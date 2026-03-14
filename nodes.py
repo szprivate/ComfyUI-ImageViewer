@@ -161,11 +161,11 @@ class bEpicSendToViewer:
 
 # mapping dictionaries for external use (nodes.py imports these)
 
-VIEWER_NODE_CLASS_MAPPINGS = {
+NODE_CLASS_MAPPINGS = {
     "bEpicSendToViewer": bEpicSendToViewer,
 }
 
-VIEWER_NODE_DISPLAY_NAME_MAPPINGS = {
+NODE_DISPLAY_NAME_MAPPINGS = {
     "bEpicSendToViewer": "bEpic Send To Image Viewer",
 }
 
