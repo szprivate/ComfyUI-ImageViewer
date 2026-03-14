@@ -1,0 +1,119 @@
+<div class="resizer r-top"></div><div class="resizer r-right"></div><div class="resizer r-bottom"></div><div class="resizer r-left"></div>
+<div class="resizer r-tl"></div><div class="resizer r-tr"></div><div class="resizer r-bl"></div><div class="resizer r-br"></div>
+    <div class="tab-bar" id="tab-bar">
+        <div id="tabs-container" class="tabs-container"></div>
+        <div class="tab-buttons">
+            <button id="undock-btn" class="sprite-icon" title="Undock to separate window"></button>
+        </div>
+    </div>
+    <div class="main-area">
+        <div id="history-panel" class="history-panel">
+            <div class="history-header">History</div>
+            <div id="history-strip" class="history-strip"></div>
+                <div style="display:flex; gap:6px; padding:6px; justify-content: center;">
+                    <button id="history-clear-btn" class="history-clear sprite-icon" title="Clear History"></button>
+                </div>
+            <div id="history-resizer" class="history-resizer" title="Resize History Panel"></div>
+        </div>
+        <div class="viewport" id="viewport">
+            <div id="shape-overlay">Shape: [?, ?, ?, ?]</div>
+            <div id="exposure-control" class="exposure-control">
+                <span class="exposure-label">Exposure</span>
+                <input type="range" id="exposure-slider" min="-4" max="4" step="0.1" value="0" title="Exposure (EV)">
+                <span id="exposure-value" class="exposure-value">0.0 EV</span>
+                <select id="rgb-channel-sel" title="Channel View">
+                    <option value="all" selected>RGB</option>
+                    <option value="red">Red</option>
+                    <option value="green">Green</option>
+                    <option value="blue">Blue</option>
+                </select>
+            </div>
+            <svg width="0" height="0" style="position:absolute; pointer-events:none;">
+                <defs>
+                    <filter id="bepic-channel-red">
+                        <feColorMatrix type="matrix" values="1 0 0 0 0  1 0 0 0 0  1 0 0 0 0  0 0 0 1 0"/>
+                    </filter>
+                    <filter id="bepic-channel-green">
+                        <feColorMatrix type="matrix" values="0 1 0 0 0  0 1 0 0 0  0 1 0 0 0  0 0 0 1 0"/>
+                    </filter>
+                    <filter id="bepic-channel-blue">
+                        <feColorMatrix type="matrix" values="0 0 1 0 0  0 0 1 0 0  0 0 1 0 0  0 0 0 1 0"/>
+                    </filter>
+                </defs>
+            </svg>
+            <div id="contact-container">
+                <img id="img-base" class="img-layer">
+                <img id="img-compare" class="img-layer">
+            </div>
+            <div id="img-frame"></div>
+            <div id="compare-slider" class="slider-v"></div>
+            <button id="rotate-btn" class="sprite-icon" style="display:none;" title="Toggle Compare Modes"></button>
+        </div>
+        <div id="params-panel" class="params-panel right">
+            <div class="panel-resizer" id="panel-resizer"></div>
+            <div class="params-header">
+                <button id="params-dock-btn" class="sprite-icon" title="Switch Side"></button>
+                <span id="params-title">No Node Selected</span>
+                <button id="params-lock-btn" class="sprite-icon" title="Lock – freeze to currently selected node"></button>
+            </div>
+            <div id="params-content" class="params-content"></div>
+        </div>
+    </div>
+    <div id="hotkey-help" class="hotkey-overlay">
+        <h3>Viewer Hotkeys</h3>
+        <div><b>Left:</b> Step Back</div>
+        <div><b>Right:</b> Step Forward</div>
+        <div><b>Space:</b> Play/Pause</div>
+        <div><b>Ctrl+Left:</b> First Frame</div>
+        <div><b>Ctrl+Right:</b> Last Frame</div>
+        <div><b>Alt+Enter:</b> Queue Prompt</div>
+        <div><b>F:</b> Toggle Fit Zoom</div>
+        <div><b>C:</b> Toggle Compare Mode</div>
+        <div><b>R / G / B:</b> Toggle Red, Green, Blue channel (press again for RGB)</div>
+        <div><b>Hold E + Drag:</b> Adjust Exposure</div>
+        <div><b>Shift+Click Tabs:</b> Select two for comparison</div>
+        <div><b>Shift+Click History:</b> Compare two snapshots</div>
+        <div><b>Up/Down Arrows:</b> Navigate history items</div>
+        <div><b>Ctrl-left drag on Timeline</b>  Select playback range</div>
+        <p style="font-size:11px; color:#888; margin-top:20px;">Click anywhere to close</p>
+    </div>
+    <div class="controls">
+        <div style="display:flex; gap:10px; align-items:center;">
+            <span id="cur-f" style="font-family:monospace; font-size:11px; color:#888; width: 20px; text-align:right;">0</span>
+            <div class="timeline-container" id="timeline-container">
+                <div id="timeline-range" class="timeline-range"></div>
+                <div id="timeline-ticks" class="timeline-ticks"></div>
+                <input type="range" id="timeline" min="0" max="0" value="0">
+            </div>                    
+            <span id="total-f" style="font-family:monospace; font-size:11px; color:#888; width: 20px;">0</span>
+        </div>
+    <div class="transport">
+        <button id="help-btn" class="help-btn sprite-icon" title="Show Hotkeys"></button>
+        <button id="s-start" class="sprite-icon" title="Rewind"></button>
+        <button id="s-prev" class="sprite-icon" title="Step Back"></button>
+        <button id="play" class="sprite-icon" style="min-width:48px" title="Play/Pause"></button>
+        <button id="s-next" class="sprite-icon" title="Step Forward"></button>
+        <button id="s-end" class="sprite-icon" title="Go to End"></button>
+        <input type="number" id="fps-in" style="width:40px; background-color:#111; color:#00e5ff; border:1px solid #444; text-align:center;" value="25" title="FPS">
+        <select id="loop-sel" title="Loop Mode">
+        <option value="loop">Loop</option>
+        <option value="ping-pong">Ping-Pong</option>
+        <option value="once">Once</option>
+        </select>
+        <div style="display:flex; gap:0;">
+        <button id="fit-btn" class="sprite-icon" title="Fit to Screen" style="border-radius: 2px 0 0 2px; border-right:none;"></button>
+        <select id="zoom-sel" style="border-radius: 0 2px 2px 0; padding:4px 0; width:18px; margin-right:8px;">
+        <option value="" selected hidden></option>
+        <option value="fit">Fit</option><option value="1.0">100%</option><option value="0.75">75%</option><option value="0.5">50%</option>
+        </select>
+    </div>
+    
+    <button id="layout-btn" class="sprite-icon" title="Panel Layout"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-layout-dashboard-icon lucide-layout-dashboard"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg></button>
+    
+    <button id="shape-btn" class="sprite-icon" title="Toggle Tensor Shape Overlay"></button>
+    <button id="history-toggle-btn" class="sprite-icon" title="Toggle History Panel"></button>
+    <button id="params-btn" class="sprite-icon" title="Toggle Parameters Panel" style="margin-left:2px;"></button>
+    <button id="refresh" class="sprite-icon" title="Queue Prompt (Run)"></button>
+    <button id="clear-cache-btn" class="sprite-icon" title="Clear bEpic temp files"></button>
+    </div>
+    </div>
