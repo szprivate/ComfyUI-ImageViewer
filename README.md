@@ -1,1 +1,1 @@
-Image Viewer for ComfyUI
+ComfyUI IV
