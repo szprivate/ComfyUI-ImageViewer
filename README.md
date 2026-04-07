@@ -4,7 +4,7 @@ An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/C
 
 ---
 
-![alt text](docs/screenshot_03.png)
+![image viewer](docs/screenshot_01.png)
 
 ## Features
 
