@@ -41,7 +41,6 @@ All viewer state — open tabs, history stacks, panel positions, layouts — is 
 
 | Page | What you will learn |
 |---|---|
-| [Installation & Setup](sub/getting-started.md) | Requirements, install methods, first launch |
 | [Viewer Interface](sub/interface.md) | Anatomy of every panel and control |
 | [Tabs & History](sub/tabs-history.md) | Creating tabs, navigating history, context menu |
 | [Image Comparison](sub/comparison.md) | Split view, contact sheet, comparing history snapshots |
