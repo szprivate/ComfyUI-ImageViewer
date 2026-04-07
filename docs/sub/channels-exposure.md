@@ -12,12 +12,6 @@ The viewer's exposure and channel controls let you inspect image data the way a 
 ## Exposure Control
 
 The exposure slider ranges from **−4 EV** to **+4 EV** and adjusts display brightness using a CSS `brightness()` filter — the underlying image data is **never modified**.
-
-```
-darker ←──────────────────────────────→ brighter
-  −4 EV    −2 EV    0 EV    +2 EV    +4 EV
-           [══════════●══════════]
-                      ↑ knob
 ```
 
 Use it to:

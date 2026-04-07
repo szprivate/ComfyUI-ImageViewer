@@ -11,28 +11,13 @@ A guided tour of every region of the viewer panel — from the title bar at the 
 
 ## Panel Layout
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  [tab 1 ●]  [tab 2]  [+]                     [⊞] [↗] [?]  │  ← Tab bar
-├────────┬────────────────────────────────────┬────────────────┤
-│        │  Tensor: [1, 847, 1024, 3]          │                │
-│        │            [Exposure ───●────] 0EV  │                │
-│  HIST  │                                     │     PARAMS     │
-│  ORY   │                                     │     PANEL      │
-│        │           V I E W P O R T           │                │
-│  [▓▓]  │                                     │  node widgets  │
-│  [  ]  │                                     │  …             │
-│  [  ]  │                                     │                │
-├────────┴────────────────────────────────────┴────────────────┤
-│  ⏮ ◁ ▶ ▷ ⏭  [════════●══════════════] fps 25  Loop ▾  icons │  ← Playback
-└─────────────────────────────────────────────────────────────┘
-```
+![bEpic ImageViewer main interface](screenshot_01.png)
 
 ## Regions Explained
 
 ### Tab Bar
 
-The topmost strip holds one tab per image source. The **active tab** is highlighted orange. Tabs appear automatically when a bEpicSendToViewer node runs or when you open a folder via the file browser.
+The topmost strip holds the tabs. The **active tab** is highlighted orange. Tabs appear automatically when a bEpicSendToViewer node runs or when you open a folder via the file browser. Change the name of the tabs by changing the `tab_name` in the **bEpic Send To Image Viewer** node.
 
 | Action | How |
 |---|---|
@@ -55,12 +40,10 @@ The central image display area. Supports:
 
 - **Pan** — click and drag when zoomed in.
 - **Zoom** — choose a preset (Fit, 100%, 75%, 50%) from the dropdown, or press <kbd>F</kbd> to toggle fit-to-screen.
-- **Channel overlays** — red, green, or blue isolation rendered with CSS SVG filters.
-- **Compare layer** — a second image layer appears in comparison mode.
 
 ### Tensor Shape Overlay
 
-A small cyan label in the top-left of the viewport displays the tensor dimensions of the current image, e.g. `[1, 847, 1024, 3]` or `[8, 512, 512, 3]` for a batch. Toggle visibility with the **Shape** button or press <kbd>S</kbd>.
+A small cyan label in the top-left of the viewport displays the tensor dimensions of the current image or sequence. Toggle visibility with the **Shape** button or press <kbd>S</kbd>.
 
 ### Exposure & Channel Bar
 

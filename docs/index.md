@@ -3,7 +3,6 @@
 A professional floating image viewer for ComfyUI — multi-tab, history snapshots, side-by-side comparison, playback timeline, exposure/channel controls, and a live parameter panel.
 
 ![bEpic ImageViewer main interface](screenshot_01.png)
-*The viewer floating over a ComfyUI workspace — history panel left, viewport centre, parameter panel right.*
 
 ---
 
@@ -32,7 +31,7 @@ All viewer state — open tabs, history stacks, panel positions, layouts — is 
 
 ## Quick Start
 
-1. Install the extension via ComfyUI Manager or clone into `custom_nodes/`. See [Installation & Setup](sub/getting-started.md).
+1. Install the extension via ComfyUI Manager or git clone into `custom_nodes/`. See [Installation & Setup](sub/getting-started.md).
 2. Click **Toggle bEpic Image Viewer** in the ComfyUI action bar to open the panel.
 3. Add a **bEpic Send To Image Viewer** node to your workflow and connect any image output to its `input` pin.
 4. Set an optional `tab_name` on the node, then run your workflow. The image appears in the viewer instantly.
@@ -52,3 +51,11 @@ All viewer state — open tabs, history stacks, panel positions, layouts — is 
 | [Advanced Features](sub/advanced.md) | File browser, undocking, layouts, cache management |
 | [Node Reference](sub/nodes.md) | Full input/output spec for the bEpicSendToViewer node |
 | [Keyboard Shortcuts](sub/hotkeys.md) | Complete hotkey reference |
+
+
+
+![bEpic ImageViewer main interface](screenshot_01.png)
+![bEpic ImageViewer main interface](screenshot_02.png)
+![bEpic ImageViewer main interface](screenshot_03.png)
+![bEpic ImageViewer main interface](screenshot_04.png)
+![bEpic ImageViewer main interface](screenshot_05.png)
