@@ -2,7 +2,7 @@
 
 Get bEpic ImageViewer running in ComfyUI in under two minutes using either ComfyUI Manager (recommended) or a manual clone.
 
-← [Back to index](index.md)
+← [Back to index](../index.md)
 
 ---
 

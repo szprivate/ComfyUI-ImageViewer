@@ -32,7 +32,7 @@ All viewer state — open tabs, history stacks, panel positions, layouts — is 
 
 ## Quick Start
 
-1. Install the extension via ComfyUI Manager or clone into `custom_nodes/`. See [Installation & Setup](getting-started.md).
+1. Install the extension via ComfyUI Manager or clone into `custom_nodes/`. See [Installation & Setup](sub/getting-started.md).
 2. Click **Toggle bEpic Image Viewer** in the ComfyUI action bar to open the panel.
 3. Add a **bEpic Send To Image Viewer** node to your workflow and connect any image output to its `input` pin.
 4. Set an optional `tab_name` on the node, then run your workflow. The image appears in the viewer instantly.
@@ -42,13 +42,13 @@ All viewer state — open tabs, history stacks, panel positions, layouts — is 
 
 | Page | What you will learn |
 |---|---|
-| [Installation & Setup](getting-started.md) | Requirements, install methods, first launch |
-| [Viewer Interface](interface.md) | Anatomy of every panel and control |
-| [Tabs & History](tabs-history.md) | Creating tabs, navigating history, context menu |
-| [Image Comparison](comparison.md) | Split view, contact sheet, comparing history snapshots |
-| [Playback Controls](playback.md) | Playing sequences, timeline scrubbing, loop modes, sub-range |
-| [Channels & Exposure](channels-exposure.md) | Exposure slider, RGB isolation, interactive E-drag |
-| [Parameter Panel](params-panel.md) | Live node params, lock, dock, resize |
-| [Advanced Features](advanced.md) | File browser, undocking, layouts, cache management |
-| [Node Reference](nodes.md) | Full input/output spec for the bEpicSendToViewer node |
-| [Keyboard Shortcuts](hotkeys.md) | Complete hotkey reference |
+| [Installation & Setup](sub/getting-started.md) | Requirements, install methods, first launch |
+| [Viewer Interface](sub/interface.md) | Anatomy of every panel and control |
+| [Tabs & History](sub/tabs-history.md) | Creating tabs, navigating history, context menu |
+| [Image Comparison](sub/comparison.md) | Split view, contact sheet, comparing history snapshots |
+| [Playback Controls](sub/playback.md) | Playing sequences, timeline scrubbing, loop modes, sub-range |
+| [Channels & Exposure](sub/channels-exposure.md) | Exposure slider, RGB isolation, interactive E-drag |
+| [Parameter Panel](sub/params-panel.md) | Live node params, lock, dock, resize |
+| [Advanced Features](sub/advanced.md) | File browser, undocking, layouts, cache management |
+| [Node Reference](sub/nodes.md) | Full input/output spec for the bEpicSendToViewer node |
+| [Keyboard Shortcuts](sub/hotkeys.md) | Complete hotkey reference |

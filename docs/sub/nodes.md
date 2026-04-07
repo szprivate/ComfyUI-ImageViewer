@@ -2,7 +2,7 @@
 
 Complete specification for the custom nodes provided by bEpic ImageViewer.
 
-← [Back to index](index.md)
+← [Back to index](../index.md)
 
 ---
 

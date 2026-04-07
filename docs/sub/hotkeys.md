@@ -2,7 +2,7 @@
 
 All hotkeys are active only when the mouse cursor is **hovering over the viewer panel** (except <kbd>E</kbd>-drag and <kbd>Alt</kbd>+<kbd>Enter</kbd>). Typing in an input or textarea field inside the parameter panel temporarily suspends hotkeys.
 
-← [Back to index](index.md)
+← [Back to index](../index.md)
 
 > [!TIP]
 > Press `?` while hovering the viewer to open the built-in hotkey overlay without leaving the browser.
@@ -91,4 +91,4 @@ All hotkeys are active only when the mouse cursor is **hovering over the viewer 
 
 ---
 
-← [Node Reference](nodes.md) | [Back to index](index.md)
+← [Node Reference](nodes.md) | [Back to index](../index.md)

@@ -2,11 +2,11 @@
 
 A guided tour of every region of the viewer panel — from the title bar at the top to the playback toolbar at the bottom.
 
-← [Back to index](index.md)
+← [Back to index](../index.md)
 
 ---
 
-![Annotated viewer interface](screenshot_03.png)
+![Annotated viewer interface](../screenshot_03.png)
 *The viewer with all panels visible: history strip (left), viewport (centre), tensor shape overlay, exposure control, and parameter panel (right).*
 
 ## Panel Layout

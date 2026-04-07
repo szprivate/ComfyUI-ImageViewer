@@ -2,11 +2,11 @@
 
 The parameter panel is a live mirror of any ComfyUI node you select on the canvas. Read values, tweak settings, and queue a new generation — all without leaving the viewer.
 
-← [Back to index](index.md)
+← [Back to index](../index.md)
 
 ---
 
-![Parameter panel on the right side](screenshot_03.png)
+![Parameter panel on the right side](../screenshot_03.png)
 *The parameter panel (right column) showing the bEpic Send To Image Viewer node's widgets.*
 
 ## How It Works

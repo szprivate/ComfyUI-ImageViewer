@@ -2,11 +2,11 @@
 
 The viewer treats every tab as a potential sequence. Use the timeline and playback controls to review image batches, frame-by-frame outputs, and folder-loaded sequences at any speed.
 
-← [Back to index](index.md)
+← [Back to index](../index.md)
 
 ---
 
-![Viewer with playback toolbar](screenshot_01.png)
+![Viewer with playback toolbar](../screenshot_01.png)
 *Viewer showing the playback toolbar at the bottom — transport buttons, timeline slider, FPS input, and loop mode selector.*
 
 ## Transport Buttons

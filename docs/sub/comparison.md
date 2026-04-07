@@ -2,11 +2,11 @@
 
 bEpic ImageViewer has a powerful split-view comparison mode that works across tabs, within a single tab's history, and in multiple orientation modes.
 
-← [Back to index](index.md)
+← [Back to index](../index.md)
 
 ---
 
-![Vertical split comparison mode](screenshot_02.png)
+![Vertical split comparison mode](../screenshot_02.png)
 *Vertical split comparison — two images divided by a draggable white divider.*
 
 ## Starting a Comparison

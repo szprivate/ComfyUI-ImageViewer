@@ -2,11 +2,11 @@
 
 The viewer's exposure and channel controls let you inspect image data the way a VFX artist would — adjusting brightness non-destructively and isolating individual colour channels to spot artefacts, clipping, or bias.
 
-← [Back to index](index.md)
+← [Back to index](../index.md)
 
 ---
 
-![Exposure slider and channel selector](screenshot_03.png)
+![Exposure slider and channel selector](../screenshot_03.png)
 *The exposure bar centred at the top of the viewport — slider, EV readout, and channel dropdown.*
 
 ## Exposure Control
