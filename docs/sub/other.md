@@ -9,19 +9,14 @@ Beyond basic image display, bEpic ImageViewer offers a file browser for external
 ## File Browser
 
 You can load any folder of images from your computer into the viewer — no ComfyUI workflow needed.
-
-1. Click the **Open Folder** button in the playback toolbar (folder icon).
-2. A native OS folder picker dialog opens. Navigate to the folder containing your images.
-3. The viewer scans the folder for supported image types: `jpg`, `jpeg`, `png`, `webp`, `gif`, `bmp`, `tiff`, `avif`.
-4. A new tab labelled `folder_<name>` is created containing all found images as a sequence.
-5. Use the timeline and playback controls to browse the sequence.
+1. Click the **Open Folder** button in the playback toolbar (folder icon), select the folder you want to import.
+2. The viewer scans the folder for supported image types: `jpg`, `jpeg`, `png`, `webp`, `gif`, `bmp`, `tiff`, `avif`.
+3. A new tab labelled `folder_<name>` is created containing all found images as a sequence.
+4. Use the timeline and playback controls to browse the sequence.
 
 ### Path Bar Overlay
 
 When viewing an externally loaded image, a **path bar** appears at the bottom of the viewport showing the file's path. Click it to expand and see the full path — useful when comparing many similarly-named files.
-
-> [!TIP]
-> Load a folder of renders from a previous session to compare them against a new generation — use tab comparison (<kbd>Shift</kbd>+click tabs) for a side-by-side diff.
 
 ---
 
@@ -82,9 +77,6 @@ Every image received by bEpicSendToViewer nodes is saved as a temporary PNG in C
 3. Confirm to delete all `bEpic_*` temp files and wipe all history thumbnails.
 4. The viewer resets to an empty state (all tabs closed, history cleared).
 
-> [!WARNING]
-> Cache clearing removes the actual PNG files from disk. Always copy any images you want to keep using the right-click *Copy Image Path* option before clearing.
-
 ---
 
 ## Hotkey Help Overlay
@@ -95,10 +87,5 @@ See also: [Keyboard Shortcuts](hotkeys.md)
 
 ---
 
-## Open in File Explorer
-
-The extension integrates with the OS file explorer via the `/bepic/open_path` API endpoint. This lets you quickly reveal the raw output files for further processing outside ComfyUI.
-
----
 
 ← [Parameter Panel](params-panel.md) | Next: [Node Reference](nodes.md)

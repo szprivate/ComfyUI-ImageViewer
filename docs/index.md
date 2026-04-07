@@ -54,8 +54,3 @@ All viewer state — open tabs, history stacks, panel positions, layouts — is 
 
 
 
-![bEpic ImageViewer main interface](screenshot_01.png)
-![bEpic ImageViewer main interface](screenshot_02.png)
-![bEpic ImageViewer main interface](screenshot_03.png)
-![bEpic ImageViewer main interface](screenshot_04.png)
-![bEpic ImageViewer main interface](screenshot_05.png)

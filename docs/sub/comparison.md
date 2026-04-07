@@ -7,7 +7,6 @@ bEpic ImageViewer has a powerful split-view comparison mode that works across ta
 ---
 
 ![Vertical split comparison mode](../screenshot_02.png)
-*Vertical split comparison — two images divided by a draggable white divider.*
 
 ## Starting a Comparison
 
@@ -44,15 +43,6 @@ The **Rotate** button in the toolbar cycles through three modes:
 | **Horizontal Split** | Top/bottom division. Drag divider vertically. |
 | **Contact Sheet** | Both images stacked vertically in full — no divider, scroll to compare. |
 
-```
-Vertical Split          Horizontal Split
-┌─────┬─────┐           ┌───────────┐
-│     │     │           │  Image A  │
-│  A  │  B  │           ├───────────┤
-│     │     │           │  Image B  │
-└─────┴─────┘           └───────────┘
-      ↕ drag                ↕ drag
-```
 
 ---
 

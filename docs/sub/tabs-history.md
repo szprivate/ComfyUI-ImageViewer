@@ -8,10 +8,13 @@ Learn how the viewer organises multiple image sources into tabs and maintains an
 
 ## The Tab System
 
+![tabs](../screenshot_03.png)
+
 Every image source gets its own tab. Tabs are created automatically when:
 
 - A **bEpic Send To Image Viewer** node runs — the tab name is set by the node's `tab_name` field (defaults to the node's unique ID if left blank).
 - You **Open a Folder** via the file-browser button — a `folder_*` tab is created for the images in that directory.
+
 
 ### Naming Tabs
 
@@ -33,10 +36,10 @@ Give each bEpicSendToViewer node a meaningful `tab_name` — for example `vae_de
 
 ## History Snapshots
 
+![history](../screenshot_04.png)
+
 Every time new images arrive in a tab, they are automatically saved as a snapshot in that tab's **history**. The history strip is the vertical thumbnail column on the left side of the viewport.
 
-![History panel with thumbnails](../screenshot_03.png)
-*History strip showing one thumbnail — the orange border marks the currently displayed snapshot.*
 
 ### Navigating History
 
@@ -58,9 +61,6 @@ Right-click any thumbnail to open the context menu:
 ### Clearing All History
 
 The **Clear Cache** button in the playback toolbar deletes all temporary bEpic files and wipes every tab's history. A confirmation dialog prevents accidental clearing.
-
-> [!WARNING]
-> Clearing the cache permanently removes the temporary PNG files written by the bEpicSendToViewer nodes. If you need to keep specific images, copy them to another location first using the *Copy Image Path* context menu option.
 
 ---
 
