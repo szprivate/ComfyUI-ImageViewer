@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Parameter Panel – bEpic ImageViewer</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <a href="index.html">bEpic ImageViewer</a>
+    <span class="sub">Documentation</span>
+  </div>
+  <nav>
+    <span class="nav-section">Getting Started</span>
+    <a href="index.html">Overview</a>
+    <a href="getting-started.html">Installation &amp; Setup</a>
+    <span class="nav-section">Tutorial</span>
+    <a href="interface.html">Viewer Interface</a>
+    <a href="tabs-history.html">Tabs &amp; History</a>
+    <a href="comparison.html">Image Comparison</a>
+    <a href="playback.html">Playback Controls</a>
+    <a href="channels-exposure.html">Channels &amp; Exposure</a>
+    <a href="params-panel.html" class="active">Parameter Panel</a>
+    <a href="advanced.html">Advanced Features</a>
+    <span class="nav-section">Reference</span>
+    <a href="nodes.html">Node Reference</a>
+    <a href="hotkeys.html">Keyboard Shortcuts</a>
+  </nav>
+</aside>
+
+<main class="content">
+  <h1>Parameter Panel</h1>
+  <p class="page-intro">
+    The parameter panel is a live mirror of any ComfyUI node you select on the
+    canvas. Read values, tweak settings, and queue a new generation — all without
+    leaving the viewer.
+  </p>
+
+  <img src="screenshot_03.png" alt="Parameter panel on the right side" class="screenshot" />
+  <p class="screenshot-caption">The parameter panel (right column) showing the bEpic Send To Image Viewer node's widgets.</p>
+
+  <h2>How It Works</h2>
+  <p>
+    The viewer monitors the ComfyUI canvas selection using
+    <code>requestAnimationFrame</code>. When you click a node on the canvas, the
+    parameter panel automatically populates with that node's widget values.
+    No button click required.
+  </p>
+  <p>
+    If no node is selected on the canvas, the panel falls back to showing the
+    source node of the active viewer tab (i.e. the bEpicSendToViewer node that
+    generated the current image).
+  </p>
+
+  <h2>Widget Types Displayed</h2>
+  <table>
+    <thead><tr><th>Widget type</th><th>Displayed as</th></tr></thead>
+    <tbody>
+      <tr><td>Toggle / Boolean</td><td>Checkbox</td></tr>
+      <tr><td>Combo / Dropdown</td><td>Select dropdown</td></tr>
+      <tr><td>Number (INT / FLOAT)</td><td>Numeric input</td></tr>
+      <tr><td>String / Text</td><td>Single-line text input</td></tr>
+      <tr><td>Multiline string</td><td>Textarea</td></tr>
+      <tr><td>Connected inputs</td><td>Shown but greyed out / disabled</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout callout-note">
+    <strong>Note</strong>
+    Connected widget inputs (e.g. a seed wired from another node) are displayed
+    as disabled fields — you can see the current value but cannot edit it directly
+    in the viewer. To change a connected value, edit the source node instead.
+  </div>
+
+  <h2>Editing Values</h2>
+  <p>
+    Click any editable field and type a new value. Changes take effect in the
+    ComfyUI node immediately (the node's widget is updated live). On your next
+    queue, the modified value is used.
+  </p>
+
+  <div class="callout callout-tip">
+    <strong>Tip</strong>
+    This is particularly powerful with the <strong>seed</strong> widget on a
+    KSampler node — you can lock the param panel to the KSampler, iterate
+    through history snapshots to find a result you like, then tweak its seed or
+    steps directly in the panel without clicking around the canvas.
+  </div>
+
+  <h2>Locking the Panel</h2>
+  <p>
+    By default the panel tracks whatever node is selected. Click the
+    <strong>padlock</strong> icon in the panel's header to lock it to the currently
+    displayed node. While locked:
+  </p>
+  <ul style="margin: 0 0 14px 20px; color: var(--text-dim); line-height:2">
+    <li>Selecting other nodes on the canvas will <em>not</em> update the panel.</li>
+    <li>The padlock icon changes to a closed-lock indicator.</li>
+    <li>Click the padlock again to unlock and resume tracking canvas selection.</li>
+  </ul>
+
+  <h2>Docking the Panel</h2>
+  <p>
+    By default the parameter panel docks on the <strong>right</strong> side of the
+    viewport. Click the <strong>dock</strong> button (arrows icon) to move it to
+    the <strong>left</strong> side — useful if your canvas is on the right side of
+    your screen and you want the panel closer to it.
+  </p>
+
+  <h2>Resizing the Panel</h2>
+  <p>
+    Drag the panel's inner edge (the thin 10 px resize handle) to widen or narrow
+    it. The minimum width is set automatically; the maximum is the full viewport
+    width minus the history strip.
+  </p>
+
+  <h2>Multi-Node Selection</h2>
+  <p>
+    In ComfyUI, you can <kbd>Shift</kbd>+click multiple nodes to select them
+    simultaneously. The parameter panel will display the widgets of
+    <em>all selected nodes</em> stacked vertically — each group prefixed with
+    the node's title. This is handy for adjusting related settings across
+    multiple nodes in one view.
+  </p>
+
+  <h2>Queuing a New Prompt</h2>
+  <p>
+    After editing parameters in the panel, press <kbd>Alt</kbd>+<kbd>Enter</kbd>
+    while hovering the viewer to queue a new prompt — equivalent to clicking
+    "Queue Prompt" in the ComfyUI interface. This closes the loop:
+    inspect → tweak params → re-generate → inspect again.
+  </p>
+
+  <footer class="doc-footer">
+    <a href="channels-exposure.html">← Channels &amp; Exposure</a>
+    <a href="advanced.html">Advanced Features →</a>
+  </footer>
+</main>
+
+</body>
+</html>

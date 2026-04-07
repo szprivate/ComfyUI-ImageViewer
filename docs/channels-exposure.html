@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Channels &amp; Exposure – bEpic ImageViewer</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <a href="index.html">bEpic ImageViewer</a>
+    <span class="sub">Documentation</span>
+  </div>
+  <nav>
+    <span class="nav-section">Getting Started</span>
+    <a href="index.html">Overview</a>
+    <a href="getting-started.html">Installation &amp; Setup</a>
+    <span class="nav-section">Tutorial</span>
+    <a href="interface.html">Viewer Interface</a>
+    <a href="tabs-history.html">Tabs &amp; History</a>
+    <a href="comparison.html">Image Comparison</a>
+    <a href="playback.html">Playback Controls</a>
+    <a href="channels-exposure.html" class="active">Channels &amp; Exposure</a>
+    <a href="params-panel.html">Parameter Panel</a>
+    <a href="advanced.html">Advanced Features</a>
+    <span class="nav-section">Reference</span>
+    <a href="nodes.html">Node Reference</a>
+    <a href="hotkeys.html">Keyboard Shortcuts</a>
+  </nav>
+</aside>
+
+<main class="content">
+  <h1>Channels &amp; Exposure</h1>
+  <p class="page-intro">
+    The viewer's exposure and channel controls let you inspect image data the way
+    a VFX artist would — adjusting brightness non-destructively and isolating
+    individual colour channels to spot artefacts, clipping, or bias.
+  </p>
+
+  <img src="screenshot_03.png" alt="Exposure slider and channel selector" class="screenshot" />
+  <p class="screenshot-caption">The exposure bar centred at the top of the viewport — slider, EV readout, and channel dropdown.</p>
+
+  <h2>Exposure Control</h2>
+  <p>
+    The exposure slider sits in a semi-transparent bar near the top of the
+    viewport. It ranges from <strong>−4 EV</strong> to <strong>+4 EV</strong>
+    and adjusts display brightness using a CSS <code>brightness()</code> filter —
+    the underlying image data is <em>never modified</em>.
+  </p>
+  <p>
+    This is equivalent to adjusting the camera exposure in a colour grading tool.
+    Use it to:
+  </p>
+  <ul style="margin: 0 0 14px 20px; color: var(--text-dim); line-height:2">
+    <li>Check for clipped highlights by pushing exposure up and looking for blown-out white patches.</li>
+    <li>Inspect shadow detail by boosting exposure to see into dark areas.</li>
+    <li>Confirm that near-black regions carry actual data (and aren't just crushed blacks).</li>
+  </ul>
+
+  <h3>Using the Slider</h3>
+  <p>
+    Drag the slider knob or click on the track to set an EV value.
+    The readout on the right updates in real time (e.g. <code>+1.5 EV</code>).
+  </p>
+
+  <h3>Interactive E-Drag</h3>
+  <p>
+    For a hands-free workflow, hold <kbd>E</kbd> while dragging the mouse
+    horizontally anywhere over the viewer to scrub exposure interactively.
+    Release <kbd>E</kbd> to lock the value in place.
+  </p>
+
+  <h3>Resetting Exposure</h3>
+  <p>
+    Right-click the exposure control (slider or label) to instantly reset to
+    <strong>0.0 EV</strong>.
+  </p>
+
+  <!-- EV diagram -->
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 500 80" width="100%" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="expGrad" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%"   stop-color="#000"/>
+          <stop offset="50%"  stop-color="#555"/>
+          <stop offset="100%" stop-color="#fff"/>
+        </linearGradient>
+      </defs>
+      <!-- track -->
+      <rect x="60" y="30" width="380" height="10" fill="url(#expGrad)" rx="5"/>
+      <!-- center tick (0 EV) -->
+      <line x1="250" y1="25" x2="250" y2="45" stroke="#f60" stroke-width="1.5" stroke-dasharray="3,2"/>
+      <!-- knob at centre -->
+      <circle cx="250" cy="35" r="8" fill="#fff" stroke="#f60" stroke-width="2"/>
+      <!-- labels -->
+      <text x="60"  y="60" fill="#888" font-size="11" text-anchor="middle">−4 EV</text>
+      <text x="250" y="60" fill="#888" font-size="11" text-anchor="middle">0 EV</text>
+      <text x="440" y="60" fill="#888" font-size="11" text-anchor="middle">+4 EV</text>
+      <text x="60"  y="20" fill="#555" font-size="10">darker</text>
+      <text x="380" y="20" fill="#555" font-size="10">brighter</text>
+    </svg>
+  </div>
+  <p class="screenshot-caption">Exposure range: −4 EV (dark) to +4 EV (bright). Right-click to reset to 0.</p>
+
+  <h2>Channel Isolation</h2>
+  <p>
+    The channel selector dropdown (to the right of the EV readout) switches the
+    viewport between four display modes. Channels are extracted using CSS
+    SVG matrix filters — non-destructive and instant.
+  </p>
+
+  <table>
+    <thead><tr><th>Mode</th><th>Keyboard</th><th>What you see</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>RGB</strong></td>
+        <td>Press <kbd>R</kbd> / <kbd>G</kbd> / <kbd>B</kbd> a second time to return</td>
+        <td>Full colour composite (normal display)</td>
+      </tr>
+      <tr>
+        <td><strong>R</strong> — Red</td>
+        <td><kbd>R</kbd></td>
+        <td>Red channel rendered as greyscale — brighter = more red</td>
+      </tr>
+      <tr>
+        <td><strong>G</strong> — Green</td>
+        <td><kbd>G</kbd></td>
+        <td>Green channel rendered as greyscale — brighter = more green</td>
+      </tr>
+      <tr>
+        <td><strong>B</strong> — Blue</td>
+        <td><kbd>B</kbd></td>
+        <td>Blue channel rendered as greyscale — brighter = more blue</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- channel visualization -->
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 500 100" width="100%" xmlns="http://www.w3.org/2000/svg">
+      <!-- RGB -->
+      <rect x="10"  y="15" width="100" height="60" fill="#1a1a1a" stroke="#333"/>
+      <rect x="15"  y="20" width="90"  height="50" fill="url(#cRGB)"/>
+      <defs>
+        <linearGradient id="cRGB" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%"   stop-color="#f44"/>
+          <stop offset="50%"  stop-color="#4f4"/>
+          <stop offset="100%" stop-color="#44f"/>
+        </linearGradient>
+        <linearGradient id="cR" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%"   stop-color="#000"/>
+          <stop offset="100%" stop-color="#f00"/>
+        </linearGradient>
+        <linearGradient id="cG" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%"   stop-color="#000"/>
+          <stop offset="100%" stop-color="#0f0"/>
+        </linearGradient>
+        <linearGradient id="cB" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%"   stop-color="#000"/>
+          <stop offset="100%" stop-color="#00f"/>
+        </linearGradient>
+      </defs>
+      <text x="60"  y="95" fill="#888" font-size="11" text-anchor="middle">RGB</text>
+
+      <!-- R channel -->
+      <rect x="130" y="15" width="100" height="60" fill="#1a1a1a" stroke="#333"/>
+      <rect x="135" y="20" width="90"  height="50" fill="url(#cR)"/>
+      <text x="180" y="95" fill="#888" font-size="11" text-anchor="middle">R channel</text>
+
+      <!-- G channel -->
+      <rect x="250" y="15" width="100" height="60" fill="#1a1a1a" stroke="#333"/>
+      <rect x="255" y="20" width="90"  height="50" fill="url(#cG)"/>
+      <text x="300" y="95" fill="#888" font-size="11" text-anchor="middle">G channel</text>
+
+      <!-- B channel -->
+      <rect x="370" y="15" width="100" height="60" fill="#1a1a1a" stroke="#333"/>
+      <rect x="375" y="20" width="90"  height="50" fill="url(#cB)"/>
+      <text x="420" y="95" fill="#888" font-size="11" text-anchor="middle">B channel</text>
+    </svg>
+  </div>
+  <p class="screenshot-caption">Channel isolation modes — R, G, B each rendered as a greyscale luminance image.</p>
+
+  <h2>Practical Inspection Workflows</h2>
+
+  <h3>Checking for Colour Bias</h3>
+  <p>
+    Switch to R, G, B in turn and look for areas that are brighter than expected
+    in one channel. An overall green cast, for example, will show the G channel
+    uniformly lighter than R and B.
+  </p>
+
+  <h3>Verifying Alpha / Mask Data</h3>
+  <p>
+    If you pass a grayscale mask tensor to the viewer (shape <code>[1, H, W, 1]</code>
+    or <code>[1, H, W]</code>), the viewer detects it and converts it to a
+    displayable format. Use channel isolation to confirm mask coverage is correct.
+  </p>
+
+  <h3>Detecting Highlight Clipping</h3>
+  <ol class="steps">
+    <li>Drag exposure to <strong>+2 EV or higher</strong>.</li>
+    <li>Look for areas that become pure white — these are already clipped at 1.0 in the source.</li>
+    <li>If you see extensive pure-white patches at +2 EV, your sampler may be over-saturating highlights.</li>
+  </ol>
+
+  <footer class="doc-footer">
+    <a href="playback.html">← Playback Controls</a>
+    <a href="params-panel.html">Parameter Panel →</a>
+  </footer>
+</main>
+
+</body>
+</html>

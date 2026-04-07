@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Playback Controls – bEpic ImageViewer</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <a href="index.html">bEpic ImageViewer</a>
+    <span class="sub">Documentation</span>
+  </div>
+  <nav>
+    <span class="nav-section">Getting Started</span>
+    <a href="index.html">Overview</a>
+    <a href="getting-started.html">Installation &amp; Setup</a>
+    <span class="nav-section">Tutorial</span>
+    <a href="interface.html">Viewer Interface</a>
+    <a href="tabs-history.html">Tabs &amp; History</a>
+    <a href="comparison.html">Image Comparison</a>
+    <a href="playback.html" class="active">Playback Controls</a>
+    <a href="channels-exposure.html">Channels &amp; Exposure</a>
+    <a href="params-panel.html">Parameter Panel</a>
+    <a href="advanced.html">Advanced Features</a>
+    <span class="nav-section">Reference</span>
+    <a href="nodes.html">Node Reference</a>
+    <a href="hotkeys.html">Keyboard Shortcuts</a>
+  </nav>
+</aside>
+
+<main class="content">
+  <h1>Playback Controls</h1>
+  <p class="page-intro">
+    The viewer treats every tab as a potential sequence. Use the timeline and
+    playback controls to review image batches, frame-by-frame outputs, and
+    folder-loaded sequences at any speed.
+  </p>
+
+  <img src="screenshot_01.png" alt="Viewer with playback toolbar" class="screenshot" />
+  <p class="screenshot-caption">Viewer showing the playback toolbar at the bottom — transport buttons, timeline slider, FPS input, and loop mode selector.</p>
+
+  <h2>Transport Buttons</h2>
+  <p>
+    The five transport buttons on the left of the playback toolbar control
+    frame-level navigation:
+  </p>
+
+  <table>
+    <thead><tr><th>Button</th><th>Keyboard</th><th>Action</th></tr></thead>
+    <tbody>
+      <tr><td>⏮ Rewind</td><td><kbd>Ctrl</kbd>+<kbd>←</kbd></td><td>Jump to frame 1</td></tr>
+      <tr><td>◁ Step Back</td><td><kbd>←</kbd></td><td>Go back one frame</td></tr>
+      <tr><td>▶ / ⏸ Play/Pause</td><td><kbd>Space</kbd></td><td>Start or stop playback</td></tr>
+      <tr><td>▷ Step Forward</td><td><kbd>→</kbd></td><td>Advance one frame</td></tr>
+      <tr><td>⏭ End</td><td><kbd>Ctrl</kbd>+<kbd>→</kbd></td><td>Jump to last frame</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout callout-tip">
+    <strong>Tip</strong>
+    Keyboard shortcuts only activate when your mouse cursor is hovering over the viewer panel. Move your cursor inside the viewer before pressing keys.
+  </div>
+
+  <h2>The Timeline</h2>
+  <p>
+    The timeline slider stretches across most of the playback toolbar.
+    It shows major and minor tick marks as visual reference.
+    The current frame position is highlighted.
+  </p>
+
+  <h3>Scrubbing</h3>
+  <p>
+    Click anywhere on the timeline to jump to that frame. Click and drag to scrub
+    through frames interactively. This is the fastest way to review a long sequence.
+  </p>
+
+  <h3>Selecting a Playback Sub-Range</h3>
+  <p>
+    Hold <kbd>Ctrl</kbd> while dragging on the timeline to define a sub-range.
+    The selected region is highlighted in <span style="color:#f60;font-weight:600">orange</span>.
+    Playback will loop only within this range — useful for focusing on a specific
+    section of a long sequence without re-generating it.
+  </p>
+
+  <!-- sub-range diagram -->
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 500 60" width="100%" xmlns="http://www.w3.org/2000/svg">
+      <rect x="0" y="15" width="500" height="20" fill="#1a1a1a" stroke="#333"/>
+      <!-- sub-range highlight -->
+      <rect x="150" y="15" width="180" height="20" fill="rgba(255,102,0,.35)"/>
+      <!-- ticks -->
+      <line x1="0"   y1="25" x2="0"   y2="35" stroke="#444"/>
+      <line x1="100" y1="25" x2="100" y2="35" stroke="#444"/>
+      <line x1="200" y1="25" x2="200" y2="35" stroke="#444"/>
+      <line x1="300" y1="25" x2="300" y2="35" stroke="#444"/>
+      <line x1="400" y1="25" x2="400" y2="35" stroke="#444"/>
+      <line x1="500" y1="25" x2="500" y2="35" stroke="#444"/>
+      <!-- range markers -->
+      <line x1="150" y1="12" x2="150" y2="38" stroke="#f60" stroke-width="2"/>
+      <line x1="330" y1="12" x2="330" y2="38" stroke="#f60" stroke-width="2"/>
+      <text x="240" y="10" fill="#f60" font-size="10" text-anchor="middle">sub-range</text>
+      <!-- playhead -->
+      <line x1="210" y1="12" x2="210" y2="38" stroke="#fff" stroke-width="1.5"/>
+      <polygon points="205,12 215,12 210,6" fill="#fff"/>
+      <text x="210" y="52" fill="#888" font-size="9" text-anchor="middle">playhead</text>
+    </svg>
+  </div>
+  <p class="screenshot-caption"><kbd>Ctrl</kbd>+drag on the timeline to set the orange sub-range. Playback stays within it.</p>
+
+  <p>To clear the sub-range and return to full-sequence playback, <kbd>Ctrl</kbd>+click on an empty part of the timeline outside the selection.</p>
+
+  <h2>FPS Control</h2>
+  <p>
+    The <strong>FPS</strong> input box next to the loop mode selector sets the
+    playback speed. The default is <code>25</code> fps. Click the number and
+    type a new value, or scroll the mouse wheel over it.
+  </p>
+  <p>Common values:</p>
+  <table>
+    <thead><tr><th>FPS</th><th>Use case</th></tr></thead>
+    <tbody>
+      <tr><td>1–4</td><td>Very slow step-through for debugging individual frames</td></tr>
+      <tr><td>12–15</td><td>Anime / stop-motion style</td></tr>
+      <tr><td>24–25</td><td>Film / broadcast standard (default)</td></tr>
+      <tr><td>60</td><td>Smooth game-engine style preview</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Loop Modes</h2>
+  <p>
+    The loop mode dropdown controls what happens when playback reaches the end of
+    the sequence (or sub-range):
+  </p>
+  <table>
+    <thead><tr><th>Mode</th><th>Behaviour</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Loop</strong></td><td>Wraps back to the first frame and continues playing.</td></tr>
+      <tr><td><strong>Ping-Pong</strong></td><td>Reverses direction at each end — plays forwards then backwards continuously.</td></tr>
+      <tr><td><strong>Once</strong></td><td>Stops at the last frame and pauses.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Working with Batches</h2>
+  <p>
+    When a bEpicSendToViewer node receives a batch of images (tensor shape
+    <code>[N, H, W, 3]</code> where N &gt; 1), all N frames are loaded into the
+    tab automatically. The tensor shape overlay will read
+    <code>[N, H, W, 3]</code> instead of <code>[1, H, W, 3] [Still Frame]</code>.
+  </p>
+  <p>
+    Use the timeline or <kbd>←</kbd>/<kbd>→</kbd> keys to step through individual
+    batch frames, or press <kbd>Space</kbd> to play them as an animation.
+  </p>
+
+  <h2>Frame Counter</h2>
+  <p>
+    A small frame counter is displayed on the timeline — it shows the current
+    frame number and total frame count (e.g. <code>5 / 24</code>).
+  </p>
+
+  <footer class="doc-footer">
+    <a href="comparison.html">← Image Comparison</a>
+    <a href="channels-exposure.html">Channels &amp; Exposure →</a>
+  </footer>
+</main>
+
+</body>
+</html>

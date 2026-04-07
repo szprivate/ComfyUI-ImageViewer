@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>bEpic ImageViewer – Documentation</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <a href="index.html">bEpic ImageViewer</a>
+    <span class="sub">Documentation</span>
+  </div>
+  <nav>
+    <span class="nav-section">Getting Started</span>
+    <a href="index.html" class="active">Overview</a>
+    <a href="getting-started.html">Installation &amp; Setup</a>
+    <span class="nav-section">Tutorial</span>
+    <a href="interface.html">Viewer Interface</a>
+    <a href="tabs-history.html">Tabs &amp; History</a>
+    <a href="comparison.html">Image Comparison</a>
+    <a href="playback.html">Playback Controls</a>
+    <a href="channels-exposure.html">Channels &amp; Exposure</a>
+    <a href="params-panel.html">Parameter Panel</a>
+    <a href="advanced.html">Advanced Features</a>
+    <span class="nav-section">Reference</span>
+    <a href="nodes.html">Node Reference</a>
+    <a href="hotkeys.html">Keyboard Shortcuts</a>
+  </nav>
+</aside>
+
+<main class="content">
+  <h1>bEpic ImageViewer <span class="badge">ComfyUI Extension</span></h1>
+  <p class="page-intro">
+    A professional floating image viewer for ComfyUI — multi-tab, history snapshots,
+    side-by-side comparison, playback timeline, exposure/channel controls, and a live
+    parameter panel. Everything you need to inspect and iterate on AI-generated images
+    without leaving your workflow.
+  </p>
+
+  <img src="screenshot_01.png" alt="bEpic ImageViewer main interface" class="screenshot" />
+  <p class="screenshot-caption">The viewer floating over a ComfyUI workspace — history panel on the left, viewport centre, parameter panel on the right.</p>
+
+  <h2>What is bEpic ImageViewer?</h2>
+  <p>
+    bEpic ImageViewer is a custom node extension for
+    <a href="https://github.com/comfyanonymous/ComfyUI" target="_blank">ComfyUI</a>
+    that replaces the built-in preview with a powerful, dockable viewer panel.
+    Instead of hunting through tiny preview nodes scattered across your canvas,
+    every output is routed here — organised into named tabs, kept in a scrollable
+    history, and ready for detailed inspection.
+  </p>
+
+  <h2>Key Features</h2>
+  <div class="cards">
+    <a class="card" href="tabs-history.html">
+      <div class="card-icon">🗂</div>
+      <div class="card-title">Multi-Tab Organisation</div>
+      <div class="card-desc">Route different outputs to named tabs. Reorder by drag, close with ×.</div>
+    </a>
+    <a class="card" href="tabs-history.html#history">
+      <div class="card-icon">🕐</div>
+      <div class="card-title">History Snapshots</div>
+      <div class="card-desc">Up to 20 generations per tab shown as thumbnails. Navigate with ↑↓.</div>
+    </a>
+    <a class="card" href="comparison.html">
+      <div class="card-icon">⬛⬜</div>
+      <div class="card-title">Image Comparison</div>
+      <div class="card-desc">Vertical or horizontal split with a draggable divider. Compare tabs or history items.</div>
+    </a>
+    <a class="card" href="playback.html">
+      <div class="card-icon">▶</div>
+      <div class="card-title">Playback &amp; Timeline</div>
+      <div class="card-desc">Play image sequences, set FPS, loop modes, scrub frames, select sub-ranges.</div>
+    </a>
+    <a class="card" href="channels-exposure.html">
+      <div class="card-icon">🎚</div>
+      <div class="card-title">Exposure &amp; Channels</div>
+      <div class="card-desc">±4 EV exposure slider. Isolate R/G/B channels for data inspection.</div>
+    </a>
+    <a class="card" href="params-panel.html">
+      <div class="card-icon">🔧</div>
+      <div class="card-title">Parameter Panel</div>
+      <div class="card-desc">Live widget values for the selected ComfyUI node — editable in the viewer.</div>
+    </a>
+    <a class="card" href="advanced.html#filebrowser">
+      <div class="card-icon">📁</div>
+      <div class="card-title">File Browser</div>
+      <div class="card-desc">Open any folder of images as a new viewer tab for playback and inspection.</div>
+    </a>
+    <a class="card" href="advanced.html#undock">
+      <div class="card-icon">🪟</div>
+      <div class="card-title">Undock / Multi-Monitor</div>
+      <div class="card-desc">Pop the viewer into its own browser window for use on a second screen.</div>
+    </a>
+  </div>
+
+  <h2>How It Works</h2>
+  <p>
+    The extension registers a floating panel (<code>&lt;bepic-viewer-panel&gt;</code>)
+    using the Web Components API with Shadow DOM — so its styles never conflict with
+    ComfyUI's own UI. On the backend, a companion <strong>bEpic Send To Image Viewer</strong>
+    node converts image tensors to PNG, saves them to ComfyUI's temp directory, and
+    pushes a <code>bepic.viewer.update</code> WebSocket message to the frontend. The
+    viewer picks up the message and populates the relevant tab automatically.
+  </p>
+  <p>
+    All viewer state — open tabs, history stacks, panel positions, layouts — is persisted
+    to <code>localStorage</code> so your workspace survives page reloads.
+  </p>
+
+  <h2>Quick Start</h2>
+  <ol class="steps">
+    <li>Install the extension via ComfyUI Manager or clone into <code>custom_nodes/</code>. See <a href="getting-started.html">Installation</a>.</li>
+    <li>Click <strong>Toggle bEpic Image Viewer</strong> in the ComfyUI action bar to open the panel.</li>
+    <li>Add a <strong>bEpic Send To Image Viewer</strong> node to your workflow and connect any image output to its <code>input</code> pin.</li>
+    <li>Set an optional <code>tab_name</code> on the node, then run your workflow. The image appears in the viewer instantly.</li>
+    <li>Explore — hover the panel and press <kbd>?</kbd> for the hotkey overlay at any time.</li>
+  </ol>
+
+  <h2>Documentation Map</h2>
+  <table>
+    <thead><tr><th>Page</th><th>What you will learn</th></tr></thead>
+    <tbody>
+      <tr><td><a href="getting-started.html">Installation &amp; Setup</a></td><td>Requirements, install methods, first launch</td></tr>
+      <tr><td><a href="interface.html">Viewer Interface</a></td><td>Anatomy of every panel and control</td></tr>
+      <tr><td><a href="tabs-history.html">Tabs &amp; History</a></td><td>Creating tabs, navigating history, context menu</td></tr>
+      <tr><td><a href="comparison.html">Image Comparison</a></td><td>Split view, contact sheet, comparing history snapshots</td></tr>
+      <tr><td><a href="playback.html">Playback Controls</a></td><td>Playing sequences, timeline scrubbing, loop modes, sub-range</td></tr>
+      <tr><td><a href="channels-exposure.html">Channels &amp; Exposure</a></td><td>Exposure slider, RGB isolation, interactive E-drag</td></tr>
+      <tr><td><a href="params-panel.html">Parameter Panel</a></td><td>Live node params, lock, dock, resize</td></tr>
+      <tr><td><a href="advanced.html">Advanced Features</a></td><td>File browser, undocking, layouts, cache management</td></tr>
+      <tr><td><a href="nodes.html">Node Reference</a></td><td>Full input/output spec for the bEpicSendToViewer node</td></tr>
+      <tr><td><a href="hotkeys.html">Keyboard Shortcuts</a></td><td>Complete hotkey reference</td></tr>
+    </tbody>
+  </table>
+
+  <footer class="doc-footer">
+    <span>bEpic ImageViewer — ComfyUI Extension</span>
+    <span>Built with ♥ for image inspection</span>
+  </footer>
+</main>
+
+</body>
+</html>
