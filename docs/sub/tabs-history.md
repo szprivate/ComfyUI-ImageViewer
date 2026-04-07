@@ -1,14 +1,12 @@
 # Tabs & History
 
-Learn how the viewer organises multiple image sources into tabs and maintains an automatic per-tab history of every generation.
-
 ← [Back to index](../index.md)
 
 ---
 
 ## The Tab System
 
-![tabs](../screenshot_03.png)
+![tabs](../screenshots/screenshot_03.png)
 
 Every image source gets its own tab. Tabs are created automatically when:
 
@@ -36,7 +34,7 @@ Give each bEpicSendToViewer node a meaningful `tab_name` — for example `vae_de
 
 ## History Snapshots
 
-![history](../screenshot_04.png)
+![history](../screenshots/screenshot_04.png)
 
 Every time new images arrive in a tab, they are automatically saved as a snapshot in that tab's **history**. The history strip is the vertical thumbnail column on the left side of the viewport.
 

@@ -1,17 +1,14 @@
 # Viewer Interface
 
-A guided tour of every region of the viewer panel — from the title bar at the top to the playback toolbar at the bottom.
-
 ← [Back to index](../index.md)
 
 ---
 
-![Annotated viewer interface](../screenshot_03.png)
-*The viewer with all panels visible: history strip (left), viewport (centre), tensor shape overlay, exposure control, and parameter panel (right).*
+![viewer interface](../screenshots/screenshot_01.png)
 
 ## Panel Layout
 
-![bEpic ImageViewer main interface](screenshot_01.png)
+![bEpic ImageViewer main interface](../screenshots/screenshot_01.png)
 
 ## Regions Explained
 

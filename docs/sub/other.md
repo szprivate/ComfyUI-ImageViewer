@@ -1,7 +1,5 @@
 # Advanced Features
 
-Beyond basic image display, bEpic ImageViewer offers a file browser for external images, pop-out undocking for multi-monitor setups, named layout presets, and cache management.
-
 ← [Back to index](../index.md)
 
 ---

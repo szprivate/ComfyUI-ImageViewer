@@ -2,7 +2,7 @@
 
 A professional floating image viewer for ComfyUI — multi-tab, history snapshots, side-by-side comparison, playback timeline, exposure/channel controls, and a live parameter panel.
 
-![bEpic ImageViewer main interface](screenshot_01.png)
+![bEpic ImageViewer main interface](screenshots/screenshot_01.png)
 
 ---
 
@@ -48,7 +48,7 @@ All viewer state — open tabs, history stacks, panel positions, layouts — is 
 | [Playback Controls](sub/playback.md) | Playing sequences, timeline scrubbing, loop modes, sub-range |
 | [Channels & Exposure](sub/channels-exposure.md) | Exposure slider, RGB isolation, interactive E-drag |
 | [Parameter Panel](sub/params-panel.md) | Live node params, lock, dock, resize |
-| [Advanced Features](sub/advanced.md) | File browser, undocking, layouts, cache management |
+| [Other Features](sub/other.md) | File browser, undocking, layouts, cache management |
 | [Node Reference](sub/nodes.md) | Full input/output spec for the bEpicSendToViewer node |
 | [Keyboard Shortcuts](sub/hotkeys.md) | Complete hotkey reference |
 

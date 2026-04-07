@@ -1,12 +1,10 @@
 # Playback Controls
 
-The viewer treats every tab as a potential sequence. Use the timeline and playback controls to review image batches, frame-by-frame outputs, and folder-loaded sequences at any speed.
-
 ← [Back to index](../index.md)
 
 ---
 
-![Playback toolbar](../screenshot_05.png)
+![Playback toolbar](../screenshots/screenshot_05.png)
 
 ---
 

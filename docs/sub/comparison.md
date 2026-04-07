@@ -1,12 +1,10 @@
 # Image Comparison
 
-bEpic ImageViewer has a powerful split-view comparison mode that works across tabs, within a single tab's history, and in multiple orientation modes.
-
 ← [Back to index](../index.md)
 
 ---
 
-![Vertical split comparison mode](../screenshot_02.png)
+![Vertical split comparison mode](../screenshots/screenshot_02.png)
 
 ## Starting a Comparison
 

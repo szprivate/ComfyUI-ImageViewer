@@ -1,12 +1,10 @@
 # Parameter Panel
 
-The parameter panel is a live mirror of any ComfyUI node you select on the canvas. Read values, tweak settings, and queue a new generation — all without leaving the viewer.
-
 ← [Back to index](../index.md)
 
 ---
 
-![Parameter panel on the right side](../screenshot_08.png)
+![Parameter panel on the right side](../screenshots/screenshot_08.png)
 
 The parameter panel displays the parameters of your selected node (s).
 
