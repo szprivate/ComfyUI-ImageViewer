@@ -67,13 +67,15 @@ After installation a **"Toggle bEpic Image Viewer"** button appears in the Comfy
 
 ---
 
-## License
+## License, contributing
 
 Copyright © 2024 bEpic GmbH / Sebastian Zilius
 
 **Free for personal and non-commercial use.**
 
 - ✅ Personal projects, research, education, and non-commercial creative work
+- ✅ Feel free to create your own fork and make updates - this is OpenSource, happy to include your Pull Requests if they're good!
+
 - ❌ Commercial use of any kind is **prohibited** without explicit written permission from the author
 
 Redistribution, modification, and use in source and binary forms are permitted **for non-commercial purposes only**, provided that this copyright notice is retained in all copies or substantial portions of the software.
