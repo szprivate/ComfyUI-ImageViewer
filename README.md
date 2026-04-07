@@ -11,8 +11,7 @@ An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/C
 - Send any image to the viewer using the **bEpic Send To Image Viewer** node
 - View images from multiple nodes simultaneously in separate tabs
 
-- Fit-to-screen, 100%, 75%, and 50% zoom presets
-- Pan the image freely when zoomed in
+- support Zoom / Pan 
 
 - allows undocking into a separate browser window or tab (for two-monitor setups)
 
