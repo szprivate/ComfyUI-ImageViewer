@@ -16,7 +16,6 @@ An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/C
 - allows undocking into a separate browser window or tab (for two-monitor setups)
 
 - Each tab maintains a history of up to 20 snapshots automatically
-- Play image sequences as animations with configurable FPS
 - Select a sub-range on the timeline to loop only part of a sequence
 
 - Split-screen comparison mode with a draggable divider
