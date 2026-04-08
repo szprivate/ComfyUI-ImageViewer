@@ -1,10 +1,10 @@
 [project]
-name = "ComfyUI-ImageViewer"
-description = "The bEpic image viewer by sebastianzilius is a professional floating image viewer for ComfyUI — multi-tab, history snapshots, side-by-side comparison, playback timeline, exposure/channel controls, and a live parameter panel."
+name = "ComfyUI-ImageViewerBEPIC"
+description = "The bEpic image viewer by sebastianzilius is a professional floating image viewer for ComfyUI - multi-tab, history snapshots, side-by-side comparison, playback timeline, exposure/channel controls, and a live parameter panel."
 authors = [ "Sebastian Zilius"]  
 
-version = "0.1.0"
-license = "Polyform Noncommercial" 
+version = "0.2.0"
+license = "Noncommercial" 
 classifiers = [
     "Operating System :: Microsoft :: Windows"
 ]
