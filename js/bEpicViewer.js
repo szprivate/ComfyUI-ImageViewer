@@ -10,6 +10,9 @@ import { HistoryMixin }  from "./bEpicViewer_mixinHistory.js";
 import { PlaybackMixin } from "./bEpicViewer_mixinPlayback.js";
 import { ParamsMixin }   from "./bEpicViewer_mixinParams.js";
 import { UIMixin }       from "./bEpicViewer_mixinUI.js";
+import { ToolsMixin }    from "./bEpicViewer_tools.js";
+import { RotoMixin }     from "./bEpicViewer_roto.js";
+import { registerSendNode } from "./bEpicViewer_nodeTools.js";
 
 let globalViewerPanel = null;
 const watchedNodeIds  = new Set();
@@ -333,6 +336,7 @@ class ViewerPanel extends HTMLElement {
         this.setupCompareSlider();
         this.setupPanelDragging();
         this.setupTimelineEvents();
+        this._initTools();
 
         this.currentParamNodeId  = null;
         this.currentHistoryKey   = null;
@@ -1001,6 +1005,8 @@ Object.assign(
     PlaybackMixin,
     ParamsMixin,
     UIMixin,
+    ToolsMixin,
+    RotoMixin,
 );
 
 if (!customElements.get("bepic-viewer-panel")) {
@@ -1126,6 +1132,10 @@ app.registerExtension({
 
         if (nodeData.name === "bEpicGetPath") {
             registerBepicGetPath(nodeType);
+        }
+
+        if (nodeData.name === "bEpicSendToViewer") {
+            registerSendNode(nodeType, nodeData);
         }
 
         const getExtraMenuOptions = nodeType.prototype.getExtraMenuOptions;

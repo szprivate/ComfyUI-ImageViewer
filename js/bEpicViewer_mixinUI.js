@@ -324,6 +324,8 @@ export const UIMixin = {
         this._historyPanelSig = null;
         this.renderHistoryPanel();
         this.queuePersistViewerState();
+        if (this._bindToolsToActiveTab) this._bindToolsToActiveTab();
+        if (this.updateToolOverlay) this.updateToolOverlay();
     },
 
     updateTabHighlights() {
@@ -544,6 +546,7 @@ export const UIMixin = {
         this.updateImageFrame();
         this.updateCompareVisuals();
         this.updateTabHighlights();
+        this.updateToolOverlay && this.updateToolOverlay();
     },
 
     updateImageFrame() {

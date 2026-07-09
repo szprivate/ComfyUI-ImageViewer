@@ -1,4 +1,5 @@
 import os
+import json
 import random
 from PIL import Image
 import numpy as np
@@ -10,6 +11,49 @@ try:
     from comfy.comfy_types.node_typing import IO
 except Exception:
     IO = None
+
+try:
+    from . import roto_raster
+except Exception:
+    roto_raster = None
+
+
+_ANY = IO.ANY if IO is not None else "IMAGE"
+
+
+def _dims_from_input(inp):
+    """Return (N, H, W) from a ComfyUI IMAGE [B,H,W,C] / MASK [B,H,W] tensor."""
+    try:
+        if isinstance(inp, torch.Tensor):
+            t = inp
+            if t.ndim == 4:        # B,H,W,C
+                return int(t.shape[0]), int(t.shape[1]), int(t.shape[2])
+            if t.ndim == 3:        # B,H,W  (mask)
+                return int(t.shape[0]), int(t.shape[1]), int(t.shape[2])
+            if t.ndim == 2:        # H,W
+                return 1, int(t.shape[0]), int(t.shape[1])
+    except Exception:
+        pass
+    return 1, 512, 512
+
+
+def _points_prompt(json_str, label):
+    """Build a SAM3_POINTS_PROMPT dict from a normalized [{x,y},...] JSON string."""
+    pts, labels = [], []
+    try:
+        arr = json.loads(json_str) if json_str and json_str.strip() else []
+    except Exception:
+        arr = []
+    if isinstance(arr, list):
+        for p in arr:
+            try:
+                x = float(p["x"])
+                y = float(p["y"])
+            except Exception:
+                continue
+            pts.append([x, y])
+            labels.append(label)
+    return {"points": pts, "labels": labels}
 
 
 class bEpicSendToViewer:
@@ -24,17 +68,30 @@ class bEpicSendToViewer:
                 "input": (IO.ANY, ) if IO is not None else (("IMAGE", "MASK"),),
                 "tab_name": ("STRING", {"default": ""}),
             },
-            "optional": {},
+            "optional": {
+                # Hidden (via JS) stores written by the in-viewer tools. Kept as
+                # widgets so their values serialize into the workflow and reach
+                # the backend on execute.
+                "roto_data":     ("STRING", {"default": "", "multiline": False}),
+                "sam3_positive": ("STRING", {"default": "[]", "multiline": False}),
+                "sam3_negative": ("STRING", {"default": "[]", "multiline": False}),
+            },
             "hidden": {"unique_id": "UNIQUE_ID"},
         }
 
-    RETURN_TYPES = ()
+    # image passthrough + roto matte + SAM3 point prompts. The JS only reveals
+    # the optional output slots once the corresponding viewer tool is used, but
+    # the tuple returned here always matches this fixed order/length so ComfyUI
+    # can map outputs by index.
+    RETURN_TYPES = (_ANY, "MASK", "SAM3_POINTS_PROMPT", "SAM3_POINTS_PROMPT")
+    RETURN_NAMES = ("image", "roto_mask", "positive_points", "negative_points")
     FUNCTION = "send"
     OUTPUT_NODE = True
     CATEGORY = "image/bEpic"
 
-    def send(self, input, tab_name="", unique_id=None):
-        # Pass-through node: returns the incoming image unchanged
+    def send(self, input, tab_name="", roto_data="", sam3_positive="[]",
+             sam3_negative="[]", unique_id=None):
+        # ── 1. Save incoming tensors to temp PNGs and push to the viewer ──────
         def process_batch(inp, label):
             if inp is None:
                 return []
@@ -105,7 +162,31 @@ class bEpicSendToViewer:
             "unique_id": unique_id
         })
 
-        return ()
+        # ── 2. Build the tool outputs ────────────────────────────────────────
+        N, H, W = _dims_from_input(input)
+
+        roto_obj = None
+        if roto_data and roto_data.strip():
+            try:
+                roto_obj = json.loads(roto_data)
+            except Exception:
+                roto_obj = None
+
+        if roto_obj and roto_raster is not None:
+            try:
+                mask_np = roto_raster.rasterize(roto_obj, W, H, N)
+            except Exception:
+                mask_np = np.zeros((N, H, W), dtype=np.float32)
+        else:
+            mask_np = np.zeros((N, H, W), dtype=np.float32)
+        roto_mask = torch.from_numpy(np.ascontiguousarray(mask_np)).float()
+
+        positive_points = _points_prompt(sam3_positive, 1)
+        negative_points = _points_prompt(sam3_negative, 0)
+
+        # ── 3. Passthrough + tool outputs ────────────────────────────────────
+        return (input, roto_mask, positive_points, negative_points)
+
 
 # mapping dictionaries for external use (nodes.py imports these)
 
@@ -116,5 +197,3 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "bEpicSendToViewer": "bEpic Send To Image Viewer",
 }
-
-

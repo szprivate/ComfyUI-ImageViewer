@@ -239,6 +239,7 @@ export const PlaybackMixin = {
             if (this.sliderMode === 'contact') this.resizeContactContainer();
             if (this.updateImageFrame) this.updateImageFrame();
             if (this.updateShapeInfo) this.updateShapeInfo();
+            if (this.updateToolOverlay) this.updateToolOverlay();
         });
 
         // Path bar
@@ -266,6 +267,11 @@ export const PlaybackMixin = {
         this.timeline.value = this.currentFrame;
         this.container.querySelector('#cur-f').innerText = this.currentFrame;
         if (this.imgBase.naturalWidth) this.updateShapeInfo();
+        // Roto keyframes are frame-dependent — refresh the overlay on scrub/play.
+        if (this._toolState && this._toolState.active === "roto") {
+            this._rotoRefreshKfInfo && this._rotoRefreshKfInfo();
+            this._toolRedraw && this._toolRedraw();
+        }
     },
 
     // Only assign src when it has actually changed, to prevent redundant decodes.
