@@ -188,7 +188,7 @@ export const RotoMixin = {
         p.appendChild(el("div",
             "Draw: click to add points, drag to curve, click first point to close. " +
             "Edit: drag points/handles, Alt+click edge adds a point, R-click deletes, hold F+drag sets feather. " +
-            "Alt+drag pans.", "bepic-tool-hint"));
+            "Middle-drag pans.", "bepic-tool-hint"));
 
         this._rotoRefreshModeBtns();
         this._rotoRefreshLayerList();
@@ -511,7 +511,7 @@ export const RotoMixin = {
     // ── pointer handling ──────────────────────────────────────────────────────
     _rotoPointerDown(e) {
         const n = this._eventToNorm(e);
-        if (!n) return;
+        if (!n) return false;
         const mode = this._roto.mode;
 
         if (mode === "draw") return this._rotoDrawDown(e, n);
@@ -520,6 +520,7 @@ export const RotoMixin = {
     },
 
     _rotoDrawDown(e, n) {
+        if (e.button !== 0) return false;   // right-click → viewport zoom
         let layer = this._roto.drawing;
         if (!layer) {
             // start a fresh shape if none in progress
@@ -536,7 +537,7 @@ export const RotoMixin = {
                 this._roto.mode = "edit";
                 this._rotoSetPivotToCenter(layer);
                 this._rotoSave(); this._rotoRefreshModeBtns(); this._rotoRefreshKfInfo(); this._toolRedraw();
-                return;
+                return true;
             }
         }
 
@@ -544,38 +545,39 @@ export const RotoMixin = {
         const raw = this._rotoInvTf({ x: clamp01(n.x), y: clamp01(n.y) }, layer.transform);
         const pt = { x: raw.x, y: raw.y };
         pts.push(pt);
-        const idx = pts.length - 1;
         this._toolRedraw();
 
-        let dragged = false;
         this._toolDrag(
             (ev) => {
                 const m = this._eventToNorm(ev);
                 if (!m) return;
                 const rawM = this._rotoInvTf(m, layer.transform);
-                dragged = true;
                 pt.cout = { x: rawM.x, y: rawM.y };
                 pt.cin = { x: 2 * pt.x - rawM.x, y: 2 * pt.y - rawM.y }; // mirror
                 this._toolRedraw();
             },
-            () => { if (dragged) this._rotoSave(); else this._rotoSave(); this._toolRedraw(); },
+            () => { this._rotoSave(); this._toolRedraw(); },
         );
+        return true;
     },
 
     _rotoEditDown(e, n) {
         const layer = this._rotoCurLayer();
-        if (!layer) return;
+        if (!layer) return false;
         const tf = layer.transform;
         const dpts = this._rotoDisplayPoints(layer);
         const editPts = this._rotoEditablePoints(layer);
+        const isDelete = (e.button === 2 || e.ctrlKey);
 
-        // 1) tangent / feather handle hit (selected points only)
-        for (const i of this._roto.selPts) {
-            const p = dpts[i];
-            if (!p) continue;
-            for (const hk of ["cin", "cout", "feather"]) {
-                if (!p[hk]) continue;
-                if (this._screenDist(n, p[hk]) <= HIT) return this._rotoDragHandle(e, layer, editPts, i, hk);
+        // 1) tangent / feather handle hit (selected points, left button only)
+        if (!isDelete) {
+            for (const i of this._roto.selPts) {
+                const p = dpts[i];
+                if (!p) continue;
+                for (const hk of ["cin", "cout", "feather"]) {
+                    if (!p[hk]) continue;
+                    if (this._screenDist(n, p[hk]) <= HIT) { this._rotoDragHandle(e, layer, editPts, i, hk); return true; }
+                }
             }
         }
 
@@ -586,16 +588,15 @@ export const RotoMixin = {
         }
 
         if (hitIdx >= 0) {
-            // right-click / ctrl deletes
-            if (e.button === 2 || e.ctrlKey) {
+            // right-click / ctrl deletes the point
+            if (isDelete) {
                 editPts.splice(hitIdx, 1);
                 this._roto.selPts = new Set();
-                if (editPts.length < 2) { /* keep shape but degenerate */ }
                 this._rotoSave(); this._toolRedraw();
-                return;
+                return true;
             }
             // F+drag creates/moves a feather handle
-            if (this._roto.featherKey) return this._rotoDragFeatherCreate(e, layer, editPts, hitIdx);
+            if (this._roto.featherKey) { this._rotoDragFeatherCreate(e, layer, editPts, hitIdx); return true; }
 
             if (e.shiftKey) {
                 if (this._roto.selPts.has(hitIdx)) this._roto.selPts.delete(hitIdx);
@@ -604,8 +605,12 @@ export const RotoMixin = {
                 this._roto.selPts = new Set([hitIdx]);
             }
             this._rotoRefreshShapeControls?.();
-            return this._rotoDragPoints(e, layer, editPts, n);
+            this._rotoDragPoints(e, layer, editPts, n);
+            return true;
         }
+
+        // right-click on empty space → let the viewport zoom
+        if (isDelete) return false;
 
         // 3) Alt+click on an edge inserts a point
         if (e.altKey) {
@@ -615,13 +620,14 @@ export const RotoMixin = {
                 editPts.splice(seg.i + 1, 0, { x: rawInsert.x, y: rawInsert.y });
                 this._roto.selPts = new Set([seg.i + 1]);
                 this._rotoSave(); this._toolRedraw();
-                return;
+                return true;
             }
         }
 
         // 4) empty: clear selection
         this._roto.selPts = new Set();
         this._toolRedraw();
+        return true;
     },
 
     _rotoDragPoints(e, layer, editPts, startNorm) {
@@ -687,19 +693,21 @@ export const RotoMixin = {
     },
 
     _rotoTransformDown(e, n) {
+        if (e.button !== 0) return false;   // right-click → viewport zoom
         const layer = this._rotoCurLayer();
-        if (!layer) return;
+        if (!layer) return false;
         const g = this._rotoTransformGeom(layer);
-        if (!g) return;
+        if (!g) return false;
 
         // 1) corner handle → scale (non-uniform; Shift = uniform)
         for (let i = 0; i < 4; i++) {
-            if (this._screenDist(n, g.dispCorners[i]) <= HIT + 3) return this._rotoScaleDown(e, layer, g, i);
+            if (this._screenDist(n, g.dispCorners[i]) <= HIT + 3) { this._rotoScaleDown(e, layer, g, i); return true; }
         }
         // 2) inside the oriented box → translate
-        if (pointInPoly(n, g.dispCorners)) return this._rotoTranslateDown(e, layer, n);
+        if (pointInPoly(n, g.dispCorners)) { this._rotoTranslateDown(e, layer, n); return true; }
         // 3) outside the box → rotate about the pivot
-        return this._rotoRotateDown(e, layer);
+        this._rotoRotateDown(e, layer);
+        return true;
     },
 
     _rotoTranslateDown(e, layer, n) {

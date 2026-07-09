@@ -579,13 +579,30 @@ export const UIMixin = {
 
     // ── Zoom & pan ────────────────────────────────────────────────────────────
 
+    // Zoom while keeping the image point under (clientX, clientY) fixed, so the
+    // cursor position acts as the zoom anchor instead of the image centre.
+    _zoomAt(newZoom, clientX, clientY) {
+        newZoom = Math.max(0.05, Math.min(newZoom, 20.0));
+        // Contact mode uses a different transform origin; fall back to plain zoom.
+        if (this.sliderMode === 'contact') { this.zoom = newZoom; this.updateTransform(); return; }
+        const rect = this.viewport.getBoundingClientRect();
+        if (!rect.width || !rect.height) { this.zoom = newZoom; this.updateTransform(); return; }
+        const sx = clientX - rect.left, sy = clientY - rect.top;
+        const cx = rect.width / 2, cy = rect.height / 2;
+        const ratio = newZoom / (this.zoom || 1);
+        // screen(p) = C + zoom*(p-C) + pan  →  solve pan so the cursor point stays put
+        this.panX = sx - cx - ratio * (sx - cx - this.panX);
+        this.panY = sy - cy - ratio * (sy - cy - this.panY);
+        this.zoom = newZoom;
+        this.updateTransform();
+    },
+
     setupZoomAndPan() {
         this.viewport.oncontextmenu = (e) => e.preventDefault();
         this.viewport.onwheel       = (e) => {
             if (e.target && e.target.closest && e.target.closest('#exposure-control')) return;
             e.preventDefault();
-            this.zoom = Math.max(0.05, Math.min(this.zoom + (e.deltaY > 0 ? -0.1 : 0.1), 20.0));
-            this.updateTransform();
+            this._zoomAt(this.zoom + (e.deltaY > 0 ? -0.1 : 0.1), e.clientX, e.clientY);
         };
 
         this.viewport.onmousedown = (e) => {
@@ -598,6 +615,9 @@ export const UIMixin = {
                 e.preventDefault();
             } else if (e.button === 2) {
                 this.isZooming = true;
+                // Anchor the scrub-zoom at the point where the drag started.
+                this._zoomAnchorX = e.clientX;
+                this._zoomAnchorY = e.clientY;
                 e.preventDefault();
             } else if (e.button === 1) {
                 // Middle-button always pans (works even when a tool has taken
@@ -616,8 +636,8 @@ export const UIMixin = {
                     this.setExposure(this.exposure + (evt.clientX - this.lastMouseX) * 0.02);
                 }
                 if (this.isZooming) {
-                    this.zoom = Math.max(0.05, Math.min(this.zoom + (evt.clientX - this.lastMouseX) * 0.005, 20.0));
-                    this.updateTransform();
+                    const nz = this.zoom + (evt.clientX - this.lastMouseX) * 0.005 * this.zoom;
+                    this._zoomAt(nz, this._zoomAnchorX, this._zoomAnchorY);
                 }
                 if (this.isPanning) {
                     this.panX += evt.clientX - this.lastMouseX;

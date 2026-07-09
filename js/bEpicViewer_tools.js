@@ -299,15 +299,21 @@ export const ToolsMixin = {
     _wireToolPointer() {
         const origDown = this.viewport.onmousedown;
         this.viewport.onmousedown = (e) => {
-            if (this._toolActive() && e.button === 0 && !e.altKey) {
+            // Route left AND right buttons to the active tool (middle stays pan,
+            // E-held stays exposure). The tool decides whether it consumes the
+            // event; unconsumed right-clicks fall through to viewport zoom.
+            if (this._toolActive() && !this.isExposureModifierActive
+                && (e.button === 0 || e.button === 2)) {
                 if (e.target && e.target.closest && e.target.closest(
                     ".bepic-toolbar,.bepic-tool-panel,#exposure-control,#compare-slider")) {
                     return origDown ? origDown.call(this.viewport, e) : undefined;
                 }
-                e.preventDefault();
-                e.stopPropagation();
-                this._onToolPointerDown(e);
-                return;
+                const consumed = this._onToolPointerDown(e);
+                if (consumed) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return;
+                }
             }
             return origDown ? origDown.call(this.viewport, e) : undefined;
         };
@@ -315,8 +321,9 @@ export const ToolsMixin = {
 
     _onToolPointerDown(e) {
         this.updateToolOverlay();
-        if (this._toolState.active === "sam3") this._sam3PointerDown(e);
-        else if (this._toolState.active === "roto") this._rotoPointerDown?.(e);
+        if (this._toolState.active === "sam3") return this._sam3PointerDown(e);
+        if (this._toolState.active === "roto") return this._rotoPointerDown?.(e);
+        return false;
     },
 
     // Attach a window-level drag loop; onMove/onUp receive the raw event.
@@ -373,18 +380,21 @@ export const ToolsMixin = {
 
     _sam3PointerDown(e) {
         const n = this._eventToNorm(e);
-        if (!n) return;
+        if (!n) return false;
         const hit = this._sam3HitTest(n.x, n.y);
+        const isDelete = (e.button === 2 || e.ctrlKey);
 
         // Right-click / ctrl-click on a point removes it.
-        if (hit && (e.button === 2 || e.ctrlKey)) {
+        if (hit && isDelete) {
             (hit.type === "pos" ? this._sam3.pos : this._sam3.neg).splice(hit.i, 1);
             this._sam3Save(); this._toolRedraw();
-            return;
+            return true;
         }
+        // Right-click on empty space: let the viewport handle zoom.
+        if (isDelete) return false;
 
         if (hit) {
-            // Begin dragging an existing point.
+            // Begin dragging an existing point (left button).
             this._sam3.drag = hit;
             this._toolDrag(
                 (ev) => {
@@ -396,7 +406,7 @@ export const ToolsMixin = {
                 },
                 () => { this._sam3.drag = null; this._sam3Save(); this._toolRedraw(); },
             );
-            return;
+            return true;
         }
 
         // Add a new point. Shift = negative, else positive.
@@ -405,6 +415,7 @@ export const ToolsMixin = {
         else this._sam3.pos.push(p);
         this._sam3Save();
         this._toolRedraw();
+        return true;
     },
 
     _sam3Render() {
@@ -448,7 +459,7 @@ export const ToolsMixin = {
 
         p.appendChild(elWith("div", {
             className: "bepic-tool-hint",
-            innerHTML: "L-click: <b style='color:#28d17c'>positive</b><br>Shift+click: <b style='color:#e5484d'>negative</b><br>R-click / Ctrl+click a dot: delete<br>Drag a dot to move. Alt+drag pans.",
+            innerHTML: "L-click: <b style='color:#28d17c'>positive</b><br>Shift+click: <b style='color:#e5484d'>negative</b><br>R-click / Ctrl+click a dot: delete<br>Drag a dot to move. Middle-drag pans.",
         }));
         this._sam3UpdateCount();
     },
