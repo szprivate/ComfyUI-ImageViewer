@@ -70,7 +70,10 @@ export const ToolsMixin = {
                 z-index:40; overflow:visible; opacity:0; }
             #bepic-tool-draw { position:absolute; inset:0; z-index:41;
                 pointer-events:none; overflow:visible; }
-            #bepic-tool-draw.active { pointer-events:auto; cursor:crosshair; }
+            #bepic-tool-draw.active { pointer-events:auto; }
+            /* While a tool is on, stop the viewport's grab/grabbing hand from
+               bleeding through (esp. the :active grabbing cursor during drags). */
+            .viewport.bepic-tool-on, .viewport.bepic-tool-on:active { cursor:default; }
             .bepic-toolbar { position:absolute; top:44px; left:8px; z-index:60;
                 display:flex; flex-direction:column; gap:4px; }
             .bepic-toolbar button { width:30px; height:30px; border:1px solid #444;
@@ -138,7 +141,6 @@ export const ToolsMixin = {
             return b;
         };
         this._toolBtns = {
-            none: mk("none", "▹", "Pan / no tool"),
             roto: mk("roto", "✎", "Roto tool"),
             sam3: mk("sam3", "◉", "SAM3 points tool"),
         };
@@ -241,6 +243,7 @@ export const ToolsMixin = {
 
         for (const k in this._toolBtns) this._toolBtns[k].classList.toggle("active", k === tool);
         this._toolDraw.classList.toggle("active", tool !== "none");
+        this._updateToolCursor();
 
         this._bindToolsToActiveTab();
 
@@ -251,6 +254,16 @@ export const ToolsMixin = {
         else this._toolPanel.innerHTML = "";
 
         this.updateToolOverlay();
+    },
+
+    // Cursor while a tool is active: arrow for roto (all modes), crosshair for
+    // point placing. The bepic-tool-on class also suppresses the viewport grab.
+    _updateToolCursor() {
+        const active = this._toolState.active;
+        this.viewport.classList.toggle("bepic-tool-on", active !== "none");
+        let c = "default";
+        if (active === "sam3") c = "crosshair";
+        this._toolDraw.style.cursor = c;
     },
 
     // Bind the current active tab to its send-node and load tool data.

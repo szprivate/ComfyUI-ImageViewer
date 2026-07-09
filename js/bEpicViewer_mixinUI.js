@@ -599,6 +599,11 @@ export const UIMixin = {
             } else if (e.button === 2) {
                 this.isZooming = true;
                 e.preventDefault();
+            } else if (e.button === 1) {
+                // Middle-button always pans (works even when a tool has taken
+                // over left-drag).
+                this.isPanning = true;
+                e.preventDefault();
             } else if (e.button === 0) {
                 this.isPanning = true;
                 e.preventDefault();
@@ -624,7 +629,7 @@ export const UIMixin = {
             };
             const onUp = (evt) => {
                 if (evt.button === 2) this.isZooming = false;
-                if (evt.button === 0) this.isPanning = false;
+                if (evt.button === 0 || evt.button === 1) this.isPanning = false;
                 this.isExposureDragging = false;
                 if (!this.isZooming && !this.isPanning && !this.isExposureDragging) {
                     win.removeEventListener('mousemove', onMove);

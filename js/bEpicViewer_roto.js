@@ -420,28 +420,57 @@ export const RotoMixin = {
                     }
                 }
 
-                const sq = svgEl("rect", {
-                    x: scr.x - 3.5, y: scr.y - 3.5, width: 7, height: 7,
-                    fill: selected ? "#ff8a00" : "#fff", stroke: "#000", "stroke-width": 1,
-                });
-                draw.appendChild(sq);
+                if (this._roto.mode !== "transform") {
+                    const sq = svgEl("rect", {
+                        x: scr.x - 3.5, y: scr.y - 3.5, width: 7, height: 7,
+                        fill: selected ? "#ff8a00" : "#fff", stroke: "#000", "stroke-width": 1,
+                    });
+                    draw.appendChild(sq);
+                }
             });
         });
     },
 
-    _rotoRenderTransformBox(dpts, layer) {
-        if (dpts.length < 2) return;
+    // Oriented transform box: the raw AABB corners run through the shape
+    // transform, so the box rotates/scales with the shape (like Nuke).
+    _rotoTransformGeom(layer) {
+        const raw = this._rotoRawPoints(layer, this._rotoFrame());
+        if (!raw || raw.length < 2) return null;
         let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
-        for (const p of dpts) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
-        const a = this._normToDraw(minX, minY), b = this._normToDraw(maxX, maxY);
-        if (!a || !b) return;
-        this._toolDraw.appendChild(svgEl("rect", {
-            x: Math.min(a.x, b.x), y: Math.min(a.y, b.y),
-            width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y),
+        for (const p of raw) {
+            if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y;
+            if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y;
+        }
+        // corner order: TL, TR, BR, BL (so opposite = (i+2)%4)
+        const rawCorners = [
+            { x: minX, y: minY }, { x: maxX, y: minY },
+            { x: maxX, y: maxY }, { x: minX, y: maxY },
+        ];
+        const tf = layer.transform;
+        const dispCorners = rawCorners.map((c) => this._rotoApplyTf(c, tf));
+        return { raw, rawCorners, dispCorners, tf };
+    },
+
+    _rotoRenderTransformBox(_dpts, layer) {
+        const g = this._rotoTransformGeom(layer);
+        if (!g) return;
+        const scr = g.dispCorners.map((c) => this._normToDraw(c.x, c.y));
+        if (scr.some((s) => !s)) return;
+
+        this._toolDraw.appendChild(svgEl("polygon", {
+            points: scr.map((s) => `${s.x},${s.y}`).join(" "),
             fill: "rgba(255,138,0,.06)", stroke: "#ff8a00", "stroke-width": 1, "stroke-dasharray": "5 3",
         }));
-        // pivot marker
-        const pv = this._normToDraw(layer.transform.px, layer.transform.py);
+        scr.forEach((s) => {
+            this._toolDraw.appendChild(svgEl("rect", {
+                x: s.x - 4, y: s.y - 4, width: 8, height: 8,
+                fill: "#ffce85", stroke: "#000", "stroke-width": 1,
+            }));
+        });
+
+        // pivot marker (display pivot = px+tx, py+ty)
+        const tf = layer.transform;
+        const pv = this._normToDraw(tf.px + tf.tx, tf.py + tf.ty);
         if (pv) {
             this._toolDraw.appendChild(svgEl("circle", { cx: pv.x, cy: pv.y, r: 5, fill: "none", stroke: "#ff8a00", "stroke-width": 1 }));
             this._toolDraw.appendChild(svgEl("line", { x1: pv.x - 7, y1: pv.y, x2: pv.x + 7, y2: pv.y, stroke: "#ff8a00" }));
@@ -505,6 +534,7 @@ export const RotoMixin = {
             if (this._screenDist(n, first) <= HIT) {
                 this._roto.drawing = null;
                 this._roto.mode = "edit";
+                this._rotoSetPivotToCenter(layer);
                 this._rotoSave(); this._rotoRefreshModeBtns(); this._rotoRefreshKfInfo(); this._toolRedraw();
                 return;
             }
@@ -659,6 +689,20 @@ export const RotoMixin = {
     _rotoTransformDown(e, n) {
         const layer = this._rotoCurLayer();
         if (!layer) return;
+        const g = this._rotoTransformGeom(layer);
+        if (!g) return;
+
+        // 1) corner handle → scale (non-uniform; Shift = uniform)
+        for (let i = 0; i < 4; i++) {
+            if (this._screenDist(n, g.dispCorners[i]) <= HIT + 3) return this._rotoScaleDown(e, layer, g, i);
+        }
+        // 2) inside the oriented box → translate
+        if (pointInPoly(n, g.dispCorners)) return this._rotoTranslateDown(e, layer, n);
+        // 3) outside the box → rotate about the pivot
+        return this._rotoRotateDown(e, layer);
+    },
+
+    _rotoTranslateDown(e, layer, n) {
         const tf = layer.transform;
         const startTx = tf.tx, startTy = tf.ty;
         const start = { x: n.x, y: n.y };
@@ -672,6 +716,98 @@ export const RotoMixin = {
             },
             () => { this._rotoSave(); this._toolRedraw(); },
         );
+    },
+
+    // Drag a corner to scale about the opposite corner. Works in pixel space so
+    // it composes exactly with the Python transform (scale about pivot + rotate
+    // + translate); tx/ty are solved so the anchor corner stays fixed.
+    _rotoScaleDown(e, layer, g, cornerIdx) {
+        const { w, h } = this._toolImgSize();
+        if (!w || !h) return;
+        const tf = layer.transform;
+        const anchorIdx = (cornerIdx + 2) % 4;
+        const A0 = g.dispCorners[anchorIdx];
+        const A0px = { x: A0.x * w, y: A0.y * h };
+        const px = tf.px * w, py = tf.py * h;
+        const rc = g.rawCorners;
+        const cK = { x: rc[cornerIdx].x * w - px, y: rc[cornerIdx].y * h - py };
+        const cA = { x: rc[anchorIdx].x * w - px, y: rc[anchorIdx].y * h - py };
+        const sx0 = tf.sx, sy0 = tf.sy;
+        const rot = tf.rot * Math.PI / 180, ca = Math.cos(rot), sa = Math.sin(rot);
+        const Rinv = (vx, vy) => ({ x: vx * ca + vy * sa, y: -vx * sa + vy * ca });
+        const Rot = (vx, vy) => ({ x: vx * ca - vy * sa, y: vx * sa + vy * ca });
+        const dX = (cK.x - cA.x) || 1e-6, dY = (cK.y - cA.y) || 1e-6;
+        const v0 = { x: sx0 * dX, y: sy0 * dY };  // anchor→corner at current scale
+
+        this._toolDrag(
+            (ev) => {
+                const m = this._eventToNorm(ev);
+                if (!m) return;
+                const u = Rinv(m.x * w - A0px.x, m.y * h - A0px.y);
+                let sxp, syp;
+                if (ev.shiftKey) {
+                    // uniform: least-squares projection of the drag onto v0
+                    const denom = v0.x * v0.x + v0.y * v0.y || 1e-6;
+                    let k = (u.x * v0.x + u.y * v0.y) / denom;
+                    if (!isFinite(k) || k === 0) k = 1e-3;
+                    sxp = sx0 * k; syp = sy0 * k;
+                } else {
+                    sxp = u.x / dX; syp = u.y / dY;
+                }
+                if (Math.abs(sxp) < 1e-3) sxp = (sxp < 0 ? -1 : 1) * 1e-3;
+                if (Math.abs(syp) < 1e-3) syp = (syp < 0 ? -1 : 1) * 1e-3;
+                // keep the anchor fixed: Tr = A0 - pivot - R*diag(sxp,syp)*cA
+                const rsca = Rot(sxp * cA.x, syp * cA.y);
+                tf.sx = sxp; tf.sy = syp;
+                tf.tx = (A0px.x - px - rsca.x) / w;
+                tf.ty = (A0px.y - py - rsca.y) / h;
+                this._toolRedraw();
+                this._rotoRefreshShapeControls && this._rotoRefreshShapeControls();
+            },
+            () => { this._rotoSave(); this._toolRedraw(); },
+        );
+    },
+
+    // Left-drag outside the box rotates the shape about its (display) pivot,
+    // following the cursor's angular movement. Shift snaps to 15°.
+    _rotoRotateDown(e, layer) {
+        const { w, h } = this._toolImgSize();
+        if (!w || !h) return;
+        const tf = layer.transform;
+        const pivx = (tf.px + tf.tx) * w, pivy = (tf.py + tf.ty) * h;
+        const s = this._eventToNorm(e);
+        if (!s) return;
+        const a0 = Math.atan2(s.y * h - pivy, s.x * w - pivx);
+        const rot0 = tf.rot;
+        this._toolDrag(
+            (ev) => {
+                const m = this._eventToNorm(ev);
+                if (!m) return;
+                const a1 = Math.atan2(m.y * h - pivy, m.x * w - pivx);
+                let nr = rot0 + (a1 - a0) * 180 / Math.PI;
+                if (ev.shiftKey) nr = Math.round(nr / 15) * 15;
+                tf.rot = nr;
+                this._toolRedraw();
+                this._rotoRefreshShapeControls && this._rotoRefreshShapeControls();
+            },
+            () => { this._rotoSave(); this._toolRedraw(); },
+        );
+    },
+
+    _rotoSetPivotToCenter(layer) {
+        const raw = layer.points;
+        if (!raw || raw.length < 2) return;
+        const tf = layer.transform;
+        // moving the pivot only leaves the shape visually fixed for free when
+        // the transform is still identity — do it right after drawing.
+        if (tf.rot !== 0 || tf.sx !== 1 || tf.sy !== 1 || tf.tx !== 0 || tf.ty !== 0) return;
+        let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+        for (const p of raw) {
+            if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y;
+            if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y;
+        }
+        tf.px = (minX + maxX) / 2;
+        tf.py = (minY + maxY) / 2;
     },
 
     _rotoNearestSegment(dpts, n) {
@@ -728,6 +864,17 @@ function interpPoint(a, b, t) {
         }
     }
     return o;
+}
+
+function pointInPoly(p, poly) {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
+        const hit = ((yi > p.y) !== (yj > p.y)) &&
+            (p.x < (xj - xi) * (p.y - yi) / ((yj - yi) || 1e-12) + xi);
+        if (hit) inside = !inside;
+    }
+    return inside;
 }
 
 function projectToSeg(p, a, b) {
