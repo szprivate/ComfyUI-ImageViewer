@@ -102,7 +102,11 @@ class bEpicSendToViewer:
                 "sam3_positive": ("STRING", {"default": "[]", "multiline": False}),
                 "sam3_negative": ("STRING", {"default": "[]", "multiline": False}),
             },
-            "hidden": {"unique_id": "UNIQUE_ID"},
+            "hidden": {
+                "unique_id": "UNIQUE_ID",
+                "prompt": "PROMPT",
+                "extra_pnginfo": "EXTRA_PNGINFO",
+            },
         }
 
     # image passthrough + roto matte + SAM3 point prompts. The JS only reveals
@@ -118,7 +122,7 @@ class bEpicSendToViewer:
     def send(self, input, tab_name="", save_to_output=False,
              file_format="png", fps=24.0, filename_prefix="bEpic",
              roto_data="", sam3_positive="[]", sam3_negative="[]",
-             unique_id=None):
+             unique_id=None, prompt=None, extra_pnginfo=None):
         # ── 1. Save incoming tensors to temp PNGs and push to the viewer ──────
         def process_batch(inp, label):
             if inp is None:
@@ -197,14 +201,16 @@ class bEpicSendToViewer:
         if file_writer is not None and file_writer.is_video_input(input):
             try:
                 _saved, tab_frames = file_writer.write_video_input(
-                    input, save_to_output, filename_prefix, file_format, fps)
+                    input, save_to_output, filename_prefix, file_format, fps,
+                    prompt, extra_pnginfo)
             except Exception as e:
                 print(f"\033[91m[bEpicSendToViewer] video input failed: {e}\033[0m")
                 tab_frames = None
         elif save_to_output and file_writer is not None:
             try:
                 _saved, tab_frames = file_writer.write_output(
-                    input, filename_prefix, file_format, fps)
+                    input, filename_prefix, file_format, fps,
+                    prompt, extra_pnginfo)
             except Exception as e:
                 print(f"\033[91m[bEpicSendToViewer] save to output failed: {e}\033[0m")
                 tab_frames = None

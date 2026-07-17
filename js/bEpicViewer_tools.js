@@ -52,9 +52,14 @@ export const ToolsMixin = {
         // Roto mixin one-time setup (state containers).
         this._rotoInit?.();
 
-        // Keep the overlay aligned when the viewport resizes.
+        // Keep the overlay AND the white image-frame outline aligned when the
+        // viewport resizes (e.g. a side panel is toggled). updateImageFrame
+        // recomputes #img-frame from the image's new client size.
         try {
-            this._toolResizeObs = new ResizeObserver(() => this.updateToolOverlay());
+            this._toolResizeObs = new ResizeObserver(() => {
+                this.updateImageFrame && this.updateImageFrame();
+                this.updateToolOverlay && this.updateToolOverlay();
+            });
             this._toolResizeObs.observe(this.viewport);
         } catch (e) {}
 

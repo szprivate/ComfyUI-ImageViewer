@@ -12,6 +12,7 @@ menu simply shrinks and a clear error is raised only if an unavailable writer is
 actually requested.
 """
 
+import json
 import os
 import random
 
@@ -240,6 +241,38 @@ def _thumb_from_frame(frame01, tag):
         return None
 
 
+def _write_workflow_png(frame01, png_path, prompt, extra_pnginfo):
+    """Write a PNG of a single [H,W,C] float frame with ComfyUI's workflow/prompt
+    embedded in PNG text chunks (the same metadata SaveImage writes), so the file
+    can be dragged back into ComfyUI to restore the graph. Returns the path."""
+    from PIL import Image
+    from PIL.PngImagePlugin import PngInfo
+    meta = PngInfo()
+    if prompt is not None:
+        meta.add_text("prompt", json.dumps(prompt))
+    if isinstance(extra_pnginfo, dict):
+        for key, value in extra_pnginfo.items():
+            meta.add_text(key, json.dumps(value))
+    u8 = np.clip(frame01[:, :, :3] * 255.0, 0, 255).astype(np.uint8)
+    Image.fromarray(u8, "RGB").save(png_path, pnginfo=meta, compress_level=4)
+    return png_path
+
+
+def _first_frame_from_video(video_path):
+    """Decode the first frame of a video file as a [H,W,C] float array in [0,1]."""
+    try:
+        import imageio
+        reader = imageio.get_reader(video_path)
+        try:
+            frame = np.asarray(reader.get_data(0), dtype=np.float32) / 255.0
+        finally:
+            reader.close()
+        return frame[:, :, :3]
+    except Exception as e:
+        print(f"[bEpicSendToViewer] first-frame decode failed: {e}")
+        return None
+
+
 def _thumb_from_video_file(video_path, tag):
     """Decode just the first frame of a written video file into a PNG thumbnail."""
     try:
@@ -312,11 +345,13 @@ def is_video_input(obj):
             and hasattr(obj, "get_frame_rate"))
 
 
-def write_video_input(video_obj, save_to_output, filename_prefix, file_format, fps):
+def write_video_input(video_obj, save_to_output, filename_prefix, file_format, fps,
+                      prompt=None, extra_pnginfo=None):
     """Handle a ComfyUI VIDEO input: always produce a viewer-playable file, and
     persist it to ./output when the toggle is on. Returns (saved_paths,
     viewer_frames). mp4 targets use the video's own encoder (keeps audio); other
-    formats extract the frames and reuse write_output."""
+    formats extract the frames and reuse write_output. Persisted videos also get
+    a same-named companion PNG carrying the ComfyUI workflow."""
     if folder_paths is None:
         raise RuntimeError("folder_paths unavailable (not running inside ComfyUI)")
 
@@ -348,31 +383,50 @@ def write_video_input(video_obj, save_to_output, filename_prefix, file_format, f
             frames = int(video_obj.get_frame_count())
         except Exception:
             frames = 0
+
+        saved = [path] if save_to_output else []
+        thumb = None
+        if save_to_output:
+            # Companion PNG (same name) with the ComfyUI workflow, reused as the
+            # history thumbnail. Falls back to a temp thumbnail on failure.
+            first = _first_frame_from_video(path)
+            if first is not None:
+                try:
+                    png_path = os.path.join(full_folder, f"{filename}_{counter:05}_.png")
+                    _write_workflow_png(first, png_path, prompt, extra_pnginfo)
+                    saved.append(png_path)
+                    thumb = png_path
+                except Exception as e:
+                    print(f"[bEpicSendToViewer] workflow PNG failed: {e}")
+        if thumb is None:
+            thumb = _thumb_from_video_file(path, filename if save_to_output else "vid")
+
         vframe = {
             "path": path, "type": "output" if save_to_output else "temp",
             "kind": "video", "fps": rate, "frames": frames,
-            "filename": file, "subfolder": subfolder,
-            "thumb": _thumb_from_video_file(path, filename if save_to_output else "vid"),
+            "filename": file, "subfolder": subfolder, "thumb": thumb,
         }
         print(f"[bEpicSendToViewer] {'saved' if save_to_output else 'buffered'} "
               f"video {path} ({frames} frames @ {rate} fps)")
-        return ([path] if save_to_output else []), [vframe]
+        return saved, [vframe]
 
     # Non-mp4 output format: extract frames and route through the image/video
     # writer (audio is dropped for these formats).
     images = video_obj.get_components().images
-    return write_output(images, filename_prefix, ext, rate)
+    return write_output(images, filename_prefix, ext, rate, prompt, extra_pnginfo)
 
 
 # ── public entry point ───────────────────────────────────────────────────────
 
-def write_output(tensor, filename_prefix, file_format, fps):
+def write_output(tensor, filename_prefix, file_format, fps,
+                 prompt=None, extra_pnginfo=None):
     """Persist `tensor` to the ComfyUI output directory in `file_format`.
 
     Returns (saved_paths, viewer_frames): `saved_paths` are the files written to
     ./output; `viewer_frames` are frame dicts for the viewer to display — the
     saved files themselves for video and browser-friendly images, or temp PNG
-    proxies for formats a browser can't render (exr / tiff / dpx / ...)."""
+    proxies for formats a browser can't render (exr / tiff / dpx / ...). Video
+    outputs also get a same-named companion PNG carrying the ComfyUI workflow."""
     if tensor is None:
         return [], []
     if folder_paths is None:
@@ -391,13 +445,24 @@ def write_output(tensor, filename_prefix, file_format, fps):
         path = os.path.join(full_folder, file)
         _write_video(frames, path, fps, ext)
         saved.append(path)
+        # Companion PNG (same name) carrying the ComfyUI workflow, reused as the
+        # history thumbnail — a video container can't hold ComfyUI's metadata.
+        thumb = None
+        try:
+            png_path = os.path.join(full_folder, f"{filename}_{counter:05}_.png")
+            _write_workflow_png(frames[0], png_path, prompt, extra_pnginfo)
+            saved.append(png_path)
+            thumb = png_path
+        except Exception as e:
+            print(f"[bEpicSendToViewer] workflow PNG failed: {e}")
+            thumb = _thumb_from_frame(frames[0], filename)
         viewer_frames.append({
             "path": path, "type": "output", "kind": "video",
             "fps": float(fps) if fps and fps > 0 else 24.0, "frames": int(n),
             "filename": file, "subfolder": subfolder,
-            "thumb": _thumb_from_frame(frames[0], filename),
+            "thumb": thumb,
         })
-        print(f"[bEpicSendToViewer] wrote {path} ({n} frames @ {viewer_frames[0]['fps']} fps)")
+        print(f"[bEpicSendToViewer] wrote {path} (+ workflow PNG, {n} frames @ {viewer_frames[0]['fps']} fps)")
     else:
         for i in range(n):
             file = f"{filename}_{counter:05}_.{ext}"

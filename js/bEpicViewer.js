@@ -312,6 +312,10 @@ class ViewerPanel extends HTMLElement {
         this.shadowRoot.appendChild(this.container);
 
         this.container.onmouseenter = () => { this.isHovered = true;  };
+        // mousemove bubbles up from the canvas and every child, so hover stays
+        // correct even when onmouseenter was missed (panel shown under the
+        // cursor) — otherwise hotkeys silently die while over the canvas.
+        this.container.onmousemove  = () => { if (!this.isHovered) this.isHovered = true; };
         this.container.onmouseleave = () => { this.isHovered = false; };
         window.addEventListener('keydown', (e) => this.handleKeyDown(e));
         window.addEventListener('keyup', (e) => this.handleKeyUp(e));
