@@ -17,12 +17,24 @@ try:
 except Exception:
     roto_raster = None
 
+try:
+    from . import file_writer
+except Exception:
+    file_writer = None
+
 
 _ANY = IO.ANY if IO is not None else "IMAGE"
 
+# File formats offered by the "save to ./output" mode. Discovered from the
+# installed writers when file_writer imports cleanly, else a safe static list.
+_FILE_FORMATS = file_writer.FILE_FORMATS if file_writer is not None else [
+    "png", "exr", "tiff", "jpg", "mp4", "mov", "webm"]
+_DEFAULT_FORMAT = "png" if "png" in _FILE_FORMATS else _FILE_FORMATS[0]
+
 
 def _dims_from_input(inp):
-    """Return (N, H, W) from a ComfyUI IMAGE [B,H,W,C] / MASK [B,H,W] tensor."""
+    """Return (N, H, W) from a ComfyUI IMAGE [B,H,W,C] / MASK [B,H,W] tensor, or
+    a native VIDEO object."""
     try:
         if isinstance(inp, torch.Tensor):
             t = inp
@@ -32,6 +44,10 @@ def _dims_from_input(inp):
                 return int(t.shape[0]), int(t.shape[1]), int(t.shape[2])
             if t.ndim == 2:        # H,W
                 return 1, int(t.shape[0]), int(t.shape[1])
+        # ComfyUI VIDEO object: read dims/count without materializing frames.
+        if hasattr(inp, "get_dimensions") and hasattr(inp, "get_frame_count"):
+            w, h = inp.get_dimensions()
+            return int(inp.get_frame_count()), int(h), int(w)
     except Exception:
         pass
     return 1, 512, 512
@@ -67,6 +83,16 @@ class bEpicSendToViewer:
             "required": {
                 "input": (IO.ANY, ) if IO is not None else (("IMAGE", "MASK"),),
                 "tab_name": ("STRING", {"default": ""}),
+                # "save to ./output" mode. When off (default) the node behaves
+                # exactly as before — temp PNGs pushed to the viewer only. When
+                # on, the incoming frames are ALSO persisted to ComfyUI's output
+                # dir in `file_format`. The JS hides the three config widgets
+                # below while this is off.
+                "save_to_output": ("BOOLEAN", {"default": False}),
+                "file_format": (_FILE_FORMATS, {"default": _DEFAULT_FORMAT}),
+                "fps": ("FLOAT", {"default": 24.0, "min": 0.01, "max": 1000.0,
+                                  "step": 0.01}),
+                "filename_prefix": ("STRING", {"default": "bEpic"}),
             },
             "optional": {
                 # Hidden (via JS) stores written by the in-viewer tools. Kept as
@@ -89,8 +115,10 @@ class bEpicSendToViewer:
     OUTPUT_NODE = True
     CATEGORY = "image/bEpic"
 
-    def send(self, input, tab_name="", roto_data="", sam3_positive="[]",
-             sam3_negative="[]", unique_id=None):
+    def send(self, input, tab_name="", save_to_output=False,
+             file_format="png", fps=24.0, filename_prefix="bEpic",
+             roto_data="", sam3_positive="[]", sam3_negative="[]",
+             unique_id=None):
         # ── 1. Save incoming tensors to temp PNGs and push to the viewer ──────
         def process_batch(inp, label):
             if inp is None:
@@ -155,7 +183,35 @@ class bEpicSendToViewer:
             return batch_results
 
         safe_label = tab_name.replace(" ", "_") if tab_name else "send"
-        tabs = {"tab": process_batch(input, safe_label)}
+
+        # Three source kinds feed the viewer tab:
+        #   • a ComfyUI VIDEO object   → decoded to a playable file and shown as
+        #     a <video> (always, even with the toggle off — it can't preview as
+        #     temp PNGs); persisted to ./output when the toggle is on.
+        #   • save-to-output on        → frames persisted in the chosen format
+        #     (mp4/exr/tiff/...) and those files shown in the viewer.
+        #   • otherwise                → the temp-PNG preview path used forever.
+        # write_output/write_video_input return viewer frame dicts (saved files
+        # for video and browser images, temp PNG proxies for exr/tiff/...).
+        tab_frames = None
+        if file_writer is not None and file_writer.is_video_input(input):
+            try:
+                _saved, tab_frames = file_writer.write_video_input(
+                    input, save_to_output, filename_prefix, file_format, fps)
+            except Exception as e:
+                print(f"\033[91m[bEpicSendToViewer] video input failed: {e}\033[0m")
+                tab_frames = None
+        elif save_to_output and file_writer is not None:
+            try:
+                _saved, tab_frames = file_writer.write_output(
+                    input, filename_prefix, file_format, fps)
+            except Exception as e:
+                print(f"\033[91m[bEpicSendToViewer] save to output failed: {e}\033[0m")
+                tab_frames = None
+        if tab_frames is None:
+            tab_frames = process_batch(input, safe_label)
+
+        tabs = {"tab": tab_frames}
 
         PromptServer.instance.send_sync("bepic.viewer.update", {
             "tabs": tabs,

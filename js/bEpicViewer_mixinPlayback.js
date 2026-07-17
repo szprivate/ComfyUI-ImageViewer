@@ -38,7 +38,11 @@ export const PlaybackMixin = {
 
     // ── Tab / image count helpers ────────────────────────────────────────────
 
-    getImgCount() { return (this.allTabs[this.activeTab] || []).length; },
+    getImgCount() {
+        // A video tab holds a single frame dict but scrubs over many frames.
+        if (this._videoMode && this._videoFrames > 0) return this._videoFrames;
+        return (this.allTabs[this.activeTab] || []).length;
+    },
 
     getActiveTabNode() {
         const key = this.activeTab;
@@ -226,7 +230,12 @@ export const PlaybackMixin = {
         }
 
         const imgs = this.allTabs[this.activeTab];
-        if (!imgs || imgs.length === 0) return;
+        if (!imgs || imgs.length === 0) { this._exitVideoMode(); return; }
+
+        // Video tab: a single {kind:"video"} entry scrubbed through the <video>.
+        if (this._frameIsVideo(imgs[0])) { this._videoSeek(idx, imgs[0]); return; }
+        this._exitVideoMode();
+
         const imgIdx = this.displayFrameToImageIndex(idx, imgs.length);
         if (!imgs[imgIdx]) return;
         this.currentFrame = this.imageIndexToDisplayFrame(imgIdx, imgs.length);
@@ -285,12 +294,137 @@ export const PlaybackMixin = {
         if (imgEl.src !== url) imgEl.src = url;
     },
 
+    // ── Video playback ────────────────────────────────────────────────────────
+    // A "save to ./output" node writing mp4/mov/webm sends the viewer a single
+    // {kind:"video", fps, frames} entry. The <video> element decodes it and is
+    // driven by the same transport (play/timeline/step) and zoom/pan as images.
+
+    _frameIsVideo(o) {
+        return !!(o && (o.kind === "video" ||
+            /\.(mp4|m4v|mov|webm|mkv)$/i.test(o.path || o.filename || "")));
+    },
+
+    _enterVideoMode(imgObj) {
+        const v = this.videoBase;
+        if (!v) return;
+        // Key on the stable path, not the cache-busted URL — otherwise every
+        // scrub would look like a new source and reload the whole video.
+        const key = imgObj.path || imgObj.filename || "";
+        if (this._videoMode && this._videoKey === key) return;   // already showing
+        const wasVideo = this._videoMode;
+        const url = this.buildImgUrl(imgObj);
+
+        this._videoMode   = true;
+        this._videoKey    = key;
+        this._videoFps    = (imgObj.fps && imgObj.fps > 0) ? imgObj.fps : (this.fps || 24);
+        this._videoFrames = (imgObj.frames && imgObj.frames > 0) ? imgObj.frames : 0;
+
+        // The FPS field reflects the video's rate while it plays; remember the
+        // user's setting (once, on the image→video transition) so switching to
+        // another history item / image restores it.
+        if (!wasVideo) this._savedFps = this.fps;
+        this._setFpsUi(this._videoFps);
+
+        if (this.imgBase)    this.imgBase.style.display = "none";
+        if (this.imgCompare) this.imgCompare.style.display = "none";
+        if (this.imgFrame)   this.imgFrame.style.display = "none";
+        v.style.display = "block";
+        v.loop  = (this.loopMode === "loop" || this.loopMode === "ping-pong");
+        v.muted = false;
+
+        if (!this._videoHandlersBound) {
+            v.addEventListener("timeupdate",     () => this._videoOnTimeUpdate());
+            v.addEventListener("loadedmetadata", () => this._videoOnMeta());
+            v.addEventListener("ended",          () => { if (!v.loop) this.stop(); });
+            this._videoHandlersBound = true;
+        }
+        if (v.src !== url) v.src = url;
+
+        this.updateTransform();
+        if (this.setImageFilter) this.setImageFilter();
+        if (this.pathBar && imgObj.path) {
+            this.pathBar.textContent = imgObj.path;
+            this.pathBar.title       = imgObj.path;
+            this.pathBar.style.display = "block";
+        }
+        if (this._videoFrames > 0) this.applyTimelineBounds(this._videoFrames);
+    },
+
+    _exitVideoMode() {
+        if (!this._videoMode) return;
+        this._videoMode = false;
+        this._videoKey  = null;
+        this._videoFrames = 0;
+        const v = this.videoBase;
+        if (v) {
+            try { v.pause(); } catch (e) {}
+            v.removeAttribute("src");
+            try { v.load(); } catch (e) {}
+            v.style.display = "none";
+        }
+        if (this.imgBase)    this.imgBase.style.display = "";
+        if (this.imgCompare) this.imgCompare.style.display = this.isComparing ? "block" : "none";
+        // Restore the FPS field to the user's setting from before the video.
+        if (this._savedFps != null) { this._setFpsUi(this._savedFps); this._savedFps = null; }
+    },
+
+    // Set the playback fps and reflect it in the #fps-in field.
+    _setFpsUi(value) {
+        this.fps = value;
+        const el = this.shadowRoot && this.shadowRoot.getElementById("fps-in");
+        if (el) el.value = Number.isInteger(value) ? value : Math.round(value * 1000) / 1000;
+    },
+
+    _videoSeek(idx, imgObj) {
+        this._enterVideoMode(imgObj);
+        const fps = this._videoFps || 24;
+        let frame = Math.floor(idx);
+        frame = this._videoFrames > 0 ? Math.max(0, Math.min(frame, this._videoFrames - 1))
+                                      : Math.max(0, frame);
+        this.currentFrame = frame;
+        try { this.videoBase.currentTime = frame / fps; } catch (e) {}
+        if (this.timeline) this.timeline.value = frame;
+        const curEl = this.container && this.container.querySelector("#cur-f");
+        if (curEl) curEl.innerText = frame;
+    },
+
+    _videoOnMeta() {
+        const v = this.videoBase;
+        if (!this._videoMode || !v) return;
+        if (!(this._videoFrames > 0)) {
+            this._videoFrames = Math.max(1, Math.round((v.duration || 0) * (this._videoFps || 24)));
+        }
+        this.applyTimelineBounds(this._videoFrames);
+        this.fitView();
+        if (this.timeline) this.timeline.value = this.currentFrame || 0;
+    },
+
+    _videoOnTimeUpdate() {
+        if (!this._videoMode || !this.videoBase) return;
+        const frame = Math.round((this.videoBase.currentTime || 0) * (this._videoFps || 24));
+        this.currentFrame = frame;
+        if (this.timeline) this.timeline.value = frame;
+        const curEl = this.container && this.container.querySelector("#cur-f");
+        if (curEl) curEl.innerText = frame;
+    },
+
     // ── Playback ──────────────────────────────────────────────────────────────
 
     play() {
         this.stop();
         const count = this.getImgCount();
         if (count === 0) return;
+
+        // Video tabs play through the browser's decoder; the timeline follows
+        // via the <video>'s timeupdate events (see _enterVideoMode).
+        if (this._videoMode && this.videoBase) {
+            this.isPlaying = true;
+            this._setIcon(this.playBtn, 'icon-pause');
+            this.videoBase.loop = (this.loopMode === 'loop' || this.loopMode === 'ping-pong');
+            const p = this.videoBase.play();
+            if (p && p.catch) p.catch(() => {});
+            return;
+        }
 
         this.isPlaying        = true;
         this._setIcon(this.playBtn, 'icon-pause');
@@ -327,6 +461,7 @@ export const PlaybackMixin = {
         this.isPlaying = false;
         this._setIcon(this.playBtn, 'icon-play');
         if (this.playbackInterval) clearInterval(this.playbackInterval);
+        if (this._videoMode && this.videoBase) { try { this.videoBase.pause(); } catch (e) {} }
     },
 
     step(n) {
@@ -343,6 +478,23 @@ export const PlaybackMixin = {
     // ── Fit view ──────────────────────────────────────────────────────────────
 
     fitView() {
+        // Video tab: fit using the decoded video dimensions.
+        if (this._videoMode && this.videoBase) {
+            const vw = this.videoBase.videoWidth, vh = this.videoBase.videoHeight;
+            if (!vw || !vh) return;
+            try {
+                const viewRect = this.viewport.getBoundingClientRect();
+                const availW   = Math.max(10, viewRect.width  - 2);
+                const availH   = Math.max(10, viewRect.height - 2);
+                const contain  = Math.min(availW / vw, availH / vh);
+                const dispW = Math.max(1, vw * contain), dispH = Math.max(1, vh * contain);
+                const targetZoom = (availW / availH >= vw / vh) ? (availH / dispH) : (availW / dispW);
+                this.zoom = Math.max(0.05, Math.min(20.0, targetZoom));
+            } catch (e) { this.zoom = 1.0; }
+            this.panX = 0; this.panY = 0;
+            this.updateTransform();
+            return;
+        }
         if (!this.imgBase.naturalWidth) return;
         try {
             const viewRect = this.viewport.getBoundingClientRect();

@@ -41,6 +41,7 @@ export const UIMixin = {
         const filter = channelFilter ? `${channelFilter} ${exposureFilter}` : exposureFilter;
         if (this.imgBase) this.imgBase.style.filter = filter;
         if (this.imgCompare) this.imgCompare.style.filter = filter;
+        if (this.videoBase) this.videoBase.style.filter = filter;
     },
 
     // ── Hotkeys ──────────────────────────────────────────────────────────────
@@ -315,6 +316,7 @@ export const UIMixin = {
                 this.setFrame(nextFrame);
             }
         } else {
+            if (this._exitVideoMode) this._exitVideoMode();
             this.imgBase.src = "";
             this.applyTimelineBounds(0);
             this.timeline.value = 0;
@@ -537,11 +539,15 @@ export const UIMixin = {
             this.viewport.style.transform  = '';
             this.imgBase.style.transform   = '';
             this.imgCompare.style.transform = '';
+            if (this.videoBase) this.videoBase.style.transform = '';
         } else {
             if (this.contactContainer) this.contactContainer.style.transform = '';
             this.viewport.style.transform   = '';
             this.imgBase.style.transform    = t;
             this.imgCompare.style.transform = t;
+            // Video shares the image zoom/pan transform so it scrubs, zooms and
+            // pans exactly like an image sequence.
+            if (this.videoBase) this.videoBase.style.transform = t;
         }
         this.updateImageFrame();
         this.updateCompareVisuals();

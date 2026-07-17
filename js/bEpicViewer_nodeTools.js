@@ -20,6 +20,10 @@ export const ROTO_WIDGET = "roto_data";
 export const SAM3_POS_WIDGET = "sam3_positive";
 export const SAM3_NEG_WIDGET = "sam3_negative";
 
+// "save to ./output" toggle and the config widgets it shows/hides.
+export const OUTPUT_TOGGLE = "save_to_output";
+export const OUTPUT_CFG_WIDGETS = ["file_format", "fps", "filename_prefix"];
+
 // Fully hide a widget while keeping it serializable (values still reach backend).
 function hideWidget(node, widget) {
     if (!widget) return;
@@ -42,6 +46,28 @@ function hideWidget(node, widget) {
 export function getToolWidget(node, name) {
     if (!node || !node.widgets) return null;
     return node.widgets.find((w) => w.name === name) || null;
+}
+
+// Reversibly collapse/restore a widget (unlike hideWidget, which is permanent).
+// Collapsed widgets keep their value and serialize normally; they just take no
+// space and don't draw.
+function setWidgetVisible(node, widget, visible) {
+    if (!widget) return;
+    if (visible) {
+        if (!widget._bepicCollapsed) return;
+        widget._bepicCollapsed = false;
+        widget.type        = widget._bepicOrigType;
+        widget.computeSize = widget._bepicOrigComputeSize;
+        if (widget.element) { widget.element.style.display = ""; widget.element.style.visibility = ""; }
+    } else {
+        if (widget._bepicCollapsed) return;
+        widget._bepicCollapsed        = true;
+        widget._bepicOrigType         = widget.type;
+        widget._bepicOrigComputeSize  = widget.computeSize;
+        widget.type        = "bepic-hidden";
+        widget.computeSize = () => [0, -4];   // -4 cancels litegraph's per-widget gap
+        if (widget.element) { widget.element.style.display = "none"; widget.element.style.visibility = "hidden"; }
+    }
 }
 
 export function readToolStore(node, name, fallback) {
@@ -129,7 +155,33 @@ export function registerSendNode(nodeType, nodeData) {
         hideWidget(this, getToolWidget(this, SAM3_POS_WIDGET));
         hideWidget(this, getToolWidget(this, SAM3_NEG_WIDGET));
 
+        // Re-sync the save-to-output config widgets whenever the toggle flips.
+        const toggle = getToolWidget(this, OUTPUT_TOGGLE);
+        if (toggle) {
+            const node = this;
+            const origCb = toggle.callback;
+            toggle.callback = function () {
+                const cr = origCb ? origCb.apply(this, arguments) : undefined;
+                node.bepicSyncOutputWidgets();
+                return cr;
+            };
+        }
+        this.bepicSyncOutputWidgets();
+
         return r;
+    };
+
+    // Show file_format / fps / filename_prefix only while save_to_output is on,
+    // then reflow the node to the new widget layout.
+    nodeType.prototype.bepicSyncOutputWidgets = function () {
+        const toggle = getToolWidget(this, OUTPUT_TOGGLE);
+        const show = !!(toggle && toggle.value);
+        for (const name of OUTPUT_CFG_WIDGETS) {
+            setWidgetVisible(this, getToolWidget(this, name), show);
+        }
+        const sz = this.computeSize();
+        this.setSize([Math.max(this.size[0], sz[0]), sz[1]]);
+        this.setDirtyCanvas?.(true, true);
     };
 
     // Reveal outputs to match the current stores (grow-only).
@@ -155,6 +207,7 @@ export function registerSendNode(nodeType, nodeData) {
         hideWidget(this, getToolWidget(this, SAM3_POS_WIDGET));
         hideWidget(this, getToolWidget(this, SAM3_NEG_WIDGET));
         this.bepicSyncToolOutputs?.();
+        this.bepicSyncOutputWidgets?.();
         return r;
     };
 }
