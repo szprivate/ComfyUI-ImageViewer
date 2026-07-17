@@ -597,17 +597,25 @@ export const UIMixin = {
         this.updateTransform();
     },
 
+    // UI that lives inside the viewport and owns its own mouse events — pan/zoom
+    // must keep its hands off, or it steals the drag from sliders and buttons.
+    _overViewportChrome(e) {
+        const t = e.target;
+        return !!(t && t.closest && t.closest(
+            '#exposure-control, .bepic-toolbar, .bepic-tool-panel'));
+    },
+
     setupZoomAndPan() {
         this.viewport.oncontextmenu = (e) => e.preventDefault();
         this.viewport.onwheel       = (e) => {
-            if (e.target && e.target.closest && e.target.closest('#exposure-control')) return;
+            if (this._overViewportChrome(e)) return;
             e.preventDefault();
             this._zoomAt(this.zoom + (e.deltaY > 0 ? -0.1 : 0.1), e.clientX, e.clientY);
         };
 
         this.viewport.onmousedown = (e) => {
             if (e.target.id === 'compare-slider') return;
-            if (e.target && e.target.closest && e.target.closest('#exposure-control')) return;
+            if (this._overViewportChrome(e)) return;
             this.lastMouseX = e.clientX;
             this.lastMouseY = e.clientY;
             if (this.isExposureModifierActive) {
