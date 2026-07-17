@@ -136,7 +136,7 @@ export const HistoryMixin = {
 
             const imgEl = document.createElement('img');
             if (imgObj) {
-                try { imgEl.src = this.buildImgUrl(imgObj); } catch (e) { /* ignore */ }
+                try { imgEl.src = this.thumbUrl(imgObj); } catch (e) { /* ignore */ }
             }
             thumb.appendChild(imgEl);
             thumb.title = `History ${idx + 1}`;

@@ -58,6 +58,7 @@ function setWidgetVisible(node, widget, visible) {
         widget._bepicCollapsed = false;
         widget.type        = widget._bepicOrigType;
         widget.computeSize = widget._bepicOrigComputeSize;
+        widget.hidden      = false;
         if (widget.element) { widget.element.style.display = ""; widget.element.style.visibility = ""; }
     } else {
         if (widget._bepicCollapsed) return;
@@ -66,6 +67,7 @@ function setWidgetVisible(node, widget, visible) {
         widget._bepicOrigComputeSize  = widget.computeSize;
         widget.type        = "bepic-hidden";
         widget.computeSize = () => [0, -4];   // -4 cancels litegraph's per-widget gap
+        widget.hidden      = true;            // litegraph's draw loop skips hidden widgets
         if (widget.element) { widget.element.style.display = "none"; widget.element.style.visibility = "hidden"; }
     }
 }

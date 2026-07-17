@@ -219,6 +219,45 @@ def _write_video(frames, path, fps, ext):
         writer.close()
 
 
+def _temp_png_path(tag, kind):
+    tmp = folder_paths.get_temp_directory()
+    os.makedirs(tmp, exist_ok=True)
+    safe = "".join(c for c in (tag or kind) if c.isalnum() or c in "-_") or kind
+    return os.path.join(tmp, f"bEpic_{kind}_{safe}_{random.randint(1, 1_000_000)}.png")
+
+
+def _thumb_from_frame(frame01, tag):
+    """Write a browser-displayable PNG thumbnail from a single [H,W,C] float frame.
+    Videos need this because an <img> (history strip) can't render the video file."""
+    try:
+        from PIL import Image
+        u8 = np.clip(frame01[:, :, :3] * 255.0, 0, 255).astype(np.uint8)
+        path = _temp_png_path(tag, "thumb")
+        Image.fromarray(u8, "RGB").save(path, compress_level=4)
+        return path
+    except Exception as e:
+        print(f"[bEpicSendToViewer] thumbnail write failed: {e}")
+        return None
+
+
+def _thumb_from_video_file(video_path, tag):
+    """Decode just the first frame of a written video file into a PNG thumbnail."""
+    try:
+        import imageio
+        reader = imageio.get_reader(video_path)
+        try:
+            frame = reader.get_data(0)          # [H,W,C] uint8 RGB
+        finally:
+            reader.close()
+        from PIL import Image
+        path = _temp_png_path(tag, "thumb")
+        Image.fromarray(np.asarray(frame)[:, :, :3]).save(path, compress_level=4)
+        return path
+    except Exception as e:
+        print(f"[bEpicSendToViewer] video thumbnail failed: {e}")
+        return None
+
+
 def _write_temp_proxies(frames, tag):
     """Write browser-displayable PNG proxies to the temp dir for formats the
     viewer can't render directly (exr / tiff / dpx / ...). Returns viewer frame
@@ -313,6 +352,7 @@ def write_video_input(video_obj, save_to_output, filename_prefix, file_format, f
             "path": path, "type": "output" if save_to_output else "temp",
             "kind": "video", "fps": rate, "frames": frames,
             "filename": file, "subfolder": subfolder,
+            "thumb": _thumb_from_video_file(path, filename if save_to_output else "vid"),
         }
         print(f"[bEpicSendToViewer] {'saved' if save_to_output else 'buffered'} "
               f"video {path} ({frames} frames @ {rate} fps)")
@@ -355,6 +395,7 @@ def write_output(tensor, filename_prefix, file_format, fps):
             "path": path, "type": "output", "kind": "video",
             "fps": float(fps) if fps and fps > 0 else 24.0, "frames": int(n),
             "filename": file, "subfolder": subfolder,
+            "thumb": _thumb_from_frame(frames[0], filename),
         })
         print(f"[bEpicSendToViewer] wrote {path} ({n} frames @ {viewer_frames[0]['fps']} fps)")
     else:

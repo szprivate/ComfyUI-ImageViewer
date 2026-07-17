@@ -20,6 +20,13 @@ export const PlaybackMixin = {
         return api.apiURL(`/view${params}`);
     },
 
+    // Thumbnail URL for a frame. Video frames carry an extracted `thumb` PNG
+    // because an <img> (history strip) can't render the video file itself.
+    thumbUrl(imgObj) {
+        if (imgObj && imgObj.thumb) return this.buildImgUrl({ path: imgObj.thumb, type: "temp" });
+        return this.buildImgUrl(imgObj);
+    },
+
     // ── Shape info overlay ───────────────────────────────────────────────────
 
     updateShapeInfo() {
