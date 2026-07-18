@@ -140,6 +140,8 @@ export const HistoryMixin = {
             }
             thumb.appendChild(imgEl);
             thumb.title = `History ${idx + 1}`;
+            // Drag source: drop onto the ComfyUI graph to make a Load Image node.
+            if (imgObj && this._makeHistoryThumbDraggable) this._makeHistoryThumbDraggable(thumb, imgObj);
 
             const isSelected = (this.currentHistoryKey === key && this.currentHistoryIndex === idx);
             if (isSelected) {
@@ -152,7 +154,10 @@ export const HistoryMixin = {
                 if (idx === this.historyCompare.otherIdx) thumb.classList.add('compare');
             }
 
-            thumb.onmousedown  = ev => ev.preventDefault();
+            // Don't preventDefault here — that would block the native drag start
+            // used to drop thumbnails onto the graph. stopPropagation still keeps
+            // the mousedown from reaching any parent panel handler.
+            thumb.onmousedown  = ev => ev.stopPropagation();
             thumb.oncontextmenu = (ev) => { ev.preventDefault(); ev.stopPropagation(); this.showThumbContextMenu(ev, imgObj, key, idx); };
             thumb.onclick = (ev) => {
                 ev.stopPropagation();
@@ -428,6 +433,7 @@ export const HistoryMixin = {
     },
 
     closeTab(key) {
+        if (this._revokeDroppedTab) this._revokeDroppedTab(key);   // free blob: URLs of dropped files
         this.tabOrder = this.tabOrder.filter(k => k !== key);
         delete this.allTabs[key];
         delete this.tabLabels[key];

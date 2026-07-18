@@ -9,6 +9,9 @@ export const PlaybackMixin = {
 
     buildImgUrl(imgObj) {
         if (!imgObj) return '';
+        // Dropped OS files are served straight from an in-memory blob: URL — it is
+        // already unique per file, so never cache-bust or rewrite it.
+        if (imgObj.url) return imgObj.url;
         if (imgObj.path) {
             const endpoint = imgObj.external ? '/bepic/view_file' : '/bepic/raw_view';
             return api.apiURL(`${endpoint}?path=${encodeURIComponent(imgObj.path)}&t=${Date.now()}`);
@@ -23,7 +26,11 @@ export const PlaybackMixin = {
     // Thumbnail URL for a frame. Video frames carry an extracted `thumb` PNG
     // because an <img> (history strip) can't render the video file itself.
     thumbUrl(imgObj) {
-        if (imgObj && imgObj.thumb) return this.buildImgUrl({ path: imgObj.thumb, type: "temp" });
+        if (imgObj && imgObj.thumb) {
+            // A dropped video's poster is an inline data:/blob: URL, not a temp path.
+            if (/^(data:|blob:)/.test(imgObj.thumb)) return imgObj.thumb;
+            return this.buildImgUrl({ path: imgObj.thumb, type: "temp" });
+        }
         return this.buildImgUrl(imgObj);
     },
 

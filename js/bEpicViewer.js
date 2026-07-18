@@ -12,6 +12,7 @@ import { ParamsMixin }   from "./bEpicViewer_mixinParams.js";
 import { UIMixin }       from "./bEpicViewer_mixinUI.js";
 import { ToolsMixin }    from "./bEpicViewer_tools.js";
 import { RotoMixin }     from "./bEpicViewer_roto.js";
+import { DnDMixin }      from "./bEpicViewer_mixinDnD.js";
 import { registerSendNode } from "./bEpicViewer_nodeTools.js";
 
 let globalViewerPanel = null;
@@ -214,14 +215,23 @@ class ViewerPanel extends HTMLElement {
     persistViewerState() {
         if (this._isRestoringViewerState) return;
         try {
+            // Dropped-file tabs live on blob: URLs that die on reload — never
+            // persist them (they would restore as broken images).
+            const keepKey = (k) => !String(k).startsWith('dropped_');
+            const pick = (obj) => {
+                const out = {};
+                Object.keys(obj || {}).forEach((k) => { if (keepKey(k)) out[k] = obj[k]; });
+                return out;
+            };
+            const activeTab = keepKey(this.activeTab) ? (this.activeTab || null) : null;
             const payload = {
                 version: 1,
-                allTabs: this.allTabs || {},
-                history: this.history || {},
-                tabViewState: this.tabViewState || {},
-                tabLabels: this.tabLabels || {},
-                tabOrder: Array.isArray(this.tabOrder) ? this.tabOrder : [],
-                activeTab: this.activeTab || null,
+                allTabs: pick(this.allTabs),
+                history: pick(this.history),
+                tabViewState: pick(this.tabViewState),
+                tabLabels: pick(this.tabLabels),
+                tabOrder: (Array.isArray(this.tabOrder) ? this.tabOrder : []).filter(keepKey),
+                activeTab,
                 savedAt: Date.now(),
             };
             window.localStorage.setItem(this._getViewerStateStorageKey(), JSON.stringify(payload));
@@ -303,6 +313,14 @@ class ViewerPanel extends HTMLElement {
             }
             .tab, .history-thumb { user-select:none; }
             .history-thumb.selected { border:1px solid #f60; }
+            .history-thumb[draggable="true"] { cursor: grab; }
+            #viewport.bepic-drop-hover { outline: 2px dashed #f60; outline-offset: -6px; }
+            #viewport.bepic-drop-hover::after {
+                content: "Drop images or videos to open";
+                position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
+                background: rgba(20,20,20,0.85); color: #f60; font-size: 12px;
+                padding: 4px 10px; border-radius: 4px; pointer-events: none; z-index: 40;
+            }
         `;
         this.shadowRoot.appendChild(style);
 
@@ -341,6 +359,8 @@ class ViewerPanel extends HTMLElement {
         this.setupPanelDragging();
         this.setupTimelineEvents();
         this._initTools();
+        this.setupExplorerDrop();      // OS files → viewport
+        this.setupGraphDropTarget();   // history thumb → ComfyUI graph
 
         this.currentParamNodeId  = null;
         this.currentHistoryKey   = null;
@@ -1012,6 +1032,7 @@ Object.assign(
     UIMixin,
     ToolsMixin,
     RotoMixin,
+    DnDMixin,
 );
 
 if (!customElements.get("bepic-viewer-panel")) {
