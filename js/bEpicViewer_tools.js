@@ -20,6 +20,8 @@ import {
     writeToolStore,
     SAM3_POS_WIDGET,
     SAM3_NEG_WIDGET,
+    SAM3_BOX_POS_WIDGET,
+    SAM3_BOX_NEG_WIDGET,
 } from "./bEpicViewer_nodeTools.js";
 
 const SVGNS = "http://www.w3.org/2000/svg";
@@ -43,6 +45,7 @@ export const ToolsMixin = {
     _initTools() {
         this._toolState = { active: "none", node: null };
         this._sam3 = { pos: [], neg: [], drag: null, hover: null };
+        this._sam3box = { pos: [], neg: [], drag: null, hover: null };
 
         this._injectToolStyles();
         this._buildToolOverlay();
@@ -161,6 +164,7 @@ export const ToolsMixin = {
         this._toolBtns = {
             roto: mk("roto", "✎", "Roto tool"),
             sam3: mk("sam3", "◉", "SAM3 points tool"),
+            sam3box: mk("sam3box", "⬚", "SAM3 boxes tool"),
         };
         this.viewport.appendChild(bar);
         this._toolbar = bar;
@@ -280,6 +284,7 @@ export const ToolsMixin = {
         // Panel content
         this._toolPanel.classList.toggle("show", tool !== "none");
         if (tool === "sam3") this._sam3BuildPanel();
+        else if (tool === "sam3box") this._sam3boxBuildPanel();
         else if (tool === "roto") this._rotoActivate?.(this._toolPanel);
         else this._toolPanel.innerHTML = "";
         if (tool === "none") this._toolSetStatus("");
@@ -293,7 +298,7 @@ export const ToolsMixin = {
         const active = this._toolState.active;
         this.viewport.classList.toggle("bepic-tool-on", active !== "none");
         let c = "default";
-        if (active === "sam3") c = "crosshair";
+        if (active === "sam3" || active === "sam3box") c = "crosshair";
         this._toolDraw.style.cursor = c;
     },
 
@@ -303,9 +308,11 @@ export const ToolsMixin = {
         this._toolState.node = node;
         if (node) {
             this._sam3Load(node);
+            this._sam3boxLoad(node);
             this._rotoLoadFromNode?.(node);
         } else {
             this._sam3 = { pos: [], neg: [], drag: null, hover: null };
+            this._sam3box = { pos: [], neg: [], drag: null, hover: null };
             this._rotoClearState?.();
         }
         // Reflect availability
@@ -323,6 +330,7 @@ export const ToolsMixin = {
         if (!this._toolActive()) return;
         this._toolDrawRect = this._toolDraw.getBoundingClientRect();
         if (this._toolState.active === "sam3") this._sam3Render();
+        else if (this._toolState.active === "sam3box") this._sam3boxRender();
         else if (this._toolState.active === "roto") this._rotoRender?.();
     },
 
@@ -353,6 +361,7 @@ export const ToolsMixin = {
     _onToolPointerDown(e) {
         this.updateToolOverlay();
         if (this._toolState.active === "sam3") return this._sam3PointerDown(e);
+        if (this._toolState.active === "sam3box") return this._sam3boxPointerDown(e);
         if (this._toolState.active === "roto") return this._rotoPointerDown?.(e);
         return false;
     },
@@ -371,6 +380,7 @@ export const ToolsMixin = {
         let ctx = null;
         if (this._toolState.active === "roto") ctx = this._rotoHoverContext?.(e, n);
         else if (this._toolState.active === "sam3") ctx = this._sam3HoverContext(e, n);
+        else if (this._toolState.active === "sam3box") ctx = this._sam3boxHoverContext(e, n);
         if (!ctx) return;
         this._toolSetStatus(ctx.status);
         this._toolDraw.style.cursor = ctx.cursor || "default";
@@ -530,6 +540,237 @@ export const ToolsMixin = {
         if (this._sam3CountEl) {
             this._sam3CountEl.textContent =
                 `${this._sam3.pos.length} positive · ${this._sam3.neg.length} negative`;
+        }
+    },
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //  SAM3 BOXES TOOL
+    //  Drag out a bounding box (positive = green, Shift = negative/red). Drag a
+    //  corner to resize, drag the body to move, right-click / Ctrl+click to
+    //  delete. Boxes are stored normalized as {x1,y1,x2,y2} and emitted as
+    //  SAM3_BOXES_PROMPT (center format), matching ComfyUI-SAM3's BBoxCollector.
+    // ═══════════════════════════════════════════════════════════════════════
+    _sam3boxLoad(node) {
+        const parse = (name) => {
+            try {
+                const arr = JSON.parse(readToolStore(node, name, "[]"));
+                return Array.isArray(arr)
+                    ? arr.filter((b) => b && isFinite(b.x1) && isFinite(b.y1) && isFinite(b.x2) && isFinite(b.y2))
+                          .map((b) => ({ x1: +b.x1, y1: +b.y1, x2: +b.x2, y2: +b.y2 }))
+                    : [];
+            } catch (e) { return []; }
+        };
+        this._sam3box = {
+            pos: parse(SAM3_BOX_POS_WIDGET),
+            neg: parse(SAM3_BOX_NEG_WIDGET),
+            drag: null, hover: null,
+        };
+    },
+
+    _sam3boxSave() {
+        const node = this._toolState.node;
+        if (!node) return;
+        writeToolStore(node, SAM3_BOX_POS_WIDGET, this._sam3box.pos);
+        writeToolStore(node, SAM3_BOX_NEG_WIDGET, this._sam3box.neg);
+        this._sam3boxUpdateCount();
+    },
+
+    // Normalize a box in place so x1<x2 and y1<y2.
+    _sam3boxNormalize(b) {
+        const x1 = Math.min(b.x1, b.x2), x2 = Math.max(b.x1, b.x2);
+        const y1 = Math.min(b.y1, b.y2), y2 = Math.max(b.y1, b.y2);
+        b.x1 = x1; b.x2 = x2; b.y1 = y1; b.y2 = y2;
+        return b;
+    },
+
+    // Hit-test: corners (resize) first, then body (move). Returns
+    // { type:'pos'|'neg', i, part:'nw'|'ne'|'sw'|'se'|'body' } or null.
+    _sam3boxHitTest(nx, ny) {
+        const cur = { x: nx, y: ny };
+        const th = 9;   // screen px for a corner grab
+        const corners = (b) => ({
+            nw: { x: Math.min(b.x1, b.x2), y: Math.min(b.y1, b.y2) },
+            ne: { x: Math.max(b.x1, b.x2), y: Math.min(b.y1, b.y2) },
+            sw: { x: Math.min(b.x1, b.x2), y: Math.max(b.y1, b.y2) },
+            se: { x: Math.max(b.x1, b.x2), y: Math.max(b.y1, b.y2) },
+        });
+        // Corners across both lists (positive drawn on top → tested first).
+        for (const type of ["pos", "neg"]) {
+            const arr = this._sam3box[type];
+            for (let i = arr.length - 1; i >= 0; i--) {
+                const c = corners(arr[i]);
+                for (const part of ["nw", "ne", "sw", "se"]) {
+                    if (this._screenDist(cur, c[part]) <= th) return { type, i, part };
+                }
+            }
+        }
+        // Bodies.
+        for (const type of ["pos", "neg"]) {
+            const arr = this._sam3box[type];
+            for (let i = arr.length - 1; i >= 0; i--) {
+                const b = arr[i];
+                const x1 = Math.min(b.x1, b.x2), x2 = Math.max(b.x1, b.x2);
+                const y1 = Math.min(b.y1, b.y2), y2 = Math.max(b.y1, b.y2);
+                if (nx >= x1 && nx <= x2 && ny >= y1 && ny <= y2) return { type, i, part: "body" };
+            }
+        }
+        return null;
+    },
+
+    _sam3boxPointerDown(e) {
+        const n = this._eventToNorm(e);
+        if (!n) return false;
+        const isDelete = (e.button === 2 || e.ctrlKey);
+        const hit = this._sam3boxHitTest(n.x, n.y);
+
+        // Right-click / ctrl-click on a box removes it.
+        if (hit && isDelete) {
+            this._sam3box[hit.type].splice(hit.i, 1);
+            this._sam3boxSave(); this._toolRedraw();
+            return true;
+        }
+        if (isDelete) return false;   // right-click empty → viewport zoom
+
+        // Resize by dragging a corner (the opposite corner stays anchored).
+        if (hit && hit.part !== "body") {
+            const b = this._sam3boxNormalize(this._sam3box[hit.type][hit.i]);
+            const anchor = {
+                nw: { x: b.x2, y: b.y2 }, ne: { x: b.x1, y: b.y2 },
+                sw: { x: b.x2, y: b.y1 }, se: { x: b.x1, y: b.y1 },
+            }[hit.part];
+            this._sam3box.drag = hit;
+            this._toolDrag(
+                (ev) => {
+                    const m = this._eventToNorm(ev);
+                    if (!m) return;
+                    const mx = clamp01(m.x), my = clamp01(m.y);
+                    b.x1 = Math.min(anchor.x, mx); b.x2 = Math.max(anchor.x, mx);
+                    b.y1 = Math.min(anchor.y, my); b.y2 = Math.max(anchor.y, my);
+                    this._toolRedraw();
+                },
+                () => { this._sam3box.drag = null; this._sam3boxSave(); this._toolRedraw(); },
+            );
+            return true;
+        }
+
+        // Move the whole box.
+        if (hit && hit.part === "body") {
+            const b = this._sam3boxNormalize(this._sam3box[hit.type][hit.i]);
+            const start = { x: n.x, y: n.y };
+            const orig = { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 };
+            this._sam3box.drag = hit;
+            this._toolDrag(
+                (ev) => {
+                    const m = this._eventToNorm(ev);
+                    if (!m) return;
+                    let dx = m.x - start.x, dy = m.y - start.y;
+                    dx = Math.max(-orig.x1, Math.min(1 - orig.x2, dx));
+                    dy = Math.max(-orig.y1, Math.min(1 - orig.y2, dy));
+                    b.x1 = orig.x1 + dx; b.x2 = orig.x2 + dx;
+                    b.y1 = orig.y1 + dy; b.y2 = orig.y2 + dy;
+                    this._toolRedraw();
+                },
+                () => { this._sam3box.drag = null; this._sam3boxSave(); this._toolRedraw(); },
+            );
+            return true;
+        }
+
+        // Otherwise: draw a new box from here. Shift = negative.
+        const arr = e.shiftKey ? this._sam3box.neg : this._sam3box.pos;
+        const box = { x1: clamp01(n.x), y1: clamp01(n.y), x2: clamp01(n.x), y2: clamp01(n.y) };
+        arr.push(box);
+        this._sam3box.drag = { type: e.shiftKey ? "neg" : "pos", i: arr.length - 1, part: "se" };
+        this._toolDrag(
+            (ev) => {
+                const m = this._eventToNorm(ev);
+                if (!m) return;
+                box.x2 = clamp01(m.x); box.y2 = clamp01(m.y);
+                this._toolRedraw();
+            },
+            () => {
+                this._sam3box.drag = null;
+                // Drop boxes too small to be meaningful.
+                const tiny = this._screenDist({ x: box.x1, y: box.y1 }, { x: box.x2, y: box.y2 }) < 6;
+                if (tiny || box.x1 === box.x2 || box.y1 === box.y2) arr.pop();
+                else this._sam3boxNormalize(box);
+                this._sam3boxSave(); this._toolRedraw();
+            },
+        );
+        return true;
+    },
+
+    _sam3boxRender() {
+        const drawBoxes = (arr, color) => {
+            for (const b of arr) {
+                const p1 = this._normToDraw(Math.min(b.x1, b.x2), Math.min(b.y1, b.y2));
+                const p2 = this._normToDraw(Math.max(b.x1, b.x2), Math.max(b.y1, b.y2));
+                if (!p1 || !p2) continue;
+                this._toolDraw.appendChild(svgEl("rect", {
+                    x: p1.x, y: p1.y, width: p2.x - p1.x, height: p2.y - p1.y,
+                    fill: color, "fill-opacity": 0.1, stroke: color, "stroke-width": 2,
+                }));
+                for (const c of [[p1.x, p1.y], [p2.x, p1.y], [p1.x, p2.y], [p2.x, p2.y]]) {
+                    this._toolDraw.appendChild(svgEl("rect", {
+                        x: c[0] - 4, y: c[1] - 4, width: 8, height: 8,
+                        fill: "#000", stroke: color, "stroke-width": 1.5,
+                    }));
+                }
+            }
+        };
+        drawBoxes(this._sam3box.pos, "#28d17c");
+        drawBoxes(this._sam3box.neg, "#e5484d");
+    },
+
+    _sam3boxHoverContext(e, n) {
+        const hit = this._sam3boxHitTest(n.x, n.y);
+        if (hit && hit.part !== "body") {
+            const cur = (hit.part === "nw" || hit.part === "se") ? "nwse-resize" : "nesw-resize";
+            return { status: "<b>Drag</b> resize · <b>Right-click</b> delete", cursor: cur };
+        }
+        if (hit && hit.part === "body") {
+            return { status: "<b>Drag</b> move · <b>Right-click</b> delete", cursor: "move" };
+        }
+        return {
+            status: e.shiftKey ? "<b>Drag</b> out a negative box"
+                               : "<b>Drag</b> out a positive box · <b>Shift</b> negative",
+            cursor: "crosshair",
+        };
+    },
+
+    _sam3boxBuildPanel() {
+        const p = this._toolPanel;
+        p.innerHTML = "";
+        p.appendChild(elWith("h4", { textContent: "SAM3 Boxes" }));
+
+        if (!this._toolState.node) {
+            p.appendChild(elWith("div", {
+                className: "bepic-tool-hint",
+                textContent: "Active tab has no 'Send to bEpic Viewer' node, so boxes can't be saved. Switch to a tab produced by that node.",
+            }));
+            return;
+        }
+
+        this._sam3boxCountEl = elWith("div", { className: "bepic-tool-hint" });
+        p.appendChild(this._sam3boxCountEl);
+
+        const clearBtn = elWith("button", { className: "bepic-act bepic-danger", textContent: "Clear boxes" });
+        clearBtn.onclick = () => {
+            this._sam3box.pos = []; this._sam3box.neg = [];
+            this._sam3boxSave(); this._toolRedraw();
+        };
+        p.appendChild(clearBtn);
+
+        p.appendChild(elWith("div", {
+            className: "bepic-tool-hint",
+            innerHTML: "Drag out a box: <b style='color:#28d17c'>positive</b><br>Shift+drag: <b style='color:#e5484d'>negative</b><br>Corner: resize · body: move<br>R-click / Ctrl+click a box: delete. Middle-drag pans.",
+        }));
+        this._sam3boxUpdateCount();
+    },
+
+    _sam3boxUpdateCount() {
+        if (this._sam3boxCountEl) {
+            this._sam3boxCountEl.textContent =
+                `${this._sam3box.pos.length} positive · ${this._sam3box.neg.length} negative`;
         }
     },
 };

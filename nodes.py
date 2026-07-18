@@ -72,6 +72,37 @@ def _points_prompt(json_str, label):
     return {"points": pts, "labels": labels}
 
 
+def _boxes_prompt(json_str, positive):
+    """Build a SAM3_BOXES_PROMPT dict from a normalized [{x1,y1,x2,y2},...] string.
+
+    Boxes arrive already normalized to [0,1] (top-left / bottom-right). SAM3
+    expects center format [cx, cy, w, h] plus a per-box boolean label
+    (True = positive, False = negative), matching ComfyUI-SAM3's
+    SAM3BBoxCollector output.
+    """
+    boxes, labels = [], []
+    try:
+        arr = json.loads(json_str) if json_str and json_str.strip() else []
+    except Exception:
+        arr = []
+    if isinstance(arr, list):
+        for b in arr:
+            try:
+                x1 = float(b["x1"]); y1 = float(b["y1"])
+                x2 = float(b["x2"]); y2 = float(b["y2"])
+            except Exception:
+                continue
+            lo_x, hi_x = min(x1, x2), max(x1, x2)
+            lo_y, hi_y = min(y1, y2), max(y1, y2)
+            w = hi_x - lo_x
+            h = hi_y - lo_y
+            if w <= 0 or h <= 0:
+                continue
+            boxes.append([(lo_x + hi_x) / 2.0, (lo_y + hi_y) / 2.0, w, h])
+            labels.append(bool(positive))
+    return {"boxes": boxes, "labels": labels}
+
+
 class bEpicSendToViewer:
     def __init__(self):
         self.output_dir = folder_paths.get_temp_directory()
@@ -101,6 +132,8 @@ class bEpicSendToViewer:
                 "roto_data":     ("STRING", {"default": "", "multiline": False}),
                 "sam3_positive": ("STRING", {"default": "[]", "multiline": False}),
                 "sam3_negative": ("STRING", {"default": "[]", "multiline": False}),
+                "sam3_box_positive": ("STRING", {"default": "[]", "multiline": False}),
+                "sam3_box_negative": ("STRING", {"default": "[]", "multiline": False}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -113,8 +146,10 @@ class bEpicSendToViewer:
     # the optional output slots once the corresponding viewer tool is used, but
     # the tuple returned here always matches this fixed order/length so ComfyUI
     # can map outputs by index.
-    RETURN_TYPES = (_ANY, "MASK", "SAM3_POINTS_PROMPT", "SAM3_POINTS_PROMPT")
-    RETURN_NAMES = ("image", "roto_mask", "positive_points", "negative_points")
+    RETURN_TYPES = (_ANY, "MASK", "SAM3_POINTS_PROMPT", "SAM3_POINTS_PROMPT",
+                    "SAM3_BOXES_PROMPT", "SAM3_BOXES_PROMPT")
+    RETURN_NAMES = ("image", "roto_mask", "positive_points", "negative_points",
+                    "positive_bboxes", "negative_bboxes")
     FUNCTION = "send"
     OUTPUT_NODE = True
     CATEGORY = "image/bEpic"
@@ -122,6 +157,7 @@ class bEpicSendToViewer:
     def send(self, input, tab_name="", save_to_output=False,
              file_format="png", fps=24.0, filename_prefix="bEpic",
              roto_data="", sam3_positive="[]", sam3_negative="[]",
+             sam3_box_positive="[]", sam3_box_negative="[]",
              unique_id=None, prompt=None, extra_pnginfo=None):
         # ── 1. Save incoming tensors to temp PNGs and push to the viewer ──────
         def process_batch(inp, label):
@@ -245,9 +281,12 @@ class bEpicSendToViewer:
 
         positive_points = _points_prompt(sam3_positive, 1)
         negative_points = _points_prompt(sam3_negative, 0)
+        positive_bboxes = _boxes_prompt(sam3_box_positive, True)
+        negative_bboxes = _boxes_prompt(sam3_box_negative, False)
 
         # ── 3. Passthrough + tool outputs ────────────────────────────────────
-        return (input, roto_mask, positive_points, negative_points)
+        return (input, roto_mask, positive_points, negative_points,
+                positive_bboxes, negative_bboxes)
 
 
 # mapping dictionaries for external use (nodes.py imports these)

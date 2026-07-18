@@ -1,14 +1,17 @@
 // bEpicViewer_nodeTools.js
 // Node-side glue for the in-viewer tools (Roto + SAM3 points).
 //
-// The bEpicSendToViewer node carries three hidden STRING widgets that the
-// viewer's tools write into:
-//     roto_data      – serialized roto layers  (JSON)
-//     sam3_positive  – normalized [{x,y},...]   (JSON)
-//     sam3_negative  – normalized [{x,y},...]   (JSON)
+// The bEpicSendToViewer node carries hidden STRING widgets that the viewer's
+// tools write into:
+//     roto_data          – serialized roto layers        (JSON)
+//     sam3_positive      – normalized points [{x,y},...]  (JSON)
+//     sam3_negative      – normalized points [{x,y},...]  (JSON)
+//     sam3_box_positive  – normalized boxes [{x1,y1,x2,y2},...] (JSON)
+//     sam3_box_negative  – normalized boxes [{x1,y1,x2,y2},...] (JSON)
 //
 // Its Python RETURN_TYPES are fixed at:
 //     0 image | 1 roto_mask | 2 positive_points | 3 negative_points
+//   | 4 positive_bboxes | 5 negative_bboxes
 // but we collapse the node to just `image` on creation and only *reveal* the
 // optional outputs (contiguously, so backend indices stay aligned) once a tool
 // has actually produced data — the "appear when used" behaviour.
@@ -19,6 +22,8 @@ export const BEPIC_SEND_NODE = "bEpicSendToViewer";
 export const ROTO_WIDGET = "roto_data";
 export const SAM3_POS_WIDGET = "sam3_positive";
 export const SAM3_NEG_WIDGET = "sam3_negative";
+export const SAM3_BOX_POS_WIDGET = "sam3_box_positive";
+export const SAM3_BOX_NEG_WIDGET = "sam3_box_negative";
 
 // "save to ./output" toggle and the config widgets it shows/hides.
 export const OUTPUT_TOGGLE = "save_to_output";
@@ -112,13 +117,26 @@ function storeHasPoints(node) {
     return false;
 }
 
+function storeHasBoxes(node) {
+    for (const name of [SAM3_BOX_POS_WIDGET, SAM3_BOX_NEG_WIDGET]) {
+        const raw = readToolStore(node, name, "[]");
+        try {
+            const arr = JSON.parse(raw);
+            if (Array.isArray(arr) && arr.length > 0) return true;
+        } catch (e) {}
+    }
+    return false;
+}
+
 // Build authoritative output specs from the node definition:
-//   { image: {name,type}, optional: [{name,type} x3] }
+//   { image: {name,type}, optional: [{name,type}, ...] }  (every slot past 0)
 function outputSpecsFromDef(nodeData) {
     const types = (nodeData && nodeData.output) || [];
     const names = (nodeData && nodeData.output_name) || [];
     const spec = (i) => ({ name: names[i] || types[i] || `out${i}`, type: types[i] });
-    return { image: spec(0), optional: [spec(1), spec(2), spec(3)] };
+    const optional = [];
+    for (let i = 1; i < types.length; i++) optional.push(spec(i));
+    return { image: spec(0), optional };
 }
 
 // Reveal at least `count` optional outputs (contiguous after the image slot).
@@ -156,6 +174,8 @@ export function registerSendNode(nodeType, nodeData) {
         hideWidget(this, getToolWidget(this, ROTO_WIDGET));
         hideWidget(this, getToolWidget(this, SAM3_POS_WIDGET));
         hideWidget(this, getToolWidget(this, SAM3_NEG_WIDGET));
+        hideWidget(this, getToolWidget(this, SAM3_BOX_POS_WIDGET));
+        hideWidget(this, getToolWidget(this, SAM3_BOX_NEG_WIDGET));
 
         // Re-sync the save-to-output config widgets whenever the toggle flips.
         const toggle = getToolWidget(this, OUTPUT_TOGGLE);
@@ -191,6 +211,7 @@ export function registerSendNode(nodeType, nodeData) {
         let desired = 0;
         if (storeHasRoto(this)) desired = Math.max(desired, 1);
         if (storeHasPoints(this)) desired = Math.max(desired, 3);
+        if (storeHasBoxes(this)) desired = Math.max(desired, 5);
         if (desired > 0) ensureOutputsAtLeast(this, desired);
     };
 
@@ -208,6 +229,8 @@ export function registerSendNode(nodeType, nodeData) {
         hideWidget(this, getToolWidget(this, ROTO_WIDGET));
         hideWidget(this, getToolWidget(this, SAM3_POS_WIDGET));
         hideWidget(this, getToolWidget(this, SAM3_NEG_WIDGET));
+        hideWidget(this, getToolWidget(this, SAM3_BOX_POS_WIDGET));
+        hideWidget(this, getToolWidget(this, SAM3_BOX_NEG_WIDGET));
         this.bepicSyncToolOutputs?.();
         this.bepicSyncOutputWidgets?.();
         return r;

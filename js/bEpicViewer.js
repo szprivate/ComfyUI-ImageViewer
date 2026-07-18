@@ -664,8 +664,10 @@ class ViewerPanel extends HTMLElement {
             const active = this._toolState ? this._toolState.active : "none";
             const rotoSec = this.helpOverlay.querySelector('#help-roto');
             const sam3Sec = this.helpOverlay.querySelector('#help-sam3');
+            const sam3boxSec = this.helpOverlay.querySelector('#help-sam3box');
             if (rotoSec) rotoSec.style.display = active === "roto" ? "block" : "none";
             if (sam3Sec) sam3Sec.style.display = active === "sam3" ? "block" : "none";
+            if (sam3boxSec) sam3boxSec.style.display = active === "sam3box" ? "block" : "none";
             this.helpOverlay.style.display = "flex";
         };
         this.helpOverlay.onclick  = () => { this.helpOverlay.style.display = "none"; };
