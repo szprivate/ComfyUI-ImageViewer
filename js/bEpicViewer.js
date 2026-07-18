@@ -699,11 +699,19 @@ class ViewerPanel extends HTMLElement {
             let val = parseInt(e.target.value);
             if (!val || val < 1) val = 1;
             this.fps = val;
-            if (this.isPlaying) { this.stop(); this.play(); }
+            if (this._videoMode) {
+                // Re-time the <video> live (no restart needed) instead of driving
+                // a frame interval.
+                this._applyVideoPlaybackRate();
+            } else if (this.isPlaying) {
+                this.stop(); this.play();
+            }
         };
         sr.getElementById('zoom-sel').onchange = (e) => {
+            // "Fit" is relative to the viewport; the % presets are relative to the
+            // media's actual pixel size (see setPixelZoom).
             if (e.target.value === "fit") this.fitView();
-            else { this.zoom = parseFloat(e.target.value); this.panX = 0; this.panY = 0; this.updateTransform(); }
+            else this.setPixelZoom(parseFloat(e.target.value));
             e.target.selectedIndex = 0;
         };
         this.timeline.oninput = (e) => { this.stop(); this.setFrame(parseInt(e.target.value)); };

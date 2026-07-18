@@ -140,8 +140,10 @@ export const HistoryMixin = {
             }
             thumb.appendChild(imgEl);
             thumb.title = `History ${idx + 1}`;
-            // Drag source: drop onto the ComfyUI graph to make a Load Image node.
-            if (imgObj && this._makeHistoryThumbDraggable) this._makeHistoryThumbDraggable(thumb, imgObj);
+            // Drag source: drop onto the ComfyUI graph to make a loader node. The
+            // whole snapshot is passed so multi-image sequences map to a sequence
+            // loader (see _makeHistoryThumbDraggable / _sequenceDirForSnapshot).
+            if (imgObj && this._makeHistoryThumbDraggable) this._makeHistoryThumbDraggable(thumb, imgObj, snapshot);
 
             const isSelected = (this.currentHistoryKey === key && this.currentHistoryIndex === idx);
             if (isSelected) {

@@ -83,12 +83,20 @@ export const UIMixin = {
                 this.isPlaying ? this.stop() : this.play();
                 break;
             case "Enter":
-                if (e.altKey) { e.preventDefault(); app.queuePrompt(0); }
+                // Ctrl/Cmd+Enter queues a prompt (matching ComfyUI). In the docked
+                // panel ComfyUI's own global shortcut already fires, so only handle
+                // it here for the undocked popout (which has no such shortcut) to
+                // avoid queuing the prompt twice.
+                if (e.ctrlKey || e.metaKey) {
+                    const fromPopout = !!(this.popoutWindow && !this.popoutWindow.closed &&
+                        e.target && e.target.ownerDocument === this.popoutWindow.document);
+                    if (fromPopout) { e.preventDefault(); app.queuePrompt(0); }
+                }
                 break;
             case "f": case "F":
                 e.preventDefault(); this.fitView(); break;
             case "c": case "C":
-                e.preventDefault(); this.toggleCompare(); break;
+                e.preventDefault(); this.cycleCompareMode(); break;
             case "r": case "R":
                 e.preventDefault();
                 this.setChannelView(this.channelView === 'red' ? 'all' : 'red');
@@ -339,6 +347,16 @@ export const UIMixin = {
     },
 
     // ── Compare mode ─────────────────────────────────────────────────────────
+
+    // Cycle the "c" hotkey through the compare modes, mirroring the compare
+    // (rotate) button's slider-mode cycle but adding an OFF state so the hotkey
+    // can also exit: off → split (vertical) → split (horizontal) → contact → off.
+    cycleCompareMode() {
+        if (!this.isComparing) { this.toggleCompare(); return; }   // off → vertical
+        if (this.sliderMode === 'vertical')        this.setSliderMode('horizontal');
+        else if (this.sliderMode === 'horizontal') this.setSliderMode('contact');
+        else                                       this.toggleCompare();   // contact → off
+    },
 
     toggleCompare() {
         this.isComparing = !this.isComparing;

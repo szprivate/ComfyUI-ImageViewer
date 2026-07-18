@@ -7,8 +7,9 @@
 //   2. History → ComfyUI graph:  drag a history thumbnail onto the node graph to
 //      create a path-based loader that references the ORIGINAL file on disk (no
 //      upload / no duplicate copy):
-//        • image → VHS "Load Image (Path)" (VHS_LoadImagePath), path in `image`
-//        • video → VHS "Load Video (Path)" (VHS_LoadVideoPath), path in `video`
+//        • image           → VHS "Load Image (Path)"  (VHS_LoadImagePath),  `image`
+//        • image sequence  → VHS "Load Images (Path)" (VHS_LoadImagesPath), `directory`
+//        • video           → VHS "Load Video (Path)"  (VHS_LoadVideoPath),  `video`
 //      Items with no on-disk path (dropped-from-Explorer blobs, or filename-only
 //      frames), or when VHS isn't installed, fall back to a native upload loader:
 //      image → LoadImage, video → LoadVideo (both copy the file into /input).
@@ -172,13 +173,16 @@ export const DnDMixin = {
 
     // ── 2. History → ComfyUI graph ───────────────────────────────────────────
 
-    // Make a history-strip thumbnail a drag source for the node graph.
-    _makeHistoryThumbDraggable(thumb, imgObj) {
+    // Make a history-strip thumbnail a drag source for the node graph. `snapshot`
+    // is the full frame array behind the thumbnail — a length>1 image snapshot is
+    // an image sequence and maps to a directory-based sequence loader.
+    _makeHistoryThumbDraggable(thumb, imgObj, snapshot) {
         if (!thumb || !imgObj) return;
         thumb.draggable = true;
         const img = thumb.querySelector("img");
         if (img) img.draggable = false;   // let the container own the drag, not the <img>
         thumb.addEventListener("dragstart", (e) => {
+            const seq = this._sequenceDirForSnapshot(snapshot, imgObj);
             const payload = {
                 path:      imgObj.path || null,
                 url:       imgObj.url || null,
@@ -189,6 +193,9 @@ export const DnDMixin = {
                 dropped:   !!imgObj.dropped,
                 kind:      imgObj.kind || (this._frameIsVideo(imgObj) ? "video" : "image"),
                 thumb:     imgObj.thumb || null,
+                isSequence: !!(seq && seq.dir),
+                seqDir:     seq ? seq.dir : null,
+                seqCount:   seq ? seq.count : 0,
             };
             try {
                 e.dataTransfer.setData("application/x-bepic-history", JSON.stringify(payload));
@@ -196,6 +203,32 @@ export const DnDMixin = {
                 if (img && e.dataTransfer.setDragImage) e.dataTransfer.setDragImage(img, 20, 20);
             } catch (_) {}
         });
+    },
+
+    // A history snapshot with >1 image frame is an image sequence. If every frame
+    // is a real on-disk image living in ONE directory, return {dir, count} so the
+    // drop can create a directory-based sequence loader. Videos, single images,
+    // dropped blobs, or frames spanning multiple folders → null (not a sequence).
+    _sequenceDirForSnapshot(snapshot, imgObj) {
+        if (!Array.isArray(snapshot) || snapshot.length < 2) return null;
+        if (imgObj && (imgObj.kind === "video" || this._frameIsVideo(imgObj))) return null;
+        let dir = null;
+        for (const fr of snapshot) {
+            if (!fr || fr.dropped || fr.kind === "video" || this._frameIsVideo(fr)) return null;
+            const p = fr.path || "";
+            if (!/^([a-zA-Z]:[\\/]|[\\/]{2}|[\\/])/.test(p)) return null;   // need a real abs path
+            const d = this._dirname(p);
+            if (dir === null) dir = d;
+            else if (d !== dir) return null;   // frames span folders — not one sequence dir
+        }
+        return dir ? { dir, count: snapshot.length } : null;
+    },
+
+    // Directory portion of a path, preserving the original separator style.
+    _dirname(p) {
+        const s = String(p || "");
+        const i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
+        return i >= 0 ? s.slice(0, i) : s;
     },
 
     _dragHasHistoryPayload(e) {
@@ -255,6 +288,19 @@ export const DnDMixin = {
     async _dropHistoryOntoGraph(payload, e) {
         try {
             const isVideo = payload.kind === "video";
+
+            // Image sequence → a directory-based loader that reads the whole
+            // sequence. VHS "Load Images (Path)" takes an arbitrary directory.
+            if (payload.isSequence && payload.seqDir) {
+                if (this._nodeTypeAvailable("VHS_LoadImagesPath")) {
+                    this._createPathLoaderNode("VHS_LoadImagesPath", "directory", payload.seqDir, e);
+                    return;
+                }
+                // ComfyUI core has no arbitrary-path folder loader (the native
+                // LoadImageDataSetFromFolder only accepts input-dir subfolders),
+                // so without VHS fall through to a single-image loader below.
+            }
+
             const absPath = this._absPathForPayload(payload);
 
             // Preferred path: a VHS "(Path)" loader that references the ORIGINAL
@@ -305,7 +351,7 @@ export const DnDMixin = {
 
         const w = node.widgets && (
             node.widgets.find((x) => x.name === widgetName) ||
-            node.widgets.find((x) => x.name === "video" || x.name === "image")
+            node.widgets.find((x) => x.name === "video" || x.name === "image" || x.name === "directory")
         );
         if (w) {
             try {

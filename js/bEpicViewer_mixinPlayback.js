@@ -349,10 +349,11 @@ export const PlaybackMixin = {
         if (!this._videoHandlersBound) {
             v.addEventListener("timeupdate",     () => this._videoOnTimeUpdate());
             v.addEventListener("loadedmetadata", () => this._videoOnMeta());
-            v.addEventListener("ended",          () => { if (!v.loop) this.stop(); });
+            v.addEventListener("ended",          () => this._videoOnEnded());
             this._videoHandlersBound = true;
         }
         if (v.src !== url) v.src = url;
+        this._applyVideoPlaybackRate();
 
         this.updateTransform();
         if (this.setImageFilter) this.setImageFilter();
@@ -410,16 +411,69 @@ export const PlaybackMixin = {
         }
         this.applyTimelineBounds(this._videoFrames);
         this.fitView();
+        this._applyVideoPlaybackRate();
         if (this.timeline) this.timeline.value = this.currentFrame || 0;
     },
 
     _videoOnTimeUpdate() {
-        if (!this._videoMode || !this.videoBase) return;
-        const frame = Math.round((this.videoBase.currentTime || 0) * (this._videoFps || 24));
+        const v = this.videoBase;
+        if (!this._videoMode || !v) return;
+        const fps = this._videoFps || 24;
+
+        // Region playback (ctrl-drag selection on the timeline): keep the <video>
+        // inside the selected range instead of playing the whole clip.
+        if (this.isPlaying && this.playbackRange) {
+            const startT = this.playbackRange.start / fps;
+            const endT   = (this.playbackRange.end + 1) / fps;
+            if (v.currentTime >= endT - 1e-3 || v.currentTime < startT - 1e-3) {
+                if (this.loopMode === "once") {
+                    this.stop();
+                    try { v.currentTime = Math.max(startT, endT - 1 / fps); } catch (e) {}
+                } else {
+                    // loop + ping-pong both restart at the region start (a <video>
+                    // can't scrub backwards smoothly, so ping-pong loops forward).
+                    try { v.currentTime = startT; } catch (e) {}
+                }
+            }
+        }
+
+        const frame = Math.round((v.currentTime || 0) * fps);
         this.currentFrame = frame;
         if (this.timeline) this.timeline.value = frame;
         const curEl = this.container && this.container.querySelector("#cur-f");
         if (curEl) curEl.innerText = frame;
+    },
+
+    // Fired when the <video> plays past its end. If a region is active in a
+    // looping mode the wrap in _videoOnTimeUpdate usually fires first, but when
+    // the region ends on the last frame the clip can end naturally — restart it.
+    _videoOnEnded() {
+        const v = this.videoBase;
+        if (!v) return;
+        if (this._videoMode && this.isPlaying && this.playbackRange && this.loopMode !== "once") {
+            const fps = this._videoFps || 24;
+            try {
+                v.currentTime = this.playbackRange.start / fps;
+                const p = v.play();
+                if (p && p.catch) p.catch(() => {});
+            } catch (e) {}
+            return;
+        }
+        if (!v.loop) this.stop();
+    },
+
+    // Drive <video> playback speed from the FPS field: rate = wanted / native, so
+    // changing FPS re-times the clip (e.g. a 30-fps video at 60 plays 2× faster)
+    // while the frame counter still maps through the native rate.
+    _applyVideoPlaybackRate() {
+        const v = this.videoBase;
+        if (!v || !this._videoMode) return;
+        const native = this._videoFps || 24;
+        const want   = this.fps || native;
+        let rate = want / native;
+        if (!Number.isFinite(rate) || rate <= 0) rate = 1;
+        rate = Math.max(0.0625, Math.min(16, rate));   // browsers reject extreme rates anyway
+        try { v.playbackRate = rate; } catch (e) {}
     },
 
     // ── Playback ──────────────────────────────────────────────────────────────
@@ -434,8 +488,22 @@ export const PlaybackMixin = {
         if (this._videoMode && this.videoBase) {
             this.isPlaying = true;
             this._setIcon(this.playBtn, 'icon-pause');
-            this.videoBase.loop = (this.loopMode === 'loop' || this.loopMode === 'ping-pong');
-            const p = this.videoBase.play();
+            const v = this.videoBase;
+            const fps = this._videoFps || 24;
+            if (this.playbackRange) {
+                // Region playback: manage looping manually (see _videoOnTimeUpdate),
+                // and jump into the region if we're currently outside it.
+                v.loop = false;
+                const startT = this.playbackRange.start / fps;
+                const endT   = (this.playbackRange.end + 1) / fps;
+                if (v.currentTime < startT - 1e-3 || v.currentTime >= endT - 1e-3) {
+                    try { v.currentTime = startT; } catch (e) {}
+                }
+            } else {
+                v.loop = (this.loopMode === 'loop' || this.loopMode === 'ping-pong');
+            }
+            this._applyVideoPlaybackRate();
+            const p = v.play();
             if (p && p.catch) p.catch(() => {});
             return;
         }
@@ -543,6 +611,45 @@ export const PlaybackMixin = {
         } catch (e) {
             this.panX = 0; this.panY = 0; this.zoom = 1.0; this.updateTransform();
         }
+    },
+
+    // Set zoom so the media displays at `fraction` of its ACTUAL pixel size
+    // (1.0 = 100% = one image pixel per screen pixel, e.g. a 1920×1080 clip fills
+    // 1920 screen px). Unlike fitView (relative to the viewport), this is relative
+    // to the media's native resolution. Used by the zoom menu's 100/75/50% items.
+    setPixelZoom(fraction) {
+        if (!Number.isFinite(fraction) || fraction <= 0) fraction = 1;
+
+        // Contact-compare packs two images into a container with its own transform
+        // origin; "actual size" isn't well-defined there, so apply plainly.
+        if (this.sliderMode === 'contact') {
+            this.zoom = Math.max(0.05, Math.min(20.0, fraction));
+            this.panX = 0; this.panY = 0; this.updateTransform();
+            return;
+        }
+
+        let natW = 0, natH = 0;
+        if (this._videoMode && this.videoBase) {
+            natW = this.videoBase.videoWidth; natH = this.videoBase.videoHeight;
+        } else if (this.imgBase) {
+            natW = this.imgBase.naturalWidth; natH = this.imgBase.naturalHeight;
+        }
+
+        if (natW && natH && this.viewport) {
+            const viewRect = this.viewport.getBoundingClientRect();
+            const availW   = Math.max(10, viewRect.width  - 2);
+            const availH   = Math.max(10, viewRect.height - 2);
+            // The <img>/<video> uses max-width/height:100% (.img-layer) so at
+            // zoom=1 it renders at min(natural, contain) — CSS never upscales.
+            const containScale = Math.min(availW / natW, availH / natH);
+            const renderScale  = Math.min(1, containScale);
+            const targetZoom   = fraction / renderScale;   // displayed px = natural px × fraction
+            this.zoom = Math.max(0.05, Math.min(20.0, targetZoom));
+        } else {
+            this.zoom = Math.max(0.05, Math.min(20.0, fraction));
+        }
+        this.panX = 0; this.panY = 0;
+        this.updateTransform();
     },
 
     // ── Input range sync ─────────────────────────────────────────────────────
