@@ -24,6 +24,29 @@ const DEF_TF = () => ({ tx: 0, ty: 0, rot: 0, sx: 1, sy: 1, px: 0.5, py: 0.5 });
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 const lerp = (a, b, t) => a + (b - a) * t;
 
+// Keyframe easing (softness): 0 = linear, 1 = full smoothstep ease-in/out.
+// Must match roto_raster.py's _points_for_frame so preview == render.
+const easeT = (t, ease) => {
+    if (!ease) return t;
+    const s = t * t * (3 - 2 * t);
+    return t + (s - t) * Math.max(0, Math.min(1, ease));
+};
+
+// Custom cursors (data-URI SVG) for the pen (drawing) and rotate zones.
+function cursorFromSvg(svg, hx, hy, fallback) {
+    return `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${hx} ${hy}, ${fallback}`;
+}
+const CUR_PEN = cursorFromSvg(
+    "<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'>" +
+    "<path d='M3 21l4-1L19 8l-3-3L4 17z' fill='#222' stroke='#ff8a00' stroke-width='1.5' stroke-linejoin='round'/>" +
+    "<path d='M15 5l3 3' stroke='#ff8a00' stroke-width='1.5'/><path d='M3 21l2.5-.6L4 19z' fill='#ff8a00'/></svg>",
+    2, 22, "crosshair");
+const CUR_ROTATE = cursorFromSvg(
+    "<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' " +
+    "stroke='#ff8a00' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>" +
+    "<path d='M20 12a8 8 0 1 1-2.4-5.7'/><path d='M20 3.5V8h-4.5' fill='#ff8a00' stroke='none'/></svg>",
+    12, 12, "crosshair");
+
 let _rotoIdSeq = 1;
 
 export const RotoMixin = {
@@ -35,7 +58,7 @@ export const RotoMixin = {
         // shows a transform box.
         this._roto = {
             layers: [], global: { invert: false, blur: 0, dilate: 0, feather: 0 },
-            selLayer: -1, selPts: new Set(),
+            selLayer: -1, selPts: new Set(), selAngle: 0,
             showMask: false, autokey: false,
             drawing: null, drag: null,
         };
@@ -47,13 +70,14 @@ export const RotoMixin = {
         this._roto.global = { invert: false, blur: 0, dilate: 0, feather: 0 };
         this._roto.selLayer = -1;
         this._roto.selPts = new Set();
+        this._roto.selAngle = 0;
         this._roto.drawing = null;
     },
 
     _rotoLoadFromNode(node) {
         this._rotoClearState();
         let raw = readToolStore(node, ROTO_WIDGET, "");
-        if (!raw) { this._rotoRefreshPanel?.(); return; }
+        if (!raw) { this._rotoRefreshPanel?.(); this._rotoRefreshKfInfo?.(); return; }
         try {
             const obj = JSON.parse(raw);
             if (obj && Array.isArray(obj.layers)) {
@@ -63,6 +87,7 @@ export const RotoMixin = {
             }
         } catch (e) { /* ignore malformed */ }
         this._rotoRefreshPanel?.();
+        this._rotoRefreshKfInfo?.();
     },
 
     _rotoSave() {
@@ -80,11 +105,15 @@ export const RotoMixin = {
     _rotoActivate(panel) {
         this._rotoPanel = panel;
         this._rotoBuildPanel();
+        this._rotoBuildKfEditor();
+        this._rotoRefreshKfInfo();
     },
 
     _rotoDeactivate() {
         this._roto.drawing = null;
         this._roto.drag = null;
+        this._rotoRenderTimelineKeys();   // clears ticks
+        if (this._rotoKfEditor) this._rotoKfEditor.style.display = "none";
     },
 
     _rotoCurLayer() {
@@ -101,7 +130,9 @@ export const RotoMixin = {
         this._roto.layers.push(layer);
         this._roto.selLayer = this._roto.layers.length - 1;
         this._roto.selPts = new Set();
+        this._roto.selAngle = 0;
         this._roto.drawing = layer;      // begin drawing this shape
+        if (this._toolDraw) this._toolDraw.style.cursor = CUR_PEN;
         this._rotoRefreshPanel();
         this._toolRedraw();
     },
@@ -153,18 +184,21 @@ export const RotoMixin = {
         delK.onclick = () => this._rotoDelKey();
         kfRow.appendChild(setK); kfRow.appendChild(delK);
         kfWrap.appendChild(kfRow);
-        this._rotoAutokeyCb = checkbox("Autokey", false, (v) => { this._roto.autokey = v; });
+        this._rotoAutokeyCb = checkbox("Autokey", this._roto.autokey, (v) => { this._roto.autokey = v; });
         kfWrap.appendChild(this._rotoAutokeyCb.row);
-        this._rotoKfInfo = el("div", "", "bepic-tool-hint");
+        this._rotoKfInfo = el("div",
+            "Keys show as <b>orange ticks</b> on the timeline — drag to retime. " +
+            "Use the <b>Keyframe Curve</b> above the timeline for timing &amp; softness.",
+            "bepic-tool-hint");
         kfWrap.appendChild(this._rotoKfInfo);
         p.appendChild(kfWrap);
 
         // Global controls
         p.appendChild(el("h4", "Global matte"));
-        p.appendChild(slider("Feather", 0, 100, this._roto.global.feather, (v) => { this._roto.global.feather = v; this._rotoSave(); }));
-        p.appendChild(slider("Blur", 0, 100, this._roto.global.blur, (v) => { this._roto.global.blur = v; this._rotoSave(); }));
-        p.appendChild(slider("Dilate", -50, 50, this._roto.global.dilate, (v) => { this._roto.global.dilate = v; this._rotoSave(); }));
-        this._rotoGlobalInvCb = checkbox("Invert all", this._roto.global.invert, (v) => { this._roto.global.invert = v; this._rotoSave(); });
+        p.appendChild(slider("Feather", 0, 100, this._roto.global.feather, (v) => { this._roto.global.feather = v; this._rotoSave(); this._toolRedraw(); }));
+        p.appendChild(slider("Blur", 0, 100, this._roto.global.blur, (v) => { this._roto.global.blur = v; this._rotoSave(); this._toolRedraw(); }));
+        p.appendChild(slider("Dilate", -50, 50, this._roto.global.dilate, (v) => { this._roto.global.dilate = v; this._rotoSave(); this._toolRedraw(); }));
+        this._rotoGlobalInvCb = checkbox("Invert all", this._roto.global.invert, (v) => { this._roto.global.invert = v; this._rotoSave(); this._toolRedraw(); });
         p.appendChild(this._rotoGlobalInvCb.row);
 
         // Preview toggle + hint
@@ -220,11 +254,11 @@ export const RotoMixin = {
         const layer = this._rotoCurLayer();
         if (!layer) return;
         box.appendChild(el("h4", "Shape matte"));
-        box.appendChild(slider("Feather", 0, 100, layer.feather, (v) => { layer.feather = v; this._rotoSave(); }));
-        box.appendChild(slider("Blur", 0, 100, layer.blur, (v) => { layer.blur = v; this._rotoSave(); }));
-        box.appendChild(slider("Dilate", -50, 50, layer.dilate, (v) => { layer.dilate = v; this._rotoSave(); }));
+        box.appendChild(slider("Feather", 0, 100, layer.feather, (v) => { layer.feather = v; this._rotoSave(); this._toolRedraw(); }));
+        box.appendChild(slider("Blur", 0, 100, layer.blur, (v) => { layer.blur = v; this._rotoSave(); this._toolRedraw(); }));
+        box.appendChild(slider("Dilate", -50, 50, layer.dilate, (v) => { layer.dilate = v; this._rotoSave(); this._toolRedraw(); }));
         box.appendChild(slider("Opacity", 0, 100, Math.round(layer.opacity * 100), (v) => { layer.opacity = v / 100; this._rotoSave(); this._toolRedraw(); }));
-        const inv = checkbox("Invert shape", layer.invert, (v) => { layer.invert = v; this._rotoSave(); });
+        const inv = checkbox("Invert shape", layer.invert, (v) => { layer.invert = v; this._rotoSave(); this._toolRedraw(); });
         box.appendChild(inv.row);
 
         box.appendChild(el("h4", "Transform"));
@@ -235,18 +269,247 @@ export const RotoMixin = {
         box.appendChild(resetT);
     },
 
+    // Keyframes are surfaced as draggable orange ticks on the transport timeline
+    // and in the collapsible curve editor above it (not as text in the panel).
     _rotoRefreshKfInfo() {
-        if (!this._rotoKfInfo) return;
-        const layer = this._rotoCurLayer();
-        const f = this._rotoFrame();
-        if (!layer) { this._rotoKfInfo.textContent = ""; return; }
-        const keys = layer.keyframes ? Object.keys(layer.keyframes).map(Number).sort((a, b) => a - b) : [];
-        this._rotoKfInfo.innerHTML = keys.length
-            ? `Frame ${f} · keys: ${keys.join(", ")}`
-            : `Frame ${f} · static (no keys)`;
+        this._rotoRenderTimelineKeys();
+        this._rotoRefreshKfEditor();
     },
 
     _rotoFrame() { return Math.max(0, Math.round(this.currentFrame || 0)); },
+
+    // ── keyframe ticks on the timeline + curve editor ─────────────────────────
+    _rotoKfTicksHost() { return this.container?.querySelector?.("#kf-ticks"); },
+
+    _rotoTimelineBounds() {
+        const b = this.getTimelineBounds ? this.getTimelineBounds() : { min: 0, max: 0 };
+        return { min: b.min, max: b.max, total: Math.max(0, b.max - b.min) };
+    },
+
+    _rotoCurKeys(layer) {
+        layer = layer || this._rotoCurLayer();
+        if (!layer || !layer.keyframes) return [];
+        return Object.keys(layer.keyframes).map(Number).filter((f) => isFinite(f)).sort((a, b) => a - b);
+    },
+
+    // Orange draggable keyframe ticks overlaid on the timeline.
+    _rotoRenderTimelineKeys() {
+        const host = this._rotoKfTicksHost();
+        if (!host) return;
+        host.innerHTML = "";
+        if (!this._toolState || this._toolState.active !== "roto") return;
+        const layer = this._rotoCurLayer();
+        const keys = this._rotoCurKeys(layer);
+        if (!keys.length) return;
+        const { min, total } = this._rotoTimelineBounds();
+        const cur = this._rotoFrame();
+        for (const f of keys) {
+            const pct = total === 0 ? 0 : ((f - min) / total) * 100;
+            const t = document.createElement("div");
+            t.className = "kf-tick" + (f === cur ? " cur" : "");
+            t.style.left = pct + "%";
+            t.title = "Keyframe " + f + " — drag to retime · double-click to delete";
+            t.onmousedown = (e) => this._rotoTickDown(e, layer, f);
+            t.ondblclick = (e) => { e.preventDefault(); e.stopPropagation(); this._rotoDeleteKeyAt(layer, f); };
+            host.appendChild(t);
+        }
+    },
+
+    _rotoTickDown(e, layer, frame) {
+        if (e.button !== 0) return;
+        e.preventDefault(); e.stopPropagation();
+        const container = this.shadowRoot.getElementById("timeline-container");
+        const tickEl = e.currentTarget;
+        if (!container) return;
+        const rect = container.getBoundingClientRect();
+        const { min, total } = this._rotoTimelineBounds();
+        const win = this.container.ownerDocument.defaultView || window;
+        let target = frame;
+        const move = (ev) => {
+            const pct = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+            target = min + Math.round(pct * total);
+            tickEl.style.left = (pct * 100) + "%";
+        };
+        const up = () => {
+            win.removeEventListener("mousemove", move);
+            win.removeEventListener("mouseup", up);
+            if (target !== frame) this._rotoMoveKey(layer, frame, target);
+            this._rotoRefreshKfInfo();
+        };
+        win.addEventListener("mousemove", move);
+        win.addEventListener("mouseup", up);
+    },
+
+    // Retime a keyframe (rename its frame key). A collision overwrites; the
+    // dragged key wins.
+    _rotoMoveKey(layer, from, to) {
+        if (!layer || !layer.keyframes || from === to) return;
+        to = Math.max(0, Math.round(to));
+        const kfs = layer.keyframes;
+        if (!(String(from) in kfs)) return;
+        const pts = kfs[from];
+        delete kfs[from];
+        kfs[to] = pts;
+        this._rotoSave();
+        this._toolRedraw();
+    },
+
+    _rotoDeleteKeyAt(layer, frame) {
+        if (!layer || !layer.keyframes) return;
+        delete layer.keyframes[frame];
+        if (Object.keys(layer.keyframes).length === 0) delete layer.keyframes;
+        this._rotoSave();
+        this._rotoRefreshKfInfo();
+        this._toolRedraw();
+    },
+
+    // Collapsible curve editor above the timeline: retime keys (drag dots) and
+    // shape the interpolation softness (ease) of the roto animation.
+    _rotoBuildKfEditor() {
+        const host = this.container?.querySelector?.("#kf-editor");
+        if (!host) return;
+        this._rotoKfEditor = host;
+        if (host.dataset.built === "1") { this._rotoRefreshKfEditor(); return; }
+        host.dataset.built = "1";
+        host.innerHTML = "";
+
+        const head = el("div", "", "kf-editor-head");
+        this._rotoKfCollapse = el("span", this._rotoKfOpen ? "▾" : "▸", "kf-editor-toggle");
+        head.appendChild(this._rotoKfCollapse);
+        head.appendChild(el("span", "Keyframe Curve", "kf-editor-title"));
+        this._rotoKfSub = el("span", "", "kf-editor-sub");
+        head.appendChild(this._rotoKfSub);
+        head.onclick = () => this._rotoToggleKfEditor();
+        host.appendChild(head);
+
+        this._rotoKfBody = el("div", "", "kf-editor-body");
+        this._rotoKfBody.style.display = this._rotoKfOpen ? "block" : "none";
+
+        this._rotoKfGraphWrap = el("div", "", "kf-graph");
+        this._rotoKfSvg = svgEl("svg", { class: "kf-graph-svg", preserveAspectRatio: "none", viewBox: "0 0 1000 100" });
+        this._rotoKfGraphWrap.appendChild(this._rotoKfSvg);
+        this._rotoKfBody.appendChild(this._rotoKfGraphWrap);
+
+        const ctl = el("div", "", "kf-editor-controls");
+        ctl.appendChild(el("label", "Softness"));
+        const soft = document.createElement("input");
+        soft.type = "range"; soft.min = 0; soft.max = 100; soft.value = 0; soft.className = "kf-soft";
+        const softVal = el("span", "0", "kf-soft-val");
+        soft.oninput = () => {
+            const layer = this._rotoCurLayer();
+            softVal.textContent = soft.value;
+            if (layer) { layer.ease = (+soft.value) / 100; this._rotoSave(); this._toolRedraw(); this._rotoDrawKfCurve(); }
+        };
+        this._rotoKfSoft = soft; this._rotoKfSoftVal = softVal;
+        ctl.appendChild(soft); ctl.appendChild(softVal);
+        this._rotoKfBody.appendChild(ctl);
+
+        host.appendChild(this._rotoKfBody);
+        this._rotoRefreshKfEditor();
+    },
+
+    _rotoToggleKfEditor() {
+        this._rotoKfOpen = !this._rotoKfOpen;
+        if (this._rotoKfBody) this._rotoKfBody.style.display = this._rotoKfOpen ? "block" : "none";
+        if (this._rotoKfCollapse) this._rotoKfCollapse.textContent = this._rotoKfOpen ? "▾" : "▸";
+        if (this._rotoKfOpen) this._rotoRefreshKfEditor();
+    },
+
+    _rotoRefreshKfEditor() {
+        const host = this._rotoKfEditor || this.container?.querySelector?.("#kf-editor");
+        if (!host) return;
+        this._rotoKfEditor = host;
+        const active = this._toolState && this._toolState.active === "roto";
+        const layer = this._rotoCurLayer();
+        const keys = this._rotoCurKeys(layer);
+        // Only surface the editor when there's an animation to shape.
+        if (!active || !layer || keys.length < 1) { host.style.display = "none"; return; }
+        host.style.display = "block";
+        if (this._rotoKfSub) this._rotoKfSub.textContent = keys.length === 1 ? "1 key" : keys.length + " keys";
+        if (this._rotoKfSoft) {
+            const v = Math.round((+layer.ease || 0) * 100);
+            this._rotoKfSoft.value = v;
+            if (this._rotoKfSoftVal) this._rotoKfSoftVal.textContent = v;
+        }
+        if (this._rotoKfOpen) { this._rotoDrawKfCurve(); this._rotoLayoutKfDots(); }
+    },
+
+    _rotoDrawKfCurve() {
+        const svg = this._rotoKfSvg;
+        if (!svg) return;
+        while (svg.firstChild) svg.removeChild(svg.firstChild);
+        const layer = this._rotoCurLayer();
+        const keys = this._rotoCurKeys(layer);
+        const { min, total } = this._rotoTimelineBounds();
+        const X = (f) => total === 0 ? 0 : ((f - min) / total) * 1000;
+        const yTop = 12, yBot = 88;
+        const ns = (t, a) => { a["vector-effect"] = "non-scaling-stroke"; return svgEl(t, a); };
+        svg.appendChild(ns("line", { x1: 0, y1: yBot, x2: 1000, y2: yBot, stroke: "#333" }));
+        const ease = +layer?.ease || 0;
+        if (keys.length >= 2) {
+            let d = "";
+            for (let s = 0; s < keys.length - 1; s++) {
+                const x0 = X(keys[s]), x1 = X(keys[s + 1]);
+                const STEP = 16;
+                for (let i = 0; i <= STEP; i++) {
+                    const tt = i / STEP;
+                    const x = x0 + (x1 - x0) * tt;
+                    const y = yBot - easeT(tt, ease) * (yBot - yTop);
+                    d += (i === 0 && s === 0 ? "M " : "L ") + x.toFixed(1) + " " + y.toFixed(1) + " ";
+                }
+            }
+            svg.appendChild(ns("path", { d, fill: "none", stroke: "#ff8a00", "stroke-width": 2 }));
+        }
+        for (const f of keys) {
+            const x = X(f);
+            svg.appendChild(ns("line", { x1: x, y1: yTop - 4, x2: x, y2: yBot, stroke: "#ff8a00", "stroke-dasharray": "3 3", opacity: 0.5 }));
+        }
+        const px = X(this._rotoFrame());
+        svg.appendChild(ns("line", { x1: px, y1: 0, x2: px, y2: 100, stroke: "#fff", opacity: 0.7 }));
+    },
+
+    _rotoLayoutKfDots() {
+        const wrap = this._rotoKfGraphWrap;
+        if (!wrap) return;
+        wrap.querySelectorAll(".kf-dot").forEach((d) => d.remove());
+        const layer = this._rotoCurLayer();
+        const keys = this._rotoCurKeys(layer);
+        const { min, total } = this._rotoTimelineBounds();
+        for (const f of keys) {
+            const pct = total === 0 ? 0 : ((f - min) / total) * 100;
+            const dot = el("div", "", "kf-dot");
+            dot.style.left = pct + "%";
+            dot.title = "Keyframe " + f + " — drag to retime · double-click to delete";
+            dot.onmousedown = (e) => this._rotoKfDotDown(e, layer, f);
+            dot.ondblclick = (e) => { e.preventDefault(); e.stopPropagation(); this._rotoDeleteKeyAt(layer, f); };
+            wrap.appendChild(dot);
+        }
+    },
+
+    _rotoKfDotDown(e, layer, frame) {
+        if (e.button !== 0) return;
+        e.preventDefault(); e.stopPropagation();
+        const wrap = this._rotoKfGraphWrap;
+        if (!wrap) return;
+        const rect = wrap.getBoundingClientRect();
+        const { min, total } = this._rotoTimelineBounds();
+        const win = this.container.ownerDocument.defaultView || window;
+        let target = frame;
+        const dot = e.currentTarget;
+        const move = (ev) => {
+            const pct = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+            target = min + Math.round(pct * total);
+            dot.style.left = (pct * 100) + "%";
+        };
+        const up = () => {
+            win.removeEventListener("mousemove", move);
+            win.removeEventListener("mouseup", up);
+            if (target !== frame) this._rotoMoveKey(layer, frame, target);
+            this._rotoRefreshKfInfo();
+        };
+        win.addEventListener("mousemove", move);
+        win.addEventListener("mouseup", up);
+    },
 
     // ── keyframe helpers ──────────────────────────────────────────────────────
     _rotoRawPoints(layer, frame) {
@@ -260,7 +523,7 @@ export const RotoMixin = {
         if (hi === lo) return kfs[lo];
         const a = kfs[lo], b = kfs[hi];
         if (a.length !== b.length) return (frame - lo) <= (hi - frame) ? a : b;
-        const t = (frame - lo) / (hi - lo);
+        const t = easeT((frame - lo) / (hi - lo), +layer.ease || 0);
         return a.map((pa, i) => interpPoint(pa, b[i], t));
     },
 
@@ -410,93 +673,136 @@ export const RotoMixin = {
         });
     },
 
-    // Preview one layer's matte: the feather contour (if any per-point feather)
-    // under the core shape, both softened by an SVG blur sized from the feather
-    // amount — an approximation of roto_raster.py's contour + distance ramp.
+    // Preview one layer's matte. The soft edge is genuinely per-vertex: a stack
+    // of concentric contours between the core shape and each vertex's feather
+    // point builds a local ramp (only the feathered vertices fan out), mirroring
+    // roto_raster.py's distance ramp. The Feather/Blur sliders add a uniform
+    // Gaussian, Dilate an feMorphology grow/shrink, and Invert flips the filled
+    // region — so every menu control visibly affects the preview.
     _rotoRenderPreview(layer) {
         const draw = this._toolDraw;
         const dpts = this._rotoDisplayPoints(layer);
         const core = this._rotoPathD(dpts, true);
         if (!core) return;
 
+        const spp = this._rotoScreenPerImgPx();
+        // Uniform softening from the sliders, in image px (matches roto_raster).
+        const featherImg = (+layer.feather || 0) + (+this._roto.global.feather || 0);
+        const blurImg    = (+layer.blur || 0)    + (+this._roto.global.blur || 0);
+        const sigmaScr   = Math.min(80, (featherImg * 0.5 + blurImg) * spp);
+        const dilImg     = (+layer.dilate || 0) + (+this._roto.global.dilate || 0);
+        const dilScr     = Math.min(60, Math.abs(dilImg) * spp);
+
         let parent = draw;
-        const blur = this._rotoFeatherScreenPx(layer, dpts);
-        if (blur > 0.3) {
+        if (sigmaScr > 0.3 || dilScr >= 1) {
             let defs = draw.querySelector("defs.bepic-rf-defs");
             if (!defs) { defs = svgEl("defs", { class: "bepic-rf-defs" }); draw.appendChild(defs); }
             const fid = "bepic-rf-" + (layer.id || "x");
-            const filt = svgEl("filter", { id: fid, x: "-40%", y: "-40%", width: "180%", height: "180%" });
-            filt.appendChild(svgEl("feGaussianBlur", { in: "SourceGraphic", stdDeviation: blur.toFixed(2) }));
+            const filt = svgEl("filter", { id: fid, x: "-60%", y: "-60%", width: "220%", height: "220%" });
+            let src = "SourceGraphic";
+            if (dilScr >= 1) {
+                filt.appendChild(svgEl("feMorphology", {
+                    in: src, operator: dilImg > 0 ? "dilate" : "erode",
+                    radius: dilScr.toFixed(2), result: "morph",
+                }));
+                src = "morph";
+            }
+            if (sigmaScr > 0.3) filt.appendChild(svgEl("feGaussianBlur", { in: src, stdDeviation: sigmaScr.toFixed(2) }));
             defs.appendChild(filt);
             parent = svgEl("g", { filter: `url(#${fid})` });
             draw.appendChild(parent);
         }
 
-        if (dpts.some((p) => p.feather)) {
-            const fd = this._rotoPathD(this._rotoFeatherPts(dpts), true);
-            if (fd) parent.appendChild(svgEl("path", {
-                d: fd, stroke: "none",
-                fill: layer.invert ? "rgba(255,255,255,.06)" : "rgba(255,120,0,.16)",
+        const base = "255,120,0";
+        if (layer.invert) {
+            // Inverted matte: fill everything outside the shape (even-odd rule
+            // punches the core out of a full-frame rect).
+            const frame = this._rotoFrameRectD();
+            if (frame) parent.appendChild(svgEl("path", {
+                d: frame + " " + core, "fill-rule": "evenodd", stroke: "none",
+                fill: `rgba(${base},.30)`,
             }));
+            return;
         }
-        parent.appendChild(svgEl("path", {
-            d: core, stroke: "none",
-            fill: layer.invert ? "rgba(255,255,255,.16)" : "rgba(255,120,0,.34)",
-        }));
+
+        // Per-vertex feather ramp: concentric bands from feather contour inward.
+        // Non-feathered vertices coincide across all bands, so the ramp appears
+        // only where a feather handle was pulled.
+        if (dpts.some((p) => p.feather)) {
+            const BANDS = 5;
+            for (let k = BANDS; k >= 1; k--) {
+                const bd = this._rotoPathD(this._rotoFeatherPts(dpts, k / BANDS), true);
+                if (bd) parent.appendChild(svgEl("path", { d: bd, stroke: "none", fill: `rgba(${base},.09)` }));
+            }
+        }
+        parent.appendChild(svgEl("path", { d: core, stroke: "none", fill: `rgba(${base},.34)` }));
     },
 
-    // Feather contour points: each vertex replaced by its feather point (falling
-    // back to the vertex), keeping the original tangents — mirrors the Python
-    // _contour(use_feather=True) so the preview matches the rendered matte.
-    _rotoFeatherPts(dpts) {
+    // Feather contour points at blend factor t (0 = core vertex, 1 = feather
+    // point), keeping the original tangents — mirrors _contour(use_feather=True).
+    _rotoFeatherPts(dpts, t = 1) {
         return dpts.map((p) => {
-            const b = p.feather || p;
-            const o = { x: b.x, y: b.y };
+            const fx = p.feather ? p.feather.x : p.x;
+            const fy = p.feather ? p.feather.y : p.y;
+            const o = { x: p.x + (fx - p.x) * t, y: p.y + (fy - p.y) * t };
             if (p.cin) o.cin = p.cin;
             if (p.cout) o.cout = p.cout;
             return o;
         });
     },
 
-    // Approximate feather softness in screen px: mean per-point feather offset
-    // plus the shape/global feather sliders (image px → screen px), matching how
-    // roto_raster.py combines them.
-    _rotoFeatherScreenPx(layer, dpts) {
-        let sum = 0, count = 0;
-        for (const p of dpts) {
-            if (!p.feather) continue;
-            const a = this._normToClient(p.x, p.y);
-            const b = this._normToClient(p.feather.x, p.feather.y);
-            if (a && b) { sum += Math.hypot(a.x - b.x, a.y - b.y); count++; }
-        }
-        const perPoint = count ? (sum / count) : 0;
-
+    // Screen px per image px at the current zoom/fit.
+    _rotoScreenPerImgPx() {
         const o = this._normToClient(0, 0), ex = this._normToClient(1, 0);
         const { w } = this._toolImgSize();
-        const screenPerImgPx = (o && ex && w > 0) ? (Math.hypot(ex.x - o.x, ex.y - o.y) / w) : 0;
-        const sliderPx = ((+layer.feather || 0) + (+this._roto.global.feather || 0)) * 0.5 * screenPerImgPx;
-
-        return Math.min(60, perPoint * 0.5 + sliderPx);
+        return (o && ex && w > 0) ? (Math.hypot(ex.x - o.x, ex.y - o.y) / w) : 0;
     },
 
-    // Axis-aligned box around the current multi-point selection (display space),
-    // with screen-space corners for rendering + hit-testing.
+    // Screen-space path of the image rectangle (for inverted-matte previews).
+    _rotoFrameRectD() {
+        const c = [this._normToDraw(0, 0), this._normToDraw(1, 0), this._normToDraw(1, 1), this._normToDraw(0, 1)];
+        if (c.some((p) => !p)) return null;
+        return `M ${c[0].x} ${c[0].y} L ${c[1].x} ${c[1].y} L ${c[2].x} ${c[2].y} L ${c[3].x} ${c[3].y} Z`;
+    },
+
+    // Oriented box around the current multi-point selection. It carries the
+    // selection's rotation (this._roto.selAngle) so the box turns with the shape,
+    // and exposes its centre (centroid, in image px) + local axes so group
+    // scale/rotate act along the box's own axes.
     _rotoSelBox(dpts) {
         const sel = [...this._roto.selPts].filter((i) => dpts[i]);
         if (sel.length < 2) return null;
-        let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+        const { w, h } = this._toolImgSize();
+        if (!w || !h) return null;
+
+        let cx = 0, cy = 0;
+        for (const i of sel) { cx += dpts[i].x * w; cy += dpts[i].y * h; }
+        cx /= sel.length; cy /= sel.length;
+
+        const ang = this._roto.selAngle || 0;
+        const ca = Math.cos(ang), sa = Math.sin(ang);
+        let minU = 1e9, minV = 1e9, maxU = -1e9, maxV = -1e9;
         for (const i of sel) {
-            const p = dpts[i];
-            if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y;
-            if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y;
+            const dx = dpts[i].x * w - cx, dy = dpts[i].y * h - cy;
+            const u =  dx * ca + dy * sa;   // project onto the box's local frame
+            const v = -dx * sa + dy * ca;
+            if (u < minU) minU = u; if (v < minV) minV = v;
+            if (u > maxU) maxU = u; if (v > maxV) maxV = v;
         }
-        const cornersNorm = [
-            { x: minX, y: minY }, { x: maxX, y: minY },
-            { x: maxX, y: maxY }, { x: minX, y: maxY },
-        ];
+        const pad = 3;   // image-px slack so corner handles clear the vertices
+        minU -= pad; minV -= pad; maxU += pad; maxV += pad;
+
+        const toNorm = (u, v) => ({ x: (cx + u * ca - v * sa) / w, y: (cy + u * sa + v * ca) / h });
+        const cornersNorm = [toNorm(minU, minV), toNorm(maxU, minV), toNorm(maxU, maxV), toNorm(minU, maxV)];
         const cornersScr = cornersNorm.map((c) => this._normToDraw(c.x, c.y));
         if (cornersScr.some((s) => !s)) return null;
-        return { cornersNorm, cornersScr, centerNorm: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 } };
+
+        return {
+            cornersNorm, cornersScr,
+            centerNorm: { x: cx / w, y: cy / h },
+            center: { x: cx, y: cy }, ca, sa, w, h,
+            cornersLocal: [{ u: minU, v: minV }, { u: maxU, v: minV }, { u: maxU, v: maxV }, { u: minU, v: maxV }],
+        };
     },
 
     _rotoRenderSelBox(box) {
@@ -649,17 +955,18 @@ export const RotoMixin = {
         const hitIdx = this._rotoHitPoint(dpts, n);
         if (hitIdx >= 0) {
             if (e.ctrlKey) {   // Ctrl+drag pulls a feather handle (Nuke-style)
-                if (!this._roto.selPts.has(hitIdx)) { this._roto.selPts = new Set([hitIdx]); this._rotoRefreshShapeControls?.(); }
+                if (!this._roto.selPts.has(hitIdx)) { this._roto.selPts = new Set([hitIdx]); this._roto.selAngle = 0; this._rotoRefreshShapeControls?.(); }
                 this._rotoDragFeatherCreate(e, layer, editPts, hitIdx);
                 return true;
             }
             if (e.shiftKey) {
                 if (this._roto.selPts.has(hitIdx)) this._roto.selPts.delete(hitIdx);
                 else this._roto.selPts.add(hitIdx);
+                this._roto.selAngle = 0;   // membership changed → fresh axis-aligned box
                 this._rotoRefreshShapeControls?.(); this._toolRedraw();
                 return true;
             }
-            if (!this._roto.selPts.has(hitIdx)) this._roto.selPts = new Set([hitIdx]);
+            if (!this._roto.selPts.has(hitIdx)) { this._roto.selPts = new Set([hitIdx]); this._roto.selAngle = 0; }
             this._rotoRefreshShapeControls?.();
             this._rotoDragPoints(e, layer, editPts, n);   // moves the whole selection
             return true;
@@ -679,6 +986,7 @@ export const RotoMixin = {
                 const rawInsert = this._rotoInvTf(seg.point, tf);
                 editPts.splice(seg.i + 1, 0, { x: rawInsert.x, y: rawInsert.y });
                 this._roto.selPts = new Set([seg.i + 1]);
+                this._roto.selAngle = 0;
                 this._rotoSave(); this._rotoRefreshShapeControls?.(); this._toolRedraw();
                 return true;
             }
@@ -701,14 +1009,14 @@ export const RotoMixin = {
         const layer = this._rotoCurLayer();
         if (!layer) return { status: "<b>+ Shape</b> to start a roto shape", cursor: "default" };
 
-        // While drawing, clicks lay points.
+        // While drawing, clicks lay points (pen cursor).
         if (this._roto.drawing) {
             const pts = this._roto.drawing.points || [];
             if (pts.length >= 3) {
                 const first = this._rotoApplyTf(pts[0], layer.transform);
                 if (this._screenDist(n, first) <= HIT) return { status: "<b>Click</b> to close the shape", cursor: "pointer" };
             }
-            return { status: "<b>Click</b> add point · <b>drag</b> to curve · click the first point to close", cursor: "crosshair" };
+            return { status: "<b>Click</b> add point · <b>drag</b> to curve · click the first point to close", cursor: CUR_PEN };
         }
 
         const dpts = this._rotoDisplayPoints(layer);
@@ -737,7 +1045,7 @@ export const RotoMixin = {
                 }
                 if (this._rotoHitPoint(dpts, n) >= 0) return { status: "<b>Drag</b> move · <b>Ctrl+drag</b> feather · <b>Right-click</b> delete", cursor: "move" };
                 if (pointInPoly(n, box.cornersNorm)) return { status: "<b>Drag</b> move selection", cursor: "move" };
-                return { status: "<b>Drag</b> rotate selection (<b>Shift</b> 15°) · <b>click</b> to clear", cursor: "crosshair" };
+                return { status: "<b>Drag</b> rotate selection (<b>Shift</b> 15°) · <b>click</b> to clear", cursor: CUR_ROTATE };
             }
         }
 
@@ -779,6 +1087,7 @@ export const RotoMixin = {
             },
             () => {
                 rectEl.remove();
+                this._roto.selAngle = 0;   // new selection → axis-aligned box
                 if (moved) {
                     const minX = Math.min(startNorm.x, cur.x), maxX = Math.max(startNorm.x, cur.x);
                     const minY = Math.min(startNorm.y, cur.y), maxY = Math.max(startNorm.y, cur.y);
@@ -891,38 +1200,50 @@ export const RotoMixin = {
         this._toolRedraw();
     },
 
-    // Corner drag scales the selection about the box centre (Shift = uniform).
+    // Corner drag scales the selection along the box's own axes about its centre
+    // (Shift = uniform). Works in the oriented local frame so a rotated box
+    // scales the way it looks.
     _rotoGroupScale(e, layer, editPts, dpts, box, cornerIdx) {
         const cap = this._rotoGroupCapture(dpts);
         if (!cap.w || !cap.h || cap.sel.length < 2) return;
-        const cx = box.centerNorm.x * cap.w, cy = box.centerNorm.y * cap.h;
-        const g0 = { x: box.cornersNorm[cornerIdx].x * cap.w, y: box.cornersNorm[cornerIdx].y * cap.h };
+        const bx = box.center.x, by = box.center.y, ca = box.ca, sa = box.sa;
+        const cu0 = box.cornersLocal[cornerIdx].u || 1e-6;
+        const cv0 = box.cornersLocal[cornerIdx].v || 1e-6;
         this._toolDrag(
             (ev) => {
                 const m = this._eventToNorm(ev);
                 if (!m) return;
-                const mx = m.x * cap.w, my = m.y * cap.h;
-                let fx = (mx - cx) / ((g0.x - cx) || 1e-6);
-                let fy = (my - cy) / ((g0.y - cy) || 1e-6);
+                const mx = m.x * cap.w - bx, my = m.y * cap.h - by;
+                const mu =  mx * ca + my * sa;   // mouse in box-local frame
+                const mv = -mx * sa + my * ca;
+                let fu = mu / (cu0 || 1e-6);
+                let fv = mv / (cv0 || 1e-6);
                 if (ev.shiftKey) {
-                    const denom = (g0.x - cx) ** 2 + (g0.y - cy) ** 2 || 1e-6;
-                    fx = fy = ((mx - cx) * (g0.x - cx) + (my - cy) * (g0.y - cy)) / denom;
+                    const f = (mu * cu0 + mv * cv0) / ((cu0 * cu0 + cv0 * cv0) || 1e-6);
+                    fu = fv = f;
                 }
-                if (Math.abs(fx) < 1e-3) fx = (fx < 0 ? -1 : 1) * 1e-3;
-                if (Math.abs(fy) < 1e-3) fy = (fy < 0 ? -1 : 1) * 1e-3;
-                this._rotoGroupApply(layer, editPts, cap, (q) => ({ x: cx + fx * (q.x - cx), y: cy + fy * (q.y - cy) }));
+                if (Math.abs(fu) < 1e-3) fu = (fu < 0 ? -1 : 1) * 1e-3;
+                if (Math.abs(fv) < 1e-3) fv = (fv < 0 ? -1 : 1) * 1e-3;
+                this._rotoGroupApply(layer, editPts, cap, (q) => {
+                    const dx = q.x - bx, dy = q.y - by;
+                    const u = ( dx * ca + dy * sa) * fu;
+                    const v = (-dx * sa + dy * ca) * fv;
+                    return { x: bx + u * ca - v * sa, y: by + u * sa + v * ca };
+                });
             },
             () => { this._rotoSave(); this._rotoRefreshKfInfo?.(); this._toolRedraw(); },
         );
     },
 
     // Drag outside the box rotates the selection about its centre (Shift snaps to
-    // 15°). A click with no movement clears the selection.
+    // 15°) — the box orientation (selAngle) tracks it so the frame turns with the
+    // shape. A click with no movement clears the selection.
     _rotoGroupRotate(e, layer, editPts, dpts, box, startNorm) {
         const cap = this._rotoGroupCapture(dpts);
         if (!cap.w || !cap.h || cap.sel.length < 2) return;
-        const cx = box.centerNorm.x * cap.w, cy = box.centerNorm.y * cap.h;
+        const cx = box.center.x, cy = box.center.y;
         const a0 = Math.atan2(startNorm.y * cap.h - cy, startNorm.x * cap.w - cx);
+        const angStart = this._roto.selAngle || 0;
         let moved = false;
         this._toolDrag(
             (ev) => {
@@ -931,6 +1252,7 @@ export const RotoMixin = {
                 moved = true;
                 let da = Math.atan2(m.y * cap.h - cy, m.x * cap.w - cx) - a0;
                 if (ev.shiftKey) da = Math.round(da / (Math.PI / 12)) * (Math.PI / 12);
+                this._roto.selAngle = angStart + da;   // box turns with the shape
                 const ca = Math.cos(da), sa = Math.sin(da);
                 this._rotoGroupApply(layer, editPts, cap, (q) => ({
                     x: cx + (q.x - cx) * ca - (q.y - cy) * sa,
@@ -939,7 +1261,7 @@ export const RotoMixin = {
             },
             () => {
                 if (moved) { this._rotoSave(); this._rotoRefreshKfInfo?.(); }
-                else { this._roto.selPts = new Set(); this._rotoRefreshShapeControls?.(); }
+                else { this._roto.selPts = new Set(); this._roto.selAngle = 0; this._rotoRefreshShapeControls?.(); }
                 this._toolRedraw();
             },
         );
@@ -986,6 +1308,7 @@ function normalizeLayer(l) {
         blur: +l.blur || 0,
         dilate: +l.dilate || 0,
         opacity: l.opacity == null ? 1 : +l.opacity,
+        ease: Math.max(0, Math.min(1, +l.ease || 0)),
         closed: true,
         transform: Object.assign(DEF_TF(), l.transform || {}),
         points: Array.isArray(l.points) ? l.points.map(clonePoint) : [],

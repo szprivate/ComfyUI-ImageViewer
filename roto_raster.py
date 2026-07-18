@@ -120,6 +120,12 @@ def _points_for_frame(layer, frame):
         return a if (frame - lo) <= (hi - frame) else b
 
     t = (frame - lo) / float(hi - lo)
+    # Softness: blend the linear parameter toward a smoothstep ease-in/out.
+    # ease 0 = linear, 1 = full smoothstep (matches the viewer's curve editor).
+    ease = max(0.0, min(1.0, _num(layer.get("ease"), 0.0)))
+    if ease:
+        s = t * t * (3.0 - 2.0 * t)
+        t = t + (s - t) * ease
     merged = []
     for pa, pb in zip(a, b):
         p = {

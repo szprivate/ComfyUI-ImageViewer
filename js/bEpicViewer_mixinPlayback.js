@@ -117,6 +117,11 @@ export const PlaybackMixin = {
         this.container.querySelector('#total-f').innerText = bounds.max;
         this.updateTicks(Math.max(0, bounds.max - bounds.min));
         this.updateRangeOverlay(imgCount);
+        // Keep roto keyframe ticks + curve editor aligned to new timeline bounds.
+        if (this._toolState && this._toolState.active === 'roto') {
+            this._rotoRenderTimelineKeys && this._rotoRenderTimelineKeys();
+            this._rotoRefreshKfEditor && this._rotoRefreshKfEditor();
+        }
         return bounds;
     },
 

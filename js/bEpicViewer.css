@@ -302,11 +302,37 @@ option { text-align: left; }
 #timeline::-moz-range-thumb { height: 25px; width: 8px; background: #fff; border: none; border-radius: 1px; cursor: ew-resize; box-shadow: 0 0 2px rgba(0,0,0,0.8); }
 
 .timeline-range {
-    position: absolute; top: 0; bottom: 0; 
-    background: rgba(255, 102, 0, 0.4); 
-    z-index: 0; pointer-events: none; 
+    position: absolute; top: 0; bottom: 0;
+    background: rgba(255, 102, 0, 0.4);
+    z-index: 0; pointer-events: none;
     display: none; border-left: 1px solid #f60; border-right: 1px solid #f60;
 }
+
+/* Roto keyframe ticks on the timeline (draggable to retime) */
+.kf-ticks { position: absolute; top: 0; left: 0; right: 0; height: 100%; pointer-events: none; z-index: 3; }
+.kf-tick { position: absolute; top: 2px; bottom: 2px; width: 3px; margin-left: -1.5px; background: #ff8a00;
+    border-radius: 1px; pointer-events: auto; cursor: ew-resize; box-shadow: 0 0 2px rgba(0,0,0,0.8); }
+.kf-tick:hover { background: #ffb04d; }
+.kf-tick.cur { background: #fff; box-shadow: 0 0 3px #ff8a00; }
+
+/* Roto keyframe curve editor (collapsible, above the timeline) */
+.kf-editor { background: #1b1b1b; border: 1px solid #3a3a3a; border-radius: 4px;
+    font-family: sans-serif; font-size: 11px; color: #ccc; overflow: hidden; }
+.kf-editor-head { display: flex; align-items: center; gap: 6px; padding: 4px 8px; cursor: pointer; user-select: none; }
+.kf-editor-head:hover { background: #232323; }
+.kf-editor-toggle { color: #ff8a00; width: 10px; }
+.kf-editor-title { color: #ff8a00; text-transform: uppercase; letter-spacing: 0.4px; font-size: 10px; }
+.kf-editor-sub { color: #888; margin-left: auto; }
+.kf-editor-body { padding: 6px 8px 8px; }
+.kf-graph { position: relative; height: 60px; background: #141414; border: 1px solid #2c2c2c; border-radius: 3px; }
+.kf-graph-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.kf-dot { position: absolute; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; background: #ff8a00;
+    border: 1px solid #000; border-radius: 50%; cursor: ew-resize; z-index: 2; }
+.kf-dot:hover { background: #ffb04d; }
+.kf-editor-controls { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.kf-editor-controls label { color: #aaa; }
+.kf-editor-controls input[type=range] { flex: 1; }
+.kf-soft-val { width: 26px; text-align: right; color: #0ce; }
 
 .resizer { position: absolute; background: transparent; z-index: 10001; }
 .r-top { left: 0; right: 0; top: -5px; height: 10px; cursor: ns-resize; }
