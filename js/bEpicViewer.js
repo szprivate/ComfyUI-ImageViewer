@@ -658,7 +658,16 @@ class ViewerPanel extends HTMLElement {
     _bindToolbarHandlers() {
         const sr = this.shadowRoot;
 
-        this.helpBtn.onclick      = () => { this.helpOverlay.style.display = "flex";  };
+        this.helpBtn.onclick      = () => {
+            // Reveal the tool-specific section only for the tool that's active, so
+            // the help matches the current context.
+            const active = this._toolState ? this._toolState.active : "none";
+            const rotoSec = this.helpOverlay.querySelector('#help-roto');
+            const sam3Sec = this.helpOverlay.querySelector('#help-sam3');
+            if (rotoSec) rotoSec.style.display = active === "roto" ? "block" : "none";
+            if (sam3Sec) sam3Sec.style.display = active === "sam3" ? "block" : "none";
+            this.helpOverlay.style.display = "flex";
+        };
         this.helpOverlay.onclick  = () => { this.helpOverlay.style.display = "none"; };
 
         if (this.layoutSel) this.layoutSel.onchange = async (e) => {

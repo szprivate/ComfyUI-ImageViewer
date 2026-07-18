@@ -118,6 +118,14 @@ export const ToolsMixin = {
                 white-space:nowrap; }
             .bepic-layer-row .vis { cursor:pointer; opacity:.85; }
             .bepic-layer-row .del { cursor:pointer; color:#c66; }
+            /* Context hint that tracks what the cursor is over (bottom-left,
+               above the full-width path bar). */
+            .bepic-tool-status { position:absolute; left:8px; bottom:30px; z-index:55;
+                max-width:calc(100% - 16px); background:rgba(20,20,20,.9); color:#cfcfcf;
+                border:1px solid #444; border-radius:4px; padding:4px 9px; font-size:11px;
+                font-family:sans-serif; pointer-events:none; display:none; white-space:nowrap;
+                overflow:hidden; text-overflow:ellipsis; }
+            .bepic-tool-status b { color:#f60; font-weight:600; }
         `;
         this.shadowRoot.appendChild(s);
     },
@@ -134,6 +142,11 @@ export const ToolsMixin = {
         this.viewport.appendChild(this._toolRef);
         this.viewport.appendChild(this._toolDraw);
         this._toolDrawRect = null;
+
+        // Hover feedback: a context hint + cursor that reflect what's under the
+        // pointer. Only fires while a tool owns the draw layer (pointer-events).
+        this._toolDraw.addEventListener("mousemove", (e) => this._onToolPointerMove(e));
+        this._toolDraw.addEventListener("mouseleave", () => this._toolSetStatus(""));
     },
 
     _buildToolbar() {
@@ -154,6 +167,18 @@ export const ToolsMixin = {
 
         this._toolPanel = elWith("div", { className: "bepic-tool-panel" });
         this.viewport.appendChild(this._toolPanel);
+
+        // Context hint that updates from what the cursor is over (see
+        // _onToolPointerMove). Hidden unless a tool is active.
+        this._toolStatusEl = elWith("div", { className: "bepic-tool-status" });
+        this.viewport.appendChild(this._toolStatusEl);
+    },
+
+    // Update (or hide, when text is empty) the context hint line.
+    _toolSetStatus(text) {
+        if (!this._toolStatusEl) return;
+        if (text) { this._toolStatusEl.innerHTML = text; this._toolStatusEl.style.display = "block"; }
+        else this._toolStatusEl.style.display = "none";
     },
 
     // ── geometry / mapping ────────────────────────────────────────────────────
@@ -257,6 +282,7 @@ export const ToolsMixin = {
         if (tool === "sam3") this._sam3BuildPanel();
         else if (tool === "roto") this._rotoActivate?.(this._toolPanel);
         else this._toolPanel.innerHTML = "";
+        if (tool === "none") this._toolSetStatus("");
 
         this.updateToolOverlay();
     },
@@ -331,13 +357,44 @@ export const ToolsMixin = {
         return false;
     },
 
+    // Hover feedback: set the context hint + cursor from what the pointer is over.
+    // Skipped while a drag is in progress or over tool chrome.
+    _onToolPointerMove(e) {
+        if (!this._toolActive() || this._toolDragging) return;
+        if (e.target && e.target.closest && e.target.closest(
+            ".bepic-toolbar,.bepic-tool-panel,#exposure-control,#compare-slider")) {
+            this._toolSetStatus("");
+            return;
+        }
+        const n = this._eventToNorm(e);
+        if (!n) return;
+        let ctx = null;
+        if (this._toolState.active === "roto") ctx = this._rotoHoverContext?.(e, n);
+        else if (this._toolState.active === "sam3") ctx = this._sam3HoverContext(e, n);
+        if (!ctx) return;
+        this._toolSetStatus(ctx.status);
+        this._toolDraw.style.cursor = ctx.cursor || "default";
+    },
+
+    _sam3HoverContext(e, n) {
+        if (this._sam3HitTest(n.x, n.y)) {
+            return { status: "<b>Drag</b> move · <b>Right-click</b> delete", cursor: "move" };
+        }
+        return {
+            status: e.shiftKey ? "<b>Click</b> add negative point" : "<b>Click</b> positive · <b>Shift+click</b> negative",
+            cursor: "crosshair",
+        };
+    },
+
     // Attach a window-level drag loop; onMove/onUp receive the raw event.
     _toolDrag(onMove, onUp) {
         const win = this.container.ownerDocument.defaultView || window;
+        this._toolDragging = true;
         const move = (ev) => { ev.preventDefault(); onMove(ev); };
         const up = (ev) => {
             win.removeEventListener("mousemove", move);
             win.removeEventListener("mouseup", up);
+            this._toolDragging = false;
             onUp && onUp(ev);
         };
         win.addEventListener("mousemove", move);
