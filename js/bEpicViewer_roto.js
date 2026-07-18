@@ -23,29 +23,46 @@ const HIT = 9;             // screen-px hit radius
 const DEF_TF = () => ({ tx: 0, ty: 0, rot: 0, sx: 1, sy: 1, px: 0.5, py: 0.5 });
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 const lerp = (a, b, t) => a + (b - a) * t;
+const num = (v, d = 0) => (isFinite(+v) ? +v : d);
 
-// Keyframe easing (softness): 0 = linear, 1 = full smoothstep ease-in/out.
-// Must match roto_raster.py's _points_for_frame so preview == render.
-const easeT = (t, ease) => {
-    if (!ease) return t;
-    const s = t * t * (3 - 2 * t);
-    return t + (s - t) * Math.max(0, Math.min(1, ease));
-};
+// Standard OS cursors (the earlier custom data-URI SVG cursors didn't render
+// reliably in Chrome, so we use plain CSS keywords).
+const CUR_PEN = "crosshair";     // laying down a shape's points
+const CUR_ROTATE = "grab";       // rotating a multi-point selection
 
-// Custom cursors (data-URI SVG) for the pen (drawing) and rotate zones.
-function cursorFromSvg(svg, hx, hy, fallback) {
-    return `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${hx} ${hy}, ${fallback}`;
+// ── keyframe easing ───────────────────────────────────────────────────────────
+// Per-keyframe ease is a cubic-bezier timing curve (like CSS cubic-bezier):
+// the segment between key `lo` and key `hi` maps time-fraction x∈[0,1] → eased
+// t via control points P1=(lo.out) and P2=(hi.in). Defaults are (1/3,1/3) and
+// (2/3,2/3) → a straight line (linear). This exact math is mirrored in
+// roto_raster.py's _seg_ease so the preview matches the rendered mask.
+function bezierAxis(t, a1, a2) {          // cubic with P0=0, P3=1
+    const mt = 1 - t;
+    return 3 * mt * mt * t * a1 + 3 * mt * t * t * a2 + t * t * t;
 }
-const CUR_PEN = cursorFromSvg(
-    "<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'>" +
-    "<path d='M3 21l4-1L19 8l-3-3L4 17z' fill='#222' stroke='#ff8a00' stroke-width='1.5' stroke-linejoin='round'/>" +
-    "<path d='M15 5l3 3' stroke='#ff8a00' stroke-width='1.5'/><path d='M3 21l2.5-.6L4 19z' fill='#ff8a00'/></svg>",
-    2, 22, "crosshair");
-const CUR_ROTATE = cursorFromSvg(
-    "<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' " +
-    "stroke='#ff8a00' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>" +
-    "<path d='M20 12a8 8 0 1 1-2.4-5.7'/><path d='M20 3.5V8h-4.5' fill='#ff8a00' stroke='none'/></svg>",
-    12, 12, "crosshair");
+function bezierSolveT(x, p1x, p2x) {
+    let t = x;
+    for (let i = 0; i < 8; i++) {          // Newton-Raphson
+        const err = bezierAxis(t, p1x, p2x) - x;
+        if (Math.abs(err) < 1e-5) return t;
+        const d = 3 * (1 - t) * (1 - t) * p1x + 6 * (1 - t) * t * (p2x - p1x) + 3 * t * t * (1 - p2x);
+        if (Math.abs(d) < 1e-6) break;
+        t -= err / d;
+    }
+    let lo = 0, hi = 1; t = x;             // bisection fallback
+    for (let i = 0; i < 24; i++) {
+        const xt = bezierAxis(t, p1x, p2x);
+        if (Math.abs(xt - x) < 1e-5) break;
+        if (xt < x) lo = t; else hi = t;
+        t = (lo + hi) / 2;
+    }
+    return t;
+}
+function bezierEase(x, p1x, p1y, p2x, p2y) {
+    if (x <= 0) return 0;
+    if (x >= 1) return 1;
+    return bezierAxis(bezierSolveT(x, p1x, p2x), p1y, p2y);
+}
 
 let _rotoIdSeq = 1;
 
@@ -207,9 +224,10 @@ export const RotoMixin = {
         p.appendChild(el("div",
             "<b>+ Shape</b>, then click to add points (drag to curve); click the first point to close. " +
             "After closing: drag a vertex to move it, single-click shows its tangents, " +
-            "<b>Ctrl+drag</b> a vertex pulls feather, right-click a vertex deletes, Alt+click an edge inserts. " +
-            "Drag from empty space across points to select them, then drag inside the box to move, " +
-            "corners to scale, outside to rotate. Middle-drag pans.", "bepic-tool-hint"));
+            "<b>Ctrl+drag</b> a vertex pulls out the feather (an outer curve with its own " +
+            "<span style='color:#c98aff;'>tangents</span> you can drag). Right-click a vertex deletes, " +
+            "Alt+click an edge inserts. Drag from empty space across points to select them, then drag inside " +
+            "the box to move, corners to scale, outside to rotate. Middle-drag pans.", "bepic-tool-hint"));
 
         this._rotoRefreshLayerList();
         this._rotoRefreshShapeControls();
@@ -294,6 +312,7 @@ export const RotoMixin = {
 
     // Orange draggable keyframe ticks overlaid on the timeline.
     _rotoRenderTimelineKeys() {
+        if (this._rotoTickDragging) return;   // don't yank the tick out from under a drag
         const host = this._rotoKfTicksHost();
         if (!host) return;
         host.innerHTML = "";
@@ -318,21 +337,29 @@ export const RotoMixin = {
     _rotoTickDown(e, layer, frame) {
         if (e.button !== 0) return;
         e.preventDefault(); e.stopPropagation();
-        const container = this.shadowRoot.getElementById("timeline-container");
         const tickEl = e.currentTarget;
-        if (!container) return;
-        const rect = container.getBoundingClientRect();
+        // Map against the ticks host (the ticks are positioned inside it). Using
+        // the element's OWN document/window keeps drags working when the viewer
+        // is popped out into a separate window.
+        const host = tickEl.parentElement || this._rotoKfTicksHost();
+        if (!host) return;
+        const rect = host.getBoundingClientRect();
+        if (!rect.width) return;
         const { min, total } = this._rotoTimelineBounds();
-        const win = this.container.ownerDocument.defaultView || window;
+        const win = tickEl.ownerDocument.defaultView || window;
+        this._rotoTickDragging = true;   // suppress tick re-render mid-drag
         let target = frame;
         const move = (ev) => {
+            ev.preventDefault();
             const pct = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
             target = min + Math.round(pct * total);
             tickEl.style.left = (pct * 100) + "%";
+            tickEl.title = "Keyframe " + target + " — drag to retime · double-click to delete";
         };
         const up = () => {
             win.removeEventListener("mousemove", move);
             win.removeEventListener("mouseup", up);
+            this._rotoTickDragging = false;
             if (target !== frame) this._rotoMoveKey(layer, frame, target);
             this._rotoRefreshKfInfo();
         };
@@ -347,9 +374,12 @@ export const RotoMixin = {
         to = Math.max(0, Math.round(to));
         const kfs = layer.keyframes;
         if (!(String(from) in kfs)) return;
-        const pts = kfs[from];
+        kfs[to] = kfs[from];
         delete kfs[from];
-        kfs[to] = pts;
+        if (layer.tangents && String(from) in layer.tangents) {   // carry ease handles along
+            layer.tangents[to] = layer.tangents[from];
+            delete layer.tangents[from];
+        }
         this._rotoSave();
         this._toolRedraw();
     },
@@ -357,14 +387,16 @@ export const RotoMixin = {
     _rotoDeleteKeyAt(layer, frame) {
         if (!layer || !layer.keyframes) return;
         delete layer.keyframes[frame];
+        if (layer.tangents) delete layer.tangents[frame];
         if (Object.keys(layer.keyframes).length === 0) delete layer.keyframes;
         this._rotoSave();
         this._rotoRefreshKfInfo();
         this._toolRedraw();
     },
 
-    // Collapsible curve editor above the timeline: retime keys (drag dots) and
-    // shape the interpolation softness (ease) of the roto animation.
+    // Collapsible curve editor above the timeline: retime keys (drag the round
+    // dots on the baseline) and shape the animation's ease per keyframe (drag the
+    // small square tangent handles — one out of each key, one into the next).
     _rotoBuildKfEditor() {
         const host = this.container?.querySelector?.("#kf-editor");
         if (!host) return;
@@ -386,23 +418,14 @@ export const RotoMixin = {
         this._rotoKfBody.style.display = this._rotoKfOpen ? "block" : "none";
 
         this._rotoKfGraphWrap = el("div", "", "kf-graph");
-        this._rotoKfSvg = svgEl("svg", { class: "kf-graph-svg", preserveAspectRatio: "none", viewBox: "0 0 1000 100" });
+        this._rotoKfSvg = svgEl("svg", { class: "kf-graph-svg", preserveAspectRatio: "none", viewBox: "0 0 100 100" });
         this._rotoKfGraphWrap.appendChild(this._rotoKfSvg);
         this._rotoKfBody.appendChild(this._rotoKfGraphWrap);
 
-        const ctl = el("div", "", "kf-editor-controls");
-        ctl.appendChild(el("label", "Softness"));
-        const soft = document.createElement("input");
-        soft.type = "range"; soft.min = 0; soft.max = 100; soft.value = 0; soft.className = "kf-soft";
-        const softVal = el("span", "0", "kf-soft-val");
-        soft.oninput = () => {
-            const layer = this._rotoCurLayer();
-            softVal.textContent = soft.value;
-            if (layer) { layer.ease = (+soft.value) / 100; this._rotoSave(); this._toolRedraw(); this._rotoDrawKfCurve(); }
-        };
-        this._rotoKfSoft = soft; this._rotoKfSoftVal = softVal;
-        ctl.appendChild(soft); ctl.appendChild(softVal);
-        this._rotoKfBody.appendChild(ctl);
+        this._rotoKfBody.appendChild(el("div",
+            "Round dots retime a key. Square handles set the <b>ease in / out</b> " +
+            "of each transition — drag them to soften or sharpen the timing.",
+            "bepic-tool-hint"));
 
         host.appendChild(this._rotoKfBody);
         this._rotoRefreshKfEditor();
@@ -426,43 +449,61 @@ export const RotoMixin = {
         if (!active || !layer || keys.length < 1) { host.style.display = "none"; return; }
         host.style.display = "block";
         if (this._rotoKfSub) this._rotoKfSub.textContent = keys.length === 1 ? "1 key" : keys.length + " keys";
-        if (this._rotoKfSoft) {
-            const v = Math.round((+layer.ease || 0) * 100);
-            this._rotoKfSoft.value = v;
-            if (this._rotoKfSoftVal) this._rotoKfSoftVal.textContent = v;
-        }
         if (this._rotoKfOpen) { this._rotoDrawKfCurve(); this._rotoLayoutKfDots(); }
+    },
+
+    // Shared geometry for the curve editor: keyframe x-positions and, per
+    // segment, the two ease control points (out of the left key, in of the right
+    // key) in the graph's 0..100 space. Drawing and hit/drag both use this.
+    _rotoKfGeom() {
+        const layer = this._rotoCurLayer();
+        const keys = this._rotoCurKeys(layer);
+        const { min, total } = this._rotoTimelineBounds();
+        const X = (f) => total === 0 ? 0 : ((f - min) / total) * 100;
+        const yTop = 12, yBot = 88;
+        const Yv = (v) => yBot - v * (yBot - yTop);
+        const segs = [];
+        for (let s = 0; s < keys.length - 1; s++) {
+            const lo = keys[s], hi = keys[s + 1];
+            const tl = this._rotoKeyTangent(layer, lo), th = this._rotoKeyTangent(layer, hi);
+            const x0 = X(lo), x1 = X(hi), dx = x1 - x0;
+            segs.push({
+                lo, hi, x0, x1,
+                out: { key: lo, side: "out", frac: tl.ox, val: tl.oy, gx: x0 + dx * tl.ox, gy: Yv(tl.oy) },
+                in:  { key: hi, side: "in",  frac: th.ix, val: th.iy, gx: x0 + dx * th.ix, gy: Yv(th.iy) },
+            });
+        }
+        return { layer, keys, X, Yv, yTop, yBot, segs };
     },
 
     _rotoDrawKfCurve() {
         const svg = this._rotoKfSvg;
         if (!svg) return;
         while (svg.firstChild) svg.removeChild(svg.firstChild);
-        const layer = this._rotoCurLayer();
-        const keys = this._rotoCurKeys(layer);
-        const { min, total } = this._rotoTimelineBounds();
-        const X = (f) => total === 0 ? 0 : ((f - min) / total) * 1000;
-        const yTop = 12, yBot = 88;
+        const g = this._rotoKfGeom();
+        const { layer, keys, X, Yv, yTop, yBot, segs } = g;
         const ns = (t, a) => { a["vector-effect"] = "non-scaling-stroke"; return svgEl(t, a); };
-        svg.appendChild(ns("line", { x1: 0, y1: yBot, x2: 1000, y2: yBot, stroke: "#333" }));
-        const ease = +layer?.ease || 0;
-        if (keys.length >= 2) {
-            let d = "";
-            for (let s = 0; s < keys.length - 1; s++) {
-                const x0 = X(keys[s]), x1 = X(keys[s + 1]);
-                const STEP = 16;
-                for (let i = 0; i <= STEP; i++) {
-                    const tt = i / STEP;
-                    const x = x0 + (x1 - x0) * tt;
-                    const y = yBot - easeT(tt, ease) * (yBot - yTop);
-                    d += (i === 0 && s === 0 ? "M " : "L ") + x.toFixed(1) + " " + y.toFixed(1) + " ";
-                }
-            }
-            svg.appendChild(ns("path", { d, fill: "none", stroke: "#ff8a00", "stroke-width": 2 }));
-        }
+
+        svg.appendChild(ns("line", { x1: 0, y1: yBot, x2: 100, y2: yBot, stroke: "#333" }));
+        // Vertical guide at each key.
         for (const f of keys) {
             const x = X(f);
-            svg.appendChild(ns("line", { x1: x, y1: yTop - 4, x2: x, y2: yBot, stroke: "#ff8a00", "stroke-dasharray": "3 3", opacity: 0.5 }));
+            svg.appendChild(ns("line", { x1: x, y1: yTop - 4, x2: x, y2: yBot, stroke: "#ff8a00", "stroke-dasharray": "2 2", opacity: 0.4 }));
+        }
+        // Per-segment eased curve + tangent-handle stems.
+        for (const seg of segs) {
+            const a = this._rotoKeyTangent(layer, seg.lo), b = this._rotoKeyTangent(layer, seg.hi);
+            let d = "";
+            const STEP = 24;
+            for (let i = 0; i <= STEP; i++) {
+                const xf = i / STEP;
+                const yv = bezierEase(xf, a.ox, a.oy, b.ix, b.iy);
+                const x = seg.x0 + (seg.x1 - seg.x0) * xf;
+                d += (i === 0 ? "M " : "L ") + x.toFixed(2) + " " + Yv(yv).toFixed(2) + " ";
+            }
+            svg.appendChild(ns("path", { d, fill: "none", stroke: "#ff8a00", "stroke-width": 2 }));
+            svg.appendChild(ns("line", { x1: seg.x0, y1: Yv(0), x2: seg.out.gx, y2: seg.out.gy, stroke: "#6cf", opacity: 0.7 }));
+            svg.appendChild(ns("line", { x1: seg.x1, y1: Yv(1), x2: seg.in.gx, y2: seg.in.gy, stroke: "#6cf", opacity: 0.7 }));
         }
         const px = X(this._rotoFrame());
         svg.appendChild(ns("line", { x1: px, y1: 0, x2: px, y2: 100, stroke: "#fff", opacity: 0.7 }));
@@ -471,18 +512,30 @@ export const RotoMixin = {
     _rotoLayoutKfDots() {
         const wrap = this._rotoKfGraphWrap;
         if (!wrap) return;
-        wrap.querySelectorAll(".kf-dot").forEach((d) => d.remove());
-        const layer = this._rotoCurLayer();
-        const keys = this._rotoCurKeys(layer);
-        const { min, total } = this._rotoTimelineBounds();
+        wrap.querySelectorAll(".kf-dot,.kf-tan").forEach((d) => d.remove());
+        const g = this._rotoKfGeom();
+        const { layer, keys, X, Yv } = g;
+
+        // Retime dots on the baseline.
         for (const f of keys) {
-            const pct = total === 0 ? 0 : ((f - min) / total) * 100;
             const dot = el("div", "", "kf-dot");
-            dot.style.left = pct + "%";
+            dot.style.left = X(f) + "%";
+            dot.style.top = Yv(0) + "%";
             dot.title = "Keyframe " + f + " — drag to retime · double-click to delete";
             dot.onmousedown = (e) => this._rotoKfDotDown(e, layer, f);
             dot.ondblclick = (e) => { e.preventDefault(); e.stopPropagation(); this._rotoDeleteKeyAt(layer, f); };
             wrap.appendChild(dot);
+        }
+        // Tangent (ease) handles: one out of the left key, one into the right key.
+        for (const seg of g.segs) {
+            for (const h of [seg.out, seg.in]) {
+                const t = el("div", "", "kf-tan");
+                t.style.left = h.gx + "%";
+                t.style.top = h.gy + "%";
+                t.title = (h.side === "out" ? "Ease out of key " : "Ease into key ") + h.key;
+                t.onmousedown = (e) => this._rotoKfTanDown(e, layer, seg, h.side);
+                wrap.appendChild(t);
+            }
         }
     },
 
@@ -493,10 +546,11 @@ export const RotoMixin = {
         if (!wrap) return;
         const rect = wrap.getBoundingClientRect();
         const { min, total } = this._rotoTimelineBounds();
-        const win = this.container.ownerDocument.defaultView || window;
-        let target = frame;
         const dot = e.currentTarget;
+        const win = dot.ownerDocument.defaultView || window;
+        let target = frame;
         const move = (ev) => {
+            ev.preventDefault();
             const pct = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
             target = min + Math.round(pct * total);
             dot.style.left = (pct * 100) + "%";
@@ -506,6 +560,43 @@ export const RotoMixin = {
             win.removeEventListener("mouseup", up);
             if (target !== frame) this._rotoMoveKey(layer, frame, target);
             this._rotoRefreshKfInfo();
+        };
+        win.addEventListener("mousemove", move);
+        win.addEventListener("mouseup", up);
+    },
+
+    // Drag an ease tangent handle. `side` = "out" edits the left key's out
+    // control point, "in" edits the right key's in control point (both in the
+    // segment's normalized [0,1]² frame). x = timing, y = value → softness.
+    _rotoKfTanDown(e, layer, seg, side) {
+        if (e.button !== 0) return;
+        e.preventDefault(); e.stopPropagation();
+        const wrap = this._rotoKfGraphWrap;
+        if (!wrap) return;
+        const rect = wrap.getBoundingClientRect();
+        const el0 = e.currentTarget;
+        const win = el0.ownerDocument.defaultView || window;
+        const yTop = 12, yBot = 88;
+        const key = side === "out" ? seg.lo : seg.hi;
+        const move = (ev) => {
+            ev.preventDefault();
+            const gx = Math.max(0, Math.min(100, (ev.clientX - rect.left) / rect.width * 100));
+            const gy = (ev.clientY - rect.top) / rect.height * 100;
+            const dx = seg.x1 - seg.x0 || 1;
+            let frac = (gx - seg.x0) / dx;
+            frac = Math.max(0.02, Math.min(0.98, frac));
+            let val = (yBot - gy) / (yBot - yTop);
+            val = Math.max(0, Math.min(1, val));
+            if (side === "out") this._rotoSetKeyTangent(layer, key, { ox: frac, oy: val });
+            else this._rotoSetKeyTangent(layer, key, { ix: frac, iy: val });
+            this._rotoDrawKfCurve();
+            this._rotoLayoutKfDots();
+            this._toolRedraw();
+        };
+        const up = () => {
+            win.removeEventListener("mousemove", move);
+            win.removeEventListener("mouseup", up);
+            this._rotoSave();
         };
         win.addEventListener("mousemove", move);
         win.addEventListener("mouseup", up);
@@ -523,8 +614,30 @@ export const RotoMixin = {
         if (hi === lo) return kfs[lo];
         const a = kfs[lo], b = kfs[hi];
         if (a.length !== b.length) return (frame - lo) <= (hi - frame) ? a : b;
-        const t = easeT((frame - lo) / (hi - lo), +layer.ease || 0);
+        const t = this._rotoSegEase(layer, lo, hi, (frame - lo) / (hi - lo));
         return a.map((pa, i) => interpPoint(pa, b[i], t));
+    },
+
+    // ── per-keyframe ease tangents ────────────────────────────────────────────
+    // Tangent handles are stored per keyframe frame: { ox,oy (out control point),
+    // ix,iy (in control point) } in the segment's normalized [0,1]² time/value
+    // space. Absent → derived from the legacy scalar `ease` (0 linear .. 1 smooth).
+    _rotoKeyTangent(layer, frame) {
+        const t = layer && layer.tangents && layer.tangents[String(frame)];
+        if (t) return { ox: num(t.ox, 1 / 3), oy: num(t.oy, 1 / 3), ix: num(t.ix, 2 / 3), iy: num(t.iy, 2 / 3) };
+        const e = Math.max(0, Math.min(1, +((layer || {}).ease) || 0));   // migrate old global ease
+        return { ox: 1 / 3, oy: (1 - e) / 3, ix: 2 / 3, iy: 2 / 3 + e / 3 };
+    },
+
+    _rotoSetKeyTangent(layer, frame, patch) {
+        layer.tangents = layer.tangents || {};
+        layer.tangents[String(frame)] = Object.assign(this._rotoKeyTangent(layer, frame), patch);
+    },
+
+    // Eased parameter for the segment lo→hi at time fraction x (0..1).
+    _rotoSegEase(layer, lo, hi, x) {
+        const a = this._rotoKeyTangent(layer, lo), b = this._rotoKeyTangent(layer, hi);
+        return bezierEase(x, a.ox, a.oy, b.ix, b.iy);
     },
 
     // The array of raw points that edits should mutate for the current frame.
@@ -559,6 +672,7 @@ export const RotoMixin = {
         if (!layer || !layer.keyframes) return;
         const f = this._rotoFrame();
         delete layer.keyframes[f];
+        if (layer.tangents) delete layer.tangents[f];
         if (Object.keys(layer.keyframes).length === 0) delete layer.keyframes;
         this._rotoSave(); this._rotoRefreshKfInfo(); this._toolRedraw();
     },
@@ -599,7 +713,11 @@ export const RotoMixin = {
             const d = { ...this._rotoApplyTf({ x: p.x, y: p.y }, tf) };
             if (p.cin) d.cin = this._rotoApplyTf(p.cin, tf);
             if (p.cout) d.cout = this._rotoApplyTf(p.cout, tf);
-            if (p.feather) d.feather = this._rotoApplyTf(p.feather, tf);
+            if (p.feather) {
+                d.feather = { ...this._rotoApplyTf(p.feather, tf) };
+                if (p.feather.cin) d.feather.cin = this._rotoApplyTf(p.feather.cin, tf);
+                if (p.feather.cout) d.feather.cout = this._rotoApplyTf(p.feather.cout, tf);
+            }
             return d;
         });
     },
@@ -632,6 +750,15 @@ export const RotoMixin = {
             }));
             if (!isSel) return;
 
+            // Outer feather curve: the editable spline the soft edge blends out to.
+            if (dpts.some((p) => p.feather)) {
+                const fd = this._rotoPathD(this._rotoFeatherPts(dpts, 1), true);
+                if (fd) draw.appendChild(svgEl("path", {
+                    d: fd, fill: "none", stroke: "#e6a9ff", "stroke-width": 1,
+                    "stroke-dasharray": "4 3", opacity: 0.85,
+                }));
+            }
+
             // Tangent / feather handles only when a single point is selected, so a
             // click reveals its curve controls; a multi-selection shows the box.
             const showHandles = this._roto.selPts.size < 2 && this._roto.drawing !== layer;
@@ -653,6 +780,15 @@ export const RotoMixin = {
                         const fs = this._normToDraw(p.feather.x, p.feather.y);
                         if (fs) {
                             draw.appendChild(svgEl("line", { x1: scr.x, y1: scr.y, x2: fs.x, y2: fs.y, stroke: "#c9a", "stroke-width": 1, "stroke-dasharray": "3 2" }));
+                            // feather tangent handles (outer-curve control points)
+                            const fh = this._rotoFeatherHandles(p);
+                            for (const hk of ["cin", "cout"]) {
+                                if (!fh || !fh[hk]) continue;
+                                const hs = this._normToDraw(fh[hk].x, fh[hk].y);
+                                if (!hs) continue;
+                                draw.appendChild(svgEl("line", { x1: fs.x, y1: fs.y, x2: hs.x, y2: hs.y, stroke: "#c9a", "stroke-width": 1 }));
+                                draw.appendChild(diamond(hs.x, hs.y, 3, "#c98aff"));
+                            }
                             draw.appendChild(diamond(fs.x, fs.y, 4, "#e6a9ff"));
                         }
                     }
@@ -738,17 +874,78 @@ export const RotoMixin = {
         parent.appendChild(svgEl("path", { d: core, stroke: "none", fill: `rgba(${base},.34)` }));
     },
 
-    // Feather contour points at blend factor t (0 = core vertex, 1 = feather
-    // point), keeping the original tangents — mirrors _contour(use_feather=True).
+    // The outer-feather counterpart of a display vertex: its feather point plus
+    // that point's OWN bezier tangents. When a feather tangent is absent it
+    // falls back to the core tangent translated by the feather offset, so the
+    // outer curve mirrors the shape until the user pulls the feather handle.
+    _rotoFeatherHandles(p) {
+        const f = p.feather;
+        if (!f) return null;
+        const off = { x: f.x - p.x, y: f.y - p.y };
+        return {
+            x: f.x, y: f.y,
+            cout: f.cout || (p.cout ? { x: p.cout.x + off.x, y: p.cout.y + off.y } : undefined),
+            cin: f.cin || (p.cin ? { x: p.cin.x + off.x, y: p.cin.y + off.y } : undefined),
+        };
+    },
+
+    // Feather contour points at blend factor t (0 = inner roto curve, 1 = outer
+    // feather curve). Position AND tangents blend, so the soft edge morphs from
+    // the shape spline to the feather spline — mirrors _contour(use_feather=True).
     _rotoFeatherPts(dpts, t = 1) {
         return dpts.map((p) => {
-            const fx = p.feather ? p.feather.x : p.x;
-            const fy = p.feather ? p.feather.y : p.y;
-            const o = { x: p.x + (fx - p.x) * t, y: p.y + (fy - p.y) * t };
-            if (p.cin) o.cin = p.cin;
-            if (p.cout) o.cout = p.cout;
-            return o;
+            const inner = { x: p.x, y: p.y };
+            if (p.cin) inner.cin = p.cin;
+            if (p.cout) inner.cout = p.cout;
+            const outer = this._rotoFeatherHandles(p);
+            if (!outer) return inner;
+            return interpHandled(inner, outer, t);
         });
+    },
+
+    // Drag the feather point itself — its tangents ride along so the outer curve
+    // keeps its shape.
+    _rotoDragFeather(e, layer, editPts, i) {
+        const tf = layer.transform;
+        this._roto.selPts = new Set([i]);
+        this._toolDrag(
+            (ev) => {
+                const m = this._eventToNorm(ev);
+                if (!m) return;
+                const rawM = this._rotoInvTf(m, tf);
+                const f = editPts[i].feather;
+                if (!f) return;
+                const dx = rawM.x - f.x, dy = rawM.y - f.y;
+                f.x = rawM.x; f.y = rawM.y;
+                if (f.cin) { f.cin.x += dx; f.cin.y += dy; }
+                if (f.cout) { f.cout.x += dx; f.cout.y += dy; }
+                this._toolRedraw();
+            },
+            () => { this._rotoSave(); this._toolRedraw(); },
+        );
+    },
+
+    // Drag a feather point's own tangent handle (materializing it from the
+    // fallback if it didn't exist yet). Alt breaks the smooth mirror.
+    _rotoDragFeatherHandle(e, layer, editPts, i, which) {
+        const tf = layer.transform;
+        const broken = e.altKey;
+        this._toolDrag(
+            (ev) => {
+                const m = this._eventToNorm(ev);
+                if (!m) return;
+                const f = editPts[i].feather;
+                if (!f) return;
+                const rawM = this._rotoInvTf(m, tf);
+                f[which] = { x: rawM.x, y: rawM.y };
+                if (!broken) {
+                    const other = which === "cin" ? "cout" : "cin";
+                    f[other] = { x: 2 * f.x - rawM.x, y: 2 * f.y - rawM.y };
+                }
+                this._toolRedraw();
+            },
+            () => { this._rotoSave(); this._toolRedraw(); },
+        );
     },
 
     // Screen px per image px at the current zoom/fit.
@@ -931,9 +1128,16 @@ export const RotoMixin = {
             for (const i of this._roto.selPts) {
                 const p = dpts[i];
                 if (!p) continue;
-                for (const hk of ["cin", "cout", "feather"]) {
-                    if (!p[hk]) continue;
-                    if (this._screenDist(n, p[hk]) <= HIT) { this._rotoDragHandle(e, layer, editPts, i, hk); return true; }
+                for (const hk of ["cin", "cout"]) {
+                    if (p[hk] && this._screenDist(n, p[hk]) <= HIT) { this._rotoDragHandle(e, layer, editPts, i, hk); return true; }
+                }
+                if (p.feather) {
+                    // outer-feather tangent handles, then the feather point itself
+                    const fh = this._rotoFeatherHandles(p);
+                    for (const hk of ["cout", "cin"]) {
+                        if (fh && fh[hk] && this._screenDist(n, fh[hk]) <= HIT) { this._rotoDragFeatherHandle(e, layer, editPts, i, hk); return true; }
+                    }
+                    if (this._screenDist(n, p.feather) <= HIT) { this._rotoDragFeather(e, layer, editPts, i); return true; }
                 }
             }
         }
@@ -1025,9 +1229,15 @@ export const RotoMixin = {
         if (this._roto.selPts.size < 2) {
             for (const i of this._roto.selPts) {
                 const p = dpts[i]; if (!p) continue;
-                if (p.feather && this._screenDist(n, p.feather) <= HIT) return { status: "<b>Drag</b> adjust feather", cursor: "move" };
                 for (const hk of ["cin", "cout"]) {
                     if (p[hk] && this._screenDist(n, p[hk]) <= HIT) return { status: "<b>Drag</b> tangent · <b>Alt+drag</b> break it", cursor: "move" };
+                }
+                if (p.feather) {
+                    const fh = this._rotoFeatherHandles(p);
+                    for (const hk of ["cout", "cin"]) {
+                        if (fh && fh[hk] && this._screenDist(n, fh[hk]) <= HIT) return { status: "<b>Drag</b> feather-curve tangent · <b>Alt+drag</b> break it", cursor: "move" };
+                    }
+                    if (this._screenDist(n, p.feather) <= HIT) return { status: "<b>Drag</b> move the feather point", cursor: "move" };
                 }
             }
         }
@@ -1120,8 +1330,14 @@ export const RotoMixin = {
                 for (const i of this._roto.selPts) {
                     const o = origin[i]; if (!o) continue;
                     editPts[i].x = clamp01(o.x + dx); editPts[i].y = clamp01(o.y + dy);
-                    for (const hk of ["cin", "cout", "feather"]) {
+                    for (const hk of ["cin", "cout"]) {
                         if (o[hk]) editPts[i][hk] = { x: o[hk].x + dx, y: o[hk].y + dy };
+                    }
+                    if (o.feather) {   // feather point + its own tangents ride along
+                        const f = { x: o.feather.x + dx, y: o.feather.y + dy };
+                        if (o.feather.cin) f.cin = { x: o.feather.cin.x + dx, y: o.feather.cin.y + dy };
+                        if (o.feather.cout) f.cout = { x: o.feather.cout.x + dx, y: o.feather.cout.y + dy };
+                        editPts[i].feather = f;
                     }
                 }
                 this._toolRedraw();
@@ -1151,6 +1367,8 @@ export const RotoMixin = {
         );
     },
 
+    // Ctrl+drag a vertex to pull out (or move) its feather point. Existing
+    // feather tangents ride along with the point rather than being discarded.
     _rotoDragFeatherCreate(e, layer, editPts, i) {
         const tf = layer.transform;
         this._roto.selPts = new Set([i]);
@@ -1159,7 +1377,15 @@ export const RotoMixin = {
                 const m = this._eventToNorm(ev);
                 if (!m) return;
                 const rawM = this._rotoInvTf(m, tf);
-                editPts[i].feather = { x: rawM.x, y: rawM.y };
+                const f = editPts[i].feather;
+                if (f) {
+                    const dx = rawM.x - f.x, dy = rawM.y - f.y;
+                    f.x = rawM.x; f.y = rawM.y;
+                    if (f.cin) { f.cin.x += dx; f.cin.y += dy; }
+                    if (f.cout) { f.cout.x += dx; f.cout.y += dy; }
+                } else {
+                    editPts[i].feather = { x: rawM.x, y: rawM.y };
+                }
                 this._toolRedraw();
             },
             () => { this._rotoSave(); this._toolRedraw(); },
@@ -1175,8 +1401,14 @@ export const RotoMixin = {
         const orig = {};
         for (const i of sel) {
             const p = dpts[i];
-            orig[i] = { a: { x: p.x * w, y: p.y * h } };
-            for (const hk of ["cin", "cout", "feather"]) if (p[hk]) orig[i][hk] = { x: p[hk].x * w, y: p[hk].y * h };
+            const o = { a: { x: p.x * w, y: p.y * h } };
+            for (const hk of ["cin", "cout"]) if (p[hk]) o[hk] = { x: p[hk].x * w, y: p[hk].y * h };
+            if (p.feather) {
+                o.feather = { x: p.feather.x * w, y: p.feather.y * h };
+                if (p.feather.cin) o.featherCin = { x: p.feather.cin.x * w, y: p.feather.cin.y * h };
+                if (p.feather.cout) o.featherCout = { x: p.feather.cout.x * w, y: p.feather.cout.y * h };
+            }
+            orig[i] = o;
         }
         return { w, h, sel, orig };
     },
@@ -1185,16 +1417,22 @@ export const RotoMixin = {
     _rotoGroupApply(layer, editPts, cap, map) {
         const { w, h } = cap;
         const tf = layer.transform;
+        const back = (px) => {
+            const hn = this._rotoInvTf({ x: px.x / w, y: px.y / h }, tf);
+            return { x: hn.x, y: hn.y };
+        };
         for (const i of cap.sel) {
             const o = cap.orig[i]; if (!o) continue;
-            const na = map(o.a);
-            const nn = this._rotoInvTf({ x: na.x / w, y: na.y / h }, tf);
+            const nn = back(map(o.a));
             editPts[i].x = clamp01(nn.x); editPts[i].y = clamp01(nn.y);
-            for (const hk of ["cin", "cout", "feather"]) {
-                if (!o[hk]) continue;
-                const hp = map(o[hk]);
-                const hn = this._rotoInvTf({ x: hp.x / w, y: hp.y / h }, tf);
-                editPts[i][hk] = { x: hn.x, y: hn.y };
+            for (const hk of ["cin", "cout"]) {
+                if (o[hk]) editPts[i][hk] = back(map(o[hk]));
+            }
+            if (o.feather) {
+                const f = back(map(o.feather));
+                if (o.featherCin) f.cin = back(map(o.featherCin));
+                if (o.featherCout) f.cout = back(map(o.featherCout));
+                editPts[i].feather = f;
             }
         }
         this._toolRedraw();
@@ -1315,27 +1553,50 @@ function normalizeLayer(l) {
         keyframes: l.keyframes && typeof l.keyframes === "object"
             ? Object.fromEntries(Object.entries(l.keyframes).map(([k, v]) => [k, (v || []).map(clonePoint)]))
             : undefined,
+        tangents: l.tangents && typeof l.tangents === "object"
+            ? Object.fromEntries(Object.entries(l.tangents)
+                .filter(([, v]) => v && typeof v === "object")
+                .map(([k, v]) => [k, { ox: num(v.ox, 1 / 3), oy: num(v.oy, 1 / 3), ix: num(v.ix, 2 / 3), iy: num(v.iy, 2 / 3) }]))
+            : undefined,
     };
 }
 
-function clonePoint(p) {
+// A point-ish {x,y} that may carry its own bezier tangents (used for both a
+// vertex and its feather counterpart).
+function cloneHandled(p) {
     const o = { x: +p.x, y: +p.y };
     if (p.cin) o.cin = { x: +p.cin.x, y: +p.cin.y };
     if (p.cout) o.cout = { x: +p.cout.x, y: +p.cout.y };
-    if (p.feather) o.feather = { x: +p.feather.x, y: +p.feather.y };
+    return o;
+}
+
+function clonePoint(p) {
+    const o = cloneHandled(p);
+    if (p.feather) o.feather = cloneHandled(p.feather);   // outer-feather vertex + its tangents
     return o;
 }
 
 function clonePoints(arr) { return (arr || []).map(clonePoint); }
 
-function interpPoint(a, b, t) {
+// Interpolate a handled point-ish (position + cin/cout) at t.
+function interpHandled(a, b, t) {
     const o = { x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t) };
-    for (const hk of ["cin", "cout", "feather"]) {
+    for (const hk of ["cin", "cout"]) {
         if (a[hk] || b[hk]) {
             const da = a[hk] || { x: a.x, y: a.y };
             const db = b[hk] || { x: b.x, y: b.y };
             o[hk] = { x: lerp(da.x, db.x, t), y: lerp(da.y, db.y, t) };
         }
+    }
+    return o;
+}
+
+function interpPoint(a, b, t) {
+    const o = interpHandled(a, b, t);
+    if (a.feather || b.feather) {
+        const fa = a.feather || { x: a.x, y: a.y };
+        const fb = b.feather || { x: b.x, y: b.y };
+        o.feather = interpHandled(fa, fb, t);
     }
     return o;
 }

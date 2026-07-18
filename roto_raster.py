@@ -77,6 +77,63 @@ def _bezier(p0, c0, c1, p1, steps):
     return out
 
 
+# ── cubic-bezier keyframe easing (mirrors bezierEase in bEpicViewer_roto.js) ──
+
+def _bezier_axis(t, a1, a2):          # cubic coord with P0=0, P3=1
+    mt = 1.0 - t
+    return 3 * mt * mt * t * a1 + 3 * mt * t * t * a2 + t * t * t
+
+
+def _bezier_solve_t(x, p1x, p2x):
+    t = x
+    for _ in range(8):                # Newton-Raphson
+        err = _bezier_axis(t, p1x, p2x) - x
+        if abs(err) < 1e-5:
+            return t
+        d = 3 * (1 - t) * (1 - t) * p1x + 6 * (1 - t) * t * (p2x - p1x) + 3 * t * t * (1 - p2x)
+        if abs(d) < 1e-6:
+            break
+        t -= err / d
+    lo, hi, t = 0.0, 1.0, x           # bisection fallback
+    for _ in range(24):
+        xt = _bezier_axis(t, p1x, p2x)
+        if abs(xt - x) < 1e-5:
+            break
+        if xt < x:
+            lo = t
+        else:
+            hi = t
+        t = (lo + hi) / 2.0
+    return t
+
+
+def _bezier_ease(x, p1x, p1y, p2x, p2y):
+    if x <= 0:
+        return 0.0
+    if x >= 1:
+        return 1.0
+    return _bezier_axis(_bezier_solve_t(x, p1x, p2x), p1y, p2y)
+
+
+def _key_tangent(layer, frame):
+    """Per-keyframe ease control points (ox,oy = out, ix,iy = in). Absent →
+    derived from the legacy scalar `ease` (0 linear .. 1 smooth)."""
+    tans = layer.get("tangents")
+    t = tans.get(str(frame)) if isinstance(tans, dict) else None
+    if isinstance(t, dict):
+        return (_num(t.get("ox"), 1 / 3.), _num(t.get("oy"), 1 / 3.),
+                _num(t.get("ix"), 2 / 3.), _num(t.get("iy"), 2 / 3.))
+    e = max(0.0, min(1.0, _num(layer.get("ease"), 0.0)))
+    return (1 / 3., (1 - e) / 3., 2 / 3., 2 / 3. + e / 3.)
+
+
+def _seg_ease(layer, lo, hi, x):
+    """Eased interpolation parameter for the segment lo→hi at time fraction x."""
+    ox, oy, _ix, _iy = _key_tangent(layer, lo)
+    _ox, _oy, ix, iy = _key_tangent(layer, hi)
+    return _bezier_ease(x, ox, oy, ix, iy)
+
+
 # ── keyframe resolution ──────────────────────────────────────────────────────
 
 def _points_for_frame(layer, frame):
@@ -119,25 +176,33 @@ def _points_for_frame(layer, frame):
         # can't interpolate mismatched shapes; snap to nearest
         return a if (frame - lo) <= (hi - frame) else b
 
-    t = (frame - lo) / float(hi - lo)
-    # Softness: blend the linear parameter toward a smoothstep ease-in/out.
-    # ease 0 = linear, 1 = full smoothstep (matches the viewer's curve editor).
-    ease = max(0.0, min(1.0, _num(layer.get("ease"), 0.0)))
-    if ease:
-        s = t * t * (3.0 - 2.0 * t)
-        t = t + (s - t) * ease
+    # Per-keyframe ease (cubic-bezier tangents) — matches the viewer's curve editor.
+    t = _seg_ease(layer, lo, hi, (frame - lo) / float(hi - lo))
     merged = []
     for pa, pb in zip(a, b):
         p = {
             "x": _lerp(_num(pa.get("x")), _num(pb.get("x")), t),
             "y": _lerp(_num(pa.get("y")), _num(pb.get("y")), t),
         }
-        for key in ("cin", "cout", "feather"):
+        for key in ("cin", "cout"):
             if key in pa or key in pb:
                 da = _pt(pa.get(key), (p["x"], p["y"]))
                 db = _pt(pb.get(key), (p["x"], p["y"]))
                 lp = _lerp_pt(da, db, t)
                 p[key] = {"x": lp[0], "y": lp[1]}
+        # feather: a nested point that may carry its own tangents (outer curve).
+        if "feather" in pa or "feather" in pb:
+            fa = pa.get("feather") if isinstance(pa.get("feather"), dict) else {"x": pa.get("x"), "y": pa.get("y")}
+            fb = pb.get("feather") if isinstance(pb.get("feather"), dict) else {"x": pb.get("x"), "y": pb.get("y")}
+            flp = _lerp_pt(_pt(fa, (p["x"], p["y"])), _pt(fb, (p["x"], p["y"])), t)
+            fp = {"x": flp[0], "y": flp[1]}
+            for key in ("cin", "cout"):
+                if key in fa or key in fb:
+                    da = _pt(fa.get(key), (fp["x"], fp["y"]))
+                    db = _pt(fb.get(key), (fp["x"], fp["y"]))
+                    lp = _lerp_pt(da, db, t)
+                    fp[key] = {"x": lp[0], "y": lp[1]}
+            p["feather"] = fp
         merged.append(p)
     return merged
 
@@ -169,9 +234,10 @@ def _apply_transform_px(x, y, tf, W, H):
 def _contour(points, W, H, tf, use_feather, steps):
     """Tessellate a list of normalized point dicts into a closed pixel polygon.
 
-    use_feather: when True, each vertex is replaced by its feather point
-    (falling back to the vertex itself when absent), producing the outer
-    feather contour.
+    use_feather: when True, each vertex is replaced by its feather point and the
+    segment uses that feather point's OWN tangents (falling back to the vertex /
+    its core tangent translated by the feather offset when absent), producing the
+    outer feather contour that the soft edge blends out to.
     """
     if not isinstance(points, list) or len(points) < 2:
         return []
@@ -183,14 +249,21 @@ def _contour(points, W, H, tf, use_feather, steps):
             base = _pt(p)
         return (base[0] * W, base[1] * H)
 
-    def cout(p, fallback):
-        c = p.get("cout")
-        if isinstance(c, dict):
-            return (_num(c.get("x")) * W, _num(c.get("y")) * H)
-        return fallback
-
-    def cin(p, fallback):
-        c = p.get("cin")
+    def handle(p, which, fallback):
+        # Outer contour: prefer the feather point's own tangent; else translate
+        # the core tangent by the feather offset; else fall back to the anchor.
+        if use_feather and isinstance(p.get("feather"), dict):
+            f = p["feather"]
+            fh = f.get(which)
+            if isinstance(fh, dict):
+                return (_num(fh.get("x")) * W, _num(fh.get("y")) * H)
+            c = p.get(which)
+            if isinstance(c, dict):
+                px, py = _pt(p)
+                fx, fy = _pt(f, (px, py))
+                return ((_num(c.get("x")) + (fx - px)) * W, (_num(c.get("y")) + (fy - py)) * H)
+            return fallback
+        c = p.get(which)
         if isinstance(c, dict):
             return (_num(c.get("x")) * W, _num(c.get("y")) * H)
         return fallback
@@ -202,8 +275,8 @@ def _contour(points, W, H, tf, use_feather, steps):
         p1 = points[(i + 1) % n]
         a = vert(p0)
         b = vert(p1)
-        c0 = cout(p0, a)
-        c1 = cin(p1, b)
+        c0 = handle(p0, "cout", a)
+        c1 = handle(p1, "cin", b)
         poly.append(a)
         # only curve when tangents actually differ from the anchors
         if c0 != a or c1 != b:
