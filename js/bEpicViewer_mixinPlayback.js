@@ -252,7 +252,13 @@ export const PlaybackMixin = {
         if (!imgs || imgs.length === 0) { this._exitVideoMode(); return; }
 
         // Video tab: a single {kind:"video"} entry scrubbed through the <video>.
-        if (this._frameIsVideo(imgs[0])) { this._videoSeek(idx, imgs[0]); return; }
+        // Still refresh the compare slot so a video base shows the second tab in
+        // the wipe (the early return used to skip the compare update below).
+        if (this._frameIsVideo(imgs[0])) {
+            this._videoSeek(idx, imgs[0]);
+            this._updateCompareFrame(this.currentFrame);
+            return;
+        }
         this._exitVideoMode();
 
         const imgIdx = this.displayFrameToImageIndex(idx, imgs.length);
@@ -281,16 +287,7 @@ export const PlaybackMixin = {
             }
         }
 
-        if (this.isComparing && this.compareTab && this.allTabs[this.compareTab]) {
-            const compImgs = this.allTabs[this.compareTab];
-            const compIdx  = this.displayFrameToImageIndex(this.currentFrame, compImgs.length);
-            if (compImgs[compIdx]) {
-                this._setImgSrcCached(this.imgCompare, this.buildImgUrl(compImgs[compIdx]), () => {
-                    if (this.sliderMode === 'contact') this.resizeContactContainer();
-                    if (this.updateImageFrame) this.updateImageFrame();
-                });
-            }
-        }
+        this._updateCompareFrame(this.currentFrame);
 
         this.timeline.value = this.currentFrame;
         this.container.querySelector('#cur-f').innerText = this.currentFrame;
@@ -300,6 +297,104 @@ export const PlaybackMixin = {
             this._rotoRefreshKfInfo && this._rotoRefreshKfInfo();
             this._toolRedraw && this._toolRedraw();
         }
+    },
+
+    // Load the compare tab's frame into the compare slot. Called from both the
+    // image and video base paths so either base still fills the wipe/split/contact
+    // with the second tab. Images go to the compare <img>; a video compare tab is
+    // routed to the dedicated compare <video> (an <img> can't decode a video).
+    _updateCompareFrame(displayFrame) {
+        if (!this.isComparing || !this.compareTab) { this._hideCompareVideo(); return; }
+        const compImgs = this.allTabs[this.compareTab];
+        if (!compImgs || compImgs.length === 0) return;
+
+        // Video compare tab → drive the compare <video>.
+        if (this._frameIsVideo(compImgs[0])) { this._compareVideoSync(displayFrame, compImgs[0]); return; }
+
+        // Image compare tab → drive the compare <img>, hide the compare video.
+        this._hideCompareVideo();
+        if (this.imgCompare) this.imgCompare.style.display = "block";
+        const compIdx = this.displayFrameToImageIndex(displayFrame, compImgs.length);
+        const o = compImgs[compIdx];
+        if (!o) return;
+        this._setImgSrcCached(this.imgCompare, this.buildImgUrl(o), () => {
+            if (this.sliderMode === 'contact') this.resizeContactContainer();
+            if (this.updateImageFrame) this.updateImageFrame();
+        });
+    },
+
+    // Show the compare tab's video in the compare <video>, seeking it to the same
+    // frame index as the base. While playing it runs natively (rate matched to the
+    // base fps) for smoothness; when paused/scrubbing it seeks by currentTime.
+    _compareVideoSync(displayFrame, vObj) {
+        const v = this.videoCompare;
+        if (!v) return;
+        const key = vObj.path || vObj.filename || "";
+        if (v.dataset.key !== key) {
+            v.dataset.key = key;
+            v.loop  = true;
+            v.muted = true;
+            if (!v._cmpHandlersBound) {
+                v.addEventListener("loadedmetadata", () => {
+                    if (!this.isComparing) return;
+                    if (!(this._compareVideoFrames > 0) && v.duration) {
+                        this._compareVideoFrames = Math.max(1, Math.round(v.duration * (this._compareVideoFps || 24)));
+                    }
+                    if (this.sliderMode === 'contact') this.resizeContactContainer();
+                    this.updateTransform && this.updateTransform();
+                    // Re-seek: a currentTime set before metadata loaded is ignored.
+                    this._updateCompareFrame(this.currentFrame);
+                });
+                v._cmpHandlersBound = true;
+            }
+            const url = this.buildImgUrl(vObj);
+            if (v.src !== url) v.src = url;
+            this._compareVideoFps    = (vObj.fps && vObj.fps > 0) ? vObj.fps : (this.fps || 24);
+            this._compareVideoFrames = (vObj.frames && vObj.frames > 0) ? vObj.frames : 0;
+        }
+
+        // Reveal the compare video, hide the compare <img>. On first reveal, sync
+        // its transform + clip once (ongoing changes flow through updateTransform /
+        // the slider drag), so playback doesn't re-run layout every frame.
+        const wasHidden = v.style.display === "none";
+        if (this.imgCompare) this.imgCompare.style.display = "none";
+        v.style.display = "block";
+        if (wasHidden) {
+            if (this.imgCompare) v.style.transform = this.imgCompare.style.transform;
+            this.updateCompareVisuals && this.updateCompareVisuals();
+        }
+
+        const fps = this._compareVideoFps || 24;
+        if (this.isPlaying) {
+            this._compareVideoEnsurePlaying();
+            const wantT = displayFrame / fps;
+            if (Math.abs((v.currentTime || 0) - wantT) > 0.25) { try { v.currentTime = wantT; } catch (e) {} }
+        } else {
+            try { v.pause(); } catch (e) {}
+            let frame = Math.floor(displayFrame);
+            if (this._compareVideoFrames > 0) frame = Math.max(0, Math.min(frame, this._compareVideoFrames - 1));
+            try { v.currentTime = frame / fps; } catch (e) {}
+        }
+    },
+
+    // Play the compare video in lockstep with the base: rate = base fps / native
+    // fps so one base frame advances one compare frame in real time.
+    _compareVideoEnsurePlaying() {
+        const v = this.videoCompare;
+        if (!v) return;
+        const native = this._compareVideoFps || 24;
+        let rate = (this.fps || native) / native;
+        if (!Number.isFinite(rate) || rate <= 0) rate = 1;
+        rate = Math.max(0.0625, Math.min(16, rate));
+        try { v.playbackRate = rate; } catch (e) {}
+        if (v.paused) { const p = v.play(); if (p && p.catch) p.catch(() => {}); }
+    },
+
+    _hideCompareVideo() {
+        const v = this.videoCompare;
+        if (!v) return;
+        try { v.pause(); } catch (e) {}
+        v.style.display = "none";
     },
 
     // Only assign src when it has actually changed, to prevent redundant decodes.
@@ -345,7 +440,9 @@ export const PlaybackMixin = {
         this._setFpsUi(this._videoFps);
 
         if (this.imgBase)    this.imgBase.style.display = "none";
-        if (this.imgCompare) this.imgCompare.style.display = "none";
+        // Keep the compare overlay up when comparing — the video is the base layer
+        // and the compare <img> wipes over it.
+        if (this.imgCompare) this.imgCompare.style.display = this.isComparing ? "block" : "none";
         if (this.imgFrame)   this.imgFrame.style.display = "none";
         v.style.display = "block";
         v.loop  = (this.loopMode === "loop" || this.loopMode === "ping-pong");
@@ -447,6 +544,9 @@ export const PlaybackMixin = {
         if (this.timeline) this.timeline.value = frame;
         const curEl = this.container && this.container.querySelector("#cur-f");
         if (curEl) curEl.innerText = frame;
+        // Native <video> playback doesn't go through setFrame, so advance the
+        // compare overlay here to keep the wipe in sync while the video plays.
+        this._updateCompareFrame(frame);
     },
 
     // Fired when the <video> plays past its end. If a region is active in a
@@ -549,6 +649,7 @@ export const PlaybackMixin = {
         this._setIcon(this.playBtn, 'icon-play');
         if (this.playbackInterval) clearInterval(this.playbackInterval);
         if (this._videoMode && this.videoBase) { try { this.videoBase.pause(); } catch (e) {} }
+        if (this.videoCompare) { try { this.videoCompare.pause(); } catch (e) {} }
     },
 
     step(n) {
@@ -588,9 +689,10 @@ export const PlaybackMixin = {
             const availW   = Math.max(10, viewRect.width  - 2);
             const availH   = Math.max(10, viewRect.height - 2);
 
-            if (this.sliderMode === 'contact' && this.imgCompare.naturalWidth) {
-                const groupW     = this.imgBase.naturalWidth  + this.imgCompare.naturalWidth;
-                const groupH     = Math.max(this.imgBase.naturalHeight, this.imgCompare.naturalHeight);
+            const cmp = this._compareMediaSize ? this._compareMediaSize() : { w: this.imgCompare.naturalWidth, h: this.imgCompare.naturalHeight };
+            if (this.sliderMode === 'contact' && cmp.w) {
+                const groupW     = this.imgBase.naturalWidth  + cmp.w;
+                const groupH     = Math.max(this.imgBase.naturalHeight, cmp.h);
                 this.zoom        = Math.max(0.05, Math.min(20.0, Math.min(availW / groupW, availH / groupH)));
             } else {
                 const imgW = this.imgBase.naturalWidth;

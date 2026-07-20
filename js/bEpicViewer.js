@@ -376,6 +376,7 @@ class ViewerPanel extends HTMLElement {
         this.imgBase          = sr.getElementById('img-base');
         this.imgCompare       = sr.getElementById('img-compare');
         this.videoBase        = sr.getElementById('video-base');
+        this.videoCompare     = sr.getElementById('video-compare');
         this.imgFrame         = sr.getElementById('img-frame');
         this.contactContainer = sr.getElementById('contact-container');
         this.slider           = sr.getElementById('compare-slider');

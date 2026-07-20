@@ -119,7 +119,8 @@
     align-items: center;
     justify-content: center;
 }
-.viewport.contact-mode #contact-container img {
+.viewport.contact-mode #contact-container img,
+.viewport.contact-mode #contact-container video {
     position: static !important;
     max-height: 100%;
     max-width: none;
@@ -143,7 +144,8 @@
 }
 .viewport.contact-mode #img-frame { display: none !important; }
 #img-base { z-index: 1; }
-#img-compare { z-index: 2; display: none; } 
+#img-compare { z-index: 2; display: none; }
+#video-compare { z-index: 2; display: none; }
 
 #shape-overlay { 
     position: absolute; top: 10px; left: 10px; 

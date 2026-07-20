@@ -377,6 +377,8 @@ export const UIMixin = {
         } else {
             this.rotateBtn.style.display          = "none";
             this.imgCompare.style.display         = "none";
+            if (this._hideCompareVideo) this._hideCompareVideo();
+            if (this.videoCompare) this.videoCompare.dataset.key = "";
             this.slider.style.display             = "none";
             this.imgCompare.style.clipPath        = "none";
             this.viewport.classList.remove('contact-mode');
@@ -404,8 +406,9 @@ export const UIMixin = {
         this.sliderMode = mode;
         if (mode === 'contact') {
             this.slider.style.display         = 'none';
-            this.imgCompare.style.display     = 'block';
+            this._activeCompareEl().style.display = 'block';
             this.imgCompare.style.clipPath    = 'none';
+            if (this.videoCompare) this.videoCompare.style.clipPath = 'none';
             this.resizeContactContainer();
         } else {
             this.slider.style.display = 'block';
@@ -423,6 +426,8 @@ export const UIMixin = {
         this.updateCompareVisuals();
         this.updateTransform();
         this.fitView();
+        // Re-resolve which compare layer shows (img vs video) and re-seek it.
+        if (this.isComparing) this._updateCompareFrame(this.currentFrame);
     },
 
     applyContactClass() {
@@ -440,13 +445,33 @@ export const UIMixin = {
         this.imgBase.style.height = '';
         this.imgCompare.style.width = '';
         this.imgCompare.style.height = '';
+        if (this.videoCompare) { this.videoCompare.style.width = ''; this.videoCompare.style.height = ''; }
+    },
+
+    // Is the compare tab a video (routed to the compare <video> instead of <img>)?
+    _compareIsVideo() {
+        const c = this.isComparing && this.compareTab && this.allTabs[this.compareTab];
+        return !!(c && c.length && this._frameIsVideo && this._frameIsVideo(c[0]));
+    },
+
+    // The compare layer element that is actually showing (video or img).
+    _activeCompareEl() {
+        return (this._compareIsVideo() && this.videoCompare) ? this.videoCompare : this.imgCompare;
+    },
+
+    // Natural pixel size of the compare media, whether it's an image or a video.
+    _compareMediaSize() {
+        if (this._compareIsVideo() && this.videoCompare)
+            return { w: this.videoCompare.videoWidth || 0, h: this.videoCompare.videoHeight || 0 };
+        return { w: this.imgCompare.naturalWidth || 0, h: this.imgCompare.naturalHeight || 0 };
     },
 
     getContactLayout() {
         const baseW = this.imgBase.naturalWidth || 0;
         const baseH = this.imgBase.naturalHeight || 0;
-        const compW = this.imgCompare.naturalWidth || 0;
-        const compH = this.imgCompare.naturalHeight || 0;
+        const comp  = this._compareMediaSize();
+        const compW = comp.w;
+        const compH = comp.h;
 
         if (!baseW || !baseH || !compW || !compH) return null;
 
@@ -484,8 +509,9 @@ export const UIMixin = {
 
         this.imgBase.style.width = layout.baseDrawW + 'px';
         this.imgBase.style.height = layout.baseDrawH + 'px';
-        this.imgCompare.style.width = layout.compDrawW + 'px';
-        this.imgCompare.style.height = layout.compDrawH + 'px';
+        const compEl = this._activeCompareEl();
+        compEl.style.width = layout.compDrawW + 'px';
+        compEl.style.height = layout.compDrawH + 'px';
     },
 
     // ── Compare slider drag ───────────────────────────────────────────────────
@@ -520,22 +546,29 @@ export const UIMixin = {
         if (!this.isComparing) return;
         this.updateTabHighlights();
         const viewRect = this.viewport.getBoundingClientRect();
-        const imgRect  = this.imgBase.getBoundingClientRect();
+        // Reference the visible base layer (a video base hides imgBase).
+        const baseEl   = (this._videoMode && this.videoBase && this.videoBase.style.display !== "none")
+            ? this.videoBase : this.imgBase;
+        const imgRect  = baseEl.getBoundingClientRect();
+        let clip;
         if (this.sliderMode === "contact") {
-            this.imgCompare.style.clipPath = "none";
+            clip = "none";
         } else if (this.sliderMode === "vertical") {
             this.slider.style.left        = `${this.sliderPos}%`;
             this.slider.style.top         = "0";
             const sliderScreenX = (this.sliderPos / 100) * viewRect.width;
             const relX          = sliderScreenX - (imgRect.left - viewRect.left);
-            this.imgCompare.style.clipPath = `inset(0 0 0 ${(relX / imgRect.width) * 100}%)`;
+            clip = `inset(0 0 0 ${(relX / imgRect.width) * 100}%)`;
         } else {
             this.slider.style.top  = `${this.sliderPos}%`;
             this.slider.style.left = "0";
             const sliderScreenY = (this.sliderPos / 100) * viewRect.height;
             const relY          = sliderScreenY - (imgRect.top - viewRect.top);
-            this.imgCompare.style.clipPath = `inset(${(relY / imgRect.height) * 100}% 0 0 0)`;
+            clip = `inset(${(relY / imgRect.height) * 100}% 0 0 0)`;
         }
+        // Apply to both compare layers; the inactive one is display:none anyway.
+        this.imgCompare.style.clipPath = clip;
+        if (this.videoCompare) this.videoCompare.style.clipPath = clip;
     },
 
     // ── Transform / zoom ─────────────────────────────────────────────────────
@@ -558,6 +591,7 @@ export const UIMixin = {
             this.imgBase.style.transform   = '';
             this.imgCompare.style.transform = '';
             if (this.videoBase) this.videoBase.style.transform = '';
+            if (this.videoCompare) this.videoCompare.style.transform = '';
         } else {
             if (this.contactContainer) this.contactContainer.style.transform = '';
             this.viewport.style.transform   = '';
@@ -566,6 +600,7 @@ export const UIMixin = {
             // Video shares the image zoom/pan transform so it scrubs, zooms and
             // pans exactly like an image sequence.
             if (this.videoBase) this.videoBase.style.transform = t;
+            if (this.videoCompare) this.videoCompare.style.transform = t;
         }
         this.updateImageFrame();
         this.updateCompareVisuals();
