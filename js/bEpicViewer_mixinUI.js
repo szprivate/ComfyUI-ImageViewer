@@ -466,6 +466,39 @@ export const UIMixin = {
         return { w: this.imgCompare.naturalWidth || 0, h: this.imgCompare.naturalHeight || 0 };
     },
 
+    // Base and compare each get object-fit:contain against the same box, so media
+    // with different aspect ratios render at different sizes. This returns the
+    // extra uniform scale that makes the compare frame fit the base's frame
+    // rectangle (centred/letterboxed). It is exactly 1 when the aspect ratios
+    // match, so equal-format compares are unaffected.
+    _compareExtraScale() {
+        if (!this.isComparing) return 1;
+        // Base decoded size (a video base hides imgBase, so read the <video>).
+        const baseW = (this._videoMode && this.videoBase) ? (this.videoBase.videoWidth  || 0) : (this.imgBase.naturalWidth  || 0);
+        const baseH = (this._videoMode && this.videoBase) ? (this.videoBase.videoHeight || 0) : (this.imgBase.naturalHeight || 0);
+        const cmp   = this._compareMediaSize();
+        if (!baseW || !baseH || !cmp.w || !cmp.h) return 1;
+        const box = this.viewport.getBoundingClientRect();
+        if (!box.width || !box.height) return 1;
+        const bScale = Math.min(box.width / baseW, box.height / baseH);
+        const cScale = Math.min(box.width / cmp.w, box.height / cmp.h);
+        const bW = baseW * bScale, bH = baseH * bScale;
+        const cW = cmp.w * cScale, cH = cmp.h * cScale;
+        if (!cW || !cH) return 1;
+        const s = Math.min(bW / cW, bH / cH);
+        return (Number.isFinite(s) && s > 0) ? s : 1;
+    },
+
+    // Apply the shared zoom/pan to the compare layers, plus the aspect-match scale
+    // so the compare frame lines up with the base frame in wipe/split modes.
+    _applyCompareTransform() {
+        if (this.sliderMode === 'contact') return;   // contact positions via flex
+        const s  = this._compareExtraScale();
+        const tc = `translate(${this.panX}px, ${this.panY}px) scale(${this.zoom * s})`;
+        this.imgCompare.style.transform = tc;
+        if (this.videoCompare) this.videoCompare.style.transform = tc;
+    },
+
     getContactLayout() {
         const baseW = this.imgBase.naturalWidth || 0;
         const baseH = this.imgBase.naturalHeight || 0;
@@ -546,10 +579,10 @@ export const UIMixin = {
         if (!this.isComparing) return;
         this.updateTabHighlights();
         const viewRect = this.viewport.getBoundingClientRect();
-        // Reference the visible base layer (a video base hides imgBase).
-        const baseEl   = (this._videoMode && this.videoBase && this.videoBase.style.display !== "none")
-            ? this.videoBase : this.imgBase;
-        const imgRect  = baseEl.getBoundingClientRect();
+        // Clip is applied to the compare layer, so measure the wipe seam against
+        // that layer's own on-screen box — it can be scaled differently from the
+        // base (aspect-match scale), so the base rect would place the seam wrong.
+        const compRect = this._activeCompareEl().getBoundingClientRect();
         let clip;
         if (this.sliderMode === "contact") {
             clip = "none";
@@ -557,14 +590,14 @@ export const UIMixin = {
             this.slider.style.left        = `${this.sliderPos}%`;
             this.slider.style.top         = "0";
             const sliderScreenX = (this.sliderPos / 100) * viewRect.width;
-            const relX          = sliderScreenX - (imgRect.left - viewRect.left);
-            clip = `inset(0 0 0 ${(relX / imgRect.width) * 100}%)`;
+            const relX          = sliderScreenX - (compRect.left - viewRect.left);
+            clip = `inset(0 0 0 ${(relX / compRect.width) * 100}%)`;
         } else {
             this.slider.style.top  = `${this.sliderPos}%`;
             this.slider.style.left = "0";
             const sliderScreenY = (this.sliderPos / 100) * viewRect.height;
-            const relY          = sliderScreenY - (imgRect.top - viewRect.top);
-            clip = `inset(${(relY / imgRect.height) * 100}% 0 0 0)`;
+            const relY          = sliderScreenY - (compRect.top - viewRect.top);
+            clip = `inset(${(relY / compRect.height) * 100}% 0 0 0)`;
         }
         // Apply to both compare layers; the inactive one is display:none anyway.
         this.imgCompare.style.clipPath = clip;
@@ -596,11 +629,11 @@ export const UIMixin = {
             if (this.contactContainer) this.contactContainer.style.transform = '';
             this.viewport.style.transform   = '';
             this.imgBase.style.transform    = t;
-            this.imgCompare.style.transform = t;
             // Video shares the image zoom/pan transform so it scrubs, zooms and
             // pans exactly like an image sequence.
             if (this.videoBase) this.videoBase.style.transform = t;
-            if (this.videoCompare) this.videoCompare.style.transform = t;
+            // Compare layers add an aspect-match scale on top of the shared zoom.
+            this._applyCompareTransform();
         }
         this.updateImageFrame();
         this.updateCompareVisuals();

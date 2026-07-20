@@ -320,6 +320,10 @@ export const PlaybackMixin = {
         this._setImgSrcCached(this.imgCompare, this.buildImgUrl(o), () => {
             if (this.sliderMode === 'contact') this.resizeContactContainer();
             if (this.updateImageFrame) this.updateImageFrame();
+            // Compare image size is known now → align its frame to the base's and
+            // re-derive the wipe seam against the aligned box.
+            this._applyCompareTransform && this._applyCompareTransform();
+            this.updateCompareVisuals && this.updateCompareVisuals();
         });
     },
 
@@ -341,7 +345,10 @@ export const PlaybackMixin = {
                         this._compareVideoFrames = Math.max(1, Math.round(v.duration * (this._compareVideoFps || 24)));
                     }
                     if (this.sliderMode === 'contact') this.resizeContactContainer();
-                    this.updateTransform && this.updateTransform();
+                    // videoWidth/Height are known now → recompute the aspect-match
+                    // scale and re-derive the wipe seam against the new box.
+                    this._applyCompareTransform && this._applyCompareTransform();
+                    this.updateCompareVisuals && this.updateCompareVisuals();
                     // Re-seek: a currentTime set before metadata loaded is ignored.
                     this._updateCompareFrame(this.currentFrame);
                 });
@@ -360,7 +367,7 @@ export const PlaybackMixin = {
         if (this.imgCompare) this.imgCompare.style.display = "none";
         v.style.display = "block";
         if (wasHidden) {
-            if (this.imgCompare) v.style.transform = this.imgCompare.style.transform;
+            this._applyCompareTransform && this._applyCompareTransform();
             this.updateCompareVisuals && this.updateCompareVisuals();
         }
 

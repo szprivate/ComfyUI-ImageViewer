@@ -559,7 +559,8 @@ class ViewerPanel extends HTMLElement {
                 this.isViewingHistory    = false;
                 this._historyPanelSig    = null;
                 if (this.historyStrip)   this.historyStrip.innerHTML = '';
-                if (this.historyPanel)   this.historyPanel.style.display = 'none';
+                // Keep the history panel open after clearing — just refresh its (now empty) strip.
+                if (this.renderHistoryPanel) this.renderHistoryPanel();
                 this._syncHistoryToggleState();
                 if (this.historyClearBtn) this.historyClearBtn.disabled = true;
                 this.currentHistoryKey   = null;
