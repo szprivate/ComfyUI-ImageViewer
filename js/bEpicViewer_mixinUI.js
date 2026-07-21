@@ -480,28 +480,37 @@ export const UIMixin = {
         }
     },
 
-    // Floating swatch menu anchored at the cursor.
+    // Swatch menu anchored at the cursor. Mirrors showThumbContextMenu: it is
+    // appended to this.container (position:relative) and positioned absolutely
+    // against its rect — a proven pattern in this shadow DOM. Critical layout
+    // styles are set inline so a stale/missing stylesheet can't hide the menu.
     _openTabColorMenu(key, x, y) {
         this._closeTabColorMenu();
 
-        const root = this.shadowRoot || this;
-        // Use the document the panel actually lives in — it may be an undocked
-        // popout window, not the main document the module was loaded in.
-        const doc  = root.ownerDocument || document;
-        const win  = doc.defaultView || window;
+        const host = this.container || this.shadowRoot || this;
+        const doc  = (host.ownerDocument) ? host.ownerDocument : document;
+
         const menu = doc.createElement('div');
         menu.className = 'tab-color-menu';
+        menu.style.cssText = 'position:absolute;z-index:2147483647;background:#1b1b1b;' +
+            'border:1px solid #444;border-radius:8px;padding:8px;' +
+            'box-shadow:0 6px 20px rgba(0,0,0,0.6);user-select:none;font-size:12px;';
 
         const swatches = doc.createElement('div');
         swatches.className = 'tcm-swatches';
+        swatches.style.cssText = 'display:grid;grid-template-columns:repeat(5,20px);gap:6px;';
         this._tabColorPalette().forEach(col => {
             const s = doc.createElement('button');
             s.className = 'tcm-swatch';
             s.type = 'button';
-            s.style.background = col;
+            s.style.cssText = 'width:20px;height:20px;border-radius:4px;cursor:pointer;padding:0;' +
+                'border:1px solid rgba(255,255,255,0.25);background:' + col + ';';
             s.title = col;
             if (this.tabColors && this.tabColors[key] &&
-                this.tabColors[key].toLowerCase() === col.toLowerCase()) s.classList.add('sel');
+                this.tabColors[key].toLowerCase() === col.toLowerCase()) {
+                s.classList.add('sel');
+                s.style.boxShadow = '0 0 0 2px #fff';
+            }
             s.onclick = () => { this.setTabColor(key, col); this._closeTabColorMenu(); };
             swatches.appendChild(s);
         });
@@ -509,17 +518,25 @@ export const UIMixin = {
 
         const row = doc.createElement('div');
         row.className = 'tcm-row';
+        row.style.cssText = 'display:flex;gap:6px;margin-top:8px;';
 
-        const custom = doc.createElement('button');
-        custom.className = 'tcm-item';
-        custom.type = 'button';
-        custom.textContent = 'Custom…';
+        const mkItem = (label) => {
+            const b = doc.createElement('button');
+            b.className = 'tcm-item';
+            b.type = 'button';
+            b.textContent = label;
+            b.style.cssText = 'flex:1;background:#2a2a2a;color:#ddd;border:1px solid #444;' +
+                'border-radius:5px;padding:4px 8px;cursor:pointer;font-size:12px;';
+            return b;
+        };
+
+        const custom = mkItem('Custom…');
         custom.onclick = () => {
             const picker = doc.createElement('input');
             picker.type = 'color';
             picker.value = (this.tabColors && this.tabColors[key]) || '#5b6ee1';
             picker.style.cssText = 'position:fixed;left:-9999px;top:0;width:0;height:0;opacity:0;';
-            root.appendChild(picker);
+            host.appendChild(picker);
             const finish = () => {
                 this.setTabColor(key, picker.value);
                 picker.remove();
@@ -531,22 +548,20 @@ export const UIMixin = {
         };
         row.appendChild(custom);
 
-        const clear = doc.createElement('button');
-        clear.className = 'tcm-item tcm-clear';
-        clear.type = 'button';
-        clear.textContent = 'Clear';
+        const clear = mkItem('Clear');
+        clear.classList.add('tcm-clear');
         clear.onclick = () => { this.setTabColor(key, null); this._closeTabColorMenu(); };
         row.appendChild(clear);
 
         menu.appendChild(row);
-        root.appendChild(menu);
+        host.appendChild(menu);
 
-        // Clamp into the viewport.
-        const rect = menu.getBoundingClientRect();
-        const vw = win.innerWidth, vh = win.innerHeight;
-        let px = x, py = y;
-        if (px + rect.width  > vw - 8) px = Math.max(8, vw - rect.width  - 8);
-        if (py + rect.height > vh - 8) py = Math.max(8, vh - rect.height - 8);
+        // Position relative to the container, clamped so it stays inside it.
+        const hostRect = host.getBoundingClientRect();
+        let px = x - hostRect.left;
+        let py = y - hostRect.top;
+        px = Math.max(4, Math.min(px, hostRect.width  - menu.offsetWidth  - 4));
+        py = Math.max(4, Math.min(py, hostRect.height - menu.offsetHeight - 4));
         menu.style.left = px + 'px';
         menu.style.top  = py + 'px';
 
@@ -559,6 +574,7 @@ export const UIMixin = {
         this._tabColorMenuKey = (ev) => { if (ev.key === 'Escape') this._closeTabColorMenu(); };
         // Defer so the opening right-click doesn't immediately dismiss it.
         setTimeout(() => {
+            const win = doc.defaultView || window;
             doc.addEventListener('pointerdown', this._tabColorMenuDismiss, true);
             win.addEventListener('blur', this._tabColorMenuDismiss, true);
             doc.addEventListener('keydown', this._tabColorMenuKey, true);
