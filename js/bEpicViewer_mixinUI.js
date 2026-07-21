@@ -346,6 +346,225 @@ export const UIMixin = {
         });
     },
 
+    // ── Tab colors ───────────────────────────────────────────────────────────
+    // A user can right-click a tab and assign it a color. The color tints the
+    // tab button and propagates to every "Send to Viewer" node that writes to
+    // that tab (there can be several when they share a tab_name).
+
+    // Quick-pick palette shown in the color menu.
+    _tabColorPalette() {
+        return ['#c0392b', '#e67e22', '#f1c40f', '#27ae60', '#16a085',
+                '#2980b9', '#5b6ee1', '#8e44ad', '#d64f9b', '#7f8c8d'];
+    },
+
+    _parseHexColor(hex) {
+        if (typeof hex !== 'string') return null;
+        let h = hex.trim().replace(/^#/, '');
+        if (h.length === 3) h = h.split('').map(c => c + c).join('');
+        if (h.length !== 6 || /[^0-9a-fA-F]/.test(h)) return null;
+        return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16) };
+    },
+
+    _darkenHex(hex, factor) {
+        const c = this._parseHexColor(hex);
+        if (!c) return hex;
+        const f = Math.max(0, Math.min(1, factor));
+        const to2 = (v) => Math.round(v * f).toString(16).padStart(2, '0');
+        return `#${to2(c.r)}${to2(c.g)}${to2(c.b)}`;
+    },
+
+    // Black or white text, whichever reads better on the given background.
+    _readableTextColor(hex) {
+        const c = this._parseHexColor(hex);
+        if (!c) return '#fff';
+        const lum = (0.299 * c.r + 0.587 * c.g + 0.114 * c.b) / 255;
+        return lum > 0.6 ? '#111' : '#fff';
+    },
+
+    // Apply (or clear) the stored color on a single tab button element.
+    _applyTabColor(btn, key) {
+        if (!btn) return;
+        const color = this.tabColors ? this.tabColors[key] : null;
+        if (color && this._parseHexColor(color)) {
+            btn.classList.add('has-color');
+            btn.style.setProperty('--tab-color', color);
+            btn.style.setProperty('--tab-fg', this._readableTextColor(color));
+        } else {
+            btn.classList.remove('has-color');
+            btn.style.removeProperty('--tab-color');
+            btn.style.removeProperty('--tab-fg');
+        }
+    },
+
+    // Every graph node that writes to the given tab key.
+    _nodesForTabKey(key) {
+        const out = [];
+        const graph = (typeof app !== 'undefined') ? app.graph : null;
+        if (!graph) return out;
+        const nodes = graph._nodes || graph.nodes || [];
+        nodes.forEach(n => {
+            if (!n) return;
+            if (n.type === 'bEpicSendToViewer') {
+                let val = '';
+                try {
+                    const w = (n.widgets || []).find(w => w.name === 'tab_name');
+                    val = w ? (w.value || '') : '';
+                } catch (e) {}
+                let fk;
+                if (val) {
+                    const safe = val.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_\-]/g, '').trim();
+                    fk = `send_label_${safe || ('node_' + n.id)}`;
+                } else {
+                    fk = `send_${n.id}`;
+                }
+                if (fk === key) out.push(n);
+            } else if (n.type === 'bEpicViewer' && key.startsWith('tab') && Array.isArray(n.inputs)) {
+                // Legacy multi-input viewer: tint the node feeding that input.
+                const idx = parseInt(key.replace('tab', ''), 10) - 1;
+                const inp = n.inputs[idx];
+                if (inp && inp.link != null) {
+                    const link = graph.links[inp.link];
+                    const origin = link ? graph.getNodeById(link.origin_id) : null;
+                    if (origin) out.push(origin);
+                }
+            }
+        });
+        return out;
+    },
+
+    // Tint (color != null) or reset (color == null) every node for this tab.
+    _applyColorToTabNodes(key, color) {
+        const nodes = this._nodesForTabKey(key);
+        if (!nodes.length) return;
+        nodes.forEach(n => {
+            if (color && this._parseHexColor(color)) {
+                n.bgcolor = color;
+                n.color   = this._darkenHex(color, 0.5);
+            } else {
+                delete n.bgcolor;
+                delete n.color;
+            }
+            if (typeof n.setDirtyCanvas === 'function') n.setDirtyCanvas(true, true);
+        });
+        try {
+            if (app.graph)  app.graph.setDirtyCanvas(true, true);
+            if (app.canvas) app.canvas.setDirty(true, true);
+        } catch (e) {}
+    },
+
+    // Assign/clear a tab color and push it through to button + nodes + storage.
+    setTabColor(key, color) {
+        if (!this.tabColors) this.tabColors = {};
+        if (color && this._parseHexColor(color)) this.tabColors[key] = color;
+        else { color = null; delete this.tabColors[key]; }
+
+        const container = this.tabsContainer || this.tabBar;
+        const btn = container && container.querySelector(`[data-tab="${CSS.escape(key)}"]`);
+        if (btn) this._applyTabColor(btn, key);
+
+        this._applyColorToTabNodes(key, color);
+        if (typeof this.queuePersistViewerState === 'function') this.queuePersistViewerState();
+    },
+
+    _closeTabColorMenu() {
+        if (this._tabColorMenuEl) { this._tabColorMenuEl.remove(); this._tabColorMenuEl = null; }
+        if (this._tabColorMenuDismiss) {
+            const doc = this._tabColorMenuDoc || document;
+            const win = doc.defaultView || window;
+            doc.removeEventListener('pointerdown', this._tabColorMenuDismiss, true);
+            win.removeEventListener('blur', this._tabColorMenuDismiss, true);
+            doc.removeEventListener('keydown', this._tabColorMenuKey, true);
+            this._tabColorMenuDismiss = null;
+            this._tabColorMenuKey = null;
+            this._tabColorMenuDoc = null;
+        }
+    },
+
+    // Floating swatch menu anchored at the cursor.
+    _openTabColorMenu(key, x, y) {
+        this._closeTabColorMenu();
+
+        const root = this.shadowRoot || this;
+        // Use the document the panel actually lives in — it may be an undocked
+        // popout window, not the main document the module was loaded in.
+        const doc  = root.ownerDocument || document;
+        const win  = doc.defaultView || window;
+        const menu = doc.createElement('div');
+        menu.className = 'tab-color-menu';
+
+        const swatches = doc.createElement('div');
+        swatches.className = 'tcm-swatches';
+        this._tabColorPalette().forEach(col => {
+            const s = doc.createElement('button');
+            s.className = 'tcm-swatch';
+            s.type = 'button';
+            s.style.background = col;
+            s.title = col;
+            if (this.tabColors && this.tabColors[key] &&
+                this.tabColors[key].toLowerCase() === col.toLowerCase()) s.classList.add('sel');
+            s.onclick = () => { this.setTabColor(key, col); this._closeTabColorMenu(); };
+            swatches.appendChild(s);
+        });
+        menu.appendChild(swatches);
+
+        const row = doc.createElement('div');
+        row.className = 'tcm-row';
+
+        const custom = doc.createElement('button');
+        custom.className = 'tcm-item';
+        custom.type = 'button';
+        custom.textContent = 'Custom…';
+        custom.onclick = () => {
+            const picker = doc.createElement('input');
+            picker.type = 'color';
+            picker.value = (this.tabColors && this.tabColors[key]) || '#5b6ee1';
+            picker.style.cssText = 'position:fixed;left:-9999px;top:0;width:0;height:0;opacity:0;';
+            root.appendChild(picker);
+            const finish = () => {
+                this.setTabColor(key, picker.value);
+                picker.remove();
+                this._closeTabColorMenu();
+            };
+            picker.addEventListener('change', finish);
+            picker.addEventListener('input', () => this.setTabColor(key, picker.value));
+            picker.click();
+        };
+        row.appendChild(custom);
+
+        const clear = doc.createElement('button');
+        clear.className = 'tcm-item tcm-clear';
+        clear.type = 'button';
+        clear.textContent = 'Clear';
+        clear.onclick = () => { this.setTabColor(key, null); this._closeTabColorMenu(); };
+        row.appendChild(clear);
+
+        menu.appendChild(row);
+        root.appendChild(menu);
+
+        // Clamp into the viewport.
+        const rect = menu.getBoundingClientRect();
+        const vw = win.innerWidth, vh = win.innerHeight;
+        let px = x, py = y;
+        if (px + rect.width  > vw - 8) px = Math.max(8, vw - rect.width  - 8);
+        if (py + rect.height > vh - 8) py = Math.max(8, vh - rect.height - 8);
+        menu.style.left = px + 'px';
+        menu.style.top  = py + 'px';
+
+        this._tabColorMenuEl = menu;
+        this._tabColorMenuDoc = doc;
+        this._tabColorMenuDismiss = (ev) => {
+            if (ev && ev.type === 'pointerdown' && menu.contains(ev.target)) return;
+            this._closeTabColorMenu();
+        };
+        this._tabColorMenuKey = (ev) => { if (ev.key === 'Escape') this._closeTabColorMenu(); };
+        // Defer so the opening right-click doesn't immediately dismiss it.
+        setTimeout(() => {
+            doc.addEventListener('pointerdown', this._tabColorMenuDismiss, true);
+            win.addEventListener('blur', this._tabColorMenuDismiss, true);
+            doc.addEventListener('keydown', this._tabColorMenuKey, true);
+        }, 0);
+    },
+
     // ── Compare mode ─────────────────────────────────────────────────────────
 
     // Cycle the "c" hotkey through the compare modes, mirroring the compare

@@ -57,6 +57,24 @@
 /* highlight tab used as comparison target when compare mode is active */
 .tab.compare { background: #222; color: #0ff; border: 1px dashed #0ff; }
 .tab.compare:hover { background: #333; }
+
+/* User-assigned tab color (right-click a tab -> pick a color). Driven by the
+   --tab-color / --tab-fg custom properties set inline so hover/active still work. */
+.tab.has-color { background: var(--tab-color); color: var(--tab-fg, #fff); border: 1px solid var(--tab-color); }
+.tab.has-color:hover { filter: brightness(1.18); color: var(--tab-fg, #fff); background: var(--tab-color); }
+.tab.has-color.active { background: var(--tab-color); color: var(--tab-fg, #fff); font-weight: bold; border: 1px solid #fff; box-shadow: 0 0 0 1px #fff, 0 2px 6px rgba(0,0,0,0.6); }
+.tab.has-color .tab-close { color: var(--tab-fg, #fff); }
+
+/* Right-click tab color menu */
+.tab-color-menu { position: fixed; z-index: 2147483647; background: #1b1b1b; border: 1px solid #444; border-radius: 8px; padding: 8px; box-shadow: 0 6px 20px rgba(0,0,0,0.6); user-select: none; font-size: 12px; }
+.tcm-swatches { display: grid; grid-template-columns: repeat(5, 20px); gap: 6px; }
+.tcm-swatch { width: 20px; height: 20px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.25); cursor: pointer; padding: 0; }
+.tcm-swatch:hover { transform: scale(1.12); border-color: #fff; }
+.tcm-swatch.sel { box-shadow: 0 0 0 2px #fff; }
+.tcm-row { display: flex; gap: 6px; margin-top: 8px; }
+.tcm-item { flex: 1; background: #2a2a2a; color: #ddd; border: 1px solid #444; border-radius: 5px; padding: 4px 8px; cursor: pointer; font-size: 12px; }
+.tcm-item:hover { background: #3a3a3a; color: #fff; }
+.tcm-clear:hover { background: #5a2222; border-color: #a44; color: #fff; }
 #close-panel-btn { /* moved inside tab-bar, static positioning */
     width: 32px; height: 32px; background: #222; border: none;
     color: #888; font-size: 14px; line-height: 14px; cursor: pointer;

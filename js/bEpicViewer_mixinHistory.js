@@ -470,6 +470,15 @@ export const HistoryMixin = {
         span.textContent = labelText;
         btn.appendChild(span);
 
+        // User-assigned tab color (right-click → pick), applied via CSS custom
+        // properties so hover/active styling keeps working.
+        if (typeof this._applyTabColor === 'function') this._applyTabColor(btn, key);
+        btn.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (typeof this._openTabColorMenu === 'function') this._openTabColorMenu(key, e.clientX, e.clientY);
+        });
+
         btn.draggable = true;
         btn.addEventListener('dragstart', (e) => {
             e.dataTransfer.effectAllowed = 'move';

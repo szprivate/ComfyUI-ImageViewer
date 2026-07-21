@@ -120,6 +120,7 @@ class ViewerPanel extends HTMLElement {
         this.showShape           = true;
         this.customLayouts       = {};
         this.tabLabels           = {};
+        this.tabColors           = {};
         this.sliderPos           = 50;
         this.isDraggingSlider    = false;
         this.sliderMode          = "vertical";
@@ -230,6 +231,7 @@ class ViewerPanel extends HTMLElement {
                 history: pick(this.history),
                 tabViewState: pick(this.tabViewState),
                 tabLabels: pick(this.tabLabels),
+                tabColors: pick(this.tabColors),
                 tabOrder: (Array.isArray(this.tabOrder) ? this.tabOrder : []).filter(keepKey),
                 activeTab,
                 savedAt: Date.now(),
@@ -258,6 +260,7 @@ class ViewerPanel extends HTMLElement {
         const restoredHistory = (parsed.history && typeof parsed.history === 'object') ? parsed.history : {};
         const restoredTabViewState = (parsed.tabViewState && typeof parsed.tabViewState === 'object') ? parsed.tabViewState : {};
         const restoredLabels = (parsed.tabLabels && typeof parsed.tabLabels === 'object') ? parsed.tabLabels : {};
+        const restoredColors = (parsed.tabColors && typeof parsed.tabColors === 'object') ? parsed.tabColors : {};
         const restoredOrder = Array.isArray(parsed.tabOrder) ? parsed.tabOrder : [];
         const restoredActive = typeof parsed.activeTab === 'string' ? parsed.activeTab : null;
 
@@ -270,6 +273,7 @@ class ViewerPanel extends HTMLElement {
             this.history = JSON.parse(JSON.stringify(restoredHistory));
             this.tabViewState = JSON.parse(JSON.stringify(restoredTabViewState));
             this.tabLabels = JSON.parse(JSON.stringify(restoredLabels));
+            this.tabColors = JSON.parse(JSON.stringify(restoredColors));
 
             const known = restoredOrder.filter(k => !!this.allTabs[k]);
             const added = Object.keys(this.allTabs).filter(k => !known.includes(k));
@@ -1020,6 +1024,12 @@ class ViewerPanel extends HTMLElement {
             this.switchTab(this.activeTab);
         }
         this.updateTabHighlights();
+
+        // Keep the "Send to Viewer" nodes tinted to match their tab color even
+        // after nodes are (re)added or state is restored on a fresh graph.
+        if (this.tabColors && typeof this._applyColorToTabNodes === 'function') {
+            Object.keys(this.tabColors).forEach(k => this._applyColorToTabNodes(k, this.tabColors[k]));
+        }
     }
 
     _resolveTabLabel(k, node) {
