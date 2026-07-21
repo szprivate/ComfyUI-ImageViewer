@@ -405,6 +405,9 @@ export const UIMixin = {
     setSliderMode(mode) {
         this.sliderMode = mode;
         if (mode === 'contact') {
+            // Fit against the 2-wide combined canvas once both frames are decoded
+            // (resizeContactContainer clears this after the fit).
+            this._contactNeedsFit = true;
             this.slider.style.display         = 'none';
             this._activeCompareEl().style.display = 'block';
             this.imgCompare.style.clipPath    = 'none';
@@ -468,9 +471,10 @@ export const UIMixin = {
 
     // Base and compare each get object-fit:contain against the same box, so media
     // with different aspect ratios render at different sizes. This returns the
-    // extra uniform scale that makes the compare frame fit the base's frame
-    // rectangle (centred/letterboxed). It is exactly 1 when the aspect ratios
-    // match, so equal-format compares are unaffected.
+    // extra uniform scale that makes the compare frame's on-screen HEIGHT match
+    // the base frame's height, so different-resolution sources line up by height
+    // in the wipe/split modes. It is exactly 1 when the two render at the same
+    // height (e.g. matching aspect ratios), so equal-format compares are unaffected.
     _compareExtraScale() {
         if (!this.isComparing) return 1;
         // Base decoded size (a video base hides imgBase, so read the <video>).
@@ -482,10 +486,10 @@ export const UIMixin = {
         if (!box.width || !box.height) return 1;
         const bScale = Math.min(box.width / baseW, box.height / baseH);
         const cScale = Math.min(box.width / cmp.w, box.height / cmp.h);
-        const bW = baseW * bScale, bH = baseH * bScale;
-        const cW = cmp.w * cScale, cH = cmp.h * cScale;
-        if (!cW || !cH) return 1;
-        const s = Math.min(bW / cW, bH / cH);
+        const bH = baseH * bScale;
+        const cH = cmp.h * cScale;
+        if (!cH) return 1;
+        const s = bH / cH;   // match rendered heights
         return (Number.isFinite(s) && s > 0) ? s : 1;
     },
 
@@ -545,6 +549,15 @@ export const UIMixin = {
         const compEl = this._activeCompareEl();
         compEl.style.width = layout.compDrawW + 'px';
         compEl.style.height = layout.compDrawH + 'px';
+
+        // The combined side-by-side size is only known once BOTH frames have
+        // decoded. If a fit was requested before then (entering contact while the
+        // compare frame was still loading), do it now against the real 2-wide
+        // canvas so it isn't left cropped at a single-frame zoom.
+        if (this._contactNeedsFit && this.sliderMode === 'contact') {
+            this._contactNeedsFit = false;
+            this.fitView();
+        }
     },
 
     // ── Compare slider drag ───────────────────────────────────────────────────

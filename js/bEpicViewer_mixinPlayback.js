@@ -697,7 +697,14 @@ export const PlaybackMixin = {
             const availH   = Math.max(10, viewRect.height - 2);
 
             const cmp = this._compareMediaSize ? this._compareMediaSize() : { w: this.imgCompare.naturalWidth, h: this.imgCompare.naturalHeight };
-            if (this.sliderMode === 'contact' && cmp.w) {
+            const contactLayout = (this.sliderMode === 'contact' && this.getContactLayout) ? this.getContactLayout() : null;
+            if (contactLayout) {
+                // Side-by-side fits the whole combined canvas (both frames scaled to
+                // a shared height, laid out in one row). Its width is ~2x a single
+                // frame, so the fit zoom must be derived from that NEW resolution or
+                // the pair overflows and gets cropped left/right.
+                this.zoom = Math.max(0.05, Math.min(20.0, Math.min(availW / contactLayout.contW, availH / contactLayout.contH)));
+            } else if (this.sliderMode === 'contact' && cmp.w) {
                 const groupW     = this.imgBase.naturalWidth  + cmp.w;
                 const groupH     = Math.max(this.imgBase.naturalHeight, cmp.h);
                 this.zoom        = Math.max(0.05, Math.min(20.0, Math.min(availW / groupW, availH / groupH)));
