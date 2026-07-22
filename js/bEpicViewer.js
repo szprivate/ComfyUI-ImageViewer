@@ -594,7 +594,7 @@ class ViewerPanel extends HTMLElement {
                 if (!this.isViewingHistory) return;
                 if (e.target && e.target.closest &&
                     (e.target.closest('.history-thumb') || e.target.closest('.history-path') || e.target.closest('.history-thumb-wrapper'))) return;
-                this.restoreHistoryView();
+                this.jumpToLatestVisibleHistory();
             });
         }
 

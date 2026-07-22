@@ -353,6 +353,27 @@ export const HistoryMixin = {
         this.queuePersistViewerState();
     },
 
+    /**
+     * Clicking an empty area of the history strip returns the viewer to the
+     * newest snapshot that's actually VISIBLE in the panel (index 0), rather
+     * than restoring the saved live-view backup. That backup can be stale —
+     * e.g. after removing the first history item, the live view still holds
+     * the removed snapshot, so restoring it would resurrect the deleted item.
+     */
+    jumpToLatestVisibleHistory() {
+        const key   = this.activeTab;
+        const stack = this.history[key] || [];
+        if (stack.length === 0) { this.restoreHistoryView(); return; }
+        // Drop any stale backup, then show the newest visible snapshot.
+        this.previewBackup = null;
+        this.openHistorySnapshot(key, 0);
+        // Anchor the live-view backup to that newest snapshot so a later click
+        // on the selected thumb returns here, not to a removed item.
+        this.previewBackup = this.history[key][0]
+            ? JSON.parse(JSON.stringify(this.history[key][0]))
+            : null;
+    },
+
     // ── Open Folder ──────────────────────────────────────────────────────────
 
     async openFolderPicker() {
