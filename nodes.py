@@ -103,6 +103,36 @@ def _boxes_prompt(json_str, positive):
     return {"boxes": boxes, "labels": labels}
 
 
+def _history_images(saved_paths):
+    """Turn absolute ./output file paths (from file_writer) into ComfyUI history
+    image dicts {filename, subfolder, type:"output"}.
+
+    Returning these under a node's `ui.images` records the saved files in
+    ComfyUI's prompt history, so they show up in the frontend's outputs/assets
+    panel and can be queried by other nodes via /history — the same convention
+    SaveImage uses. Paths outside the output dir are skipped."""
+    if not saved_paths:
+        return []
+    try:
+        out_dir = os.path.abspath(folder_paths.get_output_directory())
+    except Exception:
+        return []
+    images = []
+    for p in saved_paths:
+        try:
+            rel = os.path.relpath(os.path.abspath(p), out_dir)
+        except Exception:
+            continue
+        if rel.startswith(".."):
+            continue  # outside ComfyUI's output dir — not history-addressable
+        images.append({
+            "filename": os.path.basename(rel),
+            "subfolder": os.path.dirname(rel).replace("\\", "/"),
+            "type": "output",
+        })
+    return images
+
+
 class bEpicSendToViewer:
     def __init__(self):
         self.output_dir = folder_paths.get_temp_directory()
@@ -234,9 +264,10 @@ class bEpicSendToViewer:
         # write_output/write_video_input return viewer frame dicts (saved files
         # for video and browser images, temp PNG proxies for exr/tiff/...).
         tab_frames = None
+        saved_paths = []
         if file_writer is not None and file_writer.is_video_input(input):
             try:
-                _saved, tab_frames = file_writer.write_video_input(
+                saved_paths, tab_frames = file_writer.write_video_input(
                     input, save_to_output, filename_prefix, file_format, fps,
                     prompt, extra_pnginfo)
             except Exception as e:
@@ -244,7 +275,7 @@ class bEpicSendToViewer:
                 tab_frames = None
         elif save_to_output and file_writer is not None:
             try:
-                _saved, tab_frames = file_writer.write_output(
+                saved_paths, tab_frames = file_writer.write_output(
                     input, filename_prefix, file_format, fps,
                     prompt, extra_pnginfo)
             except Exception as e:
@@ -285,8 +316,16 @@ class bEpicSendToViewer:
         negative_bboxes = _boxes_prompt(sam3_box_negative, False)
 
         # ── 3. Passthrough + tool outputs ────────────────────────────────────
-        return (input, roto_mask, positive_points, negative_points,
-                positive_bboxes, negative_bboxes)
+        result = (input, roto_mask, positive_points, negative_points,
+                  positive_bboxes, negative_bboxes)
+
+        # When save_to_output persisted files to ./output, record them in
+        # ComfyUI's prompt history (like SaveImage) so they appear in the
+        # frontend's outputs/assets panel and are queryable by other nodes.
+        ui_images = _history_images(saved_paths)
+        if ui_images:
+            return {"ui": {"images": ui_images}, "result": result}
+        return result
 
 
 # mapping dictionaries for external use (nodes.py imports these)
