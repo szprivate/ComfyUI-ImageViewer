@@ -1,4 +1,6 @@
 import os
+import re
+import base64
 import traceback
 import folder_paths
 from server import PromptServer
@@ -203,6 +205,52 @@ try:
             """
             raise web.HTTPFound('/?bepic_viewer_only=1')
 
+        async def _bepic_save_annotation(request):
+            """Save a PNG produced by the in-viewer Annotation tool to ./output.
+
+            Body: JSON { dataurl: "data:image/png;base64,...", filename_prefix }.
+            Returns { filename, subfolder, type:"output", path } so the viewer can
+            add the saved file to its history strip (and drag it onto the graph).
+            """
+            try:
+                data = await request.json()
+            except Exception:
+                return web.json_response({"error": "invalid JSON body"}, status=400)
+
+            dataurl = data.get("dataurl") or ""
+            prefix = str(data.get("filename_prefix") or "bEpic_annotation")
+            # Keep only filesystem-safe characters in the prefix.
+            prefix = "".join(c for c in prefix if c.isalnum() or c in ("_", "-")) or "bEpic_annotation"
+
+            m = re.match(r"^data:image/(png|jpeg);base64,(.*)$", dataurl, re.DOTALL)
+            if not m:
+                return web.json_response({"error": "expected a data:image/png;base64 payload"}, status=400)
+            ext = "png" if m.group(1) == "png" else "jpg"
+            try:
+                raw = base64.b64decode(m.group(2))
+            except Exception as e:
+                return web.json_response({"error": f"base64 decode failed: {e}"}, status=400)
+
+            try:
+                out_dir = folder_paths.get_output_directory()
+                full_output_folder, filename, counter, subfolder, _ = \
+                    folder_paths.get_save_image_path(prefix, out_dir)
+                os.makedirs(full_output_folder, exist_ok=True)
+                fname = f"{filename}_{counter:05d}_.{ext}"
+                fpath = os.path.join(full_output_folder, fname)
+                with open(fpath, "wb") as fh:
+                    fh.write(raw)
+            except Exception as e:
+                traceback.print_exc()
+                return web.json_response({"error": str(e)}, status=500)
+
+            return web.json_response({
+                "filename": fname,
+                "subfolder": subfolder or "",
+                "type": "output",
+                "path": os.path.abspath(fpath),
+            })
+
         async def _bepic_health(_request):
             return web.json_response({"ok": True, "service": "bepic_templates"})
 
@@ -218,6 +266,8 @@ try:
         _safe_add("GET", "/api/bepic/pick_folder", _bepic_pick_folder)
         _safe_add("GET", "/bepic/view_file", _bepic_view_file)
         _safe_add("GET", "/api/bepic/view_file", _bepic_view_file)
+        _safe_add("POST", "/bepic/save_annotation", _bepic_save_annotation)
+        _safe_add("POST", "/api/bepic/save_annotation", _bepic_save_annotation)
         _safe_add("GET", "/bepic/viewer", _bepic_viewer_page)
         _safe_add("GET", "/api/bepic/viewer", _bepic_viewer_page)
         _safe_add("GET", "/imageviewer", _bepic_viewer_page)

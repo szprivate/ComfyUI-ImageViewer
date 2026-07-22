@@ -12,6 +12,7 @@ import { ParamsMixin }   from "./bEpicViewer_mixinParams.js";
 import { UIMixin }       from "./bEpicViewer_mixinUI.js";
 import { ToolsMixin }    from "./bEpicViewer_tools.js";
 import { RotoMixin }     from "./bEpicViewer_roto.js";
+import { AnnotateMixin } from "./bEpicViewer_annotate.js";
 import { DnDMixin }      from "./bEpicViewer_mixinDnD.js";
 import { registerSendNode } from "./bEpicViewer_nodeTools.js";
 
@@ -1063,6 +1064,7 @@ Object.assign(
     UIMixin,
     ToolsMixin,
     RotoMixin,
+    AnnotateMixin,
     DnDMixin,
 );
 

@@ -54,6 +54,8 @@ export const ToolsMixin = {
 
         // Roto mixin one-time setup (state containers).
         this._rotoInit?.();
+        // Annotation mixin one-time setup (per-tab item store + styles).
+        this._annotInit?.();
 
         // Keep the overlay AND the white image-frame outline aligned when the
         // viewport resizes (e.g. a side panel is toggled). updateImageFrame
@@ -165,6 +167,7 @@ export const ToolsMixin = {
             roto: mk("roto", "✎", "Roto tool"),
             sam3: mk("sam3", "◉", "SAM3 points tool"),
             sam3box: mk("sam3box", "⬚", "SAM3 boxes tool"),
+            annotate: mk("annotate", "✐", "Annotate (draw & text)"),
         };
         this.viewport.appendChild(bar);
         this._toolbar = bar;
@@ -264,15 +267,18 @@ export const ToolsMixin = {
 
     // ── tool activation ───────────────────────────────────────────────────────
     _toolActive() {
-        return this._toolState.active !== "none"
-            && !!this._toolState.node
-            && !this.isComparing
-            && this.sliderMode !== "contact";
+        if (this._toolState.active === "none") return false;
+        if (this.isComparing || this.sliderMode === "contact") return false;
+        // Annotation is standalone markup over whatever image is shown, so it
+        // needs no bound "Send to Viewer" node (works on folder / dropped tabs).
+        if (this._toolState.active === "annotate") return true;
+        return !!this._toolState.node;
     },
 
     setActiveTool(tool) {
         const prev = this._toolState.active;
         if (prev === "roto" && tool !== "roto") this._rotoDeactivate?.();
+        if (prev === "annotate" && tool !== "annotate") this._annotDeactivate?.();
         this._toolState.active = tool;
 
         for (const k in this._toolBtns) this._toolBtns[k].classList.toggle("active", k === tool);
@@ -286,6 +292,7 @@ export const ToolsMixin = {
         if (tool === "sam3") this._sam3BuildPanel();
         else if (tool === "sam3box") this._sam3boxBuildPanel();
         else if (tool === "roto") this._rotoActivate?.(this._toolPanel);
+        else if (tool === "annotate") this._annotActivate?.(this._toolPanel);
         else this._toolPanel.innerHTML = "";
         if (tool === "none") this._toolSetStatus("");
 
@@ -299,6 +306,7 @@ export const ToolsMixin = {
         this.viewport.classList.toggle("bepic-tool-on", active !== "none");
         let c = "default";
         if (active === "sam3" || active === "sam3box") c = "crosshair";
+        else if (active === "annotate") c = (this._annot && this._annot.tool === "text") ? "text" : "crosshair";
         this._toolDraw.style.cursor = c;
     },
 
@@ -315,9 +323,11 @@ export const ToolsMixin = {
             this._sam3box = { pos: [], neg: [], drag: null, hover: null };
             this._rotoClearState?.();
         }
-        // Reflect availability
-        const disabled = !node;
+        // Reflect availability. Annotation needs no node, so its panel stays live
+        // on every tab; refresh its per-tab annotation count on rebind.
+        const disabled = !node && this._toolState.active !== "annotate";
         this._toolPanel.classList.toggle("bepic-tool-disabled", disabled);
+        if (this._toolState.active === "annotate") this._annotUpdateInfo?.();
         this._toolRedraw();
     },
 
@@ -332,6 +342,7 @@ export const ToolsMixin = {
         if (this._toolState.active === "sam3") this._sam3Render();
         else if (this._toolState.active === "sam3box") this._sam3boxRender();
         else if (this._toolState.active === "roto") this._rotoRender?.();
+        else if (this._toolState.active === "annotate") this._annotRender?.();
     },
 
     // ── pointer dispatch (integrates with existing pan/zoom) ──────────────────
@@ -363,6 +374,7 @@ export const ToolsMixin = {
         if (this._toolState.active === "sam3") return this._sam3PointerDown(e);
         if (this._toolState.active === "sam3box") return this._sam3boxPointerDown(e);
         if (this._toolState.active === "roto") return this._rotoPointerDown?.(e);
+        if (this._toolState.active === "annotate") return this._annotPointerDown?.(e);
         return false;
     },
 
@@ -381,6 +393,7 @@ export const ToolsMixin = {
         if (this._toolState.active === "roto") ctx = this._rotoHoverContext?.(e, n);
         else if (this._toolState.active === "sam3") ctx = this._sam3HoverContext(e, n);
         else if (this._toolState.active === "sam3box") ctx = this._sam3boxHoverContext(e, n);
+        else if (this._toolState.active === "annotate") ctx = this._annotHoverContext?.(e, n);
         if (!ctx) return;
         this._toolSetStatus(ctx.status);
         this._toolDraw.style.cursor = ctx.cursor || "default";
