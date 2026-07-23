@@ -13,6 +13,9 @@
 //      Items with no on-disk path (dropped-from-Explorer blobs, or filename-only
 //      frames), or when VHS isn't installed, fall back to a native upload loader:
 //      image → LoadImage, video → LoadVideo (both copy the file into /input).
+//      Dropping ONTO an existing loader node (VHS or native Load Image/Video)
+//      replaces that node's media in place instead of adding a new node — the
+//      node's wiring and position are kept, only the referenced file changes.
 import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
 
@@ -289,6 +292,16 @@ export const DnDMixin = {
         try {
             const isVideo = payload.kind === "video";
 
+            // Dropped onto an existing loader node whose widget matches the dragged
+            // media type → swap that node's file in place (keeps its wiring/position)
+            // rather than spawning a new node. Falls through to node-creation when
+            // the drop misses, hits an unrelated node, or the media types differ.
+            const target = this._nodeUnderEvent(e);
+            if (target) {
+                const widget = this._loaderWidgetFor(target, isVideo ? "video" : "image", payload);
+                if (widget && await this._replaceLoaderMedia(target, widget, payload, isVideo)) return;
+            }
+
             // Image sequence → a directory-based loader that reads the whole
             // sequence. VHS "Load Images (Path)" takes an arbitrary directory.
             if (payload.isSequence && payload.seqDir) {
@@ -353,15 +366,8 @@ export const DnDMixin = {
             node.widgets.find((x) => x.name === widgetName) ||
             node.widgets.find((x) => x.name === "video" || x.name === "image" || x.name === "directory")
         );
-        if (w) {
-            try {
-                w.value = absPath;                                   // OS abs path (VHS validates it server-side)
-                if (typeof w.callback === "function") w.callback(absPath);
-            } catch (_) {}
-        }
-        try { node.onResize?.(node.size); } catch (_) {}
-        try { app.graph.setDirtyCanvas(true, true); } catch (_) {}
-        try { if (app.canvas && app.canvas.selectNode) app.canvas.selectNode(node); } catch (_) {}
+        if (w) this._setWidget(w, absPath);                          // OS abs path (VHS validates it server-side)
+        this._afterNodeMediaChange(node);
     },
 
     // Fallback for items without an absolute path (dropped blobs, filename-only
@@ -369,8 +375,19 @@ export const DnDMixin = {
     // native loader that reads from there.
     //   image → LoadImage (widget "image"),  video → LoadVideo (widget "file").
     async _dropViaUpload(payload, e, isVideo) {
+        const uploaded = await this._uploadPayloadToInput(payload, isVideo);
+        if (!uploaded) throw new Error("upload failed");
+
+        if (isVideo) this._createNativeLoaderNode("LoadVideo", "file",  uploaded, e);
+        else         this._createNativeLoaderNode("LoadImage", "image", uploaded, e);
+    },
+
+    // Fetch a history payload's bytes and upload a copy to /input, returning the
+    // { path, name, subfolder, type } descriptor (or null). Shared by the native
+    // upload loader and in-place replacement of a combo/upload loader node.
+    async _uploadPayloadToInput(payload, isVideo) {
         const fetchUrl = this._frameFetchUrl(payload);
-        if (!fetchUrl) return;
+        if (!fetchUrl) return null;
         let fname = this._basename(payload.filename || payload.path || (isVideo ? "video.mp4" : "image.png"));
         const resp = await fetch(fetchUrl);
         if (!resp.ok) throw new Error(`fetch ${resp.status}`);
@@ -381,11 +398,7 @@ export const DnDMixin = {
             if (!/\.(png|jpe?g|webp|gif|bmp)$/i.test(fname)) fname += ".png";
         }
         const file = new File([blob], fname, { type: blob.type || (isVideo ? "video/mp4" : "image/png") });
-        const uploaded = await this._uploadFileToInput(file);
-        if (!uploaded) throw new Error("upload failed");
-
-        if (isVideo) this._createNativeLoaderNode("LoadVideo", "file",  uploaded, e);
-        else         this._createNativeLoaderNode("LoadImage", "image", uploaded, e);
+        return await this._uploadFileToInput(file);
     },
 
     // ComfyUI's /upload/image saves any uploaded file (image OR video) to /input.
@@ -418,14 +431,97 @@ export const DnDMixin = {
             node.widgets.find((x) => x.type === "combo")
         );
         if (w) {
-            try {
-                if (w.options && Array.isArray(w.options.values) && !w.options.values.includes(uploaded.path)) {
-                    w.options.values.push(uploaded.path);
-                }
-                w.value = uploaded.path;
-                if (typeof w.callback === "function") w.callback(uploaded.path);
-            } catch (_) {}
+            if (w.options && Array.isArray(w.options.values) && !w.options.values.includes(uploaded.path)) {
+                w.options.values.push(uploaded.path);
+            }
+            this._setWidget(w, uploaded.path);
         }
+        this._afterNodeMediaChange(node);
+    },
+
+    // ── In-place replacement (drop onto an existing loader node) ──────────────
+
+    // The loader node under the drop point, or null. Uses litegraph hit-testing
+    // in graph space (convertEventToCanvasOffset already maps the event there).
+    _nodeUnderEvent(e) {
+        try {
+            const pos = app.canvas && app.canvas.convertEventToCanvasOffset(e);
+            if (!pos) return null;
+            const g = app.graph;
+            if (!g) return null;
+            if (typeof g.getNodeOnPos === "function") return g.getNodeOnPos(pos[0], pos[1], g._nodes, 2) || null;
+            const nodes = g._nodes || [];
+            for (let i = nodes.length - 1; i >= 0; i--) {
+                const n = nodes[i];
+                if (n && typeof n.isPointInside === "function" && n.isPointInside(pos[0], pos[1])) return n;
+            }
+        } catch (_) {}
+        return null;
+    },
+
+    // The widget on `node` that should receive dragged media of the given kind, or
+    // null when the node has no matching input (so a mismatched drop — e.g. a video
+    // onto a Load Image node — falls through to creating a fresh node instead).
+    //   image → "image" / "directory"   video → "video" / "file"
+    // Covers native (LoadImage `image`, LoadVideo `file`) and VHS (`image`,
+    // `video`, `directory`) loaders alike, since both name their widgets this way.
+    _loaderWidgetFor(node, kind, payload) {
+        const ws = (node && node.widgets) || [];
+        const byName = (n) => ws.find((w) => w && w.name === n);
+        if (kind === "video") return byName("video") || byName("file") || null;
+        if (payload && payload.isSequence && payload.seqDir) {
+            const d = byName("directory");
+            if (d) return d;
+        }
+        return byName("image") || byName("directory") || null;
+    },
+
+    // Point an existing loader node's widget at the dragged media. Path-style
+    // widgets (VHS "(Path)" loaders, `directory`) take the OS path directly;
+    // combo/upload widgets (native LoadImage/LoadVideo, VHS upload loaders) need
+    // the file copied into /input first. Returns true when the swap was applied.
+    async _replaceLoaderMedia(node, widget, payload, isVideo) {
+        const isCombo = widget.type === "combo" ||
+                        !!(widget.options && Array.isArray(widget.options.values));
+
+        // Sequence directory target: set the folder path straight through.
+        if (widget.name === "directory" && payload.isSequence && payload.seqDir) {
+            this._setWidget(widget, payload.seqDir);
+            this._afterNodeMediaChange(node);
+            return true;
+        }
+
+        // Path-style loader with a real on-disk path → reference the original file.
+        const absPath = this._absPathForPayload(payload);
+        if (!isCombo && absPath) {
+            this._setWidget(widget, absPath);
+            this._afterNodeMediaChange(node);
+            return true;
+        }
+
+        // Combo/upload loader, or a path loader fed a blob with no on-disk path →
+        // upload a copy to /input and point the widget at it.
+        const uploaded = await this._uploadPayloadToInput(payload, isVideo);
+        if (!uploaded) return false;
+        if (widget.options && Array.isArray(widget.options.values) &&
+            !widget.options.values.includes(uploaded.path)) {
+            widget.options.values.push(uploaded.path);
+        }
+        this._setWidget(widget, uploaded.path);
+        this._afterNodeMediaChange(node);
+        return true;
+    },
+
+    // Assign a widget value and fire its callback (loads previews / revalidates).
+    _setWidget(w, value) {
+        try {
+            w.value = value;
+            if (typeof w.callback === "function") w.callback(value);
+        } catch (_) {}
+    },
+
+    // Redraw + reselect after a loader node's media changed.
+    _afterNodeMediaChange(node) {
         try { node.onResize?.(node.size); } catch (_) {}
         try { app.graph.setDirtyCanvas(true, true); } catch (_) {}
         try { if (app.canvas && app.canvas.selectNode) app.canvas.selectNode(node); } catch (_) {}
