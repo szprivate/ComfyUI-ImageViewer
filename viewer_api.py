@@ -233,8 +233,11 @@ try:
 
             try:
                 out_dir = folder_paths.get_output_directory()
+                # Store annotations under ./output/annotations/ (get_save_image_path
+                # honours a subfolder embedded in the prefix and reports it back).
                 full_output_folder, filename, counter, subfolder, _ = \
-                    folder_paths.get_save_image_path(prefix, out_dir)
+                    folder_paths.get_save_image_path(
+                        os.path.join("annotations", prefix), out_dir)
                 os.makedirs(full_output_folder, exist_ok=True)
                 fname = f"{filename}_{counter:05d}_.{ext}"
                 fpath = os.path.join(full_output_folder, fname)
