@@ -374,8 +374,15 @@ export const PlaybackMixin = {
         const fps = this._compareVideoFps || 24;
         if (this.isPlaying) {
             this._compareVideoEnsurePlaying();
-            const wantT = displayFrame / fps;
-            if (Math.abs((v.currentTime || 0) - wantT) > 0.25) { try { v.currentTime = wantT; } catch (e) {} }
+            let wantT = displayFrame / fps;
+            // Keep the target inside the compare clip's own timeline so a shorter,
+            // looping compare video isn't seeked past its end (which fights the
+            // native loop and stutters).
+            if (v.loop && v.duration) wantT = ((wantT % v.duration) + v.duration) % v.duration;
+            // Once it's playing natively at a matched rate, correct only genuine
+            // drift. Nudging every timeupdate makes the freely-running compare video
+            // stutter, so tolerate ~0.5s before re-seeking.
+            if (Math.abs((v.currentTime || 0) - wantT) > 0.5) { try { v.currentTime = wantT; } catch (e) {} }
         } else {
             try { v.pause(); } catch (e) {}
             let frame = Math.floor(displayFrame);
@@ -522,6 +529,16 @@ export const PlaybackMixin = {
         this.fitView();
         this._applyVideoPlaybackRate();
         if (this.timeline) this.timeline.value = this.currentFrame || 0;
+        // The base video's decoded size is known only now. The compare aspect-match
+        // scale (and the side-by-side layout) both depend on it, so a compare frame
+        // that decoded before the base would otherwise stay mis-scaled — one media
+        // rendered larger than the other. Recompute them against the real base size.
+        if (this.isComparing) {
+            if (this.sliderMode === 'contact') this.resizeContactContainer();
+            this._applyCompareTransform && this._applyCompareTransform();
+            this.updateCompareVisuals && this.updateCompareVisuals();
+            this._updateCompareFrame && this._updateCompareFrame(this.currentFrame);
+        }
     },
 
     _videoOnTimeUpdate() {
@@ -617,6 +634,10 @@ export const PlaybackMixin = {
             this._applyVideoPlaybackRate();
             const p = v.play();
             if (p && p.catch) p.catch(() => {});
+            // Kick the compare video now instead of waiting for the base's first
+            // timeupdate (~250ms later), so a compared video pair starts together
+            // rather than leaving the second clip frozen until the base ticks.
+            if (this.isComparing) this._updateCompareFrame(this.currentFrame);
             return;
         }
 
@@ -681,10 +702,18 @@ export const PlaybackMixin = {
                 const viewRect = this.viewport.getBoundingClientRect();
                 const availW   = Math.max(10, viewRect.width  - 2);
                 const availH   = Math.max(10, viewRect.height - 2);
-                const contain  = Math.min(availW / vw, availH / vh);
-                const dispW = Math.max(1, vw * contain), dispH = Math.max(1, vh * contain);
-                const targetZoom = (availW / availH >= vw / vh) ? (availH / dispH) : (availW / dispW);
-                this.zoom = Math.max(0.05, Math.min(20.0, targetZoom));
+                // Contact side-by-side fits the combined 2-wide canvas (both frames
+                // scaled to a shared height), not just the base video — otherwise the
+                // pair overflows and is cropped.
+                const contactLayout = (this.sliderMode === 'contact' && this.getContactLayout) ? this.getContactLayout() : null;
+                if (contactLayout) {
+                    this.zoom = Math.max(0.05, Math.min(20.0, Math.min(availW / contactLayout.contW, availH / contactLayout.contH)));
+                } else {
+                    const contain  = Math.min(availW / vw, availH / vh);
+                    const dispW = Math.max(1, vw * contain), dispH = Math.max(1, vh * contain);
+                    const targetZoom = (availW / availH >= vw / vh) ? (availH / dispH) : (availW / dispW);
+                    this.zoom = Math.max(0.05, Math.min(20.0, targetZoom));
+                }
             } catch (e) { this.zoom = 1.0; }
             this.panX = 0; this.panY = 0;
             this.updateTransform();

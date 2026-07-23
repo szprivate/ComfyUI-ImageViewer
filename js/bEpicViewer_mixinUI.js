@@ -683,6 +683,7 @@ export const UIMixin = {
         this.imgBase.style.height = '';
         this.imgCompare.style.width = '';
         this.imgCompare.style.height = '';
+        if (this.videoBase)    { this.videoBase.style.width = '';    this.videoBase.style.height = ''; }
         if (this.videoCompare) { this.videoCompare.style.width = ''; this.videoCompare.style.height = ''; }
     },
 
@@ -697,11 +698,24 @@ export const UIMixin = {
         return (this._compareIsVideo() && this.videoCompare) ? this.videoCompare : this.imgCompare;
     },
 
+    // The base layer element that is actually showing (video or img).
+    _activeBaseEl() {
+        return (this._videoMode && this.videoBase) ? this.videoBase : this.imgBase;
+    },
+
     // Natural pixel size of the compare media, whether it's an image or a video.
     _compareMediaSize() {
         if (this._compareIsVideo() && this.videoCompare)
             return { w: this.videoCompare.videoWidth || 0, h: this.videoCompare.videoHeight || 0 };
         return { w: this.imgCompare.naturalWidth || 0, h: this.imgCompare.naturalHeight || 0 };
+    },
+
+    // Natural pixel size of the base media, whether it's an image or a video. A
+    // video base hides imgBase (no naturalWidth), so the <video> must be read.
+    _baseMediaSize() {
+        if (this._videoMode && this.videoBase)
+            return { w: this.videoBase.videoWidth || 0, h: this.videoBase.videoHeight || 0 };
+        return { w: this.imgBase.naturalWidth || 0, h: this.imgBase.naturalHeight || 0 };
     },
 
     // Base and compare each get object-fit:contain against the same box, so media
@@ -713,8 +727,8 @@ export const UIMixin = {
     _compareExtraScale() {
         if (!this.isComparing) return 1;
         // Base decoded size (a video base hides imgBase, so read the <video>).
-        const baseW = (this._videoMode && this.videoBase) ? (this.videoBase.videoWidth  || 0) : (this.imgBase.naturalWidth  || 0);
-        const baseH = (this._videoMode && this.videoBase) ? (this.videoBase.videoHeight || 0) : (this.imgBase.naturalHeight || 0);
+        const base  = this._baseMediaSize();
+        const baseW = base.w, baseH = base.h;
         const cmp   = this._compareMediaSize();
         if (!baseW || !baseH || !cmp.w || !cmp.h) return 1;
         const box = this.viewport.getBoundingClientRect();
@@ -739,8 +753,9 @@ export const UIMixin = {
     },
 
     getContactLayout() {
-        const baseW = this.imgBase.naturalWidth || 0;
-        const baseH = this.imgBase.naturalHeight || 0;
+        const base  = this._baseMediaSize();
+        const baseW = base.w;
+        const baseH = base.h;
         const comp  = this._compareMediaSize();
         const compW = comp.w;
         const compH = comp.h;
@@ -779,8 +794,9 @@ export const UIMixin = {
         this.contactContainer.style.width  = layout.contW + 'px';
         this.contactContainer.style.height = layout.contH + 'px';
 
-        this.imgBase.style.width = layout.baseDrawW + 'px';
-        this.imgBase.style.height = layout.baseDrawH + 'px';
+        const baseEl = this._activeBaseEl();
+        baseEl.style.width = layout.baseDrawW + 'px';
+        baseEl.style.height = layout.baseDrawH + 'px';
         const compEl = this._activeCompareEl();
         compEl.style.width = layout.compDrawW + 'px';
         compEl.style.height = layout.compDrawH + 'px';
