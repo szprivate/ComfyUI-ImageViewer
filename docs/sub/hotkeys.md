@@ -35,6 +35,20 @@ Every key on this page can be changed — see [Changing the Hotkeys](#changing-t
 
 See [Selecting Several Snapshots](tabs-history.md#selecting-several-snapshots) for what a selection can then do. <kbd>Shift</kbd>+<kbd>Delete</kbd> works only while the viewer is hovered, so a plain <kbd>Delete</kbd> still goes to ComfyUI's graph.
 
+## Previz (3D scenes)
+
+| Key | Action |
+|---|---|
+| <kbd>Q</kbd> | Select — puts the gizmo away |
+| <kbd>W</kbd> | Move tool |
+| <kbd>E</kbd> | Rotate tool |
+| <kbd>R</kbd> | Scale tool |
+| <kbd>X</kbd> | Gizmo axes: World / Local |
+| <kbd>Alt</kbd>+drag | Tumble (left), track (middle), dolly (right) — as in Maya |
+| <kbd>F</kbd> | Frame the scene again |
+
+These answer only while a [previz](models-3d.md#previz-building-a-scene) tab is open, so <kbd>R</kbd> and <kbd>E</kbd> keep their usual meanings everywhere else.
+
 ## Tabs
 
 | Key / Interaction | Action |

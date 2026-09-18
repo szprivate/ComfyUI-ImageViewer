@@ -14,7 +14,8 @@ import { app } from "../../scripts/app.js";
 import * as S from "./bEpicViewer_scene3d.js";
 
 const VEC_LABELS = ["X", "Y", "Z"];
-const GIZMO_MODES = [["translate", "Move"], ["rotate", "Rotate"], ["scale", "Scale"]];
+// Maya's manipulator keys, which is what the hotkeys below bind to.
+const GIZMO_MODES = [["translate", "Move", "W"], ["rotate", "Rotate", "E"], ["scale", "Scale", "R"]];
 
 export const PrevizMixin = {
 
@@ -193,6 +194,22 @@ export const PrevizMixin = {
         return done;
     },
 
+    /** Gizmo mode from a hotkey (W / E / R), and Q for no gizmo at all. */
+    previzSetGizmoMode(mode) {
+        if (!this.isPrevizTab()) return;
+        const view = this._modelView();
+        if (mode === "none") this.previzSelect(null);
+        else view.setGizmoMode(mode);
+        this._previzRenderPanel();
+    },
+
+    previzToggleGizmoSpace() {
+        if (!this.isPrevizTab()) return;
+        const view = this._modelView();
+        view.setGizmoSpace(view.gizmoSpace === "local" ? "world" : "local");
+        this._previzRenderPanel();
+    },
+
     previzSelect(id) {
         this._previzSelection = id || null;
         if (this._model3d) this._model3d.select(id);
@@ -277,7 +294,7 @@ export const PrevizMixin = {
      * of moving the item for the whole shot, which is what would silently undo
      * the animation.
      */
-    previzApplyTransform(id, transform, props) {
+    previzApplyTransform(id, transform, props, { live = false } = {}) {
         const item = S.itemById(this.previzScene(), id);
         if (!item) return;
         const frame = Math.round(this.currentFrame || 0);
@@ -287,7 +304,9 @@ export const PrevizMixin = {
             if (this._previzAutokey || S.isAnimated(item, prop)) S.setKeyframe(item, prop, frame, value);
             else item[prop] = Array.isArray(value) ? value.slice() : value;
         }
-        this.previzChanged();
+        // Mid-drag the scene only needs the numbers; the panel, the node widget
+        // and the saved state catch up when the drag ends (onTransformEnd).
+        if (!live) this.previzChanged();
     },
 
     /** Key every animatable property of the selection at the current frame. */
@@ -426,13 +445,21 @@ export const PrevizMixin = {
 
         const gizmoRow = el("div", "previz-row previz-gizmo");
         const gizmoBtns = {};
-        for (const [mode, label] of GIZMO_MODES) {
+        for (const [mode, label, key] of GIZMO_MODES) {
             const b = el("button", "previz-btn", label);
-            b.title = `${label} the selected item`;
+            b.title = `${label} the selected item (${key})`;
             b.onclick = () => { this._modelView().setGizmoMode(mode); this._previzRenderPanel(); };
             gizmoBtns[mode] = b;
             gizmoRow.append(b);
         }
+        const spaceBtn = el("button", "previz-btn", "World");
+        spaceBtn.title = "Gizmo axes: world or the item's own (scale is always local)";
+        spaceBtn.onclick = () => {
+            const view = this._modelView();
+            view.setGizmoSpace(view.gizmoSpace === "local" ? "world" : "local");
+            this._previzRenderPanel();
+        };
+        gizmoRow.append(spaceBtn);
 
         const list = el("div", "previz-list");
 
@@ -459,7 +486,7 @@ export const PrevizMixin = {
 
         root.append(head, actions, gizmoRow, list, props, foot);
         view.root.appendChild(root);
-        this._previzUI = { root, list, props, fpsIn, lenIn, gizmoBtns };
+        this._previzUI = { root, list, props, fpsIn, lenIn, gizmoBtns, spaceBtn };
         return this._previzUI;
     },
 
@@ -475,6 +502,9 @@ export const PrevizMixin = {
         if (doc.activeElement !== ui.lenIn) ui.lenIn.value = String(scene.length);
         const mode = this._model3d ? this._model3d.gizmoMode : "translate";
         for (const [m, btn] of Object.entries(ui.gizmoBtns)) btn.classList.toggle("active", m === mode);
+        const space = (this._model3d && this._model3d.gizmoSpace) || "world";
+        ui.spaceBtn.textContent = space === "local" ? "Local" : "World";
+        ui.spaceBtn.classList.toggle("active", space === "local");
 
         // Outliner
         ui.list.innerHTML = "";
@@ -652,10 +682,13 @@ ${failed}`;
     },
 
     /**
-     * Render every frame of the shot through the active camera and upload it to
-     * ./output/previz/<name>, where the bEpic 3D Scene node reads it back as
+     * Render the shot through the active camera and leave an mp4 in
+     * ./output/previz/<name>.mp4, which the bEpic 3D Scene node reads back as
      * its IMAGE output. The viewport is what renders, so what you see is what
      * the workflow gets.
+     *
+     * Frames go up one at a time — a canvas can only hand over one picture —
+     * and the server encodes them into the clip at the end.
      */
     async previzRender({ width = 1024, height = 576 } = {}) {
         const scene = this.previzScene();
@@ -683,7 +716,15 @@ ${failed}`;
                 done++;
                 view._setStatus(`Rendering ${name}: frame ${f + 1} of ${total}…`);
             }
-            view._setStatus(`Rendered ${done} frames into output/previz/${name}.`);
+            view._setStatus(`Encoding ${done} frames…`);
+            const enc = await fetch(api.apiURL("/bepic/previz_encode"), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name, fps: scene.fps || 24 }),
+            });
+            const encData = await enc.json().catch(() => ({}));
+            if (!enc.ok) throw new Error(encData.error || `the server answered ${enc.status}`);
+            view._setStatus(`Rendered ${done} frames to output/previz/${name}.mp4`);
         } catch (e) {
             console.warn("[bEpicViewer] previz render failed", e);
             view._setStatus(`Render stopped after ${done} frames.\n${(e && e.message) || e}`, true);

@@ -5,9 +5,12 @@ bEpic 3D Scene node. This module only deals with what has to live on disk:
 
   • scene files, under `output/3d_scenes/<name>.json`, for reusing a setup
     across workflows;
-  • rendered frames, under `output/previz/<name>/frame_0000.png`, written one
-    at a time by the viewer as it plays the shot back through a camera. The
-    node then reads that folder as its IMAGE output.
+  • rendered shots, under `output/previz/<name>.mp4`. The viewer plays the shot
+    back through a camera and posts one PNG per frame into
+    `output/previz/<name>/`; those frames are then encoded into the mp4 and
+    deleted, and the node reads the mp4 back as its IMAGE output. Frames are
+    uploaded one at a time because that is all a browser canvas can hand over —
+    the clip is what survives.
 
 Both folders sit inside ComfyUI's output directory on purpose: nothing here
 writes anywhere the viewer's other routes wouldn't (see path_access.py).
@@ -83,6 +86,11 @@ def load_scene(name):
         return json.load(fh)
 
 
+def video_path(name):
+    """The rendered shot itself: output/previz/<name>.mp4."""
+    return os.path.join(renders_dir(), f"{_safe_name(name)}.mp4")
+
+
 def frame_path(name, index):
     return os.path.join(renders_dir(name), f"frame_{int(index):04d}.png")
 
@@ -123,11 +131,100 @@ def render_frames(name):
     return [p for _i, p in numbered]
 
 
+def encode_render(name, fps=24.0):
+    """Turn the uploaded frames of `name` into output/previz/<name>.mp4.
+
+    The frames are removed afterwards: the clip is the deliverable, and leaving
+    both behind would double the disk cost of every take. Raises with a readable
+    message when this install has no encoder.
+    """
+    paths = render_frames(name)
+    if not paths:
+        raise ValueError("there are no rendered frames to encode")
+
+    import numpy as np
+    from PIL import Image
+    from . import file_writer
+
+    frames, size = [], None
+    for p in paths:
+        with Image.open(p) as im:
+            im = im.convert("RGB")
+            if size is None:
+                size = im.size
+            elif im.size != size:
+                raise ValueError(
+                    f"the rendered frames are not all {size[0]}x{size[1]} — "
+                    f"render the shot again to replace them")
+            frames.append(np.asarray(im, dtype=np.float32) / 255.0)
+
+    out = video_path(name)
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    try:
+        file_writer._write_video(np.stack(frames), out, float(fps or 24.0), "mp4")
+    except Exception as e:
+        raise ValueError(
+            f"could not encode the shot ({e}). Install imageio-ffmpeg, or read "
+            f"the frames in {renders_dir(name)} instead.")
+    clear_render(name)
+    try:
+        os.rmdir(renders_dir(name))          # empty now; leave it tidy
+    except OSError:
+        pass
+    return out
+
+
+def load_render_video(name):
+    """The rendered mp4 as an IMAGE tensor [N,H,W,3], or None when there isn't
+    one. Decoded with whatever this install has, like the rest of the viewer."""
+    path = video_path(name)
+    if not os.path.isfile(path):
+        return None
+    import numpy as np
+    import torch
+
+    frames = []
+    try:
+        import imageio
+        reader = imageio.get_reader(path)
+        try:
+            for frame in reader:
+                frames.append(np.asarray(frame)[:, :, :3])
+        finally:
+            reader.close()
+    except Exception:
+        frames = []
+    if not frames:
+        try:
+            import cv2
+            cap = cv2.VideoCapture(path)
+            try:
+                while True:
+                    ok, bgr = cap.read()
+                    if not ok:
+                        break
+                    frames.append(bgr[:, :, ::-1].copy())
+            finally:
+                cap.release()
+        except Exception:
+            frames = []
+    if not frames:
+        raise ValueError(f"{os.path.basename(path)} is there but nothing on this "
+                         f"install could decode it (imageio-ffmpeg / opencv)")
+    stacked = np.stack(frames).astype(np.float32) / 255.0
+    return torch.from_numpy(stacked)
+
+
 def load_render(name):
     """The rendered shot as an IMAGE tensor [N,H,W,3], or None when there is
-    nothing rendered yet. Frames of differing sizes are refused rather than
-    silently cropped — that only happens if the folder was rendered twice at
-    different resolutions."""
+    nothing rendered yet.
+
+    The mp4 is what a finished render leaves behind; a folder of frames is only
+    there when a take was interrupted before it could be encoded, and is read as
+    a fallback so those frames aren't lost."""
+    video = load_render_video(name)
+    if video is not None:
+        return video
     paths = render_frames(name)
     if not paths:
         return None

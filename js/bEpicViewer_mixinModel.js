@@ -38,7 +38,8 @@ export const ModelMixin = {
                 // view makes is handed back to it instead of kept in three.
                 srcUrl: (src) => this.buildImgUrl(src),
                 onPick: (id) => this.previzSelect(id),
-                onTransform: (id, transform) => this.previzApplyTransform(id, transform),
+                onTransform: (id, transform, live) => this.previzApplyTransform(id, transform, null, { live }),
+                onTransformEnd: () => this.previzChanged(),
                 onCameraMoved: (id, transform) => this.previzApplyTransform(id, transform, ["position", "rotation"]),
                 onPrevizToggle: () => this.togglePreviz(),
             });

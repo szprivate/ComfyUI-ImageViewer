@@ -913,6 +913,30 @@ try:
             return web.json_response({"ok": True, "path": path,
                                       "dir": os.path.dirname(path)})
 
+        async def _bepic_previz_encode(request):
+            """Encode a finished take into output/previz/<name>.mp4."""
+            if previz is None:
+                return web.json_response({"error": "unavailable"}, status=500)
+            try:
+                data = await request.json()
+            except Exception:
+                data = None
+            if not isinstance(data, dict):
+                return web.json_response({"error": "bad request"}, status=400)
+            name = data.get("name") or "shot"
+            try:
+                fps = float(data.get("fps", 24.0)) or 24.0
+            except (TypeError, ValueError):
+                fps = 24.0
+            try:
+                path = previz.encode_render(name, fps)
+            except ValueError as e:
+                return web.json_response({"error": str(e)}, status=400)
+            except Exception as e:
+                return web.json_response({"error": str(e)}, status=500)
+            return web.json_response({"ok": True, "path": path,
+                                      "name": previz._safe_name(name)})
+
         def _is_local(request):
             return (request.remote or "") in ("127.0.0.1", "::1", "localhost")
 
@@ -991,6 +1015,8 @@ try:
         _safe_add("POST", "/api/bepic/scene", _bepic_scene_save)
         _safe_add("POST", "/bepic/previz_frame", _bepic_previz_frame)
         _safe_add("POST", "/api/bepic/previz_frame", _bepic_previz_frame)
+        _safe_add("POST", "/bepic/previz_encode", _bepic_previz_encode)
+        _safe_add("POST", "/api/bepic/previz_encode", _bepic_previz_encode)
         _safe_add("POST", "/api/bepic/model_thumb", _bepic_model_thumb)
         _safe_add("POST", "/bepic/reveal", _bepic_reveal)
         _safe_add("POST", "/api/bepic/reveal", _bepic_reveal)

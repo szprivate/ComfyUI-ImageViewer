@@ -101,6 +101,7 @@ export class Model3DView {
         this.sceneFrame = 0;          // where the timeline is (frames, not a media frame)
         this.selected = null;
         this.gizmoMode = "translate";
+        this.gizmoSpace = "world";
     }
 
     get doc() { return this.host.ownerDocument; }
@@ -175,6 +176,9 @@ export class Model3DView {
     setPrevizActive(on) {
         const was = !!this.previzActive;
         this.previzActive = !!on;
+        // The left button belongs to the scene while previz is on (see
+        // _applyNavButtons), so the mapping changes with the mode.
+        this._applyNavButtons(false);
         if (was && !this.previzActive) {
             // Leaving previz: drop the scene's objects, keep the lone model path.
             for (const [id, entry] of [...this._entries]) { this._disposeEntry(entry, true); this._entries.delete(id); }
@@ -261,15 +265,31 @@ export class Model3DView {
         this.canvas = canvas;
         canvas.style.filter = this.channelFilter;
 
-        canvas.addEventListener("pointerdown", (e) => this._onPointerDown(e));
+        // Alt+RMB is a navigation drag, not a place to open a menu.
+        canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+        // Capture phase: the orbit controls also listen for pointerdown, and
+        // which of them may have the drag is decided here first.
+        canvas.addEventListener("pointerdown", (e) => this._onPointerDown(e), true);
         canvas.addEventListener("pointerup", (e) => this._onPointerUp(e));
 
         const controls = new OrbitControls(this.activeCameraObject(), canvas);
         controls.enableDamping = true;
         if (this._target) controls.target.copy(this._target);
         controls.addEventListener("change", () => this.requestRender());
+        controls.addEventListener("start", () => { this._navigating = true; });
+        controls.addEventListener("end", () => {
+            this._navigating = false;
+            // Navigating while looking through a scene camera IS moving that
+            // camera, so the scene takes the result — once, at the end of the
+            // drag rather than on every mouse move.
+            const id = this.scene3d && this.scene3d.activeCamera;
+            if (id && this.hooks.onCameraMoved) {
+                this.hooks.onCameraMoved(id, this.readTransform(this.activeCameraObject()));
+            }
+        });
         controls.update();
         this.controls = controls;
+        this._applyNavButtons(false);
 
         const RO = this.win.ResizeObserver;
         if (RO) {
@@ -279,16 +299,46 @@ export class Model3DView {
         this._resize();
     }
 
-    // Click to select, drag to orbit: the difference is whether the pointer
-    // moved between down and up.
+    /**
+     * Maya's navigation: nothing moves the camera unless Alt is held, and then
+     *   Alt + left   tumbles (orbit)
+     *   Alt + middle tracks  (pan)
+     *   Alt + right  dollies (zoom)
+     * The wheel always zooms, as it does everywhere.
+     *
+     * With Alt up, the left button belongs to the scene — picking an object and
+     * dragging the gizmo — which is why a previz tab needs this at all. On a
+     * plain single-model tab there is nothing to pick, so the left button keeps
+     * orbiting the way it always has.
+     */
+    _applyNavButtons(alt) {
+        if (!this.controls || !this.libs) return;
+        const { THREE } = this.libs;
+        const M = THREE.MOUSE;
+        if (alt) {
+            this.controls.mouseButtons = { LEFT: M.ROTATE, MIDDLE: M.PAN, RIGHT: M.DOLLY };
+            this.controls.enabled = true;
+            return;
+        }
+        this.controls.mouseButtons = {
+            LEFT: this.previzActive ? null : M.ROTATE,
+            MIDDLE: M.PAN,
+            RIGHT: M.PAN,
+        };
+        this.controls.enabled = true;
+    }
+
+    // Click to select, drag to navigate: which one is decided by Alt, and a
+    // click only counts as a pick when the pointer stayed put.
     _onPointerDown(e) {
-        this._downAt = { x: e.clientX, y: e.clientY, button: e.button };
+        this._applyNavButtons(e.altKey);
+        this._downAt = { x: e.clientX, y: e.clientY, button: e.button, alt: e.altKey };
     }
 
     _onPointerUp(e) {
         const d = this._downAt;
         this._downAt = null;
-        if (!d || d.button !== 0 || !this.scene3d) return;
+        if (!d || d.button !== 0 || d.alt || !this.scene3d) return;
         if (Math.abs(e.clientX - d.x) > 3 || Math.abs(e.clientY - d.y) > 3) return;
         if (this.gizmo && this.gizmo.dragging) return;
         const hit = this._pick(e);
@@ -890,11 +940,23 @@ export class Model3DView {
         this.requestRender();
     }
 
+    /**
+     * Whether the gizmo's handles follow the world axes or the item's own.
+     * three always scales along the item's axes, so "world" there is a no-op —
+     * the same as every other 3D app.
+     */
+    setGizmoSpace(space) {
+        this.gizmoSpace = space === "local" ? "local" : "world";
+        if (this.gizmo) this.gizmo.setSpace(this.gizmoSpace);
+        this.requestRender();
+    }
+
     _ensureGizmo() {
         if (this.gizmo || !this.libs || !this.renderer) return;
         const { TransformControls } = this.libs;
         const gizmo = new TransformControls(this.activeCameraObject(), this.canvas);
         gizmo.setMode(this.gizmoMode);
+        gizmo.setSpace(this.gizmoSpace || "world");
         gizmo.addEventListener("change", () => this.requestRender());
         // The orbit controls and the gizmo both want the drag; the gizmo wins
         // while one of its handles is held.
@@ -904,7 +966,12 @@ export class Model3DView {
         });
         gizmo.addEventListener("objectChange", () => {
             const entry = this.selected && this._entries.get(this.selected);
-            if (entry && this.hooks.onTransform) this.hooks.onTransform(this.selected, this.readTransform(entry.root));
+            // `live`: the object is already where the gizmo put it, so the scene
+            // only has to take the numbers — rebuilding the panel and rewriting
+            // the node's widget on every mouse move is what that would cost.
+            if (entry && this.hooks.onTransform) {
+                this.hooks.onTransform(this.selected, this.readTransform(entry.root), true);
+            }
             if (entry && entry.helper) entry.helper.update();
             this.requestRender();
         });

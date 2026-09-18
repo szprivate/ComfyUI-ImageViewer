@@ -67,6 +67,9 @@ export function comboLabel(combo) {
 // to re-derive from inline styles.
 const _historyOpen = (p) => !!(p && p.isPanelDocked && p.isPanelDocked("history"));
 
+// A 3D tab with a previz scene on it: where the gizmo keys mean something.
+const _previz = (p) => !!(p && p.isPrevizTab && p.isPrevizTab());
+
 const ACTION_DEFS = [
     { key: "StepBack",     label: "Step Back One Frame",     combo: { key: "ArrowLeft"  },
       run: (p) => p.step(-1) },
@@ -94,12 +97,27 @@ const ACTION_DEFS = [
       enabled: (p) => _historyOpen(p) && typeof p.hasDeletableHistory === "function" && p.hasDeletableHistory(),
       run: (p) => p.deleteSelectedHistory() },
 
+    // Maya's manipulator keys, and they only answer on a previz tab — which is
+    // what lets R stay the red-channel key everywhere else (see effectiveMap:
+    // a combo can carry more than one action, and the first one whose `enabled`
+    // passes wins).
+    { key: "GizmoSelect", label: "Previz: Select (no gizmo)", combo: { key: "q" },
+      enabled: _previz, run: (p) => p.previzSetGizmoMode("none") },
+    { key: "GizmoMove",   label: "Previz: Move Tool",         combo: { key: "w" },
+      enabled: _previz, run: (p) => p.previzSetGizmoMode("translate") },
+    { key: "GizmoRotate", label: "Previz: Rotate Tool",       combo: { key: "e" },
+      enabled: _previz, run: (p) => p.previzSetGizmoMode("rotate") },
+    { key: "GizmoScale",  label: "Previz: Scale Tool",        combo: { key: "r" },
+      enabled: _previz, run: (p) => p.previzSetGizmoMode("scale") },
+    { key: "GizmoSpace",  label: "Previz: Local / World Axes", combo: { key: "x" },
+      enabled: _previz, run: (p) => p.previzToggleGizmoSpace() },
+
     { key: "FitView",      label: "Fit Image To Viewport",   combo: { key: "f" },
       run: (p) => p.fitView() },
     { key: "CycleCompare", label: "Cycle Compare Mode",      combo: { key: "c" },
       run: (p) => p.cycleCompareMode() },
     { key: "ChannelRed",   label: "Isolate Red Channel",     combo: { key: "r" },
-      run: (p) => p.setChannelView(p.channelView === "red"   ? "all" : "red") },
+      enabled: (p) => !_previz(p), run: (p) => p.setChannelView(p.channelView === "red"   ? "all" : "red") },
     { key: "ChannelGreen", label: "Isolate Green Channel",   combo: { key: "g" },
       run: (p) => p.setChannelView(p.channelView === "green" ? "all" : "green") },
     { key: "ChannelBlue",  label: "Isolate Blue Channel",    combo: { key: "b" },
@@ -217,31 +235,45 @@ function _setting(id) {
 
 let _memo = null;
 
-// combo key -> { action, combo }, merged the same way ComfyUI merges its own
+// combo key -> [{ action, combo }], merged the same way ComfyUI merges its own
 // stores: defaults, minus the ones the user unset, with the user's bindings
 // laid over the top. A user binding pointing somewhere else takes the combo away
 // from the viewer, so rebinding one of these keys to a ComfyUI command works.
+//
+// A combo can carry SEVERAL actions — R is the red channel on an image tab and
+// the scale tool on a previz one. resolveViewerAction picks the first whose
+// `enabled` guard passes, so at any moment only one of them can fire.
 function effectiveMap() {
     const userBindings  = _setting(USER_BINDINGS_SETTING)  || [];
     const unsetBindings = _setting(UNSET_BINDINGS_SETTING) || [];
     if (_memo && _memo.user === userBindings && _memo.unset === unsetBindings) return _memo.map;
 
     const map = new Map();
+    const add = (key, entry) => {
+        const list = map.get(key);
+        if (list) list.push(entry);
+        else map.set(key, [entry]);
+    };
     for (const action of VIEWER_ACTIONS) {
-        if (action.combo) map.set(comboKey(action.combo), { action, combo: action.combo });
+        if (action.combo) add(comboKey(action.combo), { action, combo: action.combo });
     }
     for (const binding of unsetBindings) {
         if (!binding) continue;
         const key = comboKey(binding.combo);
-        const hit = map.get(key);
-        if (hit && hit.action.id === binding.commandId) map.delete(key);
+        const list = map.get(key);
+        if (!list) continue;
+        const left = list.filter((e) => e.action.id !== binding.commandId);
+        if (left.length) map.set(key, left);
+        else map.delete(key);
     }
     for (const binding of userBindings) {
         if (!binding) continue;
         const key = comboKey(binding.combo);
         if (!key) continue;
         const action = _byId.get(binding.commandId);
-        if (action) map.set(key, { action, combo: binding.combo });
+        // The user's binding replaces whatever the viewer had on that combo; a
+        // binding naming something else takes the combo away from the viewer.
+        if (action) map.set(key, [{ action, combo: binding.combo }]);
         else        map.delete(key);
     }
 
@@ -249,10 +281,15 @@ function effectiveMap() {
     return map;
 }
 
-/** The viewer action bound to this keystroke, or null. */
-export function resolveViewerAction(ev) {
-    const hit = effectiveMap().get(comboKeyFromEvent(ev));
-    return hit ? hit.action : null;
+/** The viewer action bound to this keystroke in the current state, or null. */
+export function resolveViewerAction(ev, panel) {
+    const hits = effectiveMap().get(comboKeyFromEvent(ev));
+    if (!hits || hits.length === 0) return null;
+    if (hits.length === 1) return hits[0].action;
+    for (const hit of hits) {
+        if (!hit.action.enabled || (panel && hit.action.enabled(panel))) return hit.action;
+    }
+    return hits[0].action;
 }
 
 /** Forget the cached merge — for tests, and whenever the settings are replaced. */
@@ -276,9 +313,11 @@ function _foldKeys(labels) {
  */
 export function viewerHelpRows() {
     const combosFor = new Map();
-    for (const { action, combo } of effectiveMap().values()) {
-        if (!combosFor.has(action.id)) combosFor.set(action.id, []);
-        combosFor.get(action.id).push(combo);
+    for (const hits of effectiveMap().values()) {
+        for (const { action, combo } of hits) {
+            if (!combosFor.has(action.id)) combosFor.set(action.id, []);
+            combosFor.get(action.id).push(combo);
+        }
     }
 
     const rows = [];

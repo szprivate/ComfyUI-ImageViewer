@@ -34,9 +34,9 @@ With **save_to_output** off, the model is only previewed from ComfyUI's temp fol
 
 | Action | How |
 |---|---|
-| Orbit | Left-drag |
-| Pan | Right-drag |
-| Zoom | Mouse wheel, or middle-drag |
+| Tumble (orbit) | <kbd>Alt</kbd>+left-drag |
+| Track (pan) | <kbd>Alt</kbd>+middle-drag, or right-drag |
+| Dolly (zoom) | <kbd>Alt</kbd>+right-drag, or the mouse wheel |
 | Frame the model again | **Reset view**, or <kbd>F</kbd> |
 | Material | **Original**, **Clay**, **Normal** or **Wireframe** from the toolbar |
 | Grid | **Grid** toggles it |
@@ -64,7 +64,19 @@ A 3D tab starts with one model. Press **Previz** in the 3D toolbar and that tab 
 | Transform fields | The selected item's position, rotation (degrees) and scale — and a camera's field of view. |
 | **fps / frames** | The shot's frame rate and length. The viewer's timeline covers exactly this range while previz is on. |
 
-Click an object in the viewport to select it, or a camera's frustum lines. Drag the gizmo to move it; the numbers follow, and so does the scene.
+Navigation follows Maya: hold <kbd>Alt</kbd> and the left button tumbles, the middle button tracks and the right button dollies. Without <kbd>Alt</kbd> the left button belongs to the scene — click an object in the viewport to select it, or a camera's frustum lines, and drag the gizmo to move it. The numbers follow, and so does the scene. (On a plain one-model tab there is nothing to select, so left-drag orbits there as it always did.)
+
+| Key | Tool |
+|---|---|
+| <kbd>Q</kbd> | Select — puts the gizmo away |
+| <kbd>W</kbd> | Move |
+| <kbd>E</kbd> | Rotate |
+| <kbd>R</kbd> | Scale |
+| <kbd>X</kbd> | Switch the gizmo between **World** and **Local** axes |
+
+These only answer on a previz tab, so <kbd>R</kbd> is still the red channel and <kbd>E</kbd> still the exposure drag everywhere else. Like every viewer hotkey they can be rebound in **Settings → Keybinding**.
+
+**World / Local** is also a button next to the tool buttons. World lines the handles up with the grid; Local lines them up with the item's own axes. Scaling is always along the item's own axes, as it is in every 3D app.
 
 ### Cameras
 
@@ -94,8 +106,10 @@ The **bEpic 3D Scene (Previz)** node holds the scene and hands the rendered shot
 1. Drop the node in and press **Open in Image Viewer** on it. The viewer opens on that node's tab as an empty scene — no run needed.
 2. Build the shot. The scene is stored on the node, so it is saved with the workflow.
 3. Set **render_name** on the node (the folder under `output/previz`).
-4. Press **Render…** in the panel, set a size, and press **Go**. The viewer plays the shot through the active camera and writes one PNG per frame.
-5. Run the workflow. The node outputs those frames as `images`, plus `frame_count` and `fps`.
+4. Press **Render…** in the panel, set a size, and press **Go**. The viewer plays the shot through the active camera and the server encodes it into **`output/previz/<render_name>.mp4`** at the scene's frame rate.
+5. Run the workflow. The node reads that clip back as `images`, plus `frame_count` and `fps`.
+
+Frames travel to the server one at a time — a canvas can only hand over one picture — and are deleted once the clip is written, so a take leaves one mp4 behind rather than a folder of stills. If a render is interrupted before it finishes, the frames it did upload stay in `output/previz/<render_name>/` and the node reads those instead, so nothing is lost. Encoding needs `imageio-ffmpeg`, the same encoder the viewer's video saving already uses.
 
 The render is what the viewport draws, at the size you asked for — so it carries the same materials, grid and lighting you see. Hide the grid first if you don't want it in the render.
 

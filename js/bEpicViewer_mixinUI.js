@@ -63,7 +63,9 @@ export const UIMixin = {
         // its arrows walk the listing, so the viewer must not also step frames.
         if (target.closest && target.closest('.browser-list')) return;
 
-        if (e.key === 'e' || e.key === 'E') {
+        // E holds the exposure drag — except on a previz tab, where there is no
+        // exposure drag (the 3D view owns the mouse) and E is the rotate tool.
+        if ((e.key === 'e' || e.key === 'E') && !(this.isPrevizTab && this.isPrevizTab())) {
             this.isExposureModifierActive = true;
             return;
         }
@@ -81,7 +83,7 @@ export const UIMixin = {
             return;
         }
 
-        const action = resolveViewerAction(e);
+        const action = resolveViewerAction(e, this);
         if (!action) return;
         if (action.enabled && !action.enabled(this)) return;
 
