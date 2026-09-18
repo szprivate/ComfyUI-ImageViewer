@@ -813,3 +813,4 @@ textarea.param-input {
 .previz-key.on, .previz-key:hover { color: #f60; }
 .previz-foot { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .previz-warn { color: #e66; font-weight: 700; cursor: help; }
+.previz-note { color: #c90; background: rgba(200, 150, 0, 0.08); border: 1px solid #553; border-radius: 3px; padding: 3px 5px; line-height: 1.35; }

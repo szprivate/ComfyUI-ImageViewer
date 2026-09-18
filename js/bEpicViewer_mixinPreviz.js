@@ -185,6 +185,10 @@ export const PrevizMixin = {
         const view = this._modelView();
         const done = reload ? view.setScene(scene, this.currentFrame || 0)
                             : (view.applyFrame(this.currentFrame || 0), Promise.resolve());
+        // Adding, duplicating or deleting an item moves the selection; without
+        // this the gizmo stayed on whatever was selected before, so dragging it
+        // moved something other than the item the panel was showing.
+        if (view.selected !== this._previzSelection) view.select(this._previzSelection);
         this._previzRenderPanel();
         this._previzRenderTicks();
         if (persist) {
@@ -306,7 +310,22 @@ export const PrevizMixin = {
         }
         // Mid-drag the scene only needs the numbers; the panel, the node widget
         // and the saved state catch up when the drag ends (onTransformEnd).
-        if (!live) this.previzChanged();
+        if (live) this._previzRefreshFields();
+        else this.previzChanged();
+    },
+
+    /**
+     * Re-read the selection's numbers into the transform fields, without
+     * rebuilding the panel — cheap enough to run on every mouse move while a
+     * gizmo or the camera is being dragged.
+     */
+    _previzRefreshFields() {
+        const ui = this._previzUI;
+        const item = this.previzSelectedItem();
+        if (!ui || !ui.props || !item || !ui.root || ui.root.style.display === "none") return;
+        const doc = ui.root.ownerDocument;
+        if (doc.activeElement && doc.activeElement.classList.contains("previz-num")) return;
+        this._previzRenderProps(ui, doc);
     },
 
     /** Key every animatable property of the selection at the current frame. */
@@ -570,6 +589,17 @@ ${failed}`;
         ui.props.innerHTML = "";
         if (!item) return;
         const frame = Math.round(this.currentFrame || 0);
+
+        // The camera you are looking through has no handles on screen to grab,
+        // so the gizmo steps aside for it — said out loud, because an absent
+        // gizmo otherwise looks like a broken one.
+        const scene = this.previzScene();
+        if (item.kind === "camera" && scene && scene.activeCamera === item.id) {
+            const note = doc.createElement("div");
+            note.className = "previz-note";
+            note.textContent = "Looking through this camera. Press ▣ to step outside and move it.";
+            ui.props.append(note);
+        }
 
         const nameIn = doc.createElement("input");
         nameIn.className = "previz-text";

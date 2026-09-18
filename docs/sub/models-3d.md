@@ -79,7 +79,9 @@ These only answer on a previz tab, so <kbd>R</kbd> is still the red channel and 
 
 ### Cameras
 
-**▣** looks through a camera. Orbiting, panning and zooming then move *that* camera, so lining up a shot is the same as looking at it. **▣** again returns to the free view, where cameras are drawn as frustums you can pick and move like anything else.
+**▣** looks through a camera. Tumbling, tracking and dollying then move *that* camera — the panel's numbers follow as you drag — so lining up a shot is the same as looking at it. **▣** again returns to the free view, where cameras are drawn as frustums you can pick and move like anything else.
+
+While you are looking through a camera it has no gizmo: there would be no handles on screen to grab. Step outside with **▣** to move it by hand.
 
 ### Animation
 

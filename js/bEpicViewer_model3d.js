@@ -275,17 +275,23 @@ export class Model3DView {
         const controls = new OrbitControls(this.activeCameraObject(), canvas);
         controls.enableDamping = true;
         if (this._target) controls.target.copy(this._target);
-        controls.addEventListener("change", () => this.requestRender());
+        // Navigating while looking through a scene camera IS moving that camera.
+        // The scene takes every step of it (`live`, so the panel's numbers
+        // follow the tumble) and the full update — panel, node widget, saved
+        // state — lands once the drag ends.
+        const reportCamera = (live) => {
+            const id = this.scene3d && this.scene3d.activeCamera;
+            if (!id || !this.hooks.onCameraMoved) return;
+            this.hooks.onCameraMoved(id, this.readTransform(this.activeCameraObject()), live);
+        };
+        controls.addEventListener("change", () => {
+            if (this._navigating) reportCamera(true);
+            this.requestRender();
+        });
         controls.addEventListener("start", () => { this._navigating = true; });
         controls.addEventListener("end", () => {
             this._navigating = false;
-            // Navigating while looking through a scene camera IS moving that
-            // camera, so the scene takes the result — once, at the end of the
-            // drag rather than on every mouse move.
-            const id = this.scene3d && this.scene3d.activeCamera;
-            if (id && this.hooks.onCameraMoved) {
-                this.hooks.onCameraMoved(id, this.readTransform(this.activeCameraObject()));
-            }
+            reportCamera(false);
         });
         controls.update();
         this.controls = controls;
@@ -381,6 +387,18 @@ export class Model3DView {
         }
         this._raf = 0;
         if (this._ro) { this._ro.disconnect(); this._ro = null; }
+        // The gizmo listens on the canvas. Keeping it across a rebuild left its
+        // handles bound to a canvas that no longer exists — they drew, and
+        // dragging them did nothing. It is rebuilt by _syncSelection below.
+        if (this.gizmo) {
+            this.gizmo.detach();
+            this.gizmo.dispose();
+            this.gizmo = null;
+        }
+        if (this.gizmoHelper) {
+            this.scene.remove(this.gizmoHelper);
+            this.gizmoHelper = null;
+        }
         if (this.controls) {
             this._target = this.controls.target.clone();
             this.controls.dispose();
@@ -409,6 +427,27 @@ export class Model3DView {
         const out = [];
         for (const e of this._entries.values()) if (e.camera) out.push(e.camera);
         return out;
+    }
+
+    /**
+     * Point the orbit controls and the gizmo at whatever camera the viewport is
+     * rendering through.
+     *
+     * Binding this once, when the camera is chosen, was not enough: a camera
+     * added and looked through in the same breath has no 3D object yet, so the
+     * controls fell back to the free camera and stayed there — tumbling moved a
+     * camera nobody was looking through, and the scene camera never changed.
+     * Checked whenever the scene or the frame changes; it is an identity test.
+     */
+    _syncControlsCamera() {
+        if (!this.controls) return;
+        const cam = this.activeCameraObject();
+        if (this.controls.object === cam) return;
+        const target = this.controls.target.clone();
+        this.controls.object = cam;
+        this.controls.target.copy(target);
+        this.controls.update();
+        if (this.gizmo) this.gizmo.camera = cam;
     }
 
     /** The camera the viewport renders from: a scene camera, or the free one. */
@@ -460,6 +499,7 @@ export class Model3DView {
         if (!this.renderer) return;
         this._disposeRenderer();
         this._initRenderer();
+        this._syncSelection();
     }
 
     hide() {
@@ -767,6 +807,7 @@ export class Model3DView {
         this._syncSelection();
         this.requestRender();
         await Promise.all(pending);
+        this._syncControlsCamera();          // the active camera's object exists now
         this.applyFrame(this.sceneFrame);
         this._updateSceneStats();
         this.requestRender();
@@ -858,6 +899,7 @@ export class Model3DView {
     applyFrame(frame) {
         if (!this.scene3d || !this.libs) return;
         this.sceneFrame = frame;
+        this._syncControlsCamera();
         const { THREE } = this.libs;
         const D = Math.PI / 180;
         const activeId = this.scene3d.activeCamera;
@@ -1029,6 +1071,7 @@ export class Model3DView {
         const cam = this.activeCameraObject();
         if (this.controls) {
             this.controls.object = cam;
+            if (this.gizmo) this.gizmo.camera = cam;
             // Looking through a camera, the orbit pivot sits in front of it, so
             // dragging turns the shot rather than swinging it around the origin.
             if (id) {
