@@ -66,10 +66,17 @@ export const ModelMixin = {
             if (view.scene3d !== scene) {
                 view.setScene(scene, Math.round(this.currentFrame || 0));
                 view.select(this._previzSelection);
+            } else if (!view.reveal()) {
+                // Nothing built yet (first paint after a reload): setScene does
+                // that. reveal() only handles the view that already exists,
+                // which is the common case of switching tabs and back.
+                view.setScene(scene, Math.round(this.currentFrame || 0));
+                view.select(this._previzSelection);
             }
             this._previzRenderPanel();
             this._updatePathBar(null);
         } else {
+            view.reveal();
             view.show(frame, this.buildImgUrl(frame)).catch((e) => {
                 console.warn("[bEpicViewer] 3D view failed", e);
             });

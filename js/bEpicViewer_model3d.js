@@ -508,6 +508,20 @@ export class Model3DView {
         this.setAnimationPlaying(false);
     }
 
+    /**
+     * Put an already-built view back on screen after hide() — coming back to a
+     * 3D tab whose scene hasn't changed, so there is nothing to load. The
+     * viewport may have been resized while this was hidden, and a hidden canvas
+     * is never painted, so it is measured and drawn again here.
+     */
+    reveal() {
+        if (!this.root || !this.renderer) return false;
+        this.root.style.display = "block";
+        this._resize();
+        this.requestRender();
+        return true;
+    }
+
     get visible() {
         return !!(this.root && this.root.style.display !== "none");
     }

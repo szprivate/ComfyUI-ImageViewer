@@ -850,6 +850,11 @@ export const HistoryMixin = {
 
     closeTab(key) {
         if (this._revokeDroppedTab) this._revokeDroppedTab(key);   // free blob: URLs of dropped files
+        // A 3D tab's picture is an overlay, not an <img>: closing the tab has to
+        // take it down, or it keeps hanging over whatever comes next (or over an
+        // empty viewer, when this was the last tab). Whichever tab is shown next
+        // puts it back if it needs it.
+        if (this.activeTab === key && this._exitModelMode) this._exitModelMode();
         this.tabOrder = this.tabOrder.filter(k => k !== key);
         delete this.allTabs[key];
         delete this.tabLabels[key];
