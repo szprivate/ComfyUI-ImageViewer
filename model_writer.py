@@ -21,7 +21,8 @@ import folder_paths
 
 # Formats the viewer can open in a 3D tab. Splats and USDZ can be saved but not
 # shown; they still land in ./output when saving is on.
-VIEWABLE_EXTS = {"glb", "gltf", "fbx", "obj", "stl", "ply"}
+VIEWABLE_EXTS = {"glb", "gltf", "fbx", "obj", "stl", "ply",
+                 "usd", "usda", "usdc", "usdz"}
 
 
 def _core_save3d():

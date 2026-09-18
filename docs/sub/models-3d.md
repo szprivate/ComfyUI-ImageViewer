@@ -6,7 +6,7 @@
 
 The viewer shows 3D models in a tab of their own, the way ComfyUI's **Save 3D Model** / **Load 3D** nodes do: same lighting, grid, camera and material modes, and it follows ComfyUI's *Load 3D* settings for background colour, grid and light intensity.
 
-Supported formats: **GLB**, **glTF**, **FBX**, **OBJ**, **STL** and **PLY** (meshes and point clouds).
+Supported formats: **GLB**, **glTF**, **FBX**, **OBJ**, **STL**, **PLY** (meshes and point clouds) and **USD** (`.usd`, `.usda`, `.usdc`, `.usdz` — see [USD](#usd)).
 
 ## Getting a Model into the Viewer
 
@@ -153,6 +153,55 @@ Models are referenced by path, not copied into the scene — so a scene opened o
 
 An item whose file can't be loaded shows a red **!** in the list, with the reason behind it — rather than an empty spot in the scene.
 
+## USD
+
+Previz stages are read and written as **USD**, so a shot can leave this viewer for the rest of the pipeline and come back. `.usd`, `.usda`, `.usdc` and `.usdz` also open as ordinary 3D tabs.
+
+### Viewing a stage
+
+Open one like any other model — from the file browser, a drop, a loader node, or **+ Model** in previz. The stage is composed on the server (layers, references, payloads and variants all resolve through OpenUSD) and handed to the viewport as a flattened glTF copy, cached until the file changes. That copy is for looking at only; what the scene stores, and what is exported again, is the stage itself.
+
+The flattening keeps geometry, transforms, visibility and `displayColor`, prefers the proxy purpose, and skips `guide` prims. Shading beyond `displayColor` is not carried — previz is about staging, and a viewport material would only pretend to be the look.
+
+### Exporting a shot
+
+**USD ↑** in the previz panel writes the scene as a stage:
+
+```
+/previz                 Xform, the default prim, fps and range on the stage
+  /previz/Hero          Xform + payload → hero.usd
+  /previz/Floor         UsdGeomPlane, displayColor
+  /previz/ShotCam       UsdGeomCamera, focalLength on a 36×24 back
+```
+
+Assets arrive as **payloads**, not references, so the stage opens instantly and an application loads only what it needs — which is what a previz stage is for.
+
+Animation is **baked per frame**, because USD interpolates linearly between time samples and has no concept of easing: a Smooth key would otherwise arrive somewhere else. The scene's own keys ride along in `customData`, so re-importing a stage this viewer wrote restores the exact keys rather than a per-frame bake.
+
+Give a plain name and the stage lands in `output/3d_scenes`; give a full path ending in `.usda` or `.usdc` and it writes there, as long as it is [a folder the viewer may write to](other.md#which-folders-the-viewer-can-open).
+
+### Importing a stage
+
+**USD ↓** builds the scene from a stage — one made here, or one from anywhere else:
+
+| In the stage | Becomes |
+|---|---|
+| `UsdGeomCamera` | a previz camera, its focal length read back as a field of view |
+| A prim with a payload or reference | a model item pointing at that asset |
+| `Cube`, `Sphere`, `Cylinder`, `Cone`, `Plane` | the matching previz shape, with its `displayColor` |
+| Time samples on the transforms | keyframes, with linear easing — which is what USD samples mean |
+| `timeCodesPerSecond`, start and end | the shot's fps and length |
+
+Payloads stay **unloaded** while the stage is read: the hierarchy, transforms and cameras all live in the stage itself, and each asset is loaded by the viewer when it draws it.
+
+### What doesn't survive
+
+- An **FBX or GLB** asset can't be payloaded — USD payloads point at USD layers. Those items export as an empty xform with the file path in `customData`: this viewer finds them again, another application sees an empty group where they sit.
+- Materials, lights, variants and per-prim purposes in an imported stage are left in the stage; previz only takes transforms, cameras and geometry.
+- Easing is this viewer's own idea, so a stage read by another application sees the baked frames.
+
+USD support needs `usd-core`, which installs with the node.
+
 ## Moving Models Onto the Graph
 
 Drag a model's history thumbnail or browser row onto the graph and you get a **Load 3D** node holding it. Drop it onto an existing Load 3D node to swap that node's model. Load 3D reads from `input/3d`, so the file is copied there.
@@ -162,6 +211,7 @@ Drag a model's history thumbnail or browser row onto the graph and you get a **L
 - A glTF's `.bin` and textures and an FBX's external textures are looked up next to the model file. A model dropped in from the desktop has no folder, so it shows without them.
 - OBJ files show their geometry only; an `.mtl` material file isn't read.
 - Draco- and KTX2-compressed glTF files aren't supported yet.
+- A USD stage is shown through a flattened copy, so its materials and variants are not visible in the viewport.
 - Gaussian splats and USDZ can be saved but not shown.
 - three.js (r180, the version ComfyUI uses) ships with the node and only loads when a model tab first opens.
 - Previz has no lights of its own yet: a scene is lit by the same fixed rig as a single model.

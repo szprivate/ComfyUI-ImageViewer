@@ -542,7 +542,13 @@ export const PrevizMixin = {
         const loadBtn = el("button", "previz-btn", "Load");
         loadBtn.title = "Load a saved scene";
         loadBtn.onclick = () => this.previzLoadSceneFile();
-        foot.append(renderBtn, saveBtn, loadBtn);
+        const usdOut = el("button", "previz-btn", "USD ↑");
+        usdOut.title = "Export this shot as a USD stage (payloaded assets, baked animation)";
+        usdOut.onclick = () => this.previzExportUsd();
+        const usdIn = el("button", "previz-btn", "USD ↓");
+        usdIn.title = "Build the scene from a USD stage";
+        usdIn.onclick = () => this.previzImportUsd();
+        foot.append(renderBtn, saveBtn, loadBtn, usdOut, usdIn);
 
         root.append(head, actions, gizmoRow, list, props, foot);
         view.root.appendChild(root);
@@ -909,6 +915,82 @@ ${failed}`;
             view._setStatus(`Could not load that scene.\n${(e && e.message) || e}`, true);
             win.setTimeout(() => view._setStatus(""), 4000);
         }
+    },
+
+    // ── USD stages ───────────────────────────────────────────────────────────
+
+    /** Write the shot out as a USD stage, for the rest of the pipeline. */
+    async previzExportUsd() {
+        const scene = this.previzScene();
+        if (!scene) return;
+        const win = this._viewerWindow();
+        const name = win.prompt(
+            "Export this shot as a USD stage.\n\n" +
+            "A name lands in output/3d_scenes; a full path (.usda / .usdc) writes there.",
+            this.previzRenderName());
+        if (!name) return;
+        const body = /[\\/]/.test(name) ? { scene, path: name } : { scene, name };
+        const view = this._modelView();
+        try {
+            const res = await fetch(api.apiURL("/bepic/usd_export"), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || `the server answered ${res.status}`);
+            view._setStatus(`Exported ${data.name}`);
+        } catch (e) {
+            console.warn("[bEpicViewer] USD export failed", e);
+            view._setStatus(`Could not export the stage.\n${(e && e.message) || e}`, true);
+        }
+        win.setTimeout(() => view._setStatus(""), 5000);
+    },
+
+    /** Replace the scene with one read from a USD stage. */
+    async previzImportUsd() {
+        const win = this._viewerWindow();
+        let listed = [];
+        try {
+            const res = await fetch(api.apiURL("/bepic/usd_stages"));
+            const data = await res.json();
+            listed = (data.stages || []).map((s) => s.name);
+        } catch (e) { /* offline: the prompt still takes a path */ }
+        const pick = win.prompt(
+            "Import a USD stage — a full path, or a name from output/3d_scenes." +
+            (listed.length ? `\n\n${listed.join("\n")}` : ""),
+            listed[0] || "");
+        if (!pick) return;
+        const view = this._modelView();
+        try {
+            const path = /[\\/]/.test(pick) ? pick : `${await this._previzScenesDir()}/${pick}`;
+            const res = await fetch(api.apiURL(`/bepic/usd_import?path=${encodeURIComponent(path)}`));
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || `the server answered ${res.status}`);
+            const scene = S.parseScene(data.scene);
+            if (!scene.items.length) throw new Error("that stage has nothing this viewer can place");
+            this._setScene(this.activeTab, scene);
+            this._previzSelection = scene.items[0].id;
+            this.applyTimelineBounds();
+            this.setFrame(0);
+            await this.previzChanged({ reload: true });
+            if (this._model3d) this._model3d.resetView();
+            view._setStatus(`Imported ${scene.items.length} item${scene.items.length === 1 ? "" : "s"}`);
+        } catch (e) {
+            console.warn("[bEpicViewer] USD import failed", e);
+            view._setStatus(`Could not import that stage.\n${(e && e.message) || e}`, true);
+        }
+        win.setTimeout(() => view._setStatus(""), 5000);
+    },
+
+    async _previzScenesDir() {
+        if (this._previzScenesFolder) return this._previzScenesFolder;
+        try {
+            const res = await fetch(api.apiURL("/bepic/usd_stages"));
+            const data = await res.json();
+            if (data.dir) this._previzScenesFolder = data.dir;
+        } catch (e) { /* the prompt's own path still works */ }
+        return this._previzScenesFolder || "";
     },
 
     /** + Model: take the file browser's selection, or open it to make one. */

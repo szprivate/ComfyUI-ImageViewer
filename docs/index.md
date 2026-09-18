@@ -26,6 +26,7 @@ bEpic ImageViewer is a custom node extension for [ComfyUI](https://github.com/co
 | **Dockable Panels** | Drag any panel by its title bar to either side of the picture, or stack it above another. Splitters between them, arrangement remembered. |
 | **3D Models** | View GLB, glTF, FBX, OBJ, STL and PLY like ComfyUI's Save 3D Model does, and save meshes and 3D files from the send node. |
 | **3D Previz** | Build a scene from models and primitive shapes, move them with a gizmo, set cameras, keyframe everything on a value-graph curve editor, and render the shot back into the workflow as an mp4. |
+| **USD Stages** | Open `.usd` / `.usdz` assets, and export or import whole previz shots as USD — payloaded assets, baked animation, cameras. |
 | **Undock / Multi-Monitor** | Pop the viewer into its own browser window for a second screen. |
 
 ## How It Works

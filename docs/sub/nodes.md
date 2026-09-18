@@ -122,6 +122,9 @@ Every route that takes a path only reaches ComfyUI's input, output and temp fold
 | GET | `/bepic/scenes` | List saved previz scenes |
 | GET | `/bepic/scene?name=…` | Read one saved scene |
 | POST | `/bepic/scene` | Save a scene to `output/3d_scenes` |
+| POST | `/bepic/usd_export` | Write a previz scene out as a USD stage |
+| GET | `/bepic/usd_import?path=…` | Read a USD stage into a previz scene |
+| GET | `/bepic/usd_stages` | List the stages in `output/3d_scenes` |
 | POST | `/bepic/previz_frame` | Write one rendered previz frame into `output/previz/<name>` (decoded and re-encoded) |
 | POST | `/bepic/model_thumb` | Keep the viewer's rendering of a model as its history thumbnail (decoded and re-encoded; allowed folders only) |
 | GET | `/bepic/lib/three/<file>` | The bundled three.js files for 3D tabs |

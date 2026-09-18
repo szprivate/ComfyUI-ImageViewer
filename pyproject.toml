@@ -9,7 +9,7 @@ classifiers = [
     "Operating System :: Microsoft :: Windows"
 ]
 
-dependencies = ["psutil", "nvidia-ml-py"]
+dependencies = ["psutil", "nvidia-ml-py", "usd-core"]
 
 [project.urls]
 Repository = "https://github.com/szprivate/ComfyUI-ImageViewer"

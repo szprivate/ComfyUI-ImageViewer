@@ -27,8 +27,10 @@ except Exception:  # pragma: no cover - file_writer is optional
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif", ".ico",
               ".svg", ".tif", ".tiff", ".exr", ".dpx", ".tga", ".hdr"}
-# 3D formats a viewer tab can show (see model_writer.VIEWABLE_EXTS).
-MODEL_EXTS = {".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply"}
+# 3D formats a viewer tab can show (see model_writer.VIEWABLE_EXTS). USD is
+# shown through a GLB the server builds from the stage (usd_io.display_proxy).
+MODEL_EXTS = {".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply",
+              ".usd", ".usda", ".usdc", ".usdz"}
 VIDEO_EXTS = {".mp4", ".m4v", ".mov", ".webm", ".mkv", ".ogv", ".avi", ".mpg",
               ".mpeg", ".wmv", ".flv"}
 

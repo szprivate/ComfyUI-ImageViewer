@@ -25,7 +25,13 @@ try:
 except Exception:  # pragma: no cover
     previz = None
 
-_MODEL_EXTS = {".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply"}
+try:
+    from . import usd_io
+except Exception:  # pragma: no cover
+    usd_io = None
+
+_MODEL_EXTS = {".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply",
+               ".usd", ".usda", ".usdc", ".usdz"}
 
 # three.js and its loaders, for the viewer's 3D tabs. Outside js/ so ComfyUI
 # doesn't import them at startup; served by /bepic/lib/three/<name> instead.
@@ -79,6 +85,23 @@ def _decode_image_upload(dataurl, force_png=False):
     return buf.getvalue(), ("png" if fmt == "PNG" else "jpg")
 
 
+def _usd_display_path(path):
+    """The GLB standing in for a USD file, or the path itself when it isn't one.
+
+    The viewport speaks glTF; a stage is flattened once and cached. Failing to
+    build it is reported to the log and the original path is returned, so the
+    client gets a plain "can't read this" rather than a broken response.
+    """
+    if usd_io is None or not usd_io.is_usd(path):
+        return path
+    try:
+        proxy = usd_io.display_proxy(path)
+        return proxy or path
+    except Exception as e:
+        print(f"[bEpicViewer] could not build a preview of {os.path.basename(path)}: {e}")
+        return path
+
+
 def _file_response(path):
     """Serve an image/video file, swapping in a browser-renderable PNG proxy for
     formats an <img> can't decode (exr / tiff / dpx / ...).
@@ -89,6 +112,7 @@ def _file_response(path):
     re-download. That is what lets the viewer drop the per-request cache-buster
     it used to append, which was defeating its own frame-caching.
     """
+    path = _usd_display_path(path)
     if media_resolve is not None:
         try:
             proxy = media_resolve.proxy_for_display(path)
@@ -937,6 +961,72 @@ try:
             return web.json_response({"ok": True, "path": path,
                                       "name": previz._safe_name(name)})
 
+        async def _bepic_usd_export(request):
+            """Write a previz scene out as a USD stage."""
+            if usd_io is None or not usd_io.available():
+                return web.json_response({"error": "this install has no USD (pip install usd-core)"},
+                                         status=501)
+            try:
+                data = await request.json()
+            except Exception:
+                data = None
+            if not isinstance(data, dict) or not isinstance(data.get("scene"), dict):
+                return web.json_response({"error": "bad request"}, status=400)
+
+            target = data.get("path")
+            if target:
+                target = os.path.abspath(str(target))
+                if not path_access.is_allowed(target):
+                    return web.json_response({"error": path_access.refusal(target)}, status=403)
+                if not usd_io.is_usd(target):
+                    return web.json_response({"error": "that name is not a USD file"}, status=400)
+            else:
+                name = previz._safe_name(data.get("name") or "previz") if previz else "previz"
+                ext = "usdc" if str(data.get("format", "")).lower() == "usdc" else "usda"
+                folder = previz.scenes_dir(create=True) if previz else folder_paths.get_output_directory()
+                target = os.path.join(folder, f"{name}.{ext}")
+            try:
+                written = usd_io.export_scene(data["scene"], target)
+            except Exception as e:
+                return web.json_response({"error": str(e)}, status=400)
+            return web.json_response({"ok": True, "path": written,
+                                      "name": os.path.basename(written)})
+
+        async def _bepic_usd_import(request):
+            """Read a USD stage into a previz scene."""
+            if usd_io is None or not usd_io.available():
+                return web.json_response({"error": "this install has no USD (pip install usd-core)"},
+                                         status=501)
+            raw = request.query.get("path") or ""
+            if not raw:
+                return web.json_response({"error": "missing path"}, status=400)
+            path = os.path.abspath(raw)
+            if not path_access.is_allowed(path):
+                return web.json_response({"error": path_access.refusal(path)}, status=403)
+            if not os.path.isfile(path):
+                return web.json_response({"error": "no such stage"}, status=404)
+            try:
+                scene = usd_io.import_scene(path)
+            except Exception as e:
+                return web.json_response({"error": str(e)}, status=400)
+            return web.json_response({"ok": True, "path": path, "scene": scene})
+
+        async def _bepic_usd_stages(_request):
+            """USD stages sitting in output/3d_scenes, for the Load menu."""
+            if previz is None:
+                return web.json_response({"stages": []})
+            folder = previz.scenes_dir()
+            out = []
+            try:
+                names = os.listdir(folder)
+            except OSError:
+                names = []
+            for n in sorted(names):
+                if os.path.splitext(n)[1].lower() in (usd_io.USD_EXTS if usd_io else set()):
+                    out.append({"name": n, "path": os.path.join(folder, n)})
+            return web.json_response({"stages": out, "dir": folder,
+                                      "available": bool(usd_io and usd_io.available())})
+
         def _is_local(request):
             return (request.remote or "") in ("127.0.0.1", "::1", "localhost")
 
@@ -1017,6 +1107,12 @@ try:
         _safe_add("POST", "/api/bepic/previz_frame", _bepic_previz_frame)
         _safe_add("POST", "/bepic/previz_encode", _bepic_previz_encode)
         _safe_add("POST", "/api/bepic/previz_encode", _bepic_previz_encode)
+        _safe_add("POST", "/bepic/usd_export", _bepic_usd_export)
+        _safe_add("POST", "/api/bepic/usd_export", _bepic_usd_export)
+        _safe_add("GET", "/bepic/usd_import", _bepic_usd_import)
+        _safe_add("GET", "/api/bepic/usd_import", _bepic_usd_import)
+        _safe_add("GET", "/bepic/usd_stages", _bepic_usd_stages)
+        _safe_add("GET", "/api/bepic/usd_stages", _bepic_usd_stages)
         _safe_add("POST", "/api/bepic/model_thumb", _bepic_model_thumb)
         _safe_add("POST", "/bepic/reveal", _bepic_reveal)
         _safe_add("POST", "/api/bepic/reveal", _bepic_reveal)

@@ -42,8 +42,9 @@ function loadLibs() {
     return _libsPromise;
 }
 
-export const MODEL_FORMATS = ["glb", "gltf", "fbx", "obj", "stl", "ply"];
-const _MODEL_RE = /\.(glb|gltf|fbx|obj|stl|ply)$/i;
+export const MODEL_FORMATS = ["glb", "gltf", "fbx", "obj", "stl", "ply",
+                               "usd", "usda", "usdc", "usdz"];
+const _MODEL_RE = /\.(glb|gltf|fbx|obj|stl|ply|usda|usdc|usdz|usd)$/i;
 
 /** The 3D format of a viewer frame, or "" when it isn't a model. */
 export function modelFormatOf(frame) {
@@ -560,6 +561,10 @@ export class Model3DView {
 
     async _load(frame, url, format) {
         const { THREE, GLTFLoader, FBXLoader, OBJLoader, STLLoader, PLYLoader } = this.libs;
+        // A USD stage is composed on the server — layers, references, payloads
+        // and all — and handed over as a GLB. three.js has no USD crate reader
+        // (its USDCParser is a stub), so this is the only honest way to show one.
+        if (format.startsWith("usd")) format = "glb";
         const res = await fetch(url);
         if (!res.ok) throw new Error(`the server answered ${res.status}`);
 
