@@ -74,6 +74,7 @@ export const PrevizMixin = {
         this._setScene(key, null);
         if (this._model3d) this._model3d.setScene(S.makeScene(), 0);
         this._previzHidePanel();
+        this.previzRefreshCurves();          // takes the curve strip down with it
         this.applyTimelineBounds();
         this.refreshView();
         this.queuePersistViewerState();
@@ -179,7 +180,7 @@ export const PrevizMixin = {
      * without it only the transforms are re-applied, which is what dragging the
      * gizmo or scrubbing the timeline needs.
      */
-    previzChanged({ reload = false, persist = true } = {}) {
+    previzChanged({ reload = false, persist = true, light = false } = {}) {
         const scene = this.previzScene();
         if (!scene) return Promise.resolve();
         const view = this._modelView();
@@ -189,8 +190,12 @@ export const PrevizMixin = {
         // this the gizmo stayed on whatever was selected before, so dragging it
         // moved something other than the item the panel was showing.
         if (view.selected !== this._previzSelection) view.select(this._previzSelection);
-        this._previzRenderPanel();
+        // `light` is for the middle of a drag: rebuilding the outliner on every
+        // mouse move is a lot of DOM for something that hasn't changed.
+        if (light) this._previzRefreshFields();
+        else this._previzRenderPanel();
         this._previzRenderTicks();
+        this.previzRefreshCurves();
         if (persist) {
             this.previzPersist();
             this.queuePersistViewerState();
@@ -219,6 +224,7 @@ export const PrevizMixin = {
         if (this._model3d) this._model3d.select(id);
         this._previzRenderPanel();
         this._previzRenderTicks();
+        this.previzRefreshCurves();
     },
 
     previzSelectedItem() {
@@ -244,6 +250,27 @@ export const PrevizMixin = {
         // The first model in an empty scene is what the camera should frame.
         if (wasEmpty && this._model3d) this._model3d.resetView();
         return added;
+    },
+
+    /**
+     * Add a blocking shape. It lands at the middle of the view rather than at
+     * the world origin, so it appears where you are looking instead of
+     * somewhere off screen.
+     */
+    async previzAddPrimitive(type) {
+        const scene = this.previzScene();
+        if (!scene) return null;
+        const wasEmpty = scene.items.length === 0;
+        const item = S.makePrimitiveItem(type);
+        item.name = S.uniqueName(scene, item.name);
+        const view = this._modelView();
+        const at = view.viewFocus && view.viewFocus();
+        if (at) item.position = [at[0], item.position[1] + at[1], at[2]];
+        scene.items.push(item);
+        this._previzSelection = item.id;
+        await this.previzChanged({ reload: true });
+        if (wasEmpty && this._model3d) this._model3d.resetView();
+        return item;
     },
 
     /** A camera where the viewport is looking right now. */
@@ -453,6 +480,20 @@ export const PrevizMixin = {
         const addModelBtn = el("button", "previz-btn", "+ Model");
         addModelBtn.title = "Add the file browser's selected model, or open the browser to pick one";
         addModelBtn.onclick = () => this.previzAddFromBrowser();
+        const addShape = el("select", "previz-sel");
+        addShape.title = "Add a shape to block the scene out with";
+        addShape.append(Object.assign(doc.createElement("option"),
+                                      { value: "", textContent: "+ Shape" }));
+        for (const spec of S.PRIMITIVES) {
+            addShape.append(Object.assign(doc.createElement("option"),
+                                          { value: spec.type, textContent: spec.label }));
+        }
+        addShape.onchange = () => {
+            const type = addShape.value;
+            addShape.value = "";
+            if (type) this.previzAddPrimitive(type);
+        };
+
         const addCamBtn = el("button", "previz-btn", "+ Camera");
         addCamBtn.title = "Add a camera where the view is now";
         addCamBtn.onclick = () => this.previzAddCamera();
@@ -460,7 +501,7 @@ export const PrevizMixin = {
         dupBtn.onclick = () => this.previzDuplicate();
         const delBtn = el("button", "previz-btn", "Delete");
         delBtn.onclick = () => this.previzDelete();
-        actions.append(addModelBtn, addCamBtn, dupBtn, delBtn);
+        actions.append(addModelBtn, addShape, addCamBtn, dupBtn, delBtn);
 
         const gizmoRow = el("div", "previz-row previz-gizmo");
         const gizmoBtns = {};
@@ -641,6 +682,24 @@ ${failed}`;
             row.append(key);
             ui.props.append(row);
         };
+
+        if (item.kind === "primitive") {
+            const row = doc.createElement("div");
+            row.className = "previz-row";
+            row.append(Object.assign(doc.createElement("span"),
+                                     { className: "previz-label", textContent: "Colour" }));
+            const swatch = doc.createElement("input");
+            swatch.type = "color";
+            swatch.className = "previz-color";
+            swatch.value = item.color || S.DEFAULT_COLOR;
+            swatch.oninput = () => {
+                item.color = swatch.value;
+                // A colour change repaints the shape; it doesn't rebuild it.
+                this.previzChanged({ reload: true });
+            };
+            row.append(swatch);
+            ui.props.append(row);
+        }
 
         vecRow("position", "Move", 0.1);
         vecRow("rotation", "Rotate", 1);

@@ -384,6 +384,7 @@ export const PlaybackMixin = {
             if (this._model3d) this._model3d.applyFrame(this.currentFrame);
             this._previzRenderPanel();
             this._previzRenderTicks();
+            this.previzRefreshCurves();
             this.timeline.value = this.currentFrame;
             this.container.querySelector('#cur-f').innerText = this.currentFrame;
             return;

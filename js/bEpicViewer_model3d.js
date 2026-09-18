@@ -809,6 +809,15 @@ export class Model3DView {
             if (item.kind === "model" && entry.key !== this._srcKey(item.src)) {
                 this._disposeEntry(entry, false);
                 pending.push(this._loadEntry(entry, item));
+            } else if (item.kind === "primitive") {
+                const type = (item.primitive && item.primitive.type) || "box";
+                if (entry.key !== type) {
+                    this._disposeEntry(entry, false);
+                    this._buildPrimitive(entry, item);
+                } else if (entry.material && entry.color !== item.color) {
+                    entry.material.color.set(item.color || "#9a9a9a");
+                    entry.color = item.color;
+                }
             }
         }
         for (const [id, entry] of [...this._entries]) {
@@ -832,6 +841,47 @@ export class Model3DView {
         return src.path || src.url || [src.type, src.subfolder, src.filename].filter(Boolean).join("/");
     }
 
+    /**
+     * Geometry for a built-in shape, at unit size: a 1-unit box, a half-unit
+     * radius, a 1×1 plane lying flat. Size is the item's scale, so the gizmo's
+     * scale handles are the shape's size handles.
+     */
+    _primitiveGeometry(type) {
+        const { THREE } = this.libs;
+        switch (type) {
+            case "sphere":   return new THREE.SphereGeometry(0.5, 32, 16);
+            case "plane":    return new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+            case "cylinder": return new THREE.CylinderGeometry(0.5, 0.5, 1, 32);
+            case "cone":     return new THREE.ConeGeometry(0.5, 1, 32);
+            case "torus":    return new THREE.TorusGeometry(0.35, 0.15, 16, 48);
+            default:         return new THREE.BoxGeometry(1, 1, 1);
+        }
+    }
+
+    _buildPrimitive(entry, item) {
+        const { THREE } = this.libs;
+        const type = (item.primitive && item.primitive.type) || "box";
+        const geometry = this._primitiveGeometry(type);
+        const material = new THREE.MeshStandardMaterial({
+            color: new THREE.Color(item.color || "#9a9a9a"),
+            roughness: 0.85, metalness: 0.0,
+            // A plane has no back, and a previz floor is looked at from below
+            // often enough that a single-sided one reads as a hole.
+            side: type === "plane" ? THREE.DoubleSide : THREE.FrontSide,
+        });
+        const mesh = new THREE.Mesh(geometry, material);
+        const group = new THREE.Group();
+        group.add(mesh);
+        entry.root.add(group);
+        entry.object = group;
+        entry.material = material;
+        entry.color = item.color;
+        entry.key = type;
+        entry.stats = this._statsOf(group, type);
+        this._originals.set(mesh, material);
+        return entry;
+    }
+
     async _addEntry(item) {
         const { THREE } = this.libs;
         // A camera IS its own root, so the gizmo and the orbit controls move the
@@ -844,6 +894,11 @@ export class Model3DView {
         this.scene.add(root);
         const entry = { item, root, key: "", mixer: null, clips: [], camera: null, helper: null, stats: null };
         this._entries.set(item.id, entry);
+
+        if (item.kind === "primitive") {
+            this._buildPrimitive(entry, item);
+            return entry;
+        }
 
         if (item.kind === "camera") {
             entry.camera = root;
@@ -896,6 +951,7 @@ export class Model3DView {
             }
             entry.object = null;
             entry.stats = null;
+            entry.material = null;      // a shape's own material went with it
         }
         if (!full) return;
         if (entry.helper) { this.scene.remove(entry.helper); entry.helper.dispose(); entry.helper = null; }
@@ -968,9 +1024,10 @@ export class Model3DView {
 
     _updateSceneStats() {
         if (!this.scene3d) return;
-        const total = { vertices: 0, triangles: 0, points: 0, meshes: 0, objects: 0, cameras: 0, format: "scene" };
+        const total = { vertices: 0, triangles: 0, points: 0, meshes: 0, objects: 0, cameras: 0, shapes: 0, format: "scene" };
         for (const entry of this._entries.values()) {
             if (entry.camera) { total.cameras++; continue; }
+            if (entry.item && entry.item.kind === "primitive") total.shapes++;
             total.objects++;
             if (!entry.stats) continue;
             total.vertices += entry.stats.vertices;
@@ -1062,6 +1119,12 @@ export class Model3DView {
             rotation: [object.rotation.x * R, object.rotation.y * R, object.rotation.z * R],
             scale: object.scale.toArray(),
         };
+    }
+
+    /** The point the view is looking at — where a new shape should land. */
+    viewFocus() {
+        if (!this.controls) return null;
+        return this.controls.target.toArray();
     }
 
     /** Where the free camera is now — for "add a camera from this view". */

@@ -56,11 +56,12 @@ A 3D tab starts with one model. Press **Previz** in the 3D toolbar and that tab 
 | Part | What it does |
 |---|---|
 | **+ Model** | Adds the model selected in the [File Browser](other.md#file-browser). You can also drag models straight into the 3D view, from the browser, the history strip or your desktop. |
+| **+ Shape** | Adds a box, sphere, plane, cylinder, cone or torus — no file needed, for blocking a scene out. It lands where the view is looking. |
 | **+ Camera** | Adds a camera where the view is right now. |
 | **Duplicate / Delete** | Copies or removes the selected item, animation included. |
 | **Move / Rotate / Scale** | Which gizmo the selected item gets. |
 | The list | Every item in the scene. Click to select, **◉** hides and shows, **▣** looks through a camera, **•** marks an item that has keyframes. |
-| Transform fields | The selected item's position, rotation (degrees) and scale — and a camera's field of view. |
+| Transform fields | The selected item's position, rotation (degrees) and scale — and a camera's field of view, or a shape's colour. |
 | **fps / frames** | The shot's frame rate and length. The viewer's timeline covers exactly this range while previz is on. |
 
 Navigation follows Maya: hold <kbd>Alt</kbd> and the left button tumbles, the middle button tracks and the right button dollies. Without <kbd>Alt</kbd> the left button belongs to the scene — click an object in the viewport to select it, or a camera's frustum lines, and drag the gizmo to move it. The numbers follow, and so does the scene. (On a plain one-model tab there is nothing to select, so left-drag orbits there as it always did.)
@@ -83,6 +84,12 @@ These only answer on a previz tab, so <kbd>R</kbd> is still the red channel and 
 
 While you are looking through a camera it has no gizmo: there would be no handles on screen to grab. Step outside with **▣** to move it by hand.
 
+### Shapes
+
+**+ Shape** drops a primitive into the scene: **Box**, **Sphere**, **Plane**, **Cylinder**, **Cone** or **Torus**. They need no file and are saved with the scene like anything else, so they cost nothing to keep around.
+
+Each is built at unit size — a 1-unit box, a half-unit radius — and sized by its **Scale**, so the scale gizmo is also the size gizmo. A plane arrives lying flat and 10 units across, ready to be a floor, and is visible from both sides. Give a shape a **Colour** in the panel to tell your blocking apart; they animate exactly like a loaded model.
+
 ### Animation
 
 Keyframes are per item and per property.
@@ -99,6 +106,24 @@ Keyframes are per item and per property.
 Keyframes show as orange ticks under the timeline; click one to jump to it. Play, scrub and step work as they do for footage. A model with its own animation (an FBX clip) is scrubbed by the timeline too, so the whole shot stays frame-accurate.
 
 Rotations interpolate the short way round, so a turn from 350° to 10° moves 20°, not 340°.
+
+### The Curve Editor
+
+Keys are also shown as a graph in the strip above the timeline, the same place the [Roto tool](other.md) puts its curves. It appears whenever the selected item has an animation; click the title to fold it away.
+
+It plots **value over time** — one curve per channel, X red, Y green, Z blue (a camera's field of view gets a single curve). That's the difference from Roto's editor: roto animates one shape, so its graph is about timing, while here every channel is a plain number in world units or degrees, and the useful question is what the number does.
+
+| Action | How |
+|---|---|
+| Pick a channel | **Move**, **Rotate**, **Scale** (or **FOV**). A channel with no keys is greyed out. |
+| Show / hide an axis | **X**, **Y**, **Z** |
+| Retime a key | Drag it sideways. All three axes move together — one key holds the whole property, as it does everywhere else. |
+| Change a value | Drag a key up or down; only the channel you grabbed changes. Hold <kbd>Shift</kbd> to retime without touching the value. |
+| Remove a key | Double-click it |
+
+The curve is drawn through the scene's own interpolation, so **Smooth**, **Linear** and **Hold** look here exactly as they play. Easing itself stays on the key, in the previz panel — there are no speed handles to drag.
+
+The white line is the current frame, and the graph spans the timeline's range.
 
 ### Rendering the Shot Back Into ComfyUI
 

@@ -18,6 +18,21 @@ export const DEFAULT_FPS = 24;
 export const DEFAULT_LENGTH = 120;
 export const TRACKS = ["position", "rotation", "scale", "fov"];
 
+// Blocking shapes the viewer can make on its own — no file, no loader. Each is
+// built at unit size and placed by its transform, so the gizmo's scale handles
+// are also its size handles. `scale` is the default the item is created with.
+export const PRIMITIVES = [
+    { type: "box",      label: "Box",      scale: [1, 1, 1] },
+    { type: "sphere",   label: "Sphere",   scale: [1, 1, 1] },
+    { type: "plane",    label: "Plane",    scale: [10, 1, 10] },   // lies flat, as a floor
+    { type: "cylinder", label: "Cylinder", scale: [1, 1, 1] },
+    { type: "cone",     label: "Cone",     scale: [1, 1, 1] },
+    { type: "torus",    label: "Torus",    scale: [1, 1, 1] },
+];
+
+const PRIMITIVE_TYPES = new Set(PRIMITIVES.map((p) => p.type));
+export const DEFAULT_COLOR = "#9a9a9a";
+
 let _seq = 0;
 
 export function newId(prefix = "i") {
@@ -50,6 +65,22 @@ export function makeModelItem(src, name) {
     };
 }
 
+export function makePrimitiveItem(type, name) {
+    const spec = PRIMITIVES.find((p) => p.type === type) || PRIMITIVES[0];
+    return {
+        id: newId("p"),
+        kind: "primitive",
+        name: name || spec.label,
+        primitive: { type: spec.type },
+        color: DEFAULT_COLOR,
+        position: [0, spec.type === "plane" ? 0 : 0.5, 0],   // sitting on the grid
+        rotation: [0, 0, 0],
+        scale: spec.scale.slice(),
+        visible: true,
+        tracks: {},
+    };
+}
+
 export function makeCameraItem(name, patch = {}) {
     return {
         id: newId("c"),
@@ -76,6 +107,11 @@ export function cameras(scene) {
 
 export function models(scene) {
     return (scene.items || []).filter((it) => it && it.kind === "model");
+}
+
+/** Everything that is drawn: loaded files and built-in shapes alike. */
+export function geometry(scene) {
+    return (scene.items || []).filter((it) => it && it.kind !== "camera");
 }
 
 /** A name no other item carries, so the outliner never shows two the same. */
@@ -246,18 +282,28 @@ export function parseScene(raw) {
     for (const raw of Array.isArray(data.items) ? data.items : []) {
         if (!raw || typeof raw !== "object") continue;
         const isCam = raw.kind === "camera";
+        const isPrim = raw.kind === "primitive";
         const item = {
-            id: typeof raw.id === "string" && raw.id ? raw.id : newId(isCam ? "c" : "m"),
-            kind: isCam ? "camera" : "model",
-            name: typeof raw.name === "string" && raw.name ? raw.name : (isCam ? "Camera" : "model"),
+            id: typeof raw.id === "string" && raw.id ? raw.id : newId(isCam ? "c" : isPrim ? "p" : "m"),
+            kind: isCam ? "camera" : isPrim ? "primitive" : "model",
+            name: typeof raw.name === "string" && raw.name ? raw.name : (isCam ? "Camera" : isPrim ? "Shape" : "model"),
             position: vec(raw.position, [0, 0, 0]),
             rotation: vec(raw.rotation, [0, 0, 0]),
             scale: vec(raw.scale, [1, 1, 1]),
             visible: raw.visible !== false,
             tracks: {},
         };
-        if (isCam) item.fov = num(raw.fov, 35);
-        else item.src = raw.src && typeof raw.src === "object" ? raw.src : null;
+        if (isCam) {
+            item.fov = num(raw.fov, 35);
+        } else if (isPrim) {
+            const type = raw.primitive && PRIMITIVE_TYPES.has(raw.primitive.type)
+                ? raw.primitive.type : "box";
+            item.primitive = { type };
+            item.color = typeof raw.color === "string" && /^#[0-9a-f]{6}$/i.test(raw.color)
+                ? raw.color : DEFAULT_COLOR;
+        } else {
+            item.src = raw.src && typeof raw.src === "object" ? raw.src : null;
+        }
 
         const tracks = raw.tracks && typeof raw.tracks === "object" ? raw.tracks : {};
         for (const prop of TRACKS) {
@@ -275,8 +321,9 @@ export function parseScene(raw) {
             }
         }
         // A model with no file left to point at is dropped: it would show as an
-        // invisible row the user can't fix.
-        if (!isCam && !item.src) continue;
+        // invisible row the user can't fix. A shape carries its own geometry, so
+        // it has nothing to lose.
+        if (!isCam && !isPrim && !item.src) continue;
         items.push(item);
     }
 
