@@ -84,13 +84,13 @@ export const ModelMixin = {
         if (this._model3d) this._model3d.hide();
     },
 
+    // A 3D tab has no exposure and no channels: the picture is a render, not a
+    // photograph, and the controls for those hide with the image layers (the
+    // slider by CSS, the keys by their `enabled` guards in the keymap). The
+    // render is therefore always shown as it is.
     _applyModelLook() {
         if (!this._model3d) return;
-        let channel = "";
-        if (this.channelView === "red") channel = "url(#bepic-channel-red)";
-        else if (this.channelView === "green") channel = "url(#bepic-channel-green)";
-        else if (this.channelView === "blue") channel = "url(#bepic-channel-blue)";
-        this._model3d.setLook(this.exposure, channel);
+        this._model3d.setLook(0, "");
     },
 
     _modelInfoText() {

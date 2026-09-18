@@ -737,6 +737,10 @@ textarea.param-input {
 .model-view { position: absolute; inset: 0; z-index: 8; display: none; background: #282828; cursor: grab; }
 .model-view:active { cursor: grabbing; }
 .model-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; touch-action: none; }
+/* Exposure and channel isolation are picture controls; a 3D tab has neither,
+   so the slider goes with the image layers (the hotkeys step aside in
+   bEpicViewer_keymap.js). */
+.viewport.model-mode #exposure-control,
 .viewport.model-mode #contact-container,
 .viewport.model-mode #img-frame,
 .viewport.model-mode #compare-slider,

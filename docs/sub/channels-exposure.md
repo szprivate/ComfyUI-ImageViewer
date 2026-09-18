@@ -11,6 +11,8 @@
 
 The exposure slider ranges from **−4 EV** to **+4 EV** and adjusts display brightness using a CSS `brightness()` filter — the underlying image data is **never modified**.
 
+These are controls for a picture. On a [3D tab](models-3d.md) the bar is hidden and <kbd>R</kbd> / <kbd>G</kbd> / <kbd>B</kbd> and the <kbd>E</kbd> drag do nothing, so those keys reach ComfyUI (and, in previz, the tools they belong to there).
+
 ### Using the Slider
 
 Drag the slider knob or click on the track to set an EV value. The readout on the right updates in real time (e.g. `+1.5 EV`).

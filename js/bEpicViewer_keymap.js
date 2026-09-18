@@ -70,6 +70,11 @@ const _historyOpen = (p) => !!(p && p.isPanelDocked && p.isPanelDocked("history"
 // A 3D tab with a previz scene on it: where the gizmo keys mean something.
 const _previz = (p) => !!(p && p.isPrevizTab && p.isPrevizTab());
 
+// Any 3D tab, previz or a lone model. Exposure and channel isolation are
+// darkroom controls for a picture; a rendered model has neither, so they step
+// aside there — and the exposure slider hides with them (see the CSS).
+const _picture = (p) => !(p && p._modelMode);
+
 const ACTION_DEFS = [
     { key: "StepBack",     label: "Step Back One Frame",     combo: { key: "ArrowLeft"  },
       run: (p) => p.step(-1) },
@@ -117,11 +122,11 @@ const ACTION_DEFS = [
     { key: "CycleCompare", label: "Cycle Compare Mode",      combo: { key: "c" },
       run: (p) => p.cycleCompareMode() },
     { key: "ChannelRed",   label: "Isolate Red Channel",     combo: { key: "r" },
-      enabled: (p) => !_previz(p), run: (p) => p.setChannelView(p.channelView === "red"   ? "all" : "red") },
+      enabled: _picture, run: (p) => p.setChannelView(p.channelView === "red"   ? "all" : "red") },
     { key: "ChannelGreen", label: "Isolate Green Channel",   combo: { key: "g" },
-      run: (p) => p.setChannelView(p.channelView === "green" ? "all" : "green") },
+      enabled: _picture, run: (p) => p.setChannelView(p.channelView === "green" ? "all" : "green") },
     { key: "ChannelBlue",  label: "Isolate Blue Channel",    combo: { key: "b" },
-      run: (p) => p.setChannelView(p.channelView === "blue"  ? "all" : "blue") },
+      enabled: _picture, run: (p) => p.setChannelView(p.channelView === "blue"  ? "all" : "blue") },
     { key: "ToggleShape",  label: "Toggle Tensor Shape Overlay", combo: { key: "s" },
       run: (p) => p.toggleShapeOverlay() },
     { key: "ToggleHelp",   label: "Toggle Hotkey Help",      combo: { key: "?", shift: true },

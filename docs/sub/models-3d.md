@@ -41,12 +41,11 @@ With **save_to_output** off, the model is only previewed from ComfyUI's temp fol
 | Material | **Original**, **Clay**, **Normal** or **Wireframe** from the toolbar |
 | Grid | **Grid** toggles it |
 | Animation | FBX / glTF animations play on their own; the ▶ / ❚❚ button pauses them |
-| Brightness | The [exposure slider](channels-exposure.md) and R/G/B isolation work on the render |
 | Info | The shape overlay (toolbar button) shows vertex, triangle and point counts |
 
 The first time a model is shown, the viewer keeps a snapshot of it as its history thumbnail. Until then the tile shows a cube.
 
-Compare, contact sheet and the drawing tools don't apply to a model tab.
+Compare, contact sheet and the drawing tools don't apply to a model tab. Neither do [exposure and channel isolation](channels-exposure.md) — a render is not a photograph — so the exposure bar is hidden on a 3D tab and its keys are left to ComfyUI.
 
 ## Previz: Building a Scene
 
@@ -74,7 +73,7 @@ Navigation follows Maya: hold <kbd>Alt</kbd> and the left button tumbles, the mi
 | <kbd>R</kbd> | Scale |
 | <kbd>X</kbd> | Switch the gizmo between **World** and **Local** axes |
 
-These only answer on a previz tab, so <kbd>R</kbd> is still the red channel and <kbd>E</kbd> still the exposure drag everywhere else. Like every viewer hotkey they can be rebound in **Settings → Keybinding**.
+These only answer on a previz tab, so <kbd>R</kbd> is still the red channel and <kbd>E</kbd> still the exposure drag on a picture. Like every viewer hotkey they can be rebound in **Settings → Keybinding**.
 
 **World / Local** is also a button next to the tool buttons. World lines the handles up with the grid; Local lines them up with the item's own axes. Scaling is always along the item's own axes, as it is in every 3D app.
 
