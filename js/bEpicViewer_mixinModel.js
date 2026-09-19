@@ -90,6 +90,9 @@ export const ModelMixin = {
         this._modelMode = false;
         this.viewport.classList.remove("model-mode");
         if (this._model3d) this._model3d.hide();
+        // The previz panel is a docked panel now, so it no longer disappears
+        // along with the 3D view — it has to be told the picture has changed.
+        if (this._previzRenderPanel) this._previzRenderPanel();
     },
 
     // A 3D tab has no exposure and no channels: the picture is a render, not a

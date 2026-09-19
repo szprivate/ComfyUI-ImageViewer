@@ -454,54 +454,48 @@ export const PrevizMixin = {
 
     // ── Panel ────────────────────────────────────────────────────────────────
 
+    /**
+     * Put the panel away. The body it built stays with it, so turning previz
+     * back on picks up the outliner, the fields and the scroll position it had.
+     */
     _previzHidePanel() {
+        this._previzPanelOn = false;
+        this._previzCloseAddMenu();
         if (this._previzUI && this._previzUI.root) this._previzUI.root.style.display = "none";
+        if (this.isPanelDocked("previz")) this.setPanelDocked("previz", false);
     },
 
+    /**
+     * Fill the dock panel in.
+     *
+     * The panel element itself comes from the markup and is owned by the dock
+     * (rail, width, title bar, dragging); previz only puts a body inside it, so
+     * an undocked viewer takes the whole thing with it and nothing here needs
+     * to know which window it ended up in.
+     */
     _previzBuildPanel() {
-        const view = this._modelView();
-        const doc = view.root.ownerDocument;
+        const host = this.previzPanel;
+        if (!host) return null;
+        const doc = host.ownerDocument;
         const el = (tag, cls, text) => {
             const n = doc.createElement(tag);
             if (cls) n.className = cls;
             if (text !== undefined) n.textContent = text;
             return n;
         };
-        const root = el("div", "previz-panel");
-
-        const head = el("div", "previz-head");
-        head.append(el("span", "previz-title", "Previz"));
-        const closeBtn = el("button", "previz-x", "×");
-        closeBtn.title = "Leave previz (the scene is kept)";
-        closeBtn.onclick = () => this.exitPreviz();
-        head.append(closeBtn);
+        const root = el("div", "previz-body");
 
         const actions = el("div", "previz-actions");
-        const addModelBtn = el("button", "previz-btn", "+ Model");
-        addModelBtn.title = "Add the file browser's selected model, or open the browser to pick one";
-        addModelBtn.onclick = () => this.previzAddFromBrowser();
-        const addShape = el("select", "previz-sel");
-        addShape.title = "Add a shape to block the scene out with";
-        addShape.append(Object.assign(doc.createElement("option"),
-                                      { value: "", textContent: "+ Shape" }));
-        for (const spec of S.PRIMITIVES) {
-            addShape.append(Object.assign(doc.createElement("option"),
-                                          { value: spec.type, textContent: spec.label }));
-        }
-        addShape.onchange = () => {
-            const type = addShape.value;
-            addShape.value = "";
-            if (type) this.previzAddPrimitive(type);
-        };
-
-        const addCamBtn = el("button", "previz-btn", "+ Camera");
-        addCamBtn.title = "Add a camera where the view is now";
-        addCamBtn.onclick = () => this.previzAddCamera();
+        const addBtn = el("button", "previz-btn previz-add");
+        addBtn.title = "Add a model, a camera or a shape";
+        addBtn.textContent = "+";               // stands in if the skin is missing
+        this._setIcon(addBtn, "icon-circle-plus");
+        addBtn.onclick = () => this._previzToggleAddMenu(addBtn);
         const dupBtn = el("button", "previz-btn", "Duplicate");
         dupBtn.onclick = () => this.previzDuplicate();
         const delBtn = el("button", "previz-btn", "Delete");
         delBtn.onclick = () => this.previzDelete();
-        actions.append(addModelBtn, addShape, addCamBtn, dupBtn, delBtn);
+        actions.append(addBtn, dupBtn, delBtn);
 
         const gizmoRow = el("div", "previz-row previz-gizmo");
         const gizmoBtns = {};
@@ -548,19 +542,101 @@ export const PrevizMixin = {
         const usdIn = el("button", "previz-btn", "USD ↓");
         usdIn.title = "Build the scene from a USD stage";
         usdIn.onclick = () => this.previzImportUsd();
-        foot.append(renderBtn, saveBtn, loadBtn, usdOut, usdIn);
+        // The dock's own ✕ puts the panel away; leaving previz is a different
+        // thing and belongs with the other scene-wide commands.
+        const leaveBtn = el("button", "previz-btn", "Leave previz");
+        leaveBtn.title = "Leave previz (the scene is kept)";
+        leaveBtn.onclick = () => this.exitPreviz();
+        foot.append(renderBtn, saveBtn, loadBtn, usdOut, usdIn, leaveBtn);
 
-        root.append(head, actions, gizmoRow, list, props, foot);
-        view.root.appendChild(root);
+        root.append(actions, gizmoRow, list, props, foot);
+        // The title bar the dock built is a sibling and stays; only previz's own
+        // body is replaced.
+        this._previzCloseAddMenu();
+        host.querySelectorAll(":scope > .previz-body").forEach((n) => n.remove());
+        host.appendChild(root);
         this._previzUI = { root, list, props, fpsIn, lenIn, gizmoBtns, spaceBtn };
         return this._previzUI;
+    },
+
+    /**
+     * The "+" menu: a model, a camera, or a shape to block the scene out.
+     *
+     * It hangs off .main-area rather than the panel because the panel clips its
+     * own overflow, and it is built on demand so the listeners that close it
+     * come from whichever document the viewer is living in.
+     */
+    _previzToggleAddMenu(anchor) {
+        if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
+        const host = this.previzPanel && this.previzPanel.closest(".main-area");
+        if (!host) return;
+        const doc = host.ownerDocument;
+
+        const menu = doc.createElement("div");
+        menu.className = "previz-menu";
+        const item = (label, run) => {
+            const b = doc.createElement("button");
+            b.className = "previz-menu-item";
+            b.textContent = label;
+            b.onclick = () => { this._previzCloseAddMenu(); run(); };
+            menu.append(b);
+        };
+        item("Model…", () => this.previzAddFromBrowser());
+        item("Camera", () => this.previzAddCamera());
+        menu.append(Object.assign(doc.createElement("div"), { className: "previz-menu-sep" }));
+        for (const spec of S.PRIMITIVES) item(spec.label, () => this.previzAddPrimitive(spec.type));
+        host.appendChild(menu);
+
+        // Under the button, then pulled back inside whatever room .main-area has.
+        const a = anchor.getBoundingClientRect();
+        const h = host.getBoundingClientRect();
+        menu.style.left = `${a.left - h.left}px`;
+        menu.style.top  = `${a.bottom - h.top + 2}px`;
+        const m = menu.getBoundingClientRect();
+        if (m.bottom > h.bottom) menu.style.top  = `${Math.max(0, a.top - h.top - m.height - 2)}px`;
+        if (m.right  > h.right)  menu.style.left = `${Math.max(0, h.width - m.width - 4)}px`;
+
+        // composedPath, because a listener on the document sees every event from
+        // inside the shadow root retargeted to the host element.
+        this._previzAddMenu = menu;
+        this._previzAddMenuAway = (ev) => {
+            if (ev.type === "keydown") { if (ev.key === "Escape") this._previzCloseAddMenu(); return; }
+            const path = ev.composedPath ? ev.composedPath() : [];
+            if (path.includes(menu) || path.includes(anchor)) return;
+            this._previzCloseAddMenu();
+        };
+        // Kept, rather than read back off the menu later: undocking moves the
+        // menu into another document, and the listeners stay on this one.
+        this._previzAddMenuDoc = doc;
+        doc.addEventListener("pointerdown", this._previzAddMenuAway, true);
+        doc.addEventListener("keydown", this._previzAddMenuAway, true);
+    },
+
+    _previzCloseAddMenu() {
+        if (!this._previzAddMenu) return;
+        const doc = this._previzAddMenuDoc;
+        doc.removeEventListener("pointerdown", this._previzAddMenuAway, true);
+        doc.removeEventListener("keydown", this._previzAddMenuAway, true);
+        this._previzAddMenu.remove();
+        this._previzAddMenu = null;
+        this._previzAddMenuAway = null;
+        this._previzAddMenuDoc = null;
     },
 
     _previzRenderPanel() {
         if (!this.isPrevizTab()) { this._previzHidePanel(); return; }
         const ui = (this._previzUI && this._previzUI.root && this._previzUI.root.isConnected)
             ? this._previzUI : this._previzBuildPanel();
+        if (!ui) return;
         ui.root.style.display = "flex";
+        // Previz coming on is what opens the panel. After that the dock owns
+        // it, so one put away by hand stays away — and stays undrawn, which is
+        // worth having while playback calls through here every frame.
+        if (!this._previzPanelOn) {
+            this._previzPanelOn = true;
+            this.setPanelDocked("previz", true);
+        }
+        if (!this.isPanelDocked("previz")) return;
         const scene = this.previzScene();
         const doc = ui.root.ownerDocument;
 
