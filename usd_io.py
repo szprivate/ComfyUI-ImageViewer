@@ -469,6 +469,23 @@ def _has_arc(prim):
     return False
 
 
+def _mark_external(scene):
+    """Say that these files are addressed by their own absolute path.
+
+    The viewer has two file routes: /bepic/raw_view, which serves ComfyUI's
+    output and temp folders by a short name, and /bepic/view_file, which serves
+    any absolute path inside the allowed folders (path_access). An item without
+    this flag is asked for through the first one, and a stage that lives
+    anywhere else — the input folder, a project drive — comes back 403 with no
+    geometry to show for it.
+    """
+    for item in scene.get("items", []):
+        src = item.get("src")
+        if isinstance(src, dict) and src.get("path"):
+            src["external"] = True
+    return scene
+
+
 def import_scene(path, load_payloads=True):
     """Read a USD stage into a previz scene dict.
 
@@ -513,7 +530,7 @@ def import_scene(path, load_payloads=True):
             scene["items"].append(item)
         if active_id and any(it.get("id") == active_id for it in scene["items"]):
             scene["activeCamera"] = active_id
-        return scene
+        return _mark_external(scene)
 
     # Anyone else's stage: take the layout, and the geometry under it.
     objects, cameras = _object_prims(stage, root)
@@ -539,7 +556,7 @@ def import_scene(path, load_payloads=True):
             if asset:
                 item["src"]["asset"] = asset
         scene["items"].append(item)
-    return scene
+    return _mark_external(scene)
 
 
 def _item_from_prim(prim, xformable, is_camera, shape, asset, stage):
