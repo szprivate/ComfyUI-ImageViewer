@@ -6,12 +6,25 @@
 // as JSON, and a scene file is exactly this shape. Keeping it separate is what
 // makes the animation testable without a browser.
 //
-// A scene is { fps, length, items[], activeCamera }. Every item — model or
-// camera — carries a static transform plus optional animation `tracks`. A track
-// is a sorted list of keyframes { f, v, ease }: `f` is a frame number on the
-// viewer's own timeline, `v` the value at that frame ([x,y,z], or a number for
-// fov), and `ease` how it leaves that key ("smooth" or "linear"). A property
-// with no track holds its static value for the whole shot.
+// A scene is { fps, length, items[], activeCamera }. Every item — model,
+// camera or group — carries a static transform plus optional animation
+// `tracks`. A track is a sorted list of keyframes { f, v, ease }: `f` is a
+// frame number on the viewer's own timeline, `v` the value at that frame
+// ([x,y,z], or a number for fov), and `ease` how it leaves that key ("smooth"
+// or "linear"). A property with no track holds its static value for the whole
+// shot.
+//
+// THE HIERARCHY
+// `items` stays a flat list — it is what a JSON widget, an undo snapshot and a
+// diff all want — and the tree is carried by one field: `parent`, the id of the
+// item this one hangs under, or null at the top. A transform is LOCAL to that
+// parent, exactly as in USD or any DCC, so moving a group moves what is inside
+// it and a child's numbers stay the numbers you typed. A `group` item is a
+// transform and nothing else: it draws no geometry and exists to hold others,
+// which is what a USD Xform or an assembly comes in as.
+//
+// Nothing here walks the tree to place an item — the view parents three.js
+// objects the same way and lets the engine compose the matrices.
 
 export const SCENE_VERSION = 1;
 export const DEFAULT_FPS = 24;
@@ -40,6 +53,21 @@ export function newId(prefix = "i") {
     return `${prefix}${Date.now().toString(36)}${_seq.toString(36)}`;
 }
 
+/** An empty transform others hang under: a USD Xform, or a folder you made. */
+export function makeGroupItem(name) {
+    return {
+        id: newId("g"),
+        kind: "group",
+        name: name || "Group",
+        position: [0, 0, 0],
+        rotation: [0, 0, 0],
+        scale: [1, 1, 1],
+        visible: true,
+        tracks: {},
+        parent: null,
+    };
+}
+
 export function makeScene(patch = {}) {
     return {
         version: SCENE_VERSION,
@@ -62,6 +90,7 @@ export function makeModelItem(src, name) {
         scale: [1, 1, 1],
         visible: true,
         tracks: {},
+        parent: null,
     };
 }
 
@@ -78,6 +107,7 @@ export function makePrimitiveItem(type, name) {
         scale: spec.scale.slice(),
         visible: true,
         tracks: {},
+        parent: null,
     };
 }
 
@@ -92,6 +122,7 @@ export function makeCameraItem(name, patch = {}) {
         fov: 35,
         visible: true,
         tracks: {},
+        parent: null,
         ...patch,
     };
 }
@@ -111,7 +142,79 @@ export function models(scene) {
 
 /** Everything that is drawn: loaded files and built-in shapes alike. */
 export function geometry(scene) {
-    return (scene.items || []).filter((it) => it && it.kind !== "camera");
+    return (scene.items || []).filter((it) => it && it.kind !== "camera" && it.kind !== "group");
+}
+
+export function groups(scene) {
+    return (scene.items || []).filter((it) => it && it.kind === "group");
+}
+
+/** The items hanging directly under `id` (or at the top, for null), in order. */
+export function childrenOf(scene, id) {
+    return (scene.items || []).filter((it) => it && (it.parent || null) === (id || null));
+}
+
+/** Everything under `id`, at any depth — what deleting a group takes with it. */
+export function descendantsOf(scene, id) {
+    const out = [];
+    const walk = (parentId) => {
+        for (const child of childrenOf(scene, parentId)) {
+            out.push(child);
+            walk(child.id);
+        }
+    };
+    walk(id);
+    return out;
+}
+
+/** How deep an item sits, for the outliner's indent. */
+export function depthOf(scene, item) {
+    let depth = 0;
+    let node = item;
+    const seen = new Set();
+    while (node && node.parent && !seen.has(node.id)) {
+        seen.add(node.id);
+        node = itemById(scene, node.parent);
+        if (node) depth += 1;
+    }
+    return depth;
+}
+
+/**
+ * May `id` be moved under `parentId`? Not into itself, and not into its own
+ * descendants — that would cut the branch off the tree and lose it.
+ */
+export function canParent(scene, id, parentId) {
+    if (!id || id === parentId) return false;
+    if (!parentId) return true;
+    const target = itemById(scene, parentId);
+    if (!target) return false;
+    let node = target;
+    const seen = new Set();
+    while (node && !seen.has(node.id)) {
+        if (node.id === id) return false;
+        seen.add(node.id);
+        node = node.parent ? itemById(scene, node.parent) : null;
+    }
+    return true;
+}
+
+/**
+ * Put `id` under `parentId` (null for the top), keeping the flat list in tree
+ * order: an item sits directly after its parent, ahead of the next branch. The
+ * order matters — the outliner reads the list as it stands, and so does an
+ * export.
+ */
+export function setParent(scene, id, parentId) {
+    const item = itemById(scene, id);
+    if (!item || !canParent(scene, id, parentId)) return false;
+    item.parent = parentId || null;
+    const moving = [item, ...descendantsOf(scene, id)];
+    const rest = (scene.items || []).filter((it) => !moving.includes(it));
+    const at = parentId ? rest.findIndex((it) => it.id === parentId) + 1 : rest.length;
+    rest.splice(at, 0, ...moving);
+    scene.items = rest;
+    return true;
 }
 
 /** A name no other item carries, so the outliner never shows two the same. */
@@ -283,10 +386,13 @@ export function parseScene(raw) {
         if (!raw || typeof raw !== "object") continue;
         const isCam = raw.kind === "camera";
         const isPrim = raw.kind === "primitive";
+        const isGroup = raw.kind === "group";
         const item = {
-            id: typeof raw.id === "string" && raw.id ? raw.id : newId(isCam ? "c" : isPrim ? "p" : "m"),
-            kind: isCam ? "camera" : isPrim ? "primitive" : "model",
-            name: typeof raw.name === "string" && raw.name ? raw.name : (isCam ? "Camera" : isPrim ? "Shape" : "model"),
+            id: typeof raw.id === "string" && raw.id ? raw.id : newId(isCam ? "c" : isPrim ? "p" : isGroup ? "g" : "m"),
+            kind: isCam ? "camera" : isPrim ? "primitive" : isGroup ? "group" : "model",
+            name: typeof raw.name === "string" && raw.name ? raw.name
+                : (isCam ? "Camera" : isPrim ? "Shape" : isGroup ? "Group" : "model"),
+            parent: typeof raw.parent === "string" && raw.parent ? raw.parent : null,
             position: vec(raw.position, [0, 0, 0]),
             rotation: vec(raw.rotation, [0, 0, 0]),
             scale: vec(raw.scale, [1, 1, 1]),
@@ -295,6 +401,8 @@ export function parseScene(raw) {
         };
         if (isCam) {
             item.fov = num(raw.fov, 35);
+        } else if (isGroup) {
+            // A group is its transform. Nothing else to read.
         } else if (isPrim) {
             const type = raw.primitive && PRIMITIVE_TYPES.has(raw.primitive.type)
                 ? raw.primitive.type : "box";
@@ -323,7 +431,7 @@ export function parseScene(raw) {
         // A model with no file left to point at is dropped: it would show as an
         // invisible row the user can't fix. A shape carries its own geometry, so
         // it has nothing to lose.
-        if (!isCam && !isPrim && !item.src) continue;
+        if (!isCam && !isPrim && !isGroup && !item.src) continue;
         items.push(item);
     }
 
@@ -334,6 +442,29 @@ export function parseScene(raw) {
         activeCamera: typeof data.activeCamera === "string" ? data.activeCamera : null,
     });
     if (scene.activeCamera && !itemById(scene, scene.activeCamera)) scene.activeCamera = null;
+    repairTree(scene);
+    return scene;
+}
+
+/**
+ * Make the tree true: a parent that isn't there, or a loop made by hand-editing
+ * a widget, would otherwise hide items from the outliner for good. Both are
+ * fixed by lifting the item back to the top rather than dropping it.
+ */
+export function repairTree(scene) {
+    const byId = new Map((scene.items || []).map((it) => [it.id, it]));
+    for (const item of scene.items || []) {
+        if (item.parent && !byId.has(item.parent)) item.parent = null;
+    }
+    for (const item of scene.items || []) {
+        const seen = new Set([item.id]);
+        let node = item.parent ? byId.get(item.parent) : null;
+        while (node) {
+            if (seen.has(node.id)) { item.parent = null; break; }
+            seen.add(node.id);
+            node = node.parent ? byId.get(node.parent) : null;
+        }
+    }
     return scene;
 }
 

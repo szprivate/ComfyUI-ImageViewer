@@ -80,20 +80,21 @@ The bottom bar contains (left to right):
 
 ## Docking Panels
 
-The history strip, the file browser, the previz panel, the animation curves and the parameters panel all live in one of two **rails**, left and right of the picture. A rail is a vertical stack, so panels can sit side by side *or* above one another.
+The history strip, the file browser, the previz panel, the animation curves and the parameters panel all live in one of three **rails**: left and right of the picture, and one along the bottom, between the picture and the timeline. The side rails are vertical stacks, so panels can sit side by side *or* above one another; the bottom rail is a horizontal one, where panels sit next to each other. A wide graph — the animation curves, say — reads better down there than squeezed into a side rail.
 
 Every panel wears a slim **title bar** across its top — a grip, the panel's name, and a **✕**. Drag the bar to move the panel; the ✕ puts it away, keeping its slot so showing it again brings it back where it was.
 
 **Drag a panel by its title bar** to move it:
 
 - Drop it on the **left or right edge of the picture** to send it to that rail.
-- Drop it on the **top or bottom half of another panel** to place it above or below that one, in the same rail.
+- Drop it on the **bottom edge of the picture** to send it to the bottom rail.
+- Drop it on the **top or bottom half of another panel** to place it above or below that one, in the same rail — or on the **left or right half**, for a panel already in the bottom rail.
 - Drop it in the **middle of the picture** — or press <kbd>Esc</kbd> — to cancel. An outline shows exactly where it will land before you let go.
 
 **Resizing:**
 
-- The bar between a rail and the picture sets that rail's width; everything in the rail shares it.
-- The bar between two stacked panels sets how they split the height.
+- The bar between a rail and the picture sets that rail's width — or the bottom rail's height; everything in the rail shares it.
+- The bar between two panels in a rail sets how they split the space: the height in a side rail, the width along the bottom.
 - Panels have minimums, so neither drag can squeeze one out of existence. In the file browser the *preview* gives up its height first, so the file list stays readable however short the panel gets.
 
 ### Saving an arrangement

@@ -572,10 +572,28 @@ textarea.param-input {
     flex: 0 0 6px; align-self: stretch;
     cursor: col-resize; background: transparent; z-index: 30;
 }
+/* The bottom rail runs the other way, and so does everything that sizes it. */
+.rail-splitter.horizontal { cursor: row-resize; width: 100%; align-self: auto; }
+.dock-rail.bottom {
+    flex-direction: row;
+    width: 100%; min-height: 0;
+    border-top: 1px solid #333;
+}
+.dock-rail.bottom > .params-panel,
+.dock-rail.bottom > .browser-panel,
+.dock-rail.bottom > .previz-panel,
+.dock-rail.bottom > .curves-panel,
+.dock-rail.bottom > .history-panel {
+    height: auto; min-height: 0; flex-shrink: 1;
+}
 .stack-splitter {
     flex: 0 0 6px;
     cursor: row-resize; background: #111;
     border-top: 1px solid #222; border-bottom: 1px solid #222;
+}
+.stack-splitter.horizontal {
+    cursor: col-resize;
+    border: none; border-left: 1px solid #222; border-right: 1px solid #222;
 }
 .rail-splitter:hover, .rail-splitter.dragging,
 .stack-splitter:hover, .stack-splitter.dragging { background: rgba(255,102,0,0.30); }
@@ -846,6 +864,14 @@ textarea.param-input {
 .previz-item { display: flex; align-items: center; gap: 4px; padding: 3px 4px; cursor: pointer; }
 .previz-item:hover { background: #242424; }
 .previz-item.selected { background: #33230f; outline: 1px solid #f60; }
+/* The hierarchy: a twisty per row that has children, and the drop mark that
+   says which group a dragged row would land in. */
+.previz-twisty { width: 10px; flex: 0 0 10px; color: #888; font-size: 9px; text-align: center; }
+.previz-twisty:hover { color: #f60; }
+.previz-twisty.empty { pointer-events: none; }
+.previz-item.dragging { opacity: 0.45; }
+.previz-item.drop-into { background: #1d2a33; outline: 1px solid #4a9; }
+.previz-list.drop-into { outline: 1px solid #4a9; }
 .previz-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .previz-eye, .previz-look {
     background: none; border: none; color: #888; cursor: pointer; font-size: 12px; padding: 0 2px;

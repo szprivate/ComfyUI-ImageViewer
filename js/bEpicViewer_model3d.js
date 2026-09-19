@@ -312,7 +312,9 @@ export class Model3DView {
         const reportCamera = (live) => {
             const id = this.scene3d && this.scene3d.activeCamera;
             if (!id || !this.hooks.onCameraMoved) return;
-            this.hooks.onCameraMoved(id, this.readTransform(this.activeCameraObject()), live);
+            const entry = this._entries.get(id);
+            this.hooks.onCameraMoved(id, this.readTransform(this.activeCameraObject(),
+                                                            entry && entry.item), live);
         };
         controls.addEventListener("change", () => {
             if (this._navigating) reportCamera(true);
@@ -770,7 +772,9 @@ export class Model3DView {
         // Reframing through a scene camera moves that camera, so the scene has
         // to hear about it.
         if (cam !== this.camera && this.hooks.onCameraMoved) {
-            this.hooks.onCameraMoved(this.scene3d.activeCamera, this.readTransform(cam));
+            const moved = this._entries.get(this.scene3d.activeCamera);
+            this.hooks.onCameraMoved(this.scene3d.activeCamera,
+                                     this.readTransform(cam, moved && moved.item));
         }
 
         // ComfyUI's grid is a fixed 20 units. Scaled by powers of ten here, so a
@@ -841,6 +845,7 @@ export class Model3DView {
                 continue;
             }
             entry.item = item;
+            this._reparent(entry);
             // A model whose file changed is reloaded; everything else is a
             // transform, which applyFrame picks up.
             if (item.kind === "model" && entry.key !== this._srcKey(item.src)) {
@@ -867,6 +872,9 @@ export class Model3DView {
         this._syncSelection();
         this.requestRender();
         await Promise.all(pending);
+        // Children can arrive before their parents; one pass once they are all
+        // here puts every object under the right one.
+        this._reparentAll();
         this._syncControlsCamera();          // the active camera's object exists now
         this.applyFrame(this.sceneFrame);
         this._updateSceneStats();
@@ -920,6 +928,40 @@ export class Model3DView {
         return entry;
     }
 
+    /**
+     * Hang an entry's object where the item says it belongs.
+     *
+     * Groups and geometry are parented in three, so the engine composes the
+     * matrices and moving a group moves everything under it. A camera is the
+     * exception: it stays at the top of the 3D scene and gets its world
+     * transform written into it (see applyFrame), because OrbitControls and
+     * TransformControls both treat the camera they drive as living in world
+     * space — under a moved group, tumbling would fight the parent.
+     */
+    _reparent(entry) {
+        const item = entry.item;
+        const wanted = (item.kind !== "camera" && item.parent && this._entries.get(item.parent))
+            ? this._entries.get(item.parent).root
+            : this.scene;
+        if (entry.root.parent !== wanted) wanted.add(entry.root);
+    }
+
+    /** Place every entry — after an add, or when a parent has changed. */
+    _reparentAll() {
+        for (const entry of this._entries.values()) this._reparent(entry);
+    }
+
+    /**
+     * The matrix the item's parent imposes, or null at the top. Only a camera
+     * needs it: everything else is parented, so three has already applied it.
+     */
+    _parentWorld(item) {
+        const parent = item && item.parent ? this._entries.get(item.parent) : null;
+        if (!parent) return null;
+        parent.root.updateWorldMatrix(true, false);
+        return parent.root.matrixWorld;
+    }
+
     async _addEntry(item) {
         const { THREE } = this.libs;
         // A camera IS its own root, so the gizmo and the orbit controls move the
@@ -932,6 +974,18 @@ export class Model3DView {
         this.scene.add(root);
         const entry = { item, root, key: "", mixer: null, clips: [], camera: null, helper: null, stats: null };
         this._entries.set(item.id, entry);
+        this._reparent(entry);
+
+        if (item.kind === "group") {
+            // Something to see and to grab: a small set of axes, the size of
+            // the grid's cell, shown only while the group is selected.
+            const axes = new THREE.AxesHelper(0.75);
+            axes.visible = false;
+            axes.userData.bepicItemId = item.id;
+            root.add(axes);
+            entry.axes = axes;
+            return entry;
+        }
 
         if (item.kind === "primitive") {
             this._buildPrimitive(entry, item);
@@ -992,9 +1046,12 @@ export class Model3DView {
             entry.material = null;      // a shape's own material went with it
         }
         if (!full) return;
+        if (entry.axes) { entry.root.remove(entry.axes); entry.axes.dispose && entry.axes.dispose(); entry.axes = null; }
         if (entry.helper) { this.scene.remove(entry.helper); entry.helper.dispose(); entry.helper = null; }
         if (this.gizmo && this.gizmo.object === entry.root) this.gizmo.detach();
-        this.scene.remove(entry.root);
+        // It may hang under a group rather than at the top of the scene.
+        if (entry.root.parent) entry.root.parent.remove(entry.root);
+        else this.scene.remove(entry.root);
     }
 
     _aspect() {
@@ -1019,7 +1076,20 @@ export class Model3DView {
             entry.root.position.set(...at.position);
             entry.root.rotation.set(at.rotation[0] * D, at.rotation[1] * D, at.rotation[2] * D);
             entry.root.scale.set(...at.scale);
-            entry.root.visible = item.visible !== false;
+            // A camera is not parented in three, so its own transform is
+            // composed with its parents' here instead.
+            if (entry.camera && item.parent) {
+                const parentWorld = this._parentWorld(item);
+                if (parentWorld) {
+                    const local = new THREE.Matrix4().compose(
+                        entry.root.position.clone(),
+                        entry.root.quaternion.clone(),
+                        entry.root.scale.clone());
+                    local.premultiply(parentWorld);
+                    local.decompose(entry.root.position, entry.root.quaternion, entry.root.scale);
+                }
+            }
+            entry.root.visible = item.visible !== false && this._visibleInTree(item);
             if (entry.camera) {
                 entry.camera.fov = at.fov || 35;
                 entry.camera.aspect = this._aspect();
@@ -1040,6 +1110,23 @@ export class Model3DView {
         // helper, which has to be told the item moved under it.
         if (this.gizmoHelper && this.gizmo && this.gizmo.object) this.gizmoHelper.updateMatrixWorld();
         this.requestRender();
+    }
+
+    /**
+     * A hidden group hides what it holds. three does this for parented objects
+     * on its own; a camera is not parented, so it is asked here — and the
+     * answer is the same either way, which keeps the two in step.
+     */
+    _visibleInTree(item) {
+        let node = item;
+        const seen = new Set();
+        while (node && node.parent && !seen.has(node.id)) {
+            seen.add(node.id);
+            const parent = this._entries.get(node.parent);
+            node = parent ? parent.item : null;
+            if (node && node.visible === false) return false;
+        }
+        return true;
     }
 
     _statsOf(object, format) {
@@ -1065,6 +1152,7 @@ export class Model3DView {
         const total = { vertices: 0, triangles: 0, points: 0, meshes: 0, objects: 0, cameras: 0, shapes: 0, format: "scene" };
         for (const entry of this._entries.values()) {
             if (entry.camera) { total.cameras++; continue; }
+            if (entry.item && entry.item.kind === "group") continue;
             if (entry.item && entry.item.kind === "primitive") total.shapes++;
             total.objects++;
             if (!entry.stats) continue;
@@ -1121,7 +1209,7 @@ export class Model3DView {
             // only has to take the numbers — rebuilding the panel and rewriting
             // the node's widget on every mouse move is what that would cost.
             if (entry && this.hooks.onTransform) {
-                this.hooks.onTransform(this.selected, this.readTransform(entry.root), true);
+                this.hooks.onTransform(this.selected, this.readTransform(entry.root, entry.item), true);
             }
             if (entry && entry.helper) entry.helper.update();
             this.requestRender();
@@ -1135,6 +1223,11 @@ export class Model3DView {
 
     _syncSelection() {
         const entry = this.selected ? this._entries.get(this.selected) : null;
+        // A group has nothing to draw, so its axes stand in for it — and only
+        // while it is the thing being moved.
+        for (const e of this._entries.values()) {
+            if (e.axes) e.axes.visible = (e === entry);
+        }
         // No scene, or nothing selected: no gizmo to show.
         if (!entry || !this.scene3d) {
             if (this.gizmo) this.gizmo.detach();
@@ -1150,8 +1243,25 @@ export class Model3DView {
     }
 
     /** The transform of a three object, in the scene's own units (degrees). */
-    readTransform(object) {
+    readTransform(object, item = null) {
         const R = 180 / Math.PI;
+        // A camera inside a group is driven in world space (see _reparent), so
+        // what the scene stores has to be taken back out of its parent.
+        const parentWorld = (item && item.kind === "camera") ? this._parentWorld(item) : null;
+        if (parentWorld) {
+            const { THREE } = this.libs;
+            const world = new THREE.Matrix4().compose(
+                object.position.clone(), object.quaternion.clone(), object.scale.clone());
+            const local = new THREE.Matrix4().copy(parentWorld).invert().multiply(world);
+            const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+            local.decompose(p, q, s);
+            const e = new THREE.Euler().setFromQuaternion(q, "XYZ");
+            return {
+                position: p.toArray(),
+                rotation: [e.x * R, e.y * R, e.z * R],
+                scale: s.toArray(),
+            };
+        }
         return {
             position: object.position.toArray(),
             rotation: [object.rotation.x * R, object.rotation.y * R, object.rotation.z * R],

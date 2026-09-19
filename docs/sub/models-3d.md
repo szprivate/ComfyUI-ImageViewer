@@ -59,11 +59,11 @@ Two icons appear in the 3D toolbar while previz is on, and they are the only way
 
 | Part | What it does |
 |---|---|
-| **+** | One menu for everything a scene can gain. **Model…** adds the model selected in the [File Browser](other.md#file-browser) — you can also drag models straight into the 3D view, from the browser, the history strip or your desktop. **Camera** adds a camera where the view is right now. Below the line: a box, sphere, plane, cylinder, cone or torus — no file needed, for blocking a scene out. It lands where the view is looking. |
-| **Duplicate / Delete** | Copies or removes the selected item, animation included. |
+| **+** | One menu for everything a scene can gain. **Model…** adds the model selected in the [File Browser](other.md#file-browser) — you can also drag models straight into the 3D view, from the browser, the history strip or your desktop. **Camera** adds a camera where the view is right now. **Group** adds an empty one to hang things under. Below the line: a box, sphere, plane, cylinder, cone or torus — no file needed, for blocking a scene out. It lands where the view is looking. |
+| **Right-click an item** | **Duplicate** or **Delete** it — that row, not whatever happened to be selected. A group takes what is inside it either way. |
 | **↩ / ↪** | Undo and redo the last previz edit — see [Undoing](#undoing). Their tooltips name what they would take back. |
 | **Move / Rotate / Scale** | Which gizmo the selected item gets. |
-| The list | Every item in the scene. Click to select, **◉** hides and shows, **▣** looks through a camera, **•** marks an item that has keyframes. |
+| The list | The scene as a tree. Click to select, **◉** hides and shows, **▣** looks through a camera, **•** marks an item that has keyframes, and **▾** folds a group away. |
 | Transform fields | The selected item's position, rotation (degrees) and scale — and a camera's field of view, or a shape's colour. |
 | **fps / frames** | The shot's frame rate and length. The viewer's timeline covers exactly this range while previz is on. |
 
@@ -109,6 +109,22 @@ Keyframes are per item and per property.
 Keyframes show as orange ticks under the timeline; click one to jump to it. Play, scrub and step work as they do for footage. A model with its own animation (an FBX clip) is scrubbed by the timeline too, so the whole shot stays frame-accurate.
 
 Rotations interpolate the short way round, so a turn from 350° to 10° moves 20°, not 340°.
+
+### Groups
+
+A **group** is a transform and nothing else — no geometry, no file. Move, rotate or scale it and everything inside moves with it; hide it and they all go; key it and they all follow. It is the same thing a USD `Xform` is, and an imported stage arrives as exactly that (see [USD](#usd)).
+
+| To | Do |
+|---|---|
+| Make one | **+ → Group** |
+| Put something in it | Drag the item's row onto the group's row in the outliner |
+| Take it out again | Drag the row onto the empty space below the tree |
+| Fold it away | The **▾** at the left of its row |
+| Delete the lot | Right-click the group → **Delete** — what it holds goes with it, and one undo brings all of it back |
+
+An item's numbers are **local** to its group, exactly as in Maya, Houdini or USD: a chair at `x = -2` inside a set at `z = 10` stands at `-2, 0, 10` in the shot, and its own fields still read `-2, 0, 0`. Nothing can be dropped inside itself or inside its own contents, so the tree stays a tree.
+
+A camera inside a group is carried by it like anything else, and still tumbles the way it always did — looking through it moves the camera, not the group.
 
 ### Undoing
 
@@ -187,10 +203,13 @@ The flattening keeps geometry, transforms, visibility and `displayColor`, prefer
 
 ```
 /previz                 Xform, the default prim, fps and range on the stage
-  /previz/Hero          Xform + payload → hero.usd
-  /previz/Floor         UsdGeomPlane, displayColor
+  /previz/Set           Xform — a group, with what it holds beneath it
+    /previz/Set/Hero    Xform + payload → hero.usd
+    /previz/Set/Floor   UsdGeomPlane, displayColor
   /previz/ShotCam       UsdGeomCamera, focalLength on a 36×24 back
 ```
+
+[Groups](#groups) go out as nested `Xform`s and each item keeps its local transform, so the stage another application opens has the hierarchy you built rather than a flattened list.
 
 Assets arrive as **payloads**, not references, so the stage opens instantly and an application loads only what it needs — which is what a previz stage is for.
 
@@ -208,13 +227,16 @@ Give a plain name and the stage lands in `output/3d_scenes`; give a full path en
 | A prim with a payload or reference | one item, drawn from that prim |
 | A prim marked `component` in the model hierarchy | one item — an asset is a thing you move, not a hundred things |
 | Geometry with no such ancestor | one item of its own |
+| Every `Xform` above one of those | a [group](#groups), so the stage's hierarchy is the outliner's |
 | `Cube`, `Sphere`, `Cylinder`, `Cone`, `Plane` | the matching previz shape, with its `displayColor` |
 | Time samples on the transforms | keyframes, with linear easing — which is what USD samples mean |
 | `timeCodesPerSecond`, start and end | the shot's fps and length |
 
 Nothing below a chosen prim is taken again, so a kitchen arrives as its furniture rather than as every cupboard door.
 
-A previz scene is a flat list, so each item carries the prim's transform **in the world**, parents included. Its geometry is addressed as the stage plus that prim path: the server flattens only that subtree, in the prim's own space, and the stage's composition — variants, nested payloads, the transforms inside the asset — is what you see.
+Each item keeps the **local** transform it was authored with, and the groups above it carry the rest — the same arrangement the stage has, so moving a set moves its furniture and a group that animates animates what it holds. Geometry is addressed as the stage plus that prim path: the server flattens only that subtree, in the prim's own space, and the stage's composition — variants, nested payloads, the transforms inside the asset — is what you see.
+
+Files are fetched by their own path, so a stage anywhere in your [allowed folders](other.md) can be imported, not only one under ComfyUI's output.
 
 Payloads are composed while reading, since a layout stage keeps its geometry behind them. A prim whose asset can't be composed — a missing file, or a type the local prim overrides — is still kept, showing as an empty item with a red **!** and the reason, rather than quietly disappearing from the layout.
 

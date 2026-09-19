@@ -265,6 +265,33 @@ def _define_shape(stage, path, item):
     return prim
 
 
+def _in_tree_order(items):
+    """Items with every parent ahead of its children.
+
+    Order in the list is not load-bearing anywhere else, so a scene that has
+    been edited, undone or imported can hand its items over in any order and
+    still export as the tree it is. Anything whose parent is missing is treated
+    as top level rather than dropped.
+    """
+    by_id = {it.get("id"): it for it in items if isinstance(it, dict)}
+    out, placed = [], set()
+
+    def place(item):
+        ident = item.get("id")
+        if ident in placed:
+            return
+        parent = by_id.get(item.get("parent"))
+        if parent is not None and parent is not item and parent.get("id") not in placed:
+            place(parent)
+        placed.add(ident)
+        out.append(item)
+
+    for item in items:
+        if isinstance(item, dict):
+            place(item)
+    return out
+
+
 def export_scene(scene, path, bake=True):
     """Write a previz scene to `path` as a USD stage. Returns the path."""
     Gf, Sdf, Usd, UsdGeom, _Vt = _pxr()
@@ -292,12 +319,22 @@ def export_scene(scene, path, bake=True):
         root.GetPrim().SetCustomDataByKey(f"{_CUSTOM_KEY}:activeCamera", str(scene["activeCamera"]))
 
     used, layer_dir = set(), os.path.dirname(path)
-    for item in scene.get("items") or []:
+    # Parents before their children, so a child's prim path can be built from
+    # the one its parent got. A scene keeps its items in tree order already;
+    # this does not rely on that.
+    paths = {}
+    for item in _in_tree_order(scene.get("items") or []):
         name = _prim_name(item.get("name"), used)
-        prim_path = Sdf.Path(f"/previz/{name}")
+        parent_path = paths.get(item.get("parent")) or "/previz"
+        prim_path = Sdf.Path(f"{parent_path}/{name}")
+        paths[item.get("id")] = str(prim_path)
         kind = item.get("kind")
 
-        if kind == "camera":
+        if kind == "group":
+            # A group is an Xform and nothing else: it holds the others, and
+            # its transform is theirs too.
+            xformable = UsdGeom.Xform.Define(stage, prim_path)
+        elif kind == "camera":
             cam = UsdGeom.Camera.Define(stage, prim_path)
             cam.CreateHorizontalApertureAttr(APERTURE_H)
             cam.CreateVerticalApertureAttr(APERTURE_V)
@@ -534,6 +571,26 @@ def import_scene(path, load_payloads=True):
 
     # Anyone else's stage: take the layout, and the geometry under it.
     objects, cameras = _object_prims(stage, root)
+    # Every Xform above a chosen prim comes in as a group, so the stage's
+    # hierarchy is the outliner's hierarchy and each item keeps the local
+    # transform it was authored with.
+    group_ids = {}
+
+    def ensure_group(prim):
+        if prim is None or not prim.IsValid() or prim.IsPseudoRoot():
+            return None
+        key = str(prim.GetPath())
+        if key in group_ids:
+            return group_ids[key]
+        parent_id = ensure_group(prim.GetParent())
+        item = _item_from_prim(prim, UsdGeom.Xformable(prim), False, None, None, stage)
+        item["kind"] = "group"
+        item.pop("src", None)
+        item["parent"] = parent_id
+        scene["items"].append(item)
+        group_ids[key] = item["id"]
+        return item["id"]
+
     for prim in cameras + objects:
         is_camera = bool(UsdGeom.Camera(prim))
         shape = _SHAPE_BY_TYPE.get(prim.GetTypeName()) if not is_camera else None
@@ -543,6 +600,7 @@ def import_scene(path, load_payloads=True):
             shape = None
         asset = None if (is_camera or shape) else _asset_of(prim, layer_dir)
         item = _item_from_prim(prim, UsdGeom.Xformable(prim), is_camera, shape, asset, stage)
+        item["parent"] = ensure_group(prim.GetParent())
         if not is_camera and not shape:
             # Geometry comes from this stage, at this prim: the server flattens
             # that subtree for the viewport (usd_io.display_proxy) and the item
@@ -562,28 +620,19 @@ def import_scene(path, load_payloads=True):
 def _item_from_prim(prim, xformable, is_camera, shape, asset, stage):
     """A previz item for a prim some other package authored.
 
-    The transform read here is the prim's place in the WORLD, not in its
-    parent: a previz scene is a flat list, so a chair three groups deep has to
-    carry the whole chain or it would land at the origin.
+    The transform read here is the prim's own, LOCAL to its parent — the scene
+    carries the stage's hierarchy as group items, so a chair three groups deep
+    keeps the numbers it was authored with and moves when its groups move.
     """
     _Gf, _Sdf, Usd, UsdGeom, _Vt = _pxr()
     name = prim.GetName()
-    # Every frame anything in this prim's chain moves on: the item carries the
-    # world transform, so a parent's animation is this item's animation too.
-    times = set()
-    node = prim
-    while node and node.IsValid() and not node.IsPseudoRoot():
-        anc = UsdGeom.Xformable(node)
-        if anc:
-            times.update(anc.GetTimeSamples() or [])
-        node = node.GetParent()
-    times = sorted(times)
-
-    cache = UsdGeom.XformCache()
+    # This prim's own samples. A parent that animates is a group of its own and
+    # brings its own keys, so nothing has to be baked down the chain.
+    xf = UsdGeom.Xformable(prim)
+    times = sorted(xf.GetTimeSamples() or []) if xf else []
 
     def at(time):
-        cache.SetTime(Usd.TimeCode(time))
-        return _decompose(cache.GetLocalToWorldTransform(prim))
+        return _decompose(xf.GetLocalTransformation(Usd.TimeCode(time)) if xf else _Gf.Matrix4d(1.0))
 
     position, rotation, scale = at(times[0] if times else Usd.TimeCode.Default())
     item = {

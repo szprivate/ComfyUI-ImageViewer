@@ -291,26 +291,44 @@ export const PrevizMixin = {
         return item;
     },
 
-    previzDuplicate() {
+    /** Copy an item, and everything under it if it is a group. */
+    previzDuplicate(id = null) {
         const scene = this.previzScene();
-        const item = this.previzSelectedItem();
+        const item = id ? S.itemById(scene, id) : this.previzSelectedItem();
         if (!scene || !item) return;
         this.previzSnapshot(`duplicate ${item.name}`);
-        const copy = JSON.parse(JSON.stringify(item));
-        copy.id = S.newId(item.kind === "camera" ? "c" : "m");
-        copy.name = S.uniqueName(scene, item.name);
-        scene.items.splice(scene.items.indexOf(item) + 1, 0, copy);
-        this._previzSelection = copy.id;
+
+        const branch = [item, ...S.descendantsOf(scene, item.id)];
+        const newId = new Map();
+        const copies = branch.map((src) => {
+            const copy = JSON.parse(JSON.stringify(src));
+            copy.id = S.newId(src.kind === "camera" ? "c" : src.kind === "group" ? "g" : "m");
+            copy.name = S.uniqueName(scene, src.name);
+            newId.set(src.id, copy.id);
+            return copy;
+        });
+        // Inside the copy, parents point at the copies; the top of it keeps the
+        // parent the original had.
+        copies.forEach((copy, i) => {
+            const was = branch[i].parent;
+            copy.parent = (was && newId.has(was)) ? newId.get(was) : (i === 0 ? was || null : null);
+        });
+        scene.items.splice(scene.items.indexOf(item) + branch.length, 0, ...copies);
+        this._previzSelection = copies[0].id;
         this.previzChanged({ reload: true });
     },
 
-    previzDelete() {
+    /** Delete an item — a group takes what it holds with it. */
+    previzDelete(id = null) {
         const scene = this.previzScene();
-        const item = this.previzSelectedItem();
+        const item = id ? S.itemById(scene, id) : this.previzSelectedItem();
         if (!scene || !item) return;
-        this.previzSnapshot(`delete ${item.name}`);
-        scene.items = scene.items.filter((it) => it !== item);
-        if (scene.activeCamera === item.id) scene.activeCamera = null;
+        const branch = new Set([item, ...S.descendantsOf(scene, item.id)]);
+        const label = branch.size > 1 ? `delete ${item.name} and ${branch.size - 1} inside it`
+                                      : `delete ${item.name}`;
+        this.previzSnapshot(label);
+        scene.items = scene.items.filter((it) => !branch.has(it));
+        if ([...branch].some((it) => it.id === scene.activeCamera)) scene.activeCamera = null;
         this._previzSelection = scene.items.length ? scene.items[0].id : null;
         this.previzChanged({ reload: true });
         if (this._model3d) this._model3d.setActiveCamera(scene.activeCamera);
@@ -501,15 +519,10 @@ export const PrevizMixin = {
 
         const actions = el("div", "previz-actions");
         const addBtn = el("button", "previz-btn previz-add");
-        addBtn.title = "Add a model, a camera or a shape";
+        addBtn.title = "Add a model, a camera, a group or a shape";
         addBtn.textContent = "+";               // stands in if the skin is missing
         this._setIcon(addBtn, "icon-circle-plus");
         addBtn.onclick = () => this._previzToggleAddMenu(addBtn);
-        const dupBtn = el("button", "previz-btn", "Duplicate");
-        dupBtn.onclick = () => this.previzDuplicate();
-        const delBtn = el("button", "previz-btn", "Delete");
-        delBtn.onclick = () => this.previzDelete();
-
         const undoBtn = el("button", "previz-btn previz-step");
         undoBtn.textContent = "↩";              // stands in if the skin is missing
         this._setIcon(undoBtn, "icon-undo");
@@ -519,7 +532,10 @@ export const PrevizMixin = {
         this._setIcon(redoBtn, "icon-redo");
         redoBtn.onclick = () => this.previzRedo();
 
-        actions.append(addBtn, dupBtn, delBtn, undoBtn, redoBtn);
+        // Duplicate and Delete live on the item itself, under a right-click —
+        // they act on one row, so they belong on the row rather than on a bar
+        // that has to guess which one you mean.
+        actions.append(addBtn, undoBtn, redoBtn);
 
         const gizmoRow = el("div", "previz-row previz-gizmo");
         const gizmoBtns = {};
@@ -540,6 +556,21 @@ export const PrevizMixin = {
         gizmoRow.append(spaceBtn);
 
         const list = el("div", "previz-list");
+        // The space below the tree is "no parent": dropping a row here lifts it
+        // out of whatever group it was in.
+        list.ondragover = (e) => {
+            if (!this._previzDragItem || e.target.closest(".previz-item")) return;
+            e.preventDefault();
+            this._previzClearDropMarks();
+            list.classList.add("drop-into");
+        };
+        list.ondragleave = () => list.classList.remove("drop-into");
+        list.ondrop = (e) => {
+            if (!this._previzDragItem || e.target.closest(".previz-item")) return;
+            e.preventDefault();
+            this._previzClearDropMarks();
+            this.previzReparent(this._previzDragItem, null);
+        };
 
         const props = el("div", "previz-props");
 
@@ -590,34 +621,54 @@ export const PrevizMixin = {
      * own overflow, and it is built on demand so the listeners that close it
      * come from whichever document the viewer is living in.
      */
-    _previzToggleAddMenu(anchor) {
-        if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
-        const host = this.previzPanel && this.previzPanel.closest(".main-area");
-        if (!host) return;
+    /**
+     * The panel's menus — the "+" list, and an item's right-click list.
+     *
+     * Hung off .panel-container rather than the panel: a panel clips its own
+     * overflow, and it can be docked anywhere, including the bottom rail. The
+     * container is the one element that is always an ancestor and is already
+     * positioned, so the arithmetic below works from wherever the panel is.
+     */
+    _previzMenuHost() {
+        const p = this.previzPanel;
+        if (!p) return null;
+        return p.closest(".panel-container") || p.closest(".main-area") || p.parentNode;
+    },
+
+    /**
+     * Put `entries` on screen at (x, y) in client coordinates.
+     * An entry is { label, run, disabled } or the string "-" for a separator.
+     * `anchor`, when given, is the button that opened it: a press on it closes
+     * the menu rather than immediately reopening it.
+     */
+    _previzOpenMenu(entries, x, y, anchor = null) {
+        this._previzCloseAddMenu();
+        const host = this._previzMenuHost();
+        if (!host) return null;
         const doc = host.ownerDocument;
 
         const menu = doc.createElement("div");
         menu.className = "previz-menu";
-        const item = (label, run) => {
+        for (const e of entries) {
+            if (e === "-") {
+                menu.append(Object.assign(doc.createElement("div"), { className: "previz-menu-sep" }));
+                continue;
+            }
             const b = doc.createElement("button");
             b.className = "previz-menu-item";
-            b.textContent = label;
-            b.onclick = () => { this._previzCloseAddMenu(); run(); };
+            b.textContent = e.label;
+            b.disabled = !!e.disabled;
+            b.onclick = () => { this._previzCloseAddMenu(); e.run(); };
             menu.append(b);
-        };
-        item("Model…", () => this.previzAddFromBrowser());
-        item("Camera", () => this.previzAddCamera());
-        menu.append(Object.assign(doc.createElement("div"), { className: "previz-menu-sep" }));
-        for (const spec of S.PRIMITIVES) item(spec.label, () => this.previzAddPrimitive(spec.type));
+        }
         host.appendChild(menu);
 
-        // Under the button, then pulled back inside whatever room .main-area has.
-        const a = anchor.getBoundingClientRect();
+        // Where it was asked for, then pulled back inside the viewer.
         const h = host.getBoundingClientRect();
-        menu.style.left = `${a.left - h.left}px`;
-        menu.style.top  = `${a.bottom - h.top + 2}px`;
+        menu.style.left = `${x - h.left}px`;
+        menu.style.top  = `${y - h.top}px`;
         const m = menu.getBoundingClientRect();
-        if (m.bottom > h.bottom) menu.style.top  = `${Math.max(0, a.top - h.top - m.height - 2)}px`;
+        if (m.bottom > h.bottom) menu.style.top  = `${Math.max(0, y - h.top - m.height)}px`;
         if (m.right  > h.right)  menu.style.left = `${Math.max(0, h.width - m.width - 4)}px`;
 
         // composedPath, because a listener on the document sees every event from
@@ -626,7 +677,7 @@ export const PrevizMixin = {
         this._previzAddMenuAway = (ev) => {
             if (ev.type === "keydown") { if (ev.key === "Escape") this._previzCloseAddMenu(); return; }
             const path = ev.composedPath ? ev.composedPath() : [];
-            if (path.includes(menu) || path.includes(anchor)) return;
+            if (path.includes(menu) || (anchor && path.includes(anchor))) return;
             this._previzCloseAddMenu();
         };
         // Kept, rather than read back off the menu later: undocking moves the
@@ -634,6 +685,35 @@ export const PrevizMixin = {
         this._previzAddMenuDoc = doc;
         doc.addEventListener("pointerdown", this._previzAddMenuAway, true);
         doc.addEventListener("keydown", this._previzAddMenuAway, true);
+        return menu;
+    },
+
+    _previzToggleAddMenu(anchor) {
+        if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
+        const entries = [
+            { label: "Model\u2026", run: () => this.previzAddFromBrowser() },
+            { label: "Camera", run: () => this.previzAddCamera() },
+            { label: "Group", run: () => this.previzAddGroup() },
+            "-",
+        ];
+        for (const spec of S.PRIMITIVES) {
+            entries.push({ label: spec.label, run: () => this.previzAddPrimitive(spec.type) });
+        }
+        const a = anchor.getBoundingClientRect();
+        this._previzOpenMenu(entries, a.left, a.bottom + 2, anchor);
+    },
+
+    /** Right-click on a row in the outliner. */
+    _previzItemMenu(id, ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this.previzSelect(id);
+        const item = S.itemById(this.previzScene(), id);
+        if (!item) return;
+        this._previzOpenMenu([
+            { label: "Duplicate", run: () => this.previzDuplicate(id) },
+            { label: "Delete", run: () => this.previzDelete(id) },
+        ], ev.clientX, ev.clientY);
     },
 
     _previzCloseAddMenu() {
@@ -673,55 +753,16 @@ export const PrevizMixin = {
         ui.spaceBtn.textContent = space === "local" ? "Local" : "World";
         ui.spaceBtn.classList.toggle("active", space === "local");
 
-        // Outliner
+        // Outliner: the tree, parents before their children.
         ui.list.innerHTML = "";
-        for (const item of scene.items) {
-            const row = doc.createElement("div");
-            row.className = "previz-item" + (item.id === this._previzSelection ? " selected" : "");
-            row.onclick = () => this.previzSelect(item.id);
-
-            const eye = doc.createElement("button");
-            eye.className = "previz-eye" + (item.visible === false ? " off" : "");
-            eye.textContent = item.visible === false ? "◌" : "◉";
-            eye.title = "Show / hide";
-            eye.onclick = (e) => {
-                e.stopPropagation();
-                item.visible = item.visible === false;
-                this.previzChanged();
-            };
-
-            const name = doc.createElement("span");
-            name.className = "previz-name";
-            name.textContent = `${item.kind === "camera" ? "🎥" : "🧊"} ${item.name}`;
-            name.title = item.kind === "model" && item.src ? (item.src.path || item.src.filename || "") : item.name;
-
-            row.append(eye, name);
-            if (item.kind === "camera") {
-                const look = doc.createElement("button");
-                look.className = "previz-look" + (scene.activeCamera === item.id ? " active" : "");
-                look.textContent = "▣";
-                look.title = scene.activeCamera === item.id ? "Back to the free view" : "Look through this camera";
-                look.onclick = (e) => { e.stopPropagation(); this.previzLookThrough(item.id); };
-                row.append(look);
+        const collapsed = this._previzCollapsed || (this._previzCollapsed = new Set());
+        const drawLevel = (parentId, depth) => {
+            for (const item of S.childrenOf(scene, parentId)) {
+                ui.list.append(this._previzOutlinerRow(item, depth, doc, scene));
+                if (!collapsed.has(item.id)) drawLevel(item.id, depth + 1);
             }
-            const failed = this._model3d ? this._model3d.itemError(item.id) : "";
-            if (failed) {
-                const warn = doc.createElement("span");
-                warn.className = "previz-warn";
-                warn.textContent = "!";
-                warn.title = `This file could not be loaded:
-${failed}`;
-                row.append(warn);
-            }
-            if (S.keyframeFrames(item).length) {
-                const dot = doc.createElement("span");
-                dot.className = "previz-anim";
-                dot.textContent = "•";
-                dot.title = `${S.keyframeFrames(item).length} keyframes`;
-                row.append(dot);
-            }
-            ui.list.append(row);
-        }
+        };
+        drawLevel(null, 0);
         if (!scene.items.length) {
             ui.list.append(Object.assign(doc.createElement("div"), {
                 className: "previz-empty",
@@ -730,6 +771,145 @@ ${failed}`;
         }
 
         this._previzRenderProps(ui, doc);
+    },
+
+
+    /**
+     * One row of the outliner.
+     *
+     * Dragging a row onto another makes it a child of that one; dropping it on
+     * the empty space below the tree puts it back at the top. That is the whole
+     * grouping interface — there is no "add to group" command, because the
+     * thing you want to say is where it goes.
+     */
+    _previzOutlinerRow(item, depth, doc, scene) {
+        const collapsed = this._previzCollapsed || (this._previzCollapsed = new Set());
+        const row = doc.createElement("div");
+        row.className = "previz-item" + (item.id === this._previzSelection ? " selected" : "");
+        row.style.paddingLeft = `${4 + depth * 12}px`;
+        row.dataset.itemId = item.id;
+        row.draggable = true;
+        row.onclick = () => this.previzSelect(item.id);
+        row.oncontextmenu = (e) => this._previzItemMenu(item.id, e);
+
+        const kids = S.childrenOf(scene, item.id);
+        const twisty = doc.createElement("span");
+        twisty.className = "previz-twisty" + (kids.length ? "" : " empty");
+        twisty.textContent = kids.length ? (collapsed.has(item.id) ? "\u25b8" : "\u25be") : "";
+        if (kids.length) {
+            twisty.title = collapsed.has(item.id) ? "Show what is inside" : "Fold this away";
+            twisty.onclick = (e) => {
+                e.stopPropagation();
+                if (collapsed.has(item.id)) collapsed.delete(item.id); else collapsed.add(item.id);
+                this._previzRenderPanel();
+            };
+        }
+
+        const eye = doc.createElement("button");
+        eye.className = "previz-eye" + (item.visible === false ? " off" : "");
+        eye.textContent = item.visible === false ? "\u25cc" : "\u25c9";
+        eye.title = item.kind === "group" ? "Show / hide the group and what is in it" : "Show / hide";
+        eye.onclick = (e) => {
+            e.stopPropagation();
+            item.visible = item.visible === false;
+            this.previzChanged();
+        };
+
+        const name = doc.createElement("span");
+        name.className = "previz-name";
+        const mark = item.kind === "camera" ? "\ud83c\udfa5" : item.kind === "group" ? "\ud83d\udcc1" : "\ud83e\uddca";
+        name.textContent = `${mark} ${item.name}`;
+        name.title = item.kind === "model" && item.src ? (item.src.path || item.src.filename || "") : item.name;
+
+        row.append(twisty, eye, name);
+        if (item.kind === "camera") {
+            const look = doc.createElement("button");
+            look.className = "previz-look" + (scene.activeCamera === item.id ? " active" : "");
+            look.textContent = "\u25a3";
+            look.title = scene.activeCamera === item.id ? "Back to the free view" : "Look through this camera";
+            look.onclick = (e) => { e.stopPropagation(); this.previzLookThrough(item.id); };
+            row.append(look);
+        }
+        const failed = this._model3d ? this._model3d.itemError(item.id) : "";
+        if (failed) {
+            const warn = doc.createElement("span");
+            warn.className = "previz-warn";
+            warn.textContent = "!";
+            warn.title = `This file could not be loaded:\n${failed}`;
+            row.append(warn);
+        }
+        if (S.keyframeFrames(item).length) {
+            const dot = doc.createElement("span");
+            dot.className = "previz-anim";
+            dot.textContent = "\u2022";
+            dot.title = `${S.keyframeFrames(item).length} keyframes`;
+            row.append(dot);
+        }
+
+        row.ondragstart = (e) => {
+            this._previzDragItem = item.id;
+            row.classList.add("dragging");
+            try { e.dataTransfer.setData("text/plain", item.name); } catch (_) {}
+            if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+        };
+        row.ondragend = () => {
+            this._previzDragItem = null;
+            row.classList.remove("dragging");
+            this._previzClearDropMarks();
+        };
+        row.ondragover = (e) => {
+            const dragged = this._previzDragItem;
+            if (!dragged || !S.canParent(scene, dragged, item.id)) return;
+            e.preventDefault();
+            if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+            this._previzClearDropMarks();
+            row.classList.add("drop-into");
+        };
+        row.ondragleave = () => row.classList.remove("drop-into");
+        row.ondrop = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            this._previzClearDropMarks();
+            this.previzReparent(this._previzDragItem, item.id);
+        };
+        return row;
+    },
+
+    _previzClearDropMarks() {
+        const ui = this._previzUI;
+        if (!ui || !ui.list) return;
+        ui.list.querySelectorAll(".drop-into").forEach((n) => n.classList.remove("drop-into"));
+        ui.list.classList.remove("drop-into");
+    },
+
+    /** Move an item under a group — or out of every group, for a null parent. */
+    previzReparent(id, parentId) {
+        const scene = this.previzScene();
+        if (!scene || !id) return false;
+        const item = S.itemById(scene, id);
+        if (!item || (item.parent || null) === (parentId || null)) return false;
+        if (!S.canParent(scene, id, parentId)) return false;
+        const into = parentId ? S.itemById(scene, parentId) : null;
+        this.previzSnapshot(into ? `move ${item.name} into ${into.name}` : `move ${item.name} out`);
+        S.setParent(scene, id, parentId || null);
+        this.previzChanged({ reload: true });
+        return true;
+    },
+
+    /** A new, empty group — what a USD Xform comes in as, and a folder to fill. */
+    previzAddGroup() {
+        const scene = this.previzScene();
+        if (!scene) return null;
+        this.previzSnapshot("add group");
+        const item = S.makeGroupItem(S.uniqueName(scene, "Group"));
+        // Made where the selection is, so grouping what you are looking at does
+        // not move it across the shot.
+        const selected = this.previzSelectedItem();
+        if (selected) item.parent = selected.parent || null;
+        scene.items.push(item);
+        this._previzSelection = item.id;
+        this.previzChanged({ reload: true });
+        return item;
     },
 
     _previzRenderProps(ui, doc) {
@@ -810,7 +990,7 @@ ${failed}`;
 
         vecRow("position", "Move", 0.1);
         vecRow("rotation", "Rotate", 1);
-        if (item.kind === "model") vecRow("scale", "Scale", 0.01);
+        if (item.kind === "model" || item.kind === "group") vecRow("scale", "Scale", 0.01);
 
         if (item.kind === "camera") {
             const row = doc.createElement("div");

@@ -16,12 +16,16 @@
 // on it.
 //
 //   dockLayout = {
-//     left:  { width: 260, panels: [{ id:'history', size:1, hidden:false }] },
-//     right: { width: 320, panels: [{ id:'browser', size:1 }, { id:'params', size:1 }] },
+//     left:   { width: 260, panels: [{ id:'history', size:1, hidden:false }] },
+//     right:  { width: 320, panels: [{ id:'browser', size:1 }, { id:'params', size:1 }] },
+//     bottom: { height: 240, panels: [{ id:'curves', size:1 }] },
 //   }
 //
-// A rail is a vertical stack sharing one width; `size` is each panel's share of
-// the rail's height. Everything else — toggling a panel, restoring a layout,
+// A side rail is a vertical stack sharing one width; `size` is each panel's
+// share of the rail's height. The bottom rail — under the picture, above the
+// timeline — is the same idea turned ninety degrees: one height, and `size` is
+// each panel's share of its width. Everything below asks _railIsRow(side)
+// rather than naming "bottom", so the two read as one rule with an axis. Everything else — toggling a panel, restoring a layout,
 // dropping a dragged panel — edits that object and calls applyDockLayout().
 import { api } from "../../scripts/api.js";
 
@@ -39,7 +43,9 @@ const DOCK_PANELS = {
     // more than the rest; the channel buttons set the width.
     curves:  { prop: "curvesPanel",  label: "Animation Curves", minW: 220, minH: 190, defaultRail: "right" },
 };
-const RAIL_SIDES = ["left", "right"];
+const RAIL_SIDES = ["left", "right", "bottom"];
+// Which way a rail stacks: the bottom one lays its panels out side by side.
+const _isRow = (side) => side === "bottom";
 
 const RAIL_MAX = 900;
 // How far into the viewport an edge drop is offered.
@@ -53,13 +59,16 @@ export const DockMixin = {
 
     _initDock() {
         const sr = this.shadowRoot;
+        this._ensureBottomRail();
         this.railEl = {
-            left:  sr.getElementById("dock-left"),
-            right: sr.getElementById("dock-right"),
+            left:   sr.getElementById("dock-left"),
+            right:  sr.getElementById("dock-right"),
+            bottom: sr.getElementById("dock-bottom"),
         };
         this.railSplitter = {
-            left:  sr.getElementById("rail-splitter-left"),
-            right: sr.getElementById("rail-splitter-right"),
+            left:   sr.getElementById("rail-splitter-left"),
+            right:  sr.getElementById("rail-splitter-right"),
+            bottom: sr.getElementById("rail-splitter-bottom"),
         };
         this.dockOverlay = sr.getElementById("dock-overlay");
         if (!this.railEl.left || !this.railEl.right) return;
@@ -77,6 +86,34 @@ export const DockMixin = {
         this.applyDockLayout();
     },
 
+    /**
+     * The bottom rail, built here when the markup doesn't carry it.
+     *
+     * A viewer can come up against an older cached bEpicViewer.html (the
+     * parameters panel is rebuilt the same way, and for the same reason), and
+     * a missing rail would take docking down with it rather than simply
+     * leaving one side unavailable.
+     */
+    _ensureBottomRail() {
+        const sr = this.shadowRoot;
+        if (sr.getElementById("dock-bottom")) return;
+        const main = sr.querySelector(".main-area");
+        const controls = sr.querySelector(".controls");
+        if (!main || !main.parentNode) return;
+        const doc = main.ownerDocument;
+        const mk = (id, cls) => {
+            const n = doc.createElement("div");
+            n.id = id; n.className = cls; n.dataset.rail = "bottom";
+            return n;
+        };
+        const sp = mk("rail-splitter-bottom", "rail-splitter horizontal");
+        sp.title = "Resize";
+        const rail = mk("dock-bottom", "dock-rail bottom");
+        const at = (controls && controls.parentNode === main.parentNode) ? controls : main.nextSibling;
+        main.parentNode.insertBefore(sp, at);
+        main.parentNode.insertBefore(rail, at);
+    },
+
     _dockPanelEl(id) {
         const spec = DOCK_PANELS[id];
         return spec ? (this[spec.prop] || null) : null;
@@ -86,11 +123,12 @@ export const DockMixin = {
         // Matches what the viewer opened with before docking existed: the
         // parameters panel showing on the right, the other two put away.
         return {
-            left:  { width: 88,  panels: [{ id: "history", size: 1, hidden: true  }] },
-            right: { width: 300, panels: [{ id: "browser", size: 1, hidden: true  },
-                                          { id: "previz",  size: 1, hidden: true  },
-                                          { id: "curves",  size: 1, hidden: true  },
-                                          { id: "params",  size: 1, hidden: false }] },
+            left:   { width: 88,  panels: [{ id: "history", size: 1, hidden: true  }] },
+            right:  { width: 300, panels: [{ id: "browser", size: 1, hidden: true  },
+                                           { id: "previz",  size: 1, hidden: true  },
+                                           { id: "curves",  size: 1, hidden: true  },
+                                           { id: "params",  size: 1, hidden: false }] },
+            bottom: { height: 240, panels: [] },
         };
     },
 
@@ -107,6 +145,8 @@ export const DockMixin = {
 
         for (const side of RAIL_SIDES) {
             const rail = this.railEl[side];
+            if (!rail) continue;
+            const row = _isRow(side);
             const spec = this.dockLayout[side];
             const shown = spec.panels.filter(p => !p.hidden);
 
@@ -122,9 +162,13 @@ export const DockMixin = {
                 el.style.display = entry.hidden ? "none" : "flex";
                 el.style.flex    = `${entry.size || 1} 1 0`;
                 el.style.minHeight = `${DOCK_PANELS[entry.id].minH}px`;
-                el.style.width   = "";               // the rail owns width now
-                el.classList.toggle("left",  side === "left");
-                el.classList.toggle("right", side === "right");
+                // Whichever way the rail runs, the rail owns the other axis.
+                el.style.minWidth = row ? `${DOCK_PANELS[entry.id].minW}px` : "";
+                el.style.width   = "";
+                el.style.height  = "";
+                el.classList.toggle("left",   side === "left");
+                el.classList.toggle("right",  side === "right");
+                el.classList.toggle("bottom", row);
             });
 
             // One splitter between each adjacent visible pair.
@@ -133,7 +177,7 @@ export const DockMixin = {
                 const el = this._dockPanelEl(entry.id);
                 if (!el) return;
                 const sp = el.ownerDocument.createElement("div");
-                sp.className = "stack-splitter";
+                sp.className = row ? "stack-splitter horizontal" : "stack-splitter";
                 sp.dataset.rail = side;
                 sp.dataset.after = shown[i - 1].id;
                 sp.dataset.before = entry.id;
@@ -143,7 +187,8 @@ export const DockMixin = {
 
             const active = shown.length > 0;
             rail.style.display = active ? "flex" : "none";
-            rail.style.width   = active ? `${this._railWidth(side)}px` : "";
+            rail.style.width   = (active && !row) ? `${this._railSize(side)}px` : "";
+            rail.style.height  = (active && row)  ? `${this._railSize(side)}px` : "";
             if (this.railSplitter[side]) {
                 this.railSplitter[side].style.display = active ? "block" : "none";
             }
@@ -160,12 +205,23 @@ export const DockMixin = {
         if (this._afterViewportMoved) this._afterViewportMoved();
     },
 
-    /** Clamp a rail's width to what the panels in it can live with. */
-    _railWidth(side) {
+    /**
+     * A rail's one measurement — its width, or the bottom rail's height —
+     * clamped to what the panels in it can live with.
+     */
+    _railSize(side) {
         const spec = this.dockLayout[side];
+        const row = _isRow(side);
         const shown = spec.panels.filter(p => !p.hidden);
-        const min = shown.reduce((m, p) => Math.max(m, DOCK_PANELS[p.id].minW), 60);
-        return Math.round(Math.max(min, Math.min(RAIL_MAX, spec.width || min)));
+        const min = shown.reduce((m, p) => Math.max(m, DOCK_PANELS[p.id][row ? "minH" : "minW"]), 60);
+        const want = (row ? spec.height : spec.width) || min;
+        return Math.round(Math.max(min, Math.min(RAIL_MAX, want)));
+    },
+
+    /** Write that measurement back, to whichever field the rail keeps it in. */
+    _setRailSize(side, px) {
+        const spec = this.dockLayout[side];
+        if (_isRow(side)) spec.height = px; else spec.width = px;
     },
 
     /** Drop unknown ids, re-home missing ones, and keep every panel exactly once. */
@@ -182,7 +238,8 @@ export const DockMixin = {
                 p.hidden = !!p.hidden;
                 return true;
             });
-            if (!(spec.width > 0)) spec.width = 300;
+            if (_isRow(side)) { if (!(spec.height > 0)) spec.height = 240; }
+            else if (!(spec.width > 0)) spec.width = 300;
         }
         // A panel the saved layout never mentioned (a viewer upgraded mid-flight)
         // goes back to where it shipped, put away rather than sprung on the user.
@@ -246,7 +303,8 @@ export const DockMixin = {
         // A rail that has only ever held the history strip is 88px wide; the
         // parameters panel arriving there would be unusable at that width.
         const spec = this.dockLayout[side];
-        spec.width = Math.max(spec.width || 0, DOCK_PANELS[id].minW);
+        this._setRailSize(side, Math.max(_isRow(side) ? (spec.height || 0) : (spec.width || 0),
+                                         DOCK_PANELS[id][_isRow(side) ? "minH" : "minW"]));
 
         // Sizes are shares, so a stack of new arrivals should start out even.
         target.forEach(p => { p.size = 1; });
@@ -352,15 +410,18 @@ export const DockMixin = {
             if (!sp || sp._dockBound) continue;
             sp._dockBound = true;
             sp.addEventListener("pointerdown", (e) => {
-                const startX = e.clientX;
-                const startW = this._railWidth(side);
+                const row = _isRow(side);
+                const start = row ? e.clientY : e.clientX;
+                const startSize = this._railSize(side);
                 sp.classList.add("dragging");
                 this._pointerDrag(sp, e, (ev) => {
-                    const dx = ev.clientX - startX;
-                    this.dockLayout[side].width = side === "left" ? startW + dx : startW - dx;
-                    const w = this._railWidth(side);
-                    this.dockLayout[side].width = w;
-                    this.railEl[side].style.width = `${w}px`;
+                    // Each rail grows away from the picture: the left one with
+                    // the pointer, the right and bottom ones against it.
+                    const d = (row ? ev.clientY : ev.clientX) - start;
+                    this._setRailSize(side, side === "left" ? startSize + d : startSize - d);
+                    const px = this._railSize(side);
+                    this._setRailSize(side, px);
+                    this.railEl[side].style[row ? "height" : "width"] = `${px}px`;
                     if (this._afterViewportMoved) this._afterViewportMoved();
                 }, () => {
                     sp.classList.remove("dragging");
@@ -378,17 +439,21 @@ export const DockMixin = {
             const aEl = this._dockPanelEl(aId), bEl = this._dockPanelEl(bId);
             if (!a || !b || !aEl || !bEl) return;
 
-            const startY = e.clientY;
-            const aH = aEl.getBoundingClientRect().height;
-            const bH = bEl.getBoundingClientRect().height;
+            // Along the rail: heights in a side rail, widths in the bottom one.
+            const row = _isRow(side);
+            const axis = row ? "width" : "height";
+            const startAt = row ? e.clientX : e.clientY;
+            const aH = aEl.getBoundingClientRect()[axis];
+            const bH = bEl.getBoundingClientRect()[axis];
             const total = aH + bH;
             const share = a.entry.size + b.entry.size;
             if (total <= 0 || share <= 0) return;
-            const aMin = DOCK_PANELS[aId].minH, bMin = DOCK_PANELS[bId].minH;
+            const key = row ? "minW" : "minH";
+            const aMin = DOCK_PANELS[aId][key], bMin = DOCK_PANELS[bId][key];
 
             sp.classList.add("dragging");
             this._pointerDrag(sp, e, (ev) => {
-                const dy = ev.clientY - startY;
+                const dy = (row ? ev.clientX : ev.clientY) - startAt;
                 const newAH = Math.max(aMin, Math.min(total - bMin, aH + dy));
                 a.entry.size = share * (newAH / total);
                 b.entry.size = share - a.entry.size;
@@ -562,7 +627,9 @@ export const DockMixin = {
 
         for (const p of R.panels) {
             if (!inside(p.r)) continue;
-            const above = y < p.r.top + p.r.height / 2;
+            // "Before" is up in a side rail and left in the bottom one.
+            const above = _isRow(p.side) ? (x < p.r.left + p.r.width / 2)
+                                         : (y < p.r.top + p.r.height / 2);
             let index = above ? p.index : p.index + 1;
             // Dropping either side of itself changes nothing.
             const cur = this._dockEntry(dragId);
@@ -576,6 +643,11 @@ export const DockMixin = {
             const edge = v.width * EDGE_ZONE;
             if (x <= v.left + edge)  return { side: "left",  index: null, kind: "edge" };
             if (x >= v.right - edge) return { side: "right", index: null, kind: "edge" };
+            // The bottom edge is a shallower band than the sides: it is a strip
+            // under the picture, not half of it.
+            if (this.railEl.bottom && y >= v.bottom - v.height * (EDGE_ZONE / 2)) {
+                return { side: "bottom", index: null, kind: "edge" };
+            }
         }
         return null;
     },
@@ -600,13 +672,25 @@ export const DockMixin = {
 
         if (target.kind === "edge") {
             const rail = R.rails[target.side];
+            if (target.side === "bottom") {
+                // The rail sits under .main-area, so the band is drawn along
+                // the foot of the picture — where the panel will appear.
+                const h = rail ? rail.height : Math.max(DOCK_PANELS[dragId].minH, 200);
+                put(main.left, main.bottom - h, main.width, h);
+                return;
+            }
             const w = rail ? rail.width : Math.max(DOCK_PANELS[dragId].minW, 260);
             const l = target.side === "left" ? main.left : main.right - w;
             put(l, main.top, w, main.height);
             return;
         }
-        // Insert above or below a panel: a band at that edge of it.
+        // Insert beside a panel: a band at that edge of it.
         const r = target.ref.r;
+        if (_isRow(target.side)) {
+            const w = Math.max(24, Math.min(r.width / 2, 120));
+            put(target.kind === "before" ? r.left : r.right - w, r.top, w, r.height);
+            return;
+        }
         const h = Math.max(24, Math.min(r.height / 2, 120));
         put(r.left, target.kind === "before" ? r.top : r.bottom - h, r.width, h);
     },
@@ -622,13 +706,15 @@ export const DockMixin = {
         if (!data || typeof data !== "object") return false;
         if (!data.left && !data.right) return false;
         this.dockLayout = {
-            left:  { width: 88,  panels: [] },
-            right: { width: 300, panels: [] },
+            left:   { width: 88,  panels: [] },
+            right:  { width: 300, panels: [] },
+            bottom: { height: 240, panels: [] },
         };
         for (const side of RAIL_SIDES) {
             const src = data[side];
             if (!src) continue;
-            if (src.width > 0) this.dockLayout[side].width = src.width;
+            if (src.width > 0)  this.dockLayout[side].width = src.width;
+            if (src.height > 0) this.dockLayout[side].height = src.height;
             if (Array.isArray(src.panels)) {
                 this.dockLayout[side].panels = src.panels
                     .filter(p => p && DOCK_PANELS[p.id])
@@ -660,8 +746,9 @@ export const DockMixin = {
             ? data.browser.side : paramsSide;
 
         const layout = {
-            left:  { width: 88,  panels: [] },
-            right: { width: 300, panels: [] },
+            left:   { width: 88,  panels: [] },
+            right:  { width: 300, panels: [] },
+            bottom: { height: 240, panels: [] },
         };
         const place = (id, side, visible, width) => {
             layout[side].panels.push({ id, size: 1, hidden: !visible });
