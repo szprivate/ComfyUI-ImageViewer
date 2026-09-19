@@ -841,3 +841,6 @@ textarea.param-input {
 .kf-axis { background: #222; border: 1px solid #444; border-radius: 3px; padding: 1px 6px; font-size: 11px; cursor: pointer; font-weight: 700; }
 .kf-axis.off { opacity: 0.35; }
 .previz-color { width: 44px; height: 20px; padding: 0; background: #1b1b1b; border: 1px solid #444; border-radius: 3px; cursor: pointer; }
+.previz-step { margin-left: auto; }
+.previz-step + .previz-step { margin-left: 0; }
+.previz-btn:disabled { opacity: 0.4; cursor: default; }

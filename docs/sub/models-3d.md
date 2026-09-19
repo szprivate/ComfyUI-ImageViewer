@@ -59,6 +59,7 @@ The previz panel is a docked panel like the file browser: it opens in a rail whe
 |---|---|
 | **+** | One menu for everything a scene can gain. **Model…** adds the model selected in the [File Browser](other.md#file-browser) — you can also drag models straight into the 3D view, from the browser, the history strip or your desktop. **Camera** adds a camera where the view is right now. Below the line: a box, sphere, plane, cylinder, cone or torus — no file needed, for blocking a scene out. It lands where the view is looking. |
 | **Duplicate / Delete** | Copies or removes the selected item, animation included. |
+| **↩ / ↪** | Undo and redo the last previz edit — see [Undoing](#undoing). Their tooltips name what they would take back. |
 | **Move / Rotate / Scale** | Which gizmo the selected item gets. |
 | The list | Every item in the scene. Click to select, **◉** hides and shows, **▣** looks through a camera, **•** marks an item that has keyframes. |
 | Transform fields | The selected item's position, rotation (degrees) and scale — and a camera's field of view, or a shape's colour. |

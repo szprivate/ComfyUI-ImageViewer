@@ -507,7 +507,17 @@ export const PrevizMixin = {
         dupBtn.onclick = () => this.previzDuplicate();
         const delBtn = el("button", "previz-btn", "Delete");
         delBtn.onclick = () => this.previzDelete();
-        actions.append(addBtn, dupBtn, delBtn);
+
+        const undoBtn = el("button", "previz-btn previz-step");
+        undoBtn.textContent = "↩";              // stands in if the skin is missing
+        this._setIcon(undoBtn, "icon-undo");
+        undoBtn.onclick = () => this.previzUndo();
+        const redoBtn = el("button", "previz-btn previz-step");
+        redoBtn.textContent = "↪";
+        this._setIcon(redoBtn, "icon-redo");
+        redoBtn.onclick = () => this.previzRedo();
+
+        actions.append(addBtn, dupBtn, delBtn, undoBtn, redoBtn);
 
         const gizmoRow = el("div", "previz-row previz-gizmo");
         const gizmoBtns = {};
@@ -567,7 +577,7 @@ export const PrevizMixin = {
         this._previzCloseAddMenu();
         host.querySelectorAll(":scope > .previz-body").forEach((n) => n.remove());
         host.appendChild(root);
-        this._previzUI = { root, list, props, fpsIn, lenIn, gizmoBtns, spaceBtn };
+        this._previzUI = { root, list, props, fpsIn, lenIn, gizmoBtns, spaceBtn, undoBtn, redoBtn };
         return this._previzUI;
     },
 
@@ -656,7 +666,8 @@ export const PrevizMixin = {
         if (doc.activeElement !== ui.lenIn) ui.lenIn.value = String(scene.length);
         const mode = this._model3d ? this._model3d.gizmoMode : "translate";
         for (const [m, btn] of Object.entries(ui.gizmoBtns)) btn.classList.toggle("active", m === mode);
-        const space = (this._model3d && this._model3d.gizmoSpace) || "world";
+        this._previzRefreshUndoButtons();
+        const space = (this._model3d && this._model3d.gizmoSpace) || "local";
         ui.spaceBtn.textContent = space === "local" ? "Local" : "World";
         ui.spaceBtn.classList.toggle("active", space === "local");
 
