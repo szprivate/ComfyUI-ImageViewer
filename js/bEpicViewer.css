@@ -886,6 +886,22 @@ textarea.param-input {
 .previz-text { width: 100%; box-sizing: border-box; background: #1b1b1b; color: #ddd; border: 1px solid #444; border-radius: 3px; padding: 2px 4px; }
 .previz-key { background: none; border: none; color: #666; cursor: pointer; font-size: 12px; }
 .previz-key.on, .previz-key:hover { color: #f60; }
+/* The frame counter at the end of the timeline. A readout, and on a previz tab
+   the shot's length — so it is an input that only looks like one when it is. */
+.total-f {
+    width: 34px; padding: 0; border: 1px solid transparent; border-radius: 3px;
+    background: transparent; color: #888;
+    font-family: monospace; font-size: 11px; text-align: left;
+}
+.total-f.editable { color: #00e5ff; border-color: #444; background: #111; text-align: center; }
+.total-f::-webkit-outer-spin-button, .total-f::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.total-f[readonly] { -moz-appearance: textfield; appearance: textfield; }
+
+/* An icon button keeps the row's height without a label to set it. */
+.previz-icon { display: inline-flex; align-items: center; justify-content: center; padding: 1px 6px; }
+.previz-icon svg { width: 15px; height: 15px; }
+/* A button that has an icon has no use for its fallback text. */
+.previz-icon:has(svg) { font-size: 0; }
 .previz-foot { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .previz-warn { color: #e66; font-weight: 700; cursor: help; }
 .previz-note { color: #c90; background: rgba(200, 150, 0, 0.08); border: 1px solid #553; border-radius: 3px; padding: 3px 5px; line-height: 1.35; }

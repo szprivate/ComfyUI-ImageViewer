@@ -15,7 +15,9 @@ import * as S from "./bEpicViewer_scene3d.js";
 
 const VEC_LABELS = ["X", "Y", "Z"];
 // Maya's manipulator keys, which is what the hotkeys below bind to.
-const GIZMO_MODES = [["translate", "Move", "W"], ["rotate", "Rotate", "E"], ["scale", "Scale", "R"]];
+const GIZMO_MODES = [["translate", "Move", "W", "icon-move"],
+                     ["rotate", "Rotate", "E", "icon-rotate3d"],
+                     ["scale", "Scale", "R", "icon-scale3d"]];
 
 export const PrevizMixin = {
 
@@ -402,6 +404,37 @@ export const PrevizMixin = {
         this.previzChanged();
     },
 
+    /**
+     * Show the shot's frame rate and length in the timeline's own fields.
+     *
+     * The previz panel used to carry a second pair, which then had to be kept
+     * in step with the transport's — two places saying the same thing, and one
+     * of them lying whenever the other was used. The timeline owns both now:
+     * the fps box plays the shot AND sets its rate, and the frame counter at
+     * the end of the slider is the last frame of the shot.
+     */
+    previzSyncTimelineFields() {
+        // Through the container, like every other reader of these two: the
+        // popout moves the whole tree into another document and this still
+        // finds them there.
+        const host = this.container;
+        if (!host || !host.querySelector) return;
+        const scene = this.previzScene();
+        const fpsEl = host.querySelector("#fps-in");
+        const endEl = host.querySelector("#total-f");
+        const doc = (endEl || fpsEl || host).ownerDocument;
+        const previz = !!scene;
+        if (fpsEl && previz && doc.activeElement !== fpsEl) fpsEl.value = String(scene.fps);
+        if (!endEl) return;
+        // A plain readout everywhere else: the length of a clip or a batch is
+        // what it is, and only a shot you are building can be told how long.
+        endEl.readOnly = !previz;
+        endEl.classList.toggle("editable", previz);
+        endEl.title = previz ? "The shot's last frame — type to make it longer or shorter"
+                             : "Last frame";
+        if (previz && doc.activeElement !== endEl) endEl.value = String(Math.max(1, scene.length) - 1);
+    },
+
     previzSetSceneField(field, value) {
         const scene = this.previzScene();
         if (!scene) return;
@@ -495,6 +528,8 @@ export const PrevizMixin = {
         if (this.isPanelDocked("previz")) this.setPanelDocked("previz", false);
         // The curves describe the same scene, so they go with it.
         if (this._previzHideCurves) this._previzHideCurves();
+        // And the timeline's last-frame box goes back to being a readout.
+        this.previzSyncTimelineFields();
     },
 
     /**
@@ -518,11 +553,21 @@ export const PrevizMixin = {
         const root = el("div", "previz-body");
 
         const actions = el("div", "previz-actions");
-        const addBtn = el("button", "previz-btn previz-add");
+        const newBtn = el("button", "previz-btn previz-icon");
+        newBtn.title = "New scene — empties this one (Ctrl+Z brings it back)";
+        newBtn.textContent = "\u25a1";          // stands in if the skin is missing
+        this._setIcon(newBtn, "icon-file");
+        newBtn.onclick = () => this.previzNewScene();
+        const addBtn = el("button", "previz-btn previz-add previz-icon");
         addBtn.title = "Add a model, a camera, a group or a shape";
         addBtn.textContent = "+";               // stands in if the skin is missing
         this._setIcon(addBtn, "icon-circle-plus");
         addBtn.onclick = () => this._previzToggleAddMenu(addBtn);
+        const exportBtn = el("button", "previz-btn previz-icon");
+        exportBtn.title = "Save, export or render this shot";
+        exportBtn.textContent = "\u2193";
+        this._setIcon(exportBtn, "icon-save");
+        exportBtn.onclick = () => this._previzToggleExportMenu(exportBtn);
         const undoBtn = el("button", "previz-btn previz-step");
         undoBtn.textContent = "↩";              // stands in if the skin is missing
         this._setIcon(undoBtn, "icon-undo");
@@ -535,18 +580,19 @@ export const PrevizMixin = {
         // Duplicate and Delete live on the item itself, under a right-click —
         // they act on one row, so they belong on the row rather than on a bar
         // that has to guess which one you mean.
-        actions.append(addBtn, undoBtn, redoBtn);
+        actions.append(newBtn, addBtn, exportBtn, undoBtn, redoBtn);
 
         const gizmoRow = el("div", "previz-row previz-gizmo");
         const gizmoBtns = {};
-        for (const [mode, label, key] of GIZMO_MODES) {
-            const b = el("button", "previz-btn", label);
+        for (const [mode, label, key, icon] of GIZMO_MODES) {
+            const b = el("button", "previz-btn previz-icon", label);
+            this._setIcon(b, icon);
             b.title = `${label} the selected item (${key})`;
             b.onclick = () => { this._modelView().setGizmoMode(mode); this._previzRenderPanel(); };
             gizmoBtns[mode] = b;
             gizmoRow.append(b);
         }
-        const spaceBtn = el("button", "previz-btn", "World");
+        const spaceBtn = el("button", "previz-btn previz-icon", "World");
         spaceBtn.title = "Gizmo axes: world or the item's own (scale is always local)";
         spaceBtn.onclick = () => {
             const view = this._modelView();
@@ -574,43 +620,13 @@ export const PrevizMixin = {
 
         const props = el("div", "previz-props");
 
-        const foot = el("div", "previz-foot");
-        const fpsIn = el("input", "previz-num");
-        fpsIn.type = "number"; fpsIn.step = "0.01"; fpsIn.min = "0.1"; fpsIn.title = "Scene frame rate";
-        fpsIn.onchange = () => this.previzSetSceneField("fps", fpsIn.value);
-        const lenIn = el("input", "previz-num");
-        lenIn.type = "number"; lenIn.step = "1"; lenIn.min = "1"; lenIn.title = "Shot length, in frames";
-        lenIn.onchange = () => this.previzSetSceneField("length", lenIn.value);
-        foot.append(el("span", "previz-label", "fps"), fpsIn, el("span", "previz-label", "frames"), lenIn);
-        const renderBtn = el("button", "previz-btn previz-render", "Render…");
-        renderBtn.title = "Render the shot through the active camera into ./output/previz";
-        renderBtn.onclick = () => this.previzRenderDialog();
-        const saveBtn = el("button", "previz-btn", "Save");
-        saveBtn.title = "Save this scene as a file in output/3d_scenes";
-        saveBtn.onclick = () => this.previzSaveSceneFile();
-        const loadBtn = el("button", "previz-btn", "Load");
-        loadBtn.title = "Load a saved scene";
-        loadBtn.onclick = () => this.previzLoadSceneFile();
-        const usdOut = el("button", "previz-btn", "USD ↑");
-        usdOut.title = "Export this shot as a USD stage (payloaded assets, baked animation)";
-        usdOut.onclick = () => this.previzExportUsd();
-        const usdIn = el("button", "previz-btn", "USD ↓");
-        usdIn.title = "Build the scene from a USD stage";
-        usdIn.onclick = () => this.previzImportUsd();
-        // The dock's own ✕ puts the panel away; leaving previz is a different
-        // thing and belongs with the other scene-wide commands.
-        const leaveBtn = el("button", "previz-btn", "Leave previz");
-        leaveBtn.title = "Leave previz (the scene is kept)";
-        leaveBtn.onclick = () => this.exitPreviz();
-        foot.append(renderBtn, saveBtn, loadBtn, usdOut, usdIn, leaveBtn);
-
-        root.append(actions, gizmoRow, list, props, foot);
+        root.append(actions, gizmoRow, list, props);
         // The title bar the dock built is a sibling and stays; only previz's own
         // body is replaced.
         this._previzCloseAddMenu();
         host.querySelectorAll(":scope > .previz-body").forEach((n) => n.remove());
         host.appendChild(root);
-        this._previzUI = { root, list, props, fpsIn, lenIn, gizmoBtns, spaceBtn, undoBtn, redoBtn };
+        this._previzUI = { root, list, props, gizmoBtns, spaceBtn, undoBtn, redoBtn };
         return this._previzUI;
     },
 
@@ -688,6 +704,7 @@ export const PrevizMixin = {
         return menu;
     },
 
+    /** Everything that puts something INTO the scene, under one button. */
     _previzToggleAddMenu(anchor) {
         if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
         const entries = [
@@ -699,8 +716,40 @@ export const PrevizMixin = {
         for (const spec of S.PRIMITIVES) {
             entries.push({ label: spec.label, run: () => this.previzAddPrimitive(spec.type) });
         }
+        entries.push("-");
+        entries.push({ label: "Import USD\u2026", run: () => this.previzImportUsd() });
+        entries.push({ label: "Load scene\u2026", run: () => this.previzLoadSceneFile() });
         const a = anchor.getBoundingClientRect();
         this._previzOpenMenu(entries, a.left, a.bottom + 2, anchor);
+    },
+
+    /** ...and everything that takes something OUT of it. */
+    _previzToggleExportMenu(anchor) {
+        if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
+        const a = anchor.getBoundingClientRect();
+        this._previzOpenMenu([
+            { label: "Save scene\u2026", run: () => this.previzSaveSceneFile() },
+            { label: "Export USD\u2026", run: () => this.previzExportUsd() },
+            "-",
+            { label: "Render\u2026", run: () => this.previzRenderDialog() },
+        ], a.left, a.bottom + 2, anchor);
+    },
+
+    /**
+     * Empty the scene and start again.
+     *
+     * Not a question: it is one undo step like any other, and asking "are you
+     * sure" about something Ctrl+Z takes back is noise.
+     */
+    previzNewScene() {
+        const scene = this.previzScene();
+        if (!scene) return;
+        this.previzSnapshot("new scene");
+        scene.items = [];
+        scene.activeCamera = null;
+        this._previzSelection = null;
+        if (this._previzCollapsed) this._previzCollapsed.clear();
+        this.previzChanged({ reload: true });
     },
 
     /** Right-click on a row in the outliner. */
@@ -744,13 +793,16 @@ export const PrevizMixin = {
         const scene = this.previzScene();
         const doc = ui.root.ownerDocument;
 
-        if (doc.activeElement !== ui.fpsIn) ui.fpsIn.value = String(scene.fps);
-        if (doc.activeElement !== ui.lenIn) ui.lenIn.value = String(scene.length);
+        this.previzSyncTimelineFields();
         const mode = this._model3d ? this._model3d.gizmoMode : "translate";
         for (const [m, btn] of Object.entries(ui.gizmoBtns)) btn.classList.toggle("active", m === mode);
         this._previzRefreshUndoButtons();
         const space = (this._model3d && this._model3d.gizmoSpace) || "local";
         ui.spaceBtn.textContent = space === "local" ? "Local" : "World";
+        this._setIcon(ui.spaceBtn, space === "local" ? "icon-globe-off" : "icon-globe");
+        ui.spaceBtn.title = space === "local"
+            ? "Gizmo axes: the item's own — click for the world's"
+            : "Gizmo axes: the world's — click for the item's own";
         ui.spaceBtn.classList.toggle("active", space === "local");
 
         // Outliner: the tree, parents before their children.

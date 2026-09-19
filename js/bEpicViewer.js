@@ -492,6 +492,7 @@ class ViewerPanel extends HTMLElement {
         this.exposureValue    = sr.getElementById('exposure-value');
         this.rgbChannelSel    = sr.getElementById('rgb-channel-sel');
         this.previzPanel      = sr.getElementById('previz-panel');
+        this.totalFrameEl     = sr.getElementById('total-f');
         this.curvesPanel      = sr.getElementById('curves-panel');
     }
 
@@ -746,10 +747,25 @@ class ViewerPanel extends HTMLElement {
         if (this.closeBtn) this.closeBtn.onclick = () => { this.style.display = 'none'; };
         this.shapeBtn.onclick  = () => this.toggleShapeOverlay();
 
+        // The last-frame box: a readout, except on a previz tab, where it is
+        // how long the shot is (see previzSyncTimelineFields).
+        const endEl = sr.getElementById('total-f');
+        if (endEl && 'value' in endEl) {
+            endEl.onchange = () => {
+                if (!(this.isPrevizTab && this.isPrevizTab())) return;
+                const last = Math.max(0, Math.round(Number(endEl.value) || 0));
+                this.previzSetSceneField('length', last + 1);
+                this.previzSyncTimelineFields();
+            };
+        }
+
         sr.getElementById('fps-in').oninput = (e) => {
             let val = parseInt(e.target.value);
             if (!val || val < 1) val = 1;
             this.fps = val;
+            // On a previz tab this IS the shot's frame rate: what it plays at
+            // is what it renders at and what a USD stage is written with.
+            if (this.isPrevizTab && this.isPrevizTab()) this.previzSetSceneField('fps', val);
             if (this._videoMode) {
                 // Re-time the <video> live (no restart needed) instead of driving
                 // a frame interval.

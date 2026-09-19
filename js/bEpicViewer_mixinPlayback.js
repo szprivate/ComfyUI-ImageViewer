@@ -206,7 +206,12 @@ export const PlaybackMixin = {
         const bounds           = this.getTimelineBounds(imgCount);
         this.timeline.min      = bounds.min;
         this.timeline.max      = bounds.max;
-        this.container.querySelector('#total-f').innerText = bounds.max;
+        const endEl = this.container.querySelector('#total-f');
+        if (endEl) {
+            // An input in current markup, a span in an older cached copy.
+            if ('value' in endEl) endEl.value = bounds.max;
+            else endEl.innerText = bounds.max;
+        }
         this.updateTicks(Math.max(0, bounds.max - bounds.min));
         this.updateRangeOverlay(imgCount);
         // Keep roto keyframe ticks + curve editor aligned to new timeline bounds.

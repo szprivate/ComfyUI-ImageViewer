@@ -53,19 +53,23 @@ A 3D tab starts with one model. Press **Previz** in the 3D toolbar and that tab 
 
 ### The Panel
 
-The previz panel is a docked panel like the file browser: it opens in a rail when previz starts, and can be moved, stacked and resized like any other — see [Docking Panels](interface.md#docking-panels). Its **✕** puts the panel away without leaving previz; **Leave previz** at the foot does that.
+The previz panel is a docked panel like the file browser: it opens in a rail when previz starts, and can be moved, stacked and resized like any other — see [Docking Panels](interface.md#docking-panels). Its **✕** puts the panel away without leaving previz; the **Previz** button in the 3D toolbar does that, and keeps the scene.
 
 Two icons appear in the 3D toolbar while previz is on, and they are the only way back to either panel: the **cube** shows and hides the previz panel, the **curve** shows and hides the [Animation Curves](#the-curve-editor). They sit over the canvas they belong to — neither has anything to say about a picture, so neither clutters the playback bar. Both panels close when previz does.
 
 | Part | What it does |
 |---|---|
-| **+** | One menu for everything a scene can gain. **Model…** adds the model selected in the [File Browser](other.md#file-browser) — you can also drag models straight into the 3D view, from the browser, the history strip or your desktop. **Camera** adds a camera where the view is right now. **Group** adds an empty one to hang things under. Below the line: a box, sphere, plane, cylinder, cone or torus — no file needed, for blocking a scene out. It lands where the view is looking. |
+| **New** | Empties the scene and starts again. It is one undo step like any other, so there is nothing to confirm. |
+| **+** | One menu for everything a scene can gain. **Model…** adds the model selected in the [File Browser](other.md#file-browser) — you can also drag models straight into the 3D view, from the browser, the history strip or your desktop. **Camera** adds a camera where the view is right now. **Group** adds an empty one to hang things under. Then a box, sphere, plane, cylinder, cone or torus — no file needed, for blocking a scene out; it lands where the view is looking. Last, the two ways a whole scene arrives: **Import USD…** and **Load scene…**. |
+| **Export** | The other direction: **Save scene…** writes the scene as a file, **Export USD…** as a stage, and **Render…** turns the shot into an mp4 or a PNG sequence. |
 | **Right-click an item** | **Duplicate** or **Delete** it — that row, not whatever happened to be selected. A group takes what is inside it either way. |
 | **↩ / ↪** | Undo and redo the last previz edit — see [Undoing](#undoing). Their tooltips name what they would take back. |
 | **Move / Rotate / Scale** | Which gizmo the selected item gets. |
+| **Globe** | The gizmo's axes: the world's, or — with the globe crossed out — the item's own. |
 | The list | The scene as a tree. Click to select, **◉** hides and shows, **▣** looks through a camera, **•** marks an item that has keyframes, and **▾** folds a group away. |
 | Transform fields | The selected item's position, rotation (degrees) and scale — and a camera's field of view, or a shape's colour. |
-| **fps / frames** | The shot's frame rate and length. The viewer's timeline covers exactly this range while previz is on. |
+
+The shot's **frame rate and length live on the timeline**, not in the panel: while previz is on, the **fps** box in the transport is the rate the shot plays, renders and exports at, and the **frame number at the end of the timeline** is its last frame — type a new one to make the shot longer or shorter. Everywhere else that number is the readout it has always been.
 
 Navigation follows Maya: hold <kbd>Alt</kbd> and the left button tumbles, the middle button tracks and the right button dollies. The pointer says which it is — an arrow that picks and drags, a hand while <kbd>Alt</kbd> is held. Without <kbd>Alt</kbd> the left button belongs to the scene — click an object in the viewport to select it, or a camera's frustum lines, and drag the gizmo to move it. The numbers follow, and so does the scene. (On a plain one-model tab there is nothing to select, so left-drag orbits there as it always did.)
 
@@ -79,7 +83,7 @@ Navigation follows Maya: hold <kbd>Alt</kbd> and the left button tumbles, the mi
 
 These only answer on a previz tab, so <kbd>R</kbd> is still the red channel and <kbd>E</kbd> still the exposure drag on a picture. Like every viewer hotkey they can be rebound in **Settings → Keybinding**.
 
-**Local / World** is also a button next to the tool buttons. Local (the default) lines the handles up with the item's own axes, so something you have turned still moves the way it faces; World lines them up with the grid. Scaling is always along the item's own axes, as it is in every 3D app.
+**Local / World** is the globe button next to the tool buttons. Local (the default, a crossed-out globe) lines the handles up with the item's own axes, so something you have turned still moves the way it faces; World (a globe) lines them up with the grid. Scaling is always along the item's own axes, as it is in every 3D app.
 
 ### Cameras
 
@@ -164,7 +168,7 @@ The **bEpic 3D Scene (Previz)** node holds the scene and hands the rendered shot
 1. Drop the node in and press **Open in Image Viewer** on it. The viewer opens on that node's tab as an empty scene — no run needed.
 2. Build the shot. The scene is stored on the node, so it is saved with the workflow.
 3. Set **render_name** on the node (the folder under `output/previz`).
-4. Press **Render…** in the panel, set a size (1920×1080 to start with) and a format, and press **Go**. The viewer plays the shot through the active camera.
+4. Pick **Export → Render…**, set a size (1920×1080 to start with) and a format, and press **Go**. The viewer plays the shot through the active camera.
 5. Run the workflow. The node reads the render back as `images`, plus `frame_count` and `fps`.
 
 **MP4** is the usual choice: the frames are encoded into **`output/previz/<render_name>.mp4`** at the scene's frame rate and then deleted, so a take leaves one clip behind rather than a folder of stills. Encoding needs `imageio-ffmpeg`, the same encoder the viewer's video saving already uses. **PNG** skips the encoding and keeps the stills in **`output/previz/<render_name>/`** as `frame_0000.png` onwards — what you want for a single frame, or to take the render into another tool. A one-frame shot offers PNG first for that reason.
@@ -173,7 +177,7 @@ Either way the node reads what is there, and a new take clears whatever the last
 
 The render is what the viewport draws, at the size you asked for — so it carries the same materials, grid and lighting you see. Hide the grid first if you don't want it in the render.
 
-**Save** and **Load** keep a scene as a file in `output/3d_scenes`, for reuse across workflows.
+**Export → Save scene…** and **+ → Load scene…** keep a scene as a file in `output/3d_scenes`, for reuse across workflows.
 
 ### Where a Scene Lives
 
@@ -199,7 +203,7 @@ The flattening keeps geometry, transforms, visibility and `displayColor`, prefer
 
 ### Exporting a shot
 
-**USD ↑** in the previz panel writes the scene as a stage:
+**Export → Export USD…** writes the scene as a stage:
 
 ```
 /previz                 Xform, the default prim, fps and range on the stage
@@ -219,7 +223,7 @@ Give a plain name and the stage lands in `output/3d_scenes`; give a full path en
 
 ### Importing a stage
 
-**USD ↓** builds the scene from a stage — one made here, or one from anywhere else:
+**+ → Import USD…** builds the scene from a stage — one made here, or one from anywhere else:
 
 | In the stage | Becomes |
 |---|---|
