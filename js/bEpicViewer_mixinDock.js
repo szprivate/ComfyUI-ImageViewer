@@ -572,7 +572,7 @@ export const DockMixin = {
         };
         for (const side of RAIL_SIDES) {
             const rail = this.railEl[side];
-            const active = rail.style.display !== "none";
+            const active = !!rail && rail.style.display !== "none";
             this._dockRects.rails[side] = active ? rail.getBoundingClientRect() : null;
             (this.dockLayout[side].panels || []).forEach((p, i) => {
                 if (p.hidden) return;
