@@ -132,10 +132,12 @@ The **bEpic 3D Scene (Previz)** node holds the scene and hands the rendered shot
 1. Drop the node in and press **Open in Image Viewer** on it. The viewer opens on that node's tab as an empty scene — no run needed.
 2. Build the shot. The scene is stored on the node, so it is saved with the workflow.
 3. Set **render_name** on the node (the folder under `output/previz`).
-4. Press **Render…** in the panel, set a size, and press **Go**. The viewer plays the shot through the active camera and the server encodes it into **`output/previz/<render_name>.mp4`** at the scene's frame rate.
-5. Run the workflow. The node reads that clip back as `images`, plus `frame_count` and `fps`.
+4. Press **Render…** in the panel, set a size (1920×1080 to start with) and a format, and press **Go**. The viewer plays the shot through the active camera.
+5. Run the workflow. The node reads the render back as `images`, plus `frame_count` and `fps`.
 
-Frames travel to the server one at a time — a canvas can only hand over one picture — and are deleted once the clip is written, so a take leaves one mp4 behind rather than a folder of stills. If a render is interrupted before it finishes, the frames it did upload stay in `output/previz/<render_name>/` and the node reads those instead, so nothing is lost. Encoding needs `imageio-ffmpeg`, the same encoder the viewer's video saving already uses.
+**MP4** is the usual choice: the frames are encoded into **`output/previz/<render_name>.mp4`** at the scene's frame rate and then deleted, so a take leaves one clip behind rather than a folder of stills. Encoding needs `imageio-ffmpeg`, the same encoder the viewer's video saving already uses. **PNG** skips the encoding and keeps the stills in **`output/previz/<render_name>/`** as `frame_0000.png` onwards — what you want for a single frame, or to take the render into another tool. A one-frame shot offers PNG first for that reason.
+
+Either way the node reads what is there, and a new take clears whatever the last one left, so the two never mix. Frames travel to the server one at a time — a canvas can only hand over one picture — so a render interrupted part-way still leaves the frames it managed, and the node reads those.
 
 The render is what the viewport draws, at the size you asked for — so it carries the same materials, grid and lighting you see. Hide the grid first if you don't want it in the render.
 

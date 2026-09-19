@@ -5,12 +5,12 @@ bEpic 3D Scene node. This module only deals with what has to live on disk:
 
   • scene files, under `output/3d_scenes/<name>.json`, for reusing a setup
     across workflows;
-  • rendered shots, under `output/previz/<name>.mp4`. The viewer plays the shot
-    back through a camera and posts one PNG per frame into
-    `output/previz/<name>/`; those frames are then encoded into the mp4 and
-    deleted, and the node reads the mp4 back as its IMAGE output. Frames are
-    uploaded one at a time because that is all a browser canvas can hand over —
-    the clip is what survives.
+  • rendered shots, under `output/previz/`. The viewer plays the shot back
+    through a camera and posts one PNG per frame into `output/previz/<name>/`;
+    a render asked for as a clip then has those frames encoded into
+    `output/previz/<name>.mp4` and deleted, while a render asked for as stills
+    keeps them. The node reads back whichever of the two is there. Frames are
+    uploaded one at a time because that is all a browser canvas can hand over.
 
 Both folders sit inside ComfyUI's output directory on purpose: nothing here
 writes anywhere the viewer's other routes wouldn't (see path_access.py).
@@ -95,9 +95,8 @@ def frame_path(name, index):
     return os.path.join(renders_dir(name), f"frame_{int(index):04d}.png")
 
 
-def clear_render(name):
-    """Drop the frames of a previous take, so a shorter one can't leave a tail
-    of stale frames behind it. Only ever removes `frame_####.png`."""
+def _clear_frames(name):
+    """Drop the loose frames of `name`. Only ever removes `frame_####.png`."""
     folder = renders_dir(name)
     removed = 0
     try:
@@ -112,6 +111,20 @@ def clear_render(name):
             removed += 1
         except OSError:
             continue
+    return removed
+
+
+def clear_render(name):
+    """Drop everything a previous take of `name` left behind — its frames and
+    its mp4 alike. A take is cleared before the new one starts uploading, so a
+    shorter take can't leave a tail of stale frames behind it, and a take kept
+    as stills isn't read back as the clip an earlier take encoded."""
+    removed = _clear_frames(name)
+    try:
+        os.remove(video_path(name))
+        removed += 1
+    except OSError:
+        pass
     return removed
 
 
@@ -166,7 +179,7 @@ def encode_render(name, fps=24.0):
         raise ValueError(
             f"could not encode the shot ({e}). Install imageio-ffmpeg, or read "
             f"the frames in {renders_dir(name)} instead.")
-    clear_render(name)
+    _clear_frames(name)
     try:
         os.rmdir(renders_dir(name))          # empty now; leave it tidy
     except OSError:
@@ -219,9 +232,10 @@ def load_render(name):
     """The rendered shot as an IMAGE tensor [N,H,W,3], or None when there is
     nothing rendered yet.
 
-    The mp4 is what a finished render leaves behind; a folder of frames is only
-    there when a take was interrupted before it could be encoded, and is read as
-    a fallback so those frames aren't lost."""
+    The mp4 is what a render asked for as a clip leaves behind; a folder of
+    frames is what a render asked for as PNG stills leaves, and what an
+    interrupted take leaves before it could be encoded. Either reads back, and
+    only one of the two can be there — a new take clears the other."""
     video = load_render_video(name)
     if video is not None:
         return video
