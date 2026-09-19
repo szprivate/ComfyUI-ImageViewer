@@ -39,7 +39,7 @@ export const ModelMixin = {
                 srcUrl: (src) => this.buildImgUrl(src),
                 onPick: (id) => this.previzSelect(id),
                 onTransform: (id, transform, live) => this.previzApplyTransform(id, transform, null, { live }),
-                onTransformEnd: () => this.previzChanged(),
+                onTransformEnd: () => { this.previzEndDrag(); this.previzChanged(); },
                 onCameraMoved: (id, transform, live) =>
                     this.previzApplyTransform(id, transform, ["position", "rotation"], { live }),
                 onPrevizToggle: () => this.togglePreviz(),

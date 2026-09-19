@@ -308,7 +308,8 @@ def export_scene(scene, path, bake=True):
         else:
             xformable = UsdGeom.Xform.Define(stage, prim_path)
             src = item.get("src") or {}
-            asset = src.get("path")
+            asset = src.get("asset") or src.get("path")
+            prim_path = src.get("prim")
             if asset and is_usd(asset):
                 # A payload, so opening the stage costs nothing until the asset
                 # is actually wanted. Relative when it can be, so the stage and
@@ -318,7 +319,13 @@ def export_scene(scene, path, bake=True):
                     target = rel if not rel.startswith("..") else asset.replace("\\", "/")
                 except ValueError:
                     target = asset.replace("\\", "/")
-                xformable.GetPrim().GetPayloads().AddPayload(target)
+                # With a prim path the payload points INTO the stage, which is
+                # how an item taken from someone else's layout keeps pointing at
+                # the thing it came from rather than at a whole shot.
+                if prim_path and not src.get("asset"):
+                    xformable.GetPrim().GetPayloads().AddPayload(target, Sdf.Path(prim_path))
+                else:
+                    xformable.GetPrim().GetPayloads().AddPayload(target)
             elif asset:
                 # Not a USD layer, so it can't be payloaded: other packages see
                 # an empty xform, and this viewer reads the path back out.
@@ -392,13 +399,84 @@ _SHAPE_BY_TYPE = {
 }
 
 
-def import_scene(path, load_payloads=False):
+def _has_geometry(prim):
+    """True when there is anything drawable at or under this prim."""
+    _Gf, _Sdf, _Usd, UsdGeom, _Vt = _pxr()
+    if UsdGeom.Gprim(prim):
+        return True
+    for child in prim.GetAllChildren():
+        if _has_geometry(child):
+            return True
+    return False
+
+
+def _object_prims(stage, root):
+    """The prims a previz scene should carry as items.
+
+    A layout stage is a hierarchy, and previz is a flat list, so this picks the
+    level that means "one thing you can move": a prim marked as a **component**
+    in USD's model hierarchy (what an asset is), else one that pulls an asset in
+    through a reference or payload, else a piece of geometry with no such
+    ancestor. Once a prim is taken, nothing below it is — otherwise a kitchen
+    would import as a thousand separate cupboard doors.
+    """
+    _Gf, _Sdf, Usd, UsdGeom, _Vt = _pxr()
+    chosen, cameras = [], []
+
+    def visit(prim):
+        if not prim.IsValid() or not prim.IsActive():
+            return
+        if UsdGeom.Camera(prim):
+            cameras.append(prim)
+            return
+        model = Usd.ModelAPI(prim)
+        kind = model.GetKind() if model else ""
+        is_component = kind == "component"
+        # A prim that pulls an asset in is an item even when nothing composes
+        # under it — a missing file, or an asset whose type the local prim
+        # overrides. Dropping it would quietly lose a piece of the layout;
+        # keeping it shows the gap, with the reason on the item.
+        if prim != root and _has_arc(prim):
+            chosen.append(prim)
+            return
+        if prim != root and is_component and _has_geometry(prim):
+            chosen.append(prim)
+            return                          # its innards are the asset's business
+        if prim != root and UsdGeom.Gprim(prim):
+            chosen.append(prim)
+            return
+        for child in prim.GetAllChildren():
+            visit(child)
+
+    visit(root)
+    # A stage whose default prim IS the geometry (a single published asset,
+    # rather than a layout) has nothing below the root to choose, so the root
+    # itself is the object.
+    if not chosen and not cameras and root.IsValid() and not root.IsPseudoRoot() and _has_geometry(root):
+        chosen.append(root)
+    return chosen, cameras
+
+
+def _has_arc(prim):
+    for spec in prim.GetPrimStack():
+        for which in ("payloadList", "referenceList"):
+            arcs = getattr(spec, which, None)
+            if arcs is None:
+                continue
+            for name in ("prependedItems", "explicitItems", "appendedItems"):
+                if list(getattr(arcs, name, []) or []):
+                    return True
+    return False
+
+
+def import_scene(path, load_payloads=True):
     """Read a USD stage into a previz scene dict.
 
-    Payloads stay unloaded by default: the hierarchy, the transforms and the
-    cameras are all in the stage itself, and the viewer loads each asset by its
-    own path anyway. Items this viewer wrote come back exactly — keys, easing
-    and colours included — from the customData it left behind.
+    Payloads are composed by default: a layout stage keeps its geometry behind
+    them, and without loading there would be nothing to place or to draw. Items
+    this viewer wrote come back exactly — keys, easing and colours included —
+    from the customData it left behind; anything else is read from the stage as
+    it stands.
     """
     _Gf, _Sdf, Usd, UsdGeom, _Vt = _pxr()
     path = os.path.abspath(path)
@@ -417,53 +495,78 @@ def import_scene(path, load_payloads=False):
     root = default if default and default.IsValid() else stage.GetPseudoRoot()
     active_id = root.GetCustomDataByKey(f"{_CUSTOM_KEY}:activeCamera") if root else None
 
-    # TraverseAll, not Traverse: the default predicate skips prims that are not
-    # loaded, and a payloaded asset is precisely that — the whole point of
-    # opening the stage without composing them. Activity is checked here instead.
+    # A stage this viewer wrote is read back item by item, exactly as it left.
+    ours = []
     for prim in stage.TraverseAll():
-        if not prim.IsValid() or prim == root or not prim.IsActive():
-            continue
-        is_camera = bool(UsdGeom.Camera(prim))
-        asset = _asset_of(prim, layer_dir)
-        shape = _SHAPE_BY_TYPE.get(prim.GetTypeName())
-        xformable = UsdGeom.Xformable(prim)
-        if not (is_camera or asset or shape) or not xformable:
-            continue
-
-        stored = prim.GetCustomDataByKey(f"{_CUSTOM_KEY}:item")
-        item = None
-        if stored:
+        if prim.IsValid() and prim.IsActive() and prim.GetCustomDataByKey(f"{_CUSTOM_KEY}:item"):
+            ours.append(prim)
+    if ours:
+        for prim in ours:
             try:
-                item = json.loads(stored)
+                item = json.loads(prim.GetCustomDataByKey(f"{_CUSTOM_KEY}:item"))
             except Exception:
-                item = None
+                continue
+            asset = _asset_of(prim, layer_dir)
+            if asset and item.get("kind") == "model":
+                item.setdefault("src", {})
+                item["src"]["path"] = asset
+            scene["items"].append(item)
+        if active_id and any(it.get("id") == active_id for it in scene["items"]):
+            scene["activeCamera"] = active_id
+        return scene
 
-        if item is None:
-            item = _item_from_prim(prim, xformable, is_camera, shape, asset, stage)
-        elif asset and item.get("kind") == "model":
-            # The stage is the truth about where the asset is now: it may have
-            # been moved, or the stage handed to someone else entirely.
-            item.setdefault("src", {})
-            item["src"]["path"] = asset
+    # Anyone else's stage: take the layout, and the geometry under it.
+    objects, cameras = _object_prims(stage, root)
+    for prim in cameras + objects:
+        is_camera = bool(UsdGeom.Camera(prim))
+        shape = _SHAPE_BY_TYPE.get(prim.GetTypeName()) if not is_camera else None
+        # A shape prim that carries other geometry underneath is a group, not a
+        # primitive, so it is shown as geometry rather than rebuilt as a sphere.
+        if shape and any(_has_geometry(c) for c in prim.GetAllChildren()):
+            shape = None
+        asset = None if (is_camera or shape) else _asset_of(prim, layer_dir)
+        item = _item_from_prim(prim, UsdGeom.Xformable(prim), is_camera, shape, asset, stage)
+        if not is_camera and not shape:
+            # Geometry comes from this stage, at this prim: the server flattens
+            # that subtree for the viewport (usd_io.display_proxy) and the item
+            # carries the transform the prim has in the stage.
+            # Addressed as stage + prim, not as the asset file: that way the
+            # composition the stage set up — variants, nested payloads, the
+            # transforms inside the asset — is what gets drawn. The asset path
+            # rides along for anyone who wants the file itself.
+            item["src"] = {"path": path, "prim": str(prim.GetPath()),
+                           "name": prim.GetName(), "format": "usd"}
+            if asset:
+                item["src"]["asset"] = asset
         scene["items"].append(item)
-
-    if active_id and any(it.get("id") == active_id for it in scene["items"]):
-        scene["activeCamera"] = active_id
     return scene
 
 
 def _item_from_prim(prim, xformable, is_camera, shape, asset, stage):
-    """A previz item for a prim some other package authored."""
+    """A previz item for a prim some other package authored.
+
+    The transform read here is the prim's place in the WORLD, not in its
+    parent: a previz scene is a flat list, so a chair three groups deep has to
+    carry the whole chain or it would land at the origin.
+    """
     _Gf, _Sdf, Usd, UsdGeom, _Vt = _pxr()
     name = prim.GetName()
-    times = []
-    try:
-        times = list(xformable.GetTimeSamples() or [])
-    except Exception:
-        times = []
+    # Every frame anything in this prim's chain moves on: the item carries the
+    # world transform, so a parent's animation is this item's animation too.
+    times = set()
+    node = prim
+    while node and node.IsValid() and not node.IsPseudoRoot():
+        anc = UsdGeom.Xformable(node)
+        if anc:
+            times.update(anc.GetTimeSamples() or [])
+        node = node.GetParent()
+    times = sorted(times)
+
+    cache = UsdGeom.XformCache()
 
     def at(time):
-        return _decompose(xformable.GetLocalTransformation(Usd.TimeCode(time)))
+        cache.SetTime(Usd.TimeCode(time))
+        return _decompose(cache.GetLocalToWorldTransform(prim))
 
     position, rotation, scale = at(times[0] if times else Usd.TimeCode.Default())
     item = {
@@ -530,12 +633,14 @@ def _triangulate(counts, indices):
     return tris
 
 
-def stage_to_mesh(path, time=None):
-    """Every visible mesh in a stage, flattened into (vertices, faces, colors).
+def stage_to_mesh(path, time=None, prim_path=None):
+    """Visible meshes flattened into (vertices, faces, colors).
 
-    World space, triangles, one buffer — a preview of the stage, not a faithful
-    copy of it. Meshes tagged as `guide` are skipped, and `proxy` is preferred
-    over `render` when an asset offers both, since that is what previz wants.
+    With `prim_path`, only that subtree is taken and it comes back in that
+    prim's own space — the item carries the prim's world transform, so the two
+    must not both apply it. Meshes tagged `guide` are skipped.
+
+    Triangles, one buffer: a preview of the stage, not a faithful copy of it.
     """
     Gf, _Sdf, Usd, UsdGeom, _Vt = _pxr()
     stage = Usd.Stage.Open(path, load=Usd.Stage.LoadAll)
@@ -545,7 +650,17 @@ def stage_to_mesh(path, time=None):
 
     vertices, faces, colors = [], [], []
     xform_cache = UsdGeom.XformCache(when)
-    for prim in stage.TraverseAll():
+
+    subtree_root = None
+    to_local = None
+    if prim_path:
+        subtree_root = stage.GetPrimAtPath(prim_path)
+        if not subtree_root or not subtree_root.IsValid():
+            raise ValueError(f"{prim_path} is not in {os.path.basename(path)}")
+        to_local = xform_cache.GetLocalToWorldTransform(subtree_root).GetInverse()
+
+    prims = Usd.PrimRange(subtree_root) if subtree_root else stage.TraverseAll()
+    for prim in prims:
         mesh = UsdGeom.Mesh(prim)
         if not mesh or not prim.IsActive():
             continue
@@ -563,6 +678,8 @@ def stage_to_mesh(path, time=None):
             continue
 
         matrix = xform_cache.GetLocalToWorldTransform(prim)
+        if to_local is not None:
+            matrix = matrix * to_local
         offset = len(vertices)
         for p in points:
             world = matrix.Transform(Gf.Vec3d(p[0], p[1], p[2]))
@@ -582,28 +699,31 @@ def stage_to_mesh(path, time=None):
     return vertices, faces, colors
 
 
-def _cache_path(src):
-    """Where a stage's display copy lives: the temp dir, keyed on the file so a
-    changed stage lands on a new entry rather than a stale one."""
+def _cache_path(src, prim_path=None):
+    """Where a stage's display copy lives: the temp dir, keyed on the file (and
+    the prim, when only part of it is wanted) so a changed stage lands on a new
+    entry rather than a stale one."""
     import hashlib
     import folder_paths
     tmp = folder_paths.get_temp_directory()
     os.makedirs(tmp, exist_ok=True)
-    digest = hashlib.sha1(os.path.normcase(os.path.abspath(src)).encode("utf-8", "replace")).hexdigest()[:16]
+    key = os.path.normcase(os.path.abspath(src)) + "|" + (prim_path or "")
+    digest = hashlib.sha1(key.encode("utf-8", "replace")).hexdigest()[:16]
     stem = "".join(c for c in os.path.splitext(os.path.basename(src))[0]
                    if c.isalnum() or c in "-_")[:40] or "stage"
     return os.path.join(tmp, f"bEpic_usd_{stem}_{digest}.glb")
 
 
-def display_proxy(path):
-    """A GLB standing in for a USD file, built once and reused until it changes.
+def display_proxy(path, prim_path=None):
+    """A GLB standing in for a USD file (or one prim of it), built once and
+    reused until the stage changes.
 
     Returns None when this install has no USD, so callers fall back to their
     ordinary "cannot show this" path instead of failing.
     """
     if not available() or not is_usd(path):
         return None
-    dst = _cache_path(path)
+    dst = _cache_path(path, prim_path)
     try:
         if os.path.isfile(dst) and os.path.getmtime(dst) >= os.path.getmtime(path):
             return dst
@@ -612,7 +732,7 @@ def display_proxy(path):
 
     import numpy as np
     import torch
-    vertices, faces, colors = stage_to_mesh(path)
+    vertices, faces, colors = stage_to_mesh(path, prim_path=prim_path)
 
     from comfy_extras.nodes_save_3d import save_glb
     save_glb(

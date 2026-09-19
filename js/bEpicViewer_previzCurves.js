@@ -249,6 +249,7 @@ export const PrevizCurvesMixin = {
                 dot.onmousedown = (e) => this._previzCurveDotDown(e, item, prop, k.f, a);
                 dot.ondblclick = (e) => {
                     e.preventDefault(); e.stopPropagation();
+                    this.previzSnapshot("delete key");
                     S.removeKeyframe(item, k.f, prop);
                     this.previzChanged();
                 };
@@ -265,6 +266,7 @@ export const PrevizCurvesMixin = {
         const win = this._viewerWindow();
         const rect = wrap.getBoundingClientRect();
         let current = frame;
+        this.previzBeginDrag("move key");
 
         const onMove = (evt) => {
             const g = this._previzCurveGeom(item, prop);
@@ -293,6 +295,7 @@ export const PrevizCurvesMixin = {
         const onUp = () => {
             win.removeEventListener("mousemove", onMove);
             win.removeEventListener("mouseup", onUp);
+            this.previzEndDrag();
             this.previzChanged();          // one save at the end of the drag
         };
         win.addEventListener("mousemove", onMove);

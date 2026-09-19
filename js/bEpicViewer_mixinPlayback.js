@@ -34,7 +34,11 @@ export const PlaybackMixin = {
         if (imgObj.url) return imgObj.url;
         if (imgObj.path) {
             const endpoint = imgObj.external ? '/bepic/view_file' : '/bepic/raw_view';
-            return api.apiURL(`${endpoint}?path=${encodeURIComponent(imgObj.path)}`);
+            let url = `${endpoint}?path=${encodeURIComponent(imgObj.path)}`;
+            // One prim of a USD stage: the server flattens just that subtree,
+            // which is how a layout stage arrives as separate movable items.
+            if (imgObj.prim) url += `&prim=${encodeURIComponent(imgObj.prim)}`;
+            return api.apiURL(url);
         }
         let params = `?filename=${encodeURIComponent(imgObj.filename || '')}`;
         if (imgObj.type)     params += `&type=${imgObj.type}`;

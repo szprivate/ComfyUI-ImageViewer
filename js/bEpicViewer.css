@@ -734,8 +734,12 @@ textarea.param-input {
 #refresh { color: #f00; }
 /* 3D tabs (bEpicViewer_model3d.js). The model view covers the image layers;
    the path bar, shape overlay and exposure control stay on top of it. */
-.model-view { position: absolute; inset: 0; z-index: 8; display: none; background: #282828; cursor: grab; }
-.model-view:active { cursor: grabbing; }
+/* The pointer says what the mouse would do: an arrow picks and drags the
+   gizmo, a hand appears with Alt, which is what navigates (see Maya
+   navigation in bEpicViewer_model3d.js). */
+.model-view { position: absolute; inset: 0; z-index: 8; display: none; background: #282828; cursor: default; }
+.model-view.navigating { cursor: grab; }
+.model-view.navigating:active { cursor: grabbing; }
 .model-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; touch-action: none; }
 /* Exposure and channel isolation are picture controls; a 3D tab has neither,
    so the slider goes with the image layers (the hotkeys step aside in

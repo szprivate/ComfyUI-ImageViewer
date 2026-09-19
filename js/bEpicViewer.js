@@ -20,6 +20,7 @@ import { ReconnectMixin } from "./bEpicViewer_mixinReconnect.js";
 import { ModelMixin }    from "./bEpicViewer_mixinModel.js";
 import { PrevizMixin }   from "./bEpicViewer_mixinPreviz.js";
 import { PrevizCurvesMixin } from "./bEpicViewer_previzCurves.js";
+import { PrevizUndoMixin } from "./bEpicViewer_previzUndo.js";
 import { SendFromNodeMixin, registerSendToViewerMenu, sendSelectionToViewer } from "./bEpicViewer_sendFromNode.js";
 import {
     registerSendNode, registerToolNode, senderTabInfo, isViewerSourceNode, BEPIC_SCENE_NODE,
@@ -1089,6 +1090,7 @@ Object.assign(
     ModelMixin,
     PrevizMixin,
     PrevizCurvesMixin,
+    PrevizUndoMixin,
 );
 
 if (!customElements.get("bepic-viewer-panel")) {

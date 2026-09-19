@@ -85,7 +85,7 @@ def _decode_image_upload(dataurl, force_png=False):
     return buf.getvalue(), ("png" if fmt == "PNG" else "jpg")
 
 
-def _usd_display_path(path):
+def _usd_display_path(path, prim=None):
     """The GLB standing in for a USD file, or the path itself when it isn't one.
 
     The viewport speaks glTF; a stage is flattened once and cached. Failing to
@@ -95,14 +95,14 @@ def _usd_display_path(path):
     if usd_io is None or not usd_io.is_usd(path):
         return path
     try:
-        proxy = usd_io.display_proxy(path)
+        proxy = usd_io.display_proxy(path, prim)
         return proxy or path
     except Exception as e:
         print(f"[bEpicViewer] could not build a preview of {os.path.basename(path)}: {e}")
         return path
 
 
-def _file_response(path):
+def _file_response(path, prim=None):
     """Serve an image/video file, swapping in a browser-renderable PNG proxy for
     formats an <img> can't decode (exr / tiff / dpx / ...).
 
@@ -112,7 +112,7 @@ def _file_response(path):
     re-download. That is what lets the viewer drop the per-request cache-buster
     it used to append, which was defeating its own frame-caching.
     """
-    path = _usd_display_path(path)
+    path = _usd_display_path(path, prim)
     if media_resolve is not None:
         try:
             proxy = media_resolve.proxy_for_display(path)
@@ -529,7 +529,9 @@ try:
                 return web.Response(status=403, text=path_access.refusal(path))
             if not os.path.isfile(path):
                 return web.Response(status=404, text="file not found")
-            return _file_response(path)
+            # `prim` narrows a USD stage to one subtree — how a layout stage
+            # arrives as separate items the viewer can place.
+            return _file_response(path, params.get("prim"))
 
         async def _bepic_thumb(request):
             """Serve a small cached stand-in for an image, for the thumbnail strips.

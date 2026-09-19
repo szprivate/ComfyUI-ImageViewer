@@ -102,7 +102,9 @@ export class Model3DView {
         this.sceneFrame = 0;          // where the timeline is (frames, not a media frame)
         this.selected = null;
         this.gizmoMode = "translate";
-        this.gizmoSpace = "world";
+        // Local by default: a shape you have turned should move along its own
+        // axes, which is what "forward" means once something is placed.
+        this.gizmoSpace = "local";
     }
 
     get doc() { return this.host.ownerDocument; }
@@ -272,6 +274,10 @@ export class Model3DView {
         // which of them may have the drag is decided here first.
         canvas.addEventListener("pointerdown", (e) => this._onPointerDown(e), true);
         canvas.addEventListener("pointerup", (e) => this._onPointerUp(e));
+        // Alt can be pressed or let go while the pointer just sits there.
+        canvas.addEventListener("pointermove", (e) => {
+            if (!!e.altKey !== this.root.classList.contains("navigating")) this._applyNavButtons(e.altKey);
+        });
 
         const controls = new OrbitControls(this.activeCameraObject(), canvas);
         controls.enableDamping = true;
@@ -319,6 +325,9 @@ export class Model3DView {
      * orbiting the way it always has.
      */
     _applyNavButtons(alt) {
+        // Alt is the navigation modifier, so it is also what turns the pointer
+        // into a hand; without it the pointer picks and drags like any other.
+        if (this.root) this.root.classList.toggle("navigating", !!alt);
         if (!this.controls || !this.libs) return;
         const { THREE } = this.libs;
         const M = THREE.MOUSE;
@@ -843,7 +852,8 @@ export class Model3DView {
 
     _srcKey(src) {
         if (!src) return "";
-        return src.path || src.url || [src.type, src.subfolder, src.filename].filter(Boolean).join("/");
+        const base = src.path || src.url || [src.type, src.subfolder, src.filename].filter(Boolean).join("/");
+        return src.prim ? `${base}|${src.prim}` : base;
     }
 
     /**
@@ -1064,7 +1074,7 @@ export class Model3DView {
      * the same as every other 3D app.
      */
     setGizmoSpace(space) {
-        this.gizmoSpace = space === "local" ? "local" : "world";
+        this.gizmoSpace = space === "world" ? "world" : "local";
         if (this.gizmo) this.gizmo.setSpace(this.gizmoSpace);
         this.requestRender();
     }
@@ -1074,7 +1084,7 @@ export class Model3DView {
         const { TransformControls } = this.libs;
         const gizmo = new TransformControls(this.activeCameraObject(), this.canvas);
         gizmo.setMode(this.gizmoMode);
-        gizmo.setSpace(this.gizmoSpace || "world");
+        gizmo.setSpace(this.gizmoSpace || "local");
         gizmo.addEventListener("change", () => this.requestRender());
         // The orbit controls and the gizmo both want the drag; the gizmo wins
         // while one of its handles is held.

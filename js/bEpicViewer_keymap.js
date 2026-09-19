@@ -116,6 +116,15 @@ const ACTION_DEFS = [
       enabled: _previz, run: (p) => p.previzSetGizmoMode("scale") },
     { key: "GizmoSpace",  label: "Previz: Local / World Axes", combo: { key: "x" },
       enabled: _previz, run: (p) => p.previzToggleGizmoSpace() },
+    // Ctrl+Z is ComfyUI's own, so it ships unregistered and answers only while
+    // the viewer is hovered on a previz tab — where it means the shot, not the
+    // graph behind it.
+    { key: "PrevizUndo", label: "Previz: Undo", combo: { key: "z", ctrl: true },
+      enabled: (p) => _previz(p) && p.previzCanUndo(), run: (p) => p.previzUndo() },
+    { key: "PrevizRedo", label: "Previz: Redo", combo: { key: "z", ctrl: true, shift: true },
+      enabled: (p) => _previz(p) && p.previzCanRedo(), run: (p) => p.previzRedo() },
+    { key: "PrevizRedoY", label: "Previz: Redo (Ctrl+Y)", combo: { key: "y", ctrl: true },
+      enabled: (p) => _previz(p) && p.previzCanRedo(), run: (p) => p.previzRedo() },
 
     { key: "FitView",      label: "Fit Image To Viewport",   combo: { key: "f" },
       run: (p) => p.fitView() },

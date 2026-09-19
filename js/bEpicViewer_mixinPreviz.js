@@ -234,6 +234,7 @@ export const PrevizMixin = {
     async previzAddModels(items) {
         const scene = this.previzScene();
         if (!scene || !items || !items.length) return 0;
+        this.previzSnapshot(items.length > 1 ? "add models" : "add model");
         const wasEmpty = scene.items.length === 0;
         let added = 0;
         for (const it of items) {
@@ -260,6 +261,7 @@ export const PrevizMixin = {
     async previzAddPrimitive(type) {
         const scene = this.previzScene();
         if (!scene) return null;
+        this.previzSnapshot(`add ${type}`);
         const wasEmpty = scene.items.length === 0;
         const item = S.makePrimitiveItem(type);
         item.name = S.uniqueName(scene, item.name);
@@ -277,6 +279,7 @@ export const PrevizMixin = {
     previzAddCamera() {
         const scene = this.previzScene();
         if (!scene) return null;
+        this.previzSnapshot("add camera");
         const view = this._modelView();
         const at = view.viewTransform();
         const item = S.makeCameraItem(S.uniqueName(scene, "Camera"), {
@@ -292,6 +295,7 @@ export const PrevizMixin = {
         const scene = this.previzScene();
         const item = this.previzSelectedItem();
         if (!scene || !item) return;
+        this.previzSnapshot(`duplicate ${item.name}`);
         const copy = JSON.parse(JSON.stringify(item));
         copy.id = S.newId(item.kind === "camera" ? "c" : "m");
         copy.name = S.uniqueName(scene, item.name);
@@ -304,6 +308,7 @@ export const PrevizMixin = {
         const scene = this.previzScene();
         const item = this.previzSelectedItem();
         if (!scene || !item) return;
+        this.previzSnapshot(`delete ${item.name}`);
         scene.items = scene.items.filter((it) => it !== item);
         if (scene.activeCamera === item.id) scene.activeCamera = null;
         this._previzSelection = scene.items.length ? scene.items[0].id : null;
@@ -328,6 +333,10 @@ export const PrevizMixin = {
     previzApplyTransform(id, transform, props, { live = false } = {}) {
         const item = S.itemById(this.previzScene(), id);
         if (!item) return;
+        // One step per drag, taken as the drag starts; a typed-in number is an
+        // edit of its own and gets its own step.
+        if (live) this.previzBeginDrag(`move ${item.name}`);
+        else if (!this._previzDragging) this.previzSnapshot(`move ${item.name}`);
         const frame = Math.round(this.currentFrame || 0);
         for (const prop of props || ["position", "rotation", "scale"]) {
             const value = transform[prop];
@@ -359,6 +368,7 @@ export const PrevizMixin = {
     previzKeyAll(prop) {
         const item = this.previzSelectedItem();
         if (!item) return;
+        this.previzSnapshot(prop ? `key ${prop}` : "key");
         const frame = Math.round(this.currentFrame || 0);
         const props = prop ? [prop] : (item.kind === "camera"
             ? ["position", "rotation", "fov"] : ["position", "rotation", "scale"]);
@@ -369,6 +379,7 @@ export const PrevizMixin = {
     previzDeleteKey() {
         const item = this.previzSelectedItem();
         if (!item) return;
+        this.previzSnapshot("delete key");
         S.removeKeyframe(item, Math.round(this.currentFrame || 0));
         this.previzChanged();
     },
@@ -376,6 +387,7 @@ export const PrevizMixin = {
     previzSetSceneField(field, value) {
         const scene = this.previzScene();
         if (!scene) return;
+        this.previzSnapshot(field === "fps" ? "frame rate" : "shot length");
         if (field === "fps") scene.fps = Math.max(0.1, Number(value) || S.DEFAULT_FPS);
         if (field === "length") {
             scene.length = Math.max(1, Math.round(Number(value) || S.DEFAULT_LENGTH));
