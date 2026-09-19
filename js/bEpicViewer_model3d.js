@@ -145,17 +145,30 @@ export class Model3DView {
         previzBtn.title = "Build a scene from several models, with cameras and keyframes";
         previzBtn.onclick = () => { if (this.hooks.onPrevizToggle) this.hooks.onPrevizToggle(); };
 
+        // The two previz panels are toggled from here rather than from the
+        // playback bar: they describe this canvas, and there is nothing they
+        // can say about a picture.
+        const panelBtn = el("button", "model-btn model-panel-btn", "▣");
+        panelBtn.title = "Show / hide the Previz panel";
+        panelBtn.onclick = () => { if (this.hooks.onPanelToggle) this.hooks.onPanelToggle("previz"); };
+        if (this.hooks.setIcon) this.hooks.setIcon(panelBtn, "icon-previz");
+
+        const curvesBtn = el("button", "model-btn model-panel-btn", "∿");
+        curvesBtn.title = "Show / hide the Animation Curves";
+        curvesBtn.onclick = () => { if (this.hooks.onPanelToggle) this.hooks.onPanelToggle("curves"); };
+        if (this.hooks.setIcon) this.hooks.setIcon(curvesBtn, "icon-curves");
+
         const animBtn = el("button", "model-btn", "❚❚");
         animBtn.title = "Play / pause the model's animation";
         animBtn.style.display = "none";
         animBtn.onclick = () => this.setAnimationPlaying(!this._playing);
 
-        bar.append(modeSel, gridBtn, resetBtn, animBtn, previzBtn);
+        bar.append(modeSel, gridBtn, resetBtn, animBtn, previzBtn, panelBtn, curvesBtn);
         const status = el("div", "model-status");
 
         root.append(bar, status);
         this.root = root;
-        this.ui = { modeSel, gridBtn, resetBtn, animBtn, previzBtn, status };
+        this.ui = { modeSel, gridBtn, resetBtn, animBtn, previzBtn, panelBtn, curvesBtn, status };
         this._syncToolbar();
         this.host.appendChild(root);
     }
@@ -170,9 +183,19 @@ export class Model3DView {
         this.ui.animBtn.style.display = hasAnim ? "" : "none";
         this.ui.animBtn.textContent = this._playing ? "❚❚" : "▶";
         this.ui.previzBtn.classList.toggle("active", !!this.previzActive);
+        // Only in previz: on a lone model there is no scene to outline and no
+        // keys to draw.
+        for (const b of [this.ui.panelBtn, this.ui.curvesBtn]) b.style.display = this.previzActive ? "" : "none";
         this.ui.previzBtn.title = this.previzActive
             ? "Leave previz (the scene is kept)"
             : "Build a scene from several models, with cameras and keyframes";
+    }
+
+    /** Light the panel buttons from the dock, which is what actually knows. */
+    setPanelStates(states) {
+        if (!this.ui) return;
+        this.ui.panelBtn.classList.toggle("active", !!(states && states.previz));
+        this.ui.curvesBtn.classList.toggle("active", !!(states && states.curves));
     }
 
     /** Previz on: the single-model view steps aside for the scene. */

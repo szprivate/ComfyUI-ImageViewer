@@ -74,7 +74,7 @@ export const PrevizMixin = {
         this._setScene(key, null);
         if (this._model3d) this._model3d.setScene(S.makeScene(), 0);
         this._previzHidePanel();
-        this.previzRefreshCurves();          // takes the curve strip down with it
+        this.previzRefreshCurves();          // takes the curves panel down with it
         this.applyTimelineBounds();
         this.refreshView();
         this.queuePersistViewerState();
@@ -475,6 +475,8 @@ export const PrevizMixin = {
         this._previzCloseAddMenu();
         if (this._previzUI && this._previzUI.root) this._previzUI.root.style.display = "none";
         if (this.isPanelDocked("previz")) this.setPanelDocked("previz", false);
+        // The curves describe the same scene, so they go with it.
+        if (this._previzHideCurves) this._previzHideCurves();
     },
 
     /**

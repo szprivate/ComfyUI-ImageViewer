@@ -1,7 +1,12 @@
 // bEpicViewer_previzCurves.js
 // The previz animation curves: the selected item's keys drawn as value over
-// time, in the collapsible strip above the timeline the Roto tool also uses
-// (#kf-editor — a 3D tab has no roto, so they never want it at once).
+// time, in a dock panel of their own (#curves-panel), alongside the previz
+// panel and reached from the 3D toolbar.
+//
+// It used to share the Roto tool's strip above the timeline (#kf-editor). A
+// graph you drag keys around in wants height, and that strip could only take
+// it from the picture; as a docked panel it is sized, moved and stacked like
+// every other panel, and the strip goes back to being the roto tool's alone.
 //
 // Deliberately NOT the roto editor's speed graph. Roto animates one shape, so
 // its curve is about timing; here every channel is a plain number — X, Y and Z
@@ -29,7 +34,7 @@ const GRAPH = { top: 10, bottom: 90 };
 export const PrevizCurvesMixin = {
 
     _previzCurveHost() {
-        return this.container && this.container.querySelector("#kf-editor");
+        return this.curvesPanel || null;
     },
 
     /** The channel on screen: the chosen one, or the first that has keys. */
@@ -43,35 +48,46 @@ export const PrevizCurvesMixin = {
         return null;
     },
 
-    /** Show the editor when the selection has an animation, hide it otherwise. */
+    /**
+     * Draw what the selection has to show.
+     *
+     * The panel is the dock's to open and close — previz only fills it in, and
+     * says nothing at all while it is away. An item without keys still keeps
+     * the panel: a graph that vanished whenever you clicked something else was
+     * the strip's behaviour, and it made the panel feel broken.
+     */
     previzRefreshCurves() {
         const host = this._previzCurveHost();
         if (!host) return;
-        const item = this.isPrevizTab() ? this.previzSelectedItem() : null;
+        if (!this.isPrevizTab()) { this._previzHideCurves(); return; }
+        if (!this.isPanelDocked("curves")) return;
+
+        const ui = this._previzBuildCurveEditor(host);
+        if (!ui) return;
+        const item = this.previzSelectedItem();
         const prop = item ? this._previzCurveProp(item) : null;
-        if (!prop) {
-            // Leave the host to the Roto tool when previz has nothing to say.
-            if (host.dataset.owner === "previz") host.style.display = "none";
-            return;
-        }
-        this._previzBuildCurveEditor(host);
-        host.style.display = "block";
+
+        ui.body.style.display = prop ? "flex" : "none";
+        ui.empty.style.display = prop ? "none" : "block";
+        ui.empty.textContent = !item
+            ? "Select something in the scene to see its animation."
+            : `${item.name} has no keyframes yet — set one in the previz panel.`;
+        if (!prop) { ui.sub.textContent = item ? item.name : ""; return; }
+
         const keys = S.track(item, prop).length;
-        if (this._previzCurveSub) {
-            const label = (CHANNELS.find((c) => c.prop === prop) || {}).label || prop;
-            this._previzCurveSub.textContent = `${item.name} · ${label} · ${keys} key${keys === 1 ? "" : "s"}`;
-        }
-        if (this._previzCurveOpen) this._previzDrawCurves(item, prop);
+        const label = (CHANNELS.find((c) => c.prop === prop) || {}).label || prop;
+        ui.sub.textContent = `${item.name} · ${label} · ${keys} key${keys === 1 ? "" : "s"}`;
+        this._previzDrawCurves(item, prop);
         this._previzSyncCurveButtons(item, prop);
     },
 
+    /** Put the panel away — previz is over, or the tab is not a 3D one. */
+    _previzHideCurves() {
+        if (this.isPanelDocked && this.isPanelDocked("curves")) this.setPanelDocked("curves", false);
+    },
+
     _previzBuildCurveEditor(host) {
-        if (host.dataset.owner === "previz" && host.dataset.built === "1") return;
-        // The Roto tool builds its own editor in here; taking the host over means
-        // clearing whatever it left behind (and it does the same to us).
-        host.innerHTML = "";
-        host.dataset.owner = "previz";
-        host.dataset.built = "1";
+        if (this._previzCurveUI && this._previzCurveUI.body.isConnected) return this._previzCurveUI;
         const doc = host.ownerDocument;
         const el = (tag, cls, text) => {
             const n = doc.createElement(tag);
@@ -79,21 +95,11 @@ export const PrevizCurvesMixin = {
             if (text !== undefined) n.textContent = text;
             return n;
         };
+        // The dock owns the title bar; everything below it is ours to replace.
+        host.querySelectorAll(":scope > .curves-body, :scope > .curves-empty").forEach((n) => n.remove());
 
-        const head = el("div", "kf-editor-head");
-        this._previzCurveToggle = el("span", "kf-editor-toggle", this._previzCurveOpen ? "▾" : "▸");
-        head.append(this._previzCurveToggle, el("span", "kf-editor-title", "Animation Curves"));
-        this._previzCurveSub = el("span", "kf-editor-sub");
-        head.append(this._previzCurveSub);
-        head.onclick = () => {
-            this._previzCurveOpen = !this._previzCurveOpen;
-            this.previzRefreshCurves();
-        };
-        host.append(head);
-
-        const body = el("div", "kf-editor-body");
-        body.style.display = this._previzCurveOpen ? "block" : "none";
-        this._previzCurveBody = body;
+        const empty = el("div", "curves-empty");
+        const body = el("div", "curves-body");
 
         const bar = el("div", "kf-channels");
         this._previzChannelBtns = {};
@@ -116,7 +122,8 @@ export const PrevizCurvesMixin = {
             this._previzAxisBtns.push(b);
             bar.append(b);
         }
-        body.append(bar);
+        const sub = el("div", "curves-sub");
+        body.append(bar, sub);
 
         this._previzCurveWrap = el("div", "kf-graph");
         this._previzCurveSvg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -129,7 +136,10 @@ export const PrevizCurvesMixin = {
         body.append(el("div", "bepic-tool-hint",
             "Value over time. Drag a key sideways to retime it, up and down to change that channel; " +
             "double-click removes it. Easing is per key, in the previz panel."));
-        host.append(body);
+        host.append(empty, body);
+
+        this._previzCurveUI = { body, empty, sub };
+        return this._previzCurveUI;
     },
 
     _previzSyncCurveButtons(item, prop) {
@@ -148,8 +158,6 @@ export const PrevizCurvesMixin = {
             b.style.display = prop === "fov" ? "none" : "";
             b.classList.toggle("off", hidden.has(i));
         }
-        if (this._previzCurveBody) this._previzCurveBody.style.display = this._previzCurveOpen ? "block" : "none";
-        if (this._previzCurveToggle) this._previzCurveToggle.textContent = this._previzCurveOpen ? "▾" : "▸";
     },
 
     /** Frames → x%, values → y%, for the channel on screen. */

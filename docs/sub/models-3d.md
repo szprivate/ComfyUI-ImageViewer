@@ -53,7 +53,9 @@ A 3D tab starts with one model. Press **Previz** in the 3D toolbar and that tab 
 
 ### The Panel
 
-The previz panel is a docked panel like the file browser: it opens in a rail when previz starts, and can be moved, stacked and resized like any other — see [Docking Panels](interface.md#docking-panels). The **cube icon** in the playback toolbar shows and hides it. Its **✕** puts the panel away without leaving previz; **Leave previz** at the foot does that.
+The previz panel is a docked panel like the file browser: it opens in a rail when previz starts, and can be moved, stacked and resized like any other — see [Docking Panels](interface.md#docking-panels). Its **✕** puts the panel away without leaving previz; **Leave previz** at the foot does that.
+
+Two icons appear in the 3D toolbar while previz is on, and they are the only way back to either panel: the **cube** shows and hides the previz panel, the **curve** shows and hides the [Animation Curves](#the-curve-editor). They sit over the canvas they belong to — neither has anything to say about a picture, so neither clutters the playback bar. Both panels close when previz does.
 
 | Part | What it does |
 |---|---|
@@ -121,7 +123,9 @@ A whole drag is a single step, however many times the mouse moved. The buttons' 
 
 ### The Curve Editor
 
-Keys are also shown as a graph in the strip above the timeline, the same place the [Roto tool](other.md) puts its curves. It appears whenever the selected item has an animation; click the title to fold it away.
+Keys are also shown as a graph, in an **Animation Curves** panel of its own — a dock panel like the others, opened with the **curve icon** in the 3D toolbar. It used to share the strip above the timeline with the [Roto tool](other.md); a graph you drag keys around in wants height, and in a rail it can have it. Drag the bar between the panel and the picture to give it more, or stack it under the previz panel to work on one shot with both open.
+
+The panel stays put while you click around the scene: with nothing animated selected it says so rather than disappearing.
 
 It plots **value over time** — one curve per channel, X red, Y green, Z blue (a camera's field of view gets a single curve). That's the difference from Roto's editor: roto animates one shape, so its graph is about timing, while here every channel is a plain number in world units or degrees, and the useful question is what the number does.
 

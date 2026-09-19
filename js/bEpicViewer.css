@@ -773,6 +773,32 @@ textarea.param-input {
 }
 .model-status.error { border-color: #a33; color: #e88; }
 
+/* The two panel toggles over the canvas: icons, so neither is mistaken for
+   the Previz button beside them, which switches the mode rather than a panel. */
+.model-panel-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; padding: 0; }
+.model-panel-btn svg { width: 15px; height: 15px; }
+
+/* Animation Curves: one channel of the selected item drawn over time
+   (bEpicViewer_previzCurves.js). A dock panel, so the graph has room to be
+   dragged in. */
+.curves-panel {
+    width: 300px; min-width: 220px; flex-shrink: 0;
+    background: linear-gradient(180deg,#0d0d0d,#0b0b0b);
+    border: 1px solid #333; border-radius: 6px;
+    display: flex; flex-direction: column; position: relative; z-index: 20;
+    box-sizing: border-box; overflow: hidden;
+    color: #ddd; font-family: sans-serif; font-size: 12px; cursor: default;
+}
+.curves-body {
+    flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 4px;
+    padding: 8px; box-sizing: border-box;
+}
+/* The graph takes whatever the panel has left: this is the one part worth
+   making the panel taller for. */
+.curves-body .kf-graph { flex: 1 1 auto; height: auto; min-height: 90px; }
+.curves-sub { color: #888; font-size: 11px; }
+.curves-empty { padding: 10px 8px; color: #777; line-height: 1.4; }
+
 /* Previz panel: the outliner, transforms and keys for a 3D scene
    (bEpicViewer_mixinPreviz.js). A dock panel like the file browser — the rail
    sizes it, and it no longer covers the corner of the picture it describes. */

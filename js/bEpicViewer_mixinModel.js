@@ -43,9 +43,20 @@ export const ModelMixin = {
                 onCameraMoved: (id, transform, live) =>
                     this.previzApplyTransform(id, transform, ["position", "rotation"], { live }),
                 onPrevizToggle: () => this.togglePreviz(),
+                onPanelToggle: (id) => this.togglePanelDocked(id),
+                setIcon: (el, key) => this._setIcon(el, key),
             });
         }
         return this._model3d;
+    },
+
+    /** The 3D toolbar's two panel toggles, lit from the dock. */
+    _syncModelPanelButtons() {
+        if (!this._model3d || !this._model3d.setPanelStates) return;
+        this._model3d.setPanelStates({
+            previz: this.isPanelDocked("previz"),
+            curves: this.isPanelDocked("curves"),
+        });
     },
 
     _enterModelMode(frame) {
@@ -74,6 +85,7 @@ export const ModelMixin = {
                 view.select(this._previzSelection);
             }
             this._previzRenderPanel();
+            this._syncModelPanelButtons();
             this._updatePathBar(null);
         } else {
             view.reveal();

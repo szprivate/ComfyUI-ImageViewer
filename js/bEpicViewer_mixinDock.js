@@ -35,6 +35,9 @@ const DOCK_PANELS = {
     // The outliner and a transform's three boxes set the floor here; the
     // properties block grows downwards from it.
     previz:  { prop: "previzPanel",  label: "Previz",     minW: 210, minH: 260, defaultRail: "right" },
+    // A graph is only readable with some height under it, so this one asks for
+    // more than the rest; the channel buttons set the width.
+    curves:  { prop: "curvesPanel",  label: "Animation Curves", minW: 220, minH: 190, defaultRail: "right" },
 };
 const RAIL_SIDES = ["left", "right"];
 
@@ -86,6 +89,7 @@ export const DockMixin = {
             left:  { width: 88,  panels: [{ id: "history", size: 1, hidden: true  }] },
             right: { width: 300, panels: [{ id: "browser", size: 1, hidden: true  },
                                           { id: "previz",  size: 1, hidden: true  },
+                                          { id: "curves",  size: 1, hidden: true  },
                                           { id: "params",  size: 1, hidden: false }] },
         };
     },
@@ -289,6 +293,8 @@ export const DockMixin = {
             if (this.renderHistoryPanel) this.renderHistoryPanel();
         } else if (id === "params") {
             if (this.updateParamsPanel) this.updateParamsPanel(true);
+        } else if (id === "curves") {
+            if (this.previzRefreshCurves) this.previzRefreshCurves();
         } else if (id === "previz") {
             // A panel with nothing to show puts itself away again: without a
             // scene on the tab there is no outliner, no transform and no keys.
@@ -304,9 +310,9 @@ export const DockMixin = {
         if (this.browserToggleBtn) {
             this.browserToggleBtn.classList.toggle("active", this.isPanelDocked("browser"));
         }
-        if (this.previzToggleBtn) {
-            this.previzToggleBtn.classList.toggle("active", this.isPanelDocked("previz"));
-        }
+        // Previz and its curves are reached from the 3D toolbar, over the
+        // canvas they belong to, rather than from the playback bar.
+        if (this._syncModelPanelButtons) this._syncModelPanelButtons();
         if (this.paramsBtn) {
             const open = this.isPanelDocked("params");
             this.paramsBtn.style.color = open ? "#f60" : "#eee";

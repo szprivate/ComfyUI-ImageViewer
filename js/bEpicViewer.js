@@ -142,7 +142,6 @@ const ICON_MAP = {
     'range-btn':         'icon-range',
     'refresh':           'icon-refresh',
     'browser-toggle-btn':'icon-folder',
-    'previz-toggle-btn': 'icon-previz',
     'clear-cache-btn':   'icon-delete',
     'history-clear-btn': 'icon-delete',
     'help-btn':          'icon-help',
@@ -493,6 +492,7 @@ class ViewerPanel extends HTMLElement {
         this.exposureValue    = sr.getElementById('exposure-value');
         this.rgbChannelSel    = sr.getElementById('rgb-channel-sel');
         this.previzPanel      = sr.getElementById('previz-panel');
+        this.curvesPanel      = sr.getElementById('curves-panel');
     }
 
     /** Set inline SVG icon on an element from the loaded skin. */
@@ -684,15 +684,6 @@ class ViewerPanel extends HTMLElement {
         if (clearCacheBtn && clearCacheBtn.parentNode) clearCacheBtn.parentNode.insertBefore(this.browserToggleBtn, clearCacheBtn);
         else if (this.historyToggleBtn && this.historyToggleBtn.parentNode) {
             this.historyToggleBtn.parentNode.insertBefore(this.browserToggleBtn, this.historyToggleBtn.nextSibling);
-        }
-
-        this.previzToggleBtn           = document.createElement('button');
-        this.previzToggleBtn.id        = 'previz-toggle-btn';
-        this.previzToggleBtn.className = 'sprite-icon';
-        this.previzToggleBtn.title     = 'Toggle Previz Panel (3D scene tabs)';
-        this.previzToggleBtn.onclick   = () => this.togglePanelDocked('previz');
-        if (this.browserToggleBtn.parentNode) {
-            this.browserToggleBtn.parentNode.insertBefore(this.previzToggleBtn, this.browserToggleBtn.nextSibling);
         }
 
         // layout-sel doesn't exist in HTML — create it as an invisible overlay
