@@ -562,6 +562,7 @@ textarea.param-input {
    a panel's own width and min-width have to stand down. */
 .dock-rail > .params-panel,
 .dock-rail > .browser-panel,
+.dock-rail > .previz-panel,
 .dock-rail > .history-panel {
     width: auto; min-width: 0; flex-shrink: 1;
     margin: 0; border-radius: 0;
@@ -773,21 +774,39 @@ textarea.param-input {
 .model-status.error { border-color: #a33; color: #e88; }
 
 /* Previz panel: the outliner, transforms and keys for a 3D scene
-   (bEpicViewer_mixinPreviz.js). It lives inside the 3D view so it travels with
-   the viewer into the undocked window. */
+   (bEpicViewer_mixinPreviz.js). A dock panel like the file browser — the rail
+   sizes it, and it no longer covers the corner of the picture it describes. */
 .previz-panel {
-    position: absolute; top: 44px; right: 8px; bottom: 34px; z-index: 3;
-    display: none; flex-direction: column; gap: 6px;
-    width: 250px; padding: 8px; box-sizing: border-box;
-    background: rgba(20, 20, 20, 0.94); border: 1px solid #444; border-radius: 6px;
+    width: 250px; min-width: 210px; flex-shrink: 0;
+    background: linear-gradient(180deg,#0d0d0d,#0b0b0b);
+    border: 1px solid #333; border-radius: 6px;
+    display: flex; flex-direction: column; position: relative; z-index: 20;
+    box-sizing: border-box; overflow: hidden;
     color: #ddd; font-family: sans-serif; font-size: 12px; cursor: default;
 }
-.viewport.model-mode .model-toolbar { right: 266px; }
-.previz-head { display: flex; align-items: center; justify-content: space-between; }
-.previz-title { color: #f60; font-weight: 600; }
-.previz-x { background: none; border: none; color: #999; font-size: 15px; cursor: pointer; padding: 0 2px; }
-.previz-x:hover { color: #fff; }
+/* Everything below the dock's title bar scrolls together: a scene with a long
+   outliner must not push the transform fields out of reach. */
+.previz-body {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 8px; box-sizing: border-box;
+}
 .previz-actions, .previz-row { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.previz-add { display: inline-flex; align-items: center; justify-content: center; padding: 1px 6px; }
+.previz-add svg { width: 15px; height: 15px; }
+/* Hung off .main-area, clear of the panel's own clipping. */
+.previz-menu {
+    position: absolute; z-index: 300; min-width: 122px; padding: 3px;
+    display: flex; flex-direction: column;
+    background: #1b1b1b; border: 1px solid #444; border-radius: 4px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.6);
+}
+.previz-menu-item {
+    background: none; border: none; border-radius: 3px; color: #ccc;
+    min-height: 0; padding: 4px 8px; font-size: 11px; text-align: left; cursor: pointer;
+}
+.previz-menu-item:hover { background: #333; color: #fff; }
+.previz-menu-sep { height: 1px; margin: 3px 2px; background: #3a3a3a; }
 .previz-btn, .previz-sel {
     background: #222; color: #ccc; border: 1px solid #444; border-radius: 3px;
     padding: 2px 6px; font-size: 11px; cursor: pointer;

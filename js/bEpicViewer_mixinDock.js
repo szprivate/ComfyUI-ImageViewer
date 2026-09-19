@@ -32,6 +32,9 @@ const DOCK_PANELS = {
     // buttons; the preview shrinks into whatever is left over.
     browser: { prop: "browserPanel", label: "Files",      minW: 180, minH: 220, defaultRail: "right" },
     params:  { prop: "paramsPanel",  label: "Parameters", minW: 200, minH: 120, defaultRail: "right" },
+    // The outliner and a transform's three boxes set the floor here; the
+    // properties block grows downwards from it.
+    previz:  { prop: "previzPanel",  label: "Previz",     minW: 210, minH: 260, defaultRail: "right" },
 };
 const RAIL_SIDES = ["left", "right"];
 
@@ -82,6 +85,7 @@ export const DockMixin = {
         return {
             left:  { width: 88,  panels: [{ id: "history", size: 1, hidden: true  }] },
             right: { width: 300, panels: [{ id: "browser", size: 1, hidden: true  },
+                                          { id: "previz",  size: 1, hidden: true  },
                                           { id: "params",  size: 1, hidden: false }] },
         };
     },
@@ -285,16 +289,23 @@ export const DockMixin = {
             if (this.renderHistoryPanel) this.renderHistoryPanel();
         } else if (id === "params") {
             if (this.updateParamsPanel) this.updateParamsPanel(true);
+        } else if (id === "previz") {
+            // A panel with nothing to show puts itself away again: without a
+            // scene on the tab there is no outliner, no transform and no keys.
+            if (this._previzRenderPanel) this._previzRenderPanel();
         }
     },
 
-    /** The toolbar's three toggles, lit from the dock rather than each other. */
+    /** The toolbar's toggles, lit from the dock rather than from each other. */
     _syncPanelToggleButtons() {
         if (this.historyToggleBtn) {
             this.historyToggleBtn.classList.toggle("active", this.isPanelDocked("history"));
         }
         if (this.browserToggleBtn) {
             this.browserToggleBtn.classList.toggle("active", this.isPanelDocked("browser"));
+        }
+        if (this.previzToggleBtn) {
+            this.previzToggleBtn.classList.toggle("active", this.isPanelDocked("previz"));
         }
         if (this.paramsBtn) {
             const open = this.isPanelDocked("params");

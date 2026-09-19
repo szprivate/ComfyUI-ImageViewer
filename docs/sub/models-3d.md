@@ -53,11 +53,11 @@ A 3D tab starts with one model. Press **Previz** in the 3D toolbar and that tab 
 
 ### The Panel
 
+The previz panel is a docked panel like the file browser: it opens in a rail when previz starts, and can be moved, stacked and resized like any other — see [Docking Panels](interface.md#docking-panels). The **cube icon** in the playback toolbar shows and hides it. Its **✕** puts the panel away without leaving previz; **Leave previz** at the foot does that.
+
 | Part | What it does |
 |---|---|
-| **+ Model** | Adds the model selected in the [File Browser](other.md#file-browser). You can also drag models straight into the 3D view, from the browser, the history strip or your desktop. |
-| **+ Shape** | Adds a box, sphere, plane, cylinder, cone or torus — no file needed, for blocking a scene out. It lands where the view is looking. |
-| **+ Camera** | Adds a camera where the view is right now. |
+| **+** | One menu for everything a scene can gain. **Model…** adds the model selected in the [File Browser](other.md#file-browser) — you can also drag models straight into the 3D view, from the browser, the history strip or your desktop. **Camera** adds a camera where the view is right now. Below the line: a box, sphere, plane, cylinder, cone or torus — no file needed, for blocking a scene out. It lands where the view is looking. |
 | **Duplicate / Delete** | Copies or removes the selected item, animation included. |
 | **Move / Rotate / Scale** | Which gizmo the selected item gets. |
 | The list | Every item in the scene. Click to select, **◉** hides and shows, **▣** looks through a camera, **•** marks an item that has keyframes. |
@@ -86,7 +86,7 @@ While you are looking through a camera it has no gizmo: there would be no handle
 
 ### Shapes
 
-**+ Shape** drops a primitive into the scene: **Box**, **Sphere**, **Plane**, **Cylinder**, **Cone** or **Torus**. They need no file and are saved with the scene like anything else, so they cost nothing to keep around.
+The bottom half of the **+** menu drops a primitive into the scene: **Box**, **Sphere**, **Plane**, **Cylinder**, **Cone** or **Torus**. They need no file and are saved with the scene like anything else, so they cost nothing to keep around.
 
 Each is built at unit size — a 1-unit box, a half-unit radius — and sized by its **Scale**, so the scale gizmo is also the size gizmo. A plane arrives lying flat and 10 units across, ready to be a floor, and is visible from both sides. Give a shape a **Colour** in the panel to tell your blocking apart; they animate exactly like a loaded model.
 
@@ -172,7 +172,7 @@ Previz stages are read and written as **USD**, so a shot can leave this viewer f
 
 ### Viewing a stage
 
-Open one like any other model — from the file browser, a drop, a loader node, or **+ Model** in previz. The stage is composed on the server (layers, references, payloads and variants all resolve through OpenUSD) and handed to the viewport as a flattened glTF copy, cached until the file changes. That copy is for looking at only; what the scene stores, and what is exported again, is the stage itself.
+Open one like any other model — from the file browser, a drop, a loader node, or **+ → Model…** in previz. The stage is composed on the server (layers, references, payloads and variants all resolve through OpenUSD) and handed to the viewport as a flattened glTF copy, cached until the file changes. That copy is for looking at only; what the scene stores, and what is exported again, is the stage itself.
 
 The flattening keeps geometry, transforms, visibility and `displayColor`, prefers the proxy purpose, and skips `guide` prims. Shading beyond `displayColor` is not carried — previz is about staging, and a viewport material would only pretend to be the look.
 

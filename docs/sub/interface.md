@@ -80,7 +80,7 @@ The bottom bar contains (left to right):
 
 ## Docking Panels
 
-The history strip, the file browser and the parameters panel all live in one of two **rails**, left and right of the picture. A rail is a vertical stack, so panels can sit side by side *or* above one another.
+The history strip, the file browser, the previz panel and the parameters panel all live in one of two **rails**, left and right of the picture. A rail is a vertical stack, so panels can sit side by side *or* above one another.
 
 Every panel wears a slim **title bar** across its top — a grip, the panel's name, and a **✕**. Drag the bar to move the panel; the ✕ puts it away, keeping its slot so showing it again brings it back where it was.
 
