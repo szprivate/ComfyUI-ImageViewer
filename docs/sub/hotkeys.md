@@ -45,6 +45,8 @@ See [Selecting Several Snapshots](tabs-history.md#selecting-several-snapshots) f
 | <kbd>R</kbd> | Scale tool |
 | <kbd>X</kbd> | Gizmo axes: World / Local |
 | <kbd>Alt</kbd>+drag | Tumble (left), track (middle), dolly (right) — as in Maya |
+| <kbd>Ctrl</kbd>+<kbd>Z</kbd> | Undo the last previz edit |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd> | Redo |
 | <kbd>F</kbd> | Frame the scene again |
 
 These answer only while a [previz](models-3d.md#previz-building-a-scene) tab is open, so <kbd>R</kbd> and <kbd>E</kbd> keep their usual meanings everywhere else.

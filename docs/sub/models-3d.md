@@ -64,7 +64,7 @@ A 3D tab starts with one model. Press **Previz** in the 3D toolbar and that tab 
 | Transform fields | The selected item's position, rotation (degrees) and scale — and a camera's field of view, or a shape's colour. |
 | **fps / frames** | The shot's frame rate and length. The viewer's timeline covers exactly this range while previz is on. |
 
-Navigation follows Maya: hold <kbd>Alt</kbd> and the left button tumbles, the middle button tracks and the right button dollies. Without <kbd>Alt</kbd> the left button belongs to the scene — click an object in the viewport to select it, or a camera's frustum lines, and drag the gizmo to move it. The numbers follow, and so does the scene. (On a plain one-model tab there is nothing to select, so left-drag orbits there as it always did.)
+Navigation follows Maya: hold <kbd>Alt</kbd> and the left button tumbles, the middle button tracks and the right button dollies. The pointer says which it is — an arrow that picks and drags, a hand while <kbd>Alt</kbd> is held. Without <kbd>Alt</kbd> the left button belongs to the scene — click an object in the viewport to select it, or a camera's frustum lines, and drag the gizmo to move it. The numbers follow, and so does the scene. (On a plain one-model tab there is nothing to select, so left-drag orbits there as it always did.)
 
 | Key | Tool |
 |---|---|
@@ -76,7 +76,7 @@ Navigation follows Maya: hold <kbd>Alt</kbd> and the left button tumbles, the mi
 
 These only answer on a previz tab, so <kbd>R</kbd> is still the red channel and <kbd>E</kbd> still the exposure drag on a picture. Like every viewer hotkey they can be rebound in **Settings → Keybinding**.
 
-**World / Local** is also a button next to the tool buttons. World lines the handles up with the grid; Local lines them up with the item's own axes. Scaling is always along the item's own axes, as it is in every 3D app.
+**Local / World** is also a button next to the tool buttons. Local (the default) lines the handles up with the item's own axes, so something you have turned still moves the way it faces; World lines them up with the grid. Scaling is always along the item's own axes, as it is in every 3D app.
 
 ### Cameras
 
@@ -106,6 +106,17 @@ Keyframes are per item and per property.
 Keyframes show as orange ticks under the timeline; click one to jump to it. Play, scrub and step work as they do for footage. A model with its own animation (an FBX clip) is scrubbed by the timeline too, so the whole shot stays frame-accurate.
 
 Rotations interpolate the short way round, so a turn from 350° to 10° moves 20°, not 340°.
+
+### Undoing
+
+Every previz edit can be taken back: adding, deleting and duplicating, a gizmo drag, a typed number, keying, retiming, the frame rate and the shot's length.
+
+| Action | How |
+|---|---|
+| Undo | <kbd>Ctrl</kbd>+<kbd>Z</kbd>, or the ↩ button |
+| Redo | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> or <kbd>Ctrl</kbd>+<kbd>Y</kbd>, or the ↪ button |
+
+A whole drag is a single step, however many times the mouse moved. The buttons' tooltips name what they would undo or redo, and the last fifty steps are kept per tab. The keys answer only while a previz tab is hovered, so <kbd>Ctrl</kbd>+<kbd>Z</kbd> still belongs to the node graph everywhere else.
 
 ### The Curve Editor
 
@@ -189,12 +200,18 @@ Give a plain name and the stage lands in `output/3d_scenes`; give a full path en
 | In the stage | Becomes |
 |---|---|
 | `UsdGeomCamera` | a previz camera, its focal length read back as a field of view |
-| A prim with a payload or reference | a model item pointing at that asset |
+| A prim with a payload or reference | one item, drawn from that prim |
+| A prim marked `component` in the model hierarchy | one item — an asset is a thing you move, not a hundred things |
+| Geometry with no such ancestor | one item of its own |
 | `Cube`, `Sphere`, `Cylinder`, `Cone`, `Plane` | the matching previz shape, with its `displayColor` |
 | Time samples on the transforms | keyframes, with linear easing — which is what USD samples mean |
 | `timeCodesPerSecond`, start and end | the shot's fps and length |
 
-Payloads stay **unloaded** while the stage is read: the hierarchy, transforms and cameras all live in the stage itself, and each asset is loaded by the viewer when it draws it.
+Nothing below a chosen prim is taken again, so a kitchen arrives as its furniture rather than as every cupboard door.
+
+A previz scene is a flat list, so each item carries the prim's transform **in the world**, parents included. Its geometry is addressed as the stage plus that prim path: the server flattens only that subtree, in the prim's own space, and the stage's composition — variants, nested payloads, the transforms inside the asset — is what you see.
+
+Payloads are composed while reading, since a layout stage keeps its geometry behind them. A prim whose asset can't be composed — a missing file, or a type the local prim overrides — is still kept, showing as an empty item with a red **!** and the reason, rather than quietly disappearing from the layout.
 
 ### What doesn't survive
 
