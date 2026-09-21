@@ -14,6 +14,17 @@
 // or "linear"). A property with no track holds its static value for the whole
 // shot.
 //
+// TANGENTS
+// A key may also carry `ti` and `to`: the slope of the curve coming in and
+// going out, in value-units per frame, shaped like `v` (three numbers, or one
+// for fov). They are what the curve editor's handles set, and they are
+// OPTIONAL — a key without them behaves exactly as its `ease` says, because
+// the ease shapes are the same cubic with the tangents those words imply:
+// "smooth" is flat at both ends, "linear" is the straight line between the
+// keys, "hold" is not a curve at all. So dragging a handle does not switch a
+// scene into some other mode; it writes down the number the word was standing
+// in for.
+//
 // THE HIERARCHY
 // `items` stays a flat list — it is what a JSON widget, an undo snapshot and a
 // diff all want — and the tree is carried by one field: `parent`, the id of the
@@ -236,6 +247,19 @@ export function uniqueName(scene, wanted) {
 
 const _clone = (v) => (Array.isArray(v) ? v.slice() : v);
 
+/** Read one component of a key's value or tangent — vec3 or a lone number. */
+export function componentOf(value, axis) {
+    return Array.isArray(value) ? value[axis] : value;
+}
+
+/** Write one component back, in whatever shape the value has. */
+function _withComponent(value, axis, x) {
+    if (!Array.isArray(value)) return x;
+    const out = value.slice();
+    out[axis] = x;
+    return out;
+}
+
 /** Keyframes of one property, oldest first. Never null. */
 export function track(item, prop) {
     const t = item && item.tracks && item.tracks[prop];
@@ -264,11 +288,64 @@ export function setKeyframe(item, prop, frame, value, ease) {
     const list = Array.isArray(item.tracks[prop]) ? item.tracks[prop] : [];
     const at = list.findIndex((k) => k.f === f);
     const key = { f, v: _clone(value), ease: ease || (at >= 0 ? list[at].ease : "smooth") };
+    // Moving a key keeps the shape its handles were given; only the editor's
+    // tangent drag rewrites those.
+    if (at >= 0 && list[at].ti !== undefined) key.ti = _clone(list[at].ti);
+    if (at >= 0 && list[at].to !== undefined) key.to = _clone(list[at].to);
     if (at >= 0) list[at] = key;
     else list.push(key);
     list.sort((a, b) => a.f - b.f);
     item.tracks[prop] = list;
     return item;
+}
+
+/**
+ * Set one component of a key's tangent.
+ *
+ * `side` is "in" or "out". Handles are unified unless `broken` says otherwise:
+ * a curve with a kink in it is something you ask for, not something a drag
+ * gives you by accident.
+ */
+export function setTangent(item, prop, frame, axis, slope, { side = "out", broken = false } = {}) {
+    const key = track(item, prop).find((k) => k.f === Math.round(frame));
+    if (!key) return null;
+    const blank = Array.isArray(key.v) ? key.v.map(() => 0) : 0;
+    const put = (which) => {
+        const base = key[which] !== undefined ? key[which] : _clone(blank);
+        key[which] = _withComponent(base, axis, slope);
+    };
+    put(side === "in" ? "ti" : "to");
+    if (!broken) put(side === "in" ? "to" : "ti");
+    return key;
+}
+
+/** Back to what the key's ease says — the handles stop being hand-set. */
+export function clearTangents(item, prop, frame) {
+    const key = track(item, prop).find((k) => k.f === Math.round(frame));
+    if (!key) return null;
+    delete key.ti;
+    delete key.to;
+    return key;
+}
+
+/**
+ * The slope a key actually has on one side, hand-set or implied by its ease.
+ * What the editor draws its handles from.
+ */
+export function tangentAt(item, prop, frame, axis, side = "out") {
+    const keys = track(item, prop);
+    const i = keys.findIndex((k) => k.f === Math.round(frame));
+    if (i < 0) return 0;
+    const key = keys[i];
+    const own = side === "in" ? key.ti : key.to;
+    if (own !== undefined) return componentOf(own, axis);
+    // Implied: read it off the segment this side of the key.
+    const other = side === "in" ? keys[i - 1] : keys[i + 1];
+    if (!other) return 0;
+    const [from, to] = side === "in" ? [other, key] : [key, other];
+    const span = to.f - from.f;
+    const ease = from.ease;
+    return _autoSlope(ease, componentOf(from.v, axis), componentOf(to.v, axis), span);
 }
 
 /** Drop the key at `frame` (all properties when `prop` is omitted). */
@@ -302,19 +379,41 @@ export function clearTracks(item, frame) {
 // Ease shapes the segment AFTER a key: "linear" holds a constant speed,
 // "smooth" (the default) eases out of it and into the next, and "hold" keeps
 // the value until the next key, for stepped moves.
-function _shape(t, ease) {
-    if (ease === "linear") return t;
-    if (ease === "hold") return 0;
-    return t * t * (3 - 2 * t);           // smoothstep
+//
+// Written as the tangents each word means, so one cubic draws every case and a
+// hand-set handle is the same curve with a different number in it:
+//   smooth → flat at both ends (which IS smoothstep)
+//   linear → the straight line's own slope at both ends
+function _autoSlope(ease, from, to, span) {
+    if (ease === "linear" && span > 0) return (to - from) / span;
+    return 0;
+}
+
+/**
+ * One component of a segment, as a cubic Hermite.
+ * `t` is 0..1 across the segment; the tangents are in value-units per frame,
+ * so they are scaled by the segment's length to become the Hermite's.
+ */
+function _hermite(p0, p1, m0, m1, t, span) {
+    const t2 = t * t;
+    const t3 = t2 * t;
+    return (2 * t3 - 3 * t2 + 1) * p0
+         + (t3 - 2 * t2 + t) * span * m0
+         + (-2 * t3 + 3 * t2) * p1
+         + (t3 - t2) * span * m1;
 }
 
 // Rotations are kept in degrees, and two keys 350° apart really mean 10° the
 // other way. Without this a turn would spin the long way round.
-function _lerpAngle(a, b, t) {
+function _angleDelta(a, b) {
     let d = (b - a) % 360;
     if (d > 180) d -= 360;
     if (d < -180) d += 360;
-    return a + d * t;
+    return d;
+}
+
+function _lerpAngle(a, b, t) {
+    return a + _angleDelta(a, b) * t;
 }
 
 function _lerp(a, b, t, angles) {
@@ -336,8 +435,20 @@ export function valueAt(item, prop, frame) {
     while (i < keys.length - 1 && keys[i + 1].f <= frame) i++;
     const a = keys[i], b = keys[i + 1];
     const span = b.f - a.f;
-    const t = span > 0 ? _shape((frame - a.f) / span, a.ease) : 0;
-    return _lerp(a.v, b.v, t, prop === "rotation");
+    if (a.ease === "hold" || span <= 0) return _clone(a.v);
+    const t = (frame - a.f) / span;
+    const angles = prop === "rotation";
+    const each = (axis) => {
+        const p0 = componentOf(a.v, axis);
+        // The short way round for angles: the segment is drawn to the nearer
+        // turn, so 350° to 10° is 20° rather than 340°.
+        const p1 = angles ? p0 + _angleDelta(p0, componentOf(b.v, axis))
+                          : componentOf(b.v, axis);
+        const m0 = a.to !== undefined ? componentOf(a.to, axis) : _autoSlope(a.ease, p0, p1, span);
+        const m1 = b.ti !== undefined ? componentOf(b.ti, axis) : _autoSlope(a.ease, p0, p1, span);
+        return _hermite(p0, p1, m0, m1, t, span);
+    };
+    return Array.isArray(a.v) ? a.v.map((_, axis) => each(axis)) : each(0);
 }
 
 /** Everything the view needs to place one item at `frame`. */
@@ -425,7 +536,17 @@ export function parseScene(raw) {
             for (const k of list) {
                 if (!k || !Number.isFinite(Number(k.f))) continue;
                 const v = prop === "fov" ? num(k.v, item.fov ?? 35) : vec(k.v, item[prop]);
-                keys.push({ f: Math.round(Number(k.f)), v, ease: k.ease === "linear" || k.ease === "hold" ? k.ease : "smooth" });
+                const key = { f: Math.round(Number(k.f)), v,
+                              ease: k.ease === "linear" || k.ease === "hold" ? k.ease : "smooth" };
+                // Hand-set tangents, in the same shape as the value. Anything
+                // else is left off, and the ease speaks for the key again.
+                const zero = prop === "fov" ? 0 : [0, 0, 0];
+                for (const side of ["ti", "to"]) {
+                    if (k[side] === undefined) continue;
+                    const t = prop === "fov" ? num(k[side], undefined) : vec(k[side], zero);
+                    if (prop === "fov" ? Number.isFinite(t) : Array.isArray(t)) key[side] = t;
+                }
+                keys.push(key);
             }
             if (keys.length) {
                 keys.sort((a, b) => a.f - b.f);

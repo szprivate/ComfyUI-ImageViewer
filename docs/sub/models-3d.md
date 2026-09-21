@@ -149,17 +149,33 @@ Keys are also shown as a graph, in an **Animation Curves** panel of its own — 
 
 The panel stays put while you click around the scene: with nothing animated selected it says so rather than disappearing.
 
-It plots **value over time** — one curve per channel, X red, Y green, Z blue (a camera's field of view gets a single curve). That's the difference from Roto's editor: roto animates one shape, so its graph is about timing, while here every channel is a plain number in world units or degrees, and the useful question is what the number does.
+It plots **value over time** — one curve per channel. That's the difference from Roto's editor: roto animates one shape, so its graph is about timing, while here every channel is a plain number in world units or degrees, and the useful question is what the number does.
+
+#### Channels
+
+The column down the left lists them the way a DCC does — **translate.x**, **rotate.y**, **scale.z**, and **fov** on a camera — each in the colour its curve is drawn in. Any set of them can be on screen at once, which is the point of a graph editor: translate.x against rotate.y is a question you can now ask.
 
 | Action | How |
 |---|---|
-| Pick a channel | **Move**, **Rotate**, **Scale** (or **FOV**). A channel with no keys is greyed out. |
-| Show / hide an axis | **X**, **Y**, **Z** |
+| Show one channel | Click its name |
+| Add or remove one | <kbd>Shift</kbd>+click (or <kbd>Ctrl</kbd>+click) |
+| What you get by default | Every channel the selected item animates |
+
+A channel with no keys still draws, as the flat line its static value is — useful for seeing where a move would start from. Names in brighter text are the ones that have keys.
+
+#### Keys and tangents
+
+| Action | How |
+|---|---|
 | Retime a key | Drag it sideways. All three axes move together — one key holds the whole property, as it does everywhere else. |
 | Change a value | Drag a key up or down; only the channel you grabbed changes. Hold <kbd>Shift</kbd> to retime without touching the value. |
 | Remove a key | Double-click it |
+| Show its tangents | Click it — the key takes a white ring and its handles appear |
+| Shape the curve | Drag a handle. Both sides move together, so the curve stays smooth through the key. |
+| Break the pair | <kbd>Alt</kbd>+drag a handle — the two sides then go their own way, for a corner |
+| Back to the ease | Double-click a handle |
 
-The curve is drawn through the scene's own interpolation, so **Smooth**, **Linear** and **Hold** look here exactly as they play. Easing itself stays on the key, in the previz panel — there are no speed handles to drag.
+A key you have not touched has no tangents of its own: it behaves exactly as its ease says, and **Smooth**, **Linear** and **Hold** are drawn here as the curves they are. Dragging a handle writes the number that word was standing in for, so nothing switches mode — **Hold** stays stepped whatever the handles say, because a step has no curve to shape.
 
 The white line is the current frame, and the graph spans the timeline's range.
 

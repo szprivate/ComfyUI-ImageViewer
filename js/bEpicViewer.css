@@ -807,15 +807,41 @@ textarea.param-input {
     box-sizing: border-box; overflow: hidden;
     color: #ddd; font-family: sans-serif; font-size: 12px; cursor: default;
 }
+/* The channel list on the left, the graph on the right — a graph editor's
+   shape, and the only one that can show translate.x and rotate.z at once. */
 .curves-body {
-    flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 4px;
+    flex: 1 1 auto; min-height: 0; display: flex; flex-direction: row; gap: 6px;
     padding: 8px; box-sizing: border-box;
 }
+.curves-channels {
+    flex: 0 0 auto; width: 84px; min-width: 66px; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 1px;
+    border-right: 1px solid #2c2c2c; padding-right: 4px;
+}
+.curves-ch {
+    --ch: #888;
+    background: none; border: none; border-left: 3px solid transparent; border-radius: 2px;
+    color: #777; font-size: 11px; text-align: left; padding: 2px 4px; cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.curves-ch:hover { background: #242424; color: #ccc; }
+/* A channel that has keys is worth looking at; one on screen says so in its
+   own colour. */
+.curves-ch.animated { color: #bbb; }
+.curves-ch.on { border-left-color: var(--ch); color: var(--ch); background: #1e1e1e; }
+.curves-graph-col { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 /* The graph takes whatever the panel has left: this is the one part worth
    making the panel taller for. */
 .curves-body .kf-graph { flex: 1 1 auto; height: auto; min-height: 90px; }
 .curves-sub { color: #888; font-size: 11px; }
 .curves-empty { padding: 10px 8px; color: #777; line-height: 1.4; }
+/* The selected key wears a ring, because its handles belong to it. */
+.kf-dot.chosen { box-shadow: 0 0 0 2px #fff; z-index: 4; }
+/* A tangent handle and the arm holding it. */
+.curves-body .kf-tan { width: 8px; height: 8px; margin: -4px 0 0 -4px; background: #111;
+    border: 2px solid #888; border-radius: 50%; cursor: crosshair; z-index: 5; }
+.kf-tan-line { position: absolute; height: 1px; transform-origin: 0 0; opacity: 0.55; z-index: 3;
+    pointer-events: none; }
 
 /* Previz panel: the outliner, transforms and keys for a 3D scene
    (bEpicViewer_mixinPreviz.js). A dock panel like the file browser — the rail
