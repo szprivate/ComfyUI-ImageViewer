@@ -40,8 +40,10 @@ With **save_to_output** off, the model is only previewed from ComfyUI's temp fol
 | Frame the model again | **Reset view**, or <kbd>F</kbd> |
 | Material | **Original**, **Clay**, **Normal** or **Wireframe** from the toolbar |
 | Grid | **Grid** toggles it |
-| Animation | FBX / glTF animations play on their own; the ▶ / ❚❚ button pauses them |
+| Animation | An FBX / glTF clip is scrubbed by the timeline, like everything else in the shot |
 | Info | The shape overlay (toolbar button) shows vertex, triangle and point counts |
+
+The toolbar sits at the top right of the canvas, level with that read-out, in two rows: what the view looks like — material, **Grid**, **Reset view**, and the two panel toggles — and underneath, what the mouse does: **Move**, **Rotate**, **Scale** and the axes globe.
 
 The first time a model is shown, the viewer keeps a snapshot of it as its history thumbnail. Until then the tile shows a cube.
 
@@ -66,8 +68,6 @@ That is what the two icons in the 3D toolbar are for, and they are the only way 
 | **Export** | The other direction: **Save scene…** writes the scene as a file, **Export USD…** as a stage, and **Render…** turns the shot into an mp4 or a PNG sequence. |
 | **Right-click an item** | **Group**, **Duplicate** or **Delete**. A row inside the current selection acts on all of it — the menu says how many — and a row outside it selects itself first. A group takes what is inside it either way. |
 | **↩ / ↪** | Undo and redo the last previz edit — see [Undoing](#undoing). Their tooltips name what they would take back. |
-| **Move / Rotate / Scale** | Which gizmo the selected item gets. |
-| **Globe** | The gizmo's axes: the world's, or — with the globe crossed out — the item's own. |
 | The list | The scene as a tree. Click to select, <kbd>Shift</kbd>+click to select several, **◉** hides and shows, **▣** looks through a camera, **•** marks an item that has keyframes, and **▾** folds a group away. |
 | Transform fields | The selected item's position, rotation (degrees) and scale — and a camera's field of view, or a shape's colour. |
 
@@ -85,7 +85,9 @@ Navigation follows Maya: hold <kbd>Alt</kbd> and the left button tumbles, the mi
 
 These only answer on a previz tab, so <kbd>R</kbd> is still the red channel and <kbd>E</kbd> still the exposure drag on a picture. Like every viewer hotkey they can be rebound in **Settings → Keybinding**.
 
-**Local / World** is the globe button next to the tool buttons. Local (the default, a crossed-out globe) lines the handles up with the item's own axes, so something you have turned still moves the way it faces; World (a globe) lines them up with the grid. Scaling is always along the item's own axes, as it is in every 3D app.
+The tools themselves — **Move**, **Rotate**, **Scale** and the axes globe — are in the 3D toolbar's second row, over the canvas they act on rather than a rail away from it.
+
+**Local / World** is that globe. Local (the default, a crossed-out globe) lines the handles up with the item's own axes, so something you have turned still moves the way it faces; World (a globe) lines them up with the grid. Scaling is always along the item's own axes, as it is in every 3D app.
 
 ### Cameras
 
@@ -191,6 +193,8 @@ The **bEpic 3D Scene (Previz)** node holds the scene and hands the rendered shot
 3. Set **render_name** on the node (the folder under `output/previz`).
 4. Pick **Export → Render…**, set a size (1920×1080 to start with) and a format, and press **Go**. The viewer plays the shot through the active camera.
 5. Run the workflow. The node reads the render back as `images`, plus `frame_count` and `fps`.
+
+A finished render also **puts itself on the ComfyUI canvas** as a loader node pointing at what was just written — the mp4, the folder of stills, or the single frame — exactly as dragging a history frame onto the graph would. With [VHS](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) installed that is a *(Path)* loader reading the file where it lies; without it, one of ComfyUI's own loaders over a copy in `input`. So the shot is ready to wire into the rest of the workflow without going to look for it, whether or not you use the previz node's own `images` output.
 
 **MP4** is the usual choice: the frames are encoded into **`output/previz/<render_name>.mp4`** at the scene's frame rate and then deleted, so a take leaves one clip behind rather than a folder of stills. Encoding needs `imageio-ffmpeg`, the same encoder the viewer's video saving already uses. **PNG** skips the encoding and keeps the stills in **`output/previz/<render_name>/`** as `frame_0000.png` onwards — what you want for a single frame, or to take the render into another tool. A one-frame shot offers PNG first for that reason.
 

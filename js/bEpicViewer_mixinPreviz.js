@@ -15,10 +15,6 @@ import * as S from "./bEpicViewer_scene3d.js";
 
 const VEC_LABELS = ["X", "Y", "Z"];
 // Maya's manipulator keys, which is what the hotkeys below bind to.
-const GIZMO_MODES = [["translate", "Move", "W", "icon-move"],
-                     ["rotate", "Rotate", "E", "icon-rotate3d"],
-                     ["scale", "Scale", "R", "icon-scale3d"]];
-
 export const PrevizMixin = {
 
     // ── Scene per tab ────────────────────────────────────────────────────────
@@ -671,25 +667,6 @@ export const PrevizMixin = {
         // that has to guess which one you mean.
         actions.append(newBtn, addBtn, exportBtn, undoBtn, redoBtn);
 
-        const gizmoRow = el("div", "previz-row previz-gizmo");
-        const gizmoBtns = {};
-        for (const [mode, label, key, icon] of GIZMO_MODES) {
-            const b = el("button", "previz-btn previz-icon", label);
-            this._setIcon(b, icon);
-            b.title = `${label} the selected item (${key})`;
-            b.onclick = () => { this._modelView().setGizmoMode(mode); this._previzRenderPanel(); };
-            gizmoBtns[mode] = b;
-            gizmoRow.append(b);
-        }
-        const spaceBtn = el("button", "previz-btn previz-icon", "World");
-        spaceBtn.title = "Gizmo axes: world or the item's own (scale is always local)";
-        spaceBtn.onclick = () => {
-            const view = this._modelView();
-            view.setGizmoSpace(view.gizmoSpace === "local" ? "world" : "local");
-            this._previzRenderPanel();
-        };
-        gizmoRow.append(spaceBtn);
-
         const list = el("div", "previz-list");
         // The space below the tree is "no parent": dropping a row here lifts it
         // out of whatever group it was in.
@@ -709,13 +686,13 @@ export const PrevizMixin = {
 
         const props = el("div", "previz-props");
 
-        root.append(actions, gizmoRow, list, props);
+        root.append(actions, list, props);
         // The title bar the dock built is a sibling and stays; only previz's own
         // body is replaced.
         this._previzCloseAddMenu();
         host.querySelectorAll(":scope > .previz-body").forEach((n) => n.remove());
         host.appendChild(root);
-        this._previzUI = { root, list, props, gizmoBtns, spaceBtn, undoBtn, redoBtn };
+        this._previzUI = { root, list, props, undoBtn, redoBtn };
         return this._previzUI;
     },
 
@@ -926,16 +903,7 @@ export const PrevizMixin = {
         const doc = ui.root.ownerDocument;
 
         this.previzSyncTimelineFields();
-        const mode = this._model3d ? this._model3d.gizmoMode : "translate";
-        for (const [m, btn] of Object.entries(ui.gizmoBtns)) btn.classList.toggle("active", m === mode);
         this._previzRefreshUndoButtons();
-        const space = (this._model3d && this._model3d.gizmoSpace) || "local";
-        ui.spaceBtn.textContent = space === "local" ? "Local" : "World";
-        this._setIcon(ui.spaceBtn, space === "local" ? "icon-globe-off" : "icon-globe");
-        ui.spaceBtn.title = space === "local"
-            ? "Gizmo axes: the item's own — click for the world's"
-            : "Gizmo axes: the world's — click for the item's own";
-        ui.spaceBtn.classList.toggle("active", space === "local");
 
         // Outliner: the tree, parents before their children.
         ui.list.innerHTML = "";
@@ -1262,6 +1230,7 @@ export const PrevizMixin = {
         const wasFrame = Math.round(this.currentFrame || 0);
         this._previzRendering = true;
         let done = 0;
+        let firstPath = null, framesDir = null, moviePath = null;
         try {
             for (let f = 0; f < total; f++) {
                 view.applyFrame(f);
@@ -1272,10 +1241,9 @@ export const PrevizMixin = {
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ name, index: f, dataurl, first: f === 0 }),
                 });
-                if (!res.ok) {
-                    const err = await res.json().catch(() => ({}));
-                    throw new Error(err.error || `the server answered ${res.status}`);
-                }
+                const info = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(info.error || `the server answered ${res.status}`);
+                if (f === 0) { firstPath = info.path || null; framesDir = info.dir || null; }
                 done++;
                 view._setStatus(`Rendering ${name}: frame ${f + 1} of ${total}…`);
             }
@@ -1290,8 +1258,17 @@ export const PrevizMixin = {
                 });
                 const encData = await enc.json().catch(() => ({}));
                 if (!enc.ok) throw new Error(encData.error || `the server answered ${enc.status}`);
+                moviePath = encData.path || null;
                 view._setStatus(`Wrote output/previz/${name}.mp4, ${done} frames long.`);
             }
+            // The shot goes back to the graph it was built for: a loader node
+            // pointing at what was just written, exactly as dragging a history
+            // frame onto the canvas would make one.
+            const made = await this.previzNodeForRender(
+                format === "png"
+                    ? { kind: "image", isSequence: done > 1, seqDir: framesDir, path: firstPath }
+                    : { kind: "video", path: moviePath });
+            if (made) view._setStatus(`${view.ui.status.textContent} Dropped a ${made} node on the graph.`);
         } catch (e) {
             console.warn("[bEpicViewer] previz render failed", e);
             view._setStatus(`Render stopped after ${done} frames.\n${(e && e.message) || e}`, true);
@@ -1303,6 +1280,28 @@ export const PrevizMixin = {
             win.setTimeout(() => { if (!this._previzRendering) view._setStatus(""); }, 5000);
         }
         return done;
+    },
+
+    /**
+     * Put a finished render on the ComfyUI canvas as a loader node.
+     *
+     * The same road a history frame takes when it is dragged onto the graph
+     * (bEpicViewer_mixinDnD.js): a VHS "(Path)" loader that reads the file
+     * where it lies when VHS is installed, and one of ComfyUI's own loaders
+     * over an uploaded copy when it is not. A render that produced no path —
+     * an older server, a failed encode — is simply not dropped.
+     */
+    async previzNodeForRender(payload) {
+        if (!payload || (!payload.path && !payload.seqDir)) return null;
+        if (!this._createLoaderForPayload) return null;
+        try {
+            await this._createLoaderForPayload(payload, null, [0, 0]);
+            if (app.graph) app.graph.setDirtyCanvas(true, false);
+            return payload.kind === "video" ? "video" : (payload.isSequence ? "image sequence" : "image");
+        } catch (e) {
+            console.warn("[bEpicViewer] could not put the render on the graph", e);
+            return null;
+        }
     },
 
     /** Ask for a size and a format, then render. Kept in the panel so the popout

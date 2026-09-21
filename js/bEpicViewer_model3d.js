@@ -120,7 +120,11 @@ export class Model3DView {
         const root = el("div", "model-view");
         root.id = "model-view";
 
+        // Two rows, at the top of the canvas beside the scene's own read-out:
+        // what the view looks like, then what the mouse does in it.
         const bar = el("div", "model-toolbar");
+        const look = el("div", "model-toolbar-row");
+        const tools = el("div", "model-toolbar-row");
         const modeSel = el("select", "model-mode");
         modeSel.title = "Material";
         for (const [value, label] of MATERIAL_MODES) {
@@ -151,12 +155,34 @@ export class Model3DView {
         curvesBtn.onclick = () => { if (this.hooks.onPanelToggle) this.hooks.onPanelToggle("curves"); };
         if (this.hooks.setIcon) this.hooks.setIcon(curvesBtn, "icon-curves");
 
-        bar.append(modeSel, gridBtn, resetBtn, panelBtn, curvesBtn);
+        look.append(modeSel, gridBtn, resetBtn, panelBtn, curvesBtn);
+
+        // The gizmo tools. They used to sit in the previz panel, a rail away
+        // from the object they act on; here they are over the canvas, beside
+        // the view controls, and they follow the same keys (W / E / R / X).
+        const toolBtns = {};
+        for (const [mode, label, key, icon] of [
+            ["translate", "Move", "W", "icon-move"],
+            ["rotate", "Rotate", "E", "icon-rotate3d"],
+            ["scale", "Scale", "R", "icon-scale3d"],
+        ]) {
+            const b = el("button", "model-btn model-icon-btn", label);
+            b.title = `${label} the selected item (${key})`;
+            b.onclick = () => this.setGizmoMode(mode);
+            if (this.hooks.setIcon) this.hooks.setIcon(b, icon);
+            toolBtns[mode] = b;
+            tools.append(b);
+        }
+        const spaceBtn = el("button", "model-btn model-icon-btn", "World");
+        spaceBtn.onclick = () => this.setGizmoSpace(this.gizmoSpace === "local" ? "world" : "local");
+        tools.append(spaceBtn);
+
+        bar.append(look, tools);
         const status = el("div", "model-status");
 
         root.append(bar, status);
         this.root = root;
-        this.ui = { modeSel, gridBtn, resetBtn, panelBtn, curvesBtn, status };
+        this.ui = { modeSel, gridBtn, resetBtn, panelBtn, curvesBtn, toolBtns, spaceBtn, status };
         this._syncToolbar();
         this.host.appendChild(root);
     }
@@ -165,6 +191,19 @@ export class Model3DView {
         if (!this.ui) return;
         this.ui.modeSel.value = this.materialMode;
         this.ui.gridBtn.classList.toggle("active", this.showGrid);
+        for (const [mode, btn] of Object.entries(this.ui.toolBtns || {})) {
+            btn.classList.toggle("active", mode === this.gizmoMode);
+        }
+        const space = this.ui.spaceBtn;
+        if (space) {
+            const local = this.gizmoSpace === "local";
+            space.textContent = local ? "Local" : "World";
+            space.classList.toggle("active", local);
+            space.title = local
+                ? "Gizmo axes: the item's own — click for the world's (X)"
+                : "Gizmo axes: the world's — click for the item's own (X)";
+            if (this.hooks.setIcon) this.hooks.setIcon(space, local ? "icon-globe-off" : "icon-globe");
+        }
     }
 
     /** Light the panel buttons from the dock, which is what actually knows. */
@@ -1087,6 +1126,7 @@ export class Model3DView {
     setGizmoMode(mode) {
         this.gizmoMode = ["translate", "rotate", "scale"].includes(mode) ? mode : "translate";
         if (this.gizmo) this.gizmo.setMode(this.gizmoMode);
+        this._syncToolbar();
         this.requestRender();
     }
 
@@ -1098,6 +1138,7 @@ export class Model3DView {
     setGizmoSpace(space) {
         this.gizmoSpace = space === "world" ? "world" : "local";
         if (this.gizmo) this.gizmo.setSpace(this.gizmoSpace);
+        this._syncToolbar();
         this.requestRender();
     }
 

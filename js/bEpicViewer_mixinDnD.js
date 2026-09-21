@@ -649,10 +649,25 @@ export const DnDMixin = {
 
     // Where a node dropped by this event goes, in graph space. `offset` steps a
     // batch apart; null when the canvas can't map the event.
+    //
+    // With no event at all — a render handing its result to the graph rather
+    // than a pointer dropping something — it lands in the middle of whatever
+    // the canvas is showing, which is where you are looking.
     _dropPosition(e, offset) {
+        const step = [(offset && offset[0]) || 0, (offset && offset[1]) || 0];
         try {
-            const pos = app.canvas && app.canvas.convertEventToCanvasOffset(e);
-            if (pos) return [pos[0] + ((offset && offset[0]) || 0), pos[1] + ((offset && offset[1]) || 0)];
+            if (e) {
+                const pos = app.canvas && app.canvas.convertEventToCanvasOffset(e);
+                if (pos) return [pos[0] + step[0], pos[1] + step[1]];
+            } else {
+                const c = app.canvas;
+                const ds = c && c.ds;
+                const el = c && c.canvas;
+                if (ds && el && ds.scale) {
+                    return [(-ds.offset[0] + (el.width / ds.scale) / 2) + step[0],
+                            (-ds.offset[1] + (el.height / ds.scale) / 2) + step[1]];
+                }
+            }
         } catch (_) {}
         return null;
     },
