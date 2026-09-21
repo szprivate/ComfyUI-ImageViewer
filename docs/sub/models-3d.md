@@ -57,7 +57,7 @@ A model that carries its own animation (an FBX clip) is scrubbed by the timeline
 
 The previz panel is a docked panel like the file browser: it opens in a rail with the first 3D tab, and can be moved, stacked and resized like any other — see [Docking Panels](interface.md#docking-panels). Its **✕** puts it away, and it stays away until you ask for it again.
 
-That is what the two icons in the 3D toolbar are for, and they are the only way back to either panel: the **cube** shows and hides the previz panel, the **curve** shows and hides the [Animation Curves](#the-curve-editor). They sit over the canvas they belong to — neither has anything to say about a picture, so neither clutters the playback bar. Both close with the 3D tab.
+That is what the two icons in the 3D toolbar are for, and they are the only way back to either panel: the **cube** shows and hides the previz panel, the **curve graph** shows and hides the [Animation Curves](#the-curve-editor). They sit over the canvas they belong to — neither has anything to say about a picture, so neither clutters the playback bar. Both close with the 3D tab.
 
 | Part | What it does |
 |---|---|
@@ -145,7 +145,7 @@ A whole drag is a single step, however many times the mouse moved. The buttons' 
 
 ### The Curve Editor
 
-Keys are also shown as a graph, in an **Animation Curves** panel of its own — a dock panel like the others, opened with the **curve icon** in the 3D toolbar. It used to share the strip above the timeline with the [Roto tool](other.md); a graph you drag keys around in wants height, and in a rail it can have it. Drag the bar between the panel and the picture to give it more, or stack it under the previz panel to work on one shot with both open.
+Keys are also shown as a graph, in an **Animation Curves** panel of its own — a dock panel like the others, opened with the **curve graph** icon in the 3D toolbar. It used to share the strip above the timeline with the [Roto tool](other.md); a graph you drag keys around in wants height, and in a rail it can have it. Drag the bar between the panel and the picture to give it more, or stack it under the previz panel to work on one shot with both open.
 
 The panel stays put while you click around the scene: with nothing animated selected it says so rather than disappearing.
 
