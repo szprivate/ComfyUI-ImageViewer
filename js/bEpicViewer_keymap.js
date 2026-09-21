@@ -116,6 +116,9 @@ const ACTION_DEFS = [
       enabled: _previz, run: (p) => p.previzSetGizmoMode("scale") },
     { key: "GizmoSpace",  label: "Previz: Local / World Axes", combo: { key: "x" },
       enabled: _previz, run: (p) => p.previzToggleGizmoSpace() },
+    // Maya's key for it, and the same meaning: the gizmo drags the pivot.
+    { key: "PivotMode",   label: "Previz: Move the Pivot", combo: { key: "Insert" },
+      enabled: _previz, run: (p) => p.previzTogglePivotMode() },
     // Ctrl+Z is ComfyUI's own, so it ships unregistered and answers only while
     // the viewer is hovered on a previz tab — where it means the shot, not the
     // graph behind it.

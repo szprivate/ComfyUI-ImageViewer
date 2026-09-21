@@ -831,6 +831,15 @@ textarea.param-input {
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .curves-ch:hover { background: #242424; color: #ccc; }
+/* One section per object, when several are selected. */
+.curves-obj {
+    background: none; border: none; border-radius: 2px;
+    color: #ddd; font-size: 11px; font-weight: 700; text-align: left;
+    padding: 3px 2px 2px; margin-top: 2px; cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    border-bottom: 1px solid #2c2c2c;
+}
+.curves-obj:hover { color: #f60; }
 /* A channel that has keys is worth looking at; one on screen says so in its
    own colour. */
 .curves-ch.animated { color: #bbb; }
@@ -921,6 +930,19 @@ textarea.param-input {
 .previz-text { width: 100%; box-sizing: border-box; background: #1b1b1b; color: #ddd; border: 1px solid #444; border-radius: 3px; padding: 2px 4px; }
 .previz-key { background: none; border: none; color: #666; cursor: pointer; font-size: 12px; }
 .previz-key.on, .previz-key:hover { color: #f60; }
+/* Keying, in the transport beside the timeline it acts on. The autokey ring
+   turns red while it is armed, the way a record button does. */
+.previz-keybar { display: none; align-items: center; gap: 2px; margin-right: 6px; }
+.previz-keybtn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; padding: 0;
+    background: #222; color: #ccc; border: 1px solid #444; border-radius: 3px; cursor: pointer;
+}
+.previz-keybtn:hover { background: #333; color: #fff; }
+.previz-keybtn svg { width: 15px; height: 15px; }
+.previz-keybtn.on { color: #e5484d; border-color: #e5484d; }
+.previz-ease { height: 24px; }
+
 /* The frame counter at the end of the timeline. A readout, and on a previz tab
    the shot's length — so it is an input that only looks like one when it is. */
 .total-f {

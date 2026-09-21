@@ -46,6 +46,7 @@ Every 3D tab is a scene, so these answer on all of them.
 | <kbd>E</kbd> | Rotate tool |
 | <kbd>R</kbd> | Scale tool |
 | <kbd>X</kbd> | Gizmo axes: World / Local |
+| <kbd>Insert</kbd> | Move the pivot instead of the object |
 | <kbd>Alt</kbd>+drag | Tumble (left), track (middle), dolly (right) — as in Maya |
 | <kbd>Ctrl</kbd>+<kbd>Z</kbd> | Undo the last previz edit |
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd> | Redo |

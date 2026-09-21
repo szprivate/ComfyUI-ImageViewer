@@ -38,7 +38,10 @@ export const ModelMixin = {
                 // view makes is handed back to it instead of kept in three.
                 srcUrl: (src) => this.buildImgUrl(src),
                 onPick: (id, add) => this.previzSelect(id, { add }),
-                onTransform: (id, transform, live) => this.previzApplyTransform(id, transform, null, { live }),
+                // `props` arrives when the view knows which ones it changed —
+                // moving a pivot writes the position too.
+                onTransform: (id, transform, live, props) =>
+                    this.previzApplyTransform(id, transform, props || null, { live }),
                 onTransformEnd: () => { this.previzEndDrag(); this.previzChanged(); },
                 onCameraMoved: (id, transform, live) =>
                     this.previzApplyTransform(id, transform, ["position", "rotation"], { live }),

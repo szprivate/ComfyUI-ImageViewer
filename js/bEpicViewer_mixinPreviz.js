@@ -401,6 +401,46 @@ export const PrevizMixin = {
         if (this._model3d) this._model3d.setActiveCamera(scene.activeCamera);
     },
 
+    /**
+     * Insert, as in Maya: the gizmo drags the pivot instead of the object.
+     * It is a mode of the view, not of the scene, so it goes away with the tab.
+     */
+    previzTogglePivotMode(on) {
+        this._previzPivotMode = on === undefined ? !this._previzPivotMode : !!on;
+        const view = this._modelView();
+        if (view.setPivotMode) view.setPivotMode(this._previzPivotMode);
+        this._previzRenderPanel();
+        return this._previzPivotMode;
+    },
+
+    /** Move an item's pivot without moving the item. */
+    previzSetPivot(id, pivot) {
+        const item = S.itemById(this.previzScene(), id);
+        const view = this._modelView();
+        if (!item || !view._pivotShiftLocal || !view.libs) return;
+        const frame = Math.round(this.currentFrame || 0);
+        const at = S.evaluate(item, frame);
+        const { THREE } = view.libs;
+        const now = at.pivot || [0, 0, 0];
+        const e = new THREE.Vector3(pivot[0] - now[0], pivot[1] - now[1], pivot[2] - now[2]);
+        this.previzApplyTransform(id, view._pivotShiftLocal(at, e), ["position", "pivot"]);
+    },
+
+    /** The pivot into the middle of the thing, which is where it usually wants
+     *  to be — and nothing moves. */
+    previzCentrePivot(id = null) {
+        const view = this._modelView();
+        if (!view.pivotCentre) return;
+        const ids = this._previzIdList(id);
+        if (!ids.length) return;
+        this.previzSnapshot(ids.length > 1 ? `centre ${ids.length} pivots` : "centre pivot");
+        for (const one of ids) {
+            const next = view.pivotCentre(one);
+            if (next) this.previzApplyTransform(one, next, ["position", "pivot"]);
+        }
+        this.previzChanged();
+    },
+
     previzLookThrough(id) {
         const scene = this.previzScene();
         if (!scene) return;
@@ -416,18 +456,44 @@ export const PrevizMixin = {
      * the animation.
      */
     previzApplyTransform(id, transform, props, { live = false } = {}) {
-        const item = S.itemById(this.previzScene(), id);
+        const scene = this.previzScene();
+        const item = S.itemById(scene, id);
         if (!item) return;
         // One step per drag, taken as the drag starts; a typed-in number is an
         // edit of its own and gets its own step.
         if (live) this.previzBeginDrag(`move ${item.name}`);
         else if (!this._previzDragging) this.previzSnapshot(`move ${item.name}`);
         const frame = Math.round(this.currentFrame || 0);
+        const write = (target, prop, value) => {
+            if (this._previzAutokey || S.isAnimated(target, prop)) S.setKeyframe(target, prop, frame, value);
+            else target[prop] = Array.isArray(value) ? value.slice() : value;
+        };
+        // Everything else that is selected comes along, by the same amount.
+        // Anything inside a selected group is left out: its parent is already
+        // carrying it, and moving both would move it twice.
+        const others = this.previzSelectedIds().filter((x) => x !== id);
+        const carried = new Set();
+        for (const one of [id, ...others]) {
+            for (const child of S.descendantsOf(scene, one)) carried.add(child.id);
+        }
+        const movers = others.filter((x) => !carried.has(x)).map((x) => S.itemById(scene, x)).filter(Boolean);
+
         for (const prop of props || ["position", "rotation", "scale"]) {
             const value = transform[prop];
             if (value === undefined) continue;
-            if (this._previzAutokey || S.isAnimated(item, prop)) S.setKeyframe(item, prop, frame, value);
-            else item[prop] = Array.isArray(value) ? value.slice() : value;
+            if (movers.length && Array.isArray(value) && prop !== "pivot") {
+                const before = S.valueAt(item, prop, frame);
+                for (const other of movers) {
+                    const ov = S.valueAt(other, prop, frame);
+                    // Scale is a ratio — adding it would make a small thing
+                    // huge and a huge thing wrong.
+                    const next = prop === "scale"
+                        ? ov.map((v, i) => (before[i] ? v * (value[i] / before[i]) : v))
+                        : ov.map((v, i) => v + (value[i] - before[i]));
+                    write(other, prop, next);
+                }
+            }
+            write(item, prop, value);
         }
         // Mid-drag the scene only needs the numbers; the panel, the node widget
         // and the saved state catch up when the drag ends (onTransformEnd).
@@ -450,22 +516,30 @@ export const PrevizMixin = {
     },
 
     /** Key every animatable property of the selection at the current frame. */
+    /** Key everything selected — one key press, one step, however many items. */
     previzKeyAll(prop) {
-        const item = this.previzSelectedItem();
-        if (!item) return;
+        const items = this.previzSelectedIds()
+            .map((id) => S.itemById(this.previzScene(), id)).filter(Boolean);
+        if (!items.length) return;
         this.previzSnapshot(prop ? `key ${prop}` : "key");
         const frame = Math.round(this.currentFrame || 0);
-        const props = prop ? [prop] : (item.kind === "camera"
-            ? ["position", "rotation", "fov"] : ["position", "rotation", "scale"]);
-        for (const p of props) S.setKeyframe(item, p, frame, S.valueAt(item, p, frame), this._previzEase || "smooth");
+        for (const item of items) {
+            const props = prop ? [prop] : (item.kind === "camera"
+                ? ["position", "rotation", "fov"] : ["position", "rotation", "scale"]);
+            for (const p of props) {
+                S.setKeyframe(item, p, frame, S.valueAt(item, p, frame), this._previzEase || "smooth");
+            }
+        }
         this.previzChanged();
     },
 
     previzDeleteKey() {
-        const item = this.previzSelectedItem();
-        if (!item) return;
+        const items = this.previzSelectedIds()
+            .map((id) => S.itemById(this.previzScene(), id)).filter(Boolean);
+        if (!items.length) return;
         this.previzSnapshot("delete key");
-        S.removeKeyframe(item, Math.round(this.currentFrame || 0));
+        const frame = Math.round(this.currentFrame || 0);
+        for (const item of items) S.removeKeyframe(item, frame);
         this.previzChanged();
     },
 
@@ -478,6 +552,68 @@ export const PrevizMixin = {
      * the fps box plays the shot AND sets its rate, and the frame counter at
      * the end of the slider is the last frame of the shot.
      */
+    /**
+     * The keying controls, in the transport beside the timeline.
+     *
+     * They used to sit at the foot of the previz panel, which put the thing
+     * you press while watching the playhead a rail away from the playhead.
+     * Built once and shown only while a 3D tab is up, since keying an image
+     * means nothing.
+     */
+    previzEnsureKeyBar() {
+        const host = this.container;
+        if (!host || !host.querySelector) return null;
+        if (this._previzKeyBar && this._previzKeyBar.bar.isConnected) return this._previzKeyBar;
+        const transport = host.querySelector(".transport");
+        if (!transport) return null;
+        const doc = transport.ownerDocument;
+
+        const bar = doc.createElement("div");
+        bar.className = "previz-keybar";
+        const button = (icon, fallback, title, run) => {
+            const b = doc.createElement("button");
+            b.className = "previz-keybtn sprite-icon";
+            b.textContent = fallback;
+            b.title = title;
+            this._setIcon(b, icon);
+            b.onclick = run;
+            bar.append(b);
+            return b;
+        };
+        const key = button("icon-circle-plus", "+", "Key the selected item's transform here",
+                           () => this.previzKeyAll());
+        const del = button("icon-circle-x", "\u00d7", "Remove the key under the playhead",
+                           () => this.previzDeleteKey());
+        const auto = button("icon-circle", "\u25cb", "Autokey: every move sets a key at this frame",
+                            () => { this._previzAutokey = !this._previzAutokey; this._previzRenderPanel(); });
+        const ease = doc.createElement("select");
+        ease.className = "previz-sel previz-ease";
+        for (const [v, label] of [["smooth", "Smooth"], ["linear", "Linear"], ["hold", "Hold"]]) {
+            ease.append(Object.assign(doc.createElement("option"), { value: v, textContent: label }));
+        }
+        ease.title = "How new keys leave their frame";
+        ease.onchange = () => {
+            this._previzEase = ease.value;
+            // Re-ease the keys the selection has at this frame, so the menu
+            // also works as "change the key I am standing on".
+            const frame = Math.round(this.currentFrame || 0);
+            for (const id of this.previzSelectedIds()) {
+                const item = S.itemById(this.previzScene(), id);
+                if (!item) continue;
+                for (const prop of S.TRACKS) {
+                    for (const k of S.track(item, prop)) if (k.f === frame) k.ease = ease.value;
+                }
+            }
+            this.previzChanged();
+        };
+        bar.append(ease);
+
+        const fps = transport.querySelector("#fps-in");
+        transport.insertBefore(bar, fps || transport.firstChild);
+        this._previzKeyBar = { bar, key, del, auto, ease };
+        return this._previzKeyBar;
+    },
+
     previzSyncTimelineFields() {
         // Through the container, like every other reader of these two: the
         // popout moves the whole tree into another document and this still
@@ -490,6 +626,22 @@ export const PrevizMixin = {
         const doc = (endEl || fpsEl || host).ownerDocument;
         const previz = !!scene;
         if (fpsEl && previz && doc.activeElement !== fpsEl) fpsEl.value = String(scene.fps);
+        // The keying controls belong to the same band as the timeline.
+        const keys = this.previzEnsureKeyBar();
+        if (keys) {
+            keys.bar.style.display = scene ? "flex" : "none";
+            if (scene) {
+                const frame = Math.round(this.currentFrame || 0);
+                keys.key.title = `Key the selected item's transform at frame ${frame}`;
+                keys.auto.classList.toggle("on", !!this._previzAutokey);
+                keys.auto.title = this._previzAutokey
+                    ? "Autokey is on: every move sets a key at this frame"
+                    : "Autokey: every move sets a key at this frame";
+                if (keys.ease.value !== (this._previzEase || "smooth")) {
+                    keys.ease.value = this._previzEase || "smooth";
+                }
+            }
+        }
         if (!endEl) return;
         // A plain readout everywhere else: the length of a clip or a batch is
         // what it is, and only a shot you are building can be told how long.
@@ -1111,6 +1263,9 @@ export const PrevizMixin = {
                 box.onchange = () => {
                     const next = S.valueAt(item, prop, frame).slice();
                     next[i] = Number(box.value) || 0;
+                    // A pivot is where a thing turns, not where it is: typing
+                    // one moves the pivot and leaves the item alone.
+                    if (prop === "pivot") { this.previzSetPivot(item.id, next); return; }
                     this.previzApplyTransform(item.id, { [prop]: next }, [prop]);
                 };
                 row.append(box);
@@ -1145,6 +1300,25 @@ export const PrevizMixin = {
         vecRow("position", "Move", 0.1);
         vecRow("rotation", "Rotate", 1);
         if (item.kind === "model" || item.kind === "group") vecRow("scale", "Scale", 0.01);
+        if (item.kind !== "camera") {
+            vecRow("pivot", "Pivot", 0.1);
+            const row = doc.createElement("div");
+            row.className = "previz-row";
+            row.append(Object.assign(doc.createElement("span"),
+                                     { className: "previz-label", textContent: "" }));
+            const move = doc.createElement("button");
+            move.className = "previz-btn" + (this._previzPivotMode ? " active" : "");
+            move.textContent = "Move pivot";
+            move.title = "Drag the pivot with the gizmo instead of the object (Insert)";
+            move.onclick = () => this.previzTogglePivotMode();
+            const centre = doc.createElement("button");
+            centre.className = "previz-btn";
+            centre.textContent = "Centre";
+            centre.title = "Put the pivot in the middle of the item, without moving it";
+            centre.onclick = () => this.previzCentrePivot();
+            row.append(move, centre);
+            ui.props.append(row);
+        }
 
         if (item.kind === "camera") {
             const row = doc.createElement("div");
@@ -1169,40 +1343,6 @@ export const PrevizMixin = {
             ui.props.append(row);
         }
 
-        const keyRow = doc.createElement("div");
-        keyRow.className = "previz-row previz-keys";
-        const keyAll = doc.createElement("button");
-        keyAll.className = "previz-btn";
-        keyAll.textContent = `Key @ ${frame}`;
-        keyAll.title = "Key this item's transform at the current frame";
-        keyAll.onclick = () => this.previzKeyAll();
-        const delKey = doc.createElement("button");
-        delKey.className = "previz-btn";
-        delKey.textContent = "Delete key";
-        delKey.onclick = () => this.previzDeleteKey();
-        const auto = doc.createElement("button");
-        auto.className = "previz-btn" + (this._previzAutokey ? " active" : "");
-        auto.textContent = "Auto";
-        auto.title = "Autokey: every move you make sets a key at the current frame";
-        auto.onclick = () => { this._previzAutokey = !this._previzAutokey; this._previzRenderPanel(); };
-        const ease = doc.createElement("select");
-        ease.className = "previz-sel";
-        for (const [v, label] of [["smooth", "Smooth"], ["linear", "Linear"], ["hold", "Hold"]]) {
-            ease.append(Object.assign(doc.createElement("option"), { value: v, textContent: label }));
-        }
-        ease.value = this._previzEase || "smooth";
-        ease.title = "How new keys leave their frame";
-        ease.onchange = () => {
-            this._previzEase = ease.value;
-            // Re-ease the keys this item has at this frame, so the menu also
-            // works as "change the key I am standing on".
-            for (const prop of S.TRACKS) {
-                for (const k of S.track(item, prop)) if (k.f === frame) k.ease = ease.value;
-            }
-            this.previzChanged();
-        };
-        keyRow.append(keyAll, delKey, auto, ease);
-        ui.props.append(keyRow);
     },
 
     // ── Rendering the shot ───────────────────────────────────────────────────

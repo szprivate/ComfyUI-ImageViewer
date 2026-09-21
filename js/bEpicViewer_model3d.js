@@ -821,7 +821,7 @@ export class Model3DView {
         const mesh = new THREE.Mesh(geometry, material);
         const group = new THREE.Group();
         group.add(mesh);
-        entry.root.add(group);
+        this._bodyOf(entry).add(group);
         entry.object = group;
         entry.material = material;
         entry.color = item.color;
@@ -844,7 +844,7 @@ export class Model3DView {
     _reparent(entry) {
         const item = entry.item;
         const wanted = (item.kind !== "camera" && item.parent && this._entries.get(item.parent))
-            ? this._entries.get(item.parent).root
+            ? this._bodyOf(this._entries.get(item.parent))
             : this.scene;
         if (entry.root.parent !== wanted) wanted.add(entry.root);
     }
@@ -861,8 +861,22 @@ export class Model3DView {
     _parentWorld(item) {
         const parent = item && item.parent ? this._entries.get(item.parent) : null;
         if (!parent) return null;
-        parent.root.updateWorldMatrix(true, false);
-        return parent.root.matrixWorld;
+        const body = this._bodyOf(parent);
+        body.updateWorldMatrix(true, false);
+        return body.matrixWorld;
+    }
+
+    /**
+     * Where an entry's geometry and children hang.
+     *
+     * An item's transform is T(position)*T(pivot)*R*S*T(-pivot) — the pivot is
+     * the point it turns about — so the root carries position+pivot, R and S,
+     * and everything inside it sits in a body node offset by -pivot. Children
+     * go in the body too, so a parent turning about its pivot carries them
+     * round with it rather than about some other point.
+     */
+    _bodyOf(entry) {
+        return (entry && entry.body) || (entry && entry.root) || null;
     }
 
     async _addEntry(item) {
@@ -876,6 +890,13 @@ export class Model3DView {
         root.userData.bepicItemId = item.id;
         this.scene.add(root);
         const entry = { item, root, key: "", mixer: null, clips: [], camera: null, helper: null, stats: null };
+        // A camera IS its root, so it has no body to offset; nothing hangs
+        // inside one anyway.
+        if (item.kind !== "camera") {
+            entry.body = new THREE.Group();
+            entry.body.name = "body";
+            root.add(entry.body);
+        }
         this._entries.set(item.id, entry);
         this._reparent(entry);
 
@@ -885,7 +906,7 @@ export class Model3DView {
             const axes = new THREE.AxesHelper(0.75);
             axes.visible = false;
             axes.userData.bepicItemId = item.id;
-            root.add(axes);
+            entry.body.add(axes);
             entry.axes = axes;
             return entry;
         }
@@ -917,7 +938,7 @@ export class Model3DView {
             const loaded = await this._load(item.src, url, format);
             // The scene may have moved on while this was in flight.
             if (!this._entries.has(item.id)) { this._disposeObject(loaded.object); return entry; }
-            entry.root.add(loaded.object);
+            this._bodyOf(entry).add(loaded.object);
             entry.object = loaded.object;
             entry.stats = this._statsOf(loaded.object, format);
             loaded.object.traverse((c) => { if (c.isMesh) this._originals.set(c, c.material); });
@@ -944,7 +965,7 @@ export class Model3DView {
     _disposeEntry(entry, full) {
         if (entry.mixer) { entry.mixer.stopAllAction(); entry.mixer = null; }
         if (entry.object) {
-            entry.root.remove(entry.object);
+            this._bodyOf(entry).remove(entry.object);
             this._disposeObject(entry.object);
             for (const mesh of [...this._originals.keys()]) {
                 if (!mesh.parent) this._originals.delete(mesh);
@@ -954,7 +975,7 @@ export class Model3DView {
             entry.material = null;      // a shape's own material went with it
         }
         if (!full) return;
-        if (entry.axes) { entry.root.remove(entry.axes); entry.axes.dispose && entry.axes.dispose(); entry.axes = null; }
+        if (entry.axes) { this._bodyOf(entry).remove(entry.axes); entry.axes.dispose && entry.axes.dispose(); entry.axes = null; }
         if (entry.helper) { this.scene.remove(entry.helper); entry.helper.dispose(); entry.helper = null; }
         if (this.gizmo && this.gizmo.object === entry.root) this.gizmo.detach();
         // It may hang under a group rather than at the top of the scene.
@@ -981,7 +1002,11 @@ export class Model3DView {
             const entry = this._entries.get(item.id);
             if (!entry) continue;
             const at = evaluate(item, frame);
-            entry.root.position.set(...at.position);
+            // The root sits at position+pivot — which IS where the pivot point
+            // ends up, whatever R and S do — and the body takes it back off.
+            const pv = at.pivot || [0, 0, 0];
+            if (entry.body) entry.body.position.set(-pv[0], -pv[1], -pv[2]);
+            entry.root.position.set(at.position[0] + pv[0], at.position[1] + pv[1], at.position[2] + pv[2]);
             entry.root.rotation.set(at.rotation[0] * D, at.rotation[1] * D, at.rotation[2] * D);
             entry.root.scale.set(...at.scale);
             // A camera is not parented in three, so its own transform is
@@ -1018,7 +1043,132 @@ export class Model3DView {
         // helper, which has to be told the item moved under it.
         if (this.gizmoHelper && this.gizmo && this.gizmo.object) this.gizmoHelper.updateMatrixWorld();
         this._refreshAlsoBoxes();
+        this._syncPivotMark();
         this.requestRender();
+    }
+
+    // ── The pivot ────────────────────────────────────────────────────────────
+
+    /**
+     * Move the pivot instead of the object.
+     *
+     * Maya's Insert key. The gizmo then drags the pivot point, and the item's
+     * position is adjusted so that nothing on screen moves: a pivot is where a
+     * thing turns, not where it is.
+     */
+    setPivotMode(on) {
+        this.pivotMode = !!on;
+        this._syncSelection();
+        this._syncPivotMark();
+        this._syncToolbar();
+        this.requestRender();
+    }
+
+    /** The object the gizmo drags while the pivot is being moved. */
+    _pivotHandle(entry) {
+        const { THREE } = this.libs;
+        if (!this._pivotHandleObj) {
+            this._pivotHandleObj = new THREE.Object3D();
+            this._pivotHandleObj.name = "PivotHandle";
+        }
+        const handle = this._pivotHandleObj;
+        const parent = entry.root.parent || this.scene;
+        if (handle.parent !== parent) parent.add(handle);
+        handle.position.copy(entry.root.position);
+        handle.quaternion.identity();
+        handle.scale.setScalar(1);
+        handle.userData.bepicItemId = entry.item.id;
+        return handle;
+    }
+
+    /** The little cross that says where the pivot is, on the selected item. */
+    _syncPivotMark() {
+        if (!this.libs) return;
+        const { THREE } = this.libs;
+        const entry = this.selected ? this._entries.get(this.selected) : null;
+        const want = !!(this.pivotMode && entry && !entry.camera);
+        if (want && !this._pivotMark) {
+            const mark = new THREE.AxesHelper(0.6);
+            mark.name = "PivotMark";
+            this._pivotMark = mark;
+            this.scene.add(mark);
+        }
+        if (!this._pivotMark) return;
+        this._pivotMark.visible = want;
+        if (!want) return;
+        entry.root.updateWorldMatrix(true, false);
+        // The root's own origin is the pivot point: position+pivot, which R and
+        // S leave alone.
+        this._pivotMark.position.setFromMatrixPosition(entry.root.matrixWorld);
+        this._pivotMark.quaternion.identity();
+    }
+
+    /**
+     * Where the pivot would go to sit in the middle of the item, and the
+     * position that keeps the item where it is once it does.
+     */
+    pivotCentre(id) {
+        const entry = this._entries.get(id);
+        if (!entry || !this.libs || !entry.body) return null;
+        const { THREE } = this.libs;
+        const box = new THREE.Box3();
+        let any = false;
+        entry.body.traverse((c) => {
+            if (!c.isMesh && !c.isPoints) return;
+            const b = new THREE.Box3().setFromObject(c);
+            if (b.isEmpty()) return;
+            if (any) box.union(b); else box.copy(b);
+            any = true;
+        });
+        if (!any) return null;
+        // Into the item's own space, which is what the pivot is written in.
+        const centre = box.getCenter(new THREE.Vector3());
+        entry.body.updateWorldMatrix(true, false);
+        centre.applyMatrix4(new THREE.Matrix4().copy(entry.body.matrixWorld).invert());
+        const at = evaluate(entry.item, this.sceneFrame);
+        const pv = at.pivot || [0, 0, 0];
+        return this._pivotShiftLocal(at, centre.clone().sub(new THREE.Vector3(...pv)));
+    }
+
+    /** R*S for an item's values — the part of its transform that isn't a move. */
+    _rotScale(at) {
+        const { THREE } = this.libs;
+        const D = Math.PI / 180;
+        return new THREE.Matrix4().compose(
+            new THREE.Vector3(),
+            new THREE.Quaternion().setFromEuler(new THREE.Euler(
+                at.rotation[0] * D, at.rotation[1] * D, at.rotation[2] * D, "XYZ")),
+            new THREE.Vector3(...at.scale));
+    }
+
+    /**
+     * position and pivot after shifting the pivot by `e` in the ITEM's own
+     * space, with the item left exactly where it was.
+     *
+     * An item's placement is T(position + pivot - R*S*pivot)*R*S, so moving the
+     * pivot by e and the position by R*S*e - e leaves that expression alone —
+     * the object does not budge, only the point it turns about.
+     */
+    _pivotShiftLocal(at, e) {
+        const pv = at.pivot || [0, 0, 0];
+        const moved = e.clone().applyMatrix4(this._rotScale(at)).sub(e);
+        return {
+            pivot: [pv[0] + e.x, pv[1] + e.y, pv[2] + e.z],
+            position: [at.position[0] + moved.x, at.position[1] + moved.y, at.position[2] + moved.z],
+        };
+    }
+
+    /**
+     * The same, for a drag of `d` in the item's PARENT space — which is where
+     * the gizmo works, and where the pivot marker has to follow the pointer.
+     *
+     * The marker sits at position+pivot, so it moves by d exactly when the
+     * pivot moves by (R*S)^-1 * d in the item's own space.
+     */
+    _pivotShiftWorld(at, d) {
+        const { THREE } = this.libs;
+        const inv = new THREE.Matrix4().copy(this._rotScale(at)).invert();
+        return this._pivotShiftLocal(at, d.clone().applyMatrix4(inv));
     }
 
     /**
@@ -1157,6 +1307,19 @@ export class Model3DView {
         });
         gizmo.addEventListener("objectChange", () => {
             const entry = this.selected && this._entries.get(this.selected);
+            // Pivot mode: the handle moved, so the pivot moves with it and the
+            // position takes up the slack.
+            if (entry && this.pivotMode && this._pivotHandleObj && gizmo.object === this._pivotHandleObj) {
+                const at = evaluate(entry.item, this.sceneFrame);
+                const d = this._pivotHandleObj.position.clone().sub(entry.root.position);
+                if (this.hooks.onTransform) {
+                    this.hooks.onTransform(this.selected, this._pivotShiftWorld(at, d), true,
+                                           ["position", "pivot"]);
+                }
+                this._syncPivotMark();
+                this.requestRender();
+                return;
+            }
             // `live`: the object is already where the gizmo put it, so the scene
             // only has to take the numbers — rebuilding the panel and rewriting
             // the node's widget on every mouse move is what that would cost.
@@ -1191,7 +1354,15 @@ export class Model3DView {
         // You cannot drag the camera you are looking through — there would be
         // no handles on screen to grab.
         if (entry.item.kind === "camera" && entry.item.id === this.scene3d.activeCamera) this.gizmo.detach();
-        else this.gizmo.attach(entry.root);
+        else if (this.pivotMode && entry.body) {
+            // A stand-in at the pivot point: dragging the item's own root would
+            // move the item, which is the one thing moving a pivot must not do.
+            this.gizmo.setMode("translate");
+            this.gizmo.attach(this._pivotHandle(entry));
+        } else {
+            this.gizmo.setMode(this.gizmoMode);
+            this.gizmo.attach(entry.root);
+        }
     }
 
     /** The transform of a three object, in the scene's own units (degrees). */

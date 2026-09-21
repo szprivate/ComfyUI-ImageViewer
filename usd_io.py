@@ -105,6 +105,29 @@ def _decompose(matrix):
     return [t[0], t[1], t[2]], rot, [s[0], s[1], s[2]]
 
 
+def _with_pivot(position, rotation, scale, pivot):
+    """The translate that stands in for a pivot.
+
+    An item's placement is T(position + pivot - R*S*pivot) * R * S, so a stage
+    written with plain translate / rotate / scale ops reproduces it exactly by
+    folding the pivot into the translate. The pivot itself rides along in this
+    viewer's own customData, so our stages come back with it; anyone else's
+    reader sees the object in the right place, which is what matters.
+    """
+    Gf, _Sdf, _Usd, _UsdGeom, _Vt = _pxr()
+    pv = [float(v) for v in (pivot or [0.0, 0.0, 0.0])]
+    if not any(pv):
+        return [float(v) for v in position]
+    m = Gf.Matrix4d(1.0)
+    m.SetScale(Gf.Vec3d(*[float(v) for v in scale]))
+    r = Gf.Matrix4d(1.0)
+    r.SetRotate(Gf.Rotation(Gf.Vec3d(1, 0, 0), float(rotation[0]))
+                * Gf.Rotation(Gf.Vec3d(0, 1, 0), float(rotation[1]))
+                * Gf.Rotation(Gf.Vec3d(0, 0, 1), float(rotation[2])))
+    turned = (r * m).TransformDir(Gf.Vec3d(*pv))
+    return [float(position[i]) + pv[i] - turned[i] for i in range(3)]
+
+
 def _set_xform(xformable, position, rotation, scale, time=None):
     """Author (or sample) the translate / rotateXYZ / scale ops of a prim."""
     Gf, _Sdf, _Usd, UsdGeom, _Vt = _pxr()
@@ -126,21 +149,37 @@ def _set_xform(xformable, position, rotation, scale, time=None):
 
 # ── the scene's own evaluation, mirrored from scene3d.js ─────────────────────
 
-def _shape(t, ease):
-    if ease == "linear":
-        return t
-    if ease == "hold":
-        return 0.0
-    return t * t * (3 - 2 * t)
+def _auto_slope(ease, frm, to, span):
+    """The slope an ease word means: flat for smooth, the secant for linear."""
+    if ease == "linear" and span > 0:
+        return (to - frm) / span
+    return 0.0
 
 
-def _lerp_angle(a, b, t):
+def _hermite(p0, p1, m0, m1, t, span):
+    t2 = t * t
+    t3 = t2 * t
+    return ((2 * t3 - 3 * t2 + 1) * p0
+            + (t3 - 2 * t2 + t) * span * m0
+            + (-2 * t3 + 3 * t2) * p1
+            + (t3 - t2) * span * m1)
+
+
+def _angle_delta(a, b):
     d = (b - a) % 360.0
     if d > 180:
         d -= 360
     if d < -180:
         d += 360
-    return a + d * t
+    return d
+
+
+def _lerp_angle(a, b, t):
+    return a + _angle_delta(a, b) * t
+
+
+def _component(value, axis):
+    return value[axis] if isinstance(value, (list, tuple)) else value
 
 
 def value_at(item, prop, frame):
@@ -163,18 +202,30 @@ def value_at(item, prop, frame):
         i += 1
     a, b = keys[i], keys[i + 1]
     span = b["f"] - a["f"]
-    t = _shape((frame - a["f"]) / span, a.get("ease", "smooth")) if span > 0 else 0.0
+    ease = a.get("ease", "smooth")
+    if ease == "hold" or span <= 0:
+        return a["v"]
+    t = (frame - a["f"]) / span
+    angles = prop == "rotation"
+
+    def each(axis):
+        p0 = _component(a["v"], axis)
+        # The short way round for angles, exactly as the viewer draws it.
+        p1 = p0 + _angle_delta(p0, _component(b["v"], axis)) if angles else _component(b["v"], axis)
+        # Hand-set tangents win; otherwise the ease says what they are.
+        m0 = _component(a["to"], axis) if a.get("to") is not None else _auto_slope(ease, p0, p1, span)
+        m1 = _component(b["ti"], axis) if b.get("ti") is not None else _auto_slope(ease, p0, p1, span)
+        return _hermite(p0, p1, m0, m1, t, span)
+
     if isinstance(a["v"], (list, tuple)):
-        if prop == "rotation":
-            return [_lerp_angle(a["v"][k], b["v"][k], t) for k in range(len(a["v"]))]
-        return [a["v"][k] + (b["v"][k] - a["v"][k]) * t for k in range(len(a["v"]))]
-    return a["v"] + (b["v"] - a["v"]) * t
+        return [each(k) for k in range(len(a["v"]))]
+    return each(0)
 
 
 def _animated_range(item):
     """(first, last) frame this item has keys on, or None when it is still."""
     frames = []
-    for prop in ("position", "rotation", "scale", "fov"):
+    for prop in ("position", "rotation", "scale", "pivot", "fov"):
         for key in ((item.get("tracks") or {}).get(prop)) or []:
             frames.append(key["f"])
     return (min(frames), max(frames)) if frames else None
@@ -376,7 +427,9 @@ def export_scene(scene, path, bake=True):
 
         span = _animated_range(item) if bake else None
         if span is None:
-            _set_xform(UsdGeom.Xformable(prim), item.get("position") or [0, 0, 0],
+            pos = _with_pivot(item.get("position") or [0, 0, 0], item.get("rotation") or [0, 0, 0],
+                              item.get("scale") or [1, 1, 1], item.get("pivot"))
+            _set_xform(UsdGeom.Xformable(prim), pos,
                        item.get("rotation") or [0, 0, 0], item.get("scale") or [1, 1, 1])
             if kind == "camera":
                 UsdGeom.Camera(prim).CreateFocalLengthAttr(_fov_to_focal(item.get("fov", 35)))
@@ -384,10 +437,12 @@ def export_scene(scene, path, bake=True):
             first, last = span
             focal_attr = UsdGeom.Camera(prim).CreateFocalLengthAttr() if kind == "camera" else None
             for frame in range(int(first), int(last) + 1):
+                rot = value_at(item, "rotation", frame)
+                scl = value_at(item, "scale", frame)
                 _set_xform(UsdGeom.Xformable(prim),
-                           value_at(item, "position", frame),
-                           value_at(item, "rotation", frame),
-                           value_at(item, "scale", frame),
+                           _with_pivot(value_at(item, "position", frame), rot, scl,
+                                       value_at(item, "pivot", frame)),
+                           rot, scl,
                            time=Usd.TimeCode(frame))
                 if focal_attr is not None:
                     focal_attr.Set(_fov_to_focal(value_at(item, "fov", frame)), Usd.TimeCode(frame))

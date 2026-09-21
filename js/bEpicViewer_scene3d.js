@@ -25,6 +25,14 @@
 // scene into some other mode; it writes down the number the word was standing
 // in for.
 //
+// THE PIVOT
+// `pivot` is the point rotation and scale happen about, in the item's own
+// space. It is a channel like any other — keyable, and on the curve editor's
+// list — and the transform it stands for is
+//     T(position) · T(pivot) · R · S · T(-pivot)
+// which is what every DCC means by one: move the pivot and the object stays
+// where it is, then turns around somewhere else.
+//
 // THE HIERARCHY
 // `items` stays a flat list — it is what a JSON widget, an undo snapshot and a
 // diff all want — and the tree is carried by one field: `parent`, the id of the
@@ -40,7 +48,7 @@
 export const SCENE_VERSION = 1;
 export const DEFAULT_FPS = 24;
 export const DEFAULT_LENGTH = 120;
-export const TRACKS = ["position", "rotation", "scale", "fov"];
+export const TRACKS = ["position", "rotation", "scale", "pivot", "fov"];
 
 // Blocking shapes the viewer can make on its own — no file, no loader. Each is
 // built at unit size and placed by its transform, so the gizmo's scale handles
@@ -73,6 +81,7 @@ export function makeGroupItem(name) {
         position: [0, 0, 0],
         rotation: [0, 0, 0],
         scale: [1, 1, 1],
+        pivot: [0, 0, 0],
         visible: true,
         tracks: {},
         parent: null,
@@ -103,6 +112,7 @@ export function makeModelItem(src, name) {
         position: [0, 0, 0],
         rotation: [0, 0, 0],     // degrees, XYZ order
         scale: [1, 1, 1],
+        pivot: [0, 0, 0],
         visible: true,
         tracks: {},
         parent: null,
@@ -120,6 +130,7 @@ export function makePrimitiveItem(type, name) {
         position: [0, spec.type === "plane" ? 0 : 0.5, 0],   // sitting on the grid
         rotation: [0, 0, 0],
         scale: spec.scale.slice(),
+        pivot: [0, 0, 0],
         visible: true,
         tracks: {},
         parent: null,
@@ -135,6 +146,7 @@ export function makeCameraItem(name, patch = {}) {
         rotation: [0, 0, 0],
         scale: [1, 1, 1],
         fov: 35,
+        pivot: [0, 0, 0],
         visible: true,
         tracks: {},
         parent: null,
@@ -426,7 +438,11 @@ function _lerp(a, b, t, angles) {
 /** The value of one property at `frame`, animated or not. */
 export function valueAt(item, prop, frame) {
     const keys = track(item, prop);
-    const stat = prop === "fov" ? (item.fov ?? 35) : _clone(item[prop]);
+    // A scene written before pivots existed simply has none, which is the
+    // same thing as one at the origin.
+    const stat = prop === "fov" ? (item.fov ?? 35)
+               : prop === "pivot" ? _clone(item.pivot || [0, 0, 0])
+               : _clone(item[prop]);
     if (keys.length === 0) return stat;
     if (frame <= keys[0].f) return _clone(keys[0].v);
     const last = keys[keys.length - 1];
@@ -457,6 +473,7 @@ export function evaluate(item, frame) {
         position: valueAt(item, "position", frame),
         rotation: valueAt(item, "rotation", frame),
         scale: valueAt(item, "scale", frame),
+        pivot: valueAt(item, "pivot", frame),
         fov: item.kind === "camera" ? valueAt(item, "fov", frame) : undefined,
     };
 }
@@ -511,6 +528,7 @@ export function parseScene(raw) {
             position: vec(raw.position, [0, 0, 0]),
             rotation: vec(raw.rotation, [0, 0, 0]),
             scale: vec(raw.scale, [1, 1, 1]),
+            pivot: vec(raw.pivot, [0, 0, 0]),
             visible: raw.visible !== false,
             tracks: {},
         };

@@ -69,7 +69,7 @@ That is what the two icons in the 3D toolbar are for, and they are the only way 
 | **Right-click an item** | **Group**, **Duplicate** or **Delete**. A row inside the current selection acts on all of it — the menu says how many — and a row outside it selects itself first. A group takes what is inside it either way. |
 | **↩ / ↪** | Undo and redo the last previz edit — see [Undoing](#undoing). Their tooltips name what they would take back. |
 | The list | The scene as a tree. Click to select, <kbd>Shift</kbd>+click to select several, **◉** hides and shows, **▣** looks through a camera, **•** marks an item that has keyframes, and **▾** folds a group away. |
-| Transform fields | The selected item's position, rotation (degrees) and scale — and a camera's field of view, or a shape's colour. |
+| Transform fields | The selected item's position, rotation (degrees), scale and pivot — and a camera's field of view, or a shape's colour. |
 
 The shot's **frame rate and length live on the timeline**, not in the panel: while previz is on, the **fps** box in the transport is the rate the shot plays, renders and exports at, and the **frame number at the end of the timeline** is its last frame — type a new one to make the shot longer or shorter. Everywhere else that number is the readout it has always been.
 
@@ -109,10 +109,12 @@ Keyframes are per item and per property.
 |---|---|
 | Key the selection where it stands | **Key @ *frame*** |
 | Key one property only | The **◆** next to that row |
-| Autokey | **Auto** — every move you make from then on keys the property it changed |
+| Autokey | The **○** ring, which turns red while it is armed — every move then keys the property it changed |
 | Change a key | Go to its frame, move the item |
-| Remove a key | **Delete key**, or double-click its tick on the timeline |
+| Remove a key | **⊗**, or double-click its tick on the timeline |
 | Interpolation | **Smooth** (default), **Linear** or **Hold**, applied to new keys and to any key on the current frame |
+
+Those four live in the transport, beside the timeline they act on: **⊕** keys, **⊗** removes, **○** is autokey, and the menu is the interpolation. They appear only on a 3D tab.
 
 Keyframes show as orange ticks under the timeline; click one to jump to it. Play, scrub and step work as they do for footage. A model's own clip is scrubbed by the same timeline, so the whole shot stays frame-accurate — there is no second clock playing underneath.
 
@@ -133,9 +135,24 @@ A **group** is a transform and nothing else — no geometry, no file. Move, rota
 
 Select several first — <kbd>Shift</kbd>+click in the outliner, or <kbd>Shift</kbd>+click objects in the viewport; every one of them is lit in the list and outlined in orange in the scene, while the last one clicked keeps the gizmo and the transform fields. **Group** then puts the lot under one new group, which is made with no transform of its own, so nothing moves.
 
+**Moving several at once** works without grouping them: drag the gizmo, or type a number, and the rest follow by the same amount — a rotation turns each about its own pivot, and a scale is passed on as a ratio, so a small thing stays small. Anything inside a selected group stays put, since its parent is already carrying it. Keying works the same way: one press keys everything selected, in one undo step.
+
 An item's numbers are **local** to its group, exactly as in Maya, Houdini or USD: a chair at `x = -2` inside a set at `z = 10` stands at `-2, 0, 10` in the shot, and its own fields still read `-2, 0, 0`. Nothing can be dropped inside itself or inside its own contents, so the tree stays a tree.
 
 A camera inside a group is carried by it like anything else, and still tumbles the way it always did — looking through it moves the camera, not the group.
+
+### The Pivot
+
+Every item has one: the point it turns and scales about, in its own space. A box turns about its middle until you say otherwise; drop the pivot to its base and it swings like a door instead.
+
+| To | Do |
+|---|---|
+| Move the pivot | <kbd>Insert</kbd> — or **Move pivot** in the panel — then drag the gizmo. The item does not move, only the point it turns about. |
+| Type it | The **Pivot** row in the transform fields |
+| Put it in the middle | **Centre**, which does the same for everything selected |
+| Animate it | It is a channel like any other: `pivot.x`, `pivot.y`, `pivot.z` in the [curve editor](#the-curve-editor), and <kbd>Insert</kbd> again to go back to moving the object |
+
+Moving a pivot never moves the item: the position takes up whatever slack the new pivot introduces, which is what every other 3D application does and what makes a pivot worth having. A group's pivot carries what is inside it, so a set turns about the door it was given rather than about the origin.
 
 ### Undoing
 
@@ -158,7 +175,9 @@ It plots **value over time** — one curve per channel. That's the difference fr
 
 #### Channels
 
-The column down the left lists them the way a DCC does — **translate.x**, **rotate.y**, **scale.z**, and **fov** on a camera — each in the colour its curve is drawn in. Any set of them can be on screen at once, which is the point of a graph editor: translate.x against rotate.y is a question you can now ask.
+The column down the left lists them the way a DCC does — **translate.x**, **rotate.y**, **scale.z**, **pivot.x** and **fov** on a camera — each in the colour its curve is drawn in. Any set of them can be on screen at once, which is the point of a graph editor: translate.x against rotate.y is a question you can now ask.
+
+Select several objects and each gets its own section, headed by its name: click the header to fold that object's channels away. A curve is then **Name.channel** — the full name is on every key's tooltip — and each object has its own shade of the colours, so two objects' translate.x are told apart at a glance.
 
 | Action | How |
 |---|---|

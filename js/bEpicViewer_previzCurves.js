@@ -15,10 +15,16 @@
 //
 // CHANNELS
 // The left column lists them one per line, named the way a DCC names them:
-// translate.x, rotate.z, scale.y, fov. Any set of them can be on screen at
-// once — that is the whole point of a graph editor, and it is what the old
-// "one property plus three axis toggles" could not do. A channel with no keys
-// still draws, as the flat line its static value is.
+// translate.x, rotate.z, scale.y, pivot.x, fov. Any set of them can be on
+// screen at once — that is the whole point of a graph editor, and it is what
+// the old "one property plus three axis toggles" could not do. A channel with
+// no keys still draws, as the flat line its static value is.
+//
+// Select several objects and each gets its own section, headed by its name and
+// foldable, so a scene's worth of channels stays a list you can read. A curve
+// is then Name.channel — the full name is on every key's tooltip — and each
+// object's shade of a colour is its own, so two objects' translate.x are told
+// apart at a glance.
 //
 // TANGENTS
 // Click a key to select it and its handles appear; drag one to shape the
@@ -41,10 +47,30 @@ const CHANNELS = [
     { key: "scale.0", prop: "scale", axis: 0, label: "scale.x", color: "#ff6bd5" },
     { key: "scale.1", prop: "scale", axis: 1, label: "scale.y", color: "#6be2c8" },
     { key: "scale.2", prop: "scale", axis: 2, label: "scale.z", color: "#9d8cff" },
+    { key: "pivot.0", prop: "pivot", axis: 0, label: "pivot.x", color: "#c98a8a" },
+    { key: "pivot.1", prop: "pivot", axis: 1, label: "pivot.y", color: "#a5c98a" },
+    { key: "pivot.2", prop: "pivot", axis: 2, label: "pivot.z", color: "#8aa8c9" },
     { key: "fov", prop: "fov", axis: 0, label: "fov", color: "#ffd24d" },
 ];
 
 const GRAPH = { top: 10, bottom: 90 };
+
+/**
+ * One object's shade of a channel colour.
+ *
+ * The first object keeps the colour as it is; the ones after it are lightened
+ * and darkened in turn, which stays legible far longer than picking unrelated
+ * hues per object would.
+ */
+function shade(hex, index) {
+    if (!index) return hex;
+    const n = parseInt(hex.slice(1), 16);
+    const rgb = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    const step = Math.ceil(index / 2) * 0.26;
+    const towards = index % 2 ? 255 : 0;          // lighter, then darker, ...
+    const mixed = rgb.map((c) => Math.round(c + (towards - c) * Math.min(0.8, step)));
+    return "#" + mixed.map((c) => c.toString(16).padStart(2, "0")).join("");
+}
 // How far a tangent handle reaches, as a share of the frame range on screen.
 const HANDLE_SPAN = 0.06;
 
@@ -56,24 +82,33 @@ export const PrevizCurvesMixin = {
 
     /** Which channels an item can show at all: no field of view on a box. */
     _previzChannelsFor(item) {
-        return CHANNELS.filter((c) => c.prop !== "fov" || item.kind === "camera");
+        return CHANNELS.filter((c) => (c.prop !== "fov" || item.kind === "camera")
+                                   && (c.prop !== "pivot" || item.kind !== "camera"));
     },
 
-    /**
-     * The channels on screen.
-     *
-     * Chosen by hand once anything has been clicked in the list; until then,
-     * whatever the item actually animates — which is the answer nine times out
-     * of ten, and beats opening on an empty graph.
-     */
-    _previzShownChannels(item) {
-        const usable = this._previzChannelsFor(item);
+    /** The objects the editor is showing: everything selected, in scene order. */
+    _previzCurveItems() {
+        const scene = this.previzScene();
+        if (!scene) return [];
+        return (scene.items || []).filter((it) => this.previzIsSelected(it.id));
+    },
+
+    /** One line of the graph: an object, a channel, and the colour it wears. */
+    _previzCurveLines() {
+        const items = this._previzCurveItems();
         const picked = this._previzCurveShown;
-        if (picked && picked.size) {
-            const chosen = usable.filter((c) => picked.has(c.key));
-            if (chosen.length) return chosen;
-        }
-        return usable.filter((c) => S.isAnimated(item, c.prop));
+        const out = [];
+        items.forEach((item, index) => {
+            const usable = this._previzChannelsFor(item);
+            const chosen = picked && picked.size
+                ? usable.filter((c) => picked.has(`${item.id}|${c.key}`))
+                : usable.filter((c) => S.isAnimated(item, c.prop));
+            for (const ch of chosen) {
+                out.push({ ...ch, item, index, color: shade(ch.color, index),
+                           label: items.length > 1 ? `${item.name}.${ch.label}` : ch.label });
+            }
+        });
+        return out;
     },
 
     /**
@@ -92,20 +127,21 @@ export const PrevizCurvesMixin = {
 
         const ui = this._previzBuildCurveEditor(host);
         if (!ui) return;
-        const item = this.previzSelectedItem();
-        const shown = item ? this._previzShownChannels(item) : [];
-        const anyKeys = item ? S.keyframeFrames(item).length > 0 : false;
+        const items = this._previzCurveItems();
+        const lines = this._previzCurveLines();
 
-        ui.body.style.display = item ? "flex" : "none";
-        ui.empty.style.display = item ? "none" : "block";
+        ui.body.style.display = items.length ? "flex" : "none";
+        ui.empty.style.display = items.length ? "none" : "block";
         ui.empty.textContent = "Select something in the scene to see its animation.";
-        if (!item) return;
+        if (!items.length) return;
 
-        this._previzSyncChannelList(ui, item, shown);
+        this._previzSyncChannelList(ui, items, lines);
+        const anyKeys = items.some((it) => S.keyframeFrames(it).length > 0);
+        const what = items.length === 1 ? items[0].name : `${items.length} objects`;
         ui.sub.textContent = anyKeys
-            ? `${item.name} · ${shown.length} channel${shown.length === 1 ? "" : "s"}`
-            : `${item.name} · no keyframes yet`;
-        this._previzDrawCurves(item, shown);
+            ? `${what} · ${lines.length} channel${lines.length === 1 ? "" : "s"}`
+            : `${what} · no keyframes yet`;
+        this._previzDrawCurves(lines);
     },
 
     /** Put the panel away — previz is over, or the tab is not a 3D one. */
@@ -128,17 +164,8 @@ export const PrevizCurvesMixin = {
         const empty = el("div", "curves-empty");
         const body = el("div", "curves-body");
 
-        // Left: the channel list. Right: the graph, with its own header.
+        // Left: the channel list, a section per object. Right: the graph.
         const list = el("div", "curves-channels");
-        this._previzChannelRows = {};
-        for (const ch of CHANNELS) {
-            const row = el("button", "curves-ch", ch.label);
-            row.style.setProperty("--ch", ch.color);
-            row.title = `Show or hide ${ch.label}`;
-            row.onclick = (e) => this._previzToggleChannel(ch.key, e.shiftKey || e.ctrlKey || e.metaKey);
-            this._previzChannelRows[ch.key] = row;
-            list.append(row);
-        }
 
         const right = el("div", "curves-graph-col");
         const sub = el("div", "curves-sub");
@@ -170,46 +197,72 @@ export const PrevizCurvesMixin = {
         return this._previzCurveUI;
     },
 
-    /** Show or hide one channel. Plain click picks it alone; Shift adds. */
-    _previzToggleChannel(key, add) {
-        const item = this.previzSelectedItem();
-        if (!item) return;
+    /** Show or hide one channel of one object. Plain click picks it alone. */
+    _previzToggleChannel(id, add) {
         let shown = this._previzCurveShown;
         if (!shown || !shown.size) {
             // The first click starts from what is on screen, so nothing jumps.
-            shown = new Set(this._previzShownChannels(item).map((c) => c.key));
+            shown = new Set(this._previzCurveLines().map((l) => `${l.item.id}|${l.key}`));
         }
         if (add) {
-            if (shown.has(key)) shown.delete(key); else shown.add(key);
+            if (shown.has(id)) shown.delete(id); else shown.add(id);
         } else {
-            shown = new Set([key]);
+            shown = new Set([id]);
         }
         this._previzCurveShown = shown;
         this.previzRefreshCurves();
     },
 
-    _previzSyncChannelList(ui, item, shown) {
-        const usable = new Set(this._previzChannelsFor(item).map((c) => c.key));
-        const on = new Set(shown.map((c) => c.key));
-        for (const ch of CHANNELS) {
-            const row = this._previzChannelRows[ch.key];
-            if (!row) continue;
-            row.style.display = usable.has(ch.key) ? "" : "none";
-            row.classList.toggle("on", on.has(ch.key));
-            row.classList.toggle("animated", S.isAnimated(item, ch.prop));
-        }
+    /**
+     * The list: each object's name, then its channels under it.
+     *
+     * Rebuilt rather than hidden and shown, because which objects are in it
+     * changes with the selection — and it is a couple of dozen small rows.
+     */
+    _previzSyncChannelList(ui, items, lines) {
+        const doc = ui.list.ownerDocument;
+        const on = new Set(lines.map((l) => `${l.item.id}|${l.key}`));
+        const folded = this._previzCurveFolded || (this._previzCurveFolded = new Set());
+        ui.list.innerHTML = "";
+        items.forEach((item, index) => {
+            if (items.length > 1) {
+                const head = doc.createElement("button");
+                head.className = "curves-obj" + (folded.has(item.id) ? " folded" : "");
+                head.textContent = `${folded.has(item.id) ? "\u25b8" : "\u25be"} ${item.name}`;
+                head.title = "Fold this object's channels away";
+                head.onclick = () => {
+                    if (folded.has(item.id)) folded.delete(item.id); else folded.add(item.id);
+                    this.previzRefreshCurves();
+                };
+                ui.list.append(head);
+                if (folded.has(item.id)) return;
+            }
+            for (const ch of this._previzChannelsFor(item)) {
+                const id = `${item.id}|${ch.key}`;
+                const row = doc.createElement("button");
+                row.className = "curves-ch";
+                row.textContent = ch.label;
+                row.style.setProperty("--ch", shade(ch.color, index));
+                row.title = `Show or hide ${item.name}.${ch.label}`;
+                row.classList.toggle("on", on.has(id));
+                row.classList.toggle("animated", S.isAnimated(item, ch.prop));
+                row.onclick = (e) => this._previzToggleChannel(id, e.shiftKey || e.ctrlKey || e.metaKey);
+                ui.list.append(row);
+            }
+        });
     },
 
     // ── Geometry ─────────────────────────────────────────────────────────────
 
     /** Frames → x%, values → y%, across every channel on screen. */
-    _previzCurveGeom(item, shown) {
+    _previzCurveGeom(lines) {
         const bounds = this.getTimelineBounds();
         const span = Math.max(1, bounds.max - bounds.min);
 
         let lo = Infinity, hi = -Infinity;
         const see = (v) => { if (v < lo) lo = v; if (v > hi) hi = v; };
-        for (const ch of shown) {
+        for (const ch of lines) {
+            const item = ch.item;
             const keys = S.track(item, ch.prop);
             if (!keys.length) { see(S.componentOf(S.valueAt(item, ch.prop, bounds.min), ch.axis)); continue; }
             for (const k of keys) see(S.componentOf(k.v, ch.axis));
@@ -231,18 +284,18 @@ export const PrevizCurvesMixin = {
         const Y = (v) => GRAPH.bottom - ((v - lo) / (hi - lo)) * (GRAPH.bottom - GRAPH.top);
         const frameAt = (xPct) => Math.round(bounds.min + (xPct / 100) * span);
         const valueAt = (yPct) => lo + ((GRAPH.bottom - yPct) / (GRAPH.bottom - GRAPH.top)) * (hi - lo);
-        return { bounds, span, lo, hi, X, Y, frameAt, valueAt, shown };
+        return { bounds, span, lo, hi, X, Y, frameAt, valueAt, lines };
     },
 
     // ── Drawing ──────────────────────────────────────────────────────────────
 
-    _previzDrawCurves(item, shown) {
+    _previzDrawCurves(lines) {
         const svg = this._previzCurveSvg;
         if (!svg) return;
         const doc = svg.ownerDocument;
         const NS = "http://www.w3.org/2000/svg";
         while (svg.firstChild) svg.removeChild(svg.firstChild);
-        const g = this._previzCurveGeom(item, shown);
+        const g = this._previzCurveGeom(lines);
         const line = (attrs) => {
             const n = doc.createElementNS(NS, attrs.tag || "line");
             delete attrs.tag;
@@ -258,7 +311,9 @@ export const PrevizCurvesMixin = {
         if (g.lo < 0 && g.hi > 0) {
             line({ x1: 0, y1: g.Y(0), x2: 100, y2: g.Y(0), stroke: "#3a3a3a", "stroke-dasharray": "3 3" });
         }
-        for (const f of S.keyframeFrames(item)) {
+        const everyKey = new Set();
+        for (const ch of g.lines) for (const f of S.keyframeFrames(ch.item)) everyKey.add(f);
+        for (const f of everyKey) {
             const x = g.X(f);
             line({ x1: x, y1: GRAPH.top, x2: x, y2: GRAPH.bottom, stroke: "#ff8a00",
                    "stroke-dasharray": "2 2", opacity: 0.22 });
@@ -267,7 +322,8 @@ export const PrevizCurvesMixin = {
         // The curves themselves, sampled through the scene's own interpolation —
         // so smooth, linear, hold and a dragged handle all look here exactly as
         // they play.
-        for (const ch of g.shown) {
+        for (const ch of g.lines) {
+            const item = ch.item;
             const keys = S.track(item, ch.prop);
             let d = "";
             if (!keys.length) {
@@ -289,21 +345,22 @@ export const PrevizCurvesMixin = {
         const playhead = g.X(Math.round(this.currentFrame || 0));
         line({ x1: playhead, y1: 0, x2: playhead, y2: 100, stroke: "#fff", opacity: 0.6 });
 
-        this._previzLayoutCurveDots(item, g);
+        this._previzLayoutCurveDots(g);
     },
 
-    _previzLayoutCurveDots(item, g) {
+    _previzLayoutCurveDots(g) {
         const wrap = this._previzCurveWrap;
         if (!wrap) return;
         wrap.querySelectorAll(".kf-dot, .kf-tan, .kf-tan-line").forEach((d) => d.remove());
         const doc = wrap.ownerDocument;
         const sel = this._previzCurveKey;
 
-        for (const ch of g.shown) {
+        for (const ch of g.lines) {
+            const item = ch.item;
             for (const k of S.track(item, ch.prop)) {
                 const v = S.componentOf(k.v, ch.axis);
                 const dot = doc.createElement("div");
-                const chosen = !!sel && sel.prop === ch.prop && sel.f === k.f;
+                const chosen = !!sel && sel.id === item.id && sel.prop === ch.prop && sel.f === k.f;
                 dot.className = "kf-dot" + (chosen ? " chosen" : "");
                 dot.style.left = g.X(k.f) + "%";
                 dot.style.top = g.Y(v) + "%";
@@ -311,6 +368,7 @@ export const PrevizCurvesMixin = {
                 dot.title = `${ch.label} · frame ${k.f} = ${Math.round(v * 1000) / 1000}\n` +
                             "drag sideways to retime, up/down to change · click for tangents · double-click to delete";
                 dot.onmousedown = (e) => this._previzCurveDotDown(e, item, ch, k.f, g);
+                dot.dataset.item = item.id;
                 dot.ondblclick = (e) => {
                     e.preventDefault(); e.stopPropagation();
                     this.previzSnapshot("delete key");
@@ -384,7 +442,7 @@ export const PrevizCurvesMixin = {
         e.preventDefault();
         e.stopPropagation();
         // Clicking a key is also how you ask for its handles.
-        this._previzCurveKey = { prop: ch.prop, f: frame };
+        this._previzCurveKey = { id: item.id, prop: ch.prop, f: frame };
         const wrap = this._previzCurveWrap;
         const win = this._viewerWindow();
         const rect = wrap.getBoundingClientRect();
@@ -394,7 +452,7 @@ export const PrevizCurvesMixin = {
 
         const onMove = (evt) => {
             moved = true;
-            const g = this._previzCurveGeom(item, geom.shown);
+            const g = this._previzCurveGeom(geom.lines);
             const xPct = Math.max(0, Math.min(100, ((evt.clientX - rect.left) / rect.width) * 100));
             const yPct = Math.max(0, Math.min(100, ((evt.clientY - rect.top) / rect.height) * 100));
             const wantFrame = Math.max(g.bounds.min, Math.min(g.bounds.max, g.frameAt(xPct)));
@@ -414,7 +472,7 @@ export const PrevizCurvesMixin = {
                 S.removeKeyframe(item, current, ch.prop);
                 S.setKeyframe(item, ch.prop, wantFrame, next, key.ease);
                 current = wantFrame;
-                this._previzCurveKey = { prop: ch.prop, f: current };
+                this._previzCurveKey = { id: item.id, prop: ch.prop, f: current };
             } else {
                 S.setKeyframe(item, ch.prop, current, next, key.ease);
             }
@@ -450,7 +508,7 @@ export const PrevizCurvesMixin = {
         this.previzBeginDrag(broken ? "break tangent" : "shape tangent");
 
         const onMove = (evt) => {
-            const g = this._previzCurveGeom(item, geom.shown);
+            const g = this._previzCurveGeom(geom.lines);
             const xPct = Math.max(0, Math.min(100, ((evt.clientX - rect.left) / rect.width) * 100));
             const yPct = Math.max(0, Math.min(100, ((evt.clientY - rect.top) / rect.height) * 100));
             const dir = side === "in" ? -1 : 1;
