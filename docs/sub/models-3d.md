@@ -64,11 +64,11 @@ That is what the two icons in the 3D toolbar are for, and they are the only way 
 | **New** | Empties the scene and starts again. It is one undo step like any other, so there is nothing to confirm. |
 | **+** | One menu for everything a scene can gain. **Model…** adds the model selected in the [File Browser](other.md#file-browser) — you can also drag models straight into the 3D view, from the browser, the history strip or your desktop. **Camera** adds a camera where the view is right now. **Group** adds an empty one to hang things under. Then a box, sphere, plane, cylinder, cone or torus — no file needed, for blocking a scene out; it lands where the view is looking. Last, the two ways a whole scene arrives: **Import USD…** and **Load scene…**. |
 | **Export** | The other direction: **Save scene…** writes the scene as a file, **Export USD…** as a stage, and **Render…** turns the shot into an mp4 or a PNG sequence. |
-| **Right-click an item** | **Duplicate** or **Delete** it — that row, not whatever happened to be selected. A group takes what is inside it either way. |
+| **Right-click an item** | **Group**, **Duplicate** or **Delete**. A row inside the current selection acts on all of it — the menu says how many — and a row outside it selects itself first. A group takes what is inside it either way. |
 | **↩ / ↪** | Undo and redo the last previz edit — see [Undoing](#undoing). Their tooltips name what they would take back. |
 | **Move / Rotate / Scale** | Which gizmo the selected item gets. |
 | **Globe** | The gizmo's axes: the world's, or — with the globe crossed out — the item's own. |
-| The list | The scene as a tree. Click to select, **◉** hides and shows, **▣** looks through a camera, **•** marks an item that has keyframes, and **▾** folds a group away. |
+| The list | The scene as a tree. Click to select, <kbd>Shift</kbd>+click to select several, **◉** hides and shows, **▣** looks through a camera, **•** marks an item that has keyframes, and **▾** folds a group away. |
 | Transform fields | The selected item's position, rotation (degrees) and scale — and a camera's field of view, or a shape's colour. |
 
 The shot's **frame rate and length live on the timeline**, not in the panel: while previz is on, the **fps** box in the transport is the rate the shot plays, renders and exports at, and the **frame number at the end of the timeline** is its last frame — type a new one to make the shot longer or shorter. Everywhere else that number is the readout it has always been.
@@ -122,11 +122,14 @@ A **group** is a transform and nothing else — no geometry, no file. Move, rota
 
 | To | Do |
 |---|---|
-| Make one | **+ → Group** |
+| Group what is selected | Right-click one of them → **Group** |
+| Make an empty one | **+ → Group** |
 | Put something in it | Drag the item's row onto the group's row in the outliner |
 | Take it out again | Drag the row onto the empty space below the tree |
 | Fold it away | The **▾** at the left of its row |
 | Delete the lot | Right-click the group → **Delete** — what it holds goes with it, and one undo brings all of it back |
+
+Select several first — <kbd>Shift</kbd>+click in the outliner, or <kbd>Shift</kbd>+click objects in the viewport; every one of them is lit in the list and outlined in orange in the scene, while the last one clicked keeps the gizmo and the transform fields. **Group** then puts the lot under one new group, which is made with no transform of its own, so nothing moves.
 
 An item's numbers are **local** to its group, exactly as in Maya, Houdini or USD: a chair at `x = -2` inside a set at `z = 10` stands at `-2, 0, 10` in the shot, and its own fields still read `-2, 0, 0`. Nothing can be dropped inside itself or inside its own contents, so the tree stays a tree.
 

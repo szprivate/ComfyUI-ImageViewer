@@ -889,7 +889,10 @@ textarea.param-input {
 }
 .previz-item { display: flex; align-items: center; gap: 4px; padding: 3px 4px; cursor: pointer; }
 .previz-item:hover { background: #242424; }
-.previz-item.selected { background: #33230f; outline: 1px solid #f60; }
+/* Everything selected is lit; the primary — the one the gizmo and the fields
+   belong to — is outlined. */
+.previz-item.selected { background: #2a1e12; }
+.previz-item.selected.primary { background: #33230f; outline: 1px solid #f60; }
 /* The hierarchy: a twisty per row that has children, and the drop mark that
    says which group a dragged row would land in. */
 .previz-twisty { width: 10px; flex: 0 0 10px; color: #888; font-size: 9px; text-align: center; }

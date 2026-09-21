@@ -337,7 +337,9 @@ export class Model3DView {
         if (Math.abs(e.clientX - d.x) > 3 || Math.abs(e.clientY - d.y) > 3) return;
         if (this.gizmo && this.gizmo.dragging) return;
         const hit = this._pick(e);
-        if (this.hooks.onPick) this.hooks.onPick(hit);
+        // Shift adds to the selection rather than replacing it — the scene's
+        // own modifier, clear of Alt, which is navigation's.
+        if (this.hooks.onPick) this.hooks.onPick(hit, !!e.shiftKey);
     }
 
     /** Why an item has nothing on screen, or "" when it is fine. */
@@ -976,6 +978,7 @@ export class Model3DView {
         // The gizmo is a controller, not an object; its handles live in the
         // helper, which has to be told the item moved under it.
         if (this.gizmoHelper && this.gizmo && this.gizmo.object) this.gizmoHelper.updateMatrixWorld();
+        this._refreshAlsoBoxes();
         this.requestRender();
     }
 
@@ -1038,6 +1041,47 @@ export class Model3DView {
         this.selected = id || null;
         this._syncSelection();
         this.requestRender();
+    }
+
+    /**
+     * The rest of a multiple selection.
+     *
+     * The gizmo belongs to one object — three's TransformControls takes one —
+     * so the others are outlined instead. That is enough to see what a Group
+     * is about to swallow, which is what selecting several is for.
+     */
+    setAlsoSelected(ids) {
+        const wanted = new Set(ids || []);
+        wanted.delete(this.selected);
+        if (!this.libs) { this._alsoWanted = wanted; return; }
+        const { THREE } = this.libs;
+        if (!this._alsoBoxes) this._alsoBoxes = new Map();
+        for (const [id, box] of [...this._alsoBoxes]) {
+            if (wanted.has(id) && this._entries.has(id)) continue;
+            this.scene.remove(box);
+            box.geometry && box.geometry.dispose();
+            this._alsoBoxes.delete(id);
+        }
+        for (const id of wanted) {
+            const entry = this._entries.get(id);
+            if (!entry || this._alsoBoxes.has(id)) continue;
+            const box = new THREE.BoxHelper(entry.root, 0xff8a00);
+            box.userData.bepicItemId = id;
+            this.scene.add(box);
+            this._alsoBoxes.set(id, box);
+        }
+        this._refreshAlsoBoxes();
+        this.requestRender();
+    }
+
+    _refreshAlsoBoxes() {
+        if (!this._alsoBoxes) return;
+        for (const [id, box] of this._alsoBoxes) {
+            const entry = this._entries.get(id);
+            if (!entry) continue;
+            box.setFromObject(entry.root);
+            box.visible = entry.root.visible;
+        }
     }
 
     setGizmoMode(mode) {

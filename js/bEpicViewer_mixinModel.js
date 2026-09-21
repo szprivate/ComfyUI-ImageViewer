@@ -37,7 +37,7 @@ export const ModelMixin = {
                 // Previz: the scene owns where everything is, so each move the
                 // view makes is handed back to it instead of kept in three.
                 srcUrl: (src) => this.buildImgUrl(src),
-                onPick: (id) => this.previzSelect(id),
+                onPick: (id, add) => this.previzSelect(id, { add }),
                 onTransform: (id, transform, live) => this.previzApplyTransform(id, transform, null, { live }),
                 onTransformEnd: () => { this.previzEndDrag(); this.previzChanged(); },
                 onCameraMoved: (id, transform, live) =>

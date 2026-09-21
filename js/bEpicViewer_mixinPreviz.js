@@ -211,12 +211,52 @@ export const PrevizMixin = {
         this._previzRenderPanel();
     },
 
-    previzSelect(id) {
-        this._previzSelection = id || null;
-        if (this._model3d) this._model3d.select(id);
+    /**
+     * Select an item — or, with `add`, take it into the selection alongside
+     * whatever is already there.
+     *
+     * One of them is the primary: it wears the gizmo, fills the transform
+     * fields and draws its curves, and it is the one you clicked last. The
+     * rest are along for what acts on a group of things — Group, Delete,
+     * Duplicate.
+     */
+    previzSelect(id, { add = false } = {}) {
+        const also = this._previzAlso || (this._previzAlso = new Set());
+        if (!id) {
+            also.clear();
+            this._previzSelection = null;
+        } else if (!add) {
+            also.clear();
+            this._previzSelection = id;
+        } else if (this.previzIsSelected(id)) {
+            // Shift-clicking something already in takes it out again.
+            also.delete(id);
+            if (this._previzSelection === id) {
+                const rest = [...also];
+                this._previzSelection = rest.length ? rest.pop() : null;
+                if (this._previzSelection) also.delete(this._previzSelection);
+            }
+        } else {
+            if (this._previzSelection) also.add(this._previzSelection);
+            this._previzSelection = id;
+        }
+        if (this._model3d) {
+            this._model3d.select(this._previzSelection);
+            this._model3d.setAlsoSelected([...also]);
+        }
         this._previzRenderPanel();
         this._previzRenderTicks();
         this.previzRefreshCurves();
+    },
+
+    previzIsSelected(id) {
+        return !!id && (id === this._previzSelection || !!(this._previzAlso && this._previzAlso.has(id)));
+    },
+
+    /** Everything selected, the primary last — the order Group reads them in. */
+    previzSelectedIds() {
+        const also = [...(this._previzAlso || [])].filter((id) => S.itemById(this.previzScene(), id));
+        return this._previzSelection ? [...also, this._previzSelection] : also;
     },
 
     previzSelectedItem() {
@@ -283,12 +323,38 @@ export const PrevizMixin = {
         return item;
     },
 
-    /** Copy an item, and everything under it if it is a group. */
+    /**
+     * Copy an item, and everything under it if it is a group.
+     * Takes one id, several, or none for whatever is selected.
+     */
     previzDuplicate(id = null) {
+        const scene = this.previzScene();
+        if (!scene) return;
+        const ids = this._previzIdList(id);
+        if (ids.length > 1) {
+            this.previzSnapshot(`duplicate ${ids.length} items`);
+            // Each in turn, and no snapshot of its own: the one above covers
+            // the lot, so a single undo puts the scene back.
+            for (const one of ids) this._previzDuplicateOne(one, { snapshot: false });
+            this.previzChanged({ reload: true });
+            return;
+        }
+        this._previzDuplicateOne(ids[0] || null, { snapshot: true });
+        this.previzChanged({ reload: true });
+    },
+
+    /** One id, several, or the current selection — as a plain list of ids. */
+    _previzIdList(id) {
+        if (Array.isArray(id)) return id.filter(Boolean);
+        if (id) return [id];
+        return this.previzSelectedIds();
+    },
+
+    _previzDuplicateOne(id, { snapshot = true } = {}) {
         const scene = this.previzScene();
         const item = id ? S.itemById(scene, id) : this.previzSelectedItem();
         if (!scene || !item) return;
-        this.previzSnapshot(`duplicate ${item.name}`);
+        if (snapshot) this.previzSnapshot(`duplicate ${item.name}`);
 
         const branch = [item, ...S.descendantsOf(scene, item.id)];
         const newId = new Map();
@@ -307,21 +373,34 @@ export const PrevizMixin = {
         });
         scene.items.splice(scene.items.indexOf(item) + branch.length, 0, ...copies);
         this._previzSelection = copies[0].id;
-        this.previzChanged({ reload: true });
+        if (this._previzAlso) this._previzAlso.clear();
     },
 
-    /** Delete an item — a group takes what it holds with it. */
+    /**
+     * Delete an item — a group takes what it holds with it.
+     * Takes one id, several, or none for whatever is selected.
+     */
     previzDelete(id = null) {
         const scene = this.previzScene();
-        const item = id ? S.itemById(scene, id) : this.previzSelectedItem();
-        if (!scene || !item) return;
-        const branch = new Set([item, ...S.descendantsOf(scene, item.id)]);
-        const label = branch.size > 1 ? `delete ${item.name} and ${branch.size - 1} inside it`
-                                      : `delete ${item.name}`;
+        if (!scene) return;
+        const ids = this._previzIdList(id);
+        const gone = new Set();
+        for (const one of ids) {
+            const item = S.itemById(scene, one);
+            if (!item) continue;
+            gone.add(item);
+            for (const child of S.descendantsOf(scene, item.id)) gone.add(child);
+        }
+        if (!gone.size) return;
+        const first = S.itemById(scene, ids[0]);
+        const label = ids.length > 1 ? `delete ${ids.length} items`
+            : (gone.size > 1 ? `delete ${first.name} and ${gone.size - 1} inside it`
+                             : `delete ${first.name}`);
         this.previzSnapshot(label);
-        scene.items = scene.items.filter((it) => !branch.has(it));
-        if ([...branch].some((it) => it.id === scene.activeCamera)) scene.activeCamera = null;
+        scene.items = scene.items.filter((it) => !gone.has(it));
+        if ([...gone].some((it) => it.id === scene.activeCamera)) scene.activeCamera = null;
         this._previzSelection = scene.items.length ? scene.items[0].id : null;
+        if (this._previzAlso) this._previzAlso.clear();
         this.previzChanged({ reload: true });
         if (this._model3d) this._model3d.setActiveCamera(scene.activeCamera);
     },
@@ -762,17 +841,60 @@ export const PrevizMixin = {
         this.previzChanged({ reload: true });
     },
 
-    /** Right-click on a row in the outliner. */
+    /**
+     * Right-click on a row in the outliner.
+     *
+     * A row that is part of the current selection keeps it, so a menu opened
+     * on one of five acts on all five; a row outside it selects itself first,
+     * because acting on something you cannot see selected is a nasty surprise.
+     */
     _previzItemMenu(id, ev) {
         ev.preventDefault();
         ev.stopPropagation();
-        this.previzSelect(id);
+        if (!this.previzIsSelected(id)) this.previzSelect(id);
         const item = S.itemById(this.previzScene(), id);
         if (!item) return;
+        const ids = this.previzSelectedIds();
+        const many = ids.length > 1;
+        const count = `${ids.length} items`;
         this._previzOpenMenu([
-            { label: "Duplicate", run: () => this.previzDuplicate(id) },
-            { label: "Delete", run: () => this.previzDelete(id) },
+            { label: many ? `Group ${count}` : "Group", run: () => this.previzGroupSelection() },
+            "-",
+            { label: many ? `Duplicate ${count}` : "Duplicate", run: () => this.previzDuplicate(ids) },
+            { label: many ? `Delete ${count}` : "Delete", run: () => this.previzDelete(ids) },
         ], ev.clientX, ev.clientY);
+    },
+
+    /**
+     * Put everything selected into a new group.
+     *
+     * The group is made at the origin with no transform of its own, so nothing
+     * moves: each item keeps the local numbers it had, and they are now read
+     * against a parent that is the identity. Anything whose own parent is also
+     * in the selection is left where it is — it is already coming along.
+     */
+    previzGroupSelection() {
+        const scene = this.previzScene();
+        const ids = this.previzSelectedIds();
+        if (!scene || !ids.length) return null;
+        const chosen = new Set(ids);
+        const tops = ids.filter((id) => {
+            const item = S.itemById(scene, id);
+            return item && !(item.parent && chosen.has(item.parent));
+        });
+        if (!tops.length) return null;
+        this.previzSnapshot(tops.length > 1 ? `group ${tops.length} items` : "group");
+        const group = S.makeGroupItem(S.uniqueName(scene, "Group"));
+        // Where the group lands in the tree: with the items it takes in, when
+        // they share a parent, so grouping inside a set stays inside that set.
+        const parents = new Set(tops.map((id) => S.itemById(scene, id).parent || null));
+        group.parent = parents.size === 1 ? [...parents][0] : null;
+        scene.items.push(group);
+        for (const id of tops) S.setParent(scene, id, group.id);
+        this._previzSelection = group.id;
+        if (this._previzAlso) this._previzAlso.clear();
+        this.previzChanged({ reload: true });
+        return group;
     },
 
     _previzCloseAddMenu() {
@@ -847,11 +969,13 @@ export const PrevizMixin = {
     _previzOutlinerRow(item, depth, doc, scene) {
         const collapsed = this._previzCollapsed || (this._previzCollapsed = new Set());
         const row = doc.createElement("div");
-        row.className = "previz-item" + (item.id === this._previzSelection ? " selected" : "");
+        row.className = "previz-item"
+            + (this.previzIsSelected(item.id) ? " selected" : "")
+            + (item.id === this._previzSelection ? " primary" : "");
         row.style.paddingLeft = `${4 + depth * 12}px`;
         row.dataset.itemId = item.id;
         row.draggable = true;
-        row.onclick = () => this.previzSelect(item.id);
+        row.onclick = (e) => this.previzSelect(item.id, { add: e.shiftKey || e.ctrlKey || e.metaKey });
         row.oncontextmenu = (e) => this._previzItemMenu(item.id, e);
 
         const kids = S.childrenOf(scene, item.id);
