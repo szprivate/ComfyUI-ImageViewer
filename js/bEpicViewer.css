@@ -695,6 +695,10 @@ textarea.param-input {
 .browser-row.selected { background: rgba(255,102,0,0.28); color: #fff; }
 .browser-row.is-dir { color: #9cf; }
 .browser-row.is-dir:hover { color: #cfe; }
+/* Listed so the folder reads true, but there is nothing to open: dimmed, the
+   way a disabled control is. */
+.browser-row.is-other { color: #6d6d6d; }
+.browser-row.is-other:hover { color: #999; }
 .browser-row .b-glyph { flex: 0 0 auto; font-size: 11px; opacity: 0.85; }
 .browser-row .b-name  { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .browser-row .b-meta  { flex: 0 0 auto; font-size: 10px; color: #666; font-family: monospace; }

@@ -400,8 +400,12 @@ try:
 
             No path → ComfyUI's input directory, which is where the browser opens.
 
-            Confined to the allowed folders (path_access); only directories and
-            media files are reported within them.
+            Confined to the allowed folders (path_access). Everything inside
+            them is listed — a folder with a .json beside its .png is a folder
+            with a .json in it, and a browser that hides half of what is there
+            is a browser you cannot trust. Each file says what kind it is, and
+            "other" is the viewer's way of saying it has nothing to show for
+            it: no preview, nothing to open, nothing to drag onto the graph.
             """
             raw = (request.query.get("path") or "").strip()
             if not raw:
@@ -451,7 +455,7 @@ try:
                 elif ext in _MODEL_EXTS:
                     kind = "model"
                 else:
-                    continue
+                    kind = "other"
                 if len(files) >= _BROWSE_FILE_CAP:
                     truncated = True
                     continue

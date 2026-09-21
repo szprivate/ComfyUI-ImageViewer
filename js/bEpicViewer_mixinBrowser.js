@@ -23,7 +23,10 @@ import { api } from "../../scripts/api.js";
 // to a poster frame for them, because nothing in the browser can decode them.
 const _PLAYABLE_VIDEO = /\.(mp4|m4v|mov|webm|ogv)$/i;
 
-const _KIND_GLYPH = { dir: "📁", image: "🖼", video: "🎬", model: "🧊" };
+const _KIND_GLYPH = { dir: "📁", image: "🖼", video: "🎬", model: "🧊", other: "📄" };
+
+/** The kinds this viewer can actually open. Everything else is along to be seen. */
+const _OPENABLE = new Set(["image", "video", "model"]);
 
 // Preview pane height, in px, and the range the splitter allows.
 const _PREVIEW_DEFAULT = 190;
@@ -288,7 +291,7 @@ export const BrowserMixin = {
         this.browserList.appendChild(frag);
 
         if (this._browserDirs.length === 0 && this._browserFiles.length === 0) {
-            this._setBrowserStatus("No images or videos in this folder.", { keepList: true });
+            this._setBrowserStatus("This folder is empty.", { keepList: true });
         } else if (this._browserTrunc) {
             this._setBrowserStatus(`Showing the first ${this._browserFiles.length} files — this folder holds more.`,
                                    { keepList: true });
@@ -372,9 +375,11 @@ export const BrowserMixin = {
 
     _syncBrowserOpenButton() {
         if (!this.browserOpenBtn) return;
-        const n = this._browserSel.size;
-        const total = this._browserFiles.length;
-        this.browserOpenBtn.disabled = total === 0;
+        // Counted over what the viewer can open: a folder of a hundred JSONs
+        // and one PNG offers to open one thing, not a hundred and one.
+        const n = this._selectedBrowserFiles().filter((f) => _OPENABLE.has(f.kind)).length;
+        const total = this._browserFiles.filter((f) => _OPENABLE.has(f.kind)).length;
+        this.browserOpenBtn.disabled = total === 0 && n === 0;
         this.browserOpenBtn.textContent = n > 0
             ? `Open ${n} in Viewer`
             : (total > 0 ? `Open all ${total} in Viewer` : "Nothing to open");
@@ -431,6 +436,17 @@ export const BrowserMixin = {
 
         this._setBrowserMeta(file, "");
         const url = this.buildImgUrl({ path: file.path, external: true });
+
+        if (!_OPENABLE.has(file.kind)) {
+            // Listed, but not something the viewer can show: say which and stop
+            // there rather than firing a request that can only fail.
+            if (msg) {
+                msg.textContent = `${(file.ext || "This file").replace(/^\./, "").toUpperCase()} — ` +
+                                  "nothing this viewer can display.";
+                msg.style.display = "block";
+            }
+            return;
+        }
 
         if (file.kind === "model") {
             // The tile the viewer rendered last time this model was opened, or a
@@ -545,6 +561,8 @@ export const BrowserMixin = {
     /** One browsed file as the payload both drop targets already understand. */
     _browserDragItem(file) {
         if (!file || !file.path) return null;
+        // A loader node for a text file would be a node that cannot run.
+        if (!_OPENABLE.has(file.kind)) return null;
         return {
             path: file.path, url: null,
             filename: file.name, subfolder: "", type: null,
@@ -600,8 +618,16 @@ export const BrowserMixin = {
     /** Open the current selection — or the whole folder when nothing is picked. */
     async openBrowserSelection(files) {
         const picked = files || this._selectedBrowserFiles();
-        const list   = picked.length > 0 ? picked : this._browserFiles;
-        if (list.length === 0) return;
+        const all    = picked.length > 0 ? picked : this._browserFiles;
+        const list   = all.filter((f) => _OPENABLE.has(f.kind));
+        if (list.length === 0) {
+            if (all.length) {
+                this._setBrowserStatus(all.length === 1
+                    ? "There is nothing to show for that file."
+                    : "None of those are files this viewer can open.", { keepList: true });
+            }
+            return;
+        }
 
         const label = this._browserDir
             ? (this._browserDir.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || this._browserDir)

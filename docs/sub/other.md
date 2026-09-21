@@ -36,9 +36,11 @@ Drag the title bar across the top to move the panel — see [Docking Panels](int
 | **Go to…** | Jump to Input, Output, Temp, or any folder you have [allowed](#which-folders-the-viewer-can-open). |
 | **⟳** | Re-read the folder — pick up files written since you last looked. |
 | **Path field** | Shows where you are; type or paste a path and press <kbd>Enter</kbd> to go there. |
-| **List** | Sub-folders and media files, ordered so `frame_2` comes before `frame_10`. Sizes on the right. <kbd>↑</kbd> <kbd>↓</kbd> walk it. |
+| **List** | Everything in the folder, ordered so `frame_2` comes before `frame_10`. Sizes on the right. <kbd>↑</kbd> <kbd>↓</kbd> walk it. |
 | **Preview** | The selected file, at whatever size the pane is. Drag the bar above it to make it taller. |
-| **Open in Viewer** | Opens the selection — or the whole folder when nothing is selected. |
+| **Open in Viewer** | Opens the selection — or the whole folder when nothing is selected. It counts only what can be opened, so a folder of JSON beside one PNG offers one file, not a hundred. |
+
+**The whole folder is listed**, not just the media in it: a workflow's `.json` sitting beside its renders is part of what is there, and a browser that hides half a folder is one you end up checking elsewhere. Files the viewer has nothing to show for are greyed, say so in the preview, and stay out of the way otherwise — they cannot be opened, they are not counted by **Open in Viewer**, and dragging one onto the graph does nothing, since a loader pointing at a text file would be a node that cannot run.
 
 Everything the viewer can display is listed, `exr`, `dpx`, `tiff` and `hdr` included; those are converted to a PNG proxy on the way to the preview, exactly as they are in the main viewport. Videos preview in place with their own transport. A container the browser has no decoder for (`mkv`, `avi`, `wmv`) says so and shows a poster frame instead — it still opens and drags like anything else.
 
