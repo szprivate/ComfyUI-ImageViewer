@@ -165,7 +165,13 @@ export const PrevizCurvesMixin = {
         const body = el("div", "curves-body");
 
         // Left: the channel list, a section per object. Right: the graph.
+        // The bar between them is draggable, because a name like
+        // "Kitchen_set.translate.x" needs more room than "fov" does.
         const list = el("div", "curves-channels");
+        list.style.width = `${this._previzCurveListW || 120}px`;
+        const split = el("div", "curves-split");
+        split.title = "Drag to give the channel names more or less room";
+        split.onpointerdown = (e) => this._previzCurveSplitDown(e, list, split);
 
         const right = el("div", "curves-graph-col");
         const sub = el("div", "curves-sub");
@@ -190,11 +196,45 @@ export const PrevizCurvesMixin = {
             "Drag a key sideways to retime it, up and down to change it; double-click removes it. " +
             "Click a key for its tangents — drag a handle to shape the curve, Alt to break it, " +
             "double-click it to hand the key back to its ease."));
-        body.append(list, right);
+        body.append(list, split, right);
         host.append(empty, body);
 
         this._previzCurveUI = { body, empty, sub, list };
         return this._previzCurveUI;
+    },
+
+    /**
+     * Drag the bar between the names and the graph.
+     *
+     * Pointer capture rather than window listeners: a drag started here has to
+     * keep receiving moves after the viewer is popped out into another
+     * document, which is the same reason the dock's splitters use it.
+     */
+    _previzCurveSplitDown(e, list, split) {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        const startX = e.clientX;
+        const startW = list.getBoundingClientRect().width;
+        split.classList.add("dragging");
+        try { split.setPointerCapture(e.pointerId); } catch (_) {}
+        const move = (ev) => {
+            const w = Math.round(Math.max(54, Math.min(320, startW + (ev.clientX - startX))));
+            this._previzCurveListW = w;
+            list.style.width = `${w}px`;
+        };
+        const up = () => {
+            split.removeEventListener("pointermove", move);
+            split.removeEventListener("pointerup", up);
+            split.removeEventListener("pointercancel", up);
+            split.classList.remove("dragging");
+            try { split.releasePointerCapture(e.pointerId); } catch (_) {}
+            // The graph is measured in percentages of its box, and the box
+            // just changed.
+            this.previzRefreshCurves();
+        };
+        split.addEventListener("pointermove", move);
+        split.addEventListener("pointerup", up);
+        split.addEventListener("pointercancel", up);
     },
 
     /** Show or hide one channel of one object. Plain click picks it alone. */

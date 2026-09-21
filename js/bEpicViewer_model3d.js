@@ -1303,6 +1303,14 @@ export class Model3DView {
         // while one of its handles is held.
         gizmo.addEventListener("dragging-changed", (e) => {
             if (this.controls) this.controls.enabled = !e.value;
+            // Where the pivot drag started. The scene is only told the numbers
+            // mid-drag — nothing re-places the objects until it ends — so the
+            // handle has to be measured against the state it set off from, or
+            // every mouse move would add the whole journey again.
+            const entry = this.selected && this._entries.get(this.selected);
+            this._pivotDragFrom = (e.value && entry && this.pivotMode && entry.body)
+                ? { root: entry.root.position.clone(), at: evaluate(entry.item, this.sceneFrame) }
+                : null;
             if (!e.value && this.hooks.onTransformEnd) this.hooks.onTransformEnd(this.selected);
         });
         gizmo.addEventListener("objectChange", () => {
@@ -1310,8 +1318,10 @@ export class Model3DView {
             // Pivot mode: the handle moved, so the pivot moves with it and the
             // position takes up the slack.
             if (entry && this.pivotMode && this._pivotHandleObj && gizmo.object === this._pivotHandleObj) {
-                const at = evaluate(entry.item, this.sceneFrame);
-                const d = this._pivotHandleObj.position.clone().sub(entry.root.position);
+                const from = this._pivotDragFrom
+                    || { root: entry.root.position.clone(), at: evaluate(entry.item, this.sceneFrame) };
+                const at = from.at;
+                const d = this._pivotHandleObj.position.clone().sub(from.root);
                 if (this.hooks.onTransform) {
                     this.hooks.onTransform(this.selected, this._pivotShiftWorld(at, d), true,
                                            ["position", "pivot"]);
@@ -1368,6 +1378,18 @@ export class Model3DView {
     /** The transform of a three object, in the scene's own units (degrees). */
     readTransform(object, item = null) {
         const R = 180 / Math.PI;
+        // The root sits at position+pivot (see applyFrame), so what the scene
+        // stores is what the gizmo left MINUS the pivot. Without this the item
+        // jumps by its pivot the moment anything is dragged.
+        const entry = item ? this._entries.get(item.id) : null;
+        if (entry && entry.body && object === entry.root) {
+            const pv = evaluate(item, this.sceneFrame).pivot || [0, 0, 0];
+            return {
+                position: [object.position.x - pv[0], object.position.y - pv[1], object.position.z - pv[2]],
+                rotation: [object.rotation.x * R, object.rotation.y * R, object.rotation.z * R],
+                scale: object.scale.toArray(),
+            };
+        }
         // A camera inside a group is driven in world space (see _reparent), so
         // what the scene stores has to be taken back out of its parent.
         const parentWorld = (item && item.kind === "camera") ? this._parentWorld(item) : null;

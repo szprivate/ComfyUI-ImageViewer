@@ -114,7 +114,7 @@ Keyframes are per item and per property.
 | Remove a key | **⊗**, or double-click its tick on the timeline |
 | Interpolation | **Smooth** (default), **Linear** or **Hold**, applied to new keys and to any key on the current frame |
 
-Those four live in the transport, beside the timeline they act on: **⊕** keys, **⊗** removes, **○** is autokey, and the menu is the interpolation. They appear only on a 3D tab.
+Those four live in the **transport row under the timeline**, just left of the fps box: **⊕** keys, **⊗** removes, **○** is autokey — it turns red while it is armed — and the menu is the interpolation. They appear on any 3D tab, whether or not the previz panel is open.
 
 Keyframes show as orange ticks under the timeline; click one to jump to it. Play, scrub and step work as they do for footage. A model's own clip is scrubbed by the same timeline, so the whole shot stays frame-accurate — there is no second clock playing underneath.
 
@@ -176,6 +176,8 @@ It plots **value over time** — one curve per channel. That's the difference fr
 #### Channels
 
 The column down the left lists them the way a DCC does — **translate.x**, **rotate.y**, **scale.z**, **pivot.x** and **fov** on a camera — each in the colour its curve is drawn in. Any set of them can be on screen at once, which is the point of a graph editor: translate.x against rotate.y is a question you can now ask.
+
+Drag the bar between the names and the graph to give the names more room — `Kitchen_set.translate.x` needs more than `fov` does.
 
 Select several objects and each gets its own section, headed by its name: click the header to fold that object's channels away. A curve is then **Name.channel** — the full name is on every key's tooltip — and each object has its own shade of the colours, so two objects' translate.x are told apart at a glance.
 

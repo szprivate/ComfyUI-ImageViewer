@@ -1050,11 +1050,14 @@ export const PrevizMixin = {
             this._previzPanelOn = true;
             this.setPanelDocked("previz", true);
         }
+        // Before the early return below: the timeline's fields and the keying
+        // buttons belong to the tab, and a previz panel put away by hand must
+        // not take them with it.
+        this.previzSyncTimelineFields();
         if (!this.isPanelDocked("previz")) return;
         const scene = this.previzScene();
         const doc = ui.root.ownerDocument;
 
-        this.previzSyncTimelineFields();
         this._previzRefreshUndoButtons();
 
         // Outliner: the tree, parents before their children.
