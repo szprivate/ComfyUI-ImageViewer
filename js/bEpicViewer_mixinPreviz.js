@@ -44,8 +44,27 @@ export const PrevizMixin = {
     },
 
     /**
+     * Make this tab's scene, if it hasn't got one.
+     *
+     * Called from the 3D view's own entry point, so opening a model IS opening
+     * a scene that holds it. Building needs the server (a dropped file has to
+     * be resolved to something the scene can point at), so it runs in the
+     * background and hands back nothing; the reload at the end comes back
+     * through here with the scene in place.
+     */
+    _previzBuildForTab(key = this.activeTab) {
+        const scene = this.previzScene(key);
+        if (scene) return scene;
+        if (!this._previzBuilding) this._previzBuilding = {};
+        if (this._previzBuilding[key]) return null;
+        this._previzBuilding[key] = true;
+        this.enterPreviz(key).finally(() => { delete this._previzBuilding[key]; });
+        return null;
+    },
+
+    /**
      * Turn the current 3D tab into a scene. Whatever the tab is showing becomes
-     * its first object, so previz starts from the model already on screen.
+     * its first object, so the scene starts from the model already on screen.
      */
     async enterPreviz(key = this.activeTab) {
         if (this.previzScene(key)) return this.previzScene(key);
@@ -65,21 +84,6 @@ export const PrevizMixin = {
         this.applyTimelineBounds();
         this.setFrame(0);
         return scene;
-    },
-
-    /** Leave previz. The scene is kept, so turning it back on resumes it. */
-    exitPreviz(key = this.activeTab) {
-        const scene = this.previzScene(key);
-        if (!scene) return;
-        if (!this._previzKept) this._previzKept = {};
-        this._previzKept[key] = scene;
-        this._setScene(key, null);
-        if (this._model3d) this._model3d.setScene(S.makeScene(), 0);
-        this._previzHidePanel();
-        this.previzRefreshCurves();          // takes the curves panel down with it
-        this.applyTimelineBounds();
-        this.refreshView();
-        this.queuePersistViewerState();
     },
 
     /**
@@ -107,20 +111,6 @@ export const PrevizMixin = {
         this.requestPanelOpen();
         this.switchTab(key);
         return this.previzScene(key);
-    },
-
-    togglePreviz(key = this.activeTab) {
-        if (this.isPrevizTab(key)) { this.exitPreviz(key); return false; }
-        const kept = this._previzKept && this._previzKept[key];
-        if (kept) {
-            this._setScene(key, kept);
-            this.applyTimelineBounds();
-            this.setFrame(0);
-            this.previzChanged({ reload: true });
-        } else {
-            this.enterPreviz(key);
-        }
-        return true;
     },
 
     /** What a scene item needs to find a model file again. */
@@ -435,6 +425,25 @@ export const PrevizMixin = {
         if (previz && doc.activeElement !== endEl) endEl.value = String(Math.max(1, scene.length) - 1);
     },
 
+    /**
+     * Make room for a model's own animation.
+     *
+     * A clip used to play in real time, off to one side of the timeline. Now
+     * the timeline scrubs it, so a 300-frame walk cycle in a 120-frame shot
+     * would simply stop halfway. An untouched shot grows to fit it; one that
+     * has been keyed, or whose length was set by hand, is left alone — the
+     * length is then a decision, not a default.
+     */
+    previzFitClipLength(frames) {
+        const scene = this.previzScene();
+        if (!scene || !(frames > scene.length)) return;
+        if (scene.lengthSet || S.isAnimatedScene(scene)) return;
+        scene.length = Math.round(frames);
+        this.applyTimelineBounds();
+        this.previzSyncTimelineFields();
+        this.previzChanged({ persist: true, light: true });
+    },
+
     previzSetSceneField(field, value) {
         const scene = this.previzScene();
         if (!scene) return;
@@ -442,6 +451,7 @@ export const PrevizMixin = {
         if (field === "fps") scene.fps = Math.max(0.1, Number(value) || S.DEFAULT_FPS);
         if (field === "length") {
             scene.length = Math.max(1, Math.round(Number(value) || S.DEFAULT_LENGTH));
+            scene.lengthSet = true;          // said out loud: don't grow it for me
             this.applyTimelineBounds();
         }
         this.previzChanged();

@@ -35,7 +35,9 @@ Every key on this page can be changed — see [Changing the Hotkeys](#changing-t
 
 See [Selecting Several Snapshots](tabs-history.md#selecting-several-snapshots) for what a selection can then do. <kbd>Shift</kbd>+<kbd>Delete</kbd> works only while the viewer is hovered, so a plain <kbd>Delete</kbd> still goes to ComfyUI's graph.
 
-## Previz (3D scenes)
+## 3D scenes
+
+Every 3D tab is a scene, so these answer on all of them.
 
 | Key | Action |
 |---|---|

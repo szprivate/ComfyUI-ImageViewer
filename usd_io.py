@@ -544,7 +544,9 @@ def import_scene(path, load_payloads=True):
     end = stage.GetEndTimeCode()
     length = max(1, int(round(end - start + 1))) if end > start else 120
 
-    scene = {"version": 1, "fps": fps, "length": length, "items": [], "activeCamera": None}
+    # The stage's own range, so a clip inside it never stretches the shot.
+    scene = {"version": 1, "fps": fps, "length": length, "lengthSet": True,
+             "items": [], "activeCamera": None}
     default = stage.GetDefaultPrim()
     root = default if default and default.IsValid() else stage.GetPseudoRoot()
     active_id = root.GetCustomDataByKey(f"{_CUSTOM_KEY}:activeCamera") if root else None

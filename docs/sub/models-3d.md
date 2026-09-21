@@ -49,13 +49,15 @@ Compare, contact sheet and the drawing tools don't apply to a model tab. Neither
 
 ## Previz: Building a Scene
 
-A 3D tab starts with one model. Press **Previz** in the 3D toolbar and that tab becomes a scene you can build on: several models, cameras, and keyframes on the viewer's own timeline. Pressing it again leaves previz — the scene is kept, so you can go back to it.
+**Every 3D tab is a scene.** Opening one model gives you a scene holding that model — same outliner, same gizmo, same timeline — and a scene is also what you get from a *bEpic 3D Scene (Previz)* node or from a USD stage. There is no mode to turn on and nothing to switch back to: add a second model, a camera or a shape whenever the shot asks for one.
+
+A model that carries its own animation (an FBX clip) is scrubbed by the timeline like everything else, and an untouched shot grows to fit the clip rather than cutting it short. Once you have keyed something, or typed a length yourself, the length is yours and stays put.
 
 ### The Panel
 
-The previz panel is a docked panel like the file browser: it opens in a rail when previz starts, and can be moved, stacked and resized like any other — see [Docking Panels](interface.md#docking-panels). Its **✕** puts the panel away without leaving previz; the **Previz** button in the 3D toolbar does that, and keeps the scene.
+The previz panel is a docked panel like the file browser: it opens in a rail with the first 3D tab, and can be moved, stacked and resized like any other — see [Docking Panels](interface.md#docking-panels). Its **✕** puts it away, and it stays away until you ask for it again.
 
-Two icons appear in the 3D toolbar while previz is on, and they are the only way back to either panel: the **cube** shows and hides the previz panel, the **curve** shows and hides the [Animation Curves](#the-curve-editor). They sit over the canvas they belong to — neither has anything to say about a picture, so neither clutters the playback bar. Both panels close when previz does.
+That is what the two icons in the 3D toolbar are for, and they are the only way back to either panel: the **cube** shows and hides the previz panel, the **curve** shows and hides the [Animation Curves](#the-curve-editor). They sit over the canvas they belong to — neither has anything to say about a picture, so neither clutters the playback bar. Both close with the 3D tab.
 
 | Part | What it does |
 |---|---|
@@ -71,7 +73,7 @@ Two icons appear in the 3D toolbar while previz is on, and they are the only way
 
 The shot's **frame rate and length live on the timeline**, not in the panel: while previz is on, the **fps** box in the transport is the rate the shot plays, renders and exports at, and the **frame number at the end of the timeline** is its last frame — type a new one to make the shot longer or shorter. Everywhere else that number is the readout it has always been.
 
-Navigation follows Maya: hold <kbd>Alt</kbd> and the left button tumbles, the middle button tracks and the right button dollies. The pointer says which it is — an arrow that picks and drags, a hand while <kbd>Alt</kbd> is held. Without <kbd>Alt</kbd> the left button belongs to the scene — click an object in the viewport to select it, or a camera's frustum lines, and drag the gizmo to move it. The numbers follow, and so does the scene. (On a plain one-model tab there is nothing to select, so left-drag orbits there as it always did.)
+Navigation follows Maya: hold <kbd>Alt</kbd> and the left button tumbles, the middle button tracks and the right button dollies. The pointer says which it is — an arrow that picks and drags, a hand while <kbd>Alt</kbd> is held. Without <kbd>Alt</kbd> the left button belongs to the scene — click an object in the viewport to select it, or a camera's frustum lines, and drag the gizmo to move it. The numbers follow, and so does the scene. It is the same on every 3D tab, whether it holds one model or fifty.
 
 | Key | Tool |
 |---|---|
@@ -110,7 +112,7 @@ Keyframes are per item and per property.
 | Remove a key | **Delete key**, or double-click its tick on the timeline |
 | Interpolation | **Smooth** (default), **Linear** or **Hold**, applied to new keys and to any key on the current frame |
 
-Keyframes show as orange ticks under the timeline; click one to jump to it. Play, scrub and step work as they do for footage. A model with its own animation (an FBX clip) is scrubbed by the timeline too, so the whole shot stays frame-accurate.
+Keyframes show as orange ticks under the timeline; click one to jump to it. Play, scrub and step work as they do for footage. A model's own clip is scrubbed by the same timeline, so the whole shot stays frame-accurate — there is no second clock playing underneath.
 
 Rotations interpolate the short way round, so a turn from 350° to 10° moves 20°, not 340°.
 
@@ -264,8 +266,8 @@ Drag a model's history thumbnail or browser row onto the graph and you get a **L
 - A USD stage is shown through a flattened copy, so its materials and variants are not visible in the viewport.
 - Gaussian splats and USDZ can be saved but not shown.
 - three.js (r180, the version ComfyUI uses) ships with the node and only loads when a model tab first opens.
-- Previz has no lights of its own yet: a scene is lit by the same fixed rig as a single model.
-- Compare, contact sheet and the drawing tools don't apply to a previz tab.
+- Previz has no lights of its own yet: a scene is lit by the same fixed rig ComfyUI's *Load 3D* uses.
+- Compare, contact sheet and the drawing tools don't apply to a 3D tab.
 
 ---
 

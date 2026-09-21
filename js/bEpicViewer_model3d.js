@@ -84,8 +84,6 @@ export class Model3DView {
         this.hooks = hooks;
         this.root = null;
         this.libs = null;
-        this.model = null;
-        this.frame = null;
         this.stats = null;
         this.materialMode = "original";
         this.showGrid = !!setting("Comfy.Load3D.ShowGrid", true);
@@ -93,14 +91,13 @@ export class Model3DView {
         this.channelFilter = "";
         this._loadId = 0;
         this._raf = 0;
-        this._mixer = null;
-        this._playing = false;
         this._originals = new Map();
         // Previz scene: item id -> { item, root, key, mixer, clips, camera, helper }
         this._entries = new Map();
         this.scene3d = null;          // the scene data this view is showing
         this.sceneFrame = 0;          // where the timeline is (frames, not a media frame)
         this.selected = null;
+        this._thumbId = 0;
         this.gizmoMode = "translate";
         // Local by default: a shape you have turned should move along its own
         // axes, which is what "forward" means once something is placed.
@@ -141,10 +138,6 @@ export class Model3DView {
         resetBtn.title = "Frame the model again (F)";
         resetBtn.onclick = () => this.resetView();
 
-        const previzBtn = el("button", "model-btn", "Previz");
-        previzBtn.title = "Build a scene from several models, with cameras and keyframes";
-        previzBtn.onclick = () => { if (this.hooks.onPrevizToggle) this.hooks.onPrevizToggle(); };
-
         // The two previz panels are toggled from here rather than from the
         // playback bar: they describe this canvas, and there is nothing they
         // can say about a picture.
@@ -158,17 +151,12 @@ export class Model3DView {
         curvesBtn.onclick = () => { if (this.hooks.onPanelToggle) this.hooks.onPanelToggle("curves"); };
         if (this.hooks.setIcon) this.hooks.setIcon(curvesBtn, "icon-curves");
 
-        const animBtn = el("button", "model-btn", "❚❚");
-        animBtn.title = "Play / pause the model's animation";
-        animBtn.style.display = "none";
-        animBtn.onclick = () => this.setAnimationPlaying(!this._playing);
-
-        bar.append(modeSel, gridBtn, resetBtn, animBtn, previzBtn, panelBtn, curvesBtn);
+        bar.append(modeSel, gridBtn, resetBtn, panelBtn, curvesBtn);
         const status = el("div", "model-status");
 
         root.append(bar, status);
         this.root = root;
-        this.ui = { modeSel, gridBtn, resetBtn, animBtn, previzBtn, panelBtn, curvesBtn, status };
+        this.ui = { modeSel, gridBtn, resetBtn, panelBtn, curvesBtn, status };
         this._syncToolbar();
         this.host.appendChild(root);
     }
@@ -177,18 +165,6 @@ export class Model3DView {
         if (!this.ui) return;
         this.ui.modeSel.value = this.materialMode;
         this.ui.gridBtn.classList.toggle("active", this.showGrid);
-        // In a scene, clips are driven by the timeline, so there is no separate
-        // play button for them.
-        const hasAnim = !!this._mixer && !this.previzActive;
-        this.ui.animBtn.style.display = hasAnim ? "" : "none";
-        this.ui.animBtn.textContent = this._playing ? "❚❚" : "▶";
-        this.ui.previzBtn.classList.toggle("active", !!this.previzActive);
-        // Only in previz: on a lone model there is no scene to outline and no
-        // keys to draw.
-        for (const b of [this.ui.panelBtn, this.ui.curvesBtn]) b.style.display = this.previzActive ? "" : "none";
-        this.ui.previzBtn.title = this.previzActive
-            ? "Leave previz (the scene is kept)"
-            : "Build a scene from several models, with cameras and keyframes";
     }
 
     /** Light the panel buttons from the dock, which is what actually knows. */
@@ -196,29 +172,6 @@ export class Model3DView {
         if (!this.ui) return;
         this.ui.panelBtn.classList.toggle("active", !!(states && states.previz));
         this.ui.curvesBtn.classList.toggle("active", !!(states && states.curves));
-    }
-
-    /** Previz on: the single-model view steps aside for the scene. */
-    setPrevizActive(on) {
-        const was = !!this.previzActive;
-        this.previzActive = !!on;
-        // The left button belongs to the scene while previz is on (see
-        // _applyNavButtons), so the mapping changes with the mode.
-        this._applyNavButtons(false);
-        if (was && !this.previzActive) {
-            // Leaving previz: drop the scene's objects, keep the lone model path.
-            for (const [id, entry] of [...this._entries]) { this._disposeEntry(entry, true); this._entries.delete(id); }
-            this.scene3d = null;
-            this.selected = null;
-            if (this.gizmo) this.gizmo.detach();
-        }
-        if (!was && this.previzActive) {
-            // Entering previz: the lone model is now an item in the scene.
-            this._clearModel();
-            this._key = null;
-        }
-        this._syncToolbar();
-        this.requestRender();
     }
 
     _setStatus(text, isError = false) {
@@ -345,9 +298,8 @@ export class Model3DView {
      * The wheel always zooms, as it does everywhere.
      *
      * With Alt up, the left button belongs to the scene — picking an object and
-     * dragging the gizmo — which is why a previz tab needs this at all. On a
-     * plain single-model tab there is nothing to pick, so the left button keeps
-     * orbiting the way it always has.
+     * dragging the gizmo — so orbiting is Alt+left, as in Maya. Every 3D tab is
+     * a scene, so there is no second mapping to remember.
      */
     _applyNavButtons(alt) {
         // Alt is the navigation modifier, so it is also what turns the pointer
@@ -362,7 +314,9 @@ export class Model3DView {
             return;
         }
         this.controls.mouseButtons = {
-            LEFT: this.previzActive ? null : M.ROTATE,
+            // Nothing: the left button picks, and drags the gizmo. Orbiting is
+            // Alt+left, as in Maya — the same everywhere, on one model or fifty.
+            LEFT: null,
             MIDDLE: M.PAN,
             RIGHT: M.PAN,
         };
@@ -503,12 +457,8 @@ export class Model3DView {
         if (!this.renderer) return;
         const dt = this.clock.getDelta();
         let again = false;
-        // A lone model's own clip runs in real time; in a scene the timeline
-        // owns the clock, so clips are set to the frame instead (see applyFrame).
-        if (this._mixer && this._playing) {
-            this._mixer.update(dt);
-            again = true;
-        }
+        // Clips are not played here: the timeline owns the clock and applyFrame
+        // sets each mixer to the frame, so scrubbing and playing agree.
         // update() reports whether damping moved the camera; keep going until
         // it has settled.
         if (this.controls && this.controls.update(dt)) again = true;
@@ -540,7 +490,6 @@ export class Model3DView {
     hide() {
         if (!this.root) return;
         this.root.style.display = "none";
-        this.setAnimationPlaying(false);
     }
 
     /**
@@ -562,36 +511,6 @@ export class Model3DView {
     }
 
     // ── Loading ──────────────────────────────────────────────────────────────
-
-    /** Show `frame` (a viewer frame dict) fetched from `url`. */
-    async show(frame, url) {
-        const key = frame.path || frame.url || frame.filename || url;
-        await this.ensure();
-        if (this.frame && this._key === key && this.model) { this.requestRender(); return; }
-
-        const id = ++this._loadId;
-        this._key = key;
-        this.frame = frame;
-        const format = modelFormatOf(frame);
-        this._setStatus(`Loading ${frame.name || format.toUpperCase()}…`);
-        try {
-            const object = await this._load(frame, url, format);
-            if (id !== this._loadId) { this._disposeObject(object.object); return; }
-            this._setModel(object.object, object.animations);
-            this._setStatus("");
-            this.requestRender();
-            if (this.hooks.onLoaded) this.hooks.onLoaded(frame, this.stats);
-            this._captureThumbnailSoon(frame, id);
-        } catch (e) {
-            if (id !== this._loadId) return;
-            console.warn("[bEpicViewer] could not load 3D model", e);
-            this._clearModel();
-            const msg = (e && e.message) ? e.message : String(e);
-            this._setStatus(`Could not load this ${format.toUpperCase()} file.\n${msg}`, true);
-            this.requestRender();
-            if (this.hooks.onError) this.hooks.onError(frame, msg);
-        }
-    }
 
     async _load(frame, url, format) {
         const { THREE, GLTFLoader, FBXLoader, OBJLoader, STLLoader, PLYLoader } = this.libs;
@@ -658,57 +577,6 @@ export class Model3DView {
         throw new Error(`.${format} files can't be shown`);
     }
 
-    _setModel(object, animations) {
-        const { THREE } = this.libs;
-        this._clearModel();
-        this.model = object;
-        this.scene.add(object);
-
-        this._originals.clear();
-        let vertices = 0, triangles = 0, points = 0, meshes = 0;
-        object.traverse((c) => {
-            if (c.isMesh) {
-                this._originals.set(c, c.material);
-                meshes++;
-                const pos = c.geometry && c.geometry.getAttribute("position");
-                if (pos) {
-                    vertices += pos.count;
-                    triangles += Math.floor((c.geometry.index ? c.geometry.index.count : pos.count) / 3);
-                }
-            } else if (c.isPoints) {
-                const pos = c.geometry && c.geometry.getAttribute("position");
-                if (pos) points += pos.count;
-            }
-        });
-        this.stats = { vertices, triangles, points, meshes, format: modelFormatOf(this.frame) };
-
-        if (animations && animations.length) {
-            this._mixer = new THREE.AnimationMixer(object);
-            this._mixer.clipAction(animations[0]).play();
-            this._playing = true;
-            this.stats.animations = animations.length;
-        }
-        this.setMaterialMode(this.materialMode);
-        this.resetView();
-        this._syncToolbar();
-    }
-
-    _clearModel() {
-        if (this._mixer) {
-            this._mixer.stopAllAction();
-            this._mixer = null;
-        }
-        this._playing = false;
-        if (this.model) {
-            this.scene.remove(this.model);
-            this._disposeObject(this.model);
-        }
-        this.model = null;
-        this.stats = null;
-        this._originals.clear();
-        this._syncToolbar();
-    }
-
     /**
      * A stand-in object spanning everything in the scene that has geometry, so
      * resetView can frame the lot. resetView measures with Box3.setFromObject,
@@ -755,7 +623,7 @@ export class Model3DView {
         if (!this.libs) return;
         const { THREE } = this.libs;
         const box = new THREE.Box3();
-        const target = subject || this.model || this._sceneBoundsSubject();
+        const target = subject || this._sceneBoundsSubject();
         if (target) box.setFromObject(target);
         if (box.isEmpty()) box.set(new THREE.Vector3(-1, 0, -1), new THREE.Vector3(1, 2, 1));
         const size = box.getSize(new THREE.Vector3());
@@ -803,13 +671,6 @@ export class Model3DView {
     setGrid(on) {
         this.showGrid = !!on;
         if (this.grid) this.grid.visible = this.showGrid;
-        this._syncToolbar();
-        this.requestRender();
-    }
-
-    setAnimationPlaying(on) {
-        this._playing = !!(on && this._mixer);
-        if (this.clock) this.clock.getDelta();
         this._syncToolbar();
         this.requestRender();
     }
@@ -878,6 +739,7 @@ export class Model3DView {
         this._syncControlsCamera();          // the active camera's object exists now
         this.applyFrame(this.sceneFrame);
         this._updateSceneStats();
+        this._captureThumbnailSoon(this.hooks.thumbFrame && this.hooks.thumbFrame());
         this.requestRender();
     }
 
@@ -1023,6 +885,11 @@ export class Model3DView {
                 entry.mixer = new THREE.AnimationMixer(loaded.object);
                 entry.clips = loaded.animations;
                 entry.mixer.clipAction(loaded.animations[0]).play();
+                // A clip has a length of its own, and the timeline is what plays
+                // it now: the shot is told, and decides whether to grow.
+                const fps = (this.scene3d && this.scene3d.fps) || 24;
+                const frames = Math.ceil(loaded.animations[0].duration * fps);
+                if (frames > 1 && this.hooks.onClipFrames) this.hooks.onClipFrames(item.id, frames);
             }
             this.setMaterialMode(this.materialMode);
         } catch (e) {
@@ -1319,13 +1186,22 @@ export class Model3DView {
 
     // ── Thumbnail ────────────────────────────────────────────────────────────
 
-    _captureThumbnailSoon(frame, id) {
-        if (!this.hooks.onThumbnail) return;
+    /**
+     * A tile for the history strip, taken once the scene has settled.
+     *
+     * It used to be captured when a lone model finished loading. A scene has no
+     * such moment — items arrive one at a time — so it is asked for after a
+     * reconcile and coalesced: the last call within the delay wins, and a view
+     * that is off screen (a hidden tab paints nothing) is skipped.
+     */
+    _captureThumbnailSoon(frame) {
+        if (!this.hooks.onThumbnail || !frame) return;
+        const id = ++this._thumbId;
         this.win.setTimeout(() => {
-            if (id !== this._loadId || !this.renderer || !this.visible) return;
+            if (id !== this._thumbId || !this.renderer || !this.visible) return;
             const url = this.captureThumbnail(256);
             if (url) this.hooks.onThumbnail(frame, url);
-        }, 300);
+        }, 400);
     }
 
     /**
@@ -1386,7 +1262,6 @@ export class Model3DView {
         this._loadId++;
         for (const [id, entry] of [...this._entries]) { this._disposeEntry(entry, true); this._entries.delete(id); }
         if (this.gizmo) { this.gizmo.dispose(); this.gizmo = null; }
-        if (this.model) this._clearModel();
         this._disposeRenderer();
         if (this.materials) Object.values(this.materials).forEach((m) => m.dispose());
         if (this.root) this.root.remove();

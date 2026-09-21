@@ -75,6 +75,10 @@ export function makeScene(patch = {}) {
         length: DEFAULT_LENGTH,
         items: [],
         activeCamera: null,      // item id, or null for the free camera
+        // Whether the length above was chosen rather than defaulted. A model's
+        // own clip may stretch a shot nobody has set a length for; once it has
+        // been set — here, or by a stage that carries a range — it stands.
+        lengthSet: false,
         ...patch,
     };
 }
@@ -438,6 +442,7 @@ export function parseScene(raw) {
     const scene = makeScene({
         fps: Math.max(0.1, num(data.fps, DEFAULT_FPS)),
         length: Math.max(1, Math.round(num(data.length, DEFAULT_LENGTH))),
+        lengthSet: !!data.lengthSet,
         items,
         activeCamera: typeof data.activeCamera === "string" ? data.activeCamera : null,
     });

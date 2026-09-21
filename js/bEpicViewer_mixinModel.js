@@ -42,9 +42,13 @@ export const ModelMixin = {
                 onTransformEnd: () => { this.previzEndDrag(); this.previzChanged(); },
                 onCameraMoved: (id, transform, live) =>
                     this.previzApplyTransform(id, transform, ["position", "rotation"], { live }),
-                onPrevizToggle: () => this.togglePreviz(),
                 onPanelToggle: (id) => this.togglePanelDocked(id),
                 setIcon: (el, key) => this._setIcon(el, key),
+                // Which frame a scene's thumbnail belongs to: the tab's first
+                // model, which is what the history strip has a tile for.
+                thumbFrame: () => (this.allTabs[this.activeTab] || [])
+                    .find((f) => this._frameIsModel(f)) || null,
+                onClipFrames: (id, frames) => this.previzFitClipLength(frames),
             });
         }
         return this._model3d;
@@ -59,6 +63,14 @@ export const ModelMixin = {
         });
     },
 
+    /**
+     * Show the 3D view for this tab.
+     *
+     * Every 3D tab is a scene. A model opened on its own is a scene with one
+     * item in it — same outliner, same gizmo, same timeline — so there is no
+     * mode to be in and nothing to switch. A tab that has not been made into
+     * one yet is built here, once, from the models it holds.
+     */
     _enterModelMode(frame) {
         this._exitVideoMode();
         const view = this._modelView();
@@ -67,33 +79,22 @@ export const ModelMixin = {
             this.viewport.classList.add("model-mode");
         }
         this._applyModelLook();
-        view.setPrevizActive(this.isPrevizTab());
-        if (this.isPrevizTab()) {
-            // The scene decides what is on screen, not the tab's own frame.
-            // Scrubbing comes through here every frame, so the scene is only
-            // re-reconciled when it is a different one — applyFrame does the
-            // per-frame work (see the previz branch of setFrame).
-            const scene = this.previzScene();
-            if (view.scene3d !== scene) {
-                view.setScene(scene, Math.round(this.currentFrame || 0));
-                view.select(this._previzSelection);
-            } else if (!view.reveal()) {
-                // Nothing built yet (first paint after a reload): setScene does
-                // that. reveal() only handles the view that already exists,
-                // which is the common case of switching tabs and back.
-                view.setScene(scene, Math.round(this.currentFrame || 0));
-                view.select(this._previzSelection);
-            }
-            this._previzRenderPanel();
-            this._syncModelPanelButtons();
-            this._updatePathBar(null);
-        } else {
-            view.reveal();
-            view.show(frame, this.buildImgUrl(frame)).catch((e) => {
-                console.warn("[bEpicViewer] 3D view failed", e);
-            });
-            this._updatePathBar(frame);
+
+        const scene = this.previzScene() || this._previzBuildForTab();
+        if (!scene) return;                  // being built; setFrame will be back
+        // The scene decides what is on screen, not the tab's own frame.
+        // Scrubbing comes through here every frame, so the scene is only
+        // re-reconciled when it is a different one — applyFrame does the
+        // per-frame work (see the previz branch of setFrame).
+        if (view.scene3d !== scene || !view.reveal()) {
+            // reveal() only handles a view that already exists, which is the
+            // common case of switching tabs and back; otherwise setScene builds.
+            view.setScene(scene, Math.round(this.currentFrame || 0));
+            view.select(this._previzSelection);
         }
+        this._previzRenderPanel();
+        this._syncModelPanelButtons();
+        this._updatePathBar(null);
         this.updateShapeInfo();
     },
 
