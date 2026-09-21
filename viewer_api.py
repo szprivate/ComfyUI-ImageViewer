@@ -395,6 +395,29 @@ try:
 
             return web.json_response({"unreachable": unreachable})
 
+        def _browse_matcher(pattern):
+            """A name test from what the user typed in the filter box.
+
+            Globs if it looks like one — `*.exr`, `frame_??.png`, `{png,jpg}`
+            are all fnmatch — and a plain substring otherwise, because typing
+            "hero" and being told a folder is empty is not what anyone means by
+            a filter. Several patterns can be separated by spaces, commas or
+            semicolons, and a match on any of them is a match.
+            """
+            import fnmatch
+
+            parts = [p for p in re.split(r"[\s,;]+", (pattern or "").strip()) if p]
+            if not parts:
+                return None
+            tests = []
+            for part in parts:
+                low = part.lower()
+                if any(ch in low for ch in "*?["):
+                    tests.append(lambda name, pat=low: fnmatch.fnmatch(name, pat))
+                else:
+                    tests.append(lambda name, needle=low: needle in name)
+            return lambda name: any(test(name.lower()) for test in tests)
+
         async def _bepic_browse(request):
             """List one directory for the viewer's file browser panel.
 
@@ -429,6 +452,11 @@ try:
                 }, status=404)
 
             image_exts, video_exts = _browse_exts()
+            # Filtering happens HERE, not in the page: the listing is capped, so
+            # a filter applied afterwards would search the first few hundred
+            # names of a big folder rather than the folder.
+            matches = _browse_matcher(request.query.get("filter"))
+            kinds = {k for k in (request.query.get("kinds") or "").split(",") if k}
             dirs, files, truncated = [], [], False
             try:
                 names = os.listdir(path)
@@ -456,6 +484,10 @@ try:
                     kind = "model"
                 else:
                     kind = "other"
+                if kinds and kind not in kinds:
+                    continue
+                if matches and not matches(name):
+                    continue
                 if len(files) >= _BROWSE_FILE_CAP:
                     truncated = True
                     continue
@@ -474,6 +506,8 @@ try:
                 "dirs": dirs,
                 "files": files,
                 "truncated": truncated,
+                # So the page can say "nothing matches" rather than "empty".
+                "filtered": bool(matches or kinds),
             })
 
         async def _bepic_browse_frames(request):

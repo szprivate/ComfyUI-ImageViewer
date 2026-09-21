@@ -76,6 +76,20 @@
             <input type="text" id="browser-path" class="browser-path" spellcheck="false"
                    placeholder="ComfyUI input folder"
                    title="Type or paste a folder path, then press Enter">
+            <div class="browser-filter">
+                <input type="text" id="browser-filter" class="browser-filter-in" spellcheck="false"
+                       placeholder="Filter, e.g. *.exr"
+                       title="Show only the files whose name matches. Wildcards work (*.exr, frame_??.png); anything else is a plain substring. Separate several with a space or a comma.">
+                <button id="browser-filter-clear" class="browser-btn" title="Clear the filter">&#10005;</button>
+                <select id="browser-kind-sel" title="Which kinds of file to list">
+                    <option value="">All files</option>
+                    <option value="image,video,model">Media only</option>
+                    <option value="image">Images</option>
+                    <option value="video">Video</option>
+                    <option value="model">3D models</option>
+                    <option value="other">Everything else</option>
+                </select>
+            </div>
             <div id="browser-list" class="browser-list" tabindex="0"></div>
             <div id="browser-split" class="browser-split" title="Resize the preview"></div>
             <div id="browser-preview-stage" class="browser-preview-stage">

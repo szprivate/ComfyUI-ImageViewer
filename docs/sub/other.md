@@ -36,9 +36,13 @@ Drag the title bar across the top to move the panel — see [Docking Panels](int
 | **Go to…** | Jump to Input, Output, Temp, or any folder you have [allowed](#which-folders-the-viewer-can-open). |
 | **⟳** | Re-read the folder — pick up files written since you last looked. |
 | **Path field** | Shows where you are; type or paste a path and press <kbd>Enter</kbd> to go there. |
+| **Filter** | Show only the files you are after. Wildcards work — `*.exr`, `frame_??.png` — and anything without one is a plain substring, so `hero` finds `hero_01.png`. Several patterns separated by a space or a comma match any of them. <kbd>Esc</kbd> clears it, and so does the **✕**. |
+| **Kind** | All files, media only, or just images, video, 3D models or everything else. |
 | **List** | Everything in the folder, ordered so `frame_2` comes before `frame_10`. Sizes on the right. <kbd>↑</kbd> <kbd>↓</kbd> walk it. |
 | **Preview** | The selected file, at whatever size the pane is. Drag the bar above it to make it taller. |
 | **Open in Viewer** | Opens the selection — or the whole folder when nothing is selected. It counts only what can be opened, so a folder of JSON beside one PNG offers one file, not a hundred. |
+
+The filter is the browser's, not the folder's: walk into the next folder and it is still looking for `*.exr`, which is the point of having set it. It survives a reload too, and it is applied **where the listing is made** — so filtering a folder of fifty thousand frames finds the matches in the whole folder, not in the first few hundred names of it.
 
 **The whole folder is listed**, not just the media in it: a workflow's `.json` sitting beside its renders is part of what is there, and a browser that hides half a folder is one you end up checking elsewhere. Files the viewer has nothing to show for are greyed, say so in the preview, and stay out of the way otherwise — they cannot be opened, they are not counted by **Open in Viewer**, and dragging one onto the graph does nothing, since a loader pointing at a text file would be a node that cannot run.
 

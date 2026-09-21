@@ -52,6 +52,8 @@ export const BrowserMixin = {
         this.browserPrevMsg = sr.getElementById("browser-preview-msg");
         this.browserMeta    = sr.getElementById("browser-preview-meta");
         this.browserOpenBtn = sr.getElementById("browser-open-btn");
+        this.browserFilterIn = sr.getElementById("browser-filter");
+        this.browserKindSel  = sr.getElementById("browser-kind-sel");
 
         this.browserPanel.style.display = "none";
         this._browserDirs   = [];
@@ -60,6 +62,14 @@ export const BrowserMixin = {
         this._browserAnchor = null;        // for shift-range selection
         this._browserLoaded = false;
         this._browserDir    = this._browserDir || this._savedBrowserDir();
+        // The filter belongs to the browser, not to the folder: looking for
+        // *.exr, walking into the next folder and being shown everything again
+        // is not what a filter is for.
+        const saved = this._savedBrowserFilter();
+        this._browserFilter = saved.text;
+        this._browserKinds  = saved.kinds;
+        if (this.browserFilterIn) this.browserFilterIn.value = this._browserFilter;
+        if (this.browserKindSel) this.browserKindSel.value = this._browserKinds;
 
         // Fill the path field straight away rather than leaving it blank until
         // the first listing lands — an empty address bar reads as "broken", and
@@ -82,11 +92,71 @@ export const BrowserMixin = {
         } catch (e) { return null; }
     },
 
+    _savedBrowserFilter() {
+        try {
+            const raw = window.localStorage.getItem(this._getViewerStateStorageKey());
+            const parsed = raw ? JSON.parse(raw) : null;
+            const f = (parsed && parsed.browserFilter) || {};
+            return {
+                text: typeof f.text === "string" ? f.text : "",
+                kinds: typeof f.kinds === "string" ? f.kinds : "",
+            };
+        } catch (e) { return { text: "", kinds: "" }; }
+    },
+
+    /** What the two filter controls say, as the query the route takes. */
+    browserFilterQuery() {
+        const parts = [];
+        if (this._browserFilter) parts.push(`filter=${encodeURIComponent(this._browserFilter)}`);
+        if (this._browserKinds) parts.push(`kinds=${encodeURIComponent(this._browserKinds)}`);
+        return parts;
+    },
+
+    /** Re-read the folder through the filter, without racing the typing. */
+    _browserFilterChanged({ now = false } = {}) {
+        this._browserFilter = this.browserFilterIn ? this.browserFilterIn.value.trim() : "";
+        this._browserKinds = this.browserKindSel ? this.browserKindSel.value : "";
+        if (this.queuePersistViewerState) this.queuePersistViewerState();
+        const win = this._viewerWindow();
+        if (this._browserFilterTimer) win.clearTimeout(this._browserFilterTimer);
+        const run = () => {
+            this._browserFilterTimer = null;
+            this.browseTo(this._browserDir, { force: true });
+        };
+        // Typing "*.exr" is five keystrokes and would be five listings; a short
+        // wait turns it into one.
+        if (now) run(); else this._browserFilterTimer = win.setTimeout(run, 220);
+    },
+
     _bindBrowserControls() {
         const sr = this.shadowRoot;
 
         const upBtn = sr.getElementById("browser-up-btn");
         if (upBtn) upBtn.onclick = () => { if (this._browserParent) this.browseTo(this._browserParent); };
+
+        if (this.browserFilterIn) {
+            this.browserFilterIn.addEventListener("input", () => this._browserFilterChanged());
+            this.browserFilterIn.addEventListener("keydown", (e) => {
+                if (e.key === "Enter") { e.preventDefault(); this._browserFilterChanged({ now: true }); }
+                else if (e.key === "Escape") {
+                    e.preventDefault();
+                    this.browserFilterIn.value = "";
+                    this._browserFilterChanged({ now: true });
+                }
+                e.stopPropagation();          // the viewer's own hotkeys are not wanted here
+            });
+        }
+        if (this.browserKindSel) {
+            this.browserKindSel.onchange = () => this._browserFilterChanged({ now: true });
+        }
+        const clearBtn = sr.getElementById("browser-filter-clear");
+        if (clearBtn) {
+            clearBtn.onclick = () => {
+                if (this.browserFilterIn) this.browserFilterIn.value = "";
+                if (this.browserKindSel) this.browserKindSel.value = "";
+                this._browserFilterChanged({ now: true });
+            };
+        }
 
         const refreshBtn = sr.getElementById("browser-refresh-btn");
         if (refreshBtn) refreshBtn.onclick = () => this.browseTo(this._browserDir, { force: true });
@@ -158,7 +228,9 @@ export const BrowserMixin = {
 
         let data = null;
         try {
-            const q = dir ? `?path=${encodeURIComponent(dir)}` : "";
+            const parts = dir ? [`path=${encodeURIComponent(dir)}`] : [];
+            parts.push(...this.browserFilterQuery());
+            const q = parts.length ? `?${parts.join("&")}` : "";
             const res = await api.fetchApi(`/bepic/browse${q}`);
             data = await res.json();
         } catch (e) {
@@ -196,6 +268,7 @@ export const BrowserMixin = {
         this._browserDirs   = Array.isArray(data.dirs) ? data.dirs : [];
         this._browserFiles  = Array.isArray(data.files) ? data.files : [];
         this._browserTrunc  = !!data.truncated;
+        this._browserFiltered = !!data.filtered;
         this._browserSel    = new Set();
         this._browserAnchor = null;
 
@@ -291,7 +364,9 @@ export const BrowserMixin = {
         this.browserList.appendChild(frag);
 
         if (this._browserDirs.length === 0 && this._browserFiles.length === 0) {
-            this._setBrowserStatus("This folder is empty.", { keepList: true });
+            this._setBrowserStatus(this._browserFiltered
+                ? "Nothing here matches the filter."
+                : "This folder is empty.", { keepList: true });
         } else if (this._browserTrunc) {
             this._setBrowserStatus(`Showing the first ${this._browserFiles.length} files — this folder holds more.`,
                                    { keepList: true });

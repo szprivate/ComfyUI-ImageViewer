@@ -693,6 +693,22 @@ textarea.param-input {
 }
 .browser-row:hover { background: rgba(255,102,0,0.10); color: #fff; }
 .browser-row.selected { background: rgba(255,102,0,0.28); color: #fff; }
+/* The filter row, under the path field: a pattern, a way out of it, and the
+   kinds to list. */
+.browser-filter { display: flex; gap: 4px; align-items: center; margin: 0 6px 4px; }
+.browser-filter-in {
+    flex: 1 1 auto; min-width: 0;
+    background: #111; color: #ddd; border: 1px solid #333; border-radius: 3px;
+    padding: 3px 5px; font-size: 11px;
+}
+.browser-filter-in:focus { border-color: #f60; outline: none; }
+.browser-filter select {
+    flex: 0 0 auto; max-width: 104px;
+    background: #111; color: #ccc; border: 1px solid #333; border-radius: 3px;
+    padding: 2px; font-size: 11px;
+}
+.browser-filter .browser-btn { flex: 0 0 auto; }
+
 .browser-row.is-dir { color: #9cf; }
 .browser-row.is-dir:hover { color: #cfe; }
 /* Listed so the folder reads true, but there is nothing to open: dimmed, the

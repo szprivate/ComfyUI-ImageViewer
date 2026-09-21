@@ -284,6 +284,10 @@ class ViewerPanel extends HTMLElement {
                 tabOrder: (Array.isArray(this.tabOrder) ? this.tabOrder : []).filter(keepKey),
                 activeTab,
                 browserDir: this._browserDir || null,
+                browserFilter: {
+                    text: this._browserFilter || "",
+                    kinds: this._browserKinds || "",
+                },
                 // Previz scenes belong to their tab. A scene on a bEpic 3D Scene
                 // node is also kept there, but a scene built on a plain model
                 // tab has nowhere else to live.
