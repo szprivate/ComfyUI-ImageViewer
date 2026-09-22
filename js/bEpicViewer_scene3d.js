@@ -52,7 +52,9 @@
 // diff all want — and the tree is carried by one field: `parent`, the id of the
 // item this one hangs under, or null at the top. A transform is LOCAL to that
 // parent, exactly as in USD or any DCC, so moving a group moves what is inside
-// it and a child's numbers stay the numbers you typed. A `group` item is a
+// it and a child's numbers stay the numbers you typed. (Changing an item's
+// parent in the outliner rewrites its numbers so it stays put in the world —
+// that is the mixin's job, _previzKeepWorld; nothing here moves anything.) A `group` item is a
 // transform and nothing else: it draws no geometry and exists to hold others,
 // which is what a USD Xform or an assembly comes in as.
 //

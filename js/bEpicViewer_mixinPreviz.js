@@ -1282,7 +1282,12 @@ export const PrevizMixin = {
         const parents = new Set(tops.map((id) => S.itemById(scene, id).parent || null));
         group.parent = parents.size === 1 ? [...parents][0] : null;
         scene.items.push(group);
-        for (const id of tops) S.setParent(scene, id, group.id);
+        for (const id of tops) {
+            // The group sits at the identity, so only an item coming from a
+            // different parent has anything to make up.
+            this._previzKeepWorld(scene, id, group.id);
+            S.setParent(scene, id, group.id);
+        }
         this._previzSelection = group.id;
         if (this._previzAlso) this._previzAlso.clear();
         this.previzChanged({ reload: true });
@@ -1537,11 +1542,111 @@ export const PrevizMixin = {
         for (const id of list) S.moveItem(trial, id, parentId, beforeId);
         if (shape(trial) === shape(scene)) { this._previzRenderPanel(); return false; }
         this.previzSnapshot(into ? `move ${what} into ${into.name}` : `move ${what}`);
-        for (const id of list) S.moveItem(scene, id, parentId, beforeId);
+        for (const id of list) {
+            this._previzKeepWorld(scene, id, parentId);
+            S.moveItem(scene, id, parentId, beforeId);
+        }
         // Showing where it went: a folded parent opens.
         if (parentId && this._previzCollapsed) this._previzCollapsed.delete(parentId);
         this.previzChanged({ reload: true });
         return true;
+    },
+
+    // ── Keeping the world place across a reparent ────────────────────────────
+
+    /**
+     * An item's own matrix at `frame`, as scene3d defines it:
+     *     T(position + pivot) · R · S · T(-pivot) · offset
+     * Anything hanging under the item is placed by this, times its parents'.
+     */
+    _previzLocalMatrix(item, frame) {
+        const view = this._modelView();
+        const { THREE } = view.libs;
+        const at = S.evaluate(item, frame);
+        const pv = at.pivot || [0, 0, 0];
+        const m = new THREE.Matrix4()
+            .makeTranslation(at.position[0] + pv[0], at.position[1] + pv[1], at.position[2] + pv[2])
+            .multiply(view._rotScale(at))
+            .multiply(new THREE.Matrix4().makeTranslation(-pv[0], -pv[1], -pv[2]));
+        const off = S.offsetOf(item);
+        if (off) m.multiply(new THREE.Matrix4().fromArray(off));
+        return m;
+    },
+
+    /** Where `parentId`'s children live, in world space, at `frame`. */
+    _previzParentMatrix(scene, parentId, frame) {
+        const { THREE } = this._modelView().libs;
+        const chain = [];
+        for (let p = parentId ? S.itemById(scene, parentId) : null; p; p = p.parent ? S.itemById(scene, p.parent) : null) {
+            chain.unshift(p);
+        }
+        const m = new THREE.Matrix4();
+        for (const p of chain) m.multiply(this._previzLocalMatrix(p, frame));
+        return m;
+    },
+
+    /**
+     * The channel values that put `item` where `local` says, keeping its
+     * pivot and frozen offset. Rotations are picked close to `near` (degrees)
+     * so keys don't spin the long way round.
+     */
+    _previzValuesFromMatrix(item, local, frame, near) {
+        const { THREE } = this._modelView().libs;
+        const pv = S.evaluate(item, frame).pivot || [0, 0, 0];
+        const k = local.clone();
+        const off = S.offsetOf(item);
+        if (off) k.multiply(new THREE.Matrix4().fromArray(off).invert());
+        k.multiply(new THREE.Matrix4().makeTranslation(pv[0], pv[1], pv[2]));
+        const t = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+        k.decompose(t, q, s);
+        const e = new THREE.Euler().setFromQuaternion(q, "XYZ");
+        const R = 180 / Math.PI;
+        const tidy = (v) => (Math.abs(v) < 1e-9 ? 0 : v);
+        const rot = [e.x * R, e.y * R, e.z * R].map((v, i) =>
+            tidy(near ? v + 360 * Math.round((near[i] - v) / 360) : v));
+        return {
+            position: [t.x - pv[0], t.y - pv[1], t.z - pv[2]].map(tidy),
+            rotation: rot,
+            scale: [s.x, s.y, s.z].map(tidy),
+        };
+    },
+
+    /**
+     * Before `id` moves under `newParentId`: rewrite its channels so it stays
+     * exactly where it is in the world — what Maya's outliner does. A channel
+     * that isn't animated is made up at the current frame; one that is has
+     * every key made up at that key's own frame, so the motion stays where it
+     * was too. Its pivot and frozen transform are left as they are.
+     */
+    _previzKeepWorld(scene, id, newParentId) {
+        const item = S.itemById(scene, id);
+        const view = this._modelView();
+        if (!item || !view || !view.libs || !view._rotScale) return;
+        if ((item.parent || null) === (newParentId || null)) return;
+        const now = Math.round(this.currentFrame || 0);
+        const oldParent = item.parent || null;
+        const redo = (frame) => {
+            const world = this._previzParentMatrix(scene, oldParent, frame)
+                .multiply(this._previzLocalMatrix(item, frame));
+            const local = this._previzParentMatrix(scene, newParentId, frame).invert().multiply(world);
+            return this._previzValuesFromMatrix(item, local, frame, S.valueAt(item, "rotation", frame));
+        };
+        const props = item.kind === "camera" ? ["position", "rotation"] : ["position", "rotation", "scale"];
+        // Work everything out first: writing one key changes what the next
+        // frame evaluates to.
+        const writes = [];
+        const still = redo(now);
+        for (const prop of props) {
+            if (!S.isAnimated(item, prop)) { writes.push([prop, null, still[prop]]); continue; }
+            for (const key of S.track(item, prop)) writes.push([prop, key, redo(key.f)[prop]]);
+        }
+        for (const [prop, key, value] of writes) {
+            if (!key) { item[prop] = value.slice(); continue; }
+            key.v = value.slice();
+            // A hand-set tangent was shaped for the old numbers; the ease
+            // speaks for the key again.
+            delete key.ti; delete key.to;
+        }
     },
 
     /** Move an item under a group — or out of every group, for a null parent. */
@@ -1553,6 +1658,7 @@ export const PrevizMixin = {
         if (!S.canParent(scene, id, parentId)) return false;
         const into = parentId ? S.itemById(scene, parentId) : null;
         this.previzSnapshot(into ? `move ${item.name} into ${into.name}` : `move ${item.name} out`);
+        this._previzKeepWorld(scene, id, parentId || null);
         S.setParent(scene, id, parentId || null);
         this.previzChanged({ reload: true });
         return true;
