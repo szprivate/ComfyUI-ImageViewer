@@ -5,6 +5,8 @@
 ---
 
 ![Exposure slider and channel selector](../screenshots/screenshot_07.png)
+
+![The red channel on its own, with the exposure lifted](../screenshots/viewer_2d_channels.jpg)
 *The exposure bar centred at the top of the viewport — slider, EV readout, and channel dropdown.*
 
 ## Exposure Control

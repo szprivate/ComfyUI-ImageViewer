@@ -4,7 +4,7 @@
 
 ---
 
-![Vertical split comparison mode](../screenshots/screenshot_02.png)
+![A vertical wipe between two tabs: the original on the left, a warmer grade on the right](../screenshots/viewer_2d_compare.jpg)
 
 ## Starting a Comparison
 

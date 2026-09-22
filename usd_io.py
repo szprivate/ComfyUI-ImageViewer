@@ -555,13 +555,19 @@ def _object_prims(stage, root):
     would import as a thousand separate cupboard doors.
     """
     _Gf, _Sdf, Usd, UsdGeom, _Vt = _pxr()
-    chosen, cameras = [], []
+    chosen, cameras, instancers = [], [], []
 
     def visit(prim):
         if not prim.IsValid() or not prim.IsActive():
             return
         if UsdGeom.Camera(prim):
             cameras.append(prim)
+            return
+        # A PointInstancer places its prototypes many times over; the
+        # prototypes under it are templates, not things in the scene, so they
+        # are not visited — import_scene makes one item per instance instead.
+        if prim != root and prim.IsA(UsdGeom.PointInstancer):
+            instancers.append(prim)
             return
         model = Usd.ModelAPI(prim)
         kind = model.GetKind() if model else ""
@@ -586,9 +592,10 @@ def _object_prims(stage, root):
     # A stage whose default prim IS the geometry (a single published asset,
     # rather than a layout) has nothing below the root to choose, so the root
     # itself is the object.
-    if not chosen and not cameras and root.IsValid() and not root.IsPseudoRoot() and _has_geometry(root):
+    if not chosen and not cameras and not instancers and root.IsValid() \
+            and not root.IsPseudoRoot() and _has_geometry(root):
         chosen.append(root)
-    return chosen, cameras
+    return chosen, cameras, instancers
 
 
 def _has_arc(prim):
@@ -669,7 +676,7 @@ def import_scene(path, load_payloads=True):
         return _mark_external(scene)
 
     # Anyone else's stage: take the layout, and the geometry under it.
-    objects, cameras = _object_prims(stage, root)
+    objects, cameras, instancers = _object_prims(stage, root)
     # Every Xform above a chosen prim comes in as a group, so the stage's
     # hierarchy is the outliner's hierarchy and each item keeps the local
     # transform it was authored with.
@@ -713,7 +720,59 @@ def import_scene(path, load_payloads=True):
             if asset:
                 item["src"]["asset"] = asset
         scene["items"].append(item)
+
+    for instancer in instancers:
+        _expand_instancer(instancer, stage, path, layer_dir, ensure_group, scene)
     return _mark_external(scene)
+
+
+def _expand_instancer(instancer, stage, path, layer_dir, ensure_group, scene):
+    """One item per instance of a PointInstancer, grouped under it.
+
+    Each instance draws its prototype's geometry (addressed as stage + the
+    prototype's prim, like any other item) at the transform the instancer gives
+    it — USD's own ComputeInstanceTransformsAtTime, which also folds in the
+    prototype's root transform. The instancer itself becomes the group, so
+    moving it moves the lot, as it does in the stage. Masked-off (invisible)
+    instances are left out; animated instancers come in at their first sample.
+    """
+    Gf, _Sdf, Usd, UsdGeom, _Vt = _pxr()
+    pi = UsdGeom.PointInstancer(instancer)
+    protos = [stage.GetPrimAtPath(t) for t in pi.GetPrototypesRel().GetTargets()]
+    indices = list(pi.GetProtoIndicesAttr().Get() or [])
+    if not protos or not indices:
+        return
+    samples = sorted(pi.GetPositionsAttr().GetTimeSamples() or [])
+    time = Usd.TimeCode(samples[0]) if samples else Usd.TimeCode.Default()
+    matrices = pi.ComputeInstanceTransformsAtTime(time, time)
+    hidden = set(pi.GetInvisibleIdsAttr().Get(time) or [])
+    ids = list(pi.GetIdsAttr().Get(time) or [])
+    group_id = ensure_group(instancer)
+    for i, (proto_index, matrix) in enumerate(zip(indices, matrices)):
+        if (ids[i] if i < len(ids) else i) in hidden:
+            continue
+        if not (0 <= proto_index < len(protos)) or not protos[proto_index].IsValid():
+            continue
+        proto = protos[proto_index]
+        shape = _SHAPE_BY_TYPE.get(proto.GetTypeName())
+        if shape and any(_has_geometry(c) for c in proto.GetAllChildren()):
+            shape = None
+        asset = None if shape else _asset_of(proto, layer_dir)
+        item = _item_from_prim(proto, UsdGeom.Xformable(proto), False, shape, asset, stage)
+        position, rotation, scale = _decompose(Gf.Matrix4d(matrix))
+        item.update({
+            "id": f"usd_{abs(hash(str(instancer.GetPath()) + '#' + str(i))) & 0xffffffff:x}",
+            "name": f"{proto.GetName()}_{i + 1}",
+            "position": position, "rotation": rotation, "scale": scale,
+            "tracks": {},
+            "parent": group_id,
+        })
+        if not shape:
+            item["src"] = {"path": path, "prim": str(proto.GetPath()),
+                           "name": proto.GetName(), "format": "usd"}
+            if asset:
+                item["src"]["asset"] = asset
+        scene["items"].append(item)
 
 
 def _item_from_prim(prim, xformable, is_camera, shape, asset, stage):

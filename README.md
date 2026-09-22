@@ -4,7 +4,7 @@ An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/C
 
 ---
 
-![The bEpic viewer: named tabs, the history strip, the exposure bar, the file browser and the timeline](docs/screenshots/viewer_main.png)
+![The bEpic viewer: an image on the canvas, its history of takes on the left, the exposure and channel bar above](docs/screenshots/viewer_2d_canvas.jpg)
 
 ## Core Features
 
@@ -17,6 +17,13 @@ An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/C
 - play image sequences and videos with configurable FPS, and loop a sub-range of the timeline
 - split-screen comparison with a draggable divider — shift-click two tabs or two history items to compare them
 - real-time exposure (−4 EV to +4 EV) and isolation of the **Red**, **Green** or **Blue** channel
+
+<p>
+<img src="docs/screenshots/viewer_2d_compare.jpg" alt="Split comparison between two versions of a frame" width="49%">
+<img src="docs/screenshots/viewer_2d_channels.jpg" alt="The red channel on its own, exposure lifted" width="49%">
+</p>
+
+*Left: a wipe between two tabs. Right: the red channel on its own, +0.7 EV.*
 
 ### Working with the graph
 
@@ -36,7 +43,9 @@ An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/C
 
 ## 3D Models and Previz
 
-![A previz scene in the viewer](docs/screenshots/previz_overview.png)
+![A USD chess set in the 3D viewer, with the Outliner and Channel Box beside it](docs/screenshots/previz_usd_chess.png)
+
+*The chess set is the [Open Chess Set](https://github.com/usd-wg/assets/tree/main/full_assets/OpenChessSet), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) by the Academy Software Foundation — imported here straight from its USD stage.*
 
 - view **GLB, glTF, FBX, OBJ, STL, PLY** and **USD** files, and save meshes the way ComfyUI's Save 3D Model does
 - every 3D tab is a **previz scene**: models, primitive shapes, groups and cameras, laid out in a Maya-style **Outliner** (drag to reorder and reparent — items keep their place in the world — double-click to rename) and edited in a **Channel Box**
@@ -50,6 +59,8 @@ An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/C
 <img src="docs/screenshots/previz_resolution_gate.png" alt="Looking through a camera, with its resolution gate" width="49%">
 <img src="docs/screenshots/previz_render_dialog.png" alt="The render dialog" width="49%">
 </p>
+
+*Left: looking through a camera, its 2.39 gate over the shot. Right: the render dialog.*
 
 ---
 

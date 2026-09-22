@@ -40,6 +40,8 @@ Give each bEpicSendToViewer node a meaningful `tab_name` — for example `vae_de
 
 ![history](../screenshots/screenshot_04.png)
 
+![The history strip beside the canvas: four takes of the same shot](../screenshots/viewer_2d_canvas.jpg)
+
 Every time new images arrive in a tab, they are automatically saved as a snapshot in that tab's **history**. The history strip is the vertical thumbnail column on the left side of the viewport.
 
 

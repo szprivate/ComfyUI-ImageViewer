@@ -329,6 +329,7 @@ export const RotoMixin = {
         const host = this._rotoKfTicksHost();
         if (!host) return;
         host.innerHTML = "";
+        host.dataset.owner = "roto";   // shared with previz's ticks; see _previzRenderTicks
         if (!this._toolState || this._toolState.active !== "roto") return;
         const layer = this._rotoCurLayer();
         const keys = this._rotoCurKeys(layer);

@@ -894,7 +894,13 @@ export const PrevizMixin = {
     _previzRenderTicks() {
         const host = this.container && this.container.querySelector("#kf-ticks");
         if (!host) return;
-        if (!this.isPrevizTab()) { host.innerHTML = ""; return; }
+        // The strip is shared with the Roto tool. Off a 3D tab, only ticks
+        // this drew are taken down — Roto's are Roto's to manage.
+        if (!this.isPrevizTab()) {
+            if (host.dataset.owner === "previz") { host.innerHTML = ""; delete host.dataset.owner; }
+            return;
+        }
+        host.dataset.owner = "previz";
         const scene = this.previzScene();
         const item = this.previzSelectedItem();
         const frames = item ? S.keyframeFrames(item) : S.sceneKeyframes(scene);

@@ -329,6 +329,10 @@ Give a plain name and the stage lands in `output/3d_scenes`; give a full path en
 
 **+ → Import USD…** builds the scene from a stage — one made here, or one from anywhere else:
 
+![A USD chess set imported into the viewer: the stage's hierarchy in the Outliner, the selected piece's channels beside it](../screenshots/previz_usd_chess.png)
+
+*The chess set is the [Open Chess Set](https://github.com/usd-wg/assets/tree/main/full_assets/OpenChessSet), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) by the Academy Software Foundation — imported here straight from its USD stage.*
+
 | In the stage | Becomes |
 |---|---|
 | `UsdGeomCamera` | a previz camera, its focal length read back as a field of view |
@@ -336,6 +340,7 @@ Give a plain name and the stage lands in `output/3d_scenes`; give a full path en
 | A prim marked `component` in the model hierarchy | one item — an asset is a thing you move, not a hundred things |
 | Geometry with no such ancestor | one item of its own |
 | Every `Xform` above one of those | a [group](#groups), so the stage's hierarchy is the outliner's |
+| A `PointInstancer` | one item per instance, at the transform the instancer gives it, grouped under the instancer — so a stage that scatters a prop a hundred times arrives as a hundred items you can move. Instances hidden by `invisibleIds` are left out; an animated instancer comes in at its first sample. |
 | `Cube`, `Sphere`, `Cylinder`, `Cone`, `Plane` | the matching previz shape, with its `displayColor` |
 | Time samples on the transforms | keyframes, with linear easing — which is what USD samples mean |
 | `timeCodesPerSecond`, start and end | the shot's fps and length |
