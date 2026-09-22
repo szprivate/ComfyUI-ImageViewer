@@ -28,6 +28,10 @@ The limit exists because the viewer's file routes answer anything that can reach
 
 ### The panel
 
+<img src="../screenshots/browser_all_files.png" alt="The file browser listing a whole folder — images, an EXR, a text file and a JSON, the last two greyed" width="274"> <img src="../screenshots/browser_filter.png" alt="The same folder filtered to *.png *.jpg, with the selected image previewed" width="274">
+
+*Left: everything in the folder. Right: filtered to `*.png *.jpg`, one image selected and previewed.*
+
 Drag the title bar across the top to move the panel — see [Docking Panels](interface.md#docking-panels). Below it:
 
 | Part | What it does |

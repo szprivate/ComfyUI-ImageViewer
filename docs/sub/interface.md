@@ -114,4 +114,4 @@ The panel remembers its position and size across page reloads.
 
 ---
 
-← [Installation & Setup](getting-started.md) | Next: [Tabs & History](tabs-history.md)
+← [Installation](../../README.md#installation) | Next: [Tabs & History](tabs-history.md)

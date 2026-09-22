@@ -53,6 +53,8 @@ Compare, contact sheet and the drawing tools don't apply to a model tab. Neither
 
 **Every 3D tab is a scene.** Opening one model gives you a scene holding that model — same outliner, same gizmo, same timeline — and a scene is also what you get from a *bEpic 3D Scene (Previz)* node or from a USD stage. There is no mode to turn on and nothing to switch back to: add a second model, a camera or a shape whenever the shot asks for one.
 
+![A previz scene: the gizmo on the selected duck, the Outliner and Channel Box on the right, the Animation Curves below](../screenshots/previz_overview.png)
+
 A model that carries its own animation (an FBX clip) is scrubbed by the timeline like everything else, and an untouched shot grows to fit the clip rather than cutting it short. Once you have keyed something, or typed a length yourself, the length is yours and stays put.
 
 ### The Outliner and the Channel Box
@@ -76,6 +78,8 @@ That is what the three icons in the 3D toolbar are for, and they are the only wa
 #### The Channel Box
 
 The selected item's name on top, then one row per channel — **Translate X/Y/Z**, **Rotate X/Y/Z** (degrees), **Scale X/Y/Z**, **Pivot X/Y/Z**, **Visibility** — and, under **SHAPES**, what belongs to the item itself: a camera's **Field Of View** and **Resolution**, a shape's **Colour**.
+
+<img src="../screenshots/previz_outliner_channelbox.png" alt="The Outliner above the Channel Box, with the selected item's keyed channels tinted red" width="245">
 
 | To | Do |
 |---|---|
@@ -108,6 +112,8 @@ The tools themselves — **Move**, **Rotate**, **Scale** and the axes globe — 
 ### Cameras
 
 **▣** looks through a camera. Tumbling, tracking and dollying then move *that* camera — the Channel Box's numbers follow as you drag — so lining up a shot is the same as looking at it. **▣** again returns to the free view, where cameras are drawn as frustums you can pick and move like anything else.
+
+![Looking through a camera: the 2.39 resolution gate, labelled with the camera's name and size, the rest of the view dimmed](../screenshots/previz_resolution_gate.png)
 
 Each camera has a **resolution** — **Resolution W** and **H** in the Channel Box, or a **Preset** (HD 1080 and 720, UHD, DCI 2K and 4K, square, vertical, 2.39 scope). Looking through a camera shows its **resolution gate**: the frame of the picture it takes, labelled with its name and size, with the rest of the view dimmed around it — a margin is left on every side, so you can see what is just outside the shot. What is inside the gate is exactly what renders: the camera's **Field Of View** is the height of the gate, whatever shape the viewer is. In the free view, a camera's frustum takes the shape of its resolution too. **Render…** starts from the size of the camera you are looking through.
 
@@ -179,6 +185,8 @@ Moving a pivot never moves the item: the position takes up whatever slack the ne
 
 **Edit → Freeze Transformations** does what it does in Maya: the selected items stay exactly where they are, and their translate, rotate and scale go back to 0, 0 and 1 — so a prop placed by eye can have clean numbers to animate from. The pivot keeps its place in the world. A frozen group takes what is inside it along, untouched.
 
+<img src="../screenshots/previz_edit_menu.png" alt="The Edit menu: Centre Pivot, Move Pivot, Freeze Transformations" width="245">
+
 Maya bakes the frozen transform into the vertices. A previz item points at a file the viewer must not rewrite, so the transform is kept on the item instead, underneath its channels; the Channel Box says so. It is one undo step, it travels with the scene, and a USD export writes it as an extra transform op, so any other application puts the item in the same place.
 
 Cameras are not frozen — a camera's transform is where it looks from — and neither is anything with keys on its translate, rotate, scale or pivot, which would need every key rewritten. Those are left as they are, and the viewer says which.
@@ -244,6 +252,8 @@ The **bEpic 3D Scene (Previz)** node holds the scene and hands the rendered shot
 4. Run the workflow. The node reads the render back as `images`, plus `frame_count` and `fps`.
 
 #### The render dialog
+
+![The render dialog, over the view through the shot camera](../screenshots/previz_render_dialog.png)
 
 | Section | Setting | What it does |
 |---|---|---|
