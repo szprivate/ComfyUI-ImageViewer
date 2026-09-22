@@ -80,7 +80,7 @@ The bottom bar contains (left to right):
 
 ## Docking Panels
 
-The history strip, the file browser, the previz panel, the animation curves and the parameters panel all live in one of three **rails**: left and right of the picture, and one along the bottom, between the picture and the timeline. The side rails are vertical stacks, so panels can sit side by side *or* above one another; the bottom rail is a horizontal one, where panels sit next to each other. A wide graph — the animation curves, say — reads better down there than squeezed into a side rail.
+The history strip, the file browser, the Outliner, the Channel Box, the animation curves and the parameters panel all live in one of three **rails**: left and right of the picture, and one along the bottom, between the picture and the timeline. The side rails are vertical stacks, so panels can sit side by side *or* above one another; the bottom rail is a horizontal one, where panels sit next to each other. A wide graph — the animation curves, say — reads better down there than squeezed into a side rail.
 
 Every panel wears a slim **title bar** across its top — a grip, the panel's name, and a **✕**. Drag the bar to move the panel; the ✕ puts it away, keeping its slot so showing it again brings it back where it was.
 

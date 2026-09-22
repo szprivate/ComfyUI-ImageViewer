@@ -55,21 +55,37 @@ Compare, contact sheet and the drawing tools don't apply to a model tab. Neither
 
 A model that carries its own animation (an FBX clip) is scrubbed by the timeline like everything else, and an untouched shot grows to fit the clip rather than cutting it short. Once you have keyed something, or typed a length yourself, the length is yours and stays put.
 
-### The Panel
+### The Outliner and the Channel Box
 
-The previz panel is a docked panel like the file browser: it opens in a rail with the first 3D tab, and can be moved, stacked and resized like any other — see [Docking Panels](interface.md#docking-panels). Its **✕** puts it away, and it stays away until you ask for it again.
+A scene is worked on in two dock panels, as in Maya: the **Outliner** — the scene's tree and the buttons over it — and the **Channel Box** — the selected item's numbers. Both open in a rail with the first 3D tab, stacked one above the other, and each can be moved, stacked and resized like any other panel — see [Docking Panels](interface.md#docking-panels). Drag the bar between them to give the outliner more room. A panel's **✕** puts it away, and it stays away until you ask for it again.
 
-That is what the two icons in the 3D toolbar are for, and they are the only way back to either panel: the **cube** shows and hides the previz panel, the **curve graph** shows and hides the [Animation Curves](#the-curve-editor). They sit over the canvas they belong to — neither has anything to say about a picture, so neither clutters the playback bar. Both close with the 3D tab.
+That is what the three icons in the 3D toolbar are for, and they are the only way back to those panels: the **cube** shows and hides the Outliner, the **sliders** the Channel Box, and the **curve graph** the [Animation Curves](#the-curve-editor). They sit over the canvas they belong to — none of them has anything to say about a picture, so none clutters the playback bar. All three close with the 3D tab.
+
+#### The Outliner
 
 | Part | What it does |
 |---|---|
 | **New** | Empties the scene and starts again. It is one undo step like any other, so there is nothing to confirm. |
+| **Edit** | **Centre Pivot**, **Move Pivot** (ticked while it is on — the same as <kbd>Insert</kbd>) and **Freeze Transformations** — see [The Pivot](#the-pivot) and [Freezing](#freezing-transformations). |
 | **+** | One menu for everything a scene can gain. **Model…** adds the model selected in the [File Browser](other.md#file-browser) — you can also drag models straight into the 3D view, from the browser, the history strip or your desktop. **Camera** adds a camera where the view is right now. **Group** adds an empty one to hang things under. Then a box, sphere, plane, cylinder, cone or torus — no file needed, for blocking a scene out; it lands where the view is looking. Last, the two ways a whole scene arrives: **Import USD…** and **Load scene…**. |
 | **Export** | The other direction: **Save scene…** writes the scene as a file, **Export USD…** as a stage, and **Render…** turns the shot into an mp4 or a PNG sequence. |
 | **Right-click an item** | **Rename**, **Group**, **Duplicate** or **Delete**. A row inside the current selection acts on all of it — the menu says how many — and a row outside it selects itself first. A group takes what is inside it either way. |
 | **↩ / ↪** | Undo and redo the last previz edit — see [Undoing](#undoing). Their tooltips name what they would take back. |
 | The list | The scene as a tree. Click to select, <kbd>Shift</kbd>+click to select several, **◉** hides and shows, **▣** looks through a camera, **•** marks an item that has keyframes, and **▾** folds a group away. **Double-click** a name (or press <kbd>F2</kbd>) to rename it in place: <kbd>Enter</kbd> or clicking away keeps the new name, <kbd>Esc</kbd> drops it. Names stay unique — a name already taken becomes "Name 2" — and a rename is one undo step. |
-| Transform fields | The selected item's position, rotation (degrees), scale and pivot — and a camera's field of view, or a shape's colour. |
+
+#### The Channel Box
+
+The selected item's name on top, then one row per channel — **Translate X/Y/Z**, **Rotate X/Y/Z** (degrees), **Scale X/Y/Z**, **Pivot X/Y/Z**, **Visibility** — and, under **SHAPES**, what belongs to the item itself: a camera's **Field Of View** and **Resolution**, a shape's **Colour**.
+
+| To | Do |
+|---|---|
+| Set a value | Type it and press <kbd>Enter</kbd> (<kbd>Esc</kbd> backs out). With several items selected the value goes to **all** of them — set, not added, as in Maya. `+=2`, `-=2`, `*=2` and `/=2` work relative to what is there. |
+| Drag a value | Drag a channel's **name** left or right. <kbd>Shift</kbd> moves ten times as fast, <kbd>Ctrl</kbd> a tenth. Every selected channel moves together, and the whole drag is one undo step. |
+| Select channels | Click a name; <kbd>Ctrl</kbd>+click adds or removes one, <kbd>Shift</kbd>+click takes a run. |
+| Key them | Right-click → **Key Selected** (or **Key All**). **Delete Key At Frame** and **Delete All Keys** take them away again; a channel that loses all its keys keeps the value it had. |
+| Rename | Edit the name at the top. |
+
+Keyed channels are tinted red, and brighter on a frame that holds a key. Values follow playback and the gizmo as they happen, without the field you are typing in being taken away from you.
 
 The shot's **frame rate and length live on the timeline**, not in the panel: while previz is on, the **fps** box in the transport is the rate the shot plays, renders and exports at, and the **frame number at the end of the timeline** is its last frame — type a new one to make the shot longer or shorter. Everywhere else that number is the readout it has always been.
 
@@ -91,7 +107,9 @@ The tools themselves — **Move**, **Rotate**, **Scale** and the axes globe — 
 
 ### Cameras
 
-**▣** looks through a camera. Tumbling, tracking and dollying then move *that* camera — the panel's numbers follow as you drag — so lining up a shot is the same as looking at it. **▣** again returns to the free view, where cameras are drawn as frustums you can pick and move like anything else.
+**▣** looks through a camera. Tumbling, tracking and dollying then move *that* camera — the Channel Box's numbers follow as you drag — so lining up a shot is the same as looking at it. **▣** again returns to the free view, where cameras are drawn as frustums you can pick and move like anything else.
+
+Each camera has a **resolution** — **Resolution W** and **H** in the Channel Box, or a **Preset** (HD 1080 and 720, UHD, DCI 2K and 4K, square, vertical, 2.39 scope). Looking through a camera shows its **resolution gate**: the frame of the picture it takes, labelled with its name and size, with the rest of the view dimmed around it — a margin is left on every side, so you can see what is just outside the shot. What is inside the gate is exactly what renders: the camera's **Field Of View** is the height of the gate, whatever shape the viewer is. In the free view, a camera's frustum takes the shape of its resolution too. **Render…** starts from the size of the camera you are looking through.
 
 While you are looking through a camera it has no gizmo: there would be no handles on screen to grab. Step outside with **▣** to move it by hand.
 
@@ -114,7 +132,7 @@ Keyframes are per item and per property.
 | Remove a key | **⊗**, or double-click its tick on the timeline |
 | Interpolation | **Smooth** (default), **Linear** or **Hold**, applied to new keys and to any key on the current frame |
 
-Those four live in the **transport row under the timeline**, just left of the fps box: **⊕** keys, **⊗** removes, **○** is autokey — it turns red while it is armed — and the menu is the interpolation. They appear on any 3D tab, whether or not the previz panel is open.
+Those four live in the **transport row under the timeline**, just left of the fps box: **⊕** keys, **⊗** removes, **○** is autokey — it turns red while it is armed — and the menu is the interpolation. They appear on any 3D tab, whether or not the Outliner is open.
 
 Keyframes show as orange ticks under the timeline; click one to jump to it. Play, scrub and step work as they do for footage. A model's own clip is scrubbed by the same timeline, so the whole shot stays frame-accurate — there is no second clock playing underneath.
 
@@ -133,7 +151,7 @@ A **group** is a transform and nothing else — no geometry, no file. Move, rota
 | Fold it away | The **▾** at the left of its row |
 | Delete the lot | Right-click the group → **Delete** — what it holds goes with it, and one undo brings all of it back |
 
-Select several first — <kbd>Shift</kbd>+click in the outliner, or <kbd>Shift</kbd>+click objects in the viewport; every one of them is lit in the list and outlined in orange in the scene, while the last one clicked keeps the gizmo and the transform fields. **Group** then puts the lot under one new group, which is made with no transform of its own, so nothing moves.
+Select several first — <kbd>Shift</kbd>+click in the outliner, or <kbd>Shift</kbd>+click objects in the viewport; every one of them is lit in the list and outlined in orange in the scene, while the last one clicked keeps the gizmo and the Channel Box. **Group** then puts the lot under one new group, which is made with no transform of its own, so nothing moves.
 
 **Moving several at once** works without grouping them: drag the gizmo, or type a number, and the rest follow by the same amount — a rotation turns each about its own pivot, and a scale is passed on as a ratio, so a small thing stays small. Anything inside a selected group stays put, since its parent is already carrying it. Keying works the same way: one press keys everything selected, in one undo step.
 
@@ -147,12 +165,20 @@ Every item has one: the point it turns and scales about, in its own space. A box
 
 | To | Do |
 |---|---|
-| Move the pivot | <kbd>Insert</kbd> — or **Move pivot** in the panel — then drag the gizmo. The item does not move, only the point it turns about. |
-| Type it | The **Pivot** row in the transform fields |
-| Put it in the middle | **Centre**, which does the same for everything selected |
+| Move the pivot | <kbd>Insert</kbd> — or **Edit → Move Pivot** — then drag the gizmo. The item does not move, only the point it turns about. |
+| Type it | **Pivot X/Y/Z** in the Channel Box |
+| Put it in the middle | **Edit → Centre Pivot**, which does the same for everything selected |
 | Animate it | It is a channel like any other: `pivot.x`, `pivot.y`, `pivot.z` in the [curve editor](#the-curve-editor), and <kbd>Insert</kbd> again to go back to moving the object |
 
 Moving a pivot never moves the item: the position takes up whatever slack the new pivot introduces, which is what every other 3D application does and what makes a pivot worth having. A group's pivot carries what is inside it, so a set turns about the door it was given rather than about the origin.
+
+### Freezing Transformations
+
+**Edit → Freeze Transformations** does what it does in Maya: the selected items stay exactly where they are, and their translate, rotate and scale go back to 0, 0 and 1 — so a prop placed by eye can have clean numbers to animate from. The pivot keeps its place in the world. A frozen group takes what is inside it along, untouched.
+
+Maya bakes the frozen transform into the vertices. A previz item points at a file the viewer must not rewrite, so the transform is kept on the item instead, underneath its channels; the Channel Box says so. It is one undo step, it travels with the scene, and a USD export writes it as an extra transform op, so any other application puts the item in the same place.
+
+Cameras are not frozen — a camera's transform is where it looks from — and neither is anything with keys on its translate, rotate, scale or pivot, which would need every key rewritten. Those are left as they are, and the viewer says which.
 
 ### Undoing
 
@@ -167,7 +193,7 @@ A whole drag is a single step, however many times the mouse moved. The buttons' 
 
 ### The Curve Editor
 
-Keys are also shown as a graph, in an **Animation Curves** panel of its own — a dock panel like the others, opened with the **curve graph** icon in the 3D toolbar. It used to share the strip above the timeline with the [Roto tool](other.md); a graph you drag keys around in wants height, and in a rail it can have it. Drag the bar between the panel and the picture to give it more, or stack it under the previz panel to work on one shot with both open.
+Keys are also shown as a graph, in an **Animation Curves** panel of its own — a dock panel like the others, opened with the **curve graph** icon in the 3D toolbar. It used to share the strip above the timeline with the [Roto tool](other.md); a graph you drag keys around in wants height, and in a rail it can have it. Drag the bar between the panel and the picture to give it more, or stack it under the Outliner and Channel Box to work on one shot with all three open.
 
 The panel stays put while you click around the scene: with nothing animated selected it says so rather than disappearing.
 
@@ -295,6 +321,7 @@ Payloads are composed while reading, since a layout stage keeps its geometry beh
 - An **FBX or GLB** asset can't be payloaded — USD payloads point at USD layers. Those items export as an empty xform with the file path in `customData`: this viewer finds them again, another application sees an empty group where they sit.
 - Materials, lights, variants and per-prim purposes in an imported stage are left in the stage; previz only takes transforms, cameras and geometry.
 - Easing is this viewer's own idea, so a stage read by another application sees the baked frames.
+- A camera's resolution goes out as the shape of its film back, which is all USD has to say about it; a stage from elsewhere comes in 1080 lines tall at that shape.
 
 USD support needs `usd-core`, which installs with the node.
 

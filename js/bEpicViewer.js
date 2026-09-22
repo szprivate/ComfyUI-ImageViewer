@@ -20,6 +20,7 @@ import { ReconnectMixin } from "./bEpicViewer_mixinReconnect.js";
 import { ModelMixin }    from "./bEpicViewer_mixinModel.js";
 import { PrevizMixin }   from "./bEpicViewer_mixinPreviz.js";
 import { PrevizCurvesMixin } from "./bEpicViewer_previzCurves.js";
+import { PrevizChannelsMixin } from "./bEpicViewer_previzChannels.js";
 import { PrevizUndoMixin } from "./bEpicViewer_previzUndo.js";
 import { SendFromNodeMixin, registerSendToViewerMenu, sendSelectionToViewer } from "./bEpicViewer_sendFromNode.js";
 import {
@@ -498,6 +499,16 @@ class ViewerPanel extends HTMLElement {
         this.previzPanel      = sr.getElementById('previz-panel');
         this.totalFrameEl     = sr.getElementById('total-f');
         this.curvesPanel      = sr.getElementById('curves-panel');
+        // The Channel Box came after the others; a cached older markup lacks
+        // it, so it is made here beside the Outliner rather than going missing.
+        this.channelsPanel    = sr.getElementById('channels-panel');
+        if (!this.channelsPanel && this.previzPanel && this.previzPanel.parentNode) {
+            const cb = this.previzPanel.ownerDocument.createElement('div');
+            cb.id = 'channels-panel';
+            cb.className = 'previz-panel channels-panel right';
+            this.previzPanel.parentNode.insertBefore(cb, this.previzPanel.nextSibling);
+            this.channelsPanel = cb;
+        }
     }
 
     /** Set inline SVG icon on an element from the loaded skin. */
@@ -1112,6 +1123,7 @@ Object.assign(
     ModelMixin,
     PrevizMixin,
     PrevizCurvesMixin,
+    PrevizChannelsMixin,
     PrevizUndoMixin,
 );
 

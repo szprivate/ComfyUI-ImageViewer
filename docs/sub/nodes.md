@@ -47,7 +47,7 @@ Holds a [previz scene](models-3d.md#previz-building-a-scene) and hands the rende
 
 **Open in Image Viewer** on the node opens the viewer on that node's previz tab, creating it if the node has never run.
 
-The scene travels with the workflow because it lives in `scene_data`. Until you press **Render…** in the viewer's previz panel there is nothing to output, and the node hands back a single black frame and says so in the log.
+The scene travels with the workflow because it lives in `scene_data`. Until you press **Render…** in the viewer's Outliner (under **Export**) there is nothing to output, and the node hands back a single black frame and says so in the log.
 
 ---
 

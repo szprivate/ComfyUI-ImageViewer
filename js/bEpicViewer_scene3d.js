@@ -33,6 +33,20 @@
 // which is what every DCC means by one: move the pivot and the object stays
 // where it is, then turns around somewhere else.
 //
+// FROZEN TRANSFORMS
+// `offset`, when present, is a 4x4 matrix (16 numbers, three.js column-major
+// order) that sits under everything above:
+//     T(position) · T(pivot) · R · S · T(-pivot) · offset
+// Freeze Transformations is what writes it. Maya bakes a frozen transform into
+// the vertices; a previz item points at a file it must not rewrite, so the
+// transform is kept here instead, and the channels go back to zero with the
+// item exactly where it was. It is not a channel and never animates.
+//
+// CAMERAS
+// A camera's `resolution` is the [width, height] of the picture it takes. Its
+// `fov` is the vertical field of view of THAT picture — the gate — whatever
+// shape the viewport happens to be.
+//
 // THE HIERARCHY
 // `items` stays a flat list — it is what a JSON widget, an undo snapshot and a
 // diff all want — and the tree is carried by one field: `parent`, the id of the
@@ -46,6 +60,21 @@
 // objects the same way and lets the engine compose the matrices.
 
 export const SCENE_VERSION = 1;
+export const DEFAULT_RESOLUTION = [1920, 1080];
+
+/** The picture a camera takes, as [width, height] — never missing, never zero. */
+export function cameraResolution(item) {
+    const r = item && Array.isArray(item.resolution) ? item.resolution : null;
+    const ok = r && r.length === 2 && r.every((v) => Number.isFinite(Number(v)) && Number(v) >= 1);
+    return ok ? r.map((v) => Math.round(Number(v))) : DEFAULT_RESOLUTION.slice();
+}
+
+/** A valid frozen-transform matrix, or null (none, or not 16 finite numbers). */
+export function offsetOf(item) {
+    const m = item && item.offset;
+    return Array.isArray(m) && m.length === 16 && m.every((v) => Number.isFinite(Number(v)))
+        ? m.map(Number) : null;
+}
 export const DEFAULT_FPS = 24;
 export const DEFAULT_LENGTH = 120;
 export const TRACKS = ["position", "rotation", "scale", "pivot", "fov"];
@@ -146,6 +175,7 @@ export function makeCameraItem(name, patch = {}) {
         rotation: [0, 0, 0],
         scale: [1, 1, 1],
         fov: 35,
+        resolution: DEFAULT_RESOLUTION.slice(),
         pivot: [0, 0, 0],
         visible: true,
         tracks: {},
@@ -537,6 +567,12 @@ export function parseScene(raw) {
         };
         if (isCam) {
             item.fov = num(raw.fov, 35);
+            item.resolution = cameraResolution(raw);
+        } else if (offsetOf(raw)) {
+            item.offset = offsetOf(raw);
+        }
+        if (isCam) {
+            // (the camera's fields are read above)
         } else if (isGroup) {
             // A group is its transform. Nothing else to read.
         } else if (isPrim) {

@@ -13,7 +13,6 @@ import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
 import * as S from "./bEpicViewer_scene3d.js";
 
-const VEC_LABELS = ["X", "Y", "Z"];
 // Maya's manipulator keys, which is what the hotkeys below bind to.
 export const PrevizMixin = {
 
@@ -677,12 +676,9 @@ export const PrevizMixin = {
      * gizmo or the camera is being dragged.
      */
     _previzRefreshFields() {
-        const ui = this._previzUI;
-        const item = this.previzSelectedItem();
-        if (!ui || !ui.props || !item || !ui.root || ui.root.style.display === "none") return;
-        const doc = ui.root.ownerDocument;
-        if (doc.activeElement && doc.activeElement.classList.contains("previz-num")) return;
-        this._previzRenderProps(ui, doc);
+        // The Channel Box only writes values into rows it already has, and
+        // leaves alone the one being typed in.
+        if (this._previzRenderChannels) this._previzRenderChannels();
     },
 
     /** Key every animatable property of the selection at the current frame. */
@@ -931,8 +927,11 @@ export const PrevizMixin = {
     _previzHidePanel() {
         this._previzPanelOn = false;
         this._previzCloseAddMenu();
+        this._previzRenaming = null;
         if (this._previzUI && this._previzUI.root) this._previzUI.root.style.display = "none";
         if (this.isPanelDocked("previz")) this.setPanelDocked("previz", false);
+        // The Channel Box is the same scene's numbers, so it goes too.
+        if (this._previzHideChannels) this._previzHideChannels();
         // The curves describe the same scene, so they go with it.
         if (this._previzHideCurves) this._previzHideCurves();
         // And the timeline's last-frame box goes back to being a readout.
@@ -965,6 +964,11 @@ export const PrevizMixin = {
         newBtn.textContent = "\u25a1";          // stands in if the skin is missing
         this._setIcon(newBtn, "icon-file");
         newBtn.onclick = () => this.previzNewScene();
+        const editBtn = el("button", "previz-btn previz-icon");
+        editBtn.title = "Edit: the pivot, and freezing transformations";
+        editBtn.textContent = "\u270e";         // stands in if the skin is missing
+        this._setIcon(editBtn, "icon-square-pen");
+        editBtn.onclick = () => this._previzToggleEditMenu(editBtn);
         const addBtn = el("button", "previz-btn previz-add previz-icon");
         addBtn.title = "Add a model, a camera, a group or a shape";
         addBtn.textContent = "+";               // stands in if the skin is missing
@@ -987,7 +991,7 @@ export const PrevizMixin = {
         // Duplicate and Delete live on the item itself, under a right-click —
         // they act on one row, so they belong on the row rather than on a bar
         // that has to guess which one you mean.
-        actions.append(newBtn, addBtn, exportBtn, undoBtn, redoBtn);
+        actions.append(newBtn, editBtn, addBtn, exportBtn, undoBtn, redoBtn);
 
         const list = el("div", "previz-list");
         // The space below the tree is "no parent": dropping a row here lifts it
@@ -1006,15 +1010,13 @@ export const PrevizMixin = {
             this.previzReparent(this._previzDragItem, null);
         };
 
-        const props = el("div", "previz-props");
-
-        root.append(actions, list, props);
+        root.append(actions, list);
         // The title bar the dock built is a sibling and stays; only previz's own
         // body is replaced.
         this._previzCloseAddMenu();
         host.querySelectorAll(":scope > .previz-body").forEach((n) => n.remove());
         host.appendChild(root);
-        this._previzUI = { root, list, props, undoBtn, redoBtn };
+        this._previzUI = { root, list, undoBtn, redoBtn };
         return this._previzUI;
     },
 
@@ -1090,6 +1092,95 @@ export const PrevizMixin = {
         doc.addEventListener("pointerdown", this._previzAddMenuAway, true);
         doc.addEventListener("keydown", this._previzAddMenuAway, true);
         return menu;
+    },
+
+    /** What changes an item without adding or removing anything. */
+    _previzToggleEditMenu(anchor) {
+        if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
+        const ids = this.previzSelectedIds();
+        const frozen = this._previzFreezable(ids);
+        const a = anchor.getBoundingClientRect();
+        this._previzOpenMenu([
+            { label: "Centre Pivot", disabled: !ids.length, run: () => this.previzCentrePivot() },
+            { label: (this._previzPivotMode ? "\u2713 " : "") + "Move Pivot",
+              disabled: !ids.length && !this._previzPivotMode, run: () => this.previzTogglePivotMode() },
+            "-",
+            { label: "Freeze Transformations", disabled: !frozen.ok.length,
+              run: () => this.previzFreezeTransforms() },
+        ], a.left, a.bottom + 2, anchor);
+    },
+
+    /**
+     * Which of `ids` can be frozen, and why the rest can't. A camera's
+     * transform IS where it looks from, and an animated channel would need
+     * every key rewritten — both are refused, as Maya refuses the second.
+     */
+    _previzFreezable(ids) {
+        const scene = this.previzScene();
+        const ok = [], skipped = [];
+        for (const id of ids) {
+            const item = S.itemById(scene, id);
+            if (!item) continue;
+            if (item.kind === "camera") { skipped.push([item, "a camera"]); continue; }
+            if (["position", "rotation", "scale", "pivot"].some((p) => S.isAnimated(item, p))) {
+                skipped.push([item, "animated"]);
+                continue;
+            }
+            ok.push(item);
+        }
+        return { ok, skipped };
+    },
+
+    /**
+     * Freeze Transformations: the item stays exactly where it is, and its
+     * translate, rotate and scale go back to 0, 0 and 1.
+     *
+     * The transform they held moves into the item's `offset` (see scene3d),
+     * under everything, so geometry and children keep their place. The pivot
+     * stays where it was in the world, as Maya keeps it.
+     */
+    previzFreezeTransforms(ids = null) {
+        const view = this._modelView();
+        if (!view || !view.libs || !view._rotScale) return 0;
+        const { THREE } = view.libs;
+        const list = ids ? this._previzIdList(ids) : this.previzSelectedIds();
+        const { ok, skipped } = this._previzFreezable(list);
+        if (!ok.length) {
+            if (skipped.length && view._setStatus) {
+                view._setStatus("Nothing to freeze: " + skipped.map(([it, why]) => `${it.name} is ${why}`).join(", ") + ".");
+                (this._viewerWindow()).setTimeout(() => view._setStatus(""), 3000);
+            }
+            return 0;
+        }
+        this.previzSnapshot(ok.length > 1 ? `freeze ${ok.length} items` : `freeze ${ok[0].name}`);
+        const frame = Math.round(this.currentFrame || 0);
+        for (const item of ok) {
+            const at = S.evaluate(item, frame);
+            const pv = at.pivot || [0, 0, 0];
+            // T(position + pivot) · R · S · T(-pivot): the local matrix the
+            // channels stand for, now handed to the offset.
+            const local = new THREE.Matrix4()
+                .makeTranslation(at.position[0] + pv[0], at.position[1] + pv[1], at.position[2] + pv[2])
+                .multiply(view._rotScale(at))
+                .multiply(new THREE.Matrix4().makeTranslation(-pv[0], -pv[1], -pv[2]));
+            const before = new THREE.Matrix4();
+            const off = S.offsetOf(item);
+            if (off) before.fromArray(off);
+            const next = local.multiply(before).toArray().map((v) => (Math.abs(v) < 1e-12 ? 0 : v));
+            item.offset = next;
+            // The pivot keeps its place in the world: with no rotation or
+            // scale left, the pivot's space is the parent's.
+            item.pivot = [at.position[0] + pv[0], at.position[1] + pv[1], at.position[2] + pv[2]];
+            item.position = [0, 0, 0];
+            item.rotation = [0, 0, 0];
+            item.scale = [1, 1, 1];
+        }
+        this.previzChanged();
+        if (skipped.length && view._setStatus) {
+            view._setStatus("Not frozen: " + skipped.map(([it, why]) => `${it.name} (${why})`).join(", ") + ".");
+            (this._viewerWindow()).setTimeout(() => view._setStatus(""), 3000);
+        }
+        return ok.length;
     },
 
     /** Everything that puts something INTO the scene, under one button. */
@@ -1221,11 +1312,14 @@ export const PrevizMixin = {
         if (!this._previzPanelOn) {
             this._previzPanelOn = true;
             this.setPanelDocked("previz", true);
+            this.setPanelDocked("channels", true);
         }
         // Before the early return below: the timeline's fields and the keying
         // buttons belong to the tab, and a previz panel put away by hand must
         // not take them with it.
         this.previzSyncTimelineFields();
+        // The Channel Box is its own panel, open or shut independently.
+        if (this._previzRenderChannels) this._previzRenderChannels();
         if (!this.isPanelDocked("previz")) return;
         const scene = this.previzScene();
         const doc = ui.root.ownerDocument;
@@ -1249,7 +1343,6 @@ export const PrevizMixin = {
             }));
         }
 
-        this._previzRenderProps(ui, doc);
     },
 
 
@@ -1410,134 +1503,6 @@ export const PrevizMixin = {
         return item;
     },
 
-    _previzRenderProps(ui, doc) {
-        const item = this.previzSelectedItem();
-        ui.props.innerHTML = "";
-        if (!item) return;
-        const frame = Math.round(this.currentFrame || 0);
-
-        // The camera you are looking through has no handles on screen to grab,
-        // so the gizmo steps aside for it — said out loud, because an absent
-        // gizmo otherwise looks like a broken one.
-        const scene = this.previzScene();
-        if (item.kind === "camera" && scene && scene.activeCamera === item.id) {
-            const note = doc.createElement("div");
-            note.className = "previz-note";
-            note.textContent = "Looking through this camera. Press ▣ to step outside and move it.";
-            ui.props.append(note);
-        }
-
-        const nameIn = doc.createElement("input");
-        nameIn.className = "previz-text";
-        nameIn.value = item.name;
-        nameIn.title = "Name";
-        nameIn.onchange = () => { this.previzRename(item.id, nameIn.value); };
-        // Typing here must not reach ComfyUI's own shortcuts: from outside the
-        // shadow root the keystroke looks like it came from the panel, not from
-        // a text field, so ComfyUI would act on it.
-        nameIn.addEventListener("keydown", (e) => e.stopPropagation());
-        ui.props.append(nameIn);
-
-        const vecRow = (prop, label, step) => {
-            const row = doc.createElement("div");
-            row.className = "previz-row";
-            const tag = doc.createElement("span");
-            tag.className = "previz-label";
-            tag.textContent = label;
-            row.append(tag);
-            const value = S.valueAt(item, prop, frame);
-            for (let i = 0; i < 3; i++) {
-                const box = doc.createElement("input");
-                box.className = "previz-num";
-                box.type = "number";
-                box.step = String(step);
-                box.value = String(Math.round(value[i] * 1000) / 1000);
-                box.title = `${label} ${VEC_LABELS[i]}`;
-                box.onchange = () => {
-                    const next = S.valueAt(item, prop, frame).slice();
-                    next[i] = Number(box.value) || 0;
-                    // A pivot is where a thing turns, not where it is: typing
-                    // one moves the pivot and leaves the item alone.
-                    if (prop === "pivot") { this.previzSetPivot(item.id, next); return; }
-                    this.previzApplyTransform(item.id, { [prop]: next }, [prop]);
-                };
-                row.append(box);
-            }
-            const key = doc.createElement("button");
-            key.className = "previz-key" + (S.track(item, prop).some((k) => k.f === frame) ? " on" : "");
-            key.textContent = "◆";
-            key.title = `Key ${label.toLowerCase()} at frame ${frame}`;
-            key.onclick = () => this.previzKeyAll(prop);
-            row.append(key);
-            ui.props.append(row);
-        };
-
-        if (item.kind === "primitive") {
-            const row = doc.createElement("div");
-            row.className = "previz-row";
-            row.append(Object.assign(doc.createElement("span"),
-                                     { className: "previz-label", textContent: "Colour" }));
-            const swatch = doc.createElement("input");
-            swatch.type = "color";
-            swatch.className = "previz-color";
-            swatch.value = item.color || S.DEFAULT_COLOR;
-            swatch.oninput = () => {
-                item.color = swatch.value;
-                // A colour change repaints the shape; it doesn't rebuild it.
-                this.previzChanged({ reload: true });
-            };
-            row.append(swatch);
-            ui.props.append(row);
-        }
-
-        vecRow("position", "Move", 0.1);
-        vecRow("rotation", "Rotate", 1);
-        if (item.kind === "model" || item.kind === "group") vecRow("scale", "Scale", 0.01);
-        if (item.kind !== "camera") {
-            vecRow("pivot", "Pivot", 0.1);
-            const row = doc.createElement("div");
-            row.className = "previz-row";
-            row.append(Object.assign(doc.createElement("span"),
-                                     { className: "previz-label", textContent: "" }));
-            const move = doc.createElement("button");
-            move.className = "previz-btn" + (this._previzPivotMode ? " active" : "");
-            move.textContent = "Move pivot";
-            move.title = "Drag the pivot with the gizmo instead of the object (Insert)";
-            move.onclick = () => this.previzTogglePivotMode();
-            const centre = doc.createElement("button");
-            centre.className = "previz-btn";
-            centre.textContent = "Centre";
-            centre.title = "Put the pivot in the middle of the item, without moving it";
-            centre.onclick = () => this.previzCentrePivot();
-            row.append(move, centre);
-            ui.props.append(row);
-        }
-
-        if (item.kind === "camera") {
-            const row = doc.createElement("div");
-            row.className = "previz-row";
-            row.append(Object.assign(doc.createElement("span"), { className: "previz-label", textContent: "FOV" }));
-            const fov = doc.createElement("input");
-            fov.className = "previz-num";
-            fov.type = "number"; fov.step = "1"; fov.min = "1"; fov.max = "170";
-            fov.value = String(Math.round(S.valueAt(item, "fov", frame)));
-            fov.onchange = () => {
-                const v = Math.min(170, Math.max(1, Number(fov.value) || 35));
-                if (this._previzAutokey || S.isAnimated(item, "fov")) S.setKeyframe(item, "fov", frame, v);
-                else item.fov = v;
-                this.previzChanged();
-            };
-            const key = doc.createElement("button");
-            key.className = "previz-key" + (S.track(item, "fov").some((k) => k.f === frame) ? " on" : "");
-            key.textContent = "◆";
-            key.title = `Key the field of view at frame ${frame}`;
-            key.onclick = () => this.previzKeyAll("fov");
-            row.append(fov, key);
-            ui.props.append(row);
-        }
-
-    },
-
     // ── Rendering the shot ───────────────────────────────────────────────────
 
     previzRenderName(key = this.activeTab) {
@@ -1648,12 +1613,16 @@ export const PrevizMixin = {
         const scene = this.previzScene();
         const form = doc.createElement("div");
         form.className = "previz-row previz-renderform";
+        // Through a camera, the size to render is that camera's resolution —
+        // it is what the gate has been showing.
+        const cam = scene && scene.activeCamera ? S.itemById(scene, scene.activeCamera) : null;
+        const [camW, camH] = cam ? S.cameraResolution(cam) : [0, 0];
         const w = doc.createElement("input");
         w.className = "previz-num"; w.type = "number"; w.step = "16"; w.min = "16";
-        w.value = String(this._previzRenderW || 1920); w.title = "Render width";
+        w.value = String(camW || this._previzRenderW || 1920); w.title = "Render width";
         const h = doc.createElement("input");
         h.className = "previz-num"; h.type = "number"; h.step = "16"; h.min = "16";
-        h.value = String(this._previzRenderH || 1080); h.title = "Render height";
+        h.value = String(camH || this._previzRenderH || 1080); h.title = "Render height";
         const fmt = doc.createElement("select");
         fmt.className = "previz-sel";
         for (const [v, label] of [["mp4", "MP4"], ["png", "PNG"]]) {

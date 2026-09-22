@@ -63,6 +63,7 @@ export const ModelMixin = {
         this._model3d.setPanelStates({
             previz: this.isPanelDocked("previz"),
             curves: this.isPanelDocked("curves"),
+            channels: this.isPanelDocked("channels"),
         });
     },
 

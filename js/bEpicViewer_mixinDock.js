@@ -36,9 +36,10 @@ const DOCK_PANELS = {
     // buttons; the preview shrinks into whatever is left over.
     browser: { prop: "browserPanel", label: "Files",      minW: 180, minH: 220, defaultRail: "right" },
     params:  { prop: "paramsPanel",  label: "Parameters", minW: 200, minH: 120, defaultRail: "right" },
-    // The outliner and a transform's three boxes set the floor here; the
-    // properties block grows downwards from it.
-    previz:  { prop: "previzPanel",  label: "Previz",     minW: 210, minH: 260, defaultRail: "right" },
+    // The outliner: the scene's tree and the buttons over it. Its numbers
+    // live next door, in the Channel Box, so each can be sized on its own.
+    previz:  { prop: "previzPanel",  label: "Outliner",   minW: 190, minH: 140, defaultRail: "right" },
+    channels: { prop: "channelsPanel", label: "Channel Box", minW: 190, minH: 160, defaultRail: "right" },
     // A graph is only readable with some height under it, so this one asks for
     // more than the rest; the channel buttons set the width.
     curves:  { prop: "curvesPanel",  label: "Animation Curves", minW: 220, minH: 190, defaultRail: "right" },
@@ -126,6 +127,7 @@ export const DockMixin = {
             left:   { width: 88,  panels: [{ id: "history", size: 1, hidden: true  }] },
             right:  { width: 300, panels: [{ id: "browser", size: 1, hidden: true  },
                                            { id: "previz",  size: 1, hidden: true  },
+                                           { id: "channels", size: 1, hidden: true },
                                            { id: "curves",  size: 1, hidden: true  },
                                            { id: "params",  size: 1, hidden: false }] },
             bottom: { height: 240, panels: [] },
@@ -353,6 +355,8 @@ export const DockMixin = {
             if (this.updateParamsPanel) this.updateParamsPanel(true);
         } else if (id === "curves") {
             if (this.previzRefreshCurves) this.previzRefreshCurves();
+        } else if (id === "channels") {
+            if (this._previzRenderChannels) this._previzRenderChannels();
         } else if (id === "previz") {
             // A panel with nothing to show puts itself away again: without a
             // scene on the tab there is no outliner, no transform and no keys.

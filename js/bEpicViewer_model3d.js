@@ -16,7 +16,7 @@
 // runs while the camera is settling or an animation plays.
 import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
-import { evaluate } from "./bEpicViewer_scene3d.js";
+import { evaluate, cameraResolution, offsetOf } from "./bEpicViewer_scene3d.js";
 
 let _libsPromise = null;
 
@@ -155,7 +155,12 @@ export class Model3DView {
         curvesBtn.onclick = () => { if (this.hooks.onPanelToggle) this.hooks.onPanelToggle("curves"); };
         if (this.hooks.setIcon) this.hooks.setIcon(curvesBtn, "icon-curves");
 
-        look.append(modeSel, gridBtn, resetBtn, panelBtn, curvesBtn);
+        const channelsBtn = el("button", "model-btn model-panel-btn", "≡");
+        channelsBtn.title = "Show / hide the Channel Box";
+        channelsBtn.onclick = () => { if (this.hooks.onPanelToggle) this.hooks.onPanelToggle("channels"); };
+        if (this.hooks.setIcon) this.hooks.setIcon(channelsBtn, "icon-channelbox");
+
+        look.append(modeSel, gridBtn, resetBtn, panelBtn, channelsBtn, curvesBtn);
 
         // The gizmo tools. They used to sit in the previz panel, a rail away
         // from the object they act on; here they are over the canvas, beside
@@ -180,9 +185,24 @@ export class Model3DView {
         bar.append(look, tools);
         const status = el("div", "model-status");
 
-        root.append(bar, status);
+        // The resolution gate: the picture the camera you are looking through
+        // actually takes, with the rest of the view dimmed around it — Maya's
+        // gate mask. Four shades and a frame; none of it takes the mouse.
+        const gate = el("div", "model-gate");
+        const shades = ["top", "bottom", "left", "right"].map((side) => {
+            const n = el("div", `model-gate-shade ${side}`);
+            gate.append(n);
+            return n;
+        });
+        const gateFrame = el("div", "model-gate-frame");
+        const gateLabel = el("div", "model-gate-label");
+        gateFrame.append(gateLabel);
+        gate.append(gateFrame);
+
+        root.append(gate, bar, status);
         this.root = root;
-        this.ui = { modeSel, gridBtn, resetBtn, panelBtn, curvesBtn, toolBtns, spaceBtn, status };
+        this.ui = { modeSel, gridBtn, resetBtn, panelBtn, channelsBtn, curvesBtn, toolBtns, spaceBtn, status,
+                    gate, shades, gateFrame, gateLabel };
         this._syncToolbar();
         this.host.appendChild(root);
     }
@@ -211,6 +231,7 @@ export class Model3DView {
         if (!this.ui) return;
         this.ui.panelBtn.classList.toggle("active", !!(states && states.previz));
         this.ui.curvesBtn.classList.toggle("active", !!(states && states.curves));
+        if (this.ui.channelsBtn) this.ui.channelsBtn.classList.toggle("active", !!(states && states.channels));
     }
 
     _setStatus(text, isError = false) {
@@ -446,10 +467,14 @@ export class Model3DView {
         const w = Math.max(1, this.root.clientWidth);
         const h = Math.max(1, this.root.clientHeight);
         this.renderer.setSize(w, h, false);
-        for (const cam of [this.camera, ...this._sceneCameraObjects()]) {
-            cam.aspect = w / h;
-            cam.updateProjectionMatrix();
+        this.camera.aspect = w / h;
+        this.camera.updateProjectionMatrix();
+        // A scene camera's lens depends on the viewport too, when you are
+        // looking through it: the gate is fitted inside, and the view around it.
+        for (const entry of this._entries.values()) {
+            if (entry.camera) this._applyLens(entry, evaluate(entry.item, this.sceneFrame).fov);
         }
+        this._syncGate();
         this.requestRender();
     }
 
@@ -876,7 +901,7 @@ export class Model3DView {
      * round with it rather than about some other point.
      */
     _bodyOf(entry) {
-        return (entry && entry.body) || (entry && entry.root) || null;
+        return (entry && entry.inner) || (entry && entry.body) || (entry && entry.root) || null;
     }
 
     async _addEntry(item) {
@@ -896,6 +921,14 @@ export class Model3DView {
             entry.body = new THREE.Group();
             entry.body.name = "body";
             root.add(entry.body);
+            // Under the body sits the frozen transform (scene3d's `offset`),
+            // and under that everything the item holds — geometry and
+            // children alike. The body itself stays the pivot's space, which
+            // is what the pivot maths reads.
+            entry.inner = new THREE.Group();
+            entry.inner.name = "offset";
+            entry.inner.matrixAutoUpdate = false;
+            entry.body.add(entry.inner);
         }
         this._entries.set(item.id, entry);
         this._reparent(entry);
@@ -1006,6 +1039,12 @@ export class Model3DView {
             // ends up, whatever R and S do — and the body takes it back off.
             const pv = at.pivot || [0, 0, 0];
             if (entry.body) entry.body.position.set(-pv[0], -pv[1], -pv[2]);
+            if (entry.inner) {
+                const off = offsetOf(item);
+                if (off) entry.inner.matrix.fromArray(off);
+                else entry.inner.matrix.identity();
+                entry.inner.matrixWorldNeedsUpdate = true;
+            }
             entry.root.position.set(at.position[0] + pv[0], at.position[1] + pv[1], at.position[2] + pv[2]);
             entry.root.rotation.set(at.rotation[0] * D, at.rotation[1] * D, at.rotation[2] * D);
             entry.root.scale.set(...at.scale);
@@ -1024,9 +1063,7 @@ export class Model3DView {
             }
             entry.root.visible = item.visible !== false && this._visibleInTree(item);
             if (entry.camera) {
-                entry.camera.fov = at.fov || 35;
-                entry.camera.aspect = this._aspect();
-                entry.camera.updateProjectionMatrix();
+                this._applyLens(entry, at.fov);
                 // Drawing the camera you are looking through would put its own
                 // frustum lines across the shot.
                 const active = item.id === activeId;
@@ -1044,7 +1081,75 @@ export class Model3DView {
         if (this.gizmoHelper && this.gizmo && this.gizmo.object) this.gizmoHelper.updateMatrixWorld();
         this._refreshAlsoBoxes();
         this._syncPivotMark();
+        this._syncGate();
         this.requestRender();
+    }
+
+    // ── Cameras: the lens and the gate ───────────────────────────────────────
+
+    /**
+     * Where the gate sits in the viewport, in CSS pixels, when looking through
+     * `item`: the camera's picture, fitted inside with a margin around it so
+     * the edges of the shot can be seen — Maya's overscan.
+     */
+    _gateRect(item) {
+        const w = Math.max(1, this.root ? this.root.clientWidth : 1);
+        const h = Math.max(1, this.root ? this.root.clientHeight : 1);
+        const [rw, rh] = cameraResolution(item);
+        const ar = rw / rh;
+        const OVERSCAN = 1.15;
+        const gh = Math.min(h, w / ar) / OVERSCAN;
+        const gw = gh * ar;
+        return { x: (w - gw) / 2, y: (h - gh) / 2, w: gw, h: gh, vw: w, vh: h };
+    }
+
+    /**
+     * A scene camera's projection. `fov` is the vertical field of view of the
+     * camera's own picture, so:
+     *   - looking through it, the view is wider than the shot by the overscan,
+     *     and the gate drawn over it is exactly what renders;
+     *   - otherwise it has the shape of its picture, so the frustum drawn for
+     *     it in the scene is the shot's.
+     * Rendering sets its own lens (renderToDataURL).
+     */
+    _applyLens(entry, fov) {
+        const cam = entry.camera;
+        if (!cam || this._sizeBackup) return;
+        const item = entry.item;
+        const f = fov || 35;
+        const active = this.scene3d && this.scene3d.activeCamera === item.id;
+        if (active) {
+            const g = this._gateRect(item);
+            const half = Math.tan((f * Math.PI / 180) / 2) * (g.vh / g.h);
+            cam.fov = 2 * Math.atan(half) * 180 / Math.PI;
+            cam.aspect = g.vw / g.vh;
+        } else {
+            const [rw, rh] = cameraResolution(item);
+            cam.fov = f;
+            cam.aspect = rw / rh;
+        }
+        cam.updateProjectionMatrix();
+        if (entry.helper) entry.helper.update();
+    }
+
+    /** Show the gate while looking through a camera, and only then. */
+    _syncGate() {
+        const ui = this.ui;
+        if (!ui || !ui.gate) return;
+        const id = this.scene3d && this.scene3d.activeCamera;
+        const entry = id ? this._entries.get(id) : null;
+        if (!entry || !entry.camera) { ui.gate.style.display = "none"; return; }
+        const g = this._gateRect(entry.item);
+        const [rw, rh] = cameraResolution(entry.item);
+        const px = (v) => `${Math.round(v)}px`;
+        ui.gate.style.display = "block";
+        const [top, bottom, left, right] = ui.shades;
+        Object.assign(top.style, { left: "0", top: "0", width: "100%", height: px(g.y) });
+        Object.assign(bottom.style, { left: "0", top: px(g.y + g.h), width: "100%", height: px(g.vh - g.y - g.h) });
+        Object.assign(left.style, { left: "0", top: px(g.y), width: px(g.x), height: px(g.h) });
+        Object.assign(right.style, { left: px(g.x + g.w), top: px(g.y), width: px(g.vw - g.x - g.w), height: px(g.h) });
+        Object.assign(ui.gateFrame.style, { left: px(g.x), top: px(g.y), width: px(g.w), height: px(g.h) });
+        ui.gateLabel.textContent = `${entry.item.name}  ${rw} × ${rh}`;
     }
 
     // ── The pivot ────────────────────────────────────────────────────────────
@@ -1496,6 +1601,11 @@ export class Model3DView {
         this.renderer.setPixelRatio(1);
         this.renderer.setSize(width, height, false);
         cam.aspect = width / height;
+        // Through a scene camera the render is its gate: its own fov, not the
+        // overscanned one the viewport shows around it.
+        const id = this.scene3d && this.scene3d.activeCamera;
+        const entry = id ? this._entries.get(id) : null;
+        if (entry && entry.camera === cam) cam.fov = evaluate(entry.item, this.sceneFrame).fov || 35;
         cam.updateProjectionMatrix();
         this.renderer.render(this.scene, cam);
         try {

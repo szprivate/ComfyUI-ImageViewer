@@ -155,6 +155,8 @@ const ACTION_DEFS = [
       enabled: _sel, run: (p) => p.previzToggleVisibility() },
     { key: "PrevizCentrePivot", label: "Previz: Centre Pivot",
       enabled: _sel, run: (p) => p.previzCentrePivot() },
+    { key: "PrevizFreeze", label: "Previz: Freeze Transformations",
+      enabled: _sel, run: (p) => p.previzFreezeTransforms() },
     { key: "PrevizLookThrough", label: "Previz: Look Through Camera / Back To Free View",
       enabled: _previz, run: (p) => p.previzLookThroughSelected() },
 
@@ -215,10 +217,12 @@ const ACTION_DEFS = [
       enabled: _previz, run: (p) => p.previzCycleMaterialMode() },
     { key: "View3DGrid",      label: "3D View: Show / Hide Grid",
       enabled: _previz, run: (p) => p.previzToggleGrid() },
-    { key: "View3DPrevizPanel", label: "3D View: Show / Hide Previz Panel",
+    { key: "View3DPrevizPanel", label: "3D View: Show / Hide Outliner",
       enabled: _previz, run: (p) => p.togglePanelDocked("previz") },
     { key: "View3DCurvesPanel", label: "3D View: Show / Hide Animation Curves",
       enabled: _previz, run: (p) => p.togglePanelDocked("curves") },
+    { key: "View3DChannelBox", label: "3D View: Show / Hide Channel Box",
+      enabled: _previz, run: (p) => p.togglePanelDocked("channels") },
 
     { key: "FitView",      label: "Fit Image To Viewport",   combo: { key: "f" },
       run: (p) => p.fitView() },

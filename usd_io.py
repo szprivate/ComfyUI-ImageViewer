@@ -128,6 +128,39 @@ def _with_pivot(position, rotation, scale, pivot):
     return [float(position[i]) + pv[i] - turned[i] for i in range(3)]
 
 
+def _resolution(item):
+    """A camera item's [width, height], defaulting as scene3d does."""
+    res = item.get("resolution") if isinstance(item, dict) else None
+    try:
+        w, h = (int(round(float(v))) for v in res)
+        if w >= 1 and h >= 1:
+            return w, h
+    except (TypeError, ValueError):
+        pass
+    return 1920, 1080
+
+
+def _offset_matrix(item):
+    """scene3d's `offset` as a Gf.Matrix4d, or None when there is none.
+
+    three.js keeps a matrix column-major with the translation in elements
+    12..14; USD reads sixteen numbers row by row, with the translation in the
+    last row. The same sixteen numbers, in the same order, are the same matrix.
+    """
+    Gf, _Sdf, _Usd, _UsdGeom, _Vt = _pxr()
+    m = item.get("offset") if isinstance(item, dict) else None
+    if not isinstance(m, list) or len(m) != 16:
+        return None
+    try:
+        values = [float(v) for v in m]
+    except (TypeError, ValueError):
+        return None
+    identity = [1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
+    if all(abs(a - b) < 1e-12 for a, b in zip(values, identity)):
+        return None
+    return Gf.Matrix4d(*values)
+
+
 def _set_xform(xformable, position, rotation, scale, time=None):
     """Author (or sample) the translate / rotateXYZ / scale ops of a prim."""
     Gf, _Sdf, _Usd, UsdGeom, _Vt = _pxr()
@@ -387,7 +420,11 @@ def export_scene(scene, path, bake=True):
             xformable = UsdGeom.Xform.Define(stage, prim_path)
         elif kind == "camera":
             cam = UsdGeom.Camera.Define(stage, prim_path)
-            cam.CreateHorizontalApertureAttr(APERTURE_H)
+            # The film back takes the shape of the picture: the vertical
+            # aperture (and so the vertical fov) stays put, and the horizontal
+            # one follows the resolution's aspect.
+            res_w, res_h = _resolution(item)
+            cam.CreateHorizontalApertureAttr(APERTURE_V * res_w / res_h)
             cam.CreateVerticalApertureAttr(APERTURE_V)
             cam.CreateClippingRangeAttr(Gf.Vec2f(0.01, 10000.0))
             xformable = cam
@@ -425,6 +462,7 @@ def export_scene(scene, path, bake=True):
         if item.get("visible") is False:
             UsdGeom.Imageable(prim).CreateVisibilityAttr(UsdGeom.Tokens.invisible)
 
+        offset = _offset_matrix(item)
         span = _animated_range(item) if bake else None
         if span is None:
             pos = _with_pivot(item.get("position") or [0, 0, 0], item.get("rotation") or [0, 0, 0],
@@ -446,6 +484,10 @@ def export_scene(scene, path, bake=True):
                            time=Usd.TimeCode(frame))
                 if focal_attr is not None:
                     focal_attr.Set(_fov_to_focal(value_at(item, "fov", frame)), Usd.TimeCode(frame))
+        if offset is not None:
+            # Frozen transformations: a matrix under translate / rotate / scale,
+            # which is exactly where scene3d's `offset` sits.
+            UsdGeom.Xformable(prim).AddTransformOp(opSuffix="frozen").Set(offset)
 
     stage.GetRootLayer().Save()
     return path
@@ -705,6 +747,11 @@ def _item_from_prim(prim, xformable, is_camera, shape, asset, stage):
         focal = cam.GetFocalLengthAttr().Get()
         aperture = cam.GetVerticalApertureAttr().Get()
         item["fov"] = _focal_to_fov(focal, aperture)
+        # Only the shape of the picture is in the stage, not its size: 1080
+        # lines at the film back's aspect.
+        h_ap = cam.GetHorizontalApertureAttr().Get() or APERTURE_H
+        v_ap = aperture or APERTURE_V
+        item["resolution"] = [max(1, int(round(1080 * float(h_ap) / float(v_ap)))), 1080]
     elif shape:
         item["primitive"] = {"type": shape}
         color = UsdGeom.Gprim(prim).GetDisplayColorAttr().Get()
