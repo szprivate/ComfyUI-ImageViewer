@@ -292,7 +292,9 @@ export class Model3DView {
         canvas.className = "model-canvas";
         this.root.insertBefore(canvas, this.root.firstChild);
 
-        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+        // alpha: a render can be asked for with a transparent background. The
+        // clear colour is opaque otherwise, so the view looks the same.
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
         renderer.setPixelRatio(this.win.devicePixelRatio || 1);
         // Linear tone mapping at exposure 1 is the same picture as none at all,
         // and it is what lets the viewer's exposure slider work on a model.
@@ -1702,37 +1704,140 @@ export class Model3DView {
         }, 400);
     }
 
+    // ── Rendering a shot ─────────────────────────────────────────────────────
+    //
+    // beginRender(opts) → renderFrame(frame, w, h) per frame → endRender().
+    // Between the first and the last the view is set up for the picture, not
+    // for working in: the camera chosen, the helpers hidden, the shading and
+    // background asked for. endRender puts every one of them back.
+
     /**
-     * Render the current frame at an exact size and hand back a PNG data URL.
-     * The canvas itself is resized for the shot and put back by restoreSize(),
-     * so the render is the size asked for rather than whatever the panel is.
+     * Set the view up for a render.
+     *   camera     scene camera id, "" for the free view, undefined for the
+     *              camera being looked through (the viewport's own)
+     *   shading    "original" | "clay" | "normal" | "wireframe"
+     *   background "viewer" | "color" | "transparent", with `color` for "color"
+     *   grid       keep the grid in the picture
+     *   helpers    keep camera frustums, group axes and the like
+     *   aa         supersampling factor: 1, 2 or 4
      */
-    renderToDataURL(width, height) {
-        if (!this.renderer || !this.canvas) return null;
-        const cam = this.activeCameraObject();
-        if (!this._sizeBackup) {
-            this._sizeBackup = { w: this.canvas.width, h: this.canvas.height, aspect: cam.aspect, ratio: this.renderer.getPixelRatio() };
+    beginRender(opts = {}) {
+        if (!this.renderer || !this.canvas || this._rendering) return false;
+        const { THREE } = this.libs;
+        const r = this._rendering = { opts, restore: [] };
+        const keep = (obj, key) => { if (obj) r.restore.push([obj, key, obj[key]]); };
+
+        let cam = this.activeCameraObject();
+        let item = null;
+        if (opts.camera === "") cam = this.camera;
+        else if (opts.camera) {
+            const entry = this._entries.get(opts.camera);
+            if (entry && entry.camera) { cam = entry.camera; item = entry.item; }
+        } else {
+            const id = this.scene3d && this.scene3d.activeCamera;
+            const entry = id ? this._entries.get(id) : null;
+            if (entry && entry.camera === cam) item = entry.item;
         }
+        r.cam = cam;
+        r.item = item;
+        keep(cam, "fov"); keep(cam, "aspect");
+
+        this._sizeBackup = { w: this.canvas.width, h: this.canvas.height, ratio: this.renderer.getPixelRatio() };
+        r.clear = this.renderer.getClearColor(new THREE.Color());
+        r.clearAlpha = this.renderer.getClearAlpha();
+        r.material = this.materialMode;
+        if (opts.shading && opts.shading !== this.materialMode) this.setMaterialMode(opts.shading);
+        if (opts.background === "transparent") this.renderer.setClearColor(r.clear, 0);
+        else if (opts.background === "color" && opts.color) this.renderer.setClearColor(new THREE.Color(opts.color), 1);
+        this._renderHideOverlays();
+        return true;
+    }
+
+    /** Everything that is there to work with rather than to be looked at. */
+    _renderHideOverlays() {
+        const r = this._rendering;
+        if (!r) return;
+        const hide = (obj) => { if (obj && obj.visible) { r.restore.push([obj, "visible", true]); obj.visible = false; } };
+        if (!r.opts.grid) hide(this.grid);
+        hide(this.gizmoHelper);
+        hide(this._pivotMark);
+        for (const box of (this._alsoBoxes || new Map()).values()) hide(box);
+        if (!r.opts.helpers) {
+            for (const entry of this._entries.values()) {
+                hide(entry.helper);
+                hide(entry.axes);
+            }
+        }
+    }
+
+    /**
+     * One frame, `width` x `height`, as a PNG data URL. Rendered `aa` times
+     * as large and scaled down, which is what smooths the edges of a still
+     * that will be looked at far longer than a viewport ever is.
+     */
+    renderFrame(frame, width, height) {
+        const r = this._rendering;
+        if (!r) return null;
+        if (frame !== undefined && frame !== null) this.applyFrame(frame);
+        // applyFrame shows the helpers again as it places things.
+        this._renderHideOverlays();
+        const cam = r.cam;
+        const max = (this.renderer.capabilities && this.renderer.capabilities.maxTextureSize) || 8192;
+        let aa = Math.max(1, Math.min(4, Math.round(r.opts.aa || 1)));
+        while (aa > 1 && Math.max(width, height) * aa > max) aa--;
+        const W = Math.round(width * aa), H = Math.round(height * aa);
         this.renderer.setPixelRatio(1);
-        this.renderer.setSize(width, height, false);
+        this.renderer.setSize(W, H, false);
         cam.aspect = width / height;
-        // Through a scene camera the render is its gate: its own fov, not the
-        // overscanned one the viewport shows around it.
-        const id = this.scene3d && this.scene3d.activeCamera;
-        const entry = id ? this._entries.get(id) : null;
-        if (entry && entry.camera === cam) cam.fov = evaluate(entry.item, this.sceneFrame).fov || 35;
+        // A scene camera renders its gate: its own fov, not the overscanned
+        // one the viewport shows around it.
+        if (r.item) cam.fov = evaluate(r.item, this.sceneFrame).fov || 35;
         cam.updateProjectionMatrix();
         this.renderer.render(this.scene, cam);
         try {
-            return this.canvas.toDataURL("image/png");
+            if (aa === 1) return this.canvas.toDataURL("image/png");
+            const out = this.doc.createElement("canvas");
+            out.width = width; out.height = height;
+            const ctx = out.getContext("2d");
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = "high";
+            ctx.drawImage(this.canvas, 0, 0, W, H, 0, 0, width, height);
+            return out.toDataURL("image/png");
         } catch (e) {
             console.warn("[bEpicViewer] could not read the render back", e);
             return null;
         }
     }
 
+    /** Put the view back the way it was before beginRender. */
+    endRender() {
+        const r = this._rendering;
+        if (!r) return;
+        this._rendering = null;
+        for (let i = r.restore.length - 1; i >= 0; i--) {
+            const [obj, key, value] = r.restore[i];
+            obj[key] = value;
+        }
+        if (r.cam && r.cam.updateProjectionMatrix) r.cam.updateProjectionMatrix();
+        this.renderer.setClearColor(r.clear, r.clearAlpha);
+        if (r.material !== this.materialMode) this.setMaterialMode(r.material);
+        this.restoreSize();
+        this.applyFrame(this.sceneFrame);
+    }
+
+    /**
+     * Render the current frame at an exact size through the viewport's camera
+     * and hand back a PNG data URL — one frame of what beginRender sets up.
+     * restoreSize() (or endRender) puts the view back.
+     */
+    renderToDataURL(width, height) {
+        if (!this._rendering && !this.beginRender({ grid: true, helpers: true })) return null;
+        return this.renderFrame(null, width, height);
+    }
+
     /** Undo renderToDataURL's resize. */
     restoreSize() {
+        if (this._rendering) { this.endRender(); return; }
         if (!this._sizeBackup || !this.renderer) return;
         const b = this._sizeBackup;
         this._sizeBackup = null;

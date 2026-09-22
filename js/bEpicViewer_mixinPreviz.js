@@ -1575,80 +1575,10 @@ export const PrevizMixin = {
     },
 
     // ── Rendering the shot ───────────────────────────────────────────────────
+    // The dialog and the render itself: bEpicViewer_previzRender.js.
 
     previzRenderName(key = this.activeTab) {
         return (this._previzRenderNames && this._previzRenderNames[key]) || "shot";
-    },
-
-    /**
-     * Render the shot through the active camera and leave it in ./output/previz,
-     * which the bEpic 3D Scene node reads back as its IMAGE output. The viewport
-     * is what renders, so what you see is what the workflow gets.
-     *
-     * Frames go up one at a time — a canvas can only hand over one picture —
-     * and `format` decides what stays behind: "mp4" has the server encode them
-     * into <name>.mp4 and drop the stills, "png" keeps the stills themselves,
-     * which is what a single frame or a trip through another tool wants.
-     */
-    async previzRender({ width = 1920, height = 1080, format = "mp4" } = {}) {
-        const scene = this.previzScene();
-        if (!scene || this._previzRendering) return null;
-        const view = this._modelView();
-        const name = this.previzRenderName();
-        const total = Math.max(1, scene.length);
-        const wasFrame = Math.round(this.currentFrame || 0);
-        this._previzRendering = true;
-        let done = 0;
-        let firstPath = null, framesDir = null, moviePath = null;
-        try {
-            for (let f = 0; f < total; f++) {
-                view.applyFrame(f);
-                const dataurl = view.renderToDataURL(width, height);
-                if (!dataurl) throw new Error("the renderer produced no image");
-                const res = await fetch(api.apiURL("/bepic/previz_frame"), {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ name, index: f, dataurl, first: f === 0 }),
-                });
-                const info = await res.json().catch(() => ({}));
-                if (!res.ok) throw new Error(info.error || `the server answered ${res.status}`);
-                if (f === 0) { firstPath = info.path || null; framesDir = info.dir || null; }
-                done++;
-                view._setStatus(`Rendering ${name}: frame ${f + 1} of ${total}…`);
-            }
-            if (format === "png") {
-                view._setStatus(`Wrote ${done} PNG${done === 1 ? "" : "s"} into output/previz/${name}/`);
-            } else {
-                view._setStatus(`Encoding ${done} frames…`);
-                const enc = await fetch(api.apiURL("/bepic/previz_encode"), {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ name, fps: scene.fps || 24 }),
-                });
-                const encData = await enc.json().catch(() => ({}));
-                if (!enc.ok) throw new Error(encData.error || `the server answered ${enc.status}`);
-                moviePath = encData.path || null;
-                view._setStatus(`Wrote output/previz/${name}.mp4, ${done} frames long.`);
-            }
-            // The shot goes back to the graph it was built for: a loader node
-            // pointing at what was just written, exactly as dragging a history
-            // frame onto the canvas would make one.
-            const made = await this.previzNodeForRender(
-                format === "png"
-                    ? { kind: "image", isSequence: done > 1, seqDir: framesDir, path: firstPath }
-                    : { kind: "video", path: moviePath });
-            if (made) view._setStatus(`${view.ui.status.textContent} Dropped a ${made} node on the graph.`);
-        } catch (e) {
-            console.warn("[bEpicViewer] previz render failed", e);
-            view._setStatus(`Render stopped after ${done} frames.\n${(e && e.message) || e}`, true);
-        } finally {
-            this._previzRendering = false;
-            view.restoreSize();
-            this.setFrame(wasFrame);
-            const win = this._viewerWindow();
-            win.setTimeout(() => { if (!this._previzRendering) view._setStatus(""); }, 5000);
-        }
-        return done;
     },
 
     /**
@@ -1671,55 +1601,6 @@ export const PrevizMixin = {
             console.warn("[bEpicViewer] could not put the render on the graph", e);
             return null;
         }
-    },
-
-    /** Ask for a size and a format, then render. Kept in the panel so the popout
-     *  has it too. */
-    previzRenderDialog() {
-        if (!this.isPrevizTab()) return;
-        const ui = this._previzUI;
-        if (!ui) return;
-        if (ui.renderForm && ui.renderForm.isConnected) { ui.renderForm.remove(); ui.renderForm = null; return; }
-        const doc = ui.root.ownerDocument;
-        const scene = this.previzScene();
-        const form = doc.createElement("div");
-        form.className = "previz-row previz-renderform";
-        // Through a camera, the size to render is that camera's resolution —
-        // it is what the gate has been showing.
-        const cam = scene && scene.activeCamera ? S.itemById(scene, scene.activeCamera) : null;
-        const [camW, camH] = cam ? S.cameraResolution(cam) : [0, 0];
-        const w = doc.createElement("input");
-        w.className = "previz-num"; w.type = "number"; w.step = "16"; w.min = "16";
-        w.value = String(camW || this._previzRenderW || 1920); w.title = "Render width";
-        const h = doc.createElement("input");
-        h.className = "previz-num"; h.type = "number"; h.step = "16"; h.min = "16";
-        h.value = String(camH || this._previzRenderH || 1080); h.title = "Render height";
-        const fmt = doc.createElement("select");
-        fmt.className = "previz-sel";
-        for (const [v, label] of [["mp4", "MP4"], ["png", "PNG"]]) {
-            fmt.append(Object.assign(doc.createElement("option"), { value: v, textContent: label }));
-        }
-        // A one-frame shot is a still, and a one-frame clip is an awkward way to
-        // hand a still to the rest of the workflow.
-        fmt.value = this._previzRenderFormat
-            || (scene && Math.max(1, scene.length) === 1 ? "png" : "mp4");
-        fmt.title = "MP4: one clip. PNG: the frames themselves, in output/previz/<name>/";
-        const go = doc.createElement("button");
-        go.className = "previz-btn";
-        go.textContent = "Go";
-        go.onclick = () => {
-            this._previzRenderW = Math.max(16, Number(w.value) || 1920);
-            this._previzRenderH = Math.max(16, Number(h.value) || 1080);
-            this._previzRenderFormat = fmt.value;
-            form.remove();
-            ui.renderForm = null;
-            this.previzRender({ width: this._previzRenderW, height: this._previzRenderH,
-                                format: this._previzRenderFormat });
-        };
-        form.append(Object.assign(doc.createElement("span"), { className: "previz-label", textContent: "Size" }),
-                    w, h, fmt, go);
-        ui.root.appendChild(form);
-        ui.renderForm = form;
     },
 
     // ── Scene files ──────────────────────────────────────────────────────────

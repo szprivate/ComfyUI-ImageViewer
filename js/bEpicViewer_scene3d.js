@@ -69,6 +69,47 @@ export function cameraResolution(item) {
     return ok ? r.map((v) => Math.round(Number(v))) : DEFAULT_RESOLUTION.slice();
 }
 
+// ── Render settings ───────────────────────────────────────────────────────────
+// What the render dialog last used, kept on the scene so it travels with the
+// workflow. `camera` is an item id, "" for the free view, or null for "the
+// camera being looked through, else the first one"; `end` null is the last
+// frame of the shot; `fps` null is the shot's own rate.
+export const RENDER_FORMATS = ["mp4", "mov", "webm", "png"];
+export const RENDER_DEFAULTS = {
+    camera: null, useCameraRes: true, width: 1920, height: 1080, scale: 100,
+    start: 0, end: null, fps: null,
+    format: "mp4", quality: "high",
+    shading: "original", background: "viewer", color: "#282828",
+    aa: 2, grid: false, helpers: false, addNode: true,
+};
+
+/** The scene's render settings, every field present and sane. */
+export function renderSettings(scene) {
+    const raw = (scene && scene.render && typeof scene.render === "object") ? scene.render : {};
+    const d = RENDER_DEFAULTS;
+    const int = (v, lo, hi, dflt) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Math.round(Number(v)))) : dflt);
+    const pick = (v, list, dflt) => (list.includes(v) ? v : dflt);
+    return {
+        camera: typeof raw.camera === "string" ? raw.camera : null,
+        useCameraRes: raw.useCameraRes !== false,
+        width: int(raw.width, 16, 8192, d.width),
+        height: int(raw.height, 16, 8192, d.height),
+        scale: int(raw.scale, 10, 400, d.scale),
+        start: int(raw.start, 0, 99999, d.start),
+        end: raw.end === null || raw.end === undefined ? null : int(raw.end, 0, 99999, null),
+        fps: raw.fps === null || raw.fps === undefined || !(Number(raw.fps) > 0) ? null : Number(raw.fps),
+        format: pick(raw.format, RENDER_FORMATS, d.format),
+        quality: pick(raw.quality, ["high", "medium", "low"], d.quality),
+        shading: pick(raw.shading, ["original", "clay", "normal", "wireframe"], d.shading),
+        background: pick(raw.background, ["viewer", "color", "transparent"], d.background),
+        color: typeof raw.color === "string" && /^#[0-9a-f]{6}$/i.test(raw.color) ? raw.color : d.color,
+        aa: pick(Number(raw.aa), [1, 2, 4], d.aa),
+        grid: !!raw.grid,
+        helpers: !!raw.helpers,
+        addNode: raw.addNode !== false,
+    };
+}
+
 /** A valid frozen-transform matrix, or null (none, or not 16 finite numbers). */
 export function offsetOf(item) {
     const m = item && item.offset;
@@ -654,6 +695,7 @@ export function parseScene(raw) {
         items,
         activeCamera: typeof data.activeCamera === "string" ? data.activeCamera : null,
     });
+    if (data.render && typeof data.render === "object") scene.render = renderSettings(data);
     if (scene.activeCamera && !itemById(scene, scene.activeCamera)) scene.activeCamera = null;
     repairTree(scene);
     return scene;

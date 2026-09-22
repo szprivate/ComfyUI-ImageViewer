@@ -259,16 +259,25 @@ def _pad_even(frame_u8):
     return frame_u8
 
 
-def _write_video(frames, path, fps, ext):
-    """Encode a [B,H,W,C] float array to a single video file at `fps`."""
+def _write_video(frames, path, fps, ext, quality=8):
+    """Encode a [B,H,W,C] float array to a single video file at `fps`.
+
+    `quality` is imageio's 0-10 scale (10 best); 8 is what saving has always
+    used."""
     import imageio
 
     fps = float(fps) if fps and fps > 0 else 24.0
+    q = max(1, min(10, int(quality if quality is not None else 8)))
     if ext == "webm":
-        writer = imageio.get_writer(path, fps=fps, codec="libvpx-vp9",
-                                    macro_block_size=1)
+        # VP9 takes no notice of imageio's quality; its own knob is the
+        # constant-quality CRF (lower is better), 22 / 31 / 40 for the
+        # dialog's high / medium / low.
+        crf = int(round(62.5 - 4.5 * q))
+        writer = imageio.get_writer(path, fps=fps, codec="libvpx-vp9", quality=None,
+                                    macro_block_size=1,
+                                    ffmpeg_params=["-crf", str(crf), "-b:v", "0"])
     else:  # mp4 / mov → H.264
-        writer = imageio.get_writer(path, fps=fps, codec="libx264", quality=8,
+        writer = imageio.get_writer(path, fps=fps, codec="libx264", quality=q,
                                     macro_block_size=1, pixelformat="yuv420p")
     try:
         for i in range(frames.shape[0]):

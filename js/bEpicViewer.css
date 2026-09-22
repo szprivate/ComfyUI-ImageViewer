@@ -1063,3 +1063,59 @@ textarea.param-input {
     position: absolute; left: 0; bottom: 100%; padding: 0 2px 2px;
     color: rgba(255, 255, 255, 0.7); font: 10px sans-serif; white-space: pre;
 }
+
+/* ── The render dialog ───────────────────────────────────────────────────────
+   Modal over the whole viewer: every setting a render has, then Render. */
+.rd-shade {
+    position: absolute; inset: 0; z-index: 400;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, 0.55);
+}
+.rd-box {
+    width: min(460px, calc(100% - 32px)); max-height: calc(100% - 32px); overflow-y: auto;
+    box-sizing: border-box; padding: 0 14px 12px;
+    background: #1b1b1b; border: 1px solid #444; border-radius: 6px;
+    box-shadow: 0 10px 32px rgba(0, 0, 0, 0.7);
+    color: #ddd; font: 12px sans-serif;
+}
+.rd-head {
+    position: sticky; top: 0; z-index: 1; background: #1b1b1b;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 0 6px; border-bottom: 1px solid #333;
+}
+.rd-title { font-size: 13px; font-weight: bold; color: #eee; }
+.rd-x { background: none; border: none; color: #999; font-size: 14px; cursor: pointer; padding: 2px 4px; }
+.rd-x:hover { color: #fff; }
+.rd-section {
+    margin: 10px 0 4px; color: #f60; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+}
+.rd-row { display: flex; align-items: center; gap: 6px; min-height: 24px; flex-wrap: wrap; }
+.rd-label { flex: 0 0 92px; color: #aaa; text-align: right; }
+.rd-inline { display: inline-flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.rd-sub { color: #888; }
+.rd-hint { color: #888; font-size: 11px; }
+.rd-in {
+    background: #111; color: #ddd; border: 1px solid #3a3a3a; border-radius: 3px;
+    padding: 2px 4px; font: inherit; min-height: 20px; box-sizing: border-box;
+}
+.rd-in:focus { outline: none; border-color: #f60; }
+.rd-in:disabled { color: #777; }
+.rd-num { width: 64px; }
+.rd-text { width: 150px; }
+.rd-color { width: 30px; height: 20px; padding: 0; border: 1px solid #3a3a3a; background: #111; }
+.rd-check { color: #ccc; cursor: pointer; user-select: none; }
+.rd-btn {
+    background: #262626; color: #ccc; border: 1px solid #444; border-radius: 3px;
+    padding: 3px 10px; font: inherit; cursor: pointer;
+}
+.rd-btn:hover:not(:disabled) { background: #333; color: #fff; }
+.rd-btn:disabled { opacity: 0.5; cursor: default; }
+.rd-go { background: #f60; border-color: #f60; color: #111; font-weight: bold; }
+.rd-go:hover:not(:disabled) { background: #ff7a1f; color: #000; }
+.rd-summary { margin-top: 12px; padding: 6px 8px; background: #141414; border-radius: 3px; color: #bbb; }
+.rd-progress { height: 4px; margin-top: 8px; background: #222; border-radius: 2px; overflow: hidden; display: none; }
+.rd-box.rendering .rd-progress { display: block; }
+.rd-bar { height: 100%; width: 0; background: #f60; transition: width 0.15s; }
+.rd-message { min-height: 16px; margin-top: 6px; color: #bbb; white-space: pre-line; }
+.rd-message.error { color: #e88; }
+.rd-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }

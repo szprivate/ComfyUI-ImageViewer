@@ -21,6 +21,7 @@ import { ModelMixin }    from "./bEpicViewer_mixinModel.js";
 import { PrevizMixin }   from "./bEpicViewer_mixinPreviz.js";
 import { PrevizCurvesMixin } from "./bEpicViewer_previzCurves.js";
 import { PrevizChannelsMixin } from "./bEpicViewer_previzChannels.js";
+import { PrevizRenderMixin } from "./bEpicViewer_previzRender.js";
 import { PrevizUndoMixin } from "./bEpicViewer_previzUndo.js";
 import { SendFromNodeMixin, registerSendToViewerMenu, sendSelectionToViewer } from "./bEpicViewer_sendFromNode.js";
 import {
@@ -1124,6 +1125,7 @@ Object.assign(
     PrevizMixin,
     PrevizCurvesMixin,
     PrevizChannelsMixin,
+    PrevizRenderMixin,
     PrevizUndoMixin,
 );
 

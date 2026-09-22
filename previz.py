@@ -25,6 +25,10 @@ import folder_paths
 SCENES_DIRNAME = "3d_scenes"
 RENDERS_DIRNAME = "previz"
 FRAME_RE = re.compile(r"^frame_(\d+)\.png$")
+# The containers a take can be encoded into, first one the default.
+VIDEO_FORMATS = ("mp4", "mov", "webm")
+# imageio's 0-10 quality scale, by the names the render dialog uses.
+VIDEO_QUALITY = {"high": 9, "medium": 7, "low": 5}
 
 
 def _safe_name(name, fallback="scene"):
@@ -86,9 +90,19 @@ def load_scene(name):
         return json.load(fh)
 
 
-def video_path(name):
-    """The rendered shot itself: output/previz/<name>.mp4."""
-    return os.path.join(renders_dir(), f"{_safe_name(name)}.mp4")
+def video_path(name, fmt="mp4"):
+    """The rendered shot itself: output/previz/<name>.<fmt>."""
+    fmt = fmt if fmt in VIDEO_FORMATS else "mp4"
+    return os.path.join(renders_dir(), f"{_safe_name(name)}.{fmt}")
+
+
+def existing_video(name):
+    """Whichever clip a take of `name` was encoded into, or None."""
+    for fmt in VIDEO_FORMATS:
+        path = video_path(name, fmt)
+        if os.path.isfile(path):
+            return path
+    return None
 
 
 def frame_path(name, index):
@@ -120,11 +134,12 @@ def clear_render(name):
     shorter take can't leave a tail of stale frames behind it, and a take kept
     as stills isn't read back as the clip an earlier take encoded."""
     removed = _clear_frames(name)
-    try:
-        os.remove(video_path(name))
-        removed += 1
-    except OSError:
-        pass
+    for fmt in VIDEO_FORMATS:
+        try:
+            os.remove(video_path(name, fmt))
+            removed += 1
+        except OSError:
+            pass
     return removed
 
 
@@ -144,8 +159,11 @@ def render_frames(name):
     return [p for _i, p in numbered]
 
 
-def encode_render(name, fps=24.0):
-    """Turn the uploaded frames of `name` into output/previz/<name>.mp4.
+def encode_render(name, fps=24.0, fmt="mp4", quality="high"):
+    """Turn the uploaded frames of `name` into output/previz/<name>.<fmt>.
+
+    `fmt` is one of VIDEO_FORMATS (mp4 and mov are H.264, webm is VP9) and
+    `quality` one of VIDEO_QUALITY's names.
 
     The frames are removed afterwards: the clip is the deliverable, and leaving
     both behind would double the disk cost of every take. Raises with a readable
@@ -171,10 +189,20 @@ def encode_render(name, fps=24.0):
                     f"render the shot again to replace them")
             frames.append(np.asarray(im, dtype=np.float32) / 255.0)
 
-    out = video_path(name)
+    fmt = fmt if fmt in VIDEO_FORMATS else "mp4"
+    # One take, one clip: a re-render into another container must not leave
+    # the old one behind for the node to read.
+    for other in VIDEO_FORMATS:
+        if other != fmt:
+            try:
+                os.remove(video_path(name, other))
+            except OSError:
+                pass
+    out = video_path(name, fmt)
     os.makedirs(os.path.dirname(out), exist_ok=True)
     try:
-        file_writer._write_video(np.stack(frames), out, float(fps or 24.0), "mp4")
+        file_writer._write_video(np.stack(frames), out, float(fps or 24.0), fmt,
+                                 quality=VIDEO_QUALITY.get(quality, VIDEO_QUALITY["high"]))
     except Exception as e:
         raise ValueError(
             f"could not encode the shot ({e}). Install imageio-ffmpeg, or read "
@@ -188,10 +216,10 @@ def encode_render(name, fps=24.0):
 
 
 def load_render_video(name):
-    """The rendered mp4 as an IMAGE tensor [N,H,W,3], or None when there isn't
+    """The rendered clip as an IMAGE tensor [N,H,W,3], or None when there isn't
     one. Decoded with whatever this install has, like the rest of the viewer."""
-    path = video_path(name)
-    if not os.path.isfile(path):
+    path = existing_video(name)
+    if not path:
         return None
     import numpy as np
     import torch

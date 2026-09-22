@@ -68,7 +68,7 @@ That is what the three icons in the 3D toolbar are for, and they are the only wa
 | **New** | Empties the scene and starts again. It is one undo step like any other, so there is nothing to confirm. |
 | **Edit** | **Centre Pivot**, **Move Pivot** (ticked while it is on — the same as <kbd>Insert</kbd>) and **Freeze Transformations** — see [The Pivot](#the-pivot) and [Freezing](#freezing-transformations). |
 | **+** | One menu for everything a scene can gain. **Model…** adds the model selected in the [File Browser](other.md#file-browser) — you can also drag models straight into the 3D view, from the browser, the history strip or your desktop. **Camera** adds a camera where the view is right now. **Group** adds an empty one to hang things under. Then a box, sphere, plane, cylinder, cone or torus — no file needed, for blocking a scene out; it lands where the view is looking. Last, the two ways a whole scene arrives: **Import USD…** and **Load scene…**. |
-| **Export** | The other direction: **Save scene…** writes the scene as a file, **Export USD…** as a stage, and **Render…** turns the shot into an mp4 or a PNG sequence. |
+| **Export** | The other direction: **Save scene…** writes the scene as a file, **Export USD…** as a stage, and **Render…** opens the [render dialog](#the-render-dialog), which turns the shot into a video (MP4, MOV, WebM) or a PNG sequence. |
 | **Right-click an item** | **Rename**, **Group**, **Duplicate** or **Delete**. A row inside the current selection acts on all of it — the menu says how many — and a row outside it selects itself first. A group takes what is inside it either way. |
 | **↩ / ↪** | Undo and redo the last previz edit — see [Undoing](#undoing). Their tooltips name what they would take back. |
 | The list | The scene as a tree. Click to select, <kbd>Shift</kbd>+click to select several, **◉** hides and shows, **▣** looks through a camera, **•** marks an item that has keyframes, and **▾** folds a group away. **Double-click** a name (or press <kbd>F2</kbd>) to rename it in place: <kbd>Enter</kbd> or clicking away keeps the new name, <kbd>Esc</kbd> drops it. Names stay unique — a name already taken becomes "Name 2" — and a rename is one undo step. |
@@ -240,17 +240,36 @@ The **bEpic 3D Scene (Previz)** node holds the scene and hands the rendered shot
 
 1. Drop the node in and press **Open in Image Viewer** on it. The viewer opens on that node's tab as an empty scene — no run needed.
 2. Build the shot. The scene is stored on the node, so it is saved with the workflow.
-3. Set **render_name** on the node (the folder under `output/previz`).
-4. Pick **Export → Render…**, set a size (1920×1080 to start with) and a format, and press **Go**. The viewer plays the shot through the active camera.
-5. Run the workflow. The node reads the render back as `images`, plus `frame_count` and `fps`.
+3. Pick **Export → Render…**. The **render dialog** opens with every setting a render has (below); press **Render**. The viewer plays the shot through the camera you chose, with a progress bar and a **Stop** button, and closes the dialog when it is done.
+4. Run the workflow. The node reads the render back as `images`, plus `frame_count` and `fps`.
 
-A finished render also **puts itself on the ComfyUI canvas** as a loader node pointing at what was just written — the mp4, the folder of stills, or the single frame — exactly as dragging a history frame onto the graph would. With [VHS](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) installed that is a *(Path)* loader reading the file where it lies; without it, one of ComfyUI's own loaders over a copy in `input`. So the shot is ready to wire into the rest of the workflow without going to look for it, whether or not you use the previz node's own `images` output.
+#### The render dialog
 
-**MP4** is the usual choice: the frames are encoded into **`output/previz/<render_name>.mp4`** at the scene's frame rate and then deleted, so a take leaves one clip behind rather than a folder of stills. Encoding needs `imageio-ffmpeg`, the same encoder the viewer's video saving already uses. **PNG** skips the encoding and keeps the stills in **`output/previz/<render_name>/`** as `frame_0000.png` onwards — what you want for a single frame, or to take the render into another tool. A one-frame shot offers PNG first for that reason.
+| Section | Setting | What it does |
+|---|---|---|
+| Output | **Name** | The render's name: `output/previz/<name>.<format>`, or the folder `output/previz/<name>/` for stills. It is the node's **render_name** — changing it here changes it there, so the node finds the shot. |
+| | **Format** | **MP4** or **MOV** (H.264), **WebM** (VP9), or a **PNG sequence** |
+| | **Quality** | High, Medium or Low — for the video formats |
+| Camera | **Camera** | Any camera in the scene, or the free view. Starts on the camera you are looking through, else the first one. |
+| | **Resolution** | The camera's own resolution, or a width × height of your own (with presets) |
+| | **Scale** | 25 – 200 % of that size — a quick half-size preview, say. The final size is shown beside it. |
+| Frames | **Range** | First and last frame to render; **Whole shot** and **This frame** set it in one click |
+| | **Frame rate** | What the video plays at (the scene's rate unless you change it) — for the video formats |
+| Look | **Shading** | Original materials, Clay, Normals or Wireframe — for this render only |
+| | **Background** | The viewer's colour, a colour of your own, or **transparent** (PNG only — a video has no alpha) |
+| | **Anti-aliasing** | Off, 2× or 4× supersampling: the frame is drawn that much larger and scaled down, for clean edges |
+| | **Include** | The **grid** and the **camera frustums & helpers** — both left out unless you tick them. The gizmo, the pivot marker and selection outlines never are in a render. |
+| After | **Put a loader node on the graph** | See below |
+
+The summary at the bottom says what you will get — frames, size, format, length. The settings are kept on the scene, so the next render of the shot starts from them, on this machine or wherever the workflow goes. <kbd>Esc</kbd> closes the dialog; a render in progress is stopped with **Stop**, and the frames done so far stay in `output/previz/<name>/`.
+
+A finished render also **puts itself on the ComfyUI canvas** (unless you untick it) as a loader node pointing at what was just written — the mp4, the folder of stills, or the single frame — exactly as dragging a history frame onto the graph would. With [VHS](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) installed that is a *(Path)* loader reading the file where it lies; without it, one of ComfyUI's own loaders over a copy in `input`. So the shot is ready to wire into the rest of the workflow without going to look for it, whether or not you use the previz node's own `images` output.
+
+A video format is the usual choice: the frames are encoded into **`output/previz/<render_name>.mp4`** (or `.mov` / `.webm`) and then deleted, so a take leaves one clip behind rather than a folder of stills. Encoding needs `imageio-ffmpeg`, the same encoder the viewer's video saving already uses. **PNG** skips the encoding and keeps the stills in **`output/previz/<render_name>/`**, numbered by their frame in the shot (`frame_0012.png` is frame 12) — what you want for a single frame, a transparent background, or to take the render into another tool.
 
 Either way the node reads what is there, and a new take clears whatever the last one left, so the two never mix. Frames travel to the server one at a time — a canvas can only hand over one picture — so a render interrupted part-way still leaves the frames it managed, and the node reads those.
 
-The render is what the viewport draws, at the size you asked for — so it carries the same materials, grid and lighting you see. Hide the grid first if you don't want it in the render.
+The render is what the viewport draws, at the size you asked for, with the same lighting — minus the things that are there to work with (grid, helpers, gizmo), unless you ask for them.
 
 **Export → Save scene…** and **+ → Load scene…** keep a scene as a file in `output/3d_scenes`, for reuse across workflows.
 

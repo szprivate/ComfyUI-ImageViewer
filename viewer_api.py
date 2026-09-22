@@ -978,7 +978,7 @@ try:
                                       "dir": os.path.dirname(path)})
 
         async def _bepic_previz_encode(request):
-            """Encode a finished take into output/previz/<name>.mp4."""
+            """Encode a finished take into output/previz/<name>.<format>."""
             if previz is None:
                 return web.json_response({"error": "unavailable"}, status=500)
             try:
@@ -992,8 +992,14 @@ try:
                 fps = float(data.get("fps", 24.0)) or 24.0
             except (TypeError, ValueError):
                 fps = 24.0
+            fmt = str(data.get("format") or "mp4").lower()
+            if fmt not in previz.VIDEO_FORMATS:
+                return web.json_response({"error": f"unknown format: {fmt}"}, status=400)
+            quality = str(data.get("quality") or "high").lower()
+            if quality not in previz.VIDEO_QUALITY:
+                return web.json_response({"error": f"unknown quality: {quality}"}, status=400)
             try:
-                path = previz.encode_render(name, fps)
+                path = previz.encode_render(name, fps, fmt, quality)
             except ValueError as e:
                 return web.json_response({"error": str(e)}, status=400)
             except Exception as e:
