@@ -496,15 +496,18 @@ class TransformControls extends Controls {
 			if ( axis.indexOf( 'Y' ) === - 1 ) this._offset.y = 0;
 			if ( axis.indexOf( 'Z' ) === - 1 ) this._offset.z = 0;
 
+			// bEpic patch: back to world through the SAME rotation the handles are
+			// drawn with (the decomposed world matrix), then into the parent's
+			// space. Upstream used the object's own quaternion here, which differs
+			// from the drawn frame whenever a scale is negative: a mirrored object
+			// then moved against the mouse on its mirrored axes.
 			if ( space === 'local' && axis !== 'XYZ' ) {
 
-				this._offset.applyQuaternion( this._quaternionStart ).divide( this._parentScale );
-
-			} else {
-
-				this._offset.applyQuaternion( this._parentQuaternionInv ).divide( this._parentScale );
+				this._offset.applyQuaternion( this.worldQuaternionStart );
 
 			}
+
+			this._offset.applyQuaternion( this._parentQuaternionInv ).divide( this._parentScale );
 
 			object.position.copy( this._offset ).add( this._positionStart );
 
@@ -702,18 +705,25 @@ class TransformControls extends Controls {
 			if ( this.rotationSnap ) this.rotationAngle = Math.round( this.rotationAngle / this.rotationSnap ) * this.rotationSnap;
 
 			// Apply rotate
+			// bEpic patch: always turn about the axis as it is DRAWN, in world
+			// space, and carry that into the parent's space — mirror included. The
+			// angle above is measured against the drawn axis; upstream then turned
+			// about the object's own local axis, which points the other way on a
+			// mirrored object, so it turned against the mouse.
 			if ( space === 'local' && axis !== 'E' && axis !== 'XYZE' ) {
 
-				object.quaternion.copy( this._quaternionStart );
-				object.quaternion.multiply( _tempQuaternion.setFromAxisAngle( this.rotationAxis, this.rotationAngle ) ).normalize();
-
-			} else {
-
-				this.rotationAxis.applyQuaternion( this._parentQuaternionInv );
-				object.quaternion.copy( _tempQuaternion.setFromAxisAngle( this.rotationAxis, this.rotationAngle ) );
-				object.quaternion.multiply( this._quaternionStart ).normalize();
+				this.rotationAxis.applyQuaternion( this.worldQuaternionStart );
 
 			}
+
+			this.rotationAxis.applyQuaternion( this._parentQuaternionInv );
+			// A mirrored parent (a negative scale folded into _parentScale by the
+			// decomposition) reflects the axis and reverses the sense of turning.
+			const _ps = this._parentScale;
+			this.rotationAxis.set( this.rotationAxis.x * Math.sign( _ps.x || 1 ), this.rotationAxis.y * Math.sign( _ps.y || 1 ), this.rotationAxis.z * Math.sign( _ps.z || 1 ) ).normalize();
+			const _mirror = Math.sign( _ps.x || 1 ) * Math.sign( _ps.y || 1 ) * Math.sign( _ps.z || 1 );
+			object.quaternion.copy( _tempQuaternion.setFromAxisAngle( this.rotationAxis, this.rotationAngle * _mirror ) );
+			object.quaternion.multiply( this._quaternionStart ).normalize();
 
 		}
 
