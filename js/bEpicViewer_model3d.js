@@ -310,6 +310,8 @@ export class Model3DView {
         // which of them may have the drag is decided here first.
         canvas.addEventListener("pointerdown", (e) => this._onPointerDown(e), true);
         canvas.addEventListener("pointerup", (e) => this._onPointerUp(e));
+        canvas.addEventListener("pointermove", (e) => this._tumbleMove(e));
+        canvas.addEventListener("pointercancel", (e) => this._tumbleEnd(e));
         // Alt can be pressed or let go while the pointer just sits there.
         canvas.addEventListener("pointermove", (e) => {
             if (!!e.altKey !== this.root.classList.contains("navigating")) this._applyNavButtons(e.altKey);
@@ -329,6 +331,7 @@ export class Model3DView {
             this.hooks.onCameraMoved(id, this.readTransform(this.activeCameraObject(),
                                                             entry && entry.item), live);
         };
+        this._reportCamera = reportCamera;
         controls.addEventListener("change", () => {
             if (this._navigating) reportCamera(true);
             this.requestRender();
@@ -369,7 +372,9 @@ export class Model3DView {
         const { THREE } = this.libs;
         const M = THREE.MOUSE;
         if (alt) {
-            this.controls.mouseButtons = { LEFT: M.ROTATE, MIDDLE: M.PAN, RIGHT: M.DOLLY };
+            // Tumbling is done here rather than by the orbit controls, which
+            // can only turn around the point they look at (see _tumbleStart).
+            this.controls.mouseButtons = { LEFT: null, MIDDLE: M.PAN, RIGHT: M.DOLLY };
             this.controls.enabled = true;
             return;
         }
@@ -388,9 +393,119 @@ export class Model3DView {
     _onPointerDown(e) {
         this._applyNavButtons(e.altKey);
         this._downAt = { x: e.clientX, y: e.clientY, button: e.button, alt: e.altKey };
+        if (e.altKey && e.button === 0) this._tumbleStart(e);
+    }
+
+    // ── Tumbling about what is under the cursor ──────────────────────────────
+
+    /**
+     * Maya's "tumble on object": Alt+left turns the camera about the point of
+     * the object under the cursor, so whatever you pressed on stays where it
+     * is on screen while the view swings around it. Pressed on empty space, it
+     * turns about the orbit centre as before.
+     *
+     * Orbit controls can only circle the point they look at, and making them
+     * look at the object would jerk the view over to it. So the camera is
+     * turned here, rigidly about the pivot: a yaw about the world's up axis and
+     * a pitch about the camera's own right, both through the pivot — the view
+     * never rolls. The orbit centre is moved onto the view axis at the
+     * object's depth, which changes nothing on screen and means a dolly
+     * afterwards heads for the object too. Works on the free camera and on
+     * any scene camera you are looking through.
+     */
+    _tumbleStart(e) {
+        if (!this.controls || !this.libs || !this.canvas) return;
+        const { THREE } = this.libs;
+        const cam = this.activeCameraObject();
+        const hit = this._surfaceUnder(e);
+        const pos = cam.getWorldPosition(new THREE.Vector3());
+        const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.getWorldQuaternion(new THREE.Quaternion()));
+        let pivot;
+        if (hit) {
+            pivot = hit.clone();
+            // The orbit centre onto the view axis, at the hit's depth: nothing
+            // on screen moves, and the controls stay consistent.
+            const depth = Math.max(1e-3, pivot.clone().sub(pos).dot(fwd));
+            this.controls.target.copy(pos).addScaledVector(fwd, depth);
+        } else {
+            pivot = this.controls.target.clone();
+        }
+        this._tumble = { pivot, x: e.clientX, y: e.clientY, id: e.pointerId, moved: false };
+        try { this.canvas.setPointerCapture(e.pointerId); } catch (_) { /* synthetic */ }
+    }
+
+    /** The world point of visible geometry under the pointer, or null. */
+    _surfaceUnder(e) {
+        const { THREE } = this.libs;
+        const rect = this.canvas.getBoundingClientRect();
+        const ndc = new THREE.Vector2(
+            ((e.clientX - rect.left) / rect.width) * 2 - 1,
+            -((e.clientY - rect.top) / rect.height) * 2 + 1);
+        const ray = new THREE.Raycaster();
+        ray.setFromCamera(ndc, this.activeCameraObject());
+        const roots = [];
+        for (const entry of this._entries.values()) {
+            if (entry.object && entry.root.visible) roots.push(entry.root);
+        }
+        const shown = (node) => {
+            for (let n = node; n; n = n.parent) if (n.visible === false) return false;
+            return true;
+        };
+        for (const hit of ray.intersectObjects(roots, true)) {
+            if ((hit.object.isMesh || hit.object.isPoints) && shown(hit.object)) return hit.point;
+        }
+        return null;
+    }
+
+    _tumbleMove(e) {
+        const t = this._tumble;
+        if (!t || e.pointerId !== t.id || !this.libs) return;
+        const dx = e.clientX - t.x, dy = e.clientY - t.y;
+        if (!dx && !dy) return;
+        t.x = e.clientX; t.y = e.clientY;
+        const { THREE } = this.libs;
+        const cam = this.activeCameraObject();
+        const h = Math.max(1, this.canvas.clientHeight);
+        // The same rate as the orbit controls: a drag the height of the view
+        // is a full turn.
+        const yaw = -2 * Math.PI * dx / h * this.controls.rotateSpeed;
+        let pitch = -2 * Math.PI * dy / h * this.controls.rotateSpeed;
+
+        const up = new THREE.Vector3(0, 1, 0);
+        const q = cam.quaternion;
+        const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
+        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+        // Stop short of looking straight up or down, where "up" stops meaning
+        // anything and the view would flip.
+        const polar = Math.acos(Math.min(1, Math.max(-1, fwd.dot(up))));
+        const LIMIT = 0.01;
+        pitch = Math.min(Math.max(pitch, -(polar - LIMIT)), Math.PI - LIMIT - polar);
+        const turn = new THREE.Quaternion().setFromAxisAngle(up, yaw)
+            .multiply(new THREE.Quaternion().setFromAxisAngle(right, pitch));
+
+        const about = (p) => p.sub(t.pivot).applyQuaternion(turn).add(t.pivot);
+        about(cam.position);
+        cam.quaternion.premultiply(turn);
+        about(this.controls.target);
+        cam.updateMatrixWorld();
+        if (!t.moved) { t.moved = true; this._navigating = true; }
+        if (this._reportCamera) this._reportCamera(true);
+        this.requestRender();
+    }
+
+    _tumbleEnd(e) {
+        const t = this._tumble;
+        if (!t || (e && e.pointerId !== t.id)) return;
+        this._tumble = null;
+        try { this.canvas.releasePointerCapture(t.id); } catch (_) { /* gone */ }
+        if (t.moved) {
+            this._navigating = false;
+            if (this._reportCamera) this._reportCamera(false);
+        }
     }
 
     _onPointerUp(e) {
+        this._tumbleEnd(e);
         const d = this._downAt;
         this._downAt = null;
         if (!d || d.button !== 0 || d.alt || !this.scene3d) return;
