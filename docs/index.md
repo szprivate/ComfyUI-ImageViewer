@@ -2,7 +2,7 @@
 
 A professional floating image viewer for ComfyUI — multi-tab, history snapshots, side-by-side comparison, playback timeline, exposure/channel controls, and a live parameter panel.
 
-![bEpic ImageViewer main interface](screenshots/screenshot_01.png)
+![bEpic ImageViewer main interface](screenshots/viewer_main.png)
 
 ---
 

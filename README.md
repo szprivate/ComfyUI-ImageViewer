@@ -4,7 +4,7 @@ An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/C
 
 ---
 
-![image viewer](docs/screenshots/screenshot_01.png)
+![The bEpic viewer: named tabs, the history strip, the exposure bar, the file browser and the timeline](docs/screenshots/viewer_main.png)
 
 ## Core Features
 
