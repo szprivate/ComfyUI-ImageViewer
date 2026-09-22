@@ -82,8 +82,7 @@ Right-click any thumbnail to open the context menu:
 
 | Menu Item | Effect |
 |---|---|
-| Copy Image Path | Copies the absolute file path of that snapshot to the clipboard |
-| Open in Explorer | Opens the snapshot's folder in the file manager with the file selected. Reads *Open in Finder* on macOS and *Open in File Manager* on Linux, following the OS ComfyUI runs on. Hidden for files dropped in from the desktop, and when the page isn't on the ComfyUI machine. Only works for [folders the viewer can open](other.md#which-folders-the-viewer-can-open) |
+| Copy Image Path | Copies the absolute file path of that snapshot to the clipboard — paste it into a file manager, or into the [File Browser](other.md#file-browser)'s path field to go there |
 | Remove from History | Deletes that snapshot from the strip (does not delete the file on disk) |
 | Remove *n* from History | Shown instead when you right-click inside a selection — removes all of them |
 

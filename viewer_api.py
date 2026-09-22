@@ -2,7 +2,6 @@ import io
 import os
 import re
 import base64
-import subprocess
 import sys
 import traceback
 import folder_paths
@@ -286,64 +285,7 @@ try:
             try:
                 router.add_route(method, path, handler)
             except Exception as e:
-                print(f"[bEpicGetPath] route register failed {method} {path}: {e}")
-
-        async def _bepic_open_path(request):
-            data = {}
-            if request.method == "POST":
-                try:
-                    data = await request.json()
-                except Exception:
-                    data = {}
-            else:
-                data = dict(request.query)
-
-            paths_id = data.get("paths_id", "")
-            path_key = data.get("path_key", "")
-            suffix = data.get("suffix", "")
-
-            try:
-                from . import nodes
-                store = getattr(nodes, 'BEPIC_PATHS_STORE', {})
-            except Exception:
-                store = {}
-            # look up the specific paths dict for this ID; fall back to empty if missing
-            paths_to_use = store.get(paths_id, {})
-            rel = f"{paths_to_use.get(path_key, '')}{suffix}"
-
-            print(f"[bEpicGetPath] open_path called with paths_id={paths_id!r}, path_key={path_key!r}, suffix={suffix!r}")
-            print(f"[bEpicGetPath] store lookup returned: {paths_to_use!r}")
-            print(f"[bEpicGetPath] relative path computed: {rel!r}")
-            try:
-                base = folder_paths.get_output_directory()
-            except Exception:
-                try:
-                    base = folder_paths.get_temp_directory()
-                except Exception:
-                    return web.json_response({"success": False, "error": "no output folder"}, status=500)
-            full = os.path.abspath(os.path.join(base, rel))
-            print(f"[bEpicGetPath] base directory: {base!r}, full path: {full!r}")
-
-            # The suffix is typed on the node, and a "..\.." in it would otherwise
-            # create folders anywhere on the machine and open Explorer on them.
-            if not path_access.within(full, base):
-                return web.json_response(
-                    {"success": False, "error": f"{full} is outside {base}"}, status=403)
-
-            if os.path.isdir(full):
-                target_dir = full
-            else:
-                target_dir = os.path.dirname(full) or base
-            try:
-                os.makedirs(target_dir, exist_ok=True)
-            except Exception:
-                pass
-            try:
-                os.startfile(target_dir)
-            except Exception as e:
-                print(f"[bEpicGetPath] _bepic_open_path error: {e}")
-
-            return web.json_response({"success": True})
+                print(f"[bEpicViewer] route register failed {method} {path}: {e}")
 
         async def _bepic_raw_view(request):
             params = dict(request.query)
@@ -1104,73 +1046,10 @@ try:
             return web.json_response({"stages": out, "dir": folder,
                                       "available": bool(usd_io and usd_io.available())})
 
-        def _is_local(request):
-            return (request.remote or "") in ("127.0.0.1", "::1", "localhost")
-
-        async def _bepic_reveal_info(request):
-            """Which file manager "Open in …" would open, and whether it would
-            open on the machine the page is looking at at all."""
-            return web.json_response({"platform": sys.platform,
-                                      "local": _is_local(request)})
-
-        async def _bepic_reveal(request):
-            """Show a history item in the server's file manager, file selected.
-
-            Takes a path, or ComfyUI's {filename, subfolder, type}. Same reach as
-            /bepic/view_file, and only for a page on this machine: a browser
-            elsewhere would pop a window on someone else's desktop.
-            """
-            if not _is_local(request):
-                return web.json_response(
-                    {"success": False, "error": "only available on this machine"}, status=403)
-            if request.content_type != "application/json":
-                return web.json_response(
-                    {"success": False, "error": "expected JSON"}, status=415)
-            try:
-                data = await request.json()
-            except Exception:
-                data = None
-            if not isinstance(data, dict):
-                return web.json_response({"success": False, "error": "bad request"}, status=400)
-
-            path = data.get("path")
-            if not path:
-                path = _resolve_comfy_ref(data.get("filename"), data.get("type"),
-                                          data.get("subfolder"))
-            if not path or not isinstance(path, str):
-                return web.json_response(
-                    {"success": False, "error": "missing path"}, status=400)
-            path = os.path.abspath(path)
-            if not path_access.is_allowed(path):
-                return web.json_response(
-                    {"success": False, "error": path_access.refusal(path)}, status=403)
-            if not os.path.exists(path):
-                return web.json_response(
-                    {"success": False, "error": "file not found"}, status=404)
-
-            try:
-                if sys.platform == "win32":
-                    if os.path.isdir(path):
-                        os.startfile(path)
-                    else:
-                        # Windows paths can't contain '"', so the quoting holds.
-                        subprocess.Popen(f'explorer /select,"{path}"')
-                elif sys.platform == "darwin":
-                    subprocess.Popen(["open", "-R", path])
-                else:
-                    target = path if os.path.isdir(path) else os.path.dirname(path)
-                    subprocess.Popen(["xdg-open", target])
-            except Exception as e:
-                print(f"[bEpicViewer] reveal failed for {path}: {e}")
-                return web.json_response({"success": False, "error": str(e)}, status=500)
-            return web.json_response({"success": True})
-
-        # Routes that change something on the machine — open Explorer, delete
-        # cache files — are POST only. A GET can be set off by a link or an <img>
-        # on any page the user has open; a JSON POST from another origin can't
-        # get past the browser without a CORS preflight.
-        _safe_add("POST", "/bepic/open_path", _bepic_open_path)
-        _safe_add("POST", "/api/bepic/open_path", _bepic_open_path)
+        # Routes that change something on the machine — writing a render,
+        # deleting cache files — are POST only. A GET can be set off by a link
+        # or an <img> on any page the user has open; a JSON POST from another
+        # origin can't get past the browser without a CORS preflight.
         _safe_add("GET", "/bepic/lib/three/{name}", _bepic_three)
         _safe_add("GET", "/api/bepic/lib/three/{name}", _bepic_three)
         _safe_add("POST", "/bepic/model_thumb", _bepic_model_thumb)
@@ -1191,10 +1070,6 @@ try:
         _safe_add("GET", "/bepic/usd_stages", _bepic_usd_stages)
         _safe_add("GET", "/api/bepic/usd_stages", _bepic_usd_stages)
         _safe_add("POST", "/api/bepic/model_thumb", _bepic_model_thumb)
-        _safe_add("POST", "/bepic/reveal", _bepic_reveal)
-        _safe_add("POST", "/api/bepic/reveal", _bepic_reveal)
-        _safe_add("GET", "/bepic/reveal_info", _bepic_reveal_info)
-        _safe_add("GET", "/api/bepic/reveal_info", _bepic_reveal_info)
         _safe_add("GET", "/bepic/raw_view", _bepic_raw_view)
         _safe_add("GET", "/api/bepic/raw_view", _bepic_raw_view)
         _safe_add("POST", "/bepic/probe_paths", _bepic_probe_paths)
@@ -1227,7 +1102,7 @@ try:
     try:
         register_routes()
     except Exception as e:
-        print(f"[bEpicGetPath] could not register viewer routes: {e}")
+        print(f"[bEpicViewer] could not register viewer routes: {e}")
         traceback.print_exc()
 except ImportError:
     # aiohttp not available; skip route registration

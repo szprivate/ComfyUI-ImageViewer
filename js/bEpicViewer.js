@@ -3,7 +3,6 @@
 // overall codebase stays manageable while sharing one prototype chain.
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { registerBepicGetPath } from "./bEpicGetPath.js";
 
 import { LayoutMixin }   from "./bEpicViewer_mixinLayout.js";
 import { HistoryMixin }  from "./bEpicViewer_mixinHistory.js";
@@ -1275,10 +1274,6 @@ app.registerExtension({
                 this.addWidget("button", "Toggle Viewer",     null, () => { _toggleViewerPanelFromUi(); });
                 this.setSize([240, 140]);
             };
-        }
-
-        if (nodeData.name === "bEpicGetPath") {
-            registerBepicGetPath(nodeType);
         }
 
         if (nodeData.name === BEPIC_SEND_NODE) {
