@@ -35,7 +35,7 @@ import { app } from "../../scripts/app.js";
 
 const _IMG_RE = /\.(png|jpe?g|webp|gif|bmp|avif|tiff?|svg|ico)$/i;
 const _VID_RE = /\.(mp4|m4v|mov|webm|mkv|ogv|avi)$/i;
-const _MODEL_RE = /\.(glb|gltf|fbx|obj|stl|ply|usda|usdc|usdz|usd)$/i;
+const _MODEL_RE = /\.(glb|gltf|fbx|obj|stl|ply|usda|usdc|usdz|usd|abc)$/i;
 
 // How far each node of a multi-item drop is stepped from the last, so a
 // batch lands as a readable cascade instead of one unreachable pile.
@@ -91,6 +91,19 @@ export const DnDMixin = {
             if (this.isPrevizTab && this.isPrevizTab() && items.some((it) => this._frameIsModel(it))) {
                 this.previzAddModels(items.filter((it) => this._frameIsModel(it)));
                 return;
+            }
+            // ...and a picture becomes an image plane, for the same reason: on
+            // a 3D tab what you are dropping onto is the scene.
+            if (this.isPrevizTab && this.isPrevizTab() && this.previzAddImagePlane) {
+                const pictures = items.filter((it) => it && it.path
+                    && !this._frameIsModel(it) && !this._frameIsVideo(it));
+                if (pictures.length === items.length && pictures.length) {
+                    for (const pic of pictures) {
+                        this.previzAddImagePlane({ path: pic.path, name: pic.filename || pic.name
+                            || this._basename(pic.path), external: true });
+                    }
+                    return;
+                }
             }
             this._openDragItemsInViewer(items);
         });

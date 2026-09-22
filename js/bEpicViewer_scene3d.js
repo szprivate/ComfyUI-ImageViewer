@@ -209,6 +209,44 @@ export function makePrimitiveItem(type, name) {
     };
 }
 
+/**
+ * A picture standing in the scene: a card showing an image.
+ *
+ * It is a scene item like any other — moved, parented, keyed — and its
+ * geometry is a unit-height card whose width comes from the picture, so a
+ * scale of 1 means "one unit tall". Parent one to a camera and it becomes
+ * that camera's backplate; stand one behind the set and it is a matte
+ * painting; put one beside the model and it is the reference you are
+ * matching.
+ */
+export function makeImagePlaneItem(src, name) {
+    return {
+        id: newId("ip"),
+        kind: "imageplane",
+        name: name || (src && (src.name || src.filename)) || "Image plane",
+        src: src || null,
+        plane: { opacity: 1, lit: false, doubleSided: true },
+        position: [0, 0.5, 0],
+        rotation: [0, 0, 0],
+        scale: [1, 1, 1],
+        pivot: [0, 0, 0],
+        visible: true,
+        tracks: {},
+        parent: null,
+    };
+}
+
+/** An image plane's own settings, every field present and sane. */
+export function planeSettings(item) {
+    const raw = (item && item.plane && typeof item.plane === "object") ? item.plane : {};
+    const opacity = Number(raw.opacity);
+    return {
+        opacity: Number.isFinite(opacity) ? Math.min(1, Math.max(0, opacity)) : 1,
+        lit: !!raw.lit,
+        doubleSided: raw.doubleSided !== false,
+    };
+}
+
 export function makeCameraItem(name, patch = {}) {
     return {
         id: newId("c"),
@@ -625,11 +663,15 @@ export function parseScene(raw) {
         const isCam = raw.kind === "camera";
         const isPrim = raw.kind === "primitive";
         const isGroup = raw.kind === "group";
+        const isPlane = raw.kind === "imageplane";
         const item = {
-            id: typeof raw.id === "string" && raw.id ? raw.id : newId(isCam ? "c" : isPrim ? "p" : isGroup ? "g" : "m"),
-            kind: isCam ? "camera" : isPrim ? "primitive" : isGroup ? "group" : "model",
+            id: typeof raw.id === "string" && raw.id ? raw.id
+                : newId(isCam ? "c" : isPrim ? "p" : isGroup ? "g" : isPlane ? "ip" : "m"),
+            kind: isCam ? "camera" : isPrim ? "primitive" : isGroup ? "group"
+                : isPlane ? "imageplane" : "model",
             name: typeof raw.name === "string" && raw.name ? raw.name
-                : (isCam ? "Camera" : isPrim ? "Shape" : isGroup ? "Group" : "model"),
+                : (isCam ? "Camera" : isPrim ? "Shape" : isGroup ? "Group"
+                   : isPlane ? "Image plane" : "model"),
             parent: typeof raw.parent === "string" && raw.parent ? raw.parent : null,
             position: vec(raw.position, [0, 0, 0]),
             rotation: vec(raw.rotation, [0, 0, 0]),
@@ -654,6 +696,9 @@ export function parseScene(raw) {
             item.primitive = { type };
             item.color = typeof raw.color === "string" && /^#[0-9a-f]{6}$/i.test(raw.color)
                 ? raw.color : DEFAULT_COLOR;
+        } else if (isPlane) {
+            item.src = raw.src && typeof raw.src === "object" ? raw.src : null;
+            item.plane = planeSettings(raw);
         } else {
             item.src = raw.src && typeof raw.src === "object" ? raw.src : null;
         }
@@ -683,9 +728,9 @@ export function parseScene(raw) {
                 item.tracks[prop] = keys;
             }
         }
-        // A model with no file left to point at is dropped: it would show as an
-        // invisible row the user can't fix. A shape carries its own geometry, so
-        // it has nothing to lose.
+        // A model (or an image plane) with no file left to point at is
+        // dropped: it would show as an invisible row the user can't fix. A
+        // shape carries its own geometry, so it has nothing to lose.
         if (!isCam && !isPrim && !isGroup && !item.src) continue;
         items.push(item);
     }

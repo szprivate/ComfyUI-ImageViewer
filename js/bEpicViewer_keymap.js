@@ -187,6 +187,8 @@ const ACTION_DEFS = [
       enabled: _previz, run: (p) => p.previzAddFromBrowser() },
     { key: "PrevizAddCamera", label: "Previz: Add Camera",
       enabled: _previz, run: (p) => p.previzAddCamera() },
+    { key: "PrevizAddImagePlane", label: "Previz: Add Image Plane…",
+      enabled: _previz, run: (p) => p.previzAddImagePlane() },
     { key: "PrevizAddGroup",  label: "Previz: Add Group",
       enabled: _previz, run: (p) => p.previzAddGroup() },
     ...PRIMITIVES.map((spec) => ({

@@ -38,6 +38,9 @@ export const PlaybackMixin = {
             // One prim of a USD stage: the server flattens just that subtree,
             // which is how a layout stage arrives as separate movable items.
             if (imgObj.prim) url += `&prim=${encodeURIComponent(imgObj.prim)}`;
+            // An Alembic cache is geometry per frame: which one is part of the
+            // request, and the server keeps one proxy per frame it is asked for.
+            if (Number.isFinite(Number(imgObj.frame))) url += `&frame=${Math.max(0, Math.round(imgObj.frame))}`;
             return api.apiURL(url);
         }
         let params = `?filename=${encodeURIComponent(imgObj.filename || '')}`;

@@ -64,7 +64,7 @@ These answer only while a [previz](models-3d.md#previz-building-a-scene) tab is 
 
 Every other thing the 3D viewer does is a command as well, listed in **Settings → Keybinding** under *bEpic Viewer: Previz …* and *bEpic Viewer: 3D View …*, with no key until you give it one:
 
-- **Scene:** New Scene, Add Model…, Add Camera, Add Group, Add Box / Sphere / Plane / Cylinder / Cone / Torus, Import USD…, Load Scene…, Save Scene…, Export USD…, Render…
+- **Scene:** New Scene, Add Model…, Add Camera, Add Image Plane…, Add Group, Add Box / Sphere / Plane / Cylinder / Cone / Torus, Import USD…, Load Scene…, Save Scene…, Export USD…, Render…
 - **Selection:** Show / Hide Selected, Centre Pivot, Freeze Transformations, Look Through Camera / Back To Free View
 - **Keying:** Key Selected, Delete Key At Playhead, Toggle Autokey, Keys Ease Smooth / Linear / Hold
 - **View:** Original Materials, Clay, Normals, Wireframe, Cycle Material Mode, Show / Hide Grid, Show / Hide Outliner, Show / Hide Channel Box, Show / Hide Animation Curves

@@ -47,9 +47,10 @@ An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/C
 
 *The chess set is the [Open Chess Set](https://github.com/usd-wg/assets/tree/main/full_assets/OpenChessSet), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) by the Academy Software Foundation — imported here straight from its USD stage.*
 
-- view **GLB, glTF, FBX, OBJ, STL, PLY** and **USD** files, and save meshes the way ComfyUI's Save 3D Model does
+- view **GLB, glTF, FBX, OBJ, STL, PLY**, **USD** and **Alembic** (`.abc`) files, and save meshes the way ComfyUI's Save 3D Model does — an Alembic cache is read frame by frame, so a deforming cache plays in the viewer
 - every 3D tab is a **previz scene**: models, primitive shapes, groups and cameras, laid out in a Maya-style **Outliner** (drag to reorder and reparent — items keep their place in the world — double-click to rename) and edited in a **Channel Box**
 - move, rotate and scale with a gizmo, around a pivot you can move; **Freeze Transformations**; tumble around the object under the cursor, Maya-style (<kbd>Alt</kbd> + mouse)
+- stand **image planes** in the scene — a plate to match, a reference, a camera backplate that travels with the shot
 - keyframe everything on the viewer's timeline and shape the motion in a **curve editor** with tangents
 - cameras have a **resolution** and show a **resolution gate** when you look through them
 - **render the shot** back into the workflow from a render dialog — any camera, frame range and size, MP4 / MOV / WebM / PNG, shading, transparent backgrounds, supersampled anti-aliasing — and it lands on the graph as a loader node

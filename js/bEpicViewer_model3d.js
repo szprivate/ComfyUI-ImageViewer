@@ -16,7 +16,7 @@
 // runs while the camera is settling or an animation plays.
 import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
-import { evaluate, cameraResolution, offsetOf } from "./bEpicViewer_scene3d.js";
+import { evaluate, cameraResolution, offsetOf, planeSettings } from "./bEpicViewer_scene3d.js";
 
 let _libsPromise = null;
 
@@ -43,8 +43,8 @@ function loadLibs() {
 }
 
 export const MODEL_FORMATS = ["glb", "gltf", "fbx", "obj", "stl", "ply",
-                               "usd", "usda", "usdc", "usdz"];
-const _MODEL_RE = /\.(glb|gltf|fbx|obj|stl|ply|usda|usdc|usdz|usd)$/i;
+                               "usd", "usda", "usdc", "usdz", "abc"];
+const _MODEL_RE = /\.(glb|gltf|fbx|obj|stl|ply|usda|usdc|usdz|usd|abc)$/i;
 
 /** The 3D format of a viewer frame, or "" when it isn't a model. */
 export function modelFormatOf(frame) {
@@ -700,7 +700,8 @@ export class Model3DView {
         // A USD stage is composed on the server — layers, references, payloads
         // and all — and handed over as a GLB. three.js has no USD crate reader
         // (its USDCParser is a stub), so this is the only honest way to show one.
-        if (format.startsWith("usd")) format = "glb";
+        // Both arrive as a GLB the server flattened for us.
+        if (format.startsWith("usd") || format === "abc") format = "glb";
         const res = await fetch(url);
         if (!res.ok) throw new Error(`the server answered ${res.status}`);
 
@@ -843,7 +844,10 @@ export class Model3DView {
 
     setMaterialMode(mode) {
         this.materialMode = MATERIAL_MODES.some(([v]) => v === mode) ? mode : "original";
+        // An image plane keeps its picture: clay or normals would show
+        // something that is not the picture, which is the whole point of it.
         for (const [mesh, original] of this._originals) {
+            if (mesh.name === "imageplane") continue;
             mesh.material = this.materialMode === "original"
                 ? original : this.materials[this.materialMode];
         }
@@ -1066,6 +1070,11 @@ export class Model3DView {
             return entry;
         }
 
+        if (item.kind === "imageplane") {
+            await this._buildImagePlane(entry, item);
+            return entry;
+        }
+
         if (item.kind === "camera") {
             entry.camera = root;
             // Every camera but the one being looked through is drawn as its own
@@ -1079,9 +1088,131 @@ export class Model3DView {
         return entry;
     }
 
-    async _loadEntry(entry, item) {
+    /**
+     * An image plane: a card showing a picture.
+     *
+     * One unit tall and as wide as the picture is — the shape of the image is
+     * the card's, so scaling the item keeps it. The picture is drawn as it is
+     * (no tone mapping, no lighting) unless the item asks to be lit, which is
+     * what makes it usable as a backplate behind a lit set.
+     */
+    async _buildImagePlane(entry, item) {
+        const { THREE } = this.libs;
         const url = this.hooks.srcUrl && this.hooks.srcUrl(item.src);
         entry.key = this._srcKey(item.src);
+        const opts = planeSettings(item);
+        const geometry = new THREE.PlaneGeometry(1, 1);
+        const material = new THREE.MeshBasicMaterial({
+            color: 0xffffff, transparent: true, opacity: opts.opacity,
+            side: opts.doubleSided ? THREE.DoubleSide : THREE.FrontSide,
+            toneMapped: !!opts.lit, depthWrite: opts.opacity >= 1,
+        });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.userData.bepicItemId = item.id;
+        mesh.name = "imageplane";
+        this._bodyOf(entry).add(mesh);
+        entry.object = mesh;
+        entry.plane = mesh;
+        entry.stats = { meshes: 1, vertices: 4, triangles: 2 };
+        if (!url) {
+            entry.error = "this image plane has no picture to show";
+            return entry;
+        }
+        try {
+            const texture = await this._loadTexture(url);
+            if (!this._entries.has(item.id)) { texture.dispose(); return entry; }
+            texture.colorSpace = THREE.SRGBColorSpace;
+            material.map = texture;
+            material.needsUpdate = true;
+            const w = texture.image && (texture.image.width || texture.image.videoWidth) || 1;
+            const h = texture.image && (texture.image.height || texture.image.videoHeight) || 1;
+            // The card takes the picture's shape: a unit tall, as wide as it is.
+            mesh.scale.set(w / h, 1, 1);
+            entry.error = "";
+        } catch (e) {
+            entry.error = (e && e.message) || "that picture could not be loaded";
+        }
+        this.requestRender();
+        return entry;
+    }
+
+    _loadTexture(url) {
+        const { THREE } = this.libs;
+        return new Promise((resolve, reject) => {
+            new THREE.TextureLoader().load(
+                url, resolve, undefined,
+                () => reject(new Error("that picture could not be loaded")));
+        });
+    }
+
+    /** Re-read an image plane's own settings (opacity, lighting, sides). */
+    syncImagePlane(item) {
+        const entry = this._entries.get(item.id);
+        const mesh = entry && entry.plane;
+        if (!mesh) return;
+        const { THREE } = this.libs;
+        const opts = planeSettings(item);
+        mesh.material.opacity = opts.opacity;
+        mesh.material.transparent = true;
+        mesh.material.depthWrite = opts.opacity >= 1;
+        mesh.material.side = opts.doubleSided ? THREE.DoubleSide : THREE.FrontSide;
+        mesh.material.toneMapped = !!opts.lit;
+        mesh.material.needsUpdate = true;
+        this.requestRender();
+    }
+
+    /** True for an item whose geometry is a cache: one shape per frame. */
+    _isCache(item) {
+        const src = (item && item.src) || null;
+        if (!src) return false;
+        return String(src.format || "").toLowerCase() === "abc"
+            || /\.abc$/i.test(String(src.path || src.name || ""));
+    }
+
+    /**
+     * The URL an item's geometry comes from. A cache names the frame it is
+     * wanted at; everything else is the same file whatever the playhead says.
+     */
+    _srcUrlFor(item) {
+        if (!this.hooks.srcUrl || !item.src) return null;
+        if (!this._isCache(item)) return this.hooks.srcUrl(item.src);
+        const frame = Math.max(0, Math.round(this.sceneFrame || 0));
+        return this.hooks.srcUrl({ ...item.src, frame });
+    }
+
+    /**
+     * Re-read a cache's geometry for the frame now showing.
+     *
+     * Coalesced, because scrubbing walks a lot of frames and each one is a
+     * request and a parse; the server keeps the frames it has already built,
+     * so a second pass over the same range is quick.
+     */
+    _queueCacheReload(entry, item) {
+        const frames = this._cacheReload || (this._cacheReload = new Map());
+        frames.set(item.id, item);
+        if (this._cacheTimer) this.win.clearTimeout(this._cacheTimer);
+        this._cacheTimer = this.win.setTimeout(async () => {
+            this._cacheTimer = null;
+            const wanted = [...frames.values()];
+            frames.clear();
+            for (const one of wanted) {
+                const e = this._entries.get(one.id);
+                if (!e || e.cacheFrame === Math.round(this.sceneFrame || 0)) continue;
+                if (e.object) {
+                    this._bodyOf(e).remove(e.object);
+                    this._disposeObject(e.object);
+                    e.object = null;
+                }
+                await this._loadEntry(e, one);
+            }
+            this.applyFrame(this.sceneFrame);
+        }, 140);
+    }
+
+    async _loadEntry(entry, item) {
+        const url = this._srcUrlFor(item);
+        entry.key = this._srcKey(item.src);
+        entry.cacheFrame = this._isCache(item) ? Math.max(0, Math.round(this.sceneFrame || 0)) : null;
         if (!url) return entry;
         const format = modelFormatOf(item.src) || "glb";
         try {
@@ -1192,6 +1323,10 @@ export class Model3DView {
             // Clips are scrubbed, not played, so a frame always looks the same
             // whether it was reached by playing or by dragging the timeline.
             if (entry.mixer) entry.mixer.setTime(Math.max(0, frame / fps));
+            // A cache holds a different shape per frame, so it is re-read.
+            if (this._isCache(item) && entry.cacheFrame !== Math.round(frame)) {
+                this._queueCacheReload(entry, item);
+            }
         }
         // The gizmo is a controller, not an object; its handles live in the
         // helper, which has to be told the item moved under it.

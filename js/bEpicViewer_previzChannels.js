@@ -222,6 +222,34 @@ export const PrevizChannelsMixin = {
             row.append(tag, sel);
             t.append(row);
             ui.rows.set("preset", { row, input: sel, kind: "preset" });
+        } else if (item.kind === "imageplane") {
+            const t = shape(`${item.name}Shape`);
+            const row = doc.createElement("div");
+            row.className = "cb-row";
+            row.append(Object.assign(doc.createElement("span"), { className: "cb-label", textContent: "Opacity" }));
+            const op = doc.createElement("input");
+            op.className = "cb-val";
+            op.type = "number"; op.min = "0"; op.max = "1"; op.step = "0.05";
+            op.addEventListener("keydown", (e) => e.stopPropagation());
+            op.onchange = () => this.previzSetPlane(null, { opacity: Number(op.value) });
+            row.append(op);
+            t.append(row);
+            ui.rows.set("opacity", { row, input: op, kind: "plane", field: "opacity" });
+
+            for (const [field, label] of [["lit", "Lit"], ["doubleSided", "Double-sided"]]) {
+                const r2 = doc.createElement("div");
+                r2.className = "cb-row";
+                r2.append(Object.assign(doc.createElement("span"), { className: "cb-label", textContent: label }));
+                const sel = doc.createElement("select");
+                sel.className = "cb-val cb-sel";
+                for (const v of ["on", "off"]) {
+                    sel.append(Object.assign(doc.createElement("option"), { value: v, textContent: v }));
+                }
+                sel.onchange = () => this.previzSetPlane(null, { [field]: sel.value === "on" });
+                r2.append(sel);
+                t.append(r2);
+                ui.rows.set(field, { row: r2, input: sel, kind: "plane", field });
+            }
         } else if (item.kind === "primitive") {
             const t = shape(`${item.name}Shape`);
             const row = doc.createElement("div");
@@ -272,6 +300,12 @@ export const PrevizChannelsMixin = {
                 if (focused !== r.input) r.input.value = match ? `${w}x${h}` : "";
             } else if (r.kind === "color") {
                 if (focused !== r.input) r.input.value = item.color || S.DEFAULT_COLOR;
+            } else if (r.kind === "plane") {
+                const opts = S.planeSettings(item);
+                if (focused !== r.input) {
+                    r.input.value = r.field === "opacity" ? String(opts.opacity)
+                        : (opts[r.field] ? "on" : "off");
+                }
             }
         }
     },

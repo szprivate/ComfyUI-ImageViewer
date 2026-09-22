@@ -1195,6 +1195,7 @@ export const PrevizMixin = {
         const entries = [
             { label: "Model\u2026", run: () => this.previzAddFromBrowser() },
             { label: "Camera", run: () => this.previzAddCamera() },
+            { label: "Image plane\u2026", run: () => this.previzAddImagePlane() },
             { label: "Group", run: () => this.previzAddGroup() },
             "-",
         ];
@@ -1202,7 +1203,7 @@ export const PrevizMixin = {
             entries.push({ label: spec.label, run: () => this.previzAddPrimitive(spec.type) });
         }
         entries.push("-");
-        entries.push({ label: "Import USD\u2026", run: () => this.previzImportUsd() });
+        entries.push({ label: "Import USD / Alembic\u2026", run: () => this.previzImportUsd() });
         entries.push({ label: "Load scene\u2026", run: () => this.previzLoadSceneFile() });
         const a = anchor.getBoundingClientRect();
         this._previzOpenMenu(entries, a.left, a.bottom + 2, anchor);
@@ -1416,7 +1417,10 @@ export const PrevizMixin = {
 
         const name = doc.createElement("span");
         name.className = "previz-name";
-        const mark = item.kind === "camera" ? "\ud83c\udfa5" : item.kind === "group" ? "\ud83d\udcc1" : "\ud83e\uddca";
+        const mark = item.kind === "camera" ? "\ud83c\udfa5"
+            : item.kind === "group" ? "\ud83d\udcc1"
+            : item.kind === "imageplane" ? "\ud83d\uddbc"
+            : "\ud83e\uddca";
         name.textContent = `${mark} ${item.name}`;
         name.title = item.kind === "model" && item.src ? (item.src.path || item.src.filename || "") : item.name;
 
@@ -1809,7 +1813,7 @@ export const PrevizMixin = {
             listed = (data.stages || []).map((s) => s.name);
         } catch (e) { /* offline: the prompt still takes a path */ }
         const pick = win.prompt(
-            "Import a USD stage — a full path, or a name from output/3d_scenes." +
+            "Import a USD stage or an Alembic cache — a full path, or a name from output/3d_scenes." +
             (listed.length ? `\n\n${listed.join("\n")}` : ""),
             listed[0] || "");
         if (!pick) return;
@@ -1846,6 +1850,77 @@ export const PrevizMixin = {
     },
 
     /** + Model: take the file browser's selection, or open it to make one. */
+    /**
+     * An image plane from the picture in hand: the file browser's selection,
+     * else the frame on screen in another tab.
+     *
+     * It lands facing the view, a unit tall, at the point the view is looking
+     * at — the same place a new shape lands, so it is in front of you rather
+     * than at the origin behind the set.
+     */
+    previzAddImagePlane(src = null) {
+        const scene = this.previzScene();
+        if (!scene) return null;
+        const picked = src ? [src] : this._previzPictures();
+        if (!picked.length) {
+            if (this.setPanelDocked) this.setPanelDocked("browser", true);
+            const view = this._modelView();
+            view._setStatus("Pick an image in the File Browser, then choose Image plane again — "
+                            + "or drag one into the view.");
+            const win = this._viewerWindow();
+            win.setTimeout(() => view._setStatus(""), 6000);
+            return null;
+        }
+        this.previzSnapshot(picked.length > 1 ? `add ${picked.length} image planes` : "add image plane");
+        let last = null;
+        for (const one of picked) {
+            const item = S.makeImagePlaneItem(one, S.uniqueName(scene, one.name || "Image plane"));
+            const view = this._modelView();
+            const at = view && view.viewFocus && view.viewFocus();
+            if (at) item.position = [at[0], item.position[1] + at[1], at[2]];
+            scene.items.push(item);
+            last = item;
+        }
+        if (last) this._previzSelection = last.id;
+        this.previzChanged({ reload: true });
+        return last;
+    },
+
+    /** Pictures to make a plane from: the browser's selection, else the frame
+     *  on screen in the tab you came from. */
+    _previzPictures() {
+        const picked = this._selectedBrowserFiles ? (this._selectedBrowserFiles() || []) : [];
+        const images = picked.filter((f) => f && f.kind === "image");
+        if (images.length) {
+            return images.map((f) => ({ path: f.path, name: f.name, external: true }));
+        }
+        // Whatever another tab is showing: the plate you are matching to.
+        for (const key of this.tabOrder || []) {
+            if (key === this.activeTab || this.isPrevizTab(key)) continue;
+            const frames = this.allTabs[key] || [];
+            const frame = frames[Math.min(frames.length - 1, Math.max(0, Math.round(this.currentFrame || 0)))];
+            const src = frame && this._srcOfFrame ? this._srcOfFrame(frame) : null;
+            if (src && !this._frameIsModel(frame) && !this._frameIsVideo(frame)) return [src];
+        }
+        return [];
+    },
+
+    /** An image plane's own settings — opacity, lighting, which sides show. */
+    previzSetPlane(id, patch) {
+        const scene = this.previzScene();
+        const ids = this._previzIdList(id);
+        const planes = ids.map((one) => S.itemById(scene, one))
+            .filter((it) => it && it.kind === "imageplane");
+        if (!planes.length) return;
+        this.previzSnapshot("image plane");
+        const view = this._modelView();
+        for (const item of planes) {
+            item.plane = S.planeSettings({ plane: { ...S.planeSettings(item), ...patch } });
+            if (view && view.syncImagePlane) view.syncImagePlane(item);
+        }
+        this.previzChanged();
+    },
+
     previzAddFromBrowser() {
         const picked = this._selectedBrowserFiles ? (this._selectedBrowserFiles() || []) : [];
         const models = picked.filter((f) => f && f.kind === "model");

@@ -6,7 +6,7 @@
 
 The viewer shows 3D models in a tab of their own, the way ComfyUI's **Save 3D Model** / **Load 3D** nodes do: same lighting, grid, camera and material modes, and it follows ComfyUI's *Load 3D* settings for background colour, grid and light intensity.
 
-Supported formats: **GLB**, **glTF**, **FBX**, **OBJ**, **STL**, **PLY** (meshes and point clouds) and **USD** (`.usd`, `.usda`, `.usdc`, `.usdz` — see [USD](#usd)).
+Supported formats: **GLB**, **glTF**, **FBX**, **OBJ**, **STL**, **PLY** (meshes and point clouds), **USD** (`.usd`, `.usda`, `.usdc`, `.usdz` — see [USD](#usd)) and **Alembic** (`.abc` — see [Alembic caches](#alembic-caches)).
 
 ## Getting a Model into the Viewer
 
@@ -69,7 +69,7 @@ That is what the three icons in the 3D toolbar are for, and they are the only wa
 |---|---|
 | **New** | Empties the scene and starts again. It is one undo step like any other, so there is nothing to confirm. |
 | **Edit** | **Centre Pivot**, **Move Pivot** (ticked while it is on — the same as <kbd>Insert</kbd>) and **Freeze Transformations** — see [The Pivot](#the-pivot) and [Freezing](#freezing-transformations). |
-| **+** | One menu for everything a scene can gain. **Model…** adds the model selected in the [File Browser](other.md#file-browser) — you can also drag models straight into the 3D view, from the browser, the history strip or your desktop. **Camera** adds a camera where the view is right now. **Group** adds an empty one to hang things under. Then a box, sphere, plane, cylinder, cone or torus — no file needed, for blocking a scene out; it lands where the view is looking. Last, the two ways a whole scene arrives: **Import USD…** and **Load scene…**. |
+| **+** | One menu for everything a scene can gain. **Model…** adds the model selected in the [File Browser](other.md#file-browser) — you can also drag models straight into the 3D view, from the browser, the history strip or your desktop. **Camera** adds a camera where the view is right now. **Image plane…** stands a picture in the scene (see [Image Planes](#image-planes)). **Group** adds an empty one to hang things under. Then a box, sphere, plane, cylinder, cone or torus — no file needed, for blocking a scene out; it lands where the view is looking. Last, the two ways a whole scene arrives: **Import USD…** and **Load scene…**. |
 | **Export** | The other direction: **Save scene…** writes the scene as a file, **Export USD…** as a stage, and **Render…** opens the [render dialog](#the-render-dialog), which turns the shot into a video (MP4, MOV, WebM) or a PNG sequence. |
 | **Right-click an item** | **Rename**, **Group**, **Duplicate** or **Delete**. A row inside the current selection acts on all of it — the menu says how many — and a row outside it selects itself first. A group takes what is inside it either way. |
 | **↩ / ↪** | Undo and redo the last previz edit — see [Undoing](#undoing). Their tooltips name what they would take back. |
@@ -77,7 +77,7 @@ That is what the three icons in the 3D toolbar are for, and they are the only wa
 
 #### The Channel Box
 
-The selected item's name on top, then one row per channel — **Translate X/Y/Z**, **Rotate X/Y/Z** (degrees), **Scale X/Y/Z**, **Pivot X/Y/Z**, **Visibility** — and, under **SHAPES**, what belongs to the item itself: a camera's **Field Of View** and **Resolution**, a shape's **Colour**.
+The selected item's name on top, then one row per channel — **Translate X/Y/Z**, **Rotate X/Y/Z** (degrees), **Scale X/Y/Z**, **Pivot X/Y/Z**, **Visibility** — and, under **SHAPES**, what belongs to the item itself: a camera's **Field Of View** and **Resolution**, a shape's **Colour**, an image plane's **Opacity**, **Lit** and **Double-sided**.
 
 <img src="../screenshots/previz_outliner_channelbox.png" alt="The Outliner above the Channel Box, with the selected item's keyed channels tinted red" width="245">
 
@@ -282,6 +282,38 @@ Either way the node reads what is there, and a new take clears whatever the last
 The render is what the viewport draws, at the size you asked for, with the same lighting — minus the things that are there to work with (grid, helpers, gizmo), unless you ask for them.
 
 **Export → Save scene…** and **+ → Load scene…** keep a scene as a file in `output/3d_scenes`, for reuse across workflows.
+
+### Image Planes
+
+**+ → Image plane…** stands a picture in the scene: the plate you are matching, a reference, a matte painting, a camera's backplate.
+
+| To | Do |
+|---|---|
+| Make one | Select an image in the [File Browser](other.md#file-browser) and pick **+ → Image plane…** — or drag a picture from the browser or the history strip straight into the 3D view. With nothing selected it takes the frame another tab is showing. |
+| Make it a backplate | Drag its row onto a camera's in the outliner. It then travels with that camera, so the shot always has it behind. |
+| Size it | It arrives **one unit tall and as wide as the picture**, so its shape is the picture's. Scale it like anything else; a plane at scale 1 next to a 1-unit box is the same height as the box. |
+| Fade it | **Opacity** in the Channel Box — a half-faded reference is easier to match to than a solid one. |
+| Light it | **Lit**: off by default, so the picture is shown as it is rather than dimmed by the scene's lamps. On, it takes the light like any other surface. |
+| Show its back | **Double-sided**, on by default, so it doesn't vanish when you swing the camera past it. |
+
+It is an item like any other: it moves, rotates, parents, keys and renders — a plane parented to a moving camera is a backplate that stays put in frame, and a keyed one is a card that animates. In a render it is drawn as it appears in the viewport.
+
+The picture is read at the path the plane was made from, so a plane made from a file on disk survives reloads; one made from a frame another tab was showing points at that file too.
+
+### Alembic caches
+
+`.abc` files open like any other model — in the [File Browser](other.md#file-browser), dragged in, or through **+ → Import USD / Alembic…**, which brings the whole cache in as a scene: one item per mesh, the transforms above them as [groups](#groups), and a transform that animates as keyframes.
+
+A cache holds **a different shape per frame**, so the viewer reads the frame the playhead is on: scrub, and the geometry is re-read for that frame (the server keeps each frame it has built, so a second pass over the same range is quick). That is how a deforming cache — a character, a cloth sim, a crowd — plays in the viewer.
+
+Alembic has no Python bindings to install and `usd-core` ships without its Alembic plugin, so the viewer **reads the format itself**. What it takes is the geometry: polygon meshes (points, face counts, face indices) and the transforms above them.
+
+| Read | Left alone |
+|---|---|
+| Polygon meshes and subdivision meshes, at any sample | UVs, normals, and per-face or per-point colours |
+| The transform above each mesh, animated or not | Materials and shaders |
+| The cache's frame rate and sample count | Curves, points, cameras and lights |
+| Ogawa `.abc` files (everything written since 2013) | HDF5 `.abc` files, which say so rather than failing quietly |
 
 ### Where a Scene Lives
 

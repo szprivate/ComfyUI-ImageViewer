@@ -24,10 +24,11 @@ bEpic ImageViewer is a custom node extension for [ComfyUI](https://github.com/co
 | **Send from Any Node** | Right-click a VHS / native / AYON loader → *Send to Image Viewer*, or any image-producing node to run just its branch. |
 | **Frame to Graph** | Shift-drag the timeline onto the graph for a Load Image node holding the frame on screen — a video frame is extracted to a PNG beside the clip, or to `output/extracted_frames` for clips outside ComfyUI's folders. |
 | **Dockable Panels** | Drag any panel by its title bar to either side of the picture, or stack it above another. Splitters between them, arrangement remembered. |
-| **3D Models** | View GLB, glTF, FBX, OBJ, STL and PLY like ComfyUI's Save 3D Model does, and save meshes and 3D files from the send node. |
+| **3D Models** | View GLB, glTF, FBX, OBJ, STL, PLY and Alembic (`.abc`) caches like ComfyUI's Save 3D Model does, and save meshes and 3D files from the send node. |
 | **3D Previz** | Build a scene from models and primitive shapes in a Maya-style **Outliner** (groups, drag to reorder and reparent, rename) and **Channel Box**; move, rotate and scale with a gizmo, pivots included; tumble about what is under the cursor; keyframe on a curve editor with tangents; cameras with a **resolution gate**; **Freeze Transformations**; and render the shot back into the workflow from a **render dialog** — MP4, MOV, WebM or PNG, any camera, any range, anti-aliased. |
 | **Hotkeys for Everything** | Every viewer and 3D function is a ComfyUI command you can bind in Settings → Keybinding. |
 | **History & Assets** | What *Send To Image Viewer* writes is reported to ComfyUI like a save node's output — it shows up in the queue history, the Assets panel, and to any tool reading them. |
+| **Image Planes** | Stand a picture in a scene — the plate you are matching, a reference, or a backplate parented to a camera. |
 | **USD Stages** | Open `.usd` / `.usdz` assets, and export or import whole previz shots as USD — payloaded assets, baked animation, cameras. |
 | **Undock / Multi-Monitor** | Pop the viewer into its own browser window for a second screen. |
 

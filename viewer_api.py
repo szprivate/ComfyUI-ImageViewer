@@ -26,12 +26,17 @@ except Exception:  # pragma: no cover
     previz = None
 
 try:
+    from . import abc_io
+except Exception:  # pragma: no cover
+    abc_io = None
+
+try:
     from . import usd_io
 except Exception:  # pragma: no cover
     usd_io = None
 
 _MODEL_EXTS = {".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply",
-               ".usd", ".usda", ".usdc", ".usdz"}
+               ".usd", ".usda", ".usdc", ".usdz", ".abc"}
 
 # three.js and its loaders, for the viewer's 3D tabs. Outside js/ so ComfyUI
 # doesn't import them at startup; served by /bepic/lib/three/<name> instead.
@@ -85,24 +90,36 @@ def _decode_image_upload(dataurl, force_png=False):
     return buf.getvalue(), ("png" if fmt == "PNG" else "jpg")
 
 
-def _usd_display_path(path, prim=None):
-    """The GLB standing in for a USD file, or the path itself when it isn't one.
+def _usd_display_path(path, prim=None, frame=0):
+    """The GLB standing in for a USD stage or an Alembic cache — or the path
+    itself, when it is neither.
 
-    The viewport speaks glTF; a stage is flattened once and cached. Failing to
-    build it is reported to the log and the original path is returned, so the
-    client gets a plain "can't read this" rather than a broken response.
+    The viewport speaks glTF; a stage or a cache is flattened once and reused.
+    An Alembic cache is flattened at one sample, so `frame` picks which: a
+    cache is geometry per frame, not a rig the viewport could play by itself.
+    Failing to build it is reported to the log and the original path is
+    returned, so the client gets a plain "can't read this" rather than a
+    broken response.
     """
-    if usd_io is None or not usd_io.is_usd(path):
-        return path
     try:
-        proxy = usd_io.display_proxy(path, prim)
-        return proxy or path
+        if abc_io is not None and abc_io.is_abc(path):
+            return abc_io.display_proxy(path, sample=frame, obj_path=prim) or path
+        if usd_io is not None and usd_io.is_usd(path):
+            return usd_io.display_proxy(path, prim) or path
     except Exception as e:
         print(f"[bEpicViewer] could not build a preview of {os.path.basename(path)}: {e}")
-        return path
+    return path
 
 
-def _file_response(path, prim=None):
+def _frame_arg(request):
+    """The `frame` query, for a format that holds one picture per frame."""
+    try:
+        return max(0, int(request.query.get("frame") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _file_response(path, prim=None, frame=0):
     """Serve an image/video file, swapping in a browser-renderable PNG proxy for
     formats an <img> can't decode (exr / tiff / dpx / ...).
 
@@ -112,7 +129,7 @@ def _file_response(path, prim=None):
     re-download. That is what lets the viewer drop the per-request cache-buster
     it used to append, which was defeating its own frame-caching.
     """
-    path = _usd_display_path(path, prim)
+    path = _usd_display_path(path, prim, frame)
     if media_resolve is not None:
         try:
             proxy = media_resolve.proxy_for_display(path)
@@ -567,9 +584,10 @@ try:
                 return web.Response(status=403, text=path_access.refusal(path))
             if not os.path.isfile(path):
                 return web.Response(status=404, text="file not found")
-            # `prim` narrows a USD stage to one subtree — how a layout stage
-            # arrives as separate items the viewer can place.
-            return _file_response(path, params.get("prim"))
+            # `prim` narrows a USD stage (or an Alembic cache) to one subtree —
+            # how a layout arrives as separate items the viewer can place; a
+            # cache also takes `frame`, since it holds geometry per frame.
+            return _file_response(path, params.get("prim"), _frame_arg(request))
 
         async def _bepic_thumb(request):
             """Serve a small cached stand-in for an image, for the thumbnail strips.
@@ -1039,7 +1057,20 @@ try:
                                       "name": os.path.basename(written)})
 
         async def _bepic_usd_import(request):
-            """Read a USD stage into a previz scene."""
+            """Read a USD stage — or an Alembic cache — into a previz scene."""
+            raw_path = request.query.get("path") or ""
+            if abc_io is not None and abc_io.is_abc(raw_path):
+                target = os.path.abspath(raw_path)
+                if not path_access.is_allowed(target):
+                    return web.json_response({"error": path_access.refusal(target)}, status=403)
+                if not os.path.isfile(target):
+                    return web.json_response({"error": "no such file"}, status=404)
+                try:
+                    scene = abc_io.import_scene(target)
+                except Exception as e:
+                    return web.json_response({"error": str(e)}, status=400)
+                return web.json_response({"ok": True, "scene": scene,
+                                          "name": os.path.basename(target)})
             if usd_io is None or not usd_io.available():
                 return web.json_response({"error": "this install has no USD (pip install usd-core)"},
                                          status=501)
