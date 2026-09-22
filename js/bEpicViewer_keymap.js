@@ -4,6 +4,7 @@
 // Settings → Keybinding and can be changed there), the viewer's own key handler,
 // and the in-viewer help overlay — so a rebind shows up in all three at once.
 import { app } from "../../scripts/app.js";
+import { PRIMITIVES } from "./bEpicViewer_scene3d.js";
 
 export const VIEWER_CMD_PREFIX = "bEpic.Viewer.";
 
@@ -75,6 +76,11 @@ const _previz = (p) => !!(p && p.isPrevizTab && p.isPrevizTab());
 // aside there — and the exposure slider hides with them (see the CSS).
 const _picture = (p) => !(p && p._modelMode);
 
+// A previz tab with something selected: what acts on the selection needs one,
+// and without it the keystroke is left for whatever else wants it.
+const _sel = (p) => _previz(p) && p.previzSelectedIds().length > 0;
+const _hasItems = (p) => _previz(p) && !!(p.previzScene() && p.previzScene().items.length);
+
 const ACTION_DEFS = [
     { key: "StepBack",     label: "Step Back One Frame",     combo: { key: "ArrowLeft"  },
       run: (p) => p.step(-1) },
@@ -128,6 +134,91 @@ const ACTION_DEFS = [
       enabled: (p) => _previz(p) && p.previzCanRedo(), run: (p) => p.previzRedo() },
     { key: "PrevizRedoY", label: "Previz: Redo (Ctrl+Y)", combo: { key: "y", ctrl: true },
       enabled: (p) => _previz(p) && p.previzCanRedo(), run: (p) => p.previzRedo() },
+
+    // ── Everything else the 3D viewer can do ─────────────────────────────────
+    // Each of these is a ComfyUI command, so any of them can be given a key in
+    // Settings → Keybinding. Only the ones with an obvious, free key ship with
+    // one; the rest are there to be bound. Ctrl+A, Ctrl+G and Delete belong to
+    // ComfyUI, so — like Ctrl+Z above — they ship unregistered and answer only
+    // while the viewer is hovered on a previz tab with something to act on.
+    { key: "PrevizRename",    label: "Previz: Rename Selected",       combo: { key: "F2" },
+      enabled: _sel, run: (p) => p.previzBeginRename() },
+    { key: "PrevizSelectAll", label: "Previz: Select All",            combo: { key: "a", ctrl: true },
+      enabled: _hasItems, run: (p) => p.previzSelectAll() },
+    { key: "PrevizDuplicate", label: "Previz: Duplicate Selected",    combo: { key: "d", ctrl: true },
+      enabled: _sel, run: (p) => p.previzDuplicate(p.previzSelectedIds()) },
+    { key: "PrevizDelete",    label: "Previz: Delete Selected",       combo: { key: "Delete" },
+      enabled: _sel, run: (p) => p.previzDelete(p.previzSelectedIds()) },
+    { key: "PrevizGroup",     label: "Previz: Group Selected",        combo: { key: "g", ctrl: true },
+      enabled: _sel, run: (p) => p.previzGroupSelection() },
+    { key: "PrevizVisibility", label: "Previz: Show / Hide Selected",
+      enabled: _sel, run: (p) => p.previzToggleVisibility() },
+    { key: "PrevizCentrePivot", label: "Previz: Centre Pivot",
+      enabled: _sel, run: (p) => p.previzCentrePivot() },
+    { key: "PrevizLookThrough", label: "Previz: Look Through Camera / Back To Free View",
+      enabled: _previz, run: (p) => p.previzLookThroughSelected() },
+
+    // Keying. Shift+W / E / R key one channel, as Maya's do.
+    { key: "PrevizKey",       label: "Previz: Key Selected",
+      enabled: _sel, run: (p) => p.previzKeyAll() },
+    { key: "PrevizKeyMove",   label: "Previz: Key Translate",   combo: { key: "W", shift: true },
+      enabled: _sel, run: (p) => p.previzKeyAll("position") },
+    { key: "PrevizKeyRotate", label: "Previz: Key Rotate",      combo: { key: "E", shift: true },
+      enabled: _sel, run: (p) => p.previzKeyAll("rotation") },
+    { key: "PrevizKeyScale",  label: "Previz: Key Scale",       combo: { key: "R", shift: true },
+      enabled: _sel, run: (p) => p.previzKeyAll("scale") },
+    { key: "PrevizDeleteKey", label: "Previz: Delete Key At Playhead",
+      enabled: _sel, run: (p) => p.previzDeleteKey() },
+    { key: "PrevizAutokey",   label: "Previz: Toggle Autokey",
+      enabled: _previz, run: (p) => p.previzToggleAutokey() },
+    { key: "PrevizEaseSmooth", label: "Previz: Keys Ease Smooth",
+      enabled: _previz, run: (p) => p.previzSetEase("smooth") },
+    { key: "PrevizEaseLinear", label: "Previz: Keys Ease Linear",
+      enabled: _previz, run: (p) => p.previzSetEase("linear") },
+    { key: "PrevizEaseHold",  label: "Previz: Keys Ease Hold",
+      enabled: _previz, run: (p) => p.previzSetEase("hold") },
+
+    // Putting things in, and taking the shot out.
+    { key: "PrevizNewScene",  label: "Previz: New Scene",
+      enabled: _previz, run: (p) => p.previzNewScene() },
+    { key: "PrevizAddModel",  label: "Previz: Add Model…",
+      enabled: _previz, run: (p) => p.previzAddFromBrowser() },
+    { key: "PrevizAddCamera", label: "Previz: Add Camera",
+      enabled: _previz, run: (p) => p.previzAddCamera() },
+    { key: "PrevizAddGroup",  label: "Previz: Add Group",
+      enabled: _previz, run: (p) => p.previzAddGroup() },
+    ...PRIMITIVES.map((spec) => ({
+        key: `PrevizAdd${spec.label}`, label: `Previz: Add ${spec.label}`,
+        enabled: _previz, run: (p) => p.previzAddPrimitive(spec.type),
+    })),
+    { key: "PrevizImportUsd", label: "Previz: Import USD…",
+      enabled: _previz, run: (p) => p.previzImportUsd() },
+    { key: "PrevizLoadScene", label: "Previz: Load Scene…",
+      enabled: _previz, run: (p) => p.previzLoadSceneFile() },
+    { key: "PrevizSaveScene", label: "Previz: Save Scene…",
+      enabled: _previz, run: (p) => p.previzSaveSceneFile() },
+    { key: "PrevizExportUsd", label: "Previz: Export USD…",
+      enabled: _previz, run: (p) => p.previzExportUsd() },
+    { key: "PrevizRender",    label: "Previz: Render…",
+      enabled: _previz, run: (p) => p.previzRenderDialog() },
+
+    // How the canvas looks, and what is open beside it.
+    { key: "View3DOriginal",  label: "3D View: Original Materials",
+      enabled: _previz, run: (p) => p.previzSetMaterialMode("original") },
+    { key: "View3DClay",      label: "3D View: Clay",
+      enabled: _previz, run: (p) => p.previzSetMaterialMode("clay") },
+    { key: "View3DNormal",    label: "3D View: Normals",
+      enabled: _previz, run: (p) => p.previzSetMaterialMode("normal") },
+    { key: "View3DWireframe", label: "3D View: Wireframe",
+      enabled: _previz, run: (p) => p.previzSetMaterialMode("wireframe") },
+    { key: "View3DCycleLook", label: "3D View: Cycle Material Mode",
+      enabled: _previz, run: (p) => p.previzCycleMaterialMode() },
+    { key: "View3DGrid",      label: "3D View: Show / Hide Grid",
+      enabled: _previz, run: (p) => p.previzToggleGrid() },
+    { key: "View3DPrevizPanel", label: "3D View: Show / Hide Previz Panel",
+      enabled: _previz, run: (p) => p.togglePanelDocked("previz") },
+    { key: "View3DCurvesPanel", label: "3D View: Show / Hide Animation Curves",
+      enabled: _previz, run: (p) => p.togglePanelDocked("curves") },
 
     { key: "FitView",      label: "Fit Image To Viewport",   combo: { key: "f" },
       run: (p) => p.fitView() },
@@ -351,6 +442,9 @@ export function viewerHelpRows() {
             row._labels.push(...labels);
             continue;
         }
+        // An action nobody has given a key to has nothing to tell you here —
+        // and there are dozens of them on the 3D side, waiting to be bound.
+        if (!labels.length) continue;
         rows.push({ keys: _foldKeys(labels), label: action.label });
     }
     for (const row of groupRow.values()) {

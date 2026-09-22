@@ -259,6 +259,176 @@ export const PrevizMixin = {
         return S.itemById(this.previzScene(), this._previzSelection);
     },
 
+    /**
+     * Rename an item. Names stay unique, the way the rest of the scene keeps
+     * them — a clash becomes "Box 2" — and a blank name keeps the old one.
+     * One undo step. Returns the name it got, or null if nothing changed.
+     */
+    previzRename(id, wanted) {
+        const scene = this.previzScene();
+        const item = S.itemById(scene, id);
+        if (!item) return null;
+        const text = String(wanted == null ? "" : wanted).trim();
+        if (!text || text === item.name) { this._previzRenderPanel(); return null; }
+        const name = S.uniqueName(scene, text, item.id);
+        this.previzSnapshot(`rename ${item.name}`);
+        item.name = name;
+        this.previzChanged();
+        this.previzRefreshCurves();
+        return name;
+    },
+
+    /** Edit a name in place in the outliner — the selected item's by default. */
+    previzBeginRename(id = this._previzSelection) {
+        const item = S.itemById(this.previzScene(), id);
+        if (!item) return false;
+        if (!this.previzIsSelected(id)) this.previzSelect(id);
+        // Collapsed parents would hide the row being edited.
+        let up = item.parent;
+        while (up) {
+            if (this._previzCollapsed) this._previzCollapsed.delete(up);
+            up = (S.itemById(this.previzScene(), up) || {}).parent;
+        }
+        this._previzRenaming = { id, value: item.name, fresh: true };
+        if (!this.isPanelDocked("previz")) this.setPanelDocked("previz", true);
+        this._previzRenderPanel();
+        return true;
+    },
+
+    /**
+     * The name field over a row. It survives the tree being redrawn — which
+     * playback does every frame — because what was typed is kept on
+     * `_previzRenaming` and the field is put back on the new row.
+     */
+    _previzMountRename(row, nameEl, item) {
+        const state = this._previzRenaming;
+        const doc = row.ownerDocument;
+        const input = doc.createElement("input");
+        input.className = "previz-rename";
+        input.value = state.value;
+        input.spellcheck = false;
+        row.draggable = false;
+        nameEl.replaceWith(input);
+
+        let done = false;
+        const finish = (commit) => {
+            if (done) return;
+            done = true;
+            this._previzRenaming = null;
+            if (commit) this.previzRename(item.id, input.value);
+            else this._previzRenderPanel();
+        };
+        state.input = input;
+        const keep = () => {
+            state.value = input.value;
+            state.sel = [input.selectionStart, input.selectionEnd];
+        };
+        input.oninput = keep;
+        input.onkeyup = keep;
+        input.onselect = keep;
+        input.addEventListener("keydown", (e) => {
+            // Nothing typed here is a hotkey — not the viewer's (it skips
+            // inputs already) and not ComfyUI's, which only sees the panel.
+            e.stopPropagation();
+            if (e.key === "Enter") { e.preventDefault(); finish(true); }
+            else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+        });
+        // A redraw removes the field, and a browser may call that a blur. Only
+        // a blur that leaves this very field still the one being edited is
+        // the user clicking away — a redraw has mounted a new one by then.
+        input.onblur = () => {
+            (doc.defaultView || window).setTimeout(() => {
+                if (this._previzRenaming === state && state.input === input) finish(true);
+            }, 0);
+        };
+        for (const type of ["click", "pointerdown", "mousedown", "dblclick"]) {
+            input.addEventListener(type, (e) => e.stopPropagation());
+        }
+        const focus = () => {
+            if (!input.isConnected) return;
+            input.focus();
+            if (state.fresh) { input.select(); state.fresh = false; keep(); }
+            else if (state.sel) input.setSelectionRange(state.sel[0], state.sel[1]);
+        };
+        // After the row is in the document.
+        (doc.defaultView || window).requestAnimationFrame(focus);
+    },
+
+    /** Everything in the scene, selected. */
+    previzSelectAll() {
+        const scene = this.previzScene();
+        if (!scene || !scene.items.length) return;
+        const ids = scene.items.map((it) => it.id);
+        this._previzAlso = new Set(ids.slice(0, -1));
+        this._previzSelection = ids[ids.length - 1];
+        if (this._model3d) {
+            this._model3d.select(this._previzSelection);
+            this._model3d.setAlsoSelected([...this._previzAlso]);
+        }
+        this._previzRenderPanel();
+        this._previzRenderTicks();
+        this.previzRefreshCurves();
+    },
+
+    /** Show or hide the selection — all of it the same way, following the primary. */
+    previzToggleVisibility(id = null) {
+        const scene = this.previzScene();
+        const ids = this._previzIdList(id);
+        if (!scene || !ids.length) return;
+        const lead = S.itemById(scene, ids[ids.length - 1]);
+        const show = !!lead && lead.visible === false;
+        this.previzSnapshot(show ? "show" : "hide");
+        for (const one of ids) {
+            const item = S.itemById(scene, one);
+            if (item) item.visible = show;
+        }
+        this.previzChanged();
+    },
+
+    /** Look through the selected camera — or, looking through one, step back out. */
+    previzLookThroughSelected() {
+        const scene = this.previzScene();
+        if (!scene) return;
+        if (scene.activeCamera) { this.previzLookThrough(scene.activeCamera); return; }
+        const item = this.previzSelectedItem();
+        const cam = item && item.kind === "camera" ? item
+            : (scene.items || []).find((it) => it.kind === "camera");
+        if (cam) this.previzLookThrough(cam.id);
+    },
+
+    previzToggleAutokey() {
+        this._previzAutokey = !this._previzAutokey;
+        this._previzRenderPanel();
+        return this._previzAutokey;
+    },
+
+    /** How new keys leave their frame: smooth, linear or hold. */
+    previzSetEase(ease) {
+        this._previzEase = ease;
+        const bar = this._previzKeyBar;
+        if (bar && bar.ease) {
+            bar.ease.value = ease;
+            bar.ease.onchange();
+        }
+    },
+
+    previzSetMaterialMode(mode) {
+        const view = this._model3d;
+        if (view) view.setMaterialMode(mode);
+    },
+
+    previzCycleMaterialMode() {
+        const view = this._model3d;
+        if (!view) return;
+        const modes = ["original", "clay", "normal", "wireframe"];
+        view.setMaterialMode(modes[(modes.indexOf(view.materialMode) + 1) % modes.length]);
+    },
+
+    previzToggleGrid() {
+        const view = this._model3d;
+        if (view) view.setGrid(!view.showGrid);
+    },
+
     async previzAddModels(items) {
         const scene = this.previzScene();
         if (!scene || !items || !items.length) return 0;
@@ -987,6 +1157,8 @@ export const PrevizMixin = {
         const many = ids.length > 1;
         const count = `${ids.length} items`;
         this._previzOpenMenu([
+            { label: "Rename", disabled: many, run: () => this.previzBeginRename(id) },
+            "-",
             { label: many ? `Group ${count}` : "Group", run: () => this.previzGroupSelection() },
             "-",
             { label: many ? `Duplicate ${count}` : "Duplicate", run: () => this.previzDuplicate(ids) },
@@ -1098,7 +1270,21 @@ export const PrevizMixin = {
         row.style.paddingLeft = `${4 + depth * 12}px`;
         row.dataset.itemId = item.id;
         row.draggable = true;
-        row.onclick = (e) => this.previzSelect(item.id, { add: e.shiftKey || e.ctrlKey || e.metaKey });
+        row.onclick = (e) => {
+            // A double-click is timed by hand: the first click re-renders the
+            // tree, so the second lands on a new row and the browser never
+            // sees the two as one dblclick.
+            const now = Date.now();
+            const last = this._previzLastClick;
+            this._previzLastClick = { id: item.id, t: now };
+            const add = e.shiftKey || e.ctrlKey || e.metaKey;
+            if (!add && last && last.id === item.id && now - last.t < 400) {
+                this._previzLastClick = null;
+                this.previzBeginRename(item.id);
+                return;
+            }
+            this.previzSelect(item.id, { add });
+        };
         row.oncontextmenu = (e) => this._previzItemMenu(item.id, e);
 
         const kids = S.childrenOf(scene, item.id);
@@ -1131,6 +1317,9 @@ export const PrevizMixin = {
         name.title = item.kind === "model" && item.src ? (item.src.path || item.src.filename || "") : item.name;
 
         row.append(twisty, eye, name);
+        if (this._previzRenaming && this._previzRenaming.id === item.id) {
+            this._previzMountRename(row, name, item);
+        }
         if (item.kind === "camera") {
             const look = doc.createElement("button");
             look.className = "previz-look" + (scene.activeCamera === item.id ? " active" : "");
@@ -1242,10 +1431,11 @@ export const PrevizMixin = {
         nameIn.className = "previz-text";
         nameIn.value = item.name;
         nameIn.title = "Name";
-        nameIn.onchange = () => {
-            item.name = S.uniqueName(this.previzScene(), nameIn.value.trim() || item.name);
-            this.previzChanged();
-        };
+        nameIn.onchange = () => { this.previzRename(item.id, nameIn.value); };
+        // Typing here must not reach ComfyUI's own shortcuts: from outside the
+        // shadow root the keystroke looks like it came from the panel, not from
+        // a text field, so ComfyUI would act on it.
+        nameIn.addEventListener("keydown", (e) => e.stopPropagation());
         ui.props.append(nameIn);
 
         const vecRow = (prop, label, step) => {

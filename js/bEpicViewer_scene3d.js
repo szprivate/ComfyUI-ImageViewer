@@ -245,8 +245,11 @@ export function setParent(scene, id, parentId) {
 }
 
 /** A name no other item carries, so the outliner never shows two the same. */
-export function uniqueName(scene, wanted) {
-    const taken = new Set((scene.items || []).map((it) => it.name));
+export function uniqueName(scene, wanted, exceptId = null) {
+    // `exceptId` is the item being renamed: its own current name is not in
+    // the way, or keeping a name would turn "Box" into "Box 2".
+    const taken = new Set((scene.items || [])
+        .filter((it) => it.id !== exceptId).map((it) => it.name));
     if (!taken.has(wanted)) return wanted;
     const base = wanted.replace(/\s+\d+$/, "");
     for (let n = 2; ; n++) {

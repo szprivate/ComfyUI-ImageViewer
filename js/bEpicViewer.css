@@ -943,6 +943,12 @@ textarea.param-input {
 .previz-item.drop-into { background: #1d2a33; outline: 1px solid #4a9; }
 .previz-list.drop-into { outline: 1px solid #4a9; }
 .previz-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Renaming in place: the field takes the name's room in the row. */
+.previz-rename {
+    flex: 1 1 auto; min-width: 0;
+    background: #111; color: #eee; border: 1px solid #f60; border-radius: 2px;
+    padding: 0 3px; font: inherit; font-size: 11px; outline: none;
+}
 .previz-eye, .previz-look {
     background: none; border: none; color: #888; cursor: pointer; font-size: 12px; padding: 0 2px;
 }

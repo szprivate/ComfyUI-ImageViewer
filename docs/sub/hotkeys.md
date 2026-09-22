@@ -51,8 +51,25 @@ Every 3D tab is a scene, so these answer on all of them.
 | <kbd>Ctrl</kbd>+<kbd>Z</kbd> | Undo the last previz edit |
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd> | Redo |
 | <kbd>F</kbd> | Frame the scene again |
+| <kbd>F2</kbd> / double-click in the outliner | Rename the selected item |
+| <kbd>Ctrl</kbd>+<kbd>A</kbd> | Select everything in the scene |
+| <kbd>Ctrl</kbd>+<kbd>D</kbd> | Duplicate the selection |
+| <kbd>Ctrl</kbd>+<kbd>G</kbd> | Group the selection |
+| <kbd>Delete</kbd> | Delete the selection |
+| <kbd>Shift</kbd>+<kbd>W</kbd> / <kbd>E</kbd> / <kbd>R</kbd> | Key translate / rotate / scale at the playhead |
 
-These answer only while a [previz](models-3d.md#previz-building-a-scene) tab is open, so <kbd>R</kbd> and <kbd>E</kbd> keep their usual meanings everywhere else.
+These answer only while a [previz](models-3d.md#previz-building-a-scene) tab is open, so <kbd>R</kbd> and <kbd>E</kbd> keep their usual meanings everywhere else. <kbd>Ctrl</kbd>+<kbd>A</kbd>, <kbd>Ctrl</kbd>+<kbd>G</kbd> and <kbd>Delete</kbd> are ComfyUI's own keys too: the viewer takes them only while it is hovered on a 3D tab with something to act on, and otherwise leaves them to the graph.
+
+### Everything else, bindable
+
+Every other thing the 3D viewer does is a command as well, listed in **Settings → Keybinding** under *bEpic Viewer: Previz …* and *bEpic Viewer: 3D View …*, with no key until you give it one:
+
+- **Scene:** New Scene, Add Model…, Add Camera, Add Group, Add Box / Sphere / Plane / Cylinder / Cone / Torus, Import USD…, Load Scene…, Save Scene…, Export USD…, Render…
+- **Selection:** Show / Hide Selected, Centre Pivot, Look Through Camera / Back To Free View
+- **Keying:** Key Selected, Delete Key At Playhead, Toggle Autokey, Keys Ease Smooth / Linear / Hold
+- **View:** Original Materials, Clay, Normals, Wireframe, Cycle Material Mode, Show / Hide Grid, Show / Hide Previz Panel, Show / Hide Animation Curves
+
+A key you bind there works while the viewer is hovered, and — since a binding made in the editor is not tied to the viewer — from anywhere in ComfyUI. The in-viewer help (<kbd>?</kbd>) lists whichever of them have a key.
 
 ## Tabs
 
