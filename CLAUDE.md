@@ -1,0 +1,71 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+A ComfyUI custom node pack whose real product is a **frontend viewer panel**: a floating, dockable image/video/3D viewer with tabs, history, comparison, playback, a file browser, drawing tools and a 3D previz tool. Python here is the thin half — four nodes and a set of `/bepic/*` HTTP routes; the JavaScript in `js/` is the thick half.
+
+`__init__.py` exports the nodes, imports `viewer_api` (which registers the routes as a side effect of import), and sets `WEB_DIRECTORY = "js"`, which is how ComfyUI serves the frontend from `/extensions/ComfyUI-ImageViewer/`.
+
+## Running and testing
+
+There is **no test suite in the repository** and nothing to build: the JS is plain ES modules served as-is, and Python needs no compilation step. Two things stand in for a test runner, and both are worth rebuilding when you change anything non-trivial.
+
+Use ComfyUI's own interpreter, never a bare `python`:
+
+```bash
+D:/ai/comfyui/.venv/Scripts/python.exe -s <script>      # -s: ignore user site-packages
+node --check js/bEpicViewer_model3d.js                  # the only "lint" the JS has
+D:/ai/comfyui/.venv/Scripts/python.exe -m py_compile viewer_api.py
+```
+
+**Python-side checks** run the real modules with ComfyUI stubbed, in a scratch directory (not in the repo). The pattern each such script follows:
+
+```python
+sys.path.insert(0, r"D:\ai\comfyui")          # for folder_paths and comfy_extras
+import folder_paths
+folder_paths.set_output_directory(tmp); folder_paths.set_input_directory(...)   # scratch dirs
+sys.modules["server"] = <module exposing PromptServer.instance.app + send_sync>
+sys.modules["bepic"] = <module whose __path__ is this repo>                     # relative imports
+importlib.import_module("bepic.viewer_api")   # registers routes onto the aiohttp app
+```
+Routes are then driven over real HTTP with `aiohttp.test_utils.TestServer/TestClient`. Nodes are exercised by calling their `FUNCTION` directly.
+
+**Frontend checks** run the real modules in a page: a small aiohttp server serves `js/` plus stubs for ComfyUI's `scripts/app.js` and `scripts/api.js`, and a test script is injected as `<script type="module">`, writing results to a `window.__*` object that is then read out of the page. Two pitfalls: modules are cached hard (hard-reload, or `fetch(url, {cache: "reload"})` before reloading), and a backgrounded tab throttles timers and stalls `requestAnimationFrame`, which makes anything waiting on a frame appear to hang.
+
+## Architecture
+
+### The panel is one Web Component assembled from mixins
+
+`js/bEpicViewer.js` defines `<bepic-viewer-panel>` (Shadow DOM, so ComfyUI's CSS cannot reach it), loads `bEpicViewer.html` / `.css` / the icon JSON by `fetch`, and `Object.assign`s every mixin onto the class prototype. Each `bEpicViewer_mixin*.js` / feature file is therefore **one flat object of methods sharing one `this`** — there is no inheritance and no module boundary at runtime. Consequences worth knowing before editing:
+
+- a method name collides across mixins silently; the last `Object.assign` wins,
+- `this.container` is the `.panel-container` inside the shadow root — reach elements through it (or `this.shadowRoot`), never `document`,
+- the panel can be **undocked into another browser window**: use `this._viewerWindow()` and the element's `ownerDocument` rather than the globals, or timers and observers fire in the wrong realm.
+
+State that must survive a reload goes through `queuePersistViewerState()` into `localStorage`; a previz scene additionally lives on its node's hidden `scene_data` widget (see below).
+
+### The 3D side
+
+- `bEpicViewer_scene3d.js` — the scene **data model only**: plain objects, no DOM, no three.js. Items are a flat list with a `parent` id; transforms are `T(position)·T(pivot)·R·S·T(-pivot)·offset`; keyframes are cubic Hermite with per-key easing. Because it is pure data it can be unit-tested under plain `node`.
+- `bEpicViewer_model3d.js` — turns that model into three.js objects and owns the viewport (camera, gizmo, grid, picking, Maya-style navigation, rendering a shot). Each item becomes `root → body → inner(offset) → geometry/children`; the split matters: pivot maths reads *body* space, frozen transforms live on *inner*.
+- `bEpicViewer_mixinPreviz.js` + `previzChannels` / `previzCurves` / `previzRender` / `previzUndo` — the panels and the edits (outliner, channel box, curve editor, render dialog, undo stack).
+- three.js is **vendored in `vendor/three/`, deliberately outside `js/`**, so ComfyUI does not serve or import it at startup; it is fetched on demand through `/bepic/lib/three/<name>`.
+
+### Server side
+
+- `viewer_api.py` — all `/bepic/*` routes, registered at import. Everything taking a path is filtered through `path_access.py`, which confines reads to ComfyUI's input/output/temp plus folders the user allows (`bepic_viewer_roots.txt` or `BEPIC_VIEWER_ROOTS`). Routes with side effects are POST only. **No route may start a process on the host** — the Explorer-opening routes were removed for exactly this reason, and the ComfyUI registry rejected the repo while they existed.
+- `usd_io.py` / `abc_io.py` — USD stages and Alembic caches. The viewport speaks glTF only, so both are flattened server-side into a cached GLB "display proxy" and served through the ordinary file route. `abc_io.py` reads the Ogawa container itself (no Alembic bindings exist on PyPI); an Alembic cache is geometry per frame, so its proxy is keyed by `frame`.
+- `file_writer.py` / `model_writer.py` / `previz.py` / `roto_raster.py` — saving frames in VFX formats, saving meshes, previz render folders, rasterising roto shapes.
+- `nodes.py` — `bEpicSendToViewer`, `bEpicImageViewerRoto`, `bEpicImageViewerSAM3Collector`, `bEpicScene3D`. Node → viewer is a `bepic.viewer.update` websocket message; the nodes also return a `ui` dict so their files appear in ComfyUI's history and Assets panel (the frontend suppresses the inline node preview instead of the node withholding `ui`).
+
+### Hotkeys
+
+`bEpicViewer_keymap.js` is the single table feeding three consumers: ComfyUI's command list (so every action is rebindable in Settings → Keybinding), the panel's own key handler (which answers while the viewer is hovered), and the in-viewer help overlay. Add actions there, not ad-hoc listeners. A combo ComfyUI already owns ships unregistered and still works while hovered.
+
+## Publishing
+
+`.github/workflows/publish.yml` publishes to the Comfy registry **on any push to `master` that touches `pyproject.toml`**, and only from `szprivate/ComfyUI-ImageViewer`. So: bumping `version` in `pyproject.toml` *is* publishing. Push other changes freely; touch that file only when a release is intended.
+
+Remotes: `upstream` = szprivate (dev, and the one that publishes), `origin` = bEpic-studio (org).
