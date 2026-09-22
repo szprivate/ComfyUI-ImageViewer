@@ -217,6 +217,14 @@ export function registerSendNode(nodeType, nodeData) {
     nodeType.prototype.onNodeCreated = function () {
         const r = onNodeCreated?.apply(this, arguments);
         this._bepicVideoFormats = videoFormats;
+        // The node reports its files to ComfyUI (that is how they reach history
+        // and the asset list), and that report is also what the frontend draws
+        // an inline preview from. The picture belongs in the viewer, so the
+        // preview is turned off: hideOutputImages for the Vue node renderer,
+        // and an empty background for the classic canvas, whose preview is
+        // drawn from onDrawBackground and ignores that flag.
+        this.hideOutputImages = true;
+        this.onDrawBackground = function () {};
         // Re-sync the save-to-output config widgets whenever the toggle flips —
         // and whenever the format changes, since that decides whether fps means
         // anything.

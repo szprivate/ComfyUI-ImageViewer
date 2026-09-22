@@ -355,6 +355,50 @@ def _push_tab(inp, tab_name, unique_id, node_label):
     })
 
 
+def _result_entry(path):
+    """`path` as the {filename, subfolder, type} ComfyUI's history speaks.
+
+    The type is whichever of ComfyUI's own folders the file sits in, found from
+    the path itself — a frame dict's "type" is the viewer's idea ("mask" is
+    one), not a folder. A file outside all three can't be named that way and
+    is left out."""
+    if not path:
+        return None
+    full = os.path.abspath(path)
+    for kind, base in (("output", folder_paths.get_output_directory()),
+                       ("temp", folder_paths.get_temp_directory()),
+                       ("input", folder_paths.get_input_directory())):
+        base = os.path.abspath(base)
+        try:
+            if os.path.commonpath([base, full]) != base:
+                continue
+        except ValueError:          # another drive
+            continue
+        subfolder = os.path.relpath(os.path.dirname(full), base)
+        return {"filename": os.path.basename(full),
+                "subfolder": "" if subfolder == "." else subfolder.replace(os.sep, "/"),
+                "type": kind}
+    return None
+
+
+def _history_ui(paths, key="images", animated=False):
+    """The `ui` block that puts a node's files in ComfyUI's history.
+
+    History and the asset registry are both built from what a node returns
+    under `ui` and from nothing else: a node that writes files and returns no
+    `ui` has, as far as /history, the Assets panel or any agent reading them
+    are concerned, produced nothing. The keys follow core's own savers —
+    SaveImage's "images", SaveVideo's "images" + "animated", SaveGLB's "3d" —
+    so whatever reads theirs reads these."""
+    entries = [e for e in (_result_entry(p) for p in paths) if e]
+    if not entries:
+        return {}
+    ui = {key: entries}
+    if animated:
+        ui["animated"] = (True,)
+    return ui
+
+
 class bEpicSendToViewer:
     def __init__(self):
         self.output_dir = folder_paths.get_temp_directory()
@@ -430,9 +474,10 @@ class bEpicSendToViewer:
         # write_output/write_video_input return viewer frame dicts (saved files
         # for video and browser images, temp PNG proxies for exr/tiff/...).
         tab_frames = None
+        saved = []
         if file_writer is not None and file_writer.is_video_input(input):
             try:
-                _, tab_frames = file_writer.write_video_input(
+                saved, tab_frames = file_writer.write_video_input(
                     input, save_to_output, filename_prefix, file_format, fps,
                     prompt, extra_pnginfo)
             except Exception as e:
@@ -440,7 +485,7 @@ class bEpicSendToViewer:
                 tab_frames = None
         elif save_to_output and file_writer is not None:
             try:
-                _, tab_frames = file_writer.write_output(
+                saved, tab_frames = file_writer.write_output(
                     input, filename_prefix, file_format, fps,
                     prompt, extra_pnginfo,
                     sequence=is_sequence, first_frame=first_frame_number,
@@ -459,18 +504,34 @@ class bEpicSendToViewer:
             "unique_id": unique_id
         })
 
-        # No `ui.images` here on purpose: that's the same message the core
-        # frontend reads to draw an inline preview on the node, and this
-        # node's picture belongs in the Image Viewer panel, not on the node
-        # itself. The viewer already got it above, over the websocket.
-        return (input, )
+        # The files go into history as well, so they are the run's outputs to
+        # everything that asks ComfyUI for them. That is also the message the
+        # frontend draws a node's inline preview from; the node's JS turns that
+        # preview off, because this node's picture belongs in the viewer.
+        return {"ui": self._history(tab_frames, saved), "result": (input, )}
+
+    @staticmethod
+    def _history(tab_frames, saved):
+        """What this run produced, in the form history records it.
+
+        A video is the video file (its companion PNG is a thumbnail, not an
+        output). Saved stills are the files written to ./output — an EXR, not
+        the PNG proxy the viewer shows for it. Otherwise it is the temp PNGs,
+        which is what PreviewImage records too."""
+        frames = tab_frames or []
+        videos = [f.get("path") for f in frames if f.get("kind") == "video"]
+        if videos:
+            return _history_ui(videos, animated=True)
+        if saved:
+            return _history_ui(saved)
+        return _history_ui([f.get("path") for f in frames])
 
     def _send_model(self, mesh, label, save_to_output, filename_prefix,
                     unique_id, prompt, extra_pnginfo):
         frames = []
         try:
             if save_to_output:
-                _saved, _ui, frames = model_writer.save_model_input(
+                _saved, _results, frames = model_writer.save_model_input(
                     mesh, filename_prefix, prompt, extra_pnginfo)
             else:
                 frames = _model_frames(mesh, label, unique_id, self.output_dir)
@@ -481,9 +542,9 @@ class bEpicSendToViewer:
             "tabs": {"tab": frames},
             "unique_id": unique_id,
         })
-        # No `ui` for the same reason as send(): the model belongs in the viewer,
-        # not in a preview on the node.
-        return (mesh, )
+        # Recorded in history the way SaveGLB records it, under "3d".
+        return {"ui": _history_ui([f.get("path") for f in frames], key="3d"),
+                "result": (mesh, )}
 
 
 class bEpicImageViewerRoto:
