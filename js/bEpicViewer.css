@@ -941,6 +941,9 @@ textarea.param-input {
 .previz-twisty.empty { pointer-events: none; }
 .previz-item.dragging { opacity: 0.45; }
 .previz-item.drop-into { background: #1d2a33; outline: 1px solid #4a9; }
+/* Between rows: a line where the item will land. */
+.previz-item.drop-before { box-shadow: inset 0 2px 0 #4a9; }
+.previz-item.drop-after { box-shadow: inset 0 -2px 0 #4a9; }
 .previz-list.drop-into { outline: 1px solid #4a9; }
 .previz-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Renaming in place: the field takes the name's room in the row. */

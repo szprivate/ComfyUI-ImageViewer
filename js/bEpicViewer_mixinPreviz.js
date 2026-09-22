@@ -1007,7 +1007,7 @@ export const PrevizMixin = {
             if (!this._previzDragItem || e.target.closest(".previz-item")) return;
             e.preventDefault();
             this._previzClearDropMarks();
-            this.previzReparent(this._previzDragItem, null);
+            this.previzMoveItems(this._previzDragIds(), null, null);
         };
 
         root.append(actions, list);
@@ -1438,6 +1438,9 @@ export const PrevizMixin = {
         }
 
         row.ondragstart = (e) => {
+            // Dragging one of a selection takes the selection along; any other
+            // row goes alone. Not selected here: that would redraw the tree
+            // and pull this row out from under the drag that just started.
             this._previzDragItem = item.id;
             row.classList.add("dragging");
             try { e.dataTransfer.setData("text/plain", item.name); } catch (_) {}
@@ -1449,19 +1452,21 @@ export const PrevizMixin = {
             this._previzClearDropMarks();
         };
         row.ondragover = (e) => {
-            const dragged = this._previzDragItem;
-            if (!dragged || !S.canParent(scene, dragged, item.id)) return;
+            if (!this._previzDragItem) return;
+            const drop = this._previzDropFor(row, item, e, scene);
+            if (!drop) return;
             e.preventDefault();
             if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
             this._previzClearDropMarks();
-            row.classList.add("drop-into");
+            row.classList.add(`drop-${drop.zone}`);
         };
-        row.ondragleave = () => row.classList.remove("drop-into");
+        row.ondragleave = () => row.classList.remove("drop-into", "drop-before", "drop-after");
         row.ondrop = (e) => {
             e.preventDefault();
             e.stopPropagation();
+            const drop = this._previzDragItem ? this._previzDropFor(row, item, e, scene) : null;
             this._previzClearDropMarks();
-            this.previzReparent(this._previzDragItem, item.id);
+            if (drop) this.previzMoveItems(this._previzDragIds(), drop.parent, drop.before);
         };
         return row;
     },
@@ -1469,8 +1474,74 @@ export const PrevizMixin = {
     _previzClearDropMarks() {
         const ui = this._previzUI;
         if (!ui || !ui.list) return;
-        ui.list.querySelectorAll(".drop-into").forEach((n) => n.classList.remove("drop-into"));
+        ui.list.querySelectorAll(".drop-into, .drop-before, .drop-after")
+            .forEach((n) => n.classList.remove("drop-into", "drop-before", "drop-after"));
         ui.list.classList.remove("drop-into");
+    },
+
+    /**
+     * Where a drop over `row` would put things: the top quarter of a row is
+     * "above it", the bottom quarter "below it", and the middle "inside it" —
+     * the three places an outliner offers. Below a row whose children are
+     * showing means first among them, which is where the line is drawn.
+     * Null when the drop would put something inside itself.
+     */
+    _previzDropFor(row, item, e, scene) {
+        const ids = this._previzDragIds();
+        if (!ids.length || ids.includes(item.id)) return null;
+        const r = row.getBoundingClientRect();
+        const y = (e.clientY - r.top) / Math.max(1, r.height);
+        const parent = item.parent || null;
+        const siblings = S.childrenOf(scene, parent);
+        const kids = S.childrenOf(scene, item.id);
+        const open = kids.length && !(this._previzCollapsed && this._previzCollapsed.has(item.id));
+        let drop;
+        if (y < 0.25) drop = { zone: "before", parent, before: item.id };
+        else if (y > 0.75) {
+            drop = open
+                ? { zone: "after", parent: item.id, before: kids[0].id }
+                : { zone: "after", parent, before: (siblings[siblings.indexOf(item) + 1] || {}).id || null };
+        } else drop = { zone: "into", parent: item.id, before: null };
+        return ids.every((id) => S.canParent(scene, id, drop.parent)) ? drop : null;
+    },
+
+    /** What a drag carries: the selection's top items, in outliner order. */
+    _previzDragIds() {
+        const scene = this.previzScene();
+        const lead = this._previzDragItem;
+        if (!scene || !lead) return [];
+        const picked = this.previzIsSelected(lead) ? new Set(this.previzSelectedIds()) : new Set([lead]);
+        // Something whose parent is also being dragged is already coming along.
+        const inside = new Set();
+        for (const id of picked) for (const d of S.descendantsOf(scene, id)) inside.add(d.id);
+        return scene.items.map((it) => it.id).filter((id) => picked.has(id) && !inside.has(id));
+    },
+
+    /**
+     * Move items to `parentId` (null: the top), just before `beforeId` among
+     * their new siblings, or last. They keep their order and their own local
+     * numbers, and the whole move is one undo step.
+     */
+    previzMoveItems(ids, parentId, beforeId) {
+        const scene = this.previzScene();
+        const list = (ids || []).filter((id) => S.itemById(scene, id));
+        if (!scene || !list.length) return false;
+        if (!list.every((id) => S.canParent(scene, id, parentId))) return false;
+        if (beforeId && list.includes(beforeId)) return false;
+        const into = parentId ? S.itemById(scene, parentId) : null;
+        const what = list.length > 1 ? `${list.length} items` : S.itemById(scene, list[0]).name;
+        // Tried on a copy first: dropped where it already was, nothing
+        // changes, and there should be no undo step for it.
+        const shape = (sc) => sc.items.map((it) => `${it.id}<${it.parent || ""}`).join();
+        const trial = { items: scene.items.map((it) => ({ ...it })) };
+        for (const id of list) S.moveItem(trial, id, parentId, beforeId);
+        if (shape(trial) === shape(scene)) { this._previzRenderPanel(); return false; }
+        this.previzSnapshot(into ? `move ${what} into ${into.name}` : `move ${what}`);
+        for (const id of list) S.moveItem(scene, id, parentId, beforeId);
+        // Showing where it went: a folded parent opens.
+        if (parentId && this._previzCollapsed) this._previzCollapsed.delete(parentId);
+        this.previzChanged({ reload: true });
+        return true;
     },
 
     /** Move an item under a group — or out of every group, for a null parent. */

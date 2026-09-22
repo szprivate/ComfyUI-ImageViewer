@@ -274,6 +274,36 @@ export function setParent(scene, id, parentId) {
     return true;
 }
 
+/**
+ * Put `id` under `parentId` (null for the top) and among its new siblings
+ * just before `beforeId` — or last, when `beforeId` is null or isn't one of
+ * them. Its descendants come along. The flat list stays in tree order, so
+ * the outliner, an export and a reload all see the same order.
+ */
+export function moveItem(scene, id, parentId, beforeId = null) {
+    const item = itemById(scene, id);
+    if (!item || !canParent(scene, id, parentId)) return false;
+    const moving = [item, ...descendantsOf(scene, id)];
+    if (beforeId && moving.some((it) => it.id === beforeId)) return false;
+    item.parent = parentId || null;
+    const rest = (scene.items || []).filter((it) => !moving.includes(it));
+    const before = beforeId ? rest.find((it) => it.id === beforeId) : null;
+    let at;
+    if (before && (before.parent || null) === (parentId || null)) {
+        at = rest.indexOf(before);
+    } else if (parentId) {
+        // Last child: after the parent and everything already under it.
+        const tail = [itemById(scene, parentId), ...descendantsOf(scene, parentId)]
+            .filter((it) => rest.includes(it));
+        at = Math.max(...tail.map((it) => rest.indexOf(it))) + 1;
+    } else {
+        at = rest.length;
+    }
+    rest.splice(at, 0, ...moving);
+    scene.items = rest;
+    return true;
+}
+
 /** A name no other item carries, so the outliner never shows two the same. */
 export function uniqueName(scene, wanted, exceptId = null) {
     // `exceptId` is the item being renamed: its own current name is not in

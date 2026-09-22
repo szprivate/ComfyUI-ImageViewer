@@ -146,10 +146,13 @@ A **group** is a transform and nothing else — no geometry, no file. Move, rota
 |---|---|
 | Group what is selected | Right-click one of them → **Group** |
 | Make an empty one | **+ → Group** |
-| Put something in it | Drag the item's row onto the group's row in the outliner |
-| Take it out again | Drag the row onto the empty space below the tree |
+| Put something in it | Drag the item's row onto the **middle** of the group's row in the outliner |
+| Change the order | Drag a row onto the **top or bottom edge** of another: a line shows where it will land, above or below that row and beside it in the tree. Below a group that is open means first inside it. |
+| Take it out again | Drag the row above or below something at the top of the tree, or onto the empty space below the tree (it goes last) |
 | Fold it away | The **▾** at the left of its row |
 | Delete the lot | Right-click the group → **Delete** — what it holds goes with it, and one undo brings all of it back |
+
+Any item can hold others, not only a group — drop a light's stand onto the car and it rides along. Dragging a row that is part of the selection moves the whole selection, in the order it had; every drop is one undo step, and a row put back where it was leaves none. Items keep their own numbers when they move, so something dropped into a moved or rotated group moves with it.
 
 Select several first — <kbd>Shift</kbd>+click in the outliner, or <kbd>Shift</kbd>+click objects in the viewport; every one of them is lit in the list and outlined in orange in the scene, while the last one clicked keeps the gizmo and the Channel Box. **Group** then puts the lot under one new group, which is made with no transform of its own, so nothing moves.
 
