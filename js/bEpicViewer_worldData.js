@@ -1,0 +1,266 @@
+// bEpicViewer_worldData.js
+// The world item kinds, as data: what an environment, a terrain, a scatter
+// and a depth mesh hold, their defaults, and how a stored one is made sane.
+//
+// Plain data and pure functions, like bEpicViewer_scene3d.js (which reads
+// scenes through these) — no three.js, no DOM. The builder that writes worlds
+// lives in its own repo (ComfyUI-bEpicWorlds); its SCHEMA.md and this file
+// describe the same thing, and this file is what the viewer believes.
+//
+// Units are metres, Y is up, and a reference camera looks down -Z. A sun
+// azimuth of 0 is straight ahead (-Z), +90 to the right (+X); elevation is
+// degrees above the horizon.
+
+export const WORLD_KINDS = ["environment", "terrain", "scatter", "depthmesh"];
+export const SCATTER_TYPES = ["pine", "tree", "bush", "grass", "rock", "model"];
+export const SKY_MODES = ["gradient", "panorama"];
+
+const HEX = /^#[0-9a-f]{6}$/i;
+const num = (v, d, lo = -Infinity, hi = Infinity) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d;
+};
+const col = (v, d) => (typeof v === "string" && HEX.test(v) ? v : d);
+const file = (v) => (v && typeof v === "object" && (v.path || v.url || v.filename) ? v : null);
+const pair = (v, d, lo = -Infinity, hi = Infinity) => (Array.isArray(v) && v.length === 2
+    ? [num(v[0], d[0], lo, hi), num(v[1], d[1], lo, hi)] : d.slice());
+
+export function environmentSettings(item) {
+    const it = item || {};
+    const sky = it.sky || {}, sun = it.sun || {}, fog = it.fog || {}, amb = it.ambient || {};
+    return {
+        sky: {
+            mode: SKY_MODES.includes(sky.mode) ? sky.mode : "gradient",
+            top: col(sky.top, "#4a78b8"),
+            horizon: col(sky.horizon, "#b9cde0"),
+            bottom: col(sky.bottom, "#6d6a5e"),
+            src: file(sky.src),
+        },
+        sun: {
+            azimuth: num(sun.azimuth, 150),
+            elevation: num(sun.elevation, 35, -90, 90),
+            color: col(sun.color, "#fff4e6"),
+            intensity: num(sun.intensity, 2.6, 0, 50),
+            shadows: sun.shadows !== false,
+        },
+        fog: { color: col(fog.color, "#c3cfd8"), density: num(fog.density, 0.004, 0, 1) },
+        ambient: {
+            sky: col(amb.sky, "#9fb8d6"), ground: col(amb.ground, "#5a5548"),
+            intensity: num(amb.intensity, 0.9, 0, 20),
+        },
+    };
+}
+
+const DEFAULT_LAYERS = [
+    { name: "ground", src: null, color: "#5f7a3c", tile: 9 },
+    { name: "rock", src: null, color: "#7c776d", tile: 14 },
+    { name: "cliff", src: null, color: "#4f4b45", tile: 20 },
+    { name: "peak", src: null, color: "#eef1f5", tile: 20 },
+];
+
+export function terrainSettings(item) {
+    const t = (item && item.terrain) || {};
+    const layers = DEFAULT_LAYERS.map((d, i) => {
+        const l = (Array.isArray(t.layers) && t.layers[i]) || {};
+        return { name: typeof l.name === "string" ? l.name : d.name, src: file(l.src),
+                 color: col(l.color, d.color), tile: num(l.tile, d.tile, 0.1, 10000) };
+    });
+    const r = t.rules || {};
+    return {
+        heightmap: file(t.heightmap),
+        encoding: t.encoding === "rg16" ? "rg16" : "gray",
+        splat: file(t.splat),
+        seed: Math.round(num(t.seed, 0)),
+        roughness: num(t.roughness, 0.5, 0.05, 0.95),
+        size: pair(t.size, [200, 200], 1, 100000),
+        height: num(t.height, 20, 0, 10000),
+        segments: Math.round(num(t.segments, 256, 8, 512)),
+        layers,
+        rules: {
+            rockSlope: pair(r.rockSlope, [24, 38], 0, 90),
+            cliffSlope: pair(r.cliffSlope, [40, 56], 0, 90),
+            peak: pair(r.peak, [0.9, 1.01], 0, 2),
+        },
+    };
+}
+
+function _clearList(v) {
+    const list = Array.isArray(v) ? v : (v && typeof v === "object" ? [v] : []);
+    return list.filter((c) => c && Array.isArray(c.center))
+        .map((c) => ({ center: [num(c.center[0], 0), num(c.center[1], 0)], radius: num(c.radius, 5, 0) }));
+}
+
+export function scatterSettings(item) {
+    const s = (item && item.scatter) || {};
+    const source = s.source || {};
+    return {
+        target: typeof s.target === "string" ? s.target : "terrain",
+        source: { type: SCATTER_TYPES.includes(source.type) ? source.type : "tree", src: file(source.src) },
+        count: Math.round(num(s.count, 500, 0, 200000)),
+        seed: Math.round(num(s.seed, 1)),
+        scale: pair(s.scale, [0.8, 1.4], 0.01, 100),
+        layer: Math.round(num(s.layer, 0, -1, 3)),
+        maxSlope: num(s.maxSlope, 32, 0, 90),
+        color: col(s.color, "#3f6b2e"),
+        wind: num(s.wind, 0.3, 0, 5),
+        clear: _clearList(s.clear),
+    };
+}
+
+export function depthMeshSettings(item) {
+    const d = (item && item.depthmesh) || {};
+    return {
+        src: file(d.src), depth: file(d.depth),
+        fov: num(d.fov, 50, 1, 170),
+        near: num(d.near, 2, 0.01), far: num(d.far, 100, 0.02),
+        cut: num(d.cut, 0.12, 0, 5),
+        invert: !!d.invert,
+        segments: Math.round(num(d.segments, 256, 8, 1024)),
+    };
+}
+
+export function referenceSettings(item) {
+    const r = item && item.reference;
+    if (!r || !file(r.src)) return null;
+    return { src: r.src, opacity: num(r.opacity, 0.5, 0, 1), wipe: num(r.wipe, 1, 0, 1) };
+}
+
+export function walkSettings(scene) {
+    const w = (scene && scene.walk) || {};
+    const b = w.bounds || {};
+    const sp = Array.isArray(w.spawn) && w.spawn.length === 3 ? w.spawn.map((v) => num(v, 0)) : null;
+    return {
+        spawn: sp, yaw: num(w.yaw, 0),
+        eyeHeight: num(w.eyeHeight, 1.7, 0.1, 100),
+        speed: num(w.speed, 5, 0.1, 500),
+        bounds: b && Array.isArray(b.center)
+            ? { center: [num(b.center[0], 0), num(b.center[1], 0)], radius: num(b.radius, 100, 1) } : null,
+    };
+}
+
+export function worldInfo(scene) {
+    const w = scene && scene.world;
+    if (!w || typeof w !== "object" || typeof w.name !== "string" || !w.name) return null;
+    return {
+        name: w.name,
+        version: Math.round(num(w.version, 1)),
+        schema: Math.round(num(w.schema, 1)),
+        feedback: (Array.isArray(w.feedback) ? w.feedback : [])
+            .filter((f) => f && typeof f.text === "string")
+            .map((f) => ({ id: String(f.id || ""), n: num(f.n, 0), text: f.text,
+                           point: Array.isArray(f.point) && f.point.length === 3 ? f.point.map((v) => num(v, 0)) : null,
+                           local: !!f.local })),
+    };
+}
+
+/** Read one stored world item's own block into `item` (parseScene's helper). */
+export function readWorldItem(item, raw) {
+    if (item.kind === "environment") Object.assign(item, environmentSettings(raw));
+    else if (item.kind === "terrain") item.terrain = terrainSettings(raw);
+    else if (item.kind === "scatter") item.scatter = scatterSettings(raw);
+    else if (item.kind === "depthmesh") item.depthmesh = depthMeshSettings(raw);
+    return item;
+}
+
+const base = (id, kind, name) => ({
+    id, kind, name, position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1],
+    pivot: [0, 0, 0], visible: true, tracks: {}, parent: null,
+});
+
+export function makeEnvironmentItem(id) {
+    return Object.assign(base(id, "environment", "Environment"), environmentSettings({}));
+}
+
+export function makeTerrainItem(id) {
+    return Object.assign(base(id, "terrain", "Terrain"), { terrain: terrainSettings({}) });
+}
+
+export function makeScatterItem(id, type = "tree", target = "terrain") {
+    const s = scatterSettings({ scatter: { source: { type }, target } });
+    if (type === "grass") Object.assign(s, { count: 6000, scale: [0.6, 1.2], wind: 0.6, color: "#6f9a44" });
+    if (type === "rock") Object.assign(s, { count: 200, scale: [0.4, 1.8], wind: 0, layer: -1, maxSlope: 60, color: "#7c776d" });
+    if (type === "pine") Object.assign(s, { count: 1200, color: "#2f5226" });
+    const label = { pine: "Pines", tree: "Trees", bush: "Bushes", grass: "Grass", rock: "Rocks", model: "Scatter" }[type];
+    return Object.assign(base(id, "scatter", label), { scatter: s });
+}
+
+export function makeDepthMeshItem(id, src, depth) {
+    return Object.assign(base(id, "depthmesh", "Depth mesh"),
+                         { depthmesh: depthMeshSettings({ depthmesh: { src, depth } }) });
+}
+
+/**
+ * What the channel box shows for each world kind: a path into the item, a
+ * label, and how to edit it. Numbers are not keyable — these are the world's
+ * settings, not its animation.
+ */
+export const WORLD_FIELDS = {
+    environment: [
+        { path: "sky.mode", label: "Sky", type: "select", options: SKY_MODES },
+        { path: "sky.top", label: "Sky top", type: "color" },
+        { path: "sky.horizon", label: "Sky horizon", type: "color" },
+        { path: "sky.bottom", label: "Below horizon", type: "color" },
+        { path: "sun.azimuth", label: "Sun azimuth", type: "number", step: 5 },
+        { path: "sun.elevation", label: "Sun elevation", type: "number", step: 2, min: -90, max: 90 },
+        { path: "sun.color", label: "Sun colour", type: "color" },
+        { path: "sun.intensity", label: "Sun intensity", type: "number", step: 0.1, min: 0 },
+        { path: "sun.shadows", label: "Shadows", type: "bool" },
+        { path: "fog.color", label: "Fog colour", type: "color" },
+        { path: "fog.density", label: "Fog density", type: "number", step: 0.001, min: 0 },
+        { path: "ambient.intensity", label: "Ambient", type: "number", step: 0.05, min: 0 },
+    ],
+    terrain: [
+        { path: "terrain.height", label: "Height", type: "number", step: 1, min: 0 },
+        { path: "terrain.size.0", label: "Size X", type: "number", step: 10, min: 1 },
+        { path: "terrain.size.1", label: "Size Z", type: "number", step: 10, min: 1 },
+        { path: "terrain.seed", label: "Seed", type: "number", step: 1, rebuild: true },
+        { path: "terrain.roughness", label: "Roughness", type: "number", step: 0.05, min: 0.05, max: 0.95 },
+        { path: "terrain.segments", label: "Segments", type: "number", step: 32, min: 8, max: 512 },
+        { path: "terrain.layers.0.color", label: "Ground", type: "color" },
+        { path: "terrain.layers.1.color", label: "Rock", type: "color" },
+        { path: "terrain.layers.2.color", label: "Cliff", type: "color" },
+        { path: "terrain.layers.3.color", label: "Peak", type: "color" },
+    ],
+    scatter: [
+        { path: "scatter.source.type", label: "Type", type: "select", options: SCATTER_TYPES },
+        { path: "scatter.count", label: "Count", type: "number", step: 100, min: 0, max: 200000 },
+        { path: "scatter.seed", label: "Seed", type: "number", step: 1 },
+        { path: "scatter.scale.0", label: "Scale min", type: "number", step: 0.1, min: 0.01 },
+        { path: "scatter.scale.1", label: "Scale max", type: "number", step: 0.1, min: 0.01 },
+        { path: "scatter.layer", label: "On layer", type: "number", step: 1, min: -1, max: 3 },
+        { path: "scatter.maxSlope", label: "Max slope", type: "number", step: 1, min: 0, max: 90 },
+        { path: "scatter.color", label: "Colour", type: "color" },
+        { path: "scatter.wind", label: "Wind", type: "number", step: 0.05, min: 0 },
+    ],
+    depthmesh: [
+        { path: "depthmesh.fov", label: "FOV", type: "number", step: 1, min: 1, max: 170 },
+        { path: "depthmesh.near", label: "Near", type: "number", step: 0.5, min: 0.01 },
+        { path: "depthmesh.far", label: "Far", type: "number", step: 5, min: 0.02 },
+        { path: "depthmesh.cut", label: "Edge cut", type: "number", step: 0.01, min: 0 },
+        { path: "depthmesh.invert", label: "Invert depth", type: "bool" },
+    ],
+    camera: [
+        { path: "reference.opacity", label: "Ref opacity", type: "number", step: 0.05, min: 0, max: 1, needs: "reference" },
+        { path: "reference.wipe", label: "Ref wipe", type: "number", step: 0.05, min: 0, max: 1, needs: "reference" },
+    ],
+};
+
+export function getPath(obj, path) {
+    let cur = obj;
+    for (const p of String(path).split(".")) {
+        if (cur == null) return undefined;
+        cur = cur[p];
+    }
+    return cur;
+}
+
+export function setPath(obj, path, value) {
+    const parts = String(path).split(".");
+    let cur = obj;
+    for (const p of parts.slice(0, -1)) {
+        if (cur[p] == null || typeof cur[p] !== "object") cur[p] = {};
+        cur = cur[p];
+    }
+    cur[parts[parts.length - 1]] = value;
+    return obj;
+}

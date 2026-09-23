@@ -195,6 +195,12 @@ const ACTION_DEFS = [
         key: `PrevizAdd${spec.label}`, label: `Previz: Add ${spec.label}`,
         enabled: _previz, run: (p) => p.previzAddPrimitive(spec.type),
     })),
+    // Worlds: only on a scene that has world items. While walking, the walk
+    // owns the keyboard (W A S D, arrows, Shift, F, Esc) and these stand aside.
+    { key: "WorldWalk", label: "World: Walk / Stop Walking", combo: { key: "J", shift: true },
+      enabled: (p) => _previz(p) && !!(p.previzHasWorld && p.previzHasWorld()), run: (p) => p.previzWalkToggle() },
+    { key: "WorldNote", label: "World: Pin a Note", combo: { key: "N", shift: true },
+      enabled: (p) => _previz(p) && !!(p.previzHasWorld && p.previzHasWorld()), run: (p) => p.previzFeedbackPlace() },
     { key: "PrevizImportUsd", label: "Previz: Import USD…",
       enabled: _previz, run: (p) => p.previzImportUsd() },
     { key: "PrevizLoadScene", label: "Previz: Load Scene…",

@@ -783,6 +783,12 @@ textarea.param-input {
    navigation in bEpicViewer_model3d.js). */
 .model-view { position: absolute; inset: 0; z-index: 8; display: none; background: #282828; cursor: default; }
 .model-view.navigating { cursor: grab; }
+/* Worlds: walking hides the pointer (it is locked, or drags the view), and
+   placing a note asks for a spot. */
+.model-view.walking, .model-view.walking .model-canvas { cursor: none; }
+.model-view.placing-note .model-canvas { cursor: crosshair; }
+.previz-btn.previz-world { font-size: 11px; padding: 0 8px; }
+.previz-btn.previz-world.active { color: #f60; border-color: #f60; }
 .model-view.navigating:active { cursor: grabbing; }
 .model-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; touch-action: none; }
 /* Exposure and channel isolation are picture controls; a 3D tab has neither,

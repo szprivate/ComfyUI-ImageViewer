@@ -876,9 +876,21 @@ export const PrevizMixin = {
      * a previz tab even when the scene is empty, which is what a freshly dropped
      * node needs: something to open the 3D view and its panel on.
      */
-    previzAdoptSceneData(key, raw, { always = false } = {}) {
+    previzAdoptSceneData(key, raw, { always = false, replace = false } = {}) {
         const incoming = S.parseScene(raw);
         const current = this.previzScene(key);
+        // A world sent again is a new version of it: it replaces this one,
+        // keeping what was selected if it is still there.
+        if (replace && incoming.items.length) {
+            if (current && this._model3d && this._model3d.walking && this.activeTab === key) {
+                this._model3d.walkExit();
+            }
+            this._setScene(key, incoming);
+            if (!incoming.items.some((i) => i.id === this._previzSelection)) {
+                this._previzSelection = incoming.items[0].id;
+            }
+            return incoming;
+        }
         // The node is the source of truth only when the viewer has nothing yet:
         // otherwise a re-run would throw away edits made since.
         if (current && current.items.length) return current;
@@ -997,7 +1009,15 @@ export const PrevizMixin = {
         // Duplicate and Delete live on the item itself, under a right-click —
         // they act on one row, so they belong on the row rather than on a bar
         // that has to guess which one you mean.
-        actions.append(newBtn, editBtn, addBtn, exportBtn, undoBtn, redoBtn);
+        // Worlds: walk one, and leave a note about it. Shown only on a scene
+        // that has world items (see _previzRenderPanel).
+        const walkBtn = el("button", "previz-btn previz-world", "Walk");
+        walkBtn.title = "Walk through the world — Shift+J (W A S D, mouse to look, Shift run, F note, Esc stop)";
+        walkBtn.onclick = () => this.previzWalkToggle();
+        const noteBtn = el("button", "previz-btn previz-world", "Note");
+        noteBtn.title = "Pin a note to a spot — Shift+N. The agent that built the world reads it, with a snapshot";
+        noteBtn.onclick = () => this.previzFeedbackPlace();
+        actions.append(newBtn, editBtn, addBtn, exportBtn, undoBtn, redoBtn, walkBtn, noteBtn);
 
         const list = el("div", "previz-list");
         // The space below the tree is "no parent": dropping a row here lifts it
@@ -1022,7 +1042,7 @@ export const PrevizMixin = {
         this._previzCloseAddMenu();
         host.querySelectorAll(":scope > .previz-body").forEach((n) => n.remove());
         host.appendChild(root);
-        this._previzUI = { root, list, undoBtn, redoBtn };
+        this._previzUI = { root, list, undoBtn, redoBtn, walkBtn, noteBtn };
         return this._previzUI;
     },
 
@@ -1203,6 +1223,8 @@ export const PrevizMixin = {
             entries.push({ label: spec.label, run: () => this.previzAddPrimitive(spec.type) });
         }
         entries.push("-");
+        entries.push(...this._previzWorldMenuEntries());
+        entries.push("-");
         entries.push({ label: "Import USD / Alembic\u2026", run: () => this.previzImportUsd() });
         entries.push({ label: "Load scene\u2026", run: () => this.previzLoadSceneFile() });
         const a = anchor.getBoundingClientRect();
@@ -1318,6 +1340,12 @@ export const PrevizMixin = {
             ? this._previzUI : this._previzBuildPanel();
         if (!ui) return;
         ui.root.style.display = "flex";
+        const world = this.previzHasWorld();
+        if (ui.walkBtn) {
+            ui.walkBtn.style.display = world ? "" : "none";
+            ui.noteBtn.style.display = world ? "" : "none";
+            ui.walkBtn.classList.toggle("active", !!(this._model3d && this._model3d.walking));
+        }
         // Previz coming on is what opens the panel. After that the dock owns
         // it, so one put away by hand stays away — and stays undrawn, which is
         // worth having while playback calls through here every frame.

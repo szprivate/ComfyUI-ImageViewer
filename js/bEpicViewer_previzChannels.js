@@ -267,6 +267,8 @@ export const PrevizChannelsMixin = {
             t.append(row);
             ui.rows.set("color", { row, input: swatch, kind: "color" });
         }
+        // World settings, and a camera's reference (bEpicViewer_previzWorld.js).
+        if (this._cbWorldRows) this._cbWorldRows(ui, item, shape, doc);
         if (item.kind !== "camera" && S.offsetOf(item)) {
             root.append(Object.assign(doc.createElement("div"), {
                 className: "cb-note", textContent: "Transformations frozen (Edit → Freeze).",
@@ -300,6 +302,8 @@ export const PrevizChannelsMixin = {
                 if (focused !== r.input) r.input.value = match ? `${w}x${h}` : "";
             } else if (r.kind === "color") {
                 if (focused !== r.input) r.input.value = item.color || S.DEFAULT_COLOR;
+            } else if (r.kind === "world") {
+                this._cbWorldFill(r, item, focused);
             } else if (r.kind === "plane") {
                 const opts = S.planeSettings(item);
                 if (focused !== r.input) {

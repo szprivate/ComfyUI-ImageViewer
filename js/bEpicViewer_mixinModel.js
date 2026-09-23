@@ -52,6 +52,10 @@ export const ModelMixin = {
                 thumbFrame: () => (this.allTabs[this.activeTab] || [])
                     .find((f) => this._frameIsModel(f)) || null,
                 onClipFrames: (id, frames) => this.previzFitClipLength(frames),
+                // Worlds (bEpicViewer_previzWorld.js).
+                onWalkChange: (on) => this._onWalkChange(on),
+                onFeedbackRequest: (point, seen) => this._previzFeedbackSubmit(point, seen),
+                onPinClick: (pin) => this._previzPinClicked(pin),
             });
         }
         return this._model3d;
