@@ -61,6 +61,8 @@
 // Nothing here walks the tree to place an item — the view parents three.js
 // objects the same way and lets the engine compose the matrices.
 
+import { WORLD_KINDS, readWorldItem, referenceSettings, walkSettings, worldInfo } from "./bEpicViewer_worldData.js";
+
 export const SCENE_VERSION = 1;
 export const DEFAULT_RESOLUTION = [1920, 1080];
 
@@ -664,14 +666,17 @@ export function parseScene(raw) {
         const isPrim = raw.kind === "primitive";
         const isGroup = raw.kind === "group";
         const isPlane = raw.kind === "imageplane";
+        // Worlds (bEpicViewer_worldData.js): an environment, a terrain, a
+        // scatter or a depth mesh carries its own settings block and no src.
+        const isWorld = WORLD_KINDS.includes(raw.kind);
         const item = {
             id: typeof raw.id === "string" && raw.id ? raw.id
                 : newId(isCam ? "c" : isPrim ? "p" : isGroup ? "g" : isPlane ? "ip" : "m"),
             kind: isCam ? "camera" : isPrim ? "primitive" : isGroup ? "group"
-                : isPlane ? "imageplane" : "model",
+                : isPlane ? "imageplane" : isWorld ? raw.kind : "model",
             name: typeof raw.name === "string" && raw.name ? raw.name
                 : (isCam ? "Camera" : isPrim ? "Shape" : isGroup ? "Group"
-                   : isPlane ? "Image plane" : "model"),
+                   : isPlane ? "Image plane" : isWorld ? raw.kind : "model"),
             parent: typeof raw.parent === "string" && raw.parent ? raw.parent : null,
             position: vec(raw.position, [0, 0, 0]),
             rotation: vec(raw.rotation, [0, 0, 0]),
@@ -683,6 +688,9 @@ export function parseScene(raw) {
         if (isCam) {
             item.fov = num(raw.fov, 35);
             item.resolution = cameraResolution(raw);
+            // The picture this camera's view has to match (a world's reference).
+            const ref = referenceSettings(raw);
+            if (ref) item.reference = ref;
         } else if (offsetOf(raw)) {
             item.offset = offsetOf(raw);
         }
@@ -690,6 +698,8 @@ export function parseScene(raw) {
             // (the camera's fields are read above)
         } else if (isGroup) {
             // A group is its transform. Nothing else to read.
+        } else if (isWorld) {
+            readWorldItem(item, raw);
         } else if (isPrim) {
             const type = raw.primitive && PRIMITIVE_TYPES.has(raw.primitive.type)
                 ? raw.primitive.type : "box";
@@ -731,7 +741,7 @@ export function parseScene(raw) {
         // A model (or an image plane) with no file left to point at is
         // dropped: it would show as an invisible row the user can't fix. A
         // shape carries its own geometry, so it has nothing to lose.
-        if (!isCam && !isPrim && !isGroup && !item.src) continue;
+        if (!isCam && !isPrim && !isGroup && !isWorld && !item.src) continue;
         items.push(item);
     }
 
@@ -743,6 +753,10 @@ export function parseScene(raw) {
         activeCamera: typeof data.activeCamera === "string" ? data.activeCamera : null,
     });
     if (data.render && typeof data.render === "object") scene.render = renderSettings(data);
+    // A world: where walking starts, and which world (and version) this is.
+    if (data.walk && typeof data.walk === "object") scene.walk = walkSettings(data);
+    const world = worldInfo(data);
+    if (world) scene.world = world;
     if (scene.activeCamera && !itemById(scene, scene.activeCamera)) scene.activeCamera = null;
     repairTree(scene);
     return scene;

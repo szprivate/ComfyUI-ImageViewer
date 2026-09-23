@@ -17,6 +17,7 @@
 import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
 import { evaluate, cameraResolution, offsetOf, planeSettings } from "./bEpicViewer_scene3d.js";
+import { WorldViewMixin } from "./bEpicViewer_world3d.js";
 
 let _libsPromise = null;
 
@@ -513,6 +514,15 @@ export class Model3DView {
         if (!d || d.button !== 0 || d.alt || !this.scene3d) return;
         if (Math.abs(e.clientX - d.x) > 3 || Math.abs(e.clientY - d.y) > 3) return;
         if (this.gizmo && this.gizmo.dragging) return;
+        if (this._walk) return;
+        const pin = this.pickFeedbackPin(e);
+        if (pin && this.hooks.onPinClick) { this.hooks.onPinClick(pin); return; }
+        if (this._placingNote && this.hooks.onFeedbackRequest) {
+            this._placingNote = false;
+            this.root.classList.remove("placing-note");
+            this.hooks.onFeedbackRequest(this.worldPointAt(e), this.feedbackView());
+            return;
+        }
         const hit = this._pick(e);
         // Shift adds to the selection rather than replacing it — the scene's
         // own modifier, clear of Alt, which is navigation's.
@@ -550,6 +560,9 @@ export class Model3DView {
     }
 
     _disposeRenderer() {
+        // Walking is bound to this canvas and its document; a rebuilt one
+        // starts standing still.
+        if (this._walk) this.walkExit();
         if (this._raf && this._rafWin) {
             try { this._rafWin.cancelAnimationFrame(this._raf); } catch (e) {}
         }
@@ -624,6 +637,7 @@ export class Model3DView {
 
     /** The camera the viewport renders from: a scene camera, or the free one. */
     activeCameraObject() {
+        if (this._walk) return this.camera;
         const id = this.scene3d && this.scene3d.activeCamera;
         const entry = id ? this._entries.get(id) : null;
         return (entry && entry.camera) || this.camera;
@@ -644,7 +658,9 @@ export class Model3DView {
         // sets each mixer to the frame, so scrubbing and playing agree.
         // update() reports whether damping moved the camera; keep going until
         // it has settled.
-        if (this.controls && this.controls.update(dt)) again = true;
+        if (this.controls && this.controls.enabled && this.controls.update(dt)) again = true;
+        // Wind and walking run the loop for as long as they last.
+        if (this._worldTick(dt)) again = true;
         this.renderer.render(this.scene, this.activeCameraObject());
         if (again) this.requestRender();
     }
@@ -771,7 +787,7 @@ export class Model3DView {
         const box = new THREE.Box3();
         let any = false;
         for (const entry of this._entries.values()) {
-            if (!entry.object) continue;
+            if (!entry.object || entry.item.kind === "scatter") continue;
             box.expandByObject(entry.root);
             any = true;
         }
@@ -899,6 +915,13 @@ export class Model3DView {
             if (item.kind === "model" && entry.key !== this._srcKey(item.src)) {
                 this._disposeEntry(entry, false);
                 pending.push(this._loadEntry(entry, item));
+            } else if (this._isWorldKind(item)) {
+                // A world item rebuilds when its settings change; a scatter
+                // also when the ground it grows on does.
+                if (entry.key !== this._worldKey(item)) {
+                    this._worldDispose(entry);
+                    pending.push(this._worldBuild(entry, item));
+                }
             } else if (item.kind === "primitive") {
                 const type = (item.primitive && item.primitive.type) || "box";
                 if (entry.key !== type) {
@@ -924,6 +947,8 @@ export class Model3DView {
         // here puts every object under the right one.
         this._reparentAll();
         this._syncControlsCamera();          // the active camera's object exists now
+        this.syncFeedbackPins();
+        this._worldSyncStudio();
         this.applyFrame(this.sceneFrame);
         this._updateSceneStats();
         this._captureThumbnailSoon(this.hooks.thumbFrame && this.hooks.thumbFrame());
@@ -1072,6 +1097,11 @@ export class Model3DView {
 
         if (item.kind === "imageplane") {
             await this._buildImagePlane(entry, item);
+            return entry;
+        }
+
+        if (this._isWorldKind(item)) {
+            await this._worldBuild(entry, item);
             return entry;
         }
 
@@ -1245,6 +1275,7 @@ export class Model3DView {
 
     _disposeEntry(entry, full) {
         if (entry.mixer) { entry.mixer.stopAllAction(); entry.mixer = null; }
+        if (entry.worldExtras || entry.envApplied || entry.terrain) this._worldDispose(entry);
         if (entry.object) {
             this._bodyOf(entry).remove(entry.object);
             this._disposeObject(entry.object);
@@ -1389,9 +1420,14 @@ export class Model3DView {
         const ui = this.ui;
         if (!ui || !ui.gate) return;
         const id = this.scene3d && this.scene3d.activeCamera;
-        const entry = id ? this._entries.get(id) : null;
-        if (!entry || !entry.camera) { ui.gate.style.display = "none"; return; }
+        const entry = id && !this._walk ? this._entries.get(id) : null;
+        if (!entry || !entry.camera) {
+            ui.gate.style.display = "none";
+            this._syncReference(null, null);
+            return;
+        }
         const g = this._gateRect(entry.item);
+        this._syncReference(entry, g);
         const [rw, rh] = cameraResolution(entry.item);
         const px = (v) => `${Math.round(v)}px`;
         ui.gate.style.display = "block";
@@ -1896,6 +1932,7 @@ export class Model3DView {
         if (!r.opts.grid) hide(this.grid);
         hide(this.gizmoHelper);
         hide(this._pivotMark);
+        hide(this._pinGroup);           // feedback pins are notes, not part of the shot
         for (const box of (this._alsoBoxes || new Map()).values()) hide(box);
         if (!r.opts.helpers) {
             for (const entry of this._entries.values()) {
@@ -2003,6 +2040,7 @@ export class Model3DView {
 
     dispose() {
         this._loadId++;
+        if (this._walk) this.walkExit();
         for (const [id, entry] of [...this._entries]) { this._disposeEntry(entry, true); this._entries.delete(id); }
         if (this.gizmo) { this.gizmo.dispose(); this.gizmo = null; }
         this._disposeRenderer();
@@ -2011,3 +2049,7 @@ export class Model3DView {
         this.root = null;
     }
 }
+
+// Worlds (bEpicViewer_world3d.js). Copied as descriptors, not with
+// Object.assign, because the mixin has a getter (`walking`).
+Object.defineProperties(Model3DView.prototype, Object.getOwnPropertyDescriptors(WorldViewMixin));

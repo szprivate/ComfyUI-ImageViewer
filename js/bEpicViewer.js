@@ -6,6 +6,7 @@ import { api } from "../../scripts/api.js";
 
 import { LayoutMixin }   from "./bEpicViewer_mixinLayout.js";
 import { HistoryMixin, HISTORY_LIMIT_DEFAULT, clampHistoryLimit }  from "./bEpicViewer_mixinHistory.js";
+import { PrevizWorldMixin } from "./bEpicViewer_previzWorld.js";
 import { PlaybackMixin } from "./bEpicViewer_mixinPlayback.js";
 import { ParamsMixin }   from "./bEpicViewer_mixinParams.js";
 import { UIMixin }       from "./bEpicViewer_mixinUI.js";
@@ -36,7 +37,8 @@ const watchedNodeIds  = new Set();
 // Tab keys the user opened by hand rather than ones mirroring a node in the
 // graph: 📂 Open Folder, 📥 dropped files, and 🖼/🎬 "Send to Image Viewer".
 // Nothing in the graph backs them, so the stale-tab sweep must leave them be.
-const USER_TAB_PREFIXES = ["folder_", "dropped_", "loader_"];
+// "world:" tabs come from the bEpic Worlds pack (or an agent through it).
+const USER_TAB_PREFIXES = ["folder_", "dropped_", "loader_", "world:"];
 let isViewerPanelToggledOn = false;
 let _actionBarStateRetryTimer = null;
 
@@ -954,11 +956,19 @@ class ViewerPanel extends HTMLElement {
 
             // A previz node sends its scene with the tab, so opening a saved
             // workflow rebuilds the shot before anything has run.
+            // A sender with no node on the graph (the worlds pack, an agent)
+            // names its own tab.
+            if (data.tab_label && !this.tabLabels[finalKey]) this.tabLabels[finalKey] = data.tab_label;
             if (data.scene_data !== undefined && this.previzAdoptSceneData) {
                 // A previz node's tab is always a scene, even an empty one —
                 // otherwise a fresh node would show nothing and there would be
-                // no 3D view to switch previz on from.
-                this.previzAdoptSceneData(finalKey, data.scene_data, { always: true });
+                // no 3D view to switch previz on from. A world sent again
+                // (`scene_replace`) is a new version: it replaces what's there.
+                this.previzAdoptSceneData(finalKey, data.scene_data,
+                                          { always: true, replace: !!data.scene_replace });
+                if (data.scene_replace && this.activeTab === finalKey && this._model3d) {
+                    this.previzChanged({ reload: true, persist: false });
+                }
             }
             if (data.render_name) {
                 if (!this._previzRenderNames) this._previzRenderNames = {};
@@ -1031,6 +1041,15 @@ class ViewerPanel extends HTMLElement {
         }
 
         this._rebuildTabBar(node);
+        // A world opened for the user to look at comes to the front.
+        if (data.focus_tab) {
+            const key = Object.keys(data.tabs).find((k) => this.allTabs[k]);
+            if (key && key !== this.activeTab) {
+                if (this.isComparing) this.toggleCompare();
+                this.switchTab(key);
+                this.updateTabHighlights();
+            }
+        }
 
         this._historyPanelSig = null;
         this.requestPanelOpen();
@@ -1154,6 +1173,7 @@ Object.assign(
     PrevizChannelsMixin,
     PrevizRenderMixin,
     PrevizUndoMixin,
+    PrevizWorldMixin,
 );
 
 if (!customElements.get("bepic-viewer-panel")) {
