@@ -5,7 +5,7 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
 import { LayoutMixin }   from "./bEpicViewer_mixinLayout.js";
-import { HistoryMixin }  from "./bEpicViewer_mixinHistory.js";
+import { HistoryMixin, HISTORY_LIMIT_DEFAULT, clampHistoryLimit }  from "./bEpicViewer_mixinHistory.js";
 import { PlaybackMixin } from "./bEpicViewer_mixinPlayback.js";
 import { ParamsMixin }   from "./bEpicViewer_mixinParams.js";
 import { UIMixin }       from "./bEpicViewer_mixinUI.js";
@@ -294,6 +294,7 @@ class ViewerPanel extends HTMLElement {
                 // tab has nowhere else to live.
                 scenes: pick(this._scenes || {}),
                 dock: this.serializeDock ? this.serializeDock() : null,
+                historyLimit: clampHistoryLimit(this.historyLimit),
                 savedAt: Date.now(),
             };
             window.localStorage.setItem(this._getViewerStateStorageKey(), JSON.stringify(payload));
@@ -315,6 +316,12 @@ class ViewerPanel extends HTMLElement {
         }
 
         if (!parsed || typeof parsed !== 'object') return false;
+
+        // A preference, not content: restored even when no tab came back.
+        if (parsed.historyLimit != null) {
+            this.historyLimit = clampHistoryLimit(parsed.historyLimit);
+            this._syncHistoryLimitInput();
+        }
 
         const restoredTabs = (parsed.allTabs && typeof parsed.allTabs === 'object') ? parsed.allTabs : {};
         const restoredHistory = (parsed.history && typeof parsed.history === 'object') ? parsed.history : {};
@@ -607,6 +614,27 @@ class ViewerPanel extends HTMLElement {
         this.historyStrip   = sr.getElementById('history-strip');
         this.historyClearBtn = sr.getElementById('history-clear-btn');
         this.historyPanel   = sr.getElementById('history-panel');
+        this.historyLimitInput = sr.getElementById('history-limit-input');
+
+        if (this.historyLimit == null) this.historyLimit = HISTORY_LIMIT_DEFAULT;
+        if (this.historyLimitInput) {
+            this._syncHistoryLimitInput();
+            // Committed on Enter, blur or the spinner — not per keystroke, or
+            // typing "35" would pass through 3 and throw history away.
+            this.historyLimitInput.addEventListener('change', () =>
+                this.setHistoryLimit(this.historyLimitInput.value));
+            // The panel's own click handler leaves compare mode — the "Keep"
+            // text is part of the control too — and ComfyUI's key handler on
+            // window would take Backspace or Delete as "delete the selected
+            // nodes", since from outside the shadow root no input is focused.
+            const control = this.historyLimitInput.closest('.history-limit') || this.historyLimitInput;
+            for (const type of ['click', 'mousedown']) {
+                control.addEventListener(type, (ev) => ev.stopPropagation());
+            }
+            for (const type of ['keydown', 'keyup']) {
+                this.historyLimitInput.addEventListener(type, (ev) => ev.stopPropagation());
+            }
+        }
 
         // Placement is the dock mixin's business now — see applyDockLayout.
         if (this.historyPanel) this.historyPanel.style.display = 'none';
@@ -617,7 +645,7 @@ class ViewerPanel extends HTMLElement {
             // over the top of the strip with the panel reserving 48px of padding
             // for it, which the title bar now occupies.
             Object.assign(this.historyClearBtn.style, {
-                width: '100%',
+                flex: '1 1 auto', minWidth: '40px',
                 background: 'rgba(30,30,30,0.9)', color: '#fff', border: '1px solid #444',
                 padding: '6px', textAlign: 'center', cursor: 'pointer',
             });

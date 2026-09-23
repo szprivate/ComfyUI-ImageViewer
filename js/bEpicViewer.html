@@ -15,6 +15,9 @@
         <div id="history-panel" class="history-panel">
             <div id="history-strip" class="history-strip"></div>
             <div class="history-footer">
+                <label class="history-limit" title="How many images / videos each tab's history keeps. The oldest drop off past this. With clip caching on, kept videos also stay in memory.">
+                    Keep <input id="history-limit-input" type="number" min="1" max="500" step="1" value="40">
+                </label>
                 <button id="history-clear-btn" class="history-clear sprite-icon" title="Clear History"></button>
             </div>
         </div>

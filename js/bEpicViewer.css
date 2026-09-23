@@ -765,7 +765,12 @@ textarea.param-input {
 .thumb-ctx-item:hover { background: rgba(255,102,0,0.18); color: #fff; }
 .history-restore { margin: 6px; padding: 6px; background: #222; color: #eee; border: 1px solid #333; font-size: 11px; }
 .history-restore:hover { border-color: #f60; color: #f60; }
-.history-footer { flex: 0 0 auto; display: flex; gap: 6px; padding: 6px; justify-content: center; }
+.history-footer { flex: 0 0 auto; display: flex; gap: 6px; padding: 6px; justify-content: center; align-items: stretch; }
+.history-limit { flex: 0 0 auto; display: flex; align-items: center; gap: 5px; padding: 0 8px; font-size: 11px; color: #999; background: rgba(30,30,30,0.9); border: 1px solid #444; border-radius: 6px; white-space: nowrap; cursor: default; }
+.history-limit input { width: 44px; padding: 3px 4px; font: inherit; color: #ddd; background: #1a1a1a; border: 1px solid #333; border-radius: 4px; text-align: right; }
+.history-limit input:focus { outline: none; border-color: #f60; }
+/* A narrow panel has no room for both side by side. */
+.dock-rail:not(.bottom) > .history-panel .history-footer { flex-wrap: wrap; }
 .history-clear { margin: 0; padding: 8px 10px; background: rgba(30,30,30,0.85); color: #fff; border: 1px solid rgba(255,255,255,0.03); font-size: 12px; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.6); text-align: center; }
 .history-clear:hover { border-color: rgba(255,255,255,0.06); color: #fff; background: rgba(255,102,0,0.95); }
 

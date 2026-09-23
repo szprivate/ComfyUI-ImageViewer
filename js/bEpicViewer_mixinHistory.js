@@ -10,9 +10,16 @@
 // selection is the one that had to find another modifier.
 import { api } from "../../scripts/api.js";
 
-// Snapshots kept per tab. With clip caching on, this is also how many videos can
-// be held in RAM by history alone, so falling off the end has to release them.
-const HISTORY_LIMIT = 20;
+// Snapshots kept per tab, unless the user sets another number at the foot of
+// the history panel. With clip caching on, this is also how many videos can be
+// held in RAM by history alone, so falling off the end has to release them.
+export const HISTORY_LIMIT_DEFAULT = 40;
+export const HISTORY_LIMIT_MAX = 500;
+
+export function clampHistoryLimit(value) {
+    const n = Math.round(Number(value));
+    return Number.isFinite(n) && n >= 1 ? Math.min(n, HISTORY_LIMIT_MAX) : HISTORY_LIMIT_DEFAULT;
+}
 
 // Collapse the burst of failures a rebuilt strip produces into one probe.
 const PRUNE_DEBOUNCE_MS = 300;
@@ -41,7 +48,36 @@ export const HistoryMixin = {
     trimHistory(key) {
         const stack = this.history[key];
         if (!Array.isArray(stack)) return;
-        while (stack.length > HISTORY_LIMIT) stack.pop();
+        const limit = clampHistoryLimit(this.historyLimit);
+        while (stack.length > limit) stack.pop();
+    },
+
+    // A new cap from the panel footer. Lowering it drops the oldest snapshots
+    // of every tab straight away, rather than on each tab's next push — through
+    // removeHistoryItems, which also leaves a snapshot on screen, a compare or
+    // a selection that pointed at one of them.
+    setHistoryLimit(value) {
+        // A cleared or nonsense entry puts the old number back — falling to
+        // the default instead could quietly cut history short.
+        if (!(Math.round(Number(value)) >= 1)) {
+            this._syncHistoryLimitInput();
+            return;
+        }
+        this.historyLimit = clampHistoryLimit(value);
+        this._syncHistoryLimitInput();
+        for (const key of Object.keys(this.history || {})) {
+            const stack = this.history[key];
+            if (!Array.isArray(stack) || stack.length <= this.historyLimit) continue;
+            const past = [];
+            for (let i = this.historyLimit; i < stack.length; i++) past.push(i);
+            this.removeHistoryItems(key, past);
+        }
+        this.queuePersistViewerState?.();
+    },
+
+    _syncHistoryLimitInput() {
+        const input = this.historyLimitInput;
+        if (input) input.value = String(clampHistoryLimit(this.historyLimit));
     },
 
     // ── Pruning snapshots whose files are gone ───────────────────────────────
