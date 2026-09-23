@@ -25,7 +25,7 @@ function loadLibs() {
         const base = api.apiURL("/bepic/lib/three/");
         const load = (name) => import(base + name);
         _libsPromise = Promise.all([
-            load("three.module.min.js"), load("OrbitControls.js"), load("GLTFLoader.js"),
+            load("three.module.js"), load("OrbitControls.js"), load("GLTFLoader.js"),
             load("FBXLoader.js"), load("OBJLoader.js"), load("STLLoader.js"), load("PLYLoader.js"),
             load("TransformControls.js"),
         ]).then(([THREE, orbit, gltf, fbx, obj, stl, ply, gizmo]) => ({
