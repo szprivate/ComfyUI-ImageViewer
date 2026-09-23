@@ -60,6 +60,22 @@ State that must survive a reload goes through `queuePersistViewerState()` into `
 - `file_writer.py` / `model_writer.py` / `previz.py` / `roto_raster.py` — saving frames in VFX formats, saving meshes, previz render folders, rasterising roto shapes.
 - `nodes.py` — `bEpicSendToViewer`, `bEpicImageViewerRoto`, `bEpicImageViewerSAM3Collector`, `bEpicScene3D`. Node → viewer is a `bepic.viewer.update` websocket message; the nodes also return a `ui` dict so their files appear in ComfyUI's history and Assets panel (the frontend suppresses the inline node preview instead of the node withholding `ui`).
 
+### Worlds (branch `worlds`)
+
+Walkable worlds built from reference images. The viewer only *shows* them; they are *made* by a separate repo,
+`ComfyUI-bEpicWorlds` (sibling folder in custom_nodes; library, nodes, `/bepic_worlds/*` routes, MCP server, CLI).
+The contract is the scene schema — `SCHEMA.md` there, `bEpicViewer_worldData.js` here.
+
+- `bEpicViewer_worldData.js` — the world item kinds (environment, terrain, scatter, depthmesh), camera `reference`,
+  scene `walk` / `world`, as pure data; `parseScene` reads them through it.
+- `bEpicViewer_world3d.js` — a mixin on Model3DView (installed with `defineProperties`: it has a getter): sky/sun/fog
+  replacing the studio rig, terrain, instanced scatter with wind, depth mesh, walking, reference overlay, feedback pins.
+  World items rebuild when `_worldKey` (their settings as JSON) changes.
+- `bEpicViewer_previzWorld.js` — the panel side: Add → World, channel-box rows from `WORLD_FIELDS`, Walk/Note buttons,
+  notes POSTed to `/bepic_worlds/feedback` (kept in the scene only when that route is missing).
+- A world arrives as a normal `bepic.viewer.update` with `scene_replace` (replace the tab's scene), `tab_label` and
+  `focus_tab`; tab keys start `world:` and survive the stale-tab sweep.
+
 ### Hotkeys
 
 `bEpicViewer_keymap.js` is the single table feeding three consumers: ComfyUI's command list (so every action is rebindable in Settings → Keybinding), the panel's own key handler (which answers while the viewer is hovered), and the in-viewer help overlay. Add actions there, not ad-hoc listeners. A combo ComfyUI already owns ships unregistered and still works while hovered.

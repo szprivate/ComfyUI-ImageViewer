@@ -658,11 +658,16 @@ export const WorldViewMixin = {
         const decode = (arr, i) => (arr[i] + arr[i + 1] + arr[i + 2]) / 765;
         const cols = sx + 1, rows = sy + 1;
         const pos = new Float32Array(cols * rows * 3), uv = new Float32Array(cols * rows * 2), dist = new Float32Array(cols * rows);
+        const sky = new Uint8Array(cols * rows);
         for (let y = 0; y < rows; y++) {
             for (let x = 0; x < cols; x++) {
                 const u = x / sx, v = y / sy, i = y * cols + x;
                 let disp = this._sample(px, u, v, decode);
                 if (d.invert) disp = 1 - disp;
+                // Depth models give the sky (nothing there) a depth of zero. As
+                // geometry that is a painted wall at `far`, hiding the world's own
+                // sky and hills; it is left out instead.
+                sky[i] = disp < 0.012 ? 1 : 0;
                 // Depth maps store inverse depth: 1 is `near`, 0 is `far`.
                 const z = 1 / (disp / d.near + (1 - disp) / d.far);
                 dist[i] = z;
@@ -677,6 +682,7 @@ export const WorldViewMixin = {
         for (let y = 0; y < sy; y++) {
             for (let x = 0; x < sx; x++) {
                 const a = y * cols + x, b = a + 1, c = a + cols, e = c + 1;
+                if (sky[a] || sky[b] || sky[c] || sky[e]) continue;
                 const zs = [dist[a], dist[b], dist[c], dist[e]];
                 if (Math.max(...zs) / Math.min(...zs) - 1 > d.cut) continue;
                 index.push(a, c, b, b, c, e);
@@ -686,7 +692,10 @@ export const WorldViewMixin = {
         geom.setAttribute("position", new THREE.BufferAttribute(pos, 3));
         geom.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
         geom.setIndex(index);
-        const material = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, toneMapped: false, fog: false });
+        // Where the picture's ground lies on the terrain's (it is calibrated to),
+        // the two would fight pixel by pixel; the picture wins.
+        const material = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, toneMapped: false, fog: false,
+                                                       polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -16 });
         const mesh = new THREE.Mesh(geom, material);
         mesh.name = "imageplane";          // keeps its picture in clay/normal modes, like an image plane
         mesh.userData.bepicItemId = item.id;
