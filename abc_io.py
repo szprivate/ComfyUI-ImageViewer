@@ -28,6 +28,7 @@ glTF, and a cache is flattened once per frame it is asked for.
 
 import hashlib
 import math
+import mmap
 import os
 import struct
 
@@ -65,9 +66,19 @@ class _Archive:
     """The raw tree: groups, data blocks, and the two indexes at the root."""
 
     def __init__(self, path):
-        with open(path, "rb") as fh:
-            self.buf = fh.read()
+        # Mapped, not read. A cache is routinely a gigabyte, and every mesh at
+        # every frame is its own request: reading the file in would pull that
+        # gigabyte again each time — two seconds over a project drive — to
+        # reach the few megabytes one sample actually needs. A map hands the
+        # same bytes to struct and to slicing, and only the pages that are
+        # touched are ever fetched.
+        self._file = open(path, "rb")
+        try:
+            self.buf = mmap.mmap(self._file.fileno(), 0, access=mmap.ACCESS_READ)
+        except (OSError, ValueError):     # an empty file, or a filesystem that won't map
+            self.buf = self._file.read()
         if self.buf[:5] != _MAGIC:
+            self.close()
             raise ValueError(f"{os.path.basename(path)} is not an Ogawa Alembic file "
                              f"(an HDF5 one needs the Alembic libraries)")
         self.path = path
@@ -78,6 +89,23 @@ class _Archive:
         self.archive_metadata = self._read_metadata(root[3])
         self.time_samplings = self._read_time_samplings(root[4])
         self.indexed_metadata = self.data(root[5]).decode("utf-8", "replace").split(";")
+
+    def close(self):
+        """Let the file go. A map holds it open, and on Windows an open map is
+        what would stop the cache being re-exported while the viewer has it —
+        so an archive is opened for one read and dropped again."""
+        buf, self.buf = getattr(self, "buf", b""), b""
+        if hasattr(buf, "close"):
+            buf.close()
+        fh, self._file = getattr(self, "_file", None), None
+        if fh is not None:
+            fh.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
     # -- primitives --
     def group(self, off):
@@ -534,8 +562,14 @@ def import_scene(path):
                 "pivot": [0, 0, 0], "visible": True, "tracks": {},
                 "parent": ids.get(obj.parent.path) if obj.parent else None}
         if obj.is_mesh:
+            # `external` picks the route the geometry is asked for through:
+            # /bepic/view_file, which serves any absolute path inside the
+            # allowed folders and understands `prim` and `frame`. Without it
+            # the viewer asks /bepic/raw_view, which only serves ComfyUI's
+            # output and temp — so a cache anywhere else (the input folder, a
+            # project drive) answers 403 and the scene comes up empty.
             item["src"] = {"path": os.path.abspath(path), "prim": obj.path,
-                           "name": obj.name, "format": "abc"}
+                           "name": obj.name, "format": "abc", "external": True}
         # A transform with more than one sample animates: one key per sample.
         if count > 1 and obj.matrix(0) is not None:
             tracks = {"position": [], "rotation": [], "scale": []}
