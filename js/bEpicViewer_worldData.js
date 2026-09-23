@@ -12,7 +12,7 @@
 // degrees above the horizon.
 
 export const WORLD_KINDS = ["environment", "terrain", "scatter", "depthmesh"];
-export const SCATTER_TYPES = ["pine", "tree", "bush", "grass", "rock", "model"];
+export const SCATTER_TYPES = ["pine", "tree", "bush", "grass", "rock", "column", "model"];
 export const SKY_MODES = ["gradient", "panorama"];
 
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -75,6 +75,8 @@ export function terrainSettings(item) {
         size: pair(t.size, [200, 200], 1, 100000),
         height: num(t.height, 20, 0, 10000),
         segments: Math.round(num(t.segments, 256, 8, 512)),
+        // A ceiling is a terrain turned over; you don't stand on it.
+        walkable: t.walkable !== false,
         layers,
         rules: {
             rockSlope: pair(r.rockSlope, [24, 38], 0, 90),
@@ -84,10 +86,39 @@ export function terrainSettings(item) {
     };
 }
 
+// Areas a scatter leaves empty: circles {center: [x, z], radius}, or wedges
+// {wedge: {apex: [x, z], yaw, half, range}} — the view a picture already
+// covers, yaw 0 looking down -Z, `half` degrees either side.
 function _clearList(v) {
     const list = Array.isArray(v) ? v : (v && typeof v === "object" ? [v] : []);
-    return list.filter((c) => c && Array.isArray(c.center))
-        .map((c) => ({ center: [num(c.center[0], 0), num(c.center[1], 0)], radius: num(c.radius, 5, 0) }));
+    const out = [];
+    for (const c of list) {
+        if (c && Array.isArray(c.center)) {
+            out.push({ center: [num(c.center[0], 0), num(c.center[1], 0)], radius: num(c.radius, 5, 0) });
+        } else if (c && c.wedge && Array.isArray(c.wedge.apex)) {
+            const w = c.wedge;
+            out.push({ wedge: { apex: [num(w.apex[0], 0), num(w.apex[1], 0)], yaw: num(w.yaw, 0),
+                                half: num(w.half, 30, 0, 180), range: num(w.range, 100, 0) } });
+        }
+    }
+    return out;
+}
+
+/** Whether world x, z lies in one of a scatter's clear areas. */
+export function inClearArea(clear, x, z) {
+    for (const c of clear || []) {
+        if (c.center) {
+            if (Math.hypot(x - c.center[0], z - c.center[1]) < c.radius) return true;
+        } else if (c.wedge) {
+            const w = c.wedge, dx = x - w.apex[0], dz = z - w.apex[1], d = Math.hypot(dx, dz);
+            if (d > w.range) continue;
+            // Angle from the wedge's axis (yaw 0 = -Z, +90 = +X).
+            const ang = Math.atan2(dx, -dz) * 180 / Math.PI - w.yaw;
+            const off = Math.abs(((ang + 540) % 360) - 180);
+            if (off <= w.half) return true;
+        }
+    }
+    return false;
 }
 
 export function scatterSettings(item) {
@@ -104,6 +135,10 @@ export function scatterSettings(item) {
         color: col(s.color, "#3f6b2e"),
         wind: num(s.wind, 0.3, 0, 5),
         clear: _clearList(s.clear),
+        // A regular layout [dx, dz] in metres (columns in a hall), or null for
+        // random; and a stretch of the height alone (a column as tall as the room).
+        grid: Array.isArray(s.grid) && s.grid.length >= 2 ? pair(s.grid.slice(0, 2), [8, 8], 0.2, 1000) : null,
+        aspect: num(s.aspect, 1, 0.01, 1000),
     };
 }
 
@@ -111,10 +146,19 @@ export function depthMeshSettings(item) {
     const d = (item && item.depthmesh) || {};
     return {
         src: file(d.src), depth: file(d.depth),
+        // "rg16": 16 bits in red (high) and green (low), as heightmaps are
+        // stored — a depth map needs them; "gray" is an ordinary picture.
+        encoding: d.encoding === "rg16" ? "rg16" : "gray",
         fov: num(d.fov, 50, 1, 170),
         near: num(d.near, 2, 0.01), far: num(d.far, 100, 0.02),
         cut: num(d.cut, 0.12, 0, 5),
         invert: !!d.invert,
+        // [d, metres] pairs, interpolated in inverse depth — how the builder
+        // says "the fit holds here, stretch the rest"; null for plain near/far.
+        curve: Array.isArray(d.curve) && d.curve.length >= 2
+            ? d.curve.filter((p) => Array.isArray(p) && p.length === 2)
+                .map((p) => [num(p[0], 0, 0, 1), num(p[1], 1, 0.01)]).sort((a, b) => a[0] - b[0])
+            : null,
         segments: Math.round(num(d.segments, 256, 8, 1024)),
     };
 }
@@ -180,7 +224,10 @@ export function makeScatterItem(id, type = "tree", target = "terrain") {
     if (type === "grass") Object.assign(s, { count: 6000, scale: [0.6, 1.2], wind: 0.6, color: "#6f9a44" });
     if (type === "rock") Object.assign(s, { count: 200, scale: [0.4, 1.8], wind: 0, layer: -1, maxSlope: 60, color: "#7c776d" });
     if (type === "pine") Object.assign(s, { count: 1200, color: "#2f5226" });
-    const label = { pine: "Pines", tree: "Trees", bush: "Bushes", grass: "Grass", rock: "Rocks", model: "Scatter" }[type];
+    if (type === "column") Object.assign(s, { count: 400, scale: [1, 1], wind: 0, layer: -1, maxSlope: 90,
+                                              color: "#e6e4df", grid: [8.5, 8.5], aspect: 3 });
+    const label = { pine: "Pines", tree: "Trees", bush: "Bushes", grass: "Grass", rock: "Rocks",
+                    column: "Columns", model: "Scatter" }[type];
     return Object.assign(base(id, "scatter", label), { scatter: s });
 }
 
@@ -231,6 +278,9 @@ export const WORLD_FIELDS = {
         { path: "scatter.maxSlope", label: "Max slope", type: "number", step: 1, min: 0, max: 90 },
         { path: "scatter.color", label: "Colour", type: "color" },
         { path: "scatter.wind", label: "Wind", type: "number", step: 0.05, min: 0 },
+        { path: "scatter.aspect", label: "Height ×", type: "number", step: 0.1, min: 0.01 },
+        { path: "scatter.grid.0", label: "Grid X", type: "number", step: 0.5, min: 0.2, needs: "scatter.grid" },
+        { path: "scatter.grid.1", label: "Grid Z", type: "number", step: 0.5, min: 0.2, needs: "scatter.grid" },
     ],
     depthmesh: [
         { path: "depthmesh.fov", label: "FOV", type: "number", step: 1, min: 1, max: 170 },

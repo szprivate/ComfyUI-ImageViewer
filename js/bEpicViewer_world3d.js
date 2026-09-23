@@ -13,7 +13,7 @@
 
 import {
     WORLD_KINDS, environmentSettings, terrainSettings, scatterSettings, depthMeshSettings,
-    referenceSettings, walkSettings, worldInfo,
+    referenceSettings, walkSettings, worldInfo, inClearArea,
 } from "./bEpicViewer_worldData.js";
 
 const DEG = Math.PI / 180;
@@ -29,6 +29,19 @@ function rng(seed) {
         t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
         return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
+}
+
+/** Metres for a depth-map value from [d, z] pairs, interpolated in 1/z. */
+function curveDepth(curve, d) {
+    if (d <= curve[0][0]) return curve[0][1];
+    for (let i = 1; i < curve.length; i++) {
+        const [d0, z0] = curve[i - 1], [d1, z1] = curve[i];
+        if (d <= d1) {
+            const t = (d - d0) / Math.max(d1 - d0, 1e-9);
+            return 1 / ((1 - t) / z0 + t / z1);
+        }
+    }
+    return curve[curve.length - 1][1];
 }
 
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
@@ -412,13 +425,18 @@ export const WorldViewMixin = {
         return body.localToWorld(p).y;
     },
 
-    /** The highest ground under x, z across every terrain, or null. */
-    groundAt(x, z) {
+    /**
+     * The ground under x, z: the highest walkable terrain surface there — or,
+     * with `below`, the highest one not above that height (so a bridge or an
+     * upper floor over you isn't where your feet go). Null when there is none.
+     */
+    groundAt(x, z, below = Infinity) {
         let best = null;
         for (const entry of this._entries.values()) {
             if (!entry.terrain || entry.item.visible === false) continue;
+            if (!terrainSettings(entry.item).walkable) continue;
             const y = this._terrainHeightAt(entry, x, z);
-            if (y != null && (best == null || y > best)) best = y;
+            if (y != null && y <= below && (best == null || y > best)) best = y;
         }
         return best;
     },
@@ -494,6 +512,12 @@ export const WorldViewMixin = {
             const nrm = g.attributes.normal;
             for (let i = 0; i < nrm.count; i++) nrm.setXYZ(i, 0, 1, 0);
             parts = [{ geometry: g, part: "grass", height: 0.7 }];
+        } else if (type === "column") {
+            // A column one unit tall with a flared head, as in a car park or a
+            // hall; the scatter's `aspect` stretches it to the room's height.
+            const shaft = new THREE.CylinderGeometry(0.3, 0.3, 0.86, 16).translate(0, 0.43, 0);
+            const head = new THREE.CylinderGeometry(0.75, 0.3, 0.14, 16).translate(0, 0.93, 0);
+            parts = [{ geometry: merge([shaft, head]), part: "column", height: 1 }];
         } else {                                            // rock
             parts = [{ geometry: jitter(new THREE.IcosahedronGeometry(0.7, 1), 0.45, 23).scale(1.3, 0.75, 1.1).translate(0, 0.25, 0),
                        part: "rock", height: 0.8 }];
@@ -570,9 +594,23 @@ export const WorldViewMixin = {
         const q = new THREE.Quaternion(), e = new THREE.Euler(), sc = new THREE.Vector3(), p = new THREE.Vector3();
         const world = new THREE.Vector3();
         const m = new THREE.Matrix4();
-        const maxTries = s.count * 8;
+        // Where to try: a regular grid (offset by the seed), or random spots.
+        const spots = [];
+        if (s.grid) {
+            const ox = r() * s.grid[0], oz = r() * s.grid[1];
+            for (let z = -T.size[1] / 2 + oz; z < T.size[1] / 2; z += s.grid[1]) {
+                for (let x = -T.size[0] / 2 + ox; x < T.size[0] / 2; x += s.grid[0]) {
+                    spots.push([x / T.size[0] + 0.5, z / T.size[1] + 0.5]);
+                }
+            }
+            // Middle out, so a count that doesn't cover the grid trims the rim
+            // rather than leaving one half of the room bare.
+            spots.sort((a, b) => Math.hypot(a[0] - 0.5, a[1] - 0.5) - Math.hypot(b[0] - 0.5, b[1] - 0.5));
+        }
+        const maxTries = s.grid ? spots.length : s.count * 8;
         for (let tries = 0; matrices.length < s.count && tries < maxTries; tries++) {
-            const u = r() * 0.98 + 0.01, v = r() * 0.98 + 0.01;
+            const [u, v] = s.grid ? spots[tries] : [r() * 0.98 + 0.01, r() * 0.98 + 0.01];
+            if (u < 0.005 || u > 0.995 || v < 0.005 || v > 0.995) continue;
             const gx = Math.round(u * T.seg), gy = Math.round(v * T.seg), vi = gy * n + gx;
             const ny = T.normals[vi * 3 + 1];
             const slope = Math.acos(Math.min(1, Math.max(-1, ny))) / DEG;
@@ -588,12 +626,14 @@ export const WorldViewMixin = {
             p.y = ((H[y0 * n + x0] * (1 - tx) + H[y0 * n + x0 + 1] * tx) * (1 - ty)
                  + (H[(y0 + 1) * n + x0] * (1 - tx) + H[(y0 + 1) * n + x0 + 1] * tx) * ty) * T.height - 0.05;
             world.copy(p).applyMatrix4(tbody.matrixWorld);
-            if (s.clear.some((c) => Math.hypot(world.x - c.center[0], world.z - c.center[1]) < c.radius)) continue;
+            if (inClearArea(s.clear, world.x, world.z)) continue;
             const size = s.scale[0] + (s.scale[1] - s.scale[0]) * r();
-            const tilt = s.source.type === "rock" ? 0.4 : (s.source.type === "grass" ? 0.15 : 0.05);
+            const tilt = s.source.type === "rock" ? 0.4 : (s.source.type === "grass" ? 0.15
+                       : (s.source.type === "column" ? 0 : 0.05));
             e.set((r() - 0.5) * tilt, r() * Math.PI * 2, (r() - 0.5) * tilt);
             q.setFromEuler(e);
-            sc.set(size, size * (0.85 + r() * 0.3), size);
+            const vary = s.source.type === "column" ? 1 : 0.85 + r() * 0.3;
+            sc.set(size, size * vary * s.aspect, size);
             m.compose(p, q, sc).premultiply(toScatter);
             matrices.push(m.clone());
         }
@@ -606,13 +646,16 @@ export const WorldViewMixin = {
         const tints = matrices.map(() => 0.82 + cr() * 0.3);
         for (const part of parts) {
             const flat = part.part === "rock" || part.part === "crown";
+            // (a column is smooth-shaded: it is round)
             let material = part.material && part.part === "model" ? part.material.clone()
                 : new THREE.MeshStandardMaterial({
                     color: part.part === "trunk" ? trunkColor : 0xffffff,
                     roughness: 0.9, metalness: 0, flatShading: flat,
                     side: part.part === "grass" ? THREE.DoubleSide : THREE.FrontSide,
                 });
-            if (part.part !== "trunk" && part.part !== "model") material = this._windMaterial(material, s.wind, part.height);
+            if (part.part !== "trunk" && part.part !== "model" && part.part !== "column") {
+                material = this._windMaterial(material, s.wind, part.height);
+            }
             if (part.part === "model" && s.wind > 0) material = this._windMaterial(material, s.wind * 0.5, part.height);
             const mesh = new THREE.InstancedMesh(part.geometry, material, Math.max(1, matrices.length));
             mesh.count = matrices.length;
@@ -655,7 +698,9 @@ export const WorldViewMixin = {
         const sx = aspect >= 1 ? d.segments : Math.max(8, Math.round(d.segments * aspect));
         const sy = aspect >= 1 ? Math.max(8, Math.round(d.segments / aspect)) : d.segments;
         const tanV = Math.tan((d.fov * DEG) / 2), tanH = tanV * aspect;
-        const decode = (arr, i) => (arr[i] + arr[i + 1] + arr[i + 2]) / 765;
+        const decode = d.encoding === "rg16"
+            ? (arr, i) => (arr[i] * 256 + arr[i + 1]) / 65535
+            : (arr, i) => (arr[i] + arr[i + 1] + arr[i + 2]) / 765;
         const cols = sx + 1, rows = sy + 1;
         const pos = new Float32Array(cols * rows * 3), uv = new Float32Array(cols * rows * 2), dist = new Float32Array(cols * rows);
         const sky = new Uint8Array(cols * rows);
@@ -667,9 +712,10 @@ export const WorldViewMixin = {
                 // Depth models give the sky (nothing there) a depth of zero. As
                 // geometry that is a painted wall at `far`, hiding the world's own
                 // sky and hills; it is left out instead.
-                sky[i] = disp < 0.012 ? 1 : 0;
-                // Depth maps store inverse depth: 1 is `near`, 0 is `far`.
-                const z = 1 / (disp / d.near + (1 - disp) / d.far);
+                sky[i] = disp < 0.0015 ? 1 : 0;
+                // Depth maps store inverse depth: 1 is `near`, 0 is `far` —
+                // or the builder's curve, where the map isn't one straight line.
+                const z = d.curve ? curveDepth(d.curve, disp) : 1 / (disp / d.near + (1 - disp) / d.far);
                 dist[i] = z;
                 pos.set([(u - 0.5) * 2 * tanH * z, (0.5 - v) * 2 * tanV * z, -z], i * 3);
                 uv.set([u, 1 - v], i * 2);
@@ -872,7 +918,9 @@ export const WorldViewMixin = {
         } else {
             W.pos.x = nx; W.pos.z = nz;
         }
-        const ground = this.groundAt(W.pos.x, W.pos.z);
+        // Feet go to the ground below the eyes (a step up is fine), never onto
+        // something overhead.
+        const ground = this.groundAt(W.pos.x, W.pos.z, W.pos.y - W.settings.eyeHeight + 0.6);
         if (ground != null) {
             const want = ground + W.settings.eyeHeight;
             // Up a step at once, down a slope gently — no floating off ledges.

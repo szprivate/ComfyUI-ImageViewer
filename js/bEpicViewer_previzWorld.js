@@ -15,7 +15,8 @@ import {
     makeDepthMeshItem, getPath, setPath, referenceSettings,
 } from "./bEpicViewer_worldData.js";
 
-const SCATTER_LABELS = { pine: "Pines", tree: "Trees", bush: "Bushes", grass: "Grass", rock: "Rocks", model: "Model…" };
+const SCATTER_LABELS = { pine: "Pines", tree: "Trees", bush: "Bushes", grass: "Grass", rock: "Rocks",
+                         column: "Columns", model: "Model…" };
 
 export const PrevizWorldMixin = {
 
@@ -148,7 +149,7 @@ export const PrevizWorldMixin = {
 
     /** The rows for a world item's settings (or a camera's reference). */
     _cbWorldRows(ui, item, shape, doc) {
-        const fields = (WORLD_FIELDS[item.kind] || []).filter((f) => !f.needs || item[f.needs]);
+        const fields = (WORLD_FIELDS[item.kind] || []).filter((f) => !f.needs || getPath(item, f.needs));
         if (!fields.length) return;
         const title = item.kind === "camera" ? "Reference" : `${item.name}Settings`;
         const t = shape(title);
