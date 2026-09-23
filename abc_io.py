@@ -16,8 +16,10 @@ property layer written into it, and both are simple enough to read directly:
                data blocks of a 16-byte key followed by the values.
 
 What comes back is geometry: polygon meshes (`P`, `.faceIndices`,
-`.faceCounts`) and the transforms above them (`.xform`'s `.vals`, a 4x4
-matrix per sample), which is what a previz shot needs from a cache. Other
+`.faceCounts`) and the transforms above them (`.xform`: a stack of ops —
+translate, pivots, rotations, scale, or a whole matrix — named in `.ops`
+with their channels packed into `.vals`), which is what a previz shot needs
+from a cache. Other
 schemas — curves, points, subdivision creases, cameras, materials, UVs and
 normals — are left alone, as are HDF5-backed .abc files (Alembic's older
 container, which Ogawa replaced in 2013).
@@ -40,6 +42,7 @@ _POD_SIZE = {0: 1, 1: 1, 2: 1, 3: 2, 4: 2, 5: 4, 6: 4, 7: 8, 8: 8, 9: 2, 10: 4, 
 _KEY_BYTES = 16          # every sample is prefixed with its own hash
 
 _MESH_SCHEMAS = ("AbcGeom_PolyMesh", "AbcGeom_SubD")
+_PROXY_VERSION = 2       # bump when a change alters what a proxy contains
 
 
 def is_abc(path):
@@ -160,49 +163,72 @@ class _Archive:
 
 
 def _read_property_headers(buf, indexed_metadata):
-    """The packed header block that ends every compound property's group."""
+    """The packed header block that ends every compound property's group.
+
+    Every count after the leading word — sample count, changed range, time
+    sampling, name and metadata lengths — is 1, 2 or 4 bytes wide, as the
+    word's size hint says. The changed range is what maps a sample index to
+    a stored sample: an animation that holds still at either end stores
+    only the samples in between.
+    """
     out, i = [], 0
-    while i < len(buf):
-        try:
-            info = struct.unpack_from("<I", buf, i)[0]
-        except struct.error:
-            break
+    while i + 4 <= len(buf):
+        info = struct.unpack_from("<I", buf, i)[0]
         i += 4
         ptype = info & 0x3                      # 0 compound, 1 scalar, 2 array
-        size_hint = (info >> 2) & 0x3
+        width = {0: 1, 1: 2, 2: 4}.get((info >> 2) & 0x3, 4)
+        fmt = {1: "<B", 2: "<H", 4: "<I"}[width]
+
+        def take():
+            nonlocal i
+            v = struct.unpack_from(fmt, buf, i)[0]
+            i += width
+            return v
+
         rec = {"type": ptype, "pod": (info >> 4) & 0xF, "extent": (info >> 12) & 0xFF,
-               "samples": 1, "ts": 0}
+               "samples": 1, "first": 0, "last": 0, "ts": 0}
         meta_index = (info >> 20) & 0xFF
-        if ptype != 0:
-            width = {0: 1, 1: 2, 2: 4}[size_hint]
-            fmt = {0: "<B", 1: "<H", 2: "<I"}[size_hint]
-            rec["samples"] = struct.unpack_from(fmt, buf, i)[0]; i += width
-            if info & 0x0100:                   # carries a time-sampling index
-                rec["ts"] = buf[i]; i += 1
-        if i >= len(buf):
+        try:
+            if ptype != 0:
+                rec["samples"] = take()
+                if info & 0x0200:               # the changed range is written out
+                    rec["first"], rec["last"] = take(), take()
+                elif info & 0x0800:             # every sample is the same one
+                    rec["first"] = rec["last"] = 0
+                else:
+                    rec["first"], rec["last"] = 1, max(0, rec["samples"] - 1)
+                if info & 0x0100:               # carries a time-sampling index
+                    rec["ts"] = take()
+            n = take()
+            rec["name"] = buf[i:i + n].decode("utf-8", "replace"); i += n
+            if meta_index == 0xFF:              # its own metadata, not an indexed one
+                n2 = take()
+                rec["metadata"] = buf[i:i + n2].decode("utf-8", "replace"); i += n2
+            else:
+                rec["metadata"] = (indexed_metadata[meta_index]
+                                   if meta_index < len(indexed_metadata) else "")
+        except struct.error:
             break
-        n = buf[i]; i += 1
-        rec["name"] = buf[i:i + n].decode("utf-8", "replace"); i += n
-        if meta_index == 0xFF:                  # its own metadata, not an indexed one
-            n2 = buf[i]; i += 1
-            rec["metadata"] = buf[i:i + n2].decode("utf-8", "replace"); i += n2
-        else:
-            rec["metadata"] = (indexed_metadata[meta_index]
-                               if meta_index < len(indexed_metadata) else "")
         out.append(rec)
     return out
 
 
 def _read_object_headers(buf):
-    """The block naming an object's children: a length, a name, a metadata index."""
+    """The block naming an object's children: per child a length, a name and a
+    metadata index — followed by the metadata itself when the index is 0xFF.
+    The block ends in two 16-byte hashes, which are not a child."""
     out, i = [], 0
-    while i + 4 <= len(buf):
+    limit = len(buf) - 32 if len(buf) >= 32 else len(buf)
+    while i + 4 <= limit:
         n = struct.unpack_from("<I", buf, i)[0]; i += 4
-        if n == 0 or i + n > len(buf):
+        if n == 0 or i + n > limit:
             break
         out.append(buf[i:i + n].decode("utf-8", "replace")); i += n
-        if i < len(buf):
-            i += 1                              # metadata index
+        if i >= limit:
+            break
+        meta_index = buf[i]; i += 1
+        if meta_index == 0xFF and i + 4 <= limit:
+            i += 4 + struct.unpack_from("<I", buf, i)[0]
     return out
 
 
@@ -218,6 +244,17 @@ class _Property:
     def samples(self):
         return max(1, int(self.h.get("samples") or 1))
 
+    def _stored(self, sample):
+        """Which stored sample stands for `sample` (Alembic's own mapping):
+        the first one before the range that changes, the last one after it."""
+        sample = max(0, int(sample))
+        first, last = self.h.get("first", 0), self.h.get("last", 0)
+        if sample < first or (first == 0 and last == 0):
+            return 0
+        if sample >= last:
+            return last - first + 1
+        return sample - first + 1
+
     def _sample_refs(self):
         return self.a.children(self.ref) if not self.a.is_data(self.ref) else (self.ref,)
 
@@ -230,7 +267,7 @@ class _Property:
         # stores just the data. A sample that never changes is stored once.
         stride = 2 if self.h["type"] == 2 else 1
         count = max(1, len(refs) // stride)
-        index = min(max(0, int(sample)), count - 1)
+        index = min(self._stored(sample), count - 1)
         raw = self.a.data(refs[index * stride])
         if len(raw) <= _KEY_BYTES:
             return ()
@@ -317,15 +354,45 @@ class Object:
 
     # -- transform --
     def matrix(self, sample=0):
-        """This object's own 4x4 matrix at `sample`, row-major as Alembic stores it."""
+        """This object's own 4x4 matrix at `sample`, row-major as Alembic stores it.
+
+        An Alembic transform is a stack of operations — Maya writes translate,
+        rotate pivot, rotate, scale pivot, scale, each as its own op — whose
+        channels are packed one after another into `.vals`. `.ops` says which
+        op each is; a bare 4x4 is only one of the kinds. A transform with
+        nothing in it is the identity, and one is returned for it.
+        """
         if not self.props:
             return None
         xform = self.props.compound(".xform")
-        vals = xform.prop(".vals") if xform else None
-        if vals is None:
+        if xform is None:
             return None
-        v = vals.values(sample)
-        return list(v) if len(v) == 16 else None
+        ops_prop = xform.prop(".ops")
+        vals_prop = xform.prop(".vals")
+        ops = [int(o) for o in ops_prop.values(0)] if ops_prop else []
+        vals = list(vals_prop.values(sample)) if vals_prop else []
+        if not ops:
+            return list(vals) if len(vals) == 16 else _identity()
+        m, at = _identity(), 0
+        for op in ops:
+            kind = op >> 4
+            n = _OP_CHANNELS.get(kind, 0)
+            ch = vals[at:at + n]
+            at += n
+            if len(ch) < n:
+                break
+            # Imath composes each op in front of the ones before it, so the
+            # first op written is the outermost — translate, as in Maya.
+            m = _mat_mul(_op_matrix(kind, ch), m)
+        return m
+
+    @property
+    def inherits(self):
+        """False when this transform ignores its parents' (`.inherits`)."""
+        xform = self.props.compound(".xform") if self.props else None
+        prop = xform.prop(".inherits") if xform else None
+        v = prop.values(0) if prop else ()
+        return bool(v[0]) if v else True
 
     def world_matrix(self, sample=0):
         m = _identity()
@@ -336,6 +403,8 @@ class Object:
             node = node.parent
         for node in reversed(chain):
             local = node.matrix(sample)
+            if not node.inherits:
+                m = _identity()             # this one starts again from the world
             if local:
                 m = _mat_mul(local, m)      # row-vector convention, child first
         return m
@@ -376,6 +445,57 @@ class Object:
 
 def _identity():
     return [1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
+
+
+# Channels per transform op, by the op's kind (the high nibble of its code):
+# scale, translate, rotate (axis + angle), matrix, rotate X, Y, Z.
+_OP_CHANNELS = {0: 3, 1: 3, 2: 4, 3: 16, 4: 1, 5: 1, 6: 1}
+
+
+def _op_matrix(kind, ch):
+    """One transform op as a row-vector 4x4. Angles are in degrees."""
+    m = _identity()
+    if kind == 0:                                   # scale
+        m[0], m[5], m[10] = ch[0], ch[1], ch[2]
+    elif kind == 1:                                 # translate (or a pivot)
+        m[12], m[13], m[14] = ch[0], ch[1], ch[2]
+    elif kind == 3:                                 # a whole matrix
+        m = [float(v) for v in ch]
+    elif kind in (2, 4, 5, 6):                      # rotations
+        if kind == 2:
+            axis, angle = ch[:3], ch[3]
+        else:
+            axis, angle = ((1, 0, 0), (0, 1, 0), (0, 0, 1))[kind - 4], ch[0]
+        length = math.sqrt(sum(a * a for a in axis)) or 1.0
+        x, y, z = (a / length for a in axis)
+        rad = math.radians(angle)
+        c, s, t = math.cos(rad), math.sin(rad), 1 - math.cos(rad)
+        # Rodrigues' rotation, written row-vector: the transpose of the
+        # column-vector matrix, so a point times it turns right-handed.
+        m[0], m[1], m[2] = t * x * x + c, t * x * y + s * z, t * x * z - s * y
+        m[4], m[5], m[6] = t * x * y - s * z, t * y * y + c, t * y * z + s * x
+        m[8], m[9], m[10] = t * x * z + s * y, t * y * z - s * x, t * z * z + c
+    return m
+
+
+def _invert_affine(m):
+    """The inverse of an affine row-vector 4x4."""
+    a, b, c = m[0], m[1], m[2]
+    d, e, f = m[4], m[5], m[6]
+    g, h, k = m[8], m[9], m[10]
+    det = a * (e * k - f * h) - b * (d * k - f * g) + c * (d * h - e * g)
+    if abs(det) < 1e-12:
+        return _identity()
+    inv = [(e * k - f * h) / det, (c * h - b * k) / det, (b * f - c * e) / det,
+           (f * g - d * k) / det, (a * k - c * g) / det, (c * d - a * f) / det,
+           (d * h - e * g) / det, (b * g - a * h) / det, (a * e - b * d) / det]
+    tx, ty, tz = m[12], m[13], m[14]
+    return [inv[0], inv[1], inv[2], 0.0,
+            inv[3], inv[4], inv[5], 0.0,
+            inv[6], inv[7], inv[8], 0.0,
+            -(tx * inv[0] + ty * inv[3] + tz * inv[6]),
+            -(tx * inv[1] + ty * inv[4] + tz * inv[7]),
+            -(tx * inv[2] + ty * inv[5] + tz * inv[8]), 1.0]
 
 
 def _mat_mul(a, b):
@@ -433,11 +553,18 @@ def info(path):
     objects = _objects(a)
     meshes = [o for o in objects if o.is_mesh]
     samples = max([o.sample_count() for o in objects] or [1])
-    fps = 24.0
+    fps = 0.0
     try:
-        fps = float(a.archive_metadata.get("FramesPerTimeUnit") or 24.0)
+        fps = float(a.archive_metadata.get("FramesPerTimeUnit") or 0.0)
     except (TypeError, ValueError):
         pass
+    if not fps:
+        # Maya writes no rate into the archive; the samples' own spacing is
+        # the rate (a step of 0.04 s is 25 fps). Sampling 0 is Alembic's
+        # default one-second placeholder, so the first real one is used.
+        steps = [step for _start, step in a.time_samplings[1:] if step > 0]
+        if steps:
+            fps = round(1.0 / steps[0], 3)
     return {"objects": len(objects), "meshes": [o.path for o in meshes],
             "samples": samples, "fps": fps or 24.0,
             "application": a.archive_metadata.get("_ai_Application", ""),
@@ -479,7 +606,9 @@ def _cache_path(src, sample, obj_path=None):
         stamp = os.path.getmtime(src)
     except OSError:
         stamp = 0
-    key = f"{os.path.abspath(src)}|{stamp}|{sample}|{obj_path or ''}"
+    # The reader's version is part of the key: a proxy flattened by an older
+    # one (before transform ops were read) must not be served again.
+    key = f"{_PROXY_VERSION}|{os.path.abspath(src)}|{stamp}|{sample}|{obj_path or ''}"
     digest = hashlib.sha1(key.encode("utf-8", "replace")).hexdigest()[:16]
     stem = "".join(c for c in os.path.splitext(os.path.basename(src))[0]
                    if c.isalnum() or c in "-_")[:40] or "cache"
@@ -514,17 +643,24 @@ def _decompose(m):
     t = [m[12], m[13], m[14]]
     rows = [[m[0], m[1], m[2]], [m[4], m[5], m[6]], [m[8], m[9], m[10]]]
     scale = [math.sqrt(sum(c * c for c in r)) or 1.0 for r in rows]
+    # A mirrored transform: carry the flip on X's scale, so what is left to
+    # read angles from is a rotation.
+    det = (rows[0][0] * (rows[1][1] * rows[2][2] - rows[1][2] * rows[2][1])
+           - rows[0][1] * (rows[1][0] * rows[2][2] - rows[1][2] * rows[2][0])
+           + rows[0][2] * (rows[1][0] * rows[2][1] - rows[1][1] * rows[2][0]))
+    if det < 0:
+        scale[0] = -scale[0]
     r = [[rows[i][j] / scale[i] for j in range(3)] for i in range(3)]
-    # The viewer's rotations are three's XYZ Euler, read off the same basis USD
-    # uses; the matrix here is the transpose of three's column-major one.
-    sy = -r[2][0]
-    if abs(sy) < 0.999999:
-        x = math.atan2(r[2][1], r[2][2])
-        y = math.asin(max(-1.0, min(1.0, sy)))
-        z = math.atan2(r[1][0], r[0][0])
+    # The viewer's rotations are three's Euler XYZ, read the way three's own
+    # setFromRotationMatrix reads them. Its matrix is column-vector — the
+    # transpose of this one — so its element (i, j) is r[j][i] here.
+    m13 = r[2][0]
+    y = math.asin(max(-1.0, min(1.0, m13)))
+    if abs(m13) < 0.9999999:
+        x = math.atan2(-r[2][1], r[2][2])
+        z = math.atan2(-r[1][0], r[0][0])
     else:
-        x = math.atan2(-r[1][2], r[1][1])
-        y = math.asin(max(-1.0, min(1.0, sy)))
+        x = math.atan2(r[1][2], r[1][1])
         z = 0.0
     deg = 180.0 / math.pi
     return t, [x * deg, y * deg, z * deg], scale
@@ -550,12 +686,21 @@ def import_scene(path):
     def item_id(obj):
         return f"abc_{abs(hash(obj.path)) & 0xffffffff:x}"
 
+    def local(obj, sample):
+        """The matrix the viewer should give the item, under its parent there.
+        A transform that doesn't inherit is placed in the world directly, so
+        the parent the outliner still shows it under is taken back off."""
+        m = obj.matrix(sample) or _identity()
+        if not obj.inherits and obj.parent is not None:
+            m = _mat_mul(m, _invert_affine(obj.parent.world_matrix(sample)))
+        return m
+
     for obj in objects:
         if not (obj.is_mesh or obj.is_xform):
             continue
         ids[obj.path] = item_id(obj)
         count = obj.sample_count()
-        t, r, s = _decompose(obj.matrix(0) or _identity())
+        t, r, s = _decompose(local(obj, 0))
         item = {"id": ids[obj.path], "kind": "model" if obj.is_mesh else "group",
                 "name": obj.name or "object",
                 "position": t, "rotation": r, "scale": s,
@@ -571,10 +716,17 @@ def import_scene(path):
             item["src"] = {"path": os.path.abspath(path), "prim": obj.path,
                            "name": obj.name, "format": "abc", "external": True}
         # A transform with more than one sample animates: one key per sample.
-        if count > 1 and obj.matrix(0) is not None:
+        if count > 1 and obj.is_xform:
             tracks = {"position": [], "rotation": [], "scale": []}
+            prev = None
             for i in range(count):
-                ti, ri, si = _decompose(obj.matrix(i) or _identity())
+                ti, ri, si = _decompose(local(obj, i))
+                if prev is not None:
+                    # Keys are blended linearly, so an angle that wraps from
+                    # 179 to -179 would spin the long way round; keep each
+                    # one within half a turn of the key before it.
+                    ri = [a + 360.0 * round((b - a) / 360.0) for a, b in zip(ri, prev)]
+                prev = ri
                 tracks["position"].append({"f": i, "v": ti, "ease": "linear"})
                 tracks["rotation"].append({"f": i, "v": ri, "ease": "linear"})
                 tracks["scale"].append({"f": i, "v": si, "ease": "linear"})
