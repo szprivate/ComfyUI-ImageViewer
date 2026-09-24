@@ -784,6 +784,18 @@ textarea.param-input {
 .thumb-ctx-menu { position: absolute; z-index: 9999; background: #1e1e1e; border: 1px solid #444; border-radius: 5px; padding: 4px 0; min-width: 170px; box-shadow: 0 4px 14px rgba(0,0,0,0.7); font-size: 12px; color: #ddd; }
 .thumb-ctx-item { padding: 7px 14px; cursor: pointer; white-space: nowrap; }
 .thumb-ctx-item:hover { background: rgba(255,102,0,0.18); color: #fff; }
+/* Colour tags on history snapshots (bEpicViewer_historyTags.js). */
+.thumb-ctx-tags { display: flex; gap: 6px; align-items: center; padding: 6px 14px; border-top: 1px solid #2c2c2c; border-bottom: 1px solid #2c2c2c; margin: 3px 0; }
+.thumb-ctx-tag { width: 14px; height: 14px; border-radius: 50%; cursor: pointer; box-sizing: border-box; border: 1px solid rgba(0,0,0,0.5); flex: 0 0 auto; }
+.thumb-ctx-tag:hover { transform: scale(1.2); }
+.thumb-ctx-tag.sel { box-shadow: 0 0 0 2px #fff; }
+.thumb-ctx-tag.none { background: transparent; border: 1px solid #555; color: #888; font-size: 9px; line-height: 12px; text-align: center; }
+.thumb-ctx-tag.none:hover { color: #fff; border-color: #aaa; }
+.history-tag-dot { position: absolute; top: 4px; left: 4px; width: 10px; height: 10px; border-radius: 50%; border: 1px solid rgba(0,0,0,0.6); box-shadow: 0 0 0 1px rgba(255,255,255,0.35); pointer-events: none; z-index: 2; }
+.history-tag-filter { flex: 0 1 auto; min-width: 0; min-height: 0; padding: 3px 4px; font-size: 11px; color: #999; background: rgba(30,30,30,0.9); border: 1px solid #444; border-radius: 6px; }
+.history-tag-filter.on { border-color: #f60; }
+.history-tag-filter option { color: #ddd; background: #1b1b1b; }
+.history-tag-empty { color: #666; font-size: 11px; padding: 10px 6px; text-align: center; }
 .history-restore { margin: 6px; padding: 6px; background: #222; color: #eee; border: 1px solid #333; font-size: 11px; }
 .history-restore:hover { border-color: #f60; color: #f60; }
 .history-footer { flex: 0 0 auto; display: flex; gap: 6px; padding: 6px; justify-content: center; align-items: stretch; }

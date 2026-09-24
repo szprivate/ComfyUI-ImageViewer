@@ -477,13 +477,18 @@ export const HistoryMixin = {
         }
 
         // --- fast-path: skip full DOM rebuild if nothing changed ---
-        const newSig = JSON.stringify({ key, len: stack.length, sel: this.currentHistoryIndex, cmp: this.historyCompare });
+        const newSig = JSON.stringify({ key, len: stack.length, sel: this.currentHistoryIndex, cmp: this.historyCompare,
+                                        tags: this.historyTagSig ? this.historyTagSig(stack) : "" });
         if (newSig === this._historyPanelSig) return;
         this._historyPanelSig = newSig;
 
         const frag = document.createDocumentFragment();
+        // The tag filter in the footer (HistoryTagsMixin).
+        if (this._syncHistoryTagFilter) this._syncHistoryTagFilter();
 
         stack.forEach((snapshot, idx) => {
+            // Hidden by the tag filter; indices stay the stack's own.
+            if (this.historyTagVisible && !this.historyTagVisible(snapshot)) return;
             const imgObj    = (snapshot && snapshot.length > 0) ? snapshot[0] : null;
             const thumb     = document.createElement('div');
             thumb.className = 'history-thumb';
@@ -506,10 +511,13 @@ export const HistoryMixin = {
                 try { imgEl.src = this.thumbUrl(imgObj); } catch (e) { /* ignore */ }
             }
             thumb.appendChild(imgEl);
+            const tagDot = this.historyTagDot ? this.historyTagDot(snapshot) : null;
+            if (tagDot) thumb.appendChild(tagDot);
             thumb.dataset.idx = String(idx);
             thumb.title = `History ${idx + 1}\n` +
                           `Ctrl+click to add to the selection, Ctrl+Shift+click for a range\n` +
-                          `Shift+click to compare against the open snapshot`;
+                          `Shift+click to compare against the open snapshot\n` +
+                          `Right-click to tag it with a colour`;
             // Drag source: drop onto the ComfyUI graph to make a loader node. The
             // whole snapshot is passed so multi-image sequences map to a sequence
             // loader (see _makeHistoryThumbDraggable / _sequenceDirForSnapshot);
@@ -579,12 +587,18 @@ export const HistoryMixin = {
                 }
             };
 
-            frag.appendChild(thumb);
+                frag.appendChild(thumb);
         });
 
         // Replace strip contents in one operation
         this.historyStrip.innerHTML = '';
         this.historyStrip.appendChild(frag);
+        if (stack.length && !this.historyStrip.childElementCount) {
+            const none = document.createElement('div');
+            none.className = 'history-tag-empty';
+            none.textContent = 'Nothing tagged like that here';
+            this.historyStrip.appendChild(none);
+        }
 
         // Only reached when the signature changed, so this rides on real rebuilds
         // — a restore from localStorage, a new output, a tab switch — rather than
@@ -628,6 +642,14 @@ export const HistoryMixin = {
         }
         let newIdx = this.currentHistoryIndex + delta;
         newIdx = Math.min(Math.max(newIdx, 0), stack.length - 1);
+        // With a tag filter on, step through what the strip shows.
+        const shown = this.historyVisibleIndices ? this.historyVisibleIndices(key) : null;
+        if (shown && shown.length && shown.length < stack.length) {
+            const cur = this.currentHistoryIndex;
+            const next = delta > 0 ? shown.find((i) => i > cur) : [...shown].reverse().find((i) => i < cur);
+            if (next === undefined) return;
+            newIdx = next;
+        }
         if (newIdx === this.currentHistoryIndex) return;
         this.currentHistoryIndex = newIdx;
         this.openHistorySnapshot(key, newIdx);
@@ -671,6 +693,11 @@ export const HistoryMixin = {
         // outside one acts on the item under the cursor, as it always did.
         const batch = this.isHistoryItemSelected(key, idx)
             ? this.historySelectionIndices(key) : [];
+
+        // Colour tags (HistoryTagsMixin), for the same items Remove acts on.
+        if (this.historyTagMenuRow) {
+            menu.appendChild(this.historyTagMenuRow(doc, menu, key, batch.length > 1 ? batch : [idx]));
+        }
         const removeItem = doc.createElement('div');
         removeItem.className = 'thumb-ctx-item';
         removeItem.textContent = batch.length > 1

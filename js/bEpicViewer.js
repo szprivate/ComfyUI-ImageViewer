@@ -21,6 +21,7 @@ import { ModelMixin }    from "./bEpicViewer_mixinModel.js";
 import { PrevizMixin }   from "./bEpicViewer_mixinPreviz.js";
 import { PrevizCurvesMixin } from "./bEpicViewer_previzCurves.js";
 import { RotoCurvesMixin } from "./bEpicViewer_rotoCurves.js";
+import { HistoryTagsMixin } from "./bEpicViewer_historyTags.js";
 import { ParamAnimMixin } from "./bEpicViewer_paramAnim.js";
 import { ParamCurvesMixin } from "./bEpicViewer_paramCurves.js";
 import { PrevizChannelsMixin } from "./bEpicViewer_previzChannels.js";
@@ -169,6 +170,8 @@ class ViewerPanel extends HTMLElement {
         this.customLayouts       = {};
         this.tabLabels           = {};
         this.tabColors           = {};
+        this.historyTags         = {};    // image key → tag id (HistoryTagsMixin)
+        this.historyTagFilter    = "";
         this.sliderPos           = 50;
         this.isDraggingSlider    = false;
         this.sliderMode          = "vertical";
@@ -287,6 +290,8 @@ class ViewerPanel extends HTMLElement {
                 tabViewState: pick(this.tabViewState),
                 tabLabels: pick(this.tabLabels),
                 tabColors: pick(this.tabColors),
+                historyTags: this.historyTagsToPersist ? this.historyTagsToPersist(pick(this.history)) : {},
+                historyTagFilter: this.historyTagFilter || "",
                 tabOrder: (Array.isArray(this.tabOrder) ? this.tabOrder : []).filter(keepKey),
                 activeTab,
                 browserDir: this._browserDir || null,
@@ -327,6 +332,10 @@ class ViewerPanel extends HTMLElement {
         if (parsed.historyLimit != null) {
             this.historyLimit = clampHistoryLimit(parsed.historyLimit);
             this._syncHistoryLimitInput();
+        }
+        if (typeof parsed.historyTagFilter === 'string') this.historyTagFilter = parsed.historyTagFilter;
+        if (parsed.historyTags && typeof parsed.historyTags === 'object') {
+            this.historyTags = JSON.parse(JSON.stringify(parsed.historyTags));
         }
 
         const restoredTabs = (parsed.allTabs && typeof parsed.allTabs === 'object') ? parsed.allTabs : {};
@@ -1197,6 +1206,7 @@ Object.assign(
     PrevizMixin,
     PrevizCurvesMixin,
     RotoCurvesMixin,
+    HistoryTagsMixin,
     ParamAnimMixin,
     ParamCurvesMixin,
     PrevizChannelsMixin,
