@@ -896,36 +896,83 @@ export const HistoryMixin = {
             if (typeof this._openTabColorMenu === 'function') this._openTabColorMenu(key, e.clientX, e.clientY);
         });
 
+        // Reordering is previewed live: the dragged tab itself moves through the
+        // bar as the pointer passes each neighbour's middle, and the others
+        // slide aside. Dropping keeps the order; Esc, or letting go anywhere
+        // else, puts the tab back where it started.
         btn.draggable = true;
         btn.addEventListener('dragstart', (e) => {
             e.dataTransfer.effectAllowed = 'move';
             e.dataTransfer.setData('text/plain', key);
             btn.classList.add('dragging');
+            const container = btn.parentNode;
+            this._tabDrag = { btn, container, home: btn.nextSibling, dropped: false };
+            this._ensureTabBarDropZone(container);
         });
         btn.addEventListener('dragend', () => {
             btn.classList.remove('dragging');
-            (this.tabsContainer || this.tabBar).querySelectorAll('.tab').forEach(t => t.classList.remove('drag-over'));
+            const drag = this._tabDrag;
+            this._tabDrag = null;
+            if (!drag) return;
+            if (drag.dropped) { this.saveTabOrder(); return; }
+            // Cancelled: back to where it was picked up.
+            if (drag.home && drag.home.parentNode === drag.container) drag.container.insertBefore(btn, drag.home);
+            else drag.container.appendChild(btn);
         });
         btn.addEventListener('dragover', (e) => {
+            const drag = this._tabDrag;
+            if (!drag) return;               // not a tab drag (e.g. a history thumb)
             e.preventDefault();
             e.dataTransfer.dropEffect = 'move';
-            (this.tabsContainer || this.tabBar).querySelectorAll('.tab').forEach(t => t.classList.remove('drag-over'));
-            btn.classList.add('drag-over');
-        });
-        btn.addEventListener('dragleave', () => { btn.classList.remove('drag-over'); });
-        btn.addEventListener('drop', (e) => {
-            e.preventDefault();
-            btn.classList.remove('drag-over');
-            const fromKey = e.dataTransfer.getData('text/plain');
-            if (fromKey === key) return;
-            const container = this.tabsContainer || this.tabBar;
-            const fromBtn   = container.querySelector(`[data-tab="${CSS.escape(fromKey)}"]`);
-            if (!fromBtn) return;
+            if (btn === drag.btn) return;
             const rect = btn.getBoundingClientRect();
-            container.insertBefore(fromBtn, e.clientX < rect.left + rect.width / 2 ? btn : btn.nextSibling);
-            this.saveTabOrder();
+            const before = e.clientX < rect.left + rect.width / 2;
+            const target = before ? btn : btn.nextSibling;
+            if (target === drag.btn || target === drag.btn.nextSibling) return;   // already there
+            this._moveTabAnimated(drag.container, drag.btn, target);
+        });
+        btn.addEventListener('drop', (e) => {
+            if (!this._tabDrag) return;
+            e.preventDefault();
+            this._tabDrag.dropped = true;
         });
 
         return btn;
+    },
+
+    /** The bar itself accepts the drop too, so letting go between tabs keeps the order. */
+    _ensureTabBarDropZone(container) {
+        if (!container || container._bepicTabDropZone) return;
+        container._bepicTabDropZone = true;
+        container.addEventListener('dragover', (e) => {
+            if (!this._tabDrag) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+        });
+        container.addEventListener('drop', (e) => {
+            if (!this._tabDrag) return;
+            e.preventDefault();
+            this._tabDrag.dropped = true;
+        });
+    },
+
+    /**
+     * Move `btn` before `target` (null: to the end), sliding the tabs it passes
+     * into their new places rather than letting them jump: each is shifted back
+     * to where it was drawn, then eased to where it now belongs.
+     */
+    _moveTabAnimated(container, btn, target) {
+        const tabs = [...container.querySelectorAll('.tab')].filter((t) => t !== btn);
+        const before = new Map(tabs.map((t) => [t, t.getBoundingClientRect().left]));
+        container.insertBefore(btn, target);
+        for (const t of tabs) {
+            const dx = before.get(t) - t.getBoundingClientRect().left;
+            if (!dx) continue;
+            t.style.transition = 'none';
+            t.style.transform = `translateX(${dx}px)`;
+            t.getBoundingClientRect();                    // commit the start position
+            t.style.transition = 'transform 140ms ease';
+            t.style.transform = '';
+        }
     },
 };
