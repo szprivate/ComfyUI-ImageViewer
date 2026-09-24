@@ -29,6 +29,7 @@ raising during a ComfyUI execution.
 """
 
 import math
+import os
 
 import numpy as np
 
@@ -298,15 +299,17 @@ def _contour(points, W, H, tf, use_feather, steps):
     return [_apply_transform_px(x, y, tf, W, H) for (x, y) in poly]
 
 
-def _fill_polygon(poly, W, H, ss=2):
-    """Anti-aliased fill of a polygon → float32 [H,W] in 0..1."""
+def _fill_polygon(poly, w, h, ss=2, off=(0, 0)):
+    """Anti-aliased fill of a polygon → float32 [h,w] in 0..1, for the region
+    of the frame whose top-left corner is `off` (x, y) in frame pixels."""
     if Image is None or len(poly) < 3:
-        return np.zeros((H, W), dtype=np.float32)
-    img = Image.new("L", (W * ss, H * ss), 0)
+        return np.zeros((h, w), dtype=np.float32)
+    ox, oy = off
+    img = Image.new("L", (w * ss, h * ss), 0)
     d = ImageDraw.Draw(img)
-    d.polygon([(x * ss, y * ss) for (x, y) in poly], fill=255)
+    d.polygon([((x - ox) * ss, (y - oy) * ss) for (x, y) in poly], fill=255)
     if ss != 1:
-        img = img.resize((W, H), Image.BILINEAR)
+        img = img.resize((w, h), Image.BILINEAR)
     return np.asarray(img, dtype=np.float32) / 255.0
 
 
@@ -343,15 +346,15 @@ def _dilate_erode(mask, amount):
     return np.asarray(im, dtype=np.float32) / 255.0
 
 
-def _feathered_matte(shape_poly, feather_poly, W, H, feather_px):
+def _feathered_matte(shape_poly, feather_poly, w, h, feather_px, off=(0, 0)):
     """Blend a shape contour toward its feather contour into a soft matte."""
-    core = _fill_polygon(shape_poly, W, H)
+    core = _fill_polygon(shape_poly, w, h, off=off)
     if not feather_poly or feather_poly == shape_poly:
         if feather_px > 0:
             return np.clip(_gaussian(core, feather_px * 0.5), 0.0, 1.0)
         return core
 
-    outer = _fill_polygon(feather_poly, W, H)
+    outer = _fill_polygon(feather_poly, w, h, off=off)
     union = np.maximum(core, outer)
 
     if _ndimage is not None:
@@ -388,52 +391,145 @@ def _mean_feather_px(points, W, H):
     return (total / count) if count else 0.0
 
 
-def _render_layer(layer, W, H, frame):
+def _layer_plan(layer, W, H, frame):
+    """Everything about one layer at one frame that decides its pixels — the
+    outlines in frame pixels and the matte settings — or None when it draws
+    nothing. Cheap (tessellation only), so a frame's plans double as its cache
+    key: two frames with equal plans have equal mattes."""
     if not layer.get("visible", True):
         return None
     points = _points_for_frame(layer, frame)
     if not isinstance(points, list) or len(points) < 3:
         return None
-
     tf = layer.get("transform")
     steps = 16
     shape_poly = _contour(points, W, H, tf, use_feather=False, steps=steps)
     if len(shape_poly) < 3:
         return None
-
     per_shape_feather = _num(layer.get("feather"), 0.0)
-    has_pt_feather = any(isinstance(p.get("feather"), dict) for p in points)
-    if has_pt_feather:
+    feather_poly, fpx = None, 0.0
+    if any(isinstance(p.get("feather"), dict) for p in points):
         feather_poly = _contour(points, W, H, tf, use_feather=True, steps=steps)
         fpx = _mean_feather_px(points, W, H) + per_shape_feather
-        matte = _feathered_matte(shape_poly, feather_poly, W, H, fpx)
+    return {
+        "shape": shape_poly, "feather_poly": feather_poly, "fpx": fpx,
+        "feather": per_shape_feather,
+        "dilate": _num(layer.get("dilate"), 0.0), "blur": _num(layer.get("blur"), 0.0),
+        "invert": bool(layer.get("invert")), "opacity": _num(layer.get("opacity"), 1.0),
+    }
+
+
+def _plan_key(plan):
+    if plan is None:
+        return None
+    r = lambda poly: tuple((round(x, 2), round(y, 2)) for (x, y) in poly) if poly else None
+    return (r(plan["shape"]), r(plan["feather_poly"]), round(plan["fpx"], 3), plan["feather"],
+            plan["dilate"], plan["blur"], plan["invert"], plan["opacity"])
+
+
+def _region(polys, W, H, pad):
+    """The part of the frame a layer can touch: the box around its outlines,
+    grown by how far its feather, dilate and blur reach. None if off-frame."""
+    xs = [x for poly in polys if poly for (x, _y) in poly]
+    ys = [y for poly in polys if poly for (_x, y) in poly]
+    if not xs:
+        return None
+    x0 = max(0, int(math.floor(min(xs) - pad)))
+    y0 = max(0, int(math.floor(min(ys) - pad)))
+    x1 = min(W, int(math.ceil(max(xs) + pad)) + 1)
+    y1 = min(H, int(math.ceil(max(ys) + pad)) + 1)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    return x0, y0, x1, y1
+
+
+def _render_plan(plan, W, H):
+    """One layer's matte, worked out only inside the region it can reach.
+
+    Returns (matte, (x0, y0, x1, y1)); the region is the whole frame for an
+    inverted layer, which is everything outside the shape. Everything outside
+    the region is exactly zero — the margin is wide enough that no blur tail or
+    dilation is cut off (3 sigma for a Gaussian, the full radius for dilate),
+    and the filters see the same zeros past the region's edge as they did past
+    it in the full frame."""
+    reach = (abs(plan["dilate"]) + 1
+             + 3.0 * max(plan["blur"], 0.0)
+             + 3.0 * max(plan["feather"] * 0.5, plan["fpx"] * 0.5 if plan["feather_poly"] is None else 0.0)
+             + 4)
+    box = _region([plan["shape"], plan["feather_poly"]], W, H, reach)
+    if box is None:
+        matte = None
     else:
-        matte = _fill_polygon(shape_poly, W, H)
-        if per_shape_feather > 0:
-            matte = np.clip(_gaussian(matte, per_shape_feather * 0.5), 0.0, 1.0)
+        x0, y0, x1, y1 = box
+        w, h, off = x1 - x0, y1 - y0, (x0, y0)
+        if plan["feather_poly"] is not None:
+            matte = _feathered_matte(plan["shape"], plan["feather_poly"], w, h, plan["fpx"], off)
+        else:
+            matte = _fill_polygon(plan["shape"], w, h, off=off)
+            if plan["feather"] > 0:
+                matte = np.clip(_gaussian(matte, plan["feather"] * 0.5), 0.0, 1.0)
+        matte = _dilate_erode(matte, plan["dilate"])
+        if plan["blur"] > 0:
+            matte = np.clip(_gaussian(matte, plan["blur"]), 0.0, 1.0)
 
-    matte = _dilate_erode(matte, _num(layer.get("dilate"), 0.0))
-    blur = _num(layer.get("blur"), 0.0)
-    if blur > 0:
-        matte = np.clip(_gaussian(matte, blur), 0.0, 1.0)
+    if plan["invert"]:
+        full = np.zeros((H, W), dtype=np.float32)
+        if matte is not None:
+            full[y0:y1, x0:x1] = matte
+        matte, box = 1.0 - full, (0, 0, W, H)
+    if matte is None:
+        return None, None
+    if plan["opacity"] != 1.0:
+        matte = matte * max(0.0, min(1.0, plan["opacity"]))
+    return matte.astype(np.float32, copy=False), box
 
-    if layer.get("invert"):
-        matte = 1.0 - matte
 
-    opacity = _num(layer.get("opacity"), 1.0)
-    if opacity != 1.0:
-        matte = matte * max(0.0, min(1.0, opacity))
+def _render_layer(layer, W, H, frame):
+    """A layer's full-frame matte (kept for callers that want one)."""
+    plan = _layer_plan(layer, W, H, frame)
+    if plan is None:
+        return None
+    matte, box = _render_plan(plan, W, H)
+    if matte is None:
+        return None
+    out = np.zeros((H, W), dtype=np.float32)
+    x0, y0, x1, y1 = box
+    out[y0:y1, x0:x1] = matte
+    return out
 
-    return matte.astype(np.float32)
+
+def _nonzero_box(a, pad, W, H):
+    rows = np.flatnonzero(a.any(axis=1))
+    if rows.size == 0:
+        return None
+    cols = np.flatnonzero(a.any(axis=0))
+    return (max(0, int(cols[0] - pad)), max(0, int(rows[0] - pad)),
+            min(W, int(cols[-1] + pad + 1)), min(H, int(rows[-1] + pad + 1)))
 
 
 # ── public entry point ───────────────────────────────────────────────────────
+
+def _workers():
+    try:
+        n = int(os.environ.get("BEPIC_ROTO_THREADS", "0"))
+    except ValueError:
+        n = 0
+    return n if n > 0 else max(1, min(16, (os.cpu_count() or 4)))
+
 
 def rasterize(roto_data, W, H, frame_count=1):
     """Rasterize roto JSON into a float32 mask batch [N, H, W] in 0..1.
 
     frame_count is the input batch size; if any layer is keyframed we render a
     mask per frame, otherwise the single static matte is broadcast.
+
+    Speed: each layer is worked out only inside the region its outline,
+    feather, dilate and blur can reach (the full-frame distance transforms and
+    blurs were ~75% of the time); a frame whose outlines equal an earlier
+    frame's reuses its mask (before the first key, after the last, on Hold);
+    and the frames left are rendered on a thread pool — the fill, the distance
+    transforms and the blurs run in C with the GIL released. Set
+    BEPIC_ROTO_THREADS to cap the pool.
     """
     W = int(max(1, W))
     H = int(max(1, H))
@@ -449,43 +545,80 @@ def rasterize(roto_data, W, H, frame_count=1):
             for l in layers
         )
         g = roto_data.get("global") if isinstance(roto_data.get("global"), dict) else {}
+        g_dilate = _num(g.get("dilate"), 0.0)
+        g_feather = _num(g.get("feather"), 0.0)
+        g_blur = _num(g.get("blur"), 0.0)
+        g_reach = abs(g_dilate) + 1 + 3.0 * max(g_blur, g_feather * 0.5, 0.0) + 4
 
-        def render_frame(frame):
-            acc = np.zeros((H, W), dtype=np.float32)
+        def plans_for(frame):
+            out = []
             for layer in layers:
                 try:
-                    m = _render_layer(layer, W, H, frame)
+                    out.append(_layer_plan(layer, W, H, frame))
+                except Exception:
+                    out.append(None)
+            return out
+
+        def render_frame(plans, dst):
+            acc = dst
+            acc[...] = 0.0
+            for plan in plans:
+                if plan is None:
+                    continue
+                try:
+                    m, box = _render_plan(plan, W, H)
                 except Exception:
                     m = None
                 if m is not None:
-                    acc = np.maximum(acc, m)
-            # global post
-            acc = _dilate_erode(acc, _num(g.get("dilate"), 0.0))
-            gf = _num(g.get("feather"), 0.0)
-            if gf > 0:
-                acc = np.clip(_gaussian(acc, gf * 0.5), 0.0, 1.0)
-            gb = _num(g.get("blur"), 0.0)
-            if gb > 0:
-                acc = np.clip(_gaussian(acc, gb), 0.0, 1.0)
+                    x0, y0, x1, y1 = box
+                    np.maximum(acc[y0:y1, x0:x1], m, out=acc[y0:y1, x0:x1])
+            # global post, over the part of the frame that has anything in it
+            if g_dilate or g_feather > 0 or g_blur > 0:
+                box = _nonzero_box(acc, g_reach, W, H)
+                if box is not None:
+                    x0, y0, x1, y1 = box
+                    region = acc[y0:y1, x0:x1]
+                    region = _dilate_erode(region, g_dilate)
+                    if g_feather > 0:
+                        region = np.clip(_gaussian(region, g_feather * 0.5), 0.0, 1.0)
+                    if g_blur > 0:
+                        region = np.clip(_gaussian(region, g_blur), 0.0, 1.0)
+                    acc[y0:y1, x0:x1] = region
             if g.get("invert"):
-                acc = 1.0 - acc
-            return np.clip(acc, 0.0, 1.0)
+                np.subtract(1.0, acc, out=acc)
+            np.clip(acc, 0.0, 1.0, out=acc)
 
-        # Both branches write straight into the one output array. The obvious
-        # spellings each carried a redundant full-size copy: np.stack over a list
-        # of per-frame mattes holds every frame twice at the moment it allocates,
-        # and `.astype(np.float32)` on an array that is already float32 still
-        # copies (astype defaults to copy=True). At [N,H,W] float32 that is
-        # gigabytes for a long sequence — 957 MB peak measured for a 477 MB matte.
+        # Every frame writes straight into the one output array — no per-frame
+        # full-size copies (see the note that used to sit here: np.stack over a
+        # list held every frame twice).
         out = np.empty((N, H, W), dtype=np.float32)
-        if animated and N > 1:
-            for i in range(N):
-                out[i] = render_frame(i)
+        if not (animated and N > 1):
+            render_frame(plans_for(0), out[0])
+            out[1:] = out[0]
             return out
 
-        # Static roto: one matte broadcast across the batch, so it is rendered
-        # once and assigned into every slice without an intermediate.
-        out[...] = render_frame(0)
+        # Frames whose outlines match an earlier frame's reuse its mask.
+        first_of = {}
+        todo, copies = [], []
+        for i in range(N):
+            plans = plans_for(i)
+            key = tuple(_plan_key(p) for p in plans)
+            if key in first_of:
+                copies.append((i, first_of[key]))
+            else:
+                first_of[key] = i
+                todo.append((i, plans))
+
+        workers = min(_workers(), len(todo))
+        if workers > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                list(pool.map(lambda job: render_frame(job[1], out[job[0]]), todo))
+        else:
+            for i, plans in todo:
+                render_frame(plans, out[i])
+        for i, j in copies:
+            out[i] = out[j]
         return out
     except Exception:
         return np.zeros((N, H, W), dtype=np.float32)

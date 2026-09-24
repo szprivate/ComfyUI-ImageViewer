@@ -142,6 +142,11 @@ def _roto_mask(roto_data, N, H, W):
     return torch.from_numpy(np.ascontiguousarray(mask_np)).float()
 
 
+# Temp previews are written once and read back by the viewer a few times, so
+# they trade file size for speed: level 1 encodes 1080p frames several times
+# faster than level 4 for files ~15% larger (the byte budget below still holds).
+_PREVIEW_PNG_LEVEL = 1
+
 # How much preview data one node/tab may keep in the temp dir before its older
 # runs are deleted. Budgeting in megabytes rather than in frames tracks the
 # resource actually being consumed and scales itself with resolution: 4 GB is
@@ -259,57 +264,54 @@ def _temp_frames(inp, label, unique_id, out_dir, temp_type):
     prefix = _run_group_prefix(unique_id, label)
     run_tag = uuid.uuid4().hex[:_RUN_TAG_LEN]
 
-    try:
-        samples = inp
-        for i, tensor in enumerate(samples):
-            t = tensor
-            arr = t.cpu().numpy()
-
-            # Detect if this array contains 3 or 4 color channels on any axis
-            chan_axis = None
-            for ax, s in enumerate(arr.shape):
-                if s in (3, 4):
-                    chan_axis = ax
-                    break
-
+    def write(i, tensor):
+        arr = tensor.cpu().numpy()
+        # Detect if this array contains 3 or 4 color channels on any axis
+        chan_axis = None
+        for ax, s in enumerate(arr.shape):
+            if s in (3, 4):
+                chan_axis = ax
+                break
+        try:
             if chan_axis is not None and arr.ndim >= 2:
-                try:
-                    # Move channel axis to last to get H,W,C
-                    if chan_axis != arr.ndim - 1:
-                        img_arr = np.moveaxis(arr, chan_axis, -1)
-                    else:
-                        img_arr = arr
+                # Move channel axis to last to get H,W,C
+                img_arr = np.moveaxis(arr, chan_axis, -1) if chan_axis != arr.ndim - 1 else arr
+                # If there's a leading batch dimension, squeeze it
+                if img_arr.ndim == 4 and img_arr.shape[0] == 1:
+                    img_arr = img_arr[0]
+                img = Image.fromarray(np.clip(255.0 * img_arr, 0, 255).astype(np.uint8))
+                # Convert RGBA → RGB so PNG saves in full colour
+                if img.mode == 'RGBA':
+                    img = img.convert('RGB')
+                filename = f"{prefix}{run_tag}_{i:04d}.png"
+                img.save(os.path.join(out_dir, filename), compress_level=_PREVIEW_PNG_LEVEL)
+                return {"filename": filename, "subfolder": "", "type": temp_type,
+                        "path": os.path.abspath(os.path.join(out_dir, filename))}
+            mask_arr = arr
+            if mask_arr.ndim == 3 and mask_arr.shape[0] == 1:
+                mask_arr = mask_arr[0]
+            if mask_arr.ndim == 3 and mask_arr.shape[-1] == 1:
+                mask_arr = mask_arr[..., 0]
+            mask_img = Image.fromarray(np.clip(255.0 * mask_arr, 0, 255).astype(np.uint8)).convert('L')
+            mask_filename = f"{prefix}{run_tag}_{i:04d}_mask.png"
+            mask_img.save(os.path.join(out_dir, mask_filename), compress_level=_PREVIEW_PNG_LEVEL)
+            return {"filename": mask_filename, "subfolder": "", "type": "mask",
+                    "path": os.path.abspath(os.path.join(out_dir, mask_filename))}
+        except Exception:
+            return None
 
-                    # If there's a leading batch dimension, squeeze it
-                    if img_arr.ndim == 4 and img_arr.shape[0] == 1:
-                        img_arr = img_arr[0]
-
-                    array = 255.0 * img_arr
-                    img = Image.fromarray(np.clip(array, 0, 255).astype(np.uint8))
-                    # Convert RGBA → RGB so PNG saves in full colour
-                    if img.mode == 'RGBA':
-                        img = img.convert('RGB')
-                    filename = f"{prefix}{run_tag}_{i:04d}.png"
-                    img.save(os.path.join(out_dir, filename), compress_level=4)
-                    full = os.path.abspath(os.path.join(out_dir, filename))
-                    batch_results.append({"filename": filename, "subfolder": "", "type": temp_type, "path": full})
-                except Exception:
-                    continue
-            else:
-                try:
-                    mask_arr = arr
-                    if mask_arr.ndim == 3 and mask_arr.shape[0] == 1:
-                        mask_arr = mask_arr[0]
-                    if mask_arr.ndim == 3 and mask_arr.shape[-1] == 1:
-                        mask_arr = mask_arr[..., 0]
-                    mask_arr = (255.0 * mask_arr).astype(np.uint8)
-                    mask_img = Image.fromarray(np.clip(mask_arr, 0, 255).astype(np.uint8)).convert('L')
-                    mask_filename = f"{prefix}{run_tag}_{i:04d}_mask.png"
-                    mask_img.save(os.path.join(out_dir, mask_filename), compress_level=4)
-                    full = os.path.abspath(os.path.join(out_dir, mask_filename))
-                    batch_results.append({"filename": mask_filename, "subfolder": "", "type": "mask", "path": full})
-                except Exception:
-                    continue
+    try:
+        # Encoding a PNG runs in C with the GIL released, so frames are written
+        # on a thread pool; map() keeps them in order.
+        frames = list(inp)
+        workers = max(1, min(8, len(frames), os.cpu_count() or 4))
+        if workers > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                written = list(pool.map(lambda job: write(*job), enumerate(frames)))
+        else:
+            written = [write(i, t) for i, t in enumerate(frames)]
+        batch_results = [w for w in written if w]
     except Exception:
         return []
 
