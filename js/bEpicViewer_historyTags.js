@@ -10,6 +10,10 @@
 // so tags are kept in a map keyed by the snapshot's first image (its path, or
 // type/subfolder/filename for ComfyUI's own outputs). The map is saved with
 // the rest of the viewer state, trimmed to the images history still holds.
+//
+// The history's Clear button follows the filter: with one on, it removes only
+// the snapshots the filter shows (clearHistoryFiltered) — every red one, say,
+// or with "Untagged" everything that was not kept by a tag.
 
 export const HISTORY_TAGS = [
     { id: "red",    label: "Red",    color: "#e5484d" },
@@ -21,9 +25,11 @@ export const HISTORY_TAGS = [
 ];
 const TAG_BY_ID = Object.fromEntries(HISTORY_TAGS.map((t) => [t.id, t]));
 
-/** "" shows everything, "any" everything tagged, a tag id that colour only. */
+/** "" shows everything, "any" everything tagged, "none" everything untagged,
+ *  a tag id that colour only. */
 const FILTER_ALL = "";
 const FILTER_ANY = "any";
+const FILTER_NONE = "none";
 
 export const HistoryTagsMixin = {
 
@@ -62,7 +68,9 @@ export const HistoryTagsMixin = {
         const f = this.historyTagFilter || FILTER_ALL;
         if (f === FILTER_ALL) return true;
         const tag = this.historyTagOf(snapshot);
-        return f === FILTER_ANY ? !!tag : tag === f;
+        if (f === FILTER_ANY) return !!tag;
+        if (f === FILTER_NONE) return !tag;
+        return tag === f;
     },
 
     /** Indices of the active tab's snapshots the filter shows, newest first. */
@@ -74,7 +82,7 @@ export const HistoryTagsMixin = {
     },
 
     setHistoryTagFilter(value) {
-        this.historyTagFilter = value === FILTER_ANY || TAG_BY_ID[value] ? value : FILTER_ALL;
+        this.historyTagFilter = value === FILTER_ANY || value === FILTER_NONE || TAG_BY_ID[value] ? value : FILTER_ALL;
         this._syncHistoryTagFilter();
         this._historyPanelSig = null;
         this.renderHistoryPanel();
@@ -120,6 +128,7 @@ export const HistoryTagsMixin = {
             };
             opt(FILTER_ALL, "All");
             opt(FILTER_ANY, "● Tagged");
+            opt(FILTER_NONE, "○ Untagged");
             for (const t of HISTORY_TAGS) opt(t.id, `● ${t.label}`, t.color);
             sel.onchange = () => this.setHistoryTagFilter(sel.value);
             // The panel's own click handler leaves compare mode; ComfyUI's key
@@ -134,6 +143,44 @@ export const HistoryTagsMixin = {
         const tag = TAG_BY_ID[f];
         sel.style.color = tag ? tag.color : "";
         sel.classList.toggle("on", f !== FILTER_ALL);
+        this._syncHistoryClearTitle();
+    },
+
+    /** What the filter is called in a sentence: "red", "tagged", "untagged". */
+    _historyFilterWords() {
+        const f = this.historyTagFilter || FILTER_ALL;
+        if (f === FILTER_ANY) return "tagged";
+        if (f === FILTER_NONE) return "untagged";
+        return TAG_BY_ID[f] ? TAG_BY_ID[f].label.toLowerCase() : "";
+    },
+
+    /** The Clear button says what it will clear. */
+    _syncHistoryClearTitle() {
+        const btn = this.historyClearBtn;
+        if (!btn) return;
+        const words = this._historyFilterWords();
+        if (!words || !this.activeTab) { btn.title = "Clear History"; return; }
+        const n = this.historyVisibleIndices().length;
+        btn.title = `Clear the ${n} ${words} snapshot${n === 1 ? "" : "s"} of this tab (the filter decides)`;
+        btn.disabled = n === 0;
+    },
+
+    /**
+     * The Clear button with a filter on: remove only what the filter shows, in
+     * the active tab, after asking. Returns false when no filter is on, so the
+     * button goes on to clear the whole history as before.
+     */
+    clearHistoryFiltered(dlgWin) {
+        const words = this._historyFilterWords();
+        const key = this.activeTab;
+        if (!words || !key) return false;
+        const shown = this.historyVisibleIndices(key);
+        if (!shown.length) return true;
+        const label = (this.tabLabels && this.tabLabels[key]) || key;
+        const what = `${shown.length} ${words} snapshot${shown.length === 1 ? "" : "s"}`;
+        if (!dlgWin.confirm(`Remove the ${what} from the history of ${label}?`)) return true;
+        this.removeHistoryItems(key, shown);
+        return true;
     },
 
     // ── Pieces the strip and its menu use ────────────────────────────────────

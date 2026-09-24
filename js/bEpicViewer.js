@@ -689,6 +689,8 @@ class ViewerPanel extends HTMLElement {
             this.historyClearBtn.addEventListener('click', (ev) => ev.stopPropagation());
             this.historyClearBtn.onclick = () => {
                 const dlgWin = this.historyClearBtn.ownerDocument?.defaultView || window;
+                // A tag filter on: only what it shows goes (HistoryTagsMixin).
+                if (this.clearHistoryFiltered && this.clearHistoryFiltered(dlgWin)) return;
                 const key = this.activeTab;
                 if (!key) {
                     if (!dlgWin.confirm('Clear all in-memory history for all tabs?')) return;

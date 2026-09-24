@@ -610,6 +610,8 @@ export const HistoryMixin = {
         Object.values(this.history).forEach(arr => { totalHistory += arr?.length || 0; });
         const canClear = key ? stack.length > 0 : totalHistory > 0;
         if (this.historyClearBtn) this.historyClearBtn.disabled = !canClear;
+        // With a tag filter on, Clear clears what it shows (HistoryTagsMixin).
+        if (this._syncHistoryClearTitle) this._syncHistoryClearTitle();
     },
 
     openHistorySnapshot(key, index) {
