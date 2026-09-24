@@ -471,6 +471,25 @@ textarea.param-input {
 }
 #params-lock-btn:hover { color: #fff; }
 
+/* Keyed node parameters (bEpicViewer_paramAnim.js), in Nuke's colours: an
+   animated value on light blue, a deeper blue on a frame that has a key. */
+.param-key {
+    display: inline-block; width: 14px; margin-right: 3px; cursor: pointer;
+    color: #555; font-size: 11px; text-align: center; user-select: none;
+}
+.param-key:hover { color: #f60; }
+.param-row.anim-animated .param-key { color: #7fb8d8; }
+.param-row.anim-key .param-key { color: #4fb0ff; }
+.param-row.anim-animated .param-input { background: #1d3340; border-color: #2e5266; }
+.param-row.anim-key .param-input { background: #22506e; border-color: #3c7fae; }
+.params-curves-btn {
+    background: transparent; border: none; color: #888; cursor: pointer;
+    font-size: 15px; line-height: 1; padding: 0 4px; margin-left: auto; flex-shrink: 0;
+    min-height: 0;
+}
+.params-curves-btn:hover, .params-curves-btn.active { color: #f60; }
+.params-curves-btn:not([style*="none"]) + #params-lock-btn { margin-left: 0; }
+
 /* Ensure checkboxes sit at the left edge of the parameter row */
 .param-row input[type="checkbox"] {
     align-self: flex-start;

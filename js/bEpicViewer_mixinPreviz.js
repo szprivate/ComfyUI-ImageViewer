@@ -762,6 +762,7 @@ export const PrevizMixin = {
         ease.title = "How new keys leave their frame";
         ease.onchange = () => {
             if (this._keyBarContext() === "roto") { this._rotoApplyEase(ease.value); return; }
+            if (this._keyBarContext() === "params") { this.paramAnimSetEase(ease.value); return; }
             this._previzEase = ease.value;
             // Re-ease the keys the selection has at this frame, so the menu
             // also works as "change the key I am standing on".
@@ -785,17 +786,23 @@ export const PrevizMixin = {
 
     /**
      * Who the key bar is keying right now: a previz scene on a 3D tab, the
-     * roto tool's shapes while that tool is on, or nothing (the bar hides).
+     * roto tool's shapes while that tool is on, the animatable node in an open
+     * Parameters panel (ParamAnimMixin), or nothing (the bar hides).
      */
     _keyBarContext() {
         if (this.isPrevizTab && this.isPrevizTab() && this.previzScene && this.previzScene()) return "previz";
         if (this._toolState && this._toolState.active === "roto" && this._toolState.node && this._roto) return "roto";
+        if (this.paramAnimNode && this.isPanelDocked && this.isPanelDocked("params") && this.paramAnimNode()) return "params";
         return null;
     },
 
     _keyBarAct(what) {
         const ctx = this._keyBarContext();
-        if (ctx === "roto") {
+        if (ctx === "params") {
+            // No Autokey here: an animated parameter keys itself when edited.
+            if (what === "key") this.paramAnimKeyAll();
+            else if (what === "del") this.paramAnimDeleteKeys();
+        } else if (ctx === "roto") {
             if (what === "key") this._rotoSetKey();
             else if (what === "del") this._rotoDelKey();
             else this._roto.autokey = !this._roto.autokey;
@@ -813,8 +820,18 @@ export const PrevizMixin = {
         if (!keys) return;
         const ctx = this._keyBarContext();
         keys.bar.style.display = ctx ? "flex" : "none";
+        // The node's key ticks come and go with the bar.
+        this.paramAnimRenderTicks?.();
         if (!ctx) return;
         const frame = Math.round(this.currentFrame || 0);
+        keys.auto.style.display = ctx === "params" ? "none" : "";
+        if (ctx === "params") {
+            keys.key.title = `Key every animated parameter at frame ${frame}`;
+            keys.del.title = `Remove this node's keys at frame ${frame}`;
+            const ease = this._paramEase || "smooth";
+            if (keys.ease.value !== ease) keys.ease.value = ease;
+            return;
+        }
         const roto = ctx === "roto";
         const auto = roto ? !!this._roto.autokey : !!this._previzAutokey;
         const what = roto ? "the selected shape" : "the selected item's transform";

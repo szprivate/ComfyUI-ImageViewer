@@ -468,6 +468,8 @@ export const PlaybackMixin = {
     // setFrame, videos in _videoSeek's branch and in _videoOnTimeUpdate — or the
     // overlay only catches up on the next unrelated redraw (a viewport resize).
     _toolsFrameChanged() {
+        // Keyed node parameters show their value at the frame (ParamAnimMixin).
+        this.paramAnimFrameChanged?.();
         if (!this._toolState || this._toolState.active !== "roto") return;
         this._rotoRefreshKfInfo && this._rotoRefreshKfInfo();
         this._toolRedraw && this._toolRedraw();

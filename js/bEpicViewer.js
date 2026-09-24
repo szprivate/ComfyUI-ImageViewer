@@ -21,6 +21,8 @@ import { ModelMixin }    from "./bEpicViewer_mixinModel.js";
 import { PrevizMixin }   from "./bEpicViewer_mixinPreviz.js";
 import { PrevizCurvesMixin } from "./bEpicViewer_previzCurves.js";
 import { RotoCurvesMixin } from "./bEpicViewer_rotoCurves.js";
+import { ParamAnimMixin } from "./bEpicViewer_paramAnim.js";
+import { ParamCurvesMixin } from "./bEpicViewer_paramCurves.js";
 import { PrevizChannelsMixin } from "./bEpicViewer_previzChannels.js";
 import { PrevizRenderMixin } from "./bEpicViewer_previzRender.js";
 import { PrevizUndoMixin } from "./bEpicViewer_previzUndo.js";
@@ -515,6 +517,15 @@ class ViewerPanel extends HTMLElement {
         // A cached markup from the release that gave the drawing tools a dock
         // panel of their own; they live in the Parameters panel now.
         sr.getElementById('tool-dock-panel')?.remove();
+        // Parameter Curves (keyed node parameters), made here too for an older markup.
+        this.paramCurvesPanel = sr.getElementById('param-curves-panel');
+        if (!this.paramCurvesPanel && this.curvesPanel && this.curvesPanel.parentNode) {
+            const pc = this.curvesPanel.ownerDocument.createElement('div');
+            pc.id = 'param-curves-panel';
+            pc.className = 'curves-panel right';
+            this.curvesPanel.parentNode.insertBefore(pc, this.curvesPanel.nextSibling);
+            this.paramCurvesPanel = pc;
+        }
         if (!this.rotoCurvesPanel && this.curvesPanel && this.curvesPanel.parentNode) {
             const rc = this.curvesPanel.ownerDocument.createElement('div');
             rc.id = 'roto-curves-panel';
@@ -1185,6 +1196,8 @@ Object.assign(
     PrevizMixin,
     PrevizCurvesMixin,
     RotoCurvesMixin,
+    ParamAnimMixin,
+    ParamCurvesMixin,
     PrevizChannelsMixin,
     PrevizRenderMixin,
     PrevizUndoMixin,

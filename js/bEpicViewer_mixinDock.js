@@ -46,6 +46,9 @@ const DOCK_PANELS = {
     // The roto shapes' timing, the same editor's look (bEpicViewer_rotoCurves.js);
     // the roto tool opens and closes it.
     rotoCurves: { prop: "rotoCurvesPanel", label: "Roto Curves", minW: 220, minH: 170, defaultRail: "right" },
+    // Keyed node parameters (bEpicViewer_paramCurves.js); the ∿ button in the
+    // Parameters header opens it.
+    paramCurves: { prop: "paramCurvesPanel", label: "Parameter Curves", minW: 220, minH: 170, defaultRail: "right" },
     // (The drawing tools' options have no panel of their own: while a tool is
     // on they take the Parameters panel over — ToolsMixin._toolShowDock.)
 };
@@ -135,6 +138,7 @@ export const DockMixin = {
                                            { id: "channels", size: 1, hidden: true },
                                            { id: "curves",  size: 1, hidden: true  },
                                            { id: "rotoCurves", size: 1, hidden: true },
+                                           { id: "paramCurves", size: 1, hidden: true },
                                            { id: "params",  size: 1, hidden: false }] },
             bottom: { height: 240, panels: [] },
         };
@@ -366,6 +370,8 @@ export const DockMixin = {
             if (this.previzRefreshCurves) this.previzRefreshCurves();
         } else if (id === "rotoCurves") {
             if (this.rotoRefreshCurves) this.rotoRefreshCurves();
+        } else if (id === "paramCurves") {
+            if (this.paramRefreshCurves) this.paramRefreshCurves();
         } else if (id === "channels") {
             if (this._previzRenderChannels) this._previzRenderChannels();
         } else if (id === "previz") {
@@ -391,6 +397,10 @@ export const DockMixin = {
             this.paramsBtn.style.color = open ? "#f60" : "#eee";
             this.paramsBtn.classList.toggle("active", open);
         }
+        // The ∿ in the Parameters header, lit while Parameter Curves is up.
+        if (this._paramAnimSyncCurvesButton) this._paramAnimSyncCurvesButton(!!this.paramAnimNode?.());
+        // Closing the Parameters panel takes the key bar off its node.
+        if (this.keyBarSync) this.keyBarSync();
     },
 
     // ── Splitters ────────────────────────────────────────────────────────────

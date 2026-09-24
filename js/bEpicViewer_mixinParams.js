@@ -58,6 +58,9 @@ export const ParamsMixin = {
         if (!this.selectedNodeIds) return;
         this.selectedNodeIds.forEach(id => {
             const n = app.graph.getNodeById(id);
+            // An animated parameter takes the value as a key at this frame
+            // (ParamAnimMixin), not into its widget.
+            if (n && this.paramAnimApply && this.paramAnimApply(n, name, value)) return;
             if (n && n.widgets) {
                 const w = n.widgets.find(x => x.name === name);
                 if (w) { w.value = value; w.callback?.(w.value); }
@@ -131,6 +134,8 @@ export const ParamsMixin = {
                         this.selectedNodeIds            = [];
                         this.paramsTitle.innerText      = "No Node Selected";
                         this.paramsContent.innerHTML    = "";
+                        this.keyBarSync?.();
+                        this.paramRefreshCurves?.();
                     }
                     return;
                 }
@@ -247,6 +252,11 @@ export const ParamsMixin = {
 
         this.paramsContent.innerHTML = '';
         this.paramsContent.appendChild(frag);
+        // Key toggles and values at the frame for an animatable node; the key
+        // bar, the timeline ticks and the curves follow the node shown.
+        this.paramAnimDecorate?.();
+        this.keyBarSync?.();
+        this.paramRefreshCurves?.();
     },
 
     // Build the appropriate input element for a given widget
