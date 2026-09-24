@@ -552,6 +552,8 @@ textarea.param-input {
 .dock-rail > .params-panel,
 .dock-rail > .browser-panel,
 .dock-rail > .previz-panel,
+.dock-rail > .curves-panel,
+.dock-rail > .tool-dock-panel,
 .dock-rail > .history-panel {
     width: auto; min-width: 0; flex-shrink: 1;
     margin: 0; border-radius: 0;
@@ -572,6 +574,7 @@ textarea.param-input {
 .dock-rail.bottom > .browser-panel,
 .dock-rail.bottom > .previz-panel,
 .dock-rail.bottom > .curves-panel,
+.dock-rail.bottom > .tool-dock-panel,
 .dock-rail.bottom > .history-panel {
     height: auto; min-height: 0; flex-shrink: 1;
 }

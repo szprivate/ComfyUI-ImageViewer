@@ -50,7 +50,7 @@ const DOCK_PANELS = {
     // ToolsMixin._toolShowDock). It used to float over the picture.
     // `first`: a layout saved before this panel existed gets it at the top of
     // its rail, not the bottom — it is what you work in while a tool is on.
-    tool:    { prop: "toolDockPanel", label: "Tool", minW: 200, minH: 160, defaultRail: "right", first: true },
+    tool:    { prop: "toolDockPanel", label: "Tool", minW: 200, minH: 160, defaultRail: "right", first: true, size: 2 },
 };
 const RAIL_SIDES = ["left", "right", "bottom"];
 // Which way a rail stacks: the bottom one lays its panels out side by side.
@@ -133,7 +133,7 @@ export const DockMixin = {
         // parameters panel showing on the right, the other two put away.
         return {
             left:   { width: 88,  panels: [{ id: "history", size: 1, hidden: true  }] },
-            right:  { width: 300, panels: [{ id: "tool",    size: 1, hidden: true  },
+            right:  { width: 300, panels: [{ id: "tool",    size: 2, hidden: true  },
                                            { id: "browser", size: 1, hidden: true  },
                                            { id: "previz",  size: 1, hidden: true  },
                                            { id: "channels", size: 1, hidden: true },
@@ -257,7 +257,8 @@ export const DockMixin = {
         // goes back to where it shipped, put away rather than sprung on the user.
         for (const [id, spec] of Object.entries(DOCK_PANELS)) {
             if (seen.has(id)) continue;
-            const entry = { id, size: 1, hidden: true };
+            // `size`: its share of the rail's height, until the user drags it.
+            const entry = { id, size: spec.size || 1, hidden: true };
             if (spec.first) this.dockLayout[spec.defaultRail].panels.unshift(entry);
             else this.dockLayout[spec.defaultRail].panels.push(entry);
         }

@@ -52,6 +52,19 @@ export function svgEl(tag, attrs) {
     return el;
 }
 
+/** Help that folds away, under the controls. */
+export function toolHelp(title, html, open = false) {
+    const d = document.createElement("details");
+    d.className = "bepic-tool-help";
+    if (open) d.open = true;
+    const sm = document.createElement("summary");
+    sm.textContent = title;
+    const body = document.createElement("div");
+    body.innerHTML = html;
+    d.append(sm, body);
+    return d;
+}
+
 function elWith(tag, props, style) {
     const el = document.createElement(tag);
     if (props) Object.assign(el, props);
@@ -165,46 +178,87 @@ export const ToolsMixin = {
                 display:flex; align-items:center; justify-content:center; }
             .bepic-toolbar button:hover { background:#333; color:#fff; }
             .bepic-toolbar button.active { color:#f60; border-color:#f60; }
-            /* The body of the Tool dock panel (#tool-dock-panel); the dock owns
-               the title bar above it. */
-            .bepic-tool-panel { flex:1 1 auto; min-height:0; overflow:auto; padding:8px;
-                box-sizing:border-box; color:#ddd; font-family:sans-serif; font-size:12px; }
-            .bepic-tool-panel h4 { margin:0 0 6px; font-size:12px; color:#f60;
-                text-transform:uppercase; letter-spacing:.4px; }
-            .bepic-tool-panel .row { display:flex; align-items:center;
-                justify-content:space-between; gap:6px; margin:4px 0; }
-            .bepic-tool-panel .row label { color:#aaa; flex:0 0 auto; }
-            .bepic-tool-panel input[type=range] { flex:1; min-width:0; }
-            .bepic-tool-panel input[type=number] { width:52px; background:#111;
-                color:#0ce; border:1px solid #444; border-radius:3px; }
-            .bepic-tool-panel button.bepic-act { width:100%; margin-top:4px;
-                padding:5px; background:#2a2a2a; color:#ddd; border:1px solid #555;
-                border-radius:4px; cursor:pointer; }
-            .bepic-tool-panel button.bepic-act:hover { background:#3a3a3a; }
-            .bepic-tool-panel button.bepic-danger:hover { background:#5a2020;
+            /* The body of the Tool dock panel (#tool-dock-panel), in the same
+               vocabulary as the Outliner and the Channel Box: one scrolling
+               column, small grey section captions, name-against-value rows,
+               compact buttons, and a list that takes the height it is given. */
+            .bepic-tool-panel { flex:1 1 auto; min-height:0; overflow-y:auto;
+                display:flex; flex-direction:column; gap:4px;
+                padding:6px 8px 8px; box-sizing:border-box;
+                color:#ddd; font-family:sans-serif; font-size:11px; }
+            /* Nothing in the column gives way when the panel is short — the
+               body scrolls instead — except the shape list, which is what
+               a taller panel is for. */
+            .bepic-tool-panel > * { flex-shrink:0; }
+            .bepic-tool-panel .bepic-annot-swatch { min-height:0; }
+            .bepic-tool-panel h4 { margin:6px 0 0; padding:3px 0 1px; font-size:10px;
+                font-weight:normal; color:#888; text-transform:uppercase;
+                letter-spacing:.08em; border-top:1px solid #333; }
+            .bepic-tool-panel h4:first-child { margin-top:0; border-top:none; }
+            /* A value row: the name right-aligned against its control, as the
+               Channel Box lays out a channel. */
+            .bepic-tool-panel .row { display:grid; align-items:center; gap:0 6px;
+                grid-template-columns:minmax(58px, 30%) minmax(0, 1fr) auto;
+                min-height:21px; margin:0; }
+            .bepic-tool-panel .row > label, .bepic-tool-panel .row > span:first-child {
+                color:#c8c8c8; text-align:right;
+                white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+            .bepic-tool-panel .row > input[type=checkbox] { justify-self:start; margin:0;
+                accent-color:#f60; }
+            /* A row of buttons rather than of values. */
+            .bepic-tool-panel .row.btns { display:flex; gap:4px; }
+            .bepic-tool-panel .row.btns > * { flex:1; }
+            .bepic-tool-panel input[type=range] { width:100%; min-width:0; margin:0;
+                accent-color:#f60; height:14px; }
+            .bepic-tool-panel input[type=number], .bepic-tool-panel .tool-val {
+                width:48px; height:17px; box-sizing:border-box;
+                background:#2b2b2b; color:#ddd; border:1px solid #1e1e1e; border-radius:0;
+                padding:0 4px; font:inherit; font-size:11px; }
+            .bepic-tool-panel input[type=number]:focus { outline:none; border-color:#f60; background:#111; }
+            .bepic-tool-panel button.bepic-act, .bepic-tool-panel .bepic-annot-tool {
+                background:#222; color:#ccc; border:1px solid #444; border-radius:3px;
+                padding:3px 8px; min-height:0; height:auto; line-height:1.3;
+                font-size:11px; cursor:pointer; width:auto; margin:0; }
+            .bepic-tool-panel .bepic-annot-tool.active { color:#f60; border-color:#f60; }
+            .bepic-tool-panel button.bepic-act:hover { background:#333; color:#fff; }
+            .bepic-tool-panel > button.bepic-act { align-self:stretch; }
+            .bepic-tool-panel button.bepic-danger:hover { background:#4a1c1c;
                 border-color:#a33; color:#fff; }
-            .bepic-tool-hint { color:#888; font-size:11px; margin-top:6px;
-                line-height:1.35; }
+            .bepic-tool-hint { color:#888; font-size:10px; line-height:1.4; }
+            .bepic-tool-hint b { color:#bbb; font-weight:600; }
+            /* Long help folds away, so it doesn't push the controls down. */
+            .bepic-tool-help { color:#888; font-size:10px; line-height:1.4;
+                border-top:1px solid #333; padding-top:3px; margin-top:4px; }
+            .bepic-tool-help > summary { cursor:pointer; color:#999; font-size:10px;
+                text-transform:uppercase; letter-spacing:.08em; list-style:none; }
+            .bepic-tool-help > summary::before { content:"▸  "; color:#666; }
+            .bepic-tool-help[open] > summary::before { content:"▾  "; }
+            .bepic-tool-help > summary:hover { color:#f60; }
+            .bepic-tool-help b { color:#bbb; font-weight:600; }
             /* Which node the tool is reading and writing — it follows the canvas
-               selection, so it has to be visible. */
+               selection, so it has to be visible. The Channel Box's name line. */
             .bepic-tool-node { display:flex; align-items:baseline; gap:5px;
-                margin:-2px 0 7px; padding-bottom:6px; font-size:11px;
-                border-bottom:1px solid #333; }
-            .bepic-tool-node .lbl { color:#f60; font-size:9px; letter-spacing:.5px;
-                text-transform:uppercase; flex:0 0 auto; }
-            .bepic-tool-node .nm { color:#ddd; flex:1; min-width:0; overflow:hidden;
-                text-overflow:ellipsis; white-space:nowrap; }
+                padding:1px 2px 5px; border-bottom:1px solid #333; }
+            .bepic-tool-node .lbl { color:#888; font-size:10px; text-transform:uppercase;
+                letter-spacing:.08em; flex:0 0 auto; }
+            .bepic-tool-node .nm { color:#eee; font-size:12px; font-weight:bold; flex:1;
+                min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
             .bepic-tool-node .id { color:#666; flex:0 0 auto; }
             .bepic-tool-disabled { opacity:.45; }
-            .bepic-layer-list { max-height:150px; overflow:auto; margin:4px 0;
-                border:1px solid #333; border-radius:4px; }
+            /* The shapes: the Outliner's list, growing with the panel. */
+            .bepic-tool-panel > .bepic-layer-list { flex:1 1 auto; }
+            .bepic-layer-list { min-height:66px; max-height:none; overflow-y:auto;
+                margin:0; border:1px solid #333; border-radius:3px; background:#161616; }
             .bepic-layer-row { display:flex; align-items:center; gap:4px;
-                padding:3px 5px; cursor:pointer; border-bottom:1px solid #262626; }
-            .bepic-layer-row.sel { background:#3a2a10; }
+                padding:3px 4px; cursor:pointer; }
+            .bepic-layer-row:hover { background:#242424; }
+            .bepic-layer-row.sel { background:#33230f; outline:1px solid #f60; outline-offset:-1px; }
             .bepic-layer-row .nm { flex:1; overflow:hidden; text-overflow:ellipsis;
                 white-space:nowrap; }
-            .bepic-layer-row .vis { cursor:pointer; opacity:.85; }
-            .bepic-layer-row .del { cursor:pointer; color:#c66; }
+            .bepic-layer-row .vis { cursor:pointer; color:#aaa; }
+            .bepic-layer-row .vis:hover { color:#f60; }
+            .bepic-layer-row .del { cursor:pointer; color:#666; }
+            .bepic-layer-row .del:hover { color:#e66; }
             /* Context hint that tracks what the cursor is over (bottom-left,
                above the full-width path bar). */
             .bepic-tool-status { position:absolute; left:8px; bottom:30px; z-index:55;
@@ -378,8 +432,10 @@ export const ToolsMixin = {
         if (TOOL_NODE_KIND[tool]) this._toolWatchSelection();
         else this._toolUnwatchSelection();
 
-        // Panel content
+        // Panel content. The Roto Curves go with any other tool — also when a
+        // saved layout had them open without the roto tool being on.
         this._toolShowDock(tool !== "none");
+        if (tool !== "roto") this.rotoShowCurves?.(false);
         if (tool === "sam3") this._sam3BuildPanel();
         else if (tool === "sam3box") this._sam3boxBuildPanel();
         else if (tool === "roto") this._rotoActivate?.(this._toolPanel);
@@ -771,10 +827,8 @@ export const ToolsMixin = {
         };
         p.appendChild(clearBtn);
 
-        p.appendChild(elWith("div", {
-            className: "bepic-tool-hint",
-            innerHTML: "L-click: <b style='color:#28d17c'>positive</b><br>Shift+click: <b style='color:#e5484d'>negative</b><br>R-click / Ctrl+click a dot: delete<br>Drag a dot to move. Middle-drag pans.",
-        }));
+        p.appendChild(toolHelp("How to place points",
+            "L-click: <b style='color:#28d17c'>positive</b><br>Shift+click: <b style='color:#e5484d'>negative</b><br>R-click / Ctrl+click a dot: delete<br>Drag a dot to move. Middle-drag pans."));
         this._sam3UpdateCount();
     },
 
@@ -1002,10 +1056,8 @@ export const ToolsMixin = {
         };
         p.appendChild(clearBtn);
 
-        p.appendChild(elWith("div", {
-            className: "bepic-tool-hint",
-            innerHTML: "Drag out a box: <b style='color:#28d17c'>positive</b><br>Shift+drag: <b style='color:#e5484d'>negative</b><br>Corner: resize · body: move<br>R-click / Ctrl+click a box: delete. Middle-drag pans.",
-        }));
+        p.appendChild(toolHelp("How to draw boxes",
+            "Drag out a box: <b style='color:#28d17c'>positive</b><br>Shift+drag: <b style='color:#e5484d'>negative</b><br>Corner: resize · body: move<br>R-click / Ctrl+click a box: delete. Middle-drag pans."));
         this._sam3boxUpdateCount();
     },
 

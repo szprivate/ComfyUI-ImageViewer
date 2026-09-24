@@ -22,7 +22,7 @@
 // transform + keyframe interpolation are applied for display and re-applied
 // identically in Python at render time.
 
-import { svgEl } from "./bEpicViewer_tools.js";
+import { svgEl, toolHelp } from "./bEpicViewer_tools.js";
 import { readToolStore, writeToolStore, ROTO_WIDGET } from "./bEpicViewer_nodeTools.js";
 
 const HIT = 9;             // screen-px hit radius
@@ -194,10 +194,10 @@ export const RotoMixin = {
         this._rotoLayerList = el("div", "", "bepic-layer-list");
         p.appendChild(this._rotoLayerList);
 
-        const layBtns = el("div", "", "row");
-        const addB = el("button", "+ Shape", "bepic-act"); addB.style.flex = "1";
+        const layBtns = el("div", "", "row btns");
+        const addB = el("button", "+ Shape", "bepic-act");
         addB.onclick = () => this._rotoAddLayer();
-        const delB = el("button", "Delete", "bepic-act bepic-danger"); delB.style.flex = "1";
+        const delB = el("button", "Delete", "bepic-act bepic-danger");
         delB.onclick = () => this._rotoDeleteLayer(this._roto.selLayer);
         layBtns.appendChild(addB); layBtns.appendChild(delB);
         p.appendChild(layBtns);
@@ -209,19 +209,17 @@ export const RotoMixin = {
         // Keyframes: keyed with the buttons beside the timeline (Set Key, Delete
         // Key, Autokey, ease — the same ones previz uses), timed in the Roto
         // Curves panel.
-        const kfWrap = el("div");
-        kfWrap.appendChild(el("h4", "Keyframes"));
-        const curvesB = el("button", "Roto Curves panel", "bepic-act");
+        p.appendChild(el("h4", "Keyframes"));
+        const kfRow = el("div", "", "row btns");
+        const curvesB = el("button", "Roto Curves", "bepic-act");
         curvesB.title = "Show or hide the shapes' animation curves";
         curvesB.onclick = () => this.rotoToggleCurves?.();
-        kfWrap.appendChild(curvesB);
-        kfWrap.appendChild(el("div",
-            "Key with the buttons beside the timeline: <b>+</b> sets a key, <b>×</b> removes it, " +
-            "<b>○</b> is Autokey, and the menu sets the ease (Smooth, Linear, Hold). " +
-            "Keys show as <b>orange ticks</b> on the timeline — drag to retime; shape the timing " +
-            "in the <b>Roto Curves</b> panel.",
+        kfRow.appendChild(curvesB);
+        p.appendChild(kfRow);
+        p.appendChild(el("div",
+            "Key with <b>+ × ○</b> and the ease menu beside the timeline; " +
+            "drag the orange ticks to retime.",
             "bepic-tool-hint"));
-        p.appendChild(kfWrap);
 
         // Global controls
         p.appendChild(el("h4", "Global matte"));
@@ -234,13 +232,13 @@ export const RotoMixin = {
         // Preview toggle + hint
         this._rotoPreviewCb = checkbox("Show mask preview", this._roto.showMask, (v) => { this._roto.showMask = v; this._toolRedraw(); });
         p.appendChild(this._rotoPreviewCb.row);
-        p.appendChild(el("div",
+        p.appendChild(toolHelp("How to draw",
             "<b>+ Shape</b>, then click to add points (drag to curve); click the first point to close. " +
             "After closing: drag a vertex to move it, single-click shows its tangents, " +
             "<b>Ctrl+drag</b> a vertex pulls out the feather (an outer curve with its own " +
             "<span style='color:#c98aff;'>tangents</span> you can drag). Right-click a vertex deletes, " +
             "Alt+click an edge inserts. Drag from empty space across points to select them, then drag inside " +
-            "the box to move, corners to scale, outside to rotate. Middle-drag pans.", "bepic-tool-hint"));
+            "the box to move, corners to scale, outside to rotate. Middle-drag pans."));
 
         this._rotoRefreshLayerList();
         this._rotoRefreshShapeControls();
@@ -1519,14 +1517,20 @@ function diamond(x, y, r, fill) {
     });
 }
 
+// A value row: name, slider, and the number itself — typed into as well as
+// dragged, as the Channel Box's fields are.
 function slider(label, min, max, value, onInput) {
     const row = el("div", "", "row");
     row.appendChild(el("label", label));
     const rng = document.createElement("input");
     rng.type = "range"; rng.min = min; rng.max = max; rng.value = value;
-    const num = document.createElement("span");
-    num.textContent = value; num.style.cssText = "width:30px;text-align:right;color:#0ce;";
-    rng.oninput = () => { num.textContent = rng.value; onInput(parseFloat(rng.value)); };
+    const num = document.createElement("input");
+    num.type = "number"; num.value = value; num.step = "1";
+    rng.oninput = () => { num.value = rng.value; onInput(parseFloat(rng.value)); };
+    num.onchange = () => {
+        const v = Math.max(+min, Math.min(+max, parseFloat(num.value) || 0));
+        num.value = v; rng.value = v; onInput(v);
+    };
     row.appendChild(rng); row.appendChild(num);
     return row;
 }

@@ -16,7 +16,7 @@
 // Interaction is drawn in screen space via ToolsMixin's _normToDraw so shapes
 // track zoom/pan/fit; items are stored in normalized [0,1] image coordinates.
 
-import { svgEl } from "./bEpicViewer_tools.js";
+import { svgEl, toolHelp } from "./bEpicViewer_tools.js";
 import { api } from "../../scripts/api.js";
 
 const ANNOT_COLORS = ["#ff3b30", "#ff9500", "#ffcc00", "#34c759",
@@ -455,12 +455,10 @@ export const AnnotateMixin = {
         // Info + hint.
         this._annotInfoEl = el("div", { className: "bepic-tool-hint" });
         p.appendChild(this._annotInfoEl);
-        p.appendChild(el("div", {
-            className: "bepic-tool-hint",
-            innerHTML: "Pen / Arrow / Box: <b>drag</b>. Text: <b>click</b> &amp; type (Enter sets).<br>"
-                     + "Right-click an annotation to delete.<br>"
-                     + "Export saves a PNG to <b>./output</b> and adds it to History — then drag it onto the graph.",
-        }));
+        p.appendChild(toolHelp("How to annotate",
+            "Pen / Arrow / Box: <b>drag</b>. Text: <b>click</b> &amp; type (Enter sets).<br>"
+            + "Right-click an annotation to delete.<br>"
+            + "Export saves a PNG to <b>./output</b> and adds it to History — then drag it onto the graph."));
 
         this._annotSetTool(this._annot.tool);
         this._annotSetColor(this._annot.color);
