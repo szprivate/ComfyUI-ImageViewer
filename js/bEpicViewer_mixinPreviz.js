@@ -1014,10 +1014,14 @@ export const PrevizMixin = {
         const walkBtn = el("button", "previz-btn previz-world", "Walk");
         walkBtn.title = "Walk through the world — Shift+J (W A S D, mouse to look, Shift run, F note, Esc stop)";
         walkBtn.onclick = () => this.previzWalkToggle();
+        const matchBtn = el("button", "previz-btn previz-world", "Match");
+        matchBtn.title = "Measure the world against its reference picture and set exposure, light, fog and "
+                       + "surface glow to match — saved as a new version";
+        matchBtn.onclick = () => this.previzMatchReference();
         const noteBtn = el("button", "previz-btn previz-world", "Note");
         noteBtn.title = "Pin a note to a spot — Shift+N. The agent that built the world reads it, with a snapshot";
         noteBtn.onclick = () => this.previzFeedbackPlace();
-        actions.append(newBtn, editBtn, addBtn, exportBtn, undoBtn, redoBtn, walkBtn, noteBtn);
+        actions.append(newBtn, editBtn, addBtn, exportBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn);
 
         const list = el("div", "previz-list");
         // The space below the tree is "no parent": dropping a row here lifts it
@@ -1042,7 +1046,7 @@ export const PrevizMixin = {
         this._previzCloseAddMenu();
         host.querySelectorAll(":scope > .previz-body").forEach((n) => n.remove());
         host.appendChild(root);
-        this._previzUI = { root, list, undoBtn, redoBtn, walkBtn, noteBtn };
+        this._previzUI = { root, list, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn };
         return this._previzUI;
     },
 
@@ -1344,6 +1348,7 @@ export const PrevizMixin = {
         if (ui.walkBtn) {
             ui.walkBtn.style.display = world ? "" : "none";
             ui.noteBtn.style.display = world ? "" : "none";
+            ui.matchBtn.style.display = world ? "" : "none";
             ui.walkBtn.classList.toggle("active", !!(this._model3d && this._model3d.walking));
         }
         // Previz coming on is what opens the panel. After that the dock owns

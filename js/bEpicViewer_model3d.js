@@ -18,6 +18,7 @@ import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
 import { evaluate, cameraResolution, offsetOf, planeSettings } from "./bEpicViewer_scene3d.js";
 import { WorldViewMixin } from "./bEpicViewer_world3d.js";
+import { WorldMatchMixin } from "./bEpicViewer_worldMatch.js";
 
 let _libsPromise = null;
 
@@ -2059,3 +2060,4 @@ export class Model3DView {
 // Worlds (bEpicViewer_world3d.js). Copied as descriptors, not with
 // Object.assign, because the mixin has a getter (`walking`).
 Object.defineProperties(Model3DView.prototype, Object.getOwnPropertyDescriptors(WorldViewMixin));
+Object.assign(Model3DView.prototype, WorldMatchMixin);

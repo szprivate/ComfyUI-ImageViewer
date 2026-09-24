@@ -1301,6 +1301,12 @@ app.registerExtension({
             }
         });
 
+        // The worlds pack asks (for an agent) to match a world to its reference.
+        api.addEventListener("bepic.world.calibrate", (e) => {
+            const name = e.detail && e.detail.name;
+            if (name && globalViewerPanel.previzMatchWorld) globalViewerPanel.previzMatchWorld(name);
+        });
+
         api.addEventListener("bepic.viewer.update", (e) => {
             // "Send to Image Viewer (run branch)" queues a prompt with its own
             // throwaway sink node. That sink has no counterpart in the graph, so

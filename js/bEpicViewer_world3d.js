@@ -594,7 +594,7 @@ export const WorldViewMixin = {
         this._bodyOf(entry).add(mesh);
         entry.object = mesh;
         this._originals.set(mesh, material);
-        entry.terrain = { heights, seg, size: t.size, height: t.height, weights, normals: nrm.array, mesh };
+        entry.terrain = { heights, seg, size: t.size, height: t.height, weights, normals: nrm.array, mesh, uniforms };
         entry.stats = { meshes: 1, vertices: pos.count, triangles: seg * seg * 2 };
     },
 

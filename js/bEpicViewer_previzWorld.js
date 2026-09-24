@@ -222,6 +222,69 @@ export const PrevizWorldMixin = {
         if (!on) this.previzChanged({ persist: false });
     },
 
+    // ── Matching the reference ───────────────────────────────────────────────
+
+    /**
+     * Measure the world against its reference picture and set exposure, fill,
+     * sun, fog and baked light to match (bEpicViewer_worldMatch.js). A world
+     * from the worlds pack is saved there as a new version, with the error
+     * before and after in its note; any other scene keeps the values here.
+     */
+    async previzMatchReference() {
+        const scene = this.previzScene();
+        if (!scene || this._matching) return null;
+        const view = this._modelView();
+        if (view.walking) view.walkExit();
+        this._matching = true;
+        const ui = this._previzUI;
+        if (ui && ui.matchBtn) ui.matchBtn.classList.add("active");
+        view._setStatus("Matching the world to its reference…");
+        try {
+            const res = await view.matchReference({
+                onProgress: (p) => view._setStatus(`Matching the world to its reference… ${p.param}, error ${p.error.toFixed(3)}`),
+            });
+            const pct = res.before.total > 0 ? Math.round((1 - res.after.total / res.before.total) * 100) : 0;
+            const bands = res.rows.map((r) => `${r.band} ${r.brightness_vs_picture}×`).join(", ");
+            const note = `matched to the reference: error ${res.before.total} → ${res.after.total} (${pct}% less); `
+                       + `brightness vs picture: ${bands}`;
+            this.previzSnapshot("match reference");
+            for (const op of res.ops) {
+                const item = S.itemById(scene, op.id);
+                if (item) setPath(item, op.path, op.value);
+            }
+            let saved = false;
+            if (scene.world && scene.world.name) {
+                try {
+                    const r = await api.fetchApi("/bepic_worlds/edit", {
+                        method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ name: scene.world.name, ops: res.ops, note, open_in_viewer: true }),
+                    });
+                    saved = r.ok;
+                } catch (e) { /* kept in the scene below */ }
+            }
+            await this.previzChanged({ reload: true });
+            view._setStatus(`${saved ? "Saved as a new version — " : ""}${note}`);
+            this._viewerWindow().setTimeout(() => view._setStatus(""), 9000);
+            return { ...res, note, saved };
+        } catch (e) {
+            view._setStatus(`Could not match: ${(e && e.message) || e}`, true);
+            this._viewerWindow().setTimeout(() => view._setStatus(""), 7000);
+            return null;
+        } finally {
+            this._matching = false;
+            if (ui && ui.matchBtn) ui.matchBtn.classList.remove("active");
+        }
+    },
+
+    /** The worlds pack asked (for an agent) to match a world: open it, then match. */
+    async previzMatchWorld(name) {
+        const key = `world:${name}`;
+        if (!this.allTabs[key]) return null;
+        if (this.activeTab !== key) this.switchTab(key);
+        await this.previzChanged({ reload: true, persist: false });
+        return this.previzMatchReference();
+    },
+
     // ── Feedback ─────────────────────────────────────────────────────────────
 
     /** Click-to-place a note: the next click in the view says where. */
