@@ -746,12 +746,14 @@ export const PrevizMixin = {
             bar.append(b);
             return b;
         };
+        // The same three buttons key a previz scene and the roto tool's shapes;
+        // _keyBarAct sends each press to whichever is up (see keyBarSync).
         const key = button("icon-circle-plus", "+", "Key the selected item's transform here",
-                           () => this.previzKeyAll());
+                           () => this._keyBarAct("key"));
         const del = button("icon-circle-x", "\u00d7", "Remove the key under the playhead",
-                           () => this.previzDeleteKey());
+                           () => this._keyBarAct("del"));
         const auto = button("icon-circle", "\u25cb", "Autokey: every move sets a key at this frame",
-                            () => { this._previzAutokey = !this._previzAutokey; this._previzRenderPanel(); });
+                            () => this._keyBarAct("auto"));
         const ease = doc.createElement("select");
         ease.className = "previz-sel previz-ease";
         for (const [v, label] of [["smooth", "Smooth"], ["linear", "Linear"], ["hold", "Hold"]]) {
@@ -759,6 +761,7 @@ export const PrevizMixin = {
         }
         ease.title = "How new keys leave their frame";
         ease.onchange = () => {
+            if (this._keyBarContext() === "roto") { this._rotoApplyEase(ease.value); return; }
             this._previzEase = ease.value;
             // Re-ease the keys the selection has at this frame, so the menu
             // also works as "change the key I am standing on".
@@ -780,6 +783,51 @@ export const PrevizMixin = {
         return this._previzKeyBar;
     },
 
+    /**
+     * Who the key bar is keying right now: a previz scene on a 3D tab, the
+     * roto tool's shapes while that tool is on, or nothing (the bar hides).
+     */
+    _keyBarContext() {
+        if (this.isPrevizTab && this.isPrevizTab() && this.previzScene && this.previzScene()) return "previz";
+        if (this._toolState && this._toolState.active === "roto" && this._toolState.node && this._roto) return "roto";
+        return null;
+    },
+
+    _keyBarAct(what) {
+        const ctx = this._keyBarContext();
+        if (ctx === "roto") {
+            if (what === "key") this._rotoSetKey();
+            else if (what === "del") this._rotoDelKey();
+            else this._roto.autokey = !this._roto.autokey;
+        } else if (ctx === "previz") {
+            if (what === "key") this.previzKeyAll();
+            else if (what === "del") this.previzDeleteKey();
+            else { this._previzAutokey = !this._previzAutokey; this._previzRenderPanel(); }
+        }
+        this.keyBarSync();
+    },
+
+    /** Show the key bar for whoever it keys, lit and titled for them. */
+    keyBarSync() {
+        const keys = this.previzEnsureKeyBar();
+        if (!keys) return;
+        const ctx = this._keyBarContext();
+        keys.bar.style.display = ctx ? "flex" : "none";
+        if (!ctx) return;
+        const frame = Math.round(this.currentFrame || 0);
+        const roto = ctx === "roto";
+        const auto = roto ? !!this._roto.autokey : !!this._previzAutokey;
+        const what = roto ? "the selected shape" : "the selected item's transform";
+        keys.key.title = `Key ${what} at frame ${frame}`;
+        keys.del.title = roto ? `Remove the selected shape's key at frame ${frame}`
+                              : "Remove the key under the playhead";
+        keys.auto.classList.toggle("on", auto);
+        keys.auto.title = auto ? "Autokey is on: every move sets a key at this frame"
+                               : "Autokey: every move sets a key at this frame";
+        const ease = (roto ? this._roto.ease : this._previzEase) || "smooth";
+        if (keys.ease.value !== ease) keys.ease.value = ease;
+    },
+
     previzSyncTimelineFields() {
         // Through the container, like every other reader of these two: the
         // popout moves the whole tree into another document and this still
@@ -793,21 +841,7 @@ export const PrevizMixin = {
         const previz = !!scene;
         if (fpsEl && previz && doc.activeElement !== fpsEl) fpsEl.value = String(scene.fps);
         // The keying controls belong to the same band as the timeline.
-        const keys = this.previzEnsureKeyBar();
-        if (keys) {
-            keys.bar.style.display = scene ? "flex" : "none";
-            if (scene) {
-                const frame = Math.round(this.currentFrame || 0);
-                keys.key.title = `Key the selected item's transform at frame ${frame}`;
-                keys.auto.classList.toggle("on", !!this._previzAutokey);
-                keys.auto.title = this._previzAutokey
-                    ? "Autokey is on: every move sets a key at this frame"
-                    : "Autokey: every move sets a key at this frame";
-                if (keys.ease.value !== (this._previzEase || "smooth")) {
-                    keys.ease.value = this._previzEase || "smooth";
-                }
-            }
-        }
+        this.keyBarSync();
         if (!endEl) return;
         // A plain readout everywhere else: the length of a clip or a batch is
         // what it is, and only a shot you are building can be told how long.

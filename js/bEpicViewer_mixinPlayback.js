@@ -217,10 +217,10 @@ export const PlaybackMixin = {
         }
         this.updateTicks(Math.max(0, bounds.max - bounds.min));
         this.updateRangeOverlay(imgCount);
-        // Keep roto keyframe ticks + curve editor aligned to new timeline bounds.
+        // Keep roto keyframe ticks + the Roto Curves aligned to new timeline bounds.
         if (this._toolState && this._toolState.active === 'roto') {
             this._rotoRenderTimelineKeys && this._rotoRenderTimelineKeys();
-            this._rotoRefreshKfEditor && this._rotoRefreshKfEditor();
+            this.rotoRefreshCurves && this.rotoRefreshCurves();
         }
         return bounds;
     },
@@ -430,6 +430,7 @@ export const PlaybackMixin = {
             // A clip that is already decoded can report its size now; one that
             // has just been pointed at a new src reports it from _videoOnMeta.
             this.updateShapeInfo();
+            this._toolsFrameChanged();
             return;
         }
         this._exitVideoMode();
@@ -459,11 +460,17 @@ export const PlaybackMixin = {
         this.timeline.value = this.currentFrame;
         this.container.querySelector('#cur-f').innerText = this.currentFrame;
         if (this.imgBase.naturalWidth) this.updateShapeInfo();
-        // Roto keyframes are frame-dependent — refresh the overlay on scrub/play.
-        if (this._toolState && this._toolState.active === "roto") {
-            this._rotoRefreshKfInfo && this._rotoRefreshKfInfo();
-            this._toolRedraw && this._toolRedraw();
-        }
+        this._toolsFrameChanged();
+    },
+
+    // A drawing tool whose shapes change over time (roto keyframes) follows the
+    // frame. Every path that moves the frame calls this — image sequences here in
+    // setFrame, videos in _videoSeek's branch and in _videoOnTimeUpdate — or the
+    // overlay only catches up on the next unrelated redraw (a viewport resize).
+    _toolsFrameChanged() {
+        if (!this._toolState || this._toolState.active !== "roto") return;
+        this._rotoRefreshKfInfo && this._rotoRefreshKfInfo();
+        this._toolRedraw && this._toolRedraw();
     },
 
     // Load the compare source's frame into the compare slot. Called from both the
@@ -792,7 +799,9 @@ export const PlaybackMixin = {
         }
 
         const frame = this._videoFrameAtTime(v.currentTime);
+        const moved = frame !== this.currentFrame;
         this.currentFrame = frame;
+        if (moved) this._toolsFrameChanged();
         if (this.timeline) this.timeline.value = frame;
         const curEl = this.container && this.container.querySelector("#cur-f");
         if (curEl) curEl.innerText = frame;

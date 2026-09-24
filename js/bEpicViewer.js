@@ -20,6 +20,7 @@ import { ReconnectMixin } from "./bEpicViewer_mixinReconnect.js";
 import { ModelMixin }    from "./bEpicViewer_mixinModel.js";
 import { PrevizMixin }   from "./bEpicViewer_mixinPreviz.js";
 import { PrevizCurvesMixin } from "./bEpicViewer_previzCurves.js";
+import { RotoCurvesMixin } from "./bEpicViewer_rotoCurves.js";
 import { PrevizChannelsMixin } from "./bEpicViewer_previzChannels.js";
 import { PrevizRenderMixin } from "./bEpicViewer_previzRender.js";
 import { PrevizUndoMixin } from "./bEpicViewer_previzUndo.js";
@@ -508,6 +509,16 @@ class ViewerPanel extends HTMLElement {
         this.previzPanel      = sr.getElementById('previz-panel');
         this.totalFrameEl     = sr.getElementById('total-f');
         this.curvesPanel      = sr.getElementById('curves-panel');
+        // The Roto Curves panel came later still; made beside the Animation
+        // Curves when a cached older markup lacks it, like the Channel Box below.
+        this.rotoCurvesPanel  = sr.getElementById('roto-curves-panel');
+        if (!this.rotoCurvesPanel && this.curvesPanel && this.curvesPanel.parentNode) {
+            const rc = this.curvesPanel.ownerDocument.createElement('div');
+            rc.id = 'roto-curves-panel';
+            rc.className = 'curves-panel right';
+            this.curvesPanel.parentNode.insertBefore(rc, this.curvesPanel.nextSibling);
+            this.rotoCurvesPanel = rc;
+        }
         // The Channel Box came after the others; a cached older markup lacks
         // it, so it is made here beside the Outliner rather than going missing.
         this.channelsPanel    = sr.getElementById('channels-panel');
@@ -1170,6 +1181,7 @@ Object.assign(
     ModelMixin,
     PrevizMixin,
     PrevizCurvesMixin,
+    RotoCurvesMixin,
     PrevizChannelsMixin,
     PrevizRenderMixin,
     PrevizUndoMixin,

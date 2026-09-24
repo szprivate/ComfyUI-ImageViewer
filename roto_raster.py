@@ -135,7 +135,12 @@ def _key_tangent(layer, frame):
 
 
 def _seg_ease(layer, lo, hi, x):
-    """Eased interpolation parameter for the segment lo→hi at time fraction x."""
+    """Eased interpolation parameter for the segment lo→hi at time fraction x.
+    A `hold` key keeps its shape until the next key (a step), as in the viewer."""
+    tans = layer.get("tangents")
+    t_lo = tans.get(str(lo)) if isinstance(tans, dict) else None
+    if isinstance(t_lo, dict) and t_lo.get("hold"):
+        return 1.0 if x >= 1 else 0.0
     ox, oy, _ix, _iy = _key_tangent(layer, lo)
     _ox, _oy, ix, iy = _key_tangent(layer, hi)
     return _bezier_ease(x, ox, oy, ix, iy)

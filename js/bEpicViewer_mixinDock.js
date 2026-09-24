@@ -43,6 +43,9 @@ const DOCK_PANELS = {
     // A graph is only readable with some height under it, so this one asks for
     // more than the rest; the channel buttons set the width.
     curves:  { prop: "curvesPanel",  label: "Animation Curves", minW: 220, minH: 190, defaultRail: "right" },
+    // The roto shapes' timing, the same editor's look (bEpicViewer_rotoCurves.js);
+    // the roto tool opens and closes it.
+    rotoCurves: { prop: "rotoCurvesPanel", label: "Roto Curves", minW: 220, minH: 170, defaultRail: "right" },
 };
 const RAIL_SIDES = ["left", "right", "bottom"];
 // Which way a rail stacks: the bottom one lays its panels out side by side.
@@ -129,6 +132,7 @@ export const DockMixin = {
                                            { id: "previz",  size: 1, hidden: true  },
                                            { id: "channels", size: 1, hidden: true },
                                            { id: "curves",  size: 1, hidden: true  },
+                                           { id: "rotoCurves", size: 1, hidden: true },
                                            { id: "params",  size: 1, hidden: false }] },
             bottom: { height: 240, panels: [] },
         };
@@ -355,6 +359,8 @@ export const DockMixin = {
             if (this.updateParamsPanel) this.updateParamsPanel(true);
         } else if (id === "curves") {
             if (this.previzRefreshCurves) this.previzRefreshCurves();
+        } else if (id === "rotoCurves") {
+            if (this.rotoRefreshCurves) this.rotoRefreshCurves();
         } else if (id === "channels") {
             if (this._previzRenderChannels) this._previzRenderChannels();
         } else if (id === "previz") {

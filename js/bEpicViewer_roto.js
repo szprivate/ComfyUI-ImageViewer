@@ -81,7 +81,7 @@ export const RotoMixin = {
         this._roto = {
             layers: [], global: { invert: false, blur: 0, dilate: 0, feather: 0 },
             selLayer: -1, selPts: new Set(), selAngle: 0,
-            showMask: false, autokey: false,
+            showMask: false, autokey: false, ease: "smooth",
             drawing: null, drag: null,
         };
     },
@@ -127,7 +127,9 @@ export const RotoMixin = {
     _rotoActivate(panel) {
         this._rotoPanel = panel;
         this._rotoBuildPanel();
-        this._rotoBuildKfEditor();
+        // The shapes' curves get a dock panel of their own, the roto tool's to
+        // open and close (bEpicViewer_rotoCurves.js).
+        if (this._toolState.node) this.rotoShowCurves?.(true);
         this._rotoRefreshKfInfo();
     },
 
@@ -135,7 +137,7 @@ export const RotoMixin = {
         this._roto.drawing = null;
         this._roto.drag = null;
         this._rotoRenderTimelineKeys();   // clears ticks
-        if (this._rotoKfEditor) this._rotoKfEditor.style.display = "none";
+        this.rotoShowCurves?.(false);
     },
 
     _rotoCurLayer() {
@@ -201,23 +203,21 @@ export const RotoMixin = {
         this._rotoShapeControls = el("div");
         p.appendChild(this._rotoShapeControls);
 
-        // Keyframe controls
+        // Keyframes: keyed with the buttons beside the timeline (Set Key, Delete
+        // Key, Autokey, ease — the same ones previz uses), timed in the Roto
+        // Curves panel.
         const kfWrap = el("div");
         kfWrap.appendChild(el("h4", "Keyframes"));
-        const kfRow = el("div", "", "row");
-        const setK = el("button", "Set Key", "bepic-act"); setK.style.flex = "1";
-        setK.onclick = () => this._rotoSetKey();
-        const delK = el("button", "Del Key", "bepic-act"); delK.style.flex = "1";
-        delK.onclick = () => this._rotoDelKey();
-        kfRow.appendChild(setK); kfRow.appendChild(delK);
-        kfWrap.appendChild(kfRow);
-        this._rotoAutokeyCb = checkbox("Autokey", this._roto.autokey, (v) => { this._roto.autokey = v; });
-        kfWrap.appendChild(this._rotoAutokeyCb.row);
-        this._rotoKfInfo = el("div",
-            "Keys show as <b>orange ticks</b> on the timeline — drag to retime. " +
-            "Use the <b>Keyframe Curve</b> above the timeline for timing &amp; softness.",
-            "bepic-tool-hint");
-        kfWrap.appendChild(this._rotoKfInfo);
+        const curvesB = el("button", "Roto Curves panel", "bepic-act");
+        curvesB.title = "Show or hide the shapes' animation curves";
+        curvesB.onclick = () => this.rotoToggleCurves?.();
+        kfWrap.appendChild(curvesB);
+        kfWrap.appendChild(el("div",
+            "Key with the buttons beside the timeline: <b>+</b> sets a key, <b>×</b> removes it, " +
+            "<b>○</b> is Autokey, and the menu sets the ease (Smooth, Linear, Hold). " +
+            "Keys show as <b>orange ticks</b> on the timeline — drag to retime; shape the timing " +
+            "in the <b>Roto Curves</b> panel.",
+            "bepic-tool-hint"));
         p.appendChild(kfWrap);
 
         // Global controls
@@ -304,7 +304,8 @@ export const RotoMixin = {
     // and in the collapsible curve editor above it (not as text in the panel).
     _rotoRefreshKfInfo() {
         this._rotoRenderTimelineKeys();
-        this._rotoRefreshKfEditor();
+        this.rotoRefreshCurves?.();
+        this.keyBarSync?.();
     },
 
     _rotoFrame() { return Math.max(0, Math.round(this.currentFrame || 0)); },
@@ -408,244 +409,6 @@ export const RotoMixin = {
         this._toolRedraw();
     },
 
-    // Collapsible curve editor above the timeline: retime keys (drag the round
-    // dots on the baseline) and shape the animation's ease per keyframe (drag the
-    // small square tangent handles — one out of each key, one into the next).
-    _rotoBuildKfEditor() {
-        const host = this.container?.querySelector?.("#kf-editor");
-        if (!host) return;
-        this._rotoKfEditor = host;
-        if (host.dataset.built === "1") { this._rotoRefreshKfEditor(); return; }
-        host.dataset.built = "1";
-        host.innerHTML = "";
-
-        const head = el("div", "", "kf-editor-head");
-        this._rotoKfCollapse = el("span", this._rotoKfOpen ? "▾" : "▸", "kf-editor-toggle");
-        head.appendChild(this._rotoKfCollapse);
-        head.appendChild(el("span", "Keyframe Curve", "kf-editor-title"));
-        this._rotoKfSub = el("span", "", "kf-editor-sub");
-        head.appendChild(this._rotoKfSub);
-        head.onclick = () => this._rotoToggleKfEditor();
-        host.appendChild(head);
-
-        this._rotoKfBody = el("div", "", "kf-editor-body");
-        this._rotoKfBody.style.display = this._rotoKfOpen ? "block" : "none";
-
-        this._rotoKfGraphWrap = el("div", "", "kf-graph");
-        this._rotoKfSvg = svgEl("svg", { class: "kf-graph-svg", preserveAspectRatio: "none", viewBox: "0 0 100 100" });
-        this._rotoKfGraphWrap.appendChild(this._rotoKfSvg);
-        this._rotoKfBody.appendChild(this._rotoKfGraphWrap);
-
-        this._rotoKfBody.appendChild(el("div",
-            "One continuous motion curve through every key (After Effects style). " +
-            "Round dots retime a key. Drag a square <b>ease handle</b> out of a key — " +
-            "farther out = more ease, its angle sets the speed.",
-            "bepic-tool-hint"));
-
-        host.appendChild(this._rotoKfBody);
-        this._rotoRefreshKfEditor();
-    },
-
-    _rotoToggleKfEditor() {
-        this._rotoKfOpen = !this._rotoKfOpen;
-        if (this._rotoKfBody) this._rotoKfBody.style.display = this._rotoKfOpen ? "block" : "none";
-        if (this._rotoKfCollapse) this._rotoKfCollapse.textContent = this._rotoKfOpen ? "▾" : "▸";
-        if (this._rotoKfOpen) this._rotoRefreshKfEditor();
-    },
-
-    _rotoRefreshKfEditor() {
-        const host = this._rotoKfEditor || this.container?.querySelector?.("#kf-editor");
-        if (!host) return;
-        this._rotoKfEditor = host;
-        const active = this._toolState && this._toolState.active === "roto";
-        const layer = this._rotoCurLayer();
-        const keys = this._rotoCurKeys(layer);
-        // Only surface the editor when there's an animation to shape.
-        if (!active || !layer || keys.length < 1) { host.style.display = "none"; return; }
-        host.style.display = "block";
-        if (this._rotoKfSub) this._rotoKfSub.textContent = keys.length === 1 ? "1 key" : keys.length + " keys";
-        if (this._rotoKfOpen) { this._rotoDrawKfCurve(); this._rotoLayoutKfDots(); }
-    },
-
-    // Shared geometry for the curve editor. The whole animation is drawn as ONE
-    // continuous motion curve (After Effects value-graph style): each keyframe
-    // index k sits at a global height level(k) = k/(K-1), and every segment's
-    // 0..1 ease progress is mapped into its own vertical band [v0,v1]. So a
-    // middle key's in- and out-handles live in the SAME continuous space and
-    // read as one curve through the key — instead of a stack of overlapping
-    // 0..1 boxes. Drawing and hit/drag both use this.
-    _rotoKfGeom() {
-        const layer = this._rotoCurLayer();
-        const keys = this._rotoCurKeys(layer);
-        const { min, total } = this._rotoTimelineBounds();
-        const K = keys.length;
-        const X = (f) => total === 0 ? 0 : ((f - min) / total) * 100;
-        const yTop = 12, yBot = 88;
-        const level = (k) => K <= 1 ? 0 : k / (K - 1);
-        const Yv = (v) => yBot - v * (yBot - yTop);          // v = global progress 0..1
-        const keyPt = (k) => ({ x: X(keys[k]), y: Yv(level(k)) });
-        const segs = [];
-        for (let s = 0; s < K - 1; s++) {
-            const lo = keys[s], hi = keys[s + 1];
-            const tl = this._rotoKeyTangent(layer, lo), th = this._rotoKeyTangent(layer, hi);
-            const x0 = X(lo), x1 = X(hi), dx = x1 - x0;
-            const v0 = level(s), v1 = level(s + 1), dv = v1 - v0;
-            segs.push({
-                s, lo, hi, x0, x1, dx, v0, v1, dv,
-                out: { key: lo, kIdx: s,     side: "out", gx: x0 + dx * tl.ox, gy: Yv(v0 + dv * tl.oy) },
-                in:  { key: hi, kIdx: s + 1, side: "in",  gx: x0 + dx * th.ix, gy: Yv(v0 + dv * th.iy) },
-            });
-        }
-        return { layer, keys, K, X, Yv, level, keyPt, yTop, yBot, min, total, segs };
-    },
-
-    _rotoDrawKfCurve() {
-        const svg = this._rotoKfSvg;
-        if (!svg) return;
-        while (svg.firstChild) svg.removeChild(svg.firstChild);
-        const g = this._rotoKfGeom();
-        const { layer, keys, K, X, Yv, keyPt, yTop, yBot, segs } = g;
-        const ns = (t, a) => { a["vector-effect"] = "non-scaling-stroke"; return svgEl(t, a); };
-
-        // Top/bottom rails + a vertical guide at each key.
-        svg.appendChild(ns("line", { x1: 0, y1: yBot, x2: 100, y2: yBot, stroke: "#333" }));
-        svg.appendChild(ns("line", { x1: 0, y1: yTop, x2: 100, y2: yTop, stroke: "#262626" }));
-        for (const f of keys) {
-            const x = X(f);
-            svg.appendChild(ns("line", { x1: x, y1: yTop, x2: x, y2: yBot, stroke: "#ff8a00", "stroke-dasharray": "2 2", opacity: 0.26 }));
-        }
-        // ONE continuous eased motion curve through every key.
-        if (K >= 2) {
-            let d = "";
-            for (const seg of segs) {
-                const a = this._rotoKeyTangent(layer, seg.lo), b = this._rotoKeyTangent(layer, seg.hi);
-                const STEP = 20;
-                for (let i = 0; i <= STEP; i++) {
-                    const xf = i / STEP;
-                    const p = bezierEase(xf, a.ox, a.oy, b.ix, b.iy);
-                    const x = seg.x0 + seg.dx * xf;
-                    const y = Yv(seg.v0 + seg.dv * p);
-                    d += (d === "" ? "M " : "L ") + x.toFixed(2) + " " + y.toFixed(2) + " ";
-                }
-            }
-            svg.appendChild(ns("path", { d, fill: "none", stroke: "#ff8a00", "stroke-width": 2 }));
-        }
-        // Tangent-handle stems, drawn from each key to its ease handle.
-        for (const seg of segs) {
-            const lp = keyPt(seg.out.kIdx), hp = keyPt(seg.in.kIdx);
-            svg.appendChild(ns("line", { x1: lp.x, y1: lp.y, x2: seg.out.gx, y2: seg.out.gy, stroke: "#6cf", opacity: 0.75 }));
-            svg.appendChild(ns("line", { x1: hp.x, y1: hp.y, x2: seg.in.gx,  y2: seg.in.gy,  stroke: "#6cf", opacity: 0.75 }));
-        }
-        const px = X(this._rotoFrame());
-        svg.appendChild(ns("line", { x1: px, y1: 0, x2: px, y2: 100, stroke: "#fff", opacity: 0.6 }));
-    },
-
-    _rotoLayoutKfDots() {
-        const wrap = this._rotoKfGraphWrap;
-        if (!wrap) return;
-        wrap.querySelectorAll(".kf-dot,.kf-tan").forEach((d) => d.remove());
-        const g = this._rotoKfGeom();
-        const { layer, keys, keyPt } = g;
-
-        // Keyframe markers, sitting on the motion curve (retime by dragging).
-        for (let k = 0; k < keys.length; k++) {
-            const f = keys[k];
-            const pt = keyPt(k);
-            const dot = el("div", "", "kf-dot");
-            dot.style.left = pt.x + "%";
-            dot.style.top = pt.y + "%";
-            dot.title = "Keyframe " + f + " — drag to retime · double-click to delete";
-            dot.onmousedown = (e) => this._rotoKfDotDown(e, layer, f);
-            dot.ondblclick = (e) => { e.preventDefault(); e.stopPropagation(); this._rotoDeleteKeyAt(layer, f); };
-            wrap.appendChild(dot);
-        }
-        // Tangent (ease) handles: one out of the left key, one into the right key.
-        for (const seg of g.segs) {
-            for (const h of [seg.out, seg.in]) {
-                const t = el("div", "", "kf-tan");
-                t.style.left = h.gx + "%";
-                t.style.top = h.gy + "%";
-                t.title = (h.side === "out" ? "Ease out of key " : "Ease into key ") + h.key;
-                t.onmousedown = (e) => this._rotoKfTanDown(e, layer, seg, h.side);
-                wrap.appendChild(t);
-            }
-        }
-    },
-
-    _rotoKfDotDown(e, layer, frame) {
-        if (e.button !== 0) return;
-        e.preventDefault(); e.stopPropagation();
-        const wrap = this._rotoKfGraphWrap;
-        if (!wrap) return;
-        const rect = wrap.getBoundingClientRect();
-        const { min, total } = this._rotoTimelineBounds();
-        // Keep keyframe order intact: a key can't be dragged past its neighbours.
-        const keys = this._rotoCurKeys(layer);
-        const idx = keys.indexOf(frame);
-        const loBound = idx > 0 ? keys[idx - 1] + 1 : min;
-        const hiBound = idx >= 0 && idx < keys.length - 1 ? keys[idx + 1] - 1 : min + total;
-        const dot = e.currentTarget;
-        const win = dot.ownerDocument.defaultView || window;
-        let target = frame;
-        const move = (ev) => {
-            ev.preventDefault();
-            const pct = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
-            let f = min + Math.round(pct * total);
-            f = Math.max(loBound, Math.min(hiBound, f));
-            target = f;
-            dot.style.left = (total === 0 ? 0 : ((f - min) / total) * 100) + "%";
-        };
-        const up = () => {
-            win.removeEventListener("mousemove", move);
-            win.removeEventListener("mouseup", up);
-            if (target !== frame) this._rotoMoveKey(layer, frame, target);
-            this._rotoRefreshKfInfo();
-        };
-        win.addEventListener("mousemove", move);
-        win.addEventListener("mouseup", up);
-    },
-
-    // Drag an ease tangent handle. `side` = "out" edits the left key's out
-    // control point, "in" edits the right key's in control point (both in the
-    // segment's normalized [0,1]² frame). Horizontal position = influence
-    // (ease amount); vertical position within the segment's band = speed.
-    _rotoKfTanDown(e, layer, seg, side) {
-        if (e.button !== 0) return;
-        e.preventDefault(); e.stopPropagation();
-        const wrap = this._rotoKfGraphWrap;
-        if (!wrap) return;
-        const rect = wrap.getBoundingClientRect();
-        const el0 = e.currentTarget;
-        const win = el0.ownerDocument.defaultView || window;
-        const yTop = 12, yBot = 88;                         // must match _rotoKfGeom
-        const key = side === "out" ? seg.lo : seg.hi;
-        const move = (ev) => {
-            ev.preventDefault();
-            const gx = (ev.clientX - rect.left) / rect.width * 100;
-            const gy = (ev.clientY - rect.top) / rect.height * 100;
-            // Influence: horizontal position within the segment (0..1).
-            const dx = seg.x1 - seg.x0 || 1;
-            let frac = (gx - seg.x0) / dx;
-            frac = Math.max(0.02, Math.min(0.98, frac));
-            // Speed: vertical position mapped into THIS segment's stacked band.
-            const gv = (yBot - gy) / (yBot - yTop);          // global progress 0..1
-            let val = seg.dv === 0 ? 0 : (gv - seg.v0) / seg.dv;
-            val = Math.max(0, Math.min(1, val));
-            if (side === "out") this._rotoSetKeyTangent(layer, key, { ox: frac, oy: val });
-            else this._rotoSetKeyTangent(layer, key, { ix: frac, iy: val });
-            this._rotoDrawKfCurve();
-            this._rotoLayoutKfDots();
-            this._toolRedraw();
-        };
-        const up = () => {
-            win.removeEventListener("mousemove", move);
-            win.removeEventListener("mouseup", up);
-            this._rotoSave();
-        };
-        win.addEventListener("mousemove", move);
-        win.addEventListener("mouseup", up);
-    },
-
     // ── keyframe helpers ──────────────────────────────────────────────────────
     _rotoRawPoints(layer, frame) {
         const kfs = layer.keyframes;
@@ -666,11 +429,38 @@ export const RotoMixin = {
     // Tangent handles are stored per keyframe frame: { ox,oy (out control point),
     // ix,iy (in control point) } in the segment's normalized [0,1]² time/value
     // space. Absent → derived from the legacy scalar `ease` (0 linear .. 1 smooth).
+    // `hold` on a key: the shape stays as it is until the next key (a step).
     _rotoKeyTangent(layer, frame) {
         const t = layer && layer.tangents && layer.tangents[String(frame)];
-        if (t) return { ox: num(t.ox, 1 / 3), oy: num(t.oy, 1 / 3), ix: num(t.ix, 2 / 3), iy: num(t.iy, 2 / 3) };
+        if (t) return { ox: num(t.ox, 1 / 3), oy: num(t.oy, 1 / 3), ix: num(t.ix, 2 / 3), iy: num(t.iy, 2 / 3),
+                        hold: !!t.hold };
         const e = Math.max(0, Math.min(1, +((layer || {}).ease) || 0));   // migrate old global ease
-        return { ox: 1 / 3, oy: (1 - e) / 3, ix: 2 / 3, iy: 2 / 3 + e / 3 };
+        return { ox: 1 / 3, oy: (1 - e) / 3, ix: 2 / 3, iy: 2 / 3 + e / 3, hold: false };
+    },
+
+    /**
+     * The ease presets of the key bar's menu, as tangents on one key: how the
+     * shape leaves the key and how it arrives at it. The same three names as
+     * previz's keys, so the one menu means the same thing in both.
+     */
+    _rotoEasePreset(name) {
+        if (name === "hold") return { hold: true };
+        if (name === "linear") return { ox: 1 / 3, oy: 1 / 3, ix: 2 / 3, iy: 2 / 3, hold: false };
+        return { ox: 1 / 3, oy: 0, ix: 2 / 3, iy: 1, hold: false };       // smooth: ease out and in
+    },
+
+    /** The menu's choice: for new keys, and for the key under the playhead if there is one. */
+    _rotoApplyEase(name) {
+        this._roto.ease = name || "smooth";
+        const layer = this._rotoCurLayer();
+        const f = this._rotoFrame();
+        if (layer && layer.keyframes && String(f) in layer.keyframes) {
+            layer.tangents = layer.tangents || {};
+            layer.tangents[String(f)] = Object.assign(this._rotoKeyTangent(layer, f), this._rotoEasePreset(this._roto.ease));
+            this._rotoSave();
+            this._rotoRefreshKfInfo();
+            this._toolRedraw();
+        }
     },
 
     _rotoSetKeyTangent(layer, frame, patch) {
@@ -681,6 +471,7 @@ export const RotoMixin = {
     // Eased parameter for the segment lo→hi at time fraction x (0..1).
     _rotoSegEase(layer, lo, hi, x) {
         const a = this._rotoKeyTangent(layer, lo), b = this._rotoKeyTangent(layer, hi);
+        if (a.hold) return x >= 1 ? 1 : 0;
         return bezierEase(x, a.ox, a.oy, b.ix, b.iy);
     },
 
@@ -707,7 +498,15 @@ export const RotoMixin = {
         if (!layer) return;
         const f = this._rotoFrame();
         layer.keyframes = layer.keyframes || {};
+        const fresh = !(String(f) in layer.keyframes);
         layer.keyframes[f] = clonePoints(this._rotoRawPoints(layer, f));
+        // A new key eases the way the key bar's menu says; re-keying one keeps
+        // the handles it has.
+        if (fresh) {
+            layer.tangents = layer.tangents || {};
+            layer.tangents[String(f)] = Object.assign(this._rotoKeyTangent(layer, f),
+                                                      this._rotoEasePreset(this._roto.ease));
+        }
         this._rotoSave(); this._rotoRefreshKfInfo(); this._toolRedraw();
     },
 

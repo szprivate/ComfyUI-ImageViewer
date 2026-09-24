@@ -76,6 +76,13 @@ The contract is the scene schema — `SCHEMA.md` there, `bEpicViewer_worldData.j
 - A world arrives as a normal `bepic.viewer.update` with `scene_replace` (replace the tab's scene), `tab_label` and
   `focus_tab`; tab keys start `world:` and survive the stale-tab sweep.
 
+### Keys and curves (previz and roto)
+
+- One key bar in the transport (Set Key, Delete Key, Autokey, ease menu), built in `previzEnsureKeyBar`; `_keyBarContext()` decides whether a press keys the previz scene or the roto tool's shapes, and `keyBarSync()` shows it for whichever is up.
+- Two dock panels, one look: previz's **Animation Curves** (`bEpicViewer_previzCurves.js`, value graphs) and **Roto Curves** (`bEpicViewer_rotoCurves.js`, a shape's timing between keys). Both are built from `bEpicViewer_curveUI.js` (panel skeleton, list/graph splitter, tangent arms), which stays plain functions so the two mixins can't collide.
+- A roto key's `tangents[frame]` carries `{ox, oy, ix, iy, hold}`; `roto_raster.py` must interpolate exactly as `_rotoSegEase` does, or the mask a node renders won't match the viewer.
+- Anything that moves the frame must call `_toolsFrameChanged()` (image sequences in `setFrame`, videos in its video branch and `_videoOnTimeUpdate`), or the roto overlay lags until the next unrelated redraw.
+
 ### Hotkeys
 
 `bEpicViewer_keymap.js` is the single table feeding three consumers: ComfyUI's command list (so every action is rebindable in Settings → Keybinding), the panel's own key handler (which answers while the viewer is hovered), and the in-viewer help overlay. Add actions there, not ad-hoc listeners. A combo ComfyUI already owns ships unregistered and still works while hovered.

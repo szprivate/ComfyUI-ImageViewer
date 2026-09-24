@@ -6,7 +6,9 @@
 // It used to share the Roto tool's strip above the timeline (#kf-editor). A
 // graph you drag keys around in wants height, and that strip could only take
 // it from the picture; as a docked panel it is sized, moved and stacked like
-// every other panel, and the strip goes back to being the roto tool's alone.
+// every other panel. The roto tool has since followed it into a panel of its
+// own (bEpicViewer_rotoCurves.js), built from the same parts
+// (bEpicViewer_curveUI.js), and the strip is gone.
 //
 // Deliberately NOT the roto editor's speed graph. Roto animates one shape, so
 // its curve is about timing; here every channel is a plain number — X, Y and Z
@@ -33,6 +35,7 @@
 // The numbers live on the key itself — see the tangent notes in
 // bEpicViewer_scene3d.js.
 import * as S from "./bEpicViewer_scene3d.js";
+import { buildCurvePanel, svgLine, tangentArm } from "./bEpicViewer_curveUI.js";
 
 // Every channel an item can have, in the order they are listed. Colour is by
 // axis, shaded by property, so translate.x and rotate.x are never the same
@@ -151,90 +154,22 @@ export const PrevizCurvesMixin = {
 
     _previzBuildCurveEditor(host) {
         if (this._previzCurveUI && this._previzCurveUI.body.isConnected) return this._previzCurveUI;
-        const doc = host.ownerDocument;
-        const el = (tag, cls, text) => {
-            const n = doc.createElement(tag);
-            if (cls) n.className = cls;
-            if (text !== undefined) n.textContent = text;
-            return n;
-        };
-        // The dock owns the title bar; everything below it is ours to replace.
-        host.querySelectorAll(":scope > .curves-body, :scope > .curves-empty").forEach((n) => n.remove());
-
-        const empty = el("div", "curves-empty");
-        const body = el("div", "curves-body");
-
-        // Left: the channel list, a section per object. Right: the graph.
-        // The bar between them is draggable, because a name like
-        // "Kitchen_set.translate.x" needs more room than "fov" does.
-        const list = el("div", "curves-channels");
-        list.style.width = `${this._previzCurveListW || 120}px`;
-        const split = el("div", "curves-split");
-        split.title = "Drag to give the channel names more or less room";
-        split.onpointerdown = (e) => this._previzCurveSplitDown(e, list, split);
-
-        const right = el("div", "curves-graph-col");
-        const sub = el("div", "curves-sub");
-        right.append(sub);
-
-        this._previzCurveWrap = el("div", "kf-graph");
-        this._previzCurveSvg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
-        this._previzCurveSvg.setAttribute("class", "kf-graph-svg");
-        this._previzCurveSvg.setAttribute("viewBox", "0 0 100 100");
-        this._previzCurveSvg.setAttribute("preserveAspectRatio", "none");
-        this._previzCurveWrap.append(this._previzCurveSvg);
-        // A click on the graph itself, clear of any key, drops the selection —
-        // and with it the handles.
-        this._previzCurveWrap.onmousedown = (e) => {
-            if (e.target.closest(".kf-dot, .kf-tan")) return;
-            this._previzCurveKey = null;
-            this.previzRefreshCurves();
-        };
-        right.append(this._previzCurveWrap);
-
-        right.append(el("div", "bepic-tool-hint",
-            "Drag a key sideways to retime it, up and down to change it; double-click removes it. " +
-            "Click a key for its tangents — drag a handle to shape the curve, Alt to break it, " +
-            "double-click it to hand the key back to its ease."));
-        body.append(list, split, right);
-        host.append(empty, body);
-
-        this._previzCurveUI = { body, empty, sub, list };
-        return this._previzCurveUI;
-    },
-
-    /**
-     * Drag the bar between the names and the graph.
-     *
-     * Pointer capture rather than window listeners: a drag started here has to
-     * keep receiving moves after the viewer is popped out into another
-     * document, which is the same reason the dock's splitters use it.
-     */
-    _previzCurveSplitDown(e, list, split) {
-        if (e.button !== 0) return;
-        e.preventDefault();
-        const startX = e.clientX;
-        const startW = list.getBoundingClientRect().width;
-        split.classList.add("dragging");
-        try { split.setPointerCapture(e.pointerId); } catch (_) {}
-        const move = (ev) => {
-            const w = Math.round(Math.max(54, Math.min(320, startW + (ev.clientX - startX))));
-            this._previzCurveListW = w;
-            list.style.width = `${w}px`;
-        };
-        const up = () => {
-            split.removeEventListener("pointermove", move);
-            split.removeEventListener("pointerup", up);
-            split.removeEventListener("pointercancel", up);
-            split.classList.remove("dragging");
-            try { split.releasePointerCapture(e.pointerId); } catch (_) {}
-            // The graph is measured in percentages of its box, and the box
-            // just changed.
-            this.previzRefreshCurves();
-        };
-        split.addEventListener("pointermove", move);
-        split.addEventListener("pointerup", up);
-        split.addEventListener("pointercancel", up);
+        // The skeleton is shared with the Roto Curves (bEpicViewer_curveUI.js).
+        const ui = buildCurvePanel(host, {
+            listWidth: this._previzCurveListW || 120,
+            onListWidth: (w) => { this._previzCurveListW = w; },
+            onResized: () => this.previzRefreshCurves(),
+            // A click on the graph itself, clear of any key, drops the
+            // selection — and with it the handles.
+            onBlank: () => { this._previzCurveKey = null; this.previzRefreshCurves(); },
+            hint: "Drag a key sideways to retime it, up and down to change it; double-click removes it. " +
+                  "Click a key for its tangents — drag a handle to shape the curve, Alt to break it, " +
+                  "double-click it to hand the key back to its ease.",
+        });
+        this._previzCurveWrap = ui.wrap;
+        this._previzCurveSvg = ui.svg;
+        this._previzCurveUI = ui;
+        return ui;
     },
 
     /** Show or hide one channel of one object. Plain click picks it alone. */
@@ -332,18 +267,9 @@ export const PrevizCurvesMixin = {
     _previzDrawCurves(lines) {
         const svg = this._previzCurveSvg;
         if (!svg) return;
-        const doc = svg.ownerDocument;
-        const NS = "http://www.w3.org/2000/svg";
         while (svg.firstChild) svg.removeChild(svg.firstChild);
         const g = this._previzCurveGeom(lines);
-        const line = (attrs) => {
-            const n = doc.createElementNS(NS, attrs.tag || "line");
-            delete attrs.tag;
-            attrs["vector-effect"] = "non-scaling-stroke";
-            for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
-            svg.append(n);
-            return n;
-        };
+        const line = (attrs) => svgLine(svg, attrs);
 
         line({ x1: 0, y1: GRAPH.bottom, x2: 100, y2: GRAPH.bottom, stroke: "#333" });
         line({ x1: 0, y1: GRAPH.top, x2: 100, y2: GRAPH.top, stroke: "#262626" });
@@ -443,18 +369,8 @@ export const PrevizCurvesMixin = {
             const hx = key.f + dir * reach;
             const hy = v + dir * reach * slope;
 
-            const l = doc.createElement("div");
-            l.className = "kf-tan-line";
-            const x1 = g.X(key.f), y1 = g.Y(v), x2 = g.X(hx), y2 = g.Y(hy);
-            const rect = wrap.getBoundingClientRect();
-            const dx = ((x2 - x1) / 100) * (rect.width || 1);
-            const dy = ((y2 - y1) / 100) * (rect.height || 1);
-            l.style.left = x1 + "%";
-            l.style.top = y1 + "%";
-            l.style.width = `${Math.hypot(dx, dy)}px`;
-            l.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
-            l.style.background = ch.color;
-            wrap.append(l);
+            const x2 = g.X(hx), y2 = g.Y(hy);
+            tangentArm(wrap, g.X(key.f), g.Y(v), x2, y2, ch.color);
 
             const h = doc.createElement("div");
             h.className = "kf-tan";

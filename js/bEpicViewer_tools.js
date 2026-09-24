@@ -363,6 +363,8 @@ export const ToolsMixin = {
         if (prev === "roto" && tool !== "roto") this._rotoDeactivate?.();
         if (prev === "annotate" && tool !== "annotate") this._annotDeactivate?.();
         this._toolState.active = tool;
+        // The key bar keys roto shapes while that tool is on, and hides again after.
+        this.keyBarSync?.();
 
         for (const k in this._toolBtns) this._toolBtns[k].classList.toggle("active", k === tool);
         this._toolDraw.classList.toggle("active", tool !== "none");
