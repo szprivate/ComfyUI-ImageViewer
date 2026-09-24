@@ -29,6 +29,9 @@ import {
     toolNodeFromSelection,
     graphSelectionSignature,
     nodeInGraph,
+    nodeToolKind,
+    leadSelectedNode,
+    createToolNode,
     readToolStore,
     writeToolStore,
     SAM3_POS_WIDGET,
@@ -295,7 +298,7 @@ export const ToolsMixin = {
         const mk = (tool, glyph, title) => {
             const b = elWith("button", { title, textContent: glyph });
             b.dataset.tool = tool;
-            b.onclick = () => this.setActiveTool(this._toolState.active === tool ? "none" : tool);
+            b.onclick = () => this._toolButtonPressed(tool);
             bar.appendChild(b);
             return b;
         };
@@ -318,6 +321,34 @@ export const ToolsMixin = {
         // _onToolPointerMove). Hidden unless a tool is active.
         this._toolStatusEl = elWith("div", { className: "bepic-tool-status" });
         this.viewport.appendChild(this._toolStatusEl);
+    },
+
+    /**
+     * A toolbar button. Annotate toggles its tool. Roto and SAM3 make a node:
+     * a new Roto / SAM3 Collector hung off the selected (or the tab's) image
+     * and left selected, and selecting it is what brings the tool up — the same
+     * as selecting an existing one on the canvas (_toolFollowSelection).
+     * Pressing the button of the tool that is on turns it off; the two SAM3
+     * tools share a collector, so going from one to the other only switches.
+     */
+    _toolButtonPressed(tool) {
+        const active = this._toolState.active;
+        if (active === tool) {
+            this._toolBySelection = false;
+            this.setActiveTool("none");
+            return;
+        }
+        if (tool === "sam3" || tool === "sam3box") this._lastSam3Tool = tool;
+        const kind = TOOL_NODE_KIND[tool];
+        if (!kind) { this._toolBySelection = false; this.setActiveTool(tool); return; }
+        if (TOOL_NODE_KIND[active] === kind && this._toolState.node) { this.setActiveTool(tool); return; }
+        const node = createToolNode(this, this.activeTab, kind);
+        // The new node is the selection now; the tool follows it from here on,
+        // so note the selection as seen rather than have the next tick redo it.
+        this._toolFollowSig = graphSelectionSignature();
+        this._toolBySelection = !!node;
+        // With no image to hang a node off, the tool still comes up, to say so.
+        this.setActiveTool(tool);
     },
 
     // Update (or hide, when text is empty) the context hint line.
@@ -426,10 +457,9 @@ export const ToolsMixin = {
         this._toolDraw.classList.toggle("active", tool !== "none");
         this._updateToolCursor();
 
-        // Pressing a tool button is the one moment we may add a node to the
-        // graph: the user asked for this tool here, so give them somewhere to
-        // draw. Plain rebinds (tab switches, selection changes) never create.
-        this._bindActiveTool({ create: tool !== "none" });
+        // Never creates: a node is made by the toolbar button
+        // (_toolButtonPressed) or the panel's "Add … node" button.
+        this._bindActiveTool();
         if (TOOL_NODE_KIND[tool]) this._toolWatchSelection();
         else this._toolUnwatchSelection();
 
@@ -459,8 +489,8 @@ export const ToolsMixin = {
      * A tool's options are the parameters of the node it draws into, so they
      * show there rather than in a panel of their own: the header names the
      * tool, the node widgets step aside (the selection monitor pauses, see
-     * ParamsMixin) and the panel opens if it was put away — and is put away
-     * again afterwards if it was. A 3D tab has no drawing tools, so there the
+     * ParamsMixin; the lock stays, holding the tool on its node) and the panel
+     * opens if it was put away — and is put away again afterwards if it was. A 3D tab has no drawing tools, so there the
      * panel goes back to the node (see ModelMixin's enter/exit).
      */
     _toolShowDock(on) {
@@ -474,14 +504,12 @@ export const ToolsMixin = {
                 this._paramsToolMode = true;
                 this._paramsOpenBeforeTool = this.isPanelDocked("params");
                 panel.classList.add("tool-mode");
-                if (this.paramsLockBtn) this.paramsLockBtn.style.display = "none";
             }
             if (this.paramsTitle) this.paramsTitle.innerText = names[this._toolState.active] || "Tool";
             if (!this.isPanelDocked("params")) this.setPanelDocked("params", true);
         } else if (this._paramsToolMode) {
             this._paramsToolMode = false;
             panel.classList.remove("tool-mode");
-            if (this.paramsLockBtn) this.paramsLockBtn.style.display = "";
             // Back to the node the widgets were showing (values may have moved
             // meanwhile); the monitor takes any new selection from here.
             if (this.paramsTitle) this.paramsTitle.innerText = "No Node Selected";
@@ -625,10 +653,39 @@ export const ToolsMixin = {
         return `${graphSelectionSignature()}|${alive}`;
     },
 
+    /**
+     * Selecting a Roto or SAM3 Collector node on the canvas brings its tool up
+     * (and with it the tool's options in the Parameters panel); selecting
+     * something else, or nothing, puts a tool brought up that way away again.
+     * The Parameters lock holds the tool where it is. Called from the
+     * parameters monitor's tick (ParamsMixin.startParamMonitor) whether or not
+     * that panel is open, and acts only when the selection changes.
+     */
+    _toolFollowSelection(selected) {
+        const ids = Object.keys(selected || {});
+        const sig = ids.slice().sort().join(",");
+        if (sig === this._toolFollowSig) return;
+        if (this.paramsLocked || this._modelMode || !this._toolState) return;   // re-read once free
+        this._toolFollowSig = sig;
+        const kind = nodeToolKind(leadSelectedNode());
+        const active = this._toolState.active;
+        if (kind) {
+            const want = kind === "roto" ? "roto"
+                : (active === "sam3" || active === "sam3box") ? active : (this._lastSam3Tool || "sam3");
+            if (active !== want) this.setActiveTool(want);
+            this._toolBySelection = true;
+        } else if (this._toolBySelection) {
+            this._toolBySelection = false;
+            if (TOOL_NODE_KIND[active]) this.setActiveTool("none");
+        }
+    },
+
     _onGraphSelectionChanged() {
         const kind = TOOL_NODE_KIND[this._toolState.active];
         if (!kind) return;
         const bound = this._toolState.node;
+        // Locked, the tool stays on its node — unless that node is gone.
+        if (this.paramsLocked && bound && nodeInGraph(bound)) return;
         // Two things move the tool: a selection that names a node of this kind,
         // and the node it is on being deleted. Anything else — a KSampler, empty
         // canvas — is not about this tool and leaves it alone, because rebinding

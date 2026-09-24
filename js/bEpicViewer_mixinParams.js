@@ -42,6 +42,9 @@ export const ParamsMixin = {
 
     toggleParamsLock() {
         this.paramsLocked = !this.paramsLocked;
+        // Unlocked, catch up with whatever was selected meanwhile: the tool
+        // follows the selection again, and rebinds to a node picked while held.
+        if (!this.paramsLocked) { this._toolFollowSig = null; this._toolSelSig = null; }
         if (this.paramsLockBtn) {
             this._setIcon(this.paramsLockBtn, this.paramsLocked ? 'icon-lock' : 'icon-unlock');
             this.paramsLockBtn.style.color = this.paramsLocked ? '#f60' : '';
@@ -102,6 +105,11 @@ export const ParamsMixin = {
         const tick  = () => {
             if (!running) return;
             requestAnimationFrame(tick);
+
+            // A selected Roto / SAM3 Collector node brings its tool up, panel
+            // open or not (ToolsMixin._toolFollowSelection).
+            try { this._toolFollowSelection?.(app?.canvas?.selected_nodes); }
+            catch (e) { console.warn("bEpicViewer: tool selection follow failed", e); }
 
             if (!this.isPanelDocked || !this.isPanelDocked("params")) return;
             // A drawing tool has the panel (ToolsMixin._toolShowDock).
@@ -176,7 +184,9 @@ export const ParamsMixin = {
         const frag = document.createDocumentFragment();
         if (node.widgets) {
             node.widgets.forEach(w => {
-                if (w.type === "button") return;
+                // Hidden ones too, as on the canvas: a Roto / SAM3 node's stores
+                // (roto_data, sam3_*) are the tools' business, not the user's.
+                if (w.type === "button" || w.hidden) return;
 
                 const row = document.createElement("div");
                 row.className       = "param-row";

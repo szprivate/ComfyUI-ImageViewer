@@ -391,6 +391,11 @@ function selectedGraphNodes() {
     return nodes;
 }
 
+/** The node "selected" means: the one touched last, or null. */
+export function leadSelectedNode() {
+    return selectedGraphNodes()[0] || null;
+}
+
 /** A tool node of this kind picked on the canvas, if the user has one selected. */
 function selectedToolNode(kind) {
     const type = TOOL_NODE_TYPES[kind];
@@ -529,6 +534,17 @@ export function ensureToolNode(panel, tabKey, kind, { create = false } = {}) {
     }
 
     return null;
+}
+
+/** What the viewer toolbar's Roto / SAM3 buttons do: add a new tool node of
+ * `kind`, hung off the selected node's image (or, with nothing usable
+ * selected, the tab's), and leave it selected — the selection is what then
+ * brings its tool up (ToolsMixin._toolFollowSelection). Null when there is no
+ * image to hang it off. */
+export function createToolNode(panel, tabKey, kind) {
+    const type = TOOL_NODE_TYPES[kind];
+    const src = type && (selectedImageSource() || imageSourceForTab(panel, tabKey));
+    return src ? addToolNode(type, src) : null;
 }
 
 /** Add a tool node to the graph, wired to `src` and left selected. */
