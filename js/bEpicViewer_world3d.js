@@ -181,6 +181,7 @@ export const WorldViewMixin = {
     },
 
     _worldDispose(entry) {
+        this._stopMotion(entry);
         if (entry.worldExtras) {
             for (const obj of entry.worldExtras) {
                 if (obj.parent) obj.parent.remove(obj);
@@ -977,6 +978,7 @@ export const WorldViewMixin = {
         // the two would fight pixel by pixel; the picture wins.
         const material = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, toneMapped: false, fog: false,
                                                        polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -16 });
+        if (d.motion) await this._depthMotion(entry, material, d.motion);
         const mesh = new THREE.Mesh(geom, material);
         mesh.name = "imageplane";          // keeps its picture in clay/normal modes, like an image plane
         mesh.userData.bepicItemId = item.id;
@@ -984,6 +986,54 @@ export const WorldViewMixin = {
         entry.object = mesh;
         this._originals.set(mesh, material);
         entry.stats = { meshes: 1, vertices: cols * rows, triangles: index.length / 3 };
+    },
+
+    /**
+     * Ambient motion on the depth mesh: a looping video of the picture, mixed
+     * in where the mask is white. The video starts and ends on the picture, so
+     * outside the moving parts nothing changes and the loop has no jump.
+     */
+    async _depthMotion(entry, material, motion) {
+        const { THREE } = this.libs;
+        // In the panel's own document: an undocked viewer lives in another window.
+        const video = this.doc.createElement("video");
+        Object.assign(video, { loop: true, muted: true, playsInline: true, crossOrigin: "anonymous", preload: "auto" });
+        // Mixed in only once there are frames: until then (a slow file, or a
+        // background tab, where Chrome doesn't load media at all) the still
+        // picture shows, never a black hole.
+        const on = { value: 0 };
+        video.addEventListener("loadeddata", () => { on.value = 1; video.play().catch(() => {}); this.requestRender(); });
+        video.addEventListener("error", () => console.warn("[bEpicViewer] motion video did not load", motion.src));
+        video.src = this.hooks.srcUrl(motion.src);
+        video.play().catch(() => {});
+        const vtex = new THREE.VideoTexture(video);
+        vtex.colorSpace = THREE.SRGBColorSpace;
+        const mtex = motion.mask ? await this._loadTexture(this.hooks.srcUrl(motion.mask)) : null;
+        const uniforms = { uMotion: { value: vtex }, uMotionOn: on };
+        if (mtex) uniforms.uMotionMask = { value: mtex };
+        material.onBeforeCompile = (shader) => {
+            Object.assign(shader.uniforms, uniforms);
+            shader.fragmentShader = shader.fragmentShader
+                .replace("void main() {", `uniform sampler2D uMotion;\nuniform float uMotionOn;\n${mtex ? "uniform sampler2D uMotionMask;\n" : ""}void main() {`)
+                .replace("#include <map_fragment>", `#include <map_fragment>
+                    {
+                        float motionAmount = uMotionOn * ${mtex ? "texture2D(uMotionMask, vMapUv).r" : "1.0"};
+                        diffuseColor.rgb = mix(diffuseColor.rgb, texture2D(uMotion, vMapUv).rgb, motionAmount);
+                    }`);
+        };
+        material.customProgramCacheKey = () => (mtex ? "depthmotion-mask" : "depthmotion");
+        material.needsUpdate = true;
+        entry.motion = { video, uniforms, textures: [vtex, mtex].filter(Boolean) };
+    },
+
+    _stopMotion(entry) {
+        if (!entry.motion) return;
+        const { video, textures } = entry.motion;
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+        for (const t of textures) t.dispose();
+        entry.motion = null;
     },
 
     // ── Animation ────────────────────────────────────────────────────────────
@@ -997,7 +1047,11 @@ export const WorldViewMixin = {
         }
         if (windy && !this._rendering) this._worldTime().value += Math.min(dt, 0.1);
         if (this._walk) this._walkStep(Math.min(dt, 0.1));
-        return (windy || !!this._walk) && this.visible;
+        let moving = false;
+        for (const e of this._entries.values()) {
+            if (e.motion && e.object && e.item.visible !== false) { moving = true; break; }
+        }
+        return (windy || moving || !!this._walk) && this.visible;
     },
 
     // ── Walking ──────────────────────────────────────────────────────────────

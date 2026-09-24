@@ -199,6 +199,10 @@ export function depthMeshSettings(item) {
                 .map((p) => [num(p[0], 0, 0, 1), num(p[1], 1, 0.01)]).sort((a, b) => a[0] - b[0])
             : null,
         segments: Math.round(num(d.segments, 256, 8, 1024)),
+        // A loop of the picture moving (it starts and ends on the picture),
+        // played where the mask is white; the rest stays the still picture.
+        motion: d.motion && file(d.motion.src)
+            ? { src: d.motion.src, mask: file(d.motion.mask) ? d.motion.mask : null } : null,
     };
 }
 

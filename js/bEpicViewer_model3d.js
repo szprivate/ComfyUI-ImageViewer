@@ -1280,7 +1280,7 @@ export class Model3DView {
 
     _disposeEntry(entry, full) {
         if (entry.mixer) { entry.mixer.stopAllAction(); entry.mixer = null; }
-        if (entry.worldExtras || entry.envApplied || entry.terrain) this._worldDispose(entry);
+        if (entry.worldExtras || entry.envApplied || entry.terrain || entry.motion) this._worldDispose(entry);
         if (entry.object) {
             this._bodyOf(entry).remove(entry.object);
             this._disposeObject(entry.object);
