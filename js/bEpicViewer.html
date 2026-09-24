@@ -73,12 +73,14 @@
         <div id="browser-panel" class="browser-panel right">
             <div class="browser-header">
                 <button id="browser-up-btn" class="browser-btn" title="Parent folder (Backspace)">&#8593;</button>
-                <select id="browser-root-sel" title="Jump to a folder"><option value="">Go to&#8230;</option></select>
+                <!-- The folder you are in, where the jump menu used to sit; the
+                     menu is the narrow drop-down beside it. -->
+                <input type="text" id="browser-path" class="browser-path" spellcheck="false"
+                       placeholder="ComfyUI input folder"
+                       title="Type or paste a folder path, then press Enter">
+                <select id="browser-root-sel" title="Go to a folder&#8230;"><option value="">Go to&#8230;</option></select>
                 <button id="browser-refresh-btn" class="browser-btn" title="Re-read this folder">&#10227;</button>
             </div>
-            <input type="text" id="browser-path" class="browser-path" spellcheck="false"
-                   placeholder="ComfyUI input folder"
-                   title="Type or paste a folder path, then press Enter">
             <div class="browser-filter">
                 <input type="text" id="browser-filter" class="browser-filter-in" spellcheck="false"
                        placeholder="Filter, e.g. *.exr"
