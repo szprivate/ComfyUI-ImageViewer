@@ -11,10 +11,29 @@
 // and rebuilt when its key (the settings, as JSON) changes — a scatter's key
 // includes its terrain's, so re-shaping the ground re-plants what grows on it.
 
+import { api } from "../../scripts/api.js";
 import {
     WORLD_KINDS, environmentSettings, terrainSettings, scatterSettings, depthMeshSettings,
-    referenceSettings, walkSettings, worldInfo, inClearArea,
+    referenceSettings, walkSettings, worldInfo, inClearArea, lightSettings,
 } from "./bEpicViewer_worldData.js";
+
+// Bloom and tone mapping come from three's post-processing addons, loaded the
+// first time a world asks for bloom (vendor/three, like the rest of three).
+let _postPromise = null;
+function loadPost() {
+    if (!_postPromise) {
+        const base = api.apiURL("/bepic/lib/three/");
+        _postPromise = Promise.all(["EffectComposer.js", "RenderPass.js", "UnrealBloomPass.js", "OutputPass.js"]
+            .map((n) => import(base + n)))
+            .then(([ec, rp, ub, op]) => ({ EffectComposer: ec.EffectComposer, RenderPass: rp.RenderPass,
+                                         UnrealBloomPass: ub.UnrealBloomPass, OutputPass: op.OutputPass }))
+            .catch((e) => { _postPromise = null; throw e; });
+    }
+    return _postPromise;
+}
+
+// What each scatter shape is made of, unless the scatter says otherwise.
+const ROUGHNESS = { pine: 0.85, tree: 0.8, bush: 0.85, grass: 0.9, rock: 0.8, column: 0.55, lamp: 0.4, model: null };
 
 const DEG = Math.PI / 180;
 const SKY_RADIUS = 4000;
@@ -116,6 +135,7 @@ export const WorldViewMixin = {
                                    target ? [target.position, target.rotation, target.scale] : null]);
         }
         if (item.kind === "depthmesh") return JSON.stringify(depthMeshSettings(item));
+        if (item.kind === "light") return JSON.stringify(lightSettings(item));
         return "";
     },
 
@@ -144,6 +164,7 @@ export const WorldViewMixin = {
                 else if (item.kind === "terrain") await this._buildTerrain(entry, item);
                 else if (item.kind === "scatter") await this._buildScatter(entry, item);
                 else if (item.kind === "depthmesh") await this._buildDepthMesh(entry, item);
+                else if (item.kind === "light") this._buildLight(entry, item);
                 entry.error = "";
             } catch (e) {
                 console.warn(`[bEpicViewer] could not build ${item.name}`, e);
@@ -151,6 +172,8 @@ export const WorldViewMixin = {
                 if (this.hooks.onError) this.hooks.onError(item, entry.error);
             }
             this._worldSyncStudio();
+            // What the world looks like changed: its reflections are stale.
+            this._envDirty = true;
             this.requestRender();
         })();
         await entry.worldReady;
@@ -198,6 +221,137 @@ export const WorldViewMixin = {
             this.renderer.shadowMap.enabled = env;
         }
         if (this.grid) this.grid.visible = this.showGrid && !ground;
+        this._worldSyncRender();
+    },
+
+    /** The environment's render settings, or null when there is no world. */
+    _worldRenderSettings() {
+        for (const e of this._entries.values()) {
+            if (e.item.kind === "environment" && e.envApplied && e.item.visible !== false) {
+                return environmentSettings(e.item).render;
+            }
+        }
+        return null;
+    },
+
+    /**
+     * Tone curve, exposure and bloom, from the environment's `render` block.
+     * Without a world the viewer's plain linear look stays, so a model tab is
+     * drawn as it always was.
+     */
+    _worldSyncRender() {
+        if (!this.renderer || !this.libs) return;
+        const { THREE } = this.libs;
+        const r = this._worldRenderSettings();
+        const curve = { neutral: THREE.NeutralToneMapping, aces: THREE.ACESFilmicToneMapping,
+                        agx: THREE.AgXToneMapping, linear: THREE.LinearToneMapping };
+        this.renderer.toneMapping = r ? curve[r.tone] : THREE.LinearToneMapping;
+        this.renderer.toneMappingExposure = this.exposure * (r ? r.exposure : 1);
+        const want = !!(r && r.bloom > 0);
+        if (!want) {
+            if (this._composer) { this._composer.dispose && this._composer.dispose(); this._composer = null; }
+            this._bloomPass = null;
+            return;
+        }
+        if (this._composer) {
+            this._bloomPass.strength = r.bloom;
+            return;
+        }
+        if (this._postLoading) return;
+        this._postLoading = true;
+        loadPost().then((P) => {
+            this._postLoading = false;
+            if (!this.renderer || !this._worldRenderSettings()) return;
+            const size = this.renderer.getSize(new THREE.Vector2());
+            const composer = new P.EffectComposer(this.renderer);
+            composer.setPixelRatio(this.renderer.getPixelRatio());
+            composer.setSize(size.x, size.y);
+            this._renderPass = new P.RenderPass(this.scene, this.activeCameraObject());
+            this._bloomPass = new P.UnrealBloomPass(size.clone(), (this._worldRenderSettings() || {}).bloom || 0.3, 0.45, 0.9);
+            composer.addPass(this._renderPass);
+            composer.addPass(this._bloomPass);
+            composer.addPass(new P.OutputPass());
+            this._composer = composer;
+            this.requestRender();
+        }).catch((e) => {
+            this._postLoading = false;
+            console.warn("[bEpicViewer] bloom unavailable", e);
+        });
+    },
+
+    /** Draw a frame: through bloom and tone mapping when the world has them. */
+    _worldRender(camera) {
+        if (this._envDirty) this._worldCaptureEnv();
+        if (this._composer && this._renderPass) {
+            this._renderPass.camera = camera;
+            this._composer.render();
+            return;
+        }
+        this.renderer.render(this.scene, camera);
+    },
+
+    /** The composer follows the canvas's size. */
+    _worldResize(w, h) {
+        if (this._composer) {
+            this._composer.setPixelRatio(this.renderer.getPixelRatio());
+            this._composer.setSize(w, h);
+        }
+    },
+
+    /**
+     * Reflections and image-based light from the world itself: a cube map
+     * taken where the reference camera (or the walk) stands, filtered for
+     * rough and smooth surfaces alike. A glossy floor then reflects the
+     * picture's own lamps and columns, not a sky it doesn't have.
+     */
+    _worldCaptureEnv() {
+        this._envDirty = false;
+        const { THREE } = this.libs;
+        const r = this._worldRenderSettings();
+        if (!r || r.reflections !== "capture" || !this.renderer) {
+            if (this._envRT) { this._envRT.dispose(); this._envRT = null; }
+            if (this.scene.environment && this.scene.environment.userData && this.scene.environment.userData.bepicCapture) {
+                this.scene.environment = null;
+            }
+            this._worldScaleFill(1);
+            return;
+        }
+        const walk = walkSettings(this.scene3d);
+        const refcam = (this.scene3d.items || []).find((i) => i.id === "refcam");
+        const at = walk.spawn || (refcam && refcam.position) || [0, 1.7, 0];
+        const cube = new THREE.WebGLCubeRenderTarget(256, { type: THREE.HalfFloatType });
+        const cam = new THREE.CubeCamera(0.05, SKY_RADIUS * 2, cube);
+        cam.position.set(at[0], at[1], at[2]);
+        const hidden = [];
+        const hide = (o) => { if (o && o.visible) { o.visible = false; hidden.push(o); } };
+        hide(this.grid); hide(this.gizmoHelper); hide(this._pinGroup); hide(this._pivotMark);
+        for (const e of this._entries.values()) { hide(e.helper); hide(e.axes); }
+        this.scene.environment = null;
+        this._worldScaleFill(1);
+        this.scene.add(cam);
+        cam.update(this.renderer, this.scene);
+        this.scene.remove(cam);
+        for (const o of hidden) o.visible = true;
+        const pmrem = new THREE.PMREMGenerator(this.renderer);
+        const rt = pmrem.fromCubemap(cube.texture);
+        pmrem.dispose();
+        cube.dispose();
+        if (this._envRT) this._envRT.dispose();
+        this._envRT = rt;
+        rt.texture.userData.bepicCapture = true;
+        this.scene.environment = rt.texture;
+        // The captured world already carries much of the fill light: the
+        // hemisphere light keeps only the share the world asks for.
+        this._worldScaleFill(r.fill);
+    },
+
+    _worldScaleFill(k) {
+        for (const e of this._entries.values()) {
+            if (e.item.kind !== "environment" || !e.worldExtras) continue;
+            for (const o of e.worldExtras) {
+                if (o.isHemisphereLight) o.intensity = environmentSettings(e.item).ambient.intensity * k;
+            }
+        }
     },
 
     // ── Environment ──────────────────────────────────────────────────────────
@@ -353,34 +507,59 @@ export const WorldViewMixin = {
 
         const white = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
         white.needsUpdate = true;
-        const maps = await Promise.all(t.layers.map(async (l) => {
-            if (!l.src || !this.hooks.srcUrl) return null;
+        const loadMap = async (src, srgb) => {
+            if (!src || !this.hooks.srcUrl) return null;
             try {
-                const tex = await this._loadTexture(this.hooks.srcUrl(l.src));
-                tex.colorSpace = THREE.SRGBColorSpace;
+                const tex = await this._loadTexture(this.hooks.srcUrl(src));
+                tex.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
                 tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
                 tex.anisotropy = this.renderer ? this.renderer.capabilities.getMaxAnisotropy() : 1;
                 return tex;
             } catch (e) { return null; }
-        }));
+        };
+        const [maps, normals, roughs] = await Promise.all([
+            Promise.all(t.layers.map((l) => loadMap(l.src, true))),
+            Promise.all(t.layers.map((l) => loadMap(l.normal, false))),
+            Promise.all(t.layers.map((l) => loadMap(l.rough, false))),
+        ]);
+        const flat = new THREE.DataTexture(new Uint8Array([128, 128, 255, 255]), 1, 1);
+        flat.needsUpdate = true;
         const uniforms = {
             uMap0: { value: maps[0] || white }, uMap1: { value: maps[1] || white },
             uMap2: { value: maps[2] || white }, uMap3: { value: maps[3] || white },
             uColor0: { value: new THREE.Color(t.layers[0].color) }, uColor1: { value: new THREE.Color(t.layers[1].color) },
             uColor2: { value: new THREE.Color(t.layers[2].color) }, uColor3: { value: new THREE.Color(t.layers[3].color) },
             uTile: { value: new THREE.Vector4(...t.layers.map((l) => l.tile)) },
+            uNrm0: { value: normals[0] || flat }, uNrm1: { value: normals[1] || flat },
+            uNrm2: { value: normals[2] || flat }, uNrm3: { value: normals[3] || flat },
+            uRgh0: { value: roughs[0] || white }, uRgh1: { value: roughs[1] || white },
+            uRgh2: { value: roughs[2] || white }, uRgh3: { value: roughs[3] || white },
+            uHasR: { value: new THREE.Vector4(...roughs.map((m) => (m ? 1 : 0))) },
+            uRough: { value: new THREE.Vector4(...t.layers.map((l) => l.roughness)) },
+            uNScale: { value: new THREE.Vector4(...t.layers.map((l, i) => (normals[i] ? l.normalScale : 0))) },
+            uBake: { value: new THREE.Vector4(...t.layers.map((l) => l.baked)) },
         };
         const material = new THREE.MeshStandardMaterial({ roughness: 0.95, metalness: 0 });
+        // A key per program: without it, three reuses one compiled shader for
+        // every terrain, and the first one's patch is the only one it runs.
+        material.customProgramCacheKey = () => "bepic-terrain-pbr";
         material.onBeforeCompile = (shader) => {
             Object.assign(shader.uniforms, uniforms);
             shader.vertexShader = shader.vertexShader
-                .replace("#include <common>", "#include <common>\nattribute vec4 aSplat;\nvarying vec4 vSplat;\nvarying vec2 vGround;")
-                .replace("#include <begin_vertex>", "#include <begin_vertex>\nvSplat = aSplat;\nvGround = position.xz;");
+                .replace("#include <common>", "#include <common>\nattribute vec4 aSplat;\nvarying vec4 vSplat;\nvarying vec2 vGround;\nvarying vec3 vTanV;\nvarying vec3 vBitV;")
+                .replace("#include <begin_vertex>", "#include <begin_vertex>\nvSplat = aSplat;\nvGround = position.xz;\n"
+                         + "vTanV = normalize(normalMatrix * vec3(1.0, 0.0, 0.0));\nvBitV = normalize(normalMatrix * vec3(0.0, 0.0, 1.0));");
             shader.fragmentShader = shader.fragmentShader
                 .replace("#include <common>", `#include <common>
                     uniform sampler2D uMap0; uniform sampler2D uMap1; uniform sampler2D uMap2; uniform sampler2D uMap3;
                     uniform vec3 uColor0; uniform vec3 uColor1; uniform vec3 uColor2; uniform vec3 uColor3;
                     uniform vec4 uTile; varying vec4 vSplat; varying vec2 vGround;
+                    uniform sampler2D uNrm0; uniform sampler2D uNrm1; uniform sampler2D uNrm2; uniform sampler2D uNrm3;
+                    uniform sampler2D uRgh0; uniform sampler2D uRgh1; uniform sampler2D uRgh2; uniform sampler2D uRgh3;
+                    uniform vec4 uHasR; uniform vec4 uRough; uniform vec4 uNScale; uniform vec4 uBake;
+                    varying vec3 vTanV; varying vec3 vBitV;
+                    vec2 layerN(sampler2D m, float tile) { return texture2D(m, vGround / tile).xy * 2.0 - 1.0; }
+                    float layerR(sampler2D m, float tile) { return texture2D(m, vGround / tile).r; }
                     // Two scales of the same texture, so a repeat doesn't read as a grid.
                     vec3 layerTex(sampler2D m, float tile) {
                         vec3 a = texture2D(m, vGround / tile).rgb;
@@ -391,7 +570,21 @@ export const WorldViewMixin = {
                     vec4 sw = vSplat / max(dot(vSplat, vec4(1.0)), 1e-4);
                     vec3 ground = uColor0 * layerTex(uMap0, uTile.x) * sw.x + uColor1 * layerTex(uMap1, uTile.y) * sw.y
                                 + uColor2 * layerTex(uMap2, uTile.z) * sw.z + uColor3 * layerTex(uMap3, uTile.w) * sw.w;
-                    diffuseColor.rgb *= ground;`);
+                    diffuseColor.rgb *= ground;`)
+                // Roughness: each layer's map, or its measured value, blended.
+                .replace("#include <roughnessmap_fragment>", `
+                    vec4 rs = vec4(mix(uRough.x, layerR(uRgh0, uTile.x), uHasR.x), mix(uRough.y, layerR(uRgh1, uTile.y), uHasR.y),
+                                   mix(uRough.z, layerR(uRgh2, uTile.z), uHasR.z), mix(uRough.w, layerR(uRgh3, uTile.w), uHasR.w));
+                    float roughnessFactor = clamp(dot(sw, rs), 0.04, 1.0);`)
+                // Relief: the layers' normal maps, blended, bent onto the ground.
+                .replace("#include <normal_fragment_maps>", `
+                    vec2 nd = layerN(uNrm0, uTile.x) * uNScale.x * sw.x + layerN(uNrm1, uTile.y) * uNScale.y * sw.y
+                            + layerN(uNrm2, uTile.z) * uNScale.z * sw.z + layerN(uNrm3, uTile.w) * uNScale.w * sw.w;
+                    normal = normalize(normal + (vTanV * nd.x + vBitV * nd.y) * faceDirection);`)
+                // Light the picture already had on this surface, kept as glow.
+                .replace("#include <emissivemap_fragment>", `
+                    #include <emissivemap_fragment>
+                    totalEmissiveRadiance += diffuseColor.rgb * dot(sw, uBake);`);
         };
         const mesh = new THREE.Mesh(geom, material);
         mesh.name = "terrain";
@@ -512,6 +705,9 @@ export const WorldViewMixin = {
             const nrm = g.attributes.normal;
             for (let i = 0; i < nrm.count; i++) nrm.setXYZ(i, 0, 1, 0);
             parts = [{ geometry: g, part: "grass", height: 0.7 }];
+        } else if (type === "lamp") {
+            // A strip light: a thin glowing tube along X, hung under the ceiling.
+            parts = [{ geometry: new THREE.BoxGeometry(1.25, 0.05, 0.12).translate(0, -0.025, 0), part: "lamp", height: 0.05 }];
         } else if (type === "column") {
             // A column one unit tall with a flared head, as in a car park or a
             // hall; the scatter's `aspect` stretches it to the room's height.
@@ -624,13 +820,14 @@ export const WorldViewMixin = {
             const fx = u * T.seg, fy = v * T.seg, x0 = Math.min(T.seg - 1, Math.floor(fx)), y0 = Math.min(T.seg - 1, Math.floor(fy));
             const tx = fx - x0, ty = fy - y0, H = T.heights;
             p.y = ((H[y0 * n + x0] * (1 - tx) + H[y0 * n + x0 + 1] * tx) * (1 - ty)
-                 + (H[(y0 + 1) * n + x0] * (1 - tx) + H[(y0 + 1) * n + x0 + 1] * tx) * ty) * T.height - 0.05;
+                 + (H[(y0 + 1) * n + x0] * (1 - tx) + H[(y0 + 1) * n + x0 + 1] * tx) * ty) * T.height - 0.05 + s.lift;
             world.copy(p).applyMatrix4(tbody.matrixWorld);
             if (inClearArea(s.clear, world.x, world.z)) continue;
             const size = s.scale[0] + (s.scale[1] - s.scale[0]) * r();
             const tilt = s.source.type === "rock" ? 0.4 : (s.source.type === "grass" ? 0.15
-                       : (s.source.type === "column" ? 0 : 0.05));
-            e.set((r() - 0.5) * tilt, r() * Math.PI * 2, (r() - 0.5) * tilt);
+                       : (s.source.type === "column" || s.source.type === "lamp" ? 0 : 0.05));
+            // Lamps hang in rows, all one way; everything else turns at random.
+            e.set((r() - 0.5) * tilt, s.source.type === "lamp" ? 0 : r() * Math.PI * 2, (r() - 0.5) * tilt);
             q.setFromEuler(e);
             const vary = s.source.type === "column" ? 1 : 0.85 + r() * 0.3;
             sc.set(size, size * vary * s.aspect, size);
@@ -647,12 +844,19 @@ export const WorldViewMixin = {
         for (const part of parts) {
             const flat = part.part === "rock" || part.part === "crown";
             // (a column is smooth-shaded: it is round)
+            const rough = s.roughness != null ? s.roughness
+                : (part.part === "trunk" ? 0.9 : (ROUGHNESS[s.source.type] ?? 0.85));
             let material = part.material && part.part === "model" ? part.material.clone()
                 : new THREE.MeshStandardMaterial({
                     color: part.part === "trunk" ? trunkColor : 0xffffff,
-                    roughness: 0.9, metalness: 0, flatShading: flat,
+                    roughness: rough, metalness: 0, flatShading: flat,
                     side: part.part === "grass" ? THREE.DoubleSide : THREE.FrontSide,
                 });
+            if (part.part === "lamp" || s.emissive > 0) {
+                // Glows by itself (and blooms), whatever the light around it.
+                material.emissive = new THREE.Color(s.color);
+                material.emissiveIntensity = s.emissive || 6;
+            }
             if (part.part !== "trunk" && part.part !== "model" && part.part !== "column") {
                 material = this._windMaterial(material, s.wind, part.height);
             }
@@ -668,7 +872,7 @@ export const WorldViewMixin = {
             mesh.instanceMatrix.needsUpdate = true;
             if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
             mesh.computeBoundingSphere();
-            mesh.castShadow = part.part !== "grass";
+            mesh.castShadow = part.part !== "grass" && part.part !== "lamp";
             mesh.receiveShadow = true;
             mesh.userData.bepicItemId = item.id;
             mesh.userData.sharedGeometry = !part.material;       // built-in shapes are cached
@@ -681,6 +885,37 @@ export const WorldViewMixin = {
         if (matrices.length < s.count) {
             entry.note = `${matrices.length} of ${s.count} placed — the rest had no ground that fits (layer, slope, clearings)`;
         }
+    },
+
+    // ── Lights ───────────────────────────────────────────────────────────────
+
+    /** A point light and the fixture it hangs in, glowing in the light's colour. */
+    _buildLight(entry, item) {
+        const { THREE } = this.libs;
+        const l = lightSettings(item);
+        const group = new THREE.Group();
+        group.name = "light";
+        const light = new THREE.PointLight(new THREE.Color(l.color), l.intensity, l.distance, l.decay);
+        light.castShadow = l.shadows;
+        if (l.shadows) { light.shadow.mapSize.set(1024, 1024); light.shadow.bias = -0.002; }
+        group.add(light);
+        if (l.fixture.shape !== "none") {
+            const [len, wid, th] = l.fixture.size;
+            const geo = l.fixture.shape === "panel"
+                ? new THREE.BoxGeometry(Math.max(len, 0.05), Math.max(th, 0.01), Math.max(len, 0.05))
+                : new THREE.BoxGeometry(Math.max(len, 0.05), Math.max(th, 0.01), Math.max(wid, 0.02));
+            const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: new THREE.Color(l.color),
+                                                         emissiveIntensity: l.fixture.emissive, roughness: 0.4 });
+            const fixture = new THREE.Mesh(geo, mat);
+            fixture.position.y = Math.max(th, 0.01) / 2;
+            fixture.userData.bepicItemId = item.id;
+            group.add(fixture);
+            this._originals.set(fixture, mat);
+        }
+        group.traverse((c) => { c.userData.bepicItemId = item.id; });
+        this._bodyOf(entry).add(group);
+        entry.object = group;
+        entry.stats = { format: "light" };
     },
 
     // ── Depth mesh ───────────────────────────────────────────────────────────
@@ -980,7 +1215,7 @@ export const WorldViewMixin = {
             // Rendered and read in one go: the canvas keeps no copy of the frame.
             const pins = this._pinGroup, pinsVisible = pins && pins.visible;
             if (pins) pins.visible = false;
-            this.renderer.render(this.scene, cam);
+            this._worldRender(cam);              // as seen: bloom and tone mapping included
             if (pins) pins.visible = pinsVisible;
             const src = this.renderer.domElement;
             const s = Math.min(1, 960 / Math.max(src.width, src.height));

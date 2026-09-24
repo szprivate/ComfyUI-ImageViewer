@@ -597,6 +597,7 @@ export class Model3DView {
         const w = Math.max(1, this.root.clientWidth);
         const h = Math.max(1, this.root.clientHeight);
         this.renderer.setSize(w, h, false);
+        this._worldResize(w, h);
         this.camera.aspect = w / h;
         this.camera.updateProjectionMatrix();
         // A scene camera's lens depends on the viewport too, when you are
@@ -661,7 +662,7 @@ export class Model3DView {
         if (this.controls && this.controls.enabled && this.controls.update(dt)) again = true;
         // Wind and walking run the loop for as long as they last.
         if (this._worldTick(dt)) again = true;
-        this.renderer.render(this.scene, this.activeCameraObject());
+        this._worldRender(this.activeCameraObject());
         if (again) this.requestRender();
     }
 
@@ -883,6 +884,7 @@ export class Model3DView {
         this.exposure = Math.pow(2, Number.isFinite(ev) ? ev : 0);
         this.channelFilter = channelFilter || "";
         if (this.renderer) this.renderer.toneMappingExposure = this.exposure;
+        this._worldSyncRender();
         if (this.canvas) this.canvas.style.filter = this.channelFilter;
         this.requestRender();
     }
@@ -949,6 +951,8 @@ export class Model3DView {
         this._syncControlsCamera();          // the active camera's object exists now
         this.syncFeedbackPins();
         this._worldSyncStudio();
+        // The world is complete: take its reflections now, not piece by piece.
+        if (this._envDirty) this._worldCaptureEnv();
         this.applyFrame(this.sceneFrame);
         this._updateSceneStats();
         this._captureThumbnailSoon(this.hooks.thumbFrame && this.hooks.thumbFrame());
@@ -1965,7 +1969,9 @@ export class Model3DView {
         // one the viewport shows around it.
         if (r.item) cam.fov = evaluate(r.item, this.sceneFrame).fov || 35;
         cam.updateProjectionMatrix();
-        this.renderer.render(this.scene, cam);
+        // Rendered as the viewport draws it: bloom and tone mapping included.
+        this._worldResize(W, H);
+        this._worldRender(cam);
         try {
             if (aa === 1) return this.canvas.toDataURL("image/png");
             const out = this.doc.createElement("canvas");

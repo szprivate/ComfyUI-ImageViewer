@@ -12,11 +12,11 @@ import { api } from "../../scripts/api.js";
 import * as S from "./bEpicViewer_scene3d.js";
 import {
     WORLD_KINDS, WORLD_FIELDS, SCATTER_TYPES, makeEnvironmentItem, makeTerrainItem, makeScatterItem,
-    makeDepthMeshItem, getPath, setPath, referenceSettings,
+    makeDepthMeshItem, makeLightItem, getPath, setPath, referenceSettings,
 } from "./bEpicViewer_worldData.js";
 
 const SCATTER_LABELS = { pine: "Pines", tree: "Trees", bush: "Bushes", grass: "Grass", rock: "Rocks",
-                         column: "Columns", model: "Model…" };
+                         column: "Columns", lamp: "Lamps", model: "Model…" };
 
 export const PrevizWorldMixin = {
 
@@ -35,6 +35,7 @@ export const PrevizWorldMixin = {
         for (const type of SCATTER_TYPES) {
             entries.push({ label: `World: Scatter ${SCATTER_LABELS[type]}`, run: () => this.previzAddWorldItem("scatter", type) });
         }
+        entries.push({ label: "World: Lamp", run: () => this.previzAddWorldItem("light") });
         entries.push({ label: "World: Depth mesh… (picture + depth map)", run: () => this.previzAddWorldItem("depthmesh") });
         entries.push({ label: "World: Reference on camera…", run: () => this.previzSetCameraReference() });
         return entries;
@@ -81,6 +82,11 @@ export const PrevizWorldMixin = {
                 item.scatter.source.src = { path: picked[0].path, name: picked[0].name, external: true };
                 item.name = `${picked[0].name} scatter`;
             }
+        } else if (kind === "light") {
+            item = makeLightItem(this._worldId(scene, "light"));
+            const view = this._modelView();
+            const at = view && view.viewFocus && view.viewFocus();
+            if (at) item.position = [at[0], at[1] + 3, at[2]];
         } else if (kind === "depthmesh") {
             const pics = this._previzPictures();
             const depth = pics.find((p) => /depth|disp/i.test(p.name || "")) || pics[1];

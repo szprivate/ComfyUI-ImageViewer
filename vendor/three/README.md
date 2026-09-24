@@ -8,9 +8,11 @@ Upstream: https://github.com/mrdoob/three.js, npm package `three@0.180.0`
 | `three.module.js`, `three.core.js` | `three@0.180.0/build/` — the **unminified** build, so the code here is the code upstream publishes and can be read and diffed |
 | `OrbitControls.js`, `TransformControls.js`, `GLTFLoader.js`, `FBXLoader.js`, `OBJLoader.js`, `STLLoader.js`, `PLYLoader.js`, `ViewHelper.js`, `BufferGeometryUtils.js`, `NURBSCurve.js`, `NURBSUtils.js` | `three@0.180.0/examples/jsm/` |
 | `fflate.module.js` | `three@0.180.0/examples/jsm/libs/` (FBXLoader needs it) |
+| `EffectComposer.js`, `Pass.js`, `ShaderPass.js`, `MaskPass.js`, `RenderPass.js`, `UnrealBloomPass.js`, `OutputPass.js` | `three@0.180.0/examples/jsm/postprocessing/` (worlds: bloom and tone mapping) |
+| `CopyShader.js`, `LuminosityHighPassShader.js`, `OutputShader.js` | `three@0.180.0/examples/jsm/shaders/` (the passes above need them) |
 
 The addons are copied flat, so their imports are rewritten: `'three'` →
-`'./three.module.js'`, and `../utils/`, `../libs/`, `../curves/` → `./`. That
+`'./three.module.js'`, and `../utils/`, `../libs/`, `../curves/`, `../shaders/` → `./`. That
 and the patch below are the only changes.
 
 `TransformControls.js` carries one local patch, marked `bEpic patch` in the

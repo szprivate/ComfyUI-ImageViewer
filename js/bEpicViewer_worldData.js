@@ -11,8 +11,9 @@
 // azimuth of 0 is straight ahead (-Z), +90 to the right (+X); elevation is
 // degrees above the horizon.
 
-export const WORLD_KINDS = ["environment", "terrain", "scatter", "depthmesh"];
-export const SCATTER_TYPES = ["pine", "tree", "bush", "grass", "rock", "column", "model"];
+export const WORLD_KINDS = ["environment", "terrain", "scatter", "depthmesh", "light"];
+export const SCATTER_TYPES = ["pine", "tree", "bush", "grass", "rock", "column", "lamp", "model"];
+export const TONE_CURVES = ["neutral", "aces", "agx", "linear"];
 export const SKY_MODES = ["gradient", "panorama"];
 
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -27,7 +28,7 @@ const pair = (v, d, lo = -Infinity, hi = Infinity) => (Array.isArray(v) && v.len
 
 export function environmentSettings(item) {
     const it = item || {};
-    const sky = it.sky || {}, sun = it.sun || {}, fog = it.fog || {}, amb = it.ambient || {};
+    const sky = it.sky || {}, sun = it.sun || {}, fog = it.fog || {}, amb = it.ambient || {}, ren = it.render || {};
     return {
         sky: {
             mode: SKY_MODES.includes(sky.mode) ? sky.mode : "gradient",
@@ -48,6 +49,32 @@ export function environmentSettings(item) {
             sky: col(amb.sky, "#9fb8d6"), ground: col(amb.ground, "#5a5548"),
             intensity: num(amb.intensity, 0.9, 0, 20),
         },
+        // How the world is drawn: tone curve, exposure on top of the viewer's
+        // own, bloom strength, and reflections captured from the world itself.
+        render: {
+            tone: TONE_CURVES.includes(ren.tone) ? ren.tone : "linear",
+            exposure: num(ren.exposure, 1, 0.01, 100),
+            bloom: num(ren.bloom, 0, 0, 5),
+            reflections: ren.reflections === "capture" ? "capture" : "off",
+            fill: num(ren.fill, 0.35, 0, 1),
+        },
+    };
+}
+
+/** A light: a point light, and the fixture it hangs in (a glowing tube or panel). */
+export function lightSettings(item) {
+    const l = (item && item.light) || {};
+    const f = l.fixture || {};
+    const size = Array.isArray(f.size) && f.size.length === 3 ? f.size.map((v) => num(v, 0.1, 0, 100)) : [1.2, 0.14, 0.05];
+    return {
+        type: "point",
+        color: col(l.color, "#fff6e8"),
+        intensity: num(l.intensity, 18, 0, 100000),
+        distance: num(l.distance, 14, 0, 100000),
+        decay: num(l.decay, 2, 0, 4),
+        shadows: !!l.shadows,
+        fixture: { shape: ["tube", "panel", "none"].includes(f.shape) ? f.shape : "tube", size,
+                   emissive: num(f.emissive, 6, 0, 1000) },
     };
 }
 
@@ -63,7 +90,14 @@ export function terrainSettings(item) {
     const layers = DEFAULT_LAYERS.map((d, i) => {
         const l = (Array.isArray(t.layers) && t.layers[i]) || {};
         return { name: typeof l.name === "string" ? l.name : d.name, src: file(l.src),
-                 color: col(l.color, d.color), tile: num(l.tile, d.tile, 0.1, 10000) };
+                 color: col(l.color, d.color), tile: num(l.tile, d.tile, 0.1, 10000),
+                 // PBR: a normal map, a roughness map, and the roughness the
+                 // surface was read as (used where there is no map).
+                 normal: file(l.normal), rough: file(l.rough),
+                 roughness: num(l.roughness, 0.9, 0.02, 1), normalScale: num(l.normalScale, 1, 0, 10),
+                 // How much of the texture's own (photographed) light it keeps
+                 // as glow, 0..1 — a ceiling lit by the picture's lamps.
+                 baked: num(l.baked, 0, 0, 2) };
     });
     const r = t.rules || {};
     return {
@@ -139,6 +173,11 @@ export function scatterSettings(item) {
         // random; and a stretch of the height alone (a column as tall as the room).
         grid: Array.isArray(s.grid) && s.grid.length >= 2 ? pair(s.grid.slice(0, 2), [8, 8], 0.2, 1000) : null,
         aspect: num(s.aspect, 1, 0.01, 1000),
+        // Hung this far above the ground (lamps under a ceiling), glowing this
+        // strongly (a lamp), and the surface's roughness (null: by type).
+        lift: num(s.lift, 0, -1000, 1000),
+        emissive: num(s.emissive, 0, 0, 1000),
+        roughness: s.roughness == null ? null : num(s.roughness, 0.85, 0.02, 1),
     };
 }
 
@@ -200,6 +239,7 @@ export function worldInfo(scene) {
 /** Read one stored world item's own block into `item` (parseScene's helper). */
 export function readWorldItem(item, raw) {
     if (item.kind === "environment") Object.assign(item, environmentSettings(raw));
+    else if (item.kind === "light") item.light = lightSettings(raw);
     else if (item.kind === "terrain") item.terrain = terrainSettings(raw);
     else if (item.kind === "scatter") item.scatter = scatterSettings(raw);
     else if (item.kind === "depthmesh") item.depthmesh = depthMeshSettings(raw);
@@ -226,9 +266,15 @@ export function makeScatterItem(id, type = "tree", target = "terrain") {
     if (type === "pine") Object.assign(s, { count: 1200, color: "#2f5226" });
     if (type === "column") Object.assign(s, { count: 400, scale: [1, 1], wind: 0, layer: -1, maxSlope: 90,
                                               color: "#e6e4df", grid: [8.5, 8.5], aspect: 3 });
+    if (type === "lamp") Object.assign(s, { count: 2000, scale: [1, 1], wind: 0, layer: -1, maxSlope: 90,
+                                            color: "#fff6e8", grid: [8.5, 4.25], lift: 3, emissive: 6 });
     const label = { pine: "Pines", tree: "Trees", bush: "Bushes", grass: "Grass", rock: "Rocks",
-                    column: "Columns", model: "Scatter" }[type];
+                    column: "Columns", lamp: "Lamps", model: "Scatter" }[type];
     return Object.assign(base(id, "scatter", label), { scatter: s });
+}
+
+export function makeLightItem(id) {
+    return Object.assign(base(id, "light", "Lamp"), { position: [0, 3, 0], light: lightSettings({}) });
 }
 
 export function makeDepthMeshItem(id, src, depth) {
@@ -255,6 +301,17 @@ export const WORLD_FIELDS = {
         { path: "fog.color", label: "Fog colour", type: "color" },
         { path: "fog.density", label: "Fog density", type: "number", step: 0.001, min: 0 },
         { path: "ambient.intensity", label: "Ambient", type: "number", step: 0.05, min: 0 },
+        { path: "render.tone", label: "Tone curve", type: "select", options: TONE_CURVES },
+        { path: "render.exposure", label: "Exposure ×", type: "number", step: 0.05, min: 0.01 },
+        { path: "render.bloom", label: "Bloom", type: "number", step: 0.05, min: 0, max: 5 },
+        { path: "render.reflections", label: "Reflections", type: "select", options: ["capture", "off"] },
+    ],
+    light: [
+        { path: "light.color", label: "Colour", type: "color" },
+        { path: "light.intensity", label: "Intensity (cd)", type: "number", step: 1, min: 0 },
+        { path: "light.distance", label: "Reach", type: "number", step: 1, min: 0 },
+        { path: "light.shadows", label: "Shadows", type: "bool" },
+        { path: "light.fixture.emissive", label: "Glow", type: "number", step: 0.5, min: 0 },
     ],
     terrain: [
         { path: "terrain.height", label: "Height", type: "number", step: 1, min: 0 },
@@ -264,6 +321,8 @@ export const WORLD_FIELDS = {
         { path: "terrain.roughness", label: "Roughness", type: "number", step: 0.05, min: 0.05, max: 0.95 },
         { path: "terrain.segments", label: "Segments", type: "number", step: 32, min: 8, max: 512 },
         { path: "terrain.layers.0.color", label: "Ground", type: "color" },
+        { path: "terrain.layers.0.roughness", label: "Ground rough", type: "number", step: 0.05, min: 0.02, max: 1 },
+        { path: "terrain.layers.0.normalScale", label: "Ground relief", type: "number", step: 0.1, min: 0 },
         { path: "terrain.layers.1.color", label: "Rock", type: "color" },
         { path: "terrain.layers.2.color", label: "Cliff", type: "color" },
         { path: "terrain.layers.3.color", label: "Peak", type: "color" },
@@ -279,6 +338,9 @@ export const WORLD_FIELDS = {
         { path: "scatter.color", label: "Colour", type: "color" },
         { path: "scatter.wind", label: "Wind", type: "number", step: 0.05, min: 0 },
         { path: "scatter.aspect", label: "Height ×", type: "number", step: 0.1, min: 0.01 },
+        { path: "scatter.roughness", label: "Roughness", type: "number", step: 0.05, min: 0.02, max: 1 },
+        { path: "scatter.lift", label: "Lift", type: "number", step: 0.1 },
+        { path: "scatter.emissive", label: "Glow", type: "number", step: 0.5, min: 0 },
         { path: "scatter.grid.0", label: "Grid X", type: "number", step: 0.5, min: 0.2, needs: "scatter.grid" },
         { path: "scatter.grid.1", label: "Grid Z", type: "number", step: 0.5, min: 0.2, needs: "scatter.grid" },
     ],
