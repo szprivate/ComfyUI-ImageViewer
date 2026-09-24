@@ -293,6 +293,7 @@ class ViewerPanel extends HTMLElement {
                 browserFilter: {
                     text: this._browserFilter || "",
                     kinds: this._browserKinds || "",
+                    foldSequences: !!this._browserFold,
                 },
                 // Previz scenes belong to their tab. A scene on a bEpic 3D Scene
                 // node is also kept there, but a scene built on a plain model

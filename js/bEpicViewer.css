@@ -723,6 +723,8 @@ textarea.param-input {
 /* Listed so the folder reads true, but there is nothing to open: dimmed, the
    way a disabled control is. */
 .browser-row.is-other { color: #6d6d6d; }
+/* A folded image sequence (the Fold image sequences switch in the kind menu). */
+.browser-row.is-seq .b-name { color: #e6c88c; }
 .browser-row.is-other:hover { color: #999; }
 .browser-row .b-glyph { flex: 0 0 auto; font-size: 11px; opacity: 0.85; }
 .browser-row .b-name  { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }

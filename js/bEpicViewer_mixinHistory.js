@@ -663,20 +663,7 @@ export const HistoryMixin = {
         item.onclick = (e) => {
             e.stopPropagation();
             menu.remove();
-            // Synchronous fallback first (still within user-activation window)
-            try {
-                const ta = doc.createElement('textarea');
-                ta.value = copyPath;
-                ta.setAttribute('readonly', '');
-                ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0;pointer-events:none;';
-                doc.body.appendChild(ta);
-                ta.focus({ preventScroll: true });
-                ta.setSelectionRange(0, copyPath.length);
-                doc.execCommand('copy');
-                doc.body.removeChild(ta);
-            } catch (err) { console.warn('bEpicViewer: execCommand copy failed', err); }
-            const nav = (doc.defaultView && doc.defaultView.navigator) ? doc.defaultView.navigator : navigator;
-            if (nav.clipboard && nav.clipboard.writeText) nav.clipboard.writeText(copyPath).catch(() => {});
+            this.copyTextToClipboard(copyPath);     // BrowserMixin; the browser's menu shares it
         };
         menu.appendChild(item);
 

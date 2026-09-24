@@ -28,6 +28,14 @@ const _KIND_GLYPH = { dir: "📁", image: "🖼", video: "🎬", model: "🧊", 
 /** The kinds this viewer can actually open. Everything else is along to be seen. */
 const _OPENABLE = new Set(["image", "video", "model"]);
 
+// A numbered file: everything before the frame number, the number (the last
+// run of digits, right before the extension), and the extension.
+const _SEQ_NAME = /^(.*?)(\d+)(\.[^.]+)$/;
+
+// The kind menu's extra entry that flips sequence folding rather than
+// choosing a kind (see _syncBrowserFoldOption).
+const _FOLD_OPTION = "__fold";
+
 // Preview pane height, in px, and the range the splitter allows.
 const _PREVIEW_DEFAULT = 190;
 const _PREVIEW_MIN     = 90;
@@ -58,7 +66,8 @@ export const BrowserMixin = {
         this.browserPanel.style.display = "none";
         this._browserDirs   = [];
         this._browserFiles  = [];
-        this._browserSel    = new Set();   // indices into _browserFiles
+        this._browserEntries = [];         // what the list shows: a file, or a folded sequence
+        this._browserSel    = new Set();   // indices into _browserEntries
         this._browserAnchor = null;        // for shift-range selection
         this._browserLoaded = false;
         this._browserDir    = this._browserDir || this._savedBrowserDir();
@@ -68,7 +77,9 @@ export const BrowserMixin = {
         const saved = this._savedBrowserFilter();
         this._browserFilter = saved.text;
         this._browserKinds  = saved.kinds;
+        this._browserFold   = saved.fold;
         if (this.browserFilterIn) this.browserFilterIn.value = this._browserFilter;
+        this._syncBrowserFoldOption();
         if (this.browserKindSel) this.browserKindSel.value = this._browserKinds;
 
         // Fill the path field straight away rather than leaving it blank until
@@ -100,8 +111,89 @@ export const BrowserMixin = {
             return {
                 text: typeof f.text === "string" ? f.text : "",
                 kinds: typeof f.kinds === "string" ? f.kinds : "",
+                fold: !!f.foldSequences,
             };
-        } catch (e) { return { text: "", kinds: "" }; }
+        } catch (e) { return { text: "", kinds: "", fold: false }; }
+    },
+
+    /**
+     * The fold switch lives in the kind menu, as its last entry. A <select>
+     * holds one value, so the entry is a command rather than a choice: picking
+     * it flips folding and the menu goes straight back to the kind it showed.
+     */
+    _syncBrowserFoldOption() {
+        const sel = this.browserKindSel;
+        if (!sel) return;
+        let opt = sel.querySelector(`option[value="${_FOLD_OPTION}"]`);
+        if (!opt) {
+            const sep = sel.ownerDocument.createElement("option");
+            sep.disabled = true;
+            sep.textContent = "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500";
+            opt = sel.ownerDocument.createElement("option");
+            opt.value = _FOLD_OPTION;
+            sel.append(sep, opt);
+        }
+        opt.textContent = `${this._browserFold ? "\u2611" : "\u2610"} Fold image sequences`;
+        opt.title = "Show a numbered run of images (shot.1001.exr, shot.1002.exr, \u2026) as one entry";
+    },
+
+    toggleBrowserFold(on = !this._browserFold) {
+        this._browserFold = !!on;
+        this._syncBrowserFoldOption();
+        if (this.queuePersistViewerState) this.queuePersistViewerState();
+        this._browserBuildEntries();
+        this._browserSel = new Set();
+        this._browserAnchor = null;
+        this._renderBrowserList();
+        this._renderBrowserPreview(null);
+    },
+
+    /**
+     * What the list shows, from the folder's files: each file on its own, or —
+     * with folding on — every numbered run of two or more images of one name
+     * and extension as a single entry, where its first frame stood.
+     */
+    _browserBuildEntries() {
+        const files = this._browserFiles || [];
+        if (!this._browserFold) { this._browserEntries = files.map((f) => ({ file: f })); return; }
+        const groups = new Map();
+        files.forEach((f) => {
+            const m = f.kind === "image" && _SEQ_NAME.exec(f.name);
+            if (!m) return;
+            const key = `${m[1]}\u0000${m[3].toLowerCase()}`;
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push({ f, prefix: m[1], digits: m[2], ext: m[3] });
+        });
+        const inSeq = new Map();
+        for (const members of groups.values()) {
+            if (members.length < 2) continue;
+            members.sort((a, b) => Number(a.digits) - Number(b.digits));
+            const first = Number(members[0].digits), last = Number(members[members.length - 1].digits);
+            const pad = Math.min(...members.map((x) => x.digits.length));
+            const seq = {
+                name: `${members[0].prefix}${"#".repeat(Math.max(1, pad))}${members[0].ext}`,
+                files: members.map((x) => x.f),
+                first, last,
+                gaps: last - first + 1 !== members.length,
+                size: members.reduce((n, x) => n + (x.f.size || 0), 0),
+            };
+            seq.path = members[0].f.path.replace(/[^\\/]*$/, "") + seq.name;
+            for (const x of members) inSeq.set(x.f, seq);
+        }
+        const out = [], placed = new Set();
+        for (const f of files) {
+            const seq = inSeq.get(f);
+            if (!seq) { out.push({ file: f }); continue; }
+            if (placed.has(seq)) continue;
+            placed.add(seq);
+            out.push({ seq });
+        }
+        this._browserEntries = out;
+    },
+
+    /** The files behind one list entry. */
+    _browserEntryFiles(entry) {
+        return !entry ? [] : entry.seq ? entry.seq.files : [entry.file];
     },
 
     /** What the two filter controls say, as the query the route takes. */
@@ -147,7 +239,14 @@ export const BrowserMixin = {
             });
         }
         if (this.browserKindSel) {
-            this.browserKindSel.onchange = () => this._browserFilterChanged({ now: true });
+            this.browserKindSel.onchange = () => {
+                if (this.browserKindSel.value === _FOLD_OPTION) {
+                    this.browserKindSel.value = this._browserKinds;
+                    this.toggleBrowserFold();
+                    return;
+                }
+                this._browserFilterChanged({ now: true });
+            };
         }
         const clearBtn = sr.getElementById("browser-filter-clear");
         if (clearBtn) {
@@ -269,6 +368,7 @@ export const BrowserMixin = {
         this._browserFiles  = Array.isArray(data.files) ? data.files : [];
         this._browserTrunc  = !!data.truncated;
         this._browserFiltered = !!data.filtered;
+        this._browserBuildEntries();
         this._browserSel    = new Set();
         this._browserAnchor = null;
 
@@ -337,22 +437,40 @@ export const BrowserMixin = {
         }
 
         this._browserDirs.forEach((d) => {
-            frag.appendChild(this._makeBrowserRow({
+            const row = this._makeBrowserRow({
                 glyph: _KIND_GLYPH.dir, name: d.name, cls: "is-dir",
                 title: d.path,
                 onOpen: () => this.browseTo(d.path),
-            }));
+            });
+            row.addEventListener("contextmenu", (e) => this._browserContextMenu(e, [d.path]));
+            frag.appendChild(row);
         });
 
-        this._browserFiles.forEach((f, idx) => {
-            const row = this._makeBrowserRow({
+        const hint = "Click to preview · double-click to open in the viewer\nDrag onto the graph for a loader node, or onto the viewer to open it\nCtrl+click to add to the selection, Shift+click for a range · right-click to copy the path";
+        this._browserEntries.forEach((entry, idx) => {
+            const f = entry.file, seq = entry.seq;
+            const row = seq ? this._makeBrowserRow({
+                glyph: "\ud83c\udf9e",                               // 🎞
+                name: seq.name,
+                cls: "is-file is-image is-seq",
+                meta: `${seq.first}\u2013${seq.last}${seq.gaps ? "*" : ""} \u00b7 ${seq.files.length}`,
+                title: `${seq.path}\n${seq.files.length} frames, ${seq.first}\u2013${seq.last}` +
+                       (seq.gaps ? " (with gaps)" : "") + ` \u00b7 ${this._formatBytes(seq.size)}\n${hint}`,
+                onOpen: () => this.openBrowserSelection(seq.files),
+                onSelect: (e) => this._clickBrowserFile(idx, e),
+            }) : this._makeBrowserRow({
                 glyph: _KIND_GLYPH[f.kind] || _KIND_GLYPH.image,
                 name: f.name,
                 cls: `is-file is-${f.kind}`,
                 meta: this._formatBytes(f.size),
-                title: `${f.path}\nClick to preview · double-click to open in the viewer\nDrag onto the graph for a loader node, or onto the viewer to open it\nCtrl+click to add to the selection, Shift+click for a range`,
+                title: `${f.path}\n${hint}`,
                 onOpen: () => this.openBrowserSelection([f]),
                 onSelect: (e) => this._clickBrowserFile(idx, e),
+            });
+            row.addEventListener("contextmenu", (e) => {
+                // Inside the selection it copies all of it; outside, just this row.
+                const picked = this._browserSel.has(idx) ? [...this._browserSel].sort((a, b) => a - b) : [idx];
+                this._browserContextMenu(e, picked.map((i) => this._browserEntryPath(this._browserEntries[i])));
             });
             row.dataset.idx = String(idx);
             if (this._browserSel.has(idx)) row.classList.add("selected");
@@ -363,7 +481,7 @@ export const BrowserMixin = {
         this.browserList.innerHTML = "";
         this.browserList.appendChild(frag);
 
-        if (this._browserDirs.length === 0 && this._browserFiles.length === 0) {
+        if (this._browserDirs.length === 0 && this._browserEntries.length === 0) {
             this._setBrowserStatus(this._browserFiltered
                 ? "Nothing here matches the filter."
                 : "This folder is empty.", { keepList: true });
@@ -432,20 +550,78 @@ export const BrowserMixin = {
     },
 
     _setBrowserSelection(indices, { preview } = {}) {
-        this._browserSel = new Set(indices.filter(i => this._browserFiles[i]));
+        this._browserSel = new Set(indices.filter(i => this._browserEntries[i]));
         if (!this.browserList) return;
         this.browserList.querySelectorAll(".browser-row.is-file").forEach((row) => {
             row.classList.toggle("selected", this._browserSel.has(Number(row.dataset.idx)));
         });
         const pv = (preview != null) ? preview
                  : (this._browserSel.size === 1 ? [...this._browserSel][0] : null);
-        this._renderBrowserPreview(pv != null ? this._browserFiles[pv] : null);
+        const entry = pv != null ? this._browserEntries[pv] : null;
+        this._renderBrowserPreview(entry ? this._browserEntryFiles(entry)[0] : null, entry && entry.seq);
         this._syncBrowserOpenButton();
     },
 
     _selectedBrowserFiles() {
         return [...this._browserSel].sort((a, b) => a - b)
-            .map(i => this._browserFiles[i]).filter(Boolean);
+            .flatMap(i => this._browserEntryFiles(this._browserEntries[i]));
+    },
+
+    /** The path a list entry stands for: a folded sequence's is its #### pattern. */
+    _browserEntryPath(entry) {
+        return !entry ? "" : entry.seq ? entry.seq.path : entry.file.path;
+    },
+
+    // ── Right-click ──────────────────────────────────────────────────────────
+
+    /** The history strip's menu, for the browser's rows: copy the path(s). */
+    _browserContextMenu(e, paths) {
+        e.preventDefault();
+        e.stopPropagation();
+        paths = paths.filter(Boolean);
+        if (!paths.length || !this.container) return;
+        const doc = this.container.ownerDocument;
+        this.container.querySelector("#thumb-ctx-menu")?.remove();
+        const menu = doc.createElement("div");
+        menu.id = "thumb-ctx-menu";
+        menu.className = "thumb-ctx-menu";
+        const item = doc.createElement("div");
+        item.className = "thumb-ctx-item";
+        item.textContent = paths.length > 1 ? `\ud83d\udccb Copy ${paths.length} paths` : "\ud83d\udccb Copy path";
+        item.onclick = (ev) => {
+            ev.stopPropagation();
+            menu.remove();
+            this.copyTextToClipboard(paths.join("\n"));
+        };
+        menu.appendChild(item);
+        const panelRect = this.container.getBoundingClientRect();
+        menu.style.left = `${e.clientX - panelRect.left}px`;
+        menu.style.top  = `${e.clientY - panelRect.top}px`;
+        this.container.appendChild(menu);
+        const dismiss = () => { menu.remove(); this.container.removeEventListener("click", dismiss, true); };
+        setTimeout(() => this.container.addEventListener("click", dismiss, true), 0);
+    },
+
+    /**
+     * Put text on the clipboard from a click. The synchronous copy goes first,
+     * while the click still counts as a user gesture; the async API follows
+     * where it exists. Uses the viewer's own document, which a popout moves.
+     */
+    copyTextToClipboard(text) {
+        const doc = (this.container && this.container.ownerDocument) || document;
+        try {
+            const ta = doc.createElement("textarea");
+            ta.value = text;
+            ta.setAttribute("readonly", "");
+            ta.style.cssText = "position:fixed;opacity:0;top:0;left:0;pointer-events:none;";
+            doc.body.appendChild(ta);
+            ta.focus({ preventScroll: true });
+            ta.setSelectionRange(0, text.length);
+            doc.execCommand("copy");
+            doc.body.removeChild(ta);
+        } catch (err) { console.warn("bEpicViewer: execCommand copy failed", err); }
+        const nav = (doc.defaultView && doc.defaultView.navigator) || navigator;
+        if (nav.clipboard && nav.clipboard.writeText) nav.clipboard.writeText(text).catch(() => {});
     },
 
     _syncBrowserOpenButton() {
@@ -461,7 +637,7 @@ export const BrowserMixin = {
     },
 
     _onBrowserListKey(e) {
-        const rows = this._browserFiles;
+        const rows = this._browserEntries;
         if (e.key === "Backspace") {
             e.preventDefault(); e.stopPropagation();
             if (this._browserParent) this.browseTo(this._browserParent);
@@ -494,7 +670,7 @@ export const BrowserMixin = {
         v.style.display = "none";
     },
 
-    _renderBrowserPreview(file) {
+    _renderBrowserPreview(file, seq = null) {
         if (!this.browserPreview) return;
         const img = this.browserPrevImg, vid = this.browserPrevVid, msg = this.browserPrevMsg;
 
@@ -509,7 +685,7 @@ export const BrowserMixin = {
             return;
         }
 
-        this._setBrowserMeta(file, "");
+        this._setBrowserMeta(file, "", seq);
         const url = this.buildImgUrl({ path: file.path, external: true });
 
         if (!_OPENABLE.has(file.kind)) {
@@ -565,7 +741,7 @@ export const BrowserMixin = {
         img.onload = () => {
             if (this._browserPreviewPath !== file.path) return;
             img.style.display = "block";
-            this._setBrowserMeta(file, `${img.naturalWidth}×${img.naturalHeight}`);
+            this._setBrowserMeta(file, `${img.naturalWidth}×${img.naturalHeight}`, seq);
         };
         img.onerror = () => {
             if (this._browserPreviewPath !== file.path) return;
@@ -608,13 +784,16 @@ export const BrowserMixin = {
         }
     },
 
-    _setBrowserMeta(file, extra) {
+    _setBrowserMeta(file, extra, seq = null) {
         if (!this.browserMeta) return;
-        const bits = [file.name];
+        // A folded sequence previews its first frame, and says it is a sequence.
+        const bits = [seq ? seq.name : file.name];
+        if (seq) bits.push(`${seq.files.length} frames, ${seq.first}\u2013${seq.last}`);
         if (extra) bits.push(extra);
-        if (file.size) bits.push(this._formatBytes(file.size));
+        const size = seq ? seq.size : file.size;
+        if (size) bits.push(this._formatBytes(size));
         this.browserMeta.textContent = bits.join("  ·  ");
-        this.browserMeta.title = file.path;
+        this.browserMeta.title = seq ? seq.path : file.path;
     },
 
     _formatBytes(n) {
@@ -647,6 +826,17 @@ export const BrowserMixin = {
         };
     },
 
+    /** A folded sequence as the payload: its folder, for a sequence loader. */
+    _browserSeqDragItem(seq) {
+        const first = seq.files[0];
+        return {
+            ...this._browserDragItem(first),
+            isSequence: true,
+            seqDir: first.path.replace(/[\\/][^\\/]*$/, ""),
+            seqCount: seq.files.length,
+        };
+    },
+
     _makeBrowserRowDraggable(row, idx) {
         row.draggable = true;
         row.addEventListener("dragstart", (e) => {
@@ -654,9 +844,11 @@ export const BrowserMixin = {
             // dragging any other row takes just that one and leaves the
             // selection alone — the rule the history strip uses.
             const picked = this._browserSel.has(idx)
-                ? this._selectedBrowserFiles()
-                : [this._browserFiles[idx]];
-            const items = picked.map(f => this._browserDragItem(f)).filter(Boolean);
+                ? [...this._browserSel].sort((a, b) => a - b).map((i) => this._browserEntries[i])
+                : [this._browserEntries[idx]];
+            const items = picked.filter(Boolean)
+                .map((en) => (en.seq ? this._browserSeqDragItem(en.seq) : this._browserDragItem(en.file)))
+                .filter(Boolean);
             if (items.length === 0) { e.preventDefault(); return; }
             try {
                 e.dataTransfer.setData("application/x-bepic-history", JSON.stringify({ items }));
