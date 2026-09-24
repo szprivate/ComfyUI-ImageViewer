@@ -46,6 +46,11 @@ const DOCK_PANELS = {
     // The roto shapes' timing, the same editor's look (bEpicViewer_rotoCurves.js);
     // the roto tool opens and closes it.
     rotoCurves: { prop: "rotoCurvesPanel", label: "Roto Curves", minW: 220, minH: 170, defaultRail: "right" },
+    // The drawing tools' options; the title bar says which tool (see
+    // ToolsMixin._toolShowDock). It used to float over the picture.
+    // `first`: a layout saved before this panel existed gets it at the top of
+    // its rail, not the bottom — it is what you work in while a tool is on.
+    tool:    { prop: "toolDockPanel", label: "Tool", minW: 200, minH: 160, defaultRail: "right", first: true },
 };
 const RAIL_SIDES = ["left", "right", "bottom"];
 // Which way a rail stacks: the bottom one lays its panels out side by side.
@@ -128,7 +133,8 @@ export const DockMixin = {
         // parameters panel showing on the right, the other two put away.
         return {
             left:   { width: 88,  panels: [{ id: "history", size: 1, hidden: true  }] },
-            right:  { width: 300, panels: [{ id: "browser", size: 1, hidden: true  },
+            right:  { width: 300, panels: [{ id: "tool",    size: 1, hidden: true  },
+                                           { id: "browser", size: 1, hidden: true  },
                                            { id: "previz",  size: 1, hidden: true  },
                                            { id: "channels", size: 1, hidden: true },
                                            { id: "curves",  size: 1, hidden: true  },
@@ -251,7 +257,9 @@ export const DockMixin = {
         // goes back to where it shipped, put away rather than sprung on the user.
         for (const [id, spec] of Object.entries(DOCK_PANELS)) {
             if (seen.has(id)) continue;
-            this.dockLayout[spec.defaultRail].panels.push({ id, size: 1, hidden: true });
+            const entry = { id, size: 1, hidden: true };
+            if (spec.first) this.dockLayout[spec.defaultRail].panels.unshift(entry);
+            else this.dockLayout[spec.defaultRail].panels.push(entry);
         }
     },
 
@@ -361,6 +369,8 @@ export const DockMixin = {
             if (this.previzRefreshCurves) this.previzRefreshCurves();
         } else if (id === "rotoCurves") {
             if (this.rotoRefreshCurves) this.rotoRefreshCurves();
+        } else if (id === "tool") {
+            if (this._toolRefreshPanel) this._toolRefreshPanel();
         } else if (id === "channels") {
             if (this._previzRenderChannels) this._previzRenderChannels();
         } else if (id === "previz") {

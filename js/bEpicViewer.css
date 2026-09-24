@@ -789,7 +789,6 @@ textarea.param-input {
 .viewport.model-mode #compare-slider,
 .viewport.model-mode #rotate-btn,
 .viewport.model-mode .bepic-toolbar,
-.viewport.model-mode .bepic-tool-panel { display: none !important; }
 /* Top right, level with the scene read-out on the left, so the canvas has one
    band of chrome across its top rather than two at different heights. */
 .model-toolbar {
@@ -821,6 +820,16 @@ textarea.param-input {
    the Previz button beside them, which switches the mode rather than a panel. */
 .model-panel-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; padding: 0; }
 .model-panel-btn svg { width: 15px; height: 15px; }
+
+/* The drawing tools' options (Roto, SAM3, Annotate) — a dock panel since it
+   stopped floating over the picture; its body is .bepic-tool-panel. */
+.tool-dock-panel {
+    width: 300px; min-width: 200px; flex-shrink: 0;
+    background: linear-gradient(180deg,#0d0d0d,#0b0b0b);
+    border: 1px solid #333; border-radius: 6px;
+    display: flex; flex-direction: column; position: relative; z-index: 20;
+    box-sizing: border-box; overflow: hidden; cursor: default;
+}
 
 /* Animation Curves: one channel of the selected item drawn over time
    (bEpicViewer_previzCurves.js). A dock panel, so the graph has room to be

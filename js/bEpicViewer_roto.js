@@ -173,9 +173,12 @@ export const RotoMixin = {
     },
 
     _rotoBuildPanel() {
-        const p = this._rotoPanel;
+        // The Tool dock panel can ask for a fill while it is still opening,
+        // before _rotoActivate has handed the panel over.
+        const p = this._rotoPanel || (this._rotoPanel = this._toolPanel);
+        if (!p) return;
         p.innerHTML = "";
-        p.appendChild(el("h4", "Roto"));
+        // No title of its own: the Tool dock panel's bar says "Roto".
 
         if (!this._toolState.node) {
             this._toolMissingNodeBody(p, "roto");

@@ -512,6 +512,15 @@ class ViewerPanel extends HTMLElement {
         // The Roto Curves panel came later still; made beside the Animation
         // Curves when a cached older markup lacks it, like the Channel Box below.
         this.rotoCurvesPanel  = sr.getElementById('roto-curves-panel');
+        // The drawing tools' dock panel, made here too when the markup is older.
+        this.toolDockPanel    = sr.getElementById('tool-dock-panel');
+        if (!this.toolDockPanel && this.curvesPanel && this.curvesPanel.parentNode) {
+            const tp = this.curvesPanel.ownerDocument.createElement('div');
+            tp.id = 'tool-dock-panel';
+            tp.className = 'tool-dock-panel right';
+            this.curvesPanel.parentNode.insertBefore(tp, this.curvesPanel);
+            this.toolDockPanel = tp;
+        }
         if (!this.rotoCurvesPanel && this.curvesPanel && this.curvesPanel.parentNode) {
             const rc = this.curvesPanel.ownerDocument.createElement('div');
             rc.id = 'roto-curves-panel';

@@ -165,11 +165,10 @@ export const ToolsMixin = {
                 display:flex; align-items:center; justify-content:center; }
             .bepic-toolbar button:hover { background:#333; color:#fff; }
             .bepic-toolbar button.active { color:#f60; border-color:#f60; }
-            .bepic-tool-panel { position:absolute; top:44px; left:46px; z-index:60;
-                min-width:190px; max-width:230px; background:rgba(20,20,20,.94);
-                border:1px solid #444; border-radius:6px; padding:8px;
-                color:#ddd; font-family:sans-serif; font-size:12px; display:none; }
-            .bepic-tool-panel.show { display:block; }
+            /* The body of the Tool dock panel (#tool-dock-panel); the dock owns
+               the title bar above it. */
+            .bepic-tool-panel { flex:1 1 auto; min-height:0; overflow:auto; padding:8px;
+                box-sizing:border-box; color:#ddd; font-family:sans-serif; font-size:12px; }
             .bepic-tool-panel h4 { margin:0 0 6px; font-size:12px; color:#f60;
                 text-transform:uppercase; letter-spacing:.4px; }
             .bepic-tool-panel .row { display:flex; align-items:center;
@@ -255,8 +254,10 @@ export const ToolsMixin = {
         this.viewport.appendChild(bar);
         this._toolbar = bar;
 
+        // The options live in a dock panel of their own (sized, moved and
+        // stacked like every other panel); each tool fills this body.
         this._toolPanel = elWith("div", { className: "bepic-tool-panel" });
-        this.viewport.appendChild(this._toolPanel);
+        (this.toolDockPanel || this.viewport).appendChild(this._toolPanel);
 
         // Context hint that updates from what the cursor is over (see
         // _onToolPointerMove). Hidden unless a tool is active.
@@ -378,7 +379,7 @@ export const ToolsMixin = {
         else this._toolUnwatchSelection();
 
         // Panel content
-        this._toolPanel.classList.toggle("show", tool !== "none");
+        this._toolShowDock(tool !== "none");
         if (tool === "sam3") this._sam3BuildPanel();
         else if (tool === "sam3box") this._sam3boxBuildPanel();
         else if (tool === "roto") this._rotoActivate?.(this._toolPanel);
@@ -387,6 +388,22 @@ export const ToolsMixin = {
         if (tool === "none") this._toolSetStatus("");
 
         this.updateToolOverlay();
+    },
+
+    /**
+     * Open or put away the Tool dock panel, titled for the tool that is on.
+     * A 3D tab has no drawing tools, so there it stays away (and comes back
+     * when the tab is a picture again — see ModelMixin's enter/exit).
+     */
+    _toolShowDock(on) {
+        const names = { roto: "Roto", sam3: "SAM3 Points", sam3box: "SAM3 Boxes", annotate: "Annotate" };
+        const tool = this._toolState.active;
+        if (!this.setPanelDocked || !this.isPanelDocked || !this.toolDockPanel) return;
+        const bar = this._ensurePanelTitlebar && this._ensurePanelTitlebar("tool");
+        const name = bar && bar.querySelector(".pt-name");
+        if (name) name.textContent = names[tool] || "Tool";
+        const want = !!on && !this._modelMode;
+        if (this.isPanelDocked("tool") !== want) this.setPanelDocked("tool", want);
     },
 
     // Cursor while a tool is active: arrow for roto (all modes), crosshair for
@@ -734,7 +751,7 @@ export const ToolsMixin = {
     _sam3BuildPanel() {
         const p = this._toolPanel;
         p.innerHTML = "";
-        p.appendChild(elWith("h4", { textContent: "SAM3 Points" }));
+        // Titled by the Tool dock panel's bar.
 
         if (!this._toolState.node) {
             this._toolMissingNodeBody(p, "sam3");
@@ -965,7 +982,7 @@ export const ToolsMixin = {
     _sam3boxBuildPanel() {
         const p = this._toolPanel;
         p.innerHTML = "";
-        p.appendChild(elWith("h4", { textContent: "SAM3 Boxes" }));
+        // Titled by the Tool dock panel's bar.
 
         if (!this._toolState.node) {
             this._toolMissingNodeBody(p, "sam3box");

@@ -360,7 +360,7 @@ export const AnnotateMixin = {
     _annotBuildPanel() {
         const p = this._annotPanel;
         p.innerHTML = "";
-        p.appendChild(el("h4", { textContent: "Annotate" }));
+        // Titled by the Tool dock panel's bar.
 
         // Sub-tool row.
         this._annotToolBtns = {};
