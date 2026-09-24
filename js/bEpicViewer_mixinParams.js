@@ -82,6 +82,7 @@ export const ParamsMixin = {
     },
 
     updateParamsHeader() {
+        if (this._paramsToolMode) return;        // the header names the tool
         const node = app.graph.getNodeById(this.currentParamNodeId);
         if (!node) return;
         const title = node.title || node.type;
@@ -103,7 +104,8 @@ export const ParamsMixin = {
             requestAnimationFrame(tick);
 
             if (!this.isPanelDocked || !this.isPanelDocked("params")) return;
-            if (this.paramsLocked) return;
+            // A drawing tool has the panel (ToolsMixin._toolShowDock).
+            if (this.paramsLocked || this._paramsToolMode) return;
 
             const selected = (app && app.canvas) ? app.canvas.selected_nodes : null;
             // If there's no canvas selection available (standalone viewer page),

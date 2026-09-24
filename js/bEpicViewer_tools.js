@@ -178,7 +178,7 @@ export const ToolsMixin = {
                 display:flex; align-items:center; justify-content:center; }
             .bepic-toolbar button:hover { background:#333; color:#fff; }
             .bepic-toolbar button.active { color:#f60; border-color:#f60; }
-            /* The body of the Tool dock panel (#tool-dock-panel), in the same
+            /* The tools' body in the Parameters panel (.params-panel.tool-mode), in the same
                vocabulary as the Outliner and the Channel Box: one scrolling
                column, small grey section captions, name-against-value rows,
                compact buttons, and a list that takes the height it is given. */
@@ -308,10 +308,11 @@ export const ToolsMixin = {
         this.viewport.appendChild(bar);
         this._toolbar = bar;
 
-        // The options live in a dock panel of their own (sized, moved and
-        // stacked like every other panel); each tool fills this body.
+        // The options live in the Parameters panel, beside the node widgets
+        // they stand in for while a tool is on (_toolShowDock); each tool
+        // fills this body.
         this._toolPanel = elWith("div", { className: "bepic-tool-panel" });
-        (this.toolDockPanel || this.viewport).appendChild(this._toolPanel);
+        this._toolPlacePanel();
 
         // Context hint that updates from what the cursor is over (see
         // _onToolPointerMove). Hidden unless a tool is active.
@@ -446,20 +447,47 @@ export const ToolsMixin = {
         this.updateToolOverlay();
     },
 
+    /** Put the tool body into the Parameters panel, after its node widgets. */
+    _toolPlacePanel() {
+        const host = this.paramsPanel;
+        if (host && this._toolPanel && this._toolPanel.parentNode !== host) host.appendChild(this._toolPanel);
+    },
+
     /**
-     * Open or put away the Tool dock panel, titled for the tool that is on.
-     * A 3D tab has no drawing tools, so there it stays away (and comes back
-     * when the tab is a picture again — see ModelMixin's enter/exit).
+     * Hand the Parameters panel to the tool that is on, or give it back.
+     *
+     * A tool's options are the parameters of the node it draws into, so they
+     * show there rather than in a panel of their own: the header names the
+     * tool, the node widgets step aside (the selection monitor pauses, see
+     * ParamsMixin) and the panel opens if it was put away — and is put away
+     * again afterwards if it was. A 3D tab has no drawing tools, so there the
+     * panel goes back to the node (see ModelMixin's enter/exit).
      */
     _toolShowDock(on) {
         const names = { roto: "Roto", sam3: "SAM3 Points", sam3box: "SAM3 Boxes", annotate: "Annotate" };
-        const tool = this._toolState.active;
-        if (!this.setPanelDocked || !this.isPanelDocked || !this.toolDockPanel) return;
-        const bar = this._ensurePanelTitlebar && this._ensurePanelTitlebar("tool");
-        const name = bar && bar.querySelector(".pt-name");
-        if (name) name.textContent = names[tool] || "Tool";
+        const panel = this.paramsPanel;
+        if (!panel || !this.setPanelDocked || !this.isPanelDocked) return;
+        this._toolPlacePanel();
         const want = !!on && !this._modelMode;
-        if (this.isPanelDocked("tool") !== want) this.setPanelDocked("tool", want);
+        if (want) {
+            if (!this._paramsToolMode) {
+                this._paramsToolMode = true;
+                this._paramsOpenBeforeTool = this.isPanelDocked("params");
+                panel.classList.add("tool-mode");
+                if (this.paramsLockBtn) this.paramsLockBtn.style.display = "none";
+            }
+            if (this.paramsTitle) this.paramsTitle.innerText = names[this._toolState.active] || "Tool";
+            if (!this.isPanelDocked("params")) this.setPanelDocked("params", true);
+        } else if (this._paramsToolMode) {
+            this._paramsToolMode = false;
+            panel.classList.remove("tool-mode");
+            if (this.paramsLockBtn) this.paramsLockBtn.style.display = "";
+            // Back to the node the widgets were showing (values may have moved
+            // meanwhile); the monitor takes any new selection from here.
+            if (this.paramsTitle) this.paramsTitle.innerText = "No Node Selected";
+            if (this.currentParamNodeId != null) this.updateParamsPanel?.(true);
+            if (!this._paramsOpenBeforeTool) this.setPanelDocked("params", false);
+        }
     },
 
     // Cursor while a tool is active: arrow for roto (all modes), crosshair for

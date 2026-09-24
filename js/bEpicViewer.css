@@ -553,7 +553,6 @@ textarea.param-input {
 .dock-rail > .browser-panel,
 .dock-rail > .previz-panel,
 .dock-rail > .curves-panel,
-.dock-rail > .tool-dock-panel,
 .dock-rail > .history-panel {
     width: auto; min-width: 0; flex-shrink: 1;
     margin: 0; border-radius: 0;
@@ -574,7 +573,6 @@ textarea.param-input {
 .dock-rail.bottom > .browser-panel,
 .dock-rail.bottom > .previz-panel,
 .dock-rail.bottom > .curves-panel,
-.dock-rail.bottom > .tool-dock-panel,
 .dock-rail.bottom > .history-panel {
     height: auto; min-height: 0; flex-shrink: 1;
 }
@@ -824,15 +822,10 @@ textarea.param-input {
 .model-panel-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; padding: 0; }
 .model-panel-btn svg { width: 15px; height: 15px; }
 
-/* The drawing tools' options (Roto, SAM3, Annotate) — a dock panel since it
-   stopped floating over the picture; its body is .bepic-tool-panel. */
-.tool-dock-panel {
-    width: 300px; min-width: 200px; flex-shrink: 0;
-    background: linear-gradient(180deg,#0d0d0d,#0b0b0b);
-    border: 1px solid #333; border-radius: 6px;
-    display: flex; flex-direction: column; position: relative; z-index: 20;
-    box-sizing: border-box; overflow: hidden; cursor: default;
-}
+/* The drawing tools' options (Roto, SAM3, Annotate) — .bepic-tool-panel — take
+   the Parameters panel's body over while a tool is on (.tool-mode). */
+.params-panel.tool-mode > .params-content,
+.params-panel:not(.tool-mode) > .bepic-tool-panel { display: none; }
 
 /* Animation Curves: one channel of the selected item drawn over time
    (bEpicViewer_previzCurves.js). A dock panel, so the graph has room to be
