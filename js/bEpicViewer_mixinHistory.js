@@ -884,6 +884,7 @@ export const HistoryMixin = {
         btn.title       = labelText;
 
         const span = document.createElement('span');
+        span.className = 'tab-label';           // truncated with an ellipsis; the title has it whole
         span.textContent = labelText;
         btn.appendChild(span);
 
