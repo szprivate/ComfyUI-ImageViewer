@@ -628,8 +628,10 @@ export const BrowserMixin = {
         if (!this.browserOpenBtn) return;
         // Counted over what the viewer can open: a folder of a hundred JSONs
         // and one PNG offers to open one thing, not a hundred and one.
-        const n = this._selectedBrowserFiles().filter((f) => _OPENABLE.has(f.kind)).length;
-        const total = this._browserFiles.filter((f) => _OPENABLE.has(f.kind)).length;
+        // Counted in list entries, so a folded sequence is one thing to open.
+        const openable = (en) => !!en && (en.seq ? true : _OPENABLE.has(en.file.kind));
+        const n = [...this._browserSel].filter((i) => openable(this._browserEntries[i])).length;
+        const total = this._browserEntries.filter(openable).length;
         this.browserOpenBtn.disabled = total === 0 && n === 0;
         this.browserOpenBtn.textContent = n > 0
             ? `Open ${n} in Viewer`
