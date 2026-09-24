@@ -83,6 +83,19 @@ function videoFormatsFromDef(nodeData) {
 
 const normExt = (v) => String(v || "").toLowerCase().replace(/^\./, "");
 
+/** The 3D formats (glb, obj, usd …) — from the fps spec, like the video list. */
+function modelFormatsFromDef(nodeData) {
+    const spec = nodeData && nodeData.input && nodeData.input.required && nodeData.input.required.fps;
+    const list = Array.isArray(spec) && spec[1] ? spec[1].bepic_model_formats : null;
+    return Array.isArray(list) ? list : [];
+}
+
+export function isModelFormat(node, format) {
+    const list = (node && Array.isArray(node._bepicModelFormats)) ? node._bepicModelFormats : [];
+    const ext = normExt(format);
+    return ext !== "" && list.some(v => normExt(v) === ext);
+}
+
 export function isVideoFormat(node, format) {
     const list = (node && Array.isArray(node._bepicVideoFormats))
         ? node._bepicVideoFormats
@@ -211,12 +224,14 @@ function resyncOnChange(node, widgetName) {
 /** Register bEpicSendToViewer. Call from beforeRegisterNodeDef. */
 export function registerSendNode(nodeType, nodeData) {
     const videoFormats = videoFormatsFromDef(nodeData);
+    const modelFormats = modelFormatsFromDef(nodeData);
     const outCount = ((nodeData && nodeData.output) || []).length;
 
     const onNodeCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {
         const r = onNodeCreated?.apply(this, arguments);
         this._bepicVideoFormats = videoFormats;
+        this._bepicModelFormats = modelFormats;
         // The node reports its files to ComfyUI (that is how they reach history
         // and the asset list), and that report is also what the frontend draws
         // an inline preview from. The picture belongs in the viewer, so the
@@ -246,12 +261,14 @@ export function registerSendNode(nodeType, nodeData) {
         const saving = !!(toggle && toggle.value);
         const fmt    = getToolWidget(this, FORMAT_WIDGET);
         const isVideo = isVideoFormat(this, fmt && fmt.value);
+        // A 3D format writes a model: no frame rate, no frame numbering.
+        const isModel = isModelFormat(this, fmt && fmt.value);
         const seqOn  = !!(getToolWidget(this, SEQUENCE_TOGGLE) || {}).value;
         for (const name of OUTPUT_CFG_WIDGETS) {
             let show = saving;
             if (name === FPS_WIDGET) show = saving && isVideo;
-            else if (name === SEQUENCE_TOGGLE) show = saving && !isVideo;
-            else if (SEQUENCE_WIDGETS.includes(name)) show = saving && !isVideo && seqOn;
+            else if (name === SEQUENCE_TOGGLE) show = saving && !isVideo && !isModel;
+            else if (SEQUENCE_WIDGETS.includes(name)) show = saving && !isVideo && !isModel && seqOn;
             setWidgetVisible(this, getToolWidget(this, name), show);
         }
         const sz = this.computeSize();
@@ -263,6 +280,7 @@ export function registerSendNode(nodeType, nodeData) {
     nodeType.prototype.onConfigure = function (info) {
         const r = onConfigure?.apply(this, arguments);
         this._bepicVideoFormats = videoFormats;
+        this._bepicModelFormats = modelFormats;
         // Workflows saved before the tools moved out carry roto_mask / SAM3
         // slots this node no longer has. Litegraph restores whatever was
         // serialized, so drop the extras rather than leave slots that can never

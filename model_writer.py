@@ -11,11 +11,22 @@ does with the same inputs:
 
 Saved files take SaveGLB's naming: `<prefix>_<counter:05>_.<ext>` under
 ComfyUI's output folder. Previews that aren't saved go to the temp folder.
+
+Choosing a 3D format in the node's `file_format` converts on the way out
+(`convert`): trimesh reads the input (a USD input through usd_io's GLB proxy)
+and writes GLB, glTF (one file, buffers and textures embedded), OBJ (+ .mtl
+and its textures beside it), PLY (texture baked to vertex colours), STL
+(geometry only), or USD / USDA / USDC (meshes, normals, UVs, colours and a
+UsdPreviewSurface with the base-colour texture). FBX has no writer here, so an
+FBX stays an FBX and nothing converts to it. A conversion that fails saves the
+input as it came instead of losing it.
 """
 
 import hashlib
+import io
 import json
 import os
+import re
 
 import folder_paths
 
@@ -23,6 +34,38 @@ import folder_paths
 # shown; they still land in ./output when saving is on.
 VIEWABLE_EXTS = {"glb", "gltf", "fbx", "obj", "stl", "ply",
                  "usd", "usda", "usdc", "usdz"}
+
+
+_USD_EXTS = ("usd", "usda", "usdc")
+_TRIMESH_OUT = ("gltf", "obj", "ply", "stl")
+
+
+def _has(module):
+    try:
+        __import__(module)
+        return True
+    except Exception:
+        return False
+
+
+def _model_formats():
+    """The 3D formats the node can save to, in menu order: GLB always (core's
+    writer, or the input's own bytes); the rest when trimesh (and pxr, for USD)
+    are installed."""
+    out = ["glb"]
+    if _has("trimesh"):
+        out += list(_TRIMESH_OUT)
+        if _has("pxr"):
+            out += list(_USD_EXTS)
+    return out
+
+
+# Computed once at import; nodes.py appends them to the file_format menu.
+MODEL_FORMATS = _model_formats()
+
+
+def is_model_format(file_format):
+    return (file_format or "").lower().lstrip(".") in MODEL_FORMATS
 
 
 def _core_save3d():
@@ -119,19 +162,216 @@ def model_frame(path, ext=None):
     }
 
 
-def save_model_input(inp, filename_prefix, prompt=None, extra_pnginfo=None):
-    """Write `inp` to ./output the way SaveGLB does.
+# ── conversion ───────────────────────────────────────────────────────────────
+
+def _load_scene(data, src_ext):
+    """A trimesh Scene from a 3D file's bytes."""
+    import trimesh
+    if src_ext in _USD_EXTS:
+        # usd_io flattens a stage into a GLB (its viewer proxy); read that.
+        import tempfile
+        from . import usd_io
+        with tempfile.NamedTemporaryFile(suffix="." + src_ext, delete=False) as fh:
+            fh.write(data)
+            tmp = fh.name
+        try:
+            glb = usd_io.display_proxy(tmp)
+            with open(glb, "rb") as fh:
+                data, src_ext = fh.read(), "glb"
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+    if src_ext == "fbx":
+        raise ValueError("FBX can't be read here (no FBX importer), so it isn't converted")
+    return trimesh.load(io.BytesIO(data), file_type=src_ext, force="scene")
+
+
+def _placed_meshes(scene):
+    """[(name, Trimesh)] with every node's transform applied, meshes only."""
+    import trimesh
+    out = []
+    for node in scene.graph.nodes_geometry:
+        transform, geom_name = scene.graph[node]
+        geom = scene.geometry.get(geom_name)
+        if not isinstance(geom, trimesh.Trimesh) or len(geom.faces) == 0:
+            continue
+        mesh = geom.copy()
+        mesh.apply_transform(transform)
+        out.append((str(node), mesh))
+    return out
+
+
+def _base_color(mesh):
+    """(PIL image or None, [r, g, b, a] factor or None) of a mesh's material."""
+    vis = getattr(mesh, "visual", None)
+    mat = getattr(vis, "material", None)
+    if mat is None:
+        return None, None
+    image = getattr(mat, "baseColorTexture", None) or getattr(mat, "image", None)
+    factor = getattr(mat, "baseColorFactor", None)
+    if factor is None and getattr(mat, "diffuse", None) is not None:
+        factor = mat.diffuse
+    if factor is not None:
+        factor = [float(c) / (255.0 if max(factor) > 1 else 1.0) for c in list(factor)[:4]]
+    return image, factor
+
+
+def _write_usd(scene, path):
+    """Meshes (points, triangles, normals, UVs, vertex colours) and a
+    UsdPreviewSurface per mesh, base-colour textures as PNGs beside the stage."""
+    from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, Vt
+    stage = Usd.Stage.CreateNew(path)
+    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.y)
+    UsdGeom.SetStageMetersPerUnit(stage, 1.0)
+    root = UsdGeom.Xform.Define(stage, "/Model")
+    stage.SetDefaultPrim(root.GetPrim())
+    stem = os.path.splitext(os.path.basename(path))[0]
+    tex_dir = os.path.join(os.path.dirname(path), f"{stem}_textures")
+    written = [path]
+    used = set()
+    for i, (name, mesh) in enumerate(_placed_meshes(scene)):
+        prim_name = re.sub(r"[^A-Za-z0-9_]", "_", name) or f"mesh_{i}"
+        if prim_name[0].isdigit():
+            prim_name = "m_" + prim_name
+        while prim_name in used:
+            prim_name += "_"
+        used.add(prim_name)
+        m = UsdGeom.Mesh.Define(stage, f"/Model/{prim_name}")
+        m.CreatePointsAttr(Vt.Vec3fArray.FromNumpy(mesh.vertices.astype("float32")))
+        m.CreateFaceVertexCountsAttr(Vt.IntArray([3] * len(mesh.faces)))
+        m.CreateFaceVertexIndicesAttr(Vt.IntArray.FromNumpy(mesh.faces.astype("int32").ravel()))
+        m.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+        m.CreateNormalsAttr(Vt.Vec3fArray.FromNumpy(mesh.vertex_normals.astype("float32")))
+        m.SetNormalsInterpolation(UsdGeom.Tokens.vertex)
+        pv = UsdGeom.PrimvarsAPI(m)
+        vis = mesh.visual
+        uv = getattr(vis, "uv", None)
+        if uv is not None and len(uv) == len(mesh.vertices):
+            pv.CreatePrimvar("st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.vertex) \
+              .Set(Vt.Vec2fArray.FromNumpy(uv.astype("float32")))
+        if getattr(vis, "kind", None) == "vertex":
+            cols = vis.vertex_colors[:, :3].astype("float32") / 255.0
+            pv.CreatePrimvar("displayColor", Sdf.ValueTypeNames.Color3fArray, UsdGeom.Tokens.vertex) \
+              .Set(Vt.Vec3fArray.FromNumpy(cols))
+
+        image, factor = _base_color(mesh)
+        if image is None and factor is None:
+            continue
+        mat = UsdShade.Material.Define(stage, f"/Model/Looks/{prim_name}_mat")
+        shader = UsdShade.Shader.Define(stage, f"/Model/Looks/{prim_name}_mat/Surface")
+        shader.CreateIdAttr("UsdPreviewSurface")
+        mat.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+        if factor is not None:
+            shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*factor[:3]))
+        if image is not None and uv is not None:
+            os.makedirs(tex_dir, exist_ok=True)
+            tex_path = os.path.join(tex_dir, f"{prim_name}_basecolor.png")
+            image.save(tex_path)
+            written.append(tex_path)
+            reader = UsdShade.Shader.Define(stage, f"/Model/Looks/{prim_name}_mat/st")
+            reader.CreateIdAttr("UsdPrimvarReader_float2")
+            reader.CreateInput("varname", Sdf.ValueTypeNames.Token).Set("st")
+            tex = UsdShade.Shader.Define(stage, f"/Model/Looks/{prim_name}_mat/baseColor")
+            tex.CreateIdAttr("UsdUVTexture")
+            tex.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(
+                f"./{stem}_textures/{prim_name}_basecolor.png")
+            tex.CreateInput("st", Sdf.ValueTypeNames.Float2).ConnectToSource(
+                reader.ConnectableAPI(), "result")
+            tex.CreateOutput("rgb", Sdf.ValueTypeNames.Float3)
+            shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).ConnectToSource(
+                tex.ConnectableAPI(), "rgb")
+        UsdShade.MaterialBindingAPI.Apply(m.GetPrim()).Bind(mat)
+    stage.GetRootLayer().Save()
+    return written
+
+
+def convert(data, src_ext, dst_ext, path):
+    """Write the 3D file `data` (format `src_ext`) to `path` as `dst_ext`.
+    Returns the files written, the model itself first (OBJ and USD bring their
+    materials and textures along beside it)."""
+    dst_ext = dst_ext.lower()
+    scene = _load_scene(data, src_ext.lower())
+    if dst_ext in _USD_EXTS:
+        return _write_usd(scene, path)
+    import trimesh
+    if dst_ext == "glb":
+        blob = scene.export(file_type="glb")
+    elif dst_ext == "gltf":
+        # One self-contained file: buffers and textures embedded as data URIs.
+        files = trimesh.exchange.gltf.export_gltf(scene, embed_buffers=True)
+        blob = files.get("model.gltf") or next(iter(files.values()))
+    elif dst_ext == "obj":
+        stem = os.path.splitext(os.path.basename(path))[0]
+        text, extras = trimesh.exchange.obj.export_obj(
+            scene, include_texture=True, return_texture=True, mtl_name=f"{stem}.mtl")
+        written = [path]
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        # trimesh names the textures material_0.png …; in a shared output
+        # folder the next OBJ would overwrite them. They take the model's name,
+        # and the .mtl is pointed at the new names.
+        extras = dict(extras or {})
+        mtl_name = f"{stem}.mtl"
+        renames = {n: f"{stem}_{n}" for n in extras if n != mtl_name}
+        if mtl_name in extras and renames:
+            mtl = extras[mtl_name].decode("utf-8", "replace")
+            for old, new in renames.items():
+                mtl = re.sub(rf"(?<![\w.-]){re.escape(old)}(?![\w.-])", new, mtl)
+            extras[mtl_name] = mtl.encode("utf-8")
+        for fname, blob in extras.items():
+            extra = os.path.join(os.path.dirname(path), renames.get(fname, fname))
+            with open(extra, "wb") as fh:
+                fh.write(blob)
+            written.append(extra)
+        return written
+    elif dst_ext in ("ply", "stl"):
+        meshes = [m for _n, m in _placed_meshes(scene)]
+        if not meshes:
+            raise ValueError("no mesh geometry to write")
+        if dst_ext == "ply":
+            # PLY has no texture: keep the look as vertex colours.
+            for m in meshes:
+                if getattr(m.visual, "kind", None) == "texture":
+                    try:
+                        m.visual = m.visual.to_color()
+                    except Exception:
+                        pass
+        mesh = trimesh.util.concatenate(meshes) if len(meshes) > 1 else meshes[0]
+        blob = mesh.export(file_type=dst_ext)
+    else:
+        raise ValueError(f"no writer for .{dst_ext}")
+    with open(path, "wb") as fh:
+        fh.write(blob if isinstance(blob, (bytes, bytearray)) else blob.encode("utf-8"))
+    return [path]
+
+
+def _source_items(inp, metadata):
+    """[(bytes, ext)] — the input as the file(s) it is, before any conversion."""
+    if is_file3d(inp):
+        return [(inp.get_bytes(), _file3d_item(inp))]
+    return _mesh_items(inp, metadata)
+
+
+def save_model_input(inp, filename_prefix, prompt=None, extra_pnginfo=None, file_format=None):
+    """Write `inp` to ./output the way SaveGLB does — as `file_format` when that
+    is a 3D format (converted when it isn't already), else as it came.
 
     Returns (saved_paths, ui_results, frames): ui_results is SaveGLB's
-    `ui["3d"]` list, frames are viewer frame dicts for the saved files.
+    `ui["3d"]` list, frames are viewer frame dicts for the saved models (the
+    materials and textures an OBJ or USD brings along are in saved_paths only).
     """
     out_root = folder_paths.get_output_directory()
     folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
         filename_prefix, out_root)
     os.makedirs(folder, exist_ok=True)
+    want = (file_format or "").lower().lstrip(".")
+    want = want if want in MODEL_FORMATS else None
 
     saved, results, frames = [], [], []
-    if is_file3d(inp):
+    if is_file3d(inp) and want is None:
+        # As it came, straight from its own file: no read into memory.
         ext = _file3d_item(inp)
         name = f"{filename}_{counter:05}_.{ext}"
         full = os.path.join(folder, name)
@@ -139,16 +379,30 @@ def save_model_input(inp, filename_prefix, prompt=None, extra_pnginfo=None):
         saved.append(full)
         results.append({"filename": name, "subfolder": subfolder, "type": "output"})
         frames.append(model_frame(full, ext))
-    else:
-        for data, ext in _mesh_items(inp, _metadata(prompt, extra_pnginfo)):
-            name = f"{filename}_{counter:05}_.{ext}"
-            full = os.path.join(folder, name)
+        return saved, results, frames
+
+    for data, ext in _source_items(inp, _metadata(prompt, extra_pnginfo)):
+        target = want or ext
+        name = f"{filename}_{counter:05}_.{target}"
+        full = os.path.join(folder, name)
+        written = None
+        if target != ext:
+            try:
+                written = convert(data, ext, target, full)
+            except Exception as e:
+                print(f"\033[93m[bEpicSendToViewer] could not save as .{target} ({e}); "
+                      f"saving the .{ext} it came as instead\033[0m")
+                target = ext
+                name = f"{filename}_{counter:05}_.{ext}"
+                full = os.path.join(folder, name)
+        if written is None:
             with open(full, "wb") as fh:
                 fh.write(data)
-            saved.append(full)
-            results.append({"filename": name, "subfolder": subfolder, "type": "output"})
-            frames.append(model_frame(full, ext))
-            counter += 1
+            written = [full]
+        saved.extend(written)
+        results.append({"filename": name, "subfolder": subfolder, "type": "output"})
+        frames.append(model_frame(full, target))
+        counter += 1
     return saved, results, frames
 
 

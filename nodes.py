@@ -47,6 +47,13 @@ _DEFAULT_FORMAT = "png" if "png" in _FILE_FORMATS else _FILE_FORMATS[0]
 # verbatim. See videoFormatsFromDef / bepicSyncOutputWidgets.
 _VIDEO_FORMATS = file_writer.VIDEO_EXTS if file_writer is not None else ["mp4", "mov", "webm"]
 
+# 3D formats, after the image and video ones: a MESH or 3D-file input is saved
+# (converted) as one of these; with an image or video format picked it is saved
+# as it came. Carried on the fps spec like the video list, so the JS can hide
+# fps and the sequence fields for them.
+_MODEL_FORMATS = list(model_writer.MODEL_FORMATS) if model_writer is not None else []
+_FILE_FORMATS = list(_FILE_FORMATS) + [f for f in _MODEL_FORMATS if f not in _FILE_FORMATS]
+
 
 def _dims_from_input(inp):
     """Return (N, H, W) from a ComfyUI IMAGE [B,H,W,C] / MASK [B,H,W] tensor, or
@@ -424,7 +431,8 @@ class bEpicSendToViewer:
                 # list carried here.
                 "fps": ("FLOAT", {"default": 24.0, "min": 0.01, "max": 1000.0,
                                   "step": 0.01,
-                                  "bepic_video_formats": _VIDEO_FORMATS}),
+                                  "bepic_video_formats": _VIDEO_FORMATS,
+                                  "bepic_model_formats": _MODEL_FORMATS}),
                 "filename_prefix": ("STRING", {"default": "bEpic"}),
                 # Image-sequence naming: prefix.1001.png instead of ComfyUI's
                 # prefix_00001_.png. Only means anything for a still format, so
@@ -461,10 +469,16 @@ class bEpicSendToViewer:
         safe_label = tab_name.replace(" ", "_") if tab_name else "send"
 
         # A MESH or 3D file opens as a 3D tab, and "save to output" writes it
-        # the way core's Save 3D Model does (file_format doesn't apply).
+        # the way core's Save 3D Model does — in file_format when that is a 3D
+        # format (converted), else in the format it came as.
         if model_writer is not None and model_writer.is_model_input(input):
             return self._send_model(input, safe_label, save_to_output,
-                                    filename_prefix, unique_id, prompt, extra_pnginfo)
+                                    filename_prefix, unique_id, prompt, extra_pnginfo,
+                                    file_format)
+        if model_writer is not None and model_writer.is_model_format(file_format):
+            print(f"[93m[bEpicSendToViewer] .{file_format} is a 3D format and the input is "
+                  f"not a mesh — saving it as png[0m")
+            file_format = "png"
 
         # Three source kinds feed the viewer tab:
         #   • a ComfyUI VIDEO object   → decoded to a playable file and shown as
@@ -529,12 +543,12 @@ class bEpicSendToViewer:
         return _history_ui([f.get("path") for f in frames])
 
     def _send_model(self, mesh, label, save_to_output, filename_prefix,
-                    unique_id, prompt, extra_pnginfo):
+                    unique_id, prompt, extra_pnginfo, file_format=None):
         frames = []
         try:
             if save_to_output:
                 _saved, _results, frames = model_writer.save_model_input(
-                    mesh, filename_prefix, prompt, extra_pnginfo)
+                    mesh, filename_prefix, prompt, extra_pnginfo, file_format)
             else:
                 frames = _model_frames(mesh, label, unique_id, self.output_dir)
         except Exception as e:
