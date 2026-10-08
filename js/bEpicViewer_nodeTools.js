@@ -133,16 +133,28 @@ export function isVideoFormat(node, format) {
     return ext !== "" && list.some(v => normExt(v) === ext);
 }
 
+// The two node renderers each ask in their own place whether a widget is
+// hidden: the classic canvas reads `widget.hidden`, Nodes 2.0 reads
+// `options.hidden` - and reads it from the widget store's state, which is what
+// it watches, so the flag is written there when the widget has one. The
+// widget's type is left alone: Nodes 2.0 picks a widget's component from the
+// type it had when the node was built, and a placeholder type there would
+// outlive the hiding.
+function flagHidden(widget, hidden) {
+    widget.hidden = hidden;
+    const watched = widget._state && widget._state.options;
+    if (watched) watched.hidden = hidden;
+    if (widget.options && widget.options !== watched) widget.options.hidden = hidden;
+}
+
 // Fully hide a widget while keeping it serializable (values still reach backend).
 function hideWidget(node, widget) {
     if (!widget) return;
     if (widget._bepicHidden) return;
     widget._bepicHidden = true;
-    widget.origType = widget.type;
     widget.origComputeSize = widget.computeSize;
     widget.computeSize = () => [0, -4]; // -4 cancels litegraph's per-widget gap
-    widget.type = "bepic-hidden";
-    widget.hidden = true;
+    flagHidden(widget, true);
     if (widget.element) {
         widget.element.style.display = "none";
         widget.element.style.visibility = "hidden";
@@ -165,18 +177,15 @@ function setWidgetVisible(node, widget, visible) {
     if (visible) {
         if (!widget._bepicCollapsed) return;
         widget._bepicCollapsed = false;
-        widget.type        = widget._bepicOrigType;
         widget.computeSize = widget._bepicOrigComputeSize;
-        widget.hidden      = false;
+        flagHidden(widget, false);
         if (widget.element) { widget.element.style.display = ""; widget.element.style.visibility = ""; }
     } else {
         if (widget._bepicCollapsed) return;
         widget._bepicCollapsed        = true;
-        widget._bepicOrigType         = widget.type;
         widget._bepicOrigComputeSize  = widget.computeSize;
-        widget.type        = "bepic-hidden";
         widget.computeSize = () => [0, -4];   // -4 cancels litegraph's per-widget gap
-        widget.hidden      = true;            // litegraph's draw loop skips hidden widgets
+        flagHidden(widget, true);             // litegraph's draw loop skips hidden widgets
         if (widget.element) { widget.element.style.display = "none"; widget.element.style.visibility = "hidden"; }
     }
 }
