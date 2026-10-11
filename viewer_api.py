@@ -313,44 +313,125 @@ try:
             info = await asyncio.get_running_loop().run_in_executor(None, color_io.info)
             return web.json_response(info)
 
-        async def _bepic_timeline(request):
-            """The cut that lies beside a film: its ``.otio``, flattened.
+        def _timeline_media(params):
+            """The film a timeline request is about: ``(path, allowed, error)``.
 
             Reach is the same as the file's own: a film the viewer may show is a
-            film whose timeline it may read. No timeline is the ordinary case
-            (most films were generated, not cut) and answers 404 quietly.
+            film whose timeline it may read - and change.
             """
-            from . import timeline_io
-            params = dict(request.query)
             path = params.get('path')
             if path:
                 if params.get('external'):
-                    media = os.path.abspath(path)
-                    allowed = path_access.is_allowed(media)
-                else:
-                    media, allowed = _resolve_raw_path(path)
-            elif params.get('filename'):
+                    media = os.path.abspath(str(path))
+                    return media, path_access.is_allowed(media), None
+                media, allowed = _resolve_raw_path(str(path))
+                return media, allowed, None
+            if params.get('filename'):
                 try:
                     base = folder_paths.get_directory_by_type(params.get('type') or 'output')
                 except Exception:
                     base = None
                 if not base:
-                    return web.Response(status=400, text="unknown folder type")
-                media = os.path.abspath(os.path.join(base, params.get('subfolder') or '',
-                                                     params['filename']))
-                allowed = path_access.within(media, base)
-            else:
-                return web.Response(status=400, text="missing 'path' or 'filename' parameter")
+                    return None, False, "unknown folder type"
+                media = os.path.abspath(os.path.join(base, str(params.get('subfolder') or ''),
+                                                     str(params['filename'])))
+                return media, path_access.within(media, base), None
+            return None, False, "missing 'path' or 'filename' parameter"
+
+        async def _bepic_timeline(request):
+            """The cut that lies beside a film: its ``.otio``.
+
+            Flattened to seconds for drawing, and - under ``edit`` - as the Edit
+            panel works on it (clips at full length, each with its dissolve). No
+            timeline is the ordinary case (most films were generated, not cut)
+            and answers 404 quietly.
+            """
+            from . import timeline_io
+            media, allowed, error = _timeline_media(dict(request.query))
+            if error:
+                return web.Response(status=400, text=error)
             if not allowed:
                 return web.Response(status=403, text=path_access.refusal(media))
             side = timeline_io.sidecar_for(media)
             if not side:
                 return web.Response(status=404, text="no timeline beside this file")
+
+            def _read():
+                data = timeline_io.read(side)
+                data["edit"] = timeline_io.read_editable(side)
+                return data
             try:
-                data = await asyncio.get_running_loop().run_in_executor(None, timeline_io.read, side)
+                data = await asyncio.get_running_loop().run_in_executor(None, _read)
             except (OSError, ValueError) as exc:
                 return web.Response(status=422, text=f"the timeline could not be read: {exc}")
             data["file"] = os.path.basename(side)
+            return web.json_response(data, headers={"Cache-Control": "no-cache"})
+
+        async def _bepic_timeline_save(request):
+            """Save a cut changed in the Edit panel into the ``.otio`` beside its film.
+
+            Only an existing timeline can be saved into, and only its own clips
+            and texts can be in the edit (timeline_io.rebuild): the panel cuts
+            what is there. Nothing is rendered - the viewer starts no process -
+            so the film stays as it was until its maker renders the edited cut;
+            the file is stamped so that it can tell.
+            """
+            from . import timeline_io
+            try:
+                body = await request.json()
+            except Exception:
+                return web.Response(status=400, text="the request is not JSON")
+            if not isinstance(body, dict):
+                return web.Response(status=400, text="the request is not an object")
+            import datetime
+            now = datetime.datetime.now(datetime.timezone.utc)
+            stamp = now.isoformat(timespec="seconds")
+            create = None
+            if body.get("new"):
+                # A cut started in the panel, with no film yet: it gets a file of
+                # its own in ComfyUI's output folder, where its maker will look.
+                try:
+                    base = folder_paths.get_output_directory()
+                except Exception:
+                    base = None
+                if not base:
+                    return web.Response(status=500, text="ComfyUI has no output folder")
+                name = re.sub(r"[^A-Za-z0-9_-]+", "_", str(body.get("name") or "")).strip("_")[:60] \
+                    or "cut_" + now.astimezone().strftime("%Y%m%d_%H%M%S")
+                side = os.path.join(base, "edits", name + ".otio")
+                n = 1
+                while os.path.exists(side):
+                    n += 1
+                    side = os.path.join(base, "edits", f"{name}_{n}.otio")
+                create = name
+            else:
+                media, allowed, error = _timeline_media(body)
+                if error:
+                    return web.Response(status=400, text=error)
+                if not allowed:
+                    return web.Response(status=403, text=path_access.refusal(media))
+                side = timeline_io.sidecar_for(media)
+                if not side:
+                    return web.Response(status=404, text="no timeline beside this file")
+
+            def _may_use(path):
+                return path_access.is_allowed(path)
+
+            def _save():
+                edit = timeline_io.save(side, body.get("edit"), stamp, _may_use, create)
+                data = timeline_io.read(side)
+                data["edit"] = edit
+                return data
+            try:
+                data = await asyncio.get_running_loop().run_in_executor(None, _save)
+            except ValueError as exc:
+                return web.Response(status=422, text=f"not saved: {exc}")
+            except OSError as exc:
+                return web.Response(status=500, text=f"not saved: {exc}")
+            data["file"] = os.path.basename(side)
+            if create is not None:
+                # How the panel names this cut from now on.
+                data["target"] = {"path": side, "external": 1}
             return web.json_response(data, headers={"Cache-Control": "no-cache"})
 
         async def _bepic_raw_view(request):
@@ -1206,6 +1287,8 @@ try:
         _safe_add("POST", "/api/bepic/model_thumb", _bepic_model_thumb)
         _safe_add("GET", "/bepic/timeline", _bepic_timeline)
         _safe_add("GET", "/api/bepic/timeline", _bepic_timeline)
+        _safe_add("POST", "/bepic/timeline", _bepic_timeline_save)
+        _safe_add("POST", "/api/bepic/timeline", _bepic_timeline_save)
         _safe_add("GET", "/bepic/raw_view", _bepic_raw_view)
         _safe_add("GET", "/api/bepic/raw_view", _bepic_raw_view)
         _safe_add("POST", "/bepic/probe_paths", _bepic_probe_paths)

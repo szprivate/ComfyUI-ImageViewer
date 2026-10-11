@@ -568,3 +568,42 @@ export const SendFromNodeMixin = {
         return true;
     },
 };
+
+// ── Media as files, for the Edit panel ───────────────────────────────────────
+
+/**
+ * The files a node holds, as clips an edit can take:
+ * `[{ path, name, kind, external, length }]` (`length` in seconds, 0 when the
+ * server did not say). Only media the node POINTS at - a loader's file, a save
+ * node's result on disk, an AYON container: a node that would have to be run to
+ * produce a picture has no file to cut. Sequences of stills are left out.
+ */
+export async function nodeMediaClips(node) {
+    let source = null;
+    try { source = findMediaSource(node); } catch (_) { source = null; }
+    if (!source || source.target) return [];
+    const { body, shown } = resolveRequest(source);
+    if (!shown) return [];
+    let data = null;
+    try {
+        const resp = await api.fetchApi("/bepic/resolve_media", {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        });
+        data = await resp.json();
+    } catch (_) { return []; }
+    const out = [];
+    for (const tab of (data && Array.isArray(data.tabs) ? data.tabs : [])) {
+        const frames = Array.isArray(tab.frames) ? tab.frames : [];
+        if ((tab.kind !== "video" && tab.kind !== "image") || frames.length !== 1) continue;
+        const f = frames[0];
+        if (!f || !f.path) continue;
+        out.push({
+            path: f.path, name: f.name || tab.label || "", kind: tab.kind, external: true,
+            length: f.frames > 0 && f.fps > 0 ? f.frames / f.fps : 0,
+        });
+    }
+    return out;
+}
+
+/** The nodes selected on the canvas (the Edit panel's "add from selected nodes"). */
+export function selectedNodes() { return selectedGraphNodes(); }

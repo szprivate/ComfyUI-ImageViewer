@@ -49,6 +49,10 @@ const DOCK_PANELS = {
     // Keyed node parameters (bEpicViewer_paramCurves.js); the ∿ button in the
     // Parameters header opens it.
     paramCurves: { prop: "paramCurvesPanel", label: "Parameter Curves", minW: 220, minH: 170, defaultRail: "right" },
+    // The cut that lies beside a film, to read and to change
+    // (bEpicViewer_editTimeline.js); the transport's timeline button opens it. A
+    // timeline wants width, so it starts under the picture.
+    editTimeline: { prop: "editTimelinePanel", label: "Edit", minW: 320, minH: 150, defaultRail: "bottom" },
     // (The drawing tools' options have no panel of their own: while a tool is
     // on they take the Parameters panel over — ToolsMixin._toolShowDock.)
 };
@@ -372,6 +376,8 @@ export const DockMixin = {
             if (this.rotoRefreshCurves) this.rotoRefreshCurves();
         } else if (id === "paramCurves") {
             if (this.paramRefreshCurves) this.paramRefreshCurves();
+        } else if (id === "editTimeline") {
+            if (this.editTlRefresh) this.editTlRefresh();
         } else if (id === "channels") {
             if (this._previzRenderChannels) this._previzRenderChannels();
         } else if (id === "previz") {

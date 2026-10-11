@@ -1203,41 +1203,45 @@ textarea.param-input {
 .rd-message.error { color: #e88; }
 .rd-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 
-/* The edit strip: the cut that lies beside a film, over the scrub bar
-   (bEpicViewer_editTimeline.js). Padded like the scrub bar's own row - the frame
-   number on its left, the last frame on its right - so a shot's block sits over
-   the frames it covers. */
-.edit-tl-row { display: flex; padding: 0 46px 3px 30px; }
-.edit-tl-row[hidden] { display: none; }
-.edit-tl { flex: 1; position: relative; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.edit-tl-track { position: relative; height: 20px; }
-.edit-tl-track[hidden] { display: none; }
-.edit-tl-texts { height: 13px; }
-.edit-tl-audio { height: 7px; }
-.edit-tl-shot, .edit-tl-text, .edit-tl-sound, .edit-tl-mix {
+/* The Edit panel: the cut that lies beside a film (bEpicViewer_editTimeline.js).
+   A dock panel like the curve editors, so the box and title bar are theirs. */
+.edit-body { display: flex; flex-direction: column; gap: 4px; flex: 1; min-height: 0; padding: 4px 8px 6px; box-sizing: border-box; }
+.edit-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.edit-sub { flex: 1; min-width: 80px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.edit-badge { font-size: 10px; color: #888; white-space: nowrap; }
+.edit-badge.dirty { color: #ffcf6f; }
+.edit-btn { background: #2a2a2a; color: #ccc; border: 1px solid #444; border-radius: 3px; font-size: 11px; padding: 2px 7px; cursor: pointer; }
+.edit-btn:hover:not(:disabled) { border-color: #6cf; color: #fff; }
+.edit-btn:disabled { opacity: .4; cursor: default; }
+.edit-btn.primary:not(:disabled) { background: #1d4d63; border-color: #00b8d4; color: #fff; }
+.edit-area { position: relative; display: flex; flex-direction: column; gap: 2px; touch-action: none; user-select: none; }
+.edit-ruler { position: relative; height: 13px; border-bottom: 1px solid #333; }
+.edit-tick { position: absolute; top: 0; bottom: 0; border-left: 1px solid #444; padding-left: 3px; font-size: 9px; line-height: 12px; color: #777; white-space: nowrap; }
+.edit-track { position: relative; height: 24px; }
+.edit-texts { height: 16px; }
+.edit-sound { height: 9px; }
+.edit-shot, .edit-text, .edit-snd, .edit-mix {
     position: absolute; top: 0; bottom: 0; box-sizing: border-box; overflow: hidden;
-    white-space: nowrap; text-overflow: ellipsis; font-size: 10px; line-height: 18px;
+    white-space: nowrap; text-overflow: ellipsis; font-size: 10px; line-height: 22px;
 }
-.edit-tl-shot {
-    background: #2b3a4a; border: 1px solid #4a6078; border-radius: 2px; color: #cfd8e3;
-    padding: 0 4px; cursor: pointer;
-}
-.edit-tl-shot:nth-child(even) { background: #33455a; }
-.edit-tl-shot:hover { border-color: #6cf; }
-.edit-tl-shot.on { background: #3d5f80; border-color: #00e5ff; color: #fff; }
-.edit-tl-shot.gap { background: transparent; border: 1px dashed #444; cursor: default; }
+.edit-shot { background: #2b3a4a; border: 1px solid #4a6078; border-radius: 2px; color: #cfd8e3; padding: 0 5px; cursor: grab; }
+.edit-shot:nth-child(even) { background: #33455a; }
+.edit-shot:hover { border-color: #6cf; }
+.edit-shot.on { background: #3d5f80; }
+.edit-shot.new { border-style: dashed; }
+.edit-shot.sel, .edit-text.sel { border-color: #00e5ff; box-shadow: inset 0 0 0 1px #00e5ff; color: #fff; }
 /* A dissolve, on the join it sits on: lighter in the middle, where both shots show. */
-.edit-tl-mix {
-    pointer-events: none; z-index: 1;
-    background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,.38), rgba(255,255,255,0));
-}
-.edit-tl-text {
-    background: #5a3d78; border: 1px solid #8a63b5; border-radius: 2px; color: #e9dcf7;
-    padding: 0 3px; font-size: 9px; line-height: 11px; cursor: pointer;
-}
-.edit-tl-text:hover { border-color: #d0a8ff; }
-.edit-tl-sound { background: #2f5a45; border-radius: 2px; font-size: 0; }
-.edit-tl-head {
-    position: absolute; top: 0; bottom: 0; width: 1px; background: #fff; opacity: .8;
-    pointer-events: none; z-index: 2;
-}
+.edit-mix { pointer-events: none; z-index: 1; background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,.38), rgba(255,255,255,0)); }
+.edit-text { background: #5a3d78; border: 1px solid #8a63b5; border-radius: 2px; color: #e9dcf7; padding: 0 4px; font-size: 9px; line-height: 14px; cursor: grab; }
+.edit-text.late { border-color: #ff9f6f; }
+.edit-snd { background: #2f5a45; border-radius: 2px; color: #9fd0b7; font-size: 8px; line-height: 9px; padding: 0 4px; }
+.edit-head { position: absolute; top: 0; bottom: 0; width: 1px; background: #fff; opacity: .85; pointer-events: none; z-index: 3; display: none; }
+.edit-drop { position: absolute; top: 12px; bottom: 0; width: 2px; margin-left: -1px; background: #ffcf6f; pointer-events: none; z-index: 4; display: none; }
+.edit-inspect { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-height: 22px; }
+.edit-none { font-size: 10px; color: #777; }
+.edit-field { display: flex; align-items: center; gap: 4px; font-size: 10px; color: #888; }
+.edit-field input { width: 54px; background: #111; color: #00e5ff; border: 1px solid #444; border-radius: 2px; font-size: 11px; padding: 1px 4px; }
+.edit-field.wide { flex: 1; min-width: 120px; }
+.edit-field.wide input { flex: 1; width: auto; min-width: 60px; color: #ddd; }
+.edit-tl-btn.active { color: #00e5ff; }
+.edit-tl-btn.has-cut:not(.active) { color: #ffcf6f; }

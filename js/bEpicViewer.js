@@ -551,6 +551,15 @@ class ViewerPanel extends HTMLElement {
             this.curvesPanel.parentNode.insertBefore(pc, this.curvesPanel.nextSibling);
             this.paramCurvesPanel = pc;
         }
+        // The Edit panel (the cut beside a film) is always made here: no markup carries it.
+        this.editTimelinePanel = sr.getElementById('edit-timeline-panel');
+        if (!this.editTimelinePanel && this.curvesPanel && this.curvesPanel.parentNode) {
+            const ep = this.curvesPanel.ownerDocument.createElement('div');
+            ep.id = 'edit-timeline-panel';
+            ep.className = 'curves-panel edit-panel';
+            this.curvesPanel.parentNode.insertBefore(ep, this.curvesPanel.nextSibling);
+            this.editTimelinePanel = ep;
+        }
         if (!this.rotoCurvesPanel && this.curvesPanel && this.curvesPanel.parentNode) {
             const rc = this.curvesPanel.ownerDocument.createElement('div');
             rc.id = 'roto-curves-panel';
