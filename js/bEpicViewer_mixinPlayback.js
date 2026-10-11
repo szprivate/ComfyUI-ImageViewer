@@ -554,6 +554,8 @@ export const PlaybackMixin = {
     _toolsFrameChanged() {
         // Keyed node parameters show their value at the frame (ParamAnimMixin).
         this.paramAnimFrameChanged?.();
+        // The edit strip's playhead, and which shot is lit (EditTimelineMixin).
+        this._editTlPlayhead?.();
         if (!this._toolState || this._toolState.active !== "roto") return;
         this._rotoRefreshKfInfo && this._rotoRefreshKfInfo();
         this._toolRedraw && this._toolRedraw();
@@ -783,6 +785,9 @@ export const PlaybackMixin = {
         if (this.setImageFilter) this.setImageFilter();
         this._updatePathBar(imgObj);
         if (this._videoFrames > 0) this.applyTimelineBounds(this._videoFrames);
+        // A film that was cut has its cut beside it: shown as a strip over the
+        // scrub bar (EditTimelineMixin). Most films have none.
+        this.editTlShow?.(imgObj);
     },
 
     _exitVideoMode() {
@@ -790,6 +795,7 @@ export const PlaybackMixin = {
         this._videoMode = false;
         this._videoKey  = null;
         this._videoFrames = 0;
+        this.editTlShow?.(null);
         const v = this.videoBase;
         if (v) {
             try { v.pause(); } catch (e) {}
@@ -855,6 +861,9 @@ export const PlaybackMixin = {
             this._videoFrames = Math.max(1, Math.round((v.duration || 0) * (this._videoFps || 24)));
         }
         this.applyTimelineBounds(this._videoFrames);
+        // The film's real length is known only now, and the edit strip is laid
+        // out against it.
+        this._editTlDraw?.();
         this.fitView();
         this._applyVideoPlaybackRate();
         if (this.timeline) this.timeline.value = this.currentFrame || 0;

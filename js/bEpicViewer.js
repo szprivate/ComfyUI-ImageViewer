@@ -29,6 +29,7 @@ import { ParamCurvesMixin } from "./bEpicViewer_paramCurves.js";
 import { PrevizChannelsMixin } from "./bEpicViewer_previzChannels.js";
 import { PrevizRenderMixin } from "./bEpicViewer_previzRender.js";
 import { PrevizUndoMixin } from "./bEpicViewer_previzUndo.js";
+import { EditTimelineMixin } from "./bEpicViewer_editTimeline.js";
 import { SendFromNodeMixin, registerSendToViewerMenu, sendSelectionToViewer } from "./bEpicViewer_sendFromNode.js";
 import {
     registerSendNode, registerToolNode, senderTabInfo, isViewerSourceNode, BEPIC_SCENE_NODE,
@@ -1248,6 +1249,7 @@ Object.assign(
     PrevizChannelsMixin,
     PrevizRenderMixin,
     PrevizUndoMixin,
+    EditTimelineMixin,
     PrevizWorldMixin,
     PrefsMixin,
 );

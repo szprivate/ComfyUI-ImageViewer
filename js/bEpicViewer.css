@@ -1202,3 +1202,42 @@ textarea.param-input {
 .rd-message { min-height: 16px; margin-top: 6px; color: #bbb; white-space: pre-line; }
 .rd-message.error { color: #e88; }
 .rd-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+
+/* The edit strip: the cut that lies beside a film, over the scrub bar
+   (bEpicViewer_editTimeline.js). Padded like the scrub bar's own row - the frame
+   number on its left, the last frame on its right - so a shot's block sits over
+   the frames it covers. */
+.edit-tl-row { display: flex; padding: 0 46px 3px 30px; }
+.edit-tl-row[hidden] { display: none; }
+.edit-tl { flex: 1; position: relative; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.edit-tl-track { position: relative; height: 20px; }
+.edit-tl-track[hidden] { display: none; }
+.edit-tl-texts { height: 13px; }
+.edit-tl-audio { height: 7px; }
+.edit-tl-shot, .edit-tl-text, .edit-tl-sound, .edit-tl-mix {
+    position: absolute; top: 0; bottom: 0; box-sizing: border-box; overflow: hidden;
+    white-space: nowrap; text-overflow: ellipsis; font-size: 10px; line-height: 18px;
+}
+.edit-tl-shot {
+    background: #2b3a4a; border: 1px solid #4a6078; border-radius: 2px; color: #cfd8e3;
+    padding: 0 4px; cursor: pointer;
+}
+.edit-tl-shot:nth-child(even) { background: #33455a; }
+.edit-tl-shot:hover { border-color: #6cf; }
+.edit-tl-shot.on { background: #3d5f80; border-color: #00e5ff; color: #fff; }
+.edit-tl-shot.gap { background: transparent; border: 1px dashed #444; cursor: default; }
+/* A dissolve, on the join it sits on: lighter in the middle, where both shots show. */
+.edit-tl-mix {
+    pointer-events: none; z-index: 1;
+    background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,.38), rgba(255,255,255,0));
+}
+.edit-tl-text {
+    background: #5a3d78; border: 1px solid #8a63b5; border-radius: 2px; color: #e9dcf7;
+    padding: 0 3px; font-size: 9px; line-height: 11px; cursor: pointer;
+}
+.edit-tl-text:hover { border-color: #d0a8ff; }
+.edit-tl-sound { background: #2f5a45; border-radius: 2px; font-size: 0; }
+.edit-tl-head {
+    position: absolute; top: 0; bottom: 0; width: 1px; background: #fff; opacity: .8;
+    pointer-events: none; z-index: 2;
+}

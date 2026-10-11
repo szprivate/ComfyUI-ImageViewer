@@ -313,6 +313,46 @@ try:
             info = await asyncio.get_running_loop().run_in_executor(None, color_io.info)
             return web.json_response(info)
 
+        async def _bepic_timeline(request):
+            """The cut that lies beside a film: its ``.otio``, flattened.
+
+            Reach is the same as the file's own: a film the viewer may show is a
+            film whose timeline it may read. No timeline is the ordinary case
+            (most films were generated, not cut) and answers 404 quietly.
+            """
+            from . import timeline_io
+            params = dict(request.query)
+            path = params.get('path')
+            if path:
+                if params.get('external'):
+                    media = os.path.abspath(path)
+                    allowed = path_access.is_allowed(media)
+                else:
+                    media, allowed = _resolve_raw_path(path)
+            elif params.get('filename'):
+                try:
+                    base = folder_paths.get_directory_by_type(params.get('type') or 'output')
+                except Exception:
+                    base = None
+                if not base:
+                    return web.Response(status=400, text="unknown folder type")
+                media = os.path.abspath(os.path.join(base, params.get('subfolder') or '',
+                                                     params['filename']))
+                allowed = path_access.within(media, base)
+            else:
+                return web.Response(status=400, text="missing 'path' or 'filename' parameter")
+            if not allowed:
+                return web.Response(status=403, text=path_access.refusal(media))
+            side = timeline_io.sidecar_for(media)
+            if not side:
+                return web.Response(status=404, text="no timeline beside this file")
+            try:
+                data = await asyncio.get_running_loop().run_in_executor(None, timeline_io.read, side)
+            except (OSError, ValueError) as exc:
+                return web.Response(status=422, text=f"the timeline could not be read: {exc}")
+            data["file"] = os.path.basename(side)
+            return web.json_response(data, headers={"Cache-Control": "no-cache"})
+
         async def _bepic_raw_view(request):
             params = dict(request.query)
             path = params.get('path') or params.get('filename')
@@ -1164,6 +1204,8 @@ try:
         _safe_add("GET", "/bepic/usd_stages", _bepic_usd_stages)
         _safe_add("GET", "/api/bepic/usd_stages", _bepic_usd_stages)
         _safe_add("POST", "/api/bepic/model_thumb", _bepic_model_thumb)
+        _safe_add("GET", "/bepic/timeline", _bepic_timeline)
+        _safe_add("GET", "/api/bepic/timeline", _bepic_timeline)
         _safe_add("GET", "/bepic/raw_view", _bepic_raw_view)
         _safe_add("GET", "/api/bepic/raw_view", _bepic_raw_view)
         _safe_add("POST", "/bepic/probe_paths", _bepic_probe_paths)
