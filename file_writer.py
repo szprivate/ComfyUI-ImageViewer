@@ -378,16 +378,25 @@ def _pad_even(frame_u8):
     return frame_u8
 
 
-def _write_video(frames, path, fps, ext, quality=8):
+def _write_video(frames, path, fps, ext, quality=8, codec=None):
     """Encode a [B,H,W,C] float array to a single video file at `fps`.
 
     `quality` is imageio's 0-10 scale (10 best); 8 is what saving has always
-    used."""
+    used. `codec` is for a container that can hold more than one
+    (export_rules.VIDEO): "prores" writes a MOV as ProRes 422, at the profile
+    its quality maps to. Without it a MOV is H.264, as it always was here - a
+    caller that offers the choice passes it."""
     import imageio
 
     fps = float(fps) if fps and fps > 0 else 24.0
     q = max(1.0, min(10.0, float(quality if quality is not None else 8)))
-    if ext == "webm":
+    if ext == "mov" and str(codec or "").lower() == "prores":
+        # 422 HQ / 422 / 422 LT for the high / medium / low the dialogs offer.
+        profile = "3" if q >= 8.5 else ("2" if q >= 6.5 else "1")
+        writer = imageio.get_writer(path, fps=fps, codec="prores_ks", quality=None,
+                                    macro_block_size=1, pixelformat="yuv422p10le",
+                                    ffmpeg_params=["-profile:v", profile])
+    elif ext == "webm":
         # VP9 takes no notice of imageio's quality; its own knob is the
         # constant-quality CRF (lower is better), 22 / 31 / 40 for the
         # dialog's high / medium / low.

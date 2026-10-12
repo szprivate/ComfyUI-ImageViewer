@@ -159,7 +159,7 @@ def render_frames(name):
     return [p for _i, p in numbered]
 
 
-def encode_render(name, fps=24.0, fmt="mp4", quality="high"):
+def encode_render(name, fps=24.0, fmt="mp4", quality="high", codec=None):
     """Turn the uploaded frames of `name` into output/previz/<name>.<fmt>.
 
     `fmt` is one of VIDEO_FORMATS (mp4 and mov are H.264, webm is VP9) and
@@ -202,7 +202,8 @@ def encode_render(name, fps=24.0, fmt="mp4", quality="high"):
     os.makedirs(os.path.dirname(out), exist_ok=True)
     try:
         file_writer._write_video(np.stack(frames), out, float(fps or 24.0), fmt,
-                                 quality=VIDEO_QUALITY.get(quality, VIDEO_QUALITY["high"]))
+                                 quality=VIDEO_QUALITY.get(quality, VIDEO_QUALITY["high"]),
+                                 codec=codec)
     except Exception as e:
         raise ValueError(
             f"could not encode the shot ({e}). Install imageio-ffmpeg, or read "

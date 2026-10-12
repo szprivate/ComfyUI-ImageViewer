@@ -319,8 +319,11 @@ def check(cut, may_use=None):
         cut["bed"] = None            # a bed that may not be read is left out, not a reason to refuse
 
 
-def render(doc, out_path, fmt="mp4", may_use=None):
+def render(doc, out_path, fmt="mp4", may_use=None, codec=None, quality="high"):
     """Render the cut in *doc* to *out_path*.
+
+    *fmt*, *codec* and *quality* are read through :mod:`export_rules`, the one
+    table of what a format means: a MOV is ProRes unless H.264 is asked for.
 
     Returns ``{"path", "seconds", "frames", "width", "height", "fps", "sound",
     "texts_left_out"}``. Written beside the target first and moved over, so a
@@ -329,6 +332,9 @@ def render(doc, out_path, fmt="mp4", may_use=None):
     import av
     import numpy as np
     fmt = fmt if fmt in FORMATS else "mp4"
+    from . import export_rules
+    how = export_rules.video_settings(fmt, codec, quality)
+    packed = how["audio"] == "pcm_s16le"
     cut = read_cut(doc)
     check(cut, may_use)
     fps = cut["fps"] if cut["fps"] > 0 else 24.0
@@ -342,16 +348,12 @@ def render(doc, out_path, fmt="mp4", may_use=None):
     rate = Fraction(fps).limit_denominator(1001)
     try:
         with av.open(tmp, "w", format="mov" if fmt == "mov" else "mp4") as out:
-            if fmt == "mov":
-                vs = out.add_stream("prores_ks", rate=rate, options={"profile": "3"})
-                vs.pix_fmt = "yuv422p10le"
-            else:
-                vs = out.add_stream("libx264", rate=rate, options={"crf": "16", "preset": "medium"})
-                vs.pix_fmt = "yuv420p"
+            vs = out.add_stream(how["encoder"], rate=rate, options=dict(how["options"]))
+            vs.pix_fmt = how["pix_fmt"]
             vs.width, vs.height = w, h
             snd = None
             if sound is not None:
-                snd = out.add_stream("pcm_s16le" if fmt == "mov" else "aac", rate=RATE)
+                snd = out.add_stream(how["audio"], rate=RATE)
                 snd.layout = "stereo"
             step = 1024
             sent = 0
@@ -360,9 +362,9 @@ def render(doc, out_path, fmt="mp4", may_use=None):
                 nonlocal sent
                 while snd is not None and sent < until:
                     piece = sound[:, sent:sent + step]
-                    if fmt == "mov":
-                        packed = (piece.T * 32767.0).astype(np.int16).reshape(1, -1)
-                        af = av.AudioFrame.from_ndarray(np.ascontiguousarray(packed), format="s16", layout="stereo")
+                    if packed:
+                        s16 = (piece.T * 32767.0).astype(np.int16).reshape(1, -1)
+                        af = av.AudioFrame.from_ndarray(np.ascontiguousarray(s16), format="s16", layout="stereo")
                     else:
                         af = av.AudioFrame.from_ndarray(np.ascontiguousarray(piece), format="fltp", layout="stereo")
                     af.sample_rate = RATE
@@ -398,4 +400,5 @@ def render(doc, out_path, fmt="mp4", may_use=None):
         except OSError:
             pass
     return {"path": out_path, "seconds": round(total / fps, 3), "frames": total, "width": w,
-            "height": h, "fps": fps, "sound": sound is not None, "texts_left_out": cut["texts"]}
+            "height": h, "fps": fps, "sound": sound is not None, "texts_left_out": cut["texts"],
+            "format": how["label"]}

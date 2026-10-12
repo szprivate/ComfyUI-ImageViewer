@@ -68,6 +68,18 @@ State that must survive a reload goes through `queuePersistViewerState()` into `
 - A MESH / 3D-file input to `bEpicSendToViewer` is saved in the 3D format picked in `file_format` (glb, gltf, obj, ply, stl, usd/usda/usdc — `model_writer.MODEL_FORMATS`, appended after the image and video formats): `model_writer.convert` reads it with trimesh (USD through `usd_io.display_proxy`) and writes it, USD by its own pxr writer. An image or video format on a 3D input keeps the input's own format; a 3D format on an image falls back to png. FBX has no writer here.
 - `nodes.py` — `bEpicSendToViewer`, `bEpicImageViewerRoto`, `bEpicImageViewerSAM3Collector`, `bEpicScene3D`. Node → viewer is a `bepic.viewer.update` websocket message; the nodes also return a `ui` dict so their files appear in ComfyUI's history and Assets panel (the frontend suppresses the inline node preview instead of the node withholding `ui`).
 
+## Import and export: one vocabulary, one set of rules
+
+The viewer's ways in and out grew one feature at a time; they are being brought under one rule (the plan and its state: the `viewer-import-export-unification` memory). New work follows this, old work is moved to it as it is touched.
+
+**Four words, and they do not overlap.** *Open* shows a file in the viewer. *Add* brings a file into what is being worked on (a scene, a cut). *Save* keeps the working document (a scene, a cut) where it already lives. *Export* writes a deliverable (a film, frames, a USD stage, a PNG). "Render" is the button inside an export dialog, not a fifth idea. No "Import", "Load" or "Download" in new UI.
+
+**`export_rules.py` decides, for every export:**
+- *what a format is* (`VIDEO`, `video_settings`): a container means the same codec wherever it is offered. MOV is ProRes 422 unless H.264 is asked for; MP4 is H.264; WebM is VP9. Quality is `high` / `medium` / `low`, and each encoder's number for those is there and nowhere else. `/bepic/export_options` serves the table to the page.
+- *where a file goes and what it is called* (`target`): with a sequence and shot (a context node on the canvas, sent by the page as `context`) the bEpic layout, `<Seq>/<Shot>/<kind>/v###/<shot>_v###_<name>.<ext>`; without, `bepic/<kind>/<name>_v###.<ext>`. Under ComfyUI's output folder, always the next version - an export never writes over an earlier one. `/bepic/export_target` previews it without creating anything.
+
+**Not moved yet** (do not copy their habits): previz's scene / USD entries ask through `prompt()` and write to `output/3d_scenes`; the previz render writes `output/previz/<name>`; annotations go to the output root; an extracted frame goes beside its clip or to `output/extracted_frames`. The Send to Viewer node's `mov` is still H.264 - it gets a codec widget rather than a silent change, since saved workflows hold its settings.
+
 ### Worlds (branch `worlds`)
 
 Walkable worlds built from reference images. The viewer only *shows* them; they are *made* by a separate repo,

@@ -396,14 +396,14 @@ try:
                     base = None
                 if not base:
                     return web.Response(status=500, text="ComfyUI has no output folder")
-                name = re.sub(r"[^A-Za-z0-9_-]+", "_", str(body.get("name") or "")).strip("_")[:60] \
-                    or "cut_" + now.astimezone().strftime("%Y%m%d_%H%M%S")
-                side = os.path.join(base, "edits", name + ".otio")
-                n = 1
-                while os.path.exists(side):
-                    n += 1
-                    side = os.path.join(base, "edits", f"{name}_{n}.otio")
-                create = name
+                from . import export_rules
+                try:
+                    where = export_rules.target("edit", body.get("name") or "cut", "otio", base,
+                                                body.get("context"))
+                except ValueError as exc:
+                    return web.Response(status=400, text=str(exc))
+                side = where["path"]
+                create = os.path.splitext(os.path.basename(side))[0]
             else:
                 media, allowed, error = _timeline_media(body)
                 if error:
@@ -459,25 +459,30 @@ try:
             side = timeline_io.sidecar_for(media)
             if not side:
                 return web.Response(status=404, text="no timeline beside this file")
+            from . import export_rules
             fmt = str(body.get("format") or "mp4").lower()
             if fmt not in timeline_render.FORMATS:
                 return web.Response(status=400, text=f"unknown format: {fmt}")
-            stem = os.path.splitext(side)[0]
-            own = os.path.abspath(media) == os.path.abspath(side)      # a cut with no film yet
-            if own:
-                out = f"{stem}.{fmt}"
-            else:
-                n = 1
-                while any(os.path.exists(f"{stem}_cut{n}.{e}") for e in timeline_render.FORMATS + ("otio",)):
-                    n += 1
-                out = f"{stem}_cut{n}.{fmt}"
+            codec, quality = body.get("codec"), str(body.get("quality") or "high")
+            # Where it goes and what it is called is the rule every export
+            # follows: the shot's folder when the canvas names one, the plain
+            # one otherwise, and always the next version - never over a film
+            # that is there.
+            try:
+                where = export_rules.target(
+                    "video", body.get("name") or os.path.splitext(os.path.basename(side))[0],
+                    fmt, folder_paths.get_output_directory(), body.get("context"),
+                    body.get("version"))
+            except ValueError as exc:
+                return web.Response(status=400, text=str(exc))
+            out = where["path"]
 
             def _render():
                 import copy
                 import datetime
                 import json as _json
                 doc = timeline_io._load(side)
-                got = timeline_render.render(doc, out, fmt, path_access.is_allowed)
+                got = timeline_render.render(doc, out, fmt, path_access.is_allowed, codec, quality)
                 # The timeline that goes with the new film: this cut, marked as
                 # rendered rather than as changed-and-waiting.
                 done = copy.deepcopy(doc)
@@ -499,7 +504,32 @@ try:
             except OSError as exc:
                 return web.Response(status=500, text=f"not rendered: {exc}")
             got["name"] = os.path.basename(got["path"])
+            got["relative"], got["version"] = where["relative"], where["version"]
             return web.json_response(got, headers={"Cache-Control": "no-cache"})
+
+        async def _bepic_export_options(request):
+            """What an export can be: the formats, the codecs each can hold and
+            which is the default, the names quality goes by (export_rules)."""
+            from . import export_rules
+            return web.json_response(export_rules.options())
+
+        async def _bepic_export_target(request):
+            """Where an export WOULD go and what it would be called, for the
+            dialog to show before anything is written. Nothing is created."""
+            from . import export_rules
+            try:
+                body = await request.json()
+            except Exception:
+                body = None
+            if not isinstance(body, dict):
+                return web.Response(status=400, text="the request is not an object")
+            try:
+                where = export_rules.target(body.get("kind"), body.get("name"), body.get("ext"),
+                                            folder_paths.get_output_directory(),
+                                            body.get("context"), body.get("version"))
+            except (ValueError, TypeError) as exc:
+                return web.Response(status=400, text=str(exc))
+            return web.json_response({k: where[k] for k in ("relative", "version", "layout", "exists")})
 
         async def _bepic_raw_view(request):
             params = dict(request.query)
@@ -1178,8 +1208,13 @@ try:
             quality = str(data.get("quality") or "high").lower()
             if quality not in previz.VIDEO_QUALITY:
                 return web.json_response({"error": f"unknown quality: {quality}"}, status=400)
+            # A MOV can be ProRes or H.264; the rule for which, and its default,
+            # is the one every export follows (export_rules).
+            from . import export_rules
+            codec = export_rules.video_settings(fmt, data.get("codec"), quality)["codec"] \
+                if data.get("codec") else None
             try:
-                path = previz.encode_render(name, fps, fmt, quality)
+                path = previz.encode_render(name, fps, fmt, quality, codec)
             except ValueError as e:
                 return web.json_response({"error": str(e)}, status=400)
             except Exception as e:
@@ -1358,6 +1393,10 @@ try:
         _safe_add("POST", "/api/bepic/timeline", _bepic_timeline_save)
         _safe_add("POST", "/bepic/timeline_render", _bepic_timeline_render)
         _safe_add("POST", "/api/bepic/timeline_render", _bepic_timeline_render)
+        _safe_add("GET", "/bepic/export_options", _bepic_export_options)
+        _safe_add("GET", "/api/bepic/export_options", _bepic_export_options)
+        _safe_add("POST", "/bepic/export_target", _bepic_export_target)
+        _safe_add("POST", "/api/bepic/export_target", _bepic_export_target)
         _safe_add("GET", "/bepic/raw_view", _bepic_raw_view)
         _safe_add("GET", "/api/bepic/raw_view", _bepic_raw_view)
         _safe_add("POST", "/bepic/probe_paths", _bepic_probe_paths)
