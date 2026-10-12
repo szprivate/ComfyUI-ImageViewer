@@ -29,7 +29,7 @@ import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
 import * as D from "./bEpicViewer_editTimelineData.js";
 import { nodeMediaClips, selectedNodes } from "./bEpicViewer_sendFromNode.js";
-import { canvasContext, notice, openExportDialog } from "./bEpicViewer_exportUI.js";
+import { canvasContext, notice, openExportDialog, openFilePicker } from "./bEpicViewer_exportUI.js";
 
 const DOCK_ID = "editTimeline";
 const EDGE_PX = 7;          // how close to a block's end a press is a trim
@@ -160,16 +160,13 @@ export const EditTimelineMixin = {
             b.addEventListener("click", fn);
             return b;
         };
-        const add = button("＋ nodes", "Add the media of the nodes selected on the canvas as clips",
-                           () => this._editTlAddSelected());
+        // Add and Export are in the panel's title bar, where every panel that
+        // has them keeps them (DOCK_PANELS in bEpicViewer_mixinDock.js).
         const revert = button("Revert", "Throw away the changes since the last save", () => this._editTlRevert());
         const save = button("Save", "Write the cut into the timeline file. The film is not rendered again.",
                             () => this._editTlSave());
         save.classList.add("primary");
-        const render = button("Export…", "Export this cut as a film, rendered here in the viewer: picture, "
-            + "dissolves and sound. Texts are not drawn. The film it lies beside is left as it is.",
-            () => this._editTlRender());
-        bar.append(sub, badge, add, revert, save, render);
+        bar.append(sub, badge, revert, save);
 
         const area = el("div", "edit-area");
         const ruler = el("div", "edit-ruler");
@@ -206,7 +203,7 @@ export const EditTimelineMixin = {
                 this._editTlAdd((payload && payload.items) || [], at);
             });
         }
-        this._editTlUi = { host, empty, body, sub, badge, add, revert, save, render, area, ruler, texts,
+        this._editTlUi = { host, empty, body, sub, badge, revert, save, area, ruler, texts,
                            shots, sound, head, drop, inspect };
         this._editTlWatchCanvas();
         return this._editTlUi;
@@ -247,8 +244,8 @@ export const EditTimelineMixin = {
         ui.badge.title = this._editTlPending ? "Another film came on screen: save or revert to see its cut." : "";
         ui.save.disabled = !dirty || !!this._editTlBusy;
         ui.revert.disabled = !dirty || !this._editTlSaved || !!this._editTlBusy;
-        ui.render.disabled = !!this._editTlBusy;
-        ui.render.textContent = this._editTlBusy ? "Rendering…" : "Export…";
+        const out = host.querySelector(":scope > .panel-titlebar .pt-export");
+        if (out) out.disabled = !!this._editTlBusy;
 
         const doc = host.ownerDocument;
         const block = (cls, item, text) => {
@@ -603,6 +600,32 @@ export const EditTimelineMixin = {
 
     _editTlAddSelected() { return this._editTlAddNodes(selectedNodes(), null); },
 
+    /** The title bar's Add: files from disk, or what the canvas has selected. */
+    _editTlAddMenu(anchor) {
+        if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
+        const a = anchor.getBoundingClientRect();
+        this._previzOpenMenu([
+            { label: "Files\u2026", run: () => this._editTlAddFiles() },
+            { label: "Selected canvas nodes", run: () => this._editTlAddSelected() },
+        ], a.left, a.bottom + 2, anchor);
+    },
+
+    async _editTlAddFiles() {
+        await openFilePicker(this.container, {
+            id: "clip",
+            title: "Add clips",
+            kind: "video",
+            exts: [".mp4", ".mov", ".webm", ".mkv", ".m4v", ".avi", ".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"],
+            multiple: true,
+            go: "Add",
+            note: "Added at the end of the cut. Ctrl-click picks more than one.",
+            onPick: async (files) => {
+                await this._editTlAdd(files.map((f) => ({ path: f.path, name: f.name, kind: f.kind })), null);
+                return { ok: true };
+            },
+        });
+    },
+
     // A node dragged off the canvas and let go over the panel is a clip. The
     // canvas keeps the pointer for the whole drag, so the panel never sees it:
     // the page is watched instead, and the node is put back where it was picked
@@ -675,7 +698,11 @@ export const EditTimelineMixin = {
     // export uses (bEpicViewer_exportUI.js): name, format, codec, quality, and
     // where it will land, by the rule all exports follow.
     async _editTlRender() {
-        if (this._editTlBusy || !this._editTlCut || !this._editTlCut.clips.length) return;
+        if (this._editTlBusy) return;
+        if (!this._editTlCut || !this._editTlCut.clips.length) {
+            notice("info", "Nothing to export", "This cut has no clips yet.");
+            return;
+        }
         if (this._editTlDirty()) {
             await this._editTlSave();
             if (this._editTlDirty()) return;             // the save said why

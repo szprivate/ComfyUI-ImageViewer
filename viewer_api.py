@@ -529,7 +529,117 @@ try:
                                             body.get("context"), body.get("version"))
             except (ValueError, TypeError) as exc:
                 return web.Response(status=400, text=str(exc))
+            if body.get("sequence"):
+                seq = export_rules.sequence_target(body.get("kind"), body.get("name"), body.get("ext"),
+                                                   folder_paths.get_output_directory(),
+                                                   body.get("context"), body.get("version"))
+                where = dict(where, relative=seq["relative"], exists=False)
             return web.json_response({k: where[k] for k in ("relative", "version", "layout", "exists")})
+
+        async def _bepic_export_places(request):
+            """The folders a kind of file is looked for in (export_rules.places):
+            where a picker opens, and the shortcuts it offers."""
+            from . import export_rules
+            try:
+                body = await request.json()
+            except Exception:
+                body = None
+            if not isinstance(body, dict):
+                return web.Response(status=400, text="the request is not an object")
+            try:
+                found = export_rules.places(body.get("kind"), folder_paths.get_output_directory(),
+                                            body.get("context"))
+            except (ValueError, TypeError) as exc:
+                return web.Response(status=400, text=str(exc))
+            return web.json_response({"places": found})
+
+        async def _bepic_export_view(request):
+            """Export what is on screen (export_view.py): the frame being looked
+            at as a PNG, or the whole clip as a film - by the rule every export
+            follows, so as the next version in the shot's folder or the viewer's.
+
+            Body: ``{scope: "frame" | "clip", name, context, files: [{path |
+            filename, subfolder, type}], frame, fps, cs, format, codec, quality,
+            dataurl}``. `files` is the tab's frames: one video, or the pictures
+            of a sequence. `dataurl` stands in for a clip only the browser has.
+            """
+            from . import export_rules, export_view, timeline_render
+            try:
+                body = await request.json()
+            except Exception:
+                body = None
+            if not isinstance(body, dict):
+                return web.Response(status=400, text="the request is not an object")
+            scope = "clip" if body.get("scope") == "clip" else "frame"
+            out_dir = folder_paths.get_output_directory()
+            cs = str(body.get("cs") or "")
+            try:
+                index = max(0, int(body.get("frame") or 0))
+            except (TypeError, ValueError):
+                index = 0
+
+            paths = []
+            for item in (body.get("files") or [])[:export_view.MAX_FRAMES + 1]:
+                if not isinstance(item, dict):
+                    continue
+                raw = str(item.get("path") or "")
+                if not raw and item.get("filename"):
+                    raw = os.path.join(str(item.get("subfolder") or ""), str(item["filename"]))
+                try:
+                    full = media_resolve.resolve_path(raw, str(item.get("type") or ""),
+                                                      allow=path_access.is_allowed)
+                except PermissionError as e:
+                    return web.Response(status=403, text=path_access.refusal(e.args[0]))
+                if not full or not os.path.isfile(full):
+                    return web.Response(status=404, text=f"{os.path.basename(raw) or 'a file'} is not on disk any more")
+                paths.append(full)
+
+            fmt = str(body.get("format") or ("mp4" if scope == "clip" else "png")).lower()
+            name = body.get("name") or (os.path.splitext(os.path.basename(paths[0]))[0] if paths else "export")
+            try:
+                if scope == "frame":
+                    where = export_rules.target("frame", name, "png", out_dir, body.get("context"))
+                    if body.get("dataurl"):
+                        raw_png, _ext = _decode_image_upload(body.get("dataurl"), force_png=True)
+
+                        def work():
+                            os.makedirs(where["folder"], exist_ok=True)
+                            with open(where["path"], "wb") as fh:
+                                fh.write(raw_png)
+                            return {"path": where["path"], "frames": 1}
+                    elif not paths:
+                        return web.Response(status=400, text="there is nothing on screen that has a file")
+                    else:
+                        src = paths[0] if export_view.is_video(paths[0]) or len(paths) == 1 \
+                            else paths[min(index, len(paths) - 1)]
+
+                        def work():
+                            return export_view.write_png(export_view.frame_of(src, index, cs), where["path"])
+                else:
+                    if fmt not in timeline_render.FORMATS:
+                        return web.Response(status=400, text=f"unknown format: {fmt}")
+                    if not paths:
+                        return web.Response(status=400, text="a clip only the browser holds cannot be exported whole "
+                                                             "- export its frame, or open it from a folder")
+                    where = export_rules.target("video", name, fmt, out_dir, body.get("context"))
+                    codec, quality = body.get("codec"), str(body.get("quality") or "high")
+                    if export_view.is_video(paths[0]):
+                        def work():
+                            return export_view.write_video_clip(paths[0], where["path"], fmt, codec, quality,
+                                                                path_access.is_allowed)
+                    else:
+                        fps = body.get("fps")
+
+                        def work():
+                            return export_view.write_sequence(paths, where["path"], fps, fmt, codec, quality, cs)
+                got = await asyncio.get_running_loop().run_in_executor(None, work)
+            except ValueError as exc:                       # ExportError and RenderError are
+                return web.Response(status=422, text=f"not exported: {exc}")
+            except OSError as exc:
+                return web.Response(status=500, text=f"not exported: {exc}")
+            got = dict(got, name=os.path.basename(got["path"]), relative=where["relative"],
+                       version=where["version"], kind="video" if scope == "clip" else "image")
+            return web.json_response(got, headers={"Cache-Control": "no-cache"})
 
         async def _bepic_raw_view(request):
             params = dict(request.query)
@@ -970,7 +1080,8 @@ try:
                 stem = os.path.splitext(os.path.basename(str(data.get("name") or "clip")))[0]
                 stem = "".join(c for c in stem if c.isalnum() or c in ("_", "-")) or "clip"
                 try:
-                    folder = media_resolve.extract_dir_fallback()
+                    folder = media_resolve.extract_dir(data.get("context")) if data.get("rule") \
+                        else media_resolve.extract_dir_fallback()
                     os.makedirs(folder, exist_ok=True)
                     # Same naming as a server-side extract, so a folder of frames
                     # reads the same however they got there.
@@ -995,8 +1106,12 @@ try:
                     {"error": f"could not find {raw_path!r} on disk"}, status=404)
 
             try:
-                out = media_resolve.extract_frame(
-                    path, frame, beside=path_access.in_comfy_dirs(path))
+                if data.get("rule"):
+                    out = media_resolve.extract_frame(path, frame, beside=False,
+                                                      folder=media_resolve.extract_dir(data.get("context")))
+                else:
+                    out = media_resolve.extract_frame(
+                        path, frame, beside=path_access.in_comfy_dirs(path))
             except ValueError as e:
                 return web.json_response({"error": str(e)}, status=422)
             except Exception as e:
@@ -1138,6 +1253,21 @@ try:
         async def _bepic_scene_load(request):
             if previz is None:
                 return web.json_response({"error": "unavailable"}, status=500)
+            raw = request.query.get("path", "")
+            if raw:
+                # A scene picked in the file picker: anywhere the viewer may read.
+                path = os.path.abspath(raw)
+                if os.path.splitext(path)[1].lower() != ".json":
+                    return web.json_response({"error": "a scene is a .json file"}, status=400)
+                if not path_access.is_allowed(path):
+                    return web.json_response({"error": path_access.refusal(path)}, status=403)
+                if not os.path.isfile(path):
+                    return web.json_response({"error": "no such scene"}, status=404)
+                try:
+                    return web.json_response({"name": os.path.basename(path), "path": path,
+                                              "scene": previz.load_scene_at(path)})
+                except Exception as e:
+                    return web.json_response({"error": str(e)}, status=400)
             name = request.query.get("name", "")
             if not name:
                 return web.json_response({"error": "missing name"}, status=400)
@@ -1158,6 +1288,19 @@ try:
             if not isinstance(data, dict) or not isinstance(data.get("scene"), dict):
                 return web.json_response({"error": "bad request"}, status=400)
             name = data.get("name") or "scene"
+            if data.get("rule"):
+                # Saved where every export goes, as the next version (export_rules).
+                from . import export_rules
+                try:
+                    where = export_rules.target("scene", name, "json",
+                                                folder_paths.get_output_directory(), data.get("context"))
+                    path = previz.save_scene_at(where["path"], data["scene"])
+                except ValueError as e:
+                    return web.json_response({"error": str(e)}, status=400)
+                except OSError as e:
+                    return web.json_response({"error": str(e)}, status=500)
+                return web.json_response({"ok": True, "name": os.path.basename(path), "path": path,
+                                          "relative": where["relative"], "version": where["version"]})
             try:
                 path = previz.save_scene(name, data["scene"])
             except OSError as e:
@@ -1226,14 +1369,49 @@ try:
             from . import export_rules
             codec = export_rules.video_settings(fmt, data.get("codec"), quality)["codec"] \
                 if data.get("codec") else None
+            where = None
+            if data.get("rule"):
+                try:
+                    where = export_rules.target("video", name, fmt, folder_paths.get_output_directory(),
+                                                data.get("context"))
+                except ValueError as e:
+                    return web.json_response({"error": str(e)}, status=400)
             try:
-                path = previz.encode_render(name, fps, fmt, quality, codec)
+                path = previz.encode_render(name, fps, fmt, quality, codec,
+                                            out=where["path"] if where else None)
             except ValueError as e:
                 return web.json_response({"error": str(e)}, status=400)
             except Exception as e:
                 return web.json_response({"error": str(e)}, status=500)
             return web.json_response({"ok": True, "path": path,
-                                      "name": previz._safe_name(name)})
+                                      "name": previz._safe_name(name),
+                                      "relative": where["relative"] if where else
+                                      f"{previz.RENDERS_DIRNAME}/{os.path.basename(path)}"})
+
+        async def _bepic_previz_publish(request):
+            """Put a finished take kept as stills where every export goes: its
+            frames leave the working folder for the next version's."""
+            if previz is None:
+                return web.json_response({"error": "unavailable"}, status=500)
+            try:
+                data = await request.json()
+            except Exception:
+                data = None
+            if not isinstance(data, dict):
+                return web.json_response({"error": "bad request"}, status=400)
+            name = data.get("name") or "shot"
+            from . import export_rules
+            try:
+                seq = export_rules.sequence_target("frame", name, "png",
+                                                   folder_paths.get_output_directory(), data.get("context"))
+                paths = previz.publish_frames(name, seq)
+            except ValueError as e:
+                return web.json_response({"error": str(e)}, status=400)
+            except OSError as e:
+                return web.json_response({"error": str(e)}, status=500)
+            return web.json_response({"ok": True, "dir": seq["folder"], "path": paths[0],
+                                      "paths": paths, "count": len(paths), "relative": seq["relative"],
+                                      "version": seq["version"]})
 
         async def _bepic_usd_export(request):
             """Write a previz scene out as a USD stage."""
@@ -1254,6 +1432,17 @@ try:
                     return web.json_response({"error": path_access.refusal(target)}, status=403)
                 if not usd_io.is_usd(target):
                     return web.json_response({"error": "that name is not a USD file"}, status=400)
+            elif data.get("rule"):
+                # Exported where every export goes, as the next version.
+                from . import export_rules
+                ext = "usdc" if str(data.get("format", "")).lower() == "usdc" else "usda"
+                try:
+                    where = export_rules.target("stage", data.get("name") or "previz", ext,
+                                                folder_paths.get_output_directory(), data.get("context"))
+                except ValueError as e:
+                    return web.json_response({"error": str(e)}, status=400)
+                target = where["path"]
+                os.makedirs(os.path.dirname(target), exist_ok=True)
             else:
                 name = previz._safe_name(data.get("name") or "previz") if previz else "previz"
                 ext = "usdc" if str(data.get("format", "")).lower() == "usdc" else "usda"
@@ -1263,8 +1452,12 @@ try:
                 written = usd_io.export_scene(data["scene"], target)
             except Exception as e:
                 return web.json_response({"error": str(e)}, status=400)
+            root = os.path.abspath(folder_paths.get_output_directory())
+            inside = os.path.abspath(written).startswith(root + os.sep)
             return web.json_response({"ok": True, "path": written,
-                                      "name": os.path.basename(written)})
+                                      "name": os.path.basename(written),
+                                      "relative": os.path.relpath(written, root).replace("\\", "/")
+                                      if inside else ""})
 
         async def _bepic_usd_import(request):
             """Read a USD stage — or an Alembic cache — into a previz scene."""
@@ -1410,6 +1603,12 @@ try:
         _safe_add("GET", "/api/bepic/export_options", _bepic_export_options)
         _safe_add("POST", "/bepic/export_target", _bepic_export_target)
         _safe_add("POST", "/api/bepic/export_target", _bepic_export_target)
+        _safe_add("POST", "/bepic/export_places", _bepic_export_places)
+        _safe_add("POST", "/bepic/export_view", _bepic_export_view)
+        _safe_add("POST", "/api/bepic/export_view", _bepic_export_view)
+        _safe_add("POST", "/api/bepic/export_places", _bepic_export_places)
+        _safe_add("POST", "/bepic/previz_publish", _bepic_previz_publish)
+        _safe_add("POST", "/api/bepic/previz_publish", _bepic_previz_publish)
         _safe_add("GET", "/bepic/raw_view", _bepic_raw_view)
         _safe_add("GET", "/api/bepic/raw_view", _bepic_raw_view)
         _safe_add("POST", "/bepic/probe_paths", _bepic_probe_paths)

@@ -201,9 +201,9 @@ const ACTION_DEFS = [
       enabled: (p) => _previz(p) && !!(p.previzHasWorld && p.previzHasWorld()), run: (p) => p.previzWalkToggle() },
     { key: "WorldNote", label: "World: Pin a Note", combo: { key: "N", shift: true },
       enabled: (p) => _previz(p) && !!(p.previzHasWorld && p.previzHasWorld()), run: (p) => p.previzFeedbackPlace() },
-    { key: "PrevizImportUsd", label: "Previz: Import USD…",
+    { key: "PrevizImportUsd", label: "Previz: Open USD / Alembic…",
       enabled: _previz, run: (p) => p.previzImportUsd() },
-    { key: "PrevizLoadScene", label: "Previz: Load Scene…",
+    { key: "PrevizLoadScene", label: "Previz: Open Scene…",
       enabled: _previz, run: (p) => p.previzLoadSceneFile() },
     { key: "PrevizSaveScene", label: "Previz: Save Scene…",
       enabled: _previz, run: (p) => p.previzSaveSceneFile() },
@@ -211,6 +211,8 @@ const ACTION_DEFS = [
       enabled: _previz, run: (p) => p.previzExportUsd() },
     { key: "PrevizRender",    label: "Previz: Render…",
       enabled: _previz, run: (p) => p.previzRenderDialog() },
+
+    { key: "ExportView",      label: "Export Frame or Clip…", run: (p) => p.exportViewDialog() },
 
     // How the canvas looks, and what is open beside it.
     { key: "View3DOriginal",  label: "3D View: Original Materials",

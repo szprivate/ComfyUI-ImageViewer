@@ -12,6 +12,7 @@
 import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
 import * as S from "./bEpicViewer_scene3d.js";
+import { notice, openExportDialog, openFilePicker } from "./bEpicViewer_exportUI.js";
 
 // Maya's manipulator keys, which is what the hotkeys below bind to.
 export const PrevizMixin = {
@@ -1038,16 +1039,9 @@ export const PrevizMixin = {
         editBtn.textContent = "\u270e";         // stands in if the skin is missing
         this._setIcon(editBtn, "icon-square-pen");
         editBtn.onclick = () => this._previzToggleEditMenu(editBtn);
-        const addBtn = el("button", "previz-btn previz-add previz-icon");
-        addBtn.title = "Add a model, a camera, a group or a shape";
-        addBtn.textContent = "+";               // stands in if the skin is missing
-        this._setIcon(addBtn, "icon-circle-plus");
-        addBtn.onclick = () => this._previzToggleAddMenu(addBtn);
-        const exportBtn = el("button", "previz-btn previz-icon");
-        exportBtn.title = "Save, export or render this shot";
-        exportBtn.textContent = "\u2193";
-        this._setIcon(exportBtn, "icon-save");
-        exportBtn.onclick = () => this._previzToggleExportMenu(exportBtn);
+        // Add and Export are in the panel's title bar, where every panel that
+        // has them keeps them (DOCK_PANELS in bEpicViewer_mixinDock.js).
+        this._previzBindDrops(host);
         const undoBtn = el("button", "previz-btn previz-step");
         undoBtn.textContent = "↩";              // stands in if the skin is missing
         this._setIcon(undoBtn, "icon-undo");
@@ -1072,7 +1066,7 @@ export const PrevizMixin = {
         const noteBtn = el("button", "previz-btn previz-world", "Note");
         noteBtn.title = "Pin a note to a spot — Shift+N. The agent that built the world reads it, with a snapshot";
         noteBtn.onclick = () => this.previzFeedbackPlace();
-        actions.append(newBtn, editBtn, addBtn, exportBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn);
+        actions.append(newBtn, editBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn);
 
         const list = el("div", "previz-list");
         // The space below the tree is "no parent": dropping a row here lifts it
@@ -1264,6 +1258,51 @@ export const PrevizMixin = {
         return ok.length;
     },
 
+    /**
+     * Files dropped on the Outliner go into the scene - the same payload the
+     * Edit panel and the viewport take (rows of the file browser, history
+     * thumbs): a model as a model, a picture as an image plane.
+     */
+    _previzBindDrops(host) {
+        if (!host || host._bepicDrops) return;
+        host._bepicDrops = true;
+        const TYPE = "application/x-bepic-history";
+        const carries = (e) => !this._previzDragItem && e.dataTransfer
+            && [...(e.dataTransfer.types || [])].includes(TYPE);
+        host.addEventListener("dragover", (e) => {
+            if (!carries(e)) return;
+            e.preventDefault();
+            try { e.dataTransfer.dropEffect = "copy"; } catch (_) {}
+        });
+        host.addEventListener("drop", (e) => {
+            if (!carries(e)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            let payload = null;
+            try { payload = JSON.parse(e.dataTransfer.getData(TYPE)); } catch (_) {}
+            this.previzAddDropped((payload && payload.items) || []);
+        });
+    },
+
+    /** Put dropped files into the scene; says what it left out. */
+    previzAddDropped(items) {
+        if (!this.previzScene()) return 0;
+        const models = (items || []).filter((it) => it && this._frameIsModel(it));
+        const pictures = (items || []).filter((it) => it && it.path && !this._frameIsModel(it)
+            && !this._frameIsVideo(it) && !it.isSequence);
+        if (models.length) this.previzAddModels(models);
+        for (const pic of pictures) {
+            this.previzAddImagePlane({ path: pic.path, name: pic.filename || pic.name
+                || String(pic.path).split(/[\\/]/).pop(), external: true });
+        }
+        const left = (items || []).length - models.length - pictures.length;
+        if (left > 0) {
+            notice("warn", "Not everything was added",
+                   `${left} item${left === 1 ? "" : "s"} left out: a scene takes models and single pictures.`);
+        }
+        return models.length + pictures.length;
+    },
+
     /** Everything that puts something INTO the scene, under one button. */
     _previzToggleAddMenu(anchor) {
         if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
@@ -1280,8 +1319,10 @@ export const PrevizMixin = {
         entries.push("-");
         entries.push(...this._previzWorldMenuEntries());
         entries.push("-");
-        entries.push({ label: "Import USD / Alembic\u2026", run: () => this.previzImportUsd() });
-        entries.push({ label: "Load scene\u2026", run: () => this.previzLoadSceneFile() });
+        // These two REPLACE the scene rather than add to it - "Open", in the
+        // viewer's vocabulary - and sit last for that reason.
+        entries.push({ label: "Open scene\u2026", run: () => this.previzLoadSceneFile() });
+        entries.push({ label: "Open USD / Alembic\u2026", run: () => this.previzImportUsd() });
         const a = anchor.getBoundingClientRect();
         this._previzOpenMenu(entries, a.left, a.bottom + 2, anchor);
     },
@@ -1805,56 +1846,61 @@ export const PrevizMixin = {
 
     // ── Scene files ──────────────────────────────────────────────────────────
 
+    /** Save the scene as a file: a new version each time, where every export goes. */
     async previzSaveSceneFile() {
         const scene = this.previzScene();
         if (!scene) return;
-        const win = this._viewerWindow();
-        const name = win.prompt("Save this scene as", this.previzRenderName());
-        if (!name) return;
-        try {
-            const res = await fetch(api.apiURL("/bepic/scene"), {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name, scene }),
-            });
-            const data = await res.json().catch(() => ({}));
-            const view = this._modelView();
-            view._setStatus(res.ok ? `Saved as output/3d_scenes/${data.name}.json`
-                : `Could not save: ${data.error || res.status}`, !res.ok);
-            win.setTimeout(() => view._setStatus(""), 4000);
-        } catch (e) {
-            console.warn("[bEpicViewer] could not save the scene", e);
-        }
+        await openExportDialog(this.container, {
+            title: "Save scene",
+            kind: "scene",
+            name: this.previzRenderName(),
+            fixed: [{ value: "json", label: "Scene (.json)" }],
+            go: "Save",
+            note: "Each save is a new version, so an earlier one is never written over. "
+                + "Open scene\u2026 reads any of them back.",
+            onExport: async (v) => {
+                const res = await fetch(api.apiURL("/bepic/scene"), {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name: v.name, scene, rule: true, context: v.context }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) return { ok: false, message: `Could not save: ${data.error || res.status}` };
+                notice("success", "Scene saved", "output/" + (data.relative || data.name));
+                return { ok: true };
+            },
+        });
+    },
+
+    /** Put a scene read from a file in this tab, in place of the one there. */
+    _previzOpenScene(data) {
+        const scene = S.parseScene(data);
+        if (!scene.items.length) throw new Error("that file has nothing this viewer can place");
+        this._setScene(this.activeTab, scene);
+        this._previzSelection = scene.items[0].id;
+        this.applyTimelineBounds();
+        this.setFrame(0);
+        return scene;
     },
 
     async previzLoadSceneFile() {
-        const win = this._viewerWindow();
-        let names = [];
-        try {
-            const res = await fetch(api.apiURL("/bepic/scenes"));
-            const data = await res.json();
-            names = (data.scenes || []).map((s) => s.name);
-        } catch (e) { /* offline: fall through to the prompt */ }
-        const pick = win.prompt(
-            names.length ? `Load which scene?\n${names.join("\n")}` : "Load which scene?",
-            names[0] || "");
-        if (!pick) return;
-        try {
-            const res = await fetch(api.apiURL(`/bepic/scene?name=${encodeURIComponent(pick)}`));
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.error || res.status);
-            const scene = S.parseScene(data.scene);
-            this._setScene(this.activeTab, scene);
-            this._previzSelection = scene.items.length ? scene.items[0].id : null;
-            this.applyTimelineBounds();
-            this.setFrame(0);
-            this.previzChanged({ reload: true });
-        } catch (e) {
-            console.warn("[bEpicViewer] could not load the scene", e);
-            const view = this._modelView();
-            view._setStatus(`Could not load that scene.\n${(e && e.message) || e}`, true);
-            win.setTimeout(() => view._setStatus(""), 4000);
-        }
+        await openFilePicker(this.container, {
+            id: "scene",
+            title: "Open scene",
+            kind: "scene",
+            exts: [".json"],
+            go: "Open",
+            note: "Replaces the scene in this tab.",
+            onPick: async ([file]) => {
+                const res = await fetch(api.apiURL(`/bepic/scene?path=${encodeURIComponent(file.path)}`));
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) return { ok: false, message: `Could not open ${file.name}: ${data.error || res.status}` };
+                this._previzOpenScene(data.scene);
+                this.previzChanged({ reload: true });
+                notice("info", "Scene opened", file.name);
+                return { ok: true };
+            },
+        });
     },
 
     // ── USD stages ───────────────────────────────────────────────────────────
@@ -1863,74 +1909,48 @@ export const PrevizMixin = {
     async previzExportUsd() {
         const scene = this.previzScene();
         if (!scene) return;
-        const win = this._viewerWindow();
-        const name = win.prompt(
-            "Export this shot as a USD stage.\n\n" +
-            "A name lands in output/3d_scenes; a full path (.usda / .usdc) writes there.",
-            this.previzRenderName());
-        if (!name) return;
-        const body = /[\\/]/.test(name) ? { scene, path: name } : { scene, name };
-        const view = this._modelView();
-        try {
-            const res = await fetch(api.apiURL("/bepic/usd_export"), {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(body),
-            });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(data.error || `the server answered ${res.status}`);
-            view._setStatus(`Exported ${data.name}`);
-        } catch (e) {
-            console.warn("[bEpicViewer] USD export failed", e);
-            view._setStatus(`Could not export the stage.\n${(e && e.message) || e}`, true);
-        }
-        win.setTimeout(() => view._setStatus(""), 5000);
+        await openExportDialog(this.container, {
+            title: "Export USD",
+            kind: "stage",
+            name: this.previzRenderName(),
+            fixed: [{ value: "usda", label: "USD, text (.usda)" }, { value: "usdc", label: "USD, binary (.usdc)" }],
+            values: this._previzUsdExport,
+            onExport: async (v) => {
+                this._previzUsdExport = { format: v.format };
+                const res = await fetch(api.apiURL("/bepic/usd_export"), {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ scene, name: v.name, format: v.format, rule: true, context: v.context }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) return { ok: false, message: `Could not export the stage: ${data.error || res.status}` };
+                notice("success", "USD stage exported", data.relative ? "output/" + data.relative : data.path);
+                return { ok: true };
+            },
+        });
     },
 
-    /** Replace the scene with one read from a USD stage. */
+    /** Replace the scene with one read from a USD stage or an Alembic cache. */
     async previzImportUsd() {
-        const win = this._viewerWindow();
-        let listed = [];
-        try {
-            const res = await fetch(api.apiURL("/bepic/usd_stages"));
-            const data = await res.json();
-            listed = (data.stages || []).map((s) => s.name);
-        } catch (e) { /* offline: the prompt still takes a path */ }
-        const pick = win.prompt(
-            "Import a USD stage or an Alembic cache — a full path, or a name from output/3d_scenes." +
-            (listed.length ? `\n\n${listed.join("\n")}` : ""),
-            listed[0] || "");
-        if (!pick) return;
-        const view = this._modelView();
-        try {
-            const path = /[\\/]/.test(pick) ? pick : `${await this._previzScenesDir()}/${pick}`;
-            const res = await fetch(api.apiURL(`/bepic/usd_import?path=${encodeURIComponent(path)}`));
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(data.error || `the server answered ${res.status}`);
-            const scene = S.parseScene(data.scene);
-            if (!scene.items.length) throw new Error("that stage has nothing this viewer can place");
-            this._setScene(this.activeTab, scene);
-            this._previzSelection = scene.items[0].id;
-            this.applyTimelineBounds();
-            this.setFrame(0);
-            await this.previzChanged({ reload: true });
-            if (this._model3d) this._model3d.resetView();
-            view._setStatus(`Imported ${scene.items.length} item${scene.items.length === 1 ? "" : "s"}`);
-        } catch (e) {
-            console.warn("[bEpicViewer] USD import failed", e);
-            view._setStatus(`Could not import that stage.\n${(e && e.message) || e}`, true);
-        }
-        win.setTimeout(() => view._setStatus(""), 5000);
-    },
-
-    async _previzScenesDir() {
-        if (this._previzScenesFolder) return this._previzScenesFolder;
-        try {
-            const res = await fetch(api.apiURL("/bepic/usd_stages"));
-            const data = await res.json();
-            if (data.dir) this._previzScenesFolder = data.dir;
-        } catch (e) { /* the prompt's own path still works */ }
-        return this._previzScenesFolder || "";
+        await openFilePicker(this.container, {
+            id: "stage",
+            title: "Open USD / Alembic",
+            kind: "stage",
+            exts: [".usd", ".usda", ".usdc", ".usdz", ".abc"],
+            go: "Open",
+            note: "Replaces the scene in this tab with what the stage or cache holds.",
+            onPick: async ([file]) => {
+                const res = await fetch(api.apiURL(`/bepic/usd_import?path=${encodeURIComponent(file.path)}`));
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) return { ok: false, message: `Could not open ${file.name}: ${data.error || res.status}` };
+                const scene = this._previzOpenScene(data.scene);
+                await this.previzChanged({ reload: true });
+                if (this._model3d) this._model3d.resetView();
+                notice("info", "Stage opened",
+                       `${file.name}: ${scene.items.length} item${scene.items.length === 1 ? "" : "s"}`);
+                return { ok: true };
+            },
+        });
     },
 
     /** + Model: take the file browser's selection, or open it to make one. */

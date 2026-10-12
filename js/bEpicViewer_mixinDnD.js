@@ -32,7 +32,7 @@
 //      through the same route as 2, replacement onto an existing node included.
 import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
-import { notice } from "./bEpicViewer_exportUI.js";
+import { canvasContext, notice } from "./bEpicViewer_exportUI.js";
 
 // What went wrong, as a toast: a failed drop must not stop the page for it.
 const say = (text) => notice("error", "bEpic Viewer", String(text).replace(/^bEpic Viewer \u2013 /, ""));
@@ -455,7 +455,8 @@ export const DnDMixin = {
      */
     async _extractedFramePayload(p) {
         const frame = Math.max(0, Math.floor(p.extractFrame || 0));
-        const body  = { frame };
+        // Written where the rule every export follows puts frames.
+        const body  = { frame, rule: true, context: canvasContext() };
 
         if (p.dropped || (!p.path && !p.filename)) {
             const dataurl = this._grabVideoFrameDataUrl();

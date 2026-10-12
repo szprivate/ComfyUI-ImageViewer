@@ -537,11 +537,31 @@ def extract_dir_fallback():
     return os.path.join(folder_paths.get_output_directory(), _EXTRACT_DIR)
 
 
-def _extract_targets(video_path, name, beside=True):
+def extract_dir(context=None):
+    """Where extracted frames go by the rule every export follows
+    (export_rules): the shot's images folder when the canvas names a shot, the
+    viewer's own otherwise - in a `frames` folder of their own, because these
+    are named after the clip and its frame and so are not versioned: the same
+    frame dragged out twice is the same file."""
+    from . import export_rules
+    out = folder_paths.get_output_directory()
+    ctx = export_rules.context_of(context)
+    if ctx:
+        seq, shot = ctx
+        return os.path.join(out, *([seq] if seq else []), shot, export_rules.KINDS["frame"], "frames")
+    return os.path.join(out, export_rules.FALLBACK_ROOT, export_rules.KINDS["frame"], "frames")
+
+
+def _extract_targets(video_path, name, beside=True, folder=None):
     """Where an extracted frame may be written, best first. `beside` allows the
     clip's own folder; the caller decides whether it is one the viewer may
-    write into."""
+    write into. `folder` is the one place the rule names, used alone."""
     targets = []
+    if folder:
+        stem, ext = os.path.splitext(name)
+        tag = hashlib.sha1(os.path.normcase(os.path.abspath(video_path))
+                           .encode("utf-8", "replace")).hexdigest()[:8]
+        return [os.path.join(folder, f"{stem}_{tag}{ext}")]
     folder = os.path.dirname(video_path)
     if folder and beside:
         targets.append(os.path.join(folder, name))
@@ -566,7 +586,7 @@ def extract_frame_name(video_path, index):
     return f"{stem}_f{int(index):05d}.png"
 
 
-def extract_frame(video_path, index, beside=True):
+def extract_frame(video_path, index, beside=True, folder=None):
     """Write frame `index` of `video_path` out as a PNG and return its path —
     next to the clip when `beside`, else in ./output/extracted_frames.
 
@@ -577,7 +597,7 @@ def extract_frame(video_path, index, beside=True):
     from PIL import Image
 
     index = max(0, int(index))
-    targets = _extract_targets(video_path, extract_frame_name(video_path, index), beside)
+    targets = _extract_targets(video_path, extract_frame_name(video_path, index), beside, folder)
     if not targets:
         raise ValueError("nowhere to write the extracted frame")
     for dst in targets:

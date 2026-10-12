@@ -31,14 +31,21 @@ import { api } from "../../scripts/api.js";
 
 // The dockable panels, and the room each one needs to stay usable.
 const DOCK_PANELS = {
-    history: { prop: "historyPanel", label: "History",    minW: 60,  minH: 90,  defaultRail: "left"  },
+    // `add` / `export` name the panel's two ways in and out, when it has them:
+    // the same two buttons in the same place on every panel that holds something
+    // files go into or come out of (_ensurePanelTitlebar). Each is a method
+    // name, called with the button, so a panel may hang a menu off it.
+    history: { prop: "historyPanel", label: "History",    minW: 60,  minH: 90,  defaultRail: "left",
+               export: "exportViewDialog", exportTitle: "Export what is on screen: the current frame, or the whole clip" },
     // Enough for the header, the path field, a list worth reading and the
     // buttons; the preview shrinks into whatever is left over.
     browser: { prop: "browserPanel", label: "Files",      minW: 180, minH: 220, defaultRail: "right" },
     params:  { prop: "paramsPanel",  label: "Parameters", minW: 200, minH: 120, defaultRail: "right" },
     // The outliner: the scene's tree and the buttons over it. Its numbers
     // live next door, in the Channel Box, so each can be sized on its own.
-    previz:  { prop: "previzPanel",  label: "Outliner",   minW: 190, minH: 140, defaultRail: "right" },
+    previz:  { prop: "previzPanel",  label: "Outliner",   minW: 190, minH: 140, defaultRail: "right",
+               add: "_previzToggleAddMenu", addTitle: "Add a model, a camera, a group or a shape - or open a scene",
+               export: "_previzToggleExportMenu", exportTitle: "Save, export or render this shot" },
     channels: { prop: "channelsPanel", label: "Channel Box", minW: 190, minH: 160, defaultRail: "right" },
     // A graph is only readable with some height under it, so this one asks for
     // more than the rest; the channel buttons set the width.
@@ -52,7 +59,9 @@ const DOCK_PANELS = {
     // The cut that lies beside a film, to read and to change
     // (bEpicViewer_editTimeline.js); the transport's timeline button opens it. A
     // timeline wants width, so it starts under the picture.
-    editTimeline: { prop: "editTimelinePanel", label: "Edit", minW: 320, minH: 150, defaultRail: "bottom" },
+    editTimeline: { prop: "editTimelinePanel", label: "Edit", minW: 320, minH: 150, defaultRail: "bottom",
+                    add: "_editTlAddMenu", addTitle: "Add clips to the cut: files, or the nodes selected on the canvas",
+                    export: "_editTlRender", exportTitle: "Export this cut as a film" },
     // (The drawing tools' options have no panel of their own: while a tool is
     // on they take the Parameters panel over — ToolsMixin._toolShowDock.)
 };
@@ -97,6 +106,9 @@ export const DockMixin = {
         this._bindRailSplitters();
         this._bindDockDrag();
         this.applyDockLayout();
+        // The lower bar's own two: the timeline and the export, there from the start.
+        if (this._editTlButton) this._editTlButton();
+        if (this._exportViewButton) this._exportViewButton();
     },
 
     /**
@@ -532,7 +544,23 @@ export const DockMixin = {
             hide.title = "Hide this panel";
             hide.textContent = "\u2715";
 
-            bar.append(grip, name, hide);
+            bar.append(grip, name);
+            // In and out, where the panel has them: always these two, always here.
+            const spec = DOCK_PANELS[id];
+            for (const [what, glyph] of [["add", "\uff0b"], ["export", "\u2193"]]) {
+                if (!spec[what]) continue;
+                const b = doc.createElement("button");
+                b.className = `pt-btn pt-${what}`;
+                b.textContent = glyph;
+                b.title = spec[what + "Title"] || (what === "add" ? "Add" : "Export");
+                b.addEventListener("pointerdown", (e) => e.stopPropagation());
+                b.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    if (typeof this[spec[what]] === "function") this[spec[what]](b);
+                });
+                bar.append(b);
+            }
+            bar.append(hide);
             el.insertBefore(bar, el.firstChild);
 
             hide.addEventListener("pointerdown", (e) => e.stopPropagation());

@@ -668,6 +668,10 @@ textarea.param-input {
 .pt-btn:hover { color: #fff; background: rgba(255,255,255,0.08); }
 .pt-btn > svg { width: 12px; height: 12px; }
 .pt-close:hover { color: #fff; background: rgba(229,72,77,0.75); }
+/* A panel's ways in and out: the same two, in the same place, on each that has them. */
+.pt-add, .pt-export { font-size: 12px; min-width: 16px; }
+.pt-btn:disabled { opacity: 0.35; cursor: default; }
+.export-view-btn.busy { color: #f60; }
 
 /* Drag-to-dock: a preview of where the panel would land, and a label under the
    cursor. Lives inside .main-area, so it travels with the panel when the whole
@@ -1251,3 +1255,25 @@ textarea.param-input {
 .export-where { font-family: monospace; color: #9cc; word-break: break-all; }
 .export-note { margin: 6px 0 0 98px; max-width: 330px; line-height: 1.35; }
 .export-foot { justify-content: flex-end; margin-top: 10px; }
+
+/* The file picker (bEpicViewer_exportUI.js): the file browser's listing as a
+   question. The same box as the export dialog, a little wider for names. */
+.pick-box { width: min(560px, calc(100% - 32px)); }
+.pick-bar { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.pick-jump { flex: 0 0 110px; min-width: 0; }
+.pick-path { flex: 1; min-width: 0; font-family: monospace; font-size: 11px; }
+.pick-list {
+    height: 260px; overflow-y: auto; margin-top: 6px; background: #111;
+    border: 1px solid #333; border-radius: 3px; user-select: none;
+}
+.pick-list:focus { outline: none; border-color: #555; }
+.pick-row { display: flex; align-items: baseline; gap: 10px; padding: 2px 8px; cursor: default; white-space: nowrap; }
+.pick-row:hover { background: #222; }
+.pick-row.sel { background: #1d4d63; color: #fff; }
+.pick-row.dir { cursor: pointer; }
+.pick-row.dir .pick-name { color: #9cc; }
+.pick-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pick-meta { color: #777; font-size: 10px; }
+.pick-row.sel .pick-meta { color: #bcd; }
+.pick-empty { padding: 12px; color: #777; }
+.pick-note { margin-top: 6px; line-height: 1.35; }

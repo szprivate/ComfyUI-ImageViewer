@@ -30,6 +30,7 @@ import { PrevizChannelsMixin } from "./bEpicViewer_previzChannels.js";
 import { PrevizRenderMixin } from "./bEpicViewer_previzRender.js";
 import { PrevizUndoMixin } from "./bEpicViewer_previzUndo.js";
 import { EditTimelineMixin } from "./bEpicViewer_editTimeline.js";
+import { ExportViewMixin } from "./bEpicViewer_exportView.js";
 import { SendFromNodeMixin, registerSendToViewerMenu, sendSelectionToViewer } from "./bEpicViewer_sendFromNode.js";
 import {
     registerSendNode, registerToolNode, senderTabInfo, isViewerSourceNode, BEPIC_SCENE_NODE,
@@ -1259,6 +1260,7 @@ Object.assign(
     PrevizRenderMixin,
     PrevizUndoMixin,
     EditTimelineMixin,
+    ExportViewMixin,
     PrevizWorldMixin,
     PrefsMixin,
 );

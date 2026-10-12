@@ -194,3 +194,49 @@ def target(kind, name, ext, output_dir, context=None, version=None):
         raise ValueError("the export would land outside the output folder")
     return {"path": path, "version": v, "folder": os.path.dirname(path), "layout": layout,
             "relative": os.path.relpath(path, root).replace("\\", "/"), "exists": os.path.exists(path)}
+
+
+def sequence_target(kind, name, ext, output_dir, context=None, version=None):
+    """Where a numbered sequence goes: ``{"folder", "stem", "version", "layout",
+    "relative"}``; frame *n* is ``<folder>/<stem>.<n, four digits>.<ext>``
+    (:func:`sequence_frame`).
+
+    The same rule as one file, :func:`target`, and the same versions. In a shot
+    the frames lie in the version's folder, as the path nodes lay them; without
+    one they get a folder of their own name, so two sequences do not mix.
+    """
+    one = target(kind, name, ext, output_dir, context, version)
+    stem = os.path.splitext(os.path.basename(one["path"]))[0]
+    folder = one["folder"] if one["layout"] == "shot" else os.path.join(one["folder"], stem)
+    root = os.path.abspath(output_dir)
+    rel = os.path.relpath(folder, root).replace("\\", "/")
+    return {"folder": folder, "stem": stem, "ext": ext.lower().lstrip("."), "version": one["version"],
+            "layout": one["layout"], "relative": f"{rel}/{stem}.####.{ext.lower().lstrip('.')}"}
+
+
+def sequence_frame(seq, index):
+    return os.path.join(seq["folder"], f"{seq['stem']}.{int(index):04d}.{seq['ext']}")
+
+
+# Where each kind was written before there was a rule. Nothing is moved out of
+# these: they are only still offered, so what was saved earlier stays in reach.
+LEGACY = {"scene": "3d_scenes", "stage": "3d_scenes", "video": "previz",
+          "frame": "extracted_frames", "annotation": "annotations", "edit": "edits"}
+
+
+def places(kind, output_dir, context=None):
+    """The folders a file of *kind* is looked for in, best first:
+    ``[{"label", "path"}]`` - the shot's, the viewer's own, where it used to be
+    written, and the output folder itself. Only the ones that exist."""
+    if kind not in KINDS:
+        raise ValueError(f"unknown kind of export: {kind}")
+    out = []
+    ctx = context_of(context)
+    if ctx:
+        seq, shot = ctx
+        out.append((f"This shot ({shot})", os.path.join(output_dir, *([seq] if seq else []), shot, KINDS[kind])))
+    out.append(("Viewer exports", os.path.join(output_dir, FALLBACK_ROOT, KINDS[kind])))
+    if kind in LEGACY:
+        out.append((f"Earlier ({LEGACY[kind]})", os.path.join(output_dir, LEGACY[kind])))
+    out.append(("Output folder", output_dir))
+    return [{"label": label, "path": os.path.abspath(path)} for label, path in out if os.path.isdir(path)]

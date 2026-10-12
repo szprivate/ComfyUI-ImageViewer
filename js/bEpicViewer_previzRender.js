@@ -14,6 +14,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import * as S from "./bEpicViewer_scene3d.js";
+import { canvasContext, exportTarget, notice } from "./bEpicViewer_exportUI.js";
 
 // What a container holds is one rule for the whole viewer (export_rules.py): MOV
 // is ProRes unless H.264 is picked, so the label no longer names a codec for it.
@@ -235,6 +236,7 @@ export const PrevizRenderMixin = {
         shade.append(box);
         host.append(shade);
 
+        let whereAsked = 0;
         const read = () => ({
             name: (name.value || "").trim() || "shot",
             format: format.value, quality: quality.value,
@@ -270,8 +272,18 @@ export const PrevizRenderMixin = {
             if (tOpt) tOpt.disabled = isVideo;
             if (isVideo && background.value === "transparent") background.value = "viewer";
             color.style.display = background.value === "color" ? "" : "none";
-            const safe = (name.value || "").trim() || "shot";
-            where.textContent = isVideo ? `→ output/previz/${safe}.${s.format}` : `→ output/previz/${safe}/`;
+            // Where it will land is the server's to say (the rule every export
+            // follows), asked a moment after the typing stops.
+            const asked = ++whereAsked;
+            (doc.defaultView || window).setTimeout(async () => {
+                if (asked !== whereAsked) return;
+                const t = await exportTarget(isVideo ? "video" : "frame", s.name, isVideo ? s.format : "png",
+                                             canvasContext(), null, !isVideo);
+                if (asked === whereAsked && shade.isConnected) {
+                    where.textContent = t ? `→ output/${t.relative}` : "";
+                    where.title = "The next version: an earlier render is never written over.";
+                }
+            }, 180);
             const size = this._renderSize({ ...s, camera: s.camera }, scene);
             outSize.textContent = `→ ${size.w} × ${size.h} px`;
             const range = this._renderRange({ ...s, end: Number.isFinite(s.end) ? s.end : null }, scene);
@@ -403,7 +415,26 @@ export const PrevizRenderMixin = {
                     + (isVideo ? " — not encoded." : ".");
                 view._setStatus(result.message);
             } else if (!isVideo) {
-                result.message = `Wrote ${done} PNG${done === 1 ? "" : "s"} into output/previz/${name}/`;
+                // The stills leave the working folder for where every export
+                // goes, as the next version; an older server keeps them where
+                // they were uploaded.
+                let kept = `output/previz/${name}/`;
+                try {
+                    const pub = await fetch(api.apiURL("/bepic/previz_publish"), {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ name, context: canvasContext() }),
+                    });
+                    const info = await pub.json().catch(() => ({}));
+                    if (pub.ok && info.dir) {
+                        firstPath = info.path || firstPath;
+                        framesDir = info.dir;
+                        result.landed = info.paths || [firstPath];
+                        kept = "output/" + info.relative;
+                    }
+                } catch (_) { /* they are still where they were uploaded */ }
+                result.message = `Wrote ${done} PNG${done === 1 ? "" : "s"}: ${kept}`;
+                result.where = kept;
                 view._setStatus(result.message);
             } else {
                 if (onProgress) onProgress(count, count);
@@ -412,15 +443,23 @@ export const PrevizRenderMixin = {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ name, fps, format: st.format, quality: st.quality,
-                                           codec: st.format === "mov" ? (st.codec || "prores") : "" }),
+                                           codec: st.format === "mov" ? (st.codec || "prores") : "",
+                                           rule: true, context: canvasContext() }),
                 });
                 const encData = await enc.json().catch(() => ({}));
                 if (!enc.ok) throw new Error(encData.error || `the server answered ${enc.status}`);
                 moviePath = encData.path || null;
-                result.message = `Wrote output/previz/${name}.${st.format}, ${done} frames long.`;
+                result.where = "output/" + (encData.relative || `previz/${name}.${st.format}`);
+                result.landed = moviePath ? [moviePath] : null;
+                result.message = `Wrote ${result.where}, ${done} frames long.`;
                 view._setStatus(result.message);
             }
             result.ok = done > 0;
+            // Like every export: said once with its path, and put in History.
+            if (result.ok && !result.stopped && result.where) {
+                notice("success", "Shot rendered", result.where);
+                if (result.landed && this.exportLanded) this.exportLanded(result.landed);
+            }
             // The shot goes back to the graph it was built for, as dragging a
             // history frame onto the canvas would put it there.
             if (result.ok && st.addNode && !(result.stopped && isVideo)) {

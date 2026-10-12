@@ -3,14 +3,17 @@
 The scene itself is browser-side data (js/bEpicViewer_scene3d.js) kept on the
 bEpic 3D Scene node. This module only deals with what has to live on disk:
 
-  • scene files, under `output/3d_scenes/<name>.json`, for reusing a setup
-    across workflows;
-  • rendered shots, under `output/previz/`. The viewer plays the shot back
-    through a camera and posts one PNG per frame into `output/previz/<name>/`;
-    a render asked for as a clip then has those frames encoded into
-    `output/previz/<name>.mp4` and deleted, while a render asked for as stills
-    keeps them. The node reads back whichever of the two is there. Frames are
-    uploaded one at a time because that is all a browser canvas can hand over.
+  • scene files. They are saved where every export goes (export_rules: the
+    shot's folder, or `output/bepic/scenes`, versioned); `output/3d_scenes` is
+    where they went before that and is still read.
+  • rendered shots. The viewer plays the shot back through a camera and posts
+    one PNG per frame into `output/previz/<name>/` - the take's working folder,
+    because that is all a browser canvas can hand over. A finished take is then
+    put where every export goes: encoded into a clip, or its frames moved, as a
+    new version. `output/previz/<name>.latest.json` says where that was, and it
+    is how the node finds the take by its name; a take from before the rule
+    (`output/previz/<name>.mp4`, or its frames left in the working folder) is
+    still read.
 
 Both folders sit inside ComfyUI's output directory on purpose: nothing here
 writes anywhere the viewer's other routes wouldn't (see path_access.py).
@@ -76,6 +79,22 @@ def list_scenes():
     return out
 
 
+def save_scene_at(path, scene):
+    """Write a scene as JSON to a path the caller has already decided on."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(scene, fh, indent=1)
+    return path
+
+
+def load_scene_at(path):
+    with open(path, "r", encoding="utf-8") as fh:
+        scene = json.load(fh)
+    if not isinstance(scene, dict) or not isinstance(scene.get("items"), list):
+        raise ValueError("that file is not a previz scene")
+    return scene
+
+
 def save_scene(name, scene):
     """Write a scene as JSON. `scene` is already-parsed data, not a string."""
     os.makedirs(scenes_dir(), exist_ok=True)
@@ -96,8 +115,67 @@ def video_path(name, fmt="mp4"):
     return os.path.join(renders_dir(), f"{_safe_name(name)}.{fmt}")
 
 
+def _pointer(name):
+    return os.path.join(renders_dir(), f"{_safe_name(name)}.latest.json")
+
+
+def note_render(name, path=None, folder=None, stem=None):
+    """Remember where the finished take of `name` was put (see the module's
+    notes): a clip's path, or a sequence's folder and the stem of its frames."""
+    note = {"path": path} if path else {"folder": folder, "stem": stem}
+    os.makedirs(renders_dir(), exist_ok=True)
+    with open(_pointer(name), "w", encoding="utf-8") as fh:
+        json.dump(note, fh)
+
+
+def latest_render(name):
+    """What :func:`note_render` wrote, if what it names is still there and still
+    inside the output folder - a note is a file, and files get edited."""
+    try:
+        with open(_pointer(name), "r", encoding="utf-8") as fh:
+            note = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(note, dict):
+        return None
+    root = os.path.abspath(folder_paths.get_output_directory())
+    where = note.get("path") or note.get("folder")
+    if not isinstance(where, str):
+        return None
+    where = os.path.abspath(where)
+    try:
+        if os.path.commonpath([root, where]) != root:
+            return None
+    except ValueError:
+        return None
+    if note.get("path"):
+        return {"path": where} if os.path.isfile(where) else None
+    if not isinstance(note.get("stem"), str) or not os.path.isdir(where):
+        return None
+    return {"folder": where, "stem": note["stem"]}
+
+
+def _noted_frames(note):
+    """The frames of a take kept as stills, in order."""
+    pattern = re.compile(r"^" + re.escape(note["stem"]) + r"\.(\d+)\.png$", re.I)
+    numbered = []
+    try:
+        names = os.listdir(note["folder"])
+    except OSError:
+        return []
+    for n in names:
+        m = pattern.match(n)
+        if m:
+            numbered.append((int(m.group(1)), os.path.join(note["folder"], n)))
+    numbered.sort()
+    return [p for _i, p in numbered]
+
+
 def existing_video(name):
     """Whichever clip a take of `name` was encoded into, or None."""
+    note = latest_render(name)
+    if note and note.get("path"):
+        return note["path"]
     for fmt in VIDEO_FORMATS:
         path = video_path(name, fmt)
         if os.path.isfile(path):
@@ -140,11 +218,27 @@ def clear_render(name):
             removed += 1
         except OSError:
             pass
+    # A take put away as a version stays where it is - it is an export, and an
+    # export is never written over. Only the note that it is the latest goes.
+    try:
+        os.remove(_pointer(name))
+    except OSError:
+        pass
     return removed
 
 
 def render_frames(name):
-    """The rendered frames of `name`, in order."""
+    """The rendered frames of `name`, in order: the ones still in the working
+    folder (a take that was stopped, or one from before takes were put away),
+    else the take that was kept as stills."""
+    loose = _working_frames(name)
+    if loose:
+        return loose
+    note = latest_render(name)
+    return _noted_frames(note) if note and note.get("folder") else []
+
+
+def _working_frames(name):
     folder = renders_dir(name)
     try:
         names = os.listdir(folder)
@@ -159,8 +253,36 @@ def render_frames(name):
     return [p for _i, p in numbered]
 
 
-def encode_render(name, fps=24.0, fmt="mp4", quality="high", codec=None):
-    """Turn the uploaded frames of `name` into output/previz/<name>.<fmt>.
+def publish_frames(name, seq):
+    """Move a take kept as stills out of the working folder to where the rule
+    puts it (`seq`: export_rules.sequence_target), keeping each frame's number.
+    Returns the new paths."""
+    from . import export_rules
+    moved = []
+    folder = renders_dir(name)
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        names = []
+    numbered = sorted((int(m.group(1)), n) for n, m in ((n, FRAME_RE.match(n)) for n in names) if m)
+    if not numbered:
+        raise ValueError("there are no rendered frames to keep")
+    os.makedirs(seq["folder"], exist_ok=True)
+    for index, n in numbered:
+        dst = export_rules.sequence_frame(seq, index)
+        os.replace(os.path.join(folder, n), dst)
+        moved.append(dst)
+    try:
+        os.rmdir(folder)
+    except OSError:
+        pass
+    note_render(name, folder=seq["folder"], stem=seq["stem"])
+    return moved
+
+
+def encode_render(name, fps=24.0, fmt="mp4", quality="high", codec=None, out=None):
+    """Turn the uploaded frames of `name` into a clip: at `out` when the caller
+    has decided where (the export rule), else output/previz/<name>.<fmt>.
 
     `fmt` is one of VIDEO_FORMATS (mp4 and mov are H.264, webm is VP9) and
     `quality` one of VIDEO_QUALITY's names.
@@ -169,7 +291,7 @@ def encode_render(name, fps=24.0, fmt="mp4", quality="high", codec=None):
     both behind would double the disk cost of every take. Raises with a readable
     message when this install has no encoder.
     """
-    paths = render_frames(name)
+    paths = _working_frames(name)
     if not paths:
         raise ValueError("there are no rendered frames to encode")
 
@@ -198,7 +320,8 @@ def encode_render(name, fps=24.0, fmt="mp4", quality="high", codec=None):
                 os.remove(video_path(name, other))
             except OSError:
                 pass
-    out = video_path(name, fmt)
+    placed = bool(out)
+    out = out or video_path(name, fmt)
     os.makedirs(os.path.dirname(out), exist_ok=True)
     try:
         file_writer._write_video(np.stack(frames), out, float(fps or 24.0), fmt,
@@ -213,6 +336,8 @@ def encode_render(name, fps=24.0, fmt="mp4", quality="high", codec=None):
         os.rmdir(renders_dir(name))          # empty now; leave it tidy
     except OSError:
         pass
+    if placed:
+        note_render(name, path=out)
     return out
 
 
