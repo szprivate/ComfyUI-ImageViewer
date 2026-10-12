@@ -56,7 +56,9 @@ export const EditTimelineMixin = {
             + '<rect x="2" y="14" width="5" height="5" rx="1"/><rect x="9" y="14" width="13" height="5" rx="1"/></svg>';
         b.addEventListener("click", () => this.editTlToggle());
         const before = bar.querySelector("#layout-btn");
-        if (before) bar.insertBefore(b, before); else bar.append(b);
+        // Beside the layout button, wherever in the bar it sits: in the viewer's own
+        // markup it is inside a group, not a direct child of the bar.
+        if (before && before.parentNode) before.parentNode.insertBefore(b, before); else bar.append(b);
         this._editTlBtn = b;
         return b;
     },

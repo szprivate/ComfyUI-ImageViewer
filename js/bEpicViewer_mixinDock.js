@@ -107,8 +107,12 @@ export const DockMixin = {
         this._bindDockDrag();
         this.applyDockLayout();
         // The lower bar's own two: the timeline and the export, there from the start.
-        if (this._editTlButton) this._editTlButton();
-        if (this._exportViewButton) this._exportViewButton();
+        // Each on its own: a button that cannot be placed must not take docking,
+        // or the other button, down with it.
+        for (const make of ["_editTlButton", "_exportViewButton"]) {
+            try { if (this[make]) this[make](); }
+            catch (e) { console.warn(`bEpicViewer: ${make} failed`, e); }
+        }
     },
 
     /**

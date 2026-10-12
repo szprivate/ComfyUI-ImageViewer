@@ -40,7 +40,9 @@ export const ExportViewMixin = {
         b.innerHTML = ICON;
         b.addEventListener("click", () => this.exportViewDialog());
         const before = bar.querySelector("#layout-btn");
-        if (before) bar.insertBefore(b, before); else bar.append(b);
+        // Beside the layout button, wherever in the bar it sits: in the viewer's own
+        // markup it is inside a group, not a direct child of the bar.
+        if (before && before.parentNode) before.parentNode.insertBefore(b, before); else bar.append(b);
         this._exportViewBtn = b;
         return b;
     },
