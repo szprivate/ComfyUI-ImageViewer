@@ -78,7 +78,9 @@ The viewer's ways in and out grew one feature at a time; they are being brought 
 - *what a format is* (`VIDEO`, `video_settings`): a container means the same codec wherever it is offered. MOV is ProRes 422 unless H.264 is asked for; MP4 is H.264; WebM is VP9. Quality is `high` / `medium` / `low`, and each encoder's number for those is there and nowhere else. `/bepic/export_options` serves the table to the page.
 - *where a file goes and what it is called* (`target`): with a sequence and shot (a context node on the canvas, sent by the page as `context`) the bEpic layout, `<Seq>/<Shot>/<kind>/v###/<shot>_v###_<name>.<ext>`; without, `bepic/<kind>/<name>_v###.<ext>`. Under ComfyUI's output folder, always the next version - an export never writes over an earlier one. `/bepic/export_target` previews it without creating anything.
 
-**Not moved yet** (do not copy their habits): previz's scene / USD entries ask through `prompt()` and write to `output/3d_scenes`; the previz render writes `output/previz/<name>`; annotations go to the output root; an extracted frame goes beside its clip or to `output/extracted_frames`. The Send to Viewer node's `mov` is still H.264 - it gets a codec widget rather than a silent change, since saved workflows hold its settings.
+**Moved so far:** the Edit panel (Export… opens the shared dialog, `bEpicViewer_exportUI.js`; a new cut is saved by the rule), annotations (versioned, in the shot's folder when there is one), the previz render dialog's codec choice, and every former `alert()` (now `notice`, a toast).
+
+**Not moved yet** (do not copy their habits): previz's scene / USD entries ask through `prompt()` and write to `output/3d_scenes`; the previz render still writes `output/previz/<name>` - deliberately for now, since the scene node reads its shot from there; an extracted frame goes beside its clip or to `output/extracted_frames`; there is no export of what is on screen. The Send to Viewer node's `mov` is still H.264 - it gets a codec widget rather than a silent change, since saved workflows hold its settings.
 
 ### Worlds (branch `worlds`)
 

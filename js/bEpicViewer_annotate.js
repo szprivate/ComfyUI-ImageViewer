@@ -19,6 +19,7 @@
 import { svgEl, toolHelp } from "./bEpicViewer_tools.js";
 import { api } from "../../scripts/api.js";
 import { prefColor, PREF } from "./bEpicViewer_settings.js";
+import { canvasContext, notice } from "./bEpicViewer_exportUI.js";
 
 const ANNOT_COLORS = ["#ff3b30", "#ff9500", "#ffcc00", "#34c759",
                       "#00c7be", "#0a84ff", "#ffffff", "#000000"];
@@ -516,20 +517,26 @@ export const AnnotateMixin = {
         catch (e) { this._toolSetStatus("<b>Annotate:</b> image is cross-origin — can't export"); return; }
 
         const btn = this._annotExportBtn;
-        if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+        if (btn) { btn.disabled = true; btn.textContent = "Exporting…"; }
         try {
             const resp = await api.fetchApi("/bepic/save_annotation", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ dataurl, filename_prefix: "bEpic_annotation" }),
+                // Named and placed by the rule every export follows: the shot's
+                // folder when the canvas names one, and the next version.
+                body: JSON.stringify({ dataurl, filename_prefix: "bEpic_annotation",
+                                       name: "annotation", context: canvasContext() }),
             });
             const data = await resp.json().catch(() => ({}));
             if (!resp.ok || data.error) throw new Error(data.error || ("HTTP " + resp.status));
             this._annotAddToHistory(data);
-            this._toolSetStatus("<b>Annotate:</b> saved to History — drag the new thumbnail onto the graph");
+            this._toolSetStatus("<b>Annotate:</b> exported to History — drag the new thumbnail onto the graph");
+            notice("success", "Annotation exported",
+                   "output/" + [data.subfolder, data.filename].filter(Boolean).join("/"));
         } catch (e) {
             console.error("[annot] export failed", e);
-            this._toolSetStatus("<b>Annotate:</b> save failed — see console");
+            this._toolSetStatus("<b>Annotate:</b> export failed");
+            notice("error", "Annotation not exported", String((e && e.message) || e));
         } finally {
             if (btn) { btn.disabled = false; btn.textContent = "Export annotation"; }
         }

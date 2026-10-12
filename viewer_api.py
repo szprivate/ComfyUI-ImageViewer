@@ -895,16 +895,29 @@ try:
 
             try:
                 out_dir = folder_paths.get_output_directory()
-                # Store annotations under ./output/annotations/ (get_save_image_path
-                # honours a subfolder embedded in the prefix and reports it back).
-                full_output_folder, filename, counter, subfolder, _ = \
-                    folder_paths.get_save_image_path(
-                        os.path.join("annotations", prefix), out_dir)
+                if data.get("name"):
+                    # Named by the page: exported by the rule every export follows
+                    # (export_rules) - the shot's folder when the canvas names
+                    # one, the viewer's own otherwise, and the next version.
+                    from . import export_rules
+                    where = export_rules.target("annotation", data.get("name"), ext, out_dir,
+                                                data.get("context"))
+                    fpath, fname = where["path"], os.path.basename(where["path"])
+                    full_output_folder = where["folder"]
+                    subfolder = os.path.dirname(where["relative"])
+                else:
+                    # An older page: ./output/annotations/, counted as ComfyUI counts
+                    # (get_save_image_path honours a subfolder in the prefix).
+                    full_output_folder, filename, counter, subfolder, _ = \
+                        folder_paths.get_save_image_path(
+                            os.path.join("annotations", prefix), out_dir)
+                    fname = f"{filename}_{counter:05d}_.{ext}"
+                    fpath = os.path.join(full_output_folder, fname)
                 os.makedirs(full_output_folder, exist_ok=True)
-                fname = f"{filename}_{counter:05d}_.{ext}"
-                fpath = os.path.join(full_output_folder, fname)
                 with open(fpath, "wb") as fh:
                     fh.write(raw)
+            except ValueError as e:
+                return web.json_response({"error": str(e)}, status=400)
             except Exception as e:
                 traceback.print_exc()
                 return web.json_response({"error": str(e)}, status=500)

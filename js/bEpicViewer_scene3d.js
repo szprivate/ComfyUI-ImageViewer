@@ -114,6 +114,8 @@ export function renderSettings(scene) {
         fps: raw.fps === null || raw.fps === undefined || !(Number(raw.fps) > 0) ? null : Number(raw.fps),
         format: pick(raw.format, RENDER_FORMATS, d.format),
         quality: pick(raw.quality, ["high", "medium", "low"], d.quality),
+        // What a MOV is written with (the viewer-wide rule: ProRes unless H.264 is picked).
+        codec: pick(raw.codec, ["prores", "h264"], "prores"),
         shading: pick(raw.shading, ["original", "clay", "normal", "wireframe"], d.shading),
         background: pick(raw.background, ["viewer", "color", "transparent"], d.background),
         color: typeof raw.color === "string" && /^#[0-9a-f]{6}$/i.test(raw.color) ? raw.color : d.color,

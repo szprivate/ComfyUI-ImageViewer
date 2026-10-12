@@ -15,9 +15,12 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import * as S from "./bEpicViewer_scene3d.js";
 
+// What a container holds is one rule for the whole viewer (export_rules.py): MOV
+// is ProRes unless H.264 is picked, so the label no longer names a codec for it.
 const FORMATS = [
-    ["mp4", "MP4 (H.264)"], ["mov", "MOV (H.264)"], ["webm", "WebM (VP9)"], ["png", "PNG sequence"],
+    ["mp4", "MP4 (H.264)"], ["mov", "MOV"], ["webm", "WebM (VP9)"], ["png", "PNG sequence"],
 ];
+const MOV_CODECS = [["prores", "ProRes 422"], ["h264", "H.264"]];
 const RES_PRESETS = [
     ["HD 1080", 1920, 1080], ["HD 720", 1280, 720], ["UHD 4K", 3840, 2160],
     ["DCI 2K", 2048, 1080], ["DCI 4K", 4096, 2160], ["Square 1080", 1080, 1080],
@@ -150,6 +153,10 @@ export const PrevizRenderMixin = {
         const quality = select([["high", "High"], ["medium", "Medium"], ["low", "Low"]], st.quality);
         const qualityWrap = el("span", "rd-inline");
         qualityWrap.append(el("span", "rd-sub", "Quality"), quality);
+        // Only a MOV has a choice of codec; ProRes unless the scene remembers otherwise.
+        const codec = select(MOV_CODECS, st.codec === "h264" ? "h264" : "prores");
+        const codecWrap = el("span", "rd-inline");
+        codecWrap.append(el("span", "rd-sub", "Codec"), codec);
 
         // Camera and size
         const cams = S.cameras(scene);
@@ -201,7 +208,7 @@ export const PrevizRenderMixin = {
 
         const fpsRow = row("Frame rate", fps, el("span", "rd-sub", "fps"));
         const useCamRow = row("Resolution", useCam.wrap);
-        const qualityRow = row("", qualityWrap);
+        const qualityRow = row("", codecWrap, qualityWrap);
         box.append(
             head,
             section("Output"),
@@ -231,6 +238,7 @@ export const PrevizRenderMixin = {
         const read = () => ({
             name: (name.value || "").trim() || "shot",
             format: format.value, quality: quality.value,
+            codec: format.value === "mov" ? codec.value : "",
             camera: camera.value, useCameraRes: useCam.box.checked,
             width: Number(width.value) || 1920, height: Number(height.value) || 1080,
             scale: Number(scale.value) || 100,
@@ -255,6 +263,7 @@ export const PrevizRenderMixin = {
             }
             width.disabled = height.disabled = preset.disabled = fromCam;
             qualityRow.style.display = isVideo ? "" : "none";
+            codecWrap.style.display = s.format === "mov" ? "" : "none";
             fpsRow.style.display = isVideo ? "" : "none";
             // A video has no alpha to put a transparent background in.
             const tOpt = [...background.options].find((o) => o.value === "transparent");
@@ -269,10 +278,11 @@ export const PrevizRenderMixin = {
             const secs = range.count / (s.fps || 24);
             summary.textContent = `${range.count} frame${range.count === 1 ? "" : "s"} · ${size.w}×${size.h}`
                 + ` · ${FORMATS.find(([v]) => v === s.format)[1]}`
+                + (s.format === "mov" ? ` (${MOV_CODECS.find(([v]) => v === s.codec)[1]})` : "")
                 + (isVideo ? ` · ${secs.toFixed(secs < 10 ? 2 : 1)} s at ${s.fps} fps` : "")
                 + (s.aa > 1 ? ` · ${s.aa}× AA` : "");
         };
-        for (const n of [name, format, quality, camera, width, height, scale, start, end, fps,
+        for (const n of [name, format, quality, codec, camera, width, height, scale, start, end, fps,
                          shading, background, color, aa, useCam.box, grid.box, helpers.box, addNode.box]) {
             n.addEventListener("input", sync);
             n.addEventListener("change", sync);
@@ -401,7 +411,8 @@ export const PrevizRenderMixin = {
                 const enc = await fetch(api.apiURL("/bepic/previz_encode"), {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ name, fps, format: st.format, quality: st.quality }),
+                    body: JSON.stringify({ name, fps, format: st.format, quality: st.quality,
+                                           codec: st.format === "mov" ? (st.codec || "prores") : "" }),
                 });
                 const encData = await enc.json().catch(() => ({}));
                 if (!enc.ok) throw new Error(encData.error || `the server answered ${enc.status}`);
