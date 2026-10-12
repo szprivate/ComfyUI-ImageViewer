@@ -29,6 +29,7 @@ import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
 import * as D from "./bEpicViewer_editTimelineData.js";
 import { nodeMediaClips, selectedNodes } from "./bEpicViewer_sendFromNode.js";
+import { canvasContext, notice, openExportDialog } from "./bEpicViewer_exportUI.js";
 
 const DOCK_ID = "editTimeline";
 const EDGE_PX = 7;          // how close to a block's end a press is a trim
@@ -165,7 +166,7 @@ export const EditTimelineMixin = {
         const save = button("Save", "Write the cut into the timeline file. The film is not rendered again.",
                             () => this._editTlSave());
         save.classList.add("primary");
-        const render = button("Render", "Render this cut into a film of its own, here in the viewer: picture, "
+        const render = button("Export…", "Export this cut as a film, rendered here in the viewer: picture, "
             + "dissolves and sound. Texts are not drawn. The film it lies beside is left as it is.",
             () => this._editTlRender());
         bar.append(sub, badge, add, revert, save, render);
@@ -247,7 +248,7 @@ export const EditTimelineMixin = {
         ui.save.disabled = !dirty || !!this._editTlBusy;
         ui.revert.disabled = !dirty || !this._editTlSaved || !!this._editTlBusy;
         ui.render.disabled = !!this._editTlBusy;
-        ui.render.textContent = this._editTlBusy ? "Rendering…" : "Render";
+        ui.render.textContent = this._editTlBusy ? "Rendering…" : "Export…";
 
         const doc = host.ownerDocument;
         const block = (cls, item, text) => {
@@ -647,7 +648,7 @@ export const EditTimelineMixin = {
         const cut = this._editTlCut;
         if (!cut || !this._editTlDirty()) return;
         const creating = !this._editTlSaved;
-        const body = creating ? { new: true, edit: D.toSave(cut) }
+        const body = creating ? { new: true, name: cut.name || "cut", context: canvasContext(), edit: D.toSave(cut) }
                               : { ...this._editTlTarget, edit: D.toSave(cut) };
         let data = null, said = "";
         try {
@@ -669,9 +670,10 @@ export const EditTimelineMixin = {
         if (this._editTlPending) { const next = this._editTlPending; this._editTlPending = null; this.editTlShow(next); }
     },
 
-    // Render the cut into a film of its own, in the viewer. What is rendered is
-    // the SAVED cut, so unsaved changes are saved first; the film comes up in a
-    // tab of its own, with its timeline beside it.
+    // Export the cut as a film, rendered in the viewer. What is rendered is the
+    // SAVED cut, so unsaved changes are saved first. The dialog is the one every
+    // export uses (bEpicViewer_exportUI.js): name, format, codec, quality, and
+    // where it will land, by the rule all exports follow.
     async _editTlRender() {
         if (this._editTlBusy || !this._editTlCut || !this._editTlCut.clips.length) return;
         if (this._editTlDirty()) {
@@ -679,34 +681,52 @@ export const EditTimelineMixin = {
             if (this._editTlDirty()) return;             // the save said why
         }
         if (!this._editTlTarget) return;
+        const texts = this._editTlCut.texts.length;
+        await openExportDialog(this.container, {
+            title: "Export film",
+            kind: "video",
+            name: this._editTlCut.name || String(this._editTlFile || "cut").replace(/\.otio$/i, ""),
+            formats: ["mp4", "mov"],
+            values: this._editTlExport,
+            go: "Render",
+            note: texts ? `Its ${texts} text${texts === 1 ? " is" : "s are"} not drawn here: titles are drawn by `
+                + "whatever made the timeline. The film it lies beside is left as it is." : "",
+            onExport: (values, ui) => this._editTlExportRun(values, ui),
+        });
+    },
+
+    async _editTlExportRun(values, ui) {
+        this._editTlExport = { format: values.format, codec: values.codec, quality: values.quality };
         this._editTlBusy = true;
-        this._editTlNote = "rendering…";
         this.editTlRefresh();
+        ui.progress(0, 1, "Rendering…");
         let got = null, said = "";
         try {
             const res = await api.fetchApi("/bepic/timeline_render", {
                 method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ ...this._editTlTarget, format: "mp4" }),
+                body: JSON.stringify({ ...this._editTlTarget, name: values.name, format: values.format,
+                                       codec: values.codec, quality: values.quality, context: values.context }),
             });
             if (res.ok) got = await res.json(); else said = await res.text();
         } catch (e) { said = String(e && e.message || e); }
         this._editTlBusy = false;
         if (!got || !got.path) {
-            this._editTlNote = said || "not rendered";
             this.editTlRefresh();
-            return;
+            return { ok: false, error: true, message: said || "Nothing was rendered." };
         }
         const left = got.texts_left_out;
-        this._editTlNote = "rendered as " + got.name
-            + (left ? ` - without its ${left} text${left === 1 ? "" : "s"} (the viewer does not draw them)` : "");
+        this._editTlNote = "exported as " + got.name;
         this._editTlKeepNote = this._editTlNote;
         this.editTlRefresh();
+        notice("success", "Film exported" + (left ? ` - without its ${left} text${left === 1 ? "" : "s"}` : ""),
+               "output/" + (got.relative || got.name));
         // Up on screen, in a tab of its own; its timeline is read with it.
         if (this.openExternalFramesInViewer) {
             this.openExternalFramesInViewer(
                 [{ path: got.path, name: got.name, external: true, kind: "video", fps: got.fps, frames: got.frames }],
                 got.name);
         }
+        return { ok: true };
     },
 
     _editTlRevert() {

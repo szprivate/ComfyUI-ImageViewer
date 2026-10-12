@@ -1245,3 +1245,9 @@ textarea.param-input {
 .edit-field.wide input { flex: 1; width: auto; min-width: 60px; color: #ddd; }
 .edit-tl-btn.active { color: #00e5ff; }
 .edit-tl-btn.has-cut:not(.active) { color: #ffcf6f; }
+
+/* The export dialog every feature shares (bEpicViewer_exportUI.js). Its box and
+   rows are the render dialog's (.rd-*); these are only what it adds. */
+.export-where { font-family: monospace; color: #9cc; word-break: break-all; }
+.export-note { margin: 6px 0 0 98px; max-width: 330px; line-height: 1.35; }
+.export-foot { justify-content: flex-end; margin-top: 10px; }

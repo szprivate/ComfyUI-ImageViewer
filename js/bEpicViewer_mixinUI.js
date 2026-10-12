@@ -6,6 +6,7 @@ import { app } from "../../scripts/app.js";
 import { resolveViewerAction, viewerHelpRows } from "./bEpicViewer_keymap.js";
 import { isViewerSourceNode, senderTabInfo } from "./bEpicViewer_nodeTools.js";
 import { POPOUT_NAME } from "./bEpicViewer_mixinReconnect.js";
+import { notice } from "./bEpicViewer_exportUI.js";
 
 export const UIMixin = {
 
@@ -336,7 +337,7 @@ export const UIMixin = {
                 const res = await envFetch(url, { method: 'POST' });
                 if (!res.ok) throw new Error('Request failed');
                 const js = await res.json();
-                dlgWin.alert(`Cleared ${js.deleted || 0} files from bEpic temp cache.`);
+                notice("success", "bEpic temp files cleared", `${js.deleted || 0} file(s) removed.`);
                 this.forgetCachedFrames();
                 try {
                     this.history        = {};
@@ -350,7 +351,7 @@ export const UIMixin = {
                 } catch (e) { console.warn('Failed to clear viewer history', e); }
             } catch (e) {
                 console.error('clear cache failed', e);
-                dlgWin.alert('Failed to clear cache: ' + e.message);
+                notice("error", "bEpic temp files not cleared", String(e.message || e));
             }
         };
     },

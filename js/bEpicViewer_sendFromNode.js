@@ -300,14 +300,14 @@ async function runBranchToViewer(node, target, ctx) {
         prompt = await app.graphToPrompt();
     } catch (e) {
         console.error("[bEpicViewer] graphToPrompt failed", e);
-        alert(`bEpic Viewer – could not read the workflow.\n${e.message || e}`);
+        say(`bEpic Viewer – could not read the workflow.\n${e.message || e}`);
         return;
     }
 
     const output = (prompt && prompt.output) || {};
     const rootId = String(target.nodeId);
     if (!output[rootId]) {
-        alert(`bEpic Viewer – "${target.title}" is not part of the prompt.\n` +
+        say(`bEpic Viewer – "${target.title}" is not part of the prompt.\n` +
               `It may be muted, bypassed, or a node that never executes.`);
         return;
     }
@@ -332,7 +332,7 @@ async function runBranchToViewer(node, target, ctx) {
         const detail = e?.response?.error?.message || e?.response?.error ||
                        e?.message || e;
         console.error("[bEpicViewer] branch run failed", e);
-        alert(`bEpic Viewer – could not run the branch feeding "${target.title}":\n${detail}`);
+        say(`bEpic Viewer – could not run the branch feeding "${target.title}":\n${detail}`);
     }
 }
 
@@ -355,14 +355,14 @@ async function sendNodeToViewer(node, source, ctx) {
         data = await resp.json();
     } catch (e) {
         console.error("[bEpicViewer] resolve_media failed", e);
-        alert(`bEpic Viewer – could not reach the server.\n${e.message || e}`);
+        say(`bEpic Viewer – could not reach the server.\n${e.message || e}`);
         return;
     }
 
     if (!data || data.error || !Array.isArray(data.tabs) || data.tabs.length === 0) {
         const msg = (data && data.error) || "nothing to show";
         console.warn("[bEpicViewer] send to viewer:", msg);
-        alert(`bEpic Viewer – could not open "${shown}":\n${msg}`);
+        say(`bEpic Viewer – could not open "${shown}":\n${msg}`);
         return;
     }
     // A partly-uploaded container still opens — say so rather than silently
@@ -375,6 +375,12 @@ async function sendNodeToViewer(node, source, ctx) {
 
 // A keystroke that hits nothing must not raise a modal — say it in a toast and
 // let the user carry on.
+// What went wrong, without stopping the page for it: these used to be alert()s,
+// which block the canvas until dismissed - for a node that simply holds nothing.
+function say(text) {
+    notify("error", "bEpic Viewer", String(text).replace(/^bEpic Viewer – /, ""));
+}
+
 function notify(severity, summary, detail) {
     const add = app.extensionManager?.toast?.add;
     if (add) app.extensionManager.toast.add({ severity, summary, detail, life: 4000 });

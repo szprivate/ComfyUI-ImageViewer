@@ -32,6 +32,10 @@
 //      through the same route as 2, replacement onto an existing node included.
 import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
+import { notice } from "./bEpicViewer_exportUI.js";
+
+// What went wrong, as a toast: a failed drop must not stop the page for it.
+const say = (text) => notice("error", "bEpic Viewer", String(text).replace(/^bEpic Viewer \u2013 /, ""));
 
 const _IMG_RE = /\.(png|jpe?g|webp|gif|bmp|avif|tiff?|svg|ico)$/i;
 const _VID_RE = /\.(mp4|m4v|mov|webm|mkv|ogv|avi)$/i;
@@ -456,7 +460,7 @@ export const DnDMixin = {
         if (p.dropped || (!p.path && !p.filename)) {
             const dataurl = this._grabVideoFrameDataUrl();
             if (!dataurl) {
-                alert("bEpic Viewer – could not read this clip's frame out of the player.");
+                say("bEpic Viewer – could not read this clip's frame out of the player.");
                 return null;
             }
             body.dataurl = dataurl;
@@ -478,13 +482,13 @@ export const DnDMixin = {
             data = await resp.json();
         } catch (err) {
             console.error("[bEpicViewer] extract_frame failed", err);
-            alert(`bEpic Viewer – could not reach the server.\n${err.message || err}`);
+            say(`bEpic Viewer – could not reach the server.\n${err.message || err}`);
             return null;
         }
         if (!data || data.error || !data.path) {
             const msg = (data && data.error) || "nothing came back";
             console.warn("[bEpicViewer] extract frame:", msg);
-            alert(`bEpic Viewer – could not extract frame ${frame}:\n${msg}`);
+            say(`bEpic Viewer – could not extract frame ${frame}:\n${msg}`);
             return null;
         }
 
