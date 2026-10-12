@@ -142,6 +142,25 @@ def _menu(table):
 BIT_DEPTH_MENU = _menu(BIT_DEPTHS)
 COMPRESSION_MENU = _menu(COMPRESSIONS)
 
+# The codec, for a container that can hold more than one: the table every export
+# shares (export_rules.VIDEO), so the node offers what the dialogs offer. "auto"
+# is that table's default - a MOV is ProRes unless H.264 is picked.
+try:
+    from . import export_rules as _export_rules
+    CODECS = {c: list(v) for c, v in _export_rules.VIDEO.items() if len(v) > 1}
+except Exception:  # run outside the package
+    _export_rules = None
+    CODECS = {"mov": ["prores", "h264"]}
+CODEC_MENU = _menu(CODECS)
+
+
+def _video_codec(options, ext):
+    """The codec *ext* is written with: the one picked, else the rule's default."""
+    picked = _option(options, "codec", CODECS, ext)
+    if picked:
+        return picked
+    return CODECS[ext][0] if ext in CODECS else None
+
 
 def _option(options, key, table, ext):
     """options[key] if *ext* takes that value, else None ("auto").
@@ -775,7 +794,8 @@ def write_output(tensor, filename_prefix, file_format, fps,
         path = os.path.join(full_folder, file)
         quality = _int_option(options, "quality", QUALITY_FORMATS, ext, 1, 100)
         _write_video(frames, path, fps, ext,
-                     quality / 10.0 if quality is not None else 8)
+                     quality / 10.0 if quality is not None else 8,
+                     codec=_video_codec(options, ext))
         saved.append(path)
         # Companion PNG (same name) carrying the ComfyUI workflow, reused as the
         # history thumbnail — a video container can't hold ComfyUI's metadata.

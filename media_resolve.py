@@ -186,6 +186,107 @@ def _write_proxy_oiio(src, dst):
         dst, compress_level=4)
 
 
+# ── a film a browser cannot play ─────────────────────────────────────────────
+#
+# A <video> plays H.264 (8 bit, 4:2:0), VP8/VP9 and AV1. ProRes - what a MOV is
+# written as by default (export_rules) - it does not, nor 10-bit or 4:2:2 H.264.
+# Such a film is shown through an H.264 copy made the first time it is asked
+# for and kept in the temp folder until the film changes. Made in this process
+# through PyAV, like every other film the viewer writes. Only ever what is
+# looked at: exports, cuts and extracted frames read the film itself.
+
+_PLAYABLE_CODECS = {"h264", "vp8", "vp9", "av1"}
+_PLAYABLE_PIX = {"yuv420p", "yuvj420p"}
+_VIDEO_PROXY_LOCKS = {}
+_VIDEO_PLAYS = {}
+_VIDEO_PROXY_GUARD = __import__("threading").Lock()
+
+
+def _video_plays(path):
+    import av
+    with av.open(path) as src:
+        if not src.streams.video:
+            return True
+        ctx = src.streams.video[0].codec_context
+        if ctx.name not in _PLAYABLE_CODECS:
+            return False
+        return ctx.name != "h264" or (ctx.pix_fmt in _PLAYABLE_PIX)
+
+
+def _write_video_proxy(src_path, dst):
+    import av
+    tmp = dst + ".part.mp4"
+    try:
+        with av.open(src_path) as src, av.open(tmp, "w", format="mp4") as out:
+            vin = src.streams.video[0]
+            rate = vin.average_rate or vin.guessed_rate or 24
+            vout = out.add_stream("libx264", rate=rate, options={"crf": "20", "preset": "veryfast"})
+            vout.pix_fmt = "yuv420p"
+            vout.width, vout.height = vin.width - vin.width % 2, vin.height - vin.height % 2
+            ain = src.streams.audio[0] if src.streams.audio else None
+            aout = resampler = None
+            if ain is not None:
+                aout = out.add_stream("aac", rate=48000)
+                aout.layout = "stereo"
+                resampler = av.AudioResampler(format="fltp", layout="stereo", rate=48000)
+            made = 0
+            for packet in src.demux(*([vin] + ([ain] if ain is not None else []))):
+                for frame in packet.decode():
+                    if packet.stream is vin:
+                        pic = frame.reformat(width=vout.width, height=vout.height, format="yuv420p")
+                        pic.pts = made
+                        made += 1
+                        for p in vout.encode(pic):
+                            out.mux(p)
+                    elif aout is not None:
+                        frame.pts = None
+                        for piece in resampler.resample(frame):
+                            for p in aout.encode(piece):
+                                out.mux(p)
+            for p in vout.encode(None):
+                out.mux(p)
+            if aout is not None:
+                for p in aout.encode(None):
+                    out.mux(p)
+        os.replace(tmp, dst)
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+
+
+def video_proxy(path):
+    """A copy of the film `path` that a <video> can play, or None when it plays
+    as it is (or is not a film). Raises when it cannot be read."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in VIDEO_EXTS:
+        return None
+    dst = os.path.splitext(_cache_path(path, "vproxy"))[0] + ".mp4"
+    if _cached(dst, path):
+        return dst
+    # Asked once per film and state of it: a player fetches in many ranges.
+    try:
+        key = (os.path.normcase(path), os.path.getmtime(path))
+    except OSError:
+        return None
+    if key not in _VIDEO_PLAYS:
+        if len(_VIDEO_PLAYS) > 512:
+            _VIDEO_PLAYS.clear()
+        _VIDEO_PLAYS[key] = _video_plays(path)
+    if _VIDEO_PLAYS[key]:
+        return None
+    # A player asks for a film in several ranges at once: one of them makes the
+    # copy, the others wait for it.
+    with _VIDEO_PROXY_GUARD:
+        lock = _VIDEO_PROXY_LOCKS.setdefault(dst, __import__("threading").Lock())
+    with lock:
+        if not _cached(dst, path):
+            _write_video_proxy(path, dst)
+    return dst
+
+
 def proxy_for_display(path):
     """A browser-renderable stand-in for `path`, or None when it needs none (or
     when no decoder on this install can read it — the caller then serves the

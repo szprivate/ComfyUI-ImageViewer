@@ -55,7 +55,7 @@ export const SEQUENCE_TOGGLE = "is_sequence";
 export const SEQUENCE_WIDGETS = ["first_frame_number", "padding"];
 // Per-format settings: each is shown only for the formats its definition lists
 // (`bepic_formats`), and a menu is narrowed to that format's entries.
-export const FORMAT_OPTION_WIDGETS = ["bit_depth", "compression", "quality", "compress_level"];
+export const FORMAT_OPTION_WIDGETS = ["bit_depth", "compression", "quality", "compress_level", "codec"];
 export const OUTPUT_CFG_WIDGETS = [FORMAT_WIDGET, FPS_WIDGET, "filename_prefix",
                                    SEQUENCE_TOGGLE, ...SEQUENCE_WIDGETS,
                                    ...FORMAT_OPTION_WIDGETS];

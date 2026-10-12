@@ -147,6 +147,13 @@ def _file_response(path, prim=None, frame=0, cs=None, ev=None):
                 proxy = media_resolve.proxy_for_display(path)
             except Exception as e:
                 print(f"[bEpicViewer] display proxy failed for {path}: {e}")
+        if not proxy:
+            # A film a <video> cannot play (ProRes, say) is shown through an
+            # H.264 copy; what is exported or cut is always the film itself.
+            try:
+                proxy = media_resolve.video_proxy(path)
+            except Exception as e:
+                print(f"[bEpicViewer] playable copy failed for {path}: {e}")
         if proxy:
             path = proxy
     from aiohttp import web

@@ -423,6 +423,11 @@ def _format_option_inputs():
                             "bepic_formats": fw.QUALITY_FORMATS}),
         "compress_level": ("INT", {"default": fw.COMPRESS_LEVEL_DEFAULT, "min": 0, "max": 9,
                                    "step": 1, "bepic_formats": fw.COMPRESS_LEVEL_FORMATS}),
+        # LAST, and it must stay last: a saved workflow holds widget values by
+        # position, so anything new goes after what was there. Shown for a
+        # container that can hold more than one codec (mov); "auto" is the
+        # default every export shares - ProRes for a MOV.
+        "codec": (fw.CODEC_MENU, {"default": fw.AUTO, "bepic_formats": fw.CODECS}),
     }
 
 
@@ -489,9 +494,9 @@ class bEpicSendToViewer:
              file_format="png", fps=24.0, filename_prefix="bEpic",
              is_sequence=False, first_frame_number=1001, padding=4,
              bit_depth="auto", compression="auto", quality=None, compress_level=None,
-             unique_id=None, prompt=None, extra_pnginfo=None):
+             codec="auto", unique_id=None, prompt=None, extra_pnginfo=None):
         options = {"bit_depth": bit_depth, "compression": compression,
-                   "quality": quality, "compress_level": compress_level}
+                   "quality": quality, "compress_level": compress_level, "codec": codec}
         safe_label = tab_name.replace(" ", "_") if tab_name else "send"
 
         # A MESH or 3D file opens as a 3D tab, and "save to output" writes it
