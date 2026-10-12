@@ -434,6 +434,73 @@ try:
                 data["target"] = {"path": side, "external": 1}
             return web.json_response(data, headers={"Cache-Control": "no-cache"})
 
+        async def _bepic_timeline_render(request):
+            """Render the saved cut of a film into a film of its own.
+
+            Done in this process (timeline_render.py, through PyAV): no program
+            is started. The film a cut lies beside is never written over - it
+            may be somebody's render - so the result goes next to it as
+            ``<name>_cut<N>``, with its timeline beside it; a cut that has no
+            film yet gets one of its own name. Texts are not drawn here, and the
+            answer says how many were left out.
+            """
+            from . import timeline_io, timeline_render
+            try:
+                body = await request.json()
+            except Exception:
+                return web.Response(status=400, text="the request is not JSON")
+            if not isinstance(body, dict):
+                return web.Response(status=400, text="the request is not an object")
+            media, allowed, error = _timeline_media(body)
+            if error:
+                return web.Response(status=400, text=error)
+            if not allowed:
+                return web.Response(status=403, text=path_access.refusal(media))
+            side = timeline_io.sidecar_for(media)
+            if not side:
+                return web.Response(status=404, text="no timeline beside this file")
+            fmt = str(body.get("format") or "mp4").lower()
+            if fmt not in timeline_render.FORMATS:
+                return web.Response(status=400, text=f"unknown format: {fmt}")
+            stem = os.path.splitext(side)[0]
+            own = os.path.abspath(media) == os.path.abspath(side)      # a cut with no film yet
+            if own:
+                out = f"{stem}.{fmt}"
+            else:
+                n = 1
+                while any(os.path.exists(f"{stem}_cut{n}.{e}") for e in timeline_render.FORMATS + ("otio",)):
+                    n += 1
+                out = f"{stem}_cut{n}.{fmt}"
+
+            def _render():
+                import copy
+                import datetime
+                import json as _json
+                doc = timeline_io._load(side)
+                got = timeline_render.render(doc, out, fmt, path_access.is_allowed)
+                # The timeline that goes with the new film: this cut, marked as
+                # rendered rather than as changed-and-waiting.
+                done = copy.deepcopy(doc)
+                meta = done.setdefault("metadata", {})
+                if isinstance(meta, dict):
+                    meta["bepic"] = {"rendered": datetime.datetime.now(datetime.timezone.utc)
+                                     .isoformat(timespec="seconds"),
+                                     "texts_left_out": got["texts_left_out"]}
+                beside = os.path.splitext(out)[0] + ".otio"
+                tmp = beside + ".tmp"
+                with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+                    _json.dump(done, fh, indent=2)
+                os.replace(tmp, beside)
+                return got
+            try:
+                got = await asyncio.get_running_loop().run_in_executor(None, _render)
+            except ValueError as exc:                       # RenderError is one
+                return web.Response(status=422, text=f"not rendered: {exc}")
+            except OSError as exc:
+                return web.Response(status=500, text=f"not rendered: {exc}")
+            got["name"] = os.path.basename(got["path"])
+            return web.json_response(got, headers={"Cache-Control": "no-cache"})
+
         async def _bepic_raw_view(request):
             params = dict(request.query)
             path = params.get('path') or params.get('filename')
@@ -1289,6 +1356,8 @@ try:
         _safe_add("GET", "/api/bepic/timeline", _bepic_timeline)
         _safe_add("POST", "/bepic/timeline", _bepic_timeline_save)
         _safe_add("POST", "/api/bepic/timeline", _bepic_timeline_save)
+        _safe_add("POST", "/bepic/timeline_render", _bepic_timeline_render)
+        _safe_add("POST", "/api/bepic/timeline_render", _bepic_timeline_render)
         _safe_add("GET", "/bepic/raw_view", _bepic_raw_view)
         _safe_add("GET", "/api/bepic/raw_view", _bepic_raw_view)
         _safe_add("POST", "/bepic/probe_paths", _bepic_probe_paths)

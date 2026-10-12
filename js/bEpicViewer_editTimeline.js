@@ -116,7 +116,9 @@ export const EditTimelineMixin = {
         this._editTlCut = data.edit;
         this._editTlFile = data.file || "";
         this._editTlSel = null;
-        this._editTlNote = "";
+        // What a render just said stays up when its film comes on screen.
+        this._editTlNote = this._editTlKeepNote || "";
+        this._editTlKeepNote = "";
     },
 
     _editTlDirty() {
@@ -163,7 +165,10 @@ export const EditTimelineMixin = {
         const save = button("Save", "Write the cut into the timeline file. The film is not rendered again.",
                             () => this._editTlSave());
         save.classList.add("primary");
-        bar.append(sub, badge, add, revert, save);
+        const render = button("Render", "Render this cut into a film of its own, here in the viewer: picture, "
+            + "dissolves and sound. Texts are not drawn. The film it lies beside is left as it is.",
+            () => this._editTlRender());
+        bar.append(sub, badge, add, revert, save, render);
 
         const area = el("div", "edit-area");
         const ruler = el("div", "edit-ruler");
@@ -200,8 +205,8 @@ export const EditTimelineMixin = {
                 this._editTlAdd((payload && payload.items) || [], at);
             });
         }
-        this._editTlUi = { host, empty, body, sub, badge, add, revert, save, area, ruler, texts, shots,
-                           sound, head, drop, inspect };
+        this._editTlUi = { host, empty, body, sub, badge, add, revert, save, render, area, ruler, texts,
+                           shots, sound, head, drop, inspect };
         this._editTlWatchCanvas();
         return this._editTlUi;
     },
@@ -239,8 +244,10 @@ export const EditTimelineMixin = {
                 ? "saved — the film has not been rendered again" : ""));
         ui.badge.className = "edit-badge" + (dirty ? " dirty" : "");
         ui.badge.title = this._editTlPending ? "Another film came on screen: save or revert to see its cut." : "";
-        ui.save.disabled = !dirty;
-        ui.revert.disabled = !dirty || !this._editTlSaved;
+        ui.save.disabled = !dirty || !!this._editTlBusy;
+        ui.revert.disabled = !dirty || !this._editTlSaved || !!this._editTlBusy;
+        ui.render.disabled = !!this._editTlBusy;
+        ui.render.textContent = this._editTlBusy ? "Rendering…" : "Render";
 
         const doc = host.ownerDocument;
         const block = (cls, item, text) => {
@@ -660,6 +667,46 @@ export const EditTimelineMixin = {
         this.editTlRefresh();
         // A film that came on screen while this cut had unsaved changes.
         if (this._editTlPending) { const next = this._editTlPending; this._editTlPending = null; this.editTlShow(next); }
+    },
+
+    // Render the cut into a film of its own, in the viewer. What is rendered is
+    // the SAVED cut, so unsaved changes are saved first; the film comes up in a
+    // tab of its own, with its timeline beside it.
+    async _editTlRender() {
+        if (this._editTlBusy || !this._editTlCut || !this._editTlCut.clips.length) return;
+        if (this._editTlDirty()) {
+            await this._editTlSave();
+            if (this._editTlDirty()) return;             // the save said why
+        }
+        if (!this._editTlTarget) return;
+        this._editTlBusy = true;
+        this._editTlNote = "rendering…";
+        this.editTlRefresh();
+        let got = null, said = "";
+        try {
+            const res = await api.fetchApi("/bepic/timeline_render", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ...this._editTlTarget, format: "mp4" }),
+            });
+            if (res.ok) got = await res.json(); else said = await res.text();
+        } catch (e) { said = String(e && e.message || e); }
+        this._editTlBusy = false;
+        if (!got || !got.path) {
+            this._editTlNote = said || "not rendered";
+            this.editTlRefresh();
+            return;
+        }
+        const left = got.texts_left_out;
+        this._editTlNote = "rendered as " + got.name
+            + (left ? ` - without its ${left} text${left === 1 ? "" : "s"} (the viewer does not draw them)` : "");
+        this._editTlKeepNote = this._editTlNote;
+        this.editTlRefresh();
+        // Up on screen, in a tab of its own; its timeline is read with it.
+        if (this.openExternalFramesInViewer) {
+            this.openExternalFramesInViewer(
+                [{ path: got.path, name: got.name, external: true, kind: "video", fps: got.fps, frames: got.frames }],
+                got.name);
+        }
     },
 
     _editTlRevert() {
