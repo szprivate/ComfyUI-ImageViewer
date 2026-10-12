@@ -56,9 +56,13 @@ export const EditTimelineMixin = {
             + '<rect x="2" y="14" width="5" height="5" rx="1"/><rect x="9" y="14" width="13" height="5" rx="1"/></svg>';
         b.addEventListener("click", () => this.editTlToggle());
         const before = bar.querySelector("#layout-btn");
-        // Beside the layout button, wherever in the bar it sits: in the viewer's own
-        // markup it is inside a group, not a direct child of the bar.
-        if (before && before.parentNode) before.parentNode.insertBefore(b, before); else bar.append(b);
+        // Beside the layout button - which the viewer wraps in a box of its own,
+        // with an invisible menu laid over the whole box (.layout-picker-wrap). A
+        // button put INSIDE that box sits under the menu: it shows the menu's
+        // tooltip, a click opens the menu, and the wider box covers its neighbour.
+        // So: before the box, in whatever holds the box.
+        const at = before && (before.closest(".layout-picker-wrap") || before);
+        if (at && at.parentNode) at.parentNode.insertBefore(b, at); else bar.append(b);
         this._editTlBtn = b;
         return b;
     },
