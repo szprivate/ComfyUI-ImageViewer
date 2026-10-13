@@ -307,3 +307,34 @@ export function timelineQuery(obj) {
     if (!target) return "";
     return "?" + Object.entries(target).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
 }
+
+// ── playing ──────────────────────────────────────────────────────────────────
+
+/** How many frames the film of a cut has (one for a cut with nothing in it). */
+export function filmFrames(cut) {
+    const rate = cut && num(cut.fps) > 0 ? num(cut.fps) : 24;
+    return Math.max(1, Math.round(filmLength(cut) * rate));
+}
+
+/**
+ * What is on screen at `seconds` of the film, for playing it: clip `i`, shown
+ * from `start` until `end` (where the next clip takes over - in a dissolve that
+ * is the dissolve's beginning, as clipAt has it), and `local`, the moment of
+ * the clip's own file. `seconds` is held inside the film; null for no clips.
+ */
+export function playAt(cut, seconds) {
+    const clips = (cut && cut.clips) || [];
+    if (!clips.length) return null;
+    const starts = clipStarts(cut);
+    const total = filmLength(cut);
+    const t = Math.max(0, Math.min(num(seconds), Math.max(0, total - 1e-4)));
+    let i = 0;
+    for (let k = 0; k < starts.length; k++) if (t >= starts[k] - 1e-6) i = k;
+    const end = i + 1 < starts.length ? starts[i + 1] : total;
+    return { i, t, start: starts[i], end, local: round(num(clips[i].in) + Math.max(0, t - starts[i])) };
+}
+
+/** Is a clip's file a picture (shown for the clip's length) rather than a film? */
+export function isStill(file) {
+    return !/\.(mp4|m4v|mov|webm|mkv|avi)$/i.test(String(file || ""));
+}

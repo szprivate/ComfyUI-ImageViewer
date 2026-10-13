@@ -90,6 +90,8 @@ export const DnDMixin = {
             try { payload = JSON.parse(e.dataTransfer.getData("application/x-bepic-history")); } catch (_) {}
             if (!payload) return;
             const items = Array.isArray(payload.items) ? payload.items : [payload];
+            // Dropped onto a cut that is playing, they are clips for it.
+            if (this.isEditTab && this.isEditTab() && this._editTlAdd) { this._editTlAdd(items, null); return; }
             // Dropped onto a previz scene, models join the scene instead of
             // replacing what the tab is showing.
             if (this.isPrevizTab && this.isPrevizTab() && items.some((it) => this._frameIsModel(it))) {

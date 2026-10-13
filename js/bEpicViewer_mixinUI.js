@@ -383,6 +383,8 @@ export const UIMixin = {
     switchTab(k) {
         const prevTab = this.activeTab;
         if (prevTab && prevTab !== k) this.captureTabViewState(prevTab);
+        // An Edit tab hands the viewport back before anything else is shown.
+        if (this._editPlayOn && !(prevTab === k && this.isEditTab(k))) this.editPlayLeave();
 
         try {
             if (this.activeTab !== k && this.isViewingHistory && this.previewBackup && this.activeTab && this.allTabs[this.activeTab]) {
@@ -421,7 +423,14 @@ export const UIMixin = {
             }
         }
 
-        if (imgs && imgs.length > 0) {
+        if (this.isEditTab && this.isEditTab(k)) {
+            // An Edit tab's picture is its cut, played from the clips' own files.
+            this.editPlayEnter(k);
+            this.applyTimelineBounds();
+            const bounds = this.getTimelineBounds();
+            const preferred = tabState && Number.isFinite(tabState.frame) ? tabState.frame : 0;
+            this.setFrame(preferred >= bounds.min && preferred <= bounds.max ? preferred : bounds.min);
+        } else if (imgs && imgs.length > 0) {
             if (!restoredByHistory) {
                 this.applyTimelineBounds(imgs.length);
                 const bounds = this.getTimelineBounds(imgs.length);

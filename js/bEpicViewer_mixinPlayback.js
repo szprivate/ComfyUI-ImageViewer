@@ -163,6 +163,8 @@ export const PlaybackMixin = {
     getImgCount() {
         // Previz: the timeline belongs to the shot, not to the tab's media.
         if (this.isPrevizTab && this.isPrevizTab()) return this.previzFrameCount();
+        // An Edit tab: the film of the cut (EditPlayMixin).
+        if (this._editPlayOn) return this.editPlayFrameCount();
         // A video tab holds a single frame dict but scrubs over many frames.
         if (this._videoMode && this._videoFrames > 0) return this._videoFrames;
         return (this._baseFrames() || []).length;
@@ -468,6 +470,8 @@ export const PlaybackMixin = {
     },
 
     setFrame(idx) {
+        // An Edit tab shows its cut, clip by clip (EditPlayMixin).
+        if (this._editPlayOn) { this.editPlaySetFrame(idx); return; }
         const imgs = this._baseFrames();
         // Previz: the frame is a moment in the shot, and the scene places every
         // item itself — so this runs even for a tab with no media frames of its
@@ -554,7 +558,7 @@ export const PlaybackMixin = {
     _toolsFrameChanged() {
         // Keyed node parameters show their value at the frame (ParamAnimMixin).
         this.paramAnimFrameChanged?.();
-        // The edit strip's playhead, and which shot is lit (EditTimelineMixin).
+        // The Edit panel's playhead, and which shot is lit (EditTimelineMixin).
         this._editTlPlayhead?.();
         if (!this._toolState || this._toolState.active !== "roto") return;
         this._rotoRefreshKfInfo && this._rotoRefreshKfInfo();
@@ -773,7 +777,7 @@ export const PlaybackMixin = {
             // <img>. Hand it to the history prune, which confirms with the server
             // before dropping anything.
             v.addEventListener("error", () => {
-                if (!this._videoMode) return;
+                if (!this._videoMode || this._editPlayOn) return;
                 if (v.getAttribute("src") && this.noteMediaLoadFailed) this.noteMediaLoadFailed();
             });
             this._videoHandlersBound = true;
@@ -785,8 +789,8 @@ export const PlaybackMixin = {
         if (this.setImageFilter) this.setImageFilter();
         this._updatePathBar(imgObj);
         if (this._videoFrames > 0) this.applyTimelineBounds(this._videoFrames);
-        // A film that was cut has its cut beside it: shown as a strip over the
-        // scrub bar (EditTimelineMixin). Most films have none.
+        // A film that was cut has its cut beside it, and the timeline button
+        // opens it (EditTimelineMixin). Most films have none.
         this.editTlShow?.(imgObj);
     },
 
@@ -855,15 +859,13 @@ export const PlaybackMixin = {
     },
 
     _videoOnMeta() {
+        if (this._editPlayOn) return;          // the cut player reads its clips itself
         const v = this.videoBase;
         if (!this._videoMode || !v) return;
         if (!(this._videoFrames > 0)) {
             this._videoFrames = Math.max(1, Math.round((v.duration || 0) * (this._videoFps || 24)));
         }
         this.applyTimelineBounds(this._videoFrames);
-        // The film's real length is known only now, and the edit strip is laid
-        // out against it.
-        this._editTlDraw?.();
         this.fitView();
         this._applyVideoPlaybackRate();
         if (this.timeline) this.timeline.value = this.currentFrame || 0;
@@ -881,6 +883,7 @@ export const PlaybackMixin = {
     },
 
     _videoOnTimeUpdate() {
+        if (this._editPlayOn) return;
         const v = this.videoBase;
         if (!this._videoMode || !v) return;
         const fps = this._videoFps || 24;
@@ -920,6 +923,7 @@ export const PlaybackMixin = {
     // looping mode the wrap in _videoOnTimeUpdate usually fires first, but when
     // the region ends on the last frame the clip can end naturally — restart it.
     _videoOnEnded() {
+        if (this._editPlayOn) return;
         const v = this.videoBase;
         if (!v) return;
         if (this._videoMode && this.isPlaying && this.playbackRange && this.loopMode !== "once") {
@@ -951,6 +955,7 @@ export const PlaybackMixin = {
 
     play() {
         this.stop();
+        if (this._editPlayOn) { this.editPlayStart(); return; }
         const count = this.getImgCount();
         if (count === 0) return;
 
@@ -1020,6 +1025,7 @@ export const PlaybackMixin = {
         if (this.playbackInterval) clearInterval(this.playbackInterval);
         if (this._videoMode && this.videoBase) { try { this.videoBase.pause(); } catch (e) {} }
         if (this.videoCompare) { try { this.videoCompare.pause(); } catch (e) {} }
+        if (this._editPlayOn) this.editPlayStop();
     },
 
     step(n) {

@@ -1,13 +1,20 @@
 // bEpicViewer_editTimeline.js
-// The Edit panel: the cut that lies beside a film, to read and to change.
+// The Edit panel: a cut - shots in an order, each a piece of a file - to make,
+// to change and to play.
 //
-// A film that was edited rather than generated usually has its edit next to it:
-// an OpenTimelineIO file of the same name (agentY's edit stage writes one, and so
-// can Resolve, Nuke Studio or Premiere). The panel (#edit-timeline-panel, dock id
+// A cut is an OpenTimelineIO file. One lies beside a film that was edited rather
+// than generated (agentY's edit stage writes one, and so can Resolve, Nuke Studio
+// or Premiere); one is started here with New, or by adding clips. Every cut that
+// is open has a TAB of its own ("edit:…"), and in that tab the viewport plays the
+// cut from the clips' own files (bEpicViewer_editPlay.js) - so an edit is seen
+// and heard before anything is rendered. The panel (#edit-timeline-panel, dock id
 // "editTimeline", the timeline button in the transport) draws it - a ruler, the
-// texts, one block per shot with a mark on every dissolve, the sound - and lets
-// it be cut:
+// texts, one block per shot with a mark on every dissolve, the sound:
 //
+//   the buttons, top left   New (an empty cut, in its tab) · Add (files, or the
+//                           nodes selected on the canvas) · Save / Export
+//   drag on the ruler       scrub the film
+//   click a shot            go to it (and to the cut's tab, from another one)
 //   drag a shot's edge      trim it (what follows moves with it)
 //   drag a shot             put it elsewhere in the order
 //   drag a text / its edge  move it / make it longer or shorter
@@ -16,10 +23,8 @@
 //   the line under it       the selected shot's name, in point, length and the
 //                           dissolve into it, as numbers; a text's words
 //
-// Save writes the cut back into the .otio (/bepic/timeline). NOTHING IS RENDERED:
-// the viewer starts no process, so the film stays as it was until its maker
-// renders the edited cut - the panel says so while the two differ. With no film
-// on screen, dropping clips starts a new cut, saved into ComfyUI's output folder.
+// Save writes the cut into its .otio (/bepic/timeline); Export renders the film
+// of it (/bepic/timeline_render), which lands as a file of its own.
 //
 // What an edit does to a cut is worked out in bEpicViewer_editTimelineData.js
 // (plain functions, run under node); this is the panel side. It is a dock panel
@@ -36,6 +41,13 @@ const EDGE_PX = 7;          // how close to a block's end a press is a trim
 const DRAG_SLOP = 4;        // travel before a press on a shot becomes a move
 const STILL_SECONDS = 3;
 const DRAG_TYPE = "application/x-bepic-history";
+const PREFIX = "edit:";                       // an Edit tab's key (EditPlayMixin.isEditTab)
+const STORE = "bepic.viewer.edits";           // the open cuts, across a reload
+const hash = (text) => {
+    let h = 5381;
+    for (let i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
+    return h.toString(36);
+};
 
 export const EditTimelineMixin = {
 
@@ -49,7 +61,7 @@ export const EditTimelineMixin = {
         const b = bar.ownerDocument.createElement("button");
         b.id = "edit-tl-btn";
         b.className = "sprite-icon edit-tl-btn";
-        b.title = "Edit: the timeline of this film";
+        b.title = "Edit: the cut, to change and to play";
         b.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" '
             + 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
             + '<rect x="2" y="5" width="9" height="5" rx="1"/><rect x="13" y="5" width="9" height="5" rx="1"/>'
@@ -69,53 +81,191 @@ export const EditTimelineMixin = {
 
     _editTlOpen() { return !!(this.isPanelDocked && this.isPanelDocked(DOCK_ID)); },
 
-    /** Open or close the panel (the transport's timeline button). */
-    editTlToggle() {
+    /**
+     * The transport's timeline button. On a film that has a cut beside it, it
+     * opens that cut (its tab, and the panel); anywhere else it shows or hides
+     * the panel.
+     */
+    async editTlToggle() {
         if (!this.setPanelDocked) return;
+        if (this._editTlFilm && !this.isEditTab()) { await this.editTlOpenFilmCut(); return; }
         const open = !this._editTlOpen();
-        // Closed by hand stays closed: a film with a cut no longer opens it by itself.
+        // Put away by hand stays away: an Edit tab coming up no longer opens it.
         this._editTlAuto = open;
         this.setPanelDocked(DOCK_ID, open);
         this.editTlRefresh();
     },
 
-    // A film came on screen (or left: pass null). Asks once per film. A cut with
-    // changes that were not saved is not swept away by another film coming up.
+    // ── the cuts: one to a tab ───────────────────────────────────────────────
+    //
+    // Every open cut has a tab and a record here, { cut, saved, target, file }.
+    // The panel shows ONE of them - the Edit tab that was up last (`_editTlTab`)
+    // - and keeps showing it while other tabs are looked at, so that clips can
+    // be dragged out of their History into it. Its record is spread over the
+    // `_editTl*` fields; the others wait in `_editTlCuts`. They are kept in
+    // localStorage, so a reload loses no work.
+
+    _editTlAll() {
+        if (this._editTlCuts) return this._editTlCuts;
+        let kept = null;
+        try { kept = JSON.parse(window.localStorage.getItem(STORE) || "null"); } catch (_) {}
+        this._editTlCuts = (kept && typeof kept === "object" && !Array.isArray(kept)) ? kept : {};
+        return this._editTlCuts;
+    },
+
+    _editTlStash() {
+        if (!this._editTlTab) return;
+        this._editTlAll()[this._editTlTab] = {
+            cut: this._editTlCut, saved: this._editTlSaved || null,
+            target: this._editTlTarget || null, file: this._editTlFile || "",
+        };
+    },
+
+    // Written a moment later, and once: a drag changes the cut on every move.
+    _editTlKeep() {
+        this._editTlStash();
+        if (this._editTlKeepTimer) return;
+        const win = (this._viewerWindow && this._viewerWindow()) || window;
+        this._editTlKeepTimer = win.setTimeout(() => {
+            this._editTlKeepTimer = 0;
+            const all = this._editTlAll();
+            const out = {};
+            for (const key of Object.keys(all)) if (this.allTabs && this.allTabs[key]) out[key] = all[key];
+            try { window.localStorage.setItem(STORE, JSON.stringify(out)); } catch (_) {}
+        }, 400);
+    },
+
+    /** The open Edit tabs, in tab order. */
+    _editTlTabs() {
+        return (this.tabOrder || []).filter((k) => this.isEditTab(k) && this.allTabs[k]);
+    },
+
+    /** Make `key`'s cut the one in the panel. */
+    editTlUse(key) {
+        if (this._editTlTab === key) return;
+        this._editTlStash();
+        const s = this._editTlAll()[key] || {};
+        const label = String((this.tabLabels && this.tabLabels[key]) || "").replace(/^[^\w]+/, "");
+        this._editTlTab = key;
+        this._editTlCut = s.cut || D.emptyCut(label || "cut");
+        this._editTlSaved = s.saved || null;
+        this._editTlTarget = s.target || null;
+        this._editTlFile = s.file || "";
+        this._editTlSel = null;
+        this._editTlNote = "";
+        this._editTlNow = -1;
+    },
+
+    // A cut gets its tab. `focus`: come up on screen too - not when clips were
+    // dropped from another tab, which the user is still picking from.
+    _editTlOpenTab(key, name, record, focus) {
+        this._editTlStash();
+        this._editTlAll()[key] = record;
+        if (this._editTlTab === key) this._editTlTab = null;          // read the record again
+        if (!this.allTabs[key]) {
+            this.allTabs[key] = [];
+            this.tabLabels[key] = "\u2702 " + name;
+            if (!this.tabOrder.includes(key)) this.tabOrder.push(key);
+            this._rebuildTabBar(null);
+        }
+        if (this.setPanelDocked && !this._editTlOpen()) this.setPanelDocked(DOCK_ID, true);
+        if (focus) {
+            if (this.requestPanelOpen) this.requestPanelOpen();
+            this.switchTab(key);
+        } else {
+            this.editTlUse(key);
+        }
+        this.editTlRefresh();
+        return key;
+    },
+
+    /** New: an empty cut, in a tab of its own. */
+    editTlNew(focus = true) {
+        this._editTlStash();
+        const all = this._editTlAll();
+        const taken = new Set(this._editTlTabs().map((k) => all[k] && all[k].cut && all[k].cut.name));
+        let n = 1;
+        while (taken.has("cut" + n)) n += 1;
+        const name = "cut" + n;
+        return this._editTlOpenTab(PREFIX + "n" + Date.now().toString(36), name,
+                                   { cut: D.emptyCut(name), saved: null, target: null, file: "" }, focus);
+    },
+
+    async _editTlRead(obj) {
+        try {
+            const res = await api.fetchApi("/bepic/timeline" + D.timelineQuery(obj));
+            const data = res.ok ? await res.json() : null;
+            return data && data.edit ? data : null;
+        } catch (e) { return null; }
+    },
+
+    // A film came on screen (or left: pass null). Asked once per film: has it a
+    // cut beside it? If so the timeline button says so, and opens it.
     async editTlShow(obj) {
         this._editTlButton();
         const target = D.timelineTarget(obj);
-        const key = target ? JSON.stringify(target) : "";
-        if (key === this._editTlKey) return;
-        if (this._editTlDirty()) { this._editTlPending = obj; this.editTlRefresh(); return; }
-        // A cut of its own (started here, no film yet) stays up while films
-        // without a timeline come and go: there is nowhere else to find it again.
-        const own = !!(this._editTlCut && this._editTlTarget
-            && String(this._editTlTarget.path || "").toLowerCase().endsWith(".otio"));
-        const clear = () => {
-            this._editTlTarget = null;
-            this._editTlSaved = null;
-            this._editTlCut = null;
-            this._editTlSel = null;
-        };
-        this._editTlAsked = key;
-        this._editTlPending = null;
-        if (!own) { this._editTlKey = key; clear(); this.editTlRefresh(); }
+        const id = target ? JSON.stringify(target) : "";
+        if (id === this._editTlFilmId) return;
+        this._editTlFilmId = id;
+        this._editTlFilm = null;
+        this.editTlRefresh();
         if (!target) return;
-        let data = null;
-        try {
-            const res = await api.fetchApi("/bepic/timeline" + D.timelineQuery(obj));
-            if (res.ok) data = await res.json();
-        } catch (e) { data = null; }
-        if (this._editTlAsked !== key || this._editTlDirty()) return;
-        if (!data || !data.edit) return;
-        this._editTlKey = key;
-        this._editTlTarget = target;
-        this._editTlLoaded(data);
-        // A film with a cut brings its panel up, unless it was put away by hand.
-        if (this._editTlAuto !== false && this.setPanelDocked && !this._editTlOpen()) {
+        const data = await this._editTlRead(obj);
+        if (this._editTlFilmId !== id || !data) return;
+        this._editTlFilm = { id, obj, target };
+        this.editTlRefresh();
+    },
+
+    /** Open the cut of the film on screen in its Edit tab (read again: it may have been saved since). */
+    async editTlOpenFilmCut() {
+        const film = this._editTlFilm;
+        if (!film) return false;
+        const key = PREFIX + "f" + hash(film.id);
+        if (this.allTabs[key]) {
+            if (this.setPanelDocked && !this._editTlOpen()) this.setPanelDocked(DOCK_ID, true);
+            this.switchTab(key);
+            return true;
+        }
+        const data = await this._editTlRead(film.obj);
+        if (!data) { notice("warn", "No cut to open", "The timeline beside this film could not be read."); return false; }
+        const name = data.edit.name || String(data.file || "cut").replace(/\.otio$/i, "");
+        this._editTlOpenTab(key, name, { cut: data.edit, saved: data.edit, target: film.target, file: data.file || "" }, true);
+        return true;
+    },
+
+    // An Edit tab came on screen (EditPlayMixin.editPlayEnter). `fresh`: from
+    // another kind of tab - that is what brings the panel up with it.
+    editTlTabShown(key, fresh) {
+        if (fresh && this._editTlAuto !== false && this.setPanelDocked && !this._editTlOpen()) {
             this.setPanelDocked(DOCK_ID, true);
         }
         this.editTlRefresh();
+    },
+
+    // An Edit tab is being closed (closeTab). A cut with unsaved changes says so
+    // once and stays; the second close throws them away.
+    editTlTabClosing(key) {
+        if (!this.isEditTab || !this.isEditTab(key)) return true;
+        this._editTlStash();
+        const all = this._editTlAll();
+        if (this._editTlDirtyOf(all[key]) && this._editTlCloseAsked !== key) {
+            this._editTlCloseAsked = key;
+            notice("warn", "This cut has changes that are not saved", "Close the tab again to throw them away.");
+            return false;
+        }
+        this._editTlCloseAsked = null;
+        if (this.activeTab === key && this.editPlayLeave) this.editPlayLeave();
+        delete all[key];
+        if (this._editTlTab === key) {
+            this._editTlTab = null;
+            this._editTlCut = null;
+            this._editTlSaved = null;
+            this._editTlTarget = null;
+            this._editTlSel = null;
+        }
+        const win = (this._viewerWindow && this._viewerWindow()) || window;
+        win.setTimeout(() => { this._editTlKeep(); this.editTlRefresh(); }, 0);
+        return true;
     },
 
     _editTlLoaded(data) {
@@ -123,23 +273,29 @@ export const EditTimelineMixin = {
         this._editTlCut = data.edit;
         this._editTlFile = data.file || "";
         this._editTlSel = null;
-        // What a render just said stays up when its film comes on screen.
-        this._editTlNote = this._editTlKeepNote || "";
-        this._editTlKeepNote = "";
+        this._editTlNote = "";
+    },
+
+    _editTlDirtyOf(s) {
+        if (!s || !s.cut) return false;
+        if (!s.saved) return s.cut.clips.length > 0;                  // a new cut, never saved
+        return !D.sameCut(s.cut, s.saved);
     },
 
     _editTlDirty() {
-        if (!this._editTlCut) return false;
-        if (!this._editTlSaved) return this._editTlCut.clips.length > 0;      // a new cut, never saved
-        return !D.sameCut(this._editTlCut, this._editTlSaved);
+        return !!this._editTlTab && this._editTlDirtyOf({ cut: this._editTlCut, saved: this._editTlSaved });
     },
 
-    // Does the film on screen show THIS cut? Not once the cut was changed, here
-    // or in an earlier session (the file is stamped when it is saved from here).
-    _editTlIsFilm() {
-        return !!(this._editTlSaved && this._editTlTarget && this._videoMode
-            && !this._editTlSaved.edited && !this._editTlDirty()
-            && !String(this._editTlTarget.path || "").toLowerCase().endsWith(".otio"));
+    /** Is the cut in the panel the one the viewport is playing? */
+    _editTlOnScreen() {
+        return !!(this._editTlTab && this._editPlayOn && this.activeTab === this._editTlTab);
+    },
+
+    /** One line of news in the panel's header (the player says what it cannot play). */
+    _editTlSay(text) {
+        if (this._editTlNote === text) return;
+        this._editTlNote = text;
+        this.editTlRefresh();
     },
 
     // ── the panel ────────────────────────────────────────────────────────────
@@ -154,10 +310,22 @@ export const EditTimelineMixin = {
             return n;
         };
         host.querySelectorAll(":scope > .edit-body, :scope > .curves-empty").forEach((n) => n.remove());
-        const empty = el("div", "curves-empty");
         const body = el("div", "edit-body");
 
         const bar = el("div", "edit-bar");
+        // In and out, top left, the Outliner's buttons at the Outliner's size:
+        // New, Add, then Save / Export.
+        const icon = (key, fallback, title, fn) => {
+            const b = el("button", "previz-btn previz-icon", fallback);      // the text stands in if the skin is missing
+            b.title = title;
+            this._setIcon(b, key);
+            b.addEventListener("click", () => fn(b));
+            return b;
+        };
+        const fresh = icon("icon-file", "\u25a1", "New: an empty cut, in a tab of its own", () => this.editTlNew());
+        const add = icon("icon-circle-plus", "+", "Add clips to the cut: files, or the nodes selected on the canvas",
+                         (b) => this._editTlAddMenu(b));
+        const out = icon("icon-save", "\u2193", "Save this cut, or export it as a film", (b) => this._editTlOutMenu(b));
         const sub = el("div", "curves-sub edit-sub");
         const badge = el("div", "edit-badge");
         const button = (label, title, fn) => {
@@ -166,16 +334,16 @@ export const EditTimelineMixin = {
             b.addEventListener("click", fn);
             return b;
         };
-        // Add and Export are in the panel's title bar, where every panel that
-        // has them keeps them (DOCK_PANELS in bEpicViewer_mixinDock.js).
+        const film = button("Open this film\u2019s cut", "The film on screen has a timeline beside it: open it in an Edit tab",
+                            () => this.editTlOpenFilmCut());
         const revert = button("Revert", "Throw away the changes since the last save", () => this._editTlRevert());
-        const save = button("Save", "Write the cut into the timeline file. The film is not rendered again.",
-                            () => this._editTlSave());
+        const save = button("Save", "Write the cut into its timeline file", () => this._editTlSave());
         save.classList.add("primary");
-        bar.append(sub, badge, revert, save);
+        bar.append(fresh, add, out, film, sub, badge, revert, save);
 
         const area = el("div", "edit-area");
         const ruler = el("div", "edit-ruler");
+        ruler.title = "Drag to scrub";
         const texts = el("div", "edit-track edit-texts");
         const shots = el("div", "edit-track edit-shots");
         const sound = el("div", "edit-track edit-sound");
@@ -184,33 +352,49 @@ export const EditTimelineMixin = {
         area.append(ruler, texts, shots, sound, head, drop);
 
         const inspect = el("div", "edit-inspect");
-        const hint = el("div", "bepic-tool-hint",
-            "Drag a shot's edge to trim, a shot to reorder, a text to move. Drop files or canvas nodes to add clips.");
-        body.append(bar, area, inspect, hint);
-        host.append(empty, body);
+        const hint = el("div", "bepic-tool-hint");
+        const empty = el("div", "curves-empty edit-empty");
+        body.append(bar, area, inspect, hint, empty);
+        host.append(body);
+
+        // The ruler is the film's own scrub bar.
+        ruler.addEventListener("pointerdown", (e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            const go = (ev) => { const at = this._editTlTimeAt(ev.clientX); if (at != null) this._editTlSeek(at, true); };
+            const up = () => {
+                ruler.removeEventListener("pointermove", go);
+                ruler.removeEventListener("pointerup", up);
+                ruler.removeEventListener("pointercancel", up);
+                try { ruler.releasePointerCapture(e.pointerId); } catch (_) {}
+            };
+            try { ruler.setPointerCapture(e.pointerId); } catch (_) {}
+            ruler.addEventListener("pointermove", go);
+            ruler.addEventListener("pointerup", up);
+            ruler.addEventListener("pointercancel", up);
+            go(e);
+        });
 
         // New material: rows of the file browser, history thumbs, the viewport.
-        for (const zone of [body, empty]) {
-            zone.addEventListener("dragover", (e) => {
-                if (!this._editTlCarries(e)) return;
-                e.preventDefault();
-                try { e.dataTransfer.dropEffect = "copy"; } catch (_) {}
-                this._editTlDropMark(e.clientX);
-            });
-            zone.addEventListener("dragleave", () => this._editTlDropMark(null));
-            zone.addEventListener("drop", (e) => {
-                if (!this._editTlCarries(e)) return;
-                e.preventDefault();
-                e.stopPropagation();
-                let payload = null;
-                try { payload = JSON.parse(e.dataTransfer.getData(DRAG_TYPE)); } catch (_) {}
-                const at = this._editTlTimeAt(e.clientX);
-                this._editTlDropMark(null);
-                this._editTlAdd((payload && payload.items) || [], at);
-            });
-        }
-        this._editTlUi = { host, empty, body, sub, badge, revert, save, area, ruler, texts,
-                           shots, sound, head, drop, inspect };
+        body.addEventListener("dragover", (e) => {
+            if (!this._editTlCarries(e)) return;
+            e.preventDefault();
+            try { e.dataTransfer.dropEffect = "copy"; } catch (_) {}
+            this._editTlDropMark(e.clientX);
+        });
+        body.addEventListener("dragleave", () => this._editTlDropMark(null));
+        body.addEventListener("drop", (e) => {
+            if (!this._editTlCarries(e)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            let payload = null;
+            try { payload = JSON.parse(e.dataTransfer.getData(DRAG_TYPE)); } catch (_) {}
+            const at = this._editTlTimeAt(e.clientX);
+            this._editTlDropMark(null);
+            this._editTlAdd((payload && payload.items) || [], at);
+        });
+        this._editTlUi = { host, empty, body, sub, badge, revert, save, out, film, area, ruler, texts,
+                           shots, sound, head, drop, inspect, hint };
         this._editTlWatchCanvas();
         return this._editTlUi;
     },
@@ -222,36 +406,53 @@ export const EditTimelineMixin = {
     /** Draw the panel from the cut as it stands. The one place it is drawn. */
     editTlRefresh() {
         const btn = this._editTlButton();
+        const filmCut = !!(this._editTlFilm && !(this.isEditTab && this.isEditTab()));
         if (btn) {
             btn.classList.toggle("active", this._editTlOpen());
-            btn.classList.toggle("has-cut", !!this._editTlCut);
+            btn.classList.toggle("has-cut", filmCut);
+            btn.title = filmCut ? "Edit: open the cut of this film" : "Edit: the cut, to change and to play";
         }
+        // With no cut in the panel, an Edit tab that is open takes its place.
+        if (!this._editTlTab) {
+            const first = this._editTlTabs()[0];
+            if (first) this.editTlUse(first);
+        }
+        // The viewport plays the cut: a change is on screen with this redraw.
+        if (this.editPlayCutChanged) this.editPlayCutChanged();
+        if (this._editTlTab) this._editTlKeep();
         const host = this.editTimelinePanel;
         if (!host || !this._editTlOpen()) return;
         const ui = this._editTlBuild(host);
-        const cut = this._editTlCut;
+        const cut = this._editTlTab ? this._editTlCut : null;
         const has = !!(cut && cut.clips.length);
-        ui.body.style.display = has ? "flex" : "none";
+        const busy = !!this._editTlBusy;
+        const dirty = this._editTlDirty();
+        for (const part of [ui.area, ui.inspect, ui.hint]) part.style.display = has ? "" : "none";
         ui.empty.style.display = has ? "none" : "block";
-        ui.empty.textContent = "This film has no timeline beside it. Drop clips here - from the file browser, "
-            + "the history strip, or a node dragged off the canvas - to start a new cut.";
-        if (!has) return;
+        ui.empty.textContent = cut
+            ? "This cut is empty. Add clips with the plus button, or drop them here - from the file browser, "
+              + "the history strip, or a node dragged off the canvas."
+            : "No cut is open. New starts one; so does adding or dropping clips here.";
+        ui.film.style.display = filmCut ? "" : "none";
+        ui.out.disabled = !has || busy;
+        ui.save.disabled = !dirty || busy;
+        ui.revert.disabled = !dirty || !this._editTlSaved || busy;
+        ui.save.style.display = ui.revert.style.display = cut ? "" : "none";
+        ui.badge.textContent = dirty ? (this._editTlSaved ? "changed \u2014 not saved" : "new cut \u2014 not saved") : "";
+        ui.badge.className = "edit-badge" + (dirty ? " dirty" : "");
+        if (!has) {
+            this._editTlLay = null;
+            ui.sub.textContent = cut ? (cut.name || "new cut") + (this._editTlNote ? " \u00b7 " + this._editTlNote : "") : "";
+            return;
+        }
         const lay = D.layoutCut(cut);
         this._editTlLay = lay;
-        const dirty = this._editTlDirty();
-        const isFilm = this._editTlIsFilm();
         const n = cut.clips.length;
-        ui.sub.textContent = `${cut.name || this._editTlFile || "new cut"} · ${n} shot${n === 1 ? "" : "s"} · `
-            + D.lengthLabel(lay.total) + (this._editTlNote ? " · " + this._editTlNote : "");
-        ui.badge.textContent = dirty ? (this._editTlSaved ? "changed — not saved" : "new cut — not saved")
-            : (isFilm ? "" : (this._editTlSaved && this._editTlSaved.edited
-                ? "saved — the film has not been rendered again" : ""));
-        ui.badge.className = "edit-badge" + (dirty ? " dirty" : "");
-        ui.badge.title = this._editTlPending ? "Another film came on screen: save or revert to see its cut." : "";
-        ui.save.disabled = !dirty || !!this._editTlBusy;
-        ui.revert.disabled = !dirty || !this._editTlSaved || !!this._editTlBusy;
-        const out = host.querySelector(":scope > .panel-titlebar .pt-export");
-        if (out) out.disabled = !!this._editTlBusy;
+        ui.sub.textContent = `${cut.name || this._editTlFile || "new cut"} \u00b7 ${n} shot${n === 1 ? "" : "s"} \u00b7 `
+            + D.lengthLabel(lay.total) + (this._editTlNote ? " \u00b7 " + this._editTlNote : "");
+        ui.hint.textContent = (this._editTlOnScreen() ? "" : "Click a shot to bring this cut on screen. ")
+            + "Drag on the ruler to scrub, a shot's edge to trim, a shot to reorder, a text to move. "
+            + "Drop files or canvas nodes to add clips.";
 
         const doc = host.ownerDocument;
         const block = (cls, item, text) => {
@@ -292,11 +493,9 @@ export const EditTimelineMixin = {
         ui.sound.replaceChildren(...lay.sound.map((s) => block("edit-snd", s, s.name)));
         ui.sound.style.display = lay.sound.length ? "" : "none";
         this._editTlInspect();
+        this._editTlNow = -1;
         this._editTlPlayhead();
     },
-
-    // Kept for the playback mixin, which calls it when a film's length is known.
-    _editTlDraw() { this.editTlRefresh(); },
 
     // ── the line of numbers under the tracks ─────────────────────────────────
 
@@ -498,12 +697,16 @@ export const EditTimelineMixin = {
 
     // ── the film under it ────────────────────────────────────────────────────
 
-    // Go to a moment of the film - only while the film on screen IS this cut.
-    _editTlSeek(seconds) {
-        if (!this._editTlIsFilm()) return;
-        const fps = this._videoFps || this.fps || 24;
-        if (this.stop && this.isPlaying) this.stop();
-        this.setFrame(Math.max(0, Math.ceil(seconds * fps - 1e-6)));
+    // Go to a moment of the cut - in its tab, which comes up if another is.
+    // `under`: the frame that holds the moment (a scrub); without it the first
+    // frame at or after it, which for a shot's start is that shot's first frame.
+    _editTlSeek(seconds, under) {
+        if (!this._editTlTab || !this.allTabs[this._editTlTab]) return;
+        if (!this._editTlOnScreen()) this.switchTab(this._editTlTab);
+        if (!this._editTlOnScreen()) return;
+        const fps = (this._editTlCut && this._editTlCut.fps) || 24;
+        if (this.isPlaying) this.stop();
+        this.setFrame(Math.max(0, under ? Math.floor(seconds * fps + 1e-6) : Math.ceil(seconds * fps - 1e-6)));
     },
 
     // The line that follows the frame. Called whenever the frame moves
@@ -511,13 +714,21 @@ export const EditTimelineMixin = {
     _editTlPlayhead() {
         const ui = this._editTlUi;
         const lay = this._editTlLay;
-        if (!ui || !lay || !ui.body.isConnected || !this._editTlOpen()) return;
-        if (!this._editTlIsFilm() || !(lay.total > 0)) { ui.head.style.display = "none"; return; }
-        const fps = this._videoFps || this.fps || 24;
+        if (!ui || !ui.body.isConnected || !this._editTlOpen()) return;
+        if (!lay || !(lay.total > 0) || !this._editTlOnScreen()) {
+            ui.head.style.display = "none";
+            if (this._editTlNow !== -2) {
+                this._editTlNow = -2;
+                for (const b of ui.shots.querySelectorAll(".edit-shot.on")) b.classList.remove("on");
+            }
+            return;
+        }
+        const fps = this._editTlCut.fps || 24;
         const seconds = ((this.currentFrame || 0) + 0.5) / fps;
         ui.head.style.display = "block";
         ui.head.style.left = Math.max(0, Math.min(100, (seconds / lay.total) * 100)) + "%";
-        const now = D.clipAt(this._editTlCut, seconds);
+        const at = D.playAt(this._editTlCut, seconds);
+        const now = at ? at.i : -1;
         if (now === this._editTlNow) return;
         this._editTlNow = now;
         for (const b of ui.shots.querySelectorAll(".edit-shot")) {
@@ -566,6 +777,9 @@ export const EditTimelineMixin = {
             this.editTlRefresh();
             return;
         }
+        // No cut open: the clips start one, in a tab of its own - which stays
+        // behind the tab they are being picked from.
+        if (!this._editTlTab) this.editTlNew(false);
         let cut = this._editTlCut || D.emptyCut();
         let index = at == null || !cut.clips.length ? cut.clips.length : D.dropIndex(cut, at);
         let unread = 0;
@@ -575,11 +789,6 @@ export const EditTimelineMixin = {
             const name = String(it.name || it.filename || it.path).split(/[\\/]/).pop().replace(/\.[^.]+$/, "");
             cut = D.insertClip(cut, { file: it.path, name, length: D.toFrame(length, cut.fps || 24) }, index);
             index += 1;
-        }
-        if (!this._editTlCut) {                  // the first clips of a new cut
-            this._editTlSaved = null;
-            this._editTlTarget = null;
-            this._editTlKey = "new";
         }
         this._editTlSel = { kind: "clip", i: index - 1 };
         this._editTlNote = [
@@ -606,13 +815,26 @@ export const EditTimelineMixin = {
 
     _editTlAddSelected() { return this._editTlAddNodes(selectedNodes(), null); },
 
-    /** The title bar's Add: files from disk, or what the canvas has selected. */
+    /** Add: files from disk, or what the canvas has selected. */
     _editTlAddMenu(anchor) {
         if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
         const a = anchor.getBoundingClientRect();
         this._previzOpenMenu([
             { label: "Files\u2026", run: () => this._editTlAddFiles() },
             { label: "Selected canvas nodes", run: () => this._editTlAddSelected() },
+        ], a.left, a.bottom + 2, anchor);
+    },
+
+    /** Out: keep the cut, or make the film of it. */
+    _editTlOutMenu(anchor) {
+        if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
+        const dirty = this._editTlDirty();
+        const a = anchor.getBoundingClientRect();
+        this._previzOpenMenu([
+            { label: "Save cut", disabled: !dirty, run: () => this._editTlSave() },
+            { label: "Revert to saved", disabled: !dirty || !this._editTlSaved, run: () => this._editTlRevert() },
+            "-",
+            { label: "Export film\u2026", run: () => this._editTlRender() },
         ], a.left, a.bottom + 2, anchor);
     },
 
@@ -691,12 +913,10 @@ export const EditTimelineMixin = {
             this.editTlRefresh();
             return;
         }
-        if (data.target) { this._editTlTarget = data.target; this._editTlKey = JSON.stringify(data.target); }
+        if (data.target) this._editTlTarget = data.target;
         this._editTlLoaded(data);
         this._editTlNote = creating ? "saved as " + (data.file || "a new timeline") : "saved";
         this.editTlRefresh();
-        // A film that came on screen while this cut had unsaved changes.
-        if (this._editTlPending) { const next = this._editTlPending; this._editTlPending = null; this.editTlShow(next); }
     },
 
     // Export the cut as a film, rendered in the viewer. What is rendered is the
@@ -749,11 +969,10 @@ export const EditTimelineMixin = {
         }
         const left = got.texts_left_out;
         this._editTlNote = "exported as " + got.name;
-        this._editTlKeepNote = this._editTlNote;
         this.editTlRefresh();
         notice("success", "Film exported" + (left ? ` - without its ${left} text${left === 1 ? "" : "s"}` : ""),
                "output/" + (got.relative || got.name));
-        // Up on screen, in a tab of its own; its timeline is read with it.
+        // Up on screen, in a tab of its own, beside the cut it was made from.
         if (this.openExternalFramesInViewer) {
             this.openExternalFramesInViewer(
                 [{ path: got.path, name: got.name, external: true, kind: "video", fps: got.fps, frames: got.frames }],
@@ -768,6 +987,5 @@ export const EditTimelineMixin = {
         this._editTlSel = null;
         this._editTlNote = "";
         this.editTlRefresh();
-        if (this._editTlPending) { const next = this._editTlPending; this._editTlPending = null; this.editTlShow(next); }
     },
 };

@@ -54,6 +54,7 @@ export const ExportViewMixin = {
     /** What the tab on screen is, as something to export; null when it is empty. */
     _exportViewSource() {
         if (this.isPrevizTab && this.isPrevizTab()) return { kind: "previz" };
+        if (this.isEditTab && this.isEditTab()) return { kind: "edit" };
         const frames = (this._baseFrames && this._baseFrames()) || [];
         if (!frames.length) return null;
         if (this._frameIsVideo(frames[0])) {
@@ -86,6 +87,7 @@ export const ExportViewMixin = {
         const src = this._exportViewSource();
         if (!src) { notice("warn", "Nothing to export", "There is nothing on screen."); return; }
         if (src.kind === "previz") { if (this.previzRenderDialog) this.previzRenderDialog(); return; }
+        if (src.kind === "edit") { if (this._editTlRender) this._editTlRender(); return; }
         if (src.kind === "model") {
             notice("info", "Nothing to export here",
                    "A 3D model is exported from a 3D scene: Export is in its Outliner.");

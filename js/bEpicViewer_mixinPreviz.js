@@ -1039,8 +1039,19 @@ export const PrevizMixin = {
         editBtn.textContent = "\u270e";         // stands in if the skin is missing
         this._setIcon(editBtn, "icon-square-pen");
         editBtn.onclick = () => this._previzToggleEditMenu(editBtn);
-        // Add and Export are in the panel's title bar, where every panel that
-        // has them keeps them (DOCK_PANELS in bEpicViewer_mixinDock.js).
+        // In and out, as buttons of the bar's own size: Add beside New (both
+        // put something into the shot), Save / Export / Render beside Edit.
+        // The Edit panel has the same ones in the same place.
+        const addBtn = el("button", "previz-btn previz-icon");
+        addBtn.title = "Add a model, a camera, a group or a shape - or open a scene";
+        addBtn.textContent = "+";               // stands in if the skin is missing
+        this._setIcon(addBtn, "icon-circle-plus");
+        addBtn.onclick = () => this._previzToggleAddMenu(addBtn);
+        const outBtn = el("button", "previz-btn previz-icon");
+        outBtn.title = "Save the scene, export it as USD, or render this shot";
+        outBtn.textContent = "\u2193";
+        this._setIcon(outBtn, "icon-save");
+        outBtn.onclick = () => this._previzToggleExportMenu(outBtn);
         this._previzBindDrops(host);
         const undoBtn = el("button", "previz-btn previz-step");
         undoBtn.textContent = "↩";              // stands in if the skin is missing
@@ -1066,7 +1077,7 @@ export const PrevizMixin = {
         const noteBtn = el("button", "previz-btn previz-world", "Note");
         noteBtn.title = "Pin a note to a spot — Shift+N. The agent that built the world reads it, with a snapshot";
         noteBtn.onclick = () => this.previzFeedbackPlace();
-        actions.append(newBtn, editBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn);
+        actions.append(newBtn, addBtn, editBtn, outBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn);
 
         const list = el("div", "previz-list");
         // The space below the tree is "no parent": dropping a row here lifts it

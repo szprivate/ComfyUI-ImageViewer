@@ -668,8 +668,6 @@ textarea.param-input {
 .pt-btn:hover { color: #fff; background: rgba(255,255,255,0.08); }
 .pt-btn > svg { width: 12px; height: 12px; }
 .pt-close:hover { color: #fff; background: rgba(229,72,77,0.75); }
-/* A panel's ways in and out: the same two, in the same place, on each that has them. */
-.pt-add, .pt-export { font-size: 12px; min-width: 16px; }
 .pt-btn:disabled { opacity: 0.35; cursor: default; }
 .export-view-btn.busy { color: #f60; }
 
@@ -1219,8 +1217,12 @@ textarea.param-input {
 .edit-btn:disabled { opacity: .4; cursor: default; }
 .edit-btn.primary:not(:disabled) { background: #1d4d63; border-color: #00b8d4; color: #fff; }
 .edit-area { position: relative; display: flex; flex-direction: column; gap: 2px; touch-action: none; user-select: none; }
-.edit-ruler { position: relative; height: 13px; border-bottom: 1px solid #333; }
-.edit-tick { position: absolute; top: 0; bottom: 0; border-left: 1px solid #444; padding-left: 3px; font-size: 9px; line-height: 12px; color: #777; white-space: nowrap; }
+.edit-ruler { position: relative; height: 15px; border-bottom: 1px solid #333; cursor: ew-resize; }
+.edit-ruler:hover { background: rgba(255,255,255,.05); }
+.edit-empty { flex: 1; }
+/* The bar's in / out buttons are the Outliner's (.previz-btn.previz-icon); the name takes what is left. */
+.edit-bar .previz-icon { flex: none; }
+.edit-tick { position: absolute; top: 0; bottom: 0; border-left: 1px solid #444; padding-left: 3px; font-size: 9px; line-height: 14px; pointer-events: none; color: #777; white-space: nowrap; }
 .edit-track { position: relative; height: 24px; }
 .edit-texts { height: 16px; }
 .edit-sound { height: 9px; }
@@ -1240,7 +1242,7 @@ textarea.param-input {
 .edit-text.late { border-color: #ff9f6f; }
 .edit-snd { background: #2f5a45; border-radius: 2px; color: #9fd0b7; font-size: 8px; line-height: 9px; padding: 0 4px; }
 .edit-head { position: absolute; top: 0; bottom: 0; width: 1px; background: #fff; opacity: .85; pointer-events: none; z-index: 3; display: none; }
-.edit-drop { position: absolute; top: 12px; bottom: 0; width: 2px; margin-left: -1px; background: #ffcf6f; pointer-events: none; z-index: 4; display: none; }
+.edit-drop { position: absolute; top: 14px; bottom: 0; width: 2px; margin-left: -1px; background: #ffcf6f; pointer-events: none; z-index: 4; display: none; }
 .edit-inspect { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-height: 22px; }
 .edit-none { font-size: 10px; color: #777; }
 .edit-field { display: flex; align-items: center; gap: 4px; font-size: 10px; color: #888; }

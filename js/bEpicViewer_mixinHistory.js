@@ -851,6 +851,8 @@ export const HistoryMixin = {
     },
 
     closeTab(key) {
+        // A cut with changes that were not saved asks once (EditTimelineMixin).
+        if (this.editTlTabClosing && this.editTlTabClosing(key) === false) return;
         if (this._revokeDroppedTab) this._revokeDroppedTab(key);   // free blob: URLs of dropped files
         // A 3D tab's picture is an overlay, not an <img>: closing the tab has to
         // take it down, or it keeps hanging over whatever comes next (or over an

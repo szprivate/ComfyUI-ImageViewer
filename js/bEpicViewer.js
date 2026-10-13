@@ -30,6 +30,7 @@ import { PrevizChannelsMixin } from "./bEpicViewer_previzChannels.js";
 import { PrevizRenderMixin } from "./bEpicViewer_previzRender.js";
 import { PrevizUndoMixin } from "./bEpicViewer_previzUndo.js";
 import { EditTimelineMixin } from "./bEpicViewer_editTimeline.js";
+import { EditPlayMixin } from "./bEpicViewer_editPlay.js";
 import { ExportViewMixin } from "./bEpicViewer_exportView.js";
 import { SendFromNodeMixin, registerSendToViewerMenu, sendSelectionToViewer } from "./bEpicViewer_sendFromNode.js";
 import {
@@ -47,7 +48,8 @@ const watchedNodeIds  = new Set();
 // graph: 📂 Open Folder, 📥 dropped files, and 🖼/🎬 "Send to Image Viewer".
 // Nothing in the graph backs them, so the stale-tab sweep must leave them be.
 // "world:" tabs come from the bEpic Worlds pack (or an agent through it).
-const USER_TAB_PREFIXES = ["folder_", "dropped_", "loader_", "world:"];
+// "edit:" tabs are cuts being worked on in the Edit panel.
+const USER_TAB_PREFIXES = ["folder_", "dropped_", "loader_", "world:", "edit:"];
 let isViewerPanelToggledOn = false;
 let _actionBarStateRetryTimer = null;
 
@@ -1260,6 +1262,7 @@ Object.assign(
     PrevizRenderMixin,
     PrevizUndoMixin,
     EditTimelineMixin,
+    EditPlayMixin,
     ExportViewMixin,
     PrevizWorldMixin,
     PrefsMixin,
