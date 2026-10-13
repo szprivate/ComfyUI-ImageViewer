@@ -197,6 +197,47 @@ def covered(base, overlays, total, w, h, fps):
         yield black if frame is None else frame
 
 
+# ── texts ────────────────────────────────────────────────────────────────────
+
+def _font(px):
+    """A plain sans-serif at *px* pixels: Arial where the machine has it (what
+    the viewer's preview draws with), else what Pillow can find."""
+    from PIL import ImageFont
+    for name in ("arial.ttf", "Arial.ttf", "DejaVuSans.ttf", "LiberationSans-Regular.ttf"):
+        try:
+            return ImageFont.truetype(name, px)
+        except OSError:
+            continue
+    return ImageFont.load_default(size=px)
+
+
+def draw_texts(picture, texts, n, fps):
+    """*picture* (frame *n*) with the texts that stand at that moment drawn on it.
+
+    Each as the Edit tab shows it: its middle at ``x`` / ``y`` of the picture,
+    ``size`` percent of the picture's height, in its colour, with a dark edge so
+    that it reads on any picture. The frame is returned as it came when no text
+    stands on it.
+    """
+    moment = (n + 0.5) / fps
+    now = [t for t in texts if t["start"] <= moment < t["start"] + t["length"] and str(t["text"]).strip()]
+    if not now:
+        return picture
+    import numpy as np
+    from PIL import Image, ImageDraw
+    im = Image.fromarray(picture)
+    draw = ImageDraw.Draw(im)
+    h, w = picture.shape[0], picture.shape[1]
+    for t in now:
+        px = max(8, int(round(h * float(t["size"]) / 100.0)))
+        font = _font(px)
+        edge = max(1, px // 14)
+        draw.multiline_text((w * float(t["x"]), h * float(t["y"])), str(t["text"]), font=font, anchor="mm",
+                            align="center", fill=t["color"], stroke_width=edge, stroke_fill="#000000",
+                            spacing=px * 0.2)
+    return np.asarray(im)
+
+
 # ── sound ────────────────────────────────────────────────────────────────────
 
 def _sound_of(path, start, seconds):
@@ -350,7 +391,11 @@ def read_cut(doc):
         start, _length = timeline_io._span(beds[0].get("source_range"))
         bed = {"file": timeline_io._file(beds[0].get("media_reference")), "in": start,
                "gain": float(note.get("gain", 1.0)), "fade_out": float(note.get("fade_out", 1.0))}
+    texts = [] if off.get("T") else [
+        {"text": t["text"], "start": float(t["start"]), "length": float(t["length"]), "size": t["size"],
+         "x": t["x"], "y": t["y"], "color": t["color"]} for t in edit["texts"]]
     return {"name": edit["name"], "fps": float(edit["fps"] or 24.0), "clips": clips, "bed": bed,
+            "draw": texts,
             "overlays": overlays, "sounds": sounds, "v1_off": bool(off.get("V1")),
             "texts": len(edit["texts"]), "clip_sound": bool(about.get("clip_sound", True)),
             "width": int(about.get("width") or 0), "height": int(about.get("height") or 0)}
@@ -459,6 +504,7 @@ def render(doc, out_path, fmt="mp4", may_use=None, codec=None, quality="high"):
 
             made = 0
             for picture in covered(base, cut["overlays"], total, w, h, fps):
+                picture = draw_texts(picture, cut["draw"], made, fps)
                 frame = av.VideoFrame.from_ndarray(np.ascontiguousarray(picture), format="rgb24")
                 frame.pts = made
                 for packet in vs.encode(frame):
@@ -484,5 +530,7 @@ def render(doc, out_path, fmt="mp4", may_use=None, codec=None, quality="high"):
         except OSError:
             pass
     return {"path": out_path, "seconds": round(total / fps, 3), "frames": total, "width": w,
-            "height": h, "fps": fps, "sound": sound is not None, "texts_left_out": cut["texts"],
+            "height": h, "fps": fps, "sound": sound is not None,
+            # Texts are drawn now; the key stays for callers that read it.
+            "texts_left_out": 0, "texts": len(cut["draw"]),
             "format": how["label"]}

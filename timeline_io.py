@@ -190,6 +190,9 @@ def _note(obj):
     return note if isinstance(note, dict) else {}
 
 
+_COLOR = __import__("re").compile(r"^#[0-9a-fA-F]{6}$")
+
+
 def _bepic(obj):
     meta = obj.get("metadata") if isinstance(obj, dict) else None
     note = meta.get("bepic") if isinstance(meta, dict) else None
@@ -208,6 +211,27 @@ def _look(item):
     except (TypeError, ValueError):
         volume = 1.0
     return {"color": str(_bepic(item).get("color") or ""), "volume": round(max(0.0, min(4.0, volume)), 4)}
+
+
+# How a text is drawn where its timeline does not say: centred, in the lower
+# part of the picture, a sixteenth of its height, white.
+TEXT_LOOK = {"size": 6.0, "x": 0.5, "y": 0.85, "color": "#ffffff"}
+
+
+def text_look(mark):
+    """A text's look: ``{"size", "x", "y", "color"}``. ``size`` is a percentage
+    of the picture's height, ``x`` / ``y`` where its middle is (0..1)."""
+    note = _bepic(mark)
+    out = dict(TEXT_LOOK)
+    for key, low, high in (("size", 1.0, 40.0), ("x", 0.0, 1.0), ("y", 0.0, 1.0)):
+        try:
+            out[key] = round(max(low, min(high, float(note.get(key, out[key])))), 4)
+        except (TypeError, ValueError):
+            pass
+    color = str(note.get("color") or "")
+    if _COLOR.match(color):
+        out["color"] = color.lower()
+    return out
 
 
 def _tracks(doc):
@@ -308,14 +332,15 @@ def editable(doc):
         note = _note(m)
         out["texts"].append({"ref": ref, "text": str(note.get("text") or m.get("name") or ""),
                              "start": round(start, 4), "length": round(length, 4),
-                             "preset": str(note.get("preset") or "")})
+                             "preset": str(note.get("preset") or ""), **text_look(m)})
     audio = _track_of(doc, "audio")
     for child in (audio or {}).get("children") or []:
         if isinstance(child, dict) and str(child.get("OTIO_SCHEMA") or "").startswith("Clip"):
             out["sound"].append({"name": str(child.get("name") or ""),
                                  "file": _file(child.get("media_reference"))})
     out["tracks"] = extra_tracks(doc)
-    out["off"] = {"V1": _is_off(video), "A1": _is_off(audio)}
+    out["off"] = {"V1": _is_off(video), "A1": _is_off(audio),
+                  "T": bool(_bepic(stack).get("texts_off"))}
     return out
 
 
@@ -329,9 +354,6 @@ def edit_length(edit):
             for t in (edit.get("tracks") or []) if isinstance(t, dict) and t.get("kind") != "audio"
             for c in (t.get("clips") or []) if isinstance(c, dict)]
     return max([main] + over)
-
-
-_COLOR = __import__("re").compile(r"^#[0-9a-fA-F]{6}$")
 
 
 def _dress(item, c):
@@ -578,6 +600,12 @@ def rebuild(doc, edit, stamp="", may_use=None):
             _set_off(video, bool(off["V1"]))
         if "A1" in off:
             _set_off(audio, bool(off["A1"]))
+        if "T" in off:
+            stack_meta = (new.get("tracks") or {}).setdefault("metadata", {})
+            if isinstance(stack_meta, dict):
+                note = stack_meta.setdefault("bepic", {})
+                if isinstance(note, dict):
+                    note["texts_off"] = bool(off["T"])
     film = edit_length({"clips": [{"length": p[2], "transition": p[3]} for p in parsed],
                         "tracks": extra_tracks(new)})
 
@@ -605,6 +633,14 @@ def rebuild(doc, edit, stamp="", may_use=None):
                 note = meta.setdefault("agentY", {})
                 if isinstance(note, dict):
                     note["text"] = text
+        look = {k: t[k] for k in TEXT_LOOK if isinstance(t, dict) and t.get(k) is not None}
+        if look:
+            meta = mark.setdefault("metadata", {})
+            if isinstance(meta, dict):
+                note = meta.setdefault("bepic", {})
+                if isinstance(note, dict):
+                    note.update(look)
+                    note.update(text_look(mark))          # held to what a look may be
         marks.append(mark)
     stack["markers"] = marks
 
