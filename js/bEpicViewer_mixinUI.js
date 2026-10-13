@@ -385,6 +385,8 @@ export const UIMixin = {
         if (prevTab && prevTab !== k) this.captureTabViewState(prevTab);
         // An Edit tab hands the viewport back before anything else is shown.
         if (this._editPlayOn && !(prevTab === k && this.isEditTab(k))) this.editPlayLeave();
+        // ...and its panels (Edit, Inspector, Effects) are up only with a cut's tab.
+        if (this.editTlTabHidden && !this.isEditTab(k)) this.editTlTabHidden(!!prevTab && this.isEditTab(prevTab));
 
         try {
             if (this.activeTab !== k && this.isViewingHistory && this.previewBackup && this.activeTab && this.allTabs[this.activeTab]) {

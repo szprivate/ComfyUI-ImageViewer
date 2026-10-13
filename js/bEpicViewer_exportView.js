@@ -18,10 +18,6 @@ import { api } from "../../scripts/api.js";
 import { notice, openExportDialog } from "./bEpicViewer_exportUI.js";
 
 const TAB = "folder_exports";          // "folder_": a tab the user made, kept by the stale-tab sweep
-const ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" '
-    + 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-    + '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>';
-
 const hasFile = (f) => !!f && !f.dropped && !!(f.path || f.filename);
 const fileRef = (f) => ({ path: f.path || "", filename: f.filename || "", subfolder: f.subfolder || "", type: f.type || "" });
 const stem = (f) => String((f && (f.name || f.filename || f.path)) || "").split(/[\\/]/).pop().replace(/\.[^.]+$/, "");
@@ -29,28 +25,6 @@ const stem = (f) => String((f && (f.name || f.filename || f.path)) || "").split(
 export const ExportViewMixin = {
 
     /** The export button, made on first use beside the layout button. */
-    _exportViewButton() {
-        if (this._exportViewBtn && this._exportViewBtn.isConnected) return this._exportViewBtn;
-        const bar = this.container && this.container.querySelector(".transport");
-        if (!bar) return null;
-        const b = bar.ownerDocument.createElement("button");
-        b.id = "export-view-btn";
-        b.className = "sprite-icon export-view-btn";
-        b.title = "Export what is on screen: the current frame, or the whole clip";
-        b.innerHTML = ICON;
-        b.addEventListener("click", () => this.exportViewDialog());
-        const before = bar.querySelector("#layout-btn");
-        // Beside the layout button - which the viewer wraps in a box of its own,
-        // with an invisible menu laid over the whole box (.layout-picker-wrap). A
-        // button put INSIDE that box sits under the menu: it shows the menu's
-        // tooltip, a click opens the menu, and the wider box covers its neighbour.
-        // So: before the box, in whatever holds the box.
-        const at = before && (before.closest(".layout-picker-wrap") || before);
-        if (at && at.parentNode) at.parentNode.insertBefore(b, at); else bar.append(b);
-        this._exportViewBtn = b;
-        return b;
-    },
-
     /** What the tab on screen is, as something to export; null when it is empty. */
     _exportViewSource() {
         if (this.isPrevizTab && this.isPrevizTab()) return { kind: "previz" };

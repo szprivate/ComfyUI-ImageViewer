@@ -53,6 +53,10 @@ const DOCK_PANELS = {
     // transport's timeline button opens it. A timeline wants width, so it
     // starts under the picture.
     editTimeline: { prop: "editTimelinePanel", label: "Edit", minW: 320, minH: 150, defaultRail: "bottom" },
+    // Its companions (bEpicViewer_editPanels.js). All three are up only while
+    // a cut's tab is; the bar's Timeline group opens them.
+    editInspector: { prop: "editInspectorPanel", label: "Inspector", minW: 220, minH: 160, defaultRail: "right" },
+    editEffects: { prop: "editEffectsPanel", label: "Effects", minW: 220, minH: 150, defaultRail: "left" },
     // (The drawing tools' options have no panel of their own: while a tool is
     // on they take the Parameters panel over — ToolsMixin._toolShowDock.)
 };
@@ -97,10 +101,9 @@ export const DockMixin = {
         this._bindRailSplitters();
         this._bindDockDrag();
         this.applyDockLayout();
-        // The lower bar's own two: the timeline and the export, there from the start.
-        // Each on its own: a button that cannot be placed must not take docking,
-        // or the other button, down with it.
-        for (const make of ["_editTlButton", "_exportViewButton"]) {
+        // The lower bar's panel groups (bEpicViewer_barGroups.js). On its own: a
+        // bar that cannot be built must not take docking down with it.
+        for (const make of ["_barGroupsBuild"]) {
             try { if (this[make]) this[make](); }
             catch (e) { console.warn(`bEpicViewer: ${make} failed`, e); }
         }
@@ -377,6 +380,8 @@ export const DockMixin = {
             if (this.renderHistoryPanel) this.renderHistoryPanel();
         } else if (id === "params") {
             if (this.updateParamsPanel) this.updateParamsPanel(true);
+        } else if (id === "editTimeline" || id === "editInspector" || id === "editEffects") {
+            if (this.editTlRefresh) this.editTlRefresh();
         } else if (id === "curves") {
             if (this.previzRefreshCurves) this.previzRefreshCurves();
         } else if (id === "rotoCurves") {
@@ -414,6 +419,8 @@ export const DockMixin = {
         if (this._paramAnimSyncCurvesButton) this._paramAnimSyncCurvesButton(!!this.paramAnimNode?.());
         // Closing the Parameters panel takes the key bar off its node.
         if (this.keyBarSync) this.keyBarSync();
+        // The bar's groups are lit by what is up.
+        if (this.barGroupsSync) this.barGroupsSync();
     },
 
     // ── Splitters ────────────────────────────────────────────────────────────

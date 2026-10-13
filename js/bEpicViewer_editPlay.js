@@ -21,6 +21,13 @@
 // - after a scrub - is loaded behind the picture that is up and shown when its
 // frame is there, so nothing flashes black.
 //
+// Tracks: the picture is the clip of the highest video track that has one at
+// the moment (pictureAt), and only that clip is heard; the bed and the clips of
+// the sound tracks play under it from <audio> elements kept beside the film's
+// clock. A track that is switched off, or left out by another one's solo, is
+// neither seen nor heard (liveTracks). The render follows the same rules, save
+// for solo, which is a way of listening and is not rendered.
+//
 // What the preview is not: a dissolve is shown as a cut at its beginning, and
 // texts are not drawn - as in the render (timeline_render.py), which draws none.
 import * as D from "./bEpicViewer_editTimelineData.js";
@@ -135,6 +142,12 @@ export const EditPlayMixin = {
         this._editTlPlayhead?.();
     },
 
+    /** A solo switch was pressed: the same cut, shown and heard differently. */
+    editPlayLiveChanged() {
+        this._epCutShown = null;
+        this.editPlayCutChanged();
+    },
+
     /** The cut was changed in the panel: its length, and what is at this frame. */
     editPlayCutChanged() {
         if (!this._editPlayOn || this._editTlTab !== this.activeTab) return;
@@ -178,27 +191,46 @@ export const EditPlayMixin = {
         this.updateShapeInfo();
     },
 
+    /** The tracks that are seen and heard now (EditTimelineMixin keeps the solo switches). */
+    _editPlayLive() {
+        return this._editTlLive ? this._editTlLive() : null;
+    },
+
     // Put the moment `t` (seconds of the film) on screen. `seek`: the moment was
     // asked for (a scrub, a step, a loop); without it the film ran into it.
     _editPlayShow(t, seek) {
         const cut = this._editPlayCut();
         const ep = this._ep;
         if (!ep) return;
-        const at = cut && D.playAt(cut, t);
-        if (!at) { ep.at = null; ep.i = -1; this._editPlayBlank(); return; }
-        const clip = cut.clips[at.i];
-        const obj = { path: clip.file, external: true, name: clip.name };
-        const url = this.buildImgUrl(obj, { noColor: true });
-        const same = ep.at && ep.i === at.i && ep.url === url;
-        ep.at = at;
-        ep.in = Number(clip.in) || 0;
-        ep.i = at.i;
-        ep.url = url;
+        const at = cut && D.pictureAt(cut, t, this._editPlayLive());
+        if (!at) { ep.at = null; ep.key = ""; this._editPlayBlank(); return; }
+        const clip = at.clip;
         ep.t = at.t;
         ep.wall = this._editPlayNow();
-        this._updatePathBar(obj);
         const slots = this._editPlaySlots();
         if (!slots) return;
+        const spare = () => (this.videoBase === slots[0] ? slots[1] : slots[0]);
+
+        if (!clip) {
+            // Nothing has a picture here (a gap, a track switched off): black,
+            // for as long as that lasts, on the wall clock.
+            ep.at = at;
+            ep.key = "";
+            ep.url = "";
+            ep.still = true;
+            this._editPlayBlank();
+            this._editPlayReady(cut, at, slots[1]);
+            this._editPlaySounds(at.t, this.isPlaying);
+            return;
+        }
+        const obj = { path: clip.file, external: true, name: clip.name };
+        const url = this.buildImgUrl(obj, { noColor: true });
+        const same = !!ep.at && ep.key === at.key && ep.url === url;
+        ep.at = at;
+        ep.in = Number(clip.in) || 0;
+        ep.key = at.key;
+        ep.url = url;
+        this._updatePathBar(obj);
 
         if (D.isStill(clip.file)) {
             ep.still = true;
@@ -208,15 +240,15 @@ export const EditPlayMixin = {
             }
             this._videoMode = false;
             this._setImgSrcCached(this.imgBase, url, () => {
-                if (!this._editPlayOn || !this._ep || !this._ep.still) return;
+                if (!this._editPlayOn || !this._ep || !this._ep.still || this._ep.url !== url) return;
                 for (const v of slots) v.style.display = "none";
                 this.imgBase.style.display = "";
                 if (this.updateImageFrame) this.updateImageFrame();
                 this.updateShapeInfo();
                 this._editPlayFitOnce();
             });
-            this._editPlayReady(cut, at.i + 1, this.videoBase === slots[0] ? slots[1] : slots[0]);
-            if (this.isPlaying) this._editPlayBed(at.t, true);
+            this._editPlayReady(cut, at, spare());
+            this._editPlaySounds(at.t, this.isPlaying);
             return;
         }
 
@@ -229,6 +261,7 @@ export const EditPlayMixin = {
         else if (mine._epUrl === url) v = mine;
         else { v = other; this._editPlayLoad(v, url); }
         v._epName = clip.name || String(clip.file || "").split(/[\\/]/).pop();
+        try { v.volume = Math.max(0, Math.min(1, clip.volume == null ? 1 : Number(clip.volume) || 0)); } catch (_) {}
         if (seek || v !== mine || !same || Math.abs((v.currentTime || 0) - at.local) > 0.08) {
             if (Math.abs((v.currentTime || 0) - at.local) > 1e-3) { try { v.currentTime = at.local; } catch (_) {} }
         }
@@ -237,9 +270,9 @@ export const EditPlayMixin = {
             this._applyVideoPlaybackRate();
             const p = v.play();
             if (p && p.catch) p.catch(() => {});
-            this._editPlayBed(at.t, true);
         }
-        this._editPlayReady(cut, at.i + 1, v === mine ? other : mine);
+        this._editPlaySounds(at.t, this.isPlaying);
+        this._editPlayReady(cut, at, v === mine ? other : mine);
     },
 
     _editPlayNow() {
@@ -293,11 +326,14 @@ export const EditPlayMixin = {
         for (const name of ["loadeddata", "seeked", "canplay"]) v.addEventListener(name, again);
     },
 
-    // The clip after the one on screen, loaded and sought, in the player that
-    // is not showing. A picture is fetched so that it is in the browser's cache.
-    _editPlayReady(cut, i, v) {
-        const clip = cut.clips[i];
-        if (!clip || !v || v === this.videoBase && this._videoMode) return;
+    // What comes after the picture on screen, loaded and sought, in the player
+    // that is not showing. A picture is fetched so that it is in the browser's cache.
+    _editPlayReady(cut, at, v) {
+        if (!v || (v === this.videoBase && this._videoMode)) return;
+        if (!(at.end < D.filmLength(cut) - 1e-3)) return;
+        const next = D.pictureAt(cut, at.end + 1e-3, this._editPlayLive());
+        const clip = next && next.clip;
+        if (!clip || next.key === at.key) return;
         const url = this.buildImgUrl({ path: clip.file, external: true }, { noColor: true });
         if (D.isStill(clip.file)) {
             const img = new ((v.ownerDocument.defaultView || window).Image)();
@@ -305,38 +341,42 @@ export const EditPlayMixin = {
             return;
         }
         if (v._epUrl !== url) this._editPlayLoad(v, url);
-        const to = Number(clip.in) || 0;
+        const to = Math.max(0, next.local - 1e-3);
         if (Math.abs((v.currentTime || 0) - to) > 1e-3) { try { v.currentTime = to; } catch (_) {} }
     },
 
-    // The sound that lies under the whole film. The clips' own sound comes out
-    // of their players; this is kept beside the film's clock, loosely - an ear
-    // forgives a tenth of a second, and seeking it on every frame would click.
-    _editPlayBed(t, playing) {
+    // What is heard under the picture: the bed and the clips of the sound
+    // tracks, each from an <audio> of its own. They are kept beside the film's
+    // clock loosely - an ear forgives a tenth of a second, and seeking on every
+    // frame would click.
+    _editPlaySounds(t, playing) {
         const ep = this._ep;
         const cut = this._editPlayCut();
         if (!ep) return;
-        const files = ((cut && cut.sound) || []).map((s) => s && s.file).filter(Boolean);
         if (!ep.bed) ep.bed = [];
+        ep.sndAt = this._editPlayNow();
+        const items = cut ? D.soundItems(cut, this._editPlayLive()) : [];
         const doc = (this.container && this.container.ownerDocument) || document;
         const fps = this.editPlayFps();
         const rate = Math.max(0.0625, Math.min(16, (this.fps || fps) / fps));
-        files.forEach((file, k) => {
+        items.forEach((item, k) => {
             let a = ep.bed[k];
             if (!a) { a = ep.bed[k] = doc.createElement("audio"); a.preload = "auto"; }
-            if (a._epFile !== file) {
-                a._epFile = file;
-                a.src = this.buildImgUrl({ path: file, external: true }, { noColor: true });
+            if (a._epFile !== item.file) {
+                a._epFile = item.file;
+                a.src = this.buildImgUrl({ path: item.file, external: true }, { noColor: true });
             }
             try {
-                if (!playing) { a.pause(); return; }
-                if (Math.abs((a.currentTime || 0) - t) > 0.12) a.currentTime = t;
+                const inside = t >= item.at - 1e-3 && t < item.at + item.length - 1e-3;
+                if (!playing || !inside) { a.pause(); return; }
+                const want = item.in + (t - item.at);
+                if (a.paused || Math.abs((a.currentTime || 0) - want) > 0.15) a.currentTime = want;
+                a.volume = Math.max(0, Math.min(1, item.volume));
                 a.playbackRate = rate;
-                const p = a.play();
-                if (p && p.catch) p.catch(() => {});
+                if (a.paused) { const p = a.play(); if (p && p.catch) p.catch(() => {}); }
             } catch (_) {}
         });
-        for (let k = files.length; k < ep.bed.length; k++) { try { ep.bed[k].pause(); } catch (_) {} }
+        for (let k = items.length; k < ep.bed.length; k++) { try { ep.bed[k].pause(); } catch (_) {} }
     },
 
     // ── playing ──────────────────────────────────────────────────────────────
@@ -398,19 +438,21 @@ export const EditPlayMixin = {
         } else {
             const v = this.videoBase;
             // The film's clock is the clip's own: sound and picture cannot part.
-            t = v.ended ? at.end : at.start + Math.max(0, (v.currentTime || 0) - ep.in);
+            t = v.ended ? at.end : at.origin + Math.max(0, (v.currentTime || 0) - ep.in);
         }
         const { min, max } = this._editPlayRange();
         const endT = (max + 1) / fps;
         // (The last clip running out is the film running out, whatever the
         // frame count was rounded to.)
-        if (t >= endT - 1e-4 || (t >= at.end - 1e-4 && at.i >= cut.clips.length - 1)) {
+        if (t >= endT - 1e-4 || (t >= at.end - 1e-4 && at.end >= D.filmLength(cut) - 1e-3)) {
             if (this.loopMode === "once") { this.stop(); this.editPlaySetFrame(max); return; }
             t = min / fps;                               // loop and ping-pong both go round
             this._editPlayShow(t, true);
         } else if (t >= at.end - 1e-4) {
             t = at.end;
             this._editPlayShow(t, false);                // the next clip's turn
+        } else if (this._editPlayNow() - (ep.sndAt || 0) > 200) {
+            this._editPlaySounds(t, true);               // a sound clip whose moment has come
         }
         const frame = Math.max(min, Math.min(max, Math.floor(t * fps + 1e-6)));
         if (frame === this.currentFrame) return;

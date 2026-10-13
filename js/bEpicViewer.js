@@ -31,6 +31,8 @@ import { PrevizRenderMixin } from "./bEpicViewer_previzRender.js";
 import { PrevizUndoMixin } from "./bEpicViewer_previzUndo.js";
 import { EditTimelineMixin } from "./bEpicViewer_editTimeline.js";
 import { EditPlayMixin } from "./bEpicViewer_editPlay.js";
+import { EditPanelsMixin } from "./bEpicViewer_editPanels.js";
+import { BarGroupsMixin } from "./bEpicViewer_barGroups.js";
 import { ExportViewMixin } from "./bEpicViewer_exportView.js";
 import { SendFromNodeMixin, registerSendToViewerMenu, sendSelectionToViewer } from "./bEpicViewer_sendFromNode.js";
 import {
@@ -562,6 +564,17 @@ class ViewerPanel extends HTMLElement {
             ep.className = 'curves-panel edit-panel';
             this.curvesPanel.parentNode.insertBefore(ep, this.curvesPanel.nextSibling);
             this.editTimelinePanel = ep;
+        }
+        // Its two companions (bEpicViewer_editPanels.js), made the same way.
+        for (const [prop, id] of [["editInspectorPanel", "edit-inspector-panel"], ["editEffectsPanel", "edit-effects-panel"]]) {
+            this[prop] = sr.getElementById(id);
+            if (!this[prop] && this.curvesPanel && this.curvesPanel.parentNode) {
+                const panel = this.curvesPanel.ownerDocument.createElement('div');
+                panel.id = id;
+                panel.className = 'curves-panel edit-side-panel right';
+                this.curvesPanel.parentNode.insertBefore(panel, this.curvesPanel.nextSibling);
+                this[prop] = panel;
+            }
         }
         if (!this.rotoCurvesPanel && this.curvesPanel && this.curvesPanel.parentNode) {
             const rc = this.curvesPanel.ownerDocument.createElement('div');
@@ -1263,6 +1276,8 @@ Object.assign(
     PrevizUndoMixin,
     EditTimelineMixin,
     EditPlayMixin,
+    EditPanelsMixin,
+    BarGroupsMixin,
     ExportViewMixin,
     PrevizWorldMixin,
     PrefsMixin,
