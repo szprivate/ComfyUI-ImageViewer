@@ -46,6 +46,8 @@ export const ModelMixin = {
                 onCameraMoved: (id, transform, live) =>
                     this.previzApplyTransform(id, transform, ["position", "rotation"], { live }),
                 onPanelToggle: (id) => this.togglePanelDocked(id),
+                // The pivot mode is the tab's (previzTogglePivotMode keeps it and tells the view).
+                onPivotMode: () => this.previzTogglePivotMode(),
                 setIcon: (el, key) => this._setIcon(el, key),
                 // Which frame a scene's thumbnail belongs to: the tab's first
                 // model, which is what the history strip has a tile for.

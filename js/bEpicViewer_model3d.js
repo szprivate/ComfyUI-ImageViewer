@@ -207,7 +207,7 @@ export class Model3DView {
         // the view controls, and they follow the same keys (W / E / R / X).
         const toolBtns = {};
         for (const [mode, label, key, icon] of [
-            ["translate", "Move", "W", "icon-move"],
+            ["translate", "Move", "W", "icon-move3d"],
             ["rotate", "Rotate", "E", "icon-rotate3d"],
             ["scale", "Scale", "R", "icon-scale3d"],
         ]) {
@@ -221,6 +221,14 @@ export class Model3DView {
         const spaceBtn = el("button", "model-btn model-icon-btn", "World");
         spaceBtn.onclick = () => this.setGizmoSpace(this.gizmoSpace === "local" ? "world" : "local");
         tools.append(spaceBtn);
+        // Move the pivot instead of the item (Maya's Insert): the gizmo then
+        // drags the point the item turns about, and the item stays where it is.
+        const pivotBtn = el("button", "model-btn model-icon-btn", "Pivot");
+        pivotBtn.onclick = () => {
+            if (this.hooks.onPivotMode) this.hooks.onPivotMode(); else this.setPivotMode(!this.pivotMode);
+        };
+        if (this.hooks.setIcon) this.hooks.setIcon(pivotBtn, "icon-axis3d");
+        tools.append(pivotBtn);
 
         bar.append(look, tools);
         const status = el("div", "model-status");
@@ -241,7 +249,7 @@ export class Model3DView {
 
         root.append(gate, bar, status);
         this.root = root;
-        this.ui = { modeSel, gridBtn, resetBtn, panelBtn, channelsBtn, curvesBtn, toolBtns, spaceBtn, status,
+        this.ui = { modeSel, gridBtn, resetBtn, panelBtn, channelsBtn, curvesBtn, toolBtns, spaceBtn, pivotBtn, status,
                     gate, shades, gateFrame, gateLabel };
         this._syncToolbar();
         this.host.appendChild(root);
@@ -263,6 +271,12 @@ export class Model3DView {
                 ? "Gizmo axes: the item's own — click for the world's (X)"
                 : "Gizmo axes: the world's — click for the item's own (X)";
             if (this.hooks.setIcon) this.hooks.setIcon(space, local ? "icon-globe-off" : "icon-globe");
+        }
+        if (this.ui.pivotBtn) {
+            this.ui.pivotBtn.classList.toggle("active", !!this.pivotMode);
+            this.ui.pivotBtn.title = this.pivotMode
+                ? "Moving the pivot: the gizmo drags the point the item turns about - click to move the item again (Insert)"
+                : "Move the pivot: drag the point the selected item turns about, the item stays where it is (Insert)";
         }
     }
 
