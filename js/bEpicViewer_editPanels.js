@@ -17,8 +17,8 @@
 // selection / the playhead:
 //
 //   Video Transitions   Cross Dissolve, onto the join between two shots
-//   Titles              Text, a text of the timeline (kept in it; drawn by
-//                       whatever makes the film's titles, not by this render)
+//   Titles              Text, drawn on the picture - by the Edit tab while it
+//                       plays and by the render, the same way
 //   Generators          a plain colour, as a clip (a PNG made by the server:
 //                       a clip is a piece of a file)
 import { api } from "../../scripts/api.js";
@@ -35,8 +35,9 @@ const TOOLBOX = [
         { name: "Cut", note: "takes a dissolve away", fx: { type: "dissolve", seconds: 0 } },
     ] },
     { id: "titles", name: "Titles", items: [
-        { name: "Text 2 s", note: "a text of the timeline", fx: { type: "text", text: "Text", seconds: 2 } },
-        { name: "Text 5 s", note: "a text of the timeline", fx: { type: "text", text: "Text", seconds: 5 } },
+        { name: "Text 2 s", note: "words on the picture, low in it", fx: { type: "text", text: "Text", seconds: 2 } },
+        { name: "Text 5 s", note: "words on the picture, low in it", fx: { type: "text", text: "Text", seconds: 5 } },
+        { name: "Title", note: "large, in the middle", fx: { type: "text", text: "Title", seconds: 3, look: { size: 12, y: 0.5 } } },
     ] },
     { id: "generators", name: "Generators", items: [
         { name: "Solid Black", note: "a plain colour, as a clip", color: "#000000", fx: { type: "solid", color: "#000000", name: "Black" } },
@@ -183,10 +184,42 @@ export const EditPanelsMixin = {
             section("Timing");
             row("Starts at", seconds(t.start, (v) => apply(D.moveText(cut, i, v))));
             row("Length", seconds(t.length, (v) => apply(D.resizeText(cut, i, v))));
-            parts.push(el("div", "insp-note", "A text is kept in the timeline. Its look belongs to what makes the "
-                + "film's titles; this viewer's own render does not draw it."));
+            // Its look: drawn the same on the picture here and in the rendered film.
+            section("Look");
+            const look = D.textLook(t);
+            const percent = (value, key, title) => {
+                const input = quiet(el("input", "insp-num"));
+                input.type = "number";
+                input.step = "1";
+                input.min = key === "size" ? "1" : "0";
+                input.max = key === "size" ? "40" : "100";
+                input.value = String(Math.round(value * 10) / 10);
+                input.title = title;
+                input.addEventListener("change", () => apply(D.setTextLook(cut, i, { [key]: key === "size" ? Number(input.value) : Number(input.value) / 100 })));
+                return input;
+            };
+            row("Size", percent(look.size, "size", "percent of the picture's height"));
+            row("Across", percent(look.x * 100, "x", "where its middle is, in percent from the left"));
+            row("Down", percent(look.y * 100, "y", "where its middle is, in percent from the top"));
+            const ink = quiet(el("input", "insp-color"));
+            ink.type = "color";
+            ink.value = look.color;
+            ink.addEventListener("change", () => apply(D.setTextLook(cut, i, { color: ink.value })));
+            row("Colour", ink);
             const tail = el("div", "insp-foot");
             tail.append(button("Remove this text", "Take this text off the film", () => this._editTlRemove(sel)));
+            parts.push(tail);
+        } else if (sel && sel.kind === "mix" && cut.clips[sel.i] && sel.i > 0) {
+            const i = sel.i, c = cut.clips[i];
+            parts.push(el("div", "insp-title", "Cross Dissolve"));
+            section("Transition");
+            row("From", said(cut.clips[i - 1].name || "shot " + i), true);
+            row("To", said(c.name || "shot " + (i + 1)), true);
+            row("Duration", seconds(c.transition || 0, (v) => apply(D.setTransition(cut, i, v))));
+            parts.push(el("div", "insp-note", "For its length the two shots overlap, so the film is shorter by it. "
+                + "On the timeline, drag an edge of its bar."));
+            const tail = el("div", "insp-foot");
+            tail.append(button("Remove this dissolve", "Back to a cut", () => this._editTlRemove(sel)));
             parts.push(tail);
         } else {
             parts.push(el("div", "insp-title", "Timeline"));
@@ -284,13 +317,16 @@ export const EditPanelsMixin = {
                 i = this._editTlSel.i;
             }
             if (i < 1) { this._editTlSay("select the shot the dissolve leads into (not the first), or drag it onto a join"); return; }
-            this._editTlSel = { kind: "clip", i };
+            // Selected as what it is, so that its bar is lit and the Inspector has its length.
+            this._editTlSel = fx.seconds > 0 ? { kind: "mix", i } : { kind: "clip", i };
             this._editTlApply(D.setTransition(cut, i, fx.seconds));
             return;
         }
         if (fx.type === "text") {
             const start = D.toFrame(at == null ? this._editTlNowSeconds() : at, fps);
-            const next = D.addText(cut, fx.text, start, fx.seconds);
+            let next = D.addText(cut, fx.text, start, fx.seconds);
+            if (fx.look) next = D.setTextLook(next, next.texts.length - 1, fx.look);
+            if (next.off && next.off.T) next = D.setTrackOff(next, "T", false);      // a text just added is meant to be seen
             this._editTlSel = { kind: "text", i: next.texts.length - 1 };
             this._editTlApply(next);
             return;

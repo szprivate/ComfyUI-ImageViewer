@@ -6,7 +6,7 @@
 // short menu upwards:
 //
 //   ComfyUI    History · Parameters
-//   3D         Outliner · Channel Box              (on a 3D tab)
+//   3D         Outliner · Channel Box · Curve Editor   (on a 3D tab)
 //   Timeline   Edit · Effects · Inspector          (Effects and Inspector on a cut's tab)
 //
 // A group's button is lit while one of its panels is up. Everything else that
@@ -35,6 +35,7 @@ const GROUPS = [
     { id: "3d", title: "3D", icon: "box", items: [
         { label: "Outliner", panel: "previz", needs: "3d" },
         { label: "Channel Box", panel: "channels", needs: "3d" },
+        { label: "Curve Editor", panel: "curves", needs: "3d" },
     ] },
     { id: "timeline", title: "Timeline", icon: "timeline", items: [
         { label: "Edit", panel: "editTimeline", run: (p) => p.editTlToggle() },
@@ -94,7 +95,11 @@ export const BarGroupsMixin = {
             label: (this.isPanelDocked(item.panel) ? "✓  " : "   ") + item.label,
             disabled: !this._barGroupCan(item),
             run: () => {
-                if (item.run) item.run(this); else this.togglePanelDocked(item.panel);
+                // Open, but behind another panel's tab: it comes to the front
+                // rather than being closed by the press that asked to see it.
+                if (this.isPanelDocked(item.panel) && this.isPanelFront && !this.isPanelFront(item.panel)) {
+                    this.dockTabFront(item.panel);
+                } else if (item.run) item.run(this); else this.togglePanelDocked(item.panel);
                 this.barGroupsSync();
             },
         }));

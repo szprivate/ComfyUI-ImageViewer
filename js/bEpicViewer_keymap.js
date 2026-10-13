@@ -229,7 +229,7 @@ const ACTION_DEFS = [
       enabled: _previz, run: (p) => p.previzToggleGrid() },
     { key: "View3DPrevizPanel", label: "3D View: Show / Hide Outliner",
       enabled: _previz, run: (p) => p.togglePanelDocked("previz") },
-    { key: "View3DCurvesPanel", label: "3D View: Show / Hide Animation Curves",
+    { key: "View3DCurvesPanel", label: "3D View: Show / Hide Curve Editor",
       enabled: _previz, run: (p) => p.togglePanelDocked("curves") },
     { key: "View3DChannelBox", label: "3D View: Show / Hide Channel Box",
       enabled: _previz, run: (p) => p.togglePanelDocked("channels") },

@@ -191,7 +191,7 @@ export class Model3DView {
         if (this.hooks.setIcon) this.hooks.setIcon(panelBtn, "icon-previz");
 
         const curvesBtn = el("button", "model-btn model-panel-btn", "∿");
-        curvesBtn.title = "Show / hide the Animation Curves";
+        curvesBtn.title = "Show / hide the Curve Editor";
         curvesBtn.onclick = () => { if (this.hooks.onPanelToggle) this.hooks.onPanelToggle("curves"); };
         if (this.hooks.setIcon) this.hooks.setIcon(curvesBtn, "icon-curves");
 

@@ -21,8 +21,11 @@
 //   drag on the ruler       scrub the film
 //   click a clip            select it and go to it; right-click: its colour, remove
 //   drag a shot's edge      trim it (what follows moves with it)
-//   drag a shot             put it elsewhere in the order
-//   a clip on a higher track  drag it to another moment, its edges to trim it
+//   drag a shot             put it elsewhere in the order - or onto another track
+//   a clip on a higher track  drag it to another moment, its edges to trim it, or
+//                           onto another track (onto V1: between the shots there)
+//   a dissolve              the bar over the join: drag its edge to make it longer
+//                           or shorter, click it for the Inspector
 //   drag a text / its edge  move it / make it longer or shorter
 //   drop files onto a track from the file browser, or a node dragged off the
 //                           canvas: new clips, where they land
@@ -266,6 +269,10 @@ export const EditTimelineMixin = {
             for (const id of EDIT_PANELS) {
                 if (!!want[id] !== this.isPanelDocked(id)) this.setPanelDocked(id, !!want[id]);
             }
+            // Where they share a place as tabs, the one that was in front is again.
+            for (const id of want.front || []) {
+                if (this.isPanelDocked(id) && this.isPanelFront && !this.isPanelFront(id)) this.dockTabFront(id);
+            }
         }
         this.editTlRefresh();
     },
@@ -275,6 +282,9 @@ export const EditTimelineMixin = {
     // which panels were open is remembered for the next one.
     editTlTabHidden(left) {
         if (!this.isPanelDocked || !this.setPanelDocked) return;
+        if (left && this.isPanelFront) {
+            this._editTlWanted().front = EDIT_PANELS.filter((id) => this.isPanelFront(id));
+        }
         for (const id of EDIT_PANELS) {
             const open = this.isPanelDocked(id);
             if (left) this._editTlWant(id, open);
@@ -569,7 +579,7 @@ export const EditTimelineMixin = {
         const rowEls = [];
         for (const row of list) {
             const height = Math.max(12, Math.min(160, Number(view.heights[row.id]) || ROW_HEIGHT[row.kind]));
-            const dead = row.id === "T" ? !!view.textsOff : !live.has(row.id);
+            const dead = row.id === "T" ? !!(cut.off && cut.off.T) : !live.has(row.id);
             const tr = doc.createElement("div");
             tr.className = `edit-track edit-k-${row.kind}` + (dead ? " dead" : "");
             tr.dataset.track = row.id;
@@ -593,7 +603,14 @@ export const EditTimelineMixin = {
                     b.addEventListener("contextmenu", (e) => this._editTlClipMenu(e, { kind: "clip", i: s.i }));
                     kids.push(b);
                 }
-                for (const m of lay.mixes) kids.push(block("edit-mix", m, ""));
+                // A dissolve: a bar over the join, as long as the dissolve is.
+                for (const m of lay.mixes) {
+                    const b = block("edit-mix" + (picked("mix", m.i) ? " sel" : ""), m, "Cross Dissolve");
+                    b.addEventListener("pointerdown", (e) => this._editTlMixDown(e, b, m.i));
+                    b.addEventListener("pointermove", (e) => this._editTlEdgeCursor(e, b));
+                    b.addEventListener("contextmenu", (e) => this._editTlClipMenu(e, { kind: "mix", i: m.i }));
+                    kids.push(b);
+                }
             } else if (row.id === "A1") {
                 for (const s of lay.sound) kids.push(block("edit-snd", s, s.name));
             } else {
@@ -640,13 +657,10 @@ export const EditTimelineMixin = {
             return b;
         };
         const cut = this._editTlCut;
-        const off = row.id === "T" ? !!view.textsOff
-            : (row.track ? !!row.track.off : !!(cut.off && cut.off[row.id]));
+        const off = row.track ? !!row.track.off : !!(cut.off && cut.off[row.id]);
         hd.append(name, small("\u25cf", off ? "Switched off - click to switch this track on"
-                                             : "Switch this track off: not seen, not heard, not rendered", !off, () => {
-            if (row.id === "T") { view.textsOff = !view.textsOff; this.editTlRefresh(); return; }
-            this._editTlApply(D.setTrackOff(cut, row.id, !off));
-        }));
+                                             : "Switch this track off: not seen, not heard, not rendered", !off,
+                              () => this._editTlApply(D.setTrackOff(cut, row.id, !off))));
         if (row.id !== "T") {
             hd.append(small("S", "Solo: play only the soloed tracks of this kind (not saved, not rendered)",
                             !!view.solo[row.id], () => {
@@ -712,11 +726,11 @@ export const EditTimelineMixin = {
         e.stopPropagation();
         this._editTlSel = sel;
         this.editTlRefresh();
-        const entries = [{ label: sel.kind === "text" ? "Remove this text" : "Remove from the cut",
+        const entries = [{ label: sel.kind === "text" ? "Remove this text" : sel.kind === "mix" ? "Remove this dissolve" : "Remove from the cut",
                            disabled: sel.kind === "clip" && this._editTlCut.clips.length <= 1,
                            run: () => this._editTlRemove(sel) }];
         const menu = this._previzOpenMenu(entries, e.clientX, e.clientY);
-        if (!menu || sel.kind === "text") return;
+        if (!menu || sel.kind === "text" || sel.kind === "mix") return;
         menu.prepend(this._editTlSwatches(menu.ownerDocument, D.clipOf(this._editTlCut, sel), (color) => {
             this._previzCloseAddMenu();
             this._editTlApply(D.setClipProps(this._editTlCut, sel, { color }));
@@ -745,6 +759,7 @@ export const EditTimelineMixin = {
         if (sel.kind === "clip") this._editTlApply(D.removeClip(cut, sel.i));
         else if (sel.kind === "tclip") this._editTlApply(D.removeTrackClip(cut, sel.track, sel.i));
         else if (sel.kind === "text") this._editTlApply(D.removeText(cut, sel.i));
+        else if (sel.kind === "mix") this._editTlApply(D.setTransition(cut, sel.i, 0));
     },
 
     _editTlApply(cut) {
@@ -798,10 +813,12 @@ export const EditTimelineMixin = {
         const id = e.pointerId;
         const captor = ui.area;          // the block itself is replaced on every redraw
         try { captor.setPointerCapture(id); } catch (_) {}
+        const y0 = e.clientY;
         let moved = false;
         const move = (ev) => {
             const dx = ev.clientX - x0;
-            if (!moved && Math.abs(dx) < DRAG_SLOP) return;
+            // Sideways or up and down: a clip is also dragged from one track to another.
+            if (!moved && Math.hypot(dx, ev.clientY - y0) < DRAG_SLOP) return;
             moved = true;
             onMove(dx * perPx, ev);
         };
@@ -817,21 +834,85 @@ export const EditTimelineMixin = {
         captor.addEventListener("pointercancel", up);
     },
 
+    // The track under the pointer that a clip may be dropped onto ("" for none).
+    // `sel` is the clip being dragged: a sound cannot become a picture, nor a
+    // picture a sound, and a cut cannot lose its only shot.
+    _editTlTrackUnder(ev, sel) {
+        const ui = this._editTlUi;
+        const cut = this._editTlCut;
+        const root = ui.body.getRootNode();
+        const hit = root && root.elementFromPoint ? root.elementFromPoint(ev.clientX, ev.clientY) : null;
+        const row = hit && hit.closest ? hit.closest(".edit-track") : null;
+        const id = row ? row.dataset.track : "";
+        if (!id || id === "T" || id === "A1") return "";
+        const from = sel.kind === "clip" ? "V1" : sel.track;
+        if (id === from) return id;
+        const clip = D.clipOf(cut, sel);
+        const target = D.trackOf(cut, id);
+        const source = D.trackOf(cut, from);
+        const still = D.isStill(clip.file) && !SOUND_EXTS.includes(ext(clip.file));
+        if (target && target.kind === "audio") return still ? "" : id;            // a film gives its sound
+        if (source && source.kind === "audio" && !FILM_EXTS.includes(ext(clip.file))) return "";
+        if (sel.kind === "clip" && cut.clips.length <= 1) return "";
+        return id;
+    },
+
+    // What is being dragged, drawn where it would land: on the track under the
+    // pointer, at the pointer's moment. null takes it away.
+    _editTlGhost(spec) {
+        const ui = this._editTlUi;
+        if (!ui) return;
+        for (const r of ui.rows.querySelectorAll(".edit-track.landing")) r.classList.remove("landing");
+        if (!spec) { if (ui.ghost) ui.ghost.style.display = "none"; return; }
+        if (!ui.ghost || !ui.ghost.isConnected) {
+            ui.ghost = ui.area.ownerDocument.createElement("div");
+            ui.ghost.className = "edit-ghost";
+            ui.area.append(ui.ghost);
+        }
+        const row = ui.rows.querySelector(`.edit-track[data-track="${spec.track}"]`);
+        if (!row) { ui.ghost.style.display = "none"; return; }
+        row.classList.add("landing");
+        const a = ui.area.getBoundingClientRect(), r = row.getBoundingClientRect();
+        const total = this._editTlLay.total || 1;
+        ui.ghost.style.display = "block";
+        ui.ghost.style.top = (r.top - a.top) + "px";
+        ui.ghost.style.height = r.height + "px";
+        ui.ghost.style.left = Math.max(0, (spec.at / total) * 100) + "%";
+        ui.ghost.style.width = Math.max(0.5, (spec.length / total) * 100) + "%";
+        ui.ghost.textContent = spec.name || "";
+    },
+
     _editTlShotDown(e, el, i) {
         const start = this._editTlCut;
         const fps = start.fps || 24;
         const zone = this._editTlZone(e, el);
         const was = start.clips[i];
-        this._editTlSel = { kind: "clip", i };
+        const sel = { kind: "clip", i };
+        const began = D.clipStarts(start)[i];
+        const grab = (this._editTlTimeAt(e.clientX) || began) - began;       // where in the clip it was taken hold of
+        this._editTlSel = sel;
+        let onto = "V1";
         this._editTlDrag(e, el, (seconds, ev) => {
             if (zone === "end") this._editTlCut = D.trimEnd(start, i, D.toFrame(was.length + seconds, fps));
             else if (zone === "start") this._editTlCut = D.trimStart(start, i, D.toFrame(seconds, fps));
-            else { this._editTlDropMark(ev.clientX); return; }
+            else {
+                // The body: to another place in the order, or onto another track.
+                onto = this._editTlTrackUnder(ev, sel) || "V1";
+                const at = Math.max(0, (this._editTlTimeAt(ev.clientX) || 0) - grab);
+                if (onto === "V1") { this._editTlGhost(null); this._editTlDropMark(ev.clientX); }
+                else { this._editTlDropMark(null); this._editTlGhost({ track: onto, at, length: was.length, name: was.name }); }
+                return;
+            }
             this.editTlRefresh();
         }, (moved, ev) => {
             this._editTlDropMark(null);
+            this._editTlGhost(null);
             if (moved && zone === "body") {
                 const at = this._editTlTimeAt(ev.clientX);
+                if (onto !== "V1") {
+                    const got = D.transferClip(start, sel, onto, D.toFrame(Math.max(0, (at || 0) - grab), fps));
+                    if (got) { this._editTlSel = got.sel; this._editTlApply(got.cut); return; }
+                }
                 // Where it lands among the OTHERS: its own block is not a place to land.
                 const others = D.removeClip(start, i);
                 let to = at == null ? i : D.dropIndex(start.clips.length > 1 ? others : start, at);
@@ -839,6 +920,25 @@ export const EditTimelineMixin = {
                 this._editTlMove(i, to);
                 return;
             }
+            if (!moved) this._editTlSeek(began);
+            this.editTlRefresh();
+        });
+    },
+
+    // A dissolve's bar: its edges make it longer or shorter (the join it sits on
+    // stays the end of the shot before it), a click selects it.
+    _editTlMixDown(e, el, i) {
+        const start = this._editTlCut;
+        const fps = start.fps || 24;
+        const zone = this._editTlZone(e, el);
+        const was = Number(start.clips[i].transition) || 0;
+        this._editTlSel = { kind: "mix", i };
+        this._editTlDrag(e, el, (seconds) => {
+            if (zone === "body") return;
+            const length = Math.max(1 / fps, D.toFrame(was + (zone === "end" ? seconds : -seconds), fps));
+            this._editTlCut = D.setTransition(start, i, length);
+            this.editTlRefresh();
+        }, (moved) => {
             if (!moved) this._editTlSeek(D.clipStarts(start)[i]);
             this.editTlRefresh();
         });
@@ -851,13 +951,38 @@ export const EditTimelineMixin = {
         const fps = start.fps || 24;
         const zone = this._editTlZone(e, el);
         const was = D.trackOf(start, id).clips[i];
-        this._editTlSel = { kind: "tclip", track: id, i };
-        this._editTlDrag(e, el, (seconds) => {
+        const sel = { kind: "tclip", track: id, i };
+        this._editTlSel = sel;
+        let onto = id;
+        this._editTlDrag(e, el, (seconds, ev) => {
             if (zone === "end") this._editTlCut = D.trimTrackClipEnd(start, id, i, D.toFrame(was.length + seconds, fps));
             else if (zone === "start") this._editTlCut = D.trimTrackClipStart(start, id, i, D.toFrame(seconds, fps));
-            else this._editTlCut = D.moveTrackClip(start, id, i, D.toFrame(was.at + seconds, fps));
+            else {
+                onto = this._editTlTrackUnder(ev, sel) || id;
+                const at = D.toFrame(Math.max(0, was.at + seconds), fps);
+                if (onto === id) {
+                    this._editTlGhost(null);
+                    this._editTlDropMark(null);
+                    this._editTlCut = D.moveTrackClip(start, id, i, at);
+                    this.editTlRefresh();
+                    return;
+                }
+                // Over another track: it stays where it was until it is let go there.
+                if (this._editTlCut !== start) { this._editTlCut = start; this.editTlRefresh(); }
+                if (onto === "V1") { this._editTlGhost(null); this._editTlDropMark(ev.clientX); }
+                else { this._editTlDropMark(null); this._editTlGhost({ track: onto, at, length: was.length, name: was.name }); }
+                return;
+            }
             this.editTlRefresh();
-        }, (moved) => {
+        }, (moved, ev) => {
+            this._editTlDropMark(null);
+            this._editTlGhost(null);
+            if (moved && zone === "body" && onto !== id) {
+                const at = onto === "V1" ? (this._editTlTimeAt(ev.clientX) || 0)
+                                         : D.toFrame(Math.max(0, was.at + ((this._editTlTimeAt(ev.clientX) || 0) - (this._editTlTimeAt(e.clientX) || 0))), fps);
+                const got = D.transferClip(start, sel, onto, at);
+                if (got) { this._editTlSel = got.sel; this._editTlApply(got.cut); return; }
+            }
             if (!moved) this._editTlSeek(was.at);
             this.editTlRefresh();
         });
@@ -1177,7 +1302,6 @@ export const EditTimelineMixin = {
             if (this._editTlDirty()) return;             // the save said why
         }
         if (!this._editTlTarget) return;
-        const texts = this._editTlCut.texts.length;
         await openExportDialog(this.container, {
             title: "Export film",
             kind: "video",
@@ -1185,8 +1309,7 @@ export const EditTimelineMixin = {
             formats: ["mp4", "mov"],
             values: this._editTlExport,
             go: "Render",
-            note: texts ? `Its ${texts} text${texts === 1 ? " is" : "s are"} not drawn here: titles are drawn by `
-                + "whatever made the timeline. The film it lies beside is left as it is." : "",
+            note: "A film of its own, as the next version; an earlier one is never written over.",
             onExport: (values, ui) => this._editTlExportRun(values, ui),
         });
     },

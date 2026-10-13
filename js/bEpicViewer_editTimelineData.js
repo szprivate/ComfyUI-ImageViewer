@@ -7,10 +7,10 @@
 //
 //   { name, fps,
 //     clips: [{ ref, name, file, in, length, transition, color, volume }],   // seconds
-//     texts: [{ ref, text, start, length, preset }],
+//     texts: [{ ref, text, start, length, preset, size, x, y, color }],   // its look: see TEXT_LOOK
 //     sound: [{ name, file }],
 //     tracks: [{ id, kind, name, off, clips: [{ ref, name, file, in, length, at, color, volume }] }],
-//     off: { V1, A1 } }
+//     off: { V1, A1, T } }
 //
 // `clips` is the cut itself - track V1: one clip after the other, each at its
 // FULL length; `transition` is the dissolve from the clip before it, and is taken
@@ -24,6 +24,20 @@
 //
 // Every edit returns a NEW cut and leaves the one it was given alone: the panel
 // keeps the saved cut beside the working one to know what has changed.
+
+// How a text is drawn where nothing says otherwise (timeline_io.TEXT_LOOK, kept
+// in step): `size` is a percentage of the picture's height, `x` / `y` where its
+// middle is (0..1 of the picture).
+export const TEXT_LOOK = { size: 6, x: 0.5, y: 0.85, color: "#ffffff" };
+
+/** A text's look, every part of it present. */
+export function textLook(t) {
+    const hold = (v, low, high, fallback) => (Number.isFinite(Number(v)) && v !== null && v !== "" ? Math.max(low, Math.min(high, Number(v))) : fallback);
+    return {
+        size: hold(t && t.size, 1, 40, TEXT_LOOK.size), x: hold(t && t.x, 0, 1, TEXT_LOOK.x), y: hold(t && t.y, 0, 1, TEXT_LOOK.y),
+        color: /^#[0-9a-f]{6}$/i.test(String((t && t.color) || "")) ? String(t.color).toLowerCase() : TEXT_LOOK.color,
+    };
+}
 
 export const MIN_CLIP = 0.1;
 export const MIN_TEXT = 0.2;
@@ -206,7 +220,7 @@ export function removeTrack(cut, id) {
 /** Switch a track off or on. "V1" is the cut itself, "A1" its bed. */
 export function setTrackOff(cut, id, off) {
     const next = copy(cut);
-    if (id === "V1" || id === "A1") next.off[id] = !!off;
+    if (id === "V1" || id === "A1" || id === "T") next.off[id] = !!off;
     else { const k = trackOf(next, id); if (k) k.off = !!off; }
     return next;
 }
@@ -277,8 +291,51 @@ export function setClipProps(cut, sel, props) {
 /** A text of its own, written here. */
 export function addText(cut, text, start, length = 2) {
     const next = copy(cut);
-    next.texts.push({ text: String(text || "Text").slice(0, 2000), start: Math.max(0, num(start)), length: num(length, 2), preset: "" });
+    next.texts.push({ text: String(text || "Text").slice(0, 2000), start: Math.max(0, num(start)), length: num(length, 2),
+                      preset: "", ...TEXT_LOOK });
     return settle(next);
+}
+
+/** Change how a text is drawn: its size, where it stands, its colour. */
+export function setTextLook(cut, i, look) {
+    const next = copy(cut);
+    if (next.texts[i]) Object.assign(next.texts[i], textLook({ ...next.texts[i], ...look }));
+    return next;
+}
+
+/** The texts that stand on the picture at `seconds`, each with its look. */
+export function textsAt(cut, seconds) {
+    if (!cut || (cut.off && cut.off.T)) return [];
+    return (cut.texts || []).filter((t) => seconds >= num(t.start) - 1e-6 && seconds < num(t.start) + num(t.length) - 1e-6
+        && String(t.text || "").trim()).map((t) => ({ text: String(t.text), ...textLook(t) }));
+}
+
+/**
+ * Move a clip to another track (`to`: "V1" or a track's id), to the moment `at`.
+ * On the cut itself it goes between the shots there; on any other track it is
+ * placed at `at`. Returns { cut, sel } - the new cut and where the clip is now -
+ * or null when it cannot go there (the cut's only shot cannot leave it).
+ */
+export function transferClip(cut, sel, to, at) {
+    const c = clipOf(cut, sel);
+    if (!c) return null;
+    const from = sel.kind === "clip" ? "V1" : sel.track;
+    if (from === to) return null;
+    if (sel.kind === "clip" && cut.clips.length <= 1) return null;
+    let next = sel.kind === "clip" ? removeClip(cut, sel.i) : removeTrackClip(cut, sel.track, sel.i);
+    const keep = { file: c.file, name: c.name, in: c.in, length: c.length, color: c.color || "" };
+    const carry = (clip) => { clip.volume = num(c.volume, 1); };
+    if (to === "V1") {
+        const index = next.clips.length ? dropIndex(next, num(at)) : 0;
+        next = insertClip(next, keep, index);
+        carry(next.clips[index]);
+        return { cut: next, sel: { kind: "clip", i: index } };
+    }
+    if (!trackOf(next, to)) return null;
+    next = placeClip(next, to, keep, at);
+    const k = trackOf(next, to);
+    carry(k.clips[k.clips.length - 1]);
+    return { cut: next, sel: { kind: "tclip", track: to, i: k.clips.length - 1 } };
 }
 
 /**
@@ -374,10 +431,10 @@ export function sameCut(a, b) {
     const dress = (c) => [String(c.color || ""), round(num(c.volume, 1))];
     const key = (cut) => JSON.stringify({
         clips: ((cut && cut.clips) || []).map((c) => [Number.isInteger(c.ref) ? c.ref : c.file, c.name, round(num(c.in)), round(num(c.length)), round(num(c.transition)), ...dress(c)]),
-        texts: ((cut && cut.texts) || []).map((t) => [Number.isInteger(t.ref) ? t.ref : "new", t.text, round(num(t.start)), round(num(t.length))]),
+        texts: ((cut && cut.texts) || []).map((t) => [Number.isInteger(t.ref) ? t.ref : "new", t.text, round(num(t.start)), round(num(t.length)), JSON.stringify(textLook(t))]),
         tracks: ((cut && cut.tracks) || []).map((k) => [k.kind, k.name, !!k.off, (k.clips || []).map((c) =>
             [Array.isArray(c.ref) ? c.ref.join(":") : c.file, c.name, round(num(c.at)), round(num(c.in)), round(num(c.length)), ...dress(c)])]),
-        off: [!!(cut && cut.off && cut.off.V1), !!(cut && cut.off && cut.off.A1)],
+        off: [!!(cut && cut.off && cut.off.V1), !!(cut && cut.off && cut.off.A1), !!(cut && cut.off && cut.off.T)],
     });
     return key(a) === key(b);
 }
@@ -393,7 +450,7 @@ export function toSave(cut) {
         })),
         // A text with no `ref` was written here.
         texts: cut.texts.map((t) => ({ ...(Number.isInteger(t.ref) ? { ref: t.ref } : {}),
-                                       text: t.text, start: t.start, length: t.length })),
+                                       text: t.text, start: t.start, length: t.length, ...textLook(t) })),
         tracks: (cut.tracks || []).map((k) => ({
             id: k.id, kind: k.kind, name: k.name, off: !!k.off,
             clips: (k.clips || []).map((c) => ({
@@ -401,7 +458,7 @@ export function toSave(cut) {
                 name: c.name, at: c.at, in: c.in, length: c.length, color: c.color || "", volume: num(c.volume, 1),
             })),
         })),
-        off: { V1: !!(cut.off && cut.off.V1), A1: !!(cut.off && cut.off.A1) },
+        off: { V1: !!(cut.off && cut.off.V1), A1: !!(cut.off && cut.off.A1), T: !!(cut.off && cut.off.T) },
     };
 }
 
@@ -428,7 +485,8 @@ export function layoutCut(cut, density = 1) {
         };
     });
     const mixes = cut.clips.map((c, i) => (i && num(c.transition) > 0
-        ? { ...place(starts[i], num(c.transition)), i, title: `dissolve, ${lengthLabel(c.transition)}` }
+        ? { ...place(starts[i], num(c.transition)), i, start: starts[i], length: num(c.transition),
+            title: `Cross Dissolve, ${lengthLabel(c.transition)} - drag an edge to make it longer or shorter` }
         : null)).filter(Boolean);
     const texts = cut.texts.map((t, i) => ({
         ...place(num(t.start), num(t.length)), i, start: num(t.start), length: num(t.length),
@@ -513,13 +571,18 @@ export function playAt(cut, seconds) {
  * The picture of the film at `seconds`, every track counted: the clip of the
  * highest live video track that has one there, else the cut's own.
  *
- *   { clip, key, sel, t, end, origin, local }
+ *   { clip, key, sel, t, end, origin, local, under, mix }
  *
  * `clip` is null where nothing has a picture (black). `key` names the clip
  * ("V1:2", "V3:0") and changes exactly when the picture's source does; `sel` is
  * the same as a selection. The picture stays until `end`. `origin` is the moment
  * of the film at which the clip's file is at its in point, so the file's time
  * is `clip.in + (t - origin)` - which is `local`. `live` is liveTracks().
+ *
+ * In a dissolve of the cut the picture is the clip coming IN, and `under` is the
+ * one going out - { clip, key, origin, local } - still running beneath it, with
+ * `mix` (0..1) how far the dissolve has got: the picture is `under` with `clip`
+ * laid over it at that opacity.
  */
 export function pictureAt(cut, seconds, live) {
     const total = filmLength(cut);
@@ -544,7 +607,19 @@ export function pictureAt(cut, seconds, live) {
     }
     if (!found && on("V1") && t < mainLength(cut) - 1e-6) {
         const at = playAt(cut, t);
-        if (at) found = { clip: cut.clips[at.i], key: `V1:${at.i}`, sel: { kind: "clip", i: at.i }, origin: at.start, end: at.end };
+        if (at) {
+            found = { clip: cut.clips[at.i], key: `V1:${at.i}`, sel: { kind: "clip", i: at.i }, origin: at.start, end: at.end };
+            const mixLen = at.i > 0 ? num(cut.clips[at.i].transition) : 0;
+            if (mixLen > 0 && t < at.start + mixLen - 1e-6) {
+                const before = cut.clips[at.i - 1];
+                const began = clipStarts(cut)[at.i - 1];
+                found.under = { clip: before, key: `V1:${at.i - 1}`, origin: began, local: round(num(before.in) + Math.max(0, t - began)) };
+                found.mix = Math.max(0, Math.min(1, (t - at.start) / mixLen));
+                found.mixStart = at.start;
+                found.mixLen = mixLen;
+                next = Math.min(next, at.start + mixLen);          // the moment the dissolve is over
+            }
+        }
     }
     if (!found) found = { clip: null, key: "", sel: null, origin: t, end: total };
     found.t = t;

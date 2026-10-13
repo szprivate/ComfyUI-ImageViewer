@@ -28,8 +28,15 @@
 // neither seen nor heard (liveTracks). The render follows the same rules, save
 // for solo, which is a way of listening and is not rendered.
 //
-// What the preview is not: a dissolve is shown as a cut at its beginning, and
-// texts are not drawn - as in the render (timeline_render.py), which draws none.
+// A dissolve is played as one: for its length the clip going out keeps running
+// in one layer (`under`) and the clip coming in lies over it at a rising
+// opacity, their sound crossing the same way. Which layers those are depends on
+// what the two clips are - two films take the two <video>s, a picture the
+// <img>, two pictures the <img> and a second one kept for this.
+//
+// Texts stand on the picture as the render draws them (timeline_render.draw_texts):
+// a layer of its own, laid exactly over the picture's rectangle, each text at
+// its place and size.
 import * as D from "./bEpicViewer_editTimelineData.js";
 
 const PREFIX = "edit:";
@@ -85,7 +92,35 @@ export const EditPlayMixin = {
             });
         }
         this._epSlots = [home, other];
+        // A second <img>, for the picture going out when one picture dissolves
+        // into another; and the layer the texts are written on.
+        const doc = home.ownerDocument;
+        this._epImgB = doc.createElement("img");
+        this._epImgB.className = home.className;
+        this._epImgB.style.display = "none";
+        this._epImgB.draggable = false;
+        home.parentNode.insertBefore(this._epImgB, home);
+        this._epTitles = doc.createElement("div");
+        this._epTitles.className = "edit-titles";
+        this._epTitles.style.display = "none";
+        home.parentNode.appendChild(this._epTitles);
         return this._epSlots;
+    },
+
+    /** Every layer the player may draw a picture in. */
+    _editPlayLayers() {
+        return [...(this._epSlots || []), this._epImgB, this.imgBase].filter(Boolean);
+    },
+
+    // The viewer zooms and pans by a transform on its own two layers; the
+    // player's other layers take the same one, and the texts follow the picture.
+    // Called whenever that transform changes (updateTransform) and after a show.
+    _editPlayMirror() {
+        if (!this._editPlayOn) return;
+        const main = this._videoMode ? this.videoBase : this.imgBase;
+        const tr = main ? main.style.transform : "";
+        for (const el of this._editPlayLayers()) if (el !== main && el.style.transform !== tr) el.style.transform = tr;
+        this._editPlayTitles();
     },
 
     // The first picture of a tab is fitted to the viewport; after that the zoom
@@ -132,6 +167,9 @@ export const EditPlayMixin = {
         }
         if (this._epHome) this.videoBase = this._epHome;
         for (const a of (this._ep && this._ep.bed) || []) { try { a.pause(); } catch (_) {} }
+        for (const el of this._editPlayLayers()) { el.style.opacity = ""; el.style.zIndex = ""; }
+        if (this._epImgB) { this._epImgB.style.display = "none"; this._epImgB.removeAttribute("src"); }
+        if (this._epTitles) this._epTitles.style.display = "none";
         this._ep = null;
         this._epCutShown = null;
         this._videoMode = false;
@@ -184,6 +222,9 @@ export const EditPlayMixin = {
             try { v.pause(); } catch (_) {}
             v.style.display = "none";
         }
+        for (const el of this._editPlayLayers()) { el.style.opacity = ""; el.style.zIndex = ""; }
+        if (this._epImgB) this._epImgB.style.display = "none";
+        if (this._ep) this._ep.underEl = null;
         this._videoMode = false;
         if (this.imgBase) { this.imgBase.style.display = ""; this.imgBase.removeAttribute("src"); }
         if (this.imgFrame) this.imgFrame.style.display = "none";
@@ -203,13 +244,12 @@ export const EditPlayMixin = {
         const ep = this._ep;
         if (!ep) return;
         const at = cut && D.pictureAt(cut, t, this._editPlayLive());
-        if (!at) { ep.at = null; ep.key = ""; this._editPlayBlank(); return; }
+        if (!at) { ep.at = null; ep.key = ""; this._editPlayBlank(); this._editPlayTitles(); return; }
         const clip = at.clip;
         ep.t = at.t;
         ep.wall = this._editPlayNow();
         const slots = this._editPlaySlots();
         if (!slots) return;
-        const spare = () => (this.videoBase === slots[0] ? slots[1] : slots[0]);
 
         if (!clip) {
             // Nothing has a picture here (a gap, a track switched off): black,
@@ -221,6 +261,7 @@ export const EditPlayMixin = {
             this._editPlayBlank();
             this._editPlayReady(cut, at, slots[1]);
             this._editPlaySounds(at.t, this.isPlaying);
+            this._editPlayTitles();
             return;
         }
         const obj = { path: clip.file, external: true, name: clip.name };
@@ -234,21 +275,27 @@ export const EditPlayMixin = {
 
         if (D.isStill(clip.file)) {
             ep.still = true;
+            // The picture going out, when it is one too, moves to the second
+            // <img> before this one takes the first.
+            const under = this._editPlayUnder(at, this.imgBase);
             for (const v of slots) {
                 v._epWait = (v._epWait || 0) + 1;
-                try { v.pause(); } catch (_) {}
+                if (v !== under) { try { v.pause(); } catch (_) {} }
             }
             this._videoMode = false;
             this._setImgSrcCached(this.imgBase, url, () => {
                 if (!this._editPlayOn || !this._ep || !this._ep.still || this._ep.url !== url) return;
-                for (const v of slots) v.style.display = "none";
+                for (const v of slots) if (v !== this._ep.underEl) v.style.display = "none";
                 this.imgBase.style.display = "";
                 if (this.updateImageFrame) this.updateImageFrame();
                 this.updateShapeInfo();
                 this._editPlayFitOnce();
+                this._editPlayMirror();
             });
-            this._editPlayReady(cut, at, spare());
+            this._editPlayMix(at);
+            if (!under) this._editPlayReady(cut, at, this.videoBase === slots[0] ? slots[1] : slots[0]);
             this._editPlaySounds(at.t, this.isPlaying);
+            this._editPlayMirror();
             return;
         }
 
@@ -257,22 +304,131 @@ export const EditPlayMixin = {
         const other = mine === slots[0] ? slots[1] : slots[0];
         let v;
         if (same && this._videoMode && mine._epUrl === url) v = mine;      // the clip that is up
-        else if (other._epUrl === url) v = other;                           // made ready beforehand
+        else if (other._epUrl === url && other !== ep.underEl) v = other;   // made ready beforehand
         else if (mine._epUrl === url) v = mine;
         else { v = other; this._editPlayLoad(v, url); }
         v._epName = clip.name || String(clip.file || "").split(/[\\/]/).pop();
-        try { v.volume = Math.max(0, Math.min(1, clip.volume == null ? 1 : Number(clip.volume) || 0)); } catch (_) {}
         if (seek || v !== mine || !same || Math.abs((v.currentTime || 0) - at.local) > 0.08) {
             if (Math.abs((v.currentTime || 0) - at.local) > 1e-3) { try { v.currentTime = at.local; } catch (_) {} }
         }
+        const under = this._editPlayUnder(at, v);
         this._editPlayFront(v, v === mine ? other : mine);
+        this._editPlayMix(at);
         if (this.isPlaying) {
             this._applyVideoPlaybackRate();
             const p = v.play();
             if (p && p.catch) p.catch(() => {});
         }
         this._editPlaySounds(at.t, this.isPlaying);
-        this._editPlayReady(cut, at, v === mine ? other : mine);
+        if (!under) this._editPlayReady(cut, at, v === mine ? other : mine);
+        this._editPlayMirror();
+    },
+
+    // The clip going out of a dissolve, kept running beneath the one coming in
+    // (`main` is the layer that one is in). Returns the layer it is in, or null
+    // outside a dissolve - and puts away a layer that was one and no longer is.
+    _editPlayUnder(at, main) {
+        const ep = this._ep;
+        const u = at && at.under;
+        const slots = this._epSlots;
+        let el = null;
+        if (u && u.clip) {
+            const url = this.buildImgUrl({ path: u.clip.file, external: true }, { noColor: true });
+            if (D.isStill(u.clip.file)) {
+                el = main === this.imgBase ? this._epImgB : this.imgBase;
+                if (el._epShown !== url) { el._epShown = url; el.src = url; }
+                el.style.display = "block";
+            } else {
+                el = slots.find((s) => s !== main && s._epUrl === url) || slots.find((s) => s !== main);
+                if (el._epUrl !== url) this._editPlayLoad(el, url);
+                if (Math.abs((el.currentTime || 0) - u.local) > 0.12) { try { el.currentTime = u.local; } catch (_) {} }
+                el._epWait = (el._epWait || 0) + 1;                 // it is not waiting to become the picture
+                el.style.display = "block";
+                try {
+                    if (this.isPlaying) {
+                        el.playbackRate = Math.max(0.0625, Math.min(16, (this.fps || this.editPlayFps()) / this.editPlayFps()));
+                        const p = el.play();
+                        if (p && p.catch) p.catch(() => {});
+                    } else {
+                        el.pause();
+                    }
+                } catch (_) {}
+            }
+            el.style.opacity = "1";
+            el.style.zIndex = "1";
+            main.style.zIndex = "2";
+        } else {
+            main.style.zIndex = "";
+            main.style.opacity = "";
+        }
+        const was = ep.underEl;
+        ep.underEl = el;
+        if (was && was !== el && was !== main) {
+            was.style.zIndex = "";
+            was.style.opacity = "";
+            was.style.display = "none";
+            if (was.tagName === "VIDEO") { try { was.pause(); } catch (_) {} }
+        }
+        return el;
+    },
+
+    // How far a dissolve has got: the clip coming in at that opacity over the one
+    // going out, and their sound crossing with it.
+    _editPlayMix(at) {
+        const ep = this._ep;
+        if (!ep || !at) return;
+        const main = ep.still ? this.imgBase : this.videoBase;
+        const under = ep.underEl;
+        const a = under ? Math.max(0, Math.min(1, Number(at.mix) || 0)) : 1;
+        if (main) main.style.opacity = under ? String(Math.round(a * 1000) / 1000) : "";
+        const loud = (clip) => Math.max(0, Math.min(1, clip && clip.volume != null ? Number(clip.volume) || 0 : 1));
+        try { if (!ep.still && this.videoBase) this.videoBase.volume = loud(at.clip) * a; } catch (_) {}
+        try { if (under && under.tagName === "VIDEO") under.volume = loud(at.under.clip) * (1 - a); } catch (_) {}
+    },
+
+    // The texts that stand on the picture now, written over its rectangle. With
+    // no `t` the moment is the one on screen (the picture moved, not the film).
+    _editPlayTitles(t) {
+        const box = this._epTitles;
+        const ep = this._ep;
+        if (!box) return;
+        const cut = this._editPlayCut();
+        const moment = t != null ? t : (ep ? ((this.currentFrame || 0) + 0.5) / this.editPlayFps() : 0);
+        const items = cut && ep ? D.textsAt(cut, moment) : [];
+        const main = this._videoMode ? this.videoBase : this.imgBase;
+        const size = items.length ? this._displayedMediaSize() : null;
+        if (!items.length || !size || !main || !main.parentNode) {
+            if (box.style.display !== "none") { box.style.display = "none"; box._sig = ""; }
+            return;
+        }
+        // The layer is the viewport's size with the picture fitted inside it:
+        // where the picture really is comes from its own proportions.
+        const outer = main.parentNode.getBoundingClientRect();
+        const r = main.getBoundingClientRect();
+        const s = Math.min(r.width / size.w, r.height / size.h);
+        const w = size.w * s, h = size.h * s;
+        const left = r.left - outer.left + (r.width - w) / 2, top = r.top - outer.top + (r.height - h) / 2;
+        const sig = JSON.stringify([items, Math.round(w), Math.round(h), Math.round(left), Math.round(top)]);
+        if (box._sig === sig) return;
+        box._sig = sig;
+        box.style.display = "block";
+        box.style.left = left + "px";
+        box.style.top = top + "px";
+        box.style.width = w + "px";
+        box.style.height = h + "px";
+        const doc = box.ownerDocument;
+        box.replaceChildren(...items.map((item) => {
+            const d = doc.createElement("div");
+            d.className = "edit-title";
+            const px = Math.max(4, h * item.size / 100);
+            d.style.left = (item.x * 100) + "%";
+            d.style.top = (item.y * 100) + "%";
+            d.style.fontSize = px + "px";
+            d.style.color = item.color;
+            d.style.webkitTextStroke = Math.max(1, px / 7) + "px #000";
+            d.textContent = item.text;
+            return d;
+        }));
     },
 
     _editPlayNow() {
@@ -292,6 +448,7 @@ export const EditPlayMixin = {
     // `v` becomes the picture: at once if its frame is there, else when it is -
     // until then what was up stays up (stopped).
     _editPlayFront(v, old) {
+        const keep = () => (this._ep ? this._ep.underEl : null);
         const fps = this.editPlayFps();
         this.videoBase = v;
         this._videoMode = true;
@@ -299,15 +456,16 @@ export const EditPlayMixin = {
         this._videoFps = fps;
         this._videoFrames = 0;
         v.loop = false;
-        if (old && old !== v) { try { old.pause(); } catch (_) {} }
+        if (old && old !== v && old !== keep()) { try { old.pause(); } catch (_) {} }
         const wait = (v._epWait = (v._epWait || 0) + 1);
         const reveal = () => {
             if (v._epWait !== wait || !this._editPlayOn || this.videoBase !== v) return true;
             if (v.readyState < 2 || v.seeking) return false;
             v._epWait += 1;
             v.style.display = "block";
-            if (old && old !== v) old.style.display = "none";
-            if (this.imgBase) this.imgBase.style.display = "none";
+            if (old && old !== v && old !== keep()) old.style.display = "none";
+            if (this.imgBase && this.imgBase !== keep()) this.imgBase.style.display = "none";
+            if (this._epImgB && this._epImgB !== keep()) this._epImgB.style.display = "none";
             if (this.imgFrame) this.imgFrame.style.display = "none";
             if (this.imgCompare) this.imgCompare.style.display = this.isComparing ? "block" : "none";
             this.updateTransform();
@@ -316,6 +474,7 @@ export const EditPlayMixin = {
             if (this.updateImageFrame) this.updateImageFrame();
             this.updateShapeInfo();
             this._editPlayFitOnce();
+            this._editPlayMirror();
             return true;
         };
         if (reveal()) return;
@@ -454,10 +613,15 @@ export const EditPlayMixin = {
         } else if (this._editPlayNow() - (ep.sndAt || 0) > 200) {
             this._editPlaySounds(t, true);               // a sound clip whose moment has come
         }
+        if (ep.at && ep.at.under) {
+            const now = ep.at;
+            this._editPlayMix({ ...now, mix: (t - now.mixStart) / now.mixLen });
+        }
         const frame = Math.max(min, Math.min(max, Math.floor(t * fps + 1e-6)));
         if (frame === this.currentFrame) return;
         this.currentFrame = frame;
         this._editPlayReadout(frame);
+        this._editPlayTitles(t);
         this._updateCompareFrame(frame);
         this._toolsFrameChanged();
     },

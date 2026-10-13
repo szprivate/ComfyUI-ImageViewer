@@ -27,6 +27,14 @@
 // each panel's share of its width. Everything below asks _railIsRow(side)
 // rather than naming "bottom", so the two read as one rule with an axis. Everything else — toggling a panel, restoring a layout,
 // dropping a dragged panel — edits that object and calls applyDockLayout().
+//
+// TABS. A panel dropped onto the middle of another shares its place: the two
+// are tabs of one slot, named in the title bar, one of them in front. In the
+// layout that is two more fields on an entry - `tab`, the name of the group it
+// is in, and `behind`, set on every member but the one in front. A panel that
+// is behind is open (isPanelDocked) but not drawn; isPanelFront says which is.
+// Members of a group lie next to each other in the rail's list, and the slot's
+// share of the rail is the front one's `size`.
 import { api } from "../../scripts/api.js";
 
 // The dockable panels, and the room each one needs to stay usable.
@@ -42,7 +50,7 @@ const DOCK_PANELS = {
     channels: { prop: "channelsPanel", label: "Channel Box", minW: 190, minH: 160, defaultRail: "right" },
     // A graph is only readable with some height under it, so this one asks for
     // more than the rest; the channel buttons set the width.
-    curves:  { prop: "curvesPanel",  label: "Animation Curves", minW: 220, minH: 190, defaultRail: "right" },
+    curves:  { prop: "curvesPanel",  label: "Curve Editor", minW: 220, minH: 190, defaultRail: "bottom" },
     // The roto shapes' timing, the same editor's look (bEpicViewer_rotoCurves.js);
     // the roto tool opens and closes it.
     rotoCurves: { prop: "rotoCurvesPanel", label: "Roto Curves", minW: 220, minH: 170, defaultRail: "right" },
@@ -150,11 +158,11 @@ export const DockMixin = {
             right:  { width: 300, panels: [{ id: "browser", size: 1, hidden: true  },
                                            { id: "previz",  size: 1, hidden: true  },
                                            { id: "channels", size: 1, hidden: true },
-                                           { id: "curves",  size: 1, hidden: true  },
                                            { id: "rotoCurves", size: 1, hidden: true },
                                            { id: "paramCurves", size: 1, hidden: true },
                                            { id: "params",  size: 1, hidden: false }] },
-            bottom: { height: 240, panels: [] },
+            // A graph over time wants width: the Curve Editor lives under the picture.
+            bottom: { height: 240, panels: [{ id: "curves", size: 1, hidden: true }] },
         };
     },
 
@@ -174,7 +182,8 @@ export const DockMixin = {
             if (!rail) continue;
             const row = _isRow(side);
             const spec = this.dockLayout[side];
-            const shown = spec.panels.filter(p => !p.hidden);
+            // A panel behind another's tab is open, and has no room of its own.
+            const shown = spec.panels.filter(p => !p.hidden && !p.behind);
 
             // Splitters are rebuilt each pass; they belong between panels, and
             // which panels are in the rail is exactly what may have changed.
@@ -185,7 +194,7 @@ export const DockMixin = {
                 if (!el) return;
                 if (el.parentNode !== rail) rail.appendChild(el);
                 else rail.appendChild(el);           // re-append: array order wins
-                el.style.display = entry.hidden ? "none" : "flex";
+                el.style.display = (entry.hidden || entry.behind) ? "none" : "flex";
                 el.style.flex    = `${entry.size || 1} 1 0`;
                 el.style.minHeight = `${DOCK_PANELS[entry.id].minH}px`;
                 // Whichever way the rail runs, the rail owns the other axis.
@@ -223,12 +232,51 @@ export const DockMixin = {
         // Kept in step for anything still reading it (icons, older call sites).
         this.paramsSide  = this._dockSideOf("params")  || this.paramsSide  || "right";
         this.browserSide = this._dockSideOf("browser") || this.browserSide || "right";
+        this._syncDockTabs();
         this._syncPanelToggleButtons();
         this._notifyPanelsShown();
 
         // Compare geometry and the frame outline are measured against the
         // viewport, which has just changed width.
         if (this._afterViewportMoved) this._afterViewportMoved();
+    },
+
+    // The title bar of a panel that shares its place names every panel there:
+    // the one in front as it is, the others as tabs to press.
+    _syncDockTabs() {
+        for (const side of RAIL_SIDES) {
+            const list = this.dockLayout[side].panels;
+            for (const entry of list) {
+                const el = this._dockPanelEl(entry.id);
+                const bar = el && el.querySelector(":scope > .panel-titlebar");
+                const name = bar && bar.querySelector(":scope > .pt-name");
+                if (!name) continue;
+                const mates = entry.tab ? list.filter((p) => p.tab === entry.tab && !p.hidden) : [];
+                if (entry.hidden || entry.behind || mates.length < 2) {
+                    if (name._tabs) { name._tabs = ""; name.classList.remove("pt-tabs"); name.textContent = DOCK_PANELS[entry.id].label; }
+                    continue;
+                }
+                const sig = mates.map((p) => p.id).join(",") + "|" + entry.id;
+                if (name._tabs === sig) continue;
+                name._tabs = sig;
+                name.classList.add("pt-tabs");
+                const doc = name.ownerDocument;
+                name.replaceChildren(...mates.map((p) => {
+                    const front = p.id === entry.id;
+                    // The front one is part of the bar (it is what a drag takes
+                    // hold of); the others are buttons, and a press brings them up.
+                    const tab = doc.createElement(front ? "span" : "button");
+                    tab.className = "pt-tab" + (front ? " on" : "");
+                    tab.textContent = DOCK_PANELS[p.id].label;
+                    if (!front) {
+                        tab.title = "Show " + DOCK_PANELS[p.id].label;
+                        tab.addEventListener("pointerdown", (e) => e.stopPropagation());
+                        tab.addEventListener("click", (e) => { e.stopPropagation(); this.dockTabFront(p.id); });
+                    }
+                    return tab;
+                }));
+            }
+        }
     },
 
     /**
@@ -238,7 +286,7 @@ export const DockMixin = {
     _railSize(side) {
         const spec = this.dockLayout[side];
         const row = _isRow(side);
-        const shown = spec.panels.filter(p => !p.hidden);
+        const shown = spec.panels.filter(p => !p.hidden && !p.behind);
         const min = shown.reduce((m, p) => Math.max(m, DOCK_PANELS[p.id][row ? "minH" : "minW"]), 60);
         const want = (row ? spec.height : spec.width) || min;
         return Math.round(Math.max(min, Math.min(RAIL_MAX, want)));
@@ -264,9 +312,39 @@ export const DockMixin = {
                 p.hidden = !!p.hidden;
                 return true;
             });
+            // Tabs: of the open panels that share a place exactly one is in
+            // front; a panel left alone in its group is simply a panel.
+            const groups = new Map();
+            for (const p of spec.panels) {
+                if (typeof p.tab !== "string" || !p.tab) { delete p.tab; p.behind = false; continue; }
+                if (!groups.has(p.tab)) groups.set(p.tab, []);
+                groups.get(p.tab).push(p);
+            }
+            for (const members of groups.values()) {
+                if (members.length < 2) { delete members[0].tab; members[0].behind = false; continue; }
+                const open = members.filter((p) => !p.hidden);
+                const front = open.find((p) => !p.behind) || open[0];
+                for (const p of members) p.behind = p !== front;
+            }
             if (_isRow(side)) { if (!(spec.height > 0)) spec.height = 240; }
             else if (!(spec.width > 0)) spec.width = 300;
         }
+        // Once: the Curve Editor's home became the strip under the picture. A
+        // layout saved before that has it, put away, in a side rail.
+        try {
+            if (!window.localStorage.getItem("bepic.viewer.curvesBottom")) {
+                window.localStorage.setItem("bepic.viewer.curvesBottom", "1");
+                for (const side of ["left", "right"]) {
+                    const list = this.dockLayout[side].panels;
+                    const i = list.findIndex((p) => p.id === "curves");
+                    if (i < 0) continue;
+                    const [entry] = list.splice(i, 1);
+                    delete entry.tab;
+                    entry.behind = false;
+                    this.dockLayout.bottom.panels.push(entry);
+                }
+            }
+        } catch (_) { /* no storage: it stays where the layout has it */ }
         // A panel the saved layout never mentioned (a viewer upgraded mid-flight)
         // goes back to where it shipped, put away rather than sprung on the user.
         for (const [id, spec] of Object.entries(DOCK_PANELS)) {
@@ -301,6 +379,68 @@ export const DockMixin = {
         return !!(found && !found.entry.hidden);
     },
 
+    /** Is the panel open AND the one drawn in its place (not behind another's tab)? */
+    isPanelFront(id) {
+        const found = this._dockEntry(id);
+        return !!(found && !found.entry.hidden && !found.entry.behind);
+    },
+
+    _dockTabMates(found) {
+        const tab = found.entry.tab;
+        return tab ? this.dockLayout[found.side].panels.filter((p) => p.tab === tab) : [found.entry];
+    },
+
+    // Keep the panels that share a place next to each other in a rail's list,
+    // where the first of them is.
+    _dockRegroup(list) {
+        const out = [], done = new Set();
+        for (const p of list) {
+            if (!p.tab) { out.push(p); continue; }
+            if (done.has(p.tab)) continue;
+            done.add(p.tab);
+            out.push(...list.filter((q) => q.tab === p.tab));
+        }
+        list.splice(0, list.length, ...out);
+    },
+
+    /** Bring a panel to the front of the place it shares. */
+    dockTabFront(id) {
+        const found = this._dockEntry(id);
+        if (!found || found.entry.hidden) return;
+        const mates = this._dockTabMates(found);
+        const was = mates.find((p) => !p.hidden && !p.behind && p !== found.entry);
+        if (was) found.entry.size = was.size;            // the place keeps its share of the rail
+        for (const p of mates) p.behind = p !== found.entry;
+        this.applyDockLayout();
+        this.queuePersistViewerState && this.queuePersistViewerState();
+    },
+
+    /** Put a panel into the place of another, as a tab beside it, in front. */
+    dockPanelAsTab(id, ontoId) {
+        if (id === ontoId || !DOCK_PANELS[id]) return;
+        const from = this._dockEntry(id);
+        if (!from) return;
+        const entry = from.entry;
+        this.dockLayout[from.side].panels.splice(from.index, 1);
+        const onto = this._dockEntry(ontoId);
+        if (!onto) { this.dockLayout[from.side].panels.splice(from.index, 0, entry); return; }
+        if (!onto.entry.tab) onto.entry.tab = "t" + Date.now().toString(36) + ontoId;
+        entry.tab = onto.entry.tab;
+        entry.hidden = false;
+        entry.size = onto.entry.size;
+        const list = this.dockLayout[onto.side].panels;
+        // After the last member of the group, so the group stays in one piece.
+        let at = onto.index;
+        list.forEach((p, i) => { if (p.tab === entry.tab) at = i; });
+        list.splice(at + 1, 0, entry);
+        for (const p of list) if (p.tab === entry.tab) p.behind = p !== entry;
+        const spec = this.dockLayout[onto.side];
+        this._setRailSize(onto.side, Math.max(_isRow(onto.side) ? (spec.height || 0) : (spec.width || 0),
+                                              DOCK_PANELS[id][_isRow(onto.side) ? "minH" : "minW"]));
+        this.applyDockLayout();
+        this.queuePersistViewerState && this.queuePersistViewerState();
+    },
+
     // ── Mutations (each ends in one applyDockLayout) ─────────────────────────
 
     /** Show or hide a panel, keeping the slot it had. */
@@ -308,6 +448,13 @@ export const DockMixin = {
         const found = this._dockEntry(id);
         if (!found) return;
         found.entry.hidden = !visible;
+        // Opened: it comes up in front of the place it shares.
+        if (visible && found.entry.tab) {
+            const mates = this._dockTabMates(found);
+            const was = mates.find((p) => !p.hidden && !p.behind && p !== found.entry);
+            if (was) found.entry.size = was.size;
+            for (const p of mates) p.behind = p !== found.entry;
+        }
         this.applyDockLayout();
         this.queuePersistViewerState && this.queuePersistViewerState();
     },
@@ -324,6 +471,9 @@ export const DockMixin = {
         if (!found) return;
         const entry = found.entry;
         this.dockLayout[found.side].panels.splice(found.index, 1);
+        // A place of its own again: it leaves whatever tabs it was among.
+        delete entry.tab;
+        entry.behind = false;
 
         const target = this.dockLayout[side].panels;
         const at = (index == null) ? target.length : Math.max(0, Math.min(target.length, index));
@@ -337,6 +487,8 @@ export const DockMixin = {
 
         // Sizes are shares, so a stack of new arrivals should start out even.
         target.forEach(p => { p.size = 1; });
+        // Dropped between two tabs of one place, it would split them.
+        this._dockRegroup(target);
 
         this.applyDockLayout();
         this.queuePersistViewerState && this.queuePersistViewerState();
@@ -359,7 +511,8 @@ export const DockMixin = {
         const before = this._dockShown || new Set();
         const now = new Set();
         for (const side of RAIL_SIDES) {
-            for (const p of this.dockLayout[side].panels) if (!p.hidden) now.add(p.id);
+            // In front counts: a tab brought up is a panel coming into view.
+            for (const p of this.dockLayout[side].panels) if (!p.hidden && !p.behind) now.add(p.id);
         }
         this._dockShown = now;
         for (const id of now) {
@@ -581,7 +734,8 @@ export const DockMixin = {
         }, () => {
             if (!started) return;
             this._endDockDrag(id);
-            if (target) this.dockPanelTo(id, target.side, target.index);
+            if (target && target.kind === "tab") this.dockPanelAsTab(id, target.ref.id);
+            else if (target) this.dockPanelTo(id, target.side, target.index);
         });
     },
 
@@ -620,7 +774,7 @@ export const DockMixin = {
             const active = !!rail && rail.style.display !== "none";
             this._dockRects.rails[side] = active ? rail.getBoundingClientRect() : null;
             (this.dockLayout[side].panels || []).forEach((p, i) => {
-                if (p.hidden) return;
+                if (p.hidden || p.behind) return;
                 const pel = this._dockPanelEl(p.id);
                 if (!pel) return;
                 this._dockRects.panels.push({ id: p.id, side, index: i, r: pel.getBoundingClientRect() });
@@ -659,7 +813,8 @@ export const DockMixin = {
     /**
      * Where would a drop at (x, y) put the panel? null for "nowhere".
      *
-     * Over a docked panel: its top half means above it, its bottom half below.
+     * Over a docked panel: its middle means INTO its place, as a tab; the
+     * third towards its top means above it, the third towards its bottom below.
      * Over the outer quarter-ish of the viewport: the end of that rail.
      * Anywhere else — the middle of the picture — is not a drop.
      */
@@ -672,9 +827,12 @@ export const DockMixin = {
 
         for (const p of R.panels) {
             if (!inside(p.r)) continue;
+            // How far along the panel the pointer is, the way its rail runs.
+            const along = _isRow(p.side) ? (x - p.r.left) / Math.max(1, p.r.width)
+                                         : (y - p.r.top) / Math.max(1, p.r.height);
+            if (p.id !== dragId && along > 0.3 && along < 0.7) return { side: p.side, kind: "tab", ref: p };
             // "Before" is up in a side rail and left in the bottom one.
-            const above = _isRow(p.side) ? (x < p.r.left + p.r.width / 2)
-                                         : (y < p.r.top + p.r.height / 2);
+            const above = along < 0.5;
             let index = above ? p.index : p.index + 1;
             // Dropping either side of itself changes nothing.
             const cur = this._dockEntry(dragId);
@@ -729,6 +887,8 @@ export const DockMixin = {
             put(l, main.top, w, main.height);
             return;
         }
+        // Onto a panel: the whole of it, since its place is what is shared.
+        if (target.kind === "tab") { const q = target.ref.r; put(q.left, q.top, q.width, q.height); return; }
         // Insert beside a panel: a band at that edge of it.
         const r = target.ref.r;
         if (_isRow(target.side)) {
@@ -763,7 +923,8 @@ export const DockMixin = {
             if (Array.isArray(src.panels)) {
                 this.dockLayout[side].panels = src.panels
                     .filter(p => p && DOCK_PANELS[p.id])
-                    .map(p => ({ id: p.id, size: p.size > 0 ? p.size : 1, hidden: !!p.hidden }));
+                    .map(p => ({ id: p.id, size: p.size > 0 ? p.size : 1, hidden: !!p.hidden,
+                                 ...(typeof p.tab === "string" && p.tab ? { tab: p.tab, behind: !!p.behind } : {}) }));
             }
         }
         this.applyDockLayout();
