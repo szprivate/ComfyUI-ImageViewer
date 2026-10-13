@@ -7,16 +7,31 @@
 // cut through the same functions (bEpicViewer_editTimelineData.js), so there is
 // one cut and three views of it.
 //
-// INSPECTOR - what is selected, as numbers and words, in sections the way an
-// editor's inspector has them: the clip (name, colour), its timing, its sound,
-// its file. Everything shown is something the preview plays and the render
-// writes; there is no row here that only looks like a control.
+// INSPECTOR - what is selected, laid out the way an editor's inspector is: the
+// clip's name, a row of tabs, and under each tab sections that have a switch
+// (off: the section is not applied, its numbers are kept) and a reset, with a
+// reset on every row as well.
+//
+//   a clip        Video   Transform (zoom, position, rotation angle, anchor
+//                         point, flip) · Cropping · Composite (opacity)
+//                 Audio   Volume
+//                 Timing  in, length, the dissolve in / where it starts, order
+//                 File    name, colour, source
+//   a text        Title   its words and its look;  Timing
+//   a dissolve    Transition  its duration
+//
+// Every control is something the Edit tab draws and the render writes
+// (clipFx / timeline_render.lay): there is no row here that only looks like
+// one. What an editor's inspector has and this one does not - pitch and yaw,
+// crop softness, dynamic zoom, speed, keyframes - is not shown rather than
+// shown dead.
 //
 // EFFECTS - a toolbox: categories on the left, what is in one on the right.
 // An item is dragged onto the timeline, or double-clicked to be applied at the
 // selection / the playhead:
 //
-//   Video Transitions   Cross Dissolve, onto the join between two shots
+//   Video Transitions   Cross Dissolve, onto the join between two shots (it is
+//                       taken away on its bar, or in the Inspector)
 //   Titles              Text, drawn on the picture - by the Edit tab while it
 //                       plays and by the render, the same way
 //   Generators          a plain colour, as a clip (a PNG made by the server:
@@ -32,7 +47,6 @@ const TOOLBOX = [
         { name: "Cross Dissolve \u00bd s", note: "onto the join between two shots", fx: { type: "dissolve", seconds: 0.5 } },
         { name: "Cross Dissolve 1 s", note: "onto the join between two shots", fx: { type: "dissolve", seconds: 1 } },
         { name: "Cross Dissolve 2 s", note: "onto the join between two shots", fx: { type: "dissolve", seconds: 2 } },
-        { name: "Cut", note: "takes a dissolve away", fx: { type: "dissolve", seconds: 0 } },
     ] },
     { id: "titles", name: "Titles", items: [
         { name: "Text 2 s", note: "words on the picture, low in it", fx: { type: "text", text: "Text", seconds: 2 } },
@@ -76,65 +90,99 @@ export const EditPanelsMixin = {
             if (text !== undefined) n.textContent = text;
             return n;
         };
-        const section = (title) => parts.push(el("div", "insp-sec", title));
-        const row = (label, control, wide) => {
-            // (Not a <label>: a click on the word would press the first button in the row.)
-            const r = el("div", "insp-row" + (wide ? " wide" : ""));
-            r.append(el("span", "insp-label", label), control);
-            parts.push(r);
-            return control;
-        };
         const quiet = (input) => { input.addEventListener("keydown", (e) => e.stopPropagation()); return input; };
-        const seconds = (value, onChange, disabled) => {
+        const apply = (next) => { this._editFxLive = null; this._editTlApply(next); };
+        const tip = (n, text) => { n.title = text; return n; };
+
+        // ── the pieces every tab is made of
+        const resetBtn = (title, fn) => {
+            const b = tip(el("button", "insp-reset", "\u21ba"), title);
+            b.addEventListener("click", (e) => { e.stopPropagation(); fn(); });
+            return b;
+        };
+        // A section: a switch, its name, a reset; then its rows.
+        let into = null;
+        const section = (title, opts = {}) => {
+            const sec = el("div", "insp-section" + (opts.off ? " off" : ""));
+            const bar = el("div", "insp-sec");
+            if (opts.toggle) {
+                const sw = tip(el("button", "insp-switch" + (opts.off ? "" : " on")),
+                               opts.off ? "Off: not applied, its numbers kept - click to apply it" : "On - click to switch this section off");
+                sw.append(el("i"));
+                sw.addEventListener("click", () => opts.toggle(!opts.off));
+                bar.append(sw);
+            }
+            bar.append(el("span", "insp-sec-name", title));
+            if (opts.reset) bar.append(resetBtn("Reset " + title, opts.reset));
+            sec.append(bar);
+            parts.push(sec);
+            into = sec;
+            return sec;
+        };
+        // A row: its name, its controls, its own reset.
+        const row = (label, controls, reset) => {
+            const r = el("div", "insp-row");
+            const ctl = el("div", "insp-ctl");
+            ctl.append(...[].concat(controls));
+            r.append(el("span", "insp-label", label), ctl);
+            r.append(reset ? resetBtn("Reset " + label, reset) : el("span", "insp-reset-gap"));
+            (into || { append: (n) => parts.push(n) }).append(r);
+            return r;
+        };
+        const numField = (value, digits, commit, o = {}) => {
             const input = quiet(el("input", "insp-num"));
             input.type = "number";
-            input.step = "0.1";
-            input.min = "0";
-            input.value = String(Math.round(value * 1000) / 1000);
-            input.disabled = !!disabled;
-            input.title = "seconds";
-            input.addEventListener("change", () => onChange(D.toFrame(Number(input.value), fps)));
+            input.step = String(o.step || 1);
+            if (o.min !== undefined) input.min = String(o.min);
+            if (o.max !== undefined) input.max = String(o.max);
+            input.value = Number(value).toFixed(digits);
+            if (o.title) input.title = o.title;
+            input.disabled = !!o.disabled;
+            input.addEventListener("change", () => { if (input.value !== "" && Number.isFinite(Number(input.value))) commit(Number(input.value)); });
             return input;
         };
-        const words = (value, onChange) => {
-            const input = quiet(el("input", "insp-text"));
-            input.type = "text";
-            input.value = value;
-            input.addEventListener("change", () => onChange(input.value));
-            return input;
+        const axis = (letter) => el("span", "insp-axis", letter);
+        // A slider with its number beside it. While it is dragged only the
+        // picture follows (`live`); the cut changes when it is let go, or the
+        // slider would be redrawn under the pointer.
+        const slider = (value, min, max, step, digits, live, commit, title) => {
+            const range = el("input", "insp-range");
+            range.type = "range";
+            range.min = String(min);
+            range.max = String(max);
+            range.step = String(step);
+            range.value = String(Math.max(min, Math.min(max, value)));
+            const num = numField(value, digits, commit, { step, title });
+            range.addEventListener("input", () => { num.value = Number(range.value).toFixed(digits); if (live) live(Number(range.value)); });
+            range.addEventListener("change", () => commit(Number(range.value)));
+            return [range, num];
         };
-        const said = (text) => { const s = el("span", "insp-said", text); s.title = text; return s; };
+        const seconds = (value, commit, disabled) => numField(value, 3, (v) => commit(D.toFrame(v, fps)),
+                                                              { step: 0.1, min: 0, title: "seconds", disabled });
+        const said = (text) => tip(el("span", "insp-said", text), text);
         const button = (label, title, fn, disabled) => {
-            const b = el("button", "edit-btn", label);
-            b.title = title;
+            const b = tip(el("button", "edit-btn", label), title);
             b.disabled = !!disabled;
             b.addEventListener("click", fn);
             return b;
         };
-        const apply = (next) => this._editTlApply(next);
-        const sound = (clip, target) => {
-            const wrap = el("span", "insp-slider");
-            const input = el("input");
-            input.type = "range";
-            input.min = "0";
-            input.max = "100";
-            input.step = "1";
-            const now = Math.round(Math.max(0, Math.min(1, clip.volume == null ? 1 : Number(clip.volume))) * 100);
-            input.value = String(now);
-            const read = el("span", "insp-read", now + " %");
-            // While it is dragged only the readout and what is heard follow; the
-            // cut is changed when it is let go, or the slider would be redrawn
-            // under the pointer.
-            input.addEventListener("input", () => {
-                read.textContent = input.value + " %";
-                if (this._editTlOnScreen() && this._videoMode && this.videoBase) {
-                    try { this.videoBase.volume = Number(input.value) / 100; } catch (_) {}
-                }
-            });
-            input.addEventListener("change", () => apply(D.setClipProps(cut, target, { volume: Number(input.value) / 100 })));
-            wrap.append(input, read);
-            return wrap;
+        // The tabs: [id, name, has it anything for this selection]. The one
+        // that was open stays open from one selection to the next.
+        const tabs = (list) => {
+            const strip = el("div", "insp-tabs");
+            const open = list.find((x) => x[0] === this._editInspTab && x[2]) || list.find((x) => x[2]);
+            for (const [id, name, has] of list) {
+                const b = el("button", "insp-tab" + (open && open[0] === id ? " on" : ""), name);
+                b.disabled = !has;
+                b.addEventListener("click", () => { this._editInspTab = id; this._editInspRender(); });
+                strip.append(b);
+            }
+            parts.push(strip);
+            return open ? open[0] : "";
         };
+        const head = (text) => parts.push(tip(el("div", "insp-title", text), text));
+        const foot = (...buttons) => { const f = el("div", "insp-foot"); f.append(...buttons); parts.push(f); };
+        const note = (text) => parts.push(el("div", "insp-note", text));
 
         if (!cut) {
             parts.push(el("div", "curves-empty", "No cut is open."));
@@ -143,96 +191,146 @@ export const EditPanelsMixin = {
             const placed = sel.kind === "tclip";
             const track = placed ? D.trackOf(cut, sel.track) : null;
             const isSound = !!track && track.kind === "audio";
-            parts.push(el("div", "insp-title", (placed ? track.name : "V1") + " · " + (c.name || "clip")));
-            section("Clip");
-            row("Name", words(c.name || "", (v) => apply(D.setClipProps(cut, sel, { name: v }))), true);
-            row("Colour", this._editTlSwatches(doc, c, (color) => apply(D.setClipProps(cut, sel, { color }))), true);
-            section("Timing");
-            if (placed) {
-                row("Starts at", seconds(c.at, (v) => apply(D.moveTrackClip(cut, sel.track, sel.i, v))));
-                row("In", seconds(c.in, (v) => apply(D.trimTrackClipStart(cut, sel.track, sel.i, v - c.in))));
-                row("Length", seconds(c.length, (v) => apply(D.trimTrackClipEnd(cut, sel.track, sel.i, v))));
+            const still = D.isStill(c.file) && !isSound;
+            head(c.name || String(c.file || "").split(/[\\/]/).pop() || "clip");
+            const tab = tabs([["video", "Video", !isSound], ["audio", "Audio", !still], ["timing", "Timing", true], ["file", "File", true]]);
+            const fx = D.rawFx(c);
+            const setFx = (patch) => apply(D.setClipFx(cut, sel, patch));
+            const liveFx = (patch) => { if (this.editPlayFxLive) this.editPlayFxLive(c, { ...D.cleanFx(c.fx), ...patch }); };
+            const pct = (key, label, o = {}) => row(label, slider(fx[key] * 100, 0, 100, 0.1, 1, (v) => liveFx({ [key]: v / 100 }),
+                (v) => setFx({ [key]: v / 100 }), o.title || "percent"), () => setFx({ [key]: D.FX[key][0] }));
+            if (tab === "video") {
+                section("Transform", { off: fx.toff, toggle: (off) => setFx({ toff: off }), reset: () => apply(D.resetClipFx(cut, sel, "transform")) });
+                const linked = this._editInspUnlinked !== true;
+                const link = tip(el("button", "insp-link" + (linked ? " on" : ""), "\u26ad"),
+                                 linked ? "Zoom X and Y are linked - click to set them apart" : "Link zoom X and Y");
+                link.addEventListener("click", () => { this._editInspUnlinked = linked; this._editInspRender(); });
+                row("Zoom", [axis("X"), numField(fx.zx, 3, (v) => setFx(linked ? { zx: v, zy: v } : { zx: v }), { step: 0.01, min: 0.01, title: "1 is its own size" }),
+                             link, axis("Y"), numField(fx.zy, 3, (v) => setFx(linked ? { zx: v, zy: v } : { zy: v }), { step: 0.01, min: 0.01, title: "1 is its own size" })],
+                    () => setFx({ zx: 1, zy: 1 }));
+                row("Position", [axis("X"), numField(fx.x * 100, 1, (v) => setFx({ x: v / 100 }), { step: 0.5, title: "percent of the frame's width, to the right" }),
+                                 el("span", "insp-link-gap"), axis("Y"), numField(fx.y * 100, 1, (v) => setFx({ y: v / 100 }), { step: 0.5, title: "percent of the frame's height, up" })],
+                    () => setFx({ x: 0, y: 0 }));
+                row("Rotation Angle", slider(fx.rot, -180, 180, 0.1, 1, (v) => liveFx({ rot: v }), (v) => setFx({ rot: v }), "degrees, clockwise"),
+                    () => setFx({ rot: 0 }));
+                row("Anchor Point", [axis("X"), numField(fx.ax * 100, 1, (v) => setFx({ ax: v / 100 }), { step: 0.5, title: "the point it is scaled and turned about: percent of the frame's width from its middle" }),
+                                     el("span", "insp-link-gap"), axis("Y"), numField(fx.ay * 100, 1, (v) => setFx({ ay: v / 100 }), { step: 0.5, title: "percent of the frame's height from its middle, up" })],
+                    () => setFx({ ax: 0, ay: 0 }));
+                const flip = (key, glyph, title) => {
+                    const b = tip(el("button", "insp-flip" + (fx[key] ? " on" : ""), glyph), title);
+                    b.addEventListener("click", () => setFx({ [key]: !fx[key] }));
+                    return b;
+                };
+                row("Flip", [flip("fh", "\u25b6\u25c0", "Flip left to right"), flip("fv", "\u25b2\u25bc", "Flip top to bottom")],
+                    () => setFx({ fh: false, fv: false }));
+
+                section("Cropping", { off: fx.coff, toggle: (off) => setFx({ coff: off }), reset: () => apply(D.resetClipFx(cut, sel, "crop")) });
+                pct("cl", "Crop Left", { title: "percent of the picture taken off its left" });
+                pct("cr", "Crop Right", { title: "percent of the picture taken off its right" });
+                pct("ct", "Crop Top", { title: "percent of the picture taken off its top" });
+                pct("cb", "Crop Bottom", { title: "percent of the picture taken off its bottom" });
+
+                section("Composite", { off: fx.ooff, toggle: (off) => setFx({ ooff: off }), reset: () => apply(D.resetClipFx(cut, sel, "composite")) });
+                pct("op", "Opacity", { title: "percent" });
+                into = null;
+                if (!placed) note("This shot is on the cut itself: where it does not cover the frame, the film is black. On a track above, what is under it shows.");
+            } else if (tab === "audio") {
+                section("Volume", { reset: () => apply(D.setClipProps(cut, sel, { volume: 1 })) });
+                const now = Math.max(0, Math.min(1, c.volume == null ? 1 : Number(c.volume))) * 100;
+                row("Volume", slider(now, 0, 100, 1, 0, (v) => {
+                    if (this._editTlOnScreen() && this._videoMode && this.videoBase) { try { this.videoBase.volume = v / 100; } catch (_) {} }
+                }, (v) => apply(D.setClipProps(cut, sel, { volume: v / 100 })), "percent"), () => apply(D.setClipProps(cut, sel, { volume: 1 })));
+                into = null;
+            } else if (tab === "timing") {
+                section("Timing");
+                if (placed) {
+                    row("Starts at", seconds(c.at, (v) => apply(D.moveTrackClip(cut, sel.track, sel.i, v))));
+                    row("In", seconds(c.in, (v) => apply(D.trimTrackClipStart(cut, sel.track, sel.i, v - c.in))));
+                    row("Length", seconds(c.length, (v) => apply(D.trimTrackClipEnd(cut, sel.track, sel.i, v))));
+                } else {
+                    const i = sel.i, n = cut.clips.length;
+                    row("In", seconds(c.in, (v) => apply(D.setClipIn(cut, i, v))));
+                    row("Length", seconds(c.length, (v) => apply(D.trimEnd(cut, i, v))));
+                    row("Dissolve in", seconds(c.transition || 0, (v) => apply(D.setTransition(cut, i, v)), i === 0), i === 0 ? null : () => apply(D.setTransition(cut, i, 0)));
+                    row("Order", [button("\u25c0 Earlier", "Earlier in the order", () => this._editTlMove(i, i - 1), i === 0),
+                                  button("Later \u25b6", "Later in the order", () => this._editTlMove(i, i + 1), i === n - 1)]);
+                }
+                into = null;
             } else {
-                const i = sel.i, n = cut.clips.length;
-                row("In", seconds(c.in, (v) => apply(D.setClipIn(cut, i, v))));
-                row("Length", seconds(c.length, (v) => apply(D.trimEnd(cut, i, v))));
-                row("Dissolve in", seconds(c.transition || 0, (v) => apply(D.setTransition(cut, i, v)), i === 0));
-                const order = el("span", "insp-buttons");
-                order.append(button("◀ Earlier", "Earlier in the order", () => this._editTlMove(i, i - 1), i === 0),
-                             button("Later ▶", "Later in the order", () => this._editTlMove(i, i + 1), i === n - 1));
-                row("Order", order, true);
+                section("Clip");
+                const name = quiet(el("input", "insp-text"));
+                name.type = "text";
+                name.value = c.name || "";
+                name.addEventListener("change", () => apply(D.setClipProps(cut, sel, { name: name.value })));
+                row("Name", name);
+                row("Colour", this._editTlSwatches(doc, c, (color) => apply(D.setClipProps(cut, sel, { color }))));
+                row("Track", said(placed ? track.name : "V1"));
+                section("File");
+                const src = said(c.file || "");
+                src.classList.add("insp-path");
+                row("Source", src);
+                into = null;
+                foot(button("Remove from the cut", "Take this clip out", () => this._editTlRemove(sel), !placed && cut.clips.length <= 1));
             }
-            if (!D.isStill(c.file) || isSound) {
-                section("Audio");
-                row("Volume", sound(c, sel), true);
-            }
-            section("File");
-            row("Source", said(c.file || ""), true).classList.add("insp-path");
-            const tail = el("div", "insp-foot");
-            tail.append(button("Remove from the cut", "Take this clip out", () => this._editTlRemove(sel),
-                               !placed && cut.clips.length <= 1));
-            parts.push(tail);
         } else if (sel && sel.kind === "text" && cut.texts[sel.i]) {
-            const i = sel.i, t = cut.texts[i];
-            parts.push(el("div", "insp-title", "Text"));
-            section("Text");
-            const area = quiet(el("textarea", "insp-area"));
-            area.value = String(t.text || "");
-            area.rows = 3;
-            area.addEventListener("change", () => apply(D.setText(cut, i, area.value)));
-            row("Words", area, true);
-            section("Timing");
-            row("Starts at", seconds(t.start, (v) => apply(D.moveText(cut, i, v))));
-            row("Length", seconds(t.length, (v) => apply(D.resizeText(cut, i, v))));
-            // Its look: drawn the same on the picture here and in the rendered film.
-            section("Look");
-            const look = D.textLook(t);
-            const percent = (value, key, title) => {
-                const input = quiet(el("input", "insp-num"));
-                input.type = "number";
-                input.step = "1";
-                input.min = key === "size" ? "1" : "0";
-                input.max = key === "size" ? "40" : "100";
-                input.value = String(Math.round(value * 10) / 10);
-                input.title = title;
-                input.addEventListener("change", () => apply(D.setTextLook(cut, i, { [key]: key === "size" ? Number(input.value) : Number(input.value) / 100 })));
-                return input;
-            };
-            row("Size", percent(look.size, "size", "percent of the picture's height"));
-            row("Across", percent(look.x * 100, "x", "where its middle is, in percent from the left"));
-            row("Down", percent(look.y * 100, "y", "where its middle is, in percent from the top"));
-            const ink = quiet(el("input", "insp-color"));
-            ink.type = "color";
-            ink.value = look.color;
-            ink.addEventListener("change", () => apply(D.setTextLook(cut, i, { color: ink.value })));
-            row("Colour", ink);
-            const tail = el("div", "insp-foot");
-            tail.append(button("Remove this text", "Take this text off the film", () => this._editTlRemove(sel)));
-            parts.push(tail);
+            const i = sel.i, x = cut.texts[i];
+            head(String(x.text || "Text").split("\n")[0]);
+            const tab = tabs([["title", "Title", true], ["timing", "Timing", true]]);
+            const look = D.textLook(x);
+            const setLook = (patch) => apply(D.setTextLook(cut, i, patch));
+            if (tab === "title") {
+                section("Text");
+                const area = quiet(el("textarea", "insp-area"));
+                area.value = String(x.text || "");
+                area.rows = 3;
+                area.addEventListener("change", () => apply(D.setText(cut, i, area.value)));
+                row("Words", area);
+                section("Look", { reset: () => setLook({ ...D.TEXT_LOOK }) });
+                row("Size", slider(look.size, 1, 40, 0.1, 1, null, (v) => setLook({ size: v }), "percent of the picture's height"), () => setLook({ size: D.TEXT_LOOK.size }));
+                row("Position", [axis("X"), numField(look.x * 100, 1, (v) => setLook({ x: v / 100 }), { step: 0.5, min: 0, max: 100, title: "where its middle is: percent from the left" }),
+                                 el("span", "insp-link-gap"), axis("Y"), numField(look.y * 100, 1, (v) => setLook({ y: v / 100 }), { step: 0.5, min: 0, max: 100, title: "percent from the top" })],
+                    () => setLook({ x: D.TEXT_LOOK.x, y: D.TEXT_LOOK.y }));
+                const ink = quiet(el("input", "insp-color"));
+                ink.type = "color";
+                ink.value = look.color;
+                ink.addEventListener("change", () => setLook({ color: ink.value }));
+                row("Colour", ink, () => setLook({ color: D.TEXT_LOOK.color }));
+                into = null;
+            } else {
+                section("Timing");
+                row("Starts at", seconds(x.start, (v) => apply(D.moveText(cut, i, v))));
+                row("Length", seconds(x.length, (v) => apply(D.resizeText(cut, i, v))));
+                into = null;
+            }
+            foot(button("Remove this text", "Take this text off the film", () => this._editTlRemove(sel)));
         } else if (sel && sel.kind === "mix" && cut.clips[sel.i] && sel.i > 0) {
             const i = sel.i, c = cut.clips[i];
-            parts.push(el("div", "insp-title", "Cross Dissolve"));
-            section("Transition");
-            row("From", said(cut.clips[i - 1].name || "shot " + i), true);
-            row("To", said(c.name || "shot " + (i + 1)), true);
-            row("Duration", seconds(c.transition || 0, (v) => apply(D.setTransition(cut, i, v))));
-            parts.push(el("div", "insp-note", "For its length the two shots overlap, so the film is shorter by it. "
-                + "On the timeline, drag an edge of its bar."));
-            const tail = el("div", "insp-foot");
-            tail.append(button("Remove this dissolve", "Back to a cut", () => this._editTlRemove(sel)));
-            parts.push(tail);
+            head("Cross Dissolve");
+            tabs([["transition", "Transition", true]]);
+            section("Cross Dissolve", { reset: () => apply(D.setTransition(cut, i, 1)) });
+            row("Duration", slider(c.transition || 0, 0, Math.max(0.1, Math.min(c.length, cut.clips[i - 1].length) - 0.05), 1 / fps, 3, null,
+                                   (v) => apply(D.setTransition(cut, i, D.toFrame(v, fps))), "seconds"));
+            row("From", said(cut.clips[i - 1].name || "shot " + i));
+            row("To", said(c.name || "shot " + (i + 1)));
+            into = null;
+            note("For its length the two shots overlap, so the film is shorter by it. On the timeline, drag an edge of its bar.");
+            foot(button("Remove this dissolve", "Back to a cut", () => this._editTlRemove(sel)));
         } else {
-            parts.push(el("div", "insp-title", "Timeline"));
-            section("Cut");
-            row("Name", said(cut.name || this._editTlFile || "new cut"), true);
-            row("Length", said(D.lengthLabel(D.filmLength(cut)) + " · " + D.filmFrames(cut) + " frames"), true);
-            row("Frame rate", said(String(Math.round(fps * 1000) / 1000) + " fps"), true);
-            row("Shots", said(String(cut.clips.length)), true);
+            head(cut.name || this._editTlFile || "new cut");
+            tabs([["timeline", "Timeline", true]]);
+            section("Timeline");
+            row("Length", said(D.lengthLabel(D.filmLength(cut)) + " \u00b7 " + D.filmFrames(cut) + " frames"));
+            row("Frame rate", said(String(Math.round(fps * 1000) / 1000) + " fps"));
+            row("Shots", said(String(cut.clips.length)));
             const more = (cut.tracks || []).map((k) => `${k.name} (${k.clips.length})`).join(", ");
-            row("Tracks", said("V1" + ((cut.sound || []).length ? ", A1" : "") + (more ? ", " + more : "")), true);
-            parts.push(el("div", "insp-note", "Select a clip or a text on the timeline to change it here."));
+            row("Tracks", said("V1" + ((cut.sound || []).length ? ", A1" : "") + (more ? ", " + more : "")));
+            into = null;
+            note("Select a clip, a text or a dissolve on the timeline to change it here.");
         }
+        // Where the user had scrolled to is kept: every change redraws all of it.
+        const scrolled = body.scrollTop;
         body.replaceChildren(...parts);
+        body.scrollTop = scrolled;
     },
 
     // ── Effects ──────────────────────────────────────────────────────────────

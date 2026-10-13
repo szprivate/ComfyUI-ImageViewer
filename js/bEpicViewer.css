@@ -1256,7 +1256,7 @@ textarea.param-input {
 .edit-ghost { position: absolute; z-index: 5; pointer-events: none; box-sizing: border-box; border: 1px dashed #ffcf6f; border-radius: 2px;
               background: rgba(255,207,111,.22); color: #ffe9bd; font-size: 10px; padding: 0 5px; overflow: hidden; white-space: nowrap; }
 .edit-track.landing { background: rgba(255,207,111,.08); }
-.insp-color { width: 44px; height: 20px; padding: 0; border: 1px solid #444; border-radius: 2px; background: #111; cursor: pointer; }
+
 .edit-text { background: #5a3d78; border: 1px solid #8a63b5; border-radius: 2px; color: #e9dcf7; padding: 0 4px; font-size: 9px; line-height: 14px; cursor: grab; }
 .edit-text.late { border-color: #ff9f6f; }
 .edit-snd { background: #2f5a45; border-radius: 2px; color: #9fd0b7; font-size: 8px; line-height: 9px; padding: 0 4px; }
@@ -1314,31 +1314,63 @@ textarea.param-input {
 /* The texts of a cut, over the picture (bEpicViewer_editPlay.js): a layer laid
    exactly on the picture's rectangle, each text by its middle. Arial, because
    that is what the render draws with. */
-.edit-titles { position: absolute; z-index: 4; pointer-events: none; overflow: hidden; }
+.edit-titles { position: absolute; z-index: 4; pointer-events: none; transform-origin: center; }
+.edit-titles-frame { position: absolute; overflow: hidden; }
 .edit-title { position: absolute; transform: translate(-50%, -50%); white-space: pre; text-align: center; line-height: 1.2;
               font-family: Arial, Helvetica, sans-serif; paint-order: stroke fill; }
 
-/* Inspector and Effects (bEpicViewer_editPanels.js). */
-.insp-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px 8px 10px; display: flex; flex-direction: column; gap: 4px; }
-.insp-title { font-size: 12px; color: #eee; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-bottom: 2px; }
-.insp-sec { margin-top: 6px; padding: 3px 6px; background: #1c1c1c; border-top: 1px solid #333; font-size: 10px;
-            letter-spacing: .06em; text-transform: uppercase; color: #9aa; }
-.insp-row { display: flex; align-items: center; gap: 8px; min-height: 22px; font-size: 11px; color: #999; }
-.insp-label { flex: none; width: 74px; }
-.insp-num { width: 70px; background: #111; color: #00e5ff; border: 1px solid #444; border-radius: 2px; font-size: 11px; padding: 2px 4px; }
-.insp-text, .insp-area { flex: 1; min-width: 0; background: #111; color: #ddd; border: 1px solid #444; border-radius: 2px;
-                         font-size: 11px; padding: 2px 4px; font-family: inherit; }
+/* Inspector and Effects (bEpicViewer_editPanels.js). The Inspector is laid
+   out as an editor's is: a name, tabs, sections with a switch and a reset. */
+.insp-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; background: #26262b; }
+/* The name and the tabs stay while the sections scroll under them. */
+.insp-title { position: sticky; top: 0; z-index: 2; height: 30px; box-sizing: border-box; flex: none; padding: 7px 10px 6px; font-size: 13px; font-weight: 600; color: #f0f0f0; background: #1e1e22; border-bottom: 1px solid #111;
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.insp-tabs { position: sticky; top: 30px; z-index: 2; flex: none; display: flex; background: #1e1e22; border-bottom: 1px solid #111; }
+.insp-tab { flex: 1 1 0; min-width: 0; min-height: 0; padding: 7px 4px 6px; background: none; border: none; border-bottom: 2px solid transparent;
+            color: #b8b8b8; font-size: 11px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.insp-tab:hover:not(:disabled) { color: #fff; }
+/* (The viewer's own button:hover colours every border; only the open tab is underlined.) */
+.insp-tab:hover:not(.on) { border-color: transparent; }
+.insp-tab.on { color: #fff; border-bottom-color: #e64b3d; }
+.insp-tab:disabled { color: #55555c; cursor: default; }
+.insp-section { border-bottom: 1px solid #141417; padding-bottom: 6px; }
+.insp-sec { display: flex; align-items: center; gap: 8px; padding: 8px 8px 6px 10px; font-size: 12px; font-weight: 600; color: #ececec; }
+.insp-sec-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.insp-switch { flex: none; position: relative; width: 26px; height: 14px; min-height: 0; padding: 0; border: none; border-radius: 7px;
+               background: #121214; cursor: pointer; }
+.insp-switch i { position: absolute; top: 3px; left: 4px; width: 8px; height: 8px; border-radius: 50%; background: #77777f; transition: left .12s; }
+.insp-switch.on i { left: 14px; background: #e64b3d; }
+.insp-section.off .insp-row { opacity: .4; }
+.insp-row { display: flex; align-items: center; gap: 6px; min-height: 26px; padding: 1px 6px 1px 10px; font-size: 11px; color: #b4b4ba; }
+.insp-label { flex: none; width: 34%; max-width: 104px; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.insp-ctl { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; }
+.insp-axis { flex: none; color: #8c8c94; font-size: 10px; }
+.insp-num { flex: 1 1 0; min-width: 44px; max-width: 76px; height: 20px; box-sizing: border-box; background: #141416; color: #eaeaea;
+            border: 1px solid #3a3a41; border-radius: 3px; font-size: 11px; padding: 0 5px; text-align: center; }
+.insp-num:focus { border-color: #e64b3d; outline: none; }
+.insp-num:disabled { opacity: .4; }
+.insp-range { flex: 2 1 0; min-width: 40px; height: 14px; accent-color: #9a9aa2; }
+.insp-text, .insp-area { flex: 1; min-width: 0; box-sizing: border-box; background: #141416; color: #eaeaea; border: 1px solid #3a3a41;
+                         border-radius: 3px; font-size: 11px; padding: 3px 5px; font-family: inherit; }
 .insp-area { resize: vertical; }
-.insp-said { flex: 1; min-width: 0; color: #ccc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.insp-said { flex: 1; min-width: 0; color: #dcdce0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* A path is cut at its front: the file's name is the end that says something. */
 .insp-said.insp-path { direction: rtl; text-align: left; }
-.insp-slider { flex: 1; display: flex; align-items: center; gap: 6px; min-width: 0; }
-.insp-slider input { flex: 1; min-width: 40px; accent-color: #00b8d4; }
-.insp-read { width: 40px; text-align: right; color: #00e5ff; }
-.insp-buttons { display: flex; gap: 4px; }
+.insp-reset, .insp-link, .insp-flip { flex: none; min-height: 0; padding: 0; background: none; border: 1px solid transparent; border-radius: 3px;
+                                      color: #8a8a92; cursor: pointer; }
+.insp-reset { width: 18px; height: 18px; font-size: 13px; line-height: 16px; }
+.insp-reset:hover, .insp-link:hover, .insp-flip:hover { color: #fff; border-color: #55555c; }
+.insp-reset-gap { flex: none; width: 18px; }
+.insp-link { width: 18px; height: 18px; font-size: 13px; line-height: 16px; }
+.insp-link.on { color: #fff; }
+.insp-link-gap { flex: none; width: 18px; }
+.insp-flip { width: 30px; height: 20px; font-size: 8px; letter-spacing: -1px; border-color: #3a3a41; background: #141416; }
+.insp-flip.on { color: #fff; border-color: #e64b3d; background: #3a1d1a; }
 .insp-row .edit-swatches { padding: 0; max-width: none; }
-.insp-note { font-size: 10px; color: #777; line-height: 1.4; margin-top: 6px; }
-.insp-foot { margin-top: 10px; }
+.insp-color { width: 44px; height: 20px; padding: 0; border: 1px solid #3a3a41; border-radius: 3px; background: #141416; cursor: pointer; }
+.insp-note { font-size: 10px; color: #84848c; line-height: 1.45; padding: 8px 10px 0; }
+.insp-foot { padding: 10px; }
+.insp-body .curves-empty { padding: 12px; }
 .fx-body { flex: 1 1 auto; min-height: 0; display: flex; gap: 6px; padding: 6px 8px 8px; }
 .fx-cats { flex: none; width: 34%; max-width: 120px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
 .fx-cat { text-align: left; background: none; color: #aaa; border: 1px solid transparent; border-radius: 2px; font-size: 11px; padding: 3px 6px; cursor: pointer; }

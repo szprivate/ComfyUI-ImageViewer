@@ -63,7 +63,7 @@ const DOCK_PANELS = {
     editTimeline: { prop: "editTimelinePanel", label: "Edit", minW: 320, minH: 150, defaultRail: "bottom" },
     // Its companions (bEpicViewer_editPanels.js). All three are up only while
     // a cut's tab is; the bar's Timeline group opens them.
-    editInspector: { prop: "editInspectorPanel", label: "Inspector", minW: 220, minH: 160, defaultRail: "right" },
+    editInspector: { prop: "editInspectorPanel", label: "Inspector", minW: 290, minH: 200, defaultRail: "right" },
     editEffects: { prop: "editEffectsPanel", label: "Effects", minW: 220, minH: 150, defaultRail: "left" },
     // (The drawing tools' options have no panel of their own: while a tool is
     // on they take the Parameters panel over — ToolsMixin._toolShowDock.)

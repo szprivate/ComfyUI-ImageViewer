@@ -34,6 +34,13 @@
 // what the two clips are - two films take the two <video>s, a picture the
 // <img>, two pictures the <img> and a second one kept for this.
 //
+// A clip's transform, cropping and opacity (the Inspector's Video tab; clipFx)
+// are drawn by the layer the clip is in: a CSS transform put after the viewer's
+// own zoom and pan, a clip-path that keeps the picture inside the frame and its
+// crop, an opacity (fxPlace - the render's arithmetic, timeline_render.lay). A
+// clip on a higher track that no longer covers the frame has what is beneath it
+// in the second layer, the way a dissolve has the clip going out.
+//
 // Texts stand on the picture as the render draws them (timeline_render.draw_texts):
 // a layer of its own, laid exactly over the picture's rectangle, each text at
 // its place and size.
@@ -112,15 +119,56 @@ export const EditPlayMixin = {
         return [...(this._epSlots || []), this._epImgB, this.imgBase].filter(Boolean);
     },
 
-    // The viewer zooms and pans by a transform on its own two layers; the
-    // player's other layers take the same one, and the texts follow the picture.
-    // Called whenever that transform changes (updateTransform) and after a show.
-    _editPlayMirror() {
+    // The viewer zooms and pans by a transform on its own two layers
+    // (`_epViewerT`, noted each time it changes). Every layer the player draws in
+    // takes that one, and after it the transform of the clip it shows; the
+    // texts follow the picture. Called whenever the viewer's transform changes
+    // (updateTransform) and after a show.
+    _editPlayMirror(viewerChanged) {
         if (!this._editPlayOn) return;
-        const main = this._videoMode ? this.videoBase : this.imgBase;
-        const tr = main ? main.style.transform : "";
-        for (const el of this._editPlayLayers()) if (el !== main && el.style.transform !== tr) el.style.transform = tr;
+        if (viewerChanged || this._epViewerT == null) {
+            // updateTransform has just written the plain transform into both of its layers.
+            this._epViewerT = (this._videoMode && this.videoBase ? this.videoBase : this.imgBase).style.transform || "";
+        }
+        const base = this._epViewerT;
+        const live = this._editFxLive;
+        for (const el of this._editPlayLayers()) {
+            const clip = el._epClip;
+            const fx = clip ? D.clipFx(live && live.clip === clip ? { fx: live.fx } : clip) : null;
+            let transform = base, clipPath = "";
+            if (fx) {
+                const w = el.videoWidth || el.naturalWidth, h = el.videoHeight || el.naturalHeight;
+                const W = el.clientWidth, H = el.clientHeight;
+                if (w && h && W && H) {
+                    // Where the picture lies in its layer: fitted, in the middle.
+                    const s = Math.min(W / w, H / h);
+                    const place = D.fxPlace(fx, { x: (W - w * s) / 2, y: (H - h * s) / 2, w: w * s, h: h * s });
+                    transform = (base + " " + place.transform).trim();
+                    clipPath = place.clip;
+                }
+            }
+            if (el.style.transform !== transform) el.style.transform = transform;
+            if (el.style.clipPath !== clipPath) el.style.clipPath = clipPath;
+        }
+        if (this._ep && this._ep.at) this._editPlayMix(this._ep.at);
         this._editPlayTitles();
+    },
+
+    /** A clip's opacity as it is drawn (1 for a clip as it comes), a live Inspector drag included. */
+    _editPlayOpacity(clip) {
+        const live = this._editFxLive;
+        const fx = clip ? D.clipFx(live && live.clip === clip ? { fx: live.fx } : clip) : null;
+        return fx ? fx.op : 1;
+    },
+
+    /**
+     * The Inspector is dragging a slider: draw `clip` with `fx` for now, without
+     * changing the cut (which would redraw the slider under the pointer). null
+     * ends it.
+     */
+    editPlayFxLive(clip, fx) {
+        this._editFxLive = clip ? { clip, fx } : null;
+        this._editPlayMirror();
     },
 
     // The first picture of a tab is fitted to the viewport; after that the zoom
@@ -167,7 +215,15 @@ export const EditPlayMixin = {
         }
         if (this._epHome) this.videoBase = this._epHome;
         for (const a of (this._ep && this._ep.bed) || []) { try { a.pause(); } catch (_) {} }
-        for (const el of this._editPlayLayers()) { el.style.opacity = ""; el.style.zIndex = ""; }
+        for (const el of this._editPlayLayers()) {
+            el.style.opacity = "";
+            el.style.zIndex = "";
+            el.style.clipPath = "";
+            el._epClip = null;
+            if (this._epViewerT != null) el.style.transform = this._epViewerT;
+        }
+        this._epViewerT = null;
+        this._editFxLive = null;
         if (this._epImgB) { this._epImgB.style.display = "none"; this._epImgB.removeAttribute("src"); }
         if (this._epTitles) this._epTitles.style.display = "none";
         this._ep = null;
@@ -278,6 +334,7 @@ export const EditPlayMixin = {
             // The picture going out, when it is one too, moves to the second
             // <img> before this one takes the first.
             const under = this._editPlayUnder(at, this.imgBase);
+            this.imgBase._epClip = clip;
             for (const v of slots) {
                 v._epWait = (v._epWait || 0) + 1;
                 if (v !== under) { try { v.pause(); } catch (_) {} }
@@ -312,6 +369,7 @@ export const EditPlayMixin = {
             if (Math.abs((v.currentTime || 0) - at.local) > 1e-3) { try { v.currentTime = at.local; } catch (_) {} }
         }
         const under = this._editPlayUnder(at, v);
+        v._epClip = clip;
         this._editPlayFront(v, v === mine ? other : mine);
         this._editPlayMix(at);
         if (this.isPlaying) {
@@ -354,6 +412,7 @@ export const EditPlayMixin = {
                     }
                 } catch (_) {}
             }
+            el._epClip = u.clip;
             el.style.opacity = "1";
             el.style.zIndex = "1";
             main.style.zIndex = "2";
@@ -372,22 +431,29 @@ export const EditPlayMixin = {
         return el;
     },
 
-    // How far a dissolve has got: the clip coming in at that opacity over the one
-    // going out, and their sound crossing with it.
+    // The layers' opacity and loudness. In a dissolve the clip coming in lies
+    // over the one going out at the dissolve's share, their sound crossing with
+    // it; a clip that merely has something beneath it (`over`) lies there at its
+    // own opacity, and is the one that is heard.
     _editPlayMix(at) {
         const ep = this._ep;
         if (!ep || !at) return;
         const main = ep.still ? this.imgBase : this.videoBase;
         const under = ep.underEl;
-        const a = under ? Math.max(0, Math.min(1, Number(at.mix) || 0)) : 1;
-        if (main) main.style.opacity = under ? String(Math.round(a * 1000) / 1000) : "";
+        const a = under && !at.over ? Math.max(0, Math.min(1, Number(at.mix) || 0)) : 1;
+        const own = this._editPlayOpacity(at.clip);
+        const show = Math.round(a * own * 1000) / 1000;
+        if (main) main.style.opacity = show === 1 && !under ? "" : String(show);
+        if (under) under.style.opacity = String(Math.round(this._editPlayOpacity(at.under.clip) * 1000) / 1000);
         const loud = (clip) => Math.max(0, Math.min(1, clip && clip.volume != null ? Number(clip.volume) || 0 : 1));
         try { if (!ep.still && this.videoBase) this.videoBase.volume = loud(at.clip) * a; } catch (_) {}
-        try { if (under && under.tagName === "VIDEO") under.volume = loud(at.under.clip) * (1 - a); } catch (_) {}
+        try { if (under && under.tagName === "VIDEO") under.volume = at.over ? 0 : loud(at.under.clip) * (1 - a); } catch (_) {}
     },
 
-    // The texts that stand on the picture now, written over its rectangle. With
-    // no `t` the moment is the one on screen (the picture moved, not the film).
+    // The texts that stand on the picture now. Their layer is laid over the
+    // picture's own - it takes the viewer's zoom and pan as the pictures do - and
+    // in it a box lies where the untransformed picture does: the frame. With no
+    // `t` the moment is the one on screen (the picture moved, not the film).
     _editPlayTitles(t) {
         const box = this._epTitles;
         const ep = this._ep;
@@ -397,35 +463,42 @@ export const EditPlayMixin = {
         const items = cut && ep ? D.textsAt(cut, moment) : [];
         const main = this._videoMode ? this.videoBase : this.imgBase;
         const size = items.length ? this._displayedMediaSize() : null;
-        if (!items.length || !size || !main || !main.parentNode) {
+        if (!items.length || !size || !main) {
             if (box.style.display !== "none") { box.style.display = "none"; box._sig = ""; }
             return;
         }
-        // The layer is the viewport's size with the picture fitted inside it:
-        // where the picture really is comes from its own proportions.
-        const outer = main.parentNode.getBoundingClientRect();
-        const r = main.getBoundingClientRect();
-        const s = Math.min(r.width / size.w, r.height / size.h);
+        const W = main.clientWidth, H = main.clientHeight;
+        const s = Math.min(W / size.w, H / size.h);
         const w = size.w * s, h = size.h * s;
-        const left = r.left - outer.left + (r.width - w) / 2, top = r.top - outer.top + (r.height - h) / 2;
-        const sig = JSON.stringify([items, Math.round(w), Math.round(h), Math.round(left), Math.round(top)]);
+        // The layer of the texts lies exactly where the picture's layer does (a
+        // layer is as large as the viewer lays its picture out, not as large as
+        // the viewport), before the viewer's zoom and pan - which it then takes.
+        const at = [main.offsetLeft, main.offsetTop];
+        const sig = JSON.stringify([items, Math.round(w), Math.round(h), W, H, at, this._epViewerT]);
         if (box._sig === sig) return;
         box._sig = sig;
         box.style.display = "block";
-        box.style.left = left + "px";
-        box.style.top = top + "px";
-        box.style.width = w + "px";
-        box.style.height = h + "px";
+        box.style.left = at[0] + "px";
+        box.style.top = at[1] + "px";
+        box.style.width = W + "px";
+        box.style.height = H + "px";
+        box.style.transform = this._epViewerT || "";
+        let frame = box.firstChild;
+        if (!frame) { frame = box.ownerDocument.createElement("div"); frame.className = "edit-titles-frame"; box.append(frame); }
+        frame.style.left = ((W - w) / 2) + "px";
+        frame.style.top = ((H - h) / 2) + "px";
+        frame.style.width = w + "px";
+        frame.style.height = h + "px";
         const doc = box.ownerDocument;
-        box.replaceChildren(...items.map((item) => {
+        frame.replaceChildren(...items.map((item) => {
             const d = doc.createElement("div");
             d.className = "edit-title";
-            const px = Math.max(4, h * item.size / 100);
+            const px = Math.max(2, h * item.size / 100);
             d.style.left = (item.x * 100) + "%";
             d.style.top = (item.y * 100) + "%";
             d.style.fontSize = px + "px";
             d.style.color = item.color;
-            d.style.webkitTextStroke = Math.max(1, px / 7) + "px #000";
+            d.style.webkitTextStroke = Math.max(0.5, px / 7) + "px #000";
             d.textContent = item.text;
             return d;
         }));
@@ -613,7 +686,7 @@ export const EditPlayMixin = {
         } else if (this._editPlayNow() - (ep.sndAt || 0) > 200) {
             this._editPlaySounds(t, true);               // a sound clip whose moment has come
         }
-        if (ep.at && ep.at.under) {
+        if (ep.at && ep.at.under && !ep.at.over) {
             const now = ep.at;
             this._editPlayMix({ ...now, mix: (t - now.mixStart) / now.mixLen });
         }

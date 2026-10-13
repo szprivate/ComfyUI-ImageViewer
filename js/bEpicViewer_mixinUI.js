@@ -1206,7 +1206,7 @@ export const UIMixin = {
         this.updateTabHighlights();
         this.updateToolOverlay && this.updateToolOverlay();
         // A cut that is playing has layers of its own, and texts on the picture.
-        if (this._editPlayOn && this._editPlayMirror) this._editPlayMirror();
+        if (this._editPlayOn && this._editPlayMirror) this._editPlayMirror(true);
     },
 
     // The white outline around the picture. It marks the edge of the frame, which

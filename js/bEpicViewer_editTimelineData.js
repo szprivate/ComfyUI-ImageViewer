@@ -39,6 +39,103 @@ export function textLook(t) {
     };
 }
 
+// What the Inspector's Video tab sets on a clip (timeline_io.FX, kept in step):
+// each key with its neutral value and the range it is held to. Zoom is a factor;
+// position and anchor point are fractions of the frame (x of its width to the
+// right, y of its height UP); rotation is degrees, clockwise; a crop is the
+// fraction of the picture taken off that side; opacity is 0..1. `toff` / `coff`
+// / `ooff` switch a whole section off without losing its numbers.
+export const FX = { zx: [1, 0.01, 20], zy: [1, 0.01, 20], x: [0, -5, 5], y: [0, -5, 5], rot: [0, -3600, 3600],
+                    ax: [0, -5, 5], ay: [0, -5, 5], cl: [0, 0, 1], cr: [0, 0, 1], ct: [0, 0, 1], cb: [0, 0, 1], op: [1, 0, 1] };
+export const FX_FLAGS = ["fh", "fv", "toff", "coff", "ooff"];
+export const FX_SECTIONS = { transform: ["zx", "zy", "x", "y", "rot", "ax", "ay", "fh", "fv"], crop: ["cl", "cr", "ct", "cb"], composite: ["op"] };
+const FX_OFF = { transform: "toff", crop: "coff", composite: "ooff" };
+
+/** `given` held to what an effect may be, with only what differs from neutral kept. */
+export function cleanFx(given) {
+    const out = {};
+    if (!given || typeof given !== "object") return out;
+    for (const [key, [neutral, low, high]] of Object.entries(FX)) {
+        const v = Number(given[key]);
+        if (given[key] === undefined || given[key] === null || !Number.isFinite(v)) continue;
+        const held = Math.round(Math.max(low, Math.min(high, v)) * 100000) / 100000;
+        if (held !== neutral) out[key] = held;
+    }
+    for (const key of FX_FLAGS) if (given[key]) out[key] = true;
+    return out;
+}
+
+/** A clip's effect with every key present, as its numbers stand (sections that are off included). */
+export function rawFx(clip) {
+    const fx = cleanFx(clip && clip.fx);
+    const out = {};
+    for (const [key, [neutral]] of Object.entries(FX)) out[key] = fx[key] === undefined ? neutral : fx[key];
+    for (const key of FX_FLAGS) out[key] = !!fx[key];
+    return out;
+}
+
+/** A clip's effect as it is DRAWN - sections that are switched off at neutral - or null for a clip drawn as it comes. */
+export function clipFx(clip) {
+    const fx = rawFx(clip);
+    for (const [section, keys] of Object.entries(FX_SECTIONS)) {
+        if (!fx[FX_OFF[section]]) continue;
+        for (const key of keys) fx[key] = FX[key] ? FX[key][0] : false;
+    }
+    const plain = Object.entries(FX).every(([key, [neutral]]) => fx[key] === neutral) && !fx.fh && !fx.fv;
+    return plain ? null : fx;
+}
+
+/**
+ * How a layer draws a clip with effect `fx` (clipFx): the CSS transform to put
+ * AFTER the viewer's own, and the clip-path that keeps the picture inside the
+ * frame and inside its crop. `box` is where the untransformed picture lies in
+ * the layer, in the layer's own pixels: { x, y, w, h }; the layer turns about
+ * its middle, which is the picture's. The same arithmetic as the render's
+ * (timeline_render.lay): cropped, scaled and turned about the anchor point, moved.
+ */
+export function fxPlace(fx, box) {
+    const sx = fx.zx * (fx.fh ? -1 : 1), sy = fx.zy * (fx.fv ? -1 : 1);
+    const px = fx.x * box.w, py = -fx.y * box.h, ax = fx.ax * box.w, ay = -fx.ay * box.h;
+    const r = (v) => Math.round(v * 1000) / 1000;
+    const moved = sx !== 1 || sy !== 1 || fx.rot % 360 !== 0 || px !== 0 || py !== 0;
+    const transform = moved
+        ? `translate(${r(px + ax)}px, ${r(py + ay)}px) rotate(${r(fx.rot)}deg) scale(${r(sx)}, ${r(sy)}) translate(${r(-ax)}px, ${r(-ay)}px)`
+        : "";
+    const cropped = fx.cl > 0 || fx.cr > 0 || fx.ct > 0 || fx.cb > 0;
+    if (!moved && !cropped) return { transform, clip: "", opacity: fx.op };
+    // The frame, seen from the picture's own space: its corners taken back
+    // through the transform. What is drawn is the part of that inside the crop.
+    const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
+    const cos = Math.cos(fx.rot * Math.PI / 180), sin = Math.sin(fx.rot * Math.PI / 180);
+    const back = ([X, Y]) => {
+        const dx = X - cx - px - ax, dy = Y - cy - py - ay;
+        return [cx + ax + (cos * dx + sin * dy) / sx, cy + ay + (-sin * dx + cos * dy) / sy];
+    };
+    let poly = [[box.x, box.y], [box.x + box.w, box.y], [box.x + box.w, box.y + box.h], [box.x, box.y + box.h]].map(back);
+    const sides = [
+        [(q) => q[0] >= box.x + fx.cl * box.w, 0, box.x + fx.cl * box.w],
+        [(q) => q[0] <= box.x + box.w - fx.cr * box.w, 0, box.x + box.w - fx.cr * box.w],
+        [(q) => q[1] >= box.y + fx.ct * box.h, 1, box.y + fx.ct * box.h],
+        [(q) => q[1] <= box.y + box.h - fx.cb * box.h, 1, box.y + box.h - fx.cb * box.h],
+    ];
+    for (const [inside, axis, at] of sides) {          // one side of the crop at a time (Sutherland-Hodgman)
+        const next = [];
+        for (let i = 0; i < poly.length; i++) {
+            const a = poly[i], b = poly[(i + 1) % poly.length];
+            const ia = inside(a), ib = inside(b);
+            if (ia) next.push(a);
+            if (ia !== ib) {
+                const f = (at - a[axis]) / (b[axis] - a[axis]);
+                next.push([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]);
+            }
+        }
+        poly = next;
+        if (!poly.length) break;
+    }
+    const clip = poly.length ? "polygon(" + poly.map(([X, Y]) => `${r(X)}px ${r(Y)}px`).join(", ") + ")" : "polygon(0px 0px, 0px 0px, 0px 0px)";
+    return { transform, clip, opacity: fx.op };
+}
+
 export const MIN_CLIP = 0.1;
 export const MIN_TEXT = 0.2;
 // A dissolve leaves at least this much of each clip it joins outside itself.
@@ -285,7 +382,22 @@ export function setClipProps(cut, sel, props) {
     if (props.name !== undefined) c.name = String(props.name == null ? "" : props.name).slice(0, 200);
     if (props.color !== undefined) c.color = /^#[0-9a-f]{6}$/i.test(String(props.color)) ? String(props.color).toLowerCase() : "";
     if (props.volume !== undefined) c.volume = round(Math.max(0, Math.min(1, num(props.volume, 1))));
+    if (props.fx !== undefined) c.fx = cleanFx(props.fx);
     return next;
+}
+
+/** Change some of a clip's effect numbers ({ zx: 0.5, fh: true, ... }); the rest stay. */
+export function setClipFx(cut, sel, patch) {
+    const c = clipOf(cut, sel);
+    return c ? setClipProps(cut, sel, { fx: { ...cleanFx(c.fx), ...patch } }) : copy(cut);
+}
+
+/** Put a section of a clip's effect ("transform" / "crop" / "composite"), or single keys, back to neutral. */
+export function resetClipFx(cut, sel, what) {
+    const keys = Array.isArray(what) ? what : (FX_SECTIONS[what] || []);
+    const patch = {};
+    for (const key of keys) patch[key] = FX[key] ? FX[key][0] : false;
+    return setClipFx(cut, sel, patch);
 }
 
 /** A text of its own, written here. */
@@ -324,7 +436,7 @@ export function transferClip(cut, sel, to, at) {
     if (sel.kind === "clip" && cut.clips.length <= 1) return null;
     let next = sel.kind === "clip" ? removeClip(cut, sel.i) : removeTrackClip(cut, sel.track, sel.i);
     const keep = { file: c.file, name: c.name, in: c.in, length: c.length, color: c.color || "" };
-    const carry = (clip) => { clip.volume = num(c.volume, 1); };
+    const carry = (clip) => { clip.volume = num(c.volume, 1); clip.fx = cleanFx(c.fx); };
     if (to === "V1") {
         const index = next.clips.length ? dropIndex(next, num(at)) : 0;
         next = insertClip(next, keep, index);
@@ -428,7 +540,7 @@ export function removeText(cut, i) {
 
 /** Has anything the panel can change been changed? */
 export function sameCut(a, b) {
-    const dress = (c) => [String(c.color || ""), round(num(c.volume, 1))];
+    const dress = (c) => [String(c.color || ""), round(num(c.volume, 1)), JSON.stringify(Object.entries(cleanFx(c.fx)).sort())];
     const key = (cut) => JSON.stringify({
         clips: ((cut && cut.clips) || []).map((c) => [Number.isInteger(c.ref) ? c.ref : c.file, c.name, round(num(c.in)), round(num(c.length)), round(num(c.transition)), ...dress(c)]),
         texts: ((cut && cut.texts) || []).map((t) => [Number.isInteger(t.ref) ? t.ref : "new", t.text, round(num(t.start)), round(num(t.length)), JSON.stringify(textLook(t))]),
@@ -446,7 +558,7 @@ export function toSave(cut) {
         clips: cut.clips.map((c) => ({
             ...(Number.isInteger(c.ref) ? { ref: c.ref } : { file: c.file }),
             name: c.name, in: c.in, length: c.length, transition: c.transition,
-            color: c.color || "", volume: num(c.volume, 1),
+            color: c.color || "", volume: num(c.volume, 1), fx: cleanFx(c.fx),
         })),
         // A text with no `ref` was written here.
         texts: cut.texts.map((t) => ({ ...(Number.isInteger(t.ref) ? { ref: t.ref } : {}),
@@ -456,6 +568,7 @@ export function toSave(cut) {
             clips: (k.clips || []).map((c) => ({
                 ...(Array.isArray(c.ref) ? { ref: c.ref } : { file: c.file }),
                 name: c.name, at: c.at, in: c.in, length: c.length, color: c.color || "", volume: num(c.volume, 1),
+                fx: cleanFx(c.fx),
             })),
         })),
         off: { V1: !!(cut.off && cut.off.V1), A1: !!(cut.off && cut.off.A1), T: !!(cut.off && cut.off.T) },
@@ -583,6 +696,11 @@ export function playAt(cut, seconds) {
  * one going out - { clip, key, origin, local } - still running beneath it, with
  * `mix` (0..1) how far the dissolve has got: the picture is `under` with `clip`
  * laid over it at that opacity.
+ *
+ * A clip on a higher track that does not cover the frame as it comes - scaled,
+ * moved, cropped, translucent (clipFx) - has what is beneath it as `under` too,
+ * with `over: true` and no `mix`: the picture is `under` with `clip` over it.
+ * (One picture beneath is all the player draws; the render draws them all.)
  */
 export function pictureAt(cut, seconds, live) {
     const total = filmLength(cut);
@@ -592,34 +710,46 @@ export function pictureAt(cut, seconds, live) {
     let found = null;
     let next = total;                       // the first moment after t at which something may change
     const tracks = (cut.tracks || []).filter((k) => k.kind !== "audio" && on(k.id));
+    const stack = [];                       // what has a picture here, from the top down
     for (let n = tracks.length - 1; n >= 0; n--) {
         const k = tracks[n];
         k.clips.forEach((c, i) => {
             const a = num(c.at), b = a + num(c.length);
             if (a > t + 1e-6) next = Math.min(next, a);
-            if (found || !(t >= a - 1e-6 && t < b - 1e-6)) return;
+            if (!(t >= a - 1e-6 && t < b - 1e-6)) return;
+            next = Math.min(next, b);
             // Two clips of one track at one moment: the one that begins later is on top.
             const later = k.clips.some((o, j) => j !== i && num(o.at) > a && t >= num(o.at) - 1e-6 && t < num(o.at) + num(o.length) - 1e-6);
             if (later) return;
-            found = { clip: c, key: `${k.id}:${i}`, sel: { kind: "tclip", track: k.id, i }, origin: a, end: b };
+            stack.push({ clip: c, key: `${k.id}:${i}`, sel: { kind: "tclip", track: k.id, i }, origin: a, end: b });
         });
-        if (found) break;
     }
-    if (!found && on("V1") && t < mainLength(cut) - 1e-6) {
+    let main = null;
+    if (on("V1") && t < mainLength(cut) - 1e-6) {
         const at = playAt(cut, t);
         if (at) {
-            found = { clip: cut.clips[at.i], key: `V1:${at.i}`, sel: { kind: "clip", i: at.i }, origin: at.start, end: at.end };
+            main = { clip: cut.clips[at.i], key: `V1:${at.i}`, sel: { kind: "clip", i: at.i }, origin: at.start, end: at.end };
             const mixLen = at.i > 0 ? num(cut.clips[at.i].transition) : 0;
             if (mixLen > 0 && t < at.start + mixLen - 1e-6) {
                 const before = cut.clips[at.i - 1];
                 const began = clipStarts(cut)[at.i - 1];
-                found.under = { clip: before, key: `V1:${at.i - 1}`, origin: began, local: round(num(before.in) + Math.max(0, t - began)) };
-                found.mix = Math.max(0, Math.min(1, (t - at.start) / mixLen));
-                found.mixStart = at.start;
-                found.mixLen = mixLen;
-                next = Math.min(next, at.start + mixLen);          // the moment the dissolve is over
+                main.under = { clip: before, key: `V1:${at.i - 1}`, origin: began, local: round(num(before.in) + Math.max(0, t - began)) };
+                main.mix = Math.max(0, Math.min(1, (t - at.start) / mixLen));
+                main.mixStart = at.start;
+                main.mixLen = mixLen;
+                main.dissolveEnd = at.start + mixLen;
             }
+            stack.push(main);
         }
+    }
+    found = stack[0] || null;
+    if (found === main && main && main.dissolveEnd) next = Math.min(next, main.dissolveEnd);   // the moment the dissolve is over
+    if (found && found !== main && clipFx(found.clip) && stack[1]) {
+        // It does not cover the frame: what is beneath it shows.
+        const b = stack[1];
+        found.under = { clip: b.clip, key: b.key, origin: b.origin, local: round(num(b.clip.in) + Math.max(0, t - b.origin)) };
+        found.over = true;
+        next = Math.min(next, b.end);
     }
     if (!found) found = { clip: null, key: "", sel: null, origin: t, end: total };
     found.t = t;
