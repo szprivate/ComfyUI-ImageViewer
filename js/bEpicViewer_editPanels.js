@@ -7,10 +7,13 @@
 // cut through the same functions (bEpicViewer_editTimelineData.js), so there is
 // one cut and three views of it.
 //
-// INSPECTOR - what is selected, laid out the way an editor's inspector is: the
-// clip's name, a row of tabs, and under each tab sections that have a switch
-// (off: the section is not applied, its numbers are kept) and a reset, with a
-// reset on every row as well.
+// INSPECTOR - what is selected: the clip's name, a row of tabs, and under each
+// tab sections that have a switch (off: the section is not applied, its numbers
+// are kept) and a reset, with a reset on every row as well. It is drawn in the
+// viewer's own look - the panels' ground, the Edit panel's buttons, the cyan
+// numbers of every other field here - and deliberately not in any other
+// program's: what it borrows from editors is the idea of sections, nothing of
+// how one of them looks.
 //
 //   a clip        Video   Transform (zoom, position, rotation angle, anchor
 //                         point, flip) · Cropping · Composite (opacity)
@@ -106,9 +109,9 @@ export const EditPanelsMixin = {
             const sec = el("div", "insp-section" + (opts.off ? " off" : ""));
             const bar = el("div", "insp-sec");
             if (opts.toggle) {
-                const sw = tip(el("button", "insp-switch" + (opts.off ? "" : " on")),
+                // The same switch a track's header has.
+                const sw = tip(el("button", "edit-hbtn insp-switch" + (opts.off ? "" : " on"), "\u25cf"),
                                opts.off ? "Off: not applied, its numbers kept - click to apply it" : "On - click to switch this section off");
-                sw.append(el("i"));
                 sw.addEventListener("click", () => opts.toggle(!opts.off));
                 bar.append(sw);
             }
@@ -172,7 +175,7 @@ export const EditPanelsMixin = {
             const strip = el("div", "insp-tabs");
             const open = list.find((x) => x[0] === this._editInspTab && x[2]) || list.find((x) => x[2]);
             for (const [id, name, has] of list) {
-                const b = el("button", "insp-tab" + (open && open[0] === id ? " on" : ""), name);
+                const b = el("button", "edit-btn insp-tab" + (open && open[0] === id ? " on" : ""), name);
                 b.disabled = !has;
                 b.addEventListener("click", () => { this._editInspTab = id; this._editInspRender(); });
                 strip.append(b);
@@ -202,11 +205,11 @@ export const EditPanelsMixin = {
             if (tab === "video") {
                 section("Transform", { off: fx.toff, toggle: (off) => setFx({ toff: off }), reset: () => apply(D.resetClipFx(cut, sel, "transform")) });
                 const linked = this._editInspUnlinked !== true;
-                const link = tip(el("button", "insp-link" + (linked ? " on" : ""), "\u26ad"),
+                const link = tip(el("button", "edit-hbtn insp-link" + (linked ? " on" : ""), "="),
                                  linked ? "Zoom X and Y are linked - click to set them apart" : "Link zoom X and Y");
                 link.addEventListener("click", () => { this._editInspUnlinked = linked; this._editInspRender(); });
-                row("Zoom", [axis("X"), numField(fx.zx, 3, (v) => setFx(linked ? { zx: v, zy: v } : { zx: v }), { step: 0.01, min: 0.01, title: "1 is its own size" }),
-                             link, axis("Y"), numField(fx.zy, 3, (v) => setFx(linked ? { zx: v, zy: v } : { zy: v }), { step: 0.01, min: 0.01, title: "1 is its own size" })],
+                row("Zoom", [axis("X"), numField(fx.zx, 2, (v) => setFx(linked ? { zx: v, zy: v } : { zx: v }), { step: 0.01, min: 0.01, title: "1 is its own size" }),
+                             link, axis("Y"), numField(fx.zy, 2, (v) => setFx(linked ? { zx: v, zy: v } : { zy: v }), { step: 0.01, min: 0.01, title: "1 is its own size" })],
                     () => setFx({ zx: 1, zy: 1 }));
                 row("Position", [axis("X"), numField(fx.x * 100, 1, (v) => setFx({ x: v / 100 }), { step: 0.5, title: "percent of the frame's width, to the right" }),
                                  el("span", "insp-link-gap"), axis("Y"), numField(fx.y * 100, 1, (v) => setFx({ y: v / 100 }), { step: 0.5, title: "percent of the frame's height, up" })],
@@ -217,11 +220,11 @@ export const EditPanelsMixin = {
                                      el("span", "insp-link-gap"), axis("Y"), numField(fx.ay * 100, 1, (v) => setFx({ ay: v / 100 }), { step: 0.5, title: "percent of the frame's height from its middle, up" })],
                     () => setFx({ ax: 0, ay: 0 }));
                 const flip = (key, glyph, title) => {
-                    const b = tip(el("button", "insp-flip" + (fx[key] ? " on" : ""), glyph), title);
+                    const b = tip(el("button", "edit-btn insp-flip" + (fx[key] ? " on" : ""), glyph), title);
                     b.addEventListener("click", () => setFx({ [key]: !fx[key] }));
                     return b;
                 };
-                row("Flip", [flip("fh", "\u25b6\u25c0", "Flip left to right"), flip("fv", "\u25b2\u25bc", "Flip top to bottom")],
+                row("Flip", [flip("fh", "Horizontal", "Flip left to right"), flip("fv", "Vertical", "Flip top to bottom")],
                     () => setFx({ fh: false, fv: false }));
 
                 section("Cropping", { off: fx.coff, toggle: (off) => setFx({ coff: off }), reset: () => apply(D.resetClipFx(cut, sel, "crop")) });
