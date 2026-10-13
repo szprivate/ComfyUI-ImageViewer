@@ -144,13 +144,94 @@ def _clip_pictures(path, start, count, w, h, fps):
             made += 1
 
 
+# ── a clip's transform, cropping and opacity ─────────────────────────────────
+
+def effective(fx):
+    """*fx* with every key present and the sections that are switched off back
+    at neutral - or None for a clip that is drawn as it comes."""
+    fx = timeline_io.clean_fx(fx)
+    out = {key: neutral for key, (neutral, _l, _h) in timeline_io.FX.items()}
+    out.update({"fh": False, "fv": False})
+    for key, value in fx.items():
+        if key in ("toff", "coff", "ooff"):
+            continue
+        section = "ooff" if key == "op" else "coff" if key in ("cl", "cr", "ct", "cb") else "toff"
+        if not fx.get(section):
+            out[key] = value
+    plain = all(out[key] == neutral for key, (neutral, _l, _h) in timeline_io.FX.items()) \
+        and not out["fh"] and not out["fv"]
+    return None if plain else out
+
+
+_BOXES = {}
+
+
+def picture_box(path, w, h):
+    """Where *path*'s picture lies in a ``w x h`` frame once fitted into it:
+    ``(left, top, width, height)``. The rest of the frame is not picture."""
+    key = (path, w, h)
+    if key not in _BOXES:
+        if len(_BOXES) > 256:
+            _BOXES.clear()
+        if is_still(path):
+            from PIL import Image
+            with Image.open(path) as im:
+                sw, sh = im.size
+        else:
+            import av
+            with av.open(path) as src:
+                sw, sh = src.streams.video[0].width, src.streams.video[0].height
+        dw, dh, _l, _t = fit(sw, sh, w, h)
+        _BOXES[key] = ((w - dw) // 2, (h - dh) // 2, dw, dh)
+    return _BOXES[key]
+
+
+def lay(under, frame, fx, box):
+    """*frame* (a clip's picture, fitted into the film's frame) drawn over *under*
+    with *fx* - as the Edit tab draws it: cropped, then scaled and turned about
+    its anchor point, then moved, at its opacity. *under* None is black. What of
+    the frame is not the clip's picture (*box*) lets what is under show."""
+    import numpy as np
+    from PIL import Image
+    h, w = frame.shape[0], frame.shape[1]
+    left, top, dw, dh = box
+    alpha = np.zeros((h, w), dtype=np.uint8)
+    a0, b0 = left + int(round(fx["cl"] * dw)), top + int(round(fx["ct"] * dh))
+    a1, b1 = left + dw - int(round(fx["cr"] * dw)), top + dh - int(round(fx["cb"] * dh))
+    if a1 > a0 and b1 > b0:
+        alpha[b0:b1, a0:a1] = 255
+    rgba = np.dstack([frame, alpha])
+    sx = fx["zx"] * (-1.0 if fx["fh"] else 1.0)
+    sy = fx["zy"] * (-1.0 if fx["fv"] else 1.0)
+    turned = fx["rot"] % 360.0 != 0.0
+    if sx != 1.0 or sy != 1.0 or turned or fx["x"] or fx["y"]:
+        import math
+        cx, cy = w / 2.0, h / 2.0
+        ax, ay = fx["ax"] * w, -fx["ay"] * h                 # the anchor point, from the middle (y up)
+        qx, qy = cx + fx["x"] * w + ax, cy - fx["y"] * h + ay    # where the anchor point lands
+        cos, sin = math.cos(math.radians(fx["rot"])), math.sin(math.radians(fx["rot"]))
+        # Output to source: undo the move, the turn (clockwise on screen), the scale.
+        m = (cos / sx, sin / sx, -sin / sy, cos / sy)
+        coeffs = (m[0], m[1], cx + ax - m[0] * qx - m[1] * qy,
+                  m[2], m[3], cy + ay - m[2] * qx - m[3] * qy)
+        rgba = np.asarray(Image.fromarray(rgba, "RGBA").transform((w, h), Image.AFFINE, coeffs,
+                                                                  resample=Image.BILINEAR))
+    weight = rgba[:, :, 3:4].astype(np.float32) * (fx["op"] / 255.0)
+    below = np.zeros((h, w, 3), dtype=np.float32) if under is None else under.astype(np.float32)
+    return (below * (1.0 - weight) + rgba[:, :, :3].astype(np.float32) * weight + 0.5).astype(np.uint8)
+
+
 def film_pictures(clips, counts, w, h, fps):
     """Every frame of the film, in order: the clips joined, the dissolves blended."""
     import numpy as np
     held = []
     for clip, (n, d_in, d_out) in zip(clips, counts):
         keep = []
+        fx = effective(clip.get("fx"))
+        box = picture_box(clip["file"], w, h) if fx else None
         for k, frame in enumerate(_clip_pictures(clip["file"], float(clip["in"]), n, w, h, fps)):
+            if fx:
+                frame = lay(None, frame, fx, box)
             if k < d_in:
                 a = (k + 1) / (d_in + 1)
                 yield (held[k].astype(np.float32) * (1 - a) + frame.astype(np.float32) * a + 0.5).astype(np.uint8)
@@ -171,29 +252,31 @@ def _spans(overlays, fps):
 
 def covered(base, overlays, total, w, h, fps):
     """*total* frames: those of *base* (the cut), with the clips of the higher
-    video tracks laid over them where they are. Where neither has a picture the
-    frame is black. A covered frame of the cut is still read, so the cut keeps
-    its time under what covers it."""
+    video tracks laid over them where they are, lowest first. A clip as it comes
+    covers the whole frame; one that was scaled, moved, turned, cropped or made
+    translucent (its ``fx``) is drawn over what is under it. Where nothing has a
+    picture the frame is black. A covered frame of the cut is still read, so the
+    cut keeps its time under what covers it."""
     import numpy as np
-    spans = _spans(overlays, fps)
+    spans = [(first, count, clip, effective(clip.get("fx"))) for first, count, clip in _spans(overlays, fps)]
+    # Down from the top, the first clip that is drawn as it comes hides the rest.
     black = np.zeros((h, w, 3), dtype=np.uint8)
     running = {}                      # span -> (its generator, the frame it gives next)
     for n in range(total):
         frame = next(base, None)
-        top = None
-        for k, (first, count, _clip) in enumerate(spans):
-            if first <= n < first + count:
-                top = k
-        if top is not None:
-            first, count, clip = spans[top]
-            gen, due = running.get(top, (None, -1))
+        on = [k for k, (first, count, _c, _fx) in enumerate(spans) if first <= n < first + count]
+        solid = max((i for i, k in enumerate(on) if spans[k][3] is None), default=-1)
+        for k in on[max(0, solid):]:
+            first, count, clip, fx = spans[k]
+            gen, due = running.get(k, (None, -1))
             if gen is None or due != n:           # just uncovered, or new: read from this moment of it
                 done = n - first
                 gen = _clip_pictures(clip["file"], float(clip["in"]) + done / fps, count - done, w, h, fps)
             over = next(gen, None)
-            running[top] = (gen, n + 1)
-            if over is not None:
-                frame = over
+            running[k] = (gen, n + 1)
+            if over is None:
+                continue
+            frame = over if fx is None else lay(frame, over, fx, picture_box(clip["file"], w, h))
         yield black if frame is None else frame
 
 
@@ -371,7 +454,7 @@ def read_cut(doc):
         note = _note(children[c["ref"]]) if 0 <= c["ref"] < len(children) else {}
         clips.append({"file": c["file"], "in": c["in"], "length": c["length"],
                       "transition": c["transition"], "name": c["name"],
-                      "volume": float(note.get("volume", 1.0))})
+                      "volume": float(note.get("volume", 1.0)), "fx": c.get("fx") or {}})
     off = edit.get("off") or {}
     overlays, sounds = [], []
     for order, track in enumerate(edit.get("tracks") or []):
@@ -380,6 +463,7 @@ def read_cut(doc):
         for c in track.get("clips") or []:
             item = {"file": c["file"], "in": c["in"], "length": c["length"], "at": c["at"],
                     "volume": float(c.get("volume", 1.0)), "name": c["name"], "order": order,
+                    "fx": c.get("fx") or {},
                     "track": track.get("name") or track.get("id")}
             (sounds if track.get("kind") == "audio" else overlays).append(item)
     bed = None

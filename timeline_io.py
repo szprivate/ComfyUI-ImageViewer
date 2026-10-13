@@ -204,13 +204,51 @@ def _is_off(track):
     return bool(track) and (bool(_bepic(track).get("off")) or track.get("enabled") is False)
 
 
+# What the Inspector's Video tab sets on a clip (bEpicViewer_editTimelineData.js
+# has the same table, FX): each key with its neutral value and the range it is
+# held to. Zoom is a factor; position and anchor point are fractions of the
+# frame (x of its width to the right, y of its height UP); rotation is degrees,
+# clockwise; a crop is the fraction of the picture taken off that side; opacity
+# is 0..1. `toff` / `coff` / `ooff` switch a whole section off without losing
+# its numbers.
+FX = {"zx": (1.0, 0.01, 20.0), "zy": (1.0, 0.01, 20.0), "x": (0.0, -5.0, 5.0), "y": (0.0, -5.0, 5.0),
+      "rot": (0.0, -3600.0, 3600.0), "ax": (0.0, -5.0, 5.0), "ay": (0.0, -5.0, 5.0),
+      "cl": (0.0, 0.0, 1.0), "cr": (0.0, 0.0, 1.0), "ct": (0.0, 0.0, 1.0), "cb": (0.0, 0.0, 1.0),
+      "op": (1.0, 0.0, 1.0)}
+FX_FLAGS = ("fh", "fv", "toff", "coff", "ooff")
+
+
+def clean_fx(given):
+    """*given* held to what an effect may be, with only what differs from neutral
+    kept: ``{}`` is a clip as it comes."""
+    out = {}
+    if not isinstance(given, dict):
+        return out
+    for key, (neutral, low, high) in FX.items():
+        try:
+            value = float(given.get(key, neutral))
+        except (TypeError, ValueError):
+            continue
+        if value != value:
+            continue
+        value = round(max(low, min(high, value)), 5)
+        if value != neutral:
+            out[key] = value
+    for key in FX_FLAGS:
+        if given.get(key):
+            out[key] = True
+    return out
+
+
 def _look(item):
-    """What the panel shows of a clip beyond its range: its colour and its volume."""
+    """What the panel shows of a clip beyond its range: its colour, its volume,
+    and what the Inspector did to its picture (``fx``)."""
     try:
         volume = float(_note(item).get("volume", 1.0))
     except (TypeError, ValueError):
         volume = 1.0
-    return {"color": str(_bepic(item).get("color") or ""), "volume": round(max(0.0, min(4.0, volume)), 4)}
+    return {"color": str(_bepic(item).get("color") or ""), "volume": round(max(0.0, min(4.0, volume)), 4),
+            "fx": clean_fx(_bepic(item).get("fx"))}
 
 
 # How a text is drawn where its timeline does not say: centred, in the lower
@@ -368,6 +406,16 @@ def _dress(item, c):
                     note["color"] = color.lower()
                 else:
                     note.pop("color", None)
+    if "fx" in c:
+        meta = item.setdefault("metadata", {})
+        if isinstance(meta, dict):
+            note = meta.setdefault("bepic", {})
+            if isinstance(note, dict):
+                fx = clean_fx(c.get("fx"))
+                if fx:
+                    note["fx"] = fx
+                else:
+                    note.pop("fx", None)
     if c.get("volume") is not None:
         volume = max(0.0, min(4.0, _num(c.get("volume"), "a clip's volume")))
         meta = item.setdefault("metadata", {})
