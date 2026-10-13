@@ -441,6 +441,53 @@ try:
                 data["target"] = {"path": side, "external": 1}
             return web.json_response(data, headers={"Cache-Control": "no-cache"})
 
+        async def _bepic_timeline_solid(request):
+            """A plain colour as a picture a cut can hold: the Effects panel's generators.
+
+            A clip is a piece of a file, so a colour has to be one: a PNG under
+            ``<output>/bepic/edits/solids``, named after its colour and size, so
+            asking twice gives the same file and nothing piles up.
+            """
+            import re
+            try:
+                body = await request.json()
+            except Exception:
+                return web.Response(status=400, text="the request is not JSON")
+            if not isinstance(body, dict):
+                return web.Response(status=400, text="the request is not an object")
+            color = str(body.get("color") or "#000000").lower()
+            if not re.match(r"^#[0-9a-f]{6}$", color):
+                return web.Response(status=400, text="a colour is written #rrggbb")
+            try:
+                w, h = int(body.get("width") or 1920), int(body.get("height") or 1080)
+            except (TypeError, ValueError):
+                return web.Response(status=400, text="the size is not a number")
+            if not (16 <= w <= 8192 and 16 <= h <= 8192):
+                return web.Response(status=400, text="the size is out of range")
+            try:
+                base = folder_paths.get_output_directory()
+            except Exception:
+                base = None
+            if not base:
+                return web.Response(status=500, text="ComfyUI has no output folder")
+            folder = os.path.join(base, "bepic", "edits", "solids")
+            path = os.path.join(folder, f"solid_{color[1:]}_{w}x{h}.png")
+
+            def _make():
+                if os.path.isfile(path):
+                    return
+                from PIL import Image
+                os.makedirs(folder, exist_ok=True)
+                rgb = tuple(int(color[i:i + 2], 16) for i in (1, 3, 5))
+                tmp = path + ".tmp"
+                Image.new("RGB", (w, h), rgb).save(tmp, "PNG")
+                os.replace(tmp, path)
+            try:
+                await asyncio.get_running_loop().run_in_executor(None, _make)
+            except OSError as exc:
+                return web.Response(status=500, text=f"not written: {exc}")
+            return web.json_response({"path": path, "name": os.path.basename(path), "color": color})
+
         async def _bepic_timeline_render(request):
             """Render the saved cut of a film into a film of its own.
 
@@ -1605,6 +1652,8 @@ try:
         _safe_add("POST", "/bepic/timeline", _bepic_timeline_save)
         _safe_add("POST", "/api/bepic/timeline", _bepic_timeline_save)
         _safe_add("POST", "/bepic/timeline_render", _bepic_timeline_render)
+        _safe_add("POST", "/bepic/timeline_solid", _bepic_timeline_solid)
+        _safe_add("POST", "/api/bepic/timeline_solid", _bepic_timeline_solid)
         _safe_add("POST", "/api/bepic/timeline_render", _bepic_timeline_render)
         _safe_add("GET", "/bepic/export_options", _bepic_export_options)
         _safe_add("GET", "/api/bepic/export_options", _bepic_export_options)

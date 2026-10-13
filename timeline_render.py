@@ -161,6 +161,42 @@ def film_pictures(clips, counts, w, h, fps):
         held = keep
 
 
+def _spans(overlays, fps):
+    """The clips of the higher video tracks as ``(first frame, frames, clip)``,
+    lowest first: a later one in this list covers an earlier one."""
+    spans = [(int(round(float(o["at"]) * fps)), max(1, int(round(float(o["length"]) * fps))), o)
+             for o in overlays or []]
+    return sorted(spans, key=lambda s: (s[2].get("order", 0), s[0]))
+
+
+def covered(base, overlays, total, w, h, fps):
+    """*total* frames: those of *base* (the cut), with the clips of the higher
+    video tracks laid over them where they are. Where neither has a picture the
+    frame is black. A covered frame of the cut is still read, so the cut keeps
+    its time under what covers it."""
+    import numpy as np
+    spans = _spans(overlays, fps)
+    black = np.zeros((h, w, 3), dtype=np.uint8)
+    running = {}                      # span -> (its generator, the frame it gives next)
+    for n in range(total):
+        frame = next(base, None)
+        top = None
+        for k, (first, count, _clip) in enumerate(spans):
+            if first <= n < first + count:
+                top = k
+        if top is not None:
+            first, count, clip = spans[top]
+            gen, due = running.get(top, (None, -1))
+            if gen is None or due != n:           # just uncovered, or new: read from this moment of it
+                done = n - first
+                gen = _clip_pictures(clip["file"], float(clip["in"]) + done / fps, count - done, w, h, fps)
+            over = next(gen, None)
+            running[top] = (gen, n + 1)
+            if over is not None:
+                frame = over
+        yield black if frame is None else frame
+
+
 # ── sound ────────────────────────────────────────────────────────────────────
 
 def _sound_of(path, start, seconds):
@@ -202,8 +238,10 @@ def film_sound(cut, counts, fps, total_frames):
     """The film's sound as a ``(2, n)`` float array, or None when there is none.
 
     Each clip's own sound sits where its picture is, fading in and out over its
-    dissolves (which is a crossfade with its neighbour); the bed lies under all
-    of it.
+    dissolves (which is a crossfade with its neighbour). A clip on a higher video
+    track takes the place of what it covers, sound as well as picture - which is
+    what the Edit tab plays. The bed and the clips of the sound tracks lie under
+    all of it.
     """
     import numpy as np
     total = int(round(total_frames / fps * RATE))
@@ -213,7 +251,7 @@ def film_sound(cut, counts, fps, total_frames):
     for clip, (n, d_in, d_out) in zip(cut["clips"], counts):
         start = at - d_in
         volume = float(clip.get("volume", 1.0))
-        if cut.get("clip_sound", True) and volume > 0 and not is_still(clip["file"]):
+        if cut.get("clip_sound", True) and not cut.get("v1_off") and volume > 0 and not is_still(clip["file"]):
             try:
                 sound = _sound_of(clip["file"], float(clip["in"]), n / fps)
             except Exception:  # noqa: BLE001 - a shot whose sound will not decode is silent
@@ -231,6 +269,31 @@ def film_sound(cut, counts, fps, total_frames):
                     mix[:, a:b] += sound[:, :b - a]
                     heard = True
         at = start + n
+
+    def lay(clip, replace):
+        nonlocal heard
+        a = int(round(float(clip["at"]) * RATE))
+        want = int(round(float(clip["length"]) * RATE))
+        b = min(total, a + want)
+        if b <= a:
+            return
+        if replace:
+            mix[:, a:b] = 0.0
+        volume = float(clip.get("volume", 1.0))
+        if volume <= 0 or is_still(clip["file"]):
+            return
+        try:
+            sound = _sound_of(clip["file"], float(clip["in"]), want / RATE)
+        except Exception:  # noqa: BLE001
+            sound = None
+        if sound is not None:
+            mix[:, a:b] += sound[:, :b - a] * volume
+            heard = True
+
+    for _first, _count, clip in _spans(cut.get("overlays"), fps):
+        lay(clip, True)
+    for clip in cut.get("sounds") or []:
+        lay(clip, False)
     bed = cut.get("bed")
     if bed and bed.get("file"):
         try:
@@ -268,16 +331,27 @@ def read_cut(doc):
         clips.append({"file": c["file"], "in": c["in"], "length": c["length"],
                       "transition": c["transition"], "name": c["name"],
                       "volume": float(note.get("volume", 1.0))})
+    off = edit.get("off") or {}
+    overlays, sounds = [], []
+    for order, track in enumerate(edit.get("tracks") or []):
+        if track.get("off"):
+            continue
+        for c in track.get("clips") or []:
+            item = {"file": c["file"], "in": c["in"], "length": c["length"], "at": c["at"],
+                    "volume": float(c.get("volume", 1.0)), "name": c["name"], "order": order,
+                    "track": track.get("name") or track.get("id")}
+            (sounds if track.get("kind") == "audio" else overlays).append(item)
     bed = None
     audio = timeline_io._track_of(doc, "audio") or {}
     beds = [k for k in audio.get("children") or [] if isinstance(k, dict)
             and str(k.get("OTIO_SCHEMA") or "").startswith("Clip")]
-    if len(beds) == 1:
+    if len(beds) == 1 and not off.get("A1"):
         note = _note(beds[0])
         start, _length = timeline_io._span(beds[0].get("source_range"))
         bed = {"file": timeline_io._file(beds[0].get("media_reference")), "in": start,
                "gain": float(note.get("gain", 1.0)), "fade_out": float(note.get("fade_out", 1.0))}
     return {"name": edit["name"], "fps": float(edit["fps"] or 24.0), "clips": clips, "bed": bed,
+            "overlays": overlays, "sounds": sounds, "v1_off": bool(off.get("V1")),
             "texts": len(edit["texts"]), "clip_sound": bool(about.get("clip_sound", True)),
             "width": int(about.get("width") or 0), "height": int(about.get("height") or 0)}
 
@@ -310,7 +384,15 @@ def check(cut, may_use=None):
             raise RenderError(f"clip {i}: {os.path.basename(path) or 'its file'} does not exist")
         if may_use is not None and not may_use(os.path.abspath(path)):
             raise RenderError(f"clip {i}: {os.path.basename(path)} is not a file the viewer may use")
-    total = timeline_io.edit_length(cut)
+    for c in list(cut.get("overlays") or []) + list(cut.get("sounds") or []):
+        path = c["file"]
+        what = f"{c.get('track') or 'a track'}: {os.path.basename(path) or 'a clip'}"
+        if not path or not os.path.isfile(path):
+            raise RenderError(f"{what} does not exist")
+        if may_use is not None and not may_use(os.path.abspath(path)):
+            raise RenderError(f"{what} is not a file the viewer may use")
+    total = max([timeline_io.edit_length(cut)]
+                + [float(c["at"]) + float(c["length"]) for c in cut.get("overlays") or []])
     if total > MAX_SECONDS:
         raise RenderError(f"a film of {total / 60:.0f} minutes is longer than this renders "
                           f"({MAX_SECONDS // 60} minutes)")
@@ -340,8 +422,10 @@ def render(doc, out_path, fmt="mp4", may_use=None, codec=None, quality="high"):
     fps = cut["fps"] if cut["fps"] > 0 else 24.0
     w, h = _size(cut)
     counts = frame_counts(cut["clips"], fps)
-    total = film_frames(counts)
+    # As long as the cut, or as far as the last clip over it reaches.
+    total = max([film_frames(counts)] + [first + count for first, count, _c in _spans(cut["overlays"], fps)])
     sound = film_sound(cut, counts, fps, total)
+    base = iter(()) if cut["v1_off"] else film_pictures(cut["clips"], counts, w, h, fps)
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     tmp = out_path + ".part." + fmt
@@ -374,7 +458,7 @@ def render(doc, out_path, fmt="mp4", may_use=None, codec=None, quality="high"):
                     sent += piece.shape[1]
 
             made = 0
-            for picture in film_pictures(cut["clips"], counts, w, h, fps):
+            for picture in covered(base, cut["overlays"], total, w, h, fps):
                 frame = av.VideoFrame.from_ndarray(np.ascontiguousarray(picture), format="rgb24")
                 frame.pts = made
                 for packet in vs.encode(frame):

@@ -190,15 +190,81 @@ def _note(obj):
     return note if isinstance(note, dict) else {}
 
 
+def _bepic(obj):
+    meta = obj.get("metadata") if isinstance(obj, dict) else None
+    note = meta.get("bepic") if isinstance(meta, dict) else None
+    return note if isinstance(note, dict) else {}
+
+
+def _is_off(track):
+    """A track that is switched off: ours (``metadata.bepic.off``) or OTIO's ``enabled``."""
+    return bool(track) and (bool(_bepic(track).get("off")) or track.get("enabled") is False)
+
+
+def _look(item):
+    """What the panel shows of a clip beyond its range: its colour and its volume."""
+    try:
+        volume = float(_note(item).get("volume", 1.0))
+    except (TypeError, ValueError):
+        volume = 1.0
+    return {"color": str(_bepic(item).get("color") or ""), "volume": round(max(0.0, min(4.0, volume)), 4)}
+
+
+def _tracks(doc):
+    """``[(place in the stack, track)]`` of every track of the timeline."""
+    stack = doc.get("tracks") or {}
+    return [(i, t) for i, t in enumerate(stack.get("children") or [])
+            if isinstance(t, dict) and str(t.get("OTIO_SCHEMA") or "").startswith("Track")]
+
+
+def _kind(track):
+    return "audio" if str(track.get("kind") or "Video").lower() == "audio" else "video"
+
+
+def extra_tracks(doc):
+    """The tracks beyond the first video and the first audio track, as the panel
+    works on them: ``[{"id", "kind", "name", "off", "clips": [{"ref", "name",
+    "file", "in", "length", "at", "color", "volume"}]}]``. A clip's ``at`` is
+    where it begins in the film; ``ref`` is ``[track, child]`` in the file."""
+    first = {"video": _track_of(doc, "video"), "audio": _track_of(doc, "audio")}
+    count = {"video": 1, "audio": 1}
+    out = []
+    for ti, track in _tracks(doc):
+        kind = _kind(track)
+        if track is first[kind]:
+            continue
+        count[kind] += 1
+        tid = ("V" if kind == "video" else "A") + str(count[kind])
+        clips, at = [], 0.0
+        for ci, child in enumerate((track.get("children") or [])[:_MAX_ITEMS]):
+            if not isinstance(child, dict):
+                continue
+            schema = str(child.get("OTIO_SCHEMA") or "")
+            if schema.startswith("Transition"):
+                continue
+            start, length = _span(child.get("source_range"))
+            if schema.startswith("Clip") and length > 0:
+                clips.append({"ref": [ti, ci], "name": str(child.get("name") or ""),
+                              "file": _file(child.get("media_reference")), "in": round(start, 4),
+                              "length": round(length, 4), "at": round(at, 4), **_look(child)})
+            at += length
+        out.append({"id": tid, "kind": kind, "name": str(track.get("name") or tid), "off": _is_off(track),
+                    "clips": clips})
+    return out
+
+
 def editable(doc):
     """An OTIO timeline as the Edit panel works on it.
 
     ``{"name", "fps", "clips": [{"ref", "name", "file", "in", "length",
-    "transition"}], "texts": [{"ref", "text", "start", "length", "preset"}],
-    "sound": [{"name", "file"}], "edited"}``. ``ref`` is the item's place in the
+    "transition", "color", "volume"}], "texts": [{"ref", "text", "start",
+    "length", "preset"}], "sound": [{"name", "file"}], "tracks": [...],
+    "off": {"V1", "A1"}, "edited"}``. ``ref`` is the item's place in the
     file it came from, so saving can keep everything about it that the panel
     does not show. Clips are at their full length; ``transition`` is the dissolve
-    from the clip before.
+    from the clip before. ``tracks`` are the tracks beyond the first of each
+    kind (:func:`extra_tracks`): clips placed at a moment of the film, the
+    picture of a higher track covering what is under it.
     """
     if not isinstance(doc, dict) or not str(doc.get("OTIO_SCHEMA") or "").startswith("Timeline"):
         raise ValueError("not an OpenTimelineIO timeline")
@@ -225,7 +291,7 @@ def editable(doc):
         start, length = _span(child.get("source_range"))
         clip = {"ref": ref, "name": str(child.get("name") or ""),
                 "file": _file(child.get("media_reference")), "in": start, "length": length,
-                "transition": 0.0}
+                "transition": 0.0, **_look(child)}
         if pending:
             before, after = pending
             clip["in"] = max(0.0, start - before)
@@ -248,14 +314,135 @@ def editable(doc):
         if isinstance(child, dict) and str(child.get("OTIO_SCHEMA") or "").startswith("Clip"):
             out["sound"].append({"name": str(child.get("name") or ""),
                                  "file": _file(child.get("media_reference"))})
+    out["tracks"] = extra_tracks(doc)
+    out["off"] = {"V1": _is_off(video), "A1": _is_off(audio)}
     return out
 
 
 def edit_length(edit):
-    """How long the film of *edit* is: the clips, less what the dissolves take."""
+    """How long the film of *edit* is: the clips, less what the dissolves take -
+    or as far as the last clip on a higher video track reaches, if that is later."""
     clips = edit.get("clips") or []
     total = sum(float(c.get("length") or 0) for c in clips)
-    return max(0.0, total - sum(float(c.get("transition") or 0) for c in clips[1:]))
+    main = max(0.0, total - sum(float(c.get("transition") or 0) for c in clips[1:]))
+    over = [float(c.get("at") or 0) + float(c.get("length") or 0)
+            for t in (edit.get("tracks") or []) if isinstance(t, dict) and t.get("kind") != "audio"
+            for c in (t.get("clips") or []) if isinstance(c, dict)]
+    return max([main] + over)
+
+
+_COLOR = __import__("re").compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def _dress(item, c):
+    """Write a clip's colour and volume, where the edit states them, into *item*."""
+    if "color" in c:
+        color = str(c.get("color") or "")
+        meta = item.setdefault("metadata", {})
+        if isinstance(meta, dict):
+            note = meta.setdefault("bepic", {})
+            if isinstance(note, dict):
+                if _COLOR.match(color):
+                    note["color"] = color.lower()
+                else:
+                    note.pop("color", None)
+    if c.get("volume") is not None:
+        volume = max(0.0, min(4.0, _num(c.get("volume"), "a clip's volume")))
+        meta = item.setdefault("metadata", {})
+        if isinstance(meta, dict):
+            note = meta.setdefault("agentY", {})
+            if isinstance(note, dict):
+                note["volume"] = round(volume, 4)
+
+
+def _set_off(track, off):
+    if track is None:
+        return
+    meta = track.setdefault("metadata", {})
+    if isinstance(meta, dict):
+        note = meta.setdefault("bepic", {})
+        if isinstance(note, dict):
+            note["off"] = bool(off)
+    track["enabled"] = not off
+
+
+def _new_clip(c, what, may_use):
+    path = os.path.abspath(str(c["file"]).strip())
+    if may_use is None or not may_use(path):
+        raise ValueError(f"{what}: {os.path.basename(path)} is not a file the viewer may use")
+    if not os.path.isfile(path):
+        raise ValueError(f"{what}: {os.path.basename(path)} does not exist")
+    return {"OTIO_SCHEMA": "Clip.1", "name": os.path.basename(path), "metadata": {},
+            "effects": [], "markers": [], "source_range": None,
+            "media_reference": {"OTIO_SCHEMA": "ExternalReference.1", "name": "",
+                                "metadata": {}, "available_range": None,
+                                "target_url": _url(path)}}
+
+
+def _build_tracks(doc, tracks, rate, may_use):
+    """The extra tracks of an edit as OTIO tracks: ``(video tracks, audio tracks)``.
+
+    A track is a row of clips with gaps between them, so two clips of one track
+    cannot share a moment: where they would, the earlier one ends where the
+    later one begins.
+    """
+    import copy
+    if not isinstance(tracks, list):
+        raise ValueError("the tracks are not a list")
+    if len(tracks) > 32:
+        raise ValueError("too many tracks")
+    stack = (doc.get("tracks") or {}).get("children") or []
+    made = {"video": [], "audio": []}
+    for n, t in enumerate(tracks, 1):
+        if not isinstance(t, dict):
+            raise ValueError(f"track {n} is not an object")
+        kind = "audio" if t.get("kind") == "audio" else "video"
+        name = str(t.get("name") or t.get("id") or f"track {n}")[:80]
+        clips = t.get("clips") or []
+        if not isinstance(clips, list) or len(clips) > _MAX_ITEMS:
+            raise ValueError(f"{name}: its clips are not a list this can hold")
+        placed = []
+        for i, c in enumerate(clips, 1):
+            what = f"{name}, clip {i}"
+            if not isinstance(c, dict):
+                raise ValueError(f"{what} is not an object")
+            ref = c.get("ref")
+            if ref is None and str(c.get("file") or "").strip():
+                item = _new_clip(c, what, may_use)
+            else:
+                ok = (isinstance(ref, list) and len(ref) == 2 and all(isinstance(v, int) and not isinstance(v, bool)
+                                                                      for v in ref)
+                      and 0 <= ref[0] < len(stack) and isinstance(stack[ref[0]], dict))
+                kids = (stack[ref[0]].get("children") or []) if ok else []
+                if not ok or not 0 <= ref[1] < len(kids) \
+                        or not str((kids[ref[1]] or {}).get("OTIO_SCHEMA") or "").startswith("Clip"):
+                    raise ValueError(f"{what} does not name a clip of this timeline")
+                item = copy.deepcopy(kids[ref[1]])
+            at = _num(c.get("at") or 0, f"{what}'s place")
+            start = _num(c.get("in") or 0, f"{what}'s in point")
+            length = _num(c.get("length"), f"{what}'s length", _MIN_CLIP)
+            if c.get("name") is not None:
+                item["name"] = str(c["name"])[:200]
+            _dress(item, c)
+            placed.append([round(at * rate), round(start * rate), max(1, round(length * rate)), item])
+        placed.sort(key=lambda p: p[0])
+        children, cursor = [], 0
+        for k, (at, start, length, item) in enumerate(placed):
+            if k + 1 < len(placed):
+                length = min(length, placed[k + 1][0] - at)      # it ends where the next one begins
+            if length <= 0:
+                continue
+            if at > cursor:
+                children.append({"OTIO_SCHEMA": "Gap.1", "name": "", "metadata": {}, "effects": [], "markers": [],
+                                 "source_range": _range(0.0, (at - cursor) / rate, rate)})
+            item["source_range"] = _range(start / rate, length / rate, rate)
+            children.append(item)
+            cursor = at + length
+        track = {"OTIO_SCHEMA": "Track.1", "name": name, "kind": "Audio" if kind == "audio" else "Video",
+                 "metadata": {}, "source_range": None, "effects": [], "markers": [], "children": children}
+        _set_off(track, bool(t.get("off")))
+        made[kind].append(track)
+    return made["video"], made["audio"]
 
 
 def _num(value, what, low=0.0):
@@ -307,6 +494,11 @@ def rebuild(doc, edit, stamp="", may_use=None):
     passes the viewer's own rule for which files it may show). Without
     *may_use* no new material is taken. Sound is kept as it is, with a bed laid
     under the whole film stretched or cut to the film's new length.
+
+    A text with no ``ref`` is a new one. ``tracks`` (when the edit has the key)
+    replaces every track beyond the first video and the first audio track;
+    ``off`` switches those two off or on. An edit without those keys - an older
+    page - leaves what the file holds of them alone.
     """
     import copy
     if not isinstance(edit, dict):
@@ -328,24 +520,15 @@ def rebuild(doc, edit, stamp="", may_use=None):
         ref = c.get("ref") if isinstance(c, dict) else None
         if ref is None and isinstance(c, dict) and str(c.get("file") or "").strip():
             # New material, dropped into the cut.
-            path = os.path.abspath(str(c["file"]).strip())
-            if may_use is None or not may_use(path):
-                raise ValueError(f"clip {i}: {os.path.basename(path)} is not a file the viewer may use")
-            if not os.path.isfile(path):
-                raise ValueError(f"clip {i}: {os.path.basename(path)} does not exist")
-            ref = {"OTIO_SCHEMA": "Clip.1", "name": os.path.basename(path), "metadata": {},
-                   "effects": [], "markers": [], "source_range": None,
-                   "media_reference": {"OTIO_SCHEMA": "ExternalReference.1", "name": "",
-                                       "metadata": {}, "available_range": None,
-                                       "target_url": _url(path)}}
+            ref = _new_clip(c, f"clip {i}", may_use)
         elif not isinstance(ref, int) or isinstance(ref, bool) or not 0 <= ref < len(source) \
                 or not str((source[ref] or {}).get("OTIO_SCHEMA") or "").startswith("Clip"):
             raise ValueError(f"clip {i} does not name a clip of this timeline")
         start = _num(c.get("in"), f"clip {i}'s in point")
         length = _num(c.get("length"), f"clip {i}'s length", _MIN_CLIP)
         mix = _num(c.get("transition") or 0, f"clip {i}'s dissolve") if i > 1 else 0.0
-        parsed.append((ref, start, length, mix, str(c.get("name")) if c.get("name") is not None else None))
-    for i, (_ref, _s, length, mix, _n) in enumerate(parsed):
+        parsed.append((ref, start, length, mix, str(c.get("name")) if c.get("name") is not None else None, c))
+    for i, (_ref, _s, length, mix, _n, _c) in enumerate(parsed):
         if mix and (mix >= length or mix >= parsed[i - 1][2]):
             raise ValueError(f"the dissolve into clip {i + 1} is as long as one of the clips it joins")
     def halves(seconds):
@@ -356,7 +539,7 @@ def rebuild(doc, edit, stamp="", may_use=None):
         return first / rate, (frames - first) / rate
 
     children = []
-    for i, (ref, start, length, mix, name) in enumerate(parsed):
+    for i, (ref, start, length, mix, name, given) in enumerate(parsed):
         head, before = halves(mix if i else 0.0)
         tail = halves(parsed[i + 1][3])[1] if i + 1 < len(parsed) else 0.0
         if head or before:
@@ -367,20 +550,52 @@ def rebuild(doc, edit, stamp="", may_use=None):
         item["source_range"] = _range(start + head, length - head - tail, rate)
         if name is not None:
             item["name"] = name[:200]
+        _dress(item, given)
         children.append(item)
     video["children"] = children
-    film = edit_length({"clips": [{"length": p[2], "transition": p[3]} for p in parsed]})
+    audio = _track_of(new, "audio")
+    if "tracks" in edit:
+        more_video, more_audio = _build_tracks(doc, edit.get("tracks") or [], rate, may_use)
+        stack_new = new.get("tracks") or {}
+        kept = [t for t in (stack_new.get("children") or [])
+                if not (isinstance(t, dict) and str(t.get("OTIO_SCHEMA") or "").startswith("Track"))
+                or t is video or t is audio]
+        # Bottom to top, as OTIO stacks them: the cut, what lies over it, then the sound.
+        at = kept.index(video) + 1
+        kept[at:at] = more_video
+        if more_audio and audio is None:
+            # The first sound track of a timeline is the bed under the whole film
+            # (A1). A cut that has none gets an empty one, or the first track
+            # added would be read back as the bed.
+            audio = {"OTIO_SCHEMA": "Track.1", "name": "A1", "kind": "Audio", "metadata": {},
+                     "source_range": None, "effects": [], "markers": [], "children": []}
+            kept.append(audio)
+        kept.extend(more_audio)
+        stack_new["children"] = kept
+    off = edit.get("off")
+    if isinstance(off, dict):
+        if "V1" in off:
+            _set_off(video, bool(off["V1"]))
+        if "A1" in off:
+            _set_off(audio, bool(off["A1"]))
+    film = edit_length({"clips": [{"length": p[2], "transition": p[3]} for p in parsed],
+                        "tracks": extra_tracks(new)})
 
     stack = new.get("tracks") or {}
     old_marks = list(((doc.get("tracks") or {}).get("markers")) or [])
     marks = []
     for i, t in enumerate(edit.get("texts") or [], 1):
         ref = t.get("ref") if isinstance(t, dict) else None
-        if not isinstance(ref, int) or isinstance(ref, bool) or not 0 <= ref < len(old_marks):
+        if ref is None and isinstance(t, dict):
+            # A text written in the panel: a marker of its own, said the way agentY says its texts.
+            mark = {"OTIO_SCHEMA": "Marker.2", "name": "", "color": "PURPLE", "marked_range": None,
+                    "metadata": {"agentY": {"text": ""}, "made_by": "bEpic viewer"}}
+        elif not isinstance(ref, int) or isinstance(ref, bool) or not 0 <= ref < len(old_marks):
             raise ValueError(f"text {i} does not name a text of this timeline")
+        else:
+            mark = copy.deepcopy(old_marks[ref])
         start = _num(t.get("start"), f"text {i}'s start")
         length = _num(t.get("length"), f"text {i}'s length", 0.2)
-        mark = copy.deepcopy(old_marks[ref])
         mark["marked_range"] = _range(start, length, rate)
         if t.get("text") is not None:
             text = str(t["text"])[:2000]
@@ -393,7 +608,6 @@ def rebuild(doc, edit, stamp="", may_use=None):
         marks.append(mark)
     stack["markers"] = marks
 
-    audio = _track_of(new, "audio")
     kids = [c for c in (audio or {}).get("children") or [] if isinstance(c, dict)]
     if audio is not None and len(kids) == 1 and str(kids[0].get("OTIO_SCHEMA") or "").startswith("Clip"):
         start, _length = _span(kids[0].get("source_range"))
