@@ -189,6 +189,73 @@ def _mtime(path):
         return None
 
 
+# ── What may be allowed, and what may be served ──────────────────────────────
+#
+# A folder the user allows is a folder of pictures and films, not a way into the
+# machine. So the list never holds a whole drive, the home folder or anything
+# above it, or the system's own folders; inside an allowed folder nothing under
+# a hidden folder (.ssh, .aws, .git ...) or AppData is opened; and the routes that
+# hand back a file's bytes hand back media only. Together these keep a key, a
+# token or a config out of reach of every route, whatever folder is listed.
+
+# What the viewer shows: pictures, films, sound, 3D files - and the files a 3D
+# file names beside itself (a .gltf's .bin, an .obj's .mtl, its textures).
+MEDIA_EXTS = frozenset({
+    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif", ".ico", ".svg",
+    ".tif", ".tiff", ".exr", ".dpx", ".tga", ".hdr",
+    ".mp4", ".m4v", ".mov", ".webm", ".mkv", ".ogv", ".avi", ".mpg", ".mpeg", ".wmv", ".flv",
+    ".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac",
+    ".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply", ".usd", ".usda", ".usdc", ".usdz", ".abc",
+    ".spz", ".splat", ".ksplat", ".sog",
+    ".bin", ".mtl", ".ktx2",
+})
+
+_PRIVATE_NAMES = {"appdata", "application data"}
+
+
+def is_media(path):
+    """True for a file the viewer shows, by its extension."""
+    return os.path.splitext(str(path or ""))[1].lower() in MEDIA_EXTS
+
+
+def _private_part(real_path):
+    """True when a folder on the way to `real_path` is a hidden one or AppData:
+    where keys, tokens and program settings are kept, never media."""
+    parts = [p for p in real_path.replace("\\", "/").split("/")[1:] if p]
+    return any(p.startswith(".") or p.lower() in _PRIVATE_NAMES for p in parts)
+
+
+def _system_dirs():
+    out = []
+    for var in ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"):
+        v = os.environ.get(var, "").strip()
+        if v:
+            out.append(v)
+    if sys.platform != "win32":
+        out += ["/etc", "/bin", "/sbin", "/usr", "/var", "/proc", "/sys", "/dev", "/boot", "/root"]
+    return out
+
+
+def too_broad(path):
+    """Why `path` can't be an allowed folder, or "": a drive or filesystem root,
+    the home folder or one above it, a system folder, a hidden folder."""
+    try:
+        real = _real(path)
+    except Exception:
+        return "not a folder path"
+    if os.path.dirname(real) == real:
+        return "a whole drive"
+    home = _real(os.path.expanduser("~"))
+    if _inside(home, real):
+        return "the home folder, or a folder that holds it"
+    for sysdir in _system_dirs():
+        if _inside(real, _real(sysdir)):
+            return "a system folder"
+    if _private_part(real):
+        return "a hidden folder, or one in AppData"
+    return ""
+
+
 def roots():
     """[(label, path, real)] for every allowed folder, ComfyUI's own first."""
     comfy = comfy_dirs()
@@ -201,6 +268,12 @@ def roots():
         seen, out = set(), []
         for label, path in comfy + [(p, p) for p in _configured()]:
             real = _real(path)
+            if label == path:
+                why = too_broad(path)
+                if why:
+                    print(f"[bEpicViewer] not allowing {path}: {why}. List the project "
+                          f"folders inside it instead.")
+                    continue
             if real not in seen:
                 seen.add(real)
                 out.append((label, path, real))
@@ -216,7 +289,29 @@ def is_allowed(path):
         real = _real(path)
     except Exception:
         return False
-    return any(_inside(real, root) for _, _, root in roots())
+    comfy = {_real(p) for _, p in comfy_dirs()}
+    for _, _, root in roots():
+        if _inside(real, root):
+            # ComfyUI's own folders are trusted as they are (a Linux or Desktop
+            # install may keep them under a hidden folder); inside a folder the
+            # user added, nothing below a hidden folder or AppData.
+            if root in comfy or not _private_part(real[len(root):] or "/"):
+                return True
+    return False
+
+
+def may_serve(path):
+    """True when a route may hand back this file's bytes: inside the allowed
+    folders AND a picture, film, sound or 3D file. Listing a folder and writing
+    an export only need is_allowed; returning a file's content needs this."""
+    return is_media(path) and is_allowed(path)
+
+
+def serve_refusal(path):
+    if is_allowed(path):
+        return (f"{os.path.basename(path)} is not a picture, film, sound or 3D file, "
+                f"and the viewer hands back nothing else.")
+    return refusal(path)
 
 
 def in_comfy_dirs(path):
@@ -264,6 +359,29 @@ def _is_local(request):
         return False
 
 
+def _own_host(host):
+    """True when `host` (a Host header, with or without its port) is an IP
+    address, localhost, or one of this machine's own names."""
+    name = str(host or "").strip().lower()
+    if not name:
+        return False
+    if name.startswith("["):                        # [::1]:8188
+        name = name[1:name.find("]")] if "]" in name else name[1:]
+    elif name.count(":") == 1:
+        name = name.rsplit(":", 1)[0]
+    if _ip(name) is not None:
+        return True
+    if name == "localhost" or name.endswith(".localhost"):
+        return True
+    import socket
+    try:
+        own = {socket.gethostname().lower(), socket.getfqdn().lower()}
+    except Exception:
+        own = set()
+    own |= {n.split(".")[0] for n in own}           # the short name too
+    return name.rstrip(".") in own
+
+
 def may_edit(request):
     """(allowed, reason) for a request that would change the list, or look
     outside it.
@@ -274,6 +392,12 @@ def may_edit(request):
     """
     if _truthy(LOCKED_ENV):
         return False, f"The folder list is locked ({LOCKED_ENV} is set). Edit {ROOTS_FILE} instead."
+    # The name the page was opened by must be this machine's: an address, or
+    # localhost / the machine's own name. A site that points its own name at
+    # 127.0.0.1 (DNS rebinding) sends a matching Origin and arrives over
+    # loopback, so neither check below would catch it; its Host gives it away.
+    if not _own_host(request.host):
+        return False, "Refused: the page was not opened by this machine's address or name."
     origin = request.headers.get("Origin")
     if origin is not None:
         parts = urlsplit(origin)
@@ -321,6 +445,10 @@ def write_file_entries(entries):
             continue
         if any(ch in entry for ch in "\r\n\0"):
             raise ValueError(f"not a folder path: {entry!r}")
+        why = too_broad(expand(entry))
+        if why:
+            raise ValueError(f"{entry} can't be allowed: it is {why}. "
+                             f"Add the project folders inside it instead.")
         key = os.path.normcase(expand(entry))
         if key and key not in seen:
             seen.add(key)

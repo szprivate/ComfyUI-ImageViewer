@@ -187,19 +187,10 @@ def _resolve_raw_path(path):
     else:
         cand = os.path.abspath(cand)
 
-    norm_cand = os.path.normcase(cand)
+    # Inside, with links resolved: a junction in temp must not reach out of it.
     for base in (temp_base, out_base):
-        if not base:
-            continue
-        norm_base = os.path.normcase(os.path.abspath(base))
-        try:
-            if os.path.commonpath([norm_base, norm_cand]).startswith(norm_base):
-                return cand, True
-        except Exception:
-            # commonpath raises across drives / on malformed input; fall back to a
-            # plain prefix test rather than treating the path as denied outright.
-            if norm_cand.startswith(norm_base):
-                return cand, True
+        if base and path_access.within(cand, base):
+            return cand, True
     return cand, False
 
 def _resolve_comfy_ref(filename, type_name, subfolder):
@@ -708,7 +699,7 @@ try:
             # another machine — and printing here put one line in the ComfyUI log
             # per dead entry per redraw of the history strip. The client asks
             # /bepic/probe_paths instead and drops those entries from the panel.
-            if not allowed:
+            if not allowed or not path_access.is_media(cand):
                 return web.Response(status=403, text="access denied")
 
             if not os.path.exists(cand):
@@ -930,8 +921,8 @@ try:
             if not path:
                 return web.Response(status=400, text="missing 'path' parameter")
             path = os.path.abspath(path)
-            if not path_access.is_allowed(path):
-                return web.Response(status=403, text=path_access.refusal(path))
+            if not path_access.may_serve(path):
+                return web.Response(status=403, text=path_access.serve_refusal(path))
             if not os.path.isfile(path):
                 return web.Response(status=404, text="file not found")
             # `raw` is the file itself, never a browser-friendly stand-in: a
@@ -971,8 +962,8 @@ try:
                     return web.Response(status=400,
                                         text="missing 'path', or an unresolvable filename")
             path = os.path.abspath(path)
-            if not path_access.is_allowed(path):
-                return web.Response(status=403, text=path_access.refusal(path))
+            if not path_access.may_serve(path):
+                return web.Response(status=403, text=path_access.serve_refusal(path))
             if not os.path.isfile(path):
                 return web.Response(status=404, text="file not found")
 
