@@ -42,10 +42,11 @@ _TRIMESH_OUT = ("gltf", "obj", "ply", "stl")
 
 
 def _has(module):
+    """Whether *module* is installed - looked up, not imported."""
+    import importlib.util
     try:
-        __import__(module)
-        return True
-    except Exception:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ValueError):
         return False
 
 

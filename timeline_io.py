@@ -13,6 +13,7 @@ needed - a ``.otio`` file is JSON.
 
 import json
 import os
+import re
 
 _MAX_BYTES = 8 * 1024 * 1024
 _MAX_ITEMS = 2000
@@ -190,7 +191,7 @@ def _note(obj):
     return note if isinstance(note, dict) else {}
 
 
-_COLOR = __import__("re").compile(r"^#[0-9a-fA-F]{6}$")
+_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
 def _bepic(obj):

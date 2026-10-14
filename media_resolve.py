@@ -16,6 +16,7 @@ Three widget shapes are covered:
 import hashlib
 import os
 import re
+import threading
 
 import folder_paths
 
@@ -199,7 +200,7 @@ _PLAYABLE_CODECS = {"h264", "vp8", "vp9", "av1"}
 _PLAYABLE_PIX = {"yuv420p", "yuvj420p"}
 _VIDEO_PROXY_LOCKS = {}
 _VIDEO_PLAYS = {}
-_VIDEO_PROXY_GUARD = __import__("threading").Lock()
+_VIDEO_PROXY_GUARD = threading.Lock()
 
 
 def _video_plays(path):
@@ -280,7 +281,7 @@ def video_proxy(path):
     # A player asks for a film in several ranges at once: one of them makes the
     # copy, the others wait for it.
     with _VIDEO_PROXY_GUARD:
-        lock = _VIDEO_PROXY_LOCKS.setdefault(dst, __import__("threading").Lock())
+        lock = _VIDEO_PROXY_LOCKS.setdefault(dst, threading.Lock())
     with lock:
         if not _cached(dst, path):
             _write_video_proxy(path, dst)
