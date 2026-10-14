@@ -559,19 +559,29 @@ textarea.param-input {
     padding: 8px 6px 10px 6px;
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 88px), 1fr));
+    /* Rows as tall as their tiles. An <img> sized as a percentage counts as
+       shrinkable, so with plain auto rows the grid squeezed every row to fit the
+       panel's height whenever the tiles did not fit - and each tile ran under
+       the next, looking cropped (narrowing the rail was the usual way there). */
+    grid-auto-rows: max-content;
     gap: 8px;
     align-content: start;
     overflow-y: auto; overflow-x: hidden;
     flex: 1; min-height: 0;
 }
+/* A tile is as tall as its picture is at the column's width: the picture is
+   never cropped (`contain`, and the tile takes the picture's shape: its own
+   ratio once loaded, 4:3 while it is still on its way - `auto 4 / 3`). */
 .history-thumb {
-    position: relative; width: auto; aspect-ratio: 4 / 3; min-width: 0;
+    position: relative; width: auto; min-width: 0; align-self: start;
     background: #050505; border-radius: 6px; overflow: hidden;
-    border: 1px solid #1a1a1a; display: flex; align-items: center;
-    justify-content: center; cursor: pointer;
+    border: 1px solid #1a1a1a; display: block; cursor: pointer;
     box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02);
 }
-.history-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.history-thumb img {
+    display: block; width: 100%; height: auto;
+    aspect-ratio: auto 4 / 3; object-fit: contain;
+}
 .history-thumb:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.6), 0 0 0 2px rgba(255,102,0,0.08); transform: translateY(-2px); }
 .history-thumb.selected { box-shadow: 0 0 0 2px rgba(255,102,0,0.9); }
 
