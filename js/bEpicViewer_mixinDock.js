@@ -67,6 +67,9 @@ const DOCK_PANELS = {
     editEffects: { prop: "editEffectsPanel", label: "Effects", minW: 220, minH: 150, defaultRail: "left" },
     // (The drawing tools' options have no panel of their own: while a tool is
     // on they take the Parameters panel over — ToolsMixin._toolShowDock.)
+    // The agentY chat panel (bEpicViewer_agentPanel.js): agentY's own panel,
+    // moved here from the ComfyUI sidebar while this panel is open.
+    agentChat: { prop: "agentChatPanel", label: "agentY", minW: 280, minH: 260, defaultRail: "right", size: 2 },
 };
 const RAIL_SIDES = ["left", "right", "bottom"];
 // Which way a rail stacks: the bottom one lays its panels out side by side.
@@ -515,6 +518,10 @@ export const DockMixin = {
             for (const p of this.dockLayout[side].panels) if (!p.hidden && !p.behind) now.add(p.id);
         }
         this._dockShown = now;
+        if (before.has("agentChat") && !now.has("agentChat")) {
+            try { this._agentPanelRelease(); }
+            catch (e) { console.warn("bEpicViewer: agentY panel could not go back", e); }
+        }
         for (const id of now) {
             if (before.has(id)) continue;
             try { this._onPanelShown(id); }
@@ -545,6 +552,8 @@ export const DockMixin = {
             if (this.editTlRefresh) this.editTlRefresh();
         } else if (id === "channels") {
             if (this._previzRenderChannels) this._previzRenderChannels();
+        } else if (id === "agentChat") {
+            if (this._agentPanelMount) this._agentPanelMount();
         } else if (id === "previz") {
             // A panel with nothing to show puts itself away again: without a
             // scene on the tab there is no outliner, no transform and no keys.

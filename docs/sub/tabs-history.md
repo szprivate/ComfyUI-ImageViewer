@@ -135,3 +135,14 @@ When [agentY](https://github.com/szprivate/agentY) is installed (it installs thi
 **Approve for agentY.** When a `review` hook has stopped a run, select the pictures you want to continue with (<kbd>Ctrl</kbd>+click, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+click for a range), right-click and choose **Approve for agentY**. The review collector on the canvas is filled with exactly those files and the run continues — the same as editing the collector and pressing *Continue with these*. The row is greyed out when nothing is waiting.
 
 The two actions go through `window.agentYViewerBridge`, which agentY's extension provides.
+
+### The agentY panel inside the viewer
+
+agentY's chat panel can sit in the viewer as a dock panel, so the pictures and the conversation are in one workspace. It is the **same panel** as the ComfyUI sidebar's - same conversation, same running turn, same Send and Stop - moved, not copied.
+
+- **Open it:** click **↗** in the panel's header in the agentY sidebar, or pick **ComfyUI ▸ agentY** in the lower bar's menu. The sidebar tab then says the panel is in the viewer and offers **Bring it back here**.
+- **Put it back:** click **↙** in the panel's header, or in the dock panel's title bar - or close the dock panel with **✕**. The conversation carries on where it was.
+- It moves, stacks and resizes like any other dock panel (see [Docking Panels](interface.md#docking-panels)), and goes with the viewer into its own window when you undock it.
+- Approval dialogs and toasts still appear in the ComfyUI window, not in a popped-out viewer.
+
+**Drag pictures into the message.** Drag a history thumbnail (or a multi-selection of them), a row or selection of the file browser, or - holding <kbd>Shift</kbd> - the frame on screen from the timeline, onto the agentY panel, in the viewer or in the ComfyUI sidebar. They are attached to the next message like files from the paperclip: a picture already on disk is attached where it lies, a clip's frame is saved as a PNG first, and anything the viewer holds only in the browser is uploaded. Files dragged in from the desktop work the same way.
