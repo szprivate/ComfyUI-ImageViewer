@@ -27,6 +27,7 @@ import { HistoryTagsMixin } from "./bEpicViewer_historyTags.js";
 import { AgentYMixin, namedTabInfo } from "./bEpicViewer_agentY.js";
 import { ParamAnimMixin } from "./bEpicViewer_paramAnim.js";
 import { ParamCurvesMixin } from "./bEpicViewer_paramCurves.js";
+import { CodePanelMixin } from "./bEpicViewer_codePanel.js";
 import { PrevizChannelsMixin } from "./bEpicViewer_previzChannels.js";
 import { PrevizRenderMixin } from "./bEpicViewer_previzRender.js";
 import { PrevizUndoMixin } from "./bEpicViewer_previzUndo.js";
@@ -583,6 +584,15 @@ class ViewerPanel extends HTMLElement {
             rc.className = 'curves-panel right';
             this.curvesPanel.parentNode.insertBefore(rc, this.curvesPanel.nextSibling);
             this.rotoCurvesPanel = rc;
+        }
+        // Agent code (bEpicViewer_codePanel.js): no markup carries it, so it is made here.
+        this.agentCodePanel = sr.getElementById('agent-code-panel');
+        if (!this.agentCodePanel && this.curvesPanel && this.curvesPanel.parentNode) {
+            const ac = this.curvesPanel.ownerDocument.createElement('div');
+            ac.id = 'agent-code-panel';
+            ac.className = 'curves-panel agent-code-panel right';
+            this.curvesPanel.parentNode.insertBefore(ac, this.curvesPanel.nextSibling);
+            this.agentCodePanel = ac;
         }
         // The Channel Box came after the others; a cached older markup lacks
         // it, so it is made here beside the Outliner rather than going missing.
@@ -1279,6 +1289,7 @@ Object.assign(
     AgentYMixin,
     ParamAnimMixin,
     ParamCurvesMixin,
+    CodePanelMixin,
     PrevizChannelsMixin,
     PrevizRenderMixin,
     PrevizUndoMixin,
@@ -1425,6 +1436,12 @@ app.registerExtension({
         api.addEventListener("bepic.world.calibrate", (e) => {
             const name = e.detail && e.detail.name;
             if (name && globalViewerPanel.previzMatchWorld) globalViewerPanel.previzMatchWorld(name);
+        });
+
+        // Code the agent produced (viewer_code.py): the Agent code panel's feed.
+        api.addEventListener("bepic.code.update", (e) => {
+            try { globalViewerPanel?.codePanelReceive?.(e.detail); }
+            catch (err) { console.warn("bEpicViewer: agent code not shown", err); }
         });
 
         api.addEventListener("bepic.viewer.update", (e) => {

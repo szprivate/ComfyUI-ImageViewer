@@ -9,6 +9,10 @@ import folder_paths
 from server import PromptServer
 
 from . import path_access
+try:
+    from . import viewer_code
+except Exception:  # pragma: no cover - the code panel is optional
+    viewer_code = None
 from . import viewer_settings
 
 try:
@@ -840,6 +844,8 @@ try:
                     kind = "video"
                 elif ext in _MODEL_EXTS:
                     kind = "model"
+                elif viewer_code is not None and ext in viewer_code.TEXT_EXTS:
+                    kind = "text"          # shown in the Agent code panel
                 else:
                     kind = "other"
                 if kinds and kind not in kinds:
@@ -976,6 +982,54 @@ try:
                     "tab_name": tab,
                 })
             return web.json_response({"ok": True, "shown": len(frames), "refused": refused})
+
+        # --- Agent code panel (viewer_code.py) -------------------------------
+        _code_store = viewer_code.CodeStore() if viewer_code is not None else None
+
+        async def _bepic_code_add(request):
+            """A snippet of code the agent made, for the Agent code panel."""
+            if _code_store is None:
+                return web.json_response({"error": "code panel unavailable"}, status=500)
+            try:
+                data = await request.json()
+            except Exception:
+                data = {}
+            snip, is_new = _code_store.add(data if isinstance(data, dict) else {})
+            if snip is None:
+                return web.json_response({"error": "bad request"}, status=400)
+            if is_new:
+                try:
+                    PromptServer.instance.send_sync("bepic.code.update", snip)
+                except Exception as e:
+                    print(f"[bEpicViewer] code push failed: {e}")
+            return web.json_response({"ok": True, "id": snip["id"], "new": is_new})
+
+        async def _bepic_code_list(request):
+            if _code_store is None:
+                return web.json_response({"snippets": []})
+            try:
+                limit = max(1, min(200, int(request.query.get("limit") or 50)))
+            except ValueError:
+                limit = 50
+            return web.json_response({"snippets": _code_store.recent(limit=limit)})
+
+        async def _bepic_text(request):
+            """A text file (code, json, notes) from an allowed folder."""
+            if viewer_code is None:
+                return web.json_response({"error": "code panel unavailable"}, status=500)
+            path = os.path.abspath(request.query.get("path") or "")
+            if not request.query.get("path") or not path_access.may_serve(path):
+                return web.json_response({"error": "not allowed"}, status=403)
+            if not os.path.isfile(path):
+                return web.json_response({"error": "file not found"}, status=404)
+            try:
+                text, language, cut = viewer_code.read_text_file(path)
+            except ValueError:
+                return web.json_response({"error": "not a text file"}, status=415)
+            except OSError as e:
+                return web.json_response({"error": str(e)}, status=500)
+            return web.json_response({"path": path, "name": os.path.basename(path),
+                                      "language": language, "code": text, "truncated": cut})
 
         async def _bepic_view_file(request):
             """Serve a file by absolute path, from inside the allowed folders."""
@@ -1728,6 +1782,12 @@ try:
         _safe_add("GET", "/bepic/browse", _bepic_browse)
         _safe_add("GET", "/api/bepic/browse", _bepic_browse)
         _safe_add("POST", "/bepic/browse_frames", _bepic_browse_frames)
+        _safe_add("POST", "/bepic/code", _bepic_code_add)
+        _safe_add("POST", "/api/bepic/code", _bepic_code_add)
+        _safe_add("GET", "/bepic/code", _bepic_code_list)
+        _safe_add("GET", "/api/bepic/code", _bepic_code_list)
+        _safe_add("GET", "/bepic/text", _bepic_text)
+        _safe_add("GET", "/api/bepic/text", _bepic_text)
         _safe_add("POST", "/bepic/push", _bepic_push)
         _safe_add("POST", "/api/bepic/push", _bepic_push)
         _safe_add("POST", "/api/bepic/browse_frames", _bepic_browse_frames)

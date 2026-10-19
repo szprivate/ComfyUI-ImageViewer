@@ -31,6 +31,7 @@ const GROUPS = [
     { id: "comfy", title: "ComfyUI", icon: "comfy", items: [
         { label: "History", panel: "history" },
         { label: "Parameters", panel: "params" },
+        { label: "Agent code", panel: "agentCode" },
     ] },
     { id: "3d", title: "3D", icon: "box", items: [
         { label: "Outliner", panel: "previz", needs: "3d" },
