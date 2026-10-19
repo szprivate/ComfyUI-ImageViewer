@@ -141,6 +141,7 @@ Every route that takes a path only reaches ComfyUI's input, output and temp fold
 | GET | `/bepic/view_file?path=…` | Serve a file from an allowed folder |
 | GET | `/bepic/browse?path=…` | List one allowed directory's sub-folders and media files (no path → ComfyUI's input folder) |
 | POST | `/bepic/browse_frames` | Turn browsed paths into viewer frames — fps, frame count and poster for videos |
+| POST | `/bepic/push` | Show files in a viewer tab that did not come through a save node: `{paths, tab_name, group, label}`; frames are sent as a `bepic.viewer.update`, files outside the allowed folders come back in `refused` |
 | GET | `/bepic/scenes` | List saved previz scenes |
 | GET | `/bepic/scene?name=…` | Read one saved scene |
 | POST | `/bepic/scene` | Save a scene to `output/3d_scenes` |
