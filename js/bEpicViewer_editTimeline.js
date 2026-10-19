@@ -245,8 +245,8 @@ export const EditTimelineMixin = {
     },
 
     /** Open the cut of the film on screen in its Edit tab (read again: it may have been saved since). */
-    async editTlOpenFilmCut() {
-        const film = this._editTlFilm;
+    async editTlOpenFilmCut(given) {
+        const film = given || this._editTlFilm;
         if (!film) return false;
         const key = PREFIX + "f" + hash(film.id);
         if (this.allTabs[key]) {
@@ -259,6 +259,13 @@ export const EditTimelineMixin = {
         const name = data.edit.name || String(data.file || "cut").replace(/\.otio$/i, "");
         this._editTlOpenTab(key, name, { cut: data.edit, saved: data.edit, target: film.target, file: data.file || "" }, true);
         return true;
+    },
+
+    /** Open the cut beside a film that is not (yet) on screen - an agent's "open the edit". */
+    async editTlOpenCutOf(obj) {
+        const target = D.timelineTarget(obj);
+        if (!target) return false;
+        return this.editTlOpenFilmCut({ id: JSON.stringify(target), obj, target });
     },
 
     // A cut's tab came on screen (EditPlayMixin.editPlayEnter): its panels come

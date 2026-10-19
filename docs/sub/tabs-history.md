@@ -138,6 +138,8 @@ When [agentY](https://github.com/szprivate/agentY) is installed (it installs thi
 
 **Annotating a video.** Over a clip, a mark belongs to frames: the one on screen, plus the **Hold** count after it (or press **Out here** later to end the last annotation at the playhead). It shows only on its frames, has a cyan marker on the timeline (yellow while the playhead is inside it), and **◀ Mark / Mark ▶** jump between annotated frames. Double-click a text mark to edit it, drag it to move it, drag its corner square to resize, pick a colour to recolour it, <kbd>Delete</kbd> removes it. The marks are saved beside the video as `<name>.annotations.json` (plain JSON, frame ranges and 0–1 positions) and come back when the clip is opened again. **Send to agentY** sends, per annotation, the frame with the marks drawn in, its frame number and timecode (and range), the notes and the video's path; **This frame** sends only what is on the current frame.
 
+**Show me / open the edit.** Ask agentY "show me clip 3 in the viewer" or "open the edit" and it loads the files into the viewer (the `agentY` tab or a tab it names), brings the viewer up if it is closed or docked, and selects (or plays) the first one. For a film with an `.otio` beside it, the Edit panel opens on that cut, so you see it shot by shot. The same happens by itself when agentY's edit node finishes a render (agentY setting `viewer_open_edit`, on by default).
+
 The actions go through `window.agentYViewerBridge`, which agentY's extension provides (`feedback({ text, files })` is the send).
 
 ### The agentY panel inside the viewer

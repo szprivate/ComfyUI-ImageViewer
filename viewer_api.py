@@ -9,6 +9,7 @@ import folder_paths
 from server import PromptServer
 
 from . import path_access
+from . import push_open
 try:
     from . import viewer_code
 except Exception:  # pragma: no cover - the code panel is optional
@@ -932,6 +933,13 @@ try:
             that is not on the open graph. Only files inside the folders the
             viewer may open (path_access) are shown; the rest come back in
             ``refused``.
+
+            A path may also be a folder, an image sequence (``f_%04d.png``,
+            ``f_####.png``, ``f_*.png``) or an ``.otio`` (the film beside it, see
+            push_open). Optional: ``focus`` (bring the viewer up and select the
+            first item), ``play`` (start it), ``panel: "edit"`` (open the Edit
+            panel on the cut beside the first film that has one). They ride on the
+            same message as ``open``; the page does the rest.
             """
             if media_resolve is None:
                 return web.json_response({"error": "media resolver unavailable"}, status=500)
@@ -945,15 +953,14 @@ try:
             tab = clean(data.get("tab_name")) or "agentY"
             group, label = clean(data.get("group")), clean(data.get("label"))
 
+            from . import timeline_io
             image_exts, video_exts = _browse_exts()
-            frames, refused = [], []
-            for raw in data["paths"][:_BROWSE_FRAME_CAP]:
-                if not raw or not isinstance(raw, str):
-                    continue
-                p = os.path.abspath(raw)
-                if not path_access.may_serve(p) or not os.path.isfile(p):
-                    refused.append(raw)
-                    continue
+            files, refused, cuts = push_open.expand(
+                data["paths"], image_exts, video_exts,
+                may_serve=path_access.may_serve, is_allowed=path_access.is_allowed,
+                cap=_BROWSE_FRAME_CAP)
+            frames, edit_at = [], None
+            for p in files:
                 ext = os.path.splitext(p)[1].lower()
                 try:
                     if ext in _MODEL_EXTS:
@@ -963,25 +970,46 @@ try:
                     elif ext in image_exts:
                         frame = media_resolve._image_frame(p)
                     else:
-                        refused.append(raw)
+                        refused.append(p)
                         continue
                 except Exception as e:
                     print(f"[bEpicViewer] push failed for {p}: {e}")
-                    refused.append(raw)
+                    refused.append(p)
                     continue
                 if group:
                     frame["group"] = group
                 if label:
                     frame["label"] = label
+                # The film that has a cut beside it is what the Edit panel opens on.
+                if (edit_at is None and ext in video_exts
+                        and (p in cuts or timeline_io.sidecar_for(p))):
+                    edit_at = len(frames)
                 frames.append(frame)
 
+            # Optional: bring the viewer up, select/play the first item, open the
+            # Edit panel on a cut. A plain push (no focus, no panel) stays quiet.
+            want_panel = str(data.get("panel") or "").strip().lower()
+            opened = None
+            notes = []
+            if want_panel == "edit" and edit_at is None and frames:
+                notes.append("no .otio beside the film, so the Edit panel was not opened")
+            if frames and (data.get("focus") or want_panel == "edit"):
+                opened = {"focus": True, "select": 0, "play": bool(data.get("play"))}
+                if want_panel == "edit" and edit_at is not None:
+                    opened.update(panel="edit", select=edit_at, play=False)
+
             if frames:
-                PromptServer.instance.send_sync("bepic.viewer.update", {
+                msg = {
                     "tabs": {"tab": frames},
                     "unique_id": None,
                     "tab_name": tab,
-                })
-            return web.json_response({"ok": True, "shown": len(frames), "refused": refused})
+                }
+                if opened:
+                    msg["open"] = opened
+                PromptServer.instance.send_sync("bepic.viewer.update", msg)
+            return web.json_response({"ok": True, "shown": len(frames), "refused": refused,
+                                      "opened": bool(opened), "edit": bool(opened and opened.get("panel")),
+                                      "notes": notes})
 
         # --- Agent code panel (viewer_code.py) -------------------------------
         _code_store = viewer_code.CodeStore() if viewer_code is not None else None

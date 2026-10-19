@@ -1040,6 +1040,7 @@ class ViewerPanel extends HTMLElement {
         this.viewerNode  = node || null;
         const senderNode = node || app.graph.getNodeById(data.unique_id);
 
+        let openedKey = null;
         Object.keys(data.tabs).forEach(k => {
             let finalKey = k;
             // Every node that owns a tab — the send node and both tool nodes —
@@ -1070,6 +1071,7 @@ class ViewerPanel extends HTMLElement {
                 }
             }
 
+            openedKey = finalKey;
             // A previz node sends its scene with the tab, so opening a saved
             // workflow rebuilds the shot before anything has run.
             // A sender with no node on the graph (the worlds pack, an agent)
@@ -1171,6 +1173,10 @@ class ViewerPanel extends HTMLElement {
         this.requestPanelOpen();
         this.renderHistoryPanel();
         this.queuePersistViewerState();
+        // An agent asked to have this shown (POST /bepic/push with focus / panel).
+        if (data.open && openedKey && this.agentOpenRequest) {
+            this.agentOpenRequest(data.open, openedKey).catch((e) => console.warn("bEpicViewer: open request failed", e));
+        }
     }
 
     // Build the tab-bar DOM from this.tabOrder.
