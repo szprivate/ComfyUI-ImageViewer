@@ -139,3 +139,14 @@ When [agentY](https://github.com/szprivate/agentY) is installed (it installs thi
 **Annotating a video.** Over a clip, a mark belongs to frames: the one on screen, plus the **Hold** count after it (or press **Out here** later to end the last annotation at the playhead). It shows only on its frames, has a cyan marker on the timeline (yellow while the playhead is inside it), and **◀ Mark / Mark ▶** jump between annotated frames. Double-click a text mark to edit it, drag it to move it, drag its corner square to resize, pick a colour to recolour it, <kbd>Delete</kbd> removes it. The marks are saved beside the video as `<name>.annotations.json` (plain JSON, frame ranges and 0–1 positions) and come back when the clip is opened again. **Send to agentY** sends, per annotation, the frame with the marks drawn in, its frame number and timecode (and range), the notes and the video's path; **This frame** sends only what is on the current frame.
 
 The actions go through `window.agentYViewerBridge`, which agentY's extension provides (`feedback({ text, files })` is the send).
+
+### The agentY panel inside the viewer
+
+agentY's chat panel can sit in the viewer as a dock panel, so the pictures and the conversation are in one workspace. It is the **same panel** as the ComfyUI sidebar's - same conversation, same running turn, same Send and Stop - moved, not copied.
+
+- **Open it:** click **↗** in the panel's header in the agentY sidebar, or pick **ComfyUI ▸ agentY** in the lower bar's menu. The sidebar tab then says the panel is in the viewer and offers **Bring it back here**.
+- **Put it back:** click **↙** in the panel's header, or in the dock panel's title bar - or close the dock panel with **✕**. The conversation carries on where it was.
+- It moves, stacks and resizes like any other dock panel (see [Docking Panels](interface.md#docking-panels)), and goes with the viewer into its own window when you undock it.
+- Approval dialogs and toasts still appear in the ComfyUI window, not in a popped-out viewer.
+
+**Drag pictures into the message.** Drag a history thumbnail (or a multi-selection of them), a row or selection of the file browser, or - holding <kbd>Shift</kbd> - the frame on screen from the timeline, onto the agentY panel, in the viewer or in the ComfyUI sidebar. They are attached to the next message like files from the paperclip: a picture already on disk is attached where it lies, a clip's frame is saved as a PNG first, and anything the viewer holds only in the browser is uploaded. Files dragged in from the desktop work the same way.

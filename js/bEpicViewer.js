@@ -26,6 +26,7 @@ import { PrevizCurvesMixin } from "./bEpicViewer_previzCurves.js";
 import { RotoCurvesMixin } from "./bEpicViewer_rotoCurves.js";
 import { HistoryTagsMixin } from "./bEpicViewer_historyTags.js";
 import { AgentYMixin, namedTabInfo } from "./bEpicViewer_agentY.js";
+import { AgentPanelMixin } from "./bEpicViewer_agentPanel.js";
 import { ParamAnimMixin } from "./bEpicViewer_paramAnim.js";
 import { ParamCurvesMixin } from "./bEpicViewer_paramCurves.js";
 import { CodePanelMixin } from "./bEpicViewer_codePanel.js";
@@ -478,6 +479,8 @@ class ViewerPanel extends HTMLElement {
         try { this._initFileBrowser(); }   // needs the toolbar button it toggles from
         catch (e) { console.warn('bEpicViewer: file browser failed to start', e); }
         // Last: it adopts all three panels into rails, so they must exist first.
+        try { this._initAgentPanel(); }   // the agentY chat panel's slot, before the dock adopts it
+        catch (e) { console.warn('bEpicViewer: agentY panel failed to start', e); }
         try { this._initDock(); }
         catch (e) { console.warn('bEpicViewer: docking failed to start', e); }
         this._applyIconSkin();          // inject inline SVGs from the JSON skin
@@ -1289,6 +1292,7 @@ Object.assign(
     RotoCurvesMixin,
     HistoryTagsMixin,
     AgentYMixin,
+    AgentPanelMixin,
     ParamAnimMixin,
     ParamCurvesMixin,
     CodePanelMixin,
@@ -1411,6 +1415,8 @@ app.registerExtension({
         document.body.appendChild(globalViewerPanel);
         _setViewerPanelToggle(false, { syncDisplay: true });
         _updateActionBarButtonState();
+        window.bEpicViewerApi = Object.assign(window.bEpicViewerApi || {},
+            { show: () => _setViewerPanelToggle(true, { syncDisplay: true }) });
         // A reload takes back the popout the previous page left open, so the
         // toolbar button has to show the viewer as on again.
         globalViewerPanel.addEventListener("bepic-popout-adopted", () => {
