@@ -51,7 +51,7 @@ All viewer state — open tabs, history stacks, panel positions, layouts — is 
 | Page | What you will learn |
 |---|---|
 | [Viewer Interface](sub/interface.md) | Anatomy of every panel and control |
-| [Tabs & History](sub/tabs-history.md) | Creating tabs, navigating history, context menu |
+| [Tabs & History](sub/tabs-history.md) | Creating tabs, navigating history, context menu, working with agentY |
 | [Image Comparison](sub/comparison.md) | Split view, contact sheet, comparing history snapshots |
 | [Playback Controls](sub/playback.md) | Playing sequences, timeline scrubbing, loop modes, sub-range |
 | [Channels & Exposure](sub/channels-exposure.md) | Exposure slider, RGB isolation, interactive E-drag |

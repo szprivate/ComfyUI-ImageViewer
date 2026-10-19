@@ -24,6 +24,7 @@ import { PrevizMixin }   from "./bEpicViewer_mixinPreviz.js";
 import { PrevizCurvesMixin } from "./bEpicViewer_previzCurves.js";
 import { RotoCurvesMixin } from "./bEpicViewer_rotoCurves.js";
 import { HistoryTagsMixin } from "./bEpicViewer_historyTags.js";
+import { AgentYMixin, namedTabInfo } from "./bEpicViewer_agentY.js";
 import { ParamAnimMixin } from "./bEpicViewer_paramAnim.js";
 import { ParamCurvesMixin } from "./bEpicViewer_paramCurves.js";
 import { PrevizChannelsMixin } from "./bEpicViewer_previzChannels.js";
@@ -51,7 +52,7 @@ const watchedNodeIds  = new Set();
 // Nothing in the graph backs them, so the stale-tab sweep must leave them be.
 // "world:" tabs come from the bEpic Worlds pack (or an agent through it).
 // "edit:" tabs are cuts being worked on in the Edit panel.
-const USER_TAB_PREFIXES = ["folder_", "dropped_", "loader_", "world:", "edit:"];
+const USER_TAB_PREFIXES = ["folder_", "dropped_", "loader_", "world:", "edit:", "named:"];
 let isViewerPanelToggledOn = false;
 let _actionBarStateRetryTimer = null;
 
@@ -1030,11 +1031,17 @@ class ViewerPanel extends HTMLElement {
             // Every node that owns a tab — the send node and both tool nodes —
             // keys it the same way (see senderTabInfo): an explicit tab_name
             // groups them, an empty one gives the node a tab of its own.
-            const info = senderTabInfo(senderNode);
+            let info = senderTabInfo(senderNode);
+            // A send that names its tab but whose node (if the open graph even has
+            // one by that id) does not - an agent running a workflow of its own -
+            // is filed by the name it carries, so all of its pictures share a tab.
+            if (data.tab_name && (!info || info.key.startsWith('send_') && !info.key.startsWith('send_label_'))) {
+                info = namedTabInfo(data.tab_name);
+            }
             if (info) {
                 finalKey = info.key;
                 this.tabLabels[finalKey] = info.label;
-                this.tabSourceNodeIds[finalKey] = senderNode.id;
+                if (senderNode && !info.key.startsWith('named:')) this.tabSourceNodeIds[finalKey] = senderNode.id;
             }
 
             if (!this.tabSourceNodeIds[finalKey]) {
@@ -1269,6 +1276,7 @@ Object.assign(
     PrevizCurvesMixin,
     RotoCurvesMixin,
     HistoryTagsMixin,
+    AgentYMixin,
     ParamAnimMixin,
     ParamCurvesMixin,
     PrevizChannelsMixin,

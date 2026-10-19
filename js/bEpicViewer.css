@@ -1415,3 +1415,46 @@ textarea.param-input {
 .pick-row.sel .pick-meta { color: #bcd; }
 .pick-empty { padding: 12px; color: #777; }
 .pick-note { margin-top: 6px; line-height: 1.35; }
+
+/* -- agentY: stage groups, labels, tags ------------------------------------ */
+.history-group {
+  grid-column: 1 / -1; padding: 6px 4px 2px; font-size: 11px; font-weight: 600;
+  letter-spacing: 0.04em; text-transform: uppercase; color: #f60;
+  border-bottom: 1px solid rgba(255,102,0,0.35);
+}
+.history-thumb-label {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: 2px 5px;
+  font-size: 10px; line-height: 1.3; color: #fff; pointer-events: none;
+  background: linear-gradient(transparent, rgba(0,0,0,0.78));
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.history-agent-tag {
+  position: absolute; top: 3px; left: 3px; padding: 0 5px; border-radius: 8px;
+  font-size: 10px; color: #111; background: #f60; pointer-events: none;
+  max-width: 80%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.thumb-ctx-item.disabled { opacity: 0.4; cursor: default; }
+.thumb-ctx-item.disabled:hover { background: none; color: inherit; }
+.agenty-tag-dialog {
+  position: absolute; inset: 0; z-index: 10000; display: flex;
+  align-items: center; justify-content: center; background: rgba(0,0,0,0.45);
+}
+.agenty-tag-dialog form {
+  width: min(320px, 90%); padding: 14px; background: #181818; color: #ddd;
+  border: 1px solid #333; border-radius: 8px; box-shadow: 0 8px 30px rgba(0,0,0,0.6);
+  display: flex; flex-direction: column; gap: 8px; font-size: 12px;
+}
+.agenty-tag-title { font-weight: 600; color: #f60; }
+.agenty-tag-dialog label { display: flex; flex-direction: column; gap: 3px; }
+.agenty-tag-dialog input {
+  padding: 5px 7px; background: #0c0c0c; color: #eee; border: 1px solid #333; border-radius: 4px;
+}
+.agenty-tag-dialog input:focus { outline: none; border-color: #f60; }
+.agenty-tag-hint { color: #888; min-height: 14px; }
+.agenty-tag-buttons { display: flex; justify-content: flex-end; gap: 8px; }
+.agenty-tag-buttons button {
+  padding: 4px 12px; background: #262626; color: #ddd; border: 1px solid #3a3a3a;
+  border-radius: 4px; cursor: pointer;
+}
+.agenty-tag-buttons button[type=submit] { background: #f60; color: #111; border-color: #f60; }
+.agenty-tag-buttons button:disabled { opacity: 0.5; cursor: default; }

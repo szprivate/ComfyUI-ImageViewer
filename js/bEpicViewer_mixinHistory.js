@@ -488,6 +488,8 @@ export const HistoryMixin = {
         // The tag filter in the footer (HistoryTagsMixin).
         if (this._syncHistoryTagFilter) this._syncHistoryTagFilter();
 
+        // Stage headings (AgentYMixin): a heading wherever the group changes.
+        const groupRun = {};
         stack.forEach((snapshot, idx) => {
             // Hidden by the tag filter; indices stay the stack's own.
             if (this.historyTagVisible && !this.historyTagVisible(snapshot)) return;
@@ -515,8 +517,13 @@ export const HistoryMixin = {
             thumb.appendChild(imgEl);
             const tagDot = this.historyTagDot ? this.historyTagDot(snapshot) : null;
             if (tagDot) thumb.appendChild(tagDot);
+            const caption = this.historyThumbCaption ? this.historyThumbCaption(document, snapshot) : null;
+            if (caption) thumb.appendChild(caption);
+            const agentTag = this.historyAgentTagBadge ? this.historyAgentTagBadge(document, snapshot) : null;
+            if (agentTag) thumb.appendChild(agentTag);
             thumb.dataset.idx = String(idx);
-            thumb.title = `History ${idx + 1}\n` +
+            const what = imgObj && imgObj.label ? ` - ${imgObj.label}` : '';
+            thumb.title = `History ${idx + 1}${what}\n` +
                           `Ctrl+click to add to the selection, Ctrl+Shift+click for a range\n` +
                           `Shift+click to compare against the open snapshot\n` +
                           `Right-click to tag it with a colour`;
@@ -589,6 +596,8 @@ export const HistoryMixin = {
                 }
             };
 
+                const heading = this.historyGroupHeader ? this.historyGroupHeader(document, snapshot, groupRun) : null;
+                if (heading) frag.appendChild(heading);
                 frag.appendChild(thumb);
         });
 
@@ -698,6 +707,10 @@ export const HistoryMixin = {
         const batch = this.isHistoryItemSelected(key, idx)
             ? this.historySelectionIndices(key) : [];
 
+        // agentY: tag the picture, approve it at a review stop (AgentYMixin).
+        if (this.agentYMenuItems) {
+            for (const el of this.agentYMenuItems(doc, menu, key, batch.length > 1 ? batch : [idx])) menu.appendChild(el);
+        }
         // Colour tags (HistoryTagsMixin), for the same items Remove acts on.
         if (this.historyTagMenuRow) {
             menu.appendChild(this.historyTagMenuRow(doc, menu, key, batch.length > 1 ? batch : [idx]));

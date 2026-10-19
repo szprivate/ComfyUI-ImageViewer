@@ -121,3 +121,17 @@ The viewer computes a fast signature for each incoming snapshot. If the same ima
 ---
 
 ← [Viewer Interface](interface.md) | Next: [Image Comparison](comparison.md)
+
+---
+
+## Working with agentY
+
+When [agentY](https://github.com/szprivate/agentY) is installed (it installs this viewer beside its ComfyUI extension and saves into it by default), the history strip grows a few things. None of them appear without agentY, except the headings.
+
+**One tab, grouped by stage.** Everything agentY saves goes into one tab (`agentY`). Pictures from a hook stage sit under a heading with the stage's name — the hook's title, e.g. *Characters* or *Places* — and a thumbnail wears what it is (a character's name) at its foot. Any node can do the same: `bEpic Send To Image Viewer` has optional `group` and `label` inputs, and a send that names a `tab_name` but has no node on the open graph is filed in the tab of that name.
+
+**Tag for agentY…** Right-click a thumbnail and choose it, give a name, and the picture becomes a reference agentY understands as `#name` — in a hook's prompt, in the `#` menu of a collector, in the project memory. It is the same thing an `agentY add tag` node with *remember* switched on makes, so it works in any workflow, not only the open one. The thumbnail shows the tag as a badge.
+
+**Approve for agentY.** When a `review` hook has stopped a run, select the pictures you want to continue with (<kbd>Ctrl</kbd>+click, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+click for a range), right-click and choose **Approve for agentY**. The review collector on the canvas is filled with exactly those files and the run continues — the same as editing the collector and pressing *Continue with these*. The row is greyed out when nothing is waiting.
+
+The two actions go through `window.agentYViewerBridge`, which agentY's extension provides.

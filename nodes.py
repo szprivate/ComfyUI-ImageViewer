@@ -431,6 +431,23 @@ def _format_option_inputs():
     }
 
 
+def _name_frames(frames, group, label):
+    """Stamp a send's group heading and label onto its viewer frames, in place.
+
+    They travel with each frame, so they survive in the viewer's history exactly
+    as long as the picture does."""
+    group = " ".join(str(group or "").split())
+    label = " ".join(str(label or "").split())
+    if not (group or label):
+        return
+    for fr in frames or []:
+        if isinstance(fr, dict):
+            if group:
+                fr["group"] = group
+            if label:
+                fr["label"] = label
+
+
 class bEpicSendToViewer:
     def __init__(self):
         self.output_dir = folder_paths.get_temp_directory()
@@ -473,7 +490,19 @@ class bEpicSendToViewer:
             # they existed still validates; each carries the formats it applies
             # to (and, for a menu, that format's entries), which is what the JS
             # shows it by. "auto" is what saving did before these existed.
-            "optional": _format_option_inputs(),
+            "optional": {
+                **_format_option_inputs(),
+                # LAST, like codec: saved workflows hold widget values by position.
+                # A caller that fills one tab from many nodes (agentY) names what
+                # each send is: the stage it belongs to, and what it is within it.
+                # The history strip shows a heading wherever the group changes.
+                "group": ("STRING", {"default": "", "tooltip":
+                          "A heading for these pictures inside the tab, e.g. the stage "
+                          "or asset type (Characters, Places)."}),
+                "label": ("STRING", {"default": "", "tooltip":
+                          "What these pictures are, e.g. a character's name. Shown on "
+                          "the thumbnail."}),
+            },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
                 "prompt": "PROMPT",
@@ -494,7 +523,8 @@ class bEpicSendToViewer:
              file_format="png", fps=24.0, filename_prefix="bEpic",
              is_sequence=False, first_frame_number=1001, padding=4,
              bit_depth="auto", compression="auto", quality=None, compress_level=None,
-             codec="auto", unique_id=None, prompt=None, extra_pnginfo=None):
+             codec="auto", group="", label="", unique_id=None, prompt=None,
+             extra_pnginfo=None):
         options = {"bit_depth": bit_depth, "compression": compression,
                    "quality": quality, "compress_level": compress_level, "codec": codec}
         safe_label = tab_name.replace(" ", "_") if tab_name else "send"
@@ -546,11 +576,15 @@ class bEpicSendToViewer:
             tab_frames = _temp_frames(input, safe_label, unique_id,
                                       self.output_dir, self.type)
 
+        _name_frames(tab_frames, group, label)
         tabs = {"tab": tab_frames}
 
         PromptServer.instance.send_sync("bepic.viewer.update", {
             "tabs": tabs,
-            "unique_id": unique_id
+            "unique_id": unique_id,
+            # Lets a send with no node on the open graph (an agent running a
+            # workflow of its own) still land in the tab it names.
+            "tab_name": tab_name or "",
         })
 
         # The files go into history as well, so they are the run's outputs to
