@@ -914,6 +914,69 @@ try:
 
             return web.json_response({"frames": frames, "missing": missing})
 
+        async def _bepic_push(request):
+            """Show files in a viewer tab that did not come through a save node.
+
+            Body: {"paths": [abs path, ...], "tab_name": "agentY", "group": "...",
+            "label": "..."}. An MCP tool's render, a script's output, a shot's
+            picture: whoever produced the file says where it belongs. The frames
+            are the ones /bepic/browse_frames builds, sent as the same
+            ``bepic.viewer.update`` message bEpicSendToViewer sends, so the page
+            files them by ``tab_name`` exactly as it does a send from a workflow
+            that is not on the open graph. Only files inside the folders the
+            viewer may open (path_access) are shown; the rest come back in
+            ``refused``.
+            """
+            if media_resolve is None:
+                return web.json_response({"error": "media resolver unavailable"}, status=500)
+            try:
+                data = await request.json()
+            except Exception:
+                data = {}
+            if not isinstance(data, dict) or not isinstance(data.get("paths"), list):
+                return web.json_response({"error": "bad request"}, status=400)
+            clean = lambda v: " ".join(str(v or "").split())[:60]
+            tab = clean(data.get("tab_name")) or "agentY"
+            group, label = clean(data.get("group")), clean(data.get("label"))
+
+            image_exts, video_exts = _browse_exts()
+            frames, refused = [], []
+            for raw in data["paths"][:_BROWSE_FRAME_CAP]:
+                if not raw or not isinstance(raw, str):
+                    continue
+                p = os.path.abspath(raw)
+                if not path_access.may_serve(p) or not os.path.isfile(p):
+                    refused.append(raw)
+                    continue
+                ext = os.path.splitext(p)[1].lower()
+                try:
+                    if ext in _MODEL_EXTS:
+                        frame = media_resolve._model_frame(p)
+                    elif ext in video_exts:
+                        frame = media_resolve._video_frame(p)
+                    elif ext in image_exts:
+                        frame = media_resolve._image_frame(p)
+                    else:
+                        refused.append(raw)
+                        continue
+                except Exception as e:
+                    print(f"[bEpicViewer] push failed for {p}: {e}")
+                    refused.append(raw)
+                    continue
+                if group:
+                    frame["group"] = group
+                if label:
+                    frame["label"] = label
+                frames.append(frame)
+
+            if frames:
+                PromptServer.instance.send_sync("bepic.viewer.update", {
+                    "tabs": {"tab": frames},
+                    "unique_id": None,
+                    "tab_name": tab,
+                })
+            return web.json_response({"ok": True, "shown": len(frames), "refused": refused})
+
         async def _bepic_view_file(request):
             """Serve a file by absolute path, from inside the allowed folders."""
             params = dict(request.query)
@@ -1665,6 +1728,8 @@ try:
         _safe_add("GET", "/bepic/browse", _bepic_browse)
         _safe_add("GET", "/api/bepic/browse", _bepic_browse)
         _safe_add("POST", "/bepic/browse_frames", _bepic_browse_frames)
+        _safe_add("POST", "/bepic/push", _bepic_push)
+        _safe_add("POST", "/api/bepic/push", _bepic_push)
         _safe_add("POST", "/api/bepic/browse_frames", _bepic_browse_frames)
         _safe_add("GET", "/bepic/view_file", _bepic_view_file)
         _safe_add("GET", "/bepic/colorspaces", _bepic_colorspaces)
