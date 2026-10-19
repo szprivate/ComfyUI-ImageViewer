@@ -1,0 +1,21 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>annotate harness</title>
+<style>html,body{margin:0;height:100%;background:#111}</style></head>
+<body>
+<script type="module">
+  window.__sent = [];
+  // What the agentY panel puts on the page (agent_viewer_bridge.js), stubbed.
+  window.agentYReviewHalted = new URLSearchParams(location.search).has("halted");
+  window.agentYViewerBridge = {
+    version: 1,
+    state: () => ({ halted: !!window.agentYReviewHalted }),
+    tag: async () => ({ ok: true }), approve: async () => ({ ok: true }),
+    feedback: async (a) => { window.__sent.push(a); return { ok: true, message: "Sent to agentY." }; },
+  };
+  const m = await import("/ext/viewer/js/bEpicViewer.js");
+  const { app } = await import("/ext/scripts/app.js");
+  for (const e of app.__extensions) { try { if (e.setup) await e.setup(); } catch (err) { console.warn("setup", e.name, err); } }
+  window.__panel = m.mountStandaloneViewer();
+  window.__ready = true;
+</script>
+</body></html>

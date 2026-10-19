@@ -154,6 +154,7 @@ Every route that takes a path only reaches ComfyUI's input, output and temp fold
 | POST | `/bepic/clear_cache` | Delete all `bEpic_*` temp files |
 | POST | `/bepic/extract_frame` | Write one frame of a clip out as a PNG and report where it landed |
 | POST | `/bepic/save_annotation` | Save an Annotation tool PNG to `output/annotations/` (decoded and re-encoded, so only an image is written) |
+| GET / POST | `/bepic/video_annotations` | The Annotation tool's marks over a clip, kept beside it as `<name>.annotations.json` (validated and clamped; no marks removes the file; allowed folders only) |
 | GET | `/bepic/viewer` | Standalone viewer-only HTML page |
 | GET | `/bepic/health` | Health check — returns 200 if running |
 
