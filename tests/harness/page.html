@@ -1,0 +1,51 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#222;height:100%}</style></head>
+<body><div id="log" style="display:none"></div>
+<script>window.addEventListener("error",(e)=>{document.title="ERR "+e.message});</script><script type="module">
+const SNIPS = [
+ {id:"a1", title:"stitch frames", language:"python", source:"run_python_node", conversation:"thread-7f3a", turn:"3c1d9e02", ts:Date.now()/1000-5,
+  code:`import os\nfrom pathlib import Path\n\n@dataclass\nclass Job:\n    """Stitch a folder of frames."""\n    folder: str\n    fps: int = 24\n\ndef stitch(job: Job, *, dry=False):\n    frames = sorted(Path(job.folder).glob("*.png"))  # numbered\n    if not frames:\n        raise ValueError(f"no frames in {job.folder!r}")\n    for i, f in enumerate(frames[:3]):\n        print(i, f.name, 0x1F, 3.5e2, None)\n    return len(frames)\n\n# a really long line to show wrapping: ${"x".repeat(160)}\n`},
+ {id:"b2", title:"Main composition", language:"tsx", source:"remotion__update_composition", conversation:"thread-7f3a", turn:"3c1d9e02", ts:Date.now()/1000-90,
+  code:`import React from "react";\nimport {AbsoluteFill} from "remotion";\n\nexport const Main: React.FC = () => {\n  return <AbsoluteFill style={{background: "#000"}}>hi</AbsoluteFill>;\n};\n`},
+ {id:"c3", title:"Reply: {\"seed\": 42}", language:"json", source:"reply", conversation:"thread-7f3a", turn:"a0b1c2d3", ts:Date.now()/1000-3600, code:`{"seed": 42, "steps": [20, 30], "ok": true, "name": null}`},
+];
+let sent = [];
+window.__fetchApi = async (p) => {
+  const j = (o, ok=true) => ({ ok, status: ok?200:404, json: async () => o });
+  if (p.startsWith("/bepic/code")) return j({ snippets: window.__history ? SNIPS.slice(1) : [] });
+  if (p.startsWith("/bepic/text")) return j({ path:"D:/x/notes.json", name:"notes.json", language:"json", code:'{\n  "hello": "world",\n  "n": [1, 2, 3]\n}\n', truncated:false });
+  return j({}, false);
+};
+window.__SNIPS = SNIPS;
+let v; try { v = await import("/extensions/viewer/bEpicViewer.js"); } catch (e) { document.title = "IMPORT " + e.message; throw e; }
+window.__v = v;
+const panel = v.mountStandaloneViewer(document.body);
+window.__panel = panel;
+window.__ready = true;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const mode = location.hash.slice(1);
+try {
+  for (let i = 0; i < 100 && !(panel.dockLayout && panel.agentCodePanel); i++) await sleep(50);
+  document.title = "mounted";
+  window.__history = true;
+  Object.assign(panel.style, { width: "1300px", height: "800px", left: "40px", top: "40px" });
+  panel.setPanelDocked("params", false);
+  if (panel.dockLayout) panel.dockLayout.right.width = 560;
+  panel.applyDockLayout();
+  let setupErr = ""; try { await window.__ext.setup(); } catch (e) { setupErr = e.message; }
+  window.__setupErr = setupErr;
+  const api = (await import("/scripts/api.js")).api;
+  // the extension's listener is registered in setup(); emulate it the same way it does
+  api.dispatch("bepic.code.update", SNIPS[0]);
+  await sleep(100);
+  if (!panel._code) panel.codePanelReceive(SNIPS[0]);
+  const dot = panel.shadowRoot.getElementById("bar-group-comfy")?.classList.contains("has-code");
+  if (mode === "file") await panel.codePanelOpenFile({ path: "D:/x/notes.json", name: "notes.json" });
+  else panel.setPanelDocked("agentCode", true);
+  await sleep(600);
+  if (mode === "wrap") { panel.shadowRoot.querySelector(".ac-btn:nth-of-type(1)"); [...panel.shadowRoot.querySelectorAll(".ac-btn")].find((b) => b.textContent === "Wrap").click(); }
+  if (mode === "pick") panel.shadowRoot.querySelectorAll(".ac-row")[1].click();
+  await sleep(300);
+  const items = panel._code.items.map((x) => x.id).join(",");
+  document.title = `done setup=${setupErr||"ok"} dot=${dot} items=${items} unseen=${panel._code.unseen}`;
+} catch (e) { document.title = "ERR " + e.message; console.error(e); }
+</script></body></html>

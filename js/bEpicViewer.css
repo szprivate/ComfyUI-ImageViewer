@@ -1458,3 +1458,45 @@ textarea.param-input {
 }
 .agenty-tag-buttons button[type=submit] { background: #f60; color: #111; border-color: #f60; }
 .agenty-tag-buttons button:disabled { opacity: 0.5; cursor: default; }
+
+/* Agent code (bEpicViewer_codePanel.js): the code the agent writes, read-only. */
+.dock-rail > .agent-code-panel { width: auto; min-width: 0; }
+.ac-root { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; font-family: sans-serif; }
+.ac-list { flex: 0 0 auto; max-height: 34%; min-height: 40px; overflow: auto; border-bottom: 1px solid #222; }
+.ac-split { flex: 0 0 5px; cursor: row-resize; background: #111; border-bottom: 1px solid #222; }
+.ac-row { padding: 4px 8px; cursor: pointer; border-left: 2px solid transparent; }
+.ac-row:hover { background: #161616; }
+.ac-row.sel { background: #1d1d1d; border-left-color: #f60; }
+.ac-row-title { color: #eee; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ac-row-meta { color: #777; font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ac-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-bottom: 1px solid #222; }
+.ac-title { flex: 1 1 auto; min-width: 0; color: #ddd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ac-lang { background: #151515; color: #ccc; border: 1px solid #333; border-radius: 3px; font-size: 11px; }
+.ac-btn { background: #1a1a1a; color: #ccc; border: 1px solid #333; border-radius: 3px; padding: 2px 8px; font-size: 11px; cursor: pointer; }
+.ac-btn:hover { background: #262626; color: #fff; }
+.ac-btn.on { color: #f60; border-color: #f60; }
+.ac-note { padding: 3px 8px; color: #c90; font-size: 11px; background: #17140a; }
+.ac-empty { padding: 12px 10px; color: #777; line-height: 1.45; }
+.ac-view {
+    flex: 1 1 auto; min-height: 0; overflow: auto; counter-reset: ln;
+    background: #0a0a0a; padding: 6px 0;
+    font: 12px/1.5 Consolas, "Cascadia Mono", "SF Mono", Menlo, monospace; color: #d4d4d4; tab-size: 4;
+}
+.ac-line { display: flex; counter-increment: ln; min-width: max-content; }
+.ac-view.wrap .ac-line { min-width: 0; }
+.ac-line::before {
+    content: counter(ln); flex: 0 0 auto; box-sizing: content-box;
+    width: calc(var(--ac-digits, 2) * 1ch); padding: 0 10px 0 8px; margin-right: 8px;
+    text-align: right; color: #555; border-right: 1px solid #222; user-select: none; position: sticky; left: 0; background: #0a0a0a;
+}
+.ac-text { white-space: pre; flex: 1 1 auto; padding-right: 12px; }
+.ac-view.wrap .ac-text { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.ac-more { padding: 6px 12px; color: #777; font-style: italic; }
+.tk-kw { color: #c586c0; } .tk-bi { color: #4fc1ff; } .tk-str { color: #ce9178; }
+.tk-num { color: #b5cea8; } .tk-com { color: #6a9955; font-style: italic; }
+.tk-fn { color: #dcdcaa; } .tk-cls { color: #4ec9b0; } .tk-dec { color: #ffd479; }
+.tk-key { color: #9cdcfe; } .tk-op { color: #9a9a9a; } .tk-var { color: #9cdcfe; }
+.tk-tag { color: #569cd6; } .tk-head { color: #569cd6; font-weight: bold; }
+/* The bar's ComfyUI group lights a dot when the agent sent code you have not opened. */
+.bar-group.has-code { position: relative; }
+.bar-group.has-code::after { content: ""; position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: #f60; }

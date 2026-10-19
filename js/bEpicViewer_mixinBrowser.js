@@ -24,7 +24,7 @@ import { pref, prefKinds, setPref, PREF } from "./bEpicViewer_settings.js";
 // to a poster frame for them, because nothing in the browser can decode them.
 const _PLAYABLE_VIDEO = /\.(mp4|m4v|mov|webm|ogv)$/i;
 
-const _KIND_GLYPH = { dir: "📁", image: "🖼", video: "🎬", model: "🧊", other: "📄" };
+const _KIND_GLYPH = { dir: "📁", image: "🖼", video: "🎬", model: "🧊", text: "📝", other: "📄" };
 
 /** The kinds this viewer can actually open. Everything else is along to be seen. */
 const _OPENABLE = new Set(["image", "video", "model"]);
@@ -701,6 +701,14 @@ export const BrowserMixin = {
         this._setBrowserMeta(file, "", seq);
         const url = this.buildImgUrl({ path: file.path, external: true });
 
+        if (file.kind === "text") {
+            // Code and text are read in the Agent code panel, which shares this
+            // preview's job; the preview pane just says where it went.
+            if (msg) { msg.textContent = "Shown in the Agent code panel."; msg.style.display = "block"; }
+            if (this.codePanelOpenFile) this.codePanelOpenFile(file);
+            return;
+        }
+
         if (!_OPENABLE.has(file.kind)) {
             // Listed, but not something the viewer can show: say which and stop
             // there rather than firing a request that can only fail.
@@ -900,6 +908,12 @@ export const BrowserMixin = {
         const picked = files || this._selectedBrowserFiles();
         const all    = picked.length > 0 ? picked : this._browserFiles;
         const list   = all.filter((f) => _OPENABLE.has(f.kind));
+        // A text file opens in the Agent code panel (a double-click on one).
+        const texts  = picked.filter((f) => f.kind === "text");
+        if (list.length === 0 && texts.length && this.codePanelOpenFile) {
+            this.codePanelOpenFile(texts[0]);
+            return;
+        }
         if (list.length === 0) {
             if (all.length) {
                 this._setBrowserStatus(all.length === 1

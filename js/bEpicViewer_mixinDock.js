@@ -65,6 +65,9 @@ const DOCK_PANELS = {
     // a cut's tab is; the bar's Timeline group opens them.
     editInspector: { prop: "editInspectorPanel", label: "Inspector", minW: 290, minH: 200, defaultRail: "right" },
     editEffects: { prop: "editEffectsPanel", label: "Effects", minW: 220, minH: 150, defaultRail: "left" },
+    // The code the agent writes, and text files from the browser
+    // (bEpicViewer_codePanel.js). Read-only for now.
+    agentCode: { prop: "agentCodePanel", label: "Agent code", minW: 240, minH: 160, defaultRail: "right" },
     // (The drawing tools' options have no panel of their own: while a tool is
     // on they take the Parameters panel over — ToolsMixin._toolShowDock.)
 };
@@ -160,6 +163,7 @@ export const DockMixin = {
                                            { id: "channels", size: 1, hidden: true },
                                            { id: "rotoCurves", size: 1, hidden: true },
                                            { id: "paramCurves", size: 1, hidden: true },
+                                           { id: "agentCode", size: 1, hidden: true },
                                            { id: "params",  size: 1, hidden: false }] },
             // A graph over time wants width: the Curve Editor lives under the picture.
             bottom: { height: 240, panels: [{ id: "curves", size: 1, hidden: true }] },
@@ -541,6 +545,8 @@ export const DockMixin = {
             if (this.rotoRefreshCurves) this.rotoRefreshCurves();
         } else if (id === "paramCurves") {
             if (this.paramRefreshCurves) this.paramRefreshCurves();
+        } else if (id === "agentCode") {
+            if (this._codeOnShown) this._codeOnShown();
         } else if (id === "editTimeline") {
             if (this.editTlRefresh) this.editTlRefresh();
         } else if (id === "channels") {
