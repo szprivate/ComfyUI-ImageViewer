@@ -14,6 +14,7 @@ import { ColorMixin }    from "./bEpicViewer_color.js";
 import { ToolsMixin }    from "./bEpicViewer_tools.js";
 import { RotoMixin }     from "./bEpicViewer_roto.js";
 import { AnnotateMixin } from "./bEpicViewer_annotate.js";
+import { AnnotateVideoMixin } from "./bEpicViewer_annotateVideo.js";
 import { DnDMixin }      from "./bEpicViewer_mixinDnD.js";
 import { BrowserMixin }  from "./bEpicViewer_mixinBrowser.js";
 import { DockMixin }     from "./bEpicViewer_mixinDock.js";
@@ -1275,6 +1276,7 @@ Object.assign(
     ToolsMixin,
     RotoMixin,
     AnnotateMixin,
+    AnnotateVideoMixin,
     DnDMixin,
     BrowserMixin,
     DockMixin,

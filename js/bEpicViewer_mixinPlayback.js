@@ -556,6 +556,8 @@ export const PlaybackMixin = {
     // setFrame, videos in _videoSeek's branch and in _videoOnTimeUpdate — or the
     // overlay only catches up on the next unrelated redraw (a viewport resize).
     _toolsFrameChanged() {
+        // Annotation marks over a clip are shown on their frames (AnnotateVideoMixin).
+        this._annotFrameChanged?.();
         // Keyed node parameters show their value at the frame (ParamAnimMixin).
         this.paramAnimFrameChanged?.();
         // The Edit panel's playhead, and which shot is lit (EditTimelineMixin).

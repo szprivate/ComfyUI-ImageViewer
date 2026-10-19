@@ -384,6 +384,9 @@ export const ToolsMixin = {
 
     // ── geometry / mapping ────────────────────────────────────────────────────
     _toolImgSize() {
+        // Over a clip the picture is the <video>, whose size imgBase knows nothing of.
+        if (this._videoMode && this.videoBase && this.videoBase.videoWidth)
+            return { w: this.videoBase.videoWidth, h: this.videoBase.videoHeight };
         const w = this.imgBase?.naturalWidth || 0;
         const h = this.imgBase?.naturalHeight || 0;
         return { w, h };

@@ -1201,6 +1201,53 @@ try:
                 "path": os.path.abspath(fpath),
             })
 
+        # ── marks on a film (annotation_io.py) ──────────────────────────────────
+        def _annot_target(params):
+            """(media, sidecar, error_response) for the film a request names; the file's
+            own reach applies - a film the viewer may show may have marks beside it."""
+            from . import annotation_io
+            media, allowed, error = _timeline_media(params)
+            if error:
+                return None, None, web.Response(status=400, text=error)
+            if not allowed:
+                return None, None, web.Response(status=403, text=path_access.refusal(media))
+            return media, annotation_io.sidecar_for(media), None
+
+        async def _bepic_video_annotations(request):
+            """The marks stored beside a film: {items: [...]} (empty when none)."""
+            from . import annotation_io
+            media, side, bad = _annot_target(dict(request.query))
+            if bad is not None:
+                return bad
+            doc = await asyncio.get_running_loop().run_in_executor(None, annotation_io.read, side)
+            doc = dict(doc or {"version": annotation_io.VERSION, "items": []})
+            # Where the film is, so the page can tell the agent: its own idea of the
+            # file is a ComfyUI reference, which means nothing outside ComfyUI.
+            doc["media_path"] = media
+            return web.json_response(doc, headers={"Cache-Control": "no-cache"})
+
+        async def _bepic_video_annotations_save(request):
+            """Replace the marks beside a film. No marks removes the file."""
+            from . import annotation_io
+            try:
+                body = await request.json()
+            except Exception:
+                return web.Response(status=400, text="the request is not JSON")
+            if not isinstance(body, dict):
+                return web.Response(status=400, text="the request is not an object")
+            media, side, bad = _annot_target(body)
+            if bad is not None:
+                return bad
+            try:
+                doc = await asyncio.get_running_loop().run_in_executor(
+                    None, annotation_io.save, side, body)
+            except ValueError as exc:
+                return web.Response(status=422, text=f"not saved: {exc}")
+            except OSError as exc:
+                return web.Response(status=500, text=f"not saved: {exc}")
+            return web.json_response({"ok": True, "file": os.path.basename(side),
+                                      "path": side, "media_path": media, "count": len(doc["items"]) if doc else 0})
+
         async def _bepic_extract_frame(request):
             """Write one frame of a clip out as a PNG file and say where it landed.
 
@@ -1775,6 +1822,10 @@ try:
         _safe_add("POST", "/api/bepic/previz_publish", _bepic_previz_publish)
         _safe_add("GET", "/bepic/raw_view", _bepic_raw_view)
         _safe_add("GET", "/api/bepic/raw_view", _bepic_raw_view)
+        _safe_add("GET", "/bepic/video_annotations", _bepic_video_annotations)
+        _safe_add("GET", "/api/bepic/video_annotations", _bepic_video_annotations)
+        _safe_add("POST", "/bepic/video_annotations", _bepic_video_annotations_save)
+        _safe_add("POST", "/api/bepic/video_annotations", _bepic_video_annotations_save)
         _safe_add("POST", "/bepic/probe_paths", _bepic_probe_paths)
         _safe_add("POST", "/api/bepic/probe_paths", _bepic_probe_paths)
         _safe_add("POST", "/bepic/clear_cache", _bepic_clear_cache)
