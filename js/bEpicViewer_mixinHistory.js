@@ -315,20 +315,28 @@ export const HistoryMixin = {
     // Transient by design: not persisted, and dropped whenever the stack it
     // indexes into shifts underneath it.
 
+    // The selection holds the snapshots themselves (the stack's own array for
+    // each frame), never their positions or file paths: two renders of the same
+    // file are two items, and a new render shifting the strip moves nothing.
+
     _historySel() {
         if (!this._historySelSet) this._historySelSet = new Set();
         return this._historySelSet;
     },
 
     isHistoryItemSelected(key, idx) {
-        return this._historySelKey === key && this._historySel().has(idx);
+        const snap = (this.history[key] || [])[idx];
+        return this._historySelKey === key && !!snap && this._historySel().has(snap);
     },
 
     /** The selected indices for a tab, ascending. Empty when it isn't the one. */
     historySelectionIndices(key = this.activeTab) {
         if (this._historySelKey !== key) return [];
         const stack = this.history[key] || [];
-        return [...this._historySel()].filter((i) => i >= 0 && i < stack.length).sort((a, b) => a - b);
+        const set = this._historySel();
+        const out = [];
+        stack.forEach((snap, i) => { if (set.has(snap)) out.push(i); });
+        return out;
     },
 
     /** `[{ imgObj, snapshot }]` for the selection, in strip order. */
@@ -347,28 +355,45 @@ export const HistoryMixin = {
         this._paintHistorySelection();
     },
 
+    /** A plain click: this item alone is the selection, and the anchor for what
+     *  follows (Ctrl+click adds to it, Ctrl+Shift+click ranges from it). */
+    startHistorySelection(key, idx) {
+        const snap = (this.history[key] || [])[idx];
+        this._historySelKey = key;
+        this._historySel().clear();
+        this._historySelAnchor = null;
+        if (snap) {
+            this._historySel().add(snap);
+            this._historySelAnchor = snap;
+        }
+        this._paintHistorySelection();
+    },
+
     toggleHistorySelection(key, idx) {
+        const snap = (this.history[key] || [])[idx];
+        if (!snap) return;
         if (this._historySelKey !== key) {
             this._historySelKey = key;
             this._historySel().clear();
         }
         const set = this._historySel();
-        if (set.has(idx)) set.delete(idx);
-        else set.add(idx);
-        this._historySelAnchor = set.has(idx) ? idx : null;
+        if (set.has(snap)) set.delete(snap);
+        else set.add(snap);
+        this._historySelAnchor = set.has(snap) ? snap : null;
         this._paintHistorySelection();
     },
 
     extendHistorySelection(key, idx) {
-        if (this._historySelKey !== key || this._historySelAnchor == null) {
+        const stack = this.history[key] || [];
+        const from = this._historySelKey === key && this._historySelAnchor
+            ? stack.indexOf(this._historySelAnchor) : -1;
+        if (from < 0) {
             this.toggleHistorySelection(key, idx);
             return;
         }
         const set = this._historySel();
-        const [lo, hi] = this._historySelAnchor < idx
-            ? [this._historySelAnchor, idx]
-            : [idx, this._historySelAnchor];
-        for (let i = lo; i <= hi; i++) set.add(i);
+        const [lo, hi] = from < idx ? [from, idx] : [idx, from];
+        for (let i = lo; i <= hi; i++) if (stack[i]) set.add(stack[i]);
         this._paintHistorySelection();
     },
 
@@ -376,9 +401,12 @@ export const HistoryMixin = {
     // every thumbnail, which is far too much for a click that changed nothing
     // but which items are highlighted. renderHistoryPanel applies the same
     // classes from state, so a rebuild for other reasons keeps them.
+    // A lone selected item is just the open one (it has its own border), so the
+    // highlight only shows once there are two or more.
     _paintHistorySelection() {
         if (!this.historyStrip) return;
-        const selected = new Set(this.historySelectionIndices(this.activeTab));
+        const picked = this.historySelectionIndices(this.activeTab);
+        const selected = new Set(picked.length > 1 ? picked : []);
         for (const thumb of this.historyStrip.children) {
             const idx = Number(thumb.dataset ? thumb.dataset.idx : NaN);
             if (Number.isInteger(idx)) thumb.classList.toggle('multi', selected.has(idx));
@@ -399,13 +427,7 @@ export const HistoryMixin = {
             this.currentHistoryIndex = Math.min(this.currentHistoryIndex + 1, Math.max(0, stack.length - 1));
         }
 
-        // Everything already in the strip moved down one; the selection has to
-        // move with it or it would silently come to mean other snapshots.
-        if (this._historySelKey === key) {
-            const shifted = new Set([...this._historySel()].map((i) => i + 1));
-            this._historySelSet = shifted;
-            if (Number.isInteger(this._historySelAnchor)) this._historySelAnchor += 1;
-        }
+        // The selection holds the snapshots themselves, so it needs no shifting.
 
         if (this.historyCompare && this.historyCompare.key === key) {
             this.historyCompare.baseIdx = Math.min(this.historyCompare.baseIdx + 1, Math.max(0, stack.length - 1));
@@ -524,7 +546,7 @@ export const HistoryMixin = {
             thumb.dataset.idx = String(idx);
             const what = imgObj && imgObj.label ? ` - ${imgObj.label}` : '';
             thumb.title = `History ${idx + 1}${what}\n` +
-                          `Ctrl+click to add to the selection, Ctrl+Shift+click for a range\n` +
+                          `Click, then Ctrl+click to add to the selection, Ctrl+Shift+click for a range\n` +
                           `Shift+click to compare against the open snapshot\n` +
                           `Right-click to tag it with a colour`;
             // Drag source: drop onto the ComfyUI graph to make a loader node. The
@@ -546,7 +568,7 @@ export const HistoryMixin = {
                 if (idx === this.historyCompare.otherIdx) thumb.classList.add('compare');
             }
 
-            if (this.isHistoryItemSelected(key, idx)) thumb.classList.add('multi');
+            if (this.isHistoryItemSelected(key, idx) && this.historySelectionIndices(key).length > 1) thumb.classList.add('multi');
 
             // Don't preventDefault here — that would block the native drag start
             // used to drop thumbnails onto the graph. stopPropagation still keeps
@@ -564,8 +586,9 @@ export const HistoryMixin = {
                     return;
                 }
 
-                // Any other click is about the view, so the selection goes.
-                this.clearHistorySelection();
+                // Any other click is about the view, but the item it opens is
+                // also where a selection starts: Ctrl+click then adds to it.
+                this.startHistorySelection(key, idx);
 
                 if (ev.shiftKey && this.isViewingHistory && this.currentHistoryKey === key) {
                     if (!this.historyCompare) {
