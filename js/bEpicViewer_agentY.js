@@ -48,6 +48,32 @@ function bridge() {
 
 export const AgentYMixin = {
 
+    // ── "show it to me" (POST /bepic/push with focus / panel) ───────────────
+
+    /**
+     * An agent asked for what it just pushed to be looked at. `req`:
+     * { focus, select (index of the item to show), play, panel: "edit" }.
+     * Brings the viewer up (open or closed), goes to the tab, shows the item,
+     * plays it, and - for panel "edit" - opens the Edit panel on the cut beside
+     * that film.
+     */
+    async agentOpenRequest(req, key) {
+        if (!req || !key || !this.allTabs[key]) return;
+        const api = window.bEpicViewerApi || {};
+        try { if (api.show) api.show(); } catch (_) { /* already up */ }
+        if (this.historyCompare) this.exitHistoryCompare?.();
+        const items = this.allTabs[key];
+        const index = Math.max(0, Math.min(Number(req.select) || 0, items.length - 1));
+        if (this.activeTab !== key) this.switchTab(key);
+        if (req.panel === "edit" && this.editTlOpenCutOf) {
+            const opened = await this.editTlOpenCutOf(items[index]);
+            if (opened) return;            // the cut's own tab is up: the Edit panel is the view
+        }
+        const bounds = this.getTimelineBounds ? this.getTimelineBounds(items.length) : { min: 0 };
+        this.setFrame((bounds.min || 0) + index);
+        if (req.play && this.play) this.play();
+    },
+
     agentYAvailable() { return !!bridge(); },
 
     // ── groups in the history strip ──────────────────────────────────────────
