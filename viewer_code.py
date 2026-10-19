@@ -123,5 +123,7 @@ def read_text_file(path: str) -> tuple[str, str, bool]:
     cut = len(raw) > MAX_TEXT_FILE
     if b"\0" in raw[:4096]:
         raise ValueError("binary file")
-    text = raw[:MAX_TEXT_FILE].decode("utf-8", "replace")
+    text = raw[:MAX_TEXT_FILE].decode("utf-8", "replace").replace("
+", "
+")
     return text, language_of(path), cut
