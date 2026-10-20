@@ -283,6 +283,17 @@ The render is what the viewport draws, at the size you asked for, with the same 
 
 **Export → Save scene…** and **+ → Load scene…** keep a scene as a file in `output/3d_scenes`, for reuse across workflows.
 
+### Rendering a view with World Labs Atlas
+
+A world made by agentY's [World Labs Atlas](https://github.com/szprivate/agentY) tools (a folder with a `world.json` and a `world.glb`, under `output/3d_scenes/atlas/<name>/`) is an ordinary model here, with one extra: the Previz panel shows an **Atlas** button. Ask agentY to *open the Atlas world in the viewer* (it opens the scene looking through a 16:9 camera at the first picture's viewpoint), navigate with **Alt** + the mouse as with any camera (the view you look through IS that camera), and press **Atlas**.
+
+| Setting | What it does |
+|---|---|
+| **Upscale** | None (1280 x 720, Atlas' own size), 2x or 4x: a local ComfyUI upscale model makes the picture larger. Needs ComfyUI and an upscale model in `models/upscale_models`; without them the 1280 x 720 picture is kept and the dialog says why. |
+| **Add this view to the world** | The new view joins the world's mesh, so later renders of the same place stay consistent with it. |
+
+**Render view with Atlas** sends the camera you are looking through to agentY (through ComfyUI: the viewer itself has no World Labs key). Atlas paints a new picture of the same place from that camera, which takes from under a minute to a few. The picture opens in its own tab, **Atlas: <world>**, shown large, and lands as a loader node on the canvas; it is also saved in the world's `renders/` folder (`render_000.png`, `render_000_x2.png`) with a note of the camera. A looking-through camera whose frame is 16:9 gives exactly what its frame shows; the free camera (or another shape of frame) gives a 16:9 picture that covers what you see. Each render is one billed World Labs task. Needs agentY running; **Esc** closes the dialog while nothing is running.
+
 ### Image Planes
 
 **+ → Image plane…** stands a picture in the scene: the plate you are matching, a reference, a matte painting, a camera's backplate.

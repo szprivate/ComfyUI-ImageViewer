@@ -37,6 +37,11 @@ except Exception:  # pragma: no cover
     previz_shot = None
 
 try:
+    from . import atlas_render
+except Exception:  # pragma: no cover
+    atlas_render = None
+
+try:
     from . import abc_io
 except Exception:  # pragma: no cover
     abc_io = None
@@ -1080,6 +1085,36 @@ try:
                 return web.json_response({"error": "unknown shot"}, status=404)
             return web.json_response(_shots.public(job))
 
+        # --- Render with World Labs Atlas (atlas_render.py) -------------------
+        # The viewer has neither agenty_core nor the World Labs key: these two routes relay to the
+        # agentY host, which renders (the same core function the agent's atlas_render_view runs).
+        async def _bepic_atlas_render(request):
+            """Body: {"world_path": ".../world.glb", "camera": {"camera_world": [16], "model_world": [16],
+            "fov", "aspect", "gated"}, "upscale": 0|2|4, "add_to_world": false}. Answers at once with an ``id``;
+            poll GET /bepic/atlas_render?id=<id> (``state``: running | done | error, ``path`` when done)."""
+            if atlas_render is None:
+                return web.json_response({"error": "atlas render unavailable"}, status=500)
+            try:
+                data = await request.json()
+            except Exception:
+                data = None
+            base = f"{request.scheme}://{request.host}"
+            try:
+                out = await asyncio.to_thread(atlas_render.start_render, base, data)
+            except atlas_render.RelayError as e:
+                return web.json_response({"error": str(e)}, status=e.status)
+            return web.json_response(out)
+
+        async def _bepic_atlas_render_state(request):
+            if atlas_render is None:
+                return web.json_response({"error": "atlas render unavailable"}, status=500)
+            base = f"{request.scheme}://{request.host}"
+            try:
+                out = await asyncio.to_thread(atlas_render.render_state, base, request.query.get("id") or "")
+            except atlas_render.RelayError as e:
+                return web.json_response({"error": str(e)}, status=e.status)
+            return web.json_response(out)
+
         # --- Agent code panel (viewer_code.py) -------------------------------
         _code_store = viewer_code.CodeStore() if viewer_code is not None else None
 
@@ -1941,6 +1976,10 @@ try:
         _safe_add("POST", "/api/bepic/previz_shot", _bepic_previz_shot)
         _safe_add("POST", "/bepic/previz_shot_done", _bepic_previz_shot_done)
         _safe_add("POST", "/api/bepic/previz_shot_done", _bepic_previz_shot_done)
+        _safe_add("POST", "/bepic/atlas_render", _bepic_atlas_render)
+        _safe_add("POST", "/api/bepic/atlas_render", _bepic_atlas_render)
+        _safe_add("GET", "/bepic/atlas_render", _bepic_atlas_render_state)
+        _safe_add("GET", "/api/bepic/atlas_render", _bepic_atlas_render_state)
         _safe_add("GET", "/bepic/previz_shot", _bepic_previz_shot_state)
         _safe_add("GET", "/api/bepic/previz_shot", _bepic_previz_shot_state)
         _safe_add("POST", "/api/bepic/push", _bepic_push)
