@@ -55,8 +55,9 @@ const watchedNodeIds  = new Set();
 // graph: 📂 Open Folder, 📥 dropped files, and 🖼/🎬 "Send to Image Viewer".
 // Nothing in the graph backs them, so the stale-tab sweep must leave them be.
 // "world:" tabs come from the bEpic Worlds pack (or an agent through it).
+// "previz:" tabs are shots an agent asked for (previz_shot.py).
 // "edit:" tabs are cuts being worked on in the Edit panel.
-const USER_TAB_PREFIXES = ["folder_", "dropped_", "loader_", "world:", "edit:", "named:"];
+const USER_TAB_PREFIXES = ["folder_", "dropped_", "loader_", "world:", "previz:", "edit:", "named:"];
 let isViewerPanelToggledOn = false;
 let _actionBarStateRetryTimer = null;
 
