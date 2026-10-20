@@ -32,6 +32,11 @@ except Exception:  # pragma: no cover
     previz = None
 
 try:
+    from . import previz_shot
+except Exception:  # pragma: no cover
+    previz_shot = None
+
+try:
     from . import abc_io
 except Exception:  # pragma: no cover
     abc_io = None
@@ -1011,6 +1016,70 @@ try:
                                       "opened": bool(opened), "edit": bool(opened and opened.get("panel")),
                                       "notes": notes})
 
+        # --- Previz shots for an agent (previz_shot.py) ----------------------
+        _shots = previz_shot.ShotBook() if previz_shot is not None else None
+
+        async def _bepic_previz_shot(request):
+            """Open a previz scene in the viewer and (optionally) render a camera through it.
+
+            Body: {"scene": {...previz scene...}, "name": "shot", "render": {camera,
+            start, end, fps, width, height, format, quality, shading, background, aa},
+            "add_node": true, "focus": true}. The scene is saved under output/3d_scenes,
+            sent to the page as the tab ``previz:<name>`` and, when ``render`` is given,
+            the page renders it exactly as Export > Render does and reports back. Answers
+            at once with an ``id``; poll GET /bepic/previz_shot?id=<id> for the state
+            (``queued`` | ``rendering`` | ``done`` | ``error``) and, when done, ``path``.
+            """
+            if _shots is None or previz is None:
+                return web.json_response({"error": "previz unavailable"}, status=500)
+            try:
+                data = await request.json()
+            except Exception:
+                data = None
+            try:
+                job = _shots.new_job(data)
+            except ValueError as e:
+                return web.json_response({"error": str(e)}, status=400)
+            try:
+                saved = previz.save_scene(job["name"], job["scene"])
+            except OSError as e:
+                return web.json_response({"error": str(e)}, status=500)
+            PromptServer.instance.send_sync("bepic.viewer.update", {
+                "tabs": {job["key"]: []},
+                "unique_id": None,
+                "scene_data": previz_shot.json_dumps(job["scene"]),
+                "scene_replace": True,
+                "tab_label": f"Previz: {job['name']}",
+                "focus_tab": bool(job["focus"]),
+            })
+            if job["render"] is not None:
+                PromptServer.instance.send_sync("bepic.previz.render", {
+                    "id": job["id"], "key": job["key"], "name": job["name"],
+                    "render": job["render"], "add_node": job["add_node"],
+                })
+            return web.json_response({"ok": True, "id": job["id"], "key": job["key"],
+                                      "scene_file": saved, "state": job["state"]})
+
+        async def _bepic_previz_shot_done(request):
+            """The page's report on a shot it was asked to render (progress or result)."""
+            if _shots is None:
+                return web.json_response({"error": "previz unavailable"}, status=500)
+            try:
+                data = await request.json()
+            except Exception:
+                data = None
+            if not isinstance(data, dict) or not _shots.report(data):
+                return web.json_response({"error": "unknown shot"}, status=404)
+            return web.json_response({"ok": True})
+
+        async def _bepic_previz_shot_state(request):
+            if _shots is None:
+                return web.json_response({"error": "previz unavailable"}, status=500)
+            job = _shots.get(request.query.get("id") or "")
+            if job is None:
+                return web.json_response({"error": "unknown shot"}, status=404)
+            return web.json_response(_shots.public(job))
+
         # --- Agent code panel (viewer_code.py) -------------------------------
         _code_store = viewer_code.CodeStore() if viewer_code is not None else None
 
@@ -1868,6 +1937,12 @@ try:
         _safe_add("GET", "/bepic/text", _bepic_text)
         _safe_add("GET", "/api/bepic/text", _bepic_text)
         _safe_add("POST", "/bepic/push", _bepic_push)
+        _safe_add("POST", "/bepic/previz_shot", _bepic_previz_shot)
+        _safe_add("POST", "/api/bepic/previz_shot", _bepic_previz_shot)
+        _safe_add("POST", "/bepic/previz_shot_done", _bepic_previz_shot_done)
+        _safe_add("POST", "/api/bepic/previz_shot_done", _bepic_previz_shot_done)
+        _safe_add("GET", "/bepic/previz_shot", _bepic_previz_shot_state)
+        _safe_add("GET", "/api/bepic/previz_shot", _bepic_previz_shot_state)
         _safe_add("POST", "/api/bepic/push", _bepic_push)
         _safe_add("POST", "/api/bepic/browse_frames", _bepic_browse_frames)
         _safe_add("GET", "/bepic/view_file", _bepic_view_file)

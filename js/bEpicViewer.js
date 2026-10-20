@@ -32,6 +32,7 @@ import { ParamCurvesMixin } from "./bEpicViewer_paramCurves.js";
 import { CodePanelMixin } from "./bEpicViewer_codePanel.js";
 import { PrevizChannelsMixin } from "./bEpicViewer_previzChannels.js";
 import { PrevizRenderMixin } from "./bEpicViewer_previzRender.js";
+import { PrevizShotMixin } from "./bEpicViewer_previzShot.js";
 import { PrevizUndoMixin } from "./bEpicViewer_previzUndo.js";
 import { EditTimelineMixin } from "./bEpicViewer_editTimeline.js";
 import { EditPlayMixin } from "./bEpicViewer_editPlay.js";
@@ -1304,6 +1305,7 @@ Object.assign(
     CodePanelMixin,
     PrevizChannelsMixin,
     PrevizRenderMixin,
+    PrevizShotMixin,
     PrevizUndoMixin,
     EditTimelineMixin,
     EditPlayMixin,
@@ -1450,6 +1452,12 @@ app.registerExtension({
         api.addEventListener("bepic.world.calibrate", (e) => {
             const name = e.detail && e.detail.name;
             if (name && globalViewerPanel.previzMatchWorld) globalViewerPanel.previzMatchWorld(name);
+        });
+
+        // A previz shot an agent asked for (previz_shot.py): render it and report back.
+        api.addEventListener("bepic.previz.render", (e) => {
+            try { globalViewerPanel?.previzShotRun?.(e.detail); }
+            catch (err) { console.warn("bEpicViewer: previz shot not run", err); }
         });
 
         // Code the agent produced (viewer_code.py): the Agent code panel's feed.

@@ -1007,6 +1007,30 @@ export class Model3DView {
     // That is what lets the outliner, the gizmo and the timeline all just hand
     // the scene back after every edit.
 
+    /** Count a load in flight, so whenLoaded() can tell when the scene is all here. */
+    _tracked(promise) {
+        this._inflight = (this._inflight || 0) + 1;
+        const done = () => { this._inflight = Math.max(0, (this._inflight || 1) - 1); };
+        promise.then(done, done);
+        return promise;
+    }
+
+    /**
+     * Resolves true once nothing is loading (held for a moment, so the setScene
+     * a tab switch starts is counted), false after `timeoutMs`. A render waits
+     * on this: drawing a shot before its model arrives films an empty set.
+     */
+    async whenLoaded(timeoutMs = 120000) {
+        const t0 = Date.now();
+        let quiet = 0;
+        while (Date.now() - t0 < timeoutMs) {
+            quiet = this._inflight ? 0 : quiet + 1;
+            if (quiet >= 4) return true;
+            await new Promise((r) => setTimeout(r, 100));
+        }
+        return false;
+    }
+
     async setScene(scene, frame = this.sceneFrame) {
         await this.ensure();
         this.scene3d = scene;
@@ -1018,7 +1042,7 @@ export class Model3DView {
             wanted.add(item.id);
             const entry = this._entries.get(item.id);
             if (!entry) {
-                pending.push(this._addEntry(item));
+                pending.push(this._tracked(this._addEntry(item)));
                 continue;
             }
             entry.item = item;
@@ -1027,13 +1051,13 @@ export class Model3DView {
             // transform, which applyFrame picks up.
             if (item.kind === "model" && entry.key !== this._srcKey(item.src)) {
                 this._disposeEntry(entry, false);
-                pending.push(this._loadEntry(entry, item));
+                pending.push(this._tracked(this._loadEntry(entry, item)));
             } else if (this._isWorldKind(item)) {
                 // A world item rebuilds when its settings change; a scatter
                 // also when the ground it grows on does.
                 if (entry.key !== this._worldKey(item)) {
                     this._worldDispose(entry);
-                    pending.push(this._worldBuild(entry, item));
+                    pending.push(this._tracked(this._worldBuild(entry, item)));
                 }
             } else if (item.kind === "primitive") {
                 const type = (item.primitive && item.primitive.type) || "box";
