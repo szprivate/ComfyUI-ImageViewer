@@ -33,6 +33,7 @@ import { CodePanelMixin } from "./bEpicViewer_codePanel.js";
 import { PrevizChannelsMixin } from "./bEpicViewer_previzChannels.js";
 import { PrevizRenderMixin } from "./bEpicViewer_previzRender.js";
 import { PrevizShotMixin } from "./bEpicViewer_previzShot.js";
+import { PrevizAtlasMixin } from "./bEpicViewer_previzAtlas.js";
 import { PrevizUndoMixin } from "./bEpicViewer_previzUndo.js";
 import { EditTimelineMixin } from "./bEpicViewer_editTimeline.js";
 import { EditPlayMixin } from "./bEpicViewer_editPlay.js";
@@ -1306,6 +1307,7 @@ Object.assign(
     PrevizChannelsMixin,
     PrevizRenderMixin,
     PrevizShotMixin,
+    PrevizAtlasMixin,
     PrevizUndoMixin,
     EditTimelineMixin,
     EditPlayMixin,

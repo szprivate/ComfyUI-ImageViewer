@@ -1077,7 +1077,13 @@ export const PrevizMixin = {
         const noteBtn = el("button", "previz-btn previz-world", "Note");
         noteBtn.title = "Pin a note to a spot — Shift+N. The agent that built the world reads it, with a snapshot";
         noteBtn.onclick = () => this.previzFeedbackPlace();
-        actions.append(newBtn, addBtn, editBtn, outBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn);
+        // An Atlas world (world.glb from an Atlas folder): paint a new view from the camera you look through.
+        const atlasBtn = el("button", "previz-btn previz-world", "Atlas");
+        atlasBtn.title = "Render with Atlas: World Labs paints a new picture of this place from the camera "
+                       + "you are looking through";
+        atlasBtn.style.display = "none";
+        atlasBtn.onclick = () => this.previzAtlasDialog();
+        actions.append(newBtn, addBtn, editBtn, outBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn);
 
         const list = el("div", "previz-list");
         // The space below the tree is "no parent": dropping a row here lifts it
@@ -1102,7 +1108,7 @@ export const PrevizMixin = {
         this._previzCloseAddMenu();
         host.querySelectorAll(":scope > .previz-body").forEach((n) => n.remove());
         host.appendChild(root);
-        this._previzUI = { root, list, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn };
+        this._previzUI = { root, list, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn };
         return this._previzUI;
     },
 
@@ -1454,6 +1460,7 @@ export const PrevizMixin = {
             ui.matchBtn.style.display = world ? "" : "none";
             ui.walkBtn.classList.toggle("active", !!(this._model3d && this._model3d.walking));
         }
+        if (ui.atlasBtn) ui.atlasBtn.style.display = this.previzAtlasItem && this.previzAtlasItem() ? "" : "none";
         // Previz coming on is what opens the panel. After that the dock owns
         // it, so one put away by hand stays away — and stays undrawn, which is
         // worth having while playback calls through here every frame.
