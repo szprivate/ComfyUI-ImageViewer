@@ -35,6 +35,8 @@
 // The numbers live on the key itself — see the tangent notes in
 // bEpicViewer_scene3d.js.
 import * as S from "./bEpicViewer_scene3d.js";
+import { eulerFilter } from "./bEpicViewer_eulerFilter.js";
+import { notice } from "./bEpicViewer_exportUI.js";
 import { buildCurvePanel, svgLine, tangentArm } from "./bEpicViewer_curveUI.js";
 
 // Every channel an item can have, in the order they are listed. Colour is by
@@ -55,6 +57,9 @@ const CHANNELS = [
     { key: "pivot.2", prop: "pivot", axis: 2, label: "pivot.z", color: "#8aa8c9" },
     { key: "fov", prop: "fov", axis: 0, label: "fov", color: "#ffd24d" },
 ];
+
+const EULER_TIP = "Euler filter — removes 180° flips between rotation keys so turns interpolate " +
+                 "smoothly; the poses at the keys don't change.";
 
 const GRAPH = { top: 10, bottom: 90 };
 
@@ -94,6 +99,34 @@ export const PrevizCurvesMixin = {
         const scene = this.previzScene();
         if (!scene) return [];
         return (scene.items || []).filter((it) => this.previzIsSelected(it.id));
+    },
+
+    /**
+     * Euler filter on the rotation tracks of the selected objects - or, when
+     * the panel has been told which channels to show, only the objects that
+     * have a rotate channel on screen. One undo step.
+     */
+    previzEulerFilter() {
+        const items = this._previzCurveItems();
+        const picked = this._previzCurveShown;
+        const targets = items.filter((it) => S.track(it, "rotation").length > 1
+            && (!picked || !picked.size || [0, 1, 2].some((a) => picked.has(`${it.id}|rotation.${a}`))));
+        if (!targets.length) {
+            notice("info", "Euler filter", "Select an object with at least two rotation keys.");
+            return 0;
+        }
+        const results = targets.map((it) => ({ it, r: eulerFilter(S.track(it, "rotation")) }));
+        const total = results.reduce((n, x) => n + x.r.changed, 0);
+        if (!total) {
+            notice("info", "Euler filter", "No flips found - 0 keys changed.");
+            return 0;
+        }
+        this.previzSnapshot("Euler filter");
+        for (const { it, r } of results) it.tracks.rotation = r.keys;
+        this.previzChanged();
+        notice("success", "Euler filter", `${total} key${total === 1 ? "" : "s"} changed on ` +
+               `${targets.length} object${targets.length === 1 ? "" : "s"}.`);
+        return total;
     },
 
     /** One line of the graph: an object, a channel, and the colour it wears. */
@@ -141,7 +174,7 @@ export const PrevizCurvesMixin = {
         this._previzSyncChannelList(ui, items, lines);
         const anyKeys = items.some((it) => S.keyframeFrames(it).length > 0);
         const what = items.length === 1 ? items[0].name : `${items.length} objects`;
-        ui.sub.textContent = anyKeys
+        ui.subText.textContent = anyKeys
             ? `${what} · ${lines.length} channel${lines.length === 1 ? "" : "s"}`
             : `${what} · no keyframes yet`;
         this._previzDrawCurves(lines);
