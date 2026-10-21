@@ -171,6 +171,8 @@ const ACTION_DEFS = [
       enabled: _sel, run: (p) => p.previzKeyAll("scale") },
     { key: "PrevizDeleteKey", label: "Previz: Delete Key At Playhead",
       enabled: _sel, run: (p) => p.previzDeleteKey() },
+    { key: "PrevizEulerFilter", label: "Previz: Euler Filter Rotation Keys",
+      enabled: _sel, run: (p) => p.previzEulerFilter() },
     { key: "PrevizAutokey",   label: "Previz: Toggle Autokey",
       enabled: _previz, run: (p) => p.previzToggleAutokey() },
     { key: "PrevizEaseSmooth", label: "Previz: Keys Ease Smooth",
