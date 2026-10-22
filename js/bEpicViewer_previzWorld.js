@@ -26,6 +26,11 @@ export const PrevizWorldMixin = {
         return !!(scene && (scene.world || (scene.items || []).some((i) => WORLD_KINDS.includes(i.kind))));
     },
 
+    /** Whether the Walk button (Shift+J) applies: a viewer world to walk, or an Atlas world to fly through. */
+    previzCanMove(key = this.activeTab) {
+        return this.previzHasWorld(key) || !!(this.previzAtlasItem && this.previzAtlasItem(key));
+    },
+
     /** The Add menu's World section. */
     _previzWorldMenuEntries() {
         const entries = [
@@ -210,10 +215,15 @@ export const PrevizWorldMixin = {
 
     // ── Walking ──────────────────────────────────────────────────────────────
 
+    /**
+     * Start or stop moving through the world. An Atlas world is flown (no ground, see
+     * bEpicViewer_atlasRender.js), a viewer world walked. Answers whether it is on now.
+     */
     previzWalkToggle() {
         if (!this.isPrevizTab()) return false;
         const view = this._modelView();
-        return view.walkToggle();
+        if (view.walking) { view.walkExit(); return false; }
+        return !!(this.previzAtlasItem && this.previzAtlasItem() ? view.flyEnter() : view.walkEnter());
     },
 
     _onWalkChange(on) {

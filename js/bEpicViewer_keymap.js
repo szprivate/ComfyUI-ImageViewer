@@ -200,7 +200,7 @@ const ACTION_DEFS = [
     // Worlds: only on a scene that has world items. While walking, the walk
     // owns the keyboard (W A S D, arrows, Shift, F, Esc) and these stand aside.
     { key: "WorldWalk", label: "World: Walk / Stop Walking", combo: { key: "J", shift: true },
-      enabled: (p) => _previz(p) && !!(p.previzHasWorld && p.previzHasWorld()), run: (p) => p.previzWalkToggle() },
+      enabled: (p) => _previz(p) && !!(p.previzCanMove && p.previzCanMove()), run: (p) => p.previzWalkToggle() },
     { key: "WorldNote", label: "World: Pin a Note", combo: { key: "N", shift: true },
       enabled: (p) => _previz(p) && !!(p.previzHasWorld && p.previzHasWorld()), run: (p) => p.previzFeedbackPlace() },
     { key: "PrevizImportUsd", label: "Previz: Open USD / Alembic…",

@@ -16,6 +16,7 @@ import {
     WORLD_KINDS, environmentSettings, terrainSettings, scatterSettings, depthMeshSettings,
     referenceSettings, walkSettings, worldInfo, inClearArea, lightSettings,
 } from "./bEpicViewer_worldData.js";
+import { FLY_SPEED, flyDelta, flyWheel, flyStatus } from "./bEpicViewer_atlasRender.js";
 
 // Bloom and tone mapping come from three's post-processing addons, loaded the
 // first time a world asks for bloom (vendor/three, like the rest of three).
@@ -1123,8 +1124,12 @@ export const WorldViewMixin = {
      * or drag when the browser won't lock), W A S D or the arrows to walk,
      * Shift to run, F to leave a note where you look, Esc to stop. Feet follow
      * the ground; the walk stays inside the world's bounds.
+     *
+     * `{ fly: true }` is the Atlas world's way (flyEnter): no ground, no bounds; W S go along the whole view
+     * direction, E/Space and Q/C up and down, the wheel sets the speed. It starts from the camera being
+     * looked through, at its pose and lens, and Esc leaves the free camera where it flew to.
      */
-    walkEnter() {
+    walkEnter({ fly = false } = {}) {
         if (this._walk || !this.canvas || !this.libs) return false;
         const { THREE } = this.libs;
         const walk = walkSettings(this.scene3d);
@@ -1134,19 +1139,28 @@ export const WorldViewMixin = {
                        target: this.controls ? this.controls.target.clone() : null };
         // Walking moves the free camera, never a shot camera.
         const from = this.activeCameraObject();
-        let pos = from.position.clone(), yaw;
-        const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(from.quaternion);
+        from.updateMatrixWorld(true);
+        let pos = new THREE.Vector3().setFromMatrixPosition(from.matrixWorld), yaw, pitch = 0;
+        const quat = new THREE.Quaternion().setFromRotationMatrix(from.matrixWorld);
+        const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(quat);
         yaw = Math.atan2(-fwd.x, -fwd.z);
-        if (walk.spawn && !this._walkedHere) {
+        let fov = 60;
+        if (fly) {
+            pitch = Math.asin(Math.max(-1, Math.min(1, fwd.y)));
+            // A shot camera's lens is its item's (the gate's), not the viewport's overscanned one.
+            const entry = prev.active ? this._entries.get(prev.active) : null;
+            fov = (entry && entry.camera === from && entry.item && entry.item.fov) || from.fov || 35;
+        } else if (walk.spawn && !this._walkedHere) {
             pos = new THREE.Vector3(...walk.spawn);
             yaw = -walk.yaw * DEG;
         }
-        this._walkedHere = true;
+        if (!fly) this._walkedHere = true;
         if (this.scene3d) this.scene3d.activeCamera = null;
-        this._walk = { prev, yaw, pitch: 0, keys: new Set(), settings: walk, pos, vy: 0, drag: null };
+        this._walk = { prev, yaw, pitch, keys: new Set(), settings: walk, pos, vy: 0, drag: null,
+                       fly, speed: FLY_SPEED, quat: fly ? quat : null };
         cam.near = 0.05;
         cam.far = SKY_RADIUS * 2.5;
-        cam.fov = 60;
+        cam.fov = fov;
         cam.updateProjectionMatrix();
         if (this.controls) this.controls.enabled = false;
         if (this.gizmo) this.gizmo.enabled = false;
@@ -1154,8 +1168,13 @@ export const WorldViewMixin = {
         W.onKey = (ev) => {
             if (!this._walk) return;
             const k = ev.key.length === 1 ? ev.key.toLowerCase() : ev.key;
-            const mine = ["w", "a", "s", "d", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Shift", "f", "Escape"];
+            const mine = ["w", "a", "s", "d", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Shift", "Escape"];
+            if (fly) mine.push("e", "q", "c", " ");
+            else mine.push("f");
             if (!mine.includes(k)) return;
+            // A dialog opened while flying (Render with Atlas) keeps its own typing and Space.
+            const t = ev.target;
+            if (k !== "Escape" && t && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName || "")) return;
             ev.preventDefault();
             ev.stopPropagation();
             if (ev.type === "keydown") {
@@ -1174,6 +1193,7 @@ export const WorldViewMixin = {
             if (!locked) W.drag = { x: ev.clientX, y: ev.clientY };
             W.yaw -= dx * 0.0022;
             W.pitch = Math.max(-1.45, Math.min(1.45, W.pitch - dy * 0.0022));
+            W.quat = null;      // looked: the pose now comes from yaw and pitch
             this.requestRender();
         };
         W.onDown = (ev) => {
@@ -1183,24 +1203,33 @@ export const WorldViewMixin = {
             }
         };
         W.onUp = () => { W.drag = null; };
+        const hint = () => fly ? flyStatus(W.speed)
+            : "Walking — click to look around · W A S D to move · Shift run · F note · Esc stop";
         W.onLock = () => {
             // Esc releases the pointer first; that alone doesn't end the walk,
             // so the notes prompt (which also releases it) can come back.
-            this._setStatus(this.doc.pointerLockElement === this.canvas
-                ? "" : "Walking — click to look around · W A S D to move · Shift run · F note · Esc stop");
+            this._setStatus(this.doc.pointerLockElement === this.canvas ? "" : hint());
+        };
+        W.onWheel = (ev) => {
+            if (!fly) return;
+            ev.preventDefault();
+            ev.stopPropagation();
+            W.speed = flyWheel(W.speed, ev.deltaY);
+            this._setStatus(hint());      // the speed is read off the status line, locked pointer or not
         };
         const win = this.win;
         win.addEventListener("keydown", W.onKey, true);
         win.addEventListener("keyup", W.onKey, true);
         this.doc.addEventListener("mousemove", W.onMove);
         this.canvas.addEventListener("mousedown", W.onDown);
+        this.canvas.addEventListener("wheel", W.onWheel, { passive: false, capture: true });
         this.doc.addEventListener("mouseup", W.onUp);
         this.doc.addEventListener("pointerlockchange", W.onLock);
         W.blur = () => W.keys.clear();
         win.addEventListener("blur", W.blur);
         try { this.canvas.requestPointerLock(); } catch (e) { /* drag to look */ }
         this.root.classList.add("walking");
-        this._setStatus("Walking — click to look around · W A S D to move · Shift run · F note · Esc stop");
+        this._setStatus(hint());
         this._walkStep(0);
         this._syncGate();
         this._syncSelection && this._syncSelection();
@@ -1208,6 +1237,9 @@ export const WorldViewMixin = {
         this.requestRender();
         return true;
     },
+
+    /** Fly the free camera through an Atlas world (see walkEnter). */
+    flyEnter() { return this.walkEnter({ fly: true }); },
 
     walkExit() {
         const W = this._walk;
@@ -1218,6 +1250,7 @@ export const WorldViewMixin = {
         win.removeEventListener("blur", W.blur);
         this.doc.removeEventListener("mousemove", W.onMove);
         this.canvas && this.canvas.removeEventListener("mousedown", W.onDown);
+        this.canvas && this.canvas.removeEventListener("wheel", W.onWheel, { capture: true });
         this.doc.removeEventListener("mouseup", W.onUp);
         this.doc.removeEventListener("pointerlockchange", W.onLock);
         if (this.doc.pointerLockElement) { try { this.doc.exitPointerLock(); } catch (e) {} }
@@ -1231,9 +1264,13 @@ export const WorldViewMixin = {
             this.controls.enabled = true;
             this.controls.update();
         }
-        cam.fov = 35;
-        cam.updateProjectionMatrix();
-        if (this.scene3d && W.prev.active) this.scene3d.activeCamera = W.prev.active;
+        // Walking gives the lens and the shot camera back. Flying keeps both: the free camera stays where
+        // it flew to, with the lens it started with, so "Render with Atlas" paints what is on screen.
+        if (!W.fly) {
+            cam.fov = 35;
+            cam.updateProjectionMatrix();
+            if (this.scene3d && W.prev.active) this.scene3d.activeCamera = W.prev.active;
+        }
         if (this.gizmo) this.gizmo.enabled = true;
         this.root && this.root.classList.remove("walking");
         this._setStatus("");
@@ -1251,6 +1288,7 @@ export const WorldViewMixin = {
         const W = this._walk;
         if (!W) return;
         const { THREE } = this.libs;
+        if (W.fly) { this._flyStep(dt); return; }
         const k = W.keys;
         const run = k.has("Shift") ? 2.6 : 1;
         const f = (k.has("w") || k.has("ArrowUp") ? 1 : 0) - (k.has("s") || k.has("ArrowDown") ? 1 : 0);
@@ -1278,6 +1316,19 @@ export const WorldViewMixin = {
         const cam = this.camera;
         cam.position.copy(W.pos);
         cam.quaternion.setFromEuler(new THREE.Euler(W.pitch, W.yaw, 0, "YXZ"));
+        cam.updateMatrixWorld(true);
+    },
+
+    _flyStep(dt) {
+        const W = this._walk;
+        const { THREE } = this.libs;
+        const d = flyDelta({ yaw: W.yaw, pitch: W.pitch, keys: W.keys, speed: W.speed, dt });
+        W.pos.x += d[0]; W.pos.y += d[1]; W.pos.z += d[2];
+        const cam = this.camera;
+        cam.position.copy(W.pos);
+        // Until the user looks, the quaternion is the shot camera's own (roll and all), not yaw and pitch.
+        if (W.quat) cam.quaternion.copy(W.quat);
+        else cam.quaternion.setFromEuler(new THREE.Euler(W.pitch, W.yaw, 0, "YXZ"));
         cam.updateMatrixWorld(true);
     },
 

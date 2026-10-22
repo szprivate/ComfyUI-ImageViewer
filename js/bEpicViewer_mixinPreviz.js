@@ -1068,7 +1068,8 @@ export const PrevizMixin = {
         // Worlds: walk one, and leave a note about it. Shown only on a scene
         // that has world items (see _previzRenderPanel).
         const walkBtn = el("button", "previz-btn previz-world", "Walk");
-        walkBtn.title = "Walk through the world — Shift+J (W A S D, mouse to look, Shift run, F note, Esc stop)";
+        walkBtn.title = "Walk through the world — Shift+J (W A S D, mouse to look, Shift run, F note, Esc stop). "
+                      + "An Atlas world is flown: W S along the view, E/Q up/down, wheel sets the speed";
         walkBtn.onclick = () => this.previzWalkToggle();
         const matchBtn = el("button", "previz-btn previz-world", "Match");
         matchBtn.title = "Measure the world against its reference picture and set exposure, light, fog and "
@@ -1455,7 +1456,7 @@ export const PrevizMixin = {
         ui.root.style.display = "flex";
         const world = this.previzHasWorld();
         if (ui.walkBtn) {
-            ui.walkBtn.style.display = world ? "" : "none";
+            ui.walkBtn.style.display = this.previzCanMove() ? "" : "none";
             ui.noteBtn.style.display = world ? "" : "none";
             ui.matchBtn.style.display = world ? "" : "none";
             ui.walkBtn.classList.toggle("active", !!(this._model3d && this._model3d.walking));

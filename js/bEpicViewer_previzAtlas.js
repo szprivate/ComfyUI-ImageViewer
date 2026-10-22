@@ -122,7 +122,10 @@ export const PrevizAtlasMixin = {
                 message.textContent = state.message ? `Done, but: ${state.message}` : "Done — " + where;
                 notice(state.message ? "warn" : "success", "Atlas render ready", state.path || "");
                 if (add.checked && state.added_to_world) {
-                    notice("info", "Added to the world", "Re-open the world to see the rebuilt mesh.");
+                    const fresh = await this.previzAtlasReloadWorld(item);
+                    notice("info", "World updated", fresh
+                        ? "The rebuilt mesh is showing: the newly filled areas are there."
+                        : "The view was added; the rebuilt mesh could not be reloaded here - re-open the world to see it.");
                 }
                 this._atlasBusy = false;
                 close();
@@ -134,6 +137,15 @@ export const PrevizAtlasMixin = {
                 this._atlasBusy = false;
             }
         };
+    },
+
+    /** Read the world's mesh again, in place: same item, camera, selection and scene. True when it is showing. */
+    async previzAtlasReloadWorld(item) {
+        try {
+            return !!(await this._modelView().reloadModel(item.id));
+        } catch (e) {
+            return false;
+        }
     },
 
     /** The finished picture, into its own tab, selected and shown large. */

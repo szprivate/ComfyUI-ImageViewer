@@ -19,6 +19,7 @@ import { pref, PREF } from "./bEpicViewer_settings.js";
 import { app } from "../../scripts/app.js";
 import { evaluate, cameraResolution, offsetOf, planeSettings } from "./bEpicViewer_scene3d.js";
 import { WorldViewMixin } from "./bEpicViewer_world3d.js";
+import { bustUrl } from "./bEpicViewer_atlasRender.js";
 import { WorldMatchMixin } from "./bEpicViewer_worldMatch.js";
 
 let _libsPromise = null;
@@ -1344,7 +1345,11 @@ export class Model3DView {
      */
     _srcUrlFor(item) {
         if (!this.hooks.srcUrl || !item.src) return null;
-        if (!this._isCache(item)) return this.hooks.srcUrl(item.src);
+        if (!this._isCache(item)) {
+            const url = this.hooks.srcUrl(item.src);
+            const entry = this._entries.get(item.id);
+            return entry && entry.bust ? bustUrl(url, entry.bust) : url;
+        }
         const frame = Math.max(0, Math.round(this.sceneFrame || 0));
         return this.hooks.srcUrl({ ...item.src, frame });
     }
@@ -1376,6 +1381,24 @@ export class Model3DView {
             }
             this.applyFrame(this.sceneFrame);
         }, 140);
+    }
+
+    /**
+     * Read a model item's file again, in place: the same item, the same transform, the camera, the
+     * selection and the rest of the scene untouched. For a file rewritten under the same name (an Atlas
+     * world whose mesh was rebuilt). Answers whether the item was found.
+     */
+    async reloadModel(itemId) {
+        const entry = this._entries.get(itemId);
+        if (!entry || !entry.item || entry.item.kind !== "model") return false;
+        entry.bust = Date.now();
+        entry.error = null;
+        this._disposeEntry(entry, false);
+        await this._tracked(this._loadEntry(entry, entry.item));
+        this.applyFrame(this.sceneFrame);
+        this._updateSceneStats();
+        this.requestRender();
+        return !entry.error;
     }
 
     async _loadEntry(entry, item) {

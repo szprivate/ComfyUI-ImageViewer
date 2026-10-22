@@ -38,6 +38,8 @@ const apiStub = await import(url.pathToFileURL(path.join(tmp, "scripts", "api.js
 const appStub = await import(url.pathToFileURL(path.join(tmp, "scripts", "app.js")).href);
 const Mixin = await import(url.pathToFileURL(path.join(tmp, "ext", "js", "bEpicViewer_previzAtlas.js")).href);
 
+const World = await import(url.pathToFileURL(path.join(tmp, "ext", "js", "bEpicViewer_previzWorld.js")).href);
+
 const M16 = Array.from({ length: 16 }, (_, i) => i);
 const mat = (elements) => ({ elements: Float32Array.from(elements) });
 
@@ -156,7 +158,9 @@ test("clicking Render sends the current camera, follows the job and shows the pi
         if (p === "/bepic/push") return ok({ ok: true, shown: 1, refused: [] });
         throw new Error("unexpected " + p);
     };
-    const { ctx, doc, keys } = makeViewer({ through: true });
+    const { ctx, doc, keys, view } = makeViewer({ through: true });
+    const reloaded = [];
+    view.reloadModel = async (id) => { reloaded.push(id); return true; };
     ctx.previzAtlasDialog();
     const dlg = doc.body.find((e) => e.className.includes("atlas-dlg"));
     assert.ok(dlg, "the dialog is up");
@@ -188,6 +192,9 @@ test("clicking Render sends the current camera, follows the job and shows the pi
     assert.equal(ctx._atlasBusy, false);
     assert.equal(doc.body.find((e) => e.className.includes("atlas-dlg")), null, "the dialog closes when done");
     assert.ok(appStub.toasts.some((t) => /Atlas render ready/.test(t.summary)));
+    assert.deepEqual(reloaded, ["m1"], "the world's mesh is reloaded in place");
+    assert.ok(appStub.toasts.some((t) => /World updated/.test(t.summary)), "and the notice says so");
+    assert.ok(!appStub.toasts.some((t) => /Re-open/.test(t.detail || "")));
     assert.ok(!keys.has("keydown"), "the key handler is gone");
 });
 
@@ -217,4 +224,89 @@ test("no world, no dialog", () => {
     ctx.previzAtlasDialog();
     assert.equal(doc.body.find((e) => e.className.includes("atlas-dlg")), null);
     assert.equal(ctx.previzAtlasItem(), null);
+});
+
+test("flying: W follows the whole view direction (pitch included), A/D strafe, E/Q go up and down", () => {
+    const near = (a, b) => a.forEach((v, i) => assert.ok(Math.abs(v - b[i]) < 1e-9, `${a} vs ${b}`));
+    const go = (keys, o = {}) => A.flyDelta({ yaw: 0, pitch: 0, keys: new Set(keys), speed: 1.5, dt: 1, ...o });
+    near(go(["w"]), [0, 0, -1.5]);                                  // looking down -Z
+    near(go(["s"]), [0, 0, 1.5]);
+    near(go(["d"]), [1.5, 0, 0]);
+    near(go(["a"]), [-1.5, 0, 0]);
+    near(go(["e"]), [0, 1.5, 0]);
+    near(go([" "]), [0, 1.5, 0]);
+    near(go(["q"]), [0, -1.5, 0]);
+    near(go(["c"]), [0, -1.5, 0]);
+    near(go(["w", "s"]), [0, 0, 0]);
+    near(go(["w"], { pitch: Math.PI / 2 }), [0, 1.5, 0]);           // looking straight up: W climbs
+    near(go(["w"], { pitch: Math.PI / 6 }), [0, 0.75, -1.5 * Math.cos(Math.PI / 6)]);
+    near(go(["w"], { yaw: Math.PI / 2 }), [-1.5, 0, 0]);            // turned left: forward is -X
+    near(go(["w", "Shift"]), [0, 0, -1.5 * A.FLY_FAST]);
+    near(go(["w"], { dt: 0.5, speed: 4 }), [0, 0, -2]);
+    assert.equal(A.FLY_SPEED, 1.5);
+});
+
+test("the wheel scales the speed, clamped, and the status line shows it", () => {
+    assert.ok(A.flyWheel(1.5, -100) > 1.5);
+    assert.ok(A.flyWheel(1.5, 100) < 1.5);
+    assert.ok(Math.abs(A.flyWheel(A.flyWheel(1.5, -100), 100) - 1.5) < 1e-9);
+    assert.equal(A.flyWheel(1, -1e9), A.flyWheel(1, -400));             // one notch is capped
+    let v = 1.5;
+    for (let i = 0; i < 500; i++) v = A.flyWheel(v, -100);
+    assert.equal(v, A.FLY_SPEED_MAX);
+    for (let i = 0; i < 1000; i++) v = A.flyWheel(v, 100);
+    assert.equal(v, A.FLY_SPEED_MIN);
+    assert.equal(A.flyWheel(1.5, 0), 1.5);
+    assert.match(A.flyStatus(1.5), /^Flying — click to look · W A S D move · E\/Q up\/down · Shift fast · wheel speed 1\.5 m\/s · Esc stop$/);
+    assert.match(A.flyStatus(12.345), /12\.3 m\/s/);
+});
+
+test("after flying, the free camera at the flown pose is what Render with Atlas sends", () => {
+    // flying leaves the scene's active camera empty: the free camera, not the shot camera, is looked through
+    const view = fakeView({ through: false });
+    view.free.fov = 50;                                            // the shot camera's lens, kept
+    const c = A.captureCamera(view, { id: "m1" });
+    assert.deepEqual(c.camera_world, M16);                         // the free camera's matrix
+    assert.deepEqual([c.fov, c.gated], [50, false]);
+    // still flying: the walk flag changes nothing about which camera it is
+    view._walk = {};
+    assert.deepEqual(A.captureCamera(view, { id: "m1" }).camera_world, M16);
+    // while a shot camera is active and not flying, it is the shot camera, as before
+    assert.equal(A.captureCamera(fakeView({ through: true }), { id: "m1" }).gated, true);
+});
+
+test("Walk / Shift+J apply to an Atlas world as well as to a viewer world", () => {
+    const atlas = { items: [{ id: "w", kind: "model", src: { path: "D:/o/atlas/court/world.glb" } }, { kind: "camera" }] };
+    const plain = { items: [{ id: "d", kind: "model", src: { path: "C:/a/duck.glb" } }] };
+    const viewerWorld = { items: [{ id: "t", kind: "terrain" }] };
+    const mk = (scene) => Object.assign({ activeTab: "k", previzScene: () => scene }, World.PrevizWorldMixin, Mixin.PrevizAtlasMixin);
+    assert.equal(mk(atlas).previzHasWorld(), false);               // not a viewer world ...
+    assert.equal(mk(atlas).previzCanMove(), true);                 // ... but it can be flown
+    assert.equal(mk(viewerWorld).previzCanMove(), true);
+    assert.equal(mk(plain).previzCanMove(), false);
+});
+
+test("the Walk toggle flies an Atlas world, walks a viewer world, and stops either", () => {
+    const calls = [];
+    const view = { walking: false, flyEnter() { calls.push("fly"); this.walking = true; return true; },
+                   walkEnter() { calls.push("walk"); this.walking = true; return true; },
+                   walkExit() { calls.push("exit"); this.walking = false; } };
+    const atlas = { items: [{ id: "w", kind: "model", src: { path: "D:/o/atlas/court/world.glb" } }] };
+    const world = { items: [{ id: "t", kind: "terrain" }] };
+    const mk = (scene) => Object.assign({ activeTab: "k", isPrevizTab: () => true, previzScene: () => scene, _modelView: () => view },
+                                        World.PrevizWorldMixin, Mixin.PrevizAtlasMixin);
+    const a = mk(atlas);
+    assert.equal(a.previzWalkToggle(), true);
+    assert.equal(a.previzWalkToggle(), false);
+    view.walking = false;
+    const w = mk(world);
+    assert.equal(w.previzWalkToggle(), true);
+    assert.deepEqual(calls, ["fly", "exit", "walk"]);
+});
+
+test("a reload asks for the same file under a new URL, and a blob stays as it is", () => {
+    assert.equal(A.bustUrl("/bepic/view_file?path=a%2Fworld.glb", 7), "/bepic/view_file?path=a%2Fworld.glb&_=7");
+    assert.equal(A.bustUrl("/x/world.glb", 7), "/x/world.glb?_=7");
+    assert.equal(A.bustUrl("blob:http://h/abc", 7), "blob:http://h/abc");
+    assert.equal(A.bustUrl("", 7), "");
 });

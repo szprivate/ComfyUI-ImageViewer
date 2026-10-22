@@ -21,6 +21,48 @@ export function atlasWorldName(path) {
     return parts.length >= 2 ? parts[parts.length - 2] : "world";
 }
 
+// ── Flying through the world (bEpicViewer_world3d.js flyEnter) ───────────────────────────────────────────
+// Atlas worlds are metric, Y up, cameras looking down -Z, and have no ground to follow: the free camera
+// flies. The maths is here, DOM-free, so it can be tested.
+export const FLY_SPEED = 1.5;                // metres per second
+export const FLY_SPEED_MIN = 0.05, FLY_SPEED_MAX = 200;
+export const FLY_FAST = 3;                   // Shift
+
+export const clampFlySpeed = (v) => Math.min(FLY_SPEED_MAX, Math.max(FLY_SPEED_MIN, Number(v) || FLY_SPEED));
+
+/** The speed after one wheel notch (deltaY < 0 is away from the user: faster). 12% a notch of 100. */
+export function flyWheel(speed, deltaY) {
+    return clampFlySpeed(speed * Math.exp(-Math.max(-400, Math.min(400, Number(deltaY) || 0)) * 0.0012));
+}
+
+/**
+ * How far one step moves the camera, [x, y, z] in metres. `keys` is a Set of key names: W/S along the
+ * whole view direction (pitch included), A/D sideways, E/Space up and Q/C down along world Y, Shift faster.
+ */
+export function flyDelta({ yaw, pitch, keys, speed, dt }) {
+    const has = (...names) => names.some((n) => keys.has(n));
+    const f = (has("w", "ArrowUp") ? 1 : 0) - (has("s", "ArrowDown") ? 1 : 0);
+    const r = (has("d", "ArrowRight") ? 1 : 0) - (has("a", "ArrowLeft") ? 1 : 0);
+    const u = (has("e", " ") ? 1 : 0) - (has("q", "c") ? 1 : 0);
+    const step = clampFlySpeed(speed) * (keys.has("Shift") ? FLY_FAST : 1) * dt;
+    const cp = Math.cos(pitch);
+    return [
+        (-Math.sin(yaw) * cp * f + Math.cos(yaw) * r) * step,
+        (Math.sin(pitch) * f + u) * step,
+        (-Math.cos(yaw) * cp * f - Math.sin(yaw) * r) * step,
+    ];
+}
+
+export const flyStatus = (speed) => "Flying — click to look · W A S D move · E/Q up/down · Shift fast · wheel speed "
+    + `${Number(speed.toFixed(speed < 10 ? 2 : 1))} m/s · Esc stop`;
+
+/** The same file under a new URL, so a rewritten one is fetched again rather than served from the cache. */
+export function bustUrl(url, stamp) {
+    const u = String(url || "");
+    if (!u || /^(blob|data):/i.test(u)) return u;
+    return u + (u.includes("?") ? "&" : "?") + "_=" + encodeURIComponent(String(stamp));
+}
+
 const elements = (m) => (m && m.elements ? Array.from(m.elements) : null);
 
 /**
