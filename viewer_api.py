@@ -1144,8 +1144,10 @@ try:
             if not mg_scene_io.is_scene_path(path):
                 return web.json_response({"error": "not a scene file (*.mgscene.json)"}, status=400)
             path = os.path.abspath(path)
-            if not path_access.may_serve(path):
-                return web.json_response({"error": "not allowed"}, status=403)
+            # a scene file is not media, so may_serve would refuse it; the
+            # .mgscene.json check above plus the allowed folders are the rule
+            if not path_access.is_allowed(path):
+                return web.json_response({"error": path_access.refusal(path)}, status=403)
             if not os.path.isfile(path):
                 return web.json_response({"error": "file not found"}, status=404)
             try:
@@ -1251,7 +1253,9 @@ try:
             if not path:
                 return web.Response(status=400, text="missing 'path' parameter")
             path = os.path.abspath(path)
-            if not path_access.may_serve(path):
+            # fonts are served too: a motion-graphics scene draws its text with them
+            if not (path_access.may_serve(path)
+                    or (path_access.is_font(path) and path_access.is_allowed(path))):
                 return web.Response(status=403, text=path_access.serve_refusal(path))
             if not os.path.isfile(path):
                 return web.Response(status=404, text="file not found")

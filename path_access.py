@@ -218,6 +218,14 @@ def is_media(path):
     return os.path.splitext(str(path or ""))[1].lower() in MEDIA_EXTS
 
 
+FONT_EXTS = {".ttf", ".otf", ".woff", ".woff2"}
+
+
+def is_font(path):
+    """True for a font file (a motion-graphics scene's text needs its font)."""
+    return os.path.splitext(str(path or ""))[1].lower() in FONT_EXTS
+
+
 def _private_part(real_path):
     """True when a folder on the way to `real_path` is a hidden one or AppData:
     where keys, tokens and program settings are kept, never media."""
