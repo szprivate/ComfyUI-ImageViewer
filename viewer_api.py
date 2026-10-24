@@ -1137,10 +1137,25 @@ try:
 
         # --- Motion panel: scene files and the Render relay (mg_scene_io.py, mg_render.py) ---
         async def _bepic_mgscene(request):
-            """GET ?path=<file>.mgscene.json -> {"path", "scene"}."""
+            """GET ?path=<file>.mgscene.json (or a poster .png carrying one) -> {"path", "scene"}."""
             if mg_scene_io is None:
                 return web.json_response({"error": "motion panel unavailable"}, status=500)
             path = request.query.get("path") or ""
+            if mg_scene_io.is_png_path(path):
+                # a poster PNG that carries its scene (agentY writes one next to every rendered
+                # video); never writes: a Save of a PNG's scene goes to the path returned here
+                path = os.path.abspath(path)
+                if not path_access.may_serve(path):
+                    return web.json_response({"error": path_access.serve_refusal(path)}, status=403)
+                if not os.path.isfile(path):
+                    return web.json_response({"error": "file not found"}, status=404)
+                found = await asyncio.get_running_loop().run_in_executor(
+                    None, mg_scene_io.resolve_png, path, path_access.is_allowed)
+                if request.query.get("probe"):
+                    return web.json_response({"has_scene": found is not None})
+                if found is None:
+                    return web.json_response({"error": "this PNG carries no motion-graphics scene"}, status=422)
+                return web.json_response(found, headers={"Cache-Control": "no-cache"})
             if not mg_scene_io.is_scene_path(path):
                 return web.json_response({"error": "not a scene file (*.mgscene.json)"}, status=400)
             path = os.path.abspath(path)

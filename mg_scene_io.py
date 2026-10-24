@@ -60,3 +60,89 @@ def write(path, scene) -> str:
             pass
         raise
     return p
+
+
+# --- a poster PNG that carries a scene (written by agentY-core next to every rendered video) ---
+PNG_SIG = b"\x89PNG\r\n\x1a\n"
+PNG_SCENE_KEY = "mgscene"
+PNG_PATH_KEY = "mgscene_path"
+
+
+def is_png_path(path) -> bool:
+    return isinstance(path, str) and path.lower().endswith(".png")
+
+
+def read_png_scene(path):
+    """``(scene, source_path)`` from a PNG's ``mgscene`` / ``mgscene_path`` text chunks, or None.
+
+    Reads the chunks up to the first IDAT only (the text is written before the pixels), so
+    probing a big PNG is cheap. Handles iTXt (compressed or not) and tEXt."""
+    import zlib
+    found = {}
+    try:
+        with open(path, "rb") as fh:
+            if fh.read(8) != PNG_SIG:
+                return None
+            while True:
+                head = fh.read(8)
+                if len(head) < 8:
+                    break
+                length, ctype = int.from_bytes(head[:4], "big"), head[4:]
+                if ctype in (b"IDAT", b"IEND"):
+                    break
+                if ctype not in (b"iTXt", b"tEXt", b"zTXt"):
+                    fh.seek(length + 4, 1)
+                    continue
+                if length > MAX_BYTES * 2:
+                    fh.seek(length + 4, 1)
+                    continue
+                body = fh.read(length)
+                fh.seek(4, 1)
+                key, _, rest = body.partition(b"\0")
+                key = key.decode("latin-1")
+                if key not in (PNG_SCENE_KEY, PNG_PATH_KEY):
+                    continue
+                if ctype == b"tEXt":
+                    found[key] = rest.decode("latin-1")
+                elif ctype == b"zTXt":
+                    found[key] = zlib.decompress(rest[1:]).decode("latin-1")
+                else:  # iTXt: flag, method, language\0, translated key\0, text
+                    flag, rest = rest[0], rest[2:]
+                    _lang, _, rest = rest.partition(b"\0")
+                    _tkey, _, text = rest.partition(b"\0")
+                    if flag:
+                        text = zlib.decompress(text)
+                    found[key] = text.decode("utf-8")
+    except (OSError, ValueError, zlib.error):
+        return None
+    raw = found.get(PNG_SCENE_KEY)
+    if not raw:
+        return None
+    try:
+        scene = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(scene, dict):
+        return None
+    return scene, found.get(PNG_PATH_KEY, "")
+
+
+def resolve_png(png_path, is_allowed):
+    """What the Motion panel opens for a poster PNG: ``{"path", "scene"}`` or None (no scene).
+
+    The source scene file named in the PNG wins when it exists, is allowed and still holds the
+    same scene, so a Save lands in the real file. Otherwise the embedded scene opens as
+    ``<png folder>/<png stem>.mgscene.json`` (assets are relative to that folder); nothing is
+    written here. ``is_allowed(path)`` is path_access.is_allowed."""
+    got = read_png_scene(png_path)
+    if got is None:
+        return None
+    scene, src = got
+    if src and is_scene_path(src) and os.path.isabs(src) and os.path.isfile(src) and is_allowed(src):
+        try:
+            if read(src) == scene:
+                return {"path": os.path.abspath(src), "scene": scene}
+        except (ValueError, OSError):
+            pass
+    stem = os.path.splitext(os.path.basename(png_path))[0]
+    return {"path": os.path.join(os.path.dirname(os.path.abspath(png_path)), stem + SUFFIX), "scene": scene}

@@ -36,11 +36,40 @@ export const MgPanelMixin = {
         return true;
     },
 
+    /** Does this PNG carry a motion-graphics scene (a poster written next to a rendered video)? */
+    async _mgPngHasScene(path) {
+        try {
+            const res = await api.fetchApi(`/bepic/mgscene?path=${encodeURIComponent(path)}&probe=1`);
+            const data = await res.json().catch(() => ({}));
+            return !!(res.ok && data.has_scene);
+        } catch (_) { return false; }
+    },
+
+    /** Dropping a file-browser / history PNG onto the panel opens the scene it carries. */
+    _mgWireDrop(host) {
+        if (host.__mgDropWired) return;
+        host.__mgDropWired = true;
+        const TYPE = "application/x-bepic-history";
+        const has = (e) => Array.from(e.dataTransfer?.types || []).includes(TYPE);
+        host.addEventListener("dragover", (e) => { if (has(e)) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } });
+        host.addEventListener("drop", (e) => {
+            if (!has(e)) return;
+            let payload = null;
+            try { payload = JSON.parse(e.dataTransfer.getData(TYPE)); } catch (_) {}
+            const items = payload && Array.isArray(payload.items) ? payload.items : [];
+            const png = items.find((it) => it && /\.png$/i.test(String(it.path || "")));
+            if (!png) return;
+            e.preventDefault(); e.stopPropagation();
+            this.mgOpenFile(png.path);
+        });
+    },
+
     /** The dock calls this when the panel comes up. */
     _mgOnShown() {
         const st = this._mgState();
         const host = this.motionPanel;
         if (!host) return;
+        this._mgWireDrop(host);
         if (!st.editor || st.host !== host) {
             if (st.editor) st.editor.dispose();
             st.host = host;

@@ -65,6 +65,17 @@ timeline / keyframe editor. User and agent edit one file, and the preview is the
    scene (`bEpicViewer_mgModel.js`, node-tested) with an undo stack; Save writes the same file
    (`POST /bepic/mgscene_save`, allowed folders only). **Render** relays to the agentY host (like Atlas render)
    which runs `mg_render`.
+
+   **Poster PNG**: every video `mg_render` writes also gets a `<name>.png` beside it, a still of the scene (its
+   `comp.poster` frame, else the middle) that carries the whole scene in an iTXt chunk `mgscene` and the source
+   scene file's absolute path in a tEXt chunk `mgscene_path` (like ComfyUI's workflow PNGs), so the video stays
+   editable when only the PNG travels. `GET /bepic/mgscene?path=<file>.png` reads the chunk (up to IDAT, no image
+   decoding) and answers `{path, scene}`: the source scene file when it still exists, is in an allowed folder and
+   holds the same scene (Save then writes the real file), otherwise the embedded scene as
+   `<png folder>/<png stem>.mgscene.json` (Save creates it there; assets are relative to the scene file, so they
+   resolve when the PNG sits next to them). GET never writes; `&probe=1` only answers `{has_scene}`. In the UI: a
+   PNG still opens as an image on double-click; right-click it in the file browser and choose **Edit in Motion**
+   (offered only when the PNG carries a scene), or drag a PNG from the browser onto the Motion panel.
 6. **Phases**: (1) schema + shared module + validator + tests; (2) renderer + `mg_render` + real render;
    (3) editor; (4) skill + wiring + examples. Left for later: precomps, masks beyond reveal, text animators
    (per-character), motion paths with auto-orient, Lottie export, audio, per-component previews.
