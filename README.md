@@ -36,6 +36,7 @@ An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/C
 ### Motion graphics
 
 - the **Motion** panel (bar: *ComfyUI > Motion*, or double-click a `*.mgscene.json` in the file browser) edits the motion graphics an agent writes as a scene file: a layer list, a preview, a timeline with keyframes (move, copy, paste, delete), a properties panel, a curve for the selected key and on-canvas move / scale / rotate / anchor handles; **Render** hands the saved scene to agentY's Remotion renderer. The preview and the render share one module, so what you see is what comes out. Each rendered video also gets a poster `.png` that carries the scene: right-click it in the file browser and pick **Edit in Motion** (or drag it onto the panel) to edit the motion graphic from the PNG alone - see [docs/motion_graphics_editor.md](docs/motion_graphics_editor.md)
+- the **Dataset** panel (bar: *ComfyUI > Dataset*; opens when an agent shows a LoRA dataset's `manifest.json`) reviews a LoRA training dataset: thumbnails with editable captions, include / remove / restore, bulk find-replace, trigger word, crop boxes, then **Approve & train** / **Ask the agent** / **Cancel**; its Training tab shows the run (progress, loss curve, sample strip, events) and can stop it - see [docs/lora_dataset_panel.md](docs/lora_dataset_panel.md)
 
 ### The interface
 

@@ -71,6 +71,8 @@ const DOCK_PANELS = {
     // The motion-graphics editor (bEpicViewer_mgPanel.js / bEpicViewer_mgEditor.js): a scene an agent wrote,
     // as layers, a timeline with keyframes, curves and gizmos. A whole editor wants room.
     motionGfx: { prop: "motionPanel", label: "Motion", minW: 560, minH: 360, defaultRail: "right", size: 3 },
+    // The LoRA dataset review and training monitor (bEpicViewer_loraPanel.js / bEpicViewer_loraEditor.js).
+    loraDataset: { prop: "loraPanel", label: "Dataset", minW: 480, minH: 320, defaultRail: "right", size: 3 },
     // (The drawing tools' options have no panel of their own: while a tool is
     // on they take the Parameters panel over — ToolsMixin._toolShowDock.)
     // The agentY chat panel (bEpicViewer_agentPanel.js): agentY's own panel,
@@ -171,6 +173,7 @@ export const DockMixin = {
                                            { id: "paramCurves", size: 1, hidden: true },
                                            { id: "agentCode", size: 1, hidden: true },
                                            { id: "motionGfx", size: 3, hidden: true },
+                                           { id: "loraDataset", size: 3, hidden: true },
                                            { id: "params",  size: 1, hidden: false }] },
             // A graph over time wants width: the Curve Editor lives under the picture.
             bottom: { height: 240, panels: [{ id: "curves", size: 1, hidden: true }] },
@@ -560,6 +563,8 @@ export const DockMixin = {
             if (this._codeOnShown) this._codeOnShown();
         } else if (id === "motionGfx") {
             if (this._mgOnShown) this._mgOnShown();
+        } else if (id === "loraDataset") {
+            if (this._loraOnShown) this._loraOnShown();
         } else if (id === "editTimeline") {
             if (this.editTlRefresh) this.editTlRefresh();
         } else if (id === "channels") {

@@ -46,6 +46,10 @@ try:
     from . import atlas_render
 except Exception:  # pragma: no cover
     atlas_render = None
+try:
+    from . import lora_io
+except Exception:  # pragma: no cover
+    lora_io = None
 
 try:
     from . import abc_io
@@ -971,9 +975,11 @@ try:
 
             from . import timeline_io
             # Motion-graphics scenes (*.mgscene.json) open the Motion panel, not a media tab.
-            motion, rest = [], []
+            motion, rest, lora = [], [], []
             for raw in data["paths"]:
-                if mg_scene_io is not None and mg_scene_io.is_scene_path(raw):
+                if lora_io is not None and lora_io.dataset_name_of_path(raw, folder_paths.get_output_directory()):
+                    lora.append(os.path.abspath(raw))    # a LoRA dataset's manifest.json opens the Dataset panel
+                elif mg_scene_io is not None and mg_scene_io.is_scene_path(raw):
                     p = os.path.abspath(raw)
                     if os.path.isfile(p) and path_access.may_serve(p):
                         motion.append(p)
@@ -1037,7 +1043,9 @@ try:
                 PromptServer.instance.send_sync("bepic.viewer.update", msg)
             for p in motion:
                 PromptServer.instance.send_sync("bepic.mg.open", {"path": p})
-            return web.json_response({"ok": True, "shown": len(frames), "motion": motion, "refused": refused,
+            for p in lora:
+                PromptServer.instance.send_sync("bepic.lora.open", {"path": p})
+            return web.json_response({"ok": True, "shown": len(frames), "motion": motion, "lora": lora, "refused": refused,
                                       "opened": bool(opened), "edit": bool(opened and opened.get("panel")),
                                       "notes": notes})
 
@@ -1212,6 +1220,78 @@ try:
             except mg_render.RelayError as e:
                 return web.json_response({"error": str(e)}, status=e.status)
             return web.json_response(out)
+
+
+        # --- Dataset panel: LoRA datasets and training runs (lora_io.py) -----
+        def _lora_reply(fn, *args):
+            async def run():
+                try:
+                    return web.json_response(await asyncio.get_running_loop().run_in_executor(None, fn, *args),
+                                             headers={"Cache-Control": "no-cache"})
+                except lora_io.LoraError as e:
+                    return web.json_response({"error": str(e)}, status=e.status)
+                except OSError as e:
+                    return web.json_response({"error": f"not done: {e}"}, status=500)
+            return run()
+
+        async def _lora_body(request):
+            try:
+                body = await request.json()
+            except Exception:
+                body = None
+            return body if isinstance(body, dict) else {}
+
+        async def _bepic_lora_datasets(request):
+            if lora_io is None:
+                return web.json_response({"error": "dataset panel unavailable"}, status=500)
+            out = folder_paths.get_output_directory()
+            return await _lora_reply(lambda: {"datasets": lora_io.list_datasets(out)})
+
+        async def _bepic_lora_dataset(request):
+            if lora_io is None:
+                return web.json_response({"error": "dataset panel unavailable"}, status=500)
+            return await _lora_reply(lora_io.get_dataset, folder_paths.get_output_directory(), request.query.get("name"))
+
+        async def _bepic_lora_file(request):
+            if lora_io is None:
+                return web.json_response({"error": "dataset panel unavailable"}, status=500)
+            try:
+                p = lora_io.resolve_file(folder_paths.get_output_directory(), request.query.get("path"))
+            except lora_io.LoraError as e:
+                return web.json_response({"error": str(e)}, status=e.status)
+            return web.FileResponse(p, headers={"Cache-Control": "no-cache"})
+
+        async def _bepic_lora_dataset_save(request):
+            if lora_io is None:
+                return web.json_response({"error": "dataset panel unavailable"}, status=500)
+            b = await _lora_body(request)
+            return await _lora_reply(lora_io.save_dataset, folder_paths.get_output_directory(),
+                                     b.get("name"), b.get("manifest"))
+
+        async def _bepic_lora_review(request):
+            if lora_io is None:
+                return web.json_response({"error": "dataset panel unavailable"}, status=500)
+            b = await _lora_body(request)
+            return await _lora_reply(lora_io.review_dataset, folder_paths.get_output_directory(),
+                                     b.get("name"), b.get("action"), b.get("note"), b.get("manifest"))
+
+        async def _bepic_lora_runs(request):
+            if lora_io is None:
+                return web.json_response({"error": "dataset panel unavailable"}, status=500)
+            out = folder_paths.get_output_directory()
+            return await _lora_reply(lambda: {"runs": lora_io.list_runs(out)})
+
+        async def _bepic_lora_run(request):
+            if lora_io is None:
+                return web.json_response({"error": "dataset panel unavailable"}, status=500)
+            return await _lora_reply(lora_io.get_run, folder_paths.get_output_directory(), request.query.get("name"))
+
+        async def _bepic_lora_control(request):
+            if lora_io is None:
+                return web.json_response({"error": "dataset panel unavailable"}, status=500)
+            b = await _lora_body(request)
+            return await _lora_reply(lora_io.control_run, folder_paths.get_output_directory(),
+                                     b.get("name"), b.get("action"), b.get("keep"))
 
         # --- Agent code panel (viewer_code.py) -------------------------------
         _code_store = viewer_code.CodeStore() if viewer_code is not None else None
@@ -2118,6 +2198,12 @@ try:
         for _m in ("GET", "POST"):
             _safe_add(_m, "/bepic/mg_render", _bepic_mg_render)
             _safe_add(_m, "/api/bepic/mg_render", _bepic_mg_render)
+        for _m, _p, _h in (("GET", "datasets", _bepic_lora_datasets), ("GET", "dataset", _bepic_lora_dataset),
+                           ("GET", "file", _bepic_lora_file), ("POST", "dataset_save", _bepic_lora_dataset_save),
+                           ("POST", "review", _bepic_lora_review), ("GET", "runs", _bepic_lora_runs),
+                           ("GET", "run", _bepic_lora_run), ("POST", "control", _bepic_lora_control)):
+            _safe_add(_m, "/bepic/lora/" + _p, _h)
+            _safe_add(_m, "/api/bepic/lora/" + _p, _h)
         _safe_add("GET", "/bepic/health", _bepic_health)
         _safe_add("GET", "/api/bepic/health", _bepic_health)
 

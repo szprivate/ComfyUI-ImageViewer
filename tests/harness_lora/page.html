@@ -1,0 +1,34 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>lora panel harness</title>
+<style>html,body{margin:0;height:100%;background:#111}#host{position:absolute;inset:0}</style></head>
+<body><div id="host"></div>
+<script type="module">
+import { createLoraEditor } from "/js/bEpicViewer_loraEditor.js";
+const call = async (path, body) => {
+  const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || "HTTP " + r.status);
+  return d;
+};
+const q = encodeURIComponent;
+const sent = [];
+window.__toasts = [];
+const ed = createLoraEditor(document.getElementById("host"), {
+  api: {
+    datasets: () => call("/bepic/lora/datasets"),
+    dataset: (n) => call("/bepic/lora/dataset?name=" + q(n)),
+    save: (n, m) => call("/bepic/lora/dataset_save", { name: n, manifest: m }),
+    review: (n, a, note, m) => call("/bepic/lora/review", { name: n, action: a, note, manifest: m }),
+    runs: () => call("/bepic/lora/runs"),
+    run: (n) => call("/bepic/lora/run?name=" + q(n)),
+    control: (n, keep) => call("/bepic/lora/control", { name: n, action: "stop", keep }),
+  },
+  fileUrl: (p) => "/bepic/lora/file?path=" + q(p),
+  notify: (m, s) => { window.__toasts.push([s, m]); },
+  sendToAgent: async (t) => { sent.push(t); },
+  isOpen: () => true,
+});
+window.ed = ed; window.__sent = sent; window.__ready = true;
+const t = new URLSearchParams(location.search).get("tab");
+if (t === "training") ed.showTraining(); else ed.openDataset("demo_cat");
+</script></body></html>

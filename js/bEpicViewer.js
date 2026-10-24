@@ -31,6 +31,7 @@ import { ParamAnimMixin } from "./bEpicViewer_paramAnim.js";
 import { ParamCurvesMixin } from "./bEpicViewer_paramCurves.js";
 import { CodePanelMixin } from "./bEpicViewer_codePanel.js";
 import { MgPanelMixin } from "./bEpicViewer_mgPanel.js";
+import { LoraPanelMixin } from "./bEpicViewer_loraPanel.js";
 import { PrevizChannelsMixin } from "./bEpicViewer_previzChannels.js";
 import { PrevizRenderMixin } from "./bEpicViewer_previzRender.js";
 import { PrevizShotMixin } from "./bEpicViewer_previzShot.js";
@@ -610,6 +611,15 @@ class ViewerPanel extends HTMLElement {
             mp.className = 'curves-panel motion-panel right';
             this.curvesPanel.parentNode.insertBefore(mp, this.curvesPanel.nextSibling);
             this.motionPanel = mp;
+        }
+        // Dataset (bEpicViewer_loraPanel.js): LoRA dataset review + training monitor, made here like Motion.
+        this.loraPanel = sr.getElementById('lora-panel');
+        if (!this.loraPanel && this.curvesPanel && this.curvesPanel.parentNode) {
+            const lp = this.curvesPanel.ownerDocument.createElement('div');
+            lp.id = 'lora-panel';
+            lp.className = 'curves-panel lora-panel right';
+            this.curvesPanel.parentNode.insertBefore(lp, this.curvesPanel.nextSibling);
+            this.loraPanel = lp;
         }
         // The Channel Box came after the others; a cached older markup lacks
         // it, so it is made here beside the Outliner rather than going missing.
@@ -1316,6 +1326,7 @@ Object.assign(
     ParamCurvesMixin,
     CodePanelMixin,
     MgPanelMixin,
+    LoraPanelMixin,
     PrevizChannelsMixin,
     PrevizRenderMixin,
     PrevizShotMixin,
@@ -1487,6 +1498,15 @@ app.registerExtension({
                 try { if (bridge.show) bridge.show(); } catch (_) { /* already up */ }
                 if (e.detail && e.detail.path) globalViewerPanel?.mgOpenFile?.(e.detail.path);
             } catch (err) { console.warn("bEpicViewer: motion scene not opened", err); }
+        });
+
+        // An agent opened a LoRA dataset (POST /bepic/push with its manifest.json).
+        api.addEventListener("bepic.lora.open", (e) => {
+            try {
+                const bridge = window.bEpicViewerApi || {};
+                try { if (bridge.show) bridge.show(); } catch (_) { /* already up */ }
+                if (e.detail && e.detail.path) globalViewerPanel?.loraOpen?.(e.detail.path);
+            } catch (err) { console.warn("bEpicViewer: lora dataset not opened", err); }
         });
 
         api.addEventListener("bepic.viewer.update", (e) => {

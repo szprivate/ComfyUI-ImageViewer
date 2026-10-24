@@ -33,6 +33,7 @@ const GROUPS = [
         { label: "Parameters", panel: "params" },
         { label: "Agent code", panel: "agentCode" },
         { label: "Motion", panel: "motionGfx" },
+        { label: "Dataset", panel: "loraDataset" },
         { label: "agentY", panel: "agentChat" },
     ] },
     { id: "3d", title: "3D", icon: "box", items: [
