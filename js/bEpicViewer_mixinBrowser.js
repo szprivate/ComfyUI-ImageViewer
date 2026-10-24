@@ -910,6 +910,10 @@ export const BrowserMixin = {
         const list   = all.filter((f) => _OPENABLE.has(f.kind));
         // A text file opens in the Agent code panel (a double-click on one).
         const texts  = picked.filter((f) => f.kind === "text");
+        if (list.length === 0 && texts.length && /\.mgscene\.json$/i.test(texts[0].path || "") && this.mgOpenFile) {
+            this.mgOpenFile(texts[0].path);       // a motion-graphics scene opens in the Motion editor
+            return;
+        }
         if (list.length === 0 && texts.length && this.codePanelOpenFile) {
             this.codePanelOpenFile(texts[0]);
             return;

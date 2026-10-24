@@ -33,6 +33,10 @@ An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/C
 - drag a history thumbnail, a file or the frame on screen onto the graph to get a loader node holding it
 - **Roto** and **SAM3** tools draw mattes and point / box prompts right in the viewer, onto nodes that feed them to the workflow
 
+### Motion graphics
+
+- the **Motion** panel (bar: *ComfyUI > Motion*, or double-click a `*.mgscene.json` in the file browser) edits the motion graphics an agent writes as a scene file: a layer list, a preview, a timeline with keyframes (move, copy, paste, delete), a properties panel, a curve for the selected key and on-canvas move / scale / rotate / anchor handles; **Render** hands the saved scene to agentY's Remotion renderer. The preview and the render share one module, so what you see is what comes out - see [docs/motion_graphics_editor.md](docs/motion_graphics_editor.md)
+
 ### The interface
 
 - **dockable panels** — history, file browser, parameters, and the 3D panels — on either side of the picture or along the bottom, stacked and resized with splitters, arrangement remembered

@@ -30,6 +30,7 @@ import { AgentPanelMixin } from "./bEpicViewer_agentPanel.js";
 import { ParamAnimMixin } from "./bEpicViewer_paramAnim.js";
 import { ParamCurvesMixin } from "./bEpicViewer_paramCurves.js";
 import { CodePanelMixin } from "./bEpicViewer_codePanel.js";
+import { MgPanelMixin } from "./bEpicViewer_mgPanel.js";
 import { PrevizChannelsMixin } from "./bEpicViewer_previzChannels.js";
 import { PrevizRenderMixin } from "./bEpicViewer_previzRender.js";
 import { PrevizShotMixin } from "./bEpicViewer_previzShot.js";
@@ -600,6 +601,15 @@ class ViewerPanel extends HTMLElement {
             ac.className = 'curves-panel agent-code-panel right';
             this.curvesPanel.parentNode.insertBefore(ac, this.curvesPanel.nextSibling);
             this.agentCodePanel = ac;
+        }
+        // Motion (bEpicViewer_mgPanel.js): the motion-graphics editor, made here like Agent code.
+        this.motionPanel = sr.getElementById('motion-panel');
+        if (!this.motionPanel && this.curvesPanel && this.curvesPanel.parentNode) {
+            const mp = this.curvesPanel.ownerDocument.createElement('div');
+            mp.id = 'motion-panel';
+            mp.className = 'curves-panel motion-panel right';
+            this.curvesPanel.parentNode.insertBefore(mp, this.curvesPanel.nextSibling);
+            this.motionPanel = mp;
         }
         // The Channel Box came after the others; a cached older markup lacks
         // it, so it is made here beside the Outliner rather than going missing.
@@ -1305,6 +1315,7 @@ Object.assign(
     ParamAnimMixin,
     ParamCurvesMixin,
     CodePanelMixin,
+    MgPanelMixin,
     PrevizChannelsMixin,
     PrevizRenderMixin,
     PrevizShotMixin,
@@ -1467,6 +1478,15 @@ app.registerExtension({
         api.addEventListener("bepic.code.update", (e) => {
             try { globalViewerPanel?.codePanelReceive?.(e.detail); }
             catch (err) { console.warn("bEpicViewer: agent code not shown", err); }
+        });
+
+        // An agent opened a motion-graphics scene (POST /bepic/push with a .mgscene.json).
+        api.addEventListener("bepic.mg.open", (e) => {
+            try {
+                const bridge = window.bEpicViewerApi || {};
+                try { if (bridge.show) bridge.show(); } catch (_) { /* already up */ }
+                if (e.detail && e.detail.path) globalViewerPanel?.mgOpenFile?.(e.detail.path);
+            } catch (err) { console.warn("bEpicViewer: motion scene not opened", err); }
         });
 
         api.addEventListener("bepic.viewer.update", (e) => {

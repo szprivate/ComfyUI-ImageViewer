@@ -32,6 +32,7 @@ const GROUPS = [
         { label: "History", panel: "history" },
         { label: "Parameters", panel: "params" },
         { label: "Agent code", panel: "agentCode" },
+        { label: "Motion", panel: "motionGfx" },
         { label: "agentY", panel: "agentChat" },
     ] },
     { id: "3d", title: "3D", icon: "box", items: [

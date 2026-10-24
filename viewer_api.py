@@ -37,6 +37,12 @@ except Exception:  # pragma: no cover
     previz_shot = None
 
 try:
+    from . import mg_scene_io
+    from . import mg_render
+except Exception:  # noqa: BLE001
+    mg_scene_io = None
+    mg_render = None
+try:
     from . import atlas_render
 except Exception:  # pragma: no cover
     atlas_render = None
@@ -964,6 +970,18 @@ try:
             group, label = clean(data.get("group")), clean(data.get("label"))
 
             from . import timeline_io
+            # Motion-graphics scenes (*.mgscene.json) open the Motion panel, not a media tab.
+            motion, rest = [], []
+            for raw in data["paths"]:
+                if mg_scene_io is not None and mg_scene_io.is_scene_path(raw):
+                    p = os.path.abspath(raw)
+                    if os.path.isfile(p) and path_access.may_serve(p):
+                        motion.append(p)
+                    else:
+                        rest.append(raw)
+                else:
+                    rest.append(raw)
+            data["paths"] = rest
             image_exts, video_exts = _browse_exts()
             files, refused, cuts = push_open.expand(
                 data["paths"], image_exts, video_exts,
@@ -1017,7 +1035,9 @@ try:
                 if opened:
                     msg["open"] = opened
                 PromptServer.instance.send_sync("bepic.viewer.update", msg)
-            return web.json_response({"ok": True, "shown": len(frames), "refused": refused,
+            for p in motion:
+                PromptServer.instance.send_sync("bepic.mg.open", {"path": p})
+            return web.json_response({"ok": True, "shown": len(frames), "motion": motion, "refused": refused,
                                       "opened": bool(opened), "edit": bool(opened and opened.get("panel")),
                                       "notes": notes})
 
@@ -1112,6 +1132,67 @@ try:
             try:
                 out = await asyncio.to_thread(atlas_render.render_state, base, request.query.get("id") or "")
             except atlas_render.RelayError as e:
+                return web.json_response({"error": str(e)}, status=e.status)
+            return web.json_response(out)
+
+        # --- Motion panel: scene files and the Render relay (mg_scene_io.py, mg_render.py) ---
+        async def _bepic_mgscene(request):
+            """GET ?path=<file>.mgscene.json -> {"path", "scene"}."""
+            if mg_scene_io is None:
+                return web.json_response({"error": "motion panel unavailable"}, status=500)
+            path = request.query.get("path") or ""
+            if not mg_scene_io.is_scene_path(path):
+                return web.json_response({"error": "not a scene file (*.mgscene.json)"}, status=400)
+            path = os.path.abspath(path)
+            if not path_access.may_serve(path):
+                return web.json_response({"error": "not allowed"}, status=403)
+            if not os.path.isfile(path):
+                return web.json_response({"error": "file not found"}, status=404)
+            try:
+                scene = await asyncio.get_running_loop().run_in_executor(None, mg_scene_io.read, path)
+            except (ValueError, OSError) as e:
+                return web.json_response({"error": str(e)}, status=422)
+            return web.json_response({"path": path, "scene": scene}, headers={"Cache-Control": "no-cache"})
+
+        async def _bepic_mgscene_save(request):
+            """POST {"path", "scene"}: write the scene file the editor changed (allowed folders only)."""
+            if mg_scene_io is None:
+                return web.json_response({"error": "motion panel unavailable"}, status=500)
+            try:
+                body = await request.json()
+            except Exception:
+                body = None
+            if not isinstance(body, dict):
+                return web.json_response({"error": "bad request"}, status=400)
+            path = body.get("path") or ""
+            if not mg_scene_io.is_scene_path(path):
+                return web.json_response({"error": "not a scene file (*.mgscene.json)"}, status=400)
+            path = os.path.abspath(path)
+            if not path_access.is_allowed(path):
+                return web.json_response({"error": path_access.refusal(path)}, status=403)
+            try:
+                await asyncio.get_running_loop().run_in_executor(None, mg_scene_io.write, path, body.get("scene"))
+            except ValueError as e:
+                return web.json_response({"error": str(e)}, status=422)
+            except OSError as e:
+                return web.json_response({"error": f"not saved: {e}"}, status=500)
+            return web.json_response({"ok": True, "path": path})
+
+        async def _bepic_mg_render(request):
+            """POST {"path", "format"?, "scale"?} starts a render on the agentY host; GET ?id= polls it."""
+            if mg_render is None:
+                return web.json_response({"error": "motion render unavailable"}, status=500)
+            base = f"{request.scheme}://{request.host}"
+            try:
+                if request.method == "POST":
+                    try:
+                        data = await request.json()
+                    except Exception:
+                        data = None
+                    out = await asyncio.to_thread(mg_render.start_render, base, data)
+                else:
+                    out = await asyncio.to_thread(mg_render.render_state, base, request.query.get("id") or "")
+            except mg_render.RelayError as e:
                 return web.json_response({"error": str(e)}, status=e.status)
             return web.json_response(out)
 
@@ -2012,6 +2093,12 @@ try:
         _safe_add("POST", "/api/bepic/roots", _bepic_roots_save)
         _safe_add("POST", "/bepic/roots/folders", _bepic_roots_folders)
         _safe_add("POST", "/api/bepic/roots/folders", _bepic_roots_folders)
+        for _m, _h in (("GET", _bepic_mgscene), ("POST", _bepic_mgscene_save)):
+            _safe_add(_m, "/bepic/mgscene", _h)
+            _safe_add(_m, "/api/bepic/mgscene", _h)
+        for _m in ("GET", "POST"):
+            _safe_add(_m, "/bepic/mg_render", _bepic_mg_render)
+            _safe_add(_m, "/api/bepic/mg_render", _bepic_mg_render)
         _safe_add("GET", "/bepic/health", _bepic_health)
         _safe_add("GET", "/api/bepic/health", _bepic_health)
 

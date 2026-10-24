@@ -1503,3 +1503,7 @@ textarea.param-input {
 /* The bar's ComfyUI group lights a dot when the agent sent code you have not opened. */
 .bar-group.has-code { position: relative; }
 .bar-group.has-code::after { content: ""; position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: #f60; }
+
+/* Motion (bEpicViewer_mgPanel.js / bEpicViewer_mgEditor.js): the editor brings its own styles (mg-*). */
+.dock-rail > .motion-panel { width: auto; min-width: 0; display: flex; flex-direction: column; }
+.motion-panel > .mg-root { flex: 1 1 0; min-height: 0; height: auto; }

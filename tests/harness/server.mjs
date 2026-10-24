@@ -3,7 +3,8 @@ const VIEWER = process.argv[2], HERE = path.dirname(new URL(import.meta.url).pat
 const types = { ".js": "text/javascript", ".css": "text/css", ".html": "text/html", ".json": "application/json", ".png": "image/png" };
 http.createServer((req, res) => {
   const u = new URL(req.url, "http://x"); let p = u.pathname;
-  let file = p.startsWith("/extensions/viewer/") ? path.join(VIEWER, "js", p.slice("/extensions/viewer/".length))
+  let file = p.startsWith("/scenes/") ? path.join(VIEWER, "..", "agentY-core", "agenty_core", "motion_graphics", "examples", p.slice(8))
+           : p.startsWith("/extensions/viewer/") ? path.join(VIEWER, "js", p.slice("/extensions/viewer/".length))
            : path.join(HERE, p);
   fs.readFile(file, (err, buf) => {
     if (err) { res.writeHead(404); res.end("nf"); return; }

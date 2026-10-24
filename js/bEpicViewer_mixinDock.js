@@ -68,6 +68,9 @@ const DOCK_PANELS = {
     // The code the agent writes, and text files from the browser
     // (bEpicViewer_codePanel.js). Read-only for now.
     agentCode: { prop: "agentCodePanel", label: "Agent code", minW: 240, minH: 160, defaultRail: "right" },
+    // The motion-graphics editor (bEpicViewer_mgPanel.js / bEpicViewer_mgEditor.js): a scene an agent wrote,
+    // as layers, a timeline with keyframes, curves and gizmos. A whole editor wants room.
+    motionGfx: { prop: "motionPanel", label: "Motion", minW: 560, minH: 360, defaultRail: "right", size: 3 },
     // (The drawing tools' options have no panel of their own: while a tool is
     // on they take the Parameters panel over — ToolsMixin._toolShowDock.)
     // The agentY chat panel (bEpicViewer_agentPanel.js): agentY's own panel,
@@ -167,6 +170,7 @@ export const DockMixin = {
                                            { id: "rotoCurves", size: 1, hidden: true },
                                            { id: "paramCurves", size: 1, hidden: true },
                                            { id: "agentCode", size: 1, hidden: true },
+                                           { id: "motionGfx", size: 3, hidden: true },
                                            { id: "params",  size: 1, hidden: false }] },
             // A graph over time wants width: the Curve Editor lives under the picture.
             bottom: { height: 240, panels: [{ id: "curves", size: 1, hidden: true }] },
@@ -554,6 +558,8 @@ export const DockMixin = {
             if (this.paramRefreshCurves) this.paramRefreshCurves();
         } else if (id === "agentCode") {
             if (this._codeOnShown) this._codeOnShown();
+        } else if (id === "motionGfx") {
+            if (this._mgOnShown) this._mgOnShown();
         } else if (id === "editTimeline") {
             if (this.editTlRefresh) this.editTlRefresh();
         } else if (id === "channels") {

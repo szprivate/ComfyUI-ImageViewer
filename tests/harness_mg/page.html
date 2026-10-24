@@ -1,0 +1,19 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>mg editor harness</title>
+<style>html,body{margin:0;height:100%;background:#111}#host{position:absolute;inset:0}</style></head>
+<body><div id="host"></div>
+<script type="module">
+import { createMgEditor } from "/js/bEpicViewer_mgEditor.js";
+const q = new URLSearchParams(location.search);
+const name = q.get("scene") || "lower_third";
+const saved = [];
+const ed = createMgEditor(document.getElementById("host"), {
+  assetUrl: (s) => s,
+  save: async (path, scene) => { saved.push(JSON.stringify(scene)); await fetch("/save?name=" + encodeURIComponent(name), { method: "POST", body: JSON.stringify(scene) }); },
+  render: async () => ({ message: "render requested (harness)" }),
+  notify: (m) => { window.__toast = m; },
+});
+const scene = await (await fetch("/scenes/" + name + ".mgscene.json")).json();
+const v = ed.load(scene, "C:/demo/" + name + ".mgscene.json");
+window.ed = ed; window.__saved = saved; window.__ready = true; document.title = v.ok ? "ready" : "invalid";
+</script></body></html>

@@ -1,0 +1,36 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#222;height:100%}</style></head>
+<body>
+<script>window.addEventListener("error",(e)=>{document.title="ERR "+e.message});</script><script type="module">
+// The REAL viewer (stubbed ComfyUI scripts) with the Motion panel: node tests/harness/server.mjs <viewer checkout>,
+// then open http://127.0.0.1:8765/motion.html . The scene comes from agentY-core's examples; saves are kept in window.__saves.
+window.__saves = [];
+window.__fetchApi = async (p, opts) => {
+  const j = (o, ok = true) => ({ ok, status: ok ? 200 : 404, json: async () => o });
+  if (p.startsWith("/bepic/mgscene") && (!opts || !opts.method || opts.method === "GET")) {
+    const name = decodeURIComponent(p.split("path=")[1]).split(/[\\/]/).pop();
+    const scene = await (await fetch("/scenes/" + name)).json();
+    return j({ path: "D:/out/" + name, scene });
+  }
+  if (p.startsWith("/bepic/mgscene")) { window.__saves.push(JSON.parse(opts.body)); return j({ ok: true }); }
+  return j({}, false);
+};
+let v; try { v = await import("/extensions/viewer/bEpicViewer.js"); } catch (e) { document.title = "IMPORT " + e.message; throw e; }
+const panel = v.mountStandaloneViewer(document.body);
+window.__panel = panel;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+try {
+  for (let i = 0; i < 100 && !(panel.dockLayout && panel.motionPanel); i++) await sleep(50);
+  Object.assign(panel.style, { width: "1400px", height: "850px", left: "20px", top: "20px" });
+  panel.setPanelDocked("params", false);
+  if (panel.dockLayout) panel.dockLayout.right.width = 1000;
+  panel.applyDockLayout();
+  try { await window.__ext.setup(); } catch (e) { window.__setupErr = e.message; }
+  const api = (await import("/scripts/api.js")).api;
+  api.dispatch("bepic.mg.open", { path: "D:/out/title_card.mgscene.json" });   // what POST /bepic/push sends
+  await sleep(200); if (!(panel._mg && panel._mg.path)) await panel.mgOpenFile("D:/out/title_card.mgscene.json");     // the stub app has no extension listener
+  await sleep(900);
+  const ed = panel._mg && panel._mg.editor;
+  document.title = ed ? `done layers=${ed.getScene().layers.length} docked=${panel.isPanelDocked("motionGfx")}` : "no editor";
+  window.__ready = true;
+} catch (e) { document.title = "ERR " + e.message; console.error(e); }
+</script></body></html>
