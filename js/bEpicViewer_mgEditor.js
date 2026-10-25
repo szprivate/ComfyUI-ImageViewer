@@ -792,10 +792,13 @@ export function createMgEditor(host, opts = {}) {
         const orig = JSON.stringify(st.scene.layers);
         const x0 = e.clientX; let moved = false;
         const sel0 = st.keys.map((s) => ({ ...s }));
-        const target = e.currentTarget;
-        target.setPointerCapture(e.pointerId);
-        target.onpointermove = (ev) => {
-            const df = Math.round((ev.clientX - x0) / k);
+        // The drag listens on the timeline container, not on the diamond: every refresh rebuilds the
+        // timeline, which would detach a diamond holding the pointer capture and end the drag.
+        const target = tl;
+        try { target.setPointerCapture(e.pointerId); } catch (_) { /* pointer already gone */ }
+        const onMove = (ev) => {
+            if (ev.pointerId !== e.pointerId) return;
+            const df =Math.round((ev.clientX - x0) / k);
             if (!df && !moved) return;
             if (!moved) { moved = true; st.hist.push(st.scene); }
             const base = JSON.parse(orig);
@@ -808,7 +811,17 @@ export function createMgEditor(host, opts = {}) {
             st.keys = next; st.dirty = true;
             refresh(["bar", "stage", "timeline", "gizmo"]);
         };
-        target.onpointerup = () => { target.onpointermove = null; target.onpointerup = null; if (moved) refresh(); else { setFrame(f); refresh(["props", "timeline"]); } };
+        const onUp = (ev) => {
+            if (ev.pointerId !== e.pointerId) return;
+            target.removeEventListener("pointermove", onMove);
+            target.removeEventListener("pointerup", onUp);
+            target.removeEventListener("pointercancel", onUp);
+            try { target.releasePointerCapture(e.pointerId); } catch (_) { /* already released */ }
+            if (moved) refresh(); else { setFrame(f); refresh(["props", "timeline"]); }
+        };
+        target.addEventListener("pointermove", onMove);
+        target.addEventListener("pointerup", onUp);
+        target.addEventListener("pointercancel", onUp);
         refresh(["props", "timeline"]);
     }
 
