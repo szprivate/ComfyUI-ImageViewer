@@ -10,10 +10,17 @@
 //   save(path, scene)        -> Promise, writes the file
 //   render(path, scene)      -> Promise<{message}>, asks for a video
 //   notify(text, severity)   -> a toast
-//   split: true              -> the layers list, the properties (with the curve) and the timeline are NOT
-//                               put in `host`: they are handed back as `parts` ({layers, props, timeline},
-//                               plain elements), so the viewer can seat each in a dock panel of its own.
-//                               `host` then holds the toolbar, the preview and the transport.
+//   split: true              -> the properties (with the curve) and the timeline (whose left column is the
+//                               layer list) are NOT put in `host`: they are handed back as `parts`
+//                               ({props, timeline}, plain elements), so the viewer can seat each in a dock
+//                               panel of its own. `host` then holds the toolbar and the preview.
+//   transport: {toggle, step(n), first, last}
+//                            -> the host owns time (the viewer's own play / step / scrub bar): the editor has no
+//                               transport of its own, plays nothing itself, and sends every time key through
+//                               these. The host moves the playhead with editor.setFrame(f, {fromHost: true}).
+//   onFrame(f)               -> the user moved the playhead here (ruler, playhead, track, a key); host-driven
+//                               setFrame(..., {fromHost}) does not call it, so the two never echo.
+//   onComp()                 -> the composition's length / frame rate / size changed (an edit, undo, load).
 //
 // The preview is the render: every SVG layer is drawn by layerSvg() from the shared
 // module (bEpicViewer_mgScene.js), the same code agentY's Remotion renderer runs.
@@ -33,14 +40,11 @@ const CSS = `
 .mg-bar .mg-title{font-weight:600;margin-right:6px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mg-btn{background:#2b2b31;border:1px solid #3a3a42;color:#d8d8dc;border-radius:3px;padding:2px 7px;cursor:pointer;font:inherit}
 .mg-btn:hover{background:#35353d}.mg-btn[disabled]{opacity:.4;cursor:default}.mg-btn.on{background:#ff6a1a;border-color:#ff6a1a;color:#111}
+.mg-info{opacity:.6;white-space:nowrap}
 .mg-sep{width:1px;height:16px;background:#3a3a42;margin:0 3px}
 .mg-main{display:flex;flex:1;min-height:0}
-.mg-layers{width:176px;border-right:1px solid #2c2c32;overflow:auto;flex:none}
-.mg-lrow{display:flex;align-items:center;gap:3px;padding:0 4px;height:22px;cursor:pointer;white-space:nowrap}
-.mg-lrow:hover{background:#25252b}.mg-lrow.sel{background:#3a2a1c}
-.mg-lrow .mg-name{flex:1;overflow:hidden;text-overflow:ellipsis}
 .mg-ic{width:16px;text-align:center;opacity:.55;cursor:pointer;flex:none;user-select:none}.mg-ic.on{opacity:1}
-.mg-type{font-size:10px;opacity:.5;width:18px;flex:none}
+.mg-type{font-size:10px;opacity:.5;width:14px;text-align:center;flex:none}
 .mg-center{flex:1;display:flex;flex-direction:column;min-width:0}
 .mg-stage-wrap{flex:1;min-height:80px;position:relative;overflow:hidden;background:#0f0f12}
 .mg-stage{position:absolute;left:0;top:0;transform-origin:0 0;overflow:hidden;box-shadow:0 0 0 1px #444;isolation:isolate}
@@ -56,24 +60,38 @@ const CSS = `
 .mg-prop textarea{height:44px;resize:vertical}.mg-prop input[type=color]{width:34px;height:20px;padding:0;border:1px solid #34343c;background:none}
 .mg-sw{width:16px;text-align:center;cursor:pointer;opacity:.5;flex:none;user-select:none}.mg-sw.on{opacity:1;color:${AMBER}}
 .mg-key{width:16px;text-align:center;cursor:pointer;color:${AMBER};flex:none;user-select:none}
-.mg-tl{height:210px;min-height:60px;overflow:auto;border-top:1px solid #2c2c32;position:relative;flex:none;background:#17171b}
+.mg-tl{user-select:none;height:210px;min-height:60px;overflow:auto;border-top:1px solid #2c2c32;position:relative;flex:none;background:#17171b}
 .mg-tl-in{position:relative}
 .mg-trow{display:flex;height:${ROW_H}px}
-.mg-tlabel{position:sticky;left:0;z-index:3;width:${LABEL_W}px;flex:none;background:#1b1b1f;border-right:1px solid #2c2c32;padding:0 6px;display:flex;align-items:center;gap:4px;overflow:hidden;white-space:nowrap}
-.mg-tlabel.sub{padding-left:22px;opacity:.8}.mg-trow.sel .mg-tlabel{background:#2b2218}
+.mg-tlabel{position:sticky;left:0;z-index:3;width:${LABEL_W}px;flex:none;background:#1b1b1f;border-right:1px solid #2c2c32;padding:0 4px;display:flex;align-items:center;gap:3px;overflow:hidden;white-space:nowrap}
+.mg-tlabel.sub{padding-left:40px;opacity:.8}.mg-trow.sel .mg-tlabel{background:#2b2218}
+.mg-trow.mg-layer-row .mg-tlabel{cursor:pointer;user-select:none}.mg-trow.mg-layer-row:not(.sel):hover .mg-tlabel{background:#25252b}
+.mg-trow.mg-hidden .mg-tlabel .mg-name,.mg-trow.mg-hidden .mg-type{opacity:.4}
+.mg-tlabel .mg-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.mg-tlabel input.mg-rename{flex:1;min-width:0;background:#0f0f12;border:1px solid #ff6a1a;color:#fff;font:inherit;padding:0 2px;border-radius:2px;height:18px}
+.mg-ruler .mg-tlabel{gap:2px;padding:0 2px}
+.mg-ruler .mg-btn{padding:0 5px;line-height:16px;height:18px}
+.mg-trow.mg-drag-src{opacity:.45}
+.mg-dropline{position:absolute;left:0;width:${LABEL_W}px;height:2px;background:#ff6a1a;z-index:6;pointer-events:none}
+.mg-ctx{position:absolute;z-index:20;min-width:140px;background:#26262c;border:1px solid #44444c;border-radius:3px;padding:2px 0;box-shadow:0 4px 14px #0008}
+.mg-ctx div{padding:3px 12px;cursor:pointer;white-space:nowrap}.mg-ctx div:hover{background:#3a2a1c}.mg-ctx hr{border:0;border-top:1px solid #3a3a42;margin:2px 0}
 .mg-ttrack{position:relative;flex:none;border-bottom:1px solid #202026}
-.mg-ruler .mg-ttrack{background:#202026;cursor:ew-resize}
+.mg-ruler .mg-ttrack{background:#202026;cursor:ew-resize;overflow:hidden}
 .mg-tick{position:absolute;top:0;bottom:0;border-left:1px solid #34343c;font-size:9px;padding-left:2px;opacity:.7;pointer-events:none}
 .mg-bar-range{position:absolute;top:6px;height:10px;background:#3a4a66;border-radius:2px;opacity:.7}
 .mg-dia{position:absolute;top:5px;width:11px;height:11px;margin-left:-5px;background:${AMBER};transform:rotate(45deg) scale(.78);border:1px solid #402a00;cursor:pointer}
 .mg-dia.agg{background:#b98a4a;pointer-events:none}.mg-dia.sel{background:#fff;border-color:#ff6a1a}
-.mg-playhead{position:absolute;top:0;bottom:0;width:0;border-left:1px solid #ff3b3b;z-index:4;pointer-events:none}
-.mg-playhead:before{content:"";position:absolute;top:0;left:-5px;border:5px solid transparent;border-top-color:#ff3b3b}
+.mg-playhead{position:absolute;top:0;bottom:0;width:0;border-left:1px solid #ff3b3b;z-index:2;pointer-events:none}
+.mg-ph-grip{position:absolute;top:0;margin-left:-8px;width:15px;height:${ROW_H}px;cursor:ew-resize;z-index:2}
+.mg-ph-grip:before{content:"";position:absolute;top:3px;left:2px;border:6px solid transparent;border-top:9px solid #ff3b3b;border-bottom:0}
+.mg-ph-grip:after{content:"";position:absolute;top:12px;bottom:0;left:7px;border-left:1px solid #ff3b3b}
+.mg-ruler{position:sticky;top:0;z-index:5}
+.mg-ttrack{touch-action:none}
 .mg-curve{margin-top:4px}.mg-curve svg{width:100%;height:120px;background:#121216;border:1px solid #2c2c32;touch-action:none}
 .mg-empty{padding:18px;opacity:.6}
 .mg-part{background:#1b1b1f;color:#d8d8dc;font:12px/1.35 system-ui,Segoe UI,sans-serif;outline:none;position:absolute;inset:0;overflow:auto}
 .mg-part,.mg-part *{box-sizing:border-box}
-.mg-layers.mg-part,.mg-side.mg-part{width:auto;border:0}
+.mg-side.mg-part{width:auto;border:0}
 .mg-tl.mg-part{height:auto;border:0;min-height:0}
 .mg-toast{position:absolute;right:8px;bottom:8px;background:#2b2b31;border:1px solid #444;padding:4px 8px;border-radius:3px;z-index:9}
 .mg-vid{background:#223;color:#9ab;font-size:20px;display:flex;align-items:center;justify-content:center;border:2px dashed #557}
@@ -104,13 +122,17 @@ const EASE_CHOICES = ["smooth", "linear", "hold", "easeIn", "easeOut", "easeInOu
 export function createMgEditor(host, opts = {}) {
     const doc = host.ownerDocument;
     const rootNode = host.getRootNode ? host.getRootNode() : doc;
-    const o = Object.assign({ assetUrl: (s) => s, save: async () => {}, render: async () => ({ message: "no renderer" }), notify: () => {} }, opts);
+    const o = Object.assign({ assetUrl: (s) => s, save: async () => {}, render: async () => ({ message: "no renderer" }), notify: () => {},
+        onFrame: () => {}, onComp: () => {} }, opts);
     const st = {
         scene: null, path: "", sel: null, keys: [], frame: 0, playing: false, dirty: false, autokey: false,
         hist: new Mo.History(), clip: null, zoom: 1, curveAxis: 0, view: { s: 1, x: 0, y: 0 }, fit: true,
     };
     let dragging = null;
     let raf = 0;
+    let phEl = null;          // the playhead of the timeline as last built (moved in place, never rebuilt per frame)
+    let scrubbing = false;    // a playhead drag is on: nothing may rebuild the timeline under it
+    let compSig = "";
     const videos = new Map();
 
     // -- skeleton ----------------------------------------------------------------------------
@@ -122,23 +144,26 @@ export function createMgEditor(host, opts = {}) {
     const root = el(doc, "div", "mg-root"); root.tabIndex = 0;
     const bar = el(doc, "div", "mg-bar");
     const main = el(doc, "div", "mg-main");
-    const layersCol = el(doc, "div", "mg-layers");
     const center = el(doc, "div", "mg-center");
     const stageWrap = el(doc, "div", "mg-stage-wrap");
     const stage = el(doc, "div", "mg-stage");
     const gizmo = svgEl(doc, "svg", { class: "mg-gizmo" });
     stageWrap.append(stage, gizmo);
+    // The editor's own transport: only when nobody else owns time (the standalone page). Inside the viewer the
+    // viewer's play / step / scrub bar is the transport.
+    const hosted = !!o.transport;
     const transport = el(doc, "div", "mg-transport");
-    center.append(stageWrap, transport);
+    center.append(stageWrap);
+    if (!hosted) center.append(transport);
     const side = el(doc, "div", "mg-side");
     const tl = el(doc, "div", "mg-tl");
     if (o.split) {
         // Seated by the caller, each in a panel of its own; the keys must work there too.
-        for (const part of [layersCol, side, tl]) { part.classList.add("mg-part"); part.tabIndex = 0; }
+        for (const part of [side, tl]) { part.classList.add("mg-part"); part.tabIndex = 0; }
         main.append(center);
         root.append(bar, main);
     } else {
-        main.append(layersCol, center, side);
+        main.append(center, side);
         root.append(bar, main, tl);
     }
     host.append(root);
@@ -166,12 +191,21 @@ export function createMgEditor(host, opts = {}) {
         if (!st.scene) return;
         const all = !parts;
         if (all || parts.includes("bar")) renderBar();
-        if (all || parts.includes("layers")) renderLayers();
         if (all || parts.includes("stage")) renderStage();
         if (all || parts.includes("transport")) renderTransport();
         if (all || parts.includes("props")) renderProps();
         if (all || parts.includes("timeline")) renderTimeline();
         if (all || parts.includes("gizmo")) renderGizmo();
+        compChanged();
+    }
+    /** The composition's length / frame rate / size moved (an edit, undo, load): the host's bar follows. */
+    function compChanged() {
+        const c = st.scene && st.scene.comp;
+        const sig = c ? `${c.duration}|${c.fps}|${c.width}|${c.height}` : "";
+        if (sig === compSig) return;
+        compSig = sig;
+        if (c && st.frame > c.duration - 1) st.frame = Math.max(0, c.duration - 1);
+        try { o.onComp(c); } catch (_) { /* host has no bar */ }
     }
 
     // -- toolbar -----------------------------------------------------------------------------
@@ -184,15 +218,8 @@ export function createMgEditor(host, opts = {}) {
         const redo = btn("↷", "Redo (Ctrl+Y)", () => redo_());
         redo.disabled = !st.hist.canRedo;
         bar.append(title, btn("Save", "Save the scene file (Ctrl+S)", () => save()), undo, redo, el(doc, "span", "mg-sep"));
-        for (const [t, label] of [["text", "+ Text"], ["rect", "+ Rect"], ["ellipse", "+ Ellipse"], ["group", "+ Group"]]) {
-            bar.append(btn(label, "Add a layer", () => addLayer(t)));
-        }
-        bar.append(el(doc, "span", "mg-sep"),
-            btn("▲", "Move the layer up (drawn later)", () => moveSel(1)),
-            btn("▼", "Move the layer down", () => moveSel(-1)),
-            btn("Dup", "Duplicate the layer", () => dupSel()),
-            btn("Del", "Delete the layer (Delete)", () => delSel()),
-            el(doc, "span", "mg-sep"),
+        const c = st.scene.comp;
+        bar.append(el(doc, "span", "mg-info", `${c.width}×${c.height} · ${c.fps} fps · ${c.duration} f`), el(doc, "span", "mg-sep"),
             btn("Auto-key", "On: changing a value that is not animated yet starts its animation (a key at the playhead)",
                 () => { st.autokey = !st.autokey; renderBar(); }, st.autokey ? "on" : ""),
             btn("Fit", "Fit the picture to the panel", () => { st.fit = true; layoutStage(); }),
@@ -228,41 +255,113 @@ export function createMgEditor(host, opts = {}) {
         catch (e) { toast("Render failed: " + (e.message || e), "error"); }
     }
 
-    // -- layers list -----------------------------------------------------------------------------
-    function renderLayers() {
-        layersCol.replaceChildren();
-        const layers = st.scene.layers;
-        if (!layers.length) layersCol.append(el(doc, "div", "mg-empty", "No layers. Add one with the + buttons."));
-        for (let i = layers.length - 1; i >= 0; i--) {
-            const l = layers[i];
-            const row = el(doc, "div", "mg-lrow" + (l.id === st.sel ? " sel" : ""));
-            const depth = parentDepth(l);
-            row.style.paddingLeft = 4 + depth * 12 + "px";
-            const eye = el(doc, "span", "mg-ic" + (l.hidden ? "" : " on"), l.hidden ? "○" : "●");
-            eye.title = "Show / hide";
-            eye.onclick = (e) => { e.stopPropagation(); mutate(() => { if (l.hidden) delete l.hidden; else l.hidden = true; }); };
-            const lock = el(doc, "span", "mg-ic" + (l.locked ? " on" : ""), l.locked ? "\u{1F512}" : "\u{1F513}");
-            lock.title = "Lock (the preview cannot select or move it)";
-            lock.onclick = (e) => { e.stopPropagation(); mutate(() => { if (l.locked) delete l.locked; else l.locked = true; }); };
-            const name = el(doc, "span", "mg-name", l.name || l.id);
-            name.title = `${l.id} (${l.type})`;
-            name.ondblclick = () => {
-                const v = doc.defaultView.prompt("Layer name", l.name || l.id);
-                if (v) mutate(() => { l.name = v; });
-            };
-            row.append(eye, lock, el(doc, "span", "mg-type", TYPE_ICON[l.type] || "?"), name);
-            row.onclick = () => select(l.id);
-            layersCol.append(row);
-        }
-    }
+    // -- layers: the timeline's left column is the layer list (see renderTimeline) ----------------------------
     function parentDepth(l) {
         let d = 0, cur = l;
         while (cur && cur.parent && d < 20) { cur = Mo.layerOf(st.scene, cur.parent); d++; }
         return d;
     }
     function select(id) {
+        if (id === st.sel && !st.keys.length) return;
         st.sel = id; st.keys = [];
-        refresh(["layers", "props", "timeline", "gizmo"]);
+        refresh(["props", "timeline", "gizmo"]);
+    }
+    function renameLayer(l, nameEl) {
+        const inp = el(doc, "input", "mg-rename"); inp.type = "text"; inp.value = l.name || l.id;
+        nameEl.replaceWith(inp);
+        inp.focus(); inp.select();
+        let done = false;
+        const finish = (commit) => {
+            if (done) return; done = true;
+            const v = inp.value.trim();
+            if (commit && v && v !== (l.name || l.id)) mutate(() => { l.name = v; }); else refresh(["timeline"]);
+        };
+        inp.addEventListener("keydown", (e) => {
+            e.stopPropagation();
+            if (e.key === "Enter") { e.preventDefault(); finish(true); }
+            else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+        });
+        inp.addEventListener("blur", () => finish(true));
+        for (const t of ["pointerdown", "click", "dblclick"]) inp.addEventListener(t, (e) => e.stopPropagation());
+    }
+    /** Drag a layer row to a new place in the stack (the pointer stays on `tl`: nothing is rebuilt until the drop). */
+    function reorderDrag(e, l, rowEl) {
+        const rows = () => [...inner_().querySelectorAll(".mg-layer-row")];
+        const n = st.scene.layers.length;
+        const from = rows().indexOf(rowEl);
+        if (from < 0 || n < 2) return;
+        const y0 = e.clientY; let moving = false, to = from, line = null;
+        const target = (y) => {
+            const rs = rows();
+            for (let i = 0; i < rs.length; i++) { const r = rs[i].getBoundingClientRect(); if (y < r.bottom) return i; }
+            return rs.length - 1;
+        };
+        const onMove = (ev) => {
+            if (ev.pointerId !== e.pointerId) return;
+            if (!moving) {
+                if (Math.abs(ev.clientY - y0) < 4) return;
+                moving = true; scrubbing = true;
+                try { tl.setPointerCapture(e.pointerId); } catch (_) { /* pointer already gone */ }
+                rowEl.classList.add("mg-drag-src");
+                line = el(doc, "div", "mg-dropline"); inner_().append(line);
+            }
+            to = clamp(target(ev.clientY), 0, rows().length - 1);
+            const rs = rows(), r = rs[to].getBoundingClientRect(), ir = inner_().getBoundingClientRect();
+            line.style.top = (to <= from ? r.top : r.bottom) - ir.top - 1 + "px";
+        };
+        const onUp = (ev) => {
+            if (ev.pointerId !== e.pointerId) return;
+            tl.removeEventListener("pointermove", onMove);
+            tl.removeEventListener("pointerup", onUp);
+            tl.removeEventListener("pointercancel", onUp);
+            try { tl.releasePointerCapture(e.pointerId); } catch (_) { /* already released */ }
+            scrubbing = false;
+            if (!moving) return;
+            suppressClick = true; setTimeout(() => { suppressClick = false; }, 0);
+            if (ev.type === "pointercancel" || to === from) { refresh(["timeline"]); return; }
+            // the list shows the top layer first: display row i is layers[n-1-i], so moving up the list is +index
+            mutate(() => { Mo.moveLayer(st.scene, l.id, from - to); });
+        };
+        tl.addEventListener("pointermove", onMove);
+        tl.addEventListener("pointerup", onUp);
+        tl.addEventListener("pointercancel", onUp);
+    }
+    let suppressClick = false;
+    const inner_ = () => tl.querySelector(".mg-tl-in");
+
+    let ctxAway = null;
+    function closeCtx() {
+        for (const m of tl.querySelectorAll(".mg-ctx")) m.remove();
+        if (ctxAway) { doc.removeEventListener("pointerdown", ctxAway, true); ctxAway = null; }
+    }
+    /** A small menu at the pointer (inside the timeline panel): items are [label, fn] or "-". */
+    function showMenu(e, items) {
+        closeCtx();
+        const m = el(doc, "div", "mg-ctx");
+        for (const it of items) {
+            if (it === "-") { m.append(el(doc, "hr")); continue; }
+            const d = el(doc, "div", "", it[0]);
+            d.onclick = (ev) => { ev.stopPropagation(); closeCtx(); it[1](); };
+            m.append(d);
+        }
+        const r = tl.getBoundingClientRect();
+        m.style.left = Math.min(e.clientX - r.left + tl.scrollLeft, tl.scrollLeft + Math.max(0, tl.clientWidth - 160)) + "px";
+        m.style.top = Math.min(e.clientY - r.top + tl.scrollTop, tl.scrollTop + Math.max(0, tl.clientHeight - 24 * items.length)) + "px";
+        for (const t of ["pointerdown", "click", "dblclick"]) m.addEventListener(t, (ev) => ev.stopPropagation());
+        tl.append(m);
+        // (the panel lives in a shadow root: the event is retargeted to its host here, so ask the path)
+        ctxAway = (ev) => { if (!ev.composedPath().includes(m)) closeCtx(); };
+        doc.addEventListener("pointerdown", ctxAway, true);
+    }
+    const ADD_KINDS = [["text", "Text"], ["rect", "Rectangle"], ["ellipse", "Ellipse"], ["group", "Group"]];
+    function addItems() { return ADD_KINDS.map(([k, label]) => ["Add " + label, () => addLayer(k)]); }
+    function layerItems(l) {
+        return [["Rename", () => { select(l.id); const n = tl.querySelector(`.mg-layer-row[data-layer="${CSS_escape(l.id)}"] .mg-name`); if (n) renameLayer(l, n); }],
+            ["Duplicate", () => { select(l.id); dupSel(); }],
+            ["Move up", () => { select(l.id); moveSel(1); }],
+            ["Move down", () => { select(l.id); moveSel(-1); }],
+            ["Delete", () => { select(l.id); delSel(); }],
+            "-", ...addItems()];
     }
 
     // -- stage ---------------------------------------------------------------------------------------
@@ -497,7 +596,9 @@ export function createMgEditor(host, opts = {}) {
     stageWrap.addEventListener("pointercancel", endDrag);
 
     // -- transport -----------------------------------------------------------------------------------------------
+    // Only the standalone page has one (see `hosted`); in the viewer the viewer's own bar plays, steps and scrubs.
     function renderTransport() {
+        if (hosted) return;
         transport.replaceChildren();
         const c = comp();
         const play = btn(st.playing ? "⏸" : "▶", "Play / pause (Space)", () => togglePlay());
@@ -511,12 +612,23 @@ export function createMgEditor(host, opts = {}) {
         const lab = el(doc, "span", "", "Length");
         transport.append(rew, play, fr, secs, el(doc, "span", "mg-sep"), lab, len);
     }
-    function setFrame(f, { keepPlaying = false } = {}) {
-        st.frame = clamp(Math.round(f), 0, dur() - 1);
-        if (!keepPlaying && st.playing) togglePlay();
-        refresh(["stage", "transport", "props", "timeline", "gizmo"]);
+    /**
+     * Put the playhead on frame `f`. Only the picture, the gizmo, the properties and the playhead move: the timeline is
+     * NOT rebuilt (a rebuild per frame is what used to cut a scrub short). `live` skips the properties (playing, dragging);
+     * `fromHost` means the host's bar already knows (it asked), so it is not told again.
+     */
+    function setFrame(f, { keepPlaying = false, live = false, fromHost = false } = {}) {
+        if (!st.scene) return;
+        const nf = clamp(Math.round(Number(f) || 0), 0, dur() - 1);
+        const moved = nf !== st.frame;
+        st.frame = nf;
+        if (!hosted && !keepPlaying && st.playing) togglePlay();
+        refresh(live ? ["stage", "transport", "gizmo"] : ["stage", "transport", "props", "gizmo"]);
+        movePlayhead();
+        if (!fromHost && (moved || hosted)) { try { o.onFrame(nf); } catch (_) { /* host has no bar */ } }
     }
     function togglePlay() {
+        if (hosted) { o.transport.toggle(); return; }
         st.playing = !st.playing;
         for (const v of videos.values()) { try { v.pause(); } catch (_) { /* */ } }
         if (st.playing) {
@@ -525,7 +637,8 @@ export function createMgEditor(host, opts = {}) {
                 if (!st.playing) return;
                 const f = f0 + Math.floor(((t - t0) / 1000) * comp().fps);
                 st.frame = f % dur();
-                refresh(["stage", "transport", "timeline", "gizmo"]);
+                refresh(["stage", "transport", "gizmo"]);
+                movePlayhead(true);
                 raf = requestAnimationFrame(tick);
             };
             raf = requestAnimationFrame(tick);
@@ -740,8 +853,51 @@ export function createMgEditor(host, opts = {}) {
         const avail = Math.max(200, tl.clientWidth - LABEL_W - 20);
         return (avail / Math.max(1, dur())) * st.zoom;
     }
+    /** Move the playhead (line and ruler grip) to the current frame without rebuilding the timeline. */
+    function movePlayhead(follow = false) {
+        if (!phEl || !st.scene) return;
+        const k = ppf();
+        phEl.style.left = LABEL_W + st.frame * k + "px";
+        if (phEl._grip) phEl._grip.style.left = st.frame * k + "px";
+        if (follow && !scrubbing) {            // playing a zoomed timeline: keep the playhead on screen
+            const x = LABEL_W + st.frame * k;
+            if (x > tl.scrollLeft + tl.clientWidth - 12 || x < tl.scrollLeft + LABEL_W) tl.scrollLeft = Math.max(0, x - LABEL_W - 40);
+        }
+    }
+    /**
+     * Scrub: drag the playhead along the timeline. The pointer is captured by `tl` - the one element that is never
+     * replaced - and the frame is read off tl's own box, so nothing that rebuilds the rows (a selection, an edit, the
+     * resize observer) can detach the drag. `grab` is how far inside the playhead the pointer took hold of it.
+     */
+    function startScrub(e, grab = 0) {
+        if (e.button !== undefined && e.button !== 0) return;
+        scrubbing = true;
+        const at = (ev) => {
+            const r = tl.getBoundingClientRect();
+            return (ev.clientX - r.left - tl.clientLeft - LABEL_W + tl.scrollLeft - grab) / ppf();
+        };
+        try { tl.setPointerCapture(e.pointerId); } catch (_) { /* pointer already gone */ }
+        setFrame(at(e), { live: true });
+        const onMove = (ev) => { if (ev.pointerId === e.pointerId) setFrame(at(ev), { live: true }); };
+        const onUp = (ev) => {
+            if (ev.pointerId !== e.pointerId) return;
+            tl.removeEventListener("pointermove", onMove);
+            tl.removeEventListener("pointerup", onUp);
+            tl.removeEventListener("pointercancel", onUp);
+            tl.removeEventListener("lostpointercapture", onUp);
+            try { tl.releasePointerCapture(e.pointerId); } catch (_) { /* already released */ }
+            scrubbing = false;
+            refresh(["props", "timeline"]);
+        };
+        tl.addEventListener("pointermove", onMove);
+        tl.addEventListener("pointerup", onUp);
+        tl.addEventListener("pointercancel", onUp);
+        tl.addEventListener("lostpointercapture", onUp);
+    }
     function renderTimeline() {
         if (!st.scene) return;
+        // A drag that holds the pointer (scrub, reorder) must not lose its rows; it asks for a rebuild when it is over.
+        if (scrubbing) return;
         const keepL = tl.scrollLeft, keepT = tl.scrollTop;
         tl.replaceChildren();
         const k = ppf(), total = dur() * k;
@@ -750,31 +906,65 @@ export function createMgEditor(host, opts = {}) {
         const row = (label, cls = "", sub = false) => {
             const r = el(doc, "div", "mg-trow " + cls);
             const lab = el(doc, "div", "mg-tlabel" + (sub ? " sub" : ""));
-            if (label instanceof Node) lab.append(label); else lab.textContent = label;
+            if (label instanceof Node) lab.append(label); else if (label) lab.textContent = label;
             const track_ = el(doc, "div", "mg-ttrack"); track_.style.width = total + "px";
             r.append(lab, track_); inner.append(r);
             return { r, lab, track: track_ };
         };
-        // ruler
+        // ruler: the layer actions on the left, the frames (click or drag anywhere in them to move time) on the right
         const ruler = row("", "mg-ruler");
         const step = [1, 2, 5, 10, 15, 30, 60, 120].find((s) => s * k >= 42) || 240;
         for (let f = 0; f <= dur(); f += step) {
             const t = el(doc, "div", "mg-tick", String(f)); t.style.left = f * k + "px"; ruler.track.append(t);
         }
-        const fpsTxt = el(doc, "span", "", "frames"); ruler.lab.append(fpsTxt);
-        const scrub = (e) => {
-            const r = ruler.track.getBoundingClientRect();
-            setFrame((e.clientX - r.left) / k);
+        const act = (label, title, fn) => { const b = btn(label, title, fn); b.onpointerdown = (e) => e.stopPropagation(); return b; };
+        ruler.lab.append(
+            act("+", "Add a layer (Text, Rectangle, Ellipse, Group)", (e) => showMenu(e, addItems())),
+            act("\u29C9", "Duplicate the layer", () => dupSel()),
+            act("\u25B2", "Move the layer up (drawn later)", () => moveSel(1)),
+            act("\u25BC", "Move the layer down", () => moveSel(-1)),
+            act("\u2715", "Delete the layer (Delete)", () => delSel()));
+        ruler.lab.oncontextmenu = (e) => { e.preventDefault(); showMenu(e, addItems()); };
+        ruler.track.onpointerdown = (e) => startScrub(e);
+        // the playhead: a line over the rows, and its grip in the ruler (the part to take hold of)
+        const ph = el(doc, "div", "mg-playhead"); ph.style.left = LABEL_W + st.frame * k + "px";
+        const grip = el(doc, "div", "mg-ph-grip"); grip.style.left = st.frame * k + "px"; grip.title = "Drag to move time";
+        grip.onpointerdown = (e) => {
+            e.stopPropagation();
+            const r = tl.getBoundingClientRect();
+            startScrub(e, e.clientX - (r.left + tl.clientLeft + LABEL_W - tl.scrollLeft + st.frame * ppf()));
         };
-        ruler.track.onpointerdown = (e) => {
-            scrub(e); ruler.track.setPointerCapture(e.pointerId);
-            ruler.track.onpointermove = scrub; ruler.track.onpointerup = () => { ruler.track.onpointermove = null; };
+        ruler.track.append(grip);
+        ph._grip = grip; phEl = ph;
+        const scrubOnTrack = (track_, id) => {
+            track_.onpointerdown = (e) => {
+                if (e.button !== 0 || e.target.closest(".mg-dia")) return;
+                if (id && id !== st.sel) select(id);
+                startScrub(e);
+            };
         };
         const layers = st.scene.layers;
         for (let i = layers.length - 1; i >= 0; i--) {
             const l = layers[i];
-            const r = row((l.name || l.id), l.id === st.sel ? "sel" : "");
-            r.r.onclick = (e) => { if (!e.target.closest(".mg-dia")) select(l.id); };
+            const r = row("", "mg-layer-row" + (l.id === st.sel ? " sel" : "") + (l.hidden ? " mg-hidden" : ""));
+            r.r.dataset.layer = l.id;
+            const lab = r.lab;
+            lab.style.paddingLeft = 4 + parentDepth(l) * 10 + "px";
+            const eye = el(doc, "span", "mg-ic mg-eye" + (l.hidden ? "" : " on"), l.hidden ? "\u25CB" : "\u25CF");
+            eye.title = "Show / hide";
+            const lock = el(doc, "span", "mg-ic mg-lock" + (l.locked ? " on" : ""), l.locked ? "\u{1F512}" : "\u{1F513}");
+            lock.title = "Lock (the preview cannot select or move it)";
+            for (const ic of [eye, lock]) ic.onpointerdown = (e) => e.stopPropagation();
+            eye.onclick = (e) => { e.stopPropagation(); mutate(() => { if (l.hidden) delete l.hidden; else l.hidden = true; }); };
+            lock.onclick = (e) => { e.stopPropagation(); mutate(() => { if (l.locked) delete l.locked; else l.locked = true; }); };
+            const name = el(doc, "span", "mg-name", l.name || l.id);
+            lab.title = `${l.id} (${l.type}) - click to select, double-click to rename, drag to reorder, right-click for more`;
+            lab.append(eye, lock, el(doc, "span", "mg-type", TYPE_ICON[l.type] || "?"), name);
+            lab.onclick = (e) => { if (suppressClick || e.target.closest(".mg-ic,input")) return; closeCtx(); select(l.id); };
+            lab.ondblclick = (e) => { if (e.target.closest(".mg-ic,input")) return; renameLayer(l, lab.querySelector(".mg-name")); };
+            lab.onpointerdown = (e) => { if (e.button === 0 && !e.target.closest(".mg-ic,input")) reorderDrag(e, l, r.r); };
+            lab.oncontextmenu = (e) => { e.preventDefault(); e.stopPropagation(); select(l.id); showMenu(e, layerItems(l)); };
+            scrubOnTrack(r.track, l.id);
             const a = l.in ?? 0, b = l.out ?? dur();
             const range = el(doc, "div", "mg-bar-range"); range.style.left = a * k + "px"; range.style.width = Math.max(2, (b - a) * k) + "px";
             r.track.append(range);
@@ -784,6 +974,7 @@ export function createMgEditor(host, opts = {}) {
             if (l.id === st.sel) {
                 for (const prop of Mo.animatedProps(l)) {
                     const pr = row(prop, "", true);
+                    scrubOnTrack(pr.track, null);
                     for (const kk of S.track(l, prop)) {
                         const on = st.keys.some((s) => s.id === l.id && s.prop === prop && s.f === kk.f);
                         const d = el(doc, "div", "mg-dia" + (on ? " sel" : "")); d.style.left = kk.f * k + "px";
@@ -794,7 +985,7 @@ export function createMgEditor(host, opts = {}) {
                 }
             }
         }
-        const ph = el(doc, "div", "mg-playhead"); ph.style.left = LABEL_W + st.frame * k + "px";
+        if (!layers.length) inner.append(el(doc, "div", "mg-empty", "No layers. Add one with + above."));
         inner.append(ph);
         tl.append(inner);
         tl.scrollLeft = keepL; tl.scrollTop = keepT;
@@ -858,10 +1049,14 @@ export function createMgEditor(host, opts = {}) {
             mutate(() => { const l = layer(); st.keys = Mo.pasteKeys(l, st.clip, st.frame).map((s) => ({ id: l.id, ...s })); });
             return;
         }
+        // Time keys: inside the viewer they go to the viewer's own transport (the one path; when the pointer is over the
+        // viewer its key handler has already taken them and this is not reached), on the standalone page to this editor.
+        const T = o.transport;
         if (e.key === " ") { e.preventDefault(); e.stopPropagation(); togglePlay(); }
-        else if (e.key === "ArrowLeft") { e.preventDefault(); e.stopPropagation(); setFrame(st.frame - (e.shiftKey ? 10 : 1)); }
-        else if (e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); setFrame(st.frame + (e.shiftKey ? 10 : 1)); }
-        else if (e.key === "Home") { e.preventDefault(); e.stopPropagation(); setFrame(0); }
+        else if (e.key === "ArrowLeft") { e.preventDefault(); e.stopPropagation(); T ? T.step(e.shiftKey ? -10 : -1) : setFrame(st.frame - (e.shiftKey ? 10 : 1)); }
+        else if (e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); T ? T.step(e.shiftKey ? 10 : 1) : setFrame(st.frame + (e.shiftKey ? 10 : 1)); }
+        else if (e.key === "Home") { e.preventDefault(); e.stopPropagation(); T ? T.first() : setFrame(0); }
+        else if (e.key === "End") { e.preventDefault(); e.stopPropagation(); T ? T.last() : setFrame(dur() - 1); }
         else if (e.key === "Delete" || e.key === "Backspace") {
             e.preventDefault(); e.stopPropagation();
             if (st.keys.length) mutate(() => { for (const k of st.keys) { const l = Mo.layerOf(st.scene, k.id); if (l) Mo.removeKey(l, k.prop, k.f); } st.keys = []; });
@@ -871,7 +1066,7 @@ export function createMgEditor(host, opts = {}) {
     root.addEventListener("keydown", onKey);
     const focusOnPress = (e) => { const t = (e.target.tagName || "").toLowerCase(); if (!["input", "textarea", "select"].includes(t)) e.currentTarget.focus({ preventScroll: true }); };
     root.addEventListener("pointerdown", focusOnPress, true);
-    if (o.split) for (const part of [layersCol, side, tl]) { part.addEventListener("keydown", onKey); part.addEventListener("pointerdown", focusOnPress, true); }
+    if (o.split) for (const part of [side, tl]) { part.addEventListener("keydown", onKey); part.addEventListener("pointerdown", focusOnPress, true); }
     tl.addEventListener("wheel", (e) => {
         if (!e.ctrlKey) return;
         e.preventDefault();
@@ -883,16 +1078,26 @@ export function createMgEditor(host, opts = {}) {
     return {
         state: st,
         root,
-        parts: o.split ? { layers: layersCol, props: side, timeline: tl } : null,
+        parts: o.split ? { props: side, timeline: tl } : null,
         load(sceneObj, path = "") {
             st.scene = S.normalizeScene(sceneObj);
             st.path = path; st.sel = null; st.keys = []; st.frame = 0; st.dirty = false; st.hist = new Mo.History(); st.fit = true;
+            compSig = "";
             if (st.playing) togglePlay();
             refresh();
             return S.validateScene(st.scene);
         },
         getScene: () => st.scene,
         setFrame, select, save, undo: undo_, redo: redo_, refresh,
+        comp: () => (st.scene ? st.scene.comp : null),
+        /** The host's bar changed the composition's length (frames) or frame rate: an undoable edit. */
+        setComp(patch) {
+            if (!st.scene) return;
+            mutate(() => {
+                if (patch.duration != null) Mo.setDuration(st.scene, patch.duration);
+                if (patch.fps > 0) st.scene.comp.fps = patch.fps;
+            });
+        },
         isDirty: () => st.dirty,
         path: () => st.path,
         setPath(p) { st.path = p; renderBar(); },
@@ -904,7 +1109,7 @@ export function createMgEditor(host, opts = {}) {
             cancelAnimationFrame(raf);
             if (ro) ro.disconnect();
             host.replaceChildren();
-            if (o.split) for (const part of [layersCol, side, tl]) part.remove();
+            if (o.split) for (const part of [side, tl]) part.remove();
         },
     };
 }

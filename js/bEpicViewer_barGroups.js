@@ -46,7 +46,6 @@ const GROUPS = [
     // A motion-graphics scene is a tab; "Open scene" asks for one, the three panels are its parts.
     { id: "motion", title: "Motion", icon: "motion", items: [
         { label: "Open scene\u2026", run: (p) => p.mgBarOpen(), checked: (p) => !!(p.isMotionTab && p.isMotionTab()) },
-        { label: "Layers", panel: "motionLayers", needs: "motion" },
         { label: "Properties", panel: "motionProps", needs: "motion" },
         { label: "Timeline", panel: "motionTimeline", needs: "motion" },
     ] },

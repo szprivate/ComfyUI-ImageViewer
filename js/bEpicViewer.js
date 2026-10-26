@@ -605,10 +605,9 @@ class ViewerPanel extends HTMLElement {
             this.curvesPanel.parentNode.insertBefore(ac, this.curvesPanel.nextSibling);
             this.agentCodePanel = ac;
         }
-        // Motion (bEpicViewer_mgPanel.js): a scene is a TAB; its layers, properties and timeline are
-        // these three dock panels, each holding one part of the tab's editor (a .mg-slot the glue fills).
-        for (const [id, prop, cls] of [['motionLayers', 'motionLayersPanel', 'motion-layers'],
-                                       ['motionProps', 'motionPropsPanel', 'motion-props'],
+        // Motion (bEpicViewer_mgPanel.js): a scene is a TAB; its properties and timeline (with the layer list)
+        // are these two dock panels, each holding one part of the tab's editor (a .mg-slot the glue fills).
+        for (const [id, prop, cls] of [['motionProps', 'motionPropsPanel', 'motion-props'],
                                        ['motionTimeline', 'motionTimelinePanel', 'motion-timeline']]) {
             let mp = sr.getElementById(`${id}-panel`);
             if (!mp && this.curvesPanel && this.curvesPanel.parentNode) {
@@ -945,6 +944,17 @@ class ViewerPanel extends HTMLElement {
             };
         }
 
+        // A motion tab: the boxes are the scene's own length and frame rate (the viewer's bar is its transport).
+        // On commit, not per keystroke: each is one undoable edit.
+        if (endEl && 'value' in endEl) {
+            endEl.addEventListener('change', () => {
+                if (!this._mgOn || endEl.readOnly) return;
+                this.mgSetComp({ duration: Math.max(0, Math.round(Number(endEl.value) || 0)) + 1 });
+            });
+        }
+        sr.getElementById('fps-in').addEventListener('change', (e) => {
+            if (this._mgOn) this.mgSetComp({ fps: Math.max(1, parseInt(e.target.value, 10) || 1) });
+        });
         sr.getElementById('fps-in').oninput = (e) => {
             let val = parseInt(e.target.value);
             if (!val || val < 1) val = 1;

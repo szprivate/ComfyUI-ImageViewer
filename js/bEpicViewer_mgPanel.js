@@ -2,11 +2,16 @@
 // Motion: the editor for an agent's motion-graphics scene (*.mgscene.json) as a TAB of the viewer.
 //
 // A scene is opened like any other media: it gets a tab ("motion:<scene path>", no media frames)
-// and the preview + transport fill the MAIN CANVAS. Its other parts are normal dock panels -
-// Layers, Properties (with the curve) and Timeline - that follow the tab on screen: they come up
-// with a motion tab and go away with it, and can be dragged, tabbed, resized and closed like any
+// and the preview fills the MAIN CANVAS. Its other parts are normal dock panels - Properties (with the
+// curve) and Timeline (whose left column is the layer list) - that follow the tab on screen: they come
+// up with a motion tab and go away with it, and can be dragged, tabbed, resized and closed like any
 // other (bEpicViewer_mixinDock.js). With no scene there is no empty panel: the Motion button
 // opens a tab that says "Open a motion scene" and has the file picker behind its Open button.
+//
+// TIME belongs to the viewer's own bar (play, pause, step, start / end, loop, the frame counter, the
+// scrubber, the fps and last-frame boxes): on a motion tab the playback mixin counts the scene's frames
+// (_mgFrameCount) and routes setFrame here (_mgSetFrame); the editor keeps no transport of its own and
+// tells the viewer when the user moves its playhead (onFrame). One path, both ways.
 //
 // The editor itself is bEpicViewer_mgEditor.js (it does not know about the viewer); this mixin is
 // the glue: opening a scene from a file, from a poster PNG or from the film beside it, saving it,
@@ -19,7 +24,7 @@ import { mgRefQuery, mgMayHaveScene, mgIsSceneFile } from "./bEpicViewer_mgRefs.
 
 export const MG_PREFIX = "motion:";
 /** The dock panels of a motion tab, and the editor part each one holds. */
-export const MG_PANELS = { motionLayers: "layers", motionProps: "props", motionTimeline: "timeline" };
+export const MG_PANELS = { motionProps: "props", motionTimeline: "timeline" };
 
 const dirOf = (p) => String(p || "").replace(/[\\/][^\\/]*$/, "");
 const baseOf = (p) => String(p || "").split(/[\\/]/).pop();
@@ -169,6 +174,7 @@ export const MgPanelMixin = {
             host.append(rec.el);
         }
         for (const other of Object.values(st.tabs)) if (other.el) other.el.style.display = other === rec ? "block" : "none";
+        this.stop();
         if (!rec.editor && !rec.shown) this._mgBuild(key, rec);
         // The tab's own panels, the way they were left (all up the first time).
         if (this.setPanelDocked) {
@@ -178,6 +184,7 @@ export const MgPanelMixin = {
             }
         }
         this._mgSeat(rec);
+        this._mgSyncBar();
         if (first && this.barGroupsSync) this.barGroupsSync();
     },
 
@@ -186,6 +193,11 @@ export const MgPanelMixin = {
         if (!this._mgOn) return;
         const st = this._mgState();
         this._mgOn = false;
+        this.stop();
+        // The viewer's bar is the picture's again: its frame rate and its last-frame box.
+        if (this._mgSavedFps != null) { this._setFpsUi(this._mgSavedFps); this._mgSavedFps = null; }
+        const endEl = this.container.querySelector("#total-f");
+        if (endEl) { endEl.readOnly = true; endEl.classList.remove("editable"); endEl.title = "Last frame"; }
         this.viewport.classList.remove("motion-mode");
         if (st.host) st.host.style.display = "none";
         if (this.isPanelDocked && this.setPanelDocked) {
@@ -195,6 +207,68 @@ export const MgPanelMixin = {
             }
         }
         if (this.barGroupsSync) this.barGroupsSync();
+    },
+
+    // ── time: the viewer's bar drives the scene ──────────────────────────────
+
+    _mgActive() { return this._mgOn ? this._mgState().tabs[this.activeTab] || null : null; },
+
+    /** How many frames the viewer's timeline spans on a motion tab: the scene's length (0 with no scene). */
+    _mgFrameCount() {
+        const rec = this._mgActive();
+        const c = rec && rec.editor ? rec.editor.comp() : null;
+        return c ? c.duration : 0;
+    },
+
+    /** The viewer moved to frame `idx` (its scrubber, step, play, keys): the scene's playhead follows. */
+    _mgSetFrame(idx) {
+        const rec = this._mgActive();
+        const ed = rec && rec.editor;
+        const max = Math.max(0, this._mgFrameCount() - 1);
+        const f = Math.max(0, Math.min(Math.round(Number(idx) || 0), max));
+        this.currentFrame = f;
+        this.timeline.value = f;
+        const cur = this.container.querySelector("#cur-f");
+        if (cur) cur.innerText = f;
+        if (ed && ed.state.frame !== f) ed.setFrame(f, { fromHost: true, live: !!this.isPlaying });
+    },
+
+    /** The user moved the scene's playhead (ruler, playhead, a key): playback stops and the viewer's bar follows. */
+    _mgUserFrame(f) {
+        this.stop();
+        this.setFrame(f);
+    },
+
+    /** The scene's length / frame rate went into the viewer's bar (last-frame box, fps box, ticks, counter). */
+    _mgSyncBar() {
+        if (!this._mgOn) return;
+        const rec = this._mgActive();
+        const ed = rec && rec.editor;
+        const c = ed ? ed.comp() : null;
+        if (c && c.fps > 0 && this.fps !== c.fps) {
+            if (this._mgSavedFps == null) this._mgSavedFps = this.fps;
+            const was = this.isPlaying;
+            this._setFpsUi(c.fps);
+            if (was) { this.stop(); this.play(); }
+        }
+        this.applyTimelineBounds();
+        const f = ed ? Math.min(ed.state.frame, Math.max(0, this._mgFrameCount() - 1)) : 0;
+        this.currentFrame = f;
+        this.timeline.value = f;
+        const cur = this.container.querySelector("#cur-f");
+        if (cur) cur.innerText = f;
+        const endEl = this.container.querySelector("#total-f");
+        if (endEl) {
+            endEl.readOnly = !c;
+            endEl.classList.toggle("editable", !!c);
+            endEl.title = c ? "The scene's last frame - type to make it longer or shorter" : "Last frame";
+        }
+    },
+
+    /** The bar's last-frame / fps boxes: the scene's length (frames = last + 1) and frame rate, as one undoable edit. */
+    mgSetComp(patch) {
+        const rec = this._mgActive();
+        if (rec && rec.editor) rec.editor.setComp(patch);
     },
 
     /** The panels hold the active tab's editor parts (each tab's editor made its own). */
@@ -244,14 +318,24 @@ export const MgPanelMixin = {
         const stage = doc.createElement("div");
         stage.className = "motion-stage";
         rec.el.append(stage);
+        const bounds = () => this.getTimelineBounds();
         rec.editor = createMgEditor(stage, {
             split: true,
+            transport: {
+                toggle: () => { this.isPlaying ? this.stop() : this.play(); },
+                step: (n) => this.step(n),
+                first: () => { this.stop(); this.setFrame(bounds().min); },
+                last: () => { this.stop(); this.setFrame(bounds().max); },
+            },
+            onFrame: (f) => { if (this.activeTab === key) this._mgUserFrame(f); },
+            onComp: () => { if (this.activeTab === key) this._mgSyncBar(); },
             assetUrl: (src) => this._mgAssetUrl(src, rec.path),
             save: (path, sc) => this._mgSave(path, sc),
             render: (path) => this._mgRender(path),
             notify: (m, sev) => notice(sev || "info", m),
         });
         const check = rec.editor.load(scene, rec.path);
+        if (this.activeTab === key) this._mgSyncBar();
         if (!check.ok) notice("warn", "The scene has problems", check.errors.slice(0, 3).map((x) => x.message).join("; "));
         if (this.activeTab === key) this._mgSeat(rec);
     },

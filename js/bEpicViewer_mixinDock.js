@@ -69,8 +69,9 @@ const DOCK_PANELS = {
     // (bEpicViewer_codePanel.js). Read-only for now.
     agentCode: { prop: "agentCodePanel", label: "Agent code", minW: 240, minH: 160, defaultRail: "right" },
     // The motion-graphics editor (bEpicViewer_mgPanel.js / bEpicViewer_mgEditor.js): a scene an agent wrote is a
-    // TAB (preview and transport in the main canvas); these are its other parts, up only with a motion tab.
-    motionLayers: { prop: "motionLayersPanel", label: "Layers", minW: 170, minH: 120, defaultRail: "left" },
+    // TAB (preview in the main canvas, its transport is the viewer's bar); these are its other parts, up only with a
+    // motion tab. (There was a Layers panel: the timeline's left column is the layer list now, and a saved layout that
+    // still names "motionLayers" is read without it - unknown ids are dropped by _normaliseDockLayout / applyDockData.)
     motionProps: { prop: "motionPropsPanel", label: "Properties", minW: 240, minH: 200, defaultRail: "right", size: 2 },
     motionTimeline: { prop: "motionTimelinePanel", label: "Motion timeline", minW: 360, minH: 160, defaultRail: "bottom" },
     // The LoRA dataset review and training monitor (bEpicViewer_loraPanel.js / bEpicViewer_loraEditor.js).
@@ -167,8 +168,7 @@ export const DockMixin = {
         // Matches what the viewer opened with before docking existed: the
         // parameters panel showing on the right, the other two put away.
         return {
-            left:   { width: 88,  panels: [{ id: "history", size: 1, hidden: true  },
-                                           { id: "motionLayers", size: 1, hidden: true }] },
+            left:   { width: 88,  panels: [{ id: "history", size: 1, hidden: true  }] },
             right:  { width: 300, panels: [{ id: "browser", size: 1, hidden: true  },
                                            { id: "previz",  size: 1, hidden: true  },
                                            { id: "channels", size: 1, hidden: true },
@@ -565,7 +565,7 @@ export const DockMixin = {
             if (this.paramRefreshCurves) this.paramRefreshCurves();
         } else if (id === "agentCode") {
             if (this._codeOnShown) this._codeOnShown();
-        } else if (id === "motionLayers" || id === "motionProps" || id === "motionTimeline") {
+        } else if (id === "motionProps" || id === "motionTimeline") {
             if (this._mgOn && this._mgSeat) this._mgSeat(this._mgState().tabs[this.activeTab]);
         } else if (id === "loraDataset") {
             if (this._loraOnShown) this._loraOnShown();

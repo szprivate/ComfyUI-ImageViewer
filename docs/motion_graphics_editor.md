@@ -55,15 +55,36 @@ timeline / keyframe editor. User and agent edit one file, and the preview is the
    `mg_scene_preview_frame(path, frame)` (a PNG to look at). Skill `motion-graphics-scene`: WRITE the scene
    JSON, validate, look at a still, open it in the viewer (`show_in_viewer` -> the Motion panel), render
    on request.
-5. **Viewer editor** = a docked panel "Motion" (`bEpicViewer_mgEditor.js`): preview stage (SVG from
-   `layerSvg`, zoom to fit, safe margins), layer list (select / hide / lock / reorder / rename / add),
-   timeline (playhead, play, per-layer rows with key diamonds - click, drag, shift-multi, copy/paste, delete),
-   properties (numbers and colours at the playhead; editing an animated property sets a key, the stopwatch
-   toggles animation), **curve editor** for the selected property (the previz curve panel parts: value over
-   time, tangent handles, ease presets), on-canvas gizmo (move / scale / rotate / anchor of the selected
-   layer; writes a key when the property is animated or auto-key is on). Edits are pure functions on the
-   scene (`bEpicViewer_mgModel.js`, node-tested) with an undo stack; Save writes the same file
-   (`POST /bepic/mgscene_save`, allowed folders only). **Render** relays to the agentY host (like Atlas render)
+5. **Viewer editor** = a **tab** of the viewer (`motion:<scene path>`; `bEpicViewer_mgPanel.js` + `bEpicViewer_mgEditor.js`):
+   the preview (SVG from `layerSvg`, zoom to fit, safe margins, on-canvas gizmo) fills the main canvas, and two normal
+   dock panels follow the tab: **Properties** (numbers and colours at the playhead; editing an animated property sets a
+   key, the stopwatch toggles animation; **curve editor** for the selected key: value over time, tangent handles, ease
+   presets) and the **Motion timeline**.
+
+   *The timeline's left column is the layer list* (there is no separate Layers panel; a saved layout that still names
+   `motionLayers` is read without it): click a row to select, the eye and the lock per row, double-click the name to
+   rename, drag a row to reorder, right-click for Rename / Duplicate / Move / Delete / Add. The header row (the
+   ruler) has the **+** (Text, Rectangle, Ellipse, Group), duplicate, move up / down and delete buttons. The rows
+   carry the key diamonds (click, drag, shift-multi, copy / paste, delete); the selected layer shows its animated
+   properties as sub-rows.
+
+   *Scrubbing*: click or drag anywhere in the ruler, drag the playhead's grip, or drag on the empty background of any
+   track (a diamond is still its own drag). The drag is held by the timeline element itself (pointer capture) and the
+   frame is read off its box, and moving the playhead moves it in place: the rows are not rebuilt per frame. (The old
+   ruler took the capture on its own track element and then rebuilt the whole timeline on every move, which detached
+   that element: the drag stopped after the first frame.)
+
+   *Time is the viewer's own bar*: on a motion tab the viewer's play / pause, frame step, start / end, loop, frame
+   counter, timeline slider, fps box and last-frame box drive the scene (`getImgCount` = the scene's length, `setFrame`
+   routes to the editor, `fps` = the scene's). The last-frame box (length = last + 1) and the fps box edit the scene
+   (one undoable edit each). Scrubbing in the scene's timeline stops playback and moves the viewer's bar; the bar
+   moves the scene's playhead; both directions go through `setFrame`, so they cannot drift. Space, arrows and Ctrl+arrows
+   are the viewer's keys (its one handler); Home / End and the same keys while the viewer is not hovered reach the
+   editor, which hands them to the same transport (`step` / `play` / `stop`), never plays on its own. Only the
+   standalone test page (`tests/harness_mg`) keeps the editor's own small transport.
+
+   Edits are pure functions on the scene (`bEpicViewer_mgModel.js`, node-tested) with an undo stack; Save writes the same
+   file (`POST /bepic/mgscene_save`, allowed folders only). **Render** relays to the agentY host (like Atlas render)
    which runs `mg_render`.
 
    **Poster PNG**: every video `mg_render` writes also gets a `<name>.png` beside it, a still of the scene (its

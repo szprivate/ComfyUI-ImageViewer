@@ -165,6 +165,8 @@ export const PlaybackMixin = {
         if (this.isPrevizTab && this.isPrevizTab()) return this.previzFrameCount();
         // An Edit tab: the film of the cut (EditPlayMixin).
         if (this._editPlayOn) return this.editPlayFrameCount();
+        // A motion tab: the scene's own length (bEpicViewer_mgPanel.js); the editor plays nothing itself.
+        if (this._mgOn) return this._mgFrameCount();
         // A video tab holds a single frame dict but scrubs over many frames.
         if (this._videoMode && this._videoFrames > 0) return this._videoFrames;
         return (this._baseFrames() || []).length;
@@ -472,6 +474,8 @@ export const PlaybackMixin = {
     setFrame(idx) {
         // An Edit tab shows its cut, clip by clip (EditPlayMixin).
         if (this._editPlayOn) { this.editPlaySetFrame(idx); return; }
+        // A motion tab has no media frames: the frame is a moment of the scene.
+        if (this._mgOn) { this._mgSetFrame(idx); return; }
         const imgs = this._baseFrames();
         // Previz: the frame is a moment in the shot, and the scene places every
         // item itself — so this runs even for a tab with no media frames of its
