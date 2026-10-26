@@ -31,7 +31,7 @@ export const ModelMixin = {
         if (!this._model3d) {
             this._model3d = new Model3DView(this.viewport, {
                 resolveResource: (name, frame) => this._modelResourceUrl(name, frame),
-                onLoaded: () => this.updateShapeInfo(),
+                onLoaded: () => { this.updateShapeInfo(); if (this._previzRenderPanel && this.isPrevizTab && this.isPrevizTab()) this._previzRenderPanel(); },
                 onError: () => this.updateShapeInfo(),
                 onThumbnail: (frame, dataUrl) => this._storeModelThumbnail(frame, dataUrl),
                 // Previz: the scene owns where everything is, so each move the

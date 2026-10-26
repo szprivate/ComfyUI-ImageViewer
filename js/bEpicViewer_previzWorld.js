@@ -10,6 +10,7 @@
 
 import { api } from "../../scripts/api.js";
 import * as S from "./bEpicViewer_scene3d.js";
+import { SPLAT_FORMATS, modelFormatOf } from "./bEpicViewer_model3d.js";
 import {
     WORLD_KINDS, WORLD_FIELDS, SCATTER_TYPES, makeEnvironmentItem, makeTerrainItem, makeScatterItem,
     makeDepthMeshItem, makeLightItem, getPath, setPath, referenceSettings,
@@ -26,9 +27,26 @@ export const PrevizWorldMixin = {
         return !!(scene && (scene.world || (scene.items || []).some((i) => WORLD_KINDS.includes(i.kind))));
     },
 
-    /** Whether the Walk button (Shift+J) applies: a viewer world to walk, or an Atlas world to fly through. */
+    /**
+     * Whether the scene holds a Gaussian splat: a splat file by its extension, or a .ply the view has loaded
+     * and found to be one (the header decides, so that needs the view's stats).
+     */
+    previzHasSplat(key = this.activeTab) {
+        const scene = this.previzScene(key);
+        if (!scene || !Array.isArray(scene.items)) return false;
+        const view = key === this.activeTab ? this._model3d : null;
+        return scene.items.some((item) => {
+            const p = item && item.kind === "model" && item.src && item.src.path;
+            if (typeof p !== "string") return false;
+            if (SPLAT_FORMATS.includes(modelFormatOf({ path: p }))) return true;
+            const e = view && view._entries && view._entries.get(item.id);
+            return !!(e && e.stats && e.stats.splats > 0);
+        });
+    },
+
+    /** Whether the Walk button (Shift+J) applies: a viewer world to walk, or an Atlas world or a splat to fly through. */
     previzCanMove(key = this.activeTab) {
-        return this.previzHasWorld(key) || !!(this.previzAtlasItem && this.previzAtlasItem(key));
+        return this.previzHasWorld(key) || !!(this.previzAtlasItem && this.previzAtlasItem(key)) || this.previzHasSplat(key);
     },
 
     /** The Add menu's World section. */
@@ -216,14 +234,15 @@ export const PrevizWorldMixin = {
     // ── Walking ──────────────────────────────────────────────────────────────
 
     /**
-     * Start or stop moving through the world. An Atlas world is flown (no ground, see
+     * Start or stop moving through the world. An Atlas world or a splat is flown (no ground, see
      * bEpicViewer_atlasRender.js), a viewer world walked. Answers whether it is on now.
      */
     previzWalkToggle() {
         if (!this.isPrevizTab()) return false;
         const view = this._modelView();
         if (view.walking) { view.walkExit(); return false; }
-        return !!(this.previzAtlasItem && this.previzAtlasItem() ? view.flyEnter() : view.walkEnter());
+        const fly = !this.previzHasWorld() && ((this.previzAtlasItem && this.previzAtlasItem()) || this.previzHasSplat());
+        return !!(fly ? view.flyEnter() : view.walkEnter());
     },
 
     _onWalkChange(on) {

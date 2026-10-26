@@ -149,3 +149,35 @@ test("reloadModel re-reads the model's file under a cache-busting URL and leaves
     assert.equal(await self.reloadModel("x"), false, "only a model item");
     assert.equal(await self.reloadModel("nope"), false);
 });
+
+// A Gaussian splat scene is flown like an Atlas world: Shift+J and the Walk button used to exist only for
+// worlds and world.glb, so on a splat the key did nothing.
+test("a splat scene can be flown (previzCanMove / previzWalkToggle)", async () => {
+    const { PrevizWorldMixin } = await mod("bEpicViewer_previzWorld.js");
+    const mk = (items, entries) => {
+        const calls = [];
+        const view = { walking: false, _entries: new Map(entries || []),
+                       flyEnter() { calls.push("fly"); return true; }, walkEnter() { calls.push("walk"); return true; } };
+        const p = Object.assign({ activeTab: "t", _model3d: view, calls,
+            previzScene: () => ({ items }), previzAtlasItem: () => null,
+            isPrevizTab: () => true, _modelView: () => view }, PrevizWorldMixin);
+        return p;
+    };
+    const model = (path, id = "m1") => ({ id, kind: "model", src: { path } });
+    for (const ext of ["spz", "splat", "ksplat", "sog"]) {
+        const p = mk([model(`/x/scene.${ext}`)]);
+        assert.equal(p.previzCanMove(), true, ext);
+        assert.equal(p.previzWalkToggle(), true);
+        assert.deepEqual(p.calls, ["fly"]);
+    }
+    // A .ply is a splat only once the view has seen its header.
+    assert.equal(mk([model("/x/a.ply")]).previzCanMove(), false);
+    const ply = mk([model("/x/a.ply")], [["m1", { stats: { splats: 5 } }]]);
+    assert.equal(ply.previzCanMove(), true);
+    // Meshes: unchanged.
+    assert.equal(mk([model("/x/a.glb")]).previzCanMove(), false);
+    assert.equal(mk([model("/x/a.glb")], [["m1", { stats: { splats: 0 } }]]).previzCanMove(), false);
+    const w = mk([{ id: "e", kind: "environment" }]);
+    assert.equal(w.previzWalkToggle(), true);
+    assert.deepEqual(w.calls, ["walk"]);
+});
