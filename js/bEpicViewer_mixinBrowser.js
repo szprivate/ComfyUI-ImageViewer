@@ -704,10 +704,9 @@ export const BrowserMixin = {
         const url = this.buildImgUrl({ path: file.path, external: true });
 
         if (file.kind === "text") {
-            // Code and text are read in the Agent code panel, which shares this
-            // preview's job; the preview pane just says where it went.
-            if (msg) { msg.textContent = "Shown in the Agent code panel."; msg.style.display = "block"; }
-            if (this.codePanelOpenFile) this.codePanelOpenFile(file);
+            // Code and text are read in an Agent code tab (a double-click opens it); a single
+            // click must not fill the tab bar, so the preview pane just says so.
+            if (msg) { msg.textContent = "Double-click to read it in an Agent code tab."; msg.style.display = "block"; }
             return;
         }
 
@@ -910,8 +909,12 @@ export const BrowserMixin = {
         const picked = files || this._selectedBrowserFiles();
         const all    = picked.length > 0 ? picked : this._browserFiles;
         const list   = all.filter((f) => _OPENABLE.has(f.kind));
-        // A text file opens in the Agent code panel (a double-click on one).
+        // A text file opens in an Agent code tab (a double-click on one).
         const texts  = picked.filter((f) => f.kind === "text");
+        if (list.length === 0 && texts.length && /lora_datasets[\\/][^\\/]+[\\/]manifest\.json$/i.test(texts[0].path || "") && this.loraOpen) {
+            this.loraOpen(texts[0].path);         // a LoRA dataset's manifest opens in a Dataset tab
+            return;
+        }
         if (list.length === 0 && texts.length && /\.mgscene\.json$/i.test(texts[0].path || "") && this.mgOpenFile) {
             this.mgOpenFile(texts[0].path);       // a motion-graphics scene opens in the Motion editor
             return;

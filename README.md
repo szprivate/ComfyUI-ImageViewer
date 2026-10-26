@@ -33,10 +33,14 @@ An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/C
 - drag a history thumbnail, a file or the frame on screen onto the graph to get a loader node holding it
 - **Roto** and **SAM3** tools draw mattes and point / box prompts right in the viewer, onto nodes that feed them to the workflow
 
+### Agent code
+
+- the **Agent code** reader is a tab of the main canvas too: a double-click on a text or code file in the file browser opens it as `code:<file>` (one tab per file, several at once), and the bar's *ComfyUI > Agent code* opens the live feed of what the agent writes - a list of snippets, newest first, and the one shown. Read-only, highlighted, with Copy and Wrap - see [docs/sub/agent-code.md](docs/sub/agent-code.md)
+
 ### Motion graphics
 
 - the **Motion** panel (bar: *ComfyUI > Motion*, or double-click a `*.mgscene.json` in the file browser) edits the motion graphics an agent writes as a scene file, as a tab: the preview in the main canvas with on-canvas move / scale / rotate / anchor handles, a properties panel with a curve for the selected key, and a Motion timeline whose left column is the layer list (select, eye, lock, rename, drag to reorder, add / delete) and whose rows carry the keyframes (move, copy, paste, delete). Scrub by clicking or dragging in the ruler, the playhead or an empty track; the viewer's own play / step / scrub bar, fps and last-frame boxes drive the scene; **Render** hands the saved scene to agentY's Remotion renderer. The preview and the render share one module, so what you see is what comes out. Each rendered video also gets a poster `.png` that carries the scene: right-click it in the file browser and pick **Edit in Motion** (or drag it onto the panel) to edit the motion graphic from the PNG alone - see [docs/motion_graphics_editor.md](docs/motion_graphics_editor.md)
-- the **Dataset** panel (bar: *ComfyUI > Dataset*; opens when an agent shows a LoRA dataset's `manifest.json`) reviews a LoRA training dataset: thumbnails with editable captions, include / remove / restore, bulk find-replace, trigger word, crop boxes, then **Approve & train** / **Ask the agent** / **Cancel**; its Training tab shows the run (progress, loss curve, sample strip, events) and can stop it - see [docs/lora_dataset_panel.md](docs/lora_dataset_panel.md)
+- the **Dataset** view (a tab of the main canvas, one per dataset: bar *ComfyUI > Dataset*, a double-click on a dataset's `manifest.json` in the file browser, or an agent showing it) reviews a LoRA training dataset: thumbnails with editable captions, include / remove / restore, bulk find-replace, trigger word, crop boxes, then **Approve & train** / **Ask the agent** / **Cancel**; its Training page (inside the tab) shows the run (progress, loss curve, sample strip, events) and can stop it - see [docs/lora_dataset_panel.md](docs/lora_dataset_panel.md)
 
 ### The interface
 

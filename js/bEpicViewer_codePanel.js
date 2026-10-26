@@ -1,8 +1,10 @@
 // bEpicViewer_codePanel.js
-// "Agent code": a dock panel (#agent-code-panel, dock id "agentCode") that shows
-// the code the agent makes - a script it ran, a custom node, a Remotion
-// composition, a fenced block in its reply - and any text file opened from the
-// file browser. Read-only.
+// "Agent code": the reader for the code the agent makes - a script it ran, a custom node, a Remotion
+// composition, a fenced block in its reply - and for any text file opened from the file browser.
+// Read-only. It opens as TABS of the main canvas (bEpicViewer_viewTabs.js), the way a Motion scene does:
+//   - "code:<path>"  one text file, opened by a double-click in the file browser;
+//   - "code:"        the agent's feed: the list of snippets (newest first) and the one shown.
+// Several can be open at once; nothing of it lives in a dock panel.
 //
 // Snippets arrive two ways, both from viewer_code.py:
 //   - live: ComfyUI's "bepic.code.update" message (one snippet), and
@@ -11,7 +13,7 @@
 // Files come from GET /bepic/text?path=.
 //
 // A snippet is {id, title, language, code, source, conversation, turn, ts}. The
-// panel only ever shows it as text. To add "edit and send back to the agent"
+// tab only ever shows it as text. To add "edit and send back to the agent"
 // later, register an action: viewer.codePanelAddAction({label, run(snippet)}) -
 // it gets a button in the toolbar and receives the snippet shown.
 import { api } from "../../scripts/api.js";
@@ -21,6 +23,8 @@ const MAX_ITEMS = 200;
 const MAX_RENDER_LINES = 6000;
 const LANGS = ["python", "javascript", "typescript", "tsx", "json", "shell", "markdown", "html", "css", "yaml", "toml", "text"];
 const WRAP_KEY = "bepic.viewer.codeWrap";
+export const CODE_PREFIX = "code:";
+const baseOf = (p) => String(p || "").split(/[\\/]/).pop();
 
 function store(get, set) {
     try { return get ? window.localStorage.getItem(get) : (window.localStorage.setItem(set[0], set[1]), null); }
@@ -38,17 +42,48 @@ export const CodePanelMixin = {
 
     _codeState() {
         if (!this._code) {
-            this._code = { items: [], sel: null, wrap: store(WRAP_KEY) === "1", loaded: false,
-                           loading: false, actions: [], unseen: 0, ui: null };
+            this._code = { items: [], wrap: store(WRAP_KEY) === "1", loaded: false, loading: false, actions: [], unseen: 0 };
         }
         return this._code;
     },
+
+    // ── the tab kind (ViewTabsMixin) ─────────────────────────────────────────
+
+    _codeTabKind() {
+        return {
+            restore: (key) => (key === CODE_PREFIX
+                ? { feed: true, sel: null }
+                : { feed: false, path: key.slice(CODE_PREFIX.length), items: [], sel: null, loadMe: true }),
+            build: (rec) => {
+                this._codeBuildUi(rec);
+                if (rec.feed) this.codePanelLoad();
+                else if (rec.loadMe) { rec.loadMe = false; this._codeLoadInto(rec, { path: rec.path, name: baseOf(rec.path) }); }
+                rec.stale = true;
+            },
+            shown: (rec) => {
+                if (rec.feed) {
+                    const st = this._codeState();
+                    st.unseen = 0;
+                    this._codeMarkUnseen();
+                    this.codePanelLoad();
+                }
+                if (rec.stale) this._codeRender(rec);
+            },
+            isDirty: () => false,
+            dispose: (rec) => { rec.ui = null; },
+        };
+    },
+
+    _codeFeedRec() { return (this._vtState().tabs[CODE_PREFIX] || null); },
+
+    /** The bar's "Agent code": the feed's tab, opened or brought forward. */
+    codeBarOpen() { return this.vtOpen("code", CODE_PREFIX, "Agent code", { feed: true, sel: null }); },
 
     /** Add a toolbar button that gets the snippet on show ("send back to agent" later). */
     codePanelAddAction(action) {
         if (!action || typeof action.run !== "function") return;
         this._codeState().actions.push(action);
-        this._codeRender();
+        this._codeRenderAll();
     },
 
     /** A snippet from the live message. */
@@ -59,14 +94,16 @@ export const CodePanelMixin = {
         if (had >= 0) st.items.splice(had, 1);
         st.items.unshift(snip);
         st.items.length = Math.min(st.items.length, MAX_ITEMS);
-        if (!this.isPanelDocked || !this.isPanelDocked("agentCode")) {
+        const feed = this._codeFeedRec();
+        const watching = !!feed && this.activeTab === CODE_PREFIX;
+        if (!watching) {
             st.unseen += 1;
             this._codeMarkUnseen();
         } else {
             // Following along: the newest one is what you are here to see.
-            st.sel = snip.id;
+            feed.sel = snip.id;
         }
-        this._codeRender();
+        if (feed) { feed.stale = true; if (watching) this._codeRender(feed); }
     },
 
     /** The history from the server, merged under what already arrived. */
@@ -83,32 +120,46 @@ export const CodePanelMixin = {
                 st.items = [...st.items, ...older].sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, MAX_ITEMS);
                 st.loaded = true;
             }
-        } catch (e) { /* no server route (older viewer backend): the panel just starts empty */ }
+        } catch (e) { /* no server route (older viewer backend): the tab just starts empty */ }
         st.loading = false;
-        this._codeRender();
+        const feed = this._codeFeedRec();
+        if (feed) { feed.stale = true; if (this.activeTab === CODE_PREFIX) this._codeRender(feed); }
     },
 
-    /** Show a file (from the file browser) as a snippet of its own. */
-    async codePanelOpenFile(file) {
-        if (!file || !file.path) return;
-        const st = this._codeState();
+    /** A file (from the file browser) as a snippet of its own. */
+    async _codeFetchFile(file) {
         const id = "file:" + file.path;
         try {
             const res = await api.fetchApi(`/bepic/text?path=${encodeURIComponent(file.path)}`);
             const data = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-            const snip = { id, title: data.name || file.name, language: data.language || "text",
-                           code: data.code || "", source: "file", conversation: "", turn: "",
-                           path: data.path, ts: Date.now() / 1000, note: data.truncated ? "file cut at 1 MB" : "" };
-            st.items = [snip, ...st.items.filter((s) => s.id !== id)].slice(0, MAX_ITEMS);
+            return { id, title: data.name || file.name, language: data.language || "text",
+                     code: data.code || "", source: "file", conversation: "", turn: "",
+                     path: data.path, ts: Date.now() / 1000, note: data.truncated ? "file cut at 1 MB" : "" };
         } catch (e) {
-            st.items = [{ id, title: file.name, language: "text", code: "", source: "file", ts: Date.now() / 1000,
-                          note: `Cannot show this file: ${e.message || e}` },
-                        ...st.items.filter((s) => s.id !== id)];
+            return { id, title: file.name, language: "text", code: "", source: "file", ts: Date.now() / 1000,
+                     note: `Cannot show this file: ${e.message || e}` };
         }
-        st.sel = id;
-        if (this.setPanelDocked && !this.isPanelDocked("agentCode")) this.setPanelDocked("agentCode", true);
-        else this._codeRender();
+    },
+
+    async _codeLoadInto(rec, file) {
+        const snip = await this._codeFetchFile(file);
+        rec.items = [snip];
+        rec.sel = snip.id;
+        rec.stale = true;
+        if (this.activeTab === rec.key) this._codeRender(rec);
+    },
+
+    /** Open a text file in a tab of its own (or bring its tab forward, with the file read again). */
+    async codePanelOpenFile(file) {
+        if (!file || !file.path) return;
+        const key = CODE_PREFIX + file.path;
+        const snip = await this._codeFetchFile(file);
+        const known = this._vtState().tabs[key];
+        if (known) { known.items = [snip]; known.sel = snip.id; known.stale = true; }
+        const { rec } = this.vtOpen("code", key, snip.title || file.name || baseOf(file.path),
+            { feed: false, path: file.path, items: [snip], sel: snip.id });
+        if (rec.built && this.activeTab === key && rec.stale) this._codeRender(rec);
     },
 
     _codeMarkUnseen() {
@@ -117,26 +168,20 @@ export const CodePanelMixin = {
         if (btn) { btn.classList.toggle("has-code", st.unseen > 0); btn.title = st.unseen > 0 ? `${st.unseen} new code snippet(s) from the agent (ComfyUI > Agent code)` : btn.title; }
     },
 
-    /** Dock calls this when the panel comes up. */
-    _codeOnShown() {
-        const st = this._codeState();
-        st.unseen = 0;
-        this._codeMarkUnseen();
-        if (!st.sel && st.items.length) st.sel = st.items[0].id;
-        this._codeRender();
-        this.codePanelLoad();
+    _codeRenderAll() {
+        for (const rec of this.vtTabsOf ? this.vtTabsOf("code") : []) {
+            if (rec.built) { if (this.activeTab === rec.key) this._codeRender(rec); else rec.stale = true; }
+        }
     },
 
     // ── drawing ──────────────────────────────────────────────────────────────
 
-    _codeBuild() {
+    _codeBuildUi(rec) {
         const st = this._codeState();
-        const host = this.agentCodePanel;
-        if (!host) return null;
-        if (st.ui && st.ui.host === host && st.ui.root.isConnected) return st.ui;
+        const host = rec.el;
         const doc = host.ownerDocument;
         const el = (tag, cls, text) => { const n = doc.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
-        host.querySelectorAll(":scope > .ac-root").forEach((n) => n.remove());
+        host.replaceChildren();
         const root = el("div", "ac-root");
         const list = el("div", "ac-list");
         const split = el("div", "ac-split");
@@ -160,9 +205,9 @@ export const CodePanelMixin = {
         root.append(list, split, bar, note, view, empty);
         host.append(root);
 
-        wrap.onclick = () => { st.wrap = !st.wrap; store(null, [WRAP_KEY, st.wrap ? "1" : "0"]); this._codeRender(); };
-        copy.onclick = () => this._codeCopy(copy);
-        lang.onchange = () => { const s = this._codeCurrent(); if (s) { s.language = lang.value; this._codeRender(); } };
+        wrap.onclick = () => { st.wrap = !st.wrap; store(null, [WRAP_KEY, st.wrap ? "1" : "0"]); this._codeRenderAll(); };
+        copy.onclick = () => this._codeCopy(copy, rec);
+        lang.onchange = () => { const s = this._codeCurrent(rec); if (s) { s.language = lang.value; this._codeRender(rec); } };
         split.onpointerdown = (e) => {
             e.preventDefault();
             const y0 = e.clientY, h0 = list.getBoundingClientRect().height;
@@ -170,43 +215,48 @@ export const CodePanelMixin = {
             const up = () => { doc.removeEventListener("pointermove", move); doc.removeEventListener("pointerup", up); };
             doc.addEventListener("pointermove", move); doc.addEventListener("pointerup", up);
         };
-        st.ui = { host, root, list, bar, title, lang, actions, wrap, copy, note, view, empty };
-        return st.ui;
+        rec.ui = { host, root, list, split, bar, title, lang, actions, wrap, copy, note, view, empty };
+        return rec.ui;
     },
 
-    _codeCurrent() {
-        const st = this._codeState();
-        return st.items.find((s) => s.id === st.sel) || null;
+    _codeItems(rec) { return rec.feed ? this._codeState().items : (rec.items || []); },
+
+    _codeCurrent(rec) {
+        return this._codeItems(rec).find((s) => s.id === rec.sel) || null;
     },
 
-    _codeRender() {
-        if (!this.isPanelDocked || !this.isPanelDocked("agentCode")) return;
+    _codeRender(rec) {
         const st = this._codeState();
-        const ui = this._codeBuild();
-        if (!ui) return;
+        const ui = rec && rec.ui;
+        if (!ui || !ui.root.isConnected) return;
+        rec.stale = false;
         const doc = ui.host.ownerDocument;
-        if (!st.sel || !st.items.some((s) => s.id === st.sel)) st.sel = st.items.length ? st.items[0].id : null;
+        const items = this._codeItems(rec);
+        if (!rec.sel || !items.some((s) => s.id === rec.sel)) rec.sel = items.length ? items[0].id : null;
 
-        // The list: newest first.
+        // The list (the feed only): newest first.
         ui.list.replaceChildren();
-        for (const s of st.items) {
-            const row = doc.createElement("div");
-            row.className = "ac-row" + (s.id === st.sel ? " sel" : "");
-            row.dataset.id = s.id;
-            const t = doc.createElement("div");
-            t.className = "ac-row-title"; t.textContent = s.title || "Code";
-            const m = doc.createElement("div");
-            m.className = "ac-row-meta";
-            m.textContent = [s.language, s.source, s.conversation, s.turn, timeText(s.ts)].filter(Boolean).join(" · ");
-            row.append(t, m);
-            row.title = m.textContent;
-            row.onclick = () => { st.sel = s.id; this._codeRender(); };
-            ui.list.append(row);
+        if (rec.feed) {
+            for (const s of items) {
+                const row = doc.createElement("div");
+                row.className = "ac-row" + (s.id === rec.sel ? " sel" : "");
+                row.dataset.id = s.id;
+                const t = doc.createElement("div");
+                t.className = "ac-row-title"; t.textContent = s.title || "Code";
+                const m = doc.createElement("div");
+                m.className = "ac-row-meta";
+                m.textContent = [s.language, s.source, s.conversation, s.turn, timeText(s.ts)].filter(Boolean).join(" · ");
+                row.append(t, m);
+                row.title = m.textContent;
+                row.onclick = () => { rec.sel = s.id; this._codeRender(rec); };
+                ui.list.append(row);
+            }
         }
-        const cur = this._codeCurrent();
+        const cur = this._codeCurrent(rec);
         ui.root.classList.toggle("has-items", !!cur);
-        ui.list.style.display = st.items.length > 1 ? "" : "none";
-        ui.root.querySelector(".ac-split").style.display = st.items.length > 1 ? "" : "none";
+        const showList = rec.feed && items.length > 1;
+        ui.list.style.display = showList ? "" : "none";
+        ui.split.style.display = showList ? "" : "none";
         ui.empty.style.display = cur ? "none" : "";
         ui.bar.style.display = ui.view.style.display = cur ? "" : "none";
         ui.note.style.display = "none";
@@ -215,7 +265,7 @@ export const CodePanelMixin = {
         if (!cur) return;
 
         ui.title.textContent = cur.title || "Code";
-        ui.title.title = [cur.source, cur.conversation, cur.turn, timeText(cur.ts)].filter(Boolean).join(" · ");
+        ui.title.title = cur.path || [cur.source, cur.conversation, cur.turn, timeText(cur.ts)].filter(Boolean).join(" · ");
         ui.lang.value = LANGS.includes(cur.language) ? cur.language : "text";
         for (const a of st.actions) {
             const b = doc.createElement("button");
@@ -262,8 +312,8 @@ export const CodePanelMixin = {
         view.scrollTop = 0;
     },
 
-    async _codeCopy(button) {
-        const cur = this._codeCurrent();
+    async _codeCopy(button, rec) {
+        const cur = this._codeCurrent(rec);
         if (!cur) return;
         let ok = false;
         try { await navigator.clipboard.writeText(cur.code); ok = true; } catch (e) { /* fall back below */ }

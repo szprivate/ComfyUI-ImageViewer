@@ -4,14 +4,15 @@
 // (agenty_core/tools/lora_training/formats.py); the routes are lora_io.py (/bepic/lora/*).
 //
 // It is a plain function over a host element - no dependency on the viewer's element or on ComfyUI -
-// so the dock panel (bEpicViewer_loraPanel.js) and the standalone test page (tests/harness_lora)
+// so the viewer's tab (bEpicViewer_loraPanel.js) and the standalone test page (tests/harness_lora)
 // mount the same thing. What it needs from its surroundings arrives in `opts`:
 //   api.datasets() / api.dataset(name) / api.save(name, manifest) / api.review(name, action, note, manifest)
 //   api.runs() / api.run(name) / api.control(name, keep)            -> Promise<json> (throw on error)
 //   fileUrl(path)            -> a url the browser can load for a file under a dataset / run folder
 //   notify(text, severity)   -> a toast
 //   sendToAgent(text)        -> Promise, tells agentY (when it runs); may be missing
-//   isOpen()                 -> is the panel on screen (polling backs off when it is not)
+//   isOpen()                 -> is the page on screen (polling backs off when it is not)
+//   onDataset(name)          -> a dataset was opened in it (the viewer titles the tab with it)
 // The edits themselves are pure functions in bEpicViewer_loraModel.js.
 import * as Mo from "./bEpicViewer_loraModel.js";
 
@@ -387,6 +388,7 @@ export function createLoraEditor(host, opts) {
         } catch (e) { toast("Cannot open the dataset: " + msgOf(e), "error"); return false; }
         if (!S.datasets.some((d) => d.name === name)) await loadList(); else renderPicker();
         renderDataset();
+        if (opts.onDataset) { try { opts.onDataset(S.name); } catch (_) { /* the host's own business */ } }
         return true;
     }
 

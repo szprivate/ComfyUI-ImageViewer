@@ -1,0 +1,81 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#222;height:100%}</style></head>
+<body>
+<script>window.addEventListener("error",(e)=>{document.title="ERR "+e.message});</script><script type="module">
+// The REAL viewer (stubbed ComfyUI scripts) with the Agent code and Dataset TABS: PORT=8792 node tests/harness/server.mjs <viewer checkout>,
+// then open http://127.0.0.1:8792/tabs.html . tests/test_viewer_browser.py drives this page with real pointer input.
+// Stubbed here: /bepic/code, /bepic/text, /bepic/lora/*. Window state for the tests: __posts (every POST body), __runs (the runs the stub knows).
+window.__posts = [];
+const SNIPS = [
+  { id: "a1", title: "stitch frames", language: "python", source: "run_python_node", conversation: "t1", turn: "x1", ts: Date.now() / 1000 - 5,
+    code: "import os\nfrom pathlib import Path\n\ndef stitch(folder):\n    return sorted(Path(folder).glob('*.png'))\n" },
+  { id: "b2", title: "Main composition", language: "tsx", source: "remotion", conversation: "t1", turn: "x1", ts: Date.now() / 1000 - 90,
+    code: "export const Main = () => <div>hi</div>;\n" },
+];
+const FILES = {
+  "D:/x/notes.json": { language: "json", code: '{\n  "hello": "world"\n}\n' },
+  "D:/x/tool.py": { language: "python", code: "def run():\n    return 42\n" },
+};
+const mkItems = (tag) => Array.from({ length: 4 }, (_, i) => ({ id: `i${i + 1}`, file: `items/i${i + 1}.png`, kind: "image",
+  caption: `${tag} picture ${i + 1}`, included: true, crop: null, original: `C:/src/${i}.jpg`, size: [256, 256], frames: null, fps: null,
+  source: "folder", note: "", removed_by: null }));
+const mkManifest = (name) => ({ version: 1, name, subject: name, kind: "character", model: "flux1-dev", trigger_word: "ohwx",
+  caption_style: "natural", status: "review", approved_at: null, created: "2026-10-26", buckets: [[512, 512]],
+  summary: { count: 4, included: 4, removed: 0, warnings: [] }, items: mkItems(name) });
+const DS = { demo_cat: mkManifest("demo_cat"), demo_dog: mkManifest("demo_dog") };
+const REVIEW = { demo_cat: { state: "none" }, demo_dog: { state: "none" } };
+window.__runs = [{ name: "old_run_v1", status: "done", step: 1000, total: 1000, pct: 1, dataset: "demo_cat", model: "flux1-dev", updated: Date.now() / 1000 - 3600 }];
+const dsInfo = (n) => ({ name: n, dir: `D:/out/agent/lora_datasets/${n}`, manifest_path: `D:/out/agent/lora_datasets/${n}/manifest.json`, subject: n,
+  kind: "character", model: "flux1-dev", status: "review", trigger_word: "ohwx", count: 4, included: 4, removed: 0, review: "none", cover: "", updated: 1 });
+window.__fetchApi = async (p, opts) => {
+  const j = (o, ok = true) => ({ ok, status: ok ? 200 : 404, json: async () => o });
+  const [path, qs] = p.split("?");
+  const q = new URLSearchParams(qs || "");
+  const body = opts && opts.body ? JSON.parse(opts.body) : null;
+  if (body) window.__posts.push({ path, body });
+  if (path === "/bepic/browse") {
+    const file = (name, p) => ({ name, path: p, kind: "text", size: 100, mtime: 1 });
+    return j({ path: "D:/x", parent: null, dirs: [], truncated: false, roots: [],
+      files: [file("tool.py", "D:/x/tool.py"), file("notes.json", "D:/x/notes.json"),
+              file("manifest.json", "D:/out/agent/lora_datasets/demo_dog/manifest.json")] });
+  }
+  if (path === "/bepic/code") return j({ snippets: SNIPS.slice(1) });
+  if (path === "/bepic/text") {
+    const f = FILES[q.get("path")];
+    return f ? j({ path: q.get("path"), name: q.get("path").split("/").pop(), language: f.language, code: f.code, truncated: false }) : j({ error: "no file" }, false);
+  }
+  if (path === "/bepic/lora/datasets") return j({ datasets: Object.keys(DS).map(dsInfo) });
+  if (path === "/bepic/lora/dataset") {
+    const n = q.get("name");
+    return DS[n] ? j({ name: n, dir: dsInfo(n).dir, manifest_path: dsInfo(n).manifest_path, manifest: DS[n], review: REVIEW[n], sha: "s" }) : j({ error: "no dataset" }, false);
+  }
+  if (path === "/bepic/lora/dataset_save") { DS[body.name] = body.manifest; return j({ ok: true, manifest: body.manifest, review: REVIEW[body.name], sha: "s2", reset_approval: false }); }
+  if (path === "/bepic/lora/review") {
+    if (body.action === "approve") {
+      REVIEW[body.name] = { state: "approved" };
+      // the training run the agent starts after the approval: a NEW run that the Training page has to follow
+      window.__runs.unshift({ name: `${body.name}_v2`, status: "running", step: 10, total: 1000, pct: .01, dataset: body.name, model: "flux1-dev", updated: Date.now() / 1000 });
+    }
+    return j({ ok: true, state: body.action === "approve" ? "approved" : body.action, review: REVIEW[body.name], manifest: DS[body.name], message: "ok" });
+  }
+  if (path === "/bepic/lora/runs") return j({ runs: window.__runs });
+  if (path === "/bepic/lora/run") {
+    const r = window.__runs.find((x) => x.name === q.get("name"));
+    if (!r) return j({ error: "no run" }, false);
+    return j({ name: r.name, dir: "D:/out/agent/lora_runs/" + r.name, progress: { job: r.name, status: r.status, step: r.step, total: r.total, pct: r.pct, loss_series: [], dataset: r.dataset },
+      job: { dataset: r.dataset }, result: null, control: null, samples: [], events: [], log_tail: "" });
+  }
+  return j({}, false);
+};
+let v; try { v = await import("/extensions/viewer/bEpicViewer.js"); } catch (e) { document.title = "IMPORT " + e.message; throw e; }
+const panel = v.mountStandaloneViewer(document.body);
+window.__panel = panel;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+try {
+  for (let i = 0; i < 100 && !(panel.dockLayout && panel.motionTimelinePanel); i++) await sleep(50);
+  Object.assign(panel.style, { width: "1400px", height: "850px", left: "20px", top: "20px" });
+  try { await window.__ext.setup(); } catch (e) { window.__setupErr = e.message; }
+  window.__api = (await import("/scripts/api.js")).api;
+  window.__ready = true;
+  document.title = "ready";
+} catch (e) { document.title = "ERR " + e.message; console.error(e); }
+</script></body></html>

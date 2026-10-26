@@ -389,6 +389,8 @@ export const UIMixin = {
         if (this.editTlTabHidden && !this.isEditTab(k)) this.editTlTabHidden(!!prevTab && this.isEditTab(prevTab));
         // A motion tab's editor sits over the viewport, with its panels (Layers, Properties, Timeline).
         if (this._mgOn && !(this.isMotionTab && this.isMotionTab(k))) this.mgTabLeave();
+        // A code or dataset tab (ViewTabsMixin) is a page over the viewport too.
+        if (this._vtOn && !(this.isViewTab && this.isViewTab(k))) this.vtLeave();
 
         try {
             if (this.activeTab !== k && this.isViewingHistory && this.previewBackup && this.activeTab && this.allTabs[this.activeTab]) {
@@ -427,7 +429,18 @@ export const UIMixin = {
             }
         }
 
-        if (this.isMotionTab && this.isMotionTab(k)) {
+        if (this.isViewTab && this.isViewTab(k)) {
+            // A code / dataset tab has no media: its page covers the viewport (vtEnter).
+            if (this._exitVideoMode) this._exitVideoMode();
+            if (this._exitModelMode) this._exitModelMode();
+            this.imgBase.src = "";
+            this._updatePathBar(null);
+            if (this.updateShapeInfo) this.updateShapeInfo();
+            this.applyTimelineBounds(0);
+            this.timeline.value = 0;
+            this.container.querySelector('#cur-f').innerText = 0;
+            this.vtEnter(k);
+        } else if (this.isMotionTab && this.isMotionTab(k)) {
             // A motion tab has no media: the editor covers the viewport (mgTabEnter) and has its own transport.
             if (this._exitVideoMode) this._exitVideoMode();
             if (this._exitModelMode) this._exitModelMode();

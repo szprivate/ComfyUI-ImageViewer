@@ -895,6 +895,8 @@ export const HistoryMixin = {
         if (this.editTlTabClosing && this.editTlTabClosing(key) === false) return;
         // ...and so does a motion scene (MgPanelMixin).
         if (this.mgTabClosing && this.mgTabClosing(key) === false) return;
+        // ...and so does a code / dataset tab (ViewTabsMixin).
+        if (this.vtTabClosing && this.vtTabClosing(key) === false) return;
         if (this._revokeDroppedTab) this._revokeDroppedTab(key);   // free blob: URLs of dropped files
         // A 3D tab's picture is an overlay, not an <img>: closing the tab has to
         // take it down, or it keeps hanging over whatever comes next (or over an
@@ -902,6 +904,7 @@ export const HistoryMixin = {
         // puts it back if it needs it.
         if (this.activeTab === key && this._exitModelMode) this._exitModelMode();
         if (this.activeTab === key && this._mgOn) this.mgTabLeave();
+        if (this.activeTab === key && this._vtOn) this.vtLeave();
         this.tabOrder = this.tabOrder.filter(k => k !== key);
         delete this.allTabs[key];
         delete this.tabLabels[key];
@@ -910,6 +913,7 @@ export const HistoryMixin = {
         const btn = container && container.querySelector(`[data-tab="${key}"]`);
         if (btn) btn.remove();
         if (this.mgTabClosed) this.mgTabClosed(key);
+        if (this.vtTabClosed) this.vtTabClosed(key);
         if (this.activeTab === key) {
             const remaining = Object.keys(this.allTabs);
             if (remaining.length > 0) {

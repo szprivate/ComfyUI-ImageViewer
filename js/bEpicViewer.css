@@ -1464,8 +1464,8 @@ textarea.param-input {
 .agenty-tag-buttons button[type=submit] { background: #f60; color: #111; border-color: #f60; }
 .agenty-tag-buttons button:disabled { opacity: 0.5; cursor: default; }
 
-/* Agent code (bEpicViewer_codePanel.js): the code the agent writes, read-only. */
-.dock-rail > .agent-code-panel { width: auto; min-width: 0; }
+/* Agent code (bEpicViewer_codePanel.js): the code the agent writes, read-only, in a tab of the main canvas. */
+.view-tab-code > .ac-root { position: absolute; inset: 0; }
 .ac-root { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; font-family: sans-serif; }
 .ac-list { flex: 0 0 auto; max-height: 34%; min-height: 40px; overflow: auto; border-bottom: 1px solid #222; }
 .ac-split { flex: 0 0 5px; cursor: row-resize; background: #111; border-bottom: 1px solid #222; }
@@ -1509,9 +1509,6 @@ textarea.param-input {
 /* Motion (bEpicViewer_mgPanel.js / bEpicViewer_mgEditor.js): the editor brings its own styles (mg-*). */
 .dock-rail > .motion-part-panel { width: auto; min-width: 0; display: flex; flex-direction: column; }
 
-/* Dataset (bEpicViewer_loraPanel.js / bEpicViewer_loraEditor.js): the editor brings its own styles (lr-*). */
-.dock-rail > .lora-panel { width: auto; min-width: 0; display: flex; flex-direction: column; }
-.lora-panel > .lr-root { flex: 1 1 0; min-height: 0; height: auto; }
 
 
 /* Motion (bEpicViewer_mgPanel.js): a scene is a tab. The editor covers the viewport the way a 3D view does;
@@ -1519,6 +1516,12 @@ textarea.param-input {
 .motion-view { position: absolute; inset: 0; z-index: 8; display: none; background: #0f0f12; cursor: default; }
 .motion-tab, .motion-stage { position: absolute; inset: 0; }
 .viewport.motion-mode #exposure-control,
+.viewport.view-mode #exposure-control,
+.viewport.view-mode #contact-container,
+.viewport.view-mode #img-frame,
+.viewport.view-mode #compare-slider,
+.viewport.view-mode #rotate-btn,
+.viewport.view-mode .bepic-toolbar,
 .viewport.motion-mode #contact-container,
 .viewport.motion-mode #img-frame,
 .viewport.motion-mode #compare-slider,
@@ -1532,3 +1535,8 @@ textarea.param-input {
 .mg-open-text { max-width: 420px; color: #9a9aa2; }
 .mg-open-btn { background: #ff6a1a; border: 0; color: #111; font: 600 13px system-ui, sans-serif; padding: 8px 22px; border-radius: 4px; cursor: pointer; }
 .mg-open-btn:hover { background: #ff7f3a; }
+
+/* Code and Dataset tabs (bEpicViewer_viewTabs.js): a page over the viewport, like a motion tab. */
+.view-tabs { position: absolute; inset: 0; z-index: 8; display: none; background: #0f0f12; cursor: default; }
+.view-tab { position: absolute; inset: 0; overflow: hidden; }
+.view-tab-dataset > .lr-root { position: absolute; inset: 0; height: auto; }

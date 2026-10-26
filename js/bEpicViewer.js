@@ -29,6 +29,7 @@ import { AgentYMixin, namedTabInfo } from "./bEpicViewer_agentY.js";
 import { AgentPanelMixin } from "./bEpicViewer_agentPanel.js";
 import { ParamAnimMixin } from "./bEpicViewer_paramAnim.js";
 import { ParamCurvesMixin } from "./bEpicViewer_paramCurves.js";
+import { ViewTabsMixin } from "./bEpicViewer_viewTabs.js";
 import { CodePanelMixin } from "./bEpicViewer_codePanel.js";
 import { MgPanelMixin } from "./bEpicViewer_mgPanel.js";
 import { LoraPanelMixin } from "./bEpicViewer_loraPanel.js";
@@ -61,8 +62,8 @@ const watchedNodeIds  = new Set();
 // "previz:" tabs are shots an agent asked for (previz_shot.py).
 // "edit:" tabs are cuts being worked on in the Edit panel.
 // "motion:" tabs are motion-graphics scenes in the Motion editor.
-// "motion:" tabs are motion-graphics scenes in the Motion editor.
-const USER_TAB_PREFIXES = ["folder_", "dropped_", "loader_", "world:", "previz:", "edit:", "motion:", "named:"];
+// "code:" tabs are the Agent code reader (a file, or the agent's feed); "dataset:" tabs are LoRA datasets.
+const USER_TAB_PREFIXES = ["folder_", "dropped_", "loader_", "world:", "previz:", "edit:", "motion:", "code:", "dataset:", "named:"];
 let isViewerPanelToggledOn = false;
 let _actionBarStateRetryTimer = null;
 
@@ -596,15 +597,7 @@ class ViewerPanel extends HTMLElement {
             this.curvesPanel.parentNode.insertBefore(rc, this.curvesPanel.nextSibling);
             this.rotoCurvesPanel = rc;
         }
-        // Agent code (bEpicViewer_codePanel.js): no markup carries it, so it is made here.
-        this.agentCodePanel = sr.getElementById('agent-code-panel');
-        if (!this.agentCodePanel && this.curvesPanel && this.curvesPanel.parentNode) {
-            const ac = this.curvesPanel.ownerDocument.createElement('div');
-            ac.id = 'agent-code-panel';
-            ac.className = 'curves-panel agent-code-panel right';
-            this.curvesPanel.parentNode.insertBefore(ac, this.curvesPanel.nextSibling);
-            this.agentCodePanel = ac;
-        }
+        // (Agent code and Dataset are tabs of the main canvas now - bEpicViewer_viewTabs.js - not panels.)
         // Motion (bEpicViewer_mgPanel.js): a scene is a TAB; its properties and timeline (with the layer list)
         // are these two dock panels, each holding one part of the tab's editor (a .mg-slot the glue fills).
         for (const [id, prop, cls] of [['motionProps', 'motionPropsPanel', 'motion-props'],
@@ -621,15 +614,6 @@ class ViewerPanel extends HTMLElement {
                 this.curvesPanel.parentNode.insertBefore(mp, this.curvesPanel.nextSibling);
             }
             this[prop] = mp;
-        }
-        // Dataset (bEpicViewer_loraPanel.js): LoRA dataset review + training monitor, made here like Motion.
-        this.loraPanel = sr.getElementById('lora-panel');
-        if (!this.loraPanel && this.curvesPanel && this.curvesPanel.parentNode) {
-            const lp = this.curvesPanel.ownerDocument.createElement('div');
-            lp.id = 'lora-panel';
-            lp.className = 'curves-panel lora-panel right';
-            this.curvesPanel.parentNode.insertBefore(lp, this.curvesPanel.nextSibling);
-            this.loraPanel = lp;
         }
         // The Channel Box came after the others; a cached older markup lacks
         // it, so it is made here beside the Outliner rather than going missing.
@@ -1345,6 +1329,7 @@ Object.assign(
     AgentPanelMixin,
     ParamAnimMixin,
     ParamCurvesMixin,
+    ViewTabsMixin,
     CodePanelMixin,
     MgPanelMixin,
     LoraPanelMixin,

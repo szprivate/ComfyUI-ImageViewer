@@ -34,8 +34,9 @@ const GROUPS = [
     { id: "comfy", title: "ComfyUI", icon: "comfy", items: [
         { label: "History", panel: "history" },
         { label: "Parameters", panel: "params" },
-        { label: "Agent code", panel: "agentCode" },
-        { label: "Dataset", panel: "loraDataset" },
+        // Agent code and Dataset open as tabs of the main canvas (bEpicViewer_viewTabs.js).
+        { label: "Agent code", run: (p) => p.codeBarOpen(), checked: (p) => !!(p.isViewTab && p.vtKindOf() === "code") },
+        { label: "Dataset", run: (p) => p.loraBarOpen(), checked: (p) => !!(p.isViewTab && p.vtKindOf() === "dataset") },
         { label: "agentY", panel: "agentChat" },
     ] },
     { id: "3d", title: "3D", icon: "box", items: [
@@ -130,7 +131,8 @@ export const BarGroupsMixin = {
     barGroupsSync() {
         if (!this._barGroups || !this.isPanelDocked) return;
         for (const { group, button } of this._barGroups) {
-            button.classList.toggle("active", group.items.some((item) => item.panel && this.isPanelDocked(item.panel)));
+            button.classList.toggle("active", group.items.some((item) => item.panel ? this.isPanelDocked(item.panel)
+                : !!(item.checked && item.checked(this))));
             if (group.id === "timeline") {
                 // A film with a cut beside it: this is where it opens.
                 const film = !!(this._editTlFilm && !(this.isEditTab && this.isEditTab()));

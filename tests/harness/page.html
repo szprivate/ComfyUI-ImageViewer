@@ -24,7 +24,7 @@ window.__ready = true;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const mode = location.hash.slice(1);
 try {
-  for (let i = 0; i < 100 && !(panel.dockLayout && panel.agentCodePanel); i++) await sleep(50);
+  for (let i = 0; i < 100 && !(panel.dockLayout && panel.motionTimelinePanel); i++) await sleep(50);
   document.title = "mounted";
   window.__history = true;
   Object.assign(panel.style, { width: "1300px", height: "800px", left: "40px", top: "40px" });
@@ -40,7 +40,7 @@ try {
   if (!panel._code) panel.codePanelReceive(SNIPS[0]);
   const dot = panel.shadowRoot.getElementById("bar-group-comfy")?.classList.contains("has-code");
   if (mode === "file") await panel.codePanelOpenFile({ path: "D:/x/notes.json", name: "notes.json" });
-  else panel.setPanelDocked("agentCode", true);
+  else panel.codeBarOpen();
   await sleep(600);
   if (mode === "wrap") { panel.shadowRoot.querySelector(".ac-btn:nth-of-type(1)"); [...panel.shadowRoot.querySelectorAll(".ac-btn")].find((b) => b.textContent === "Wrap").click(); }
   if (mode === "pick") panel.shadowRoot.querySelectorAll(".ac-row")[1].click();

@@ -65,17 +65,14 @@ const DOCK_PANELS = {
     // a cut's tab is; the bar's Timeline group opens them.
     editInspector: { prop: "editInspectorPanel", label: "Inspector", minW: 290, minH: 200, defaultRail: "right" },
     editEffects: { prop: "editEffectsPanel", label: "Effects", minW: 220, minH: 150, defaultRail: "left" },
-    // The code the agent writes, and text files from the browser
-    // (bEpicViewer_codePanel.js). Read-only for now.
-    agentCode: { prop: "agentCodePanel", label: "Agent code", minW: 240, minH: 160, defaultRail: "right" },
+    // (Agent code and Dataset are tabs of the main canvas, bEpicViewer_viewTabs.js. A saved layout that still names
+    // "agentCode" or "loraDataset" is read without them: unknown ids are dropped by _normaliseDockLayout / applyDockData.)
     // The motion-graphics editor (bEpicViewer_mgPanel.js / bEpicViewer_mgEditor.js): a scene an agent wrote is a
     // TAB (preview in the main canvas, its transport is the viewer's bar); these are its other parts, up only with a
     // motion tab. (There was a Layers panel: the timeline's left column is the layer list now, and a saved layout that
     // still names "motionLayers" is read without it - unknown ids are dropped by _normaliseDockLayout / applyDockData.)
     motionProps: { prop: "motionPropsPanel", label: "Properties", minW: 240, minH: 200, defaultRail: "right", size: 2 },
     motionTimeline: { prop: "motionTimelinePanel", label: "Motion timeline", minW: 360, minH: 160, defaultRail: "bottom" },
-    // The LoRA dataset review and training monitor (bEpicViewer_loraPanel.js / bEpicViewer_loraEditor.js).
-    loraDataset: { prop: "loraPanel", label: "Dataset", minW: 480, minH: 320, defaultRail: "right", size: 3 },
     // (The drawing tools' options have no panel of their own: while a tool is
     // on they take the Parameters panel over — ToolsMixin._toolShowDock.)
     // The agentY chat panel (bEpicViewer_agentPanel.js): agentY's own panel,
@@ -174,9 +171,7 @@ export const DockMixin = {
                                            { id: "channels", size: 1, hidden: true },
                                            { id: "rotoCurves", size: 1, hidden: true },
                                            { id: "paramCurves", size: 1, hidden: true },
-                                           { id: "agentCode", size: 1, hidden: true },
                                            { id: "motionProps", size: 2, hidden: true },
-                                           { id: "loraDataset", size: 3, hidden: true },
                                            { id: "params",  size: 1, hidden: false }] },
             // A graph over time wants width: the Curve Editor lives under the picture.
             bottom: { height: 240, panels: [{ id: "curves", size: 1, hidden: true },
@@ -563,12 +558,8 @@ export const DockMixin = {
             if (this.rotoRefreshCurves) this.rotoRefreshCurves();
         } else if (id === "paramCurves") {
             if (this.paramRefreshCurves) this.paramRefreshCurves();
-        } else if (id === "agentCode") {
-            if (this._codeOnShown) this._codeOnShown();
         } else if (id === "motionProps" || id === "motionTimeline") {
             if (this._mgOn && this._mgSeat) this._mgSeat(this._mgState().tabs[this.activeTab]);
-        } else if (id === "loraDataset") {
-            if (this._loraOnShown) this._loraOnShown();
         } else if (id === "editTimeline") {
             if (this.editTlRefresh) this.editTlRefresh();
         } else if (id === "channels") {
