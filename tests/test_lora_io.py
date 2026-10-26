@@ -181,6 +181,27 @@ class DatasetTests(Base):
         self.assertIsNone(io.dataset_name_of_path(other, self.out))
         self.assertIsNone(io.dataset_name_of_path(os.path.join(self.ds, "items", "i001.png"), self.out))
 
+    def test_dataset_name_of_path_through_an_alias(self):
+        """The agent names the output folder by one spelling (UNC), ComfyUI by another (W:): the manifest is
+        still the dataset's (was a ValueError from relpath -> 'the viewer refused to open the panel')."""
+        alias = os.path.join(tempfile.mkdtemp(), "alias")
+        try:
+            os.symlink(self.out, alias, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            import subprocess
+            r = subprocess.run(["cmd", "/c", "mklink", "/J", alias, self.out], capture_output=True) if os.name == "nt" else None
+            if r is None or r.returncode != 0:
+                self.skipTest("cannot make a folder alias here")
+        mp = os.path.join(alias, "agent", "lora_datasets", "cat", "manifest.json")
+        self.assertEqual(io.dataset_name_of_path(mp, self.out), "cat")
+        self.assertEqual(io.dataset_name_of_path(os.path.join(self.ds, "manifest.json"), alias), "cat")
+
+    def test_dataset_name_of_path_on_another_mount_is_none_not_an_error(self):
+        from unittest import mock
+        mp = os.path.join(self.ds, "manifest.json")
+        with mock.patch.object(os.path, "relpath", side_effect=ValueError("different mount")):
+            self.assertIsNone(io.dataset_name_of_path(mp, self.out))
+
 
 class FileTests(Base):
     def test_serves_inside_and_refuses_outside(self):

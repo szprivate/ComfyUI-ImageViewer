@@ -107,7 +107,7 @@ export function createLoraEditor(host, opts) {
         tab: "dataset",
         datasets: [], name: "", dir: "", saved: null, m: null, review: { state: "none" },
         selected: new Set(), history: new Mo.History(), find: "", repl: "", rewrite: true,
-        runs: [], run: "", runData: null, pickedRun: false, showLog: false, lastEvent: {}, timer: 0, disposed: false,
+        runs: [], run: "", runData: null, pickedRun: false, seenRuns: null, offered: "", showLog: false, lastEvent: {}, timer: 0, disposed: false,
         busy: false,
     };
 
@@ -541,7 +541,7 @@ export function createLoraEditor(host, opts) {
         btnStopKeep.disabled = btnStopDiscard.disabled = !live || !!(d.control && d.control.action === "stop");
         const card = el(doc, "div", "lr-card-run");
         const head = el(doc, "div");
-        head.append(el(doc, "b", "", d.name), `  ${p.model || (d.job && d.job.model) || ""} on ${p.dataset || (d.job && d.job.dataset) || ""}  `,
+        head.append(el(doc, "b", "", d.name), el(doc, "span", "lr-pill", "run " + Mo.runLabel(d.name, S.runs)), `  ${p.model || (d.job && d.job.model) || ""} on ${p.dataset || (d.job && d.job.dataset) || ""}  `,
             el(doc, "span", `lr-pill ${p.status === "done" ? "approved" : p.status === "failed" ? "cancelled" : ""}`, p.status || "starting"));
         if (d.control && d.control.action === "stop") head.append(el(doc, "span", "lr-pill changes", d.control.keep ? "stopping, keeping the last checkpoint" : "stopping"));
         const pct = Math.max(0, Math.min(1, +p.pct || (p.total ? (p.step || 0) / p.total : 0)));
@@ -616,7 +616,8 @@ export function createLoraEditor(host, opts) {
     function renderRunPicker() {
         runPick.textContent = "";
         for (const r of S.runs) {
-            const o = el(doc, "option", "", `${r.name}  ${r.status}  ${r.step}/${r.total}`);
+            const v = Mo.runVersion(r.name);
+            const o = el(doc, "option", "", `${v ? v + "  " : ""}${r.name}  ${r.status}  ${r.step}/${r.total}${S.offered === r.name ? "  (new)" : ""}`);
             o.value = r.name;
             runPick.append(o);
         }
@@ -652,10 +653,13 @@ export function createLoraEditor(host, opts) {
             const r = await api.runs();
             S.runs = r.runs || [];
         } catch (_) { return null; }
-        if (!S.pickedRun || !S.runs.some((x) => x.name === S.run)) {
-            const live = S.runs.find((x) => x.status === "running" || x.status === "starting");
-            S.run = (live || S.runs[0] || {}).name || "";
-        }
+        const pick = Mo.chooseRun(S.runs, { run: S.run, picked: S.pickedRun, seen: S.seenRuns, dataset: S.name });
+        S.seenRuns = pick.seen;
+        if (pick.run !== S.run) S.runData = null;
+        S.run = pick.run; S.pickedRun = pick.picked;
+        if (pick.switched && pick.fresh.length) toast(`New training run ${Mo.runLabel(S.run, S.runs)} started: showing it.`, "info");
+        if (pick.offer) toast(`A new training run started: ${Mo.runLabel(pick.offer, S.runs)}. Pick it in the run list to watch it.`, "info");
+        S.offered = pick.offer || "";
         renderRunPicker();
         if (!S.run) { S.runData = null; if (S.tab === "training") renderRun(); return "none"; }
         try {

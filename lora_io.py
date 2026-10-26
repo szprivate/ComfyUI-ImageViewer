@@ -77,7 +77,12 @@ def dataset_name_of_path(path, output_dir: str) -> str | None:
     p = os.path.abspath(path)
     if not _inside(p, datasets_root(output_dir)):
         return None
-    rel = os.path.relpath(p, datasets_root(output_dir)).replace("\\", "/").split("/")
+    # Compare the resolved spellings: an agent may name the same folder by its UNC path while ComfyUI
+    # knows it as a mapped drive (W:), and relpath raises ValueError across the two spellings.
+    try:
+        rel = os.path.relpath(os.path.realpath(p), os.path.realpath(datasets_root(output_dir))).replace("\\", "/").split("/")
+    except ValueError:
+        return None
     if len(rel) != 2 or not NAME_RE.match(rel[0]) or not os.path.isfile(p):
         return None
     return rel[0]

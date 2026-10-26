@@ -148,3 +148,27 @@ test("two curves can share one scale", () => {
   assert.equal(L.sparkPath([[0, 5], [10, 5]], 100, 20, 0, r), "M0.0 10.0 L100.0 10.0");
   assert.equal(L.seriesRange([]), null);
 });
+
+test("the Training tab follows a newly started run, and says which one", () => {
+  const R = (name, status, dataset = "cat") => ({ name, status, dataset });
+  // first poll: nothing is "new", the live run is shown
+  let c = L.chooseRun([R("cat_v2", "running"), R("cat_v1", "done")], { run: "", picked: false, seen: null });
+  assert.equal(c.run, "cat_v2"); assert.deepEqual(c.fresh, []);
+  // a new run starts while the user had picked the old one: it is shown (this was the bug)
+  c = L.chooseRun([R("cat_v3", "starting"), R("cat_v2", "done"), R("cat_v1", "done")], { run: "cat_v1", picked: true, seen: c.seen });
+  assert.equal(c.run, "cat_v3"); assert.equal(c.switched, true); assert.equal(c.picked, false); assert.deepEqual(c.fresh, ["cat_v3"]);
+  // a picked, older run stays while nothing new appears
+  c = L.chooseRun([R("cat_v3", "running"), R("cat_v1", "done")], { run: "cat_v1", picked: true, seen: c.seen });
+  assert.equal(c.run, "cat_v1"); assert.equal(c.switched, false);
+  // a new run of ANOTHER dataset while the user watches a live picked run: offered, not forced
+  c = L.chooseRun([R("dog_v1", "starting", "dog"), R("cat_v3", "running")], { run: "cat_v3", picked: true, seen: c.seen });
+  assert.equal(c.run, "cat_v3"); assert.equal(c.offer, "dog_v1");
+  // the shown run disappears: fall back to the live / newest one
+  c = L.chooseRun([R("dog_v1", "running", "dog")], { run: "cat_v3", picked: true, seen: c.seen });
+  assert.equal(c.run, "dog_v1");
+  assert.equal(L.chooseRun([], { run: "x", picked: false, seen: null }).run, "");
+  assert.equal(L.runVersion("cozy_cabin_v8"), "v8"); assert.equal(L.runVersion("custom"), "");
+  const runs = [R("cat_v2", "done"), R("cat_v1", "done"), R("dog_v1", "done", "dog")];
+  assert.equal(L.runLabel("cat_v2", runs), "v2 of 2 on cat");
+  assert.equal(L.runLabel("dog_v1", runs), "v1 on dog");
+});

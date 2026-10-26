@@ -271,6 +271,50 @@ export function pollDelay(status, panelOpen) {
     return (status === "running" || status === "starting") ? 3000 : 12000;
 }
 
+const isLive = (r) => !!r && (r.status === "running" || r.status === "starting");
+
+/** "v3" from a run name like "cozy_cabin_v3" ("" when the name has no version suffix). */
+export function runVersion(name) {
+    const m = /_v(\d+)$/.exec(String(name || ""));
+    return m ? "v" + m[1] : "";
+}
+
+/** "v3 of 8 on cozy_cabin": which run this is among the runs of its dataset. */
+export function runLabel(name, runs) {
+    const r = (runs || []).find((x) => x.name === name);
+    if (!r) return name || "";
+    const same = (runs || []).filter((x) => (x.dataset || "") === (r.dataset || ""));
+    const v = runVersion(name);
+    return `${v || name}${v && same.length > 1 ? ` of ${same.length}` : ""}${r.dataset ? ` on ${r.dataset}` : ""}`;
+}
+
+/** Which run the Training tab shows after a poll.
+ *  runs: newest first (lora_io.list_runs). cur: {run, picked, seen: Set|null, dataset}.
+ *  A run the page has not seen before is a run that was just started: it is shown (the tab used to keep
+ *  the old run, so a new start looked like nothing happened) unless the user is watching a LIVE run of
+ *  another dataset; then it is only offered (`offer`). Without a new run, an unpicked tab follows the
+ *  live run (else the newest), a picked one stays while it exists.
+ *  Returns {run, picked, switched, offer, fresh, seen}. */
+export function chooseRun(runs, cur) {
+    runs = runs || [];
+    const seen = new Set(cur.seen || []);
+    const fresh = cur.seen ? runs.filter((r) => !seen.has(r.name)) : [];
+    runs.forEach((r) => seen.add(r.name));
+    const have = runs.find((r) => r.name === cur.run);
+    let run = cur.run, picked = !!cur.picked, switched = false, offer = "";
+    const cand = fresh[0];
+    if (cand) {
+        const watching = have && isLive(have) && (have.dataset || "") !== (cand.dataset || "") && picked;
+        if (watching) offer = cand.name;
+        else { run = cand.name; picked = false; switched = cand.name !== cur.run; }
+    } else if (!picked || !have) {
+        run = ((runs.find(isLive) || runs[0]) || {}).name || "";
+        picked = false;
+        switched = run !== cur.run;
+    }
+    return { run, picked, switched, offer, fresh: fresh.map((r) => r.name), seen };
+}
+
 export const sampleSteps = (samples) => (samples || []).filter((s) => s && Array.isArray(s.files)).sort((a, b) => a.step - b.step);
 
 export { clone };
