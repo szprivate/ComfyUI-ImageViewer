@@ -10,4 +10,4 @@ http.createServer((req, res) => {
     if (err) { res.writeHead(404); res.end("nf"); return; }
     res.writeHead(200, { "content-type": types[path.extname(file)] || "application/octet-stream", "cache-control": "no-store" }); res.end(buf);
   });
-}).listen(8765, () => console.log("up"));
+}).listen(Number(process.env.PORT) || 8765, () => console.log("up"));

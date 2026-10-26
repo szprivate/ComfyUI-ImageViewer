@@ -750,6 +750,10 @@ export const HistoryMixin = {
             else this.removeHistoryItem(key, idx);
         };
         menu.appendChild(removeItem);
+        // A scene, or the film / poster of one, can be edited in the Motion editor (MgPanelMixin).
+        if (batch.length <= 1 && this.mgAddEditItem && imgObj) {
+            this.mgAddEditItem(menu, imgObj.path ? imgObj.path : { filename: imgObj.filename, subfolder: imgObj.subfolder, type: imgObj.type }, removeItem);
+        }
 
         const panelRect = this.container.getBoundingClientRect();
         menu.style.left = `${ev.clientX - panelRect.left}px`;
@@ -889,12 +893,15 @@ export const HistoryMixin = {
     closeTab(key) {
         // A cut with changes that were not saved asks once (EditTimelineMixin).
         if (this.editTlTabClosing && this.editTlTabClosing(key) === false) return;
+        // ...and so does a motion scene (MgPanelMixin).
+        if (this.mgTabClosing && this.mgTabClosing(key) === false) return;
         if (this._revokeDroppedTab) this._revokeDroppedTab(key);   // free blob: URLs of dropped files
         // A 3D tab's picture is an overlay, not an <img>: closing the tab has to
         // take it down, or it keeps hanging over whatever comes next (or over an
         // empty viewer, when this was the last tab). Whichever tab is shown next
         // puts it back if it needs it.
         if (this.activeTab === key && this._exitModelMode) this._exitModelMode();
+        if (this.activeTab === key && this._mgOn) this.mgTabLeave();
         this.tabOrder = this.tabOrder.filter(k => k !== key);
         delete this.allTabs[key];
         delete this.tabLabels[key];
@@ -902,6 +909,7 @@ export const HistoryMixin = {
         const container = this.tabsContainer || this.tabBar;
         const btn = container && container.querySelector(`[data-tab="${key}"]`);
         if (btn) btn.remove();
+        if (this.mgTabClosed) this.mgTabClosed(key);
         if (this.activeTab === key) {
             const remaining = Object.keys(this.allTabs);
             if (remaining.length > 0) {

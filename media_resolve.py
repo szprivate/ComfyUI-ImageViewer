@@ -727,22 +727,18 @@ def extract_frame(video_path, index, beside=True, folder=None):
 
 def _video_thumb(path):
     """Temp PNG poster for a video (an <img> in the history strip can't show the
-    clip itself), cached per source file. None when no decoder is available."""
-    if file_writer is None:
-        return None
+    clip itself), cached per source file. The picture written beside the clip comes
+    first (no decoder needed), then a decoded frame, then ffmpeg (video_poster).
+    None when nothing can make one."""
     try:
         dst = _cache_path(path, "poster")
     except Exception:
-        dst = None
-    if dst and _cached(dst, path):
+        return None
+    if _cached(dst, path):
         return dst
     try:
-        made = file_writer._thumb_from_video_file(
-            path, os.path.splitext(os.path.basename(path))[0])
-        if made and dst:
-            os.replace(made, dst)
-            return dst
-        return made
+        from . import video_poster
+        return video_poster.make(path, dst, decode=_decode_video_frame)
     except Exception:
         return None
 

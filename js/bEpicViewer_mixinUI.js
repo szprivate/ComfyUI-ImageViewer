@@ -387,6 +387,8 @@ export const UIMixin = {
         if (this._editPlayOn && !(prevTab === k && this.isEditTab(k))) this.editPlayLeave();
         // ...and its panels (Edit, Inspector, Effects) are up only with a cut's tab.
         if (this.editTlTabHidden && !this.isEditTab(k)) this.editTlTabHidden(!!prevTab && this.isEditTab(prevTab));
+        // A motion tab's editor sits over the viewport, with its panels (Layers, Properties, Timeline).
+        if (this._mgOn && !(this.isMotionTab && this.isMotionTab(k))) this.mgTabLeave();
 
         try {
             if (this.activeTab !== k && this.isViewingHistory && this.previewBackup && this.activeTab && this.allTabs[this.activeTab]) {
@@ -425,7 +427,18 @@ export const UIMixin = {
             }
         }
 
-        if (this.isEditTab && this.isEditTab(k)) {
+        if (this.isMotionTab && this.isMotionTab(k)) {
+            // A motion tab has no media: the editor covers the viewport (mgTabEnter) and has its own transport.
+            if (this._exitVideoMode) this._exitVideoMode();
+            if (this._exitModelMode) this._exitModelMode();
+            this.imgBase.src = "";
+            this._updatePathBar(null);
+            if (this.updateShapeInfo) this.updateShapeInfo();
+            this.applyTimelineBounds(0);
+            this.timeline.value = 0;
+            this.container.querySelector('#cur-f').innerText = 0;
+            this.mgTabEnter(k);
+        } else if (this.isEditTab && this.isEditTab(k)) {
             // An Edit tab's picture is its cut, played from the clips' own files.
             this.editPlayEnter(k);
             this.applyTimelineBounds();

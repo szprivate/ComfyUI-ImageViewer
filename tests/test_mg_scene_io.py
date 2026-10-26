@@ -120,5 +120,39 @@ class PosterPngTests(unittest.TestCase):
         self.assertIsNone(io.resolve_png(_png(os.path.join(self.d, "p.png")), self.allow))
 
 
+class SceneBesideFilmTests(unittest.TestCase):
+    """Edit in Motion on the rendered film: the scene file beside it, else the poster PNG that carries it."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.allow = lambda p: os.path.abspath(p).startswith(os.path.abspath(self.d))
+        self.mp4 = os.path.join(self.d, "title.mp4")
+        open(self.mp4, "wb").close()
+
+    def test_video_names(self):
+        self.assertTrue(io.is_video_path("a/b.MP4"))
+        self.assertFalse(io.is_video_path("a/b.png"))
+
+    def test_scene_file_beside_the_film(self):
+        src = os.path.join(self.d, "title.mgscene.json")
+        io.write(src, SCENE)
+        self.assertEqual(io.scene_beside(self.mp4, self.allow), {"path": os.path.abspath(src), "scene": SCENE})
+
+    def test_poster_png_is_the_way_back(self):
+        png = _png(os.path.join(self.d, "title.png"), SCENE, "/gone/title.mgscene.json", False)
+        got = io.scene_beside(self.mp4, self.allow)
+        self.assertEqual(got["scene"], SCENE)
+        self.assertEqual(got["path"], os.path.join(self.d, "title.mgscene.json"))
+
+    def test_nothing_beside(self):
+        self.assertIsNone(io.scene_beside(self.mp4, self.allow))
+        open(os.path.join(self.d, "title.png"), "wb").write(b"not a png")
+        self.assertIsNone(io.scene_beside(self.mp4, self.allow))
+
+    def test_not_allowed(self):
+        io.write(os.path.join(self.d, "title.mgscene.json"), SCENE)
+        self.assertIsNone(io.scene_beside(self.mp4, lambda p: False))
+
+
 if __name__ == "__main__":
     unittest.main()

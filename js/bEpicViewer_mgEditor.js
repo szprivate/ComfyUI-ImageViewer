@@ -10,6 +10,10 @@
 //   save(path, scene)        -> Promise, writes the file
 //   render(path, scene)      -> Promise<{message}>, asks for a video
 //   notify(text, severity)   -> a toast
+//   split: true              -> the layers list, the properties (with the curve) and the timeline are NOT
+//                               put in `host`: they are handed back as `parts` ({layers, props, timeline},
+//                               plain elements), so the viewer can seat each in a dock panel of its own.
+//                               `host` then holds the toolbar, the preview and the transport.
 //
 // The preview is the render: every SVG layer is drawn by layerSvg() from the shared
 // module (bEpicViewer_mgScene.js), the same code agentY's Remotion renderer runs.
@@ -67,6 +71,10 @@ const CSS = `
 .mg-playhead:before{content:"";position:absolute;top:0;left:-5px;border:5px solid transparent;border-top-color:#ff3b3b}
 .mg-curve{margin-top:4px}.mg-curve svg{width:100%;height:120px;background:#121216;border:1px solid #2c2c32;touch-action:none}
 .mg-empty{padding:18px;opacity:.6}
+.mg-part{background:#1b1b1f;color:#d8d8dc;font:12px/1.35 system-ui,Segoe UI,sans-serif;outline:none;position:absolute;inset:0;overflow:auto}
+.mg-part,.mg-part *{box-sizing:border-box}
+.mg-layers.mg-part,.mg-side.mg-part{width:auto;border:0}
+.mg-tl.mg-part{height:auto;border:0;min-height:0}
 .mg-toast{position:absolute;right:8px;bottom:8px;background:#2b2b31;border:1px solid #444;padding:4px 8px;border-radius:3px;z-index:9}
 .mg-vid{background:#223;color:#9ab;font-size:20px;display:flex;align-items:center;justify-content:center;border:2px dashed #557}
 `;
@@ -123,9 +131,16 @@ export function createMgEditor(host, opts = {}) {
     const transport = el(doc, "div", "mg-transport");
     center.append(stageWrap, transport);
     const side = el(doc, "div", "mg-side");
-    main.append(layersCol, center, side);
     const tl = el(doc, "div", "mg-tl");
-    root.append(bar, main, tl);
+    if (o.split) {
+        // Seated by the caller, each in a panel of its own; the keys must work there too.
+        for (const part of [layersCol, side, tl]) { part.classList.add("mg-part"); part.tabIndex = 0; }
+        main.append(center);
+        root.append(bar, main);
+    } else {
+        main.append(layersCol, center, side);
+        root.append(bar, main, tl);
+    }
     host.append(root);
 
     const btn = (label, title, fn, cls = "") => {
@@ -826,7 +841,7 @@ export function createMgEditor(host, opts = {}) {
     }
 
     // -- keyboard -------------------------------------------------------------------------------------------------------------------------
-    root.addEventListener("keydown", (e) => {
+    const onKey = (e) => {
         const tag = (e.target.tagName || "").toLowerCase();
         const typing = tag === "input" || tag === "textarea" || tag === "select";
         const mod = e.ctrlKey || e.metaKey;
@@ -852,8 +867,11 @@ export function createMgEditor(host, opts = {}) {
             if (st.keys.length) mutate(() => { for (const k of st.keys) { const l = Mo.layerOf(st.scene, k.id); if (l) Mo.removeKey(l, k.prop, k.f); } st.keys = []; });
             else delSel();
         }
-    });
-    root.addEventListener("pointerdown", (e) => { const t = (e.target.tagName || "").toLowerCase(); if (!["input", "textarea", "select"].includes(t)) root.focus({ preventScroll: true }); }, true);
+    };
+    root.addEventListener("keydown", onKey);
+    const focusOnPress = (e) => { const t = (e.target.tagName || "").toLowerCase(); if (!["input", "textarea", "select"].includes(t)) e.currentTarget.focus({ preventScroll: true }); };
+    root.addEventListener("pointerdown", focusOnPress, true);
+    if (o.split) for (const part of [layersCol, side, tl]) { part.addEventListener("keydown", onKey); part.addEventListener("pointerdown", focusOnPress, true); }
     tl.addEventListener("wheel", (e) => {
         if (!e.ctrlKey) return;
         e.preventDefault();
@@ -864,6 +882,8 @@ export function createMgEditor(host, opts = {}) {
     // -- public ---------------------------------------------------------------------------------------------------------------------------
     return {
         state: st,
+        root,
+        parts: o.split ? { layers: layersCol, props: side, timeline: tl } : null,
         load(sceneObj, path = "") {
             st.scene = S.normalizeScene(sceneObj);
             st.path = path; st.sel = null; st.keys = []; st.frame = 0; st.dirty = false; st.hist = new Mo.History(); st.fit = true;
@@ -876,6 +896,15 @@ export function createMgEditor(host, opts = {}) {
         isDirty: () => st.dirty,
         path: () => st.path,
         setPath(p) { st.path = p; renderBar(); },
-        dispose() { if (st.playing) togglePlay(); cancelAnimationFrame(raf); if (ro) ro.disconnect(); host.replaceChildren(); },
+        focus() { try { root.focus({ preventScroll: true }); } catch (_) { /* detached */ } },
+        /** The viewer's panels came or went: the preview and the timeline measure themselves again. */
+        relayout() { if (st.scene) { layoutStage(); renderTimeline(); } },
+        dispose() {
+            if (st.playing) togglePlay();
+            cancelAnimationFrame(raf);
+            if (ro) ro.disconnect();
+            host.replaceChildren();
+            if (o.split) for (const part of [layersCol, side, tl]) part.remove();
+        },
     };
 }

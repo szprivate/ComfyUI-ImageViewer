@@ -605,17 +605,8 @@ export const BrowserMixin = {
             this.copyTextToClipboard(paths.join("\n"));
         };
         menu.appendChild(item);
-        // A poster PNG that carries a motion-graphics scene can be edited in the Motion panel.
-        if (paths.length === 1 && /\.png$/i.test(paths[0]) && this.mgOpenFile) {
-            this._mgPngHasScene(paths[0]).then((yes) => {
-                if (!yes || !menu.isConnected) return;
-                const edit = doc.createElement("div");
-                edit.className = "thumb-ctx-item";
-                edit.textContent = "🎬 Edit in Motion";
-                edit.onclick = (ev) => { ev.stopPropagation(); menu.remove(); this.mgOpenFile(paths[0]); };
-                menu.appendChild(edit);
-            });
-        }
+        // A scene, a poster PNG that carries one, or the film rendered from one: edit it in Motion.
+        if (paths.length === 1 && this.mgAddEditItem) this.mgAddEditItem(menu, paths[0]);
         const panelRect = this.container.getBoundingClientRect();
         menu.style.left = `${e.clientX - panelRect.left}px`;
         menu.style.top  = `${e.clientY - panelRect.top}px`;

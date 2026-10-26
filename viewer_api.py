@@ -69,6 +69,13 @@ _MODEL_EXTS = {".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply",
 _THREE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor", "three")
 
 # Stands in for a model's history tile until the browser has rendered one.
+# A film with no poster and no decoder: a tile that says "film" instead of a broken image.
+_VIDEO_PLACEHOLDER_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
+    '<rect width="64" height="64" fill="#2a2a2a"/>'
+    '<rect x="10" y="18" width="44" height="28" rx="3" fill="none" stroke="#9a9a9a" stroke-width="2"/>'
+    '<path d="M28 25v14l12-7z" fill="#9a9a9a"/></svg>')
+
 _MODEL_PLACEHOLDER_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
     '<rect width="64" height="64" fill="#2a2a2a"/>'
@@ -974,19 +981,12 @@ try:
             group, label = clean(data.get("group")), clean(data.get("label"))
 
             from . import timeline_io
-            # Motion-graphics scenes (*.mgscene.json) open the Motion panel, not a media tab.
-            motion, rest, lora = [], [], []
-            for raw in data["paths"]:
-                if lora_io is not None and lora_io.dataset_name_of_path(raw, folder_paths.get_output_directory()):
-                    lora.append(os.path.abspath(raw))    # a LoRA dataset's manifest.json opens the Dataset panel
-                elif mg_scene_io is not None and mg_scene_io.is_scene_path(raw):
-                    p = os.path.abspath(raw)
-                    if os.path.isfile(p) and path_access.may_serve(p):
-                        motion.append(p)
-                    else:
-                        rest.append(raw)
-                else:
-                    rest.append(raw)
+            # Motion-graphics scenes (*.mgscene.json) open the Motion editor, a LoRA dataset's manifest the
+            # Dataset panel; neither is media (push_open.split_pushed).
+            motion, lora, rest = push_open.split_pushed(
+                data["paths"], is_allowed=path_access.is_allowed,
+                is_scene=lambda r: mg_scene_io is not None and mg_scene_io.is_scene_path(r),
+                dataset_of=(lambda r: lora_io is not None and lora_io.dataset_name_of_path(r, folder_paths.get_output_directory())))
             data["paths"] = rest
             image_exts, video_exts = _browse_exts()
             files, refused, cuts = push_open.expand(
@@ -1173,26 +1173,36 @@ try:
 
         # --- Motion panel: scene files and the Render relay (mg_scene_io.py, mg_render.py) ---
         async def _bepic_mgscene(request):
-            """GET ?path=<file>.mgscene.json (or a poster .png carrying one) -> {"path", "scene"}."""
+            """GET ?path=<file>.mgscene.json -> {"path", "scene"}.
+
+            Also answers for what belongs to a scene: a poster .png that carries it, and the rendered
+            film beside it (``clip.mp4`` + ``clip.mgscene.json`` / ``clip.png``). The file may be named
+            by ``path`` or, as the history strip knows a render, by ``filename`` + ``subfolder`` +
+            ``type``. ``probe=1`` answers only {"has_scene"}."""
             if mg_scene_io is None:
                 return web.json_response({"error": "motion panel unavailable"}, status=500)
             path = request.query.get("path") or ""
-            if mg_scene_io.is_png_path(path):
-                # a poster PNG that carries its scene (agentY writes one next to every rendered
-                # video); never writes: a Save of a PNG's scene goes to the path returned here
+            if not path and request.query.get("filename"):
+                path = _resolve_comfy_ref(request.query.get("filename"), request.query.get("type"),
+                                          request.query.get("subfolder")) or ""
+            if mg_scene_io.is_png_path(path) or mg_scene_io.is_video_path(path):
+                # a poster PNG that carries its scene, or the film beside its scene (agentY writes
+                # both next to every rendered video); never writes: a Save goes to the path returned
                 path = os.path.abspath(path)
                 if not path_access.may_serve(path):
                     return web.json_response({"error": path_access.serve_refusal(path)}, status=403)
                 if not os.path.isfile(path):
                     return web.json_response({"error": "file not found"}, status=404)
-                found = await asyncio.get_running_loop().run_in_executor(
-                    None, mg_scene_io.resolve_png, path, path_access.is_allowed)
+                resolve = mg_scene_io.resolve_png if mg_scene_io.is_png_path(path) else mg_scene_io.scene_beside
+                found = await asyncio.get_running_loop().run_in_executor(None, resolve, path, path_access.is_allowed)
                 if request.query.get("probe"):
                     return web.json_response({"has_scene": found is not None})
                 if found is None:
-                    return web.json_response({"error": "this PNG carries no motion-graphics scene"}, status=422)
+                    return web.json_response({"error": "no motion-graphics scene belongs to this file"}, status=422)
                 return web.json_response(found, headers={"Cache-Control": "no-cache"})
             if not mg_scene_io.is_scene_path(path):
+                if request.query.get("probe"):
+                    return web.json_response({"has_scene": False})
                 return web.json_response({"error": "not a scene file (*.mgscene.json)"}, status=400)
             path = os.path.abspath(path)
             # a scene file is not media, so may_serve would refuse it; the
@@ -1432,6 +1442,18 @@ try:
                 if thumb:
                     return web.FileResponse(thumb, headers={"Cache-Control": "no-cache"})
                 return web.Response(text=_MODEL_PLACEHOLDER_SVG, content_type="image/svg+xml",
+                                    headers={"Cache-Control": "no-store"})
+
+            if media_resolve is not None and os.path.splitext(path)[1].lower() in media_resolve.VIDEO_EXTS:
+                # A film's tile is its poster: the picture beside it, or a decoded frame. Never the film's own
+                # bytes: an <img> cannot show them, and that was the broken tile in the history strip.
+                try:
+                    poster = await asyncio.get_running_loop().run_in_executor(None, media_resolve._video_thumb, path)
+                except Exception:
+                    poster = None
+                if poster and os.path.isfile(poster):
+                    return web.FileResponse(poster, headers={"Cache-Control": "no-cache"})
+                return web.Response(text=_VIDEO_PLACEHOLDER_SVG, content_type="image/svg+xml",
                                     headers={"Cache-Control": "no-store"})
 
             if media_resolve is not None:

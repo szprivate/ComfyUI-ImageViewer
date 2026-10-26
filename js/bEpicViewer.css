@@ -706,6 +706,8 @@ textarea.param-input {
 }
 .dock-grab { cursor: grab; user-select: none; }
 .dock-dragging { opacity: 0.4; }
+/* While a panel is dragged nothing inside another panel (an embedded frame, the chat) may take the pointer. */
+.dock-drag-on iframe, .dock-drag-on webview { pointer-events: none; }
 
 /* File Browser Panel
    A flex sibling of the viewport rather than an overlay like the history strip,
@@ -1505,9 +1507,28 @@ textarea.param-input {
 .bar-group.has-code::after { content: ""; position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: #f60; }
 
 /* Motion (bEpicViewer_mgPanel.js / bEpicViewer_mgEditor.js): the editor brings its own styles (mg-*). */
-.dock-rail > .motion-panel { width: auto; min-width: 0; display: flex; flex-direction: column; }
-.motion-panel > .mg-root { flex: 1 1 0; min-height: 0; height: auto; }
+.dock-rail > .motion-part-panel { width: auto; min-width: 0; display: flex; flex-direction: column; }
 
 /* Dataset (bEpicViewer_loraPanel.js / bEpicViewer_loraEditor.js): the editor brings its own styles (lr-*). */
 .dock-rail > .lora-panel { width: auto; min-width: 0; display: flex; flex-direction: column; }
 .lora-panel > .lr-root { flex: 1 1 0; min-height: 0; height: auto; }
+
+
+/* Motion (bEpicViewer_mgPanel.js): a scene is a tab. The editor covers the viewport the way a 3D view does;
+   its layers / properties / timeline are dock panels, each holding one part of it. */
+.motion-view { position: absolute; inset: 0; z-index: 8; display: none; background: #0f0f12; cursor: default; }
+.motion-tab, .motion-stage { position: absolute; inset: 0; }
+.viewport.motion-mode #exposure-control,
+.viewport.motion-mode #contact-container,
+.viewport.motion-mode #img-frame,
+.viewport.motion-mode #compare-slider,
+.viewport.motion-mode #rotate-btn,
+.viewport.motion-mode .bepic-toolbar { display: none !important; }
+.motion-part-panel > .mg-slot { flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden; background: #1b1b1f; }
+.mg-note { padding: 14px; color: #8a8a92; font: 12px/1.4 system-ui, sans-serif; }
+.mg-open-state { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; padding: 24px; text-align: center; color: #d8d8dc; font: 13px/1.5 system-ui, "Segoe UI", sans-serif; }
+.mg-open-title { font-size: 20px; font-weight: 600; }
+.mg-open-text { max-width: 420px; color: #9a9aa2; }
+.mg-open-btn { background: #ff6a1a; border: 0; color: #111; font: 600 13px system-ui, sans-serif; padding: 8px 22px; border-radius: 4px; cursor: pointer; }
+.mg-open-btn:hover { background: #ff7f3a; }

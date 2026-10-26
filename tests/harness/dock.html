@@ -1,0 +1,35 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#222;height:100%}</style></head>
+<body>
+<script>window.addEventListener("error",(e)=>{document.title="ERR "+e.message});</script><script type="module">
+// The REAL viewer (stubbed ComfyUI scripts) with the agentY chat panel docked beside other panels, for pointer
+// tests of the dock drag (tests/test_viewer_browser.py). A stub agentYPanelHost mounts a chat-like body, as
+// agentY-comfyuiConnect does: a log, a textarea and an iframe-like embed.
+window.__fetchApi = async () => ({ ok: false, status: 404, json: async () => ({}) });
+window.agentYPanelHost = {
+  _where: "sidebar",
+  mountInto(el, o) {
+    this._where = "viewer";
+    el.replaceChildren();
+    const wrap = document.createElement("div");
+    wrap.className = "ay-wrap";
+    wrap.style.cssText = "position:relative;display:flex;flex-direction:column;height:100%;background:#15171c;color:#eee";
+    wrap.innerHTML = '<div class="ay-bar" style="padding:8px">agentY</div><div style="flex:1;overflow:auto">chat log</div>'
+      + '<iframe id="ay-frame" srcdoc="<body style=background:#345>embedded</body>" style="height:60px;border:0"></iframe>'
+      + '<textarea style="height:50px"></textarea>';
+    el.append(wrap);
+  },
+  toSidebar() { this._where = "sidebar"; },
+  where() { return this._where; },
+};
+let v; try { v = await import("/extensions/viewer/bEpicViewer.js"); } catch (e) { document.title = "IMPORT " + e.message; throw e; }
+const panel = v.mountStandaloneViewer(document.body);
+window.__panel = panel;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+try {
+  for (let i = 0; i < 100 && !(panel.dockLayout && panel.agentChatPanel); i++) await sleep(50);
+  Object.assign(panel.style, { width: "1400px", height: "850px", left: "20px", top: "20px" });
+  try { await window.__ext.setup(); } catch (e) { window.__setupErr = e.message; }
+  window.__ready = true;
+  document.title = "ready";
+} catch (e) { document.title = "ERR " + e.message; console.error(e); }
+</script></body></html>

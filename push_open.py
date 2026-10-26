@@ -92,3 +92,27 @@ def expand(raw_paths, image_exts, video_exts, *, may_serve, is_allowed, cap=200)
             continue
         add(p)
     return files, refused, cuts
+
+
+def split_pushed(raw_paths, *, is_allowed, is_scene, dataset_of=None):
+    """(motion, lora, rest): which of the pushed paths open a panel rather than a media tab.
+
+    A motion-graphics scene (``*.mgscene.json``) is not media, so the test for it is the allowed
+    folders (``is_allowed``) and that the file exists - NOT ``may_serve``, which only passes pictures,
+    films, sound and 3D files and refused every scene (the Motion panel never opened for an agent's
+    new scene). A LoRA dataset's ``manifest.json`` (``dataset_of(raw)`` true) opens the Dataset panel.
+    Anything else, and a scene that is missing or outside the allowed folders, stays in ``rest``
+    (which the caller reports as refused)."""
+    motion, lora, rest = [], [], []
+    for raw in raw_paths:
+        if dataset_of is not None and dataset_of(raw):
+            lora.append(os.path.abspath(raw))
+        elif is_scene(raw):
+            p = os.path.abspath(raw)
+            if os.path.isfile(p) and is_allowed(p):
+                motion.append(p)
+            else:
+                rest.append(raw)
+        else:
+            rest.append(raw)
+    return motion, lora, rest

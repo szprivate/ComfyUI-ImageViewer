@@ -146,3 +146,32 @@ def resolve_png(png_path, is_allowed):
             pass
     stem = os.path.splitext(os.path.basename(png_path))[0]
     return {"path": os.path.join(os.path.dirname(os.path.abspath(png_path)), stem + SUFFIX), "scene": scene}
+
+
+# --- the scene that belongs to a rendered film ---
+VIDEO_EXTS = frozenset({".mp4", ".m4v", ".mov", ".webm", ".mkv"})
+
+
+def is_video_path(path) -> bool:
+    return isinstance(path, str) and os.path.splitext(path)[1].lower() in VIDEO_EXTS
+
+
+def scene_beside(video_path, is_allowed):
+    """What "Edit in Motion" opens for a rendered film: ``{"path", "scene"}`` or None.
+
+    agentY renders ``<name>.mp4`` next to ``<name>.mgscene.json`` and a poster ``<name>.png`` that
+    carries the scene; the scene file wins, the poster is the way back when the file is gone."""
+    stem = os.path.splitext(os.path.abspath(video_path))[0]
+    for cand in (stem + SUFFIX, stem + SUFFIX.upper()):
+        if os.path.isfile(cand) and is_allowed(cand):
+            try:
+                return {"path": cand, "scene": read(cand)}
+            except (ValueError, OSError):
+                continue
+    for ext in (".png", ".PNG"):
+        poster = stem + ext
+        if os.path.isfile(poster) and is_allowed(poster):
+            found = resolve_png(poster, is_allowed)
+            if found is not None:
+                return found
+    return None

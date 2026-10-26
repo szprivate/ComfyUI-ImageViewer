@@ -60,7 +60,9 @@ const watchedNodeIds  = new Set();
 // "world:" tabs come from the bEpic Worlds pack (or an agent through it).
 // "previz:" tabs are shots an agent asked for (previz_shot.py).
 // "edit:" tabs are cuts being worked on in the Edit panel.
-const USER_TAB_PREFIXES = ["folder_", "dropped_", "loader_", "world:", "previz:", "edit:", "named:"];
+// "motion:" tabs are motion-graphics scenes in the Motion editor.
+// "motion:" tabs are motion-graphics scenes in the Motion editor.
+const USER_TAB_PREFIXES = ["folder_", "dropped_", "loader_", "world:", "previz:", "edit:", "motion:", "named:"];
 let isViewerPanelToggledOn = false;
 let _actionBarStateRetryTimer = null;
 
@@ -603,14 +605,23 @@ class ViewerPanel extends HTMLElement {
             this.curvesPanel.parentNode.insertBefore(ac, this.curvesPanel.nextSibling);
             this.agentCodePanel = ac;
         }
-        // Motion (bEpicViewer_mgPanel.js): the motion-graphics editor, made here like Agent code.
-        this.motionPanel = sr.getElementById('motion-panel');
-        if (!this.motionPanel && this.curvesPanel && this.curvesPanel.parentNode) {
-            const mp = this.curvesPanel.ownerDocument.createElement('div');
-            mp.id = 'motion-panel';
-            mp.className = 'curves-panel motion-panel right';
-            this.curvesPanel.parentNode.insertBefore(mp, this.curvesPanel.nextSibling);
-            this.motionPanel = mp;
+        // Motion (bEpicViewer_mgPanel.js): a scene is a TAB; its layers, properties and timeline are
+        // these three dock panels, each holding one part of the tab's editor (a .mg-slot the glue fills).
+        for (const [id, prop, cls] of [['motionLayers', 'motionLayersPanel', 'motion-layers'],
+                                       ['motionProps', 'motionPropsPanel', 'motion-props'],
+                                       ['motionTimeline', 'motionTimelinePanel', 'motion-timeline']]) {
+            let mp = sr.getElementById(`${id}-panel`);
+            if (!mp && this.curvesPanel && this.curvesPanel.parentNode) {
+                const doc = this.curvesPanel.ownerDocument;
+                mp = doc.createElement('div');
+                mp.id = `${id}-panel`;
+                mp.className = `curves-panel motion-part-panel ${cls} right`;
+                const slot = doc.createElement('div');
+                slot.className = 'mg-slot';
+                mp.appendChild(slot);
+                this.curvesPanel.parentNode.insertBefore(mp, this.curvesPanel.nextSibling);
+            }
+            this[prop] = mp;
         }
         // Dataset (bEpicViewer_loraPanel.js): LoRA dataset review + training monitor, made here like Motion.
         this.loraPanel = sr.getElementById('lora-panel');

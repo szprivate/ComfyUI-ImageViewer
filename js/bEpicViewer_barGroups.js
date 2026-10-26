@@ -21,6 +21,9 @@ const ICONS = {
     // Lucide "box".
     box: SVG('<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/>'
            + '<path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>'),
+    // Lucide "clapperboard".
+    motion: SVG('<path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z"/>'
+              + '<path d="m6.2 5.3 3.1 3.9"/><path d="m12.4 3.4 3.1 4"/><path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>'),
     timeline: SVG('<rect x="2" y="5" width="9" height="5" rx="1"/><rect x="13" y="5" width="9" height="5" rx="1"/>'
                 + '<rect x="2" y="14" width="5" height="5" rx="1"/><rect x="9" y="14" width="13" height="5" rx="1"/>'),
 };
@@ -32,7 +35,6 @@ const GROUPS = [
         { label: "History", panel: "history" },
         { label: "Parameters", panel: "params" },
         { label: "Agent code", panel: "agentCode" },
-        { label: "Motion", panel: "motionGfx" },
         { label: "Dataset", panel: "loraDataset" },
         { label: "agentY", panel: "agentChat" },
     ] },
@@ -40,6 +42,13 @@ const GROUPS = [
         { label: "Outliner", panel: "previz", needs: "3d" },
         { label: "Channel Box", panel: "channels", needs: "3d" },
         { label: "Curve Editor", panel: "curves", needs: "3d" },
+    ] },
+    // A motion-graphics scene is a tab; "Open scene" asks for one, the three panels are its parts.
+    { id: "motion", title: "Motion", icon: "motion", items: [
+        { label: "Open scene\u2026", run: (p) => p.mgBarOpen(), checked: (p) => !!(p.isMotionTab && p.isMotionTab()) },
+        { label: "Layers", panel: "motionLayers", needs: "motion" },
+        { label: "Properties", panel: "motionProps", needs: "motion" },
+        { label: "Timeline", panel: "motionTimeline", needs: "motion" },
     ] },
     { id: "timeline", title: "Timeline", icon: "timeline", items: [
         { label: "Edit", panel: "editTimeline", run: (p) => p.editTlToggle() },
@@ -90,18 +99,19 @@ export const BarGroupsMixin = {
     _barGroupCan(item) {
         if (item.needs === "3d") return !!(this.isPrevizTab && this.isPrevizTab());
         if (item.needs === "cut") return !!(this.isEditTab && this.isEditTab());
+        if (item.needs === "motion") return !!(this.isMotionTab && this.isMotionTab());
         return true;
     },
 
     _barGroupMenu(group, button) {
         if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
         const entries = group.items.map((item) => ({
-            label: (this.isPanelDocked(item.panel) ? "✓  " : "   ") + item.label,
+            label: ((item.panel ? this.isPanelDocked(item.panel) : (item.checked && item.checked(this))) ? "✓  " : "   ") + item.label,
             disabled: !this._barGroupCan(item),
             run: () => {
                 // Open, but behind another panel's tab: it comes to the front
                 // rather than being closed by the press that asked to see it.
-                if (this.isPanelDocked(item.panel) && this.isPanelFront && !this.isPanelFront(item.panel)) {
+                if (item.panel && this.isPanelDocked(item.panel) && this.isPanelFront && !this.isPanelFront(item.panel)) {
                     this.dockTabFront(item.panel);
                 } else if (item.run) item.run(this); else this.togglePanelDocked(item.panel);
                 this.barGroupsSync();
@@ -121,7 +131,7 @@ export const BarGroupsMixin = {
     barGroupsSync() {
         if (!this._barGroups || !this.isPanelDocked) return;
         for (const { group, button } of this._barGroups) {
-            button.classList.toggle("active", group.items.some((item) => this.isPanelDocked(item.panel)));
+            button.classList.toggle("active", group.items.some((item) => item.panel && this.isPanelDocked(item.panel)));
             if (group.id === "timeline") {
                 // A film with a cut beside it: this is where it opens.
                 const film = !!(this._editTlFilm && !(this.isEditTab && this.isEditTab()));

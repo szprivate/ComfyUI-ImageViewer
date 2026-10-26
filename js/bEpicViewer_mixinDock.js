@@ -68,9 +68,11 @@ const DOCK_PANELS = {
     // The code the agent writes, and text files from the browser
     // (bEpicViewer_codePanel.js). Read-only for now.
     agentCode: { prop: "agentCodePanel", label: "Agent code", minW: 240, minH: 160, defaultRail: "right" },
-    // The motion-graphics editor (bEpicViewer_mgPanel.js / bEpicViewer_mgEditor.js): a scene an agent wrote,
-    // as layers, a timeline with keyframes, curves and gizmos. A whole editor wants room.
-    motionGfx: { prop: "motionPanel", label: "Motion", minW: 560, minH: 360, defaultRail: "right", size: 3 },
+    // The motion-graphics editor (bEpicViewer_mgPanel.js / bEpicViewer_mgEditor.js): a scene an agent wrote is a
+    // TAB (preview and transport in the main canvas); these are its other parts, up only with a motion tab.
+    motionLayers: { prop: "motionLayersPanel", label: "Layers", minW: 170, minH: 120, defaultRail: "left" },
+    motionProps: { prop: "motionPropsPanel", label: "Properties", minW: 240, minH: 200, defaultRail: "right", size: 2 },
+    motionTimeline: { prop: "motionTimelinePanel", label: "Motion timeline", minW: 360, minH: 160, defaultRail: "bottom" },
     // The LoRA dataset review and training monitor (bEpicViewer_loraPanel.js / bEpicViewer_loraEditor.js).
     loraDataset: { prop: "loraPanel", label: "Dataset", minW: 480, minH: 320, defaultRail: "right", size: 3 },
     // (The drawing tools' options have no panel of their own: while a tool is
@@ -165,18 +167,20 @@ export const DockMixin = {
         // Matches what the viewer opened with before docking existed: the
         // parameters panel showing on the right, the other two put away.
         return {
-            left:   { width: 88,  panels: [{ id: "history", size: 1, hidden: true  }] },
+            left:   { width: 88,  panels: [{ id: "history", size: 1, hidden: true  },
+                                           { id: "motionLayers", size: 1, hidden: true }] },
             right:  { width: 300, panels: [{ id: "browser", size: 1, hidden: true  },
                                            { id: "previz",  size: 1, hidden: true  },
                                            { id: "channels", size: 1, hidden: true },
                                            { id: "rotoCurves", size: 1, hidden: true },
                                            { id: "paramCurves", size: 1, hidden: true },
                                            { id: "agentCode", size: 1, hidden: true },
-                                           { id: "motionGfx", size: 3, hidden: true },
+                                           { id: "motionProps", size: 2, hidden: true },
                                            { id: "loraDataset", size: 3, hidden: true },
                                            { id: "params",  size: 1, hidden: false }] },
             // A graph over time wants width: the Curve Editor lives under the picture.
-            bottom: { height: 240, panels: [{ id: "curves", size: 1, hidden: true }] },
+            bottom: { height: 240, panels: [{ id: "curves", size: 1, hidden: true },
+                                            { id: "motionTimeline", size: 1, hidden: true }] },
         };
     },
 
@@ -561,8 +565,8 @@ export const DockMixin = {
             if (this.paramRefreshCurves) this.paramRefreshCurves();
         } else if (id === "agentCode") {
             if (this._codeOnShown) this._codeOnShown();
-        } else if (id === "motionGfx") {
-            if (this._mgOnShown) this._mgOnShown();
+        } else if (id === "motionLayers" || id === "motionProps" || id === "motionTimeline") {
+            if (this._mgOn && this._mgSeat) this._mgSeat(this._mgState().tabs[this.activeTab]);
         } else if (id === "loraDataset") {
             if (this._loraOnShown) this._loraOnShown();
         } else if (id === "editTimeline") {
@@ -615,17 +619,24 @@ export const DockMixin = {
     _pointerDrag(el, e, onMove, onUp) {
         e.preventDefault();
         try { el.setPointerCapture(e.pointerId); } catch (_) {}
-        const move = (ev) => onMove(ev);
+        let done = false;
+        const move = (ev) => { if (!done) onMove(ev); };
         const up = (ev) => {
+            if (done) return;
+            done = true;
             el.removeEventListener("pointermove", move);
             el.removeEventListener("pointerup", up);
             el.removeEventListener("pointercancel", up);
+            el.removeEventListener("lostpointercapture", up);
             try { el.releasePointerCapture(e.pointerId); } catch (_) {}
             if (onUp) onUp(ev);
         };
         el.addEventListener("pointermove", move);
         el.addEventListener("pointerup", up);
         el.addEventListener("pointercancel", up);
+        // Capture taken away (the window lost the button, the header was re-parented): the drag is over; without
+        // this the overlay and the dimmed panel stayed up until a reload.
+        el.addEventListener("lostpointercapture", up);
     },
 
     _bindRailSplitters() {
@@ -759,7 +770,9 @@ export const DockMixin = {
             this._paintDockPreview(target, ev.clientX, ev.clientY, id);
         }, () => {
             if (!started) return;
+            const cancelled = !!this._dockDragCancelled;
             this._endDockDrag(id);
+            if (cancelled) return;
             if (target && target.kind === "tab") this.dockPanelAsTab(id, target.ref.id);
             else if (target) this.dockPanelTo(id, target.side, target.index);
         });
@@ -767,6 +780,11 @@ export const DockMixin = {
 
     _beginDockDrag(id) {
         this._dockDragId = id;
+        // Escape cancels ONE drag. The flag used to be set and never cleared, so after a single Escape every later
+        // drag found "nowhere" to drop and panels could not be moved again until the page was reloaded.
+        this._dockDragCancelled = false;
+        // An embedded frame under the pointer must not take the moves away from the header.
+        this.container?.classList?.add("dock-drag-on");
         const el = this._dockPanelEl(id);
         if (el) {
             el.classList.add("dock-dragging");
@@ -817,6 +835,7 @@ export const DockMixin = {
     },
 
     _endDockDrag(id) {
+        this.container?.classList?.remove("dock-drag-on");
         const el = this._dockPanelEl(id);
         if (el) {
             el.classList.remove("dock-dragging");
