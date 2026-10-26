@@ -149,5 +149,48 @@ class RelayTests(unittest.TestCase):
             ar.render_state(stub.base, "///")
 
 
+class MoveRelayTests(unittest.TestCase):
+    setUp = RequestTests.setUp
+
+    def req(self, **kw):
+        keys = [{"t": i / 24, "camera_world": M16[:14] + [-0.1 * i, 1], "fov": 40, "aspect": 1.78, "gated": True} for i in range(3)]
+        body = {"world_path": os.path.join(self.world, "world.glb"), "keys": keys, "model_world": M16, "quality": "high",
+                "fps": 24, "name": "push", "dry_run": True}
+        body.update(kw)
+        return body
+
+    def test_clean_move_request(self):
+        out = ar.clean_move_request(self.req())
+        self.assertEqual(out["world"], self.world)
+        self.assertEqual((len(out["keys"]), out["quality"], out["dry_run"], out["confirm_cost"]), (3, "high", True, False))
+        self.assertEqual(out["model_world"], [float(x) for x in M16])
+        self.assertEqual(out["keys"][2]["camera_world"][14], -0.2)
+
+    def test_bad_move_requests(self):
+        for body in (None, self.req(keys=[]), self.req(keys=self.req()["keys"][:1]), self.req(quality="ultra"),
+                     self.req(keys=[{"t": 0, "camera_world": [1]}] * 2), self.req(keys=[{"camera_world": M16}] * 2),
+                     self.req(model_world=[1]), self.req(keys=self.req()["keys"] * 300), self.req(world_path="")):
+            with self.assertRaises(ar.RelayError) as cm:
+                ar.clean_move_request(body)
+            self.assertEqual(cm.exception.status, 400)
+
+    def test_start_and_poll_use_the_move_route(self):
+        stub = Stub()
+        self.addCleanup(stub.close)
+        self.assertEqual(ar.start_move(stub.base, self.req(dry_run=False, confirm_cost=True))["id"], "abc")
+        method, path, token, body = stub.seen[0]
+        self.assertEqual((method, path, token), ("POST", "/agentY/atlas_camera_move", "tok"))
+        self.assertTrue(body["confirm_cost"] and not body["dry_run"])
+        ar.move_state(stub.base, "abc")
+        self.assertEqual(stub.seen[1][:2], ("GET", "/agentY/atlas_camera_move?id=abc"))
+
+    def test_an_old_host_is_named(self):
+        old = Stub(post_status=404)
+        self.addCleanup(old.close)
+        with self.assertRaises(ar.RelayError) as cm:
+            ar.start_move(old.base, self.req())
+        self.assertIn("too old", str(cm.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

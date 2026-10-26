@@ -137,6 +137,8 @@ export function explainError(err) {
         auth: "The World Labs key is missing or wrong (WORLDLABS_API_KEY in agentY's .env).",
         content_refusal: "World Labs declined this view; try another camera.",
         dependency: "The upscale needs ComfyUI and an upscale model; the 1280 × 720 view may still have been saved.",
+        over_cap: "The plan is above the price cap; pick a lower quality or a shorter move.",
+        confirm_cost: "The price was not confirmed.",
     };
     const kind = err && err.kind;
     return hints[kind] && !msg.includes(hints[kind]) ? `${hints[kind]} (${msg})` : msg;
@@ -146,4 +148,93 @@ export function explainError(err) {
 export function clock(seconds) {
     const s = Math.max(0, Math.round(seconds || 0));
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+// ── "Render camera with Atlas": the previz camera's animation as a move painted by Atlas ─────────────────────
+// The camera is sampled from the timeline frame by frame (so the server renders exactly the path shown), sent
+// with a dry run first (the plan and the price), and followed as a job (tasks done / total).
+
+export const MOVE_QUALITIES = [
+    ["draft", "Draft — a painted view every 1 s (fewest tasks)"],
+    ["standard", "Standard — a painted view every 0.5 s"],
+    ["high", "High — a painted view every 0.25 s (most faithful)"],
+];
+export const MOVE_MAX_KEYS = 800;
+
+/**
+ * The animated camera of a previz scene and its range: {camera, start, end, fps, seconds, frames} or {error}.
+ * `S` is bEpicViewer_scene3d (itemById, keyframeFrames, isAnimated) - passed in so this stays DOM- and three-free.
+ */
+export function describeMove(scene, S) {
+    if (!scene || !Array.isArray(scene.items)) return { error: "no scene" };
+    const cams = scene.items.filter((i) => i && i.kind === "camera");
+    const active = scene.activeCamera ? S.itemById(scene, scene.activeCamera) : null;
+    const animated = (c) => c && (S.isAnimated(c, "position") || S.isAnimated(c, "rotation"));
+    const camera = animated(active) ? active : cams.find(animated);
+    if (!camera) {
+        return { error: "The scene has no camera animation: key a camera on the timeline (two keyframes at least) "
+            + "and look through it." };
+    }
+    const frames = S.keyframeFrames(camera);
+    const start = frames[0], end = frames[frames.length - 1];
+    if (!(end > start)) return { error: "The camera needs keyframes at two different frames." };
+    const fps = Number(scene.fps) || 24;
+    return { camera, start, end, fps, seconds: (end - start) / fps, frames: end - start + 1 };
+}
+
+/**
+ * Sample the camera at every frame of the range. `applyFrame(f)` places the scene at frame f, `cameraObject()`
+ * returns the three.js camera, `fovAt(f)` its lens. The scene is put back at `restoreFrame` afterwards.
+ * Returns [{t (s), camera_world (16), fov, aspect, gated}].
+ */
+export function sampleMove({ start, end, fps, applyFrame, cameraObject, fovAt, restoreFrame = 0, maxKeys = MOVE_MAX_KEYS }) {
+    const step = Math.max(1, Math.ceil((end - start + 1) / maxKeys));
+    const picks = [];
+    for (let f = start; f < end; f += step) picks.push(f);
+    picks.push(end);
+    const out = [];
+    try {
+        for (const f of picks) {
+            applyFrame(f);
+            const cam = cameraObject();
+            if (!cam) throw new Error("no camera to sample");
+            cam.updateMatrixWorld(true);
+            out.push({ t: (f - start) / fps, camera_world: elements(cam.matrixWorld), fov: fovAt(f),
+                       aspect: ATLAS_ASPECT, gated: true });
+        }
+    } finally {
+        applyFrame(restoreFrame);
+    }
+    return out;
+}
+
+export function buildMoveRequest(item, keys, modelWorld, { quality = "standard", fps = 24, name = "move", dryRun = false,
+                                                           confirmCost = false } = {}) {
+    return { world_path: item.src.path, keys, model_world: modelWorld, quality, fps, name,
+             dry_run: !!dryRun, confirm_cost: !!confirmCost };
+}
+
+const usd = (v) => "$" + Number(v).toFixed(2);
+
+/** One line for the dialog from a dry run's plan: what will be painted and what it may cost. */
+export function describePlan(plan) {
+    if (!plan || !plan.estimate) return "";
+    const e = plan.estimate;
+    const range = Math.abs(e.max_usd - e.min_usd) < 0.005 ? usd(e.max_usd) : `${usd(e.min_usd)}–${usd(e.max_usd)}`;
+    return `${plan.frames} frames (${plan.seconds}s) · Atlas paints ${plan.keyframes} views in ${plan.tasks} task`
+        + `${plan.tasks === 1 ? "" : "s"} · about ${range} of World Labs credits`;
+}
+
+/** The progress line while a move runs. */
+export function moveProgress(s) {
+    const n = s.tasks_total ? ` (${s.tasks_done || 0}/${s.tasks_total} tasks)` : "";
+    return `${s.phase || "Working"}${n}… ${clock(s.elapsed)}`;
+}
+
+/** What a dry run answered: {plan} or throws an Error with the reason (no host, no key, a bad path ...). */
+export function planOrThrow(answer) {
+    if (answer && answer.plan && answer.status === "dry_run") return answer.plan;
+    const e = new Error((answer && answer.error) || "the agentY host gave no plan");
+    e.kind = (answer && answer.error_kind) || "";
+    throw e;
 }

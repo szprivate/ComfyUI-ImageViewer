@@ -1084,7 +1084,13 @@ export const PrevizMixin = {
                        + "you are looking through";
         atlasBtn.style.display = "none";
         atlasBtn.onclick = () => this.previzAtlasDialog();
-        actions.append(newBtn, addBtn, editBtn, outBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn);
+        // ... and the camera's whole keyframed animation: Atlas paints views along the path, the move is rendered.
+        const atlasMoveBtn = el("button", "previz-btn previz-world", "Atlas move");
+        atlasMoveBtn.title = "Render camera with Atlas: World Labs paints views along the camera's keyframed "
+                           + "animation and the move is rendered through them (the price is shown first)";
+        atlasMoveBtn.style.display = "none";
+        atlasMoveBtn.onclick = () => this.previzAtlasMoveDialog();
+        actions.append(newBtn, addBtn, editBtn, outBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn, atlasMoveBtn);
 
         const list = el("div", "previz-list");
         // The space below the tree is "no parent": dropping a row here lifts it
@@ -1109,7 +1115,7 @@ export const PrevizMixin = {
         this._previzCloseAddMenu();
         host.querySelectorAll(":scope > .previz-body").forEach((n) => n.remove());
         host.appendChild(root);
-        this._previzUI = { root, list, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn };
+        this._previzUI = { root, list, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn, atlasMoveBtn };
         return this._previzUI;
     },
 
@@ -1462,6 +1468,19 @@ export const PrevizMixin = {
             ui.walkBtn.classList.toggle("active", !!(this._model3d && this._model3d.walking));
         }
         if (ui.atlasBtn) ui.atlasBtn.style.display = this.previzAtlasItem && this.previzAtlasItem() ? "" : "none";
+        if (ui.atlasMoveBtn) {
+            const atlas = !!(this.previzAtlasItem && this.previzAtlasItem());
+            ui.atlasMoveBtn.style.display = atlas ? "" : "none";
+            // Needs a keyframed camera; the title says so instead of failing in a dialog.
+            const sc = atlas ? this.previzScene() : null;
+            const animated = !!(sc && sc.items.some((i) => i.kind === "camera"
+                && (S.isAnimated(i, "position") || S.isAnimated(i, "rotation"))));
+            ui.atlasMoveBtn.style.opacity = atlas && !animated ? "0.55" : "";
+            ui.atlasMoveBtn.title = animated || !atlas
+                ? "Render camera with Atlas: World Labs paints views along the camera's keyframed animation and the "
+                  + "move is rendered through them (the price is shown first)"
+                : "Render camera with Atlas needs a camera with keyframes on the timeline (two at least)";
+        }
         // Previz coming on is what opens the panel. After that the dock owns
         // it, so one put away by hand stays away — and stays undrawn, which is
         // worth having while playback calls through here every frame.

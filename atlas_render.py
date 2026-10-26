@@ -113,10 +113,11 @@ def host_endpoint(comfy_base: str, timeout: float = 5.0):
     return f"http://127.0.0.1:{int(info['agent_server_port'])}", str(info.get("session_token") or "")
 
 
-def call_host(comfy_base: str, method: str, query: str = "", body=None, timeout: float = 30.0) -> dict:
-    """One call to the host's ``/agentY/atlas_render`` (``query`` like ``id=abc`` for a poll)."""
+def call_host(comfy_base: str, method: str, query: str = "", body=None, timeout: float = 30.0,
+              route: str = "atlas_render") -> dict:
+    """One call to the host's ``/agentY/<route>`` (``query`` like ``id=abc`` for a poll)."""
     base, token = host_endpoint(comfy_base)
-    url = base + "/agentY/atlas_render" + (f"?{query}" if query else "")
+    url = base + f"/agentY/{route}" + (f"?{query}" if query else "")
     headers = {"Content-Type": "application/json"}
     if token:
         headers[TOKEN_HEADER] = token
@@ -137,6 +138,69 @@ def call_host(comfy_base: str, method: str, query: str = "", body=None, timeout:
 
 def start_render(comfy_base: str, data) -> dict:
     return call_host(comfy_base, "POST", body=clean_request(data))
+
+
+MOVE_ROUTE = "atlas_camera_move"
+QUALITIES = ("draft", "standard", "high")
+MAX_MOVE_KEYS = 800
+
+
+def clean_move_request(data) -> dict:
+    """The body forwarded for a camera move: the world folder, the timeline camera sampled per frame
+    (``keys``: t in seconds + the camera's raw matrixWorld + its lens), the model's matrix once, the options."""
+    if not isinstance(data, dict):
+        raise RelayError("bad request", 400)
+    world = world_dir_of(data.get("world_path") or data.get("world"))
+    raw = data.get("keys")
+    if not isinstance(raw, list) or len(raw) < 2:
+        raise RelayError("the camera needs an animation: at least two keys", 400)
+    if len(raw) > MAX_MOVE_KEYS:
+        raise RelayError(f"at most {MAX_MOVE_KEYS} camera keys (a move is at most ~30 s)", 400)
+    keys = []
+    for k in raw:
+        k = k if isinstance(k, dict) else {}
+        cw = _num_list(k.get("camera_world"), 16)
+        try:
+            t = float(k.get("t"))
+        except (TypeError, ValueError):
+            t = None
+        if cw is None or t is None:
+            raise RelayError("each key needs t and camera_world (16 numbers)", 400)
+        key = {"t": t, "camera_world": cw, "gated": bool(k.get("gated", True))}
+        for a in ("fov", "aspect"):
+            try:
+                if k.get(a) is not None:
+                    key[a] = float(k[a])
+            except (TypeError, ValueError):
+                raise RelayError(f"{a} must be a number", 400)
+        keys.append(key)
+    out = {"world": world, "keys": keys}
+    if data.get("model_world") is not None:
+        mw = _num_list(data["model_world"], 16)
+        if mw is None:
+            raise RelayError("model_world must be the model's 16 matrix numbers", 400)
+        out["model_world"] = mw
+    quality = str(data.get("quality") or "standard")
+    if quality not in QUALITIES:
+        raise RelayError("quality is draft, standard or high", 400)
+    out.update(quality=quality, name=str(data.get("name") or "move")[:60], dry_run=bool(data.get("dry_run")),
+               confirm_cost=bool(data.get("confirm_cost")), grow_world=bool(data.get("grow_world")))
+    try:
+        out["fps"] = float(data.get("fps") or 24.0)
+    except (TypeError, ValueError):
+        raise RelayError("fps must be a number", 400)
+    return out
+
+
+def start_move(comfy_base: str, data) -> dict:
+    return call_host(comfy_base, "POST", body=clean_move_request(data), route=MOVE_ROUTE, timeout=60.0)
+
+
+def move_state(comfy_base: str, job_id: str) -> dict:
+    job_id = "".join(c for c in str(job_id or "") if c.isalnum())[:32]
+    if not job_id:
+        raise RelayError("no render id", 400)
+    return call_host(comfy_base, "GET", query=f"id={job_id}", route=MOVE_ROUTE)
 
 
 def render_state(comfy_base: str, job_id: str) -> dict:

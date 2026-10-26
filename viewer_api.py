@@ -1143,6 +1143,34 @@ try:
                 return web.json_response({"error": str(e)}, status=e.status)
             return web.json_response(out)
 
+        # --- Render camera with Atlas: the previz camera's animation as an Atlas-painted move (atlas_render.py) ---
+        async def _bepic_atlas_move(request):
+            """Body: {"world_path", "keys": [{"t", "camera_world": [16], "fov", "aspect"}], "model_world": [16],
+            "quality", "fps", "name", "dry_run", "confirm_cost"}. A dry run answers with the plan and the price;
+            otherwise an ``id`` to poll GET /bepic/atlas_camera_move?id=<id> (tasks_done / tasks_total)."""
+            if atlas_render is None:
+                return web.json_response({"error": "atlas render unavailable"}, status=500)
+            try:
+                data = await request.json()
+            except Exception:
+                data = None
+            base = f"{request.scheme}://{request.host}"
+            try:
+                out = await asyncio.to_thread(atlas_render.start_move, base, data)
+            except atlas_render.RelayError as e:
+                return web.json_response({"error": str(e)}, status=e.status)
+            return web.json_response(out)
+
+        async def _bepic_atlas_move_state(request):
+            if atlas_render is None:
+                return web.json_response({"error": "atlas render unavailable"}, status=500)
+            base = f"{request.scheme}://{request.host}"
+            try:
+                out = await asyncio.to_thread(atlas_render.move_state, base, request.query.get("id") or "")
+            except atlas_render.RelayError as e:
+                return web.json_response({"error": str(e)}, status=e.status)
+            return web.json_response(out)
+
         # --- Motion panel: scene files and the Render relay (mg_scene_io.py, mg_render.py) ---
         async def _bepic_mgscene(request):
             """GET ?path=<file>.mgscene.json (or a poster .png carrying one) -> {"path", "scene"}."""
@@ -2160,6 +2188,10 @@ try:
         _safe_add("POST", "/api/bepic/atlas_render", _bepic_atlas_render)
         _safe_add("GET", "/bepic/atlas_render", _bepic_atlas_render_state)
         _safe_add("GET", "/api/bepic/atlas_render", _bepic_atlas_render_state)
+        _safe_add("POST", "/bepic/atlas_camera_move", _bepic_atlas_move)
+        _safe_add("POST", "/api/bepic/atlas_camera_move", _bepic_atlas_move)
+        _safe_add("GET", "/bepic/atlas_camera_move", _bepic_atlas_move_state)
+        _safe_add("GET", "/api/bepic/atlas_camera_move", _bepic_atlas_move_state)
         _safe_add("GET", "/bepic/previz_shot", _bepic_previz_shot_state)
         _safe_add("GET", "/api/bepic/previz_shot", _bepic_previz_shot_state)
         _safe_add("POST", "/api/bepic/push", _bepic_push)
