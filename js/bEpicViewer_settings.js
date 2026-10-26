@@ -49,6 +49,7 @@ export const PREF = {
     renderAA:       P + "Previz.RenderAA",
     renderBg:       P + "Previz.RenderBackground",
     renderColor:    P + "Previz.RenderColor",
+    atlasMove:      P + "Experimental.AtlasCameraMove",
 };
 
 const DEFAULTS = {};          // id → defaultValue, filled from the table below
@@ -328,6 +329,15 @@ function defs() {
             name: "Render: background colour", type: "color",
             defaultValue: S.RENDER_DEFAULTS.color.replace(/^#/, ""),
             sortOrder: 320, onChange: applySceneDefaults,
+        },
+        // ── Experimental ──
+        {
+            id: PREF.atlasMove, category: sec("Experimental", "AtlasCameraMove"),
+            name: "Atlas camera move (paid, untested)",
+            tooltip: "Shows the \"Atlas move\" button in the Previz panel: World Labs paints views along a keyframed " +
+                     "camera. It costs World Labs credits and has not had a real run yet, so it is off. agentY " +
+                     "must have it on too ([atlas] camera_move_enabled).",
+            type: "boolean", defaultValue: false, sortOrder: 10,
         },
     ];
 }

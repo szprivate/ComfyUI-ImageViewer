@@ -12,6 +12,7 @@
 import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
 import * as S from "./bEpicViewer_scene3d.js";
+import { pref, PREF } from "./bEpicViewer_settings.js";
 import { notice, openExportDialog, openFilePicker } from "./bEpicViewer_exportUI.js";
 
 // Maya's manipulator keys, which is what the hotkeys below bind to.
@@ -1470,7 +1471,9 @@ export const PrevizMixin = {
         if (ui.atlasBtn) ui.atlasBtn.style.display = this.previzAtlasItem && this.previzAtlasItem() ? "" : "none";
         if (ui.atlasMoveBtn) {
             const atlas = !!(this.previzAtlasItem && this.previzAtlasItem());
-            ui.atlasMoveBtn.style.display = atlas ? "" : "none";
+            // Experimental and off by default (Settings -> bEpic Viewer -> Experimental).
+            const moveOn = pref(PREF.atlasMove) === true;
+            ui.atlasMoveBtn.style.display = atlas && moveOn ? "" : "none";
             // Needs a keyframed camera; the title says so instead of failing in a dialog.
             const sc = atlas ? this.previzScene() : null;
             const animated = !!(sc && sc.items.some((i) => i.kind === "camera"
