@@ -248,6 +248,7 @@ export const PrevizWorldMixin = {
     _onWalkChange(on) {
         const ui = this._previzUI;
         if (ui && ui.walkBtn) ui.walkBtn.classList.toggle("active", !!on);
+        if (this._model3d && this._model3d._syncToolbar) this._model3d._syncToolbar();
         if (!on) this.previzChanged({ persist: false });
     },
 
@@ -346,7 +347,7 @@ export const PrevizWorldMixin = {
         view._setStatus("");
         const text = win.prompt("Your note about this spot (the agent reads it with the snapshot):", "");
         if (!text || !text.trim()) {
-            if (view.walking) view._setStatus("Walking — click to look around · W A S D to move · Shift run · F note · Esc stop");
+            if (view.walking) view._setStatus("Walking — hold the left mouse button to look · W A S D to move · Shift run · F note · Esc stop");
             return;
         }
         const world = scene.world;

@@ -64,7 +64,7 @@ test("flying starts at the shot camera's exact pose and lens, and never touches 
     assert.ok(free.quaternion.angleTo(q) < 1e-6);
     assert.equal(free.fov, 40, "the shot camera item's lens");
     assert.ok(shot.position.equals(p) && shot.quaternion.equals(q) && shot.fov === fov);
-    assert.match(status.at(-1), /^Flying — click to look · W A S D move/);
+    assert.match(status.at(-1), /^Flying — hold the left mouse button to look · W A S D move/);
 });
 
 test("W flies along the view including pitch, with no ground; E and Q climb; Shift is faster", () => {
@@ -86,7 +86,7 @@ test("W flies along the view including pitch, with no ground; E and Q climb; Shi
     onKey(key("keydown", "Shift"));
     view._walkStep(1);
     assert.ok(Math.abs(free.position.y - (3 + 1.5 * 3)) < 1e-9);
-    // look up by dragging (no pointer lock needed), then W climbs as well as advances
+    // look up by dragging (the left button held), then W climbs as well as advances
     for (const k of [" ", "Shift"]) onKey(key("keyup", k));
     canvas.on.get("mousedown")({ clientX: 100, clientY: 100 });
     doc.on.get("mousemove")({ clientX: 100, clientY: 100 - 0.7854 / 0.0022 });
@@ -180,4 +180,49 @@ test("a splat scene can be flown (previzCanMove / previzWalkToggle)", async () =
     const w = mk([{ id: "e", kind: "environment" }]);
     assert.equal(w.previzWalkToggle(), true);
     assert.deepEqual(w.calls, ["walk"]);
+});
+
+test("walk mode looks only while the left button is held; plain mouse moves turn nothing", () => {
+    const { view, canvas, doc } = makeView();
+    let locks = 0, unlocks = 0;
+    canvas.requestPointerLock = () => { locks++; doc.pointerLockElement = canvas; };
+    doc.exitPointerLock = () => { unlocks++; doc.pointerLockElement = null; };
+    view.flyEnter();
+    assert.equal(locks, 0, "entering takes no pointer lock");
+    const yaw0 = view._walk.yaw, pitch0 = view._walk.pitch;
+    doc.on.get("mousemove")({ clientX: 300, clientY: 200, movementX: 300, movementY: 200 });
+    assert.equal(view._walk.yaw, yaw0);
+    assert.equal(view._walk.pitch, pitch0);
+    // a right-button press does not start a look
+    canvas.on.get("mousedown")({ button: 2, clientX: 10, clientY: 10 });
+    doc.on.get("mousemove")({ clientX: 50, clientY: 50, movementX: 40, movementY: 40 });
+    assert.equal(view._walk.yaw, yaw0);
+    // left button held: look, with the pointer locked for the drag
+    canvas.on.get("mousedown")({ button: 0, clientX: 10, clientY: 10 });
+    assert.equal(locks, 1);
+    doc.on.get("mousemove")({ clientX: 10, clientY: 10, movementX: 100, movementY: 0 });
+    assert.ok(Math.abs(view._walk.yaw - (yaw0 - 100 * 0.0022)) < 1e-9);
+    // released: the lock goes and moves are ignored again
+    doc.on.get("mouseup")({ button: 0 });
+    assert.equal(unlocks, 1);
+    const yaw1 = view._walk.yaw;
+    doc.on.get("mousemove")({ clientX: 99, clientY: 99, movementX: 90, movementY: 90 });
+    assert.equal(view._walk.yaw, yaw1);
+});
+
+test("the toolbar's walk button is lit while walking, whoever started it", () => {
+    const { view } = makeView();
+    const cls = new Set();
+    const walkBtn = { classList: { toggle: (c, on) => (on ? cls.add(c) : cls.delete(c)) }, style: {}, title: "" };
+    const m = Model3DView.prototype;
+    const sync = () => m._syncToolbar.call({
+        ui: { walkBtn, modeSel: {}, gridBtn: { classList: { toggle() {} } }, toolBtns: {}, spaceBtn: null, pivotBtn: null },
+        hooks: { canWalk: () => true }, _walk: view._walk, materialMode: "", showGrid: false,
+    });
+    sync();
+    assert.ok(!cls.has("active"));
+    view.flyEnter();
+    sync();
+    assert.ok(cls.has("active"));
+    assert.match(walkBtn.title, /left mouse button/);
 });

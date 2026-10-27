@@ -56,6 +56,8 @@ export const ModelMixin = {
                 onClipFrames: (id, frames) => this.previzFitClipLength(frames),
                 // Worlds (bEpicViewer_previzWorld.js).
                 onWalkChange: (on) => this._onWalkChange(on),
+                onWalkToggle: () => this.previzWalkToggle(),
+                canWalk: () => !!(this.previzCanMove && this.previzCanMove()),
                 onFeedbackRequest: (point, seen) => this._previzFeedbackSubmit(point, seen),
                 onPinClick: (pin) => this._previzPinClicked(pin),
             });

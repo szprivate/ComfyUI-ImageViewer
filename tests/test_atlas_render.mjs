@@ -257,7 +257,7 @@ test("the wheel scales the speed, clamped, and the status line shows it", () => 
     for (let i = 0; i < 1000; i++) v = A.flyWheel(v, 100);
     assert.equal(v, A.FLY_SPEED_MIN);
     assert.equal(A.flyWheel(1.5, 0), 1.5);
-    assert.match(A.flyStatus(1.5), /^Flying — click to look · W A S D move · E\/Q up\/down · Shift fast · wheel speed 1\.5 m\/s · Esc stop$/);
+    assert.match(A.flyStatus(1.5), /^Flying — hold the left mouse button to look · W A S D move · E\/Q up\/down · Shift fast · wheel speed 1\.5 m\/s · Esc stop$/);
     assert.match(A.flyStatus(12.345), /12\.3 m\/s/);
 });
 

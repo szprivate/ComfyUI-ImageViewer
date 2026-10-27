@@ -1185,9 +1185,11 @@ export const WorldViewMixin = {
                 W.keys.delete(k);
             }
         };
+        // Look only while the left button is held: a plain mouse move turns nothing. The pointer is locked
+        // for the length of the drag (so it can't hit the screen edge) and let go on release.
         W.onMove = (ev) => {
+            if (!W.drag) return;
             const locked = this.doc.pointerLockElement === this.canvas;
-            if (!locked && !W.drag) return;
             const dx = locked ? ev.movementX : ev.clientX - W.drag.x;
             const dy = locked ? ev.movementY : ev.clientY - W.drag.y;
             if (!locked) W.drag = { x: ev.clientX, y: ev.clientY };
@@ -1197,14 +1199,17 @@ export const WorldViewMixin = {
             this.requestRender();
         };
         W.onDown = (ev) => {
-            if (this.doc.pointerLockElement !== this.canvas) {
-                W.drag = { x: ev.clientX, y: ev.clientY };
-                try { this.canvas.requestPointerLock(); } catch (e) { /* drag to look instead */ }
-            }
+            if (ev.button) return;      // the left button only
+            W.drag = { x: ev.clientX, y: ev.clientY };
+            try { this.canvas.requestPointerLock(); } catch (e) { /* drag to look instead */ }
         };
-        W.onUp = () => { W.drag = null; };
+        W.onUp = (ev) => {
+            if (ev && ev.button) return;
+            W.drag = null;
+            if (this.doc.pointerLockElement) { try { this.doc.exitPointerLock(); } catch (e) {} }
+        };
         const hint = () => fly ? flyStatus(W.speed)
-            : "Walking — click to look around · W A S D to move · Shift run · F note · Esc stop";
+            : "Walking — hold the left mouse button to look · W A S D to move · Shift run · F note · Esc stop";
         W.onLock = () => {
             // Esc releases the pointer first; that alone doesn't end the walk,
             // so the notes prompt (which also releases it) can come back.
@@ -1227,7 +1232,6 @@ export const WorldViewMixin = {
         this.doc.addEventListener("pointerlockchange", W.onLock);
         W.blur = () => W.keys.clear();
         win.addEventListener("blur", W.blur);
-        try { this.canvas.requestPointerLock(); } catch (e) { /* drag to look */ }
         this.root.classList.add("walking");
         this._setStatus(hint());
         this._walkStep(0);

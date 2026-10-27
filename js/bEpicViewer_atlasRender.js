@@ -53,7 +53,7 @@ export function flyDelta({ yaw, pitch, keys, speed, dt }) {
     ];
 }
 
-export const flyStatus = (speed) => "Flying — click to look · W A S D move · E/Q up/down · Shift fast · wheel speed "
+export const flyStatus = (speed) => "Flying — hold the left mouse button to look · W A S D move · E/Q up/down · Shift fast · wheel speed "
     + `${Number(speed.toFixed(speed < 10 ? 2 : 1))} m/s · Esc stop`;
 
 /** The same file under a new URL, so a rewritten one is fetched again rather than served from the cache. */

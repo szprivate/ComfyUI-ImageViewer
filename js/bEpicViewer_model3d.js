@@ -230,6 +230,12 @@ export class Model3DView {
         };
         if (this.hooks.setIcon) this.hooks.setIcon(pivotBtn, "icon-axis3d");
         tools.append(pivotBtn);
+        // Walk (or fly) through the world, right beside the pivot. Shown only where the scene can be moved
+        // through (hooks.canWalk); the same switch as Shift+J, so it lights up however walking was started.
+        const walkBtn = el("button", "model-btn model-icon-btn", "Walk");
+        walkBtn.onclick = () => { if (this.hooks.onWalkToggle) this.hooks.onWalkToggle(); else this.walkToggle(); };
+        if (this.hooks.setIcon) this.hooks.setIcon(walkBtn, "icon-footprints");
+        tools.append(walkBtn);
 
         bar.append(look, tools);
         const status = el("div", "model-status");
@@ -250,7 +256,7 @@ export class Model3DView {
 
         root.append(gate, bar, status);
         this.root = root;
-        this.ui = { modeSel, gridBtn, resetBtn, panelBtn, channelsBtn, curvesBtn, toolBtns, spaceBtn, pivotBtn, status,
+        this.ui = { modeSel, gridBtn, resetBtn, panelBtn, channelsBtn, curvesBtn, toolBtns, spaceBtn, pivotBtn, walkBtn, status,
                     gate, shades, gateFrame, gateLabel };
         this._syncToolbar();
         this.host.appendChild(root);
@@ -278,6 +284,15 @@ export class Model3DView {
             this.ui.pivotBtn.title = this.pivotMode
                 ? "Moving the pivot: the gizmo drags the point the item turns about - click to move the item again (Insert)"
                 : "Move the pivot: drag the point the selected item turns about, the item stays where it is (Insert)";
+        }
+        const walk = this.ui.walkBtn;
+        if (walk) {
+            const on = !!this._walk;
+            walk.classList.toggle("active", on);
+            walk.style.display = !on && this.hooks.canWalk && !this.hooks.canWalk() ? "none" : "";
+            walk.title = on
+                ? "Walking: hold the left mouse button and drag to look, W A S D to move - click to stop (Shift+J, Esc)"
+                : "Walk through the world: hold the left mouse button and drag to look, W A S D to move (Shift+J)";
         }
     }
 
