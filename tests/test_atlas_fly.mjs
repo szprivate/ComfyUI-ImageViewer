@@ -226,3 +226,19 @@ test("the toolbar's walk button is lit while walking, whoever started it", () =>
     assert.ok(cls.has("active"));
     assert.match(walkBtn.title, /left mouse button/);
 });
+
+// A refused model path (a typo) left its error on the item's entry; the next job's scene reused the entry
+// and the stale error was reported as that job's own failure ("the server answered 403") although its file loaded.
+test("a model load clears the error an earlier file left on the entry", async () => {
+    const item = { id: "scene", kind: "model", name: "Scene model", src: { path: "W:/x/ok.ply" } };
+    const entry = { item, object: null, error: "the server answered 403", key: "W:/x/bad.py" };
+    const self = Object.assign(Object.create(Model3DView.prototype), {
+        hooks: { srcUrl: (s) => s.path }, _entries: new Map([["scene", entry]]), sceneFrame: 0,
+        _isCache: () => false, _bodyOf: () => ({ add() {} }), _statsOf: () => ({}), _originals: new Map(),
+        setMaterialMode() {}, materialMode: "original",
+        async _load() { return { object: { traverse() {} }, animations: [] }; },
+    });
+    await self._loadEntry(entry, item);
+    assert.equal(entry.error, null);
+    assert.ok(entry.object);
+});

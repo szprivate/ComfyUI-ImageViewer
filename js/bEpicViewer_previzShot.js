@@ -42,6 +42,10 @@ export const PrevizShotMixin = {
             const view = this._modelView();
             await waitFor(() => view.scene3d === this.previzScene(req.key), 15000, "the 3D view to take the scene");
             if (!(await view.whenLoaded(180000))) throw new Error("the scene's models did not finish loading");
+            // A model that failed in an earlier job (or before its folder was allowed) gets one more
+            // try now, so a refused path never poisons the jobs after it.
+            const failed = [...view._entries.values()].filter((e) => e.error && e.item && e.item.kind === "model");
+            for (const e of failed) await view.reloadModel(e.item.id);
             const bad = [...view._entries.values()].filter((e) => e.error).map((e) => `${e.item.name}: ${e.error}`);
             if (bad.length) throw new Error("could not load: " + bad.join("; "));
             await report({ state: "rendering", done: 0 });

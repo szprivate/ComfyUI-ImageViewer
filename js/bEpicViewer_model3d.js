@@ -1417,6 +1417,9 @@ export class Model3DView {
     }
 
     async _loadEntry(entry, item) {
+        // A load starts clean: an error left by an earlier file (a refused path, a
+        // typo) must not outlive it and be read as this load's failure.
+        entry.error = null;
         const url = this._srcUrlFor(item);
         entry.key = this._srcKey(item.src);
         entry.cacheFrame = this._isCache(item) ? Math.max(0, Math.round(this.sceneFrame || 0)) : null;
