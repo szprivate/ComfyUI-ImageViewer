@@ -48,6 +48,14 @@ export const PrevizShotMixin = {
             for (const e of failed) await view.reloadModel(e.item.id);
             const bad = [...view._entries.values()].filter((e) => e.error).map((e) => `${e.item.name}: ${e.error}`);
             if (bad.length) throw new Error("could not load: " + bad.join("; "));
+            // Never film a model that is not the one the scene names: every file item must hold an
+            // object loaded from ITS path (a stale or missing one ends the job here, in error).
+            const wrong = (view.scene3d.items || []).filter((it) => {
+                if (it.kind !== "model" || !it.src) return false;
+                const e = view._entries.get(it.id);
+                return !e || !e.object || e.key !== view._srcKey(it.src);
+            }).map((it) => it.name || it.id);
+            if (wrong.length) throw new Error("the scene's model is not the one loaded: " + wrong.join("; "));
             await report({ state: "rendering", done: 0 });
             let last = 0;
             const res = await this.previzRender(

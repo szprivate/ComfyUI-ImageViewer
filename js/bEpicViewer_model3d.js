@@ -1420,6 +1420,10 @@ export class Model3DView {
         // A load starts clean: an error left by an earlier file (a refused path, a
         // typo) must not outlive it and be read as this load's failure.
         entry.error = null;
+        // Loads of one entry can overlap (a scene swapped while the first file, a 3M-splat ply, is
+        // still arriving). Only the newest may land: an older one finishing late used to add its
+        // model on top of the new one, so a render showed both - or the old one alone.
+        const seq = entry.loadSeq = (entry.loadSeq || 0) + 1;
         const url = this._srcUrlFor(item);
         entry.key = this._srcKey(item.src);
         entry.cacheFrame = this._isCache(item) ? Math.max(0, Math.round(this.sceneFrame || 0)) : null;
@@ -1428,7 +1432,7 @@ export class Model3DView {
         try {
             const loaded = await this._load(item.src, url, format);
             // The scene may have moved on while this was in flight.
-            if (!this._entries.has(item.id)) { this._disposeObject(loaded.object); return entry; }
+            if (!this._entries.has(item.id) || entry.loadSeq !== seq) { this._disposeObject(loaded.object); return entry; }
             this._bodyOf(entry).add(loaded.object);
             entry.object = loaded.object;
             entry.stats = this._statsOf(loaded.object, format);
@@ -1446,6 +1450,7 @@ export class Model3DView {
             }
             this.setMaterialMode(this.materialMode);
         } catch (e) {
+            if (entry.loadSeq !== seq) return entry;         // superseded: its failure is not the entry's
             console.warn(`[bEpicViewer] could not load ${item.name}`, e);
             entry.error = (e && e.message) || String(e);
             if (this.hooks.onError) this.hooks.onError(item.src, entry.error);
