@@ -267,9 +267,12 @@ class ViewerPanel extends HTMLElement {
             this._beforeUnloadHandler = () => this.persistViewerState();
             window.addEventListener('beforeunload', this._beforeUnloadHandler);
         }
+        // agentY's tags in the history filter (HistoryTagsMixin).
+        if (this.startAgentTagWatch) this.startAgentTagWatch();
     }
 
     disconnectedCallback() {
+        if (this._agentTagTimer) { clearInterval(this._agentTagTimer); this._agentTagTimer = null; }
         this.persistViewerState();
         if (this._beforeUnloadHandler) {
             window.removeEventListener('beforeunload', this._beforeUnloadHandler);

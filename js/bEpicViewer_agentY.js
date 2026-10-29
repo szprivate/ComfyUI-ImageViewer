@@ -227,6 +227,7 @@ export const AgentYMixin = {
                 this._agentTags[framePath(fr)] = r.tag || tag;
                 this._historyPanelSig = null;
                 this.renderHistoryPanel();
+                if (this.refreshAgentTags) this.refreshAgentTags({ fresh: true });
             }
             this._agentYNotify(r && r.message ? r.message : (ok ? `Tagged #${tag}.` : "Could not tag it."),
                                ok ? "success" : "warn");
