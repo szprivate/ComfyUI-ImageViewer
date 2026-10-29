@@ -448,6 +448,23 @@ def _name_frames(frames, group, label):
                 fr["label"] = label
 
 
+def _stamp_prompt_id(frames):
+    """Stamp the run that made these frames onto them, in place.
+
+    The viewer keeps frames as they arrive, so the id lives as long as the
+    picture does in history; agentY reads it when the user points at a snapshot
+    ("the selected one") and can ask ComfyUI's history for that run."""
+    try:
+        pid = str(getattr(PromptServer.instance, "last_prompt_id", "") or "")
+    except Exception:
+        pid = ""
+    if not pid:
+        return
+    for fr in frames or []:
+        if isinstance(fr, dict) and not fr.get("prompt_id"):
+            fr["prompt_id"] = pid
+
+
 class bEpicSendToViewer:
     def __init__(self):
         self.output_dir = folder_paths.get_temp_directory()
@@ -577,6 +594,7 @@ class bEpicSendToViewer:
                                       self.output_dir, self.type)
 
         _name_frames(tab_frames, group, label)
+        _stamp_prompt_id(tab_frames)
         tabs = {"tab": tab_frames}
 
         PromptServer.instance.send_sync("bepic.viewer.update", {
@@ -621,6 +639,7 @@ class bEpicSendToViewer:
         except Exception as e:
             print(f"\033[91m[bEpicSendToViewer] 3D input failed: {e}\033[0m")
 
+        _stamp_prompt_id(frames)
         PromptServer.instance.send_sync("bepic.viewer.update", {
             "tabs": {"tab": frames},
             "unique_id": unique_id,

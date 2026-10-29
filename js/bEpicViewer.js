@@ -1454,8 +1454,11 @@ app.registerExtension({
         document.body.appendChild(globalViewerPanel);
         _setViewerPanelToggle(false, { syncDisplay: true });
         _updateActionBarButtonState();
-        window.bEpicViewerApi = Object.assign(window.bEpicViewerApi || {},
-            { show: () => _setViewerPanelToggle(true, { syncDisplay: true }) });
+        window.bEpicViewerApi = Object.assign(window.bEpicViewerApi || {}, {
+            show: () => _setViewerPanelToggle(true, { syncDisplay: true }),
+            // What the user picked in the history strip, for agentY (bEpicViewer_historySelection.js).
+            historySelection: () => globalViewerPanel?.agentHistorySelection?.() || null,
+        });
         // A reload takes back the popout the previous page left open, so the
         // toolbar button has to show the viewer as on again.
         globalViewerPanel.addEventListener("bepic-popout-adopted", () => {

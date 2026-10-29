@@ -34,6 +34,13 @@ class PanelHostContract(unittest.TestCase):
         for name in ("openAgentPanel", "closeAgentPanel", "extractFrame"):
             self.assertIn(name, src)
 
+    def test_viewer_offers_the_history_selection(self):
+        # agentY-comfyuiConnect reads window.bEpicViewerApi.historySelection()
+        # with each message and for get_history_selection.
+        src = read("bEpicViewer.js")
+        self.assertIn("historySelection: () => globalViewerPanel?.agentHistorySelection?.()", src)
+        self.assertIn("agentHistorySelection()", read("bEpicViewer_agentY.js"))
+
 
 if __name__ == "__main__":
     unittest.main()

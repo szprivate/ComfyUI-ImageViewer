@@ -21,6 +21,7 @@
 // the picture does in the history.
 
 import { app } from "../../scripts/app.js";
+import { describeHistorySelection } from "./bEpicViewer_historySelection.js";
 
 /** The tab a send files itself under when it names one but has no node of its own
  *  on the open graph - an agent running a workflow. */
@@ -75,6 +76,39 @@ export const AgentYMixin = {
     },
 
     agentYAvailable() { return !!bridge(); },
+
+    // ── what is picked in the history strip (window.bEpicViewerApi.historySelection) ──
+
+    /** Whether the user can see the viewer at all: docked / full-screen, or popped out. */
+    _agentViewerVisible() {
+        if (this.popoutWindow && !this.popoutWindow.closed) return true;
+        return !!(this.style && this.style.display !== "none" && this.isConnected);
+    },
+
+    /** The history snapshots the user picked in the open tab, as plain data
+     *  (see bEpicViewer_historySelection.js for what counts as a pick). */
+    agentHistorySelection() {
+        const key = this.activeTab;
+        const empty = { source: "viewer", tab: String(key || ""), tab_label: "", mode: "", count: 0, items: [] };
+        if (!key || !this._agentViewerVisible()) return empty;
+        let label = "";
+        try { label = this._resolveTabLabel ? this._resolveTabLabel(key) : (this.tabLabels || {})[key] || ""; }
+        catch (_) { label = (this.tabLabels || {})[key] || ""; }
+        return describeHistorySelection({
+            stack: (this.history || {})[key] || [],
+            state: {
+                key,
+                multi: this.historySelectionIndices ? this.historySelectionIndices(key) : [],
+                viewing: !!this.isViewingHistory,
+                viewingKey: this.currentHistoryKey,
+                viewingIndex: this.currentHistoryIndex,
+                compare: this.historyCompare || null,
+            },
+            tab: key,
+            tabLabel: label,
+            agentTags: this._agentTags || null,
+        });
+    },
 
     // ── groups in the history strip ──────────────────────────────────────────
 

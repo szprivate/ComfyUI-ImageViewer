@@ -69,6 +69,7 @@ Once several are selected:
 
 - **Drag any one of them** onto the node graph and the whole selection is dropped, one loader node per snapshot, cascaded so none lands hidden behind another. Dragging a thumbnail that is *not* in the selection drags just that one and leaves the selection alone.
 - **Press <kbd>Shift</kbd>+<kbd>Delete</kbd>** (with the viewer hovered) or use the context menu to remove them all in one go.
+- **Ask agentY about them.** With agentY installed, the agent sees what you picked in the open tab: the Ctrl-selected snapshots, the two pinned in a comparison, or the one older snapshot you clicked open. Write "use the selected ones as references" and it knows which files you mean. A strip you have not touched (only the newest render highlighted) and a closed viewer report nothing.
 
 ### Deleting Snapshots
 
