@@ -1,0 +1,17 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#222;height:100%}</style></head>
+<body>
+<script>window.addEventListener("error",(e)=>{document.title="ERR "+e.message});</script><script type="module">
+// The REAL viewer (stubbed ComfyUI scripts) starting the way it does in ComfyUI after a restart or a reload:
+// agentY's bridge is already on the page, and the userdata reads of the viewer's start take a while (?delay=ms).
+// tests/test_viewer_restore_browser.py puts a saved viewer state in localStorage, then opens this page.
+window.agentYViewerBridge = { version: 1, tags: async () => [] };
+window.__userDataDelay = Number(new URLSearchParams(location.search).get("delay") || 0);
+window.__fetchApi = async () => ({ ok: false, status: 404, json: async () => ({}) });
+let v; try { v = await import("/extensions/viewer/bEpicViewer.js"); } catch (e) { document.title = "IMPORT " + e.message; throw e; }
+const panel = v.mountStandaloneViewer(document.body);
+window.__panel = panel;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+for (let i = 0; i < 200 && !panel._viewerStateRestored; i++) await sleep(25);
+window.__ready = true;
+document.title = "ready";
+</script></body></html>

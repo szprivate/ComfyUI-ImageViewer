@@ -234,6 +234,10 @@ class ViewerPanel extends HTMLElement {
         this._lastTransformSig   = null;
         this._persistTimer       = null;
         this._isRestoringViewerState = false;
+        // Nothing is saved until init has read the saved state back: a save
+        // before that writes the EMPTY start state over the user's history
+        // (see persistViewerState).
+        this._viewerStateRestored = false;
         this._beforeUnloadHandler = null;
         this.viewerToggleEnabled = false;
 
@@ -287,7 +291,7 @@ class ViewerPanel extends HTMLElement {
     }
 
     queuePersistViewerState() {
-        if (this._isRestoringViewerState) return;
+        if (this._isRestoringViewerState || !this._viewerStateRestored) return;
         if (this._persistTimer) clearTimeout(this._persistTimer);
         this._persistTimer = setTimeout(() => {
             this._persistTimer = null;
@@ -296,7 +300,13 @@ class ViewerPanel extends HTMLElement {
     }
 
     persistViewerState() {
-        if (this._isRestoringViewerState) return;
+        // Before init has restored, this panel holds the empty state it was
+        // built with, and saving it would wipe the history and agent tabs the
+        // last session left. Things that run that early do exist: agentY's tag
+        // watch starts the moment the panel is attached (connectedCallback) and
+        // queued a save while init still waited on its userdata reads, which
+        // emptied the saved state on every slow start (a ComfyUI restart).
+        if (this._isRestoringViewerState || !this._viewerStateRestored) return;
         try {
             // Dropped-file tabs live on blob: URLs that die on reload — never
             // persist them (they would restore as broken images).
@@ -522,7 +532,8 @@ class ViewerPanel extends HTMLElement {
         this.currentHistoryKey   = null;
         this.currentHistoryIndex = null;
         this.historyCompare      = null;
-        this.restoreViewerState();
+        try { this.restoreViewerState(); }
+        finally { this._viewerStateRestored = true; }   // from here on saves are safe
         this.startParamMonitor();
         this._initReconnect();
     }
