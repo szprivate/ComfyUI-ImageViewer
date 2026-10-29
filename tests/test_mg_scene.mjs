@@ -34,3 +34,19 @@ test("identical to agentY-core's canonical copy (when the checkout is next door)
     assert.equal(norm(here("../js/bEpicViewer_mgScene.js")), norm(canon),
         "copy agentY-core/agenty_core/motion_graphics/renderer/src/mgscene.js over js/bEpicViewer_mgScene.js");
 });
+
+test("scene values cannot break out of the markup they are put into", () => {
+    // A scene file is the agent's (or anyone's) JSON; its SVG lands in innerHTML.
+    const scene = {
+        mgscene: 1, comp: { width: 100, height: 100, fps: 24, duration: 10 },
+        assets: { f: { type: "font", src: "x.ttf", family: 'A"}</style><img src=x onerror=alert(1)>',
+                       weight: '400;}</style><script>', style: "x;}</style>" } },
+        layers: [{ id: "t", type: "text", text: "hi", weight: '400" onmouseover="alert(1)' }],
+    };
+    const css = M.fontFaceCss(scene, () => "u");
+    assert.ok(!/[<>]/.test(css), css);
+    const res = M.evaluateScene(scene, 0)[0];
+    const out = M.layerSvg(scene, res, {});
+    assert.ok(!out.includes("onmouseover"), out);
+    assert.ok(out.includes('font-weight="400"'), out);
+});

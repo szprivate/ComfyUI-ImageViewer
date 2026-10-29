@@ -377,12 +377,15 @@ const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 const num = (x) => +(+x).toFixed(4);
 const safeId = (s) => String(s).replace(/[^A-Za-z0-9_-]/g, "_");
 
+/** A value inside a double-quoted CSS string: no way out of the quotes or the <style>. */
+const cssStr = (v) => String(v ?? "").replace(/[\\"<>\n\r]/g, "");
+
 /** @font-face rules for the scene's font assets. `url(asset)` turns an asset into a loadable url. */
 export function fontFaceCss(scene, url) {
     const out = [];
     for (const [id, a] of Object.entries(scene.assets || {})) {
         if (!a || a.type !== "font") continue;
-        out.push(`@font-face{font-family:"${a.family || id}";src:url("${url(id, a)}");font-weight:${a.weight || 400};font-style:${a.style || "normal"};}`);
+        out.push(`@font-face{font-family:"${cssStr(a.family || id)}";src:url("${cssStr(url(id, a))}");font-weight:${num(a.weight) || 400};font-style:${a.style === "italic" || a.style === "oblique" ? a.style : "normal"};}`);
     }
     return out.join("\n");
 }
@@ -425,7 +428,7 @@ function layerBody(scene, res, ctx) {
         const y0 = -((lines.length - 1) * lh) / 2;
         const tspans = lines.map((ln, i) =>
             `<tspan x="0" y="${num(y0 + i * lh)}">${esc(ln) || "&#160;"}</tspan>`).join("");
-        return `<text font-family="${esc(fontFamily(scene, layer))}" font-size="${num(fs)}" font-weight="${layer.weight || 400}"`
+        return `<text font-family="${esc(fontFamily(scene, layer))}" font-size="${num(fs)}" font-weight="${num(layer.weight) || 400}"`
             + `${layer.italic ? ' font-style="italic"' : ""} letter-spacing="${num(p.tracking || 0)}" text-anchor="${anchor}"`
             + ` dominant-baseline="central" xml:space="preserve"${paintAttrs(p)}>${tspans}</text>`;
     }

@@ -262,7 +262,7 @@ export const RotoMixin = {
         p.appendChild(el("div",
             "Key with <b>+ × ○</b> and the ease menu beside the timeline; " +
             "drag the orange ticks to retime.",
-            "bepic-tool-hint"));
+            "bepic-tool-hint", true));
 
         // Global controls
         p.appendChild(el("h4", "Global matte"));
@@ -1671,10 +1671,12 @@ function projectToSeg(p, a, b) {
 }
 
 // small DOM builders
-function el(tag, text, cls) {
+// Text is text: a layer's name is the user's (or a loaded file's) string, and
+// was parsed as HTML whenever it held a "<". Markup only when asked for (html).
+function el(tag, text, cls, html = false) {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
-    if (text != null) { if (/[<>]/.test(text) && tag !== "button") e.innerHTML = text; else e.textContent = text; }
+    if (text != null) { if (html) e.innerHTML = text; else e.textContent = text; }
     return e;
 }
 

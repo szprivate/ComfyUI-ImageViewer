@@ -93,7 +93,14 @@ export const ParamsMixin = {
         if (!node) return;
         const title = node.title || node.type;
         if (this.selectedNodeIds && this.selectedNodeIds.length > 1) {
-            this.paramsTitle.innerHTML = `${title} <span style="color:#f60;font-weight:bold;margin-left:5px;">[${this.selectedNodeIds.length}]</span>`;
+            // textContent + an element, never innerHTML: a node title is whatever
+            // the workflow file (or the agent) said, and this page holds tokens.
+            this.paramsTitle.textContent = title;
+            const count = document.createElement("span");
+            count.style.cssText = "color:#f60;font-weight:bold;margin-left:5px;";
+            count.textContent = `[${this.selectedNodeIds.length}]`;
+            this.paramsTitle.appendChild(document.createTextNode(" "));
+            this.paramsTitle.appendChild(count);
         } else {
             this.paramsTitle.innerText = title;
         }
