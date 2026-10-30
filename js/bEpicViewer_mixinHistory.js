@@ -29,6 +29,14 @@ const PRUNE_DEBOUNCE_MS = 300;
 // deleting on that race would throw away a perfectly good entry.
 const PRUNE_CONFIRM_MS  = 1500;
 
+// Thumbnails asked for at once. A browser keeps six connections to a server,
+// and a tile whose render sits on a network share can take a second or more to
+// come back - six of those and the picture a history switch asks for waits for
+// a free connection. Four leaves room for it (and for the viewer's other calls).
+const THUMB_LOADS_MAX = 4;
+// How far outside the strip's visible part a tile already loads.
+const THUMB_NEAR_MARGIN = '300px';
+
 export const HistoryMixin = {
 
     // ── History stack ────────────────────────────────────────────────────────
@@ -108,8 +116,21 @@ export const HistoryMixin = {
 
     // A media element failed to load. Re-verify rather than trust the cache, then
     // let the normal pass decide whether anything should actually go.
-    noteMediaLoadFailed() {
-        this.resetHistoryProbeCache();
+    //
+    // `frame`, when the caller knows it, is what failed: only its path is asked
+    // about again. Forgetting EVERYTHING on any failure re-checked the whole
+    // history - hundreds of paths, seconds of round trips to a network share -
+    // and a tile that fails for good (a video's poster in a cleaned temp folder)
+    // fails again every time the strip is drawn.
+    noteMediaLoadFailed(frame) {
+        const entry = frame ? this._probeEntry(frame) : null;
+        if (entry) {
+            const { good, dead } = this._probeSeen();
+            good.delete(entry.path);
+            dead.delete(entry.path);
+        } else {
+            this.resetHistoryProbeCache();
+        }
         this.scheduleHistoryPrune();
     },
 
@@ -487,7 +508,92 @@ export const HistoryMixin = {
         this.renderHistoryPanel();
     },
 
+    // ── Thumbnail loading ────────────────────────────────────────────────────
+    //
+    // What loading="lazy" did - only tiles at or near the visible part of the
+    // strip load - plus a cap on how many are asked for at once (THUMB_LOADS_MAX).
+    // The strip itself is the observer's root, so this also works with the
+    // viewer popped out into its own window.
+
+    _thumbLoader() {
+        const strip = this.historyStrip;
+        const win = (strip && strip.ownerDocument && strip.ownerDocument.defaultView) || null;
+        if (!strip || !win || typeof win.IntersectionObserver !== 'function') return null;
+        let L = this._thumbLoad;
+        if (L && L.strip === strip && L.win === win) return L;
+        // First use, or the strip moved to another window: pick up what was waiting.
+        const waiting = L ? [...L.watched] : [];
+        if (L && L.io) L.io.disconnect();
+        L = this._thumbLoad = { strip, win, near: new Set(), watched: new Set(), inflight: new Set(), io: null };
+        L.io = new win.IntersectionObserver((entries) => {
+            for (const e of entries) {
+                if (e.isIntersecting) L.near.add(e.target);
+                else L.near.delete(e.target);
+            }
+            this._pumpThumbs();
+        }, { root: strip, rootMargin: THUMB_NEAR_MARGIN });
+        for (const img of waiting) { L.watched.add(img); L.io.observe(img); }
+        return L;
+    },
+
+    // Point a strip tile at its thumbnail - now, or once it is near the visible
+    // part of the strip and a load slot is free.
+    _loadThumb(imgEl, url) {
+        if (!url) return;
+        const L = /^(data:|blob:)/.test(url) ? null : this._thumbLoader();
+        if (!L) { imgEl.src = url; return; }
+        imgEl._bepicThumbUrl = url;
+        L.watched.add(imgEl);
+        L.io.observe(imgEl);
+    },
+
+    _pumpThumbs() {
+        const L = this._thumbLoad;
+        if (!L) return;
+        // A tile dropped by a rebuild no longer holds a slot (nor waits for one).
+        for (const img of L.inflight) if (!img.isConnected) L.inflight.delete(img);
+        for (const img of L.watched) {
+            if (!img.isConnected) { L.near.delete(img); L.watched.delete(img); L.io.unobserve(img); }
+        }
+        for (const img of L.near) {
+            if (L.inflight.size >= THUMB_LOADS_MAX) break;
+            L.near.delete(img);
+            L.watched.delete(img);
+            L.io.unobserve(img);
+            const url = img._bepicThumbUrl;
+            img._bepicThumbUrl = null;
+            if (!url || !img.isConnected) continue;
+            L.inflight.add(img);
+            const done = () => {
+                img.removeEventListener('load', done);
+                img.removeEventListener('error', done);
+                L.inflight.delete(img);
+                this._pumpThumbs();
+            };
+            img.addEventListener('load', done);
+            img.addEventListener('error', done);
+            // It is near the view already: no second, browser-side wait.
+            img.loading = 'eager';
+            img.src = url;
+        }
+    },
+
     // ── Render thumbnail strip ───────────────────────────────────────────────
+
+    // The open item's highlight, set on the tiles already in the strip - what
+    // renderHistoryPanel would draw for it, without making the tiles again.
+    _paintHistoryCurrent(key) {
+        if (!this.historyStrip) return;
+        for (const thumb of this.historyStrip.children) {
+            if (!thumb.classList || !thumb.classList.contains('history-thumb')) continue;
+            const idx = Number(thumb.dataset ? thumb.dataset.idx : NaN);
+            const isSelected = this.currentHistoryKey === key && this.currentHistoryIndex === idx;
+            if (thumb.classList.contains('selected') === isSelected) continue;
+            thumb.classList.toggle('selected', isSelected);
+            thumb.style.border = isSelected ? '2px solid #f60' : '';
+        }
+        this._paintHistorySelection();
+    },
 
     renderHistoryPanel() {
         if (!this.historyStrip) return;
@@ -501,10 +607,23 @@ export const HistoryMixin = {
         }
 
         // --- fast-path: skip full DOM rebuild if nothing changed ---
-        const newSig = JSON.stringify({ key, len: stack.length, sel: this.currentHistoryIndex, cmp: this.historyCompare,
-                                        tags: this.historyTagSig ? this.historyTagSig(stack) : "" });
+        const layoutSig = JSON.stringify({ key, len: stack.length, cmp: this.historyCompare,
+                                           tags: this.historyTagSig ? this.historyTagSig(stack) : "" });
+        const newSig = `${layoutSig}|${this.currentHistoryIndex}`;
         if (newSig === this._historyPanelSig) return;
+        // Only the open item moved (a click in the strip, the arrow keys): move
+        // its highlight instead of rebuilding the strip. A rebuild makes every
+        // tile anew, and every new tile asks for its thumbnail again - on a
+        // history switch, that was a strip's worth of requests and decodes
+        // queued in front of the picture the switch was waiting for.
+        // A caller that wants a real rebuild clears _historyPanelSig.
+        if (this._historyPanelSig && this._historyPanelLayoutSig === layoutSig) {
+            this._historyPanelSig = newSig;
+            this._paintHistoryCurrent(key);
+            return;
+        }
         this._historyPanelSig = newSig;
+        this._historyPanelLayoutSig = layoutSig;
 
         const frag = document.createDocumentFragment();
         // The tag filter in the footer (HistoryTagsMixin).
@@ -533,8 +652,8 @@ export const HistoryMixin = {
                 // poster is a separate temp file, so it can be gone while the clip
                 // itself is fine. The prune pass checks the real media before
                 // anything is removed.
-                imgEl.onerror = () => this.noteMediaLoadFailed();
-                try { imgEl.src = this.thumbUrl(imgObj); } catch (e) { /* ignore */ }
+                imgEl.onerror = () => this.noteMediaLoadFailed(imgObj);
+                try { this._loadThumb(imgEl, this.thumbUrl(imgObj)); } catch (e) { /* ignore */ }
             }
             thumb.appendChild(imgEl);
             const tagDot = this.historyTagDot ? this.historyTagDot(snapshot) : null;
@@ -658,8 +777,8 @@ export const HistoryMixin = {
         if (this.activeTab !== key) this.switchTab(key);
         else this.refreshView();
         if (typeof this.captureTabViewState === 'function') this.captureTabViewState(key);
-        // Invalidate signature so the strip actually rebuilds
-        this._historyPanelSig = null;
+        // The strip's signature knows the open index, so this only moves the
+        // highlight - unless something else about the strip changed as well.
         this.renderHistoryPanel();
         this.queuePersistViewerState();
     },

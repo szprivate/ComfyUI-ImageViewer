@@ -192,6 +192,20 @@ def _file_response(path, prim=None, frame=0, cs=None, ev=None):
     return web.FileResponse(path, headers={"Cache-Control": "no-cache"})
 
 
+_PROBE_POOL = None
+
+
+def _probe_pool():
+    """A few threads for /bepic/probe_paths: checking a file on a network share is
+    a round trip, not work, so asking about several at once is what makes a
+    history of hundreds of paths quick to verify."""
+    global _PROBE_POOL
+    if _PROBE_POOL is None:
+        from concurrent.futures import ThreadPoolExecutor
+        _PROBE_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="bepic-probe")
+    return _PROBE_POOL
+
+
 def _resolve_raw_path(path):
     """Resolve a /bepic/raw_view path and say whether it may be served.
 
@@ -220,9 +234,20 @@ def _resolve_raw_path(path):
         cand = os.path.abspath(cand)
 
     # Inside, with links resolved: a junction in temp must not reach out of it.
+    # The file is resolved once for both roots - a realpath is a round trip per
+    # path component on a network share, and every history switch comes here.
+    try:
+        real_cand = path_access._real(cand)
+    except Exception:
+        return cand, False
     for base in (temp_base, out_base):
-        if base and path_access.within(cand, base):
-            return cand, True
+        if not base:
+            continue
+        try:
+            if path_access._inside(real_cand, path_access._real(base)):
+                return cand, True
+        except Exception:
+            continue
     return cand, False
 
 def _resolve_comfy_ref(filename, type_name, subfolder):
@@ -330,6 +355,19 @@ try:
             except Exception as e:
                 print(f"[bEpicViewer] route register failed {method} {path}: {e}")
 
+        async def _off_loop(fn, *args):
+            """Run `fn` in a worker thread.
+
+            For anything that touches the disk on a route the history strip calls:
+            an `isfile`, a `realpath` or a thumbnail is quick on a local drive but
+            can take tens of milliseconds - and now and then seconds - on a
+            network share, and on the event loop that wait holds up EVERY other
+            request. Measured on the W: share: a history switch's /bepic/raw_view
+            took 40 ms alone, 180-310 ms while the strip's thumbnails were being
+            answered and 4-4.7 s behind one /bepic/probe_paths of 166 paths.
+            """
+            return await asyncio.get_running_loop().run_in_executor(None, fn, *args)
+
         async def _serve(path, prim=None, frame=0, cs=None, ev=None):
             """_file_response off the event loop: decoding and converting a
             frame takes long enough to hold up every other request."""
@@ -377,12 +415,18 @@ try:
             and answers 404 quietly.
             """
             from . import timeline_io
-            media, allowed, error = _timeline_media(dict(request.query))
+
+            # Off the event loop: resolving the film and looking for its sidecar
+            # touch the disk, which on a network share can take a while.
+            def _locate(params):
+                media, allowed, error = _timeline_media(params)
+                side = timeline_io.sidecar_for(media) if (allowed and not error) else None
+                return media, allowed, error, side
+            media, allowed, error, side = await _off_loop(_locate, dict(request.query))
             if error:
                 return web.Response(status=400, text=error)
             if not allowed:
                 return web.Response(status=403, text=path_access.refusal(media))
-            side = timeline_io.sidecar_for(media)
             if not side:
                 return web.Response(status=404, text="no timeline beside this file")
 
@@ -724,17 +768,25 @@ try:
             if not path:
                 return web.Response(status=400, text="missing 'path' or 'filename' parameter")
 
-            cand, allowed = _resolve_raw_path(path)
+            def _check(path):
+                cand, allowed = _resolve_raw_path(path)
+                # Both refusals are answered silently. The viewer's history outlives
+                # the files it names — a cleaned temp dir, an output root belonging to
+                # another machine — and printing here put one line in the ComfyUI log
+                # per dead entry per redraw of the history strip. The client asks
+                # /bepic/probe_paths instead and drops those entries from the panel.
+                if not allowed or not path_access.is_media(cand):
+                    return cand, 403
+                if not os.path.exists(cand):
+                    return cand, 404
+                return cand, 200
 
-            # Both refusals are answered silently. The viewer's history outlives
-            # the files it names — a cleaned temp dir, an output root belonging to
-            # another machine — and printing here put one line in the ComfyUI log
-            # per dead entry per redraw of the history strip. The client asks
-            # /bepic/probe_paths instead and drops those entries from the panel.
-            if not allowed or not path_access.is_media(cand):
+            # Every history switch comes through here, so the checks (a realpath
+            # and a stat, on the network share for most outputs) run off the loop.
+            cand, status = await _off_loop(_check, path)
+            if status == 403:
                 return web.Response(status=403, text="access denied")
-
-            if not os.path.exists(cand):
+            if status == 404:
                 return web.Response(status=404, text="file not found")
 
             return await _serve(cand, cs=params.get("cs"), ev=params.get("ev"))
@@ -755,8 +807,7 @@ try:
             if not isinstance(entries, list):
                 entries = []
 
-            unreachable = []
-            for item in entries:
+            def _verdict(item):
                 if isinstance(item, dict):
                     p = item.get("path")
                     external = bool(item.get("external"))
@@ -764,7 +815,7 @@ try:
                     p = item
                     external = False
                 if not p or not isinstance(p, str):
-                    continue
+                    return None
                 # External frames come from the file browser, a loader node or
                 # drag-drop and are served by /bepic/view_file. One outside the
                 # allowed folders is left out of the answer entirely: reporting it
@@ -773,16 +824,26 @@ try:
                 # would tell any caller which files exist.
                 if external:
                     if not path_access.is_allowed(p):
-                        continue
+                        return None
                     if not os.path.isfile(os.path.abspath(p)):
-                        unreachable.append({"path": p, "reason": "gone"})
-                    continue
+                        return {"path": p, "reason": "gone"}
+                    return None
                 cand, allowed = _resolve_raw_path(p)
                 if not allowed:
-                    unreachable.append({"path": p, "reason": "denied"})
-                elif not os.path.isfile(cand):
-                    unreachable.append({"path": p, "reason": "gone"})
+                    return {"path": p, "reason": "denied"}
+                if not os.path.isfile(cand):
+                    return {"path": p, "reason": "gone"}
+                return None
 
+            # The whole history in one request: a realpath and a stat per path,
+            # ~25 ms each on the W: share, 4-4.7 s for 166 paths. That ran on the
+            # event loop, so every request behind it - the picture a history
+            # switch asked for included - waited the whole time. Now it runs on
+            # worker threads, several paths at once (they are latency, not work).
+            def _probe_all(items):
+                return [v for v in _probe_pool().map(_verdict, items) if v]
+
+            unreachable = await _off_loop(_probe_all, entries)
             return web.json_response({"unreachable": unreachable})
 
         def _browse_matcher(pattern):
@@ -1386,11 +1447,19 @@ try:
             if not path:
                 return web.Response(status=400, text="missing 'path' parameter")
             path = os.path.abspath(path)
-            # fonts are served too: a motion-graphics scene draws its text with them
-            if not (path_access.may_serve(path)
-                    or (path_access.is_font(path) and path_access.is_allowed(path))):
-                return web.Response(status=403, text=path_access.serve_refusal(path))
-            if not os.path.isfile(path):
+
+            # Off the event loop, like /bepic/raw_view: a file opened from a
+            # project folder is as likely to be on a network share.
+            def _check(path):
+                # fonts are served too: a motion-graphics scene draws its text with them
+                if not (path_access.may_serve(path)
+                        or (path_access.is_font(path) and path_access.is_allowed(path))):
+                    return 403, path_access.serve_refusal(path)
+                return (200, "") if os.path.isfile(path) else (404, "")
+            status, refusal = await _off_loop(_check, path)
+            if status == 403:
+                return web.Response(status=403, text=refusal)
+            if status == 404:
                 return web.Response(status=404, text="file not found")
             # `raw` is the file itself, never a browser-friendly stand-in: a
             # world's HDR sky is read by three's HDR/EXR loaders, and a PNG
@@ -1414,62 +1483,70 @@ try:
             folders: this hands back a SHRUNK version of bytes that endpoint would
             give in full, so it widens nothing.
             """
-            params = dict(request.query)
-            path = params.get('path')
-            if not path:
-                # A node run hands the viewer {filename, subfolder, type} and no
-                # path at all — that is how ComfyUI's own /view addresses a file,
-                # and it is the SHAPE THE HISTORY STRIP ACTUALLY USES. Resolving it
-                # here is what makes this endpoint reachable for generated images
-                # rather than only for files opened by path.
-                path = _resolve_comfy_ref(params.get('filename'),
-                                          params.get('type'),
-                                          params.get('subfolder'))
-                if path is None:
-                    return web.Response(status=400,
-                                        text="missing 'path', or an unresolvable filename")
-            path = os.path.abspath(path)
-            if not path_access.may_serve(path):
-                return web.Response(status=403, text=path_access.serve_refusal(path))
-            if not os.path.isfile(path):
-                return web.Response(status=404, text="file not found")
+            # All of it off the event loop: the checks stat the source (on the
+            # network share for most outputs) and a first request makes the
+            # thumbnail - a decode and resize of the full render. On the loop, a
+            # strip of new tiles held up every other request, the picture a
+            # history switch was waiting for included (40 ms alone, 0.6-1.4 s
+            # behind twelve tiles being made).
+            def _answer(params):
+                path = params.get('path')
+                if not path:
+                    # A node run hands the viewer {filename, subfolder, type} and no
+                    # path at all — that is how ComfyUI's own /view addresses a file,
+                    # and it is the SHAPE THE HISTORY STRIP ACTUALLY USES. Resolving it
+                    # here is what makes this endpoint reachable for generated images
+                    # rather than only for files opened by path.
+                    path = _resolve_comfy_ref(params.get('filename'),
+                                              params.get('type'),
+                                              params.get('subfolder'))
+                    if path is None:
+                        return web.Response(status=400,
+                                            text="missing 'path', or an unresolvable filename")
+                path = os.path.abspath(path)
+                if not path_access.may_serve(path):
+                    return web.Response(status=403, text=path_access.serve_refusal(path))
+                if not os.path.isfile(path):
+                    return web.Response(status=404, text="file not found")
 
-            if os.path.splitext(path)[1].lower() in _MODEL_EXTS:
-                # A model's tile is rendered by the browser (/bepic/model_thumb);
-                # until then, a generic cube. Neither may be cached for long:
-                # the real one replaces the placeholder under the same URL.
-                thumb = model_writer.cached_thumb(path) if model_writer else None
-                if thumb:
-                    return web.FileResponse(thumb, headers={"Cache-Control": "no-cache"})
-                return web.Response(text=_MODEL_PLACEHOLDER_SVG, content_type="image/svg+xml",
-                                    headers={"Cache-Control": "no-store"})
+                if os.path.splitext(path)[1].lower() in _MODEL_EXTS:
+                    # A model's tile is rendered by the browser (/bepic/model_thumb);
+                    # until then, a generic cube. Neither may be cached for long:
+                    # the real one replaces the placeholder under the same URL.
+                    thumb = model_writer.cached_thumb(path) if model_writer else None
+                    if thumb:
+                        return web.FileResponse(thumb, headers={"Cache-Control": "no-cache"})
+                    return web.Response(text=_MODEL_PLACEHOLDER_SVG, content_type="image/svg+xml",
+                                        headers={"Cache-Control": "no-store"})
 
-            if media_resolve is not None and os.path.splitext(path)[1].lower() in media_resolve.VIDEO_EXTS:
-                # A film's tile is its poster: the picture beside it, or a decoded frame. Never the film's own
-                # bytes: an <img> cannot show them, and that was the broken tile in the history strip.
-                try:
-                    poster = await asyncio.get_running_loop().run_in_executor(None, media_resolve._video_thumb, path)
-                except Exception:
-                    poster = None
-                if poster and os.path.isfile(poster):
-                    return web.FileResponse(poster, headers={"Cache-Control": "no-cache"})
-                return web.Response(text=_VIDEO_PLACEHOLDER_SVG, content_type="image/svg+xml",
-                                    headers={"Cache-Control": "no-store"})
+                if media_resolve is not None and os.path.splitext(path)[1].lower() in media_resolve.VIDEO_EXTS:
+                    # A film's tile is its poster: the picture beside it, or a decoded frame. Never the film's own
+                    # bytes: an <img> cannot show them, and that was the broken tile in the history strip.
+                    try:
+                        poster = media_resolve._video_thumb(path)
+                    except Exception:
+                        poster = None
+                    if poster and os.path.isfile(poster):
+                        return web.FileResponse(poster, headers={"Cache-Control": "no-cache"})
+                    return web.Response(text=_VIDEO_PLACEHOLDER_SVG, content_type="image/svg+xml",
+                                        headers={"Cache-Control": "no-store"})
 
-            if media_resolve is not None:
-                try:
-                    size = params.get('max')
-                    thumb = media_resolve.thumb_for(
-                        path, size or media_resolve.THUMB_MAX_SIDE, params.get('cs'))
-                    if thumb and os.path.isfile(thumb):
-                        # Cache hard: a thumbnail is keyed on the source's mtime, so
-                        # a changed source lands on a different cache entry rather
-                        # than needing this one revalidated.
-                        return web.FileResponse(
-                            thumb, headers={"Cache-Control": "public, max-age=31536000"})
-                except Exception as e:
-                    print(f"[bEpicViewer] thumb failed for {path}: {e}")
-            return _file_response(path)
+                if media_resolve is not None:
+                    try:
+                        size = params.get('max')
+                        thumb = media_resolve.thumb_for(
+                            path, size or media_resolve.THUMB_MAX_SIDE, params.get('cs'))
+                        if thumb and os.path.isfile(thumb):
+                            # Cache hard: a thumbnail is keyed on the source's mtime, so
+                            # a changed source lands on a different cache entry rather
+                            # than needing this one revalidated.
+                            return web.FileResponse(
+                                thumb, headers={"Cache-Control": "public, max-age=31536000"})
+                    except Exception as e:
+                        print(f"[bEpicViewer] thumb failed for {path}: {e}")
+                return _file_response(path)
+
+            return await _off_loop(_answer, dict(request.query))
 
         async def _bepic_clear_cache(request):
             try:
@@ -1578,7 +1655,7 @@ try:
         async def _bepic_video_annotations(request):
             """The marks stored beside a film: {items: [...]} (empty when none)."""
             from . import annotation_io
-            media, side, bad = _annot_target(dict(request.query))
+            media, side, bad = await _off_loop(_annot_target, dict(request.query))
             if bad is not None:
                 return bad
             doc = await asyncio.get_running_loop().run_in_executor(None, annotation_io.read, side)
