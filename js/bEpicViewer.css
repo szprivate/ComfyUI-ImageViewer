@@ -1631,7 +1631,9 @@ textarea.param-input {
 /* A clip with takes: the version showing, top left. */
 .edit-badge-take { position: absolute; left: 3px; top: 2px; z-index: 2; pointer-events: auto; font-size: 9px; line-height: 12px;
                    padding: 0 3px; border-radius: 2px; background: rgba(0,0,0,.7); color: #b8f0b0; white-space: nowrap; }
-.edit-recreate .edit-brief { min-height: 64px; }
+/* The badge sits in front of the clip's name, not over it. */
+.edit-shot.has-takes > .edit-label { margin-left: 22px; max-width: calc(100% - 22px); }
+.edit-recreate .edit-brief { min-height: 48px; }
 /* In and out on the ruler: the band, a handle at each end, a line down the tracks. */
 .edit-mark { position: absolute; top: 0; bottom: -1px; width: 9px; z-index: 4; cursor: ew-resize; display: none; }
 .edit-mark.in { margin-left: 0; border-left: 2px solid #ffd84d; }

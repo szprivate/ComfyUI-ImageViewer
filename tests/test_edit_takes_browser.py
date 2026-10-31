@@ -249,6 +249,19 @@ class EditTakesBrowserTests(unittest.TestCase):
         self.assertTrue(pg.evaluate("() => __panel._editTlUi.dialog.querySelector('.edit-btn.primary').disabled"))
         self.assertIn("cannot recreate", pg.inner_text(".edit-recreate"))
 
+    def test_a_bridge_that_throws_is_said_and_the_dialog_stays(self):
+        pg = self.page(bridge=True)
+        pg.evaluate("() => { window.agentYViewerBridge.recreate = async () => { throw new Error('panel gone'); }; }")
+        self.click(pg, "b", 4.0, button="right")
+        self.menu_item(pg, "Recreate with changes").click()
+        pg.fill(".edit-recreate textarea", "warmer")
+        pg.click(".edit-recreate .edit-btn.primary")
+        pg.wait_for_function("() => /panel gone/.test(__panel._editTlUi.dialog.querySelector('.edit-none').textContent)",
+                             timeout=10000)
+        self.assertIn("Not sent: panel gone", pg.inner_text(".edit-recreate"))
+        self.assertFalse(pg.evaluate("() => __panel._editTlUi.dialog.querySelector('.edit-btn.primary').disabled"))
+        self.assertEqual(self.errors, [])
+
     # ── takes ──
 
     def test_a_take_lands_swaps_the_file_keeps_the_rest_shows_v2_and_undo_restores(self):

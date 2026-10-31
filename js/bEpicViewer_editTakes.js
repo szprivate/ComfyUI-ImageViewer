@@ -279,9 +279,9 @@ export const EditTakesMixin = {
             if (!words) { note.textContent = "Say what should change."; return; }
             send.disabled = true;
             note.textContent = "Sending…";
-            let said = "";
+            let said;
             try { said = await this._editTlRecreateSend(words, clips); }
-            catch (err) { said = "Not sent: " + ((err && err.message) || err); }
+            catch (err) { said = { ok: false, text: "Not sent: " + ((err && err.message) || err) }; }
             note.textContent = said.text;
             send.disabled = false;
             if (said.ok) { this._editTlNote = said.text; box.remove(); ui.dialog = null; this.editTlRefresh(); }
