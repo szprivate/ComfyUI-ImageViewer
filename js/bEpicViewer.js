@@ -27,6 +27,7 @@ import { RotoCurvesMixin } from "./bEpicViewer_rotoCurves.js";
 import { HistoryTagsMixin } from "./bEpicViewer_historyTags.js";
 import { AgentYMixin, namedTabInfo } from "./bEpicViewer_agentY.js";
 import { AgentPanelMixin } from "./bEpicViewer_agentPanel.js";
+import { AgentStateMixin } from "./bEpicViewer_agentState.js";
 import { ParamAnimMixin } from "./bEpicViewer_paramAnim.js";
 import { ParamCurvesMixin } from "./bEpicViewer_paramCurves.js";
 import { ViewTabsMixin } from "./bEpicViewer_viewTabs.js";
@@ -1340,6 +1341,7 @@ Object.assign(
     RotoCurvesMixin,
     HistoryTagsMixin,
     AgentYMixin,
+    AgentStateMixin,
     AgentPanelMixin,
     ParamAnimMixin,
     ParamCurvesMixin,
@@ -1410,6 +1412,8 @@ function _applyViewerOnlyMode(panel) {
 
     document.body.classList.add("bepic-viewer-only");
     panel.style.display = "flex";
+    // Read by viewerState() (bEpicViewer_agentState.js), which reads no DOM.
+    panel._viewerOnly = true;
 }
 
 // 
@@ -1472,6 +1476,10 @@ app.registerExtension({
             show: () => _setViewerPanelToggle(true, { syncDisplay: true }),
             // What the user picked in the history strip, for agentY (bEpicViewer_historySelection.js).
             historySelection: () => globalViewerPanel?.agentHistorySelection?.() || null,
+            // What the viewer is showing (tab, item, frame, range, compare, view) and the
+            // Annotation tool's marks on it, for agentY (bEpicViewer_viewerState.js).
+            viewerState: () => globalViewerPanel?.agentViewerState?.() || null,
+            annotations: (opts) => globalViewerPanel?.agentViewerAnnotations?.(opts || {}) || null,
         });
         // A reload takes back the popout the previous page left open, so the
         // toolbar button has to show the viewer as on again.

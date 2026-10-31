@@ -10,8 +10,9 @@
 // adds that file to the active tab's history strip, so it can be dragged onto
 // the ComfyUI graph like any other history thumbnail.
 //
-// Annotations over a picture live in memory per tab for the session
-// (this._annotStore[tabKey]) and are scratch markup until exported. Over a VIDEO
+// Annotations over a picture that is a file are filed under it (store key
+// "img:<file>") and kept beside it like a video's; over a picture with no file
+// (dropped in) they live in memory per tab (this._annotStore[tabKey]). Over a VIDEO
 // they are feedback, so they carry the frames they belong to (item.f .. item.fe),
 // are filed under the video (store key "vid:<video>") and are written to a sidecar
 // beside it - all of that is in bEpicViewer_annotateVideo.js; this file only asks
@@ -115,6 +116,8 @@ export const AnnotateMixin = {
     // What the marks are filed under: the tab, or - over a video - the video, so a
     // clip's marks follow the clip and not whichever tab happens to show it.
     _annotKey() {
+        const m = this._annotMediaRef ? this._annotMediaRef() : null;
+        if (m) return m.key;
         return (this._videoMode && this._videoKey) ? "vid:" + this._videoKey : this.activeTab;
     },
 
@@ -131,7 +134,7 @@ export const AnnotateMixin = {
     _annotAfterChange() {
         this._toolRedraw();
         this._annotUpdateInfo();
-        this._annotVideoChanged?.();
+        this._annotMediaChanged?.();
     },
 
     // Over a video a mark is shown only on its frames; over a picture, always.

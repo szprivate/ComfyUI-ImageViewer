@@ -210,6 +210,27 @@ fs.copyFileSync(img.files[0], `${SHOTS}/07_sent_image.png`);
 await shot("08_image_tab");
 ok("image tab: text sent as picture + words, with the image path");
 
+// -- a picture's marks are kept beside it, and read once a session ----------------
+const imgSide = h.imagePath.replace(/\.[^.\\/]+$/, "") + ".annotations.json";
+const sideCount = (f) => { try { return JSON.parse(fs.readFileSync(f, "utf8")).items.length; } catch (_) { return -1; } };
+await page.waitForTimeout(900);
+assert.equal(sideCount(imgSide), 1);
+const vidBefore = sideCount(h.server.sidecar);
+// To the clip and back, twice: neither file's marks may be read in a second time.
+for (let i = 0; i < 2; i++) {
+    await P(() => window.__panel.switchTab("named:agent")); await page.waitForTimeout(300);
+    await P(() => window.__panel.switchTab("named:stills")); await page.waitForTimeout(300);
+}
+await page.waitForTimeout(900);
+assert.equal((await items()).length, 1);
+assert.equal(sideCount(imgSide), 1);
+assert.equal(sideCount(h.server.sidecar), vidBefore);
+const said = await P(() => window.__panel.agentViewerAnnotations({}));
+assert.equal(said.count, 1);
+assert.deepEqual(said.annotations[0].notes, ["logo too small"]);
+assert.equal(said.saved_beside, true);
+ok("a picture's marks are written beside it; switching away and back reads no file twice");
+
 assert.deepEqual(h.errors.filter((e) => !/404/.test(e)), []);
 ok("no page errors");
 await h.close();

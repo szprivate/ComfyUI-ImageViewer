@@ -55,19 +55,25 @@ export function startServer({ videoPath, dataDir, port = 0 }) {
             return fs.createReadStream(videoPath).pipe(res);
         }
         if (p === "/bepic/video_annotations") {
+            // The sidecar beside the file asked about (a clip, or a picture): the
+            // real route's rule (annotation_io.sidecar_for).
+            const sideOf = (media) => media.replace(/\.[^.\\/]+$/, "") + ".annotations.json";
             if (req.method === "GET") {
+                const media = u.searchParams.get("path") || videoPath;
                 let doc = { version: 1, items: [] };
-                try { doc = JSON.parse(fs.readFileSync(sidecar, "utf8")); } catch (_) {}
-                return send(200, { ...doc, media_path: videoPath });
+                try { doc = JSON.parse(fs.readFileSync(sideOf(media), "utf8")); } catch (_) {}
+                log.push({ route: "video_annotations", method: "GET", media });
+                return send(200, { ...doc, media_path: media });
             }
             let body = "";
             req.on("data", (c) => (body += c));
             req.on("end", () => {
                 const j = JSON.parse(body);
-                log.push({ route: "video_annotations", count: (j.items || []).length });
-                fs.writeFileSync(sidecar, JSON.stringify({ version: 1, media: j.media, fps: j.fps,
-                    frames: j.frames, items: j.items || [] }, null, 1));
-                send(200, { ok: true, path: sidecar, media_path: videoPath, count: (j.items || []).length });
+                const media = j.path || videoPath;
+                log.push({ route: "video_annotations", count: (j.items || []).length, media });
+                fs.writeFileSync(sideOf(media), JSON.stringify({ version: 1, media: j.media, fps: j.fps,
+                    frames: j.frames, width: j.width, height: j.height, items: j.items || [] }, null, 1));
+                send(200, { ok: true, path: sideOf(media), media_path: media, count: (j.items || []).length });
             });
             return;
         }

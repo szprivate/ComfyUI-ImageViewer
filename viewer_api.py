@@ -1663,7 +1663,90 @@ try:
             # Where the film is, so the page can tell the agent: its own idea of the
             # file is a ComfyUI reference, which means nothing outside ComfyUI.
             doc["media_path"] = media
+            if request.query.get("describe"):
+                # In words, the way the page answers the agent live
+                # (bEpicViewer_viewerState.annotationReport) - get_viewer_annotations(path=...).
+                try:
+                    frame = int(request.query["frame"]) if request.query.get("frame") not in (None, "") else None
+                except ValueError:
+                    frame = None
+                doc["report"] = annotation_io.report(doc, kind=_annot_kind(media), frame=frame, source=media)
             return web.json_response(doc, headers={"Cache-Control": "no-cache"})
+
+        def _annot_kind(media):
+            ext = os.path.splitext(str(media or ""))[1].lower()
+            return "video" if ext in (".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v", ".gif") else "image"
+
+        def _annot_mask(body):
+            """Draw the boxes and strokes of a file's marks (or of the marks sent) as a
+            mask PNG under ./output/annotation_masks: (status, answer)."""
+            from . import annotation_io
+            has_media = bool(body.get("path") or body.get("filename"))
+            media, side, doc = None, None, None
+            if has_media:
+                media, side, bad = _annot_target(body)
+                if bad is not None:
+                    return bad.status, {"error": bad.text}
+                doc = annotation_io.read(side) or {}
+            items = body.get("items")
+            if not isinstance(items, list):
+                items = (doc or {}).get("items") or []
+            try:
+                w = int(body.get("width") or (doc or {}).get("width") or 0)
+                h = int(body.get("height") or (doc or {}).get("height") or 0)
+            except (TypeError, ValueError):
+                w = h = 0
+            if (not w or not h) and media and _annot_kind(media) == "image" and os.path.isfile(media):
+                try:
+                    from PIL import Image
+                    with Image.open(media) as im:
+                        w, h = im.size
+                except Exception:  # noqa: BLE001
+                    w = h = 0
+            if not w or not h:
+                return 422, {"error": "the picture's size is not known - open it in the viewer once, "
+                                      "or pass width and height"}
+            frame = body.get("frame")
+            try:
+                frame = int(frame) if frame not in (None, "", -1, "-1") else None
+            except (TypeError, ValueError):
+                frame = None
+            try:
+                img, used = annotation_io.mask_image(items, w, h, frame=frame)
+            except ValueError as exc:
+                return 422, {"error": str(exc)}
+            stem = os.path.splitext(os.path.basename(media or "annotation"))[0] or "annotation"
+            stem = "".join(c for c in stem if c.isalnum() or c in ("_", "-"))[:80] or "annotation"
+            if frame is not None:
+                stem += f"_f{frame:05d}"
+            out_dir = folder_paths.get_output_directory()
+            folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
+                os.path.join("annotation_masks", stem + "_mask"), out_dir, w, h)
+            os.makedirs(folder, exist_ok=True)
+            name = f"{filename}_{counter:05d}_.png"
+            path = os.path.join(folder, name)
+            img.save(path)
+            return 200, {"ok": True, "path": os.path.abspath(path), "filename": name,
+                         "subfolder": subfolder or "", "type": "output", "width": w, "height": h,
+                         "marks": used, "frame": frame, "media_path": media or ""}
+
+        async def _bepic_annotation_mask(request):
+            """POST {path | filename+subfolder+type, items?, width?, height?, frame?}:
+            the drawn regions (boxes, freehand strokes; a closed stroke filled) as a
+            white-on-black PNG, for an inpaint mask. Without ``items`` the marks
+            stored beside the file are drawn. The file's own reach applies."""
+            try:
+                body = await request.json()
+            except Exception:
+                return web.json_response({"error": "the request is not JSON"}, status=400)
+            if not isinstance(body, dict):
+                return web.json_response({"error": "the request is not an object"}, status=400)
+            try:
+                status, answer = await _off_loop(_annot_mask, body)
+            except Exception as exc:  # noqa: BLE001
+                traceback.print_exc()
+                return web.json_response({"error": f"no mask: {exc}"}, status=500)
+            return web.json_response(answer, status=status)
 
         async def _bepic_video_annotations_save(request):
             """Replace the marks beside a film. No marks removes the file."""
@@ -2265,6 +2348,8 @@ try:
         _safe_add("GET", "/api/bepic/video_annotations", _bepic_video_annotations)
         _safe_add("POST", "/bepic/video_annotations", _bepic_video_annotations_save)
         _safe_add("POST", "/api/bepic/video_annotations", _bepic_video_annotations_save)
+        _safe_add("POST", "/bepic/annotation_mask", _bepic_annotation_mask)
+        _safe_add("POST", "/api/bepic/annotation_mask", _bepic_annotation_mask)
         _safe_add("POST", "/bepic/probe_paths", _bepic_probe_paths)
         _safe_add("POST", "/api/bepic/probe_paths", _bepic_probe_paths)
         _safe_add("POST", "/bepic/clear_cache", _bepic_clear_cache)

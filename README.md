@@ -32,6 +32,8 @@ An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/C
 - what the node writes is **reported to ComfyUI like a save node's output**, so it shows up in the queue history, the Assets panel, and to scripts and agents reading them
 - drag a history thumbnail, a file or the frame on screen onto the graph to get a loader node holding it
 - **Roto** and **SAM3** tools draw mattes and point / box prompts right in the viewer, onto nodes that feed them to the workflow
+- the **Annotation** tool's marks (text, arrows, boxes, freehand) are kept beside the file they are drawn on - `cut.mp4` -> `cut.annotations.json`, `still.png` -> `still.annotations.json` - so they are there after a reload and an agent can read them; `POST /bepic/annotation_mask` draws a file's boxes and strokes as a mask PNG (under `output/annotation_masks`)
+- for agents, `window.bEpicViewerApi.viewerState()` says what is on screen (tab, item, frame, the range picked on the timeline, compare, view, 3D camera) and `.annotations()` the marks on it, in words and normalised coordinates - from the panel's state, so the same docked, full screen or popped out
 
 ### Agent code
 

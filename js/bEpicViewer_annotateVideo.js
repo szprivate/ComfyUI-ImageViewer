@@ -19,6 +19,7 @@
 
 import { notice } from "./bEpicViewer_exportUI.js";
 import { buildFeedback } from "./bEpicViewer_annotateReport.js";
+import { frameKind } from "./bEpicViewer_historySelection.js";
 import { api } from "../../scripts/api.js";
 
 const SAVE_DELAY_MS = 600;
@@ -56,67 +57,125 @@ export const AnnotateVideoMixin = {
 
     _annotVideoStoreKey() { return this._videoKey ? "vid:" + this._videoKey : null; },
 
+    /**
+     * What the marks on screen are filed under, and the file they are kept beside:
+     * { key, kind: "video" | "image", ref } or null. A clip is "vid:<clip>"; a
+     * picture that is a file (a path, or ComfyUI's filename/subfolder/type) is
+     * "img:<file>", so its marks follow the picture - into another tab, across a
+     * reload - the way a clip's do. A picture with no file behind it (dropped in
+     * from Explorer) has none: its marks stay scratch work of the tab.
+     */
+    _annotMediaRef() {
+        if (this._videoMode && this._videoKey) {
+            return { key: "vid:" + this._videoKey, kind: "video", ref: this._annotVideoRef() };
+        }
+        if (this._modelMode || this._mgOn || this._editPlayOn) return null;
+        if (this.isPrevizTab && this.isPrevizTab()) return null;
+        const frames = (this._baseFrames && this._baseFrames()) || [];
+        if (!frames.length) return null;
+        const fr = frames[this.displayFrameToImageIndex(this.currentFrame, frames.length)];
+        if (!fr || fr.dropped || frameKind(fr) !== "image") return null;
+        if (typeof fr.path === "string" && fr.path && !/^(blob|data):/i.test(fr.path)) {
+            return { key: "img:" + fr.path, kind: "image", ref: { path: fr.path, external: fr.external ? 1 : 0 } };
+        }
+        if (fr.filename && !fr.url) {
+            const ref = { filename: fr.filename, subfolder: fr.subfolder || "", type: fr.type || "output" };
+            return { key: "img:" + ref.type + "/" + (ref.subfolder ? ref.subfolder + "/" : "") + ref.filename,
+                     kind: "image", ref };
+        }
+        return null;
+    },
+
+    /** The load / save state of the file behind `key` (the one on screen by default). */
+    _annotMediaState(key) {
+        const all = this._annotMedia || {};
+        return all[key || (this._annotMediaRef() || {}).key] || null;
+    },
+
     // ── loading and saving the sidecar ────────────────────────────────────────
-    async _annotVideoLoad() {
-        if (!this._videoMode || !this._videoKey) return;
-        const key = this._videoKey;
-        const st = this._annotVid;
-        if (st && st.key === key) return;
-        const ref = this._annotVideoRef();
-        const mine = this._annotVid = { key, ref, loaded: false, persist: !!ref, mediaPath: ref && ref.path || "" };
-        if (!ref) { mine.loaded = true; return; }
+    // Each file's marks are read ONCE a session: what is in the store after that
+    // is the truth, and reading the file again would add its marks a second time
+    // (which the next save then wrote back, doubled).
+    async _annotMediaLoad() {
+        const m = this._annotMediaRef();
+        if (!m) return;
+        const all = this._annotMedia || (this._annotMedia = {});
+        if (all[m.key]) return;
+        const mine = all[m.key] = { key: m.key, kind: m.kind, ref: m.ref, loaded: false, persist: !!m.ref,
+                                    mediaPath: (m.ref && m.ref.path) || "", width: 0, height: 0 };
+        if (!m.ref) { mine.loaded = true; return; }
         let doc = null;
         try {
-            const q = new URLSearchParams(Object.entries(ref).map(([k, v]) => [k, String(v)]));
+            const q = new URLSearchParams(Object.entries(m.ref).map(([k, v]) => [k, String(v)]));
             const r = await api.fetchApi("/bepic/video_annotations?" + q.toString());
             if (r.ok) doc = await r.json();
         } catch (e) { doc = null; }
-        if (this._annotVid !== mine) return;          // another clip came up meanwhile
         if (!doc) { mine.persist = false; mine.loaded = true; return; }   // never overwrite what was not read
-        const sk = "vid:" + key;
-        const local = this._annotStore[sk] || [];
-        const loaded = (doc.items || []).map((it, i) => Object.assign({ id: `v${i}_${Date.now() % 1e6}` }, it));
-        this._annotStore[sk] = loaded.concat(local);
+        const local = this._annotStore[m.key] || [];
+        const stamp = Date.now() % 1e6;
+        const loaded = (doc.items || []).map((it, i) => {
+            const c = Object.assign({ id: `v${i}_${stamp}` }, it);
+            if (m.kind === "image") { delete c.f; delete c.fe; }     // a picture has no frames
+            return c;
+        });
+        this._annotStore[m.key] = loaded.concat(local);
         if (doc.media_path) mine.mediaPath = doc.media_path;
+        if (doc.width > 0 && doc.height > 0) { mine.width = doc.width; mine.height = doc.height; }
         mine.loaded = true;
-        this._annotVideoMarks(true);
-        this._toolRedraw && this._toolRedraw();
-        this._annotUpdateInfo && this._annotUpdateInfo();
-        if (local.length) this._annotVideoChanged();
+        if (this._annotKey() === m.key) {
+            if (m.kind === "video") this._annotVideoMarks(true);
+            this._toolRedraw && this._toolRedraw();
+            this._annotUpdateInfo && this._annotUpdateInfo();
+        }
+        if (local.length) this._annotMediaChanged(m.key);
     },
 
-    _annotVideoChanged() {
-        if (!this._videoMode) return;
-        this._annotVideoMarks(true);
+    // The name the Annotation tool has always called it by.
+    _annotVideoLoad() { return this._annotMediaLoad(); },
+
+    _annotMediaChanged(key) {
+        if (this._videoMode) this._annotVideoMarks(true);
         this._annotVideoRefreshPanel();
-        const st = this._annotVid;
-        if (!st || !st.persist || !st.loaded || st.key !== this._videoKey) return;
+        const st = this._annotMediaState(key || this._annotKey());
+        if (!st || !st.persist || !st.loaded) return;
         clearTimeout(st.timer);
-        st.timer = setTimeout(() => this._annotVideoSave(), SAVE_DELAY_MS);
+        st.timer = setTimeout(() => this._annotMediaSave(st.key), SAVE_DELAY_MS);
     },
 
-    async _annotVideoSave() {
-        const st = this._annotVid;
+    async _annotMediaSave(key) {
+        const st = this._annotMediaState(key || this._annotKey());
         if (!st || !st.persist || !st.loaded) return false;
         clearTimeout(st.timer);
-        const items = (this._annotStore["vid:" + st.key] || []).filter((it) => it.f !== undefined)
+        const video = st.kind === "video";
+        const items = (this._annotStore[st.key] || []).filter((it) => !video || it.f !== undefined)
             .map((it) => { const c = Object.assign({}, it); delete c._editing; return c; });
-        const base = String(st.mediaPath || st.key).split(/[\\/]/).pop();
+        // The picture's size, while it is the one on screen: a mask drawn from the
+        // file later (get_viewer_annotations) needs it, and a film's is not cheap to read.
+        if (this._annotKey() === st.key) {
+            const src = video ? this.videoBase : this.imgBase;
+            const w = video ? (src && src.videoWidth) : (src && src.naturalWidth);
+            const h = video ? (src && src.videoHeight) : (src && src.naturalHeight);
+            if (w > 0 && h > 0) { st.width = w; st.height = h; }
+        }
+        const base = String(st.mediaPath || st.key.replace(/^(vid|img):/, "")).split(/[\\/]/).pop();
+        const body = Object.assign({}, st.ref, { items, media: base, width: st.width || 0, height: st.height || 0 });
+        if (video) Object.assign(body, { fps: this._videoFps || 0, frames: this._videoFrames || 0 });
         try {
             const r = await api.fetchApi("/bepic/video_annotations", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(Object.assign({}, st.ref, {
-                    items, fps: this._videoFps || 0, frames: this._videoFrames || 0, media: base })),
+                body: JSON.stringify(body),
             });
             const j = await r.json().catch(() => ({}));
             if (r.ok && j.media_path) st.mediaPath = j.media_path;
             return r.ok;
         } catch (e) {
-            console.warn("[annot] could not save the marks beside the video", e);
+            console.warn("[annot] could not save the marks beside the file", e);
             return false;
         }
     },
+
+    _annotVideoSave() { return this._annotMediaSave(); },
 
     // ── marks belong to frames ────────────────────────────────────────────────
     _annotVideoStamp(it) {
@@ -131,7 +190,7 @@ export const AnnotateVideoMixin = {
 
     // Every move of the playhead: the marks on screen follow it.
     _annotFrameChanged() {
-        this._annotVideoLoad();
+        this._annotMediaLoad();
         this._annotVideoMarks();
         this._annotVideoRefreshPanel();
         if (this._toolState && this._toolState.active === "annotate") {
@@ -336,7 +395,7 @@ export const AnnotateVideoMixin = {
         if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
         const resume = Math.round(this.currentFrame || 0);
         try {
-            if (video) await this._annotVideoSave();
+            await this._annotMediaSave();
             const files = [];
             for (const g of groups) {
                 if (video) await this._annotSeekTo(g.frame);
@@ -348,8 +407,9 @@ export const AnnotateVideoMixin = {
                 if (g.image) files.push(g.image);
                 if (!video) this._annotAddToHistory(saved);
             }
-            const source = video ? ((this._annotVid && this._annotVid.mediaPath) || this._videoKey || "")
-                                 : this._annotImageSource();
+            const st = this._annotMediaState();
+            const source = video ? ((st && st.mediaPath) || this._videoKey || "")
+                                 : ((st && st.mediaPath) || this._annotImageSource());
             let halted = false;
             try { halted = !!(bridge.state && bridge.state().halted); } catch (_) {}
             const text = buildFeedback({
