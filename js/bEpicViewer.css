@@ -1552,3 +1552,53 @@ textarea.param-input {
 .view-tabs { position: absolute; inset: 0; z-index: 8; display: none; background: #0f0f12; cursor: default; }
 .view-tab { position: absolute; inset: 0; overflow: hidden; }
 .view-tab-dataset > .lr-root { position: absolute; inset: 0; height: auto; }
+
+/* ── Edit panel: what is drawn in the clips, the blade, cut marks, Auto edit (bEpicViewer_editMedia/Keys/Auto.js) ── */
+.edit-body:focus { outline: none; }
+.edit-body:focus-visible { box-shadow: inset 0 0 0 1px #2a6f80; }
+.edit-shot, .edit-snd { line-height: normal; }
+.edit-label { position: relative; z-index: 1; display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; line-height: 14px; padding: 1px 3px; margin-top: 1px; border-radius: 2px; pointer-events: none; }
+.edit-shot.has-strip .edit-label, .edit-sclip .edit-label, .edit-snd .edit-label { background: rgba(0,0,0,.55); color: #eef; }
+.edit-media { position: absolute; top: 0; pointer-events: none; z-index: 0; }
+.edit-snd { padding: 0 4px; font-size: 9px; }
+.edit-btn.on { background: #1d4d63; border-color: #00b8d4; color: #fff; }
+.edit-body.blade .edit-shot, .edit-body.blade .edit-tclip, .edit-body.blade .edit-sclip { cursor: crosshair; }
+.edit-bladeline { position: absolute; top: 14px; bottom: 0; width: 1px; margin-left: -0.5px; background: #ff5f5f;
+    box-shadow: 0 0 0 1px rgba(255,95,95,.25); pointer-events: none; z-index: 6; display: none; }
+.edit-range { position: absolute; top: 0; bottom: 0; background: rgba(0,229,255,.16); border-left: 1px solid #00b8d4;
+    border-right: 1px solid #00b8d4; pointer-events: none; }
+.edit-cutmark { position: absolute; top: -1px; bottom: -1px; width: 9px; margin-left: -4px; z-index: 7; cursor: pointer; }
+.edit-cutmark::before { content: ""; position: absolute; left: 4px; top: 0; bottom: 0; width: 1px; background: #ffcf6f; }
+.edit-cutmark::after { content: ""; position: absolute; left: 0; top: 0; border: 4.5px solid transparent; border-top: 6px solid #ffcf6f; }
+.edit-cutmark.soft::before { background: repeating-linear-gradient(#ffcf6f 0 3px, transparent 3px 5px); }
+.edit-cutmark.off { opacity: .35; }
+.edit-cutmark.off::before { background: #888; }
+.edit-cutmark.off::after { border-top-color: #888; }
+.edit-cutmark:hover::before { width: 2px; left: 3.5px; }
+.edit-cutbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 10px; color: #ddd; padding: 3px 6px;
+    background: #2a2618; border: 1px solid #6b5a2a; border-radius: 3px; }
+.edit-sens { width: 120px; accent-color: #ffcf6f; }
+.edit-dialog { position: absolute; z-index: 30; right: 10px; top: 34px; width: min(440px, calc(100% - 20px)); max-height: calc(100% - 44px);
+    overflow: auto; box-sizing: border-box; padding: 8px 10px; background: #1e1f22; border: 1px solid #444; border-radius: 4px;
+    box-shadow: 0 6px 24px rgba(0,0,0,.6); color: #ccc; font-size: 11px; display: flex; flex-direction: column; gap: 6px; }
+.edit-body { position: relative; }
+.edit-dialog-head { display: flex; align-items: center; justify-content: space-between; }
+.edit-dialog-title { font-weight: 600; color: #eee; }
+.edit-dialog-sub { color: #aaa; font-weight: 600; margin-top: 2px; }
+.edit-modes { display: flex; flex-wrap: wrap; gap: 4px; }
+.edit-mode { background: #2a2a2a; color: #bbb; border: 1px solid #444; border-radius: 3px; font-size: 11px; padding: 3px 8px; cursor: pointer; }
+.edit-mode:hover { border-color: #6cf; color: #fff; }
+.edit-mode.on { background: #1d4d63; border-color: #00b8d4; color: #fff; }
+.edit-mode-pane > div { display: flex; flex-direction: column; gap: 4px; }
+.edit-dialog select, .edit-dialog textarea { background: #111; color: #ddd; border: 1px solid #444; border-radius: 2px; font-size: 11px; }
+.edit-dialog .edit-field input { width: 64px; }
+.edit-dialog-row { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.edit-dialog-said { min-height: 14px; color: #9fd0b7; }
+.edit-ask { display: flex; flex-direction: column; gap: 4px; border-top: 1px solid #333; padding-top: 6px; }
+.edit-brief { min-height: 46px; resize: vertical; padding: 4px; font-family: inherit; }
+.edit-warn { color: #ffcf6f; }
+.edit-ask .edit-btn { align-self: flex-start; }
+.edit-keys { width: 330px; gap: 3px; cursor: pointer; }
+.edit-keyrow { display: flex; gap: 8px; align-items: baseline; }
+.edit-keyrow kbd { flex: none; min-width: 120px; color: #00e5ff; font-family: inherit; font-size: 10px; }

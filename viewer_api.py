@@ -439,6 +439,7 @@ try:
             except (OSError, ValueError) as exc:
                 return web.Response(status=422, text=f"the timeline could not be read: {exc}")
             data["file"] = os.path.basename(side)
+            data["otio"] = side
             return web.json_response(data, headers={"Cache-Control": "no-cache"})
 
         async def _bepic_timeline_save(request):
@@ -503,10 +504,219 @@ try:
             except OSError as exc:
                 return web.Response(status=500, text=f"not saved: {exc}")
             data["file"] = os.path.basename(side)
+            data["otio"] = side
             if create is not None:
                 # How the panel names this cut from now on.
                 data["target"] = {"path": side, "external": 1}
             return web.json_response(data, headers={"Cache-Control": "no-cache"})
+
+        # ── what the Edit panel draws in its clips, and Auto edit measures ──
+        #
+        # timeline_media.py does the reading (PyAV, in this process). The work
+        # runs in a small pool of its own: a timeline of new clips asks for many
+        # readings at once, and they must not take the threads the picture being
+        # played is fetched with (raw_view and the thumbnails use the default one).
+        _media_pool = []
+
+        async def _media_work(fn, *args):
+            if not _media_pool:
+                from concurrent.futures import ThreadPoolExecutor
+                _media_pool.append(ThreadPoolExecutor(max_workers=2, thread_name_prefix="bepic-media"))
+            return await asyncio.get_running_loop().run_in_executor(_media_pool[0], fn, *args)
+
+        def _media_path(params):
+            """``(path, response)`` for a reading route: the file asked about, or the refusal.
+
+            ``path`` (absolute) or ComfyUI's ``filename`` / ``type`` / ``subfolder``;
+            only a picture, film or sound in the allowed folders (``may_serve``):
+            these routes hand back what is IN the file.
+            """
+            raw = str(params.get("path") or "").strip()
+            if raw:
+                path = os.path.abspath(raw)
+            else:
+                path = _resolve_comfy_ref(params.get("filename"), params.get("type"), params.get("subfolder"))
+                if path is None:
+                    return None, web.Response(status=400, text="missing 'path', or an unresolvable filename")
+            if not path_access.may_serve(path):
+                return None, web.Response(status=403, text=path_access.serve_refusal(path))
+            if not os.path.isfile(path):
+                return None, web.Response(status=404, text="file not found")
+            return path, None
+
+        async def _media_reading(request, kind, fn, *args):
+            """``(path, reading, etag)``, or the response to send instead (a refusal, a 304)."""
+            from . import timeline_media
+            path, refused = await _off_loop(_media_path, dict(request.query))
+            if refused is not None:
+                return refused
+            try:
+                tag = await _off_loop(timeline_media.etag, path, kind + repr(args))
+            except OSError:
+                return web.Response(status=404, text="file not found")
+            if request.headers.get("If-None-Match") == tag:
+                return web.Response(status=304, headers={"ETag": tag, "Cache-Control": "no-cache"})
+            try:
+                got = await _media_work(fn, path, *args)
+            except ValueError as exc:                    # MediaError is one
+                return web.Response(status=422, text=str(exc))
+            except OSError as exc:
+                return web.Response(status=500, text=f"not read: {exc}")
+            return path, got, tag
+
+        async def _bepic_timeline_peaks(request):
+            """The waveform of a file's sound (timeline_media.peaks), cached by path, mtime and size."""
+            from . import timeline_media
+            got = await _media_reading(request, "peaks", timeline_media.peaks)
+            if isinstance(got, web.StreamResponse):
+                return got
+            return web.json_response(got[1], headers={"ETag": got[2], "Cache-Control": "no-cache"})
+
+        async def _bepic_timeline_strip(request):
+            """A filmstrip: ``n`` frames of a film side by side on one JPEG (timeline_media.strip).
+
+            What the sheet holds is in the headers: ``X-Strip-N`` tiles, each
+            ``X-Strip-Tw`` x ``X-Strip-Th``, of a file ``X-Strip-Duration`` long;
+            tile i is the middle of the i-th of n equal parts.
+            """
+            from . import timeline_media
+            n, h = timeline_media.strip_size(request.query.get("n"), request.query.get("h"))
+            got = await _media_reading(request, "strip", timeline_media.strip, n, h)
+            if isinstance(got, web.StreamResponse):
+                return got
+            jpeg, meta = got[1]
+            return web.FileResponse(jpeg, headers={
+                "ETag": got[2], "Cache-Control": "no-cache", "Content-Type": "image/jpeg",
+                "X-Strip-N": str(meta["n"]), "X-Strip-Tw": str(meta["tw"]), "X-Strip-Th": str(meta["th"]),
+                "X-Strip-Duration": str(meta["duration"])})
+
+        async def _bepic_timeline_beats(request):
+            """Where the beats of a piece of music fall (agentY's read_beats, ported)."""
+            from . import timeline_media
+            got = await _media_reading(request, "beats", timeline_media.beats)
+            if isinstance(got, web.StreamResponse):
+                return got
+            return web.json_response(got[1], headers={"ETag": got[2], "Cache-Control": "no-cache"})
+
+        async def _bepic_timeline_shots(request):
+            """Where a film cuts: its shot lengths (agentY's read_rhythm, ported)."""
+            from . import timeline_media
+            try:
+                sens = max(0.01, min(1.0, float(request.query.get("sensitivity") or 0.3)))
+            except ValueError:
+                sens = 0.3
+            got = await _media_reading(request, "shots", timeline_media.shots, sens)
+            if isinstance(got, web.StreamResponse):
+                return got
+            return web.json_response(got[1], headers={"ETag": got[2], "Cache-Control": "no-cache"})
+
+        async def _bepic_timeline_cuts(request):
+            """Scene cut detection: where a film that is already an edit cuts (timeline_media.detect_cuts)."""
+            from . import timeline_media
+            got = await _media_reading(request, "cuts", timeline_media.detect_cuts)
+            if isinstance(got, web.StreamResponse):
+                return got
+            return web.json_response(got[1], headers={"ETag": got[2], "Cache-Control": "no-cache"})
+
+        async def _bepic_timeline_probe(request):
+            """How long files are and what they hold: ``{"info": {path: {...} | {"error"}}}``.
+
+            The Edit panel's lengths come from here (the container's header, read
+            in this process) and only fall back to the browser's ``<video>``.
+            """
+            from . import timeline_media
+            try:
+                body = await request.json()
+            except Exception:
+                return web.Response(status=400, text="the request is not JSON")
+            paths = body.get("paths") if isinstance(body, dict) else None
+            if not isinstance(paths, list) or len(paths) > 200:
+                return web.Response(status=400, text="'paths' is a list of at most 200 files")
+
+            def one(raw):
+                path = os.path.abspath(str(raw or ""))
+                if not path_access.may_serve(path):
+                    return {"error": "not allowed"}
+                if not os.path.isfile(path):
+                    return {"error": "not found"}
+                try:
+                    return timeline_media.probe(path)
+                except ValueError as exc:
+                    return {"error": str(exc)}
+            info = {}
+            for raw in paths:
+                info[str(raw)] = await _media_work(one, raw)
+            return web.json_response({"info": info}, headers={"Cache-Control": "no-cache"})
+
+        async def _bepic_timeline_locate(request):
+            """Files named the way ComfyUI names its outputs (``filename`` / ``type`` /
+            ``subfolder``: the queue's and the history's), as the paths a cut holds."""
+            try:
+                body = await request.json()
+            except Exception:
+                return web.Response(status=400, text="the request is not JSON")
+            items = body.get("items") if isinstance(body, dict) else None
+            if not isinstance(items, list) or len(items) > 200:
+                return web.Response(status=400, text="'items' is a list of at most 200 files")
+
+            def find(items):
+                out = []
+                for it in items:
+                    it = it if isinstance(it, dict) else {}
+                    path = _resolve_comfy_ref(it.get("filename"), it.get("type"), it.get("subfolder"))
+                    ok = bool(path) and path_access.may_serve(path) and os.path.isfile(path)
+                    out.append(path if ok else None)
+                return out
+            return web.json_response({"paths": await _off_loop(find, items)})
+
+        async def _bepic_timeline_upload(request):
+            """A file dropped onto the Edit panel from the desktop, kept in ``<input>/edits``.
+
+            A cut holds paths, and a file dropped from the explorer arrives as its
+            bytes only. Pictures, films and sound only (``is_media``), under their
+            own base name made safe; a file of that name and size already there is
+            used again rather than copied twice. Never written over.
+            """
+            from . import timeline_media
+            try:
+                reader = await request.multipart()
+                field = await reader.next()
+                while field is not None and field.name != "file":
+                    field = await reader.next()
+            except Exception:
+                return web.Response(status=400, text="the request is not a file upload")
+            if field is None or not field.filename:
+                return web.Response(status=400, text="no file in the upload")
+            name = timeline_media.upload_name(field.filename)
+            if not path_access.is_media(name):
+                return web.Response(status=415, text=f"{name} is not a picture, film or sound")
+            try:
+                base = folder_paths.get_input_directory()
+            except Exception:
+                base = None
+            if not base:
+                return web.Response(status=500, text="ComfyUI has no input folder")
+            folder = os.path.join(base, "edits")
+            data = bytearray()
+            while True:
+                chunk = await field.read_chunk(1 << 20)
+                if not chunk:
+                    break
+                data.extend(chunk)
+
+            def _keep():
+                path, there = timeline_media.place_upload(folder, name, len(data))
+                if not there:
+                    tmp = path + ".part"
+                    with open(tmp, "wb") as fh:
+                        fh.write(data)
+                    os.replace(tmp, path)
+                return path, there
+            try:
+                path, there = await _off_loop(_keep)
+            except OSError as exc:
+                return web.Response(status=500, text=f"not written: {exc}")
+            return web.json_response({"path": path, "name": os.path.basename(path), "reused": there})
 
         async def _bepic_timeline_solid(request):
             """A plain colour as a picture a cut can hold: the Effects panel's generators.
@@ -2330,6 +2540,22 @@ try:
         _safe_add("POST", "/api/bepic/timeline", _bepic_timeline_save)
         _safe_add("POST", "/bepic/timeline_render", _bepic_timeline_render)
         _safe_add("POST", "/bepic/timeline_solid", _bepic_timeline_solid)
+        _safe_add("GET", "/bepic/timeline_peaks", _bepic_timeline_peaks)
+        _safe_add("GET", "/api/bepic/timeline_peaks", _bepic_timeline_peaks)
+        _safe_add("GET", "/bepic/timeline_strip", _bepic_timeline_strip)
+        _safe_add("GET", "/api/bepic/timeline_strip", _bepic_timeline_strip)
+        _safe_add("GET", "/bepic/timeline_beats", _bepic_timeline_beats)
+        _safe_add("GET", "/api/bepic/timeline_beats", _bepic_timeline_beats)
+        _safe_add("GET", "/bepic/timeline_shots", _bepic_timeline_shots)
+        _safe_add("GET", "/bepic/timeline_cuts", _bepic_timeline_cuts)
+        _safe_add("GET", "/api/bepic/timeline_cuts", _bepic_timeline_cuts)
+        _safe_add("GET", "/api/bepic/timeline_shots", _bepic_timeline_shots)
+        _safe_add("POST", "/bepic/timeline_probe", _bepic_timeline_probe)
+        _safe_add("POST", "/api/bepic/timeline_probe", _bepic_timeline_probe)
+        _safe_add("POST", "/bepic/timeline_locate", _bepic_timeline_locate)
+        _safe_add("POST", "/api/bepic/timeline_locate", _bepic_timeline_locate)
+        _safe_add("POST", "/bepic/timeline_upload", _bepic_timeline_upload)
+        _safe_add("POST", "/api/bepic/timeline_upload", _bepic_timeline_upload)
         _safe_add("POST", "/api/bepic/timeline_solid", _bepic_timeline_solid)
         _safe_add("POST", "/api/bepic/timeline_render", _bepic_timeline_render)
         _safe_add("GET", "/bepic/export_options", _bepic_export_options)

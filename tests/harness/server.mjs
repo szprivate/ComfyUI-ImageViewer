@@ -1,6 +1,7 @@
 import http from "node:http"; import fs from "node:fs"; import path from "node:path"; import zlib from "node:zlib";
 const VIEWER = process.argv[2], HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\//, ""));
-const types = { ".js": "text/javascript", ".css": "text/css", ".html": "text/html", ".json": "application/json", ".png": "image/png" };
+const types = { ".js": "text/javascript", ".css": "text/css", ".html": "text/html", ".json": "application/json", ".png": "image/png",
+                ".jpg": "image/jpeg", ".mp4": "video/mp4", ".mp3": "audio/mpeg" };
 
 // HARNESS_MEDIA=1: answer /bepic/thumb and /bepic/raw_view with real pictures, made up per path, with the
 // real server's cache headers - a tile is kept for good, a picture is revalidated. THUMB_DELAY_MS holds every
@@ -41,6 +42,25 @@ http.createServer((req, res) => {
       const etag = `"${seed}"`;
       if (req.headers["if-none-match"] === etag) { res.writeHead(304, { etag, "cache-control": "no-cache" }); res.end(); return; }
       res.writeHead(200, { "content-type": "image/png", "cache-control": "no-cache", etag }); res.end(png(1600, 1000, seed));
+    }
+    return;
+  }
+  // HARNESS_MEDIA_DIR: real media and its readings, served under /media/ - and a file the viewer asks for as
+  // D:/out/<name> (raw_view / view_file) is the one of that name there, with ranges, so a film can be sought.
+  const MDIR = process.env.HARNESS_MEDIA_DIR;
+  if (MDIR && (p.startsWith("/media/") || p === "/bepic/view_file" || p === "/bepic/raw_view")) {
+    const name = p.startsWith("/media/") ? decodeURIComponent(p.slice(7)) : path.basename(u.searchParams.get("path") || "");
+    const f = path.resolve(MDIR, name);
+    if (!f.startsWith(path.resolve(MDIR)) || !fs.existsSync(f)) { res.writeHead(404); res.end("nf"); return; }
+    const size = fs.statSync(f).size, type = types[path.extname(f).toLowerCase()] || "application/octet-stream";
+    const range = /bytes=(\d*)-(\d*)/.exec(req.headers.range || "");
+    if (range) {
+      const a = range[1] ? Number(range[1]) : 0, b = range[2] ? Number(range[2]) : size - 1;
+      res.writeHead(206, { "content-type": type, "content-range": `bytes ${a}-${b}/${size}`, "accept-ranges": "bytes", "content-length": b - a + 1 });
+      fs.createReadStream(f, { start: a, end: b }).pipe(res);
+    } else {
+      res.writeHead(200, { "content-type": type, "accept-ranges": "bytes", "content-length": size });
+      fs.createReadStream(f).pipe(res);
     }
     return;
   }

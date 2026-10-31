@@ -778,3 +778,427 @@ export function soundItems(cut, live) {
 export function isStill(file) {
     return !/\.(mp4|m4v|mov|webm|mkv|avi)$/i.test(String(file || ""));
 }
+
+// ── cutting ──────────────────────────────────────────────────────────────────
+
+/**
+ * Cut one clip in two at `seconds` (a moment of the FILM): the blade. On the cut
+ * itself (V1) the halves stay where the clip was, one after the other, and no
+ * dissolve is made between them; on another track both halves stay placed.
+ * Each half keeps everything the clip carried - its `ref` too, so what another
+ * program wrote into the clip survives in both (timeline_io.rebuild copies the
+ * item it names). Returns { cut, sel } - `sel` the second half - or null where
+ * no cut can be made: too near an end, or inside a dissolve.
+ */
+export function splitClip(cut, sel, seconds) {
+    const c = clipOf(cut, sel);
+    if (!c) return null;
+    const t = num(seconds);
+    const next = copy(cut);
+    if (sel.kind === "clip") {
+        const i = sel.i;
+        const start = clipStarts(cut)[i];
+        const local = round(t - start);
+        const own = num(c.transition);
+        const following = next.clips[i + 1] ? num(next.clips[i + 1].transition) : 0;
+        const low = own > 0 ? own + MIX_MARGIN : MIN_CLIP;
+        const high = num(c.length) - (following > 0 ? following + MIX_MARGIN : MIN_CLIP);
+        if (local < low - 1e-6 || local > high + 1e-6) return null;
+        const a = next.clips[i];
+        const b = { ...a, in: round(num(a.in) + local), length: round(num(a.length) - local), transition: 0 };
+        if (a.fx) b.fx = { ...a.fx };
+        a.length = local;
+        next.clips.splice(i + 1, 0, b);
+        return { cut: settle(next), sel: { kind: "clip", i: i + 1 } };
+    }
+    if (sel.kind === "tclip") {
+        const k = trackOf(next, sel.track);
+        const a = k.clips[sel.i];
+        const local = round(t - num(a.at));
+        if (local < MIN_CLIP - 1e-6 || local > num(a.length) - MIN_CLIP + 1e-6) return null;
+        const b = { ...a, at: round(num(a.at) + local), in: round(num(a.in) + local), length: round(num(a.length) - local) };
+        if (a.fx) b.fx = { ...a.fx };
+        a.length = local;
+        k.clips.splice(sel.i + 1, 0, b);
+        return { cut: settle(next), sel: { kind: "tclip", track: sel.track, i: sel.i + 1 } };
+    }
+    return null;
+}
+
+/** Every clip (V1 and the tracks) that has the moment `seconds` inside it, as selections. */
+export function clipsAt(cut, seconds) {
+    const t = num(seconds);
+    const out = [];
+    const starts = clipStarts(cut);
+    ((cut && cut.clips) || []).forEach((c, i) => {
+        if (t > starts[i] + 1e-6 && t < starts[i] + num(c.length) - 1e-6) out.push({ kind: "clip", i });
+    });
+    for (const k of (cut && cut.tracks) || []) {
+        (k.clips || []).forEach((c, i) => {
+            if (t > num(c.at) + 1e-6 && t < num(c.at) + num(c.length) - 1e-6) out.push({ kind: "tclip", track: k.id, i });
+        });
+    }
+    return out;
+}
+
+/**
+ * "Split at playhead": the selected clip when the playhead is on it; with no
+ * such selection, every clip there - the shot of the cut and the clips of the
+ * other tracks, as an editor cuts every track under the playhead. In a
+ * dissolve the shot coming in is the one cut. Returns { cut, sel, count } or
+ * null when nothing could be cut.
+ */
+export function splitAt(cut, seconds, sel) {
+    let here = clipsAt(cut, seconds);
+    // Inside a dissolve two shots of V1 share the moment: the one coming in is cut.
+    const shots = here.filter((s) => s.kind === "clip");
+    if (shots.length > 1) here = here.filter((s) => s.kind !== "clip" || s.i === shots[shots.length - 1].i);
+    const same = (a, b) => a && b && a.kind === b.kind && a.i === b.i && (a.kind !== "tclip" || a.track === b.track);
+    let targets = here;
+    if (sel && here.some((s) => same(s, sel))) targets = [sel];
+    let next = cut, last = null, count = 0;
+    // Later clips first, so the indices of the earlier ones do not move.
+    for (const s of [...targets].sort((a, b) => b.i - a.i)) {
+        const got = splitClip(next, s, seconds);
+        if (!got) continue;
+        next = got.cut;
+        count += 1;
+        if (!last || s.kind === "clip") last = got.sel;
+    }
+    return count ? { cut: next, sel: last, count } : null;
+}
+
+/**
+ * Delete, leaving the place empty: on a track of placed clips the gap stays
+ * (nothing moves). The cut itself (V1) has no gaps - its shots are one after
+ * the other - so there it is the same as `rippleDelete`.
+ */
+export function liftClip(cut, sel) {
+    if (!sel) return copy(cut);
+    if (sel.kind === "tclip") return removeTrackClip(cut, sel.track, sel.i);
+    if (sel.kind === "text") return removeText(cut, sel.i);
+    if (sel.kind === "mix") return setTransition(cut, sel.i, 0);
+    return removeClip(cut, sel.i);
+}
+
+/** Delete and close the gap: on V1 what follows moves up; on a track the clips after it move up by its length. */
+export function rippleDelete(cut, sel) {
+    if (!sel || sel.kind !== "tclip") return liftClip(cut, sel);
+    const next = copy(cut);
+    const k = trackOf(next, sel.track);
+    const gone = k && k.clips[sel.i];
+    if (!gone) return next;
+    const end = num(gone.at) + num(gone.length);
+    k.clips.splice(sel.i, 1);
+    for (const c of k.clips) if (num(c.at) >= end - 1e-6) c.at = round(num(c.at) - num(gone.length));
+    return settle(next);
+}
+
+/** The moments where something begins or ends: the edit points (for snapping and Up / Down). */
+export function editPoints(cut) {
+    const out = new Set([0]);
+    const starts = clipStarts(cut);
+    ((cut && cut.clips) || []).forEach((c, i) => { out.add(round(starts[i])); out.add(round(starts[i] + num(c.length))); });
+    for (const k of (cut && cut.tracks) || []) {
+        for (const c of k.clips || []) { out.add(round(num(c.at))); out.add(round(num(c.at) + num(c.length))); }
+    }
+    for (const t of (cut && cut.texts) || []) { out.add(round(num(t.start))); out.add(round(num(t.start) + num(t.length))); }
+    return [...out].sort((a, b) => a - b);
+}
+
+/** `seconds` moved onto the nearest of `points` when one is within `tolerance`; else as it is. */
+export function snapTime(seconds, points, tolerance) {
+    const t = num(seconds);
+    let best = t, gap = num(tolerance);
+    for (const p of points || []) {
+        const d = Math.abs(num(p) - t);
+        if (d <= gap) { best = num(p); gap = d; }
+    }
+    return best;
+}
+
+// ── undo ─────────────────────────────────────────────────────────────────────
+//
+// A history of cuts: { past: [cut...], future: [cut...] }. Every edit returns a
+// new cut and leaves the old one alone, so keeping the old ones IS the undo.
+
+export const UNDO_DEPTH = 200;
+
+export function emptyHistory() { return { past: [], future: [] }; }
+
+/** `before` was the cut until an edit made another: it goes on the stack, and redo is gone. */
+export function historyPush(h, before, depth = UNDO_DEPTH) {
+    const past = [...((h && h.past) || []), before];
+    return { past: past.slice(Math.max(0, past.length - depth)), future: [] };
+}
+
+/** { history, cut }: one step back from `now`; null when there is nothing to undo. */
+export function historyUndo(h, now) {
+    if (!h || !h.past.length) return null;
+    return { history: { past: h.past.slice(0, -1), future: [now, ...h.future] }, cut: h.past[h.past.length - 1] };
+}
+
+/** { history, cut }: the step undone last, again; null when there is none. */
+export function historyRedo(h, now) {
+    if (!h || !h.future.length) return null;
+    return { history: { past: [...h.past, now], future: h.future.slice(1) }, cut: h.future[0] };
+}
+
+// ── auto edit ────────────────────────────────────────────────────────────────
+//
+// The deterministic modes of the Auto edit dialog. Each works on the shots of
+// the cut itself (V1) - all of them, or those in `opts.indices` - and returns a
+// new cut, which the panel applies as one step. `opts.durations` is
+// { file: seconds } where a file's length is known: a shot is never made longer
+// than its file has from its in point (a still has no end). agentY's
+// edit_timeline `rhythm` / `snap` / `fit` are the same arithmetic.
+
+const inScope = (cut, opts) => {
+    const n = ((cut && cut.clips) || []).length;
+    const want = opts && Array.isArray(opts.indices) && opts.indices.length ? new Set(opts.indices) : null;
+    return (i) => i >= 0 && i < n && (!want || want.has(i));
+};
+
+/** How long a clip could be from its in point: to the end of its file, when that is known. */
+export function room(clip, durations) {
+    if (isStill(clip && clip.file)) return Infinity;
+    const known = num(durations && durations[clip.file], 0);
+    return known > 0 ? Math.max(MIN_CLIP, known - num(clip.in)) : Infinity;
+}
+
+/** The beats of a sound as moments of the FILM: `source` is where the sound lies ({ at, in, length }). */
+export function beatsInFilm(beats, source = {}) {
+    const at = num(source.at), from = num(source.in), len = source.length == null ? Infinity : num(source.length);
+    return (beats || []).map((b) => round(at + num(b) - from)).filter((t) => t >= at - 1e-6 && t <= at + len + 1e-6);
+}
+
+/** Every `every`-th of `beats`, from the first. */
+export function everyNth(beats, every = 1) {
+    const n = Math.max(1, Math.round(num(every, 1)));
+    return (beats || []).filter((_, i) => i % n === 0);
+}
+
+/**
+ * Move each cut to the nearest beat within `within` seconds (agentY's `snap`):
+ * from the first cut to the last, by making the shot before the cut longer or
+ * shorter, so later cuts are measured from where the earlier ones ended up. A
+ * cut with no beat near it stays. With `indices`, only the cuts after those shots.
+ */
+export function snapCutsToBeats(cut, beats, opts = {}) {
+    const marks = [...(beats || [])].map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+    const next = copy(cut);
+    if (!marks.length) return next;
+    const within = num(opts.within, 0.5);
+    const mine = inScope(cut, opts);
+    let at = 0;
+    next.clips.forEach((c, i) => {
+        if (i) at -= num(c.transition);
+        let end = at + num(c.length);
+        if (i + 1 < next.clips.length && mine(i)) {
+            const near = marks.reduce((best, m) => (Math.abs(m - end) < Math.abs(best - end) ? m : best), marks[0]);
+            const length = near - at;
+            const spare = num(next.clips[i + 1].transition) + MIX_MARGIN;
+            if (Math.abs(near - end) <= within + 1e-9 && length >= Math.max(MIN_CLIP, spare)
+                && length <= room(c, opts.durations) + 1e-9) {
+                c.length = round(length);
+                end = near;
+            }
+        }
+        at = end;
+    });
+    return settle(next);
+}
+
+/**
+ * Cut on the beat: each shot lasts `every` beats, so every cut lands on one.
+ * A shot whose file is too short for that many ends on the last beat it can
+ * reach; past the last beat, or with none in reach, a shot keeps its length.
+ */
+export function cutOnBeats(cut, beats, opts = {}) {
+    const marks = [...(beats || [])].map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+    const next = copy(cut);
+    if (!marks.length) return next;
+    const every = Math.max(1, Math.round(num(opts.every, 1)));
+    const mine = inScope(cut, opts);
+    let at = 0;
+    next.clips.forEach((c, i) => {
+        if (i) at -= num(c.transition);
+        if (mine(i)) {
+            const spare = Math.max(MIN_CLIP, num(c.transition) + MIX_MARGIN,
+                                   next.clips[i + 1] ? num(next.clips[i + 1].transition) + MIX_MARGIN : 0);
+            const ahead = marks.filter((m) => m >= at + spare - 1e-6);
+            const reach = room(c, opts.durations);
+            let pick = ahead[every - 1];
+            if (pick === undefined || pick - at > reach + 1e-9) {
+                const fits = ahead.slice(0, every).filter((m) => m - at <= reach + 1e-9);
+                pick = fits.length ? fits[fits.length - 1] : undefined;
+            }
+            if (pick !== undefined) c.length = round(pick - at);
+        }
+        at += num(c.length);
+    });
+    return settle(next);
+}
+
+/** An even rhythm: every shot `seconds` long (or as long as its file allows). */
+export function evenRhythm(cut, seconds, opts = {}) {
+    const next = copy(cut);
+    const len = Math.max(MIN_CLIP, num(seconds, 2));
+    const mine = inScope(cut, opts);
+    next.clips.forEach((c, i) => { if (mine(i)) c.length = round(Math.min(len, room(c, opts.durations))); });
+    return settle(next);
+}
+
+/**
+ * The cut made `seconds` long by giving the shots in scope one share of their
+ * length each (agentY's `fit`), as far as their files and MIN_CLIP allow; the
+ * shots out of scope and the dissolves stay as they are.
+ */
+export function fitLength(cut, seconds, opts = {}) {
+    let next = copy(cut);
+    const mine = inScope(cut, opts);
+    const target = Math.max(MIN_CLIP, num(seconds));
+    for (let pass = 0; pass < 8; pass++) {
+        const total = mainLength(next);
+        if (Math.abs(total - target) < 1e-3) break;
+        const free = next.clips.filter((c, i) => mine(i) && (total > target ? num(c.length) > MIN_CLIP + 1e-6
+                                                                            : num(c.length) < room(c, opts.durations) - 1e-6));
+        const flexible = free.reduce((s, c) => s + num(c.length), 0);
+        if (!(flexible > 0)) break;
+        const share = (flexible + (target - total)) / flexible;
+        for (const c of free) c.length = Math.max(MIN_CLIP, Math.min(room(c, opts.durations), num(c.length) * share));
+        next = settle(next);
+    }
+    return next;
+}
+
+/**
+ * The shot lengths of another film (agentY's `rhythm`): the shots in scope
+ * take them in order, the pattern repeating; a shot too short for its slot
+ * keeps all it has.
+ */
+export function rhythmFrom(cut, lengths, opts = {}) {
+    const pattern = (lengths || []).map(Number).filter((v) => Number.isFinite(v) && v >= MIN_CLIP);
+    const next = copy(cut);
+    if (!pattern.length) return next;
+    const mine = inScope(cut, opts);
+    let k = 0;
+    next.clips.forEach((c, i) => {
+        if (!mine(i)) return;
+        c.length = round(Math.min(pattern[k % pattern.length], room(c, opts.durations)));
+        k += 1;
+    });
+    return settle(next);
+}
+
+/**
+ * Each shot trimmed to its middle: `head` and `tail` (fractions, 0..0.45) of
+ * its length taken off its start and its end - the first and last moments of a
+ * generated clip are the ones most often wrong. Stills are left alone.
+ */
+export function bestPart(cut, opts = {}) {
+    const head = Math.max(0, Math.min(0.45, num(opts.head, 0.1)));
+    const tail = Math.max(0, Math.min(0.45, num(opts.tail, 0.1)));
+    const next = copy(cut);
+    const mine = inScope(cut, opts);
+    next.clips.forEach((c, i) => {
+        if (!mine(i) || isStill(c.file)) return;
+        const len = num(c.length);
+        const keep = Math.max(MIN_CLIP, len * (1 - head - tail));
+        if (keep >= len - 1e-6) return;
+        c.in = round(num(c.in) + len * head);
+        c.length = round(keep);
+    });
+    return settle(next);
+}
+
+/** What an edit changed, in a few words: { lines: [...], changed } (changed: how many shots). */
+export function describeChanges(before, after) {
+    const a = (before && before.clips) || [], b = (after && after.clips) || [];
+    const lines = [];
+    let changed = 0, moved = 0;
+    if (a.length === b.length) {
+        const sa = clipStarts(before), sb = clipStarts(after);
+        for (let i = 0; i < a.length; i++) {
+            if (Math.abs(num(a[i].length) - num(b[i].length)) > 1e-3 || Math.abs(num(a[i].in) - num(b[i].in)) > 1e-3
+                || String(a[i].file || "") !== String(b[i].file || "")) changed += 1;
+            if (i + 1 < a.length && Math.abs(sa[i + 1] - sb[i + 1]) > 1e-3) moved += 1;
+        }
+        if (changed) lines.push(`${changed} shot${changed === 1 ? "" : "s"} changed`);
+        if (moved) lines.push(`${moved} cut${moved === 1 ? "" : "s"} moved`);
+    } else {
+        lines.push(`${a.length} shot${a.length === 1 ? "" : "s"} became ${b.length}`);
+        changed = Math.abs(a.length - b.length);
+    }
+    const ta = ((before && before.texts) || []).length, tb = ((after && after.texts) || []).length;
+    if (ta !== tb) lines.push(`${ta} text${ta === 1 ? "" : "s"} became ${tb}`);
+    const la = mainLength(before), lb = mainLength(after);
+    if (Math.abs(la - lb) > 1e-3) lines.push(`the film ${lengthLabel(la)} → ${lengthLabel(lb)}`);
+    if (!lines.length) lines.push("nothing changed");
+    return { lines, changed };
+}
+
+/**
+ * A cut read from another file, made one this file can hold: no item names a
+ * place in the file it came from (`ref`), so each is saved by its `file`.
+ */
+export function detach(cut) {
+    const next = copy(cut);
+    for (const c of next.clips) delete c.ref;
+    for (const t of next.texts) delete t.ref;
+    for (const k of next.tracks) for (const c of k.clips) delete c.ref;
+    return next;
+}
+
+/** What a cut holds that agentY's edit stage does not read back: the warning of "Ask agentY". */
+export function agentLoses(cut) {
+    const out = [];
+    if (((cut && cut.tracks) || []).some((k) => (k.clips || []).length)) out.push("the clips on tracks other than V1 and A1");
+    const all = [...((cut && cut.clips) || []), ...((cut && cut.tracks) || []).flatMap((k) => k.clips || [])];
+    if (all.some((c) => Object.keys(cleanFx(c.fx)).length)) out.push("transforms, crops and opacity (the Inspector's Video tab)");
+    const plain = JSON.stringify(textLook({}));
+    if (((cut && cut.texts) || []).some((t) => JSON.stringify(textLook(t)) !== plain)) out.push("how the texts look (size, place, colour)");
+    return out;
+}
+
+// ── scene cut detection ──────────────────────────────────────────────────────
+
+/**
+ * The detected cuts of a clip's file (/bepic/timeline_cuts) that the clip
+ * shows: inside its in..out (a frame from either end, so no sliver is left),
+ * and kept at `sensitivity` (0..1: higher finds softer cuts). Each as
+ * { t (the moment of the FILM), src (of the file), kind, score }. `start` is
+ * where the clip begins in the film.
+ */
+export function cutMarks(cuts, clip, start, sensitivity = 0.5, fps = 24) {
+    const from = num(clip && clip.in), len = num(clip && clip.length);
+    const edge = Math.max(MIN_CLIP, 1 / (num(fps) > 0 ? num(fps) : 24));
+    const need = cutThreshold(sensitivity);
+    return (cuts || [])
+        .filter((c) => num(c.ratio) >= 2.5 && num(c.score) >= need)
+        .filter((c) => num(c.t) > from + edge - 1e-6 && num(c.t) < from + len - edge + 1e-6)
+        .map((c) => ({ t: toFrame(num(start) + num(c.t) - from, fps), src: num(c.t), kind: c.kind || "cut", score: num(c.score) }));
+}
+
+/** The scene score a cut must reach at `sensitivity` (0..1): 0 asks 0.4, 0.5 asks 0.1, 1 asks 0.025. */
+export function cutThreshold(sensitivity) {
+    const s = Math.max(0, Math.min(1, num(sensitivity, 0.5)));
+    return round(0.4 * Math.pow(0.25, s * 2));
+}
+
+/**
+ * One clip cut at several moments of the film at once ("Split at all"):
+ * from the last moment to the first, so the clip that is cut is always the
+ * same one. Moments it cannot be cut at (too near an end, in a dissolve) are
+ * passed over. Returns { cut, count }.
+ */
+export function splitAtMany(cut, sel, moments) {
+    let next = cut, count = 0;
+    for (const t of [...new Set((moments || []).map(Number))].sort((a, b) => b - a)) {
+        const got = splitClip(next, sel, t);
+        if (!got) continue;
+        next = got.cut;
+        count += 1;
+    }
+    return { cut: next, count };
+}

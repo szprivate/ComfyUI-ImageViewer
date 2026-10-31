@@ -1,0 +1,105 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#222;height:100%}</style></head>
+<body>
+<script>window.addEventListener("error",(e)=>{document.title="ERR "+e.message});</script><script type="module">
+// The REAL viewer (stubbed ComfyUI scripts) with the Edit panel up on a cut, for tests/test_edit_timeline_browser.py.
+// The server's Edit routes are answered here (window.__fetchApi):
+//   /bepic/timeline_probe   lengths from window.__media[path] ({ duration, audio, video })
+//   /bepic/timeline_peaks   a waveform made up from the file's name (or window.__assets[path].peaks, a URL)
+//   /bepic/timeline_strip   a sheet of coloured frames, one colour per second of the file (or __assets[path].strip[n])
+//   /bepic/timeline_beats   window.__beats[path]
+//   /bepic/timeline_cuts    window.__cuts[path]
+//   /bepic/timeline_upload  the dropped file "kept" as D:/in/edits/<name>
+// Every request is counted in window.__requests; window.__delay holds each answer back that many ms.
+window.__requests = [];
+window.__media = {};
+window.__beats = {};
+window.__cuts = {};
+window.__assets = {};
+window.__delay = 0;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
+const seedOf = (s) => [...String(s)].reduce((a, c) => (a * 31 + c.charCodeAt(0)) & 0xffff, 7);
+function fakePeaks(path, duration) {
+  const levels = [];
+  for (const bps of [25, 100, 400]) {
+    const n = Math.ceil(duration * bps);
+    const bytes = new Uint8Array(n * 2);
+    const seed = seedOf(path);
+    for (let i = 0; i < n; i++) {
+      const t = i / bps;
+      const env = 0.25 + 0.7 * Math.abs(Math.sin(t * 3.1 + seed)) * (0.6 + 0.4 * Math.sin(t * 17 + seed * 0.1));
+      const a = Math.round(Math.max(1, Math.min(127, env * 127)));
+      bytes[2 * i] = (-a) & 255; bytes[2 * i + 1] = a;
+    }
+    let bin = ""; for (const b of bytes) bin += String.fromCharCode(b);
+    levels.push({ bps, n, data: btoa(bin) });
+  }
+  return { audio: true, duration, levels };
+}
+async function fakeStrip(path, n, h, duration, still) {
+  n = still ? 1 : Math.max(1, n);
+  const tw = Math.round(h * 16 / 9);
+  const c = new OffscreenCanvas(tw * n, h);
+  const g = c.getContext("2d");
+  const seed = seedOf(path);
+  for (let i = 0; i < n; i++) {
+    const t = duration * (i + 0.5) / n;
+    const hue = (seed * 37 + Math.floor(t) * 60) % 360;
+    g.fillStyle = `hsl(${hue} 60% 45%)`; g.fillRect(i * tw, 0, tw, h);
+    g.fillStyle = "rgba(255,255,255,.8)"; g.fillRect(i * tw + (i * 7) % (tw - 8), h / 3, 8, h / 3);
+  }
+  const blob = await c.convertToBlob({ type: "image/jpeg", quality: 0.8 });
+  return new Response(blob, { headers: { "Content-Type": "image/jpeg", "X-Strip-N": String(n), "X-Strip-Tw": String(tw),
+                                          "X-Strip-Th": String(h), "X-Strip-Duration": String(still ? 0 : duration) } });
+}
+window.__fetchApi = async (path, opts = {}) => {
+  const u = new URL(path, "http://x");
+  const p = u.searchParams.get("path") || "";
+  window.__requests.push(u.pathname + (p ? "?" + p : "") + (u.searchParams.get("n") ? "&n=" + u.searchParams.get("n") : ""));
+  if (window.__delay) await sleep(window.__delay);
+  if (opts.signal && opts.signal.aborted) throw new DOMException("aborted", "AbortError");
+  const m = window.__media[p] || {};
+  const a = window.__assets[p];
+  switch (u.pathname) {
+    case "/bepic/timeline_probe": {
+      const paths = JSON.parse(opts.body).paths;
+      const info = {};
+      for (const q of paths) info[q] = window.__media[q] || { error: "not found" };
+      return json({ info });
+    }
+    case "/bepic/timeline_peaks":
+      if (a && a.peaks) return fetch(a.peaks);
+      return json(m.audio ? fakePeaks(p, m.duration || 4) : { audio: false, duration: 0, levels: [] });
+    case "/bepic/timeline_strip": {
+      const n = Number(u.searchParams.get("n")), h = Number(u.searchParams.get("h"));
+      if (a && a.strip) {
+        const key = Object.keys(a.strip).map(Number).sort((x, y) => Math.abs(x - n) - Math.abs(y - n))[0];
+        const r = await fetch(a.strip[key].url);
+        const meta = a.strip[key];
+        return new Response(await r.blob(), { headers: { "Content-Type": "image/jpeg", "X-Strip-N": String(meta.n),
+          "X-Strip-Tw": String(meta.tw), "X-Strip-Th": String(meta.th), "X-Strip-Duration": String(meta.duration) } });
+      }
+      return fakeStrip(p, n, h, m.duration || 3, !!m.still);
+    }
+    case "/bepic/timeline_beats": return json(window.__beats[p] || { bpm: 0, beats: [], note: "no beat" });
+    case "/bepic/timeline_cuts": return json(window.__cuts[p] || { cuts: [], fps: 24, duration: m.duration || 0 });
+    case "/bepic/timeline_shots": return json({ shots: [1, 2], cuts: [1], duration: 3 });
+    case "/bepic/timeline_upload": {
+      const f = opts.body.get("file");
+      return json({ path: "D:/in/edits/" + f.name, name: f.name, reused: false });
+    }
+    case "/bepic/timeline_locate": return json({ paths: JSON.parse(opts.body).items.map((it) => "D:/out/" + it.filename) });
+  }
+  return { ok: false, status: 404, json: async () => ({}), text: async () => "", headers: new Headers() };
+};
+let v; try { v = await import("/extensions/viewer/bEpicViewer.js"); } catch (e) { document.title = "IMPORT " + e.message; throw e; }
+const panel = v.mountStandaloneViewer(document.body);
+window.__panel = panel;
+try {
+  for (let i = 0; i < 100 && !(panel.dockLayout && panel.editTimelinePanel); i++) await sleep(50);
+  Object.assign(panel.style, { width: "1560px", height: "900px", left: "20px", top: "20px" });
+  try { await window.__ext.setup(); } catch (e) { window.__setupErr = e.message; }
+  window.__ready = true;
+  document.title = "ready";
+} catch (e) { document.title = "ERR " + e.message; console.error(e); }
+</script></body></html>

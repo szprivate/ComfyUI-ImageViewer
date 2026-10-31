@@ -64,8 +64,11 @@ export const UIMixin = {
     // handler — which sits on window in the bubble phase — ever sees it.
     handleKeyDown(e) {
         const target   = e.composedPath()[0];
-        const isTyping = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+        const isTyping = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT'
+            || target.isContentEditable;
         if (isTyping) return;
+        // The Edit panel's keys, while it has the focus (bEpicViewer_editKeys.js).
+        if (this.editTlKeyDown && this.editTlKeyDown(e)) return;
         // Walking a world takes the keyboard (bEpicViewer_world3d.js).
         if (this._model3d && this._model3d.walking) return;
         // The file browser's list is a focusable widget: while it has the focus

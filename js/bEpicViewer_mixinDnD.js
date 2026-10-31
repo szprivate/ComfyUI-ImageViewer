@@ -83,6 +83,11 @@ export const DnDMixin = {
 
             if (hasFiles(e)) {
                 const files = Array.from(e.dataTransfer.files || []);
+                // Dropped onto a cut that is playing, they are clips for it (copied into input/edits).
+                if (files.length && this.isEditTab && this.isEditTab() && this._editTlAdd) {
+                    this._editTlAdd(this._editTlOsItems(files), null);
+                    return;
+                }
                 if (files.length) this._addDroppedFiles(files);
                 return;
             }

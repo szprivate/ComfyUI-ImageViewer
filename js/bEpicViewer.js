@@ -42,6 +42,9 @@ import { PrevizUndoMixin } from "./bEpicViewer_previzUndo.js";
 import { EditTimelineMixin } from "./bEpicViewer_editTimeline.js";
 import { EditPlayMixin } from "./bEpicViewer_editPlay.js";
 import { EditPanelsMixin } from "./bEpicViewer_editPanels.js";
+import { EditMediaMixin } from "./bEpicViewer_editMedia.js";
+import { EditKeysMixin } from "./bEpicViewer_editKeys.js";
+import { EditAutoMixin } from "./bEpicViewer_editAuto.js";
 import { BarGroupsMixin } from "./bEpicViewer_barGroups.js";
 import { ExportViewMixin } from "./bEpicViewer_exportView.js";
 import { SendFromNodeMixin, registerSendToViewerMenu, sendSelectionToViewer } from "./bEpicViewer_sendFromNode.js";
@@ -1357,6 +1360,9 @@ Object.assign(
     EditTimelineMixin,
     EditPlayMixin,
     EditPanelsMixin,
+    EditMediaMixin,
+    EditKeysMixin,
+    EditAutoMixin,
     BarGroupsMixin,
     ExportViewMixin,
     PrevizWorldMixin,
