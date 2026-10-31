@@ -1433,11 +1433,23 @@ textarea.param-input {
   background: linear-gradient(transparent, rgba(0,0,0,0.78));
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.history-agent-tag {
-  position: absolute; top: 3px; left: 3px; padding: 0 5px; border-radius: 8px;
-  font-size: 10px; color: #111; background: #f60; pointer-events: none;
-  max-width: 80%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+.history-agent-tags {
+  position: absolute; top: 3px; left: 3px; max-width: 86%; display: flex; flex-wrap: wrap;
+  gap: 2px; pointer-events: none;
 }
+.history-agent-tag {
+  padding: 0 5px; border-radius: 8px; display: flex; align-items: center; gap: 3px;
+  font-size: 10px; color: #111; background: #f60; pointer-events: none;
+  max-width: 100%; overflow: hidden; white-space: nowrap;
+}
+.history-agent-tag > span:first-child { overflow: hidden; text-overflow: ellipsis; }
+.history-agent-tag-x {
+  pointer-events: auto; cursor: pointer; font-weight: 700; line-height: 1; padding: 0 1px;
+  opacity: 0; transition: opacity .1s;
+}
+.history-thumb:hover .history-agent-tag-x, .history-agent-tag-x:focus { opacity: 1; }
+.history-agent-tag-x:hover { color: #fff; }
+.agenty-tag-text { line-height: 1.4; }
 .thumb-ctx-item.disabled { opacity: 0.4; cursor: default; }
 .thumb-ctx-item.disabled:hover { background: none; color: inherit; }
 .agenty-tag-dialog {

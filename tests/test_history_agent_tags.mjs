@@ -58,3 +58,14 @@ test("bad input gives an empty index", () => {
     assert.deepEqual(agentTagsOfSnapshot(null, [{ path: "x" }]), []);
     assert.equal(normPath(undefined), "");
 });
+
+test("one tag whatever its spelling: the store files hero_face and Hero-Face alike", async () => {
+    const { buildAgentTagIndex, agentTagKey, agentTagsOfSnapshot } = await import("../js/bEpicViewer_historyAgentTags.js");
+    assert.equal(agentTagKey("#Hero Face"), "hero-face");
+    assert.equal(agentTagKey("hero_face"), agentTagKey("Hero-Face"));
+    const index = buildAgentTagIndex([{ tag: "hero_face", path: "D:/out/a.png" }, { tag: "Hero-Face", path: "D:/out/b.png" }],
+                                     { "D:/out/c.png": "HERO_FACE" });
+    assert.deepEqual(index.names, ["hero_face"]);
+    assert.deepEqual(agentTagsOfSnapshot(index, [{ path: "D:/out/b.png" }]), ["hero_face"]);
+    assert.deepEqual(agentTagsOfSnapshot(index, [{ path: "D:/out/c.png" }]), ["hero_face"]);
+});

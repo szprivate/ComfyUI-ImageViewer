@@ -10,10 +10,15 @@
 //     state():   { halted: boolean }              // is a review stop waiting?
 //     tag({ tag, path, role }):  Promise<{ ok, message, tag }>
 //     approve({ files: [path, ...] }): Promise<{ ok, message }>
+//     untag({ tag, path }): Promise<{ ok, message, removed, canvas: [{id, title}] }>   (newer)
+//     clearCanvasTag({ tag, path }): { ok, message }                              (newer)
+//     manageTags({ anchor, tag }): opens agentY's Manage tags page                (newer)
 //   }
 //
-// Without it (agentY not installed, or an older one) the two menu rows are simply
-// not there, and the group headings, which need nothing from agentY, still are.
+// Without it (agentY not installed, or an older one) the menu rows are simply not
+// there, and the group headings, which need nothing from agentY, still are. A tag
+// that comes from an `agentY add tag` node on the canvas is never cleared from
+// here without asking: untag() names the node, and the dialog asks first.
 //
 // Pictures arrive grouped when the node that sent them carried a `group` (the
 // stage: "Characters", "Places") and a `label` (what it is: a character's name);
@@ -22,6 +27,7 @@
 
 import { app } from "../../scripts/app.js";
 import { describeHistorySelection } from "./bEpicViewer_historySelection.js";
+import { agentTagKey, agentTagsOfSnapshot, normPath } from "./bEpicViewer_historyAgentTags.js";
 
 /** The tab a send files itself under when it names one but has no node of its own
  *  on the open graph - an agent running a workflow. */
@@ -45,6 +51,12 @@ export function framePath(fr) {
 function bridge() {
     const b = typeof window !== "undefined" ? window.agentYViewerBridge : null;
     return b && typeof b.tag === "function" && typeof b.approve === "function" ? b : null;
+}
+
+/** The bridge, when it can take a tag off a picture (a newer agentY). */
+function untagBridge() {
+    const b = bridge();
+    return b && typeof b.untag === "function" ? b : null;
 }
 
 export const AgentYMixin = {
@@ -136,16 +148,49 @@ export const AgentYMixin = {
         return c;
     },
 
-    /** The "#name" badge on a picture that was tagged for agentY here. */
+    /** The agentY tags a picture wears: the ones given here, then every other
+     *  source (the canvas's tag nodes, the project's remembered references). */
+    agentTagsOf(fr) {
+        const out = [];
+        const put = (n) => { if (n && !out.some((o) => agentTagKey(o) === agentTagKey(n))) out.push(n); };
+        const p = framePath(fr);
+        if (p && this._agentTags && this._agentTags[p]) put(this._agentTags[p]);
+        if (fr && this._agentTagIndex) agentTagsOfSnapshot(this._agentTagIndex, fr).forEach(put);
+        return out;
+    },
+
+    /** The "#name" badges on a picture agentY knows by a tag, each with a × that
+     *  takes the tag off (when agentY can). */
     historyAgentTagBadge(doc, snapshot) {
-        const p = framePath(snapshot && snapshot[0]);
-        const name = p && this._agentTags ? this._agentTags[p] : "";
-        if (!name) return null;
-        const b = doc.createElement("div");
-        b.className = "history-agent-tag";
-        b.textContent = `#${name}`;
-        b.title = `Tagged for agentY as #${name}`;
-        return b;
+        const fr = snapshot && snapshot[0];
+        const names = this.agentTagsOf(fr);
+        if (!names.length) return null;
+        const canRemove = !!(framePath(fr) && untagBridge());
+        const box = doc.createElement("div");
+        box.className = "history-agent-tags";
+        for (const name of names) {
+            const b = doc.createElement("div");
+            b.className = "history-agent-tag";
+            b.title = `agentY tag #${name}`;
+            const t = doc.createElement("span");
+            t.textContent = `#${name}`;
+            b.append(t);
+            if (canRemove) {
+                const x = doc.createElement("span");
+                x.className = "history-agent-tag-x";
+                x.textContent = "×";
+                x.title = `Take #${name} off this picture`;
+                x.addEventListener("mousedown", (e) => e.stopPropagation());
+                x.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    this.agentYUntag(fr, name);
+                });
+                b.append(x);
+            }
+            box.append(b);
+        }
+        return box;
     },
 
     // ── the right-click rows ─────────────────────────────────────────────────
@@ -177,6 +222,17 @@ export const AgentYMixin = {
                 path ? "Give this picture a name agentY can use as #name in a prompt"
                      : "This picture has no file on disk, so it cannot be tagged",
                 !!path, () => this.agentYTagDialog(fr));
+            // One row per tag it wears, so with several the user picks which.
+            if (path && untagBridge()) {
+                for (const name of this.agentTagsOf(fr)) {
+                    row(`✕ Remove tag #${name}`, `Take #${name} off this picture`, true,
+                        () => this.agentYUntag(fr, name));
+                }
+            }
+        }
+        if (typeof b.manageTags === "function") {
+            row("🏷 Manage tags…", "Every agentY tag, its pictures, rename, merge and delete", true,
+                () => this.agentYManageTags());
         }
         let state = { halted: false };
         try { state = b.state() || state; } catch (e) { /* keep */ }
@@ -224,6 +280,11 @@ export const AgentYMixin = {
             const ok = !!(r && r.ok);
             if (ok) {
                 if (!this._agentTags) this._agentTags = {};
+                // A remembered tag names ONE picture: tagging another one moves it.
+                const k = agentTagKey(r.tag || tag);
+                for (const [p, n] of Object.entries(this._agentTags)) {
+                    if (agentTagKey(n) === k) delete this._agentTags[p];
+                }
                 this._agentTags[framePath(fr)] = r.tag || tag;
                 this._historyPanelSig = null;
                 this.renderHistoryPanel();
@@ -236,6 +297,115 @@ export const AgentYMixin = {
             this._agentYNotify(`Could not tag it: ${e}`, "error");
             return false;
         }
+    },
+
+    /** "Remove tag #name" (menu row or the badge's ×). The remembered tag goes at
+     *  once; one that an `agentY add tag` node on the canvas puts there is only
+     *  cleared after the user says so (agentYCanvasTagDialog). */
+    async agentYUntag(fr, name) {
+        const b = untagBridge();
+        if (!b) return false;
+        const path = framePath(fr);
+        let r = null;
+        try { r = await b.untag({ tag: name, path }); }
+        catch (e) { this._agentYNotify(`Could not remove the tag: ${e}`, "error"); return false; }
+        r = r || {};
+        if (r.removed || r.notRemembered) this._dropLocalAgentTag(path, name);
+        this._historyPanelSig = null;
+        this.renderHistoryPanel();
+        if (this.refreshAgentTags) this.refreshAgentTags({ fresh: true });
+        if (r.canvas && r.canvas.length) {
+            this.agentYCanvasTagDialog(fr, name, r);
+            return false;
+        }
+        this._agentYNotify(r.message || (r.ok ? `Removed #${name}.` : "Could not remove the tag."),
+                           r.ok ? "success" : "warn");
+        return !!r.ok;
+    },
+
+    _dropLocalAgentTag(path, name) {
+        if (!this._agentTags) return;
+        const want = normPath(path);
+        for (const [p, n] of Object.entries(this._agentTags)) {
+            if (normPath(p) === want && agentTagKey(n) === agentTagKey(name)) delete this._agentTags[p];
+        }
+    },
+
+    /** The tag comes from a node on the canvas: say which, and offer to clear its
+     *  tag field - the user's graph is only changed after they press the button. */
+    agentYCanvasTagDialog(fr, name, r) {
+        const doc = (this.container && this.container.ownerDocument) || document;
+        this.container.querySelector(".agenty-tag-dialog")?.remove();
+        const wrap = doc.createElement("div");
+        wrap.className = "agenty-tag-dialog agenty-untag-dialog";
+        const form = doc.createElement("form");
+        const title = doc.createElement("div");
+        title.className = "agenty-tag-title";
+        title.textContent = `Remove tag #${name}`;
+        const text = doc.createElement("div");
+        text.className = "agenty-tag-text";
+        text.textContent = r.message || "";
+        const buttons = doc.createElement("div");
+        buttons.className = "agenty-tag-buttons";
+        const cancel = doc.createElement("button");
+        cancel.type = "button"; cancel.textContent = "Keep it";
+        const ok = doc.createElement("button");
+        ok.type = "submit";
+        const n = (r.canvas || []).length;
+        ok.textContent = n > 1 ? `Clear the tag field of ${n} nodes` : `Clear node #${(r.canvas[0] || {}).id}'s tag field`;
+        buttons.append(cancel, ok);
+        form.append(title, text, buttons);
+        wrap.append(form);
+        const close = () => wrap.remove();
+        cancel.onclick = close;
+        wrap.onclick = (e) => { if (e.target === wrap) close(); };
+        for (const ev of ["keydown", "keyup", "keypress"]) {
+            form.addEventListener(ev, (e) => {
+                e.stopPropagation();
+                if (ev === "keydown" && e.key === "Escape") close();
+            });
+        }
+        form.onsubmit = (e) => {
+            e.preventDefault();
+            const b = untagBridge();
+            let res = null;
+            try { res = b && typeof b.clearCanvasTag === "function" ? b.clearCanvasTag({ tag: name, path: framePath(fr) }) : null; }
+            catch (err) { res = { ok: false, message: String(err) }; }
+            close();
+            res = res || { ok: false, message: "agentY cannot change the canvas from here." };
+            if (res.ok) this._dropLocalAgentTag(framePath(fr), name);
+            this._historyPanelSig = null;
+            this.renderHistoryPanel();
+            if (this.refreshAgentTags) this.refreshAgentTags({ fresh: true });
+            this._agentYNotify(res.message || "", res.ok ? "success" : "warn");
+        };
+        this.container.appendChild(wrap);
+        ok.focus();
+    },
+
+    /** agentY's Manage tags page, opened in the viewer's own root and window. */
+    agentYManageTags(tag) {
+        const b = bridge();
+        if (!b || typeof b.manageTags !== "function") return false;
+        try { return b.manageTags({ anchor: this.container, tag: tag || "" }) !== false; }
+        catch (e) { this._agentYNotify(`Could not open Manage tags: ${e}`, "error"); return false; }
+    },
+
+    /** Show the history item that is this file (agentY's "Open in viewer").
+     *  -> whether it was found. */
+    agentShowPath(path) {
+        const want = normPath(path);
+        if (!want) return false;
+        for (const [key, stack] of Object.entries(this.history || {})) {
+            const idx = (stack || []).findIndex((s) => (s || []).some((fr) => normPath(framePath(fr)) === want));
+            if (idx < 0) continue;
+            const api = window.bEpicViewerApi || {};
+            try { if (api.show) api.show(); } catch (_) { /* already up */ }
+            if (this.historyCompare && this.exitHistoryCompare) this.exitHistoryCompare();
+            this.openHistorySnapshot(key, idx);
+            return true;
+        }
+        return false;
     },
 
     _agentYNotify(msg, severity) {

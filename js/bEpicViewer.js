@@ -1480,6 +1480,8 @@ app.registerExtension({
             // Annotation tool's marks on it, for agentY (bEpicViewer_viewerState.js).
             viewerState: () => globalViewerPanel?.agentViewerState?.() || null,
             annotations: (opts) => globalViewerPanel?.agentViewerAnnotations?.(opts || {}) || null,
+            // Show the history item that is this file, for agentY's Manage tags page.
+            showPath: (path) => !!globalViewerPanel?.agentShowPath?.(path),
         });
         // A reload takes back the popout the previous page left open, so the
         // toolbar button has to show the viewer as on again.

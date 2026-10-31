@@ -17,6 +17,7 @@
 
 import {
     agentFilterValue, agentFilterName, buildAgentTagIndex, agentTagsOfSnapshot, agentTagIndexSig,
+    agentTagKey, normPath as normPathLoose,
 } from "./bEpicViewer_historyAgentTags.js";
 
 // agentY's own tags (the `#name` of a canvas tag node or a remembered reference)
@@ -39,6 +40,10 @@ const TAG_BY_ID = Object.fromEntries(HISTORY_TAGS.map((t) => [t.id, t]));
 const FILTER_ALL = "";
 const FILTER_ANY = "any";
 const FILTER_NONE = "none";
+// Not a filter: the "Manage tags…" row of the dropdown, which opens agentY's page.
+const FILTER_MANAGE = "__manage_tags__";
+// agentY's window event after any tag change (agentY-comfyuiConnect agent_tags.js).
+const AGENT_TAGS_CHANGED = "agenty-tags-changed";
 
 export const HistoryTagsMixin = {
 
@@ -103,7 +108,8 @@ export const HistoryTagsMixin = {
 
     /** A signature of what tags and filter mean for this stack, for the strip's fast path. */
     historyTagSig(stack) {
-        const agent = agentFilterName(this.historyTagFilter) ? agentTagIndexSig(this._agentTagIndex) : "";
+        // Always: the thumbnails wear agentY's tags as badges, filter or not.
+        const agent = this._agentTagSig || "";
         return `${this.historyTagFilter || ""}|${(stack || []).map((s) => this.historyTagOf(s) || "").join(",")}|${agent}`;
     },
 
@@ -143,7 +149,14 @@ export const HistoryTagsMixin = {
             opt(FILTER_ANY, "● Tagged");
             opt(FILTER_NONE, "○ Untagged");
             for (const t of HISTORY_TAGS) opt(t.id, `● ${t.label}`, t.color);
-            sel.onchange = () => this.setHistoryTagFilter(sel.value);
+            sel.onchange = () => {
+                if (sel.value === FILTER_MANAGE) {
+                    sel.value = this.historyTagFilter || FILTER_ALL;
+                    this.agentYManageTags();
+                    return;
+                }
+                this.setHistoryTagFilter(sel.value);
+            };
             // The panel's own click handler leaves compare mode; ComfyUI's key
             // handler would take the arrow keys. Neither is wanted here.
             for (const type of ["click", "mousedown", "keydown", "keyup"]) {
@@ -201,6 +214,14 @@ export const HistoryTagsMixin = {
     /** Keep the list current while the viewer can be seen (docked, full-screen or popped out). */
     startAgentTagWatch() {
         if (this._agentTagTimer) return;
+        // A change made anywhere (this viewer, the Manage tags page, the panel) is
+        // announced at once; the timer only catches what nobody announced.
+        try {
+            window.addEventListener(AGENT_TAGS_CHANGED, (e) => {
+                this.applyAgentTagChange((e && e.detail) || {});
+                this.refreshAgentTags({ fresh: true });
+            });
+        } catch (_) { /* no window: tests */ }
         const tick = () => {
             if (this._agentViewerVisible && !this._agentViewerVisible()) return;
             this.refreshAgentTags();
@@ -209,15 +230,35 @@ export const HistoryTagsMixin = {
         tick();
     },
 
+    /** The viewer's own path -> name map after a change somebody announced:
+     *  { renamed: {from, to}, deleted: [name], untagged: [{tag, path}] }. */
+    applyAgentTagChange(detail) {
+        const tags = this._agentTags;
+        if (!tags || !detail) return;
+        const ren = detail.renamed;
+        const gone = new Set((detail.deleted || []).map(agentTagKey));
+        for (const [p, n] of Object.entries(tags)) {
+            const k = agentTagKey(n);
+            if (gone.has(k)) delete tags[p];
+            else if (ren && k === agentTagKey(ren.from) && ren.to) tags[p] = ren.to;
+        }
+        for (const u of detail.untagged || []) {
+            for (const [p, n] of Object.entries(tags)) {
+                if (agentTagKey(n) === agentTagKey(u.tag) && normPathLoose(p) === normPathLoose(u.path)) delete tags[p];
+            }
+        }
+    },
+
     /** The "agentY tags" group of the dropdown, rebuilt only when its names change. */
     _syncAgentTagOptions(sel) {
         const names = this._agentTagIndex ? this._agentTagIndex.names : [];
         const cur = agentFilterName(this.historyTagFilter);
         // The saved filter may name a tag the first read has not brought back yet.
         const shown = cur && !names.includes(cur) && !this._agentTagsLoaded ? [...names, cur] : names;
-        const sig = shown.join(",");
+        const canManage = this._agentCanManageTags();
+        const sig = shown.join(",") + (canManage ? "|m" : "");
         let group = sel.querySelector("optgroup.history-agent-tags");
-        if (!shown.length) { if (group) group.remove(); sel._agentSig = ""; return; }
+        if (!shown.length && !canManage) { if (group) group.remove(); sel._agentSig = ""; return; }
         if (group && sel._agentSig === sig) return;
         const doc = sel.ownerDocument;
         if (!group) {
@@ -233,7 +274,20 @@ export const HistoryTagsMixin = {
             o.textContent = `#${n}`;
             group.append(o);
         }
+        if (canManage) {
+            const o = doc.createElement("option");
+            o.value = FILTER_MANAGE;
+            o.textContent = "Manage tags…";
+            o.className = "history-agent-manage";
+            group.append(o);
+        }
         sel._agentSig = sig;
+    },
+
+    /** Whether agentY's Manage tags page can be opened from here. */
+    _agentCanManageTags() {
+        const b = typeof window !== "undefined" ? window.agentYViewerBridge : null;
+        return !!(b && typeof b.manageTags === "function");
     },
 
     /** What the filter is called in a sentence: "red", "tagged", "untagged". */

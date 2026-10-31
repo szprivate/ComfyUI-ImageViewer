@@ -23,6 +23,13 @@ export function agentFilterName(value) {
     return v.startsWith(AGENT_FILTER_PREFIX) ? v.slice(AGENT_FILTER_PREFIX.length) : "";
 }
 
+/** A tag's identity: "hero_face", "Hero-Face" and "hero face" are one tag (the
+ *  project store files them all as hero-face; agentY's tagKey). */
+export function agentTagKey(name) {
+    return String(name || "").trim().replace(/^#+/, "").toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
 /** A file in the one spelling both sides compare: forward slashes, a drive letter
  *  in lower case, ComfyUI's " [output]" suffix dropped. */
 export function normPath(p) {
@@ -39,11 +46,15 @@ export function normPath(p) {
  */
 export function buildAgentTagIndex(list, viewerTags) {
     const names = new Set();
+    const spelling = new Map();          // key -> the first spelling seen
     const byPath = new Map();
     const relative = [];
     const add = (name, path) => {
-        const n = String(name || "").trim().replace(/^#+/, "");
-        if (!n) return;
+        const raw = String(name || "").trim().replace(/^#+/, "");
+        const key = agentTagKey(raw);
+        if (!key) return;
+        if (!spelling.has(key)) spelling.set(key, raw);
+        const n = spelling.get(key);
         names.add(n);
         const p = normPath(path);
         if (!p) return;
