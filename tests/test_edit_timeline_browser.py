@@ -740,6 +740,24 @@ class EditTimelineBrowserTests(unittest.TestCase):
         self.assertEqual(pg.evaluate("() => __panel._editTlUi.markIn.style.display"), "none")
         self.assertEqual(self.errors, [])
 
+    def test_an_in_handle_drag_survives_a_redraw_of_the_ruler(self):
+        pg = self.page()
+        self.focus_timeline(pg)
+        pg.evaluate("() => __panel._editTlSetRange({ start: 24, end: 200 })")
+        hx, hy = pg.evaluate("() => { const r = __panel._editTlUi.markIn.getBoundingClientRect(); return [r.left + 3, r.top + 6]; }")
+        x1, _ = self.x_at(pg, 2.0)
+        x2, _ = self.x_at(pg, 6.0)
+        pg.mouse.move(hx, hy)
+        pg.mouse.down()
+        pg.mouse.move(x1, hy, steps=3)
+        # The ruler is rebuilt under the pointer (a filmstrip lands, the cut is edited): the drag goes on.
+        pg.evaluate("() => { __panel.editTlRefresh(); __panel._editTlUi.ruler.replaceChildren(); __panel.editTlRefresh(); }")
+        pg.mouse.move(x2, hy, steps=3)
+        pg.mouse.up()
+        start = self.range(pg)[0]
+        self.assertLess(abs(start - 6 * 24), 4, "the handle followed the pointer to the end of the drag")
+        self.assertEqual(self.errors, [])
+
     def test_the_range_loops_playback_and_is_what_export_renders(self):
         pg = self.page()
         self.stills_cut(pg)

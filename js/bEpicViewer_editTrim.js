@@ -530,16 +530,17 @@ export const EditTrimMixin = {
                 const next = which === "in" ? { start: Math.min(f, r.end), end: r.end } : { start: r.start, end: Math.max(f, r.start) };
                 this._editTlSetRange(next);
             };
+            // On the document, not the handle: a redraw of the ruler (ticks are rebuilt, a filmstrip
+            // lands) detaches the handle mid-drag and would end the capture with it.
+            const doc = el.ownerDocument;
             const up = () => {
-                el.removeEventListener("pointermove", move);
-                el.removeEventListener("pointerup", up);
-                el.removeEventListener("pointercancel", up);
-                try { el.releasePointerCapture(e.pointerId); } catch (_) {}
+                doc.removeEventListener("pointermove", move);
+                doc.removeEventListener("pointerup", up);
+                doc.removeEventListener("pointercancel", up);
             };
-            try { el.setPointerCapture(e.pointerId); } catch (_) {}
-            el.addEventListener("pointermove", move);
-            el.addEventListener("pointerup", up);
-            el.addEventListener("pointercancel", up);
+            doc.addEventListener("pointermove", move);
+            doc.addEventListener("pointerup", up);
+            doc.addEventListener("pointercancel", up);
         });
     },
 

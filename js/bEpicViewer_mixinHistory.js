@@ -546,6 +546,10 @@ export const HistoryMixin = {
         if (!url) return;
         const L = /^(data:|blob:)/.test(url) ? null : this._thumbLoader();
         if (!L) { imgEl.src = url; return; }
+        // Loaded once already (a filter change or any rebuild remakes the tiles):
+        // set it now, from the browser's cache, so the tile never shows empty.
+        // No request, so the lazy queue and its cap of THUMB_LOADS_MAX do not apply.
+        if (this._thumbLoaded && this._thumbLoaded.has(url)) { imgEl.loading = 'eager'; imgEl.src = url; return; }
         imgEl._bepicThumbUrl = url;
         L.watched.add(imgEl);
         L.io.observe(imgEl);
@@ -568,7 +572,12 @@ export const HistoryMixin = {
             img._bepicThumbUrl = null;
             if (!url || !img.isConnected) continue;
             L.inflight.add(img);
-            const done = () => {
+            const done = (ev) => {
+                if (ev && ev.type === 'load') {
+                    const seen = this._thumbLoaded || (this._thumbLoaded = new Set());
+                    seen.add(url);
+                    if (seen.size > 3000) seen.delete(seen.values().next().value);
+                }
                 img.removeEventListener('load', done);
                 img.removeEventListener('error', done);
                 L.inflight.delete(img);
