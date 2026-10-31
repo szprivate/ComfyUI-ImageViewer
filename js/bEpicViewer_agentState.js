@@ -11,6 +11,7 @@
 
 import { describeViewerState, annotationReport } from "./bEpicViewer_viewerState.js";
 import { frameKind } from "./bEpicViewer_historySelection.js";
+import * as D from "./bEpicViewer_editTimelineData.js";
 
 const safe = (fn, fallback = null) => { try { return fn(); } catch (_) { return fallback; } };
 
@@ -76,7 +77,16 @@ export const AgentStateMixin = {
             out.cut = cut.name || "";
             out.clips = Array.isArray(cut.clips) ? cut.clips.length : 0;
             out.fps = cut.fps || 0;
-            const sel = this._editTlSel;
+            // The clips selected (several with Ctrl / Shift + click): a list agentY can act on, with the
+            // cut's .otio when it is known. Anything else selected (a text, a dissolve) stays one object.
+            const picked = safe(() => D.selectedClips(cut, this._editTlSelList()), []) || [];
+            if (picked.length) {
+                out.selected = picked;
+                const total = safe(() => this._editTlSelList().length, picked.length);
+                if (total > picked.length) out.selected_total = total;
+            }
+            if (this._editTlOtio) out.otio = String(this._editTlOtio);
+            const sel = picked.length ? null : this._editTlSel;
             if (sel && sel.kind) {
                 const s = { kind: sel.kind, index: sel.i, track: sel.track || "" };
                 const list = sel.kind === "text" ? cut.texts
@@ -89,7 +99,7 @@ export const AgentStateMixin = {
                     if (typeof c.in === "number") s.in = c.in;
                     if (typeof c.length === "number") s.length = c.length;
                 }
-                out.selected = s;
+                out.selected_item = s;
             }
         }
         return out;

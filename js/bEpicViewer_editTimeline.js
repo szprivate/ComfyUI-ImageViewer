@@ -19,7 +19,9 @@
 //                           S to solo it (only the soloed are played; a way of
 //                           looking, not saved), its lower edge to make it taller
 //   drag on the ruler       scrub the film; Ctrl+drag / right-click: the in and out
-//   click a clip            select it and go to it; right-click: its colour, remove
+//   click a clip            select it and go to it; right-click: its colour, remove, Recreate
+//                           with changes… (agentY), its takes; Ctrl+click / Shift+click: several
+//                           clips selected (bEpicViewer_editTakes.js)
 //   drag a shot's edge      trim it (what follows moves with it); the middle of a
 //                           cut rolls it; Alt: slip / retime, Alt+Shift: slide,
 //                           Ctrl on the out-edge: loop (bEpicViewer_editTrim.js)
@@ -642,6 +644,9 @@ export const EditTimelineMixin = {
         const doc = host.ownerDocument;
         const sel = this._editTlSel;
         const picked = (kind, i, track) => !!sel && sel.kind === kind && sel.i === i && (kind !== "tclip" || sel.track === track);
+        // Several clips selected are outlined (.msel) as well as the one the panel works on (.sel).
+        const several = this._editTlSelList();
+        const also = (kind, i, track) => (this._editTlInMulti(several, kind, i, track) ? " msel" : "");
         const block = (cls, item, text) => {
             const b = doc.createElement("div");
             b.className = cls;
@@ -694,12 +699,13 @@ export const EditTimelineMixin = {
                 }
             } else if (row.id === "V1") {
                 for (const s of lay.shots) {
-                    const b = block("edit-shot" + (picked("clip", s.i) ? " sel" : "")
+                    const b = block("edit-shot" + (picked("clip", s.i) ? " sel" : "") + also("clip", s.i)
                         + (Number.isInteger(cut.clips[s.i].ref) ? "" : " new"), s, s.name);
                     b.dataset.key = "V1:" + s.i;
                     b._media = { file: cut.clips[s.i].file, in: Number(cut.clips[s.i].in) || 0, length: s.length,
                                  row: "video", volume: cut.clips[s.i].volume, clip: cut.clips[s.i] };
                     this._editTlBadges(b, cut.clips[s.i]);
+                    this._editTlTakeBadge(b, cut.clips[s.i]);
                     b.addEventListener("pointerdown", (e) => this._editTlShotDown(e, b, s.i));
                     b.addEventListener("pointermove", (e) => this._editTlHover(e, b, { kind: "clip", i: s.i }));
                     b.addEventListener("pointerleave", () => this._editTlHoverEnd());
@@ -724,11 +730,12 @@ export const EditTimelineMixin = {
             } else {
                 for (const c of row.track.items) {
                     const b = block((row.kind === "audio" ? "edit-shot edit-sclip" : "edit-shot edit-tclip")
-                        + (picked("tclip", c.i, row.id) ? " sel" : ""), c, c.name);
+                        + (picked("tclip", c.i, row.id) ? " sel" : "") + also("tclip", c.i, row.id), c, c.name);
                     b.dataset.key = row.id + ":" + c.i;
                     const tc = row.track.items[c.i] && D.trackOf(cut, row.id).clips[c.i];
                     b._media = { file: tc.file, in: Number(tc.in) || 0, length: c.length, row: row.kind, volume: tc.volume, clip: tc };
                     this._editTlBadges(b, tc);
+                    this._editTlTakeBadge(b, tc);
                     b.addEventListener("pointerdown", (e) => this._editTlTrackClipDown(e, b, row.id, c.i));
                     b.addEventListener("pointermove", (e) => this._editTlHover(e, b, { kind: "tclip", track: row.id, i: c.i }));
                     b.addEventListener("pointerleave", () => this._editTlHoverEnd());
@@ -840,7 +847,8 @@ export const EditTimelineMixin = {
     _editTlClipMenu(e, sel) {
         e.preventDefault();
         e.stopPropagation();
-        this._editTlSel = sel;
+        // A clip of a selection of several keeps it (and one that is not in it joins it); else it is the selection.
+        if (sel.kind === "clip" || sel.kind === "tclip") this._editTlMenuSelect(sel); else this._editTlSel = sel;
         this.editTlRefresh();
         const entries = [{ label: sel.kind === "text" ? "Remove this text" : sel.kind === "mix" ? "Remove this dissolve" : "Remove from the cut",
                            disabled: sel.kind === "clip" && this._editTlCut.clips.length <= 1,
@@ -851,6 +859,10 @@ export const EditTimelineMixin = {
         }
         if (sel.kind === "clip" || sel.kind === "tclip") {
             entries.push({ label: "Split at the playhead", disabled: !this._editTlOnScreen(), run: () => this.editTlSplitAtPlayhead() });
+            const many = this._editTlSelList().length;
+            entries.push("-", { label: many > 1 ? `Recreate ${many} shots with changes…` : "Recreate with changes…",
+                                run: () => this.editTlRecreateDialog(sel) });
+            entries.push(...this._editTlTakeEntries(sel));
         }
         const menu = this._previzOpenMenu(entries, e.clientX, e.clientY);
         if (!menu || sel.kind === "text" || sel.kind === "mix") return;
@@ -920,6 +932,7 @@ export const EditTimelineMixin = {
         if (!got) { this._editTlSay(how === D.historyUndo ? "nothing to undo" : "nothing to redo"); return; }
         this._editTlHistories[this._editTlTab] = got.history;
         this._editTlCut = got.cut;
+        this._editTlMulti = null;
         // The selection may name a clip the cut no longer has.
         if (this._editTlSel && !(this._editTlSel.kind === "text" ? got.cut.texts[this._editTlSel.i]
                                  : this._editTlSel.kind === "mix" ? got.cut.clips[this._editTlSel.i]
@@ -1055,6 +1068,8 @@ export const EditTimelineMixin = {
         const was = start.clips[i];
         const sel = { kind: "clip", i };
         if (this._editTlBlade) { this._editTlBladeCut(e, sel); return; }
+        // Ctrl / Shift on a clip's body: several clips selected (bEpicViewer_editTakes.js).
+        if (this._editTlMultiDown(e, el, sel)) return;
         // An edge, or a modifier held: trim, roll, retime, loop, slip, slide (bEpicViewer_editTrim.js).
         if (this._editTlTrimDown && this._editTlTrimDown(e, el, sel)) return;
         const began = D.clipStarts(start)[i];
@@ -1124,6 +1139,7 @@ export const EditTimelineMixin = {
         const was = D.trackOf(start, id).clips[i];
         const sel = { kind: "tclip", track: id, i };
         if (this._editTlBlade) { this._editTlBladeCut(e, sel); return; }
+        if (this._editTlMultiDown(e, el, sel)) return;
         if (this._editTlTrimDown && this._editTlTrimDown(e, el, sel)) return;
         this._editTlSel = sel;
         let onto = id;

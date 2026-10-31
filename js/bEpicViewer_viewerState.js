@@ -22,6 +22,8 @@ import { frameKind } from "./bEpicViewer_historySelection.js";
 export const TABS_CAP = 20;
 /** Most marks one annotations answer carries; count says how many there were. */
 export const MARKS_CAP = 200;
+/** Most clips of the Edit panel's selection one answer lists. */
+export const EDIT_SELECTED_CAP = 50;
 /** Longest text of one mark kept in an answer. */
 export const TEXT_CAP = 500;
 
@@ -225,17 +227,37 @@ export function describeViewerState(s) {
         put(e, "cut", snap.edit.cut || "");
         if (Number.isInteger(snap.edit.clips)) e.clips = snap.edit.clips;
         if (snap.edit.fps > 0) e.fps = r3(snap.edit.fps);
-        if (snap.edit.selected) {
-            const sel = { kind: snap.edit.selected.kind };
-            if (Number.isInteger(snap.edit.selected.index)) sel.index = snap.edit.selected.index;
-            put(sel, "track", snap.edit.selected.track || "");
-            put(sel, "name", snap.edit.selected.name || "");
-            put(sel, "file", snap.edit.selected.file || "");
-            if (finite(snap.edit.selected.in)) sel.in = r3(snap.edit.selected.in);
-            if (finite(snap.edit.selected.length)) sel.length = r3(snap.edit.selected.length);
-            put(sel, "text", snap.edit.selected.text ? String(snap.edit.selected.text).slice(0, TEXT_CAP) : "");
-            e.selected = sel;
+        // The clips selected: a list of { name, file, in, out (seconds of the source), track, id } (id "V1:3" on the
+        // cut itself, "<track>:<i>" above it). Anything else selected (a text, a dissolve) is one object, selected_item.
+        // (A snapshot that still gives `selected` as one object is answered as it was.)
+        const one = (s) => {
+            const sel = { kind: s.kind };
+            if (Number.isInteger(s.index)) sel.index = s.index;
+            put(sel, "track", s.track || "");
+            put(sel, "name", s.name || "");
+            put(sel, "file", s.file || "");
+            if (finite(s.in)) sel.in = r3(s.in);
+            if (finite(s.length)) sel.length = r3(s.length);
+            put(sel, "text", s.text ? String(s.text).slice(0, TEXT_CAP) : "");
+            return sel;
+        };
+        if (Array.isArray(snap.edit.selected)) {
+            e.selected = snap.edit.selected.slice(0, EDIT_SELECTED_CAP).map((c) => {
+                const out = {};
+                put(out, "name", String(c.name || "").slice(0, 200));
+                put(out, "file", c.file || "");
+                if (finite(c.in)) out.in = r3(c.in);
+                if (finite(c.out)) out.out = r3(c.out);
+                put(out, "track", c.track || "");
+                put(out, "id", c.id || "");
+                return out;
+            });
+            if (snap.edit.selected_total > e.selected.length) e.selected_total = snap.edit.selected_total;
+        } else if (snap.edit.selected) {
+            e.selected = one(snap.edit.selected);
         }
+        if (snap.edit.selected_item) e.selected_item = one(snap.edit.selected_item);
+        put(e, "otio", snap.edit.otio || "");
         out.edit = e;
     }
 

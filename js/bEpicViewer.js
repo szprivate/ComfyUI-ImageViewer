@@ -46,6 +46,7 @@ import { EditPanelsMixin } from "./bEpicViewer_editPanels.js";
 import { EditMediaMixin } from "./bEpicViewer_editMedia.js";
 import { EditKeysMixin } from "./bEpicViewer_editKeys.js";
 import { EditAutoMixin } from "./bEpicViewer_editAuto.js";
+import { EditTakesMixin } from "./bEpicViewer_editTakes.js";
 import { EditTrimMixin } from "./bEpicViewer_editTrim.js";
 import { BarGroupsMixin } from "./bEpicViewer_barGroups.js";
 import { ExportViewMixin } from "./bEpicViewer_exportView.js";
@@ -542,6 +543,7 @@ class ViewerPanel extends HTMLElement {
         finally { this._viewerStateRestored = true; }   // from here on saves are safe
         this.startParamMonitor();
         this._initReconnect();
+        this._editTlListenTakes();      // agentY's new versions of shots come in as takes (bEpicViewer_editTakes.js)
     }
 
     //  Element reference cache 
@@ -1366,6 +1368,7 @@ Object.assign(
     EditMediaMixin,
     EditKeysMixin,
     EditAutoMixin,
+    EditTakesMixin,
     EditTrimMixin,
     BarGroupsMixin,
     ExportViewMixin,

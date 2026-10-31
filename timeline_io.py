@@ -248,8 +248,68 @@ def _look(item):
         volume = float(_note(item).get("volume", 1.0))
     except (TypeError, ValueError):
         volume = 1.0
-    return {"color": str(_bepic(item).get("color") or ""), "volume": round(max(0.0, min(4.0, volume)), 4),
-            "fx": clean_fx(_bepic(item).get("fx")), **clip_time(item)}
+    out = {"color": str(_bepic(item).get("color") or ""), "volume": round(max(0.0, min(4.0, volume)), 4),
+           "fx": clean_fx(_bepic(item).get("fx")), **clip_time(item)}
+    takes = clean_takes(_bepic(item).get("takes"))
+    if takes:
+        out["takes"] = takes
+    return out
+
+
+# A clip may carry takes: the same shot made again with changes, kept beside the
+# first (``metadata.bepic.takes``). Exactly one is active, and the clip's media
+# reference names its file, so OTIO stays what it was for any other program.
+# bEpicViewer_editTimelineData.js (addTake / switchTake) is the same arithmetic.
+MAX_TAKES = 50
+
+
+def clean_takes(given):
+    """*given* as a list of takes: ``{"file", "version", "created", "note", "active"}``
+    (and, for an active take that made the clip shorter, ``"len"`` - the length it
+    had). Anything that is not a take is left out; at most :data:`MAX_TAKES`;
+    exactly one is active (the last, where none says so)."""
+    if not isinstance(given, list):
+        return []
+    out = []
+    for t in given:
+        if not isinstance(t, dict) or not isinstance(t.get("file"), str) or not t["file"].strip():
+            continue
+        version = t.get("version")
+        if isinstance(version, bool) or not isinstance(version, int):
+            continue
+        take = {"file": t["file"][:2000], "version": version,
+                "created": str(t.get("created") or "")[:40] if isinstance(t.get("created") or "", str) else "",
+                "note": str(t.get("note") or "")[:200] if isinstance(t.get("note") or "", str) else "",
+                "active": t.get("active") is True}
+        try:
+            length = float(t.get("len") or 0)
+        except (TypeError, ValueError):
+            length = 0.0
+        if length > 0 and length < 86400:
+            take["len"] = round(length, 4)
+        out.append(take)
+        if len(out) >= MAX_TAKES:
+            break
+    seen = False
+    for t in out:
+        if t["active"] and seen:
+            t["active"] = False
+        seen = seen or t["active"]
+    if out and not seen:
+        out[-1]["active"] = True
+    return out
+
+
+def norm_path(path):
+    """A path as two spellings of it compare: slashes forward, and no case."""
+    return os.path.normcase(str(path or "").replace("\\", "/").rstrip("/")).replace("\\", "/")
+
+
+def version_of(path):
+    """The version a file's name says (``shot_03_v002.mp4`` -> 2); 1 where it says none."""
+    stem = os.path.splitext(os.path.basename(str(path or "").replace("\\", "/")))[0]
+    found = re.findall(r"(?:^|[^a-z0-9])v(\d{1,5})(?![0-9])", stem, re.I)
+    return max(1, int(found[-1])) if found else 1
 
 
 # A clip's speed (retime, "trim to fill": its source in and out kept, its length
@@ -460,7 +520,34 @@ def edit_length(edit):
     return max([main] + over)
 
 
-def _dress(item, c):
+def _set_takes(item, given, may_use):
+    """Write a clip's takes, where the edit states them, into *item*; the active
+    take's file becomes the media the clip points at."""
+    takes = clean_takes(given)
+    meta = item.setdefault("metadata", {})
+    note = meta.setdefault("bepic", {}) if isinstance(meta, dict) else None
+    if not isinstance(note, dict):
+        return
+    if not takes:
+        note.pop("takes", None)
+        return
+    note["takes"] = takes
+    active = next((t for t in takes if t["active"]), None)
+    ref = item.get("media_reference")
+    if active is None or not isinstance(ref, dict):
+        return
+    if norm_path(_file(ref)) == norm_path(active["file"]):
+        return
+    path = os.path.abspath(active["file"].strip())
+    if may_use is None or not may_use(path):
+        raise ValueError(f"take v{active['version']}: {os.path.basename(path)} is not a file the viewer may use")
+    if not os.path.isfile(path):
+        raise ValueError(f"take v{active['version']}: {os.path.basename(path)} does not exist")
+    ref["target_url"] = _url(path)
+    ref["available_range"] = None          # it described the media that was there
+
+
+def _dress(item, c, may_use=None):
     """Write a clip's colour and volume, where the edit states them, into *item*."""
     if "color" in c:
         color = str(c.get("color") or "")
@@ -483,6 +570,8 @@ def _dress(item, c):
                 else:
                     note.pop("fx", None)
     _set_time(item, c)
+    if "takes" in c:
+        _set_takes(item, c.get("takes"), may_use)
     if c.get("volume") is not None:
         volume = max(0.0, min(4.0, _num(c.get("volume"), "a clip's volume")))
         meta = item.setdefault("metadata", {})
@@ -560,7 +649,7 @@ def _build_tracks(doc, tracks, rate, may_use):
             length = _num(c.get("length"), f"{what}'s length", _MIN_CLIP)
             if c.get("name") is not None:
                 item["name"] = str(c["name"])[:200]
-            _dress(item, c)
+            _dress(item, c, may_use)
             placed.append([round(at * rate), round(start * rate), max(1, round(length * rate)), item])
         placed.sort(key=lambda p: p[0])
         children, cursor = [], 0
@@ -684,7 +773,7 @@ def rebuild(doc, edit, stamp="", may_use=None):
                              "transition_type": "SMPTE_Dissolve",
                              "in_offset": _rt(head, rate), "out_offset": _rt(before, rate)})
         item = copy.deepcopy(ref if isinstance(ref, dict) else source[ref])
-        _dress(item, given)
+        _dress(item, given, may_use)
         speed = clip_time(item)["speed"]
         item["source_range"] = _range(start + head * speed, length - head - tail, rate)
         if name is not None:
@@ -802,3 +891,100 @@ def save(path, edit, stamp="", may_use=None, create=None):
         json.dump(new, fh, indent=2)
     os.replace(tmp, path)
     return editable(new)
+
+
+def _every_clip(doc):
+    """Every clip of every track of *doc*, with a media reference of its own."""
+    for _i, track in _tracks(doc):
+        for child in track.get("children") or []:
+            if isinstance(child, dict) and str(child.get("OTIO_SCHEMA") or "").startswith("Clip") \
+                    and isinstance(child.get("media_reference"), dict):
+                yield child
+
+
+def add_take(doc, from_file, file, version=0, note="", created="", retime=False, duration=None):
+    """*doc* with a new take of every clip whose media is *from_file*; returns
+    ``(new document, how many clips took it)``.
+
+    The new take becomes the clip's media and its active take; the clip keeps its
+    in point, place, effects and speed. A clip with no takes yet first gets its
+    old file as the take "original". *duration* (seconds, the new file's length)
+    lets a source that is shorter than the clip used shorten the clip - or, with
+    *retime*, slow it down to fill its length; without it nothing is clamped
+    here, and the panel does it when it takes the take in. A clip that already
+    has this file as a take just makes it the active one.
+    """
+    import copy
+    new = copy.deepcopy(doc)
+    want = norm_path(from_file)
+    file = str(file or "").strip()
+    if not want or not file:
+        return new, 0
+    applied = 0
+    for item in _every_clip(new):
+        if norm_path(_file(item["media_reference"])) != want:
+            continue
+        meta = item.setdefault("metadata", {})
+        if not isinstance(meta, dict):
+            continue
+        bep = meta.setdefault("bepic", {})
+        if not isinstance(bep, dict):
+            continue
+        takes = [dict(t, active=False) for t in clean_takes(bep.get("takes"))]
+        if not takes:
+            takes = [{"file": _file(item["media_reference"]), "version": version_of(_file(item["media_reference"])),
+                      "created": "", "note": "original", "active": False}]
+        mine = next((t for t in takes if norm_path(t["file"]) == norm_path(file)), None)
+        if mine is None:
+            top = max([t["version"] for t in takes] + [0])
+            number = version if isinstance(version, int) and not isinstance(version, bool) and version > 0 else 0
+            if not number or any(t["version"] == number for t in takes):
+                number = top + 1
+            mine = {"file": file, "version": number, "created": str(created or "")[:40],
+                    "note": str(note or "")[:200], "active": False}
+            takes = (takes + [mine])[-MAX_TAKES:]
+        for t in takes:
+            t["active"] = t is mine
+        mine.pop("len", None)
+        item["media_reference"]["target_url"] = _url(os.path.abspath(file))
+        item["media_reference"]["available_range"] = None
+        was = _fit_source(item, duration, retime)
+        if was:
+            mine["len"] = was
+        bep["takes"] = takes
+        applied += 1
+    return new, applied
+
+
+def _fit_source(item, duration, retime):
+    """A clip whose media just changed, made to fit it (see :func:`add_take`);
+    returns the length it had when it was shortened, else 0."""
+    try:
+        known = float(duration or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    rng = item.get("source_range")
+    if not known > 0 or not isinstance(rng, dict):
+        return 0.0
+    start, length = _span(rng)
+    rate = float(((rng.get("duration") or {}).get("rate")) or 24.0)
+    info = clip_time(item)
+    speed = info["speed"]
+    used = info["span"] if info["loop"] else length * speed
+    if start + used <= known + 1e-3:
+        return 0.0
+    if known - start < _MIN_CLIP * speed:
+        start = max(0.0, known - _MIN_CLIP * speed)
+    usable = known - start
+    if info["loop"]:
+        _set_time(item, {"loop": info["loop"], "span": min(info["span"], usable)})
+        item["source_range"] = _range(start, length, rate)
+        return 0.0
+    if retime:
+        fit = max(MIN_SPEED, min(MAX_SPEED, usable / length))
+        _set_time(item, {"speed": fit})
+        item["source_range"] = _range(start, min(length, usable / fit), rate)
+        return 0.0
+    shorter = max(_MIN_CLIP, usable / speed)
+    item["source_range"] = _range(start, shorter, rate)
+    return round(length, 4) if shorter < length - 1e-4 else 0.0

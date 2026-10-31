@@ -11,6 +11,8 @@
 //   /bepic/timeline_upload  the dropped file "kept" as D:/in/edits/<name>
 //   /bepic/resolve_media    a canvas node's file, as D:/in/<its widget's value>
 //   /bepic/timeline_render  answered at once; the request kept in window.__rendered
+//   POST /bepic/timeline    a save: the cut sent comes back as the file now reads, as D:/out/cut.otio (a clip with
+//                           takes names its active take's file); the request kept in window.__saves
 // Every request is counted in window.__requests; window.__delay holds each answer back that many ms.
 window.__requests = [];
 window.__media = {};
@@ -103,6 +105,25 @@ window.__fetchApi = async (path, opts = {}) => {
       const f = window.__rendered.frames;
       return json({ path: "D:/out/cut_v001.mp4", name: "cut_v001.mp4", relative: "cut_v001.mp4", version: 1, fps: 24,
                     frames: f ? f[1] - f[0] + 1 : 0, texts_left_out: 0 });
+    }
+    case "/bepic/timeline": {
+      if (!opts.body) return { ok: false, status: 404, json: async () => ({}), text: async () => "no timeline", headers: new Headers() };
+      const body = JSON.parse(opts.body);
+      (window.__saves ||= []).push(body);
+      const disk = (window.__disk ||= { clips: [], tracks: {} });
+      const fileOf = (c, was) => (c.takes && c.takes.length ? (c.takes.find((t) => t.active) || c.takes[c.takes.length - 1]).file : (c.file || was || "D:/out/unknown.mp4"));
+      const clips = body.edit.clips.map((c, i) => {
+        const file = fileOf(c, Number.isInteger(c.ref) ? disk.clips[c.ref] : "");
+        return { ...c, ref: i, file, transition: c.transition || 0 };
+      });
+      const tracks = (body.edit.tracks || []).map((k) => ({ ...k, clips: k.clips.map((c, i) => {
+        const was = Array.isArray(c.ref) ? (disk.tracks[k.id] || [])[c.ref[1]] : "";
+        return { ...c, ref: [2, i], file: fileOf(c, was) };
+      }) }));
+      disk.clips = clips.map((c) => c.file);
+      disk.tracks = Object.fromEntries(tracks.map((k) => [k.id, k.clips.map((c) => c.file)]));
+      return json({ edit: { name: body.name || "cut", fps: 24, clips, texts: [], sound: [], tracks, off: body.edit.off }, file: "cut.otio",
+                    otio: "D:/out/cut.otio", target: { path: "D:/out/cut.otio", external: 1 }, duration: 0 });
     }
     case "/bepic/export_options": return json({ formats: { mp4: { codecs: ["h264"] }, mov: { codecs: ["prores"] } }, qualities: ["high"] });
     case "/bepic/export_target": return json({ path: "D:/out/cut_v001.mp4", relative: "cut_v001.mp4", version: 1 });

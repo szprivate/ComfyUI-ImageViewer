@@ -1,5 +1,6 @@
 import asyncio
 import io
+import json
 import os
 import re
 import base64
@@ -617,6 +618,111 @@ try:
             if isinstance(got, web.StreamResponse):
                 return got
             return web.json_response(got[1], headers={"ETag": got[2], "Cache-Control": "no-cache"})
+
+        async def _bepic_take(request):
+            """A shot made again: new takes of the clips of a cut that use some file.
+
+            ``{"otio": str, "takes": [{"from_file", "file", "version", "note"}], "retime": bool}``.
+            agentY's "recreate these shots with changes" posts here once a new version of a
+            shot is on disk. Every clip of the cut (``otio``) whose media is ``from_file`` gets
+            ``file`` as its next take (timeline_io.add_take) and the timeline is saved
+            (written beside it and moved over). Then ``bepic.edit.take`` goes to the pages,
+            so an Edit panel that has the cut open takes the take in as one undo step
+            (bEpicViewer_editTimeline.js: editTlTakeIn). Answers ``{"ok", "saved", "applied",
+            "pushed", "notes"}``; the timeline is fenced like the other timeline routes
+            (path_access.is_allowed) and every new file like any file the viewer hands back
+            (path_access.may_serve).
+            """
+            from . import timeline_io
+            try:
+                body = await request.json()
+            except Exception:
+                return web.json_response({"ok": False, "error": "the request is not JSON"}, status=400)
+            if not isinstance(body, dict):
+                return web.json_response({"ok": False, "error": "the request is not an object"}, status=400)
+            raw = body.get("takes")
+            if not isinstance(raw, list) or not raw or len(raw) > 50:
+                return web.json_response({"ok": False, "error": "'takes' is a list of 1 to 50 takes"}, status=400)
+            import datetime
+            stamp = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+            takes = []
+            for n, t in enumerate(raw, 1):
+                if not isinstance(t, dict):
+                    return web.json_response({"ok": False, "error": f"take {n} is not an object"}, status=400)
+                src, new = t.get("from_file"), t.get("file")
+                if not isinstance(src, str) or not src.strip() or len(src) > 2000 \
+                        or not isinstance(new, str) or not new.strip() or len(new) > 2000:
+                    return web.json_response({"ok": False, "error": f"take {n} needs 'from_file' and 'file' (paths)"},
+                                             status=400)
+                version, note = t.get("version", 0), t.get("note", "")
+                if isinstance(version, bool) or not isinstance(version, int) or version < 0 or version > 99999:
+                    version = 0
+                if not isinstance(note, str):
+                    note = ""
+                path = os.path.abspath(new.strip())
+                if not path_access.may_serve(path):
+                    return web.json_response({"ok": False, "error": path_access.serve_refusal(path)}, status=403)
+                if not os.path.isfile(path):
+                    return web.json_response({"ok": False, "error": f"{os.path.basename(path)} does not exist"},
+                                             status=400)
+                takes.append({"from_file": src.strip(), "file": path.replace("\\", "/"),
+                              "version": version or timeline_io.version_of(path), "note": note.strip()[:200],
+                              "created": stamp})
+            retime = body.get("retime") is True
+            otio_raw = body.get("otio")
+            if otio_raw is not None and not isinstance(otio_raw, str):
+                return web.json_response({"ok": False, "error": "'otio' is a path"}, status=400)
+            otio = os.path.abspath(otio_raw.strip()) if otio_raw and otio_raw.strip() else ""
+            if otio:
+                if not otio.lower().endswith(".otio"):
+                    return web.json_response({"ok": False, "error": "'otio' is not a timeline file (.otio)"}, status=400)
+                if not path_access.is_allowed(otio):
+                    return web.json_response({"ok": False, "error": path_access.refusal(otio)}, status=403)
+
+            def _apply():
+                """(saved, applied, notes): the takes put into the file, if there is one."""
+                notes = []
+                if not otio:
+                    return False, 0, ["no timeline file was named; the open Edit panels were told"]
+                if not os.path.isfile(otio):
+                    return False, 0, [f"{os.path.basename(otio)} does not exist; the open Edit panels were told"]
+                try:
+                    doc = timeline_io._load(otio)
+                    timeline_io.editable(doc)               # a timeline, and one this can read
+                except (OSError, ValueError) as exc:
+                    return False, 0, [f"{os.path.basename(otio)} could not be read ({exc}); the open Edit panels were told"]
+                total = 0
+                for t in takes:
+                    duration = None
+                    try:
+                        from . import timeline_media
+                        duration = float(timeline_media.probe(t["file"]).get("duration") or 0) or None
+                    except Exception as exc:  # noqa: BLE001 - PyAV missing or a file it cannot read: the panel clamps
+                        notes.append(f"{os.path.basename(t['file'])}: its length is not known here ({exc})")
+                    doc, n = timeline_io.add_take(doc, t["from_file"], t["file"], t["version"], t["note"],
+                                                  t["created"], retime, duration)
+                    total += n
+                    if not n:
+                        notes.append(f"no clip of {os.path.basename(otio)} uses {os.path.basename(t['from_file'])}")
+                if not total:
+                    return False, 0, notes
+                tmp = otio + ".tmp"
+                with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+                    json.dump(doc, fh, indent=2)
+                os.replace(tmp, otio)
+                return True, total, notes
+            try:
+                saved, applied, notes = await asyncio.get_running_loop().run_in_executor(None, _apply)
+            except OSError as exc:
+                return web.json_response({"ok": False, "error": f"not saved: {exc}"}, status=500)
+            pushed = False
+            try:
+                PromptServer.instance.send_sync("bepic.edit.take", {"otio": otio, "takes": takes, "saved": saved,
+                                                                     "retime": retime})
+                pushed = True
+            except Exception as exc:  # noqa: BLE001 - no page may be listening; the file is saved all the same
+                notes.append(f"the pages could not be told ({exc})")
+            return web.json_response({"ok": True, "saved": saved, "applied": applied, "pushed": pushed, "notes": notes})
 
         async def _bepic_timeline_probe(request):
             """How long files are and what they hold: ``{"info": {path: {...} | {"error"}}}``.
@@ -2544,6 +2650,8 @@ try:
         _safe_add("GET", "/api/bepic/timeline", _bepic_timeline)
         _safe_add("POST", "/bepic/timeline", _bepic_timeline_save)
         _safe_add("POST", "/api/bepic/timeline", _bepic_timeline_save)
+        _safe_add("POST", "/bepic/take", _bepic_take)
+        _safe_add("POST", "/api/bepic/take", _bepic_take)
         _safe_add("POST", "/bepic/timeline_render", _bepic_timeline_render)
         _safe_add("POST", "/bepic/timeline_solid", _bepic_timeline_solid)
         _safe_add("GET", "/bepic/timeline_peaks", _bepic_timeline_peaks)

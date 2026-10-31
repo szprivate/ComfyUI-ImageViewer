@@ -594,7 +594,8 @@ export function removeText(cut, i) {
 /** Has anything the panel can change been changed? */
 export function sameCut(a, b) {
     const dress = (c) => [String(c.color || ""), round(num(c.volume, 1)), JSON.stringify(Object.entries(cleanFx(c.fx)).sort()),
-                         round(speedOf(c)), loopOf(c), loopOf(c) ? round(num(c.span)) : 0];
+                         round(speedOf(c)), loopOf(c), loopOf(c) ? round(num(c.span)) : 0,
+                         takesOf(c).length ? JSON.stringify([c.file, takesOf(c).map((t) => [t.version, !!t.active, t.file])]) : ""];
     const key = (cut) => JSON.stringify({
         clips: ((cut && cut.clips) || []).map((c) => [Number.isInteger(c.ref) ? c.ref : c.file, c.name, round(num(c.in)), round(num(c.length)), round(num(c.transition)), ...dress(c)]),
         texts: ((cut && cut.texts) || []).map((t) => [Number.isInteger(t.ref) ? t.ref : "new", t.text, round(num(t.start)), round(num(t.length)), JSON.stringify(textLook(t))]),
@@ -619,6 +620,7 @@ export function toSave(cut) {
             ...(Number.isInteger(c.ref) ? { ref: c.ref } : { file: c.file }),
             name: c.name, in: c.in, length: c.length, transition: c.transition,
             color: c.color || "", volume: num(c.volume, 1), fx: cleanFx(c.fx), ...timeOf(c),
+            ...(takesOf(c).length ? { takes: cleanTakes(c.takes) } : {}),
         })),
         // A text with no `ref` was written here.
         texts: cut.texts.map((t) => ({ ...(Number.isInteger(t.ref) ? { ref: t.ref } : {}),
@@ -628,7 +630,7 @@ export function toSave(cut) {
             clips: (k.clips || []).map((c) => ({
                 ...(Array.isArray(c.ref) ? { ref: c.ref } : { file: c.file }),
                 name: c.name, at: c.at, in: c.in, length: c.length, color: c.color || "", volume: num(c.volume, 1),
-                fx: cleanFx(c.fx), ...timeOf(c),
+                fx: cleanFx(c.fx), ...timeOf(c), ...(takesOf(c).length ? { takes: cleanTakes(c.takes) } : {}),
             })),
         })),
         off: { V1: !!(cut.off && cut.off.V1), A1: !!(cut.off && cut.off.A1), T: !!(cut.off && cut.off.T) },
@@ -1539,4 +1541,227 @@ export function shotsIn(cut, from, to) {
     const starts = clipStarts(cut);
     return ((cut && cut.clips) || []).map((c, i) => i)
         .filter((i) => starts[i] < num(to) - 1e-6 && starts[i] + num(cut.clips[i].length) > num(from) + 1e-6);
+}
+
+// ── several clips selected ───────────────────────────────────────────────────
+//
+// The panel's selection is ONE item (`{ kind: "clip", i }` / `{ kind: "tclip",
+// track, i }`); several clips are a list of those, the last one clicked being the
+// single selection every other part of the panel reads. These are the arithmetic
+// of the list. A list is held to a cut by its signature: an edit that adds,
+// takes out or reorders clips changes it, and the list is then let go.
+
+/** The id of a selected clip: "V1:3" on the cut itself, "<track id>:<i>" on a higher track. */
+export function selId(sel) {
+    if (!sel) return "";
+    return (sel.kind === "clip" ? "V1" : String(sel.track)) + ":" + sel.i;
+}
+
+/** Do two selections name the same clip? */
+export function sameSel(a, b) {
+    return !!a && !!b && selId(a) === selId(b) && (a.kind === "clip") === (b.kind === "clip");
+}
+
+const isClipSel = (s) => !!s && (s.kind === "clip" || s.kind === "tclip");
+
+/** `list` with `sel` toggled: put in at the end, or taken out. */
+export function toggleSel(list, sel) {
+    const have = (list || []).filter(isClipSel);
+    if (!isClipSel(sel)) return have;
+    return have.some((s) => sameSel(s, sel)) ? have.filter((s) => !sameSel(s, sel)) : [...have, sel];
+}
+
+/** The clips from `anchor` to `sel` on one track, both included - or just `sel` where they are on different tracks. */
+export function rangeSel(cut, anchor, sel) {
+    if (!isClipSel(sel)) return [];
+    if (!isClipSel(anchor) || (anchor.kind === "clip") !== (sel.kind === "clip") || (sel.kind === "tclip" && anchor.track !== sel.track)) return [sel];
+    const from = Math.min(anchor.i, sel.i), to = Math.max(anchor.i, sel.i);
+    const out = [];
+    for (let i = from; i <= to; i++) out.push(sel.kind === "clip" ? { kind: "clip", i } : { kind: "tclip", track: sel.track, i });
+    return out;
+}
+
+/** Only the selections that still name a clip of the cut, in the cut's order (V1, then the tracks bottom to top). */
+export function pruneSel(cut, list) {
+    const rank = (s) => (s.kind === "clip" ? -1 : ((cut && cut.tracks) || []).findIndex((k) => k.id === s.track));
+    const seen = new Set();
+    return (list || []).filter((s) => isClipSel(s) && clipOf(cut, s) && !seen.has(selId(s)) && seen.add(selId(s)))
+        .sort((a, b) => rank(a) - rank(b) || a.i - b.i);
+}
+
+/** What ties a list to the cut it was made on: which clips there are, in which order (by `ref`; a new clip by its place). */
+export function selSignature(cut) {
+    const id = (c) => (c.ref !== undefined && c.ref !== null ? JSON.stringify(c.ref) : "f");
+    return JSON.stringify([(cut.clips || []).map(id), ((cut && cut.tracks) || []).map((k) => [k.id, (k.clips || []).map(id)])]);
+}
+
+export const SELECTED_CAP = 50;
+
+/** The selected clips as agentY reads them: [{ name, file, in, out (seconds of the source), track, id }]. */
+export function selectedClips(cut, list) {
+    return pruneSel(cut, list).slice(0, SELECTED_CAP).map((s) => {
+        const c = clipOf(cut, s);
+        const from = round(num(c.in));
+        return { name: String(c.name || ""), file: String(c.file || ""), in: from, out: round(from + srcUse(c)),
+                 track: s.kind === "clip" ? "V1" : s.track, id: selId(s) };
+    });
+}
+
+// ── takes ────────────────────────────────────────────────────────────────────
+//
+// A clip may carry `takes: [{ file, version, created, note, active }]` - the
+// same shot made again with changes. Exactly one is active, and the clip's own
+// `file` is that take's file. The first time a clip gets a take, the file it
+// had becomes the take "original". An active take that made the clip shorter
+// (its source is shorter than the clip used) remembers the length the clip had
+// as `len`, which "Retime to fit" fills instead.
+
+export const MAX_TAKES = 50;
+
+/** A path as two spellings of it compare: slashes forward, and - for a drive or share path - no case. */
+export function normFile(file) {
+    const s = String(file || "").replace(/\\/g, "/");
+    return /^([a-z]:\/|\/\/)/i.test(s) ? s.toLowerCase() : s;
+}
+
+/** The version a file's name says ("shot_03_v002.mp4" -> 2); 1 where it says none. */
+export function versionOf(file) {
+    const name = String(file || "").split(/[\\/]/).pop().replace(/\.[^.]*$/, "");
+    const all = [...name.matchAll(/(?:^|[^a-z0-9])v(\d{1,5})(?![0-9])/gi)];
+    return all.length ? Math.max(1, parseInt(all[all.length - 1][1], 10)) : 1;
+}
+
+function durationFor(durations, file) {
+    if (!durations) return 0;
+    if (num(durations[file]) > 0) return num(durations[file]);
+    const want = normFile(file);
+    for (const [k, v] of Object.entries(durations)) if (normFile(k) === want && num(v) > 0) return num(v);
+    return 0;
+}
+
+/** A clip's takes, as a list (empty for a clip with none). */
+export function takesOf(c) { return Array.isArray(c && c.takes) ? c.takes : []; }
+
+/** The active take of a clip, or null. */
+export function activeTake(c) { return takesOf(c).find((t) => t && t.active) || null; }
+
+/**
+ * `c` (a copy) made to fit its file, which has just changed: a source that ends
+ * before the clip does shortens the clip - or, with `retime`, slows it down so
+ * what there is fills the length. Returns the length the clip had when it was
+ * shortened (0 when it was not).
+ */
+function fitSource(c, durations, retime) {
+    if (isStillImage(c.file)) return 0;
+    const known = durationFor(durations, c.file);
+    if (!(known > 0)) return 0;
+    const sp = speedOf(c);
+    if (num(c.in) + srcUse(c) <= known + 1e-3) return 0;
+    const was = num(c.length);
+    if (known - num(c.in) < MIN_CLIP * sp) c.in = round(Math.max(0, known - MIN_CLIP * sp));
+    const usable = known - num(c.in);
+    if (loopOf(c)) { c.span = round(Math.min(num(c.span), usable)); return 0; }
+    if (retime) {
+        const speed = Math.max(MIN_SPEED, Math.min(MAX_SPEED, usable / was));
+        c.speed = speed;
+        c.length = round(Math.min(was, usable / speed));
+    } else {
+        c.length = round(Math.max(MIN_CLIP, usable / sp));
+    }
+    return c.length < was - 1e-4 ? round(was) : 0;
+}
+
+function everyClip(cut, fn) {
+    cut.clips.forEach((c, i) => fn(c, { kind: "clip", i }));
+    for (const k of cut.tracks || []) k.clips.forEach((c, i) => fn(c, { kind: "tclip", track: k.id, i }));
+}
+
+// Make `take` (one of c.takes, c a copy) the clip's active one.
+function takeFile(c, take, durations, retime) {
+    c.takes = c.takes.map((t) => ({ ...t, active: t === take }));
+    const active = c.takes.find((t) => t.active);
+    delete active.len;
+    c.file = active.file;
+    const len = fitSource(c, durations, retime);
+    if (len) active.len = len;
+}
+
+/**
+ * A new take of every clip whose file is `fromFile` (V1 and the tracks): it
+ * becomes the clip's file and its active take, and the clip keeps its in point,
+ * its place, its effects, its speed, its colour - everything but the file. A
+ * source shorter than the clip used shortens the clip (`retime`: slows it down
+ * to fill the length). `take`: { file, version, created, note }. A cut with no
+ * such clip comes back unchanged.
+ */
+export function addTake(cut, fromFile, take, opts = {}) {
+    const next = copy(cut);
+    const want = normFile(fromFile);
+    if (!take || !take.file || !want) return next;
+    everyClip(next, (c) => {
+        if (normFile(c.file) !== want) return;
+        let list = takesOf(c).length ? takesOf(c).map((t) => ({ ...t, active: false }))
+            : [{ file: c.file, version: versionOf(c.file), created: "", note: "original", active: false }];
+        let mine = list.find((t) => normFile(t.file) === normFile(take.file));
+        if (!mine) {
+            if (list.length >= MAX_TAKES) list = list.slice(list.length - MAX_TAKES + 1);
+            const top = Math.max(0, ...list.map((t) => num(t.version)));
+            let version = Math.round(num(take.version, 0));
+            if (!(version > 0) || list.some((t) => num(t.version) === version)) version = top + 1;
+            mine = { file: String(take.file), version, created: String(take.created || ""), note: String(take.note || "").slice(0, 200), active: false };
+            list.push(mine);
+        }
+        c.takes = list;
+        takeFile(c, mine, opts.durations, !!opts.retime);
+    });
+    return settle(next);
+}
+
+/** The clip `sel` shows its take `version` (the same fit as addTake). Not a clip with that take: unchanged. */
+export function switchTake(cut, sel, version, opts = {}) {
+    const next = copy(cut);
+    const c = clipRef(next, sel);
+    const take = c && takesOf(c).find((t) => num(t.version) === num(version));
+    if (!take || take.active) return next;
+    c.takes = takesOf(c).map((t) => ({ ...t }));
+    takeFile(c, c.takes.find((t) => num(t.version) === num(version)), opts.durations, !!opts.retime);
+    return settle(next);
+}
+
+/** "Retime to fit": the active take slowed down to fill the length the clip had before it made it shorter. */
+export function retimeToFit(cut, sel, durations) {
+    const next = copy(cut);
+    const c = clipRef(next, sel);
+    const act = c && activeTake(c);
+    if (!act || !(num(act.len) > 0)) return next;
+    const known = durationFor(durations, c.file);
+    const usable = known > 0 ? Math.max(MIN_CLIP, known - num(c.in)) : srcUse(c);
+    const len = num(act.len);
+    const speed = Math.max(MIN_SPEED, Math.min(MAX_SPEED, usable / len));
+    c.takes = c.takes.map((t) => { const o = { ...t }; if (o.active) delete o.len; return o; });
+    c.speed = speed;
+    c.length = round(Math.min(len, usable / speed));
+    return settle(next);
+}
+
+/** Takes as they are written into a file: only what is a take, at most MAX_TAKES, one active. */
+export function cleanTakes(list) {
+    if (!Array.isArray(list)) return [];
+    const out = list.filter((t) => t && typeof t === "object" && typeof t.file === "string" && t.file).slice(0, MAX_TAKES).map((t) => {
+        const o = { file: t.file, version: Math.round(num(t.version, 1)), created: String(t.created || ""),
+                    note: String(t.note || "").slice(0, 200), active: !!t.active };
+        if (num(t.len) > 0) o.len = round(num(t.len));
+        return o;
+    });
+    let seen = false;
+    for (const t of out) { if (t.active && seen) t.active = false; if (t.active) seen = true; }
+    if (out.length && !seen) out[out.length - 1].active = true;
+    return out;
+}
+
+/** Does any clip of the cut (V1 or a track) play `file`? (compared by meaning: slashes, case on a drive path) */
+export function usesFile(cut, file) {
+    const want = normFile(file);
+    if (!want || !cut) return false;
+    return [...(cut.clips || []), ...(cut.tracks || []).flatMap((k) => k.clips || [])].some((c) => normFile(c.file) === want);
 }

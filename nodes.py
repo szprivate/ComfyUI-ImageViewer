@@ -32,6 +32,11 @@ try:
 except Exception:
     previz = None
 
+try:
+    from . import provenance_write
+except Exception:
+    provenance_write = None
+
 
 _ANY = IO.ANY if IO is not None else "IMAGE"
 
@@ -465,6 +470,27 @@ def _stamp_prompt_id(frames):
             fr["prompt_id"] = pid
 
 
+def _write_provenance(frames, saved, unique_id, prompt, extra_pnginfo):
+    """Keep the graph that made this send's files beside them (provenance_write.py), so a
+    shot can be made again with a change. The files are the node's outputs (what history
+    records, in its order) and then the other files the viewer shows (a video's poster,
+    the PNG proxy of an EXR). Best effort: it never fails the node."""
+    if provenance_write is None:
+        return
+    try:
+        frames = [f for f in frames or [] if isinstance(f, dict)]
+        outputs = [f.get("path") for f in frames if f.get("kind") == "video"]
+        if not outputs:
+            outputs = [s.get("path") if isinstance(s, dict) else s for s in saved or []]
+        if not outputs:
+            outputs = [f.get("path") for f in frames]
+        pid = next((f.get("prompt_id") for f in frames if f.get("prompt_id")), "")
+        provenance_write.annotate([p for p in outputs + [f.get("path") for f in frames] if p],
+                                  unique_id, prompt, extra_pnginfo, pid or "")
+    except Exception as e:  # noqa: BLE001
+        print(f"[bEpicSendToViewer] provenance not written: {e}")
+
+
 class bEpicSendToViewer:
     def __init__(self):
         self.output_dir = folder_paths.get_temp_directory()
@@ -595,6 +621,7 @@ class bEpicSendToViewer:
 
         _name_frames(tab_frames, group, label)
         _stamp_prompt_id(tab_frames)
+        _write_provenance(tab_frames, saved, unique_id, prompt, extra_pnginfo)
         tabs = {"tab": tab_frames}
 
         PromptServer.instance.send_sync("bepic.viewer.update", {

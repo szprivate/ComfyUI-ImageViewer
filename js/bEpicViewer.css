@@ -1258,6 +1258,10 @@ textarea.param-input {
 .edit-shot.on { background: #3d5f80; }
 .edit-shot.new { border-style: dashed; }
 .edit-shot.sel, .edit-text.sel { border-color: #00e5ff; box-shadow: inset 0 0 0 1px #00e5ff; color: #fff; }
+/* Several clips selected (Ctrl / Shift + click): outlined, the one the panel works on keeps the bright border. */
+.edit-shot.msel { border-color: #00e5ff; box-shadow: inset 0 0 0 1px #00e5ff, 0 0 0 1px rgba(0,229,255,.55); color: #fff; }
+.edit-shot.msel:not(.sel) { border-style: dashed; }
+.edit-shot.tinted.msel { border-color: #fff !important; box-shadow: inset 0 0 0 1px #fff, 0 0 0 1px rgba(255,255,255,.55); }
 /* A dissolve, on the join it sits on: lighter in the middle, where both shots show. */
 /* A dissolve: a bar over the join it sits on, as long as the dissolve is; its
    edges are handles. */
@@ -1624,6 +1628,10 @@ textarea.param-input {
 .edit-badge-time { position: absolute; right: 3px; top: 2px; z-index: 2; pointer-events: auto; font-size: 9px; line-height: 12px;
                    padding: 0 3px; border-radius: 2px; background: rgba(0,0,0,.7); color: #ffcf9a; white-space: nowrap; }
 .edit-shot.looped .edit-badge-time { color: #9ef0ff; }
+/* A clip with takes: the version showing, top left. */
+.edit-badge-take { position: absolute; left: 3px; top: 2px; z-index: 2; pointer-events: auto; font-size: 9px; line-height: 12px;
+                   padding: 0 3px; border-radius: 2px; background: rgba(0,0,0,.7); color: #b8f0b0; white-space: nowrap; }
+.edit-recreate .edit-brief { min-height: 64px; }
 /* In and out on the ruler: the band, a handle at each end, a line down the tracks. */
 .edit-mark { position: absolute; top: 0; bottom: -1px; width: 9px; z-index: 4; cursor: ew-resize; display: none; }
 .edit-mark.in { margin-left: 0; border-left: 2px solid #ffd84d; }
