@@ -192,6 +192,43 @@ class HistorySwitchPerfTests(unittest.TestCase):
                              " return t && t.complete && t.naturalWidth > 0; }", timeout=60000)
         self.assertEqual(self.errors, [])
 
+    def test_a_filter_change_and_back_does_not_flash_loaded_thumbnails_black(self):
+        # The tag filter rebuilds the strip. Tiles that were loaded before must be painted from the cache in the
+        # same tick they are made: complete, with a size, and no new request for them.
+        pg = self.page()
+        pg.evaluate("""() => { const P = window.__panel; window.agentYViewerBridge = { tags: async () => [] };
+            const key = P.activeTab;
+            P.history[key].forEach((sn) => { sn[0].filename = sn[0].path.split('/').pop(); });
+            P._agentTags = { 'D:/out/render_0002.png': 'mine' }; }""")
+        pg.wait_for_function("() => [...window.__panel.historyStrip.querySelectorAll('.history-thumb img')]"
+                             ".filter((i) => i.complete && i.naturalWidth > 0).length >= 6", timeout=60000)
+        pg.wait_for_timeout(300)
+        loaded = pg.evaluate("""() => [...window.__panel.historyStrip.querySelectorAll('.history-thumb')]
+            .filter((t) => { const i = t.querySelector('img'); return i.complete && i.naturalWidth > 0; })
+            .map((t) => Number(t.dataset.idx))""")
+        self.assertGreaterEqual(len(loaded), 6)
+        before = len(self.thumb_requests)
+        got = pg.evaluate("""async (loaded) => {
+            const P = window.__panel;
+            await P.refreshAgentTags();
+            P.setHistoryTagFilter('agent:mine');
+            const inTag = P.historyStrip.querySelectorAll('.history-thumb').length;
+            P.setHistoryTagFilter('');
+            const bad = [];   // read in the very tick of the switch, before any frame
+            for (const idx of loaded) {
+                const t = P.historyStrip.querySelector(`.history-thumb[data-idx="${idx}"] img`);
+                if (!t || !t.complete || !t.naturalWidth) bad.push(idx);
+            }
+            return { inTag, bad, all: P.historyStrip.querySelectorAll('.history-thumb').length };
+        }""", loaded)
+        self.assertEqual(got["inTag"], 1)
+        self.assertEqual(got["all"], ITEMS)
+        self.assertEqual(got["bad"], [], "thumbnails loaded before were empty right after the filter switch")
+        pg.wait_for_timeout(300)
+        again = [u for u in self.thumb_requests[before:] if any(f"render_{i:04d}" in u for i in loaded)]
+        self.assertEqual(again, [], "loaded thumbnails were requested again")
+        self.assertEqual(self.errors, [])
+
     def test_a_real_change_still_rebuilds(self):
         pg = self.page()
         pg.evaluate(SWITCH, 3)
