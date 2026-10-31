@@ -387,6 +387,8 @@ export const PlaybackMixin = {
                 const widthPct = totalFrames === 0 ? 0 : ((max - min) / totalFrames) * 100;
                 rangeEl.style.left  = `${leftPct}%`;
                 rangeEl.style.width = `${widthPct}%`;
+                // The Edit panel's ruler shows the same range (EditTrimMixin).
+                this.editTlRangeChanged?.();
             };
 
             const onUp = () => {
@@ -398,6 +400,7 @@ export const PlaybackMixin = {
                     rangeEl.style.display = 'none';
                 }
                 if (this.isInputRangeLocked) { this.applyTimelineBounds(); this.syncInputRange(); }
+                this.editTlRangeChanged?.();
             };
 
             win.addEventListener('mousemove', onMove);

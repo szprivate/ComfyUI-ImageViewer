@@ -249,7 +249,72 @@ def _look(item):
     except (TypeError, ValueError):
         volume = 1.0
     return {"color": str(_bepic(item).get("color") or ""), "volume": round(max(0.0, min(4.0, volume)), 4),
-            "fx": clean_fx(_bepic(item).get("fx"))}
+            "fx": clean_fx(_bepic(item).get("fx")), **clip_time(item)}
+
+
+# A clip's speed (retime, "trim to fill": its source in and out kept, its length
+# on the timeline the source it uses divided by the speed) and its loop (past
+# one turn of ``span`` seconds of source the source again - "loop" - or back
+# and forth - "pingpong"). Both in ``metadata.bepic``; the speed also as OTIO's
+# own LinearTimeWarp, which other programs read. ``source_range`` stays what it
+# is for every clip - its start in the source, its duration on the timeline -
+# so a reader that knows neither plays the plain clip from its in point.
+MIN_SPEED, MAX_SPEED = 0.1, 10.0
+_WARP = "LinearTimeWarp"
+
+
+def clip_time(item):
+    """``{"speed", "loop", "span"}`` of a clip: 1 / "" / 0 for a plain one."""
+    note = _bepic(item)
+    speed = note.get("speed")
+    if speed is None:
+        for fx in item.get("effects") or [] if isinstance(item, dict) else []:
+            if isinstance(fx, dict) and str(fx.get("OTIO_SCHEMA") or "").startswith(_WARP):
+                speed = fx.get("time_scalar")
+                break
+    try:
+        speed = float(speed if speed is not None else 1.0)
+    except (TypeError, ValueError):
+        speed = 1.0
+    if not speed > 0:
+        speed = 1.0
+    speed = round(max(MIN_SPEED, min(MAX_SPEED, speed)), 4)
+    loop = str(note.get("loop") or "")
+    try:
+        span = float(note.get("span") or 0)
+    except (TypeError, ValueError):
+        span = 0.0
+    if loop not in ("loop", "pingpong") or not span > 0:
+        loop, span = "", 0.0
+    return {"speed": speed, "loop": loop, "span": round(span, 4)}
+
+
+def _set_time(item, c):
+    """Write a clip's speed and loop, where the edit states them, into *item*."""
+    meta = item.setdefault("metadata", {})
+    note = meta.setdefault("bepic", {}) if isinstance(meta, dict) else None
+    if not isinstance(note, dict):
+        return
+    if "speed" in c:
+        speed = _num(c.get("speed") or 1.0, "a clip's speed", MIN_SPEED)
+        speed = round(min(MAX_SPEED, speed), 4)
+        effects = [fx for fx in (item.get("effects") or [])
+                   if not (isinstance(fx, dict) and str(fx.get("OTIO_SCHEMA") or "").startswith(_WARP))]
+        if abs(speed - 1.0) > 1e-4:
+            note["speed"] = speed
+            effects.append({"OTIO_SCHEMA": "LinearTimeWarp.1", "name": "", "effect_name": _WARP,
+                            "metadata": {}, "time_scalar": speed})
+        else:
+            note.pop("speed", None)
+        item["effects"] = effects
+    if "loop" in c:
+        loop = str(c.get("loop") or "")
+        span = _num(c.get("span") or 0, "a clip's loop") if loop else 0.0
+        if loop in ("loop", "pingpong") and span > 0:
+            note["loop"], note["span"] = loop, round(span, 4)
+        else:
+            note.pop("loop", None)
+            note.pop("span", None)
 
 
 # How a text is drawn where its timeline does not say: centred, in the lower
@@ -357,7 +422,7 @@ def editable(doc):
                 "transition": 0.0, **_look(child)}
         if pending:
             before, after = pending
-            clip["in"] = max(0.0, start - before)
+            clip["in"] = max(0.0, start - before * clip["speed"])
             clip["length"] = length + before
             clip["transition"] = round(before + after, 4)
             pending = None
@@ -417,6 +482,7 @@ def _dress(item, c):
                     note["fx"] = fx
                 else:
                     note.pop("fx", None)
+    _set_time(item, c)
     if c.get("volume") is not None:
         volume = max(0.0, min(4.0, _num(c.get("volume"), "a clip's volume")))
         meta = item.setdefault("metadata", {})
@@ -618,10 +684,11 @@ def rebuild(doc, edit, stamp="", may_use=None):
                              "transition_type": "SMPTE_Dissolve",
                              "in_offset": _rt(head, rate), "out_offset": _rt(before, rate)})
         item = copy.deepcopy(ref if isinstance(ref, dict) else source[ref])
-        item["source_range"] = _range(start + head, length - head - tail, rate)
+        _dress(item, given)
+        speed = clip_time(item)["speed"]
+        item["source_range"] = _range(start + head * speed, length - head - tail, rate)
         if name is not None:
             item["name"] = name[:200]
-        _dress(item, given)
         children.append(item)
     video["children"] = children
     audio = _track_of(new, "audio")

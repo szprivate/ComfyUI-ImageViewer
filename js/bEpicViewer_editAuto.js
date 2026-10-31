@@ -164,7 +164,15 @@ export const EditAutoMixin = {
         const scopeRow = el("div", "edit-dialog-row");
         const v1 = this._editTlSel && this._editTlSel.kind === "clip" ? this._editTlSel.i : -1;
         if (v1 < 0 && st.scope === "sel") st.scope = "all";
-        const scope = select("scope", [["all", `All ${cut.clips.length} shots on V1`], ...(v1 >= 0 ? [["sel", `The selected shot (${v1 + 1})`]] : [])]);
+        // With an in and out set, what lies between them is what is worked on (unless asked otherwise).
+        const span = this._editTlRangeSpan ? this._editTlRangeSpan() : null;
+        const inRange = span ? D.shotsIn(cut, span[0], span[1]) : [];
+        if (!span && st.scope === "range") st.scope = "all";
+        if (span && !st.scopeChosen) st.scope = "range";
+        const scope = select("scope", [["all", `All ${cut.clips.length} shots on V1`],
+            ...(span ? [["range", `The ${inRange.length} shot${inRange.length === 1 ? "" : "s"} in the in\u2013out range`]] : []),
+            ...(v1 >= 0 ? [["sel", `The selected shot (${v1 + 1})`]] : [])]);
+        scope.addEventListener("change", () => { st.scopeChosen = true; });
         scopeRow.append(field("Apply to", scope));
         const go = el("button", "edit-btn primary", st.mode === "detect" ? "Detect" : "Apply");
         go.dataset.go = "1";
@@ -172,7 +180,8 @@ export const EditAutoMixin = {
         go.addEventListener("click", async () => {
             go.disabled = true;
             said.textContent = "…";
-            try { said.textContent = await this._editTlAutoRun(st, st.scope === "sel" && v1 >= 0 ? [v1] : null, sounds); }
+            const indices = st.scope === "sel" && v1 >= 0 ? [v1] : (st.scope === "range" && span ? inRange : null);
+            try { said.textContent = await this._editTlAutoRun(st, indices, sounds, st.scope === "range" ? span : null); }
             catch (err) { said.textContent = "Not done: " + (err && err.message || err); }
             go.disabled = false;
             if (said.dataset.undo) {
@@ -224,7 +233,7 @@ export const EditAutoMixin = {
     },
 
     // Run a mode: what it says back is the dialog's answer line.
-    async _editTlAutoRun(st, indices, sounds) {
+    async _editTlAutoRun(st, indices, sounds, span) {
         const before = this._editTlCut;
         const opts = { indices, durations: await this._editTlDurations(before) };
         let after = null;
@@ -250,7 +259,7 @@ export const EditAutoMixin = {
             after = D.bestPart(before, { ...opts, head: st.head / 100, tail: st.tail / 100 });
         } else if (st.mode === "detect") {
             const sels = (indices || before.clips.map((_, i) => i)).map((i) => ({ kind: "clip", i }));
-            return this.editTlDetectCuts(sels);
+            return this.editTlDetectCuts(sels, span);
         }
         if (!after) return "";
         const said = D.describeChanges(before, after);
@@ -296,7 +305,7 @@ export const EditAutoMixin = {
     // ── scene cut detection ──────────────────────────────────────────────────
 
     /** Look for the cuts in the films of these clips; they are shown as marks to split at. */
-    async editTlDetectCuts(sels) {
+    async editTlDetectCuts(sels, span) {
         const cut = this._editTlCut;
         const films = (sels || []).filter((s) => { const c = D.clipOf(cut, s); return c && FILM_RE.test(c.file || ""); });
         if (!films.length) { this._editTlSay("no film to look for cuts in"); return "no film to look for cuts in"; }
@@ -312,7 +321,7 @@ export const EditAutoMixin = {
         }
         if (this._editTlCut !== cut) return "the cut was changed meanwhile - nothing shown";
         const sens = this._editTlMarks ? this._editTlMarks.sens : 0.5;
-        this._editTlMarks = { tab: this._editTlTab, cut, sens, items };
+        this._editTlMarks = { tab: this._editTlTab, cut, sens, items, span: span || null };
         this._editTlNote = failed ? `${failed} film(s) could not be read` : "";
         const ui = this._editTlUi;
         if (ui && ui.dialog) { ui.dialog.remove(); ui.dialog = null; }
@@ -332,6 +341,7 @@ export const EditAutoMixin = {
             if (!clip) continue;
             const start = item.sel.kind === "clip" ? D.clipStarts(cut)[item.sel.i] : Number(clip.at) || 0;
             for (const mk of D.cutMarks(item.cuts, clip, start, m.sens, fps)) {
+                if (m.span && !(mk.t > m.span[0] + 1e-6 && mk.t < m.span[1] - 1e-6)) continue;     // outside the in..out
                 out.push({ item, sel: item.sel, ...mk, off: item.off.has(mk.src) });
             }
         }

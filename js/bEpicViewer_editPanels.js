@@ -18,7 +18,8 @@
 //   a clip        Video   Transform (zoom, position, rotation angle, anchor
 //                         point, flip) · Cropping · Composite (opacity)
 //                 Audio   Volume
-//                 Timing  in, length, the dissolve in / where it starts, order
+//                 Timing  start, source in / out (a slip), length, speed (retime), loop,
+//                         the dissolve in, order
 //                 File    name, colour, source
 //   a text        Title   its words and its look;  Timing
 //   a dissolve    Transition  its duration
@@ -245,15 +246,43 @@ export const EditPanelsMixin = {
                 }, (v) => apply(D.setClipProps(cut, sel, { volume: v / 100 })), "percent"), () => apply(D.setClipProps(cut, sel, { volume: 1 })));
                 into = null;
             } else if (tab === "timing") {
+                // Where it is and which part of its source it plays. "Start" and
+                // "Source in" keep the length: a move and a slip. Speed keeps the
+                // source (retime); a loop plays it again past its out point.
                 section("Timing");
-                if (placed) {
-                    row("Starts at", seconds(c.at, (v) => apply(D.moveTrackClip(cut, sel.track, sel.i, v))));
-                    row("In", seconds(c.in, (v) => apply(D.trimTrackClipStart(cut, sel.track, sel.i, v - c.in))));
-                    row("Length", seconds(c.length, (v) => apply(D.trimTrackClipEnd(cut, sel.track, sel.i, v))));
-                } else {
+                const dur = this._editTlDur ? this._editTlDur() : {};
+                const tc = (t) => D.timecode(t, fps);
+                const startAt = placed ? Number(c.at) || 0 : D.clipStarts(cut)[sel.i];
+                if (placed) row("Start", seconds(c.at, (v) => apply(D.moveTrackClip(cut, sel.track, sel.i, v))));
+                else row("Start", said(tc(startAt) + "  (by its place in the order)"));
+                row("Source in", seconds(c.in, (v) => apply(D.slipClip(cut, sel, v - (Number(c.in) || 0), dur)), still));
+                row("Source out", said(still ? "a still: no source length" : tc(Number(c.in) + D.srcUse(c))));
+                row("Length", seconds(c.length, (v) => apply(placed ? D.trimTrackClipEnd(cut, sel.track, sel.i, v, dur)
+                                                                    : D.trimEnd(cut, sel.i, v, dur))));
+                const sp = D.speedOf(c);
+                const speed = numField(sp * 100, 1, (v) => apply(D.setSpeed(cut, sel, v / 100)),
+                                       { step: 1, min: D.MIN_SPEED * 100, max: D.MAX_SPEED * 100, disabled: still,
+                                         title: "percent of its own speed: its source in and out stay, its length follows (Alt+drag an edge; Shift+R: 100 %)" });
+                speed.dataset.field = "speed";
+                row("Speed %", speed, sp === 1 ? null : () => apply(D.setSpeed(cut, sel, 1)));
+                const fill = seconds(c.length, (v) => apply(D.retimeClip(cut, sel, v)), still);
+                fill.title = "a length to fill by retiming: the source stays, the speed follows";
+                fill.dataset.field = "fill";
+                row("Retime to", fill);
+                const loop = quiet(el("select", "insp-select"));
+                for (const [v, label] of [["", "Off"], ["loop", "Loop"], ["pingpong", "Ping-pong"]]) {
+                    const o = el("option", "", label);
+                    o.value = v;
+                    loop.append(o);
+                }
+                loop.value = D.loopOf(c);
+                loop.disabled = still;
+                loop.title = "Past its source, play it again (Ctrl+drag its out-edge, Ctrl+L: one more turn)";
+                loop.addEventListener("change", () => apply(D.setLoop(cut, sel, loop.value)));
+                row("Loop", [loop, said(D.loopOf(c) ? `${Math.round(Number(c.length) * sp / Number(c.span) * 100) / 100} turns of ${D.lengthLabel(c.span)}`
+                                                  : (still ? "a still: just make it longer" : ""))]);
+                if (!placed) {
                     const i = sel.i, n = cut.clips.length;
-                    row("In", seconds(c.in, (v) => apply(D.setClipIn(cut, i, v))));
-                    row("Length", seconds(c.length, (v) => apply(D.trimEnd(cut, i, v))));
                     row("Dissolve in", seconds(c.transition || 0, (v) => apply(D.setTransition(cut, i, v)), i === 0), i === 0 ? null : () => apply(D.setTransition(cut, i, 0)));
                     row("Order", [button("\u25c0 Earlier", "Earlier in the order", () => this._editTlMove(i, i - 1), i === 0),
                                   button("Later \u25b6", "Later in the order", () => this._editTlMove(i, i + 1), i === n - 1)]);

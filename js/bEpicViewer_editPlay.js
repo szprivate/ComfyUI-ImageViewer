@@ -187,6 +187,9 @@ export const EditPlayMixin = {
     /** The tab `key` came up (switchTab). Safe to call again for the tab that is up. */
     editPlayEnter(key) {
         if (this.editTlUse) this.editTlUse(key);
+        // The cut's in and out come back with it: switching tabs clears the transport's range.
+        const kept = this._editTlView && this._editTlView.range;
+        if (kept && !this.isInputRangeLocked) this.playbackRange = { start: kept.start, end: kept.end };
         const fresh = !this._editPlayOn;
         if (fresh) {
             if (this._exitModelMode) this._exitModelMode();
@@ -357,6 +360,10 @@ export const EditPlayMixin = {
         }
 
         ep.still = false;
+        // A ping-pong's way back, or a speed the browser will not play at: shown
+        // frame by frame on the wall clock, the film sought to each (stepped).
+        const rate = this._editPlayRate(at);
+        ep.stepped = !!at.rev || rate < 0.0625 || rate > 16;
         const mine = this.videoBase === slots[1] ? slots[1] : slots[0];
         const other = mine === slots[0] ? slots[1] : slots[0];
         let v;
@@ -372,14 +379,35 @@ export const EditPlayMixin = {
         v._epClip = clip;
         this._editPlayFront(v, v === mine ? other : mine);
         this._editPlayMix(at);
-        if (this.isPlaying) {
-            this._applyVideoPlaybackRate();
+        if (this.isPlaying && !ep.stepped) {
+            this._editPlaySpeed(v, at);
             const p = v.play();
             if (p && p.catch) p.catch(() => {});
+        } else if (ep.stepped) {
+            try { v.pause(); } catch (_) {}
         }
         this._editPlaySounds(at.t, this.isPlaying);
         if (!under) this._editPlayReady(cut, at, v === mine ? other : mine);
         this._editPlayMirror();
+    },
+
+    /** The rate a film plays at for the moment `at`: the fps field's, times the clip's speed. */
+    _editPlayRate(at) {
+        const fps = this.editPlayFps();
+        return ((this.fps || fps) / fps) * (at && at.speed > 0 ? at.speed : 1);
+    },
+
+    // A retimed clip plays at its speed like tape: the sound is pitched with it
+    // (as the render makes it, timeline_render.clip_sound), and silent beyond
+    // 0.25x .. 4x, where the render leaves it out too.
+    _editPlaySpeed(v, at) {
+        const rate = Math.max(0.0625, Math.min(16, this._editPlayRate(at)));
+        const speed = at && at.speed > 0 ? at.speed : 1;
+        try {
+            v.playbackRate = rate;
+            if ("preservesPitch" in v) v.preservesPitch = speed === 1;
+            v.muted = speed < 0.25 || speed > 4;
+        } catch (_) {}
     },
 
     // The clip going out of a dissolve, kept running beneath the one coming in
@@ -404,7 +432,7 @@ export const EditPlayMixin = {
                 el.style.display = "block";
                 try {
                     if (this.isPlaying) {
-                        el.playbackRate = Math.max(0.0625, Math.min(16, (this.fps || this.editPlayFps()) / this.editPlayFps()));
+                        el.playbackRate = Math.max(0.0625, Math.min(16, (this.fps || this.editPlayFps()) / this.editPlayFps() * D.speedOf(u.clip)));
                         const p = el.play();
                         if (p && p.catch) p.catch(() => {});
                     } else {
@@ -601,10 +629,17 @@ export const EditPlayMixin = {
             try {
                 const inside = t >= item.at - 1e-3 && t < item.at + item.length - 1e-3;
                 if (!playing || !inside) { a.pause(); return; }
-                const want = item.in + (t - item.at);
-                if (a.paused || Math.abs((a.currentTime || 0) - want) > 0.15) a.currentTime = want;
+                const clip = item.clip;
+                const u = t - item.at;
+                // A retimed or looped sound clip: its source moment, at its speed; a ping-pong's way back is silent.
+                if (clip && D.clipSegment(clip, u).rev) { a.pause(); return; }
+                const want = clip ? D.srcLocal(clip, u) : item.in + u;
+                const speed = clip ? D.speedOf(clip) : 1;
+                if (a.paused || Math.abs((a.currentTime || 0) - want) > 0.15 * Math.max(1, speed)) a.currentTime = want;
                 a.volume = Math.max(0, Math.min(1, item.volume));
-                a.playbackRate = rate;
+                a.playbackRate = Math.max(0.0625, Math.min(16, rate * speed));
+                if ("preservesPitch" in a) a.preservesPitch = speed === 1;
+                a.muted = speed < 0.25 || speed > 4;
                 if (a.paused) { const p = a.play(); if (p && p.catch) p.catch(() => {}); }
             } catch (_) {}
         });
@@ -662,15 +697,27 @@ export const EditPlayMixin = {
         const fps = this.editPlayFps();
         const at = ep.at;
         let t;
-        if (ep.still) {
+        if (ep.still || ep.stepped) {
             const now = this._editPlayNow();
             ep.t += Math.max(0, now - ep.wall) / 1000 * ((this.fps || fps) / fps);
             ep.wall = now;
             t = ep.t;
+            if (ep.stepped && !ep.still && this.videoBase && at.clip) {
+                // Frame by frame: the film sought to the source moment of each new frame.
+                const f = Math.floor(t * fps + 1e-6);
+                if (f !== ep.stepFrame) {
+                    ep.stepFrame = f;
+                    const local = D.srcLocal(at.clip, (f + 0.5) / fps - at.origin);
+                    try { this.videoBase.currentTime = local; } catch (_) {}
+                }
+            }
         } else {
             const v = this.videoBase;
             // The film's clock is the clip's own: sound and picture cannot part.
-            t = v.ended ? at.end : at.origin + Math.max(0, (v.currentTime || 0) - ep.in);
+            // A retimed clip's runs at its speed; a loop's turn began at segAt.
+            const seg = at.segAt != null ? at.segAt : at.origin;
+            const base = at.base != null ? at.base : ep.in;
+            t = v.ended ? at.end : seg + Math.max(0, (v.currentTime || 0) - base) / (at.speed > 0 ? at.speed : 1);
         }
         const { min, max } = this._editPlayRange();
         const endT = (max + 1) / fps;

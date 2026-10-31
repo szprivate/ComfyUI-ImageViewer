@@ -214,6 +214,7 @@ function settle(cut) {
         c.in = round(Math.max(0, num(c.in)));
         c.length = round(Math.max(MIN_CLIP, num(c.length)));
         c.transition = i ? Math.max(0, num(c.transition)) : 0;
+        tidyTime(c);
     });
     cut.clips.forEach((c, i) => {
         if (!i || !c.transition) return;
@@ -229,31 +230,79 @@ function settle(cut) {
             c.at = round(Math.max(0, num(c.at)));
             c.in = round(Math.max(0, num(c.in)));
             c.length = round(Math.max(MIN_CLIP, num(c.length)));
+            tidyTime(c);
         }
     }
     return cut;
 }
 
+// A clip's speed and loop, held to what they may be: a speed of 1, a still's
+// speed or loop, and a loop no longer than one turn are no speed and no loop.
+function tidyTime(c) {
+    const sp = num(c.speed, 1);
+    if (!(sp > 0) || Math.abs(sp - 1) < 1e-4 || isStillImage(c.file)) delete c.speed;
+    else c.speed = round(Math.max(MIN_SPEED, Math.min(MAX_SPEED, sp)));
+    const looped = (c.loop === "loop" || c.loop === "pingpong") && num(c.span) > 0 && !isStillImage(c.file);
+    if (looped && num(c.length) * speedOf(c) > num(c.span) + 1e-4) c.span = round(num(c.span));
+    else { delete c.loop; delete c.span; }
+}
+
 // ── edits ────────────────────────────────────────────────────────────────────
 
-/** A clip ends earlier or later; what follows moves with it. */
-export function trimEnd(cut, i, length) {
+/**
+ * A clip ends earlier or later; what follows moves with it. With `durations`
+ * ({ file: seconds }) a film ends no later than its file does; a still has no
+ * end, and neither has a clip that loops.
+ */
+export function trimEnd(cut, i, length, durations) {
     const next = copy(cut);
-    if (!next.clips[i]) return next;
-    next.clips[i].length = num(length, next.clips[i].length);
+    const c = next.clips[i];
+    if (!c) return next;
+    c.length = Math.min(num(length, c.length), num(c.length) + outRoom(c, durations));
     return settle(next);
 }
 
-/** A clip starts later (or earlier) in its source: its end stays where it was in the source. */
+/**
+ * A clip starts later (or earlier): its end stays where it was in the source.
+ * `delta` is in seconds of the film. Not before the start of the source - but a
+ * still has no start, so it grows as far as it is pulled.
+ */
 export function trimStart(cut, i, delta) {
     const next = copy(cut);
     const c = next.clips[i];
     if (!c) return next;
-    // Not past the start of the source, and not past the clip's own end.
-    const d = Math.max(-num(c.in), Math.min(num(delta), num(c.length) - MIN_CLIP));
-    c.in = num(c.in) + d;
-    c.length = num(c.length) - d;
+    headTrim(c, Math.max(-inRoom(c), Math.min(num(delta), headSpare(c))));
     return settle(next);
+}
+
+// How far (seconds of the film) a clip's end may go later: to the end of its
+// source when that is known; without end for a still or a loop.
+export function outRoom(c, durations) {
+    if (!c || isStillImage(c.file) || loopOf(c)) return Infinity;
+    const room = srcRoom(c, durations);
+    return Number.isFinite(room) ? Math.max(0, room / speedOf(c) - num(c.length)) : Infinity;
+}
+
+// How far (seconds of the film) a clip's start may go earlier: to its source's start.
+export function inRoom(c) {
+    if (!c || isStillImage(c.file)) return Infinity;
+    return num(c.in) / speedOf(c);
+}
+
+// How far a clip's start may go later: the clip keeps MIN_CLIP (and a loop one turn of it).
+function headSpare(c) {
+    const len = num(c.length) - MIN_CLIP;
+    return loopOf(c) ? Math.min(len, num(c.span) / speedOf(c) - MIN_CLIP) : len;
+}
+
+// The start of a clip moved by `d` seconds of the film: the source moves with
+// it (at its speed); a loop's turn loses what its head lost.
+function headTrim(c, d) {
+    if (!isStillImage(c.file)) {
+        c.in = num(c.in) + d * speedOf(c);
+        if (loopOf(c)) c.span = num(c.span) - d * speedOf(c);
+    }
+    c.length = num(c.length) - d;
 }
 
 /** A clip goes to another place in the order. Its dissolve stays with the join it lands on. */
@@ -340,10 +389,10 @@ export function moveTrackClip(cut, id, i, at) {
     return settle(next);
 }
 
-export function trimTrackClipEnd(cut, id, i, length) {
+export function trimTrackClipEnd(cut, id, i, length, durations) {
     const next = copy(cut);
     const c = (trackOf(next, id) || { clips: [] }).clips[i];
-    if (c) c.length = num(length, c.length);
+    if (c) c.length = Math.min(num(length, c.length), num(c.length) + outRoom(c, durations));
     return settle(next);
 }
 
@@ -352,10 +401,9 @@ export function trimTrackClipStart(cut, id, i, delta) {
     const next = copy(cut);
     const c = (trackOf(next, id) || { clips: [] }).clips[i];
     if (!c) return next;
-    const d = Math.max(-Math.min(num(c.in), num(c.at)), Math.min(num(delta), num(c.length) - MIN_CLIP));
-    c.in = num(c.in) + d;
+    const d = Math.max(-Math.min(inRoom(c), num(c.at)), Math.min(num(delta), headSpare(c)));
+    headTrim(c, d);
     c.at = num(c.at) + d;
-    c.length = num(c.length) - d;
     return settle(next);
 }
 
@@ -436,7 +484,11 @@ export function transferClip(cut, sel, to, at) {
     if (sel.kind === "clip" && cut.clips.length <= 1) return null;
     let next = sel.kind === "clip" ? removeClip(cut, sel.i) : removeTrackClip(cut, sel.track, sel.i);
     const keep = { file: c.file, name: c.name, in: c.in, length: c.length, color: c.color || "" };
-    const carry = (clip) => { clip.volume = num(c.volume, 1); clip.fx = cleanFx(c.fx); };
+    const carry = (clip) => {
+        clip.volume = num(c.volume, 1); clip.fx = cleanFx(c.fx);
+        if (c.speed) clip.speed = c.speed;
+        if (loopOf(c)) { clip.loop = c.loop; clip.span = c.span; }
+    };
     if (to === "V1") {
         const index = next.clips.length ? dropIndex(next, num(at)) : 0;
         next = insertClip(next, keep, index);
@@ -498,9 +550,10 @@ export function renameClip(cut, i, name) {
     return next;
 }
 
-export function setClipIn(cut, i, seconds) {
+/** The source in point of a shot set, its length kept: a slip (slipClip). */
+export function setClipIn(cut, i, seconds, durations) {
     const c = cut.clips[i];
-    return c ? trimStart(cut, i, num(seconds, c.in) - num(c.in)) : copy(cut);
+    return c ? slipClip(cut, { kind: "clip", i }, num(seconds, c.in) - num(c.in), durations) : copy(cut);
 }
 
 export function moveText(cut, i, start) {
@@ -540,7 +593,8 @@ export function removeText(cut, i) {
 
 /** Has anything the panel can change been changed? */
 export function sameCut(a, b) {
-    const dress = (c) => [String(c.color || ""), round(num(c.volume, 1)), JSON.stringify(Object.entries(cleanFx(c.fx)).sort())];
+    const dress = (c) => [String(c.color || ""), round(num(c.volume, 1)), JSON.stringify(Object.entries(cleanFx(c.fx)).sort()),
+                         round(speedOf(c)), loopOf(c), loopOf(c) ? round(num(c.span)) : 0];
     const key = (cut) => JSON.stringify({
         clips: ((cut && cut.clips) || []).map((c) => [Number.isInteger(c.ref) ? c.ref : c.file, c.name, round(num(c.in)), round(num(c.length)), round(num(c.transition)), ...dress(c)]),
         texts: ((cut && cut.texts) || []).map((t) => [Number.isInteger(t.ref) ? t.ref : "new", t.text, round(num(t.start)), round(num(t.length)), JSON.stringify(textLook(t))]),
@@ -551,6 +605,12 @@ export function sameCut(a, b) {
     return key(a) === key(b);
 }
 
+// A clip's speed and loop as they are saved: always stated, so that a speed or
+// a loop taken off is taken off in the file too.
+function timeOf(c) {
+    return { speed: round(speedOf(c)), loop: loopOf(c), span: loopOf(c) ? round(num(c.span)) : 0 };
+}
+
 /** What is sent back to be saved: the cut, and nothing the server did not send. */
 export function toSave(cut) {
     return {
@@ -558,7 +618,7 @@ export function toSave(cut) {
         clips: cut.clips.map((c) => ({
             ...(Number.isInteger(c.ref) ? { ref: c.ref } : { file: c.file }),
             name: c.name, in: c.in, length: c.length, transition: c.transition,
-            color: c.color || "", volume: num(c.volume, 1), fx: cleanFx(c.fx),
+            color: c.color || "", volume: num(c.volume, 1), fx: cleanFx(c.fx), ...timeOf(c),
         })),
         // A text with no `ref` was written here.
         texts: cut.texts.map((t) => ({ ...(Number.isInteger(t.ref) ? { ref: t.ref } : {}),
@@ -568,7 +628,7 @@ export function toSave(cut) {
             clips: (k.clips || []).map((c) => ({
                 ...(Array.isArray(c.ref) ? { ref: c.ref } : { file: c.file }),
                 name: c.name, at: c.at, in: c.in, length: c.length, color: c.color || "", volume: num(c.volume, 1),
-                fx: cleanFx(c.fx),
+                fx: cleanFx(c.fx), ...timeOf(c),
             })),
         })),
         off: { V1: !!(cut.off && cut.off.V1), A1: !!(cut.off && cut.off.A1), T: !!(cut.off && cut.off.T) },
@@ -733,7 +793,7 @@ export function pictureAt(cut, seconds, live) {
             if (mixLen > 0 && t < at.start + mixLen - 1e-6) {
                 const before = cut.clips[at.i - 1];
                 const began = clipStarts(cut)[at.i - 1];
-                main.under = { clip: before, key: `V1:${at.i - 1}`, origin: began, local: round(num(before.in) + Math.max(0, t - began)) };
+                main.under = { clip: before, key: `V1:${at.i - 1}`, origin: began, local: srcLocal(before, t - began) };
                 main.mix = Math.max(0, Math.min(1, (t - at.start) / mixLen));
                 main.mixStart = at.start;
                 main.mixLen = mixLen;
@@ -747,14 +807,24 @@ export function pictureAt(cut, seconds, live) {
     if (found && found !== main && clipFx(found.clip) && stack[1]) {
         // It does not cover the frame: what is beneath it shows.
         const b = stack[1];
-        found.under = { clip: b.clip, key: b.key, origin: b.origin, local: round(num(b.clip.in) + Math.max(0, t - b.origin)) };
+        found.under = { clip: b.clip, key: b.key, origin: b.origin, local: srcLocal(b.clip, t - b.origin) };
         found.over = true;
         next = Math.min(next, b.end);
     }
     if (!found) found = { clip: null, key: "", sel: null, origin: t, end: total };
     found.t = t;
     found.end = Math.max(t + 1e-4, Math.min(found.end, next));
-    found.local = found.clip ? round(num(found.clip.in) + Math.max(0, t - found.origin)) : 0;
+    found.local = found.clip ? srcLocal(found.clip, t - found.origin) : 0;
+    // The stretch the player runs without a jump: to the end of a loop's turn,
+    // at the clip's speed (`segAt` the moment it began, `base` its source then).
+    const seg = found.clip ? clipSegment(found.clip, t - found.origin) : null;
+    if (seg) {
+        found.segAt = found.origin + seg.u0;
+        found.base = seg.base;
+        found.rev = seg.rev;
+        found.speed = seg.speed;
+        found.end = Math.max(t + 1e-4, Math.min(found.end, found.origin + seg.u1));
+    }
     return found;
 }
 
@@ -769,7 +839,7 @@ export function soundItems(cut, live) {
     if (on("A1")) for (const s of (cut && cut.sound) || []) if (s && s.file) out.push({ file: s.file, at: 0, in: 0, length: total, volume: 1 });
     for (const k of (cut && cut.tracks) || []) {
         if (k.kind !== "audio" || !on(k.id)) continue;
-        for (const c of k.clips || []) if (c.file) out.push({ file: c.file, at: num(c.at), in: num(c.in), length: num(c.length), volume: num(c.volume, 1) });
+        for (const c of k.clips || []) if (c.file) out.push({ file: c.file, at: num(c.at), in: num(c.in), length: num(c.length), volume: num(c.volume, 1), clip: c });
     }
     return out;
 }
@@ -798,6 +868,7 @@ export function splitClip(cut, sel, seconds) {
     if (sel.kind === "clip") {
         const i = sel.i;
         const start = clipStarts(cut)[i];
+        if (loopOf(c)) return null;                  // a loop is not cut: take its loop off first
         const local = round(t - start);
         const own = num(c.transition);
         const following = next.clips[i + 1] ? num(next.clips[i + 1].transition) : 0;
@@ -805,7 +876,7 @@ export function splitClip(cut, sel, seconds) {
         const high = num(c.length) - (following > 0 ? following + MIX_MARGIN : MIN_CLIP);
         if (local < low - 1e-6 || local > high + 1e-6) return null;
         const a = next.clips[i];
-        const b = { ...a, in: round(num(a.in) + local), length: round(num(a.length) - local), transition: 0 };
+        const b = { ...a, in: round(num(a.in) + local * speedOf(a)), length: round(num(a.length) - local), transition: 0 };
         if (a.fx) b.fx = { ...a.fx };
         a.length = local;
         next.clips.splice(i + 1, 0, b);
@@ -814,9 +885,10 @@ export function splitClip(cut, sel, seconds) {
     if (sel.kind === "tclip") {
         const k = trackOf(next, sel.track);
         const a = k.clips[sel.i];
+        if (loopOf(a)) return null;
         const local = round(t - num(a.at));
         if (local < MIN_CLIP - 1e-6 || local > num(a.length) - MIN_CLIP + 1e-6) return null;
-        const b = { ...a, at: round(num(a.at) + local), in: round(num(a.in) + local), length: round(num(a.length) - local) };
+        const b = { ...a, at: round(num(a.at) + local), in: round(num(a.in) + local * speedOf(a)), length: round(num(a.length) - local) };
         if (a.fx) b.fx = { ...a.fx };
         a.length = local;
         k.clips.splice(sel.i + 1, 0, b);
@@ -1156,6 +1228,8 @@ export function agentLoses(cut) {
     if (((cut && cut.tracks) || []).some((k) => (k.clips || []).length)) out.push("the clips on tracks other than V1 and A1");
     const all = [...((cut && cut.clips) || []), ...((cut && cut.tracks) || []).flatMap((k) => k.clips || [])];
     if (all.some((c) => Object.keys(cleanFx(c.fx)).length)) out.push("transforms, crops and opacity (the Inspector's Video tab)");
+    if (all.some((c) => speedOf(c) !== 1)) out.push("speed changes (retimed clips come back at 100 %)");
+    if (all.some((c) => loopOf(c))) out.push("loops (a looped clip comes back played once)");
     const plain = JSON.stringify(textLook({}));
     if (((cut && cut.texts) || []).some((t) => JSON.stringify(textLook(t)) !== plain)) out.push("how the texts look (size, place, colour)");
     return out;
@@ -1171,13 +1245,13 @@ export function agentLoses(cut) {
  * where the clip begins in the film.
  */
 export function cutMarks(cuts, clip, start, sensitivity = 0.5, fps = 24) {
-    const from = num(clip && clip.in), len = num(clip && clip.length);
+    const from = num(clip && clip.in), len = srcUse(clip), sp = speedOf(clip);
     const edge = Math.max(MIN_CLIP, 1 / (num(fps) > 0 ? num(fps) : 24));
     const need = cutThreshold(sensitivity);
     return (cuts || [])
         .filter((c) => num(c.ratio) >= 2.5 && num(c.score) >= need)
         .filter((c) => num(c.t) > from + edge - 1e-6 && num(c.t) < from + len - edge + 1e-6)
-        .map((c) => ({ t: toFrame(num(start) + num(c.t) - from, fps), src: num(c.t), kind: c.kind || "cut", score: num(c.score) }));
+        .map((c) => ({ t: toFrame(num(start) + (num(c.t) - from) / sp, fps), src: num(c.t), kind: c.kind || "cut", score: num(c.score) }));
 }
 
 /** The scene score a cut must reach at `sensitivity` (0..1): 0 asks 0.4, 0.5 asks 0.1, 1 asks 0.025. */
@@ -1201,4 +1275,268 @@ export function splitAtMany(cut, sel, moments) {
         count += 1;
     }
     return { cut: next, count };
+}
+
+// ── time: speed and loops ────────────────────────────────────────────────────
+//
+// A clip may play at a SPEED other than its own (`speed`, 0.1 .. 10; "trim to
+// fill" / retime): its source in and out stay, and on the timeline it lasts the
+// source it uses divided by the speed. And it may LOOP (`loop`: "loop" or
+// "pingpong", `span`: the seconds of source one turn takes): past one turn the
+// source starts again from the in point - or, ping-pong, runs back to it. A
+// looped clip that is retimed loops the retimed clip: the speed applies to the
+// source first, then the turns. In the file both sit in the clip's
+// metadata.bepic (and the speed in an OTIO LinearTimeWarp as well); a reader
+// that knows neither plays the plain clip from its in point for its length.
+
+export const MIN_SPEED = 0.1;
+export const MAX_SPEED = 10;
+const STILL_IMAGE = /\.(png|jpe?g|webp|tiff?|gif|bmp|avif|exr)$/i;
+
+/** Is a clip's file a picture (no time of its own: no speed, no loop, no source length)? */
+export function isStillImage(file) { return STILL_IMAGE.test(String(file || "")); }
+
+/** A clip's speed: 1 where it has none. */
+export function speedOf(c) {
+    const s = num(c && c.speed, 1);
+    return s > 0 && !isStillImage(c && c.file) ? Math.max(MIN_SPEED, Math.min(MAX_SPEED, s)) : 1;
+}
+
+/** How a clip loops: "loop", "pingpong" - or "" for not at all. */
+export function loopOf(c) {
+    return c && (c.loop === "loop" || c.loop === "pingpong") && num(c.span) > 0 && !isStillImage(c.file) ? c.loop : "";
+}
+
+/** How many seconds of its source a clip uses: one turn of a loop, else its length at its speed. */
+export function srcUse(c) {
+    return loopOf(c) ? num(c.span) : num(c && c.length) * speedOf(c);
+}
+
+/** How much source there is from a clip's in point (Infinity for a still, or where its length is not known). */
+export function srcRoom(c, durations) {
+    if (!c || isStillImage(c.file)) return Infinity;
+    const known = num(durations && durations[c.file], 0);
+    return known > 0 ? Math.max(0, known - num(c.in)) : Infinity;
+}
+
+/** The moment of a clip's source shown `u` seconds into the clip. */
+export function srcLocal(c, u) {
+    const q = Math.max(0, num(u)) * speedOf(c);
+    const mode = loopOf(c), span = num(c && c.span);
+    if (!mode) return round(num(c && c.in) + q);
+    if (mode === "loop") return round(num(c.in) + (q % span));
+    const p = q % (2 * span);
+    return round(num(c.in) + (p < span ? p : 2 * span - p));
+}
+
+/**
+ * The stretch of a clip the player can run without a jump, around `u` seconds
+ * into it: { u0, u1, base, rev, speed } - from u0 to u1 the source runs from
+ * `base`, forwards (or backwards: `rev`, a ping-pong's way back) at `speed`.
+ */
+export function clipSegment(c, u) {
+    const speed = speedOf(c), mode = loopOf(c);
+    if (!mode) return { u0: 0, u1: Infinity, base: num(c && c.in), rev: false, speed };
+    const turn = num(c.span) / speed;
+    const k = Math.max(0, Math.floor(num(u) / turn + 1e-9));
+    const rev = mode === "pingpong" && k % 2 === 1;
+    return { u0: k * turn, u1: (k + 1) * turn, base: num(c.in) + (rev ? num(c.span) : 0), rev, speed };
+}
+
+/** Where a looped clip's turns meet, in seconds into the clip (none for a plain one). */
+export function loopSeams(c) {
+    if (!loopOf(c)) return [];
+    const turn = num(c.span) / speedOf(c), out = [];
+    for (let u = turn; u < num(c.length) - 1e-6 && out.length < 500; u += turn) out.push(round(u));
+    return out;
+}
+
+function clipRef(cut, sel) { return sel && (sel.kind === "clip" || sel.kind === "tclip") ? clipOf(cut, sel) : null; }
+
+/**
+ * Retime: the clip made `length` seconds long by its speed, its source in and
+ * out kept (a looped clip keeps its number of turns). A still simply takes
+ * the length. Held to MIN_SPEED .. MAX_SPEED. `fromStart`: the clip was pulled
+ * by its start, so on a track of placed clips its end stays where it is.
+ */
+export function retimeClip(cut, sel, length, fromStart) {
+    const next = copy(cut);
+    const c = clipRef(next, sel);
+    if (!c) return next;
+    const was = num(c.length), sp = speedOf(c);
+    let len = Math.max(MIN_CLIP, num(length, was));
+    if (!isStillImage(c.file)) {
+        const speed = Math.max(MIN_SPEED, Math.min(MAX_SPEED, sp * was / len));
+        len = was * sp / speed;
+        c.speed = speed;
+    }
+    if (fromStart && sel.kind === "tclip") c.at = Math.max(0, num(c.at) + was - len);
+    c.length = len;
+    return settle(next);
+}
+
+/** A clip's speed set (1 = its own), its source kept: its length follows. */
+export function setSpeed(cut, sel, speed) {
+    const c = clipRef(cut, sel);
+    if (!c || isStillImage(c.file)) return copy(cut);
+    const s = Math.max(MIN_SPEED, Math.min(MAX_SPEED, num(speed, 1)));
+    return retimeClip(cut, sel, num(c.length) * speedOf(c) / s);
+}
+
+/**
+ * Loop extend: the clip made `length` long by playing its source again (mode
+ * "loop") or back and forth ("pingpong"). A plain clip's turn is the source it
+ * uses now; a still just takes the length. Shorter than one turn, it is a
+ * plain clip again.
+ */
+export function loopExtend(cut, sel, length, mode, durations) {
+    const next = copy(cut);
+    const c = clipRef(next, sel);
+    if (!c) return next;
+    if (!isStillImage(c.file)) {
+        if (!loopOf(c)) c.span = Math.min(srcUse(c), srcRoom(c, durations));
+        c.loop = mode === "pingpong" ? "pingpong" : (mode === "loop" ? "loop" : (c.loop || "loop"));
+    }
+    c.length = Math.max(MIN_CLIP, num(length, c.length));
+    return settle(next);
+}
+
+/** One more turn of a clip's loop (a still: its length once more). */
+export function loopOnce(cut, sel, mode, durations) {
+    const c = clipRef(cut, sel);
+    if (!c) return copy(cut);
+    const turn = isStillImage(c.file) ? num(c.length)
+        : (loopOf(c) ? num(c.span) : Math.min(srcUse(c), srcRoom(c, durations))) / speedOf(c);
+    return loopExtend(cut, sel, num(c.length) + turn, mode, durations);
+}
+
+/** A clip's loop set ("loop" / "pingpong"), or taken off (""): then it is one turn long. */
+export function setLoop(cut, sel, mode) {
+    const c = clipRef(cut, sel);
+    if (!c) return copy(cut);
+    if (!mode) {
+        const next = copy(cut);
+        const d = clipRef(next, sel);
+        if (loopOf(d)) d.length = Math.min(num(d.length), num(d.span) / speedOf(d));
+        delete d.loop; delete d.span;
+        return settle(next);
+    }
+    if (loopOf(c)) { const next = copy(cut); clipRef(next, sel).loop = mode; return settle(next); }
+    return loopOnce(cut, sel, mode);
+}
+
+// ── trimming like an editor: roll, slip, slide ───────────────────────────────
+
+// How short a shot of the cut may become: MIN_CLIP, and long enough for the
+// dissolves at either end of it (settle would shorten them otherwise).
+function minShot(cut, i) {
+    const c = cut.clips[i], after = cut.clips[i + 1];
+    return Math.max(MIN_CLIP, i ? num(c.transition) + MIX_MARGIN : 0, after ? num(after.transition) + MIX_MARGIN : 0);
+}
+
+/**
+ * Roll: the cut between shot i-1 and shot i moves by `delta` seconds; the shot
+ * before ends later (or earlier), the one after begins later in its source by
+ * as much - so nothing else moves and the film keeps its length. Held where
+ * either shot would run out of source or become too short.
+ */
+export function rollEdit(cut, i, delta, durations) {
+    const a = cut.clips[i - 1], b = cut.clips[i];
+    if (!a || !b) return copy(cut);
+    const lo = Math.max(minShot(cut, i - 1) - num(a.length), -inRoom(b));
+    const hi = Math.min(outRoom(a, durations), num(b.length) - minShot(cut, i), headSpare(b));
+    const d = Math.max(Math.min(lo, 0), Math.min(Math.max(hi, 0), num(delta)));
+    const next = copy(cut);
+    next.clips[i - 1].length = num(a.length) + d;
+    headTrim(next.clips[i], d);
+    return settle(next);
+}
+
+/**
+ * Slip: the clip stays where it is and as long as it is; which part of its
+ * source plays moves by `delta` SECONDS OF SOURCE (in and out together). Held
+ * to the source: not before its start, not past its end (when known). A still
+ * has nothing to slip and comes back as it was.
+ */
+export function slipClip(cut, sel, delta, durations) {
+    const next = copy(cut);
+    const c = clipRef(next, sel);
+    if (!c || isStillImage(c.file)) return next;
+    const known = num(durations && durations[c.file], 0);
+    const top = known > 0 ? Math.max(0, known - srcUse(c)) : Infinity;
+    c.in = Math.max(0, Math.min(top, num(c.in) + num(delta)));
+    return settle(next);
+}
+
+/**
+ * Slide (V1): shot i keeps its source and its length and moves along the film
+ * by `delta`; the shot before it ends later (or earlier) and the one after
+ * begins later (or earlier) in its source by as much, so the film keeps its
+ * length. Needs a shot on each side; null where there is none.
+ */
+export function slideClip(cut, i, delta, durations) {
+    const a = cut.clips[i - 1], b = cut.clips[i + 1];
+    if (!a || !b || !cut.clips[i]) return null;
+    const lo = Math.max(minShot(cut, i - 1) - num(a.length), -inRoom(b));
+    const hi = Math.min(outRoom(a, durations), num(b.length) - minShot(cut, i + 1), headSpare(b));
+    const d = Math.max(Math.min(lo, 0), Math.min(Math.max(hi, 0), num(delta)));
+    const next = copy(cut);
+    next.clips[i - 1].length = num(a.length) + d;
+    headTrim(next.clips[i + 1], d);
+    return settle(next);
+}
+
+// ── the in and out of the range played ───────────────────────────────────────
+//
+// Frames, as the transport's own playbackRange: { start, end }, both shown.
+
+/** A timecode: HH:MM:SS:FF at `fps`. */
+export function timecode(seconds, fps = 24) {
+    const rate = Math.max(1, Math.round(num(fps, 24)));
+    const total = Math.max(0, Math.round(num(seconds) * num(fps, 24)));
+    const ff = total % rate, s = Math.floor(total / rate);
+    const two = (v) => String(v).padStart(2, "0");
+    return `${two(Math.floor(s / 3600))}:${two(Math.floor(s / 60) % 60)}:${two(s % 60)}:${two(ff)}`;
+}
+
+/** The range with its in (or out) at `frame`, the other end pushed along where they would cross. */
+export function setMark(range, which, frame, last) {
+    const top = Math.max(0, Math.round(num(last)));
+    const f = Math.max(0, Math.min(top, Math.round(num(frame))));
+    const r = range && Number.isFinite(range.start) && Number.isFinite(range.end) ? range : { start: 0, end: top };
+    return which === "in" ? { start: f, end: Math.max(f, Math.min(top, r.end)) }
+                          : { start: Math.min(f, Math.max(0, r.start)), end: f };
+}
+
+/** A frame snapped to the nearest of `frames` within `tolerance` frames. */
+export function snapFrame(frame, frames, tolerance) {
+    let best = Math.round(num(frame)), gap = num(tolerance);
+    for (const f of frames || []) {
+        const d = Math.abs(num(f) - num(frame));
+        if (d <= gap) { best = Math.round(num(f)); gap = d; }
+    }
+    return best;
+}
+
+/** "Mark clip" (X): the range of a clip - its first frame to its last. */
+export function clipRange(cut, sel, fps) {
+    const c = clipRef(cut, sel);
+    if (!c) return null;
+    const rate = num(fps) > 0 ? num(fps) : 24;
+    const start = sel.kind === "clip" ? clipStarts(cut)[sel.i] : num(c.at);
+    const a = Math.round(start * rate), b = Math.round((start + num(c.length)) * rate) - 1;
+    return { start: a, end: Math.max(a, b) };
+}
+
+/** The range in seconds of the film: [from, to). */
+export function rangeSeconds(range, fps) {
+    const rate = num(fps) > 0 ? num(fps) : 24;
+    return range ? [num(range.start) / rate, (num(range.end) + 1) / rate] : null;
+}
+
+/** The shots of the cut (V1) that lie in [from, to), at least partly. */
+export function shotsIn(cut, from, to) {
+    const starts = clipStarts(cut);
+    return ((cut && cut.clips) || []).map((c, i) => i)
+        .filter((i) => starts[i] < num(to) - 1e-6 && starts[i] + num(cut.clips[i].length) > num(from) + 1e-6);
 }

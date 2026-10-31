@@ -94,8 +94,15 @@ def _clip_pictures(path, start, count, w, h, fps):
     source at another frame rate is neither sped up nor slowed down. A source
     that ends early holds its last picture.
     """
+    return _pictures_at(path, [start + (k + 0.5) / fps for k in range(count)], w, h)
+
+
+def _pictures_at(path, times, w, h):
+    """The pictures of *path* at the source moments *times* (seconds, rising),
+    each the source frame on screen at that moment, fitted into ``w x h``."""
     import av
     import numpy as np
+    count = len(times)
     if is_still(path):
         from PIL import Image
         with Image.open(path) as im:
@@ -105,14 +112,17 @@ def _clip_pictures(path, start, count, w, h, fps):
         for _ in range(count):
             yield still
         return
+    if not count:
+        return
     with av.open(path) as src:
         if not src.streams.video:
             raise RenderError(f"{os.path.basename(path)} has no picture")
         stream = src.streams.video[0]
         dw, dh, _l, _t = fit(stream.width, stream.height, w, h)
-        if start > 0.5:
+        first = times[0]
+        if first > 0.5:
             try:
-                src.seek(int((start - 0.5) * 1_000_000))
+                src.seek(int((first - 0.5) * 1_000_000))
             except Exception:  # noqa: BLE001 - a file that will not seek is read from its start
                 pass
         made = 0
@@ -127,7 +137,7 @@ def _clip_pictures(path, start, count, w, h, fps):
                 continue
             # Every film frame whose moment lies before this source frame still
             # shows the one before it.
-            while made < count and start + (made + 0.5) / fps < frame.time:
+            while made < count and times[made] + 1e-6 < frame.time:
                 if shown is None:
                     shown = ready(waiting if waiting is not None else frame)
                 yield shown
@@ -142,6 +152,48 @@ def _clip_pictures(path, start, count, w, h, fps):
         while made < count:
             yield shown
             made += 1
+
+
+def source_moment(clip, u):
+    """The moment of *clip*'s source shown *u* seconds into it: at its speed,
+    and through its loop (``loop``: from the in point again, ``pingpong``: back
+    and forth) - the Edit tab's ``srcLocal``."""
+    speed = float(clip.get("speed") or 1.0)
+    q = max(0.0, u) * (speed if speed > 0 else 1.0)
+    start = float(clip["in"])
+    span = float(clip.get("span") or 0)
+    loop = clip.get("loop") if span > 0 else ""
+    if loop == "loop":
+        q = q % span
+    elif loop == "pingpong":
+        p = q % (2 * span)
+        q = p if p < span else 2 * span - p
+    return start + q
+
+
+def clip_frames(clip, done, count, w, h, fps):
+    """Frames *done* .. *done* + *count* of *clip*: each the source frame at its
+    moment (:func:`source_moment` - so a retimed clip repeats or skips source
+    frames, nearest frame, and a loop runs the source again). Read in runs that
+    go forwards through the file; a ping-pong's way back is read forwards and
+    handed out reversed."""
+    times = [source_moment(clip, (done + k + 0.5) / fps) for k in range(count)]
+    plain = float(clip.get("speed") or 1.0) == 1.0 and not clip.get("loop")
+    if plain:
+        yield from _pictures_at(clip["file"], times, w, h)
+        return
+    k = 0
+    while k < count:
+        j = k + 1
+        rising = j < count and times[j] >= times[k]
+        while j < count and (times[j] >= times[j - 1]) == rising and (rising or times[j] < times[j - 1]):
+            j += 1
+        run = times[k:j]
+        if rising or len(run) == 1:
+            yield from _pictures_at(clip["file"], run, w, h)
+        else:
+            yield from reversed(list(_pictures_at(clip["file"], list(reversed(run)), w, h)))
+        k = j
 
 
 # ── a clip's transform, cropping and opacity ─────────────────────────────────
@@ -229,7 +281,7 @@ def film_pictures(clips, counts, w, h, fps):
         keep = []
         fx = effective(clip.get("fx"))
         box = picture_box(clip["file"], w, h) if fx else None
-        for k, frame in enumerate(_clip_pictures(clip["file"], float(clip["in"]), n, w, h, fps)):
+        for k, frame in enumerate(clip_frames(clip, 0, n, w, h, fps)):
             if fx:
                 frame = lay(None, frame, fx, box)
             if k < d_in:
@@ -271,7 +323,7 @@ def covered(base, overlays, total, w, h, fps):
             gen, due = running.get(k, (None, -1))
             if gen is None or due != n:           # just uncovered, or new: read from this moment of it
                 done = n - first
-                gen = _clip_pictures(clip["file"], float(clip["in"]) + done / fps, count - done, w, h, fps)
+                gen = clip_frames(clip, done, count - done, w, h, fps)
             over = next(gen, None)
             running[k] = (gen, n + 1)
             if over is None:
@@ -358,6 +410,39 @@ def _sound_of(path, start, seconds):
     return out
 
 
+# A retimed clip's sound is played at its speed like tape - faster is higher,
+# slower is lower, as the Edit tab plays it - and left out (silent) beyond
+# these speeds, where it would be noise. A loop's sound loops with it.
+SOUND_SPEEDS = (0.25, 4.0)
+
+
+def clip_sound(clip, seconds):
+    """*seconds* of *clip*'s sound as a ``(2, n)`` array (None for none): from its
+    in point, at its speed, through its loop (:func:`source_moment`)."""
+    import numpy as np
+    speed = float(clip.get("speed") or 1.0)
+    span = float(clip.get("span") or 0)
+    loop = clip.get("loop") if span > 0 else ""
+    if speed == 1.0 and not loop:
+        return _sound_of(clip["file"], float(clip["in"]), seconds)
+    if not SOUND_SPEEDS[0] <= speed <= SOUND_SPEEDS[1]:
+        return None
+    need = span if loop else seconds * speed
+    src = _sound_of(clip["file"], float(clip["in"]), need + 2.0 / RATE)
+    if src is None or not src.shape[1]:
+        return None
+    want = int(round(seconds * RATE))
+    q = np.arange(want, dtype=np.float64) / RATE * speed
+    if loop == "loop":
+        q = q % span
+    elif loop == "pingpong":
+        p = q % (2 * span)
+        q = np.where(p < span, p, 2 * span - p)
+    pos = np.clip(q * RATE, 0, src.shape[1] - 1)
+    grid = np.arange(src.shape[1], dtype=np.float64)
+    return np.stack([np.interp(pos, grid, src[c]) for c in range(2)]).astype(np.float32)
+
+
 def film_sound(cut, counts, fps, total_frames):
     """The film's sound as a ``(2, n)`` float array, or None when there is none.
 
@@ -377,7 +462,7 @@ def film_sound(cut, counts, fps, total_frames):
         volume = float(clip.get("volume", 1.0))
         if cut.get("clip_sound", True) and not cut.get("v1_off") and volume > 0 and not is_still(clip["file"]):
             try:
-                sound = _sound_of(clip["file"], float(clip["in"]), n / fps)
+                sound = clip_sound(clip, n / fps)
             except Exception:  # noqa: BLE001 - a shot whose sound will not decode is silent
                 sound = None
             if sound is not None:
@@ -407,7 +492,7 @@ def film_sound(cut, counts, fps, total_frames):
         if volume <= 0 or is_still(clip["file"]):
             return
         try:
-            sound = _sound_of(clip["file"], float(clip["in"]), want / RATE)
+            sound = clip_sound(clip, want / RATE)
         except Exception:  # noqa: BLE001
             sound = None
         if sound is not None:
@@ -454,6 +539,7 @@ def read_cut(doc):
         note = _note(children[c["ref"]]) if 0 <= c["ref"] < len(children) else {}
         clips.append({"file": c["file"], "in": c["in"], "length": c["length"],
                       "transition": c["transition"], "name": c["name"],
+                      "speed": c.get("speed", 1.0), "loop": c.get("loop", ""), "span": c.get("span", 0.0),
                       "volume": float(note.get("volume", 1.0)), "fx": c.get("fx") or {}})
     off = edit.get("off") or {}
     overlays, sounds = [], []
@@ -462,6 +548,7 @@ def read_cut(doc):
             continue
         for c in track.get("clips") or []:
             item = {"file": c["file"], "in": c["in"], "length": c["length"], "at": c["at"],
+                    "speed": c.get("speed", 1.0), "loop": c.get("loop", ""), "span": c.get("span", 0.0),
                     "volume": float(c.get("volume", 1.0)), "name": c["name"], "order": order,
                     "fx": c.get("fx") or {},
                     "track": track.get("name") or track.get("id")}
@@ -530,7 +617,7 @@ def check(cut, may_use=None):
         cut["bed"] = None            # a bed that may not be read is left out, not a reason to refuse
 
 
-def render(doc, out_path, fmt="mp4", may_use=None, codec=None, quality="high"):
+def render(doc, out_path, fmt="mp4", may_use=None, codec=None, quality="high", frames=None):
     """Render the cut in *doc* to *out_path*.
 
     *fmt*, *codec* and *quality* are read through :mod:`export_rules`, the one
@@ -539,6 +626,9 @@ def render(doc, out_path, fmt="mp4", may_use=None, codec=None, quality="high"):
     Returns ``{"path", "seconds", "frames", "width", "height", "fps", "sound",
     "texts_left_out"}``. Written beside the target first and moved over, so a
     render that fails leaves nothing half-written in its place.
+
+    *frames* ``(first, last)`` renders only those frames of the film, both
+    included - the Edit panel's in and out ("export in-out only").
     """
     import av
     import numpy as np
@@ -555,6 +645,15 @@ def render(doc, out_path, fmt="mp4", may_use=None, codec=None, quality="high"):
     total = max([film_frames(counts)] + [first + count for first, count, _c in _spans(cut["overlays"], fps)])
     sound = film_sound(cut, counts, fps, total)
     base = iter(()) if cut["v1_off"] else film_pictures(cut["clips"], counts, w, h, fps)
+    lo, hi = 0, total
+    if frames:
+        try:
+            lo = max(0, min(total - 1, int(frames[0])))
+            hi = max(lo + 1, min(total, int(frames[1]) + 1))
+        except (TypeError, ValueError, IndexError):
+            raise RenderError("the range to render is not two frames") from None
+        if sound is not None:
+            sound = sound[:, int(round(lo / fps * RATE)):int(round(hi / fps * RATE))]
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     tmp = out_path + ".part." + fmt
@@ -587,8 +686,10 @@ def render(doc, out_path, fmt="mp4", may_use=None, codec=None, quality="high"):
                     sent += piece.shape[1]
 
             made = 0
-            for picture in covered(base, cut["overlays"], total, w, h, fps):
-                picture = draw_texts(picture, cut["draw"], made, fps)
+            for n, picture in enumerate(covered(base, cut["overlays"], hi, w, h, fps)):
+                if n < lo:
+                    continue
+                picture = draw_texts(picture, cut["draw"], n, fps)
                 frame = av.VideoFrame.from_ndarray(np.ascontiguousarray(picture), format="rgb24")
                 frame.pts = made
                 for packet in vs.encode(frame):
@@ -613,7 +714,7 @@ def render(doc, out_path, fmt="mp4", may_use=None, codec=None, quality="high"):
                 os.remove(tmp)
         except OSError:
             pass
-    return {"path": out_path, "seconds": round(total / fps, 3), "frames": total, "width": w,
+    return {"path": out_path, "seconds": round((hi - lo) / fps, 3), "frames": hi - lo, "width": w,
             "height": h, "fps": fps, "sound": sound is not None,
             # Texts are drawn now; the key stays for callers that read it.
             "texts_left_out": 0, "texts": len(cut["draw"]),

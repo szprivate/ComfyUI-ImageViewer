@@ -99,7 +99,11 @@ export const EditMediaMixin = {
         ctx.clearRect(0, 0, pw, ph);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         const sound = m.row === "audio" || SOUND_RE.test(m.file);
-        if (sound) return this._emWave(ctx, m, W, x0, x1, 0, H, wanted, null, true);
+        if (sound) {
+            const done = this._emWave(ctx, m, W, x0, x1, 0, H, wanted, null, true);
+            this._emSeams(ctx, m, W, x0, x1, H);
+            return done;
+        }
         const still = D.isStill(m.file);
         let peaks;
         if (!still) peaks = this._emGet("peaks", m.file, wanted);
@@ -123,7 +127,7 @@ export const EditMediaMixin = {
         let n = 1;
         if (!still) {
             const dur = (any && any.duration) || (info && info.duration) || (m.in + m.length);
-            const needed = Math.ceil((dur / Math.max(0.01, m.length)) * W / tile);
+            const needed = Math.ceil((dur / Math.max(0.01, m.length * D.speedOf(m.clip))) * W / tile);
             n = STRIP_COUNTS.find((c) => c >= needed) || STRIP_COUNTS[STRIP_COUNTS.length - 1];
         }
         const exact = this._emGet("strip", m.file, wanted, n + "x" + hreq);
@@ -137,12 +141,39 @@ export const EditMediaMixin = {
             const x = k * tw;
             let idx = 0;
             if (sheet.n > 1 && sheet.duration > 0) {
-                const t = m.in + ((x + tw / 2) / W) * m.length;
+                // The source moment of the tile: at the clip's speed, through its loop.
+                const u = ((x + tw / 2) / W) * m.length;
+                const t = m.clip ? D.srcLocal(m.clip, u) : m.in + u;
                 idx = Math.max(0, Math.min(sheet.n - 1, Math.floor((t / sheet.duration) * sheet.n)));
             }
             try { ctx.drawImage(sheet.img, idx * sheet.tw, 0, sheet.tw, sheet.th, x - x0, 0, tw + 0.5, h); } catch (_) {}
         }
+        this._emSeams(ctx, m, W, x0, x1, h);
         return !!exact;
+    },
+
+    // Where a looped clip's turns meet: a dashed line and a loop mark at each.
+    _emSeams(ctx, m, W, x0, x1, h) {
+        const seams = m.clip ? D.loopSeams(m.clip) : [];
+        if (!seams.length) return;
+        const pp = D.loopOf(m.clip) === "pingpong";
+        ctx.save();
+        ctx.strokeStyle = "rgba(77, 225, 255, 0.95)";
+        ctx.fillStyle = "rgba(77, 225, 255, 0.95)";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([3, 3]);
+        ctx.font = "bold 11px sans-serif";
+        ctx.textBaseline = "top";
+        seams.forEach((u, k) => {
+            const x = (u / Math.max(0.001, m.length)) * W;
+            if (x < x0 - 14 || x > x1 + 2) return;
+            ctx.beginPath();
+            ctx.moveTo(x - x0 + 0.5, 0);
+            ctx.lineTo(x - x0 + 0.5, h);
+            ctx.stroke();
+            ctx.fillText(pp && k % 2 === 0 ? "⇄" : "↻", x - x0 + 3, 2);
+        });
+        ctx.restore();
     },
 
     // The waveform: per screen pixel the lowest and the highest of the buckets
@@ -160,7 +191,9 @@ export const EditMediaMixin = {
         ctx.fillStyle = full ? "rgba(178, 236, 204, 0.85)" : "rgba(210, 230, 255, 0.75)";
         if (!full) { ctx.fillStyle = "rgba(0,0,0,0.35)"; ctx.fillRect(0, y, x1 - x0, h); ctx.fillStyle = "rgba(210, 230, 255, 0.8)"; }
         for (let px = Math.floor(x0); px < x1; px++) {
-            const t0 = m.in + (px / W) * m.length, t1 = m.in + ((px + 1) / W) * m.length;
+            const u0 = (px / W) * m.length;
+            const t0 = m.clip ? D.srcLocal(m.clip, u0) : m.in + u0;
+            const t1 = t0 + (m.length / W) * (m.clip ? D.speedOf(m.clip) : 1);
             const b0 = Math.floor(t0 * bps);
             if (b0 >= n) break;
             const b1 = Math.min(n, Math.max(b0 + 1, Math.ceil(t1 * bps)));

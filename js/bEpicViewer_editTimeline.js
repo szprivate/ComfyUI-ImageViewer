@@ -18,9 +18,11 @@
 //   a track's header        its switch (off: not seen, not heard, not rendered),
 //                           S to solo it (only the soloed are played; a way of
 //                           looking, not saved), its lower edge to make it taller
-//   drag on the ruler       scrub the film
+//   drag on the ruler       scrub the film; Ctrl+drag / right-click: the in and out
 //   click a clip            select it and go to it; right-click: its colour, remove
-//   drag a shot's edge      trim it (what follows moves with it)
+//   drag a shot's edge      trim it (what follows moves with it); the middle of a
+//                           cut rolls it; Alt: slip / retime, Alt+Shift: slide,
+//                           Ctrl on the out-edge: loop (bEpicViewer_editTrim.js)
 //   drag a shot             put it elsewhere in the order - or onto another track
 //   a clip on a higher track  drag it to another moment, its edges to trim it, or
 //                           onto another track (onto V1: between the shots there)
@@ -187,8 +189,9 @@ export const EditTimelineMixin = {
         this._editTlOtio = s.otio || "";
         // How this cut is looked at: zoom, the tracks' heights, what is soloed.
         const view = (s.view && typeof s.view === "object") ? s.view : {};
+        const range = view.range && Number.isFinite(view.range.start) && Number.isFinite(view.range.end) ? { start: view.range.start, end: view.range.end } : null;
         this._editTlView = { zoom: Math.max(1, Math.min(64, Number(view.zoom) || 1)), heights: { ...(view.heights || {}) },
-                             solo: { ...(view.solo || {}) }, textsOff: !!view.textsOff };
+                             solo: { ...(view.solo || {}) }, textsOff: !!view.textsOff, range };
         this._editTlSel = null;
         this._editTlNote = "";
         this._editTlNow = "";
@@ -440,7 +443,7 @@ export const EditTimelineMixin = {
         const scroll = el("div", "edit-scroll");
         const area = el("div", "edit-area");
         const ruler = el("div", "edit-ruler");
-        ruler.title = "Drag to scrub";
+        ruler.title = "Drag to scrub. Ctrl+drag: set the in and out; right-click: in / out here, clear";
         const rows = el("div", "edit-rows");
         const head = el("div", "edit-head");
         const drop = el("div", "edit-drop");
@@ -474,9 +477,13 @@ export const EditTimelineMixin = {
         // The ruler is the film's own scrub bar.
         ruler.addEventListener("pointerdown", (e) => {
             if (e.button !== 0) return;
+            // Ctrl+drag draws the in..out, as Ctrl-drag on the transport's bar does (bEpicViewer_editTrim.js).
+            if ((e.ctrlKey || e.metaKey) && this._editTlRangeDrag) { this._editTlRangeDrag(e); return; }
             e.preventDefault();
+            this._editTlScrubbing = true;
             const go = (ev) => { const at = this._editTlTimeAt(ev.clientX); if (at != null) this._editTlSeek(at, true); };
             const up = () => {
+                this._editTlScrubbing = false;
                 ruler.removeEventListener("pointermove", go);
                 ruler.removeEventListener("pointerup", up);
                 ruler.removeEventListener("pointercancel", up);
@@ -488,6 +495,8 @@ export const EditTimelineMixin = {
             ruler.addEventListener("pointercancel", up);
             go(e);
         });
+        // Right-click: set the in or the out here, mark the shot, clear them.
+        ruler.addEventListener("contextmenu", (e) => { if (this._editTlRulerMenu) this._editTlRulerMenu(e); });
 
         // Zoom and pan. Ctrl + wheel zooms about the pointer; the wheel alone
         // moves along the film (a timeline has nowhere else to scroll to); the
@@ -584,6 +593,7 @@ export const EditTimelineMixin = {
         // The viewport plays the cut: a change is on screen with this redraw.
         if (this.editPlayCutChanged) this.editPlayCutChanged();
         if (this._editTlTab) this._editTlKeep();
+        if (this._editTlTab && this._editTlKnowFiles) this._editTlKnowFiles(this._editTlCut);
         // The numbers of what is selected, and what can be put into the cut.
         if (this.editPanelsRefresh) this.editPanelsRefresh();
         const host = this.editTimelinePanel;
@@ -624,9 +634,9 @@ export const EditTimelineMixin = {
             + D.lengthLabel(lay.total) + (this._editTlNote ? " \u00b7 " + this._editTlNote : "");
         ui.hint.textContent = this._editTlBlade
             ? "Blade: click a clip to cut it there (B or Esc to put it away). Ctrl+Z undoes."
-            : "Drag on the ruler to scrub, a clip's edge to trim, a shot to reorder. Ctrl + wheel zooms, the wheel pans. "
-              + "B: blade, Ctrl+B: cut at the playhead, Del / Shift+Del: delete, Ctrl+Z: undo, J K L: play, I / O: range. "
-              + "Right-click a clip for its colour. Drop files onto a track.";
+            : "Drag on the ruler to scrub, a clip's edge to trim (the middle of a cut: roll), a shot to reorder. "
+              + "Alt+drag: slip (on an edge: retime), Alt+Shift+drag: slide, Ctrl+drag the out-edge: loop. "
+              + "Ctrl + wheel zooms. I / O / X: in and out. ? lists the keys. Drop files onto a track.";
         ui.area.style.width = (view.zoom * 100) + "%";
 
         const doc = host.ownerDocument;
@@ -655,17 +665,6 @@ export const EditTimelineMixin = {
             m.textContent = t.label;
             return m;
         }));
-        // The range I and O set (the transport's own range: played and looped).
-        const range = this._editTlOnScreen() ? this.playbackRange : null;
-        if (range && Number.isFinite(range.start) && Number.isFinite(range.end) && range.end > range.start) {
-            const fps0 = cut.fps || 24;
-            const band = doc.createElement("div");
-            band.className = "edit-range";
-            band.style.left = Math.max(0, (range.start / fps0) / lay.total * 100) + "%";
-            band.style.width = Math.max(0, ((range.end + 1 - range.start) / fps0) / lay.total * 100) + "%";
-            ui.ruler.append(band);
-        }
-
         // Top to bottom as an editor lays them out: the texts, the video tracks
         // from the highest down to the cut itself, then the sound.
         const list = [];
@@ -699,9 +698,11 @@ export const EditTimelineMixin = {
                         + (Number.isInteger(cut.clips[s.i].ref) ? "" : " new"), s, s.name);
                     b.dataset.key = "V1:" + s.i;
                     b._media = { file: cut.clips[s.i].file, in: Number(cut.clips[s.i].in) || 0, length: s.length,
-                                 row: "video", volume: cut.clips[s.i].volume };
+                                 row: "video", volume: cut.clips[s.i].volume, clip: cut.clips[s.i] };
+                    this._editTlBadges(b, cut.clips[s.i]);
                     b.addEventListener("pointerdown", (e) => this._editTlShotDown(e, b, s.i));
-                    b.addEventListener("pointermove", (e) => this._editTlEdgeCursor(e, b));
+                    b.addEventListener("pointermove", (e) => this._editTlHover(e, b, { kind: "clip", i: s.i }));
+                    b.addEventListener("pointerleave", () => this._editTlHoverEnd());
                     b.addEventListener("contextmenu", (e) => this._editTlClipMenu(e, { kind: "clip", i: s.i }));
                     kids.push(b);
                 }
@@ -709,7 +710,8 @@ export const EditTimelineMixin = {
                 for (const m of lay.mixes) {
                     const b = block("edit-mix" + (picked("mix", m.i) ? " sel" : ""), m, "Cross Dissolve");
                     b.addEventListener("pointerdown", (e) => this._editTlMixDown(e, b, m.i));
-                    b.addEventListener("pointermove", (e) => this._editTlEdgeCursor(e, b));
+                    b.addEventListener("pointermove", (e) => this._editTlMixHover(e, b, m.i));
+                    b.addEventListener("pointerleave", () => this._editTlHoverEnd());
                     b.addEventListener("contextmenu", (e) => this._editTlClipMenu(e, { kind: "mix", i: m.i }));
                     kids.push(b);
                 }
@@ -725,9 +727,11 @@ export const EditTimelineMixin = {
                         + (picked("tclip", c.i, row.id) ? " sel" : ""), c, c.name);
                     b.dataset.key = row.id + ":" + c.i;
                     const tc = row.track.items[c.i] && D.trackOf(cut, row.id).clips[c.i];
-                    b._media = { file: tc.file, in: Number(tc.in) || 0, length: c.length, row: row.kind, volume: tc.volume };
+                    b._media = { file: tc.file, in: Number(tc.in) || 0, length: c.length, row: row.kind, volume: tc.volume, clip: tc };
+                    this._editTlBadges(b, tc);
                     b.addEventListener("pointerdown", (e) => this._editTlTrackClipDown(e, b, row.id, c.i));
-                    b.addEventListener("pointermove", (e) => this._editTlEdgeCursor(e, b));
+                    b.addEventListener("pointermove", (e) => this._editTlHover(e, b, { kind: "tclip", track: row.id, i: c.i }));
+                    b.addEventListener("pointerleave", () => this._editTlHoverEnd());
                     b.addEventListener("contextmenu", (e) => this._editTlClipMenu(e, { kind: "tclip", track: row.id, i: c.i }));
                     kids.push(b);
                 }
@@ -739,6 +743,8 @@ export const EditTimelineMixin = {
         ui.heads.replaceChildren(...headEls);
         ui.rows.replaceChildren(...rowEls);
         this._editTlNow = "";
+        // The in and out (the transport's own range: played, looped, exported).
+        if (this._editTlRulerMarks) this._editTlRulerMarks();
         if (this.editTlMarksDraw) this.editTlMarksDraw(ui, cut, lay);
         this._editTlPlayhead();
         if (this.editMediaSchedule) this.editMediaSchedule();
@@ -1049,6 +1055,8 @@ export const EditTimelineMixin = {
         const was = start.clips[i];
         const sel = { kind: "clip", i };
         if (this._editTlBlade) { this._editTlBladeCut(e, sel); return; }
+        // An edge, or a modifier held: trim, roll, retime, loop, slip, slide (bEpicViewer_editTrim.js).
+        if (this._editTlTrimDown && this._editTlTrimDown(e, el, sel)) return;
         const began = D.clipStarts(start)[i];
         const grab = (this._editTlTimeAt(e.clientX) || began) - began;       // where in the clip it was taken hold of
         this._editTlSel = sel;
@@ -1093,6 +1101,8 @@ export const EditTimelineMixin = {
         const fps = start.fps || 24;
         const zone = this._editTlZone(e, el);
         const was = Number(start.clips[i].transition) || 0;
+        // Its body pressed: the cut under it rolls, the dissolve with it.
+        if (zone === "body" && e.button === 0 && this._editTlMixRoll) { this._editTlMixRoll(e, el, i); return; }
         this._editTlSel = { kind: "mix", i };
         this._editTlDrag(e, el, (seconds) => {
             if (zone === "body") return;
@@ -1114,6 +1124,7 @@ export const EditTimelineMixin = {
         const was = D.trackOf(start, id).clips[i];
         const sel = { kind: "tclip", track: id, i };
         if (this._editTlBlade) { this._editTlBladeCut(e, sel); return; }
+        if (this._editTlTrimDown && this._editTlTrimDown(e, el, sel)) return;
         this._editTlSel = sel;
         let onto = id;
         // Its edges snap to the other clips' edges and to the playhead.
@@ -1265,7 +1276,7 @@ export const EditTimelineMixin = {
         e.stopPropagation();
         const t = this._editTlBladeTime(e.clientX);
         const got = t == null ? null : D.splitClip(this._editTlCut, sel, t);
-        if (!got) { this._editTlSay("not cut: too near the clip's end, or inside a dissolve"); return; }
+        if (!got) { this._editTlSay("not cut: too near the clip's end, inside a dissolve, or the clip loops (take its loop off first)"); return; }
         this._editTlSel = got.sel;
         this._editTlApply(got.cut);
     },
@@ -1274,7 +1285,17 @@ export const EditTimelineMixin = {
     editTlDetectSelected() {
         const sel = this._editTlSel;
         if (sel && (sel.kind === "clip" || sel.kind === "tclip")) return this.editTlDetectCuts([sel]);
-        return this.editTlDetectCuts((this._editTlCut ? this._editTlCut.clips : []).map((_, i) => ({ kind: "clip", i })));
+        // With an in and out set: the shots between them, and only the cuts there.
+        const span = this._editTlRangeSpan();
+        const cut = this._editTlCut;
+        const shots = span ? D.shotsIn(cut, span[0], span[1]) : (cut ? cut.clips.map((_, i) => i) : []);
+        return this.editTlDetectCuts(shots.map((i) => ({ kind: "clip", i })), span);
+    },
+
+    /** The in..out in seconds of the film, or null when none is set. */
+    _editTlRangeSpan() {
+        const r = this._editTlRange ? this._editTlRange() : null;
+        return r && this._editTlCut ? D.rangeSeconds(r, this._editTlCut.fps || 24) : null;
     },
 
     /** Ctrl+B / S: cut what is under the playhead (the selected clip, when it is there). */
@@ -1329,9 +1350,13 @@ export const EditTimelineMixin = {
         const seconds = ((this.currentFrame || 0) + 0.5) / fps;
         ui.head.style.display = "block";
         ui.head.style.left = Math.max(0, Math.min(100, (seconds / lay.total) * 100)) + "%";
-        // Zoomed in and playing: the film is followed, a screenful at a time.
+        // Zoomed in, the playhead is followed - a screenful at a time - when the
+        // FRAME moved (playing, the transport's bar, a key), not when the cut was
+        // only redrawn, and not under the ruler being scrubbed.
         const sc = ui.scroll;
-        if (this.isPlaying && sc.scrollWidth > sc.clientWidth + 1) {
+        const moved = this._editTlHeadFrame !== this.currentFrame;
+        this._editTlHeadFrame = this.currentFrame;
+        if (moved && !this._editTlScrubbing && sc.scrollWidth > sc.clientWidth + 1) {
             const x = (seconds / lay.total) * sc.scrollWidth;
             if (x < sc.scrollLeft || x > sc.scrollLeft + sc.clientWidth - 8) sc.scrollLeft = Math.max(0, x - sc.clientWidth * 0.1);
         }
@@ -1744,6 +1769,19 @@ export const EditTimelineMixin = {
             formats: ["mp4", "mov"],
             values: this._editTlExport,
             go: "Render",
+            // With an in and out set: the whole film, or only what lies between them.
+            rows: (make) => {
+                const r = this._editTlRange ? this._editTlRange() : null;
+                if (!r) { this._editTlExportRange = false; return []; }
+                const fps = this._editTlCut.fps || 24;
+                const what = make.select([["all", "Whole film"],
+                    ["range", `In\u2013out only (${D.timecode(r.start / fps, fps)} \u2013 ${D.timecode((r.end + 1) / fps, fps)}, ${r.end - r.start + 1} frames)`]],
+                    this._editTlExportRange === false ? "all" : "range");
+                this._editTlExportRange = what.value === "range";
+                what.dataset.field = "range";
+                what.addEventListener("change", () => { this._editTlExportRange = what.value === "range"; });
+                return [make.row("Export", what)];
+            },
             note: "A film of its own, as the next version; an earlier one is never written over.",
             onExport: (values, ui) => this._editTlExportRun(values, ui),
         });
@@ -1754,12 +1792,14 @@ export const EditTimelineMixin = {
         this._editTlBusy = true;
         this.editTlRefresh();
         ui.progress(0, 1, "Rendering…");
+        const range = this._editTlExportRange && this._editTlRange ? this._editTlRange() : null;
         let got = null, said = "";
         try {
             const res = await api.fetchApi("/bepic/timeline_render", {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ ...this._editTlTarget, name: values.name, format: values.format,
-                                       codec: values.codec, quality: values.quality, context: values.context }),
+                                       codec: values.codec, quality: values.quality, context: values.context,
+                                       ...(range ? { frames: [range.start, range.end] } : {}) }),
             });
             if (res.ok) got = await res.json(); else said = await res.text();
         } catch (e) { said = String(e && e.message || e); }

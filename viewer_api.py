@@ -795,6 +795,12 @@ try:
             if fmt not in timeline_render.FORMATS:
                 return web.Response(status=400, text=f"unknown format: {fmt}")
             codec, quality = body.get("codec"), str(body.get("quality") or "high")
+            # "Export in-out only": the frames of the film between the Edit panel's in and out.
+            frames = body.get("frames")
+            if frames is not None and not (isinstance(frames, list) and len(frames) == 2
+                                           and all(isinstance(v, int) and not isinstance(v, bool) and v >= 0
+                                                   for v in frames) and frames[0] <= frames[1]):
+                return web.Response(status=400, text="frames is not [first, last]")
             # Where it goes and what it is called is the rule every export
             # follows: the shot's folder when the canvas names one, the plain
             # one otherwise, and always the next version - never over a film
@@ -813,7 +819,7 @@ try:
                 import datetime
                 import json as _json
                 doc = timeline_io._load(side)
-                got = timeline_render.render(doc, out, fmt, path_access.is_allowed, codec, quality)
+                got = timeline_render.render(doc, out, fmt, path_access.is_allowed, codec, quality, frames)
                 # The timeline that goes with the new film: this cut, marked as
                 # rendered rather than as changed-and-waiting.
                 done = copy.deepcopy(doc)

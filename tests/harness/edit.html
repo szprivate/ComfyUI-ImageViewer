@@ -9,6 +9,8 @@
 //   /bepic/timeline_beats   window.__beats[path]
 //   /bepic/timeline_cuts    window.__cuts[path]
 //   /bepic/timeline_upload  the dropped file "kept" as D:/in/edits/<name>
+//   /bepic/resolve_media    a canvas node's file, as D:/in/<its widget's value>
+//   /bepic/timeline_render  answered at once; the request kept in window.__rendered
 // Every request is counted in window.__requests; window.__delay holds each answer back that many ms.
 window.__requests = [];
 window.__media = {};
@@ -89,6 +91,21 @@ window.__fetchApi = async (path, opts = {}) => {
       return json({ path: "D:/in/edits/" + f.name, name: f.name, reused: false });
     }
     case "/bepic/timeline_locate": return json({ paths: JSON.parse(opts.body).items.map((it) => "D:/out/" + it.filename) });
+    // A loader node on the canvas: its file, as the server would name it.
+    case "/bepic/resolve_media": {
+      const b = JSON.parse(opts.body); const name = String(b.value || "").split(/[\/]/).pop();
+      const kind = /\.(mp4|mov|webm)$/i.test(name) ? "video" : "image";
+      return json({ tabs: [{ label: name, kind, frames: [{ path: "D:/in/" + name, name }] }] });
+    }
+    // Export film: what was asked for is kept in window.__rendered.
+    case "/bepic/timeline_render": {
+      window.__rendered = JSON.parse(opts.body);
+      const f = window.__rendered.frames;
+      return json({ path: "D:/out/cut_v001.mp4", name: "cut_v001.mp4", relative: "cut_v001.mp4", version: 1, fps: 24,
+                    frames: f ? f[1] - f[0] + 1 : 0, texts_left_out: 0 });
+    }
+    case "/bepic/export_options": return json({ formats: { mp4: { codecs: ["h264"] }, mov: { codecs: ["prores"] } }, qualities: ["high"] });
+    case "/bepic/export_target": return json({ path: "D:/out/cut_v001.mp4", relative: "cut_v001.mp4", version: 1 });
   }
   return { ok: false, status: 404, json: async () => ({}), text: async () => "", headers: new Headers() };
 };

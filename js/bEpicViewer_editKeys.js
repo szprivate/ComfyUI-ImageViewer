@@ -11,6 +11,12 @@
 //   ← →          a frame (Shift: a second)      ↑ ↓   the edit point before / after
 //   Home / End   the first / last frame
 //   Ctrl+= / Ctrl+-   zoom the timeline in / out      Shift+Z   the whole film
+//   , .          slip the selected clip a frame of its source (Shift: a second)
+//   Shift+R      the selected clip back at 100 % speed
+//   Ctrl+L       one more turn of its loop (Ctrl+Shift+L: ping-pong)
+//   X            in and out around the selected clip (else the shot under the playhead)
+//   Alt+X, Shift+X   clear the in and out    Alt+I / Alt+O   clear one of them
+//   Shift+I / Shift+O   go to the in / the out
 //
 // They act only while the timeline has the focus - a press in it gives it the
 // focus (bEpicViewer_editTimeline.js) - and never while a field is typed into.
@@ -33,6 +39,20 @@ export const EDIT_KEYS = [
     ["Home / End", "First / last frame"],
     ["Ctrl+= / Ctrl+-", "Zoom the timeline in / out (also Ctrl + wheel)"],
     ["Shift+Z", "Zoom to fit: the whole film"],
+    ["Edge drag", "Trim: left of a cut the outgoing shot's out, right of it the incoming in (the lit side)"],
+    ["Middle of a cut", "Roll: move the cut, the film keeps its length"],
+    ["Alt+drag", "Slip: same place and length, another part of the source"],
+    [", / .", "Slip the selected clip a frame (Shift: a second)"],
+    ["Alt+Shift+drag", "Slide (V1): the shot moves, its neighbours give and take"],
+    ["Alt+drag an edge", "Retime: the source stays, the speed fills the new length"],
+    ["Shift+R", "Speed back to 100 %"],
+    ["Ctrl+drag the out-edge", "Loop extend: longer than the source, by playing it again"],
+    ["Ctrl+L / Ctrl+Shift+L", "One more turn of the loop / of a ping-pong"],
+    ["X", "In and out around the selected clip (else the shot under the playhead)"],
+    ["Alt+X, Shift+X", "Clear the in and out"],
+    ["Shift+I / Shift+O", "Go to the in / the out"],
+    ["Alt+I / Alt+O", "Clear the in / the out"],
+    ["Ctrl+drag the ruler", "Draw the in and out; right-click it: in / out here, clear"],
 ];
 
 export const EditKeysMixin = {
@@ -52,8 +72,19 @@ export const EditKeysMixin = {
         if (!this._editTlFocused(e) || !this._editTlCut) return false;
         const key = e.key, ctrl = e.ctrlKey || e.metaKey, shift = e.shiftKey, alt = e.altKey;
         const low = String(key).toLowerCase();
+        // The letter by its place on the keyboard: Alt and Shift change what e.key says.
+        const letter = /^Key[A-Z]$/.test(e.code || "") ? e.code.slice(3).toLowerCase() : low;
+        const comma = e.code === "Comma" || key === "," || key === "<";
+        const period = e.code === "Period" || key === "." || key === ">";
         let done = true;
-        if (alt) done = false;
+        if (alt && !ctrl) {
+            if (letter === "x") this._editTlSetRange(null);
+            else if (letter === "i") this._editTlClearMark("in");
+            else if (letter === "o") this._editTlClearMark("out");
+            else done = false;
+        }
+        else if (alt) done = false;
+        else if (ctrl && letter === "l") this.editTlLoopOnce(shift ? "pingpong" : "loop");
         else if (ctrl && low === "z") { if (shift) this.editTlRedo(); else this.editTlUndo(); }
         else if (ctrl && low === "y") this.editTlRedo();
         else if (ctrl && low === "b") this.editTlSplitAtPlayhead();
@@ -75,8 +106,14 @@ export const EditKeysMixin = {
         else if (low === "j" && !shift) this._editTlShuttle(-1);
         else if (low === "k" && !shift) this._editTlShuttle(0);
         else if (low === "l" && !shift) this._editTlShuttle(1);
-        else if (low === "i" && !shift) this._editTlMark("in");
-        else if (low === "o" && !shift) this._editTlMark("out");
+        else if (letter === "i") { if (shift) this._editTlGoMark("in"); else this._editTlMark("in"); }
+        else if (letter === "o") { if (shift) this._editTlGoMark("out"); else this._editTlMark("out"); }
+        else if (letter === "x") { if (shift) this._editTlSetRange(null); else this.editTlMarkClip(); }
+        else if (letter === "r" && shift) this.editTlSpeedReset();
+        else if (comma || period) {
+            const fps = this._editTlCut.fps || 24;
+            this.editTlSlipBy((comma ? -1 : 1) * (shift ? Math.round(fps) : 1));
+        }
         else if (key === "ArrowLeft" || key === "ArrowRight") {
             const fps = this._editTlCut.fps || 24;
             this._editTlGoFrame((this.currentFrame || 0) + (key === "ArrowLeft" ? -1 : 1) * (shift ? Math.round(fps) : 1));
@@ -130,17 +167,5 @@ export const EditKeysMixin = {
             if (!this._editTlOnScreen() || (this.currentFrame || 0) <= 0) { this._editTlShuttle(0, true); return; }
             this.setFrame((this.currentFrame || 0) - 1);
         }, 1000 / fps);
-    },
-
-    // I / O: the range the transport plays and loops (its own playbackRange,
-    // the one Ctrl-drag on its bar sets), shown on the timeline's ruler too.
-    _editTlMark(which) {
-        if (!this._editTlTransport()) return;
-        const last = D.filmFrames(this._editTlCut) - 1;
-        const now = Math.max(0, Math.min(last, this.currentFrame || 0));
-        const r = this.playbackRange || { start: 0, end: last };
-        this.playbackRange = which === "in" ? { start: now, end: Math.max(now, r.end) } : { start: Math.min(now, r.start), end: now };
-        if (this.updateRangeOverlay) this.updateRangeOverlay();
-        this.editTlRefresh();
     },
 };

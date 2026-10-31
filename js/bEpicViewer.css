@@ -1602,3 +1602,35 @@ textarea.param-input {
 .edit-keys { width: 330px; gap: 3px; cursor: pointer; }
 .edit-keyrow { display: flex; gap: 8px; align-items: baseline; }
 .edit-keyrow kbd { flex: none; min-width: 120px; color: #00e5ff; font-family: inherit; font-size: 10px; }
+
+/* Trimming like an editor (bEpicViewer_editTrim.js): the side a press will move, lit; its timecode beside the pointer. */
+.edit-trimhl { position: absolute; z-index: 6; pointer-events: none; display: none; box-sizing: border-box;
+               background: color-mix(in srgb, var(--trim, #9dff7a) 16%, transparent); }
+.edit-trimhl[data-side="end"] { border-right: 3px solid var(--trim, #9dff7a); }
+.edit-trimhl[data-side="start"] { border-left: 3px solid var(--trim, #9dff7a); }
+.edit-trimhl[data-side="body"] { border: 2px solid var(--trim, #9dff7a); }
+.edit-trimtip { position: absolute; z-index: 9; pointer-events: none; display: none; white-space: nowrap;
+                background: rgba(14,16,20,.94); border: 1px solid var(--trim, #9dff7a); border-radius: 3px;
+                padding: 2px 6px; font: 10px/1.35 ui-monospace, Consolas, monospace; color: #e8eef5; }
+.edit-trimtip b { color: var(--trim, #9dff7a); font-weight: 600; }
+.edit-slipband { position: absolute; z-index: 1; pointer-events: none; display: none; box-sizing: border-box;
+                 background: rgba(201,166,255,.10); border: 1px dashed rgba(201,166,255,.8); border-radius: 2px; }
+.edit-slipband.open { border-right-style: none; }
+/* A retimed clip: striped, with its speed; a looped one: its seams are drawn on the strip. */
+.edit-shot.retimed::after { content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 0;
+    background: repeating-linear-gradient(135deg, rgba(255,154,60,.28) 0 5px, transparent 5px 11px); }
+.edit-shot.retimed { border-color: #ff9a3c; }
+.edit-shot.looped { border-color: #4de1ff; }
+.edit-badge-time { position: absolute; right: 3px; top: 2px; z-index: 2; pointer-events: auto; font-size: 9px; line-height: 12px;
+                   padding: 0 3px; border-radius: 2px; background: rgba(0,0,0,.7); color: #ffcf9a; white-space: nowrap; }
+.edit-shot.looped .edit-badge-time { color: #9ef0ff; }
+/* In and out on the ruler: the band, a handle at each end, a line down the tracks. */
+.edit-mark { position: absolute; top: 0; bottom: -1px; width: 9px; z-index: 4; cursor: ew-resize; display: none; }
+.edit-mark.in { margin-left: 0; border-left: 2px solid #ffd84d; }
+.edit-mark.in::after { content: ""; position: absolute; left: 0; top: 0; border-top: 6px solid #ffd84d; border-right: 6px solid transparent; }
+.edit-mark.out { margin-left: -9px; border-right: 2px solid #ffd84d; }
+.edit-mark.out::after { content: ""; position: absolute; right: 0; top: 0; border-top: 6px solid #ffd84d; border-left: 6px solid transparent; }
+.edit-markline { position: absolute; top: 15px; bottom: 0; width: 0; border-left: 1px dashed rgba(255,216,77,.55);
+                 pointer-events: none; z-index: 3; display: none; }
+.edit-ruler .edit-range { background: rgba(255,216,77,.16); border-left: none; border-right: none; pointer-events: none; }
+.insp-select { box-sizing: border-box; background: #111; color: #00e5ff; border: 1px solid #333; border-radius: 2px; font-size: 11px; padding: 1px 2px; }
