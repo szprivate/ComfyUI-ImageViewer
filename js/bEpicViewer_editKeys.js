@@ -10,6 +10,7 @@
 //   I / O        the start / end of the range played (the transport's own range)
 //   ← →          a frame (Shift: a second)      ↑ ↓   the edit point before / after
 //   Home / End   the first / last frame
+//   Ctrl+= / Ctrl+-   zoom the timeline in / out      Shift+Z   the whole film
 //
 // They act only while the timeline has the focus - a press in it gives it the
 // focus (bEpicViewer_editTimeline.js) - and never while a field is typed into.
@@ -30,6 +31,8 @@ export const EDIT_KEYS = [
     ["← →", "A frame back / on (Shift: a second)"],
     ["↑ ↓", "The edit point before / after"],
     ["Home / End", "First / last frame"],
+    ["Ctrl+= / Ctrl+-", "Zoom the timeline in / out (also Ctrl + wheel)"],
+    ["Shift+Z", "Zoom to fit: the whole film"],
 ];
 
 export const EditKeysMixin = {
@@ -54,9 +57,13 @@ export const EditKeysMixin = {
         else if (ctrl && low === "z") { if (shift) this.editTlRedo(); else this.editTlUndo(); }
         else if (ctrl && low === "y") this.editTlRedo();
         else if (ctrl && low === "b") this.editTlSplitAtPlayhead();
+        // Zoom, as in Resolve: Ctrl+= / Ctrl++ in, Ctrl+- out (the browser's own page zoom is kept off).
+        else if (ctrl && (key === "=" || key === "+")) this._editTlZoom(this._editTlView.zoom * 1.5);
+        else if (ctrl && (key === "-" || key === "_")) this._editTlZoom(this._editTlView.zoom / 1.5);
         else if (ctrl) done = false;
         else if (low === "b" && !shift) this.editTlBladeToggle();
         else if (low === "a" && !shift) this.editTlBladeToggle(false);
+        else if (low === "z" && shift) this._editTlZoom(1);
         else if (low === "s" && !shift) this.editTlSplitAtPlayhead();
         else if (key === "Escape") {
             if (this._editTlMarks && this.editTlMarksCancel) this.editTlMarksCancel();

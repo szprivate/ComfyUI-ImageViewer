@@ -13,7 +13,7 @@
 //
 //   the buttons, top left   New (an empty cut, in its tab) · Add (files, canvas
 //                           nodes, a new track) · Save / Export
-//   − + Fit, top right      zoom the timeline; so does Ctrl + wheel, at the pointer.
+//   − + Fit, top right      zoom the timeline; so do Ctrl + wheel (at the pointer), Ctrl+= / Ctrl+- and Shift+Z (fit).
 //                           The wheel alone, or the middle button dragged, pans it
 //   a track's header        its switch (off: not seen, not heard, not rendered),
 //                           S to solo it (only the soloed are played; a way of
@@ -428,9 +428,9 @@ export const EditTimelineMixin = {
         const take = button("", "", () => this.editTlTakeAnswer && this.editTlTakeAnswer());
         take.classList.add("primary", "edit-take");
         take.style.display = "none";
-        const zoomOut = button("\u2212", "Zoom out (Ctrl + wheel)", () => this._editTlZoom(this._editTlView.zoom / 1.5));
-        const zoomIn = button("+", "Zoom in (Ctrl + wheel)", () => this._editTlZoom(this._editTlView.zoom * 1.5));
-        const zoomFit = button("Fit", "The whole film in view", () => this._editTlZoom(1));
+        const zoomOut = button("\u2212", "Zoom out (Ctrl+- or Ctrl + wheel)", () => this._editTlZoom(this._editTlView.zoom / 1.5));
+        const zoomIn = button("+", "Zoom in (Ctrl+= or Ctrl + wheel)", () => this._editTlZoom(this._editTlView.zoom * 1.5));
+        const zoomFit = button("Fit", "The whole film in view (Shift+Z)", () => this._editTlZoom(1));
         bar.append(fresh, add, out, blade, split, undo, redo, auto, cuts, take, sub, badge, zoomOut, zoomIn, zoomFit, keys);
 
         // The tracks: their headers in a column that stays, the tracks beside it

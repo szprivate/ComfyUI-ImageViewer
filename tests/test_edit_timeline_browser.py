@@ -293,6 +293,23 @@ class EditTimelineBrowserTests(unittest.TestCase):
         self.assertEqual(pg.evaluate("() => __panel._editTlHistory().future.length"), 0)
         self.assertEqual(self.errors, [])
 
+    def test_zoom_keys_zoom_in_out_and_fit(self):
+        pg = self.page()
+        self.focus_timeline(pg)
+        zoom = "() => __panel._editTlView.zoom"
+        self.assertEqual(pg.evaluate(zoom), 1)
+        pg.keyboard.press("Control+Equal")
+        self.assertAlmostEqual(pg.evaluate(zoom), 1.5, places=3)
+        pg.keyboard.press("Control+Equal")
+        self.assertAlmostEqual(pg.evaluate(zoom), 2.25, places=3)
+        pg.keyboard.press("Control+Minus")
+        self.assertAlmostEqual(pg.evaluate(zoom), 1.5, places=3)
+        pg.keyboard.press("Shift+Z")
+        self.assertEqual(pg.evaluate(zoom), 1)
+        pg.keyboard.press("Control+Minus")                 # never below the whole film
+        self.assertEqual(pg.evaluate(zoom), 1)
+        self.assertEqual(self.errors, [])
+
     # ── auto edit ──
 
     def test_auto_edit_cuts_on_the_beat_of_the_music(self):
