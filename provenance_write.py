@@ -215,3 +215,48 @@ def annotate(paths, unique_id, prompt, extra_pnginfo, prompt_id=""):
         return done
     except Exception:  # noqa: BLE001 - provenance is never worth failing a run
         return 0
+
+
+# ── off the node's thread ────────────────────────────────────────────────────
+
+import threading
+
+_PENDING = []
+_PENDING_LOCK = threading.Lock()
+
+
+def annotate_async(paths, unique_id, prompt, extra_pnginfo, prompt_id=""):
+    """:func:`annotate` on a background thread, so a slow output folder (a network share)
+    never holds up the run. The graph is copied first: the caller may change it after.
+    Returns the thread (or None when there is nothing to write)."""
+    try:
+        if not isinstance(prompt, dict) or not prompt or not paths:
+            return None
+        args = (list(paths), unique_id, copy.deepcopy(prompt),
+                copy.deepcopy(extra_pnginfo) if isinstance(extra_pnginfo, dict) else None, prompt_id)
+    except Exception:  # noqa: BLE001
+        return None
+
+    def run():
+        try:
+            annotate(*args)
+        except Exception as e:  # noqa: BLE001 - provenance is never worth failing a run
+            print(f"[bEpicSendToViewer] provenance not written: {e}")
+        finally:
+            with _PENDING_LOCK:
+                if t in _PENDING:
+                    _PENDING.remove(t)
+
+    t = threading.Thread(target=run, name="bEpic-provenance", daemon=True)
+    with _PENDING_LOCK:
+        _PENDING.append(t)
+    t.start()
+    return t
+
+
+def wait(timeout=30.0):
+    """Wait for the background writes started so far (tests, shutdown)."""
+    with _PENDING_LOCK:
+        pending = list(_PENDING)
+    for t in pending:
+        t.join(timeout)

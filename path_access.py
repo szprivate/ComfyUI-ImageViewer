@@ -390,6 +390,29 @@ def _own_host(host):
     return name.rstrip(".") in own
 
 
+def same_origin(request):
+    """(allowed, reason) for a request that writes a file the user keeps (a
+    timeline): it must come from ComfyUI's own page, or from no browser page at
+    all (agentY's host posts without an Origin).
+
+    The Host must be this machine's address or name (DNS rebinding), and an
+    Origin, when sent, must be that host. The body must be declared JSON: a
+    cross-site form or ``fetch(no-cors)`` can only send text/plain, form or
+    multipart without a CORS preflight, so this also keeps other sites out.
+    """
+    if not _own_host(request.host):
+        return False, "Refused: the page was not opened by this machine's address or name."
+    origin = request.headers.get("Origin")
+    if origin is not None:
+        parts = urlsplit(origin)
+        if origin == "null" or not parts.netloc or parts.netloc.lower() != (request.host or "").lower():
+            return False, "Refused: the request did not come from ComfyUI's own page."
+    ctype = (request.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+    if ctype != "application/json":
+        return False, "Refused: the request must be sent as application/json."
+    return True, ""
+
+
 def may_edit(request):
     """(allowed, reason) for a request that would change the list, or look
     outside it.

@@ -199,6 +199,7 @@ class NodeWritesProvenance(unittest.TestCase):
         node = self.nodes.bEpicSendToViewer()
         node.send(torch.rand(2, 8, 8, 3), tab_name="shots", unique_id="10", prompt=PROMPT,
                   extra_pnginfo={"workflow": WORKFLOW}, **kw)
+        self.nodes.provenance_write.wait()          # written off the node's thread
         return self.sent[-1][1]["tabs"]["tab"]
 
     def test_the_temp_pngs_the_viewer_shows_are_annotated(self):
@@ -220,13 +221,34 @@ class NodeWritesProvenance(unittest.TestCase):
             self.assertEqual(graph["prompt"]["9"]["inputs"]["api_key"], "<redacted>")
 
     def test_a_failing_writer_never_fails_the_node(self):
-        real = self.nodes.provenance_write.annotate
-        self.nodes.provenance_write.annotate = lambda *a, **k: 1 / 0
+        pw = self.nodes.provenance_write
+        for name in ("annotate", "annotate_async"):         # in the thread, and before it starts
+            real = getattr(pw, name)
+            setattr(pw, name, lambda *a, **k: 1 / 0)
+            try:
+                frames = self.run_node()
+            finally:
+                setattr(pw, name, real)
+            self.assertEqual(len(frames), 2)
+
+    def test_the_write_does_not_hold_up_the_node_and_takes_a_copy_of_the_graph(self):
+        import threading
+        pw = self.nodes.provenance_write
+        gate, real = threading.Event(), pw.annotate
+        seen = []
+        pw.annotate = lambda paths, uid, prompt, *a: (gate.wait(10), seen.append(prompt))
         try:
-            frames = self.run_node()
+            prompt = json.loads(json.dumps(PROMPT))
+            node = self.nodes.bEpicSendToViewer()
+            node.send(torch.rand(1, 8, 8, 3), tab_name="slow", unique_id="10", prompt=prompt,
+                      extra_pnginfo={"workflow": WORKFLOW})
+            self.assertFalse(seen)                        # the node returned while the write waits
+            prompt.clear()
+            gate.set()
+            pw.wait()
         finally:
-            self.nodes.provenance_write.annotate = real
-        self.assertEqual(len(frames), 2)
+            pw.annotate = real
+        self.assertTrue(seen and seen[0])                 # the graph as it was when the node ran
 
     def test_without_a_prompt_nothing_is_written(self):
         node = self.nodes.bEpicSendToViewer()

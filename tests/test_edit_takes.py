@@ -292,10 +292,45 @@ class TakeRoute(unittest.TestCase):
             status, ans = self.post(body)
             self.assertEqual((status, ans["ok"]), (400, False), body)
         async def fn(c):
-            r = await c.post("/bepic/take", data="not json")
+            r = await c.post("/bepic/take", data="not json", headers={"Content-Type": "application/json"})
             return r.status
         self.assertEqual(self._run(fn), 400)
         self.assertFalse(self.sent)
+
+    def _raw(self, path, body, headers):
+        async def fn(c):
+            r = await c.post(path, data=json.dumps(body), headers=headers)
+            return r.status
+        return self._run(fn)
+
+    def test_only_comfyuis_own_page_or_no_browser_page_may_write_a_timeline(self):
+        # the security audit: a web page of another site must not write into the user's .otio files
+        js = {"Content-Type": "application/json"}
+        for path, body in (("/bepic/take", self.body()),
+                           ("/bepic/timeline", {"otio": self.otio, "edit": {"clips": []}})):
+            for headers in ({"Content-Type": "text/plain"},                       # a no-preflight cross-site POST
+                            {"Content-Type": "application/x-www-form-urlencoded"},
+                            {**js, "Origin": "https://evil.example"},
+                            {**js, "Origin": "null"},
+                            {**js, "Host": "evil.example"},                       # DNS rebinding
+                            {**js, "Host": "evil.example", "Origin": "http://evil.example"}):
+                self.assertEqual(self._raw(path, body, headers), 403, (path, headers))
+        self.assertFalse(self.sent)
+        self.assertEqual(self.tio.read_editable(self.otio)["clips"][0]["file"], self.a1)
+
+        async def own(c):          # the page itself: an Origin naming the host it was sent to
+            host = f"{c.server.host}:{c.server.port}"
+            r = await c.post("/bepic/take", data=json.dumps(self.body()),
+                             headers={**js, "Origin": f"http://{host}"})
+            return r.status
+        self.assertEqual(self._run(own), 200)
+
+    def test_client_id_is_read_from_the_query_string(self):
+        async def fn(c):
+            r = await c.post("/bepic/take?client_id=tab-7", json=self.body())
+            return r.status
+        self.assertEqual(self._run(fn), 200)
+        self.assertEqual(self.sent[0][1]["client_id"], "tab-7")
 
     def test_text_from_the_request_is_data_and_capped(self):
         status, ans = self.post(self.body(takes=[{"from_file": self.a1, "file": self.a2, "version": 2,

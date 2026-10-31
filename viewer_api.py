@@ -453,6 +453,9 @@ try:
             the file is stamped so that it can tell.
             """
             from . import timeline_io
+            allowed, why = path_access.same_origin(request)
+            if not allowed:
+                return web.Response(status=403, text=why)
             try:
                 body = await request.json()
             except Exception:
@@ -631,9 +634,17 @@ try:
             (bEpicViewer_editTimeline.js: editTlTakeIn). Answers ``{"ok", "saved", "applied",
             "pushed", "notes"}``; the timeline is fenced like the other timeline routes
             (path_access.is_allowed) and every new file like any file the viewer hands back
-            (path_access.may_serve).
+            (path_access.may_serve). Only ComfyUI's own page or a caller with no browser
+            Origin may post, as application/json (path_access.same_origin). ``client_id``
+            (query string) names the asking tab; the event still goes to every page,
+            because any panel that has the cut open must take the take in, or its next save
+            would drop it.
             """
             from . import timeline_io
+            allowed, why = path_access.same_origin(request)
+            if not allowed:
+                return web.json_response({"ok": False, "error": why}, status=403)
+            client_id = str(request.query.get("client_id") or "")[:200]
             try:
                 body = await request.json()
             except Exception:
@@ -718,7 +729,7 @@ try:
             pushed = False
             try:
                 PromptServer.instance.send_sync("bepic.edit.take", {"otio": otio, "takes": takes, "saved": saved,
-                                                                     "retime": retime})
+                                                                     "retime": retime, "client_id": client_id})
                 pushed = True
             except Exception as exc:  # noqa: BLE001 - no page may be listening; the file is saved all the same
                 notes.append(f"the pages could not be told ({exc})")
