@@ -356,8 +356,10 @@ class EditTimelineBrowserTests(unittest.TestCase):
         win = pop.value
         win.wait_for_load_state()
         pg.wait_for_function("() => __panel._editTlUi && __panel._editTlUi.body.ownerDocument !== document", timeout=10000)
-        pg.evaluate("() => __panel.editTlRefresh()")
+        pg.evaluate("() => { __panel._emDrawn = 0; __panel.editTlRefresh(); }")
         pg.wait_for_function("() => __panel._emPending === 0 && __panel._emDrawn > 0", timeout=15000)
+        pg.wait_for_function("(key) => { const b = __panel._editTlUi.rows.querySelector(`[data-key='${key}']`); return !!(b && b._emCanvas); }",
+                             arg="V1:0", timeout=15000)
         a = pg.evaluate(PAINT, "V1:0")
         self.assertGreater(a[0], a[2] * a[3] * 0.2, "the strip is drawn in the popout's canvas")
         x, y = pg.evaluate(WHERE, [0.2, "V2"])
