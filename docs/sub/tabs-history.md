@@ -69,6 +69,7 @@ Once several are selected:
 
 - **Drag any one of them** onto the node graph and the whole selection is dropped, one loader node per snapshot, cascaded so none lands hidden behind another. Dragging a thumbnail that is *not* in the selection drags just that one and leaves the selection alone.
 - **Press <kbd>Shift</kbd>+<kbd>Delete</kbd>** (with the viewer hovered) or use the context menu to remove them all in one go.
+- **Press <kbd>C</kbd> to compare them.** Two compare as an A/B pair; three or more open on the **Contact Sheet**, a grid of all of them, videos playing in step (see [Image Comparison](comparison.md#compare-three-or-more-snapshots-contact-sheet-grid)).
 - **Ask agentY about them.** With agentY installed, the agent sees what you picked in the open tab: the Ctrl-selected snapshots, the two pinned in a comparison, or the one older snapshot you clicked open. Write "use the selected ones as references" and it knows which files you mean. A strip you have not touched (only the newest render highlighted) and a closed viewer report nothing.
 
 ### Deleting Snapshots
@@ -112,6 +113,8 @@ You can compare any two snapshots side-by-side without leaving the tab:
 2. <kbd>Shift</kbd>+click a **second** thumbnail to open the comparison view.
 3. A split-view appears with the two snapshots. Drag the divider to explore differences.
 4. Press <kbd>C</kbd> or click a tab normally to exit comparison mode.
+
+To compare three or more at once, <kbd>Ctrl</kbd>+click them and press <kbd>C</kbd>: the Contact Sheet shows them all in a grid.
 
 See [Image Comparison](comparison.md) for full split-view controls.
 

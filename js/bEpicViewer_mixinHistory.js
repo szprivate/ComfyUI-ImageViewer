@@ -432,6 +432,8 @@ export const HistoryMixin = {
             const idx = Number(thumb.dataset ? thumb.dataset.idx : NaN);
             if (Number.isInteger(idx)) thumb.classList.toggle('multi', selected.has(idx));
         }
+        // A multi-item compare follows the selection (ContactGridMixin).
+        if (this._multiCompareSelectionChanged) this._multiCompareSelectionChanged();
     },
 
     isHistorySelectionPinned(key) {
@@ -495,6 +497,8 @@ export const HistoryMixin = {
         if (!this.historyCompare) return;
         this.historyCompare = null;
         this._historyCompareEntered = false;
+        this._multiCompare = null;          // the Contact Sheet grid's list (ContactGridMixin)
+        if (this._gridSync) this._gridSync();
         this.compareTab = this._savedComparing ? this._savedCompareTab : null;
         if (!this._savedComparing && this.isComparing) {
             this.toggleCompare();
@@ -667,6 +671,7 @@ export const HistoryMixin = {
             thumb.title = `History ${idx + 1}${what}\n` +
                           `Click, then Ctrl+click to add to the selection, Ctrl+Shift+click for a range\n` +
                           `Shift+click to compare against the open snapshot\n` +
+                          `C with several Ctrl-selected: compare them (3+: a Contact Sheet of all)\n` +
                           `Right-click to tag it with a colour`;
             // Drag source: drop onto the ComfyUI graph to make a loader node. The
             // whole snapshot is passed so multi-image sequences map to a sequence

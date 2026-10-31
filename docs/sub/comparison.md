@@ -23,6 +23,24 @@
 > [!TIP]
 > Press <kbd>C</kbd> while hovering the viewer to toggle comparison mode on/off without losing your comparison pair selection.
 
+### Compare Three or More Snapshots (Contact Sheet grid)
+
+1. Click the first snapshot in the history strip, then <kbd>Ctrl</kbd>+click the others (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+click adds a range). Images and videos can be mixed.
+2. Press <kbd>C</kbd> (or pick **Contact Sheet** with the Rotate button while comparing). With three or more selected, compare opens straight on the **Contact Sheet**, which now shows **all** of them in a grid.
+
+- **Order** is the order you selected them in: the first one you clicked is **A**, the second **B**, and so on (a <kbd>Ctrl</kbd>+<kbd>Shift</kbd> range adds its items in strip order). <kbd>Ctrl</kbd>+clicking more thumbnails while the sheet is up adds them to it.
+- **Layout**: columns and rows are picked to show the most picture for the panel's shape and the items' own aspect ratios; every item is letterboxed in its cell, never cropped or stretched. Each cell is labelled with its place (**A**, **B**, 3, 4…), its file name, its label or version, and its agentY `#tag` if it has one. Hovering a cell lights it up; its tooltip has the full name.
+- **At most 16** items are drawn; past that a note says *Showing 16 of N*.
+- **Click** a cell to make it **A** (it moves to the front; the rest keep their order). **Double-click** a cell to leave the comparison and open that snapshot on its own.
+- **Exposure and channel view** apply to every cell.
+- Two Ctrl-selected snapshots compare as an ordinary A/B pair, the same as <kbd>Shift</kbd>+click.
+
+**Videos play in step.** The sheet's timeline is as long as its longest clip. Play, pause, scrubbing and frame-stepping drive every cell together, each showing the **same frame number**; a clip shorter than the longest **holds its last frame** until the sheet loops, so everything restarts together. Stills stay still (an image sequence steps with the timeline). Measured with nine 640×360 clips: the cells stay within a quarter of a frame of each other while playing.
+
+**The wipe modes still compare two.** With three or more selected, **Vertical Split** and **Horizontal Split** compare the first two (A and B), and a small note at the bottom reads *Comparing 1 and 2 of N; Contact Sheet shows all*. Switching modes keeps the selection. With three or more, <kbd>C</kbd> cycles Contact Sheet → Vertical Split → Horizontal Split → off.
+
+![A Contact Sheet of six renders, four videos and two stills](../screenshots/viewer_contact_sheet_grid.jpg)
+
 ---
 
 ## The Compare Divider
@@ -39,7 +57,7 @@ The **Rotate** button in the toolbar cycles through three modes:
 |---|---|
 | **Vertical Split** (default) | Left/right division — classic A/B wipe. Drag divider horizontally. |
 | **Horizontal Split** | Top/bottom division. Drag divider vertically. |
-| **Contact Sheet** | Both images stacked vertically in full — no divider, scroll to compare. |
+| **Contact Sheet** | The two images side by side at a shared height, no divider. With three or more history snapshots selected: all of them in a grid (see above). |
 
 ### Sources of Different Resolution
 

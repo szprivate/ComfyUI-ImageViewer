@@ -100,11 +100,23 @@ export const AgentStateMixin = {
         const wipe = { mode: this.sliderMode || "", position: Number(this.sliderPos) };
         if (hc && hc.key) {
             const stack = (this.history || {})[hc.key] || [];
-            return {
+            const out = {
                 mode: "history", wipe,
                 a: { index: hc.baseIdx, frame: (stack[hc.baseIdx] || [])[0] },
                 b: { index: hc.otherIdx, frame: (stack[hc.otherIdx] || [])[0] },
             };
+            // Three or more Ctrl-selected snapshots (ContactGridMixin): how many,
+            // and on the Contact Sheet grid which ones it shows - indices only.
+            const n = safe(() => (this.multiCompareCount ? this.multiCompareCount() : 0), 0) || 0;
+            if (n >= 2) out.items = n;
+            const grid = safe(() => (this.gridInfo ? this.gridInfo() : null), null);
+            if (grid) {
+                out.mode = "contact";
+                out.shown = grid.shown;
+                out.indices = grid.indices;
+                out.grid = [grid.cols, grid.rows];
+            }
+            return out;
         }
         if (this.isComparing && this.compareTab) {
             const shown = this._agentShownFrame();

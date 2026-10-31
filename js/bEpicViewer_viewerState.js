@@ -248,6 +248,12 @@ export function describeViewerState(s) {
         if (a) c.a = a;
         if (b) c.b = b;
         put(c, "tab_b", snap.compare.tabB || "");
+        // A multi-item compare: the count, and for the Contact Sheet grid the
+        // strip indices it shows (capped, so the answer stays small).
+        if (Number.isInteger(snap.compare.items) && snap.compare.items > 1) c.items = snap.compare.items;
+        if (Number.isInteger(snap.compare.shown)) c.shown = snap.compare.shown;
+        if (Array.isArray(snap.compare.indices)) c.indices = snap.compare.indices.filter(Number.isInteger).slice(0, 16);
+        if (Array.isArray(snap.compare.grid)) c.grid = snap.compare.grid.slice(0, 2);
         if (snap.compare.wipe) {
             c.wipe = {};
             put(c.wipe, "mode", snap.compare.wipe.mode || "");

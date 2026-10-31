@@ -84,7 +84,7 @@ A key you bind there works while the viewer is hovered, and — since a binding 
 |---|---|
 | <kbd>F</kbd> | Toggle fit-to-screen zoom |
 | <kbd>S</kbd> | Toggle tensor shape overlay |
-| <kbd>C</kbd> | Toggle compare / split-view mode |
+| <kbd>C</kbd> | Toggle compare / split-view mode (with 3+ history snapshots Ctrl-selected: Contact Sheet grid of all, then the two wipes, then off) |
 
 ## Channels & Exposure
 

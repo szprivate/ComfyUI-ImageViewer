@@ -52,6 +52,8 @@ export const UIMixin = {
             const exposureFilter = `brightness(${factor.toFixed(3)})`;
             el.style.filter = channelFilter ? `${channelFilter} ${exposureFilter}` : exposureFilter;
         }
+        // The Contact Sheet grid's cells take the same look (ContactGridMixin).
+        if (this._gridApplyFilter) this._gridApplyFilter();
         if (this._applyModelLook) this._applyModelLook();
     },
 
@@ -224,6 +226,8 @@ export const UIMixin = {
         else if (win && win.setTimeout) win.setTimeout(run, 0);
         // The ticker holds a frame callback from the window being left behind.
         if (this.isComparing) this._startCompareTicker();
+        // So does the Contact Sheet grid's clock, and its moved <video>s are paused.
+        if (this._gridAfterMove) this._gridAfterMove();
         // So does the 3D view, and its WebGL canvas belongs to the old document.
         if (this._model3d) this._model3d.rebind();
     },
@@ -751,10 +755,32 @@ export const UIMixin = {
     // (rotate) button's slider-mode cycle but adding an OFF state so the hotkey
     // can also exit: off → split (vertical) → split (horizontal) → contact → off.
     cycleCompareMode() {
-        if (!this.isComparing) { this.toggleCompare(); return; }   // off → vertical
+        if (!this.isComparing) { this.enterCompare(); return; }    // off → vertical
+        // Three or more history items open on the Contact Sheet grid, so the
+        // cycle runs contact → vertical → horizontal → off for them.
+        if (this.multiCompareCount && this.multiCompareCount() >= 3) {
+            if (this.sliderMode === 'contact')       this.setSliderMode('vertical');
+            else if (this.sliderMode === 'vertical') this.setSliderMode('horizontal');
+            else                                     this.toggleCompare();
+            return;
+        }
         if (this.sliderMode === 'vertical')        this.setSliderMode('horizontal');
         else if (this.sliderMode === 'horizontal') this.setSliderMode('contact');
         else                                       this.toggleCompare();   // contact → off
+    },
+
+    // Compare switched on by the user (the C hotkey): two or more snapshots
+    // Ctrl-selected in the History strip are compared THEMSELVES - the first two
+    // as A/B, three or more on a Contact Sheet grid (ContactGridMixin) - rather
+    // than another tab being grabbed. Only here: a Shift+click on a tab also
+    // ends in toggleCompare, and that one means the tab.
+    enterCompare() {
+        if (this.isComparing) return;
+        if (!this.historyCompare && this._tryEnterMultiCompare && this._tryEnterMultiCompare(2)) {
+            if (this.multiCompareCount() >= 3 && this.sliderMode !== 'contact') this.setSliderMode('contact');
+            return;
+        }
+        this.toggleCompare();
     },
 
     toggleCompare() {
@@ -792,6 +818,8 @@ export const UIMixin = {
             // for another layout.
             const mode = this._prefCompareMode ? this._prefCompareMode() : "vertical";
             if (mode !== "vertical") this.setSliderMode(mode);
+            // A multi-item compare (still pinned while compare was off) opens on its grid.
+            else if (this.multiCompareCount && this.multiCompareCount() >= 3) this.setSliderMode('contact');
         } else {
             this.rotateBtn.style.display          = "none";
             this.imgCompare.style.display         = "none";
@@ -808,6 +836,7 @@ export const UIMixin = {
             this.fitView();
             this._stopCompareTicker();
         }
+        if (this._gridSync) this._gridSync();
         this.updateTabHighlights();
     },
 
@@ -822,6 +851,14 @@ export const UIMixin = {
     },
 
     setSliderMode(mode) {
+        // Contact Sheet chosen with three or more snapshots Ctrl-selected: the
+        // sheet shows all of them (ContactGridMixin). Mode first, so the
+        // compare it enters already opens on the sheet.
+        if (mode === 'contact' && !this.multiCompareCount?.() && this._gridSelectionOrdered
+            && this._gridSelectionOrdered().length >= 3) {
+            this.sliderMode = mode;
+            this._tryEnterMultiCompare(3);
+        }
         this.sliderMode = mode;
         if (mode === 'contact') {
             // Fit against the 2-wide combined canvas once both frames are decoded
@@ -852,8 +889,9 @@ export const UIMixin = {
         this.fitView();
         this.updateCompareVisuals();
         // Re-resolve which compare layer shows (img vs video) and re-seek it.
-        if (this.isComparing) this._updateCompareFrame(this.currentFrame);
+        if (this.isComparing && !this._gridOn) this._updateCompareFrame(this.currentFrame);
         this._scheduleCompareSync();
+        if (this._gridSync) this._gridSync();
     },
 
     applyContactClass() {
@@ -1014,6 +1052,8 @@ export const UIMixin = {
                     this._syncCompareLayout();
                     this.updateImageFrame && this.updateImageFrame();
                 }
+                // The Contact Sheet grid: on/off with the state, cells re-laid on a resize.
+                if (this._gridSync) this._gridSync();
             } catch (e) { /* never let a bad frame kill the loop */ }
             this._compareTicker = win.requestAnimationFrame(tick);
         };
@@ -1323,7 +1363,7 @@ export const UIMixin = {
     _overViewportChrome(e) {
         const t = e.target;
         return !!(t && t.closest && t.closest(
-            '#exposure-control, .bepic-toolbar, .bepic-tool-panel, #model-view'));
+            '#exposure-control, .bepic-toolbar, .bepic-tool-panel, #model-view, .contact-grid'));
     },
 
     setupZoomAndPan() {

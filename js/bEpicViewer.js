@@ -28,6 +28,7 @@ import { HistoryTagsMixin } from "./bEpicViewer_historyTags.js";
 import { AgentYMixin, namedTabInfo } from "./bEpicViewer_agentY.js";
 import { AgentPanelMixin } from "./bEpicViewer_agentPanel.js";
 import { AgentStateMixin } from "./bEpicViewer_agentState.js";
+import { ContactGridMixin } from "./bEpicViewer_contactGrid.js";
 import { ParamAnimMixin } from "./bEpicViewer_paramAnim.js";
 import { ParamCurvesMixin } from "./bEpicViewer_paramCurves.js";
 import { ViewTabsMixin } from "./bEpicViewer_viewTabs.js";
@@ -1346,6 +1347,7 @@ Object.assign(
     HistoryTagsMixin,
     AgentYMixin,
     AgentStateMixin,
+    ContactGridMixin,
     AgentPanelMixin,
     ParamAnimMixin,
     ParamCurvesMixin,

@@ -1634,3 +1634,32 @@ textarea.param-input {
                  pointer-events: none; z-index: 3; display: none; }
 .edit-ruler .edit-range { background: rgba(255,216,77,.16); border-left: none; border-right: none; pointer-events: none; }
 .insp-select { box-sizing: border-box; background: #111; color: #00e5ff; border: 1px solid #333; border-radius: 2px; font-size: 11px; padding: 1px 2px; }
+
+/* Contact Sheet of 3+ history items (bEpicViewer_contactGrid.js): every item in
+   its own letterboxed cell; the two-layer compare stack steps aside. */
+.viewport.grid-mode #contact-container,
+.viewport.grid-mode #img-frame,
+.viewport.grid-mode #compare-slider { display: none !important; }
+/* Clear of the path bar along the bottom, so the last row's labels stay readable. */
+.contact-grid { position: absolute; inset: 0 0 22px 0; z-index: 5; display: none; background: #000; cursor: default; }
+.contact-grid .cg-cell { position: absolute; box-sizing: border-box; background: #0b0b0d; border: 1px solid #222;
+    overflow: hidden; cursor: pointer; }
+.contact-grid .cg-cell:hover { border-color: #f60; box-shadow: 0 0 0 1px #f60 inset; }
+.contact-grid .cg-cell.cg-a { border-color: #2bd; }
+.contact-grid .cg-cell.cg-b { border-color: #fb3; }
+.contact-grid .cg-cell:hover.cg-a, .contact-grid .cg-cell:hover.cg-b { border-color: #f60; }
+.contact-grid .cg-media { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+    pointer-events: none; user-select: none; }
+.contact-grid .cg-label { position: absolute; left: 4px; bottom: 4px; max-width: calc(100% - 8px); display: flex;
+    gap: 6px; align-items: center; padding: 2px 6px; border-radius: 3px; background: rgba(0, 0, 0, 0.72);
+    color: #ddd; font: 11px/16px sans-serif; white-space: nowrap; overflow: hidden; pointer-events: none; }
+.contact-grid .cg-mark { font-weight: bold; color: #aaa; }
+.contact-grid .cg-a .cg-mark { color: #2bd; }
+.contact-grid .cg-b .cg-mark { color: #fb3; }
+.contact-grid .cg-name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.contact-grid .cg-cell:hover .cg-name { color: #fff; }
+.contact-grid .cg-ver { color: #9a9; }
+.contact-grid .cg-tag { color: #f80; }
+.contact-grid-hint { position: absolute; left: 50%; bottom: 32px; transform: translateX(-50%); z-index: 61;
+    display: none; padding: 3px 10px; border-radius: 4px; background: rgba(0, 0, 0, 0.75); border: 1px solid #333;
+    color: #ccc; font: 12px/18px sans-serif; pointer-events: none; white-space: nowrap; }

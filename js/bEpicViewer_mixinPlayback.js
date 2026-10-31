@@ -167,6 +167,8 @@ export const PlaybackMixin = {
         if (this._editPlayOn) return this.editPlayFrameCount();
         // A motion tab: the scene's own length (bEpicViewer_mgPanel.js); the editor plays nothing itself.
         if (this._mgOn) return this._mgFrameCount();
+        // A Contact Sheet of 3+ items: its longest clip (ContactGridMixin).
+        if (this._gridOn) return this._gridFrameCount();
         // A video tab holds a single frame dict but scrubs over many frames.
         if (this._videoMode && this._videoFrames > 0) return this._videoFrames;
         return (this._baseFrames() || []).length;
@@ -479,6 +481,8 @@ export const PlaybackMixin = {
         if (this._editPlayOn) { this.editPlaySetFrame(idx); return; }
         // A motion tab has no media frames: the frame is a moment of the scene.
         if (this._mgOn) { this._mgSetFrame(idx); return; }
+        // A Contact Sheet grid: every cell to the same frame (ContactGridMixin).
+        if (this._gridOn) { this._gridSetFrame(idx); return; }
         const imgs = this._baseFrames();
         // Previz: the frame is a moment in the shot, and the scene places every
         // item itself — so this runs even for a tab with no media frames of its
@@ -965,6 +969,7 @@ export const PlaybackMixin = {
     play() {
         this.stop();
         if (this._editPlayOn) { this.editPlayStart(); return; }
+        if (this._gridOn) { this._gridPlay(); return; }
         const count = this.getImgCount();
         if (count === 0) return;
 
@@ -1035,6 +1040,7 @@ export const PlaybackMixin = {
         if (this._videoMode && this.videoBase) { try { this.videoBase.pause(); } catch (e) {} }
         if (this.videoCompare) { try { this.videoCompare.pause(); } catch (e) {} }
         if (this._editPlayOn) this.editPlayStop();
+        if (this._gridOn) this._gridStop();
     },
 
     step(n) {

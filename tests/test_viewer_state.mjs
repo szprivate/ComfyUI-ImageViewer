@@ -76,6 +76,24 @@ test("compare, the Edit panel's selection and the 3D camera", () => {
     assert.equal(s.camera.camera_world.length, 16);
 });
 
+test("a Contact Sheet of several history items: the count and the indices, small", () => {
+    const s = describeViewerState({
+        open: true, display: "docked",
+        compare: { mode: "contact", items: 20, shown: 16, indices: Array.from({ length: 20 }, (_, i) => i),
+                   grid: [4, 4], a: { index: 3, frame: fr("a.png") }, b: { index: 1, frame: fr("b.png") },
+                   wipe: { mode: "contact", position: 50 } },
+    });
+    assert.equal(s.compare.mode, "contact");
+    assert.equal(s.compare.items, 20);
+    assert.equal(s.compare.shown, 16);
+    assert.equal(s.compare.indices.length, 16);
+    assert.deepEqual(s.compare.grid, [4, 4]);
+    assert.equal(s.compare.a.index, 3);
+    // A plain pair says nothing of items.
+    const p = describeViewerState({ open: true, display: "docked", compare: { mode: "history", a: { index: 0 }, b: { index: 1 } } });
+    assert.equal(p.compare.items, undefined);
+});
+
 const NOTE = { id: "a1", type: "text", x: 0.1, y: 0.1, size: 40, color: "#ff0", text: "logo too small", _editing: true };
 const BOX = { id: "a2", type: "rect", a: { x: 0.5, y: 0.5 }, b: { x: 0.25, y: 0.25 }, color: "#f00", width: 6 };
 const PEN = { id: "a3", type: "pen", pts: [{ x: 0.7, y: 0.7 }, { x: 0.8, y: 0.9 }], color: "#0f0", width: 4 };
