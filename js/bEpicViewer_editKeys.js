@@ -7,7 +7,7 @@
 //   B            the blade (A, or Esc, puts it away)
 //   N            snapping on / off (hold S while dragging: the other way)
 //   Ctrl+B, S    cut at the playhead
-//   Del / Bksp   delete the selection, leaving a gap (a lift) - on V1 too
+//   Del / Bksp   delete everything selected, leaving gaps (a lift) - on V1 too
 //   Shift+Del    ripple delete: what follows closes up (a gap selected: closed)
 //   Ctrl+Alt+L   unlink a film's sound onto a sound track / link a picture and its sound
 //   E            extend the selected edit point (or the selected clip's out) to the playhead
@@ -17,13 +17,17 @@
 //   ← →          a frame (Shift: a second)      ↑ ↓   the edit point before / after
 //   Home / End   the first / last frame
 //   Ctrl+= / Ctrl+-   zoom the timeline in / out      Shift+Z   the whole film
-//   , .          slip the selected clip a frame of its source (Shift: a second);
-//                in the Trim mode with an edit point selected: nudge it - never snapped
+//   , .          an edit point selected: trim it a frame (Shift: a second), rippling in
+//                the Trim mode; else MOVE the selected clips - never snapped
+//   Alt+, Alt+.  slip the selected clip a frame of its source (Shift: a second)
+//   Shift+A / S  the edit before / after, selected (a roll where two clips meet); Esc lets it go
 //   Shift+R      the selected clip back at 100 % speed
 //   Ctrl+L       one more turn of its loop (Ctrl+Shift+L: ping-pong)
 //   X            in and out around the selected clip (else the shot under the playhead)
 //   Alt+X, Shift+X   clear the in and out    Alt+I / Alt+O   clear one of them
 //   Shift+I / Shift+O   go to the in / the out
+//
+//   ?            Show Hotkeys: the viewer's overlay lists these (EDIT_KEYS) while a cut's tab is up
 //
 // They act only while the timeline has the focus - a press in it gives it the
 // focus (bEpicViewer_editTimeline.js) - and never while a field is typed into.
@@ -34,29 +38,38 @@
 import * as D from "./bEpicViewer_editTimelineData.js";
 
 export const EDIT_KEYS = [
+    ["?", "This list (the viewer's Show Hotkeys button too)"],
     ["A", "Selection mode (the default): a drag moves a clip, an edge trims that edge only - gaps stay"],
     ["T", "Trim Edit mode: an edge ripples, the middle of a cut rolls, a clip's upper half slips, its lower half slides"],
     ["B", "Blade: click a clip to cut it there (A or Esc: put it away)"],
     ["N", "Snapping on / off (the magnet): clip and gap edges on every track, playhead, in / out, texts, start"],
     ["Hold S while dragging", "Snap the other way for this drag"],
     ["Ctrl+B, S", "Cut the clip under the playhead"],
-    ["Del", "Delete, leaving a gap (a lift) - a linked sound or picture goes with it"],
-    ["Shift+Del", "Ripple delete: what follows closes up (a selected gap: closed)"],
+    ["Del / Backspace", "Delete everything selected, leaving gaps (a lift) - a linked sound or picture goes with it"],
+    ["Shift+Del", "Ripple delete everything selected: what follows closes up (a selected gap: closed)"],
+    ["Ctrl+click, Shift+click", "Select several, on any tracks: picture, sound, the music, texts"],
+    ["Drag from an empty place", "Marquee: everything it touches, on all tracks, is selected (Shift: added); drag one of them: all move"],
+    ["Click a cut", "Selects that edit point, green on what moves, in every mode: its outgoing edge, its incoming edge, or the middle (a roll)"],
+    ["Shift+A / Shift+S", "Go to the edit before / after and select it (a roll where two clips meet), on the selected clip's track, else V1"],
+    ["Esc", "Let go of the edit point, then of the selection"],
     ["Ctrl+Alt+L", "Unlink a film's sound onto a sound track / link a selected picture and its sound"],
     ["Ctrl+Shift+drag", "Insert a clip into the order (what follows moves); a plain drag overwrites and leaves a gap"],
-    ["E", "Extend the selected edit point (Trim: click an edge) or the clip's out to the playhead"],
+    ["Drag above the top video / below the bottom sound track", "A new track, for a picture / a sound; also for a drop from outside"],
+    ["E", "Extend the selected edit point or the clip's out to the playhead"],
     ["Ctrl+Z / Ctrl+Shift+Z", "Undo / redo"],
     ["J K L", "Play backwards / stop / play"],
     ["I / O", "Start / end of the range played"],
     ["← →", "A frame back / on (Shift: a second)"],
     ["↑ ↓", "The edit point before / after"],
     ["Home / End", "First / last frame"],
-    ["Ctrl+= / Ctrl+-", "Zoom the timeline in / out (also Ctrl + wheel)"],
+    ["Ctrl+= / Ctrl+-", "Zoom the timeline in / out, down to 0.25x: empty timeline after the film (also Ctrl + wheel)"],
     ["Shift+Z", "Zoom to fit: the whole film"],
     ["Edge drag", "Trim: left of a cut the outgoing shot's out, right of it the incoming in (the lit side); Trim mode: ripple"],
     ["Middle of a cut", "Roll: move the cut, the film keeps its length"],
     ["Alt+drag", "Slip: same place and length, another part of the source"],
-    [", / .", "Slip the selected clip a frame (Shift: a second); Trim mode: nudge the selected edit point"],
+    [", / .", "An edit point selected: trim it a frame (Shift: a second) - Trim mode ripples, Selection opens or closes a gap"],
+    [", / . on a clip", "Move the selected clips a frame (Shift: a second). Selection: into a gap, stopping at the next clip. Trim: one clip slides"],
+    ["Alt+, / Alt+.", "Slip the selected clip a frame (Shift: a second)"],
     ["Alt+Shift+drag", "Slide (V1): the shot moves, its neighbours give and take"],
     ["Alt+drag an edge", "Retime: the source stays, the speed fills the new length"],
     ["Shift+R", "Speed back to 100 %"],
@@ -98,6 +111,7 @@ export const EditKeysMixin = {
             if (letter === "x") this._editTlSetRange(null);
             else if (letter === "i") this._editTlClearMark("in");
             else if (letter === "o") this._editTlClearMark("out");
+            else if (comma || period) this.editTlSlipBy((comma ? -1 : 1) * (shift ? Math.round(this._editTlCut.fps || 24) : 1));
             else done = false;
         }
         else if (alt) done = false;
@@ -110,16 +124,21 @@ export const EditKeysMixin = {
         else if (ctrl && (key === "-" || key === "_")) this._editTlZoom(this._editTlView.zoom / 1.5);
         else if (ctrl) done = false;
         else if (letter === "b" && !shift) this.editTlBladeToggle();
+        // The edit before / after (S alone cuts; S held in a drag is the snapping, above).
+        else if (letter === "a" && shift) this.editTlEditStep(-1);
+        else if (letter === "s" && shift) this.editTlEditStep(1);
         else if (letter === "a" && !shift) this.editTlMode("select");
         else if (letter === "t" && !shift) this.editTlMode("trim");
         else if (letter === "n" && !shift) this.editTlSnapToggle();
         else if (letter === "e" && !shift) this.editTlExtendEdit();
         else if (low === "z" && shift) this._editTlZoom(1);
         else if (low === "s" && !shift) this.editTlSplitAtPlayhead();
+        else if (key === "?") this.toggleHelpOverlay();
         else if (key === "Escape") {
             if (this._editTlMarks && this.editTlMarksCancel) this.editTlMarksCancel();
             else if (this._editTlBlade) this.editTlBladeToggle(false);
-            else if (this._editTlSel) { this._editTlSel = null; this.editTlRefresh(); }
+            else if (this._editTlEditPoint()) { this._editTlEditSel = null; this.editTlRefresh(); }
+            else if (this._editTlSel) { this._editTlSel = null; this._editTlMulti = null; this.editTlRefresh(); }
             else done = false;
         }
         else if (key === "Delete" || key === "Backspace") done = this.editTlDelete(shift);
@@ -132,7 +151,7 @@ export const EditKeysMixin = {
         else if (letter === "r" && shift) this.editTlSpeedReset();
         else if (comma || period) {
             const fps = this._editTlCut.fps || 24;
-            this.editTlSlipBy((comma ? -1 : 1) * (shift ? Math.round(fps) : 1));
+            this.editTlNudge((comma ? -1 : 1) * (shift ? Math.round(fps) : 1));
         }
         else if (key === "ArrowLeft" || key === "ArrowRight") {
             const fps = this._editTlCut.fps || 24;

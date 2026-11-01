@@ -170,10 +170,11 @@ class EditTakesBrowserTests(unittest.TestCase):
     def test_shift_stays_on_its_track_and_a_clip_on_a_track_has_its_own_id(self):
         pg = self.page()
         self.click(pg, "a", 1.5)
-        self.click(pg, "x", 6.5, "V2", mods=["Shift"])                 # another track: just that one
+        self.click(pg, "x", 6.5, "V2", mods=["Shift"])                 # another track: added, across tracks
+        self.assertEqual(pg.evaluate(MSEL), ["V1:0", "V2:0"])
+        self.click(pg, "a", 1.5, mods=["Control"])
         self.assertEqual(pg.evaluate(MSEL), [])
-        sel = pg.evaluate("() => __panel.agentViewerState().edit.selected")
-        self.assertEqual([c["id"] for c in sel], ["V2:0"])
+        self.assertEqual([c["id"] for c in pg.evaluate("() => __panel.agentViewerState().edit.selected")], ["V2:0"])
         self.click(pg, "a", 1.5, mods=["Control"])
         self.assertEqual(pg.evaluate(MSEL), ["V1:0", "V2:0"])
         self.assertEqual([c["id"] for c in pg.evaluate("() => __panel.agentViewerState().edit.selected")], ["V1:0", "V2:0"])

@@ -29,9 +29,13 @@
 //   the body, upper half   SLIP (the filmstrip)
 //   the body, lower half   SLIDE (the name bar): the clip moves, its neighbours
 //                          (or the gaps beside it) give and take
-//   a click on an edge     selects that edit point: , / . nudge it a frame
-//                          (Shift: a second), E extends it to the playhead
 // In both modes:
+//   a click on an edge     selects that edit point, green on what will move: the
+//                          outgoing edge, the incoming edge, or (the middle of a cut)
+//                          both, a roll. , / . trim it a frame (Shift: a second) -
+//                          rippling in the Trim mode, a gap opening or closing in
+//                          Selection; E extends it to the playhead; Shift+A / Shift+S
+//                          go on to the edit before / after; Esc lets it go
 //   Alt + an edge          RETIME ("trim to fill"): the source in and out stay,
 //                          the speed changes to fill the new length
 //   Ctrl + the out-edge    LOOP EXTEND: longer than the source, by playing it
@@ -57,26 +61,29 @@ import * as D from "./bEpicViewer_editTimelineData.js";
 const EDGE_PX = 7;
 const ROLL_PX = 3;
 
-// Cursors drawn as an editor's: a bracket on the side that moves.
+// Cursors drawn as an editor's: a bracket on the side that moves. 15 px on a grid
+// of their own - half-pixel coordinates, so that a 1 px stroke falls on whole pixels and stays sharp.
 function cursor(paths, color, fallback) {
-    const g = (stroke, w) => `<g fill='none' stroke='${stroke}' stroke-width='${w}' stroke-linecap='round' stroke-linejoin='round'>`
+    const g = (stroke, w) => `<g fill='none' stroke='${stroke}' stroke-width='${w}' stroke-linecap='square' stroke-linejoin='miter'>`
         + paths.map((d) => `<path d='${d}'/>`).join("") + "</g>";
-    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24'>${g("#000", 3.5)}${g(color, 1.6)}</svg>`;
-    return `url("data:image/svg+xml;utf8,${encodeURIComponent(svg)}") 12 12, ${fallback}`;
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='15' height='15' viewBox='0 0 15 15'>${g("#000", 2.6)}${g(color, 1)}</svg>`;
+    return `url("data:image/svg+xml;utf8,${encodeURIComponent(svg)}") 7 7, ${fallback}`;
 }
-const ARROWS = ["M2 12h20", "M5 9l-3 3 3 3", "M19 9l3 3-3 3"];
+const LEFT = "M4.5 5.5l-2 2 2 2", RIGHT = "M10.5 5.5l2 2-2 2";
 export const TRIM_CURSORS = {
     // A ripple: the bracket of a trim and a bar for what moves with it.
-    "ripple-out": cursor(["M13 4h3v16h-3", "M2 12h9", "M5 9l-3 3 3 3", "M8 9l3 3-3 3", "M20 7v10"], "#ffe14d", "w-resize"),
-    "ripple-in": cursor(["M11 4h-3v16h3", "M13 12h9", "M19 9l3 3-3 3", "M16 9l-3 3 3 3", "M4 7v10"], "#ffe14d", "e-resize"),
-    "trim-out": cursor(["M13 4h3v16h-3", "M2 12h9", "M5 9l-3 3 3 3", "M8 9l3 3-3 3"], "#9dff7a", "w-resize"),
-    "trim-in": cursor(["M11 4h-3v16h3", "M13 12h9", "M19 9l3 3-3 3", "M16 9l-3 3 3 3"], "#9dff7a", "e-resize"),
-    "roll": cursor(["M9 4h2v16h-2", "M15 4h-2v16h2", ...ARROWS], "#ffd84d", "col-resize"),
-    "retime": cursor(["M12 4v16", "M7 7l-4 5 4 5", "M17 7l4 5-4 5", "M9 12h6"], "#ff9a3c", "ew-resize"),
-    "loop": cursor(["M6 8h9a4 4 0 0 1 0 8h-2", "M9 5l-3 3 3 3", "M2 4v16"], "#4de1ff", "ew-resize"),
-    "slip": cursor(["M8 4h-3v16h3", "M16 4h3v16h-3", "M9 12h6", "M11 10l-2 2 2 2", "M13 10l2 2-2 2"], "#c9a6ff", "ew-resize"),
-    "slide": cursor(["M4 6v12", "M20 6v12", "M7 12h10", "M10 9l-3 3 3 3", "M14 9l3 3-3 3"], "#c9a6ff", "move"),
+    "ripple-out": cursor(["M8.5 2.5h2v10h-2", "M1.5 7.5h5", "M3.5 5.5l-2 2 2 2", "M4.5 5.5l2 2-2 2", "M13.5 4.5v6"], "#ffe14d", "w-resize"),
+    "ripple-in": cursor(["M6.5 2.5h-2v10h2", "M8.5 7.5h5", "M11.5 5.5l2 2-2 2", "M10.5 5.5l-2 2 2 2", "M1.5 4.5v6"], "#ffe14d", "e-resize"),
+    "trim-out": cursor(["M8.5 2.5h2v10h-2", "M1.5 7.5h5", "M3.5 5.5l-2 2 2 2", "M4.5 5.5l2 2-2 2"], "#9dff7a", "w-resize"),
+    "trim-in": cursor(["M6.5 2.5h-2v10h2", "M8.5 7.5h5", "M11.5 5.5l2 2-2 2", "M10.5 5.5l-2 2 2 2"], "#9dff7a", "e-resize"),
+    "roll": cursor(["M6.5 2.5v10", "M8.5 2.5v10", "M1.5 7.5h3", "M10.5 7.5h3", LEFT.replace("4.5 5.5", "3.5 5.5"), RIGHT.replace("10.5 5.5", "11.5 5.5")], "#ffd84d", "col-resize"),
+    "retime": cursor(["M7.5 2.5v10", LEFT, RIGHT, "M5.5 7.5h4"], "#ff9a3c", "ew-resize"),
+    "loop": cursor(["M4.5 5.5h5a2.5 2.5 0 0 1 0 5h-1", "M6.5 3.5l-2 2 2 2", "M1.5 2.5v10"], "#4de1ff", "ew-resize"),
+    "slip": cursor(["M4.5 2.5h-2v10h2", "M10.5 2.5h2v10h-2", "M5.5 7.5h4", "M6.5 6.5l-1 1 1 1", "M8.5 6.5l1 1-1 1"], "#c9a6ff", "ew-resize"),
+    "slide": cursor(["M1.5 3.5v8", "M13.5 3.5v8", "M4.5 7.5h6", LEFT.replace("4.5 5.5", "5.5 5.5"), RIGHT.replace("10.5 5.5", "9.5 5.5")], "#c9a6ff", "move"),
 };
+// The selected edit point, as Resolve marks it.
+const EDIT_GREEN = "#35e06f";
 const ACT_COLOR = { "trim-out": "#9dff7a", "trim-in": "#9dff7a", "ripple-out": "#ffe14d", "ripple-in": "#ffe14d", roll: "#ffd84d",
                     retime: "#ff9a3c", loop: "#4de1ff", slip: "#c9a6ff", slide: "#c9a6ff" };
 
@@ -285,7 +292,6 @@ export const EditTrimMixin = {
      * source) from the cut `start`: the new cut, with a linked partner following.
      */
     _editTlTrimCompute(info, start, d) {
-        const fps = start.fps || 24;
         const dur = this._editTlDur();
         const sel = info.sel, i = sel.i;
         const c0 = D.clipOf(start, sel);
@@ -295,13 +301,13 @@ export const EditTrimMixin = {
         let next = start;
         switch (info.act) {
             case "trim-out":
-                next = v1 ? D.liftTrimEnd(start, i, D.toFrame(len0 + d, fps), dur)
-                          : D.trimTrackClipEnd(start, sel.track, i, D.toFrame(len0 + d, fps), dur);
+                next = v1 ? D.liftTrimEnd(start, i, len0 + d, dur)
+                          : D.trimTrackClipEnd(start, sel.track, i, len0 + d, dur);
                 break;
             case "trim-in": next = v1 ? D.liftTrimStart(start, i, d) : D.trimTrackClipStart(start, sel.track, i, d); break;
             case "ripple-out":
-                next = v1 ? D.trimEnd(start, i, D.toFrame(len0 + d, fps), dur)
-                          : D.rippleTrackEnd(start, sel.track, i, D.toFrame(len0 + d, fps), dur);
+                next = v1 ? D.trimEnd(start, i, len0 + d, dur)
+                          : D.rippleTrackEnd(start, sel.track, i, len0 + d, dur);
                 break;
             case "ripple-in": next = v1 ? D.trimStart(start, i, d) : D.rippleTrackStart(start, sel.track, i, d); break;
             case "roll":
@@ -311,7 +317,7 @@ export const EditTrimMixin = {
             case "retime":
                 next = D.retimeClip(start, sel, info.side === "start" ? len0 - d : len0 + d, info.side === "start");
                 break;
-            case "loop": next = D.loopExtend(start, sel, D.toFrame(len0 + d, fps), null, dur); break;
+            case "loop": next = D.loopExtend(start, sel, len0 + d, null, dur); break;
             case "slip": next = D.slipClip(start, sel, -d * D.speedOf(c0), dur); break;         // the picture follows the pointer
             case "slide": next = (v1 ? D.slideClip(start, i, d, dur) : D.slideTrackClip(start, sel.track, i, d, dur)) || start; break;
         }
@@ -336,16 +342,14 @@ export const EditTrimMixin = {
 
     /** The clips whose edges an edit of `info` must not snap to: itself, its partner, what moves with it. */
     _editTlTrimExclude(info, start) {
-        const out = [D.selId(info.sel)];
-        const partner = D.linkPartner(start, info.sel);
-        if (partner) out.push(D.selId(partner));
+        const out = D.snapExclude(start, info.sel);
         if (info.a) out.push(D.selId(info.a), D.selId(info.b));
         if (info.act.startsWith("ripple") || info.act === "slide") {
             const p = this._editTlPlace(start, info.sel);
             const tid = info.sel.kind === "clip" ? "V1" : info.sel.track;
             const list = info.sel.kind === "clip" ? start.clips.map((c, j) => [j, D.clipStarts(start)[j]])
                 : D.trackOf(start, tid).clips.map((c, j) => [j, Number(c.at) || 0]);
-            for (const [j, at] of list) if (p && at >= p.start - 1e-6) out.push(tid + ":" + j);
+            for (const [j, at] of list) if (p && at >= p.start - 1e-6) out.push(tid + ":" + j, "gap:" + j);
             if (info.act === "slide" && info.sel.kind === "clip") out.push(tid + ":" + (info.sel.i - 1), "gap:" + info.sel.i, "gap:" + (info.sel.i + 1));
         }
         return out;
@@ -386,13 +390,13 @@ export const EditTrimMixin = {
         const exclude = this._editTlTrimExclude(info, start);
         const sp = D.speedOf(c0);
         this._editTlDrag(e, el, (seconds, ev) => {
-            let d = seconds;
+            let d = D.toFrame(seconds, fps);
             if (point) {
-                const raw = point.t0 + point.sign * d;
-                const snapped = point.span ? this._editTlSnapSpanAt(raw, point.span, exclude) : this._editTlSnapAt(raw, exclude);
-                d = (snapped - point.t0) * point.sign;
+                // The EDGE lands on a frame (not the distance, which from an edge off the grid would miss it).
+                const raw = point.t0 + point.sign * seconds;
+                const landed = point.span ? this._editTlSnapSpanAt(raw, point.span, exclude) : D.toFrame(this._editTlSnapAt(raw, exclude), fps);
+                d = (landed - point.t0) * point.sign;
             }
-            d = D.toFrame(d, fps);
             const next = this._editTlTrimCompute(info, start, d);
             this._editTlCut = next;
             this.editTlRefresh();
@@ -415,11 +419,10 @@ export const EditTrimMixin = {
         }, (moved) => {
             this._editTlTrimShow(null);
             if (!moved) {
-                // A click on an edge in the Trim mode selects that edit point (, . nudge it; E extends it).
-                if (this._editTlTrimMode && info.act !== "slip" && info.act !== "slide" && info.act !== "retime" && info.act !== "loop") {
+                // A click on an edge, in every mode, selects that edit point (, . trim it; E extends it).
+                if (info.act !== "slip" && info.act !== "slide" && info.act !== "retime" && info.act !== "loop") {
                     this._editTlEditSel = info;
-                    const pt = this._editTlTrimPoint(info, start);
-                    this._editTlSeek(pt && info.act !== "ripple-in" ? pt.t0 : began);
+                    this._editTlSeek(this._editTlEditTime(info, start));
                 } else this._editTlSeek(began);
             }
             this.editTlRefresh();
@@ -427,7 +430,7 @@ export const EditTrimMixin = {
         return true;
     },
 
-    /** The edit point selected in the Trim mode, while it still names a clip of the cut. */
+    /** The edit point selected, while it still names a clip of the cut. */
     _editTlEditPoint() {
         const info = this._editTlEditSel;
         const cut = this._editTlCut;
@@ -435,19 +438,75 @@ export const EditTrimMixin = {
         return info;
     },
 
-    /** , and . in the Trim mode: the selected edit point a frame (Shift: a second) on or back - as a drag would, never snapped. */
+    /** The moment an edit point lies at: the cut of a roll, else its clip's edge. */
+    _editTlEditTime(info, cut) {
+        if (info.act === "roll") return D.selSpan(cut, info.b).start;
+        const span = D.selSpan(cut, info.sel);
+        return info.side === "end" ? span.end : span.start;
+    },
+
+    /** The selected edit point as what moving it does in the mode that is on. */
+    _editTlEditLive(info) {
+        return { ...info, act: D.pointAct(info, !!this._editTlTrimMode) };
+    },
+
+    /** , and . with an edit point selected: it trims a frame (Shift: a second) as a drag would, never snapped; the playhead stays on it. */
     editTlNudgeEdit(frames) {
         const info = this._editTlEditPoint();
         if (!info) return false;
         const cut = this._editTlCut, fps = cut.fps || 24;
-        const pt = this._editTlTrimPoint(info, cut);
-        const before = pt ? pt.t0 : 0;
-        const next = this._editTlTrimCompute(info, cut, frames / fps);
-        if (D.sameCut(next, cut)) { this._editTlSay("held: the source ends there, or a clip is as short as it gets"); return true; }
+        const live = this._editTlEditLive(info);
+        const before = this._editTlEditTime(info, cut);
+        const on = this._editTlOnScreen() && Math.abs((this.currentFrame || 0) - Math.round(before * fps)) <= 1;
+        const next = this._editTlTrimCompute(live, cut, frames / fps);
+        if (D.sameCut(next, cut)) { this._editTlSay("held: the source ends there, a clip is as short as it gets, or the next clip is there"); return true; }
         this._editTlApply(next);
-        const after = this._editTlTrimPoint(info, next);
-        this._editTlSay(`${info.act.replace("-", " ")}: ${frames >= 0 ? "+" : "−"}${Math.abs(frames)}f · ${D.timecode(after ? after.t0 : before, fps)}`);
+        const after = this._editTlEditTime(info, next);
+        if (on) this._editTlGoFrame(Math.round(after * fps));
+        this._editTlSay(`${live.act.replace("-", " ")}: ${frames >= 0 ? "+" : "\u2212"}${Math.abs(frames)}f \u00b7 ${D.timecode(after, fps)}`);
         return true;
+    },
+
+    /**
+     * Shift+A / Shift+S: the playhead to the edit before / after, and that edit point
+     * selected (a roll where two clips meet), ready for , and . - on the track of the
+     * edit point or clip selected, else V1.
+     */
+    editTlEditStep(dir) {
+        const cut = this._editTlCut;
+        if (!cut || !this._editTlTransport()) return;
+        const on = this._editTlEditPoint() ? this._editTlEditPoint().sel : this._editTlSel;
+        const track = on && on.kind === "tclip" ? on.track : "V1";
+        const fps = cut.fps || 24;
+        const stop = D.nextStop(D.editStops(cut, track), this.currentFrame || 0, dir, fps);
+        if (!stop) { this._editTlSay(dir < 0 ? "no edit before this one" : "no edit after this one"); return; }
+        this._editTlEditSel = D.stopPoint(stop);
+        this._editTlMulti = null;
+        this._editTlSel = this._editTlEditSel.sel;
+        this._editTlGoFrame(Math.round(stop.t * fps));
+        this.editTlRefresh();
+    },
+
+    /** , and . : the edit point selected trims; else the selected clips MOVE a frame (Shift: a second). */
+    editTlNudge(frames) {
+        if (this.editTlNudgeEdit(frames)) return;
+        const cut = this._editTlCut;
+        const list = this._editTlSelAll().filter((s) => s.kind !== "gap" && s.kind !== "sound");
+        if (!cut || !list.length) { this._editTlSay("select a clip to move it, or click a cut to trim it"); return; }
+        const fps = cut.fps || 24;
+        const d = frames / fps;
+        let next = null;
+        // The Trim mode: one clip slides, its neighbours giving and taking; at an end of the track, or several, they move.
+        if (this._editTlTrimMode && list.length === 1 && D.isClipSel(list[0])) {
+            const s = list[0];
+            const slid = s.kind === "clip" ? D.slideClip(cut, s.i, d, this._editTlDur()) : D.slideTrackClip(cut, s.track, s.i, d, this._editTlDur());
+            if (slid) next = D.followLink(cut, slid, s);
+        }
+        if (!next) next = D.moveSelection(cut, list, d).cut;
+        if (D.sameCut(next, cut)) { this._editTlSay("held: a clip or the start of the film is in the way"); return; }
+        this._editTlApply(next);
+        const span = D.isClipSel(this._editTlSel) ? D.selSpan(next, this._editTlSel) : null;
+        this._editTlSay(`moved ${frames >= 0 ? "+" : "\u2212"}${Math.abs(frames)}f` + (span ? ` \u00b7 ${D.timecode(span.start, fps)}` : ""));
     },
 
     /** E: the selected edit point (or the out of the selected clip) moved to the playhead. */
@@ -455,10 +514,11 @@ export const EditTrimMixin = {
         const cut = this._editTlCut;
         if (!cut || !this._editTlOnScreen()) { this._editTlSay("the cut is not on screen: open its tab to extend to the playhead"); return; }
         let info = this._editTlEditPoint();
+        if (info) info = this._editTlEditLive(info);
         if (!info && this._editTlSel && D.clipOf(cut, this._editTlSel)) {
             info = { act: this._editTlTrimMode ? "ripple-out" : "trim-out", sel: this._editTlSel, side: "end" };
         }
-        if (!info) { this._editTlSay("select an edit point (Trim mode: click an edge) or a clip to extend it"); return; }
+        if (!info) { this._editTlSay("select an edit point (click a cut) or a clip to extend it"); return; }
         const fps = cut.fps || 24;
         const pt = this._editTlTrimPoint(info, cut);
         if (!pt) return;
@@ -468,28 +528,43 @@ export const EditTrimMixin = {
         this._editTlApply(next);
     },
 
-    /** The selected edit point, drawn: a bright bar on its side of the clip. */
+    /** The selected edit point, drawn as Resolve's: green on the edge(s) that will move, in every mode, its linked partner's too. */
     _editTlEditMarkDraw() {
         const ui = this._editTlUi, lay = this._editTlLay;
         if (!ui) return;
-        if (!ui.editMark || !ui.editMark.isConnected) {
-            ui.editMark = ui.area.ownerDocument.createElement("div");
-            ui.editMark.className = "edit-editpoint";
-            ui.area.append(ui.editMark);
+        const cut = this._editTlCut;
+        const info = this._editTlEditPoint();
+        const edges = [];
+        if (info && lay && lay.total > 0) {
+            const of = (sel, side) => {
+                const p = this._editTlPlace(cut, sel);
+                if (p && p.row) edges.push({ at: side === "end" ? p.start + p.length : p.start, side, row: p.row });
+                const partner = D.linkPartner(cut, sel);
+                const q = partner && this._editTlPlace(cut, partner);
+                if (q && q.row) edges.push({ at: side === "end" ? q.start + q.length : q.start, side, row: q.row });
+            };
+            if (info.act === "roll") { of(info.a, "end"); of(info.b, "start"); } else of(info.sel, info.side === "end" ? "end" : "start");
         }
-        const info = this._editTlTrimMode ? this._editTlEditPoint() : null;
-        const pt = info && lay && this._editTlTrimPoint(info, this._editTlCut);
-        const p = info && this._editTlPlace(this._editTlCut, info.sel);
-        if (!pt || !p || !p.row) { ui.editMark.style.display = "none"; return; }
-        const at = info.act === "ripple-in" ? p.start : pt.t0;
-        const a = ui.area.getBoundingClientRect(), r = p.row.getBoundingClientRect();
-        ui.editMark.style.display = "block";
-        ui.editMark.style.left = (at / lay.total) * 100 + "%";
-        ui.editMark.style.top = (r.top - a.top) + "px";
-        ui.editMark.style.height = r.height + "px";
-        ui.editMark.dataset.side = info.act === "roll" ? "roll" : info.side || "end";
-        ui.editMark.style.setProperty("--trim", ACT_COLOR[info.act] || "#ffe14d");
-        ui.editMark.title = `Selected edit: ${info.act.replace("-", " ")} - , / . nudge it, E extends it to the playhead`;
+        const keys = ["editMark", "editMark2", "editMark3", "editMark4"];
+        const a = ui.area.getBoundingClientRect();
+        keys.forEach((key, n) => {
+            if (!ui[key] || !ui[key].isConnected) {
+                ui[key] = ui.area.ownerDocument.createElement("div");
+                ui[key].className = "edit-editpoint";
+                ui.area.append(ui[key]);
+            }
+            const el = ui[key], g = edges[n];
+            if (!g) { el.style.display = "none"; return; }
+            const r = g.row.getBoundingClientRect();
+            el.style.display = "block";
+            el.style.left = (g.at / lay.total) * 100 + "%";
+            el.style.top = (r.top - a.top) + "px";
+            el.style.height = r.height + "px";
+            el.dataset.side = g.side;
+            el.dataset.roll = info.act === "roll" ? "1" : "";
+            el.style.setProperty("--trim", EDIT_GREEN);
+            el.title = `Selected edit: ${D.pointAct(info, !!this._editTlTrimMode).replace("-", " ")} - , / . trim it, E extends it to the playhead, Esc lets it go`;
+        });
     },
 
     /** A dissolve's bar, pressed in its body: roll the cut under it (its edges stay the dissolve's length). */
@@ -542,9 +617,8 @@ export const EditTrimMixin = {
 
     // ── keys: slip, retime, loop ─────────────────────────────────────────────
 
-    /** , and . : slip the selected clip a frame (Shift: a second) - `frames` of its source. In the Trim mode with an edit point selected: nudge that. */
+    /** Alt+, and Alt+. : slip the selected clip a frame (Shift: a second) - `frames` of its source. */
     editTlSlipBy(frames) {
-        if (this._editTlTrimMode && this.editTlNudgeEdit(frames)) return;
         const sel = this._editTlSel;
         const cut = this._editTlCut;
         const c = cut && D.clipOf(cut, sel);

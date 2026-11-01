@@ -64,6 +64,20 @@ class GapsAndLinksInTheFile(unittest.TestCase):
                             "clips": [{"file": self.a, "name": "a", "at": 0.5, "in": 0, "length": 2.5,
                                        "link": "L1", "unlinked": True}]}]}
 
+    def test_the_bed_deleted_in_the_panel_goes_from_the_file_and_the_other_clips_stay(self):
+        doc = self.tio.rebuild(self.tio.new_doc("t", FPS), self.edit(), may_use=lambda p: True)
+        bed = self.tio._track_of(doc, "audio")
+        clip = lambda f: {"OTIO_SCHEMA": "Clip.2", "name": os.path.basename(f), "source_range": rng(0, 24), "metadata": {}, "effects": [], "markers": [],
+                          "media_reference": {"OTIO_SCHEMA": "ExternalReference.1", "target_url": f, "metadata": {}}}
+        bed["children"] = [clip(self.a), clip(self.b)]
+        names = lambda d: [s["name"] for s in self.tio.editable(json.loads(json.dumps(d)))["sound"]]
+        self.assertEqual(names(doc), ["a.mp4", "b.mp4"])
+        # Nothing said about it (an older caller, agentY): as it was.
+        self.assertEqual(names(self.tio.rebuild(doc, self.edit(), may_use=lambda p: True)), ["a.mp4", "b.mp4"])
+        kept = self.tio.editable(json.loads(json.dumps(doc)))["sound"][1:]
+        self.assertEqual(names(self.tio.rebuild(doc, {**self.edit(), "sound": kept}, may_use=lambda p: True)), ["b.mp4"])
+        self.assertEqual(names(self.tio.rebuild(doc, {**self.edit(), "sound": []}, may_use=lambda p: True)), [])
+
     def test_a_gap_is_an_otio_gap_and_comes_back(self):
         doc = self.tio.rebuild(self.tio.new_doc("t", FPS), self.edit(), may_use=lambda p: True)
         v1 = doc["tracks"]["children"][0]["children"]

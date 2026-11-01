@@ -4,6 +4,7 @@
 import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
 import { resolveViewerAction, viewerHelpRows } from "./bEpicViewer_keymap.js";
+import { EDIT_KEYS } from "./bEpicViewer_editKeys.js";
 import { isViewerSourceNode, senderTabInfo } from "./bEpicViewer_nodeTools.js";
 import { POPOUT_NAME } from "./bEpicViewer_mixinReconnect.js";
 import { notice } from "./bEpicViewer_exportUI.js";
@@ -167,9 +168,35 @@ export const UIMixin = {
         section('#help-roto',    active === "roto");
         section('#help-sam3',    active === "sam3");
         section('#help-sam3box', active === "sam3box");
+        // On a cut's tab, the Edit panel up (or the timeline holding the focus): its keys instead of the viewer's.
+        const edit = this._helpIsEdit();
+        section('#help-viewer', !edit);
+        section('#help-edit', edit);
 
         this.renderHelpKeys();
+        if (edit) this.renderHelpEditKeys();
         this.helpOverlay.style.display = "flex";
+    },
+
+    /** Is it the Edit panel's keys the overlay should list? */
+    _helpIsEdit() {
+        if (!this._editTlOpen || !this._editTlOpen() || !this._editTlUi) return false;
+        const body = this._editTlUi.body;
+        const focus = body.getRootNode && body.getRootNode().activeElement;
+        return !!((this.isEditTab && this.isEditTab()) || (focus && body.contains(focus)));
+    },
+
+    renderHelpEditKeys() {
+        const host = this.helpOverlay.querySelector('#help-edit-keys');
+        if (!host) return;
+        const doc = host.ownerDocument;
+        host.replaceChildren(...EDIT_KEYS.map(([keys, what]) => {
+            const line = doc.createElement('div');
+            const key = doc.createElement('b');
+            key.textContent = `${keys}:`;
+            line.append(key, doc.createTextNode(` ${what}`));
+            return line;
+        }));
     },
 
     // The listed keys are whatever is bound right now, not the shipped defaults,

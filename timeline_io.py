@@ -860,6 +860,12 @@ def rebuild(doc, edit, stamp="", may_use=None):
         children.append(item)
     video["children"] = children
     audio = _track_of(new, "audio")
+    # The bed's clips deleted in the panel go from the file; the rest are kept whole.
+    if isinstance(edit.get("sound"), list) and audio is not None:
+        left = {str(s.get("file") or "") for s in edit["sound"] if isinstance(s, dict)}
+        audio["children"] = [c for c in (audio.get("children") or [])
+                             if not (isinstance(c, dict) and str(c.get("OTIO_SCHEMA") or "").startswith("Clip"))
+                             or _file(c.get("media_reference")) in left]
     if "tracks" in edit:
         more_video, more_audio = _build_tracks(doc, edit.get("tracks") or [], rate, may_use)
         stack_new = new.get("tracks") or {}

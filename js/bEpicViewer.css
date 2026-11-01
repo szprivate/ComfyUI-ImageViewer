@@ -1603,16 +1603,13 @@ textarea.param-input {
 .edit-brief { min-height: 46px; resize: vertical; padding: 4px; font-family: inherit; }
 .edit-warn { color: #ffcf6f; }
 .edit-ask .edit-btn { align-self: flex-start; }
-.edit-keys { width: 330px; gap: 3px; cursor: pointer; }
-.edit-keyrow { display: flex; gap: 8px; align-items: baseline; }
-.edit-keyrow kbd { flex: none; min-width: 120px; color: #00e5ff; font-family: inherit; font-size: 10px; }
 
 /* Trimming like an editor (bEpicViewer_editTrim.js): the side a press will move, lit; its timecode beside the pointer. */
 .edit-trimhl { position: absolute; z-index: 6; pointer-events: none; display: none; box-sizing: border-box;
                background: color-mix(in srgb, var(--trim, #9dff7a) 16%, transparent); }
-.edit-trimhl[data-side="end"] { border-right: 3px solid var(--trim, #9dff7a); }
-.edit-trimhl[data-side="start"] { border-left: 3px solid var(--trim, #9dff7a); }
-.edit-trimhl[data-side="body"] { border: 2px solid var(--trim, #9dff7a); }
+.edit-trimhl[data-side="end"] { border-right: 2px solid var(--trim, #9dff7a); }
+.edit-trimhl[data-side="start"] { border-left: 2px solid var(--trim, #9dff7a); }
+.edit-trimhl[data-side="body"] { border: 1px solid var(--trim, #9dff7a); }
 .edit-trimtip { position: absolute; z-index: 9; pointer-events: none; display: none; white-space: nowrap;
                 background: rgba(14,16,20,.94); border: 1px solid var(--trim, #9dff7a); border-radius: 3px;
                 padding: 2px 6px; font: 10px/1.35 ui-monospace, Consolas, monospace; color: #e8eef5; }
@@ -1681,9 +1678,18 @@ textarea.param-input {
 .edit-modetag[data-mode="trim"] { border-color: #ffe14d; color: #ffe14d; }
 .edit-modetag[data-mode="blade"] { border-color: #ff5f5f; color: #ff8f8f; }
 .edit-body.trim .edit-shot { cursor: default; }
-/* The selected edit point of the Trim mode. */
-.edit-editpoint { position: absolute; z-index: 7; pointer-events: none; display: none; width: 4px; margin-left: -2px;
-    background: var(--trim, #ffe14d); box-shadow: 0 0 0 1px rgba(0,0,0,.6), 0 0 6px var(--trim, #ffe14d); border-radius: 1px; }
+/* The selected edit point, as Resolve's: green on the edge that will move, on its own side of the cut. */
+.edit-editpoint { position: absolute; z-index: 7; pointer-events: none; display: none; width: 3px; box-sizing: border-box;
+    background: var(--trim, #35e06f); box-shadow: 0 0 0 1px rgba(0,0,0,.65), 0 0 5px var(--trim, #35e06f); }
+.edit-editpoint[data-side="end"] { transform: translateX(-100%); }
+/* A selected text, the music bed; the empty room that makes a new track; the marquee. */
+.edit-snd.sel, .edit-snd.msel, .edit-text.msel { outline: 1px solid #00e5ff; outline-offset: -1px; }
+.edit-gap.msel { border: 1px dashed #00e5ff; background-color: rgba(0,229,255,.12); }
+.edit-room { position: relative; height: 12px; flex: none; box-sizing: border-box; }
+.edit-room.landing { height: 12px; background: rgba(255,207,111,.16); outline: 1px dashed #ffcf6f; outline-offset: -1px; }
+.edit-room.landing::after { content: attr(data-label); position: absolute; left: 4px; top: 0; font-size: 9px; line-height: 12px; color: #ffcf6f; pointer-events: none; }
+.edit-headroom { height: 12px; flex: none; border: 0; background: transparent; }
+.edit-marquee { position: absolute; z-index: 9; pointer-events: none; box-sizing: border-box; border: 1px solid #00e5ff; background: rgba(0,229,255,.12); }
 /* Gaps of V1: empty time, black on screen. */
 .edit-gap { position: absolute; top: 2px; bottom: 2px; box-sizing: border-box; border: 1px dashed #4a5563; border-radius: 2px;
     background: repeating-linear-gradient(135deg, rgba(255,255,255,.035) 0 4px, transparent 4px 9px); cursor: pointer; }
@@ -1696,7 +1702,8 @@ textarea.param-input {
 .edit-badge-link.off { background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 14'><g fill='none' stroke='%23ff9f6f' stroke-width='2.4'><path d='M8 3H5.5a4 4 0 0 0 0 8H8'/><path d='M14 3h2.5a4 4 0 0 1 0 8H14'/></g><path d='M11 1v12' stroke='%23ff9f6f' stroke-width='1.6' stroke-dasharray='2 2'/></svg>"); }
 .edit-shot.muted .edit-media { opacity: .55; }
 /* Snapping: the magnet, and the line down every track at what was snapped to. */
-.edit-snap-btn { display: inline-flex; align-items: center; padding: 2px 5px; }
+.edit-iconbtn { display: inline-flex; align-items: center; justify-content: center; padding: 3px 6px; flex: none; }
+.edit-icon { width: 15px; height: 15px; display: block; }
 .edit-snap-btn:not(.on) { opacity: .55; }
 .edit-snapbeat-btn:not(.on) { opacity: .5; }
 .edit-snapline { position: absolute; top: 0; bottom: 0; width: 1px; margin-left: -0.5px; z-index: 8; pointer-events: none; display: none;
@@ -1704,3 +1711,4 @@ textarea.param-input {
 .edit-snapline.flash { animation: edit-snapflash .35s ease-out; }
 @keyframes edit-snapflash { from { box-shadow: 0 0 0 3px rgba(255,243,107,.75); } to { box-shadow: 0 0 0 1px rgba(255,243,107,.25); } }
 .edit-shot.snap-hit, .edit-gap.snap-hit, .edit-text.snap-hit { outline: 1px solid #fff36b; outline-offset: -1px; }
+.edit-area { min-height: 100%; }

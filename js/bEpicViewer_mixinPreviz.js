@@ -1174,7 +1174,8 @@ export const PrevizMixin = {
         menu.style.left = `${x - h.left}px`;
         menu.style.top  = `${y - h.top}px`;
         const m = menu.getBoundingClientRect();
-        if (m.bottom > h.bottom) menu.style.top  = `${Math.max(0, y - h.top - m.height)}px`;
+        // (A little short of the edge: the viewer's resize strip lies over its last pixels.)
+        if (m.bottom > h.bottom - 12) menu.style.top  = `${Math.max(0, y - h.top - m.height)}px`;
         if (m.right  > h.right)  menu.style.left = `${Math.max(0, h.width - m.width - 4)}px`;
 
         // composedPath, because a listener on the document sees every event from

@@ -131,6 +131,12 @@
         </div>
     </div>
     <div id="hotkey-help" class="hotkey-overlay">
+        <div id="help-edit" style="display:none;">
+            <h3>Edit Panel Hotkeys</h3>
+            <!-- Filled from EDIT_KEYS on open, while a cut's tab is up. -->
+            <div id="help-edit-keys"></div>
+        </div>
+        <div id="help-viewer">
         <h3>Viewer Hotkeys</h3>
         <!-- Filled from the keymap on open, so it lists the keys actually bound. -->
         <div id="help-keys"></div>
@@ -142,6 +148,7 @@
         <div><b>Shift-drag off the Timeline</b>  Pull the frame on screen onto the graph as a Load Image node (a video frame is extracted to a PNG beside the clip — or in output/extracted_frames when the clip is outside ComfyUI's input, output and temp folders)</div>
         <div><b>Drag from the File Browser</b>  onto the viewport to open it here, or onto the graph for a loader node</div>
         <div><b>Drag a panel by its title bar</b>  to either side of the picture, or onto another panel to stack it (Esc cancels)</div>
+        </div>
         <div id="help-roto" style="display:none; margin-top:14px; border-top:1px solid #333; padding-top:10px;">
             <h3 style="color:#f60;">Roto Tool</h3>
             <div><b>The matte lives on a node:</b> turning this on over any other tab adds a <i>bEpic Image Viewer Roto</i> node wired to the image you are looking at, and draws into that</div>

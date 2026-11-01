@@ -397,9 +397,12 @@ export function insertClip(cut, clip, index) {
 export function v1DropAt(cut, seconds) {
     const g = gapAt(cut, seconds);
     if (g >= 0) return { index: g, moment: round(Math.max(0, num(seconds))), inGap: true };
+    const main = mainLength(cut);
+    // Past the end of V1 (zoomed out, there is timeline there): at that moment, with a gap before it.
+    if (num(seconds) > main + 1e-6 && (cut.clips || []).length) return { index: cut.clips.length, moment: round(num(seconds)), inGap: false, past: true };
     const index = dropIndex(cut, seconds);
     const starts = clipStarts(cut);
-    return { index, moment: index < starts.length ? starts[index] : mainLength(cut), inGap: false };
+    return { index, moment: index < starts.length ? starts[index] : main, inGap: false };
 }
 
 /**
@@ -409,6 +412,11 @@ export function v1DropAt(cut, seconds) {
  */
 export function insertAt(cut, clip, seconds) {
     const place = v1DropAt(cut, seconds);
+    if (place.past) {
+        const next = insertClip(cut, clip, place.index);
+        next.clips[place.index].gap = round(place.moment - mainLength(cut));
+        return { cut: settle(next), i: place.index };
+    }
     if (!place.inGap) return { cut: insertClip(cut, clip, place.index), i: place.index };
     const i = place.index;
     const gapStart = clipStarts(cut)[i] - num(cut.clips[i].gap);
@@ -430,13 +438,18 @@ export function trackOf(cut, id) {
 /** A new, empty track of `kind` ("video" / "audio"), above the others of its kind. */
 export function addTrack(cut, kind) {
     const next = copy(cut);
-    const audio = kind === "audio";
-    const letter = audio ? "A" : "V";
-    const taken = new Set(next.tracks.map((k) => k.id));
+    const id = nextTrackId(next, kind);
+    next.tracks.push({ id, kind: kind === "audio" ? "audio" : "video", name: id, off: false, clips: [] });
+    return next;
+}
+
+/** The id the next new track of `kind` will get: V3, A2 ... */
+export function nextTrackId(cut, kind) {
+    const letter = kind === "audio" ? "A" : "V";
+    const taken = new Set(((cut && cut.tracks) || []).map((k) => k.id));
     let n = 2;
     while (taken.has(letter + n)) n += 1;
-    next.tracks.push({ id: letter + n, kind: audio ? "audio" : "video", name: letter + n, off: false, clips: [] });
-    return next;
+    return letter + n;
 }
 
 export function removeTrack(cut, id) {
@@ -698,6 +711,7 @@ export function sameCut(a, b) {
         texts: ((cut && cut.texts) || []).map((t) => [Number.isInteger(t.ref) ? t.ref : "new", t.text, round(num(t.start)), round(num(t.length)), JSON.stringify(textLook(t))]),
         tracks: ((cut && cut.tracks) || []).map((k) => [k.kind, k.name, !!k.off, (k.clips || []).map((c) =>
             [Array.isArray(c.ref) ? c.ref.join(":") : c.file, c.name, round(num(c.at)), round(num(c.in)), round(num(c.length)), ...dress(c)])]),
+        sound: ((cut && cut.sound) || []).map((s) => String(s.file || s.name || "")),
         off: [!!(cut && cut.off && cut.off.V1), !!(cut && cut.off && cut.off.A1), !!(cut && cut.off && cut.off.T)],
     });
     return key(a) === key(b);
@@ -731,6 +745,8 @@ export function toSave(cut) {
                 fx: cleanFx(c.fx), ...timeOf(c), ...(takesOf(c).length ? { takes: cleanTakes(c.takes) } : {}),
             })),
         })),
+        // The bed's clips that are left (one deleted in the panel goes from the file too).
+        sound: (cut.sound || []).map((s) => ({ name: s.name || "", file: s.file || "" })),
         off: { V1: !!(cut.off && cut.off.V1), A1: !!(cut.off && cut.off.A1), T: !!(cut.off && cut.off.T) },
     };
 }
@@ -738,9 +754,11 @@ export function toSave(cut) {
 // ── drawing ──────────────────────────────────────────────────────────────────
 
 /** Where everything sits, as percentages of the film's length. */
-export function layoutCut(cut, density = 1) {
-    const total = filmLength(cut);
-    const empty = { total, shots: [], mixes: [], gaps: [], texts: [], sound: [], tracks: [], ticks: [] };
+export function layoutCut(cut, density = 1, span = 0) {
+    // `span`: the seconds the whole width stands for (viewSpan: past the film's end when zoomed out). `film`: the film's own length.
+    const film = filmLength(cut);
+    const total = num(span) > 0 ? num(span) : film;
+    const empty = { total, film, shots: [], mixes: [], gaps: [], texts: [], sound: [], tracks: [], ticks: [] };
     if (!cut || !(total > 0)) return empty;
     const starts = clipStarts(cut);
     const place = (start, length) => ({
@@ -766,9 +784,9 @@ export function layoutCut(cut, density = 1) {
         name: String(t.text || "").split("\n")[0] || "text",
         title: `"${String(t.text || "").replace(/\n/g, " / ")}"${t.preset ? " — " + t.preset : ""}, `
             + `${lengthLabel(t.length)} from ${lengthLabel(t.start)}`,
-        late: num(t.start) + num(t.length) > total + 0.02,          // runs past the end of the film
+        late: num(t.start) + num(t.length) > film + 0.02,          // runs past the end of the film
     }));
-    const sound = (cut.sound || []).map((s) => ({ left: 0, width: 100, name: s.name || base(s.file),
+    const sound = (cut.sound || []).map((s) => ({ left: 0, width: pct((film / total) * 100), name: s.name || base(s.file),
                                                   title: `sound under the film: ${s.name || s.file}` }));
     const tracks = (cut.tracks || []).map((k) => ({
         id: k.id, kind: k.kind, name: k.name || k.id, off: !!k.off,
@@ -782,7 +800,7 @@ export function layoutCut(cut, density = 1) {
     }));
     const gaps = v1Gaps(cut).map((g) => ({ ...place(g.start, g.length), ...g,
         title: `Gap, ${lengthLabel(g.length)} - nothing of the cut plays here. Del or Shift+Del closes it (the clips after it move up)` }));
-    return { total, shots, mixes, gaps, texts, sound, tracks, ticks: ticks(total, density) };
+    return { total, film, shots, mixes, gaps, texts, sound, tracks, ticks: ticks(total, density) };
 }
 
 /** The marks of the ruler: a round number of seconds apart, about ten of them. */
@@ -1707,7 +1725,8 @@ export function shotsIn(cut, from, to) {
 /** The id of a selected clip: "V1:3" on the cut itself, "<track id>:<i>" on a higher track. */
 export function selId(sel) {
     if (!sel) return "";
-    return (sel.kind === "clip" ? "V1" : String(sel.track)) + ":" + sel.i;
+    const where = { clip: "V1", text: "T", gap: "gap", sound: "A1", mix: "mix" }[sel.kind];
+    return (where || String(sel.track)) + ":" + sel.i;
 }
 
 /** Do two selections name the same clip? */
@@ -1715,18 +1734,31 @@ export function sameSel(a, b) {
     return !!a && !!b && selId(a) === selId(b) && (a.kind === "clip") === (b.kind === "clip");
 }
 
-const isClipSel = (s) => !!s && (s.kind === "clip" || s.kind === "tclip");
+/** Is it a clip (on V1 or a placed track)? */
+export const isClipSel = (s) => !!s && (s.kind === "clip" || s.kind === "tclip");
+/** Can it be one of several selected: a clip, a text, a clip of the music bed, a gap of V1. */
+export const isItemSel = (s) => isClipSel(s) || (!!s && (s.kind === "text" || s.kind === "sound" || s.kind === "gap"));
+
+/** What a selection names in the cut, of any kind that can be one of several (else null). */
+export function itemOf(cut, s) {
+    if (!cut || !s) return null;
+    if (isClipSel(s)) return clipOf(cut, s);
+    if (s.kind === "text") return (cut.texts || [])[s.i] || null;
+    if (s.kind === "sound") return (cut.sound || [])[s.i] || null;
+    if (s.kind === "gap") { const c = (cut.clips || [])[s.i]; return c && num(c.gap) > 0 ? c : null; }
+    return null;
+}
 
 /** `list` with `sel` toggled: put in at the end, or taken out. */
 export function toggleSel(list, sel) {
-    const have = (list || []).filter(isClipSel);
-    if (!isClipSel(sel)) return have;
+    const have = (list || []).filter(isItemSel);
+    if (!isItemSel(sel)) return have;
     return have.some((s) => sameSel(s, sel)) ? have.filter((s) => !sameSel(s, sel)) : [...have, sel];
 }
 
 /** The clips from `anchor` to `sel` on one track, both included - or just `sel` where they are on different tracks. */
 export function rangeSel(cut, anchor, sel) {
-    if (!isClipSel(sel)) return [];
+    if (!isClipSel(sel)) return isItemSel(sel) ? [sel] : [];
     if (!isClipSel(anchor) || (anchor.kind === "clip") !== (sel.kind === "clip") || (sel.kind === "tclip" && anchor.track !== sel.track)) return [sel];
     const from = Math.min(anchor.i, sel.i), to = Math.max(anchor.i, sel.i);
     const out = [];
@@ -1736,23 +1768,25 @@ export function rangeSel(cut, anchor, sel) {
 
 /** Only the selections that still name a clip of the cut, in the cut's order (V1, then the tracks bottom to top). */
 export function pruneSel(cut, list) {
-    const rank = (s) => (s.kind === "clip" ? -1 : ((cut && cut.tracks) || []).findIndex((k) => k.id === s.track));
+    const rank = (s) => (s.kind === "clip" || s.kind === "gap" ? -1 : s.kind === "text" ? -2 : s.kind === "sound" ? 1e6
+        : ((cut && cut.tracks) || []).findIndex((k) => k.id === s.track));
     const seen = new Set();
-    return (list || []).filter((s) => isClipSel(s) && clipOf(cut, s) && !seen.has(selId(s)) && seen.add(selId(s)))
+    return (list || []).filter((s) => isItemSel(s) && itemOf(cut, s) && !seen.has(selId(s)) && seen.add(selId(s)))
         .sort((a, b) => rank(a) - rank(b) || a.i - b.i);
 }
 
 /** What ties a list to the cut it was made on: which clips there are, in which order (by `ref`; a new clip by its place). */
 export function selSignature(cut) {
     const id = (c) => (c.ref !== undefined && c.ref !== null ? JSON.stringify(c.ref) : "f");
-    return JSON.stringify([(cut.clips || []).map(id), ((cut && cut.tracks) || []).map((k) => [k.id, (k.clips || []).map(id)])]);
+    return JSON.stringify([(cut.clips || []).map(id), ((cut && cut.tracks) || []).map((k) => [k.id, (k.clips || []).map(id)]),
+                           (cut.texts || []).length, (cut.sound || []).length]);
 }
 
 export const SELECTED_CAP = 50;
 
 /** The selected clips as agentY reads them: [{ name, file, in, out (seconds of the source), track, id }]. */
 export function selectedClips(cut, list) {
-    return pruneSel(cut, list).slice(0, SELECTED_CAP).map((s) => {
+    return pruneSel(cut, list).filter(isClipSel).slice(0, SELECTED_CAP).map((s) => {
         const c = clipOf(cut, s);
         const from = round(num(c.in));
         return { name: String(c.name || ""), file: String(c.file || ""), in: from, out: round(from + srcUse(c)),
@@ -2400,4 +2434,230 @@ export function snapSpan(at, length, targets, tolerance) {
     const da = a.target ? Math.abs(a.t - at) : Infinity, db = b.target ? Math.abs(b.t - (num(at) + num(length))) : Infinity;
     if (da === Infinity && db === Infinity) return { at: num(at), target: null, edge: "" };
     return da <= db ? { at: a.t, target: a.target, edge: "start", t: a.t } : { at: b.t - num(length), target: b.target, edge: "end", t: b.t };
+}
+
+// The scale of the timeline. `zoom` 1 is the whole film across the width; above
+// it the strip is wider than the panel and scrolls; below it the film takes that
+// share of the width and the rest is empty timeline, to move or drop clips onto.
+
+export const MIN_ZOOM = 0.25;
+export const MAX_ZOOM = 64;
+
+/** A zoom within its limits (a hair off 1 is 1: stepping out and back in lands on Fit). */
+export function clampZoom(zoom) {
+    const z = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, num(zoom, 1) || 1));
+    return Math.abs(z - 1) < 0.02 ? 1 : z;
+}
+
+/** Where the last thing on any track ends: the film, or a sound running on past it. */
+export function contentEnd(cut) {
+    let end = filmLength(cut);
+    for (const k of (cut && cut.tracks) || []) {
+        if (k.kind === "audio") for (const c of k.clips || []) end = Math.max(end, num(c.at) + num(c.length));
+    }
+    return round(end);
+}
+
+/** The seconds the strip's whole width stands for at `zoom`. */
+export function viewSpan(end, zoom) {
+    return num(end) / Math.min(1, clampZoom(zoom));
+}
+
+/** The strip's width in per cent of the panel at `zoom`. */
+export function areaPercent(zoom) {
+    return Math.max(1, clampZoom(zoom)) * 100;
+}
+
+/** The zoom that keeps the seconds per pixel when the content's end goes from `was` to `now`; Fit stays Fit. */
+export function keepScale(zoom, was, now) {
+    if (zoom === 1 || !(num(was) > 0) || !(num(now) > 0) || num(was) === num(now)) return zoom;
+    return clampZoom(zoom * num(now) / num(was));
+}
+
+// ── snapping that lands on frames ────────────────────────────────────────────
+
+/** One moving edge: where it lands, ON A FRAME, snapped or not. { t, target }. */
+export function snapPoint(seconds, targets, tolerance, fps) {
+    const got = snapResolve(seconds, targets, tolerance);
+    return { t: toFrame(got.t, fps), target: got.target };
+}
+
+/**
+ * A span moved: where its start lands. Not snapped, the start goes on a frame.
+ * Snapped, the SNAPPED edge goes on the target's frame - by its end that is the
+ * target less the length, which is left alone even if it is no whole number of frames.
+ */
+export function snapMove(at, length, targets, tolerance, fps) {
+    const got = snapSpan(at, length, targets, tolerance);
+    if (!got.target) return { at: toFrame(at, fps), target: null, edge: "" };
+    const t = toFrame(got.t, fps);
+    return { at: got.edge === "end" ? round(t - num(length)) : t, target: got.target, edge: got.edge };
+}
+
+/** The target ids a drag of `sel` leaves out: it, its linked partner, and the gaps beside them (their near edges are its own). */
+export function snapExclude(cut, sel) {
+    const out = [];
+    const add = (s) => {
+        out.push(selId(s));
+        if (s.kind === "clip") out.push("gap:" + s.i, "gap:" + (s.i + 1));
+    };
+    if (isItemSel(sel)) add(sel);
+    const partner = isClipSel(sel) ? linkPartner(cut, sel) : null;
+    if (partner) add(partner);
+    return out;
+}
+
+// ── several things at once ───────────────────────────────────────────────────
+
+// The list with the linked partners of its clips.
+function withPartners(cut, list) {
+    const all = pruneSel(cut, list);
+    for (const s of all.filter(isClipSel)) { const p = linkPartner(cut, s); if (p) all.push(p); }
+    return pruneSel(cut, all);
+}
+
+/**
+ * Everything in `list` taken out, its linked partners too, as one edit. Lift:
+ * gaps stay, nothing else moves. `ripple`: what follows on each clip's own track
+ * closes up. A gap is closed; a text and a clip of the bed go. V1 keeps its last
+ * shot: { cut, kept } says it had to (an empty cut has no film).
+ */
+export function deleteSelection(cut, list, ripple) {
+    const items = withPartners(cut, list);
+    const next = copy(cut);
+    const gone = new Set(items.map(selId));
+    for (const k of next.tracks) {
+        const out = k.clips.map((c, i) => ({ c, drop: gone.has(k.id + ":" + i) }));
+        const dropped = out.filter((o) => o.drop).map((o) => o.c);
+        k.clips = out.filter((o) => !o.drop).map((o) => o.c);
+        if (ripple) {
+            for (const c of k.clips) {
+                const before = dropped.filter((d) => num(d.at) + num(d.length) <= num(c.at) + 1e-6);
+                c.at = round(num(c.at) - before.reduce((sum, d) => sum + num(d.length), 0));
+            }
+        }
+    }
+    next.texts = next.texts.filter((_, i) => !gone.has("T:" + i));
+    next.sound = next.sound.filter((_, i) => !gone.has("A1:" + i));
+    // V1 from the end: what is done there does not change the places before it. A gap before the clip it lies before.
+    let cutNow = settle(next);
+    let kept = false;
+    const v1 = items.filter((s) => s.kind === "clip" || s.kind === "gap")
+        .sort((a, b) => b.i - a.i || (a.kind === "gap" ? -1 : 1));
+    for (const s of v1) {
+        if (s.kind === "gap") { cutNow = closeGap(cutNow, s.i); continue; }
+        if (cutNow.clips.length <= 1) { kept = true; continue; }
+        cutNow = ripple ? removeClip(cutNow, s.i) : liftV1(cutNow, s.i);
+    }
+    return { cut: cutNow, kept };
+}
+
+/**
+ * Everything in `list` (with its linked partners) moved along the film by `delta`
+ * seconds, together, nothing else moving: on V1 into the gaps beside it and no
+ * further - it stops at a clip that is not moving, and at the start. Clips, texts;
+ * the bed lies under the whole film and a gap is no thing to move, so they stay.
+ * { cut, delta }: `delta` is how far it went, 0 where it is held.
+ */
+export function moveSelection(cut, list, delta) {
+    const items = withPartners(cut, list);
+    const starts = clipStarts(cut);
+    const end = (j) => starts[j] + num(cut.clips[j].length);
+    const v1 = items.filter((s) => s.kind === "clip").map((s) => s.i).sort((a, b) => a - b);
+    let low = -Infinity, high = Infinity;
+    const runs = [];
+    for (const i of v1) {
+        const run = runs[runs.length - 1];
+        if (run && run[1] === i - 1) run[1] = i; else runs.push([i, i]);
+    }
+    for (const [a, b] of runs) {
+        low = Math.max(low, -Math.max(0, starts[a] - (a ? end(a - 1) : 0)));
+        if (cut.clips[b + 1]) high = Math.min(high, Math.max(0, starts[b + 1] - end(b)));
+    }
+    for (const s of items) {
+        if (s.kind === "tclip") low = Math.max(low, -num(clipOf(cut, s).at));
+        if (s.kind === "text") low = Math.max(low, -num(cut.texts[s.i].start));
+    }
+    const d = Math.max(low, Math.min(high, num(delta)));
+    if (!d || !items.some((s) => s.kind === "clip" || s.kind === "tclip" || s.kind === "text")) return { cut, delta: 0 };
+    const next = copy(cut);
+    for (const [a, b] of runs) {
+        for (let j = a; j <= b; j++) restart(next, j, starts[j] + d);
+        if (next.clips[b + 1]) restart(next, b + 1, starts[b + 1]);
+    }
+    for (const s of items) {
+        if (s.kind === "tclip") { const c = clipOf(next, s); c.at = round(num(c.at) + d); }
+        if (s.kind === "text") next.texts[s.i].start = round(num(next.texts[s.i].start) + d);
+    }
+    return { cut: settle(next), delta: d };
+}
+
+/**
+ * What a marquee over `rows` (track ids, "V1", "T", "A1" among them) from `from`
+ * to `to` seconds touches, as a selection list: clips, texts and the bed.
+ */
+export function marqueeSel(cut, rows, from, to) {
+    const a = Math.min(num(from), num(to)), b = Math.max(num(from), num(to));
+    const on = new Set(rows || []);
+    const hits = (s, e) => s <= b + 1e-6 && e >= a - 1e-6;
+    const out = [];
+    if (on.has("V1")) clipStarts(cut).forEach((s, i) => { if (hits(s, s + num(cut.clips[i].length))) out.push({ kind: "clip", i }); });
+    for (const k of (cut && cut.tracks) || []) {
+        if (on.has(k.id)) k.clips.forEach((c, i) => { if (hits(num(c.at), num(c.at) + num(c.length))) out.push({ kind: "tclip", track: k.id, i }); });
+    }
+    if (on.has("T")) ((cut && cut.texts) || []).forEach((t, i) => { if (hits(num(t.start), num(t.start) + num(t.length))) out.push({ kind: "text", i }); });
+    if (on.has("A1") && hits(0, filmLength(cut))) ((cut && cut.sound) || []).forEach((_, i) => out.push({ kind: "sound", i }));
+    return out;
+}
+
+/**
+ * A clip dragged into the empty room above the top video track (`kind` "video")
+ * or below the bottom sound track ("audio"): a new track of that kind, with the
+ * clip on it at `at`. Picture goes up, sound goes down. { cut, sel } or null.
+ */
+export function transferToNewTrack(cut, sel, kind, at, opts = {}) {
+    if (selKind(cut, sel) !== kind) return null;
+    const next = addTrack(cut, kind);
+    return transferClip(next, sel, next.tracks[next.tracks.length - 1].id, at, opts);
+}
+
+// ── edit points ──────────────────────────────────────────────────────────────
+//
+// An edit point is what a press on a clip's edge, or Shift+A / Shift+S, selects:
+// { act, sel, side, a, b }. `side` "end" is the outgoing edge, "start" the
+// incoming; a roll names both clips of its cut and moves both edges.
+
+/** The edit points of a track in time order: [{ t, a, b }], `a` the clip ending there, `b` the one beginning there. */
+export function editStops(cut, track = "V1") {
+    const items = [];
+    if (track === "V1") clipStarts(cut).forEach((s, i) => items.push({ s, e: s + num(cut.clips[i].length), sel: { kind: "clip", i } }));
+    else ((trackOf(cut, track) || { clips: [] }).clips).forEach((c, i) => items.push({ s: num(c.at), e: num(c.at) + num(c.length), sel: { kind: "tclip", track, i } }));
+    const stops = [];
+    const at = (t) => {
+        let g = stops.find((o) => Math.abs(o.t - t) < 1e-3);
+        if (!g) { g = { t: round(t), a: null, b: null }; stops.push(g); }
+        return g;
+    };
+    for (const it of items) { at(it.s).b = it.sel; at(it.e).a = it.sel; }
+    return stops.sort((x, y) => x.t - y.t);
+}
+
+/** The next stop from frame `from` in direction `dir` (-1 / 1), by frames; null at the end. */
+export function nextStop(stops, from, dir, fps) {
+    const f = (o) => Math.round(num(o.t) * (num(fps) > 0 ? num(fps) : 24));
+    const list = stops || [];
+    if (dir < 0) { const before = list.filter((o) => f(o) < from); return before[before.length - 1] || null; }
+    return list.find((o) => f(o) > from) || null;
+}
+
+/** A stop as a selected edit point: both clips there, it is a roll; one, that clip's edge. */
+export function stopPoint(stop) {
+    if (stop.a && stop.b) return { act: "roll", sel: stop.b, side: "start", a: stop.a, b: stop.b };
+    return stop.b ? { act: "trim-in", sel: stop.b, side: "start" } : { act: "trim-out", sel: stop.a, side: "end" };
+}
+
+/** What moving a selected edit point does in a mode: a roll stays one; an edge ripples in the Trim mode, and only trims in Selection. */
+export function pointAct(point, trim) {
+    if (point.act === "roll") return "roll";
+    return (trim ? "ripple-" : "trim-") + (point.side === "end" ? "out" : "in");
 }

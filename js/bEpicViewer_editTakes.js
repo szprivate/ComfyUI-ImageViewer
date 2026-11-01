@@ -5,8 +5,10 @@
 // (plain functions, run under node).
 //
 // SEVERAL CLIPS: Ctrl+click on a clip's body puts it in the selection or takes it
-// out; Shift+click takes the clips between the last one clicked and this one, on
-// one track. A plain click is today's single selection. The single selection
+// out, on any track - the music bed, a text, a gap too; Shift+click adds the clips
+// between the last one clicked and this one (on another track: just this one); a
+// marquee adds what it touches. A plain click is a single selection, but a plain
+// press on one of several in Selection mode keeps them, to drag together. The single selection
 // (`_editTlSel`, what the Inspector, the trims and the keys read) is always the
 // last clip clicked; `_editTlMulti` is the list it is one of. The list is held to
 // the cut it was made on (D.selSignature): an edit that adds, takes out or
@@ -38,8 +40,8 @@ export const EditTakesMixin = {
 
     // ── several clips selected ───────────────────────────────────────────────
 
-    /** The selected clips: the list when there are several, else the single selection if it is a clip. */
-    _editTlSelList() {
+    /** Everything selected: clips, texts, the bed, gaps - the list when there are several, else the single selection. */
+    _editTlSelAll() {
         const cut = this._editTlCut;
         if (!cut) return [];
         const m = this._editTlMulti;
@@ -49,7 +51,12 @@ export const EditTakesMixin = {
             this._editTlMulti = null;
         }
         const s = this._editTlSel;
-        return s && (s.kind === "clip" || s.kind === "tclip") && D.clipOf(cut, s) ? [s] : [];
+        return D.isItemSel(s) && D.itemOf(cut, s) ? [s] : [];
+    },
+
+    /** The selected CLIPS (what Recreate, links and agentY work on). */
+    _editTlSelList() {
+        return this._editTlSelAll().filter(D.isClipSel);
     },
 
     /** Make `list` the selection; `primary` is the single selection (default: the last of the list). */
@@ -76,19 +83,23 @@ export const EditTakesMixin = {
         if (e.button !== 0) return false;
         const mod = !!(e.ctrlKey || e.metaKey), shift = !!e.shiftKey;
         if (this._editTlZone(e, el) !== "body" || e.altKey || !(mod || shift)) {
-            this._editTlMulti = null;
+            // A plain press on one of several, in Selection mode: they stay selected, to be dragged together (_editTlGroupDown).
+            const together = this._editTlZone(e, el) === "body" && !e.altKey && !this._editTlTrimMode
+                && this._editTlSelAll().some((s) => D.sameSel(s, sel));
+            if (!together) this._editTlMulti = null;
             return false;
         }
         e.preventDefault();
         e.stopPropagation();
         const cut = this._editTlCut;
-        const now = this._editTlSelList();
+        this._editTlEditSel = null;
+        const now = this._editTlSelAll();
         if (mod) {
             const next = D.toggleSel(now, sel);
             this._editTlSetSelList(next, next.some((s) => D.sameSel(s, sel)) ? sel : null);
         } else {
             const anchor = this._editTlSel && D.clipOf(cut, this._editTlSel) ? this._editTlSel : now[now.length - 1];
-            this._editTlSetSelList(D.rangeSel(cut, anchor, sel), sel);
+            this._editTlSetSelList([...now, ...D.rangeSel(cut, anchor, sel)], sel);
         }
         this.editTlRefresh();
         return true;
@@ -96,7 +107,7 @@ export const EditTakesMixin = {
 
     /** Right-click on a clip: it joins a selection of several, or becomes the selection. */
     _editTlMenuSelect(sel) {
-        const now = this._editTlSelList();
+        const now = this._editTlSelAll();
         if (now.length > 1) this._editTlSetSelList(now.some((s) => D.sameSel(s, sel)) ? now : [...now, sel], sel);
         else { this._editTlMulti = null; this._editTlSel = sel; }
     },

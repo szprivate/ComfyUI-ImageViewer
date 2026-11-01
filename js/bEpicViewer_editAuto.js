@@ -26,7 +26,6 @@
 // cuts the clip at the marks that are left. Only the clip's in..out is looked at.
 import { api } from "../../scripts/api.js";
 import * as D from "./bEpicViewer_editTimelineData.js";
-import { EDIT_KEYS } from "./bEpicViewer_editKeys.js";
 import { openFilePicker } from "./bEpicViewer_exportUI.js";
 
 const FILM_RE = /\.(mp4|m4v|mov|webm|mkv|avi)$/i;
@@ -274,35 +273,6 @@ export const EditAutoMixin = {
         const line = said.lines.join(", ") + note + ". Ctrl+Z undoes it.";
         if (ui && ui.dialog) { const s = ui.dialog.querySelector(".edit-dialog-said"); if (s) s.dataset.undo = "1"; }
         return line;
-    },
-
-    // ── the shortcuts ────────────────────────────────────────────────────────
-
-    editTlKeysHelp(anchor) {
-        const ui = this._editTlUi;
-        if (!ui) return;
-        if (ui.keys && ui.keys.isConnected) { ui.keys.remove(); ui.keys = null; return; }
-        const doc = ui.body.ownerDocument;
-        const box = doc.createElement("div");
-        box.className = "edit-dialog edit-keys";
-        const t = doc.createElement("div");
-        t.className = "edit-dialog-title";
-        t.textContent = "Keys (while the timeline has the focus)";
-        box.append(t);
-        for (const [k, what] of EDIT_KEYS) {
-            const row = doc.createElement("div");
-            row.className = "edit-keyrow";
-            const kb = doc.createElement("kbd");
-            kb.textContent = k;
-            const s = doc.createElement("span");
-            s.textContent = what;
-            row.append(kb, s);
-            box.append(row);
-        }
-        box.addEventListener("click", () => { box.remove(); ui.keys = null; });
-        ui.body.append(box);
-        ui.keys = box;
-        void anchor;
     },
 
     // ── scene cut detection ──────────────────────────────────────────────────

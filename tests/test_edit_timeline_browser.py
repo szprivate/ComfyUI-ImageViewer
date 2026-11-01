@@ -307,7 +307,12 @@ class EditTimelineBrowserTests(unittest.TestCase):
         self.assertAlmostEqual(pg.evaluate(zoom), 1.5, places=3)
         pg.keyboard.press("Shift+Z")
         self.assertEqual(pg.evaluate(zoom), 1)
-        pg.keyboard.press("Control+Minus")                 # never below the whole film
+        pg.keyboard.press("Control+Minus")                 # past the whole film: empty timeline after it
+        self.assertAlmostEqual(pg.evaluate(zoom), 1 / 1.5, places=3)
+        for _ in range(6):
+            pg.keyboard.press("Control+Minus")
+        self.assertEqual(pg.evaluate(zoom), 0.25)
+        pg.keyboard.press("Shift+Z")
         self.assertEqual(pg.evaluate(zoom), 1)
         self.assertEqual(self.errors, [])
 
@@ -479,11 +484,11 @@ class EditTimelineBrowserTests(unittest.TestCase):
         self.assertEqual(seen[1], "block")                         # and where the source lies
         self.assertEqual(self.cut(pg)["v1"][2], ["D:/out/b.mp4", 0.5, 4.0])
         self.assertAlmostEqual(pg.evaluate("() => __panel._editTlLay.total"), 11.0, places=3)
-        pg.keyboard.press("Period")
+        pg.keyboard.press("Alt+Period")
         self.assertAlmostEqual(self.cut(pg)["v1"][2][1], 0.5 + 1 / 24, places=3)
-        pg.keyboard.press("Shift+Period")                          # a second: held at the end of the 5 s file
+        pg.keyboard.press("Alt+Shift+Period")                      # a second: held at the end of the 5 s file
         self.assertEqual(self.cut(pg)["v1"][2], ["D:/out/b.mp4", 1.0, 4.0])
-        pg.keyboard.press("Comma")
+        pg.keyboard.press("Alt+Comma")
         self.assertAlmostEqual(self.cut(pg)["v1"][2][1], 1 - 1 / 24, places=3)
         for _ in range(4):
             pg.keyboard.press("Control+z")
@@ -565,7 +570,7 @@ class EditTimelineBrowserTests(unittest.TestCase):
     HEAD = "() => parseFloat(__panel._editTlUi.head.style.left)"
 
     def head_at(self, pg, frame):
-        return (frame + 0.5) / 24 / pg.evaluate("() => __panel._editTlLay.total") * 100
+        return frame / 24 / pg.evaluate("() => __panel._editTlLay.total") * 100
 
     def test_the_two_playheads_are_one_position_both_ways(self):
         pg = self.page()
@@ -617,7 +622,7 @@ class EditTimelineBrowserTests(unittest.TestCase):
             return { sets, heads, frames, samples, total, ms: performance.now() - t0, p95: gaps[Math.floor(gaps.length * 0.95)] }; }""")
         for frame, bar, head in got["samples"]:
             self.assertEqual(frame, bar, "the viewer's bar is the frame")
-            self.assertAlmostEqual(head, (frame + 0.5) / 24 / got["total"] * 100, places=2)
+            self.assertAlmostEqual(head, frame / 24 / got["total"] * 100, places=2)
         self.assertGreater(got["frames"], 24)                      # it ran at about 24 fps for 1.5 s
         self.assertLessEqual(got["sets"], 1, "playing moves the frame itself: nothing sets it back")
         self.assertLessEqual(got["heads"], got["frames"] + 3, "the panel's playhead is drawn once a frame, no more")
@@ -805,9 +810,9 @@ class EditTimelineBrowserTests(unittest.TestCase):
         win.mouse.move(*self.x_at(pg, 4.0, dx=-5))
         self.assertIn("Out of a", self.tip(pg))
         win.mouse.click(*self.x_at(pg, 9.0))
-        win.keyboard.press("Period")
+        win.keyboard.press("Alt+Period")
         self.assertAlmostEqual(self.cut(pg)["v1"][2][1], 1.0, places=3, msg="held at the 5 s file's end")
-        win.keyboard.press("Comma")
+        win.keyboard.press("Alt+Comma")
         self.assertAlmostEqual(self.cut(pg)["v1"][2][1], 1 - 1 / 24, places=3)
         pg.evaluate("() => __panel.setFrame(60)")
         win.keyboard.press("i")
@@ -951,9 +956,9 @@ class EditTimelineBrowserTests(unittest.TestCase):
         pg.keyboard.press("b")
         pg.keyboard.press("a")                                     # A: Selection, the blade away
         self.assertEqual(self.mode(pg), ["select", True, False, False])
-        pg.locator(".edit-tool", has_text="Trim").first.click()
+        pg.evaluate("() => __panel._editTlUi.trimBtn.click()")
         self.assertEqual(self.mode(pg), ["trim", False, True, False])
-        pg.locator(".edit-tool", has_text="Select").first.click()
+        pg.evaluate("() => __panel._editTlUi.pick.click()")
         self.assertEqual(self.mode(pg)[0], "select")
         # Not while typing: T, N, A, E, Ctrl+Alt+L go into the field.
         pg.evaluate("""() => { const i = document.createElement('input'); i.id = 'typing'; __panel._editTlUi.body.append(i); i.focus(); }""")
@@ -1135,6 +1140,697 @@ class EditTimelineBrowserTests(unittest.TestCase):
         self.assertEqual(self.mode(pg)[0], "select")
         self.assertEqual(self.errors, [])
 
+    # ── Resolve's way, the next round: zoom past the end, new tracks, several on any tracks, edit points, marquee ──
+
+    FRAMES = """() => { const c = __panel._editTlCut; let t = 0; const v = c.clips.map(k => { t += (k.gap || 0) - (k.transition || 0); const s = t; t += k.length; return [k.name, Math.round(s * 24 * 100) / 100, Math.round((s + k.length) * 24 * 100) / 100]; });
+        return { v1: v, tracks: Object.fromEntries(c.tracks.map(k => [k.id, k.clips.map(x => [x.name, Math.round(x.at * 24 * 100) / 100, Math.round((x.at + x.length) * 24 * 100) / 100])])) }; }"""
+    SEL = "() => __panel._editTlSelAll().map(s => ({ clip: 'V1:' + s.i, tclip: s.track + ':' + s.i, text: 'T:' + s.i, sound: 'A1:' + s.i, gap: 'gap:' + s.i })[s.kind]).sort()"
+    MARKS = "() => ['editMark', 'editMark2', 'editMark3', 'editMark4'].map(k => __panel._editTlUi[k]).filter(m => m && m.style.display === 'block').map(m => [m.dataset.side, parseFloat(m.style.left), m.style.getPropertyValue('--trim')])"
+
+    def frames(self, pg):
+        return pg.evaluate(self.FRAMES)
+
+    @staticmethod
+    def fit(pg):
+        """Low rows, so that every track and the empty room below them are in the (short) panel."""
+        pg.evaluate("""() => { const P = __panel; P._editTlView.heights = { V3: 14, V2: 14, V1: 14, A1: 14, A2: 14, A3: 14, T: 14 }; P.editTlRefresh(); P._editTlUi.main.scrollTop = 0; }""")
+
+    def on_v2(self, pg, *clips):
+        pg.evaluate("""(clips) => { const P = __panel; const c = P._editTlCut; c.tracks[0].clips = clips.map(([name, at, length]) => ({ file: 'D:/out/b.mp4', name, in: 0, length, at, volume: 1, color: '' }));
+            P._editTlApply({ ...c }); P._editTlHistories[P._editTlTab] = { past: [], future: [] }; }""", list(clips))
+
+    def on_a2(self, pg, *clips):
+        pg.evaluate("""(clips) => { const P = __panel; const c = P._editTlCut; c.tracks[1].clips = clips.map(([name, at, length]) => ({ file: 'D:/out/music.wav', name, in: 0, length, at, volume: 1, color: '' }));
+            P._editTlApply({ ...c }); P._editTlHistories[P._editTlTab] = { past: [], future: [] }; }""", list(clips))
+        self.fit(pg)
+
+    def undo_len(self, pg):
+        return pg.evaluate("() => __panel._editTlHistory().past.length")
+
+    def test_01_zoom_out_past_the_end_moves_and_drops_there_and_fit_is_1x(self):
+        pg = self.page()
+        self.focus_timeline(pg)
+        pg.evaluate("() => __panel._editTlZoom(0.25)")
+        self.assertEqual(pg.evaluate("() => __panel._editTlLay.total"), 44)
+        self.assertEqual(pg.evaluate("() => __panel._editTlUi.area.style.width"), "100%")
+        # The film takes a quarter of the width; the ruler goes on.
+        self.assertAlmostEqual(pg.evaluate("() => parseFloat(__panel._editTlUi.rows.querySelector('.edit-snd').style.width)"), 25, places=2)
+        self.assertGreater(pg.evaluate("() => { const t = [...__panel._editTlUi.ruler.querySelectorAll('.edit-tick')]; return parseFloat(t[t.length - 1].style.left); }"), 90)
+        # A click on the ruler past the end: the last frame, in step with the transport.
+        pg.mouse.click(*pg.evaluate("""() => { const r = __panel._editTlUi.ruler.getBoundingClientRect(); return [r.left + r.width * 0.8, r.top + 5]; }"""))
+        self.assertEqual(pg.evaluate("() => [__panel.currentFrame, Number(__panel.timeline.value)]"), [263, 263])
+        # A clip dragged there, on V1: there, a gap before it. The scale kept (not Fit).
+        x, y = pg.evaluate(WHERE, [9.0, "V1"])
+        tx = pg.evaluate(WHERE, [30.0, "V1"])[0]
+        pps = tx - pg.evaluate(WHERE, [29.0, "V1"])[0]
+        self.drag(pg, x, y, tx, y)
+        got = self.frames(pg)["v1"]
+        self.assertEqual(got[2][0], "b")
+        self.assertAlmostEqual(got[2][1], 28 * 24, delta=24 / pps + 1)                    # grabbed 2 s into it
+        self.assertAlmostEqual(tx - pg.evaluate(WHERE, [29.0, "V1"])[0], pps, places=3, msg="seconds per pixel kept")
+        pg.keyboard.press("Control+z")
+        # A drop on V1 past the end: placed there.
+        x, y = pg.evaluate(WHERE, [20.0, "V1"])
+        pg.evaluate(DROP, [x, y, [["film.mp4", "video/mp4"]], ""])
+        pg.wait_for_function("() => __panel._editTlCut.clips.length === 4", timeout=5000)
+        self.assertAlmostEqual(self.frames(pg)["v1"][3][1], 20 * 24, delta=2)
+        pg.keyboard.press("Shift+Z")
+        self.assertEqual(pg.evaluate("() => __panel._editTlView.zoom"), 1)
+        self.assertAlmostEqual(pg.evaluate("() => __panel._editTlLay.total - __panel._editTlLay.film"), 0, places=3)
+        self.assertEqual(self.errors, [])
+
+    def test_01_zoomed_out_in_the_trim_mode_a_ripple_keeps_its_scale(self):
+        pg = self.page()
+        self.focus_timeline(pg)
+        pg.keyboard.press("t")
+        pg.evaluate("() => __panel._editTlZoom(0.5)")
+        pps = pg.evaluate(WHERE, [1.0, "V1"])[0] - pg.evaluate(WHERE, [0.0, "V1"])[0]
+        x, y = self.x_at(pg, 4.0, dx=-5)
+        self.drag(pg, x, y, x - 0.5 * pps, y)
+        self.assertEqual(self.frames(pg)["v1"][0][2], 84)
+        self.assertAlmostEqual(pg.evaluate(WHERE, [1.0, "V1"])[0] - pg.evaluate(WHERE, [0.0, "V1"])[0], pps, places=2)
+        self.assertEqual(self.errors, [])
+
+    def test_02_dragging_into_the_empty_room_makes_a_track_one_undo_step(self):
+        pg = self.page()
+        self.on_a2(pg, ["s", 2, 2])
+        before = self.undo_len(pg)
+        room = "(k) => { const r = __panel._editTlUi.rows.querySelector(`.edit-room[data-room=\"${k}\"]`).getBoundingClientRect(); return r.top + r.height / 2; }"
+        # A picture up: the room lit while it hovers, the new track on the drop, in Selection and in Trim mode (Ctrl+drag free).
+        x, y = pg.evaluate(WHERE, [5.5, "V1"])
+        lit = self.drag(pg, x, y, x + 20, pg.evaluate(room, "video"),
+                        check="() => [__panel._editTlUi.rows.querySelector('.edit-room.landing')?.dataset.label, __panel._editTlUi.ghost.style.display, __panel._editTlCut.tracks.length]")
+        self.assertEqual(lit, ["+ V3", "block", 2], "a preview; no track until it is let go")
+        c = self.cut(pg)
+        self.assertEqual(sorted(c["tracks"]), ["A2", "V2", "V3"])
+        self.assertEqual(c["tracks"]["V3"][0][0], "D:/out/c.png")
+        self.assertEqual(len(c["v1"]), 2)
+        self.assertEqual(self.undo_len(pg), before + 1)
+        self.assertEqual(pg.evaluate("() => [...__panel._editTlUi.rows.querySelectorAll('.edit-track')].map(r => r.dataset.track)"), ["V3", "V2", "V1", "A1", "A2"])
+        # A sound down, below the bottom row.
+        x, y = pg.evaluate(WHERE, [3.0, "A2"])
+        self.drag(pg, x, y, x + 10, pg.evaluate(room, "audio"))
+        c = self.cut(pg)
+        self.assertEqual(c["tracks"]["A3"][0][0], "D:/out/music.wav")
+        self.assertEqual(c["tracks"]["A2"], [])
+        self.assertEqual(self.undo_len(pg), before + 2)
+        # Undo: both, one each.
+        pg.evaluate("() => __panel.editTlUndo()")
+        self.assertNotIn("A3", self.cut(pg)["tracks"])
+        pg.evaluate("() => __panel.editTlUndo()")
+        self.assertNotIn("V3", self.cut(pg)["tracks"])
+        # A picture does not make a sound track, nor a sound a video track.
+        x, y = pg.evaluate(WHERE, [5.5, "V1"])
+        self.drag(pg, x, y, x, pg.evaluate(room, "audio"))
+        self.assertNotIn("A3", self.cut(pg)["tracks"])
+        # The headers stay in line with the rows, the room counted in.
+        rows = pg.evaluate("""() => { const P = __panel, ui = P._editTlUi; const t = [...ui.rows.children].map(r => r.getBoundingClientRect().top);
+            const h = [...ui.heads.children].slice(1).map(r => r.getBoundingClientRect().top); return [t, h]; }""")
+        self.assertEqual(len(rows[0]), len(rows[1]))
+        for a, b in zip(*rows):
+            self.assertAlmostEqual(a, b, delta=1)
+        # The Trim mode: a body press slips, so Ctrl+Shift takes the clip; into the room it is a new track too.
+        n = self.undo_len(pg)
+        self.focus_timeline(pg)
+        pg.keyboard.press("t")
+        x, y = pg.evaluate(WHERE, [1.0, "V1"])
+        self.drag(pg, x, y, x + 10, pg.evaluate(room, "video"), keys=("Control", "Shift"))
+        self.assertIn("V3", self.cut(pg)["tracks"])
+        self.assertEqual(self.undo_len(pg), n + 1)
+        self.assertEqual(self.errors, [])
+
+    def test_02_a_drop_from_outside_into_the_room_makes_a_track_one_undo_step(self):
+        pg = self.page()
+        self.fit(pg)
+        room = "(k) => { const r = __panel._editTlUi.rows.querySelector(`.edit-room[data-room=\"${k}\"]`).getBoundingClientRect(); return r.top + r.height / 2; }"
+        before = self.undo_len(pg)
+        x = pg.evaluate(WHERE, [5.0, "V1"])[0]
+        mark = pg.evaluate(DROP, [x, pg.evaluate(room, "video"), [["shot.png", "image/png"]], ""])
+        self.assertEqual(mark["line"], "block")
+        pg.wait_for_function("() => __panel._editTlCut.tracks.length === 3", timeout=5000)
+        self.assertEqual(self.cut(pg)["tracks"]["V3"], [["D:/in/edits/shot.png", 5.0, 3.0]])
+        self.assertEqual(self.undo_len(pg), before + 1)
+        pg.evaluate(DROP, [x, pg.evaluate(room, "audio"), [["song.wav", "audio/wav"]], ""])
+        pg.wait_for_function("() => __panel._editTlCut.tracks.length === 4", timeout=5000)
+        self.assertEqual(self.cut(pg)["tracks"]["A3"], [["D:/in/edits/song.wav", 5.0, 6.0]])
+        self.assertEqual(self.undo_len(pg), before + 2)
+        self.assertEqual(self.errors, [])
+
+    def test_03_the_trim_cursors_are_15_px_and_sharp_and_the_lit_side_thinner(self):
+        pg = self.page()
+        for zone, dx in (("end", -5), ("roll", -1)):
+            x, y = self.x_at(pg, 4.0, dx=dx)
+            pg.mouse.move(x, y)
+            cur = pg.evaluate("([x, y]) => { const e = __panel._editTlUi.body.getRootNode().elementFromPoint(x, y); return decodeURIComponent(e.closest('.edit-shot').style.cursor); }", [x, y])
+            self.assertIn("width='15' height='15'", cur, zone)
+            self.assertIn(") 7 7,", cur, zone)
+        width = pg.evaluate("() => getComputedStyle(__panel._editTlUi.trimA).borderRightWidth")
+        self.assertEqual(width, "2px")
+        # The Trim mode's own: ripple, and slip and slide on the body.
+        self.focus_timeline(pg)
+        pg.keyboard.press("t")
+        for what, x, y in (("ripple", *self.x_at(pg, 4.0, dx=-5)), ("body", *self.x_at(pg, 2.0))):
+            pg.mouse.move(x, y)
+            cur = pg.evaluate("([x, y]) => { const e = __panel._editTlUi.body.getRootNode().elementFromPoint(x, y); return decodeURIComponent(e.closest('.edit-shot').style.cursor); }", [x, y])
+            self.assertIn("width='15' height='15'", cur, what)
+        self.assertEqual(self.errors, [])
+
+    def test_04_several_selected_across_video_sound_the_bed_a_text(self):
+        for mode in ("a", "t"):
+            pg = self.page()
+            self.on_v2(pg, ["v", 1, 1])
+            self.on_a2(pg, ["s", 5, 2])
+            pg.evaluate("() => { const P = __panel; P._editTlApply({ ...P._editTlCut, texts: [{ text: 'hi', start: 8, length: 2 }] }); }")
+            self.focus_timeline(pg)
+            pg.keyboard.press(mode)
+            pg.mouse.click(*pg.evaluate(WHERE, [2.0, "V1"]))
+            pg.keyboard.down("Control")
+            pg.mouse.click(*pg.evaluate(WHERE, [6.0, "A2"]))
+            pg.mouse.click(*pg.evaluate(WHERE, [1.5, "V2"]))
+            pg.mouse.click(*pg.evaluate(WHERE, [3.0, "A1"]))
+            pg.mouse.click(*pg.evaluate(WHERE, [9.0, "T"]))
+            pg.keyboard.up("Control")
+            self.assertEqual(pg.evaluate(self.SEL), ["A1:0", "A2:0", "T:0", "V1:0", "V2:0"])
+            for key in ("V1:0", "A2:0", "V2:0"):
+                self.assertTrue(pg.evaluate("(k) => [...__panel._editTlUi.rows.querySelectorAll('[data-key]')].find(b => b.dataset.key === k).classList.contains('msel')", key), key)
+            self.assertTrue(pg.evaluate("() => __panel._editTlUi.rows.querySelector('.edit-snd').classList.contains('msel')"))
+            # Ctrl+click takes one out; Shift+click on another track adds, keeping the rest.
+            pg.keyboard.down("Control")
+            pg.mouse.click(*pg.evaluate(WHERE, [3.0, "A1"]))
+            pg.keyboard.up("Control")
+            self.assertEqual(pg.evaluate(self.SEL), ["A2:0", "T:0", "V1:0", "V2:0"])
+            pg.keyboard.down("Shift")
+            pg.mouse.click(*pg.evaluate(WHERE, [5.0, "V1"]))
+            pg.keyboard.up("Shift")
+            self.assertIn("V1:1", pg.evaluate(self.SEL))
+            self.assertIn("A2:0", pg.evaluate(self.SEL))
+            # agentY reads the clips.
+            self.assertEqual(self.errors, [])
+            pg.close()
+
+    def test_05_clicking_a_cut_marks_it_green_and_comma_period_trim_per_side_in_selection(self):
+        pg = self.page()
+        self.focus_timeline(pg)
+        f = 1 / 24
+        # The outgoing edge: no ripple, a gap opens.
+        pg.mouse.click(*self.x_at(pg, 4.0, dx=-5))
+        marks = pg.evaluate(self.MARKS)
+        self.assertEqual([m[0] for m in marks], ["end"])
+        self.assertEqual(marks[0][2], "#35e06f")
+        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), 96, "the playhead goes to the edit")
+        pg.keyboard.press("Comma")
+        self.assertEqual(self.frames(pg)["v1"][0][2], 95)
+        self.assertEqual(self.frames(pg)["v1"][1][1], 96, "the next clip stays")
+        pg.keyboard.press("Period")
+        self.assertEqual(self.frames(pg)["v1"][0][2], 96, "and it closes")
+        pg.keyboard.press("Period")
+        self.assertEqual(self.frames(pg)["v1"][0][2], 96, "not into the clip after it")
+        self.assertIn("held", pg.evaluate("() => __panel._editTlNote"))
+        # The incoming edge.
+        pg.mouse.click(*self.x_at(pg, 7.0, dx=5))
+        self.assertEqual([m[0] for m in pg.evaluate(self.MARKS)], ["start"])
+        pg.keyboard.press("Period")
+        self.assertEqual(self.frames(pg)["v1"][2][1:], [169, 264], "its start later, its end where it was")
+        pg.keyboard.press("Comma")
+        # The centre: a roll, both edges green, the film's length kept.
+        pg.mouse.click(*self.x_at(pg, 7.0, dx=0))
+        self.assertEqual(sorted(m[0] for m in pg.evaluate(self.MARKS)), ["end", "start"])
+        pg.keyboard.press("Shift+Comma")
+        got = self.frames(pg)["v1"]
+        self.assertEqual(got[1][2], 144)
+        self.assertEqual(got[2][1:], [144, 264])
+        self.assertEqual(self.undo_len(pg), 5, "each press one step")
+        # Esc lets go of the edit point; the keys then move the clip.
+        pg.keyboard.press("Escape")
+        self.assertEqual(pg.evaluate(self.MARKS), [])
+        self.assertEqual(self.errors, [])
+
+    def test_05_comma_period_ripple_in_the_trim_mode_and_a_cut_on_a_higher_track(self):
+        pg = self.page()
+        self.on_v2(pg, ["v", 1, 1], ["w", 2, 1], ["x", 5, 1])
+        self.focus_timeline(pg)
+        pg.keyboard.press("t")
+        pg.mouse.click(*self.x_at(pg, 4.0, dx=-5))
+        self.assertEqual([m[0] for m in pg.evaluate(self.MARKS)], ["end"])
+        pg.keyboard.press("Comma")
+        got = self.frames(pg)["v1"]
+        self.assertEqual(got[0][2], 95)
+        self.assertEqual(got[1][1], 95, "what follows moves")
+        self.assertEqual(got[2][2], 263)
+        # An edge of V2's clip: its track ripples, V1 stays.
+        pg.mouse.click(*self.x_at(pg, 3.0, "V2", dx=-5))
+        pg.keyboard.press("Shift+Comma")
+        v2 = self.frames(pg)["tracks"]["V2"]
+        self.assertEqual(v2[0], ["v", 24, 48])
+        self.assertLess(v2[2][1], 120)
+        # A mode switch keeps it, and it now only trims.
+        pg.keyboard.press("a")
+        self.assertTrue(pg.evaluate("() => !!__panel._editTlEditPoint()"))
+        self.assertEqual(self.errors, [])
+
+    def test_06_snaps_land_on_the_exact_frame_by_real_drags_at_several_zooms_and_scrolls(self):
+        for zoom in (0.25, 0.5, 1, 4, 16):
+            for scroll in ((0, 900) if zoom > 1 else (0,)):
+                pg = self.page(zoom=zoom)
+                self.on_v2(pg, ["v", 8.5, 1], ["off", 5, 1.02], ["u", 1.5, 1.5])  # off: no whole number of frames long
+                # Everything is said by pixels the page reports now, so a scroll is just where the timeline is.
+                def to(t):
+                    pg.evaluate("""([t, s]) => { const P = __panel, sc = P._editTlUi.scroll; sc.scrollLeft = Math.max(0, t / P._editTlLay.total * sc.scrollWidth - sc.clientWidth / 2 + s / 10); }""", [t, scroll])
+                pps = lambda: pg.evaluate(WHERE, [1.0, "V1"])[0] - pg.evaluate(WHERE, [0.0, "V1"])[0]
+                near = min(6, 4)                                                 # within SNAP_PX (9), off by a few pixels
+                msg = f"zoom {zoom} scroll {scroll}"
+                line = """() => { const P = __panel, l = P._editTlUi.snapLine; return l && l.style.display === 'block' ? parseFloat(l.style.left) / 100 * P._editTlLay.total * 24 : null; }"""
+
+                # A move by its END, with that off-grid length: the end lands on b's start (frame 168).
+                to(5.5)
+                x, y = pg.evaluate(WHERE, [5.5, "V2"])
+                seen = self.drag(pg, x, y, x + (7 - 6.02) * pps() + near, y, check=line)
+                got = pg.evaluate("() => { const c = __panel._editTlCut.tracks[0].clips[1]; return (c.at + c.length) * 24; }")
+                self.assertAlmostEqual(got, 168, places=1, msg=msg + " move by the end")
+                self.assertAlmostEqual(seen, 168, places=3, msg=msg + " the line stands where it lands")
+                pg.evaluate("() => __panel.editTlUndo()")
+
+                # A trim of the LAST clip's out, the film's length changing under the drag, onto v's end at 9.5 (frame 228).
+                to(10.9)
+                x, y = self.x_at(pg, 11.0, dx=-4)
+                seen = self.drag(pg, x, y, x - 1.5 * pps() - near, y, check=line)
+                self.assertEqual(self.frames(pg)["v1"][2][2], 228, msg + " trim out, the last clip")
+                self.assertAlmostEqual(seen, 228, places=3, msg=msg + " its line")
+                pg.evaluate("() => __panel.editTlUndo()")
+
+                # A move of the last clip to the right, the film growing: its start onto v's end at 9.5, the pointer's offset kept.
+                pg.evaluate("() => __panel.editTlRefresh()")
+                to(8)
+                x, y = pg.evaluate(WHERE, [8.0, "V1"])
+                seen = self.drag(pg, x, y, x + 2.5 * pps() + near, y, check=line)
+                self.assertEqual(self.frames(pg)["v1"][2][1], 228, msg + " the last clip moved, the film growing")
+                self.assertAlmostEqual(seen, 228, places=3, msg=msg + " its line")
+                pg.evaluate("() => __panel.editTlUndo()")
+                pg.evaluate("() => __panel.editTlRefresh()")
+
+                # A ripple trim in the Trim mode, what follows and the film moving: a's out onto u's end at 3 (frame 72).
+                pg.evaluate("() => __panel.editTlMode('trim')")
+                to(4)
+                x, y = self.x_at(pg, 4.0, dx=-4)
+                seen = self.drag(pg, x, y, x - 1.0 * pps() + near, y, check=line)
+                self.assertEqual(self.frames(pg)["v1"][0][2], 72, msg + " ripple out")
+                self.assertAlmostEqual(seen, 72, places=3, msg=msg + " its line")
+                pg.evaluate("() => __panel.editTlUndo()")
+                pg.evaluate("() => __panel.editTlMode('select')")
+
+                # The playhead as a target: the clip's start, the snap line and the drawn playhead on one frame.
+                pg.evaluate("() => { __panel.setFrame(121); __panel.editTlRefresh(); }")
+                to(5.5)
+                pg.evaluate("() => { const P = __panel; const c = P._editTlCut; c.tracks[0].clips = [{ file: 'D:/out/b.mp4', name: 'v', in: 0, length: 1, at: 4.5, volume: 1, color: '' }]; P._editTlApply({ ...c }); }")
+                to(4.7)
+                x, y = pg.evaluate(WHERE, [4.7, "V2"])
+                seen = self.drag(pg, x, y, x + (121 / 24 - 4.5) * pps() + near, y, check=line)
+                self.assertEqual(self.frames(pg)["tracks"]["V2"][0][1], 121, msg + " onto the playhead")
+                self.assertAlmostEqual(seen, 121, places=3)
+                head = pg.evaluate("() => parseFloat(__panel._editTlUi.head.style.left) / 100 * __panel._editTlLay.total * 24")
+                self.assertAlmostEqual(head, 121, places=2, msg=msg + " the playhead is drawn where it landed")
+                self.assertEqual(self.errors, [])
+                pg.close()
+
+    def test_06_scrolling_during_a_drag_and_a_clips_own_gap_do_not_put_a_snap_off(self):
+        pg = self.page(zoom=4)
+        self.on_v2(pg, ["v", 5, 1])
+        pg.evaluate("() => { const P = __panel, s = P._editTlUi.scroll; s.scrollLeft = 5 / P._editTlLay.total * s.scrollWidth - 300; }")
+        pps = pg.evaluate(WHERE, [1.0, "V1"])[0] - pg.evaluate(WHERE, [0.0, "V1"])[0]
+        x, y = pg.evaluate(WHERE, [5.5, "V2"])
+        pg.mouse.move(x, y)
+        pg.mouse.down()
+        pg.mouse.move(x + 40, y, steps=2)
+        # The strip scrolled a screenful under the held pointer.
+        pg.evaluate("() => { __panel._editTlUi.scroll.scrollLeft += 300; }")
+        # Where the clip's end is 4 px short of b's start at 7.
+        tx = pg.evaluate(WHERE, [7.0 - 0.5, "V2"])[0] - 4
+        pg.mouse.move(tx, y, steps=2)
+        pg.mouse.up()
+        self.assertEqual(self.frames(pg)["tracks"]["V2"][0][2], 168, "the end on frame 168, read off the timeline as it is now")
+        pg.evaluate("() => __panel.editTlUndo()")
+        # A clip with a gap before it: its own near edge does not hold it back (it used to stick to it).
+        pg = self.page()
+        pg.evaluate("() => { const P = __panel; const c = P._editTlCut; c.clips[2].gap = 1; c.tracks[0].clips = []; P._editTlApply({ ...c }); }")
+        x, y = pg.evaluate(WHERE, [9.5, "V1"])
+        one = 12 / 24 * (pg.evaluate(WHERE, [1.0, "V1"])[0] - pg.evaluate(WHERE, [0.0, "V1"])[0])
+        self.drag(pg, x, y, x - one, y)
+        self.assertEqual(self.frames(pg)["v1"][2][1], 180, "half a second left, into its gap")
+        self.assertEqual(self.errors, [])
+
+    def test_07_comma_period_move_the_clip_alt_slips_in_both_modes(self):
+        pg = self.page()
+        self.on_v2(pg, ["v", 1, 1])
+        self.focus_timeline(pg)
+        # A clip on a track: moved.
+        pg.mouse.click(*pg.evaluate(WHERE, [1.5, "V2"]))
+        pg.keyboard.press("Period")
+        self.assertEqual(self.frames(pg)["tracks"]["V2"][0][1:], [25, 49])
+        pg.keyboard.press("Shift+Comma")
+        self.assertEqual(self.frames(pg)["tracks"]["V2"][0][1:], [1, 25])
+        pg.keyboard.press("Shift+Comma")
+        self.assertEqual(self.frames(pg)["tracks"]["V2"][0][1:], [0, 24], "stops at the start")
+        # V1, Selection: into a gap and no further; the source untouched.
+        pg.evaluate("() => { const P = __panel; const c = P._editTlCut; c.clips[2].gap = 2 / 24; P._editTlApply({ ...c }); }")
+        pg.mouse.click(*pg.evaluate(WHERE, [9.0, "V1"]))
+        pg.keyboard.press("Comma")
+        self.assertEqual(self.frames(pg)["v1"][2][1], 169)
+        self.assertEqual(self.cut(pg)["v1"][2][1], 1, "the source in stays")
+        pg.keyboard.press("Shift+Comma")
+        self.assertEqual(self.frames(pg)["v1"][2][1], 168, "stops at the clip before it")
+        pg.keyboard.press("Comma")
+        self.assertIn("held", pg.evaluate("() => __panel._editTlNote"))
+        # Alt: a slip, as before.
+        n = self.undo_len(pg)
+        pg.keyboard.press("Alt+Comma")
+        self.assertAlmostEqual(self.cut(pg)["v1"][2][1], 1 - 1 / 24, places=3)
+        self.assertEqual(self.frames(pg)["v1"][2][1], 168)
+        self.assertEqual(self.undo_len(pg), n + 1)
+        # The Trim mode: one clip slides, its neighbours giving and taking; the film's length kept.
+        pg.keyboard.press("t")
+        pg.evaluate("() => { __panel.editTlUndo(); __panel.editTlRefresh(); }")
+        pg.evaluate("() => { const P = __panel; P._editTlSel = { kind: 'clip', i: 1 }; P._editTlEditSel = null; }")
+        before = self.frames(pg)["v1"]
+        pg.keyboard.press("Comma")
+        got = self.frames(pg)["v1"]
+        self.assertEqual(got[1][1:], [before[1][1] - 1, before[1][2] - 1])
+        self.assertEqual(got[0][2], before[0][2] - 1, "the shot before ends earlier")
+        self.assertEqual(got[2][2], before[2][2], "the film's length kept")
+        self.assertEqual(self.errors, [])
+
+    def test_07_several_selected_move_together_by_key_and_by_a_drag(self):
+        pg = self.page()
+        self.on_v2(pg, ["v", 1, 1])
+        self.on_a2(pg, ["s", 5, 2])
+        self.focus_timeline(pg)
+        pg.mouse.click(*pg.evaluate(WHERE, [1.5, "V2"]))
+        pg.keyboard.down("Control")
+        pg.mouse.click(*pg.evaluate(WHERE, [6.0, "A2"]))
+        pg.keyboard.up("Control")
+        n = self.undo_len(pg)
+        pg.keyboard.press("Period")
+        got = self.frames(pg)["tracks"]
+        self.assertEqual((got["V2"][0][1], got["A2"][0][1]), (25, 121))
+        self.assertEqual(self.undo_len(pg), n + 1)
+        self.assertEqual(pg.evaluate(self.SEL), ["A2:0", "V2:0"], "still selected")
+        # A plain press on one of them and a drag: both go. A click only: just that one.
+        pps = pg.evaluate(WHERE, [1.0, "V1"])[0] - pg.evaluate(WHERE, [0.0, "V1"])[0]
+        x, y = pg.evaluate(WHERE, [1.5, "V2"])
+        pg.keyboard.press("n")                                       # without snapping: a plain distance
+        self.drag(pg, x, y, x + pps, y)
+        got = self.frames(pg)["tracks"]
+        self.assertAlmostEqual(got["V2"][0][1], 49, delta=1)
+        self.assertAlmostEqual(got["A2"][0][1], 145, delta=1)
+        self.assertEqual(self.undo_len(pg), n + 2)
+        x, y = pg.evaluate(WHERE, [2.5, "V2"])
+        pg.mouse.click(x, y)
+        self.assertEqual(pg.evaluate(self.SEL), ["V2:0"])
+        self.assertEqual(self.errors, [])
+
+    def test_08_shift_a_shift_s_go_from_edit_to_edit_selecting_it(self):
+        pg = self.page()
+        self.on_v2(pg, ["v", 1, 1])
+        self.focus_timeline(pg)
+        frame = "() => __panel.currentFrame"
+        pg.evaluate("() => __panel.setFrame(10)")
+        pg.keyboard.press("Shift+KeyS")
+        self.assertEqual(pg.evaluate(frame), 96)
+        self.assertEqual(sorted(m[0] for m in pg.evaluate(self.MARKS)), ["end", "start"], "a roll, green on both")
+        self.assertEqual(len(self.cut(pg)["v1"]), 3, "Shift+S does not split")
+        # , / . adjust it, the playhead with it, and the next press goes on from there.
+        pg.keyboard.press("Comma")
+        self.assertEqual(self.frames(pg)["v1"][0][2], 95)
+        self.assertEqual(self.frames(pg)["v1"][1][1], 95)
+        self.assertEqual(pg.evaluate(frame), 95)
+        pg.keyboard.press("Shift+KeyS")
+        self.assertEqual(pg.evaluate(frame), 168)
+        pg.keyboard.press("Shift+KeyS")
+        self.assertEqual([m[0] for m in pg.evaluate(self.MARKS)], ["end"], "the end of the film: an edge")
+        pg.keyboard.press("Shift+KeyA")
+        self.assertEqual(pg.evaluate(frame), 168)
+        pg.keyboard.press("Shift+KeyA")
+        self.assertEqual(pg.evaluate(frame), 95)
+        pg.keyboard.press("Shift+KeyA")
+        self.assertEqual(pg.evaluate(frame), 0)
+        self.assertEqual([m[0] for m in pg.evaluate(self.MARKS)], ["start"])
+        pg.keyboard.press("Shift+KeyA")
+        self.assertIn("no edit before", pg.evaluate("() => __panel._editTlNote"))
+        # Esc clears the edit, not more.
+        pg.keyboard.press("Escape")
+        self.assertEqual(pg.evaluate(self.MARKS), [])
+        # A clip on another track selected: that track's edits. In the Trim mode too.
+        pg.mouse.click(*pg.evaluate(WHERE, [1.5, "V2"]))
+        pg.keyboard.press("t")
+        pg.evaluate("() => __panel.setFrame(0)")
+        pg.keyboard.press("Shift+KeyS")
+        self.assertEqual(pg.evaluate(frame), 24)
+        pg.keyboard.press("Shift+KeyS")
+        self.assertEqual(pg.evaluate(frame), 48)
+        # S alone still splits; S held in a drag still flips the snapping.
+        pg.keyboard.press("Escape")
+        pg.keyboard.press("Escape")
+        pg.keyboard.press("a")
+        pg.evaluate("() => __panel.setFrame(24)")
+        pg.keyboard.press("s")
+        self.assertEqual(len(self.cut(pg)["v1"]), 4)
+        pps = pg.evaluate(WHERE, [1.0, "V1"])[0] - pg.evaluate(WHERE, [0.0, "V1"])[0]
+        x, y = pg.evaluate(WHERE, [1.5, "V2"])
+        pg.keyboard.press("n")
+        pg.mouse.move(x, y)
+        pg.mouse.down()
+        pg.mouse.move(x + 2.46 * pps, y, steps=3)
+        pg.keyboard.down("s")
+        self.assertTrue(pg.evaluate("() => __panel._editTlSnapFlip"))
+        pg.keyboard.up("s")
+        pg.mouse.up()
+        self.assertEqual(self.errors, [])
+
+    def test_09_a_marquee_selects_what_it_touches_on_all_tracks_shift_adds(self):
+        for mode in ("a", "t"):
+            pg = self.page()
+            self.on_v2(pg, ["v", 1, 1], ["w", 8, 1])
+            self.on_a2(pg, ["s", 5, 2])
+            self.focus_timeline(pg)
+            pg.keyboard.press(mode)
+            # From an empty place on V2, down over V1 and A2 and the bed.
+            x0, y0 = pg.evaluate(WHERE, [4.5, "V2"])
+            x1, y1 = pg.evaluate(WHERE, [5.5, "A2"])
+            seen = self.drag(pg, x0, y0, x1, y1, check="() => { const m = __panel._editTlUi.area.querySelector('.edit-marquee'); return m && m.style.display !== 'none' ? m.getBoundingClientRect().width : 0; }")
+            self.assertGreater(seen, 10, "the rectangle is drawn")
+            self.assertIsNone(pg.evaluate("() => __panel._editTlUi.area.querySelector('.edit-marquee')"), "and goes")
+            self.assertEqual(pg.evaluate(self.SEL), ["A1:0", "A2:0", "V1:1"])
+            # Shift adds.
+            x0, y0 = pg.evaluate(WHERE, [7.5, "V2"])
+            x1, y1 = pg.evaluate(WHERE, [8.5, "V2"])
+            self.drag(pg, x0, y0, x1, y1, keys=("Shift",))
+            self.assertEqual(pg.evaluate(self.SEL), ["A1:0", "A2:0", "V1:1", "V2:1"])
+            # A plain one replaces; a click where nothing lies takes it all off.
+            x0, y0 = pg.evaluate(WHERE, [0.1, "V2"])
+            x1, y1 = pg.evaluate(WHERE, [1.5, "V2"])
+            self.drag(pg, x0, y0, x1, y1)
+            self.assertEqual(pg.evaluate(self.SEL), ["V2:0"])
+            pg.mouse.click(*pg.evaluate(WHERE, [4.5, "V2"]))
+            self.assertEqual(pg.evaluate(self.SEL), [])
+            # The ruler is not a place to draw one: it scrubs.
+            r = pg.evaluate("() => { const r = __panel._editTlUi.ruler.getBoundingClientRect(); return [r.left + 100, r.top + 5]; }")
+            self.drag(pg, r[0], r[1], r[0] + 100, r[1] + 60)
+            self.assertEqual(pg.evaluate(self.SEL), [])
+            self.assertEqual(self.errors, [])
+            pg.close()
+
+    def test_10_del_takes_everything_selected_as_one_undo_step(self):
+        for key, ripple, mode in (("Delete", False, "a"), ("Backspace", False, "a"), ("Shift+Delete", True, "a"), ("Delete", False, "t"), ("Shift+Backspace", True, "t")):
+            pg = self.page()
+            self.on_v2(pg, ["v", 1, 1], ["w", 8, 1])
+            self.on_a2(pg, ["s", 9, 1])
+            pg.evaluate("() => { const P = __panel; P._editTlApply({ ...P._editTlCut, texts: [{ text: 'hi', start: 8, length: 2 }] }); P._editTlHistories[P._editTlTab] = { past: [], future: [] }; }")
+            self.focus_timeline(pg)
+            pg.keyboard.press(mode)
+            pg.keyboard.down("Control")
+            pg.mouse.click(*pg.evaluate(WHERE, [2.0, "V1"]))
+            pg.mouse.click(*pg.evaluate(WHERE, [9.5, "A2"]))
+            pg.mouse.click(*pg.evaluate(WHERE, [1.5, "V2"]))
+            pg.mouse.click(*pg.evaluate(WHERE, [3.0, "A1"]))
+            pg.mouse.click(*pg.evaluate(WHERE, [9.0, "T"]))
+            pg.keyboard.up("Control")
+            before = self.frames(pg)
+            pg.keyboard.press(key)
+            got = self.frames(pg)
+            self.assertEqual([c[0] for c in got["v1"]], ["c", "b"], key)
+            self.assertEqual(got["tracks"]["A2"], [], key)
+            self.assertEqual(pg.evaluate("() => [__panel._editTlCut.sound.length, __panel._editTlCut.texts.length]"), [0, 0], key)
+            if ripple:
+                self.assertEqual(got["v1"][0][1], 0, "what follows closes up")
+                self.assertEqual(got["tracks"]["V2"], [["w", 8 * 24 - 24, 8 * 24]], "on its own track")
+            else:
+                self.assertEqual(got["v1"][0][1], 96, "gaps stay")
+                self.assertEqual(got["tracks"]["V2"], [["w", 192, 216]])
+            self.assertEqual(self.undo_len(pg), 1, key)
+            self.assertEqual(pg.evaluate(self.SEL), [])
+            pg.keyboard.press("Control+z")
+            self.assertEqual(self.frames(pg), before, "one undo step brings it all back")
+            self.assertEqual(pg.evaluate("() => __panel._editTlCut.sound.length"), 1)
+            self.assertEqual(self.errors, [])
+            pg.close()
+
+    def test_10_a_linked_partner_goes_too_and_a_gap_and_a_saved_bed(self):
+        pg = self.page()
+        self.on_a2(pg, ["s", 0, 4])
+        pg.evaluate("() => { const P = __panel; const c = P._editTlCut; c.clips[0].link = 'L'; c.tracks[1].clips[0].link = 'L'; c.tracks[1].clips[0].file = c.clips[0].file; P._editTlApply({ ...c }); }")
+        pg.mouse.click(*self.x_at(pg, 2.0))
+        pg.keyboard.down("Control")
+        pg.mouse.click(*self.x_at(pg, 9.0))
+        pg.keyboard.up("Control")
+        pg.keyboard.press("Delete")
+        self.assertEqual(len(self.cut(pg)["v1"]), 1)
+        self.assertEqual(self.cut(pg)["tracks"]["A2"], [], "the linked sound went with it")
+        pg.keyboard.press("Control+z")
+        # A gap selected: closed, as before.
+        pg.evaluate("() => { const P = __panel; const c = P._editTlCut; c.clips[1].gap = 1; P._editTlApply({ ...c }); }")
+        pg.mouse.click(*self.x_at(pg, 4.5))
+        pg.keyboard.press("Delete")
+        self.assertEqual(self.frames(pg)["v1"][1][1], 96)
+        # All of V1: it keeps its last shot, and says so.
+        pg.evaluate("() => { const P = __panel; P._editTlSetSelList([{ kind: 'clip', i: 0 }, { kind: 'clip', i: 1 }, { kind: 'clip', i: 2 }]); }")
+        pg.keyboard.press("Delete")
+        self.assertEqual(len(self.cut(pg)["v1"]), 1)
+        self.assertIn("keeps its last shot", pg.evaluate("() => __panel._editTlNote"))
+        # The bed, deleted, is what a save sends.
+        pg.mouse.click(*pg.evaluate(WHERE, [0.2, "A1"]))
+        pg.keyboard.press("Delete")
+        self.assertEqual(pg.evaluate("() => __panel._editTlCut.sound.length"), 0)
+        self.assertTrue(pg.evaluate("() => { const P = __panel; return !P._editTlSaved || !!P._editTlDirty(); }"))
+        self.assertEqual(self.errors, [])
+
+    ICONS = {"pick": ["M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z"],
+             "blade": ["M5.42 9.42 8 12", "cx=4,cy=8,r=2", "m14 6-8.58 8.58", "cx=4,cy=16,r=2", "M10.8 14.8 14 18", "M16 12h-2", "M22 12h-2"],
+             "split": ["cx=6,cy=6,r=3", "M8.12 8.12 12 12", "M20 4 8.12 15.88", "cx=6,cy=18,r=3", "M14.8 14.8 20 20"],
+             "trimBtn": ["x=9,y=9,width=6,height=6,rx=1", "M3 21h18", "M3 3h18"],
+             "snap": ["m12 15 4 4", "M2.352 10.648a1.205 1.205 0 0 0 0 1.704l2.296 2.296a1.205 1.205 0 0 0 1.704 0l6.029-6.029a1 1 0 1 1 3 3l-6.029 6.029a1.205 1.205 0 0 0 0 1.704l2.296 2.296a1.205 1.205 0 0 0 1.704 0l6.365-6.367A1 1 0 0 0 8.716 4.282z", "m5 8 4 4"],
+             "beats": ["M2 10v3", "M6 6v11", "M10 3v18", "M14 8v7", "M18 5v13", "M22 10v3"],
+             "zoomOut": ["cx=11,cy=11,r=8", "x1=21,x2=16.65,y1=21,y2=16.65", "x1=8,x2=14,y1=11,y2=11"],
+             "zoomIn": ["cx=11,cy=11,r=8", "x1=21,x2=16.65,y1=21,y2=16.65", "x1=11,x2=11,y1=8,y2=14", "x1=8,x2=14,y1=11,y2=11"],
+             "zoomFit": ["M3 7V5a2 2 0 0 1 2-2h2", "M17 3h2a2 2 0 0 1 2 2v2", "M21 17v2a2 2 0 0 1-2 2h-2", "M7 21H5a2 2 0 0 1-2-2v-2", "cx=12,cy=12,r=3", "m16 16-1.9-1.9"]}
+
+    def test_the_bar_has_the_specified_icons_and_no_keys_button(self):
+        pg = self.page()
+        got = pg.evaluate("""(names) => Object.fromEntries(names.map(n => { const svg = __panel._editTlUi[n].querySelector('svg');
+            return [n, { attrs: ['viewBox', 'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin'].map(a => svg.getAttribute(a)), title: __panel._editTlUi[n].title,
+                shapes: [...svg.children].map(c => c.getAttribute('d') || [...c.attributes].map(a => a.name + '=' + a.value).join(',')), w: svg.getBoundingClientRect().width }]; }))""", list(self.ICONS))
+        for name, shapes in self.ICONS.items():
+            self.assertEqual(got[name]["shapes"], shapes, name)
+            self.assertEqual(got[name]["attrs"], ["0 0 24 24", "none", "currentColor", "2", "round", "round"], name)
+            self.assertEqual(got[name]["w"], 15, name)
+            self.assertTrue(got[name]["title"], name)
+        # The states stay.
+        self.focus_timeline(pg)
+        pg.keyboard.press("t")
+        self.assertTrue(pg.evaluate("() => __panel._editTlUi.trimBtn.classList.contains('on')"))
+        pg.keyboard.press("n")
+        self.assertFalse(pg.evaluate("() => __panel._editTlUi.snap.classList.contains('on')"))
+        # No ? button, and nothing left of its dialog.
+        self.assertEqual(pg.evaluate("() => [...__panel._editTlUi.body.querySelectorAll('.edit-bar button')].filter(b => b.textContent.trim() === '?').length"), 0)
+        self.assertEqual(pg.evaluate("() => typeof __panel.editTlKeysHelp"), "undefined")
+        self.assertEqual(self.errors, [])
+
+    HELP = """() => { const o = __panel.helpOverlay, on = (s) => getComputedStyle(o.querySelector(s)).display !== 'none';
+        return { open: getComputedStyle(o).display !== 'none', edit: on('#help-edit'), viewer: on('#help-viewer'), text: o.querySelector('#help-edit-keys').textContent }; }"""
+
+    def test_show_hotkeys_lists_the_edit_keys_on_a_cut_and_the_viewers_elsewhere(self):
+        pg = self.page()
+        pg.evaluate("() => __panel.helpBtn.click()")
+        got = pg.evaluate(self.HELP)
+        self.assertTrue(got["open"] and got["edit"])
+        self.assertFalse(got["viewer"])
+        for key in ("Selection mode", "Trim Edit mode", "Snapping", "Ripple delete", "Unlink", "Zoom the timeline", "Marquee", "Shift+A / Shift+S", "Alt+, / Alt+.", "A new track",
+                    "Click a cut", "Move the selected clips"):
+            self.assertIn(key, got["text"], key)
+        pg.evaluate("() => __panel.toggleHelpOverlay(false)")
+        # The ? key with the timeline holding the focus, the pointer elsewhere.
+        self.focus_timeline(pg)
+        pg.mouse.move(800, 5)
+        pg.keyboard.press("?")
+        self.assertTrue(pg.evaluate(self.HELP)["edit"])
+        pg.evaluate("() => __panel.toggleHelpOverlay(false)")
+        # Another tab: the viewer's own.
+        pg.evaluate("""() => { const P = __panel; P.allTabs['plain'] = []; P.tabLabels['plain'] = 'plain'; P.tabOrder.push('plain'); P.switchTab('plain'); }""")
+        pg.evaluate("() => __panel.toggleHelpOverlay(true)")
+        got = pg.evaluate(self.HELP)
+        self.assertTrue(got["open"] and got["viewer"])
+        self.assertFalse(got["edit"])
+        self.assertGreater(pg.evaluate("() => __panel.helpOverlay.querySelectorAll('#help-keys > div').length"), 5)
+        self.assertEqual(self.errors, [])
+
+    def test_keys_of_this_round_do_not_fire_while_typing(self):
+        pg = self.page()
+        self.focus_timeline(pg)
+        pg.mouse.click(*pg.evaluate(WHERE, [2.0, "V1"]))
+        before = self.cut(pg)
+        frame = pg.evaluate("() => __panel.currentFrame")
+        pg.evaluate("""() => { const i = document.createElement('input'); i.id = 'typing'; __panel._editTlUi.body.append(i); i.focus(); }""")
+        pg.evaluate("() => __panel._editTlUi.body.querySelector('#typing').focus()")
+        for key in ("Period", "Comma", "Shift+KeyA", "Shift+KeyS", "Alt+Period", "Delete", "Backspace"):
+            pg.keyboard.press(key)
+        self.assertEqual(self.cut(pg), before)
+        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), frame)
+        self.assertEqual(pg.evaluate("() => __panel._editTlUi.body.querySelector('#typing').value"), ".,A")
+        self.assertEqual(self.errors, [])
+
+    def test_popped_out_every_item_of_this_round(self):
+        pg = self.page()
+        self.on_v2(pg, ["v", 1, 1])
+        self.on_a2(pg, ["s", 5, 2])
+        with pg.context.expect_page() as pop:
+            pg.evaluate("() => window.__panel.toggleUndock()")
+        win = pop.value
+        win.wait_for_load_state()
+        pg.wait_for_function("() => __panel._editTlUi && __panel._editTlUi.body.ownerDocument !== document", timeout=10000)
+        pg.evaluate("() => __panel.editTlRefresh()")
+        # Zoom out past the end.
+        win.mouse.click(*pg.evaluate(WHERE, [4.5, "V2"]))
+        win.keyboard.press("Control+Minus")
+        self.assertLess(pg.evaluate("() => __panel._editTlView.zoom"), 1)
+        win.keyboard.press("Shift+Z")
+        # A marquee, the keys, Del.
+        x0, y0 = pg.evaluate(WHERE, [4.5, "V2"])
+        x1, y1 = pg.evaluate(WHERE, [5.5, "A2"])
+        win.mouse.move(x0, y0)
+        win.mouse.down()
+        win.mouse.move(x1, y1, steps=4)
+        win.mouse.up()
+        self.assertEqual(pg.evaluate(self.SEL), ["A1:0", "A2:0", "V1:1"])
+        win.keyboard.press("Escape")
+        # An edit point and , / .
+        win.mouse.click(*self.x_at(pg, 4.0, dx=-5))
+        self.assertEqual([m[0] for m in pg.evaluate(self.MARKS)], ["end"])
+        win.keyboard.press("Comma")
+        self.assertEqual(self.frames(pg)["v1"][0][2], 95)
+        win.keyboard.press("Period")
+        win.keyboard.press("Shift+KeyS")
+        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), 168)
+        win.keyboard.press("Escape")
+        win.keyboard.press("Escape")
+        # A clip moved by a key; a new track by a drag; ctrl-click across and Del as one step.
+        win.mouse.click(*pg.evaluate(WHERE, [1.5, "V2"]))
+        win.keyboard.press("Period")
+        self.assertEqual(self.frames(pg)["tracks"]["V2"][0][1], 25)
+        x, y = pg.evaluate(WHERE, [1.6, "V2"])
+        ry = pg.evaluate("() => { const r = __panel._editTlUi.rows.querySelector('.edit-room[data-room=\"video\"]').getBoundingClientRect(); return r.top + r.height / 2; }")
+        # V2 to a new V3
+        win.mouse.move(x, y)
+        win.mouse.down()
+        win.mouse.move(x + 10, ry, steps=4)
+        win.mouse.up()
+        self.assertIn("V3", self.cut(pg)["tracks"])
+        win.mouse.click(*pg.evaluate(WHERE, [2.0, "V1"]))
+        win.keyboard.down("Control")
+        win.mouse.click(*pg.evaluate(WHERE, [6.0, "A2"]))
+        win.keyboard.up("Control")
+        n = self.undo_len(pg)
+        win.keyboard.press("Delete")
+        self.assertEqual(self.undo_len(pg), n + 1)
+        self.assertEqual(self.cut(pg)["tracks"]["A2"], [])
+        self.assertEqual(self.errors, [])
 
 if __name__ == "__main__":
     unittest.main()
