@@ -253,7 +253,59 @@ def _look(item):
     takes = clean_takes(_bepic(item).get("takes"))
     if takes:
         out["takes"] = takes
+    out.update(clip_link(item))
     return out
+
+
+# A film's picture and its sound can be split apart (the Edit panel's "Unlink audio
+# / video", Resolve's Link Clips switched off): the video clip stays where it is,
+# with its own sound muted (``mute``), and a clip of the same file on a sound track
+# carries the sound - at its own place, so it can start earlier or end later (a J
+# or L cut). The two share a link group (``link``); ``unlinked`` says they are
+# moved and trimmed apart, else they go together. All three in ``metadata.bepic``;
+# the media reference of each is the same file, so any other program reads two
+# plain clips.
+_LINK = re.compile(r"^[A-Za-z0-9_.:-]{1,40}$")
+
+
+def clip_link(item):
+    """``{"link", "unlinked", "mute"}`` of a clip - only the keys it has."""
+    note = _bepic(item)
+    out = {}
+    link = note.get("link")
+    if isinstance(link, str) and _LINK.match(link):
+        out["link"] = link
+        if note.get("unlinked") is True:
+            out["unlinked"] = True
+    if note.get("mute") is True:
+        out["mute"] = True
+    return out
+
+
+def _set_link(item, c):
+    """Write a clip's link group and mute, where the edit states them, into *item*."""
+    if not any(k in c for k in ("link", "unlinked", "mute")):
+        return
+    meta = item.setdefault("metadata", {})
+    note = meta.setdefault("bepic", {}) if isinstance(meta, dict) else None
+    if not isinstance(note, dict):
+        return
+    if "link" in c:
+        link = c.get("link")
+        if isinstance(link, str) and _LINK.match(link):
+            note["link"] = link
+        else:
+            note.pop("link", None)
+    if "unlinked" in c or "link" in c:
+        if c.get("unlinked") is True and note.get("link"):
+            note["unlinked"] = True
+        else:
+            note.pop("unlinked", None)
+    if "mute" in c:
+        if c.get("mute") is True:
+            note["mute"] = True
+        else:
+            note.pop("mute", None)
 
 
 # A clip may carry takes: the same shot made again with changes, kept beside the
@@ -450,7 +502,8 @@ def editable(doc):
     "off": {"V1", "A1"}, "edited"}``. ``ref`` is the item's place in the
     file it came from, so saving can keep everything about it that the panel
     does not show. Clips are at their full length; ``transition`` is the dissolve
-    from the clip before. ``tracks`` are the tracks beyond the first of each
+    from the clip before; ``gap`` (where there is one) the empty time before the
+    clip - OTIO Gaps on V1, kept, with no dissolve into or out of one. ``tracks`` are the tracks beyond the first of each
     kind (:func:`extra_tracks`): clips placed at a moment of the film, the
     picture of a higher track covering what is under it.
     """
@@ -462,24 +515,42 @@ def editable(doc):
            "sound": [], "edited": str(stamp.get("edited") or "")}
     video = _track_of(doc, "video")
     pending = None                      # the dissolve waiting for the clip after it
+    gap = 0.0                           # the empty time (OTIO Gaps) waiting for the clip after it
     for ref, child in enumerate((video or {}).get("children") or []):
         if not isinstance(child, dict):
             continue
         schema = str(child.get("OTIO_SCHEMA") or "")
         if schema.startswith("Transition"):
+            # A dissolve out of a gap (a fade from black) is not one the panel
+            # makes: it is left out, and the clip after it keeps its own range.
+            if gap > 0 or not out["clips"]:
+                pending = None
+                continue
             before = _seconds(child.get("in_offset") or {})
             after = _seconds(child.get("out_offset") or {})
-            if out["clips"]:
-                out["clips"][-1]["length"] = round(out["clips"][-1]["length"] + after, 4)
+            out["clips"][-1]["length"] = round(out["clips"][-1]["length"] + after, 4)
             pending = (before, after)
+            continue
+        if schema.startswith("Gap"):
+            _start, length = _span(child.get("source_range"))
+            if pending and out["clips"]:
+                # A dissolve into this gap (a fade to black) is left out too: the
+                # clip before it ends where its own range does.
+                out["clips"][-1]["length"] = round(out["clips"][-1]["length"] - pending[1], 4)
+            pending = None
+            gap += max(0.0, length)
             continue
         if not schema.startswith("Clip"):
             pending = None
-            continue                    # a gap has nothing to cut; it is dropped on save
+            continue                    # anything else on the track has nothing to cut
         start, length = _span(child.get("source_range"))
         clip = {"ref": ref, "name": str(child.get("name") or ""),
                 "file": _file(child.get("media_reference")), "in": start, "length": length,
                 "transition": 0.0, **_look(child)}
+        if gap > 0:
+            # Empty time before this clip on V1: black, or what a higher track shows there.
+            clip["gap"] = round(gap, 4)
+            gap = 0.0
         if pending:
             before, after = pending
             clip["in"] = max(0.0, start - before * clip["speed"])
@@ -509,10 +580,10 @@ def editable(doc):
 
 
 def edit_length(edit):
-    """How long the film of *edit* is: the clips, less what the dissolves take -
+    """How long the film of *edit* is: the clips and the gaps before them, less what the dissolves take -
     or as far as the last clip on a higher video track reaches, if that is later."""
     clips = edit.get("clips") or []
-    total = sum(float(c.get("length") or 0) for c in clips)
+    total = sum(float(c.get("length") or 0) + float(c.get("gap") or 0) for c in clips)
     main = max(0.0, total - sum(float(c.get("transition") or 0) for c in clips[1:]))
     over = [float(c.get("at") or 0) + float(c.get("length") or 0)
             for t in (edit.get("tracks") or []) if isinstance(t, dict) and t.get("kind") != "audio"
@@ -570,6 +641,7 @@ def _dress(item, c, may_use=None):
                 else:
                     note.pop("fx", None)
     _set_time(item, c)
+    _set_link(item, c)
     if "takes" in c:
         _set_takes(item, c.get("takes"), may_use)
     if c.get("volume") is not None:
@@ -752,9 +824,11 @@ def rebuild(doc, edit, stamp="", may_use=None):
             raise ValueError(f"clip {i} does not name a clip of this timeline")
         start = _num(c.get("in"), f"clip {i}'s in point")
         length = _num(c.get("length"), f"clip {i}'s length", _MIN_CLIP)
-        mix = _num(c.get("transition") or 0, f"clip {i}'s dissolve") if i > 1 else 0.0
-        parsed.append((ref, start, length, mix, str(c.get("name")) if c.get("name") is not None else None, c))
-    for i, (_ref, _s, length, mix, _n, _c) in enumerate(parsed):
+        gap = _num(c.get("gap") or 0, f"the gap before clip {i}")
+        # No dissolve into a gap: a clip after empty time comes in with a cut.
+        mix = _num(c.get("transition") or 0, f"clip {i}'s dissolve") if i > 1 and not gap > 0 else 0.0
+        parsed.append((ref, start, length, mix, str(c.get("name")) if c.get("name") is not None else None, c, gap))
+    for i, (_ref, _s, length, mix, _n, _c, _g) in enumerate(parsed):
         if mix and (mix >= length or mix >= parsed[i - 1][2]):
             raise ValueError(f"the dissolve into clip {i + 1} is as long as one of the clips it joins")
     def halves(seconds):
@@ -765,9 +839,14 @@ def rebuild(doc, edit, stamp="", may_use=None):
         return first / rate, (frames - first) / rate
 
     children = []
-    for i, (ref, start, length, mix, name, given) in enumerate(parsed):
+    for i, (ref, start, length, mix, name, given, gap) in enumerate(parsed):
         head, before = halves(mix if i else 0.0)
         tail = halves(parsed[i + 1][3])[1] if i + 1 < len(parsed) else 0.0
+        frames = round(gap * rate)
+        if frames > 0:
+            # Empty time on V1, as OTIO says it: a Gap (Resolve reads it as one).
+            children.append({"OTIO_SCHEMA": "Gap.1", "name": "", "metadata": {}, "effects": [], "markers": [],
+                             "source_range": _range(0.0, frames / rate, rate)})
         if head or before:
             children.append({"OTIO_SCHEMA": "Transition.1", "name": "", "metadata": {},
                              "transition_type": "SMPTE_Dissolve",
@@ -811,7 +890,7 @@ def rebuild(doc, edit, stamp="", may_use=None):
                 note = stack_meta.setdefault("bepic", {})
                 if isinstance(note, dict):
                     note["texts_off"] = bool(off["T"])
-    film = edit_length({"clips": [{"length": p[2], "transition": p[3]} for p in parsed],
+    film = edit_length({"clips": [{"length": p[2], "transition": p[3], "gap": p[6]} for p in parsed],
                         "tracks": extra_tracks(new)})
 
     stack = new.get("tracks") or {}

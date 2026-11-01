@@ -22,10 +22,25 @@
 //   click a clip            select it and go to it; right-click: its colour, remove, Recreate
 //                           with changes… (agentY), its takes; Ctrl+click / Shift+click: several
 //                           clips selected (bEpicViewer_editTakes.js)
-//   drag a shot's edge      trim it (what follows moves with it); the middle of a
-//                           cut rolls it; Alt: slip / retime, Alt+Shift: slide,
-//                           Ctrl on the out-edge: loop (bEpicViewer_editTrim.js)
-//   drag a shot             put it elsewhere in the order - or onto another track
+//   the modes               A Selection (the default), T Trim Edit, B the blade -
+//                           buttons in the bar too, the one that is on lit
+//   drag a shot's edge      Selection: trim that edge only (a gap opens or is
+//                           filled, nothing else moves); Trim: a ripple trim. The
+//                           middle of a cut rolls it; Alt: slip / retime,
+//                           Alt+Shift: slide, Ctrl on the out-edge: loop; in the
+//                           Trim mode the body's upper half slips, its lower half
+//                           slides (bEpicViewer_editTrim.js)
+//   drag a shot             Selection: to another moment - it lies over what is
+//                           there and leaves a gap (V1 holds gaps); Ctrl+Shift+drag:
+//                           into the order (an insert, what follows moves) - or
+//                           onto another track (the clips after it stay)
+//   a gap on V1             click it to select it; Del / Shift+Del closes it
+//   Ctrl+Alt+L / right-click  Unlink a film's sound onto a sound track (A2 or the
+//                           next free one), or Link a picture and its sound again
+//   snapping (N, the magnet)  every drag snaps to clip and gap edges on all tracks,
+//                           the playhead, the in / out, the texts, the start (and,
+//                           its own switch, the music's beats); hold S while
+//                           dragging to snap the other way for that drag
 //   a clip on a higher track  drag it to another moment, its edges to trim it, or
 //                           onto another track (onto V1: between the shots there)
 //   a dissolve              the bar over the join: drag its edge to make it longer
@@ -64,6 +79,9 @@ import { canvasContext, notice, openExportDialog, openFilePicker } from "./bEpic
 
 const DOCK_ID = "editTimeline";
 const EDGE_PX = 7;          // how close to a block's end a press is a trim
+// A magnet: the snapping switch.
+const MAGNET = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M3 2h3v6a2 2 0 0 0 4 0V2h3v6a5 5 0 0 1-10 0z" '
+    + 'fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M3 4.5h3M10 4.5h3" stroke="currentColor" stroke-width="1.6"/></svg>';
 const DRAG_SLOP = 4;        // travel before a press on a shot becomes a move
 const STILL_SECONDS = 3;
 const DRAG_TYPE = "application/x-bepic-history";
@@ -74,7 +92,6 @@ export const EDIT_PANELS = ["editTimeline", "editInspector", "editEffects"];
 const PANELS_STORE = "bepic.viewer.editPanels";
 // Tall enough for a filmstrip with the sound under it, and for a waveform.
 const ROW_HEIGHT = { text: 16, video: 44, audio: 30 };
-const SNAP_PX = 8;          // how near (on screen) a drop or a move snaps to an edit point or the playhead
 const SOUND_EXTS = [".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"];
 const FILM_EXTS = [".mp4", ".mov", ".webm", ".mkv", ".m4v", ".avi"];
 const STILL_EXTS = [".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"];
@@ -193,8 +210,11 @@ export const EditTimelineMixin = {
         const view = (s.view && typeof s.view === "object") ? s.view : {};
         const range = view.range && Number.isFinite(view.range.start) && Number.isFinite(view.range.end) ? { start: view.range.start, end: view.range.end } : null;
         this._editTlView = { zoom: Math.max(1, Math.min(64, Number(view.zoom) || 1)), heights: { ...(view.heights || {}) },
-                             solo: { ...(view.solo || {}) }, textsOff: !!view.textsOff, range };
+                             solo: { ...(view.solo || {}) }, textsOff: !!view.textsOff, range,
+                             // Snapping: on unless switched off (N); the beats of the music its own switch, off.
+                             snap: view.snap !== false, snapBeats: !!view.snapBeats };
         this._editTlSel = null;
+        this._editTlEditSel = null;
         this._editTlNote = "";
         this._editTlNow = "";
     },
@@ -419,9 +439,23 @@ export const EditTimelineMixin = {
             return b;
         };
         // Cutting: the blade, a cut at the playhead, undo / redo, Auto edit.
+        // The modes, as Resolve's: Selection (A), Trim Edit (T), the blade (B). The lit one is on.
+        const pick = button("\u25b8 Select", "Selection mode (A): drag a clip to move it, an edge to trim that edge only - "
+                            + "nothing else moves (gaps stay)", () => this.editTlMode("select"));
+        pick.classList.add("edit-tool");
+        const trimBtn = button("\u21d4 Trim", "Trim Edit mode (T): an edge ripples, the middle of a cut rolls, the upper half "
+                               + "of a clip slips, the lower half slides", () => this.editTlMode("trim"));
+        trimBtn.classList.add("edit-tool");
         const blade = button("\u2702", "Blade (B): click a clip to cut it there. Ctrl+B or S cuts at the playhead",
                              () => this.editTlBladeToggle());
-        blade.classList.add("edit-blade-btn");
+        blade.classList.add("edit-blade-btn", "edit-tool");
+        const mode = el("span", "edit-modetag");
+        const snap = button("", "Snapping (N): drags snap to clip and gap edges, the playhead, the in / out and the texts. "
+                            + "Hold S while dragging to snap the other way", () => this.editTlSnapToggle());
+        snap.innerHTML = MAGNET;
+        snap.classList.add("edit-snap-btn");
+        const beats = button("\u266a", "Snap to the beats of the music too (once Auto edit has read them)", () => this.editTlSnapToggle("beats"));
+        beats.classList.add("edit-snapbeat-btn");
         const split = button("Split", "Cut the clip under the playhead (Ctrl+B, S)", () => this.editTlSplitAtPlayhead());
         const undo = button("\u21b6", "Undo (Ctrl+Z)", () => this.editTlUndo());
         const redo = button("\u21b7", "Redo (Ctrl+Shift+Z)", () => this.editTlRedo());
@@ -436,7 +470,7 @@ export const EditTimelineMixin = {
         const zoomOut = button("\u2212", "Zoom out (Ctrl+- or Ctrl + wheel)", () => this._editTlZoom(this._editTlView.zoom / 1.5));
         const zoomIn = button("+", "Zoom in (Ctrl+= or Ctrl + wheel)", () => this._editTlZoom(this._editTlView.zoom * 1.5));
         const zoomFit = button("Fit", "The whole film in view (Shift+Z)", () => this._editTlZoom(1));
-        bar.append(fresh, add, out, blade, split, undo, redo, auto, cuts, take, sub, badge, zoomOut, zoomIn, zoomFit, keys);
+        bar.append(fresh, add, out, pick, trimBtn, blade, mode, snap, beats, split, undo, redo, auto, cuts, take, sub, badge, zoomOut, zoomIn, zoomFit, keys);
 
         // The tracks: their headers in a column that stays, the tracks beside it
         // in a strip that is as wide as the zoom makes it and scrolls.
@@ -483,9 +517,11 @@ export const EditTimelineMixin = {
             if ((e.ctrlKey || e.metaKey) && this._editTlRangeDrag) { this._editTlRangeDrag(e); return; }
             e.preventDefault();
             this._editTlScrubbing = true;
-            const go = (ev) => { const at = this._editTlTimeAt(ev.clientX); if (at != null) this._editTlSeek(at, true); };
+            // The playhead snaps too, as it is scrubbed - to everything but itself.
+            const go = (ev) => { const at = this._editTlTimeAt(ev.clientX); if (at != null) this._editTlSeek(this._editTlSnapAt(at, [], { noHead: true }), true); };
             const up = () => {
                 this._editTlScrubbing = false;
+                this._editTlSnapLine(null);
                 ruler.removeEventListener("pointermove", go);
                 ruler.removeEventListener("pointerup", up);
                 ruler.removeEventListener("pointercancel", up);
@@ -531,7 +567,7 @@ export const EditTimelineMixin = {
         // A press on a track where nothing lies takes the selection off.
         rows.addEventListener("pointerdown", (e) => {
             if (e.button !== 0 || !(e.target.classList && e.target.classList.contains("edit-track"))) return;
-            if (this._editTlSel) { this._editTlSel = null; this.editTlRefresh(); }
+            if (this._editTlSel || this._editTlEditSel) { this._editTlSel = null; this._editTlEditSel = null; this.editTlRefresh(); }
         });
 
         // New material: rows of the file browser, history thumbs, the viewport -
@@ -556,7 +592,7 @@ export const EditTimelineMixin = {
             this._editTlDropMark(e.clientX, what === "effect" ? "free" : rowOf(e), true);
         });
         body.addEventListener("dragleave", (e) => {
-            if (!e.relatedTarget || !body.contains(e.relatedTarget)) this._editTlDropMark(null);
+            if (!e.relatedTarget || !body.contains(e.relatedTarget)) { this._editTlDropMark(null); this._editTlSnapLine(null); }
         });
         body.addEventListener("drop", (e) => {
             const what = carries(e);
@@ -567,6 +603,7 @@ export const EditTimelineMixin = {
             const track = rowOf(e);
             const at = raw == null ? null : this._editTlSnap(raw, track);
             this._editTlDropMark(null);
+            this._editTlSnapLine(null);
             if (what === "os") { this._editTlAdd(this._editTlOsItems(e.dataTransfer.files), at, track); return; }
             if (what === "uri") { this._editTlAdd(this._editTlUriItems(e.dataTransfer), at, track); return; }
             let payload = null;
@@ -575,7 +612,7 @@ export const EditTimelineMixin = {
             this._editTlAdd((payload && payload.items) || [], at, track);
         });
         this._editTlUi = { host, empty, body, sub, badge, out, main, heads, scroll, area, ruler, rows,
-                           head, drop, hint, blade, split, undo, redo, auto, cuts, take };
+                           head, drop, hint, blade, split, undo, redo, auto, cuts, take, pick, trimBtn, mode, snap, beats };
         this._editTlWatchCanvas();
         return this._editTlUi;
     },
@@ -618,7 +655,17 @@ export const EditTimelineMixin = {
         ui.redo.disabled = !cut || !hist.future.length;
         ui.split.disabled = ui.auto.disabled = ui.cuts.disabled = !has;
         ui.blade.classList.toggle("on", !!this._editTlBlade);
+        ui.pick.classList.toggle("on", !this._editTlBlade && !this._editTlTrimMode);
+        ui.trimBtn.classList.toggle("on", !this._editTlBlade && !!this._editTlTrimMode);
+        ui.mode.textContent = this._editTlBlade ? "Blade" : this._editTlTrimMode ? "Trim edit" : "Selection";
+        ui.mode.dataset.mode = this._editTlBlade ? "blade" : this._editTlTrimMode ? "trim" : "select";
         ui.body.classList.toggle("blade", !!this._editTlBlade && has);
+        ui.body.classList.toggle("trim", !this._editTlBlade && !!this._editTlTrimMode && has);
+        const snapOn = !this._editTlView || this._editTlView.snap !== false;
+        ui.snap.classList.toggle("on", snapOn);
+        ui.snap.setAttribute("aria-pressed", snapOn ? "true" : "false");
+        ui.beats.classList.toggle("on", !!(this._editTlView && this._editTlView.snapBeats));
+        ui.beats.disabled = !snapOn;
         if (this.editTlAnswerButton) this.editTlAnswerButton(ui.take); else ui.take.style.display = "none";
         ui.badge.textContent = dirty ? (this._editTlSaved ? "changed \u2014 not saved" : "new cut \u2014 not saved") : "";
         ui.badge.className = "edit-badge" + (dirty ? " dirty" : "");
@@ -635,10 +682,12 @@ export const EditTimelineMixin = {
         ui.sub.textContent = `${cut.name || this._editTlFile || "new cut"} \u00b7 ${n} shot${n === 1 ? "" : "s"} \u00b7 `
             + D.lengthLabel(lay.total) + (this._editTlNote ? " \u00b7 " + this._editTlNote : "");
         ui.hint.textContent = this._editTlBlade
-            ? "Blade: click a clip to cut it there (B or Esc to put it away). Ctrl+Z undoes."
-            : "Drag on the ruler to scrub, a clip's edge to trim (the middle of a cut: roll), a shot to reorder. "
-              + "Alt+drag: slip (on an edge: retime), Alt+Shift+drag: slide, Ctrl+drag the out-edge: loop. "
-              + "Ctrl + wheel zooms. I / O / X: in and out. ? lists the keys. Drop files onto a track.";
+            ? "Blade: click a clip to cut it there (A, or B or Esc, to put it away). Ctrl+Z undoes."
+            : this._editTlTrimMode
+            ? "Trim Edit (T): an edge ripples (what follows moves), the middle of a cut rolls, a clip's upper half slips, "
+              + "its lower half slides. Click an edge to select it: , / . nudge it, E extends it to the playhead. A: back to Selection."
+            : "Drag a clip to move it (it leaves a gap; Ctrl+Shift+drag inserts), an edge to trim that edge only, the middle "
+              + "of a cut to roll. Alt+drag: slip, Alt+Shift: slide. Del lifts, Shift+Del ripples. T: Trim mode, N: snapping. ? lists the keys.";
         ui.area.style.width = (view.zoom * 100) + "%";
 
         const doc = host.ownerDocument;
@@ -692,6 +741,7 @@ export const EditTimelineMixin = {
             if (row.id === "T") {
                 for (const x of lay.texts) {
                     const b = block("edit-text" + (picked("text", x.i) ? " sel" : "") + (x.late ? " late" : ""), x, x.name);
+                    b.dataset.key = "T:" + x.i;
                     b.addEventListener("pointerdown", (e) => this._editTlTextDown(e, b, x.i));
                     b.addEventListener("pointermove", (e) => this._editTlEdgeCursor(e, b));
                     b.addEventListener("contextmenu", (e) => this._editTlClipMenu(e, { kind: "text", i: x.i }));
@@ -706,10 +756,25 @@ export const EditTimelineMixin = {
                                  row: "video", volume: cut.clips[s.i].volume, clip: cut.clips[s.i] };
                     this._editTlBadges(b, cut.clips[s.i]);
                     this._editTlTakeBadge(b, cut.clips[s.i]);
+                    this._editTlLinkBadge(b, cut.clips[s.i], "video");
                     b.addEventListener("pointerdown", (e) => this._editTlShotDown(e, b, s.i));
                     b.addEventListener("pointermove", (e) => this._editTlHover(e, b, { kind: "clip", i: s.i }));
                     b.addEventListener("pointerleave", () => this._editTlHoverEnd());
                     b.addEventListener("contextmenu", (e) => this._editTlClipMenu(e, { kind: "clip", i: s.i }));
+                    kids.push(b);
+                }
+                // A gap: empty time - black, or what a higher track shows. Clicked, it is selected (Del closes it).
+                for (const g of lay.gaps || []) {
+                    const b = block("edit-gap" + (picked("gap", g.i) ? " sel" : ""), g, "");
+                    b.dataset.key = "gap:" + g.i;
+                    b.addEventListener("pointerdown", (e) => {
+                        if (e.button !== 0 || this._editTlBlade) return;
+                        e.stopPropagation();
+                        this._editTlSel = { kind: "gap", i: g.i };
+                        this._editTlEditSel = null;
+                        this.editTlRefresh();
+                    });
+                    b.addEventListener("contextmenu", (e) => this._editTlClipMenu(e, { kind: "gap", i: g.i }));
                     kids.push(b);
                 }
                 // A dissolve: a bar over the join, as long as the dissolve is.
@@ -736,6 +801,7 @@ export const EditTimelineMixin = {
                     b._media = { file: tc.file, in: Number(tc.in) || 0, length: c.length, row: row.kind, volume: tc.volume, clip: tc };
                     this._editTlBadges(b, tc);
                     this._editTlTakeBadge(b, tc);
+                    this._editTlLinkBadge(b, tc, row.kind);
                     b.addEventListener("pointerdown", (e) => this._editTlTrackClipDown(e, b, row.id, c.i));
                     b.addEventListener("pointermove", (e) => this._editTlHover(e, b, { kind: "tclip", track: row.id, i: c.i }));
                     b.addEventListener("pointerleave", () => this._editTlHoverEnd());
@@ -753,6 +819,7 @@ export const EditTimelineMixin = {
         // The in and out (the transport's own range: played, looped, exported).
         if (this._editTlRulerMarks) this._editTlRulerMarks();
         if (this.editTlMarksDraw) this.editTlMarksDraw(ui, cut, lay);
+        if (this._editTlEditMarkDraw) this._editTlEditMarkDraw();
         this._editTlPlayhead();
         if (this.editMediaSchedule) this.editMediaSchedule();
     },
@@ -850,10 +917,17 @@ export const EditTimelineMixin = {
         // A clip of a selection of several keeps it (and one that is not in it joins it); else it is the selection.
         if (sel.kind === "clip" || sel.kind === "tclip") this._editTlMenuSelect(sel); else this._editTlSel = sel;
         this.editTlRefresh();
+        if (sel.kind === "gap") {
+            this._previzOpenMenu([{ label: "Close gap (ripple delete: the clips after it move up)",
+                                    run: () => { this._editTlSel = null; this._editTlApply(D.closeGap(this._editTlCut, sel.i)); } }],
+                                 e.clientX, e.clientY);
+            return;
+        }
         const entries = [{ label: sel.kind === "text" ? "Remove this text" : sel.kind === "mix" ? "Remove this dissolve" : "Remove from the cut",
                            disabled: sel.kind === "clip" && this._editTlCut.clips.length <= 1,
                            run: () => this._editTlRemove(sel) }];
         const clip = D.clipOf(this._editTlCut, sel);
+        if (sel.kind === "clip" || sel.kind === "tclip") entries.push(...this._editTlLinkEntries(sel));
         if (clip && FILM_EXTS.includes(ext(clip.file))) {
             entries.push({ label: "Detect cuts", run: () => this.editTlDetectCuts([sel]) });
         }
@@ -891,8 +965,8 @@ export const EditTimelineMixin = {
     _editTlRemove(sel) {
         const cut = this._editTlCut;
         this._editTlSel = null;
-        if (sel.kind === "clip") this._editTlApply(D.removeClip(cut, sel.i));
-        else if (sel.kind === "tclip") this._editTlApply(D.removeTrackClip(cut, sel.track, sel.i));
+        // "Remove from the cut" lifts, as Del does: a gap stays, a linked partner goes with it.
+        if (sel.kind === "clip" || sel.kind === "tclip") this._editTlApply(D.deleteWithLink(cut, sel, false));
         else if (sel.kind === "text") this._editTlApply(D.removeText(cut, sel.i));
         else if (sel.kind === "mix") this._editTlApply(D.setTransition(cut, sel.i, 0));
     },
@@ -989,9 +1063,29 @@ export const EditTimelineMixin = {
         // The whole drag is one step of the undo stack.
         const before = this._editTlCut;
         this._editTlDragging = true;
+        this._editTlDragBase = before;
+        // S held while dragging snaps the other way for as long as it is held (not a split, then).
+        // (The viewer's own key handler, on the window, asks editTlKeyDown first, which hands S to this while a drag is on.)
+        const doc = ui.area.ownerDocument;
+        const flip = (ev) => {
+            if (ev.code !== "KeyS" && String(ev.key).toLowerCase() !== "s") return false;
+            if (ev.ctrlKey || ev.metaKey || ev.altKey) return false;
+            ev.preventDefault();
+            ev.stopImmediatePropagation();
+            const held = ev.type === "keydown";
+            if (this._editTlSnapFlip === held) return true;
+            this._editTlSnapFlip = held;
+            if (this._editTlLastMove) move(this._editTlLastMove);
+            return true;
+        };
+        this._editTlSnapKey = flip;
+        const win = doc.defaultView || window;
+        win.addEventListener("keydown", flip, true);
+        win.addEventListener("keyup", flip, true);
         const y0 = e.clientY;
         let moved = false;
         const move = (ev) => {
+            this._editTlLastMove = ev;
             const dx = ev.clientX - x0;
             // Sideways or up and down: a clip is also dragged from one track to another.
             if (!moved && Math.hypot(dx, ev.clientY - y0) < DRAG_SLOP) return;
@@ -1002,6 +1096,12 @@ export const EditTimelineMixin = {
             captor.removeEventListener("pointermove", move);
             captor.removeEventListener("pointerup", up);
             captor.removeEventListener("pointercancel", up);
+            win.removeEventListener("keydown", flip, true);
+            win.removeEventListener("keyup", flip, true);
+            this._editTlSnapKey = null;
+            this._editTlSnapFlip = false;
+            this._editTlLastMove = null;
+            this._editTlSnapLine(null);
             try { captor.releasePointerCapture(id); } catch (_) {}
             try { onUp(moved, ev); } finally {
                 this._editTlDragging = false;
@@ -1064,47 +1164,69 @@ export const EditTimelineMixin = {
     _editTlShotDown(e, el, i) {
         const start = this._editTlCut;
         const fps = start.fps || 24;
-        const zone = this._editTlZone(e, el);
         const was = start.clips[i];
         const sel = { kind: "clip", i };
         if (this._editTlBlade) { this._editTlBladeCut(e, sel); return; }
+        // Ctrl+Shift+drag: into the order (an insert), as Resolve's. Ctrl or Shift alone: several selected.
+        const insert = !!((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey);
         // Ctrl / Shift on a clip's body: several clips selected (bEpicViewer_editTakes.js).
-        if (this._editTlMultiDown(e, el, sel)) return;
+        if (!insert && this._editTlMultiDown(e, el, sel)) return;
         // An edge, or a modifier held: trim, roll, retime, loop, slip, slide (bEpicViewer_editTrim.js).
-        if (this._editTlTrimDown && this._editTlTrimDown(e, el, sel)) return;
+        if (!insert && this._editTlTrimDown && this._editTlTrimDown(e, el, sel)) return;
         const began = D.clipStarts(start)[i];
         const grab = (this._editTlTimeAt(e.clientX) || began) - began;       // where in the clip it was taken hold of
         this._editTlSel = sel;
-        let onto = "V1";
+        this._editTlEditSel = null;
+        const partner = D.linkPartner(start, sel);
+        const exclude = ["V1:" + i, ...(partner ? [D.selId(partner)] : [])];
+        let onto = "V1", landed = began;
         this._editTlDrag(e, el, (seconds, ev) => {
-            if (zone === "end") this._editTlCut = D.trimEnd(start, i, D.toFrame(was.length + seconds, fps));
-            else if (zone === "start") this._editTlCut = D.trimStart(start, i, D.toFrame(seconds, fps));
-            else {
-                // The body: to another place in the order, or onto another track.
-                onto = this._editTlTrackUnder(ev, sel) || "V1";
-                const at = Math.max(0, (this._editTlTimeAt(ev.clientX) || 0) - grab);
-                if (onto === "V1") { this._editTlGhost(null); this._editTlDropMark(ev.clientX); }
-                else { this._editTlDropMark(null); this._editTlGhost({ track: onto, at, length: was.length, name: was.name }); }
+            onto = this._editTlTrackUnder(ev, sel) || "V1";
+            const raw = Math.max(0, (this._editTlTimeAt(ev.clientX) || 0) - grab);
+            if (onto === "V1" && insert) {
+                if (this._editTlCut !== start) { this._editTlCut = start; this.editTlRefresh(); }
+                this._editTlGhost(null); this._editTlDropMark(ev.clientX);
                 return;
             }
-            this.editTlRefresh();
+            const at = D.toFrame(Math.max(0, this._editTlSnapSpanAt(raw, Number(was.length) || 0, exclude)), fps);
+            landed = at;
+            if (onto === "V1") {
+                // Selection mode: it goes there, over what is there, and leaves a gap where it was.
+                this._editTlGhost(null); this._editTlDropMark(null);
+                const got = D.moveShot(start, i, at);
+                if (got) {
+                    this._editTlCut = D.followLink(start, got.cut, sel);
+                    this._editTlSel = { kind: "clip", i: got.i };
+                }
+                this.editTlRefresh();
+                return;
+            }
+            if (this._editTlCut !== start) { this._editTlCut = start; this._editTlSel = sel; this.editTlRefresh(); }
+            this._editTlDropMark(null);
+            this._editTlGhost({ track: onto, at, length: was.length, name: was.name });
         }, (moved, ev) => {
             this._editTlDropMark(null);
             this._editTlGhost(null);
-            if (moved && zone === "body") {
-                const at = this._editTlTimeAt(ev.clientX);
-                if (onto !== "V1") {
-                    const got = D.transferClip(start, sel, onto, D.toFrame(Math.max(0, (at || 0) - grab), fps));
-                    if (got) { this._editTlSel = got.sel; this._editTlApply(got.cut); return; }
-                }
+            if (!moved) { this._editTlSeek(began); this.editTlRefresh(); return; }
+            if (onto !== "V1") {
+                // Onto another track: the clips after it on V1 stay where they are (a gap is left) - Ctrl+Shift: they close up.
+                const got = D.transferClip(start, sel, onto, landed, { ripple: insert });
+                this._editTlCut = start;
+                if (got) { this._editTlSel = got.sel; this._editTlApply(D.followLink(start, got.cut, sel)); return; }
+                this._editTlSel = sel;
+                this.editTlRefresh();
+                return;
+            }
+            if (insert) {
                 // Where it lands among the OTHERS: its own block is not a place to land.
+                const at = this._editTlTimeAt(ev.clientX);
                 const others = D.removeClip(start, i);
                 let to = at == null ? i : D.dropIndex(start.clips.length > 1 ? others : start, at);
                 if (start.clips.length <= 1) to = 0;
+                this._editTlCut = start;
                 this._editTlMove(i, to);
                 return;
             }
-            if (!moved) this._editTlSeek(began);
             this.editTlRefresh();
         });
     },
@@ -1142,26 +1264,29 @@ export const EditTimelineMixin = {
         if (this._editTlMultiDown(e, el, sel)) return;
         if (this._editTlTrimDown && this._editTlTrimDown(e, el, sel)) return;
         this._editTlSel = sel;
-        let onto = id;
-        // Its edges snap to the other clips' edges and to the playhead.
-        const others = D.editPoints(D.removeTrackClip(start, id, i));
+        this._editTlEditSel = null;
+        let onto = id, landed = Number(was.at) || 0;
+        const insert = !!((e.ctrlKey || e.metaKey) && e.shiftKey);
+        // Its edges snap to every other clip's edges, the playhead, ... (not its own, nor its partner's).
+        const partner = D.linkPartner(start, sel);
+        const exclude = [D.selId(sel), ...(partner ? [D.selId(partner)] : [])];
         this._editTlDrag(e, el, (seconds, ev) => {
-            if (zone === "end") this._editTlCut = D.trimTrackClipEnd(start, id, i, D.toFrame(was.length + seconds, fps));
-            else if (zone === "start") this._editTlCut = D.trimTrackClipStart(start, id, i, D.toFrame(seconds, fps));
+            if (zone === "end") this._editTlCut = D.followLink(start, D.trimTrackClipEnd(start, id, i, D.toFrame(was.length + seconds, fps)), sel);
+            else if (zone === "start") this._editTlCut = D.followLink(start, D.trimTrackClipStart(start, id, i, D.toFrame(seconds, fps)), sel);
             else {
                 onto = this._editTlTrackUnder(ev, sel) || id;
-                let at = D.toFrame(Math.max(0, was.at + seconds), fps);
+                const at = D.toFrame(Math.max(0, this._editTlSnapSpanAt(Math.max(0, was.at + seconds), Number(was.length) || 0, exclude)), fps);
+                landed = at;
                 if (onto === id) {
-                    at = this._editTlSnapSpan(at, Number(was.length) || 0, others);
                     this._editTlGhost(null);
                     this._editTlDropMark(null);
-                    this._editTlCut = D.moveTrackClip(start, id, i, at);
+                    this._editTlCut = D.followLink(start, D.moveTrackClip(start, id, i, at), sel);
                     this.editTlRefresh();
                     return;
                 }
                 // Over another track: it stays where it was until it is let go there.
                 if (this._editTlCut !== start) { this._editTlCut = start; this.editTlRefresh(); }
-                if (onto === "V1") { this._editTlGhost(null); this._editTlDropMark(ev.clientX); }
+                if (onto === "V1" && insert) { this._editTlGhost(null); this._editTlDropMark(ev.clientX); }
                 else { this._editTlDropMark(null); this._editTlGhost({ track: onto, at, length: was.length, name: was.name }); }
                 return;
             }
@@ -1170,10 +1295,11 @@ export const EditTimelineMixin = {
             this._editTlDropMark(null);
             this._editTlGhost(null);
             if (moved && zone === "body" && onto !== id) {
-                const at = onto === "V1" ? (this._editTlTimeAt(ev.clientX) || 0)
-                                         : D.toFrame(Math.max(0, was.at + ((this._editTlTimeAt(ev.clientX) || 0) - (this._editTlTimeAt(e.clientX) || 0))), fps);
-                const got = D.transferClip(start, sel, onto, at);
-                if (got) { this._editTlSel = got.sel; this._editTlApply(got.cut); return; }
+                // Onto V1: laid over what is there at its moment (Ctrl+Shift: put into the order there).
+                const at = onto === "V1" && insert ? (this._editTlTimeAt(ev.clientX) || 0) : landed;
+                const got = D.transferClip(start, sel, onto, at, { ripple: insert });
+                this._editTlCut = start;
+                if (got) { this._editTlSel = got.sel; this._editTlApply(D.followLink(start, got.cut, sel)); return; }
             }
             if (!moved) this._editTlSeek(was.at);
             this.editTlRefresh();
@@ -1186,10 +1312,12 @@ export const EditTimelineMixin = {
         const zone = this._editTlZone(e, el);
         const was = start.texts[i];
         this._editTlSel = { kind: "text", i };
+        const own = ["T:" + i];
         this._editTlDrag(e, el, (seconds) => {
-            if (zone === "end") this._editTlCut = D.resizeText(start, i, D.toFrame(was.length + seconds, fps));
-            else if (zone === "start") this._editTlCut = D.trimTextStart(start, i, D.toFrame(was.start + seconds, fps));
-            else this._editTlCut = D.moveText(start, i, D.toFrame(was.start + seconds, fps));
+            const end0 = Number(was.start) + Number(was.length);
+            if (zone === "end") this._editTlCut = D.resizeText(start, i, D.toFrame(this._editTlSnapAt(end0 + seconds, own) - was.start, fps));
+            else if (zone === "start") this._editTlCut = D.trimTextStart(start, i, D.toFrame(this._editTlSnapAt(was.start + seconds, own), fps));
+            else this._editTlCut = D.moveText(start, i, D.toFrame(this._editTlSnapSpanAt(was.start + seconds, Number(was.length), own), fps));
             this.editTlRefresh();
         }, (moved) => {
             if (!moved) this._editTlSeek(was.start);
@@ -1208,15 +1336,15 @@ export const EditTimelineMixin = {
         if (at == null || !this._editTlCut || !this._editTlLay) { ui.drop.style.display = "none"; return; }
         const cut = this._editTlCut;
         let moment = snap ? this._editTlSnap(at, where) : at;
+        if (!snap) this._editTlSnapLine(null);
         // The track it lands on is lit, as a moved clip's is.
         if (snap && where) {
             const row = [...ui.rows.querySelectorAll(".edit-track")].find((r) => r.dataset.track === where);
             if (row) row.classList.add("landing");
         }
         if (!(where === "free" || (where && D.trackOf(cut, where)))) {
-            const idx = D.dropIndex(cut, at);
-            const starts = D.clipStarts(cut);
-            moment = idx < starts.length ? starts[idx] : D.mainLength(cut);
+            // On V1: between two shots - or, in a gap, the moment itself (it is placed there).
+            moment = D.v1DropAt(cut, snap ? moment : at).moment;
         }
         ui.drop.style.display = "block";
         ui.drop.style.left = (moment / this._editTlLay.total) * 100 + "%";
@@ -1224,35 +1352,120 @@ export const EditTimelineMixin = {
 
     // ── snapping ─────────────────────────────────────────────────────────────
 
-    /** How many seconds SNAP_PX pixels are at the zoom the timeline is at. */
+    /** How many seconds D.SNAP_PX pixels are at the zoom the timeline is at. */
     _editTlSnapTolerance() {
         const ui = this._editTlUi, lay = this._editTlLay;
         if (!ui || !lay || !(lay.total > 0)) return 0;
-        const w = ui.area.getBoundingClientRect().width;
-        return w > 0 ? SNAP_PX * lay.total / w : 0;
+        return D.snapSeconds(D.SNAP_PX, lay.total, ui.area.getBoundingClientRect().width);
     },
 
-    /** The places a moment snaps to: the edit points, and the playhead. */
-    _editTlSnapPoints(points) {
-        const out = [...(points || D.editPoints(this._editTlCut)), D.filmLength(this._editTlCut)];
-        if (this._editTlOnScreen()) out.push((this.currentFrame || 0) / (this._editTlCut.fps || 24));
-        return out;
+    /** Is snapping on now: the switch (N, the magnet) - turned the other way while S is held in a drag. */
+    _editTlSnapping() {
+        const on = !this._editTlView || this._editTlView.snap !== false;
+        return this._editTlSnapFlip ? !on : on;
+    },
+
+    /** N / the magnet: snapping on or off (`what` "beats": the beats of the music as targets too). Kept with the cut. */
+    editTlSnapToggle(what) {
+        const view = this._editTlView;
+        if (!view) return;
+        if (what === "beats") {
+            view.snapBeats = !view.snapBeats;
+            this._editTlSay(view.snapBeats ? (this._editTlBeatTimes().length ? "snapping to the beats too"
+                                                                              : "snapping to the beats too, once Auto edit (On the beat) has read them")
+                                           : "not snapping to the beats");
+        } else {
+            view.snap = view.snap === false;
+            this._editTlSay(view.snap ? "snapping on (N)" : "snapping off (N)");
+        }
+        this._editTlKeep();
+        this.editTlRefresh();
+    },
+
+    /** The beats of the music, as moments of the film, where Auto edit has read them (editAuto keeps them). */
+    _editTlBeatTimes() {
+        const known = this._editTlBeatsKnown && this._editTlBeatsKnown[this._editTlTab];
+        return Array.isArray(known) ? known : [];
+    },
+
+    /**
+     * Everything a drag can snap to now (D.snapTargets), but the ids in `exclude`.
+     * `opts.noHead`: not the playhead (it is what is being dragged); `noRange`: not the in / out.
+     */
+    _editTlTargets(exclude, opts = {}) {
+        // The cut as it was when the drag began: what is being dragged must not drag its targets along.
+        const cut = (this._editTlDragging && this._editTlDragBase) || this._editTlCut;
+        const fps = (cut && cut.fps) || 24;
+        const span = !opts.noRange && this._editTlRangeSpan ? this._editTlRangeSpan() : null;
+        const view = this._editTlView || {};
+        return D.snapTargets(cut, {
+            exclude,
+            playhead: !opts.noHead && this._editTlOnScreen() ? (this.currentFrame || 0) / fps : null,
+            range: span,
+            beats: view.snapBeats ? this._editTlBeatTimes() : [],
+        });
+    },
+
+    /**
+     * THE snapping: `seconds` moved onto the nearest target within D.SNAP_PX pixels
+     * (whatever the zoom) while snapping is on - and the snap line drawn at it, the
+     * target lit. Off, or nothing near: as it is, and no line.
+     */
+    _editTlSnapAt(seconds, exclude = [], opts = {}) {
+        if (!this._editTlSnapping()) { this._editTlSnapLine(null); return seconds; }
+        const got = D.snapResolve(seconds, this._editTlTargets(exclude, opts), this._editTlSnapTolerance());
+        this._editTlSnapLine(got.target);
+        return got.t;
+    },
+
+    /** A span `length` long beginning at `at`, snapped by its start or its end: the start it gets. */
+    _editTlSnapSpanAt(at, length, exclude = []) {
+        if (!this._editTlSnapping()) { this._editTlSnapLine(null); return at; }
+        const got = D.snapSpan(at, length, this._editTlTargets(exclude), this._editTlSnapTolerance());
+        this._editTlSnapLine(got.target);
+        return got.at;
+    },
+
+    /** The snap line: thin, down every track, at the target snapped to - and the target lit a moment. null: away. */
+    _editTlSnapLine(target) {
+        const ui = this._editTlUi, lay = this._editTlLay;
+        if (!ui) return;
+        if (!ui.snapLine || !ui.snapLine.isConnected) {
+            ui.snapLine = ui.area.ownerDocument.createElement("div");
+            ui.snapLine.className = "edit-snapline";
+            ui.area.append(ui.snapLine);
+        }
+        const line = ui.snapLine;
+        if (!target || !lay || !(lay.total > 0)) {
+            line.style.display = "none";
+            line.dataset.kind = "";
+            this._editTlSnapHit = null;
+            for (const b of ui.rows.querySelectorAll(".snap-hit")) b.classList.remove("snap-hit");
+            return;
+        }
+        line.style.display = "block";
+        line.style.left = Math.max(0, Math.min(100, (target.t / lay.total) * 100)) + "%";
+        line.dataset.kind = target.kind;
+        line.title = target.label || "";
+        const key = target.kind + ":" + target.owner + ":" + target.t;
+        if (this._editTlSnapHit === key) return;
+        this._editTlSnapHit = key;
+        // The target lights up a moment (again whenever another one is snapped to).
+        line.classList.remove("flash");
+        void line.offsetWidth;
+        line.classList.add("flash");
+        for (const b of ui.rows.querySelectorAll(".snap-hit")) b.classList.remove("snap-hit");
+        if (target.owner) {
+            const hit = [...ui.rows.querySelectorAll(".edit-shot, .edit-gap, .edit-text")].find((b) => b.dataset.key === target.owner
+                || (target.owner.startsWith("T:") && b.classList.contains("edit-text") && b.dataset.key === target.owner));
+            if (hit) hit.classList.add("snap-hit");
+        }
     },
 
     /** A moment of a drop, snapped and on a frame. */
     _editTlSnap(seconds) {
         const fps = (this._editTlCut && this._editTlCut.fps) || 24;
-        const t = D.snapTime(seconds, this._editTlSnapPoints(), this._editTlSnapTolerance());
-        return D.toFrame(Math.max(0, t), fps);
-    },
-
-    /** A clip `length` long moved to begin at `at`: its start or its end snaps, whichever is nearer. */
-    _editTlSnapSpan(at, length, points) {
-        const pts = this._editTlSnapPoints(points), tol = this._editTlSnapTolerance();
-        const a = D.snapTime(at, pts, tol), b = D.snapTime(at + length, pts, tol) - length;
-        const da = Math.abs(a - at), db = Math.abs(b - at);
-        const best = (da && (!db || da <= db)) ? a : (db ? b : at);
-        return D.toFrame(Math.max(0, best), (this._editTlCut && this._editTlCut.fps) || 24);
+        return D.toFrame(Math.max(0, this._editTlSnapAt(seconds)), fps);
     },
 
     // ── the blade ────────────────────────────────────────────────────────────
@@ -1263,12 +1476,21 @@ export const EditTimelineMixin = {
         this.editTlRefresh();
     },
 
+    /** The mode, as Resolve's: "select" (A, the default), "trim" (T) - either puts the blade (B) away. */
+    editTlMode(mode) {
+        this._editTlTrimMode = mode === "trim";
+        if (!this._editTlTrimMode) this._editTlEditSel = null;
+        this._editTlHoverAct = null;
+        if (this._editTlTrimShow) this._editTlTrimShow(null);
+        this.editTlBladeToggle(false);
+    },
+
     /** The moment the blade would cut at, under a pointer: on a frame, snapped to the playhead and the edges. */
     _editTlBladeTime(clientX) {
         const t = this._editTlTimeAt(clientX);
         if (t == null) return null;
         const fps = this._editTlCut.fps || 24;
-        return D.toFrame(D.snapTime(t, this._editTlSnapPoints(), this._editTlSnapTolerance()), fps);
+        return D.toFrame(this._editTlSnapAt(t), fps);
     },
 
     _editTlBladeHover(e) {
@@ -1280,7 +1502,7 @@ export const EditTimelineMixin = {
             ui.area.append(ui.bladeLine);
         }
         const t = e && this._editTlBlade && !e.buttons ? this._editTlBladeTime(e.clientX) : null;
-        if (t == null || !this._editTlLay) { ui.bladeLine.style.display = "none"; return; }
+        if (t == null || !this._editTlLay) { ui.bladeLine.style.display = "none"; if (!this._editTlDragging) this._editTlSnapLine(null); return; }
         ui.bladeLine.style.display = "block";
         ui.bladeLine.style.left = (t / this._editTlLay.total) * 100 + "%";
     },
@@ -1291,7 +1513,7 @@ export const EditTimelineMixin = {
         e.preventDefault();
         e.stopPropagation();
         const t = this._editTlBladeTime(e.clientX);
-        const got = t == null ? null : D.splitClip(this._editTlCut, sel, t);
+        const got = t == null ? null : D.splitWithLink(this._editTlCut, sel, t);
         if (!got) { this._editTlSay("not cut: too near the clip's end, inside a dissolve, or the clip loops (take its loop off first)"); return; }
         this._editTlSel = got.sel;
         this._editTlApply(got.cut);
@@ -1334,8 +1556,90 @@ export const EditTimelineMixin = {
         if (!sel || !this._editTlCut) return false;
         if (sel.kind === "clip" && this._editTlCut.clips.length <= 1) { this._editTlSay("a cut keeps its last shot"); return true; }
         this._editTlSel = null;
+        this._editTlEditSel = null;
+        // A gap: closed, either way. A clip linked to its sound (or picture) takes it with it.
+        if (sel.kind === "gap") { this._editTlApply(D.closeGap(this._editTlCut, sel.i)); return true; }
+        if (sel.kind === "clip" || sel.kind === "tclip") { this._editTlApply(D.deleteWithLink(this._editTlCut, sel, !!ripple)); return true; }
         this._editTlApply(ripple ? D.rippleDelete(this._editTlCut, sel) : D.liftClip(this._editTlCut, sel));
         return true;
+    },
+
+    // ── picture and sound apart ──────────────────────────────────────────────
+
+    /** Does a clip's film have sound? (what /bepic/timeline_probe said; a film not yet asked about is taken to) */
+    _editTlHasSound(clip) {
+        if (!clip || D.isStillImage(clip.file) || !FILM_EXTS.includes(ext(clip.file))) return false;
+        const info = this._editTlInfo && this._editTlInfo.get(clip.file);
+        return !info || info.audio !== false;
+    },
+
+    /** A clip's link mark: a chain while its picture and sound go together, a broken one when they are apart. */
+    _editTlLinkBadge(b, clip, kind) {
+        const paired = !!clip.link;
+        const linked = paired ? !clip.unlinked : (kind === "video" && this._editTlHasSound(clip));
+        if (!paired && !linked) return;
+        const tag = b.ownerDocument.createElement("span");
+        tag.className = "edit-badge-link" + (linked ? "" : " off") + (paired ? " pair" : "");
+        tag.title = paired ? (linked ? "Linked to its " + (kind === "audio" ? "picture" : "sound") + ": moved, trimmed, cut and deleted together (Ctrl+Alt+L unlinks)"
+                                    : "Unlinked from its " + (kind === "audio" ? "picture" : "sound") + ": each moves on its own (select both, Ctrl+Alt+L links them)")
+                           : "Picture and sound linked (Ctrl+Alt+L: unlink - its sound becomes a clip of its own on a sound track)";
+        b.classList.add("has-link");
+        if (clip.mute) b.classList.add("muted");
+        b.append(tag);
+    },
+
+    /** The right-click entries of picture and sound: Unlink, Link clips, the clip's own sound on again. */
+    _editTlLinkEntries(sel) {
+        const cut = this._editTlCut;
+        const c = D.clipOf(cut, sel);
+        if (!c) return [];
+        const out = [];
+        const pair = this._editTlLinkPair();
+        if (pair) out.push({ label: "Link clips (Ctrl+Alt+L)", run: () => this.editTlLinkToggle() });
+        else if (c.link && !c.unlinked) out.push({ label: "Unlink audio / video (Ctrl+Alt+L)", run: () => this.editTlLinkToggle() });
+        else if (D.selKind(cut, sel) === "video" && !c.link) {
+            out.push({ label: "Unlink audio / video (Ctrl+Alt+L)", disabled: !this._editTlHasSound(c), run: () => this.editTlLinkToggle() });
+        }
+        if (c.mute) out.push({ label: "Its own sound on again", run: () => this._editTlApply(D.setClipProps(cut, sel, { mute: false })) });
+        return out;
+    },
+
+    /** A picture and a sound clip of the same file among the clips selected: [video, sound], or null. */
+    _editTlLinkPair() {
+        const cut = this._editTlCut;
+        const list = this._editTlSelList ? this._editTlSelList() : [];
+        if (list.length !== 2) return null;
+        const [a, b] = list;
+        const ca = D.clipOf(cut, a), cb = D.clipOf(cut, b);
+        if (!ca || !cb || D.normFile(ca.file) !== D.normFile(cb.file) || D.selKind(cut, a) === D.selKind(cut, b)) return null;
+        if (ca.link && ca.link === cb.link && !ca.unlinked && !cb.unlinked) return null;          // linked already
+        return D.selKind(cut, a) === "video" ? [a, b] : [b, a];
+    },
+
+    /**
+     * Ctrl+Alt+L (Resolve's Link Clips): two selected clips of one file, a picture
+     * and its sound, are linked; a linked clip is unlinked; a film with its sound in
+     * it gets the sound as a clip of its own. One step of the undo stack.
+     */
+    editTlLinkToggle() {
+        const cut = this._editTlCut;
+        if (!cut) return;
+        const pair = this._editTlLinkPair();
+        if (pair) {
+            const got = D.linkClips(cut, pair[0], pair[1]);
+            if (got) { this._editTlApply(got.cut); this._editTlSay("linked: picture and sound go together"); }
+            return;
+        }
+        const sel = this._editTlSel;
+        const c = sel && D.clipOf(cut, sel);
+        if (!c) { this._editTlSay("select a film with sound to unlink it - or its picture and its sound to link them"); return; }
+        if (c.link && c.unlinked) { this._editTlSay("unlinked already - select its picture and its sound together (Ctrl+click) to link them"); return; }
+        if (!c.link && (D.selKind(cut, sel) !== "video" || !this._editTlHasSound(c))) { this._editTlSay("this clip has no sound to unlink"); return; }
+        const got = D.unlinkClip(cut, sel);
+        if (!got) { this._editTlSay("this clip has no sound to unlink"); return; }
+        this._editTlApply(got.cut);
+        const k = D.trackOf(got.cut, got.sel.track);
+        this._editTlSay(c.link ? "unlinked: picture and sound move on their own" : `its sound is a clip of its own now, on ${k ? k.name : "a sound track"}`);
     },
 
     // ── the film under it ────────────────────────────────────────────────────
@@ -1609,6 +1913,13 @@ export const EditTimelineMixin = {
                 cut = D.placeClip(cut, onto.id, clip, moment);
                 moment = D.toFrame(moment + clip.length, fps);
                 sel = { kind: "tclip", track: onto.id, i: D.trackOf(cut, onto.id).clips.length - 1 };
+            } else if (at != null && cut.clips.length && D.gapAt(cut, moment) >= 0) {
+                // Into a gap of V1: placed at that moment (what does not fit there pushes the clips after it on).
+                const got = D.insertAt(cut, clip, moment);
+                cut = got.cut;
+                sel = { kind: "clip", i: got.i };
+                index = got.i + 1;
+                moment = D.toFrame(moment + clip.length, fps);
             } else {
                 cut = D.insertClip(cut, clip, index);
                 sel = { kind: "clip", i: index };

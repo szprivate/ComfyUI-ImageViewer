@@ -274,10 +274,18 @@ def lay(under, frame, fx, box):
 
 
 def film_pictures(clips, counts, w, h, fps):
-    """Every frame of the film, in order: the clips joined, the dissolves blended."""
+    """Every frame of the film, in order: the clips joined, the dissolves blended.
+    A gap of V1 (a ``blank`` clip) is None for each of its frames: nothing of the
+    cut there - black, or what a higher track shows (:func:`covered`)."""
     import numpy as np
     held = []
     for clip, (n, d_in, d_out) in zip(clips, counts):
+        if clip.get("blank"):
+            # No dissolve into or out of a gap: the clips beside it cut.
+            for _ in range(n):
+                yield None
+            held = []
+            continue
         keep = []
         fx = effective(clip.get("fx"))
         box = picture_box(clip["file"], w, h) if fx else None
@@ -460,7 +468,10 @@ def film_sound(cut, counts, fps, total_frames):
     for clip, (n, d_in, d_out) in zip(cut["clips"], counts):
         start = at - d_in
         volume = float(clip.get("volume", 1.0))
-        if cut.get("clip_sound", True) and not cut.get("v1_off") and volume > 0 and not is_still(clip["file"]):
+        # A gap has no sound; a clip whose sound was split off (`mute`) is heard
+        # from its sound clip, on a sound track, at that clip's own place.
+        if cut.get("clip_sound", True) and not cut.get("v1_off") and volume > 0 and not clip.get("blank") \
+                and not clip.get("mute") and not is_still(clip["file"]):
             try:
                 sound = clip_sound(clip, n / fps)
             except Exception:  # noqa: BLE001 - a shot whose sound will not decode is silent
@@ -489,7 +500,7 @@ def film_sound(cut, counts, fps, total_frames):
         if replace:
             mix[:, a:b] = 0.0
         volume = float(clip.get("volume", 1.0))
-        if volume <= 0 or is_still(clip["file"]):
+        if volume <= 0 or clip.get("mute") or is_still(clip["file"]):
             return
         try:
             sound = clip_sound(clip, want / RATE)
@@ -537,10 +548,15 @@ def read_cut(doc):
     clips = []
     for c in edit["clips"]:
         note = _note(children[c["ref"]]) if 0 <= c["ref"] < len(children) else {}
+        if float(c.get("gap") or 0) > 0:
+            # Empty time on V1 before the clip: a "blank" clip of that length, no file.
+            clips.append({"blank": True, "file": "", "in": 0.0, "length": float(c["gap"]), "transition": 0.0,
+                          "name": "gap"})
         clips.append({"file": c["file"], "in": c["in"], "length": c["length"],
-                      "transition": c["transition"], "name": c["name"],
+                      "transition": 0.0 if float(c.get("gap") or 0) > 0 else c["transition"], "name": c["name"],
                       "speed": c.get("speed", 1.0), "loop": c.get("loop", ""), "span": c.get("span", 0.0),
-                      "volume": float(note.get("volume", 1.0)), "fx": c.get("fx") or {}})
+                      "volume": float(note.get("volume", 1.0)), "fx": c.get("fx") or {},
+                      "mute": bool(c.get("mute"))})
     off = edit.get("off") or {}
     overlays, sounds = [], []
     for order, track in enumerate(edit.get("tracks") or []):
@@ -550,7 +566,7 @@ def read_cut(doc):
             item = {"file": c["file"], "in": c["in"], "length": c["length"], "at": c["at"],
                     "speed": c.get("speed", 1.0), "loop": c.get("loop", ""), "span": c.get("span", 0.0),
                     "volume": float(c.get("volume", 1.0)), "name": c["name"], "order": order,
-                    "fx": c.get("fx") or {},
+                    "fx": c.get("fx") or {}, "mute": bool(c.get("mute")),
                     "track": track.get("name") or track.get("id")}
             (sounds if track.get("kind") == "audio" else overlays).append(item)
     bed = None
@@ -577,7 +593,7 @@ def _size(cut):
     import av
     w, h = cut["width"], cut["height"]
     if not (w > 0 and h > 0):
-        first = cut["clips"][0]["file"]
+        first = next(c["file"] for c in cut["clips"] if not c.get("blank"))
         if is_still(first):
             from PIL import Image
             with Image.open(first) as im:
@@ -592,9 +608,9 @@ def _size(cut):
 
 def check(cut, may_use=None):
     """Raise :class:`RenderError` for a cut that cannot be rendered."""
-    if not cut["clips"]:
+    if not [c for c in cut["clips"] if not c.get("blank")]:
         raise RenderError("the cut has no clips")
-    for i, c in enumerate(cut["clips"], 1):
+    for i, c in enumerate([c for c in cut["clips"] if not c.get("blank")], 1):
         path = c["file"]
         if not path or not os.path.isfile(path):
             raise RenderError(f"clip {i}: {os.path.basename(path) or 'its file'} does not exist")

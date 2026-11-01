@@ -1673,3 +1673,34 @@ textarea.param-input {
 .contact-grid-hint { position: absolute; left: 50%; bottom: 32px; transform: translateX(-50%); z-index: 61;
     display: none; padding: 3px 10px; border-radius: 4px; background: rgba(0, 0, 0, 0.75); border: 1px solid #333;
     color: #ccc; font: 12px/18px sans-serif; pointer-events: none; white-space: nowrap; }
+
+/* The Edit panel's modes (A Selection, T Trim Edit, B blade), as Resolve's: the one that is on lit, and named. */
+.edit-btn.edit-tool.on { background: #1d4d63; border-color: #00b8d4; color: #fff; }
+.edit-modetag { font-size: 9px; letter-spacing: .04em; text-transform: uppercase; padding: 1px 5px; border-radius: 2px;
+    border: 1px solid #555; color: #ccc; white-space: nowrap; }
+.edit-modetag[data-mode="trim"] { border-color: #ffe14d; color: #ffe14d; }
+.edit-modetag[data-mode="blade"] { border-color: #ff5f5f; color: #ff8f8f; }
+.edit-body.trim .edit-shot { cursor: default; }
+/* The selected edit point of the Trim mode. */
+.edit-editpoint { position: absolute; z-index: 7; pointer-events: none; display: none; width: 4px; margin-left: -2px;
+    background: var(--trim, #ffe14d); box-shadow: 0 0 0 1px rgba(0,0,0,.6), 0 0 6px var(--trim, #ffe14d); border-radius: 1px; }
+/* Gaps of V1: empty time, black on screen. */
+.edit-gap { position: absolute; top: 2px; bottom: 2px; box-sizing: border-box; border: 1px dashed #4a5563; border-radius: 2px;
+    background: repeating-linear-gradient(135deg, rgba(255,255,255,.035) 0 4px, transparent 4px 9px); cursor: pointer; }
+.edit-gap:hover { border-color: #6cf; }
+.edit-gap.sel { border: 1px solid #00e5ff; background-color: rgba(0,229,255,.12); }
+/* Picture and sound: a chain while linked, broken when apart; a muted film's own waveform is dimmed. */
+.edit-badge-link { position: absolute; right: 3px; bottom: 2px; z-index: 2; width: 13px; height: 9px; pointer-events: auto;
+    background: rgba(0,0,0,.6) no-repeat center / 11px 7px; border-radius: 2px;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 14'><g fill='none' stroke='%239fe3ff' stroke-width='2.4'><rect x='1.5' y='3' width='10' height='8' rx='4'/><rect x='10.5' y='3' width='10' height='8' rx='4'/></g></svg>"); }
+.edit-badge-link.off { background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 14'><g fill='none' stroke='%23ff9f6f' stroke-width='2.4'><path d='M8 3H5.5a4 4 0 0 0 0 8H8'/><path d='M14 3h2.5a4 4 0 0 1 0 8H14'/></g><path d='M11 1v12' stroke='%23ff9f6f' stroke-width='1.6' stroke-dasharray='2 2'/></svg>"); }
+.edit-shot.muted .edit-media { opacity: .55; }
+/* Snapping: the magnet, and the line down every track at what was snapped to. */
+.edit-snap-btn { display: inline-flex; align-items: center; padding: 2px 5px; }
+.edit-snap-btn:not(.on) { opacity: .55; }
+.edit-snapbeat-btn:not(.on) { opacity: .5; }
+.edit-snapline { position: absolute; top: 0; bottom: 0; width: 1px; margin-left: -0.5px; z-index: 8; pointer-events: none; display: none;
+    background: #fff36b; box-shadow: 0 0 0 1px rgba(255,243,107,.25); }
+.edit-snapline.flash { animation: edit-snapflash .35s ease-out; }
+@keyframes edit-snapflash { from { box-shadow: 0 0 0 3px rgba(255,243,107,.75); } to { box-shadow: 0 0 0 1px rgba(255,243,107,.25); } }
+.edit-shot.snap-hit, .edit-gap.snap-hit, .edit-text.snap-hit { outline: 1px solid #fff36b; outline-offset: -1px; }

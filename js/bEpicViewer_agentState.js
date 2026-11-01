@@ -93,7 +93,9 @@ export const AgentStateMixin = {
                     : sel.kind === "sound" ? cut.sound
                     : sel.kind === "tclip" ? safe(() => (cut.tracks.find((t) => t.id === sel.track) || {}).clips, null)
                     : cut.clips;
-                const c = Array.isArray(list) ? list[sel.i] : null;
+                const c = Array.isArray(list) && sel.kind !== "gap" ? list[sel.i] : null;
+                // A gap of V1: the empty time before clip `index`.
+                if (sel.kind === "gap" && cut.clips[sel.i]) s.length = Number(cut.clips[sel.i].gap) || 0;
                 if (c) {
                     s.name = c.name || ""; s.file = c.file || ""; s.text = c.text || "";
                     if (typeof c.in === "number") s.in = c.in;

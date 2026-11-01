@@ -243,6 +243,9 @@ export const EditAutoMixin = {
             const got = await getJson("/bepic/timeline_beats?path=" + encodeURIComponent(src.file));
             if (!got.bpm || !(got.beats || []).length) return got.note || "no steady beat was found in that sound";
             const beats = D.beatsInFilm(got.beats, src);
+            // Kept for snapping to the beats (the magnet's beat switch).
+            if (!this._editTlBeatsKnown) this._editTlBeatsKnown = {};
+            this._editTlBeatsKnown[this._editTlTab] = beats;
             after = st.beatStyle === "snap"
                 ? D.snapCutsToBeats(before, D.everyNth(beats, st.every), { ...opts, within: st.within })
                 : D.cutOnBeats(before, beats, { ...opts, every: st.every });

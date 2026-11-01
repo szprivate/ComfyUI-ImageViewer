@@ -473,7 +473,8 @@ export const EditPlayMixin = {
         const show = Math.round(a * own * 1000) / 1000;
         if (main) main.style.opacity = show === 1 && !under ? "" : String(show);
         if (under) under.style.opacity = String(Math.round(this._editPlayOpacity(at.under.clip) * 1000) / 1000);
-        const loud = (clip) => Math.max(0, Math.min(1, clip && clip.volume != null ? Number(clip.volume) || 0 : 1));
+        // A clip whose sound was split off (`mute`) is silent: its sound clip plays, at its own place.
+        const loud = (clip) => D.clipVolume(clip);
         try { if (!ep.still && this.videoBase) this.videoBase.volume = loud(at.clip) * a; } catch (_) {}
         try { if (under && under.tagName === "VIDEO") under.volume = at.over ? 0 : loud(at.under.clip) * (1 - a); } catch (_) {}
     },
