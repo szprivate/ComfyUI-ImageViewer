@@ -940,7 +940,7 @@ class EditTimelineBrowserTests(unittest.TestCase):
         self.assertEqual(self.errors, [])
 
     def mode(self, pg):
-        return pg.evaluate("""() => { const ui = __panel._editTlUi; return [ui.mode.dataset.mode, ui.pick.classList.contains('on'),
+        return pg.evaluate("""() => { const ui = __panel._editTlUi; return [ui.blade.classList.contains('on') ? 'blade' : ui.trimBtn.classList.contains('on') ? 'trim' : 'select', ui.pick.classList.contains('on'),
             ui.trimBtn.classList.contains('on'), ui.blade.classList.contains('on')]; }""")
 
     def test_the_modes_a_t_b_switch_by_key_and_by_button(self):

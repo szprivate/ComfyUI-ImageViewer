@@ -456,7 +456,6 @@ export const EditTimelineMixin = {
                              () => this.editTlBladeToggle());
         blade.classList.add("edit-blade-btn", "edit-tool");
         setEditIcon(blade, "blade");
-        const mode = el("span", "edit-modetag");
         const snap = button("", "Snapping (N): drags snap to clip and gap edges, the playhead, the in / out and the texts. "
                             + "Hold S while dragging to snap the other way", () => this.editTlSnapToggle());
         setEditIcon(snap, "snap");
@@ -481,7 +480,7 @@ export const EditTimelineMixin = {
         setEditIcon(zoomOut, "zoomOut");
         setEditIcon(zoomIn, "zoomIn");
         setEditIcon(zoomFit, "fit");
-        bar.append(fresh, add, out, pick, trimBtn, blade, mode, snap, beats, split, undo, redo, auto, cuts, take, sub, badge, zoomOut, zoomIn, zoomFit);
+        bar.append(fresh, add, out, pick, trimBtn, blade, snap, beats, split, undo, redo, auto, cuts, take, sub, badge, zoomOut, zoomIn, zoomFit);
 
         // The tracks: their headers in a column that stays, the tracks beside it
         // in a strip that is as wide as the zoom makes it and scrolls.
@@ -622,7 +621,7 @@ export const EditTimelineMixin = {
             this._editTlAdd((payload && payload.items) || [], at, track, room);
         });
         this._editTlUi = { host, savedBar, empty, body, sub, badge, out, main, heads, scroll, area, ruler, rows,
-                           head, drop, hint, blade, split, undo, redo, auto, cuts, take, pick, trimBtn, mode, snap, beats, zoomOut, zoomIn, zoomFit };
+                           head, drop, hint, blade, split, undo, redo, auto, cuts, take, pick, trimBtn, snap, beats, zoomOut, zoomIn, zoomFit };
         this._editTlWatchCanvas();
         return this._editTlUi;
     },
@@ -683,8 +682,6 @@ export const EditTimelineMixin = {
         ui.blade.classList.toggle("on", !!this._editTlBlade);
         ui.pick.classList.toggle("on", !this._editTlBlade && !this._editTlTrimMode);
         ui.trimBtn.classList.toggle("on", !this._editTlBlade && !!this._editTlTrimMode);
-        ui.mode.textContent = this._editTlBlade ? "Blade" : this._editTlTrimMode ? "Trim edit" : "Selection";
-        ui.mode.dataset.mode = this._editTlBlade ? "blade" : this._editTlTrimMode ? "trim" : "select";
         ui.body.classList.toggle("blade", !!this._editTlBlade && has);
         ui.body.classList.toggle("trim", !this._editTlBlade && !!this._editTlTrimMode && has);
         const snapOn = !this._editTlView || this._editTlView.snap !== false;

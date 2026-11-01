@@ -1673,10 +1673,6 @@ textarea.param-input {
 
 /* The Edit panel's modes (A Selection, T Trim Edit, B blade), as Resolve's: the one that is on lit, and named. */
 .edit-btn.edit-tool.on { background: #1d4d63; border-color: #00b8d4; color: #fff; }
-.edit-modetag { font-size: 9px; letter-spacing: .04em; text-transform: uppercase; padding: 1px 5px; border-radius: 2px;
-    border: 1px solid #555; color: #ccc; white-space: nowrap; }
-.edit-modetag[data-mode="trim"] { border-color: #ffe14d; color: #ffe14d; }
-.edit-modetag[data-mode="blade"] { border-color: #ff5f5f; color: #ff8f8f; }
 .edit-body.trim .edit-shot { cursor: default; }
 /* The selected edit point, as Resolve's: green on the edge that will move, on its own side of the cut. */
 .edit-editpoint { position: absolute; z-index: 7; pointer-events: none; display: none; width: 3px; box-sizing: border-box;
