@@ -231,6 +231,21 @@ class GapsAndLinksRendered(unittest.TestCase):
         got = self.tr.render(doc, out, "mp4")
         return got, out
 
+    def test_a_merged_clip_is_heard_once_and_a_split_one_once(self):
+        # As loud as the film's own sound, in all three states: never that and the sound clip together.
+        plain = {"clips": [{"file": self.red, "name": "a", "in": 0, "length": 2, "transition": 0}]}
+        split = {"clips": [{**plain["clips"][0], "link": "L1", "unlinked": True, "mute": True}],
+                 "tracks": [{"id": "A2", "kind": "audio", "name": "A2", "off": False,
+                             "clips": [{"file": self.red, "name": "a", "at": 0, "in": 0, "length": 2, "link": "L1", "unlinked": True}]}]}
+        merged = {"clips": plain["clips"], "tracks": [{**split["tracks"][0], "clips": []}]}
+        relinked = {"clips": [{**plain["clips"][0], "link": "L1", "mute": True}],
+                    "tracks": [{**split["tracks"][0], "clips": [{**split["tracks"][0]["clips"][0], "unlinked": False}]}]}
+        level = lambda edit, name: sum(loudness(self.render(edit, name)[1])[2:15]) / 13
+        once = level(plain, "once")
+        self.assertGreater(once, 0.05)
+        for edit, name in ((split, "split"), (merged, "merged"), (relinked, "relinked")):
+            self.assertAlmostEqual(level(edit, name) / once, 1.0, delta=0.1, msg=name)
+
     def test_a_gap_on_v1_renders_black_or_the_track_over_it(self):
         clips = [{"file": self.red, "name": "a", "in": 0, "length": 1, "transition": 0},
                  {"file": self.red, "name": "b", "in": 1, "length": 1, "transition": 0, "gap": 1}]

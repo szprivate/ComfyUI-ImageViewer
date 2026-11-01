@@ -346,3 +346,70 @@ test("what a drag leaves out: itself, its partner, and the gaps beside them - no
     assert.ok(targets.some((g) => g.t === 4));
     assert.ok(targets.some((g) => g.t === starts[2]));
 });
+
+// ── sound split off: relink, resync, merge back ──
+
+const SPLIT = () => {
+    const cut = { ...D.emptyCut("t"), clips: [shot("a", 4), shot("b", 3)], tracks: [] };
+    return D.unlinkClip(cut, { kind: "clip", i: 0 });
+};
+
+test("relink from one clip, either part: the partner by the group, the offset kept and measured", () => {
+    for (const from of [{ kind: "clip", i: 0 }, null]) {
+        const got = SPLIT();
+        got.cut.tracks[0].clips[0].at = 0.5;
+        const sel = from || got.sel;
+        assert.equal(D.syncOffset(got.cut, sel), 0.5);
+        const next = D.relinkAudio(got.cut, sel);
+        assert.ok(!next.clips[0].unlinked && !next.tracks[0].clips[0].unlinked);
+        assert.equal(next.clips[0].mute, true, "the picture stays silent: its sound is the clip");
+        assert.equal(next.tracks[0].clips[0].at, 0.5);
+        assert.equal(D.syncOffset(next, sel), 0.5);
+        // Moved together from there, the offset kept.
+        const moved = D.moveSelection(next, [{ kind: "tclip", track: next.tracks[0].id, i: 0 }], 0);
+        assert.equal(moved.delta, 0);
+    }
+    assert.equal(D.relinkAudio({ ...D.emptyCut("t"), clips: [shot("a", 4)] }, { kind: "clip", i: 0 }), null);
+});
+
+test("a pair trimmed differently but on the same moments is in sync; a resync moves the sound only", () => {
+    const got = SPLIT();
+    const s = got.cut.tracks[0].clips[0];
+    s.at = 1; s.in = 1; s.length = 2;
+    assert.equal(D.syncOffset(got.cut, got.sel), 0);
+    assert.equal(D.resyncAudio(got.cut, got.sel), null);
+    s.at = 2;
+    const next = D.resyncAudio(got.cut, { kind: "clip", i: 0 });
+    assert.equal(next.tracks[0].clips[0].at, 1);
+    assert.equal(D.syncOffset(next, got.sel), 0);
+    assert.deepEqual(D.clipStarts(next), [0, 4]);
+    // Early, before the start of the film: it loses its head.
+    s.at = 0; s.in = 3;
+    const early = D.resyncAudio(got.cut, got.sel);
+    assert.equal(early.tracks[0].clips[0].at, 3);
+    s.at = 0; s.in = 0; got.cut.clips[0].in = 2;
+    const head = D.resyncAudio(got.cut, got.sel);
+    assert.equal(head.tracks[0].clips[0].at, 0);
+    assert.equal(D.syncOffset(head, got.sel), 0);
+});
+
+test("merge back from either part: the sound clip gone, the picture sounding, the group over", () => {
+    for (const from of [{ kind: "clip", i: 0 }, null]) {
+        const got = SPLIT();
+        const out = D.mergeAudio(got.cut, from || got.sel);
+        assert.deepEqual(out.sel, { kind: "clip", i: 0 });
+        assert.equal(out.cut.tracks[0].clips.length, 0);
+        const v = out.cut.clips[0];
+        assert.ok(v.mute === undefined && v.link === undefined && v.unlinked === undefined);
+        assert.equal(D.clipVolume(v), 1);
+        assert.equal(D.mergeAudio(out.cut, out.sel), null, "nothing left to merge");
+    }
+    // Its sound clip deleted first: the clip just gets its sound back.
+    const got = SPLIT();
+    const lone = D.deleteSelection(got.cut, [got.sel], false).cut;
+    assert.equal(lone.clips[0].mute, true);
+    assert.equal(D.clipVolume(D.mergeAudio(lone, { kind: "clip", i: 0 }).cut.clips[0]), 1);
+    // Never both: sound clip and sounding picture.
+    assert.equal(D.clipVolume(SPLIT().cut.clips[0]), 0);
+    assert.equal(D.clipVolume(D.linkClips(SPLIT().cut, { kind: "clip", i: 0 }, SPLIT().sel).cut.clips[0]), 0);
+});

@@ -332,10 +332,11 @@ export async function openFilePicker(host, spec) {
     let picked = new Set();
     let asked = 0;
     const close = () => { if (!busy) shade.remove(); };
-    const chosen = () => here.files.filter((f) => picked.has(f.path));
+    // `spec.folder`: the folder shown is what is picked (the files are there to look at).
+    const chosen = () => (spec.folder ? [{ path: here.path }] : here.files.filter((f) => picked.has(f.path)));
     const paint = () => {
         for (const row of list.querySelectorAll(".pick-row.file")) row.classList.toggle("sel", picked.has(row.dataset.path));
-        go.disabled = busy || picked.size === 0;
+        go.disabled = busy || (spec.folder ? !here.path : picked.size === 0);
     };
     const pick = async () => {
         const files = chosen();
@@ -449,7 +450,7 @@ export async function openFilePicker(host, spec) {
 
     // Where it opens: the folder used last time, else where this kind is kept.
     places = spec.kind ? await exportPlaces(spec.kind, context) : [];
-    const starts = [spec.id ? _remembered(spec.id) : "", ...places.map((pl) => pl.path), ""];
+    const starts = [spec.start || "", spec.id ? _remembered(spec.id) : "", ...places.map((pl) => pl.path), ""];
     let shown = false;
     for (const start of starts.filter((s, i) => s || i === starts.length - 1)) {
         if (await open(start, true)) { shown = true; break; }

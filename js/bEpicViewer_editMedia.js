@@ -106,11 +106,13 @@ export const EditMediaMixin = {
         }
         const still = D.isStill(m.file);
         let peaks;
-        if (!still) peaks = this._emGet("peaks", m.file, wanted);
+        // A clip whose sound is split off, or muted, draws no waveform: the strip takes its whole height.
+        const silent = m.row === "video" && m.clip && m.clip.mute;
+        if (!still && !silent) peaks = this._emGet("peaks", m.file, wanted);
         const waveH = peaks && peaks.audio && H >= 22 ? Math.round(H * 0.36) : 0;
         let done = this._emStrip(ctx, m, W, x0, x1, H - waveH, wanted, still);
         if (waveH) this._emWave(ctx, m, W, x0, x1, H - waveH, waveH, wanted, peaks, false);
-        if (!still && peaks === null) done = false;
+        if (!still && !silent && peaks === null) done = false;
         b.classList.toggle("has-strip", !!b._emHasStrip);
         return done;
     },

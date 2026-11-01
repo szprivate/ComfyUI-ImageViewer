@@ -2266,6 +2266,74 @@ export function unlinkClip(cut, sel) {
 }
 
 /**
+ * How far a clip's linked sound is off its picture, in seconds of the film: 0 in
+ * sync; positive, the sound is late. Measured by the source, so a pair trimmed
+ * differently but on the same moments is in sync. 0 with no partner.
+ */
+export function syncOffset(cut, sel) {
+    const partner = linkPartner(cut, sel, false);
+    if (!partner) return 0;
+    const video = selKind(cut, sel) === "video" ? sel : partner, sound = video === sel ? partner : sel;
+    const zero = (s) => { const c = clipOf(cut, s); return selSpan(cut, s).start - num(c.in) / speedOf(c); };
+    const d = round(zero(sound) - zero(video));
+    return Math.abs(d) < 1e-3 ? 0 : d;
+}
+
+/**
+ * Relink from either part of a split pair: the partner is found by the link
+ * group. As in Resolve the offset stays: they go together from there, out of sync
+ * (syncOffset, resyncAudio puts it right). The picture stays silent and the
+ * sound clip keeps its track and its waveform. Null where there is no pair to relink.
+ */
+export function relinkAudio(cut, sel) {
+    const c = clipOf(cut, sel);
+    if (!c || !c.link || !c.unlinked || !linkPartner(cut, sel, false)) return null;
+    const next = copy(cut);
+    for (const s of linkMembers(next, c.link)) delete clipOf(next, s).unlinked;
+    return settle(next);
+}
+
+/**
+ * The sound clip of a pair moved back onto its picture (the picture stays).
+ * Before the start of the film it loses its head. Null where it is in sync.
+ */
+export function resyncAudio(cut, sel) {
+    const d = syncOffset(cut, sel);
+    if (!d) return null;
+    const partner = linkPartner(cut, sel, false);
+    const sound = selKind(cut, sel) === "video" ? partner : sel;
+    if (sound.kind !== "tclip") return null;
+    const next = copy(cut);
+    const c = clipOf(next, sound);
+    const at = num(c.at) - d;
+    if (at < 0) headTrim(c, -at);
+    c.at = round(Math.max(0, at));
+    return settle(next);
+}
+
+/**
+ * Merge audio back into the clip, from either part: the sound clip goes, the
+ * picture plays its own sound again, the link group is over. A picture whose
+ * sound clip was deleted just gets its sound back. A clip never has both.
+ * { cut, sel (the picture) }, or null where there is nothing to merge.
+ */
+export function mergeAudio(cut, sel) {
+    const c = clipOf(cut, sel);
+    if (!c) return null;
+    const partner = linkPartner(cut, sel, false);
+    const video = selKind(cut, sel) === "video" ? sel : partner;
+    if (!video) return null;
+    const v0 = clipOf(cut, video);
+    if (!v0.link && !v0.mute) return null;
+    const sounds = v0.link ? linkMembers(cut, v0.link).filter((s) => selKind(cut, s) !== "video") : [];
+    const next = copy(cut);
+    for (const s of sounds.sort((a, b) => b.i - a.i)) trackOf(next, s.track).clips.splice(s.i, 1);
+    const v = clipOf(next, video);
+    delete v.link; delete v.unlinked; delete v.mute;
+    return { cut: settle(next), sel: video };
+}
+
+/**
  * "Link clips": a video clip and a sound clip of the same file become one link
  * group again - moved, trimmed, cut and deleted together. The video's own sound
  * stays muted (the sound clip carries it). Null when they are not such a pair.

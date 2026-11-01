@@ -52,7 +52,9 @@ export const EDIT_KEYS = [
     ["Click a cut", "Selects that edit point, green on what moves, in every mode: its outgoing edge, its incoming edge, or the middle (a roll)"],
     ["Shift+A / Shift+S", "Go to the edit before / after and select it (a roll where two clips meet), on the selected clip's track, else V1"],
     ["Esc", "Let go of the edit point, then of the selection"],
-    ["Ctrl+Alt+L", "Unlink a film's sound onto a sound track / link a selected picture and its sound"],
+    ["Ctrl+Alt+L", "Unlink a film's sound onto a sound track / relink it, from either part (the offset stays; right-click: Resync, Merge audio back into clip)"],
+    ["Ctrl+S", "Save the cut: the bar then says where it went"],
+    ["Ctrl+Shift+S", "Save cut as\u2026: another name or folder, and the tab goes on with that file"],
     ["Ctrl+Shift+drag", "Insert a clip into the order (what follows moves); a plain drag overwrites and leaves a gap"],
     ["Drag above the top video / below the bottom sound track", "A new track, for a picture / a sound; also for a drop from outside"],
     ["E", "Extend the selected edit point or the clip's out to the playhead"],
@@ -119,6 +121,11 @@ export const EditKeysMixin = {
         else if (ctrl && low === "z") { if (shift) this.editTlRedo(); else this.editTlUndo(); }
         else if (ctrl && low === "y") this.editTlRedo();
         else if (ctrl && low === "b") this.editTlSplitAtPlayhead();
+        else if (ctrl && letter === "s") {
+            if (shift) this.editTlSaveAsDialog();
+            else if (this._editTlDirty()) this._editTlSave();
+            else this._editTlSay("nothing to save");
+        }
         // Zoom, as in Resolve: Ctrl+= / Ctrl++ in, Ctrl+- out (the browser's own page zoom is kept off).
         else if (ctrl && (key === "=" || key === "+")) this._editTlZoom(this._editTlView.zoom * 1.5);
         else if (ctrl && (key === "-" || key === "_")) this._editTlZoom(this._editTlView.zoom / 1.5);

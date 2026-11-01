@@ -909,6 +909,12 @@ export const BrowserMixin = {
         const picked = files || this._selectedBrowserFiles();
         const all    = picked.length > 0 ? picked : this._browserFiles;
         const list   = all.filter((f) => _OPENABLE.has(f.kind));
+        // A cut opens in an Edit tab of its own.
+        const cuts = picked.filter((f) => f.kind === "cut");
+        if (list.length === 0 && cuts.length && this.editTlOpenPath) {
+            for (const f of cuts) await this.editTlOpenPath(f.path);
+            return;
+        }
         // A text file opens in an Agent code tab (a double-click on one).
         const texts  = picked.filter((f) => f.kind === "text");
         if (list.length === 0 && texts.length && /lora_datasets[\\/][^\\/]+[\\/]manifest\.json$/i.test(texts[0].path || "") && this.loraOpen) {

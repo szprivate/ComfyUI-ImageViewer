@@ -1700,7 +1700,6 @@ textarea.param-input {
     background: rgba(0,0,0,.6) no-repeat center / 11px 7px; border-radius: 2px;
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 14'><g fill='none' stroke='%239fe3ff' stroke-width='2.4'><rect x='1.5' y='3' width='10' height='8' rx='4'/><rect x='10.5' y='3' width='10' height='8' rx='4'/></g></svg>"); }
 .edit-badge-link.off { background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 14'><g fill='none' stroke='%23ff9f6f' stroke-width='2.4'><path d='M8 3H5.5a4 4 0 0 0 0 8H8'/><path d='M14 3h2.5a4 4 0 0 1 0 8H14'/></g><path d='M11 1v12' stroke='%23ff9f6f' stroke-width='1.6' stroke-dasharray='2 2'/></svg>"); }
-.edit-shot.muted .edit-media { opacity: .55; }
 /* Snapping: the magnet, and the line down every track at what was snapped to. */
 .edit-iconbtn { display: inline-flex; align-items: center; justify-content: center; padding: 3px 6px; flex: none; }
 .edit-icon { width: 15px; height: 15px; display: block; }
@@ -1712,3 +1711,15 @@ textarea.param-input {
 @keyframes edit-snapflash { from { box-shadow: 0 0 0 3px rgba(255,243,107,.75); } to { box-shadow: 0 0 0 1px rgba(255,243,107,.25); } }
 .edit-shot.snap-hit, .edit-gap.snap-hit, .edit-text.snap-hit { outline: 1px solid #fff36b; outline-offset: -1px; }
 .edit-area { min-height: 100%; }
+/* Over the ruler for a moment, not pushing the tracks out of a short panel. */
+.edit-saved { display: none; position: absolute; left: 8px; right: 8px; z-index: 31; align-items: center; gap: 6px; padding: 1px 6px; background: #17331f; border: 1px solid #2e6b42; border-radius: 2px; font-size: 11px; color: #cfe; min-width: 0; }
+.edit-saved .edit-btn { padding: 0 5px; line-height: 15px; flex: none; }
+.edit-saved.error { background: #421b1b; border-color: #8a3a3a; color: #fcc; }
+.edit-saved-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
+.edit-saveas-row { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+.edit-saveas-row > span { flex: none; width: 44px; color: #aaa; }
+.edit-saveas-row input { flex: 1 1 auto; min-width: 0; background: #111; color: #ddd; border: 1px solid #444; border-radius: 2px; font-size: 11px; padding: 2px 4px; }
+.edit-saveas-note.error { color: #f99; }
+.edit-badge-sync { position: absolute; right: 18px; bottom: 1px; z-index: 2; padding: 0 3px; border-radius: 2px; background: #b3261e; color: #fff; font-size: 9px; line-height: 11px; }
+/* One line: in a small window the hint must not take the tracks' height (all of it on hover). */
+.edit-body > .bepic-tool-hint { flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

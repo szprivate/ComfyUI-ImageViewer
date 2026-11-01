@@ -970,11 +970,49 @@ def save(path, edit, stamp="", may_use=None, create=None):
     """
     doc = new_doc(create) if create is not None else _load(path)
     new = rebuild(doc, edit, stamp, may_use)
+    _write_doc(path, new)
+    return editable(new)
+
+
+def _write_doc(path, doc):
+    """*doc* into *path*, whole or not at all: beside it first, then moved over."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
-        json.dump(new, fh, indent=2)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(doc, fh, indent=2)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+_NOT_IN_A_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_RESERVED_NAME = re.compile(r"^(con|prn|aux|nul|com\d|lpt\d)$", re.I)
+
+
+def cut_file_name(name):
+    """A file name for a cut from what was typed: no folder in it, always ``.otio``."""
+    text = _NOT_IN_A_NAME.sub("_", str(name or "")).strip()
+    if text.lower().endswith(".otio"):
+        text = text[:-5]
+    text = text.strip(" .")[:120].strip(" .")
+    if not text.strip("_") or _RESERVED_NAME.match(text):
+        text = ("cut_" + text) if text.strip("_") else "cut"
+    return text + ".otio"
+
+
+def save_as(path, source, edit, stamp="", may_use=None):
+    """*edit* into a new file at *path*, on the timeline of *source* (None: a new
+    one), so that what the panel does not show comes along. *source* is left as it is."""
+    stem = os.path.splitext(os.path.basename(path))[0]
+    doc = _load(source) if source else new_doc(stem)
+    new = rebuild(doc, edit, stamp, may_use)
+    new["name"] = stem
+    _write_doc(path, new)
     return editable(new)
 
 

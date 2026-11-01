@@ -355,6 +355,7 @@ export const EditPanelsMixin = {
             row("Frame rate", said(String(Math.round(fps * 1000) / 1000) + " fps"));
             row("Shots", said(String(cut.clips.length)));
             const more = (cut.tracks || []).map((k) => `${k.name} (${k.clips.length})`).join(", ");
+            row("File", said(this.editTlFilePath() || "not saved yet"));
             row("Tracks", said("V1" + ((cut.sound || []).length ? ", A1" : "") + (more ? ", " + more : "")));
             into = null;
             note("Select a clip, a text or a dissolve on the timeline to change it here.");

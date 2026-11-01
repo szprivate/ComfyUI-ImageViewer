@@ -509,9 +509,68 @@ try:
                 return web.Response(status=500, text=f"not saved: {exc}")
             data["file"] = os.path.basename(side)
             data["otio"] = side
+            data["path"] = os.path.abspath(side)         # where it is: the panel says so
             if create is not None:
                 # How the panel names this cut from now on.
                 data["target"] = {"path": side, "external": 1}
+            return web.json_response(data, headers={"Cache-Control": "no-cache"})
+
+        async def _bepic_timeline_save_as(request):
+            """Save cut as: the cut into a new ``.otio`` of the user's choosing.
+
+            ``{"name", "folder", "edit", "source": <the target of the cut's file, or
+            none>, "overwrite": bool}``. The folder must be one the viewer may use
+            (path_access), the name cannot leave it (timeline_io.cut_file_name), and a
+            file that is there answers 409 unless ``overwrite``. The source stays as it was.
+            """
+            from . import timeline_io
+            allowed, why = path_access.same_origin(request)
+            if not allowed:
+                return web.Response(status=403, text=why)
+            try:
+                body = await request.json()
+            except Exception:
+                return web.Response(status=400, text="the request is not JSON")
+            if not isinstance(body, dict):
+                return web.Response(status=400, text="the request is not an object")
+            folder = str(body.get("folder") or "").strip()
+            if not folder:
+                return web.Response(status=400, text="no folder")
+            folder = os.path.abspath(folder)
+            side = os.path.join(folder, timeline_io.cut_file_name(body.get("name")))
+            if not path_access.is_allowed(folder) or not path_access.is_allowed(side):
+                return web.Response(status=403, text=path_access.refusal(folder))
+            source = None
+            if isinstance(body.get("source"), dict):
+                media, allowed, error = _timeline_media(body["source"])
+                if error:
+                    return web.Response(status=400, text=error)
+                if not allowed:
+                    return web.Response(status=403, text=path_access.refusal(media))
+                source = timeline_io.sidecar_for(media)
+            import datetime
+            stamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+            overwrite = body.get("overwrite") is True
+
+            def _save():
+                if os.path.exists(side) and not overwrite:
+                    return None
+                edit = timeline_io.save_as(side, source, body.get("edit"), stamp, path_access.is_allowed)
+                data = timeline_io.read(side)
+                data["edit"] = edit
+                return data
+            try:
+                data = await asyncio.get_running_loop().run_in_executor(None, _save)
+            except ValueError as exc:
+                return web.Response(status=422, text=f"not saved: {exc}")
+            except OSError as exc:
+                return web.Response(status=500, text=f"not saved: {exc}")
+            if data is None:
+                return web.json_response({"exists": True, "path": side}, status=409)
+            data["file"] = os.path.basename(side)
+            data["otio"] = side
+            data["path"] = side
+            data["target"] = {"path": side, "external": 1}
             return web.json_response(data, headers={"Cache-Control": "no-cache"})
 
         # ── what the Edit panel draws in its clips, and Auto edit measures ──
@@ -1266,6 +1325,8 @@ try:
                     kind = "video"
                 elif ext in _MODEL_EXTS:
                     kind = "model"
+                elif ext == ".otio":
+                    kind = "cut"           # opens in an Edit tab
                 elif viewer_code is not None and ext in viewer_code.TEXT_EXTS:
                     kind = "text"          # shown in the Agent code panel
                 else:
@@ -2661,6 +2722,8 @@ try:
         _safe_add("GET", "/api/bepic/timeline", _bepic_timeline)
         _safe_add("POST", "/bepic/timeline", _bepic_timeline_save)
         _safe_add("POST", "/api/bepic/timeline", _bepic_timeline_save)
+        _safe_add("POST", "/bepic/timeline_save_as", _bepic_timeline_save_as)
+        _safe_add("POST", "/api/bepic/timeline_save_as", _bepic_timeline_save_as)
         _safe_add("POST", "/bepic/take", _bepic_take)
         _safe_add("POST", "/api/bepic/take", _bepic_take)
         _safe_add("POST", "/bepic/timeline_render", _bepic_timeline_render)

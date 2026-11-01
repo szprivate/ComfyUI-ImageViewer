@@ -1761,6 +1761,136 @@ class EditTimelineBrowserTests(unittest.TestCase):
         self.assertGreater(pg.evaluate("() => __panel.helpOverlay.querySelectorAll('#help-keys > div').length"), 5)
         self.assertEqual(self.errors, [])
 
+    # ── where a cut went, Save cut as, Open cut ──
+
+    SAVED = "() => { const b = __panel._editTlUi.savedBar; return [getComputedStyle(b).display, b.querySelector('.edit-saved-text')?.textContent || '', b.classList.contains('error')]; }"
+    BADGE = "() => __panel._editTlUi.badge.textContent"
+
+    def saves_show(self, pg, keys):
+        """A save says the whole path; a failure says why and leaves it unsaved; Save cut as and Open cut work. `keys`: the page holding the panel's keyboard."""
+        keys.keyboard.press("Control+s")
+        pg.wait_for_function("() => __panel._editTlUi.savedBar.style.display === 'flex'", timeout=5000)
+        self.assertEqual(pg.evaluate(self.SAVED), ["flex", "Saved to D:/out/cut.otio", False])
+        self.assertEqual(pg.evaluate(self.BADGE), "")
+        self.assertIn("Copy path", pg.evaluate("() => __panel._editTlUi.savedBar.textContent"))
+        self.assertIn("Show in file browser", pg.evaluate("() => __panel._editTlUi.savedBar.textContent"))
+        self.assertEqual(pg.evaluate("() => __panel.editTlFilePath()"), "D:/out/cut.otio")
+        # A failed save: the reason, still unsaved.
+        pg.evaluate("() => { const P = __panel; window.__saveFail = { status: 500, text: 'not saved: [Errno 24] Too many open files' }; P._editTlApply(D_len(P)); }".replace("D_len(P)", "{ ...P._editTlCut, clips: P._editTlCut.clips.slice(0, -1) }"))
+        keys.keyboard.press("Control+s")
+        pg.wait_for_function("() => __panel._editTlUi.savedBar.classList.contains('error')", timeout=5000)
+        got = pg.evaluate(self.SAVED)
+        self.assertEqual(got[0], "flex")
+        self.assertIn("Too many open files", got[1])
+        self.assertIn("not saved", pg.evaluate(self.BADGE))
+        pg.evaluate("() => { window.__saveFail = null; }")
+        # Save cut as: a dialog, the name cleaned by the server, an overwrite asked, the tab then on the new file.
+        keys.keyboard.press("Control+Shift+s")
+        pg.wait_for_function("() => !!__panel._editTlUi.dialog", timeout=5000)
+        d = "__panel._editTlUi.dialog"
+        self.assertEqual(pg.evaluate(f"() => {d}.querySelector('.edit-dialog-title').textContent"), "Save cut as\u2026")
+        self.assertEqual(pg.evaluate(f"() => {d}.querySelector('.edit-saveas-folder').value"), "D:/out")
+        pg.evaluate("() => { window.__onDisk = { 'D:/out/other.otio': true }; }")
+        pg.evaluate(f"() => {{ const i = {d}.querySelector('.edit-saveas-name'); i.value = 'other'; {d}.querySelector('.edit-saveas-go').click(); }}")
+        pg.wait_for_function(f"() => {d}.querySelector('.edit-saveas-note').textContent.includes('Overwrite it?')", timeout=5000)
+        self.assertEqual(pg.evaluate("() => __panel.editTlFilePath()"), "D:/out/cut.otio", "nothing yet")
+        pg.evaluate(f"() => {d}.querySelector('.edit-saveas-yes').click()")
+        pg.wait_for_function("() => __panel.editTlFilePath() === 'D:/out/other.otio'", timeout=5000)
+        self.assertEqual(pg.evaluate("() => __saveAs[0].source"), {"path": "D:/out/cut.otio", "external": 1})
+        self.assertIn("other", pg.evaluate("() => __panel.tabLabels[__panel._editTlTab]"))
+        self.assertEqual(pg.evaluate(self.SAVED)[1], "Saved to D:/out/other.otio")
+        # A later save goes to the new file.
+        self.assertEqual(pg.evaluate("() => __panel._editTlTarget.path"), "D:/out/other.otio")
+        # Open cut: from the menu's dialog, a tab of its own; again: that tab.
+        pg.evaluate("() => { const P = __panel; window.__otio = { 'D:/out/saved.otio': { name: 'saved', fps: 24, clips: [{ ref: 0, file: 'D:/out/a.mp4', name: 'a', in: 0, length: 2, transition: 0 }], texts: [], sound: [], tracks: [], off: {} } }; }")
+        pg.evaluate("() => __panel.editTlOpenDialog()")
+        pg.wait_for_function("() => __panel.container.querySelector('.pick-row.file')", timeout=5000)
+        pg.evaluate("""() => { const r = __panel.container.querySelector('.pick-row.file'); r.click(); __panel.container.querySelector('.pick-dlg .rd-go').click(); }""")
+        pg.wait_for_function("() => __panel.editTlFilePath() === 'D:/out/saved.otio'", timeout=5000)
+        n = pg.evaluate("() => __panel._editTlTabs().length")
+        self.assertEqual(pg.evaluate("async () => { await __panel.editTlOpenPath('D:/out/saved.otio'); return __panel._editTlTabs().length; }"), n)
+        self.assertEqual(self.errors, [])
+
+    def test_saves_say_where_in_the_viewer(self):
+        pg = self.page()
+        self.focus_timeline(pg)
+        self.saves_show(pg, pg)
+
+    def test_saves_say_where_docked_in_the_page_as_the_sidebar_is(self):
+        pg = self.page()
+        pg.evaluate("() => __panel.togglePageDock()")
+        pg.evaluate("() => __panel.editTlRefresh()")
+        self.focus_timeline(pg)
+        self.saves_show(pg, pg)
+
+    def test_saves_say_where_popped_out(self):
+        pg = self.page()
+        with pg.context.expect_page() as pop:
+            pg.evaluate("() => window.__panel.toggleUndock()")
+        win = pop.value
+        win.wait_for_load_state()
+        pg.wait_for_function("() => __panel._editTlUi && __panel._editTlUi.body.ownerDocument !== document", timeout=10000)
+        pg.evaluate("() => __panel.editTlRefresh()")
+        win.mouse.click(*pg.evaluate(WHERE, [0.2, "V2"]))
+        self.saves_show(pg, win)
+
+    # ── sound split off: relink, resync, merge back, no waveform ──
+
+    def menu_has(self, pg, x, y):
+        pg.mouse.click(x, y, button="right")
+        got = pg.evaluate("() => [...__panel.container.querySelectorAll('.previz-menu-item')].map(b => b.textContent)")
+        return got
+
+    def test_split_no_waveform_relink_from_either_part_resync_and_merge_back(self):
+        pg = self.page()
+        self.fit(pg)
+        pg.evaluate("() => { __panel._editTlView.heights = { V2: 14, V1: 60, A1: 14, A2: 14 }; __panel.editTlRefresh(); }")
+        self.settle(pg)
+        # Which clips draw a waveform lane: asked of the drawing itself, redrawn from scratch.
+        pg.evaluate("() => { const P = __panel, w = P._emWave; P._emWave = function (ctx, m, ...r) { window.__waves.add(m.file); return w.call(this, ctx, m, ...r); }; }")
+        waves = lambda: (pg.evaluate("() => { window.__waves = new Set(); __panel._emDrawn = 0; __panel.editTlRefresh(); }"),
+                         pg.wait_for_function("() => __panel._emPending === 0 && __panel._emDrawn > 0", timeout=15000),
+                         pg.evaluate("() => [...window.__waves]"))[-1]
+        self.assertIn("D:/out/a.mp4", waves())
+        pg.mouse.click(*self.x_at(pg, 2.0))
+        pg.keyboard.press("Control+Alt+l")
+        self.assertNotIn("D:/out/a.mp4", pg.evaluate("""() => { window.__waves = new Set(); const b = __panel._editTlUi.rows.querySelector("[data-key='V1:0']"); const r = b.getBoundingClientRect(); __panel._editMediaClip(b, b._media, r, r.left, r.right, new Set()); return [...window.__waves]; }"""))
+        self.assertTrue(pg.evaluate("() => __panel._editTlCut.clips[0].mute"))
+        self.assertEqual(pg.evaluate("() => __panel._editTlUi.rows.querySelector(\"[data-key='V1:0']\").classList.contains('muted')"), False)
+        # From either part.
+        items = self.menu_has(pg, *self.x_at(pg, 2.0))
+        self.assertTrue(any(i.startswith("Relink audio") for i in items), items)
+        self.assertIn("Merge audio back into clip", items)
+        self.assertFalse(any("own sound" in i for i in items))
+        pg.keyboard.press("Escape")
+        pg.mouse.click(5, 5)
+        items = self.menu_has(pg, *self.x_at(pg, 2.0, "A2"))
+        self.assertTrue(any(i.startswith("Relink audio") for i in items), items)
+        pg.keyboard.press("Escape")
+        pg.mouse.click(5, 5)
+        # Out of sync by half a second, then relinked from the sound alone: the offset stays, said on both.
+        pg.evaluate("() => { const P = __panel; const c = P._editTlCut; c.tracks[1].clips[0].at = 0.5; P._editTlSel = { kind: 'tclip', track: 'A2', i: 0 }; P._editTlApply({ ...c }); }")
+        pg.mouse.click(*self.x_at(pg, 2.0, "A2"))
+        pg.keyboard.press("Control+Alt+l")
+        self.assertTrue(pg.evaluate("() => { const c = __panel._editTlCut; return !c.clips[0].unlinked && !c.tracks[1].clips[0].unlinked && c.clips[0].mute === true; }"))
+        self.assertEqual(pg.evaluate("() => [...__panel._editTlUi.rows.querySelectorAll('.edit-badge-sync')].map(b => b.textContent)"), ["+12", "+12"])
+        self.assertEqual(pg.evaluate("() => __panel._editTlCut.tracks[1].clips[0].at"), 0.5)
+        # Resync.
+        items = self.menu_has(pg, *self.x_at(pg, 2.0))
+        pg.locator(".previz-menu-item", has_text="Resync").first.click()
+        self.assertEqual(pg.evaluate("() => [__panel._editTlCut.tracks[1].clips[0].at, __panel._editTlUi.rows.querySelectorAll('.edit-badge-sync').length]"), [0, 0])
+        # Merge back: one step; the sound clip gone, one source of sound, the waveform back.
+        n = self.undo_len(pg)
+        self.menu_has(pg, *self.x_at(pg, 2.0))
+        pg.locator(".previz-menu-item", has_text="Merge audio back").first.click()
+        self.assertEqual(self.undo_len(pg), n + 1)
+        self.assertEqual(self.cut(pg)["tracks"]["A2"], [])
+        self.assertEqual(pg.evaluate("() => { const c = __panel._editTlCut.clips[0]; return [c.mute, c.link, c.unlinked].map(v => v === undefined); }"), [True, True, True])
+        self.assertIn("D:/out/a.mp4", waves(), "the waveform lane is back")
+        pg.evaluate("() => __panel.editTlUndo()")
+        self.assertEqual(len(self.cut(pg)["tracks"]["A2"]), 1, "one undo brings the pair back")
+        self.assertEqual(self.errors, [])
+
     def test_keys_of_this_round_do_not_fire_while_typing(self):
         pg = self.page()
         self.focus_timeline(pg)

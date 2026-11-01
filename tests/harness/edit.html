@@ -106,10 +106,27 @@ window.__fetchApi = async (path, opts = {}) => {
       return json({ path: "D:/out/cut_v001.mp4", name: "cut_v001.mp4", relative: "cut_v001.mp4", version: 1, fps: 24,
                     frames: f ? f[1] - f[0] + 1 : 0, texts_left_out: 0 });
     }
+    case "/bepic/timeline_save_as": {
+      const body = JSON.parse(opts.body);
+      if (window.__saveFail) return { ok: false, status: window.__saveFail.status, json: async () => ({}), text: async () => window.__saveFail.text, headers: new Headers() };
+      const name = String(body.name).replace(/\.otio$/i, "") + ".otio", full = body.folder + "/" + name;
+      if ((window.__onDisk ||= {})[full] && !body.overwrite) return json({ exists: true, path: full }, 409);
+      (window.__saveAs ||= []).push(body);
+      const clips = body.edit.clips.map((c, i) => ({ ...c, ref: i, file: c.file || "D:/out/a.mp4" }));
+      window.__onDisk[full] = true;
+      return json({ edit: { name: name.slice(0, -5), fps: 24, clips, texts: [], sound: [], tracks: [], off: body.edit.off }, file: name, otio: full, path: full, target: { path: full, external: 1 }, duration: 0 });
+    }
+    case "/bepic/browse":
+      return json({ path: "D:/out", parent: null, dirs: [], files: [{ name: "saved.otio", path: "D:/out/saved.otio", ext: ".otio", kind: "cut", size: 10, mtime: 1 }], roots: [] });
     case "/bepic/timeline": {
+      if (!opts.body && window.__otio && window.__otio[u.searchParams.get("path")]) {
+        const p = u.searchParams.get("path");
+        return json({ edit: window.__otio[p], file: p.split("/").pop(), otio: p });
+      }
       if (!opts.body) return { ok: false, status: 404, json: async () => ({}), text: async () => "no timeline", headers: new Headers() };
       const body = JSON.parse(opts.body);
       (window.__saves ||= []).push(body);
+      if (window.__saveFail) return { ok: false, status: window.__saveFail.status, json: async () => ({}), text: async () => window.__saveFail.text, headers: new Headers() };
       const disk = (window.__disk ||= { clips: [], tracks: {} });
       const fileOf = (c, was) => (c.takes && c.takes.length ? (c.takes.find((t) => t.active) || c.takes[c.takes.length - 1]).file : (c.file || was || "D:/out/unknown.mp4"));
       const clips = body.edit.clips.map((c, i) => {

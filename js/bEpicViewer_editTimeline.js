@@ -81,7 +81,7 @@ import { app } from "../../scripts/app.js";
 import * as D from "./bEpicViewer_editTimelineData.js";
 import { nodeMediaClips, selectedNodes } from "./bEpicViewer_sendFromNode.js";
 import { setEditIcon } from "./bEpicViewer_editIcons.js";
-import { canvasContext, notice, openExportDialog, openFilePicker } from "./bEpicViewer_exportUI.js";
+import { canvasContext, exportTarget, notice, openExportDialog, openFilePicker } from "./bEpicViewer_exportUI.js";
 
 const DOCK_ID = "editTimeline";
 const EDGE_PX = 7;          // how close to a block's end a press is a trim
@@ -422,6 +422,7 @@ export const EditTimelineMixin = {
         const bar = el("div", "edit-bar");
         // In and out, top left, the Outliner's buttons at the Outliner's size:
         // New, Add, then Save / Export.
+        const savedBar = el("div", "edit-saved");
         const icon = (key, fallback, title, fn) => {
             const b = el("button", "previz-btn previz-icon", fallback);      // the text stands in if the skin is missing
             b.title = title;
@@ -499,7 +500,7 @@ export const EditTimelineMixin = {
 
         const hint = el("div", "bepic-tool-hint");
         const empty = el("div", "curves-empty edit-empty");
-        body.append(bar, main, hint, empty);
+        body.append(bar, savedBar, main, hint, empty);
         host.append(body);
         // The keys of the timeline (bEpicViewer_editKeys.js) act only while it
         // has the focus: a press anywhere in it takes it - but not from a field
@@ -620,7 +621,7 @@ export const EditTimelineMixin = {
             if (what === "effect") { if (payload && this.editFxApply) this.editFxApply(payload, at, track); return; }
             this._editTlAdd((payload && payload.items) || [], at, track, room);
         });
-        this._editTlUi = { host, empty, body, sub, badge, out, main, heads, scroll, area, ruler, rows,
+        this._editTlUi = { host, savedBar, empty, body, sub, badge, out, main, heads, scroll, area, ruler, rows,
                            head, drop, hint, blade, split, undo, redo, auto, cuts, take, pick, trimBtn, mode, snap, beats, zoomOut, zoomIn, zoomFit };
         this._editTlWatchCanvas();
         return this._editTlUi;
@@ -674,7 +675,7 @@ export const EditTimelineMixin = {
             ? "This cut is empty. Add clips with the plus button, or drop them here - from the desktop, the file "
               + "browser, the History, ComfyUI's queue, or a node dragged off the canvas."
             : "No cut is open. New starts one; so does adding or dropping clips here.";
-        ui.out.disabled = !has || busy;
+        ui.out.disabled = busy;          // Open cut... is there with nothing open too
         const hist = this._editTlHistory();
         ui.undo.disabled = !cut || !hist.past.length;
         ui.redo.disabled = !cut || !hist.future.length;
@@ -704,6 +705,7 @@ export const EditTimelineMixin = {
         const view = this._editTlView;
         const live = this._editTlLive();
         const n = cut.clips.length;
+        ui.savedBar.dataset.file = this.editTlFilePath();
         ui.sub.textContent = `${cut.name || this._editTlFile || "new cut"} \u00b7 ${n} shot${n === 1 ? "" : "s"} \u00b7 `
             + D.lengthLabel(lay.film) + (this._editTlNote ? " \u00b7 " + this._editTlNote : "");
         ui.hint.textContent = this._editTlBlade
@@ -713,6 +715,7 @@ export const EditTimelineMixin = {
               + "its lower half slides. Click a cut: , / . trim it, rippling. Shift+A / Shift+S: edit to edit. A: back to Selection."
             : "Drag a clip to move it (it leaves a gap; Ctrl+Shift+drag inserts; above the top track: a new one), an edge to trim. Click a cut: "
               + ", / . trim it; on a clip they move it (Alt: slip). Drag from an empty place: select. Del lifts, Shift+Del ripples. T: Trim, N: snap. All the keys: Show Hotkeys.";
+        ui.hint.title = ui.hint.textContent;
         ui.area.style.width = wide + "%";
 
         const doc = host.ownerDocument;
@@ -1793,31 +1796,60 @@ export const EditTimelineMixin = {
     /** A clip's link mark: a chain while its picture and sound go together, a broken one when they are apart. */
     _editTlLinkBadge(b, clip, kind) {
         const paired = !!clip.link;
-        const linked = paired ? !clip.unlinked : (kind === "video" && this._editTlHasSound(clip));
+        const linked = paired ? !clip.unlinked : (kind === "video" && !clip.mute && this._editTlHasSound(clip));
         if (!paired && !linked) return;
+        // Linked but not in step, as Resolve shows it: by how many frames, on both parts.
+        const off = paired && linked ? this._editTlOutOfSync(clip, kind) : 0;
+        if (off) {
+            const tag = b.ownerDocument.createElement("span");
+            tag.className = "edit-badge-sync";
+            tag.textContent = (off > 0 ? "+" : "\u2212") + Math.abs(off);
+            tag.title = `Picture and sound are ${Math.abs(off)} frames out of sync (right-click: Resync)`;
+            b.append(tag);
+        }
         const tag = b.ownerDocument.createElement("span");
         tag.className = "edit-badge-link" + (linked ? "" : " off") + (paired ? " pair" : "");
         tag.title = paired ? (linked ? "Linked to its " + (kind === "audio" ? "picture" : "sound") + ": moved, trimmed, cut and deleted together (Ctrl+Alt+L unlinks)"
-                                    : "Unlinked from its " + (kind === "audio" ? "picture" : "sound") + ": each moves on its own (select both, Ctrl+Alt+L links them)")
+                                    : "Unlinked from its " + (kind === "audio" ? "picture" : "sound") + ": each moves on its own (Ctrl+Alt+L relinks)")
                            : "Picture and sound linked (Ctrl+Alt+L: unlink - its sound becomes a clip of its own on a sound track)";
         b.classList.add("has-link");
-        if (clip.mute) b.classList.add("muted");
         b.append(tag);
     },
 
-    /** The right-click entries of picture and sound: Unlink, Link clips, the clip's own sound on again. */
+    // How many frames a linked clip's sound is off its picture (0: in step). `clip` as drawn; found again by its identity.
+    _editTlOutOfSync(clip, kind) {
+        const cut = this._editTlCut;
+        const member = D.linkMembers(cut, clip.link).find((s) => D.clipOf(cut, s) === clip);
+        return member ? Math.round(D.syncOffset(cut, member) * (cut.fps || 24)) : 0;
+    },
+
+    /** The right-click entries of picture and sound: Unlink / Relink, Resync, Merge back, Link clips. */
     _editTlLinkEntries(sel) {
         const cut = this._editTlCut;
         const c = D.clipOf(cut, sel);
         if (!c) return [];
         const out = [];
+        const partner = D.linkPartner(cut, sel, false);
         const pair = this._editTlLinkPair();
         if (pair) out.push({ label: "Link clips (Ctrl+Alt+L)", run: () => this.editTlLinkToggle() });
-        else if (c.link && !c.unlinked) out.push({ label: "Unlink audio / video (Ctrl+Alt+L)", run: () => this.editTlLinkToggle() });
-        else if (D.selKind(cut, sel) === "video" && !c.link) {
+        else if (partner && c.unlinked) out.push({ label: "Relink audio (Ctrl+Alt+L)", run: () => this.editTlLinkToggle() });
+        else if (partner) out.push({ label: "Unlink audio / video (Ctrl+Alt+L)", run: () => this.editTlLinkToggle() });
+        else if (D.selKind(cut, sel) === "video" && !c.link && !c.mute) {
             out.push({ label: "Unlink audio / video (Ctrl+Alt+L)", disabled: !this._editTlHasSound(c), run: () => this.editTlLinkToggle() });
         }
-        if (c.mute) out.push({ label: "Its own sound on again", run: () => this._editTlApply(D.setClipProps(cut, sel, { mute: false })) });
+        if (partner && D.syncOffset(cut, sel)) {
+            out.push({ label: "Resync (the sound back onto the picture)", run: () => { const n = D.resyncAudio(cut, sel); if (n) this._editTlApply(n); } });
+        }
+        if (D.mergeAudio(cut, sel)) {
+            out.push({ label: "Merge audio back into clip", run: () => {
+                const got = D.mergeAudio(this._editTlCut, sel);
+                if (!got) return;
+                this._editTlMulti = null;
+                this._editTlSel = got.sel;
+                this._editTlApply(got.cut);
+                this._editTlSay("the sound is back in the clip");
+            } });
+        }
         return out;
     },
 
@@ -1850,7 +1882,14 @@ export const EditTimelineMixin = {
         const sel = this._editTlSel;
         const c = sel && D.clipOf(cut, sel);
         if (!c) { this._editTlSay("select a film with sound to unlink it - or its picture and its sound to link them"); return; }
-        if (c.link && c.unlinked) { this._editTlSay("unlinked already - select its picture and its sound together (Ctrl+click) to link them"); return; }
+        // One clip of a split pair is enough: its partner is found by the link group. The offset stays (Resync puts it right).
+        if (c.link && c.unlinked) {
+            const back = D.relinkAudio(cut, sel);
+            if (!back) { this._editTlSay("its other part is gone - right-click: Merge audio back into clip"); return; }
+            this._editTlApply(back);
+            this._editTlSay("relinked: picture and sound go together");
+            return;
+        }
         if (!c.link && (D.selKind(cut, sel) !== "video" || !this._editTlHasSound(c))) { this._editTlSay("this clip has no sound to unlink"); return; }
         const got = D.unlinkClip(cut, sel);
         if (!got) { this._editTlSay("this clip has no sound to unlink"); return; }
@@ -2202,12 +2241,15 @@ export const EditTimelineMixin = {
     _editTlOutMenu(anchor) {
         if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
         const dirty = this._editTlDirty();
+        const has = !!(this._editTlCut && this._editTlCut.clips.length);
         const a = anchor.getBoundingClientRect();
         this._previzOpenMenu([
-            { label: "Save cut", disabled: !dirty, run: () => this._editTlSave() },
+            { label: "Save cut (Ctrl+S)", disabled: !dirty, run: () => this._editTlSave() },
+            { label: "Save cut as\u2026 (Ctrl+Shift+S)", disabled: !has, run: () => this.editTlSaveAsDialog() },
+            { label: "Open cut\u2026", run: () => this.editTlOpenDialog() },
             { label: "Revert to saved", disabled: !dirty || !this._editTlSaved, run: () => this._editTlRevert() },
             "-",
-            { label: "Export film\u2026", run: () => this._editTlRender() },
+            { label: "Export film\u2026", disabled: !has, run: () => this._editTlRender() },
         ], a.left, a.bottom + 2, anchor);
     },
 
@@ -2293,14 +2335,199 @@ export const EditTimelineMixin = {
             if (res.ok) data = await res.json(); else said = await res.text();
         } catch (e) { said = String(e && e.message || e); }
         if (!data || !data.edit) {
-            this._editTlNote = said || "not saved";
-            this.editTlRefresh();
+            this._editTlSaveFailed(said);
             return;
         }
+        this._editTlSavedTo(data, creating ? "saved as " + (data.file || "a new timeline") : "saved");
+    },
+
+    // A save that did not happen says why, and stays said: the cut is still marked as not saved.
+    _editTlSaveFailed(said) {
+        const why = String(said || "no answer from the server").replace(/^not saved:\s*/i, "").slice(0, 400);
+        this._editTlNote = "not saved";
+        this._editTlSavedShow({ error: "Not saved: " + why });
+        notice("error", "The cut was not saved", why);
+        this.editTlRefresh();
+    },
+
+    // A save that happened: the panel works on the file as it now reads, and says where it is.
+    _editTlSavedTo(data, note) {
         if (data.target) this._editTlTarget = data.target;
         this._editTlLoaded(data);
-        this._editTlNote = creating ? "saved as " + (data.file || "a new timeline") : "saved";
+        this._editTlMulti = null;
+        this._editTlEditSel = null;
+        this._editTlNote = note;
+        this._editTlSavedShow({ path: data.path || data.otio || "" });
         this.editTlRefresh();
+    },
+
+    /** The strip under the bar: "Saved to <the whole path>", Copy path, Show in file browser - or why it was not saved. */
+    _editTlSavedShow({ path, error }) {
+        const ui = this._editTlUi;
+        if (!ui) return;
+        const box = ui.savedBar, doc = box.ownerDocument, win = doc.defaultView || window;
+        if (this._editTlSavedTimer) { win.clearTimeout(this._editTlSavedTimer); this._editTlSavedTimer = 0; }
+        const hide = () => { box.style.display = "none"; };
+        const btn = (label, title, fn) => {
+            const b = doc.createElement("button");
+            b.className = "edit-btn";
+            b.textContent = label;
+            b.title = title;
+            b.addEventListener("click", fn);
+            return b;
+        };
+        const text = doc.createElement("span");
+        text.className = "edit-saved-text";
+        text.textContent = error || "Saved to " + path;
+        text.title = text.textContent;
+        const parts = [text];
+        if (!error) {
+            const copy = btn("Copy path", "Copy the file's whole path", async () => { copy.textContent = (await this._editTlCopy(path)) ? "Copied" : "Could not copy"; });
+            parts.push(copy);
+            if (this.browseTo) parts.push(btn("Show in file browser", "Open the file browser at its folder", () => this.editTlShowInBrowser(path)));
+        }
+        parts.push(btn("\u2715", "Close", hide));
+        box.replaceChildren(...parts);
+        box.classList.toggle("error", !!error);
+        box.style.display = "flex";
+        box.style.top = (ui.body.querySelector(".edit-bar").offsetHeight + 4) + "px";
+        // A failure stays until it is read; the path for long enough to be read.
+        if (!error) this._editTlSavedTimer = win.setTimeout(hide, 15000);
+    },
+
+    async _editTlCopy(text) {
+        const doc = this._editTlUi.body.ownerDocument, win = doc.defaultView || window;
+        try { await win.navigator.clipboard.writeText(text); return true; } catch (_) {}
+        const t = doc.createElement("textarea");
+        t.value = text;
+        doc.body.append(t);
+        t.select();
+        let ok = false;
+        try { ok = doc.execCommand("copy"); } catch (_) {}
+        t.remove();
+        return ok;
+    },
+
+    editTlShowInBrowser(path) {
+        const folder = String(path || "").replace(/[\\/][^\\/]*$/, "");
+        if (this.setPanelDocked && !this.isPanelDocked("browser")) this.setPanelDocked("browser", true);
+        if (this.browseTo) this.browseTo(folder, { force: true });
+    },
+
+    /** The file of the cut in the panel, or "" when it has not been saved. */
+    editTlFilePath() {
+        return this._editTlOtio || (this._editTlTarget && this._editTlTarget.path) || "";
+    },
+
+    /** Save cut as...: a name and a folder; the tab then works on the new file, the old one stays as it was. */
+    async editTlSaveAsDialog() {
+        const ui = this._editTlUi, cut = this._editTlCut;
+        if (!ui || !cut) return;
+        if (ui.dialog && ui.dialog.isConnected) ui.dialog.remove();
+        const doc = ui.body.ownerDocument;
+        const el = (tag, cls, text) => {
+            const n = doc.createElement(tag);
+            if (cls) n.className = cls;
+            if (text !== undefined) n.textContent = text;
+            return n;
+        };
+        const file = this.editTlFilePath();
+        const stem = file ? file.split(/[\\/]/).pop().replace(/\.otio$/i, "") : (cut.name || "cut");
+        let start = file ? file.replace(/[\\/][^\\/]*$/, "") : "";
+        if (!start) {
+            const where = await exportTarget("edit", stem, "otio", canvasContext());
+            if (where && where.path) start = where.path.replace(/[\\/][^\\/]*$/, "");
+        }
+        const box = el("div", "edit-dialog edit-saveas");
+        const head = el("div", "edit-dialog-head");
+        const close = el("button", "edit-btn", "\u2715");
+        close.title = "Close (Esc)";
+        head.append(el("span", "edit-dialog-title", "Save cut as\u2026"), close);
+        const name = el("input", "edit-saveas-name");
+        name.value = stem;
+        name.spellcheck = false;
+        const folder = el("input", "edit-saveas-folder");
+        folder.value = start;
+        folder.spellcheck = false;
+        const browse = el("button", "edit-btn edit-saveas-browse", "Browse\u2026");
+        const row = (label, ...parts) => { const r = el("label", "edit-saveas-row"); r.append(el("span", "", label), ...parts); return r; };
+        const go = el("button", "edit-btn primary edit-saveas-go", "Save");
+        const yes = el("button", "edit-btn edit-saveas-yes", "Overwrite");
+        yes.style.display = "none";
+        const note = el("div", "edit-none edit-saveas-note", "Saved as .otio. The file it was opened from stays as it is; a later Save writes to the new one.");
+        const shut = () => { box.remove(); ui.dialog = null; };
+        const send = async (overwrite) => {
+            go.disabled = yes.disabled = true;
+            yes.style.display = "none";
+            note.textContent = "Saving\u2026";
+            let res = null, data = null, said = "";
+            try {
+                res = await api.fetchApi("/bepic/timeline_save_as", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name: name.value, folder: folder.value, overwrite, edit: D.toSave(this._editTlCut),
+                                           ...(this._editTlSaved && this._editTlTarget ? { source: this._editTlTarget } : {}) }),
+                });
+                if (res.status === 409) data = await res.json();
+                else if (res.ok) data = await res.json();
+                else said = (res.status === 404 || res.status === 405) ? "this ComfyUI does not know Save cut as yet: restart it" : await res.text();
+            } catch (e) { said = String((e && e.message) || e); }
+            go.disabled = yes.disabled = false;
+            if (res && res.status === 409 && data) {
+                note.textContent = `${String(data.path || "").split(/[\\/]/).pop()} is there already. Overwrite it?`;
+                yes.style.display = "";
+                return;
+            }
+            if (!data || !data.edit) {
+                note.textContent = "Not saved: " + String(said || "no answer").replace(/^not saved:\s*/i, "");
+                note.classList.add("error");
+                return;
+            }
+            shut();
+            this._editTlSavedTo(data, "saved as " + (data.file || ""));
+            const label = String(data.file || "").replace(/\.otio$/i, "");
+            if (label && this._editTlTab && this.tabLabels) {
+                this.tabLabels[this._editTlTab] = "\u2702 " + label;
+                if (this._rebuildTabBar) this._rebuildTabBar(null);
+            }
+        };
+        close.addEventListener("click", shut);
+        go.addEventListener("click", () => send(false));
+        yes.addEventListener("click", () => send(true));
+        browse.addEventListener("click", (e) => {
+            e.preventDefault();
+            openFilePicker(this.container, { id: "cut_folder", title: "Save cut as\u2026 into", kind: "edit", start: folder.value, folder: true, exts: [".otio"], go: "This folder",
+                onPick: async ([f]) => { folder.value = f.path; return { ok: true }; } });
+        });
+        box.addEventListener("pointerdown", (e) => e.stopPropagation());
+        box.addEventListener("keydown", (e) => {
+            e.stopPropagation();
+            if (e.key === "Escape") { e.preventDefault(); shut(); }
+            else if (e.key === "Enter") { e.preventDefault(); send(false); }
+        });
+        box.append(head, row("Name", name), row("Folder", folder, browse), go, yes, note);
+        ui.body.append(box);
+        ui.dialog = box;
+        name.focus();
+        name.select();
+    },
+
+    /** Open cut...: pick a saved .otio. */
+    editTlOpenDialog() {
+        return openFilePicker(this.container, {
+            id: "cut", title: "Open cut", kind: "edit", exts: [".otio"], go: "Open",
+            note: "A cut opens in a tab of its own. Where it was saved is in the Inspector's Timeline section.",
+            onPick: async ([f]) => ((await this.editTlOpenPath(f.path)) ? { ok: true } : { ok: false, message: "That timeline could not be read." }),
+        });
+    },
+
+    /** A saved cut, by its file: its tab if it is open, else a new one. */
+    async editTlOpenPath(path) {
+        this._editTlStash();
+        const norm = (p) => String(p || "").replace(/\\/g, "/").toLowerCase();
+        const all = this._editTlAll();
+        const open = Object.keys(all).find((k) => this.allTabs[k] && norm((all[k] && all[k].otio) || (all[k] && all[k].target && all[k].target.path)) === norm(path));
+        if (open) { this._editTlWant(DOCK_ID, true); this.switchTab(open); return true; }
+        return this.editTlOpenCutOf({ path, external: 1 });
     },
 
     // Export the cut as a film, rendered in the viewer. What is rendered is the
