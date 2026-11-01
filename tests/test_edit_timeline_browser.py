@@ -1834,6 +1834,120 @@ class EditTimelineBrowserTests(unittest.TestCase):
         win.mouse.click(*pg.evaluate(WHERE, [0.2, "V2"]))
         self.saves_show(pg, win)
 
+    # ── Export to Resolve ──
+
+    RESOLVE_D = "__panel._editTlUi.dialog"
+
+    def resolve_menu(self, pg):
+        """The Save menu holds it, next to Export film; the entry opens the in-page dialog."""
+        pg.evaluate("() => __panel._editTlOutMenu(__panel._editTlUi.body.querySelector('.edit-bar button'))")
+        labels = pg.evaluate("() => [...__panel.container.querySelectorAll('.previz-menu-item')].map(b => b.textContent)")
+        self.assertEqual(labels[labels.index("Export film\u2026") + 1], "Export to Resolve\u2026")
+        pg.evaluate("() => [...__panel.container.querySelectorAll('.previz-menu-item')].find(b => b.textContent.startsWith('Export to Resolve')).click()")
+        pg.wait_for_function(f"() => {self.RESOLVE_D} && {self.RESOLVE_D}.classList.contains('edit-resolve') && !{self.RESOLVE_D}.querySelector('.edit-resolve-go').disabled", timeout=8000)
+
+    def resolve_dialog(self, pg, keys):
+        d = self.RESOLVE_D
+        self.resolve_menu(pg)
+        self.assertEqual(pg.evaluate(f"() => {d}.querySelector('.edit-dialog-title').textContent"), "Export to Resolve\u2026")
+        # All of it on screen, on top: nothing over its title, its button not cut off by a short panel.
+        hit = """(d) => { const root = d.getRootNode(); return ['.edit-dialog-title', '.edit-resolve-go'].map((s) => {
+            const r = d.querySelector(s).getBoundingClientRect(), at = root.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+            return !!at && d.contains(at); }); }"""
+        self.assertEqual(pg.evaluate_handle(f"() => {d}").evaluate(hit), [True, True])
+        self.assertEqual(pg.evaluate(f"() => {d}.querySelector('.edit-resolve-name').value"), "cut_resolve")
+        self.assertEqual(pg.evaluate(f"() => {d}.querySelector('.edit-resolve-folder').value"), "D:/out")
+        room = pg.evaluate(f"() => {d}.querySelector('.edit-resolve-room').textContent")
+        self.assertIn("5.0 MB", room)
+        self.assertIn("900.0 MB", room)
+        self.assertEqual(pg.evaluate(f"() => getComputedStyle({d}.querySelector('.edit-resolve-check')).display"), "none", "no range, no option")
+        # Typing in the name reaches the field and none of the panel's keys.
+        before = self.cut(pg)
+        keys.keyboard.press("Control+a")
+        keys.keyboard.type("bs takes")
+        self.assertEqual(pg.evaluate(f"() => {d}.querySelector('.edit-resolve-name').value"), "bs takes")
+        self.assertEqual(self.cut(pg), before, "b and s did not cut anything")
+        keys.keyboard.press("Enter")
+        pg.wait_for_function("() => (window.__resolvePlans || []).at(-1).name === 'bs takes'", timeout=5000)
+        # Progress, then the result with the whole path.
+        pg.evaluate("() => { window.__resolve = { polls: 3 }; }")
+        pg.wait_for_function(f"() => !{d}.querySelector('.edit-resolve-go').disabled", timeout=5000)
+        pg.evaluate(f"() => {d}.querySelector('.edit-resolve-go').click()")
+        pg.wait_for_function(f"() => {d}.querySelector('.edit-resolve-note').textContent.includes('a.mp4')", timeout=5000)
+        self.assertEqual(pg.evaluate(f"() => {d}.querySelector('.edit-resolve-cancel').style.display"), "")
+        pg.wait_for_function(f"() => {d}.querySelector('.edit-resolve-result').style.display === ''", timeout=8000)
+        text = pg.evaluate(f"() => {d}.querySelector('.edit-resolve-result').textContent")
+        self.assertIn("D:/out/bs takes", text)
+        self.assertIn("Left out:", text)
+        self.assertIn("Clip colours.", text)
+        self.assertIn("H.264 10-bit 4:2:2", text)
+        self.assertIn("Not tried inside Resolve", text)
+        self.assertEqual(pg.evaluate(f"() => [...{d}.querySelectorAll('.edit-resolve-result button')].map(b => b.textContent)"), ["Copy path", "Show in file browser"])
+        self.assertEqual(pg.evaluate(self.SAVED)[1], "Exported to D:/out/bs takes")
+        pg.evaluate(f"() => {d}.querySelector('.edit-resolve-close').click()")
+        self.assertFalse(pg.evaluate(f"() => !!{d}"))
+        self.assertEqual(self.errors, [])
+
+    def test_resolve_export_in_the_viewer(self):
+        pg = self.page()
+        self.resolve_dialog(pg, pg)
+
+    def test_resolve_export_docked_in_the_page(self):
+        pg = self.page()
+        pg.evaluate("() => __panel.togglePageDock()")
+        pg.evaluate("() => __panel.editTlRefresh()")
+        self.resolve_dialog(pg, pg)
+
+    def test_resolve_export_popped_out(self):
+        pg = self.page()
+        with pg.context.expect_page() as pop:
+            pg.evaluate("() => window.__panel.toggleUndock()")
+        win = pop.value
+        win.wait_for_load_state()
+        pg.wait_for_function("() => __panel._editTlUi && __panel._editTlUi.body.ownerDocument !== document", timeout=10000)
+        pg.evaluate("() => __panel.editTlRefresh()")
+        self.resolve_dialog(pg, win)
+
+    def test_resolve_export_says_what_stands_in_its_way(self):
+        pg = self.page()
+        d = self.RESOLVE_D
+        # In and out set: the option is there, and it asks for those frames.
+        pg.evaluate("() => { __panel._editTlSetRange({ start: 24, end: 47 }); }")
+        self.resolve_menu(pg)
+        self.assertNotEqual(pg.evaluate(f"() => getComputedStyle({d}.querySelector('.edit-resolve-check')).display"), "none")
+        pg.evaluate(f"() => {d}.querySelector('.edit-resolve-range').click()")
+        pg.wait_for_function("() => JSON.stringify((window.__resolvePlans || []).at(-1).frames) === '[24,47]'", timeout=5000)
+        # No room: said, and no Export.
+        pg.evaluate("() => { window.__resolve = { plan: { free: 1024 } }; }")
+        pg.evaluate(f"() => {{ const i = {d}.querySelector('.edit-resolve-name'); i.value = 'r2'; i.dispatchEvent(new Event('change')); }}")
+        pg.wait_for_function(f"() => {d}.querySelector('.edit-resolve-note').textContent.includes('not enough free space')", timeout=5000)
+        self.assertTrue(pg.evaluate(f"() => {d}.querySelector('.edit-resolve-go').disabled"))
+        # Missing: named; Export only after saying to go on without them, and that goes to the server.
+        pg.evaluate("() => { window.__resolve = { plan: { missing: ['D:/out/gone.mp4'], flagged: [{ name: 'a.mp4', note: 'H.264 10-bit 4:2:2' }] } }; }")
+        pg.evaluate(f"() => {{ const i = {d}.querySelector('.edit-resolve-name'); i.value = 'r3'; i.dispatchEvent(new Event('change')); }}")
+        pg.wait_for_function(f"() => {d}.querySelector('.edit-resolve-list').textContent.includes('gone.mp4')", timeout=5000)
+        self.assertIn("10-bit", pg.evaluate(f"() => {d}.querySelector('.edit-resolve-list').textContent"))
+        self.assertTrue(pg.evaluate(f"() => {d}.querySelector('.edit-resolve-go').disabled"))
+        pg.evaluate(f"() => {d}.querySelector('.edit-resolve-lose').click()")
+        self.assertFalse(pg.evaluate(f"() => {d}.querySelector('.edit-resolve-go').disabled"))
+        # Cancel while it runs: back at the form, the name still there.
+        pg.evaluate("() => { window.__resolve = { polls: 100000 }; }")
+        pg.evaluate(f"() => {d}.querySelector('.edit-resolve-go').click()")
+        pg.wait_for_function(f"() => {d}.querySelector('.edit-resolve-cancel').style.display === '' && window.__resolveState", timeout=5000)
+        self.assertTrue(pg.evaluate("() => __resolveStarted.at(-1).continue_missing"))
+        self.assertEqual(pg.evaluate("() => __resolveStarted.at(-1).frames"), [24, 47])
+        pg.evaluate(f"() => {d}.dispatchEvent(new KeyboardEvent('keydown', {{ key: 'Escape', bubbles: true }}))")
+        self.assertTrue(pg.evaluate(f"() => !!{d}"), "Esc does not walk away from a running export")
+        pg.evaluate(f"() => {d}.querySelector('.edit-resolve-cancel').click()")
+        pg.wait_for_function(f"() => {d}.querySelector('.edit-resolve-go').style.display === ''", timeout=5000)
+        self.assertEqual(pg.evaluate(f"() => {d}.querySelector('.edit-resolve-name').value"), "r3")
+        # A failure stays said.
+        pg.evaluate("() => { window.__resolve = { polls: 0, fail: 'The disk is full: no room' }; }")
+        pg.wait_for_function(f"() => !{d}.querySelector('.edit-resolve-go').disabled", timeout=5000)
+        pg.evaluate(f"() => {d}.querySelector('.edit-resolve-go').click()")
+        pg.wait_for_function(f"() => {d}.querySelector('.edit-resolve-note').textContent.includes('disk is full')", timeout=5000)
+        self.assertEqual(self.errors, [])
+
     # ── sound split off: relink, resync, merge back, no waveform ──
 
     def menu_has(self, pg, x, y):

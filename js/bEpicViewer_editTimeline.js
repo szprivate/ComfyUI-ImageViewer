@@ -2247,6 +2247,7 @@ export const EditTimelineMixin = {
             { label: "Revert to saved", disabled: !dirty || !this._editTlSaved, run: () => this._editTlRevert() },
             "-",
             { label: "Export film\u2026", disabled: !has, run: () => this._editTlRender() },
+            { label: "Export to Resolve\u2026", disabled: !has, run: () => this.editTlResolveDialog() },
         ], a.left, a.bottom + 2, anchor);
     },
 

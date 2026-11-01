@@ -1716,6 +1716,18 @@ textarea.param-input {
 .edit-saveas-row > span { flex: none; width: 44px; color: #aaa; }
 .edit-saveas-row input { flex: 1 1 auto; min-width: 0; background: #111; color: #ddd; border: 1px solid #444; border-radius: 2px; font-size: 11px; padding: 2px 4px; }
 .edit-saveas-note.error { color: #f99; }
+.edit-resolve { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; z-index: 60; top: 56px; right: auto; left: 50%; transform: translateX(-50%); width: min(560px, calc(100% - 24px)); max-height: calc(100% - 72px); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6); }
+.edit-resolve-check { display: flex; align-items: center; gap: 6px; color: #bbb; }
+.edit-resolve-room { color: #cfe; min-height: 14px; }
+.edit-resolve-room.error { color: #f99; }
+.edit-resolve-list { max-height: 110px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.edit-resolve-flag { color: #e8c37a; overflow-wrap: anywhere; }
+.edit-resolve-missing { color: #f99; overflow-wrap: anywhere; }
+.edit-resolve-left { color: #bbb; overflow-wrap: anywhere; }
+.edit-resolve-bar { height: 6px; background: #111; border: 1px solid #444; border-radius: 2px; overflow: hidden; }
+.edit-resolve-fill { height: 100%; width: 0; background: #4d9; transition: width .2s; }
+.edit-resolve-path { color: #cfe; user-select: text; overflow-wrap: anywhere; }
+.edit-resolve-result { display: flex; flex-direction: column; gap: 4px; }
 .edit-badge-sync { position: absolute; right: 18px; bottom: 1px; z-index: 2; padding: 0 3px; border-radius: 2px; background: #b3261e; color: #fff; font-size: 9px; line-height: 11px; }
 /* One line: in a small window the hint must not take the tracks' height (all of it on hover). */
 .edit-body > .bepic-tool-hint { flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

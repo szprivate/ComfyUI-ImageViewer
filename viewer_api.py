@@ -573,6 +573,131 @@ try:
             data["target"] = {"path": side, "external": 1}
             return web.json_response(data, headers={"Cache-Control": "no-cache"})
 
+        # ── Export to Resolve: a folder with the original clips and a timeline ──
+
+        async def _resolve_body(request):
+            """``(body, None)`` or ``(None, a refusal)``: from ComfyUI's own page, JSON."""
+            allowed, why = path_access.same_origin(request)
+            if not allowed:
+                return None, web.Response(status=403, text=why)
+            try:
+                body = await request.json()
+            except Exception:
+                return None, web.Response(status=400, text="the request is not JSON")
+            if not isinstance(body, dict):
+                return None, web.Response(status=400, text="the request is not an object")
+            return body, None
+
+        def _resolve_plan(body):
+            """What the request would export, as ``(doc, plan)``; raises what it refuses."""
+            from . import resolve_export, timeline_io
+            source = body.get("source") if isinstance(body.get("source"), dict) else {}
+            media, allowed, error = _timeline_media(source)
+            if error:
+                raise _ResolveRefused(400, error)
+            if not allowed:
+                raise _ResolveRefused(403, path_access.refusal(media))
+            side = timeline_io.sidecar_for(media)
+            if not side:
+                raise _ResolveRefused(404, "no timeline beside this file: save the cut first")
+            frames = body.get("frames")
+            if frames is not None and not (isinstance(frames, list) and len(frames) == 2
+                                           and all(isinstance(v, int) and not isinstance(v, bool) and v >= 0
+                                                   for v in frames) and frames[0] <= frames[1]):
+                raise _ResolveRefused(400, "frames is not [first, last]")
+            folder = str(body.get("folder") or "").strip() or os.path.dirname(os.path.abspath(side))
+            folder = os.path.abspath(folder)
+            if not path_access.is_allowed(folder):
+                raise _ResolveRefused(403, path_access.refusal(folder))
+            doc = timeline_io._load(side)
+            # A copy hands a file's bytes to whoever reads the package: the serve rule.
+            plan = resolve_export.make_plan(doc, side, folder, body.get("name") or None, frames, path_access.may_serve)
+            if not path_access.is_allowed(plan["path"]):
+                raise _ResolveRefused(403, path_access.refusal(plan["path"]))
+            return doc, plan
+
+        class _ResolveRefused(Exception):
+            def __init__(self, status, text):
+                super().__init__(text)
+                self.status, self.text = status, text
+
+        async def _bepic_export_resolve_plan(request):
+            """What Export to Resolve would copy: ``{name, folder, path, exists, size, free,
+            files, missing, refused, flagged, left_out, ...}``. Nothing is written."""
+            from . import resolve_export
+            body, refused = await _resolve_body(request)
+            if refused is not None:
+                return refused
+            try:
+                _doc, plan = await asyncio.get_running_loop().run_in_executor(None, _resolve_plan, body)
+            except _ResolveRefused as exc:
+                return web.Response(status=exc.status, text=exc.text)
+            except ValueError as exc:
+                return web.Response(status=422, text=str(exc))
+            except OSError as exc:
+                return web.Response(status=500, text=str(exc))
+            return web.json_response(resolve_export.public(plan), headers={"Cache-Control": "no-cache"})
+
+        async def _bepic_export_resolve(request):
+            """Start making the package; the work runs in a thread of its own
+            (resolve_export.Job), and ``{"id"}`` is what to ask the status route with.
+
+            ``{"source", "name", "folder", "frames", "continue_missing"}``. 403: outside the
+            viewer's folders. 409: the target is there. 422: files are missing (they are
+            named; ``continue_missing`` goes on without them). 507: not enough room.
+            """
+            from . import resolve_export
+            body, refused = await _resolve_body(request)
+            if refused is not None:
+                return refused
+
+            def _begin():
+                doc, plan = _resolve_plan(body)
+                if plan["refused"]:
+                    names = ", ".join(os.path.basename(p) for p in plan["refused"][:12])
+                    raise _ResolveRefused(403, f"The viewer may not copy these: {names}. "
+                                          + path_access.refusal(plan["refused"][0]))
+                if plan["exists"]:
+                    raise _ResolveRefused(409, f"{plan['path']} is there already: choose another name.")
+                if plan["missing"] and body.get("continue_missing") is not True:
+                    raise _ResolveRefused(422, "Missing: " + ", ".join(plan["missing"][:12]))
+                resolve_export.check_room(plan)
+                return resolve_export.start(doc, plan)
+            try:
+                job = await asyncio.get_running_loop().run_in_executor(None, _begin)
+            except _ResolveRefused as exc:
+                return web.Response(status=exc.status, text=exc.text)
+            except resolve_export.NoRoom as exc:
+                return web.Response(status=507, text=str(exc))
+            except ValueError as exc:
+                return web.Response(status=422, text=str(exc))
+            except OSError as exc:
+                return web.Response(status=500, text=str(exc))
+            return web.json_response(job.state(), headers={"Cache-Control": "no-cache"})
+
+        async def _bepic_export_resolve_status(request):
+            """How far a package is: ``{status: running|done|failed|cancelled, done, total, ...}``."""
+            from . import resolve_export
+            body, refused = await _resolve_body(request)
+            if refused is not None:
+                return refused
+            job = resolve_export.job_of(body.get("id"))
+            if job is None:
+                return web.Response(status=404, text="no such export")
+            return web.json_response(job.state(), headers={"Cache-Control": "no-cache"})
+
+        async def _bepic_export_resolve_cancel(request):
+            """Stop a package; what it had made so far is removed by its own thread."""
+            from . import resolve_export
+            body, refused = await _resolve_body(request)
+            if refused is not None:
+                return refused
+            job = resolve_export.job_of(body.get("id"))
+            if job is None:
+                return web.Response(status=404, text="no such export")
+            job.cancel()
+            return web.json_response(job.state(), headers={"Cache-Control": "no-cache"})
+
         # ── what the Edit panel draws in its clips, and Auto edit measures ──
         #
         # timeline_media.py does the reading (PyAV, in this process). The work
@@ -2722,6 +2847,12 @@ try:
         _safe_add("GET", "/api/bepic/timeline", _bepic_timeline)
         _safe_add("POST", "/bepic/timeline", _bepic_timeline_save)
         _safe_add("POST", "/api/bepic/timeline", _bepic_timeline_save)
+        for _route, _handler in (("timeline_export_resolve_plan", _bepic_export_resolve_plan),
+                                 ("timeline_export_resolve", _bepic_export_resolve),
+                                 ("timeline_export_resolve_status", _bepic_export_resolve_status),
+                                 ("timeline_export_resolve_cancel", _bepic_export_resolve_cancel)):
+            _safe_add("POST", "/bepic/" + _route, _handler)
+            _safe_add("POST", "/api/bepic/" + _route, _handler)
         _safe_add("POST", "/bepic/timeline_save_as", _bepic_timeline_save_as)
         _safe_add("POST", "/api/bepic/timeline_save_as", _bepic_timeline_save_as)
         _safe_add("POST", "/bepic/take", _bepic_take)

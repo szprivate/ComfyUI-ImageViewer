@@ -106,6 +106,33 @@ window.__fetchApi = async (path, opts = {}) => {
       return json({ path: "D:/out/cut_v001.mp4", name: "cut_v001.mp4", relative: "cut_v001.mp4", version: 1, fps: 24,
                     frames: f ? f[1] - f[0] + 1 : 0, texts_left_out: 0 });
     }
+    // Export to Resolve: window.__resolve = { plan: overrides, polls: "running" answers before done, fail }.
+    case "/bepic/timeline_export_resolve_plan": {
+      const body = JSON.parse(opts.body), r = window.__resolve || {};
+      (window.__resolvePlans ||= []).push(body);
+      const nm = body.name || "cut_resolve", at = body.folder || "D:/out";
+      return json({ folder: at, name: nm, path: at + "/" + nm, exists: false, size: 5 * 1048576, free: 900 * 1048576,
+        files: [{ name: "a.mp4", size: 5 * 1048576, note: "" }], missing: [], refused: [], flagged: [], left_out: [],
+        ...(r.plan || {}) });
+    }
+    case "/bepic/timeline_export_resolve": {
+      (window.__resolveStarted ||= []).push(JSON.parse(opts.body));
+      window.__resolveState = { polls: (window.__resolve || {}).polls ?? 2, cancelled: false };
+      return json({ id: "job1", status: "running", done: 0, total: 5242880 });
+    }
+    case "/bepic/timeline_export_resolve_status": {
+      const s = window.__resolveState, r = window.__resolve || {};
+      if (s.cancelled) return json({ id: "job1", status: "cancelled", done: 0, total: 5242880 });
+      if (s.polls-- > 0) return json({ id: "job1", status: "running", done: 1048576, total: 5242880, current: "a.mp4" });
+      if (r.fail) return json({ id: "job1", status: "failed", done: 0, total: 5242880, error: r.fail });
+      const path = "D:/out/" + window.__resolveStarted.at(-1).name;
+      return json({ id: "job1", status: "done", done: 5242880, total: 5242880, result: { path, fcpxml: path + "/x.fcpxml", files: 1, size: 5242880,
+        left_out: ["Clip colours."], flagged: [{ name: "a.mp4", note: "H.264 10-bit 4:2:2" }], missing: [] } });
+    }
+    case "/bepic/timeline_export_resolve_cancel": {
+      window.__resolveState.cancelled = true;
+      return json({ id: "job1", status: "running", done: 0, total: 5242880 });
+    }
     case "/bepic/timeline_save_as": {
       const body = JSON.parse(opts.body);
       if (window.__saveFail) return { ok: false, status: window.__saveFail.status, json: async () => ({}), text: async () => window.__saveFail.text, headers: new Headers() };
