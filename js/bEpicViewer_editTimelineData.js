@@ -1890,6 +1890,51 @@ export function selSignature(cut) {
                            (cut.texts || []).length, (cut.sound || []).length]);
 }
 
+// ── stable identity, for the selection across undo / redo ────────────────────
+//
+// A selection names an item by its place (kind + index), which an undo changes.
+// Every item the panel has shown carries a `uid` (never saved: toSave, sameCut
+// and the .otio writers name their fields), copied along with the item by every
+// edit, so the item that comes back from an undo is the one that went.
+
+let uidSeq = 0;
+
+/** Give every item of `cut` that has none a `uid` (in place; the cut is the panel's own). Returns the cut. */
+export function stampIds(cut) {
+    if (!cut) return cut;
+    const one = (o) => { if (o && typeof o === "object" && !o.uid) o.uid = "u" + (++uidSeq) + "_" + Math.random().toString(36).slice(2, 7); };
+    for (const c of cut.clips || []) one(c);
+    for (const t of cut.texts || []) one(t);
+    for (const m of cut.sound || []) one(m);
+    for (const k of cut.tracks || []) for (const c of k.clips || []) one(c);
+    return cut;
+}
+
+/** { kind, uid, track } for a selection of `cut` (null when it names nothing, or an item without a uid). */
+export function identOf(cut, sel) {
+    const it = itemOf(cut, sel);
+    return it && it.uid ? { kind: sel.kind, uid: it.uid, track: sel.track } : null;
+}
+
+/** The selection of `cut` that names the item with this uid (null when the cut no longer has it). */
+export function locateIdent(cut, id) {
+    if (!cut || !id) return null;
+    if (id.kind === "clip" || id.kind === "gap") {
+        const i = (cut.clips || []).findIndex((c) => c.uid === id.uid);
+        if (i < 0 || (id.kind === "gap" && !(num((cut.clips[i]).gap) > 0))) return null;
+        return { kind: id.kind, i };
+    }
+    if (id.kind === "text") { const i = (cut.texts || []).findIndex((t) => t.uid === id.uid); return i < 0 ? null : { kind: "text", i }; }
+    if (id.kind === "sound") { const i = (cut.sound || []).findIndex((m) => m.uid === id.uid); return i < 0 ? null : { kind: "sound", i }; }
+    if (id.kind === "tclip") {
+        for (const k of cut.tracks || []) {
+            const i = (k.clips || []).findIndex((c) => c.uid === id.uid);
+            if (i >= 0) return { kind: "tclip", track: k.id, i };
+        }
+    }
+    return null;
+}
+
 export const SELECTED_CAP = 50;
 
 /** The selected clips as agentY reads them: [{ name, file, in, out (seconds of the source), track, id }]. */

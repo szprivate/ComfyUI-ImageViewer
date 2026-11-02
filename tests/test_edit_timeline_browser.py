@@ -2915,6 +2915,39 @@ class EditTimelineBrowserTests(unittest.TestCase):
     FXOF = "(i) => __panel._editTlCut.clips[i].fx || {}"
     VOLS = "() => { const c = __panel._editTlCut; return [c.clips[0].volume, c.clips[1].volume, c.clips[2].volume, c.tracks[1].clips[0].volume]; }"
 
+    def test_22b_undo_and_redo_keep_the_selected_clips_selected(self):
+        pg = self.multi_page()
+        inspector = "() => __panel.editInspectorPanel.querySelector('.insp-multi').textContent.slice(0, 7)"
+        want = ["V1:0", "V1:1", "V1:2"]
+        primary = "() => { const s = __panel._editTlSel; return s.kind + ':' + s.i; }"
+        pg.evaluate(self.SETROW, ["Opacity", 40])
+        self.focus_timeline(pg)                  # the click on empty room clears the selection, as for a user
+        self.reselect(pg)
+        pg.keyboard.press("Control+z")
+        self.assertIsNone(pg.evaluate(self.FXOF, 0).get("op"))
+        self.assertEqual(pg.evaluate(self.SEL), want)
+        self.assertEqual(pg.evaluate(inspector), "3 clips")
+        self.assertEqual(pg.evaluate(primary), "clip:2")
+        pg.keyboard.press("Control+Shift+z")
+        self.assertAlmostEqual(pg.evaluate(self.FXOF, 0).get("op"), 0.4, places=3)
+        self.assertEqual(pg.evaluate(self.SEL), want)
+        self.assertEqual(pg.evaluate(inspector), "3 clips")
+        # Undoing the add of a clip: the new clip leaves the selection, the others stay.
+        pg.evaluate("""() => { const P = __panel; const c = P._editTlCut;
+            P._editTlApply({ ...c, clips: [...c.clips, { file: 'D:/out/a.mp4', name: 'new', in: 0, length: 2, volume: 1, color: '' }] });
+            P._editTlSetSelList([{ kind: 'clip', i: 0 }, { kind: 'clip', i: 1 }, { kind: 'clip', i: 3 }], { kind: 'clip', i: 3 }); P.editTlRefresh(); }""")
+        pg.keyboard.press("Control+z")
+        self.assertEqual(pg.evaluate("() => __panel._editTlCut.clips.length"), 3)
+        self.assertEqual(pg.evaluate(self.SEL), ["V1:0", "V1:1"])
+        self.assertEqual(pg.evaluate(primary), "clip:1")
+        # Indexes shift: undo of a clip put in at the front keeps the same clips, now one place earlier.
+        pg.evaluate("""() => { const P = __panel; const c = P._editTlCut;
+            P._editTlApply({ ...c, clips: [{ file: 'D:/out/a.mp4', name: 'front', in: 0, length: 2, volume: 1, color: '' }, ...c.clips] });
+            P._editTlSetSelList([{ kind: 'clip', i: 2 }, { kind: 'clip', i: 3 }], { kind: 'clip', i: 3 }); P.editTlRefresh(); }""")
+        pg.keyboard.press("Control+z")
+        self.assertEqual(pg.evaluate(self.SEL), ["V1:1", "V1:2"])
+        self.assertEqual(self.errors, [])
+
     def test_22_several_selected_opacity_zoom_and_volume_go_to_all_with_one_undo(self):
         pg = self.multi_page()
         self.assertEqual(pg.evaluate("() => __panel.editInspectorPanel.querySelector('.insp-multi').textContent.slice(0, 7)"), "3 clips")

@@ -647,6 +647,7 @@ export const EditTimelineMixin = {
 
     /** Draw the Edit panels from the cut as it stands. The one place they are drawn. */
     editTlRefresh() {
+        D.stampIds(this._editTlCut);
         if (this.barGroupsSync) this.barGroupsSync();
         // With no cut in the panel, an Edit tab that is open takes its place.
         if (!this._editTlTab) {
@@ -1166,15 +1167,31 @@ export const EditTimelineMixin = {
 
     _editTlStep(how) {
         if (!this._editTlTab || !this._editTlCut || this._editTlDragging) return;
+        const prev = D.stampIds(this._editTlCut);
         const got = how(this._editTlHistory(), this._editTlCut);
         if (!got) { this._editTlSay(how === D.historyUndo ? "nothing to undo" : "nothing to redo"); return; }
+        // What was selected stays selected where the item still is: found by its uid, not its index.
+        const was = this._editTlSelAll();
+        const primary = this._editTlSel;
+        const pid = primary ? D.identOf(prev, primary) : null;
+        const point = this._editTlEditSel;
         this._editTlHistories[this._editTlTab] = got.history;
         this._editTlCut = got.cut;
         this._editTlMulti = null;
-        // The selection may name a clip the cut no longer has.
-        if (this._editTlSel && !(this._editTlSel.kind === "text" ? got.cut.texts[this._editTlSel.i]
-                                 : this._editTlSel.kind === "mix" ? got.cut.clips[this._editTlSel.i]
-                                 : D.itemOf(got.cut, this._editTlSel))) this._editTlSel = null;
+        D.stampIds(got.cut);
+        const keep = was.map((s) => D.locateIdent(got.cut, D.identOf(prev, s))).filter(Boolean);
+        const prim = pid ? D.locateIdent(got.cut, pid) : null;
+        if (keep.length) this._editTlSetSelList(keep, prim);
+        else if (primary && !D.isItemSel(primary)) {
+            // A mix (the music bed's level) is not an item: it stays while the cut has its place.
+            this._editTlSel = primary.kind === "mix" && got.cut.clips[primary.i] ? primary : null;
+        } else this._editTlSel = null;
+        this._editTlEditSel = null;
+        if (point && point.sel) {
+            const at = (s) => D.locateIdent(got.cut, D.identOf(prev, s));
+            const sel = at(point.sel), a = point.a ? at(point.a) : null, b = point.b ? at(point.b) : null;
+            if (sel && (!point.a || (a && b))) this._editTlEditSel = { ...point, sel, ...(point.a ? { a, b } : {}) };
+        }
         this._editTlNote = "";
         this.editTlRefresh();
     },
