@@ -1162,3 +1162,224 @@ def _fit_source(item, duration, retime):
     shorter = max(_MIN_CLIP, usable / speed)
     item["source_range"] = _range(start, shorter, rate)
     return round(length, 4) if shorter < length - 1e-4 else 0.0
+
+
+# ── a cut changed by someone other than the panel: agentY's edit_cut ─────────
+#
+# The ops work on the cut as the panel holds it (:func:`editable`) and the
+# result is saved the way the panel saves (:func:`save`, through :func:`rebuild`),
+# so the file, Resolve and the panel read it as a cut made by hand. Tracks are
+# named as the panel shows them: V1 (the cut), A1 (the bed under the whole film),
+# V2.. / A2.. (clips placed at a moment of the film). Clips are counted from 1 on
+# their track, in the order they play.
+
+MAX_OPS = 50
+_SOUND_EXTS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".aif", ".aiff", ".opus"}
+_TRACK_NAME = re.compile(r"^[AV][2-9]\d*$|^[AV][1-9]\d+$")
+
+
+def _media_kind(path):
+    return "audio" if os.path.splitext(str(path or ""))[1].lower() in _SOUND_EXTS else "video"
+
+
+def v1_times(edit):
+    """Where each V1 clip begins in the film (seconds): gaps add, dissolves overlap."""
+    out, at = [], 0.0
+    for i, c in enumerate(edit.get("clips") or []):
+        at += float(c.get("gap") or 0)
+        if i:
+            at -= float(c.get("transition") or 0)
+        out.append(round(max(0.0, at), 4))
+        at += float(c.get("length") or 0)
+    return out
+
+
+def _next_track(edit, kind):
+    """A new, empty extra track of *kind*, put into *edit*; returns it."""
+    letter = "A" if kind == "audio" else "V"
+    tracks = edit.setdefault("tracks", [])
+    have = [t for t in tracks if isinstance(t, dict) and t.get("kind") == kind]
+    tid = f"{letter}{len(have) + 2}"
+    track = {"id": tid, "kind": kind, "name": tid, "off": False, "clips": []}
+    if kind == "video":
+        # Picture tracks come before sound tracks, in the panel and in the file.
+        last = max([i for i, t in enumerate(tracks) if isinstance(t, dict) and t.get("kind") == "video"], default=-1)
+        tracks.insert(last + 1, track)
+    else:
+        tracks.append(track)
+    return track
+
+
+def _find_track(edit, tid):
+    for t in edit.get("tracks") or []:
+        if isinstance(t, dict) and str(t.get("id") or "").upper() == tid:
+            return t
+    return None
+
+
+def _clashes(track, at, length, skip=None):
+    """The clip of *track* that shares a moment with ``at .. at + length``, or None."""
+    for c in track.get("clips") or []:
+        if c is skip:
+            continue
+        a = float(c.get("at") or 0)
+        b = a + float(c.get("length") or 0)
+        if at < b - 1e-4 and at + length > a + 1e-4:
+            return c
+    return None
+
+
+def _label(clip):
+    return str(clip.get("name") or os.path.basename(str(clip.get("file") or "")))
+
+
+def _op_add(new, op, what, durations):
+    file = str(op.get("file") or "").strip()
+    if not file:
+        raise ValueError(f"{what}: no 'file'")
+    kind = _media_kind(file)
+    tid = str(op.get("track") or "").strip().upper()
+    if tid in ("V1", "A1"):
+        why = "V1 is the cut itself" if tid == "V1" else "A1 is the bed under the whole film"
+        raise ValueError(f"{what}: {tid} takes no clip placed at a time ({why}) - use track "
+                         f"{'A2' if kind == 'audio' else 'V2'}, or leave 'track' empty")
+    at = _num(op.get("at") or 0, f"{what}: 'at'")
+    start = _num(op.get("in") or 0, f"{what}: 'in'")
+    if op.get("length") is not None:
+        length = _num(op.get("length"), f"{what}: 'length'", _MIN_CLIP)
+    else:
+        known = float(durations.get(norm_path(file)) or 0.0)
+        if not known > start + _MIN_CLIP:
+            raise ValueError(f"{what}: how long {os.path.basename(file)} is, is not known - give 'length'")
+        length = known - start
+    if tid in ("", "AUTO"):
+        track = next((t for t in new["tracks"] if isinstance(t, dict) and t.get("kind") == kind
+                      and not _clashes(t, at, length)), None) or _next_track(new, kind)
+    elif tid == "NEW":
+        track = _next_track(new, kind)
+    else:
+        if not _TRACK_NAME.match(tid):
+            raise ValueError(f"{what}: '{op.get('track')}' is not a track name (A2, V2 ...)")
+        track = _find_track(new, tid)
+        want = "audio" if tid[0] == "A" else "video"
+        while track is None:                       # A4 asked for with only A2 there: A3 and A4 are made
+            made = _next_track(new, want)
+            if made["id"] == tid:
+                track = made
+            elif int(made["id"][1:]) >= int(tid[1:]):
+                raise ValueError(f"{what}: track {tid} could not be made")
+        if (track.get("kind") == "audio") != (kind == "audio"):
+            raise ValueError(f"{what}: {os.path.basename(file)} is {'sound' if kind == 'audio' else 'picture'}, "
+                             f"and {track['id']} is a {'sound' if track.get('kind') == 'audio' else 'picture'} track")
+        hit = _clashes(track, at, length)
+        if hit is not None:
+            raise ValueError(f"{what}: {track['id']} has {_label(hit)} at {hit.get('at')}s for {hit.get('length')}s "
+                             "there - pick another track, or leave 'track' empty for one with room")
+    clip = {"file": file, "name": str(op.get("name") or os.path.splitext(os.path.basename(file))[0])[:200],
+            "in": round(start, 4), "length": round(length, 4), "at": round(at, 4)}
+    if op.get("volume") is not None:
+        clip["volume"] = round(min(4.0, _num(op.get("volume"), f"{what}: 'volume'")), 4)
+    track["clips"] = sorted((track.get("clips") or []) + [clip], key=lambda c: float(c.get("at") or 0))
+    return f"added {clip['name']} on {track['id']} at {clip['at']}s for {clip['length']}s"
+
+
+def _op_edit(new, op, what, kind_of_op):
+    tid = str(op.get("track") or "").strip().upper()
+    try:
+        number = int(op.get("clip"))
+    except (TypeError, ValueError):
+        raise ValueError(f"{what}: 'clip' is the clip's number on its track (1, 2 ...)") from None
+    track = None
+    if tid == "V1":
+        row = new.get("clips") or []
+    elif tid == "A1":
+        row = new.get("sound") or []
+    else:
+        track = _find_track(new, tid)
+        if track is None:
+            raise ValueError(f"{what}: there is no track {tid or '(none named)'}")
+        row = track.get("clips") or []
+    if not 1 <= number <= len(row):
+        raise ValueError(f"{what}: {tid} has {len(row)} clip(s), no clip {number}")
+    clip = row[number - 1]
+    label = _label(clip)
+    if kind_of_op == "remove":
+        if tid == "V1" and len(row) == 1:
+            raise ValueError(f"{what}: a cut needs at least one clip on V1")
+        del row[number - 1]
+        if tid == "V1" and number - 1 < len(row):
+            row[number - 1]["transition"] = 0.0       # its dissolve was into the clip taken out
+        return f"removed {label} from {tid}"
+    if tid == "A1":
+        raise ValueError(f"{what}: the bed on A1 runs under the whole film; it can only be removed")
+    changed = []
+    for key in ("in", "length", "volume", "gap", "at"):
+        if op.get(key) is None:
+            continue
+        if key == "at" and tid == "V1":
+            raise ValueError(f"{what}: a V1 clip begins where the one before it ends - set its 'gap', "
+                             "or trim the clips before it")
+        if key == "gap" and tid != "V1":
+            raise ValueError(f"{what}: 'gap' is for V1; on {tid} set 'at'")
+        v = _num(op.get(key), f"{what}: '{key}'", _MIN_CLIP if key == "length" else 0.0)
+        clip[key] = round(min(4.0, v) if key == "volume" else v, 4)
+        changed.append(f"{key} {clip[key]}")
+    if op.get("name") is not None:
+        clip["name"] = str(op["name"])[:200]
+        changed.append(f"name {clip['name']}")
+    if not changed:
+        raise ValueError(f"{what}: nothing to set (in, length, volume, name, and at - or gap on V1)")
+    if track is not None:
+        hit = _clashes(track, float(clip.get("at") or 0), float(clip.get("length") or 0), skip=clip)
+        if hit is not None:
+            raise ValueError(f"{what}: {label} would share a moment with {_label(hit)} on {tid}")
+        track["clips"] = sorted(row, key=lambda c: float(c.get("at") or 0))
+    elif number > 1 and float(clip.get("transition") or 0) >= float(clip.get("length") or 0):
+        raise ValueError(f"{what}: {label} would be shorter than its dissolve")
+    return f"{label} on {tid}: " + ", ".join(changed)
+
+
+def apply_ops(edit, ops, durations=None):
+    """*edit* (the panel's form of a cut) with *ops* done to it; returns ``(new edit, said)``.
+
+    ``said`` has one line per op. An op that cannot be done raises ValueError naming it, and
+    then none of them is done. Ops:
+
+    - ``{"op": "add", "file", "at", "track", "in", "length", "name", "volume"}``: a clip placed
+      at ``at`` seconds of the film. ``track``: ``"A2"``, ``"V3"`` ... (made when it is not
+      there), ``"new"``, or empty for the first track of the file's kind with room there (sound:
+      A2.., picture: V2..). ``length`` defaults to the rest of the file (``durations``: seconds
+      by path). V1 and A1 take no placed clips: V1 is the cut itself, A1 the bed under it.
+    - ``{"op": "set", "track", "clip", "at", "in", "length", "volume", "name", "gap"}``: move,
+      trim, rename or set the volume of clip number ``clip`` (from 1) of ``track``; on V1 a new
+      ``in`` / ``length`` ripples the clips after it, and ``gap`` is the empty time before it.
+    - ``{"op": "remove", "track", "clip"}``: take a clip out (V1 closes up; on A1 a bed goes).
+    """
+    import copy
+    if not isinstance(ops, list) or not ops:
+        raise ValueError("'ops' is a list of 1 or more changes")
+    if len(ops) > MAX_OPS:
+        raise ValueError(f"at most {MAX_OPS} changes at once")
+    new = copy.deepcopy(edit)
+    new.setdefault("tracks", [])
+    durations = {norm_path(k): v for k, v in (durations or {}).items()}
+    said = []
+    for n, op in enumerate(ops, 1):
+        if not isinstance(op, dict):
+            raise ValueError(f"change {n} is not an object")
+        kind_of_op = str(op.get("op") or "").strip().lower()
+        what = f"change {n} ({kind_of_op or '?'})"
+        if kind_of_op == "add":
+            said.append(_op_add(new, op, what, durations))
+        elif kind_of_op in ("set", "remove"):
+            said.append(_op_edit(new, op, what, kind_of_op))
+        else:
+            raise ValueError(f"{what}: 'op' is add, set or remove")
+    return new, said
+
+
+def change(path, ops, stamp="", may_use=None, durations=None):
+    """Do *ops* (:func:`apply_ops`) to the cut in the ``.otio`` at *path* and save it as the
+    panel saves; returns ``(the cut as it now reads, said)``."""
+    edit, said = apply_ops(read_editable(path), ops, durations)
+    return save(path, edit, stamp, may_use), said

@@ -177,6 +177,69 @@ export const EditTakesMixin = {
         api.addEventListener("bepic.edit.take", (e) => {
             this.editTlTakeIn(e && e.detail).catch((err) => console.warn("bEpicViewer: take not taken in", err));
         });
+        api.addEventListener("bepic.edit.changed", (e) => {
+            try { this.editTlChangedIn(e && e.detail); } catch (err) { console.warn("bEpicViewer: changed cut not taken in", err); }
+        });
+    },
+
+    // ── a cut changed on disk by agentY ──────────────────────────────────────
+
+    /**
+     * Take in what `bepic.edit.changed` says ({ otio, edit, said }, sent by POST
+     * /bepic/cut: agentY's edit_cut saved the cut with clips added, moved, trimmed
+     * or taken out). Every open cut that is that .otio becomes the saved cut, as ONE
+     * undo step: the file was written anew, so the `ref`s of what the panel held
+     * name other items now - the cut it had, and its undo stack, hold their clips by
+     * file from here on (D.detach), as after a save. Unsaved changes of the user's
+     * are not merged: they are the step before, one Ctrl+Z back, and the panel says
+     * so. Returns how many cuts took it in.
+     */
+    editTlChangedIn(detail) {
+        const d = detail && typeof detail === "object" ? detail : {};
+        const edit = d.edit;
+        const otio = D.normFile(d.otio);
+        if (!otio || !edit || typeof edit !== "object" || !Array.isArray(edit.clips)) return 0;
+        if (!Array.isArray(edit.texts)) edit.texts = [];
+        if (!Array.isArray(edit.tracks)) edit.tracks = [];
+        if (!Array.isArray(edit.sound)) edit.sound = [];
+        this._editTlStash();
+        const all = this._editTlAll();
+        const said = (Array.isArray(d.said) ? d.said : []).map(String).filter(Boolean);
+        let took = 0;
+        for (const key of Object.keys(all)) {
+            const rec = all[key];
+            if (!this.allTabs || !this.allTabs[key] || !rec || !rec.cut) continue;
+            if (D.normFile(rec.otio) !== otio) continue;
+            const dirty = this._editTlDirtyOf(rec);
+            this._editTlHistories = this._editTlHistories || {};
+            const h = this._editTlHistory(key);
+            const past = h.past.map(D.detach);
+            this._editTlHistories[key] = D.historyPush({ past, future: [] }, D.detach(rec.cut));
+            const next = JSON.parse(JSON.stringify(edit));
+            rec.cut = next;
+            rec.saved = JSON.parse(JSON.stringify(edit));
+            if (d.file) rec.file = String(d.file);
+            const line = "agentY changed the cut" + (said.length ? ": " + said.slice(0, 3).join("; ") + (said.length > 3 ? ` (+${said.length - 3})` : "") : "")
+                + (dirty ? " - your unsaved changes are one Ctrl+Z back" : " - Ctrl+Z undoes it");
+            if (key === this._editTlTab) {
+                this._editTlCut = rec.cut;
+                this._editTlSaved = rec.saved;
+                if (d.file) this._editTlFile = rec.file;
+                this._editTlSel = null;
+                this._editTlMulti = null;
+                this._editTlEditSel = null;
+                this._editTlNote = line;
+            }
+            took += 1;
+        }
+        if (took) {
+            // How long the new files are, for the trims and the waveforms.
+            const files = [...edit.clips, ...edit.tracks.flatMap((k) => k.clips || [])].map((c) => c && c.file).filter(Boolean);
+            if (files.length && this._editTlProbe) this._editTlProbe(files).catch(() => {}).then(() => this.editTlRefresh());
+            this._editTlKeep();
+            this.editTlRefresh();
+        }
+        return took;
     },
 
     /**

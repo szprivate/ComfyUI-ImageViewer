@@ -923,6 +923,97 @@ try:
                 notes.append(f"the pages could not be told ({exc})")
             return web.json_response({"ok": True, "saved": saved, "applied": applied, "pushed": pushed, "notes": notes})
 
+        async def _bepic_cut(request):
+            """A cut read, or changed, by agentY (its edit_cut tool): ``{"otio": str, "ops": [...]}``.
+
+            No ``ops``: the cut as the Edit panel works on it (``edit``), nothing written.
+            With ``ops`` (timeline_io.apply_ops: add a clip at a moment of the film, set a
+            clip's in / length / place / volume, remove one) the cut is changed and saved
+            the way the panel saves it (timeline_io.change), and ``bepic.edit.changed``
+            ({otio, edit, said, client_id}) goes to the pages: an Edit panel that has the
+            cut open takes the new cut in as one undo step (bEpicViewer_editTakes.js:
+            editTlChangedIn). Answers ``{"ok", "otio", "edit", "length", "saved", "said",
+            "pushed"}``. Fenced like the take route: the timeline by path_access.is_allowed,
+            every file added by path_access.may_serve, and only ComfyUI's own page or a
+            caller with no browser Origin may post.
+            """
+            from . import timeline_io
+            allowed, why = path_access.same_origin(request)
+            if not allowed:
+                return web.json_response({"ok": False, "error": why}, status=403)
+            client_id = str(request.query.get("client_id") or "")[:200]
+            try:
+                body = await request.json()
+            except Exception:
+                return web.json_response({"ok": False, "error": "the request is not JSON"}, status=400)
+            if not isinstance(body, dict):
+                return web.json_response({"ok": False, "error": "the request is not an object"}, status=400)
+            otio_raw = body.get("otio")
+            if not isinstance(otio_raw, str) or not otio_raw.strip():
+                return web.json_response({"ok": False, "error": "'otio' (the cut's .otio path) is needed"}, status=400)
+            otio = os.path.abspath(otio_raw.strip())
+            if not otio.lower().endswith(".otio"):
+                return web.json_response({"ok": False, "error": "'otio' is not a timeline file (.otio)"}, status=400)
+            if not path_access.is_allowed(otio):
+                return web.json_response({"ok": False, "error": path_access.refusal(otio)}, status=403)
+            ops = body.get("ops")
+            if ops is not None and not isinstance(ops, list):
+                return web.json_response({"ok": False, "error": "'ops' is a list of changes"}, status=400)
+            ops = ops or []
+            if len(ops) > timeline_io.MAX_OPS:
+                return web.json_response({"ok": False, "error": f"at most {timeline_io.MAX_OPS} changes at once"},
+                                         status=400)
+            files = []
+            for n, op in enumerate(ops, 1):
+                if isinstance(op, dict) and str(op.get("op") or "").lower() == "add":
+                    raw = op.get("file")
+                    if not isinstance(raw, str) or not raw.strip() or len(raw) > 2000:
+                        return web.json_response({"ok": False, "error": f"change {n} (add) needs 'file' (a path)"},
+                                                 status=400)
+                    path = os.path.abspath(raw.strip())
+                    if not path_access.may_serve(path):
+                        return web.json_response({"ok": False, "error": path_access.serve_refusal(path)}, status=403)
+                    if not os.path.isfile(path):
+                        return web.json_response({"ok": False, "error": f"{os.path.basename(path)} does not exist"},
+                                                 status=400)
+                    op["file"] = path.replace("\\", "/")
+                    files.append(op["file"])
+            import datetime
+            stamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+            def _work():
+                if not os.path.isfile(otio):
+                    raise FileNotFoundError(f"{os.path.basename(otio)} does not exist")
+                if not ops:
+                    return timeline_io.read_editable(otio), []
+                durations = {}
+                for f in files:
+                    try:
+                        from . import timeline_media
+                        durations[f] = float(timeline_media.probe(f).get("duration") or 0)
+                    except Exception:  # noqa: BLE001 - PyAV missing or unreadable: the op must give 'length'
+                        pass
+                return timeline_io.change(otio, ops, stamp, path_access.is_allowed, durations)
+            try:
+                edit, said = await asyncio.get_running_loop().run_in_executor(None, _work)
+            except FileNotFoundError as exc:
+                return web.json_response({"ok": False, "error": str(exc)}, status=404)
+            except ValueError as exc:
+                return web.json_response({"ok": False, "error": f"not changed: {exc}"}, status=422)
+            except OSError as exc:
+                return web.json_response({"ok": False, "error": f"not saved: {exc}"}, status=500)
+            out = {"ok": True, "otio": otio, "edit": edit, "length": round(timeline_io.edit_length(edit), 4),
+                   "saved": bool(ops), "said": said, "pushed": False}
+            if ops:
+                try:
+                    PromptServer.instance.send_sync("bepic.edit.changed", {
+                        "otio": otio, "edit": edit, "file": os.path.basename(otio), "said": said,
+                        "client_id": client_id})
+                    out["pushed"] = True
+                except Exception as exc:  # noqa: BLE001 - no page may be listening; the file is saved all the same
+                    out["notes"] = [f"the pages could not be told ({exc})"]
+            return web.json_response(out, headers={"Cache-Control": "no-cache"})
+
         async def _bepic_timeline_probe(request):
             """How long files are and what they hold: ``{"info": {path: {...} | {"error"}}}``.
 
@@ -2861,6 +2952,8 @@ try:
         _safe_add("POST", "/api/bepic/timeline_save_as", _bepic_timeline_save_as)
         _safe_add("POST", "/bepic/take", _bepic_take)
         _safe_add("POST", "/api/bepic/take", _bepic_take)
+        _safe_add("POST", "/bepic/cut", _bepic_cut)
+        _safe_add("POST", "/api/bepic/cut", _bepic_cut)
         _safe_add("POST", "/bepic/timeline_render", _bepic_timeline_render)
         _safe_add("POST", "/bepic/timeline_solid", _bepic_timeline_solid)
         _safe_add("GET", "/bepic/timeline_peaks", _bepic_timeline_peaks)
