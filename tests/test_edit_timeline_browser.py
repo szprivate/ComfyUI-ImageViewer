@@ -2664,5 +2664,107 @@ class EditTimelineBrowserTests(unittest.TestCase):
         self.assertTrue(sent["tracks"][0]["clips"][0]["disabled"])
         self.assertEqual(self.errors, [])
 
+    # ── keyframes ──
+
+    ROW = """(label) => [...__panel.editInspectorPanel.querySelectorAll('.insp-row')].find(r => r.querySelector('.insp-label').textContent === label)"""
+    DIAMOND = "(label) => (" + ROW + ")(label).querySelector('.insp-diamond').dataset.state"
+    CLICK = "([label, cls]) => (" + ROW + ")(label).querySelector(cls).click()"
+    BOX = "([label, cls]) => { const e = (" + ROW + ")(label).querySelector(cls); e.scrollIntoView({ block: 'center' }); const b = e.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]; }"
+    OPKEYS = "() => (__panel._editTlCut.clips[0].fx && __panel._editTlCut.clips[0].fx.keys && __panel._editTlCut.clips[0].fx.keys.op) || []"
+    KEYMARKS = "() => [...__panel._editTlUi.rows.querySelectorAll(\"[data-key='V1:0'] .edit-keymark\")].map(m => Number(m.dataset.t))"
+    KEYMARK = "(k) => { const m = [...__panel._editTlUi.rows.querySelectorAll(\"[data-key='V1:0'] .edit-keymark\")][k].getBoundingClientRect(); return [m.left + m.width / 2, m.top + m.height / 2]; }"
+
+    def key_page(self):
+        pg = self.page()
+        pg.evaluate("() => { const P = __panel; P._editTlSel = { kind: 'clip', i: 0 }; P._editInspTab = 'video'; P.setFrame(24); P.editTlRefresh(); }")
+        return pg
+
+    def test_21_keyframes_in_the_inspector_auto_key_jump_ease_and_the_preview(self):
+        pg = self.key_page()
+        self.assertEqual(pg.evaluate(self.DIAMOND, "Opacity"), "none")
+        self.assertEqual(pg.evaluate(self.DIAMOND, "Zoom"), "none")
+        n = self.undo_len(pg)
+        pg.evaluate(self.CLICK, ["Opacity", ".insp-diamond"])            # a key at 1 s into the clip, its value there
+        self.assertEqual(pg.evaluate(self.OPKEYS), [{"t": 1, "v": 1}])
+        self.assertEqual(pg.evaluate(self.DIAMOND, "Opacity"), "on")
+        self.assertEqual(self.undo_len(pg), n + 1)
+        # Elsewhere: lit, not filled; a change there makes a key by itself (auto-key).
+        pg.evaluate("() => __panel.setFrame(72)")
+        self.assertEqual(pg.evaluate(self.DIAMOND, "Opacity"), "has")
+        pg.evaluate("() => { const i = (" + self.ROW + ")('Opacity').querySelector('input.insp-num'); i.value = '40'; i.dispatchEvent(new Event('change')); }")
+        self.assertEqual(pg.evaluate(self.OPKEYS), [{"t": 1, "v": 1}, {"t": 3, "v": 0.4}])
+        self.assertEqual(pg.evaluate(self.DIAMOND, "Opacity"), "on")
+        # The preview draws the animation, frame by frame.
+        op = "(f) => { __panel.setFrame(f); const s = __panel.videoBase.style.opacity; return s === '' ? 1 : Number(s); }"
+        self.assertAlmostEqual(pg.evaluate(op, 72), 0.4, places=2)
+        self.assertAlmostEqual(pg.evaluate(op, 48), 1 - 0.6 * (1 + 0.5 / 24) / 2, places=2)
+        self.assertAlmostEqual(pg.evaluate(op, 12), 1.0, places=2)
+        # The Inspector shows the number at the playhead.
+        pg.evaluate("() => __panel.setFrame(48)")
+        shown = pg.evaluate("() => Number((" + self.ROW + ")('Opacity').querySelector('input.insp-num').value)")
+        self.assertAlmostEqual(shown, 70, delta=0.6)
+        # The arrows go from key to key.
+        pg.evaluate(self.CLICK, ["Opacity", ".insp-keybtn.prev"])
+        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), 24)
+        pg.evaluate(self.CLICK, ["Opacity", ".insp-keybtn.next"])
+        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), 72)
+        # Right-click the diamond: how it goes on - ease in.
+        pg.evaluate("() => __panel.setFrame(24)")
+        pg.mouse.click(*pg.evaluate(self.BOX, ["Opacity", ".insp-diamond"]), button="right")
+        pg.locator(".previz-menu-item", has_text="Ease in").first.click()
+        self.assertEqual(pg.evaluate(self.OPKEYS)[0], {"t": 1, "v": 1, "i": "in"})
+        self.assertAlmostEqual(pg.evaluate(op, 48), 1 - 0.6 * ((1 + 0.5 / 24) / 2) ** 2, places=2)
+        # The diamond again takes the key away (undone), the row's reset takes all its keys.
+        pg.evaluate("() => __panel.setFrame(72)")
+        pg.evaluate(self.CLICK, ["Opacity", ".insp-diamond"])
+        self.assertEqual(len(pg.evaluate(self.OPKEYS)), 1)
+        pg.evaluate("() => __panel.editTlUndo()")
+        self.assertEqual(len(pg.evaluate(self.OPKEYS)), 2)
+        pg.evaluate(self.CLICK, ["Opacity", ".insp-reset"])
+        self.assertEqual(pg.evaluate(self.OPKEYS), [])
+        self.assertEqual(self.errors, [])
+
+    def test_21_keyframe_marks_on_the_clip_drag_delete_ease_and_the_blade(self):
+        pg = self.key_page()
+        pg.evaluate("""() => { const P = __panel; const c = P._editTlCut; P._editTlSel = { kind: 'clip', i: 0 };
+            P._editTlApply({ ...c, clips: c.clips.map((x, i) => i ? x : { ...x, fx: { keys: { op: [{ t: 1, v: 0 }, { t: 3, v: 1 }], zx: [{ t: 3, v: 2 }] } } }) }); P.setFrame(250); }""")
+        self.assertEqual(pg.evaluate(self.KEYMARKS), [1, 3])
+        pps = pg.evaluate(WHERE, [1.0, "V1"])[0] - pg.evaluate(WHERE, [0.0, "V1"])[0]
+        # Dragged from 3 s to 2 s of the clip: every key of that moment moves (onto a frame), one undo step.
+        n = self.undo_len(pg)
+        x0, y = pg.evaluate(self.KEYMARK, 1)
+        self.drag(pg, x0, y, x0 - pps, y)
+        self.assertEqual(pg.evaluate(self.KEYMARKS), [1, 2])
+        self.assertEqual(pg.evaluate("() => __panel._editTlCut.clips[0].fx.keys.zx"), [{"t": 2, "v": 2}])
+        self.assertEqual(self.undo_len(pg), n + 1)
+        # Right-click: hold; click + Del takes the moment's keys away, not the clip.
+        x1, y1 = pg.evaluate(self.KEYMARK, 0)
+        pg.mouse.click(x1, y1, button="right")
+        pg.locator(".previz-menu-item", has_text="Hold").first.click()
+        self.assertEqual(pg.evaluate(self.OPKEYS)[0], {"t": 1, "v": 0, "i": "hold"})
+        pg.mouse.click(x1, y1)
+        pg.keyboard.press("Delete")
+        self.assertEqual(pg.evaluate(self.KEYMARKS), [2])
+        self.assertEqual(len(self.cut(pg)["v1"]), 3, "the clip stays")
+        # The blade through it: the keys divided, a key at the cut on both pieces.
+        pg.evaluate("() => __panel.setFrame(12)")
+        pg.keyboard.press("Control+b")
+        self.assertEqual(pg.evaluate("() => [__panel._editTlCut.clips[0].fx.keys.op, __panel._editTlCut.clips[1].fx.keys.op]"),
+                         [[{"t": 0.5, "v": 1}], [{"t": 0, "v": 1}, {"t": 1.5, "v": 1}]])
+        self.assertEqual(self.errors, [])
+
+    def test_21_popped_out_the_diamond_and_the_marks(self):
+        pg = self.key_page()
+        with pg.context.expect_page() as pop:
+            pg.evaluate("() => window.__panel.toggleUndock()")
+        win = pop.value
+        win.wait_for_load_state()
+        pg.wait_for_function("() => __panel._editTlUi && __panel._editTlUi.body.ownerDocument !== document", timeout=10000)
+        pg.evaluate("() => { const P = __panel; P._editTlSel = { kind: 'clip', i: 0 }; P._editInspTab = 'video'; P.setFrame(24); P.editTlRefresh(); }")
+        win.mouse.click(*pg.evaluate(self.BOX, ["Rotation Angle", ".insp-diamond"]))
+        self.assertEqual(pg.evaluate("() => __panel._editTlCut.clips[0].fx.keys.rot"), [{"t": 1, "v": 0}])
+        self.assertEqual(pg.evaluate(self.KEYMARKS), [1])
+        self.assertEqual(self.errors, [])
+
 if __name__ == "__main__":
     unittest.main()

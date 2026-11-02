@@ -136,7 +136,8 @@ export const EditPlayMixin = {
         const live = this._editFxLive;
         for (const el of this._editPlayLayers()) {
             const clip = el._epClip;
-            const fx = clip ? D.clipFx(live && live.clip === clip ? { fx: live.fx } : clip) : null;
+            // Keyframes: the clip's look at this moment of its own time (clipFx(clip, u)).
+            const fx = clip ? D.clipFx(live && live.clip === clip ? { fx: live.fx } : clip, this._editPlayU(el)) : null;
             let transform = base, clipPath = "";
             if (fx) {
                 const w = el.videoWidth || el.naturalWidth, h = el.videoHeight || el.naturalHeight;
@@ -156,11 +157,22 @@ export const EditPlayMixin = {
         this._editPlayTitles();
     },
 
-    /** A clip's opacity as it is drawn (1 for a clip as it comes), a live Inspector drag included. */
-    _editPlayOpacity(clip) {
+    /** A clip's opacity as it is drawn at clip time `u` (1 for a clip as it comes), a live Inspector drag included. */
+    _editPlayOpacity(clip, u = 0) {
         const live = this._editFxLive;
-        const fx = clip ? D.clipFx(live && live.clip === clip ? { fx: live.fx } : clip) : null;
+        const fx = clip ? D.clipFx(live && live.clip === clip ? { fx: live.fx } : clip, u) : null;
         return fx ? fx.op : 1;
+    },
+
+    /** The moment of the film on screen (the clock while playing, else the frame's middle). */
+    _editPlayT() {
+        const ep = this._ep;
+        return ep && ep.tNow != null ? ep.tNow : ((this.currentFrame || 0) + 0.5) / this.editPlayFps();
+    },
+
+    /** How far into its clip the layer `el` is now (its keyframes' time). */
+    _editPlayU(el) {
+        return Math.max(0, this._editPlayT() - (el && el._epOrigin != null ? el._epOrigin : 0));
     },
 
     /**
@@ -308,6 +320,7 @@ export const EditPlayMixin = {
         if (!at) { ep.at = null; ep.key = ""; this._editPlayBlank(); this._editPlayTitles(); return; }
         const clip = at.clip;
         ep.t = at.t;
+        ep.tNow = at.t;
         ep.wall = this._editPlayNow();
         const slots = this._editPlaySlots();
         if (!slots) return;
@@ -340,6 +353,7 @@ export const EditPlayMixin = {
             // <img> before this one takes the first.
             const under = this._editPlayUnder(at, this.imgBase);
             this.imgBase._epClip = clip;
+            this.imgBase._epOrigin = at.origin;
             for (const v of slots) {
                 v._epWait = (v._epWait || 0) + 1;
                 if (v !== under) { try { v.pause(); } catch (_) {} }
@@ -379,6 +393,7 @@ export const EditPlayMixin = {
         }
         const under = this._editPlayUnder(at, v);
         v._epClip = clip;
+        v._epOrigin = at.origin;
         this._editPlayFront(v, v === mine ? other : mine);
         this._editPlayMix(at);
         if (this.isPlaying && !ep.stepped) {
@@ -443,6 +458,7 @@ export const EditPlayMixin = {
                 } catch (_) {}
             }
             el._epClip = u.clip;
+            el._epOrigin = u.origin;
             el.style.opacity = "1";
             el.style.zIndex = "1";
             main.style.zIndex = "2";
@@ -471,16 +487,18 @@ export const EditPlayMixin = {
         const main = ep.still ? this.imgBase : this.videoBase;
         const under = ep.underEl;
         const a = under && !at.over ? Math.max(0, Math.min(1, Number(at.mix) || 0)) : 1;
-        const own = this._editPlayOpacity(at.clip);
+        const now = this._editPlayT();
+        const u = Math.max(0, now - (at.origin || 0)), uu = at.under ? Math.max(0, now - (at.under.origin || 0)) : 0;
+        const own = this._editPlayOpacity(at.clip, u);
         const show = Math.round(a * own * 1000) / 1000;
         if (main) main.style.opacity = show === 1 && !under ? "" : String(show);
-        if (under) under.style.opacity = String(Math.round(this._editPlayOpacity(at.under.clip) * 1000) / 1000);
+        if (under) under.style.opacity = String(Math.round(this._editPlayOpacity(at.under.clip, uu) * 1000) / 1000);
         // A clip whose sound was split off (`mute`) is silent: its sound clip plays, at its own place.
         // The bar's speaker off (EditAudioMixin): everything at 0.
         const gain = this._editAudioGain ? this._editAudioGain() : 1;
-        const loud = (clip) => D.clipVolume(clip) * gain;
-        try { if (!ep.still && this.videoBase) this.videoBase.volume = loud(at.clip) * a; } catch (_) {}
-        try { if (under && under.tagName === "VIDEO") under.volume = at.over ? 0 : loud(at.under.clip) * (1 - a); } catch (_) {}
+        const loud = (clip, t) => D.clipVolume(clip, t) * gain;
+        try { if (!ep.still && this.videoBase) this.videoBase.volume = loud(at.clip, u) * a; } catch (_) {}
+        try { if (under && under.tagName === "VIDEO") under.volume = at.over ? 0 : loud(at.under.clip, uu) * (1 - a); } catch (_) {}
     },
 
     // The texts that stand on the picture now. Their layer is laid over the
@@ -621,6 +639,7 @@ export const EditPlayMixin = {
         if (!ep.bed) ep.bed = [];
         ep.sndAt = this._editPlayNow();
         const items = cut ? D.soundItems(cut, this._editPlayLive()) : [];
+        ep.keyedSound = items.some((it) => it.clip && D.keysOf(it.clip, "vol").length);
         const doc = (this.container && this.container.ownerDocument) || document;
         const fps = this.editPlayFps();
         const rate = Math.max(0.0625, Math.min(16, (this.fps || fps) / fps));
@@ -641,7 +660,8 @@ export const EditPlayMixin = {
                 const want = clip ? D.srcLocal(clip, u) : item.in + u;
                 const speed = clip ? D.speedOf(clip) : 1;
                 if (a.paused || Math.abs((a.currentTime || 0) - want) > 0.15 * Math.max(1, speed)) a.currentTime = want;
-                a.volume = Math.max(0, Math.min(1, item.volume)) * (this._editAudioGain ? this._editAudioGain() : 1);
+                // Volume keys: the sound clip's own time (clipVolume(clip, u)).
+                a.volume = Math.max(0, Math.min(1, clip ? D.clipVolume(clip, u) : item.volume)) * (this._editAudioGain ? this._editAudioGain() : 1);
                 a.playbackRate = Math.max(0.0625, Math.min(16, rate * speed));
                 if ("preservesPitch" in a) a.preservesPitch = speed === 1;
                 a.muted = speed < 0.25 || speed > 4;
@@ -757,12 +777,15 @@ export const EditPlayMixin = {
         } else if (t >= at.end - 1e-4) {
             t = at.end;
             this._editPlayShow(t, false);                // the next clip's turn
-        } else if (this._editPlayNow() - (ep.sndAt || 0) > 200) {
-            this._editPlaySounds(t, true);               // a sound clip whose moment has come
+        } else if (this._editPlayNow() - (ep.sndAt || 0) > 200 || ep.keyedSound) {
+            this._editPlaySounds(t, true);               // a sound clip whose moment has come (keyed volumes: every frame)
         }
+        ep.tNow = t;
         if (ep.at && ep.at.under && !ep.at.over) {
             const now = ep.at;
             this._editPlayMix({ ...now, mix: (t - now.mixStart) / now.mixLen });
+        } else if (ep.at && (D.hasKeys(ep.at.clip) || (ep.at.under && D.hasKeys(ep.at.under.clip)))) {
+            this._editPlayMirror();                       // keyframes: the look and the loudness of this moment
         }
         const frame = Math.max(min, Math.min(max, Math.floor(t * fps + 1e-6)));
         if (frame === this.currentFrame) return;

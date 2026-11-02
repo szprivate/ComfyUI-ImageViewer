@@ -74,21 +74,110 @@ export function cleanFx(given) {
         if (held !== neutral) out[key] = held;
     }
     for (const key of FX_FLAGS) if (given[key]) out[key] = true;
+    const keys = cleanKeys(given.keys);
+    if (Object.keys(keys).length) out.keys = keys;
     return out;
 }
 
-/** A clip's effect with every key present, as its numbers stand (sections that are off included). */
-export function rawFx(clip) {
+// ── keyframes ────────────────────────────────────────────────────────────────
+//
+// Every number of the Inspector can be animated: the FX keys and the volume
+// ("vol"). `fx.keys = { param: [{ t, v, i }] }` - `t` seconds into the CLIP (clip
+// time: from the clip's first frame on the timeline, whatever its speed, loop or
+// slip - so a slip keeps them where they are on the timeline, and a retime or a
+// loop does not stretch them), `v` the value there, `i` how it goes on to the
+// next key: absent "linear", "in" (ease in), "out" (ease out), "inout", "hold".
+// A param with keys ignores its static number. The flips are switches and are
+// not keyed; the speed is one number per clip and is not keyed either.
+// timeline_io.clean_fx / timeline_render.key_value are the same in Python - a
+// change to one is a change to the other (tests/test_edit_disabled_keys.py).
+
+export const KEY_PARAMS = [...Object.keys(FX), "vol"];
+export const INTERPS = ["linear", "in", "out", "inout", "hold"];
+const KEY_RANGE = (p) => (p === "vol" ? [0, 1] : [FX[p][1], FX[p][2]]);
+
+/** Keys held to what they may be: known params, finite, sorted, one per moment (the last wins), at most 1000 each. */
+export function cleanKeys(given) {
+    const out = {};
+    if (!given || typeof given !== "object") return out;
+    for (const p of KEY_PARAMS) {
+        const list = Array.isArray(given[p]) ? given[p] : null;
+        if (!list) continue;
+        const [lo, hi] = KEY_RANGE(p);
+        const by = new Map();
+        for (const k of list) {
+            const t = Number(k && k.t), v = Number(k && k.v);
+            if (!Number.isFinite(t) || !Number.isFinite(v) || t < 0) continue;
+            const key = { t: Math.round(t * 10000) / 10000, v: Math.round(Math.max(lo, Math.min(hi, v)) * 100000) / 100000 };
+            if (INTERPS.includes(k.i) && k.i !== "linear") key.i = k.i;
+            by.set(key.t, key);
+        }
+        const keys = [...by.values()].sort((a, b) => a.t - b.t).slice(0, 1000);
+        if (keys.length) out[p] = keys;
+    }
+    return out;
+}
+
+/** How far along from one key to the next a share `p` (0..1) is, by the first key's way of going on. */
+export function easeShare(p, how) {
+    const x = Math.max(0, Math.min(1, p));
+    if (how === "hold") return 0;
+    if (how === "in") return x * x;
+    if (how === "out") return 1 - (1 - x) * (1 - x);
+    if (how === "inout") return x * x * (3 - 2 * x);
+    return x;
+}
+
+/** The value of keys `list` at clip time `u`: before the first its value, after the last its value. */
+export function keyValue(list, u) {
+    if (!list || !list.length) return undefined;
+    const t = num(u);
+    if (t <= list[0].t) return list[0].v;
+    const last = list[list.length - 1];
+    if (t >= last.t) return last.v;
+    let k = 0;
+    while (k + 1 < list.length && list[k + 1].t <= t) k += 1;
+    const a = list[k], b = list[k + 1];
+    const f = easeShare((t - a.t) / Math.max(1e-9, b.t - a.t), a.i);
+    return a.v + (b.v - a.v) * f;
+}
+
+/** The keys of a clip's param (an empty list for none). */
+export function keysOf(c, p) {
+    const k = c && c.fx && c.fx.keys;
+    return (k && Array.isArray(k[p]) && k[p]) || [];
+}
+
+/** Has the clip any keys? */
+export function hasKeys(c) {
+    const k = c && c.fx && c.fx.keys;
+    return !!k && Object.keys(k).some((p) => Array.isArray(k[p]) && k[p].length);
+}
+
+/** A param's value at clip time `u`: from its keys, else its static number (vol: the clip's volume). */
+export function paramAt(c, p, u) {
+    const list = keysOf(c, p);
+    if (list.length) return keyValue(list, u);
+    if (p === "vol") return Math.max(0, Math.min(1, c && c.volume != null ? num(c.volume, 1) : 1));
+    const fx = cleanFx(c && c.fx);
+    return fx[p] === undefined ? FX[p][0] : fx[p];
+}
+
+/** A clip's effect with every key present, as its numbers stand at clip time `u` (sections that are off included). */
+export function rawFx(clip, u = 0) {
     const fx = cleanFx(clip && clip.fx);
     const out = {};
-    for (const [key, [neutral]] of Object.entries(FX)) out[key] = fx[key] === undefined ? neutral : fx[key];
+    for (const [key, [neutral]] of Object.entries(FX)) {
+        const list = fx.keys && fx.keys[key];
+        out[key] = list ? keyValue(list, u) : (fx[key] === undefined ? neutral : fx[key]);
+    }
     for (const key of FX_FLAGS) out[key] = !!fx[key];
     return out;
 }
 
-/** A clip's effect as it is DRAWN - sections that are switched off at neutral - or null for a clip drawn as it comes. */
-export function clipFx(clip) {
-    const fx = rawFx(clip);
+/** A clip's effect as it is DRAWN at clip time `u` - sections that are switched off at neutral - or null for a clip drawn as it comes. */
+export function clipFx(clip, u = 0) {
+    const fx = rawFx(clip, u);
     for (const [section, keys] of Object.entries(FX_SECTIONS)) {
         if (!fx[FX_OFF[section]]) continue;
         for (const key of keys) fx[key] = FX[key] ? FX[key][0] : false;
@@ -945,7 +1034,7 @@ export function pictureAt(cut, seconds, live) {
     }
     found = stack[0] || null;
     if (found === main && main && main.dissolveEnd) next = Math.min(next, main.dissolveEnd);   // the moment the dissolve is over
-    if (found && found !== main && clipFx(found.clip) && stack[1]) {
+    if (found && found !== main && clipFx(found.clip, t - found.origin) && stack[1]) {
         // It does not cover the frame: what is beneath it shows.
         const b = stack[1];
         found.under = { clip: b.clip, key: b.key, origin: b.origin, local: srcLocal(b.clip, t - b.origin) };
@@ -1020,7 +1109,7 @@ export function splitClip(cut, sel, seconds) {
         const b = { ...a, in: round(num(a.in) + local * speedOf(a)), length: round(num(a.length) - local), transition: 0 };
         delete b.gap;
         delete b.link; delete b.unlinked;            // splitWithLink pairs it again
-        if (a.fx) b.fx = { ...a.fx };
+        if (a.fx) [a.fx, b.fx] = splitFx(a.fx, local);
         a.length = local;
         next.clips.splice(i + 1, 0, b);
         return { cut: settle(next), sel: { kind: "clip", i: i + 1 } };
@@ -1033,7 +1122,7 @@ export function splitClip(cut, sel, seconds) {
         if (local < MIN_CLIP - 1e-6 || local > num(a.length) - MIN_CLIP + 1e-6) return null;
         const b = { ...a, at: round(num(a.at) + local), in: round(num(a.in) + local * speedOf(a)), length: round(num(a.length) - local) };
         delete b.link; delete b.unlinked;
-        if (a.fx) b.fx = { ...a.fx };
+        if (a.fx) [a.fx, b.fx] = splitFx(a.fx, local);
         a.length = local;
         k.clips.splice(sel.i + 1, 0, b);
         return { cut: settle(next), sel: { kind: "tclip", track: sel.track, i: sel.i + 1 } };
@@ -1410,6 +1499,8 @@ export function agentLoses(cut) {
     if (((cut && cut.clips) || []).some((c) => num(c.gap) > 0)) out.push("the gaps on V1 (closed up: the clips after one move up)");
     if (((cut && cut.clips) || []).some((c) => c.mute)) out.push("sound split off its picture (heard with its picture again, J/L offsets lost)");
     if (((cut && cut.clips) || []).some((c) => c.disabled)) out.push("disabled clips (agentY plays them)");
+    const anyKeys = [...((cut && cut.clips) || []), ...(((cut && cut.tracks) || []).flatMap((k) => k.clips || []))].some((c) => hasKeys(c));
+    if (anyKeys) out.push("keyframes (agentY plays the clips without them)");
     const all = [...((cut && cut.clips) || []), ...((cut && cut.tracks) || []).flatMap((k) => k.clips || [])];
     if (all.some((c) => Object.keys(cleanFx(c.fx)).length)) out.push("transforms, crops and opacity (the Inspector's Video tab)");
     if (all.some((c) => speedOf(c) !== 1)) out.push("speed changes (retimed clips come back at 100 %)");
@@ -2015,7 +2106,7 @@ export function overwriteV1(cut, clip, at) {
             headCut(tail, b - s0);
             tail.length = round(e0 - b);
             if (s0 < a - 1e-6) { delete tail.link; delete tail.unlinked; }   // a piece of a clip cut in two has no partner
-            if (c0.fx) tail.fx = { ...c0.fx };
+            if (c0.fx) tail.fx = splitFx(c0.fx, b - s0)[1];
             placed.push({ c: tail, s: b });
         }
     });
@@ -2232,8 +2323,9 @@ export function linkPartner(cut, sel, linkedOnly = true) {
 }
 
 /** A clip's loudness as it is heard: 0 when its sound was split off it (`mute`). */
-export function clipVolume(c) {
+export function clipVolume(c, u = 0) {
     if (!c || c.mute) return 0;
+    if (keysOf(c, "vol").length) return Math.max(0, Math.min(1, keyValue(keysOf(c, "vol"), u)));
     return Math.max(0, Math.min(1, c.volume != null ? num(c.volume, 1) : 1));
 }
 
@@ -2277,6 +2369,14 @@ export function unlinkClip(cut, sel) {
                     volume: num(v.volume, 1), link: id, unlinked: true };
     if (v.speed) sound.speed = v.speed;
     if (loopOf(v)) { sound.loop = v.loop; sound.span = v.span; }
+    // Volume keys belong to the sound: they go with it (the picture is muted now).
+    if (keysOf(v, "vol").length) {
+        sound.fx = { keys: { vol: keysOf(v, "vol").map((k) => ({ ...k })) } };
+        const fx = cleanFx(v.fx);
+        delete fx.keys.vol;
+        if (!Object.keys(fx.keys).length) delete fx.keys;
+        v.fx = fx;
+    }
     track.clips.push(sound);
     Object.assign(v, { link: id, unlinked: true, mute: true });
     return { cut: settle(next), sel: { kind: "tclip", track: track.id, i: track.clips.length - 1 } };
@@ -2699,7 +2799,7 @@ export function overwriteTrack(cut, id, clip, at) {
             tail.length = round(e0 - b);
             tail.at = b;
             if (s0 < a - 1e-6) { delete tail.link; delete tail.unlinked; }
-            if (c0.fx) tail.fx = { ...c0.fx };
+            if (c0.fx) tail.fx = splitFx(c0.fx, b - s0)[1];
             kept.push(tail);
         }
     }
@@ -3109,4 +3209,158 @@ export function toggleDisabled(cut, list) {
     const next = copy(cut);
     for (const s of items) { const c = clipOf(next, s); if (off) c.disabled = true; else delete c.disabled; }
     return { cut: settle(next), off, count: items.length };
+}
+
+// ── keyframe edits (each returns a new cut: one undo step) ───────────────────
+
+/**
+ * A clip's effect `fx` cut in two at clip time `at`: [the first piece's, the
+ * second's], keys divided - the second's moved to its own clip time - with a key
+ * at the cut on each side where a param is animated (its value there), so the
+ * look does not jump.
+ */
+export function splitFx(fx, at) {
+    const clean = cleanFx(fx);
+    const a = { ...clean }, b = { ...clean };
+    delete a.keys; delete b.keys;
+    if (clean.keys) {
+        const ka = {}, kb = {};
+        const cut = round(num(at));
+        for (const [p, list] of Object.entries(clean.keys)) {
+            const v = keyValue(list, cut);
+            const before = list.filter((k) => k.t < cut - 1e-6).map((k) => ({ ...k }));
+            const after = list.filter((k) => k.t > cut + 1e-6).map((k) => ({ ...k, t: round(k.t - cut) }));
+            const on = list.find((k) => Math.abs(k.t - cut) <= 1e-6);
+            const prev = before.length ? before[before.length - 1] : null;
+            const how = on && on.i ? on.i : prev && prev.i ? prev.i : "";
+            ka[p] = [...before, { t: cut, v }];
+            kb[p] = [{ t: 0, v, ...(how ? { i: how } : {}) }, ...after];
+        }
+        a.keys = cleanKeys(ka);
+        b.keys = cleanKeys(kb);
+    }
+    return [a, b];
+}
+
+function withKeys(cut, sel, change) {
+    const next = copy(cut);
+    const c = clipOf(next, sel);
+    if (!c) return next;
+    const fx = cleanFx(c.fx);
+    const keys = fx.keys ? JSON.parse(JSON.stringify(fx.keys)) : {};
+    change(keys, c);
+    fx.keys = keys;
+    c.fx = cleanFx(fx);
+    return next;
+}
+
+/** Keys at clip time `u` for the params of `values` ({ param: value }): added, or their values changed. */
+export function setKeys(cut, sel, values, u) {
+    const t = round(Math.max(0, num(u)));
+    return withKeys(cut, sel, (keys) => {
+        for (const [p, v] of Object.entries(values)) {
+            if (!KEY_PARAMS.includes(p)) continue;
+            const was = (keys[p] || []).find((k) => Math.abs(k.t - t) <= 1e-6);
+            const list = (keys[p] || []).filter((k) => Math.abs(k.t - t) > 1e-6);
+            list.push({ t, v: num(v), ...(was && was.i ? { i: was.i } : {}) });
+            keys[p] = list;
+        }
+    });
+}
+
+/** The keys of `params` at clip time `u` taken out. */
+export function removeKeys(cut, sel, params, u) {
+    return withKeys(cut, sel, (keys) => {
+        for (const p of params) if (keys[p]) keys[p] = keys[p].filter((k) => Math.abs(k.t - num(u)) > 1e-6);
+    });
+}
+
+/** Does every one of `params` have a key at clip time `u`? */
+export function keyedAt(c, params, u) {
+    return params.every((p) => keysOf(c, p).some((k) => Math.abs(k.t - num(u)) <= 1e-6));
+}
+
+/**
+ * The Inspector's diamond: every param of the row keyed at `u` - their keys go;
+ * else a key for each at `u`, with the value it has there.
+ */
+export function toggleKeys(cut, sel, params, u) {
+    const c = clipOf(cut, sel);
+    if (!c) return copy(cut);
+    if (keyedAt(c, params, u)) return removeKeys(cut, sel, params, u);
+    const values = {};
+    for (const p of params) values[p] = paramAt(c, p, u);
+    return setKeys(cut, sel, values, u);
+}
+
+/**
+ * A value changed in the Inspector, as Resolve's auto-key once a param is
+ * animated: a param with keys gets a key at the playhead's clip time `u` (made
+ * or changed), one without keys its static number. `patch` is { param: value }
+ * (FX keys and flips; "vol" for the volume).
+ */
+export function autoKey(cut, sel, patch, u) {
+    const c = clipOf(cut, sel);
+    if (!c) return copy(cut);
+    const keyed = {}, plain = {};
+    for (const [p, v] of Object.entries(patch)) (KEY_PARAMS.includes(p) && keysOf(c, p).length ? keyed : plain)[p] = v;
+    let next = cut;
+    if (Object.keys(keyed).length) next = setKeys(next, sel, keyed, u);
+    const vol = plain.vol;
+    delete plain.vol;
+    if (Object.keys(plain).length) next = setClipFx(next, sel, plain);
+    if (vol !== undefined) next = setClipProps(next, sel, { volume: vol });
+    return next === cut ? copy(cut) : next;
+}
+
+/** A row's reset: its keys gone, its static numbers neutral. */
+export function clearKeys(cut, sel, params) {
+    let next = withKeys(cut, sel, (keys) => { for (const p of params) delete keys[p]; });
+    const fxs = params.filter((p) => FX[p]);
+    if (fxs.length) next = resetClipFx(next, sel, fxs);
+    if (params.includes("vol")) next = setClipProps(next, sel, { volume: 1 });
+    return next;
+}
+
+/** Every moment the clip has a key at (any param, or only `params`), in order. */
+export function keyTimes(c, params) {
+    const set = new Set();
+    for (const p of params || KEY_PARAMS) for (const k of keysOf(c, p)) set.add(k.t);
+    return [...set].sort((a, b) => a - b);
+}
+
+/** The key moment before (`dir` -1) or after (1) clip time `u`, for `params`; null for none. */
+export function nextKeyTime(c, params, u, dir) {
+    const times = keyTimes(c, params);
+    if (dir < 0) { const b = times.filter((t) => t < num(u) - 1e-6); return b.length ? b[b.length - 1] : null; }
+    const a = times.find((t) => t > num(u) + 1e-6);
+    return a === undefined ? null : a;
+}
+
+/** Every key at clip time `from` (of every param) moved to `to` - over a key there. */
+export function moveKeysAt(cut, sel, from, to) {
+    const t = round(Math.max(0, num(to)));
+    return withKeys(cut, sel, (keys) => {
+        for (const p of Object.keys(keys)) {
+            const mine = keys[p].filter((k) => Math.abs(k.t - num(from)) <= 1e-6);
+            if (!mine.length) continue;
+            keys[p] = [...keys[p].filter((k) => Math.abs(k.t - num(from)) > 1e-6 && Math.abs(k.t - t) > 1e-6), ...mine.map((k) => ({ ...k, t }))];
+        }
+    });
+}
+
+/** How the keys at clip time `u` (of `params`, or all) go on to the next: "linear", "in", "out", "inout", "hold". */
+export function setKeyInterp(cut, sel, params, u, how) {
+    return withKeys(cut, sel, (keys) => {
+        for (const p of params || Object.keys(keys)) {
+            for (const k of keys[p] || []) if (Math.abs(k.t - num(u)) <= 1e-6) { if (how && how !== "linear") k.i = how; else delete k.i; }
+        }
+    });
+}
+
+/** The key's way of going on at clip time `u` (of `params`, or any): "linear" when they differ or none. */
+export function keyInterpAt(c, params, u) {
+    const hows = new Set();
+    for (const p of params || KEY_PARAMS) for (const k of keysOf(c, p)) if (Math.abs(k.t - num(u)) <= 1e-6) hows.add(k.i || "linear");
+    return hows.size === 1 ? [...hows][0] : "linear";
 }

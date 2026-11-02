@@ -42,7 +42,7 @@ from fractions import Fraction
 from urllib.parse import quote
 
 from . import timeline_io
-from .timeline_render import effective, is_still
+from .timeline_render import animated, effective, is_still, key_value
 
 CHUNK = 4 * 1024 * 1024
 MAX_PIECES = 20000
@@ -215,7 +215,7 @@ def _clip_pieces(c, u0, u1, at, rate, info, track, enabled=True):
     still = bool(info and info.get("still")) or is_still(c.get("file"))
     turns = [(u0, u1, Fraction(0), Fraction(1))] if still else _turns(c, u0, u1, rate)
     return [{"file": c.get("file") or "", "name": str(c.get("name") or os.path.basename(c.get("file") or "")),
-             "start": at + a, "dur": b - a, "src": src, "speed": speed, "still": still,
+             "start": at + a, "dur": b - a, "src": src, "speed": speed, "still": still, "u": a,
              "volume": float(c.get("volume", 1.0) if c.get("volume") is not None else 1.0),
              "mute": bool(c.get("mute")), "fx": c.get("fx") or {}, "enabled": enabled and not c.get("disabled"), "track": track,
              "looped": bool(c.get("loop"))} for a, b, src, speed in turns]
@@ -226,7 +226,7 @@ def _clamp(piece, lo, hi, rate):
     a, b = max(piece["start"], lo), min(piece["start"] + piece["dur"], hi)
     if b <= a:
         return None
-    out = dict(piece, start=a - lo, dur=b - a)
+    out = dict(piece, start=a - lo, dur=b - a, u=piece.get("u", 0) + (a - piece["start"]))
     if not piece.get("gap") and not piece.get("still"):
         out["src"] = piece["src"] + Fraction(a - piece["start"]) / rate * piece["speed"]
     return out
@@ -485,32 +485,112 @@ def _format_name(width, height, rate):
     return f"FFVideoFormat{label}{code}" if code else None
 
 
+# Keyframes (the Edit panel's fx.keys) as FCPXML keyframeAnimation: a <param> under the
+# adjustment, each <keyframe> at its time on the element's own timeline (its start
+# plus the clip time). The panel's ways of going on: linear -> linear, ease in ->
+# easeIn, ease out -> easeOut, ease in and out -> ease; a HOLD has no FCPXML
+# interpolation, so it is a linear key and a second one a frame before the next key,
+# at the same value (a step).
+_INTERP = {"in": "easeIn", "out": "easeOut", "inout": "ease"}
+
+
+def _key_times(keys, params, rate):
+    """The clip frames that have a key of any of *params*, in order, with the first one's way of going on."""
+    out = {}
+    for name in params:
+        for k in keys.get(name) or []:
+            f = int(round(k["t"] * rate))
+            out.setdefault(f, k.get("i") or "")
+    return sorted(out.items())
+
+
+def _keyframes(adjust, pname, keys, params, spell, p, info, rate):
+    """A <param name=pname> with the keyframeAnimation of *params* under *adjust*;
+    *spell* turns {param: value} at a clip time into the value's text. Only the
+    keys inside this piece (and one at each of its ends, so its look is whole)."""
+    times = _key_times(keys, params, rate)
+    if not times:
+        return
+    u0 = int(p.get("u", 0))
+    n = int(p["dur"])
+    local = _local_start(p, info)
+    at = lambda f: {name: (key_value(keys[name], f / rate) if keys.get(name) else None) for name in params}
+    marks = [(f, how) for f, how in times if u0 <= f < u0 + n]
+    if not marks or marks[0][0] > u0:
+        marks.insert(0, (u0, next((how for f, how in reversed(times) if f <= u0), "")))
+    last = u0 + n - 1
+    if marks[-1][0] < last and any(f > last for f, _how in times):
+        marks.append((last, ""))
+    param = ET.SubElement(adjust, "param", {"name": pname})
+    anim = ET.SubElement(param, "keyframeAnimation")
+    for k, (f, how) in enumerate(marks):
+        attrs = {"time": time_str(local + Fraction(f - u0) / rate), "value": spell(at(f))}
+        if how in _INTERP:
+            attrs["interp"] = _INTERP[how]
+        ET.SubElement(anim, "keyframe", attrs)
+        if how == "hold" and k + 1 < len(marks) and marks[k + 1][0] - 1 > f:
+            g = marks[k + 1][0] - 1
+            ET.SubElement(anim, "keyframe", {"time": time_str(local + Fraction(g - u0) / rate), "value": spell(at(f))})
+
+
 def _intrinsics(parent, p, info, model):
-    """The adjustments in the DTD's order: crop, transform, blend, volume."""
-    fx = effective(p.get("fx")) if not p.get("sound") else None
+    """The adjustments in the DTD's order: crop, transform, blend, volume - with keyframes."""
+    keys = timeline_io.clean_fx(p.get("fx")).get("keys") or {}
+    if p.get("sound"):
+        keys = {k: v for k, v in keys.items() if k == "vol"}
+    rate = model["rate"]
+    moving = lambda *names: any(keys.get(n) for n in names)
+    fx = effective(p.get("fx"), Fraction(int(p.get("u", 0))) / rate) if not p.get("sound") else None
+    if fx is None and not p.get("sound") and animated(p.get("fx")):
+        # Neutral where it starts, animated later: the adjustments are written for their keys.
+        fx = {key: neutral for key, (neutral, _l, _h) in timeline_io.FX.items()}
+        fx.update({"fh": False, "fv": False})
     if fx:
         pw, ph = (info or {}).get("width") or model["width"], (info or {}).get("height") or model["height"]
-        if any(fx[k] for k in ("cl", "cr", "ct", "cb")):
+        if any(fx[k] for k in ("cl", "cr", "ct", "cb")) or moving("cl", "cr", "ct", "cb"):
             crop = ET.SubElement(parent, "adjust-crop", {"mode": "trim"})
             # "trim values as a percentage of original frame height" (Apple's DTD).
-            ET.SubElement(crop, "trim-rect", {
+            rect = ET.SubElement(crop, "trim-rect", {
                 "left": _num(fx["cl"] * pw / ph * 100), "top": _num(fx["ct"] * 100),
                 "right": _num(fx["cr"] * pw / ph * 100), "bottom": _num(fx["cb"] * 100)})
+            for name, side, wide in (("cl", "left", True), ("cr", "right", True), ("ct", "top", False), ("cb", "bottom", False)):
+                if keys.get(name):
+                    _keyframes(rect, side, keys, [name], lambda v, n=name, w=wide: _num(v[n] * (pw / ph if w else 1) * 100),
+                               p, info, rate)
         sx = fx["zx"] * (-1 if fx["fh"] else 1)
         sy = fx["zy"] * (-1 if fx["fv"] else 1)
-        if sx != 1 or sy != 1 or fx["x"] or fx["y"] or fx["rot"]:
+        if sx != 1 or sy != 1 or fx["x"] or fx["y"] or fx["rot"] or moving("zx", "zy", "x", "y", "rot", "ax", "ay"):
             # Position and anchor: percent of the frame's HEIGHT, x and y alike, y up.
             # Rotation: + is counter-clockwise there, clockwise here.
             aspect = model["width"] / model["height"]
             attrs = {"position": f"{_num(fx['x'] * aspect * 100)} {_num(fx['y'] * 100)}",
                      "scale": f"{_num(sx)} {_num(sy)}", "rotation": _num(-fx["rot"])}
-            if fx["ax"] or fx["ay"]:
+            if fx["ax"] or fx["ay"] or moving("ax", "ay"):
                 attrs["anchor"] = f"{_num(fx['ax'] * aspect * 100)} {_num(fx['ay'] * 100)}"
-            ET.SubElement(parent, "adjust-transform", attrs)
-        if fx["op"] != 1:
-            ET.SubElement(parent, "adjust-blend", {"amount": _num(fx["op"])})
+            tr = ET.SubElement(parent, "adjust-transform", attrs)
+            both = lambda a, b: (lambda v: f"{_num((v[a] if v[a] is not None else fx[a]) * (aspect * 100 if a in ('x', 'ax') else 100))} "
+                                           f"{_num((v[b] if v[b] is not None else fx[b]) * 100)}")
+            if moving("x", "y"):
+                _keyframes(tr, "position", keys, ["x", "y"], both("x", "y"), p, info, rate)
+            if moving("zx", "zy"):
+                fl = (-1 if fx["fh"] else 1, -1 if fx["fv"] else 1)
+                _keyframes(tr, "scale", keys, ["zx", "zy"], lambda v: f"{_num((v['zx'] if v['zx'] is not None else fx['zx']) * fl[0])} "
+                                                                      f"{_num((v['zy'] if v['zy'] is not None else fx['zy']) * fl[1])}", p, info, rate)
+            if moving("rot"):
+                _keyframes(tr, "rotation", keys, ["rot"], lambda v: _num(-v["rot"]), p, info, rate)
+            if moving("ax", "ay"):
+                _keyframes(tr, "anchor", keys, ["ax", "ay"], both("ax", "ay"), p, info, rate)
+        if fx["op"] != 1 or moving("op"):
+            blend = ET.SubElement(parent, "adjust-blend", {"amount": _num(fx["op"])})
+            if moving("op"):
+                _keyframes(blend, "amount", keys, ["op"], lambda v: _num(v["op"]), p, info, rate)
     volume = p.get("volume", 1.0)
-    if (info or {}).get("audio") and not p.get("mute") and volume > 0 and abs(volume - 1.0) > 1e-4:
+    db = lambda v: f"{20 * math.log10(v):.2f}dB" if v > 1e-5 else "-96dB"
+    if (info or {}).get("audio") and not p.get("mute") and keys.get("vol"):
+        first = key_value(keys["vol"], int(p.get("u", 0)) / rate)
+        vol = ET.SubElement(parent, "adjust-volume", {"amount": db(first)})
+        _keyframes(vol, "amount", keys, ["vol"], lambda v: db(v["vol"]), p, info, rate)
+    elif (info or {}).get("audio") and not p.get("mute") and volume > 0 and abs(volume - 1.0) > 1e-4:
         ET.SubElement(parent, "adjust-volume", {"amount": f"{20 * math.log10(volume):.2f}dB"})
 
 
@@ -942,7 +1022,9 @@ def readme(plan, model, final, base):
         "", "CARRIED",
         "  frame rate, size, all video and sound tracks with their places, gaps on V1, source in and out,",
         "  dissolves, each clip's volume, mute and split sound, retime, loops (as repeated clips),",
-        "  transform, crop, opacity, stills, switched-off tracks (as disabled clips), texts (as markers).",
+        "  transform, crop, opacity, stills, switched-off tracks and clips (as disabled clips), texts (as markers),",
+        "  keyframes of transform, crop, opacity and volume (FCPXML keyframeAnimation; a hold is a step",
+        "  of two keys). The EDL carries no keyframes, no transform and no volume.",
         "", "LEFT OUT OR DIFFERENT",
     ]
     lines += [f"  - {line}" for line in model["left_out"]] or ["  nothing else that is known"]

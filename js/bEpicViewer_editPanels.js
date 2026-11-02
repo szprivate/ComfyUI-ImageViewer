@@ -74,6 +74,141 @@ export const EditPanelsMixin = {
 
     // ── Inspector ────────────────────────────────────────────────────────────
 
+    /** The selected clip and the playhead in its own time: { c, sel, u (frame-snapped, held inside it), inside, start }. */
+    _editInspKeying(cut, sel, c) {
+        const fps = (cut && cut.fps) || 24;
+        const span = D.selSpan(cut, sel) || { start: 0, end: Number(c.length) || 0 };
+        const head = this._editTlOnScreen && this._editTlOnScreen() ? (this.currentFrame || 0) / fps : span.start;
+        const inside = head >= span.start - 1e-6 && head < span.end - 1e-6;
+        const last = Math.max(0, Math.round((span.end - span.start) * fps) - 1) / fps;
+        const u = Math.round(Math.max(0, Math.min(last, head - span.start)) * fps) / fps;
+        return { c, sel, u: Math.round(u * 10000) / 10000, inside, start: span.start, fps };
+    },
+
+    /**
+     * A row's keyframe controls, as Resolve's: the diamond (hollow: no keys;
+     * filled: a key at the playhead; outlined and lit: keys, but not here) adds or
+     * takes away a key at the playhead for the row's params; right-click it: how
+     * it goes on to the next (linear, ease in / out / in-out, hold); the arrows go
+     * to the key before / after.
+     */
+    _editInspKeys(doc, k, params, label) {
+        const box = doc.createElement("span");
+        box.className = "insp-keys";
+        const c = k.c;
+        const here = D.keyedAt(c, params, k.u) && D.keyTimes(c, params).length > 0;
+        const any = D.keyTimes(c, params).length > 0;
+        const btn = (cls, text, title, fn, disabled) => {
+            const b = doc.createElement("button");
+            b.className = "insp-keybtn " + cls;
+            b.textContent = text;
+            b.title = title;
+            b.disabled = !!disabled;
+            b.addEventListener("click", (e) => { e.stopPropagation(); fn(); });
+            return b;
+        };
+        const go = (dir) => {
+            const t = D.nextKeyTime(c, params, k.u, dir);
+            if (t != null && this._editTlSeek) this._editTlSeek(k.start + t);
+        };
+        const prev = btn("prev", "\u25c2", `The key of ${label} before`, () => go(-1), D.nextKeyTime(c, params, k.u, -1) == null);
+        const next = btn("next", "\u25b8", `The key of ${label} after`, () => go(1), D.nextKeyTime(c, params, k.u, 1) == null);
+        const dia = btn("insp-diamond" + (here ? " on" : any ? " has" : ""), here ? "\u25c6" : "\u25c7",
+            !k.inside ? `${label}: put the playhead on this clip to set a keyframe`
+                : here ? `${label}: a keyframe here - click to take it away; right-click: how it goes on to the next`
+                : `${label}: add a keyframe at the playhead` + (any ? " (it is animated: a change here makes one by itself)" : ""),
+            () => { this._editFxLive = null; this._editTlApply(D.toggleKeys(this._editTlCut, k.sel, params, k.u)); }, !k.inside);
+        dia.dataset.state = here ? "on" : any ? "has" : "none";
+        dia.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!here) return;
+            this._editKeyInterpMenu(e, k.sel, params, k.u);
+        });
+        box.append(prev, dia, next);
+        return box;
+    },
+
+    /**
+     * The keys of the selected clip, drawn on its block as small diamonds (one per
+     * moment that has a key of any param): dragged along the clip they move every
+     * key of that moment (snapping to frames and to the playhead; one undo step),
+     * a click selects it (Del takes it away, Esc lets it go), right-click: how it
+     * goes on to the next.
+     */
+    _editTlKeyMarks(b, sel, c) {
+        const times = D.keyTimes(c);
+        if (!times.length) return;
+        const doc = b.ownerDocument;
+        const len = Math.max(1e-6, Number(c.length) || 0);
+        const ks = this._editTlKeySel;
+        for (const t of times) {
+            const m = doc.createElement("span");
+            m.className = "edit-keymark" + (ks && D.sameSel(ks.sel, sel) && Math.abs(ks.t - t) < 1e-6 ? " on" : "");
+            m.style.left = Math.max(0, Math.min(100, (t / len) * 100)) + "%";
+            m.dataset.t = String(t);
+            const how = D.keyInterpAt(c, null, t);
+            if (how !== "linear") m.dataset.how = how;
+            m.title = `Keyframe at ${D.timecode(t, (this._editTlCut && this._editTlCut.fps) || 24)} into the clip (${how}) - drag to move it, Del takes it away, right-click: ease`;
+            m.addEventListener("pointerdown", (e) => this._editTlKeyDown(e, m, sel, t));
+            m.addEventListener("contextmenu", (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this._editTlKeySel = { sel, t };
+                this._editKeyInterpMenu(e, sel, null, t);
+            });
+            b.append(m);
+        }
+    },
+
+    _editTlKeyDown(e, m, sel, t0) {
+        if (e.button !== 0) return;
+        const start = this._editTlCut;
+        const c = D.clipOf(start, sel);
+        const span = D.selSpan(start, sel);
+        if (!c || !span) return;
+        const fps = start.fps || 24;
+        const len = Number(c.length) || 0;
+        this._editTlSel = sel;
+        this._editTlKeySel = { sel, t: t0 };
+        let at = t0;
+        this._editTlDrag(e, m, (seconds) => {
+            let u = Math.max(0, Math.min(len - 1 / fps, t0 + seconds));
+            // Onto the playhead when near it (the snapping distance), else onto a frame.
+            const head = this._editTlOnScreen() ? (this.currentFrame || 0) / fps - span.start : null;
+            const near = this._editTlLay && this._editTlUi ? D.snapSeconds(D.SNAP_PX, this._editTlLay.total, this._editTlUi.area.getBoundingClientRect().width) : 0;
+            const snap = !this._editTlView || this._editTlView.snap !== false;
+            if (snap && head != null && Math.abs(u - head) <= near) u = head;
+            u = Math.round(Math.max(0, u) * fps) / fps;
+            at = Math.round(u * 10000) / 10000;
+            this._editTlCut = D.moveKeysAt(start, sel, t0, at);
+            this._editTlKeySel = { sel, t: at };
+            this.editTlRefresh();
+        }, () => { this.editTlRefresh(); });
+    },
+
+    /** Del with a key mark selected: every key of that moment taken away (one undo step). True when it did. */
+    editTlKeyDelete() {
+        const ks = this._editTlKeySel;
+        const c = ks && D.clipOf(this._editTlCut, ks.sel);
+        if (!c || !D.keyTimes(c).some((t) => Math.abs(t - ks.t) < 1e-6)) { this._editTlKeySel = null; return false; }
+        this._editTlKeySel = null;
+        this._editTlApply(D.removeKeys(this._editTlCut, ks.sel, D.KEY_PARAMS, ks.t));
+        return true;
+    },
+
+    /** How the keys at clip time `u` go on to the next: a menu (Inspector diamonds and the timeline's key marks). */
+    _editKeyInterpMenu(e, sel, params, u) {
+        const c = D.clipOf(this._editTlCut, sel);
+        if (!c) return;
+        const now = D.keyInterpAt(c, params, u);
+        const names = { linear: "Linear", in: "Ease in", out: "Ease out", inout: "Ease in and out", hold: "Hold (a step)" };
+        this._previzOpenMenu(D.INTERPS.map((how) => ({
+            label: (how === now ? "\u2713 " : "") + names[how],
+            run: () => this._editTlApply(D.setKeyInterp(this._editTlCut, sel, params, u, how)),
+        })), e.clientX, e.clientY);
+    },
+
     _editInspRender() {
         const host = this.editInspectorPanel;
         if (!host || !this.isPanelDocked || !this.isPanelDocked("editInspector")) return;
@@ -123,12 +258,19 @@ export const EditPanelsMixin = {
             into = sec;
             return sec;
         };
-        // A row: its name, its controls, its own reset.
-        const row = (label, controls, reset) => {
+        // A row: its name, its controls, its keyframes (`keys`: the params it animates), its own reset.
+        let keying = null;              // { c, sel, u, inside, start } of the selected clip, for the rows' diamonds
+        const row = (label, controls, reset, keys) => {
             const r = el("div", "insp-row");
             const ctl = el("div", "insp-ctl");
             ctl.append(...[].concat(controls));
             r.append(el("span", "insp-label", label), ctl);
+            if (keys && keying) {
+                r.append(this._editInspKeys(doc, keying, keys, label));
+                r.dataset.keys = keys.join(",");
+                // Its reset takes the keys too (one undo step).
+                if (D.keyTimes(keying.c, keys).length) reset = () => apply(D.clearKeys(cut, sel, keys));
+            }
             r.append(reset ? resetBtn("Reset " + label, reset) : el("span", "insp-reset-gap"));
             (into || { append: (n) => parts.push(n) }).append(r);
             return r;
@@ -198,11 +340,20 @@ export const EditPanelsMixin = {
             const still = D.isStill(c.file) && !isSound;
             head(c.name || String(c.file || "").split(/[\\/]/).pop() || "clip");
             const tab = tabs([["video", "Video", !isSound], ["audio", "Audio", !still], ["timing", "Timing", true], ["file", "File", true]]);
-            const fx = D.rawFx(c);
-            const setFx = (patch) => apply(D.setClipFx(cut, sel, patch));
-            const liveFx = (patch) => { if (this.editPlayFxLive) this.editPlayFxLive(c, { ...D.cleanFx(c.fx), ...patch }); };
+            // The playhead in the clip's own time (frame-snapped): where its keys are made and its numbers read.
+            keying = this._editInspKeying(cut, sel, c);
+            const u = keying.u;
+            const fx = D.rawFx(c, u);
+            // A param with keys gets a key at the playhead; one without, its number (Resolve's auto-key).
+            const setFx = (patch) => apply(D.autoKey(cut, sel, patch, u));
+            const liveFx = (patch) => {
+                if (!this.editPlayFxLive) return;
+                const f = { ...D.cleanFx(c.fx), ...patch };
+                if (f.keys) { f.keys = { ...f.keys }; for (const k of Object.keys(patch)) delete f.keys[k]; }
+                this.editPlayFxLive(c, f);
+            };
             const pct = (key, label, o = {}) => row(label, slider(fx[key] * 100, 0, 100, 0.1, 1, (v) => liveFx({ [key]: v / 100 }),
-                (v) => setFx({ [key]: v / 100 }), o.title || "percent"), () => setFx({ [key]: D.FX[key][0] }));
+                (v) => setFx({ [key]: v / 100 }), o.title || "percent"), () => setFx({ [key]: D.FX[key][0] }), [key]);
             if (tab === "video") {
                 section("Transform", { off: fx.toff, toggle: (off) => setFx({ toff: off }), reset: () => apply(D.resetClipFx(cut, sel, "transform")) });
                 const linked = this._editInspUnlinked !== true;
@@ -211,15 +362,15 @@ export const EditPanelsMixin = {
                 link.addEventListener("click", () => { this._editInspUnlinked = linked; this._editInspRender(); });
                 row("Zoom", [axis("X"), numField(fx.zx, 2, (v) => setFx(linked ? { zx: v, zy: v } : { zx: v }), { step: 0.01, min: 0.01, title: "1 is its own size" }),
                              link, axis("Y"), numField(fx.zy, 2, (v) => setFx(linked ? { zx: v, zy: v } : { zy: v }), { step: 0.01, min: 0.01, title: "1 is its own size" })],
-                    () => setFx({ zx: 1, zy: 1 }));
+                    () => setFx({ zx: 1, zy: 1 }), ["zx", "zy"]);
                 row("Position", [axis("X"), numField(fx.x * 100, 1, (v) => setFx({ x: v / 100 }), { step: 0.5, title: "percent of the frame's width, to the right" }),
                                  el("span", "insp-link-gap"), axis("Y"), numField(fx.y * 100, 1, (v) => setFx({ y: v / 100 }), { step: 0.5, title: "percent of the frame's height, up" })],
-                    () => setFx({ x: 0, y: 0 }));
+                    () => setFx({ x: 0, y: 0 }), ["x", "y"]);
                 row("Rotation Angle", slider(fx.rot, -180, 180, 0.1, 1, (v) => liveFx({ rot: v }), (v) => setFx({ rot: v }), "degrees, clockwise"),
-                    () => setFx({ rot: 0 }));
+                    () => setFx({ rot: 0 }), ["rot"]);
                 row("Anchor Point", [axis("X"), numField(fx.ax * 100, 1, (v) => setFx({ ax: v / 100 }), { step: 0.5, title: "the point it is scaled and turned about: percent of the frame's width from its middle" }),
                                      el("span", "insp-link-gap"), axis("Y"), numField(fx.ay * 100, 1, (v) => setFx({ ay: v / 100 }), { step: 0.5, title: "percent of the frame's height from its middle, up" })],
-                    () => setFx({ ax: 0, ay: 0 }));
+                    () => setFx({ ax: 0, ay: 0 }), ["ax", "ay"]);
                 const flip = (key, glyph, title) => {
                     const b = tip(el("button", "edit-btn insp-flip" + (fx[key] ? " on" : ""), glyph), title);
                     b.addEventListener("click", () => setFx({ [key]: !fx[key] }));
@@ -240,10 +391,10 @@ export const EditPanelsMixin = {
                 if (!placed) note("This shot is on the cut itself: where it does not cover the frame, the film is black. On a track above, what is under it shows.");
             } else if (tab === "audio") {
                 section("Volume", { reset: () => apply(D.setClipProps(cut, sel, { volume: 1 })) });
-                const now = Math.max(0, Math.min(1, c.volume == null ? 1 : Number(c.volume))) * 100;
+                const now = D.paramAt(c, "vol", u) * 100;
                 row("Volume", slider(now, 0, 100, 1, 0, (v) => {
                     if (this._editTlOnScreen() && this._videoMode && this.videoBase) { try { this.videoBase.volume = v / 100; } catch (_) {} }
-                }, (v) => apply(D.setClipProps(cut, sel, { volume: v / 100 })), "percent"), () => apply(D.setClipProps(cut, sel, { volume: 1 })));
+                }, (v) => apply(D.autoKey(cut, sel, { vol: v / 100 }, u)), "percent"), () => apply(D.setClipProps(cut, sel, { volume: 1 })), ["vol"]);
                 into = null;
             } else if (tab === "timing") {
                 // Where it is and which part of its source it plays. "Start" and

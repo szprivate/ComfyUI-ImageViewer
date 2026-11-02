@@ -198,10 +198,78 @@ def clip_frames(clip, done, count, w, h, fps):
 
 # ── a clip's transform, cropping and opacity ─────────────────────────────────
 
-def effective(fx):
-    """*fx* with every key present and the sections that are switched off back
-    at neutral - or None for a clip that is drawn as it comes."""
+def ease_share(p, how):
+    """How far from one key to the next a share *p* is (bEpicViewer_editTimelineData.easeShare)."""
+    x = max(0.0, min(1.0, p))
+    if how == "hold":
+        return 0.0
+    if how == "in":
+        return x * x
+    if how == "out":
+        return 1.0 - (1.0 - x) * (1.0 - x)
+    if how == "inout":
+        return x * x * (3.0 - 2.0 * x)
+    return x
+
+
+def key_value(keys, u):
+    """The value of a param's *keys* at clip time *u* (keyValue in the JS, the same arithmetic)."""
+    if not keys:
+        return None
+    if u <= keys[0]["t"]:
+        return keys[0]["v"]
+    if u >= keys[-1]["t"]:
+        return keys[-1]["v"]
+    k = 0
+    while k + 1 < len(keys) and keys[k + 1]["t"] <= u:
+        k += 1
+    a, b = keys[k], keys[k + 1]
+    f = ease_share((u - a["t"]) / max(1e-9, b["t"] - a["t"]), a.get("i"))
+    return a["v"] + (b["v"] - a["v"]) * f
+
+
+def animated(fx):
+    """Has *fx* keys for any picture param (not just the volume)?"""
+    keys = (fx or {}).get("keys") if isinstance(fx, dict) else None
+    return bool(keys) and any(p != "vol" for p in keys)
+
+
+def fx_at(fx, u):
+    """*fx* with each keyed param at its value at clip time *u* (rawFx(clip, u) in the JS)."""
     fx = timeline_io.clean_fx(fx)
+    keys = fx.pop("keys", None) or {}
+    for p, items in keys.items():
+        if p in timeline_io.FX:
+            fx[p] = key_value(items, u)
+    return fx
+
+
+def volume_at(clip, u):
+    """A clip's volume at clip time *u*: its keys, else its number (clipVolume in the JS, but for mute)."""
+    keys = ((clip.get("fx") or {}).get("keys") or {}).get("vol") if isinstance(clip.get("fx"), dict) else None
+    if keys:
+        return max(0.0, min(1.0, key_value(timeline_io.clean_keys({"vol": keys}).get("vol"), u)))
+    return float(clip.get("volume", 1.0))
+
+
+def volume_curve(clip, n, rate):
+    """The gain of *clip* for each of *n* samples at *rate*, a key's value every 10 ms
+    and straight lines between (None for a clip with no volume keys: its number)."""
+    import numpy as np
+    keys = ((clip.get("fx") or {}).get("keys") or {}).get("vol") if isinstance(clip.get("fx"), dict) else None
+    if not keys or n <= 0:
+        return None
+    step = 0.01
+    m = int(n / rate / step) + 2
+    at = np.arange(m) * step
+    gains = np.array([volume_at(clip, float(t)) for t in at], dtype=np.float32)
+    return np.interp(np.arange(n) / rate, at, gains).astype(np.float32)
+
+
+def effective(fx, u=0.0):
+    """*fx* at clip time *u* with every key present and the sections that are
+    switched off back at neutral - or None for a clip that is drawn as it comes."""
+    fx = fx_at(fx, u)
     out = {key: neutral for key, (neutral, _l, _h) in timeline_io.FX.items()}
     out.update({"fh": False, "fv": False})
     for key, value in fx.items():
@@ -287,9 +355,13 @@ def film_pictures(clips, counts, w, h, fps):
             held = []
             continue
         keep = []
+        moving = animated(clip.get("fx"))
         fx = effective(clip.get("fx"))
-        box = picture_box(clip["file"], w, h) if fx else None
+        box = picture_box(clip["file"], w, h) if (fx or moving) else None
         for k, frame in enumerate(clip_frames(clip, 0, n, w, h, fps)):
+            if moving:
+                # Keyed: at the middle of frame k of the clip (the Edit tab draws frame f at (f + 0.5) / fps).
+                fx = effective(clip.get("fx"), (k + 0.5) / fps)
             if fx:
                 frame = lay(None, frame, fx, box)
             if k < d_in:
@@ -325,9 +397,13 @@ def covered(base, overlays, total, w, h, fps):
     for n in range(total):
         frame = next(base, None)
         on = [k for k, (first, count, _c, _fx) in enumerate(spans) if first <= n < first + count]
-        solid = max((i for i, k in enumerate(on) if spans[k][3] is None), default=-1)
+        # A keyed clip: its look at this frame's middle, clip time (as pictureAt / clipFx(clip, u) in the JS).
+        now = {k: (effective(spans[k][2].get("fx"), (n - spans[k][0] + 0.5) / fps) if animated(spans[k][2].get("fx"))
+                   else spans[k][3]) for k in on}
+        solid = max((i for i, k in enumerate(on) if now[k] is None), default=-1)
         for k in on[max(0, solid):]:
-            first, count, clip, fx = spans[k]
+            first, count, clip, _fx = spans[k]
+            fx = now[k]
             gen, due = running.get(k, (None, -1))
             if gen is None or due != n:           # just uncovered, or new: read from this moment of it
                 done = n - first
@@ -468,16 +544,19 @@ def film_sound(cut, counts, fps, total_frames):
     for clip, (n, d_in, d_out) in zip(cut["clips"], counts):
         start = at - d_in
         volume = float(clip.get("volume", 1.0))
+        keyed = not clip.get("blank") and volume_curve(clip, 1, RATE) is not None
         # A gap has no sound; a clip whose sound was split off (`mute`) is heard
         # from its sound clip, on a sound track, at that clip's own place.
-        if cut.get("clip_sound", True) and not cut.get("v1_off") and volume > 0 and not clip.get("blank") \
+        if cut.get("clip_sound", True) and not cut.get("v1_off") and (volume > 0 or keyed) and not clip.get("blank") \
                 and not clip.get("mute") and not is_still(clip["file"]):
             try:
                 sound = clip_sound(clip, n / fps)
             except Exception:  # noqa: BLE001 - a shot whose sound will not decode is silent
                 sound = None
             if sound is not None:
-                sound = sound * volume
+                # Volume keys: a gain per sample (a key's value every 10 ms), in the clip's own time.
+                curve = volume_curve(clip, sound.shape[1], RATE) if keyed else None
+                sound = sound * (curve if curve is not None else volume)
                 fade_in, fade_out = int(round(d_in / fps * RATE)), int(round(d_out / fps * RATE))
                 if fade_in:
                     sound[:, :fade_in] *= np.linspace(0.0, 1.0, fade_in, dtype=np.float32)
@@ -500,14 +579,16 @@ def film_sound(cut, counts, fps, total_frames):
         if replace:
             mix[:, a:b] = 0.0
         volume = float(clip.get("volume", 1.0))
-        if volume <= 0 or clip.get("mute") or is_still(clip["file"]):
+        curve = volume_curve(clip, want, RATE)
+        if (volume <= 0 and curve is None) or clip.get("mute") or is_still(clip["file"]):
             return
         try:
             sound = clip_sound(clip, want / RATE)
         except Exception:  # noqa: BLE001
             sound = None
         if sound is not None:
-            mix[:, a:b] += sound[:, :b - a] * volume
+            gain = curve[:b - a] if curve is not None else volume
+            mix[:, a:b] += sound[:, :b - a] * gain
             heard = True
 
     for _first, _count, clip in _spans(cut.get("overlays"), fps):

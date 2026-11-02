@@ -238,6 +238,47 @@ def clean_fx(given):
     for key in FX_FLAGS:
         if given.get(key):
             out[key] = True
+    keys = clean_keys(given.get("keys"))
+    if keys:
+        out["keys"] = keys
+    return out
+
+
+# Keyframes (bEpicViewer_editTimelineData.js, cleanKeys / keyValue - kept in step):
+# ``fx["keys"] = {param: [{"t", "v", "i"}]}``, ``t`` seconds of CLIP time (from the
+# clip's first frame on the timeline), ``i`` how it goes on to the next key:
+# absent linear, "in", "out", "inout", "hold". "vol" is the clip's volume.
+KEY_PARAMS = tuple(FX) + ("vol",)
+INTERPS = ("linear", "in", "out", "inout", "hold")
+
+
+def clean_keys(given):
+    """*given* held to what keys may be: known params, finite, sorted, one per moment (the last wins)."""
+    out = {}
+    if not isinstance(given, dict):
+        return out
+    for p in KEY_PARAMS:
+        items = given.get(p)
+        if not isinstance(items, list):
+            continue
+        low, high = (0.0, 1.0) if p == "vol" else FX[p][1:]
+        by = {}
+        for k in items:
+            if not isinstance(k, dict):
+                continue
+            try:
+                t, v = float(k.get("t")), float(k.get("v"))
+            except (TypeError, ValueError):
+                continue
+            if t != t or v != v or t < 0 or t in (float("inf"),) or v in (float("inf"), float("-inf")):
+                continue
+            key = {"t": round(t, 4), "v": round(max(low, min(high, v)), 5)}
+            if k.get("i") in INTERPS and k.get("i") != "linear":
+                key["i"] = k["i"]
+            by[key["t"]] = key
+        keys = sorted(by.values(), key=lambda k: k["t"])[:1000]
+        if keys:
+            out[p] = keys
     return out
 
 

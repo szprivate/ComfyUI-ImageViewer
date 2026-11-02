@@ -58,6 +58,8 @@ export const EDIT_KEYS = [
     ["Shift+S / Shift+A", "Step through the cuts, three steps each: Shift+S the out of the clip before (left), both sides (a roll), the in of the clip after (right), then the next cut; Shift+A back. On the selected clip's track, else V1"],
     ["Space in the Trim mode, a cut selected", "Play around edit: a second before the cut to a second after it, looped; , / . move the cut while it plays"],
     ["Esc", "Let go of the edit point, then of the selection"],
+    ["Inspector diamond \u25c7", "Keyframe the row at the playhead (filled: a key here); \u25c2 \u25b8 the key before / after; once animated, a change makes a key by itself; right-click: ease; its reset takes the keys too"],
+    ["Keyframe marks on the selected clip", "Drag along the clip to move a key (snaps to frames and the playhead); click + Del takes it away; right-click: linear / ease in / ease out / ease in-out / hold"],
     ["D", "Disable / enable the selected clips (and their linked sound or picture): dimmed, not seen, not heard, not rendered - the track under shows"],
     ["Ctrl+Alt+L", "Unlink a film's sound onto a sound track / relink it, from either part (the offset stays; right-click: Resync, Merge audio back into clip)"],
     ["Ctrl+S", "Save the cut: the bar then says where it went"],
@@ -157,12 +159,14 @@ export const EditKeysMixin = {
         else if (low === "s" && !shift) this.editTlSplitAtPlayhead();
         else if (key === "?") this.toggleHelpOverlay();
         else if (key === "Escape") {
-            if (this._editTlMarks && this.editTlMarksCancel) this.editTlMarksCancel();
+            if (this._editTlKeySel) { this._editTlKeySel = null; this.editTlRefresh(); }
+            else if (this._editTlMarks && this.editTlMarksCancel) this.editTlMarksCancel();
             else if (this._editTlBlade) this.editTlBladeToggle(false);
             else if (this._editTlEditPoint()) { this._editTlEditSel = null; this.editTlRefresh(); }
             else if (this._editTlSel) { this._editTlSel = null; this._editTlMulti = null; this.editTlRefresh(); }
             else done = false;
         }
+        else if ((key === "Delete" || key === "Backspace") && this._editTlKeySel && this.editTlKeyDelete && this.editTlKeyDelete()) done = true;
         else if (key === "Delete" || key === "Backspace") done = this.editTlDelete(shift);
         else if (low === "j" && !shift) this._editTlShuttle(-1);
         else if (low === "k" && !shift) this._editTlShuttle(0);

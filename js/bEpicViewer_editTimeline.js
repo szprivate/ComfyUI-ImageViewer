@@ -525,6 +525,8 @@ export const EditTimelineMixin = {
         body.tabIndex = 0;
         body.addEventListener("pointerdown", (e) => {
             const t = e.composedPath ? e.composedPath()[0] : e.target;
+            // A press anywhere but on a keyframe mark lets go of the selected keyframe.
+            if (this._editTlKeySel && !(t && t.classList && t.classList.contains("edit-keymark"))) this._editTlKeySel = null;
             if (t && /^(INPUT|TEXTAREA|SELECT|BUTTON|OPTION)$/.test(t.tagName || "")) return;
             try { body.focus({ preventScroll: true }); } catch (_) {}
         }, true);
@@ -806,6 +808,7 @@ export const EditTimelineMixin = {
                     b._media = { file: cut.clips[s.i].file, in: Number(cut.clips[s.i].in) || 0, length: s.length,
                                  row: "video", volume: cut.clips[s.i].volume, clip: cut.clips[s.i] };
                     this._editTlBadges(b, cut.clips[s.i]);
+                    if (picked("clip", s.i) && this._editTlKeyMarks) this._editTlKeyMarks(b, { kind: "clip", i: s.i }, cut.clips[s.i]);
                     this._editTlTakeBadge(b, cut.clips[s.i]);
                     this._editTlLinkBadge(b, cut.clips[s.i], "video");
                     b.addEventListener("pointerdown", (e) => this._editTlShotDown(e, b, s.i));
@@ -856,6 +859,7 @@ export const EditTimelineMixin = {
                     const tc = row.track.items[c.i] && D.trackOf(cut, row.id).clips[c.i];
                     b._media = { file: tc.file, in: Number(tc.in) || 0, length: c.length, row: row.kind, volume: tc.volume, clip: tc };
                     this._editTlBadges(b, tc);
+                    if (picked("tclip", c.i, row.id) && this._editTlKeyMarks) this._editTlKeyMarks(b, { kind: "tclip", track: row.id, i: c.i }, tc);
                     this._editTlTakeBadge(b, tc);
                     this._editTlLinkBadge(b, tc, row.kind);
                     b.addEventListener("pointerdown", (e) => this._editTlTrackClipDown(e, b, row.id, c.i));
@@ -2101,6 +2105,13 @@ export const EditTimelineMixin = {
         if (moved && !this._editTlScrubbing && sc.scrollWidth > sc.clientWidth + 1) {
             const x = (seconds / lay.total) * sc.scrollWidth;
             if (x < sc.scrollLeft || x > sc.scrollLeft + sc.clientWidth - 8) sc.scrollLeft = Math.max(0, x - sc.clientWidth * 0.1);
+        }
+        // The Inspector reads the selected clip at the playhead: its numbers when keyed, its diamonds.
+        if (moved && !this.isPlaying && this.editPanelsRefresh && D.isClipSel(this._editTlSel)) {
+            const c = D.clipOf(this._editTlCut, this._editTlSel), span = c && D.selSpan(this._editTlCut, this._editTlSel);
+            const inside = !!span && seconds >= span.start && seconds < span.end;
+            if (c && (D.hasKeys(c) || inside !== this._editInspInside)) this.editPanelsRefresh();
+            this._editInspInside = inside;
         }
         const at = D.pictureAt(this._editTlCut, seconds, this._editTlLive());
         const now = at ? at.key : "";

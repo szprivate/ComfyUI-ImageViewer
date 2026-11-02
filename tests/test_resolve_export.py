@@ -245,6 +245,41 @@ class Generator(unittest.TestCase):
         lane = [e for e in root.iter("asset-clip") if e.get("lane") == "1"]
         self.assertEqual([e.get("enabled") for e in lane], ["0"])
 
+    def test_keyframes_are_keyframe_animations_at_their_frames_with_their_eases(self):
+        keys = {"op": [{"t": 0.5, "v": 0, "i": "in"}, {"t": 1.5, "v": 1, "i": "hold"}, {"t": 2.5, "v": 0.5}],
+                "x": [{"t": 0, "v": 0}, {"t": 1, "v": 0.25, "i": "inout"}],
+                "rot": [{"t": 0, "v": 0}, {"t": 2, "v": 90, "i": "out"}],
+                "cl": [{"t": 0, "v": 0}, {"t": 1, "v": 0.1}],
+                "vol": [{"t": 0, "v": 1}, {"t": 2, "v": 0.5}]}
+        m, root, xml, _p = self.make({"clips": [clip("a.mp4", 3, start=1, fx={"keys": keys})], "texts": []}, {"a.mp4": film()})
+        el = root.find(".//spine/asset-clip")
+        self.assertEqual([c.tag for c in el], ["adjust-crop", "adjust-transform", "adjust-blend", "adjust-volume"])
+        start = T(el.get("start"))
+        self.assertEqual(start, 1)
+        def frames(adjust, name):
+            anim = adjust.find(f"param[@name='{name}']/keyframeAnimation")
+            self.assertIsNotNone(anim, name)
+            return [((T(k.get("time")) - start) * 24, k.get("value"), k.get("interp")) for k in anim.findall("keyframe")]
+        blend = frames(el.find("adjust-blend"), "amount")
+        # On the clip's own timeline (from its start), on whole frames; ease in = easeIn; a hold: a step of two keys.
+        self.assertEqual([f for f, _v, _i in blend], [0, 12, 36, 59, 60])
+        self.assertEqual(blend[1][2], "easeIn")
+        self.assertEqual((blend[3][1], blend[4][1]), ("1", "0.5"), "the hold keeps its value until the frame before the next key")
+        self.assertEqual(blend[2][1], "1")
+        pos = frames(el.find("adjust-transform"), "position")
+        self.assertEqual(pos[1][2], "ease")
+        self.assertAlmostEqual(float(pos[-1][1].split()[0]), 0.25 * 16 / 9 * 100, 3)
+        rot = frames(el.find("adjust-transform"), "rotation")
+        self.assertEqual((rot[0][2], rot[-1][2], float(rot[-1][1])), (None, "easeOut", -90.0))
+        left = frames(el.find("adjust-crop/trim-rect"), "left")
+        self.assertAlmostEqual(float(left[-1][1]), 0.1 * 16 / 9 * 100, 3)
+        vol = frames(el.find("adjust-volume"), "amount")
+        self.assertEqual((vol[0][1], vol[-1][1]), ("0.00dB", "-6.02dB"))
+        for f, _v, _i in blend + pos + vol:
+            self.assertEqual(f.denominator, 1, "on the frame grid")
+        # A clip with no keys is as before; the EDL does not carry them (the README says so).
+        self.assertIn("keyframeAnimation", xml)
+
     def test_a_switched_off_section_is_not_written(self):
         m, root, _x, _p = self.make({"clips": [clip("a.mp4", 2, fx={"zx": 2.0, "toff": True})], "texts": []}, {"a.mp4": film()})
         self.assertIsNone(root.find(".//adjust-transform"))
