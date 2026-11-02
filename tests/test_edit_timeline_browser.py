@@ -2896,5 +2896,138 @@ class EditTimelineBrowserTests(unittest.TestCase):
         self.assertEqual(pg.evaluate(self.KEYMARKS), [1])
         self.assertEqual(self.errors, [])
 
+    # ── several clips selected: the Inspector changes all of them ──
+
+    def multi_page(self, tab="video"):
+        """V1: a (film, 0-4), c (a still, 4-7), b (film, 7-11); V2: v (3-8); A2: s (0-6). Selected: a, c, b (b last)."""
+        pg = self.page()
+        self.on_v2(pg, ["v", 3, 5])
+        self.on_a2(pg, ["s", 0, 6])
+        pg.evaluate("""(tab) => { const P = __panel; P._editInspTab = tab;
+            P._editTlSetSelList([{ kind: 'clip', i: 0 }, { kind: 'clip', i: 1 }, { kind: 'clip', i: 2 }], { kind: 'clip', i: 2 }); P.setFrame(24); P.editTlRefresh(); }""", tab)
+        return pg
+
+    def reselect(self, pg):
+        """Undo lets the selection go; the three V1 clips again, the last one the primary."""
+        pg.evaluate("() => { const P = __panel; P._editTlSetSelList([{ kind: 'clip', i: 0 }, { kind: 'clip', i: 1 }, { kind: 'clip', i: 2 }], { kind: 'clip', i: 2 }); P.editTlRefresh(); }")
+
+    SETROW = "([label, v]) => { const i = (" + ROW + ")(label).querySelector('input.insp-num'); i.value = String(v); i.dispatchEvent(new Event('change')); }"
+    FXOF = "(i) => __panel._editTlCut.clips[i].fx || {}"
+    VOLS = "() => { const c = __panel._editTlCut; return [c.clips[0].volume, c.clips[1].volume, c.clips[2].volume, c.tracks[1].clips[0].volume]; }"
+
+    def test_22_several_selected_opacity_zoom_and_volume_go_to_all_with_one_undo(self):
+        pg = self.multi_page()
+        self.assertEqual(pg.evaluate("() => __panel.editInspectorPanel.querySelector('.insp-multi').textContent.slice(0, 7)"), "3 clips")
+        n = self.undo_len(pg)
+        pg.evaluate(self.SETROW, ["Opacity", 40])
+        self.assertEqual(self.undo_len(pg), n + 1)
+        for i in range(3):
+            self.assertAlmostEqual(pg.evaluate(self.FXOF, i).get("op"), 0.4, places=3, msg=str(i))
+        pg.evaluate("() => __panel.editTlUndo()")
+        for i in range(3):
+            self.assertIsNone(pg.evaluate(self.FXOF, i).get("op"))
+        self.reselect(pg)
+        # Zoom X (linked to Y): the same absolute value on all three; one step.
+        n = self.undo_len(pg)
+        pg.evaluate("() => { const i = (" + self.ROW + ")('Zoom').querySelectorAll('input.insp-num')[0]; i.value = '1.5'; i.dispatchEvent(new Event('change')); }")
+        self.assertEqual(self.undo_len(pg), n + 1)
+        for i in range(3):
+            fx = pg.evaluate(self.FXOF, i)
+            self.assertEqual((fx.get("zx"), fx.get("zy")), (1.5, 1.5), i)
+        pg.evaluate("() => __panel.editTlUndo()")
+        for i in range(3):
+            self.assertIsNone(pg.evaluate(self.FXOF, i).get("zx"))
+        self.reselect(pg)
+        # A slider drag is one step, and sets the value on all.
+        n = self.undo_len(pg)
+        pg.evaluate("() => { const r = (" + self.ROW + ")('Opacity').querySelector('input.insp-range'); r.value = '25'; r.dispatchEvent(new Event('input')); r.value = '30'; r.dispatchEvent(new Event('input')); r.dispatchEvent(new Event('change')); }")
+        self.assertEqual(self.undo_len(pg), n + 1)
+        self.assertEqual([round(pg.evaluate(self.FXOF, i).get("op") * 100) for i in range(3)], [30, 30, 30])
+        # Volume: the films (a, b) and the sound clip on A2 get it, the still does not.
+        pg.evaluate("() => { const P = __panel; P._editTlSetSelList([{ kind: 'clip', i: 0 }, { kind: 'clip', i: 1 }, { kind: 'clip', i: 2 }, { kind: 'tclip', track: 'A2', i: 0 }], { kind: 'clip', i: 0 }); P._editInspTab = 'audio'; P.editTlRefresh(); }")
+        n = self.undo_len(pg)
+        pg.evaluate(self.SETROW, ["Volume", 50])
+        self.assertEqual(self.undo_len(pg), n + 1)
+        self.assertEqual(pg.evaluate(self.VOLS), [0.5, 1, 0.5, 0.5])
+        pg.evaluate("() => __panel.editTlUndo()")
+        self.assertEqual(pg.evaluate(self.VOLS), [1, 1, 1, 1])
+        self.assertEqual(self.errors, [])
+
+    def test_22_a_row_that_differs_shows_mixed_and_a_reset_resets_all(self):
+        pg = self.multi_page()
+        pg.evaluate("() => { const P = __panel; const c = P._editTlCut; P._editTlApply({ ...c, clips: c.clips.map((x, i) => i === 0 ? { ...x, fx: { op: 0.5 } } : x) }); }")
+        state = "(l) => { const r = (" + self.ROW + ")(l); const i = r.querySelector('input.insp-num'); return [r.classList.contains('insp-mixedrow'), i.value, i.placeholder]; }"
+        self.assertEqual(pg.evaluate(state, "Opacity"), [True, "", "—"])
+        self.assertEqual(pg.evaluate(state, "Rotation Angle")[0], False)
+        pg.evaluate(self.SETROW, ["Rotation Angle", 10])
+        n = self.undo_len(pg)
+        pg.evaluate(self.CLICK, ["Opacity", ".insp-reset"])
+        self.assertEqual(self.undo_len(pg), n + 1)
+        self.assertEqual([pg.evaluate(self.FXOF, i).get("op", 1) for i in range(3)], [1, 1, 1])
+        self.assertEqual(pg.evaluate(state, "Opacity")[0], False)
+        self.assertEqual([pg.evaluate(self.FXOF, i).get("rot") for i in range(3)], [10, 10, 10])
+        self.assertEqual(self.errors, [])
+
+    def test_22_the_diamond_keys_only_the_clips_the_playhead_crosses_and_auto_key_works_per_clip(self):
+        pg = self.multi_page()
+        # a (0-4), c (4-7) and v on V2 (3-8); the playhead at 3.5 s lies in a and v, not in c; the primary is a.
+        pg.evaluate("() => { const P = __panel; P._editTlSetSelList([{ kind: 'clip', i: 1 }, { kind: 'tclip', track: 'V2', i: 0 }, { kind: 'clip', i: 0 }], { kind: 'clip', i: 0 }); P.setFrame(84); P.editTlRefresh(); }")
+        keysof = "() => { const c = __panel._editTlCut; const k = (x) => ((x.fx || {}).keys || {}).op || []; return [k(c.clips[0]), k(c.clips[1]), k(c.tracks[0].clips[0])]; }"
+        n = self.undo_len(pg)
+        pg.evaluate(self.CLICK, ["Opacity", ".insp-diamond"])
+        self.assertEqual(self.undo_len(pg), n + 1)
+        got = pg.evaluate(keysof)
+        self.assertEqual([len(x) for x in got], [1, 0, 1])
+        self.assertAlmostEqual(got[0][0]["t"], 3.5, places=3)
+        self.assertAlmostEqual(got[2][0]["t"], 0.5, places=3)
+        self.assertEqual(pg.evaluate(self.DIAMOND, "Opacity"), "on")
+        # Auto-key: a and v have keys, so they get a key at the playhead; c has none, so it gets the static value.
+        pg.evaluate(self.SETROW, ["Opacity", 20])
+        got = pg.evaluate(keysof)
+        self.assertEqual([len(x) for x in got], [1, 0, 1])
+        self.assertAlmostEqual(got[0][0]["v"], 0.2, places=3)
+        self.assertAlmostEqual(got[2][0]["v"], 0.2, places=3)
+        self.assertAlmostEqual(pg.evaluate(self.FXOF, 1)["op"], 0.2, places=3)
+        self.assertIsNone(pg.evaluate("() => (__panel._editTlCut.clips[0].fx || {}).op"))
+        # The diamond again takes the keys from every clip the playhead crosses, as one step.
+        n = self.undo_len(pg)
+        pg.evaluate(self.CLICK, ["Opacity", ".insp-diamond"])
+        self.assertEqual(self.undo_len(pg), n + 1)
+        self.assertEqual([len(x) for x in pg.evaluate(keysof)], [0, 0, 0])
+        # A playhead outside all of them: the diamond is off.
+        pg.evaluate("() => { __panel.setFrame(600); }")
+        self.assertTrue(pg.evaluate("() => (" + self.ROW + ")('Opacity').querySelector('.insp-diamond').disabled"))
+        self.assertEqual(self.errors, [])
+
+    def test_22_a_mixed_video_and_sound_selection_sends_volume_to_the_clips_with_sound(self):
+        pg = self.multi_page("audio")
+        sels = "[{ kind: 'clip', i: 1 }, { kind: 'tclip', track: 'A2', i: 0 }, { kind: 'tclip', track: 'V2', i: 0 }]"
+        pg.evaluate("() => { const P = __panel; P._editTlSetSelList(" + sels + ", { kind: 'tclip', track: 'A2', i: 0 }); P.editTlRefresh(); }")
+        pg.evaluate(self.SETROW, ["Volume", 20])
+        vols = pg.evaluate("() => { const c = __panel._editTlCut; return [c.clips[1].volume, c.tracks[1].clips[0].volume, c.tracks[0].clips[0].volume]; }")
+        self.assertEqual(vols, [1, 0.2, 0.2], "the still has no sound; the sound clip and the film on V2 have")
+        # With a picture primary, the video values go to the pictures only.
+        pg.evaluate("() => { const P = __panel; P._editTlSetSelList(" + sels + ", { kind: 'clip', i: 1 }); P._editInspTab = 'video'; P.editTlRefresh(); }")
+        pg.evaluate(self.SETROW, ["Opacity", 60])
+        ops = pg.evaluate("() => { const c = __panel._editTlCut; return [c.clips[1].fx.op, (c.tracks[0].clips[0].fx || {}).op, (c.tracks[1].clips[0].fx || {}).op]; }")
+        self.assertEqual(ops, [0.6, 0.6, None])
+        # Timing and File change the last clicked clip only, and say so.
+        pg.evaluate("() => { __panel._editInspTab = 'timing'; __panel.editTlRefresh(); }")
+        self.assertIn("last clicked", pg.evaluate("() => __panel.editInspectorPanel.querySelector('.insp-multi').textContent"))
+        self.assertEqual(self.errors, [])
+
+    def test_22_popped_out_several_selected_change_together(self):
+        pg = self.multi_page()
+        with pg.context.expect_page() as pop:
+            pg.evaluate("() => window.__panel.toggleUndock()")
+        win = pop.value
+        win.wait_for_load_state()
+        pg.wait_for_function("() => __panel._editTlUi && __panel._editTlUi.body.ownerDocument !== document", timeout=10000)
+        pg.evaluate("() => { const P = __panel; P._editTlSetSelList([{ kind: 'clip', i: 0 }, { kind: 'clip', i: 1 }, { kind: 'clip', i: 2 }], { kind: 'clip', i: 2 }); P._editInspTab = 'video'; P.editTlRefresh(); }")
+        self.assertIn("3 clips", pg.evaluate("() => __panel.editInspectorPanel.querySelector('.insp-multi').textContent"))
+        pg.evaluate(self.SETROW, ["Opacity", 70])
+        self.assertEqual([round(pg.evaluate(self.FXOF, i).get("op") * 100) for i in range(3)], [70, 70, 70])
+        self.assertEqual(self.errors, [])
+
 if __name__ == "__main__":
     unittest.main()

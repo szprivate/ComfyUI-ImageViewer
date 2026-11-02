@@ -1394,6 +1394,11 @@ textarea.param-input {
 .insp-row .edit-swatches { padding: 0; max-width: none; }
 .insp-color { width: 44px; height: 20px; padding: 0; border: 1px solid #444; border-radius: 2px; background: #111; cursor: pointer; }
 .insp-note { font-size: 10px; color: #777; line-height: 1.4; padding: 8px 8px 0; }
+.insp-multi { font-size: 10px; color: #00e5ff; line-height: 1.4; padding: 6px 8px 0; }
+.insp-mixed { font-style: italic; }
+.insp-num.insp-mixed::placeholder { color: #00b8d4; opacity: .8; }
+.insp-range.insp-mixed { opacity: .55; }
+.insp-flip.insp-mixed { font-style: italic; opacity: .7; }
 .insp-foot { padding: 10px 8px; }
 .insp-body .curves-empty { padding: 12px; }
 .fx-body { flex: 1 1 auto; min-height: 0; display: flex; gap: 6px; padding: 6px 8px 8px; }

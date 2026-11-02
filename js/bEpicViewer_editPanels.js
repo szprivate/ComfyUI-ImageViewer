@@ -113,11 +113,24 @@ export const EditPanelsMixin = {
         };
         const prev = btn("prev", "\u25c2", `The key of ${label} before`, () => go(-1), D.nextKeyTime(c, params, k.u, -1) == null);
         const next = btn("next", "\u25b8", `The key of ${label} after`, () => go(1), D.nextKeyTime(c, params, k.u, 1) == null);
+        // Several clips selected: the diamond works on every one the playhead lies inside; its state is the primary's.
+        const targets = k.targetsFor ? k.targetsFor(params) : [k];
+        const reach = targets.some((t) => t.inside);
+        const toggleAll = () => {
+            let next = this._editTlCut;
+            for (const t of targets) {
+                if (!t.inside) continue;
+                const on = D.keyedAt(D.clipOf(next, t.sel), params, t.u);
+                if (here && on) next = D.removeKeys(next, t.sel, params, t.u);
+                else if (!here && !on) next = D.toggleKeys(next, t.sel, params, t.u);
+            }
+            if (next !== this._editTlCut) this._editTlApply(next);
+        };
         const dia = btn("insp-diamond" + (here ? " on" : any ? " has" : ""), here ? "\u25c6" : "\u25c7",
-            !k.inside ? `${label}: put the playhead on this clip to set a keyframe`
+            !reach ? `${label}: put the playhead on ${targets.length > 1 ? "one of the selected clips" : "this clip"} to set a keyframe`
                 : here ? `${label}: a keyframe here - click to take it away; right-click: how it goes on to the next`
                 : `${label}: add a keyframe at the playhead` + (any ? " (it is animated: a change here makes one by itself)" : ""),
-            () => { this._editFxLive = null; this._editTlApply(D.toggleKeys(this._editTlCut, k.sel, params, k.u)); }, !k.inside);
+            () => { this._editFxLive = null; toggleAll(); }, !reach);
         dia.dataset.state = here ? "on" : any ? "has" : "none";
         dia.addEventListener("contextmenu", (e) => {
             e.preventDefault();
@@ -260,6 +273,10 @@ export const EditPanelsMixin = {
         };
         // A row: its name, its controls, its keyframes (`keys`: the params it animates), its own reset.
         let keying = null;              // { c, sel, u, inside, start } of the selected clip, for the rows' diamonds
+        // Several clips selected: a change goes to every one it applies to (video to the pictures, volume to what has
+        // sound), as the same absolute value. Without them these are the one selected clip.
+        let mixed = () => false;
+        let clearRow = (keys) => D.clearKeys(cut, sel, keys);
         const row = (label, controls, reset, keys) => {
             const r = el("div", "insp-row");
             const ctl = el("div", "insp-ctl");
@@ -269,7 +286,9 @@ export const EditPanelsMixin = {
                 r.append(this._editInspKeys(doc, keying, keys, label));
                 r.dataset.keys = keys.join(",");
                 // Its reset takes the keys too (one undo step).
-                if (D.keyTimes(keying.c, keys).length) reset = () => apply(D.clearKeys(cut, sel, keys));
+                const reach = keying.targetsFor ? keying.targetsFor(keys) : [keying];
+                if (reach.some((t) => D.keyTimes(t.c, keys).length)) reset = () => apply(clearRow(keys));
+                if (keys.some(mixed)) { r.dataset.mixed = keys.filter(mixed).join(","); r.classList.add("insp-mixedrow"); }
             }
             r.append(reset ? resetBtn("Reset " + label, reset) : el("span", "insp-reset-gap"));
             (into || { append: (n) => parts.push(n) }).append(r);
@@ -282,7 +301,13 @@ export const EditPanelsMixin = {
             if (o.min !== undefined) input.min = String(o.min);
             if (o.max !== undefined) input.max = String(o.max);
             input.value = Number(value).toFixed(digits);
-            if (o.title) input.title = o.title;
+            if (o.mixed) {
+                // Differs across the selection: no number, a dash; a value typed goes to all of them.
+                input.value = "";
+                input.placeholder = "—";
+                input.classList.add("insp-mixed");
+            }
+            if (o.title) input.title = o.mixed ? o.title + " (mixed: the selected clips differ)" : o.title;
             input.disabled = !!o.disabled;
             input.addEventListener("change", () => { if (input.value !== "" && Number.isFinite(Number(input.value))) commit(Number(input.value)); });
             return input;
@@ -291,15 +316,16 @@ export const EditPanelsMixin = {
         // A slider with its number beside it. While it is dragged only the
         // picture follows (`live`); the cut changes when it is let go, or the
         // slider would be redrawn under the pointer.
-        const slider = (value, min, max, step, digits, live, commit, title) => {
+        const slider = (value, min, max, step, digits, live, commit, title, mixed) => {
             const range = el("input", "insp-range");
             range.type = "range";
             range.min = String(min);
             range.max = String(max);
             range.step = String(step);
             range.value = String(Math.max(min, Math.min(max, value)));
-            const num = numField(value, digits, commit, { step, title });
-            range.addEventListener("input", () => { num.value = Number(range.value).toFixed(digits); if (live) live(Number(range.value)); });
+            const num = numField(value, digits, commit, { step, title, mixed });
+            if (mixed) range.classList.add("insp-mixed");
+            range.addEventListener("input", () => { num.value = Number(range.value).toFixed(digits); num.classList.remove("insp-mixed"); if (live) live(Number(range.value)); });
             range.addEventListener("change", () => commit(Number(range.value)));
             return [range, num];
         };
@@ -343,9 +369,50 @@ export const EditPanelsMixin = {
             // The playhead in the clip's own time (frame-snapped): where its keys are made and its numbers read.
             keying = this._editInspKeying(cut, sel, c);
             const u = keying.u;
+            const clipSels = this._editTlSelAll().filter((s) => (s.kind === "clip" || s.kind === "tclip") && D.clipOf(cut, s));
+            const several = clipSels.length > 1 && clipSels.some((s) => D.sameSel(s, sel));
+            const picture = (s) => s.kind === "clip" || (D.trackOf(cut, s.track) || {}).kind !== "audio";
+            const sounds = (s) => {
+                const k = D.clipOf(cut, s);
+                if (s.kind === "tclip" && (D.trackOf(cut, s.track) || {}).kind === "audio") return true;
+                return picture(s) && !D.isStill(k.file) && !k.mute;
+            };
+            // The clips a row's params reach (the selected one always), each with the playhead in its own time.
+            const targetsFor = (params) => {
+                if (!several) return [keying];
+                const want = params.includes("vol") ? sounds : picture;
+                return clipSels.filter((s) => D.sameSel(s, sel) || want(s))
+                    .map((s) => D.sameSel(s, sel) ? keying : this._editInspKeying(cut, s, D.clipOf(cut, s)));
+            };
+            keying.targetsFor = targetsFor;
+            const valueOf = (t, p) => (p === "vol" ? D.paramAt(t.c, "vol", t.u) : D.rawFx(t.c, t.u)[p]);
+            mixed = (p) => {
+                const ts = targetsFor([p]);
+                return ts.length > 1 && ts.some((t) => { const a = valueOf(t, p), b = valueOf(keying, p); return typeof a === "number" ? Math.abs(a - b) > 1e-6 : !!a !== !!b; });
+            };
+            clearRow = (keys) => targetsFor(keys).reduce((n, t) => D.clearKeys(n, t.sel, keys), cut);
+            const eachTarget = (params, fn) => targetsFor(params).reduce((n, t) => fn(n, t), cut);
             const fx = D.rawFx(c, u);
             // A param with keys gets a key at the playhead; one without, its number (Resolve's auto-key).
-            const setFx = (patch) => apply(D.autoKey(cut, sel, patch, u));
+            const setFx = (patch) => {
+                if (!several) { apply(D.autoKey(cut, sel, patch, u)); return; }
+                // Per clip: a keyed param gets a key at the playhead (only where the playhead is inside the clip), the rest their number.
+                const put = (params, p) => eachTarget(params, (n, t) => {
+                    const mine = D.sameSel(t.sel, sel);
+                    const q = {};
+                    for (const [k, v] of Object.entries(p)) if (mine || t.inside || !D.keyTimes(t.c, [k]).length) q[k] = v;
+                    return Object.keys(q).length ? D.autoKey(n, t.sel, q, t.u) : n;
+                });
+                const { vol, ...fxPatch } = patch;
+                let next = Object.keys(fxPatch).length ? put(Object.keys(fxPatch), fxPatch) : cut;
+                if (vol !== undefined) next = targetsFor(["vol"]).reduce((n, t) => {
+                    const mine = D.sameSel(t.sel, sel);
+                    return mine || t.inside || !D.keyTimes(t.c, ["vol"]).length ? D.autoKey(n, t.sel, { vol }, t.u) : n;
+                }, next);
+                apply(next);
+            };
+            const setVol = (v) => setFx({ vol: v });
+            const resetFx = (what) => apply(eachTarget(["zx"], (n, t) => D.resetClipFx(n, t.sel, what)));
             const liveFx = (patch) => {
                 if (!this.editPlayFxLive) return;
                 const f = { ...D.cleanFx(c.fx), ...patch };
@@ -353,48 +420,56 @@ export const EditPanelsMixin = {
                 this.editPlayFxLive(c, f);
             };
             const pct = (key, label, o = {}) => row(label, slider(fx[key] * 100, 0, 100, 0.1, 1, (v) => liveFx({ [key]: v / 100 }),
-                (v) => setFx({ [key]: v / 100 }), o.title || "percent"), () => setFx({ [key]: D.FX[key][0] }), [key]);
+                (v) => setFx({ [key]: v / 100 }), o.title || "percent", mixed(key)), () => setFx({ [key]: D.FX[key][0] }), [key]);
+            if (several) {
+                const m = el("div", "insp-multi", `${clipSels.length} clips`
+                    + (tab === "video" || tab === "audio" ? " · a change here goes to all of them (video to the pictures, volume to what has sound)"
+                                                          : " · this tab changes the last clicked clip only"));
+                m.title = "Several clips are selected: Video and Audio changes are set on every one they apply to, as the same value. Timing (speed, retime, length, order) and File change the last clicked clip only.";
+                parts.push(m);
+            }
             if (tab === "video") {
-                section("Transform", { off: fx.toff, toggle: (off) => setFx({ toff: off }), reset: () => apply(D.resetClipFx(cut, sel, "transform")) });
+                section("Transform", { off: fx.toff, toggle: (off) => setFx({ toff: off }), reset: () => resetFx("transform") });
                 const linked = this._editInspUnlinked !== true;
                 const link = tip(el("button", "edit-hbtn insp-link" + (linked ? " on" : ""), "="),
                                  linked ? "Zoom X and Y are linked - click to set them apart" : "Link zoom X and Y");
                 link.addEventListener("click", () => { this._editInspUnlinked = linked; this._editInspRender(); });
-                row("Zoom", [axis("X"), numField(fx.zx, 2, (v) => setFx(linked ? { zx: v, zy: v } : { zx: v }), { step: 0.01, min: 0.01, title: "1 is its own size" }),
-                             link, axis("Y"), numField(fx.zy, 2, (v) => setFx(linked ? { zx: v, zy: v } : { zy: v }), { step: 0.01, min: 0.01, title: "1 is its own size" })],
+                row("Zoom", [axis("X"), numField(fx.zx, 2, (v) => setFx(linked ? { zx: v, zy: v } : { zx: v }), { step: 0.01, min: 0.01, title: "1 is its own size", mixed: mixed("zx") }),
+                             link, axis("Y"), numField(fx.zy, 2, (v) => setFx(linked ? { zx: v, zy: v } : { zy: v }), { step: 0.01, min: 0.01, title: "1 is its own size", mixed: mixed("zy") })],
                     () => setFx({ zx: 1, zy: 1 }), ["zx", "zy"]);
-                row("Position", [axis("X"), numField(fx.x * 100, 1, (v) => setFx({ x: v / 100 }), { step: 0.5, title: "percent of the frame's width, to the right" }),
-                                 el("span", "insp-link-gap"), axis("Y"), numField(fx.y * 100, 1, (v) => setFx({ y: v / 100 }), { step: 0.5, title: "percent of the frame's height, up" })],
+                row("Position", [axis("X"), numField(fx.x * 100, 1, (v) => setFx({ x: v / 100 }), { step: 0.5, title: "percent of the frame's width, to the right", mixed: mixed("x") }),
+                                 el("span", "insp-link-gap"), axis("Y"), numField(fx.y * 100, 1, (v) => setFx({ y: v / 100 }), { step: 0.5, title: "percent of the frame's height, up", mixed: mixed("y") })],
                     () => setFx({ x: 0, y: 0 }), ["x", "y"]);
-                row("Rotation Angle", slider(fx.rot, -180, 180, 0.1, 1, (v) => liveFx({ rot: v }), (v) => setFx({ rot: v }), "degrees, clockwise"),
+                row("Rotation Angle", slider(fx.rot, -180, 180, 0.1, 1, (v) => liveFx({ rot: v }), (v) => setFx({ rot: v }), "degrees, clockwise", mixed("rot")),
                     () => setFx({ rot: 0 }), ["rot"]);
-                row("Anchor Point", [axis("X"), numField(fx.ax * 100, 1, (v) => setFx({ ax: v / 100 }), { step: 0.5, title: "the point it is scaled and turned about: percent of the frame's width from its middle" }),
-                                     el("span", "insp-link-gap"), axis("Y"), numField(fx.ay * 100, 1, (v) => setFx({ ay: v / 100 }), { step: 0.5, title: "percent of the frame's height from its middle, up" })],
+                row("Anchor Point", [axis("X"), numField(fx.ax * 100, 1, (v) => setFx({ ax: v / 100 }), { step: 0.5, title: "the point it is scaled and turned about: percent of the frame's width from its middle", mixed: mixed("ax") }),
+                                     el("span", "insp-link-gap"), axis("Y"), numField(fx.ay * 100, 1, (v) => setFx({ ay: v / 100 }), { step: 0.5, title: "percent of the frame's height from its middle, up", mixed: mixed("ay") })],
                     () => setFx({ ax: 0, ay: 0 }), ["ax", "ay"]);
                 const flip = (key, glyph, title) => {
-                    const b = tip(el("button", "edit-btn insp-flip" + (fx[key] ? " on" : ""), glyph), title);
+                    const b = tip(el("button", "edit-btn insp-flip" + (fx[key] ? " on" : "") + (mixed(key) ? " insp-mixed" : ""), glyph), title);
                     b.addEventListener("click", () => setFx({ [key]: !fx[key] }));
                     return b;
                 };
                 row("Flip", [flip("fh", "Horizontal", "Flip left to right"), flip("fv", "Vertical", "Flip top to bottom")],
                     () => setFx({ fh: false, fv: false }));
 
-                section("Cropping", { off: fx.coff, toggle: (off) => setFx({ coff: off }), reset: () => apply(D.resetClipFx(cut, sel, "crop")) });
+                section("Cropping", { off: fx.coff, toggle: (off) => setFx({ coff: off }), reset: () => resetFx("crop") });
                 pct("cl", "Crop Left", { title: "percent of the picture taken off its left" });
                 pct("cr", "Crop Right", { title: "percent of the picture taken off its right" });
                 pct("ct", "Crop Top", { title: "percent of the picture taken off its top" });
                 pct("cb", "Crop Bottom", { title: "percent of the picture taken off its bottom" });
 
-                section("Composite", { off: fx.ooff, toggle: (off) => setFx({ ooff: off }), reset: () => apply(D.resetClipFx(cut, sel, "composite")) });
+                section("Composite", { off: fx.ooff, toggle: (off) => setFx({ ooff: off }), reset: () => resetFx("composite") });
                 pct("op", "Opacity", { title: "percent" });
                 into = null;
                 if (!placed) note("This shot is on the cut itself: where it does not cover the frame, the film is black. On a track above, what is under it shows.");
             } else if (tab === "audio") {
-                section("Volume", { reset: () => apply(D.setClipProps(cut, sel, { volume: 1 })) });
+                const resetVol = () => apply(eachTarget(["vol"], (n, t) => D.setClipProps(n, t.sel, { volume: 1 })));
+                section("Volume", { reset: resetVol });
                 const now = D.paramAt(c, "vol", u) * 100;
                 row("Volume", slider(now, 0, 100, 1, 0, (v) => {
                     if (this._editTlOnScreen() && this._videoMode && this.videoBase) { try { this.videoBase.volume = v / 100; } catch (_) {} }
-                }, (v) => apply(D.autoKey(cut, sel, { vol: v / 100 }, u)), "percent"), () => apply(D.setClipProps(cut, sel, { volume: 1 })), ["vol"]);
+                }, (v) => setVol(v / 100), "percent", mixed("vol")), resetVol, ["vol"]);
                 into = null;
             } else if (tab === "timing") {
                 // Where it is and which part of its source it plays. "Start" and
@@ -460,7 +535,10 @@ export const EditPanelsMixin = {
             head(String(x.text || "Text").split("\n")[0]);
             const tab = tabs([["title", "Title", true], ["timing", "Timing", true]]);
             const look = D.textLook(x);
-            const setLook = (patch) => apply(D.setTextLook(cut, i, patch));
+            const texts = this._editTlSelAll().filter((s) => s.kind === "text" && cut.texts[s.i]);
+            const manyTexts = texts.length > 1 && texts.some((s) => s.i === i);
+            const setLook = (patch) => apply((manyTexts ? texts : [sel]).reduce((n, s) => D.setTextLook(n, s.i, patch), cut));
+            if (manyTexts) parts.push(el("div", "insp-multi", `${texts.length} texts · the look goes to all of them; the words and timing to this one`));
             if (tab === "title") {
                 section("Text");
                 const area = quiet(el("textarea", "insp-area"));
