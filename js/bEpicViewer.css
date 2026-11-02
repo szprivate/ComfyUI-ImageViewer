@@ -569,6 +569,20 @@ textarea.param-input {
     overflow-y: auto; overflow-x: hidden;
     flex: 1; min-height: 0;
 }
+/* On a cut's tab the strip shows another tab's history: which one, and a
+   dropdown to pick another (HistoryMixin._syncHistorySource). */
+.history-source {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    padding: 6px 6px 0 6px; font-size: 11px; color: #aaa;
+}
+.history-source-label { white-space: nowrap; }
+.history-source-sel {
+    flex: 1 1 60px; min-width: 0; max-width: 100%;
+    background: #151515; color: #ddd; border: 1px solid #333; border-radius: 4px;
+    font-size: 11px; padding: 2px 4px;
+}
+.history-source.none .history-source-sel { display: none; }
+
 /* A tile is as tall as its picture is at the column's width: the picture is
    never cropped (`contain`, and the tile takes the picture's shape: its own
    ratio once loaded, 4:3 while it is still on its way - `auto 4 / 3`). */

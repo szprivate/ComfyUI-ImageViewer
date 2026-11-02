@@ -60,3 +60,14 @@ test("indices that point past the stack are dropped", () => {
     const r = describeHistorySelection({ stack: [snap("a.png")], state: { key: "t", multi: [0, 9] }, tab: "t" });
     assert.equal(r.count, 1);
 });
+
+test("on a cut's tab (a borrowed strip) one clicked thumbnail is a pick, named by its own tab", () => {
+    assert.deepEqual(pickedIndices({ key: "t", multi: [2], borrowed: true }), { mode: "multi", indices: [2] });
+    assert.deepEqual(pickedIndices({ key: "t", multi: [], borrowed: true }), { mode: "", indices: [] });
+    const out = describeHistorySelection({ stack: [snap("a.mp4"), snap("b.mp4"), snap("c.mp4")],
+        state: { key: "t", multi: [1], borrowed: true }, tab: "t", tabLabel: "Renders" });
+    assert.equal(out.tab, "t");
+    assert.equal(out.tab_label, "Renders");
+    assert.equal(out.mode, "multi");
+    assert.deepEqual(out.items.map((i) => i.path), ["D:/out/b.mp4"]);
+});

@@ -10,6 +10,8 @@
 //   multi    - two or more thumbnails Ctrl/Ctrl+Shift-selected
 //   compare  - two snapshots pinned against each other (Shift+click)
 //   open     - one older snapshot clicked open (or stepped to with the arrows)
+// On a cut's tab the strip shows another tab's history (`borrowed`) and a click
+// only selects, so there one clicked thumbnail is a pick too ("multi").
 // The newest render landing in the strip highlights itself too, but nobody
 // chose it, so a strip nobody touched reports nothing. Nor does a closed viewer:
 // what cannot be seen is not "the one I have selected".
@@ -67,12 +69,12 @@ export function snapshotItem(snapshot, index, agentTags) {
 /**
  * Which snapshots count as picked, and how.
  * `state`: { multi: [idx...], viewing: bool, viewingKey, viewingIndex,
- *            compare: { key, baseIdx, otherIdx } | null, key }
+ *            compare: { key, baseIdx, otherIdx } | null, key, borrowed? }
  */
 export function pickedIndices(state) {
     const s = state || {};
     const multi = Array.isArray(s.multi) ? s.multi.filter(Number.isInteger) : [];
-    if (multi.length > 1) return { mode: "multi", indices: multi };
+    if (multi.length > 1 || (s.borrowed && multi.length === 1)) return { mode: "multi", indices: multi };
     const c = s.compare;
     if (c && c.key === s.key && Number.isInteger(c.baseIdx) && Number.isInteger(c.otherIdx)) {
         return { mode: "compare", indices: [c.baseIdx, c.otherIdx] };

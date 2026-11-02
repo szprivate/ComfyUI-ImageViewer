@@ -89,8 +89,9 @@ export const HistoryTagsMixin = {
         return tag === f;
     },
 
-    /** Indices of the active tab's snapshots the filter shows, newest first. */
-    historyVisibleIndices(key = this.activeTab) {
+    /** Indices of the strip's snapshots the filter shows, newest first (the
+     *  strip's tab: the open one, or on a cut's tab the one it borrows). */
+    historyVisibleIndices(key = this.historyKey ? this.historyKey() : this.activeTab) {
         const stack = this.history[key] || [];
         const out = [];
         stack.forEach((s, i) => { if (this.historyTagVisible(s)) out.push(i); });
@@ -304,21 +305,24 @@ export const HistoryTagsMixin = {
         const btn = this.historyClearBtn;
         if (!btn) return;
         const words = this._historyFilterWords();
-        if (!words || !this.activeTab) { btn.title = "Clear History"; return; }
-        const n = this.historyVisibleIndices().length;
+        const key = this.historyKey ? this.historyKey() : this.activeTab;
+        if (!words || !key) { btn.title = "Clear History"; return; }
+        const n = this.historyVisibleIndices(key).length;
         btn.title = `Clear the ${n} ${words} snapshot${n === 1 ? "" : "s"} of this tab (the filter decides)`;
         btn.disabled = n === 0;
     },
 
     /**
      * The Clear button with a filter on: remove only what the filter shows, in
-     * the active tab, after asking. Returns false when no filter is on, so the
+     * the strip's tab, after asking. Returns false when no filter is on, so the
      * button goes on to clear the whole history as before.
      */
     clearHistoryFiltered(dlgWin) {
         const words = this._historyFilterWords();
-        const key = this.activeTab;
-        if (!words || !key) return false;
+        const key = this.historyKey ? this.historyKey() : this.activeTab;
+        if (!words) return false;
+        // A cut's tab with nothing to borrow has nothing to clear.
+        if (!key) return !!(this.historyBorrows && this.historyBorrows());
         const shown = this.historyVisibleIndices(key);
         if (!shown.length) return true;
         const label = (this.tabLabels && this.tabLabels[key]) || key;

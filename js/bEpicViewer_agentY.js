@@ -97,10 +97,12 @@ export const AgentYMixin = {
         return !!(this.style && this.style.display !== "none" && this.isConnected);
     },
 
-    /** The history snapshots the user picked in the open tab, as plain data
-     *  (see bEpicViewer_historySelection.js for what counts as a pick). */
+    /** The history snapshots the user picked in the strip, as plain data
+     *  (see bEpicViewer_historySelection.js for what counts as a pick). On a
+     *  cut's tab the strip shows another tab's history, and that tab is named. */
     agentHistorySelection() {
-        const key = this.activeTab;
+        const borrowed = !!(this.historyBorrows && this.historyBorrows());
+        const key = borrowed ? this.historyKey() : this.activeTab;
         const empty = { source: "viewer", tab: String(key || ""), tab_label: "", mode: "", count: 0, items: [] };
         if (!key || !this._agentViewerVisible()) return empty;
         let label = "";
@@ -115,6 +117,7 @@ export const AgentYMixin = {
                 viewingKey: this.currentHistoryKey,
                 viewingIndex: this.currentHistoryIndex,
                 compare: this.historyCompare || null,
+                borrowed,
             },
             tab: key,
             tabLabel: label,

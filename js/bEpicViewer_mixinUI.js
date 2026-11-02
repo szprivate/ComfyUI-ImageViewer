@@ -435,6 +435,8 @@ export const UIMixin = {
         } catch (e) {}
 
         this.activeTab = k;
+        // A cut's tab borrows the history of the media tab looked at last (HistoryMixin).
+        if (this.historyNoteTab) this.historyNoteTab(k);
         this.tabBar.querySelectorAll('.tab').forEach(t => {
             t.classList.toggle('active', t.dataset.tab === k);
         });

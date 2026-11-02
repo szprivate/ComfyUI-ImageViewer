@@ -8,6 +8,11 @@
 //                  Shift+Delete and the drag-to-graph handler then act on
 // Shift keeps compare because that is the older and more valuable gesture; the
 // selection is the one that had to find another modifier.
+//
+// On a cut's tab the strip shows another tab's history (historyKey, below) and
+// a click only selects - plain, Ctrl, Shift for a range - so the cut stays on
+// screen while thumbnails are dragged onto its timeline; a double-click opens
+// the snapshot in its own tab.
 import { api } from "../../scripts/api.js";
 import { setPref, PREF } from "./bEpicViewer_settings.js";
 
@@ -38,6 +43,108 @@ const THUMB_LOADS_MAX = 4;
 const THUMB_NEAR_MARGIN = '300px';
 
 export const HistoryMixin = {
+
+    // ── Whose history the strip shows ────────────────────────────────────────
+    //
+    // Normally the open tab's own. A cut's tab ("edit:…") has none - it is made
+    // FROM the other tabs' renders - so on it the strip BORROWS the history of a
+    // media tab: the one the user came from, or the one picked in the "History
+    // of" dropdown at the top of the strip. The thumbnails are there to be
+    // dragged onto the timeline, so on a borrowed strip a click only selects
+    // (Ctrl / Shift add to it, and agentY reads it as the selection) and never
+    // takes the user off the cut; a double-click opens the snapshot in its own
+    // tab. Everything that acts on "the strip" asks historyKey(), not activeTab.
+
+    /** Whether tab `key`'s strip shows another tab's history (it has none of its own). */
+    historyBorrows(key = this.activeTab) {
+        return !!(key && this.isEditTab && this.isEditTab(key));
+    },
+
+    /** The tabs whose history a borrowed strip can show: open, with history, in tab order. */
+    historySourceTabs() {
+        const order = [...(this.tabOrder || [])];
+        for (const k of Object.keys(this.allTabs || {})) if (!order.includes(k)) order.push(k);
+        return order.filter((k) => this.allTabs && this.allTabs[k] && !this.historyBorrows(k)
+                                   && ((this.history || {})[k] || []).length > 0);
+    },
+
+    /** The tab whose history the strip shows now (null: none to show). */
+    historyKey() {
+        const key = this.activeTab;
+        if (!this.historyBorrows(key)) return key;
+        const tabs = this.historySourceTabs();
+        const pick = this._historyBorrowKey;
+        return pick && tabs.includes(pick) ? pick : (tabs[0] || null);
+    },
+
+    // A tab came on screen (switchTab): a media tab is where a cut's strip
+    // borrows from next, so the last one looked at is the default.
+    historyNoteTab(key) {
+        if (key && !this.historyBorrows(key)) this._historyBorrowKey = key;
+    },
+
+    /** Show tab `key`'s history in a borrowed strip (the dropdown). */
+    setHistorySource(key) {
+        if (!this.historyBorrows() || !this.historySourceTabs().includes(key)) return;
+        if (this._historyBorrowKey === key && this.historyKey() === key) return;
+        this._historyBorrowKey = key;
+        this.clearHistorySelection();
+        this._historyPanelSig = null;
+        this.renderHistoryPanel();
+    },
+
+    _historyTabLabel(key) {
+        let label = "";
+        try { label = this._resolveTabLabel ? this._resolveTabLabel(key) : ""; } catch (_) { label = ""; }
+        return String(label || (this.tabLabels || {})[key] || key || "");
+    },
+
+    // The "History of [tab]" bar over a borrowed strip; hidden on any other.
+    _syncHistorySource(borrowed, key) {
+        const panel = this.historyPanel;
+        const strip = this.historyStrip;
+        if (!panel || !strip) return;
+        let bar = panel.querySelector(".history-source");
+        if (!borrowed) { if (bar) bar.style.display = "none"; return; }
+        const doc = panel.ownerDocument || document;
+        if (!bar) {
+            bar = doc.createElement("div");
+            bar.className = "history-source";
+            const label = doc.createElement("span");
+            label.className = "history-source-label";
+            label.textContent = "History of";
+            const sel = doc.createElement("select");
+            sel.className = "history-source-sel";
+            sel.title = "This cut has no history of its own: the strip shows this tab's. "
+                      + "Drag a thumbnail onto the timeline to add it as a clip.";
+            sel.onchange = () => this.setHistorySource(sel.value);
+            // As with the tag filter: neither the panel's click handler nor
+            // ComfyUI's keys should see what happens in the dropdown.
+            for (const type of ["click", "mousedown", "keydown", "keyup"]) {
+                sel.addEventListener(type, (e) => e.stopPropagation());
+            }
+            bar.addEventListener("click", (e) => e.stopPropagation());
+            bar.append(label, sel);
+            panel.insertBefore(bar, strip);
+        }
+        bar.style.display = "";
+        const sel = bar.querySelector(".history-source-sel");
+        const tabs = this.historySourceTabs();
+        const sig = tabs.map((k) => `${k}=${this._historyTabLabel(k)}`).join("\n");
+        if (sel._sig !== sig) {
+            sel.replaceChildren();
+            for (const k of tabs) {
+                const o = doc.createElement("option");
+                o.value = k;
+                o.textContent = this._historyTabLabel(k);
+                sel.append(o);
+            }
+            sel._sig = sig;
+        }
+        sel.disabled = tabs.length === 0;
+        bar.classList.toggle("none", tabs.length === 0);
+        if (key && sel.value !== key) sel.value = key;
+    },
 
     // ── History stack ────────────────────────────────────────────────────────
 
@@ -321,6 +428,11 @@ export const HistoryMixin = {
             if (didPrepend) this.refreshView();
             this._historyPanelSig = null;
             this.renderHistoryPanel();
+        } else if (this.historyBorrows()) {
+            // A cut's strip borrows this tab's history, or may start to (its
+            // dropdown lists the tabs that have some): the signature decides
+            // whether anything needs drawing again.
+            this.renderHistoryPanel();
         }
         this.queuePersistViewerState();
     },
@@ -351,7 +463,7 @@ export const HistoryMixin = {
     },
 
     /** The selected indices for a tab, ascending. Empty when it isn't the one. */
-    historySelectionIndices(key = this.activeTab) {
+    historySelectionIndices(key = this.historyKey()) {
         if (this._historySelKey !== key) return [];
         const stack = this.history[key] || [];
         const set = this._historySel();
@@ -361,7 +473,7 @@ export const HistoryMixin = {
     },
 
     /** `[{ imgObj, snapshot }]` for the selection, in strip order. */
-    selectedHistorySnapshots(key = this.activeTab) {
+    selectedHistorySnapshots(key = this.historyKey()) {
         const stack = this.history[key] || [];
         return this.historySelectionIndices(key)
             .map((i) => ({ imgObj: stack[i] && stack[i][0], snapshot: stack[i] }))
@@ -423,11 +535,12 @@ export const HistoryMixin = {
     // but which items are highlighted. renderHistoryPanel applies the same
     // classes from state, so a rebuild for other reasons keeps them.
     // A lone selected item is just the open one (it has its own border), so the
-    // highlight only shows once there are two or more.
+    // highlight only shows once there are two or more - except on a borrowed
+    // strip, where nothing is open and a click only selects.
     _paintHistorySelection() {
         if (!this.historyStrip) return;
-        const picked = this.historySelectionIndices(this.activeTab);
-        const selected = new Set(picked.length > 1 ? picked : []);
+        const picked = this.historySelectionIndices(this.historyKey());
+        const selected = new Set(picked.length > 1 || this.historyBorrows() ? picked : []);
         for (const thumb of this.historyStrip.children) {
             const idx = Number(thumb.dataset ? thumb.dataset.idx : NaN);
             if (Number.isInteger(idx)) thumb.classList.toggle('multi', selected.has(idx));
@@ -600,7 +713,7 @@ export const HistoryMixin = {
         for (const thumb of this.historyStrip.children) {
             if (!thumb.classList || !thumb.classList.contains('history-thumb')) continue;
             const idx = Number(thumb.dataset ? thumb.dataset.idx : NaN);
-            const isSelected = this.currentHistoryKey === key && this.currentHistoryIndex === idx;
+            const isSelected = !this.historyBorrows() && this.currentHistoryKey === key && this.currentHistoryIndex === idx;
             if (thumb.classList.contains('selected') === isSelected) continue;
             thumb.classList.toggle('selected', isSelected);
             thumb.style.border = isSelected ? '2px solid #f60' : '';
@@ -610,17 +723,21 @@ export const HistoryMixin = {
 
     renderHistoryPanel() {
         if (!this.historyStrip) return;
-        const key   = this.activeTab;
-        const stack = this.history[key] || [];
+        // A cut's tab borrows a media tab's history (historyKey, at the top).
+        const borrowed = this.historyBorrows();
+        const key   = this.historyKey();
+        const stack = (key && this.history[key]) || [];
+        this._syncHistorySource(borrowed, key);
 
-        // Normalise selection pointer
-        if (stack.length > 0 && (this.currentHistoryKey !== key || this.currentHistoryIndex == null || this.currentHistoryIndex < 0 || this.currentHistoryIndex >= stack.length)) {
+        // Normalise selection pointer. Not on a borrowed strip: nothing in it is
+        // open, and the pointer belongs to the tab whose picture is on screen.
+        if (!borrowed && stack.length > 0 && (this.currentHistoryKey !== key || this.currentHistoryIndex == null || this.currentHistoryIndex < 0 || this.currentHistoryIndex >= stack.length)) {
             this.currentHistoryKey   = key;
             this.currentHistoryIndex = 0;
         }
 
         // --- fast-path: skip full DOM rebuild if nothing changed ---
-        const layoutSig = JSON.stringify({ key, len: stack.length, cmp: this.historyCompare,
+        const layoutSig = JSON.stringify({ key, borrowed, len: stack.length, cmp: this.historyCompare,
                                            tags: this.historyTagSig ? this.historyTagSig(stack) : "" });
         const newSig = `${layoutSig}|${this.currentHistoryIndex}`;
         if (newSig === this._historyPanelSig) return;
@@ -677,7 +794,13 @@ export const HistoryMixin = {
             if (agentTag) thumb.appendChild(agentTag);
             thumb.dataset.idx = String(idx);
             const what = imgObj && imgObj.label ? ` - ${imgObj.label}` : '';
-            thumb.title = `History ${idx + 1}${what}\n` +
+            thumb.title = borrowed
+                ? `History ${idx + 1}${what} (of ${this._historyTabLabel(key)})\n` +
+                  `Drag onto the timeline to add it to the cut\n` +
+                  `Click to select it, Ctrl+click to add to the selection, Shift+click for a range\n` +
+                  `Double-click to open it in its own tab\n` +
+                  `Right-click to tag it with a colour`
+                : `History ${idx + 1}${what}\n` +
                           `Click, then Ctrl+click to add to the selection, Ctrl+Shift+click for a range\n` +
                           `Shift+click to compare against the open snapshot\n` +
                           `C with several Ctrl-selected: compare them (3+: a Contact Sheet of all)\n` +
@@ -690,7 +813,7 @@ export const HistoryMixin = {
                 this._makeHistoryThumbDraggable(thumb, imgObj, snapshot, key, idx);
             }
 
-            const isSelected = (this.currentHistoryKey === key && this.currentHistoryIndex === idx);
+            const isSelected = !borrowed && (this.currentHistoryKey === key && this.currentHistoryIndex === idx);
             if (isSelected) {
                 thumb.classList.add('selected');
                 thumb.style.border = '2px solid #f60';
@@ -701,13 +824,36 @@ export const HistoryMixin = {
                 if (idx === this.historyCompare.otherIdx) thumb.classList.add('compare');
             }
 
-            if (this.isHistoryItemSelected(key, idx) && this.historySelectionIndices(key).length > 1) thumb.classList.add('multi');
+            if (this.isHistoryItemSelected(key, idx) && (borrowed || this.historySelectionIndices(key).length > 1)) thumb.classList.add('multi');
 
             // Don't preventDefault here — that would block the native drag start
             // used to drop thumbnails onto the graph. stopPropagation still keeps
             // the mousedown from reaching any parent panel handler.
             thumb.onmousedown  = ev => ev.stopPropagation();
             thumb.oncontextmenu = (ev) => { ev.preventDefault(); ev.stopPropagation(); this.showThumbContextMenu(ev, imgObj, key, idx); };
+            // A borrowed strip (a cut's tab): a click selects and the cut stays
+            // on screen; a double-click opens the snapshot in its own tab.
+            if (borrowed) {
+                thumb.onclick = (ev) => {
+                    ev.stopPropagation();
+                    if (ev.shiftKey) this.extendHistorySelection(key, idx);
+                    else if (ev.ctrlKey || ev.metaKey) this.toggleHistorySelection(key, idx);
+                    else this.startHistorySelection(key, idx);
+                };
+                thumb.ondblclick = (ev) => {
+                    ev.stopPropagation();
+                    // Its tab first: openHistorySnapshot switching from here
+                    // would file that tab's live frames under the cut's tab.
+                    if (this.historyCompare) this.exitHistoryCompare();
+                    this.switchTab(key);
+                    this.openHistorySnapshot(key, idx);
+                    this.startHistorySelection(key, idx);
+                };
+                const heading = this.historyGroupHeader ? this.historyGroupHeader(document, snapshot, groupRun) : null;
+                if (heading) frag.appendChild(heading);
+                frag.appendChild(thumb);
+                return;
+            }
             thumb.onclick = (ev) => {
                 ev.stopPropagation();
 
@@ -765,6 +911,11 @@ export const HistoryMixin = {
             none.className = 'history-tag-empty';
             none.textContent = 'Nothing tagged like that here';
             this.historyStrip.appendChild(none);
+        } else if (borrowed && !key) {
+            const none = document.createElement('div');
+            none.className = 'history-tag-empty';
+            none.textContent = 'No tab has a history yet. Renders show here, to drag onto the cut.';
+            this.historyStrip.appendChild(none);
         }
 
         // Only reached when the signature changed, so this rides on real rebuilds
@@ -775,7 +926,8 @@ export const HistoryMixin = {
 
         let totalHistory = 0;
         Object.values(this.history).forEach(arr => { totalHistory += arr?.length || 0; });
-        const canClear = key ? stack.length > 0 : totalHistory > 0;
+        // A borrowed strip with nothing to borrow clears nothing (not "every tab").
+        const canClear = key ? stack.length > 0 : !borrowed && totalHistory > 0;
         if (this.historyClearBtn) this.historyClearBtn.disabled = !canClear;
         // With a tag filter on, Clear clears what it shows (HistoryTagsMixin).
         if (this._syncHistoryClearTitle) this._syncHistoryClearTitle();
@@ -802,6 +954,8 @@ export const HistoryMixin = {
      * Positive delta moves forward (down arrow), negative moves backward.
      */
     navigateHistory(delta) {
+        // A borrowed strip opens nothing in the viewport: the cut stays on screen.
+        if (this.historyBorrows()) return;
         const key = this.activeTab;
         const stack = this.history[key] || [];
         if (stack.length === 0) return;
@@ -914,6 +1068,9 @@ export const HistoryMixin = {
      * neither applies, so the key falls through to whatever else wants it.
      */
     deleteSelectedHistory() {
+        // On a cut's tab Shift+Delete is the Edit panel's ripple delete; the
+        // borrowed strip's items go by their right-click menu.
+        if (this.historyBorrows()) return false;
         const key = this.activeTab;
         const selected = this.historySelectionIndices(key);
         if (selected.length > 0) {
@@ -930,6 +1087,7 @@ export const HistoryMixin = {
 
     /** True when Shift+Delete has something to act on -- see deleteSelectedHistory. */
     hasDeletableHistory() {
+        if (this.historyBorrows()) return false;
         const key = this.activeTab;
         if (this.historySelectionIndices(key).length > 0) return true;
         return !!(this.isViewingHistory && this.currentHistoryKey === key &&
@@ -1058,6 +1216,9 @@ export const HistoryMixin = {
                 this.applyTimelineBounds(0);
             }
             this._historyPanelSig = null;
+            this.renderHistoryPanel();
+        } else if (this.historyBorrows()) {
+            // The cut's strip may have been showing the tab that just went.
             this.renderHistoryPanel();
         }
         this.queuePersistViewerState();

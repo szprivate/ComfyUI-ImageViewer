@@ -786,7 +786,10 @@ class ViewerPanel extends HTMLElement {
                 const dlgWin = this.historyClearBtn.ownerDocument?.defaultView || window;
                 // A tag filter on: only what it shows goes (HistoryTagsMixin).
                 if (this.clearHistoryFiltered && this.clearHistoryFiltered(dlgWin)) return;
-                const key = this.activeTab;
+                // A cut's tab shows (and clears) the history it borrows.
+                const borrowed = !!(this.historyBorrows && this.historyBorrows());
+                const key = borrowed ? this.historyKey() : this.activeTab;
+                if (borrowed && !key) return;
                 if (!key) {
                     if (!dlgWin.confirm('Clear all in-memory history for all tabs?')) return;
                     this.history = {};
