@@ -580,8 +580,16 @@ export const EditPlayMixin = {
         // The bar's speaker off (EditAudioMixin): everything at 0.
         const gain = this._editAudioGain ? this._editAudioGain() : 1;
         const loud = (clip, t) => D.clipVolume(clip, t) * gain;
-        try { if (!ep.still && this.videoBase) this.videoBase.volume = loud(at.clip, u) * a; } catch (_) {}
-        try { if (under && under.tagName === "VIDEO") under.volume = at.over ? 0 : loud(at.under.clip, uu) * (1 - a); } catch (_) {}
+        // Fades and audio crossfades (envGain): the film's own sound rises and falls with them; a crossfade's
+        // sound beyond the cut is played by the sound items (soundItems' handles), not by this element.
+        const cut = this._editPlayCut();
+        const envOf = (sel) => (cut && sel ? D.audioEnv(cut, sel) : null);
+        const env = envOf(at.sel);
+        const underSel = at.under && /^V1:\d+$/.test(at.under.key || "") ? { kind: "clip", i: Number(at.under.key.slice(3)) } : null;
+        const uenv = envOf(underSel);
+        ep.envOn = D.envActive(env) || D.envActive(uenv);
+        try { if (!ep.still && this.videoBase) this.videoBase.volume = Math.max(0, Math.min(1, loud(at.clip, u) * a * D.envGain(env, u))); } catch (_) {}
+        try { if (under && under.tagName === "VIDEO") under.volume = at.over ? 0 : Math.max(0, Math.min(1, loud(at.under.clip, uu) * (1 - a) * D.envGain(uenv, uu))); } catch (_) {}
     },
 
     // The titles on screen now (titlesAt), each on a canvas of its own laid where
@@ -787,7 +795,8 @@ export const EditPlayMixin = {
         if (!ep.bed) ep.bed = [];
         ep.sndAt = this._editPlayNow();
         const items = cut ? D.soundItems(cut, this._editPlayLive()) : [];
-        ep.keyedSound = items.some((it) => it.clip && D.keysOf(it.clip, "vol").length);
+        // Volume keys, fades and crossfades: their loudness set every frame.
+        ep.keyedSound = items.some((it) => (it.clip && D.keysOf(it.clip, "vol").length) || D.envActive(it.env));
         const doc = (this.container && this.container.ownerDocument) || document;
         const fps = this.editPlayFps();
         const rate = Math.max(0.0625, Math.min(16, (this.fps || fps) / fps));
@@ -802,10 +811,11 @@ export const EditPlayMixin = {
                 const inside = t >= item.at - 1e-3 && t < item.at + item.length - 1e-3;
                 if (!playing || !inside) { a.pause(); return; }
                 const clip = item.clip;
-                const u = t - item.at;
+                // The clip's own time: from where it begins (`origin`) - a crossfade's handle before it is u < 0.
+                const u = t - (item.origin != null ? item.origin : item.at);
                 // A retimed or looped sound clip: its source moment, at its speed; a ping-pong's way back is silent.
-                if (clip && D.clipSegment(clip, u).rev) { a.pause(); return; }
-                const want = clip ? D.srcLocal(clip, u) : item.in + u;
+                if (clip && u >= 0 && D.clipSegment(clip, u).rev) { a.pause(); return; }
+                const want = clip ? D.srcAt(clip, u) : item.in + u;
                 const speed = clip ? D.speedOf(clip) : 1;
                 const nominal = Math.max(0.0625, Math.min(16, rate * speed));
                 // Beside the film's clock: sought when it starts or is far off,
@@ -820,7 +830,9 @@ export const EditPlayMixin = {
                     : followPlan(a.currentTime || 0, want, nominal, settling ? 0 : a._epSought != null ? now - a._epSought : Infinity, speed);
                 if (plan.seek) { a.currentTime = want; a._epSought = now; }
                 // Volume keys: the sound clip's own time (clipVolume(clip, u)).
-                const vol = Math.max(0, Math.min(1, clip ? D.clipVolume(clip, u) : item.volume)) * (this._editAudioGain ? this._editAudioGain() : 1);
+                // Fades and crossfades on top (envGain, the render's env_gain).
+                const level = clip ? D.clipVolume(clip, Math.max(0, Math.min(Number(clip.length) || 0, u))) : item.volume;
+                const vol = Math.max(0, Math.min(1, level * D.envGain(item.env, u))) * (this._editAudioGain ? this._editAudioGain() : 1);
                 if (a.volume !== vol) a.volume = vol;
                 if (Math.abs(a.playbackRate - plan.rate) > 1e-6) a.playbackRate = plan.rate;
                 if ("preservesPitch" in a && a.preservesPitch !== (speed === 1)) a.preservesPitch = speed === 1;
@@ -946,6 +958,8 @@ export const EditPlayMixin = {
             this._editPlayMix({ ...now, mix: (t - now.mixStart) / now.mixLen });
         } else if (ep.at && (D.hasKeys(ep.at.clip) || (ep.at.under && D.hasKeys(ep.at.under.clip)))) {
             this._editPlayMirror();                       // keyframes: the look and the loudness of this moment
+        } else if (ep.at && ep.envOn) {
+            this._editPlayMix(ep.at);                     // a fade or a crossfade: the loudness of this moment
         }
         const frame = Math.max(min, Math.min(max, Math.floor(t * fps + 1e-6)));
         if (frame === this.currentFrame) return;

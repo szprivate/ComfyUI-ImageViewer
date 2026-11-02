@@ -110,6 +110,32 @@ class Generator(unittest.TestCase):
         self.assertEqual(at, T(root.find(".//sequence").get("duration")))
         self.assertEqual(at, Fraction(model["total"]) / rate)
 
+    def test_audio_fades_and_crossfades_are_fade_handles(self):
+        a2 = {"id": "A2", "kind": "audio", "name": "A2", "off": False, "clips": [
+            clip("s.wav", 2, at=0, start=1, fadeIn=0.5),
+            clip("t.wav", 2, at=2, start=1, xfade={"len": 1, "curve": "0", "align": "centre"})]}
+        edit = {"clips": [clip("a.mp4", 2, start=2, fadeOut=0.25), clip("b.mp4", 2, start=2, xfade={"len": 0.5, "curve": "+3"})],
+                "texts": [], "tracks": [a2]}
+        m, root, _x, _p = self.make(edit, {"a.mp4": film(), "b.mp4": film(), "s.wav": SOUND, "t.wav": SOUND})
+        self.check_whole(m, root, Fraction(24))
+        fades = lambda el: {f.tag: (f.get("type"), T(f.get("duration"))) for f in el.findall("adjust-volume/param/*") if f.tag in ("fadeIn", "fadeOut")}
+        a, b = root.findall(".//spine/asset-clip")
+        # V1: a crossfade of 0.5 s centred on the cut: the shots fade over their half, their handles below.
+        self.assertEqual(fades(a)["fadeOut"], ("easeOut", Fraction(1, 4)))
+        self.assertEqual(fades(b)["fadeIn"], ("easeOut", Fraction(1, 4)))
+        handles = [e for e in root.iter("asset-clip") if e.get("srcEnable") == "audio" and e.get("name") in ("a.mp4", "b.mp4")]
+        self.assertEqual(sorted((e.get("name"), T(e.get("duration"))) for e in handles), [("a.mp4", Fraction(1, 4)), ("b.mp4", Fraction(1, 4))])
+        # A2: the clips overlap by the crossfade (its handles), each fading over all of it; the first one's fade in.
+        s = [e for e in root.iter("asset-clip") if e.get("name") == "s.wav"][0]
+        t = [e for e in root.iter("asset-clip") if e.get("name") == "t.wav"][0]
+        self.assertEqual(T(s.get("duration")), Fraction(5, 2))         # runs half a second on
+        self.assertEqual(T(t.get("duration")), Fraction(5, 2))         # begins half a second early
+        self.assertEqual(T(t.get("start")), Fraction(1, 2))            # from before its in point
+        self.assertEqual(fades(s), {"fadeIn": ("linear", Fraction(1, 2)), "fadeOut": ("linear", Fraction(1))})
+        self.assertEqual(fades(t), {"fadeIn": ("linear", Fraction(1))})
+        # The fade elements sit inside the volume's amount param.
+        self.assertIsNotNone(s.find("adjust-volume/param[@name='amount']/fadeIn"))
+
     def test_plain_cuts_are_frame_exact(self):
         m, root, _x, _p = self.make({"clips": [clip("a.mp4", 2), clip("b.mp4", 3, start=1)], "texts": []},
                                     {"a.mp4": film(), "b.mp4": film()})

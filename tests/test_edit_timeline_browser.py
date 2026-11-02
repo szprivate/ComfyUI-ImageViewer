@@ -579,7 +579,7 @@ class EditTimelineBrowserTests(unittest.TestCase):
         self.assertAlmostEqual(pg.evaluate(self.HEAD), self.head_at(pg, 100), places=2)
         # The ruler clicked: the viewer's bar and its frame number follow.
         pg.mouse.click(*pg.evaluate("""() => { const r = __panel._editTlUi.ruler.getBoundingClientRect();
-            return [r.left + r.width * 5 / __panel._editTlLay.total, r.top + 5]; }"""))
+            return [r.left + r.width * (5 + 0.3 / 24) / __panel._editTlLay.total, r.top + 5]; }"""))      # inside frame 120 (pixels round)
         self.assertEqual(pg.evaluate("() => [__panel.currentFrame, Number(__panel.timeline.value), __panel.container.querySelector('#cur-f').innerText]"),
                          [120, 120, "120"])
         self.assertAlmostEqual(pg.evaluate(self.HEAD), self.head_at(pg, 120), places=2)
@@ -1666,7 +1666,8 @@ class EditTimelineBrowserTests(unittest.TestCase):
             self.assertEqual(pg.evaluate("() => [__panel._editTlCut.sound.length, __panel._editTlCut.texts.length]"), [0, 0], key)
             if ripple:
                 self.assertEqual(got["v1"][0][1], 0, "what follows closes up")
-                self.assertEqual(got["tracks"]["V2"], [["w", 8 * 24 - 24, 8 * 24]], "on its own track")
+                # On its own track by v's length, and - V2's Auto Track Selector being on - by the V1 shot's 4 s too.
+                self.assertEqual(got["tracks"]["V2"], [["w", 8 * 24 - 24 - 96, 8 * 24 - 96]], "on its own track, and with V1")
             else:
                 self.assertEqual(got["v1"][0][1], 96, "gaps stay")
                 self.assertEqual(got["tracks"]["V2"], [["w", 192, 216]])
@@ -2140,7 +2141,7 @@ class EditTimelineBrowserTests(unittest.TestCase):
         # Over a clip the line comes first: grabbing it on c's body scrubs, nothing moves.
         hx = pg.evaluate(self.HEAD_X)
         _, yv1 = pg.evaluate(WHERE, [8.5, "V1"])
-        x3, _ = pg.evaluate(WHERE, [3.0, "V1"])
+        x3, _ = pg.evaluate(WHERE, [3.0 + 0.3 / 24, "V1"])             # inside frame 72, not on its edge (pixels round)
         pg.mouse.move(hx - 2, yv1)
         pg.mouse.down()
         pg.mouse.move(x3, yv1, steps=5)
@@ -2533,7 +2534,7 @@ class EditTimelineBrowserTests(unittest.TestCase):
         pg.mouse.click(*pg.evaluate(WHERE, [5.0, "V1"]))
         pg.keyboard.press("Alt+Shift+Comma")
         self.settle(pg)
-        pg.wait_for_function("() => __panel._editTlUi.rows.querySelector('[data-key=\"V1:1\"]')._emSheet.exact", timeout=10000)
+        pg.wait_for_function("() => { const b = __panel._editTlUi.rows.querySelector('[data-key=\"V1:1\"]'); return !!(b && b._emSheet && b._emSheet.exact); }", timeout=10000)
         mid = pg.evaluate(self.PIECES)[1]
         self.assertEqual((mid["in"], mid["out"]), (2, 6))
         self.assertAlmostEqual(mid["tiles"][0], pieces[1]["tiles"][0] - 1, places=2)

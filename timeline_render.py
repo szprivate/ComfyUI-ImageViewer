@@ -537,6 +537,70 @@ def clip_sound(clip, seconds):
     return np.stack([np.interp(pos, grid, src[c]) for c in range(2)]).astype(np.float32)
 
 
+def handled_sound(clip, seconds, pre=0.0, post=0.0):
+    """*clip*'s sound from *pre* seconds before its start to *post* after its end (a crossfade's
+    handles), as a ``(2, n)`` array; silence where its file has nothing (before its start)."""
+    import numpy as np
+    if not pre and not post:
+        return clip_sound(clip, seconds)
+    speed = float(clip.get("speed") or 1.0)
+    have = min(pre, float(clip["in"]) / speed) if speed > 0 else 0.0
+    sound = clip_sound(dict(clip, **{"in": float(clip["in"]) - have * speed}), have + seconds + post)
+    if sound is None:
+        return None
+    lead = int(round(pre * RATE)) - int(round(have * RATE))
+    if lead > 0:
+        sound = np.concatenate([np.zeros((2, lead), dtype=np.float32), sound], axis=1)
+    return sound
+
+
+def gain_line(clip, u, length):
+    """The clip's volume at each clip time in *u* (its keys, held at the ends - the handles of a
+    crossfade sound at the level of the clip's first and last moment), or its number."""
+    import numpy as np
+    keys = ((clip.get("fx") or {}).get("keys") or {}).get("vol") if isinstance(clip.get("fx"), dict) else None
+    if not keys:
+        return np.float32(float(clip.get("volume", 1.0)))
+    step = 0.01
+    m = int(max(0.0, length) / step) + 2
+    at = np.arange(m) * step
+    gains = np.array([volume_at(clip, float(t)) for t in at], dtype=np.float32)
+    return np.interp(np.clip(u, 0.0, max(0.0, length)), at, gains).astype(np.float32)
+
+
+def env_curve(env, u):
+    """:func:`timeline_io.env_gain` for every clip time in the array *u* (the same arithmetic, vectorised)."""
+    import numpy as np
+    u = np.asarray(u, dtype=np.float64)
+    length = float(env["len"])
+    xin, xout = env.get("xin"), env.get("xout")
+
+    def curve(name, p):
+        p = np.clip(p, 0.0, 1.0)
+        if name == "0":
+            return p
+        if name == "-3":
+            return p ** 1.5
+        return np.sin(p * np.pi / 2)
+    lo = -xin["b"] if xin else 0.0
+    hi = length + xout["a"] if xout else length
+    g = np.ones_like(u)
+    if xin:
+        span = xin["b"] + xin["a"]
+        if span > 0:
+            g = np.where(u < xin["a"], g * curve(xin["curve"], (u + xin["b"]) / span), g)
+    elif env.get("fi", 0) > 0:
+        g = np.where(u < env["fi"], g * np.maximum(0.0, u) / env["fi"], g)
+    if xout:
+        span, s = xout["b"] + xout["a"], length - xout["b"]
+        if span > 0:
+            g = np.where(u > s, g * curve(xout["curve"], 1 - (u - s) / span), g)
+    elif env.get("fo", 0) > 0:
+        g = np.where(u > length - env["fo"], g * np.maximum(0.0, length - u) / env["fo"], g)
+    g = np.where((u < lo - 1e-9) | (u > hi + 1e-9), 0.0, g)
+    return np.clip(g, 0.0, 1.0).astype(np.float32)
+
+
 def film_sound(cut, counts, fps, total_frames):
     """The film's sound as a ``(2, n)`` float array, or None when there is none.
 
@@ -559,23 +623,32 @@ def film_sound(cut, counts, fps, total_frames):
         # from its sound clip, on a sound track, at that clip's own place.
         if cut.get("clip_sound", True) and not cut.get("v1_off") and (volume > 0 or keyed) and not clip.get("blank") \
                 and not clip.get("mute") and not is_still(clip["file"]):
+            env = clip.get("env")
+            # A crossfade's handles: the sound before the clip's start (coming in) and after its end (going out).
+            pre = env["xin"]["b"] if env and env.get("xin") else 0.0
+            post = env["xout"]["a"] if env and env.get("xout") else 0.0
             try:
-                sound = clip_sound(clip, n / fps)
+                sound = handled_sound(clip, n / fps, pre, post)
             except Exception:  # noqa: BLE001 - a shot whose sound will not decode is silent
                 sound = None
             if sound is not None:
-                # Volume keys: a gain per sample (a key's value every 10 ms), in the clip's own time.
-                curve = volume_curve(clip, sound.shape[1], RATE) if keyed else None
-                sound = sound * (curve if curve is not None else volume)
+                # Volume keys (a key's value every 10 ms), fades and crossfades: a gain per sample, in the clip's own time.
+                u = np.arange(sound.shape[1], dtype=np.float64) / RATE - pre
+                sound = sound * gain_line(clip, u, n / fps)
+                if env:
+                    sound = sound * env_curve(env, u)
                 fade_in, fade_out = int(round(d_in / fps * RATE)), int(round(d_out / fps * RATE))
+                p0, p1 = int(round(pre * RATE)), int(round(post * RATE))
                 if fade_in:
-                    sound[:, :fade_in] *= np.linspace(0.0, 1.0, fade_in, dtype=np.float32)
+                    sound[:, p0:p0 + fade_in] *= np.linspace(0.0, 1.0, fade_in, dtype=np.float32)
                 if fade_out:
-                    sound[:, -fade_out:] *= np.linspace(1.0, 0.0, fade_out, dtype=np.float32)
-                a = int(round(start / fps * RATE))
+                    end = sound.shape[1] - p1
+                    sound[:, max(0, end - fade_out):end] *= np.linspace(1.0, 0.0, min(fade_out, end), dtype=np.float32)
+                a = int(round(start / fps * RATE)) - p0
+                lo = max(0, -a)
                 b = min(total, a + sound.shape[1])
-                if b > a:
-                    mix[:, a:b] += sound[:, :b - a]
+                if b > a + lo:
+                    mix[:, a + lo:b] += sound[:, lo:b - a]
                     heard = True
         at = start + n
 
@@ -592,14 +665,24 @@ def film_sound(cut, counts, fps, total_frames):
         curve = volume_curve(clip, want, RATE)
         if (volume <= 0 and curve is None) or clip.get("mute") or is_still(clip["file"]):
             return
+        env = clip.get("env")
+        pre = env["xin"]["b"] if env and env.get("xin") else 0.0
+        post = env["xout"]["a"] if env and env.get("xout") else 0.0
         try:
-            sound = clip_sound(clip, want / RATE)
+            sound = handled_sound(clip, want / RATE, pre, post)
         except Exception:  # noqa: BLE001
             sound = None
         if sound is not None:
-            gain = curve[:b - a] if curve is not None else volume
-            mix[:, a:b] += sound[:, :b - a] * gain
-            heard = True
+            u = np.arange(sound.shape[1], dtype=np.float64) / RATE - pre
+            sound = sound * gain_line(clip, u, float(clip["length"]))
+            if env:
+                sound = sound * env_curve(env, u)
+            s0 = a - int(round(pre * RATE))
+            lo = max(0, -s0)
+            s1 = min(total, s0 + sound.shape[1])
+            if s1 > s0 + lo:
+                mix[:, s0 + lo:s1] += sound[:, lo:s1 - s0]
+                heard = True
 
     for _first, _count, clip in _spans(cut.get("overlays"), fps):
         if clip.get("title") is None:            # words cover no sound
@@ -614,9 +697,10 @@ def film_sound(cut, counts, fps, total_frames):
             sound = None
         if sound is not None:
             sound = sound * float(bed.get("gain", 1.0))
-            fade = min(total, int(round(float(bed.get("fade_out", 1.0)) * RATE)))
-            if fade:
-                sound[:, -fade:] *= np.linspace(1.0, 0.0, fade, dtype=np.float32)
+            # Its fades, over the whole film (the bed lies under all of it).
+            env = {"len": total / RATE, "fi": float(bed.get("fade_in", 0.0)), "fo": float(bed.get("fade_out", 1.0)),
+                   "xin": None, "xout": None}
+            sound = sound * env_curve(env, np.arange(sound.shape[1], dtype=np.float64) / RATE)
             mix += sound[:, :total]
             heard = True
     return np.clip(mix, -1.0, 1.0) if heard else None
@@ -634,6 +718,7 @@ def read_cut(doc):
     """The cut in an OTIO document, with what a render needs beyond the panel's
     view of it: the film's size, each clip's volume, the bed."""
     edit = timeline_io.editable(doc)
+    envs = timeline_io.audio_envs(edit)
     video = timeline_io._track_of(doc, "video") or {}
     children = video.get("children") or []
     about = _note(doc)
@@ -663,14 +748,14 @@ def read_cut(doc):
                       "transition": 0.0 if gapped or cut_in else c["transition"], "name": c["name"],
                       "speed": c.get("speed", 1.0), "loop": c.get("loop", ""), "span": c.get("span", 0.0),
                       "volume": float(note.get("volume", 1.0)), "fx": c.get("fx") or {},
-                      "mute": bool(c.get("mute"))})
+                      "mute": bool(c.get("mute")), "env": envs.get(("V1", idx))})
         cut_in = False
     off = edit.get("off") or {}
     overlays, sounds = [], []
     for order, track in enumerate(edit.get("tracks") or []):
         if track.get("off"):
             continue
-        for c in track.get("clips") or []:
+        for ci, c in enumerate(track.get("clips") or []):
             if c.get("disabled"):
                 continue                    # switched off: not seen, not heard
             if c.get("title") is not None and track.get("kind") == "audio":
@@ -679,7 +764,7 @@ def read_cut(doc):
                     "speed": c.get("speed", 1.0), "loop": c.get("loop", ""), "span": c.get("span", 0.0),
                     "volume": float(c.get("volume", 1.0)), "name": c["name"], "order": order,
                     "fx": c.get("fx") or {}, "mute": bool(c.get("mute")),
-                    "track": track.get("name") or track.get("id")}
+                    "track": track.get("name") or track.get("id"), "env": envs.get((track.get("id"), ci))}
             if c.get("title") is not None:
                 item.update(title=c["title"], file="", speed=1.0, loop="", span=0.0, volume=0.0)
             (sounds if track.get("kind") == "audio" else overlays).append(item)
@@ -691,7 +776,8 @@ def read_cut(doc):
         note = _note(beds[0])
         start, _length = timeline_io._span(beds[0].get("source_range"))
         bed = {"file": timeline_io._file(beds[0].get("media_reference")), "in": start,
-               "gain": float(note.get("gain", 1.0)), "fade_out": float(note.get("fade_out", 1.0))}
+               "gain": float(note.get("gain", 1.0)), "fade_out": float(note.get("fade_out", 1.0)),
+               "fade_in": timeline_io.bed_fades(beds[0])["fadeIn"]}
     # Texts of older cuts are titles by now (timeline_io.editable, texts_to_titles).
     titles = sum(1 for o in overlays if o.get("title") is not None)
     return {"name": edit["name"], "fps": float(edit["fps"] or 24.0), "clips": clips, "bed": bed,

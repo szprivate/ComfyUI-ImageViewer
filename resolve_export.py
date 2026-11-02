@@ -270,6 +270,8 @@ def build_model(doc, probes, frames=None, empty_ok=False):
         starts.append(cursor)
         cursor += counts[i][0]
     v1_on = not (edit.get("off") or {}).get("V1")
+    envs = timeline_io.audio_envs(edit)
+    handles = []                         # V1's crossfades: the shots' sound beyond the cut, on a lane of its own
     for i, c in enumerate(clips):
         n, d = counts[i]
         head = d // 2
@@ -287,6 +289,19 @@ def build_model(doc, probes, frames=None, empty_ok=False):
             before = info_of(clips[i - 1].get("file"))
             if before is not None:
                 pieces[0]["mix"] = (starts[i], d, head)
+        env = envs.get(("V1", i))
+        if pieces and env:
+            _fades(pieces, env, rate, u0, n - u1)
+            xin, xout = env.get("xin"), env.get("xout")
+            if xin and xin["b"] > 0:
+                # The sound before the cut (the shot coming in, from before its in): a fade in on a lane below.
+                b = frames_of(xin["b"], rate)
+                for p in _clip_pieces(c, -b, 0, starts[i], rate, info, "V1", v1_on):
+                    handles.append(dict(p, sound=True, fi=b, fi_curve=xin["curve"]))
+            if xout and xout["a"] > 0:
+                a = frames_of(xout["a"], rate)
+                for p in _clip_pieces(c, n, n + a, starts[i], rate, info, "V1", v1_on):
+                    handles.append(dict(p, sound=True, fo=a, fo_curve=xout["curve"]))
         spine.extend(pieces)
 
     lanes = []
@@ -299,7 +314,7 @@ def build_model(doc, probes, frames=None, empty_ok=False):
         else:
             video_lane += 1
             lane = video_lane
-        for c in track.get("clips") or []:
+        for ci, c in enumerate(track.get("clips") or []):
             if c.get("title") is not None and not sound:
                 # A title is no media: a piece of its own, with its words and look.
                 lanes.append({"file": "", "title": c["title"], "name": str(c.get("name") or "Title"),
@@ -315,9 +330,23 @@ def build_model(doc, probes, frames=None, empty_ok=False):
                 continue
             n = max(1, frames_of(c["length"], rate))
             at = frames_of(c.get("at"), rate)
-            for p in _clip_pieces(c, 0, n, at, rate, info, track.get("name") or track.get("id"), not track.get("off")):
+            env = envs.get((track.get("id"), ci)) or {}
+            # A crossfade: the clip coming in begins before its start, the one going out ends after its end
+            # (their handles, overlapping), each fading over the whole crossfade.
+            pre = frames_of(env["xin"]["b"], rate) if env.get("xin") else 0
+            post = frames_of(env["xout"]["a"], rate) if env.get("xout") else 0
+            pieces = _clip_pieces(c, -pre, n + post, at, rate, info, track.get("name") or track.get("id"), not track.get("off"))
+            for p in pieces:
                 p["lane"], p["sound"] = lane, sound
-                lanes.append(p)
+            if sound and env:
+                _fades(pieces, env, rate, -pre, -post, whole=True)
+            lanes.extend(pieces)
+
+    if handles:
+        audio_lane -= 1
+        lanes.extend(dict(p, lane=audio_lane) for p in handles)
+        say("Crossfades at V1's cuts come as fades on the shots and their sound beyond the cut on a sound lane below "
+            "(Resolve has no audio-only transition on a film's own sound): close to the viewer's curve, not the same.")
 
     picture_end = max([p["start"] + p["dur"] for p in spine]
                       + [p["start"] + p["dur"] for p in lanes if not p.get("sound")] + [0])
@@ -333,14 +362,20 @@ def build_model(doc, probes, frames=None, empty_ok=False):
             room = int(math.floor((Fraction(known) - _exact(start)) * rate))
             if 0 < room < n:
                 n = room
-        lanes.extend(dict(p, lane=-1, sound=True) for p in
-                     _clip_pieces({"file": path, "name": name or os.path.basename(path), "in": start,
-                                   "volume": gain}, 0, n, begin, rate, info, "A1", bed_on))
-        try:
-            if float(fade or 0) > 0:
-                say("The fade at the end of the music bed: the viewer's render draws it, the timeline has the bed at one level.")
-        except (TypeError, ValueError):
-            pass
+        bed = [dict(p, lane=-1, sound=True) for p in
+               _clip_pieces({"file": path, "name": name or os.path.basename(path), "in": start,
+                             "volume": gain}, 0, n, begin, rate, info, "A1", bed_on)]
+        if bed:
+            try:
+                fo = frames_of(max(0.0, float(fade or 0)), rate)
+            except (TypeError, ValueError):
+                fo = 0
+            fi = frames_of(_bed_fade_in(doc, path), rate)
+            if fi:
+                bed[0]["fi"] = min(fi, bed[0]["dur"])
+            if fo:
+                bed[-1]["fo"] = min(fo, bed[-1]["dur"])
+        lanes.extend(bed)
 
     # In and out.
     total = max([p["start"] + p["dur"] for p in spine + lanes] + [0])
@@ -425,6 +460,42 @@ def build_model(doc, probes, frames=None, empty_ok=False):
             files.append(p["file"])
     return {"name": str(edit.get("name") or "cut"), "rate": rate, "width": width, "height": height, "total": total,
             "spine": full, "lanes": lanes, "left_out": left, "files": files}
+
+
+def _bed_fade_in(doc, path):
+    audio = timeline_io._track_of(doc, "audio") or {}
+    for child in audio.get("children") or []:
+        if isinstance(child, dict) and timeline_io._file(child.get("media_reference")) == path:
+            return timeline_io.bed_fades(child)["fadeIn"]
+    return 0.0
+
+
+def _fades(pieces, env, rate, lead, trail, whole=False):
+    """A clip's fades and crossfades as fade handles on its first and last piece (``fi`` / ``fo``
+    frames, ``fi_curve`` / ``fo_curve``). *lead* / *trail*: frames of the clip the pieces leave out
+    at its start / end (a dissolve's half; negative: handles before / after it). *whole*: a crossfade
+    fades over all of itself (the pieces carry the handles); else over its part inside the clip."""
+    xin, xout = env.get("xin"), env.get("xout")
+    if xin:
+        fi = frames_of(xin["b"] + xin["a"], rate) if whole else frames_of(xin["a"], rate)
+        curve = xin["curve"]
+    else:
+        fi, curve = max(0, frames_of(env.get("fi") or 0, rate) - max(0, lead)), "0"
+    if fi > 0:
+        pieces[0]["fi"], pieces[0]["fi_curve"] = min(fi, pieces[0]["dur"]), curve
+    if xout:
+        fo = frames_of(xout["b"] + xout["a"], rate) if whole else frames_of(xout["b"], rate)
+        curve = xout["curve"]
+    else:
+        fo, curve = max(0, frames_of(env.get("fo") or 0, rate) - max(0, trail)), "0"
+    if fo > 0:
+        pieces[-1]["fo"], pieces[-1]["fo_curve"] = min(fo, pieces[-1]["dur"]), curve
+
+
+# A fade's shape in FCPXML (its DTD: linear, easeIn, easeOut, easeInOut): the viewer's "0 dB" is a
+# straight line; "+3 dB" (equal power, fast at first) easeOut; "-3 dB" (slow at first) easeIn. From
+# the shapes, not checked inside Resolve.
+_FADE_TYPE = {"0": "linear", "+3": "easeOut", "-3": "easeIn"}
 
 
 def _has_links(edit):
@@ -603,12 +674,25 @@ def _intrinsics(parent, p, info, model, shift=None):
                 _keyframes(blend, "amount", keys, ["op"], lambda v: _num(v["op"]), p, info, rate)
     volume = p.get("volume", 1.0)
     db = lambda v: f"{20 * math.log10(v):.2f}dB" if v > 1e-5 else "-96dB"
+    vol = None
     if (info or {}).get("audio") and not p.get("mute") and keys.get("vol"):
         first = key_value(keys["vol"], int(p.get("u", 0)) / rate)
         vol = ET.SubElement(parent, "adjust-volume", {"amount": db(first)})
         _keyframes(vol, "amount", keys, ["vol"], lambda v: db(v["vol"]), p, info, rate)
     elif (info or {}).get("audio") and not p.get("mute") and volume > 0 and abs(volume - 1.0) > 1e-4:
-        ET.SubElement(parent, "adjust-volume", {"amount": f"{20 * math.log10(volume):.2f}dB"})
+        vol = ET.SubElement(parent, "adjust-volume", {"amount": f"{20 * math.log10(volume):.2f}dB"})
+    if (info or {}).get("audio") and not p.get("mute") and (p.get("fi") or p.get("fo")):
+        # The fade handles: <fadeIn> / <fadeOut> of the volume's "amount" param, before its keys (the DTD's order).
+        if vol is None:
+            vol = ET.SubElement(parent, "adjust-volume", {"amount": "0dB"})
+        param = vol.find("param[@name='amount']")
+        if param is None:
+            param = ET.SubElement(vol, "param", {"name": "amount"})
+        at = 0
+        for tag, n, curve in (("fadeIn", p.get("fi"), p.get("fi_curve")), ("fadeOut", p.get("fo"), p.get("fo_curve"))):
+            if n:
+                param.insert(at, ET.Element(tag, {"type": _FADE_TYPE.get(curve or "0", "linear"), "duration": _grid(int(n), rate)}))
+                at += 1
 
 
 def _local_start(p, info):

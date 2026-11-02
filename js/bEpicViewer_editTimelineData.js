@@ -263,6 +263,8 @@ const copy = (cut) => ({
     sound: (cut.sound || []).map((s) => ({ ...s })),
     tracks: (cut.tracks || []).map((k) => ({ ...k, clips: (k.clips || []).map((c) => ({ ...c })) })),
     off: { ...(cut.off || {}) },
+    lock: { ...(cut.lock || {}) },
+    auto: { ...(cut.auto || {}) },
 });
 
 /** A length in seconds, as a person writes it on a shot: 0.5s, 3.2s, 1:04. */
@@ -368,6 +370,7 @@ function settle(cut) {
             tidyLink(c);
         }
     }
+    tidyAudio(cut);
     return cut;
 }
 
@@ -941,14 +944,15 @@ export function sameCut(a, b) {
     const dress = (c) => [String(c.color || ""), round(num(c.volume, 1)), JSON.stringify(Object.entries(cleanFx(c.fx)).sort()),
                          round(speedOf(c)), loopOf(c), loopOf(c) ? round(num(c.span)) : 0,
                          takesOf(c).length ? JSON.stringify([c.file, takesOf(c).map((t) => [t.version, !!t.active, t.file])]) : "",
-                         String(c.link || ""), !!c.unlinked, !!c.mute, !!c.disabled, c.title ? JSON.stringify(cleanTitle(c.title)) : ""];
+                         String(c.link || ""), !!c.unlinked, !!c.mute, !!c.disabled, c.title ? JSON.stringify(cleanTitle(c.title)) : "", ...audioDress(c)];
     const key = (cut) => JSON.stringify({
         clips: ((cut && cut.clips) || []).map((c) => [Number.isInteger(c.ref) ? c.ref : c.file, c.name, round(num(c.in)), round(num(c.length)), round(num(c.transition)), round(num(c.gap)), ...dress(c)]),
         texts: ((cut && cut.texts) || []).map((t) => [Number.isInteger(t.ref) ? t.ref : "new", t.text, round(num(t.start)), round(num(t.length)), JSON.stringify(textLook(t))]),
-        tracks: ((cut && cut.tracks) || []).map((k) => [k.kind, k.name, !!k.off, (k.clips || []).map((c) =>
+        tracks: ((cut && cut.tracks) || []).map((k) => [k.kind, k.name, !!k.off, !!k.lock, k.auto !== false, (k.clips || []).map((c) =>
             [Array.isArray(c.ref) ? c.ref.join(":") : c.title ? "title" : c.file, c.name, round(num(c.at)), round(num(c.in)), round(num(c.length)), ...dress(c)])]),
-        sound: ((cut && cut.sound) || []).map((s) => String(s.file || s.name || "")),
+        sound: ((cut && cut.sound) || []).map((s) => [String(s.file || s.name || ""), round(num(s.fadeIn)), round(num(s.fadeOut))]),
         off: [!!(cut && cut.off && cut.off.V1), !!(cut && cut.off && cut.off.A1), !!(cut && cut.off && cut.off.T)],
+        flags: ["V1", "A1", "T"].map((id) => [!!(cut && cut.lock && cut.lock[id]), !(cut && cut.auto && cut.auto[id] === false)]),
     });
     return key(a) === key(b);
 }
@@ -957,7 +961,8 @@ export function sameCut(a, b) {
 // a loop taken off is taken off in the file too.
 function timeOf(c) {
     return { speed: round(speedOf(c)), loop: loopOf(c), span: loopOf(c) ? round(num(c.span)) : 0,
-             link: c.link || "", unlinked: !!(c.link && c.unlinked), mute: !!c.mute, disabled: !!c.disabled };
+             link: c.link || "", unlinked: !!(c.link && c.unlinked), mute: !!c.mute, disabled: !!c.disabled,
+             fadeIn: round(num(c.fadeIn)), fadeOut: round(num(c.fadeOut)), xfade: c.xfade ? cleanXfade(c.xfade) : null };
 }
 
 /** What is sent back to be saved: the cut, and nothing the server did not send. */
@@ -974,7 +979,7 @@ export function toSave(cut) {
         texts: cut.texts.map((t) => ({ ...(Number.isInteger(t.ref) ? { ref: t.ref } : {}),
                                        text: t.text, start: t.start, length: t.length, ...textLook(t) })),
         tracks: (cut.tracks || []).map((k) => ({
-            id: k.id, kind: k.kind, name: k.name, off: !!k.off,
+            id: k.id, kind: k.kind, name: k.name, off: !!k.off, lock: !!k.lock, auto: k.auto !== false,
             clips: (k.clips || []).map((c) => ({
                 // A title has no file: a new one is named by its words, and by the marker it came from (`mark`).
                 ...(Array.isArray(c.ref) ? { ref: c.ref } : c.title ? (Number.isInteger(c.mark) ? { mark: c.mark } : {}) : { file: c.file }),
@@ -984,8 +989,10 @@ export function toSave(cut) {
             })),
         })),
         // The bed's clips that are left (one deleted in the panel goes from the file too).
-        sound: (cut.sound || []).map((s) => ({ name: s.name || "", file: s.file || "" })),
+        sound: (cut.sound || []).map((s) => ({ name: s.name || "", file: s.file || "", fadeIn: round(num(s.fadeIn)), fadeOut: round(num(s.fadeOut)) })),
         off: { V1: !!(cut.off && cut.off.V1), A1: !!(cut.off && cut.off.A1), T: !!(cut.off && cut.off.T) },
+        lock: Object.fromEntries(["V1", "A1", "T"].map((id) => [id, !!(cut.lock && cut.lock[id])])),
+        auto: Object.fromEntries(["V1", "A1", "T"].map((id) => [id, !(cut.auto && cut.auto[id] === false)])),
     };
 }
 
@@ -1219,12 +1226,46 @@ export function soundItems(cut, live) {
     const on = (id) => !live || live.has(id);
     const out = [];
     const total = filmLength(cut);
-    if (on("A1")) for (const s of (cut && cut.sound) || []) if (s && s.file) out.push({ file: s.file, at: 0, in: 0, length: total, volume: 1 });
+    // `origin`: the moment of the film at which the clip's own time is 0 (a crossfade's handle starts before it);
+    // `env`: its fades and crossfades (audioEnv / envGain).
+    if (on("A1")) for (const s of (cut && cut.sound) || []) {
+        if (s && s.file) out.push({ file: s.file, at: 0, origin: 0, in: 0, length: total, volume: 1,
+                                    env: { len: total, fi: num(s.fadeIn), fo: num(s.fadeOut), xin: null, xout: null } });
+    }
     for (const k of (cut && cut.tracks) || []) {
         if (k.kind !== "audio" || !on(k.id)) continue;
-        for (const c of k.clips || []) if (c.file && !c.disabled) out.push({ file: c.file, at: num(c.at), in: num(c.in), length: num(c.length), volume: num(c.volume, 1), clip: c });
+        (k.clips || []).forEach((c, i) => {
+            if (!c.file || c.disabled) return;
+            const env = audioEnv(cut, { kind: "tclip", track: k.id, i });
+            const pre = env.xin ? env.xin.b : 0, post = env.xout ? env.xout.a : 0;
+            out.push({ file: c.file, at: round(num(c.at) - pre), origin: num(c.at), in: num(c.in), length: round(num(c.length) + pre + post),
+                       volume: num(c.volume, 1), clip: c, env, track: k.id });
+        });
+    }
+    // The handles of V1's crossfades: the film's sound before its cut (coming in) and after it (going out),
+    // which its <video> does not play - the picture cuts there.
+    if (on("V1")) {
+        const starts = clipStarts(cut);
+        ((cut && cut.clips) || []).forEach((c, i) => {
+            if (!c.xfade || !xfadeFrom(cut, { kind: "clip", i })) return;
+            const o = cut.clips[i - 1];
+            const s = xfadeSides(c.xfade);
+            if (s.b > 0 && v1Sounds(c)) {
+                out.push({ file: c.file, at: round(starts[i] - s.b), origin: starts[i], in: num(c.in), length: s.b, volume: num(c.volume, 1),
+                           clip: c, env: audioEnv(cut, { kind: "clip", i }), track: "V1", handle: "in" });
+            }
+            if (s.a > 0 && v1Sounds(o)) {
+                out.push({ file: o.file, at: round(starts[i - 1] + num(o.length)), origin: starts[i - 1], in: num(o.in), length: s.a,
+                           volume: num(o.volume, 1), clip: o, env: audioEnv(cut, { kind: "clip", i: i - 1 }), track: "V1", handle: "out" });
+            }
+        });
     }
     return out;
+}
+
+// A shot of V1 that sounds: a film, not switched off, its sound not split off.
+function v1Sounds(c) {
+    return !!c && !c.disabled && !c.mute && !isStillImage(c.file) && !isStill(c.file) && num(c.volume, 1) + (hasKeys(c) ? 1 : 0) > 0;
 }
 
 /** Is a clip's file a picture (shown for the clip's length) rather than a film? */
@@ -1308,8 +1349,9 @@ export function clipsAt(cut, seconds) {
  * dissolve the shot coming in is the one cut. Returns { cut, sel, count } or
  * null when nothing could be cut.
  */
-export function splitAt(cut, seconds, sel) {
-    let here = clipsAt(cut, seconds);
+export function splitAt(cut, seconds, sel, mask) {
+    // `mask` (editMask): with no selected clip there, only the tracks whose Auto Track Selector is on (and unlocked).
+    let here = clipsAt(cut, seconds).filter((s) => !mask || mask.has(s.kind === "clip" ? "V1" : s.track) || sameSel(s, sel));
     // Inside a dissolve two shots of V1 share the moment: the one coming in is cut.
     const shots = here.filter((s) => s.kind === "clip");
     if (shots.length > 1) here = here.filter((s) => s.kind !== "clip" || s.i === shots[shots.length - 1].i);
@@ -1375,9 +1417,9 @@ export function closeGap(cut, i) {
     return settle(next);
 }
 
-/** Delete and close the gap (Shift+Del): on V1 what follows moves up; on a track the clips after it move up by its length. */
-export function rippleDelete(cut, sel) {
-    if (sel && sel.kind === "clip") return removeClip(cut, sel.i);
+/** Delete and close the gap (Shift+Del): on V1 what follows moves up (and on the tracks in `mask`); on a track the clips after it move up by its length. */
+export function rippleDelete(cut, sel, mask) {
+    if (sel && sel.kind === "clip") return rippleV1Remove(cut, sel.i, mask);
     if (!sel || sel.kind !== "tclip") return liftClip(cut, sel);
     const next = copy(cut);
     const k = trackOf(next, sel.track);
@@ -1390,14 +1432,16 @@ export function rippleDelete(cut, sel) {
 }
 
 /** The moments where something begins or ends: the edit points (for snapping and Up / Down). */
-export function editPoints(cut) {
+export function editPoints(cut, mask) {
+    // `mask`: only the tracks whose Auto Track Selector is on (Up / Down, as Resolve's).
+    const on = (id) => !mask || mask.has(id);
     const out = new Set([0]);
     const starts = clipStarts(cut);
-    ((cut && cut.clips) || []).forEach((c, i) => { out.add(round(starts[i])); out.add(round(starts[i] + num(c.length))); });
+    if (on("V1")) ((cut && cut.clips) || []).forEach((c, i) => { out.add(round(starts[i])); out.add(round(starts[i] + num(c.length))); });
     for (const k of (cut && cut.tracks) || []) {
-        for (const c of k.clips || []) { out.add(round(num(c.at))); out.add(round(num(c.at) + num(c.length))); }
+        if (on(k.id)) for (const c of k.clips || []) { out.add(round(num(c.at))); out.add(round(num(c.at) + num(c.length))); }
     }
-    for (const t of (cut && cut.texts) || []) { out.add(round(num(t.start))); out.add(round(num(t.start) + num(t.length))); }
+    if (on("T")) for (const t of (cut && cut.texts) || []) { out.add(round(num(t.start))); out.add(round(num(t.start) + num(t.length))); }
     return [...out].sort((a, b) => a - b);
 }
 
@@ -1992,6 +2036,7 @@ export function shotsIn(cut, from, to) {
 /** The id of a selected clip: "V1:3" on the cut itself, "<track id>:<i>" on a higher track. */
 export function selId(sel) {
     if (!sel) return "";
+    if (sel.kind === "xfade") return "xf" + String(sel.track) + ":" + sel.i;
     const where = { clip: "V1", text: "T", gap: "gap", sound: "A1", mix: "mix" }[sel.kind];
     return (where || String(sel.track)) + ":" + sel.i;
 }
@@ -2912,8 +2957,10 @@ function withPartners(cut, list) {
  * closes up. A gap is closed; a text and a clip of the bed go. V1 keeps its last
  * shot: { cut, kept } says it had to (an empty cut has no film).
  */
-export function deleteSelection(cut, list, ripple) {
-    const items = withPartners(cut, list);
+export function deleteSelection(cut, list, ripple, mask) {
+    // A clip on a locked track is not taken (nor a partner there); `mask` the tracks a ripple of V1 moves too.
+    const locked = lockedTracks(cut);
+    const items = withPartners(cut, list).filter((s) => !locked.has(selTrack(s)));
     const next = copy(cut);
     const gone = new Set(items.map(selId));
     for (const k of next.tracks) {
@@ -2937,7 +2984,7 @@ export function deleteSelection(cut, list, ripple) {
     for (const s of v1) {
         if (s.kind === "gap") { cutNow = closeGap(cutNow, s.i); continue; }
         if (cutNow.clips.length <= 1) { kept = true; continue; }
-        cutNow = ripple ? removeClip(cutNow, s.i) : liftV1(cutNow, s.i);
+        cutNow = ripple ? rippleV1Remove(cutNow, s.i, mask) : liftV1(cutNow, s.i);
     }
     return { cut: cutNow, kept };
 }
@@ -3200,7 +3247,8 @@ export function pointAct(point, trim) {
  * tracks stay. Returns { cut, sel (the last clip put in), end (where the clips
  * put in end), split }.
  */
-export function insertEdit(cut, clips, seconds, track = "V1") {
+export function insertEdit(cut, clips, seconds, track = "V1", mask) {
+    const follows = (id) => !mask || mask.has(id);
     const fps = num(cut && cut.fps) > 0 ? num(cut.fps) : 24;
     const t = toFrame(Math.max(0, num(seconds)), fps);
     const list = (clips || []).filter((c) => c && c.file && num(c.length) > 0);
@@ -3248,8 +3296,8 @@ export function insertEdit(cut, clips, seconds, track = "V1") {
         }
     }
     // Everything after the playhead on the other tracks moves on with the cut.
-    for (const kk of next.tracks || []) for (const c of kk.clips) if (num(c.at) >= t - 1e-6) c.at = round(num(c.at) + total);
-    for (const x of next.texts || []) if (num(x.start) >= t - 1e-6) x.start = round(num(x.start) + total);
+    for (const kk of next.tracks || []) if (follows(kk.id)) for (const c of kk.clips) if (num(c.at) >= t - 1e-6) c.at = round(num(c.at) + total);
+    if (follows("T")) for (const x of next.texts || []) if (num(x.start) >= t - 1e-6) x.start = round(num(x.start) + total);
     const after = next.clips[index];
     if (after) after.gap = round(Math.max(0, num(after.gap) - lead));
     fresh[0].gap = lead;
@@ -3721,4 +3769,459 @@ export function pasteAttributes(cut, source, targets, picks) {
         if (Object.keys(tpatch).length) next = setTitle(next, [t], tpatch);
     }
     return next;
+}
+
+// ── tracks for editing: Lock and the Auto Track Selector ────────────────────
+//
+// Resolve's two header controls beside the switch (off: not seen, not heard) and
+// solo. LOCK: nothing on the track can be edited - not selected, dragged,
+// trimmed, cut, deleted, landed on; played and rendered as ever. AUTO TRACK
+// SELECTOR (on by default): the track takes part in the edits that reach beyond
+// the clip they are made on - a ripple of V1 (Shift+Del, a ripple trim in the
+// Trim mode) moves what follows on it too, an insert at the playhead makes room
+// on it, the blade at the playhead (Ctrl+B / S, nothing selected there) cuts it,
+// Paste Attributes reaches clips on it, Shift+A / S and Up / Down step through
+// its edits. Off, it keeps its clips where they are. "V1", "A1" (the bed) and
+// "T" (texts) keep them in cut.lock / cut.auto, the other tracks on themselves
+// (k.lock, k.auto === false). In the file metadata.bepic.lock / auto_select.
+
+/** The ids of the cut's tracks, "T", "V1" and "A1" among them. */
+export function trackIds(cut) {
+    return ["T", "V1", "A1", ...(((cut && cut.tracks) || []).map((k) => k.id))];
+}
+
+/** { lock, auto } of a track. */
+export function trackFlags(cut, id) {
+    if (id === "V1" || id === "A1" || id === "T") {
+        return { lock: !!(cut && cut.lock && cut.lock[id]), auto: !(cut && cut.auto && cut.auto[id] === false) };
+    }
+    const k = trackOf(cut, id);
+    return { lock: !!(k && k.lock), auto: !(k && k.auto === false) };
+}
+
+/** A track locked / unlocked (`flag` "lock") or its Auto Track Selector on / off ("auto"). */
+export function setTrackFlag(cut, id, flag, on) {
+    const next = copy(cut);
+    if (flag !== "lock" && flag !== "auto") return next;
+    if (id === "V1" || id === "A1" || id === "T") {
+        if (flag === "lock") { if (on) next.lock[id] = true; else delete next.lock[id]; }
+        else if (on) delete next.auto[id]; else next.auto[id] = false;
+    } else {
+        const k = trackOf(next, id);
+        if (!k) return next;
+        if (flag === "lock") { if (on) k.lock = true; else delete k.lock; }
+        else if (on) delete k.auto; else k.auto = false;
+    }
+    return next;
+}
+
+/** The locked tracks' ids. */
+export function lockedTracks(cut) {
+    return new Set(trackIds(cut).filter((id) => trackFlags(cut, id).lock));
+}
+
+/** The tracks an edit that reaches beyond its own clip may change: Auto Track Selector on, not locked. */
+export function editMask(cut) {
+    return new Set(trackIds(cut).filter((id) => { const f = trackFlags(cut, id); return f.auto && !f.lock; }));
+}
+
+/** The track a selection is on ("V1", "T", "A1", a track id). */
+export function selTrack(s) {
+    if (!s) return "";
+    if (s.kind === "clip" || s.kind === "gap" || s.kind === "mix") return "V1";
+    if (s.kind === "text") return "T";
+    if (s.kind === "sound") return "A1";
+    return String(s.track || "");
+}
+
+// What a track holds, as a string: two cuts whose locked tracks give the same one left them alone.
+function trackSig(cut, id) {
+    const strip = (c) => { const o = { ...c }; delete o.uid; delete o.ref; return o; };
+    if (id === "V1") { const st = clipStarts(cut); return JSON.stringify((cut.clips || []).map((c, i) => [st[i], strip(c)])); }
+    if (id === "T") return JSON.stringify((cut.texts || []).map(strip));
+    if (id === "A1") return JSON.stringify((cut.sound || []).map(strip));
+    const k = trackOf(cut, id);
+    return k ? JSON.stringify((k.clips || []).map(strip)) : "";
+}
+
+/** The first locked track (of `before`) that `after` changes - "" when the edit leaves every locked track alone. */
+export function lockViolation(before, after) {
+    if (!before || !after || before === after) return "";
+    for (const id of lockedTracks(before)) {
+        if (id !== "V1" && id !== "A1" && id !== "T" && !trackOf(after, id)) return id;    // a locked track is not removed
+        if (trackSig(before, id) !== trackSig(after, id)) return id;
+    }
+    return "";
+}
+
+/** Only the selections that are not on a locked track. */
+export function unlockedSel(cut, list) {
+    const locked = lockedTracks(cut);
+    return (list || []).filter((s) => !locked.has(selTrack(s)));
+}
+
+/**
+ * What follows `from` on the tracks in `mask` (not V1, not the bed - which lies
+ * under the whole film) moves by `delta` seconds, as a ripple of V1 takes the
+ * film after it along: placed clips that begin at or after `from`, and texts. A
+ * move back stops at a clip of the same track that stays (the track loses sync
+ * there rather than have two clips on one moment), and at the film's start.
+ */
+export function rippleTracks(cut, from, delta, mask) {
+    const next = copy(cut);
+    const d0 = num(delta);
+    if (!d0) return next;
+    const on = (id) => !mask || mask.has(id);
+    for (const k of next.tracks) {
+        if (!on(k.id)) continue;
+        const moving = k.clips.filter((c) => num(c.at) >= from - 1e-6);
+        if (!moving.length) continue;
+        let d = d0;
+        if (d < 0) {
+            const first = Math.min(...moving.map((c) => num(c.at)));
+            const stays = k.clips.filter((c) => num(c.at) < from - 1e-6).map((c) => num(c.at) + num(c.length));
+            const floor = Math.max(0, ...stays);
+            d = Math.min(0, Math.max(d, floor - first));
+        }
+        for (const c of moving) c.at = round(num(c.at) + d);
+    }
+    if (on("T")) for (const t of next.texts) if (num(t.start) >= from - 1e-6) t.start = round(Math.max(0, num(t.start) + d0));
+    return settle(next);
+}
+
+/** V1's clip i ripple-deleted (removeClip), the tracks in `mask` following: what began after it moves up by as much as V1 did. */
+export function rippleV1Remove(cut, i, mask) {
+    const c = cut && cut.clips && cut.clips[i];
+    const next = removeClip(cut, i);
+    if (!c || next.clips.length === cut.clips.length || !mask) return next;
+    const end = clipStarts(cut)[i] + num(c.length);
+    // How far what followed moved: the start of the clip after it, before and after.
+    const was = cut.clips[i + 1] ? clipStarts(cut)[i + 1] : end;
+    const now = next.clips[i] ? clipStarts(next)[i] : mainLength(next);
+    return rippleTracks(next, round(Math.min(end, was)), round(now - was), mask);
+}
+
+/** After a ripple of V1's clip i (`before` -> `after`, its end moved), the tracks in `mask` follow by as much. */
+export function rippleV1Follow(before, after, i, mask) {
+    if (!mask || !before.clips[i] || !after.clips[i]) return after;
+    const end0 = clipStarts(before)[i] + num(before.clips[i].length);
+    const end1 = clipStarts(after)[i] + num(after.clips[i].length);
+    const d = round(end1 - end0);
+    return d ? rippleTracks(after, round(end0), d, mask) : after;
+}
+
+// ── audio transitions and fades ─────────────────────────────────────────────
+//
+// As Resolve's: a CROSSFADE between two sound clips that meet on one track - the
+// cut of two films on V1 (their own sound: the picture still cuts; with a video
+// dissolve there the dissolve already crosses the sound, so there is no
+// crossfade), or two clips of a sound track - and FADES at a clip's start and end
+// (the corner handles), on V1's films, on sound-track clips and on the bed.
+//
+// A crossfade lies on the clip coming IN: `xfade: { len, curve, align }`. It
+// moves nothing - unlike V1's dissolve, which overlaps the clips and shortens the
+// film - and takes its sound from beyond the cut, from the media the clips do not
+// use (handles): `align` "centre" (half before the cut, half after), "start"
+// (from the cut on: the clip going out plays on past its end) or "end" (up to
+// the cut: the clip coming in begins before its start). Where there is not
+// enough media the crossfade is made shorter, or put on the side that has it
+// (fitXfade); none on either side, and there is none. `curve` "0" (Cross Fade
+// 0 dB: straight lines, the two add up to the same level for the same sound),
+// "+3" (the default: equal power, sin / cos - +3 dB in the middle against "0")
+// and "-3" (x^1.5: -3 dB in the middle against "0"). `fadeIn` / `fadeOut` are
+// seconds of the clip, straight lines of gain; a crossfade on a side takes the
+// place of the fade there. A clip's gain at clip time u is envGain(audioEnv):
+// the fades and crossfades, times its volume (keys and all). The render's
+// timeline_io.env_gain is the same arithmetic (tests/test_edit_audio_xfade.py).
+
+export const XF_CURVES = { "+3": "Cross Fade +3 dB", "0": "Cross Fade 0 dB", "-3": "Cross Fade -3 dB" };
+export const XF_ALIGNS = { centre: "Centre on edit", start: "Start on edit", end: "End on edit" };
+export const XF_DEFAULT = { len: 1, curve: "+3", align: "centre" };
+export const MIN_XFADE = 0.02;
+
+/** The gain of a fade coming in, `p` (0..1) of the way through, for a curve ("0", "+3", "-3"). */
+export function curveGain(curve, p) {
+    const x = Math.max(0, Math.min(1, num(p)));
+    if (curve === "0") return x;
+    if (curve === "-3") return Math.pow(x, 1.5);
+    return Math.sin(x * Math.PI / 2);
+}
+
+/** A crossfade held to what one may be (null for none). */
+export function cleanXfade(x) {
+    if (!x || typeof x !== "object") return null;
+    const len = round(num(x.len));
+    if (!(len >= MIN_XFADE - 1e-9)) return null;
+    return { len: Math.min(len, 60), curve: XF_CURVES[x.curve] ? String(x.curve) : "+3",
+             align: XF_ALIGNS[x.align] ? String(x.align) : "centre" };
+}
+
+/** How much of a crossfade lies before the cut (`b`) and after it (`a`), in seconds. */
+export function xfadeSides(x) {
+    const L = num(x && x.len);
+    if (x && x.align === "start") return { b: 0, a: L };
+    if (x && x.align === "end") return { b: L, a: 0 };
+    return { b: round(L / 2), a: round(L - round(L / 2)) };
+}
+
+// May this clip carry a crossfade or have one on its side (a sound that can run on: no loop, no picture)?
+function xfadeable(c, v1) {
+    return !!c && !loopOf(c) && !isStillImage(c.file) && !(v1 && (isStill(c.file) || c.mute));
+}
+
+/** The clip a crossfade into `sel` comes from: the one that ends where it begins on its track (a selection), or null. */
+export function xfadeFrom(cut, sel) {
+    if (!cut || !sel) return null;
+    if (sel.kind === "clip") {
+        const c = (cut.clips || [])[sel.i];
+        if (!c || !sel.i || num(c.gap) > 0 || num(c.transition) > 0) return null;
+        return xfadeable(c, true) && xfadeable(cut.clips[sel.i - 1], true) ? { kind: "clip", i: sel.i - 1 } : null;
+    }
+    if (sel.kind === "tclip") {
+        const k = trackOf(cut, sel.track);
+        const c = k && k.kind === "audio" ? k.clips[sel.i] : null;
+        if (!xfadeable(c)) return null;
+        const j = k.clips.findIndex((o, n) => n !== sel.i && Math.abs(num(o.at) + num(o.length) - num(c.at)) < 1e-3);
+        return j >= 0 && xfadeable(k.clips[j]) ? { kind: "tclip", track: sel.track, i: j } : null;
+    }
+    return null;
+}
+
+/** The clip a crossfade out of `sel` goes into (one whose xfadeFrom is `sel`), or null. */
+export function xfadeInto(cut, sel) {
+    if (!cut || !sel) return null;
+    if (sel.kind === "clip") {
+        const n = { kind: "clip", i: sel.i + 1 };
+        return (cut.clips || [])[sel.i + 1] && xfadeFrom(cut, n) ? n : null;
+    }
+    if (sel.kind === "tclip") {
+        const k = trackOf(cut, sel.track);
+        const c = k && k.clips[sel.i];
+        if (!c) return null;
+        const j = k.clips.findIndex((o, n) => n !== sel.i && Math.abs(num(c.at) + num(c.length) - num(o.at)) < 1e-3);
+        if (j < 0) return null;
+        const got = xfadeFrom(cut, { kind: "tclip", track: sel.track, i: j });
+        return got && got.i === sel.i ? { kind: "tclip", track: sel.track, i: j } : null;
+    }
+    return null;
+}
+
+/** The clip a crossfade selection ({ kind: "xfade", track, i }) lies on. */
+export function xfadeClipSel(x) {
+    if (!x) return null;
+    return x.track === "V1" ? { kind: "clip", i: x.i } : { kind: "tclip", track: x.track, i: x.i };
+}
+
+/** The crossfade selection of a clip coming in. */
+export function xfadeSelOf(sel) {
+    return sel && sel.kind === "clip" ? { kind: "xfade", track: "V1", i: sel.i }
+        : sel && sel.kind === "tclip" ? { kind: "xfade", track: sel.track, i: sel.i } : null;
+}
+
+/** The crossfade a selection names, held to what it may be - or null. */
+export function xfadeOf(cut, x) {
+    const s = xfadeClipSel(x);
+    const c = s && clipOf(cut, s);
+    return c && c.xfade && xfadeFrom(cut, s) ? cleanXfade(c.xfade) : null;
+}
+
+/** Where a crossfade into `sel` can take its sound from: { before, after } seconds (the handles). */
+export function xfadeRoom(cut, sel, durations) {
+    const from = xfadeFrom(cut, sel);
+    if (!from) return null;
+    const inn = clipOf(cut, sel), out = clipOf(cut, from);
+    const outIn = out.xfade && xfadeFrom(cut, from) ? xfadeSides(out.xfade).a : 0;
+    const nx = xfadeInto(cut, sel);
+    const inNext = nx && clipOf(cut, nx).xfade ? xfadeSides(clipOf(cut, nx).xfade).b : 0;
+    return { before: Math.max(0, Math.min(inRoom(inn), num(out.length) - outIn)),
+             after: Math.max(0, Math.min(outRoom(out, durations), num(inn.length) - inNext)) };
+}
+
+/**
+ * A crossfade of `want` ({ len, curve, align }) as it fits `room` (xfadeRoom):
+ * as long as asked where there is media for it, shorter where there is less, on
+ * the side that has some where its own side has none - null where neither has.
+ */
+export function fitXfade(want, room) {
+    const x = cleanXfade({ ...XF_DEFAULT, ...want }) || cleanXfade({ ...XF_DEFAULT, ...want, len: MIN_XFADE });
+    if (!x || !room) return null;
+    const most = (al) => (al === "start" ? room.after : al === "end" ? room.before : 2 * Math.min(room.before, room.after));
+    let align = x.align;
+    if (most(align) < MIN_XFADE - 1e-9) {
+        const best = ["centre", "end", "start"].sort((p, q) => most(q) - most(p))[0];
+        if (most(best) < MIN_XFADE - 1e-9) return null;
+        align = best;
+    }
+    return { len: round(Math.max(MIN_XFADE, Math.min(x.len, most(align)))), curve: x.curve, align };
+}
+
+/**
+ * An audio crossfade added at the cut into clip `sel` (or changed: `opts` the
+ * parts that change). { cut, sel (the crossfade's selection), fitted (it was made
+ * shorter or moved) } - or { error } where there can be none.
+ */
+export function addAudioXfade(cut, sel, opts = {}, durations) {
+    const c = clipOf(cut, sel);
+    if (!c) return { error: "no clip" };
+    if (!xfadeFrom(cut, sel)) {
+        return { error: sel.kind === "clip" && num(c.transition) > 0 ? "the dissolve there already crosses the sound"
+            : sel.kind === "clip" && num(c.gap) > 0 ? "there is a gap before it: no clip to cross from"
+            : "no sound clip ends where this one begins" };
+    }
+    const want = { ...XF_DEFAULT, ...(c.xfade ? cleanXfade(c.xfade) : {}), ...opts };
+    const got = fitXfade(want, xfadeRoom(cut, sel, durations));
+    if (!got) return { error: "not enough media beyond the cut for a crossfade (the clips use all of their files there)" };
+    const next = copy(cut);
+    clipOf(next, sel).xfade = got;
+    const done = settle(next);
+    return { cut: done, sel: xfadeSelOf(sel), fitted: got.len < num(want.len) - 1e-6 || got.align !== want.align };
+}
+
+/** The crossfade a selection names taken away (the cut is a plain cut again). */
+export function removeAudioXfade(cut, x) {
+    const next = copy(cut);
+    const c = clipOf(next, xfadeClipSel(x));
+    if (c) delete c.xfade;
+    return settle(next);
+}
+
+/** A clip's (or the bed's: { kind: "sound", i }) fade in or out, `which` "in" / "out", in seconds of the clip. */
+export function setFade(cut, sel, which, seconds) {
+    const next = copy(cut);
+    const c = sel && sel.kind === "sound" ? (next.sound || [])[sel.i] : clipOf(next, sel);
+    if (!c) return next;
+    const key = which === "out" ? "fadeOut" : "fadeIn";
+    const v = round(Math.max(0, num(seconds)));
+    if (v > 0) c[key] = v; else delete c[key];
+    // A crossfade on that side takes the fade's place: putting a fade there takes the crossfade away.
+    if (v > 0 && sel.kind !== "sound") {
+        if (which === "in" && c.xfade) delete c.xfade;
+        if (which === "out") { const n = xfadeInto(cut, sel); if (n) delete clipOf(next, n).xfade; }
+    }
+    if (sel.kind === "sound") {
+        const len = filmLength(next);
+        let fi = num(c.fadeIn), fo = num(c.fadeOut);
+        if (fi + fo > len && len > 0) { const k = len / (fi + fo); fi = round(fi * k); fo = round(fo * k); }
+        if (fi > 0) c.fadeIn = fi; else delete c.fadeIn;
+        if (fo > 0) c.fadeOut = fo; else delete c.fadeOut;
+    }
+    return settle(next);
+}
+
+// Fades and crossfades held to their clips (from settle): a fade no longer than the clip, the two no
+// longer than it together; a crossfade only where two sound clips still meet, no longer than they
+// allow; a fade on a crossfade's side gone.
+function tidyAudio(cut) {
+    const fades = (c, len) => {
+        let fi = round(Math.max(0, num(c.fadeIn))), fo = round(Math.max(0, num(c.fadeOut)));
+        if (fi + fo > len) { const k = len / (fi + fo); fi = round(fi * k); fo = round(fo * k); }
+        if (fi > 0) c.fadeIn = fi; else delete c.fadeIn;
+        if (fo > 0) c.fadeOut = fo; else delete c.fadeOut;
+    };
+    const each = (c, sel) => {
+        if (!c.xfade) return;
+        const x = cleanXfade(c.xfade);
+        const from = x && xfadeFrom(cut, sel);
+        if (!from) { delete c.xfade; return; }
+        const out = clipOf(cut, from);
+        const s = xfadeSides(x);
+        const scale = Math.min(1, s.b > 0 ? num(out.length) / s.b : 1, s.a > 0 ? num(c.length) / s.a : 1);
+        x.len = round(Math.max(MIN_XFADE, x.len * scale));
+        c.xfade = x;
+        delete c.fadeIn;
+        delete out.fadeOut;
+    };
+    cut.clips.forEach((c) => fades(c, num(c.length)));
+    for (const k of cut.tracks || []) for (const c of k.clips) fades(c, num(c.length));
+    for (const s of cut.sound || []) {
+        for (const key of ["fadeIn", "fadeOut"]) { const v = round(Math.max(0, num(s[key]))); if (v > 0) s[key] = v; else delete s[key]; }
+    }
+    cut.clips.forEach((c, i) => each(c, { kind: "clip", i }));
+    for (const k of cut.tracks || []) k.clips.forEach((c, i) => each(c, { kind: "tclip", track: k.id, i }));
+}
+
+// What of a clip's sound the cut's comparison (sameCut) looks at.
+function audioDress(c) {
+    return [round(num(c.fadeIn)), round(num(c.fadeOut)), c.xfade ? JSON.stringify(cleanXfade(c.xfade)) : ""];
+}
+
+/**
+ * A clip's fades and crossfades as its gain is worked out (envGain): { len, fi, fo,
+ * xin, xout }, `xin` / `xout` the crossfades into and out of it ({ b, a, curve }).
+ * `sel` a clip's selection, or { kind: "sound", i } for the bed.
+ */
+export function audioEnv(cut, sel) {
+    if (sel && sel.kind === "sound") {
+        const s = ((cut && cut.sound) || [])[sel.i];
+        return { len: filmLength(cut), fi: num(s && s.fadeIn), fo: num(s && s.fadeOut), xin: null, xout: null };
+    }
+    const c = clipOf(cut, sel);
+    if (!c) return null;
+    const env = { len: num(c.length), fi: num(c.fadeIn), fo: num(c.fadeOut), xin: null, xout: null };
+    if (c.xfade && xfadeFrom(cut, sel)) { const x = cleanXfade(c.xfade); if (x) { env.xin = { ...xfadeSides(x), curve: x.curve }; env.fi = 0; } }
+    const nx = xfadeInto(cut, sel);
+    const n = nx && clipOf(cut, nx);
+    if (n && n.xfade) { const x = cleanXfade(n.xfade); if (x) { env.xout = { ...xfadeSides(x), curve: x.curve }; env.fo = 0; } }
+    return env;
+}
+
+/** Does a clip's sound rise or fall anywhere (a fade or a crossfade)? */
+export function envActive(env) {
+    return !!env && (env.fi > 0 || env.fo > 0 || !!env.xin || !!env.xout);
+}
+
+/**
+ * The gain of the fades and crossfades at clip time `u` (from -xin.b, the handle
+ * before a crossfade coming in, to len + xout.a): 0 outside, 1 where nothing fades.
+ */
+export function envGain(env, u) {
+    if (!env) return 1;
+    const t = num(u), len = num(env.len);
+    const lo = env.xin ? -num(env.xin.b) : 0, hi = env.xout ? len + num(env.xout.a) : len;
+    if (t < lo - 1e-9 || t > hi + 1e-9) return 0;
+    let g = 1;
+    if (env.xin) {
+        const L = num(env.xin.b) + num(env.xin.a);
+        if (L > 0 && t < num(env.xin.a)) g *= curveGain(env.xin.curve, (t + num(env.xin.b)) / L);
+    } else if (env.fi > 0 && t < env.fi) g *= Math.max(0, t) / env.fi;
+    if (env.xout) {
+        const L = num(env.xout.b) + num(env.xout.a), s = len - num(env.xout.b);
+        if (L > 0 && t > s) g *= curveGain(env.xout.curve, 1 - (t - s) / L);
+    } else if (env.fo > 0 && t > len - env.fo) g *= Math.max(0, len - t) / env.fo;
+    return Math.max(0, Math.min(1, g));
+}
+
+/** The moment of a clip's source at clip time `u`, a crossfade's handle before it included (u < 0). */
+export function srcAt(c, u) {
+    return num(u) < 0 ? round(num(c && c.in) + num(u) * speedOf(c)) : srcLocal(c, u);
+}
+
+/** The crossfades of the cut, for drawing: [{ sel, track, cutAt, start, len, b, a, curve, align, left, width, title }] (% of `total`). */
+export function xfadeBars(cut, total) {
+    const out = [];
+    const T = num(total) > 0 ? num(total) : filmLength(cut);
+    const add = (sel, at, c) => {
+        if (!c.xfade || !xfadeFrom(cut, sel)) return;
+        const x = cleanXfade(c.xfade);
+        if (!x) return;
+        const s = xfadeSides(x);
+        const start = round(at - s.b);
+        out.push({ sel: xfadeSelOf(sel), track: sel.kind === "clip" ? "V1" : sel.track, cutAt: at, start, len: x.len, ...s,
+                   curve: x.curve, align: x.align, left: pct(start / T * 100), width: pct(x.len / T * 100),
+                   title: `${XF_CURVES[x.curve]}, ${lengthLabel(x.len)} (${XF_ALIGNS[x.align].toLowerCase()}) - drag an edge to make it longer or shorter, Del takes it away` });
+    };
+    const starts = clipStarts(cut);
+    ((cut && cut.clips) || []).forEach((c, i) => add({ kind: "clip", i }, starts[i], c));
+    for (const k of (cut && cut.tracks) || []) (k.clips || []).forEach((c, i) => add({ kind: "tclip", track: k.id, i }, num(c.at), c));
+    return out;
+}
+
+/** The cut nearest `seconds` on a track where a crossfade can go: the clip coming in (a selection), or null. */
+export function xfadeCutNear(cut, track, seconds, within = Infinity) {
+    let best = null, gap = within;
+    const t = num(seconds);
+    const look = (sel, at) => { const d = Math.abs(at - t); if (d <= gap && xfadeFrom(cut, sel)) { best = sel; gap = d; } };
+    if (track === "V1") { const st = clipStarts(cut); (cut.clips || []).forEach((_, i) => look({ kind: "clip", i }, st[i])); }
+    else { const k = trackOf(cut, track); if (k) k.clips.forEach((c, i) => look({ kind: "tclip", track, i }, num(c.at))); }
+    return best;
 }

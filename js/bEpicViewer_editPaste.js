@@ -44,7 +44,9 @@ export const EditPasteMixin = {
 
     /** The selected items a paste goes to: clips and texts. */
     _editTlPasteTargets() {
-        return this._editTlSelAll().filter((s) => D.isClipSel(s) || s.kind === "text");
+        // Only the clips on tracks whose Auto Track Selector is on and that are not locked (as Resolve's Paste).
+        const mask = this._editTlCut ? D.editMask(this._editTlCut) : null;
+        return this._editTlSelAll().filter((s) => (D.isClipSel(s) || s.kind === "text") && (!mask || mask.has(D.selTrack(s))));
     },
 
     /** Alt+V: the Paste Attributes dialog, for the selected clips. */

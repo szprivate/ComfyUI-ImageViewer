@@ -297,6 +297,7 @@ def _look(item):
     if takes:
         out["takes"] = takes
     out.update(clip_link(item))
+    out.update(clip_audio(item))
     return out
 
 
@@ -359,6 +360,234 @@ def _set_link(item, c):
             note["disabled"] = True
         else:
             note.pop("disabled", None)
+
+
+# Audio transitions and fades (bEpicViewer_editTimelineData.js, "audio transitions and fades" -
+# the same arithmetic, kept in step; tests/test_edit_audio_xfade.py holds the two to each other).
+# A crossfade lies on the clip coming in, ``xfade = {"len", "curve", "align"}``: "centre" half
+# before the cut and half after, "start" all after (the clip going out plays on past its end),
+# "end" all before (the clip coming in begins early) - the sound beyond the cut is the clips'
+# handles, so nothing moves. ``curve`` "0" (straight), "+3" (equal power, the default) or "-3"
+# (x^1.5). ``fadeIn`` / ``fadeOut``: seconds of the clip, straight lines of gain; a crossfade on a
+# side takes the fade's place. In the file ``metadata.bepic.afade_in`` / ``afade_out`` / ``axfade``;
+# the bed's fade out is agentY's own ``metadata.agentY.fade_out`` (1 s where it says nothing).
+XF_CURVES = ("+3", "0", "-3")
+XF_ALIGNS = ("centre", "start", "end")
+MIN_XFADE = 0.02
+
+
+def curve_gain(curve, p):
+    """The gain of a fade coming in, *p* (0..1) of the way through (curveGain in the JS)."""
+    import math
+    x = max(0.0, min(1.0, float(p)))
+    if curve == "0":
+        return x
+    if curve == "-3":
+        return x ** 1.5
+    return math.sin(x * math.pi / 2)
+
+
+def clean_xfade(x):
+    """A crossfade held to what one may be, or None."""
+    if not isinstance(x, dict):
+        return None
+    try:
+        length = round(float(x.get("len") or 0), 4)
+    except (TypeError, ValueError):
+        return None
+    if length != length or not length >= MIN_XFADE - 1e-9:
+        return None
+    return {"len": min(length, 60.0), "curve": x.get("curve") if x.get("curve") in XF_CURVES else "+3",
+            "align": x.get("align") if x.get("align") in XF_ALIGNS else "centre"}
+
+
+def xfade_sides(x):
+    """``(before, after)``: how much of a crossfade lies before the cut and after it."""
+    length = float(x["len"])
+    if x.get("align") == "start":
+        return 0.0, length
+    if x.get("align") == "end":
+        return length, 0.0
+    b = round(length / 2, 4)
+    return b, round(length - b, 4)
+
+
+def env_gain(env, u):
+    """The gain of a clip's fades and crossfades at clip time *u* (envGain in the JS).
+    *env*: ``{"len", "fi", "fo", "xin", "xout"}``, a crossfade ``{"b", "a", "curve"}``."""
+    if not env:
+        return 1.0
+    t, length = float(u), float(env["len"])
+    xin, xout = env.get("xin"), env.get("xout")
+    lo = -xin["b"] if xin else 0.0
+    hi = length + xout["a"] if xout else length
+    if t < lo - 1e-9 or t > hi + 1e-9:
+        return 0.0
+    g = 1.0
+    if xin:
+        span = xin["b"] + xin["a"]
+        if span > 0 and t < xin["a"]:
+            g *= curve_gain(xin["curve"], (t + xin["b"]) / span)
+    elif env.get("fi", 0) > 0 and t < env["fi"]:
+        g *= max(0.0, t) / env["fi"]
+    if xout:
+        span, s = xout["b"] + xout["a"], length - xout["b"]
+        if span > 0 and t > s:
+            g *= curve_gain(xout["curve"], 1 - (t - s) / span)
+    elif env.get("fo", 0) > 0 and t > length - env["fo"]:
+        g *= max(0.0, length - t) / env["fo"]
+    return max(0.0, min(1.0, g))
+
+
+def _fade_num(value):
+    try:
+        v = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return round(v, 4) if 0 < v < 86400 else 0.0
+
+
+def clip_audio(item):
+    """``{"fadeIn", "fadeOut", "xfade"}`` of a clip - only the keys it has."""
+    note = _bepic(item)
+    out = {}
+    fi, fo = _fade_num(note.get("afade_in")), _fade_num(note.get("afade_out"))
+    if fi:
+        out["fadeIn"] = fi
+    if fo:
+        out["fadeOut"] = fo
+    x = clean_xfade(note.get("axfade"))
+    if x:
+        out["xfade"] = x
+    return out
+
+
+def _set_audio(item, c):
+    """Write a clip's fades and crossfade, where the edit states them, into *item*."""
+    if not any(k in c for k in ("fadeIn", "fadeOut", "xfade")):
+        return
+    meta = item.setdefault("metadata", {})
+    note = meta.setdefault("bepic", {}) if isinstance(meta, dict) else None
+    if not isinstance(note, dict):
+        return
+    for key, name in (("fadeIn", "afade_in"), ("fadeOut", "afade_out")):
+        if key in c:
+            v = _fade_num(c.get(key))
+            if v:
+                note[name] = v
+            else:
+                note.pop(name, None)
+    if "xfade" in c:
+        x = clean_xfade(c.get("xfade"))
+        if x:
+            note["axfade"] = x
+        else:
+            note.pop("axfade", None)
+
+
+def bed_fades(item):
+    """The bed's fades: ``{"fadeIn", "fadeOut"}`` (its fade out agentY's, 1 s where it says nothing)."""
+    try:
+        fo = float(_note(item).get("fade_out", 1.0))
+    except (TypeError, ValueError):
+        fo = 1.0
+    return {"fadeIn": _fade_num(_bepic(item).get("afade_in")), "fadeOut": round(max(0.0, fo), 4)}
+
+
+def _set_bed_fades(item, s):
+    meta = item.setdefault("metadata", {})
+    if not isinstance(meta, dict):
+        return
+    if "fadeIn" in s:
+        note = meta.setdefault("bepic", {})
+        if isinstance(note, dict):
+            v = _fade_num(s.get("fadeIn"))
+            if v:
+                note["afade_in"] = v
+            else:
+                note.pop("afade_in", None)
+    if "fadeOut" in s:
+        note = meta.setdefault("agentY", {})
+        if isinstance(note, dict):
+            note["fade_out"] = _fade_num(s.get("fadeOut"))
+
+
+_FILM_EXTS = (".mp4", ".m4v", ".mov", ".webm", ".mkv", ".avi")
+_STILL_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".gif", ".bmp", ".avif", ".exr")
+
+
+def _xfadeable(c, v1):
+    f = str(c.get("file") or "").lower()
+    if c.get("loop") or f.endswith(_STILL_EXTS):
+        return False
+    return not (v1 and (not f.endswith(_FILM_EXTS) or c.get("mute")))
+
+
+def audio_envs(edit):
+    """Every clip's fades and crossfades as :func:`env_gain` reads them: ``{("V1", i) | (track id, i): env}``
+    for the clips of *edit* (as :func:`editable` gives it). xfadeFrom / audioEnv in the JS."""
+    def env_of(c):
+        return {"len": float(c.get("length") or 0), "fi": float(c.get("fadeIn") or 0),
+                "fo": float(c.get("fadeOut") or 0), "xin": None, "xout": None}
+    out = {}
+    clips = edit.get("clips") or []
+    for i, c in enumerate(clips):
+        out[("V1", i)] = env_of(c)
+    for i, c in enumerate(clips):
+        x = clean_xfade(c.get("xfade"))
+        if not x or not i or float(c.get("gap") or 0) > 0 or float(c.get("transition") or 0) > 0 \
+                or not _xfadeable(c, True) or not _xfadeable(clips[i - 1], True):
+            continue
+        b, a = xfade_sides(x)
+        out[("V1", i)].update(xin={"b": b, "a": a, "curve": x["curve"]}, fi=0.0)
+        out[("V1", i - 1)].update(xout={"b": b, "a": a, "curve": x["curve"]}, fo=0.0)
+    for t in edit.get("tracks") or []:
+        tc = t.get("clips") or []
+        for i, c in enumerate(tc):
+            out[(t.get("id"), i)] = env_of(c)
+        if t.get("kind") != "audio":
+            continue
+        for i, c in enumerate(tc):
+            x = clean_xfade(c.get("xfade"))
+            if not x or not _xfadeable(c, False):
+                continue
+            at = float(c.get("at") or 0)
+            j = next((n for n, o in enumerate(tc) if n != i
+                      and abs(float(o.get("at") or 0) + float(o.get("length") or 0) - at) < 1e-3), -1)
+            if j < 0 or not _xfadeable(tc[j], False):
+                continue
+            b, a = xfade_sides(x)
+            out[(t.get("id"), i)].update(xin={"b": b, "a": a, "curve": x["curve"]}, fi=0.0)
+            out[(t.get("id"), j)].update(xout={"b": b, "a": a, "curve": x["curve"]}, fo=0.0)
+    return out
+
+
+# Tracks for editing: a track LOCKED (nothing on it may be changed) and its AUTO TRACK SELECTOR
+# (off: ripples, inserts, the blade at the playhead leave it alone) - Resolve's two header controls,
+# the panel's (bEpicViewer_editTimelineData.js, trackFlags). ``metadata.bepic.lock`` /
+# ``auto_select`` on a track (False only when off); texts: the stack's ``texts_lock`` / ``texts_auto``.
+def track_flags(track):
+    note = _bepic(track) if track else {}
+    return {"lock": bool(note.get("lock")), "auto": note.get("auto_select") is not False}
+
+
+def _set_flags(track, t):
+    if track is None:
+        return
+    meta = track.setdefault("metadata", {})
+    note = meta.setdefault("bepic", {}) if isinstance(meta, dict) else None
+    if not isinstance(note, dict):
+        return
+    if "lock" in t:
+        if t.get("lock"):
+            note["lock"] = True
+        else:
+            note.pop("lock", None)
+    if "auto" in t:
+        if t.get("auto") is False:
+            note["auto_select"] = False
+        else:
+            note.pop("auto_select", None)
 
 
 # A clip may carry takes: the same shot made again with changes, kept beside the
@@ -647,7 +876,7 @@ def extra_tracks(doc):
                 clips.append(clip)
             at += length
         out.append({"id": tid, "kind": kind, "name": str(track.get("name") or tid), "off": _is_off(track),
-                    "clips": clips})
+                    **track_flags(track), "clips": clips})
     return out
 
 
@@ -730,10 +959,14 @@ def editable(doc):
     for child in (audio or {}).get("children") or []:
         if isinstance(child, dict) and str(child.get("OTIO_SCHEMA") or "").startswith("Clip"):
             out["sound"].append({"name": str(child.get("name") or ""),
-                                 "file": _file(child.get("media_reference"))})
+                                 "file": _file(child.get("media_reference")), **bed_fades(child)})
     out["tracks"] = extra_tracks(doc)
     out["off"] = {"V1": _is_off(video), "A1": _is_off(audio),
                   "T": bool(_bepic(stack).get("texts_off"))}
+    flags = {"V1": track_flags(video), "A1": track_flags(audio),
+             "T": {"lock": bool(_bepic(stack).get("texts_lock")), "auto": _bepic(stack).get("texts_auto") is not False}}
+    out["lock"] = {k: v["lock"] for k, v in flags.items()}
+    out["auto"] = {k: v["auto"] for k, v in flags.items()}
     # The texts (markers) as title clips: the panel, the render and the Resolve export all work on those.
     return texts_to_titles(out)
 
@@ -801,6 +1034,7 @@ def _dress(item, c, may_use=None):
                     note.pop("fx", None)
     _set_time(item, c)
     _set_link(item, c)
+    _set_audio(item, c)
     if "takes" in c:
         _set_takes(item, c.get("takes"), may_use)
     if c.get("volume") is not None:
@@ -904,6 +1138,7 @@ def _build_tracks(doc, tracks, rate, may_use):
         track = {"OTIO_SCHEMA": "Track.1", "name": name, "kind": "Audio" if kind == "audio" else "Video",
                  "metadata": {}, "source_range": None, "effects": [], "markers": [], "children": children}
         _set_off(track, bool(t.get("off")))
+        _set_flags(track, t)
         made[kind].append(track)
     return made["video"], made["audio"]
 
@@ -1031,6 +1266,10 @@ def rebuild(doc, edit, stamp="", may_use=None):
         audio["children"] = [c for c in (audio.get("children") or [])
                              if not (isinstance(c, dict) and str(c.get("OTIO_SCHEMA") or "").startswith("Clip"))
                              or _file(c.get("media_reference")) in left]
+        fades = {str(s.get("file") or ""): s for s in edit["sound"] if isinstance(s, dict)}
+        for c in audio["children"]:
+            if isinstance(c, dict) and str(c.get("OTIO_SCHEMA") or "").startswith("Clip"):
+                _set_bed_fades(c, fades.get(_file(c.get("media_reference"))) or {})
     if "tracks" in edit:
         more_video, more_audio = _build_tracks(doc, edit.get("tracks") or [], rate, may_use)
         stack_new = new.get("tracks") or {}
@@ -1061,6 +1300,25 @@ def rebuild(doc, edit, stamp="", may_use=None):
                 note = stack_meta.setdefault("bepic", {})
                 if isinstance(note, dict):
                     note["texts_off"] = bool(off["T"])
+    for flag in ("lock", "auto"):
+        given = edit.get(flag)
+        if not isinstance(given, dict):
+            continue
+        for tid, track in (("V1", video), ("A1", audio)):
+            if tid in given and track is not None:
+                _set_flags(track, {flag: given[tid]})
+        if "T" in given:
+            stack_meta = (new.get("tracks") or {}).setdefault("metadata", {})
+            note = stack_meta.setdefault("bepic", {}) if isinstance(stack_meta, dict) else None
+            if isinstance(note, dict):
+                key = "texts_lock" if flag == "lock" else "texts_auto"
+                on = bool(given["T"])
+                if flag == "lock" and on:
+                    note[key] = True
+                elif flag == "auto" and not on:
+                    note[key] = False
+                else:
+                    note.pop(key, None)
     film = edit_length({"clips": [{"length": p[2], "transition": p[3], "gap": p[6]} for p in parsed],
                         "tracks": extra_tracks(new)})
 
@@ -1343,6 +1601,14 @@ def _clashes(track, at, length, skip=None):
     return None
 
 
+def _locked(edit, tid):
+    """Is track *tid* of *edit* locked in the panel (nothing on it may be changed)?"""
+    if tid in ("V1", "A1", "T"):
+        return bool((edit.get("lock") or {}).get(tid))
+    track = _find_track(edit, tid)
+    return bool(track and track.get("lock"))
+
+
 def _label(clip):
     return str(clip.get("name") or os.path.basename(str(clip.get("file") or "")))
 
@@ -1366,9 +1632,11 @@ def _op_add(new, op, what, durations):
         if not known > start + _MIN_CLIP:
             raise ValueError(f"{what}: how long {os.path.basename(file)} is, is not known - give 'length'")
         length = known - start
+    if tid not in ("", "AUTO", "NEW") and _locked(new, tid):
+        raise ValueError(f"{what}: track {tid} is locked in the Edit panel - unlock it there, or use another track")
     if tid in ("", "AUTO"):
         track = next((t for t in new["tracks"] if isinstance(t, dict) and t.get("kind") == kind
-                      and not _clashes(t, at, length)), None) or _next_track(new, kind)
+                      and not t.get("lock") and not _clashes(t, at, length)), None) or _next_track(new, kind)
     elif tid == "NEW":
         track = _next_track(new, kind)
     else:
@@ -1404,6 +1672,8 @@ def _op_edit(new, op, what, kind_of_op):
     except (TypeError, ValueError):
         raise ValueError(f"{what}: 'clip' is the clip's number on its track (1, 2 ...)") from None
     track = None
+    if _locked(new, tid):
+        raise ValueError(f"{what}: track {tid} is locked in the Edit panel - nothing on it can be changed")
     if tid == "V1":
         row = new.get("clips") or []
     elif tid == "A1":

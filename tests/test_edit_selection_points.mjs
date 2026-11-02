@@ -290,7 +290,7 @@ test("V1 keeps its last shot, and says so; the bed is saved as it is left", () =
         assert.equal(got.kept, true);
     }
     assert.deepEqual(D.toSave({ ...CUT(), sound: [] }).sound, []);
-    assert.deepEqual(D.toSave(CUT()).sound, [{ name: "music", file: "music.wav" }]);
+    assert.deepEqual(D.toSave(CUT()).sound, [{ name: "music", file: "music.wav", fadeIn: 0, fadeOut: 0 }]);
     assert.equal(D.sameCut(CUT(), { ...CUT(), sound: [] }), false);
 });
 

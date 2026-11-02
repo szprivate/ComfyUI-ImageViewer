@@ -484,6 +484,26 @@ export const EditPanelsMixin = {
                 row("Volume", slider(now, 0, 100, 1, 0, (v) => {
                     if (this._editTlOnScreen() && this._videoMode && this.videoBase) { try { this.videoBase.volume = v / 100; } catch (_) {} }
                 }, (v) => setVol(v / 100), "percent", mixed("vol")), resetVol, ["vol"]);
+                // Fades (the corner handles on the clip) and crossfades (Shift+T at a cut), as Resolve's.
+                const env = D.audioEnv(cut, sel) || {};
+                const fadeAll = (which, v) => apply(eachTarget(["vol"], (n, t) => D.setFade(n, t.sel, which, v)));
+                section("Fades", { reset: () => apply(eachTarget(["vol"], (n, t) => D.setFade(D.setFade(n, t.sel, "in", 0), t.sel, "out", 0))) });
+                const fin = seconds(c.fadeIn || 0, (v) => fadeAll("in", v), !!env.xin);
+                fin.dataset.field = "fadeIn";
+                row("Fade in", env.xin ? [fin, said("a crossfade comes in here")] : fin, c.fadeIn ? () => fadeAll("in", 0) : null);
+                const fout = seconds(c.fadeOut || 0, (v) => fadeAll("out", v), !!env.xout);
+                fout.dataset.field = "fadeOut";
+                row("Fade out", env.xout ? [fout, said("a crossfade goes out here")] : fout, c.fadeOut ? () => fadeAll("out", 0) : null);
+                const from = D.xfadeFrom(cut, sel), into2 = D.xfadeInto(cut, sel);
+                if (from || into2) {
+                    section("Crossfade");
+                    const go = (s) => this.editTlAddAudioXfade(s);
+                    row("At its start", from ? (c.xfade ? button("Select", "The crossfade into this clip", () => { this._editTlSel = D.xfadeSelOf(sel); this.editTlRefresh(); })
+                                                         : button("Add", "A crossfade from the clip before (Shift+T)", () => go(sel))) : said("no sound ends here"));
+                    const nx = into2 && D.clipOf(cut, into2);
+                    row("At its end", into2 ? (nx.xfade ? button("Select", "The crossfade out of this clip", () => { this._editTlSel = D.xfadeSelOf(into2); this.editTlRefresh(); })
+                                                        : button("Add", "A crossfade into the clip after (Shift+T)", () => go(into2))) : said("no sound begins here"));
+                }
                 into = null;
             } else if (tab === "timing") {
                 // Where it is and which part of its source it plays. "Start" and
@@ -581,6 +601,52 @@ export const EditPanelsMixin = {
                 into = null;
             }
             foot(button("Remove this text", "Take this text off the film", () => this._editTlRemove(sel)));
+        } else if (sel && sel.kind === "xfade" && D.xfadeOf(cut, sel)) {
+            // An audio crossfade (Shift+T, the clip menu): its length, curve and alignment, as Resolve's Inspector has them.
+            const x = D.xfadeOf(cut, sel);
+            const inSel = D.xfadeClipSel(sel), outSel = D.xfadeFrom(cut, inSel);
+            const set = (patch) => {
+                const got = D.addAudioXfade(cut, inSel, patch, this._editTlDur ? this._editTlDur() : {});
+                if (got.error) { this._editTlSay(got.error); return; }
+                if (got.fitted) this._editTlSay("not enough media beyond the cut: the crossfade is as long as the media allows");
+                apply(got.cut);
+            };
+            head(D.XF_CURVES[x.curve]);
+            tabs([["transition", "Transition", true]]);
+            section("Audio Crossfade", { reset: () => set({ ...D.XF_DEFAULT }) });
+            const len = seconds(x.len, (v) => set({ len: Math.max(D.MIN_XFADE, v) }));
+            len.dataset.field = "xfadeLen";
+            row("Duration", len);
+            const pick = (table, value, fn, field) => {
+                const s = quiet(el("select", "insp-select"));
+                for (const [v, label] of Object.entries(table)) { const o = el("option", "", label); o.value = v; s.append(o); }
+                s.value = value;
+                s.dataset.field = field;
+                s.addEventListener("change", () => fn(s.value));
+                return s;
+            };
+            row("Curve", pick(D.XF_CURVES, x.curve, (v) => set({ curve: v }), "xfadeCurve"));
+            row("Alignment", pick(D.XF_ALIGNS, x.align, (v) => set({ align: v }), "xfadeAlign"));
+            const name = (s) => { const k = D.clipOf(cut, s); return (k && (k.name || String(k.file || "").split(/[\\/]/).pop())) || ""; };
+            row("From", said(name(outSel)));
+            row("To", said(name(inSel)));
+            row("Track", said(sel.track));
+            into = null;
+            note("It takes its sound from beyond the cut (the clips' handles), so nothing moves. Drag an edge of its bar to change its length; Del takes it away.");
+            foot(button("Remove this crossfade", "Back to a plain cut", () => { this._editTlSel = null; apply(D.removeAudioXfade(cut, sel)); }));
+        } else if (sel && sel.kind === "sound" && (cut.sound || [])[sel.i]) {
+            const s = cut.sound[sel.i];
+            head(s.name || String(s.file || "").split(/[\\/]/).pop() || "music");
+            tabs([["audio", "Audio", true]]);
+            section("Fades", { reset: () => apply(D.setFade(D.setFade(cut, sel, "in", 0), sel, "out", 0)) });
+            const fin = seconds(s.fadeIn || 0, (v) => apply(D.setFade(cut, sel, "in", v)));
+            fin.dataset.field = "fadeIn";
+            row("Fade in", fin);
+            const fout = seconds(s.fadeOut || 0, (v) => apply(D.setFade(cut, sel, "out", v)));
+            fout.dataset.field = "fadeOut";
+            row("Fade out", fout);
+            into = null;
+            note("The music under the whole film: it fades in from the film's start and out to its end.");
         } else if (sel && sel.kind === "mix" && cut.clips[sel.i] && sel.i > 0) {
             const i = sel.i, c = cut.clips[i];
             head("Cross Dissolve");

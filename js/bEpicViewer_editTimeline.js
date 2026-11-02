@@ -790,9 +790,22 @@ export const EditTimelineMixin = {
             const height = Math.max(12, Math.min(160, Number(view.heights[row.id]) || ROW_HEIGHT[row.kind]));
             const dead = row.id === "T" ? !!(cut.off && cut.off.T) : !live.has(row.id);
             const tr = doc.createElement("div");
-            tr.className = `edit-track edit-k-${row.kind}` + (dead ? " dead" : "");
+            const locked = D.trackFlags(cut, row.id).lock;
+            tr.className = `edit-track edit-k-${row.kind}` + (dead ? " dead" : "") + (locked ? " locked" : "");
             tr.dataset.track = row.id;
             tr.style.height = height + "px";
+            if (locked) {
+                // Locked: nothing on it is selected, dragged, trimmed or cut - a press there does nothing (the playhead's line still scrubs).
+                const refuse = (e) => {
+                    if (e.type === "pointerdown" && this._editTlHeadHit && this._editTlHeadHit(e)) return;
+                    e.stopPropagation();
+                    e.preventDefault();
+                    if (e.type === "pointerdown" && e.button === 0) this._editTlSay(`${row.name} is locked - its padlock in the header unlocks it`);
+                };
+                tr.addEventListener("pointerdown", refuse, true);
+                tr.addEventListener("contextmenu", refuse, true);
+                tr.addEventListener("dblclick", refuse, true);
+            }
             const kids = [];
             if (row.id === "T") {
                 for (const x of lay.texts) {
@@ -814,6 +827,9 @@ export const EditTimelineMixin = {
                     if (picked("clip", s.i) && this._editTlKeyMarks) this._editTlKeyMarks(b, { kind: "clip", i: s.i }, cut.clips[s.i]);
                     this._editTlTakeBadge(b, cut.clips[s.i]);
                     this._editTlLinkBadge(b, cut.clips[s.i], "video");
+                    if (this._editTlFadeHandles && !cut.clips[s.i].mute && this._editTlHasSound(cut.clips[s.i])) {
+                        this._editTlFadeHandles(b, { kind: "clip", i: s.i }, s.length, height);
+                    }
                     b.addEventListener("pointerdown", (e) => this._editTlShotDown(e, b, s.i));
                     b.addEventListener("pointermove", (e) => this._editTlHover(e, b, { kind: "clip", i: s.i }));
                     b.addEventListener("pointerleave", () => this._editTlHoverEnd());
@@ -844,11 +860,14 @@ export const EditTimelineMixin = {
                     b.addEventListener("contextmenu", (e) => this._editTlClipMenu(e, { kind: "mix", i: m.i }));
                     kids.push(b);
                 }
+                // Audio crossfades at V1's cuts (the shots' own sound; the picture cuts).
+                if (this._editTlXfadeBlocks) kids.push(...this._editTlXfadeBlocks(doc, "V1", lay));
             } else if (row.id === "A1") {
                 for (const [k, s] of lay.sound.entries()) {
                     const b = block("edit-snd" + (picked("sound", k) ? " sel" : "") + also("sound", k), s, s.name);
                     b.dataset.bed = String(k);
                     b._media = { file: cut.sound[k].file, in: 0, length: lay.film, row: "audio", volume: 1 };
+                    if (this._editTlFadeHandles) this._editTlFadeHandles(b, { kind: "sound", i: k }, lay.film, height);
                     b.addEventListener("pointerdown", (e) => this._editTlBedDown(e, b, k));
                     b.addEventListener("contextmenu", (e) => this._editTlClipMenu(e, { kind: "sound", i: k }));
                     kids.push(b);
@@ -866,12 +885,14 @@ export const EditTimelineMixin = {
                     if (picked("tclip", c.i, row.id) && this._editTlKeyMarks) this._editTlKeyMarks(b, { kind: "tclip", track: row.id, i: c.i }, tc);
                     this._editTlTakeBadge(b, tc);
                     this._editTlLinkBadge(b, tc, row.kind);
+                    if (row.kind === "audio" && this._editTlFadeHandles) this._editTlFadeHandles(b, { kind: "tclip", track: row.id, i: c.i }, c.length, height);
                     b.addEventListener("pointerdown", (e) => this._editTlTrackClipDown(e, b, row.id, c.i));
                     b.addEventListener("pointermove", (e) => this._editTlHover(e, b, { kind: "tclip", track: row.id, i: c.i }));
                     b.addEventListener("pointerleave", () => this._editTlHoverEnd());
                     b.addEventListener("contextmenu", (e) => this._editTlClipMenu(e, { kind: "tclip", track: row.id, i: c.i }));
                     kids.push(b);
                 }
+                if (row.kind === "audio" && this._editTlXfadeBlocks) kids.push(...this._editTlXfadeBlocks(doc, row.id, lay));
             }
             tr.append(...kids);
             rowEls.push(tr);
@@ -914,8 +935,8 @@ export const EditTimelineMixin = {
         };
         const cut = this._editTlCut;
         const off = row.track ? !!row.track.off : !!(cut.off && cut.off[row.id]);
-        hd.append(name, small("\u25cf", off ? "Switched off - click to switch this track on"
-                                             : "Switch this track off: not seen, not heard, not rendered", !off,
+        hd.append(name, small("\u25cf", off ? "Switched off (playback) - click to switch this track on"
+                                             : "Switch this track off (playback): not seen, not heard, not rendered - it can still be edited", !off,
                               () => this._editTlApply(D.setTrackOff(cut, row.id, !off))));
         if (row.id !== "T") {
             hd.append(small("S", "Solo: play only the soloed tracks of this kind (not saved, not rendered)",
@@ -925,6 +946,34 @@ export const EditTimelineMixin = {
                 this.editTlRefresh();
             }));
         }
+        // Resolve's two editing controls: the Auto Track Selector and the lock (not the switch, which is playback).
+        const flags = D.trackFlags(cut, row.id);
+        const icon = (name, title, on, cls, fn) => {
+            const b = small("", title, on, fn);
+            b.classList.add(cls);
+            setEditIcon(b, name);
+            b.title = title;
+            return b;
+        };
+        hd.append(icon("autoSel", flags.auto
+            ? "Auto Track Selector on: ripples, inserts, the blade at the playhead, Paste Attributes and Shift+A / S reach this track - click: off (it keeps its clips where they are)"
+            : "Auto Track Selector off: ripples, inserts and the blade at the playhead leave this track where it is - click: on", flags.auto, "edit-hauto",
+            () => this._editTlApply(D.setTrackFlag(cut, row.id, "auto", !flags.auto))));
+        hd.append(icon(flags.lock ? "lock" : "lockOpen", flags.lock
+            ? "Locked: nothing on this track can be edited (it still plays and renders) - click to unlock"
+            : "Lock this track: nothing on it can be selected, moved, trimmed, cut or deleted; it still plays and renders", flags.lock, "edit-hlock",
+            () => {
+                if (!flags.lock) {
+                    // What was selected on it is let go.
+                    const keep = D.unlockedSel(D.setTrackFlag(cut, row.id, "lock", true), this._editTlSelAll());
+                    if (this._editTlSel && D.selTrack(this._editTlSel) === row.id) this._editTlSel = null;
+                    if (this._editTlSel && this._editTlSel.kind === "xfade" && this._editTlSel.track === row.id) this._editTlSel = null;
+                    this._editTlMulti = null;
+                    if (keep.length > 1 && this._editTlSetSelList) this._editTlSetSelList(keep, this._editTlSel);
+                    this._editTlEditSel = null;
+                }
+                this._editTlApply(D.setTrackFlag(cut, row.id, "lock", !flags.lock));
+            }));
         if (row.track) {
             hd.append(small("\u2715", "Remove this track and what is on it", false, () => {
                 delete view.solo[row.id];
@@ -1075,7 +1124,12 @@ export const EditTimelineMixin = {
         if (D.isItemSel(sel)) this._editTlMenuSelect(sel); else this._editTlSel = sel;
         this.editTlRefresh();
         if (sel.kind === "sound") {
-            this._previzOpenMenu([{ label: "Remove this sound from the cut", run: () => this._editTlRemove(sel) }], e.clientX, e.clientY);
+            const s = this._editTlCut.sound[sel.i] || {};
+            this._previzOpenMenu([
+                { label: (s.fadeIn ? "No fade in" : "Fade in, 1 s"), run: () => this._editTlApply(D.setFade(this._editTlCut, sel, "in", s.fadeIn ? 0 : 1)) },
+                { label: (s.fadeOut ? "No fade out" : "Fade out, 1 s"), run: () => this._editTlApply(D.setFade(this._editTlCut, sel, "out", s.fadeOut ? 0 : 1)) },
+                "-",
+                { label: "Remove this sound from the cut", run: () => this._editTlRemove(sel) }], e.clientX, e.clientY);
             return;
         }
         if (sel.kind === "gap") {
@@ -1094,6 +1148,7 @@ export const EditTimelineMixin = {
         }
         const clip = D.clipOf(this._editTlCut, sel);
         if (sel.kind === "clip" || sel.kind === "tclip") entries.push(...this._editTlLinkEntries(sel));
+        if ((sel.kind === "clip" || sel.kind === "tclip") && this._editTlXfadeEntries) entries.push(...this._editTlXfadeEntries(sel));
         if (clip && FILM_EXTS.includes(ext(clip.file))) {
             entries.push({ label: "Detect cuts", run: () => this.editTlDetectCuts([sel]) });
         }
@@ -1144,6 +1199,13 @@ export const EditTimelineMixin = {
     },
 
     _editTlApply(cut) {
+        // A locked track is not changed: the edit is refused as a whole (the ones that reach beyond their clip skip it).
+        const locked = D.lockViolation(this._editTlCut, cut);
+        if (locked) {
+            const k = D.trackOf(this._editTlCut, locked);
+            this._editTlSay(`${(k && k.name) || locked} is locked: that edit would change it`);
+            return false;
+        }
         // One step of the undo stack - but a drag records itself once, when it is let go.
         if (!this._editTlDragging) this._editTlRecord(this._editTlCut, cut);
         this._editTlCut = cut;
@@ -1284,6 +1346,8 @@ export const EditTimelineMixin = {
             if (!moved && Math.hypot(dx, ev.clientY - y0) < DRAG_SLOP) return;
             moved = true;
             onMove((this._editTlTimeAt(ev.clientX) || 0) - t0, ev);
+            // A drag never changes a locked track (a clip landing on one, a linked partner there): held where it was.
+            if (D.lockViolation(before, this._editTlCut)) { this._editTlCut = before; this.editTlRefresh(); }
         };
         const up = (ev) => {
             captor.removeEventListener("pointermove", move);
@@ -1297,6 +1361,7 @@ export const EditTimelineMixin = {
             this._editTlSnapLine(null);
             try { captor.releasePointerCapture(id); } catch (_) {}
             try { onUp(moved, ev); } finally {
+                if (D.lockViolation(before, this._editTlCut)) { this._editTlCut = before; this._editTlSay("a locked track is not changed"); }
                 this._editTlDragging = false;
                 this._editTlDragHead = null;
                 this._editTlLock = null;
@@ -1319,6 +1384,7 @@ export const EditTimelineMixin = {
         const row = hit && hit.closest ? hit.closest(".edit-track") : null;
         const id = row ? row.dataset.track : "";
         if (!id || id === "T" || id === "A1") return "";
+        if (D.trackFlags(cut, id).lock) return "";                // nothing lands on a locked track
         const from = sel.kind === "clip" ? "V1" : sel.track;
         if (id === from) return id;
         const clip = D.clipOf(cut, sel);
@@ -1582,7 +1648,7 @@ export const EditTimelineMixin = {
             const rows = [...ui.rows.querySelectorAll(".edit-track")].filter((r) => {
                 const q = r.getBoundingClientRect();
                 return q.bottom >= top && q.top <= bottom;
-            }).map((r) => r.dataset.track);
+            }).map((r) => r.dataset.track).filter((id) => !D.trackFlags(this._editTlCut, id).lock);
             const list = [...base, ...D.marqueeSel(this._editTlCut, rows, t0, this._editTlTimeAt(ev.clientX) || 0)];
             const now = list.map(D.selId).join();
             if (now === last) return;
@@ -1951,7 +2017,7 @@ export const EditTimelineMixin = {
         }
         // At the START of the frame on screen: that frame is the first of the second half.
         const t = (this.currentFrame || 0) / (this._editTlCut.fps || 24);
-        const got = D.splitAt(this._editTlCut, t, this._editTlSel);
+        const got = D.splitAt(this._editTlCut, t, this._editTlSel, D.editMask(this._editTlCut));
         if (!got) { this._editTlSay("nothing to cut at the playhead"); return; }
         this._editTlSel = got.sel;
         this._editTlApply(got.cut);
@@ -1972,7 +2038,13 @@ export const EditTimelineMixin = {
             this._editTlApply(D.liftClip(cut, sel));
             return true;
         }
-        const got = D.deleteSelection(cut, this._editTlSelAll(), !!ripple);
+        if (sel.kind === "xfade") {
+            this._editTlSel = null;
+            this._editTlApply(D.removeAudioXfade(cut, sel));
+            return true;
+        }
+        // What is on a locked track stays; a ripple of V1 moves the tracks whose Auto Track Selector is on.
+        const got = D.deleteSelection(cut, this._editTlSelAll(), !!ripple, D.editMask(cut));
         if (D.sameCut(got.cut, cut)) { if (got.kept) this._editTlSay("a cut keeps its last shot"); return true; }
         this._editTlSel = null;
         this._editTlEditSel = null;
@@ -2408,7 +2480,7 @@ export const EditTimelineMixin = {
         }
         let end = null, split = false;
         if (ins.length) {
-            const got = D.insertEdit(cut, ins, start, opts.track || "V1");
+            const got = D.insertEdit(cut, ins, start, opts.track || "V1", D.editMask(cut));
             cut = got.cut;
             sel = got.sel;
             end = got.end;

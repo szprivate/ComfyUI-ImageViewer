@@ -45,6 +45,14 @@ export const EDIT_ICONS = {
     valignTop: [["rect", { x: 5, y: 16, width: 14, height: 6, rx: 2 }], ["rect", { x: 7, y: 6, width: 10, height: 6, rx: 2 }], P("M2 2h20")],
     valignMiddle: [["rect", { x: 5, y: 16, width: 14, height: 6, rx: 2 }], ["rect", { x: 7, y: 2, width: 10, height: 6, rx: 2 }], P("M2 12h20")],
     valignBottom: [["rect", { x: 5, y: 12, width: 14, height: 6, rx: 2 }], ["rect", { x: 7, y: 2, width: 10, height: 6, rx: 2 }], P("M2 22h20")],
+    // lock
+    lock: [["rect", { width: 18, height: 11, x: 3, y: 11, rx: 2, ry: 2 }], P("M7 11V7a5 5 0 0 1 10 0v4")],
+    // lock-open
+    lockOpen: [["rect", { width: 18, height: 11, x: 3, y: 11, rx: 2, ry: 2 }], P("M7 11V7a5 5 0 0 1 9.9-1")],
+    // square-dashed-mouse-pointer (the Auto Track Selector)
+    autoSel: [P("M12.034 12.681a.498.498 0 0 1 .647-.647l9 3.5a.5.5 0 0 1-.033.943l-3.444 1.068a1 1 0 0 0-.66.66l-1.067 3.443a.5.5 0 0 1-.943.033z"),
+              P("M5 3a2 2 0 0 0-2 2"), P("M19 3a2 2 0 0 1 2 2"), P("M5 21a2 2 0 0 1-2-2"), P("M9 3h1"), P("M9 21h2"), P("M14 3h1"),
+              P("M3 9v1"), P("M21 9v2"), P("M3 14v1")],
     fit: [P("M3 7V5a2 2 0 0 1 2-2h2"), P("M17 3h2a2 2 0 0 1 2 2v2"), P("M21 17v2a2 2 0 0 1-2 2h-2"), P("M7 21H5a2 2 0 0 1-2-2v-2"), C(12, 12, 3), P("m16 16-1.9-1.9")],
 };
 

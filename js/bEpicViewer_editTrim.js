@@ -327,7 +327,9 @@ export const EditTrimMixin = {
             case "slip": next = D.slipClip(start, sel, -d * D.speedOf(c0), dur); break;         // the picture follows the pointer
             case "slide": next = (v1 ? D.slideClip(start, i, d, dur) : D.slideTrackClip(start, sel.track, i, d, dur)) || start; break;
         }
-        return D.followLink(start, next, sel, { ripple: info.act.startsWith("ripple") });
+        const linked = D.followLink(start, next, sel, { ripple: info.act.startsWith("ripple") });
+        // A ripple of V1 takes what follows on the tracks whose Auto Track Selector is on along (Resolve's).
+        return v1 && info.act.startsWith("ripple") ? D.rippleV1Follow(start, linked, i, D.editMask(start)) : linked;
     },
 
     /**
@@ -537,7 +539,14 @@ export const EditTrimMixin = {
         if (!cut || !this._editTlTransport()) return;
         const point = this._editTlEditPoint();
         const on = point ? point.sel : this._editTlSel;
-        const track = on && on.kind === "tclip" ? on.track : "V1";
+        // On the selected clip's track; else V1 - or, with V1's Auto Track Selector off, the first track that has it on.
+        const mask = D.editMask(cut);
+        let track = on && on.kind === "tclip" ? on.track : "V1";
+        if (!point && !(on && on.kind === "tclip") && !mask.has("V1")) {
+            const k = (cut.tracks || []).find((x) => mask.has(x.id) && x.clips.length);
+            if (!k) { this._editTlSay("no track has its Auto Track Selector on"); return; }
+            track = k.id;
+        }
         const fps = cut.fps || 24;
         const step = D.nextEditStep(D.editSteps(D.editStops(cut, track)), point, this.currentFrame || 0, dir, fps);
         if (!step) { this._editTlSay(dir < 0 ? "no edit before this one" : "no edit after this one"); return; }

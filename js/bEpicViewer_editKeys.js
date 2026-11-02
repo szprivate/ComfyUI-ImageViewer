@@ -5,6 +5,7 @@
 //   T            the Trim Edit mode: edges ripple, the middle of a cut rolls,
 //                the body slips (upper half) or slides (lower half)
 //   B            the blade (A, or Esc, puts it away)
+//   Shift+T      an audio crossfade at the selected cut / the cut nearest the playhead (bEpicViewer_editXfade.js)
 //   N            snapping on / off (hold S while dragging: the other way)
 //   Ctrl+B, S    cut at the playhead
 //   Del / Bksp   delete everything selected, leaving gaps (a lift) - on V1 too
@@ -48,6 +49,9 @@ export const EDIT_KEYS = [
     ["A", "Selection mode (the default): a drag moves a clip, an edge trims that edge only - gaps stay"],
     ["T", "Trim Edit mode: an edge ripples, the middle of a cut rolls, a clip's upper half slips, its lower half slides"],
     ["B", "Blade: click a clip to cut it there (A or Esc: put it away)"],
+    ["Shift+T", "Add an audio crossfade at the selected cut, else at the cut nearest the playhead (the selected clip's track, else the auto-selected tracks); its bar: drag an edge for its length, Del removes it"],
+    ["Fade handles", "The small squares at a sound clip's upper corners: drag them in for a fade in / out (the Inspector's Audio tab has the numbers)"],
+    ["Track header: lock / auto-select", "The padlock: nothing on the track can be edited (still played and rendered). The pointer-in-a-box: Auto Track Selector - only tracks with it on are rippled, inserted into, cut by Ctrl+B and stepped through"],
     ["N", "Snapping on / off (the magnet): clip and gap edges on every track, playhead, in / out, texts, start"],
     ["Hold S while dragging", "Snap the other way for this drag"],
     ["Ctrl+B, S", "Cut the clip under the playhead"],
@@ -159,6 +163,7 @@ export const EditKeysMixin = {
         else if (letter === "s" && shift) this.editTlEditStep(1);
         else if (letter === "a" && !shift) this.editTlMode("select");
         else if (letter === "t" && !shift) this.editTlMode("trim");
+        else if (letter === "t" && shift) this.editTlAudioXfadeKey();
         else if (letter === "n" && !shift) this.editTlSnapToggle();
         else if (letter === "e" && !shift) this.editTlExtendEdit();
         else if (letter === "d" && !shift) this.editTlDisableToggle();
@@ -223,7 +228,8 @@ export const EditKeysMixin = {
         if (!this._editTlTransport()) return;
         const fps = this._editTlCut.fps || 24;
         const now = (this.currentFrame || 0);
-        const frames = D.editPoints(this._editTlCut).map((t) => Math.round(t * fps));
+        // The edits of the tracks whose Auto Track Selector is on (Resolve's Up / Down).
+        const frames = D.editPoints(this._editTlCut, D.editMask(this._editTlCut)).map((t) => Math.round(t * fps));
         const to = dir < 0 ? frames.filter((f) => f < now).pop() : frames.find((f) => f > now);
         if (to !== undefined) this._editTlGoFrame(to);
     },

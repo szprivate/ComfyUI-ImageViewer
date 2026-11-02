@@ -1285,6 +1285,31 @@ textarea.param-input {
             background: linear-gradient(to top right, rgba(20,30,40,.85) 49%, rgba(255,255,255,.8) 50%, rgba(120,150,180,.7) 51%); }
 .edit-mix:hover { border-color: #6cf; }
 .edit-mix.sel { border-color: #00e5ff; box-shadow: 0 0 0 1px #00e5ff; }
+/* An audio crossfade: a bar over the cut of two sound clips, its two curves drawn in it (bEpicViewer_editXfade.js). */
+.edit-xfade { position: absolute; z-index: 2; top: 3px; bottom: 3px; min-width: 8px; box-sizing: border-box; cursor: pointer;
+              border: 1px solid rgba(160,255,200,.8); border-radius: 2px; background: rgba(20,60,40,.72); overflow: hidden; }
+.edit-xfade:hover { border-color: #6cf; }
+.edit-xfade.sel { border-color: #00e5ff; box-shadow: 0 0 0 1px #00e5ff; }
+.edit-xfade-art { position: absolute; inset: 1px; width: calc(100% - 2px); height: calc(100% - 2px); pointer-events: none; }
+.edit-xfade-art polyline { fill: none; stroke-width: 1.4; vector-effect: non-scaling-stroke; }
+.edit-xfade-art .in { stroke: #a8ffcf; }
+.edit-xfade-art .out { stroke: #ffcf6f; }
+/* Fades: the faded part shaded over the waveform, and the handle at each upper corner. */
+.edit-fadecurve { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+.edit-fadecurve path { fill: rgba(0,0,0,.45); stroke: rgba(255,255,255,.75); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.edit-fadeh { position: absolute; top: 0; width: 7px; height: 7px; z-index: 2; box-sizing: border-box; cursor: ew-resize;
+              background: #e8e8e8; border: 1px solid #222; opacity: 0; transition: opacity .1s; }
+.edit-shot:hover > .edit-fadeh, .edit-snd:hover > .edit-fadeh, .edit-shot.sel > .edit-fadeh, .edit-fadeh:hover { opacity: 1; }
+.edit-shot[data-fade-in]:not([data-fade-in="0"]) > .edit-fadeh.in, .edit-shot[data-fade-out]:not([data-fade-out="0"]) > .edit-fadeh.out,
+.edit-snd[data-fade-in]:not([data-fade-in="0"]) > .edit-fadeh.in, .edit-snd[data-fade-out]:not([data-fade-out="0"]) > .edit-fadeh.out { opacity: 1; }
+.edit-snd { position: absolute; }
+/* A locked track: hatched, and nothing on it takes a press. */
+.edit-track.locked { background: repeating-linear-gradient(135deg, rgba(255,255,255,.05) 0 4px, transparent 4px 9px); }
+.edit-track.locked > * { opacity: .55; filter: saturate(.5); cursor: not-allowed !important; }
+.edit-hbtn.edit-iconbtn { display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+.edit-hbtn.edit-iconbtn .edit-icon { width: 11px; height: 11px; }
+.edit-hlock.on { color: #ffb347; border-color: #8a5a20; }
+.edit-hauto:not(.on) { color: #555; }
 /* A clip being dragged to another track, drawn where it would land. */
 .edit-ghost { position: absolute; z-index: 5; pointer-events: none; box-sizing: border-box; border: 1px dashed #ffcf6f; border-radius: 2px;
               background: rgba(255,207,111,.22); color: #ffe9bd; font-size: 10px; padding: 0 5px; overflow: hidden; white-space: nowrap; }
@@ -1318,7 +1343,7 @@ textarea.param-input {
 /* The Edit panel's tracks: a column of headers that stays, and beside it a
    strip as wide as the zoom makes it. */
 .edit-main { display: flex; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; align-items: flex-start; }
-.edit-heads { flex: none; width: 108px; display: flex; flex-direction: column; gap: 2px; padding-right: 4px; box-sizing: border-box; }
+.edit-heads { flex: none; width: 140px; display: flex; flex-direction: column; gap: 2px; padding-right: 4px; box-sizing: border-box; }
 .edit-scroll { flex: 1 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
 .edit-rows { display: flex; flex-direction: column; gap: 2px; }
 .edit-headrow { position: relative; display: flex; align-items: center; gap: 3px; box-sizing: border-box; padding: 0 2px 0 4px;
