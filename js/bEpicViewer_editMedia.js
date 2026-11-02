@@ -18,6 +18,18 @@
 // reading no visible clip wants any more is aborted at the next draw - after a
 // scroll or a zoom - and while the right number of frames is on its way the
 // strip is drawn from the nearest one that is already here.
+//
+// A clip that is a PART of its file - a piece of a longer film after the blade,
+// two clips of one file with different ins and outs, a slipped clip - asks for
+// a sheet of ITS part (start / end on the strip route: a window around its
+// source in..out, on a grid of a power-of-two seconds so that a small slip or
+// trim does not ask again), with as many frames as its tiles need there; each
+// tile is then the frame of its own source moment (srcLocal: retime, loop and
+// slip counted). The whole-file sheet stands in while it comes, and during a drag
+// nothing new is asked for: the nearest sheet covering the part is drawn, and the
+// right one is asked for once the drag is let go. The waveform needs nothing of
+// the kind: the peaks are of the whole file at up to 400 buckets a second, and
+// each clip reads the buckets of its own source moments.
 import { api } from "../../scripts/api.js";
 import * as D from "./bEpicViewer_editTimelineData.js";
 
@@ -26,6 +38,26 @@ const STRIP_COUNTS = [1, 8, 16, 32, 64, 128, 256];
 const MAX_LOADS = 3;
 const MAX_ENTRIES = 400;
 const SOUND_RE = /\.(wav|mp3|flac|ogg|m4a|aac)$/i;
+
+/**
+ * The part of its file a clip's strip is asked for: the source it shows
+ * (`lo`..`hi`: in to out at its speed, one turn of a loop) widened to a grid of
+ * `q` seconds, a power of two about half its length (so a small slip or trim
+ * stays on the same sheet), held to the file's length `dur` when known.
+ * `whole`: the window is (nearly) the whole file - asked for without one.
+ */
+export function stripWindow(m, dur) {
+    const c = m.clip || { in: m.in, length: m.length };
+    const lo = Math.max(0, Number(c.in) || 0);
+    const hi = lo + Math.max(0.001, D.srcUse(c));
+    const q = Math.max(0.25, Math.pow(2, Math.ceil(Math.log2(Math.max(0.01, (hi - lo) / 2)))));
+    let start = Math.floor(lo / q + 1e-9) * q, end = Math.ceil(hi / q - 1e-9) * q;
+    if (dur > 0) end = Math.min(end, Math.ceil(dur * 1000) / 1000);
+    if (end <= start) end = start + q;
+    const r = (v) => Math.round(v * 1000) / 1000;
+    const whole = dur > 0 && start <= 0 && end >= dur - 1e-3;
+    return { lo, hi, start: r(start), end: r(end), q, whole };
+}
 
 function decodePeaks(b64) {
     const bin = atob(b64 || "");
@@ -126,32 +158,42 @@ export const EditMediaMixin = {
         const any = this._emNearest(m.file, 16, hreq);
         const aspect = any ? any.tw / any.th : (info && info.width > 0 && info.height > 0 ? info.width / info.height : 16 / 9);
         const tile = Math.max(8, h * aspect);
-        let n = 1;
-        if (!still) {
-            const dur = (any && any.duration) || (info && info.duration) || (m.in + m.length);
-            const needed = Math.ceil((dur / Math.max(0.01, m.length * D.speedOf(m.clip))) * W / tile);
-            n = STRIP_COUNTS.find((c) => c >= needed) || STRIP_COUNTS[STRIP_COUNTS.length - 1];
-        }
-        const exact = this._emGet("strip", m.file, wanted, n + "x" + hreq);
-        if (exact === false) return true;                   // it cannot be read: the block stays plain
-        const sheet = exact || this._emNearest(m.file, n, hreq);
+        let n = 1, extra = "1x" + hreq, part = null;
         const b = ctx.canvas.parentNode;
+        if (!still) {
+            const dur = (any && any.duration) || (info && info.duration) || 0;
+            part = stripWindow(m, dur);
+            const span = Math.max(0.01, part.hi - part.lo);
+            // As many frames over the window as the clip's tiles need there.
+            const needed = Math.ceil(((part.end - part.start) / span) * W / tile);
+            n = STRIP_COUNTS.find((c) => c >= needed) || STRIP_COUNTS[STRIP_COUNTS.length - 1];
+            extra = n + "x" + hreq + (part.whole ? "" : `@${part.start}-${part.end}`);
+        }
+        // During a drag nothing new is asked for: what covers the part is drawn, the right sheet comes on release.
+        const cached = this._em().cache.get("strip|" + extra + "|" + m.file);
+        const asking = !this._editTlDragging || (cached && cached.state === "ok");
+        const exact = asking ? this._emGet("strip", m.file, wanted, extra) : null;
+        if (exact === false) return true;                   // it cannot be read: the block stays plain
+        const sheet = exact || this._emNearest(m.file, n, hreq, part);
         if (b) b._emHasStrip = !!sheet;
         if (!sheet) return false;
         const tw = h * sheet.tw / sheet.th;
+        const tiles = [];
         for (let k = Math.floor(x0 / tw); k * tw < x1; k++) {
             const x = k * tw;
             let idx = 0;
-            if (sheet.n > 1 && sheet.duration > 0) {
-                // The source moment of the tile: at the clip's speed, through its loop.
-                const u = ((x + tw / 2) / W) * m.length;
-                const t = m.clip ? D.srcLocal(m.clip, u) : m.in + u;
-                idx = Math.max(0, Math.min(sheet.n - 1, Math.floor((t / sheet.duration) * sheet.n)));
-            }
+            const s0 = sheet.start || 0, s1 = sheet.end > s0 ? sheet.end : sheet.duration;
+            // The source moment of the tile: at the clip's speed, through its loop, from its own in.
+            const u = ((x + tw / 2) / W) * m.length;
+            const t = m.clip ? D.srcLocal(m.clip, u) : m.in + u;
+            if (sheet.n > 1 && s1 > s0) idx = Math.max(0, Math.min(sheet.n - 1, Math.floor(((t - s0) / (s1 - s0)) * sheet.n)));
+            if (tiles.length < 64) tiles.push(Math.round(t * 1000) / 1000);
             try { ctx.drawImage(sheet.img, idx * sheet.tw, 0, sheet.tw, sheet.th, x - x0, 0, tw + 0.5, h); } catch (_) {}
         }
+        // For the tests and for looking: the source moments of the tiles drawn, and the sheet's part.
+        if (b) { b._emTiles = tiles; b._emSheet = { start: sheet.start || 0, end: sheet.end || sheet.duration, n: sheet.n, exact: !!exact }; }
         this._emSeams(ctx, m, W, x0, x1, h);
-        return !!exact;
+        return !!exact || (!asking && !!sheet);
     },
 
     // Where a looped clip's turns meet: a dashed line and a loop mark at each.
@@ -192,11 +234,15 @@ export const EditMediaMixin = {
         const mid = y + h / 2, amp = (h / 2 - 1) * (0.15 + 0.85 * vol);
         ctx.fillStyle = full ? "rgba(178, 236, 204, 0.85)" : "rgba(210, 230, 255, 0.75)";
         if (!full) { ctx.fillStyle = "rgba(0,0,0,0.35)"; ctx.fillRect(0, y, x1 - x0, h); ctx.fillStyle = "rgba(210, 230, 255, 0.8)"; }
+        const b = ctx.canvas.parentNode;
+        let first = null, last = null;
         for (let px = Math.floor(x0); px < x1; px++) {
             const u0 = (px / W) * m.length;
             const t0 = m.clip ? D.srcLocal(m.clip, u0) : m.in + u0;
             const t1 = t0 + (m.length / W) * (m.clip ? D.speedOf(m.clip) : 1);
             const b0 = Math.floor(t0 * bps);
+            if (first === null) first = t0;
+            last = t0;
             if (b0 >= n) break;
             const b1 = Math.min(n, Math.max(b0 + 1, Math.ceil(t1 * bps)));
             let lo = 127, hi = -127;
@@ -209,6 +255,8 @@ export const EditMediaMixin = {
             const top = mid - (hi / 127) * amp, len = Math.max(1, ((hi - lo) / 127) * amp);
             ctx.fillRect(px - x0, top, 1, len);
         }
+        // For the tests: the source moments the waveform drawn reads, first and last pixel.
+        if (b) b._emWaveRange = first === null ? null : [Math.round(first * 1000) / 1000, Math.round(last * 1000) / 1000];
         return true;
     },
 
@@ -227,14 +275,25 @@ export const EditMediaMixin = {
         return null;
     },
 
-    /** The strip of `file` already here whose count is nearest `n` (more frames before fewer). */
-    _emNearest(file, n, h) {
+    /**
+     * The strip of `file` already here that stands in best: one that covers the
+     * clip's `part` ({ lo, hi } of its source) before one that does not, then
+     * the nearest density of frames there, then the height.
+     */
+    _emNearest(file, n, h, part) {
         let best = null, score = Infinity;
         for (const [key, e] of this._em().cache) {
             if (e.state !== "ok" || e.kind !== "strip" || e.file !== file) continue;
-            const [en, eh] = e.extra.split("x").map(Number);
-            const s = Math.abs(Math.log2(Math.max(1, en) / Math.max(1, n))) + (en < n ? 0.25 : 0) + (eh === h ? 0 : 0.1);
-            if (s < score) { score = s; best = e.data; }
+            const [en, eh] = e.extra.split("@")[0].split("x").map(Number);
+            const d = e.data;
+            const s0 = d.start || 0, s1 = d.end > s0 ? d.end : (d.duration || 0);
+            let s = Math.abs(Math.log2(Math.max(1, en) / Math.max(1, n))) + (en < n ? 0.25 : 0) + (eh === h ? 0 : 0.1);
+            if (part && s1 > s0) {
+                const covers = s0 <= part.lo + 1e-3 && s1 >= Math.min(part.hi, d.duration || part.hi) - 1e-3;
+                const want = n / Math.max(0.01, part.end - part.start), have = d.n / (s1 - s0);
+                s = (covers ? 0 : 10) + Math.abs(Math.log2(Math.max(1e-3, have) / Math.max(1e-3, want))) + (eh === h ? 0 : 0.1);
+            }
+            if (s < score) { score = s; best = d; }
             void key;
         }
         return best;
@@ -297,14 +356,20 @@ export const EditMediaMixin = {
             for (const lv of j.levels || []) { lv.arr = decodePeaks(lv.data); delete lv.data; }
             return j;
         }
-        const [n, h] = e.extra.split("x");
-        const res = await api.fetchApi(`/bepic/timeline_strip?${q}&n=${n}&h=${h}`, { signal });
+        const [size, win] = e.extra.split("@");
+        const [n, h] = size.split("x");
+        const [ws, we] = win ? win.split("-") : [];
+        const res = await api.fetchApi(`/bepic/timeline_strip?${q}&n=${n}&h=${h}` + (win ? `&start=${ws}&end=${we}` : ""), { signal });
         if (!res.ok) throw new Error(String(res.status));
         const head = (k) => Number(res.headers.get(k));
         const blob = await res.blob();
         const img = await this._emPicture(blob);
+        const duration = head("X-Strip-Duration") || 0;
+        // An older server says nothing of a part: its sheet is of the whole file.
+        const start = res.headers.get("X-Strip-Start") != null ? head("X-Strip-Start") : 0;
+        const end = res.headers.get("X-Strip-End") != null ? head("X-Strip-End") : duration;
         return { img, n: head("X-Strip-N") || 1, tw: head("X-Strip-Tw") || img.width, th: head("X-Strip-Th") || img.height,
-                 duration: head("X-Strip-Duration") || 0 };
+                 duration, start: win ? start : 0, end: win ? end : duration };
     },
 
     async _emPicture(blob) {

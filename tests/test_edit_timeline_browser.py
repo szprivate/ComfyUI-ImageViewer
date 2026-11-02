@@ -2356,5 +2356,58 @@ class EditTimelineBrowserTests(unittest.TestCase):
         self.assertIsNone(pg.evaluate(self.TWOUP))
         self.assertEqual(self.errors, [])
 
+    # ── filmstrips of the pieces of a longer film ──
+
+    PIECES = """() => [...__panel._editTlUi.rows.querySelectorAll('.edit-track[data-track="V1"] .edit-shot')].map(b => {
+        const c = b._media.clip; return { key: b.dataset.key, in: c.in, out: c.in + c.length, tiles: b._emTiles || [], sheet: b._emSheet || null, wave: b._emWaveRange || null }; })"""
+
+    def test_17_pieces_of_a_long_film_show_their_own_frames_and_sound(self):
+        pg = self.page()
+        pg.evaluate("""() => { const P = __panel; __media['D:/out/long.mp4'] = { duration: 10, audio: true, video: true };
+            P._editTlApply({ ...P._editTlCut, clips: [{ file: 'D:/out/long.mp4', name: 'long', in: 0, length: 10, transition: 0, color: '', volume: 1 }], tracks: [], sound: [] });
+            P._editTlHistories[P._editTlTab] = { past: [], future: [] }; window.__strips = []; }""")
+        self.settle(pg)
+        # The blade at 3 s and at 7 s: three pieces of one file.
+        for f in (72, 168):
+            pg.evaluate(f"() => __panel.setFrame({f})")
+            pg.evaluate("() => __panel._editTlUi.body.focus()")
+            pg.keyboard.press("Control+b")
+        pg.evaluate("() => { __panel._editTlSel = null; __panel.editTlRefresh(); }")
+        pg.wait_for_function("() => __panel._emPending === 0 && [...__panel._editTlUi.rows.querySelectorAll('.edit-track[data-track=\"V1\"] .edit-shot')].every(b => b._emSheet && b._emSheet.exact)", timeout=10000)
+        pieces = pg.evaluate(self.PIECES)
+        self.assertEqual([(p["in"], p["out"]) for p in pieces], [(0, 3), (3, 7), (7, 10)])
+        for p in pieces:
+            self.assertTrue(p["tiles"], p)
+            # Every tile is a moment of the piece's own part of the file ...
+            self.assertTrue(all(p["in"] <= t <= p["out"] for t in p["tiles"]), p)
+            # ... from a sheet of that part (or the whole file for a piece that is most of it).
+            self.assertLessEqual(p["sheet"]["start"], p["in"] + 1e-6)
+            self.assertGreaterEqual(p["sheet"]["end"], p["out"] - 1e-6)
+            # The waveform reads the same part of the sound.
+            self.assertGreaterEqual(p["wave"][0], p["in"] - 1e-6)
+            self.assertLessEqual(p["wave"][1], p["out"] + 1e-6)
+        windows = [(w["start"], w["end"]) for w in pg.evaluate("() => __strips") if w["path"] == "D:/out/long.mp4" and w["start"] is not None]
+        self.assertTrue(any(a >= 2 for a, _ in windows), windows)       # the later pieces asked for their own parts
+        # Two pieces of one file show different frames.
+        self.assertNotEqual(pieces[0]["tiles"][0], pieces[2]["tiles"][0])
+        # A slip (Alt+Shift+.: a second of source) moves the piece's frames and sound with it; a drag asks for nothing new.
+        pg.mouse.click(*pg.evaluate(WHERE, [5.0, "V1"]))
+        pg.keyboard.press("Alt+Shift+Comma")
+        self.settle(pg)
+        pg.wait_for_function("() => __panel._editTlUi.rows.querySelector('[data-key=\"V1:1\"]')._emSheet.exact", timeout=10000)
+        mid = pg.evaluate(self.PIECES)[1]
+        self.assertEqual((mid["in"], mid["out"]), (2, 6))
+        self.assertAlmostEqual(mid["tiles"][0], pieces[1]["tiles"][0] - 1, places=2)
+        self.assertAlmostEqual(mid["wave"][0], pieces[1]["wave"][0] - 1, places=2)
+        n = pg.evaluate("() => __strips.length")
+        pg.evaluate("""() => { const P = __panel; P._editTlDragging = true; P._editTlApply(P._editTlCut); const c = { ...P._editTlCut, clips: P._editTlCut.clips.map((x, i) => i === 1 ? { ...x, in: 0.3 } : x) };
+            P._editTlCut = c; P.editTlRefresh(); }""")
+        pg.wait_for_timeout(300)
+        self.assertEqual(pg.evaluate("() => __strips.length"), n, "nothing asked for during a drag")
+        self.assertEqual(pg.evaluate(self.PIECES)[1]["tiles"][0] < 1.0, True, "drawn from what covers it meanwhile")
+        pg.evaluate("() => { __panel._editTlDragging = false; __panel.editTlRefresh(); }")
+        self.settle(pg)
+        self.assertEqual(self.errors, [])
+
 if __name__ == "__main__":
     unittest.main()

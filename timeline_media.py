@@ -254,17 +254,36 @@ def strip_size(n, h):
     return n, h
 
 
-def strip(path, n=16, height=48):
+def strip_window(start, end):
+    """A part of a file asked for (seconds), held to sense: ``(start, end)`` or None for the whole file.
+
+    A clip cut out of a long film asks for its own part only (the Edit panel
+    asks for a window around the clip's in..out), so its tiles are frames of
+    that part and not the nearest of n spread over the whole file.
+    """
+    try:
+        a = float(start)
+        b = float(end)
+    except (TypeError, ValueError):
+        return None
+    if not (a == a and b == b) or a < 0 or b <= a or b > 1e6:
+        return None
+    return round(a, 3), round(b, 3)
+
+
+def strip(path, n=16, height=48, window=None):
     """``(jpeg path, meta)``: *n* frames of *path* side by side, each *height* high.
 
-    ``meta`` is ``{"n", "tw", "th", "duration", "times"}``: frame i was taken at
-    ``times[i]`` - the middle of the i-th of n equal parts of the file. A still
-    is one tile however many were asked for. A film with fewer frames than *n*
-    gives one tile per frame.
+    ``meta`` is ``{"n", "tw", "th", "duration", "times", "start", "end"}``: frame i
+    was taken at ``times[i]`` - the middle of the i-th of n equal parts of
+    ``start..end`` (the whole file, or the *window* ``(start, end)`` of it, held
+    to the file). A still is one tile however many were asked for. A film with
+    fewer frames than *n* there gives one tile per frame.
     """
     n, height = strip_size(n, height)
     still = is_still(path)
-    kind = f"strip{1 if still else n}h{height}"
+    window = None if still else (strip_window(*window) if window else None)
+    kind = f"strip{1 if still else n}h{height}" + (f"w{window[0]:g}-{window[1]:g}" if window else "")
     dst = cache_file(path, kind, "jpg")
     meta_path = dst[:-4] + ".json"
 
@@ -283,7 +302,7 @@ def strip(path, n=16, height=48):
         got = load()
         if got:
             return got
-        sheet, meta = _make_still_strip(path, height) if still else _make_film_strip(path, n, height)
+        sheet, meta = _make_still_strip(path, height) if still else _make_film_strip(path, n, height, window)
         import io
         buf = io.BytesIO()
         sheet.save(buf, "JPEG", quality=78)
@@ -307,10 +326,10 @@ def _make_still_strip(path, height):
             tile = im.resize((tw, height), Image.BILINEAR)
     except Exception as exc:  # noqa: BLE001
         raise MediaError(f"{os.path.basename(path)} could not be read: {exc}") from None
-    return tile, {"n": 1, "tw": tw, "th": height, "duration": 0.0, "times": [0.0]}
+    return tile, {"n": 1, "tw": tw, "th": height, "duration": 0.0, "times": [0.0], "start": 0.0, "end": 0.0}
 
 
-def _make_film_strip(path, n, height):
+def _make_film_strip(path, n, height, window=None):
     import av
     from PIL import Image
     try:
@@ -325,10 +344,17 @@ def _make_film_strip(path, n, height):
         dur = float(vs.duration * vs.time_base) if vs.duration and vs.time_base else (
             float(c.duration) / 1_000_000 if c.duration else 0.0)
         fps = float(vs.average_rate) if vs.average_rate else 24.0
-        if dur > 0:
-            n = max(1, min(n, int(dur * fps) or 1))
+        a, b = 0.0, dur
+        if window and dur > 0:
+            a = max(0.0, min(window[0], dur))
+            b = max(a, min(window[1], dur))
+            if b - a < 0.5 / fps:                           # past the end: its last frame
+                a = max(0.0, b - 1.0 / fps)
+        span = b - a
+        if span > 0:
+            n = max(1, min(n, int(round(span * fps)) or 1))
         tw = _tile_width(vs.width, vs.height, height)
-        times = [round(dur * (i + 0.5) / n, 4) for i in range(n)] if dur > 0 else [0.0]
+        times = [round(a + span * (i + 0.5) / n, 4) for i in range(n)] if span > 0 else [0.0]
         n = len(times)
         sheet = Image.new("RGB", (tw * n, height), (20, 20, 20))
         filled = [False] * n
@@ -337,7 +363,13 @@ def _make_film_strip(path, n, height):
             sheet.paste(frame.to_image(width=tw, height=height), (i * tw, 0))
             filled[i] = True
 
-        if dur <= 30 or n * 2 >= dur * fps:
+        if a > 0 and (span <= 30 or n * 2 >= span * fps):
+            # A part of the file: from the key frame before it, one pass through it.
+            try:
+                c.seek(int(a / vs.time_base), stream=vs, backward=True, any_frame=False)
+            except Exception:  # noqa: BLE001 - read from the start then
+                c.seek(0)
+        if span <= 30 or n * 2 >= span * fps:
             # Short (the usual generated clip): one pass through it is cheaper than seeking.
             nxt, last = 0, None
             for frame in c.decode(vs):
@@ -370,7 +402,8 @@ def _make_film_strip(path, n, height):
                 j = next((k for k in range(i - 1, -1, -1) if filled[k]), None)
                 if j is not None:
                     sheet.paste(sheet.crop((j * tw, 0, (j + 1) * tw, height)), (i * tw, 0))
-    return sheet, {"n": n, "tw": tw, "th": height, "duration": round(dur, 4), "times": times}
+    return sheet, {"n": n, "tw": tw, "th": height, "duration": round(dur, 4), "times": times,
+                   "start": round(a, 4), "end": round(b, 4)}
 
 
 # ── beats (agentY edit_look.beats, ported) ───────────────────────────────────

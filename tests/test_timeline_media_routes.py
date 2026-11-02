@@ -291,6 +291,33 @@ class TimelineMediaRouteTests(unittest.TestCase):
         # A request is rounded up to a kept size, so 5 and 8 are one cache entry.
         self.assertEqual(self.tm.strip_size(5, 40), (8, 48))
 
+    def test_a_strip_of_a_part_of_the_file_holds_frames_of_that_part_only(self):
+        """A piece cut out of a longer film asks for its own part: start / end (the red first half, the blue second)."""
+        async def go(c):
+            out = []
+            for a, b in (("0", "1.5"), ("2.5", "4"), ("1.5", "2.5")):
+                r = await c.get("/bepic/timeline_strip", params={"path": self.clip, "n": "8", "h": "48", "start": a, "end": b})
+                out.append((r.status, dict(r.headers), await r.read()))
+            return out
+        got = self.run_async(go)
+        def colours(headers, body):
+            n, tw, th = int(headers["X-Strip-N"]), int(headers["X-Strip-Tw"]), int(headers["X-Strip-Th"])
+            img = Image.open(io.BytesIO(body)).convert("RGB")
+            return [img.getpixel((i * tw + tw // 2, th // 2)) for i in range(n)]
+        (s1, h1, b1), (s2, h2, b2), (s3, h3, b3) = got
+        self.assertEqual((s1, s2, s3), (200, 200, 200))
+        self.assertEqual((float(h1["X-Strip-Start"]), float(h1["X-Strip-End"])), (0.0, 1.5))
+        self.assertEqual((float(h2["X-Strip-Start"]), float(h2["X-Strip-End"])), (2.5, 4.0))
+        self.assertAlmostEqual(float(h2["X-Strip-Duration"]), 4.0, delta=0.1)
+        self.assertTrue(all(c[0] > 150 and c[2] < 90 for c in colours(h1, b1)), "0..1.5 is all red")
+        self.assertTrue(all(c[2] > 150 and c[0] < 90 for c in colours(h2, b2)), "2.5..4 is all blue")
+        mixed = colours(h3, b3)
+        self.assertTrue(mixed[0][0] > 150 and mixed[-1][2] > 150, mixed)
+        # Not the whole file's sheet: a part has a cache entry of its own; nonsense windows are the whole file.
+        self.assertEqual(self.tm.strip_window("2", "1"), None)
+        self.assertEqual(self.tm.strip_window(None, None), None)
+        self.assertEqual(self.tm.strip_window("0.5", "1.25"), (0.5, 1.25))
+
     def test_a_still_is_one_tile(self):
         async def go(c):
             r = await c.get("/bepic/timeline_strip", params={"path": self.still, "n": "64"})

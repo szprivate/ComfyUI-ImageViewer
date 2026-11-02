@@ -765,18 +765,22 @@ try:
 
             What the sheet holds is in the headers: ``X-Strip-N`` tiles, each
             ``X-Strip-Tw`` x ``X-Strip-Th``, of a file ``X-Strip-Duration`` long;
-            tile i is the middle of the i-th of n equal parts.
+            tile i is the middle of the i-th of n equal parts of ``X-Strip-Start`` ..
+            ``X-Strip-End``: the whole file, or the part ``start`` .. ``end`` (seconds)
+            asked for - a clip cut out of a long film shows frames of its own part.
             """
             from . import timeline_media
             n, h = timeline_media.strip_size(request.query.get("n"), request.query.get("h"))
-            got = await _media_reading(request, "strip", timeline_media.strip, n, h)
+            window = timeline_media.strip_window(request.query.get("start"), request.query.get("end"))
+            got = await _media_reading(request, "strip", timeline_media.strip, n, h, window)
             if isinstance(got, web.StreamResponse):
                 return got
             jpeg, meta = got[1]
             return web.FileResponse(jpeg, headers={
                 "ETag": got[2], "Cache-Control": "no-cache", "Content-Type": "image/jpeg",
                 "X-Strip-N": str(meta["n"]), "X-Strip-Tw": str(meta["tw"]), "X-Strip-Th": str(meta["th"]),
-                "X-Strip-Duration": str(meta["duration"])})
+                "X-Strip-Duration": str(meta["duration"]),
+                "X-Strip-Start": str(meta.get("start", 0.0)), "X-Strip-End": str(meta.get("end", meta["duration"]))})
 
         async def _bepic_timeline_beats(request):
             """Where the beats of a piece of music fall (agentY's read_beats, ported)."""
