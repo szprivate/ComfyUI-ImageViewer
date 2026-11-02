@@ -363,6 +363,7 @@ export const EditTakesMixin = {
         send.addEventListener("click", ask);
         box.append(head, sub, text, send, note);
         ui.body.append(box);
+        this._editTlCentre(box);
         ui.dialog = box;
         text.focus();
     },

@@ -1085,6 +1085,11 @@ export const EditTimelineMixin = {
         const entries = [{ label: sel.kind === "text" ? "Remove this text" : sel.kind === "mix" ? "Remove this dissolve" : "Remove from the cut",
                            disabled: sel.kind === "clip" && this._editTlCut.clips.length <= 1,
                            run: () => this._editTlRemove(sel) }];
+        if (D.isClipSel(sel) || sel.kind === "text") {
+            // Resolve's Copy / Paste Attributes (bEpicViewer_editPaste.js), first.
+            entries.unshift({ label: "Copy (Ctrl+C)", run: () => this.editTlCopy(sel) },
+                            { label: "Paste Attributes… (Alt+V)", disabled: !this._editTlClipboard, run: () => this.editTlPasteDialog() }, "-");
+        }
         const clip = D.clipOf(this._editTlCut, sel);
         if (sel.kind === "clip" || sel.kind === "tclip") entries.push(...this._editTlLinkEntries(sel));
         if (clip && FILM_EXTS.includes(ext(clip.file))) {
@@ -1249,6 +1254,7 @@ export const EditTimelineMixin = {
         const before = this._editTlCut;
         this._editTlDragging = true;
         this._editTlDragBase = before;
+        this._editTlDragHead = this.currentFrame || 0;
         // S held while dragging snaps the other way for as long as it is held (not a split, then).
         // (The viewer's own key handler, on the window, asks editTlKeyDown first, which hands S to this while a drag is on.)
         const doc = ui.area.ownerDocument;
@@ -1290,6 +1296,7 @@ export const EditTimelineMixin = {
             try { captor.releasePointerCapture(id); } catch (_) {}
             try { onUp(moved, ev); } finally {
                 this._editTlDragging = false;
+                this._editTlDragHead = null;
                 this._editTlLock = null;
                 if (this._editTlCut !== before) { this._editTlRecord(before, this._editTlCut); this.editTlRefresh(); }
             }
@@ -1766,7 +1773,9 @@ export const EditTimelineMixin = {
         const view = this._editTlView || {};
         return D.snapTargets(cut, {
             exclude,
-            playhead: !opts.noHead && this._editTlOnScreen() ? (this.currentFrame || 0) / fps : null,
+            // Where the playhead stood when the drag began: in the Trim mode it follows the edge being dragged (_editTlTrimFollow).
+            playhead: !opts.noHead && this._editTlOnScreen()
+                ? (this._editTlDragging && this._editTlDragHead != null ? this._editTlDragHead : (this.currentFrame || 0)) / fps : null,
             range: span,
             beats: view.snapBeats ? this._editTlBeatTimes() : [],
         });
@@ -1873,6 +1882,7 @@ export const EditTimelineMixin = {
     /** The mode, as Resolve's: "select" (A, the default), "trim" (T) - either puts the blade (B) away. */
     editTlMode(mode) {
         this._editTlTrimMode = mode === "trim";
+        this._editTlFollow = null;                  // the Trim mode (again): a selected cut takes the playhead
         if (!this._editTlTrimMode && this.editTwoUpHide) this.editTwoUpHide();      // the two-up is the Trim mode's
         if (this._editTlTrimMode && this.editTwoUpRest) this.editTwoUpRest();
         this._editTlHoverAct = null;
@@ -2121,9 +2131,11 @@ export const EditTimelineMixin = {
         const sc = ui.scroll;
         const moved = this._editTlHeadFrame !== this.currentFrame;
         this._editTlHeadFrame = this.currentFrame;
-        if (moved && !this._editTlScrubbing && sc.scrollWidth > sc.clientWidth + 1) {
+        if (moved && !this._editTlScrubbing && !this._editTlDragging && sc.scrollWidth > sc.clientWidth + 1) {
             const x = (seconds / lay.total) * sc.scrollWidth;
-            if (x < sc.scrollLeft || x > sc.scrollLeft + sc.clientWidth - 8) sc.scrollLeft = Math.max(0, x - sc.clientWidth * 0.1);
+            // On a selected cut in the Trim mode the cut comes to the middle (_editTlTrimFollow); else a screenful on.
+            const mid = this._editTlTrimMode && this._editTlEditPoint && this._editTlEditPoint();
+            if (x < sc.scrollLeft || x > sc.scrollLeft + sc.clientWidth - 8) sc.scrollLeft = Math.max(0, x - sc.clientWidth * (mid ? 0.5 : 0.1));
         }
         // The Inspector reads the selected clip at the playhead: its numbers when keyed, its diamonds.
         if (moved && !this.isPlaying && this.editPanelsRefresh && D.isClipSel(this._editTlSel)) {
@@ -2480,7 +2492,7 @@ export const EditTimelineMixin = {
     async _editTlAddFiles(track) {
         const onto = track ? D.trackOf(this._editTlCut, track) : null;
         const sound = !!onto && onto.kind === "audio";
-        await openFilePicker(this.container, {
+        await this._editTlPicker({
             id: sound ? "sound" : "clip",
             title: onto ? `Add to ${onto.name}` : "Add clips",
             kind: "video",
@@ -2721,7 +2733,7 @@ export const EditTimelineMixin = {
         yes.addEventListener("click", () => send(true));
         browse.addEventListener("click", (e) => {
             e.preventDefault();
-            openFilePicker(this.container, { id: "cut_folder", title: "Save cut as\u2026 into", kind: "edit", start: folder.value, folder: true, exts: [".otio"], go: "This folder",
+            this._editTlPicker({ id: "cut_folder", title: "Save cut as\u2026 into", kind: "edit", start: folder.value, folder: true, exts: [".otio"], go: "This folder",
                 onPick: async ([f]) => { folder.value = f.path; return { ok: true }; } });
         });
         box.addEventListener("pointerdown", (e) => e.stopPropagation());
@@ -2732,6 +2744,7 @@ export const EditTimelineMixin = {
         });
         box.append(head, row("Name", name), row("Folder", folder, browse), go, yes, note);
         ui.body.append(box);
+        this._editTlCentre(box);
         ui.dialog = box;
         name.focus();
         name.select();
@@ -2739,7 +2752,7 @@ export const EditTimelineMixin = {
 
     /** Open cut...: pick a saved .otio. */
     editTlOpenDialog() {
-        return openFilePicker(this.container, {
+        return this._editTlPicker({
             id: "cut", title: "Open cut", kind: "edit", exts: [".otio"], go: "Open",
             note: "A cut opens in a tab of its own. Where it was saved is in the Inspector's Timeline section.",
             onPick: async ([f]) => ((await this.editTlOpenPath(f.path)) ? { ok: true } : { ok: false, message: "That timeline could not be read." }),
@@ -2771,7 +2784,7 @@ export const EditTimelineMixin = {
             if (this._editTlDirty()) return;             // the save said why
         }
         if (!this._editTlTarget) return;
-        await openExportDialog(this.container, {
+        await this._editTlExportDialog({
             title: "Export film",
             kind: "video",
             name: this._editTlCut.name || String(this._editTlFile || "cut").replace(/\.otio$/i, ""),

@@ -187,6 +187,8 @@ export const EditTwoUpMixin = {
      * progress is left alone (its own view, put away by the drag's end / TWOUP_HOLD).
      */
     editTwoUpRest() {
+        // A selected edit point holds the playhead on its cut first (bEpicViewer_editTrim.js), so the view below rests on it.
+        if (this._editTlTrimFollow) this._editTlTrimFollow();
         const win = (this._viewerWindow && this._viewerWindow()) || window;
         if (this._etuRestTimer) { win.clearTimeout(this._etuRestTimer); this._etuRestTimer = 0; }
         if (this._etuDrag || this._etuTimer) return;

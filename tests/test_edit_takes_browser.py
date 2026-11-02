@@ -245,6 +245,8 @@ class EditTakesBrowserTests(unittest.TestCase):
         self.assertTrue(pg.evaluate("() => __panel._editTlUi.dialog.querySelector('.edit-btn.primary').disabled"))
         self.assertIn("not on this page", pg.inner_text(".edit-recreate"))
         pg.evaluate("() => { window.agentYViewerBridge = { version: 1 }; }")
+        # The dialog stands over the middle of the timeline (on the clip): closed before the next right-click.
+        pg.evaluate("() => { __panel._editTlUi.dialog.remove(); __panel._editTlUi.dialog = null; }")
         self.click(pg, "b", 4.0, button="right")
         self.menu_item(pg, "Recreate with changes").click()
         self.assertTrue(pg.evaluate("() => __panel._editTlUi.dialog.querySelector('.edit-btn.primary').disabled"))

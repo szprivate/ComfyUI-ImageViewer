@@ -204,7 +204,7 @@ export const EditResolveMixin = {
         lose.addEventListener("change", () => { if (plan) showPlan(plan); });
         browse.addEventListener("click", (e) => {
             e.preventDefault();
-            openFilePicker(this.container, { id: "resolve_folder", title: "Export to Resolve into", kind: "edit", start: folder.value, folder: true, exts: [".otio"], go: "This folder",
+            this._editTlPicker({ id: "resolve_folder", title: "Export to Resolve into", kind: "edit", start: folder.value, folder: true, exts: [".otio"], go: "This folder",
                 onPick: async ([f]) => { folder.value = f.path; ask(); return { ok: true }; } });
         });
         box.addEventListener("pointerdown", (e) => e.stopPropagation());
@@ -218,6 +218,7 @@ export const EditResolveMixin = {
         // too short to hold it, and its strip would lie over the title.
         ui.savedBar.style.display = "none";
         this.container.append(box);
+        this._editTlCentre(box);
         ui.dialog = box;
         name.focus();
         await ask();

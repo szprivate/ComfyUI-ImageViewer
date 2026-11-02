@@ -13,6 +13,7 @@
 //   D            disable / enable the selected clips (Resolve's Clip Enable)
 //   E            extend the selected edit point (or the selected clip's out) to the playhead
 //   Ctrl+Z       undo        Ctrl+Shift+Z, Ctrl+Y   redo
+//   Ctrl+C       copy the selected clip     Alt+V   Paste Attributes... of it onto the selected clips
 //   J K L        play backwards, stop, play
 //   I / O        the start / end of the range played (the transport's own range)
 //   ← →          a frame (Shift: a second)      ↑ ↓   the edit point before / after
@@ -68,6 +69,8 @@ export const EDIT_KEYS = [
     ["Drag above the top video / below the bottom sound track", "A new track, for a picture / a sound; also for a drop from outside"],
     ["E", "Extend the selected edit point or the clip's out to the playhead"],
     ["Ctrl+Z / Ctrl+Shift+Z", "Undo / redo"],
+    ["Ctrl+C", "Copy the selected clip (or text) - for Paste Attributes; also on its right-click menu"],
+    ["Alt+V", "Paste Attributes…: the copied clip's zoom, position, anchor, rotation, flip, cropping, opacity, volume, keyframes, speed, name, colour or text look onto the selected clips (one undo step)"],
     ["J K L", "Play backwards / stop / play"],
     ["I / O", "Start / end of the range played"],
     ["← →", "A frame back / on (Shift: a second)"],
@@ -107,6 +110,8 @@ export const EditKeysMixin = {
         if (!ui || !ui.body.isConnected || !this._editTlOpen()) return false;
         const path = e.composedPath ? e.composedPath() : [];
         if (!path.includes(ui.body)) return false;
+        // A dialog over the timeline (Paste Attributes, Save cut as...) has its own keys.
+        if (path.some((n) => n && n.classList && n.classList.contains("edit-dialog"))) return false;
         const t = path[0];
         return !(t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || "") || t.isContentEditable));
     },
@@ -128,6 +133,7 @@ export const EditKeysMixin = {
             if (letter === "x") this._editTlSetRange(null);
             else if (letter === "i") this._editTlClearMark("in");
             else if (letter === "o") this._editTlClearMark("out");
+            else if (letter === "v" && !shift) this.editTlPasteDialog();
             else if (comma || period) this.editTlSlipBy((comma ? -1 : 1) * (shift ? Math.round(this._editTlCut.fps || 24) : 1));
             else done = false;
         }
@@ -135,6 +141,7 @@ export const EditKeysMixin = {
         else if (ctrl && letter === "l") this.editTlLoopOnce(shift ? "pingpong" : "loop");
         else if (ctrl && low === "z") { if (shift) this.editTlRedo(); else this.editTlUndo(); }
         else if (ctrl && low === "y") this.editTlRedo();
+        else if (ctrl && letter === "c" && !shift) this.editTlCopy();
         else if (ctrl && low === "b") this.editTlSplitAtPlayhead();
         else if (ctrl && shift && letter === "m") this.editAudioToggle("play");
         else if (ctrl && letter === "s") {

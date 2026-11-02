@@ -129,7 +129,7 @@ export const EditAutoMixin = {
                 if (st.reference && !films.includes(st.reference)) opts.push([st.reference, base(st.reference)]);
                 const sel = select("reference", opts.length ? opts : [["", "(no film yet)"]]);
                 const other = el("button", "edit-btn", "Other film…");
-                other.addEventListener("click", () => openFilePicker(this.container, {
+                other.addEventListener("click", () => this._editTlPicker({
                     id: "rhythm", title: "A film to take the rhythm of", kind: "video",
                     exts: [".mp4", ".mov", ".webm", ".mkv", ".m4v", ".avi"], multiple: false, go: "Use",
                     onPick: async (files) => { if (files[0]) { st.reference = files[0].path; this._editTlAutoRedraw(); } return { ok: true }; },
@@ -222,6 +222,7 @@ export const EditAutoMixin = {
         ask.append(brief, send, note);
         box.append(ask);
         ui.body.append(box);
+        this._editTlCentre(box);
         ui.dialog = box;
     },
 

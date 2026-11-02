@@ -2287,8 +2287,11 @@ class EditTimelineBrowserTests(unittest.TestCase):
         self.assertEqual(got["right"][:3], ["V1:1", "84", ""])          # c is a still: no source frame
         self.assertIn("Out", got["left"][3])
         self.assertIn("00:00:03:11", got["left"][3])
-        self.assertIsNone(pg.evaluate(self.TWOUP), "gone when let go")
-        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), frame, "the playhead stayed put")
+        # Let go, the playhead is on the rolled cut (it follows the edit point selected) and the two-up rests on it.
+        self.assertNotEqual(frame, 84)
+        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), 84, "the playhead followed the cut")
+        pg.wait_for_function("() => __panel._etu && __panel._etu.root.style.display !== 'none'", timeout=3000)
+        self.assertEqual(pg.evaluate(self.TWOUP)["left"][:2], ["V1:0", "83"])
         # A ripple-in of b nudged with . : c's last frame and b's first (in 1 s + a frame).
         pg.mouse.click(*self.x_at(pg, 7.0, dx=5))                       # b's in (c kept its end at 7)
         self.assertEqual(pg.evaluate("() => __panel._editTlEditSel.act"), "ripple-in")
@@ -3060,6 +3063,253 @@ class EditTimelineBrowserTests(unittest.TestCase):
         self.assertIn("3 clips", pg.evaluate("() => __panel.editInspectorPanel.querySelector('.insp-multi').textContent"))
         pg.evaluate(self.SETROW, ["Opacity", 70])
         self.assertEqual([round(pg.evaluate(self.FXOF, i).get("op") * 100) for i in range(3)], [70, 70, 70])
+        self.assertEqual(self.errors, [])
+
+    # ── Copy a clip, Paste Attributes (Alt+V) ──
+
+    PASTE_D = "__panel._editTlUi.dialog"
+    BOXES = "() => Object.fromEntries([...__panel._editTlUi.dialog.querySelectorAll('input[data-attr]')].map(b => [b.dataset.attr, [b.checked, b.disabled]]))"
+
+    def paste_page(self):
+        """a (0-4) carries opacity 40 %, zoom 1.5, rotation 20 and keys on its position x at 1 s and 3.5 s."""
+        pg = self.page()
+        pg.evaluate("""() => { const P = __panel; const c = P._editTlCut;
+            P._editTlApply({ ...c, clips: c.clips.map((x, i) => i === 0 ? { ...x, fx: { op: 0.4, zx: 1.5, zy: 1.5, rot: 20, keys: { x: [{ t: 1, v: 0.1 }, { t: 3.5, v: 0.6 }] } } } : x) });
+            P._editTlHistories[P._editTlTab] = { past: [], future: [] };
+            P._editTlSel = { kind: 'clip', i: 0 }; P._editTlMulti = null; P.editTlRefresh(); P._editTlUi.body.focus(); }""")
+        return pg
+
+    def open_paste(self, pg, keys):
+        """Ctrl+C on a, then c and b selected, Alt+V."""
+        keys.keyboard.press("Control+c")
+        self.assertEqual(pg.evaluate("() => __panel._editTlClipboard.name"), "a")
+        pg.evaluate("() => { const P = __panel; P._editTlSetSelList([{ kind: 'clip', i: 1 }, { kind: 'clip', i: 2 }], { kind: 'clip', i: 2 }); P.editTlRefresh(); P._editTlUi.body.focus(); }")
+        keys.keyboard.press("Alt+v")
+        pg.wait_for_function(f"() => {self.PASTE_D} && {self.PASTE_D}.classList.contains('edit-paste')", timeout=3000)
+
+    def test_23_paste_attributes_only_opacity_and_zoom_onto_two_clips_one_undo(self):
+        pg = self.paste_page()
+        self.open_paste(pg, pg)
+        d = self.PASTE_D
+        pg.evaluate(f"() => {d}.querySelector('.edit-paste-none').click()")
+        self.assertFalse(any(v[0] for v in pg.evaluate(self.BOXES).values()), "None: nothing checked")
+        pg.evaluate(f"() => {{ {d}.querySelector('input[data-attr=opacity]').click(); {d}.querySelector('input[data-attr=zoom]').click(); }}")
+        n = self.undo_len(pg)
+        pg.evaluate(f"() => {d}.querySelector('.edit-paste-go').click()")
+        self.assertFalse(pg.evaluate(f"() => !!{d}"), "the dialog closes")
+        self.assertEqual(self.undo_len(pg), n + 1, "one undo step")
+        for i in (1, 2):
+            fx = pg.evaluate(self.FXOF, i)
+            self.assertEqual((fx.get("op"), fx.get("zx"), fx.get("zy")), (0.4, 1.5, 1.5), i)
+            self.assertNotIn("rot", fx)
+            self.assertNotIn("keys", fx)
+        self.assertEqual(pg.evaluate("() => __panel._editTlSelAll().map(s => s.i)"), [1, 2], "the selection stays")
+        # The boxes checked are remembered, for this viewer.
+        self.assertEqual(sorted(pg.evaluate("() => JSON.parse(localStorage.getItem('bepic.viewer.pasteAttrs'))")), ["opacity", "zoom"])
+        pg.keyboard.press("Alt+v")
+        pg.wait_for_function(f"() => !!{d}", timeout=3000)
+        boxes = pg.evaluate(self.BOXES)
+        self.assertEqual(sorted(k for k, v in boxes.items() if v[0]), ["opacity", "zoom"])
+        pg.keyboard.press("Escape")
+        self.assertFalse(pg.evaluate(f"() => !!{d}"))
+        # One Ctrl+Z gives both clips back.
+        pg.evaluate("() => __panel._editTlUi.body.focus()")
+        pg.keyboard.press("Control+z")
+        for i in (1, 2):
+            self.assertEqual(pg.evaluate(self.FXOF, i), {}, i)
+        # The right-click menu has Copy and Paste Attributes too.
+        x, y = self.x_at(pg, 1.0)
+        pg.mouse.click(x, y, button="right")
+        labels = pg.evaluate("() => [...__panel.container.querySelectorAll('.previz-menu-item')].map(b => b.textContent)")
+        self.assertEqual(labels[:2], ["Copy (Ctrl+C)", "Paste Attributes… (Alt+V)"])
+        self.assertEqual(self.errors, [])
+
+    def test_23_keyframes_are_pasted_relative_to_the_clip_start_and_cut_at_its_end(self):
+        pg = self.paste_page()
+        self.open_paste(pg, pg)
+        d = self.PASTE_D
+        pg.evaluate(f"() => {{ {d}.querySelector('.edit-paste-none').click(); {d}.querySelector('input[data-attr=position]').click(); {d}.querySelector('input[data-attr=keys]').click(); {d}.querySelector('.edit-paste-go').click(); }}")
+        keys = "(i) => ((__panel._editTlCut.clips[i].fx || {}).keys || {}).x || []"
+        b = pg.evaluate(keys, 2)                       # b: 4 s long, from 7 s on the timeline
+        self.assertEqual([k["t"] for k in b], [1, 3.5], "where they were from a's start, from b's start")
+        c = pg.evaluate(keys, 1)                       # c: 3 s long - the key at 3.5 s is cut off at its end
+        self.assertEqual([k["t"] for k in c], [1, 3])
+        self.assertAlmostEqual(c[1]["v"], 0.1 + 0.5 * 2 / 2.5, places=4)
+        self.assertEqual(self.errors, [])
+
+    def test_23_boxes_the_source_has_not_or_the_targets_cannot_take_are_off(self):
+        pg = self.paste_page()
+        pg.keyboard.press("Control+c")
+        # Onto the still c only: no sound, no speed; a is no text.
+        pg.evaluate("() => { const P = __panel; P._editTlSel = { kind: 'clip', i: 1 }; P._editTlMulti = null; P.editTlRefresh(); P._editTlUi.body.focus(); }")
+        pg.keyboard.press("Alt+v")
+        pg.wait_for_function(f"() => !!{self.PASTE_D}", timeout=3000)
+        boxes = pg.evaluate(self.BOXES)
+        for off in ("volume", "speed", "textlook"):
+            self.assertTrue(boxes[off][1], off)
+            self.assertFalse(boxes[off][0], off)
+        for on in ("zoom", "opacity", "crop", "keys", "name", "color"):
+            self.assertFalse(boxes[on][1], on)
+        pg.evaluate(f"() => {self.PASTE_D}.querySelector('.edit-paste-all').click()")
+        boxes = pg.evaluate(self.BOXES)
+        self.assertFalse(boxes["volume"][0], "All leaves the disabled ones")
+        self.assertTrue(boxes["rotation"][0])
+        pg.keyboard.press("Escape")
+        # A source without keys: the keyframes switch is off.
+        pg.evaluate("() => { const P = __panel; P._editTlSel = { kind: 'clip', i: 2 }; P.editTlRefresh(); P._editTlUi.body.focus(); }")
+        pg.keyboard.press("Control+c")
+        pg.evaluate("() => { const P = __panel; P._editTlSel = { kind: 'clip', i: 0 }; P.editTlRefresh(); P._editTlUi.body.focus(); }")
+        pg.keyboard.press("Alt+v")
+        pg.wait_for_function(f"() => !!{self.PASTE_D}", timeout=3000)
+        boxes = pg.evaluate(self.BOXES)
+        self.assertTrue(boxes["keys"][1])
+        self.assertFalse(boxes["volume"][1], "a film carries a volume (the Inspector's rule)")
+        # Typing in a field: neither key fires.
+        pg.keyboard.press("Escape")
+        pg.evaluate("() => { const i = document.createElement('input'); i.className = 'probe'; __panel._editTlUi.body.append(i); i.focus(); }")
+        pg.evaluate("() => { __panel._editTlClipboard = null; }")
+        pg.keyboard.press("Control+c")
+        pg.keyboard.press("Alt+v")
+        self.assertIsNone(pg.evaluate("() => __panel._editTlClipboard"))
+        self.assertFalse(pg.evaluate(f"() => !!{self.PASTE_D} && {self.PASTE_D}.isConnected"))
+        self.assertEqual(self.errors, [])
+
+    def test_23_popped_out_copy_and_paste_attributes(self):
+        pg = self.paste_page()
+        with pg.context.expect_page() as pop:
+            pg.evaluate("() => window.__panel.toggleUndock()")
+        win = pop.value
+        win.wait_for_load_state()
+        pg.wait_for_function("() => __panel._editTlUi && __panel._editTlUi.body.ownerDocument !== document", timeout=10000)
+        pg.evaluate("() => { const P = __panel; P._editTlSel = { kind: 'clip', i: 0 }; P._editTlMulti = null; P.editTlRefresh(); P._editTlUi.body.focus(); }")
+        self.open_paste(pg, win)
+        d = self.PASTE_D
+        self.assertTrue(pg.evaluate(f"() => {d}.ownerDocument !== document"), "in the pop-out")
+        self.assert_centred(pg, d)
+        pg.evaluate(f"() => {{ {d}.querySelector('.edit-paste-none').click(); {d}.querySelector('input[data-attr=opacity]').click(); {d}.querySelector('.edit-paste-go').click(); }}")
+        self.assertEqual([pg.evaluate(self.FXOF, i).get("op") for i in (1, 2)], [0.4, 0.4])
+        self.assertEqual(self.errors, [])
+
+    # ── the Edit panel's dialogs stand over the middle of the timeline ──
+
+    CENTRE = """(d) => { const b = __panel._editTlUi.body.getBoundingClientRect(), r = d.getBoundingClientRect(), w = d.ownerDocument.defaultView;
+        const hold = (v, size, room) => size + 16 >= room ? 8 : Math.max(8, Math.min(room - size - 8, v));
+        return { got: [r.left + r.width / 2, r.top + r.height / 2], tl: [b.left + b.width / 2, b.top + b.height / 2],
+                 want: [hold(b.left + b.width / 2 - r.width / 2, r.width, w.innerWidth) + r.width / 2, hold(b.top + b.height / 2 - r.height / 2, r.height, w.innerHeight) + r.height / 2],
+                 inside: r.left >= 0 && r.top >= 0 && r.right <= w.innerWidth && r.bottom <= w.innerHeight }; }"""
+
+    def assert_centred(self, pg, expr):
+        got = pg.evaluate_handle(f"() => {expr}").evaluate(self.CENTRE)
+        self.assertTrue(got["inside"], got)
+        for k in (0, 1):
+            self.assertLess(abs(got["got"][k] - got["want"][k]), 3, got)
+        self.assertLess(abs(got["got"][0] - got["tl"][0]), 3, ("over the timeline's middle", got))
+        return got
+
+    def test_24_dialogs_are_centred_over_the_timeline(self):
+        pg = self.paste_page()
+        # Paste Attributes.
+        self.open_paste(pg, pg)
+        self.assert_centred(pg, self.PASTE_D)
+        pg.keyboard.press("Escape")
+        # Save cut as...
+        pg.evaluate("() => { __panel.editTlSaveAsDialog(); }")
+        pg.wait_for_function("() => __panel._editTlUi.dialog && __panel._editTlUi.dialog.isConnected && __panel._editTlUi.dialog.querySelector('.edit-saveas-name')", timeout=5000)
+        self.assert_centred(pg, "__panel._editTlUi.dialog")
+        pg.evaluate("() => __panel._editTlUi.dialog.querySelector('.edit-btn').click()")
+        # Export to Resolve...
+        self.resolve_menu(pg)
+        self.assert_centred(pg, self.RESOLVE_D)
+        # Centred again when the window changes size.
+        pg.set_viewport_size({"width": 1300, "height": 900})
+        pg.wait_for_timeout(200)
+        self.assert_centred(pg, self.RESOLVE_D)
+        pg.evaluate(f"() => {self.RESOLVE_D}.querySelector('.edit-resolve-close').click()")
+        # Open cut... (the viewer's file picker) and Export film (its export dialog), opened from the panel.
+        pick = "__panel.container.querySelector(':scope > .rd-shade.pick-dlg .rd-box')"
+        pg.evaluate("() => { __panel.editTlOpenDialog(); }")
+        pg.wait_for_function(f"() => {pick}", timeout=5000)
+        self.assert_centred(pg, pick)
+        pg.evaluate(f"() => {pick}.querySelector('.rd-x').click()")
+        exp = "__panel.container.querySelector(':scope > .rd-shade.export-dlg .rd-box')"
+        pg.evaluate("() => { __panel._editTlRender(); }")
+        pg.wait_for_function(f"() => {exp}", timeout=8000)
+        pg.wait_for_timeout(150)
+        self.assert_centred(pg, exp)
+        self.assertEqual(self.errors, [])
+
+    # ── the Trim mode: the playhead stays on the selected cut ──
+
+    ROLL = "(i) => { const P = __panel; P._editTlEditSel = { act: 'roll', sel: { kind: 'clip', i }, side: 'start', a: { kind: 'clip', i: i - 1 }, b: { kind: 'clip', i } }; P._editTlSel = { kind: 'clip', i }; P._editTlMulti = null; P.editTlRefresh(); }"
+
+    def test_25_the_playhead_stays_on_the_selected_cut_in_the_trim_mode(self):
+        pg = self.page()
+        frame = "() => __panel.currentFrame"
+        pg.evaluate("() => { __panel.setFrame(10); __panel._editTlUi.body.focus(); }")
+        pg.keyboard.press("t")
+        # The cut a | c (4 s) selected: the playhead jumps to it; the two-up shows it.
+        pg.evaluate(self.ROLL, 1)
+        self.assertEqual(pg.evaluate(frame), 96)
+        pg.wait_for_function("() => __panel._etu && __panel._etu.root.style.display !== 'none'", timeout=3000)
+        self.assertEqual(pg.evaluate(self.TWOUP)["right"][:2], ["V1:1", "96"])
+        # , rolls it a frame back (a's film has no more frames after its end): the playhead follows.
+        pg.keyboard.press("Comma")
+        self.assertEqual(pg.evaluate(frame), 95)
+        # Moved away by hand it stays there - until the cut moves again.
+        pg.evaluate("() => __panel.setFrame(30)")
+        self.assertEqual(pg.evaluate(frame), 30)
+        pg.keyboard.press("Comma")
+        self.assertEqual(pg.evaluate(frame), 94)
+        # Undo moves the cut back: the playhead with it.
+        pg.keyboard.press("Control+z")
+        self.assertEqual(pg.evaluate(frame), 95)
+        # Another cut selected (c | b at 7 s): the playhead goes there.
+        pg.evaluate(self.ROLL, 2)
+        self.assertEqual(pg.evaluate(frame), 168)
+        # Playing: play around edit has the playhead; stopped, it is back on the cut.
+        pg.evaluate("() => __panel.play()")
+        pg.wait_for_timeout(250)
+        self.assertNotEqual(pg.evaluate(frame), 168)
+        pg.evaluate("() => __panel.stop()")
+        self.assertEqual(pg.evaluate(frame), 168)
+        # Let go of the cut (Esc): the playhead is free.
+        pg.evaluate("() => __panel._editTlUi.body.focus()")
+        pg.keyboard.press("Escape")
+        pg.evaluate("() => { __panel.setFrame(30); __panel.editTlRefresh(); }")
+        self.assertEqual(pg.evaluate(frame), 30)
+        # The Selection mode: a selected cut does not hold it either.
+        pg.keyboard.press("a")
+        pg.evaluate(self.ROLL, 1)
+        pg.evaluate("() => __panel.setFrame(30)")
+        was = pg.evaluate("() => __panel._editTlCut.clips[0].length")
+        pg.keyboard.press("Comma")
+        self.assertLess(pg.evaluate("() => __panel._editTlCut.clips[0].length"), was, "the cut did move")
+        self.assertEqual(pg.evaluate(frame), 30)
+        # Back in the Trim mode the selected cut takes it.
+        pg.keyboard.press("t")
+        self.assertEqual(pg.evaluate(frame), pg.evaluate("() => Math.round(__panel._editTlEditTime(__panel._editTlEditSel, __panel._editTlCut) * 24)"))
+        self.assertEqual(self.errors, [])
+
+    def test_25_a_cut_out_of_view_is_scrolled_to_the_middle(self):
+        pg = self.page()
+        pg.evaluate("() => { const P = __panel; P._editTlUi.body.focus(); P._editTlZoom(16); P.setFrame(0); P._editTlUi.scroll.scrollLeft = 0; }")
+        pg.keyboard.press("t")
+        mid = """() => { const P = __panel, sc = P._editTlUi.scroll; const x = (P.currentFrame / 24) / P._editTlLay.total * sc.scrollWidth;
+            return [Math.round(x - sc.scrollLeft - sc.clientWidth / 2), sc.scrollLeft > 0]; }"""
+        pg.evaluate(self.ROLL, 2)
+        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), 168)
+        off, scrolled = pg.evaluate(mid)
+        self.assertTrue(scrolled)
+        self.assertLess(abs(off), 3, "the cut in the middle of the view")
+        # Back to the first cut, out of view to the left: in the middle again.
+        pg.evaluate(self.ROLL, 1)
+        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), 96)
+        self.assertLess(abs(pg.evaluate(mid)[0]), 3)
+        # A cut still in view is not scrolled to.
+        before = pg.evaluate("() => __panel._editTlUi.scroll.scrollLeft")
+        pg.keyboard.press("Comma")
+        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), 95)
+        self.assertEqual(pg.evaluate("() => __panel._editTlUi.scroll.scrollLeft"), before)
         self.assertEqual(self.errors, [])
 
 if __name__ == "__main__":

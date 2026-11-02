@@ -3409,3 +3409,137 @@ export function keyInterpAt(c, params, u) {
     for (const p of params || KEY_PARAMS) for (const k of keysOf(c, p)) if (Math.abs(k.t - num(u)) <= 1e-6) hows.add(k.i || "linear");
     return hows.size === 1 ? [...hows][0] : "linear";
 }
+
+// ── Paste Attributes (Resolve's Alt+V) ───────────────────────────────────────
+//
+// A clip copied (Ctrl+C) is held as a SOURCE: the clip (or text) itself and what
+// kind of thing it is. Its attributes - the ones checked - then go onto every
+// selected target that can take them, as one new cut (one undo step). Keys are in
+// clip time already (from the clip's first frame), so pasted they stand where they
+// stood in the source, relative to the clip's start; keys past the target's end
+// are cut off there, with a key at its end holding the value it had there.
+
+export const PASTE_ATTRS = [
+    { id: "zoom", group: "video", label: "Zoom", params: ["zx", "zy"], off: "toff" },
+    { id: "position", group: "video", label: "Position", params: ["x", "y"], off: "toff" },
+    { id: "anchor", group: "video", label: "Anchor Point", params: ["ax", "ay"], off: "toff" },
+    { id: "rotation", group: "video", label: "Rotation Angle", params: ["rot"], off: "toff" },
+    { id: "flip", group: "video", label: "Flip", flags: ["fh", "fv"], off: "toff" },
+    { id: "crop", group: "video", label: "Cropping", params: ["cl", "cr", "ct", "cb"], off: "coff" },
+    { id: "opacity", group: "video", label: "Opacity", params: ["op"], off: "ooff" },
+    { id: "volume", group: "audio", label: "Volume", params: ["vol"] },
+    { id: "keys", group: "keys", label: "Include keyframes" },
+    { id: "speed", group: "timing", label: "Speed" },
+    { id: "name", group: "clip", label: "Name" },
+    { id: "color", group: "clip", label: "Colour" },
+    { id: "textlook", group: "text", label: "Text look (size, place, colour)" },
+];
+export const PASTE_GROUPS = [["video", "Video"], ["audio", "Audio"], ["keys", "Keyframes"], ["timing", "Timing"], ["clip", "Clip"], ["text", "Text"]];
+
+/** What a selected item is, for pasting: { clip, text, picture, sound, timed }. */
+export function pasteCaps(cut, sel) {
+    if (sel && sel.kind === "text") return (cut.texts || [])[sel.i] ? { text: true } : null;
+    const c = clipOf(cut, sel);
+    if (!c) return null;
+    const picture = sel.kind === "clip" || (trackOf(cut, sel.track) || {}).kind !== "audio";
+    const sound = (!picture) || (!isStill(c.file) && !c.mute);
+    return { clip: true, picture, sound, timed: !isStillImage(c.file) };
+}
+
+/** The clipboard's entry for a selected clip or text: a copy of it and its caps (null for anything else). */
+export function pasteSource(cut, sel) {
+    const caps = pasteCaps(cut, sel);
+    if (!caps) return null;
+    const item = sel.kind === "text" ? cut.texts[sel.i] : clipOf(cut, sel);
+    return { caps, item: JSON.parse(JSON.stringify(item)), name: String(item.name || item.text || String(item.file || "").split(/[\/]/).pop() || "clip").split("\n")[0] };
+}
+
+/** Can an item of caps `caps` have attribute `id`? */
+export function pasteTakes(caps, id) {
+    if (!caps) return false;
+    const a = PASTE_ATTRS.find((x) => x.id === id);
+    if (!a) return false;
+    if (a.group === "video") return !!caps.picture;
+    if (a.group === "audio") return !!caps.sound;
+    if (a.group === "timing") return !!caps.timed;
+    if (a.group === "clip") return !!caps.clip;
+    if (a.group === "text") return !!caps.text;
+    return !!caps.clip;                                      // keys
+}
+
+/**
+ * Which attributes the dialog offers: { id: { source, targets } } - does the
+ * source have it, can any of the targets take it. "keys" needs keys on the source.
+ */
+export function pasteOffer(cut, source, targets) {
+    const caps = targets.map((s) => pasteCaps(cut, s)).filter(Boolean);
+    const out = {};
+    for (const a of PASTE_ATTRS) {
+        const has = !!source && pasteTakes(source.caps, a.id) && (a.id !== "keys" || hasKeys(source.item));
+        out[a.id] = { source: has, targets: caps.some((c) => pasteTakes(c, a.id)) };
+    }
+    return out;
+}
+
+/** Keys held to a clip `length` seconds long: those past it go, with one at its end holding the value there. */
+export function clipKeysTo(list, length) {
+    const len = round(Math.max(0, num(length)));
+    const kept = (list || []).filter((k) => k.t <= len + 1e-6).map((k) => ({ ...k }));
+    if ((list || []).some((k) => k.t > len + 1e-6) && !(kept.length && Math.abs(kept[kept.length - 1].t - len) <= 1e-6)) {
+        kept.push({ t: len, v: keyValue(list, len) });
+    }
+    return kept;
+}
+
+/**
+ * The attributes `picks` ({ id: true }) of `source` (pasteSource) set on every
+ * target selection that can take them - one new cut. Without "keys", an
+ * animated param is pasted as its value at the source's first frame, and the
+ * target's own keys of that param go (else they would hide the number).
+ */
+export function pasteAttributes(cut, source, targets, picks) {
+    let next = copy(cut);
+    if (!source) return next;
+    const src = source.item;
+    const withKeys = !!picks.keys && hasKeys(src);
+    for (const t of targets) {
+        const caps = pasteCaps(next, t);
+        if (!caps) continue;
+        const want = (id) => !!picks[id] && pasteTakes(source.caps, id) && pasteTakes(caps, id);
+        if (caps.text) {
+            if (want("textlook")) next = setTextLook(next, t.i, textLook(src));
+            continue;
+        }
+        // The speed first: it sets the length the keys are held to.
+        if (want("speed") && Math.abs(speedOf(clipOf(next, t)) - speedOf(src)) > 1e-9) next = setSpeed(next, t, speedOf(src));
+        const props = {};
+        if (want("name")) props.name = src.name || "";
+        if (want("color")) props.color = src.color || "";
+        if (Object.keys(props).length) next = setClipProps(next, t, props);
+        const c = clipOf(next, t);
+        if (!c) continue;
+        const fx = cleanFx(c.fx), sfx = cleanFx(src.fx);
+        const keys = fx.keys ? JSON.parse(JSON.stringify(fx.keys)) : {};
+        let volume;
+        let touched = false;
+        for (const a of PASTE_ATTRS) {
+            if (!want(a.id) || (!a.params && !a.flags)) continue;
+            touched = true;
+            for (const p of a.params || []) {
+                const list = keysOf(src, p);
+                const value = list.length && !withKeys ? paramAt(src, p, 0) : (p === "vol" ? paramAt({ volume: src.volume }, "vol", 0) : (sfx[p] === undefined ? FX[p][0] : sfx[p]));
+                if (p === "vol") volume = value; else fx[p] = value;
+                if (withKeys && list.length) keys[p] = clipKeysTo(list, c.length);
+                else delete keys[p];
+            }
+            for (const f of a.flags || []) fx[f] = !!sfx[f];
+            if (a.off) fx[a.off] = !!sfx[a.off];
+        }
+        if (!touched) continue;
+        fx.keys = keys;
+        const cleaned = cleanFx(fx);
+        if (Object.keys(cleaned).length || c.fx) c.fx = cleaned;
+        if (volume !== undefined) c.volume = round(Math.max(0, Math.min(1, num(volume, 1))));
+    }
+    return next;
+}

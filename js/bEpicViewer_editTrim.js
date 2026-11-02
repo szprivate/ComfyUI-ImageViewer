@@ -387,7 +387,9 @@ export const EditTrimMixin = {
             return true;
         }
         this._editTlSel = sel;
-        this._editTlEditSel = null;
+        // The Trim mode: an edge dragged is the edit point selected, so the playhead follows it (_editTlTrimFollow).
+        const isPoint = info.act !== "slip" && info.act !== "slide" && info.act !== "retime" && info.act !== "loop";
+        this._editTlEditSel = this._editTlTrimMode && isPoint ? info : null;
         const place = this._editTlPlace(start, sel);
         const began = place ? place.start : 0;
         const len0 = Number(c0.length) || 0;
@@ -449,6 +451,45 @@ export const EditTrimMixin = {
         const cut = this._editTlCut;
         if (!info || !cut || !D.clipOf(cut, info.sel) || (info.a && !(D.clipOf(cut, info.a) && D.clipOf(cut, info.b)))) return null;
         return info;
+    },
+
+    /**
+     * The Trim mode with an edit point selected: the playhead goes to that cut and
+     * stays with it - when it is selected, when it moves (ripple, roll, , / ., a
+     * drag, an undo) and when playing stops - so the two-up always shows it; a
+     * cut out of view is scrolled to the middle. A move of the playhead by hand
+     * (a scrub, the arrows) is left where it is until the cut next moves. While
+     * the film plays, play around edit has the playhead. Leaving the Trim mode or
+     * letting go of the edit point frees it. Called from editTwoUpRest (every
+     * redraw, frame change, mode change, stop).
+     */
+    _editTlTrimFollow() {
+        const cut = this._editTlCut;
+        const point = this._editTlTrimMode && cut ? this._editTlEditPoint() : null;
+        if (!point || !this._editTlOnScreen()) { this._editTlFollow = null; return; }
+        if (this.isPlaying) { if (this._editTlFollow) this._editTlFollow.played = true; return; }
+        const fps = cut.fps || 24;
+        const span = this._editTlEditTime(point, cut);
+        if (!Number.isFinite(span)) return;
+        const frame = Math.max(0, Math.min(D.filmFrames(cut) - 1, Math.round(span * fps)));
+        const id = [point.act, point.side, D.selId(point.sel), point.a ? D.selId(point.a) : "", point.b ? D.selId(point.b) : ""].join("|");
+        const f = this._editTlFollow;
+        if (f && f.id === id && f.frame === frame && !f.played) return;
+        this._editTlFollow = { id, frame, played: false };
+        // Into view first (the middle), so the playhead's own paging does not move it a screen at a time; not under a drag.
+        if (!this._editTlDragging) this._editTlCentreOn(frame / fps);
+        if ((this.currentFrame || 0) !== frame) this.setFrame(frame);
+    },
+
+    /** The timeline scrolled so that `seconds` is in the middle, when it is out of view. */
+    _editTlCentreOn(seconds) {
+        const ui = this._editTlUi, lay = this._editTlLay;
+        if (!ui || !ui.scroll || !lay || !(lay.total > 0)) return;
+        const sc = ui.scroll;
+        if (sc.scrollWidth <= sc.clientWidth + 1) return;
+        const x = (seconds / lay.total) * sc.scrollWidth;
+        if (x >= sc.scrollLeft + 8 && x <= sc.scrollLeft + sc.clientWidth - 8) return;
+        sc.scrollLeft = Math.max(0, x - sc.clientWidth / 2);
     },
 
     /** The moment an edit point lies at: the cut of a roll, else its clip's edge. */
