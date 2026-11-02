@@ -655,6 +655,7 @@ export const EditTimelineMixin = {
         }
         // The viewport plays the cut: a change is on screen with this redraw.
         if (this.editPlayCutChanged) this.editPlayCutChanged();
+        if (this.editTwoUpRest) this.editTwoUpRest();            // the cut, the track or the tab may have changed under a resting playhead
         if (this._editTlTab) this._editTlKeep();
         if (this._editTlTab && this._editTlKnowFiles) this._editTlKnowFiles(this._editTlCut);
         // The numbers of what is selected, and what can be put into the cut.
@@ -1856,6 +1857,7 @@ export const EditTimelineMixin = {
     editTlMode(mode) {
         this._editTlTrimMode = mode === "trim";
         if (!this._editTlTrimMode && this.editTwoUpHide) this.editTwoUpHide();      // the two-up is the Trim mode's
+        if (this._editTlTrimMode && this.editTwoUpRest) this.editTwoUpRest();
         this._editTlHoverAct = null;
         if (this._editTlTrimShow) this._editTlTrimShow(null);
         this.editTlBladeToggle(false);

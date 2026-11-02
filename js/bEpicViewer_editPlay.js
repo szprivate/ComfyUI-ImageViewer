@@ -287,6 +287,7 @@ export const EditPlayMixin = {
         this._editPlayShow((frame + 0.5) / this.editPlayFps(), true);
         this._updateCompareFrame(frame);
         this._toolsFrameChanged();
+        if (this.editTwoUpRest) this.editTwoUpRest();          // Trim mode: a cut under the playhead shows its two-up
     },
 
     _editPlayBlank() {
@@ -713,7 +714,7 @@ export const EditPlayMixin = {
         const { min, max, around } = this._editPlayRange();
         // Outside the range, or standing on its last frame: from its start. Around an edit: from its pre-roll.
         const from = (around || this.currentFrame < min || this.currentFrame >= max) ? min : this.currentFrame;
-        if (around && this.editTwoUpHide) this.editTwoUpHide();          // playing shows the film, not the two-up
+        if (this.editTwoUpHide) this.editTwoUpHide();          // playing shows the film, not the two-up
         this.editPlaySetFrame(from);
         const win = (this._viewerWindow && this._viewerWindow()) || window;
         const tick = () => {
@@ -733,6 +734,7 @@ export const EditPlayMixin = {
         ep.raf = 0;
         for (const v of this._epSlots || []) { try { v.pause(); } catch (_) {} }
         for (const a of ep.bed || []) { try { a.pause(); } catch (_) {} }
+        if (this.editTwoUpRest) this.editTwoUpRest();          // stopped on a cut: its two-up is back
     },
 
     // One look at the clock while playing: where the film is, whether the clip

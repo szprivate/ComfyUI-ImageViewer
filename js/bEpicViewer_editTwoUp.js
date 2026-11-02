@@ -9,7 +9,13 @@
 // the source that plays at that edge (twoUpFrames: retime and loop counted).
 //
 // It comes up at the press (or the nudge) and goes when the drag is let go,
-// TWOUP_HOLD ms after the last nudge, or when the Trim mode is left. It is a
+// TWOUP_HOLD ms after the last nudge, or when the Trim mode is left. And it is
+// there AT REST too: in the Trim mode, whenever the playhead stands on a cut (on
+// the track of the selected clip or edit point, else V1; within half a frame)
+// - after a step, Shift+A / S or a scrub - until the playhead leaves the cut,
+// the film plays, or the Trim mode is left (editTwoUpRest; debounced, so a
+// scrub does not ask for a frame at every move). A trim that ends with the
+// playhead on a cut leaves that view up instead of fading it. It is a
 // layer of its own over the viewport (#viewport, in the shadow root - so full
 // screen and the pop-out carry it), with a <video> and an <img> per side: the
 // player's own layers and the playhead are not touched, so nothing fights the
@@ -19,6 +25,7 @@
 import * as D from "./bEpicViewer_editTimelineData.js";
 
 export const TWOUP_HOLD = 900;
+export const TWOUP_REST_DELAY = 70;
 
 export const EditTwoUpMixin = {
 
@@ -85,6 +92,7 @@ export const EditTwoUpMixin = {
         if (!layer) return;
         const win = (this._viewerWindow && this._viewerWindow()) || window;
         if (this._etuTimer) { win.clearTimeout(this._etuTimer); this._etuTimer = 0; }
+        if (this._etuRestTimer) { win.clearTimeout(this._etuRestTimer); this._etuRestTimer = 0; }
         const slip = fr.act === "slip";
         this._editTwoUpSide(layer.left, fr.left, slip ? "In" : "Out", fps);
         this._editTwoUpSide(layer.right, fr.right, slip ? "Out" : "In", fps);
@@ -98,12 +106,45 @@ export const EditTwoUpMixin = {
         if (!this.editTwoUpShown()) return;
         const win = (this._viewerWindow && this._viewerWindow()) || window;
         if (this._etuTimer) win.clearTimeout(this._etuTimer);
-        this._etuTimer = win.setTimeout(() => { this._etuTimer = 0; this.editTwoUpHide(); }, TWOUP_HOLD);
+        this._etuTimer = win.setTimeout(() => { this._etuTimer = 0; this.editTwoUpHide(); this.editTwoUpRest(); }, TWOUP_HOLD);
+    },
+
+    /** The edit point the playhead rests on, as an edit ({ act: "roll", sel, a, b }) - null off a cut. */
+    _editTwoUpRestInfo() {
+        const cut = this._editTlCut;
+        if (!this._editTlTrimMode || this.isPlaying || !cut || !this._editTlOnScreen || !this._editTlOnScreen()) return null;
+        const sel = this._editTlSel;
+        const on = this._editTlEditPoint ? (this._editTlEditPoint() || {}).sel || sel : sel;
+        const track = on && on.kind === "tclip" ? on.track : "V1";
+        const fps = cut.fps || 24, head = this.currentFrame || 0;
+        const stop = D.editStops(cut, track).find((st) => Math.abs(st.t * fps - head) < 0.5);
+        if (!stop) return null;
+        return { act: "roll", sel: stop.b || stop.a, a: stop.a, b: stop.b };
+    },
+
+    /**
+     * Settle the two-up for where the playhead is (called whenever it moves, the mode or
+     * the play state changes): up on a cut, away off it. Away at once; up after a short
+     * pause, so a scrub asks for the frame it comes to rest on. A trim or a nudge in
+     * progress is left alone (its own view, put away by the drag's end / TWOUP_HOLD).
+     */
+    editTwoUpRest() {
+        const win = (this._viewerWindow && this._viewerWindow()) || window;
+        if (this._etuRestTimer) { win.clearTimeout(this._etuRestTimer); this._etuRestTimer = 0; }
+        if (this._etuDrag || this._etuTimer) return;
+        if (!this._editTwoUpRestInfo()) { this.editTwoUpHide(); return; }
+        this._etuRestTimer = win.setTimeout(() => {
+            this._etuRestTimer = 0;
+            if (this._etuDrag || this._etuTimer) return;
+            const info = this._editTwoUpRestInfo();
+            if (info) this.editTwoUpShow(info, this._editTlCut); else this.editTwoUpHide();
+        }, TWOUP_REST_DELAY);
     },
 
     editTwoUpHide() {
         const win = (this._viewerWindow && this._viewerWindow()) || window;
         if (this._etuTimer) { win.clearTimeout(this._etuTimer); this._etuTimer = 0; }
+        if (this._etuRestTimer) { win.clearTimeout(this._etuRestTimer); this._etuRestTimer = 0; }
         const t = this._etu;
         if (!t || t.root.style.display === "none") return;
         t.root.style.display = "none";

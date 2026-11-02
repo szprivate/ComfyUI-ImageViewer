@@ -2314,6 +2314,47 @@ class EditTimelineBrowserTests(unittest.TestCase):
         self.assertIsNone(pg.evaluate(self.TWOUP))
         self.assertEqual(self.errors, [])
 
+    def test_15b_the_two_up_rests_on_a_cut_in_the_trim_mode(self):
+        pg = self.page()
+        self.focus_timeline(pg)
+        wait_up = "() => __panel._etu && __panel._etu.root.style.display !== 'none'"
+        wait_gone = "() => !__panel._etu || __panel._etu.root.style.display === 'none'"
+        # Selection mode: the playhead on a cut shows nothing.
+        pg.evaluate("() => __panel.setFrame(96)")
+        pg.wait_for_timeout(300)
+        self.assertIsNone(pg.evaluate(self.TWOUP), "Selection mode never shows it")
+        pg.keyboard.press("t")
+        pg.wait_for_function(wait_up, timeout=3000)
+        got = pg.evaluate(self.TWOUP)
+        self.assertEqual(got["left"][:2], ["V1:0", "95"])
+        self.assertEqual(got["right"][:2], ["V1:1", "96"])
+        pg.wait_for_timeout(1300)
+        self.assertIsNotNone(pg.evaluate(self.TWOUP), "it stays: it is not a nudge's flash")
+        # An arrow step off the cut puts it away; one back onto the cut brings it again.
+        pg.keyboard.press("ArrowRight")
+        pg.wait_for_function(wait_gone, timeout=3000)
+        pg.keyboard.press("ArrowLeft")
+        pg.wait_for_function(wait_up, timeout=3000)
+        # Shift+S to the next steps keeps it (a cut each).
+        pg.evaluate("() => __panel.setFrame(110)")
+        pg.wait_for_function(wait_gone, timeout=3000)
+        pg.evaluate("() => __panel.setFrame(168)")
+        pg.wait_for_function(wait_up, timeout=3000)
+        self.assertEqual(pg.evaluate(self.TWOUP)["left"][:2], ["V1:1", "167"])
+        # Playing puts it away; stopped on a cut it is back.
+        pg.evaluate("() => __panel.play()")
+        pg.wait_for_function(wait_gone, timeout=3000)
+        pg.evaluate("() => __panel.stop()")
+        pg.evaluate("() => __panel.setFrame(96)")
+        pg.wait_for_function(wait_up, timeout=3000)
+        # Leaving the Trim mode puts it away; so does Selection mode afterwards.
+        pg.keyboard.press("a")
+        self.assertIsNone(pg.evaluate(self.TWOUP))
+        pg.evaluate("() => __panel.setFrame(168)")
+        pg.wait_for_timeout(300)
+        self.assertIsNone(pg.evaluate(self.TWOUP))
+        self.assertEqual(self.errors, [])
+
     def test_16_popped_out_insert_line_grab_audio_switch_zoom_and_two_up(self):
         pg = self.page()
         pg.evaluate("() => { __media['D:/in/house.png'] = { duration: 0, still: true }; }")
@@ -2360,6 +2401,13 @@ class EditTimelineBrowserTests(unittest.TestCase):
         self.assertFalse(got["doc"], "drawn in the pop-out")
         self.assertEqual(pg.evaluate("() => __panel._etu.root.ownerDocument === __panel._editTlUi.body.ownerDocument"), True)
         self.assertIsNone(pg.evaluate(self.TWOUP))
+        # At rest on that cut the pop-out shows it too, and keeps it.
+        pg.evaluate("() => __panel.setFrame(Math.round(__panel._editTlCut.clips[0].length * 24))")
+        pg.wait_for_function("() => __panel._etu && __panel._etu.root.style.display !== 'none'", timeout=3000)
+        pg.wait_for_timeout(1300)
+        got = pg.evaluate(self.TWOUP)
+        self.assertIsNotNone(got)
+        self.assertFalse(got["doc"])
         self.assertEqual(self.errors, [])
 
     # ── filmstrips of the pieces of a longer film ──

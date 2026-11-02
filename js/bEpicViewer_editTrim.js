@@ -426,6 +426,7 @@ export const EditTrimMixin = {
             if (this._editTlTrimMode && this.editTwoUpShow) this.editTwoUpShow(info, next);
         }, (moved) => {
             this._editTlTrimShow(null);
+            this._etuDrag = false;
             if (this.editTwoUpHide) this.editTwoUpHide();
             if (!moved) {
                 // A click on an edge, in every mode, selects that edit point (, . trim it; E extends it).
@@ -435,7 +436,9 @@ export const EditTrimMixin = {
                 } else this._editTlSeek(began);
             }
             this.editTlRefresh();
+            if (this.editTwoUpRest) this.editTwoUpRest();            // still on a cut: the view stays
         });
+        this._etuDrag = true;
         if (this._editTlTrimMode && this.editTwoUpShow) this.editTwoUpShow(info, start);
         return true;
     },
