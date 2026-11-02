@@ -1,7 +1,8 @@
 import http from "node:http"; import fs from "node:fs"; import path from "node:path"; import zlib from "node:zlib";
 const VIEWER = process.argv[2], HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\//, ""));
 const types = { ".js": "text/javascript", ".css": "text/css", ".html": "text/html", ".json": "application/json", ".png": "image/png",
-                ".jpg": "image/jpeg", ".mp4": "video/mp4", ".mp3": "audio/mpeg" };
+                ".jpg": "image/jpeg", ".mp4": "video/mp4", ".mp3": "audio/mpeg",
+                ".wav": "audio/wav" };
 
 // HARNESS_MEDIA=1: answer /bepic/thumb and /bepic/raw_view with real pictures, made up per path, with the
 // real server's cache headers - a tile is kept for good, a picture is revalidated. THUMB_DELAY_MS holds every
@@ -31,7 +32,7 @@ function png(w, h, seed) {
 }
 const seedOf = (s) => [...String(s)].reduce((a, c) => (a * 31 + c.charCodeAt(0)) & 0xffff, 7);
 
-http.createServer((req, res) => {
+function handle(req, res) {
   const u = new URL(req.url, "http://x"); let p = u.pathname;
   if (MEDIA && (p === "/bepic/thumb" || p === "/bepic/raw_view")) {
     const seed = seedOf(u.searchParams.get("path") || u.searchParams.get("filename"));
@@ -47,7 +48,13 @@ http.createServer((req, res) => {
   }
   // HARNESS_MEDIA_DIR: real media and its readings, served under /media/ - and a file the viewer asks for as
   // D:/out/<name> (raw_view / view_file) is the one of that name there, with ranges, so a film can be sought.
+  // HARNESS_MEDIA_DELAY_MS holds every answer from there back that long - a file served from a share, through
+  // ComfyUI's executor - so a seek of a <video> or <audio> takes as long as it does there.
   const MDIR = process.env.HARNESS_MEDIA_DIR;
+  const MDELAY = Number(process.env.HARNESS_MEDIA_DELAY_MS || 0);
+  if (MDIR && MDELAY && !req._held && (p.startsWith("/media/") || p === "/bepic/view_file" || p === "/bepic/raw_view")) {
+    req._held = true; setTimeout(() => handle(req, res), MDELAY); return;
+  }
   if (MDIR && (p.startsWith("/media/") || p === "/bepic/view_file" || p === "/bepic/raw_view")) {
     const name = p.startsWith("/media/") ? decodeURIComponent(p.slice(7)) : path.basename(u.searchParams.get("path") || "");
     const f = path.resolve(MDIR, name);
@@ -71,4 +78,5 @@ http.createServer((req, res) => {
     if (err) { res.writeHead(404); res.end("nf"); return; }
     res.writeHead(200, { "content-type": types[path.extname(file)] || "application/octet-stream", "cache-control": "no-store" }); res.end(buf);
   });
-}).listen(Number(process.env.PORT) || 8765, () => console.log("up"));
+}
+http.createServer(handle).listen(Number(process.env.PORT) || 8765, () => console.log("up"));

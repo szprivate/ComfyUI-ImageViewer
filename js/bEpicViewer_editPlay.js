@@ -50,6 +50,41 @@ const PREFIX = "edit:";
 // Play around edit (the Trim mode, an edit point selected): this many seconds before and after the cut.
 export const PLAY_AROUND = 1;
 
+// How the film's elements are kept beside its clock while it plays (seconds,
+// of the source at speed 1). The clock is ONE clock, run from the wall clock
+// and set again only where the film jumps (a seek, a loop going round): a
+// <video> or <audio> that is a little off has its rate nudged (`nudge` at most,
+// in steps of `step`) until it is within `ok`; one further off than `seek` is
+// sought - and is then left to settle for `settle` ms before it is looked at
+// again, since a sought element's position runs late while it buffers and
+// starts. A clip run into at a cut is sought only when its frame is further off
+// than `cut`; it is started `lag` before the cut at first, then as early as the
+// player turned out to need.
+export const FOLLOW = { ok: 0.03, seek: 0.25, cut: 0.05, nudge: 0.05, step: 0.01, settle: 400, lag: 0.05 };
+
+/**
+ * The rate an element runs at to come back to the clock: `rate` nudged by its
+ * drift `d` (seconds of source, + ahead), at most FOLLOW.nudge either way, in
+ * steps of FOLLOW.step (a rate change is not free); `rate` itself within `ok`.
+ */
+export function followRate(rate, d, opt = FOLLOW) {
+    if (!(Math.abs(d) > opt.ok)) return rate;
+    const k = Math.max(-opt.nudge, Math.min(opt.nudge, -d * 2));
+    return rate * (1 + Math.round(k / opt.step) * opt.step);
+}
+
+/**
+ * What to do with an element that should be at `want` and is at `cur`: "seek",
+ * or the rate to run at. `since` ms since it was last sought (Infinity: never),
+ * `scale` the source seconds per film second (a retimed clip's speed).
+ */
+export function followPlan(cur, want, rate, since, scale = 1, opt = FOLLOW) {
+    if (since < opt.settle) return { rate };
+    const d = cur - want;
+    if (Math.abs(d) > opt.seek * Math.max(1, scale)) return { seek: true, rate };
+    return { rate: followRate(rate, d / Math.max(1e-6, scale), opt) };
+}
+
 export const EditPlayMixin = {
 
     isEditTab(key = this.activeTab) {
@@ -335,7 +370,7 @@ export const EditPlayMixin = {
             ep.still = true;
             this._editPlayBlank();
             this._editPlayReady(cut, at, slots[1]);
-            this._editPlaySounds(at.t, this.isPlaying);
+            this._editPlaySounds(at.t, this.isPlaying, seek);
             this._editPlayTitles();
             return;
         }
@@ -371,7 +406,7 @@ export const EditPlayMixin = {
             });
             this._editPlayMix(at);
             if (!under) this._editPlayReady(cut, at, this.videoBase === slots[0] ? slots[1] : slots[0]);
-            this._editPlaySounds(at.t, this.isPlaying);
+            this._editPlaySounds(at.t, this.isPlaying, seek);
             this._editPlayMirror();
             return;
         }
@@ -389,8 +424,15 @@ export const EditPlayMixin = {
         else if (mine._epUrl === url) v = mine;
         else { v = other; this._editPlayLoad(v, url); }
         v._epName = clip.name || String(clip.file || "").split(/[\\/]/).pop();
-        if (seek || v !== mine || !same || Math.abs((v.currentTime || 0) - at.local) > 0.08) {
-            if (Math.abs((v.currentTime || 0) - at.local) > 1e-3) { try { v.currentTime = at.local; } catch (_) {} }
+        v._epNext = null;
+        // Asked for (a scrub, a loop round): to the frame. Run into the next
+        // clip (made ready at its in point): the few ms the clock is past the
+        // cut are the follower's to take up (_editPlayFollow) - a seek there
+        // would throw the ready-made frame away. The clip that is up: the
+        // follower's altogether.
+        const off = Math.abs((v.currentTime || 0) - at.local);
+        if (off > (seek ? 1e-3 : !same ? FOLLOW.cut : FOLLOW.seek)) {
+            try { v.currentTime = at.local; v._epSought = this._editPlayNow(); v._epPreroll = false; } catch (_) {}
         }
         const under = this._editPlayUnder(at, v);
         v._epClip = clip;
@@ -404,9 +446,40 @@ export const EditPlayMixin = {
         } else if (ep.stepped) {
             try { v.pause(); } catch (_) {}
         }
-        this._editPlaySounds(at.t, this.isPlaying);
+        this._editPlaySounds(at.t, this.isPlaying, seek);
         if (!under) this._editPlayReady(cut, at, v === mine ? other : mine);
         this._editPlayMirror();
+    },
+
+    // The <video> on screen kept beside the film's clock `t` (followPlan):
+    // nudged, sought only when far off, started again if something paused it
+    // (a pop-out moves it). Every frame: a look at its position costs nothing.
+    _editPlayFollow(v, at, t) {
+        if (!v || v.ended || !at || !at.clip) return;
+        const speed = at.speed > 0 ? at.speed : 1;
+        const seg = at.segAt != null ? at.segAt : at.origin;
+        const base = at.base != null ? at.base : (Number(at.clip.in) || 0);
+        const want = base + Math.max(0, t - seg) * speed;
+        if (v.duration > 0 && want >= v.duration - 0.05) return;  // a film shorter than its clip: its last frame holds
+        const nominal = Math.max(0.0625, Math.min(16, this._editPlayRate(at)));
+        const now = this._editPlayNow();
+        const settling = v.seeking || v.readyState < 3;
+        const since = settling ? 0 : v._epSought != null ? now - v._epSought : Infinity;
+        if (v._epPreroll && since >= FOLLOW.settle) {
+            // Started before the cut: how far off it came in is how much earlier (or later) to start the next time.
+            v._epPreroll = false;
+            const d = ((v.currentTime || 0) - want) / speed;
+            v._epLag = Math.max(0, Math.min(0.25, (v._epLag != null ? v._epLag : FOLLOW.lag) - d));
+        }
+        const plan = followPlan(v.currentTime || 0, want, nominal, since, speed);
+        try {
+            if (plan.seek) { v.currentTime = want; v._epSought = now; }
+            if (Math.abs(v.playbackRate - plan.rate) > 1e-6) v.playbackRate = plan.rate;
+            if (v.paused && !(now - (v._epPlayTry || 0) < 500)) {
+                v._epPlayTry = now;
+                const p = v.play(); if (p && p.catch) p.catch(() => {});
+            }
+        } catch (_) {}
     },
 
     /** The rate a film plays at for the moment `at`: the fps field's, times the clip's speed. */
@@ -444,6 +517,7 @@ export const EditPlayMixin = {
                 el.style.display = "block";
             } else {
                 el = slots.find((s) => s !== main && s._epUrl === url) || slots.find((s) => s !== main);
+                el._epNext = null;
                 if (el._epUrl !== url) this._editPlayLoad(el, url);
                 if (Math.abs((el.currentTime || 0) - u.local) > 0.12) { try { el.currentTime = u.local; } catch (_) {} }
                 el._epWait = (el._epWait || 0) + 1;                 // it is not waiting to become the picture
@@ -556,13 +630,16 @@ export const EditPlayMixin = {
         }));
     },
 
+    // The film's clock reads this. One window's clock, whichever window the
+    // viewer is in: a pop-out's own performance.now() begins at its opening,
+    // and a clock that jumped back there would stand still.
     _editPlayNow() {
-        const win = (this._viewerWindow && this._viewerWindow()) || window;
-        return win.performance.now();
+        return performance.now();
     },
 
     _editPlayLoad(v, url) {
         v._epUrl = url;
+        v._epNext = null;
         // Unlike a clip that is merely looked at (_setVideoSrc), this one is
         // about to be played from a known place: let it buffer.
         v.preload = "auto";
@@ -627,13 +704,39 @@ export const EditPlayMixin = {
         if (v._epUrl !== url) this._editPlayLoad(v, url);
         const to = Math.max(0, next.local - 1e-3);
         if (Math.abs((v.currentTime || 0) - to) > 1e-3) { try { v.currentTime = to; } catch (_) {} }
+        // Started a little before the cut (_editPlayPreroll), as long before as
+        // a <video> takes to get going, so that it is at its in point AT the cut.
+        const rate = this._editPlayRate(next);
+        v._epNext = { key: next.key, end: at.end, stepped: !!next.rev || rate < 0.0625 || rate > 16, rate: Math.max(0.0625, Math.min(16, rate)) };
+        if (this._ep) this._ep.nextEl = v;
+    },
+
+    // The clip after the cut, made ready in the player that is not showing, is
+    // started (silent, unseen) its start-up time before the cut: a <video> runs
+    // some 50 ms late after play(), and the clock does not wait for it. How
+    // long that is, is learnt per player from the last cut (_epLag).
+    _editPlayPreroll(at, t) {
+        const ep = this._ep;
+        const v = ep && ep.nextEl;
+        const n = v && v._epNext;
+        if (!n || v === this.videoBase || v === ep.underEl || n.stepped || Math.abs(n.end - at.end) > 1e-6) return;
+        if (!v.paused || v.seeking || v.readyState < 3) return;
+        const lag = v._epLag != null ? v._epLag : FOLLOW.lag;
+        if (t < at.end - lag / Math.max(1e-6, n.rate)) return;
+        try {
+            v.muted = true;
+            v.playbackRate = n.rate;
+            v._epPreroll = true;
+            const p = v.play(); if (p && p.catch) p.catch(() => {});
+        } catch (_) {}
     },
 
     // What is heard under the picture: the bed and the clips of the sound
-    // tracks, each from an <audio> of its own. They are kept beside the film's
-    // clock loosely - an ear forgives a tenth of a second, and seeking on every
-    // frame would click.
-    _editPlaySounds(t, playing) {
+    // tracks, each from an <audio> of its own, kept beside the film's clock
+    // (followPlan): sought where a clip starts or the film jumps (`jump`), else
+    // only nudged - a seek for a little drift plays a stretch twice, on every
+    // track at once. Run every 200 ms, every frame with keyed volumes.
+    _editPlaySounds(t, playing, jump) {
         const ep = this._ep;
         const cut = this._editPlayCut();
         if (!ep) return;
@@ -660,12 +763,25 @@ export const EditPlayMixin = {
                 if (clip && D.clipSegment(clip, u).rev) { a.pause(); return; }
                 const want = clip ? D.srcLocal(clip, u) : item.in + u;
                 const speed = clip ? D.speedOf(clip) : 1;
-                if (a.paused || Math.abs((a.currentTime || 0) - want) > 0.15 * Math.max(1, speed)) a.currentTime = want;
+                const nominal = Math.max(0.0625, Math.min(16, rate * speed));
+                // Beside the film's clock: sought when it starts or is far off,
+                // else its rate nudged - never sought for a little drift, which
+                // would play the same stretch twice on every track at once.
+                // (A file shorter than its clip has run out: silent till the clip ends, not started again.)
+                if (a.ended && a.duration > 0 && want >= a.duration - 0.05) return;
+                const now = this._editPlayNow();
+                const settling = a.seeking || a.readyState < 3;           // a seek still under way, or waiting for data
+                // The film jumped (a seek, a loop going round): to the moment, unless it is there.
+                const plan = a.paused || (jump && Math.abs((a.currentTime || 0) - want) > FOLLOW.cut) ? { seek: true, rate: nominal }
+                    : followPlan(a.currentTime || 0, want, nominal, settling ? 0 : a._epSought != null ? now - a._epSought : Infinity, speed);
+                if (plan.seek) { a.currentTime = want; a._epSought = now; }
                 // Volume keys: the sound clip's own time (clipVolume(clip, u)).
-                a.volume = Math.max(0, Math.min(1, clip ? D.clipVolume(clip, u) : item.volume)) * (this._editAudioGain ? this._editAudioGain() : 1);
-                a.playbackRate = Math.max(0.0625, Math.min(16, rate * speed));
-                if ("preservesPitch" in a) a.preservesPitch = speed === 1;
-                a.muted = speed < 0.25 || speed > 4;
+                const vol = Math.max(0, Math.min(1, clip ? D.clipVolume(clip, u) : item.volume)) * (this._editAudioGain ? this._editAudioGain() : 1);
+                if (a.volume !== vol) a.volume = vol;
+                if (Math.abs(a.playbackRate - plan.rate) > 1e-6) a.playbackRate = plan.rate;
+                if ("preservesPitch" in a && a.preservesPitch !== (speed === 1)) a.preservesPitch = speed === 1;
+                const mute = speed < 0.25 || speed > 4;
+                if (a.muted !== mute) a.muted = mute;
                 if (a.paused) { const p = a.play(); if (p && p.catch) p.catch(() => {}); }
             } catch (_) {}
         });
@@ -745,29 +861,27 @@ export const EditPlayMixin = {
         if (!cut || !ep || !ep.at) { this.stop(); return; }
         const fps = this.editPlayFps();
         const at = ep.at;
-        let t;
-        if (ep.still || ep.stepped) {
-            const now = this._editPlayNow();
-            ep.t += Math.max(0, now - ep.wall) / 1000 * ((this.fps || fps) / fps);
-            ep.wall = now;
-            t = ep.t;
-            if (ep.stepped && !ep.still && this.videoBase && at.clip) {
-                // Frame by frame: the film sought to the source moment of each new frame.
-                const f = Math.floor(t * fps + 1e-6);
-                if (f !== ep.stepFrame) {
-                    ep.stepFrame = f;
-                    const local = D.srcLocal(at.clip, (f + 0.5) / fps - at.origin);
-                    try { this.videoBase.currentTime = local; } catch (_) {}
-                }
+        // The film's clock: the wall clock since the film last jumped (ep.t at
+        // ep.wall, set by _editPlayShow), for a film as for a still. Not the
+        // clip's own currentTime: that stands still while the next clip starts
+        // at a cut, or while a <video> waits for data, and every sound track
+        // would be pulled back with it - the same stretch heard twice.
+        const now = this._editPlayNow();
+        ep.t += Math.max(0, now - ep.wall) / 1000 * ((this.fps || fps) / fps);
+        ep.wall = now;
+        let t = ep.t;
+        if (ep.stepped && !ep.still && this.videoBase && at.clip) {
+            // Frame by frame: the film sought to the source moment of each new frame.
+            const f = Math.floor(t * fps + 1e-6);
+            if (f !== ep.stepFrame) {
+                ep.stepFrame = f;
+                const local = D.srcLocal(at.clip, (f + 0.5) / fps - at.origin);
+                try { this.videoBase.currentTime = local; } catch (_) {}
             }
-        } else {
-            const v = this.videoBase;
-            // The film's clock is the clip's own: sound and picture cannot part.
-            // A retimed clip's runs at its speed; a loop's turn began at segAt.
-            const seg = at.segAt != null ? at.segAt : at.origin;
-            const base = at.base != null ? at.base : ep.in;
-            t = v.ended ? at.end : seg + Math.max(0, (v.currentTime || 0) - base) / (at.speed > 0 ? at.speed : 1);
+        } else if (!ep.still && this.videoBase) {
+            this._editPlayFollow(this.videoBase, at, t);   // the picture (and its sound) kept beside it
         }
+        if (!ep.stepped || ep.still) this._editPlayPreroll(at, t);
         const { min, max, around } = this._editPlayRange();
         const endT = (max + 1) / fps;
         // (The last clip running out is the film running out, whatever the
@@ -777,8 +891,8 @@ export const EditPlayMixin = {
             t = min / fps;                               // loop and ping-pong both go round
             this._editPlayShow(t, true);
         } else if (t >= at.end - 1e-4) {
-            t = at.end;
-            this._editPlayShow(t, false);                // the next clip's turn
+            t = Math.max(t, at.end);
+            this._editPlayShow(t, false);                // the next clip's turn (the clock runs on: what it is past the cut is kept)
         } else if (this._editPlayNow() - (ep.sndAt || 0) > 200 || ep.keyedSound) {
             this._editPlaySounds(t, true);               // a sound clip whose moment has come (keyed volumes: every frame)
         }
