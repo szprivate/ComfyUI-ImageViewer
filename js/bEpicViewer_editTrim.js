@@ -472,29 +472,37 @@ export const EditTrimMixin = {
         if (D.sameCut(next, cut)) { this._editTlSay("held: the source ends there, a clip is as short as it gets, or the next clip is there"); return true; }
         this._editTlApply(next);
         const after = this._editTlEditTime(info, next);
-        if (on) this._editTlGoFrame(Math.round(after * fps));
-        if (this._editTlTrimMode && this.editTwoUpPulse) this.editTwoUpPulse(live, next);
+        // Playing around the edit, the loop follows the cut (_editPlayRange) and the film plays on: neither the
+        // playhead nor the two-up is touched then. Stopped, the playhead stays on the cut and the two-up shows it.
+        if (on && !this.isPlaying) this._editTlGoFrame(Math.round(after * fps));
+        if (this._editTlTrimMode && this.editTwoUpPulse && !this.isPlaying) this.editTwoUpPulse(live, next);
         this._editTlSay(`${live.act.replace("-", " ")}: ${frames >= 0 ? "+" : "\u2212"}${Math.abs(frames)}f \u00b7 ${D.timecode(after, fps)}`);
         return true;
     },
 
     /**
-     * Shift+A / Shift+S: the playhead to the edit before / after, and that edit point
-     * selected (a roll where two clips meet), ready for , and . - on the track of the
-     * edit point or clip selected, else V1.
+     * Shift+S / Shift+A: through the cuts of a track in three steps each, as
+     * Resolve's edit selection - forwards LEFT (the outgoing clip's out), BOTH (a
+     * roll), RIGHT (the incoming clip's in), then the next cut's LEFT; backwards the
+     * other way round (D.editSteps / D.nextEditStep). The playhead goes to the cut,
+     * the side is marked green, and , / . trim exactly that (both: roll). On the
+     * track of the edit point or clip selected, else V1.
      */
     editTlEditStep(dir) {
         const cut = this._editTlCut;
         if (!cut || !this._editTlTransport()) return;
-        const on = this._editTlEditPoint() ? this._editTlEditPoint().sel : this._editTlSel;
+        const point = this._editTlEditPoint();
+        const on = point ? point.sel : this._editTlSel;
         const track = on && on.kind === "tclip" ? on.track : "V1";
         const fps = cut.fps || 24;
-        const stop = D.nextStop(D.editStops(cut, track), this.currentFrame || 0, dir, fps);
-        if (!stop) { this._editTlSay(dir < 0 ? "no edit before this one" : "no edit after this one"); return; }
-        this._editTlEditSel = D.stopPoint(stop);
+        const step = D.nextEditStep(D.editSteps(D.editStops(cut, track)), point, this.currentFrame || 0, dir, fps);
+        if (!step) { this._editTlSay(dir < 0 ? "no edit before this one" : "no edit after this one"); return; }
+        this._editTlEditSel = D.stepPoint(step);
         this._editTlMulti = null;
         this._editTlSel = this._editTlEditSel.sel;
-        this._editTlGoFrame(Math.round(stop.t * fps));
+        if (Math.round(step.t * fps) !== (this.currentFrame || 0)) this._editTlGoFrame(Math.round(step.t * fps));
+        this._editTlSay({ left: "the out of the clip before the cut", both: "both sides: a roll", right: "the in of the clip after the cut" }[step.state]
+                        + ` · ${D.timecode(step.t, fps)}`);
         this.editTlRefresh();
     },
 
@@ -514,8 +522,23 @@ export const EditTrimMixin = {
             if (slid) next = D.followLink(cut, slid, s);
             if (slid) slide = s;
         }
+        // Several: they move together over what is there, as a drag of them does (D.moveGroup), in both modes.
+        let group = null;
+        if (!next && list.filter((x) => x.kind !== "text").length > 1) {
+            group = D.moveGroup(cut, list, d, 0);
+            if (group) next = group.cut;
+        }
         if (!next) next = D.moveSelection(cut, list, d).cut;
-        if (D.sameCut(next, cut)) { this._editTlSay("held: a clip or the start of the film is in the way"); return; }
+        if (D.sameCut(next, cut)) { this._editTlSay(group ? "held: the start of the film" : "held: a clip or the start of the film is in the way"); return; }
+        if (group) {
+            this._editTlCut = cut;
+            this._editTlApply(next);
+            this._editTlSetSelList(group.sel, group.moved[D.selId(this._editTlSel)] || null);
+            this.editTlRefresh();
+            const fpsN = cut.fps || 24;
+            this._editTlSay(`moved ${list.length} ${frames >= 0 ? "+" : "\u2212"}${Math.abs(frames)}f` + (group.delta !== d ? ` (held at the start: ${Math.round(group.delta * fpsN)}f)` : ""));
+            return;
+        }
         this._editTlApply(next);
         if (slide && this.editTwoUpPulse) this.editTwoUpPulse({ act: "slide", sel: slide }, next);
         const span = D.isClipSel(this._editTlSel) ? D.selSpan(next, this._editTlSel) : null;
@@ -578,6 +601,23 @@ export const EditTrimMixin = {
             el.style.setProperty("--trim", EDIT_GREEN);
             el.title = `Selected edit: ${D.pointAct(info, !!this._editTlTrimMode).replace("-", " ")} - , / . trim it, E extends it to the playhead, Esc lets it go`;
         });
+        // Play around edit: in the Trim mode the window Space plays (a second either side of the cut), on the ruler.
+        const around = this._editPlayAround && this._editTlOnScreen() ? this._editPlayAround() : null;
+        if (!ui.around || !ui.around.isConnected || ui.around.parentNode !== ui.ruler) {
+            ui.around = ui.ruler.ownerDocument.createElement("div");
+            ui.around.className = "edit-around";
+            ui.around.title = "Play around edit: Space plays a second before the cut to a second after it, looped; , / . move the cut while it plays";
+            ui.ruler.append(ui.around);
+        }
+        if (!around || !lay || !(lay.total > 0)) ui.around.style.display = "none";
+        else {
+            const fps = cut.fps || 24;
+            ui.around.style.display = "block";
+            ui.around.style.left = (around.min / fps / lay.total) * 100 + "%";
+            ui.around.style.width = ((around.max + 1 - around.min) / fps / lay.total) * 100 + "%";
+            ui.around.dataset.from = String(around.min);
+            ui.around.dataset.to = String(around.max);
+        }
     },
 
     /** A dissolve's bar, pressed in its body: roll the cut under it (its edges stay the dissolve's length). */

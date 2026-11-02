@@ -2661,6 +2661,134 @@ export function moveSelection(cut, list, delta) {
 }
 
 /**
+ * `clip` laid onto the placed track `id` from `at` (an overwrite): what was there
+ * is cut away under it - covered clips go, one it overlaps is trimmed, one it
+ * falls inside is cut in two - and nothing else moves. The clip is pushed last.
+ */
+export function overwriteTrack(cut, id, clip, at) {
+    const next = copy(cut);
+    const k = trackOf(next, id);
+    if (!k) return next;
+    const a = round(Math.max(0, num(at)));
+    const b = round(a + Math.max(MIN_CLIP, num(clip.length)));
+    const kept = [];
+    for (const c0 of k.clips) {
+        const s0 = num(c0.at), e0 = round(s0 + num(c0.length));
+        if (e0 <= a + 1e-6 || s0 >= b - 1e-6) { kept.push(c0); continue; }
+        if (s0 < a - 1e-6 && a - s0 >= MIN_CLIP - 1e-6) kept.push({ ...c0, length: round(a - s0) });
+        if (e0 > b + 1e-6 && e0 - b >= MIN_CLIP - 1e-6) {
+            const tail = { ...c0 };
+            headCut(tail, b - s0);
+            tail.length = round(e0 - b);
+            tail.at = b;
+            if (s0 < a - 1e-6) { delete tail.link; delete tail.unlinked; }
+            if (c0.fx) tail.fx = { ...c0.fx };
+            kept.push(tail);
+        }
+    }
+    const mine = { ...clip, at: a };
+    delete mine.gap; delete mine.transition;
+    kept.push(mine);
+    k.clips = kept;
+    return settle(next);
+}
+
+/**
+ * Several selected clips moved together, as Resolve's Selection mode moves them:
+ * every one by the same `delta` seconds (held only at the start of the film) and
+ * the same number of track `rows` on screen (positive: down - a picture towards
+ * V1, a sound further down; a picture stays on a video track, a sound on a sound
+ * track; past the top video or the bottom sound track a new track is made). They
+ * are lifted first - gaps stay where they were - then laid down OVER what is at
+ * their new place (overwriteV1 / overwriteTrack: covered clips go, overlapped ones
+ * are trimmed, one a clip falls inside is split). A linked partner that was not
+ * selected itself goes along in time, on its own track. Texts move in time.
+ * Returns { cut, sel (the moved items' new selections), moved ({ oldId: sel }),
+ * delta, rows } - or null when it would leave V1 without a shot.
+ */
+export function moveGroup(cut, list, delta, rows = 0) {
+    const chosen = pruneSel(cut, list).filter((s) => isClipSel(s) || s.kind === "text");
+    const items = withPartners(cut, chosen).filter((s) => isClipSel(s) || s.kind === "text");
+    if (!items.length) return null;
+    const own = new Set(chosen.map(selId));
+    const vids = ["V1", ...((cut.tracks || []).filter((k) => k.kind !== "audio").map((k) => k.id))];   // bottom up
+    const auds = (cut.tracks || []).filter((k) => k.kind === "audio").map((k) => k.id);                 // top down
+    const starts = clipStarts(cut);
+    const startOf = (s) => (s.kind === "clip" ? starts[s.i] : s.kind === "text" ? num(cut.texts[s.i].start) : num(clipOf(cut, s).at));
+    const trackId = (s) => (s.kind === "clip" ? "V1" : s.track);
+    const d = round(Math.max(num(delta), -Math.min(...items.map(startOf))));
+    // The rows held per kind: no picture below V1, no sound above the first sound track. A
+    // mixed group moved up takes its pictures up and leaves its sounds on the top sound track.
+    const r0 = Math.round(num(rows));
+    let rv = r0, ra = r0;
+    for (const s of items) {
+        if (!own.has(selId(s)) || s.kind === "text") continue;
+        const v = vids.indexOf(trackId(s)), u = auds.indexOf(trackId(s));
+        if (v >= 0) rv = Math.min(rv, v);
+        if (u >= 0) ra = Math.max(ra, -u) || 0;
+    }
+    // Lifted: V1 from the end (what follows stays where it is), the tracks from the end.
+    let next = copy(cut);
+    const v1 = items.filter((s) => s.kind === "clip").map((s) => s.i).sort((a, b) => b - a);
+    const moving = items.filter((s) => s.kind !== "text").map((s, k) => ({ s, k, c: { ...clipOf(cut, s), __mv: k }, at: round(startOf(s) + d) }));
+    // What stays on V1 stays where it was: each one's gap (or dissolve) from where the one before it now ends.
+    const gone = new Set(v1);
+    const stay = cut.clips.map((_, j) => j).filter((j) => !gone.has(j));
+    next.clips = stay.map((j) => ({ ...cut.clips[j] }));
+    let end = 0;
+    stay.forEach((j, k) => {
+        const c = next.clips[k];
+        const g = round(starts[j] - end);
+        if (g >= 0 || !k) { c.gap = Math.max(0, g); c.transition = 0; } else { c.gap = 0; c.transition = -g; }
+        end = Math.max(end, round(starts[j] + num(c.length)));
+    });
+    for (const k of next.tracks) {
+        const gone = new Set(items.filter((s) => s.kind === "tclip" && s.track === k.id).map((s) => s.i));
+        k.clips = k.clips.filter((_, j) => !gone.has(j));
+    }
+    for (const s of items) if (s.kind === "text") next.texts[s.i].start = round(num(next.texts[s.i].start) + d);
+    // Where each goes: the same rows down (or up) on its own kind of track; a partner on its own track.
+    const dest = (m) => {
+        const id = trackId(m.s);
+        if (!own.has(selId(m.s))) return id;
+        const v = vids.indexOf(id);
+        if (v >= 0) return rv ? v - rv : id;            // an index past the top: a new video track
+        const u = auds.indexOf(id);
+        return u >= 0 && ra ? { audio: u + ra } : id;
+    };
+    const want = moving.map((m) => ({ ...m, to: dest(m) }));
+    const topV = Math.max(-1, ...want.filter((m) => typeof m.to === "number").map((m) => m.to));
+    const lowA = Math.max(-1, ...want.filter((m) => m.to && m.to.audio !== undefined).map((m) => m.to.audio));
+    const vlist = [...vids], alist = [...auds];
+    while (vlist.length <= topV) { next = addTrack(next, "video"); vlist.push(next.tracks[next.tracks.length - 1].id); }
+    while (alist.length <= lowA) { next = addTrack(next, "audio"); alist.push(next.tracks[next.tracks.length - 1].id); }
+    // Laid down from the earliest: over what is there.
+    want.sort((x, y) => x.at - y.at);
+    for (const m of want) {
+        const id = typeof m.to === "number" ? vlist[m.to] : m.to && m.to.audio !== undefined ? alist[m.to.audio] : m.to;
+        if (id === "V1") next = overwriteV1(next, m.c, m.at).cut;
+        else next = overwriteTrack(next, id, m.c, m.at);
+    }
+    if (!next.clips.length) return null;
+    // Find them again, and take the marks off.
+    const moved = {}, sel = [];
+    const found = (c, s) => {
+        if (c.__mv === undefined) return;
+        const m = moving[c.__mv];
+        delete c.__mv;
+        moved[selId(m.s)] = s;
+        if (own.has(selId(m.s))) sel.push(s);
+    };
+    next.clips.forEach((c, i) => found(c, { kind: "clip", i }));
+    for (const k of next.tracks) k.clips.forEach((c, i) => found(c, { kind: "tclip", track: k.id, i }));
+    for (const s of items) if (s.kind === "text") { moved[selId(s)] = s; if (own.has(selId(s))) sel.push(s); }
+    const hasV = want.some((m) => own.has(selId(m.s)) && vids.includes(trackId(m.s)));
+    const hasA = want.some((m) => own.has(selId(m.s)) && auds.includes(trackId(m.s)));
+    const rowsOut = hasV && hasA ? (r0 > 0 ? Math.max(rv, ra) : Math.min(rv, ra)) : hasV ? rv : hasA ? ra : 0;
+    return { cut: settle(next), sel, moved, delta: d, rows: rowsOut, rowsVideo: hasV ? rv : 0, rowsAudio: hasA ? ra : 0 };
+}
+
+/**
  * What a marquee over `rows` (track ids, "V1", "T", "A1" among them) from `from`
  * to `to` seconds touches, as a selection list: clips, texts and the bed.
  */
@@ -2890,4 +3018,59 @@ export function twoUpFrames(cut, info, fps) {
     }
     if (!left && !right) return null;
     return { act, left, right };
+}
+
+// ── Shift+A / Shift+S: each cut in three steps ───────────────────────────────
+
+/**
+ * The steps Shift+S walks through, in order: at every edit stop of a track, its
+ * LEFT side (the outgoing clip's out), then BOTH (a roll, where two clips meet),
+ * then its RIGHT side (the incoming clip's in) - only the ones that are there.
+ * [{ t, stop, state: "left" | "both" | "right" }].
+ */
+export function editSteps(stops) {
+    const out = [];
+    for (const st of stops || []) {
+        if (st.a) out.push({ t: st.t, stop: st, state: "left" });
+        if (st.a && st.b) out.push({ t: st.t, stop: st, state: "both" });
+        if (st.b) out.push({ t: st.t, stop: st, state: "right" });
+    }
+    return out;
+}
+
+/** A step as a selected edit point: left - the outgoing edge, right - the incoming one, both - a roll. */
+export function stepPoint(step) {
+    const st = step.stop;
+    if (step.state === "both") return { act: "roll", sel: st.b, side: "start", a: st.a, b: st.b };
+    if (step.state === "left") return { act: "trim-out", sel: st.a, side: "end" };
+    return { act: "trim-in", sel: st.b, side: "start" };
+}
+
+/** The state of a selected edit point: "both" for a roll, "left" for an out-edge, "right" for an in-edge. */
+export function pointState(point) {
+    if (!point) return "";
+    return point.act === "roll" ? "both" : point.side === "end" ? "left" : "right";
+}
+
+/**
+ * The next step from where things stand (`dir` 1: Shift+S, -1: Shift+A). With a
+ * selected edit point `point` at one of the steps, the one after (before) it;
+ * without one, from the playhead's frame `from`: forwards the first step at or
+ * after it (a cut the playhead stands on starts at its LEFT), backwards the last
+ * at or before it (its RIGHT). Null at either end.
+ */
+export function nextEditStep(steps, point, from, dir, fps) {
+    const rate = num(fps) > 0 ? num(fps) : 24;
+    const f = (s) => Math.round(num(s.t) * rate);
+    const state = pointState(point);
+    let k = -1;
+    if (point) {
+        const ids = [point.sel, point.a, point.b].filter(Boolean).map(selId);
+        k = steps.findIndex((s) => s.state === state && [s.stop.a, s.stop.b].filter(Boolean).some((x) => ids.includes(selId(x))) && (
+            (state === "left" && sameSel(s.stop.a, point.sel)) || (state === "right" && sameSel(s.stop.b, point.sel)) ||
+            (state === "both" && sameSel(s.stop.a, point.a) && sameSel(s.stop.b, point.b))));
+    }
+    if (k >= 0) return steps[k + (dir < 0 ? -1 : 1)] || null;
+    if (dir < 0) { const before = steps.filter((s) => f(s) <= from); return before[before.length - 1] || null; }
+    return steps.find((s) => f(s) >= from) || null;
 }

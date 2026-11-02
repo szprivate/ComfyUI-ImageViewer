@@ -166,3 +166,84 @@ test("the two-up frames: roll, ripple out / in, slip, slide - with retime and lo
     const first = D.twoUpFrames(cut, { act: "ripple-in", sel: { kind: "clip", i: 0 }, side: "start" }, fps);
     assert.equal(first.left, null);
 });
+
+// ── several clips moved together (Selection mode: over what is there) ──
+
+const four = () => ({ ...D.emptyCut("g"), clips: [shot("a", 2), shot("b", 2), shot("c", 2), shot("d", 2)],
+    tracks: [{ id: "V2", kind: "video", name: "V2", off: false, clips: [{ file: "v", name: "v", in: 0, length: 2, at: 1 }] },
+             { id: "A2", kind: "audio", name: "A2", off: false, clips: [{ file: "s", name: "s", in: 0, length: 2, at: 6 }] }] });
+const lay = (c) => ({ v1: c.clips.map((x, i) => [x.file, D.clipStarts(c)[i], x.length, x.in]),
+                      tr: Object.fromEntries(c.tracks.map((k) => [k.id, k.clips.map((x) => [x.file, x.at, x.length])])) });
+
+test("a group moved left passes the clip before it and lies over it; held only at 0", () => {
+    const g = D.moveGroup(four(), [{ kind: "clip", i: 2 }, { kind: "clip", i: 3 }], -3);
+    assert.deepEqual(lay(g.cut).v1, [["a", 0, 1, 0], ["c", 1, 2, 0], ["d", 3, 2, 0]]);       // b covered, a cut back
+    assert.deepEqual(g.sel, [{ kind: "clip", i: 1 }, { kind: "clip", i: 2 }]);
+    const held = D.moveGroup(four(), [{ kind: "clip", i: 2 }, { kind: "clip", i: 3 }], -10);
+    assert.equal(held.delta, -4);
+});
+
+test("a group moved right leaves gaps and cuts what it falls on; the clips not moving stay put", () => {
+    const g = D.moveGroup(four(), [{ kind: "clip", i: 0 }, { kind: "tclip", track: "A2", i: 0 }], 3);
+    assert.deepEqual(lay(g.cut).v1, [["b", 2, 1, 0], ["a", 3, 2, 0], ["c", 5, 1, 1], ["d", 6, 2, 0]]);
+    assert.deepEqual(lay(g.cut).tr.A2, [["s", 9, 2]]);
+    const far = D.moveGroup(four(), [{ kind: "clip", i: 0 }, { kind: "clip", i: 1 }], 5);
+    assert.deepEqual(lay(far.cut).v1.map((x) => [x[0], x[1]]), [["c", 4], ["a", 5], ["b", 7]]);   // c's head stays, d covered
+});
+
+test("a group moved by rows: pictures on video tracks (a new one past the top), sounds on sound tracks; a partner follows in time", () => {
+    const up = D.moveGroup(four(), [{ kind: "clip", i: 1 }, { kind: "tclip", track: "V2", i: 0 }], 0, -1);
+    assert.deepEqual(lay(up.cut).tr.V2, [["b", 2, 2]]);
+    assert.deepEqual(lay(up.cut).tr.V3, [["v", 1, 2]]);
+    assert.equal(up.rows, -1);
+    const down = D.moveGroup(four(), [{ kind: "tclip", track: "A2", i: 0 }], 0, 1);
+    assert.deepEqual(lay(down.cut).tr.A3, [["s", 6, 2]]);
+    const low = D.moveGroup(four(), [{ kind: "clip", i: 1 }], 0, 3);
+    assert.equal(low.rows, 0, "nothing below V1");
+    const linked = { ...four(), clips: four().clips.map((c, i) => (i === 0 ? { ...c, link: "L1", mute: true } : c)),
+        tracks: [four().tracks[0], { ...four().tracks[1], clips: [{ file: "a", name: "a", in: 0, length: 2, at: 0, link: "L1" }] }] };
+    const g = D.moveGroup(linked, [{ kind: "clip", i: 0 }, { kind: "clip", i: 2 }], 1, -1);
+    assert.deepEqual(lay(g.cut).tr.A2, [["a", 1, 2]], "the sound went along in time, on its own track");
+});
+
+test("a mixed group moved by rows: the pictures go, the sounds stay on sound tracks (and the other way round)", () => {
+    const up = D.moveGroup(four(), [{ kind: "clip", i: 1 }, { kind: "tclip", track: "A2", i: 0 }], 0, -1);
+    assert.deepEqual([up.rowsVideo, up.rowsAudio], [-1, 0]);
+    assert.deepEqual(lay(up.cut).tr.V2.map((x) => x[0]).sort(), ["b", "v"]);
+    assert.deepEqual(lay(up.cut).tr.A2, [["s", 6, 2]]);
+    const down = D.moveGroup(four(), [{ kind: "clip", i: 1 }, { kind: "tclip", track: "A2", i: 0 }], 0, 1);
+    assert.deepEqual([down.rowsVideo, down.rowsAudio], [0, 1]);
+    assert.deepEqual(lay(down.cut).tr.A3, [["s", 6, 2]]);
+    assert.equal(lay(down.cut).v1[1][0], "b");
+});
+
+// ── Shift+S / Shift+A: three steps per cut ──
+
+test("Shift+S walks LEFT, BOTH, RIGHT through each cut and Shift+A back; the ends; from the playhead", () => {
+    const cut = { ...D.emptyCut("e"), clips: [shot("a", 2), shot("b", 2), shot("c", 2, { gap: 1 })] };
+    const steps = D.editSteps(D.editStops(cut, "V1"));
+    // 0: a's in; 2: a | b; 4: b's out; 5: c's in; 7: c's out.
+    assert.deepEqual(steps.map((s) => [s.t, s.state]),
+        [[0, "right"], [2, "left"], [2, "both"], [2, "right"], [4, "left"], [5, "right"], [7, "left"]]);
+    const walk = (dir, n, start = null, from = 0) => {
+        let p = start, out = [];
+        for (let k = 0; k < n; k++) {
+            const s = D.nextEditStep(steps, p, from, dir, 24);
+            if (!s) { out.push(null); break; }
+            p = D.stepPoint(s);
+            out.push([s.t, s.state, p.act]);
+        }
+        return out;
+    };
+    assert.deepEqual(walk(1, 4, null, 24), [[2, "left", "trim-out"], [2, "both", "roll"], [2, "right", "trim-in"], [4, "left", "trim-out"]]);
+    assert.deepEqual(walk(-1, 4, null, 48), [[2, "right", "trim-in"], [2, "both", "roll"], [2, "left", "trim-out"], [0, "right", "trim-in"]]);
+    // From the last step forwards: none; from the first backwards: none.
+    assert.equal(D.nextEditStep(steps, D.stepPoint(steps[steps.length - 1]), 0, 1, 24), null);
+    assert.equal(D.nextEditStep(steps, D.stepPoint(steps[0]), 0, -1, 24), null);
+    // A selected roll goes on to the right side; a selected in-edge back to both.
+    const roll = D.stepPoint(steps[2]);
+    assert.equal(D.nextEditStep(steps, roll, 0, 1, 24).state, "right");
+    assert.equal(D.nextEditStep(steps, D.stepPoint(steps[3]), 0, -1, 24).state, "both");
+    assert.equal(D.pointAct(D.stepPoint(steps[1]), true), "ripple-out");
+    assert.equal(D.pointAct(D.stepPoint(steps[3]), false), "trim-in");
+});

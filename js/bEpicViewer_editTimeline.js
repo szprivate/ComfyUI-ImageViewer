@@ -1429,7 +1429,16 @@ export const EditTimelineMixin = {
         return D.transferClip(start, sel, onto, at, { ripple });
     },
 
-    // Several selected, one of them pressed in Selection mode: all go along the film together, the pressed one snapping.
+    /**
+     * Several selected, one of them pressed in Selection mode: all of them move
+     * together, as Resolve's - the same time (the pressed one's edges snapping)
+     * and the same number of tracks up or down, each on its own kind of track
+     * (past the top video / bottom sound track: a new one). They pass over the
+     * clips that are not moving and lie OVER what is at their new place (D.moveGroup:
+     * covered clips go, overlapped ones are trimmed or split); gaps stay where
+     * they were; held only at the film's start. One undo step. (The Trim mode's
+     * body press slips / slides the pressed clip, as Resolve's does.)
+     */
     _editTlGroupDown(e, el, sel) {
         const list = this._editTlSelAll();
         if (list.length < 2 || !list.some((s) => D.sameSel(s, sel))) return false;
@@ -1440,19 +1449,50 @@ export const EditTimelineMixin = {
         const start = this._editTlCut;
         const span = D.selSpan(start, sel);
         const exclude = list.flatMap((s) => D.snapExclude(start, s));
+        const from = this._editTlRowIndex(sel.kind === "clip" ? "V1" : sel.kind === "tclip" ? sel.track : "");
         this._editTlSel = sel;
         this._editTlEditSel = null;
-        this._editTlDrag(e, el, (seconds) => {
+        this._editTlDrag(e, el, (seconds, ev) => {
             const at = Math.max(0, this._editTlSnapSpanAt(span.start + seconds, span.end - span.start, exclude));
-            const got = D.moveSelection(start, list, at - span.start);
+            const rows = from ? this._editTlRowsMoved(from, ev) : 0;
+            const got = D.moveGroup(start, list, at - span.start, rows);
+            if (!got) { this._editTlCut = start; this._editTlSetSelList(list, sel); this.editTlRefresh(); return; }
             if (Math.abs(got.delta - (at - span.start)) > 1e-6) this._editTlSnapLine(null);       // held: it is not where the line says
             this._editTlCut = got.cut;
+            this._editTlSetSelList(got.sel, got.moved[D.selId(sel)] || null);
             this.editTlRefresh();
         }, (moved) => {
-            if (!moved) { this._editTlMulti = null; this._editTlSel = sel; this._editTlSeek(span.start); }
+            if (!moved) { this._editTlCut = start; this._editTlMulti = null; this._editTlSel = sel; this._editTlSeek(span.start); }
             this.editTlRefresh();
         });
         return true;
+    },
+
+    /** A track's row among the rows of its kind, top down: { kind, i, n } - sound tracks without A1 (the bed). */
+    _editTlRowIndex(track) {
+        const ui = this._editTlUi;
+        if (!ui || !track) return null;
+        const rows = [...ui.rows.querySelectorAll(".edit-track")];
+        const row = rows.find((r) => r.dataset.track === track);
+        if (!row) return null;
+        const kind = row.classList.contains("edit-k-audio") ? "audio" : "video";
+        const same = rows.filter((r) => r.classList.contains("edit-k-" + kind) && r.dataset.track !== "A1");
+        return { kind, i: same.indexOf(row), n: same.length, ids: same.map((r) => r.dataset.track) };
+    },
+
+    /** How many rows of its own kind a drag from row `from` has gone down (negative: up); past the end, into the room: one more. */
+    _editTlRowsMoved(from, ev) {
+        const room = this._editTlRoomAt(ev.clientY);
+        if (room === from.kind) return from.kind === "video" ? -1 - from.i : from.n - from.i;
+        // The rows as they are now (a redraw during the drag replaces the elements).
+        const all = [...this._editTlUi.rows.querySelectorAll(".edit-track")];
+        const ys = from.ids.map((id) => all.find((r) => r.dataset.track === id)).filter(Boolean).map((r) => r.getBoundingClientRect());
+        const k = ys.findIndex((b) => ev.clientY >= b.top && ev.clientY < b.bottom);
+        if (k >= 0) return k - from.i;
+        if (!ys.length) return 0;
+        if (ev.clientY < ys[0].top) return from.kind === "video" ? -from.i : 0;      // above its own kind: the top one
+        if (ev.clientY >= ys[ys.length - 1].bottom) return from.kind === "audio" ? from.n - 1 - from.i : 0;
+        return 0;
     },
 
     // The music bed under the film: selected, alone or with others.

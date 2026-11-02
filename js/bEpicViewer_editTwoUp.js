@@ -75,7 +75,8 @@ export const EditTwoUpMixin = {
      * and only while the cut is the tab on screen.
      */
     editTwoUpShow(info, cut) {
-        if (!this._editTlTrimMode || !info || !this._editTlOnScreen || !this._editTlOnScreen()) { this.editTwoUpHide(); return; }
+        // Not while the cut plays (play around edit shows the film itself, as Resolve's does).
+        if (!this._editTlTrimMode || !info || this.isPlaying || !this._editTlOnScreen || !this._editTlOnScreen()) { this.editTwoUpHide(); return; }
         const c = cut || this._editTlCut;
         const fps = (c && c.fps) || 24;
         const fr = D.twoUpFrames(c, info, fps);

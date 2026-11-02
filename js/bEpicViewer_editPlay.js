@@ -47,6 +47,8 @@
 import * as D from "./bEpicViewer_editTimelineData.js";
 
 const PREFIX = "edit:";
+// Play around edit (the Trim mode, an edit point selected): this many seconds before and after the cut.
+export const PLAY_AROUND = 1;
 
 export const EditPlayMixin = {
 
@@ -651,7 +653,27 @@ export const EditPlayMixin = {
 
     // ── playing ──────────────────────────────────────────────────────────────
 
+    /**
+     * The frames played. In the Trim mode with an edit point selected, the cut is
+     * played AROUND (Resolve's play around edit): PLAY_AROUND seconds before it
+     * to as many after it, looped - asked anew every frame, so a nudge with , / .
+     * while it plays moves the loop with the cut. Held to the film; leaving the
+     * Trim mode or the edit point gives the in / out back.
+     */
+    _editPlayAround() {
+        const info = this._editTlTrimMode && this._editTlEditPoint ? this._editTlEditPoint() : null;
+        const cut = this._editPlayCut();
+        if (!info || !cut) return null;
+        const fps = this.editPlayFps();
+        const at = Math.round(this._editTlEditTime(info, cut) * fps);
+        const bounds = this.getTimelineBounds();
+        const pad = Math.round(PLAY_AROUND * fps);
+        return { min: Math.max(bounds.min, at - pad), max: Math.min(bounds.max, at + pad - 1), at };
+    },
+
     _editPlayRange() {
+        const around = this._editPlayAround();
+        if (around) return { min: around.min, max: around.max, around: true };
         const bounds = this.getTimelineBounds();
         let min = bounds.min, max = bounds.max;
         if (this.playbackRange) {
@@ -668,9 +690,10 @@ export const EditPlayMixin = {
         this.isPlaying = true;
         if (this._eaSilence) this._eaSilence();               // no scrub grains under playback
         this._setIcon(this.playBtn, "icon-pause");
-        const { min, max } = this._editPlayRange();
-        // Outside the range, or standing on its last frame: from its start.
-        const from = (this.currentFrame < min || this.currentFrame >= max) ? min : this.currentFrame;
+        const { min, max, around } = this._editPlayRange();
+        // Outside the range, or standing on its last frame: from its start. Around an edit: from its pre-roll.
+        const from = (around || this.currentFrame < min || this.currentFrame >= max) ? min : this.currentFrame;
+        if (around && this.editTwoUpHide) this.editTwoUpHide();          // playing shows the film, not the two-up
         this.editPlaySetFrame(from);
         const win = (this._viewerWindow && this._viewerWindow()) || window;
         const tick = () => {
@@ -723,12 +746,12 @@ export const EditPlayMixin = {
             const base = at.base != null ? at.base : ep.in;
             t = v.ended ? at.end : seg + Math.max(0, (v.currentTime || 0) - base) / (at.speed > 0 ? at.speed : 1);
         }
-        const { min, max } = this._editPlayRange();
+        const { min, max, around } = this._editPlayRange();
         const endT = (max + 1) / fps;
         // (The last clip running out is the film running out, whatever the
         // frame count was rounded to.)
         if (t >= endT - 1e-4 || (t >= at.end - 1e-4 && at.end >= D.filmLength(cut) - 1e-3)) {
-            if (this.loopMode === "once") { this.stop(); this.editPlaySetFrame(max); return; }
+            if (this.loopMode === "once" && !around) { this.stop(); this.editPlaySetFrame(max); return; }
             t = min / fps;                               // loop and ping-pong both go round
             this._editPlayShow(t, true);
         } else if (t >= at.end - 1e-4) {

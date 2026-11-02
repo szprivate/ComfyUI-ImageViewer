@@ -20,7 +20,9 @@
 //   , .          an edit point selected: trim it a frame (Shift: a second), rippling in
 //                the Trim mode; else MOVE the selected clips - never snapped
 //   Alt+, Alt+.  slip the selected clip a frame of its source (Shift: a second)
-//   Shift+A / S  the edit before / after, selected (a roll where two clips meet); Esc lets it go
+//   Shift+S / A  through the cuts, three steps each: the left side (the outgoing out), both (a roll), the right
+//                side (the incoming in), then the next cut - Shift+A the other way; Esc lets it go
+//   Space        in the Trim mode with a cut selected: play around edit (1 s either side, looped)
 //   Shift+R      the selected clip back at 100 % speed
 //   Ctrl+L       one more turn of its loop (Ctrl+Shift+L: ping-pong)
 //   X            in and out around the selected clip (else the shot under the playhead)
@@ -52,7 +54,8 @@ export const EDIT_KEYS = [
     ["Ctrl+click, Shift+click", "Select several, on any tracks: picture, sound, the music, texts"],
     ["Drag from an empty place", "Marquee: everything it touches, on all tracks, is selected (Shift: added); drag one of them: all move"],
     ["Click a cut", "Selects that edit point, green on what moves, in every mode: its outgoing edge, its incoming edge, or the middle (a roll)"],
-    ["Shift+A / Shift+S", "Go to the edit before / after and select it (a roll where two clips meet), on the selected clip's track, else V1"],
+    ["Shift+S / Shift+A", "Step through the cuts, three steps each: Shift+S the out of the clip before (left), both sides (a roll), the in of the clip after (right), then the next cut; Shift+A back. On the selected clip's track, else V1"],
+    ["Space in the Trim mode, a cut selected", "Play around edit: a second before the cut to a second after it, looped; , / . move the cut while it plays"],
     ["Esc", "Let go of the edit point, then of the selection"],
     ["Ctrl+Alt+L", "Unlink a film's sound onto a sound track / relink it, from either part (the offset stays; right-click: Resync, Merge audio back into clip)"],
     ["Ctrl+S", "Save the cut: the bar then says where it went"],
@@ -72,7 +75,8 @@ export const EDIT_KEYS = [
     ["Middle of a cut", "Roll: move the cut, the film keeps its length"],
     ["Alt+drag", "Slip: same place and length, another part of the source"],
     [", / .", "An edit point selected: trim it a frame (Shift: a second) - Trim mode ripples, Selection opens or closes a gap"],
-    [", / . on a clip", "Move the selected clips a frame (Shift: a second). Selection: into a gap, stopping at the next clip. Trim: one clip slides"],
+    [", / . on a clip", "Move the selected clips a frame (Shift: a second). Selection: into a gap, stopping at the next clip. Trim: one clip slides. Several: all move, over what is there"],
+    ["Drag one of several selected", "All move together - in time and up / down by tracks - over the clips they land on, leaving gaps (Selection mode)"],
     ["Alt+, / Alt+.", "Slip the selected clip a frame (Shift: a second)"],
     ["Alt+Shift+drag", "Slide (V1): the shot moves, its neighbours give and take"],
     ["Alt+drag an edge", "Retime: the source stays, the speed fills the new length"],

@@ -1762,3 +1762,5 @@ textarea.param-input {
 .edit-twoup-label { flex: 0 0 auto; text-align: center; font: 11px/1.4 ui-monospace, Consolas, monospace; color: #cfd8dc; background: rgba(0,0,0,.6); padding: 2px 6px; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .edit-twoup-side[data-side="left"] .edit-twoup-pic { box-shadow: inset -2px 0 0 #ffe14d; }
 .edit-twoup-side[data-side="right"] .edit-twoup-pic { box-shadow: inset 2px 0 0 #ffe14d; }
+/* Play around edit (Trim mode, an edit point selected): the window Space loops, on the ruler. */
+.edit-around { position: absolute; top: 0; bottom: 0; background: rgba(53, 224, 111, .16); border-left: 1px solid rgba(53, 224, 111, .7); border-right: 1px solid rgba(53, 224, 111, .7); pointer-events: none; z-index: 1; }
