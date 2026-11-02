@@ -217,7 +217,7 @@ def _clip_pieces(c, u0, u1, at, rate, info, track, enabled=True):
     return [{"file": c.get("file") or "", "name": str(c.get("name") or os.path.basename(c.get("file") or "")),
              "start": at + a, "dur": b - a, "src": src, "speed": speed, "still": still,
              "volume": float(c.get("volume", 1.0) if c.get("volume") is not None else 1.0),
-             "mute": bool(c.get("mute")), "fx": c.get("fx") or {}, "enabled": enabled, "track": track,
+             "mute": bool(c.get("mute")), "fx": c.get("fx") or {}, "enabled": enabled and not c.get("disabled"), "track": track,
              "looped": bool(c.get("loop"))} for a, b, src, speed in turns]
 
 

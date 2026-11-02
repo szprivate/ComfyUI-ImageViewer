@@ -1764,3 +1764,7 @@ textarea.param-input {
 .edit-twoup-side[data-side="right"] .edit-twoup-pic { box-shadow: inset 2px 0 0 #ffe14d; }
 /* Play around edit (Trim mode, an edit point selected): the window Space loops, on the ruler. */
 .edit-around { position: absolute; top: 0; bottom: 0; background: rgba(53, 224, 111, .16); border-left: 1px solid rgba(53, 224, 111, .7); border-right: 1px solid rgba(53, 224, 111, .7); pointer-events: none; z-index: 1; }
+/* A disabled clip (D): there, dimmed, its strip and waveform greyed - not seen, not heard, not rendered. */
+.edit-shot.disabled { opacity: .42; }
+.edit-shot.disabled .edit-media { filter: grayscale(1) brightness(.7); }
+.edit-shot.disabled .edit-label { text-decoration: line-through; }

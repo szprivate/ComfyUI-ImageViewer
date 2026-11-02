@@ -801,7 +801,7 @@ export const EditTimelineMixin = {
             } else if (row.id === "V1") {
                 for (const s of lay.shots) {
                     const b = block("edit-shot" + (picked("clip", s.i) ? " sel" : "") + also("clip", s.i)
-                        + (Number.isInteger(cut.clips[s.i].ref) ? "" : " new"), s, s.name);
+                        + (Number.isInteger(cut.clips[s.i].ref) ? "" : " new") + (cut.clips[s.i].disabled ? " disabled" : ""), s, s.name);
                     b.dataset.key = "V1:" + s.i;
                     b._media = { file: cut.clips[s.i].file, in: Number(cut.clips[s.i].in) || 0, length: s.length,
                                  row: "video", volume: cut.clips[s.i].volume, clip: cut.clips[s.i] };
@@ -849,8 +849,9 @@ export const EditTimelineMixin = {
                 }
             } else {
                 for (const c of row.track.items) {
+                    const tclip = D.trackOf(cut, row.id).clips[c.i];
                     const b = block((row.kind === "audio" ? "edit-shot edit-sclip" : "edit-shot edit-tclip")
-                        + (picked("tclip", c.i, row.id) ? " sel" : "") + also("tclip", c.i, row.id), c, c.name);
+                        + (picked("tclip", c.i, row.id) ? " sel" : "") + also("tclip", c.i, row.id) + (tclip && tclip.disabled ? " disabled" : ""), c, c.name);
                     b.dataset.key = row.id + ":" + c.i;
                     const tc = row.track.items[c.i] && D.trackOf(cut, row.id).clips[c.i];
                     b._media = { file: tc.file, in: Number(tc.in) || 0, length: c.length, row: row.kind, volume: tc.volume, clip: tc };
@@ -1085,6 +1086,8 @@ export const EditTimelineMixin = {
         }
         if (sel.kind === "clip" || sel.kind === "tclip") {
             entries.push({ label: "Split at the playhead", disabled: !this._editTlOnScreen(), run: () => this.editTlSplitAtPlayhead() });
+            const off = !!(D.clipOf(this._editTlCut, sel) || {}).disabled;
+            entries.push({ label: off ? "Enable clip (D)" : "Disable clip (D)", run: () => this.editTlDisableToggle() });
             const many = this._editTlSelList().length;
             entries.push("-", { label: many > 1 ? `Recreate ${many} shots with changes…` : "Recreate with changes…",
                                 run: () => this.editTlRecreateDialog(sel) });
@@ -1826,6 +1829,23 @@ export const EditTimelineMixin = {
         this._editTlBlade = on === undefined ? !this._editTlBlade : !!on;
         if (!this._editTlBlade) this._editTlBladeHover(null);
         this.editTlRefresh();
+    },
+
+    /**
+     * D: the selected clips switched off - or on again (Resolve's Clip Enable),
+     * their linked partners with them unless unlinked (D.toggleDisabled). A
+     * disabled clip is dimmed, not seen and not heard, and not rendered. One step.
+     */
+    editTlDisableToggle() {
+        const cut = this._editTlCut;
+        const list = this._editTlSelAll().filter(D.isClipSel);
+        if (!cut || !list.length) { this._editTlSay("select a clip to disable it (D)"); return; }
+        const got = D.toggleDisabled(cut, list);
+        if (!got) return;
+        const primary = this._editTlSel;
+        this._editTlApply(got.cut);
+        if (list.length > 1) this._editTlSetSelList(list, primary);
+        this._editTlSay(`${got.count} clip(s) ${got.off ? "disabled: not seen, not heard, not rendered" : "enabled again"}`);
     },
 
     /** The mode, as Resolve's: "select" (A, the default), "trim" (T) - either puts the blade (B) away. */

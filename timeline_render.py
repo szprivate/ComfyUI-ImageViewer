@@ -546,23 +546,41 @@ def read_cut(doc):
     children = video.get("children") or []
     about = _note(doc)
     clips = []
-    for c in edit["clips"]:
+    cut_in = False                          # the clip before was switched off: this one comes in with a cut
+    listed = edit["clips"]
+    for idx, c in enumerate(listed):
         note = _note(children[c["ref"]]) if 0 <= c["ref"] < len(children) else {}
-        if float(c.get("gap") or 0) > 0:
+        gapped = float(c.get("gap") or 0) > 0
+        if gapped:
             # Empty time on V1 before the clip: a "blank" clip of that length, no file.
             clips.append({"blank": True, "file": "", "in": 0.0, "length": float(c["gap"]), "transition": 0.0,
                           "name": "gap"})
+        if c.get("disabled"):
+            # Switched off: a gap where it is (as the Edit tab plays it, pictureAt). Its dissolves become
+            # cuts - the clip going out plays to where it began to dissolve, the one coming in from its start.
+            t1 = 0.0 if (gapped or cut_in) else float(c.get("transition") or 0)
+            after = listed[idx + 1] if idx + 1 < len(listed) else None
+            t2 = float(after.get("transition") or 0) if after and not float(after.get("gap") or 0) > 0 else 0.0
+            length = float(c["length"]) - t1 - t2
+            if length > 1e-6:
+                clips.append({"blank": True, "file": "", "in": 0.0, "length": length, "transition": 0.0,
+                              "name": "off: " + str(c.get("name") or "")})
+            cut_in = True
+            continue
         clips.append({"file": c["file"], "in": c["in"], "length": c["length"],
-                      "transition": 0.0 if float(c.get("gap") or 0) > 0 else c["transition"], "name": c["name"],
+                      "transition": 0.0 if gapped or cut_in else c["transition"], "name": c["name"],
                       "speed": c.get("speed", 1.0), "loop": c.get("loop", ""), "span": c.get("span", 0.0),
                       "volume": float(note.get("volume", 1.0)), "fx": c.get("fx") or {},
                       "mute": bool(c.get("mute"))})
+        cut_in = False
     off = edit.get("off") or {}
     overlays, sounds = [], []
     for order, track in enumerate(edit.get("tracks") or []):
         if track.get("off"):
             continue
         for c in track.get("clips") or []:
+            if c.get("disabled"):
+                continue                    # switched off: not seen, not heard
             item = {"file": c["file"], "in": c["in"], "length": c["length"], "at": c["at"],
                     "speed": c.get("speed", 1.0), "loop": c.get("loop", ""), "span": c.get("span", 0.0),
                     "volume": float(c.get("volume", 1.0)), "name": c["name"], "order": order,

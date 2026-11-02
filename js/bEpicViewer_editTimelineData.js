@@ -275,6 +275,7 @@ function tidyLink(c) {
     if (typeof c.link !== "string" || !/^[A-Za-z0-9_.:-]{1,40}$/.test(c.link)) { delete c.link; delete c.unlinked; }
     else if (c.unlinked !== true) delete c.unlinked;
     if (c.mute !== true) delete c.mute;
+    if (c.disabled !== true) delete c.disabled;
 }
 
 // A clip's speed and loop, held to what they may be: a speed of 1, a still's
@@ -587,7 +588,7 @@ export function transferClip(cut, sel, to, at, opts = {}) {
         clip.volume = num(c.volume, 1); clip.fx = cleanFx(c.fx);
         if (c.speed) clip.speed = c.speed;
         if (loopOf(c)) { clip.loop = c.loop; clip.span = c.span; }
-        for (const k of ["link", "unlinked", "mute"]) if (c[k] !== undefined) clip[k] = c[k];
+        for (const k of ["link", "unlinked", "mute", "disabled"]) if (c[k] !== undefined) clip[k] = c[k];
     };
     if (to === "V1") {
         if (!opts.ripple && next.clips.length) {
@@ -705,7 +706,7 @@ export function sameCut(a, b) {
     const dress = (c) => [String(c.color || ""), round(num(c.volume, 1)), JSON.stringify(Object.entries(cleanFx(c.fx)).sort()),
                          round(speedOf(c)), loopOf(c), loopOf(c) ? round(num(c.span)) : 0,
                          takesOf(c).length ? JSON.stringify([c.file, takesOf(c).map((t) => [t.version, !!t.active, t.file])]) : "",
-                         String(c.link || ""), !!c.unlinked, !!c.mute];
+                         String(c.link || ""), !!c.unlinked, !!c.mute, !!c.disabled];
     const key = (cut) => JSON.stringify({
         clips: ((cut && cut.clips) || []).map((c) => [Number.isInteger(c.ref) ? c.ref : c.file, c.name, round(num(c.in)), round(num(c.length)), round(num(c.transition)), round(num(c.gap)), ...dress(c)]),
         texts: ((cut && cut.texts) || []).map((t) => [Number.isInteger(t.ref) ? t.ref : "new", t.text, round(num(t.start)), round(num(t.length)), JSON.stringify(textLook(t))]),
@@ -721,7 +722,7 @@ export function sameCut(a, b) {
 // a loop taken off is taken off in the file too.
 function timeOf(c) {
     return { speed: round(speedOf(c)), loop: loopOf(c), span: loopOf(c) ? round(num(c.span)) : 0,
-             link: c.link || "", unlinked: !!(c.link && c.unlinked), mute: !!c.mute };
+             link: c.link || "", unlinked: !!(c.link && c.unlinked), mute: !!c.mute, disabled: !!c.disabled };
 }
 
 /** What is sent back to be saved: the cut, and nothing the server did not send. */
@@ -898,11 +899,12 @@ export function pictureAt(cut, seconds, live) {
         const k = tracks[n];
         k.clips.forEach((c, i) => {
             const a = num(c.at), b = a + num(c.length);
+            if (c.disabled) return;                 // a disabled clip is not there: what is under it shows
             if (a > t + 1e-6) next = Math.min(next, a);
             if (!(t >= a - 1e-6 && t < b - 1e-6)) return;
             next = Math.min(next, b);
             // Two clips of one track at one moment: the one that begins later is on top.
-            const later = k.clips.some((o, j) => j !== i && num(o.at) > a && t >= num(o.at) - 1e-6 && t < num(o.at) + num(o.length) - 1e-6);
+            const later = k.clips.some((o, j) => j !== i && !o.disabled && num(o.at) > a && t >= num(o.at) - 1e-6 && t < num(o.at) + num(o.length) - 1e-6);
             if (later) return;
             stack.push({ clip: c, key: `${k.id}:${i}`, sel: { kind: "tclip", track: k.id, i }, origin: a, end: b });
         });
@@ -924,7 +926,21 @@ export function pictureAt(cut, seconds, live) {
                 main.mixLen = mixLen;
                 main.dissolveEnd = at.start + mixLen;
             }
-            stack.push(main);
+            // A disabled shot is a gap (timeline_render.read_cut makes it a blank): in its dissolve the shot going
+            // out is shown on its own; a dissolve out of a disabled shot is the shot coming in, on its own.
+            const before = main.under ? main.under.clip : null;
+            if (cut.clips[at.i].disabled) {
+                if (main.under && !before.disabled) {
+                    const began = clipStarts(cut)[at.i - 1];
+                    main = { clip: before, key: `V1:${at.i - 1}`, sel: { kind: "clip", i: at.i - 1 }, origin: began, end: main.dissolveEnd };
+                } else {
+                    next = Math.min(next, main.dissolveEnd || at.end);
+                    main = null;
+                }
+            } else if (main.under && before.disabled) {
+                delete main.under; delete main.mix; delete main.mixStart; delete main.mixLen;
+            }
+            if (main) stack.push(main);
         }
     }
     found = stack[0] || null;
@@ -964,7 +980,7 @@ export function soundItems(cut, live) {
     if (on("A1")) for (const s of (cut && cut.sound) || []) if (s && s.file) out.push({ file: s.file, at: 0, in: 0, length: total, volume: 1 });
     for (const k of (cut && cut.tracks) || []) {
         if (k.kind !== "audio" || !on(k.id)) continue;
-        for (const c of k.clips || []) if (c.file) out.push({ file: c.file, at: num(c.at), in: num(c.in), length: num(c.length), volume: num(c.volume, 1), clip: c });
+        for (const c of k.clips || []) if (c.file && !c.disabled) out.push({ file: c.file, at: num(c.at), in: num(c.in), length: num(c.length), volume: num(c.volume, 1), clip: c });
     }
     return out;
 }
@@ -1393,6 +1409,7 @@ export function agentLoses(cut) {
     if (((cut && cut.tracks) || []).some((k) => (k.clips || []).length)) out.push("the clips on tracks other than V1 and A1");
     if (((cut && cut.clips) || []).some((c) => num(c.gap) > 0)) out.push("the gaps on V1 (closed up: the clips after one move up)");
     if (((cut && cut.clips) || []).some((c) => c.mute)) out.push("sound split off its picture (heard with its picture again, J/L offsets lost)");
+    if (((cut && cut.clips) || []).some((c) => c.disabled)) out.push("disabled clips (agentY plays them)");
     const all = [...((cut && cut.clips) || []), ...((cut && cut.tracks) || []).flatMap((k) => k.clips || [])];
     if (all.some((c) => Object.keys(cleanFx(c.fx)).length)) out.push("transforms, crops and opacity (the Inspector's Video tab)");
     if (all.some((c) => speedOf(c) !== 1)) out.push("speed changes (retimed clips come back at 100 %)");
@@ -3073,4 +3090,23 @@ export function nextEditStep(steps, point, from, dir, fps) {
     if (k >= 0) return steps[k + (dir < 0 ? -1 : 1)] || null;
     if (dir < 0) { const before = steps.filter((s) => f(s) <= from); return before[before.length - 1] || null; }
     return steps.find((s) => f(s) >= from) || null;
+}
+
+// ── clips switched off (Resolve's Clip Enable, D) ────────────────────────────
+
+/**
+ * D: every clip of `list` switched off - or on again, when all of them were off
+ * - with its linked partner (unless they are unlinked). A disabled clip stays
+ * where it is and is drawn dimmed; it is neither seen nor heard: on V1 it is a
+ * gap (pictureAt; the render's read_cut makes it a blank), on a track what is
+ * under it shows, a sound clip is silent. In the file: metadata.bepic.disabled
+ * and OTIO's own `enabled: false`. { cut, off (what it is now), count }.
+ */
+export function toggleDisabled(cut, list) {
+    const items = withPartners(cut, list).filter(isClipSel);
+    if (!items.length) return null;
+    const off = !items.every((s) => clipOf(cut, s).disabled);
+    const next = copy(cut);
+    for (const s of items) { const c = clipOf(next, s); if (off) c.disabled = true; else delete c.disabled; }
+    return { cut: settle(next), off, count: items.length };
 }

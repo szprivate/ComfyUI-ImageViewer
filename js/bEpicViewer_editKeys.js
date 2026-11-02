@@ -10,6 +10,7 @@
 //   Del / Bksp   delete everything selected, leaving gaps (a lift) - on V1 too
 //   Shift+Del    ripple delete: what follows closes up (a gap selected: closed)
 //   Ctrl+Alt+L   unlink a film's sound onto a sound track / link a picture and its sound
+//   D            disable / enable the selected clips (Resolve's Clip Enable)
 //   E            extend the selected edit point (or the selected clip's out) to the playhead
 //   Ctrl+Z       undo        Ctrl+Shift+Z, Ctrl+Y   redo
 //   J K L        play backwards, stop, play
@@ -57,6 +58,7 @@ export const EDIT_KEYS = [
     ["Shift+S / Shift+A", "Step through the cuts, three steps each: Shift+S the out of the clip before (left), both sides (a roll), the in of the clip after (right), then the next cut; Shift+A back. On the selected clip's track, else V1"],
     ["Space in the Trim mode, a cut selected", "Play around edit: a second before the cut to a second after it, looped; , / . move the cut while it plays"],
     ["Esc", "Let go of the edit point, then of the selection"],
+    ["D", "Disable / enable the selected clips (and their linked sound or picture): dimmed, not seen, not heard, not rendered - the track under shows"],
     ["Ctrl+Alt+L", "Unlink a film's sound onto a sound track / relink it, from either part (the offset stays; right-click: Resync, Merge audio back into clip)"],
     ["Ctrl+S", "Save the cut: the bar then says where it went"],
     ["Ctrl+Shift+S", "Save cut as\u2026: another name or folder, and the tab goes on with that file"],
@@ -150,6 +152,7 @@ export const EditKeysMixin = {
         else if (letter === "t" && !shift) this.editTlMode("trim");
         else if (letter === "n" && !shift) this.editTlSnapToggle();
         else if (letter === "e" && !shift) this.editTlExtendEdit();
+        else if (letter === "d" && !shift) this.editTlDisableToggle();
         else if (low === "z" && shift) this._editTlZoom(1);
         else if (low === "s" && !shift) this.editTlSplitAtPlayhead();
         else if (key === "?") this.toggleHelpOverlay();

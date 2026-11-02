@@ -279,12 +279,17 @@ def clip_link(item):
             out["unlinked"] = True
     if note.get("mute") is True:
         out["mute"] = True
+    # Switched off (the panel's D, Resolve's Clip Enable): ours, or OTIO's own `enabled`.
+    if note.get("disabled") is True or item.get("enabled") is False:
+        out["disabled"] = True
     return out
 
 
 def _set_link(item, c):
-    """Write a clip's link group and mute, where the edit states them, into *item*."""
-    if not any(k in c for k in ("link", "unlinked", "mute")):
+    """Write a clip's link group, mute and switch, where the edit states them, into *item*."""
+    if "disabled" in c:
+        item["enabled"] = c.get("disabled") is not True
+    if not any(k in c for k in ("link", "unlinked", "mute", "disabled")):
         return
     meta = item.setdefault("metadata", {})
     note = meta.setdefault("bepic", {}) if isinstance(meta, dict) else None
@@ -306,6 +311,11 @@ def _set_link(item, c):
             note["mute"] = True
         else:
             note.pop("mute", None)
+    if "disabled" in c:
+        if c.get("disabled") is True:
+            note["disabled"] = True
+        else:
+            note.pop("disabled", None)
 
 
 # A clip may carry takes: the same shot made again with changes, kept beside the

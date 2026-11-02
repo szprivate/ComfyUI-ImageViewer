@@ -2623,5 +2623,46 @@ class EditTimelineBrowserTests(unittest.TestCase):
         self.assertEqual(pg.evaluate("() => { const r = __panel._editPlayAround(); return [r.min, r.max]; }"), [0, 35])
         self.assertEqual(self.errors, [])
 
+    # ── D: a clip switched off ──
+
+    def test_20_d_switches_a_clip_off_and_the_track_under_or_black_plays_there(self):
+        pg = self.page()
+        self.on_v2(pg, ["v", 5, 1])                            # over c (4..7), from 5 to 6
+        pg.evaluate("() => __panel.setFrame(262)")
+        self.focus_timeline(pg)
+        pg.mouse.click(*pg.evaluate(WHERE, [5.5, "V2"]))
+        n = self.undo_len(pg)
+        pg.keyboard.press("d")
+        self.assertTrue(pg.evaluate("() => __panel._editTlCut.tracks[0].clips[0].disabled"))
+        self.assertEqual(self.undo_len(pg), n + 1)
+        blk = "(k) => { const b = __panel._editTlUi.rows.querySelector(`[data-key='${k}']`); return [b.classList.contains('disabled'), getComputedStyle(b).opacity]; }"
+        self.assertEqual(pg.evaluate(blk, "V2:0"), [True, "0.42"])
+        shown = "(f) => { __panel.setFrame(f); const at = __panel._ep && __panel._ep.at; return at ? (at.clip ? at.key : '') : null; }"
+        self.assertEqual(pg.evaluate(shown, 132), "V1:1", "the shot under it shows")
+        # The shot under it off too: black there.
+        pg.mouse.click(*pg.evaluate(WHERE, [4.5, "V1"]))
+        pg.evaluate("() => __panel.setFrame(262)")
+        pg.keyboard.press("d")
+        self.assertEqual(pg.evaluate(shown, 132), "")
+        self.assertEqual(pg.evaluate(blk, "V1:1")[0], True)
+        # The menu says it; D again brings it back; Ctrl+Z as well.
+        items = self.menu_has(pg, *pg.evaluate(WHERE, [4.5, "V1"]))
+        self.assertIn("Enable clip (D)", items)
+        pg.keyboard.press("Escape")
+        pg.mouse.click(5, 5)
+        pg.mouse.click(*pg.evaluate(WHERE, [4.5, "V1"]))
+        pg.keyboard.press("d")
+        self.assertEqual(pg.evaluate(blk, "V1:1")[0], False)
+        self.assertEqual(pg.evaluate(shown, 120), "V1:1")
+        pg.keyboard.press("Control+z")
+        self.assertEqual(pg.evaluate(blk, "V1:1")[0], True)
+        # Saved: the file says it.
+        pg.evaluate("() => __panel._editTlSave()")
+        pg.wait_for_function("() => (window.__saves || []).length > 0", timeout=5000)
+        sent = pg.evaluate("() => window.__saves.at(-1).edit")
+        self.assertEqual([bool(c.get("disabled")) for c in sent["clips"]], [False, True, False])
+        self.assertTrue(sent["tracks"][0]["clips"][0]["disabled"])
+        self.assertEqual(self.errors, [])
+
 if __name__ == "__main__":
     unittest.main()

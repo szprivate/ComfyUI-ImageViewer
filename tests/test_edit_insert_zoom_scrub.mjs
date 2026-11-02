@@ -247,3 +247,34 @@ test("Shift+S walks LEFT, BOTH, RIGHT through each cut and Shift+A back; the end
     assert.equal(D.pointAct(D.stepPoint(steps[1]), true), "ripple-out");
     assert.equal(D.pointAct(D.stepPoint(steps[3]), false), "trim-in");
 });
+
+// ── D: clips switched off ──
+
+test("D switches the selected clips off with their linked partners, and on again when all were off", () => {
+    const cut = { ...D.emptyCut("d"), clips: [shot("a", 2, { link: "L1", mute: true }), shot("b", 2)],
+        tracks: [{ id: "V2", kind: "video", name: "V2", off: false, clips: [{ file: "o", name: "o", in: 0, length: 1, at: 0.5 }] },
+                 { id: "A2", kind: "audio", name: "A2", off: false, clips: [{ file: "a", name: "a", in: 0, length: 2, at: 0, link: "L1" },
+                                                                         { file: "u", name: "u", in: 0, length: 2, at: 2, link: "L2", unlinked: true }] }] };
+    const off = D.toggleDisabled(cut, [{ kind: "clip", i: 0 }]);
+    assert.equal(off.off, true);
+    assert.equal(off.cut.clips[0].disabled, true);
+    assert.equal(off.cut.tracks[1].clips[0].disabled, true, "the linked sound with it");
+    assert.equal(cut.clips[0].disabled, undefined, "a new cut: the old one untouched (undo)");
+    // Off: a gap on V1 (the overlay at 0.5..1.5 shows there), its sound silent.
+    assert.equal(D.pictureAt(off.cut, 0.2).clip, null);
+    assert.equal(D.pictureAt(off.cut, 1.0).clip.file, "o");
+    assert.deepEqual(D.soundItems(off.cut).map((s) => s.file), ["u"]);
+    // The overlay off too: black there, then b.
+    const both = D.toggleDisabled(off.cut, [{ kind: "tclip", track: "V2", i: 0 }]).cut;
+    assert.equal(D.pictureAt(both, 1.0).clip, null);
+    assert.equal(D.pictureAt(both, 2.5).clip.file, "b");
+    // A mixed selection with one on: all off; all off: all on again; an unlinked partner stays as it is.
+    const mixed = D.toggleDisabled(off.cut, [{ kind: "clip", i: 0 }, { kind: "clip", i: 1 }]);
+    assert.equal(mixed.off, true);
+    const on = D.toggleDisabled(mixed.cut, [{ kind: "clip", i: 0 }, { kind: "clip", i: 1 }]);
+    assert.equal(on.off, false);
+    assert.equal(on.cut.clips.some((c) => c.disabled), false);
+    assert.equal(on.cut.tracks[1].clips[1].disabled, undefined);
+    assert.equal(D.sameCut(cut, off.cut), false, "a change to save");
+    assert.equal(D.toSave(off.cut).clips[0].disabled, true);
+});

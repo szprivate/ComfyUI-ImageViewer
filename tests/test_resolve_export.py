@@ -233,6 +233,18 @@ class Generator(unittest.TestCase):
         self.assertEqual(el.find("adjust-blend").get("amount"), "0.5")
         self.assertEqual(el.find("adjust-volume").get("amount"), "-6.02dB")
 
+    def test_a_disabled_clip_is_there_with_enabled_0(self):
+        """The panel's D (Clip Enable): the clip stays in its place, switched off - on V1 and on a track."""
+        m, root, _x, _p = self.make({"clips": [clip("a.mp4", 2), clip("b.mp4", 2, disabled=True)], "texts": [],
+                                     "tracks": [{"id": "V2", "kind": "video", "name": "V2", "off": False,
+                                                 "clips": [clip("c.mp4", 1, at=0.5, disabled=True)]}]},
+                                    {"a.mp4": film(), "b.mp4": film(), "c.mp4": film()})
+        self.check_whole(m, root, Fraction(24))
+        spine = root.findall(".//spine/asset-clip")
+        self.assertEqual([e.get("enabled") for e in spine], [None, "0"])
+        lane = [e for e in root.iter("asset-clip") if e.get("lane") == "1"]
+        self.assertEqual([e.get("enabled") for e in lane], ["0"])
+
     def test_a_switched_off_section_is_not_written(self):
         m, root, _x, _p = self.make({"clips": [clip("a.mp4", 2, fx={"zx": 2.0, "toff": True})], "texts": []}, {"a.mp4": film()})
         self.assertIsNone(root.find(".//adjust-transform"))
