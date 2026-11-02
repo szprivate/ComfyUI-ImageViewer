@@ -1344,13 +1344,10 @@ textarea.param-input {
 .edit-swatch.on { outline: 1px solid #fff; outline-offset: 1px; }
 .edit-swatch:hover { border-color: #fff; }
 
-/* The texts of a cut, over the picture (bEpicViewer_editPlay.js): a layer laid
-   exactly on the picture's rectangle, each text by its middle. Arial, because
-   that is what the render draws with. */
-.edit-titles { position: absolute; z-index: 4; pointer-events: none; transform-origin: center; }
-.edit-titles-frame { position: absolute; overflow: hidden; }
-.edit-title { position: absolute; transform: translate(-50%, -50%); white-space: pre; text-align: center; line-height: 1.2;
-              font-family: Arial, Helvetica, sans-serif; paint-order: stroke fill; }
+/* A title over the picture (bEpicViewer_editPlay.js): a canvas laid
+   exactly on the picture's rectangle, the words drawn in the frame there
+   (paintTitle), with the font the render draws with. */
+.edit-title-layer { position: absolute; pointer-events: none; transform-origin: center; }
 
 /* Inspector and Effects (bEpicViewer_editPanels.js). The Inspector wears what
    the viewer's other panels wear: their ground (the panel's own), the header
@@ -1800,3 +1797,12 @@ textarea.param-input {
 .edit-keymark[data-how="hold"] { border-radius: 0; background: #e05555; }
 .edit-keymark[data-how="in"], .edit-keymark[data-how="out"], .edit-keymark[data-how="inout"] { border-radius: 50%; }
 .edit-keymark.on { background: #fff; box-shadow: 0 0 0 2px #35e06f; }
+
+/* Titles: clips of the video tracks whose picture is words */
+.edit-shot.edit-titleclip { background: #4b3566; border-color: #8a63b5; color: #efe3fb; }
+.edit-shot.edit-titleclip .edit-label::before { content: "T  "; font-weight: 700; color: #c9a8ef; }
+.insp-tbtn { min-height: 0; padding: 1px 3px; }
+.insp-tbtn.on { background: #1d4d63; border-color: #00b8d4; color: #fff; }
+.insp-tbtn.insp-mixed { opacity: .7; }
+.insp-font { flex: 1; min-width: 0; }
+.insp-fontnote { color: #ffb36b; white-space: normal; }

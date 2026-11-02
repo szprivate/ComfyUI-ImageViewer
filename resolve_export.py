@@ -234,7 +234,8 @@ def _clamp(piece, lo, hi, rate):
 
 def build_model(doc, probes, frames=None, empty_ok=False):
     """The cut as pieces: ``{"name", "rate", "width", "height", "total", "spine",
-    "lanes", "marks", "left_out", "files"}``.
+    "lanes", "left_out", "files"}``. A title is a piece of ``lanes`` with ``title`` (its words
+    and look) and no file.
 
     ``spine`` is V1 from cut to cut with no hole (gaps are pieces, ``gap: True``);
     a piece after a dissolve carries ``mix: (first frame, frames)``. ``lanes`` are
@@ -299,6 +300,16 @@ def build_model(doc, probes, frames=None, empty_ok=False):
             video_lane += 1
             lane = video_lane
         for c in track.get("clips") or []:
+            if c.get("title") is not None and not sound:
+                # A title is no media: a piece of its own, with its words and look.
+                lanes.append({"file": "", "title": c["title"], "name": str(c.get("name") or "Title"),
+                              "start": frames_of(c.get("at"), rate), "dur": max(1, frames_of(c["length"], rate)),
+                              "src": Fraction(0), "speed": Fraction(1), "still": False, "u": 0, "volume": 1.0,
+                              "mute": True, "fx": c.get("fx") or {},
+                              "enabled": not track.get("off") and not c.get("disabled"),
+                              "track": track.get("name") or track.get("id"), "looped": False,
+                              "lane": lane, "sound": False})
+                continue
             info = info_of(c.get("file"))
             if info is None:
                 continue
@@ -331,20 +342,8 @@ def build_model(doc, probes, frames=None, empty_ok=False):
         except (TypeError, ValueError):
             pass
 
-    marks = []
-    if (edit.get("off") or {}).get("T"):
-        if edit["texts"]:
-            say("Texts: their track is switched off, so they are not in the timeline.")
-    else:
-        for t in edit["texts"]:
-            marks.append({"start": frames_of(t["start"], rate), "dur": max(1, frames_of(t["length"], rate)),
-                          "text": str(t.get("text") or "")})
-        if marks:
-            say("Texts come as markers holding their words at their moment, not as drawn titles: "
-                "their look (size, place, colour) is left out. Add them in Resolve as Text+.")
-
     # In and out.
-    total = max([p["start"] + p["dur"] for p in spine + lanes] + [m["start"] + m["dur"] for m in marks] + [0])
+    total = max([p["start"] + p["dur"] for p in spine + lanes] + [0])
     if frames:
         lo = max(0, min(total - 1, int(frames[0])))
         hi = max(lo + 1, min(total, int(frames[1]) + 1))
@@ -362,12 +361,6 @@ def build_model(doc, probes, frames=None, empty_ok=False):
             kept.append(cut)
         spine = kept
         lanes = [c for c in (_clamp(p, lo, hi, rate) for p in lanes) if c]
-        moved = []
-        for m in marks:
-            a, b = max(m["start"], lo), min(m["start"] + m["dur"], hi)
-            if b > a:
-                moved.append(dict(m, start=a - lo, dur=b - a))
-        marks = moved
         total = hi - lo
 
     # V1 with no holes: empty time is a gap, as far as anything else on the film reaches.
@@ -388,6 +381,9 @@ def build_model(doc, probes, frames=None, empty_ok=False):
 
     # What Resolve's timeline will do differently from the viewer's.
     every = [p for p in full if not p.get("gap")] + lanes
+    titles = [p["title"] for p in lanes if p.get("title") is not None]
+    if titles:
+        say(_title_limits(titles))
     if not every and not empty_ok:
         raise ExportError("no clip of this cut can be read")
     if any(p["speed"] != 1 for p in every):
@@ -421,12 +417,14 @@ def build_model(doc, probes, frames=None, empty_ok=False):
 
     files, seen = [], set()
     for p in every:
+        if p.get("title") is not None:
+            continue
         key = timeline_io.norm_path(p["file"])
         if key not in seen:
             seen.add(key)
             files.append(p["file"])
     return {"name": str(edit.get("name") or "cut"), "rate": rate, "width": width, "height": height, "total": total,
-            "spine": full, "lanes": lanes, "marks": marks, "left_out": left, "files": files}
+            "spine": full, "lanes": lanes, "left_out": left, "files": files}
 
 
 def _has_links(edit):
@@ -437,8 +435,23 @@ def _has_links(edit):
 def _covers_sound(edit, rate):
     spans = [(frames_of(c.get("at"), rate), frames_of(c.get("length"), rate))
              for t in edit.get("tracks") or [] if t.get("kind") != "audio" and not t.get("off")
-             for c in t.get("clips") or []]
+             for c in t.get("clips") or [] if c.get("title") is None]
     return bool(spans) and any(not c.get("mute") for c in edit["clips"])
+
+
+def _title_limits(titles):
+    """The line for ``left_out``: what the titles lose on the way, only what these titles use."""
+    lost = ["text box size and wrapping (the words break where they are written)"]
+    if any(t.get("bgo") for t in titles):
+        lost.append("the background box")
+    if any(t.get("valign") != "middle" for t in titles):
+        lost.append("vertical alignment")
+    if any(t.get("strike") for t in titles):
+        lost.append("strike-through")
+    if any(t.get("underline") for t in titles):
+        lost.append("underline")
+    return ("Titles come as Basic Title text titles (words, font, size, colour, opacity, outline, shadow, "
+            "alignment, place); left out: " + ", ".join(lost) + ". The font must be installed on the Resolve machine.")
 
 
 # ── FCPXML ───────────────────────────────────────────────────────────────────
@@ -464,7 +477,8 @@ def file_uri(path):
 
 
 def _num(value):
-    return f"{round(float(value), 5):.5f}".rstrip("0").rstrip(".") or "0"
+    text = f"{round(float(value), 5):.5f}".rstrip("0").rstrip(".")
+    return "0" if text in ("", "-0") else text
 
 
 _STANDARD = {(1280, 720): "720p", (1920, 1080): "1080p", (3840, 2160): "2160p", (4096, 2160): "4096x2160p"}
@@ -533,15 +547,16 @@ def _keyframes(adjust, pname, keys, params, spell, p, info, rate):
             ET.SubElement(anim, "keyframe", {"time": time_str(local + Fraction(g - u0) / rate), "value": spell(at(f))})
 
 
-def _intrinsics(parent, p, info, model):
-    """The adjustments in the DTD's order: crop, transform, blend, volume - with keyframes."""
+def _intrinsics(parent, p, info, model, shift=None):
+    """The adjustments in the DTD's order: crop, transform, blend, volume - with keyframes.
+    *shift* ``(x, y)``: a place added to the position (a title's own), in the position's units."""
     keys = timeline_io.clean_fx(p.get("fx")).get("keys") or {}
     if p.get("sound"):
         keys = {k: v for k, v in keys.items() if k == "vol"}
     rate = model["rate"]
     moving = lambda *names: any(keys.get(n) for n in names)
     fx = effective(p.get("fx"), Fraction(int(p.get("u", 0))) / rate) if not p.get("sound") else None
-    if fx is None and not p.get("sound") and animated(p.get("fx")):
+    if fx is None and not p.get("sound") and (shift or animated(p.get("fx"))):
         # Neutral where it starts, animated later: the adjustments are written for their keys.
         fx = {key: neutral for key, (neutral, _l, _h) in timeline_io.FX.items()}
         fx.update({"fh": False, "fv": False})
@@ -559,11 +574,12 @@ def _intrinsics(parent, p, info, model):
                                p, info, rate)
         sx = fx["zx"] * (-1 if fx["fh"] else 1)
         sy = fx["zy"] * (-1 if fx["fv"] else 1)
-        if sx != 1 or sy != 1 or fx["x"] or fx["y"] or fx["rot"] or moving("zx", "zy", "x", "y", "rot", "ax", "ay"):
+        dx, dy = shift or (0, 0)
+        if shift or sx != 1 or sy != 1 or fx["x"] or fx["y"] or fx["rot"] or moving("zx", "zy", "x", "y", "rot", "ax", "ay"):
             # Position and anchor: percent of the frame's HEIGHT, x and y alike, y up.
             # Rotation: + is counter-clockwise there, clockwise here.
             aspect = model["width"] / model["height"]
-            attrs = {"position": f"{_num(fx['x'] * aspect * 100)} {_num(fx['y'] * 100)}",
+            attrs = {"position": f"{_num(fx['x'] * aspect * 100 + dx)} {_num(fx['y'] * 100 + dy)}",
                      "scale": f"{_num(sx)} {_num(sy)}", "rotation": _num(-fx["rot"])}
             if fx["ax"] or fx["ay"] or moving("ax", "ay"):
                 attrs["anchor"] = f"{_num(fx['ax'] * aspect * 100)} {_num(fx['ay'] * 100)}"
@@ -571,7 +587,8 @@ def _intrinsics(parent, p, info, model):
             both = lambda a, b: (lambda v: f"{_num((v[a] if v[a] is not None else fx[a]) * (aspect * 100 if a in ('x', 'ax') else 100))} "
                                            f"{_num((v[b] if v[b] is not None else fx[b]) * 100)}")
             if moving("x", "y"):
-                _keyframes(tr, "position", keys, ["x", "y"], both("x", "y"), p, info, rate)
+                where = lambda v: " ".join(_num(float(a) + d) for a, d in zip(both("x", "y")(v).split(), (dx, dy)))
+                _keyframes(tr, "position", keys, ["x", "y"], where, p, info, rate)
             if moving("zx", "zy"):
                 fl = (-1 if fx["fh"] else 1, -1 if fx["fv"] else 1)
                 _keyframes(tr, "scale", keys, ["zx", "zy"], lambda v: f"{_num((v['zx'] if v['zx'] is not None else fx['zx']) * fl[0])} "
@@ -646,6 +663,68 @@ def _element(parent, p, info, ids, model, offset, lane=None):
     return el
 
 
+TITLE_EFFECT_UID = ".../Titles.localized/Bumper:Opener.localized/Basic Title.localized/Basic Title.moti"
+
+
+def _rgba(color, alpha=1.0):
+    """``#rrggbb`` as FCPXML's ``r g b a`` (0..1)."""
+    m = re.fullmatch(r"#?([0-9a-fA-F]{6})", str(color or ""))
+    h = m.group(1) if m else "ffffff"
+    return " ".join(_num(int(h[i:i + 2], 16) / 255) for i in (0, 2, 4)) + " " + _num(alpha)
+
+
+def _title_style(t, height):
+    """The attributes of a text-style for title *t* on a frame *height* pixels high."""
+    fs = float(t["size"]) / 100 * height
+    face = ("Bold " if t.get("bold") else "") + ("Italic" if t.get("italic") else "")
+    attrs = {"font": _text(t["font"], 120), "fontSize": _num(fs), "fontFace": face.strip() or "Regular",
+             "fontColor": _rgba(t["color"], t["op"])}
+    if t.get("bold"):
+        attrs["bold"] = "1"
+    if t.get("italic"):
+        attrs["italic"] = "1"
+    attrs["alignment"] = {"justify": "justified"}.get(t["align"], t["align"])
+    if t["sw"] > 0:
+        attrs["strokeColor"] = _rgba(t["sc"])
+        attrs["strokeWidth"] = _num(t["sw"] / 100 * fs)
+    if t["sho"] > 0:
+        # shadowOffset is "distance angle": degrees counter-clockwise from the right, 315 = down and right.
+        attrs["shadowColor"] = _rgba(t["shc"], t["sho"])
+        attrs["shadowOffset"] = (f"{_num(math.hypot(t['shx'], t['shy']) / 100 * fs)} "
+                                 f"{_num(math.degrees(math.atan2(-t['shy'], t['shx'])) % 360)}")
+        attrs["shadowBlurRadius"] = _num(t["shb"] / 100 * fs)
+    extra = (float(t["line"]) - 1.2) * fs         # the font's own line height is about 1.2 of its size
+    if abs(extra) >= 0.01:
+        attrs["lineSpacing"] = _num(extra)
+    if t["track"]:
+        attrs["kerning"] = _num(t["track"] / 1000 * fs)
+    return attrs
+
+
+def _title_element(parent, p, ids, model, offset, lane, style_id):
+    """A title piece as a ``<title>`` of Basic Title anchored in *parent*."""
+    rate = model["rate"]
+    t = p["title"]
+    attrs = {"ref": ids["title"]}
+    if lane is not None:
+        attrs["lane"] = str(lane)
+    attrs.update({"offset": time_str(offset), "name": _text(p["name"], 200), "start": "0s",
+                  "duration": _grid(p["dur"], rate)})
+    if not p.get("enabled", True):
+        attrs["enabled"] = "0"
+    el = ET.SubElement(parent, "title", attrs)
+    words = _text(t.get("text"))
+    if t.get("caps") == "upper":
+        words = words.upper()
+    ET.SubElement(ET.SubElement(el, "text"), "text-style", {"ref": style_id}).text = words
+    definition = ET.SubElement(el, "text-style-def", {"id": style_id})
+    ET.SubElement(definition, "text-style", _title_style(t, model["height"]))
+    aspect = model["width"] / model["height"]
+    shift = ((t["x"] - 0.5) * aspect * 100, (0.5 - t["y"]) * 100)
+    _intrinsics(el, p, None, model, shift)
+    return el
+
+
 def fcpxml(model, probes, uris):
     """The timeline as FCPXML 1.9. *uris*: ``{norm_path(file): file URL}``."""
     rate = model["rate"]
@@ -685,6 +764,11 @@ def fcpxml(model, probes, uris):
             "duration": "0s" if info.get("still") else time_str(Fraction(info.get("duration") or 0)), **attrs})
         ET.SubElement(asset, "media-rep", {"kind": "original-media", "src": uris[key]})
 
+    if any(p.get("title") is not None for p in model["lanes"]):
+        count += 1
+        ids["title"] = f"r{count}"
+        ET.SubElement(res, "effect", {"id": ids["title"], "name": "Basic Title", "uid": TITLE_EFFECT_UID})
+
     library = ET.SubElement(root, "library")
     event = ET.SubElement(library, "event", {"name": _text(model["name"], 200)})
     project = ET.SubElement(event, "project", {"name": _text(model["name"], 200)})
@@ -714,17 +798,14 @@ def fcpxml(model, probes, uris):
                 break
         p, el, info = chosen
         return el, _local_start(p, info) + Fraction(frame - p["start"]) / rate
+    styles = 0
     for p in sorted(model["lanes"], key=lambda q: (abs(q["lane"]), q["start"])):
         el, local = host(p["start"])
+        if p.get("title") is not None:
+            styles += 1
+            _title_element(el, p, ids, model, local, p["lane"], f"ts{styles}")
+            continue
         _element(el, p, probes.get(p["file"]), ids, model, local, p["lane"])
-    for m in model["marks"]:
-        el, local = host(m["start"])
-        text = _text(m["text"])
-        line = (text.splitlines() or [""])[0][:200] or "text"
-        attrs = {"start": time_str(local), "duration": _grid(m["dur"], rate), "value": line}
-        if text != line:
-            attrs["note"] = text
-        ET.SubElement(el, "marker", attrs)
     ET.indent(root, "  ")
     return ('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE fcpxml>\n'
             + ET.tostring(root, encoding="unicode") + "\n")
@@ -1022,12 +1103,24 @@ def readme(plan, model, final, base):
         "", "CARRIED",
         "  frame rate, size, all video and sound tracks with their places, gaps on V1, source in and out,",
         "  dissolves, each clip's volume, mute and split sound, retime, loops (as repeated clips),",
-        "  transform, crop, opacity, stills, switched-off tracks and clips (as disabled clips), texts (as markers),",
+        "  transform, crop, opacity, stills, switched-off tracks and clips (as disabled clips),",
+        "  titles (as Basic Title text titles on their video tracks: words, caps, font, size, colour and its",
+        "  opacity, bold, italic, alignment left/centre/right/justified, outline, shadow, tracking, line height,",
+        "  and the place of the text box's middle, combined with the clip's own transform and opacity),",
         "  keyframes of transform, crop, opacity and volume (FCPXML keyframeAnimation; a hold is a step",
         "  of two keys). The EDL carries no keyframes, no transform and no volume.",
         "", "LEFT OUT OR DIFFERENT",
     ]
     lines += [f"  - {line}" for line in model["left_out"]] or ["  nothing else that is known"]
+    lines += ["", "TITLES: WHAT DOES NOT COME ALONG",
+              "  The EDL has no titles (V1 only). The .otio copy keeps them exactly as they are.",
+              "  Not carried: the background box, vertical alignment (top / bottom), the text box's size and",
+              "  wrapping (lines break only where the words do), strike-through, underline, keyframes of a",
+              "  title's size, tracking, line height and outline width, and synthetic bold or italic (a font",
+              "  without a bold face is faked bold here; in Resolve it is as that font draws it).",
+              "  The font must be installed on the Resolve machine, or Resolve swaps in another.",
+              "  Size, outline, shadow and line spacing are converted into FCPXML's units and may sit a little",
+              "  differently; adjust them in Resolve's Inspector. Titles are NOT verified inside Resolve.", ""]
     lines += ["", "FILES THE FREE VERSION MAY NOT READ (checked from each file's header; nothing was transcoded)"]
     if plan["flagged"]:
         lines += [f"  - {row['name']}: {row['note']}" for row in plan["flagged"]]

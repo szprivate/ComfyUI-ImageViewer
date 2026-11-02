@@ -106,8 +106,8 @@ export const EditTrimMixin = {
     // that a trim knows where a source ends.
     _editTlKnowFiles(cut) {
         const files = new Set();
-        for (const c of (cut && cut.clips) || []) if (c.file && !D.isStillImage(c.file)) files.add(c.file);
-        for (const k of (cut && cut.tracks) || []) for (const c of k.clips || []) if (c.file && !D.isStillImage(c.file)) files.add(c.file);
+        for (const c of (cut && cut.clips) || []) if (c.file && !D.isStillClip(c)) files.add(c.file);
+        for (const k of (cut && cut.tracks) || []) for (const c of k.clips || []) if (c.file && !D.isStillClip(c)) files.add(c.file);
         if (!this._editTlAsked) this._editTlAsked = new Set();
         const want = [...files].filter((f) => !this._editTlAsked.has(f) && !(this._editTlInfo && this._editTlInfo.has(f)));
         if (!want.length || !this._editTlProbe) return;
@@ -245,7 +245,7 @@ export const EditTrimMixin = {
             const p = light("trimA", sel, side, color);
             row = p && p.row;
             const start = p ? p.start : 0, len = p ? p.length : 0;
-            const srcIn = Number(c.in) || 0, still = D.isStillImage(c.file);
+            const srcIn = Number(c.in) || 0, still = D.isStillClip(c);
             const srcOut = srcIn + D.srcUse(c);
             if (info.act === "trim-out") lines = [`Out of ${name(c)}`, tc(start + len) + (still ? "" : ` · src ${tc(srcOut)}`)];
             else if (info.act === "trim-in") lines = [`In of ${name(c)}`, tc(start) + (still ? "" : ` · src ${tc(srcIn)}`)];
@@ -374,7 +374,7 @@ export const EditTrimMixin = {
         const fps = start.fps || 24;
         const c0 = D.clipOf(start, sel);
         if (!c0) return false;
-        if (info.act === "slip" && D.isStillImage(c0.file)) {
+        if (info.act === "slip" && D.isStillClip(c0)) {
             e.preventDefault(); e.stopPropagation();
             this._editTlSel = sel;
             this._editTlSay("a still has no source to slip - drag its edges to make it longer");
@@ -720,7 +720,7 @@ export const EditTrimMixin = {
         const cut = this._editTlCut;
         const c = cut && D.clipOf(cut, sel);
         if (!c) { this._editTlSay("select a clip to slip it"); return; }
-        if (D.isStillImage(c.file)) { this._editTlSay("a still has no source to slip"); return; }
+        if (D.isStillClip(c)) { this._editTlSay("a still has no source to slip"); return; }
         const fps = cut.fps || 24;
         const next = D.slipClip(cut, sel, frames / fps, this._editTlDur());
         if (D.sameCut(next, cut)) { this._editTlSay("held: the source ends there"); return; }

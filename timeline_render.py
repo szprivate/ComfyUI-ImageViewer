@@ -7,10 +7,11 @@ a cut is a join, a dissolve a blend of as many frames as it is long - and
 encoded, with the shots' own sound and the bed under the film mixed the same
 way. No program is started.
 
-What it does NOT draw is the texts: a title's look and movement belong to
-whatever made the timeline (agentY draws them from its presets), and all the
-file says of one is where it goes. A render from here leaves them out and says
-how many.
+Titles are clips of the video tracks whose picture is words: drawn by
+title_render (Pillow) as the Edit tab draws them, on a transparent frame laid
+over what is under them like any clip's picture (:func:`lay`). A title whose
+font is not on this machine is drawn with a fallback, and the render says so
+(``notes``).
 
 Sizes: every shot is scaled to fit the film and padded, never stretched. Sound
 is 48 kHz stereo, held in memory for the length of the film, which is why a film
@@ -310,7 +311,8 @@ def lay(under, frame, fx, box):
     """*frame* (a clip's picture, fitted into the film's frame) drawn over *under*
     with *fx* - as the Edit tab draws it: cropped, then scaled and turned about
     its anchor point, then moved, at its opacity. *under* None is black. What of
-    the frame is not the clip's picture (*box*) lets what is under show."""
+    the frame is not the clip's picture (*box*) lets what is under show; a frame
+    with an alpha channel of its own (a title) lets it show where that is clear."""
     import numpy as np
     from PIL import Image
     h, w = frame.shape[0], frame.shape[1]
@@ -320,6 +322,9 @@ def lay(under, frame, fx, box):
     a1, b1 = left + dw - int(round(fx["cr"] * dw)), top + dh - int(round(fx["cb"] * dh))
     if a1 > a0 and b1 > b0:
         alpha[b0:b1, a0:a1] = 255
+    if frame.shape[2] == 4:
+        alpha = (alpha.astype(np.uint16) * frame[:, :, 3] // 255).astype(np.uint8)
+        frame = frame[:, :, :3]
     rgba = np.dstack([frame, alpha])
     sx = fx["zx"] * (-1.0 if fx["fh"] else 1.0)
     sy = fx["zy"] * (-1.0 if fx["fv"] else 1.0)
@@ -382,7 +387,48 @@ def _spans(overlays, fps):
     return sorted(spans, key=lambda s: (s[2].get("order", 0), s[0]))
 
 
-def covered(base, overlays, total, w, h, fps):
+_NEUTRAL = None
+
+
+def _neutral():
+    """The effect of a clip drawn as it comes, every key present (a title is laid with it: never a cover)."""
+    global _NEUTRAL
+    if _NEUTRAL is None:
+        _NEUTRAL = {key: neutral for key, (neutral, _l, _h) in timeline_io.FX.items()}
+        _NEUTRAL.update({"fh": False, "fv": False})
+    return dict(_NEUTRAL)
+
+
+def title_frames(clip, done, count, w, h, fps, notes=None):
+    """Frames *done* .. *done* + *count* of a title clip: its words on a transparent
+    ``w x h`` frame (RGBA), drawn once - or, with keys on its numbers (size,
+    tracking, line spacing, outline), at each frame's middle in clip time."""
+    from . import title_render
+    keys = ((clip.get("fx") or {}).get("keys") or {}) if isinstance(clip.get("fx"), dict) else {}
+    keyed = any(k in keys for k in title_render.TITLE_KEYS)
+    made = {}
+    for k in range(count):
+        look = title_render.title_at(clip["title"], keys, (done + k + 0.5) / fps) if keyed \
+            else title_render.clean_title(clip["title"])
+        sig = repr(sorted(look.items()))
+        if sig not in made:
+            if len(made) > 8:
+                made.clear()
+            made[sig], note = title_render.render(look, w, h)
+            if note and notes is not None and note not in notes:
+                notes.append(note)
+                import logging
+                logging.getLogger(__name__).warning("bEpic render: %s", note)
+        yield made[sig]
+
+
+def _frames_of(clip, done, count, w, h, fps, notes=None):
+    if clip.get("title") is not None:
+        return title_frames(clip, done, count, w, h, fps, notes)
+    return clip_frames(clip, done, count, w, h, fps)
+
+
+def covered(base, overlays, total, w, h, fps, notes=None):
     """*total* frames: those of *base* (the cut), with the clips of the higher
     video tracks laid over them where they are, lowest first. A clip as it comes
     covers the whole frame; one that was scaled, moved, turned, cropped or made
@@ -390,7 +436,11 @@ def covered(base, overlays, total, w, h, fps):
     picture the frame is black. A covered frame of the cut is still read, so the
     cut keeps its time under what covers it."""
     import numpy as np
-    spans = [(first, count, clip, effective(clip.get("fx"))) for first, count, clip in _spans(overlays, fps)]
+    def look(clip, u=None):
+        fx = effective(clip.get("fx")) if u is None else effective(clip.get("fx"), u)
+        # A title is never a cover: what is under it is drawn, and it is laid over that.
+        return fx or _neutral() if clip.get("title") is not None else fx
+    spans = [(first, count, clip, look(clip)) for first, count, clip in _spans(overlays, fps)]
     # Down from the top, the first clip that is drawn as it comes hides the rest.
     black = np.zeros((h, w, 3), dtype=np.uint8)
     running = {}                      # span -> (its generator, the frame it gives next)
@@ -398,7 +448,7 @@ def covered(base, overlays, total, w, h, fps):
         frame = next(base, None)
         on = [k for k, (first, count, _c, _fx) in enumerate(spans) if first <= n < first + count]
         # A keyed clip: its look at this frame's middle, clip time (as pictureAt / clipFx(clip, u) in the JS).
-        now = {k: (effective(spans[k][2].get("fx"), (n - spans[k][0] + 0.5) / fps) if animated(spans[k][2].get("fx"))
+        now = {k: (look(spans[k][2], (n - spans[k][0] + 0.5) / fps) if animated(spans[k][2].get("fx"))
                    else spans[k][3]) for k in on}
         solid = max((i for i, k in enumerate(on) if now[k] is None), default=-1)
         for k in on[max(0, solid):]:
@@ -407,54 +457,14 @@ def covered(base, overlays, total, w, h, fps):
             gen, due = running.get(k, (None, -1))
             if gen is None or due != n:           # just uncovered, or new: read from this moment of it
                 done = n - first
-                gen = clip_frames(clip, done, count - done, w, h, fps)
+                gen = _frames_of(clip, done, count - done, w, h, fps, notes)
             over = next(gen, None)
             running[k] = (gen, n + 1)
             if over is None:
                 continue
-            frame = over if fx is None else lay(frame, over, fx, picture_box(clip["file"], w, h))
+            box = (0, 0, w, h) if clip.get("title") is not None else picture_box(clip["file"], w, h) if fx else None
+            frame = over if fx is None else lay(frame, over, fx, box)
         yield black if frame is None else frame
-
-
-# ── texts ────────────────────────────────────────────────────────────────────
-
-def _font(px):
-    """A plain sans-serif at *px* pixels: Arial where the machine has it (what
-    the viewer's preview draws with), else what Pillow can find."""
-    from PIL import ImageFont
-    for name in ("arial.ttf", "Arial.ttf", "DejaVuSans.ttf", "LiberationSans-Regular.ttf"):
-        try:
-            return ImageFont.truetype(name, px)
-        except OSError:
-            continue
-    return ImageFont.load_default(size=px)
-
-
-def draw_texts(picture, texts, n, fps):
-    """*picture* (frame *n*) with the texts that stand at that moment drawn on it.
-
-    Each as the Edit tab shows it: its middle at ``x`` / ``y`` of the picture,
-    ``size`` percent of the picture's height, in its colour, with a dark edge so
-    that it reads on any picture. The frame is returned as it came when no text
-    stands on it.
-    """
-    moment = (n + 0.5) / fps
-    now = [t for t in texts if t["start"] <= moment < t["start"] + t["length"] and str(t["text"]).strip()]
-    if not now:
-        return picture
-    import numpy as np
-    from PIL import Image, ImageDraw
-    im = Image.fromarray(picture)
-    draw = ImageDraw.Draw(im)
-    h, w = picture.shape[0], picture.shape[1]
-    for t in now:
-        px = max(8, int(round(h * float(t["size"]) / 100.0)))
-        font = _font(px)
-        edge = max(1, px // 14)
-        draw.multiline_text((w * float(t["x"]), h * float(t["y"])), str(t["text"]), font=font, anchor="mm",
-                            align="center", fill=t["color"], stroke_width=edge, stroke_fill="#000000",
-                            spacing=px * 0.2)
-    return np.asarray(im)
 
 
 # ── sound ────────────────────────────────────────────────────────────────────
@@ -592,7 +602,8 @@ def film_sound(cut, counts, fps, total_frames):
             heard = True
 
     for _first, _count, clip in _spans(cut.get("overlays"), fps):
-        lay(clip, True)
+        if clip.get("title") is None:            # words cover no sound
+            lay(clip, True)
     for clip in cut.get("sounds") or []:
         lay(clip, False)
     bed = cut.get("bed")
@@ -662,11 +673,15 @@ def read_cut(doc):
         for c in track.get("clips") or []:
             if c.get("disabled"):
                 continue                    # switched off: not seen, not heard
+            if c.get("title") is not None and track.get("kind") == "audio":
+                continue
             item = {"file": c["file"], "in": c["in"], "length": c["length"], "at": c["at"],
                     "speed": c.get("speed", 1.0), "loop": c.get("loop", ""), "span": c.get("span", 0.0),
                     "volume": float(c.get("volume", 1.0)), "name": c["name"], "order": order,
                     "fx": c.get("fx") or {}, "mute": bool(c.get("mute")),
                     "track": track.get("name") or track.get("id")}
+            if c.get("title") is not None:
+                item.update(title=c["title"], file="", speed=1.0, loop="", span=0.0, volume=0.0)
             (sounds if track.get("kind") == "audio" else overlays).append(item)
     bed = None
     audio = timeline_io._track_of(doc, "audio") or {}
@@ -677,13 +692,11 @@ def read_cut(doc):
         start, _length = timeline_io._span(beds[0].get("source_range"))
         bed = {"file": timeline_io._file(beds[0].get("media_reference")), "in": start,
                "gain": float(note.get("gain", 1.0)), "fade_out": float(note.get("fade_out", 1.0))}
-    texts = [] if off.get("T") else [
-        {"text": t["text"], "start": float(t["start"]), "length": float(t["length"]), "size": t["size"],
-         "x": t["x"], "y": t["y"], "color": t["color"]} for t in edit["texts"]]
+    # Texts of older cuts are titles by now (timeline_io.editable, texts_to_titles).
+    titles = sum(1 for o in overlays if o.get("title") is not None)
     return {"name": edit["name"], "fps": float(edit["fps"] or 24.0), "clips": clips, "bed": bed,
-            "draw": texts,
             "overlays": overlays, "sounds": sounds, "v1_off": bool(off.get("V1")),
-            "texts": len(edit["texts"]), "clip_sound": bool(about.get("clip_sound", True)),
+            "texts": titles, "clip_sound": bool(about.get("clip_sound", True)),
             "width": int(about.get("width") or 0), "height": int(about.get("height") or 0)}
 
 
@@ -716,6 +729,8 @@ def check(cut, may_use=None):
         if may_use is not None and not may_use(os.path.abspath(path)):
             raise RenderError(f"clip {i}: {os.path.basename(path)} is not a file the viewer may use")
     for c in list(cut.get("overlays") or []) + list(cut.get("sounds") or []):
+        if c.get("title") is not None:
+            continue                         # words: no file
         path = c["file"]
         what = f"{c.get('track') or 'a track'}: {os.path.basename(path) or 'a clip'}"
         if not path or not os.path.isfile(path):
@@ -753,6 +768,7 @@ def render(doc, out_path, fmt="mp4", may_use=None, codec=None, quality="high", f
     packed = how["audio"] == "pcm_s16le"
     cut = read_cut(doc)
     check(cut, may_use)
+    notes = []                              # what the render has to say: a title's font not on this machine
     fps = cut["fps"] if cut["fps"] > 0 else 24.0
     w, h = _size(cut)
     counts = frame_counts(cut["clips"], fps)
@@ -801,10 +817,9 @@ def render(doc, out_path, fmt="mp4", may_use=None, codec=None, quality="high", f
                     sent += piece.shape[1]
 
             made = 0
-            for n, picture in enumerate(covered(base, cut["overlays"], hi, w, h, fps)):
+            for n, picture in enumerate(covered(base, cut["overlays"], hi, w, h, fps, notes)):
                 if n < lo:
                     continue
-                picture = draw_texts(picture, cut["draw"], n, fps)
                 frame = av.VideoFrame.from_ndarray(np.ascontiguousarray(picture), format="rgb24")
                 frame.pts = made
                 for packet in vs.encode(frame):
@@ -831,6 +846,6 @@ def render(doc, out_path, fmt="mp4", may_use=None, codec=None, quality="high", f
             pass
     return {"path": out_path, "seconds": round((hi - lo) / fps, 3), "frames": hi - lo, "width": w,
             "height": h, "fps": fps, "sound": sound is not None,
-            # Texts are drawn now; the key stays for callers that read it.
-            "texts_left_out": 0, "texts": len(cut["draw"]),
+            # Titles are drawn; the key stays for callers that read it.
+            "texts_left_out": 0, "texts": cut["texts"], "notes": notes,
             "format": how["label"]}

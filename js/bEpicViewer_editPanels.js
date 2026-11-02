@@ -21,7 +21,10 @@
 //                 Timing  start, source in / out (a slip), length, speed (retime), loop,
 //                         the dissolve in, order
 //                 File    name, colour, source
-//   a text        Title   its words and its look;  Timing
+//   a title       Title   its words, font, style (B I U S, caps), size, tracking, line
+//                         spacing, alignment (both ways), colour, outline, shadow,
+//                         background box, text box - to every selected title;
+//                         Video, Timing, File as a clip's (it IS a clip)
 //   a dissolve    Transition  its duration
 //
 // Every control is something the Edit tab draws and the render writes
@@ -43,6 +46,9 @@
 import { api } from "../../scripts/api.js";
 import * as D from "./bEpicViewer_editTimelineData.js";
 import { notice } from "./bEpicViewer_exportUI.js";
+import { setEditIcon } from "./bEpicViewer_editIcons.js";
+import { familyNames, fontList, fontNote, fontsKnown } from "./bEpicViewer_editFonts.js";
+import { TITLE_KEYS, TITLE_NUM, cleanTitle } from "./bEpicViewer_editTitles.js";
 
 const EFFECT_TYPE = "application/x-bepic-effect";
 
@@ -55,7 +61,9 @@ const TOOLBOX = [
     { id: "titles", name: "Titles", items: [
         { name: "Text 2 s", note: "words on the picture, low in it", fx: { type: "text", text: "Text", seconds: 2 } },
         { name: "Text 5 s", note: "words on the picture, low in it", fx: { type: "text", text: "Text", seconds: 5 } },
-        { name: "Title", note: "large, in the middle", fx: { type: "text", text: "Title", seconds: 3, look: { size: 12, y: 0.5 } } },
+        { name: "Title", note: "large, in the middle", fx: { type: "text", text: "Title", seconds: 3, look: { size: 12, y: 0.5, bold: true } } },
+        { name: "Lower Third", note: "a name low on the left, on a box", fx: { type: "text", text: "Name\nRole", seconds: 4,
+          look: { size: 5, align: "left", valign: "bottom", x: 0.3, y: 0.8, w: 0.5, h: 0.2, sw: 0, bgo: 0.6, bgp: 30, bgr: 15 } } },
     ] },
     { id: "generators", name: "Generators", items: [
         { name: "Solid Black", note: "a plain colour, as a clip", color: "#000000", fx: { type: "solid", color: "#000000", name: "Black" } },
@@ -364,8 +372,10 @@ export const EditPanelsMixin = {
             const track = placed ? D.trackOf(cut, sel.track) : null;
             const isSound = !!track && track.kind === "audio";
             const still = D.isStill(c.file) && !isSound;
+            const isTitle = !!c.title;
             head(c.name || String(c.file || "").split(/[\\/]/).pop() || "clip");
-            const tab = tabs([["video", "Video", !isSound], ["audio", "Audio", !still], ["timing", "Timing", true], ["file", "File", true]]);
+            const tab = tabs([...(isTitle ? [["title", "Title", true]] : []), ["video", "Video", !isSound], ["audio", "Audio", !still],
+                              ["timing", "Timing", true], ["file", "File", true]]);
             // The playhead in the clip's own time (frame-snapped): where its keys are made and its numbers read.
             keying = this._editInspKeying(cut, sel, c);
             const u = keying.u;
@@ -428,7 +438,11 @@ export const EditPanelsMixin = {
                 m.title = "Several clips are selected: Video and Audio changes are set on every one they apply to, as the same value. Timing (speed, retime, length, order) and File change the last clicked clip only.";
                 parts.push(m);
             }
-            if (tab === "video") {
+            if (tab === "title") {
+                this._editInspTitle({ cut, sel, c, keying, several, clipSels, apply, el, tip, quiet, row, section, slider, numField, axis, note, parts,
+                                      setMixed: (fn) => { mixed = fn; }, setClearRow: (fn) => { clearRow = fn; } });
+                into = null;
+            } else if (tab === "video") {
                 section("Transform", { off: fx.toff, toggle: (off) => setFx({ toff: off }), reset: () => resetFx("transform") });
                 const linked = this._editInspUnlinked !== true;
                 const link = tip(el("button", "edit-hbtn insp-link" + (linked ? " on" : ""), "="),
@@ -481,14 +495,16 @@ export const EditPanelsMixin = {
                 const startAt = placed ? Number(c.at) || 0 : D.clipStarts(cut)[sel.i];
                 if (placed) row("Start", seconds(c.at, (v) => apply(D.moveTrackClip(cut, sel.track, sel.i, v))));
                 else row("Start", said(tc(startAt) + "  (by its place in the order)"));
-                row("Source in", seconds(c.in, (v) => apply(D.slipClip(cut, sel, v - (Number(c.in) || 0), dur)), still));
-                row("Source out", said(still ? "a still: no source length" : tc(Number(c.in) + D.srcUse(c))));
+                if (!isTitle) row("Source in", seconds(c.in, (v) => apply(D.slipClip(cut, sel, v - (Number(c.in) || 0), dur)), still));
+                if (!isTitle) row("Source out", said(still ? "a still: no source length" : tc(Number(c.in) + D.srcUse(c))));
                 row("Length", seconds(c.length, (v) => apply(placed ? D.trimTrackClipEnd(cut, sel.track, sel.i, v, dur)
                                                                     : D.trimEnd(cut, sel.i, v, dur))));
                 const sp = D.speedOf(c);
-                const speed = numField(sp * 100, 1, (v) => apply(D.setSpeed(cut, sel, v / 100)),
+                if (isTitle) { into = null; note("A title has no source: make it longer or shorter by its edges, as any clip."); }
+                const speed = isTitle ? null : numField(sp * 100, 1, (v) => apply(D.setSpeed(cut, sel, v / 100)),
                                        { step: 1, min: D.MIN_SPEED * 100, max: D.MAX_SPEED * 100, disabled: still,
                                          title: "percent of its own speed: its source in and out stay, its length follows (Alt+drag an edge; Shift+R: 100 %)" });
+                if (!isTitle) {
                 speed.dataset.field = "speed";
                 row("Speed %", speed, sp === 1 ? null : () => apply(D.setSpeed(cut, sel, 1)));
                 const fill = seconds(c.length, (v) => apply(D.retimeClip(cut, sel, v)), still);
@@ -507,6 +523,7 @@ export const EditPanelsMixin = {
                 loop.addEventListener("change", () => apply(D.setLoop(cut, sel, loop.value)));
                 row("Loop", [loop, said(D.loopOf(c) ? `${Math.round(Number(c.length) * sp / Number(c.span) * 100) / 100} turns of ${D.lengthLabel(c.span)}`
                                                   : (still ? "a still: just make it longer" : ""))]);
+                }
                 if (!placed) {
                     const i = sel.i, n = cut.clips.length;
                     row("Dissolve in", seconds(c.transition || 0, (v) => apply(D.setTransition(cut, i, v)), i === 0), i === 0 ? null : () => apply(D.setTransition(cut, i, 0)));
@@ -524,13 +541,13 @@ export const EditPanelsMixin = {
                 row("Colour", this._editTlSwatches(doc, c, (color) => apply(D.setClipProps(cut, sel, { color }))));
                 row("Track", said(placed ? track.name : "V1"));
                 section("File");
-                const src = said(c.file || "");
+                const src = said(isTitle ? "a title: words, no file" : c.file || "");
                 src.classList.add("insp-path");
                 row("Source", src);
                 into = null;
                 foot(button("Remove from the cut", "Take this clip out", () => this._editTlRemove(sel), !placed && cut.clips.length <= 1));
             }
-        } else if (sel && sel.kind === "text" && cut.texts[sel.i]) {
+        } else if (sel && sel.kind === "text" && (cut.texts || [])[sel.i]) {
             const i = sel.i, x = cut.texts[i];
             head(String(x.text || "Text").split("\n")[0]);
             const tab = tabs([["title", "Title", true], ["timing", "Timing", true]]);
@@ -593,6 +610,165 @@ export const EditPanelsMixin = {
         const scrolled = body.scrollTop;
         body.replaceChildren(...parts);
         body.scrollTop = scrolled;
+    },
+
+    // ── a title's tab ────────────────────────────────────────────────────────
+    //
+    // The words of THIS title; everything else to every selected title (one undo
+    // step). The numbers that take keys (size, tracking, line spacing, outline)
+    // have the row's diamond, auto-key as the Video tab's: a keyed number gets a
+    // key at the playhead, an unkeyed one its value.
+    _editInspTitle(o) {
+        const { cut, sel, c, keying, apply, el, tip, quiet, row, section, slider, numField, axis, parts } = o;
+        const doc = this.editInspectorPanel.ownerDocument;
+        const look = D.titleAt(c, keying.u);
+        // The selected titles (the primary always), each with the playhead in its own time.
+        const sels = this._editTlSelAll().filter((s) => D.isTitleSel(cut, s));
+        const targets = (sels.some((s) => D.sameSel(s, sel)) ? sels : [sel])
+            .map((s) => (D.sameSel(s, sel) ? keying : this._editInspKeying(cut, s, D.clipOf(cut, s))));
+        keying.targetsFor = () => targets;
+        const keyOf = Object.fromEntries(Object.entries(TITLE_KEYS).map(([k, p]) => [p, k]));
+        const valueOf = (t, p) => (D.titleAt(t.c, t.u)[p]);
+        o.setMixed((k) => {
+            const p = TITLE_KEYS[k] || k;
+            return targets.length > 1 && targets.some((t) => {
+                const a = valueOf(t, p), b = look[p];
+                return typeof a === "number" ? Math.abs(a - b) > 1e-6 : a !== b;
+            });
+        });
+        const mixed = (p) => targets.length > 1 && targets.some((t) => {
+            const a = valueOf(t, p), b = look[p];
+            return typeof a === "number" ? Math.abs(a - b) > 1e-6 : a !== b;
+        });
+        o.setClearRow((keys) => targets.reduce((n, t) => {
+            let m = D.clearKeys(n, t.sel, keys);
+            return D.setTitle(m, [t.sel], Object.fromEntries(keys.map((k) => [TITLE_KEYS[k], TITLE_NUM[TITLE_KEYS[k]][0]])));
+        }, cut));
+        if (targets.length > 1) {
+            const m = el("div", "insp-multi", `${targets.length} titles · the look goes to all of them, the words to this one`);
+            parts.push(m);
+        }
+        // A change of the look: to every target. A keyed number gets a key at the playhead (where it is inside).
+        const set = (patch) => {
+            let next = cut;
+            for (const t of targets) {
+                const plain = {};
+                for (const [p, v] of Object.entries(patch)) {
+                    const k = keyOf[p];
+                    if (k && D.keyTimes(t.c, [k]).length) {
+                        if (t === keying || t.inside) next = D.setKeys(next, t.sel, { [k]: v }, t.u);
+                    } else plain[p] = v;
+                }
+                if (Object.keys(plain).length) next = D.setTitle(next, [t.sel], plain);
+            }
+            apply(next);
+        };
+        const live = (patch) => { if (this.editPlayTitleLive) this.editPlayTitleLive(c, { ...look, ...patch }); };
+        const toggle = (name, key, label, value, to) => {
+            const on = value === undefined ? !!look[key] : look[key] === value;
+            const b = tip(el("button", "edit-btn insp-tbtn" + (on ? " on" : "")
+                              + (mixed(key) ? " insp-mixed" : ""), ""), label);
+            setEditIcon(b, name);
+            b.dataset.title = key + (value !== undefined ? ":" + value : "");
+            b.addEventListener("click", () => set({ [key]: to !== undefined ? to : value !== undefined ? value : !look[key] }));
+            return b;
+        };
+        const color = (key) => {
+            const ink = quiet(el("input", "insp-color"));
+            ink.type = "color";
+            ink.value = look[key];
+            ink.dataset.title = key;
+            if (mixed(key)) ink.classList.add("insp-mixed");
+            ink.addEventListener("change", () => set({ [key]: ink.value }));
+            return ink;
+        };
+        const reset = (...keys) => () => set(Object.fromEntries(keys.map((k) => [k, k in TITLE_NUM ? TITLE_NUM[k][0] : cleanTitle({})[k]])));
+        const num = (key, digits, scale, opts) => {
+            const f = numField(look[key] * scale, digits, (v) => set({ [key]: v / scale }), { ...opts, mixed: mixed(key) });
+            f.dataset.title = key;
+            return f;
+        };
+
+        section("Text");
+        const area = quiet(el("textarea", "insp-area insp-title-text"));
+        area.value = String(c.title.text || "");
+        area.rows = 3;
+        area.title = "The words (Ctrl+B / Ctrl+I / Ctrl+U: bold, italic, underline)";
+        area.addEventListener("change", () => apply(D.setTitle(cut, [sel], { text: area.value })));
+        // Ctrl+B / I / U here (and only here: on the timeline Ctrl+B is the blade).
+        area.addEventListener("keydown", (e) => {
+            if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+            const key = { b: "bold", i: "italic", u: "underline" }[String(e.key).toLowerCase()];
+            if (!key) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const words = area.value;
+            let next = words !== String(c.title.text || "") ? D.setTitle(cut, [sel], { text: words }) : cut;
+            next = targets.reduce((n, t) => D.setTitle(n, [t.sel], { [key]: !look[key] }), next);
+            this._editInspFocus = "title-text";
+            apply(next);
+        });
+        if (this._editInspFocus === "title-text") {
+            this._editInspFocus = null;
+            // Once the Inspector holds it again (it is redrawn whole): the words keep the focus.
+            queueMicrotask(() => { area.focus(); area.setSelectionRange(area.value.length, area.value.length); });
+        }
+        row("Words", area);
+
+        section("Font", { reset: reset("font", "bold", "italic", "underline", "strike", "caps") });
+        const pick = quiet(el("select", "insp-select insp-font"));
+        pick.dataset.title = "font";
+        const names = familyNames();
+        const list = names.includes(look.font) ? names : [look.font, ...names];
+        for (const name of list) {
+            const opt = el("option", "", name + (names.includes(name) ? "" : " (not on this machine)"));
+            opt.value = name;
+            opt.style.fontFamily = `"${name}"`;
+            pick.append(opt);
+        }
+        pick.value = look.font;
+        if (mixed("font")) pick.classList.add("insp-mixed");
+        pick.title = "The font family: the fonts installed on the machine ComfyUI runs on";
+        pick.addEventListener("change", () => set({ font: pick.value }));
+        if (!fontsKnown()) fontList().then(() => this._editInspRender());
+        row("Family", pick);
+        row("Style", [toggle("bold", "bold", "Bold (Ctrl+B in the words)"), toggle("italic", "italic", "Italic (Ctrl+I in the words)"),
+                      toggle("underline", "underline", "Underline (Ctrl+U in the words)"), toggle("strike", "strike", "Strikethrough"),
+                      toggle("caps", "caps", "All capitals", "upper", look.caps === "upper" ? "none" : "upper")]);
+        const said = fontNote(look);
+        if (said) row("", [tip(el("span", "insp-said insp-fontnote", "⚠ " + said), said + " - the render says so too")]);
+        row("Size", (() => {
+            const [range, field] = slider(look.size, 0.5, 40, 0.1, 1, (v) => live({ size: v }), (v) => set({ size: v }), "percent of the picture's height", mixed("size"));
+            field.dataset.title = "size";
+            return [range, field];
+        })(), reset("size"), ["tsize"]);
+        row("Tracking", num("track", 0, 1, { step: 5, title: "letter spacing: thousandths of an em" }), reset("track"), ["ttrack"]);
+        row("Line Spacing", num("line", 2, 1, { step: 0.05, min: 0.5, max: 4, title: "the height of a line, times the size" }), reset("line"), ["tline"]);
+
+        section("Alignment", { reset: reset("align", "valign") });
+        row("Horizontal", [toggle("alignLeft", "align", "Align left", "left"), toggle("alignCenter", "align", "Centre", "center"),
+                           toggle("alignRight", "align", "Align right", "right"), toggle("alignJustify", "align", "Justify (every line but a paragraph's last fills the box)", "justify")]);
+        row("Vertical", [toggle("valignTop", "valign", "Top of the text box", "top"), toggle("valignMiddle", "valign", "Middle of the text box", "middle"),
+                         toggle("valignBottom", "valign", "Bottom of the text box", "bottom")]);
+
+        section("Colour", { reset: reset("color", "op") });
+        row("Text", [color("color"), num("op", 0, 100, { step: 1, min: 0, max: 100, title: "opacity, percent" })], reset("color", "op"));
+        section("Outline", { reset: reset("sc", "sw") });
+        row("Outline", [color("sc"), num("sw", 1, 1, { step: 0.5, min: 0, max: 50, title: "width: percent of the size (0: none)" })], reset("sc", "sw"), ["tsw"]);
+        section("Drop Shadow", { reset: reset("shc", "sho", "shx", "shy", "shb") });
+        row("Colour", [color("shc"), num("sho", 0, 100, { step: 1, min: 0, max: 100, title: "opacity, percent (0: no shadow)" })], reset("shc", "sho"));
+        row("Offset", [axis("X"), num("shx", 0, 1, { step: 1, title: "percent of the size, to the right" }), el("span", "insp-link-gap"),
+                       axis("Y"), num("shy", 0, 1, { step: 1, title: "percent of the size, down" })], reset("shx", "shy"));
+        row("Blur", num("shb", 0, 1, { step: 1, min: 0, max: 100, title: "percent of the size" }), reset("shb"));
+        section("Background", { reset: reset("bgc", "bgo", "bgp", "bgr") });
+        row("Colour", [color("bgc"), num("bgo", 0, 100, { step: 1, min: 0, max: 100, title: "opacity, percent (0: no box)" })], reset("bgc", "bgo"));
+        row("Padding", num("bgp", 0, 1, { step: 1, min: 0, max: 200, title: "percent of the size around the words" }), reset("bgp"));
+        row("Corners", num("bgr", 0, 1, { step: 1, min: 0, max: 200, title: "corner radius: percent of the size" }), reset("bgr"));
+        section("Text Box", { reset: reset("x", "y", "w", "h") });
+        row("Position", [axis("X"), num("x", 1, 100, { step: 0.5, min: 0, max: 100, title: "its middle: percent of the frame's width from the left" }),
+                         el("span", "insp-link-gap"), axis("Y"), num("y", 1, 100, { step: 0.5, min: 0, max: 100, title: "percent of the frame's height from the top" })], reset("x", "y"));
+        row("Size", [axis("W"), num("w", 1, 100, { step: 1, min: 2, max: 100, title: "percent of the frame's width: the words wrap at it" }),
+                     el("span", "insp-link-gap"), axis("H"), num("h", 1, 100, { step: 1, min: 2, max: 100, title: "percent of the frame's height: the words stand in it by the vertical alignment" })], reset("w", "h"));
     },
 
     // ── Effects ──────────────────────────────────────────────────────────────
@@ -683,12 +859,13 @@ export const EditPanelsMixin = {
             return;
         }
         if (fx.type === "text") {
+            // A title: a clip on a video track (the one it was dropped on where that is free there, else the top one).
             const start = D.toFrame(at == null ? this._editTlNowSeconds() : at, fps);
-            let next = D.addText(cut, fx.text, start, fx.seconds);
-            if (fx.look) next = D.setTextLook(next, next.texts.length - 1, fx.look);
-            if (next.off && next.off.T) next = D.setTrackOff(next, "T", false);      // a text just added is meant to be seen
-            this._editTlSel = { kind: "text", i: next.texts.length - 1 };
-            this._editTlApply(next);
+            const got = D.addTitle(cut, { ...(fx.look || {}), text: fx.text }, start, fx.seconds, track || "");
+            this._editTlSel = got.sel;
+            this._editTlMulti = null;
+            this._editInspTab = "title";
+            this._editTlApply(got.cut);
             return;
         }
         if (fx.type === "solid") {

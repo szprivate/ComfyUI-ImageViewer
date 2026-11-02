@@ -1114,6 +1114,34 @@ try:
                 return web.Response(status=500, text=f"not written: {exc}")
             return web.json_response({"path": path, "name": os.path.basename(path), "reused": there})
 
+        async def _bepic_fonts(request):
+            """The font families of this machine, for a title's font picker
+            (title_render.font_list: families, each face with its id and metrics -
+            no paths). Read once (Pillow, the OS's font folders), kept for the
+            life of the process; ``?refresh=1`` reads them again."""
+            from . import title_render
+            if request.query.get("refresh") == "1":
+                await _off_loop(title_render.fonts, True)
+            got = await _off_loop(title_render.font_list)
+            return web.json_response(got, headers={"Cache-Control": "no-cache"})
+
+        async def _bepic_font_file(request):
+            """ONE font file of the machine's list (``/bepic/fonts``), by its id -
+            never by a path, so nothing outside the OS's font folders can be
+            asked for; a face of a collection (.ttc) as a font file of its own.
+            The browser draws a title with it, as the render does."""
+            from . import title_render
+            face = title_render.face_by_id(request.query.get("id"))
+            if not face:
+                return web.Response(status=404, text="no such font")
+            try:
+                data = await _off_loop(title_render.face_bytes, face)
+            except (OSError, ValueError) as exc:
+                return web.Response(status=404, text=f"the font could not be read: {exc}")
+            kind = "font/otf" if data[:4] == b"OTTO" else "font/ttf"
+            return web.Response(body=data, content_type=kind,
+                                headers={"Cache-Control": "private, max-age=86400"})
+
         async def _bepic_timeline_solid(request):
             """A plain colour as a picture a cut can hold: the Effects panel's generators.
 
@@ -2956,6 +2984,10 @@ try:
         _safe_add("POST", "/api/bepic/cut", _bepic_cut)
         _safe_add("POST", "/bepic/timeline_render", _bepic_timeline_render)
         _safe_add("POST", "/bepic/timeline_solid", _bepic_timeline_solid)
+        _safe_add("GET", "/bepic/fonts", _bepic_fonts)
+        _safe_add("GET", "/api/bepic/fonts", _bepic_fonts)
+        _safe_add("GET", "/bepic/font_file", _bepic_font_file)
+        _safe_add("GET", "/api/bepic/font_file", _bepic_font_file)
         _safe_add("GET", "/bepic/timeline_peaks", _bepic_timeline_peaks)
         _safe_add("GET", "/api/bepic/timeline_peaks", _bepic_timeline_peaks)
         _safe_add("GET", "/bepic/timeline_strip", _bepic_timeline_strip)

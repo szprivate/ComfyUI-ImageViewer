@@ -247,8 +247,10 @@ def clean_fx(given):
 # Keyframes (bEpicViewer_editTimelineData.js, cleanKeys / keyValue - kept in step):
 # ``fx["keys"] = {param: [{"t", "v", "i"}]}``, ``t`` seconds of CLIP time (from the
 # clip's first frame on the timeline), ``i`` how it goes on to the next key:
-# absent linear, "in", "out", "inout", "hold". "vol" is the clip's volume.
-KEY_PARAMS = tuple(FX) + ("vol",)
+# absent linear, "in", "out", "inout", "hold". "vol" is the clip's volume; "tsize", "ttrack", "tline",
+# "tsw" a title's size, tracking, line spacing and outline width (title_render.TITLE_KEYS).
+_TITLE_KEY_RANGES = {"tsize": (0.5, 40.0), "ttrack": (-200.0, 1000.0), "tline": (0.5, 4.0), "tsw": (0.0, 50.0)}
+KEY_PARAMS = tuple(FX) + ("vol",) + tuple(_TITLE_KEY_RANGES)
 INTERPS = ("linear", "in", "out", "inout", "hold")
 
 
@@ -261,7 +263,7 @@ def clean_keys(given):
         items = given.get(p)
         if not isinstance(items, list):
             continue
-        low, high = (0.0, 1.0) if p == "vol" else FX[p][1:]
+        low, high = (0.0, 1.0) if p == "vol" else _TITLE_KEY_RANGES[p] if p in _TITLE_KEY_RANGES else FX[p][1:]
         by = {}
         for k in items:
             if not isinstance(k, dict):
@@ -501,6 +503,107 @@ def text_look(mark):
     return out
 
 
+# A TITLE is a clip whose picture is words: on a video track, with no file - a
+# GeneratorReference of kind ``bepic.title`` - and its words and look in
+# ``metadata.bepic.title`` (title_render.TITLE_NUM ..., the Edit panel's
+# bEpicViewer_editTitles.js). Every other program reads a generator clip of that
+# length. The texts of older cuts (markers on the stack) come in as titles
+# (:func:`texts_to_titles`), and are written as title clips at the next save.
+TITLE_KIND = "bepic.title"
+
+
+def title_of(item):
+    """The title a clip is (its words and look, every part present), or None for a clip that is not one."""
+    from .title_render import clean_title
+    note = _bepic(item)
+    ref = item.get("media_reference") if isinstance(item, dict) else None
+    generator = isinstance(ref, dict) and str(ref.get("OTIO_SCHEMA") or "").startswith("GeneratorReference") \
+        and str(ref.get("generator_kind") or "") == TITLE_KIND
+    if isinstance(note.get("title"), dict) or generator:
+        return clean_title(note.get("title") if isinstance(note.get("title"), dict) else {})
+    return None
+
+
+def _new_title(c, what, marks):
+    """A title clip of its own, made in the panel - or from the marker it came from (``mark``), whose metadata it keeps."""
+    import copy
+    from .title_render import clean_title
+    title = clean_title(c.get("title"))
+    meta = {}
+    mark = c.get("mark")
+    if isinstance(mark, int) and not isinstance(mark, bool):
+        if not 0 <= mark < len(marks) or not isinstance(marks[mark], dict):
+            raise ValueError(f"{what} does not name a text of this timeline")
+        meta = copy.deepcopy(marks[mark].get("metadata")) if isinstance(marks[mark].get("metadata"), dict) else {}
+        meta.pop("bepic", None)                   # the text's look: the title's own now
+    note = meta.setdefault("agentY", {})
+    if isinstance(note, dict):
+        note.setdefault("kind", "text")
+        note["text"] = title["text"]
+    meta["made_by"] = "bEpic viewer"
+    return {"OTIO_SCHEMA": "Clip.1", "name": "", "metadata": meta, "enabled": True,
+            "effects": [], "markers": [], "source_range": None,
+            "media_reference": {"OTIO_SCHEMA": "GeneratorReference.1", "name": "title", "metadata": {},
+                                "available_range": None, "generator_kind": TITLE_KIND, "parameters": {}}}
+
+
+def _set_title(item, c):
+    """Write a title's words and look, where the edit states them, into *item* (and its words where agentY reads them)."""
+    if not isinstance(c.get("title"), dict):
+        return
+    from .title_render import clean_title
+    title = clean_title(c["title"])
+    meta = item.setdefault("metadata", {})
+    if not isinstance(meta, dict):
+        return
+    note = meta.setdefault("bepic", {})
+    if isinstance(note, dict):
+        note["title"] = title
+    about = meta.setdefault("agentY", {})
+    if isinstance(about, dict):
+        about.setdefault("kind", "text")
+        about["text"] = title["text"]
+    if not str(item.get("name") or "").strip():
+        item["name"] = next((x for x in title["text"].split("\n") if x.strip()), "Title")[:200]
+
+
+def texts_to_titles(edit):
+    """*edit* (:func:`editable`) with its texts as title clips - bEpicViewer_editTimelineData.textsToTitles, the
+    same rule: each looks as the text did, on video tracks of their own above the others (as many as texts
+    overlap), ``mark`` naming the marker it came from; the texts' switch is those tracks' switch."""
+    from .title_render import title_from_text
+    texts = edit.get("texts") or []
+    if not texts:
+        return edit
+    taken = {t["id"] for t in edit["tracks"]}
+    made = []
+    for n, t in sorted(enumerate(texts), key=lambda p: (float(p[1].get("start") or 0), p[0])):
+        start = round(max(0.0, float(t.get("start") or 0)), 4)
+        length = round(max(0.2, float(t.get("length") or 0)), 4)
+        track = next((m for m in made if m["end"] <= start + 1e-6), None)
+        if track is None:
+            k = 2
+            while f"V{k}" in taken:
+                k += 1
+            taken.add(f"V{k}")
+            track = {"end": 0.0, "track": {"id": f"V{k}", "kind": "video", "name": f"V{k}",
+                                           "off": bool((edit.get("off") or {}).get("T")), "clips": []}}
+            made.append(track)
+            edit["tracks"].append(track["track"])
+        title = title_from_text(t)
+        clip = {"name": next((x for x in title["text"].split("\n") if x.strip()), "Title")[:200], "file": "",
+                "in": 0.0, "length": length, "at": start, "color": "", "volume": 1.0, "fx": {},
+                "speed": 1.0, "loop": "", "span": 0.0, "title": title}
+        if isinstance(t.get("ref"), int):
+            clip["mark"] = t["ref"]
+        track["track"]["clips"].append(clip)
+        track["end"] = start + length
+    edit["texts"] = []
+    if isinstance(edit.get("off"), dict):
+        edit["off"]["T"] = False
+    return edit
+
+
 def _tracks(doc):
     """``[(place in the stack, track)]`` of every track of the timeline."""
     stack = doc.get("tracks") or {}
@@ -535,9 +638,13 @@ def extra_tracks(doc):
                 continue
             start, length = _span(child.get("source_range"))
             if schema.startswith("Clip") and length > 0:
-                clips.append({"ref": [ti, ci], "name": str(child.get("name") or ""),
-                              "file": _file(child.get("media_reference")), "in": round(start, 4),
-                              "length": round(length, 4), "at": round(at, 4), **_look(child)})
+                clip = {"ref": [ti, ci], "name": str(child.get("name") or ""),
+                        "file": _file(child.get("media_reference")), "in": round(start, 4),
+                        "length": round(length, 4), "at": round(at, 4), **_look(child)}
+                title = title_of(child) if kind == "video" else None
+                if title is not None:
+                    clip.update(title=title, file="", **{"in": 0.0})
+                clips.append(clip)
             at += length
         out.append({"id": tid, "kind": kind, "name": str(track.get("name") or tid), "off": _is_off(track),
                     "clips": clips})
@@ -627,7 +734,8 @@ def editable(doc):
     out["tracks"] = extra_tracks(doc)
     out["off"] = {"V1": _is_off(video), "A1": _is_off(audio),
                   "T": bool(_bepic(stack).get("texts_off"))}
-    return out
+    # The texts (markers) as title clips: the panel, the render and the Resolve export all work on those.
+    return texts_to_titles(out)
 
 
 def edit_length(edit):
@@ -756,7 +864,9 @@ def _build_tracks(doc, tracks, rate, may_use):
             if not isinstance(c, dict):
                 raise ValueError(f"{what} is not an object")
             ref = c.get("ref")
-            if ref is None and str(c.get("file") or "").strip():
+            if ref is None and isinstance(c.get("title"), dict) and kind == "video":
+                item = _new_title(c, what, list(((doc.get("tracks") or {}).get("markers")) or []))
+            elif ref is None and str(c.get("file") or "").strip():
                 item = _new_clip(c, what, may_use)
             else:
                 ok = (isinstance(ref, list) and len(ref) == 2 and all(isinstance(v, int) and not isinstance(v, bool)
@@ -773,6 +883,10 @@ def _build_tracks(doc, tracks, rate, may_use):
             if c.get("name") is not None:
                 item["name"] = str(c["name"])[:200]
             _dress(item, c, may_use)
+            if kind == "video":
+                _set_title(item, c)
+            if title_of(item) is not None:
+                start = 0.0                                    # a title has no source
             placed.append([round(at * rate), round(start * rate), max(1, round(length * rate)), item])
         placed.sort(key=lambda p: p[0])
         children, cursor = [], 0

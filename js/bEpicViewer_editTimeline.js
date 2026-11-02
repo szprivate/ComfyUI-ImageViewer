@@ -214,8 +214,9 @@ export const EditTimelineMixin = {
         const s = this._editTlAll()[key] || {};
         const label = String((this.tabLabels && this.tabLabels[key]) || "").replace(/^[^\w]+/, "");
         this._editTlTab = key;
-        this._editTlCut = s.cut || D.emptyCut(label || "cut");
-        this._editTlSaved = s.saved || null;
+        // The texts of an older cut (or of one kept from before) are titles now: clips on video tracks.
+        this._editTlCut = D.textsToTitles(s.cut) || D.emptyCut(label || "cut");
+        this._editTlSaved = s.saved ? D.textsToTitles(s.saved) : null;
         this._editTlTarget = s.target || null;
         this._editTlFile = s.file || "";
         this._editTlOtio = s.otio || "";
@@ -856,7 +857,8 @@ export const EditTimelineMixin = {
                 for (const c of row.track.items) {
                     const tclip = D.trackOf(cut, row.id).clips[c.i];
                     const b = block((row.kind === "audio" ? "edit-shot edit-sclip" : "edit-shot edit-tclip")
-                        + (picked("tclip", c.i, row.id) ? " sel" : "") + also("tclip", c.i, row.id) + (tclip && tclip.disabled ? " disabled" : ""), c, c.name);
+                        + (picked("tclip", c.i, row.id) ? " sel" : "") + also("tclip", c.i, row.id) + (tclip && tclip.disabled ? " disabled" : "")
+                        + (tclip && tclip.title ? " edit-titleclip" : ""), c, c.name);
                     b.dataset.key = row.id + ":" + c.i;
                     const tc = row.track.items[c.i] && D.trackOf(cut, row.id).clips[c.i];
                     b._media = { file: tc.file, in: Number(tc.in) || 0, length: c.length, row: row.kind, volume: tc.volume, clip: tc };
@@ -1984,7 +1986,7 @@ export const EditTimelineMixin = {
 
     /** Does a clip's film have sound? (what /bepic/timeline_probe said; a film not yet asked about is taken to) */
     _editTlHasSound(clip) {
-        if (!clip || D.isStillImage(clip.file) || !FILM_EXTS.includes(ext(clip.file))) return false;
+        if (!clip || D.isStillClip(clip) || !FILM_EXTS.includes(ext(clip.file))) return false;
         const info = this._editTlInfo && this._editTlInfo.get(clip.file);
         return !info || info.audio !== false;
     },
@@ -2835,6 +2837,8 @@ export const EditTimelineMixin = {
         this.editTlRefresh();
         notice("success", "Film exported" + (left ? ` - without its ${left} text${left === 1 ? "" : "s"}` : ""),
                "output/" + (got.relative || got.name));
+        // A title whose font is not on this machine was drawn with another: the render says which.
+        if (Array.isArray(got.notes) && got.notes.length) notice("warn", "Titles drawn with another font", got.notes.join(" / "));
         // Up on screen, in a tab of its own, beside the cut it was made from.
         if (this.openExternalFramesInViewer) {
             this.openExternalFramesInViewer(

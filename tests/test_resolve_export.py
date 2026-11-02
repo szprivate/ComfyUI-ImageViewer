@@ -72,6 +72,8 @@ class Generator(unittest.TestCase):
             real = {}
 
             def here(c):
+                if not c.get("file"):          # a title is no file
+                    return
                 path = os.path.join(tmp, os.path.basename(c["file"])).replace("\\", "/")
                 open(path, "wb").close()
                 real[c["file"]] = path
@@ -90,6 +92,7 @@ class Generator(unittest.TestCase):
     def check_whole(self, model, root, rate):
         """Everything lands on the frame grid; the spine has no hole; every reference exists."""
         ids = {e.get("id") for e in root.find("resources")}
+        ids |= {e.get("id") for e in root.iter("text-style-def")}      # a text-style's ref
         for e in root.iter():
             for key in ("ref", "format"):
                 if e.get(key):
@@ -284,16 +287,76 @@ class Generator(unittest.TestCase):
         m, root, _x, _p = self.make({"clips": [clip("a.mp4", 2, fx={"zx": 2.0, "toff": True})], "texts": []}, {"a.mp4": film()})
         self.assertIsNone(root.find(".//adjust-transform"))
 
-    def test_texts_are_markers_at_their_moment_and_say_so(self):
-        edit = {"clips": [clip("a.mp4", 2), clip("b.mp4", 2)], "texts": [{"text": "Hello <&> \"you\"\nline two", "start": 3.0, "length": 1.0}]}
+    TITLE = {"text": "Hello <&> you\nline two", "font": "Impact", "size": 10.0, "bold": True, "italic": True,
+             "align": "right", "color": "#ff8000", "op": 0.5, "caps": "upper", "sc": "#000000", "sw": 10.0,
+             "shc": "#0000ff", "shx": 5.0, "shy": 5.0, "shb": 10.0, "sho": 0.8, "x": 0.75, "y": 0.25,
+             "bgo": 0.5, "strike": True}
+
+    def title_clip(self, title, at, length, name="T", **more):
+        return {"name": name, "file": "", "in": 0.0, "length": length, "at": at, "title": dict(title), **more}
+
+    def test_titles_are_basic_title_text_titles_on_their_lane(self):
+        edit = {"clips": [clip("a.mp4", 2), clip("b.mp4", 2)], "texts": [],
+                "tracks": [{"id": "V2", "kind": "video", "name": "V2", "clips": [
+                    self.title_clip(self.TITLE, 3.0, 1.0, "One"),
+                    self.title_clip({"text": "Plain"}, 0.5, 1.0, "Two", disabled=True)]}]}
         m, root, xml, _p = self.make(edit, {"a.mp4": film(), "b.mp4": film()})
-        second = root.findall(".//spine/asset-clip")[1]
-        mark = second.find("marker")
-        self.assertEqual(T(mark.get("start")), 1, "a second into the second clip")
-        self.assertEqual(mark.get("value"), 'Hello <&> "you"')
-        self.assertIn("line two", mark.get("note"))
+        self.assertEqual(m["files"] and len(m["files"]), 2, "a title is not media")
+        effects = root.findall("resources/effect")
+        self.assertEqual(len(effects), 1)
+        self.assertEqual(effects[0].get("name"), "Basic Title")
+        self.assertIn("Basic Title.moti", effects[0].get("uid"))
+        self.check_whole(m, root, Fraction(24))
+        first, second = root.findall(".//spine/asset-clip")
+        one = second.find("title")                       # 3 s lies one second into the second clip
+        self.assertEqual((one.get("ref"), one.get("lane")), (effects[0].get("id"), "1"))
+        self.assertEqual((T(one.get("offset")), T(one.get("duration"))), (1, 1))
+        self.assertIsNone(one.get("enabled"))
+        style = one.find("text/text-style")
+        self.assertEqual(style.text, "HELLO <&> YOU\nLINE TWO")
+        d = next(e for e in one.findall("text-style-def") if e.get("id") == style.get("ref")).find("text-style")
+        self.assertEqual((d.get("font"), d.get("fontFace"), d.get("bold"), d.get("italic")), ("Impact", "Bold Italic", "1", "1"))
+        self.assertEqual((d.get("alignment"), float(d.get("fontSize"))), ("right", 108.0))
+        self.assertEqual(d.get("fontColor"), "1 0.50196 0 0.5")
+        self.assertEqual(float(d.get("strokeWidth")), 10.8)
+        self.assertEqual(d.get("strokeColor"), "0 0 0 1")
+        self.assertEqual(d.get("shadowColor"), "0 0 1 0.8")
+        dist, angle = d.get("shadowOffset").split()
+        self.assertAlmostEqual(float(dist), 5 * 2 ** 0.5 * 1.08, places=2)
+        self.assertEqual(float(angle), 315.0)
+        pos = [float(v) for v in one.find("adjust-transform").get("position").split()]
+        self.assertAlmostEqual(pos[0], 0.25 * 1920 / 1080 * 100, places=2)
+        self.assertAlmostEqual(pos[1], 25.0, places=3)
+        off = first.find("title")                         # 0.5 s into the first clip
+        self.assertEqual((T(off.get("offset")), T(off.get("duration")), off.get("enabled")), (Fraction(1, 2), 1, "0"))
+        self.assertEqual(len(root.findall(".//title")), 2)
+        self.assertEqual(len({e.get("id") for e in root.iter("text-style-def")}), 2)
+        self.assertTrue(any(line.startswith("Titles come as Basic Title") and "background box" in line and "strike-through" in line
+                            for line in m["left_out"]))
+        self.assertNotIn("<marker", xml)
+
+    def test_old_cuts_texts_are_exported_as_titles_too(self):
+        edit = {"clips": [clip("a.mp4", 2), clip("b.mp4", 2)], "texts": [{"text": "Hello <&> \"you\"", "start": 3.0, "length": 1.0}]}
+        m, root, xml, _p = self.make(edit, {"a.mp4": film(), "b.mp4": film()})
+        titles = root.findall(".//title")
+        self.assertEqual(len(titles), 1)
+        self.assertEqual(titles[0].find("text/text-style").text, 'Hello <&> "you"')
+        self.assertEqual((T(titles[0].get("offset")), T(titles[0].get("duration"))), (1, 1))
         self.assertIn("&lt;&amp;&gt;", xml)
-        self.assertTrue(any(line.startswith("Texts come as markers") for line in m["left_out"]))
+        self.assertNotIn("<marker", xml)
+
+    def test_a_title_is_not_media_in_the_plan_and_the_edl_ignores_it(self):
+        edit = {"clips": [clip("a.mp4", 2)], "texts": [],
+                "tracks": [{"id": "V2", "kind": "video", "name": "V2", "clips": [self.title_clip({"text": "Hi"}, 0.0, 1.0)]}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "a.mp4").replace("\\", "/")
+            open(path, "wb").close()
+            edit["clips"][0]["file"] = path
+            doc = self.doc(edit)
+            self.assertEqual(self.rx.used_files(doc), [path])
+            model = self.rx.build_model(doc, {path: film()})
+            self.assertEqual(model["files"], [path])
+            self.assertNotIn("Hi", self.rx.edl(model))
 
     def test_special_characters_stay_well_formed_and_urls_are_encoded(self):
         name = 'Müller & "Söhne" <take> #2.mp4'.replace('"', "'").replace("<", "(").replace(">", ")")

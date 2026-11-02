@@ -31,6 +31,20 @@ export const EDIT_ICONS = {
                 L(22, 16, 9, 15), L(16, 22, 9, 15)],
     // audio-waveform
     scrub: [P("M2 13a2 2 0 0 0 2-2V7a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0V4a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0v-4a2 2 0 0 1 2-2")],
+    // The Inspector's title tools: bold, italic, underline, strikethrough, case-upper,
+    // text-align-start / -center / -end / -justify, align-vertical-justify-start / -center / -end
+    bold: [P("M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8")],
+    italic: [L(19, 10, 4, 4), L(14, 5, 20, 20), L(15, 9, 4, 20)],
+    underline: [P("M6 4v6a6 6 0 0 0 12 0V4"), L(4, 20, 20, 20)],
+    strike: [P("M16 4H9a3 3 0 0 0-2.83 4"), P("M14 12a4 4 0 0 1 0 8H6"), L(4, 20, 12, 12)],
+    caps: [P("m3 15 4-8 4 8"), P("M4 13h6"), P("M15 11h4.5a2 2 0 0 1 0 4H15V7h4a2 2 0 0 1 0 4")],
+    alignLeft: [P("M21 5H3"), P("M15 12H3"), P("M17 19H3")],
+    alignCenter: [P("M21 5H3"), P("M17 12H7"), P("M19 19H5")],
+    alignRight: [P("M21 5H3"), P("M21 12H9"), P("M21 19H7")],
+    alignJustify: [P("M3 5h18"), P("M3 12h18"), P("M3 19h18")],
+    valignTop: [["rect", { x: 5, y: 16, width: 14, height: 6, rx: 2 }], ["rect", { x: 7, y: 6, width: 10, height: 6, rx: 2 }], P("M2 2h20")],
+    valignMiddle: [["rect", { x: 5, y: 16, width: 14, height: 6, rx: 2 }], ["rect", { x: 7, y: 2, width: 10, height: 6, rx: 2 }], P("M2 12h20")],
+    valignBottom: [["rect", { x: 5, y: 12, width: 14, height: 6, rx: 2 }], ["rect", { x: 7, y: 2, width: 10, height: 6, rx: 2 }], P("M2 22h20")],
     fit: [P("M3 7V5a2 2 0 0 1 2-2h2"), P("M17 3h2a2 2 0 0 1 2 2v2"), P("M21 17v2a2 2 0 0 1-2 2h-2"), P("M7 21H5a2 2 0 0 1-2-2v-2"), C(12, 12, 3), P("m16 16-1.9-1.9")],
 };
 

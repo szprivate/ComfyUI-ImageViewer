@@ -41,10 +41,15 @@
 // clip on a higher track that no longer covers the frame has what is beneath it
 // in the second layer, the way a dissolve has the clip going out.
 //
-// Texts stand on the picture as the render draws them (timeline_render.draw_texts):
-// a layer of its own, laid exactly over the picture's rectangle, each text at
-// its place and size.
+// Titles (clips of the video tracks whose picture is words, titlesAt) are drawn
+// as the render draws them (title_render): each on a canvas of its own laid over
+// the picture's rectangle, the words in the frame there (bEpicViewer_editTitles /
+// paintTitle, the font the server's list names), and the canvas takes the clip's
+// transform, crop and opacity as a picture's layer does. Above the picture when
+// its track is; below it - under a picture of a higher track that does not cover
+// the frame - when it is not, and not at all under one that does.
 import * as D from "./bEpicViewer_editTimelineData.js";
+import { fontList, fontsKnown, paintTitle } from "./bEpicViewer_editFonts.js";
 
 const PREFIX = "edit:";
 // Play around edit (the Trim mode, an edit point selected): this many seconds before and after the cut.
@@ -137,17 +142,13 @@ export const EditPlayMixin = {
         }
         this._epSlots = [home, other];
         // A second <img>, for the picture going out when one picture dissolves
-        // into another; and the layer the texts are written on.
+        // into another. (The titles' canvases are made as they are needed.)
         const doc = home.ownerDocument;
         this._epImgB = doc.createElement("img");
         this._epImgB.className = home.className;
         this._epImgB.style.display = "none";
         this._epImgB.draggable = false;
         home.parentNode.insertBefore(this._epImgB, home);
-        this._epTitles = doc.createElement("div");
-        this._epTitles.className = "edit-titles";
-        this._epTitles.style.display = "none";
-        home.parentNode.appendChild(this._epTitles);
         return this._epSlots;
     },
 
@@ -220,6 +221,12 @@ export const EditPlayMixin = {
         this._editPlayMirror();
     },
 
+    /** The Inspector is dragging a title's slider: draw `clip` with the look `look` for now (null ends it). */
+    editPlayTitleLive(clip, look) {
+        this._editTitleLive = clip ? { clip, look } : null;
+        this._editPlayTitles();
+    },
+
     // The first picture of a tab is fitted to the viewport; after that the zoom
     // is the user's, whatever size the next clip has.
     _editPlayFitOnce() {
@@ -277,7 +284,8 @@ export const EditPlayMixin = {
         this._epViewerT = null;
         this._editFxLive = null;
         if (this._epImgB) { this._epImgB.style.display = "none"; this._epImgB.removeAttribute("src"); }
-        if (this._epTitles) this._epTitles.style.display = "none";
+        for (const el of this._epTitleEls || []) { el.style.display = "none"; el._sig = ""; }
+        this._editTitleLive = null;
         this._ep = null;
         this._epCutShown = null;
         this._videoMode = false;
@@ -576,58 +584,94 @@ export const EditPlayMixin = {
         try { if (under && under.tagName === "VIDEO") under.volume = at.over ? 0 : loud(at.under.clip, uu) * (1 - a); } catch (_) {}
     },
 
-    // The texts that stand on the picture now. Their layer is laid over the
-    // picture's own - it takes the viewer's zoom and pan as the pictures do - and
-    // in it a box lies where the untransformed picture does: the frame. With no
-    // `t` the moment is the one on screen (the picture moved, not the film).
+    // The titles on screen now (titlesAt), each on a canvas of its own laid where
+    // the picture's layer is - before the viewer's zoom and pan, which it then
+    // takes - with the words drawn in the frame's rectangle and the clip's own
+    // transform, crop and opacity after the viewer's (fxPlace, as for a picture).
+    // Redrawn only when its look, size or font changed. With no `t` the moment is
+    // the one on screen (the picture moved, not the film).
     _editPlayTitles(t) {
-        const box = this._epTitles;
         const ep = this._ep;
-        if (!box) return;
+        const pool = this._epTitleEls || (this._epTitleEls = []);
         const cut = this._editPlayCut();
         const moment = t != null ? t : (ep ? ((this.currentFrame || 0) + 0.5) / this.editPlayFps() : 0);
-        const items = cut && ep ? D.textsAt(cut, moment) : [];
+        const items = cut && ep ? D.titlesAt(cut, moment, this._editPlayLive()) : [];
         const main = this._videoMode ? this.videoBase : this.imgBase;
-        const size = items.length ? this._displayedMediaSize() : null;
-        if (!items.length || !size || !main) {
-            if (box.style.display !== "none") { box.style.display = "none"; box._sig = ""; }
-            return;
+        let n = 0, low = false;
+        if (items.length && main && main.parentNode) {
+            if (!fontsKnown()) fontList().then(() => { for (const el of pool) el._sig = ""; this._editPlayTitles(); });
+            // The frame: the picture's own size, else the last one seen (titles over black), else 1920 x 1080.
+            let size = this._displayedMediaSize && this._displayedMediaSize();
+            if (size && size.w > 0 && size.h > 0) this._epFrameSize = size; else size = this._epFrameSize || { w: 1920, h: 1080 };
+            const host = main.parentNode;
+            const doc = host.ownerDocument;
+            let W = main.clientWidth, H = main.clientHeight, at = [main.offsetLeft, main.offsetTop];
+            if (!W || !H || main.style.display === "none") { W = host.clientWidth; H = host.clientHeight; at = [0, 0]; }
+            const s = Math.min(W / size.w, H / size.h);
+            const w = size.w * s, h = size.h * s;
+            const box = { x: (W - w) / 2, y: (H - h) / 2, w, h };
+            const dpr = (doc.defaultView && doc.defaultView.devicePixelRatio) || 1;
+            // The picture on screen and where its track is: a title of a lower track lies under it, if it lets anything show.
+            const pic = ep && ep.at && ep.at.clip ? ep.at : null;
+            const rank = D.pictureRank(cut, pic);
+            const covers = !!pic && !pic.over && !D.clipFx(pic.clip, Math.max(0, moment - (pic.origin || 0)));
+            for (const item of items) {
+                const below = item.rank < rank;
+                if (below && covers) continue;
+                let el = pool[n];
+                if (!el || el.ownerDocument !== doc) {
+                    el = doc.createElement("canvas");
+                    el.className = "edit-title-layer";
+                    pool[n] = el;
+                }
+                n += 1;
+                if (el.parentNode !== host) host.appendChild(el);
+                const st = el.style;
+                st.display = "block";
+                st.left = at[0] + "px";
+                st.top = at[1] + "px";
+                st.width = W + "px";
+                st.height = H + "px";
+                st.zIndex = below ? "2" : "4";
+                low = low || below;
+                const clip = item.clip;
+                const live = this._editTitleLive;
+                const look = live && live.clip === clip ? live.look : D.titleAt(clip, item.u);
+                const bw = Math.max(1, Math.round(W * dpr)), bh = Math.max(1, Math.round(H * dpr));
+                const sig = JSON.stringify([look, bw, bh, Math.round(w * dpr), Math.round(h * dpr)]);
+                if (el._sig !== sig) {
+                    if (el.width !== bw) el.width = bw;
+                    if (el.height !== bh) el.height = bh;
+                    el._sig = sig;
+                    el._epFont = paintTitle(el, look, { x: box.x * dpr, y: box.y * dpr, w: w * dpr, h: h * dpr },
+                                            () => { el._sig = ""; this._editPlayTitles(); });
+                }
+                el.dataset.key = item.key;
+                el.dataset.font = el._epFont ? el._epFont.family : "";
+                // The clip's transform, crop and opacity, as a picture's layer has them.
+                const fxLive = this._editFxLive;
+                const fx = D.clipFx(fxLive && fxLive.clip === clip ? { fx: fxLive.fx } : clip, item.u);
+                let transform = this._epViewerT || "", clipPath = "", op = "";
+                if (fx) {
+                    const place = D.fxPlace(fx, box);
+                    transform = (transform + " " + place.transform).trim();
+                    clipPath = place.clip;
+                    op = fx.op === 1 ? "" : String(fx.op);
+                }
+                if (st.transform !== transform) st.transform = transform;
+                if (st.clipPath !== clipPath) st.clipPath = clipPath;
+                if (st.opacity !== op) st.opacity = op;
+            }
         }
-        const W = main.clientWidth, H = main.clientHeight;
-        const s = Math.min(W / size.w, H / size.h);
-        const w = size.w * s, h = size.h * s;
-        // The layer of the texts lies exactly where the picture's layer does (a
-        // layer is as large as the viewer lays its picture out, not as large as
-        // the viewport), before the viewer's zoom and pan - which it then takes.
-        const at = [main.offsetLeft, main.offsetTop];
-        const sig = JSON.stringify([items, Math.round(w), Math.round(h), W, H, at, this._epViewerT]);
-        if (box._sig === sig) return;
-        box._sig = sig;
-        box.style.display = "block";
-        box.style.left = at[0] + "px";
-        box.style.top = at[1] + "px";
-        box.style.width = W + "px";
-        box.style.height = H + "px";
-        box.style.transform = this._epViewerT || "";
-        let frame = box.firstChild;
-        if (!frame) { frame = box.ownerDocument.createElement("div"); frame.className = "edit-titles-frame"; box.append(frame); }
-        frame.style.left = ((W - w) / 2) + "px";
-        frame.style.top = ((H - h) / 2) + "px";
-        frame.style.width = w + "px";
-        frame.style.height = h + "px";
-        const doc = box.ownerDocument;
-        frame.replaceChildren(...items.map((item) => {
-            const d = doc.createElement("div");
-            d.className = "edit-title";
-            const px = Math.max(2, h * item.size / 100);
-            d.style.left = (item.x * 100) + "%";
-            d.style.top = (item.y * 100) + "%";
-            d.style.fontSize = px + "px";
-            d.style.color = item.color;
-            d.style.webkitTextStroke = Math.max(0.5, px / 7) + "px #000";
-            d.textContent = item.text;
-            return d;
-        }));
+        for (let k = n; k < pool.length; k++) if (pool[k].style.display !== "none") { pool[k].style.display = "none"; pool[k]._sig = ""; }
+        // A title under the picture: the picture's layer goes above it (put back when there is none).
+        if (main && low) { main.style.zIndex = "3"; main._epZTitle = true; }
+        for (const el of this._editPlayLayers()) {
+            if (!el._epZTitle || (low && el === main)) continue;
+            el._epZTitle = false;
+            const under = ep && ep.underEl;
+            el.style.zIndex = under === el ? "1" : under ? "2" : "";          // as _editPlayUnder has them
+        }
     },
 
     // The film's clock reads this. One window's clock, whichever window the

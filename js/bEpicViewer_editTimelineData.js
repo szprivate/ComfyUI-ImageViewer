@@ -36,6 +36,16 @@
 //
 // Every edit returns a NEW cut and leaves the one it was given alone: the panel
 // keeps the saved cut beside the working one to know what has changed.
+//
+// A TITLE is a clip like any other on a video track (V2 and up), with `title`
+// (its words and its look, bEpicViewer_editTitles.js) and no file: it has no
+// time of its own (isStillClip, like a picture), and its picture is the words
+// over what is under it - never a cover (pictureAt leaves it out; the player and
+// the render lay it over the picture, titlesAt). Texts of older cuts (`texts`,
+// markers in the file) come in as titles (textsToTitles; timeline_io does the
+// same when it reads a cut).
+
+import { TITLE_KEYS, TITLE_NUM, cleanTitle, titleFromText } from "./bEpicViewer_editTitles.js";
 
 // How a text is drawn where nothing says otherwise (timeline_io.TEXT_LOOK, kept
 // in step): `size` is a percentage of the picture's height, `x` / `y` where its
@@ -92,9 +102,9 @@ export function cleanFx(given) {
 // timeline_io.clean_fx / timeline_render.key_value are the same in Python - a
 // change to one is a change to the other (tests/test_edit_disabled_keys.py).
 
-export const KEY_PARAMS = [...Object.keys(FX), "vol"];
+export const KEY_PARAMS = [...Object.keys(FX), "vol", ...Object.keys(TITLE_KEYS)];
 export const INTERPS = ["linear", "in", "out", "inout", "hold"];
-const KEY_RANGE = (p) => (p === "vol" ? [0, 1] : [FX[p][1], FX[p][2]]);
+const KEY_RANGE = (p) => (p === "vol" ? [0, 1] : TITLE_KEYS[p] ? TITLE_NUM[TITLE_KEYS[p]].slice(1) : [FX[p][1], FX[p][2]]);
 
 /** Keys held to what they may be: known params, finite, sorted, one per moment (the last wins), at most 1000 each. */
 export function cleanKeys(given) {
@@ -159,6 +169,7 @@ export function paramAt(c, p, u) {
     const list = keysOf(c, p);
     if (list.length) return keyValue(list, u);
     if (p === "vol") return Math.max(0, Math.min(1, c && c.volume != null ? num(c.volume, 1) : 1));
+    if (TITLE_KEYS[p]) return cleanTitle(c && c.title)[TITLE_KEYS[p]];
     const fx = cleanFx(c && c.fx);
     return fx[p] === undefined ? FX[p][0] : fx[p];
 }
@@ -352,6 +363,7 @@ function settle(cut) {
             c.in = round(Math.max(0, num(c.in)));
             c.length = round(Math.max(MIN_CLIP, num(c.length)));
             delete c.gap;
+            if (c.title) { c.title = cleanTitle(c.title); c.in = 0; c.file = ""; }
             tidyTime(c);
             tidyLink(c);
         }
@@ -371,9 +383,9 @@ function tidyLink(c) {
 // speed or loop, and a loop no longer than one turn are no speed and no loop.
 function tidyTime(c) {
     const sp = num(c.speed, 1);
-    if (!(sp > 0) || Math.abs(sp - 1) < 1e-4 || isStillImage(c.file)) delete c.speed;
+    if (!(sp > 0) || Math.abs(sp - 1) < 1e-4 || isStillClip(c)) delete c.speed;
     else c.speed = round(Math.max(MIN_SPEED, Math.min(MAX_SPEED, sp)));
-    const looped = (c.loop === "loop" || c.loop === "pingpong") && num(c.span) > 0 && !isStillImage(c.file);
+    const looped = (c.loop === "loop" || c.loop === "pingpong") && num(c.span) > 0 && !isStillClip(c);
     if (looped && num(c.length) * speedOf(c) > num(c.span) + 1e-4) c.span = round(num(c.span));
     else { delete c.loop; delete c.span; }
 }
@@ -409,14 +421,14 @@ export function trimStart(cut, i, delta) {
 // How far (seconds of the film) a clip's end may go later: to the end of its
 // source when that is known; without end for a still or a loop.
 export function outRoom(c, durations) {
-    if (!c || isStillImage(c.file) || loopOf(c)) return Infinity;
+    if (!c || isStillClip(c) || loopOf(c)) return Infinity;
     const room = srcRoom(c, durations);
     return Number.isFinite(room) ? Math.max(0, room / speedOf(c) - num(c.length)) : Infinity;
 }
 
 // How far (seconds of the film) a clip's start may go earlier: to its source's start.
 export function inRoom(c) {
-    if (!c || isStillImage(c.file)) return Infinity;
+    if (!c || isStillClip(c)) return Infinity;
     return num(c.in) / speedOf(c);
 }
 
@@ -429,7 +441,7 @@ function headSpare(c) {
 // The start of a clip moved by `d` seconds of the film: the source moves with
 // it (at its speed); a loop's turn loses what its head lost.
 function headTrim(c, d) {
-    if (!isStillImage(c.file)) {
+    if (!isStillClip(c)) {
         c.in = num(c.in) + d * speedOf(c);
         if (loopOf(c)) c.span = num(c.span) - d * speedOf(c);
     }
@@ -562,7 +574,8 @@ export function placeClip(cut, id, clip, at) {
     const k = trackOf(next, id);
     if (!k) return next;
     k.clips.push({ file: String(clip.file || ""), name: String(clip.name || ""), in: Math.max(0, num(clip.in)),
-                   length: num(clip.length, 3), at: Math.max(0, num(at)), color: String(clip.color || ""), volume: 1 });
+                   length: num(clip.length, 3), at: Math.max(0, num(at)), color: String(clip.color || ""), volume: 1,
+                   ...(clip.title ? { title: cleanTitle(clip.title) } : {}) });
     return settle(next);
 }
 
@@ -656,6 +669,138 @@ export function textsAt(cut, seconds) {
         && String(t.text || "").trim()).map((t) => ({ text: String(t.text), ...textLook(t) }));
 }
 
+// ── titles ───────────────────────────────────────────────────────────────────
+
+export const TITLE_SECONDS = 3;
+
+// Is track `id` empty from `at` for `length` seconds?
+function trackFree(cut, id, at, length) {
+    const k = trackOf(cut, id);
+    if (!k || k.kind === "audio") return false;
+    const a = num(at), b = a + num(length);
+    return !k.clips.some((c) => num(c.at) < b - 1e-6 && num(c.at) + num(c.length) > a + 1e-6);
+}
+
+/**
+ * A title of its own at `at` seconds, `length` long: on the video track `track`
+ * where it is free there, else on the top video track if that is free, else on a
+ * new one above it - the top layer, as a title added in an editor lands. `title`
+ * is its look and words (cleanTitle). Returns { cut, sel }.
+ */
+export function addTitle(cut, title, at, length = TITLE_SECONDS, track = "") {
+    let next = copy(cut);
+    const start = round(Math.max(0, num(at)));
+    const len = round(Math.max(MIN_CLIP, num(length, TITLE_SECONDS)));
+    const vids = next.tracks.filter((k) => k.kind !== "audio");
+    let id = track && track !== "V1" && trackFree(next, track, start, len) ? track
+        : vids.length && trackFree(next, vids[vids.length - 1].id, start, len) ? vids[vids.length - 1].id : "";
+    if (!id) { next = addTrack(next, "video"); id = next.tracks[next.tracks.length - 1].id; }
+    const t = cleanTitle(title);
+    const k = trackOf(next, id);
+    k.clips.push({ file: "", name: titleName(t), in: 0, length: len, at: start, color: "", volume: 1, title: t });
+    return { cut: settle(next), sel: { kind: "tclip", track: id, i: k.clips.length - 1 } };
+}
+
+/** The name a title clip shows: its first line of words. */
+export function titleName(t) {
+    return String((t && t.text) || "").split("\n").find((x) => x.trim()) || "Title";
+}
+
+/** Is a selection a title clip? */
+export function isTitleSel(cut, s) {
+    const c = s && s.kind === "tclip" ? clipOf(cut, s) : null;
+    return !!(c && c.title);
+}
+
+/**
+ * Change the titles of `list` (selections; the ones that are not titles are
+ * left alone): `patch` is part of a title ({ bold: true }, { text }, ...). A
+ * title whose name was its words takes the new first line as its name.
+ */
+export function setTitle(cut, list, patch) {
+    const next = copy(cut);
+    for (const s of [].concat(list || [])) {
+        const c = s && s.kind === "tclip" ? clipOf(next, s) : null;
+        if (!c || !c.title) continue;
+        const was = c.title;
+        c.title = cleanTitle({ ...was, ...patch });
+        if (patch.text !== undefined && (!c.name || c.name === titleName(was))) c.name = titleName(c.title);
+    }
+    return next;
+}
+
+/** A title clip's look at clip time `u`: its keyed numbers (size, tracking, line spacing, outline) at their value there. */
+export function titleAt(c, u = 0) {
+    const t = cleanTitle(c && c.title);
+    for (const [k, p] of Object.entries(TITLE_KEYS)) {
+        const list = keysOf(c, k);
+        if (list.length) { const [lo, hi] = TITLE_NUM[p].slice(1); t[p] = Math.max(lo, Math.min(hi, keyValue(list, u))); }
+    }
+    return t;
+}
+
+/**
+ * The titles on screen at `seconds` (live tracks, not switched off), lowest
+ * first: [{ clip, sel, key, origin, u, rank }] - `u` the clip's own time, `rank`
+ * its track's place (V1 0, the video tracks above 1, 2, ...), the order they are
+ * laid in. Two of one track at one moment: the later is on top, as for clips.
+ */
+export function titlesAt(cut, seconds, live) {
+    const out = [];
+    const t = num(seconds);
+    const on = (id) => !live || live.has(id);
+    const vids = ((cut && cut.tracks) || []).filter((k) => k.kind !== "audio");
+    vids.forEach((k, n) => {
+        if (!on(k.id)) return;
+        const here = k.clips.map((c, i) => ({ c, i })).filter(({ c }) => c.title && !c.disabled
+            && t >= num(c.at) - 1e-6 && t < num(c.at) + num(c.length) - 1e-6);
+        here.sort((x, y) => num(x.c.at) - num(y.c.at));
+        for (const { c, i } of here) {
+            out.push({ clip: c, sel: { kind: "tclip", track: k.id, i }, key: `${k.id}:${i}`, origin: num(c.at), u: round(t - num(c.at)), rank: n + 1 });
+        }
+    });
+    return out;
+}
+
+/** Where the picture pictureAt found lies in the stack of tracks (V1 0, a video track n), -1 for none. */
+export function pictureRank(cut, at) {
+    if (!at || !at.clip || !at.sel) return -1;
+    if (at.sel.kind === "clip") return 0;
+    return ((cut && cut.tracks) || []).filter((k) => k.kind !== "audio").findIndex((k) => k.id === at.sel.track) + 1;
+}
+
+/**
+ * The texts of an older cut (`texts`, markers in the file) as titles: each a
+ * title clip that looks as the text did, on video tracks of their own above the
+ * others (as many as texts overlap); `mark` names the marker it came from, so
+ * what was written into it (agentY's preset) goes with it into the file. The
+ * texts' switch (off.T) is the new tracks' switch. timeline_io.editable does the
+ * same when it reads a cut.
+ */
+export function textsToTitles(cut) {
+    if (!cut || !(cut.texts || []).length) return cut;
+    let next = copy(cut);
+    const made = [];
+    const texts = next.texts.map((t, n) => ({ t, n })).sort((a, b) => num(a.t.start) - num(b.t.start) || a.n - b.n);
+    for (const { t } of texts) {
+        const start = round(Math.max(0, num(t.start))), len = round(Math.max(MIN_TEXT, num(t.length)));
+        let k = made.find((m) => m.end <= start + 1e-6);
+        if (!k) {
+            next = addTrack(next, "video");
+            k = { id: next.tracks[next.tracks.length - 1].id, end: 0 };
+            made.push(k);
+            if (next.off && next.off.T) trackOf(next, k.id).off = true;
+        }
+        const title = titleFromText(t);
+        trackOf(next, k.id).clips.push({ file: "", name: titleName(title), in: 0, length: len, at: start, color: "", volume: 1, title,
+                                         ...(Number.isInteger(t.ref) ? { mark: t.ref } : {}) });
+        k.end = start + len;
+    }
+    next.texts = [];
+    if (next.off) delete next.off.T;
+    return settle(next);
+}
+
 /**
  * Move a clip to another track (`to`: "V1" or a track's id), to the moment `at`.
  * On the cut itself it goes between the shots there; on any other track it is
@@ -668,6 +813,7 @@ export function transferClip(cut, sel, to, at, opts = {}) {
     const from = sel.kind === "clip" ? "V1" : sel.track;
     if (from === to) return null;
     if (sel.kind === "clip" && cut.clips.length <= 1) return null;
+    if (c.title && to === "V1") return null;                  // a title is laid over the cut: V2 and up
     // Off V1 a gap stays where it was (the clips after it do not move), unless
     // it is a ripple (`opts.ripple`): then they close up.
     let next = sel.kind === "clip" ? (opts.ripple ? removeClip(cut, sel.i) : liftV1(cut, sel.i))
@@ -677,7 +823,7 @@ export function transferClip(cut, sel, to, at, opts = {}) {
         clip.volume = num(c.volume, 1); clip.fx = cleanFx(c.fx);
         if (c.speed) clip.speed = c.speed;
         if (loopOf(c)) { clip.loop = c.loop; clip.span = c.span; }
-        for (const k of ["link", "unlinked", "mute", "disabled"]) if (c[k] !== undefined) clip[k] = c[k];
+        for (const k of ["link", "unlinked", "mute", "disabled", "title", "mark"]) if (c[k] !== undefined) clip[k] = c[k];
     };
     if (to === "V1") {
         if (!opts.ripple && next.clips.length) {
@@ -795,12 +941,12 @@ export function sameCut(a, b) {
     const dress = (c) => [String(c.color || ""), round(num(c.volume, 1)), JSON.stringify(Object.entries(cleanFx(c.fx)).sort()),
                          round(speedOf(c)), loopOf(c), loopOf(c) ? round(num(c.span)) : 0,
                          takesOf(c).length ? JSON.stringify([c.file, takesOf(c).map((t) => [t.version, !!t.active, t.file])]) : "",
-                         String(c.link || ""), !!c.unlinked, !!c.mute, !!c.disabled];
+                         String(c.link || ""), !!c.unlinked, !!c.mute, !!c.disabled, c.title ? JSON.stringify(cleanTitle(c.title)) : ""];
     const key = (cut) => JSON.stringify({
         clips: ((cut && cut.clips) || []).map((c) => [Number.isInteger(c.ref) ? c.ref : c.file, c.name, round(num(c.in)), round(num(c.length)), round(num(c.transition)), round(num(c.gap)), ...dress(c)]),
         texts: ((cut && cut.texts) || []).map((t) => [Number.isInteger(t.ref) ? t.ref : "new", t.text, round(num(t.start)), round(num(t.length)), JSON.stringify(textLook(t))]),
         tracks: ((cut && cut.tracks) || []).map((k) => [k.kind, k.name, !!k.off, (k.clips || []).map((c) =>
-            [Array.isArray(c.ref) ? c.ref.join(":") : c.file, c.name, round(num(c.at)), round(num(c.in)), round(num(c.length)), ...dress(c)])]),
+            [Array.isArray(c.ref) ? c.ref.join(":") : c.title ? "title" : c.file, c.name, round(num(c.at)), round(num(c.in)), round(num(c.length)), ...dress(c)])]),
         sound: ((cut && cut.sound) || []).map((s) => String(s.file || s.name || "")),
         off: [!!(cut && cut.off && cut.off.V1), !!(cut && cut.off && cut.off.A1), !!(cut && cut.off && cut.off.T)],
     });
@@ -830,7 +976,9 @@ export function toSave(cut) {
         tracks: (cut.tracks || []).map((k) => ({
             id: k.id, kind: k.kind, name: k.name, off: !!k.off,
             clips: (k.clips || []).map((c) => ({
-                ...(Array.isArray(c.ref) ? { ref: c.ref } : { file: c.file }),
+                // A title has no file: a new one is named by its words, and by the marker it came from (`mark`).
+                ...(Array.isArray(c.ref) ? { ref: c.ref } : c.title ? (Number.isInteger(c.mark) ? { mark: c.mark } : {}) : { file: c.file }),
+                ...(c.title ? { title: cleanTitle(c.title) } : {}),
                 name: c.name, at: c.at, in: c.in, length: c.length, color: c.color || "", volume: num(c.volume, 1),
                 fx: cleanFx(c.fx), ...timeOf(c), ...(takesOf(c).length ? { takes: cleanTakes(c.takes) } : {}),
             })),
@@ -882,6 +1030,11 @@ export function layoutCut(cut, density = 1, span = 0) {
         id: k.id, kind: k.kind, name: k.name || k.id, off: !!k.off,
         items: (k.clips || []).map((c, i) => {
             const file = base(c.file);
+            if (c.title) {
+                return { ...place(num(c.at), num(c.length)), i, start: num(c.at), length: num(c.length), color: c.color || "", isTitle: true,
+                         name: c.name || titleName(c.title),
+                         title: `Title "${String(c.title.text || "").replace(/\n/g, " / ")}" (${c.title.font}), ${lengthLabel(c.length)} at ${lengthLabel(c.at)}` };
+            }
             return { ...place(num(c.at), num(c.length)), i, start: num(c.at), length: num(c.length), color: c.color || "",
                      name: c.name || file || "clip " + (i + 1),
                      title: `${c.name || file} — ${lengthLabel(c.length)} at ${lengthLabel(c.at)}, from ${lengthLabel(c.in)} of the source`
@@ -988,12 +1141,12 @@ export function pictureAt(cut, seconds, live) {
         const k = tracks[n];
         k.clips.forEach((c, i) => {
             const a = num(c.at), b = a + num(c.length);
-            if (c.disabled) return;                 // a disabled clip is not there: what is under it shows
+            if (c.disabled || c.title) return;      // a disabled clip is not there: what is under it shows; a title is laid over (titlesAt)
             if (a > t + 1e-6) next = Math.min(next, a);
             if (!(t >= a - 1e-6 && t < b - 1e-6)) return;
             next = Math.min(next, b);
             // Two clips of one track at one moment: the one that begins later is on top.
-            const later = k.clips.some((o, j) => j !== i && !o.disabled && num(o.at) > a && t >= num(o.at) - 1e-6 && t < num(o.at) + num(o.length) - 1e-6);
+            const later = k.clips.some((o, j) => j !== i && !o.disabled && !o.title && num(o.at) > a && t >= num(o.at) - 1e-6 && t < num(o.at) + num(o.length) - 1e-6);
             if (later) return;
             stack.push({ clip: c, key: `${k.id}:${i}`, sel: { kind: "tclip", track: k.id, i }, origin: a, end: b });
         });
@@ -1108,6 +1261,7 @@ export function splitClip(cut, sel, seconds) {
         const a = next.clips[i];
         const b = { ...a, in: round(num(a.in) + local * speedOf(a)), length: round(num(a.length) - local), transition: 0 };
         delete b.gap;
+        delete b.uid;                                // a piece of its own (undo finds each by its uid)
         delete b.link; delete b.unlinked;            // splitWithLink pairs it again
         if (a.fx) [a.fx, b.fx] = splitFx(a.fx, local);
         a.length = local;
@@ -1121,6 +1275,7 @@ export function splitClip(cut, sel, seconds) {
         const local = round(t - num(a.at));
         if (local < MIN_CLIP - 1e-6 || local > num(a.length) - MIN_CLIP + 1e-6) return null;
         const b = { ...a, at: round(num(a.at) + local), in: round(num(a.in) + local * speedOf(a)), length: round(num(a.length) - local) };
+        delete b.uid;
         delete b.link; delete b.unlinked;
         if (a.fx) [a.fx, b.fx] = splitFx(a.fx, local);
         a.length = local;
@@ -1507,6 +1662,7 @@ export function agentLoses(cut) {
     if (all.some((c) => loopOf(c))) out.push("loops (a looped clip comes back played once)");
     const plain = JSON.stringify(textLook({}));
     if (((cut && cut.texts) || []).some((t) => JSON.stringify(textLook(t)) !== plain)) out.push("how the texts look (size, place, colour)");
+    if (all.some((c) => c.title)) out.push("how the titles look (font, style, alignment, outline, shadow, box: agentY draws them as captions or by their preset)");
     return out;
 }
 
@@ -1571,15 +1727,18 @@ const STILL_IMAGE = /\.(png|jpe?g|webp|tiff?|gif|bmp|avif|exr)$/i;
 /** Is a clip's file a picture (no time of its own: no speed, no loop, no source length)? */
 export function isStillImage(file) { return STILL_IMAGE.test(String(file || "")); }
 
+/** Has a clip no time of its own - a picture, or a title (no source length, no speed, no loop)? */
+export function isStillClip(c) { return !!(c && c.title) || isStillImage(c && c.file); }
+
 /** A clip's speed: 1 where it has none. */
 export function speedOf(c) {
     const s = num(c && c.speed, 1);
-    return s > 0 && !isStillImage(c && c.file) ? Math.max(MIN_SPEED, Math.min(MAX_SPEED, s)) : 1;
+    return s > 0 && !isStillClip(c) ? Math.max(MIN_SPEED, Math.min(MAX_SPEED, s)) : 1;
 }
 
 /** How a clip loops: "loop", "pingpong" - or "" for not at all. */
 export function loopOf(c) {
-    return c && (c.loop === "loop" || c.loop === "pingpong") && num(c.span) > 0 && !isStillImage(c.file) ? c.loop : "";
+    return c && (c.loop === "loop" || c.loop === "pingpong") && num(c.span) > 0 && !isStillClip(c) ? c.loop : "";
 }
 
 /** How many seconds of its source a clip uses: one turn of a loop, else its length at its speed. */
@@ -1589,7 +1748,7 @@ export function srcUse(c) {
 
 /** How much source there is from a clip's in point (Infinity for a still, or where its length is not known). */
 export function srcRoom(c, durations) {
-    if (!c || isStillImage(c.file)) return Infinity;
+    if (!c || isStillClip(c)) return Infinity;
     const known = num(durations && durations[c.file], 0);
     return known > 0 ? Math.max(0, known - num(c.in)) : Infinity;
 }
@@ -1640,7 +1799,7 @@ export function retimeClip(cut, sel, length, fromStart) {
     if (!c) return next;
     const was = num(c.length), sp = speedOf(c);
     let len = Math.max(MIN_CLIP, num(length, was));
-    if (!isStillImage(c.file)) {
+    if (!isStillClip(c)) {
         const speed = Math.max(MIN_SPEED, Math.min(MAX_SPEED, sp * was / len));
         len = was * sp / speed;
         c.speed = speed;
@@ -1653,7 +1812,7 @@ export function retimeClip(cut, sel, length, fromStart) {
 /** A clip's speed set (1 = its own), its source kept: its length follows. */
 export function setSpeed(cut, sel, speed) {
     const c = clipRef(cut, sel);
-    if (!c || isStillImage(c.file)) return copy(cut);
+    if (!c || isStillClip(c)) return copy(cut);
     const s = Math.max(MIN_SPEED, Math.min(MAX_SPEED, num(speed, 1)));
     return retimeClip(cut, sel, num(c.length) * speedOf(c) / s);
 }
@@ -1668,7 +1827,7 @@ export function loopExtend(cut, sel, length, mode, durations) {
     const next = copy(cut);
     const c = clipRef(next, sel);
     if (!c) return next;
-    if (!isStillImage(c.file)) {
+    if (!isStillClip(c)) {
         if (!loopOf(c)) c.span = Math.min(srcUse(c), srcRoom(c, durations));
         c.loop = mode === "pingpong" ? "pingpong" : (mode === "loop" ? "loop" : (c.loop || "loop"));
     }
@@ -1680,7 +1839,7 @@ export function loopExtend(cut, sel, length, mode, durations) {
 export function loopOnce(cut, sel, mode, durations) {
     const c = clipRef(cut, sel);
     if (!c) return copy(cut);
-    const turn = isStillImage(c.file) ? num(c.length)
+    const turn = isStillClip(c) ? num(c.length)
         : (loopOf(c) ? num(c.span) : Math.min(srcUse(c), srcRoom(c, durations))) / speedOf(c);
     return loopExtend(cut, sel, num(c.length) + turn, mode, durations);
 }
@@ -1736,7 +1895,7 @@ export function rollEdit(cut, i, delta, durations) {
 export function slipClip(cut, sel, delta, durations) {
     const next = copy(cut);
     const c = clipRef(next, sel);
-    if (!c || isStillImage(c.file)) return next;
+    if (!c || isStillClip(c)) return next;
     const known = num(durations && durations[c.file], 0);
     const top = known > 0 ? Math.max(0, known - srcUse(c)) : Infinity;
     c.in = Math.max(0, Math.min(top, num(c.in) + num(delta)));
@@ -1992,7 +2151,7 @@ export function activeTake(c) { return takesOf(c).find((t) => t && t.active) || 
  * shortened (0 when it was not).
  */
 function fitSource(c, durations, retime) {
-    if (isStillImage(c.file)) return 0;
+    if (isStillClip(c)) return 0;
     const known = durationFor(durations, c.file);
     if (!(known > 0)) return 0;
     const sp = speedOf(c);
@@ -2148,6 +2307,7 @@ export function overwriteV1(cut, clip, at) {
         }
         if (e0 > b + 1e-6 && e0 - b >= MIN_CLIP - 1e-6) {            // its tail stays, from the clip's end
             const tail = { ...c0 };
+            delete tail.uid;
             headCut(tail, b - s0);
             tail.length = round(e0 - b);
             if (s0 < a - 1e-6) { delete tail.link; delete tail.unlinked; }   // a piece of a clip cut in two has no partner
@@ -2392,7 +2552,7 @@ export function newLinkId(cut) {
  */
 export function unlinkClip(cut, sel) {
     const c = clipOf(cut, sel);
-    if (!c || selKind(cut, sel) !== "video" || isStillImage(c.file)) return null;
+    if (!c || selKind(cut, sel) !== "video" || isStillClip(c)) return null;
     if (c.link) {
         const partner = linkPartner(cut, sel, false);
         if (!partner || c.unlinked) return null;
@@ -2840,6 +3000,7 @@ export function overwriteTrack(cut, id, clip, at) {
         if (s0 < a - 1e-6 && a - s0 >= MIN_CLIP - 1e-6) kept.push({ ...c0, length: round(a - s0) });
         if (e0 > b + 1e-6 && e0 - b >= MIN_CLIP - 1e-6) {
             const tail = { ...c0 };
+            delete tail.uid;
             headCut(tail, b - s0);
             tail.length = round(e0 - b);
             tail.at = b;
@@ -2886,7 +3047,7 @@ export function moveGroup(cut, list, delta, rows = 0) {
     for (const s of items) {
         if (!own.has(selId(s)) || s.kind === "text") continue;
         const v = vids.indexOf(trackId(s)), u = auds.indexOf(trackId(s));
-        if (v >= 0) rv = Math.min(rv, v);
+        if (v >= 0) rv = Math.min(rv, v - (isTitleSel(cut, s) ? 1 : 0));        // a title stays above V1
         if (u >= 0) ra = Math.max(ra, -u) || 0;
     }
     // Lifted: V1 from the end (what follows stays where it is), the tracks from the end.
@@ -3154,7 +3315,7 @@ export function edgeFrame(cut, sel, which, fps) {
     const frame = which === "last" ? Math.max(first, Math.round(span.end * rate) - 1) : first;
     const t = (frame + 0.5) / rate;
     const src = srcLocal(c, Math.max(0, t - span.start));
-    return { sel, clip: c, frame, t: round(t), src, srcFrame: Math.floor(src * rate + 1e-6), still: isStillImage(c.file) };
+    return { sel, clip: c, frame, t: round(t), src, srcFrame: Math.floor(src * rate + 1e-6), still: isStillClip(c) };
 }
 
 /**
@@ -3432,7 +3593,7 @@ export const PASTE_ATTRS = [
     { id: "speed", group: "timing", label: "Speed" },
     { id: "name", group: "clip", label: "Name" },
     { id: "color", group: "clip", label: "Colour" },
-    { id: "textlook", group: "text", label: "Text look (size, place, colour)" },
+    { id: "textlook", group: "text", label: "Text look (font, style, size, alignment, colours, box)" },
 ];
 export const PASTE_GROUPS = [["video", "Video"], ["audio", "Audio"], ["keys", "Keyframes"], ["timing", "Timing"], ["clip", "Clip"], ["text", "Text"]];
 
@@ -3442,8 +3603,9 @@ export function pasteCaps(cut, sel) {
     const c = clipOf(cut, sel);
     if (!c) return null;
     const picture = sel.kind === "clip" || (trackOf(cut, sel.track) || {}).kind !== "audio";
+    if (c.title) return { clip: true, picture: true, sound: false, timed: false, text: true, title: true };
     const sound = (!picture) || (!isStill(c.file) && !c.mute);
-    return { clip: true, picture, sound, timed: !isStillImage(c.file) };
+    return { clip: true, picture, sound, timed: !isStillClip(c) };
 }
 
 /** The clipboard's entry for a selected clip or text: a copy of it and its caps (null for anything else). */
@@ -3451,7 +3613,8 @@ export function pasteSource(cut, sel) {
     const caps = pasteCaps(cut, sel);
     if (!caps) return null;
     const item = sel.kind === "text" ? cut.texts[sel.i] : clipOf(cut, sel);
-    return { caps, item: JSON.parse(JSON.stringify(item)), name: String(item.name || item.text || String(item.file || "").split(/[\/]/).pop() || "clip").split("\n")[0] };
+    return { caps, item: JSON.parse(JSON.stringify(item)),
+             name: String(item.name || item.text || (item.title && item.title.text) || String(item.file || "").split(/[\/]/).pop() || "clip").split("\n")[0] };
 }
 
 /** Can an item of caps `caps` have attribute `id`? */
@@ -3506,9 +3669,14 @@ export function pasteAttributes(cut, source, targets, picks) {
         const caps = pasteCaps(next, t);
         if (!caps) continue;
         const want = (id) => !!picks[id] && pasteTakes(source.caps, id) && pasteTakes(caps, id);
-        if (caps.text) {
-            if (want("textlook")) next = setTextLook(next, t.i, textLook(src));
+        if (caps.text && !caps.title) {
+            if (want("textlook")) next = setTextLook(next, t.i, src.title ? { ...TEXT_LOOK, size: src.title.size, x: src.title.x, y: src.title.y, color: src.title.color } : textLook(src));
             continue;
+        }
+        // A title's look: everything but its words (from a title, or from a text of an older cut).
+        if (caps.title && want("textlook")) {
+            const { text: _words, ...look } = src.title ? cleanTitle(src.title) : titleFromText(src);
+            next = setTitle(next, [t], look);
         }
         // The speed first: it sets the length the keys are held to.
         if (want("speed") && Math.abs(speedOf(clipOf(next, t)) - speedOf(src)) > 1e-9) next = setSpeed(next, t, speedOf(src));
@@ -3535,11 +3703,22 @@ export function pasteAttributes(cut, source, targets, picks) {
             for (const f of a.flags || []) fx[f] = !!sfx[f];
             if (a.off) fx[a.off] = !!sfx[a.off];
         }
+        // The keys of a title's numbers go with its look.
+        const tpatch = {};
+        if (caps.title && want("textlook")) {
+            for (const p of Object.keys(TITLE_KEYS)) {
+                const list = keysOf(src, p);
+                if (withKeys && list.length) keys[p] = clipKeysTo(list, c.length); else delete keys[p];
+                if (list.length && !withKeys) tpatch[TITLE_KEYS[p]] = keyValue(list, 0);
+                touched = true;
+            }
+        }
         if (!touched) continue;
         fx.keys = keys;
         const cleaned = cleanFx(fx);
         if (Object.keys(cleaned).length || c.fx) c.fx = cleaned;
         if (volume !== undefined) c.volume = round(Math.max(0, Math.min(1, num(volume, 1))));
+        if (Object.keys(tpatch).length) next = setTitle(next, [t], tpatch);
     }
     return next;
 }
