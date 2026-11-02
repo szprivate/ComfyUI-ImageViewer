@@ -49,6 +49,11 @@ import { notice } from "./bEpicViewer_exportUI.js";
 import { setEditIcon } from "./bEpicViewer_editIcons.js";
 import { familyNames, fontList, fontNote, fontsKnown } from "./bEpicViewer_editFonts.js";
 import { TITLE_KEYS, TITLE_NUM, cleanTitle } from "./bEpicViewer_editTitles.js";
+import * as AFX from "./bEpicViewer_audioFxData.js";
+import { AFX_DRAG } from "./bEpicViewer_editAfx.js";
+
+// Sound effects in the library: dragged onto a sound clip or track (bEpicViewer_editAfx.js). Lucide icons.
+const AFX_ICONS = { eq: "afxEq", comp: "afxComp", limit: "afxLimit", reverb: "afxReverb", delay: "afxDelay", gain: "afxGain", pan: "afxPan" };
 
 const EFFECT_TYPE = "application/x-bepic-effect";
 
@@ -65,6 +70,9 @@ const TOOLBOX = [
         { name: "Lower Third", note: "a name low on the left, on a box", fx: { type: "text", text: "Name\nRole", seconds: 4,
           look: { size: 5, align: "left", valign: "bottom", x: 0.3, y: 0.8, w: 0.5, h: 0.2, sw: 0, bgo: 0.6, bgp: 30, bgr: 15 } } },
     ] },
+    { id: "audiofx", name: "Audio FX", items: AFX.AFX_TYPES.map((t) => ({
+        name: AFX.AFX[t].name, note: "drop it on a sound clip (that clip), or on a sound track's lane or header (the whole track)",
+        icon: AFX_ICONS[t], fx: { type: "afx", afx: t } })) },
     { id: "generators", name: "Generators", items: [
         { name: "Solid Black", note: "a plain colour, as a clip", color: "#000000", fx: { type: "solid", color: "#000000", name: "Black" } },
         { name: "Solid White", note: "a plain colour, as a clip", color: "#ffffff", fx: { type: "solid", color: "#ffffff", name: "White" } },
@@ -364,6 +372,65 @@ export const EditPanelsMixin = {
         const foot = (...buttons) => { const f = el("div", "insp-foot"); f.append(...buttons); parts.push(f); };
         const note = (text) => parts.push(el("div", "insp-note", text));
 
+
+        // The sound effects of a clip or a track (bEpicViewer_audioFxData.js): each a section with its
+        // bypass switch, its order (up / down), remove, its params; mix, gain and pan keyed at `t` (a
+        // clip's time, or the film's for a track) with a diamond. `put(fn)` applies fn(chain) to every
+        // target (several selected clips: those whose chain has the same effect at that place).
+        const afxSection = (chain, put, t, where) => {
+            const open = this._editAfxOpen && this._editAfxOpen.where === where ? this._editAfxOpen.i : -1;
+            chain.forEach((fx, i) => {
+                const def = AFX.AFX[fx.type];
+                const sec = section(`${i + 1}. ${def.name}`, { off: !fx.on, toggle: (off) => put((c) => AFX.patchAfx(c, i, { on: !off }), i),
+                                                           reset: () => put((c) => { const n = [...c]; n[i] = { ...AFX.newAfx(fx.type), on: fx.on }; return n; }, i) });
+                sec.dataset.afx = fx.type;
+                sec.dataset.afxIndex = String(i);
+                sec.title = def.long;
+                if (i === open) { sec.classList.add("insp-afx-open"); this._editAfxOpen = null; requestAnimationFrame(() => { try { sec.scrollIntoView({ block: "nearest" }); } catch (_) {} }); }
+                row("Effect", [button("▲", "Earlier in the chain", () => put((c) => AFX.moveAfx(c, i, -1), i), i === 0),
+                               button("▼", "Later in the chain", () => put((c) => AFX.moveAfx(c, i, 1), i), i === chain.length - 1),
+                               button("Remove", "Take this effect off", () => put((c) => c.filter((_, k) => k !== i), i))]);
+                for (const [k, [d, lo, hi, unit, label]] of Object.entries(def.params)) {
+                    if (k === "preset") {
+                        const s = quiet(el("select", "insp-select"));
+                        for (const [v, p] of Object.entries(AFX.REVERB_PRESETS)) { const o = el("option", "", p.name); o.value = v; s.append(o); }
+                        s.value = fx.p.preset;
+                        s.dataset.field = `afx${i}.preset`;
+                        s.addEventListener("change", () => put((c) => AFX.patchAfx(c, i, { preset: s.value }), i));
+                        row(label, s);
+                        continue;
+                    }
+                    const keyedRow = (AFX.KEYED[fx.type] || []).includes(k);
+                    const v = keyedRow ? AFX.afxParam(fx, k, t) : fx.p[k];
+                    const span = hi - lo;
+                    const step = span > 1000 ? 1 : span > 50 ? 0.1 : span > 2 ? 0.01 : 0.001;
+                    const digits = step >= 1 ? 0 : step >= 0.1 ? 1 : step >= 0.01 ? 2 : 3;
+                    const ctl = slider(v, lo, hi, step, digits, null, (x) => put((c) => AFX.patchAfx(c, i, { [k]: x }, t), i), (label + (unit ? " (" + unit + ")" : "")));
+                    ctl[1].dataset.field = `afx${i}.${k}`;
+                    const parts2 = [...ctl];
+                    if (keyedRow) {
+                        const keys = (fx.keys && fx.keys[k]) || [];
+                        const here = keys.some((x) => Math.abs(x.t - t) < 1e-3);
+                        const dia = tip(el("button", "insp-diamond", here ? "◆" : "◇"), here ? "Take the key here away" : (keys.length ? "A key here (it is animated)" : "Animate it: a key here"));
+                        dia.dataset.state = here ? "on" : keys.length ? "has" : "none";
+                        dia.dataset.field = `afx${i}.${k}.key`;
+                        dia.addEventListener("click", () => put((c) => (here ? AFX.removeAfxKey(c, i, k, t) : AFX.setAfxKey(c, i, k, t, v)), i));
+                        parts2.push(dia);
+                    }
+                    row(label, parts2, Math.abs(v - d) > 1e-9 && !(fx.keys && fx.keys[k] && fx.keys[k].length) ? () => put((c) => AFX.patchAfx(c, i, { [k]: d }), i) : null);
+                }
+            });
+            const add = quiet(el("select", "insp-select insp-afx-add"));
+            const first = el("option", "", "+ Add effect…");
+            first.value = "";
+            add.append(first);
+            for (const type of AFX.AFX_TYPES) { const o = el("option", "", AFX.AFX[type].name); o.value = type; add.append(o); }
+            add.dataset.field = "afxAdd";
+            add.addEventListener("change", () => { if (add.value) put((c) => [...c, AFX.newAfx(add.value)], -1); });
+            if (!chain.length) section(where === "track" ? "Track FX" : "Audio FX");
+            row(where === "track" ? "Track FX" : "Audio FX", add);
+        };
+
         if (!cut) {
             parts.push(el("div", "curves-empty", "No cut is open."));
         } else if (sel && (sel.kind === "clip" || sel.kind === "tclip") && D.clipOf(cut, sel)) {
@@ -504,6 +571,19 @@ export const EditPanelsMixin = {
                     row("At its end", into2 ? (nx.xfade ? button("Select", "The crossfade out of this clip", () => { this._editTlSel = D.xfadeSelOf(into2); this.editTlRefresh(); })
                                                         : button("Add", "A crossfade into the clip after (Shift+T)", () => go(into2))) : said("no sound begins here"));
                 }
+                // Sound effects: to every selected clip that has the same effect at that place (adding: to all of them).
+                if (D.afxTakes(cut, sel)) {
+                    const mine = D.clipAfx(cut, sel);
+                    const targets = several ? clipSels.filter((s) => D.afxTakes(cut, s)) : [sel];
+                    const put = (fn, i) => apply(targets.reduce((n, s) => {
+                        const list = D.clipAfx(n, s);
+                        if (!D.sameSel(s, sel) && i >= 0 && !(list[i] && mine[i] && list[i].type === mine[i].type)) return n;
+                        return D.setClipAfx(n, s, fn(list));
+                    }, cut));
+                    if (mine.length) section("Audio FX");
+                    afxSection(mine, put, u, "clip");
+                    if (mine.length) note("In order: these effects, then the clip's volume and fades, then its track's effects (Track FX: click the track's name).");
+                }
                 into = null;
             } else if (tab === "timing") {
                 // Where it is and which part of its source it plays. "Start" and
@@ -601,6 +681,17 @@ export const EditPanelsMixin = {
                 into = null;
             }
             foot(button("Remove this text", "Take this text off the film", () => this._editTlRemove(sel)));
+        } else if (sel && sel.kind === "track" && D.afxTrack(cut, sel.track)) {
+            // A sound track's effects: on the sum of its clips, after theirs. Keys in the film's time.
+            const id = sel.track;
+            head(id === "A1" ? "A1 - the music under the film" : (D.trackOf(cut, id) || {}).name || id);
+            tabs([["afx", "Track FX", true]]);
+            const chain = D.trackAfx(cut, id);
+            const t = this._editTlOnScreen() ? (this.currentFrame || 0) / fps : 0;
+            if (chain.length) section("Track FX");
+            afxSection(chain, (fn) => apply(D.setTrackAfx(cut, id, fn(D.trackAfx(cut, id)))), t, "track");
+            into = null;
+            note("They work on the whole track - every clip of it, after the clips' own effects, volume and fades. Drop one from the Effects panel's Audio FX on the track's header or lane, too. The export to Resolve bakes them in (Resolve's FCPXML has no Fairlight FX).");
         } else if (sel && sel.kind === "xfade" && D.xfadeOf(cut, sel)) {
             // An audio crossfade (Shift+T, the clip menu): its length, curve and alignment, as Resolve's Inspector has them.
             const x = D.xfadeOf(cut, sel);
@@ -863,6 +954,8 @@ export const EditPanelsMixin = {
                 r.draggable = true;
                 const mark = el("span", "fx-mark fx-" + fx.type);
                 if (item.color) mark.style.background = item.color;
+                if (item.icon) { setEditIcon(mark, item.icon); mark.classList.add("fx-icon"); }
+                if (fx.type === "afx") r.dataset.afx = fx.afx;
                 r.append(mark, el("span", "fx-name", item.name));
                 if (item.custom) {
                     const pick = el("input", "fx-color");
@@ -877,11 +970,13 @@ export const EditPanelsMixin = {
                     + (fx.type === "dissolve" ? "selected shot." : "playhead.");
                 r.addEventListener("dragstart", (e) => {
                     try {
+                        // A sound effect has a drag type of its own: the timeline lights the clip or track it would go on.
+                        if (fx.type === "afx") { e.dataTransfer.setData(AFX_DRAG, JSON.stringify(fx)); e.dataTransfer.effectAllowed = "copy"; return; }
                         e.dataTransfer.setData(EFFECT_TYPE, JSON.stringify(fx));
                         e.dataTransfer.effectAllowed = "copy";
                     } catch (_) {}
                 });
-                r.addEventListener("dblclick", () => this.editFxApply(fx, null, ""));
+                r.addEventListener("dblclick", () => (fx.type === "afx" ? this.editAfxAdd(fx.afx) : this.editFxApply(fx, null, "")));
                 return r;
             }));
         };

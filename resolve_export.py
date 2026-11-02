@@ -297,11 +297,11 @@ def build_model(doc, probes, frames=None, empty_ok=False):
                 # The sound before the cut (the shot coming in, from before its in): a fade in on a lane below.
                 b = frames_of(xin["b"], rate)
                 for p in _clip_pieces(c, -b, 0, starts[i], rate, info, "V1", v1_on):
-                    handles.append(dict(p, sound=True, fi=b, fi_curve=xin["curve"]))
+                    handles.append(dict(p, sound=True, fi=b, fi_curve=xin["curve"], track_id="V1"))
             if xout and xout["a"] > 0:
                 a = frames_of(xout["a"], rate)
                 for p in _clip_pieces(c, n, n + a, starts[i], rate, info, "V1", v1_on):
-                    handles.append(dict(p, sound=True, fo=a, fo_curve=xout["curve"]))
+                    handles.append(dict(p, sound=True, fo=a, fo_curve=xout["curve"], track_id="V1"))
         spine.extend(pieces)
 
     lanes = []
@@ -337,7 +337,7 @@ def build_model(doc, probes, frames=None, empty_ok=False):
             post = frames_of(env["xout"]["a"], rate) if env.get("xout") else 0
             pieces = _clip_pieces(c, -pre, n + post, at, rate, info, track.get("name") or track.get("id"), not track.get("off"))
             for p in pieces:
-                p["lane"], p["sound"] = lane, sound
+                p["lane"], p["sound"], p["track_id"] = lane, sound, track.get("id")
             if sound and env:
                 _fades(pieces, env, rate, -pre, -post, whole=True)
             lanes.extend(pieces)
@@ -362,7 +362,7 @@ def build_model(doc, probes, frames=None, empty_ok=False):
             room = int(math.floor((Fraction(known) - _exact(start)) * rate))
             if 0 < room < n:
                 n = room
-        bed = [dict(p, lane=-1, sound=True) for p in
+        bed = [dict(p, lane=-1, sound=True, track_id="A1") for p in
                _clip_pieces({"file": path, "name": name or os.path.basename(path), "in": start,
                              "volume": gain}, 0, n, begin, rate, info, "A1", bed_on)]
         if bed:
@@ -460,6 +460,76 @@ def build_model(doc, probes, frames=None, empty_ok=False):
             files.append(p["file"])
     return {"name": str(edit.get("name") or "cut"), "rate": rate, "width": width, "height": height, "total": total,
             "spine": full, "lanes": lanes, "left_out": left, "files": files}
+
+
+# ── sound effects, baked ─────────────────────────────────────────────────────
+#
+# FCPXML has no Fairlight FX (and the panel's effects are not Resolve's), so an export of a cut with
+# sound effects BAKES them: each part with effects - V1 (its films' own sound), a sound track (its
+# clips' effects, volume, fades and its track's effects), the bed (A1) - is rendered by the viewer's
+# own render (timeline_render.render_sound, the same sound as Export film) into a WAV in media/,
+# which goes on the timeline in its place: on the part's own lane (V1's films become picture only,
+# srcEnable="video", and the WAV gets a lane of its own). The untouched originals stay beside it on
+# muted lanes of their own - clips disabled, named "<clip> (dry)", audioRole "<track> (dry)" - to
+# redo the effects in Fairlight. The fcpxml never names an effect.
+BAKE_DIR = "__bake__/"
+
+
+def bake_parts(doc):
+    """The parts of a cut whose sound has effects that are on: "V1", sound tracks' ids, "A1"."""
+    from . import audio_fx
+    edit = timeline_io.editable(doc)
+    out = []
+    if any(audio_fx.active(c.get("afx")) for c in edit["clips"]):
+        out.append("V1")
+    for t in edit.get("tracks") or []:
+        if t.get("kind") == "audio" and (audio_fx.active(t.get("afx")) or any(audio_fx.active(c.get("afx")) for c in t.get("clips") or [])):
+            out.append(t["id"])
+    if audio_fx.active((edit.get("afx") or {}).get("A1")):
+        out.append("A1")
+    return out
+
+
+def bake_model(model, parts):
+    """*model* with *parts* baked: their WAVs (``BAKE_DIR<part>_fx.wav``, made by the job) on the timeline
+    and their originals moved to muted dry lanes. Returns ``(model, {wav path: part})``."""
+    model = dict(model, spine=[dict(p) for p in model["spine"]], lanes=[dict(p) for p in model["lanes"]],
+                 files=list(model["files"]))
+    total = model["total"]
+    lane = min([p["lane"] for p in model["lanes"] if p.get("sound")] + [-1]) - 1
+    baked = {}
+
+    def wav(part, at_lane):
+        path = BAKE_DIR + part + "_fx.wav"
+        baked[path] = part
+        model["files"].append(path)
+        model["lanes"].append({"file": path, "name": f"{part} (fx)", "start": 0, "dur": total, "src": Fraction(0),
+                               "speed": Fraction(1), "still": False, "u": 0, "volume": 1.0, "mute": False, "fx": {},
+                               "enabled": True, "track": part, "track_id": part, "looped": False, "lane": at_lane,
+                               "sound": True})
+    for part in parts:
+        if part == "V1":
+            at_lane, lane = lane, lane - 1
+            dry, lane = lane, lane - 1
+            for p in model["spine"]:
+                if p.get("gap") or p.get("still") or p.get("mute") or p.get("title") is not None:
+                    continue
+                model["lanes"].append({k: v for k, v in p.items() if k not in ("mix", "fi", "fo", "fi_curve", "fo_curve")}
+                                      | {"sound": True, "lane": dry, "enabled": False, "role": "V1 (dry)", "name": f"{p['name']} (dry)",
+                                         "fi": p.get("fi"), "fo": p.get("fo"), "fi_curve": p.get("fi_curve"), "fo_curve": p.get("fo_curve")})
+                p["mute"] = True                       # its picture only: the baked WAV is its sound
+            for p in model["lanes"]:
+                if p.get("track_id") == "V1" and p.get("sound") and p.get("lane") not in (dry, at_lane):
+                    p.update(lane=dry, enabled=False, role="V1 (dry)", name=f"{p['name']} (dry)")
+            wav(part, at_lane)
+            continue
+        dry, lane = lane, lane - 1
+        own = [p for p in model["lanes"] if p.get("track_id") == part and p.get("sound") and not str(p.get("file")).startswith(BAKE_DIR)]
+        at_lane = own[0]["lane"] if own else (-1 if part == "A1" else dry)
+        for p in own:
+            p.update(lane=dry, enabled=False, role=f"{part} (dry)", name=f"{p['name']} (dry)")
+        wav(part, at_lane)
+    return model, baked
 
 
 def _bed_fade_in(doc, path):
@@ -730,6 +800,8 @@ def _element(parent, p, info, ids, model, offset, lane=None):
             attrs["srcEnable"] = "video"
     if not p.get("enabled", True):
         attrs["enabled"] = "0"
+    if p.get("role"):
+        attrs["audioRole"] = _text(p["role"], 80)        # a baked part's dry originals: "<track> (dry)"
     el = ET.SubElement(parent, tag, attrs)
     if not p["still"] and p["speed"] != 1:
         tm = ET.SubElement(el, "timeMap")
@@ -1104,7 +1176,7 @@ def _free_space(folder):
         return None
 
 
-def make_plan(doc, otio_path, folder=None, name=None, frames=None, may_read=None):
+def make_plan(doc, otio_path, folder=None, name=None, frames=None, may_read=None, bake=None):
     """What an export of *doc* would do. Nothing is written. ``refused`` are files
     the viewer may not hand out (path_access), ``missing`` files that are not there."""
     files = used_files(doc)
@@ -1125,12 +1197,29 @@ def make_plan(doc, otio_path, folder=None, name=None, frames=None, may_read=None
                      "codec": str(info.get("codec") or info.get("audio_codec") or ""),
                      "pix_fmt": str(info.get("pix_fmt") or ""), "note": free_version_note(path, info)})
     missing = [p for p in files if probes[p] is None and p not in refused]
+    # Sound effects: baked (bake None: whenever there are some), each part a WAV made by the job.
+    has_fx = bake_parts(doc)
+    parts = has_fx if bake is not False else []
+    baked = {}
+    if parts:
+        model, baked = bake_model(model, parts)
+        taken = {v.lower() for v in names.values()}
+        for path, part in baked.items():
+            wav = f"{part}_fx.wav"
+            k = 2
+            while wav.lower() in taken:
+                wav, k = f"{part}_fx_{k}.wav", k + 1
+            taken.add(wav.lower())
+            names[timeline_io.norm_path(path)] = wav
+            probes[path] = {"video": False, "audio": True, "still": False, "channels": 2, "audio_rate": 48000,
+                            "duration": Fraction(model["total"]) / model["rate"], "tc": Fraction(0)}
     return {"folder": folder, "name": final, "path": os.path.join(folder, final), "exists": os.path.exists(os.path.join(folder, final)),
             "files": rows, "size": total, "free": _free_space(folder), "missing": missing,
             "refused": refused, "left_out": model["left_out"],
             "flagged": [r for r in rows if r["note"]],
             "frames": model["total"], "fps": float(model["rate"]), "width": model["width"], "height": model["height"],
-            "_model": model, "_probes": probes, "_names": names}
+            "afx": bool(has_fx), "bake": parts,
+            "_model": model, "_probes": probes, "_names": names, "_baked": baked, "_frames": frames}
 
 
 def public(plan):
@@ -1195,6 +1284,12 @@ def readme(plan, model, final, base):
         "  of two keys). The EDL carries no keyframes, no transform and no volume.",
         "", "LEFT OUT OR DIFFERENT",
     ]
+    if plan.get("bake"):
+        lines[-1:-1] = ["", "SOUND EFFECTS",
+                        f"  Baked: {', '.join(plan['bake'])} play from WAVs rendered with their effects (media/*_fx.wav); the dry",
+                        "  originals lie on muted tracks (clips named '... (dry)', role '<track> (dry)') to redo them in Fairlight."]
+    elif plan.get("afx"):
+        lines[-1:-1] = ["", "SOUND EFFECTS", "  Not baked (switched off in the dialog): the clips come without their effects - FCPXML has none."]
     lines += [f"  - {line}" for line in model["left_out"]] or ["  nothing else that is known"]
     lines += ["", "TITLES: WHAT DOES NOT COME ALONG",
               "  The EDL has no titles (V1 only). The .otio copy keeps them exactly as they are.",
@@ -1295,6 +1390,11 @@ class Job:
             for path in model["files"]:
                 name = names[timeline_io.norm_path(path)]
                 self._set(current=name)
+                if path in (plan.get("_baked") or {}):
+                    # A part's sound with its effects, rendered here (timeline_render, as Export film makes it).
+                    from . import timeline_render
+                    timeline_render.render_sound(self.doc, os.path.join(media, name), plan["_baked"][path], plan.get("_frames"))
+                    continue
                 self._copy(path, os.path.join(media, name))
             if self._cancel.is_set():
                 raise Cancelled()

@@ -459,12 +459,20 @@ def clip_audio(item):
     x = clean_xfade(note.get("axfade"))
     if x:
         out["xfade"] = x
+    chain = _afx().clean_chain(note.get("afx"))
+    if chain:
+        out["afx"] = chain
     return out
+
+
+def _afx():
+    from . import audio_fx
+    return audio_fx
 
 
 def _set_audio(item, c):
     """Write a clip's fades and crossfade, where the edit states them, into *item*."""
-    if not any(k in c for k in ("fadeIn", "fadeOut", "xfade")):
+    if not any(k in c for k in ("fadeIn", "fadeOut", "xfade", "afx")):
         return
     meta = item.setdefault("metadata", {})
     note = meta.setdefault("bepic", {}) if isinstance(meta, dict) else None
@@ -483,6 +491,12 @@ def _set_audio(item, c):
             note["axfade"] = x
         else:
             note.pop("axfade", None)
+    if "afx" in c:
+        chain = _afx().clean_chain(c.get("afx"))
+        if chain:
+            note["afx"] = chain
+        else:
+            note.pop("afx", None)
 
 
 def bed_fades(item):
@@ -568,7 +582,12 @@ def audio_envs(edit):
 # ``auto_select`` on a track (False only when off); texts: the stack's ``texts_lock`` / ``texts_auto``.
 def track_flags(track):
     note = _bepic(track) if track else {}
-    return {"lock": bool(note.get("lock")), "auto": note.get("auto_select") is not False}
+    out = {"lock": bool(note.get("lock")), "auto": note.get("auto_select") is not False}
+    # A sound track's effects (the bEpic viewer's Fairlight-like FX), in metadata.bepic.afx.
+    chain = _afx().clean_chain(note.get("afx"))
+    if chain:
+        out["afx"] = chain
+    return out
 
 
 def _set_flags(track, t):
@@ -588,6 +607,12 @@ def _set_flags(track, t):
             note["auto_select"] = False
         else:
             note.pop("auto_select", None)
+    if "afx" in t:
+        chain = _afx().clean_chain(t.get("afx"))
+        if chain:
+            note["afx"] = chain
+        else:
+            note.pop("afx", None)
 
 
 # A clip may carry takes: the same shot made again with changes, kept beside the
@@ -967,6 +992,7 @@ def editable(doc):
              "T": {"lock": bool(_bepic(stack).get("texts_lock")), "auto": _bepic(stack).get("texts_auto") is not False}}
     out["lock"] = {k: v["lock"] for k, v in flags.items()}
     out["auto"] = {k: v["auto"] for k, v in flags.items()}
+    out["afx"] = {"A1": flags["A1"].get("afx") or []}
     # The texts (markers) as title clips: the panel, the render and the Resolve export all work on those.
     return texts_to_titles(out)
 
@@ -1300,6 +1326,9 @@ def rebuild(doc, edit, stamp="", may_use=None):
                 note = stack_meta.setdefault("bepic", {})
                 if isinstance(note, dict):
                     note["texts_off"] = bool(off["T"])
+    afx = edit.get("afx")
+    if isinstance(afx, dict) and "A1" in afx and audio is not None:
+        _set_flags(audio, {"afx": afx.get("A1")})
     for flag in ("lock", "auto"):
         given = edit.get(flag)
         if not isinstance(given, dict):

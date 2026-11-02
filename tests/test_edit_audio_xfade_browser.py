@@ -180,6 +180,131 @@ class EditAudioXfadeBrowserTests(_Base):
         self.assertEqual(len(c["v1"]), 2)
         self.assertEqual(self.errors, [])
 
+    VOLKEYS = "() => ((__panel._editTlCut.tracks.find(t => t.id === 'A2').clips[0].fx || {}).keys || {}).vol || []"
+
+    def test_the_volume_line_drag_add_move_delete_points_are_the_inspector_keys(self):
+        pg = self.xpage()
+        pg.evaluate("() => { __panel._editTlView.heights.A2 = 60; __panel.editTlRefresh(); __panel._editTlUi.rows.querySelector('[data-track=\"A2\"]').scrollIntoView({ block: 'center' }); }")
+        box = pg.evaluate("() => { const r = __panel._editTlUi.rows.querySelector('[data-key=\"A2:0\"]').getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }")
+        self.assertTrue(pg.evaluate("() => !!__panel._editTlUi.rows.querySelector('[data-key=\"A2:0\"] .edit-volline')"))
+        x = box[0] + box[2] * 0.3
+        y = box[1] + 1                                         # volume 1: 0 dB, the top of the clip
+        # Dragged down to about -12 dB (a fifth of the height: -60 dB is the bottom).
+        pg.mouse.move(x, y)
+        pg.mouse.down()
+        pg.mouse.move(x, y + box[3] * 0.1, steps=3)
+        pg.mouse.move(x, y + box[3] * 0.2, steps=3)
+        pg.mouse.up()
+        vol = pg.evaluate("() => __panel._editTlCut.tracks.find(t => t.id === 'A2').clips[0].volume")
+        self.assertAlmostEqual(vol, 10 ** (-12 / 20), delta=0.03)
+        self.assertEqual(pg.evaluate(self.VOLKEYS), [])
+        # Alt+click on the line at 1 s of the clip: a key there, at the line's level.
+        x1 = pg.evaluate(WHERE, [1.0, "A2"])[0]
+        yl = box[1] + box[3] * 0.2
+        pg.keyboard.down("Alt")
+        pg.mouse.click(x1, yl)
+        pg.keyboard.up("Alt")
+        keys = pg.evaluate(self.VOLKEYS)
+        self.assertEqual(len(keys), 1)
+        self.assertAlmostEqual(keys[0]["t"], 1.0, delta=1 / 24 + 1e-6)
+        self.assertAlmostEqual(keys[0]["v"], vol, delta=0.02)
+        # The Inspector sees the same key: its diamond is filled with the playhead on it.
+        pg.evaluate("(t) => { __panel._editTlSel = { kind: 'tclip', track: 'A2', i: 0 }; __panel._editInspTab = 'audio'; __panel.setFrame(Math.round(t * 24)); __panel.editTlRefresh(); }", keys[0]["t"])
+        self.assertEqual(pg.evaluate("() => [...__panel.editInspectorPanel.querySelectorAll('.insp-row')].find(r => r.dataset.keys === 'vol').querySelector('.insp-diamond').dataset.state"), "on")
+        # Dragged half a second later and up to 0 dB (the point takes the press, though the playhead is on it).
+        pt = pg.evaluate("() => { const r = __panel._editTlUi.rows.querySelector('[data-key=\"A2:0\"] .edit-volpt').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }")
+        x15 = pg.evaluate(WHERE, [1.5, "A2"])[0]
+        pg.mouse.move(*pt)
+        pg.mouse.down()
+        pg.mouse.move(pt[0] + (x15 - x1) / 2, pt[1] - 10, steps=3)
+        pg.mouse.move(pt[0] + (x15 - x1), box[1] - 20, steps=3)
+        pg.mouse.up()
+        keys = pg.evaluate(self.VOLKEYS)
+        self.assertAlmostEqual(keys[0]["t"], 1.5, delta=1 / 24 + 1e-6)
+        self.assertAlmostEqual(keys[0]["v"], 1.0, delta=1e-6)
+        # Selected, Del takes it away; undo brings it back.
+        self.focus_timeline(pg)
+        pg.evaluate("(t) => { __panel._editTlVolSel = { sel: { kind: 'tclip', track: 'A2', i: 0 }, t }; }", keys[0]["t"])
+        pg.keyboard.press("Delete")
+        self.assertEqual(pg.evaluate(self.VOLKEYS), [])
+        pg.evaluate("() => __panel.editTlUndo()")
+        self.assertEqual(len(pg.evaluate(self.VOLKEYS)), 1)
+        self.assertEqual(self.errors, [])
+
+    # ── sound effects ──
+
+    DRAG_AFX = """async ([type, x, y]) => { const P = __panel;
+      if (!P.isPanelDocked('editEffects')) P.editTlPanelToggle('editEffects');
+      for (let k = 0; k < 50 && !P.editEffectsPanel.querySelector('.fx-cat'); k++) await new Promise(r => setTimeout(r, 20));
+      [...P.editEffectsPanel.querySelectorAll('.fx-cat')].find(b => b.dataset.cat === 'audiofx').click();
+      const item = P.editEffectsPanel.querySelector(`.fx-item[data-afx="${type}"]`);
+      const dt = new DataTransfer();
+      item.dispatchEvent(new DragEvent('dragstart', { bubbles: true, composed: true, dataTransfer: dt }));
+      const root = P._editTlUi.body.getRootNode(); const t = root.elementFromPoint(x, y);
+      const ev = (k) => new DragEvent(k, { bubbles: true, composed: true, cancelable: true, clientX: x, clientY: y, dataTransfer: dt });
+      t.dispatchEvent(ev('dragenter')); t.dispatchEvent(ev('dragover'));
+      const lit = [...P._editTlUi.body.querySelectorAll('.afx-target')].map(n => n.dataset.key || n.dataset.track || n.className);
+      t.dispatchEvent(ev('drop'));
+      return lit; }"""
+
+    def test_an_effect_dragged_onto_a_clip_and_onto_a_track_badges_inspector_bypass_reorder(self):
+        pg = self.xpage()
+        # Onto the first clip of A2: that clip only.
+        x, y = pg.evaluate(WHERE, [1.0, "A2"])
+        lit = pg.evaluate(self.DRAG_AFX, ["eq", x, y])
+        self.assertEqual(lit, ["A2:0"], "the clip it would go on is lit")
+        afx = pg.evaluate("() => __panel._editTlCut.tracks.find(t => t.id === 'A2').clips.map(c => (c.afx || []).map(f => f.type))")
+        self.assertEqual(afx, [["eq"], []])
+        self.assertTrue(pg.evaluate("() => !!__panel._editTlUi.rows.querySelector('[data-key=\"A2:0\"] .edit-badge-afx')"))
+        # The Inspector shows its params; one set there, then a compressor added from its menu.
+        self.assertIsNotNone(pg.evaluate(FIELD, "afx0.pk_g"))
+        pg.evaluate("() => { const i = __panel.editInspectorPanel.querySelector('[data-field=\"afx0.pk_g\"]'); i.value = '6'; i.dispatchEvent(new Event('change')); }")
+        self.assertEqual(pg.evaluate("() => __panel._editTlCut.tracks.find(t => t.id === 'A2').clips[0].afx[0].p.pk_g"), 6)
+        pg.evaluate("() => { const s = __panel.editInspectorPanel.querySelector('[data-field=\"afxAdd\"]'); s.value = 'comp'; s.dispatchEvent(new Event('change')); }")
+        chain = "() => __panel._editTlCut.tracks.find(t => t.id === 'A2').clips[0].afx.map(f => [f.type, f.on])"
+        self.assertEqual(pg.evaluate(chain), [["eq", True], ["comp", True]])
+        # Bypass the EQ (its section's switch), then move the compressor first; one undo each.
+        pg.evaluate("() => [...__panel.editInspectorPanel.querySelectorAll('.insp-section')].find(s => s.dataset.afxIndex === '0').querySelector('.insp-switch').click()")
+        self.assertEqual(pg.evaluate(chain), [["eq", False], ["comp", True]])
+        pg.evaluate("() => [...[...__panel.editInspectorPanel.querySelectorAll('.insp-section')].find(s => s.dataset.afxIndex === '1').querySelectorAll('button')].find(b => b.textContent === '▲').click()")
+        self.assertEqual(pg.evaluate(chain), [["comp", True], ["eq", False]])
+        pg.evaluate("() => __panel.editTlUndo()")
+        self.assertEqual(pg.evaluate(chain), [["eq", False], ["comp", True]])
+        # Onto the track's empty lane (after its clips, at 8 s): the whole track - a badge in its header.
+        x, y = pg.evaluate(WHERE, [8.0, "A2"])
+        lit = pg.evaluate(self.DRAG_AFX, ["reverb", x, y])
+        self.assertEqual(lit, ["A2"])
+        self.assertEqual(pg.evaluate("() => (__panel._editTlCut.tracks.find(t => t.id === 'A2').afx || []).map(f => f.type)"), ["reverb"])
+        badge = "() => [...__panel._editTlUi.heads.querySelectorAll('.edit-headrow')].find(r => r.dataset.track === 'A2').querySelector('.edit-afxbadge')"
+        self.assertEqual(pg.evaluate(badge + ".textContent"), "REV")
+        pg.evaluate(badge + ".click()")
+        self.assertEqual(pg.evaluate("() => __panel._editTlSel"), {"kind": "track", "track": "A2"})
+        self.assertIsNotNone(pg.evaluate(FIELD, "afx0.mix"))
+        # Keyed: the mix gets a key at the playhead from its diamond.
+        pg.evaluate("() => { __panel.setFrame(48); __panel.editTlRefresh(); __panel.editInspectorPanel.querySelector('[data-field=\"afx0.mix.key\"]').click(); }")
+        self.assertEqual(pg.evaluate("() => __panel._editTlCut.tracks.find(t => t.id === 'A2').afx[0].keys.mix.map(k => k.t)"), [2])
+        # The preview: an element playing the clip goes through a WebAudio graph - the clip's EQ and compressor, its
+        # gain (the volume it had), the track's bus with the reverb; its keyed mix set from the film's time.
+        got = pg.evaluate("""() => { const P = __panel, a = document.createElement('audio');
+            P._editAfxEnsure(a, P._editTlCut.tracks.find(t => t.id === 'A2').clips[0], 'A2', 0); P._epVol(a, 0.5);
+            P._ep = P._ep || {}; const was = P._ep.bed; P._ep.bed = [a]; P._editAfxTick(1); P._ep.bed = was;
+            const ctx = window.__bepicAfxCtx; const bus = ctx && ctx.__buses.A2;
+            return [!!a._epAfx, a._epAfx && Math.round(a._epAfx.gain.gain.value * 100) / 100, a.volume, !!bus, bus ? bus.keyed.length : -1]; }""")
+        self.assertEqual(got, [True, 0.5, 1, True, 1])
+        # Saved with the cut.
+        pg.evaluate("() => __panel._editTlSave()")
+        pg.wait_for_function("() => (window.__saves || []).length > 0", timeout=5000)
+        sent = pg.evaluate("() => window.__saves.at(-1).edit.tracks.find(t => t.id === 'A2')")
+        self.assertEqual([f["type"] for f in sent["afx"]], ["reverb"])
+        self.assertEqual([f["type"] for f in sent["clips"][0]["afx"]], ["eq", "comp"])
+        # A locked track takes no drop.
+        pg.evaluate("() => __panel._editTlApply(__panel._editTlCut.tracks ? (() => { const c = __panel._editTlCut; return { ...c, tracks: c.tracks.map(k => k.id === 'A2' ? { ...k, lock: true } : k) }; })() : null)")
+        x, y = pg.evaluate(WHERE, [8.0, "A2"])
+        lit = pg.evaluate(self.DRAG_AFX, ["delay", x, y])
+        self.assertEqual(lit, [])
+        self.assertEqual(pg.evaluate("() => __panel._editTlCut.tracks.find(t => t.id === 'A2').afx.length"), 1)
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

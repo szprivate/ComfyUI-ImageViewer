@@ -47,6 +47,8 @@
 
 import { TITLE_KEYS, TITLE_NUM, cleanTitle, titleFromText } from "./bEpicViewer_editTitles.js";
 
+import { cleanAfx, afxActive } from "./bEpicViewer_audioFxData.js";
+
 // How a text is drawn where nothing says otherwise (timeline_io.TEXT_LOOK, kept
 // in step): `size` is a percentage of the picture's height, `x` / `y` where its
 // middle is (0..1 of the picture).
@@ -265,6 +267,8 @@ const copy = (cut) => ({
     off: { ...(cut.off || {}) },
     lock: { ...(cut.lock || {}) },
     auto: { ...(cut.auto || {}) },
+    // Track effects of the bed (A1); the other tracks carry theirs (k.afx). Chains are replaced, never changed in place.
+    afx: { ...(cut.afx || {}) },
 });
 
 /** A length in seconds, as a person writes it on a shot: 0.5s, 3.2s, 1:04. */
@@ -944,15 +948,17 @@ export function sameCut(a, b) {
     const dress = (c) => [String(c.color || ""), round(num(c.volume, 1)), JSON.stringify(Object.entries(cleanFx(c.fx)).sort()),
                          round(speedOf(c)), loopOf(c), loopOf(c) ? round(num(c.span)) : 0,
                          takesOf(c).length ? JSON.stringify([c.file, takesOf(c).map((t) => [t.version, !!t.active, t.file])]) : "",
-                         String(c.link || ""), !!c.unlinked, !!c.mute, !!c.disabled, c.title ? JSON.stringify(cleanTitle(c.title)) : "", ...audioDress(c)];
+                         String(c.link || ""), !!c.unlinked, !!c.mute, !!c.disabled, c.title ? JSON.stringify(cleanTitle(c.title)) : "", ...audioDress(c),
+                         c.afx && c.afx.length ? JSON.stringify(cleanAfx(c.afx)) : ""];
     const key = (cut) => JSON.stringify({
         clips: ((cut && cut.clips) || []).map((c) => [Number.isInteger(c.ref) ? c.ref : c.file, c.name, round(num(c.in)), round(num(c.length)), round(num(c.transition)), round(num(c.gap)), ...dress(c)]),
         texts: ((cut && cut.texts) || []).map((t) => [Number.isInteger(t.ref) ? t.ref : "new", t.text, round(num(t.start)), round(num(t.length)), JSON.stringify(textLook(t))]),
-        tracks: ((cut && cut.tracks) || []).map((k) => [k.kind, k.name, !!k.off, !!k.lock, k.auto !== false, (k.clips || []).map((c) =>
+        tracks: ((cut && cut.tracks) || []).map((k) => [k.kind, k.name, !!k.off, !!k.lock, k.auto !== false, JSON.stringify(cleanAfx(k.afx)), (k.clips || []).map((c) =>
             [Array.isArray(c.ref) ? c.ref.join(":") : c.title ? "title" : c.file, c.name, round(num(c.at)), round(num(c.in)), round(num(c.length)), ...dress(c)])]),
         sound: ((cut && cut.sound) || []).map((s) => [String(s.file || s.name || ""), round(num(s.fadeIn)), round(num(s.fadeOut))]),
         off: [!!(cut && cut.off && cut.off.V1), !!(cut && cut.off && cut.off.A1), !!(cut && cut.off && cut.off.T)],
         flags: ["V1", "A1", "T"].map((id) => [!!(cut && cut.lock && cut.lock[id]), !(cut && cut.auto && cut.auto[id] === false)]),
+        afx: JSON.stringify(cleanAfx(cut && cut.afx && cut.afx.A1)),
     });
     return key(a) === key(b);
 }
@@ -962,7 +968,8 @@ export function sameCut(a, b) {
 function timeOf(c) {
     return { speed: round(speedOf(c)), loop: loopOf(c), span: loopOf(c) ? round(num(c.span)) : 0,
              link: c.link || "", unlinked: !!(c.link && c.unlinked), mute: !!c.mute, disabled: !!c.disabled,
-             fadeIn: round(num(c.fadeIn)), fadeOut: round(num(c.fadeOut)), xfade: c.xfade ? cleanXfade(c.xfade) : null };
+             fadeIn: round(num(c.fadeIn)), fadeOut: round(num(c.fadeOut)), xfade: c.xfade ? cleanXfade(c.xfade) : null,
+             afx: cleanAfx(c.afx) };
 }
 
 /** What is sent back to be saved: the cut, and nothing the server did not send. */
@@ -979,7 +986,7 @@ export function toSave(cut) {
         texts: cut.texts.map((t) => ({ ...(Number.isInteger(t.ref) ? { ref: t.ref } : {}),
                                        text: t.text, start: t.start, length: t.length, ...textLook(t) })),
         tracks: (cut.tracks || []).map((k) => ({
-            id: k.id, kind: k.kind, name: k.name, off: !!k.off, lock: !!k.lock, auto: k.auto !== false,
+            id: k.id, kind: k.kind, name: k.name, off: !!k.off, lock: !!k.lock, auto: k.auto !== false, afx: cleanAfx(k.afx),
             clips: (k.clips || []).map((c) => ({
                 // A title has no file: a new one is named by its words, and by the marker it came from (`mark`).
                 ...(Array.isArray(c.ref) ? { ref: c.ref } : c.title ? (Number.isInteger(c.mark) ? { mark: c.mark } : {}) : { file: c.file }),
@@ -993,6 +1000,7 @@ export function toSave(cut) {
         off: { V1: !!(cut.off && cut.off.V1), A1: !!(cut.off && cut.off.A1), T: !!(cut.off && cut.off.T) },
         lock: Object.fromEntries(["V1", "A1", "T"].map((id) => [id, !!(cut.lock && cut.lock[id])])),
         auto: Object.fromEntries(["V1", "A1", "T"].map((id) => [id, !(cut.auto && cut.auto[id] === false)])),
+        afx: { A1: cleanAfx(cut.afx && cut.afx.A1) },
     };
 }
 
@@ -1229,7 +1237,7 @@ export function soundItems(cut, live) {
     // `origin`: the moment of the film at which the clip's own time is 0 (a crossfade's handle starts before it);
     // `env`: its fades and crossfades (audioEnv / envGain).
     if (on("A1")) for (const s of (cut && cut.sound) || []) {
-        if (s && s.file) out.push({ file: s.file, at: 0, origin: 0, in: 0, length: total, volume: 1,
+        if (s && s.file) out.push({ file: s.file, at: 0, origin: 0, in: 0, length: total, volume: 1, track: "A1",
                                     env: { len: total, fi: num(s.fadeIn), fo: num(s.fadeOut), xin: null, xout: null } });
     }
     for (const k of (cut && cut.tracks) || []) {
@@ -1305,6 +1313,7 @@ export function splitClip(cut, sel, seconds) {
         delete b.uid;                                // a piece of its own (undo finds each by its uid)
         delete b.link; delete b.unlinked;            // splitWithLink pairs it again
         if (a.fx) [a.fx, b.fx] = splitFx(a.fx, local);
+        if (a.afx) b.afx = shiftAfx(a.afx, -local);
         a.length = local;
         next.clips.splice(i + 1, 0, b);
         return { cut: settle(next), sel: { kind: "clip", i: i + 1 } };
@@ -1319,6 +1328,7 @@ export function splitClip(cut, sel, seconds) {
         delete b.uid;
         delete b.link; delete b.unlinked;
         if (a.fx) [a.fx, b.fx] = splitFx(a.fx, local);
+        if (a.afx) b.afx = shiftAfx(a.afx, -local);
         a.length = local;
         k.clips.splice(sel.i + 1, 0, b);
         return { cut: settle(next), sel: { kind: "tclip", track: sel.track, i: sel.i + 1 } };
@@ -1707,6 +1717,8 @@ export function agentLoses(cut) {
     const plain = JSON.stringify(textLook({}));
     if (((cut && cut.texts) || []).some((t) => JSON.stringify(textLook(t)) !== plain)) out.push("how the texts look (size, place, colour)");
     if (all.some((c) => c.title)) out.push("how the titles look (font, style, alignment, outline, shadow, box: agentY draws them as captions or by their preset)");
+    if (all.some((c) => c.xfade || num(c.fadeIn) > 0 || num(c.fadeOut) > 0)) out.push("audio crossfades and fades");
+    if (cutHasAfx(cut)) out.push("sound effects (EQ, compressor, reverb ... of clips and tracks)");
     return out;
 }
 
@@ -2037,6 +2049,7 @@ export function shotsIn(cut, from, to) {
 export function selId(sel) {
     if (!sel) return "";
     if (sel.kind === "xfade") return "xf" + String(sel.track) + ":" + sel.i;
+    if (sel.kind === "track") return "trk:" + String(sel.track);
     const where = { clip: "V1", text: "T", gap: "gap", sound: "A1", mix: "mix" }[sel.kind];
     return (where || String(sel.track)) + ":" + sel.i;
 }
@@ -3637,13 +3650,14 @@ export const PASTE_ATTRS = [
     { id: "crop", group: "video", label: "Cropping", params: ["cl", "cr", "ct", "cb"], off: "coff" },
     { id: "opacity", group: "video", label: "Opacity", params: ["op"], off: "ooff" },
     { id: "volume", group: "audio", label: "Volume", params: ["vol"] },
+    { id: "afx", group: "afx", label: "Audio effects (the whole chain, in place of the target's)" },
     { id: "keys", group: "keys", label: "Include keyframes" },
     { id: "speed", group: "timing", label: "Speed" },
     { id: "name", group: "clip", label: "Name" },
     { id: "color", group: "clip", label: "Colour" },
     { id: "textlook", group: "text", label: "Text look (font, style, size, alignment, colours, box)" },
 ];
-export const PASTE_GROUPS = [["video", "Video"], ["audio", "Audio"], ["keys", "Keyframes"], ["timing", "Timing"], ["clip", "Clip"], ["text", "Text"]];
+export const PASTE_GROUPS = [["video", "Video"], ["audio", "Audio"], ["afx", "Audio FX"], ["keys", "Keyframes"], ["timing", "Timing"], ["clip", "Clip"], ["text", "Text"]];
 
 /** What a selected item is, for pasting: { clip, text, picture, sound, timed }. */
 export function pasteCaps(cut, sel) {
@@ -3671,7 +3685,7 @@ export function pasteTakes(caps, id) {
     const a = PASTE_ATTRS.find((x) => x.id === id);
     if (!a) return false;
     if (a.group === "video") return !!caps.picture;
-    if (a.group === "audio") return !!caps.sound;
+    if (a.group === "audio" || a.group === "afx") return !!caps.sound;
     if (a.group === "timing") return !!caps.timed;
     if (a.group === "clip") return !!caps.clip;
     if (a.group === "text") return !!caps.text;
@@ -3686,7 +3700,8 @@ export function pasteOffer(cut, source, targets) {
     const caps = targets.map((s) => pasteCaps(cut, s)).filter(Boolean);
     const out = {};
     for (const a of PASTE_ATTRS) {
-        const has = !!source && pasteTakes(source.caps, a.id) && (a.id !== "keys" || hasKeys(source.item));
+        const has = !!source && pasteTakes(source.caps, a.id) && (a.id !== "keys" || hasKeys(source.item))
+            && (a.id !== "afx" || cleanAfx(source.item.afx).length > 0);
         out[a.id] = { source: has, targets: caps.some((c) => pasteTakes(c, a.id)) };
     }
     return out;
@@ -3726,6 +3741,8 @@ export function pasteAttributes(cut, source, targets, picks) {
             const { text: _words, ...look } = src.title ? cleanTitle(src.title) : titleFromText(src);
             next = setTitle(next, [t], look);
         }
+        // The audio effects: the source's chain in place of the target's (their keys only with "keys").
+        if (want("afx")) next = setClipAfx(next, t, cleanAfx(src.afx).map((fx) => (picks.keys ? fx : { ...fx, keys: {} })));
         // The speed first: it sets the length the keys are held to.
         if (want("speed") && Math.abs(speedOf(clipOf(next, t)) - speedOf(src)) > 1e-9) next = setSpeed(next, t, speedOf(src));
         const props = {};
@@ -4224,4 +4241,148 @@ export function xfadeCutNear(cut, track, seconds, within = Infinity) {
     if (track === "V1") { const st = clipStarts(cut); (cut.clips || []).forEach((_, i) => look({ kind: "clip", i }, st[i])); }
     else { const k = trackOf(cut, track); if (k) k.clips.forEach((c, i) => look({ kind: "tclip", track, i }, num(c.at))); }
     return best;
+}
+
+// ── the volume line (Media Composer's / Resolve's rubber band) ──────────────
+//
+// One line across a sound clip at its level: its points ARE the volume keys of
+// the Inspector (fx.keys.vol, clip time, eases and all) - no second model. A
+// clip without keys has a flat line at its volume. The line is drawn on a dB
+// scale (VOL_DB_FLOOR .. 0 dB, 0 at the top), as editors draw it.
+
+export const VOL_DB_FLOOR = -60;
+
+/** A gain (0..1) as dB; -Infinity for silence. */
+export function volDb(v) { return num(v) > 0 ? 20 * Math.log10(num(v)) : -Infinity; }
+
+/** dB as a gain (0..1). */
+export function dbVol(db) { return num(db) <= VOL_DB_FLOOR ? 0 : Math.min(1, Math.pow(10, num(db) / 20)); }
+
+/** Where a gain lies on the line's height: 0 at the top (0 dB), 1 at the bottom (VOL_DB_FLOOR and below). */
+export function volY(v) { const db = volDb(v); return db <= VOL_DB_FLOOR ? 1 : Math.max(0, Math.min(1, db / VOL_DB_FLOOR)); }
+
+/** The gain a height on the line stands for (volY the other way round). */
+export function yVol(y) { const s = Math.max(0, Math.min(1, num(y))); return s >= 1 ? 0 : dbVol(s * VOL_DB_FLOOR); }
+
+/** A dB readout: "-6.0 dB", "-inf dB". */
+export function dbLabel(v) { const db = volDb(v); return Number.isFinite(db) ? `${db >= 0 ? "" : ""}${db.toFixed(1)} dB` : "-inf dB"; }
+
+/**
+ * The line of a clip `length` long, sampled for drawing: [{ u, v }] - the keys
+ * and, between them, `steps` points per stretch (an ease is a curve); flat at
+ * the clip's volume without keys.
+ */
+export function volLine(c, length, steps = 8) {
+    const keys = keysOf(c, "vol");
+    const len = Math.max(0, num(length, num(c && c.length)));
+    if (!keys.length) { const v = num(c && c.volume, 1); return [{ u: 0, v }, { u: len, v }]; }
+    const out = [{ u: 0, v: paramAt(c, "vol", 0) }];
+    const stops = [...keys.map((k) => k.t).filter((t) => t > 0 && t < len), len];
+    let from = 0;
+    for (const t of stops) {
+        for (let k = 1; k <= steps; k++) { const u = from + (t - from) * k / steps; out.push({ u: round(u), v: paramAt(c, "vol", u) }); }
+        from = t;
+    }
+    return out;
+}
+
+/** The volume keys of a clip, for its points: [{ t, v, i }]. */
+export function volPoints(c) { return keysOf(c, "vol").map((k) => ({ ...k })); }
+
+/** The line dragged up or down (no point under it): flat - the clip's volume; with keys, every point by the same dB. */
+export function setVolLine(cut, sel, v, at) {
+    const c = clipOf(cut, sel);
+    if (!c) return copy(cut);
+    const keys = keysOf(c, "vol");
+    if (!keys.length) return setClipProps(cut, sel, { volume: Math.max(0, Math.min(1, num(v))) });
+    const was = paramAt(c, "vol", num(at));
+    const ddb = (num(v) > 0 ? volDb(num(v)) : VOL_DB_FLOOR) - (was > 0 ? volDb(was) : VOL_DB_FLOOR);
+    return withKeys(cut, sel, (k) => {
+        k.vol = (k.vol || []).map((p) => ({ ...p, v: round(Math.max(0, Math.min(1, p.v > 0 ? dbVol(volDb(p.v) + ddb) : dbVol(VOL_DB_FLOOR + ddb)))) }));
+    });
+}
+
+/** A point added on the line at clip time `u` (Alt-click), at the line's level there. */
+export function addVolPoint(cut, sel, u) {
+    const c = clipOf(cut, sel);
+    if (!c) return copy(cut);
+    return setKeys(cut, sel, { vol: paramAt(c, "vol", u) }, u);
+}
+
+/** The point at clip time `from` moved to `to`, at gain `v` (its ease kept); `to` held between its neighbours. */
+export function moveVolPoint(cut, sel, from, to, v) {
+    const c = clipOf(cut, sel);
+    if (!c) return copy(cut);
+    const keys = keysOf(c, "vol");
+    const i = keys.findIndex((k) => Math.abs(k.t - num(from)) <= 1e-6);
+    if (i < 0) return copy(cut);
+    const lo = i > 0 ? keys[i - 1].t + 1e-3 : 0, hi = i + 1 < keys.length ? keys[i + 1].t - 1e-3 : num(c.length);
+    const t = round(Math.max(lo, Math.min(hi, num(to))));
+    return withKeys(cut, sel, (k) => {
+        const list = (k.vol || []).filter((p) => Math.abs(p.t - num(from)) > 1e-6);
+        list.push({ t, v: round(Math.max(0, Math.min(1, num(v)))), ...(keys[i].i ? { i: keys[i].i } : {}) });
+        k.vol = list.sort((a, b) => a.t - b.t);
+    });
+}
+
+/** The point at clip time `u` taken away (Delete, or Alt-click on it). */
+export function removeVolPoint(cut, sel, u) { return removeKeys(cut, sel, ["vol"], u); }
+
+// ── sound effects on clips and tracks (bEpicViewer_audioFxData.js is what an effect is) ──
+
+/** Can a selection carry sound effects: a clip of a sound track, or a film of V1 / a video track that sounds. */
+export function afxTakes(cut, sel) {
+    const c = clipOf(cut, sel);
+    if (!c || c.title) return false;
+    if (sel.kind === "tclip" && (trackOf(cut, sel.track) || {}).kind === "audio") return true;
+    return !isStill(c.file) && !c.mute;
+}
+
+/** A clip's effects (a clean chain). */
+export function clipAfx(cut, sel) { const c = clipOf(cut, sel); return c ? cleanAfx(c.afx) : []; }
+
+/** A clip's effects replaced by `list`. */
+export function setClipAfx(cut, sel, list) {
+    const next = copy(cut);
+    const c = clipOf(next, sel);
+    if (!c) return next;
+    const chain = cleanAfx(list);
+    if (chain.length) c.afx = chain; else delete c.afx;
+    return next;
+}
+
+/** May track `id` carry effects: a sound track, or the bed (A1). */
+export function afxTrack(cut, id) {
+    return id === "A1" || (trackOf(cut, id) || {}).kind === "audio";
+}
+
+/** A track's effects ("A1": the bed's). */
+export function trackAfx(cut, id) {
+    if (id === "A1") return cleanAfx(cut && cut.afx && cut.afx.A1);
+    return cleanAfx((trackOf(cut, id) || {}).afx);
+}
+
+/** A track's effects replaced by `list`. */
+export function setTrackAfx(cut, id, list) {
+    const next = copy(cut);
+    const chain = cleanAfx(list);
+    if (id === "A1") { if (chain.length) next.afx.A1 = chain; else delete next.afx.A1; return next; }
+    const k = trackOf(next, id);
+    if (!k || k.kind !== "audio") return next;
+    if (chain.length) k.afx = chain; else delete k.afx;
+    return next;
+}
+
+/** A chain's keys moved by `d` seconds (a clip's keys after a split: the second piece's own time). */
+export function shiftAfx(list, d) {
+    return cleanAfx((list || []).map((fx) => ({ ...fx, keys: Object.fromEntries(Object.entries((fx && fx.keys) || {})
+        .map(([k, ks]) => [k, (ks || []).map((x) => ({ ...x, t: x.t + num(d) })).filter((x) => x.t >= 0)])) })));
+}
+
+/** Does anything in the cut have effects that are on? */
+export function cutHasAfx(cut) {
+    if (!cut) return false;
+    if (afxActive(cleanAfx(cut.afx && cut.afx.A1))) return true;
+    if ((cut.clips || []).some((c) => afxActive(cleanAfx(c.afx)))) return true;
+    return (cut.tracks || []).some((k) => afxActive(cleanAfx(k.afx)) || (k.clips || []).some((c) => afxActive(cleanAfx(c.afx))));
 }

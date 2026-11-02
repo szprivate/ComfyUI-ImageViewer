@@ -588,8 +588,19 @@ export const EditPlayMixin = {
         const underSel = at.under && /^V1:\d+$/.test(at.under.key || "") ? { kind: "clip", i: Number(at.under.key.slice(3)) } : null;
         const uenv = envOf(underSel);
         ep.envOn = D.envActive(env) || D.envActive(uenv);
-        try { if (!ep.still && this.videoBase) this.videoBase.volume = Math.max(0, Math.min(1, loud(at.clip, u) * a * D.envGain(env, u))); } catch (_) {}
-        try { if (under && under.tagName === "VIDEO") under.volume = at.over ? 0 : Math.max(0, Math.min(1, loud(at.under.clip, uu) * (1 - a) * D.envGain(uenv, uu))); } catch (_) {}
+        // Sound effects: the element goes through its clip's (and track's) WebAudio graph (bEpicViewer_editAfxPlay.js).
+        try {
+            if (!ep.still && this.videoBase) {
+                if (this._editAfxEnsure) this._editAfxEnsure(this.videoBase, at.clip, D.selTrack(at.sel), at.origin);
+                this._epVol(this.videoBase, loud(at.clip, u) * a * D.envGain(env, u));
+            }
+        } catch (_) {}
+        try {
+            if (under && under.tagName === "VIDEO") {
+                if (this._editAfxEnsure && !at.over) this._editAfxEnsure(under, at.under.clip, "V1", at.under.origin);
+                this._epVol(under, at.over ? 0 : loud(at.under.clip, uu) * (1 - a) * D.envGain(uenv, uu));
+            }
+        } catch (_) {}
     },
 
     // The titles on screen now (titlesAt), each on a canvas of its own laid where
@@ -833,7 +844,9 @@ export const EditPlayMixin = {
                 // Fades and crossfades on top (envGain, the render's env_gain).
                 const level = clip ? D.clipVolume(clip, Math.max(0, Math.min(Number(clip.length) || 0, u))) : item.volume;
                 const vol = Math.max(0, Math.min(1, level * D.envGain(item.env, u))) * (this._editAudioGain ? this._editAudioGain() : 1);
-                if (a.volume !== vol) a.volume = vol;
+                // Its effects and its track's (WebAudio, bEpicViewer_editAfxPlay.js), then its loudness.
+                if (this._editAfxEnsure) this._editAfxEnsure(a, clip, item.track || "", item.origin != null ? item.origin : item.at);
+                this._epVol(a, vol);
                 if (Math.abs(a.playbackRate - plan.rate) > 1e-6) a.playbackRate = plan.rate;
                 if ("preservesPitch" in a && a.preservesPitch !== (speed === 1)) a.preservesPitch = speed === 1;
                 const mute = speed < 0.25 || speed > 4;
@@ -953,6 +966,7 @@ export const EditPlayMixin = {
             this._editPlaySounds(t, true);               // a sound clip whose moment has come (keyed volumes: every frame)
         }
         ep.tNow = t;
+        if (this._editAfxTick) this._editAfxTick(t);              // keyed effect params (mix, gain, pan)
         if (ep.at && ep.at.under && !ep.at.over) {
             const now = ep.at;
             this._editPlayMix({ ...now, mix: (t - now.mixStart) / now.mixLen });

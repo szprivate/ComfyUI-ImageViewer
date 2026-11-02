@@ -21,7 +21,7 @@ may be at most ``MAX_SECONDS`` long here.
 import os
 from fractions import Fraction
 
-from . import timeline_io
+from . import audio_fx, timeline_io
 
 MAX_SECONDS = 20 * 60
 MAX_SIDE = 4096
@@ -601,8 +601,13 @@ def env_curve(env, u):
     return np.clip(g, 0.0, 1.0).astype(np.float32)
 
 
-def film_sound(cut, counts, fps, total_frames):
+def film_sound(cut, counts, fps, total_frames, only=None, fx=True):
     """The film's sound as a ``(2, n)`` float array, or None when there is none.
+
+    Sound effects (audio_fx): a clip's first, then its volume and fades, then its track's (a sound
+    track's, the bed's), then the mix. *only*: just one part - "V1" (the cut's films, silent where a
+    higher track covers them), "A1" (the bed) or a sound track's id - which the Resolve export bakes;
+    *fx* False leaves the effects out (the dry sound).
 
     Each clip's own sound sits where its picture is, fading in and out over its
     dissolves (which is a crossfade with its neighbour). A clip on a higher video
@@ -621,8 +626,8 @@ def film_sound(cut, counts, fps, total_frames):
         keyed = not clip.get("blank") and volume_curve(clip, 1, RATE) is not None
         # A gap has no sound; a clip whose sound was split off (`mute`) is heard
         # from its sound clip, on a sound track, at that clip's own place.
-        if cut.get("clip_sound", True) and not cut.get("v1_off") and (volume > 0 or keyed) and not clip.get("blank") \
-                and not clip.get("mute") and not is_still(clip["file"]):
+        if only in (None, "V1") and cut.get("clip_sound", True) and not cut.get("v1_off") and (volume > 0 or keyed) \
+                and not clip.get("blank") and not clip.get("mute") and not is_still(clip["file"]):
             env = clip.get("env")
             # A crossfade's handles: the sound before the clip's start (coming in) and after its end (going out).
             pre = env["xin"]["b"] if env and env.get("xin") else 0.0
@@ -631,6 +636,8 @@ def film_sound(cut, counts, fps, total_frames):
                 sound = handled_sound(clip, n / fps, pre, post)
             except Exception:  # noqa: BLE001 - a shot whose sound will not decode is silent
                 sound = None
+            if sound is not None and fx and clip.get("afx"):
+                sound = audio_fx.apply_chain(sound, clip["afx"], -pre)       # the clip's effects, in its own time
             if sound is not None:
                 # Volume keys (a key's value every 10 ms), fades and crossfades: a gain per sample, in the clip's own time.
                 u = np.arange(sound.shape[1], dtype=np.float64) / RATE - pre
@@ -652,8 +659,9 @@ def film_sound(cut, counts, fps, total_frames):
                     heard = True
         at = start + n
 
-    def lay(clip, replace):
+    def lay(clip, replace, into=None, quiet=False):
         nonlocal heard
+        into = mix if into is None else into
         a = int(round(float(clip["at"]) * RATE))
         want = int(round(float(clip["length"]) * RATE))
         b = min(total, a + want)
@@ -661,6 +669,8 @@ def film_sound(cut, counts, fps, total_frames):
             return
         if replace:
             mix[:, a:b] = 0.0
+        if quiet:
+            return
         volume = float(clip.get("volume", 1.0))
         curve = volume_curve(clip, want, RATE)
         if (volume <= 0 and curve is None) or clip.get("mute") or is_still(clip["file"]):
@@ -672,6 +682,8 @@ def film_sound(cut, counts, fps, total_frames):
             sound = handled_sound(clip, want / RATE, pre, post)
         except Exception:  # noqa: BLE001
             sound = None
+        if sound is not None and fx and clip.get("afx"):
+            sound = audio_fx.apply_chain(sound, clip["afx"], -pre)
         if sound is not None:
             u = np.arange(sound.shape[1], dtype=np.float64) / RATE - pre
             sound = sound * gain_line(clip, u, float(clip["length"]))
@@ -681,15 +693,28 @@ def film_sound(cut, counts, fps, total_frames):
             lo = max(0, -s0)
             s1 = min(total, s0 + sound.shape[1])
             if s1 > s0 + lo:
-                mix[:, s0 + lo:s1] += sound[:, lo:s1 - s0]
+                into[:, s0 + lo:s1] += sound[:, lo:s1 - s0]
                 heard = True
 
     for _first, _count, clip in _spans(cut.get("overlays"), fps):
-        if clip.get("title") is None:            # words cover no sound
-            lay(clip, True)
+        if clip.get("title") is None and only in (None, "V1"):      # words cover no sound
+            lay(clip, True, quiet=only == "V1")
+    # The sound tracks, each on a bus of its own when it has effects (they work on the track's sum).
+    chains = cut.get("track_afx") or {}
+    buses = {}
     for clip in cut.get("sounds") or []:
-        lay(clip, False)
-    bed = cut.get("bed")
+        tid = clip.get("track_id")
+        if only is not None and only != tid:
+            continue
+        if fx and audio_fx.active(chains.get(tid)):
+            if tid not in buses:
+                buses[tid] = np.zeros((2, total), dtype=np.float32)
+            lay(clip, False, buses[tid])
+        else:
+            lay(clip, False)
+    for tid, bus in buses.items():
+        mix += audio_fx.apply_chain(bus, chains[tid], 0.0)
+    bed = cut.get("bed") if only in (None, "A1") else None
     if bed and bed.get("file"):
         try:
             sound = _sound_of(bed["file"], float(bed.get("in") or 0), total / RATE)
@@ -701,6 +726,8 @@ def film_sound(cut, counts, fps, total_frames):
             env = {"len": total / RATE, "fi": float(bed.get("fade_in", 0.0)), "fo": float(bed.get("fade_out", 1.0)),
                    "xin": None, "xout": None}
             sound = sound * env_curve(env, np.arange(sound.shape[1], dtype=np.float64) / RATE)
+            if fx and audio_fx.active(chains.get("A1")):
+                sound = audio_fx.apply_chain(np.ascontiguousarray(sound[:, :total]), chains["A1"], 0.0)
             mix += sound[:, :total]
             heard = True
     return np.clip(mix, -1.0, 1.0) if heard else None
@@ -748,7 +775,7 @@ def read_cut(doc):
                       "transition": 0.0 if gapped or cut_in else c["transition"], "name": c["name"],
                       "speed": c.get("speed", 1.0), "loop": c.get("loop", ""), "span": c.get("span", 0.0),
                       "volume": float(note.get("volume", 1.0)), "fx": c.get("fx") or {},
-                      "mute": bool(c.get("mute")), "env": envs.get(("V1", idx))})
+                      "mute": bool(c.get("mute")), "env": envs.get(("V1", idx)), "afx": c.get("afx") or []})
         cut_in = False
     off = edit.get("off") or {}
     overlays, sounds = [], []
@@ -764,7 +791,8 @@ def read_cut(doc):
                     "speed": c.get("speed", 1.0), "loop": c.get("loop", ""), "span": c.get("span", 0.0),
                     "volume": float(c.get("volume", 1.0)), "name": c["name"], "order": order,
                     "fx": c.get("fx") or {}, "mute": bool(c.get("mute")),
-                    "track": track.get("name") or track.get("id"), "env": envs.get((track.get("id"), ci))}
+                    "track": track.get("name") or track.get("id"), "env": envs.get((track.get("id"), ci)),
+                    "track_id": track.get("id"), "afx": c.get("afx") or []}
             if c.get("title") is not None:
                 item.update(title=c["title"], file="", speed=1.0, loop="", span=0.0, volume=0.0)
             (sounds if track.get("kind") == "audio" else overlays).append(item)
@@ -782,6 +810,8 @@ def read_cut(doc):
     titles = sum(1 for o in overlays if o.get("title") is not None)
     return {"name": edit["name"], "fps": float(edit["fps"] or 24.0), "clips": clips, "bed": bed,
             "overlays": overlays, "sounds": sounds, "v1_off": bool(off.get("V1")),
+            "track_afx": {**{t.get("id"): t.get("afx") or [] for t in edit.get("tracks") or [] if t.get("kind") == "audio"},
+                          "A1": (edit.get("afx") or {}).get("A1") or []},
             "texts": titles, "clip_sound": bool(about.get("clip_sound", True)),
             "width": int(about.get("width") or 0), "height": int(about.get("height") or 0)}
 
@@ -935,3 +965,46 @@ def render(doc, out_path, fmt="mp4", may_use=None, codec=None, quality="high", f
             # Titles are drawn; the key stays for callers that read it.
             "texts_left_out": 0, "texts": cut["texts"], "notes": notes,
             "format": how["label"]}
+
+
+def render_sound(doc, out_path, only=None, frames=None, fx=True):
+    """The sound of the cut in *doc* - or of one part of it (*only*: "V1", "A1", a sound track's id;
+    :func:`film_sound`) - with its effects (*fx*), as a 48 kHz stereo 16-bit WAV at *out_path*, as long
+    as the film (or its *frames* ``(first, last)``). What the Resolve export bakes a part's effects into.
+    Written beside the target and moved over. Returns the seconds written."""
+    import av
+    import numpy as np
+    cut = read_cut(doc)
+    fps = cut["fps"] if cut["fps"] > 0 else 24.0
+    counts = frame_counts(cut["clips"], fps)
+    total = max([film_frames(counts)] + [first + count for first, count, _c in _spans(cut["overlays"], fps)])
+    sound = film_sound(cut, counts, fps, total, only=only, fx=fx)
+    n = int(round(total / fps * RATE))
+    if sound is None:
+        sound = np.zeros((2, n), dtype=np.float32)
+    if frames:
+        lo = max(0, min(total - 1, int(frames[0])))
+        hi = max(lo + 1, min(total, int(frames[1]) + 1))
+        sound = sound[:, int(round(lo / fps * RATE)):int(round(hi / fps * RATE))]
+    tmp = out_path + ".part.wav"
+    try:
+        with av.open(tmp, "w", format="wav") as out:
+            st = out.add_stream("pcm_s16le", rate=RATE)
+            st.layout = "stereo"
+            pcm = (np.clip(sound, -1, 1).T * 32767.0).astype(np.int16)
+            for k in range(0, pcm.shape[0], 4096):
+                af = av.AudioFrame.from_ndarray(np.ascontiguousarray(pcm[k:k + 4096].reshape(1, -1)), format="s16", layout="stereo")
+                af.sample_rate = RATE
+                af.pts = k
+                for packet in st.encode(af):
+                    out.mux(packet)
+            for packet in st.encode(None):
+                out.mux(packet)
+        os.replace(tmp, out_path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+    return sound.shape[1] / RATE

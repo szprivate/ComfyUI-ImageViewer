@@ -176,3 +176,50 @@ test("title clips: a locked title track takes no edit, an auto-select-off one is
     const split = D.splitAt(off, 6.5, null, D.editMask(off));
     assert.equal((split ? split.cut : off).tracks.find((t) => t.id === "V2").clips.filter((c) => c.title).length, 1);
 });
+
+// ── the volume line ──
+
+const SND = () => ({ ...CUT(), tracks: [{ id: "A2", kind: "audio", name: "A2", off: false, clips: [{ file: "s.wav", name: "s", in: 0, length: 4, at: 0, volume: 0.5 }] }] });
+const A2 = { kind: "tclip", track: "A2", i: 0 };
+
+test("the volume line's scale: dB, from 0 at the top to -60 at the bottom, and back", () => {
+    near(D.volY(1), 0); near(D.volY(D.dbVol(-30)), 0.5); assert.equal(D.volY(0), 1);
+    for (const y of [0, 0.1, 0.5, 0.9]) near(D.volY(D.yVol(y)), y, 1e-9);
+    assert.equal(D.dbLabel(0.5), "-6.0 dB");
+    assert.equal(D.dbLabel(0), "-inf dB");
+});
+
+test("a flat line is the clip's volume; its points are the Inspector's volume keys", () => {
+    assert.deepEqual(D.volLine(SND().tracks[0].clips[0], 4), [{ u: 0, v: 0.5 }, { u: 4, v: 0.5 }]);
+    let cut = D.setVolLine(SND(), A2, 0.25, 1);
+    assert.equal(D.clipOf(cut, A2).volume, 0.25);
+    cut = D.addVolPoint(cut, A2, 1);                      // Alt+click: a key, at the line's level
+    cut = D.addVolPoint(cut, A2, 3);
+    assert.deepEqual(D.keysOf(D.clipOf(cut, A2), "vol"), [{ t: 1, v: 0.25 }, { t: 3, v: 0.25 }]);
+    // Moved in time and level: the same key the Inspector's diamonds see.
+    cut = D.moveVolPoint(cut, A2, 3, 2.5, 1);
+    assert.deepEqual(D.keysOf(D.clipOf(cut, A2), "vol"), [{ t: 1, v: 0.25 }, { t: 2.5, v: 1 }]);
+    assert.ok(D.keyedAt(D.clipOf(cut, A2), ["vol"], 2.5));
+    // Held between its neighbours.
+    cut = D.moveVolPoint(cut, A2, 2.5, 0.5, 1);
+    assert.ok(D.keysOf(D.clipOf(cut, A2), "vol")[1].t > 1);
+    // The ease of a key shapes the line between it and the next (setKeyInterp, the Inspector's right-click).
+    const eased = D.setKeyInterp(cut, A2, ["vol"], 1, "hold");
+    const line = D.volLine(D.clipOf(eased, A2), 4);
+    assert.ok(line.filter((p) => p.u > 1 && p.u < D.keysOf(D.clipOf(eased, A2), "vol")[1].t).every((p) => Math.abs(p.v - 0.25) < 1e-9));
+    // The line dragged with points: every point by the same dB.
+    const up = D.setVolLine(cut, A2, 0.5, 1);
+    const ks = D.keysOf(D.clipOf(up, A2), "vol");
+    near(ks[0].v, 0.5); near(ks[1].v, 1);                 // +6 dB, held at 0 dB
+    // Removed (Del / Alt+click): the last one gone, the clip has its number again.
+    let gone = D.removeVolPoint(D.removeVolPoint(cut, A2, 1), A2, ks[1].t);
+    assert.equal(D.keysOf(D.clipOf(gone, A2), "vol").length, 0);
+    assert.equal(D.paramAt(D.clipOf(gone, A2), "vol", 2), 0.25);
+});
+
+test("the volume line, fades and crossfades multiply", () => {
+    let cut = D.addVolPoint(D.setVolLine(SND(), A2, 0.5, 0), A2, 0);
+    cut = D.setFade(cut, A2, "in", 2);
+    const c = D.clipOf(cut, A2);
+    near(D.clipVolume(c, 1) * D.envGain(D.audioEnv(cut, A2), 1), 0.25);
+});

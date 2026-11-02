@@ -5,6 +5,7 @@
 // A mixin onto the panel. The dialog lies in the panel's body, so it pops out with it.
 import { api } from "../../scripts/api.js";
 import { canvasContext, openFilePicker, notice } from "./bEpicViewer_exportUI.js";
+import * as D from "./bEpicViewer_editTimelineData.js";
 
 const POLL_MS = 250;
 
@@ -67,6 +68,14 @@ export const EditResolveMixin = {
         const onlyRow = el("label", "edit-resolve-check");
         onlyRow.append(only, el("span", "", "Include in–out only"));
         if (!range) onlyRow.style.display = "none";
+        // Sound effects cannot go into FCPXML: baked into WAVs that take the clips' place, the dry originals on muted tracks.
+        const bake = el("input", "edit-resolve-bake");
+        bake.type = "checkbox";
+        bake.checked = true;
+        const bakeRow = el("label", "edit-resolve-check");
+        bakeRow.title = "Each track (and V1) with sound effects plays from a WAV rendered with them; its original clips lie on a muted track named '<track> (dry)' to redo the effects in Fairlight";
+        bakeRow.append(bake, el("span", "", "Bake audio effects"));
+        bakeRow.style.display = this._editTlCut && D.cutHasAfx(this._editTlCut) ? "" : "none";
         const room = el("div", "edit-resolve-room", "Reading the clips…");
         const list = el("div", "edit-resolve-list");
         const lose = el("input", "edit-resolve-lose");
@@ -89,7 +98,7 @@ export const EditResolveMixin = {
 
         let job = null, plan = null, asked = 0, shut = false;
         const shutDown = () => { shut = true; box.remove(); if (ui.dialog === box) ui.dialog = null; };
-        const body = () => ({ source, name: name.value, folder: folder.value,
+        const body = () => ({ source, name: name.value, folder: folder.value, bake_fx: bakeRow.style.display !== "none" && bake.checked,
                               ...(range && only.checked ? { frames: [range.start, range.end] } : {}) });
         const fail = (text) => { note.textContent = text; note.classList.add("error"); };
 
@@ -123,7 +132,7 @@ export const EditResolveMixin = {
             showPlan(got.data);
         };
         const showResult = (r) => {
-            for (const n of [name.closest("label"), folder.closest("label"), onlyRow, loseRow, room, list, go, stop, bar, note]) n.style.display = "none";
+            for (const n of [name.closest("label"), folder.closest("label"), onlyRow, bakeRow, loseRow, room, list, go, stop, bar, note]) n.style.display = "none";
             const line = el("div", "edit-resolve-path", r.path);
             line.title = r.path;
             const copy = el("button", "edit-btn edit-resolve-copy", "Copy path");
@@ -201,6 +210,7 @@ export const EditResolveMixin = {
         name.addEventListener("change", ask);
         folder.addEventListener("change", ask);
         only.addEventListener("change", ask);
+        bake.addEventListener("change", ask);
         lose.addEventListener("change", () => { if (plan) showPlan(plan); });
         browse.addEventListener("click", (e) => {
             e.preventDefault();
@@ -213,7 +223,7 @@ export const EditResolveMixin = {
             if (e.key === "Escape") { e.preventDefault(); if (!job) shutDown(); }
             else if (e.key === "Enter" && !["BUTTON"].includes(e.target.tagName) && e.target.type !== "checkbox") { e.preventDefault(); e.target.blur(); }
         });
-        box.append(head, row("Name", name), row("Folder", folder, browse), onlyRow, room, list, loseRow, go, stop, bar, note, result);
+        box.append(head, row("Name", name), row("Folder", folder, browse), onlyRow, bakeRow, room, list, loseRow, go, stop, bar, note, result);
         // Over the whole viewer, not inside the Edit panel: docked low the panel is
         // too short to hold it, and its strip would lie over the title.
         ui.savedBar.style.display = "none";

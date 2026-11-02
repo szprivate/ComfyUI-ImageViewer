@@ -611,7 +611,8 @@ try:
                 raise _ResolveRefused(403, path_access.refusal(folder))
             doc = timeline_io._load(side)
             # A copy hands a file's bytes to whoever reads the package: the serve rule.
-            plan = resolve_export.make_plan(doc, side, folder, body.get("name") or None, frames, path_access.may_serve)
+            plan = resolve_export.make_plan(doc, side, folder, body.get("name") or None, frames, path_access.may_serve,
+                                            bake=body.get("bake_fx") if isinstance(body.get("bake_fx"), bool) else None)
             if not path_access.is_allowed(plan["path"]):
                 raise _ResolveRefused(403, path_access.refusal(plan["path"]))
             return doc, plan

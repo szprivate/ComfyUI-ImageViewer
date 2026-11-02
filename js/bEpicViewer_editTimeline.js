@@ -99,6 +99,7 @@ const DRAG_SLOP = 4;        // travel before a press on a shot becomes a move
 const STILL_SECONDS = 3;
 const DRAG_TYPE = "application/x-bepic-history";
 const EFFECT_TYPE = "application/x-bepic-effect";      // an item of the Effects panel, dragged
+const AFX_DRAG = "application/x-bepic-afx";            // a sound effect of the Effects panel, dragged (bEpicViewer_editAfx.js)
 const PREFIX = "edit:";                       // an Edit tab's key (EditPlayMixin.isEditTab)
 // The three panels that belong to a cut. They are up only while a cut's tab is.
 export const EDIT_PANELS = ["editTimeline", "editInspector", "editEffects"];
@@ -226,7 +227,9 @@ export const EditTimelineMixin = {
         this._editTlView = { zoom: D.clampZoom(view.zoom), end: Number(view.end) || 0, heights: { ...(view.heights || {}) },
                              solo: { ...(view.solo || {}) }, textsOff: !!view.textsOff, range,
                              // Snapping: on unless switched off (N); the beats of the music its own switch, off.
-                             snap: view.snap !== false, snapBeats: !!view.snapBeats };
+                             snap: view.snap !== false, snapBeats: !!view.snapBeats,
+                             // The volume line: shown on every sound track unless switched off in its header's menu.
+                             volCurve: { ...(view.volCurve || {}) } };
         this._editTlSel = null;
         this._editTlEditSel = null;
         this._editTlNote = "";
@@ -598,6 +601,7 @@ export const EditTimelineMixin = {
         // pictures dragged out of ComfyUI's own queue / assets list (a link to
         // its /view, which names the file the way ComfyUI does).
         const carries = (e) => (this._editTlCarries(e) ? "files"
+            : this._editTlCarries(e, AFX_DRAG) ? "afx"
             : this._editTlCarries(e, EFFECT_TYPE) ? "effect"
             : this._editTlCarries(e, "Files") ? "os"
             : this._editTlCarries(e, "text/uri-list") ? "uri" : "");
@@ -611,17 +615,31 @@ export const EditTimelineMixin = {
             if (!what) return;
             e.preventDefault();
             try { e.dataTransfer.dropEffect = "copy"; } catch (_) {}
+            if (what === "afx") {
+                // A sound effect: the clip or the track it would go on, lit (a locked one is not).
+                const t = this._editAfxTargetAt(e);
+                const locked = t && D.trackFlags(this._editTlCut, t.sel ? D.selTrack(t.sel) : t.track).lock;
+                this._editAfxMark(locked ? null : t);
+                try { e.dataTransfer.dropEffect = t && !locked ? "copy" : "none"; } catch (_) {}
+                return;
+            }
             const room = what === "effect" ? "" : this._editTlRoomAt(e.clientY);
             this._editTlDropMark(e.clientX, what === "effect" ? "free" : room ? "new:" + room : rowOf(e), true);
         });
         body.addEventListener("dragleave", (e) => {
-            if (!e.relatedTarget || !body.contains(e.relatedTarget)) { this._editTlDropMark(null); this._editTlSnapLine(null); }
+            if (!e.relatedTarget || !body.contains(e.relatedTarget)) { this._editTlDropMark(null); this._editTlSnapLine(null); if (this._editAfxMark) this._editAfxMark(null); }
         });
         body.addEventListener("drop", (e) => {
             const what = carries(e);
             if (!what) return;
             e.preventDefault();
             e.stopPropagation();
+            if (what === "afx") {
+                let p = null;
+                try { p = JSON.parse(e.dataTransfer.getData(AFX_DRAG)); } catch (_) {}
+                this.editAfxDrop(p && p.afx, this._editAfxTargetAt(e));
+                return;
+            }
             const raw = this._editTlTimeAt(e.clientX);
             const track = rowOf(e);
             const room = what === "effect" ? "" : this._editTlRoomAt(e.clientY);
@@ -829,6 +847,8 @@ export const EditTimelineMixin = {
                     this._editTlLinkBadge(b, cut.clips[s.i], "video");
                     if (this._editTlFadeHandles && !cut.clips[s.i].mute && this._editTlHasSound(cut.clips[s.i])) {
                         this._editTlFadeHandles(b, { kind: "clip", i: s.i }, s.length, height);
+                        if (this._editTlVolLine) this._editTlVolLine(b, { kind: "clip", i: s.i }, s.length, height, "V1");
+                        if (this._editAfxClipBadge) this._editAfxClipBadge(b, { kind: "clip", i: s.i }, cut.clips[s.i]);
                     }
                     b.addEventListener("pointerdown", (e) => this._editTlShotDown(e, b, s.i));
                     b.addEventListener("pointermove", (e) => this._editTlHover(e, b, { kind: "clip", i: s.i }));
@@ -886,6 +906,8 @@ export const EditTimelineMixin = {
                     this._editTlTakeBadge(b, tc);
                     this._editTlLinkBadge(b, tc, row.kind);
                     if (row.kind === "audio" && this._editTlFadeHandles) this._editTlFadeHandles(b, { kind: "tclip", track: row.id, i: c.i }, c.length, height);
+                    if (row.kind === "audio" && this._editTlVolLine) this._editTlVolLine(b, { kind: "tclip", track: row.id, i: c.i }, c.length, height, row.id);
+                    if (this._editAfxClipBadge && D.afxTakes(cut, { kind: "tclip", track: row.id, i: c.i })) this._editAfxClipBadge(b, { kind: "tclip", track: row.id, i: c.i }, tc);
                     b.addEventListener("pointerdown", (e) => this._editTlTrackClipDown(e, b, row.id, c.i));
                     b.addEventListener("pointermove", (e) => this._editTlHover(e, b, { kind: "tclip", track: row.id, i: c.i }));
                     b.addEventListener("pointerleave", () => this._editTlHoverEnd());
@@ -980,6 +1002,17 @@ export const EditTimelineMixin = {
                 if (this._editTlSel && this._editTlSel.track === row.id) this._editTlSel = null;
                 this._editTlApply(D.removeTrack(cut, row.id));
             }));
+        }
+        hd.dataset.track = row.id;
+        if (this._editAfxHeadBadges) this._editAfxHeadBadges(hd, row);
+        if ((row.kind === "audio" && row.id !== "A1") || row.id === "V1") {
+            // Right-click: the header's menu - whether the clips show their volume line.
+            hd.addEventListener("contextmenu", (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const on = !this._editTlVolShown || this._editTlVolShown(row.id);
+                this._previzOpenMenu([{ label: (on ? "✓ " : " ") + "Show volume curve", run: () => this._editTlVolToggle(row.id) }], e.clientX, e.clientY);
+            });
         }
         const grip = doc.createElement("div");
         grip.className = "edit-hgrip";
@@ -1098,6 +1131,8 @@ export const EditTimelineMixin = {
         const fps = cut.fps || 24;
         const head = (this.currentFrame || 0) / fps;
         const path = e.composedPath ? e.composedPath() : [e.target];
+        // A volume point, a fade handle or a crossfade's bar under the line takes the press itself.
+        if (path.some((n) => n && n.classList && (n.classList.contains("edit-volpt") || n.classList.contains("edit-fadeh")))) return false;
         const row = path.find((n) => n && n.classList && n.classList.contains("edit-track"));
         const track = row ? row.dataset.track : "";
         if (track === "V1" || (track && D.trackOf(cut, track))) {
@@ -1453,6 +1488,7 @@ export const EditTimelineMixin = {
     },
 
     _editTlShotDown(e, el, i) {
+        this._editTlVolSel = null;                 // a point of a volume line chosen is let go
         const start = this._editTlCut;
         const fps = start.fps || 24;
         const was = start.clips[i];
@@ -1694,6 +1730,7 @@ export const EditTimelineMixin = {
     // A clip on a higher track: it is PLACED, so a drag moves it to another
     // moment and nothing else moves with it.
     _editTlTrackClipDown(e, el, id, i) {
+        this._editTlVolSel = null;                 // a point of a volume line chosen is let go
         const start = this._editTlCut;
         const fps = start.fps || 24;
         const zone = this._editTlZone(e, el);

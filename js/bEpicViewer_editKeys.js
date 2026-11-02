@@ -50,6 +50,7 @@ export const EDIT_KEYS = [
     ["T", "Trim Edit mode: an edge ripples, the middle of a cut rolls, a clip's upper half slips, its lower half slides"],
     ["B", "Blade: click a clip to cut it there (A or Esc: put it away)"],
     ["Shift+T", "Add an audio crossfade at the selected cut, else at the cut nearest the playhead (the selected clip's track, else the auto-selected tracks); its bar: drag an edge for its length, Del removes it"],
+    ["Volume line on a sound clip", "Drag it up / down: the level (dB shown); Alt+click: a point (the Inspector's volume key); drag a point in time and level; Alt+click or Del removes it; right-click a point: its ease; the track header's right-click hides it"],
     ["Fade handles", "The small squares at a sound clip's upper corners: drag them in for a fade in / out (the Inspector's Audio tab has the numbers)"],
     ["Track header: lock / auto-select", "The padlock: nothing on the track can be edited (still played and rendered). The pointer-in-a-box: Auto Track Selector - only tracks with it on are rippled, inserted into, cut by Ctrl+B and stepped through"],
     ["N", "Snapping on / off (the magnet): clip and gap edges on every track, playhead, in / out, texts, start"],
@@ -172,6 +173,7 @@ export const EditKeysMixin = {
         else if (key === "?") this.toggleHelpOverlay();
         else if (key === "Escape") {
             if (this._editTlKeySel) { this._editTlKeySel = null; this.editTlRefresh(); }
+            else if (this._editTlVolSel) { this._editTlVolSel = null; this.editTlRefresh(); }
             else if (this._editTlMarks && this.editTlMarksCancel) this.editTlMarksCancel();
             else if (this._editTlBlade) this.editTlBladeToggle(false);
             else if (this._editTlEditPoint()) { this._editTlEditSel = null; this.editTlRefresh(); }
@@ -179,6 +181,7 @@ export const EditKeysMixin = {
             else done = false;
         }
         else if ((key === "Delete" || key === "Backspace") && this._editTlKeySel && this.editTlKeyDelete && this.editTlKeyDelete()) done = true;
+        else if ((key === "Delete" || key === "Backspace") && this._editTlVolSel && this.editTlVolDelete && this.editTlVolDelete()) done = true;
         else if (key === "Delete" || key === "Backspace") done = this.editTlDelete(shift);
         else if (low === "j" && !shift) this._editTlShuttle(-1);
         else if (low === "k" && !shift) this._editTlShuttle(0);
