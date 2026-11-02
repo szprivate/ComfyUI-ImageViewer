@@ -44,6 +44,9 @@ export const EditTwoUpMixin = {
             const box = doc.createElement("div");
             box.className = "edit-twoup-side";
             box.dataset.side = name;
+            // A click on a pane picks that side of the cut (editTwoUpPick); none of it reaches the viewer's own handlers.
+            for (const ev of ["pointerdown", "mousedown", "pointerup", "mouseup", "dblclick", "contextmenu"]) box.addEventListener(ev, (e) => e.stopPropagation());
+            box.addEventListener("click", (e) => { e.stopPropagation(); e.preventDefault(); this.editTwoUpPick(name); });
             const pic = doc.createElement("div");
             pic.className = "edit-twoup-pic";
             const v = doc.createElement("video");
@@ -98,6 +101,61 @@ export const EditTwoUpMixin = {
         this._editTwoUpSide(layer.right, fr.right, slip ? "Out" : "In", fps);
         layer.root.dataset.act = fr.act;
         layer.root.style.display = "flex";
+        this._editTwoUpMark();
+    },
+
+    /** The stop under the playhead on the selected track ({ t, a, b }), the cut the panes stand for; null off a cut. */
+    _editTwoUpStop() {
+        const cut = this._editTlCut;
+        if (!this._editTlTrimMode || this.isPlaying || !cut || !this._editTlOnScreen || !this._editTlOnScreen()) return null;
+        const point = this._editTlEditPoint ? this._editTlEditPoint() : null;
+        const on = point ? point.sel : this._editTlSel;
+        const track = on && on.kind === "tclip" ? on.track : "V1";
+        const fps = cut.fps || 24, head = this.currentFrame || 0;
+        return D.editStops(cut, track).find((st) => Math.abs(st.t * fps - head) < 0.5) || null;
+    },
+
+    /** Which pane(s) the selected edit point is on this cut: "left", "right", "both" or "" (data-pick, drawn by the css). */
+    _editTwoUpMark() {
+        const t = this._etu;
+        if (!t) return;
+        const stop = this._editTwoUpStop(), point = this._editTlEditPoint ? this._editTlEditPoint() : null;
+        let pick = "";
+        if (stop && point) {
+            const same = (x, y) => x && y && D.selId(x) === D.selId(y);
+            const here = point.act === "roll" ? same(point.a, stop.a) && same(point.b, stop.b)
+                : point.side === "end" ? same(point.sel, stop.a) : same(point.sel, stop.b);
+            if (here) pick = D.pointState(point);
+        }
+        t.root.dataset.pick = pick;
+    },
+
+    /**
+     * A click on a pane: the left one selects the cut's LEFT side (the outgoing clip's out), the right one
+     * its RIGHT side (the incoming clip's in) - Shift+A / S's two states, so , / . trim that side and the
+     * green marks follow. Clicking the side that is the only one selected picks BOTH (a roll), as Resolve's
+     * toggle does; clicking a pane while both are selected picks that side. A side the cut has not (the
+     * film's start or end, a gap) does nothing.
+     */
+    editTwoUpPick(name) {
+        const stop = this._editTwoUpStop();
+        if (!stop) return;
+        const side = name === "left" ? stop.a : stop.b;
+        if (!side) return;
+        this._editTwoUpMark();
+        const cur = this._etu && this._etu.root.dataset.pick;
+        let state = name;
+        if (cur === name && stop.a && stop.b) state = "both";
+        this._editTlEditSel = D.stepPoint({ t: stop.t, stop, state });
+        this._editTlMulti = null;
+        this._editTlSel = this._editTlEditSel.sel;
+        const fps = (this._editTlCut && this._editTlCut.fps) || 24;
+        this._editTlSay({ left: "the out of the clip before the cut", both: "both sides: a roll", right: "the in of the clip after the cut" }[state]
+                        + ` · ${D.timecode(stop.t, fps)}`);
+        this.editTlRefresh();
+        this._editTwoUpMark();
+        const ui = this._editTlUi;
+        if (ui && ui.body && ui.body.focus) { try { ui.body.focus({ preventScroll: true }); } catch (_) {} }
     },
 
     /** A nudge: shown, then put away TWOUP_HOLD ms after the last one. */

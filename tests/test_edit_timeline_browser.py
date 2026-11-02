@@ -2355,6 +2355,88 @@ class EditTimelineBrowserTests(unittest.TestCase):
         self.assertIsNone(pg.evaluate(self.TWOUP))
         self.assertEqual(self.errors, [])
 
+    PICK = "() => { const t = __panel._etu; const e = __panel._editTlEditSel; return { pick: t && t.root.dataset.pick, act: e && e.act, side: e && e.side, sel: e && e.sel && __panel._etu && (e.sel.kind + ':' + (e.sel.i)), lens: __panel._editTlCut.clips.map(c => Math.round(c.length * 24)) }; }"
+
+    def pane(self, pg, side):
+        box = pg.evaluate("(s) => { const r = __panel._etu[s].box.querySelector('.edit-twoup-pic').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; }", side)
+        return box
+
+    def test_15c_a_click_on_a_two_up_pane_selects_that_side_of_the_cut(self):
+        pg = self.page()
+        self.focus_timeline(pg)
+        wait_up = "() => __panel._etu && __panel._etu.root.style.display !== 'none'"
+        pg.keyboard.press("t")
+        pg.evaluate("() => __panel.setFrame(96)")
+        pg.wait_for_function(wait_up, timeout=3000)
+        base = pg.evaluate(self.PICK)
+        self.assertEqual(base["pick"], "")
+        # Left pane: the outgoing clip's out; , trims it (a ripple out: a one frame shorter).
+        pg.mouse.click(*self.pane(pg, "left"))
+        got = pg.evaluate(self.PICK)
+        self.assertEqual((got["pick"], got["act"], got["side"]), ("left", "trim-out", "end"))
+        self.assertIsNotNone(pg.evaluate(self.TWOUP), "the two-up stays up")
+        pg.keyboard.press("Comma")
+        got = pg.evaluate(self.PICK)
+        self.assertEqual(got["lens"][0], base["lens"][0] - 1)
+        self.assertEqual(got["lens"][1], base["lens"][1])
+        # Back to the cut (the nudge moved it), the right pane: the incoming clip's in.
+        pg.evaluate("() => __panel.editTlUndo()")
+        pg.evaluate("() => __panel.setFrame(96)")
+        pg.wait_for_function(wait_up, timeout=3000)
+        pg.mouse.click(*self.pane(pg, "right"))
+        got = pg.evaluate(self.PICK)
+        self.assertEqual((got["pick"], got["side"]), ("right", "start"))
+        pg.keyboard.press("Period")
+        got2 = pg.evaluate(self.PICK)
+        self.assertEqual(got2["lens"][0], base["lens"][0])
+        self.assertEqual(got2["lens"][1], base["lens"][1] - 1)
+        pg.evaluate("() => __panel.editTlUndo()")
+        pg.evaluate("() => __panel.setFrame(96)")
+        pg.wait_for_function(wait_up, timeout=3000)
+        # The side picked alone, clicked again: both (a roll); a pane while both: that side.
+        pg.evaluate("() => { __panel._editTlEditSel = null; __panel.editTlRefresh(); }")
+        pg.mouse.click(*self.pane(pg, "right"))
+        self.assertEqual(pg.evaluate(self.PICK)["pick"], "right")
+        pg.mouse.click(*self.pane(pg, "right"))
+        self.assertEqual((pg.evaluate(self.PICK)["pick"], pg.evaluate(self.PICK)["act"]), ("both", "roll"))
+        pg.mouse.click(*self.pane(pg, "left"))
+        self.assertEqual(pg.evaluate(self.PICK)["pick"], "left")
+        # The film's start: the missing left side does nothing, the right one picks.
+        pg.evaluate("() => __panel.setFrame(0)")
+        pg.wait_for_function(wait_up, timeout=3000)
+        pg.evaluate("() => { __panel._editTlEditSel = null; __panel.editTlRefresh(); }")
+        pg.mouse.click(*self.pane(pg, "left"))
+        self.assertIsNone(pg.evaluate(self.PICK)["act"])
+        pg.mouse.click(*self.pane(pg, "right"))
+        self.assertEqual(pg.evaluate(self.PICK)["pick"], "right")
+        self.assertEqual(self.errors, [])
+
+    def test_15d_two_up_pane_clicks_in_the_pop_out(self):
+        pg = self.page()
+        with pg.context.expect_page() as pop:
+            pg.evaluate("() => window.__panel.toggleUndock()")
+        win = pop.value
+        win.wait_for_load_state()
+        pg.wait_for_function("() => __panel._editTlUi && __panel._editTlUi.body.ownerDocument !== document", timeout=10000)
+        pg.evaluate("() => __panel.editTlRefresh()")
+        self.fit(pg)
+        pg.evaluate("() => __panel._editTlUi.body.focus()")
+        win.keyboard.press("t")
+        pg.evaluate("() => __panel.setFrame(96)")
+        pg.wait_for_function("() => __panel._etu && __panel._etu.root.style.display !== 'none'", timeout=3000)
+        base = pg.evaluate(self.PICK)
+        win.mouse.click(*self.pane(pg, "left"))
+        self.assertEqual(pg.evaluate(self.PICK)["pick"], "left")
+        win.keyboard.press("Comma")
+        self.assertEqual(pg.evaluate(self.PICK)["lens"][0], base["lens"][0] - 1)
+        pg.evaluate("() => __panel.editTlUndo()")
+        pg.evaluate("() => __panel.setFrame(96)")
+        pg.wait_for_function("() => __panel._etu && __panel._etu.root.style.display !== 'none'", timeout=3000)
+        win.mouse.click(*self.pane(pg, "right"))
+        self.assertEqual(pg.evaluate(self.PICK)["pick"], "right")
+        self.assertFalse(pg.evaluate(self.TWOUP)["doc"])
+        self.assertEqual(self.errors, [])
+
     def test_16_popped_out_insert_line_grab_audio_switch_zoom_and_two_up(self):
         pg = self.page()
         pg.evaluate("() => { __media['D:/in/house.png'] = { duration: 0, still: true }; }")

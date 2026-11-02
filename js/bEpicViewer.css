@@ -1762,6 +1762,13 @@ textarea.param-input {
 .edit-twoup-label { flex: 0 0 auto; text-align: center; font: 11px/1.4 ui-monospace, Consolas, monospace; color: #cfd8dc; background: rgba(0,0,0,.6); padding: 2px 6px; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .edit-twoup-side[data-side="left"] .edit-twoup-pic { box-shadow: inset -2px 0 0 #ffe14d; }
 .edit-twoup-side[data-side="right"] .edit-twoup-pic { box-shadow: inset 2px 0 0 #ffe14d; }
+/* The panes are clickable: left picks the cut's outgoing side, right the incoming one; green marks the picked side(s). */
+.edit-twoup-side { pointer-events: auto; cursor: pointer; }
+.edit-twoup-pic { outline: 2px solid transparent; outline-offset: -2px; }
+.edit-twoup-side:hover .edit-twoup-pic { outline-color: rgba(255, 138, 0, .75); }
+.edit-twoup[data-pick="left"] .edit-twoup-side[data-side="left"] .edit-twoup-pic,
+.edit-twoup[data-pick="right"] .edit-twoup-side[data-side="right"] .edit-twoup-pic,
+.edit-twoup[data-pick="both"] .edit-twoup-pic { outline-color: #35e06f; }
 /* Play around edit (Trim mode, an edit point selected): the window Space loops, on the ruler. */
 .edit-around { position: absolute; top: 0; bottom: 0; background: rgba(53, 224, 111, .16); border-left: 1px solid rgba(53, 224, 111, .7); border-right: 1px solid rgba(53, 224, 111, .7); pointer-events: none; z-index: 1; }
 /* A disabled clip (D): there, dimmed, its strip and waveform greyed - not seen, not heard, not rendered. */
