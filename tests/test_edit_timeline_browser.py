@@ -908,8 +908,8 @@ class EditTimelineBrowserTests(unittest.TestCase):
         pg.evaluate("() => { __panel._editTlView.solo = { V1: true }; __panel.editPlayLiveChanged(); __panel.setFrame(0); }")
         self.assertEqual(pg.evaluate(shown), ["", False])
         pg.evaluate("() => { __panel._editTlView.solo = {}; __panel.editPlayLiveChanged(); }")
-        # The gap is selected by a click; Del closes it.
-        x, y = self.x_at(pg, 5.5)
+        # The gap is selected by a click (off the playhead's line at 5.5 - a press within 4 px of it grabs the line); Del closes it.
+        x, y = self.x_at(pg, 5.0)
         pg.mouse.click(x, y)
         self.assertEqual(pg.evaluate("() => __panel._editTlSel && __panel._editTlSel.kind"), "gap")
         pg.keyboard.press("Delete")
@@ -2074,6 +2074,286 @@ class EditTimelineBrowserTests(unittest.TestCase):
         win.keyboard.press("Delete")
         self.assertEqual(self.undo_len(pg), n + 1)
         self.assertEqual(self.cut(pg)["tracks"]["A2"], [])
+        self.assertEqual(self.errors, [])
+
+    # ── round 29: insert at the playhead, the playhead's line, scrub audio, zoom about the playhead, the two-up ──
+
+    NODES = """async (nodes) => { const { app } = await import('/scripts/app.js');
+        app.canvas.selected_nodes = Object.fromEntries(nodes.map(([id, x, value]) => [String(id),
+            { id, type: 'LoadImage', title: 'Load', pos: [x, 10], widgets: [{ name: 'image', value, type: 'combo' }], inputs: [], outputs: [] }])); }"""
+
+    HEAD_X = "() => __panel._editTlUi.head.getBoundingClientRect().left"
+
+    def test_11_selected_canvas_nodes_are_inserted_at_the_playhead_splitting_the_shot(self):
+        pg = self.page()
+        pg.evaluate("() => { __media['D:/in/zz.mp4'] = { duration: 2, video: true }; __media['D:/in/house.png'] = { duration: 0, still: true }; }")
+        # Selected in the order zz, house - but house stands left of zz on the canvas, so it goes first.
+        pg.evaluate(self.NODES, [[1, 300, "zz.mp4"], [2, 100, "house.png"]])
+        pg.evaluate("() => __panel.setFrame(48)")                      # 2 s: inside a (0..4)
+        labels = pg.evaluate("""() => { const P = __panel; P._editTlAddMenu(P._editTlUi.body.querySelector('.previz-btn[title^="Add"]'));
+            const m = P._previzAddMenu; const out = m ? [...m.querySelectorAll('*')].map(n => n.textContent).filter(t => /inserted/.test(t)) : [];
+            P._previzCloseAddMenu && P._previzCloseAddMenu(); return out; }""")
+        self.assertTrue(any("Selected canvas nodes" in t for t in labels), labels)
+        n = self.undo_len(pg)
+        pg.evaluate("() => __panel._editTlAddSelected()")
+        pg.wait_for_function("() => __panel._editTlCut.clips.length === 6", timeout=5000)
+        self.assertEqual(self.cut(pg)["v1"][:4], [["D:/out/a.mp4", 0, 2.0], ["D:/in/house.png", 0, 3.0], ["D:/in/zz.mp4", 0, 2.0], ["D:/out/a.mp4", 2.0, 2.0]])
+        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), 7 * 24, "the playhead at the end of what went in")
+        self.assertEqual(self.undo_len(pg), n + 1, "one undo step")
+        pg.evaluate("() => __panel.editTlUndo()")
+        self.assertEqual(len(self.cut(pg)["v1"]), 3)
+        # With a clip of V2 selected, the insert goes onto V2 (its clip there split too).
+        self.on_v2(pg, ["v", 1, 4])
+        pg.mouse.click(*pg.evaluate(WHERE, [1.5, "V2"]))
+        pg.evaluate("() => __panel.setFrame(72)")                      # 3 s: inside the V2 clip (1..5)
+        pg.evaluate(self.NODES, [[2, 100, "house.png"]])
+        pg.evaluate("() => __panel._editTlAddSelected()")
+        pg.wait_for_function("() => __panel._editTlCut.tracks[0].clips.length === 3", timeout=5000)
+        self.assertEqual(sorted(self.cut(pg)["tracks"]["V2"]), sorted([["D:/out/b.mp4", 1.0, 2.0], ["D:/out/b.mp4", 6.0, 2.0], ["D:/in/house.png", 3.0, 3.0]]))
+        self.assertEqual(len(self.cut(pg)["v1"]), 3, "V1 untouched")
+        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), 6 * 24)
+        self.assertEqual(self.errors, [])
+
+    def test_12_the_playhead_line_is_grabbed_low_on_the_tracks_and_over_a_clip(self):
+        pg = self.page()
+        self.fit(pg)
+        pg.evaluate("() => __panel.setFrame(120)")                     # 5 s, inside the still c (4..7)
+        before = self.cut(pg)
+        hx = pg.evaluate(self.HEAD_X)
+        _, ya2 = pg.evaluate(WHERE, [5.0, "A2"])                       # the lowest track, empty there
+        pg.mouse.move(hx + 3, ya2)
+        self.assertTrue(pg.evaluate("() => __panel._editTlUi.body.classList.contains('head-hot')"))
+        cur = pg.evaluate("""([x, y]) => { const r = __panel._editTlUi.body.getRootNode(); return getComputedStyle(r.elementFromPoint(x, y)).cursor; }""", [hx + 3, ya2])
+        self.assertEqual(cur, "ew-resize")
+        x85, _ = pg.evaluate(WHERE, [8.5, "A2"])
+        pg.mouse.down()
+        pg.mouse.move(x85, ya2, steps=5)
+        pg.mouse.up()
+        self.assertAlmostEqual(pg.evaluate("() => __panel.currentFrame"), 204, delta=1)
+        self.assertEqual(pg.evaluate("() => __panel._editTlUi.rows.querySelectorAll('.edit-marquee').length"), 0)
+        # Over a clip the line comes first: grabbing it on c's body scrubs, nothing moves.
+        hx = pg.evaluate(self.HEAD_X)
+        _, yv1 = pg.evaluate(WHERE, [8.5, "V1"])
+        x3, _ = pg.evaluate(WHERE, [3.0, "V1"])
+        pg.mouse.move(hx - 2, yv1)
+        pg.mouse.down()
+        pg.mouse.move(x3, yv1, steps=5)
+        pg.mouse.up()
+        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), 72)
+        self.assertEqual(self.cut(pg), before)
+        # Further than 4 px: the clip's own (a click selects it).
+        pg.mouse.move(pg.evaluate(self.HEAD_X) + 12, yv1)
+        self.assertFalse(pg.evaluate("() => __panel._editTlUi.body.classList.contains('head-hot')"))
+        # Parked exactly on a cut: the edit point takes the click.
+        pg.evaluate("() => __panel.setFrame(96)")                       # 4 s = the cut a | c
+        pg.mouse.click(pg.evaluate(self.HEAD_X) + 1, yv1)
+        self.assertEqual(pg.evaluate("() => __panel._editTlEditSel && __panel._editTlEditSel.act"), "roll")
+        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), 96)
+        self.assertEqual(self.errors, [])
+
+    FAKE_AUDIO = """() => { window.__grains = []; window.__clock = 0;
+        class Buf { constructor(c, n, sr) { this.numberOfChannels = c; this.length = n; this.sampleRate = sr; this.duration = n / sr; this._d = new Float32Array(n); }
+          getChannelData() { return this._d; } copyToChannel(d) { this._d.set(d); } }
+        class Ctx { constructor() { this.state = 'running'; this.destination = {}; window.__ctxMade = (window.__ctxMade || 0) + 1; }
+          get currentTime() { return window.__clock; }
+          createBuffer(c, n, sr) { return new Buf(c, n, sr); }
+          createBufferSource() { const node = { buffer: null, playbackRate: { value: 1 }, connect() {}, stop() {},
+              start: (when) => window.__grains.push({ rate: node.playbackRate.value, when, n: node.buffer.length }) }; return node; }
+          decodeAudioData() { const b = new Buf(1, 22050 * 30, 22050); for (let i = 0; i < b.length; i++) b._d[i] = Math.sin(i / 9) * 0.5; return Promise.resolve(b); }
+          resume() {} close() {} }
+        window.AudioContext = Ctx;
+        __panel._eaFetch = async () => new ArrayBuffer(16);
+        try { localStorage.removeItem('bepic.viewer.editAudio'); } catch (_) {}
+        __panel._eaState = null; }"""
+
+    # editScrubAt at film moments on a wall clock that is ours: [t, ms, clock] each.
+    FEED = """async (steps) => { const P = __panel; const real = P._editPlayNow; let ms = 0; P._editPlayNow = () => ms;
+        const n0 = __grains.length;
+        for (const [t, m, c] of steps) { ms = m; __clock = c; P.editScrubAt(t); await new Promise(r => setTimeout(r, 30)); }
+        P._editPlayNow = real; return __grains.slice(n0).map(g => g.rate); }"""
+
+    def test_13_audio_scrubbing_and_the_two_audio_switches(self):
+        pg = self.page()
+        pg.evaluate(self.FAKE_AUDIO)
+        pg.evaluate("() => __panel.editTlRefresh()")
+        ui = "() => { const u = __panel._editTlUi; return [u.audio.dataset.icon, u.audio.classList.contains('on'), u.scrubAudio.dataset.icon, u.scrubAudio.classList.contains('on')]; }"
+        self.assertEqual(pg.evaluate(ui), ["volume", True, "scrub", True])
+        svg = pg.evaluate("() => { const s = __panel._editTlUi.audio.querySelector('svg'); return [s.getAttribute('stroke'), s.getAttribute('stroke-width'), s.getAttribute('viewBox')]; }")
+        self.assertEqual(svg, ["currentColor", "2", "0 0 24 24"])
+        # A real drag on the ruler makes the context and asks for the sound of a.mp4 and the bed.
+        x0, _ = pg.evaluate(WHERE, [0.5, "V1"])
+        x1, _ = pg.evaluate(WHERE, [2.5, "V1"])
+        ry = pg.evaluate("() => { const r = __panel._editTlUi.ruler.getBoundingClientRect(); return r.top + r.height / 2; }")
+        pg.mouse.move(x0, ry)
+        pg.mouse.down()
+        pg.mouse.move(x1, ry, steps=4)
+        pg.mouse.up()
+        self.assertEqual(pg.evaluate("() => window.__ctxMade"), 1)
+        pg.wait_for_function("() => __panel._eaHave('D:/out/a.mp4') && __panel._eaHave('D:/out/music.wav')", timeout=5000)
+        # The rate follows the speed: 0.04 s in 20 ms is 2x; a creep is held to 0.25x; a fling to 4x; standing still, nothing.
+        rates = pg.evaluate(self.FEED, [[1.0, 1000, 10], [1.04, 1020, 10.2], [1.041, 1040, 10.4], [1.4, 1060, 10.6], [1.4, 1080, 10.8]])
+        self.assertEqual(rates, [1, 2, 0.25, 4])
+        g = pg.evaluate("() => __panel._eaGrains.at(-1)")
+        self.assertEqual(sorted(g["files"]), ["D:/out/a.mp4", "D:/out/music.wav"])
+        # Backwards (J's way): a grain read backwards.
+        pg.evaluate(self.FEED, [[2.0, 3000, 20], [1.96, 3040, 20.2]])
+        self.assertEqual(pg.evaluate("() => __panel._eaGrains.at(-1).dir"), -1)
+        # While playing: no grains.
+        pg.evaluate("() => { __panel.isPlaying = true; }")
+        self.assertEqual(pg.evaluate(self.FEED, [[1.0, 5000, 30], [1.04, 5020, 30.2]]), [])
+        pg.evaluate("() => { __panel.isPlaying = false; }")
+        # Shift+M: scrubbing off - silent scrubs, playback still heard.
+        self.focus_timeline(pg)
+        pg.keyboard.press("Shift+M")
+        self.assertEqual(pg.evaluate(ui)[3], False)
+        self.assertEqual(pg.evaluate(self.FEED, [[1.0, 7000, 40], [1.04, 7020, 40.2]]), [])
+        pg.keyboard.press("Shift+M")
+        # The speaker off (Ctrl+Shift+M, or the button): scrubbing AND playback silent, the icon volume-x, kept in localStorage.
+        pg.evaluate("() => __panel.setFrame(24)")
+        pg.keyboard.press("Control+Shift+M")
+        self.assertEqual(pg.evaluate(ui)[:2], ["volumeOff", False])
+        self.assertEqual(pg.evaluate("() => JSON.parse(localStorage.getItem('bepic.viewer.editAudio'))"), {"play": False, "scrub": True})
+        self.assertEqual(pg.evaluate(self.FEED, [[1.0, 9000, 50], [1.04, 9020, 50.2]]), [])
+        vol = """() => { const P = __panel; P._editPlayMix(P._ep.at); P._editPlaySounds(1, true);
+            return [P.videoBase.volume, P._ep.bed[0].volume]; }"""
+        self.assertEqual(pg.evaluate(vol), [0, 0])
+        pg.click("bepic-viewer-panel >> .edit-audio-btn")
+        self.assertEqual(pg.evaluate(ui)[:2], ["volume", True])
+        self.assertEqual(pg.evaluate(vol), [1, 1])
+        pg.evaluate("() => __panel._editPlaySounds(1, false)")
+        # Kept for the next page.
+        pg.keyboard.press("Control+Shift+M")
+        pg.reload()
+        pg.wait_for_function("window.__ready===true", timeout=20000)
+        pg.evaluate(SETUP, 0)
+        self.assertEqual(pg.evaluate("() => __panel._editAudio().play"), False)
+        pg.evaluate("() => localStorage.removeItem('bepic.viewer.editAudio')")
+        self.assertEqual(self.errors, [])
+
+    def test_14_zoom_keys_and_buttons_keep_the_playhead_where_it_is_on_screen(self):
+        pg = self.page()
+        pg.evaluate("() => __panel.setFrame(9 * 24)")
+        self.focus_timeline(pg)
+        for how in ("Control+Equal", "Control+Equal", "button", "Control+Minus"):
+            x = pg.evaluate(self.HEAD_X)
+            if how == "button":
+                pg.click("bepic-viewer-panel >> .edit-btn[title^='Zoom in']")
+            else:
+                pg.keyboard.press(how)
+            self.assertAlmostEqual(pg.evaluate(self.HEAD_X), x, delta=1.5, msg=how)
+        self.assertAlmostEqual(pg.evaluate("() => __panel._editTlView.zoom"), 2.25, places=3)
+        # Out of view: centred after the zoom.
+        pg.evaluate("() => { const s = __panel._editTlUi.scroll; s.scrollLeft = 0; }")
+        pg.keyboard.press("Control+Equal")
+        box = pg.evaluate("() => { const r = __panel._editTlUi.scroll.getBoundingClientRect(); return [r.left, r.width]; }")
+        self.assertAlmostEqual(pg.evaluate(self.HEAD_X), box[0] + box[1] / 2, delta=2)
+        # Ctrl + wheel stays about the pointer.
+        x2, y2 = pg.evaluate(WHERE, [8.0, "V1"])
+        pg.evaluate("() => __panel._editTlUi.scroll.scrollLeft")
+        t_before = pg.evaluate("([x]) => __panel._editTlTimeAt(x)", [x2])
+        pg.mouse.move(x2, y2)
+        pg.keyboard.down("Control")
+        pg.mouse.wheel(0, -100)
+        pg.keyboard.up("Control")
+        pg.wait_for_timeout(100)
+        self.assertAlmostEqual(pg.evaluate("([x]) => __panel._editTlTimeAt(x)", [x2]), t_before, delta=0.05)
+        self.assertEqual(self.errors, [])
+
+    TWOUP = """() => { const t = __panel._etu; if (!t || t.root.style.display === 'none') return null;
+        const side = (s) => [s.box.dataset.clip, s.box.dataset.frame, s.box.dataset.srcFrame, s.label.textContent];
+        return { act: t.root.dataset.act, left: side(t.left), right: side(t.right), doc: t.root.ownerDocument === document }; }"""
+
+    def test_15_the_trim_mode_two_up_live_while_dragging_and_after_nudges(self):
+        pg = self.page()
+        pg.evaluate("() => __panel.setFrame(30)")
+        pps = self.px_per_second(pg)
+        # Selection mode: a trim shows no two-up.
+        x, y = self.x_at(pg, 4.0, dx=1)
+        self.assertIsNone(self.drag(pg, x, y, x - 0.25 * pps, y, check=self.TWOUP))
+        pg.evaluate("() => __panel.editTlUndo()")
+        self.focus_timeline(pg)
+        pg.keyboard.press("t")
+        frame = pg.evaluate("() => __panel.currentFrame")
+        # A roll of a | c: a's last frame on the left, c's first on the right, live as it moves.
+        got = self.drag(pg, x, y, x - 0.5 * pps, y, check=self.TWOUP)
+        self.assertEqual(got["act"], "roll")
+        self.assertEqual(got["left"][:3], ["V1:0", "83", "83"])        # a ends at 3.5 s: frame 83, its source frame 83
+        self.assertEqual(got["right"][:3], ["V1:1", "84", ""])          # c is a still: no source frame
+        self.assertIn("Out", got["left"][3])
+        self.assertIn("00:00:03:11", got["left"][3])
+        self.assertIsNone(pg.evaluate(self.TWOUP), "gone when let go")
+        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), frame, "the playhead stayed put")
+        # A ripple-in of b nudged with . : c's last frame and b's first (in 1 s + a frame).
+        pg.mouse.click(*self.x_at(pg, 7.0, dx=5))                       # b's in (c kept its end at 7)
+        self.assertEqual(pg.evaluate("() => __panel._editTlEditSel.act"), "ripple-in")
+        pg.keyboard.press("Period")
+        got = pg.evaluate(self.TWOUP)
+        self.assertEqual(got["left"][:2], ["V1:1", "167"])
+        self.assertEqual(got["right"][:3], ["V1:2", "168", str(24 + 1)])
+        pg.keyboard.press("Period")
+        self.assertEqual(pg.evaluate(self.TWOUP)["right"][2], str(24 + 2))
+        pg.wait_for_function("() => __panel._etu.root.style.display === 'none'", timeout=3000)
+        # Slip in the Trim mode (Alt+.): the slipped clip's new first and last frames.
+        pg.keyboard.press("Escape")
+        pg.mouse.click(*self.x_at(pg, 8.0))
+        pg.evaluate("() => __panel.editTwoUpHide()")
+        src_in = pg.evaluate("() => __panel._editTlCut.clips[2].in")
+        pg.keyboard.press("Alt+Comma")
+        got = pg.evaluate(self.TWOUP)
+        self.assertEqual(got["act"], "slip")
+        self.assertIn("In", got["left"][3])
+        self.assertEqual(got["left"][2], str(round(src_in * 24) - 1))
+        # Leaving the Trim mode puts it away at once.
+        pg.keyboard.press("a")
+        self.assertIsNone(pg.evaluate(self.TWOUP))
+        self.assertEqual(self.errors, [])
+
+    def test_16_popped_out_insert_line_grab_audio_switch_zoom_and_two_up(self):
+        pg = self.page()
+        pg.evaluate("() => { __media['D:/in/house.png'] = { duration: 0, still: true }; }")
+        with pg.context.expect_page() as pop:
+            pg.evaluate("() => window.__panel.toggleUndock()")
+        win = pop.value
+        win.wait_for_load_state()
+        pg.wait_for_function("() => __panel._editTlUi && __panel._editTlUi.body.ownerDocument !== document", timeout=10000)
+        pg.evaluate("() => __panel.editTlRefresh()")
+        self.fit(pg)
+        # The insert.
+        pg.evaluate(self.NODES, [[2, 100, "house.png"]])
+        pg.evaluate("() => __panel.setFrame(48)")
+        pg.evaluate("() => __panel._editTlAddSelected()")
+        pg.wait_for_function("() => __panel._editTlCut.clips.length === 5", timeout=5000)
+        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), 5 * 24)
+        # The line grabbed low on the tracks.
+        hx = pg.evaluate(self.HEAD_X)
+        _, ya2 = pg.evaluate(WHERE, [5.0, "A2"])
+        x8, _ = pg.evaluate(WHERE, [8.5, "A2"])
+        win.mouse.move(hx + 2, ya2)
+        win.mouse.down()
+        win.mouse.move(x8, ya2, steps=4)
+        win.mouse.up()
+        self.assertAlmostEqual(pg.evaluate("() => __panel.currentFrame"), 204, delta=1)
+        # The audio switch by key, the zoom about the playhead.
+        win.mouse.click(*pg.evaluate(WHERE, [1.0, "V2"]))
+        win.keyboard.press("Control+Shift+M")
+        self.assertFalse(pg.evaluate("() => __panel._editAudio().play"))
+        win.keyboard.press("Control+Shift+M")
+        x = pg.evaluate(self.HEAD_X)
+        win.keyboard.press("Control+Equal")
+        self.assertAlmostEqual(pg.evaluate(self.HEAD_X), x, delta=1.5)
+        win.keyboard.press("Shift+Z")
+        # The two-up, in the pop-out's own document.
+        win.keyboard.press("t")
+        x, y = self.x_at(pg, 2.0, dx=1)                                 # the cut a | house
+        win.mouse.move(x, y)
+        win.mouse.down()
+        win.mouse.move(x - 20, y, steps=3)
+        got = pg.evaluate(self.TWOUP)
+        win.mouse.up()
+        self.assertEqual(got["act"], "roll")
+        self.assertFalse(got["doc"], "drawn in the pop-out")
+        self.assertEqual(pg.evaluate("() => __panel._etu.root.ownerDocument === __panel._editTlUi.body.ownerDocument"), True)
+        self.assertIsNone(pg.evaluate(self.TWOUP))
         self.assertEqual(self.errors, [])
 
 if __name__ == "__main__":

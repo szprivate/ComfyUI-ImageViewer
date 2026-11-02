@@ -2729,3 +2729,165 @@ export function pointAct(point, trim) {
     if (point.act === "roll") return "roll";
     return (trim ? "ripple-" : "trim-") + (point.side === "end" ? "out" : "in");
 }
+
+// ── an insert at the playhead ────────────────────────────────────────────────
+
+/**
+ * Resolve's INSERT edit: `clips` ([{ file, name, length, in?, color? }], in
+ * their order) go into the cut at the moment `seconds`, and what follows makes
+ * room for them. On V1 ("V1", the default): a shot under the playhead is split
+ * there (with its linked sound, splitWithLink) and the clips go between the
+ * halves; at a cut they go in at that cut; in a gap they begin at that moment
+ * (the rest of the gap stays after them); past the end, with a gap before them.
+ * Everything that begins at or after the playhead on the OTHER tracks - placed
+ * clips, sound clips, texts - moves on by the inserted length too, so the film
+ * after the playhead stays together (the bed, under the whole film, stays).
+ * A split refused (a frame from an end, inside a dissolve, a loop) puts them in
+ * at the nearer end of that shot. On a placed video track `track`: its clip under
+ * the playhead is split, the clips of that track from the playhead on move up,
+ * the new ones are placed one after the other from the playhead; the other
+ * tracks stay. Returns { cut, sel (the last clip put in), end (where the clips
+ * put in end), split }.
+ */
+export function insertEdit(cut, clips, seconds, track = "V1") {
+    const fps = num(cut && cut.fps) > 0 ? num(cut.fps) : 24;
+    const t = toFrame(Math.max(0, num(seconds)), fps);
+    const list = (clips || []).filter((c) => c && c.file && num(c.length) > 0);
+    let next = copy(cut);
+    if (!list.length) return { cut: next, sel: null, end: t, split: false };
+    const fresh = list.map((c) => ({ file: String(c.file), name: String(c.name || ""), in: Math.max(0, num(c.in)),
+                                     length: round(num(c.length)), transition: 0, color: String(c.color || ""), volume: 1 }));
+    const total = round(fresh.reduce((s, c) => s + c.length, 0));
+    let split = false;
+    const k = track && track !== "V1" ? trackOf(next, track) : null;
+    if (k && k.kind !== "audio") {
+        const j = k.clips.findIndex((c) => t > num(c.at) + 1e-6 && t < num(c.at) + num(c.length) - 1e-6);
+        if (j >= 0) {
+            const got = splitWithLink(next, { kind: "tclip", track: k.id, i: j }, t);
+            if (got) { next = got.cut; split = true; }
+        }
+        const kk = trackOf(next, k.id);
+        // A clip the split refused stays where it is; everything from the playhead on moves up.
+        for (const c of kk.clips) if (num(c.at) >= t - 1e-6) c.at = round(num(c.at) + total);
+        let at = t;
+        for (const c of fresh) { delete c.transition; kk.clips.push({ ...c, at }); at = round(at + c.length); }
+        const done = settle(next);
+        return { cut: done, sel: { kind: "tclip", track: k.id, i: trackOf(done, k.id).clips.length - 1 }, end: at, split };
+    }
+    // V1.
+    const n = next.clips.length;
+    const starts = clipStarts(next);
+    const main = mainLength(next);
+    let index = n, lead = 0;
+    if (!n) { index = 0; lead = t; }
+    else if (t >= main - 1e-6) { index = n; lead = round(Math.max(0, t - main)); }
+    else {
+        const g = gapAt(next, t);
+        if (g >= 0) { index = g; lead = round(t - (starts[g] - num(next.clips[g].gap))); }
+        else {
+            const i = clipAt(next, t);
+            if (i < 0) index = dropIndex(next, t);
+            else if (Math.abs(t - starts[i]) < 1e-6) { index = i; lead = num(next.clips[i].gap); }
+            else {
+                const got = splitWithLink(next, { kind: "clip", i }, t);
+                if (got) { next = got.cut; index = i + 1; split = true; }
+                else if (t - starts[i] < num(next.clips[i].length) / 2) { index = i; lead = num(next.clips[i].gap); }
+                else index = i + 1;
+            }
+        }
+    }
+    // Everything after the playhead on the other tracks moves on with the cut.
+    for (const kk of next.tracks || []) for (const c of kk.clips) if (num(c.at) >= t - 1e-6) c.at = round(num(c.at) + total);
+    for (const x of next.texts || []) if (num(x.start) >= t - 1e-6) x.start = round(num(x.start) + total);
+    const after = next.clips[index];
+    if (after) after.gap = round(Math.max(0, num(after.gap) - lead));
+    fresh[0].gap = lead;
+    next.clips.splice(index, 0, ...fresh);
+    const done = settle(next);
+    const last = index + fresh.length - 1;
+    return { cut: done, sel: { kind: "clip", i: last }, end: round(clipStarts(done)[last] + num(done.clips[last].length)), split };
+}
+
+/** Canvas nodes in the order an insert takes them: left to right by their place on the canvas, then top to bottom. */
+export function canvasOrder(nodes) {
+    const x = (n) => num(n && n.pos && n.pos[0]), y = (n) => num(n && n.pos && n.pos[1]);
+    return [...(nodes || [])].filter(Boolean).sort((a, b) => x(a) - x(b) || y(a) - y(b));
+}
+
+// ── zoom about the playhead ──────────────────────────────────────────────────
+
+/**
+ * Where the strip scrolls to after a zoom so that the moment `t` keeps its x on
+ * screen: `before` / `after` are { span (seconds the strip stands for), width
+ * (its pixels), scroll (scrollLeft, before only) }, `view` the pixels visible.
+ * A moment that was off screen is centred instead. { scroll, centred, x }.
+ */
+export function zoomScroll(t, before, after, view) {
+    const x0 = before.span > 0 ? (num(t) / before.span) * num(before.width) - num(before.scroll) : 0;
+    const xa = after.span > 0 ? (num(t) / after.span) * num(after.width) : 0;
+    const on = x0 >= -0.5 && x0 <= num(view) + 0.5;
+    const want = on ? xa - x0 : xa - num(view) / 2;
+    const scroll = Math.max(0, Math.min(Math.max(0, num(after.width) - num(view)), want));
+    return { scroll, centred: !on, x: xa - scroll };
+}
+
+// ── the two-up of a trim ─────────────────────────────────────────────────────
+
+// The clip before / after `sel` on its track: V1 by the order, a placed track by time.
+function neighbourOf(cut, sel, dir) {
+    if (!sel) return null;
+    if (sel.kind === "clip") { const j = sel.i + dir; return cut.clips[j] ? { kind: "clip", i: j } : null; }
+    const k = trackOf(cut, sel.track);
+    const c = k && k.clips[sel.i];
+    if (!c) return null;
+    const a = num(c.at), b = a + num(c.length);
+    let best = -1, bestAt = dir < 0 ? -Infinity : Infinity;
+    k.clips.forEach((o, j) => {
+        if (j === sel.i) return;
+        const s = num(o.at), e = s + num(o.length);
+        if (dir < 0 && e <= a + 1e-3 && e > bestAt) { best = j; bestAt = e; }
+        if (dir > 0 && s >= b - 1e-3 && s < bestAt) { best = j; bestAt = s; }
+    });
+    return best >= 0 ? { kind: "tclip", track: sel.track, i: best } : null;
+}
+
+/**
+ * One frame at an edge of a clip: its FIRST or LAST frame on the timeline, and
+ * the moment of its source shown there (retime and loop counted, srcLocal):
+ * { sel, clip, frame (of the film), t, src (seconds of the source), srcFrame, still }.
+ */
+export function edgeFrame(cut, sel, which, fps) {
+    const c = clipOf(cut, sel), span = c && selSpan(cut, sel);
+    if (!c || !span) return null;
+    const rate = num(fps) > 0 ? num(fps) : 24;
+    const first = Math.round(span.start * rate);
+    const frame = which === "last" ? Math.max(first, Math.round(span.end * rate) - 1) : first;
+    const t = (frame + 0.5) / rate;
+    const src = srcLocal(c, Math.max(0, t - span.start));
+    return { sel, clip: c, frame, t: round(t), src, srcFrame: Math.floor(src * rate + 1e-6), still: isStillImage(c.file) };
+}
+
+/**
+ * What the viewer shows side by side while an edit point is trimmed (Resolve's
+ * trim view): `info` is the edit ({ act, sel, a, b, side }), `cut` the cut as it
+ * now stands. A roll, a trim or ripple: the outgoing clip's LAST frame on the
+ * left, the incoming one's FIRST on the right; a slip: the slipped clip's new
+ * first and last frames; a slide: the clip before it (its last) and the one
+ * after it (its first). { act, left, right } - a side with no clip is null.
+ */
+export function twoUpFrames(cut, info, fps) {
+    if (!cut || !info || !info.sel) return null;
+    const act = info.act;
+    const at = (sel, which) => (sel ? edgeFrame(cut, sel, which, fps) : null);
+    let left = null, right = null;
+    if (act === "roll") { left = at(info.a, "last"); right = at(info.b, "first"); }
+    else if (act === "slip") { left = at(info.sel, "first"); right = at(info.sel, "last"); }
+    else if (act === "slide") { left = at(neighbourOf(cut, info.sel, -1), "last"); right = at(neighbourOf(cut, info.sel, 1), "first"); }
+    else {
+        const atIn = act === "ripple-in" || act === "trim-in" || (act === "retime" && info.side === "start");
+        if (atIn) { left = at(neighbourOf(cut, info.sel, -1), "last"); right = at(info.sel, "first"); }
+        else { left = at(info.sel, "last"); right = at(neighbourOf(cut, info.sel, 1), "first"); }
+    }
+    if (!left && !right) return null;
+    return { act, left, right };
+}

@@ -48,6 +48,12 @@
 //                          its length kept)
 //   a dissolve's bar       its edges: longer / shorter; its body: roll the cut under it
 //
+// The Trim mode's TWO-UP (bEpicViewer_editTwoUp.js): while an edit is trimmed,
+// rolled, slipped or slid - dragged, or nudged with , / . - the viewer shows the
+// outgoing clip's last frame and the incoming clip's first side by side (a slip:
+// its new first and last), following the edit; put away on release, or a moment
+// after the last nudge, or on leaving the Trim mode.
+//
 // Each drag, key or field is one step of the undo stack.
 //
 // IN AND OUT are the transport's own range (`playbackRange`, frames, both
@@ -416,8 +422,11 @@ export const EditTrimMixin = {
                     : "the end of the source, or a shot's shortest")
                 : "";
             this._editTlTrimShow(info, ev.clientX, { delta: got, held });
+            // The Trim mode: the viewer shows the two frames of the edit as it moves (bEpicViewer_editTwoUp.js).
+            if (this._editTlTrimMode && this.editTwoUpShow) this.editTwoUpShow(info, next);
         }, (moved) => {
             this._editTlTrimShow(null);
+            if (this.editTwoUpHide) this.editTwoUpHide();
             if (!moved) {
                 // A click on an edge, in every mode, selects that edit point (, . trim it; E extends it).
                 if (info.act !== "slip" && info.act !== "slide" && info.act !== "retime" && info.act !== "loop") {
@@ -427,6 +436,7 @@ export const EditTrimMixin = {
             }
             this.editTlRefresh();
         });
+        if (this._editTlTrimMode && this.editTwoUpShow) this.editTwoUpShow(info, start);
         return true;
     },
 
@@ -463,6 +473,7 @@ export const EditTrimMixin = {
         this._editTlApply(next);
         const after = this._editTlEditTime(info, next);
         if (on) this._editTlGoFrame(Math.round(after * fps));
+        if (this._editTlTrimMode && this.editTwoUpPulse) this.editTwoUpPulse(live, next);
         this._editTlSay(`${live.act.replace("-", " ")}: ${frames >= 0 ? "+" : "\u2212"}${Math.abs(frames)}f \u00b7 ${D.timecode(after, fps)}`);
         return true;
     },
@@ -495,16 +506,18 @@ export const EditTrimMixin = {
         if (!cut || !list.length) { this._editTlSay("select a clip to move it, or click a cut to trim it"); return; }
         const fps = cut.fps || 24;
         const d = frames / fps;
-        let next = null;
+        let next = null, slide = null;
         // The Trim mode: one clip slides, its neighbours giving and taking; at an end of the track, or several, they move.
         if (this._editTlTrimMode && list.length === 1 && D.isClipSel(list[0])) {
             const s = list[0];
             const slid = s.kind === "clip" ? D.slideClip(cut, s.i, d, this._editTlDur()) : D.slideTrackClip(cut, s.track, s.i, d, this._editTlDur());
             if (slid) next = D.followLink(cut, slid, s);
+            if (slid) slide = s;
         }
         if (!next) next = D.moveSelection(cut, list, d).cut;
         if (D.sameCut(next, cut)) { this._editTlSay("held: a clip or the start of the film is in the way"); return; }
         this._editTlApply(next);
+        if (slide && this.editTwoUpPulse) this.editTwoUpPulse({ act: "slide", sel: slide }, next);
         const span = D.isClipSel(this._editTlSel) ? D.selSpan(next, this._editTlSel) : null;
         this._editTlSay(`moved ${frames >= 0 ? "+" : "\u2212"}${Math.abs(frames)}f` + (span ? ` \u00b7 ${D.timecode(span.start, fps)}` : ""));
     },
@@ -628,6 +641,7 @@ export const EditTrimMixin = {
         const next = D.slipClip(cut, sel, frames / fps, this._editTlDur());
         if (D.sameCut(next, cut)) { this._editTlSay("held: the source ends there"); return; }
         this._editTlApply(next);
+        if (this._editTlTrimMode && this.editTwoUpPulse) this.editTwoUpPulse({ act: "slip", sel }, next);
         const d = D.clipOf(next, sel);
         this._editTlSay(`slipped: src ${D.timecode(d.in, fps)} – ${D.timecode(Number(d.in) + D.srcUse(d), fps)}`);
     },

@@ -26,6 +26,8 @@
 //   X            in and out around the selected clip (else the shot under the playhead)
 //   Alt+X, Shift+X   clear the in and out    Alt+I / Alt+O   clear one of them
 //   Shift+I / Shift+O   go to the in / the out
+//   Ctrl+Shift+M audio playback on / off (all of the cut's sound, playing and scrubbing)
+//   Shift+M      audio scrubbing on / off (dragging the playhead or jogging plays grains of the sound)
 //
 //   ?            Show Hotkeys: the viewer's overlay lists these (EDIT_KEYS) while a cut's tab is up
 //
@@ -82,6 +84,11 @@ export const EDIT_KEYS = [
     ["Shift+I / Shift+O", "Go to the in / the out"],
     ["Alt+I / Alt+O", "Clear the in / the out"],
     ["Ctrl+drag the ruler", "Draw the in and out; right-click it: in / out here, clear"],
+    ["Drag the playhead's line", "Scrub from anywhere down the tracks (within 4 px of the line); an edit point exactly under it still takes the click"],
+    ["Ctrl+Shift+M", "Audio playback on / off: all of the cut's sound, playing and scrubbing (the speaker in the bar; the export is not touched)"],
+    ["Shift+M", "Audio scrubbing on / off: dragging the playhead, J K L and the arrows play the sound under it, pitched with the speed"],
+    ["Add > Files, Selected canvas nodes", "Insert at the playhead: a shot there is split, what follows moves on, the playhead goes to their end (nodes: left to right)"],
+    ["Trim mode: trimming an edit", "The viewer shows the outgoing clip's last frame and the incoming one's first, side by side (slip: the new in and out)"],
 ];
 
 export const EditKeysMixin = {
@@ -121,6 +128,7 @@ export const EditKeysMixin = {
         else if (ctrl && low === "z") { if (shift) this.editTlRedo(); else this.editTlUndo(); }
         else if (ctrl && low === "y") this.editTlRedo();
         else if (ctrl && low === "b") this.editTlSplitAtPlayhead();
+        else if (ctrl && shift && letter === "m") this.editAudioToggle("play");
         else if (ctrl && letter === "s") {
             if (shift) this.editTlSaveAsDialog();
             else if (this._editTlDirty()) this._editTlSave();
@@ -156,6 +164,7 @@ export const EditKeysMixin = {
         else if (letter === "o") { if (shift) this._editTlGoMark("out"); else this._editTlMark("out"); }
         else if (letter === "x") { if (shift) this._editTlSetRange(null); else this.editTlMarkClip(); }
         else if (letter === "r" && shift) this.editTlSpeedReset();
+        else if (letter === "m" && shift) this.editAudioToggle("scrub");
         else if (comma || period) {
             const fps = this._editTlCut.fps || 24;
             this.editTlNudge((comma ? -1 : 1) * (shift ? Math.round(fps) : 1));
@@ -186,7 +195,10 @@ export const EditKeysMixin = {
         if (!this._editTlTransport()) return;
         this._editTlShuttle(0, true);
         if (this.isPlaying) this.stop();
-        this.setFrame(Math.max(0, Math.min(D.filmFrames(this._editTlCut) - 1, Math.round(frame))));
+        const f = Math.max(0, Math.min(D.filmFrames(this._editTlCut) - 1, Math.round(frame)));
+        this.setFrame(f);
+        // A jog is heard: a grain of the sound there (bEpicViewer_editAudio.js).
+        if (this.editScrubAt) this.editScrubAt(f / (this._editTlCut.fps || 24));
     },
 
     _editTlJumpEdit(dir) {
@@ -212,6 +224,7 @@ export const EditKeysMixin = {
         this._editTlBack = win.setInterval(() => {
             if (!this._editTlOnScreen() || (this.currentFrame || 0) <= 0) { this._editTlShuttle(0, true); return; }
             this.setFrame((this.currentFrame || 0) - 1);
+            if (this.editScrubAt) this.editScrubAt((this.currentFrame || 0) / fps);    // heard backwards
         }, 1000 / fps);
     },
 };

@@ -12,14 +12,23 @@
 // texts, one block per shot with a mark on every dissolve, the sound:
 //
 //   the buttons, top left   New (an empty cut, in its tab) · Add (files, canvas
-//                           nodes, a new track) · Save / Export
-//   − + Fit, top right      zoom the timeline; so do Ctrl + wheel (at the pointer), Ctrl+= / Ctrl+- and Shift+Z (fit).
+//                           nodes, a new track) · Save / Export. Add's files and canvas
+//                           nodes are an INSERT at the playhead (a shot there split, what
+//                           follows moved on, the playhead then at their end; nodes left
+//                           to right as they stand on the canvas; on the selected clip's
+//                           video track, else V1)
+//   − + Fit, top right      zoom the timeline about the PLAYHEAD (it keeps its x; out of view, it is centred);
+//                           so do Ctrl+= / Ctrl+- and Shift+Z (fit). Ctrl + wheel zooms about the pointer, as Resolve's.
+//   the speaker, the wave   audio playback on / off (Ctrl+Shift+M: all of the cut's sound, playing and
+//                           scrubbing) and audio scrubbing on / off (Shift+M) - bEpicViewer_editAudio.js
 //                           Below Fit (down to 0.25x) empty timeline lies after the film, to move or drop clips onto.
 //                           The wheel alone, or the middle button dragged, pans it
 //   a track's header        its switch (off: not seen, not heard, not rendered),
 //                           S to solo it (only the soloed are played; a way of
 //                           looking, not saved), its lower edge to make it taller
-//   drag on the ruler       scrub the film; Ctrl+drag / right-click: the in and out
+//   drag on the ruler       scrub the film (heard, pitched with the speed); Ctrl+drag / right-click: the in and out
+//   the playhead's line     grabbed anywhere down the tracks (within 4 px; ew-resize): a scrub too. Over a
+//                           clip the line comes first, unless an edit point lies exactly under it
 //   click a clip            select it and go to it; right-click: its colour, remove, Recreate
 //                           with changes… (agentY), its takes; Ctrl+click / Shift+click: several
 //                           selected, on any tracks (bEpicViewer_editTakes.js); a drag from an
@@ -85,6 +94,7 @@ import { canvasContext, exportTarget, notice, openExportDialog, openFilePicker }
 
 const DOCK_ID = "editTimeline";
 const EDGE_PX = 7;          // how close to a block's end a press is a trim
+const HEAD_PX = 4;          // how close to the playhead's line, over the tracks, a press grabs it
 const DRAG_SLOP = 4;        // travel before a press on a shot becomes a move
 const STILL_SECONDS = 3;
 const DRAG_TYPE = "application/x-bepic-history";
@@ -480,7 +490,15 @@ export const EditTimelineMixin = {
         setEditIcon(zoomOut, "zoomOut");
         setEditIcon(zoomIn, "zoomIn");
         setEditIcon(zoomFit, "fit");
-        bar.append(fresh, add, out, pick, trimBtn, blade, snap, beats, split, undo, redo, auto, cuts, take, sub, badge, zoomOut, zoomIn, zoomFit);
+        // Sound, as Resolve's two switches: audio playback (all of it, playing and scrubbing) and audio scrubbing.
+        const audio = button("", "Audio playback on / off (Ctrl+Shift+M)", () => this.editAudioToggle("play"));
+        audio.classList.add("edit-audio-btn");
+        setEditIcon(audio, "volume");
+        const scrubAudio = button("", "Audio scrubbing on / off (Shift+M)", () => this.editAudioToggle("scrub"));
+        scrubAudio.classList.add("edit-scrubaudio-btn");
+        setEditIcon(scrubAudio, "scrub");
+        bar.append(fresh, add, out, pick, trimBtn, blade, snap, beats, split, undo, redo, auto, cuts, take, sub, badge,
+                   audio, scrubAudio, zoomOut, zoomIn, zoomFit);
 
         // The tracks: their headers in a column that stays, the tracks beside it
         // in a strip that is as wide as the zoom makes it and scrolls.
@@ -525,24 +543,18 @@ export const EditTimelineMixin = {
             if (e.button !== 0) return;
             // Ctrl+drag draws the in..out, as Ctrl-drag on the transport's bar does (bEpicViewer_editTrim.js).
             if ((e.ctrlKey || e.metaKey) && this._editTlRangeDrag) { this._editTlRangeDrag(e); return; }
-            e.preventDefault();
-            this._editTlScrubbing = true;
-            // The playhead snaps too, as it is scrubbed - to everything but itself.
-            const go = (ev) => { const at = this._editTlTimeAt(ev.clientX); if (at != null) this._editTlSeek(this._editTlSnapAt(at, [], { noHead: true }), true); };
-            const up = () => {
-                this._editTlScrubbing = false;
-                this._editTlSnapLine(null);
-                ruler.removeEventListener("pointermove", go);
-                ruler.removeEventListener("pointerup", up);
-                ruler.removeEventListener("pointercancel", up);
-                try { ruler.releasePointerCapture(e.pointerId); } catch (_) {}
-            };
-            try { ruler.setPointerCapture(e.pointerId); } catch (_) {}
-            ruler.addEventListener("pointermove", go);
-            ruler.addEventListener("pointerup", up);
-            ruler.addEventListener("pointercancel", up);
-            go(e);
+            this._editTlScrubDrag(e, ruler);
         });
+        // The playhead's line is grabbed anywhere down the tracks too (within HEAD_PX of it):
+        // over a clip the line comes first - unless an edit point lies exactly under it (_editTlHeadHit).
+        rows.addEventListener("pointermove", (e) => this._editTlHeadHover(e), true);
+        rows.addEventListener("pointerleave", () => this._editTlHeadHover(null));
+        rows.addEventListener("pointerdown", (e) => {
+            if (e.button !== 0 || !this._editTlHeadHit(e)) return;
+            e.stopPropagation();
+            this._editTlHoverEnd?.();
+            this._editTlScrubDrag(e, rows);
+        }, true);
         // Right-click: set the in or the out here, mark the shot, clear them.
         ruler.addEventListener("contextmenu", (e) => { if (this._editTlRulerMenu) this._editTlRulerMenu(e); });
 
@@ -621,7 +633,8 @@ export const EditTimelineMixin = {
             this._editTlAdd((payload && payload.items) || [], at, track, room);
         });
         this._editTlUi = { host, savedBar, empty, body, sub, badge, out, main, heads, scroll, area, ruler, rows,
-                           head, drop, hint, blade, split, undo, redo, auto, cuts, take, pick, trimBtn, snap, beats, zoomOut, zoomIn, zoomFit };
+                           head, drop, hint, blade, split, undo, redo, auto, cuts, take, pick, trimBtn, snap, beats, zoomOut, zoomIn, zoomFit,
+                           audio, scrubAudio };
         this._editTlWatchCanvas();
         return this._editTlUi;
     },
@@ -689,6 +702,7 @@ export const EditTimelineMixin = {
         ui.snap.setAttribute("aria-pressed", snapOn ? "true" : "false");
         ui.beats.classList.toggle("on", !!(this._editTlView && this._editTlView.snapBeats));
         ui.beats.disabled = !snapOn;
+        if (this._editAudioButtons) this._editAudioButtons(ui);
         if (this.editTlAnswerButton) this.editTlAnswerButton(ui.take); else ui.take.style.display = "none";
         ui.badge.textContent = dirty ? (this._editTlSaved ? "changed \u2014 not saved" : "new cut \u2014 not saved") : "";
         ui.badge.className = "edit-badge" + (dirty ? " dirty" : "");
@@ -938,19 +952,110 @@ export const EditTimelineMixin = {
         return hd;
     },
 
-    /** Zoom the timeline to `zoom` (1 = the whole film; below it, empty timeline after the film), keeping the moment under `clientX` where it is. */
+    /**
+     * Zoom the timeline to `zoom` (1 = the whole film; below it, empty timeline
+     * after the film). With `clientX` (Ctrl + wheel) the moment under the pointer
+     * stays where it is, as Resolve's wheel zooms; without it (Ctrl+= / Ctrl+-, the
+     * buttons, Shift+Z) the PLAYHEAD keeps its x on screen - centred when it was
+     * out of view (D.zoomScroll).
+     */
     _editTlZoom(zoom, clientX) {
         const ui = this._editTlUi;
         const view = this._editTlView;
         if (!ui || !view) return;
         const sc = ui.scroll;
         const box = sc.getBoundingClientRect();
+        const lay = this._editTlLay;
+        const fps = (this._editTlCut && this._editTlCut.fps) || 24;
+        const onHead = clientX == null && this._editTlOnScreen() && lay && lay.total > 0;
+        if (onHead) {
+            const head = (this.currentFrame || 0) / fps;
+            // The area's own scroll: how far of it lies left of the visible box.
+            const a0 = ui.area.getBoundingClientRect();
+            const before = { span: lay.total, width: a0.width, scroll: box.left - a0.left };
+            view.zoom = D.clampZoom(zoom);
+            ui.area.style.width = D.areaPercent(view.zoom) + "%";
+            this.editTlRefresh();
+            const now = this._editTlLay;
+            if (!now || !(now.total > 0)) return;
+            const a1 = ui.area.getBoundingClientRect();
+            const after = { span: now.total, width: a1.width };
+            const got = D.zoomScroll(head, before, after, sc.clientWidth);
+            sc.scrollLeft = got.scroll + (a1.left - box.left + sc.scrollLeft);   // where the area begins in the scrolled content
+            if (this.editMediaSchedule) this.editMediaSchedule();
+            return;
+        }
         const ax = clientX == null ? box.width / 2 : Math.max(0, Math.min(box.width, clientX - box.left));
         const share = sc.scrollWidth > 0 ? (sc.scrollLeft + ax) / sc.scrollWidth : 0;
         view.zoom = D.clampZoom(zoom);
         ui.area.style.width = D.areaPercent(view.zoom) + "%";
         sc.scrollLeft = Math.max(0, share * sc.scrollWidth - ax);
         this.editTlRefresh();
+    },
+
+    /**
+     * Scrub: the playhead follows the pointer from the press `e` on `el` (the
+     * ruler, or the line grabbed on the tracks), snapping as everything does -
+     * to everything but itself - and the sound under it is heard (editScrubAt).
+     */
+    _editTlScrubDrag(e, el) {
+        e.preventDefault();
+        this._editTlScrubbing = true;
+        const go = (ev) => {
+            const at = this._editTlTimeAt(ev.clientX);
+            if (at == null) return;
+            this._editTlSeek(this._editTlSnapAt(at, [], { noHead: true }), true);
+            if (this.editScrubAt) this.editScrubAt(at);
+        };
+        const up = () => {
+            this._editTlScrubbing = false;
+            this._editTlSnapLine(null);
+            el.removeEventListener("pointermove", go);
+            el.removeEventListener("pointerup", up);
+            el.removeEventListener("pointercancel", up);
+            try { el.releasePointerCapture(e.pointerId); } catch (_) {}
+            if (this._editTlUi) this._editTlUi.body.classList.remove("head-drag");
+        };
+        try { el.setPointerCapture(e.pointerId); } catch (_) {}
+        el.addEventListener("pointermove", go);
+        el.addEventListener("pointerup", up);
+        el.addEventListener("pointercancel", up);
+        if (el !== this._editTlUi?.ruler) this._editTlUi?.body.classList.add("head-drag");
+        go(e);
+    },
+
+    /**
+     * Is the pointer of `e` on the playhead's line (within HEAD_PX of it, over
+     * the tracks)? The line comes before the clip under it - but where an edit
+     * point of the track under the pointer lies exactly at the playhead (within
+     * half a frame), the press is the edit point's: that is how a cut the
+     * playhead is parked on is still clicked, as in Resolve. Not with the blade.
+     */
+    _editTlHeadHit(e) {
+        const ui = this._editTlUi, lay = this._editTlLay, cut = this._editTlCut;
+        if (!e || !ui || !lay || !(lay.total > 0) || !cut || this._editTlBlade || !this._editTlOnScreen()) return false;
+        if (ui.head.style.display === "none") return false;
+        const x = ui.head.getBoundingClientRect().left;
+        if (Math.abs(e.clientX - x) > HEAD_PX) return false;
+        const fps = cut.fps || 24;
+        const head = (this.currentFrame || 0) / fps;
+        const path = e.composedPath ? e.composedPath() : [e.target];
+        const row = path.find((n) => n && n.classList && n.classList.contains("edit-track"));
+        const track = row ? row.dataset.track : "";
+        if (track === "V1" || (track && D.trackOf(cut, track))) {
+            if (D.editStops(cut, track).some((st) => Math.abs(st.t - head) < 0.5 / fps)) return false;
+        }
+        return true;
+    },
+
+    /** Over the playhead's line on the tracks: the ew-resize cursor (CSS .head-hot), and the clip under it is not lit. */
+    _editTlHeadHover(e) {
+        const ui = this._editTlUi;
+        if (!ui) return;
+        const hot = !!e && !e.buttons && this._editTlHeadHit(e);
+        if (hot && !ui.body.classList.contains("head-hot")) this._editTlHoverEnd?.();
+        ui.body.classList.toggle("head-hot", hot);
+        if (hot) e.stopPropagation();
     },
 
     // Right-click on a clip: its colour, and taking it out.
@@ -1686,6 +1791,7 @@ export const EditTimelineMixin = {
     /** The mode, as Resolve's: "select" (A, the default), "trim" (T) - either puts the blade (B) away. */
     editTlMode(mode) {
         this._editTlTrimMode = mode === "trim";
+        if (!this._editTlTrimMode && this.editTwoUpHide) this.editTwoUpHide();      // the two-up is the Trim mode's
         this._editTlHoverAct = null;
         if (this._editTlTrimShow) this._editTlTrimShow(null);
         this.editTlBladeToggle(false);
@@ -2122,8 +2228,12 @@ export const EditTimelineMixin = {
      * track also takes films, for their sound. `room` ("video" / "audio"): let go in
      * the empty room above the top video or below the bottom sound track - what
      * belongs there goes onto a new track of that kind, in the same undo step.
+     * `opts.insert`: Resolve's insert edit at `at` (the Add menu: at the
+     * playhead) - films and pictures go in there in their order, on `opts.track`
+     * (the video track of the selected clip, else V1), a shot there split around
+     * them and what follows rippled (D.insertEdit); the playhead then stands at their end.
      */
-    async _editTlAdd(items, at, track, room = "") {
+    async _editTlAdd(items, at, track, room = "", opts = {}) {
         if (!this._editTlTab) this.editTlNew(true);            // no cut open: the clips start one
         const given = (items || []).filter(Boolean);
         if (!given.length) return;
@@ -2156,6 +2266,7 @@ export const EditTimelineMixin = {
         let moment = start, soundMoment = start;
         let soundId = onto && onto.kind === "audio" ? onto.id : "";
         let unread = 0, sel = null;
+        const ins = [];                 // an insert edit: the films and pictures, in their order
         if (plan.some((p) => p.where === "newtrack")) { cut = D.addTrack(cut, "video"); onto = cut.tracks[cut.tracks.length - 1]; }
         if (plan.some((p) => p.where === "newsound")) { cut = D.addTrack(cut, "audio"); soundId = cut.tracks[cut.tracks.length - 1].id; }
         for (const { it, where: place } of plan) {
@@ -2164,6 +2275,7 @@ export const EditTimelineMixin = {
             if (!(length > 0)) { unread += 1; length = STILL_SECONDS; }
             const name = String(it.name || it.filename || it.path).split(/[\\/]/).pop().replace(/\.[^.]+$/, "");
             const clip = { file: it.path, name, length: D.toFrame(length, fps), color: it.color || "" };
+            if (opts.insert && where !== "sound") { ins.push(clip); continue; }
             if (where === "sound") {
                 if (!soundId) {
                     const first = (cut.tracks || []).find((k) => k.kind === "audio");
@@ -2190,19 +2302,40 @@ export const EditTimelineMixin = {
                 index += 1;
             }
         }
+        let end = null, split = false;
+        if (ins.length) {
+            const got = D.insertEdit(cut, ins, start, opts.track || "V1");
+            cut = got.cut;
+            sel = got.sel;
+            end = got.end;
+            split = got.split;
+            this._editTlMulti = null;
+            this._editTlEditSel = null;
+        }
         this._editTlSel = sel;
         this._editTlNote = [
+            ins.length ? `${ins.length} clip(s) inserted at ${D.timecode(start, fps)}${split ? ", the shot there split" : ""}` : "",
             skipped ? `${skipped} item(s) left out` : "",
             unread ? `the length of ${unread} clip(s) could not be read - set it in the Inspector` : "",
         ].filter(Boolean).join(" · ");
         this._editTlRecord(this._editTlCut, cut);
         this._editTlCut = cut;
         this.editTlRefresh();
+        // After an insert the playhead stands at the end of what went in, as Resolve's does.
+        if (end != null) this._editTlSeek(end);
     },
 
-    async _editTlAddNodes(nodes, at, track, room = "") {
+    /** Where an insert from the Add menu goes: the video track of the selected clip, else V1. */
+    _editTlInsertTrack() {
+        const s = this._editTlSel, cut = this._editTlCut;
+        const k = s && s.kind === "tclip" && cut ? D.trackOf(cut, s.track) : null;
+        return k && k.kind !== "audio" ? k.id : "V1";
+    },
+
+    async _editTlAddNodes(nodes, at, track, room = "", opts = {}) {
         const items = [];
-        for (const node of nodes || []) {
+        // Several nodes go in left to right as they stand on the canvas (then top to bottom).
+        for (const node of D.canvasOrder(nodes)) {
             try { items.push(...await nodeMediaClips(node)); } catch (_) {}
         }
         if (!items.length) {
@@ -2210,10 +2343,13 @@ export const EditTimelineMixin = {
             this.editTlRefresh();
             return;
         }
-        await this._editTlAdd(items, at, track, room);
+        await this._editTlAdd(items, at, track, room, opts);
     },
 
-    _editTlAddSelected() { return this._editTlAddNodes(selectedNodes(), null); },
+    /** Add > Selected canvas nodes: an insert edit at the playhead (see _editTlAdd). */
+    _editTlAddSelected() {
+        return this._editTlAddNodes(selectedNodes(), this._editTlNowSeconds(), "", "", { insert: true, track: this._editTlInsertTrack() });
+    },
 
     /** Add: files from disk, or what the canvas has selected. */
     _editTlAddMenu(anchor) {
@@ -2221,8 +2357,8 @@ export const EditTimelineMixin = {
         const a = anchor.getBoundingClientRect();
         const cut = this._editTlTab ? this._editTlCut : null;
         const entries = [
-            { label: "Files\u2026", run: () => this._editTlAddFiles() },
-            { label: "Selected canvas nodes", run: () => this._editTlAddSelected() },
+            { label: "Files\u2026 (inserted at the playhead)", run: () => this._editTlAddFiles() },
+            { label: "Selected canvas nodes (inserted at the playhead)", run: () => this._editTlAddSelected() },
         ];
         // Onto a track of its own: placed at the playhead.
         for (const k of (cut && cut.tracks) || []) {
@@ -2261,11 +2397,13 @@ export const EditTimelineMixin = {
             exts: sound ? [...SOUND_EXTS, ...FILM_EXTS] : [...FILM_EXTS, ...STILL_EXTS],
             multiple: true,
             go: "Add",
-            note: (onto ? "Placed at the playhead, one after the other." : "Added at the end of the cut.")
+            note: (onto ? "Placed at the playhead, one after the other."
+                        : "Inserted at the playhead: a shot there is split, what follows moves on.")
                 + " Ctrl-click picks more than one.",
             onPick: async (files) => {
-                await this._editTlAdd(files.map((f) => ({ path: f.path, name: f.name, kind: f.kind })),
-                                      onto ? this._editTlNowSeconds() : null, track);
+                const list = files.map((f) => ({ path: f.path, name: f.name, kind: f.kind }));
+                if (onto) await this._editTlAdd(list, this._editTlNowSeconds(), track);
+                else await this._editTlAdd(list, this._editTlNowSeconds(), "", "", { insert: true, track: this._editTlInsertTrack() });
                 return { ok: true };
             },
         });

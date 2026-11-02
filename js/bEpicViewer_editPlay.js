@@ -474,7 +474,9 @@ export const EditPlayMixin = {
         if (main) main.style.opacity = show === 1 && !under ? "" : String(show);
         if (under) under.style.opacity = String(Math.round(this._editPlayOpacity(at.under.clip) * 1000) / 1000);
         // A clip whose sound was split off (`mute`) is silent: its sound clip plays, at its own place.
-        const loud = (clip) => D.clipVolume(clip);
+        // The bar's speaker off (EditAudioMixin): everything at 0.
+        const gain = this._editAudioGain ? this._editAudioGain() : 1;
+        const loud = (clip) => D.clipVolume(clip) * gain;
         try { if (!ep.still && this.videoBase) this.videoBase.volume = loud(at.clip) * a; } catch (_) {}
         try { if (under && under.tagName === "VIDEO") under.volume = at.over ? 0 : loud(at.under.clip) * (1 - a); } catch (_) {}
     },
@@ -637,7 +639,7 @@ export const EditPlayMixin = {
                 const want = clip ? D.srcLocal(clip, u) : item.in + u;
                 const speed = clip ? D.speedOf(clip) : 1;
                 if (a.paused || Math.abs((a.currentTime || 0) - want) > 0.15 * Math.max(1, speed)) a.currentTime = want;
-                a.volume = Math.max(0, Math.min(1, item.volume));
+                a.volume = Math.max(0, Math.min(1, item.volume)) * (this._editAudioGain ? this._editAudioGain() : 1);
                 a.playbackRate = Math.max(0.0625, Math.min(16, rate * speed));
                 if ("preservesPitch" in a) a.preservesPitch = speed === 1;
                 a.muted = speed < 0.25 || speed > 4;
@@ -664,6 +666,7 @@ export const EditPlayMixin = {
         const cut = this._editPlayCut();
         if (!cut || !cut.clips.length || !this._ep) return;
         this.isPlaying = true;
+        if (this._eaSilence) this._eaSilence();               // no scrub grains under playback
         this._setIcon(this.playBtn, "icon-pause");
         const { min, max } = this._editPlayRange();
         // Outside the range, or standing on its last frame: from its start.
