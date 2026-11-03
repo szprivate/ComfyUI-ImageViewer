@@ -85,15 +85,24 @@ export const EditMediaMixin = {
         const ui = this._editTlUi;
         if (!ui || !ui.body.isConnected || !this._editTlOpen() || !this._editTlLay) { this._emPending = 0; return; }
         const view = ui.scroll.getBoundingClientRect();
-        const box = ui.main.getBoundingClientRect();
         const left = view.left, right = view.right;
-        const top = Math.max(view.top, box.top), bottom = Math.min(view.bottom, box.bottom);
+        // Up and down, each section shows its own part of its tracks (bEpicViewer_editSections.js).
+        const secs = new Map();
+        const shown = (b) => {
+            const sec = b.closest(".edit-sec") || ui.rows;
+            if (!secs.has(sec)) {
+                const s = sec.getBoundingClientRect();
+                secs.set(sec, [Math.max(view.top, s.top), Math.min(view.bottom, s.bottom)]);
+            }
+            return secs.get(sec);
+        };
         const wanted = new Set();
         let pending = 0, drawn = 0;
         for (const b of ui.rows.querySelectorAll(".edit-shot, .edit-snd")) {
             const m = b._media;
             if (!m || !m.file) continue;
             const r = b.getBoundingClientRect();
+            const [top, bottom] = shown(b);
             if (r.right <= left || r.left >= right || r.bottom <= top || r.top >= bottom || r.width < 2) continue;
             if (!this._editMediaClip(b, m, r, left, right, wanted)) pending += 1;
             drawn += 1;
@@ -169,9 +178,10 @@ export const EditMediaMixin = {
             n = STRIP_COUNTS.find((c) => c >= needed) || STRIP_COUNTS[STRIP_COUNTS.length - 1];
             extra = n + "x" + hreq + (part.whole ? "" : `@${part.start}-${part.end}`);
         }
-        // During a drag nothing new is asked for: what covers the part is drawn, the right sheet comes on release.
+        // During a drag, or while Shift + wheel changes the heights, nothing new is asked for: what covers
+        // the part is drawn, the right sheet comes on release (once the wheel rests).
         const cached = this._em().cache.get("strip|" + extra + "|" + m.file);
-        const asking = !this._editTlDragging || (cached && cached.state === "ok");
+        const asking = !(this._editTlDragging || this._editTlSizing) || (cached && cached.state === "ok");
         const exact = asking ? this._emGet("strip", m.file, wanted, extra) : null;
         if (exact === false) return true;                   // it cannot be read: the block stays plain
         const sheet = exact || this._emNearest(m.file, n, hreq, part);

@@ -1995,6 +1995,69 @@ export function timecode(seconds, fps = 24) {
     return `${two(Math.floor(s / 3600))}:${two(Math.floor(s / 60) % 60)}:${two(s % 60)}:${two(ff)}`;
 }
 
+// ── the timeline's own layout: the playhead readout, track heights, the splitter ──
+
+/** The readout left of the ruler: frame `frame` as a timecode at `fps` (mode "tc"), or its number (mode "frames"). */
+export function playheadLabel(frame, fps, mode) {
+    const f = Math.max(0, Math.round(num(frame)));
+    if (mode === "frames") return String(f);
+    const rate = num(fps, 24) > 0 ? num(fps, 24) : 24;
+    return timecode(f / rate, rate);
+}
+
+/**
+ * What is typed into the readout, as a frame: a timecode (HH:MM:SS:FF; fewer
+ * parts count from the right, ":" ";" "." all separate) or a frame number; a
+ * leading "+" / "-" goes on / back from frame `from`. null when it is neither.
+ */
+export function parsePlayhead(text, fps, from = 0) {
+    const s = String(text == null ? "" : text).trim();
+    if (!s) return null;
+    const rate = Math.max(1, Math.round(num(fps, 24)));
+    const rel = /^[+-]/.test(s) ? s[0] : "";
+    const body = rel ? s.slice(1).trim() : s;
+    let f;
+    if (/^\d+$/.test(body)) f = parseInt(body, 10);
+    else if (/^\d+([:;.]\d+){1,3}$/.test(body)) {
+        const parts = body.split(/[:;.]/).map(Number);
+        while (parts.length < 4) parts.unshift(0);
+        const [h, m, sec, ff] = parts;
+        f = ((h * 60 + m) * 60 + sec) * rate + ff;
+    } else return null;
+    if (rel === "+") f = num(from) + f;
+    else if (rel === "-") f = num(from) - f;
+    return Math.max(0, Math.round(f));
+}
+
+/** How low and how tall a track's row may be, in pixels (the header's grip, Shift + wheel). */
+export const TRACK_MIN_PX = 12;
+export const TRACK_MAX_PX = 160;
+
+/** A row's height one Shift + wheel notch taller (`dir` > 0) or lower: an eighth, at least a pixel, within TRACK_MIN_PX..TRACK_MAX_PX. */
+export function stepTrackHeight(h, dir) {
+    const now = Math.max(TRACK_MIN_PX, Math.min(TRACK_MAX_PX, Math.round(num(h, TRACK_MIN_PX))));
+    const next = dir > 0 ? Math.max(now + 1, Math.round(now * 1.125)) : Math.min(now - 1, Math.round(now / 1.125));
+    return Math.max(TRACK_MIN_PX, Math.min(TRACK_MAX_PX, next));
+}
+
+/**
+ * The video section's height (where the splitter stands) in `room` pixels shared
+ * with the sound section: `want` when the splitter was dragged (a number), else
+ * the video tracks' own height `contentV` - when both sections' tracks fit, all
+ * of it; when not, up to 70 % of the room (the pictures are what is cut), more
+ * where the sound needs less. Each section
+ * keeps at least `min` pixels.
+ */
+export function splitHeight(want, room, contentV, contentA, min = 24) {
+    const avail = Math.max(0, num(room));
+    let h;
+    if (Number.isFinite(want)) h = want;
+    else if (num(contentV) + num(contentA) <= avail) h = num(contentV);
+    else h = Math.min(num(contentV), Math.max(avail * 0.7, avail - num(contentA)));
+    const lo = Math.min(min, avail / 2), hi = Math.max(lo, avail - min);
+    return Math.round(Math.max(lo, Math.min(hi, h)));
+}
+
 /** The range with its in (or out) at `frame`, the other end pushed along where they would cross. */
 export function setMark(range, which, frame, last) {
     const top = Math.max(0, Math.round(num(last)));

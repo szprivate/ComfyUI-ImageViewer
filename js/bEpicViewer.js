@@ -55,6 +55,7 @@ import { EditPasteMixin } from "./bEpicViewer_editPaste.js";
 import { EditDialogsMixin } from "./bEpicViewer_editDialogs.js";
 import { EditXfadeMixin } from "./bEpicViewer_editXfade.js";
 import { EditVolLineMixin } from "./bEpicViewer_editVolLine.js";
+import { EditSectionsMixin } from "./bEpicViewer_editSections.js";
 import { EditAfxPlayMixin } from "./bEpicViewer_editAfxPlay.js";
 import { EditAfxMixin } from "./bEpicViewer_editAfx.js";
 import { BarGroupsMixin } from "./bEpicViewer_barGroups.js";
@@ -1389,6 +1390,7 @@ Object.assign(
     EditDialogsMixin,
     EditXfadeMixin,
     EditVolLineMixin,
+    EditSectionsMixin,
     EditAfxPlayMixin,
     EditAfxMixin,
     BarGroupsMixin,

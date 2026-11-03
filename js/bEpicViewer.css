@@ -1365,14 +1365,33 @@ textarea.param-input {
 
 /* The Edit panel's tracks: a column of headers that stays, and beside it a
    strip as wide as the zoom makes it. */
-.edit-main { display: flex; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; align-items: flex-start; }
-.edit-heads { flex: none; width: 140px; display: flex; flex-direction: column; gap: 2px; padding-right: 4px; box-sizing: border-box; }
+/* Up and down nothing of this scrolls but the two sections (bEpicViewer_editSections.js): the ruler and the
+   readout stay on top, the video tracks above the splitter, the sound below; their headers beside them,
+   kept to the same heights and scroll by the code. */
+.edit-main { display: flex; flex: 1 1 auto; min-height: 0; overflow: hidden; align-items: stretch; }
+.edit-heads { flex: none; width: 140px; display: flex; flex-direction: column; gap: 2px; padding-right: 4px; box-sizing: border-box; min-height: 0; overflow: hidden; }
+.edit-hbox { display: flex; flex-direction: column; flex: none; min-height: 0; }
+.edit-hsec { display: flex; flex-direction: column; gap: 2px; flex: none; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
 .edit-scroll { flex: 1 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
-.edit-rows { display: flex; flex-direction: column; gap: 2px; }
+.edit-rows { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.edit-sec { display: flex; flex-direction: column; gap: 2px; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }
+.edit-sec::-webkit-scrollbar { display: none; }
+.edit-sec > *, .edit-hsec > * { flex: none; }
+.edit-sec-v { flex: none; }
+.edit-sec-a { flex: 1 1 auto; }
+.edit-split { flex: none; height: 6px; box-sizing: border-box; cursor: ns-resize; background: #1b1b1b; border-top: 1px solid #333; border-bottom: 1px solid #333; }
+.edit-split:hover, .edit-body.split-drag .edit-split { background: rgba(102,204,255,.35); }
+.edit-body.split-drag, .edit-body.split-drag * { cursor: ns-resize !important; }
+/* The playhead readout, left of the ruler. */
+.edit-tc { flex: none; display: flex; align-items: center; box-sizing: border-box; height: 16px; padding: 0 4px; cursor: pointer; user-select: none;
+           background: #111; border: 1px solid #2c2c2c; border-radius: 2px; font: 11px/1 ui-monospace, Consolas, monospace; color: #ffcf6f; overflow: hidden; }
+.edit-tc:hover { border-color: #6cf; }
+.edit-tc[data-mode="frames"] { color: #9fe3ff; }
+.edit-tclabel { white-space: nowrap; }
+.edit-tcinput { width: 100%; min-width: 0; height: 100%; box-sizing: border-box; padding: 0 2px; border: 0; outline: 1px solid #6cf; background: #000; color: #fff; font: inherit; }
 .edit-headrow { position: relative; display: flex; align-items: center; gap: 3px; box-sizing: border-box; padding: 0 2px 0 4px;
                 background: #171717; border: 1px solid #2c2c2c; border-radius: 2px; font-size: 10px; color: #bbb; overflow: hidden; }
 .edit-headrow.dead { color: #666; }
-.edit-headruler { height: 15px; background: none; border-color: transparent; }
 .edit-hname { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .edit-hbtn { flex: none; width: 19px; height: 16px; min-height: 0; max-height: 16px; align-self: center; line-height: 14px; padding: 0; font-size: 10px; cursor: pointer;
              background: #222; color: #666; border: 1px solid #3a3a3a; border-radius: 2px; }
@@ -1770,7 +1789,8 @@ textarea.param-input {
 .edit-snapline.flash { animation: edit-snapflash .35s ease-out; }
 @keyframes edit-snapflash { from { box-shadow: 0 0 0 3px rgba(255,243,107,.75); } to { box-shadow: 0 0 0 1px rgba(255,243,107,.25); } }
 .edit-shot.snap-hit, .edit-gap.snap-hit, .edit-text.snap-hit { outline: 1px solid #fff36b; outline-offset: -1px; }
-.edit-area { min-height: 100%; }
+.edit-area { height: 100%; min-height: 0; }
+.edit-ruler { flex: none; }
 /* Over the ruler for a moment, not pushing the tracks out of a short panel. */
 .edit-saved { display: none; position: absolute; left: 8px; right: 8px; z-index: 31; align-items: center; gap: 6px; padding: 1px 6px; background: #17331f; border: 1px solid #2e6b42; border-radius: 2px; font-size: 11px; color: #cfe; min-width: 0; }
 .edit-saved .edit-btn { padding: 0 5px; line-height: 15px; flex: none; }

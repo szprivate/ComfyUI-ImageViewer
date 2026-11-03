@@ -23,6 +23,10 @@
 //                           scrubbing) and audio scrubbing on / off (Shift+M) - bEpicViewer_editAudio.js
 //                           Below Fit (down to 0.25x) empty timeline lies after the film, to move or drop clips onto.
 //                           The wheel alone, or the middle button dragged, pans it
+//   the ruler, the readout  the ruler stays on top; left of it the playhead as a timecode or frames
+//   two sections            video above a splitter, sound below, each scrolling on its own (Alt + wheel,
+//                           the wheel over the headers); Shift + wheel: the heights of the section under
+//                           the pointer (bEpicViewer_editSections.js)
 //   a track's header        its switch (off: not seen, not heard, not rendered),
 //                           S to solo it (only the soloed are played; a way of
 //                           looking, not saved), its lower edge to make it taller
@@ -105,7 +109,7 @@ const PREFIX = "edit:";                       // an Edit tab's key (EditPlayMixi
 export const EDIT_PANELS = ["editTimeline", "editInspector", "editEffects"];
 const PANELS_STORE = "bepic.viewer.editPanels";
 // Tall enough for a filmstrip with the sound under it, and for a waveform.
-const ROW_HEIGHT = { text: 16, video: 44, audio: 30 };
+export const ROW_HEIGHT = { text: 16, video: 44, audio: 30 };
 const SOUND_EXTS = [".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"];
 const FILM_EXTS = [".mp4", ".mov", ".webm", ".mkv", ".m4v", ".avi"];
 const STILL_EXTS = [".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"];
@@ -229,7 +233,9 @@ export const EditTimelineMixin = {
                              // Snapping: on unless switched off (N); the beats of the music its own switch, off.
                              snap: view.snap !== false, snapBeats: !!view.snapBeats,
                              // The volume line: shown on every sound track unless switched off in its header's menu.
-                             volCurve: { ...(view.volCurve || {}) } };
+                             volCurve: { ...(view.volCurve || {}) },
+                             // Shift + wheel's scale per section, for rows of no height of their own; the splitter, once dragged (px).
+                             scale: { ...(view.scale || {}) }, split: Number.isFinite(view.split) ? view.split : null };
         this._editTlSel = null;
         this._editTlEditSel = null;
         this._editTlNote = "";
@@ -505,14 +511,29 @@ export const EditTimelineMixin = {
                    audio, scrubAudio, zoomOut, zoomIn, zoomFit);
 
         // The tracks: their headers in a column that stays, the tracks beside it
-        // in a strip that is as wide as the zoom makes it and scrolls.
+        // in a strip that is as wide as the zoom makes it and scrolls sideways.
+        // Up and down, as Resolve's: the ruler stays on top, and under it two
+        // sections that scroll on their own - the video tracks, a splitter, the
+        // sound tracks (bEpicViewer_editSections.js). Above the headers, the
+        // playhead as a timecode or a frame number.
         const main = el("div", "edit-main");
         const heads = el("div", "edit-heads");
+        const tc = el("div", "edit-tc");
+        const hbox = el("div", "edit-hbox");
+        const headsV = el("div", "edit-hsec edit-hsec-v");
+        const headsA = el("div", "edit-hsec edit-hsec-a");
+        const hsplit = el("div", "edit-split edit-hsplit");
+        hbox.append(headsV, hsplit, headsA);
+        heads.append(tc, hbox);
         const scroll = el("div", "edit-scroll");
         const area = el("div", "edit-area");
         const ruler = el("div", "edit-ruler");
-        ruler.title = "Drag to scrub. Ctrl+drag: set the in and out; right-click: in / out here, clear";
+        ruler.title = "Drag to scrub. Ctrl+drag: set the in and out; right-click: in / out here, clear. The wheel here moves along the film";
         const rows = el("div", "edit-rows");
+        const secV = el("div", "edit-sec edit-sec-v");
+        const secA = el("div", "edit-sec edit-sec-a");
+        const splitBar = el("div", "edit-split");
+        rows.append(secV, splitBar, secA);
         const head = el("div", "edit-head");
         const drop = el("div", "edit-drop");
         area.append(ruler, rows, head, drop);
@@ -540,9 +561,8 @@ export const EditTimelineMixin = {
         // What is drawn inside the clips follows what is in view.
         const redraw = () => { if (this.editMediaSchedule) this.editMediaSchedule(); };
         scroll.addEventListener("scroll", redraw, { passive: true });
-        main.addEventListener("scroll", redraw, { passive: true });
         const win = doc.defaultView || window;
-        if (win.ResizeObserver) new win.ResizeObserver(redraw).observe(scroll);
+        if (win.ResizeObserver) new win.ResizeObserver(() => { this._editTlSecSync?.(); redraw(); }).observe(scroll);
 
         // The ruler is the film's own scrub bar.
         ruler.addEventListener("pointerdown", (e) => {
@@ -564,18 +584,11 @@ export const EditTimelineMixin = {
         // Right-click: set the in or the out here, mark the shot, clear them.
         ruler.addEventListener("contextmenu", (e) => { if (this._editTlRulerMenu) this._editTlRulerMenu(e); });
 
-        // Zoom and pan. Ctrl + wheel zooms about the pointer; the wheel alone
-        // moves along the film (a timeline has nowhere else to scroll to); the
-        // middle button drags it.
-        scroll.addEventListener("wheel", (e) => {
-            if (e.ctrlKey || e.metaKey) {
-                e.preventDefault();
-                this._editTlZoom(this._editTlView.zoom * (e.deltaY < 0 ? 1.25 : 0.8), e.clientX);
-            } else if (scroll.scrollWidth > scroll.clientWidth + 1) {
-                e.preventDefault();
-                scroll.scrollLeft += (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY);
-            }
-        }, { passive: false });
+        // Zoom, pan, heights: Ctrl + wheel zooms about the pointer; the wheel alone
+        // moves along the film; Shift + wheel makes the tracks of the section under
+        // the pointer taller or lower; Alt + wheel (or the wheel over the headers)
+        // scrolls that section up and down (_editTlWheel). The middle button drags along.
+        main.addEventListener("wheel", (e) => this._editTlWheel(e), { passive: false });
         scroll.addEventListener("pointerdown", (e) => {
             if (e.button !== 1) return;
             e.preventDefault();
@@ -655,7 +668,8 @@ export const EditTimelineMixin = {
         });
         this._editTlUi = { host, savedBar, empty, body, sub, badge, out, main, heads, scroll, area, ruler, rows,
                            head, drop, hint, blade, split, undo, redo, auto, cuts, take, pick, trimBtn, snap, beats, zoomOut, zoomIn, zoomFit,
-                           audio, scrubAudio };
+                           audio, scrubAudio, tc, hbox, headsV, headsA, hsplit, secV, secA, splitter: splitBar, vPinned: true };
+        if (this._editTlSecBind) this._editTlSecBind(this._editTlUi);
         this._editTlWatchCanvas();
         return this._editTlUi;
     },
@@ -790,8 +804,9 @@ export const EditTimelineMixin = {
         if (lay.sound.length) list.push({ id: "A1", kind: "audio", name: "A1" });
         for (const k of lay.tracks.filter((x) => x.kind === "audio")) list.push({ id: k.id, kind: "audio", name: k.name, track: k });
 
-        const headEls = [Object.assign(doc.createElement("div"), { className: "edit-headrow edit-headruler" })];
-        const rowEls = [];
+        // Two sections, each its rows and their headers: the texts and the video tracks; the sound.
+        const headEls = { video: [], audio: [] };
+        const rowEls = { video: [], audio: [] };
         // The empty room above the top video track and below the bottom sound track: a clip let go there gets a new track.
         const room = (kind) => {
             const z = doc.createElement("div");
@@ -799,13 +814,14 @@ export const EditTimelineMixin = {
             z.dataset.room = kind;
             z.dataset.label = "+ " + D.nextTrackId(cut, kind);
             z.title = kind === "audio" ? "Drop a sound here: a new sound track" : "Drop a clip here: a new video track";
-            rowEls.push(z);
-            headEls.push(Object.assign(doc.createElement("div"), { className: "edit-headrow edit-headroom" }));
+            rowEls[kind].push(z);
+            headEls[kind].push(Object.assign(doc.createElement("div"), { className: "edit-headrow edit-headroom" }));
         };
         let roomed = false;
         for (const row of list) {
             if (!roomed && row.kind === "video") { room("video"); roomed = true; }
-            const height = Math.max(12, Math.min(160, Number(view.heights[row.id]) || ROW_HEIGHT[row.kind]));
+            const sec = row.kind === "audio" ? "audio" : "video";
+            const height = this._editTlRowHeight(row);
             const dead = row.id === "T" ? !!(cut.off && cut.off.T) : !live.has(row.id);
             const tr = doc.createElement("div");
             const locked = D.trackFlags(cut, row.id).lock;
@@ -917,12 +933,16 @@ export const EditTimelineMixin = {
                 if (row.kind === "audio" && this._editTlXfadeBlocks) kids.push(...this._editTlXfadeBlocks(doc, row.id, lay));
             }
             tr.append(...kids);
-            rowEls.push(tr);
-            headEls.push(this._editTlHeadRow(doc, row, height, dead, tr));
+            rowEls[sec].push(tr);
+            headEls[sec].push(this._editTlHeadRow(doc, row, height, dead, tr));
         }
         room("audio");
-        ui.heads.replaceChildren(...headEls);
-        ui.rows.replaceChildren(...rowEls);
+        ui.headsV.replaceChildren(...headEls.video);
+        ui.headsA.replaceChildren(...headEls.audio);
+        ui.secV.replaceChildren(...rowEls.video);
+        ui.secA.replaceChildren(...rowEls.audio);
+        // The splitter, the headers beside their tracks, the video section held at its bottom (V1 by the splitter).
+        if (this._editTlSecSync) this._editTlSecSync();
         this._editTlSnapPlace();
         this._editTlNow = "";
         // The in and out (the transport's own range: played, looped, exported).
@@ -931,6 +951,20 @@ export const EditTimelineMixin = {
         if (this._editTlEditMarkDraw) this._editTlEditMarkDraw();
         this._editTlPlayhead();
         if (this.editMediaSchedule) this.editMediaSchedule();
+    },
+
+    /**
+     * A row's height: its own (its header's grip, Shift + wheel), else its kind's,
+     * scaled as Shift + wheel last scaled its section (view.scale, for rows that
+     * have none of their own yet - a new track). Within D.TRACK_MIN_PX..TRACK_MAX_PX.
+     */
+    _editTlRowHeight(row) {
+        const view = this._editTlView || {};
+        const own = Number(view.heights && view.heights[row.id]);
+        const sec = row.kind === "audio" ? "audio" : "video";
+        const scale = Number(view.scale && view.scale[sec]) || 1;
+        const h = own > 0 ? own : Math.round(ROW_HEIGHT[row.kind] * scale);
+        return Math.max(D.TRACK_MIN_PX, Math.min(D.TRACK_MAX_PX, h));
     },
 
     // A track's header: its name, its switch, its solo, and - on its lower edge -
@@ -1022,7 +1056,7 @@ export const EditTimelineMixin = {
             e.preventDefault();
             const y0 = e.clientY;
             const move = (ev) => {
-                const h = Math.max(12, Math.min(160, height + (ev.clientY - y0)));
+                const h = Math.max(D.TRACK_MIN_PX, Math.min(D.TRACK_MAX_PX, height + (ev.clientY - y0)));
                 view.heights[row.id] = h;
                 hd.style.height = h + "px";
                 trackEl.style.height = h + "px";
@@ -1432,19 +1466,27 @@ export const EditTimelineMixin = {
         return id;
     },
 
-    /** The empty room a pointer's y is in: "video" above the top video track, "audio" below the bottom row, else "". In the panel only. */
+    /**
+     * The empty room a pointer's y is in: "video" above the top video track (in
+     * the video section), "audio" below the bottom sound track (in the sound
+     * section), else "". Each section scrolls on its own: past its edge counts
+     * when the room itself is out of view - above the video section (over the
+     * ruler) or below the sound section, a little way only. In the panel only.
+     */
     _editTlRoomAt(clientY) {
         const ui = this._editTlUi;
-        if (!ui) return "";
-        // The tracks scroll inside a short panel: past its edge counts, if the room itself is out of view (a little way past it only).
-        const box = ui.main.getBoundingClientRect();
-        if (clientY < box.top - 60 || clientY > box.bottom + 60) return "";
-        const rows = [...ui.rows.querySelectorAll(".edit-track")];
-        const top = rows.find((r) => r.classList.contains("edit-k-video"));
-        const last = rows[rows.length - 1];
-        if (top && clientY < Math.max(top.getBoundingClientRect().top, box.top)) return "video";
-        if (last && clientY > Math.min(last.getBoundingClientRect().bottom, box.bottom)) return "audio";
-        return "";
+        if (!ui || !ui.secV) return "";
+        const sv = ui.secV.getBoundingClientRect(), sa = ui.secA.getBoundingClientRect();
+        if (clientY < sv.top - 60 || clientY > sa.bottom + 60) return "";
+        if (clientY < sa.top) {
+            // The video section, or above it; the splitter is neither.
+            if (clientY >= sv.bottom) return "";
+            const top = ui.secV.querySelector(".edit-track.edit-k-video");
+            return top && clientY < Math.max(top.getBoundingClientRect().top, sv.top) ? "video" : "";
+        }
+        const tracks = ui.secA.querySelectorAll(".edit-track");
+        const last = tracks[tracks.length - 1];
+        return clientY > (last ? Math.min(last.getBoundingClientRect().bottom, sa.bottom) : sa.top) ? "audio" : "";
     },
 
     /** "new:video" / "new:audio" when clip `sel` dragged there would get a new track: picture upwards, sound downwards. */
@@ -1477,7 +1519,8 @@ export const EditTimelineMixin = {
         const row = this._editTlRowEl(spec.track);
         if (!row) { ui.ghost.style.display = "none"; return; }
         row.classList.add("landing");
-        const a = ui.area.getBoundingClientRect(), r = row.getBoundingClientRect();
+        // The part of the row its section shows (a room scrolled out of view: its edge).
+        const a = ui.area.getBoundingClientRect(), r = this._editTlRowBox(row, true);
         const total = this._editTlLay.total || 1;
         ui.ghost.style.display = "block";
         ui.ghost.style.top = (r.top - a.top) + "px";
@@ -1651,7 +1694,7 @@ export const EditTimelineMixin = {
         if (e.button !== 0 || !ui) return;
         const t = e.target;
         const free = t && t.classList && (t.classList.contains("edit-track") || t.classList.contains("edit-room") || t.classList.contains("edit-rows")
-            || t.classList.contains("edit-area") || t === ui.scroll);
+            || t.classList.contains("edit-sec") || t.classList.contains("edit-area") || t === ui.scroll);
         if (!free) return;
         // The scroll bars are part of the element too.
         const sb = ui.scroll.getBoundingClientRect();
@@ -1681,9 +1724,10 @@ export const EditTimelineMixin = {
             box.style.top = (top - a.top) + "px";
             box.style.width = (right - left) + "px";
             box.style.height = (bottom - top) + "px";
+            // Across both sections; a row its section has scrolled out of view is not touched.
             const rows = [...ui.rows.querySelectorAll(".edit-track")].filter((r) => {
-                const q = r.getBoundingClientRect();
-                return q.bottom >= top && q.top <= bottom;
+                const q = this._editTlRowBox(r);
+                return !!q && q.bottom >= top && q.top <= bottom;
             }).map((r) => r.dataset.track).filter((id) => !D.trackFlags(this._editTlCut, id).lock);
             const list = [...base, ...D.marqueeSel(this._editTlCut, rows, t0, this._editTlTimeAt(ev.clientX) || 0)];
             const now = list.map(D.selId).join();
@@ -2227,6 +2271,7 @@ export const EditTimelineMixin = {
         const ui = this._editTlUi;
         const lay = this._editTlLay;
         if (!ui || !ui.body.isConnected || !this._editTlOpen()) return;
+        if (this._editTlTcDraw) this._editTlTcDraw();           // the readout left of the ruler
         if (!lay || !(lay.total > 0) || !this._editTlOnScreen()) {
             ui.head.style.display = "none";
             return;

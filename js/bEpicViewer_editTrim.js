@@ -212,8 +212,9 @@ export const EditTrimMixin = {
         const light = (key, sel, side, color) => {
             const p = this._editTlPlace(cut, sel);
             const el = need(key, "edit-trimhl");
-            if (!p || !p.row) { el.style.display = "none"; return null; }
-            const r = p.row.getBoundingClientRect();
+            // The part of the row its section shows (bEpicViewer_editSections.js); scrolled away, nothing.
+            const r = p && p.row ? this._editTlRowBox(p.row) : null;
+            if (!r) { el.style.display = "none"; return p && p.row ? p : null; }
             el.style.display = "block";
             el.style.top = (r.top - a.top) + "px";
             el.style.height = r.height + "px";
@@ -259,11 +260,11 @@ export const EditTrimMixin = {
                 lines = [`Slip ${name(c)}${this._editTlTrimMode ? "" : " (Alt)"}`, still ? "a still has no source to slip" : `src ${tc(srcIn)} – ${tc(srcOut)}`];
                 // The whole source, at the timeline's scale, behind the clip: where it can slip to.
                 const dur = this._editTlDur()[c.file];
-                if (!still && p && p.row) {
+                const r = !still && p && p.row ? this._editTlRowBox(p.row) : null;
+                if (r) {
                     const band = need("slipBand", "edit-slipband");
                     const sp = D.speedOf(c);
                     const from = start - srcIn / sp, to = dur > 0 ? start + (dur - srcIn) / sp : start + len * 4;
-                    const r = p.row.getBoundingClientRect();
                     band.style.display = "block";
                     band.style.top = (r.top - a.top) + "px";
                     band.style.height = r.height + "px";
@@ -284,7 +285,7 @@ export const EditTrimMixin = {
         const tip = need("trimTip", "edit-trimtip");
         tip.replaceChildren(...lines.map((t, k) => { const s = doc.createElement(k ? "div" : "b"); s.textContent = t; return s; }));
         tip.style.display = "block";
-        const r = row ? row.getBoundingClientRect() : a;
+        const r = (row && this._editTlRowBox(row, true)) || a;
         const x = clientX == null ? a.left : clientX;
         tip.style.left = Math.max(0, Math.min(a.width - 10, x - a.left + 12)) + "px";
         tip.style.top = Math.max(0, r.top - a.top - 30) + "px";
@@ -643,8 +644,8 @@ export const EditTrimMixin = {
                 ui.area.append(ui[key]);
             }
             const el = ui[key], g = edges[n];
-            if (!g) { el.style.display = "none"; return; }
-            const r = g.row.getBoundingClientRect();
+            const r = g && this._editTlRowBox(g.row);
+            if (!r) { el.style.display = "none"; return; }
             el.style.display = "block";
             el.style.left = (g.at / lay.total) * 100 + "%";
             el.style.top = (r.top - a.top) + "px";

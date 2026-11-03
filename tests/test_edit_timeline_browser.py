@@ -833,7 +833,7 @@ class EditTimelineBrowserTests(unittest.TestCase):
     def page_a2(self):
         """The page, the tracks scrolled down so that A2 is in view too (the panel is short)."""
         pg = self.page()
-        pg.evaluate("() => { const m = __panel._editTlUi.main; m.scrollTop = m.scrollHeight; }")
+        pg.evaluate("() => { const m = __panel._editTlUi.secA; m.scrollTop = m.scrollHeight; }")
         return pg
 
     def test_unlink_by_the_menu_and_the_key_and_the_sound_moved_on_its_own(self):
@@ -1153,7 +1153,7 @@ class EditTimelineBrowserTests(unittest.TestCase):
     @staticmethod
     def fit(pg):
         """Low rows, so that every track and the empty room below them are in the (short) panel."""
-        pg.evaluate("""() => { const P = __panel; P._editTlView.heights = { V3: 14, V2: 14, V1: 14, A1: 14, A2: 14, A3: 14, T: 14 }; P.editTlRefresh(); P._editTlUi.main.scrollTop = 0; }""")
+        pg.evaluate("""() => { const P = __panel; P._editTlView.heights = { V3: 14, V2: 14, V1: 14, A1: 14, A2: 14, A3: 14, T: 14 }; P.editTlRefresh(); P._editTlUi.secA.scrollTop = 0; }""")
 
     def on_v2(self, pg, *clips):
         pg.evaluate("""(clips) => { const P = __panel; const c = P._editTlCut; c.tracks[0].clips = clips.map(([name, at, length]) => ({ file: 'D:/out/b.mp4', name, in: 0, length, at, volume: 1, color: '' }));
@@ -1244,8 +1244,9 @@ class EditTimelineBrowserTests(unittest.TestCase):
         self.drag(pg, x, y, x, pg.evaluate(room, "audio"))
         self.assertNotIn("A3", self.cut(pg)["tracks"])
         # The headers stay in line with the rows, the room counted in.
-        rows = pg.evaluate("""() => { const P = __panel, ui = P._editTlUi; const t = [...ui.rows.children].map(r => r.getBoundingClientRect().top);
-            const h = [...ui.heads.children].slice(1).map(r => r.getBoundingClientRect().top); return [t, h]; }""")
+        # (Two sections now, each with its headers beside it: every row against the header of its own.)
+        rows = pg.evaluate("""() => { const P = __panel, ui = P._editTlUi; const t = [...ui.rows.querySelectorAll('.edit-track, .edit-room')].map(r => r.getBoundingClientRect().top);
+            const h = [...ui.heads.querySelectorAll('.edit-headrow')].map(r => r.getBoundingClientRect().top); return [t, h]; }""")
         self.assertEqual(len(rows[0]), len(rows[1]))
         for a, b in zip(*rows):
             self.assertAlmostEqual(a, b, delta=1)
@@ -3311,6 +3312,334 @@ class EditTimelineBrowserTests(unittest.TestCase):
         pg.keyboard.press("Comma")
         self.assertEqual(pg.evaluate("() => __panel.currentFrame"), 95)
         self.assertEqual(pg.evaluate("() => __panel._editTlUi.scroll.scrollLeft"), before)
+        self.assertEqual(self.errors, [])
+
+    # ── the ruler on top, the readout, Shift + wheel, the video and the sound sections ──
+
+    # Video tracks V4 V3 V2 V1 above the splitter, the bed A1 and A2 A3 below it, every row 20 px: both sections
+    # are taller than the (short) panel shows, so each scrolls.
+    SECTIONS = """() => { const P = __panel; const c = P._editTlCut;
+        const v = (name, at, length) => ({ file: 'D:/out/b.mp4', name, in: 0, length, at, volume: 1, color: '' });
+        const s = (name, at, length) => ({ file: 'D:/out/music.wav', name, in: 0, length, at, volume: 1, color: '' });
+        P._editTlApply({ ...c, tracks: [
+            { id: 'V2', kind: 'video', name: 'V2', off: false, clips: [v('v2', 0.5, 1)] },
+            { id: 'V3', kind: 'video', name: 'V3', off: false, clips: [v('v3', 8, 1)] },
+            { id: 'V4', kind: 'video', name: 'V4', off: false, clips: [v('v4', 9.5, 1)] },
+            { id: 'A2', kind: 'audio', name: 'A2', off: false, clips: [s('s2', 4.5, 2)] },
+            { id: 'A3', kind: 'audio', name: 'A3', off: false, clips: [s('s3', 8, 2)] }] });
+        P._editTlHistories[P._editTlTab] = { past: [], future: [] };
+        P._editTlView.heights = { V4: 20, V3: 20, V2: 20, V1: 20, A1: 20, A2: 20, A3: 20 };
+        P._editTlView.split = null; P._editTlUi.vPinned = true; P._editTlUi.secA.scrollTop = 0; P.editTlRefresh(); }"""
+    XT = "(t) => { const a = __panel._editTlUi.area.getBoundingClientRect(); return a.left + a.width * t / __panel._editTlLay.total; }"
+    # The middle of the part of a row its section shows (null: scrolled out of view).
+    ROWY = "(id) => { const P = __panel, r = P._editTlRowBox(P._editTlRowEl(id)); return r ? (r.top + r.bottom) / 2 : null; }"
+    ROOMY = "(k) => { const P = __panel, b = P._editTlRowBox(P._editTlRowEl('new:' + k)); return b ? (b.top + b.bottom) / 2 : null; }"
+    RECT = "(k) => { const r = __panel._editTlUi[k].getBoundingClientRect(); return [r.left, r.top, r.right, r.bottom]; }"
+    HEIGHTS = "() => Object.fromEntries([...__panel._editTlUi.rows.querySelectorAll('.edit-track')].map(r => [r.dataset.track, r.offsetHeight]))"
+    TC = "() => __panel._editTlUi.tc.textContent"
+    SCROLLS = "() => [__panel._editTlUi.secV.scrollTop, __panel._editTlUi.secA.scrollTop]"
+
+    def sections_page(self):
+        pg = self.page()
+        pg.evaluate(self.SECTIONS)
+        self.settle(pg)
+        return pg
+
+    def at(self, pg, t, track):
+        return pg.evaluate(self.XT, t), pg.evaluate(self.ROWY, track)
+
+    def shift_wheel(self, pg, x, y, dy, mouse=None):
+        m = mouse or pg
+        m.mouse.move(x, y)
+        m.keyboard.down("Shift")
+        m.mouse.wheel(0, dy)
+        m.keyboard.up("Shift")
+        pg.wait_for_timeout(60)
+
+    def test_26_the_ruler_stays_on_top_with_the_tracks_scrolled_and_scrubs(self):
+        pg = self.sections_page()
+        ruler0 = pg.evaluate(self.RECT, "ruler")
+        # Both sections overflow; the video one sits down at V1 (by the splitter), the sound one at its top.
+        st = pg.evaluate("() => { const u = __panel._editTlUi; return [u.secV.scrollTop, u.secV.scrollHeight - u.secV.clientHeight, u.secA.scrollTop, u.secA.scrollHeight - u.secA.clientHeight]; }")
+        self.assertGreater(st[1], 0)
+        self.assertGreater(st[3], 0)
+        self.assertEqual(st[0], st[1], "the video section held down at V1")
+        self.assertEqual(st[2], 0)
+        pg.evaluate("() => { const u = __panel._editTlUi; u.secV.scrollTop = 0; u.secA.scrollTop = u.secA.scrollHeight; }")
+        pg.wait_for_timeout(50)
+        self.assertEqual(pg.evaluate(self.RECT, "ruler"), ruler0, "the ruler does not move")
+        area, secv = pg.evaluate(self.RECT, "area"), pg.evaluate(self.RECT, "secV")
+        self.assertAlmostEqual(ruler0[1], area[1], delta=0.5)
+        self.assertLessEqual(ruler0[3], secv[1])
+        mid_y = (ruler0[1] + ruler0[3]) / 2
+        self.assertTrue(pg.evaluate("([x, y]) => { const u = __panel._editTlUi, e = u.body.getRootNode().elementFromPoint(x, y); return !!e && u.ruler.contains(e); }",
+                                    [pg.evaluate(self.XT, 5.5), mid_y]), "nothing scrolled over it")
+        # The headers went with their sections.
+        self.assertTrue(pg.evaluate("() => { const u = __panel._editTlUi; return u.headsV.scrollTop === u.secV.scrollTop && Math.abs(u.headsA.scrollTop - u.secA.scrollTop) < 1; }"))
+        pg.wait_for_function("() => !__panel._editTlUi.vPinned", timeout=3000)     # scrolled up: no longer held at V1
+        # A drag on it scrubs.
+        self.drag(pg, pg.evaluate(self.XT, 2.5), mid_y, pg.evaluate(self.XT, 5.5), mid_y)
+        self.assertLessEqual(abs(pg.evaluate("() => __panel.currentFrame") - 132), 1)
+        # The playhead's line runs from the ruler down through both sections, and is grabbed on a sound track.
+        head = pg.evaluate("() => { const r = __panel._editTlUi.head.getBoundingClientRect(); return [r.left, r.top, r.bottom]; }")
+        seca = pg.evaluate(self.RECT, "secA")
+        self.assertLessEqual(head[1], ruler0[1] + 1)
+        self.assertGreaterEqual(head[2], seca[3] - 1)
+        y = pg.evaluate(self.ROWY, "A3")
+        self.assertIsNotNone(y)
+        self.drag(pg, head[0], y, pg.evaluate(self.XT, 6.5), y)
+        self.assertLessEqual(abs(pg.evaluate("() => __panel.currentFrame") - 156), 1)
+        self.assertEqual(self.cut(pg)["tracks"]["A3"], [["D:/out/music.wav", 8.0, 2.0]], "a scrub, not a move")
+        self.assertEqual(self.errors, [])
+
+    def test_26_the_readout_timecode_or_frames_toggled_and_live(self):
+        pg = self.page()
+        pg.evaluate("() => { try { localStorage.removeItem('bepic.viewer.editTimecode'); } catch (_) {} __panel._editTlTcModeNow = null; __panel._editTlTcSet('tc'); __panel.setFrame(25); }")
+        self.assertEqual(pg.evaluate(self.TC), "00:00:01:01")
+        tc, ruler = pg.evaluate(self.RECT, "tc"), pg.evaluate(self.RECT, "ruler")
+        self.assertLessEqual(tc[2], ruler[0], "left of the ruler, over the headers' column")
+        self.assertAlmostEqual(tc[1], ruler[1], delta=1)
+        self.assertAlmostEqual(tc[3], ruler[3], delta=1)
+        # Live, a frame at a time - and the text is written only when it changes.
+        pg.evaluate("() => { const P = __panel; P.__tcWrites = 0; new MutationObserver((m) => { P.__tcWrites += m.length; }).observe(P._editTlUi.tc, { subtree: true, childList: true, characterData: true }); }")
+        self.focus_timeline(pg)
+        pg.keyboard.press("ArrowRight")
+        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), 26)
+        self.assertEqual(pg.evaluate(self.TC), "00:00:01:02")
+        pg.wait_for_timeout(30)
+        writes = pg.evaluate("() => __panel.__tcWrites")
+        self.assertGreaterEqual(writes, 1)
+        pg.evaluate("() => { const P = __panel; for (let i = 0; i < 20; i++) P._editTlPlayhead(); P.editTlRefresh(); }")
+        pg.wait_for_timeout(30)
+        self.assertEqual(pg.evaluate("() => __panel.__tcWrites"), writes, "the same frame: not written again")
+        # A click: frames; kept for this viewer.
+        pg.click("bepic-viewer-panel >> .edit-tc")
+        self.assertEqual(pg.evaluate(self.TC), "26")
+        self.assertEqual(pg.evaluate("() => localStorage.getItem('bepic.viewer.editTimecode')"), "frames")
+        self.assertEqual(pg.evaluate("() => { __panel._editTlTcModeNow = null; return __panel._editTlTcMode(); }"), "frames")
+        pg.evaluate("() => __panel.setFrame(30)")
+        self.assertEqual(pg.evaluate(self.TC), "30")
+        # Right-click: the choice.
+        pg.click("bepic-viewer-panel >> .edit-tc", button="right")
+        pg.locator(".previz-menu-item", has_text="Timecode").first.click()
+        self.assertEqual(pg.evaluate(self.TC), "00:00:01:06")
+        # Double-click: typed, Enter goes there (the two clicks of it switch there and back).
+        for typed, frame in (("00:00:02:00", 48), ("+12", 60), ("100", 100), ("nonsense", 100)):
+            pg.dblclick("bepic-viewer-panel >> .edit-tc")
+            pg.wait_for_function("() => !!__panel._editTlUi.tc.querySelector('input')", timeout=3000)
+            pg.keyboard.press("Control+a")
+            pg.keyboard.type(typed)
+            pg.keyboard.press("Enter")
+            self.assertEqual(pg.evaluate("() => __panel.currentFrame"), frame, typed)
+            self.assertEqual(pg.evaluate("() => __panel._editTlTcMode()"), "tc")
+        self.assertEqual(pg.evaluate(self.TC), "00:00:04:04")
+        # Esc: nowhere.
+        pg.dblclick("bepic-viewer-panel >> .edit-tc")
+        pg.wait_for_function("() => !!__panel._editTlUi.tc.querySelector('input')", timeout=3000)
+        pg.keyboard.type("5")
+        pg.keyboard.press("Escape")
+        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), 100)
+        self.assertEqual(pg.evaluate(self.TC), "00:00:04:04")
+        self.assertEqual(self.errors, [])
+
+    def test_26_shift_wheel_sets_the_heights_of_the_section_under_the_pointer(self):
+        pg = self.sections_page()
+        h0 = pg.evaluate(self.HEIGHTS)
+        video, sound = ["V4", "V3", "V2", "V1"], ["A1", "A2", "A3"]
+        x, y = self.at(pg, 5.5, "V1")
+        self.shift_wheel(pg, x, y, -100)
+        self.assertTrue(pg.evaluate("() => __panel._editTlSizing"), "the strips wait for the wheel to rest")
+        pg.wait_for_function("() => !__panel._editTlSizing", timeout=3000)
+        h1 = pg.evaluate(self.HEIGHTS)
+        for k in video:
+            self.assertGreater(h1[k], h0[k], k)
+        for k in sound:
+            self.assertEqual(h1[k], h0[k], k)
+        # Over the sound section: only its tracks, lower.
+        x, y = self.at(pg, 5.5, "A1")
+        self.shift_wheel(pg, x, y, 100)
+        pg.wait_for_function("() => !__panel._editTlSizing", timeout=3000)
+        h2 = pg.evaluate(self.HEIGHTS)
+        for k in video:
+            self.assertEqual(h2[k], h1[k], k)
+        for k in sound:
+            self.assertLess(h2[k], h1[k], k)
+        # Over the ruler: all of them. Kept with the cut's view.
+        r = pg.evaluate(self.RECT, "ruler")
+        rx, ry = pg.evaluate(self.XT, 5.5), (r[1] + r[3]) / 2
+        self.shift_wheel(pg, rx, ry, -100)
+        pg.wait_for_function("() => !__panel._editTlSizing", timeout=3000)
+        h3 = pg.evaluate(self.HEIGHTS)
+        for k in video + sound:
+            self.assertGreater(h3[k], h2[k], k)
+            self.assertEqual(pg.evaluate("(k) => __panel._editTlView.heights[k]", k), h3[k])
+        # Within the bounds; the headers as tall as their rows; the volume line only on rows of 28 px or more.
+        for _ in range(25):
+            self.shift_wheel(pg, rx, ry, 100)
+        pg.wait_for_function("() => !__panel._editTlSizing", timeout=3000)
+        self.assertEqual(set(pg.evaluate(self.HEIGHTS).values()), {12})
+        self.assertEqual(pg.evaluate("() => __panel._editTlUi.rows.querySelectorAll('.edit-volline, .edit-volpt').length"), 0)
+        self.assertTrue(pg.evaluate("""() => [...__panel._editTlUi.heads.querySelectorAll('.edit-headrow[data-track]')].every(h =>
+            h.offsetHeight === __panel._editTlRowEl(h.dataset.track).offsetHeight)"""))
+        for _ in range(40):
+            self.shift_wheel(pg, rx, ry, -100)
+        pg.wait_for_function("() => !__panel._editTlSizing", timeout=3000)
+        self.assertEqual(set(pg.evaluate(self.HEIGHTS).values()), {160})
+        self.settle(pg)
+        # The wheel alone still moves along the film; Alt + wheel moves the section under it up and down.
+        pg.evaluate("() => __panel._editTlZoom(4)")
+        left = pg.evaluate("() => __panel._editTlUi.scroll.scrollLeft")
+        sa = pg.evaluate(self.RECT, "secA")
+        pg.mouse.move(rx, (sa[1] + sa[3]) / 2)
+        pg.mouse.wheel(0, 120)
+        pg.wait_for_timeout(50)
+        self.assertGreater(pg.evaluate("() => __panel._editTlUi.scroll.scrollLeft"), left)
+        top = pg.evaluate(self.SCROLLS)
+        pg.keyboard.down("Alt")
+        pg.mouse.wheel(0, 60)
+        pg.keyboard.up("Alt")
+        pg.wait_for_timeout(50)
+        now = pg.evaluate(self.SCROLLS)
+        self.assertEqual(now[0], top[0])
+        self.assertGreater(now[1], top[1])
+        self.assertEqual(self.errors, [])
+
+    def test_26_the_splitter_and_each_section_scrolling_on_its_own(self):
+        pg = self.sections_page()
+        v0, a0 = pg.evaluate(self.RECT, "secV"), pg.evaluate(self.RECT, "secA")
+        sp = pg.evaluate(self.RECT, "splitter")
+        x, y = pg.evaluate(self.XT, 5.5), (sp[1] + sp[3]) / 2
+        # Up 20 px: the video section lower, the sound taller; the headers alongside; kept with the cut's view.
+        self.drag(pg, x, y, x, y - 20)
+        v1, a1 = pg.evaluate(self.RECT, "secV"), pg.evaluate(self.RECT, "secA")
+        self.assertAlmostEqual(v1[3] - v1[1], v0[3] - v0[1] - 20, delta=1)
+        self.assertAlmostEqual(a1[3] - a1[1], a0[3] - a0[1] + 20, delta=1)
+        self.assertAlmostEqual(pg.evaluate("() => __panel._editTlView.split"), v1[3] - v1[1], delta=1)
+        self.assertTrue(pg.evaluate("() => { const u = __panel._editTlUi; return u.headsV.offsetHeight === u.secV.offsetHeight && u.headsA.offsetHeight === u.secA.offsetHeight; }"))
+        self.assertEqual(self.undo_len(pg), 0, "the splitter changes nothing of the cut")
+        # A redraw keeps it; the splitter over the headers moves it too, held at a section's minimum.
+        pg.evaluate("() => __panel.editTlRefresh()")
+        self.assertAlmostEqual(pg.evaluate("() => __panel._editTlUi.secV.offsetHeight"), v1[3] - v1[1], delta=1)
+        hs = pg.evaluate(self.RECT, "hsplit")
+        self.drag(pg, (hs[0] + hs[2]) / 2, (hs[1] + hs[3]) / 2, (hs[0] + hs[2]) / 2, hs[1] - 500)
+        self.assertAlmostEqual(pg.evaluate("() => __panel._editTlUi.secV.offsetHeight"), 24, delta=1)
+        # Double-click: back to fitting the video tracks.
+        sp = pg.evaluate(self.RECT, "splitter")
+        pg.mouse.dblclick(x, (sp[1] + sp[3]) / 2)
+        self.assertIsNone(pg.evaluate("() => __panel._editTlView.split"))
+        self.assertAlmostEqual(pg.evaluate("() => __panel._editTlUi.secV.offsetHeight"), v0[3] - v0[1], delta=1)
+        # Each section scrolls on its own: the wheel over the headers, the headers' own scroll.
+        top = pg.evaluate(self.SCROLLS)
+        hv = pg.evaluate(self.RECT, "headsV")
+        pg.mouse.move((hv[0] + hv[2]) / 2, (hv[1] + hv[3]) / 2)
+        pg.mouse.wheel(0, -40)
+        pg.wait_for_timeout(50)
+        now = pg.evaluate(self.SCROLLS)
+        self.assertLess(now[0], top[0])
+        self.assertEqual(now[1], top[1])
+        pg.evaluate("() => { __panel._editTlUi.headsA.scrollTop = 30; }")
+        pg.wait_for_timeout(50)
+        self.assertEqual(pg.evaluate(self.SCROLLS), [now[0], 30])
+        self.assertIsNone(pg.evaluate(self.ROWY, "A1"), "A1 scrolled out of view")
+        self.assertEqual(self.errors, [])
+
+    def test_26_a_marquee_across_both_sections(self):
+        pg = self.sections_page()
+        x0, y0 = self.at(pg, 5.0, "V2")
+        x1, y1 = self.at(pg, 6.0, "A2")
+        self.assertIsNotNone(y0)
+        self.assertIsNotNone(y1)
+        self.drag(pg, x0, y0, x1, y1)
+        got = pg.evaluate("() => __panel._editTlSelAll().map(s => s.kind + ':' + (s.track || '') + ':' + s.i)")
+        self.assertIn("clip::1", got, "c on V1")
+        self.assertIn("tclip:A2:0", got, "s2 on A2, below the splitter")
+        self.assertNotIn("tclip:A3:0", got)
+        self.assertEqual(self.errors, [])
+
+    def test_26_a_linked_picture_and_sound_dragged_across_the_sections(self):
+        pg = self.sections_page()
+        pg.evaluate("""() => { const P = __panel; const c = P._editTlCut; c.clips[0].link = 'L';
+            c.tracks.find(k => k.id === 'A2').clips = [{ file: c.clips[0].file, name: 'a', in: 0, length: 4, at: 0, volume: 1, color: '', link: 'L' }];
+            P._editTlApply({ ...c }); P._editTlHistories[P._editTlTab] = { past: [], future: [] }; }""")
+        pps = self.px_per_second(pg)
+        x, y = self.at(pg, 2.0, "V1")
+        self.drag(pg, x, y, x + 1.0 * pps, y)
+        self.assertEqual(self.cut(pg)["tracks"]["A2"], [["D:/out/a.mp4", 1.0, 4.0]])
+        self.assertEqual(pg.evaluate(self.STARTS)[0], 1.0)
+        self.assertEqual(self.undo_len(pg), 1)
+        # And from the sound, below the splitter: the picture above it follows.
+        x, y = self.at(pg, 2.5, "A2")
+        self.drag(pg, x, y, x + 0.5 * pps, y)
+        self.assertEqual(self.cut(pg)["tracks"]["A2"], [["D:/out/a.mp4", 1.5, 4.0]])
+        self.assertEqual(pg.evaluate(self.STARTS)[0], 1.5)
+        self.assertEqual(self.errors, [])
+
+    def test_26_a_drag_into_a_new_track_in_each_section(self):
+        pg = self.sections_page()
+        # The video section held at V1: its room is out of view above - past the section's top (over the ruler) counts.
+        sv = pg.evaluate(self.RECT, "secV")
+        x, y = self.at(pg, 5.5, "V1")
+        lit = self.drag(pg, x, y, x, sv[1] - 6,
+                        check="() => [__panel._editTlUi.rows.querySelector('.edit-room.landing')?.dataset.room, __panel._editTlUi.ghost.style.display]")
+        self.assertEqual(lit, ["video", "block"])
+        self.assertEqual(self.cut(pg)["tracks"]["V5"], [["D:/out/c.png", 4.0, 3.0]])
+        self.assertEqual(self.undo_len(pg), 1)
+        # Scrolled up to it, the room itself.
+        pg.evaluate("() => { __panel._editTlUi.secV.scrollTop = 0; }")
+        pg.wait_for_timeout(50)
+        r = pg.evaluate(self.ROOMY, "video")
+        x, y = self.at(pg, 8.5, "V3")
+        self.assertIsNotNone(r)
+        self.assertIsNotNone(y)
+        self.drag(pg, x, y, x, r)
+        self.assertIn("V6", self.cut(pg)["tracks"])
+        self.assertEqual(self.cut(pg)["tracks"]["V3"], [])
+        # The sound section: below its bottom (the room is out of view under A3) ...
+        sa = pg.evaluate(self.RECT, "secA")
+        x, y = self.at(pg, 5.0, "A2")
+        self.assertIsNotNone(y)
+        self.drag(pg, x, y, x, sa[3] + 4)
+        self.assertEqual(self.cut(pg)["tracks"]["A4"], [["D:/out/music.wav", 4.5, 2.0]])
+        # ... and scrolled down to it, the room itself.
+        pg.evaluate("() => { const s = __panel._editTlUi.secA; s.scrollTop = s.scrollHeight; }")
+        pg.wait_for_timeout(50)
+        r = pg.evaluate(self.ROOMY, "audio")
+        x, y = self.at(pg, 5.0, "A4")
+        self.assertIsNotNone(r)
+        self.assertIsNotNone(y)
+        self.drag(pg, x, y, x, r)
+        self.assertEqual(self.cut(pg)["tracks"]["A5"], [["D:/out/music.wav", 4.5, 2.0]])
+        self.assertEqual(self.undo_len(pg), 4)
+        self.assertEqual(self.errors, [])
+
+    def test_26_popped_out_the_readout_the_splitter_and_shift_wheel(self):
+        pg = self.sections_page()
+        with pg.context.expect_page() as pop:
+            pg.evaluate("() => window.__panel.toggleUndock()")
+        win = pop.value
+        win.wait_for_load_state()
+        pg.wait_for_function("() => __panel._editTlUi && __panel._editTlUi.body.ownerDocument !== document", timeout=10000)
+        pg.wait_for_function("() => __panel._editTlUi.secV.offsetHeight > 0", timeout=10000)
+        pg.evaluate("() => { __panel._editTlTcSet('tc'); __panel.setFrame(48); }")
+        self.assertEqual(pg.evaluate(self.TC), "00:00:02:00")
+        tc = pg.evaluate(self.RECT, "tc")
+        win.mouse.click((tc[0] + tc[2]) / 2, (tc[1] + tc[3]) / 2)
+        self.assertEqual(pg.evaluate(self.TC), "48")
+        h0 = pg.evaluate(self.HEIGHTS)
+        x, y = self.at(pg, 5.5, "A1")
+        self.shift_wheel(pg, x, y, -100, mouse=win)
+        pg.wait_for_function("() => !__panel._editTlSizing", timeout=3000)
+        h1 = pg.evaluate(self.HEIGHTS)
+        self.assertGreater(h1["A1"], h0["A1"])
+        self.assertEqual(h1["V1"], h0["V1"])
+        sp = pg.evaluate(self.RECT, "splitter")
+        x, y = pg.evaluate(self.XT, 5.5), (sp[1] + sp[3]) / 2
+        v0 = pg.evaluate("() => __panel._editTlUi.secV.offsetHeight")
+        win.mouse.move(x, y)
+        win.mouse.down()
+        win.mouse.move(x, y - 15, steps=3)
+        win.mouse.up()
+        self.assertAlmostEqual(pg.evaluate("() => __panel._editTlUi.secV.offsetHeight"), v0 - 15, delta=1)
         self.assertEqual(self.errors, [])
 
 if __name__ == "__main__":
