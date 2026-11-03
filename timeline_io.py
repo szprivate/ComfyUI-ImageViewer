@@ -12,6 +12,7 @@ needed - a ``.otio`` file is JSON.
 """
 
 import json
+import math
 import os
 import re
 
@@ -1796,3 +1797,210 @@ def change(path, ops, stamp="", may_use=None, durations=None):
     panel saves; returns ``(the cut as it now reads, said)``."""
     edit, said = apply_ops(read_editable(path), ops, durations)
     return save(path, edit, stamp, may_use), said
+
+
+# ── a marked range, in the sources ───────────────────────────────────────────
+#
+# The user marks an in and an out on the cut (film frames of the Edit tab's
+# timeline) and asks for "the shot inside it" made again. A generator or a trim
+# needs the SOURCE: which file, and which of its frames. That goes through the
+# clip's place in the film, its in point, its speed and its loop, and the
+# source's own frame rate - arithmetic an agent should never do by hand. A film
+# frame f shows its clip's source at the moment (f + 0.5) / fps of the film, as
+# the Edit tab plays it (srcLocal, pictureAt) and the render reads it
+# (timeline_render.clip_frames, through source_moment below).
+
+_STILL_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".gif", ".bmp", ".avif", ".exr")
+_EPS = 1e-6
+
+
+def _still_clip(clip):
+    """A picture or a title: no time of its own (the Edit tab's isStillClip)."""
+    return clip.get("title") is not None or os.path.splitext(str(clip.get("file") or ""))[1].lower() in _STILL_EXTS
+
+
+def _speed(clip):
+    """A clip's speed as the Edit tab plays it (speedOf): 1 for a still, held to MIN_SPEED .. MAX_SPEED."""
+    try:
+        s = float(clip.get("speed") if clip.get("speed") is not None else 1.0)
+    except (TypeError, ValueError):
+        s = 1.0
+    return max(MIN_SPEED, min(MAX_SPEED, s)) if s > 0 and not _still_clip(clip) else 1.0
+
+
+def _loop(clip):
+    """``(mode, span)``: "loop" / "pingpong" and one turn in seconds of source, or ``("", 0.0)`` (loopOf)."""
+    try:
+        span = float(clip.get("span") or 0)
+    except (TypeError, ValueError):
+        span = 0.0
+    mode = clip.get("loop")
+    return (mode, span) if mode in ("loop", "pingpong") and span > 0 and not _still_clip(clip) else ("", 0.0)
+
+
+def source_moment(clip, u):
+    """The moment (seconds) of *clip*'s source shown *u* seconds into the clip: from its
+    in point at its speed, through its loop (``loop``: from the in point again,
+    ``pingpong``: back and forth). The Edit tab's ``srcLocal``; the render reads its
+    frames by it (timeline_render.clip_frames)."""
+    start = float(clip.get("in") or 0)
+    q = max(0.0, float(u)) * _speed(clip)
+    mode, span = _loop(clip)
+    if mode == "loop":
+        q = q % span
+    elif mode == "pingpong":
+        p = q % (2 * span)
+        q = p if p < span else 2 * span - p
+    return start + q
+
+
+def _film_frames(a, b, fps):
+    """``(first, last)``: the film frames whose moment ``(f + 0.5) / fps`` lies in ``[a, b)`` seconds."""
+    return math.ceil(a * fps - 0.5 - _EPS), math.ceil(b * fps - 0.5 - _EPS) - 1
+
+
+def _src_frames(s0, s1, sfps):
+    """``(first, last)``: the source frames a stretch between *s0* and *s1* source seconds runs over."""
+    lo, hi = min(s0, s1), max(s0, s1)
+    first = math.floor(lo * sfps + _EPS)
+    return first, max(first, math.ceil(hi * sfps - _EPS) - 1)
+
+
+def _shown(moment, sfps):
+    """The source frame on screen at *moment* (a frame stays until the next one begins). The
+    moment is taken to 0.1 ms, as the Edit tab seeks its player (srcLocal rounds so)."""
+    return max(0, math.floor(round(moment, 4) * sfps + _EPS))
+
+
+def _runs(clip, u0, u1):
+    """The stretch ``[u0, u1)`` of a clip (seconds into it) as runs in which its source moves
+    one way: ``[(x, y, s0, s1, backwards)]`` - one for a plain clip, one per turn of a loop."""
+    speed = _speed(clip)
+    mode, span = _loop(clip)
+    start = float(clip.get("in") or 0)
+    if not mode:
+        return [(u0, u1, start + u0 * speed, start + u1 * speed, False)]
+    turn = span / speed
+    out, x = [], u0
+    while x < u1 - _EPS and len(out) < 1000:
+        k = math.floor(x / turn + 1e-9)
+        y = min(u1, (k + 1) * turn)
+        p, q = (x - k * turn) * speed, (y - k * turn) * speed
+        if mode == "pingpong" and k % 2 == 1:
+            out.append((x, y, start + span - p, start + span - q, True))
+        else:
+            out.append((x, y, start + p, start + q, False))
+        x = y
+    return out
+
+
+def _clip_label(clip):
+    if isinstance(clip.get("title"), dict):
+        words = str(clip["title"].get("text") or "").strip().splitlines()
+        return 'title "' + (words[0][:60] if words else "") + '"'
+    return str(clip.get("name") or os.path.basename(str(clip.get("file") or "")))[:80]
+
+
+def _picture_layers(edit):
+    """``[(rank, track id, number from 1, clip, film moment it begins)]`` of every clip that can
+    be seen: V1 (rank 0) and the video tracks above it, switched-off clips and tracks left out."""
+    layers = []
+    if not (edit.get("off") or {}).get("V1"):
+        for n, (c, at) in enumerate(zip(edit.get("clips") or [], v1_times(edit)), 1):
+            if isinstance(c, dict) and not c.get("disabled"):
+                layers.append((0, "V1", n, c, at))
+    rank = 0
+    for t in edit.get("tracks") or []:
+        if not isinstance(t, dict) or t.get("kind") == "audio":
+            continue
+        rank += 1                       # later video tracks lie higher (pictureAt)
+        if t.get("off"):
+            continue
+        for n, c in enumerate(t.get("clips") or [], 1):
+            if isinstance(c, dict) and not c.get("disabled"):
+                layers.append((rank, str(t.get("id") or t.get("name") or "V?"), n, c, float(c.get("at") or 0)))
+    return layers
+
+
+def source_map(edit, start, end, src_fps=None):
+    """What a marked range of the cut is in the sources.
+
+    *edit* is the cut as the Edit panel works on it (:func:`editable`); *start* / *end* are
+    film frames of its timeline, both included (the viewer's in and out marks). Answers
+    ``{"start", "end", "frames", "fps", "start_s", "end_s", "pieces"}`` with one piece for
+    every clip of a picture track the range touches (V1 and the video tracks above it):
+
+    ``track``, ``clip`` (numbered from 1 per track, as edit_cut does), ``name``, ``file``;
+    ``rec_in`` / ``rec_out`` (the film frames of the range on this clip, both included),
+    ``rec_frames``, ``rec_in_s`` / ``rec_out_s`` (film seconds, the out exclusive),
+    ``whole_clip``, ``fps`` (the cut's); ``src_fps`` (the file's), ``src_fps_known``;
+    ``src_in`` / ``src_out`` (the frames of the FILE the stretch runs over, both included,
+    0 = its first frame), ``src_frames``, ``src_in_s`` / ``src_out_s`` / ``src_seconds`` (the
+    same stretch in seconds of the file: a trim takes ``src_seconds`` from ``src_in_s``);
+    ``src_first_shown`` / ``src_last_shown`` (the file's frames on screen at the range's first
+    and last film frame); ``speed``. A looped clip adds ``loop`` and ``runs`` - one per turn
+    (``rec_in, rec_out, src_in, src_out, src_in_s, src_out_s, backwards``), the top-level
+    src_* spanning them all. A piece under a clip of a higher track has ``covered_by``. A
+    still has ``still: true`` and no source frames, a title ``title: true``.
+
+    *src_fps*: ``{file: frames per second}`` of the sources (the route probes them); a file
+    not in it is taken at the cut's rate, ``src_fps_known: false``.
+    """
+    fps = float(edit.get("fps") or 24.0) or 24.0
+    src_fps = src_fps or {}
+    a, b = sorted((int(start), int(end)))
+    total = max(1, int(round(edit_length(edit) * fps)))
+    a, b = max(0, a), min(b, total - 1)
+    out = {"start": a, "end": b, "frames": max(0, b - a + 1), "fps": fps,
+           "start_s": round(a / fps, 4), "end_s": round((b + 1) / fps, 4), "pieces": []}
+    if b < a:
+        return out
+    hits = []
+    for rank, tid, n, c, at in _picture_layers(edit):
+        length = float(c.get("length") or 0)
+        f0, f1 = _film_frames(at, at + length, fps)
+        lo, hi = max(a, f0), min(b, f1)
+        if lo <= hi:
+            hits.append({"rank": rank, "id": f"{tid}:{n}", "track": tid, "n": n, "clip": c, "at": at,
+                         "length": length, "f0": f0, "f1": f1, "lo": lo, "hi": hi})
+    for h in hits:
+        c, at, lo, hi = h["clip"], h["at"], h["lo"], h["hi"]
+        piece = {"track": h["track"], "clip": h["n"], "name": _clip_label(c), "file": str(c.get("file") or ""),
+                 "rec_in": lo, "rec_out": hi, "rec_frames": hi - lo + 1,
+                 "rec_in_s": round(lo / fps, 4), "rec_out_s": round((hi + 1) / fps, 4),
+                 "whole_clip": lo == h["f0"] and hi == h["f1"], "fps": fps}
+        over = [o["id"] for o in hits if o["rank"] > h["rank"] and o["clip"].get("title") is None
+                and o["lo"] <= hi and o["hi"] >= lo]
+        if over:
+            piece["covered_by"] = over
+        if c.get("title") is not None:
+            piece["title"] = True
+        elif _still_clip(c):
+            piece["still"] = True
+        else:
+            sfps = float(src_fps.get(piece["file"]) or 0)
+            known = sfps > 0
+            sfps = sfps if known else fps
+            u0 = max(0.0, lo / fps - at)
+            u1 = min(h["length"], (hi + 1) / fps - at)
+            runs = []
+            for x, y, s0, s1, back in _runs(c, u0, u1):
+                i0, i1 = _src_frames(s0, s1, sfps)
+                r0, r1 = _film_frames(at + x, at + y, fps)
+                runs.append({"rec_in": max(lo, r0), "rec_out": min(hi, r1), "src_in": i0, "src_out": i1,
+                             "src_in_s": round(min(s0, s1), 4), "src_out_s": round(max(s0, s1), 4),
+                             "backwards": back})
+            s_lo, s_hi = min(r["src_in_s"] for r in runs), max(r["src_out_s"] for r in runs)
+            i_lo, i_hi = min(r["src_in"] for r in runs), max(r["src_out"] for r in runs)
+            piece.update({"src_fps": round(sfps, 4), "src_fps_known": known,
+                          "src_in": i_lo, "src_out": i_hi, "src_frames": i_hi - i_lo + 1,
+                          "src_in_s": s_lo, "src_out_s": s_hi, "src_seconds": round(s_hi - s_lo, 4),
+                          "src_first_shown": _shown(source_moment(c, (lo + 0.5) / fps - at), sfps),
+                          "src_last_shown": _shown(source_moment(c, (hi + 0.5) / fps - at), sfps),
+                          "speed": _speed(c)})
+            mode, _turn = _loop(c)
+            if mode:
+                piece["loop"] = mode
+                piece["runs"] = runs
+        out["pieces"].append(piece)
+    return out

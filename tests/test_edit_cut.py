@@ -202,6 +202,21 @@ class CutRoute(unittest.TestCase):
         self.assertEqual(payload["edit"], ans["edit"])
         self.assertFalse(os.path.exists(self.otio + ".tmp"))
 
+    def test_a_marked_range_comes_back_in_the_sources(self):
+        # The in/out marks (film frames) as source frames of the file (timeline_io.source_map). The
+        # stand-in file cannot be probed, so the cut's rate is taken and that is said.
+        status, ans = self.post({"otio": self.otio, "range": {"start": 48, "end": 71}})
+        self.assertEqual(status, 200, ans)
+        m = ans["marked"]
+        self.assertEqual((m["start"], m["end"], m["frames"]), (48, 71, 24))
+        (p,) = m["pieces"]
+        self.assertEqual((p["track"], p["clip"], p["file"]), ("V1", 1, self.s1))
+        self.assertEqual((p["src_in"], p["src_out"], p["src_in_s"], p["src_seconds"]), (48, 71, 2.0, 1.0))
+        self.assertFalse(p["src_fps_known"])
+        self.assertNotIn("marked", self.post({"otio": self.otio})[1])
+        status, ans = self.post({"otio": self.otio, "range": {"start": "x"}})
+        self.assertEqual(status, 400, ans)
+
     def test_refusals(self):
         stray = _touch(self.outside, "stray.mp3")
         other = os.path.join(self.outside, "cut.otio")

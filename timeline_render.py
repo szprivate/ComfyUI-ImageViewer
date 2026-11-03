@@ -155,21 +155,10 @@ def _pictures_at(path, times, w, h):
             made += 1
 
 
-def source_moment(clip, u):
-    """The moment of *clip*'s source shown *u* seconds into it: at its speed,
-    and through its loop (``loop``: from the in point again, ``pingpong``: back
-    and forth) - the Edit tab's ``srcLocal``."""
-    speed = float(clip.get("speed") or 1.0)
-    q = max(0.0, u) * (speed if speed > 0 else 1.0)
-    start = float(clip["in"])
-    span = float(clip.get("span") or 0)
-    loop = clip.get("loop") if span > 0 else ""
-    if loop == "loop":
-        q = q % span
-    elif loop == "pingpong":
-        p = q % (2 * span)
-        q = p if p < span else 2 * span - p
-    return start + q
+#: The moment of a clip's source shown u seconds into it, at its speed and through
+#: its loop - the Edit tab's ``srcLocal``. One function for the render and for a
+#: marked range's source frames (timeline_io.source_map).
+source_moment = timeline_io.source_moment
 
 
 def clip_frames(clip, done, count, w, h, fps):

@@ -979,14 +979,39 @@ try:
                                                  status=400)
                     op["file"] = path.replace("\\", "/")
                     files.append(op["file"])
+            marked = body.get("range")
+            if marked is not None:
+                try:
+                    marked = (int(marked["start"]), int(marked["end"]))
+                except (TypeError, KeyError, ValueError):
+                    return web.json_response({"ok": False, "error": "'range' is {\"start\": frame, \"end\": frame} "
+                                              "(film frames of the cut, both included)"}, status=400)
             import datetime
             stamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+            def _sources(edit):
+                """The marked range in the sources (timeline_io.source_map), at each file's own frame rate."""
+                first = timeline_io.source_map(edit, *marked)
+                rates = {}
+                for p in first["pieces"]:
+                    f = p.get("file") or ""
+                    if f and "src_fps" in p and f not in rates:
+                        rates[f] = 0.0
+                        try:
+                            path = os.path.abspath(f)
+                            if path_access.may_serve(path) and os.path.isfile(path):
+                                from . import timeline_media
+                                rates[f] = float(timeline_media.probe(path).get("fps") or 0)
+                        except Exception:  # noqa: BLE001 - unreadable: the cut's rate is taken, and said
+                            pass
+                return timeline_io.source_map(edit, *marked, src_fps=rates)
 
             def _work():
                 if not os.path.isfile(otio):
                     raise FileNotFoundError(f"{os.path.basename(otio)} does not exist")
                 if not ops:
-                    return timeline_io.read_editable(otio), []
+                    edit = timeline_io.read_editable(otio)
+                    return edit, [], (_sources(edit) if marked else None)
                 durations = {}
                 for f in files:
                     try:
@@ -994,9 +1019,10 @@ try:
                         durations[f] = float(timeline_media.probe(f).get("duration") or 0)
                     except Exception:  # noqa: BLE001 - PyAV missing or unreadable: the op must give 'length'
                         pass
-                return timeline_io.change(otio, ops, stamp, path_access.is_allowed, durations)
+                edit, said = timeline_io.change(otio, ops, stamp, path_access.is_allowed, durations)
+                return edit, said, (_sources(edit) if marked else None)
             try:
-                edit, said = await asyncio.get_running_loop().run_in_executor(None, _work)
+                edit, said, sources = await asyncio.get_running_loop().run_in_executor(None, _work)
             except FileNotFoundError as exc:
                 return web.json_response({"ok": False, "error": str(exc)}, status=404)
             except ValueError as exc:
@@ -1005,6 +1031,8 @@ try:
                 return web.json_response({"ok": False, "error": f"not saved: {exc}"}, status=500)
             out = {"ok": True, "otio": otio, "edit": edit, "length": round(timeline_io.edit_length(edit), 4),
                    "saved": bool(ops), "said": said, "pushed": False}
+            if sources is not None:
+                out["marked"] = sources
             if ops:
                 try:
                     PromptServer.instance.send_sync("bepic.edit.changed", {
