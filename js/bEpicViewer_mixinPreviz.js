@@ -1163,6 +1163,7 @@ export const PrevizMixin = {
             const b = doc.createElement("button");
             b.className = "previz-menu-item";
             b.textContent = e.label;
+            if (e.title) b.title = e.title;
             b.disabled = !!e.disabled;
             b.onclick = () => { this._previzCloseAddMenu(); e.run(); };
             menu.append(b);

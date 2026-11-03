@@ -116,3 +116,21 @@ def split_pushed(raw_paths, *, is_allowed, is_scene, dataset_of=None):
         else:
             rest.append(raw)
     return motion, lora, rest
+
+
+def split_lone_cuts(raw_paths, *, is_allowed, may_serve, video_exts):
+    """(cuts, rest): the ``.otio`` files that open the Edit panel by themselves.
+
+    A cut with a film rendered beside it stands for that film (``expand``); a cut with NO film
+    beside it has nothing to show in a media tab, so it is opened as a cut: its tab and the Edit
+    panel. Only inside the allowed folders (``is_allowed``) and only a file that exists; any other
+    ``.otio`` stays in ``rest`` (the caller reports it as refused)."""
+    cuts, rest = [], []
+    for raw in raw_paths:
+        if isinstance(raw, str) and raw.lower().endswith(".otio"):
+            p = os.path.abspath(raw)
+            if is_allowed(p) and os.path.isfile(p) and not _film_beside(p, video_exts, may_serve):
+                cuts.append(p)
+                continue
+        rest.append(raw)
+    return cuts, rest

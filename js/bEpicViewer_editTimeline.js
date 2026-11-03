@@ -399,6 +399,7 @@ export const EditTimelineMixin = {
         this._editTlCut = data.edit;
         this._editTlFile = data.file || "";
         if (data.otio) this._editTlOtio = data.otio;
+        this._editTlRecentAdd(data.otio || data.path);
         this._editTlSel = null;
         this._editTlNote = "";
     },
@@ -454,6 +455,11 @@ export const EditTimelineMixin = {
         const add = icon("icon-circle-plus", "+", "Add clips (files, or the nodes selected on the canvas) or a track",
                          (b) => this._editTlAddMenu(b));
         const out = icon("icon-save", "\u2193", "Save this cut, or export it as a film", (b) => this._editTlOutMenu(b));
+        const opener = icon("icon-folder-open", "\u2191", "Open cut\u2026 (Ctrl+O)", () => this.editTlOpenDialog());
+        opener.classList.add("edit-open");
+        const recent = el("button", "previz-btn previz-icon edit-open-recent", "\u25be");
+        recent.title = "Open recent";
+        recent.addEventListener("click", () => this.editTlOpenMenu(recent));
         const sub = el("div", "curves-sub edit-sub");
         const badge = el("div", "edit-badge");
         const button = (label, title, fn) => {
@@ -507,7 +513,7 @@ export const EditTimelineMixin = {
         const scrubAudio = button("", "Audio scrubbing on / off (Shift+M)", () => this.editAudioToggle("scrub"));
         scrubAudio.classList.add("edit-scrubaudio-btn");
         setEditIcon(scrubAudio, "scrub");
-        bar.append(fresh, add, out, pick, trimBtn, blade, snap, beats, split, undo, redo, auto, cuts, take, sub, badge,
+        bar.append(fresh, add, out, opener, recent, pick, trimBtn, blade, snap, beats, split, undo, redo, auto, cuts, take, sub, badge,
                    audio, scrubAudio, zoomOut, zoomIn, zoomFit);
 
         // The tracks: their headers in a column that stays, the tracks beside it
@@ -659,6 +665,7 @@ export const EditTimelineMixin = {
             const at = raw == null ? null : this._editTlSnap(raw, track);
             this._editTlDropMark(null);
             this._editTlSnapLine(null);
+            if (what === "os" && this.editTlDropHasCut(e.dataTransfer.files)) { this.editTlOpenDropped(e.dataTransfer.files); return; }
             if (what === "os") { this._editTlAdd(this._editTlOsItems(e.dataTransfer.files), at, track, room); return; }
             if (what === "uri") { this._editTlAdd(this._editTlUriItems(e.dataTransfer), at, track, room); return; }
             let payload = null;
@@ -2640,7 +2647,8 @@ export const EditTimelineMixin = {
         this._previzOpenMenu([
             { label: "Save cut (Ctrl+S)", disabled: !dirty, run: () => this._editTlSave() },
             { label: "Save cut as\u2026 (Ctrl+Shift+S)", disabled: !has, run: () => this.editTlSaveAsDialog() },
-            { label: "Open cut\u2026", run: () => this.editTlOpenDialog() },
+            { label: "Open cut\u2026 (Ctrl+O)", run: () => this.editTlOpenDialog() },
+            { label: "Open recent\u2026", run: () => this.editTlOpenMenu(anchor, false) },
             { label: "Revert to saved", disabled: !dirty || !this._editTlSaved, run: () => this._editTlRevert() },
             "-",
             { label: "Export film\u2026", disabled: !has, run: () => this._editTlRender() },
@@ -2909,23 +2917,16 @@ export const EditTimelineMixin = {
         name.select();
     },
 
-    /** Open cut...: pick a saved .otio. */
-    editTlOpenDialog() {
-        return this._editTlPicker({
-            id: "cut", title: "Open cut", kind: "edit", exts: [".otio"], go: "Open",
-            note: "A cut opens in a tab of its own. Where it was saved is in the Inspector's Timeline section.",
-            onPick: async ([f]) => ((await this.editTlOpenPath(f.path)) ? { ok: true } : { ok: false, message: "That timeline could not be read." }),
-        });
-    },
-
     /** A saved cut, by its file: its tab if it is open, else a new one. */
     async editTlOpenPath(path) {
         this._editTlStash();
         const norm = (p) => String(p || "").replace(/\\/g, "/").toLowerCase();
         const all = this._editTlAll();
         const open = Object.keys(all).find((k) => this.allTabs[k] && norm((all[k] && all[k].otio) || (all[k] && all[k].target && all[k].target.path)) === norm(path));
-        if (open) { this._editTlWant(DOCK_ID, true); this.switchTab(open); return true; }
-        return this.editTlOpenCutOf({ path, external: 1 });
+        if (open) { this._editTlWant(DOCK_ID, true); this.switchTab(open); this._editTlRecentAdd(path); return true; }
+        const ok = await this.editTlOpenCutOf({ path, external: 1 });
+        if (ok) this._editTlRecentAdd(path);
+        return ok;
     },
 
     // Export the cut as a film, rendered in the viewer. What is rendered is the

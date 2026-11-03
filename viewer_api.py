@@ -1095,7 +1095,9 @@ try:
             return web.json_response({"paths": await _off_loop(find, items)})
 
         async def _bepic_timeline_upload(request):
-            """A file dropped onto the Edit panel from the desktop, kept in ``<input>/edits``.
+            """A file dropped onto the Edit panel from the desktop, kept in ``<input>/edits``
+            (a dropped ``.otio`` cut: in ``<input>/edits/cuts``, opened as a cut, never reusing a
+            file of that name unless its bytes are the same).
 
             A cut holds paths, and a file dropped from the explorer arrives as its
             bytes only. Pictures, films and sound only (``is_media``), under their
@@ -1113,24 +1115,30 @@ try:
             if field is None or not field.filename:
                 return web.Response(status=400, text="no file in the upload")
             name = timeline_media.upload_name(field.filename)
-            if not path_access.is_media(name):
-                return web.Response(status=415, text=f"{name} is not a picture, film or sound")
+            is_cut = name.lower().endswith(".otio")        # a cut dropped from the desktop: opened as a cut
+            if not is_cut and not path_access.is_media(name):
+                return web.Response(status=415, text=f"{name} is not a picture, film, sound or cut (.otio)")
             try:
                 base = folder_paths.get_input_directory()
             except Exception:
                 base = None
             if not base:
                 return web.Response(status=500, text="ComfyUI has no input folder")
-            folder = os.path.join(base, "edits")
+            folder = os.path.join(base, "edits", "cuts") if is_cut else os.path.join(base, "edits")
             data = bytearray()
             while True:
                 chunk = await field.read_chunk(1 << 20)
                 if not chunk:
                     break
                 data.extend(chunk)
+                if is_cut and len(data) > (64 << 20):
+                    return web.Response(status=413, text="that cut file is too large")
 
             def _keep():
-                path, there = timeline_media.place_upload(folder, name, len(data))
+                if is_cut:
+                    path, there = timeline_media.place_cut_upload(folder, name, data)
+                else:
+                    path, there = timeline_media.place_upload(folder, name, len(data))
                 if not there:
                     tmp = path + ".part"
                     with open(tmp, "wb") as fh:
@@ -1695,7 +1703,8 @@ try:
 
             A path may also be a folder, an image sequence (``f_%04d.png``,
             ``f_####.png``, ``f_*.png``) or an ``.otio`` (the film beside it, see
-            push_open). Optional: ``focus`` (bring the viewer up and select the
+            push_open; one with no film beside it is opened as a cut in the Edit panel,
+            answered as ``cuts``). Optional: ``focus`` (bring the viewer up and select the
             first item), ``play`` (start it), ``panel: "edit"`` (open the Edit
             panel on the cut beside the first film that has one). They ride on the
             same message as ``open``; the page does the rest.
@@ -1719,8 +1728,11 @@ try:
                 data["paths"], is_allowed=path_access.is_allowed,
                 is_scene=lambda r: mg_scene_io is not None and mg_scene_io.is_scene_path(r),
                 dataset_of=(lambda r: lora_io is not None and lora_io.dataset_name_of_path(r, folder_paths.get_output_directory())))
-            data["paths"] = rest
             image_exts, video_exts = _browse_exts()
+            # An .otio with no film beside it is a cut to open, not media to show: its tab and the Edit panel.
+            cuts_open, rest = push_open.split_lone_cuts(
+                rest, is_allowed=path_access.is_allowed, may_serve=path_access.may_serve, video_exts=video_exts)
+            data["paths"] = rest
             files, refused, cuts = push_open.expand(
                 data["paths"], image_exts, video_exts,
                 may_serve=path_access.may_serve, is_allowed=path_access.is_allowed,
@@ -1777,7 +1789,10 @@ try:
                 PromptServer.instance.send_sync("bepic.mg.open", {"path": p})
             for p in lora:
                 PromptServer.instance.send_sync("bepic.lora.open", {"path": p})
-            return web.json_response({"ok": True, "shown": len(frames), "motion": motion, "lora": lora, "refused": refused,
+            for p in cuts_open:
+                PromptServer.instance.send_sync("bepic.edit.open", {"path": p})
+            return web.json_response({"ok": True, "shown": len(frames), "motion": motion, "lora": lora, "cuts": cuts_open,
+                                      "refused": refused,
                                       "opened": bool(opened), "edit": bool(opened and opened.get("panel")),
                                       "notes": notes})
 

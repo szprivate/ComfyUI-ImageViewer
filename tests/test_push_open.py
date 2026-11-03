@@ -56,6 +56,24 @@ class ExpandTests(unittest.TestCase):
         self.assertEqual(len(files), 2)
 
 
+class LoneCutTests(unittest.TestCase):
+    def test_only_a_cut_with_no_film_beside_it_is_opened_as_a_cut(self):
+        d = tempfile.mkdtemp()
+        for n in ("cut.mp4", "cut.otio", "lone.otio", "x.png"):
+            open(os.path.join(d, n), "w").close()
+        allow = lambda p: os.path.abspath(p).startswith(os.path.abspath(d))
+        serve = lambda p: allow(p) and os.path.splitext(p)[1].lower() in IMG | VID
+        raw = [os.path.join(d, n) for n in ("cut.otio", "lone.otio", "gone.otio", "x.png")]
+        cuts, rest = po.split_lone_cuts(raw, is_allowed=allow, may_serve=serve, video_exts=VID)
+        self.assertEqual(cuts, [os.path.join(d, "lone.otio")])
+        self.assertEqual(rest, [raw[0], raw[2], raw[3]])
+        outside = tempfile.mkdtemp()
+        away = os.path.join(outside, "a.otio")
+        open(away, "w").close()
+        cuts, rest = po.split_lone_cuts([away], is_allowed=allow, may_serve=serve, video_exts=VID)
+        self.assertEqual((cuts, rest), ([], [away]))
+
+
 class SplitPushedTests(unittest.TestCase):
     """A pushed .mgscene.json must open the Motion editor: it was refused because the check was may_serve (media only)."""
 

@@ -724,3 +724,23 @@ def place_upload(folder, name, size):
         cand = os.path.join(folder, f"{stem}_{k}{ext}")
         k += 1
     return cand, False
+
+
+def place_cut_upload(folder, name, data):
+    """``(path, exists)``: where a dropped ``.otio`` of *name* goes in *folder*. Unlike a film, a cut
+    is only the same file when its BYTES are the same (two cuts can be the same size): a file of that
+    name with other content stays, and the new one is ``name_1.otio``, ``name_2.otio`` ..."""
+    os.makedirs(folder, exist_ok=True)
+    stem, ext = os.path.splitext(name)
+    cand = os.path.join(folder, name)
+    k = 1
+    while os.path.exists(cand):
+        try:
+            with open(cand, "rb") as fh:
+                if fh.read() == bytes(data):
+                    return cand, True
+        except OSError:
+            pass
+        cand = os.path.join(folder, f"{stem}_{k}{ext}")
+        k += 1
+    return cand, False

@@ -52,6 +52,7 @@ import { EditTrimMixin } from "./bEpicViewer_editTrim.js";
 import { EditAudioMixin } from "./bEpicViewer_editAudio.js";
 import { EditTwoUpMixin } from "./bEpicViewer_editTwoUp.js";
 import { EditPasteMixin } from "./bEpicViewer_editPaste.js";
+import { EditOpenMixin } from "./bEpicViewer_editOpen.js";
 import { EditDialogsMixin } from "./bEpicViewer_editDialogs.js";
 import { EditXfadeMixin } from "./bEpicViewer_editXfade.js";
 import { EditVolLineMixin } from "./bEpicViewer_editVolLine.js";
@@ -181,6 +182,7 @@ const ICON_MAP = {
     'rotate-btn':        'icon-rotate-slider',
     'close-panel-btn':   'icon-close',
     'undock-btn':        'icon-undock',
+    'open-cut-btn':      'icon-folder-open',
     'layout-btn':        'icon-layout',
     'history-toggle-btn':'icon-history',
     'params-btn':        'icon-params',
@@ -857,6 +859,19 @@ class ViewerPanel extends HTMLElement {
         }
         this.undockBtn.onclick = () => this.toggleUndock();
 
+        // Open cut..., with no cut tab and no Edit panel up (bEpicViewer_editOpen.js). Made here, not in
+        // the markup, like the buttons below.
+        this.openCutBtn = sr.getElementById('open-cut-btn');
+        if (!this.openCutBtn) {
+            this.openCutBtn           = document.createElement("button");
+            this.openCutBtn.id        = "open-cut-btn";
+            this.openCutBtn.className = "sprite-icon";
+            this.openCutBtn.title     = "Open cut… (a saved .otio, in the Edit panel)";
+            this.undockBtn.parentNode.insertBefore(this.openCutBtn, this.undockBtn);
+        }
+        this._setIcon(this.openCutBtn, 'icon-folder-open');
+        this.openCutBtn.onclick = () => this.editTlOpenMenu(this.openCutBtn);
+
         // Dock to the page / float (bEpicViewer_mixinPageDock.js). Made here, not
         // in the markup, like the buttons below: a cached copy of the markup from
         // before it existed would otherwise simply not have it.
@@ -1388,6 +1403,7 @@ Object.assign(
     EditTwoUpMixin,
     EditPasteMixin,
     EditDialogsMixin,
+    EditOpenMixin,
     EditXfadeMixin,
     EditVolLineMixin,
     EditSectionsMixin,
@@ -1576,6 +1592,15 @@ app.registerExtension({
                 try { if (bridge.show) bridge.show(); } catch (_) { /* already up */ }
                 if (e.detail && e.detail.path) globalViewerPanel?.loraOpen?.(e.detail.path);
             } catch (err) { console.warn("bEpicViewer: lora dataset not opened", err); }
+        });
+
+        // An agent opened a cut with no film beside it (POST /bepic/push with an .otio): its tab and the Edit panel.
+        api.addEventListener("bepic.edit.open", (e) => {
+            try {
+                const bridge = window.bEpicViewerApi || {};
+                try { if (bridge.show) bridge.show(); } catch (_) { /* already up */ }
+                if (e.detail && e.detail.path) globalViewerPanel?.editTlOpenPath?.(e.detail.path);
+            } catch (err) { console.warn("bEpicViewer: cut not opened", err); }
         });
 
         api.addEventListener("bepic.viewer.update", (e) => {

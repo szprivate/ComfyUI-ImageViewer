@@ -151,6 +151,9 @@ window.__fetchApi = async (path, opts = {}) => {
       window.__onDisk[full] = true;
       return json({ edit: { name: name.slice(0, -5), fps: 24, clips, texts: [], sound: [], tracks: [], off: body.edit.off }, file: name, otio: full, path: full, target: { path: full, external: 1 }, duration: 0 });
     }
+    // The paths window.__gone names are missing (Open recent greys them).
+    case "/bepic/probe_paths":
+      return json({ unreachable: JSON.parse(opts.body).paths.filter((q) => (window.__gone || []).includes(q.path)).map((q) => ({ path: q.path, reason: "gone" })) });
     case "/bepic/browse":
       return json({ path: "D:/out", parent: null, dirs: [], files: [{ name: "saved.otio", path: "D:/out/saved.otio", ext: ".otio", kind: "cut", size: 10, mtime: 1 }], roots: [] });
     case "/bepic/timeline": {

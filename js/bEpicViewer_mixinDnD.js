@@ -83,6 +83,13 @@ export const DnDMixin = {
 
             if (hasFiles(e)) {
                 const files = Array.from(e.dataTransfer.files || []);
+                // A cut (.otio) is opened as a cut, never filed as a picture.
+                if (this.editTlDropHasCut && this.editTlDropHasCut(files)) {
+                    this.editTlOpenDropped(files);
+                    const rest = files.filter((f) => !/\.otio$/i.test(f.name || ""));
+                    if (rest.length) this._addDroppedFiles(rest);
+                    return;
+                }
                 // Dropped onto a cut that is playing, they are clips for it (copied into input/edits).
                 if (files.length && this.isEditTab && this.isEditTab() && this._editTlAdd) {
                     this._editTlAdd(this._editTlOsItems(files), null);

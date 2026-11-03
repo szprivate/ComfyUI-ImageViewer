@@ -34,6 +34,7 @@
 //   Ctrl+Shift+M audio playback on / off (all of the cut's sound, playing and scrubbing)
 //   Shift+M      audio scrubbing on / off (dragging the playhead or jogging plays grains of the sound)
 //
+//   Ctrl+O       Open cut...
 //   ?            Show Hotkeys: the viewer's overlay lists these (EDIT_KEYS) while a cut's tab is up
 //
 // They act only while the timeline has the focus - a press in it gives it the
@@ -68,6 +69,7 @@ export const EDIT_KEYS = [
     ["Keyframe marks on the selected clip", "Drag along the clip to move a key (snaps to frames and the playhead); click + Del takes it away; right-click: linear / ease in / ease out / ease in-out / hold"],
     ["D", "Disable / enable the selected clips (and their linked sound or picture): dimmed, not seen, not heard, not rendered - the track under shows"],
     ["Ctrl+Alt+L", "Unlink a film's sound onto a sound track / relink it, from either part (the offset stays; right-click: Resync, Merge audio back into clip)"],
+    ["Ctrl+O", "Open cut\u2026: pick a saved .otio (the Open button on the bar too, its \u25be lists the recent cuts)"],
     ["Ctrl+S", "Save the cut: the bar then says where it went"],
     ["Ctrl+Shift+S", "Save cut as\u2026: another name or folder, and the tab goes on with that file"],
     ["Ctrl+Shift+drag", "Insert a clip into the order (what follows moves); a plain drag overwrites and leaves a gap"],
@@ -149,6 +151,7 @@ export const EditKeysMixin = {
         else if (ctrl && letter === "c" && !shift) this.editTlCopy();
         else if (ctrl && low === "b") this.editTlSplitAtPlayhead();
         else if (ctrl && shift && letter === "m") this.editAudioToggle("play");
+        else if (ctrl && letter === "o" && !shift) this.editTlOpenDialog();
         else if (ctrl && letter === "s") {
             if (shift) this.editTlSaveAsDialog();
             else if (this._editTlDirty()) this._editTlSave();
