@@ -1195,6 +1195,9 @@ export const EditTimelineMixin = {
         if (sel.kind === "sound") {
             const s = this._editTlCut.sound[sel.i] || {};
             this._previzOpenMenu([
+                { label: "Copy (Ctrl+C)", run: () => this.editTlCopy(sel) },
+                { label: "Paste Attributes… (Alt+V)", disabled: !this._editTlClipboard, run: () => this.editTlPasteDialog() },
+                "-",
                 { label: (s.fadeIn ? "No fade in" : "Fade in, 1 s"), run: () => this._editTlApply(D.setFade(this._editTlCut, sel, "in", s.fadeIn ? 0 : 1)) },
                 { label: (s.fadeOut ? "No fade out" : "Fade out, 1 s"), run: () => this._editTlApply(D.setFade(this._editTlCut, sel, "out", s.fadeOut ? 0 : 1)) },
                 "-",

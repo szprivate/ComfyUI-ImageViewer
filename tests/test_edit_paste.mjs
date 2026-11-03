@@ -85,3 +85,28 @@ test("speed, name, colour and a text's look", () => {
     assert.equal(got.texts[1].color, "#00ff00");
     assert.equal(got.texts[1].text, "two");
 });
+
+test("the bed: fades and the bed's effects go, no volume; fades go to sound clips and back", () => {
+    const fx = [{ type: "gain", p: { gain: -3 } }];
+    const cut = { ...cutOf(), sound: [{ name: "m", file: "m.wav", fadeIn: 1.5 }, { name: "n", file: "n.wav" }], afx: { A1: fx } };
+    const bed = { kind: "sound", i: 0 }, bed2 = { kind: "sound", i: 1 };
+    const src = D.pasteSource(cut, bed);
+    assert.ok(src && src.caps.bed);
+    let o = D.pasteOffer(cut, src, [bed2]);
+    assert.equal(o.volume.source, false);
+    assert.equal(o.volume.targets, false);
+    assert.equal(o.opacity.targets, false);
+    assert.equal(o.fades.source && o.fades.targets, true);
+    assert.equal(o.afx.source && o.afx.targets, true);
+    let next = D.pasteAttributes(cut, src, [bed2], { fades: true, afx: true });
+    assert.equal(next.sound[1].fadeIn, 1.5);
+    assert.equal(D.trackAfx(next, "A1")[0].p.gain, -3);
+    // onto a sound clip of A2, and a sound clip's fades and volume onto the bed (volume stays off)
+    const a2 = { kind: "tclip", track: "A2", i: 0 };
+    next = D.pasteAttributes(cut, src, [a2], { fades: true, afx: true, volume: true });
+    assert.equal(next.tracks[0].clips[0].fadeIn, 1.5);
+    assert.equal(next.tracks[0].clips[0].afx[0].p.gain, -3);
+    assert.equal(next.tracks[0].clips[0].volume, 1, "the bed has no volume to give");
+    const back = D.pasteAttributes(next, D.pasteSource(next, a2), [bed2], { fades: true, volume: true });
+    assert.equal(back.sound[1].fadeIn, 1.5);
+});

@@ -5,7 +5,7 @@
 // clip's own changes and the cut's tab changing). Alt+V (or "Paste
 // Attributes…") opens a small dialog for the selected clips: checkboxes grouped
 // as the Inspector's (Video: zoom, position, anchor, rotation, flip, cropping,
-// opacity; Audio: volume; one "include keyframes" switch; Timing: speed; Clip:
+// opacity; Audio: volume, fades, effects (the bed: fades and its effects); one "include keyframes" switch; Timing: speed; Clip:
 // name, colour; Text: its look), All / None, and Apply. A box is off where the
 // source has no such thing or none of the targets can take it. Apply is ONE
 // step of the undo stack (D.pasteAttributes); the selection stays. The boxes
@@ -44,9 +44,9 @@ export const EditPasteMixin = {
 
     /** The selected items a paste goes to: clips and texts. */
     _editTlPasteTargets() {
-        // Only the clips on tracks whose Auto Track Selector is on and that are not locked (as Resolve's Paste).
+        // Clips and texts, and the clips of the bed; only the clips on tracks whose Auto Track Selector is on and that are not locked (as Resolve's Paste).
         const mask = this._editTlCut ? D.editMask(this._editTlCut) : null;
-        return this._editTlSelAll().filter((s) => (D.isClipSel(s) || s.kind === "text") && (!mask || mask.has(D.selTrack(s))));
+        return this._editTlSelAll().filter((s) => (D.isClipSel(s) || s.kind === "text" || s.kind === "sound") && (!mask || mask.has(D.selTrack(s))));
     },
 
     /** Alt+V: the Paste Attributes dialog, for the selected clips. */

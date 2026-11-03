@@ -3713,6 +3713,7 @@ export const PASTE_ATTRS = [
     { id: "crop", group: "video", label: "Cropping", params: ["cl", "cr", "ct", "cb"], off: "coff" },
     { id: "opacity", group: "video", label: "Opacity", params: ["op"], off: "ooff" },
     { id: "volume", group: "audio", label: "Volume", params: ["vol"] },
+    { id: "fades", group: "audio", label: "Fade in / out" },
     { id: "afx", group: "afx", label: "Audio effects (the whole chain, in place of the target's)" },
     { id: "keys", group: "keys", label: "Include keyframes" },
     { id: "speed", group: "timing", label: "Speed" },
@@ -3722,9 +3723,11 @@ export const PASTE_ATTRS = [
 ];
 export const PASTE_GROUPS = [["video", "Video"], ["audio", "Audio"], ["afx", "Audio FX"], ["keys", "Keyframes"], ["timing", "Timing"], ["clip", "Clip"], ["text", "Text"]];
 
-/** What a selected item is, for pasting: { clip, text, picture, sound, timed }. */
+/** What a selected item is, for pasting: { clip, text, picture, sound, timed, bed }. */
 export function pasteCaps(cut, sel) {
     if (sel && sel.kind === "text") return (cut.texts || [])[sel.i] ? { text: true } : null;
+    // A clip of the music bed (A1): its fades, and the bed's effects (the track's chain); no volume, name or colour of its own.
+    if (sel && sel.kind === "sound") return (cut.sound || [])[sel.i] ? { clip: false, picture: false, sound: true, timed: false, bed: true } : null;
     const c = clipOf(cut, sel);
     if (!c) return null;
     const picture = sel.kind === "clip" || (trackOf(cut, sel.track) || {}).kind !== "audio";
@@ -3737,7 +3740,7 @@ export function pasteCaps(cut, sel) {
 export function pasteSource(cut, sel) {
     const caps = pasteCaps(cut, sel);
     if (!caps) return null;
-    const item = sel.kind === "text" ? cut.texts[sel.i] : clipOf(cut, sel);
+    let item = sel.kind === "text" ? cut.texts[sel.i] : sel.kind === "sound" ? { ...cut.sound[sel.i], afx: trackAfx(cut, "A1") } : clipOf(cut, sel);
     return { caps, item: JSON.parse(JSON.stringify(item)),
              name: String(item.name || item.text || (item.title && item.title.text) || String(item.file || "").split(/[\/]/).pop() || "clip").split("\n")[0] };
 }
@@ -3748,11 +3751,12 @@ export function pasteTakes(caps, id) {
     const a = PASTE_ATTRS.find((x) => x.id === id);
     if (!a) return false;
     if (a.group === "video") return !!caps.picture;
+    if (a.id === "volume" && caps.bed) return false;                // the bed has no volume of its own
     if (a.group === "audio" || a.group === "afx") return !!caps.sound;
     if (a.group === "timing") return !!caps.timed;
     if (a.group === "clip") return !!caps.clip;
     if (a.group === "text") return !!caps.text;
-    return !!caps.clip;                                      // keys
+    return !!(caps.clip || caps.bed);                        // keys (the bed's are its effects')
 }
 
 /**
@@ -3795,6 +3799,12 @@ export function pasteAttributes(cut, source, targets, picks) {
         const caps = pasteCaps(next, t);
         if (!caps) continue;
         const want = (id) => !!picks[id] && pasteTakes(source.caps, id) && pasteTakes(caps, id);
+        // A clip of the bed: its fades, and the bed's effects (one chain for the whole track).
+        if (caps.bed) {
+            if (want("fades")) { next = setFade(next, t, "in", num(src.fadeIn)); next = setFade(next, t, "out", num(src.fadeOut)); }
+            if (want("afx")) next = setTrackAfx(next, "A1", cleanAfx(src.afx).map((fx) => (picks.keys ? fx : { ...fx, keys: {} })));
+            continue;
+        }
         if (caps.text && !caps.title) {
             if (want("textlook")) next = setTextLook(next, t.i, src.title ? { ...TEXT_LOOK, size: src.title.size, x: src.title.x, y: src.title.y, color: src.title.color } : textLook(src));
             continue;
@@ -3806,6 +3816,7 @@ export function pasteAttributes(cut, source, targets, picks) {
         }
         // The audio effects: the source's chain in place of the target's (their keys only with "keys").
         if (want("afx")) next = setClipAfx(next, t, cleanAfx(src.afx).map((fx) => (picks.keys ? fx : { ...fx, keys: {} })));
+        if (want("fades")) { next = setFade(next, t, "in", num(src.fadeIn)); next = setFade(next, t, "out", num(src.fadeOut)); }
         // The speed first: it sets the length the keys are held to.
         if (want("speed") && Math.abs(speedOf(clipOf(next, t)) - speedOf(src)) > 1e-9) next = setSpeed(next, t, speedOf(src));
         const props = {};
