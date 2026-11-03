@@ -1612,6 +1612,8 @@ try:
                     kind = "model"
                 elif ext == ".otio":
                     kind = "cut"           # opens in an Edit tab
+                elif ext in (".ora", ".psd"):
+                    kind = "paint"         # a picture in layers: opens in a Paint tab
                 elif viewer_code is not None and ext in viewer_code.TEXT_EXTS:
                     kind = "text"          # shown in the Agent code panel
                 else:
@@ -1706,8 +1708,10 @@ try:
             push_open; one with no film beside it is opened as a cut in the Edit panel,
             answered as ``cuts``). Optional: ``focus`` (bring the viewer up and select the
             first item), ``play`` (start it), ``panel: "edit"`` (open the Edit
-            panel on the cut beside the first film that has one). They ride on the
-            same message as ``open``; the page does the rest.
+            panel on the cut beside the first film that has one), ``panel: "paint"``
+            (the pictures open in Paint tabs). They ride on the same message as
+            ``open``; the page does the rest. An ``.ora`` / ``.psd`` always opens in
+            Paint (``bepic.paint.open``), answered as ``paint``.
             """
             if media_resolve is None:
                 return web.json_response({"error": "media resolver unavailable"}, status=500)
@@ -1732,6 +1736,19 @@ try:
             # An .otio with no film beside it is a cut to open, not media to show: its tab and the Edit panel.
             cuts_open, rest = push_open.split_lone_cuts(
                 rest, is_allowed=path_access.is_allowed, may_serve=path_access.may_serve, video_exts=video_exts)
+            # An .ora / .psd is a picture in layers: it opens in a Paint tab, not as media.
+            paint_open, rest = push_open.split_paint(rest, is_allowed=path_access.is_allowed)
+            if str(data.get("panel") or "").strip().lower() == "paint":
+                # panel "paint": the pictures open in Paint too, each in a tab of its own.
+                keep = []
+                for raw in rest:
+                    p = os.path.abspath(str(raw))
+                    if (os.path.splitext(p)[1].lower() in image_exts and os.path.isfile(p)
+                            and path_access.may_serve(p)):
+                        paint_open.append(p)
+                    else:
+                        keep.append(raw)
+                rest = keep
             data["paths"] = rest
             files, refused, cuts = push_open.expand(
                 data["paths"], image_exts, video_exts,
@@ -1791,7 +1808,10 @@ try:
                 PromptServer.instance.send_sync("bepic.lora.open", {"path": p})
             for p in cuts_open:
                 PromptServer.instance.send_sync("bepic.edit.open", {"path": p})
+            for p in paint_open:
+                PromptServer.instance.send_sync("bepic.paint.open", {"path": p})
             return web.json_response({"ok": True, "shown": len(frames), "motion": motion, "lora": lora, "cuts": cuts_open,
+                                      "paint": paint_open,
                                       "refused": refused,
                                       "opened": bool(opened), "edit": bool(opened and opened.get("panel")),
                                       "notes": notes})
@@ -3126,6 +3146,16 @@ try:
         _safe_add("POST", "/api/bepic/roots", _bepic_roots_save)
         _safe_add("POST", "/bepic/roots/folders", _bepic_roots_folders)
         _safe_add("POST", "/api/bepic/roots/folders", _bepic_roots_folders)
+        # Paint: a picture in layers (paint_routes.py; paint_io / paint_ops / paint_math).
+        try:
+            from . import paint_routes
+            from . import export_rules as _paint_rules
+            paint_routes.register(_safe_add, web=web, path_access=path_access, export_rules=_paint_rules,
+                                  folder_paths=folder_paths,
+                                  send=lambda ev, data: PromptServer.instance.send_sync(ev, data),
+                                  resolve=lambda p: _resolve_raw_path(str(p))[0] if p else None)
+        except Exception as e:  # noqa: BLE001 - the rest of the viewer works without it
+            print(f"[bEpicViewer] Paint routes not registered: {e}")
         for _m, _h in (("GET", _bepic_mgscene), ("POST", _bepic_mgscene_save)):
             _safe_add(_m, "/bepic/mgscene", _h)
             _safe_add(_m, "/api/bepic/mgscene", _h)

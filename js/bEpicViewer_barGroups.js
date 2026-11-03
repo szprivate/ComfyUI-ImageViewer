@@ -24,6 +24,9 @@ const ICONS = {
     // Lucide "clapperboard".
     motion: SVG('<path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z"/>'
               + '<path d="m6.2 5.3 3.1 3.9"/><path d="m12.4 3.4 3.1 4"/><path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>'),
+    // Lucide "paintbrush".
+    paint: SVG('<path d="m14.622 17.897-10.68-2.913"/><path d="M18.376 2.622a1 1 0 1 1 3.002 3.002L17.36 9.643a.5.5 0 0 0 0 .707l.944.944a2.41 2.41 0 0 1 0 3.408l-.944.944a.5.5 0 0 1-.707 0L8.354 7.348a.5.5 0 0 1 0-.707l.944-.944a2.41 2.41 0 0 1 3.408 0l.944.944a.5.5 0 0 0 .707 0z"/>'
+             + '<path d="M9 8c-1.804 2.71-3.97 3.46-6.583 3.948a.507.507 0 0 0-.302.819l7.32 8.883a1 1 0 0 0 1.185.204C12.735 20.405 16 16.792 16 15"/>'),
     timeline: SVG('<rect x="2" y="5" width="9" height="5" rx="1"/><rect x="13" y="5" width="9" height="5" rx="1"/>'
                 + '<rect x="2" y="14" width="5" height="5" rx="1"/><rect x="9" y="14" width="13" height="5" rx="1"/>'),
 };
@@ -49,6 +52,12 @@ const GROUPS = [
         { label: "Open scene\u2026", run: (p) => p.mgBarOpen(), checked: (p) => !!(p.isMotionTab && p.isMotionTab()) },
         { label: "Properties", panel: "motionProps", needs: "motion" },
         { label: "Timeline", panel: "motionTimeline", needs: "motion" },
+    ] },
+    // A picture in layers is a tab (bEpicViewer_paintPanel.js); Layers and Properties are its parts.
+    { id: "paint", title: "Paint", icon: "paint", items: [
+        { label: "Open picture\u2026", run: (p) => p.paintBarOpen(), checked: (p) => !!(p.isPaintTab && p.isPaintTab()) },
+        { label: "Layers", panel: "paintLayers", needs: "paint" },
+        { label: "Properties", panel: "paintProps", needs: "paint" },
     ] },
     { id: "timeline", title: "Timeline", icon: "timeline", items: [
         { label: "Edit", panel: "editTimeline", run: (p) => p.editTlToggle() },
@@ -100,6 +109,7 @@ export const BarGroupsMixin = {
         if (item.needs === "3d") return !!(this.isPrevizTab && this.isPrevizTab());
         if (item.needs === "cut") return !!(this.isEditTab && this.isEditTab());
         if (item.needs === "motion") return !!(this.isMotionTab && this.isMotionTab());
+        if (item.needs === "paint") return !!(this.isPaintTab && this.isPaintTab());
         return true;
     },
 

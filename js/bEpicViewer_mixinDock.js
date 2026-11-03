@@ -73,6 +73,10 @@ const DOCK_PANELS = {
     // still names "motionLayers" is read without it - unknown ids are dropped by _normaliseDockLayout / applyDockData.)
     motionProps: { prop: "motionPropsPanel", label: "Properties", minW: 240, minH: 200, defaultRail: "right", size: 2 },
     motionTimeline: { prop: "motionTimelinePanel", label: "Motion timeline", minW: 360, minH: 160, defaultRail: "bottom" },
+    // Paint (bEpicViewer_paintPanel.js / bEpicViewer_paintEditor.js): a picture is a TAB (the editor covers the main
+    // canvas); these are its other parts, up only with a Paint tab.
+    paintLayers: { prop: "paintLayersPanel", label: "Layers", minW: 220, minH: 180, defaultRail: "right", size: 2 },
+    paintProps: { prop: "paintPropsPanel", label: "Properties", minW: 240, minH: 200, defaultRail: "right", size: 2 },
     // (The drawing tools' options have no panel of their own: while a tool is
     // on they take the Parameters panel over — ToolsMixin._toolShowDock.)
     // The agentY chat panel (bEpicViewer_agentPanel.js): agentY's own panel,
@@ -172,6 +176,8 @@ export const DockMixin = {
                                            { id: "rotoCurves", size: 1, hidden: true },
                                            { id: "paramCurves", size: 1, hidden: true },
                                            { id: "motionProps", size: 2, hidden: true },
+                                           { id: "paintLayers", size: 2, hidden: true },
+                                           { id: "paintProps", size: 2, hidden: true },
                                            { id: "params",  size: 1, hidden: false }] },
             // A graph over time wants width: the Curve Editor lives under the picture.
             bottom: { height: 240, panels: [{ id: "curves", size: 1, hidden: true },
@@ -560,6 +566,8 @@ export const DockMixin = {
             if (this.paramRefreshCurves) this.paramRefreshCurves();
         } else if (id === "motionProps" || id === "motionTimeline") {
             if (this._mgOn && this._mgSeat) this._mgSeat(this._mgState().tabs[this.activeTab]);
+        } else if (id === "paintLayers" || id === "paintProps") {
+            if (this._paintOn && this._paintSeat) this._paintSeat(this._paintActive());
         } else if (id === "editTimeline") {
             if (this.editTlRefresh) this.editTlRefresh();
         } else if (id === "channels") {

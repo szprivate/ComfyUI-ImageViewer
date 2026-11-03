@@ -34,6 +34,7 @@ import { ParamCurvesMixin } from "./bEpicViewer_paramCurves.js";
 import { ViewTabsMixin } from "./bEpicViewer_viewTabs.js";
 import { CodePanelMixin } from "./bEpicViewer_codePanel.js";
 import { MgPanelMixin } from "./bEpicViewer_mgPanel.js";
+import { PaintPanelMixin } from "./bEpicViewer_paintPanel.js";
 import { LoraPanelMixin } from "./bEpicViewer_loraPanel.js";
 import { PrevizChannelsMixin } from "./bEpicViewer_previzChannels.js";
 import { PrevizRenderMixin } from "./bEpicViewer_previzRender.js";
@@ -79,9 +80,9 @@ const watchedNodeIds  = new Set();
 // "world:" tabs come from the bEpic Worlds pack (or an agent through it).
 // "previz:" tabs are shots an agent asked for (previz_shot.py).
 // "edit:" tabs are cuts being worked on in the Edit panel.
-// "motion:" tabs are motion-graphics scenes in the Motion editor.
+// "motion:" tabs are motion-graphics scenes in the Motion editor; "paint:" tabs are pictures in Paint.
 // "code:" tabs are the Agent code reader (a file, or the agent's feed); "dataset:" tabs are LoRA datasets.
-const USER_TAB_PREFIXES = ["folder_", "dropped_", "loader_", "world:", "previz:", "edit:", "motion:", "code:", "dataset:", "named:"];
+const USER_TAB_PREFIXES = ["folder_", "dropped_", "loader_", "world:", "previz:", "edit:", "motion:", "paint:", "code:", "dataset:", "named:"];
 let isViewerPanelToggledOn = false;
 let _actionBarStateRetryTimer = null;
 
@@ -648,6 +649,23 @@ class ViewerPanel extends HTMLElement {
                 this.curvesPanel.parentNode.insertBefore(mp, this.curvesPanel.nextSibling);
             }
             this[prop] = mp;
+        }
+        // Paint (bEpicViewer_paintPanel.js): a picture is a TAB; its Layers and Properties are these
+        // two dock panels, each holding one part of the tab's editor (a .paint-slot the glue fills).
+        for (const [id, prop, cls] of [['paintLayers', 'paintLayersPanel', 'paint-layers'],
+                                       ['paintProps', 'paintPropsPanel', 'paint-props-panel']]) {
+            let pp = sr.getElementById(`${id}-panel`);
+            if (!pp && this.curvesPanel && this.curvesPanel.parentNode) {
+                const doc = this.curvesPanel.ownerDocument;
+                pp = doc.createElement('div');
+                pp.id = `${id}-panel`;
+                pp.className = `curves-panel paint-part-panel ${cls} right`;
+                const slot = doc.createElement('div');
+                slot.className = 'paint-slot';
+                pp.appendChild(slot);
+                this.curvesPanel.parentNode.insertBefore(pp, this.curvesPanel.nextSibling);
+            }
+            this[prop] = pp;
         }
         // The Channel Box came after the others; a cached older markup lacks
         // it, so it is made here beside the Outliner rather than going missing.
@@ -1384,6 +1402,7 @@ Object.assign(
     ViewTabsMixin,
     CodePanelMixin,
     MgPanelMixin,
+    PaintPanelMixin,
     LoraPanelMixin,
     PrevizChannelsMixin,
     PrevizRenderMixin,
@@ -1584,6 +1603,16 @@ app.registerExtension({
                 if (e.detail && e.detail.path) globalViewerPanel?.mgOpenFile?.(e.detail.path);
             } catch (err) { console.warn("bEpicViewer: motion scene not opened", err); }
         });
+
+        // An agent opened a picture in Paint (POST /bepic/push with an .ora / .psd, or panel "paint").
+        api.addEventListener("bepic.paint.open", (e) => {
+            try {
+                const bridge = window.bEpicViewerApi || {};
+                try { if (bridge.show) bridge.show(); } catch (_) { /* already up */ }
+                if (e.detail && e.detail.path) globalViewerPanel?.paintOpen?.(e.detail.path);
+            } catch (err) { console.warn("bEpicViewer: picture not opened in Paint", err); }
+        });
+        // (The agent changing a picture, "bepic.paint.changed", is listened to by each panel: PaintPanelMixin._paintState.)
 
         // An agent opened a LoRA dataset (POST /bepic/push with its manifest.json).
         api.addEventListener("bepic.lora.open", (e) => {

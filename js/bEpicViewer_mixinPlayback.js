@@ -167,6 +167,8 @@ export const PlaybackMixin = {
         if (this._editPlayOn) return this.editPlayFrameCount();
         // A motion tab: the scene's own length (bEpicViewer_mgPanel.js); the editor plays nothing itself.
         if (this._mgOn) return this._mgFrameCount();
+        // A Paint tab: a picture, no time.
+        if (this._paintOn) return 0;
         // A Contact Sheet of 3+ items: its longest clip (ContactGridMixin).
         if (this._gridOn) return this._gridFrameCount();
         // A video tab holds a single frame dict but scrubs over many frames.
@@ -481,6 +483,7 @@ export const PlaybackMixin = {
         if (this._editPlayOn) { this.editPlaySetFrame(idx); return; }
         // A motion tab has no media frames: the frame is a moment of the scene.
         if (this._mgOn) { this._mgSetFrame(idx); return; }
+        if (this._paintOn) return;
         // A Contact Sheet grid: every cell to the same frame (ContactGridMixin).
         if (this._gridOn) { this._gridSetFrame(idx); return; }
         const imgs = this._baseFrames();

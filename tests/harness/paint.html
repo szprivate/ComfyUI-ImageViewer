@@ -1,0 +1,25 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#222;height:100%}</style></head>
+<body>
+<script>window.addEventListener("error",(e)=>{document.title="ERR "+e.message});</script><script type="module">
+// The REAL viewer (stubbed ComfyUI scripts) with Paint. Served by tests/test_paint_browser.py, which answers
+// /bepic/paint/* with the REAL routes (paint_routes.py through viewer_api) on the same origin; everything else
+// the viewer asks for is answered here (empty). Feedback to agentY is kept in window.__asked.
+window.__asked = [];
+window.agentYViewerBridge = { feedback: async (m) => { window.__asked.push(m); return { ok: true }; } };
+window.__fetchApi = async (p, opts) => {
+  if (p.startsWith("/bepic/paint/") || p.startsWith("/bepic/browse") || p.startsWith("/bepic/export_")) return fetch(p, opts);
+  return { ok: false, status: 404, json: async () => ({}), text: async () => "" };
+};
+let v; try { v = await import("/extensions/viewer/bEpicViewer.js"); } catch (e) { document.title = "IMPORT " + e.message; throw e; }
+const panel = v.mountStandaloneViewer(document.body);
+window.__panel = panel;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+try {
+  for (let i = 0; i < 100 && !(panel.dockLayout && panel.paintLayersPanel); i++) await sleep(50);
+  Object.assign(panel.style, { width: "1400px", height: "850px", left: "20px", top: "20px" });
+  try { await window.__ext.setup(); } catch (e) { window.__setupErr = e.message; }
+  window.__api = (await import("/scripts/api.js")).api;
+  window.__ready = true;
+  document.title = "ready";
+} catch (e) { document.title = "ERR " + e.message; console.error(e); }
+</script></body></html>

@@ -72,6 +72,8 @@ export const UIMixin = {
         if (isTyping) return;
         // The Edit panel's keys, while it has the focus (bEpicViewer_editKeys.js).
         if (this.editTlKeyDown && this.editTlKeyDown(e)) return;
+        // Paint's keys, while a Paint tab is up (bEpicViewer_paintPanel.js).
+        if (this._paintOn && this.paintKeyDown && this.paintKeyDown(e)) return;
         // Walking a world takes the keyboard (bEpicViewer_world3d.js).
         if (this._model3d && this._model3d.walking) return;
         // The file browser's list is a focusable widget: while it has the focus
@@ -117,6 +119,7 @@ export const UIMixin = {
     },
 
     handleKeyUp(e) {
+        if (this._paintOn && this.paintKeyUp && this.paintKeyUp(e)) return;
         if (e.key === 'e' || e.key === 'E') {
             this.isExposureModifierActive = false;
             this.isExposureDragging = false;
@@ -423,6 +426,8 @@ export const UIMixin = {
         if (this.editTlTabHidden && !this.isEditTab(k)) this.editTlTabHidden(!!prevTab && this.isEditTab(prevTab));
         // A motion tab's editor sits over the viewport, with its panels (Layers, Properties, Timeline).
         if (this._mgOn && !(this.isMotionTab && this.isMotionTab(k))) this.mgTabLeave();
+        // ...and so does a Paint tab's (PaintPanelMixin), with Layers and Properties.
+        if (this._paintOn && !(this.isPaintTab && this.isPaintTab(k))) this.paintTabLeave();
         // A code or dataset tab (ViewTabsMixin) is a page over the viewport too.
         if (this._vtOn && !(this.isViewTab && this.isViewTab(k))) this.vtLeave();
 
@@ -476,6 +481,17 @@ export const UIMixin = {
             this.timeline.value = 0;
             this.container.querySelector('#cur-f').innerText = 0;
             this.vtEnter(k);
+        } else if (this.isPaintTab && this.isPaintTab(k)) {
+            // A Paint tab has no media and no time: the editor covers the viewport (paintTabEnter).
+            if (this._exitVideoMode) this._exitVideoMode();
+            if (this._exitModelMode) this._exitModelMode();
+            this.imgBase.src = "";
+            this._updatePathBar(null);
+            if (this.updateShapeInfo) this.updateShapeInfo();
+            this.applyTimelineBounds(0);
+            this.timeline.value = 0;
+            this.container.querySelector('#cur-f').innerText = 0;
+            this.paintTabEnter(k);
         } else if (this.isMotionTab && this.isMotionTab(k)) {
             // A motion tab has no media: the editor covers the viewport (mgTabEnter) and has its own transport.
             if (this._exitVideoMode) this._exitVideoMode();

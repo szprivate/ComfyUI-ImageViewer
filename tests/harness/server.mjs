@@ -1,5 +1,5 @@
 import http from "node:http"; import fs from "node:fs"; import path from "node:path"; import zlib from "node:zlib";
-const VIEWER = process.argv[2], HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\//, ""));
+const VIEWER = process.argv[2], HERE = path.dirname(decodeURIComponent(new URL(import.meta.url).pathname).replace(/^\/(?=[A-Za-z]:)/, ""));
 const types = { ".js": "text/javascript", ".css": "text/css", ".html": "text/html", ".json": "application/json", ".png": "image/png",
                 ".jpg": "image/jpeg", ".mp4": "video/mp4", ".mp3": "audio/mpeg",
                 ".wav": "audio/wav" };

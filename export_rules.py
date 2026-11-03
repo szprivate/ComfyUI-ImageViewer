@@ -112,6 +112,7 @@ KINDS = {
     "video": "videos", "matte": "mattes",
     "scene": "scenes", "stage": "scenes",          # a previz scene, a USD stage
     "edit": "edits",                               # a cut: its timeline and its film
+    "paint": "paint",                              # a picture in layers (.ora) and what is exported of it
 }
 FALLBACK_ROOT = "bepic"
 _VERSION = re.compile(r"v(\d{3,})$", re.I)

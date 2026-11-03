@@ -33,6 +33,7 @@ export const AgentStateMixin = {
 
     _agentTabMode(key) {
         if (this.isEditTab && this.isEditTab(key)) return "edit";
+        if (this.isPaintTab && this.isPaintTab(key)) return "paint";
         if (safe(() => this.isPrevizTab && this.isPrevizTab(key), false)) return "previz";
         if (safe(() => this.vtKindOf && this.vtKindOf(key), "")) return String(this.vtKindOf(key));
         if (key !== this.activeTab) return "";
@@ -202,6 +203,7 @@ export const AgentStateMixin = {
         }
         snap.timeline = this._agentTimeline();
         snap.edit = this._agentEdit();
+        snap.paint = safe(() => (this._agentPaint ? this._agentPaint() : null), null);
         snap.compare = this._agentCompare();
         snap.view = { zoom: this.zoom, panX: this.panX, panY: this.panY,
                       channel: this.channelView, exposure: this.exposure };

@@ -134,3 +134,17 @@ def split_lone_cuts(raw_paths, *, is_allowed, may_serve, video_exts):
                 continue
         rest.append(raw)
     return cuts, rest
+
+
+def split_paint(raw_paths, *, is_allowed):
+    """(paint, rest): the ``.ora`` / ``.psd`` files, which open in a Paint tab (they are not media,
+    so the test is the allowed folders and that the file exists; anything else stays in ``rest``)."""
+    paint, rest = [], []
+    for raw in raw_paths:
+        if isinstance(raw, str) and os.path.splitext(raw)[1].lower() in (".ora", ".psd"):
+            p = os.path.abspath(raw)
+            if is_allowed(p) and os.path.isfile(p):
+                paint.append(p)
+                continue
+        rest.append(raw)
+    return paint, rest

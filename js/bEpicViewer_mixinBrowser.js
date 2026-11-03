@@ -607,6 +607,8 @@ export const BrowserMixin = {
         menu.appendChild(item);
         // A scene, a poster PNG that carries one, or the film rendered from one: edit it in Motion.
         if (paths.length === 1 && this.mgAddEditItem) this.mgAddEditItem(menu, paths[0]);
+        // A picture, an .ora or a .psd: paint on it in layers.
+        if (paths.length === 1 && this.paintAddEditItem) this.paintAddEditItem(menu, paths[0]);
         const panelRect = this.container.getBoundingClientRect();
         menu.style.left = `${e.clientX - panelRect.left}px`;
         menu.style.top  = `${e.clientY - panelRect.top}px`;
@@ -913,6 +915,12 @@ export const BrowserMixin = {
         const cuts = picked.filter((f) => f.kind === "cut");
         if (list.length === 0 && cuts.length && this.editTlOpenPath) {
             for (const f of cuts) await this.editTlOpenPath(f.path);
+            return;
+        }
+        // An .ora / .psd is a picture in layers: it opens in Paint.
+        const paints = picked.filter((f) => f.kind === "paint");
+        if (list.length === 0 && paints.length && this.paintOpen) {
+            for (const f of paints) await this.paintOpen(f.path);
             return;
         }
         // A text file opens in an Agent code tab (a double-click on one).

@@ -1874,3 +1874,17 @@ textarea.param-input {
 .insp-tbtn.insp-mixed { opacity: .7; }
 .insp-font { flex: 1; min-width: 0; }
 .insp-fontnote { color: #ffb36b; white-space: normal; }
+
+/* Paint (bEpicViewer_paintPanel.js / bEpicViewer_paintEditor.js): a picture in layers is a tab; the editor
+   covers the viewport the way the Motion editor does and brings its own styles (paint-*). */
+.paint-view { position: absolute; inset: 0; z-index: 8; display: none; background: #0f0f12; cursor: default; }
+.paint-tab { position: absolute; inset: 0; }
+.viewport.paint-mode #exposure-control,
+.viewport.paint-mode #contact-container,
+.viewport.paint-mode #img-frame,
+.viewport.paint-mode #compare-slider,
+.viewport.paint-mode #rotate-btn,
+.viewport.paint-mode .bepic-toolbar { display: none !important; }
+.dock-rail > .paint-part-panel { width: auto; min-width: 0; display: flex; flex-direction: column; }
+.paint-part-panel > .paint-slot { flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden; background: #1b1b1f; display: flex; flex-direction: column; }
+.tab.paint-dirty::after { content: " \2022"; color: #f60; }

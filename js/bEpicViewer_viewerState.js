@@ -261,6 +261,15 @@ export function describeViewerState(s) {
         out.edit = e;
     }
 
+    // A picture in Paint (PaintPanelMixin._agentPaint): what edit_image works on.
+    if (snap.paint && snap.paint.open) {
+        const p = { open: true };
+        for (const k of ["path", "source", "name", "active", "tool"]) if (snap.paint[k]) p[k] = String(snap.paint[k]);
+        for (const k of ["w", "h", "layers"]) if (Number.isInteger(snap.paint[k])) p[k] = snap.paint[k];
+        for (const k of ["selection", "dirty", "empty"]) if (snap.paint[k]) p[k] = true;
+        out.paint = p;
+    }
+
     if (snap.compare) {
         const c = { mode: snap.compare.mode || "tab" };
         const a = describeFrame(snap.compare.a && snap.compare.a.frame,
