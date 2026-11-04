@@ -212,58 +212,25 @@ export const DnDMixin = {
         }
         if (!images.length && !videos.length && !models.length) return;
 
-        let firstKey = null;
-
-        // All dropped images share one browsable tab (mirrors "Open Folder":
-        // each image is its own history entry, the tab shows one at a time).
-        if (images.length) {
-            const key = `dropped_${Date.now()}_${++this._dropSeq}`;
-            const frames = images.map((f) => this._frameForDroppedFile(f, false));
-            this.allTabs[key]   = [frames[0]];
-            // Each image a snapshot of the one history, the first on top.
-            for (const fr of [...frames].reverse()) this.pushHistorySnapshot(key, [fr], { dedupe: false });
-            this.tabLabels[key] = images.length > 1 ? `📥 ${images.length} images` : `📥 ${images[0].name}`;
-            firstKey = firstKey || key;
-        }
-
-        // A video tab holds a single video, so each dropped clip gets its own tab.
+        // Into the one Viewer tab: each dropped image a snapshot of the
+        // History (the first on top and shown), each video and model one too.
+        const snaps = images.map((f) => [this._frameForDroppedFile(f, false)]);
         for (const f of videos) {
-            const key   = `dropped_${Date.now()}_${++this._dropSeq}`;
             const frame = this._frameForDroppedFile(f, true);
-            this.allTabs[key]   = [frame];
-            this.pushHistorySnapshot(key, [frame]);
-            this.tabLabels[key] = `📥 ${f.name}`;
-            firstKey = firstKey || key;
+            snaps.push([frame]);
             // <img> can't render a video file — extract a poster frame for the strip.
             this._generateDroppedVideoPoster(frame);
         }
-
-        // One tab per model, like videos. Files a .gltf or .obj refers to can't
-        // be reached from a dropped file, so those show without them.
+        // Files a .gltf or .obj refers to can't be reached from a dropped
+        // file, so those show without them.
         for (const f of models) {
-            const key   = `dropped_${Date.now()}_${++this._dropSeq}`;
             const frame = this._frameForDroppedFile(f, false);
             delete frame.path;
             frame.kind = "model";
             frame.format = _MODEL_RE.exec(f.name)[1].toLowerCase();
-            this.allTabs[key]   = [frame];
-            this.pushHistorySnapshot(key, [frame]);
-            this.tabLabels[key] = `📥 ${f.name}`;
-            firstKey = firstKey || key;
+            snaps.push([frame]);
         }
-
-        const allKeys = Object.keys(this.allTabs);
-        const known   = this.tabOrder.filter((k) => allKeys.includes(k));
-        const added   = allKeys.filter((k) => !known.includes(k));
-        this.tabOrder = [...known, ...added];
-
-        if (!this.popoutWindow || this.popoutWindow.closed) this.style.display = "flex";
-        this._rebuildTabBar(null);
-        if (firstKey) this.switchTab(firstKey);
-
-        const panel = this.historyPanel || this.shadowRoot.getElementById("history-panel");
-        if (panel) { panel.style.display = "flex"; this._historyPanelSig = null; this.renderHistoryPanel(); }
-        this._syncHistoryToggleState && this._syncHistoryToggleState();
+        this.showInViewerTab(snaps, { dedupe: false });
     },
 
     // Grab a poster frame from a dropped video (blob: URL, same-origin so the

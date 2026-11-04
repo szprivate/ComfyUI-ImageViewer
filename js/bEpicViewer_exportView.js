@@ -12,12 +12,11 @@
 // (export_view.py).
 //
 // `exportLanded` is the other half of the rule: whatever a feature exports is
-// said once, with its path, and put in the History of one tab - "Exports" -
+// said once, with its path, and put in the History (made in the Viewer tab),
 // newest first, where it can be looked at, compared and dragged onto the graph.
 import { api } from "../../scripts/api.js";
 import { notice, openExportDialog } from "./bEpicViewer_exportUI.js";
 
-const TAB = "folder_exports";          // "folder_": a tab the user made, kept by the stale-tab sweep
 const hasFile = (f) => !!f && !f.dropped && !!(f.path || f.filename);
 const fileRef = (f) => ({ path: f.path || "", filename: f.filename || "", subfolder: f.subfolder || "", type: f.type || "" });
 const stem = (f) => String((f && (f.name || f.filename || f.path)) || "").split(/[\\/]/).pop().replace(/\.[^.]+$/, "");
@@ -136,26 +135,14 @@ export const ExportViewMixin = {
     },
 
     /**
-     * Put exported files in History: one tab, "Exports", each export a snapshot
-     * in it, newest first. The tab is made on the first export and is not
-     * switched to unless `focus` - an export must not take the work off screen.
+     * Put exported files in History, by way of the one Viewer tab, newest
+     * first. The tab is not switched to unless `focus` - an export must not
+     * take the work off screen.
      */
     async exportLanded(paths, { focus = false } = {}) {
         if (!this._browserFramesFor || !paths || !paths.length) return null;
         const frames = (await this._browserFramesFor(paths)).filter(Boolean);
         if (!frames.length) return null;
-        const fresh = !this.allTabs[TAB];
-        this.allTabs[TAB] = frames;
-        this.pushHistorySnapshot(TAB, frames, { dedupe: false });
-        this.tabLabels[TAB] = "↓ Exports";
-        if (fresh) {
-            this.tabOrder = [...(this.tabOrder || []).filter((k) => k !== TAB), TAB];
-            if (this._rebuildTabBar) this._rebuildTabBar(null);
-        }
-        if (focus || this.activeTab === TAB) this.switchTab(TAB);
-        this._historyPanelSig = null;
-        if (this.renderHistoryPanel) this.renderHistoryPanel();
-        if (this.queuePersistViewerState) this.queuePersistViewerState();
-        return TAB;
+        return this.showInViewerTab([frames], { show: focus, dedupe: false });
     },
 };

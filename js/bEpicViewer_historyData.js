@@ -121,3 +121,22 @@ export function mergeTabHistories(history, order = [], limit = Infinity) {
     const cap = Number.isFinite(limit) && limit >= 1 ? Math.floor(limit) : out.length;
     return out.slice(0, cap);
 }
+
+/**
+ * The tabs that only showed media - a loader node sent to the viewer
+ * (`loader_<id>`), files opened from the browser (`folder_<time>_<n>`), files
+ * dropped in (`dropped_...`), the exports (`folder_exports`) - which are all
+ * the one Viewer tab now. Documents (cuts, Paint, 3D, Motion, code), the live
+ * tabs of Send to Viewer nodes and agentY's named tabs keep their own.
+ */
+export function isMediaTabKey(key) {
+    const k = String(key || "");
+    return /^loader_/.test(k) || /^dropped_/.test(k) || /^folder_\d+_\d+$/.test(k) || k === "folder_exports";
+}
+
+/** The stack with every snapshot made in one of `tabs` re-stamped as made in
+ *  `viewer` (a new array; `stack` is not changed). */
+export function foldIntoTab(stack, tabs, viewer) {
+    const from = new Set(tabs || []);
+    return (stack || []).map((s) => (from.has(snapshotTab(s)) ? stampSnapshot(s, viewer) : s));
+}

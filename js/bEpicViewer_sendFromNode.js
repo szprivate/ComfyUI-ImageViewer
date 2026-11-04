@@ -483,45 +483,43 @@ export function registerSendToViewerMenu(nodeType, ctx) {
 
 export const SendFromNodeMixin = {
 
-    // Open the tabs resolved from a loader node. Keyed by node id, so sending
-    // again after pointing the node at another file refreshes the same tab and
-    // stacks the previous media in its history strip instead of piling up tabs.
+    // Show the media resolved from a loader node: in the one Viewer tab, each
+    // clip a snapshot of the History, so sending again stacks it there instead
+    // of piling up tabs.
     //
     // A node that owns a viewer tab already — the send node and both tool nodes
-    // — fills that tab instead of a loader tab beside it: sending a Roto node
-    // lands its image exactly where the roto tools look for it, and running the
-    // workflow later refreshes the same tab rather than leaving a stale twin.
-    // Only the first tab can be the owned one; the rest (an AYON container
-    // holding several clips) keep loader keys.
+    // — fills that tab instead: sending a Roto node lands its image exactly
+    // where the roto tools look for it, and running the workflow later
+    // refreshes the same tab rather than leaving a stale twin. Only the first
+    // clip goes there; the rest (an AYON container holding several clips) go
+    // into the History.
     openNodeMedia(node, tabs) {
         if (!Array.isArray(tabs) || tabs.length === 0) return;
+        const media = tabs.filter((t) => t && Array.isArray(t.frames) && t.frames.length > 0);
+        if (!media.length) return;
 
         const owned = senderTabInfo(node);
+        if (!owned) {
+            // A loader's media goes into the one Viewer tab (and the History),
+            // not into a tab of its own; a container of several clips is a
+            // snapshot per clip, the first shown.
+            this.showInViewerTab(media.map((t) => t.frames), { nodeId: node.id });
+            return;
+        }
 
-        let firstKey = null;
-        tabs.forEach((tab, i) => {
-            const frames = Array.isArray(tab.frames) ? tab.frames : [];
-            if (frames.length === 0) return;
-            const mine = owned && i === 0;
-            const key = mine ? owned.key
-                      : (tabs.length > 1 ? `loader_${node.id}_${i}` : `loader_${node.id}`);
-
-            this.pushHistorySnapshot(key, frames);
-
-            this.allTabs[key]           = frames;
-            this.tabLabels[key]         = mine ? owned.label : this._nodeMediaLabel(tab);
-            this.tabSourceNodeIds[key]  = node.id;
-            if (!firstKey) {
-                firstKey = key;
-                // Show the media just sent, not wherever the history strip was.
-                this.currentHistoryKey   = this.historyKey();
-                this.currentHistoryIndex = 0;
-                this.isViewingHistory    = false;
-                this.previewBackup       = null;
-                this.historyCompare      = null;
-            }
-        });
-        if (!firstKey) return;
+        const key = owned.key;
+        this.pushHistorySnapshot(key, media[0].frames);
+        this.allTabs[key]          = media[0].frames;
+        this.tabLabels[key]        = owned.label;
+        this.tabSourceNodeIds[key] = node.id;
+        // Show the media just sent, not wherever the history strip was.
+        this.currentHistoryKey   = this.historyKey();
+        this.currentHistoryIndex = 0;
+        this.isViewingHistory    = false;
+        this.previewBackup       = null;
+        this.historyCompare      = null;
+        // The rest of a container: in the History, by way of the Viewer tab.
+        if (media.length > 1) this.showInViewerTab(media.slice(1).map((t) => t.frames), { show: false, nodeId: node.id });
 
         const allKeys = Object.keys(this.allTabs);
         const known   = this.tabOrder.filter((k) => allKeys.includes(k));
@@ -530,7 +528,7 @@ export const SendFromNodeMixin = {
 
         if (!this.popoutWindow || this.popoutWindow.closed) this.style.display = "flex";
         this._rebuildTabBar(null);
-        this.switchTab(firstKey);
+        this.switchTab(key);
 
         const panel = this.historyPanel || this.shadowRoot.getElementById("history-panel");
         if (panel) {

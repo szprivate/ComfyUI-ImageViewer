@@ -142,5 +142,33 @@ class ViewerRestoreTests(unittest.TestCase):
         self.assert_restored(self.open_viewer(pg, delay=0))
 
 
+    def test_media_tabs_of_before_become_the_one_viewer_tab(self):
+        pg = self.browser.new_page(viewport={"width": 1400, "height": 900})
+        self.addCleanup(pg.close)
+        self.errors = []
+        pg.on("pageerror", lambda e: self.errors.append(str(e)))
+        pic = lambda n: [{"filename": f"{n}.png", "subfolder": "", "type": "input", "path": f"D:/in/{n}.png"}]
+        saved = {
+            "version": 1,
+            "allTabs": {"loader_7": pic("l2"), AGENT: FRAMES, "folder_1730000000000_1": pic("f1")},
+            "history": {"all": [[{**pic("l2")[0], "fromTab": "loader_7"}], [{**FRAMES[0], "fromTab": AGENT}],
+                                [{**pic("f1")[0], "fromTab": "folder_1730000000000_1"}], [{**pic("l1")[0], "fromTab": "loader_7"}]]},
+            "tabViewState": {}, "tabLabels": {"loader_7": "l2", AGENT: "agentY", "folder_1730000000000_1": "f1"}, "tabColors": {},
+            "historyTags": {}, "historyTagFilter": "",
+            "tabOrder": ["loader_7", AGENT, "folder_1730000000000_1"], "activeTab": "folder_1730000000000_1", "savedAt": 1,
+        }
+        pg.goto(f"http://127.0.0.1:{self.port}/seed")
+        pg.evaluate("([k, v]) => localStorage.setItem(k, v)", [KEY, json.dumps(saved)])
+        self.open_viewer(pg, delay=0)
+        st = pg.evaluate("""() => { const P = window.__panel;
+          return { order: P.tabOrder, active: P.activeTab, label: P.tabLabels.folder_history,
+                   shown: P.allTabs.folder_history[0].filename, from: P.history.all.map((s) => s[0].fromTab) }; }""")
+        self.assertEqual(st["order"], ["folder_history", AGENT], "one Viewer tab, in the first one's place")
+        self.assertEqual((st["active"], st["label"], st["shown"]), ("folder_history", "🖼 Viewer", "f1.png"),
+                         "it shows what the tab that was up showed")
+        self.assertEqual(st["from"], ["folder_history", AGENT, "folder_history", "folder_history"])
+        self.assertEqual(self.errors, [])
+
+
 if __name__ == "__main__":
     unittest.main()

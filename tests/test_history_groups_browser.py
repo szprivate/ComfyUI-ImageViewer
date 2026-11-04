@@ -150,7 +150,7 @@ class HistoryGroupsTests(unittest.TestCase):
         self.assertEqual(len(pg.evaluate("() => __panel.history.all")), 4)
         self.click(pg, 0)                    # b2
         st = pg.evaluate("() => ({ active: __panel.activeTab, label: __panel.tabLabels[__panel.activeTab], shown: __panel.allTabs[__panel.activeTab][0].path })")
-        self.assertEqual(st, {"active": "folder_history", "label": "🕘 History", "shown": "D:/out/b2.png"})
+        self.assertEqual(st, {"active": "folder_history", "label": "🖼 Viewer", "shown": "D:/out/b2.png"})
         self.assertEqual(self.strip(pg)["open"], [0])
         self.assertEqual(self.errors, [])
 
@@ -280,11 +280,39 @@ class HistoryGroupsTests(unittest.TestCase):
           await e.callback();
           const sent = P.history.all.slice(0, P.history.all.length - before).map((s) => s[0].filename);
           const single = menu(n4);
-          return { content: e.content, sent, single: single.content };
+          return { content: e.content, sent, single: single.content, active: P.activeTab,
+                   loaders: Object.keys(P.allTabs).filter((k) => k.startsWith('loader_')),
+                   from: [...new Set(P.history.all.slice(0, 3).map((s) => s[0].fromTab))],
+                   shown: P.allTabs.folder_history[0].filename };
         }""")
         self.assertEqual(out["content"], "Send 3 to Image Viewer")
         self.assertEqual(out["sent"], ["left.png", "mid.png", "right.png"], "all three, in the canvas's reading order")
         self.assertEqual(out["single"], "Send to Image Viewer", "a node outside the selection sends itself")
+        self.assertEqual((out["active"], out["loaders"], out["from"]), ("folder_history", [], ["folder_history"]),
+                         "no tab per node: all in the one Viewer tab")
+        self.assertEqual(out["shown"], "left.png", "the last sent is shown")
+
+    def test_opened_and_dropped_media_go_into_the_one_viewer_tab(self):
+        pg = self.page()
+        out = pg.evaluate("""() => {
+          const P = window.__panel;
+          const tabsBefore = P.tabOrder.length, n0 = P.history.all.length;
+          const v = (n) => ({ filename: n + '.mp4', path: 'D:/in/' + n + '.mp4', type: 'input', kind: 'video', name: n });
+          P.openExternalFramesInViewer([{ filename: 'p1.png', path: 'D:/in/p1.png', type: 'input' },
+                                        { filename: 'p2.png', path: 'D:/in/p2.png', type: 'input' }, v('c1'), v('c2')], 'in');
+          const after = { tabs: P.tabOrder.length - tabsBefore, added: P.history.all.length - n0,
+                          first: P.history.all[0].map((f) => f.filename), active: P.activeTab };
+          P._addDroppedFiles([new File(['x'], 'drop.png', { type: 'image/png' })]);
+          after.dropTabs = P.tabOrder.length - tabsBefore;
+          after.dropShown = P.allTabs.folder_history[0].name || P.allTabs.folder_history[0].filename;
+          after.dropFrom = P.history.all[0][0].fromTab;
+          return after;
+        }""")
+        self.assertEqual(out["tabs"], 1, "one Viewer tab, no tab per file")
+        self.assertEqual(out["added"], 3, "the pictures as one sequence, each film one snapshot")
+        self.assertEqual((out["first"], out["active"]), (["p1.png", "p2.png"], "folder_history"))
+        self.assertEqual((out["dropTabs"], out["dropFrom"]), (1, "folder_history"))
+        self.assertEqual(out["dropShown"], "drop.png")
         self.assertEqual(self.errors, [])
 
 

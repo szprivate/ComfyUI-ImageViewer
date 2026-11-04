@@ -5,8 +5,8 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
 import { LayoutMixin }   from "./bEpicViewer_mixinLayout.js";
-import { HistoryMixin, HISTORY_LIMIT_DEFAULT, HISTORY_LIMIT_OLD_DEFAULT, HISTORY_KEY, clampHistoryLimit }  from "./bEpicViewer_mixinHistory.js";
-import { mergeTabHistories, snapshotTab } from "./bEpicViewer_historyData.js";
+import { HistoryMixin, HISTORY_LIMIT_DEFAULT, HISTORY_LIMIT_OLD_DEFAULT, HISTORY_KEY, HISTORY_VIEW_TAB, VIEWER_TAB_LABEL, clampHistoryLimit }  from "./bEpicViewer_mixinHistory.js";
+import { mergeTabHistories, snapshotTab, isMediaTabKey, foldIntoTab } from "./bEpicViewer_historyData.js";
 import { PrevizWorldMixin } from "./bEpicViewer_previzWorld.js";
 import { PlaybackMixin } from "./bEpicViewer_mixinPlayback.js";
 import { ParamsMixin }   from "./bEpicViewer_mixinParams.js";
@@ -330,21 +330,31 @@ class ViewerPanel extends HTMLElement {
         try {
             // Dropped-file tabs live on blob: URLs that die on reload — never
             // persist them (they would restore as broken images).
-            const keepKey = (k) => !String(k).startsWith('dropped_');
+            const isDropped = (frames) => (frames || []).some((fr) => fr && fr.dropped);
+            // The one history, without what dropped files made (blob: URLs too).
+            const history = {
+                [HISTORY_KEY]: ((this.history || {})[HISTORY_KEY] || []).filter((s) =>
+                    !String(snapshotTab(s)).startsWith('dropped_') && !isDropped(s)),
+            };
+            // The Viewer tab showing a dropped file is saved showing the newest
+            // snapshot of it that is kept; with none, it is not saved.
+            const tabs = { ...(this.allTabs || {}) };
+            if (isDropped(tabs[HISTORY_VIEW_TAB])) {
+                const kept = history[HISTORY_KEY].find((s) => snapshotTab(s) === HISTORY_VIEW_TAB);
+                if (kept) tabs[HISTORY_VIEW_TAB] = kept;
+                else delete tabs[HISTORY_VIEW_TAB];
+            }
+            const keepKey = (k) => !String(k).startsWith('dropped_') && !isDropped(tabs[k])
+                                   && (k !== HISTORY_VIEW_TAB || !!tabs[k]);
             const pick = (obj) => {
                 const out = {};
                 Object.keys(obj || {}).forEach((k) => { if (keepKey(k)) out[k] = obj[k]; });
                 return out;
             };
             const activeTab = keepKey(this.activeTab) ? (this.activeTab || null) : null;
-            // The one history, without what dropped files made (blob: URLs too).
-            const history = {
-                [HISTORY_KEY]: ((this.history || {})[HISTORY_KEY] || []).filter((s) =>
-                    keepKey(snapshotTab(s)) && !(s || []).some((fr) => fr && fr.dropped)),
-            };
             const payload = {
                 version: 1,
-                allTabs: pick(this.allTabs),
+                allTabs: pick(tabs),
                 history,
                 historyCollapsed: [...(this.historyCollapsed instanceof Set ? this.historyCollapsed : (this.historyCollapsed || []))],
                 tabViewState: pick(this.tabViewState),
@@ -454,11 +464,36 @@ class ViewerPanel extends HTMLElement {
                 if (scene.items.length) this._scenes[k] = scene;
             }
 
-            const known = restoredOrder.filter(k => !!this.allTabs[k]);
+            // The tabs that only showed media are the one Viewer tab now: their
+            // snapshots are its, it shows what the one that was up showed (else
+            // what it showed itself, else the newest of theirs), and it takes the
+            // first one's place in the bar.
+            let order = restoredOrder, active = restoredActive;
+            const folded = Object.keys(this.allTabs).filter(isMediaTabKey);
+            if (folded.length) {
+                const stack = foldIntoTab(this.history[HISTORY_KEY] || [], folded, HISTORY_VIEW_TAB);
+                this.history[HISTORY_KEY] = stack;
+                const shown = (folded.includes(active) && this.allTabs[active])
+                    || this.allTabs[HISTORY_VIEW_TAB]
+                    || stack.find((s) => snapshotTab(s) === HISTORY_VIEW_TAB)
+                    || this.allTabs[folded[0]];
+                for (const k of folded) {
+                    delete this.allTabs[k]; delete this.tabLabels[k]; delete this.tabColors[k]; delete this.tabViewState[k];
+                }
+                this.allTabs[HISTORY_VIEW_TAB] = JSON.parse(JSON.stringify(shown));
+                this.tabLabels[HISTORY_VIEW_TAB] = VIEWER_TAB_LABEL;
+                const at = order.findIndex((k) => isMediaTabKey(k) || k === HISTORY_VIEW_TAB);
+                order = order.filter((k) => !isMediaTabKey(k) && k !== HISTORY_VIEW_TAB);
+                order.splice(at < 0 ? order.length : Math.min(at, order.length), 0, HISTORY_VIEW_TAB);
+                if (folded.includes(active)) active = HISTORY_VIEW_TAB;
+            }
+            if (this.allTabs[HISTORY_VIEW_TAB]) this.tabLabels[HISTORY_VIEW_TAB] = VIEWER_TAB_LABEL;
+
+            const known = order.filter(k => !!this.allTabs[k]);
             const added = Object.keys(this.allTabs).filter(k => !known.includes(k));
             this.tabOrder = [...known, ...added];
 
-            if (restoredActive && this.allTabs[restoredActive]) this.activeTab = restoredActive;
+            if (active && this.allTabs[active]) this.activeTab = active;
             else this.activeTab = this.tabOrder[0] || Object.keys(this.allTabs)[0] || null;
 
             this.previewBackup = null;

@@ -19,9 +19,13 @@ import { HISTORY_KEY, snapshotTab, stampSnapshot, snapshotGroup, setSnapshotGrou
          liveIndexOf, historySections, historyDisplayOrder } from "./bEpicViewer_historyData.js";
 
 export { HISTORY_KEY };
-/** The tab a snapshot is shown in when the tab it was made in is closed. A user
- *  tab ("folder_" prefix): the stale-tab sweep leaves it alone. */
+/** The one Viewer tab: where media sent from a node, opened from the file
+ *  browser, dropped in or exported is shown (each also a snapshot of the
+ *  History), and where a snapshot whose own tab was closed is shown. A user tab
+ *  ("folder_" prefix): the stale-tab sweep leaves it alone. Documents and the
+ *  live tabs of Send to Viewer nodes keep tabs of their own. */
 export const HISTORY_VIEW_TAB = "folder_history";
+export const VIEWER_TAB_LABEL = "🖼 Viewer";
 
 // Snapshots kept in the one history (every tab's), unless the user sets another
 // number at the foot of the history panel. With clip caching on, this is also how
@@ -101,11 +105,59 @@ export const HistoryMixin = {
     _ensureHistoryViewTab(snapshot) {
         const fresh = !this.allTabs[HISTORY_VIEW_TAB];
         this.allTabs[HISTORY_VIEW_TAB] = JSON.parse(JSON.stringify(snapshot));
-        this.tabLabels[HISTORY_VIEW_TAB] = '🕘 History';
+        this.tabLabels[HISTORY_VIEW_TAB] = VIEWER_TAB_LABEL;
         if (fresh) {
             this.tabOrder = [...(this.tabOrder || []).filter((k) => k !== HISTORY_VIEW_TAB), HISTORY_VIEW_TAB];
             if (this._rebuildTabBar) this._rebuildTabBar(null);
         }
+    },
+
+    /**
+     * Put media on screen in the one Viewer tab: every snapshot of `snapshots`
+     * into the History (the first on top) and the first shown - or, with
+     * `show` false, only into the History unless the Viewer tab is up anyway
+     * (an export must not take the work off screen). `nodeId`: the graph node
+     * it came from, for the Parameters panel. -> the tab's key, or null.
+     */
+    showInViewerTab(snapshots, { show = true, nodeId = null, dedupe = true } = {}) {
+        const list = (snapshots || []).filter((s) => Array.isArray(s) && s.length > 0);
+        if (!list.length) return null;
+        const tab = HISTORY_VIEW_TAB;
+        for (const s of [...list].reverse()) this.pushHistorySnapshot(tab, s, { dedupe });
+        const fresh = !this.allTabs[tab];
+        const up = show || this.activeTab === tab || fresh;
+        if (up) {
+            this.allTabs[tab] = JSON.parse(JSON.stringify(list[0]));
+            if (nodeId != null) this.tabSourceNodeIds[tab] = nodeId;
+            else if (this.tabSourceNodeIds) delete this.tabSourceNodeIds[tab];
+        }
+        this.tabLabels[tab] = VIEWER_TAB_LABEL;
+        if (!(this.tabOrder || []).includes(tab)) this.tabOrder = [...(this.tabOrder || []), tab];
+        if (show || this.activeTab === tab) {
+            // Show what was just put there, not wherever the strip was.
+            if (this.activeTab === tab || !this.isViewingHistory) {
+                this.isViewingHistory = false;
+                this.previewBackup    = null;
+            }
+            this.historyCompare      = null;
+            this.currentHistoryKey   = this.historyKey();
+            this.currentHistoryIndex = 0;
+            // ...nor the older snapshot the tab was left on.
+            const st = this.tabViewState && this.tabViewState[tab];
+            if (st) { st.viewingHistory = false; st.historyIndex = null; }
+            if (show && (!this.popoutWindow || this.popoutWindow.closed)) this.style.display = "flex";
+            if (this._rebuildTabBar) this._rebuildTabBar(null);
+            this.switchTab(tab);
+            if (show) {
+                const panel = this.historyPanel || this.shadowRoot.getElementById("history-panel");
+                if (panel) panel.style.display = "flex";
+                this._syncHistoryToggleState?.();
+            }
+        } else if (this._rebuildTabBar) this._rebuildTabBar(null);
+        this._historyPanelSig = null;
+        this.renderHistoryPanel();
+        this.queuePersistViewerState?.();
+        return tab;
     },
 
     // ── History stack ────────────────────────────────────────────────────────
@@ -1019,11 +1071,12 @@ export const HistoryMixin = {
         if (!stack || !stack[index]) return;
         const snap = stack[index];
         const tab = this._historyTabFor(snap);
-        if (tab === HISTORY_VIEW_TAB) this._ensureHistoryViewTab(snap);
+        const fresh = tab === HISTORY_VIEW_TAB && !this.allTabs[tab];
+        if (fresh) this._ensureHistoryViewTab(snap);
         // Its tab first: switchTab hands the tab it leaves its own picture back.
         if (this.activeTab !== tab) this.switchTab(tab);
-        if (tab === HISTORY_VIEW_TAB) {
-            // The History tab has no picture of its own: what it shows is the snapshot.
+        if (fresh) {
+            // A Viewer tab made for it has no picture of its own: the snapshot is it.
             this.allTabs[tab] = JSON.parse(JSON.stringify(snap));
             this.previewBackup = JSON.parse(JSON.stringify(snap));
         } else if (!this.previewBackup) {

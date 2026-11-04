@@ -964,53 +964,25 @@ export const BrowserMixin = {
     },
 
     /**
-     * Put ready-made frames on screen as viewer tabs.
+     * Put ready-made frames on screen, in the one Viewer tab.
      *
      * Images go into ONE tab as a sequence, so the timeline scrubs the folder —
      * which is what a viewer is for, and what the old folder tab only pretended
      * to do (it put the first image in the tab and every other one in its own
-     * history entry, leaving a one-frame timeline). Each video gets a tab of its
-     * own, because a video tab holds exactly one clip.
+     * history entry, leaving a one-frame timeline). Each video is a snapshot of
+     * its own, because a video snapshot holds exactly one clip.
      *
      * Shared with the viewport drop target, so a file dropped in from the
      * browser lands the same way as one opened through the button.
      */
     openExternalFramesInViewer(frames, label) {
         if (!Array.isArray(frames) || frames.length === 0) return null;
-
         const images = frames.filter(f => f && !this._frameIsVideo(f));
         const videos = frames.filter(f => f &&  this._frameIsVideo(f));
-        let firstKey = null;
-        let seq = 0;
-
-        if (images.length > 0) {
-            const key = `folder_${Date.now()}_${++seq}`;
-            this.allTabs[key]   = images;
-            this.pushHistorySnapshot(key, images);
-            this.tabLabels[key] = `📂 ${images.length > 1 ? `${label} (${images.length})` : (images[0].name || label)}`;
-            firstKey = key;
-        }
-        for (const v of videos) {
-            const key = `folder_${Date.now()}_${++seq}`;
-            this.allTabs[key]   = [v];
-            this.pushHistorySnapshot(key, [v]);
-            this.tabLabels[key] = `📂 ${v.name || label}`;
-            firstKey = firstKey || key;
-        }
-
-        const allKeys = Object.keys(this.allTabs);
-        const known   = (this.tabOrder || []).filter(k => allKeys.includes(k));
-        const added   = allKeys.filter(k => !known.includes(k));
-        this.tabOrder = [...known, ...added];
-
-        if (!this.popoutWindow || this.popoutWindow.closed) this.style.display = "flex";
-        this._rebuildTabBar(null);
-        if (firstKey) this.switchTab(firstKey);
-
-        this._historyPanelSig = null;
-        this.renderHistoryPanel();
-        this.queuePersistViewerState();
-        return firstKey;
+        // Into the one Viewer tab: the images as one sequence snapshot, each
+        // video one of its own (a video snapshot holds exactly one clip).
+        const snaps = [...(images.length ? [images] : []), ...videos.map((v) => [v])];
+        return this.showInViewerTab(snaps);
     },
 
     // ── Panel sizing ─────────────────────────────────────────────────────────

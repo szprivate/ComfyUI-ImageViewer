@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
     HISTORY_KEY, snapshotTab, stampSnapshot, snapshotGroup, setSnapshotGroup, historyGroups,
-    liveIndexOf, historySections, historyDisplayOrder, mergeTabHistories,
+    liveIndexOf, historySections, historyDisplayOrder, mergeTabHistories, isMediaTabKey, foldIntoTab,
 } from "../js/bEpicViewer_historyData.js";
 
 const snap = (name, extra = {}) => [{ filename: name, type: "output", ...extra }];
@@ -73,4 +73,16 @@ test("a merge keeps a history already unified in front, drops repeats in a tab a
     assert.deepEqual(merged.map((s) => s[0].filename), ["n", "a0", "b0"]);
     assert.deepEqual(mergeTabHistories(null), []);
     assert.deepEqual(mergeTabHistories(old, []).map((s) => s[0].filename), ["n", "a0", "b0", "a1"]);
+});
+
+test("media-only tabs are told from documents and live tabs", () => {
+    for (const k of ["loader_12", "loader_12_1", "folder_1730000000000_1", "dropped_17_2", "folder_exports"]) assert.ok(isMediaTabKey(k), k);
+    for (const k of ["folder_history", "edit:D:/c.otio", "paint:new-1", "previz:3", "named:shots", "12", "sink_4", ""]) assert.ok(!isMediaTabKey(k), k);
+});
+
+test("folding tabs into the Viewer tab re-stamps only their snapshots", () => {
+    const stack = [stampSnapshot(snap("a"), "loader_1"), stampSnapshot(snap("b"), "edit:x"), stampSnapshot(snap("c"), "folder_1_1")];
+    const out = foldIntoTab(stack, ["loader_1", "folder_1_1"], "folder_history");
+    assert.deepEqual(out.map(snapshotTab), ["folder_history", "edit:x", "folder_history"]);
+    assert.equal(snapshotTab(stack[0]), "loader_1", "the stack is not changed");
 });
