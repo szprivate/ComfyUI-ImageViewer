@@ -636,7 +636,6 @@ export function stamp(st, cx, cy, radius, hard, flow = 1) {
     const x0 = Math.max(0, Math.floor(cx - radius - lx)), y0 = Math.max(0, Math.floor(cy - radius - ly));
     const x1 = Math.min(lw, Math.ceil(cx + radius - lx) + 1), y1 = Math.min(lh, Math.ceil(cy + radius - ly) + 1);
     if (x1 <= x0 || y1 <= y0) return null;
-    const [cr, cg, cb] = st.color;
     for (let y = y0; y < y1; y++) {
         for (let x = x0; x < x1; x++) {
             const d = Math.hypot(x + 0.5 + lx - cx, y + 0.5 + ly - cy);
@@ -650,22 +649,31 @@ export function stamp(st, cx, cy, radius, hard, flow = 1) {
             const i = y * lw + x;
             if (a <= st.cover[i]) continue;
             st.cover[i] = a;
-            const t = a * st.opacity;
+            let t = a * st.opacity;
             const o = i * 4;
             const oa = st.orig[o + 3] / 255;
+            let col = st.color;
+            if (st.clone) {
+                // The clone stamp: the colour of the source at the same offset (cloneAt), its alpha scaling the dab.
+                const q = cloneAt(st.clone, x + lx, y + ly);
+                if (q < 0) { st.cover[i] = 0; continue; }
+                const sp = st.clone.src;
+                t *= sp[q + 3] / 255;
+                if (t <= 0) continue;
+                col = [sp[q], sp[q + 1], sp[q + 2]];
+            }
             if (st.erase) {
                 st.px[o] = st.orig[o]; st.px[o + 1] = st.orig[o + 1]; st.px[o + 2] = st.orig[o + 2];
                 st.px[o + 3] = q8(oa * (1 - t));
                 continue;
             }
             if (st.lockAlpha) {
-                for (let c = 0; c < 3; c++) st.px[o + c] = q8((st.orig[o + c] / 255) * (1 - t) + ([cr, cg, cb][c] / 255) * t);
+                for (let c = 0; c < 3; c++) st.px[o + c] = q8((st.orig[o + c] / 255) * (1 - t) + (col[c] / 255) * t);
                 st.px[o + 3] = st.orig[o + 3];
                 continue;
             }
             // Normal over the picture from before the stroke.
             const ao = t + oa * (1 - t);
-            const col = [cr, cg, cb];
             for (let c = 0; c < 3; c++) {
                 const v = ao > 0 ? ((col[c] / 255) * t + (st.orig[o + c] / 255) * oa * (1 - t)) / ao : 0;
                 st.px[o + c] = q8(v);
@@ -674,6 +682,128 @@ export function stamp(st, cx, cy, radius, hard, flow = 1) {
         }
     }
     return { x0, y0, x1, y1 };
+}
+
+/**
+ * The clone stamp's source pixel for the canvas pixel (gx, gy): an index into `c.src` (RGBA, `c.sw` x `c.sh`,
+ * its top left at `c.sx`, `c.sy` on the canvas), `c.dx` / `c.dy` away; -1 outside it.
+ */
+export function cloneAt(c, gx, gy) {
+    const qx = gx + c.dx - c.sx, qy = gy + c.dy - c.sy;
+    if (qx < 0 || qy < 0 || qx >= c.sw || qy >= c.sh) return -1;
+    return (qy * c.sw + qx) * 4;
+}
+
+// ── free transform ──────────────────────────────────────────────────────────
+//
+// A layer is transformed about its middle: p = t + R(r) · Shear(kx, ky) · Scale(sx, sy) · (u - c), u in the
+// layer's own pixels (0..w, 0..h), c its middle, t where that middle lands on the canvas. `r` in degrees,
+// clockwise on screen (y down). As a 2D affine {a, b, c, d, e, f}: x = a u + c v + e, y = b u + d v + f.
+
+/** The transform that leaves a layer w x h at (x, y) where it is. */
+export function tfIdentity(x, y, w, h) {
+    return { tx: x + w / 2, ty: y + h / 2, sx: 1, sy: 1, r: 0, kx: 0, ky: 0, cx: w / 2, cy: h / 2 };
+}
+
+export function tfMatrix(t) {
+    const r = (t.r || 0) * Math.PI / 180, cs = Math.cos(r), sn = Math.sin(r);
+    const sx = t.sx, sy = t.sy, kx = t.kx || 0, ky = t.ky || 0;
+    // Shear · Scale = [[sx, kx sy], [ky sx, sy]]; R · that.
+    const a = cs * sx - sn * ky * sx, c = cs * kx * sy - sn * sy;
+    const b = sn * sx + cs * ky * sx, d = sn * kx * sy + cs * sy;
+    return { a, b, c, d, e: t.tx - (a * t.cx + c * t.cy), f: t.ty - (b * t.cx + d * t.cy) };
+}
+
+export function applyM(m, u, v) { return [m.a * u + m.c * v + m.e, m.b * u + m.d * v + m.f]; }
+
+export function invertM(m) {
+    const det = m.a * m.d - m.b * m.c;
+    if (!det) return null;
+    const a = m.d / det, b = -m.b / det, c = -m.c / det, d = m.a / det;
+    return { a, b, c, d, e: -(a * m.e + c * m.f), f: -(b * m.e + d * m.f) };
+}
+
+/** True when a transform only moves the layer by whole pixels (no resampling needed). */
+export function tfIsMove(t) {
+    return t.sx === 1 && t.sy === 1 && !(t.r % 360) && !t.kx && !t.ky
+        && Number.isInteger(t.tx - t.cx) && Number.isInteger(t.ty - t.cy);
+}
+
+/** The four corners of a w x h layer under m, on the canvas: top left, top right, bottom right, bottom left. */
+export function tfCorners(m, w, h) { return [applyM(m, 0, 0), applyM(m, w, 0), applyM(m, w, h), applyM(m, 0, h)]; }
+
+/** The whole-pixel box the transformed layer covers. */
+export function tfBox(m, w, h) {
+    const cs = tfCorners(m, w, h);
+    const xs = cs.map((p) => p[0]), ys = cs.map((p) => p[1]);
+    const x0 = Math.floor(Math.min(...xs) + 1e-6), y0 = Math.floor(Math.min(...ys) + 1e-6);
+    const x1 = Math.ceil(Math.max(...xs) - 1e-6), y1 = Math.ceil(Math.max(...ys) - 1e-6);
+    return { x: x0, y: y0, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) };
+}
+
+/**
+ * The layer's pixels (RGBA w x h) under m, into a new buffer the size of `box`: every pixel's middle taken
+ * back through m, read bilinearly with premultiplied alpha (`smooth`), or the nearest pixel.
+ */
+export function tfPixels(src, w, h, m, box, smooth = true) {
+    const inv = invertM(m);
+    const out = new Uint8ClampedArray(box.w * box.h * 4);
+    if (!inv) return out;
+    for (let Y = 0; Y < box.h; Y++) {
+        for (let X = 0; X < box.w; X++) {
+            const gx = box.x + X + 0.5, gy = box.y + Y + 0.5;
+            const u = inv.a * gx + inv.c * gy + inv.e, v = inv.b * gx + inv.d * gy + inv.f;
+            const o = (Y * box.w + X) * 4;
+            if (!smooth) {
+                const ui = Math.floor(u), vi = Math.floor(v);
+                if (ui < 0 || vi < 0 || ui >= w || vi >= h) continue;
+                const q = (vi * w + ui) * 4;
+                out[o] = src[q]; out[o + 1] = src[q + 1]; out[o + 2] = src[q + 2]; out[o + 3] = src[q + 3];
+                continue;
+            }
+            const fu = u - 0.5, fv = v - 0.5;
+            const u0 = Math.floor(fu), v0 = Math.floor(fv), du = fu - u0, dv = fv - v0;
+            let r = 0, g = 0, bl = 0, al = 0;
+            for (let j = 0; j < 2; j++) {
+                const vy = v0 + j;
+                if (vy < 0 || vy >= h) continue;
+                const wy = j ? dv : 1 - dv;
+                for (let i = 0; i < 2; i++) {
+                    const ux = u0 + i;
+                    if (ux < 0 || ux >= w) continue;
+                    const wgt = wy * (i ? du : 1 - du);
+                    if (wgt <= 0) continue;
+                    const q = (vy * w + ux) * 4, pa = src[q + 3] * wgt;
+                    r += src[q] * pa; g += src[q + 1] * pa; bl += src[q + 2] * pa; al += pa;
+                }
+            }
+            if (al <= 0) continue;
+            out[o] = r / al + 0.5; out[o + 1] = g / al + 0.5; out[o + 2] = bl / al + 0.5; out[o + 3] = al + 0.5;
+        }
+    }
+    return out;
+}
+
+/** A mask (one channel, `fill` outside it) under m, into the size of `box`. */
+export function tfMask(src, w, h, m, box, fill = 0) {
+    const inv = invertM(m);
+    const out = new Uint8Array(box.w * box.h).fill(fill);
+    if (!inv) return out;
+    for (let Y = 0; Y < box.h; Y++) {
+        for (let X = 0; X < box.w; X++) {
+            const gx = box.x + X + 0.5, gy = box.y + Y + 0.5;
+            const fu = inv.a * gx + inv.c * gy + inv.e - 0.5, fv = inv.b * gx + inv.d * gy + inv.f - 0.5;
+            const u0 = Math.floor(fu), v0 = Math.floor(fv), du = fu - u0, dv = fv - v0;
+            let s = 0;
+            for (let j = 0; j < 2; j++) for (let i = 0; i < 2; i++) {
+                const ux = u0 + i, vy = v0 + j;
+                const val = (ux < 0 || vy < 0 || ux >= w || vy >= h) ? fill : src[vy * w + ux];
+                s += val * (j ? dv : 1 - dv) * (i ? du : 1 - du);
+            }
+            out[Y * box.w + X] = Math.round(s);
+        }
+    }
+    return out;
 }
 
 // ── the bucket ──────────────────────────────────────────────────────────────

@@ -1208,7 +1208,8 @@ export const HistoryMixin = {
         delete this.tabLabels[key];
         delete this.customLayouts[key];
         const container = this.tabsContainer || this.tabBar;
-        const btn = container && container.querySelector(`[data-tab="${key}"]`);
+        // CSS.escape: a Paint tab's key is a path, and a Windows path's backslashes are escapes in a selector.
+        const btn = container && container.querySelector(`[data-tab="${CSS.escape(key)}"]`);
         if (btn) btn.remove();
         if (this.mgTabClosed) this.mgTabClosed(key);
         if (this.paintTabClosed) this.paintTabClosed(key);
@@ -1216,7 +1217,7 @@ export const HistoryMixin = {
         if (this.activeTab === key) {
             const remaining = Object.keys(this.allTabs);
             if (remaining.length > 0) {
-                this.switchTab(remaining[0]);
+                try { this.switchTab(remaining[0]); } catch (e) { console.error("bEpicViewer: switching after a closed tab", e); }
             } else {
                 this.activeTab = null;
                 if (this.imgBase)  this.imgBase.src = '';

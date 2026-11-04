@@ -111,3 +111,53 @@ test("a light press paints a smaller, or fainter, dab", () => {
     assert.ok(inked(light) < inked(full) / 5);
     assert.equal(faint[(20 * w + 20) * 4 + 3], D.q8(0.3));
 });
+
+test("the clone stamp paints what lies at the source, offset, and nothing from outside it", () => {
+    const w = 30, h = 10, px = layer(w, h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < 10; x++) px.set([0, 200, 0, 255], (y * w + x) * 4);   // green on the left
+    const st = stroke(px, w, h);
+    st.clone = { src: st.orig, sw: w, sh: h, sx: 0, sy: 0, dx: -15, dy: 0 };
+    D.stamp(st, 20, 5, 3, 1);                                  // paints at x 17..23, takes from x 2..8
+    assert.deepEqual([...px.subarray((5 * w + 20) * 4, (5 * w + 20) * 4 + 4)], [0, 200, 0, 255]);
+    assert.equal(D.cloneAt(st.clone, 20, 5), (5 * w + 5) * 4);
+    assert.equal(D.cloneAt(st.clone, 2, 5), -1);               // its source would be left of the layer
+    // A see-through source paints nothing.
+    const px2 = layer(w, h), st2 = stroke(px2, w, h);
+    st2.clone = { src: layer(w, h), sw: w, sh: h, sx: 0, sy: 0, dx: 0, dy: 0 };
+    D.stamp(st2, 10, 5, 3, 1);
+    assert.ok(px2.every((v) => v === 0));
+});
+
+test("a transform's matrix: identity, a move, a quarter turn about the middle, a shear", () => {
+    const id = D.tfIdentity(5, 7, 10, 4), m = D.tfMatrix(id);
+    assert.deepEqual(D.applyM(m, 0, 0).map(Math.round), [5, 7]);
+    assert.ok(D.tfIsMove(id));
+    assert.ok(D.tfIsMove({ ...id, tx: id.tx + 3 }));
+    assert.ok(!D.tfIsMove({ ...id, tx: id.tx + 0.5 }));
+    const q = D.tfMatrix({ ...id, r: 90 });
+    const [x, y] = D.applyM(q, 10, 0);                          // the top right corner, turned clockwise about (10, 9): below it
+    assert.ok(Math.abs(x - 12) < 1e-9 && Math.abs(y - 14) < 1e-9);
+    const inv = D.invertM(q), back = D.applyM(inv, x, y);
+    assert.ok(Math.abs(back[0] - 10) < 1e-9 && Math.abs(back[1]) < 1e-9);
+    const sh = D.tfMatrix({ ...id, kx: 1 });                    // the bottom edge goes 1 px right for each px down
+    const top = D.applyM(sh, 0, 0), bot = D.applyM(sh, 0, 4);
+    assert.ok(Math.abs((bot[0] - top[0]) - 4) < 1e-9 && Math.abs((bot[1] - top[1]) - 4) < 1e-9);
+});
+
+test("transformed pixels: a turn of 90° moves them exactly, a doubling covers twice the box", () => {
+    const w = 4, h = 2, px = layer(w, h, [10, 20, 30, 255]);
+    px.set([255, 0, 0, 255], 0);                                // the top left pixel red
+    const t = { ...D.tfIdentity(0, 0, w, h), r: 90 }, m = D.tfMatrix(t), box = D.tfBox(m, w, h);
+    assert.deepEqual([box.w, box.h], [2, 4]);
+    const out = D.tfPixels(px, w, h, m, box, false);
+    // The top left corner, turned clockwise, is the top right.
+    assert.deepEqual([...out.subarray((0 * box.w + 1) * 4, (0 * box.w + 1) * 4 + 4)], [255, 0, 0, 255]);
+    const big = { ...D.tfIdentity(0, 0, w, h), sx: 2, sy: 2 }, mb = D.tfMatrix(big), bb = D.tfBox(mb, w, h);
+    assert.deepEqual([bb.w, bb.h], [8, 4]);
+    const o2 = D.tfPixels(px, w, h, mb, bb, true);
+    for (let i = 3; i < o2.length; i += 4) assert.ok(o2[i] > 0);
+    // A mask goes along, its ground where nothing was.
+    const mk = D.tfMask(new Uint8Array(w * h).fill(200), w, h, m, box, 0);
+    assert.equal(mk.length, box.w * box.h);
+    assert.equal(mk[1], 200);
+});

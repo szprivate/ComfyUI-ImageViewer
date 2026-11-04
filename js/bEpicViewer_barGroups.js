@@ -55,9 +55,10 @@ const GROUPS = [
     ] },
     // A picture in layers is a tab (bEpicViewer_paintPanel.js); Layers and Properties are its parts.
     { id: "paint", title: "Paint", icon: "paint", items: [
-        { label: "Open picture\u2026", run: (p) => p.paintBarOpen(), checked: (p) => !!(p.isPaintTab && p.isPaintTab()) },
+        { label: "Paint", run: (p) => p.paintBarOpen(), checked: (p) => !!(p.isPaintTab && p.isPaintTab()) },
         { label: "Layers", panel: "paintLayers", needs: "paint" },
         { label: "Properties", panel: "paintProps", needs: "paint" },
+        { label: "History", panel: "paintHistory", needs: "paint" },
     ] },
     { id: "timeline", title: "Timeline", icon: "timeline", items: [
         { label: "Edit", panel: "editTimeline", run: (p) => p.editTlToggle() },

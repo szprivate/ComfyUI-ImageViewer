@@ -540,8 +540,8 @@ export const UIMixin = {
         this._historyPanelSig = null;
         this.renderHistoryPanel();
         this.queuePersistViewerState();
-        if (this._bindActiveTool) this._bindActiveTool();
-        if (this.updateToolOverlay) this.updateToolOverlay();
+        if (this._toolState && this._bindActiveTool) this._bindActiveTool();
+        if (this._toolState && this.updateToolOverlay) this.updateToolOverlay();
     },
 
     updateTabHighlights() {

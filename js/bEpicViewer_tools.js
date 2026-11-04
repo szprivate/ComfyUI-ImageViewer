@@ -401,7 +401,7 @@ export const ToolsMixin = {
             && this.sliderMode !== "contact";
         if (!usable) {
             ref.style.display = "none";
-            if (this._toolState.active !== "none") this._toolClearDraw();
+            if (this._toolState && this._toolState.active !== "none") this._toolClearDraw();
             return;
         }
         ref.style.display = "block";
@@ -564,6 +564,7 @@ export const ToolsMixin = {
     // Which node that is comes from ensureToolNode, which reads the canvas
     // selection first and the active tab second.
     _bindActiveTool(opts = {}) {
+        if (!this._toolState) return;
         const kind = TOOL_NODE_KIND[this._toolState.active] || null;
         const node = kind ? ensureToolNode(this, this.activeTab, kind, opts) : null;
         this._toolState.node = node;

@@ -20,7 +20,7 @@ import { notice, openFilePicker, openExportDialog, canvasContext } from "./bEpic
 
 export const PAINT_PREFIX = "paint:";
 /** The dock panels of a Paint tab, and the editor part each one holds. */
-export const PAINT_PANELS = { paintLayers: "layers", paintProps: "props" };
+export const PAINT_PANELS = { paintLayers: "layers", paintProps: "props", paintHistory: "history" };
 export { PAINT_KEYS };
 
 const PICTURE_EXTS = [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".tga", ".gif", ".exr", ".hdr", ".dpx"];
@@ -99,39 +99,40 @@ export const PaintPanelMixin = {
         const rec = st.tabs[key] || (st.tabs[key] = { el: null, editor: null });
         Object.assign(rec, { token: data.token, path: data.path || null, source, pending: data });
         this._paintMakeTab(key, data.doc.name || stemOf(source) || "Paint");
-        this._paintShow(key);
+        // The tab is there whatever happens next: a hiccup while it comes up is logged, not shown as "not opened".
+        try { this._paintShow(key); } catch (e) { console.error("bEpicViewer: Paint tab shown with an error", e); }
         if (data.notes && data.notes.length) notice("info", "Opened with notes", data.notes.slice(0, 4).join("; "));
         return true;
     },
 
-    /** A new, empty canvas: its size and ground asked first. */
-    paintNewDialog() {
-        const rec = this._paintActive();
-        const run = async (v) => {
-            let data;
-            try {
-                data = await postJson("/bepic/paint/open", { new: { w: Math.round(v.w), h: Math.round(v.h), name: v.name || "paint", fill: v.fill } });
-            } catch (e) { notice("error", "No new picture", String(e.message || e)); return; }
-            const st = this._paintState();
-            const key = PAINT_PREFIX + `new-${++st.n}`;
-            st.tabs[key] = { el: null, editor: null, token: data.token, path: null, source: "", pending: data };
-            this._paintMakeTab(key, data.doc.name);
-            this._paintShow(key);
-        };
-        const fields = [["name", "Name", "paint", "text"], ["w", "Width", 1920, 1, 16384], ["h", "Height", 1080, 1, 16384],
-                        ["fill", "Ground", "white", ["white", "black", "transparent"]]];
-        if (rec && rec.editor) rec.editor.dialog("New picture", fields, run);
-        else run({ name: "paint", w: 1920, h: 1080, fill: "white" });
+    /** A new canvas in a tab of its own: w x h, its ground white, black or transparent. */
+    async paintNewBlank({ name = "paint", w = 1920, h = 1080, fill = "white" } = {}) {
+        let data;
+        try {
+            data = await postJson("/bepic/paint/open", { new: { w: Math.round(w), h: Math.round(h), name: name || "paint", fill } });
+        } catch (e) { notice("error", "No new picture", String(e.message || e)); return false; }
+        const st = this._paintState();
+        const key = PAINT_PREFIX + `new-${++st.n}`;
+        st.tabs[key] = { el: null, editor: null, token: data.token, path: null, source: "", pending: data };
+        this._paintMakeTab(key, data.doc.name);
+        try { this._paintShow(key); } catch (e) { console.error("bEpicViewer: Paint tab shown with an error", e); }
+        return true;
     },
 
-    /** The bar's Paint item: the Paint tab that is open, else a tab that asks for a picture. */
+    /** A new, empty canvas: its size and ground asked first (straight away with no picture to ask over). */
+    paintNewDialog() {
+        const rec = this._paintActive();
+        const fields = [["name", "Name", "paint", "text"], ["w", "Width", 1920, 1, 16384], ["h", "Height", 1080, 1, 16384],
+                        ["fill", "Ground", "white", ["white", "black", "transparent"]]];
+        if (rec && rec.editor) rec.editor.dialog("New picture", fields, (v) => this.paintNewBlank(v));
+        else this.paintNewBlank();
+    },
+
+    /** The bar's Paint item: the Paint tab that is open, else a new white canvas, 1920 x 1080. */
     paintBarOpen() {
-        const open = (this.tabOrder || []).find((k) => this.isPaintTab(k) && this.allTabs[k]);
-        if (open) { this.switchTab(open); return; }
-        this._paintState().tabs[PAINT_PREFIX] = { el: null, editor: null, token: null, path: null, source: "" };
-        this._paintMakeTab(PAINT_PREFIX, "Paint");
-        if (this.requestPanelOpen) this.requestPanelOpen();
-        this.switchTab(PAINT_PREFIX);
+        const open = (this.tabOrder || []).find((k) => this.isPaintTab(k) && k !== PAINT_PREFIX && this.allTabs[k]);
+        if (open) { if (this.requestPanelOpen) this.requestPanelOpen(); this.switchTab(open); return Promise.resolve(true); }
+        return this.paintNewBlank();
     },
 
     _paintMakeTab(key, label) {
@@ -155,7 +156,9 @@ export const PaintPanelMixin = {
             note: "A picture opens as one layer; an .ora (Krita, GIMP, this) or a .psd opens with its layers.",
             onPick: async ([file]) => {
                 if (!file) return { ok: false, message: "Pick a file." };
-                const ok = await this.paintOpen(file.path);
+                let ok = false;
+                try { ok = await this.paintOpen(file.path); }
+                catch (e) { console.error("bEpicViewer: Paint open", e); ok = Object.values(this._paintState().tabs).some((r) => r.source === file.path); }
                 return ok ? { ok: true } : { ok: false, message: `${file.name} could not be opened.` };
             },
         });
@@ -292,7 +295,7 @@ export const PaintPanelMixin = {
             else {
                 const n = slot.ownerDocument.createElement("div");
                 n.className = "mg-note";
-                n.textContent = "Open a picture in Paint to see its " + (part === "layers" ? "layers" : "properties") + ".";
+                n.textContent = "Open a picture in Paint to see its " + ({ layers: "layers", props: "properties", history: "history" }[part] || part) + ".";
                 slot.replaceChildren(n);
             }
         }
@@ -333,8 +336,17 @@ export const PaintPanelMixin = {
                 this._previzOpenMenu(entries, x, y, anchor);
             },
             notify: (m, sev) => notice(sev || "info", m),
+            showPanel: (part) => this.paintShowPanel(part),
             onChange: (dirty) => this._paintMarkTab(key, dirty),
         };
+    },
+
+    /** A Paint panel up and in front (Shift+F5 opens Fill in Properties). */
+    paintShowPanel(part) {
+        const id = Object.keys(PAINT_PANELS).find((k) => PAINT_PANELS[k] === part);
+        if (!id || !this.setPanelDocked) return;
+        if (!this.isPanelDocked(id)) { this.setPanelDocked(id, true); this._paintSeat(this._paintActive()); }
+        else if (this.isPanelFront && !this.isPanelFront(id) && this.dockTabFront) this.dockTabFront(id);
     },
 
     _paintMarkTab(key, dirty) {

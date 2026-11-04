@@ -77,6 +77,7 @@ const DOCK_PANELS = {
     // canvas); these are its other parts, up only with a Paint tab.
     paintLayers: { prop: "paintLayersPanel", label: "Layers", minW: 220, minH: 180, defaultRail: "right", size: 2 },
     paintProps: { prop: "paintPropsPanel", label: "Properties", minW: 240, minH: 200, defaultRail: "right", size: 2 },
+    paintHistory: { prop: "paintHistoryPanel", label: "History", minW: 200, minH: 140, defaultRail: "right", size: 1 },
     // (The drawing tools' options have no panel of their own: while a tool is
     // on they take the Parameters panel over — ToolsMixin._toolShowDock.)
     // The agentY chat panel (bEpicViewer_agentPanel.js): agentY's own panel,
@@ -178,6 +179,7 @@ export const DockMixin = {
                                            { id: "motionProps", size: 2, hidden: true },
                                            { id: "paintLayers", size: 2, hidden: true },
                                            { id: "paintProps", size: 2, hidden: true },
+                                           { id: "paintHistory", size: 1, hidden: true },
                                            { id: "params",  size: 1, hidden: false }] },
             // A graph over time wants width: the Curve Editor lives under the picture.
             bottom: { height: 240, panels: [{ id: "curves", size: 1, hidden: true },
@@ -566,7 +568,7 @@ export const DockMixin = {
             if (this.paramRefreshCurves) this.paramRefreshCurves();
         } else if (id === "motionProps" || id === "motionTimeline") {
             if (this._mgOn && this._mgSeat) this._mgSeat(this._mgState().tabs[this.activeTab]);
-        } else if (id === "paintLayers" || id === "paintProps") {
+        } else if (id === "paintLayers" || id === "paintProps" || id === "paintHistory") {
             if (this._paintOn && this._paintSeat) this._paintSeat(this._paintActive());
         } else if (id === "editTimeline") {
             if (this.editTlRefresh) this.editTlRefresh();

@@ -324,6 +324,170 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertFalse(pg.evaluate("() => !!__panel.allTabs['paint:' + %s]" % json.dumps(self.png)))
         self.assertEqual(self.errors, [])
 
+    # ── Sebastian's list (the second round) ─────────────────────────────────────
+
+    def test_the_bar_opens_a_blank_canvas_and_the_pointer_shows(self):
+        pg = self.page()
+        pg.evaluate("() => __panel.paintBarOpen()")
+        pg.wait_for_function("() => { const r = __panel._paintActive(); return r && r.editor && r.editor.doc; }", timeout=10000)
+        ed = self.ED
+        st = pg.evaluate(f"() => {{ const e = {ed}; const b = e.pix.get(e.doc.layers[0].id); return {{ w: e.doc.w, h: e.doc.h, px: [...b.slice(0, 4)],"
+                         f" empty: !!e.wrap.querySelector('.paint-empty'), key: __panel.activeTab }}; }}")
+        self.assertEqual((st["w"], st["h"], st["px"], st["empty"]), (1920, 1080, [255, 255, 255, 255], False))
+        self.assertTrue(st["key"].startswith("paint:new-"), st)
+        # The bar again: the same tab, not a second one.
+        pg.evaluate("() => __panel.paintBarOpen()")
+        self.assertEqual(pg.evaluate("() => __panel.tabOrder.filter((k) => k.startsWith('paint:')).length"), 1)
+        # An editor with no picture shows the arrow (the brush hides the pointer only over a picture).
+        cur = pg.evaluate("""async () => { const m = await import('/extensions/viewer/bEpicViewer_paintEditor.js');
+            const d = document.createElement('div'); d.style.cssText = 'position:fixed;left:0;top:0;width:300px;height:200px'; document.body.append(d);
+            const e = m.createPaintEditor(d, {}); const c = e.wrap.style.cursor; const ec = getComputedStyle(e.wrap.querySelector('.paint-empty')).cursor; e.dispose(); d.remove(); return [c, ec]; }""")
+        self.assertEqual(cur, ["default", "default"])
+        self.assertEqual(self.errors, [])
+
+    def test_a_tab_whose_path_has_backslashes_closes(self):
+        pg = self.page()
+        key = "paint:C:\\AI\\out\\photo_v001.ora"
+        left = pg.evaluate("""(key) => { __panel._paintMakeTab(key, 'photo'); __panel.closeTab(key);
+            return [!!__panel.allTabs[key], [...(__panel.tabsContainer || __panel.tabBar).querySelectorAll('.tab[data-tab]')].some((b) => b.dataset.tab === key)]; }""", key)
+        self.assertEqual(left, [False, False])
+        self.assertEqual(self.errors, [])
+
+    def test_the_open_dialog_closes_when_the_picture_opened(self):
+        pg = self.page()
+        pg.evaluate("() => { __panel._toolState = undefined; __panel.paintPickOpen(); }")     # a page whose tools never came up
+        pg.wait_for_function("() => __panel.container.querySelector('.pick-dlg .pick-path')", timeout=5000)
+        pg.evaluate("""(dir) => { const p = __panel.container.querySelector('.pick-dlg .pick-path'); p.value = dir;
+            p.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); }""", os.path.dirname(self.png))
+        pg.wait_for_function("(f) => [...__panel.container.querySelectorAll('.pick-dlg .pick-row.file')].some((r) => r.dataset.path === f)", arg=self.png, timeout=5000)
+        pg.evaluate("(f) => [...__panel.container.querySelectorAll('.pick-dlg .pick-row.file')].find((r) => r.dataset.path === f).dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))", self.png)
+        pg.wait_for_function("() => { const r = __panel._paintActive(); return r && r.editor && r.editor.doc; }", timeout=10000)
+        pg.wait_for_timeout(300)
+        self.assertFalse(pg.evaluate("() => !!__panel.container.querySelector('.pick-dlg')"))
+        self.assertEqual(self.errors, [])
+
+    def test_clone_stamp_paints_from_the_source(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        pg.evaluate(f"() => {{ const e = {ed}; e.setTool('clone'); Object.assign(e.opts.clone, {{ size: 10, hardness: 100, opacity: 100 }}); }}")
+        x0, y0, k = pg.evaluate(f"() => {{ const r = {ed}.canvas.getBoundingClientRect(); return [r.left, r.top, r.width / {ed}.doc.w]; }}")
+        at = lambda x, y: (x0 + x * k, y0 + y * k)
+        # Painting before a source is set does nothing.
+        pg.mouse.move(*at(20, 10)); pg.mouse.down(); pg.mouse.move(*at(25, 10)); pg.mouse.up()
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.length"), 0)
+        # Alt+click in the red block, then paint up in the blue.
+        pg.keyboard.down("Alt"); pg.mouse.click(*at(100, 60)); pg.keyboard.up("Alt")
+        self.assertEqual(pg.evaluate(f"() => [Math.round({ed}.cloneSrc.x), Math.round({ed}.cloneSrc.y)]"), [100, 60])
+        pg.mouse.move(*at(20, 12)); pg.mouse.down()
+        pg.mouse.move(*at(40, 12), steps=8); pg.mouse.up()
+        px = f"([x, y]) => {{ const e = {ed}; const L = e.doc.layers[0]; const b = e.pix.get(L.id); const i = ((y - L.y) * L.w + x - L.x) * 4; return [...b.slice(i, i + 4)]; }}"
+        self.assertEqual(pg.evaluate(px, [30, 12]), [220, 0, 160, 255])     # red, from 80 px further on
+        self.assertEqual(pg.evaluate(px, [30, 25]), [0, 0, 160, 255])       # below the stroke: still blue
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Clone stamp")
+        # The options bar holds the clone stamp's controls, kept in step with Properties.
+        bar = pg.evaluate(f"""() => {{ const e = {ed}; const r = e.optBar.querySelector('input[type=range]'); r.value = 33; r.dispatchEvent(new Event('input'));
+            return [e.opts.clone.size, e.parts.props.querySelector('input[type=range]').value, !!e.optBar.querySelector('select')]; }}""")
+        self.assertEqual(bar, [33, "33", True])
+        self.assertEqual(self.errors, [])
+
+    def test_transform_moves_rotates_and_shears(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        pg.evaluate(f"() => {ed}.setTool('move')")
+        x0, y0, k = pg.evaluate(f"() => {{ const r = {ed}.canvas.getBoundingClientRect(); return [r.left, r.top, r.width / {ed}.doc.w]; }}")
+        at = lambda x, y: (x0 + x * k, y0 + y * k)
+        # Inside: a move by whole pixels, applied by Enter (no resampling: the same buffer).
+        buf0 = pg.evaluate(f"() => {{ window.__b0 = {ed}.pix.get({ed}.doc.layers[0].id); return true; }}")
+        pg.mouse.move(*at(100, 60)); pg.mouse.down(); pg.mouse.move(*at(110, 65), steps=5); pg.mouse.up()
+        pg.keyboard.press("Enter")
+        st = pg.evaluate(f"() => {{ const e = {ed}, L = e.doc.layers[0]; return [L.x, L.y, L.w, L.h, e.pix.get(L.id) === window.__b0, e.undoStack.at(-1).label, !!e.tf]; }}")
+        self.assertEqual(st, [10, 5, 200, 120, True, "Move", False])
+        # The numbers: a quarter turn, then Cancel (Esc) leaves it as it was.
+        pg.evaluate(f"() => {ed}.tfSet({{ r: 90 }})")
+        self.assertEqual(pg.evaluate(f"() => [{ed}.doc.layers[0].w, {ed}.doc.layers[0].h]"), [120, 200])
+        pg.mouse.move(*at(5, 5)); pg.keyboard.press("Escape")
+        self.assertEqual(pg.evaluate(f"() => [{ed}.doc.layers[0].w, {ed}.doc.layers[0].h, !!{ed}.tf]"), [200, 120, False])
+        # Outside the box (left of it): a rotation about its middle (110, 65), Shift in 15° steps.
+        pg.mouse.move(*at(5, 65)); pg.mouse.down()
+        pg.keyboard.down("Shift"); pg.mouse.move(*at(104, 58), steps=6); pg.keyboard.up("Shift")
+        r = pg.evaluate(f"() => {ed}.tf.p.r")
+        self.assertEqual(r % 15, 0)
+        self.assertAlmostEqual(r, 45, delta=1)
+        pg.mouse.up()
+        pg.evaluate(f"() => {ed}.tfCommit()")
+        L = pg.evaluate(f"() => {{ const L = {ed}.doc.layers[0]; return [L.w, L.h, {ed}.undoStack.at(-1).label]; }}")
+        self.assertEqual(L[2], "Transform")
+        self.assertAlmostEqual(L[0], 320 / 2 ** 0.5, delta=2)
+        pg.keyboard.press("Control+z")
+        self.assertEqual(pg.evaluate(f"() => [{ed}.doc.layers[0].w, {ed}.doc.layers[0].x]"), [200, 10])
+        # Ctrl + the top edge's handle: a horizontal shear.
+        top = pg.evaluate(f"() => {{ const L = {ed}.doc.layers[0]; return [L.x + L.w / 2, L.y]; }}")
+        pg.mouse.move(*at(*top)); pg.keyboard.down("Control"); pg.mouse.down()
+        pg.mouse.move(*at(top[0] + 30, top[1]), steps=5); pg.mouse.up(); pg.keyboard.up("Control")
+        p = pg.evaluate(f"() => {ed}.tf.p")
+        self.assertAlmostEqual(p["kx"], -30 / 120, delta=0.03)
+        self.assertEqual((p["sx"], p["sy"], p["r"]), (1, 1, 0))
+        # The top left handle: a scale, the bottom right corner (210, 125) staying put.
+        pg.keyboard.press("Escape")
+        pg.mouse.move(*at(10, 5)); pg.mouse.down(); pg.mouse.move(*at(60, 35), steps=5); pg.mouse.up()
+        pg.keyboard.press("Enter")
+        L = pg.evaluate(f"() => {{ const L = {ed}.doc.layers[0]; return [L.x, L.y, L.w, L.h]; }}")
+        for got, want in zip(L, [60, 35, 150, 90]):
+            self.assertAlmostEqual(got, want, delta=2)
+        self.assertEqual(self.errors, [])
+
+    def test_history_panel_rename_fill_and_backspace(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        pg.evaluate(f"() => {{ const e = {ed}; e.newLayer('A'); e.newLayer('B'); }}")
+        pg.evaluate("() => __panel.setPanelDocked('paintHistory', true)")
+        rows = pg.evaluate(f"() => [...{ed}.parts.history.querySelectorAll('.paint-row')].map((r) => [r.textContent, r.className.includes('active')])")
+        self.assertEqual([r[0] for r in rows][1:], ["New layer", "New layer"])
+        self.assertTrue(rows[2][1])
+        # A click on the first row: back to the picture as it was opened; on the last: forwards again.
+        pg.evaluate(f"() => {ed}.parts.history.querySelectorAll('.paint-row')[0].click()")
+        self.assertEqual(pg.evaluate(f"() => [{ed}.doc.layers.length, {ed}.redoStack.length]"), [1, 2])
+        self.assertTrue(pg.evaluate(f"() => {ed}.parts.history.querySelectorAll('.paint-row')[2].classList.contains('future')"))
+        pg.evaluate(f"() => {ed}.parts.history.querySelectorAll('.paint-row')[2].click()")
+        self.assertEqual(pg.evaluate(f"() => {ed}.doc.layers.length"), 3)
+
+        # A double-click on a layer's name renames it.
+        def name_box(name):
+            return pg.evaluate(f"""(n) => {{ const r = [...{ed}.layerList.querySelectorAll('.paint-row')].find((x) => x.querySelector('.nm').textContent === n);
+                const b = r.querySelector('.nm').getBoundingClientRect(); return [b.left + 10, b.top + b.height / 2]; }}""", name)
+        pg.mouse.dblclick(*name_box("A"))
+        pg.wait_for_timeout(50)
+        self.assertTrue(pg.evaluate(f"() => !!{ed}.layerList.querySelector('.nm input')"))
+        pg.keyboard.press("Control+a"); pg.keyboard.type("Sky"); pg.keyboard.press("Enter")
+        self.assertIn("Sky", pg.evaluate(f"() => {ed}.doc.layers.map((l) => l.name)"))
+        self.assertEqual(pg.evaluate(f"() => {ed}.doc.layers.length"), 3)
+
+        # Backspace with the Layers panel last pressed: the layer goes.
+        pg.mouse.click(*name_box("B"))
+        pg.keyboard.press("Backspace")
+        self.assertEqual(pg.evaluate(f"() => {ed}.doc.layers.map((l) => l.name)"), ["Background", "Sky"])
+
+        # Shift+F5 over the picture: Fill in Properties; a custom colour at half.
+        x0, y0, w, h = pg.evaluate(f"() => {{ const r = {ed}.canvas.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }}")
+        pg.mouse.click(x0 + w / 2, y0 + h / 2)   # the brush's dab on Sky; the canvas has the press now
+        pg.evaluate(f"() => {{ const e = {ed}; e.setActive(e.doc.layers[0].id); e.setTool('marquee'); }}")
+        pg.evaluate(f"() => {{ const e = {ed}; const m = new Uint8Array(200*120); for (let y = 0; y < 10; y++) for (let x = 0; x < 10; x++) m[y*200+x] = 255; e.setSelection(m); }}")
+        pg.keyboard.press("Shift+F5")
+        self.assertTrue(pg.evaluate(f"() => !!{ed}.parts.props.querySelector('.paint-fill')"))
+        pg.evaluate(f"""() => {{ const f = {ed}.parts.props.querySelector('.paint-fill'); const s = f.querySelector('select'); s.value = 'custom'; s.dispatchEvent(new Event('change'));
+            const c = f.querySelector('input[type=color]'); c.value = '#00ff00'; c.dispatchEvent(new Event('input'));
+            const n = f.querySelector('input[type=number]'); n.value = 50; n.dispatchEvent(new Event('change'));
+            [...f.querySelectorAll('button')].find((b) => b.textContent === 'Fill').click(); }}""")
+        px = pg.evaluate(f"() => {{ const e = {ed}; const b = e.pix.get(e.doc.layers[0].id); return [[...b.slice(0, 4)], [...b.slice((20*200+20)*4, (20*200+20)*4+4)]]; }}")
+        self.assertEqual(px[0], [0, 128, 80, 255])
+        self.assertEqual(px[1], [0, 0, 160, 255])
+        self.assertFalse(pg.evaluate(f"() => !!{ed}.parts.props.querySelector('.paint-fill')"))
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Fill")
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

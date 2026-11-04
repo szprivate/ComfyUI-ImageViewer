@@ -16,23 +16,27 @@ import * as D from "./bEpicViewer_paintData.js";
 import { paintIcon } from "./bEpicViewer_paintIcons.js";
 
 export const PAINT_TOOLS = [
-    ["move", "move", "Move", "V"], ["marquee", "marquee", "Rectangle select", "M"], ["ellipse", "ellipse", "Ellipse select", "Shift+M"],
+    ["move", "transform", "Transform (move, scale, rotate, shear)", "V"], ["marquee", "marquee", "Rectangle select", "M"], ["ellipse", "ellipse", "Ellipse select", "Shift+M"],
     ["lasso", "lasso", "Lasso", "L"], ["wand", "wand", "Magic wand", "W"], ["crop", "crop", "Crop", "C"],
-    ["brush", "brush", "Brush", "B"], ["eraser", "eraser", "Eraser", "E"], ["fill", "fill", "Paint bucket", "G"],
+    ["brush", "brush", "Brush", "B"], ["clone", "clone", "Clone stamp", "S"], ["eraser", "eraser", "Eraser", "E"], ["fill", "fill", "Paint bucket", "G"],
     ["picker", "picker", "Eyedropper", "I"], ["text", "text", "Text", "T"], ["hand", "hand", "Hand (hold Space)", "H"],
 ];
-const TOOL_KEYS = { v: "move", m: "marquee", l: "lasso", w: "wand", c: "crop", b: "brush", e: "eraser", g: "fill", i: "picker",
+const TOOL_KEYS = { v: "move", m: "marquee", l: "lasso", w: "wand", c: "crop", b: "brush", s: "clone", e: "eraser", g: "fill", i: "picker",
                     t: "text", h: "hand" };
+/** The tools that paint with a round brush (size, hardness, opacity, spacing, the pen). */
+const BRUSHES = ["brush", "clone", "eraser"];
 /** The keys, for the viewer's Show Hotkeys while a Paint tab is up. */
 export const PAINT_KEYS = [
-    ["V M L W C", "Move, select, lasso, magic wand, crop"], ["B E G I T H", "Brush, eraser, bucket, eyedropper, text, hand"],
+    ["V M L W C", "Transform, select, lasso, magic wand, crop"], ["B S E G I T H", "Brush, clone stamp, eraser, bucket, eyedropper, text, hand"],
     ["[ / ]", "Brush smaller / larger (Shift: softer / harder)"], ["X / D", "Swap / default colours"],
-    ["Alt+click", "Pick a colour (brush, bucket)"], ["Space+drag", "Pan"], ["Wheel", "Zoom about the pointer"],
+    ["Alt+click", "Pick a colour (brush, bucket); the clone stamp: where it takes from"],
+    ["Transform: drag", "Inside: move; a handle: scale (Shift: keep the shape, Alt: about the middle); outside: rotate (Shift: 15°); Ctrl+edge handle: shear"],
+    ["Ctrl+T", "Transform the layer"], ["Shift+F5", "Fill… (in Properties)"], ["Del / Backspace in Layers", "Delete the layer (or its mask)"], ["Space+drag", "Pan"], ["Wheel", "Zoom about the pointer"],
     ["Ctrl+0 / Ctrl+1", "Fit / 100%"], ["Ctrl+Z / Ctrl+Shift+Z", "Undo / redo"], ["Ctrl+A / Ctrl+D", "Select all / deselect"],
     ["Ctrl+Shift+I", "Invert the selection"], ["Shift / Alt while selecting", "Add to / take from the selection"],
     ["Del", "Clear the selection on the layer"], ["Alt+Del", "Fill the selection with the colour"], ["Ctrl+J", "Duplicate the layer (the selection only, with one)"],
     ["Ctrl+E", "Merge down"], ["Ctrl+Shift+N", "New layer"], ["Arrows", "Nudge the layer (Move; Shift: 10 px)"],
-    ["Enter / Esc", "Apply / cancel the crop or the text"], ["Ctrl+S / Ctrl+Shift+S", "Save / save as"],
+    ["Enter / Esc", "Apply / cancel the crop, the transform or the text"], ["Ctrl+S / Ctrl+Shift+S", "Save / save as"],
 ];
 
 const HISTORY_MAX = 60;
@@ -49,6 +53,17 @@ const STYLE = `
 .paint-btn:disabled { opacity: .35; cursor: default; border-color: transparent; }
 .paint-menu-btn { padding: 0 8px; }
 .paint-main { flex: 1 1 auto; display: flex; min-height: 0; }
+.paint-optbar { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; padding: 3px 8px; min-height: 26px; background: #19191d;
+  border-bottom: 1px solid #2b2b30; overflow-x: auto; overflow-y: hidden; white-space: nowrap; scrollbar-width: thin; }
+.paint-optbar .paint-otool { color: #f60; font-weight: 600; flex: 0 0 auto; }
+.paint-optbar .paint-field { margin: 0; flex: 0 0 auto; gap: 4px; }
+.paint-optbar .paint-field > label { flex: 0 0 auto; color: #999; }
+.paint-optbar input[type=range] { width: 80px; accent-color: #f60; }
+.paint-optbar input[type=number], .paint-optbar select { background: #111; color: #4fd6ee; border: 1px solid #3a3a40; border-radius: 3px; font: inherit; padding: 1px 3px; }
+.paint-optbar input[type=number] { width: 52px; }
+.paint-optbar select { color: #ddd; }
+.paint-optbar .paint-btn { height: 20px; border-color: #3a3a40; }
+.paint-optbar .paint-note { margin: 0; }
 .paint-tools { flex: 0 0 auto; display: flex; flex-direction: column; gap: 2px; padding: 4px 3px; background: #1d1d21; border-right: 1px solid #2b2b30; }
 .paint-tools .paint-btn { width: 30px; height: 28px; padding: 0; }
 .paint-colors { position: relative; width: 30px; height: 34px; margin-top: 6px; }
@@ -67,7 +82,7 @@ const STYLE = `
 .paint-status b { color: #f60; font-weight: 600; }
 .paint-text-input { position: absolute; z-index: 5; background: rgba(0,0,0,.15); border: 1px dashed #f60; outline: none; resize: none;
   padding: 0; margin: 0; overflow: hidden; white-space: pre; line-height: 1.25; }
-.paint-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: #999; text-align: center; padding: 20px; }
+.paint-empty { position: absolute; inset: 0; cursor: default; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: #999; text-align: center; padding: 20px; }
 .paint-empty .t { font-size: 20px; color: #ddd; font-weight: 600; }
 .paint-empty .row { display: flex; gap: 8px; }
 .paint-big { background: #ff6a1a; border: 0; color: #111; font: 600 13px system-ui, sans-serif; padding: 8px 18px; border-radius: 4px; cursor: pointer; }
@@ -96,6 +111,13 @@ const STYLE = `
 .paint-row .nm input { width: 100%; }
 .paint-row .tag { color: #888; font-size: 10px; flex: 0 0 auto; }
 .paint-row .lk { color: #f60; flex: 0 0 auto; display: inline-flex; }
+.paint-hist .paint-row { gap: 8px; }
+.paint-hist .paint-row .hico { color: #888; flex: 0 0 auto; display: inline-flex; }
+.paint-hist .paint-row.future { color: #666; }
+.paint-hist .paint-row.future .hico { color: #555; }
+.paint-hist .paint-row.saved .tag { color: #4fd6ee; }
+.paint-fill { background: #22201c; }
+.paint-fill .go { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
 .paint-lfoot { display: flex; gap: 2px; padding: 4px 6px; border-top: 1px solid #2b2b30; }
 .paint-sect { border-bottom: 1px solid #2b2b30; padding: 6px 8px 8px; }
 .paint-sect h4 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #f60; font-weight: 600; }
@@ -136,6 +158,7 @@ class PaintEditor {
         this.opts = {
             brush: { size: 24, hardness: 80, opacity: 100, spacing: 15, penSize: true, penOpacity: false },
             eraser: { size: 40, hardness: 80, opacity: 100, spacing: 15, penSize: true, penOpacity: false },
+            clone: { size: 40, hardness: 60, opacity: 100, spacing: 10, penSize: true, penOpacity: false, aligned: true, sample: "layer" },
             fill: { tolerance: 32, contiguous: true, all: false },
             wand: { tolerance: 32, contiguous: true, all: true },
             select: { feather: 0 },
@@ -151,6 +174,11 @@ class PaintEditor {
         this.bufVer = new WeakMap();
         this.saved = new Map();
         this.editMask = false;
+        this.tf = null;
+        this.cloneSrc = null;
+        this._cloneOff = null;
+        this._histDropped = 0;
+        this._fillOpen = null;
         this._build();
     }
 
@@ -198,6 +226,8 @@ class PaintEditor {
         this.redoBtn = this.btn("redo", "Redo (Ctrl+Shift+Z)", () => this.redo());
         this.fitBtn = this.btn("fit", "Fit (Ctrl+0)", () => this.fit());
         bar.append(this.undoBtn, this.redoBtn, this.fitBtn);
+        // The tool's options, in one row over the picture (the same as Properties' tool section).
+        this.optBar = this.el("div", "paint-optbar");
         const main = this.el("div", "paint-main");
         // The tools.
         const tools = this.el("div", "paint-tools");
@@ -224,10 +254,10 @@ class PaintEditor {
         this.wrap.append(this.world, this.overlay);
         main.append(tools, this.wrap);
         this.status = this.el("div", "paint-status");
-        this.box.append(bar, main, this.status);
+        this.box.append(bar, this.optBar, main, this.status);
         this.root.append(this.box);
         // The panels.
-        this.parts = { layers: this._buildLayersPart(), props: this._buildPropsPart() };
+        this.parts = { layers: this._buildLayersPart(), props: this._buildPropsPart(), history: this._buildHistoryPart() };
         this._wirePointer();
         this._ro = new (this.d.defaultView.ResizeObserver || ResizeObserver)(() => this._sizeOverlay());
         this._ro.observe(this.wrap);
@@ -268,12 +298,16 @@ class PaintEditor {
         this.sel = data.selection && data.selection.length === this.doc.w * this.doc.h ? data.selection : null;
         this.editMask = false;
         this.crop = null;
+        this.tf = null;
         this._cancelText();
         if (fresh) {
             this.undoStack = [];
             this.redoStack = [];
             this.version = 0;
             this.savedVersion = 0;
+            this._histDropped = 0;
+            this.cloneSrc = null;
+            this._cloneOff = null;
             this._markSavedRefs();
         }
         this._resizeCanvas();
@@ -282,6 +316,7 @@ class PaintEditor {
         this.redraw();
         this.refreshPanels();
         this._showEmpty();
+        this.setTool(this.tool);
         this._emit();
     }
 
@@ -437,19 +472,48 @@ class PaintEditor {
             c.strokeStyle = "#f60"; c.lineWidth = 1.5; c.strokeRect(X(x), Y(y), w * v.zoom, h * v.zoom);
             c.fillStyle = "#f60"; c.font = "11px system-ui"; c.fillText(`${Math.round(w)} x ${Math.round(h)}  (Enter applies, Esc cancels)`, X(x) + 4, Y(y) - 6);
         }
-        // The layer's box (Move).
-        const L = this.active();
-        if (this.tool === "move" && L && L.kind === "pixel") {
-            c.strokeStyle = "rgba(0,200,255,.8)"; c.setLineDash([3, 3]); c.lineWidth = 1;
-            c.strokeRect(X(L.x) + 0.5, Y(L.y) + 0.5, L.w * v.zoom, L.h * v.zoom); c.setLineDash([]);
+        // The layer's box and handles (Transform).
+        const g = this.tool === "move" ? this._tfGeom() : null;
+        if (g) {
+            const m = D.tfMatrix(g.p), cs = D.tfCorners(m, g.w, g.h);
+            c.strokeStyle = this.tf ? "#4fd6ee" : "rgba(0,200,255,.8)"; c.lineWidth = 1; c.setLineDash(this.tf ? [] : [3, 3]);
+            c.beginPath();
+            cs.forEach(([x, y], i) => (i ? c.lineTo(X(x), Y(y)) : c.moveTo(X(x), Y(y))));
+            c.closePath(); c.stroke(); c.setLineDash([]);
+            c.fillStyle = "#fff"; c.strokeStyle = "#000";
+            for (const [u, w] of this._tfHandles(g.w, g.h)) {
+                const [x, y] = D.applyM(m, u, w);
+                c.fillRect(Math.round(X(x)) - 3.5, Math.round(Y(y)) - 3.5, 7, 7); c.strokeRect(Math.round(X(x)) - 3.5, Math.round(Y(y)) - 3.5, 7, 7);
+            }
+            c.beginPath(); c.arc(X(g.p.tx), Y(g.p.ty), 3, 0, Math.PI * 2); c.stroke();
+        }
+        // The clone stamp's source.
+        if (this.tool === "clone" && this.cloneSrc) {
+            const h = this._hover;
+            const s = h ? this._cloneFrom(h.x, h.y) : this.cloneSrc;
+            if (s) {
+                const sx = X(s.x), sy = Y(s.y), r = Math.max(4, (this.opts.clone.size / 2) * v.zoom);
+                for (const [col, wd] of [["rgba(0,0,0,.7)", 3], ["#fff", 1]]) {
+                    c.strokeStyle = col; c.lineWidth = wd;
+                    c.beginPath(); c.moveTo(sx - 8, sy); c.lineTo(sx + 8, sy); c.moveTo(sx, sy - 8); c.lineTo(sx, sy + 8); c.stroke();
+                }
+                c.strokeStyle = "rgba(255,255,255,.5)"; c.lineWidth = 1; c.setLineDash([3, 3]);
+                c.beginPath(); c.arc(sx, sy, r, 0, Math.PI * 2); c.stroke(); c.setLineDash([]);
+            }
         }
         // The brush.
-        if ((this.tool === "brush" || this.tool === "eraser") && this._hover) {
+        if (BRUSHES.includes(this.tool) && this._hover) {
             const o = this.opts[this.tool];
             c.strokeStyle = "rgba(255,255,255,.9)"; c.lineWidth = 1;
             c.beginPath(); c.arc(this._hover.sx, this._hover.sy, Math.max(1, (o.size / 2) * v.zoom), 0, Math.PI * 2); c.stroke();
             c.strokeStyle = "rgba(0,0,0,.6)";
             c.beginPath(); c.arc(this._hover.sx, this._hover.sy, Math.max(1, (o.size / 2) * v.zoom) + 1, 0, Math.PI * 2); c.stroke();
+            // A small cross in the middle: the pointer stays visible however small the brush is on screen.
+            const hx = Math.round(this._hover.sx) + 0.5, hy = Math.round(this._hover.sy) + 0.5;
+            for (const [col, wd] of [["rgba(0,0,0,.6)", 3], ["#fff", 1]]) {
+                c.strokeStyle = col; c.lineWidth = wd;
+                c.beginPath(); c.moveTo(hx - 4, hy); c.lineTo(hx + 4, hy); c.moveTo(hx, hy - 4); c.lineTo(hx, hy + 4); c.stroke();
+            }
         }
     }
 
@@ -469,6 +533,8 @@ class PaintEditor {
             const bb = this.sel ? D.maskBBox(this.sel, d.w, d.h) : null;
             if (bb) parts.push(`selection ${bb.w} x ${bb.h}`);
             if (this.editMask) parts.push("<b>painting the mask</b>");
+            if (this.tool === "clone") parts.push(this.cloneSrc ? `clone from ${Math.round(this.cloneSrc.x)}, ${Math.round(this.cloneSrc.y)}` : "<b>Alt+click: where to clone from</b>");
+            if (this.tf) parts.push("<b>transforming</b> (Enter applies, Esc cancels)");
             const L = this.active();
             if (L) parts.push(`layer: ${escapeHtml(L.name)}`);
         }
@@ -512,6 +578,7 @@ class PaintEditor {
     }
 
     setSelection(mask, label = "Select") {
+        this._tfSettle();
         const before = this.sel, after = mask && mask.some((v) => v) ? mask : null;
         if (before === after) return;
         this._push({ label, undo: () => { this.sel = before; this._selChanged(); }, redo: () => { this.sel = after; this._selChanged(); } });
@@ -543,6 +610,7 @@ class PaintEditor {
         let bytes = this.undoStack.reduce((s, x) => s + x.bytes, 0);
         while (this.undoStack.length > HISTORY_MAX || (bytes > HISTORY_BYTES && this.undoStack.length > 1)) {
             bytes -= this.undoStack.shift().bytes;
+            this._histDropped++;
             this.savedVersion = -1;              // the saved state can no longer be reached by undoing
         }
         this.version++;
@@ -550,6 +618,7 @@ class PaintEditor {
     }
 
     undo() {
+        if (this.tf) { this.tfCancel(); return; }
         const e = this.undoStack.pop();
         if (!e) return;
         e.undo();
@@ -559,11 +628,25 @@ class PaintEditor {
     }
 
     redo() {
+        if (this.tf) return;
         const e = this.redoStack.pop();
         if (!e) return;
         e.redo();
         this.undoStack.push(e);
         this.version++;
+        this._afterHistory();
+    }
+
+    /**
+     * The History panel's click: the document as it was after step `i` (0: as it was opened), undoing or
+     * redoing as many steps as that takes, drawn once.
+     */
+    goTo(i) {
+        if (this.tf) this.tfCancel();
+        i = clamp(i, 0, this.undoStack.length + this.redoStack.length);
+        if (i === this.undoStack.length) return;
+        while (this.undoStack.length > i) { const e = this.undoStack.pop(); e.undo(); this.redoStack.push(e); this.version--; }
+        while (this.undoStack.length < i && this.redoStack.length) { const e = this.redoStack.pop(); e.redo(); this.undoStack.push(e); this.version++; }
         this._afterHistory();
     }
 
@@ -580,6 +663,7 @@ class PaintEditor {
         if (this.undoBtn) { this.undoBtn.disabled = !this.undoStack.length; this.redoBtn.disabled = !this.redoStack.length; }
         if (this.host.onChange) this.host.onChange(this.isDirty());
         this._status();
+        this.refreshHistory();
     }
 
     isDirty() { return !!this.doc && this.version !== this.savedVersion; }
@@ -606,6 +690,7 @@ class PaintEditor {
     /** Change the document's shape: `fn` changes it (new buffers, never old ones in place); one undo entry. */
     change(label, fn) {
         if (!this.doc) return false;
+        this._tfSettle();
         const before = this._snap();
         let ok;
         try { ok = fn(); } catch (e) { this._restore(before); this._notify(String(e.message || e), "error"); return false; }
@@ -617,7 +702,7 @@ class PaintEditor {
     }
 
     /** A live change while a slider moves (no undo entry yet): `begin` once, `live` as it moves, `end` to keep it. */
-    liveBegin() { if (!this._liveSnap) this._liveSnap = this._snap(); }
+    liveBegin() { if (!this._liveSnap) { this._tfSettle(); this._liveSnap = this._snap(); } }
     liveEnd(label) {
         const before = this._liveSnap;
         this._liveSnap = null;
@@ -642,8 +727,11 @@ class PaintEditor {
         if (!this.doc) return;
         const L = this.doc.layers.find((x) => x.id === id);
         if (!L) return;
+        const em = !!(mask && L.mask) || (L.kind === "adjust" && mask);
+        if (this.doc.active === id && this.editMask === em) return;
+        if (this.tf && this.tf.L.id !== id) this.tfCommit();
         this.doc.active = id;
-        this.editMask = !!(mask && L.mask) || (L.kind === "adjust" && mask);
+        this.editMask = em;
         this.refreshPanels();
         this.drawOverlay();
         this._status();
@@ -999,12 +1087,21 @@ class PaintEditor {
     setTool(t) {
         if (t !== "crop") this.crop = null;
         if (t !== "text") this._commitText();
+        if (t !== "move" && this.tf) this.tfCommit();
         this.tool = t;
         for (const [id, b] of Object.entries(this.toolBtns)) b.classList.toggle("on", id === t);
-        const cursors = { hand: "grab", move: "move", text: "text", picker: "copy" };
-        this.wrap.style.cursor = cursors[t] || ((t === "brush" || t === "eraser") ? "none" : "crosshair");
+        this._cursor();
         this.refreshProps();
         this.drawOverlay();
+    }
+
+    /** The pointer's look over the picture: the tool's, none where the brush's circle stands in for it, the arrow with no picture. */
+    _cursor(over = null) {
+        const t = this.tool;
+        if (!this.doc) { this.wrap.style.cursor = "default"; return; }
+        if (over) { this.wrap.style.cursor = over; return; }
+        const cursors = { hand: "grab", move: "move", text: "text", picker: "copy" };
+        this.wrap.style.cursor = cursors[t] || (BRUSHES.includes(t) ? "none" : "crosshair");
     }
 
     swapColors() { [this.fg, this.bg] = [this.bg, this.fg]; this._swatches(); this.refreshProps(); }
@@ -1044,12 +1141,15 @@ class PaintEditor {
             const k = Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0018));
             this.zoomTo(this.view.zoom * k, p.sx, p.sy);
         }, { passive: false });
-        w.addEventListener("pointerdown", (e) => this._down(e));
+        w.addEventListener("pointerdown", (e) => { this._layersFocus = false; this._down(e); });
         w.addEventListener("pointermove", (e) => this._move(e));
         w.addEventListener("pointerup", (e) => this._up(e));
         w.addEventListener("pointercancel", (e) => this._up(e));
         w.addEventListener("pointerleave", () => { this._hover = null; this.drawOverlay(); this._status(); });
-        w.addEventListener("dblclick", (e) => { if (this.tool === "crop" && this.crop) { e.preventDefault(); this.applyCrop(); } });
+        w.addEventListener("dblclick", (e) => {
+            if (this.tool === "crop" && this.crop) { e.preventDefault(); this.applyCrop(); }
+            else if (this.tool === "move" && this.tf) { e.preventDefault(); this.tfCommit(); }
+        });
         for (const t of ["mousedown", "dblclick", "contextmenu"]) w.addEventListener(t, (e) => e.stopPropagation());
     }
 
@@ -1068,13 +1168,14 @@ class PaintEditor {
         this.wrap.setPointerCapture(e.pointerId);
         const t = this.tool;
         if ((t === "brush" || t === "fill") && e.altKey) { this._pickAt(p); return; }
+        if (t === "clone" && e.altKey) { this.setCloneSource(p.x, p.y); return; }
         if (t === "picker") { this._pickAt(p); this._drag = { kind: "pick" }; return; }
-        if (t === "brush" || t === "eraser") { this._strokeStart(p, e); return; }
+        if (BRUSHES.includes(t)) { this._strokeStart(p, e); return; }
         if (t === "fill") { this._bucket(p); return; }
         if (t === "wand") { this._wand(p, e); return; }
         if (t === "marquee" || t === "ellipse") { this._drag = { kind: t, x0: p.x, y0: p.y, rect: null, e }; return; }
         if (t === "lasso") { this._drag = { kind: "lasso", pts: [[p.x, p.y]], e }; return; }
-        if (t === "move") { this._moveStart(p); return; }
+        if (t === "move") { this._tfDown(p, e); return; }
         if (t === "crop") { this._cropStart(p); return; }
         if (t === "text") { this._textAt(p); return; }
     }
@@ -1084,7 +1185,12 @@ class PaintEditor {
         const p = this.toImage(e);
         this._hover = p;
         const dr = this._drag;
-        if (!dr) { if (this.tool === "brush" || this.tool === "eraser") this.drawOverlay(); this._status(); return; }
+        if (!dr) {
+            if (BRUSHES.includes(this.tool)) this.drawOverlay();
+            else if (this.tool === "move" && !this._space) this._cursor(this._tfCursor(this._tfHit(p)));
+            this._status();
+            return;
+        }
         if (dr.kind === "pan") {
             this.view.x = dr.vx + (e.clientX - dr.sx);
             this.view.y = dr.vy + (e.clientY - dr.sy);
@@ -1096,6 +1202,7 @@ class PaintEditor {
             // A pen sends far more positions than pointermove fires: take every one, with its pressure.
             const all = (e.getCoalescedEvents && e.getCoalescedEvents()) || [];
             for (const ce of (all.length ? all : [e])) this._strokeTo(this.toImage(ce), D.pressureOf(ce.pointerType, ce.pressure));
+            this.drawOverlay();
             return;
         }
         if (dr.kind === "marquee" || dr.kind === "ellipse") {
@@ -1106,14 +1213,7 @@ class PaintEditor {
             return;
         }
         if (dr.kind === "lasso") { dr.pts.push([p.x, p.y]); this.drawOverlay(); return; }
-        if (dr.kind === "move") {
-            const dx = Math.round(p.x - dr.p0.x), dy = Math.round(p.y - dr.p0.y);
-            dr.L.x = dr.x + dx; dr.L.y = dr.y + dy;
-            if (dr.L.mask) { dr.L.mask.x = dr.mx + dx; dr.L.mask.y = dr.my + dy; }
-            this.requestRedraw();
-            this.drawOverlay();
-            return;
-        }
+        if (dr.kind === "tf") { this._tfDrag(dr, p, e); return; }
         if (dr.kind === "crop") { this._cropMove(p); return; }
     }
 
@@ -1136,16 +1236,20 @@ class PaintEditor {
             this.setSelection(this._combine(D.polygonMask(this.doc.w, this.doc.h, dr.pts), dr.e), "Lasso");
             return;
         }
-        if (dr.kind === "move") { this._moveEnd(dr); return; }
+        if (dr.kind === "tf") { this._tfShow(true); return; }
         if (dr.kind === "crop") { this.drawOverlay(); return; }
     }
 
     // The brush and the eraser: on the layer's pixels, or on its mask (Layers panel: the mask's thumbnail).
     _strokeStart(p, e) {
+        this._tfSettle();
         const L = this.active();
         if (!L) return;
         if (L.locked) { this._notify(`${L.name} is locked.`, "warn"); return; }
         const onMask = this.editMask || L.kind === "adjust";
+        const clone = this.tool === "clone";
+        if (clone && onMask) { this._notify("The clone stamp paints a layer's pixels: pick the layer (not its mask).", "info"); return; }
+        if (clone && !this.cloneSrc) { this._notify("Alt+click where the clone stamp should take from first.", "info"); return; }
         if (L.kind === "adjust" && !L.mask) this.addMask("all");
         if (L.kind === "pixel" && !onMask) {
             // A layer smaller than the canvas grows first (an undo entry of its own shape).
@@ -1169,6 +1273,16 @@ class PaintEditor {
             const px = this.pix.get(A.id);
             st = { px, orig: new Uint8ClampedArray(px), cover: new Float32Array(A.w * A.h), lw: A.w, lh: A.h, lx: A.x, ly: A.y,
                    color: this.fg, opacity: o.opacity / 100, erase, lockAlpha: false, sel: this.sel, W: this.doc.w, H: this.doc.h };
+        }
+        if (clone) {
+            // Where it takes from: the same offset for every stroke (aligned) once the first one set it, or from
+            // the source point again at each stroke. The layer as it was before the stroke, or the picture.
+            const off = o.aligned && this._cloneOff ? this._cloneOff
+                : { dx: Math.round(this.cloneSrc.x - p.x), dy: Math.round(this.cloneSrc.y - p.y) };
+            this._cloneOff = off;
+            st.clone = o.sample === "all"
+                ? { src: new Uint8ClampedArray(this.comp), sw: this.doc.w, sh: this.doc.h, sx: 0, sy: 0, dx: off.dx, dy: off.dy }
+                : { src: st.orig, sw: A.w, sh: A.h, sx: A.x, sy: A.y, dx: off.dx, dy: off.dy };
         }
         st.L = A;
         st.radius = Math.max(0.5, o.size / 2);
@@ -1232,7 +1346,7 @@ class PaintEditor {
         };
         const before = cut(origBuf), after = cut(buf);
         this._bump(buf);
-        this._push({ label: this.tool === "eraser" ? "Eraser" : "Brush", bytes: before.byteLength * 2,
+        this._push({ label: s.clone ? "Clone stamp" : this.tool === "eraser" ? "Eraser" : "Brush", bytes: before.byteLength * 2,
                      undo: () => paste(buf, before), redo: () => paste(buf, after) });
         this._lastStrokeEnd = { L: s.L.id, x: s.last[0], y: s.last[1] };
         this.redraw({ x0: r.x0 + s.lx, y0: r.y0 + s.ly, x1: r.x1 + s.lx, y1: r.y1 + s.ly });
@@ -1275,21 +1389,270 @@ class PaintEditor {
         this.setSelection(this._combine(m, e), "Magic wand");
     }
 
-    _moveStart(p) {
-        const L = this.active();
-        if (!L || L.kind !== "pixel") { this._notify("Move: pick a pixel layer.", "info"); return; }
-        if (L.locked) { this._notify(`${L.name} is locked.`, "warn"); return; }
-        this._drag = { kind: "move", L, p0: p, x: L.x, y: L.y, mx: L.mask ? L.mask.x : 0, my: L.mask ? L.mask.y : 0, before: this._snap() };
+    // The clone stamp: Alt+click sets where it takes from; the first stroke after that sets the offset.
+    setCloneSource(x, y) {
+        this.cloneSrc = { x, y };
+        this._cloneOff = null;
+        this.drawOverlay();
+        this._status();
     }
 
-    _moveEnd(dr) {
-        if (dr.L.x === dr.x && dr.L.y === dr.y) return;
-        const after = this._snap(), before = dr.before;
-        this._push({ label: "Move", undo: () => this._restore(before), redo: () => this._restore(after) });
+    /** Where the clone stamp takes from for the pointer at (x, y) (canvas pixels), or null. */
+    _cloneFrom(x, y) {
+        const o = this.opts.clone;
+        if (this._cloneOff && (o.aligned || (this._drag && this._drag.kind === "stroke"))) return { x: x + this._cloneOff.dx, y: y + this._cloneOff.dy };
+        return this.cloneSrc;
+    }
+
+    // Transform (the Move tool's place, V): the active pixel layer under p = t + R·Shear·Scale·(u - c)
+    // (bEpicViewer_paintData.js, tfMatrix). One session while the tool is on: its handles drag, the options
+    // bar's numbers type, Enter or a double-click applies it (one undo entry), Esc throws it away. The layer
+    // is shown at the nearest pixel while a handle moves and resampled (bilinear) when it is let go. A move
+    // by whole pixels resamples nothing. The layer's mask is transformed with it.
+
+    /** Anything that changes the document first applies a transform that is under way. */
+    _tfSettle() { if (this.tf) this.tfCommit(); }
+
+    _tfLayer(quiet = false) {
+        const L = this.active();
+        if (!L || L.kind !== "pixel") { if (!quiet) this._notify("Transform: pick a pixel layer.", "info"); return null; }
+        if (L.locked) { if (!quiet) this._notify(`${L.name} is locked.`, "warn"); return null; }
+        return L;
+    }
+
+    tfBegin() {
+        if (this.tf) return this.tf;
+        this._commitText();
+        const L = this._tfLayer();
+        if (!L) return null;
+        const before = this._snap();
+        const src = { px: this.pix.get(L.id), x: L.x, y: L.y, w: L.w, h: L.h,
+                      mask: L.mask ? { m: this.masks.get(L.id), x: L.mask.x, y: L.mask.y, w: L.mask.w, h: L.mask.h, fill: L.mask.fill } : null };
+        this.tf = { L, src, p: D.tfIdentity(L.x, L.y, L.w, L.h), before, smooth: true };
+        this.refreshProps();
+        this.drawOverlay();
+        return this.tf;
+    }
+
+    /** What the overlay and the hit test go by: the session's transform, else the active layer as it lies. */
+    _tfGeom() {
+        if (this.tf) return { p: this.tf.p, w: this.tf.src.w, h: this.tf.src.h };
+        const L = this.active();
+        if (!L || L.kind !== "pixel") return null;
+        return { p: D.tfIdentity(L.x, L.y, L.w, L.h), w: L.w, h: L.h };
+    }
+
+    /** The eight handles in the layer's own pixels: top left, top, top right, right, bottom right, bottom, bottom left, left. */
+    _tfHandles(w, h) { return [[0, 0], [w / 2, 0], [w, 0], [w, h / 2], [w, h], [w / 2, h], [0, h], [0, h / 2]]; }
+
+    /** What a press at p would do: { kind: "scale" | "move" | "rotate", i } or null (no pixel layer). */
+    _tfHit(p) {
+        const g = this._tfGeom();
+        if (!g) return null;
+        const m = D.tfMatrix(g.p), v = this.view;
+        const H = this._tfHandles(g.w, g.h);
+        let best = -1, bd = 8;
+        H.forEach(([u, w], i) => {
+            const [x, y] = D.applyM(m, u, w);
+            const d = Math.hypot(v.x + x * v.zoom - p.sx, v.y + y * v.zoom - p.sy);
+            if (d < bd) { bd = d; best = i; }
+        });
+        if (best >= 0) return { kind: "scale", i: best };
+        const inv = D.invertM(m);
+        if (inv) {
+            const [u, w] = D.applyM(inv, p.x, p.y);
+            if (u >= 0 && w >= 0 && u <= g.w && w <= g.h) return { kind: "move" };
+        }
+        return { kind: "rotate" };
+    }
+
+    _tfCursor(hit) {
+        if (!hit) return "default";
+        if (hit.kind === "move") return "move";
+        if (hit.kind === "rotate") return ROTATE_CURSOR;
+        const g = this._tfGeom(), m = D.tfMatrix(g.p);
+        const [u, w] = this._tfHandles(g.w, g.h)[hit.i];
+        const [x, y] = D.applyM(m, u, w);
+        const ang = ((Math.atan2(y - g.p.ty, x - g.p.tx) * 180 / Math.PI) % 180 + 180) % 180;
+        return ["ew-resize", "nwse-resize", "ns-resize", "nesw-resize"][Math.round(ang / 45) % 4];
+    }
+
+    _tfDown(p, e) {
+        const hit = this._tfHit(p);
+        if (!hit) { this._tfLayer(); return; }
+        const tf = this.tf || this.tfBegin();
+        if (!tf) return;
+        const dr = { kind: "tf", hit, p0: { x: p.x, y: p.y }, t0: { ...tf.p }, shear: hit.kind === "scale" && (e.ctrlKey || e.metaKey) && hit.i % 2 === 1 };
+        if (hit.kind === "rotate") dr.a0 = Math.atan2(p.y - tf.p.ty, p.x - tf.p.tx);
+        this._drag = dr;
+    }
+
+    _tfDrag(dr, p, e) {
+        const tf = this.tf;
+        if (!tf) return;
+        const t0 = dr.t0, P = { ...t0 }, src = tf.src;
+        if (dr.hit.kind === "move") {
+            P.tx = t0.tx + Math.round(p.x - dr.p0.x);
+            P.ty = t0.ty + Math.round(p.y - dr.p0.y);
+        } else if (dr.hit.kind === "rotate") {
+            let r = t0.r + (Math.atan2(p.y - t0.ty, p.x - t0.tx) - dr.a0) * 180 / Math.PI;
+            if (e.shiftKey) r = Math.round(r / 15) * 15;
+            P.r = ((r % 360) + 540) % 360 - 180;
+        } else {
+            const H = this._tfHandles(src.w, src.h), h = H[dr.hit.i];
+            const a = e.altKey && !dr.shear ? [t0.cx, t0.cy] : H[(dr.hit.i + 4) % 8];
+            const Pa = D.applyM(D.tfMatrix(t0), a[0], a[1]);
+            const rr = t0.r * Math.PI / 180, cs = Math.cos(rr), sn = Math.sin(rr);
+            const qx = p.x - Pa[0], qy = p.y - Pa[1];
+            const du = h[0] - a[0], dv = h[1] - a[1];
+            if (dr.shear) {
+                // R⁻¹ (q - anchor) = Shear·Scale·(h - a): along the edge that moves, the shear.
+                const lx = cs * qx + sn * qy, ly = -sn * qx + cs * qy;
+                if (du === 0) P.kx = clamp(lx / (t0.sy * dv), -10, 10);
+                else P.ky = clamp(ly / (t0.sx * du), -10, 10);
+            } else {
+                // (R·Shear)⁻¹ (q - anchor) = Scale·(h - a).
+                const kx = t0.kx || 0, ky = t0.ky || 0;
+                const B = { a: cs - sn * ky, b: sn + cs * ky, c: cs * kx - sn, d: sn * kx + cs, e: 0, f: 0 };
+                const inv = D.invertM(B);
+                if (!inv) return;
+                const [lx, ly] = D.applyM(inv, qx, qy);
+                let sx = du ? lx / du : t0.sx, sy = dv ? ly / dv : t0.sy;
+                if (e.shiftKey && du && dv) {
+                    const k = (lx * t0.sx * du + ly * t0.sy * dv) / ((t0.sx * du) ** 2 + (t0.sy * dv) ** 2);
+                    sx = t0.sx * k; sy = t0.sy * k;
+                }
+                const minX = 1 / Math.max(1, src.w), minY = 1 / Math.max(1, src.h);
+                P.sx = Math.abs(sx) < minX ? (sx < 0 ? -minX : minX) : sx;
+                P.sy = Math.abs(sy) < minY ? (sy < 0 ? -minY : minY) : sy;
+            }
+            // The anchor stays where it was.
+            const At = D.applyM(D.tfMatrix({ ...P, tx: 0, ty: 0 }), a[0], a[1]);
+            P.tx = Pa[0] - At[0];
+            P.ty = Pa[1] - At[1];
+        }
+        tf.p = P;
+        this._tfShowSoon();
+    }
+
+    _tfShowSoon() {
+        if (this._tfRaf) return;
+        this._tfRaf = this.d.defaultView.requestAnimationFrame(() => { this._tfRaf = 0; this._tfShow(false); });
+    }
+
+    /** The layer as the session's transform makes it: at the nearest pixel (while dragging) or resampled. */
+    _tfShow(smooth) {
+        const tf = this.tf;
+        if (!tf) return;
+        if (this._tfRaf) { this.d.defaultView.cancelAnimationFrame(this._tfRaf); this._tfRaf = 0; }
+        const { L, src, p } = tf;
+        if (D.tfIsMove(p)) {
+            const x = Math.round(p.tx - p.cx), y = Math.round(p.ty - p.cy);
+            this.pix.set(L.id, src.px);
+            Object.assign(L, { x, y, w: src.w, h: src.h });
+            if (src.mask) {
+                this.masks.set(L.id, src.mask.m);
+                L.mask = { ...L.mask, x: src.mask.x + x - src.x, y: src.mask.y + y - src.y, w: src.mask.w, h: src.mask.h };
+            }
+        } else {
+            const m = D.tfMatrix(p), box = D.tfBox(m, src.w, src.h);
+            if (box.w > D.MAX_SIDE * 2 || box.h > D.MAX_SIDE * 2) return;      // far too big to be meant
+            this.pix.set(L.id, D.tfPixels(src.px, src.w, src.h, m, box, smooth));
+            Object.assign(L, { x: box.x, y: box.y, w: box.w, h: box.h });
+            if (src.mask) {
+                const mk = src.mask, ox = mk.x - src.x, oy = mk.y - src.y;
+                const mm = { ...m, e: m.e + m.a * ox + m.c * oy, f: m.f + m.b * ox + m.d * oy };
+                const mb = D.tfBox(mm, mk.w, mk.h);
+                this.masks.set(L.id, D.tfMask(mk.m, mk.w, mk.h, mm, mb, mk.fill));
+                L.mask = { ...L.mask, x: mb.x, y: mb.y, w: mb.w, h: mb.h };
+            }
+        }
+        tf.smooth = smooth;
+        this.requestRedraw();
+        this.drawOverlay();
+        this._tfFieldsRefresh();
+    }
+
+    /** The options bar's numbers: a change of the transform (a session begins when there is none). */
+    tfSet(patch) {
+        const tf = this.tf || this.tfBegin();
+        if (!tf) return;
+        Object.assign(tf.p, patch);
+        this._tfShow(true);
+    }
+
+    tfCommit() {
+        const tf = this.tf;
+        if (!tf) return false;
+        const p = tf.p;
+        if (!tf.smooth || this._tfRaf) this._tfShow(true);
+        const same = p.sx === 1 && p.sy === 1 && !(p.r % 360) && !p.kx && !p.ky && p.tx === tf.src.x + p.cx && p.ty === tf.src.y + p.cy;
+        if (same) {
+            // Nothing changed: the layer is as it was (its own buffers), and no undo entry.
+            this.tf = null;
+            this.redraw();
+            this.refreshProps();
+            this.drawOverlay();
+            return false;
+        }
+        this.tf = null;
+        const before = tf.before, after = this._snap();
+        this._push({ label: D.tfIsMove(p) ? "Move" : "Transform", undo: () => this._restore(before), redo: () => this._restore(after),
+                     bytes: this._snapBytes(before, after) });
+        this._afterHistory();
+        this._thumbsSoon();
+        return true;
+    }
+
+    tfCancel() {
+        const tf = this.tf;
+        if (!tf) return;
+        if (this._tfRaf) { this.d.defaultView.cancelAnimationFrame(this._tfRaf); this._tfRaf = 0; }
+        this.tf = null;
+        this._restore(tf.before);
         this._afterHistory();
     }
 
+    /** The transform's numbers, for the options bar and Properties: kept in step while a handle moves. */
+    _tfFields(box) {
+        const deg = (k) => Math.round(Math.atan(k || 0) * 1800 / Math.PI) / 10;
+        const r1 = (v) => Math.round(v * 10) / 10;
+        const rows = [
+            ["X", (p) => r1(p.tx), (v) => ({ tx: v }), "The layer's middle, across"],
+            ["Y", (p) => r1(p.ty), (v) => ({ ty: v }), "The layer's middle, down"],
+            ["W %", (p) => r1(p.sx * 100), (v) => ({ sx: (v || 0.1) / 100 }), "Width, % of the layer's"],
+            ["H %", (p) => r1(p.sy * 100), (v) => ({ sy: (v || 0.1) / 100 }), "Height, % of the layer's"],
+            ["Angle °", (p) => r1(p.r), (v) => ({ r: v }), "Rotation, clockwise"],
+            ["Shear H °", (p) => deg(p.kx), (v) => ({ kx: Math.tan(clamp(v, -84, 84) * Math.PI / 180) }), "Horizontal shear"],
+            ["Shear V °", (p) => deg(p.ky), (v) => ({ ky: Math.tan(clamp(v, -84, 84) * Math.PI / 180) }), "Vertical shear"],
+        ];
+        this._tfInputs = (this._tfInputs || []).filter((x) => x.inp.isConnected);
+        for (const [label, get, set, title] of rows) {
+            const inp = this.el("input", "", { type: "number", step: "any", title });
+            inp.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") inp.blur(); });
+            inp.addEventListener("change", () => { const v = Number(inp.value); if (Number.isFinite(v)) this.tfSet(set(v)); });
+            this._tfInputs.push({ inp, get });
+            this._field(box, label, inp);
+        }
+        const go = this.el("button", "paint-btn on", { type: "button", text: "Apply (Enter)", disabled: !this.tf });
+        go.addEventListener("click", () => this.tfCommit());
+        const no = this.el("button", "paint-btn", { type: "button", text: "Cancel (Esc)", disabled: !this.tf });
+        no.addEventListener("click", () => this.tfCancel());
+        box.append(go, no);
+        this._tfFieldsRefresh();
+    }
+
+    _tfFieldsRefresh() {
+        const g = this._tfGeom();
+        for (const { inp, get } of this._tfInputs || []) {
+            if (!inp.isConnected) continue;
+            inp.disabled = !g;
+            if (g && inp !== inp.ownerDocument.activeElement && (!inp.getRootNode || inp.getRootNode().activeElement !== inp)) inp.value = get(g.p);
+        }
+    }
+
     nudge(dx, dy) {
+        if (this.tf) { this.tf.p.tx += dx; this.tf.p.ty += dy; this._tfShow(true); return; }
         const L = this.active();
         if (!L || L.kind !== "pixel" || L.locked) return;
         this.change("Nudge", () => {
@@ -1406,6 +1769,7 @@ class PaintEditor {
             if (lk === "n" && e.shiftKey) return take(() => this.newLayer());
             if (lk === "s") return take(() => (e.shiftKey ? this.host.saveAs && this.host.saveAs() : this.host.save && this.host.save()));
             if (lk === "o") return take(() => this.host.open && this.host.open());
+            if (lk === "t") return take(() => { this.setTool("move"); this.tfBegin(); });
             if (k === "0") return take(() => this.fit());
             if (k === "1") return take(() => this.zoomTo(1));
             if (k === "=" || k === "+") return take(() => this.zoomTo(this.view.zoom * 1.25));
@@ -1413,15 +1777,27 @@ class PaintEditor {
             return false;
         }
         if (k === " ") { e.preventDefault(); if (!this._space) { this._space = true; this.wrap.style.cursor = "grab"; } return true; }
+        if (k === "F5" && e.shiftKey) return take(() => this.openFill());
         if (k === "Enter" && this.crop) return take(() => this.applyCrop());
-        if (k === "Escape") return take(() => { if (this.crop) { this.crop = null; this.drawOverlay(); } else if (this.sel) this.deselect(); });
+        if (k === "Enter" && this.tf) return take(() => this.tfCommit());
+        if (k === "Escape") return take(() => {
+            if (this._fillOpen) this.closeFill();
+            else if (this.tf) this.tfCancel();
+            else if (this.crop) { this.crop = null; this.drawOverlay(); }
+            else if (this.sel) this.deselect();
+        });
+        if ((k === "Delete" || k === "Backspace") && this._layersFocus && !e.altKey) {
+            // In the Layers panel: the layer (or its mask, when that is what is picked) goes.
+            const L = this.active();
+            return take(() => (L && L.mask && this.editMask ? this.maskCmd("delete") : this.deleteLayer()));
+        }
         if (k === "Delete" || k === "Backspace") return take(() => (e.altKey ? this.fillSelection(this.fg) : this.clearSelection()));
         if (k.startsWith("Arrow") && this.tool === "move") {
             const s = e.shiftKey ? 10 : 1;
             return take(() => this.nudge(k === "ArrowLeft" ? -s : k === "ArrowRight" ? s : 0, k === "ArrowUp" ? -s : k === "ArrowDown" ? s : 0));
         }
         if (k === "[" || k === "]") {
-            const o = this.opts[this.tool === "eraser" ? "eraser" : "brush"];
+            const o = this.opts[BRUSHES.includes(this.tool) ? this.tool : "brush"];
             return take(() => {
                 if (e.shiftKey) o.hardness = clamp(o.hardness + (k === "]" ? 10 : -10), 0, 100);
                 else o.size = clamp(Math.round(o.size * (k === "]" ? 1.2 : 1 / 1.2) + (k === "]" ? 1 : -1)), 1, 2000);
@@ -1462,6 +1838,7 @@ class PaintEditor {
         const u = this.undoStack[this.undoStack.length - 1], r = this.redoStack[this.redoStack.length - 1];
         return [{ label: `Undo${u ? " " + u.label : ""} (Ctrl+Z)`, disabled: !u, run: () => this.undo() },
                 { label: `Redo${r ? " " + r.label : ""} (Ctrl+Shift+Z)`, disabled: !r, run: () => this.redo() }, "-",
+                { label: "Fill… (Shift+F5)", run: () => this.openFill() },
                 { label: "Fill with the colour (Alt+Del)", run: () => this.fillSelection(this.fg) },
                 { label: "Fill with the second colour", run: () => this.fillSelection(this.bg) },
                 { label: "Clear (Del)", disabled: !this.sel, run: () => this.clearSelection() }];
@@ -1516,6 +1893,7 @@ class PaintEditor {
                 { label: "Rotate 90° clockwise", disabled: !L || L.kind !== "pixel", run: () => this.rotateLayer(90) },
                 { label: "Rotate 90° anticlockwise", disabled: !L || L.kind !== "pixel", run: () => this.rotateLayer(270) },
                 { label: "Rotate 180°", disabled: !L || L.kind !== "pixel", run: () => this.rotateLayer(180) },
+                { label: "Free transform (Ctrl+T)", disabled: !L || L.kind !== "pixel", run: () => { this.setTool("move"); this.tfBegin(); } },
                 { label: "Scale…", disabled: !L || L.kind !== "pixel", run: () => this.dialog("Scale layer", [["k", "Percent", 100, 1, 1600]], (v) => this.scaleLayer(v.k / 100)) },
                 { label: L && L.locked ? "Unlock" : "Lock", disabled: !L, run: () => this.setLayerProps(L.id, { locked: !L.locked }, "Lock") }];
     }
@@ -1625,6 +2003,8 @@ class PaintEditor {
                     this.btn("mergeDown", "Merge down (Ctrl+E)", () => this.mergeDown()),
                     this.btn("trash", "Delete the layer", () => this.deleteLayer()));
         p.append(head, this.layerList, foot);
+        // Del / Backspace act on the layer while the Layers panel was the last thing pressed.
+        p.addEventListener("pointerdown", () => { this._layersFocus = true; }, true);
         return p;
     }
 
@@ -1673,12 +2053,25 @@ class PaintEditor {
                 row.append(mt);
             }
             const nm = this.el("span", "nm", { text: L.name, title: "Double-click to rename" });
-            nm.addEventListener("dblclick", (e) => { e.stopPropagation(); this._rename(nm, L); });
             row.append(nm);
             if (L.text) row.append(this.el("span", "tag", { text: "T" }));
             if (L.blend !== "normal") row.append(this.el("span", "tag", { text: D.BLEND_LABELS[L.blend].split(" ")[0] }));
             if (L.locked) { const lk = this.el("span", "lk"); lk.append(paintIcon(this.d, "lock", 12)); row.append(lk); }
-            row.addEventListener("click", () => this.setActive(L.id, false));
+            row.addEventListener("click", (e) => {
+                // A double-click on the name renames. Counted here, not by dblclick: the first click can draw
+                // the list again, and the second one then lands on a new row.
+                const now = Date.now(), last = this._rowClick;
+                this._rowClick = { id: L.id, t: now };
+                const onName = e.target && e.target.closest && e.target.closest(".nm");
+                this.setActive(L.id, false);
+                if (onName && last && last.id === L.id && now - last.t < 450) {
+                    this._rowClick = null;
+                    const row2 = [...this.layerList.children].find((r) => r.dataset.id === L.id);
+                    const nm2 = row2 && row2.querySelector(".nm");
+                    const L2 = this.doc.layers.find((x) => x.id === L.id);
+                    if (nm2 && L2 && !nm2.querySelector("input")) this._rename(nm2, L2);
+                }
+            });
             row.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); this.setActive(L.id); if (this.host.menu) this.host.menu(this._layerMenu(), e.clientX, e.clientY, row); });
             row.addEventListener("dragstart", (e) => { this._rowDrag = L.id; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", L.name); });
             row.addEventListener("dragover", (e) => {
@@ -1709,9 +2102,16 @@ class PaintEditor {
 
     _rename(nm, L) {
         const inp = this.el("input", "", { type: "text", value: L.name });
+        inp.addEventListener("pointerdown", (e) => e.stopPropagation());
         nm.replaceChildren(inp);
         inp.focus(); inp.select();
-        const done = (keep) => { const v = inp.value.trim(); if (keep && v && v !== L.name) this.setLayerProps(L.id, { name: v.slice(0, 120) }, "Rename"); else this.refreshLayers(); };
+        let over = false;
+        const done = (keep) => {
+            if (over) return;
+            over = true;
+            const v = inp.value.trim();
+            if (keep && v && v !== L.name) this.setLayerProps(L.id, { name: v.slice(0, 120) }, "Rename layer"); else this.refreshLayers();
+        };
         inp.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") done(true); if (e.key === "Escape") done(false); });
         inp.addEventListener("blur", () => done(true));
         inp.addEventListener("click", (e) => e.stopPropagation());
@@ -1751,12 +2151,14 @@ class PaintEditor {
         const p = this.el("div", "paint-panel");
         this.propsBox = this.el("div", "paint-props");
         p.append(this.propsBox);
+        p.addEventListener("pointerdown", () => { this._layersFocus = false; }, true);
         return p;
     }
 
     _field(parent, label, input, wide = false) {
         const row = this.el("div", "paint-field" + (wide ? " wide" : ""));
-        row.append(this.el("label", "", { text: label, title: label }), ...[].concat(input));
+        if (label) row.append(this.el("label", "", { text: label, title: label }));
+        row.append(...[].concat(input));
         parent.append(row);
         return row;
     }
@@ -1772,64 +2174,19 @@ class PaintEditor {
     }
 
     refreshProps() {
+        this._refreshOptBar();
         const box = this.propsBox;
         if (!box) return;
         box.replaceChildren();
-        // The tool.
+        // Fill (Shift+F5), while it is asked for.
+        if (this._fillOpen) box.append(this._fillSection());
+        // The tool: the same controls as the options bar over the picture.
         const ts = this.el("div", "paint-sect");
         const tool = PAINT_TOOLS.find((t) => t[0] === this.tool);
         ts.append(this.el("h4", "", { text: tool ? tool[2] : "Tool" }));
-        const o = this.opts;
-        if (this.tool === "brush" || this.tool === "eraser") {
-            const b = o[this.tool];
-            this._slider(ts, "Size", b.size, 1, 1000, 1, (v) => { b.size = v; this.drawOverlay(); });
-            this._slider(ts, "Hardness", b.hardness, 0, 100, 1, (v) => { b.hardness = v; });
-            this._slider(ts, "Opacity", b.opacity, 1, 100, 1, (v) => { b.opacity = v; });
-            this._slider(ts, "Spacing %", b.spacing, 1, 100, 1, (v) => { b.spacing = v; });
-            const pen = (key, text) => {
-                const c = this.el("input", "", { type: "checkbox", checked: key === "penSize" ? b.penSize !== false : !!b[key] });
-                c.addEventListener("change", () => { b[key] = c.checked; });
-                const l = this.el("label", "paint-check");
-                l.append(c, this.el("span", "", { text }));
-                return l;
-            };
-            this._field(ts, "Pen pressure", [pen("penSize", "Size"), pen("penOpacity", "Opacity")])
-                .title = "A pen tablet's pressure (Wacom, Windows Ink) sets each dab's size and / or opacity. A mouse paints at full.";
-            ts.append(this.el("div", "paint-note", { text: this.editMask ? "Painting the layer's MASK: white shows, black hides." : "Alt+click picks a colour; Shift+click draws a straight line." }));
-        } else if (this.tool === "fill" || this.tool === "wand") {
-            const f = o[this.tool];
-            this._slider(ts, "Tolerance", f.tolerance, 0, 255, 1, (v) => { f.tolerance = v; });
-            const c1 = this.el("input", "", { type: "checkbox", checked: f.contiguous });
-            c1.addEventListener("change", () => { f.contiguous = c1.checked; });
-            this._field(ts, "Contiguous", c1);
-            const c2 = this.el("input", "", { type: "checkbox", checked: f.all });
-            c2.addEventListener("change", () => { f.all = c2.checked; });
-            this._field(ts, "All layers", c2);
-        } else if (["marquee", "ellipse", "lasso"].includes(this.tool)) {
-            this._slider(ts, "Feather", o.select.feather, 0, 200, 0.5, (v) => { o.select.feather = v; });
-            ts.append(this.el("div", "paint-note", { text: "Shift adds to the selection, Alt takes from it, both keep what they share." }));
-        } else if (this.tool === "text") {
-            const t = o.text;
-            const font = this.el("input", "", { type: "text", value: t.font });
-            font.addEventListener("change", () => { t.font = font.value || "sans-serif"; });
-            font.addEventListener("keydown", (e) => e.stopPropagation());
-            this._field(ts, "Font", font);
-            this._slider(ts, "Size", t.size, 4, 1000, 1, (v) => { t.size = v; });
-            const bold = this.el("input", "", { type: "checkbox", checked: t.bold });
-            bold.addEventListener("change", () => { t.bold = bold.checked; });
-            const it = this.el("input", "", { type: "checkbox", checked: t.italic });
-            it.addEventListener("change", () => { t.italic = it.checked; });
-            this._field(ts, "Bold / italic", [bold, it]);
-            ts.append(this.el("div", "paint-note", { text: "Click to write; Enter keeps it (Shift+Enter: a new line), Esc throws it away. Click a text layer to write it again." }));
-        } else if (this.tool === "crop") {
-            const go = this.el("button", "paint-btn on", { type: "button", text: "Apply crop (Enter)" });
-            go.addEventListener("click", () => this.applyCrop());
-            ts.append(go, this.el("div", "paint-note", { text: "Drag a rectangle; drag inside it to move it." }));
-        } else if (this.tool === "move") {
-            ts.append(this.el("div", "paint-note", { text: "Drag to move the layer (its mask goes with it); the arrows nudge it." }));
-        } else if (this.tool === "picker") {
-            ts.append(this.el("div", "paint-note", { text: "Click or drag over the picture: its colour becomes the brush's." }));
-        }
+        this._propsTool = this.el("div");
+        ts.append(this._propsTool);
+        this._toolOptions(this._propsTool, false);
         const col = this.el("div", "paint-field");
         const fgc = this.el("input", "", { type: "color", value: D.rgbToHex(...this.fg) });
         fgc.addEventListener("input", () => { this.fg = D.hexToRgb(fgc.value); this._swatches(); });
@@ -1843,6 +2200,178 @@ class PaintEditor {
         if (L) box.append(this._layerSection(L));
         // Generate.
         box.append(this._generateSection());
+    }
+
+    /** The options bar over the picture: the tool's name and its controls in one row. */
+    _refreshOptBar() {
+        const bar = this.optBar;
+        if (!bar) return;
+        bar.replaceChildren();
+        const tool = PAINT_TOOLS.find((t) => t[0] === this.tool);
+        bar.append(this.el("span", "paint-otool", { text: tool ? tool[2].split(" (")[0] : "" }));
+        this._toolOptions(bar, true);
+    }
+
+    /** A control changed in one of the two places: the other one shows it too. */
+    _optSync(fromBar) {
+        if (fromBar) { if (this._propsTool && this._propsTool.isConnected) { this._propsTool.replaceChildren(); this._toolOptions(this._propsTool, false); } }
+        else this._refreshOptBar();
+    }
+
+    /** The tool's controls, into the options bar (`bar`: one row, no notes) or Properties. */
+    _toolOptions(ts, bar) {
+        const o = this.opts;
+        const sync = () => this._optSync(bar);
+        const note = (text) => { if (!bar) ts.append(this.el("div", "paint-note", { text })); };
+        const check = (obj, key, text, title = "") => {
+            const c = this.el("input", "", { type: "checkbox", checked: !!obj[key] });
+            c.addEventListener("change", () => { obj[key] = c.checked; sync(); });
+            const l = this.el("label", "paint-check", { title });
+            l.append(c, this.el("span", "", { text }));
+            return l;
+        };
+        if (BRUSHES.includes(this.tool)) {
+            const b = o[this.tool];
+            this._slider(ts, "Size", b.size, 1, 1000, 1, (v) => { b.size = v; this.drawOverlay(); sync(); });
+            this._slider(ts, "Hardness", b.hardness, 0, 100, 1, (v) => { b.hardness = v; sync(); });
+            this._slider(ts, "Opacity", b.opacity, 1, 100, 1, (v) => { b.opacity = v; sync(); });
+            this._slider(ts, "Spacing %", b.spacing, 1, 100, 1, (v) => { b.spacing = v; sync(); });
+            if (b.penSize === undefined) b.penSize = true;
+            this._field(ts, "Pen pressure", [check(b, "penSize", "Size"), check(b, "penOpacity", "Opacity")])
+                .title = "A pen tablet's pressure (Wacom, Windows Ink) sets each dab's size and / or opacity. A mouse paints at full.";
+            if (this.tool === "clone") {
+                const smp = this.el("select", "", { title: "What the clone stamp takes its pixels from" });
+                for (const [v, t] of [["layer", "This layer"], ["all", "All layers"]]) smp.append(this.el("option", "", { value: v, text: t }));
+                smp.value = b.sample;
+                smp.addEventListener("change", () => { b.sample = smp.value; sync(); });
+                this._field(ts, "Sample", smp);
+                this._field(ts, "", check(b, "aligned", "Aligned", "On: every stroke keeps the same offset from where it takes. Off: each stroke takes from the source point again."));
+                note(this.cloneSrc ? "Paints what lies at the source (the cross). Alt+click sets a new source."
+                                   : "Alt+click where to take from, then paint where it should go.");
+            } else note(this.editMask ? "Painting the layer's MASK: white shows, black hides." : "Alt+click picks a colour; Shift+click draws a straight line.");
+        } else if (this.tool === "fill" || this.tool === "wand") {
+            const f = o[this.tool];
+            this._slider(ts, "Tolerance", f.tolerance, 0, 255, 1, (v) => { f.tolerance = v; sync(); });
+            this._field(ts, "", [check(f, "contiguous", "Contiguous"), check(f, "all", "All layers")]);
+        } else if (["marquee", "ellipse", "lasso"].includes(this.tool)) {
+            this._slider(ts, "Feather", o.select.feather, 0, 200, 0.5, (v) => { o.select.feather = v; sync(); });
+            note("Shift adds to the selection, Alt takes from it, both keep what they share.");
+        } else if (this.tool === "text") {
+            const t = o.text;
+            const font = this.el("input", "", { type: "text", value: t.font });
+            font.addEventListener("change", () => { t.font = font.value || "sans-serif"; sync(); });
+            font.addEventListener("keydown", (e) => e.stopPropagation());
+            this._field(ts, "Font", font);
+            this._slider(ts, "Size", t.size, 4, 1000, 1, (v) => { t.size = v; sync(); });
+            this._field(ts, "", [check(t, "bold", "Bold"), check(t, "italic", "Italic")]);
+            note("Click to write; Enter keeps it (Shift+Enter: a new line), Esc throws it away. Click a text layer to write it again.");
+        } else if (this.tool === "crop") {
+            const go = this.el("button", "paint-btn on", { type: "button", text: "Apply crop (Enter)" });
+            go.addEventListener("click", () => this.applyCrop());
+            ts.append(go);
+            note("Drag a rectangle; drag inside it to move it.");
+        } else if (this.tool === "move") {
+            this._tfFields(ts);
+            note("Drag inside to move, a handle to scale (Shift keeps the shape, Alt scales about the middle), outside to rotate (Shift: 15° steps); "
+                 + "Ctrl+drag an edge's handle shears. The arrows nudge. Enter or a double-click applies, Esc cancels.");
+        } else if (this.tool === "picker") {
+            note("Click or drag over the picture: its colour becomes the brush's.");
+        } else if (this.tool === "hand") {
+            note("Drag to pan; the wheel zooms.");
+        }
+    }
+
+    // Fill (Shift+F5, Edit > Fill…): a colour into the selection, in Properties.
+    openFill() {
+        if (!this.doc) return;
+        this._fillOpen = this._fillOpen || { what: "fg", custom: D.rgbToHex(...this.fg), opacity: 100 };
+        this.refreshProps();
+        if (this.host.showPanel) this.host.showPanel("props");
+        const b = this.propsBox && this.propsBox.querySelector(".paint-fill .paint-btn.on");
+        if (b) setTimeout(() => b.focus(), 0);
+    }
+
+    closeFill() { this._fillOpen = null; this.refreshProps(); this.wrap.focus({ preventScroll: true }); }
+
+    _fillSection() {
+        const f = this._fillOpen;
+        const s = this.el("div", "paint-sect paint-fill");
+        s.append(this.el("h4", "", { text: "Fill" }));
+        const what = this.el("select");
+        for (const [v, t] of [["fg", "Colour"], ["bg", "Second colour"], ["custom", "Custom colour…"], ["black", "Black"], ["white", "White"], ["gray", "50% grey"]])
+            what.append(this.el("option", "", { value: v, text: t }));
+        what.value = f.what;
+        const col = this.el("input", "", { type: "color", value: f.custom, title: "The custom colour" });
+        const showCol = () => { col.style.display = what.value === "custom" ? "" : "none"; };
+        what.addEventListener("change", () => { f.what = what.value; showCol(); });
+        col.addEventListener("input", () => { f.custom = col.value; });
+        showCol();
+        this._field(s, "Contents", [what, col]);
+        this._slider(s, "Opacity %", f.opacity, 1, 100, 1, (v) => { f.opacity = v; });
+        const L = this.active();
+        s.append(this.el("div", "paint-note", { text: `Into ${this.sel ? "the selection" : "the whole layer (nothing is selected)"}` + (L ? ` on ${L.name}.` : ".") }));
+        const go = this.el("div", "go");
+        const no = this.el("button", "paint-btn", { type: "button", text: "Cancel" });
+        no.addEventListener("click", () => this.closeFill());
+        const ok = this.el("button", "paint-btn on", { type: "button", text: "Fill" });
+        ok.addEventListener("click", () => this.doFill());
+        go.append(no, ok);
+        s.append(go);
+        s.addEventListener("keydown", (e) => {
+            e.stopPropagation();
+            if (e.key === "Escape") { e.preventDefault(); this.closeFill(); }
+            else if (e.key === "Enter" && e.target.tagName !== "SELECT") { e.preventDefault(); this.doFill(); }
+        });
+        return s;
+    }
+
+    doFill() {
+        const f = this._fillOpen;
+        if (!f) return false;
+        const rgb = { fg: this.fg, bg: this.bg, black: [0, 0, 0], white: [255, 255, 255], gray: [128, 128, 128] }[f.what] || D.hexToRgb(f.custom);
+        const ok = this.fillSelection(rgb, clamp(f.opacity, 1, 100) / 100);
+        if (ok) this.closeFill();
+        return ok;
+    }
+
+    // ── the History panel ────────────────────────────────────────────────────
+
+    _buildHistoryPart() {
+        const p = this.el("div", "paint-panel");
+        this.histList = this.el("div", "paint-list paint-hist");
+        p.append(this.histList);
+        p.addEventListener("pointerdown", () => { this._layersFocus = false; }, true);
+        return p;
+    }
+
+    /** One row per step: the picture as it was opened, every step kept, the ones undone (dimmed, a click redoes them). */
+    refreshHistory() {
+        const list = this.histList;
+        if (!list) return;
+        if (!this.doc) { list.replaceChildren(this.el("div", "paint-note", { text: "Open a picture in Paint to see its history." })); return; }
+        const steps = [...this.undoStack, ...this.redoStack.slice().reverse()];
+        const cur = this.undoStack.length;
+        const sig = `${this.version}|${cur}|${steps.length}|${this._histDropped}|${this.savedVersion}|` + steps.map((x) => x.label).join("\u0001");
+        if (sig === this._histSig && list.childElementCount) return;
+        this._histSig = sig;
+        list.replaceChildren();
+        // The version a row stands for: the steps before it count up from version - cur.
+        const base = this.version - cur;
+        const rows = [[this._histDropped ? `${this.doc.name || "Picture"} (older steps not kept)` : `Open ${this.doc.name || ""}`.trim(), "open"],
+                      ...steps.map((x) => [x.label, "step"])];
+        rows.forEach(([label, kind], i) => {
+            const row = this.el("div", "paint-row" + (i === cur ? " active" : "") + (i > cur ? " future" : ""));
+            row.dataset.step = String(i);
+            const ic = this.el("span", "hico");
+            ic.append(paintIcon(this.d, kind === "open" ? "open" : "history", 14));
+            row.append(ic, this.el("span", "nm", { text: label }));
+            if (base + i === this.savedVersion) { row.classList.add("saved"); row.append(this.el("span", "tag", { text: "saved" })); }
+            row.title = i > cur ? "Undone: click to redo up to here" : i === cur ? "The picture as it is" : "Click to go back to here";
+            row.addEventListener("click", () => this.goTo(i));
+            list.append(row);
+        });
+        const act = list.children[cur];
+        if (act && act.scrollIntoView) act.scrollIntoView({ block: "nearest" });
     }
 
     _layerSection(L) {
@@ -1988,6 +2517,7 @@ class PaintEditor {
      * a layer whose pixels did not change since the last save is named in `keep` and not sent again.
      */
     toSave({ all = false } = {}) {
+        this._tfSettle();
         const meta = JSON.parse(JSON.stringify(this.doc));
         const layers = {}, masks = {}, keep = [];
         for (const L of this.doc.layers) {
@@ -2015,6 +2545,7 @@ class PaintEditor {
 
     /** The document the agent changed replaces this one, as one undo step. */
     replaceWith(data, label = "agentY") {
+        if (this.tf) this.tfCancel();
         const before = this._snap();
         const next = { doc: D.cleanDoc(data.doc), pix: new Map(Object.entries(data.pix || {})), masks: new Map(Object.entries(data.masks || {})),
                        sel: data.selection && data.selection.length === data.doc.w * data.doc.h ? data.selection : null };
@@ -2034,6 +2565,9 @@ class PaintEditor {
         for (const p of Object.values(this.parts)) p.remove();
     }
 }
+
+// Lucide's rotate-cw, white on black, as the pointer outside a transform's box.
+const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><g stroke="#000" stroke-width="4"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g><g stroke="#fff" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g></svg>')}") 12 12, alias`;
 
 const ANCHOR = { top_left: [0, 0], top: [0.5, 0], top_right: [1, 0], left: [0, 0.5], center: [0.5, 0.5], right: [1, 0.5],
                  bottom_left: [0, 1], bottom: [0.5, 1], bottom_right: [1, 1] };

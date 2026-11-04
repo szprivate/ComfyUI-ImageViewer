@@ -653,7 +653,8 @@ class ViewerPanel extends HTMLElement {
         // Paint (bEpicViewer_paintPanel.js): a picture is a TAB; its Layers and Properties are these
         // two dock panels, each holding one part of the tab's editor (a .paint-slot the glue fills).
         for (const [id, prop, cls] of [['paintLayers', 'paintLayersPanel', 'paint-layers'],
-                                       ['paintProps', 'paintPropsPanel', 'paint-props-panel']]) {
+                                       ['paintProps', 'paintPropsPanel', 'paint-props-panel'],
+                                       ['paintHistory', 'paintHistoryPanel', 'paint-history-panel']]) {
             let pp = sr.getElementById(`${id}-panel`);
             if (!pp && this.curvesPanel && this.curvesPanel.parentNode) {
                 const doc = this.curvesPanel.ownerDocument;
