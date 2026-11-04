@@ -44,10 +44,11 @@ STATE = """() => {
   let kept = null;
   try { kept = JSON.parse(localStorage.getItem('%s') || 'null'); } catch (_) {}
   return { tabs: Object.keys(P.allTabs), history: Object.fromEntries(Object.entries(P.history).map(([k, v]) => [k, v.length])),
+           from: [...new Set((P.history.all || []).map((s) => s[0].fromTab))],
            label: P.tabLabels['%s'] || '', active: P.activeTab,
            tabButtons: P.shadowRoot.querySelectorAll('.tab').length,
            keptTabs: kept ? Object.keys(kept.allTabs || {}) : null,
-           keptHistory: kept ? Object.fromEntries(Object.entries(kept.history || {}).map(([k, v]) => [k, v.length])) : null };
+           keptHistory: kept ? Object.values(kept.history || {}).reduce((n, v) => n + v.length, 0) : null };
 }""" % (KEY, AGENT)
 
 
@@ -111,11 +112,13 @@ class ViewerRestoreTests(unittest.TestCase):
 
     def assert_restored(self, st):
         self.assertEqual(st["tabs"], [AGENT])
-        self.assertEqual(st["history"], {AGENT: 2})
+        # The per-tab history of before is the one history now, each snapshot naming its tab.
+        self.assertEqual(st["history"], {"all": 2})
+        self.assertEqual(st["from"], [AGENT])
         self.assertEqual(st["label"], "agentY")
         self.assertEqual(st["active"], AGENT)
         self.assertEqual(st["keptTabs"], [AGENT], "the saved state was overwritten")
-        self.assertEqual(st["keptHistory"], {AGENT: 2})
+        self.assertEqual(st["keptHistory"], 2)
 
     def test_agent_tab_and_history_come_back_after_a_slow_start(self):
         pg = self.new_page()
@@ -128,11 +131,11 @@ class ViewerRestoreTests(unittest.TestCase):
         # new work lands in the agent tab, then ComfyUI restarts (the page loads again)
         pg.evaluate("""() => { const P = window.__panel, k = '%s';
             const f = [{ filename: 'shot_b.png', subfolder: '', type: 'output', path: 'D:/out/agent/shot_b.png' }];
-            P.history[k].unshift(f); P.allTabs[k] = f; P.persistViewerState(); }""" % AGENT)
+            P.pushHistorySnapshot(k, f); P.allTabs[k] = f; P.persistViewerState(); }""" % AGENT)
         st = self.open_viewer(pg, delay=900)
         self.assertEqual(st["tabs"], [AGENT])
-        self.assertEqual(st["history"], {AGENT: 3})
-        self.assertEqual(st["keptHistory"], {AGENT: 3})
+        self.assertEqual(st["history"], {"all": 3})
+        self.assertEqual(st["keptHistory"], 3)
 
     def test_a_fast_start_restores_too(self):
         pg = self.new_page()

@@ -35,9 +35,10 @@ SETUP = """async (n) => {
   if (!P.isPanelDocked('history')) P.setPanelDocked('history', true);
   const key = P.activeTab || 'main';
   P.activeTab = key;
-  P.history[key] = Array.from({ length: n }, (_, i) =>
-      [{ path: `D:/out/render_${String(i).padStart(4, '0')}.png`, type: 'output', label: `render ${i}` }]);
-  P.allTabs[key] = JSON.parse(JSON.stringify(P.history[key][0]));
+  P.historyLimit = 500;   // keep all of them through a push
+  P.history.all = Array.from({ length: n }, (_, i) =>
+      [{ path: `D:/out/render_${String(i).padStart(4, '0')}.png`, type: 'output', label: `render ${i}`, fromTab: key }]);
+  P.allTabs[key] = JSON.parse(JSON.stringify(P.history.all[0]));
   P._historyPanelSig = null;
   P.renderHistoryPanel();
   P.historyStrip.querySelectorAll('.history-thumb').forEach((t) => { t.__orig = true; });
@@ -49,7 +50,7 @@ SWITCH = """async (idx) => {
   const P = window.__panel;
   const raf = () => new Promise((r) => requestAnimationFrame(() => r()));
   const tile = P.historyStrip.querySelector(`.history-thumb[data-idx="${idx}"]`);
-  const want = encodeURIComponent(P.history[P.activeTab][idx][0].path);
+  const want = encodeURIComponent(P.history.all[idx][0].path);
   const t0 = performance.now();
   tile.click();
   const sync = performance.now() - t0;
@@ -198,7 +199,7 @@ class HistorySwitchPerfTests(unittest.TestCase):
         pg = self.page()
         pg.evaluate("""() => { const P = window.__panel; window.agentYViewerBridge = { tags: async () => [] };
             const key = P.activeTab;
-            P.history[key].forEach((sn) => { sn[0].filename = sn[0].path.split('/').pop(); });
+            P.history.all.forEach((sn) => { sn[0].filename = sn[0].path.split('/').pop(); });
             P._agentTags = { 'D:/out/render_0002.png': 'mine' }; }""")
         pg.wait_for_function("() => [...window.__panel.historyStrip.querySelectorAll('.history-thumb img')]"
                              ".filter((i) => i.complete && i.naturalWidth > 0).length >= 6", timeout=60000)
@@ -234,8 +235,8 @@ class HistorySwitchPerfTests(unittest.TestCase):
         pg.evaluate(SWITCH, 3)
         # A new render lands in front: the strip is drawn again, and the open item moves with it.
         pg.evaluate("""() => { const P = window.__panel, key = P.activeTab;
-                               P.history[key].unshift([{ path: 'D:/out/new.png', type: 'output' }]);
-                               P.onHistoryPrepended(key); P.renderHistoryPanel(); }""")
+                               P.pushHistorySnapshot('other', [{ path: 'D:/out/new.png', type: 'output' }]);
+                               P.renderHistoryPanel(); }""")
         strip = pg.evaluate(STRIP)
         self.assertEqual(strip["tiles"], ITEMS + 1)
         self.assertEqual(strip["kept"], 0)

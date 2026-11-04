@@ -1,5 +1,5 @@
 // bEpicViewer_agentY.js
-// The viewer as agentY's viewer: stage groups in the history strip, "Tag for
+// The viewer as agentY's viewer: stage labels in the history strip, "Tag for
 // agentY..." and "Approve for agentY" in a thumbnail's right-click menu.
 //
 // agentY is a separate ComfyUI extension (agentY-comfyuiConnect). The two meet in
@@ -28,6 +28,7 @@
 import { app } from "../../scripts/app.js";
 import { describeHistorySelection } from "./bEpicViewer_historySelection.js";
 import { agentTagKey, agentTagsOfSnapshot, normPath } from "./bEpicViewer_historyAgentTags.js";
+import { snapshotTab } from "./bEpicViewer_historyData.js";
 
 /** The tab a send files itself under when it names one but has no node of its own
  *  on the open graph - an agent running a workflow. */
@@ -98,17 +99,15 @@ export const AgentYMixin = {
     },
 
     /** The history snapshots the user picked in the strip, as plain data
-     *  (see bEpicViewer_historySelection.js for what counts as a pick). On a
-     *  cut's tab the strip shows another tab's history, and that tab is named. */
+     *  (see bEpicViewer_historySelection.js for what counts as a pick). There
+     *  is one history for every tab; each item names the tab it was made in. */
     agentHistorySelection() {
         const borrowed = !!(this.historyBorrows && this.historyBorrows());
-        const key = borrowed ? this.historyKey() : this.activeTab;
-        const empty = { source: "viewer", tab: String(key || ""), tab_label: "", mode: "", count: 0, items: [] };
+        const key = this.historyKey();
+        const empty = { source: "viewer", tab: String(key || ""), tab_label: "History", mode: "", count: 0, items: [] };
         if (!key || !this._agentViewerVisible()) return empty;
-        let label = "";
-        try { label = this._resolveTabLabel ? this._resolveTabLabel(key) : (this.tabLabels || {})[key] || ""; }
-        catch (_) { label = (this.tabLabels || {})[key] || ""; }
-        return describeHistorySelection({
+        const label = "History";
+        const out = describeHistorySelection({
             stack: (this.history || {})[key] || [],
             state: {
                 key,
@@ -123,23 +122,18 @@ export const AgentYMixin = {
             tabLabel: label,
             agentTags: this._agentTags || null,
         });
+        const stack = (this.history || {})[key] || [];
+        for (const it of out.items) {
+            const from = snapshotTab(stack[it.index]);
+            if (from) it.tab = this._historyTabLabel ? this._historyTabLabel(from) : from;
+        }
+        return out;
     },
 
     // ── groups in the history strip ──────────────────────────────────────────
 
-    /** A heading to put before this snapshot's thumbnail, or null. `run` carries
-     *  the previous visible snapshot's group between calls. */
-    historyGroupHeader(doc, snapshot, run) {
-        const group = String((snapshot && snapshot[0] && snapshot[0].group) || "");
-        const first = run.group === undefined;
-        const changed = !first && group !== run.group;
-        run.group = group;
-        if (first ? !group : !changed) return null;
-        const h = doc.createElement("div");
-        h.className = "history-group";
-        h.textContent = group || "Other";
-        return h;
-    },
+    // The group headings themselves are the strip's (HistoryMixin._historyGroupHeading):
+    // the one history is drawn by group, and a snapshot can be moved to another.
 
     /** The caption a thumbnail wears: what the picture is, when its sender said. */
     historyThumbCaption(doc, snapshot) {
@@ -200,6 +194,7 @@ export const AgentYMixin = {
 
     /** Rows for the thumbnail menu; `indices` are what the menu acts on. */
     agentYMenuItems(doc, menu, key, indices) {
+        key = this.historyKey();   // the one history, whatever key was given
         const b = bridge();
         if (!b) return [];
         const stack = this.history[key] || [];
@@ -252,6 +247,7 @@ export const AgentYMixin = {
 
     /** The files of the snapshots at `indices`, in strip order, without repeats. */
     agentYFilesOf(key, indices) {
+        key = this.historyKey();   // the one history, whatever key was given
         const stack = this.history[key] || [];
         const out = [];
         for (const i of [...indices].sort((a, b) => a - b)) {

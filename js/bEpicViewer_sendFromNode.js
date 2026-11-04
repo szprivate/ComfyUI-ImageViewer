@@ -487,7 +487,7 @@ export const SendFromNodeMixin = {
             const key = mine ? owned.key
                       : (tabs.length > 1 ? `loader_${node.id}_${i}` : `loader_${node.id}`);
 
-            if (this.pushHistorySnapshot(key, frames)) this.onHistoryPrepended?.(key);
+            this.pushHistorySnapshot(key, frames);
 
             this.allTabs[key]           = frames;
             this.tabLabels[key]         = mine ? owned.label : this._nodeMediaLabel(tab);
@@ -495,7 +495,7 @@ export const SendFromNodeMixin = {
             if (!firstKey) {
                 firstKey = key;
                 // Show the media just sent, not wherever the history strip was.
-                this.currentHistoryKey   = key;
+                this.currentHistoryKey   = this.historyKey();
                 this.currentHistoryIndex = 0;
                 this.isViewingHistory    = false;
                 this.previewBackup       = null;

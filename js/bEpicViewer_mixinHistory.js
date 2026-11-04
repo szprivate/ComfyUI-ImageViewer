@@ -9,17 +9,26 @@
 // Shift keeps compare because that is the older and more valuable gesture; the
 // selection is the one that had to find another modifier.
 //
-// On a cut's tab the strip shows another tab's history (historyKey, below) and
-// a click only selects - plain, Ctrl, Shift for a range - so the cut stays on
-// screen while thumbnails are dragged onto its timeline; a double-click opens
-// the snapshot in its own tab.
+// There is one history for all tabs (bEpicViewer_historyData.js): a click shows
+// the snapshot in the tab it was made in, switching to it. On a cut's tab a click
+// only selects - plain, Ctrl, Shift for a range - so the cut stays on screen while
+// thumbnails are dragged onto its timeline; a double-click opens the snapshot.
 import { api } from "../../scripts/api.js";
 import { setPref, PREF } from "./bEpicViewer_settings.js";
+import { HISTORY_KEY, snapshotTab, stampSnapshot, snapshotGroup, setSnapshotGroup, historyGroups,
+         liveIndexOf, historySections, historyDisplayOrder } from "./bEpicViewer_historyData.js";
 
-// Snapshots kept per tab, unless the user sets another number at the foot of
-// the history panel. With clip caching on, this is also how many videos can be
-// held in RAM by history alone, so falling off the end has to release them.
-export const HISTORY_LIMIT_DEFAULT = 40;
+export { HISTORY_KEY };
+/** The tab a snapshot is shown in when the tab it was made in is closed. A user
+ *  tab ("folder_" prefix): the stale-tab sweep leaves it alone. */
+export const HISTORY_VIEW_TAB = "folder_history";
+
+// Snapshots kept in the one history (every tab's), unless the user sets another
+// number at the foot of the history panel. With clip caching on, this is also how
+// many videos can be held in RAM by history alone, so falling off the end has to
+// release them. It was 40 per tab while every tab had a history of its own.
+export const HISTORY_LIMIT_DEFAULT = 100;
+export const HISTORY_LIMIT_OLD_DEFAULT = 40;
 export const HISTORY_LIMIT_MAX = 500;
 
 export function clampHistoryLimit(value) {
@@ -44,53 +53,34 @@ const THUMB_NEAR_MARGIN = '300px';
 
 export const HistoryMixin = {
 
-    // ── Whose history the strip shows ────────────────────────────────────────
+    // ── One history for every tab ────────────────────────────────────────────
     //
-    // Normally the open tab's own. A cut's tab ("edit:…") has none - it is made
-    // FROM the other tabs' renders - so on it the strip BORROWS the history of a
-    // media tab: the one the user came from, or the one picked in the "History
-    // of" dropdown at the top of the strip. The thumbnails are there to be
-    // dragged onto the timeline, so on a borrowed strip a click only selects
-    // (Ctrl / Shift add to it, and agentY reads it as the selection) and never
-    // takes the user off the cut; a double-click opens the snapshot in its own
-    // tab. Everything that acts on "the strip" asks historyKey(), not activeTab.
+    // There is ONE history, `this.history[HISTORY_KEY]`, newest first, whatever
+    // tab a snapshot was made in (bEpicViewer_historyData.js). Each snapshot
+    // remembers that tab (`fromTab`), so a click shows it there; groups (and
+    // labels) sort the strip. Everything that acts on "the strip" asks
+    // historyKey(), which is always HISTORY_KEY.
+    //
+    // A cut's tab ("edit:…") shows the same strip, there to be dragged onto the
+    // timeline: a click only selects (Ctrl / Shift add to it, and agentY reads it
+    // as the selection) and never takes the user off the cut; a double-click
+    // opens the snapshot in its tab. historyBorrows() says the strip is like that.
 
-    /** Whether tab `key`'s strip shows another tab's history (it has none of its own). */
+    /** Whether a click in the strip only selects (tab `key` is a cut's: the cut stays on screen). */
     historyBorrows(key = this.activeTab) {
         return !!(key && this.isEditTab && this.isEditTab(key));
     },
 
-    /** The tabs whose history a borrowed strip can show: open, with history, in tab order. */
-    historySourceTabs() {
-        const order = [...(this.tabOrder || [])];
-        for (const k of Object.keys(this.allTabs || {})) if (!order.includes(k)) order.push(k);
-        return order.filter((k) => this.allTabs && this.allTabs[k] && !this.historyBorrows(k)
-                                   && ((this.history || {})[k] || []).length > 0);
-    },
-
-    /** The tab whose history the strip shows now (null: none to show). */
+    /** The key of the one history the strip shows. */
     historyKey() {
-        const key = this.activeTab;
-        if (!this.historyBorrows(key)) return key;
-        const tabs = this.historySourceTabs();
-        const pick = this._historyBorrowKey;
-        return pick && tabs.includes(pick) ? pick : (tabs[0] || null);
+        return HISTORY_KEY;
     },
 
-    // A tab came on screen (switchTab): a media tab is where a cut's strip
-    // borrows from next, so the last one looked at is the default.
-    historyNoteTab(key) {
-        if (key && !this.historyBorrows(key)) this._historyBorrowKey = key;
-    },
-
-    /** Show tab `key`'s history in a borrowed strip (the dropdown). */
-    setHistorySource(key) {
-        if (!this.historyBorrows() || !this.historySourceTabs().includes(key)) return;
-        if (this._historyBorrowKey === key && this.historyKey() === key) return;
-        this._historyBorrowKey = key;
-        this.clearHistorySelection();
-        this._historyPanelSig = null;
-        this.renderHistoryPanel();
+    /** The history, newest first (made when first asked for). */
+    historyStack() {
+        if (!this.history || typeof this.history !== 'object') this.history = {};
+        if (!Array.isArray(this.history[HISTORY_KEY])) this.history[HISTORY_KEY] = [];
+        return this.history[HISTORY_KEY];
     },
 
     _historyTabLabel(key) {
@@ -99,69 +89,48 @@ export const HistoryMixin = {
         return String(label || (this.tabLabels || {})[key] || key || "");
     },
 
-    // The "History of [tab]" bar over a borrowed strip; hidden on any other.
-    _syncHistorySource(borrowed, key) {
-        const panel = this.historyPanel;
-        const strip = this.historyStrip;
-        if (!panel || !strip) return;
-        let bar = panel.querySelector(".history-source");
-        if (!borrowed) { if (bar) bar.style.display = "none"; return; }
-        const doc = panel.ownerDocument || document;
-        if (!bar) {
-            bar = doc.createElement("div");
-            bar.className = "history-source";
-            const label = doc.createElement("span");
-            label.className = "history-source-label";
-            label.textContent = "History of";
-            const sel = doc.createElement("select");
-            sel.className = "history-source-sel";
-            sel.title = "This cut has no history of its own: the strip shows this tab's. "
-                      + "Drag a thumbnail onto the timeline to add it as a clip.";
-            sel.onchange = () => this.setHistorySource(sel.value);
-            // As with the tag filter: neither the panel's click handler nor
-            // ComfyUI's keys should see what happens in the dropdown.
-            for (const type of ["click", "mousedown", "keydown", "keyup"]) {
-                sel.addEventListener(type, (e) => e.stopPropagation());
-            }
-            bar.addEventListener("click", (e) => e.stopPropagation());
-            bar.append(label, sel);
-            panel.insertBefore(bar, strip);
+    /** The tab a snapshot opens in: the tab it was made in while that is open,
+     *  else the History tab (made for it). */
+    _historyTabFor(snapshot) {
+        const from = snapshotTab(snapshot);
+        if (from && this.allTabs && this.allTabs[from] && !this.historyBorrows(from)) return from;
+        return HISTORY_VIEW_TAB;
+    },
+
+    /** The History tab: where a snapshot whose own tab was closed is shown. */
+    _ensureHistoryViewTab(snapshot) {
+        const fresh = !this.allTabs[HISTORY_VIEW_TAB];
+        this.allTabs[HISTORY_VIEW_TAB] = JSON.parse(JSON.stringify(snapshot));
+        this.tabLabels[HISTORY_VIEW_TAB] = '🕘 History';
+        if (fresh) {
+            this.tabOrder = [...(this.tabOrder || []).filter((k) => k !== HISTORY_VIEW_TAB), HISTORY_VIEW_TAB];
+            if (this._rebuildTabBar) this._rebuildTabBar(null);
         }
-        bar.style.display = "";
-        const sel = bar.querySelector(".history-source-sel");
-        const tabs = this.historySourceTabs();
-        const sig = tabs.map((k) => `${k}=${this._historyTabLabel(k)}`).join("\n");
-        if (sel._sig !== sig) {
-            sel.replaceChildren();
-            for (const k of tabs) {
-                const o = doc.createElement("option");
-                o.value = k;
-                o.textContent = this._historyTabLabel(k);
-                sel.append(o);
-            }
-            sel._sig = sig;
-        }
-        sel.disabled = tabs.length === 0;
-        bar.classList.toggle("none", tabs.length === 0);
-        if (key && sel.value !== key) sel.value = key;
     },
 
     // ── History stack ────────────────────────────────────────────────────────
 
-    // Prepend a snapshot, skipping an exact repeat of the newest one. Returns
-    // whether anything was added. Every history push goes through here so the cap
-    // is applied — and paid for — in one place.
-    pushHistorySnapshot(key, snapshot) {
-        const stack = this.history[key] || (this.history[key] = []);
-        const json  = JSON.stringify(snapshot);
-        if (stack.length > 0 && JSON.stringify(stack[0]) === json) return false;
-        stack.unshift(JSON.parse(json));
-        this.trimHistory(key);
+    // Prepend a snapshot made in tab `tab`, skipping an exact repeat of that
+    // tab's newest one (unless `dedupe` is false: an annotation or an export is
+    // always a new file). Returns whether anything was added. Every history push
+    // goes through here, so the cap is applied - and paid for - in one place, and
+    // what points into the stack by index is moved along (onHistoryPrepended).
+    pushHistorySnapshot(tab, snapshot, { dedupe = true } = {}) {
+        if (!Array.isArray(snapshot) || snapshot.length === 0) return false;
+        const stack = this.historyStack();
+        const stamped = stampSnapshot(snapshot, tab);
+        if (dedupe) {
+            const live = liveIndexOf(stack, tab);
+            if (live >= 0 && JSON.stringify(stack[live]) === JSON.stringify(stamped)) return false;
+        }
+        stack.unshift(stamped);
+        this.onHistoryPrepended(HISTORY_KEY);
+        this.trimHistory(HISTORY_KEY);
         return true;
     },
 
     // Drop snapshots past the cap.
-    trimHistory(key) {
+    trimHistory(key = HISTORY_KEY) {
         const stack = this.history[key];
         if (!Array.isArray(stack)) return;
         const limit = clampHistoryLimit(this.historyLimit);
@@ -169,7 +138,7 @@ export const HistoryMixin = {
     },
 
     // A new cap from the panel footer. Lowering it drops the oldest snapshots
-    // of every tab straight away, rather than on each tab's next push — through
+    // straight away, rather than on the next push — through
     // removeHistoryItems, which also leaves a snapshot on screen, a compare or
     // a selection that pointed at one of them.
     setHistoryLimit(value) {
@@ -408,32 +377,22 @@ export const HistoryMixin = {
             didPrepend = this.pushHistorySnapshot(nodeId, processed);
         } catch (e) { console.warn('bEpicViewer history push failed', e); }
 
-        if (didPrepend) this.onHistoryPrepended(nodeId);
-
         this.allTabs[nodeId] = processed;
 
-        if (didPrepend) {
-            this.currentHistoryKey = nodeId;
+        if (didPrepend && this.activeTab === nodeId) {
+            this.currentHistoryKey = HISTORY_KEY;
             this.currentHistoryIndex = 0;
-            if (this.activeTab === nodeId) {
-                this.isViewingHistory = false;
-                this.previewBackup = null;
-                this.historyCompare = null;
-                this._historyCompareEntered = false;
-                this.currentFrame = this.getTimelineBounds(processed.length).min;
-            }
+            this.isViewingHistory = false;
+            this.previewBackup = null;
+            this.historyCompare = null;
+            this._historyCompareEntered = false;
+            this.currentFrame = this.getTimelineBounds(processed.length).min;
         }
 
-        if (this.activeTab === nodeId) {
-            if (didPrepend) this.refreshView();
-            this._historyPanelSig = null;
-            this.renderHistoryPanel();
-        } else if (this.historyBorrows()) {
-            // A cut's strip borrows this tab's history, or may start to (its
-            // dropdown lists the tabs that have some): the signature decides
-            // whether anything needs drawing again.
-            this.renderHistoryPanel();
-        }
+        if (this.activeTab === nodeId && didPrepend) this.refreshView();
+        // One strip for every tab: a new snapshot is in it whichever tab is up.
+        if (didPrepend) this._historyPanelSig = null;
+        this.renderHistoryPanel();
         this.queuePersistViewerState();
     },
 
@@ -443,9 +402,8 @@ export const HistoryMixin = {
     // Shift-click is deliberately left alone: that is the two-snapshot compare
     // pin, and it is the more valuable gesture of the two.
     //
-    // It lives per tab -- the strip only ever shows one tab's stack, and a
-    // selection spanning tabs could not be shown, dragged or deleted as a unit.
-    // Transient by design: not persisted, and dropped whenever the stack it
+    // It lives on the one history (its key is HISTORY_KEY), so it can hold
+    // snapshots of several tabs. Transient by design: not persisted, and dropped whenever the stack it
     // indexes into shifts underneath it.
 
     // The selection holds the snapshots themselves (the stack's own array for
@@ -458,12 +416,14 @@ export const HistoryMixin = {
     },
 
     isHistoryItemSelected(key, idx) {
+        key = HISTORY_KEY;   // one history: a tab's key (older callers) means it too
         const snap = (this.history[key] || [])[idx];
         return this._historySelKey === key && !!snap && this._historySel().has(snap);
     },
 
     /** The selected indices for a tab, ascending. Empty when it isn't the one. */
     historySelectionIndices(key = this.historyKey()) {
+        key = HISTORY_KEY;   // one history: a tab's key (older callers) means it too
         if (this._historySelKey !== key) return [];
         const stack = this.history[key] || [];
         const set = this._historySel();
@@ -474,6 +434,7 @@ export const HistoryMixin = {
 
     /** `[{ imgObj, snapshot }]` for the selection, in strip order. */
     selectedHistorySnapshots(key = this.historyKey()) {
+        key = HISTORY_KEY;   // one history: a tab's key (older callers) means it too
         const stack = this.history[key] || [];
         return this.historySelectionIndices(key)
             .map((i) => ({ imgObj: stack[i] && stack[i][0], snapshot: stack[i] }))
@@ -491,6 +452,7 @@ export const HistoryMixin = {
     /** A plain click: this item alone is the selection, and the anchor for what
      *  follows (Ctrl+click adds to it, Ctrl+Shift+click ranges from it). */
     startHistorySelection(key, idx) {
+        key = HISTORY_KEY;   // one history: a tab's key (older callers) means it too
         const snap = (this.history[key] || [])[idx];
         this._historySelKey = key;
         this._historySel().clear();
@@ -503,6 +465,7 @@ export const HistoryMixin = {
     },
 
     toggleHistorySelection(key, idx) {
+        key = HISTORY_KEY;   // one history: a tab's key (older callers) means it too
         const snap = (this.history[key] || [])[idx];
         if (!snap) return;
         if (this._historySelKey !== key) {
@@ -517,6 +480,7 @@ export const HistoryMixin = {
     },
 
     extendHistorySelection(key, idx) {
+        key = HISTORY_KEY;   // one history: a tab's key (older callers) means it too
         const stack = this.history[key] || [];
         const from = this._historySelKey === key && this._historySelAnchor
             ? stack.indexOf(this._historySelAnchor) : -1;
@@ -524,9 +488,17 @@ export const HistoryMixin = {
             this.toggleHistorySelection(key, idx);
             return;
         }
+        // A range as the strip shows it (sections by group), not by stack index.
+        const order = this.historyDisplayIndices(key);
+        const a = order.indexOf(from), b = order.indexOf(idx);
         const set = this._historySel();
-        const [lo, hi] = from < idx ? [from, idx] : [idx, from];
-        for (let i = lo; i <= hi; i++) if (stack[i]) set.add(stack[i]);
+        if (a < 0 || b < 0) {
+            const [lo, hi] = from < idx ? [from, idx] : [idx, from];
+            for (let i = lo; i <= hi; i++) if (stack[i]) set.add(stack[i]);
+        } else {
+            const [lo, hi] = a < b ? [a, b] : [b, a];
+            for (let i = lo; i <= hi; i++) if (stack[order[i]]) set.add(stack[order[i]]);
+        }
         this._paintHistorySelection();
     },
 
@@ -549,25 +521,33 @@ export const HistoryMixin = {
         if (this._multiCompareSelectionChanged) this._multiCompareSelectionChanged();
     },
 
-    isHistorySelectionPinned(key) {
-        if (this.historyCompare && this.historyCompare.key === key) return true;
-        if (this.isViewingHistory && this.currentHistoryKey === key) return true;
-        if (this.isComparing && (this.activeTab === key || this.compareTab === key)) return true;
+    /** Whether tab `tab`'s picture must stay as it is when a new render for it
+     *  lands: the user is looking at an older snapshot there, or comparing. */
+    isHistorySelectionPinned(tab) {
+        if (this.historyCompare) return true;
+        if (this.isViewingHistory && this.activeTab === tab) return true;
+        if (this.isComparing && (this.activeTab === tab || this.compareTab === tab)) return true;
         return false;
     },
 
-    onHistoryPrepended(key) {
+    // A snapshot went onto the front of the stack: what points into it by index
+    // moves one along (the selection holds the snapshots themselves).
+    onHistoryPrepended(key = HISTORY_KEY) {
         const stack = this.history[key] || [];
+        const last = Math.max(0, stack.length - 1);
 
         if (this.currentHistoryKey === key && Number.isInteger(this.currentHistoryIndex)) {
-            this.currentHistoryIndex = Math.min(this.currentHistoryIndex + 1, Math.max(0, stack.length - 1));
+            this.currentHistoryIndex = Math.min(this.currentHistoryIndex + 1, last);
         }
 
-        // The selection holds the snapshots themselves, so it needs no shifting.
-
         if (this.historyCompare && this.historyCompare.key === key) {
-            this.historyCompare.baseIdx = Math.min(this.historyCompare.baseIdx + 1, Math.max(0, stack.length - 1));
-            this.historyCompare.otherIdx = Math.min(this.historyCompare.otherIdx + 1, Math.max(0, stack.length - 1));
+            this.historyCompare.baseIdx = Math.min(this.historyCompare.baseIdx + 1, last);
+            this.historyCompare.otherIdx = Math.min(this.historyCompare.otherIdx + 1, last);
+        }
+
+        // Where each tab was looking (switchTab opens it again).
+        for (const st of Object.values(this.tabViewState || {})) {
+            if (st && Number.isInteger(st.historyIndex)) st.historyIndex = Math.min(st.historyIndex + 1, last);
         }
     },
 
@@ -706,6 +686,43 @@ export const HistoryMixin = {
 
     // ── Render thumbnail strip ───────────────────────────────────────────────
 
+    /** The stack indices as the strip shows them, top to bottom: by group, the
+     *  tag filter applied, collapsed groups left out. */
+    historyDisplayIndices(key = HISTORY_KEY) {
+        key = HISTORY_KEY;   // one history: a tab's key (older callers) means it too
+        const stack = this.history[key] || [];
+        const visible = this.historyTagVisible ? (s) => this.historyTagVisible(s) : null;
+        return historyDisplayOrder(stack, visible, this._historyCollapsedSet());
+    },
+
+    _historyCollapsedSet() {
+        if (!(this.historyCollapsed instanceof Set)) this.historyCollapsed = new Set(Array.isArray(this.historyCollapsed) ? this.historyCollapsed : []);
+        return this.historyCollapsed;
+    },
+
+    /** Fold a group's section of the strip away, or open it again. */
+    toggleHistoryGroupCollapsed(group) {
+        const set = this._historyCollapsedSet();
+        const g = String(group || "");
+        if (set.has(g)) set.delete(g); else set.add(g);
+        this._historyPanelSig = null;
+        this.renderHistoryPanel();
+        this.queuePersistViewerState?.();
+    },
+
+    /** Which snapshot is the open one, the orange-bordered tile: the one being
+     *  looked at, else the newest one of the tab that is up (its live picture). */
+    _historyOpenIndex() {
+        if (this.historyBorrows()) return null;
+        const stack = this.history[HISTORY_KEY] || [];
+        if (this.isViewingHistory && this.currentHistoryKey === HISTORY_KEY && Number.isInteger(this.currentHistoryIndex)
+            && this.currentHistoryIndex >= 0 && this.currentHistoryIndex < stack.length) {
+            return this.currentHistoryIndex;
+        }
+        const live = liveIndexOf(stack, this.activeTab);
+        return live >= 0 ? live : null;
+    },
+
     // The open item's highlight, set on the tiles already in the strip - what
     // renderHistoryPanel would draw for it, without making the tiles again.
     _paintHistoryCurrent(key) {
@@ -721,23 +738,69 @@ export const HistoryMixin = {
         this._paintHistorySelection();
     },
 
+    /** A group's heading in the strip: its name and count; a click folds it, and
+     *  thumbnails dropped on it move into that group. */
+    _historyGroupHeading(doc, section, anyGroups) {
+        const g = section.group;
+        if (!g && !anyGroups) return null;           // no groups at all: no heading
+        const h = doc.createElement('div');
+        h.className = 'history-group';
+        const collapsed = this._historyCollapsedSet().has(g);
+        h.classList.toggle('collapsed', collapsed);
+        h.dataset.group = g;
+        const caret = doc.createElement('span');
+        caret.className = 'history-group-caret';
+        caret.textContent = collapsed ? '▸' : '▾';
+        const name = doc.createElement('span');
+        name.className = 'history-group-name';
+        name.textContent = g || 'No group';
+        const count = doc.createElement('span');
+        count.className = 'history-group-count';
+        count.textContent = String(section.count);
+        h.append(caret, name, count);
+        h.title = `${g ? `Group "${g}"` : 'Not in a group'}: ${section.count} snapshot${section.count === 1 ? '' : 's'}\n`
+                + `Click to ${collapsed ? 'show' : 'fold away'}; drop thumbnails here to move them ${g ? 'into this group' : 'out of their group'}`;
+        h.onmousedown = (ev) => ev.stopPropagation();
+        h.onclick = (ev) => { ev.stopPropagation(); this.toggleHistoryGroupCollapsed(g); };
+        // A thumbnail dragged in the strip (HistoryMixin keeps what it carries).
+        h.addEventListener('dragover', (ev) => {
+            if (!this._historyDragSnaps) return;
+            ev.preventDefault();
+            try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
+            h.classList.add('drop');
+        });
+        h.addEventListener('dragleave', () => h.classList.remove('drop'));
+        h.addEventListener('drop', (ev) => {
+            h.classList.remove('drop');
+            const snaps = this._historyDragSnaps;
+            if (!snaps) return;
+            ev.preventDefault();
+            ev.stopPropagation();
+            this._historyDragSnaps = null;
+            this.setHistoryGroupOf(snaps, g);
+        });
+        return h;
+    },
+
     renderHistoryPanel() {
         if (!this.historyStrip) return;
-        // A cut's tab borrows a media tab's history (historyKey, at the top).
+        // On a cut's tab a click only selects (historyBorrows, at the top).
         const borrowed = this.historyBorrows();
-        const key   = this.historyKey();
-        const stack = (key && this.history[key]) || [];
-        this._syncHistorySource(borrowed, key);
+        const key   = HISTORY_KEY;
+        const stack = this.history[key] || [];
 
-        // Normalise selection pointer. Not on a borrowed strip: nothing in it is
-        // open, and the pointer belongs to the tab whose picture is on screen.
-        if (!borrowed && stack.length > 0 && (this.currentHistoryKey !== key || this.currentHistoryIndex == null || this.currentHistoryIndex < 0 || this.currentHistoryIndex >= stack.length)) {
-            this.currentHistoryKey   = key;
-            this.currentHistoryIndex = 0;
+        // The open tile: the snapshot looked at, or the tab's own newest.
+        const open = this._historyOpenIndex();
+        if (!borrowed) {
+            this.currentHistoryKey   = open == null ? null : key;
+            this.currentHistoryIndex = open;
         }
 
         // --- fast-path: skip full DOM rebuild if nothing changed ---
+        const collapsed = this._historyCollapsedSet();
         const layoutSig = JSON.stringify({ key, borrowed, len: stack.length, cmp: this.historyCompare,
+                                           groups: stack.map((s) => snapshotGroup(s)).join('\u0001'),
+                                           collapsed: [...collapsed].sort(),
                                            tags: this.historyTagSig ? this.historyTagSig(stack) : "" });
         const newSig = `${layoutSig}|${this.currentHistoryIndex}`;
         if (newSig === this._historyPanelSig) return;
@@ -759,11 +822,11 @@ export const HistoryMixin = {
         // The tag filter in the footer (HistoryTagsMixin).
         if (this._syncHistoryTagFilter) this._syncHistoryTagFilter();
 
-        // Stage headings (AgentYMixin): a heading wherever the group changes.
-        const groupRun = {};
-        stack.forEach((snapshot, idx) => {
-            // Hidden by the tag filter; indices stay the stack's own.
-            if (this.historyTagVisible && !this.historyTagVisible(snapshot)) return;
+        // One section per group, the group used last first (bEpicViewer_historyData.js).
+        const visible = this.historyTagVisible ? (s) => this.historyTagVisible(s) : null;
+        const sections = historySections(stack, visible, collapsed);
+        const anyGroups = sections.some((sec) => sec.group);
+        const makeThumb = (snapshot, idx) => {
             const imgObj    = (snapshot && snapshot.length > 0) ? snapshot[0] : null;
             const thumb     = document.createElement('div');
             thumb.className = 'history-thumb';
@@ -794,17 +857,20 @@ export const HistoryMixin = {
             if (agentTag) thumb.appendChild(agentTag);
             thumb.dataset.idx = String(idx);
             const what = imgObj && imgObj.label ? ` - ${imgObj.label}` : '';
+            const from = snapshotTab(snapshot);
+            const fromWords = from ? `, from ${this._historyTabLabel(from)}` : '';
+            const groupWords = snapshotGroup(snapshot) ? ` (group ${snapshotGroup(snapshot)})` : '';
             thumb.title = borrowed
-                ? `History ${idx + 1}${what} (of ${this._historyTabLabel(key)})\n` +
+                ? `History ${idx + 1}${what}${fromWords}${groupWords}\n` +
                   `Drag onto the timeline to add it to the cut\n` +
                   `Click to select it, Ctrl+click to add to the selection, Shift+click for a range\n` +
-                  `Double-click to open it in its own tab\n` +
-                  `Right-click to tag it with a colour`
-                : `History ${idx + 1}${what}\n` +
-                          `Click, then Ctrl+click to add to the selection, Ctrl+Shift+click for a range\n` +
+                  `Double-click to open it in its tab\n` +
+                  `Right-click to tag it or move it to another group`
+                : `History ${idx + 1}${what}${fromWords}${groupWords}\n` +
+                          `Click to show it (in its tab), then Ctrl+click to add to the selection, Ctrl+Shift+click for a range\n` +
                           `Shift+click to compare against the open snapshot\n` +
                           `C with several Ctrl-selected: compare them (3+: a Contact Sheet of all)\n` +
-                          `Right-click to tag it with a colour`;
+                          `Drag onto a group's heading to move it there; right-click to tag it or pick a group`;
             // Drag source: drop onto the ComfyUI graph to make a loader node. The
             // whole snapshot is passed so multi-image sequences map to a sequence
             // loader (see _makeHistoryThumbDraggable / _sequenceDirForSnapshot);
@@ -812,6 +878,12 @@ export const HistoryMixin = {
             if (imgObj && this._makeHistoryThumbDraggable) {
                 this._makeHistoryThumbDraggable(thumb, imgObj, snapshot, key, idx);
             }
+            // ...and onto a group's heading, to move it (and the selection it is in).
+            thumb.addEventListener('dragstart', () => {
+                this._historyDragSnaps = this.isHistoryItemSelected(key, idx)
+                    ? this.selectedHistorySnapshots(key).map((p) => p.snapshot) : [snapshot];
+            });
+            thumb.addEventListener('dragend', () => { this._historyDragSnaps = null; });
 
             const isSelected = !borrowed && (this.currentHistoryKey === key && this.currentHistoryIndex === idx);
             if (isSelected) {
@@ -831,8 +903,8 @@ export const HistoryMixin = {
             // the mousedown from reaching any parent panel handler.
             thumb.onmousedown  = ev => ev.stopPropagation();
             thumb.oncontextmenu = (ev) => { ev.preventDefault(); ev.stopPropagation(); this.showThumbContextMenu(ev, imgObj, key, idx); };
-            // A borrowed strip (a cut's tab): a click selects and the cut stays
-            // on screen; a double-click opens the snapshot in its own tab.
+            // On a cut's tab a click selects and the cut stays on screen; a
+            // double-click opens the snapshot in its tab.
             if (borrowed) {
                 thumb.onclick = (ev) => {
                     ev.stopPropagation();
@@ -842,17 +914,11 @@ export const HistoryMixin = {
                 };
                 thumb.ondblclick = (ev) => {
                     ev.stopPropagation();
-                    // Its tab first: openHistorySnapshot switching from here
-                    // would file that tab's live frames under the cut's tab.
                     if (this.historyCompare) this.exitHistoryCompare();
-                    this.switchTab(key);
                     this.openHistorySnapshot(key, idx);
                     this.startHistorySelection(key, idx);
                 };
-                const heading = this.historyGroupHeader ? this.historyGroupHeader(document, snapshot, groupRun) : null;
-                if (heading) frag.appendChild(heading);
-                frag.appendChild(thumb);
-                return;
+                return thumb;
             }
             thumb.onclick = (ev) => {
                 ev.stopPropagation();
@@ -869,7 +935,7 @@ export const HistoryMixin = {
                 // also where a selection starts: Ctrl+click then adds to it.
                 this.startHistorySelection(key, idx);
 
-                if (ev.shiftKey && this.isViewingHistory && this.currentHistoryKey === key) {
+                if (ev.shiftKey && Number.isInteger(this.currentHistoryIndex) && this.currentHistoryKey === key) {
                     if (!this.historyCompare) {
                         this.historyCompare = { key, baseIdx: this.currentHistoryIndex, otherIdx: idx };
                         this.enterHistoryCompare();
@@ -893,15 +959,16 @@ export const HistoryMixin = {
                 } else {
                     this.historyCompare      = null;
                     this.openHistorySnapshot(key, idx);
-                    this.currentHistoryKey   = key;
-                    this.currentHistoryIndex = idx;
                 }
             };
+            return thumb;
+        };
 
-                const heading = this.historyGroupHeader ? this.historyGroupHeader(document, snapshot, groupRun) : null;
-                if (heading) frag.appendChild(heading);
-                frag.appendChild(thumb);
-        });
+        for (const sec of sections) {
+            const heading = this._historyGroupHeading(document, sec, anyGroups);
+            if (heading) frag.appendChild(heading);
+            for (const idx of sec.indices) frag.appendChild(makeThumb(stack[idx], idx));
+        }
 
         // Replace strip contents in one operation
         this.historyStrip.innerHTML = '';
@@ -911,10 +978,10 @@ export const HistoryMixin = {
             none.className = 'history-tag-empty';
             none.textContent = 'Nothing tagged like that here';
             this.historyStrip.appendChild(none);
-        } else if (borrowed && !key) {
+        } else if (borrowed && !stack.length) {
             const none = document.createElement('div');
             none.className = 'history-tag-empty';
-            none.textContent = 'No tab has a history yet. Renders show here, to drag onto the cut.';
+            none.textContent = 'No history yet. Renders show here, to drag onto the cut.';
             this.historyStrip.appendChild(none);
         }
 
@@ -924,25 +991,39 @@ export const HistoryMixin = {
         // sends nothing.
         this.scheduleHistoryPrune();
 
-        let totalHistory = 0;
-        Object.values(this.history).forEach(arr => { totalHistory += arr?.length || 0; });
-        // A borrowed strip with nothing to borrow clears nothing (not "every tab").
-        const canClear = key ? stack.length > 0 : !borrowed && totalHistory > 0;
-        if (this.historyClearBtn) this.historyClearBtn.disabled = !canClear;
+        if (this.historyClearBtn) this.historyClearBtn.disabled = stack.length === 0;
         // With a tag filter on, Clear clears what it shows (HistoryTagsMixin).
         if (this._syncHistoryClearTitle) this._syncHistoryClearTitle();
     },
 
+    /**
+     * Show snapshot `index` of the history: in the tab it was made in (switching
+     * to it), or, with that tab closed, in the History tab. The tab's own
+     * picture is kept in previewBackup and comes back with restoreHistoryView or
+     * when the user leaves the tab.
+     */
     openHistorySnapshot(key, index) {
-        if (!this.history[key] || !this.history[key][index]) return;
-        if (!this.previewBackup) this.previewBackup = this.allTabs[key] ? JSON.parse(JSON.stringify(this.allTabs[key])) : null;
-        this.allTabs[key]        = JSON.parse(JSON.stringify(this.history[key][index]));
+        key = HISTORY_KEY;
+        const stack = this.history[key];
+        if (!stack || !stack[index]) return;
+        const snap = stack[index];
+        const tab = this._historyTabFor(snap);
+        if (tab === HISTORY_VIEW_TAB) this._ensureHistoryViewTab(snap);
+        // Its tab first: switchTab hands the tab it leaves its own picture back.
+        if (this.activeTab !== tab) this.switchTab(tab);
+        if (tab === HISTORY_VIEW_TAB) {
+            // The History tab has no picture of its own: what it shows is the snapshot.
+            this.allTabs[tab] = JSON.parse(JSON.stringify(snap));
+            this.previewBackup = JSON.parse(JSON.stringify(snap));
+        } else if (!this.previewBackup) {
+            this.previewBackup = this.allTabs[tab] ? JSON.parse(JSON.stringify(this.allTabs[tab])) : null;
+        }
+        this.allTabs[tab]        = JSON.parse(JSON.stringify(snap));
         this.isViewingHistory    = true;
         this.currentHistoryKey   = key;
         this.currentHistoryIndex = index;
-        if (this.activeTab !== key) this.switchTab(key);
-        else this.refreshView();
-        if (typeof this.captureTabViewState === 'function') this.captureTabViewState(key);
+        this.refreshView();
+        if (typeof this.captureTabViewState === 'function') this.captureTabViewState(tab);
         // The strip's signature knows the open index, so this only moves the
         // highlight - unless something else about the strip changed as well.
         this.renderHistoryPanel();
@@ -950,31 +1031,21 @@ export const HistoryMixin = {
     },
 
     /**
-     * Move the current history selection up/down by the given delta.
+     * Move the current history selection up/down by the given delta, through
+     * the strip as it is drawn (by group, the filter applied).
      * Positive delta moves forward (down arrow), negative moves backward.
      */
     navigateHistory(delta) {
-        // A borrowed strip opens nothing in the viewport: the cut stays on screen.
+        // On a cut's tab the strip opens nothing in the viewport: the cut stays on screen.
         if (this.historyBorrows()) return;
-        const key = this.activeTab;
-        const stack = this.history[key] || [];
-        if (stack.length === 0) return;
-        if (this.currentHistoryKey !== key || !Number.isInteger(this.currentHistoryIndex)) {
-            this.currentHistoryKey = key;
-            this.currentHistoryIndex = 0;
-        }
-        let newIdx = this.currentHistoryIndex + delta;
-        newIdx = Math.min(Math.max(newIdx, 0), stack.length - 1);
-        // With a tag filter on, step through what the strip shows.
-        const shown = this.historyVisibleIndices ? this.historyVisibleIndices(key) : null;
-        if (shown && shown.length && shown.length < stack.length) {
-            const cur = this.currentHistoryIndex;
-            const next = delta > 0 ? shown.find((i) => i > cur) : [...shown].reverse().find((i) => i < cur);
-            if (next === undefined) return;
-            newIdx = next;
-        }
-        if (newIdx === this.currentHistoryIndex) return;
-        this.currentHistoryIndex = newIdx;
+        const key = HISTORY_KEY;
+        const order = this.historyDisplayIndices(key);
+        if (order.length === 0) return;
+        const cur = Number.isInteger(this.currentHistoryIndex) ? order.indexOf(this.currentHistoryIndex) : -1;
+        const pos = cur < 0 ? (delta > 0 ? 0 : order.length - 1)
+                            : Math.min(Math.max(cur + delta, 0), order.length - 1);
+        if (pos === cur) return;
+        const newIdx = order[pos];
         this.openHistorySnapshot(key, newIdx);
         // after rendering ensure the selected thumb is visible
         try {
@@ -984,9 +1055,90 @@ export const HistoryMixin = {
         } catch (e) { /* ignore */ }
     },
 
+    // ── Groups, after the fact ───────────────────────────────────────────────
+
+    /** The groups the history holds, the one used last first. */
+    historyGroupNames() {
+        return historyGroups(this.history[HISTORY_KEY] || []);
+    },
+
+    /** Put these snapshots (the stack's own arrays) into `group` ("" takes them
+     *  out of their group). What a tab shows of them follows. */
+    setHistoryGroupOf(snaps, group) {
+        const list = (snaps || []).filter(Array.isArray);
+        if (!list.length) return;
+        for (const s of list) setSnapshotGroup(s, group);
+        // The same pictures where a tab shows them now (a snapshot open in its
+        // tab is a copy of it), so the caption and agentY's state agree.
+        const paths = new Set(list.flatMap((s) => s.map((fr) => this._historyFrameKey(fr))).filter(Boolean));
+        const touch = (frames) => { for (const fr of frames || []) if (paths.has(this._historyFrameKey(fr))) setSnapshotGroup([fr], group); };
+        for (const frames of Object.values(this.allTabs || {})) if (Array.isArray(frames)) touch(frames);
+        if (Array.isArray(this.previewBackup)) touch(this.previewBackup);
+        const g = String(group || "").trim();
+        this._historyCollapsedSet().delete(g);       // show where they went
+        this._historyPanelSig = null;
+        this.renderHistoryPanel();
+        this.queuePersistViewerState?.();
+    },
+
+    /** Put the snapshots at `indices` into `group`. */
+    setHistoryGroup(key, indices, group) {
+        const stack = this.history[HISTORY_KEY] || [];
+        this.setHistoryGroupOf((indices || []).map((i) => stack[i]).filter(Boolean), group);
+    },
+
+    _historyFrameKey(fr) {
+        if (!fr || typeof fr !== 'object') return '';
+        if (fr.path) return `p:${String(fr.path).replace(/\\/g, '/')}`;
+        if (fr.filename) return `f:${fr.type || ''}|${fr.subfolder || ''}|${fr.filename}`;
+        return fr.url ? `u:${fr.url}` : '';
+    },
+
+    /** The thumbnail menu's "Move to group" row: opens the list of groups below it. */
+    _historyGroupMenuRows(doc, menu, key, indices) {
+        const stack = this.history[HISTORY_KEY] || [];
+        const snaps = indices.map((i) => stack[i]).filter(Boolean);
+        const current = new Set(snaps.map((s) => snapshotGroup(s)));
+        const n = snaps.length;
+        const head = doc.createElement('div');
+        head.className = 'thumb-ctx-item thumb-ctx-group thumb-ctx-keep';
+        head.textContent = n > 1 ? `📁 Move ${n} to group ▸` : '📁 Move to group ▸';
+        head.title = 'Put it into another group of the history (or a new one)';
+        const rows = [];
+        const sub = (text, title, run, on = false) => {
+            const el = doc.createElement('div');
+            el.className = 'thumb-ctx-item thumb-ctx-sub' + (on ? ' on' : '');
+            el.textContent = text;
+            el.title = title;
+            el.onclick = (e) => { e.stopPropagation(); menu.remove(); run(); };
+            return el;
+        };
+        head.onclick = (e) => {
+            e.stopPropagation();
+            if (rows.length) { rows.forEach((r) => r.remove()); rows.length = 0; head.textContent = head.textContent.replace('▾', '▸'); return; }
+            head.textContent = head.textContent.replace('▸', '▾');
+            const only = current.size === 1 ? [...current][0] : null;
+            for (const g of this.historyGroupNames()) {
+                rows.push(sub(`${only === g ? '✓ ' : ''}${g}`, `Move into "${g}"`, () => this.setHistoryGroupOf(snaps, g), only === g));
+            }
+            rows.push(sub('＋ New group…', 'Name a new group and move it there', () => {
+                const win = doc.defaultView || window;
+                const name = String(win.prompt('Name of the new group:', '') || '').trim();
+                if (name) this.setHistoryGroupOf(snaps, name);
+            }));
+            if ([...current].some(Boolean)) {
+                rows.push(sub('✕ No group', 'Take it out of its group', () => this.setHistoryGroupOf(snaps, '')));
+            }
+            let at = head;
+            for (const r of rows) { at.after(r); at = r; }
+        };
+        return head;
+    },
+
     // ── Thumbnail context menu ───────────────────────────────────────────────
 
     showThumbContextMenu(ev, imgObj, key, idx) {
+        key = HISTORY_KEY;   // one history: a tab's key (older callers) means it too
         const doc = (this.container && this.container.ownerDocument) ? this.container.ownerDocument : document;
         const existing = this.container ? this.container.querySelector('#thumb-ctx-menu') : null;
         if (existing) existing.remove();
@@ -1025,6 +1177,8 @@ export const HistoryMixin = {
         if (this.historyTagMenuRow) {
             menu.appendChild(this.historyTagMenuRow(doc, menu, key, batch.length > 1 ? batch : [idx]));
         }
+        // Another group for it, after the fact (the strip is sorted by group).
+        menu.appendChild(this._historyGroupMenuRows(doc, menu, key, batch.length > 1 ? batch : [idx]));
         const removeItem = doc.createElement('div');
         removeItem.className = 'thumb-ctx-item';
         removeItem.textContent = batch.length > 1
@@ -1051,12 +1205,17 @@ export const HistoryMixin = {
         menu.style.top  = `${ev.clientY - panelRect.top}px`;
         this.container.appendChild(menu);
 
-        const dismiss = () => { menu.remove(); this.container.removeEventListener('click', dismiss, true); };
+        // A row that opens more rows (Move to group) keeps the menu up.
+        const dismiss = (e) => {
+            if (e && e.target && e.target.closest && e.target.closest('.thumb-ctx-keep')) return;
+            menu.remove(); this.container.removeEventListener('click', dismiss, true);
+        };
         setTimeout(() => this.container.addEventListener('click', dismiss, true), 0);
     },
 
     /** Remove several snapshots of one tab in a single go. */
     removeHistoryItems(key, indices) {
+        key = HISTORY_KEY;   // one history: a tab's key (older callers) means it too
         // Back to front: removeHistoryItem re-indexes everything after the one it
         // drops, so the lower indices are only correct while they are still ahead.
         const ordered = [...new Set(indices)].filter(Number.isInteger).sort((a, b) => b - a);
@@ -1075,7 +1234,7 @@ export const HistoryMixin = {
         // On a cut's tab Shift+Delete is the Edit panel's ripple delete; the
         // borrowed strip's items go by their right-click menu.
         if (this.historyBorrows()) return false;
-        const key = this.activeTab;
+        const key = HISTORY_KEY;
         const selected = this.historySelectionIndices(key);
         if (selected.length > 0) {
             this.removeHistoryItems(key, selected);
@@ -1092,13 +1251,14 @@ export const HistoryMixin = {
     /** True when Shift+Delete has something to act on -- see deleteSelectedHistory. */
     hasDeletableHistory() {
         if (this.historyBorrows()) return false;
-        const key = this.activeTab;
+        const key = HISTORY_KEY;
         if (this.historySelectionIndices(key).length > 0) return true;
         return !!(this.isViewingHistory && this.currentHistoryKey === key &&
                   Number.isInteger(this.currentHistoryIndex));
     },
 
     removeHistoryItem(key, index) {
+        key = HISTORY_KEY;   // one history: a tab's key (older callers) means it too
         const stack = this.history[key];
         if (!Array.isArray(stack) || index < 0 || index >= stack.length) return;
 
@@ -1156,17 +1316,16 @@ export const HistoryMixin = {
      * the removed snapshot, so restoring it would resurrect the deleted item.
      */
     jumpToLatestVisibleHistory() {
-        const key   = this.activeTab;
-        const stack = this.history[key] || [];
-        if (stack.length === 0) { this.restoreHistoryView(); return; }
+        const stack = this.history[HISTORY_KEY] || [];
+        // The newest snapshot of the tab that is up (what a render last put there).
+        const live = liveIndexOf(stack, this.activeTab);
+        if (live < 0) { this.restoreHistoryView(); return; }
         // Drop any stale backup, then show the newest visible snapshot.
         this.previewBackup = null;
-        this.openHistorySnapshot(key, 0);
+        this.openHistorySnapshot(HISTORY_KEY, live);
         // Anchor the live-view backup to that newest snapshot so a later click
         // on the selected thumb returns here, not to a removed item.
-        this.previewBackup = this.history[key][0]
-            ? JSON.parse(JSON.stringify(this.history[key][0]))
-            : null;
+        this.previewBackup = stack[live] ? JSON.parse(JSON.stringify(stack[live])) : null;
     },
 
     // ── Opening files off disk ─────────────────────────────────────
@@ -1226,8 +1385,9 @@ export const HistoryMixin = {
             }
             this._historyPanelSig = null;
             this.renderHistoryPanel();
-        } else if (this.historyBorrows()) {
-            // The cut's strip may have been showing the tab that just went.
+        } else {
+            // The history keeps what the tab made; its tooltips name the tab.
+            this._historyPanelSig = null;
             this.renderHistoryPanel();
         }
         this.queuePersistViewerState();

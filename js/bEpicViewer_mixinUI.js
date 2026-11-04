@@ -400,12 +400,12 @@ export const UIMixin = {
         if (!this.tabViewState || typeof this.tabViewState !== 'object') this.tabViewState = {};
 
         const prev = this.tabViewState[key] || {};
+        const viewing = !!(this.isViewingHistory && this.activeTab === key && Number.isInteger(this.currentHistoryIndex));
         const state = {
             frame: Number.isFinite(this.currentFrame) ? this.currentFrame : (Number.isFinite(prev.frame) ? prev.frame : 0),
-            historyIndex: Number.isInteger(this.currentHistoryIndex) && this.currentHistoryKey === key
-                ? this.currentHistoryIndex
-                : (Number.isInteger(prev.historyIndex) ? prev.historyIndex : null),
-            viewingHistory: !!(this.isViewingHistory && this.currentHistoryKey === key && Number.isInteger(this.currentHistoryIndex)),
+            // An index into the one history (HistoryMixin), while this tab shows an older snapshot.
+            historyIndex: viewing ? this.currentHistoryIndex : null,
+            viewingHistory: viewing,
         };
 
         this.tabViewState[key] = state;
@@ -440,8 +440,6 @@ export const UIMixin = {
         } catch (e) {}
 
         this.activeTab = k;
-        // A cut's tab borrows the history of the media tab looked at last (HistoryMixin).
-        if (this.historyNoteTab) this.historyNoteTab(k);
         this.tabBar.querySelectorAll('.tab').forEach(t => {
             t.classList.toggle('active', t.dataset.tab === k);
         });
@@ -455,18 +453,18 @@ export const UIMixin = {
         const tabState = this.getTabViewState(k);
         let restoredByHistory = false;
 
-        if (tabState && Number.isInteger(tabState.historyIndex)) {
-            const stack = this.history[k] || [];
-            if (stack.length > 0) {
-                const safeIdx = Math.max(0, Math.min(tabState.historyIndex, stack.length - 1));
-                this.currentHistoryKey = k;
-                this.currentHistoryIndex = safeIdx;
-
-                if (tabState.viewingHistory) {
-                    this.historyCompare = null;
-                    this.openHistorySnapshot(k, safeIdx);
-                    restoredByHistory = true;
-                }
+        // The tab was showing an older snapshot when it was left: show it again,
+        // if that snapshot is still in the history and still opens in this tab.
+        if (tabState && tabState.viewingHistory && Number.isInteger(tabState.historyIndex) && !this.isViewingHistory) {
+            const stack = (this.historyStack ? this.historyStack() : []);
+            const snap = stack[tabState.historyIndex];
+            if (snap && this._historyTabFor && this._historyTabFor(snap) === k) {
+                this.historyCompare = null;
+                this.openHistorySnapshot(this.historyKey(), tabState.historyIndex);
+                restoredByHistory = true;
+            } else {
+                tabState.viewingHistory = false;
+                tabState.historyIndex = null;
             }
         }
 

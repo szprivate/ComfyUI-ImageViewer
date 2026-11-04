@@ -569,19 +569,6 @@ textarea.param-input {
     overflow-y: auto; overflow-x: hidden;
     flex: 1; min-height: 0;
 }
-/* On a cut's tab the strip shows another tab's history: which one, and a
-   dropdown to pick another (HistoryMixin._syncHistorySource). */
-.history-source {
-    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-    padding: 6px 6px 0 6px; font-size: 11px; color: #aaa;
-}
-.history-source-label { white-space: nowrap; }
-.history-source-sel {
-    flex: 1 1 60px; min-width: 0; max-width: 100%;
-    background: #151515; color: #ddd; border: 1px solid #333; border-radius: 4px;
-    font-size: 11px; padding: 2px 4px;
-}
-.history-source.none .history-source-sel { display: none; }
 
 /* A tile is as tall as its picture is at the column's width: the picture is
    never cropped (`contain`, and the tile takes the picture's shape: its own
@@ -1513,7 +1500,17 @@ textarea.param-input {
   grid-column: 1 / -1; padding: 6px 4px 2px; font-size: 11px; font-weight: 600;
   letter-spacing: 0.04em; text-transform: uppercase; color: #f60;
   border-bottom: 1px solid rgba(255,102,0,0.35);
+  display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none;
 }
+/* The one history is sorted by group: a heading folds its section, and takes dropped thumbnails. */
+.history-group .history-group-caret { width: 9px; flex: none; }
+.history-group .history-group-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-group .history-group-count { flex: none; color: #999; font-weight: 400; }
+.history-group:hover { background: rgba(255,102,0,0.08); }
+.history-group.collapsed { color: #c80; }
+.history-group.drop { background: rgba(255,102,0,0.25); outline: 1px dashed #f60; }
+.thumb-ctx-item.thumb-ctx-sub { padding-left: 26px; }
+.thumb-ctx-item.thumb-ctx-sub.on { color: #f60; }
 .history-thumb-label {
   position: absolute; left: 0; right: 0; bottom: 0; padding: 2px 5px;
   font-size: 10px; line-height: 1.3; color: #fff; pointer-events: none;

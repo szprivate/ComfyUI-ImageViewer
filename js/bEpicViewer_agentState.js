@@ -187,7 +187,9 @@ export const AgentStateMixin = {
         snap.tabs = order.map((k) => ({
             key: k, label: this._agentTabLabel(k),
             frames: ((this.allTabs || {})[k] || []).length,
-            history: ((this.history || {})[k] || []).length,
+            // Snapshots of the one history made in this tab.
+            history: (((this.history || {})[this.historyKey ? this.historyKey() : "all"]) || [])
+                .filter((s) => ((s || [])[0] || {}).fromTab === k).length,
         }));
         if (key) snap.tab = { key, label: this._agentTabLabel(key), mode: this._agentTabMode(key) };
         const shown = this._agentShownFrame();
@@ -196,7 +198,7 @@ export const AgentStateMixin = {
             const p = typeof fr.path === "string" ? fr.path : "";
             snap.item = {
                 frame: fr, index: shown.index, of: shown.of,
-                historyIndex: this.isViewingHistory && this.currentHistoryKey === key ? this.currentHistoryIndex : null,
+                historyIndex: this.isViewingHistory && Number.isInteger(this.currentHistoryIndex) ? this.currentHistoryIndex : null,
                 agentTag: p && this._agentTags ? this._agentTags[p] || "" : "",
                 colorTag: safe(() => this.historyTagOf([fr]), "") || "",
             };

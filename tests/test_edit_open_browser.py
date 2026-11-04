@@ -99,10 +99,12 @@ class EditOpenBrowserTests(_Base):
         self.assertEqual(pg.evaluate("() => __panel.editTlRecent()[0]"), "D:/out/saved.otio")
         self.assertEqual(self.errors, [])
 
-    def test_opening_from_the_viewer_with_no_cut_tab(self):
+    def test_the_viewers_top_bar_has_no_open_cut_button(self):
+        # Open cut... is on the Edit panel's bar only; the menu still opens a cut with no cut tab up.
         pg = self.bare()
+        self.assertFalse(pg.evaluate("() => !!__panel.shadowRoot.getElementById('open-cut-btn')"))
         self.assertEqual(pg.evaluate("() => __panel._editTlTabs().length"), 0)
-        pg.evaluate("() => __panel.shadowRoot.getElementById('open-cut-btn').click()")
+        pg.evaluate("() => __panel.editTlOpenMenu(__panel.undockBtn)")
         pg.wait_for_function("() => __panel.container.querySelector('.previz-menu .previz-menu-item')", timeout=5000)
         self.assertTrue(pg.evaluate(MENU_ITEMS)[0][0].startswith("Open cut"))
         pg.evaluate("() => __panel.container.querySelector('.previz-menu .previz-menu-item').click()")

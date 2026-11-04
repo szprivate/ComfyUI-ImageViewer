@@ -5,7 +5,8 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
 import { LayoutMixin }   from "./bEpicViewer_mixinLayout.js";
-import { HistoryMixin, HISTORY_LIMIT_DEFAULT, clampHistoryLimit }  from "./bEpicViewer_mixinHistory.js";
+import { HistoryMixin, HISTORY_LIMIT_DEFAULT, HISTORY_LIMIT_OLD_DEFAULT, HISTORY_KEY, clampHistoryLimit }  from "./bEpicViewer_mixinHistory.js";
+import { mergeTabHistories, snapshotTab } from "./bEpicViewer_historyData.js";
 import { PrevizWorldMixin } from "./bEpicViewer_previzWorld.js";
 import { PlaybackMixin } from "./bEpicViewer_mixinPlayback.js";
 import { ParamsMixin }   from "./bEpicViewer_mixinParams.js";
@@ -183,7 +184,6 @@ const ICON_MAP = {
     'rotate-btn':        'icon-rotate-slider',
     'close-panel-btn':   'icon-close',
     'undock-btn':        'icon-undock',
-    'open-cut-btn':      'icon-folder-open',
     'layout-btn':        'icon-layout',
     'history-toggle-btn':'icon-history',
     'params-btn':        'icon-params',
@@ -337,14 +337,20 @@ class ViewerPanel extends HTMLElement {
                 return out;
             };
             const activeTab = keepKey(this.activeTab) ? (this.activeTab || null) : null;
+            // The one history, without what dropped files made (blob: URLs too).
+            const history = {
+                [HISTORY_KEY]: ((this.history || {})[HISTORY_KEY] || []).filter((s) =>
+                    keepKey(snapshotTab(s)) && !(s || []).some((fr) => fr && fr.dropped)),
+            };
             const payload = {
                 version: 1,
                 allTabs: pick(this.allTabs),
-                history: pick(this.history),
+                history,
+                historyCollapsed: [...(this.historyCollapsed instanceof Set ? this.historyCollapsed : (this.historyCollapsed || []))],
                 tabViewState: pick(this.tabViewState),
                 tabLabels: pick(this.tabLabels),
                 tabColors: pick(this.tabColors),
-                historyTags: this.historyTagsToPersist ? this.historyTagsToPersist(pick(this.history)) : {},
+                historyTags: this.historyTagsToPersist ? this.historyTagsToPersist(history) : {},
                 historyTagFilter: this.historyTagFilter || "",
                 tabOrder: (Array.isArray(this.tabOrder) ? this.tabOrder : []).filter(keepKey),
                 activeTab,
@@ -385,15 +391,18 @@ class ViewerPanel extends HTMLElement {
         // The limit is a setting now (Settings → bEpic Viewer). A limit this
         // browser kept from before is taken over once, while the setting is
         // still at its default.
+        // The old default (40 per tab) is no choice of the user's: it is not taken over.
         if (parsed.historyLimit != null) {
             const kept = clampHistoryLimit(parsed.historyLimit);
-            if (kept !== HISTORY_LIMIT_DEFAULT && Number(pref(PREF.historyLimit)) === HISTORY_LIMIT_DEFAULT) {
+            if (kept !== HISTORY_LIMIT_DEFAULT && kept !== HISTORY_LIMIT_OLD_DEFAULT
+                && Number(pref(PREF.historyLimit)) === HISTORY_LIMIT_DEFAULT) {
                 this.historyLimit = kept;
                 setPref(PREF.historyLimit, kept);
                 this._syncHistoryLimitInput();
             }
         }
         if (typeof parsed.historyTagFilter === 'string') this.historyTagFilter = parsed.historyTagFilter;
+        if (Array.isArray(parsed.historyCollapsed)) this.historyCollapsed = new Set(parsed.historyCollapsed.map(String));
         if (parsed.historyTags && typeof parsed.historyTags === 'object') {
             this.historyTags = JSON.parse(JSON.stringify(parsed.historyTags));
         }
@@ -430,7 +439,12 @@ class ViewerPanel extends HTMLElement {
         this._isRestoringViewerState = true;
         try {
             this.allTabs = JSON.parse(JSON.stringify(restoredTabs));
-            this.history = JSON.parse(JSON.stringify(restoredHistory));
+            // One history for every tab. A viewer from before kept one per tab:
+            // those are merged into it, each snapshot remembering its tab.
+            const perTab = Object.keys(restoredHistory).some((k) => k !== HISTORY_KEY);
+            this.history = perTab
+                ? { [HISTORY_KEY]: mergeTabHistories(restoredHistory, restoredOrder, clampHistoryLimit(this.historyLimit)) }
+                : JSON.parse(JSON.stringify(restoredHistory));
             this.tabViewState = JSON.parse(JSON.stringify(restoredTabViewState));
             this.tabLabels = JSON.parse(JSON.stringify(restoredLabels));
             this.tabColors = JSON.parse(JSON.stringify(restoredColors));
@@ -816,17 +830,13 @@ class ViewerPanel extends HTMLElement {
                 const dlgWin = this.historyClearBtn.ownerDocument?.defaultView || window;
                 // A tag filter on: only what it shows goes (HistoryTagsMixin).
                 if (this.clearHistoryFiltered && this.clearHistoryFiltered(dlgWin)) return;
-                // A cut's tab shows (and clears) the history it borrows.
-                const borrowed = !!(this.historyBorrows && this.historyBorrows());
-                const key = borrowed ? this.historyKey() : this.activeTab;
-                if (borrowed && !key) return;
-                if (!key) {
-                    if (!dlgWin.confirm('Clear all in-memory history for all tabs?')) return;
-                    this.history = {};
-                } else {
-                    if (!dlgWin.confirm(`Clear history for ${key}?`)) return;
-                    delete this.history[key];
-                }
+                // One history for every tab: Clear clears all of it.
+                const n = ((this.history || {})[HISTORY_KEY] || []).length;
+                if (!n) return;
+                if (!dlgWin.confirm(`Clear the whole history (${n} snapshot${n === 1 ? '' : 's'}, every tab's)?`)) return;
+                // What a tab shows from an older snapshot goes back to its own picture first.
+                if (this.isViewingHistory && this.restoreHistoryView) this.restoreHistoryView();
+                this.history = {};
                 this.previewBackup       = null;
                 this.isViewingHistory    = false;
                 this._historyPanelSig    = null;
@@ -878,18 +888,8 @@ class ViewerPanel extends HTMLElement {
         }
         this.undockBtn.onclick = () => this.toggleUndock();
 
-        // Open cut..., with no cut tab and no Edit panel up (bEpicViewer_editOpen.js). Made here, not in
-        // the markup, like the buttons below.
-        this.openCutBtn = sr.getElementById('open-cut-btn');
-        if (!this.openCutBtn) {
-            this.openCutBtn           = document.createElement("button");
-            this.openCutBtn.id        = "open-cut-btn";
-            this.openCutBtn.className = "sprite-icon";
-            this.openCutBtn.title     = "Open cut… (a saved .otio, in the Edit panel)";
-            this.undockBtn.parentNode.insertBefore(this.openCutBtn, this.undockBtn);
-        }
-        this._setIcon(this.openCutBtn, 'icon-folder-open');
-        this.openCutBtn.onclick = () => this.editTlOpenMenu(this.openCutBtn);
+        // Open cut... lives on the Edit panel's bar (bEpicViewer_editOpen.js), not up here.
+        sr.getElementById('open-cut-btn')?.remove();
 
         // Dock to the page / float (bEpicViewer_mixinPageDock.js). Made here, not
         // in the markup, like the buttons below: a cached copy of the markup from
@@ -1089,7 +1089,7 @@ class ViewerPanel extends HTMLElement {
     unregisterNode(nodeId) {
         if (!this.container) return;
         delete this.allTabs[nodeId];
-        delete this.history[nodeId];
+        // The history keeps what the node made (one history for all tabs).
         if (this.activeTab === nodeId) {
             const keys = Object.keys(this.allTabs);
             if (keys.length > 0) this.switchTab(keys[0]);
@@ -1196,9 +1196,6 @@ class ViewerPanel extends HTMLElement {
                 didPrepend = this.pushHistorySnapshot(finalKey, data.tabs[k]);
             } catch (e) { console.warn('bEpicViewer history capture failed', e); }
 
-            if (didPrepend && typeof this.onHistoryPrepended === 'function') {
-                this.onHistoryPrepended(finalKey);
-            }
 
             const keepPinnedSelection = (typeof this.isHistorySelectionPinned === 'function')
                 ? this.isHistorySelectionPinned(finalKey)
@@ -1217,7 +1214,7 @@ class ViewerPanel extends HTMLElement {
             }
 
             if (!keepPinnedSelection && this.activeTab === finalKey) {
-                this.currentHistoryKey = finalKey;
+                this.currentHistoryKey = HISTORY_KEY;
                 this.currentHistoryIndex = 0;
                 this.isViewingHistory = false;
                 this.previewBackup = null;

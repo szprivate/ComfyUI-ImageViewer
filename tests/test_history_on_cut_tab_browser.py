@@ -1,9 +1,8 @@
-"""The History strip on a cut's tab, in a real browser: it shows a media tab's history to drag onto the timeline.
+"""The History strip on a cut's tab, in a real browser: it shows the one history to drag onto the timeline.
 
-A cut's tab ("edit:...") has no history of its own, and its strip used to be empty - so the renders could not
-be dragged from the History into the Edit panel. It now borrows the history of the media tab looked at last,
-named in a "History of" dropdown at its top that picks another. A click there only selects (agentY reads it);
-a double-click opens the snapshot in its tab.
+There is one history for all tabs. On a cut's tab ("edit:...") the strip shows it as anywhere else, but a click
+there only selects (agentY reads it) and the cut stays on screen; a double-click opens the snapshot in the tab it
+was made in.
 
 Needs Playwright with an installed Edge or Chrome, and node for the stub server; skipped without them.
 Run: python -m unittest tests.test_history_on_cut_tab_browser
@@ -25,8 +24,7 @@ except ImportError:  # pragma: no cover
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
-# Two media tabs with history (renders: three films; stills: two pictures), then a cut with one shot, opened from
-# "renders" - the tab looked at last.
+# Two media tabs that made history (renders: three films; stills: two pictures, made first), then a cut with one shot.
 SETUP = """async () => {
   const P = __panel;
   if (!P.isPanelDocked('history')) P.setPanelDocked('history', true);
@@ -34,8 +32,9 @@ SETUP = """async () => {
     'D:/out/r0.mp4': { duration: 2, video: true }, 'D:/out/r1.mp4': { duration: 3, video: true },
     'D:/out/r2.mp4': { duration: 2.5, video: true }, 'D:/out/s0.png': { duration: 0, still: true, video: true },
     'D:/out/s1.png': { duration: 0, still: true, video: true } });
+  // The oldest first, as renders land: the strip is then r0 r1 r2 s0 s1 (0..4).
   const tab = (key, label, frames) => {
-    P.history[key] = frames.map((f) => [f]);
+    for (const f of [...frames].reverse()) P.pushHistorySnapshot(key, [f]);
     P.allTabs[key] = [JSON.parse(JSON.stringify(frames[0]))];
     P.tabLabels[key] = label;
     if (!P.tabOrder.includes(key)) P.tabOrder.push(key);
@@ -143,26 +142,21 @@ class HistoryOnCutTabTests(unittest.TestCase):
     def strip(self, pg):
         return pg.evaluate(STRIP)
 
-    def test_the_cut_tab_shows_the_history_of_the_tab_it_came_from(self):
+    def test_the_cut_tab_shows_the_one_history(self):
         pg = self.page()
         s = self.strip(pg)
         self.assertTrue(s["active"].startswith("edit:"), s)
         self.assertTrue(s["borrowed"])
-        self.assertEqual(s["key"], "folder_renders", "the tab looked at last")
-        self.assertEqual(s["tiles"], [0, 1, 2])
-        self.assertTrue(s["bar"])
-        self.assertEqual(s["label"], "History of")
-        self.assertEqual(s["value"], "folder_renders")
-        self.assertEqual(sorted(s["options"]), ["renders", "stills"])
-        self.assertEqual(s["open"], [], "nothing in a borrowed strip is open")
-        # Back on a media tab, the strip is its own again and the bar goes.
+        self.assertEqual(s["key"], "all")
+        self.assertEqual(s["tiles"], [0, 1, 2, 3, 4], "every tab's snapshots")
+        self.assertFalse(s["bar"], "no 'History of' dropdown: there is one history")
+        self.assertEqual(s["open"], [], "nothing is open on a cut's strip")
+        # On a media tab: the same strip, its newest snapshot the open one.
         pg.evaluate("() => __panel.switchTab('folder_stills')")
         s = self.strip(pg)
-        self.assertFalse(s["bar"])
-        self.assertEqual((s["key"], s["tiles"]), ("folder_stills", [0, 1]))
-        # ...and that is the tab the cut borrows from now.
-        pg.evaluate("(k) => __panel.switchTab(k)", self.cut_key)
-        self.assertEqual(self.strip(pg)["key"], "folder_stills")
+        self.assertEqual((s["key"], s["tiles"], s["open"]), ("all", [0, 1, 2, 3, 4], [3]))
+        pg.evaluate("() => __panel.switchTab('folder_renders')")
+        self.assertEqual(self.strip(pg)["open"], [0])
         self.assertEqual(self.errors, [])
 
     def test_no_thumbnail_is_asked_for_twice_across_the_switch(self):
@@ -176,7 +170,7 @@ class HistoryOnCutTabTests(unittest.TestCase):
         pg.wait_for_timeout(300)
         self.assertEqual(self.thumbs[len(before):], [], "a borrowed strip asks for no thumbnail again")
         shown = pg.evaluate("() => [...__panel.historyStrip.querySelectorAll('.history-thumb img')].map((i) => !!i.getAttribute('src'))")
-        self.assertEqual(shown, [True, True, True], "no tile is drawn empty")
+        self.assertEqual(shown, [True] * 5, "no tile is drawn empty")
         twice = sorted({u for u in self.thumbs if self.thumbs.count(u) > 1})
         self.assertEqual(twice, [])
         self.assertEqual(self.errors, [])
@@ -208,10 +202,10 @@ class HistoryOnCutTabTests(unittest.TestCase):
         self.assertTrue(s["active"].startswith("edit:"), "a click leaves the cut on screen")
         self.assertEqual(s["picked"], [1])
         self.assertFalse(pg.evaluate("() => __panel.isViewingHistory"))
-        # agentY reads it as the selection, naming the tab the strip shows.
+        # agentY reads it as the selection; each item names the tab it was made in.
         sel = pg.evaluate("() => __panel.agentHistorySelection()")
-        self.assertEqual((sel["tab"], sel["tab_label"], sel["mode"]), ("folder_renders", "renders", "multi"))
-        self.assertEqual([i["path"] for i in sel["items"]], ["D:/out/r1.mp4"])
+        self.assertEqual((sel["tab"], sel["tab_label"], sel["mode"]), ("all", "History", "multi"))
+        self.assertEqual([(i["path"], i["tab"]) for i in sel["items"]], [("D:/out/r1.mp4", "renders")])
         # Shift+click: a range.
         pg.evaluate(f"(i) => ({tile})(i).dispatchEvent(new MouseEvent('click', {{ bubbles: true, shiftKey: true }}))", 2)
         self.assertEqual(self.strip(pg)["picked"], [1, 2])
@@ -226,29 +220,29 @@ class HistoryOnCutTabTests(unittest.TestCase):
                          "shown: __panel.allTabs['folder_renders'][0].path, cutTab: __panel.allTabs[__panel._editTlTab] })")
         self.assertEqual((st["active"], st["viewing"], st["idx"], st["shown"]), ("folder_renders", True, 2, "D:/out/r2.mp4"))
         self.assertEqual(st["cutTab"], [], "the cut's tab keeps no frames of the media tab")
+        # A snapshot of another tab opens there, and the tab left gets its own picture back.
+        pg.evaluate("() => __panel.openHistorySnapshot('all', 4)")
+        st = pg.evaluate("() => ({ active: __panel.activeTab, viewing: __panel.isViewingHistory, "
+                         "shown: __panel.allTabs['folder_stills'][0].path, renders: __panel.allTabs['folder_renders'][0].path })")
+        self.assertEqual(st, {"active": "folder_stills", "viewing": True, "shown": "D:/out/s1.png", "renders": "D:/out/r0.mp4"})
         self.assertEqual(self.errors, [])
 
-    def test_the_dropdown_switches_the_tab_shown_and_the_filters_apply(self):
+    def test_the_filters_apply_and_a_still_of_another_tab_drags_in(self):
         pg = self.page()
-        pg.evaluate("""() => { const sel = __panel.historyPanel.querySelector('.history-source select');
-            sel.value = 'folder_stills'; sel.dispatchEvent(new Event('change')); }""")
-        s = self.strip(pg)
-        self.assertEqual((s["key"], s["value"], s["tiles"]), ("folder_stills", "folder_stills", [0, 1]))
-        self.assertTrue(s["active"].startswith("edit:"))
-        # A drag from it lands the still.
+        # A drag of a still lands it.
         x, y = pg.evaluate(WHERE, [2.0, "V2"])
-        pg.evaluate(DRAG, [0, x, y])
+        pg.evaluate(DRAG, [3, x, y])
         pg.wait_for_function("() => __panel._editTlCut.tracks.find((k) => k.id === 'V2').clips.length === 1", timeout=5000)
         self.assertEqual(pg.evaluate(V2), [["D:/out/s0.png", 2.0]])
-        # Colour tag filter on the shown history.
-        pg.evaluate("() => { __panel.setHistorySource('folder_renders'); __panel.setHistoryTag('folder_renders', [1], 'red'); __panel.setHistoryTagFilter('red'); }")
-        s = self.strip(pg)
-        self.assertEqual((s["key"], s["tiles"]), ("folder_renders", [1]))
+        self.assertTrue(self.strip(pg)["active"].startswith("edit:"))
+        # Colour tag filter.
+        pg.evaluate("() => { __panel.setHistoryTag('all', [1], 'red'); __panel.setHistoryTagFilter('red'); }")
+        self.assertEqual(self.strip(pg)["tiles"], [1])
         self.assertEqual(pg.evaluate("() => __panel.historyVisibleIndices()"), [1])
         self.assertIn("1 red", pg.evaluate("() => __panel.historyClearBtn.title"))
         pg.evaluate("() => __panel.setHistoryTagFilter('none')")
-        self.assertEqual(self.strip(pg)["tiles"], [0, 2])
-        # agentY's #tags: the filter reads the same index whatever tab the strip shows.
+        self.assertEqual(self.strip(pg)["tiles"], [0, 2, 3, 4])
+        # agentY's #tags.
         pg.evaluate("""async () => { const P = __panel;
             const T = await import('/extensions/viewer/bEpicViewer_historyAgentTags.js');
             P._agentTagIndex = T.buildAgentTagIndex([{ tag: 'hero', path: 'D:/out/r2.mp4' }], null);
@@ -256,20 +250,21 @@ class HistoryOnCutTabTests(unittest.TestCase):
         self.assertEqual(self.strip(pg)["tiles"], [2])
         self.assertEqual(self.errors, [])
 
-    def test_a_new_render_in_the_borrowed_tab_lands_in_the_strip(self):
+    def test_a_new_render_in_any_tab_lands_in_the_strip(self):
         pg = self.page()
-        pg.evaluate("""() => { __panel.history['folder_renders'].unshift([{ path: 'D:/out/r3.mp4', filename: 'r3.mp4', type: 'output', kind: 'video', external: true }]);
+        pg.evaluate("""() => { __panel.pushHistorySnapshot('folder_renders', [{ path: 'D:/out/r3.mp4', filename: 'r3.mp4', type: 'output', kind: 'video', external: true }]);
             __panel.renderHistoryPanel(); }""")
-        self.assertEqual(self.strip(pg)["tiles"], [0, 1, 2, 3])
-        # A node's output pushed to a tab that has none yet: the dropdown offers it.
+        self.assertEqual(self.strip(pg)["tiles"], [0, 1, 2, 3, 4, 5])
+        # A node's output pushed to a tab that had none yet: on top of the same strip.
         pg.evaluate("() => { __panel.allTabs['42'] = []; __panel.tabOrder.push('42'); __panel.tabLabels['42'] = 'node 42'; "
                     "__panel.updateNodeImages('42', [{ filename: 'n.png', subfolder: '', type: 'output' }]); }")
         s = self.strip(pg)
-        self.assertIn("node 42", s["options"])
+        self.assertEqual(s["tiles"], list(range(7)))
+        self.assertEqual(pg.evaluate("() => __panel.history.all[0][0].fromTab"), "42")
         self.assertTrue(s["active"].startswith("edit:"), "a render elsewhere leaves the cut on screen")
         self.assertEqual(self.errors, [])
 
-    def test_popped_out_the_strip_borrows_switches_and_drags(self):
+    def test_popped_out_the_strip_selects_and_drags(self):
         pg = self.page()
         with pg.context.expect_page() as pop:
             pg.evaluate("() => window.__panel.toggleUndock()")
@@ -279,19 +274,14 @@ class HistoryOnCutTabTests(unittest.TestCase):
                              timeout=10000)
         pg.evaluate("() => { __panel._historyPanelSig = null; __panel.renderHistoryPanel(); }")
         s = self.strip(pg)
-        self.assertTrue(s["bar"])
-        self.assertEqual((s["key"], s["tiles"]), ("folder_renders", [0, 1, 2]))
-        self.assertTrue(pg.evaluate("() => __panel.historyPanel.querySelector('.history-source').ownerDocument !== document"))
-        # The dropdown, used in the popped-out window.
-        win.select_option(".history-source select", "folder_stills")
-        self.assertEqual(self.strip(pg)["tiles"], [0, 1])
+        self.assertEqual((s["key"], s["tiles"]), ("all", [0, 1, 2, 3, 4]))
         # A real click in that window selects and keeps the cut.
-        win.click(".history-thumb[data-idx='1']")
+        win.click(".history-thumb[data-idx='4']")
         s = self.strip(pg)
-        self.assertEqual(s["picked"], [1])
+        self.assertEqual(s["picked"], [4])
         self.assertTrue(s["active"].startswith("edit:"))
         x, y = pg.evaluate(WHERE, [1.0, "V2"])
-        pg.evaluate(DRAG, [1, x, y])
+        pg.evaluate(DRAG, [4, x, y])
         pg.wait_for_function("() => __panel._editTlCut.tracks.find((k) => k.id === 'V2').clips.length === 1", timeout=5000)
         self.assertEqual(pg.evaluate(V2), [["D:/out/s1.png", 1.0]])
         self.assertEqual(self.errors, [])

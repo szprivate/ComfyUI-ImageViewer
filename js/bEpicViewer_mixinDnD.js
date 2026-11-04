@@ -220,7 +220,8 @@ export const DnDMixin = {
             const key = `dropped_${Date.now()}_${++this._dropSeq}`;
             const frames = images.map((f) => this._frameForDroppedFile(f, false));
             this.allTabs[key]   = [frames[0]];
-            this.history[key]   = frames.map((fr) => [fr]);
+            // Each image a snapshot of the one history, the first on top.
+            for (const fr of [...frames].reverse()) this.pushHistorySnapshot(key, [fr], { dedupe: false });
             this.tabLabels[key] = images.length > 1 ? `📥 ${images.length} images` : `📥 ${images[0].name}`;
             firstKey = firstKey || key;
         }
@@ -230,7 +231,7 @@ export const DnDMixin = {
             const key   = `dropped_${Date.now()}_${++this._dropSeq}`;
             const frame = this._frameForDroppedFile(f, true);
             this.allTabs[key]   = [frame];
-            this.history[key]   = [[frame]];
+            this.pushHistorySnapshot(key, [frame]);
             this.tabLabels[key] = `📥 ${f.name}`;
             firstKey = firstKey || key;
             // <img> can't render a video file — extract a poster frame for the strip.
@@ -246,7 +247,7 @@ export const DnDMixin = {
             frame.kind = "model";
             frame.format = _MODEL_RE.exec(f.name)[1].toLowerCase();
             this.allTabs[key]   = [frame];
-            this.history[key]   = [[frame]];
+            this.pushHistorySnapshot(key, [frame]);
             this.tabLabels[key] = `📥 ${f.name}`;
             firstKey = firstKey || key;
         }
@@ -303,7 +304,14 @@ export const DnDMixin = {
                 if (fr && fr.dropped && fr.url && !seen.has(fr.url)) { seen.add(fr.url); URL.revokeObjectURL(fr.url); }
             });
             scan(this.allTabs[key]);
-            (this.history[key] || []).forEach(scan);
+            // The history keeps no dropped file once its tab is gone: its URLs die here.
+            const stack = this.historyStack ? this.historyStack() : [];
+            const mine = [];
+            stack.forEach((s, i) => {
+                if ((s || [])[0] && s[0].fromTab === key && s.some((fr) => fr && fr.dropped)) mine.push(i);
+            });
+            mine.forEach((i) => scan(stack[i]));
+            if (mine.length && this.removeHistoryItems) this.removeHistoryItems(this.historyKey(), mine);
         } catch (_) {}
     },
 

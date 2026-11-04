@@ -64,6 +64,7 @@ export const HistoryTagsMixin = {
 
     /** Tag (or, with null, untag) some snapshots of one tab. */
     setHistoryTag(key, indices, tagId) {
+        key = this.historyKey();   // the one history, whatever key was given
         const stack = this.history[key] || [];
         if (!this.historyTags) this.historyTags = {};
         for (const i of indices) {
@@ -89,9 +90,9 @@ export const HistoryTagsMixin = {
         return tag === f;
     },
 
-    /** Indices of the strip's snapshots the filter shows, newest first (the
-     *  strip's tab: the open one, or on a cut's tab the one it borrows). */
+    /** Indices of the history's snapshots the filter shows, newest first. */
     historyVisibleIndices(key = this.historyKey ? this.historyKey() : this.activeTab) {
+        key = this.historyKey();   // the one history, whatever key was given
         const stack = this.history[key] || [];
         const out = [];
         stack.forEach((s, i) => { if (this.historyTagVisible(s)) out.push(i); });
@@ -308,7 +309,7 @@ export const HistoryTagsMixin = {
         const key = this.historyKey ? this.historyKey() : this.activeTab;
         if (!words || !key) { btn.title = "Clear History"; return; }
         const n = this.historyVisibleIndices(key).length;
-        btn.title = `Clear the ${n} ${words} snapshot${n === 1 ? "" : "s"} of this tab (the filter decides)`;
+        btn.title = `Clear the ${n} ${words} snapshot${n === 1 ? "" : "s"} of the history (the filter decides)`;
         btn.disabled = n === 0;
     },
 
@@ -322,12 +323,11 @@ export const HistoryTagsMixin = {
         const key = this.historyKey ? this.historyKey() : this.activeTab;
         if (!words) return false;
         // A cut's tab with nothing to borrow has nothing to clear.
-        if (!key) return !!(this.historyBorrows && this.historyBorrows());
+        if (!key) return true;
         const shown = this.historyVisibleIndices(key);
         if (!shown.length) return true;
-        const label = (this.tabLabels && this.tabLabels[key]) || key;
         const what = `${shown.length} ${words} snapshot${shown.length === 1 ? "" : "s"}`;
-        if (!dlgWin.confirm(`Remove the ${what} from the history of ${label}?`)) return true;
+        if (!dlgWin.confirm(`Remove the ${what} from the history (every tab's)?`)) return true;
         this.removeHistoryItems(key, shown);
         return true;
     },

@@ -203,9 +203,9 @@ function defs() {
         },
         {
             id: PREF.historyLimit, category: sec("View", "HistoryLimit"),
-            name: "History snapshots kept per tab",
+            name: "History snapshots kept (one history for all tabs)",
             tooltip: "Older snapshots are dropped. Also set from the history panel's footer.",
-            type: "number", defaultValue: 40, attrs: { min: 1, max: 500, step: 1 }, sortOrder: 680,
+            type: "number", defaultValue: 100, attrs: { min: 1, max: 500, step: 1 }, sortOrder: 680,
             onChange: panelApply(PREF.historyLimit),
         },
         // ── Docking (the viewer as a panel of the page; bEpicViewer_mixinPageDock.js) ──

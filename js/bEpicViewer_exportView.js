@@ -146,9 +146,7 @@ export const ExportViewMixin = {
         if (!frames.length) return null;
         const fresh = !this.allTabs[TAB];
         this.allTabs[TAB] = frames;
-        if (!this.history[TAB]) this.history[TAB] = [];
-        this.history[TAB].unshift(frames);
-        if (this.trimHistory) this.trimHistory(TAB);
+        this.pushHistorySnapshot(TAB, frames, { dedupe: false });
         this.tabLabels[TAB] = "↓ Exports";
         if (fresh) {
             this.tabOrder = [...(this.tabOrder || []).filter((k) => k !== TAB), TAB];

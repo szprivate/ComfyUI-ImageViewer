@@ -986,14 +986,14 @@ export const BrowserMixin = {
         if (images.length > 0) {
             const key = `folder_${Date.now()}_${++seq}`;
             this.allTabs[key]   = images;
-            this.history[key]   = [images];
+            this.pushHistorySnapshot(key, images);
             this.tabLabels[key] = `📂 ${images.length > 1 ? `${label} (${images.length})` : (images[0].name || label)}`;
             firstKey = key;
         }
         for (const v of videos) {
             const key = `folder_${Date.now()}_${++seq}`;
             this.allTabs[key]   = [v];
-            this.history[key]   = [[v]];
+            this.pushHistorySnapshot(key, [v]);
             this.tabLabels[key] = `📂 ${v.name || label}`;
             firstKey = firstKey || key;
         }

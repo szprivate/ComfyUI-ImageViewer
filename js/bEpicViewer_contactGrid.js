@@ -114,7 +114,8 @@ export const ContactGridMixin = {
     // ── Which snapshots, in which order ─────────────────────────────────────
 
     /** The active tab's Ctrl-selection in click order: [{ snap, idx }]. */
-    _gridSelectionOrdered(key = this.activeTab) {
+    _gridSelectionOrdered(key = this.historyKey()) {
+        key = this.historyKey();   // the one history, whatever key was given
         if (!this._historySelSet || this._historySelKey !== key) return [];
         const stack = (this.history || {})[key] || [];
         const out = [];
@@ -151,7 +152,7 @@ export const ContactGridMixin = {
      * Leaves the slider mode alone; the caller picks it.
      */
     _tryEnterMultiCompare(min = 2) {
-        const key = this.activeTab;
+        const key = this.historyKey();
         const sel = this._gridSelectionOrdered(key);
         if (sel.length < min) return false;
         this._multiCompare = { key, snaps: sel.map((s) => s.snap) };
@@ -180,7 +181,7 @@ export const ContactGridMixin = {
     /** Ctrl+click while a multi compare is up: it follows the selection. */
     _multiCompareSelectionChanged() {
         const mc = this._multiCompare;
-        if (!mc || !this.isComparing || this.activeTab !== mc.key) return;
+        if (!mc || !this.isComparing || this.historyKey() !== mc.key) return;
         const sel = this._gridSelectionOrdered(mc.key);
         if (sel.length < 2) return;                 // a plain click, about to leave compare
         const snaps = sel.map((s) => s.snap);
@@ -216,7 +217,7 @@ export const ContactGridMixin = {
 
     _gridWanted() {
         return !!(this.isComparing && this.sliderMode === "contact" && this._multiCompare
-            && this.activeTab === this._multiCompare.key && this.multiCompareCount() >= 3);
+            && this.historyKey() === this._multiCompare.key && this.multiCompareCount() >= 3);
     },
 
     /** Bring the grid, the hint and the cells in line with the state. Cheap when nothing changed. */
@@ -256,7 +257,7 @@ export const ContactGridMixin = {
 
     /** "Comparing 1 and 2 of N" in a wipe; "showing 16 of N" on a capped sheet. */
     _gridHint() {
-        const n = this.isComparing && this._multiCompare && this.activeTab === this._multiCompare.key
+        const n = this.isComparing && this._multiCompare && this.historyKey() === this._multiCompare.key
             ? this.multiCompareCount() : 0;
         let text = "";
         if (n >= 3 && this.sliderMode !== "contact") text = `Comparing 1 and 2 of ${n}; Contact Sheet shows all`;

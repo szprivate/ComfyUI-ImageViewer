@@ -60,7 +60,7 @@ SETUP = """async (XSS) => {
   if (!P.isPanelDocked('history')) P.setPanelDocked('history', true);
   const key = P.activeTab || 'main';
   P.activeTab = key;
-  P.history[key] = ['c', 'b', 'a'].map((n) => [{ path: `D:/out/${n}.png`, filename: n === 'c' ? `${XSS}.png` : `${n}.png`,
+  P.history.all = ['c', 'b', 'a'].map((n) => [{ fromTab: key, path: `D:/out/${n}.png`, filename: n === 'c' ? `${XSS}.png` : `${n}.png`,
                                                   type: 'output', label: n === 'c' ? XSS : '' }]);
   P._historyPanelSig = null;
   P.renderHistoryPanel();

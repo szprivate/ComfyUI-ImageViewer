@@ -27,7 +27,7 @@ SETUP = """async () => {
   window.agentYViewerBridge = { tags: async () => window.__tagList.map((t) => ({ ...t })) };
   const key = P.activeTab || 'main';
   P.activeTab = key;
-  P.history[key] = ['c', 'b', 'a'].map((n) => [{ path: `D:/out/${n}.png`, filename: `${n}.png`, type: 'output' }]);
+  P.history.all = ['c', 'b', 'a'].map((n) => [{ fromTab: key, path: `D:/out/${n}.png`, filename: `${n}.png`, type: 'output' }]);
   P._historyPanelSig = null;
   P.renderHistoryPanel();
   await P.refreshAgentTags();
