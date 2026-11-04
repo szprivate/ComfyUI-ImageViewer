@@ -1508,6 +1508,13 @@ textarea.param-input {
 .history-group .history-group-count { flex: none; color: #999; font-weight: 400; }
 .history-group:hover { background: rgba(255,102,0,0.08); }
 .history-group.collapsed { color: #c80; }
+.history-group .history-group-rename { flex: none; opacity: 0; color: #ccc; font-weight: 400; padding: 0 2px; }
+.history-group:hover .history-group-rename { opacity: 0.8; }
+.history-group .history-group-rename:hover { opacity: 1; color: #fff; }
+.history-group .history-group-input {
+  flex: 1 1 auto; min-width: 0; font: inherit; text-transform: none; letter-spacing: 0;
+  background: #151515; color: #fff; border: 1px solid #f60; border-radius: 3px; padding: 0 4px;
+}
 .history-group.drop { background: rgba(255,102,0,0.25); outline: 1px dashed #f60; }
 .thumb-ctx-item.thumb-ctx-sub { padding-left: 26px; }
 .thumb-ctx-item.thumb-ctx-sub.on { color: #f60; }

@@ -223,6 +223,31 @@ class HistoryGroupsTests(unittest.TestCase):
         self.assertEqual(s["rows"], ["# Characters (3)", 0, 2, 3, "# Places (1)", 1])
         self.assertEqual(self.errors, [])
 
+    def test_a_group_is_renamed_from_its_heading(self):
+        pg = self.page()
+        head = "() => __panel.historyStrip.querySelector('.history-group[data-group=\"Characters\"]')"
+        self.assertFalse(pg.evaluate("() => !!__panel.historyStrip.querySelector('.history-group[data-group=\"\"] .history-group-rename')"),
+                         "'No group' is no group to rename")
+        pg.evaluate(f"() => ({head})().querySelector('.history-group-rename').click()")
+        pg.evaluate("() => { const i = __panel.historyStrip.querySelector('.history-group-input'); i.value = 'Cast';"
+                    " i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); }")
+        s = self.strip(pg)
+        self.assertEqual(s["groups"], ["Cast", "Places", "", "Cast"])
+        self.assertEqual(s["rows"][0:3], ["# Cast (2)", 0, 3])
+        self.assertEqual(pg.evaluate("() => __panel.allTabs.folder_b[0].group"), "Cast", "tab B's picture follows")
+        # Esc leaves it as it was; a right-click opens the field too.
+        pg.evaluate("() => __panel.historyStrip.querySelector('.history-group[data-group=\"Places\"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))")
+        pg.evaluate("() => { const i = __panel.historyStrip.querySelector('.history-group-input'); i.value = 'X';"
+                    " i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); }")
+        self.assertEqual(self.strip(pg)["groups"], ["Cast", "Places", "", "Cast"])
+        # A name that is there already: the two become one, and a folded group stays folded.
+        pg.evaluate("() => __panel.toggleHistoryGroupCollapsed('Places')")
+        self.assertTrue(pg.evaluate("() => __panel.renameHistoryGroup('Places', 'Cast')"))
+        s = self.strip(pg)
+        self.assertEqual(s["groups"], ["Cast", "Cast", "", "Cast"])
+        self.assertEqual(s["rows"][0], "# Cast (3)")
+        self.assertEqual(self.errors, [])
+
     def test_clear_clears_the_one_history(self):
         pg = self.page()
         pg.once("dialog", lambda d: d.accept())

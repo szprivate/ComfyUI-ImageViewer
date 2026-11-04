@@ -758,8 +758,19 @@ export const HistoryMixin = {
         count.className = 'history-group-count';
         count.textContent = String(section.count);
         h.append(caret, name, count);
+        if (g) {
+            // Rename it: the pencil, or a right-click on the heading.
+            const pen = doc.createElement('span');
+            pen.className = 'history-group-rename';
+            pen.textContent = '✎';
+            pen.title = `Rename the group "${g}"`;
+            pen.onclick = (ev) => { ev.stopPropagation(); this._historyGroupRenameField(h, g); };
+            h.insertBefore(pen, count);
+            h.oncontextmenu = (ev) => { ev.preventDefault(); ev.stopPropagation(); this._historyGroupRenameField(h, g); };
+        }
         h.title = `${g ? `Group "${g}"` : 'Not in a group'}: ${section.count} snapshot${section.count === 1 ? '' : 's'}\n`
-                + `Click to ${collapsed ? 'show' : 'fold away'}; drop thumbnails here to move them ${g ? 'into this group' : 'out of their group'}`;
+                + `Click to ${collapsed ? 'show' : 'fold away'}; drop thumbnails here to move them ${g ? 'into this group' : 'out of their group'}`
+                + (g ? '\n✎ or right-click to rename it' : '');
         h.onmousedown = (ev) => ev.stopPropagation();
         h.onclick = (ev) => { ev.stopPropagation(); this.toggleHistoryGroupCollapsed(g); };
         // A thumbnail dragged in the strip (HistoryMixin keeps what it carries).
@@ -1079,6 +1090,52 @@ export const HistoryMixin = {
         this._historyPanelSig = null;
         this.renderHistoryPanel();
         this.queuePersistViewerState?.();
+    },
+
+    /** Rename group `from` to `to` (an existing name: the two become one).
+     *  -> whether anything changed. */
+    renameHistoryGroup(from, to) {
+        const a = String(from || '').trim(), b = String(to || '').trim();
+        if (!a || !b || a === b) return false;
+        const snaps = (this.history[HISTORY_KEY] || []).filter((s) => snapshotGroup(s) === a);
+        if (!snaps.length) return false;
+        const set = this._historyCollapsedSet();
+        const folded = set.has(a);
+        set.delete(a);
+        this.setHistoryGroupOf(snaps, b);
+        // A folded group stays folded under its new name (setHistoryGroupOf opens it).
+        if (folded) { set.add(b); this._historyPanelSig = null; this.renderHistoryPanel(); }
+        return true;
+    },
+
+    /** The heading's name as a field: Enter renames, Esc or leaving it does not. */
+    _historyGroupRenameField(h, group) {
+        const doc = h.ownerDocument || document;
+        const name = h.querySelector('.history-group-name');
+        if (!name || h.querySelector('input')) return;
+        const input = doc.createElement('input');
+        input.className = 'history-group-input';
+        input.value = group;
+        input.title = 'Enter renames the group; a name that is there already merges the two';
+        let done = false;
+        const finish = (ok) => {
+            if (done) return;
+            done = true;
+            const to = input.value.trim();
+            if (ok && to && to !== group) { this.renameHistoryGroup(group, to); return; }
+            this._historyPanelSig = null;
+            this.renderHistoryPanel();
+        };
+        for (const type of ['click', 'mousedown', 'dblclick', 'keyup', 'keypress']) input.addEventListener(type, (e) => e.stopPropagation());
+        input.addEventListener('keydown', (e) => {
+            e.stopPropagation();      // the viewer's and ComfyUI's keys stay out of it
+            if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+            else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+        });
+        input.addEventListener('blur', () => finish(true));
+        name.replaceWith(input);
+        input.focus();
+        input.select();
     },
 
     /** Put the snapshots at `indices` into `group`. */
