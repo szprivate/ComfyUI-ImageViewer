@@ -406,8 +406,7 @@ function selectedGraphNodes() {
  * Nodes in the selection with nothing to show are skipped rather than refused:
  * selecting a whole region and sending it should send what can be sent.
  */
-export async function sendSelectionToViewer(ctx) {
-    const nodes = selectedGraphNodes();
+export async function sendSelectionToViewer(ctx, nodes = selectedGraphNodes()) {
     if (nodes.length === 0) {
         notify("info", "Send to Image Viewer", "Select a node on the canvas first.");
         return;
@@ -437,6 +436,20 @@ export async function sendSelectionToViewer(ctx) {
     }
 }
 
+/** The selected nodes that have something to show, when `node` is one of
+ *  them and there are at least two; else null. */
+function selectionAround(node) {
+    const sel = Object.values(app.canvas?.selected_nodes || {}).filter(Boolean);
+    if (sel.length < 2 || !sel.includes(node)) return null;
+    const sendable = sel.filter((n) => { try { return !!findMediaSource(n); } catch { return false; } });
+    if (sendable.length < 2) return null;
+    // Left to right, then top to bottom: the order they are read on the canvas.
+    // Sent right to left, so the History (newest first) lists them top down in
+    // that reading order.
+    return sendable.sort((a, b) => ((a.pos?.[0] ?? 0) - (b.pos?.[0] ?? 0)) || ((a.pos?.[1] ?? 0) - (b.pos?.[1] ?? 0)))
+                   .reverse();
+}
+
 /** Add the menu entry to a node type. Call from beforeRegisterNodeDef. */
 export function registerSendToViewerMenu(nodeType, ctx) {
     const getExtraMenuOptions = nodeType.prototype.getExtraMenuOptions;
@@ -445,12 +458,18 @@ export function registerSendToViewerMenu(nodeType, ctx) {
         try {
             const source = findMediaSource(this);
             if (source && Array.isArray(options)) {
+                // Right-clicked inside a selection of several: send them all
+                // (each lands in the one History), not just this one.
+                const many = selectionAround(this);
+                const runs = many ? many.some((n) => n !== this && findMediaSource(n)?.target) || !!source.target
+                                  : !!source.target;
                 options.push({
                     // Say so when picking this will queue work, so a heavy
                     // branch never runs as a surprise.
-                    content:  source.target ? "Send to Image Viewer (run branch)"
-                                            : "Send to Image Viewer",
-                    callback: () => sendNodeToViewer(this, source, ctx),
+                    content:  (many ? `Send ${many.length} to Image Viewer` : "Send to Image Viewer")
+                              + (runs ? " (run branch)" : ""),
+                    callback: () => many ? sendSelectionToViewer(ctx, many)
+                                         : sendNodeToViewer(this, source, ctx),
                 });
             }
         } catch (e) {

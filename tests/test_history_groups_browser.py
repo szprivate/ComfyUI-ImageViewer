@@ -257,5 +257,36 @@ class HistoryGroupsTests(unittest.TestCase):
         self.assertEqual(self.errors, [])
 
 
+    def test_send_to_viewer_on_a_selection_sends_every_selected_node(self):
+        pg = self.page()
+        out = pg.evaluate("""async () => {
+          const P = window.__panel;
+          const { app } = await import('/scripts/app.js');
+          const { registerSendToViewerMenu } = await import('/extensions/viewer/bEpicViewer_sendFromNode.js');
+          const old = window.__fetchApi;
+          window.__fetchApi = async (p, o) => p === '/bepic/resolve_media'
+            ? { ok: true, status: 200, json: async () => { const v = JSON.parse(o.body).value;
+                return { tabs: [{ label: v, frames: [{ filename: v, type: 'input' }] }] }; } }
+            : old(p, o);
+          function N() {}
+          registerSendToViewerMenu(N, { getPanel: () => P, showPanel: () => {} });
+          const node = (id, x, file) => Object.assign(new N(), { id, pos: [x, 0], title: file, type: 'LoadImage',
+            widgets: [{ name: 'image', value: file }] });
+          const n1 = node(1, 300, 'mid.png'), n2 = node(2, 0, 'left.png'), n3 = node(3, 600, 'right.png'), n4 = node(4, 900, 'other.png');
+          app.canvas.selected_nodes = { 1: n1, 2: n2, 3: n3 };
+          const before = P.history.all.length;
+          const menu = (n) => { const o = []; n.getExtraMenuOptions({}, o); return o.find((e) => /Image Viewer/.test(e.content)); };
+          const e = menu(n1);
+          await e.callback();
+          const sent = P.history.all.slice(0, P.history.all.length - before).map((s) => s[0].filename);
+          const single = menu(n4);
+          return { content: e.content, sent, single: single.content };
+        }""")
+        self.assertEqual(out["content"], "Send 3 to Image Viewer")
+        self.assertEqual(out["sent"], ["left.png", "mid.png", "right.png"], "all three, in the canvas's reading order")
+        self.assertEqual(out["single"], "Send to Image Viewer", "a node outside the selection sends itself")
+        self.assertEqual(self.errors, [])
+
+
 if __name__ == "__main__":
     unittest.main()
