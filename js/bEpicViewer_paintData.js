@@ -583,12 +583,55 @@ export function dabsAlong(x0, y0, x1, y1, radius, spacing, carry = 0) {
     return { dabs: out, carry: len - (t - step) };
 }
 
+// ── pen pressure ─────────────────────────────────────────────────────────────
+//
+// A pen (Wacom through Windows Ink, an Apple Pencil ...) reports PointerEvent.pressure 0..1; a mouse reports
+// 0.5 while a button is down, which means nothing, so only a "pen" is read. The brush's size and / or
+// opacity follow it (Properties: "Pen pressure"), each dab at the pressure where it lies along the move.
+
+/** The smallest share of the brush's size a light touch draws (a dab never vanishes). */
+export const PRESSURE_MIN_SIZE = 0.05;
+
+/** The pressure of a pointer event as the brush takes it: a pen's own, anything else 1. */
+export function pressureOf(pointerType, pressure) {
+    if (pointerType !== "pen") return 1;
+    const p = Number(pressure);
+    return Number.isFinite(p) ? Math.min(1, Math.max(0, p)) : 1;
+}
+
+/** What a pressure does to one dab: `{ r }` its share of the radius, `{ a }` of its opacity. */
+export function pressureScale(p, size, opacity) {
+    return { r: size ? Math.max(PRESSURE_MIN_SIZE, p) : 1, a: opacity ? p : 1 };
+}
+
+/**
+ * Dabs from (x0, y0) at pressure p0 to (x1, y1) at p1: each [x, y, p], the pressure taken along the move,
+ * spaced by the radius THERE (a lighter, smaller dab sits closer to the one before) when `size` follows the
+ * pen. `carry` is the distance already gone since the last dab, as dabsAlong's.
+ */
+export function pressureDabs(x0, y0, p0, x1, y1, p1, radius, spacing, carry = 0, size = true) {
+    const dx = x1 - x0, dy = y1 - y0;
+    const len = Math.hypot(dx, dy);
+    const stepAt = (p) => Math.max(0.5, radius * (size ? Math.max(PRESSURE_MIN_SIZE, p) : 1) * 2 * spacing);
+    if (len === 0) return { dabs: carry === 0 ? [[x0, y0, p1]] : [], carry };
+    const out = [];
+    let t = stepAt(p0) - carry;
+    while (t <= len) {
+        const f = t / len, p = p0 + (p1 - p0) * f;
+        out.push([x0 + dx * f, y0 + dy * f, p]);
+        t += stepAt(p);
+    }
+    const lastAt = out.length ? Math.hypot(out[out.length - 1][0] - x0, out[out.length - 1][1] - y0) : -carry;
+    return { dabs: out, carry: len - lastAt };
+}
+
 /**
  * One dab into a stroke. `st` = { px (the layer, written), orig, cover (Float32Array), lw, lh, lx, ly,
  * color [r, g, b], opacity, erase, sel (canvas mask or null), W, H, lockAlpha }. Returns the layer
- * rectangle touched, {x0, y0, x1, y1}, or null.
+ * rectangle touched, {x0, y0, x1, y1}, or null. `flow` (0..1, the pen's pressure on the opacity) scales the
+ * dab; the stroke still keeps the most any dab gave a pixel, so a lighter press never lightens it.
  */
-export function stamp(st, cx, cy, radius, hard) {
+export function stamp(st, cx, cy, radius, hard, flow = 1) {
     const { lw, lh, lx, ly } = st;
     const x0 = Math.max(0, Math.floor(cx - radius - lx)), y0 = Math.max(0, Math.floor(cy - radius - ly));
     const x1 = Math.min(lw, Math.ceil(cx + radius - lx) + 1), y1 = Math.min(lh, Math.ceil(cy + radius - ly) + 1);
@@ -597,7 +640,7 @@ export function stamp(st, cx, cy, radius, hard) {
     for (let y = y0; y < y1; y++) {
         for (let x = x0; x < x1; x++) {
             const d = Math.hypot(x + 0.5 + lx - cx, y + 0.5 + ly - cy);
-            let a = dabAt(d, radius, hard);
+            let a = dabAt(d, radius, hard) * flow;
             if (a <= 0) continue;
             if (st.sel) {
                 const gx = x + lx, gy = y + ly;

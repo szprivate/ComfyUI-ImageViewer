@@ -202,6 +202,56 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertIn("Invert (merged)", [L["name"] for L in back.layers])
         self.assertEqual(self.errors, [])
 
+    def test_a_pens_pressure_sets_the_brushs_size_and_opacity(self):
+        """A real pen through the browser's input pipeline (CDP: pointerType pen, force = pressure)."""
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        pg.evaluate(f"() => {{ const e = {ed}; e.newLayer('Pen'); e.fg = [255, 255, 0]; e.setTool('brush');"
+                    f" Object.assign(e.opts.brush, {{ size: 20, hardness: 100, opacity: 100 }}); }}")
+        cdp = pg.context.new_cdp_session(pg)
+        box = pg.evaluate(f"() => {{ const r = {ed}.canvas.getBoundingClientRect(); return [r.left, r.top, r.width / {ed}.doc.w]; }}")
+        x0, y0, k = box
+
+        def pen_line(y, pressure):
+            pts = [(x0 + (30 + i * 7) * k, y0 + y * k) for i in range(21)]
+            def ev(kind, x, yy, buttons=1):
+                cdp.send("Input.dispatchMouseEvent", {"type": kind, "x": x, "y": yy, "button": "left", "buttons": buttons,
+                                                      "clickCount": 1, "pointerType": "pen", "force": pressure})
+            ev("mouseMoved", *pts[0], buttons=0)
+            ev("mousePressed", *pts[0])
+            for x, yy in pts[1:]:
+                ev("mouseMoved", x, yy)
+            ev("mouseReleased", *pts[-1], buttons=0)
+
+        # Thickness of the stroke across x = 100 (its middle), and the alpha there.
+        across = (f"(y0) => {{ const e = {ed}; const L = e.doc.layers.find((l) => l.name === 'Pen'); const b = e.pix.get(L.id);"
+                  f" let n = 0, top = 0; for (let y = y0 - 15; y < y0 + 15; y++) {{ const a = b[(y * L.w + 100) * 4 + 3]; if (a) n++; top = Math.max(top, a); }} return [n, top]; }}")
+        pen_line(30, 0.15)
+        pen_line(80, 1.0)
+        light, full = pg.evaluate(across, 30), pg.evaluate(across, 80)
+        self.assertGreaterEqual(full[0], 18)               # size 20 at full pressure
+        self.assertLessEqual(light[0], 6)                  # about 3 px at 0.15
+        self.assertGreater(light[0], 0)
+        self.assertEqual(light[1], 255)                    # opacity does not follow the pen by default
+        # Opacity on, size off: as wide as full, but faint.
+        pg.evaluate(f"() => Object.assign({ed}.opts.brush, {{ penSize: false, penOpacity: true }})")
+        pen_line(55, 0.4)
+        faint = pg.evaluate(across, 55)
+        self.assertGreaterEqual(faint[0], 18)
+        self.assertLess(abs(faint[1] - 102), 4)
+        # The mouse paints at full, whatever the switches.
+        pg.evaluate(f"() => Object.assign({ed}.opts.brush, {{ penSize: true, penOpacity: true }})")
+        pg.mouse.move(x0 + 30 * k, y0 + 105 * k)
+        pg.mouse.down()
+        pg.mouse.move(x0 + 170 * k, y0 + 105 * k, steps=15)
+        pg.mouse.up()
+        self.assertEqual(pg.evaluate(across, 105)[1], 255)
+        self.assertGreaterEqual(pg.evaluate(across, 105)[0], 18)
+        # The switches are in Properties.
+        self.assertTrue(pg.evaluate("() => [...__panel._paintActive().editor.parts.props.querySelectorAll('label.paint-check')].length === 2"))
+        self.assertEqual(self.errors, [])
+
     def test_the_agents_change_is_one_undo_step(self):
         pg = self.page()
         self.open_photo(pg)

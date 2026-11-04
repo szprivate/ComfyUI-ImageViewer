@@ -102,6 +102,7 @@ const STYLE = `
 .paint-field { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
 .paint-field > label { flex: 0 0 92px; color: #aaa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .paint-field.wide > label { flex-basis: auto; }
+.paint-field > label.paint-check { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; color: #ddd; cursor: pointer; }
 .paint-props { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
 .paint-props textarea { width: 100%; box-sizing: border-box; min-height: 52px; resize: vertical; }
 .paint-note { color: #888; font-size: 11px; margin: 4px 0; }
@@ -133,8 +134,8 @@ class PaintEditor {
         this.selSegs = null;
         this.tool = "brush";
         this.opts = {
-            brush: { size: 24, hardness: 80, opacity: 100, spacing: 15 },
-            eraser: { size: 40, hardness: 80, opacity: 100, spacing: 15 },
+            brush: { size: 24, hardness: 80, opacity: 100, spacing: 15, penSize: true, penOpacity: false },
+            eraser: { size: 40, hardness: 80, opacity: 100, spacing: 15, penSize: true, penOpacity: false },
             fill: { tolerance: 32, contiguous: true, all: false },
             wand: { tolerance: 32, contiguous: true, all: true },
             select: { feather: 0 },
@@ -1091,7 +1092,12 @@ class PaintEditor {
             return;
         }
         if (dr.kind === "pick") { this._pickAt(p); return; }
-        if (dr.kind === "stroke") { this._strokeTo(p); return; }
+        if (dr.kind === "stroke") {
+            // A pen sends far more positions than pointermove fires: take every one, with its pressure.
+            const all = (e.getCoalescedEvents && e.getCoalescedEvents()) || [];
+            for (const ce of (all.length ? all : [e])) this._strokeTo(this.toImage(ce), D.pressureOf(ce.pointerType, ce.pressure));
+            return;
+        }
         if (dr.kind === "marquee" || dr.kind === "ellipse") {
             let w = p.x - dr.x0, h = p.y - dr.y0;
             if (e.shiftKey && !dr.e.shiftKey) { const s = Math.max(Math.abs(w), Math.abs(h)); w = Math.sign(w || 1) * s; h = Math.sign(h || 1) * s; }
@@ -1168,30 +1174,37 @@ class PaintEditor {
         st.radius = Math.max(0.5, o.size / 2);
         st.hard = o.hardness / 100;
         st.spacing = Math.max(0.01, o.spacing / 100);
-        st.last = [p.x, p.y];
+        st.penSize = o.penSize !== false;
+        st.penOpacity = !!o.penOpacity;
+        const pr = D.pressureOf(e.pointerType, e.pressure);
+        st.last = [p.x, p.y, pr];
         st.carry = 0;
         st.touched = null;
         this._keepBelow(A);
         this._drag = { kind: "stroke", st };
-        this._dab(st, [[p.x, p.y]]);
+        this._dab(st, [[p.x, p.y, pr]]);
         if (e.shiftKey && this._lastStrokeEnd && this._lastStrokeEnd.L === A.id) {
             // Shift-click: a straight line from where the last stroke ended.
             const a = this._lastStrokeEnd;
-            this._dab(st, D.dabsAlong(a.x, a.y, p.x, p.y, st.radius, st.spacing).dabs);
+            this._dab(st, D.pressureDabs(a.x, a.y, pr, p.x, p.y, pr, st.radius, st.spacing, 0, st.penSize).dabs);
         }
     }
 
-    _strokeTo(p) {
+    _strokeTo(p, pr = 1) {
         const st = this._drag.st;
-        const r = D.dabsAlong(st.last[0], st.last[1], p.x, p.y, st.radius, st.spacing, st.carry);
+        const [x0, y0, p0] = st.last;
+        const r = D.pressureDabs(x0, y0, p0, p.x, p.y, pr, st.radius, st.spacing, st.carry, st.penSize);
         st.carry = r.carry;
-        st.last = [p.x, p.y];
+        st.last = [p.x, p.y, pr];
         if (r.dabs.length) this._dab(st, r.dabs);
     }
 
     _dab(st, dabs) {
         let rect = null;
-        for (const [x, y] of dabs) rect = rectUnion(rect, D.stamp(st, x, y, st.radius, st.hard));
+        for (const [x, y, pr = 1] of dabs) {
+            const k = D.pressureScale(pr, st.penSize, st.penOpacity);
+            rect = rectUnion(rect, D.stamp(st, x, y, Math.max(0.5, st.radius * k.r), st.hard, k.a));
+        }
         if (!rect) return;
         if (st.onMask) {
             for (let y = rect.y0; y < rect.y1; y++) for (let x = rect.x0; x < rect.x1; x++) st.mask[y * st.lw + x] = st.px[(y * st.lw + x) * 4];
@@ -1773,6 +1786,15 @@ class PaintEditor {
             this._slider(ts, "Hardness", b.hardness, 0, 100, 1, (v) => { b.hardness = v; });
             this._slider(ts, "Opacity", b.opacity, 1, 100, 1, (v) => { b.opacity = v; });
             this._slider(ts, "Spacing %", b.spacing, 1, 100, 1, (v) => { b.spacing = v; });
+            const pen = (key, text) => {
+                const c = this.el("input", "", { type: "checkbox", checked: key === "penSize" ? b.penSize !== false : !!b[key] });
+                c.addEventListener("change", () => { b[key] = c.checked; });
+                const l = this.el("label", "paint-check");
+                l.append(c, this.el("span", "", { text }));
+                return l;
+            };
+            this._field(ts, "Pen pressure", [pen("penSize", "Size"), pen("penOpacity", "Opacity")])
+                .title = "A pen tablet's pressure (Wacom, Windows Ink) sets each dab's size and / or opacity. A mouse paints at full.";
             ts.append(this.el("div", "paint-note", { text: this.editMask ? "Painting the layer's MASK: white shows, black hides." : "Alt+click picks a colour; Shift+click draws a straight line." }));
         } else if (this.tool === "fill" || this.tool === "wand") {
             const f = o[this.tool];

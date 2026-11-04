@@ -78,3 +78,36 @@ test("a document is held to what it may be", () => {
     assert.deepEqual(D.panelOrder(doc).map((L) => L.id), ["b", "a"]);
     assert.deepEqual(D.hexToRgb("#ff8000"), [255, 128, 0]);
 });
+
+test("a pen's pressure is read, a mouse's is not", () => {
+    assert.equal(D.pressureOf("pen", 0.3), 0.3);
+    assert.equal(D.pressureOf("pen", 1.7), 1);
+    assert.equal(D.pressureOf("mouse", 0.5), 1);            // a mouse with a button down says 0.5: ignored
+    assert.equal(D.pressureOf("touch", 0.2), 1);
+    assert.deepEqual(D.pressureScale(0.25, true, false), { r: 0.25, a: 1 });
+    assert.deepEqual(D.pressureScale(0.25, false, true), { r: 1, a: 0.25 });
+    assert.equal(D.pressureScale(0, true, false).r, D.PRESSURE_MIN_SIZE);
+});
+
+test("dabs along a pen move carry its pressure and sit closer where it is light", () => {
+    const { dabs } = D.pressureDabs(0, 0, 0.2, 100, 0, 1, 10, 0.25);   // a step of 5 px at full pressure
+    assert.ok(dabs.length > 20);                             // a constant 5 px step would give 20
+    for (let i = 1; i < dabs.length; i++) assert.ok(dabs[i][2] >= dabs[i - 1][2]);
+    const gaps = dabs.slice(1).map((d, i) => d[0] - dabs[i][0]);
+    assert.ok(gaps[0] < gaps[gaps.length - 1]);
+    const flat = D.pressureDabs(0, 0, 0.2, 100, 0, 1, 10, 0.25, 0, false);   // size not on the pen: even steps
+    assert.deepEqual(flat.dabs.map(([x]) => x), D.dabsAlong(0, 0, 100, 0, 10, 0.25).dabs.map(([x]) => x));
+    // The rest carries across moves just as dabsAlong's.
+    const a = D.pressureDabs(0, 0, 1, 7, 0, 1, 10, 0.25), b = D.pressureDabs(7, 0, 1, 12, 0, 1, 10, 0.25, a.carry);
+    assert.deepEqual([...a.dabs, ...b.dabs].map(([x]) => x), [5, 10]);
+});
+
+test("a light press paints a smaller, or fainter, dab", () => {
+    const w = 40, h = 40, inked = (px) => { let n = 0; for (let i = 3; i < px.length; i += 4) if (px[i]) n++; return n; };
+    const full = layer(w, h), light = layer(w, h), faint = layer(w, h);
+    D.stamp(stroke(full, w, h), 20, 20, 10, 1);
+    D.stamp(stroke(light, w, h), 20, 20, 10 * D.pressureScale(0.3, true, false).r, 1);
+    D.stamp(stroke(faint, w, h), 20, 20, 10, 1, D.pressureScale(0.3, false, true).a);
+    assert.ok(inked(light) < inked(full) / 5);
+    assert.equal(faint[(20 * w + 20) * 4 + 3], D.q8(0.3));
+});
