@@ -1,7 +1,7 @@
 """Provenance beside what bEpicSendToViewer saves (provenance_write.py): the graph, how it was made, and no secrets.
 
-A saved file gets `<file>.agenty.json` (only the key "provenance" is set in it; the rest stays) and
-`<file>.prov.json.gz` (the redacted API graph and UI workflow). The node writes it for its temp PNGs and for "save to
+A saved file gets `agent_metadata/<name>.agenty.json` (only the key "provenance" is set in it; the rest stays) and
+`agent_metadata/<name>.prov.json.gz` (the redacted API graph and UI workflow), in a folder beside it. The node writes it for its temp PNGs and for "save to
 output", best effort. A fake key in a partner node's `api_key` widget must be in neither file.
 Run: python -m unittest tests.test_provenance_write   (or discover -s tests)
 """
@@ -34,6 +34,15 @@ WORKFLOW = {"nodes": [
 ], "links": [], "extra": {"api": KEY}}
 
 
+def SC(path):
+    """Where the sidecar of *path* goes: agent_metadata beside it."""
+    return os.path.join(os.path.dirname(path), "agent_metadata", os.path.basename(path) + ".agenty.json")
+
+
+def GZ(path):
+    return os.path.join(os.path.dirname(path), "agent_metadata", os.path.basename(path) + ".prov.json.gz")
+
+
 def slurp(path, mode="rb"):
     with open(path, mode, **({} if "b" in mode else {"encoding": "utf-8"})) as fh:
         return fh.read()
@@ -61,9 +70,9 @@ class Provenance(unittest.TestCase):
             self.files.append(p)
 
     def read(self, path):
-        with open(path + ".agenty.json", encoding="utf-8") as fh:
+        with open(SC(path), encoding="utf-8") as fh:
             side = json.load(fh)
-        with gzip.open(path + ".prov.json.gz", "rt", encoding="utf-8") as fh:
+        with gzip.open(GZ(path), "rt", encoding="utf-8") as fh:
             graph = json.load(fh)
         return side, graph
 
@@ -92,7 +101,7 @@ class Provenance(unittest.TestCase):
         self.pw.annotate(self.files, "10", PROMPT, {"workflow": WORKFLOW}, "p")
         for path in self.files:
             side, graph = self.read(path)
-            for name in (path + ".agenty.json", path + ".prov.json.gz"):
+            for name in (SC(path), GZ(path)):
                 raw = slurp(name)
                 if name.endswith(".gz"):
                     raw = gzip.decompress(raw)
@@ -112,7 +121,8 @@ class Provenance(unittest.TestCase):
 
     def test_the_input_prompt_is_left_alone_and_a_sidecar_keeps_what_else_it_held(self):
         before = json.dumps(PROMPT, sort_keys=True)
-        with open(self.files[0] + ".agenty.json", "w", encoding="utf-8") as fh:
+        os.makedirs(os.path.dirname(SC(self.files[0])), exist_ok=True)
+        with open(SC(self.files[0]), "w", encoding="utf-8") as fh:
             json.dump({"role": "title", "note": "x"}, fh)
         self.pw.annotate(self.files[:1], "10", PROMPT, None, "")
         self.assertEqual(json.dumps(PROMPT, sort_keys=True), before)
@@ -120,7 +130,8 @@ class Provenance(unittest.TestCase):
         self.assertEqual((side["role"], side["note"]), ("title", "x"))
         self.assertIn("provenance", side)
         self.assertIsNone(graph["workflow"])
-        self.assertFalse([n for n in os.listdir(self.tmp) if n.endswith(".tmp")])
+        self.assertFalse([n for n in os.listdir(self.tmp) + os.listdir(os.path.dirname(SC(self.files[0])))
+                          if n.endswith(".tmp")])
 
     def test_key_shapes_are_masked_in_any_text(self):
         for text in ("sk-ant-api03-abcdefghijklmnopqrstuvwx", "ghp_" + "a" * 36, "AIza" + "b" * 35, "xoxb-1234567890-abcdefghij",
@@ -135,6 +146,25 @@ class Provenance(unittest.TestCase):
         self.assertEqual(self.pw.annotate(None, "1", PROMPT, "not a dict"), 0)
         self.assertEqual(self.pw.annotate(["/no/such/folder/x.png"], "1", PROMPT, None), 0)
         self.assertEqual(os.listdir(self.tmp).count("frame_0.png.agenty.json"), 0)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "agent_metadata")))
+
+    def test_the_files_go_into_agent_metadata_and_nothing_is_left_beside_the_picture(self):
+        self.pw.annotate(self.files, "10", PROMPT, {"workflow": WORKFLOW}, "p")
+        self.assertEqual(sorted(os.listdir(self.tmp)), ["agent_metadata", "frame_0.png", "frame_1.png"])
+        self.assertEqual(sorted(os.listdir(os.path.join(self.tmp, "agent_metadata"))),
+                         ["frame_0.png.agenty.json", "frame_0.png.prov.json.gz",
+                          "frame_1.png.agenty.json", "frame_1.png.prov.json.gz"])
+
+    def test_a_file_with_an_old_sidecar_beside_it_keeps_using_that_one(self):
+        old = self.files[0] + ".agenty.json"
+        with open(old, "w", encoding="utf-8") as fh:
+            json.dump({"role": "old"}, fh)
+        self.pw.annotate(self.files[:1], "10", PROMPT, None, "")
+        side = json.loads(slurp(old, "r"))
+        self.assertEqual(side["role"], "old")
+        self.assertEqual(side["provenance"]["graph_file"], "frame_0.png.prov.json.gz")
+        self.assertTrue(os.path.isfile(self.files[0] + ".prov.json.gz"))
+        self.assertFalse(os.path.exists(SC(self.files[0])))
 
 
 def _node_module(tmp):
@@ -206,10 +236,10 @@ class NodeWritesProvenance(unittest.TestCase):
         frames = self.run_node()
         self.assertEqual(len(frames), 2)
         for i, fr in enumerate(frames):
-            side = json.loads(slurp(fr["path"] + ".agenty.json", "r"))["provenance"]
+            side = json.loads(slurp(SC(fr["path"]), "r"))["provenance"]
             self.assertEqual((side["output_node"], side["output_index"], side["prompt_id"]), ("10", i, "run-9"))
-            self.assertTrue(os.path.isfile(fr["path"] + ".prov.json.gz"))
-            self.assertNotIn(KEY, slurp(fr["path"] + ".agenty.json", "r"))
+            self.assertTrue(os.path.isfile(GZ(fr["path"])))
+            self.assertNotIn(KEY, slurp(SC(fr["path"]), "r"))
 
     def test_save_to_output_files_are_annotated(self):
         frames = self.run_node(save_to_output=True, filename_prefix="prov/test", file_format="png")
@@ -217,7 +247,7 @@ class NodeWritesProvenance(unittest.TestCase):
         paths = [f["path"] for f in frames]
         self.assertTrue(all(os.path.abspath(p).startswith(os.path.abspath(self.dirs["output"])) for p in paths), paths)
         for p in paths:
-            graph = json.loads(gzip.decompress(slurp(p + ".prov.json.gz")).decode("utf-8"))
+            graph = json.loads(gzip.decompress(slurp(GZ(p))).decode("utf-8"))
             self.assertEqual(graph["prompt"]["9"]["inputs"]["api_key"], "<redacted>")
 
     def test_a_failing_writer_never_fails_the_node(self):
@@ -254,7 +284,7 @@ class NodeWritesProvenance(unittest.TestCase):
         node = self.nodes.bEpicSendToViewer()
         node.send(torch.rand(1, 8, 8, 3), tab_name="shots2", unique_id="11")
         path = self.sent[-1][1]["tabs"]["tab"][0]["path"]
-        self.assertFalse(os.path.exists(path + ".agenty.json"))
+        self.assertFalse(os.path.exists(SC(path)))
 
 
 if __name__ == "__main__":

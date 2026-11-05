@@ -2,13 +2,16 @@
 
 agentY's "recreate these shots with changes" re-runs the graph that made a shot, so a
 file has to say how it was made. A file written by a run of the viewer's Send node
-(a temp PNG the viewer shows, or the files "save to output" writes) gets, beside it
-(the agentY format, version 1 - the same as agenty_core.utils.provenance):
+(a temp PNG the viewer shows, or the files "save to output" writes) gets, in the folder
+``agent_metadata`` beside it (the agentY format, version 1 - the same as
+agenty_core.utils.provenance, which reads it):
 
-* ``<file>.agenty.json`` - the sidecar; only the key ``"provenance"`` is set in it (what
-  else it holds stays), written to a file beside it and moved over;
-* ``<file>.prov.json.gz`` - gzip of ``{"v": 1, "prompt": <API graph>, "workflow": <UI
-  workflow or null>}``.
+* ``agent_metadata/<name>.agenty.json`` - the sidecar; only the key ``"provenance"`` is
+  set in it (what else it holds stays), written to a file beside it and moved over;
+* ``agent_metadata/<name>.prov.json.gz`` - gzip of ``{"v": 1, "prompt": <API graph>,
+  "workflow": <UI workflow or null>}``.
+
+A file that already has an old sidecar right next to it (before 1.18) keeps that one.
 
 Secrets are never stored. Any input / widget whose NAME says it is a credential
 (api key, token, secret, password, auth, credential) with a text value, and any text
@@ -31,6 +34,7 @@ VERSION = 1
 SOURCE = "bEpicSendToViewer"
 SIDECAR_SUFFIX = ".agenty.json"
 GRAPH_SUFFIX = ".prov.json.gz"
+META_DIR = "agent_metadata"
 REDACTED = "<redacted>"
 MAX_FILES = 512            # a sequence of hundreds of frames is annotated up to here
 
@@ -146,8 +150,19 @@ def _comfyui_version():
 
 # ── writing ──────────────────────────────────────────────────────────────────
 
+def record_paths(path):
+    """(sidecar, graph) of the file *path*: in ``agent_metadata`` beside it, or right next
+    to it when the file still has an old sidecar or graph there."""
+    old_sc, old_g = path + SIDECAR_SUFFIX, path + GRAPH_SUFFIX
+    if os.path.isfile(old_sc) or os.path.isfile(old_g):
+        return old_sc, old_g
+    base = os.path.join(os.path.dirname(path), META_DIR, os.path.basename(path))
+    return base + SIDECAR_SUFFIX, base + GRAPH_SUFFIX
+
+
 def _atomic_write(target, data):
     folder = os.path.dirname(target) or "."
+    os.makedirs(folder, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=os.path.basename(target) + ".", suffix=".tmp", dir=folder)
     try:
         with os.fdopen(fd, "wb") as fh:
@@ -197,9 +212,8 @@ def annotate(paths, unique_id, prompt, extra_pnginfo, prompt_id=""):
         done = 0
         for index, path in enumerate(files[:MAX_FILES]):
             try:
-                graph = path + GRAPH_SUFFIX
+                sidecar, graph = record_paths(path)
                 _atomic_write(graph, blob)
-                sidecar = path + SIDECAR_SUFFIX
                 doc = _existing(sidecar)
                 doc["provenance"] = {
                     "v": VERSION, "source": SOURCE, "prompt_id": pid,
