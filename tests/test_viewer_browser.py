@@ -208,7 +208,7 @@ class BrowserTests(unittest.TestCase):
             const mp4={kind:'video',path:'D:/out/title_card.mp4',name:'title_card.mp4',external:true,fps:30};
             const other={kind:'video',path:'D:/out/unrelated.mp4',name:'unrelated.mp4',external:true,fps:30};
             P.allTabs[key]=[mp4,other]; P.tabLabels[key]='agentY'; P.tabOrder.push(key); P._rebuildTabBar(null);
-            P.history[key]=[[mp4],[other]]; P._historyPanelSig=null; P.setPanelDocked('history',true); P.renderHistoryPanel();}""")
+            P.pushHistorySnapshot(key,[other]); P.pushHistorySnapshot(key,[mp4]); P._historyPanelSig=null; P.setPanelDocked('history',true); P.renderHistoryPanel();}""")
         pg.wait_for_timeout(500)
         thumbs = pg.locator(".history-thumb")
         self.assertEqual(thumbs.count(), 2)
