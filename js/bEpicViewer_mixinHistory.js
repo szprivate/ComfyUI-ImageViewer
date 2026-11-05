@@ -16,7 +16,7 @@
 import { api } from "../../scripts/api.js";
 import { setPref, PREF } from "./bEpicViewer_settings.js";
 import { HISTORY_KEY, snapshotTab, stampSnapshot, snapshotGroup, setSnapshotGroup, historyGroups,
-         liveIndexOf, historySections, historyDisplayOrder, foldIntoTab, groupFromLabel } from "./bEpicViewer_historyData.js";
+         liveIndexOf, historySections, historyDisplayOrder, foldIntoTab, groupFromLabel, snapshotNode } from "./bEpicViewer_historyData.js";
 
 export { HISTORY_KEY };
 /** The one Viewer tab: where media sent from a node, opened from the file
@@ -123,6 +123,9 @@ export const HistoryMixin = {
         const list = (snapshots || []).filter((s) => Array.isArray(s) && s.length > 0);
         if (!list.length) return null;
         const tab = HISTORY_VIEW_TAB;
+        // Each remembers the node it came from: the Parameters panel and the
+        // Roto / SAM3 tools follow the snapshot on screen (openHistorySnapshot).
+        if (nodeId != null) for (const s of list) if (s[0] && typeof s[0] === "object") s[0].fromNode = String(nodeId);
         for (const s of [...list].reverse()) this.pushHistorySnapshot(tab, s, { dedupe });
         const fresh = !this.allTabs[tab];
         const up = show || this.activeTab === tab || fresh;
@@ -175,6 +178,7 @@ export const HistoryMixin = {
         const shot = JSON.parse(JSON.stringify(snapshot));
         const g = groupFromLabel(group);
         if (g && !snapshotGroup(shot)) setSnapshotGroup(shot, g);
+        if (nodeId != null && shot[0] && typeof shot[0] === "object") shot[0].fromNode = String(nodeId);
         const fresh = !this.allTabs[tab];
         const onNewest = this.activeTab === tab && !this.historyCompare && !this.isComparing
             && (!this.isViewingHistory || this.currentHistoryIndex === 0);
@@ -209,6 +213,11 @@ export const HistoryMixin = {
         if (!folded.length) return 0;
         const groups = {};
         for (const k of folded) groups[k] = groupFromLabel(this._historyTabLabel(k));
+        // Each snapshot remembers its tab's node (the tools and Parameters follow it).
+        for (const s of this.historyStack()) {
+            const from = snapshotTab(s), node = this.tabSourceNodeIds && this.tabSourceNodeIds[from];
+            if (folded.includes(from) && node != null && s[0] && s[0].fromNode == null) s[0].fromNode = String(node);
+        }
         this.history[HISTORY_KEY] = foldIntoTab(this.historyStack(), folded, tab, groups);
         const wasUp = folded.includes(this.activeTab) ? this.activeTab : null;
         const shown = (wasUp && this.allTabs[wasUp]) || this.allTabs[tab]
@@ -242,6 +251,21 @@ export const HistoryMixin = {
         this.renderHistoryPanel();
         this.queuePersistViewerState?.();
         return folded.length;
+    },
+
+    /**
+     * A Roto / SAM3 tool just came onto `node` from the canvas selection: in
+     * the Viewer tab, show the newest snapshot that node made (what its own
+     * tab used to show). On any other tab, or with none, nothing changes.
+     */
+    _toolShowNodePicture(node) {
+        if (!node || node.id == null || this.activeTab !== HISTORY_VIEW_TAB) return false;
+        const id = String(node.id);
+        if (String((this.tabSourceNodeIds || {})[HISTORY_VIEW_TAB] ?? "") === id) return false;
+        const idx = this.historyStack().findIndex((s) => snapshotNode(s) === id);
+        if (idx < 0) return false;
+        this.openHistorySnapshot(HISTORY_KEY, idx);
+        return true;
     },
 
     // ── History stack ────────────────────────────────────────────────────────
@@ -1167,6 +1191,15 @@ export const HistoryMixin = {
             this.previewBackup = this.allTabs[tab] ? JSON.parse(JSON.stringify(this.allTabs[tab])) : null;
         }
         this.allTabs[tab]        = JSON.parse(JSON.stringify(snap));
+        // In the Viewer tab the node behind the picture is the snapshot's.
+        let movedNode = false;
+        if (tab === HISTORY_VIEW_TAB && this.tabSourceNodeIds) {
+            const from = snapshotNode(snap);
+            movedNode = String(this.tabSourceNodeIds[tab] ?? "") !== String(from ?? "");
+            if (from != null) this.tabSourceNodeIds[tab] = from;
+            else delete this.tabSourceNodeIds[tab];
+        }
+        if (movedNode && this._toolRebindIfMoved) this._toolRebindIfMoved();
         this.isViewingHistory    = true;
         this.currentHistoryKey   = key;
         this.currentHistoryIndex = index;

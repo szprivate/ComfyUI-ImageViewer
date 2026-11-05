@@ -5,6 +5,8 @@ The REAL viewer js against stubbed ComfyUI scripts (tests/harness/tabs.html):
 - a send naming a tab (the agent's, or a Send to Viewer node's) is a group of the Viewer tab, not a tab;
 - a new render is put on screen only while the newest one is (live, or the top snapshot picked); looking
   at an older one, or at another tab, it waits in the History;
+- a Roto / SAM3 node's picture is a group of the Viewer tab too, and its tool coming up from the canvas
+  selection shows that node's newest picture there;
 - "Open 3D…" / "Open Edit…" bring up the tab of that kind that is open, else make an empty one.
 
 Needs Playwright with an installed Edge or Chrome and node; skipped without them.
@@ -124,6 +126,33 @@ class ViewerSpacesTests(unittest.TestCase):
         st = self.shown(pg)
         self.assertEqual(st["tab"], "previz:new-1")
         self.assertEqual(st["history"], 4)
+        self.assertEqual(self.errors, [])
+
+    def test_roto_and_sam3_pictures_are_groups_and_the_tool_shows_its_node(self):
+        pg = self.page()
+        st = pg.evaluate("""async () => {
+          const P = window.__panel;
+          const { app } = await import('/scripts/app.js');
+          const mk = (id, type, title) => ({ id, type, title, widgets: [{ name: 'tab_name', value: '' }], inputs: [], outputs: [] });
+          const roto = mk(30, 'bEpicImageViewerRoto', 'Roto'), send = mk(40, 'bEpicSendToViewer', 'Send');
+          const sam = mk(50, 'bEpicImageViewerSAM3Collector', 'SAM3');
+          app.graph.nodes = [roto, send, sam];
+          app.graph.getNodeById = (id) => app.graph.nodes.find((n) => String(n.id) === String(id)) || null;
+          const pic = (n) => [{ path: `D:/tmp/${n}.png`, filename: `${n}.png`, type: 'temp' }];
+          P.updateData({ unique_id: '30', tabs: { tab: pic('roto_in') } }, roto);
+          P.updateData({ unique_id: '50', tabs: { tab: pic('sam_in') } }, sam);
+          P.updateData({ unique_id: '40', tabs: { tab: pic('render') } }, send);
+          const before = { tab: P.activeTab, shown: P.allTabs[P.activeTab][0].filename, node: P.tabSourceNodeIds.folder_history };
+          P._toolShowNodePicture(roto);
+          return { tabs: Object.keys(P.allTabs), before,
+                   groups: P.history.all.map((s) => s[0].group), nodes: P.history.all.map((s) => s[0].fromNode),
+                   shown: P.allTabs.folder_history[0].filename, node: String(P.tabSourceNodeIds.folder_history) };
+        }""")
+        self.assertEqual(st["tabs"], ["folder_history"], "no Roto / SAM3 tab")
+        self.assertEqual(st["before"]["shown"], "render.png")
+        self.assertEqual(st["groups"], ["Send 40", "SAM3: Send 50", "Roto: Send 30"])
+        self.assertEqual(st["nodes"], ["40", "50", "30"])
+        self.assertEqual((st["shown"], st["node"]), ("roto_in.png", "30"), "the tool's node's picture comes up")
         self.assertEqual(self.errors, [])
 
     def test_open_3d_and_open_edit_reuse_the_open_tab_else_make_one(self):

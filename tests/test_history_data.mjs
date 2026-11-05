@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
     HISTORY_KEY, snapshotTab, stampSnapshot, snapshotGroup, setSnapshotGroup, historyGroups,
-    liveIndexOf, historySections, historyDisplayOrder, mergeTabHistories, isMediaTabKey, foldIntoTab, isFeedTabKey, groupFromLabel,
+    liveIndexOf, historySections, historyDisplayOrder, mergeTabHistories, isMediaTabKey, foldIntoTab, isFeedTabKey, groupFromLabel, snapshotNode,
 } from "../js/bEpicViewer_historyData.js";
 
 const snap = (name, extra = {}) => [{ filename: name, type: "output", ...extra }];
@@ -109,4 +109,11 @@ test("folding a tab puts its snapshots in its group, keeping groups they had", (
     assert.equal(snapshotGroup(out[1]), "Characters");
     assert.equal(snapshotTab(out[2]), "paint:x");
     assert.equal(snapshotGroup(stack[0]), "", "the stack itself is not changed");
+});
+
+test("a node's own tab, folded, names the node its snapshots came from", () => {
+    const out = foldIntoTab([[{ filename: "r.png", fromTab: "send_7" }], [{ filename: "q.png", fromTab: "send_label_x" }]],
+                            ["send_7", "send_label_x"], "folder_history", {});
+    assert.equal(snapshotNode(out[0]), "7");
+    assert.equal(snapshotNode(out[1]), null);
 });

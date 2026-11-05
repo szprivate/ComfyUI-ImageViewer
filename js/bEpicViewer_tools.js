@@ -620,7 +620,7 @@ export const ToolsMixin = {
         panel.appendChild(add);
         panel.appendChild(elWith("div", {
             className: "bepic-tool-hint",
-            textContent: `Adds a ${label} node fed from "${from}" and edits that. It gets its own tab the next time the workflow runs. To edit an existing ${label} node instead, select it on the graph canvas.`,
+            textContent: `Adds a ${label} node fed from "${from}" and edits that. Its picture joins the Viewer tab the next time the workflow runs. To edit an existing ${label} node instead, select it on the graph canvas.`,
         }));
     },
 
@@ -702,6 +702,8 @@ export const ToolsMixin = {
                 : (active === "sam3" || active === "sam3box") ? active : (this._lastSam3Tool || "sam3");
             if (active !== want) this.setActiveTool(want);
             this._toolBySelection = true;
+            // In the Viewer tab, the picture is that node's newest.
+            this._toolShowNodePicture?.(this._toolState.node);
         } else if (this._toolBySelection) {
             this._toolBySelection = false;
             if (TOOL_NODE_KIND[active]) this.setActiveTool("none");
@@ -725,6 +727,19 @@ export const ToolsMixin = {
         // nothing to reload.
         const next = ensureToolNode(this, this.activeTab, kind);   // never creates
         if (next === bound) return;
+        this._bindActiveTool();
+        this._toolRefreshPanel();
+        this._toolShowNodePicture?.(this._toolState.node);
+    },
+
+    /** The picture on screen changed under the tool (a snapshot opened in the
+     *  Viewer tab): if that moves the tool to another node, rebind - and only
+     *  then, since a rebind reloads the tool and drops a shape being drawn. */
+    _toolRebindIfMoved() {
+        const kind = this._toolState && TOOL_NODE_KIND[this._toolState.active];
+        if (!kind) return;
+        const next = ensureToolNode(this, this.activeTab, kind);   // never creates
+        if (next === this._toolState.node) return;
         this._bindActiveTool();
         this._toolRefreshPanel();
     },

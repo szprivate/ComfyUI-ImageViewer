@@ -27,6 +27,12 @@ export function stampSnapshot(snapshot, tab) {
     return copy;
 }
 
+/** The graph node a snapshot came from (`fromNode` on its first frame), or null. */
+export function snapshotNode(snapshot) {
+    const fr = Array.isArray(snapshot) ? snapshot[0] : null;
+    return fr && fr.fromNode != null && fr.fromNode !== "" ? String(fr.fromNode) : null;
+}
+
 /** The group a snapshot is in ("" for none). */
 export function snapshotGroup(snapshot) {
     const fr = Array.isArray(snapshot) ? snapshot[0] : null;
@@ -137,9 +143,10 @@ export function isMediaTabKey(key) {
 /**
  * The tabs that showed what a node or the agent sent - a Send to Viewer node
  * (`send_<id>`, `send_label_<name>`) and agentY's named tabs (`named:<name>`) -
- * which are groups of the one Viewer tab now. `send_` keys are shared with the
- * Roto / SAM3 nodes, which keep their tabs: `isSendNode(key)` says which is
- * which (asked of the graph; without it only `named:` tabs are known).
+ * which are groups of the one Viewer tab now, and so are the Roto / SAM3
+ * nodes' tabs (same `send_` keys). A `send_` key is only known for one when
+ * `isSendNode(key)` says so (asked of the graph: a 3D Scene node's tab keeps
+ * its tab; without a graph only `named:` tabs are known).
  */
 export function isFeedTabKey(key, isSendNode = null) {
     const k = String(key || "");
@@ -164,6 +171,9 @@ export function foldIntoTab(stack, tabs, viewer, groups = null) {
         const out = stampSnapshot(s, viewer);
         const g = groups && groups[tab] ? String(groups[tab]).trim() : "";
         if (g && !snapshotGroup(out)) setSnapshotGroup(out, g);
+        // A node's own tab ("send_<id>") names the node the snapshot came from.
+        const m = /^send_(\d+)$/.exec(tab);
+        if (m && out[0] && typeof out[0] === "object" && out[0].fromNode == null) out[0].fromNode = m[1];
         return out;
     });
 }

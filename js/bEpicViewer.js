@@ -472,7 +472,7 @@ class ViewerPanel extends HTMLElement {
             let order = restoredOrder, active = restoredActive;
             // ...and so are the tabs of Send to Viewer nodes and agentY's named
             // tabs, each a group under its old name.
-            const isFeed = (k) => isFeedTabKey(k, (key) => this._isSendTabKey(key));
+            const isFeed = (k) => isFeedTabKey(k, (key) => this._isFeedNodeTabKey(key));
             const folded = Object.keys(this.allTabs).filter((k) => isMediaTabKey(k) || isFeed(k));
             if (folded.length) {
                 const groups = {};
@@ -1182,7 +1182,14 @@ class ViewerPanel extends HTMLElement {
     _feedGroupFor(senderNode, data) {
         if (data.scene_data !== undefined) return null;
         const info = senderTabInfo(senderNode);
-        if (senderNode && senderNode.type === BEPIC_SEND_NODE && info) return { key: info.key, group: info.label };
+        const type = senderNode && senderNode.type;
+        if (info && type === BEPIC_SEND_NODE) return { key: info.key, group: info.label };
+        // A Roto / SAM3 node's picture too: its tool works on the Viewer tab,
+        // on the node of the snapshot on screen (ToolsMixin._bindActiveTool).
+        if (info && (type === BEPIC_ROTO_NODE || type === BEPIC_SAM3_NODE)) {
+            const named = info.key.startsWith('send_label_');
+            return { key: info.key, group: named ? info.label : `${type === BEPIC_ROTO_NODE ? 'Roto' : 'SAM3'}: ${info.label}` };
+        }
         if (data.tab_name && (!info || (info.key.startsWith('send_') && !info.key.startsWith('send_label_')))) {
             const named = namedTabInfo(data.tab_name);
             return { key: named.key, group: named.label };
@@ -1190,13 +1197,14 @@ class ViewerPanel extends HTMLElement {
         return null;
     }
 
-    /** Whether tab `key` is a Send to Viewer node's (a node of the open graph says so). */
-    _isSendTabKey(key) {
+    /** Whether tab `key` is a Send to Viewer, Roto or SAM3 node's (a node of the open graph says so). */
+    _isFeedNodeTabKey(key) {
         const k = String(key || "");
         if (!k.startsWith('send_')) return false;
+        const feeds = [BEPIC_SEND_NODE, BEPIC_ROTO_NODE, BEPIC_SAM3_NODE];
         try {
             for (const n of (app.graph && app.graph.nodes) || []) {
-                if (n && n.type === BEPIC_SEND_NODE) {
+                if (n && feeds.includes(n.type)) {
                     const info = senderTabInfo(n);
                     if (info && info.key === k) return true;
                 }
@@ -1326,7 +1334,7 @@ class ViewerPanel extends HTMLElement {
         });
         // A Send to Viewer node's tab left from before (restored before the
         // graph was there to say whose it was) is a group of the Viewer tab.
-        const leftover = Object.keys(this.allTabs).filter((k) => this._isSendTabKey(k));
+        const leftover = Object.keys(this.allTabs).filter((k) => this._isFeedNodeTabKey(k));
         if (leftover.length) this.foldTabsIntoViewer(leftover);
         Object.keys(this.allTabs).forEach(existingKey => {
             if (USER_TAB_PREFIXES.some(p => existingKey.startsWith(p))) return;
