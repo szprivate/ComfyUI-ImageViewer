@@ -17,6 +17,7 @@
 import { api } from "../../scripts/api.js";
 import { createPaintEditor, PAINT_KEYS } from "./bEpicViewer_paintEditor.js";
 import { notice, openFilePicker, openExportDialog, canvasContext } from "./bEpicViewer_exportUI.js";
+import { addRecentDoc } from "./bEpicViewer_recentDocs.js";
 
 export const PAINT_PREFIX = "paint:";
 /** The dock panels of a Paint tab, and the editor part each one holds. */
@@ -98,6 +99,7 @@ export const PaintPanelMixin = {
         const key = PAINT_PREFIX + (source || `new-${++st.n}`);
         const rec = st.tabs[key] || (st.tabs[key] = { el: null, editor: null });
         Object.assign(rec, { token: data.token, path: data.path || null, source, pending: data });
+        addRecentDoc("paint", data.path || source);
         this._paintMakeTab(key, data.doc.name || stemOf(source) || "Paint");
         // The tab is there whatever happens next: a hiccup while it comes up is logged, not shown as "not opened".
         try { this._paintShow(key); } catch (e) { console.error("bEpicViewer: Paint tab shown with an error", e); }
@@ -381,6 +383,7 @@ export const PaintPanelMixin = {
             const res = await postJson("/bepic/paint/save", { token: rec.token, meta: s.meta, keep: s.keep, as_new: asNew,
                                                                name: name || s.meta.name, context: canvasContext() });
             rec.path = res.path;
+            addRecentDoc("paint", res.path);
             rec.editor.markSaved();
             notice("success", "Saved", res.path);
             return res.path;

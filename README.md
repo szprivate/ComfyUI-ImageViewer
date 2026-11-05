@@ -11,7 +11,7 @@ An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/C
 ### Viewing
 
 - send any image, mask, video or 3D model to the viewer with the **bEpic Send To Image Viewer** node — or right-click any node and choose **Send to Image Viewer**
-- view the outputs of several nodes at once, each in its own tab
+- view the outputs of several nodes at once, each node's renders a group of the Viewer tab
 - zoom and pan; undock the viewer into its own browser window for a second monitor
 - each tab keeps a history of up to 20 snapshots automatically
 - play image sequences and videos with configurable FPS, and loop a sub-range of the timeline

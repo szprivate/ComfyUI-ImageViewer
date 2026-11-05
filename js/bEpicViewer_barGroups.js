@@ -6,14 +6,23 @@
 // short menu upwards:
 //
 //   ComfyUI    History · Parameters
-//   3D         Outliner · Channel Box · Curve Editor   (on a 3D tab)
-//   Timeline   Edit · Effects · Inspector          (Effects and Inspector on a cut's tab)
+//   3D         Open 3D… · Outliner · Channel Box · Curve Editor   (on a 3D tab)
+//   Motion     Open Motion… · Properties · Timeline
+//   Paint      Open Paint… · Layers · Properties · History
+//   Timeline   Open Edit… · Edit · Effects · Inspector          (Effects and Inspector on a cut's tab)
+//
+// Each space's group starts with its "Open …" item (spaceOpen): the tab of that
+// kind that is open, else the last file of that kind opened or saved, else an
+// empty one - a white canvas, an empty cut, an empty scene. A second document is
+// still a second tab (the file browser, Open cut…, Edit in Paint, ...).
 //
 // A group's button is lit while one of its panels is up. Everything else that
 // is not playback - layout, the shape overlay, docking, files, run, clear -
 // stands at the right end of the bar (CSS `order`, so nothing is re-parented and
 // every other piece of code still finds its button where it put it).
 import { api } from "../../scripts/api.js";
+import { recentDocs } from "./bEpicViewer_recentDocs.js";
+import { makeScene } from "./bEpicViewer_scene3d.js";
 
 const SVG = (inner) => '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" '
     + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + inner + "</svg>";
@@ -43,24 +52,26 @@ const GROUPS = [
         { label: "agentY", panel: "agentChat" },
     ] },
     { id: "3d", title: "3D", icon: "box", items: [
+        { label: "Open 3D\u2026", run: (p) => p.spaceOpen("3d"), checked: (p) => !!(p.isPrevizTab && p.isPrevizTab()) },
         { label: "Outliner", panel: "previz", needs: "3d" },
         { label: "Channel Box", panel: "channels", needs: "3d" },
         { label: "Curve Editor", panel: "curves", needs: "3d" },
     ] },
     // A motion-graphics scene is a tab; "Open scene" asks for one, the three panels are its parts.
     { id: "motion", title: "Motion", icon: "motion", items: [
-        { label: "Open scene\u2026", run: (p) => p.mgBarOpen(), checked: (p) => !!(p.isMotionTab && p.isMotionTab()) },
+        { label: "Open Motion\u2026", run: (p) => p.spaceOpen("motion"), checked: (p) => !!(p.isMotionTab && p.isMotionTab()) },
         { label: "Properties", panel: "motionProps", needs: "motion" },
         { label: "Timeline", panel: "motionTimeline", needs: "motion" },
     ] },
     // A picture in layers is a tab (bEpicViewer_paintPanel.js); Layers and Properties are its parts.
     { id: "paint", title: "Paint", icon: "paint", items: [
-        { label: "Paint", run: (p) => p.paintBarOpen(), checked: (p) => !!(p.isPaintTab && p.isPaintTab()) },
+        { label: "Open Paint\u2026", run: (p) => p.spaceOpen("paint"), checked: (p) => !!(p.isPaintTab && p.isPaintTab()) },
         { label: "Layers", panel: "paintLayers", needs: "paint" },
         { label: "Properties", panel: "paintProps", needs: "paint" },
         { label: "History", panel: "paintHistory", needs: "paint" },
     ] },
     { id: "timeline", title: "Timeline", icon: "timeline", items: [
+        { label: "Open Edit\u2026", run: (p) => p.spaceOpen("edit"), checked: (p) => !!(p.isEditTab && p.isEditTab()) },
         { label: "Edit", panel: "editTimeline", run: (p) => p.editTlToggle() },
         { label: "Effects", panel: "editEffects", needs: "cut", run: (p) => p.editTlPanelToggle("editEffects") },
         { label: "Inspector", panel: "editInspector", needs: "cut", run: (p) => p.editTlPanelToggle("editInspector") },
@@ -68,6 +79,59 @@ const GROUPS = [
 ];
 
 export const BarGroupsMixin = {
+
+    /**
+     * "Open Paint…" / "Open Edit…" / "Open Motion…" / "Open 3D…": the open tab
+     * of that kind (the one up, else the first in the bar), else the newest
+     * recent file that is still there, else a new empty one.
+     */
+    async spaceOpen(kind) {
+        if (this.requestPanelOpen) this.requestPanelOpen();
+        const is = { paint: "isPaintTab", edit: "isEditTab", motion: "isMotionTab", "3d": "isPrevizTab" }[kind];
+        if (!is || !this[is]) return false;
+        const PAINT_ASK = "paint:", MOTION_ASK = "motion:";
+        const real = (k) => this[is](k) && !!this.allTabs[k] && k !== PAINT_ASK && k !== MOTION_ASK;
+        if (kind === "edit" && this._editTlWant) this._editTlWant("editTimeline", true);
+        if (real(this.activeTab)) return true;
+        const open = (this.tabOrder || []).find(real);
+        if (open) { this.switchTab(open); return true; }
+        const last = await this._spaceLastFile(kind);
+        if (last) {
+            const ok = kind === "paint" ? await this.paintOpen(last, { quiet: true })
+                : kind === "edit" ? await this.editTlOpenPath(last)
+                : kind === "motion" ? await this.mgOpenFile(last) : false;
+            if (ok) return true;
+        }
+        if (kind === "paint") return this.paintNewBlank();
+        if (kind === "edit") return !!this.editTlNew();
+        if (kind === "motion") { this.mgBarOpen(); return true; }
+        return this.previzNewTab();
+    },
+
+    /** The newest recent file of `kind` that still exists, or "". */
+    async _spaceLastFile(kind) {
+        const list = kind === "edit" ? (this.editTlRecent ? this.editTlRecent() : [])
+            : (kind === "paint" || kind === "motion") ? recentDocs(kind) : [];
+        if (!list.length) return "";
+        const gone = this._editTlRecentGone ? await this._editTlRecentGone(list.slice(0, 3)) : new Set();
+        const n = (p) => String(p || "").replace(/\\/g, "/").toLowerCase();
+        return list.slice(0, 3).find((p) => !gone.has(n(p))) || "";
+    },
+
+    /** A new, empty 3D scene in a tab of its own. */
+    previzNewTab() {
+        let n = 1;
+        while (this.allTabs[`previz:new-${n}`]) n++;
+        const key = `previz:new-${n}`;
+        this.allTabs[key] = [];
+        this.tabLabels[key] = "\u{1F9CA} 3D" + (n > 1 ? " " + n : "");
+        if (!this.tabOrder.includes(key)) this.tabOrder.push(key);
+        if (this._setScene) this._setScene(key, makeScene());
+        this._previzSelection = null;
+        this._rebuildTabBar(null);
+        this.switchTab(key);
+        return true;
+    },
 
     /** Make the group buttons (once), in front of what stands at the right. */
     _barGroupsBuild() {

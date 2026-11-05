@@ -134,9 +134,36 @@ export function isMediaTabKey(key) {
     return /^loader_/.test(k) || /^dropped_/.test(k) || /^folder_\d+_\d+$/.test(k) || k === "folder_exports";
 }
 
+/**
+ * The tabs that showed what a node or the agent sent - a Send to Viewer node
+ * (`send_<id>`, `send_label_<name>`) and agentY's named tabs (`named:<name>`) -
+ * which are groups of the one Viewer tab now. `send_` keys are shared with the
+ * Roto / SAM3 nodes, which keep their tabs: `isSendNode(key)` says which is
+ * which (asked of the graph; without it only `named:` tabs are known).
+ */
+export function isFeedTabKey(key, isSendNode = null) {
+    const k = String(key || "");
+    if (/^named:/.test(k)) return true;
+    return /^send_/.test(k) && !!(isSendNode && isSendNode(k));
+}
+
+/** A tab's label as a group name: without the icon in front of it. */
+export function groupFromLabel(label) {
+    return String(label || "").replace(/^[^\p{L}\p{N}]+/u, "").trim().slice(0, 60);
+}
+
 /** The stack with every snapshot made in one of `tabs` re-stamped as made in
- *  `viewer` (a new array; `stack` is not changed). */
-export function foldIntoTab(stack, tabs, viewer) {
+ *  `viewer` (a new array; `stack` is not changed). `groups` ({tab: name}): a
+ *  snapshot of that tab in no group yet goes into that group - so what a
+ *  tab held stays together, under its old name. */
+export function foldIntoTab(stack, tabs, viewer, groups = null) {
     const from = new Set(tabs || []);
-    return (stack || []).map((s) => (from.has(snapshotTab(s)) ? stampSnapshot(s, viewer) : s));
+    return (stack || []).map((s) => {
+        const tab = snapshotTab(s);
+        if (!from.has(tab)) return s;
+        const out = stampSnapshot(s, viewer);
+        const g = groups && groups[tab] ? String(groups[tab]).trim() : "";
+        if (g && !snapshotGroup(out)) setSnapshotGroup(out, g);
+        return out;
+    });
 }

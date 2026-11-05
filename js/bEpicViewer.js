@@ -6,7 +6,7 @@ import { api } from "../../scripts/api.js";
 
 import { LayoutMixin }   from "./bEpicViewer_mixinLayout.js";
 import { HistoryMixin, HISTORY_LIMIT_DEFAULT, HISTORY_LIMIT_OLD_DEFAULT, HISTORY_KEY, HISTORY_VIEW_TAB, VIEWER_TAB_LABEL, clampHistoryLimit }  from "./bEpicViewer_mixinHistory.js";
-import { mergeTabHistories, snapshotTab, isMediaTabKey, foldIntoTab } from "./bEpicViewer_historyData.js";
+import { mergeTabHistories, snapshotTab, isMediaTabKey, isFeedTabKey, foldIntoTab, groupFromLabel } from "./bEpicViewer_historyData.js";
 import { PrevizWorldMixin } from "./bEpicViewer_previzWorld.js";
 import { PlaybackMixin } from "./bEpicViewer_mixinPlayback.js";
 import { ParamsMixin }   from "./bEpicViewer_mixinParams.js";
@@ -461,7 +461,8 @@ class ViewerPanel extends HTMLElement {
             this._scenes = {};
             for (const [k, raw] of Object.entries(restoredScenes)) {
                 const scene = parseScene(raw);
-                if (scene.items.length) this._scenes[k] = scene;
+                // A 3D tab opened empty from the bar ("Open 3D…") is a scene with nothing in it yet.
+                if (scene.items.length || String(k).startsWith("previz:new-")) this._scenes[k] = scene;
             }
 
             // The tabs that only showed media are the one Viewer tab now: their
@@ -469,9 +470,14 @@ class ViewerPanel extends HTMLElement {
             // what it showed itself, else the newest of theirs), and it takes the
             // first one's place in the bar.
             let order = restoredOrder, active = restoredActive;
-            const folded = Object.keys(this.allTabs).filter(isMediaTabKey);
+            // ...and so are the tabs of Send to Viewer nodes and agentY's named
+            // tabs, each a group under its old name.
+            const isFeed = (k) => isFeedTabKey(k, (key) => this._isSendTabKey(key));
+            const folded = Object.keys(this.allTabs).filter((k) => isMediaTabKey(k) || isFeed(k));
             if (folded.length) {
-                const stack = foldIntoTab(this.history[HISTORY_KEY] || [], folded, HISTORY_VIEW_TAB);
+                const groups = {};
+                for (const k of folded) if (isFeed(k)) groups[k] = groupFromLabel(this.tabLabels[k] || k);
+                const stack = foldIntoTab(this.history[HISTORY_KEY] || [], folded, HISTORY_VIEW_TAB, groups);
                 this.history[HISTORY_KEY] = stack;
                 const shown = (folded.includes(active) && this.allTabs[active])
                     || this.allTabs[HISTORY_VIEW_TAB]
@@ -482,8 +488,8 @@ class ViewerPanel extends HTMLElement {
                 }
                 this.allTabs[HISTORY_VIEW_TAB] = JSON.parse(JSON.stringify(shown));
                 this.tabLabels[HISTORY_VIEW_TAB] = VIEWER_TAB_LABEL;
-                const at = order.findIndex((k) => isMediaTabKey(k) || k === HISTORY_VIEW_TAB);
-                order = order.filter((k) => !isMediaTabKey(k) && k !== HISTORY_VIEW_TAB);
+                const at = order.findIndex((k) => folded.includes(k) || k === HISTORY_VIEW_TAB);
+                order = order.filter((k) => !folded.includes(k) && k !== HISTORY_VIEW_TAB);
                 order.splice(at < 0 ? order.length : Math.min(at, order.length), 0, HISTORY_VIEW_TAB);
                 if (folded.includes(active)) active = HISTORY_VIEW_TAB;
             }
@@ -1166,6 +1172,39 @@ class ViewerPanel extends HTMLElement {
         if (scrapped.length > 0) this.allTabs[nodeId] = scrapped;
     }
 
+    /**
+     * Whether a viewer update is a render for the Viewer tab, and under what
+     * group: a Send to Viewer node's (its tab name, else what feeds it), or a
+     * send naming a tab with no such node on the graph (an agent's workflow).
+     * Roto, SAM3 and 3D Scene nodes keep tabs of their own. -> {key, group} | null:
+     * `key` is the tab it would have had (folded in if it is still open).
+     */
+    _feedGroupFor(senderNode, data) {
+        if (data.scene_data !== undefined) return null;
+        const info = senderTabInfo(senderNode);
+        if (senderNode && senderNode.type === BEPIC_SEND_NODE && info) return { key: info.key, group: info.label };
+        if (data.tab_name && (!info || (info.key.startsWith('send_') && !info.key.startsWith('send_label_')))) {
+            const named = namedTabInfo(data.tab_name);
+            return { key: named.key, group: named.label };
+        }
+        return null;
+    }
+
+    /** Whether tab `key` is a Send to Viewer node's (a node of the open graph says so). */
+    _isSendTabKey(key) {
+        const k = String(key || "");
+        if (!k.startsWith('send_')) return false;
+        try {
+            for (const n of (app.graph && app.graph.nodes) || []) {
+                if (n && n.type === BEPIC_SEND_NODE) {
+                    const info = senderTabInfo(n);
+                    if (info && info.key === k) return true;
+                }
+            }
+        } catch (_) { /* no graph yet */ }
+        return false;
+    }
+
     updateData(data, node) {
         if (!this.container || !data.tabs) return;
 
@@ -1173,7 +1212,22 @@ class ViewerPanel extends HTMLElement {
         const senderNode = node || app.graph.getNodeById(data.unique_id);
 
         let openedKey = null;
+        let fedViewer = false;
         Object.keys(data.tabs).forEach(k => {
+            // What a Send to Viewer node or the agent sends is a group of the
+            // one Viewer tab, named as its tab was (bEpicViewer_historyData.js
+            // isFeedTabKey): no tab of its own. A tab it had before is folded in.
+            const feed = this._feedGroupFor(senderNode, data);
+            if (feed) {
+                if (this.allTabs[feed.key]) this.foldTabsIntoViewer([feed.key]);
+                const snap = Array.isArray(data.tabs[k]) ? data.tabs[k] : [];
+                const shown = this.takeRenderInViewer(snap, {
+                    group: feed.group, nodeId: senderNode && senderNode.id != null ? senderNode.id : null,
+                    focus: !!(data.focus_tab || data.open),
+                });
+                if (shown) { openedKey = shown; fedViewer = true; }
+                return;
+            }
             let finalKey = k;
             // Every node that owns a tab — the send node and both tool nodes —
             // keys it the same way (see senderTabInfo): an explicit tab_name
@@ -1270,6 +1324,10 @@ class ViewerPanel extends HTMLElement {
                 n.inputs.forEach((inp, idx) => { if (inp.link) expected.add(`tab${idx + 1}`); });
             }
         });
+        // A Send to Viewer node's tab left from before (restored before the
+        // graph was there to say whose it was) is a group of the Viewer tab.
+        const leftover = Object.keys(this.allTabs).filter((k) => this._isSendTabKey(k));
+        if (leftover.length) this.foldTabsIntoViewer(leftover);
         Object.keys(this.allTabs).forEach(existingKey => {
             if (USER_TAB_PREFIXES.some(p => existingKey.startsWith(p))) return;
             if (!expected.has(existingKey) && !(data.tabs && Object.values(data.tabs).some(arr => arr === this.allTabs[existingKey]))) {
@@ -1289,7 +1347,7 @@ class ViewerPanel extends HTMLElement {
 
         this._rebuildTabBar(node);
         // A world opened for the user to look at comes to the front.
-        if (data.focus_tab) {
+        if (data.focus_tab && !fedViewer) {
             const key = Object.keys(data.tabs).find((k) => this.allTabs[k]);
             if (key && key !== this.activeTab) {
                 if (this.isComparing) this.toggleCompare();

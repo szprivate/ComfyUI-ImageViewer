@@ -31,9 +31,9 @@ SETUP = """async () => {
   P.setViewerToggleState(true);
   const frames = ['s0', 's1', 's2', 's3'].map((n) => ({ path: `D:/out/${n}.png`, filename: `${n}.png`, type: 'output',
                                                         prompt_id: 'run-1', label: n }));
-  P.updateData({ unique_id: '10', tab_name: 'stills', tabs: { tab1: frames } }, null);
+  // An agent's sends are groups of the one Viewer tab; the newest is on screen.
   P.updateData({ unique_id: '11', tab_name: 'other', tabs: { tab1: [{ path: 'D:/out/o.png', filename: 'o.png' }] } }, null);
-  P.switchTab('named:stills');
+  P.updateData({ unique_id: '10', tab_name: 'stills', tabs: { tab1: frames } }, null);
   P.setFrame(2);
   P.playbackRange = { start: 1, end: 3 };
   P.loopMode = 'pingpong';
@@ -111,13 +111,14 @@ class ViewerStateTests(unittest.TestCase):
         s = pg.evaluate(STATE)
         self.assertTrue(s["open"])
         self.assertIn(s["display"], ("floating", "docked"))
-        self.assertEqual(s["tab"]["key"], "named:stills")
-        self.assertEqual(s["tab"]["label"], "stills")
+        self.assertEqual(s["tab"]["key"], "folder_history")
         self.assertEqual(s["tab"]["mode"], "sequence")
         tabs = {t["key"]: t for t in s["tabs"]}
-        self.assertEqual(tabs["named:stills"]["frames"], 4)
-        self.assertIn("named:other", tabs)
+        self.assertEqual(tabs["folder_history"]["frames"], 4)
+        self.assertEqual(tabs["folder_history"]["history"], 2)
+        self.assertNotIn("named:other", tabs)
         item = s["item"]
+        self.assertEqual(item["group"], "stills")
         self.assertEqual((item["index"], item["of"], item["path"]), (2, 4, "D:/out/s2.png"))
         self.assertEqual((item["prompt_id"], item["label"], item["agent_tag"]), ("run-1", "s2", "hero"))
         tl = s["timeline"]

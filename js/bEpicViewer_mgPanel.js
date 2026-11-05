@@ -20,6 +20,7 @@
 import { api } from "../../scripts/api.js";
 import { createMgEditor } from "./bEpicViewer_mgEditor.js";
 import { notice, openFilePicker } from "./bEpicViewer_exportUI.js";
+import { addRecentDoc } from "./bEpicViewer_recentDocs.js";
 import { mgRefQuery, mgMayHaveScene, mgIsSceneFile } from "./bEpicViewer_mgRefs.js";
 
 export const MG_PREFIX = "motion:";
@@ -61,6 +62,7 @@ export const MgPanelMixin = {
             return false;
         }
         const key = MG_PREFIX + data.path;
+        addRecentDoc("motion", data.path);
         const known = !!this.allTabs[key] && !!st.tabs[key];
         let rec = st.tabs[key];
         if (known) {
@@ -419,6 +421,7 @@ export const MgPanelMixin = {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        addRecentDoc("motion", path);
     },
 
     /** Ask agentY's host to render the saved scene; poll it and tell the user when the file exists. */

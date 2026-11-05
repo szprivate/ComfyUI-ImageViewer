@@ -16,7 +16,7 @@
 import { api } from "../../scripts/api.js";
 import { setPref, PREF } from "./bEpicViewer_settings.js";
 import { HISTORY_KEY, snapshotTab, stampSnapshot, snapshotGroup, setSnapshotGroup, historyGroups,
-         liveIndexOf, historySections, historyDisplayOrder } from "./bEpicViewer_historyData.js";
+         liveIndexOf, historySections, historyDisplayOrder, foldIntoTab, groupFromLabel } from "./bEpicViewer_historyData.js";
 
 export { HISTORY_KEY };
 /** The one Viewer tab: where media sent from a node, opened from the file
@@ -158,6 +158,90 @@ export const HistoryMixin = {
         this.renderHistoryPanel();
         this.queuePersistViewerState?.();
         return tab;
+    },
+
+    /**
+     * A render a node (or the agent) sent: into the History, in `group`
+     * unless its frames name one already, and shown in the Viewer tab only
+     * when that is what the user is looking at the newest of - the Viewer tab
+     * up on the newest snapshot (live, or the top one picked), not comparing.
+     * Looking at an older one, or at another tab, it waits in the strip.
+     * `focus` (the agent asked to have it seen) always shows it; so does the
+     * first render of a viewer that has no tab at all. -> the Viewer tab's key.
+     */
+    takeRenderInViewer(snapshot, { group = "", nodeId = null, focus = false } = {}) {
+        if (!Array.isArray(snapshot) || !snapshot.length) return null;
+        const tab = HISTORY_VIEW_TAB;
+        const shot = JSON.parse(JSON.stringify(snapshot));
+        const g = groupFromLabel(group);
+        if (g && !snapshotGroup(shot)) setSnapshotGroup(shot, g);
+        const fresh = !this.allTabs[tab];
+        const onNewest = this.activeTab === tab && !this.historyCompare && !this.isComparing
+            && (!this.isViewingHistory || this.currentHistoryIndex === 0);
+        if (focus || onNewest || (fresh && !this.activeTab)) {
+            this.showInViewerTab([shot], { show: focus || fresh, nodeId });
+            return tab;
+        }
+        this.pushHistorySnapshot(tab, shot);
+        if (fresh) {
+            // The tab is made for it, behind whatever is up.
+            this.allTabs[tab] = JSON.parse(JSON.stringify(shot));
+            this.tabLabels[tab] = VIEWER_TAB_LABEL;
+            if (nodeId != null) this.tabSourceNodeIds[tab] = nodeId;
+            if (!(this.tabOrder || []).includes(tab)) this.tabOrder = [...(this.tabOrder || []), tab];
+        }
+        this._historyPanelSig = null;
+        this.renderHistoryPanel();
+        this.queuePersistViewerState?.();
+        return tab;
+    },
+
+    /**
+     * Tabs that are groups of the Viewer tab now (a Send to Viewer node's,
+     * agentY's named ones): their snapshots become the Viewer tab's, each in
+     * the group of its tab's name unless it has one, and the tabs close. The
+     * Viewer tab takes the first one's place in the bar and, if one of them
+     * was up, its picture. -> how many were folded.
+     */
+    foldTabsIntoViewer(keys) {
+        const tab = HISTORY_VIEW_TAB;
+        const folded = (keys || []).filter((k) => k && k !== tab && this.allTabs[k]);
+        if (!folded.length) return 0;
+        const groups = {};
+        for (const k of folded) groups[k] = groupFromLabel(this._historyTabLabel(k));
+        this.history[HISTORY_KEY] = foldIntoTab(this.historyStack(), folded, tab, groups);
+        const wasUp = folded.includes(this.activeTab) ? this.activeTab : null;
+        const shown = (wasUp && this.allTabs[wasUp]) || this.allTabs[tab]
+            || this.history[HISTORY_KEY].find((s) => snapshotTab(s) === tab) || this.allTabs[folded[0]];
+        const order = this.tabOrder || [];
+        const at = order.findIndex((k) => folded.includes(k) || k === tab);
+        for (const k of folded) {
+            delete this.allTabs[k]; delete this.tabLabels[k];
+            if (this.tabColors) delete this.tabColors[k];
+            if (this.tabViewState) delete this.tabViewState[k];
+            if (this.tabSourceNodeIds && wasUp !== k) delete this.tabSourceNodeIds[k];
+        }
+        if (wasUp && this.tabSourceNodeIds && this.tabSourceNodeIds[wasUp] != null) {
+            this.tabSourceNodeIds[tab] = this.tabSourceNodeIds[wasUp];
+            delete this.tabSourceNodeIds[wasUp];
+        }
+        if (this.isComparing && folded.includes(this.compareTab) && this.toggleCompare) this.toggleCompare();
+        this.allTabs[tab] = JSON.parse(JSON.stringify(shown || []));
+        this.tabLabels[tab] = VIEWER_TAB_LABEL;
+        const rest = order.filter((k) => !folded.includes(k) && k !== tab);
+        rest.splice(at < 0 ? rest.length : Math.min(at, rest.length), 0, tab);
+        this.tabOrder = rest;
+        if (wasUp) {
+            this.activeTab = null;
+            this.isViewingHistory = false;
+            this.previewBackup = null;
+            this.switchTab(tab);
+        }
+        if (this._rebuildTabBar) this._rebuildTabBar(null);
+        this._historyPanelSig = null;
+        this.renderHistoryPanel();
+        this.queuePersistViewerState?.();
+        return folded.length;
     },
 
     // ── History stack ────────────────────────────────────────────────────────

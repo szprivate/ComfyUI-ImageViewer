@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
     HISTORY_KEY, snapshotTab, stampSnapshot, snapshotGroup, setSnapshotGroup, historyGroups,
-    liveIndexOf, historySections, historyDisplayOrder, mergeTabHistories, isMediaTabKey, foldIntoTab,
+    liveIndexOf, historySections, historyDisplayOrder, mergeTabHistories, isMediaTabKey, foldIntoTab, isFeedTabKey, groupFromLabel,
 } from "../js/bEpicViewer_historyData.js";
 
 const snap = (name, extra = {}) => [{ filename: name, type: "output", ...extra }];
@@ -85,4 +85,28 @@ test("folding tabs into the Viewer tab re-stamps only their snapshots", () => {
     const out = foldIntoTab(stack, ["loader_1", "folder_1_1"], "folder_history");
     assert.deepEqual(out.map(snapshotTab), ["folder_history", "edit:x", "folder_history"]);
     assert.equal(snapshotTab(stack[0]), "loader_1", "the stack is not changed");
+});
+
+test("Send node and agent tabs are groups of the Viewer tab", () => {
+    assert.ok(isFeedTabKey("named:agentY"));
+    assert.ok(!isFeedTabKey("send_12"), "a send_ key is only a Send node's when the graph says so");
+    assert.ok(isFeedTabKey("send_12", (k) => k === "send_12"));
+    assert.ok(!isFeedTabKey("send_13", (k) => k === "send_12"));
+    for (const k of ["folder_history", "edit:D:/c.otio", "paint:new-1", "previz:3", "world:x", ""]) assert.ok(!isFeedTabKey(k, () => true), k);
+    assert.equal(groupFromLabel("\u{1F5BC} KSampler"), "KSampler");
+    assert.equal(groupFromLabel("agentY"), "agentY");
+});
+
+test("folding a tab puts its snapshots in its group, keeping groups they had", () => {
+    const stack = [
+        [{ filename: "a.png", fromTab: "send_3" }],
+        [{ filename: "b.png", fromTab: "send_3", group: "Characters" }],
+        [{ filename: "c.png", fromTab: "paint:x" }],
+    ];
+    const out = foldIntoTab(stack, ["send_3"], "folder_history", { send_3: "VAE Decode" });
+    assert.equal(snapshotTab(out[0]), "folder_history");
+    assert.equal(snapshotGroup(out[0]), "VAE Decode");
+    assert.equal(snapshotGroup(out[1]), "Characters");
+    assert.equal(snapshotTab(out[2]), "paint:x");
+    assert.equal(snapshotGroup(stack[0]), "", "the stack itself is not changed");
 });

@@ -1,4 +1,7 @@
-"""The viewer's history and its agent tabs survive a reload and a ComfyUI restart, in a real browser.
+"""The viewer's history and what the agent showed survive a reload and a ComfyUI restart, in a real browser.
+
+An agent tab of before (named:agentY) comes back as groups of the one Viewer tab: its snapshots keep
+their own group, and one that had none goes into a group named as the tab was.
 
 The REAL viewer js against stubbed ComfyUI scripts (tests/harness/restore.html). The page starts the
 way ComfyUI does: agentY's bridge is already there, so the viewer's agentY tag watch runs the moment
@@ -28,7 +31,8 @@ AGENT = "named:agentY"
 FRAMES = [{"filename": "shot_a.png", "subfolder": "", "type": "output", "path": "D:/out/agent/shot_a.png",
            "group": "Look dev", "label": "hero"}]
 OLDER = [{"filename": "shot_0.png", "subfolder": "", "type": "output", "path": "D:/out/agent/shot_0.png",
-          "group": "Look dev", "label": "first"}]
+          "label": "first"}]
+VIEWER = "folder_history"
 SAVED = {
     "version": 1,
     "allTabs": {AGENT: FRAMES},
@@ -45,11 +49,12 @@ STATE = """() => {
   try { kept = JSON.parse(localStorage.getItem('%s') || 'null'); } catch (_) {}
   return { tabs: Object.keys(P.allTabs), history: Object.fromEntries(Object.entries(P.history).map(([k, v]) => [k, v.length])),
            from: [...new Set((P.history.all || []).map((s) => s[0].fromTab))],
+           groups: (P.history.all || []).map((s) => s[0].group || ''),
            label: P.tabLabels['%s'] || '', active: P.activeTab,
            tabButtons: P.shadowRoot.querySelectorAll('.tab').length,
            keptTabs: kept ? Object.keys(kept.allTabs || {}) : null,
            keptHistory: kept ? Object.values(kept.history || {}).reduce((n, v) => n + v.length, 0) : null };
-}""" % (KEY, AGENT)
+}""" % (KEY, "folder_history")
 
 
 def _free_port():
@@ -111,13 +116,15 @@ class ViewerRestoreTests(unittest.TestCase):
         return pg
 
     def assert_restored(self, st):
-        self.assertEqual(st["tabs"], [AGENT])
-        # The per-tab history of before is the one history now, each snapshot naming its tab.
+        self.assertEqual(st["tabs"], [VIEWER])
+        # The per-tab history of before is the one history now, the agent's tab a group of the Viewer tab.
         self.assertEqual(st["history"], {"all": 2})
-        self.assertEqual(st["from"], [AGENT])
-        self.assertEqual(st["label"], "agentY")
-        self.assertEqual(st["active"], AGENT)
-        self.assertEqual(st["keptTabs"], [AGENT], "the saved state was overwritten")
+        self.assertEqual(st["from"], [VIEWER])
+        self.assertEqual(st["groups"], ["Look dev", "agentY"])
+        self.assertEqual(st["label"], "🖼 Viewer")
+        self.assertEqual(st["active"], VIEWER)
+        # Saved as it was (folded again on the next start) or already folded - never emptied.
+        self.assertIn(st["keptTabs"], ([AGENT], [VIEWER]), "the saved state was overwritten")
         self.assertEqual(st["keptHistory"], 2)
 
     def test_agent_tab_and_history_come_back_after_a_slow_start(self):
@@ -128,12 +135,15 @@ class ViewerRestoreTests(unittest.TestCase):
     def test_a_restart_after_new_work_keeps_both(self):
         pg = self.new_page()
         self.assert_restored(self.open_viewer(pg))
-        # new work lands in the agent tab, then ComfyUI restarts (the page loads again)
-        pg.evaluate("""() => { const P = window.__panel, k = '%s';
+        # new work from the agent lands in the Viewer tab, then ComfyUI restarts (the page loads again)
+        pg.evaluate("""async () => { const P = window.__panel;
+            const { app } = await import('/scripts/app.js');   // the stand-in's graph is empty
+            app.graph.nodes = app.graph.nodes || []; app.graph.links = app.graph.links || {};
             const f = [{ filename: 'shot_b.png', subfolder: '', type: 'output', path: 'D:/out/agent/shot_b.png' }];
-            P.pushHistorySnapshot(k, f); P.allTabs[k] = f; P.persistViewerState(); }""" % AGENT)
+            P.updateData({ unique_id: '90', tab_name: 'agentY', tabs: { tab: f } }, null); P.persistViewerState(); }""")
         st = self.open_viewer(pg, delay=900)
-        self.assertEqual(st["tabs"], [AGENT])
+        self.assertEqual(st["tabs"], [VIEWER])
+        self.assertEqual(st["groups"][0], "agentY")
         self.assertEqual(st["history"], {"all": 3})
         self.assertEqual(st["keptHistory"], 3)
 
@@ -163,10 +173,10 @@ class ViewerRestoreTests(unittest.TestCase):
         st = pg.evaluate("""() => { const P = window.__panel;
           return { order: P.tabOrder, active: P.activeTab, label: P.tabLabels.folder_history,
                    shown: P.allTabs.folder_history[0].filename, from: P.history.all.map((s) => s[0].fromTab) }; }""")
-        self.assertEqual(st["order"], ["folder_history", AGENT], "one Viewer tab, in the first one's place")
+        self.assertEqual(st["order"], ["folder_history"], "one Viewer tab, in the first one's place")
         self.assertEqual((st["active"], st["label"], st["shown"]), ("folder_history", "🖼 Viewer", "f1.png"),
                          "it shows what the tab that was up showed")
-        self.assertEqual(st["from"], ["folder_history", AGENT, "folder_history", "folder_history"])
+        self.assertEqual(st["from"], ["folder_history"] * 4)
         self.assertEqual(self.errors, [])
 
 
