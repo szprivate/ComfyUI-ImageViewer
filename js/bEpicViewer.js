@@ -1179,10 +1179,11 @@ class ViewerPanel extends HTMLElement {
      * Roto, SAM3 and 3D Scene nodes keep tabs of their own. -> {key, group} | null:
      * `key` is the tab it would have had (folded in if it is still open).
      */
-    _feedGroupFor(senderNode, data) {
+    _feedGroupFor(senderNode, data, key = "tab") {
         if (data.scene_data !== undefined) return null;
         const info = senderTabInfo(senderNode);
         const type = senderNode && senderNode.type;
+        if (type === BEPIC_SCENE_NODE) return null;
         if (info && type === BEPIC_SEND_NODE) return { key: info.key, group: info.label };
         // A Roto / SAM3 node's picture too: its tool works on the Viewer tab,
         // on the node of the snapshot on screen (ToolsMixin._bindActiveTool).
@@ -1190,9 +1191,12 @@ class ViewerPanel extends HTMLElement {
             const named = info.key.startsWith('send_label_');
             return { key: info.key, group: named ? info.label : `${type === BEPIC_ROTO_NODE ? 'Roto' : 'SAM3'}: ${info.label}` };
         }
-        if (data.tab_name && (!info || (info.key.startsWith('send_') && !info.key.startsWith('send_label_')))) {
-            const named = namedTabInfo(data.tab_name);
-            return { key: named.key, group: named.label };
+        // A send whose node is not on the open graph (an agent running a
+        // workflow of its own): its group is in its frames, else the name it
+        // carries. A sender naming its own tab ("world:...") keeps it.
+        if (data.tab_name || (!info && /^tab\d*$/.test(String(key)))) {
+            const named = namedTabInfo(data.tab_name || "");
+            return { key: named.key, group: data.tab_name ? named.label : "" };
         }
         return null;
     }
@@ -1225,7 +1229,7 @@ class ViewerPanel extends HTMLElement {
             // What a Send to Viewer node or the agent sends is a group of the
             // one Viewer tab, named as its tab was (bEpicViewer_historyData.js
             // isFeedTabKey): no tab of its own. A tab it had before is folded in.
-            const feed = this._feedGroupFor(senderNode, data);
+            const feed = this._feedGroupFor(senderNode, data, k);
             if (feed) {
                 if (this.allTabs[feed.key]) this.foldTabsIntoViewer([feed.key]);
                 const snap = Array.isArray(data.tabs[k]) ? data.tabs[k] : [];

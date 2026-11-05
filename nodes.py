@@ -343,14 +343,15 @@ def _model_frames(inp, label, unique_id, out_dir):
     return frames
 
 
-def _push_tab(inp, tab_name, unique_id, node_label):
+def _push_tab(inp, tab_name, unique_id, node_label, group=""):
     """Show `inp` in its own viewer tab, as a preview only.
 
     This is the tool nodes' whole viewer story: they never persist anything, so
     a native VIDEO is decoded to a playable temp file and everything else lands
     as temp PNGs. Saving frames to ./output stays bEpicSendToViewer's job."""
     out_dir = folder_paths.get_temp_directory()
-    label = tab_name.replace(" ", "_") if tab_name else "send"
+    group = " ".join(str(group or tab_name or "").split())
+    label = group.replace(" ", "_") if group else "send"
 
     frames = None
     if file_writer is not None and file_writer.is_video_input(inp):
@@ -363,6 +364,7 @@ def _push_tab(inp, tab_name, unique_id, node_label):
     if not frames:
         frames = _temp_frames(inp, label, unique_id, out_dir, "temp")
 
+    _name_frames(frames, group, "")
     PromptServer.instance.send_sync("bepic.viewer.update", {
         "tabs": {"tab": frames},
         "unique_id": unique_id,
@@ -502,7 +504,11 @@ class bEpicSendToViewer:
         return {
             "required": {
                 "input": (IO.ANY, ) if IO is not None else (("IMAGE", "MASK"),),
-                "tab_name": ("STRING", {"default": ""}),
+                # Old: what `group` is now. Kept in its place because a saved
+                # workflow holds widget values by position; the JS hides it and
+                # moves a value it holds into `group`. An API prompt may still
+                # pass it: it is the group when `group` is empty.
+                "tab_name": ("STRING", {"default": "", "tooltip": "Old name of group."}),
                 # "save to ./output" mode. When off (default) the node behaves
                 # exactly as before — temp PNGs pushed to the viewer only. When
                 # on, the incoming frames are ALSO persisted to ComfyUI's output
@@ -541,8 +547,9 @@ class bEpicSendToViewer:
                 # each send is: the stage it belongs to, and what it is within it.
                 # The history strip shows a heading wherever the group changes.
                 "group": ("STRING", {"default": "", "tooltip":
-                          "A heading for these pictures inside the tab, e.g. the stage "
-                          "or asset type (Characters, Places)."}),
+                          "The group these pictures go into in the viewer's Viewer tab, "
+                          "e.g. the stage or asset type (Characters, Places). Empty: "
+                          "named after the node that feeds this one."}),
                 "label": ("STRING", {"default": "", "tooltip":
                           "What these pictures are, e.g. a character's name. Shown on "
                           "the thumbnail."}),
@@ -571,7 +578,8 @@ class bEpicSendToViewer:
              extra_pnginfo=None):
         options = {"bit_depth": bit_depth, "compression": compression,
                    "quality": quality, "compress_level": compress_level, "codec": codec}
-        safe_label = tab_name.replace(" ", "_") if tab_name else "send"
+        group = " ".join(str(group or tab_name or "").split())
+        safe_label = group.replace(" ", "_") if group else "send"
 
         # A MESH or 3D file opens as a 3D tab, and "save to output" writes it
         # the way core's Save 3D Model does — in file_format when that is a 3D
@@ -579,7 +587,7 @@ class bEpicSendToViewer:
         if model_writer is not None and model_writer.is_model_input(input):
             return self._send_model(input, safe_label, save_to_output,
                                     filename_prefix, unique_id, prompt, extra_pnginfo,
-                                    file_format)
+                                    file_format, group=group, caption=label)
         if model_writer is not None and model_writer.is_model_format(file_format):
             print(f"[93m[bEpicSendToViewer] .{file_format} is a 3D format and the input is "
                   f"not a mesh — saving it as png[0m")
@@ -628,9 +636,9 @@ class bEpicSendToViewer:
         PromptServer.instance.send_sync("bepic.viewer.update", {
             "tabs": tabs,
             "unique_id": unique_id,
-            # Lets a send with no node on the open graph (an agent running a
-            # workflow of its own) still land in the tab it names.
-            "tab_name": tab_name or "",
+            # The group, for a viewer that cannot find this node on its graph
+            # (an agent running a workflow of its own).
+            "tab_name": group,
         })
 
         # The files go into history as well, so they are the run's outputs to
@@ -656,7 +664,8 @@ class bEpicSendToViewer:
         return _history_ui([f.get("path") for f in frames])
 
     def _send_model(self, mesh, label, save_to_output, filename_prefix,
-                    unique_id, prompt, extra_pnginfo, file_format=None):
+                    unique_id, prompt, extra_pnginfo, file_format=None,
+                    group="", caption=""):
         frames = []
         try:
             if save_to_output:
@@ -667,6 +676,7 @@ class bEpicSendToViewer:
         except Exception as e:
             print(f"\033[91m[bEpicSendToViewer] 3D input failed: {e}\033[0m")
 
+        _name_frames(frames, group, caption)
         _stamp_prompt_id(frames)
         PromptServer.instance.send_sync("bepic.viewer.update", {
             "tabs": {"tab": frames},
@@ -675,6 +685,10 @@ class bEpicSendToViewer:
         # Recorded in history the way SaveGLB records it, under "3d".
         return {"ui": _history_ui([f.get("path") for f in frames], key="3d"),
                 "result": (mesh, )}
+
+
+_TOOL_GROUP_TIP = ("The group its picture goes into in the viewer's Viewer tab. Empty: "
+                  "\"Roto\" / \"SAM3\" and the node that feeds this one.")
 
 
 class bEpicImageViewerRoto:
@@ -697,10 +711,13 @@ class bEpicImageViewerRoto:
         return {
             "required": {
                 "image": (IO.ANY, ) if IO is not None else (("IMAGE", "MASK"),),
-                "tab_name": ("STRING", {"default": ""}),
+                # Old name of `group`, kept in its place (widget values go by
+                # position); the JS hides it and moves its value into `group`.
+                "tab_name": ("STRING", {"default": "", "tooltip": "Old name of group."}),
             },
             "optional": {
                 "roto_data": ("STRING", {"default": "", "multiline": False}),
+                "group": ("STRING", {"default": "", "tooltip": _TOOL_GROUP_TIP}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -713,8 +730,8 @@ class bEpicImageViewerRoto:
     OUTPUT_NODE = True
     CATEGORY = "image/bEpic"
 
-    def run(self, image, tab_name="", roto_data="", unique_id=None):
-        _push_tab(image, tab_name, unique_id, "bEpicImageViewerRoto")
+    def run(self, image, tab_name="", roto_data="", group="", unique_id=None):
+        _push_tab(image, tab_name, unique_id, "bEpicImageViewerRoto", group)
         N, H, W = _dims_from_input(image)
         return (_roto_mask(roto_data, N, H, W), image)
 
@@ -735,13 +752,15 @@ class bEpicImageViewerSAM3Collector:
         return {
             "required": {
                 "image": (IO.ANY, ) if IO is not None else (("IMAGE", "MASK"),),
-                "tab_name": ("STRING", {"default": ""}),
+                # Old name of `group` (see the Roto node).
+                "tab_name": ("STRING", {"default": "", "tooltip": "Old name of group."}),
             },
             "optional": {
                 "sam3_positive": ("STRING", {"default": "[]", "multiline": False}),
                 "sam3_negative": ("STRING", {"default": "[]", "multiline": False}),
                 "sam3_box_positive": ("STRING", {"default": "[]", "multiline": False}),
                 "sam3_box_negative": ("STRING", {"default": "[]", "multiline": False}),
+                "group": ("STRING", {"default": "", "tooltip": _TOOL_GROUP_TIP}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -757,8 +776,8 @@ class bEpicImageViewerSAM3Collector:
     CATEGORY = "image/bEpic"
 
     def run(self, image, tab_name="", sam3_positive="[]", sam3_negative="[]",
-            sam3_box_positive="[]", sam3_box_negative="[]", unique_id=None):
-        _push_tab(image, tab_name, unique_id, "bEpicImageViewerSAM3Collector")
+            sam3_box_positive="[]", sam3_box_negative="[]", group="", unique_id=None):
+        _push_tab(image, tab_name, unique_id, "bEpicImageViewerSAM3Collector", group)
         return (
             _points_prompt(sam3_positive, 1),
             _points_prompt(sam3_negative, 0),

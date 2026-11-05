@@ -218,10 +218,14 @@ export function writeToolStore(node, name, value) {
 export function senderTabInfo(node) {
     if (!isViewerSourceNode(node)) return null;
 
+    // The group names it (tab_name, its old name, for a node not yet adopted).
     let explicit = "";
     try {
-        const w = (node.widgets || []).find((w) => w.name === "tab_name");
-        explicit = w ? (w.value || "") : "";
+        for (const name of ["group", "tab_name"]) {
+            const w = (node.widgets || []).find((w) => w.name === name);
+            explicit = w ? String(w.value || "").trim() : "";
+            if (explicit) break;
+        }
     } catch (e) {}
 
     if (explicit) {
@@ -259,6 +263,24 @@ function resyncOnChange(node, widgetName) {
     };
 }
 
+/**
+ * `tab_name` is the old name of `group` (renders are groups of the viewer's
+ * one Viewer tab, no tab per node). The widget stays where it is - a saved
+ * workflow holds widget values by position - but out of sight, and a value it
+ * holds moves into `group` when that is empty.
+ */
+export function adoptOldTabName(node) {
+    const old = getToolWidget(node, "tab_name");
+    if (!old) return;
+    const group = getToolWidget(node, "group");
+    const v = String(old.value || "").trim();
+    if (v && group) {
+        if (!String(group.value || "").trim()) group.value = v;
+        old.value = "";
+    }
+    hideWidget(node, old);
+}
+
 /** Register bEpicSendToViewer. Call from beforeRegisterNodeDef. */
 export function registerSendNode(nodeType, nodeData) {
     const videoFormats = videoFormatsFromDef(nodeData);
@@ -286,6 +308,7 @@ export function registerSendNode(nodeType, nodeData) {
         resyncOnChange(this, OUTPUT_TOGGLE);
         resyncOnChange(this, FORMAT_WIDGET);
         resyncOnChange(this, SEQUENCE_TOGGLE);
+        adoptOldTabName(this);
         this.bepicSyncOutputWidgets();
         return r;
     };
@@ -359,6 +382,7 @@ export function registerSendNode(nodeType, nodeData) {
         resyncOnChange(this, OUTPUT_TOGGLE);
         resyncOnChange(this, FORMAT_WIDGET);
         resyncOnChange(this, SEQUENCE_TOGGLE);
+        adoptOldTabName(this);
         this.bepicSyncOutputWidgets?.();
         return r;
     };
@@ -372,6 +396,7 @@ export function registerToolNode(nodeType, nodeData, kind) {
     const names = TOOL_WIDGETS[kind] || [];
     const hideStores = function () {
         for (const n of names) hideWidget(this, getToolWidget(this, n));
+        adoptOldTabName(this);
         const sz = this.computeSize();
         this.setSize([Math.max(this.size[0], sz[0]), sz[1]]);
     };

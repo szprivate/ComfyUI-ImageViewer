@@ -1693,13 +1693,14 @@ try:
         async def _bepic_push(request):
             """Show files in a viewer tab that did not come through a save node.
 
-            Body: {"paths": [abs path, ...], "tab_name": "agentY", "group": "...",
-            "label": "..."}. An MCP tool's render, a script's output, a shot's
-            picture: whoever produced the file says where it belongs. The frames
-            are the ones /bepic/browse_frames builds, sent as the same
-            ``bepic.viewer.update`` message bEpicSendToViewer sends, so the page
-            files them by ``tab_name`` exactly as it does a send from a workflow
-            that is not on the open graph. Only files inside the folders the
+            Body: {"paths": [abs path, ...], "group": "...", "label": "..."}. An
+            MCP tool's render, a script's output, a shot's picture: whoever
+            produced the file says which group of the Viewer tab it belongs in
+            ("agentY" when nobody says; ``tab_name``, the old name of ``group``,
+            is taken when ``group`` is empty). The frames are the ones
+            /bepic/browse_frames builds, sent as the same ``bepic.viewer.update``
+            message bEpicSendToViewer sends, so the page files them exactly as it
+            does a send from a workflow that is not on the open graph. Only files inside the folders the
             viewer may open (path_access) are shown; the rest come back in
             ``refused``.
 
@@ -1722,8 +1723,9 @@ try:
             if not isinstance(data, dict) or not isinstance(data.get("paths"), list):
                 return web.json_response({"error": "bad request"}, status=400)
             clean = lambda v: " ".join(str(v or "").split())[:60]
-            tab = clean(data.get("tab_name")) or "agentY"
-            group, label = clean(data.get("group")), clean(data.get("label"))
+            group = clean(data.get("group")) or clean(data.get("tab_name")) or "agentY"
+            label = clean(data.get("label"))
+            tab = group
 
             from . import timeline_io
             # Motion-graphics scenes (*.mgscene.json) open the Motion editor, a LoRA dataset's manifest the
