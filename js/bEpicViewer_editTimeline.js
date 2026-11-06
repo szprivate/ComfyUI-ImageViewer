@@ -441,8 +441,8 @@ export const EditTimelineMixin = {
         const body = el("div", "edit-body");
 
         const bar = el("div", "edit-bar");
-        // In and out, top left, the Outliner's buttons at the Outliner's size:
-        // New, Add, then Save / Export.
+        // The file buttons, top left, the Outliner's buttons at the Outliner's size:
+        // New, Open, Open recent, Save / Export; a divider, then Add and the rest.
         const savedBar = el("div", "edit-saved");
         const icon = (key, fallback, title, fn) => {
             const b = el("button", "previz-btn previz-icon", fallback);      // the text stands in if the skin is missing
@@ -513,7 +513,8 @@ export const EditTimelineMixin = {
         const scrubAudio = button("", "Audio scrubbing on / off (Shift+M)", () => this.editAudioToggle("scrub"));
         scrubAudio.classList.add("edit-scrubaudio-btn");
         setEditIcon(scrubAudio, "scrub");
-        bar.append(fresh, add, out, opener, recent, pick, trimBtn, blade, snap, beats, split, undo, redo, auto, cuts, take, sub, badge,
+        const sep = el("span", "edit-sep");
+        bar.append(fresh, opener, recent, out, sep, add, pick, trimBtn, blade, snap, beats, split, undo, redo, auto, cuts, take, sub, badge,
                    audio, scrubAudio, zoomOut, zoomIn, zoomFit);
 
         // The tracks: their headers in a column that stays, the tracks beside it

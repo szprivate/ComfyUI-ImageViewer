@@ -1245,6 +1245,7 @@ textarea.param-input {
 .edit-empty { flex: 1; }
 /* The bar's in / out buttons are the Outliner's (.previz-btn.previz-icon); the name takes what is left. */
 .edit-bar .previz-icon { flex: none; }
+.edit-sep { flex: none; width: 1px; height: 18px; background: #444; margin: 0 4px; }
 .edit-tick { position: absolute; top: 0; bottom: 0; border-left: 1px solid #444; padding-left: 3px; font-size: 9px; line-height: 14px; pointer-events: none; color: #777; white-space: nowrap; }
 .edit-track { position: relative; height: 24px; }
 .edit-texts { height: 16px; }
