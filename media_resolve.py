@@ -17,6 +17,7 @@ import hashlib
 import os
 import re
 import threading
+from fractions import Fraction
 
 import folder_paths
 
@@ -238,6 +239,9 @@ def _write_video_proxy(src_path, dst):
                 for frame in packet.decode():
                     if packet.stream is vin:
                         pic = frame.reformat(width=vout.width, height=vout.height, format="yuv420p")
+                        # Counted in frames, so in the encoder's own time base: the source's (a
+                        # ProRes MOV's 1/12288) squeezed the whole film into its first frame.
+                        pic.time_base = vout.codec_context.time_base or 1 / Fraction(rate)
                         pic.pts = made
                         made += 1
                         for p in vout.encode(pic):
