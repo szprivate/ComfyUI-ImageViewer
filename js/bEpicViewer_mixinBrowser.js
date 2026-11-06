@@ -24,10 +24,14 @@ import { pref, prefKinds, setPref, PREF } from "./bEpicViewer_settings.js";
 // to a poster frame for them, because nothing in the browser can decode them.
 const _PLAYABLE_VIDEO = /\.(mp4|m4v|mov|webm|ogv)$/i;
 
-const _KIND_GLYPH = { dir: "📁", image: "🖼", video: "🎬", model: "🧊", text: "📝", other: "📄" };
+const _KIND_GLYPH = { dir: "📁", image: "🖼", video: "🎬", audio: "🔊", model: "🧊", text: "📝", other: "📄" };
 
 /** The kinds this viewer can actually open. Everything else is along to be seen. */
-const _OPENABLE = new Set(["image", "video", "model"]);
+const _OPENABLE = new Set(["image", "video", "audio", "model"]);
+
+// Sound formats the browser's own player decodes; the rest are listed and open
+// in the viewer all the same, where the player says if it cannot play them.
+const _PLAYABLE_AUDIO = /\.(wav|mp3|flac|ogg|oga|m4a|aac|opus|weba)$/i;
 
 // A numbered file: everything before the frame number, the number (the last
 // run of digits, right before the extension), and the extension.
@@ -685,6 +689,8 @@ export const BrowserMixin = {
         if (!v) return;
         try { v.pause(); v.removeAttribute("src"); v.load(); } catch (_) {}
         v.style.display = "none";
+        v.muted = true;                    // the preview's clips play silent; a sound was unmuted
+        v.classList.remove("is-audio");
     },
 
     _renderBrowserPreview(file, seq = null) {
@@ -734,6 +740,32 @@ export const BrowserMixin = {
                 };
                 img.onerror = null;
                 img.src = this.thumbUrl({ kind: "model", path: file.path });
+            }
+            return;
+        }
+
+        if (file.kind === "audio") {
+            if (_PLAYABLE_AUDIO.test(file.name) && vid) {
+                // The preview's <video> plays a sound too; its controls are the
+                // player bar, which is all a sound has to show. Unmuted: the
+                // clips in it play silent, but a sound is there to be heard.
+                vid.preload = "metadata";
+                vid.muted = false;
+                vid.classList.add("is-audio");
+                vid.src = url;
+                vid.style.display = "block";
+                vid.onloadedmetadata = () => {
+                    if (this._browserPreviewPath !== file.path) return;
+                    this._setBrowserMeta(file, `sound · ${this._formatDuration(vid.duration)}`);
+                };
+                vid.onerror = () => {
+                    if (this._browserPreviewPath !== file.path) return;
+                    this._stopBrowserPreview();
+                    if (msg) { msg.textContent = "The browser can't decode this sound."; msg.style.display = "block"; }
+                };
+            } else if (msg) {
+                msg.textContent = `${file.ext || "This format"} doesn't play in a browser.`;
+                msg.style.display = "block";
             }
             return;
         }
@@ -845,7 +877,7 @@ export const BrowserMixin = {
             path: file.path, url: null,
             filename: file.name, subfolder: "", type: null,
             external: true, dropped: false,
-            kind: file.kind === "video" || file.kind === "model" ? file.kind : "image",
+            kind: file.kind === "video" || file.kind === "audio" || file.kind === "model" ? file.kind : "image",
             thumb: null, isSequence: false, seqDir: null, seqCount: 0,
         };
     },

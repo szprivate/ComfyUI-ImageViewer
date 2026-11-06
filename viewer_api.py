@@ -65,6 +65,10 @@ except Exception:  # pragma: no cover
 _MODEL_EXTS = {".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply",
                ".usd", ".usda", ".usdc", ".usdz", ".abc", ".spz", ".splat", ".ksplat", ".sog"}
 
+# Sound files the Viewer plays (media_resolve.AUDIO_EXTS when it is there).
+_AUDIO_EXTS = (getattr(media_resolve, "AUDIO_EXTS", None) if media_resolve is not None else None) \
+    or {".wav", ".mp3", ".flac", ".ogg", ".oga", ".m4a", ".aac", ".opus", ".weba"}
+
 # three.js and its loaders, for the viewer's 3D tabs. Outside js/ so ComfyUI
 # doesn't import them at startup; served by /bepic/lib/three/<name> instead.
 _THREE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor", "three")
@@ -1608,6 +1612,8 @@ try:
                     kind = "image"
                 elif ext in video_exts:
                     kind = "video"
+                elif ext in _AUDIO_EXTS:
+                    kind = "audio"
                 elif ext in _MODEL_EXTS:
                     kind = "model"
                 elif ext == ".otio":
@@ -1680,6 +1686,8 @@ try:
                 try:
                     if ext in _MODEL_EXTS:
                         frames.append(media_resolve._model_frame(p))
+                    elif ext in _AUDIO_EXTS:
+                        frames.append(media_resolve._audio_frame(p))
                     elif ext in video_exts:
                         frames.append(media_resolve._video_frame(p))
                     elif ext in image_exts:
@@ -1753,7 +1761,7 @@ try:
                 rest = keep
             data["paths"] = rest
             files, refused, cuts = push_open.expand(
-                data["paths"], image_exts, video_exts,
+                data["paths"], set(image_exts) | _AUDIO_EXTS, video_exts,
                 may_serve=path_access.may_serve, is_allowed=path_access.is_allowed,
                 cap=_BROWSE_FRAME_CAP)
             frames, edit_at = [], None
@@ -1762,6 +1770,8 @@ try:
                 try:
                     if ext in _MODEL_EXTS:
                         frame = media_resolve._model_frame(p)
+                    elif ext in _AUDIO_EXTS:
+                        frame = media_resolve._audio_frame(p)
                     elif ext in video_exts:
                         frame = media_resolve._video_frame(p)
                     elif ext in image_exts:

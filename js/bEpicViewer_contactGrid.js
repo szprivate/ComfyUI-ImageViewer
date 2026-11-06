@@ -24,6 +24,7 @@
 //
 // The layout math (gridLayout) is pure and exported for node --test
 // (tests/test_contact_grid.mjs); the mixin below touches the DOM.
+import { isAudioFrame } from "./bEpicViewer_audio.js";
 
 /** Most cells drawn at once; the hint says "showing 16 of N" past it. */
 export const CONTACT_GRID_CAP = 16;
@@ -104,7 +105,8 @@ export function followRate(baseRate, drift) {
 }
 
 const VIDEO_RE = /\.(mp4|m4v|mov|webm|mkv)$/i;
-const isVideo = (o) => !!(o && (o.kind === "video" || VIDEO_RE.test(o.path || o.filename || "")));
+// A sound gets a tile in the sheet, not a <video>: there is nothing to see play.
+const isVideo = (o) => !!(o && !isAudioFrame(o) && (o.kind === "video" || VIDEO_RE.test(o.path || o.filename || "")));
 const baseName = (o) => String((o && (o.name || o.filename || o.path)) || "").split(/[\\/]/).pop();
 /** A follower further off than this is sought rather than nudged (seconds). */
 const SEEK_DRIFT = 0.25;
@@ -413,7 +415,7 @@ export const ContactGridMixin = {
 
     _gridSetImg(c, frame) {
         const fr = c.snap[cellFrame(frame, c.snap.length)] || c.fr;
-        const url = this.buildImgUrl(fr);
+        const url = isAudioFrame(fr) ? this.thumbUrl(fr) : this.buildImgUrl(fr);
         if (c.imgUrl === url) return;
         c.imgUrl = url;
         c.img.src = url;

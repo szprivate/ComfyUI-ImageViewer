@@ -25,15 +25,17 @@ export const FRAME_PATHS_CAP = 16;
 
 const VIDEO_EXT = /\.(mp4|mov|webm|mkv|avi|m4v|gif)$/i;
 const MODEL_EXT = /\.(glb|gltf|obj|fbx|ply|spz|splat|usd|usda|usdc|usdz|stl)$/i;
+const AUDIO_EXT = /\.(wav|mp3|flac|ogg|oga|m4a|aac|opus|weba)$/i;
 
 function fileName(fr) {
     return String((fr && (fr.filename || fr.name || fr.path)) || "");
 }
 
-/** "image" | "video" | "model": the frame's own word when it has one. */
+/** "image" | "video" | "audio" | "model": the frame's own word when it has one. */
 export function frameKind(fr) {
     if (!fr) return "image";
     const k = String(fr.kind || "").toLowerCase();
+    if (k === "audio" || AUDIO_EXT.test(fileName(fr))) return "audio";
     if (k === "video" || k === "model" || k === "image") return k;
     const name = fileName(fr);
     if (MODEL_EXT.test(name)) return "model";

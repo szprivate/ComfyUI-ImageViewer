@@ -76,6 +76,8 @@ export function setPref(id, value) {
  *  The setting says "all": ComfyUI's dropdown can't show an empty value. */
 export function prefKinds() {
     const v = String(pref(PREF.browserKinds) || "");
+    // "Media only" took in sound later: a setting saved before that means the same choice.
+    if (v === "image,video,model") return "image,video,audio,model";
     return v === "all" ? "" : v;
 }
 
@@ -163,8 +165,8 @@ function defs() {
             name: "Show",
             tooltip: "Which files the browser lists. Also changed from the browser's kind menu.",
             type: "combo", defaultValue: "all",
-            options: opts([["all", "All files"], ["image,video,model", "Media only"], ["image", "Images"],
-                           ["video", "Video"], ["model", "3D models"], ["other", "Everything else"]]),
+            options: opts([["all", "All files"], ["image,video,audio,model", "Media only"], ["image", "Images"],
+                           ["video", "Video"], ["audio", "Audio"], ["model", "3D models"], ["other", "Everything else"]]),
             sortOrder: 880, onChange: panelApply(PREF.browserKinds),
         },
         // ── Playback ──

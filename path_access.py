@@ -204,7 +204,7 @@ MEDIA_EXTS = frozenset({
     ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif", ".ico", ".svg",
     ".tif", ".tiff", ".exr", ".dpx", ".tga", ".hdr",
     ".mp4", ".m4v", ".mov", ".webm", ".mkv", ".ogv", ".avi", ".mpg", ".mpeg", ".wmv", ".flv",
-    ".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac",
+    ".wav", ".mp3", ".flac", ".ogg", ".oga", ".m4a", ".aac", ".opus", ".weba",
     ".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply", ".usd", ".usda", ".usdc", ".usdz", ".abc",
     ".spz", ".splat", ".ksplat", ".sog",
     ".bin", ".mtl", ".ktx2",
