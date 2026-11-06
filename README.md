@@ -15,6 +15,7 @@ An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/C
 - zoom and pan; undock the viewer into its own browser window for a second monitor
 - each tab keeps a history of up to 20 snapshots automatically
 - play image sequences and videos with configurable FPS, and loop a sub-range of the timeline
+- play **sound files** (WAV, MP3, FLAC, OGG, M4A, AAC, Opus) the same way: drop one in, open it from the file browser or send a Load Audio node, and its waveform shows in place of a picture — click it to seek
 - split-screen comparison with a draggable divider — shift-click two tabs or two history items to compare them
 - real-time exposure (−4 EV to +4 EV) and isolation of the **Red**, **Green** or **Blue** channel
 

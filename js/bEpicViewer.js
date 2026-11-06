@@ -52,6 +52,7 @@ import { EditTakesMixin } from "./bEpicViewer_editTakes.js";
 import { EditResolveMixin } from "./bEpicViewer_editResolve.js";
 import { EditTrimMixin } from "./bEpicViewer_editTrim.js";
 import { EditAudioMixin } from "./bEpicViewer_editAudio.js";
+import { AudioViewMixin } from "./bEpicViewer_audio.js";
 import { EditTwoUpMixin } from "./bEpicViewer_editTwoUp.js";
 import { EditPasteMixin } from "./bEpicViewer_editPaste.js";
 import { EditOpenMixin } from "./bEpicViewer_editOpen.js";
@@ -1522,6 +1523,7 @@ Object.assign(
     EditResolveMixin,
     EditTrimMixin,
     EditAudioMixin,
+    AudioViewMixin,
     EditTwoUpMixin,
     EditPasteMixin,
     EditDialogsMixin,

@@ -33,6 +33,7 @@
 import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
 import { canvasContext, notice } from "./bEpicViewer_exportUI.js";
+import { AUDIO_RE, isAudioFrame } from "./bEpicViewer_audio.js";
 
 // What went wrong, as a toast: a failed drop must not stop the page for it.
 const say = (text) => notice("error", "bEpic Viewer", String(text).replace(/^bEpic Viewer \u2013 /, ""));
@@ -148,6 +149,7 @@ export const DnDMixin = {
                 const f = { url: it.url, name: it.filename || "file",
                             filename: it.filename || null, external: true, dropped: true };
                 if (it.kind === "video") { f.kind = "video"; f.fps = this.fps || 24; }
+                if (it.kind === "audio") { f.kind = "audio"; f.fps = this.fps || 24; }
                 if (it.kind === "model") { f.kind = "model"; f.format = it.format || null; }
                 frames.push(f);
                 continue;
@@ -178,7 +180,7 @@ export const DnDMixin = {
         this.openExternalFramesInViewer(usable, label);
     },
 
-    _frameForDroppedFile(file, isVideo) {
+    _frameForDroppedFile(file, isVideo, isAudio) {
         const url = URL.createObjectURL(file);
         (this._droppedObjectUrls || (this._droppedObjectUrls = [])).push(url);
         // A unique, stable filename keys the frame (used as the video-mode key so
@@ -190,7 +192,9 @@ export const DnDMixin = {
             external: true,
             dropped: true,
         };
-        if (isVideo) {
+        if (isAudio) {
+            frame.kind = "audio"; frame.fps = this.fps || 24;
+        } else if (isVideo) {
             frame.kind = "video"; frame.fps = this.fps || 24;
         } else {
             // Images show their name in the path bar; videos key off `filename`
@@ -201,16 +205,21 @@ export const DnDMixin = {
     },
 
     _addDroppedFiles(files) {
-        const images = [], videos = [], models = [];
+        const images = [], videos = [], models = [], sounds = [];
         for (const f of files) {
             const isModel = _MODEL_RE.test(f.name);
-            const isVid = !isModel && ((f.type && f.type.startsWith("video/")) || _VID_RE.test(f.name));
+            // By name first: an .ogg or .webm says audio/ or video/ by its type
+            // whichever it holds, and the name is what the user chose to call it.
+            const isSound = !isModel && (AUDIO_RE.test(f.name)
+                || (f.type && f.type.startsWith("audio/") && !_VID_RE.test(f.name)));
+            const isVid = !isModel && !isSound && ((f.type && f.type.startsWith("video/")) || _VID_RE.test(f.name));
             const isImg = !isModel && ((f.type && f.type.startsWith("image/")) || _IMG_RE.test(f.name));
             if (isModel) models.push(f);
+            else if (isSound) sounds.push(f);
             else if (isVid) videos.push(f);
             else if (isImg) images.push(f);
         }
-        if (!images.length && !videos.length && !models.length) return;
+        if (!images.length && !videos.length && !models.length && !sounds.length) return;
 
         // Into the one Viewer tab: each dropped image a snapshot of the
         // History (the first on top and shown), each video and model one too.
@@ -221,6 +230,8 @@ export const DnDMixin = {
             // <img> can't render a video file — extract a poster frame for the strip.
             this._generateDroppedVideoPoster(frame);
         }
+        // A sound plays like a clip, its waveform where the picture would be.
+        for (const f of sounds) snaps.push([this._frameForDroppedFile(f, false, true)]);
         // Files a .gltf or .obj refers to can't be reached from a dropped
         // file, so those show without them.
         for (const f of models) {
@@ -327,6 +338,7 @@ export const DnDMixin = {
             external:  !!imgObj.external,
             dropped:   !!imgObj.dropped,
             kind:      this._frameIsModel(imgObj) ? "model"
+                     : isAudioFrame(imgObj) ? "audio"
                      : imgObj.kind || (this._frameIsVideo(imgObj) ? "video" : "image"),
             format:    imgObj.format || null,
             thumb:     imgObj.thumb || null,
@@ -431,6 +443,8 @@ export const DnDMixin = {
         if (this._frameIsVideo(imgs[0])) {
             const item = this._historyDragItem(imgs[0], [imgs[0]]);
             if (!item) return null;
+            // A sound has no frame to take: the drag is the file itself.
+            if (item.kind === "audio") return item;
             return { ...item, extractFrame: Math.max(0, Math.floor(this.currentFrame || 0)) };
         }
 
@@ -599,6 +613,19 @@ export const DnDMixin = {
                 return;
             }
 
+            // Sounds go to core's Load Audio node, through an upload to /input
+            // (its widget is a list of what is there), or onto an audio loader.
+            if (list.some((p) => p.kind === "audio")) {
+                const target = list.length === 1 ? this._nodeUnderEvent(e) : null;
+                let offset = [0, 0];
+                for (const payload of list) {
+                    if (payload.kind !== "audio") continue;
+                    await this._dropAudioOntoGraph(payload, e, offset, target);
+                    offset = [offset[0] + DROP_CASCADE, offset[1] + DROP_CASCADE];
+                }
+                return;
+            }
+
             if (list.length === 1) {
                 const payload = list[0];
                 const target = this._nodeUnderEvent(e);
@@ -619,6 +646,34 @@ export const DnDMixin = {
         } catch (err) {
             console.error("[bEpicViewer] drop-to-graph failed", err);
         }
+    },
+
+    /** One sound onto the graph: into the audio loader under it, or a new Load Audio node. */
+    async _dropAudioOntoGraph(payload, e, offset, target) {
+        const ws = (target && target.widgets) || [];
+        const widget = ws.find((w) => w && (w.name === "audio" || w.name === "audio_file" || w.name === "audio_path"));
+        if (widget) {
+            const absPath = this._absPathForPayload(payload);
+            const isCombo = widget.type === "combo" || !!(widget.options && Array.isArray(widget.options.values));
+            if (!isCombo && absPath) {
+                this._setWidget(widget, absPath);
+                this._afterNodeMediaChange(target);
+                return;
+            }
+            const up = await this._uploadPayloadToInput(payload, false, true);
+            if (up) {
+                if (widget.options && Array.isArray(widget.options.values) && !widget.options.values.includes(up.path)) {
+                    widget.options.values.push(up.path);
+                }
+                this._setWidget(widget, up.path);
+                this._afterNodeMediaChange(target);
+                return;
+            }
+        }
+        if (!this._nodeTypeAvailable("LoadAudio")) { say("This ComfyUI has no Load Audio node."); return; }
+        const uploaded = await this._uploadPayloadToInput(payload, false, true);
+        if (!uploaded) { say("Could not copy the sound into ComfyUI's input folder."); return; }
+        this._createNativeLoaderNode("LoadAudio", "audio", uploaded, e, offset);
     },
 
     /** The right loader node for one dragged item, placed at the drop point. */
@@ -728,13 +783,18 @@ export const DnDMixin = {
     // Fetch a history payload's bytes and upload a copy to /input, returning the
     // { path, name, subfolder, type } descriptor (or null). Shared by the native
     // upload loader and in-place replacement of a combo/upload loader node.
-    async _uploadPayloadToInput(payload, isVideo) {
+    async _uploadPayloadToInput(payload, isVideo, isAudio) {
         const fetchUrl = this._frameFetchUrl(payload);
         if (!fetchUrl) return null;
-        let fname = this._basename(payload.filename || payload.path || (isVideo ? "video.mp4" : "image.png"));
+        let fname = this._basename(payload.filename || payload.path
+            || (isAudio ? "sound.wav" : isVideo ? "video.mp4" : "image.png"));
         const resp = await fetch(fetchUrl);
         if (!resp.ok) throw new Error(`fetch ${resp.status}`);
         const blob = await resp.blob();
+        if (isAudio) {
+            if (!AUDIO_RE.test(fname)) fname += ".wav";
+            return await this._uploadFileToInput(new File([blob], fname, { type: blob.type || "audio/wav" }));
+        }
         if (isVideo) {
             if (!/\.(mp4|m4v|mov|webm|mkv|avi|ogv)$/i.test(fname)) fname += ".mp4";
         } else {
