@@ -195,9 +195,10 @@ function defs() {
         },
         {
             id: PREF.showInfo, category: sec("View", "ShowInfo"),
-            name: "Show the size / format overlay",
-            tooltip: "The resolution (or a model's stats) in the corner of the viewport. " +
-                     "Its toolbar button still toggles it for the session.",
+            name: "Show the overlays on the canvas",
+            tooltip: "Everything drawn over the picture: the size read-out, the exposure bar, " +
+                     "the path bar, the tool bar and the rest. The Toggle Overlays button (S) " +
+                     "still toggles them for the session.",
             type: "boolean", defaultValue: true, sortOrder: 690,
             onChange: panelApply(PREF.showInfo),
         },
@@ -446,7 +447,7 @@ export const PrefsMixin = {
     _applyStartupViewerPrefs() {
         this._setFpsUi(Math.max(1, Number(pref(PREF.fps)) || 25));
         this._setLoopUi(pref(PREF.loop));
-        this.showShape = !!pref(PREF.showInfo);
+        this.showOverlays = !!pref(PREF.showInfo);
         this.historyLimit = Number(pref(PREF.historyLimit)) || this.historyLimit;
     },
 
@@ -473,7 +474,7 @@ export const PrefsMixin = {
             case PREF.loop:
                 return this._setLoopUi(value);
             case PREF.showInfo:
-                if (!!value !== !!this.showShape) this.toggleShapeOverlay();
+                if (!!value !== !!this.showOverlays) this.toggleOverlays(!!value);
                 return;
             case PREF.historyLimit:
                 if (Number(value) !== this.historyLimit) this.setHistoryLimit(value);

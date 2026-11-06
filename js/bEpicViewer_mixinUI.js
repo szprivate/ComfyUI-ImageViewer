@@ -145,10 +145,23 @@ export const UIMixin = {
 
     // ── Overlays ─────────────────────────────────────────────────────────────
 
-    toggleShapeOverlay() {
-        this.showShape = !this.showShape;
-        if (this.shapeOverlay) this.shapeOverlay.style.display = this.showShape ? "block" : "none";
-        if (this.shapeBtn) this.shapeBtn.classList.toggle('active', this.showShape);
+    /**
+     * Everything drawn over the picture, on or off in one go: the size read-out,
+     * the exposure bar, the path bar, the tool bar, the 3D view's buttons, the
+     * frame, the wipe line and the contact-sheet hint. Off is a class on the
+     * viewport that the stylesheet hides them by (`.overlays-off` in
+     * bEpicViewer.css), so each keeps the display its own code gave it and comes
+     * back as it was. The picture, an open page (Edit, Paint, Motion), an active
+     * tool's own drawing and the reconnect notice stay.
+     */
+    toggleOverlays(force) {
+        this.showOverlays = (force === undefined) ? !this.showOverlays : !!force;
+        this._applyOverlays();
+    },
+
+    _applyOverlays() {
+        if (this.viewport) this.viewport.classList.toggle('overlays-off', !this.showOverlays);
+        if (this.overlaysBtn) this.overlaysBtn.classList.toggle('active', this.showOverlays);
         this.updateShapeInfo();
     },
 
@@ -299,7 +312,7 @@ export const UIMixin = {
                 const computed = window.getComputedStyle(this);
                 const iconProps = [
                     '--icon-play','--icon-pause','--icon-skip-start','--icon-skip-end','--icon-prev','--icon-next',
-                    '--icon-fit','--icon-shape','--icon-rotate-slider','--icon-close','--icon-undock','--icon-layout',
+                    '--icon-fit','--icon-overlays','--icon-rotate-slider','--icon-close','--icon-undock','--icon-layout',
                     '--icon-history','--icon-params','--icon-range','--icon-refresh','--icon-folder','--icon-delete',
                     '--icon-help','--icon-dock-left','--icon-dock-right','--icon-lock','--icon-unlock'
                 ];

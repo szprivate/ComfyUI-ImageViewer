@@ -180,7 +180,7 @@ const ICON_MAP = {
     's-prev':            'icon-prev',
     's-next':            'icon-next',
     'fit-btn':           'icon-fit',
-    'shape-btn':         'icon-shape',
+    'overlays-btn':      'icon-overlays',
     'rotate-btn':        'icon-rotate-slider',
     'close-panel-btn':   'icon-close',
     'undock-btn':        'icon-undock',
@@ -207,7 +207,7 @@ class ViewerPanel extends HTMLElement {
         this.activeTab           = null;
         this.compareTab          = null;
         this.isComparing         = false;
-        this.showShape           = true;
+        this.showOverlays        = true;
         this.customLayouts       = {};
         this.tabLabels           = {};
         this.tabColors           = {};
@@ -631,7 +631,7 @@ class ViewerPanel extends HTMLElement {
         this.tabBar           = sr.getElementById('tab-bar');
         this.tabsContainer    = sr.getElementById('tabs-container');
         this.closeBtn         = sr.getElementById('close-panel-btn');
-        this.shapeBtn         = sr.getElementById('shape-btn');
+        this.overlaysBtn      = sr.getElementById('overlays-btn');
         this.shapeOverlay     = sr.getElementById('shape-overlay');
         this.layoutSel        = sr.getElementById('layout-sel');
         this.refreshBtn       = sr.getElementById('refresh');
@@ -1007,8 +1007,7 @@ class ViewerPanel extends HTMLElement {
             this.layoutSel.blur();
         };
 
-        this.shapeBtn.classList.toggle('active', this.showShape);
-        this.updateShapeInfo();
+        this._applyOverlays();
         this.playBtn.onclick      = () => {
             this.isPlaying ? this.stop() : this.play();
             this.playBtn.classList.toggle('playing', this.isPlaying);
@@ -1024,7 +1023,7 @@ class ViewerPanel extends HTMLElement {
 
         this.rotateBtn.onclick = () => this.cycleSliderMode();
         if (this.closeBtn) this.closeBtn.onclick = () => { this.style.display = 'none'; };
-        this.shapeBtn.onclick  = () => this.toggleShapeOverlay();
+        this.overlaysBtn.onclick = () => this.toggleOverlays();
 
         // The last-frame box: a readout, except on a previz tab, where it is
         // how long the shot is (see previzSyncTimelineFields).
