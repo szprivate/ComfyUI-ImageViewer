@@ -2,6 +2,7 @@
 // Playback, timeline, frame navigation, zoom helpers, image URL builder.
 import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
+import { isAudioFrame, AUDIO_TILE } from "./bEpicViewer_audio.js";
 
 // Videos stream straight from the ComfyUI server. An earlier build read whole
 // clips into memory and played them from a blob: URL, which did make scrubbing
@@ -90,6 +91,11 @@ export const PlaybackMixin = {
         // A model dropped from the desktop has no server copy to render a tile of.
         const modelTile = this._modelThumbUrl && this._frameIsModel(imgObj) && this._modelThumbUrl(imgObj);
         if (modelTile) return modelTile;
+        // A sound has no picture to shrink: its tile is drawn, never fetched (a
+        // fetched one would fail, and a failed tile asks for the item to be pruned).
+        if (isAudioFrame(imgObj)) {
+            return (imgObj.thumb && /^data:/.test(imgObj.thumb)) ? imgObj.thumb : AUDIO_TILE;
+        }
         if (imgObj && imgObj.thumb) {
             // A dropped video's poster is an inline data:/blob: URL, not a temp path.
             if (/^(data:|blob:)/.test(imgObj.thumb)) return imgObj.thumb;
@@ -136,7 +142,7 @@ export const PlaybackMixin = {
 
     updateShapeInfo() {
         if (!this.shapeOverlay) return;
-        if (!this.showShape) { this.shapeOverlay.style.display = "none"; return; }
+        if (!this.showOverlays) { this.shapeOverlay.style.display = "none"; return; }
 
         if (this._modelMode) {
             const info = this._modelInfoText();
@@ -739,8 +745,11 @@ export const PlaybackMixin = {
     // {kind:"video", fps, frames} entry. The <video> element decodes it and is
     // driven by the same transport (play/timeline/step) and zoom/pan as images.
 
+    // A sound file counts as a clip here: it plays through the same <video> and
+    // the same transport, with its waveform drawn in place of a picture
+    // (AudioViewMixin, bEpicViewer_audio.js). Ask _frameIsAudio to tell them apart.
     _frameIsVideo(o) {
-        return !!(o && (o.kind === "video" ||
+        return !!(o && (o.kind === "video" || isAudioFrame(o) ||
             /\.(mp4|m4v|mov|webm|mkv)$/i.test(o.path || o.filename || "")));
     },
 
@@ -770,12 +779,17 @@ export const PlaybackMixin = {
         // and the compare <img> wipes over it.
         if (this.imgCompare) this.imgCompare.style.display = this.isComparing ? "block" : "none";
         if (this.imgFrame)   this.imgFrame.style.display = "none";
-        v.style.display = "block";
+        // A sound has nothing to show in the <video>: it plays hidden, and the
+        // waveform stands in for it.
+        const audio = isAudioFrame(imgObj);
+        v.style.display = audio ? "none" : "block";
         v.loop  = (this.loopMode === "loop" || this.loopMode === "ping-pong");
         v.muted = false;
 
         if (!this._videoHandlersBound) {
-            v.addEventListener("timeupdate",     () => this._videoOnTimeUpdate());
+            v.addEventListener("timeupdate",     () => { this._videoOnTimeUpdate(); this._audioDraw?.(); });
+            v.addEventListener("play",           () => this._audioTick?.());
+            v.addEventListener("seeked",         () => this._audioDraw?.());
             v.addEventListener("loadedmetadata", () => this._videoOnMeta());
             v.addEventListener("ended",          () => this._videoOnEnded());
             // The base's decoded size feeds both the compare layer's scale and the
@@ -800,6 +814,8 @@ export const PlaybackMixin = {
         }
         this._setVideoSrc(v, url);
         this._applyVideoPlaybackRate();
+        if (audio) this._audioShow?.(imgObj, url);
+        else this._audioHide?.();
 
         this.updateTransform();
         if (this.setImageFilter) this.setImageFilter();
@@ -816,6 +832,7 @@ export const PlaybackMixin = {
         this._videoKey  = null;
         this._videoFrames = 0;
         this.editTlShow?.(null);
+        this._audioHide?.();
         const v = this.videoBase;
         if (v) {
             try { v.pause(); } catch (e) {}

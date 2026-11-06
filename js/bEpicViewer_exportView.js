@@ -30,6 +30,7 @@ export const ExportViewMixin = {
         if (this.isEditTab && this.isEditTab()) return { kind: "edit" };
         const frames = (this._baseFrames && this._baseFrames()) || [];
         if (!frames.length) return null;
+        if (this._frameIsAudio && this._frameIsAudio(frames[0])) return null;   // a sound has no picture to export
         if (this._frameIsVideo(frames[0])) {
             return { kind: "video", frames: [frames[0]], index: Math.max(0, Math.floor(this.currentFrame || 0)) };
         }

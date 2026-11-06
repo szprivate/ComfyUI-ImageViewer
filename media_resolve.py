@@ -17,6 +17,7 @@ import hashlib
 import os
 import re
 import threading
+from fractions import Fraction
 
 import folder_paths
 
@@ -34,6 +35,9 @@ MODEL_EXTS = {".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply",
               ".usd", ".usda", ".usdc", ".usdz", ".spz", ".splat", ".ksplat", ".sog"}
 VIDEO_EXTS = {".mp4", ".m4v", ".mov", ".webm", ".mkv", ".ogv", ".avi", ".mpg",
               ".mpeg", ".wmv", ".flv"}
+# Sound files: a viewer tab plays one through its <video>, waveform on screen
+# (js/bEpicViewer_audio.js). Kept in step with path_access.MEDIA_EXTS.
+AUDIO_EXTS = {".wav", ".mp3", ".flac", ".ogg", ".oga", ".m4a", ".aac", ".opus", ".weba"}
 
 # Formats an <img> renders directly. Everything else is transcoded to PNG on the
 # fly by /bepic/view_file, so sequences stay lazy (only scrubbed frames convert).
@@ -235,6 +239,9 @@ def _write_video_proxy(src_path, dst):
                 for frame in packet.decode():
                     if packet.stream is vin:
                         pic = frame.reformat(width=vout.width, height=vout.height, format="yuv420p")
+                        # Counted in frames, so in the encoder's own time base: the source's (a
+                        # ProRes MOV's 1/12288) squeezed the whole film into its first frame.
+                        pic.time_base = vout.codec_context.time_base or 1 / Fraction(rate)
                         pic.pts = made
                         made += 1
                         for p in vout.encode(pic):
@@ -752,6 +759,13 @@ def _model_frame(path):
             "path": path, "name": os.path.basename(path), "external": True}
 
 
+def _audio_frame(path):
+    """A sound as a viewer frame. Its length is read by the page's player; the
+    fps only sets how finely the timeline steps through it."""
+    return {"kind": "audio", "path": path, "name": os.path.basename(path),
+            "external": True, "fps": 24.0}
+
+
 def _video_frame(path):
     fps, frames = probe_video(path)
     frame = {
@@ -814,6 +828,8 @@ def resolve(raw, hint="", ann_type="", skip=0, cap=0, every=1, allow=None):
         return [{"label": name, "kind": "image", "frames": [_image_frame(path)]}]
     if ext in MODEL_EXTS:
         return [{"label": name, "kind": "model", "frames": [_model_frame(path)]}]
+    if ext in AUDIO_EXTS:
+        return [{"label": name, "kind": "audio", "frames": [_audio_frame(path)]}]
 
     # Unknown extension — the widget hint decides whether to try it as a video.
     if "video" in (hint or "").lower():
@@ -855,6 +871,7 @@ def resolve_files(files, ann_type="input", label="", allow=None):
     images = [p for p in resolved if os.path.splitext(p)[1].lower() in IMAGE_EXTS]
     videos = [p for p in resolved if os.path.splitext(p)[1].lower() in VIDEO_EXTS]
     models = [p for p in resolved if os.path.splitext(p)[1].lower() in MODEL_EXTS]
+    sounds = [p for p in resolved if os.path.splitext(p)[1].lower() in AUDIO_EXTS]
 
     if images:
         name = label or os.path.basename(images[0])
@@ -870,6 +887,9 @@ def resolve_files(files, ann_type="input", label="", allow=None):
     elif models:
         tabs = [{"label": label or os.path.basename(p), "kind": "model",
                  "frames": [_model_frame(p)]} for p in models]
+    elif sounds:
+        tabs = [{"label": label or os.path.basename(p), "kind": "audio",
+                 "frames": [_audio_frame(p)]} for p in sounds]
     else:
         raise ValueError("nothing viewable in the container")
     return tabs, missing

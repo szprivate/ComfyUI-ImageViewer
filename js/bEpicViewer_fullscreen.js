@@ -38,7 +38,7 @@ export const FullscreenMixin = {
             btn = document.createElement('button');
             btn.id = 'fullscreen-btn';
             btn.className = 'sprite-icon';
-            const after = this.shapeBtn || sr.getElementById('layout-btn');
+            const after = this.overlaysBtn || sr.getElementById('layout-btn');
             if (after && after.parentNode) after.parentNode.insertBefore(btn, after.nextSibling);
             else if (this.refreshBtn && this.refreshBtn.parentNode) this.refreshBtn.parentNode.insertBefore(btn, this.refreshBtn);
         }

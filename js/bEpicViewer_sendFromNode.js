@@ -31,11 +31,13 @@ import { nodeToolKind, senderTabInfo } from "./bEpicViewer_nodeTools.js";
 const IMG_EXT = /\.(png|jpe?g|webp|gif|bmp|avif|tiff?|exr|dpx|tga|hdr|svg|ico)$/i;
 const VID_EXT = /\.(mp4|m4v|mov|webm|mkv|ogv|avi|mpe?g|wmv|flv)$/i;
 const MODEL_EXT = /\.(glb|gltf|fbx|obj|stl|ply|usda|usdc|usdz|usd|spz|splat|ksplat|sog)$/i;
+const AUDIO_EXT = /\.(wav|mp3|flac|ogg|oga|m4a|aac|opus|weba)$/i;
 
 // Widget names loaders keep their media in, most specific first — a node with
 // both `video` and `path` widgets should be read from `video`.
 const MEDIA_WIDGETS = [
     "video", "video_path", "video_file", "image", "image_path", "images", "model_file",
+    "audio", "audio_path", "audio_file",
     "file", "file_path", "filepath", "path", "filename", "directory", "folder",
 ];
 
@@ -106,7 +108,7 @@ function looksLikeMedia(w) {
     if (!raw) return false;
     if (DIR_WIDGETS.has(w.name)) return true;
     const { value } = stripAnnotation(raw);
-    return IMG_EXT.test(value) || VID_EXT.test(value) || MODEL_EXT.test(value);
+    return IMG_EXT.test(value) || VID_EXT.test(value) || MODEL_EXT.test(value) || AUDIO_EXT.test(value);
 }
 
 /** The widget holding this node's media, or null when it has none. */
@@ -541,7 +543,8 @@ export const SendFromNodeMixin = {
     },
 
     _nodeMediaLabel(tab) {
-        const icon = tab.kind === "video" ? "🎬" : (tab.kind === "sequence" ? "🎞" : "🖼");
+        const icon = tab.kind === "video" ? "🎬" : tab.kind === "audio" ? "🔊"
+                   : (tab.kind === "sequence" ? "🎞" : "🖼");
         return `${icon} ${tab.label || "media"}`;
     },
 
@@ -581,7 +584,7 @@ export const SendFromNodeMixin = {
         });
         if (frames.length === 0) return true;   // ours, but nothing came back
 
-        const kind = frames[0] && frames[0].kind === "video" ? "video"
+        const kind = frames[0] && (frames[0].kind === "video" || frames[0].kind === "audio") ? frames[0].kind
                    : (frames.length > 1 ? "sequence" : "image");
         // The node itself, not just its id: openNodeMedia reads its widgets to
         // work out whether it owns a tab of its own to put this in.
@@ -617,7 +620,8 @@ export async function nodeMediaClips(node) {
     const out = [];
     for (const tab of (data && Array.isArray(data.tabs) ? data.tabs : [])) {
         const frames = Array.isArray(tab.frames) ? tab.frames : [];
-        if ((tab.kind !== "video" && tab.kind !== "image") || frames.length !== 1) continue;
+        // A Load Audio node's sound goes on a sound track (EditTimelineMixin reads kind "audio").
+        if ((tab.kind !== "video" && tab.kind !== "image" && tab.kind !== "audio") || frames.length !== 1) continue;
         const f = frames[0];
         if (!f || !f.path) continue;
         out.push({

@@ -38,9 +38,9 @@ The central image display area. Supports:
 - **Pan** — click and drag when zoomed in.
 - **Zoom** — choose a preset (Fit, 100%, 75%, 50%) from the dropdown, or press <kbd>F</kbd> to toggle fit-to-screen.
 
-### Tensor Shape Overlay
+### Toggle Overlays
 
-A small cyan label in the top-left of the viewport displays the tensor dimensions of the current image or sequence. Toggle visibility with the **Shape** button or press <kbd>S</kbd>.
+The **Toggle Overlays** button (layers icon, lower bar) or <kbd>S</kbd> turns everything drawn over the picture off and on in one go: the size read-out in the top-left, the exposure bar, the path bar, the tool bar, the 3D view's buttons, the image frame, the wipe line and the contact-sheet hint. The picture, an open page (Edit, Paint, Motion), an active tool's own drawing and the reconnect notice stay. *Settings → bEpic Viewer → View* sets whether the overlays start on.
 
 ### Exposure & Channel Bar
 
