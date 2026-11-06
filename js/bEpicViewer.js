@@ -63,6 +63,7 @@ import { EditAfxPlayMixin } from "./bEpicViewer_editAfxPlay.js";
 import { EditAfxMixin } from "./bEpicViewer_editAfx.js";
 import { BarGroupsMixin } from "./bEpicViewer_barGroups.js";
 import { ExportViewMixin } from "./bEpicViewer_exportView.js";
+import { FullscreenMixin } from "./bEpicViewer_fullscreen.js";
 import { SendFromNodeMixin, registerSendToViewerMenu, sendSelectionToViewer } from "./bEpicViewer_sendFromNode.js";
 import {
     registerSendNode, registerToolNode, senderTabInfo, isViewerSourceNode, BEPIC_SCENE_NODE,
@@ -592,6 +593,8 @@ class ViewerPanel extends HTMLElement {
         this._applyIconSkin();
 
         this._bindToolbarHandlers();
+        try { this._initFullscreen(); }
+        catch (e) { console.warn('bEpicViewer: full screen failed to start', e); }
 
         this.setupZoomAndPan();
         this.setupResizing();
@@ -1533,6 +1536,7 @@ Object.assign(
     EditAfxMixin,
     BarGroupsMixin,
     ExportViewMixin,
+    FullscreenMixin,
     PrevizWorldMixin,
     PrefsMixin,
 );

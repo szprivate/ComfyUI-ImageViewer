@@ -248,6 +248,8 @@ const ACTION_DEFS = [
       enabled: _picture, run: (p) => p.setChannelView(p.channelView === "blue"  ? "all" : "blue") },
     { key: "ToggleShape",  label: "Toggle Tensor Shape Overlay", combo: { key: "s" },
       run: (p) => p.toggleShapeOverlay() },
+    { key: "ToggleFullscreen", label: "Full Screen / Back", combo: { key: "F", shift: true },
+      run: (p) => p.toggleFullscreen() },
     { key: "TogglePageDock", label: "Dock Viewer as a Panel / Float", combo: { key: "d", shift: true },
       run: (p) => p.togglePageDock() },
     { key: "ToggleHelp",   label: "Toggle Hotkey Help",      combo: { key: "?", shift: true },
