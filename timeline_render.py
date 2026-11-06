@@ -475,10 +475,14 @@ def _sound_of(path, start, seconds):
                 pass
         resampler = av.AudioResampler(format="fltp", layout="stereo", rate=RATE)
         out = np.zeros((2, want), dtype=np.float32)
+        at = None
         for frame in src.decode(stream):
-            if frame.time is None:
-                continue
-            at = int(round((frame.time - start) * RATE))
+            # A frame without a time (some containers and decoders give none)
+            # follows on from the one before: dropping it made the film silent.
+            if frame.time is not None:
+                at = int(round((frame.time - start) * RATE))
+            elif at is None:
+                at = int(round(-start * RATE))
             if at >= want:
                 break
             for piece in resampler.resample(frame):
@@ -590,13 +594,24 @@ def env_curve(env, u):
     return np.clip(g, 0.0, 1.0).astype(np.float32)
 
 
-def film_sound(cut, counts, fps, total_frames, only=None, fx=True):
+def _unheard(notes, clip, exc):
+    """Say that *clip*'s sound could not be read, once per file, in *notes* (a list, or None)."""
+    if notes is None:
+        return
+    name = os.path.basename(str(clip.get("file") or "")) or "a clip"
+    said = f"{name}: {str(exc).strip() or type(exc).__name__}"[:240]
+    if not any(n.startswith(name + ":") for n in notes):
+        notes.append(said)
+
+
+def film_sound(cut, counts, fps, total_frames, only=None, fx=True, notes=None):
     """The film's sound as a ``(2, n)`` float array, or None when there is none.
 
     Sound effects (audio_fx): a clip's first, then its volume and fades, then its track's (a sound
     track's, the bed's), then the mix. *only*: just one part - "V1" (the cut's films, silent where a
     higher track covers them), "A1" (the bed) or a sound track's id - which the Resolve export bakes;
-    *fx* False leaves the effects out (the dry sound).
+    *fx* False leaves the effects out (the dry sound). *notes*: a list that is told of each file whose
+    sound could not be read - left silent, but never without saying so.
 
     Each clip's own sound sits where its picture is, fading in and out over its
     dissolves (which is a crossfade with its neighbour). A clip on a higher video
@@ -623,7 +638,8 @@ def film_sound(cut, counts, fps, total_frames, only=None, fx=True):
             post = env["xout"]["a"] if env and env.get("xout") else 0.0
             try:
                 sound = handled_sound(clip, n / fps, pre, post)
-            except Exception:  # noqa: BLE001 - a shot whose sound will not decode is silent
+            except Exception as exc:  # noqa: BLE001 - a shot whose sound will not decode is silent, and said
+                _unheard(notes, clip, exc)
                 sound = None
             if sound is not None and fx and clip.get("afx"):
                 sound = audio_fx.apply_chain(sound, clip["afx"], -pre)       # the clip's effects, in its own time
@@ -669,7 +685,8 @@ def film_sound(cut, counts, fps, total_frames, only=None, fx=True):
         post = env["xout"]["a"] if env and env.get("xout") else 0.0
         try:
             sound = handled_sound(clip, want / RATE, pre, post)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            _unheard(notes, clip, exc)
             sound = None
         if sound is not None and fx and clip.get("afx"):
             sound = audio_fx.apply_chain(sound, clip["afx"], -pre)
@@ -707,7 +724,8 @@ def film_sound(cut, counts, fps, total_frames, only=None, fx=True):
     if bed and bed.get("file"):
         try:
             sound = _sound_of(bed["file"], float(bed.get("in") or 0), total / RATE)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            _unheard(notes, bed, exc)
             sound = None
         if sound is not None:
             sound = sound * float(bed.get("gain", 1.0))
@@ -859,7 +877,8 @@ def render(doc, out_path, fmt="mp4", may_use=None, codec=None, quality="high", f
     table of what a format means: a MOV is ProRes unless H.264 is asked for.
 
     Returns ``{"path", "seconds", "frames", "width", "height", "fps", "sound",
-    "texts_left_out"}``. Written beside the target first and moved over, so a
+    "texts_left_out", "notes", "unheard"}`` - ``unheard``: the files whose sound
+    could not be read (silent in the film). Written beside the target first and moved over, so a
     render that fails leaves nothing half-written in its place.
 
     *frames* ``(first, last)`` renders only those frames of the film, both
@@ -879,7 +898,8 @@ def render(doc, out_path, fmt="mp4", may_use=None, codec=None, quality="high", f
     counts = frame_counts(cut["clips"], fps)
     # As long as the cut, or as far as the last clip over it reaches.
     total = max([film_frames(counts)] + [first + count for first, count, _c in _spans(cut["overlays"], fps)])
-    sound = film_sound(cut, counts, fps, total)
+    unheard = []                            # files whose sound would not decode: the film is silent there
+    sound = film_sound(cut, counts, fps, total, notes=unheard)
     base = iter(()) if cut["v1_off"] else film_pictures(cut["clips"], counts, w, h, fps)
     lo, hi = 0, total
     if frames:
@@ -952,7 +972,7 @@ def render(doc, out_path, fmt="mp4", may_use=None, codec=None, quality="high", f
     return {"path": out_path, "seconds": round((hi - lo) / fps, 3), "frames": hi - lo, "width": w,
             "height": h, "fps": fps, "sound": sound is not None,
             # Titles are drawn; the key stays for callers that read it.
-            "texts_left_out": 0, "texts": cut["texts"], "notes": notes,
+            "texts_left_out": 0, "texts": cut["texts"], "notes": notes, "unheard": unheard,
             "format": how["label"]}
 
 

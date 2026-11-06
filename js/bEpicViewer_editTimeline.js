@@ -2535,6 +2535,7 @@ export const EditTimelineMixin = {
         let soundId = onto && onto.kind === "audio" ? onto.id : "";
         let unread = 0, sel = null;
         const ins = [];                 // an insert edit: the films and pictures, in their order
+        const later = [];               // its sounds: placed once it is made, so its ripple does not push them on
         if (plan.some((p) => p.where === "newtrack")) { cut = D.addTrack(cut, "video"); onto = cut.tracks[cut.tracks.length - 1]; }
         if (plan.some((p) => p.where === "newsound")) { cut = D.addTrack(cut, "audio"); soundId = cut.tracks[cut.tracks.length - 1].id; }
         for (const { it, where: place } of plan) {
@@ -2544,6 +2545,7 @@ export const EditTimelineMixin = {
             const name = String(it.name || it.filename || it.path).split(/[\\/]/).pop().replace(/\.[^.]+$/, "");
             const clip = { file: it.path, name, length: D.toFrame(length, fps), color: it.color || "" };
             if (opts.insert && where !== "sound") { ins.push(clip); continue; }
+            if (opts.insert && where === "sound") { later.push(clip); continue; }
             if (where === "sound") {
                 if (!soundId) {
                     const first = (cut.tracks || []).find((k) => k.kind === "audio");
@@ -2580,9 +2582,20 @@ export const EditTimelineMixin = {
             this._editTlMulti = null;
             this._editTlEditSel = null;
         }
+        for (const clip of later) {
+            if (!soundId || !D.trackOf(cut, soundId)) {
+                const first = (cut.tracks || []).find((k) => k.kind === "audio");
+                if (!first) cut = D.addTrack(cut, "audio");
+                soundId = (first || cut.tracks[cut.tracks.length - 1]).id;
+            }
+            cut = D.placeClip(cut, soundId, clip, soundMoment);
+            soundMoment = D.toFrame(soundMoment + clip.length, fps);
+            if (!ins.length) sel = { kind: "tclip", track: soundId, i: D.trackOf(cut, soundId).clips.length - 1 };
+        }
         this._editTlSel = sel;
         this._editTlNote = [
             ins.length ? `${ins.length} clip(s) inserted at ${D.timecode(start, fps)}${split ? ", the shot there split" : ""}` : "",
+            later.length ? `${later.length} sound(s) onto ${(D.trackOf(cut, soundId) || {}).name || soundId} at ${D.timecode(start, fps)}` : "",
             skipped ? `${skipped} item(s) left out` : "",
             unread ? `the length of ${unread} clip(s) could not be read - set it in the Inspector` : "",
         ].filter(Boolean).join(" · ");
@@ -2663,11 +2676,13 @@ export const EditTimelineMixin = {
             id: sound ? "sound" : "clip",
             title: onto ? `Add to ${onto.name}` : "Add clips",
             kind: "video",
-            exts: sound ? [...SOUND_EXTS, ...FILM_EXTS] : [...FILM_EXTS, ...STILL_EXTS],
+            // Add clips takes sound too: it goes onto a sound track at the playhead.
+            exts: sound ? [...SOUND_EXTS, ...FILM_EXTS] : onto ? [...FILM_EXTS, ...STILL_EXTS] : [...FILM_EXTS, ...STILL_EXTS, ...SOUND_EXTS],
             multiple: true,
             go: "Add",
             note: (onto ? "Placed at the playhead, one after the other."
-                        : "Inserted at the playhead: a shot there is split, what follows moves on.")
+                        : "Films and pictures are inserted at the playhead: a shot there is split, what follows moves on. "
+                          + "Sounds go onto a sound track there.")
                 + " Ctrl-click picks more than one.",
             onPick: async (files) => {
                 const list = files.map((f) => ({ path: f.path, name: f.name, kind: f.kind }));
@@ -2991,10 +3006,16 @@ export const EditTimelineMixin = {
             return { ok: false, error: true, message: said || "Nothing was rendered." };
         }
         const left = got.texts_left_out;
-        this._editTlNote = "exported as " + got.name;
+        this._editTlNote = "exported as " + got.name + (got.sound === false ? " (no sound)" : "");
         this.editTlRefresh();
-        notice("success", "Film exported" + (left ? ` - without its ${left} text${left === 1 ? "" : "s"}` : ""),
+        notice("success", "Film exported" + (left ? ` - without its ${left} text${left === 1 ? "" : "s"}` : "")
+                          + (got.sound === false ? " - no sound in it" : ""),
                "output/" + (got.relative || got.name));
+        // Sound that would not decode is silent in the film: say whose, never quietly.
+        if (Array.isArray(got.unheard) && got.unheard.length) notice("warn", "Exported without some of its sound", got.unheard.join(" / "));
+        else if (got.sound === false && this._editTlHasAnySound()) {
+            notice("warn", "The film has no sound", "None of the cut's sound could be read when it was rendered.");
+        }
         // A title whose font is not on this machine was drawn with another: the render says which.
         if (Array.isArray(got.notes) && got.notes.length) notice("warn", "Titles drawn with another font", got.notes.join(" / "));
         // Up on screen, in a tab of its own, beside the cut it was made from.
@@ -3004,6 +3025,18 @@ export const EditTimelineMixin = {
                 got.name);
         }
         return { ok: true };
+    },
+
+    /** Whether the cut holds sound known to be there: a sound file, the bed, or a film the probe found sound in. */
+    _editTlHasAnySound() {
+        const cut = this._editTlCut;
+        if (!cut) return false;
+        const known = (file) => { const info = this._editTlInfo && this._editTlInfo.get(file); return !!info && info.audio === true; };
+        const films = (c) => c && c.file && !c.mute && !c.disabled && FILM_EXTS.includes(ext(c.file)) && known(c.file);
+        if ((cut.sound || []).some((s) => s && s.file)) return true;
+        if (cut.clips.some(films)) return true;
+        return (cut.tracks || []).some((k) => !k.off && (k.clips || []).some((c) => c && c.file && !c.disabled
+            && (k.kind === "audio" ? !c.mute && (SOUND_EXTS.includes(ext(c.file)) || known(c.file)) : films(c))));
     },
 
     _editTlRevert() {
