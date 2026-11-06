@@ -223,6 +223,16 @@ class HistoryGroupsTests(unittest.TestCase):
         self.assertEqual(s["rows"], ["# Characters (3)", 0, 2, 3, "# Places (1)", 1])
         self.assertEqual(self.errors, [])
 
+    def test_a_real_mouse_drag_onto_a_heading_moves_it(self):
+        # A real drag, not synthetic events: the browser only fires drop when the
+        # heading's dropEffect is one the thumbnail's effectAllowed permits.
+        pg = self.page()
+        pg.drag_and_drop('.history-thumb[data-idx="2"]', '.history-group[data-group="Characters"] .history-group-name')
+        pg.wait_for_function("window.__panel.history.all[2][0].group === 'Characters'", timeout=3000)
+        s = self.strip(pg)
+        self.assertEqual(s["rows"], ["# Characters (3)", 0, 2, 3, "# Places (1)", 1])
+        self.assertEqual(self.errors, [])
+
     def test_a_group_is_renamed_from_its_heading(self):
         pg = self.page()
         head = "() => __panel.historyStrip.querySelector('.history-group[data-group=\"Characters\"]')"

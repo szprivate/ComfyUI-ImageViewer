@@ -305,7 +305,10 @@ export const DnDMixin = {
             if (items.length === 0) return;
             try {
                 e.dataTransfer.setData("application/x-bepic-history", JSON.stringify({ items }));
-                e.dataTransfer.effectAllowed = "copy";
+                // Copy onto the graph, timeline and panels; move onto a History
+                // group's heading. With "copy" alone the browser refused the
+                // heading's "move" and never fired its drop.
+                e.dataTransfer.effectAllowed = "copyMove";
                 if (img && e.dataTransfer.setDragImage) e.dataTransfer.setDragImage(img, 20, 20);
             } catch (_) {}
         });
