@@ -249,6 +249,8 @@ const ACTION_DEFS = [
     // The id stays "ToggleShape" so a key the user rebound it to still works.
     { key: "ToggleShape",  label: "Toggle Overlays",         combo: { key: "s" },
       run: (p) => p.toggleOverlays() },
+    { key: "ToggleFullscreen", label: "Full Screen / Back", combo: { key: "F", shift: true },
+      run: (p) => p.toggleFullscreen() },
     { key: "TogglePageDock", label: "Dock Viewer as a Panel / Float", combo: { key: "d", shift: true },
       run: (p) => p.togglePageDock() },
     { key: "ToggleHelp",   label: "Toggle Hotkey Help",      combo: { key: "?", shift: true },

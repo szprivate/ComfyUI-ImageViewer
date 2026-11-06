@@ -1343,7 +1343,7 @@ textarea.param-input {
    moved out from under the code that made it. */
 .transport > .bar-group { order: 5; }
 .transport > .bar-spacer { order: 6; flex: 1 1 8px; min-width: 8px; }
-.transport > .layout-picker-wrap, .transport > #layout-btn, .transport > #overlays-btn, .transport > #pagedock-btn,
+.transport > .layout-picker-wrap, .transport > #layout-btn, .transport > #overlays-btn, .transport > #fullscreen-btn, .transport > #pagedock-btn,
 .transport > #browser-toggle-btn, .transport > #refresh, .transport > #clear-cache-btn { order: 7; }
 .bar-group.active { color: #f60; box-shadow: inset 0 -2px 0 #f60; }
 .bar-group.has-cut:not(.active) { color: #ffcf6f; }
@@ -1906,3 +1906,17 @@ textarea.param-input {
 .viewport.overlays-off .bepic-tool-status,
 .viewport.overlays-off .contact-grid-hint,
 .viewport.overlays-off .model-toolbar { display: none !important; }
+
+/* Full screen (bEpicViewer_fullscreen.js): the viewport alone fills the screen.
+   The exit button sits over the canvas and shows while the pointer moves. */
+#fullscreen-btn.active { color: #f60; }
+#fullscreen-btn.active > svg { stroke: #f60; }
+#fullscreen-btn:hover { border-color: #f60; }
+.viewport:fullscreen { width: 100%; height: 100%; }
+.fs-exit-btn { display: none; position: absolute; top: 12px; right: 12px; z-index: 50; width: 34px; height: 34px; padding: 6px;
+    border: 1px solid #444; border-radius: 4px; background: rgba(0,0,0,.6); color: #ddd; cursor: pointer;
+    opacity: 0; transition: opacity .25s; }
+.fs-exit-btn svg { width: 100%; height: 100%; }
+.fs-exit-btn:hover { border-color: #f60; color: #f60; }
+.viewport:fullscreen > .fs-exit-btn { display: block; }
+.viewport:fullscreen.fs-pointer > .fs-exit-btn, .viewport:fullscreen > .fs-exit-btn:hover { opacity: 1; }
