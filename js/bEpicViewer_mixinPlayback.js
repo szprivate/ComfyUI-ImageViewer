@@ -142,7 +142,7 @@ export const PlaybackMixin = {
 
     updateShapeInfo() {
         if (!this.shapeOverlay) return;
-        if (!this.showShape) { this.shapeOverlay.style.display = "none"; return; }
+        if (!this.showOverlays) { this.shapeOverlay.style.display = "none"; return; }
 
         if (this._modelMode) {
             const info = this._modelInfoText();

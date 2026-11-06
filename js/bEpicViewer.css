@@ -30,8 +30,8 @@
 .tab-close > svg { width: 12px; height: 12px; stroke: currentColor; fill: none; display: block; pointer-events: none; }
 .tab-close:hover { color: #f44; }
 
-#shape-btn.active, #params-btn.active, #range-btn.active, #history-toggle-btn.active { color: #f60; }
-#shape-btn.active > svg, #params-btn.active > svg, #range-btn.active > svg, #history-toggle-btn.active > svg { stroke: #f60; }
+#overlays-btn.active, #params-btn.active, #range-btn.active, #history-toggle-btn.active { color: #f60; }
+#overlays-btn.active > svg, #params-btn.active > svg, #range-btn.active > svg, #history-toggle-btn.active > svg { stroke: #f60; }
 #refresh { color: #eee; }
 #refresh > svg { stroke: #eee; }
 #refresh.running { animation: spin 1s linear infinite; }
@@ -441,7 +441,7 @@ option { text-align: left; }
     border-radius: 6px;
     border-color: transparent;
 }
-#range-btn:hover, #shape-btn:hover, #params-btn:hover { border-color: #f60; }
+#range-btn:hover, #overlays-btn:hover, #params-btn:hover { border-color: #f60; }
 #params-btn {
     font-size: 16px;
     padding: 6px 8px;
@@ -1343,7 +1343,7 @@ textarea.param-input {
    moved out from under the code that made it. */
 .transport > .bar-group { order: 5; }
 .transport > .bar-spacer { order: 6; flex: 1 1 8px; min-width: 8px; }
-.transport > .layout-picker-wrap, .transport > #layout-btn, .transport > #shape-btn, .transport > #pagedock-btn,
+.transport > .layout-picker-wrap, .transport > #layout-btn, .transport > #overlays-btn, .transport > #pagedock-btn,
 .transport > #browser-toggle-btn, .transport > #refresh, .transport > #clear-cache-btn { order: 7; }
 .bar-group.active { color: #f60; box-shadow: inset 0 -2px 0 #f60; }
 .bar-group.has-cut:not(.active) { color: #ffcf6f; }
@@ -1893,3 +1893,16 @@ textarea.param-input {
 .dock-rail > .paint-part-panel { width: auto; min-width: 0; display: flex; flex-direction: column; }
 .paint-part-panel > .paint-slot { flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden; background: #1b1b1f; display: flex; flex-direction: column; }
 .tab.paint-dirty::after { content: " \2022"; color: #f60; }
+
+/* Toggle Overlays off (toggleOverlays in bEpicViewer_mixinUI.js): the chrome
+   over the picture goes, whatever display its own code last gave it. */
+.viewport.overlays-off #shape-overlay,
+.viewport.overlays-off #exposure-control,
+.viewport.overlays-off #img-frame,
+.viewport.overlays-off #compare-slider,
+.viewport.overlays-off #rotate-btn,
+.viewport.overlays-off .path-bar,
+.viewport.overlays-off .bepic-toolbar,
+.viewport.overlays-off .bepic-tool-status,
+.viewport.overlays-off .contact-grid-hint,
+.viewport.overlays-off .model-toolbar { display: none !important; }

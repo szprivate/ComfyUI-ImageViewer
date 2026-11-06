@@ -246,8 +246,9 @@ const ACTION_DEFS = [
       enabled: _picture, run: (p) => p.setChannelView(p.channelView === "green" ? "all" : "green") },
     { key: "ChannelBlue",  label: "Isolate Blue Channel",    combo: { key: "b" },
       enabled: _picture, run: (p) => p.setChannelView(p.channelView === "blue"  ? "all" : "blue") },
-    { key: "ToggleShape",  label: "Toggle Tensor Shape Overlay", combo: { key: "s" },
-      run: (p) => p.toggleShapeOverlay() },
+    // The id stays "ToggleShape" so a key the user rebound it to still works.
+    { key: "ToggleShape",  label: "Toggle Overlays",         combo: { key: "s" },
+      run: (p) => p.toggleOverlays() },
     { key: "TogglePageDock", label: "Dock Viewer as a Panel / Float", combo: { key: "d", shift: true },
       run: (p) => p.togglePageDock() },
     { key: "ToggleHelp",   label: "Toggle Hotkey Help",      combo: { key: "?", shift: true },
