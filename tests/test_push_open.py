@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 _spec = importlib.util.spec_from_file_location(
-    "push_open", os.path.join(os.path.dirname(__file__), "..", "push_open.py"))
+    "push_open", os.path.join(os.path.dirname(__file__), "..", "src", "push_open.py"))
 po = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(po)
 

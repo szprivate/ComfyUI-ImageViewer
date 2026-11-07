@@ -14,7 +14,7 @@ import tempfile
 import unittest
 
 _spec = importlib.util.spec_from_file_location(
-    "annotation_io", pathlib.Path(__file__).resolve().parents[1] / "annotation_io.py")
+    "annotation_io", pathlib.Path(__file__).resolve().parents[1] / "src" / "annotation_io.py")
 aio = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(aio)
 

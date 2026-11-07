@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 _spec = importlib.util.spec_from_file_location(
-    "mg_scene_io", os.path.join(os.path.dirname(__file__), "..", "mg_scene_io.py"))
+    "mg_scene_io", os.path.join(os.path.dirname(__file__), "..", "src", "mg_scene_io.py"))
 io = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(io)
 

@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 _spec = importlib.util.spec_from_file_location(
-    "video_poster", os.path.join(os.path.dirname(__file__), "..", "video_poster.py"))
+    "video_poster", os.path.join(os.path.dirname(__file__), "..", "src", "video_poster.py"))
 vp = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(vp)
 

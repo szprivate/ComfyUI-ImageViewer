@@ -8,7 +8,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 _spec = importlib.util.spec_from_file_location(
-    "atlas_render", os.path.join(os.path.dirname(__file__), "..", "atlas_render.py"))
+    "atlas_render", os.path.join(os.path.dirname(__file__), "..", "src", "atlas_render.py"))
 ar = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ar)
 
