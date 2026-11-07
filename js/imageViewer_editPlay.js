@@ -383,7 +383,7 @@ export const EditPlayMixin = {
             return;
         }
         const obj = { path: clip.file, external: true, name: clip.name };
-        const url = this.buildImgUrl(obj, { noColor: true });
+        const url = this._editPlayUrl ? this._editPlayUrl(clip.file) : this.buildImgUrl(obj, { noColor: true });   // its proxy, when it has one
         const same = !!ep.at && ep.key === at.key && ep.url === url;
         ep.at = at;
         ep.in = Number(clip.in) || 0;
@@ -518,7 +518,7 @@ export const EditPlayMixin = {
         const slots = this._epSlots;
         let el = null;
         if (u && u.clip) {
-            const url = this.buildImgUrl({ path: u.clip.file, external: true }, { noColor: true });
+            const url = this._editPlayUrl ? this._editPlayUrl(u.clip.file) : this.buildImgUrl({ path: u.clip.file, external: true }, { noColor: true });
             if (D.isStill(u.clip.file)) {
                 el = main === this.imgBase ? this._epImgB : this.imgBase;
                 if (el._epShown !== url) { el._epShown = url; el.src = url; }
@@ -758,7 +758,7 @@ export const EditPlayMixin = {
         const next = D.pictureAt(cut, at.end + 1e-3, this._editPlayLive());
         const clip = next && next.clip;
         if (!clip || next.key === at.key) return;
-        const url = this.buildImgUrl({ path: clip.file, external: true }, { noColor: true });
+        const url = this._editPlayUrl ? this._editPlayUrl(clip.file) : this.buildImgUrl({ path: clip.file, external: true }, { noColor: true });
         if (D.isStill(clip.file)) {
             const img = new ((v.ownerDocument.defaultView || window).Image)();
             img.src = url;
@@ -814,9 +814,14 @@ export const EditPlayMixin = {
         items.forEach((item, k) => {
             let a = ep.bed[k];
             if (!a) { a = ep.bed[k] = doc.createElement("audio"); a.preload = "auto"; }
-            if (a._epFile !== item.file) {
+            // A compressed sound from its WAV copy once there is one (imageViewer_editProxy.js).
+            const src = this._editPlayUrl ? this._editPlayUrl(item.file) : this.buildImgUrl({ path: item.file, external: true }, { noColor: true });
+            if (a._epFile !== item.file || a._epSrc !== src) {
+                const at = a._epFile === item.file ? a.currentTime : null;
                 a._epFile = item.file;
-                a.src = this.buildImgUrl({ path: item.file, external: true }, { noColor: true });
+                a._epSrc = src;
+                a.src = src;
+                if (at != null) { try { a.currentTime = at; } catch (_) {} }
             }
             try {
                 const inside = t >= item.at - 1e-3 && t < item.at + item.length - 1e-3;

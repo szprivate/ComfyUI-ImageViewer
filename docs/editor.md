@@ -54,6 +54,8 @@ The middle of a cut rolls it in both modes. <kbd>N</kbd> turns snapping on and o
 
 <kbd>J</kbd> <kbd>K</kbd> <kbd>L</kbd> play backwards, stop and play. Press <kbd>?</kbd> on a cut's tab for every key.
 
+**Proxy playback** (the lightning button on the Edit bar, on by default): films bigger than 720p, or with key frames far apart, play and scrub from a lighter 540p copy, and compressed sounds (MP3 and the like) from a WAV copy, which stays in step with the picture. The server makes each once, in the background; until it is ready the file itself plays. Exports always use the files themselves.
+
 ## Sound
 
 - **Sound on / off**: the speaker on the Edit bar (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd>). **Scrub sound**: the waveform button (<kbd>Shift</kbd>+<kbd>M</kbd>) plays the sound under the playhead as you drag. Neither changes the export.

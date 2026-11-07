@@ -777,6 +777,36 @@ try:
                 return got
             return web.json_response(got[1], headers={"ETag": got[2], "Cache-Control": "no-cache"})
 
+        async def _imageviewer_timeline_pcm(request):
+            """A file's sound for the Edit panel's scrubbing (timeline_media.pcm): mono 16-bit
+            little-endian samples at ``X-Pcm-Rate``; 204 when it has no sound."""
+            from . import timeline_media
+            got = await _media_reading(request, "pcm", timeline_media.pcm)
+            if isinstance(got, web.StreamResponse):
+                return got
+            if not got[1]:
+                return web.Response(status=204, headers={"ETag": got[2], "Cache-Control": "no-cache"})
+            file, rate = got[1]
+            return web.FileResponse(file, headers={
+                "ETag": got[2], "Cache-Control": "no-cache", "Content-Type": "application/octet-stream",
+                "X-Pcm-Rate": str(int(rate))})
+
+        async def _imageviewer_edit_proxy(request):
+            """Whether the Edit panel's player has a lighter copy of a film to play
+            (media_resolve.edit_proxy_state): ``{"state": "ready" | "making" | "none" |
+            "failed"}``; one needed and not there is begun. Once ready, it is served
+            by /imageviewer/view_file with ``edit=1``."""
+            path, refused = await _off_loop(_media_path, dict(request.query))
+            if refused is not None:
+                return refused
+            if media_resolve is None:
+                return web.json_response({"state": "none"}, headers={"Cache-Control": "no-store"})
+            try:
+                state = await _media_work(media_resolve.edit_proxy_state, path, request.query.get("start") != "0")
+            except Exception as exc:  # noqa: BLE001
+                return web.json_response({"state": "failed", "error": str(exc)}, headers={"Cache-Control": "no-store"})
+            return web.json_response({"state": state}, headers={"Cache-Control": "no-store"})
+
         async def _imageviewer_timeline_strip(request):
             """A filmstrip: ``n`` frames of a film side by side on one JPEG (timeline_media.strip).
 
@@ -2222,6 +2252,12 @@ try:
             # proxy would throw away exactly the range it is there for.
             if params.get("raw"):
                 return web.FileResponse(path, headers={"Cache-Control": "no-cache"})
+            # `edit` is the Edit panel's player: a film's edit proxy when it has one made
+            # (media_resolve.edit_proxy_ready; it asks /imageviewer/edit_proxy first), else the film.
+            if params.get("edit") and media_resolve is not None:
+                proxy = await _off_loop(media_resolve.edit_proxy_ready, path)
+                if proxy:
+                    return web.FileResponse(proxy, headers={"Cache-Control": "no-cache"})
             # `prim` narrows a USD stage (or an Alembic cache) to one subtree —
             # how a layout arrives as separate items the viewer can place; a
             # cache also takes `frame`, since it holds geometry per frame.
@@ -3104,6 +3140,10 @@ try:
         _safe_add("GET", "/api/imageviewer/font_file", _imageviewer_font_file)
         _safe_add("GET", "/imageviewer/timeline_peaks", _imageviewer_timeline_peaks)
         _safe_add("GET", "/api/imageviewer/timeline_peaks", _imageviewer_timeline_peaks)
+        _safe_add("GET", "/imageviewer/timeline_pcm", _imageviewer_timeline_pcm)
+        _safe_add("GET", "/api/imageviewer/timeline_pcm", _imageviewer_timeline_pcm)
+        _safe_add("GET", "/imageviewer/edit_proxy", _imageviewer_edit_proxy)
+        _safe_add("GET", "/api/imageviewer/edit_proxy", _imageviewer_edit_proxy)
         _safe_add("GET", "/imageviewer/timeline_strip", _imageviewer_timeline_strip)
         _safe_add("GET", "/api/imageviewer/timeline_strip", _imageviewer_timeline_strip)
         _safe_add("GET", "/imageviewer/timeline_beats", _imageviewer_timeline_beats)

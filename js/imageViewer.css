@@ -1835,6 +1835,9 @@ textarea.param-input {
 /* The sound switches: the speaker (audio playback) and the wave (audio scrubbing). */
 .edit-audio-btn:not(.on), .edit-scrubaudio-btn:not(.on) { opacity: .55; }
 .edit-audio-btn:not(.on) { color: #ff8a7a; opacity: 1; }
+.edit-proxy-btn:not(.on) { opacity: .55; }
+.edit-proxy-btn.busy .edit-icon { animation: edit-proxy-busy 1.2s ease-in-out infinite; }
+@keyframes edit-proxy-busy { 50% { opacity: .35; } }
 /* The Trim mode's two-up: the outgoing clip's last frame, the incoming clip's first. */
 .edit-twoup { position: absolute; inset: 0; z-index: 6; background: #000; display: none; gap: 4px; padding: 6px; box-sizing: border-box; pointer-events: none; }
 .edit-twoup-side { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: stretch; gap: 4px; }

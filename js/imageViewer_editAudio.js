@@ -7,9 +7,11 @@
 // the player is at volume 0 (imageViewer_editPlay.js asks _editAudioGain).
 // The export is not touched by either.
 //
-// How a grain is made: each file's sound is decoded ONCE (fetched, the
-// browser's decodeAudioData - which decodes off the main thread - then mixed
-// down to mono at SR on an OfflineAudioContext), kept in a cache capped at
+// How a grain is made: each file's sound is read ONCE - from the server, mono
+// at SR already (/imageviewer/timeline_pcm, 16-bit: a minute is 2.6 MB, where
+// a film's own bytes were fetched whole before, for its sound) or, from an
+// older server, fetched whole and decoded here (the browser's decodeAudioData,
+// off the main thread, mixed down to mono at SR on an OfflineAudioContext) - kept in a cache capped at
 // CACHE_BYTES (the least recently used go first). A grain is GRAIN seconds of
 // wall time: its samples are the cut's mix at the playhead - every source heard
 // there (scrubSources: the picture on top and, in a dissolve, the one going
@@ -308,11 +310,35 @@ export const EditAudioMixin = {
         return await res.arrayBuffer();
     },
 
-    // Decoded by the browser (off the main thread), mixed down to mono at SR
-    // on an OfflineAudioContext (rendered off the main thread too).
+    /**
+     * The file's sound as the server reads it: { data, rate } (mono, at SR), null
+     * when it has none, undefined when the server cannot say (an older one).
+     */
+    async _eaServerPcm(file) {
+        let res;
+        try {
+            // Imported here, not at the top: the pure part of this file is tested under node, with no ComfyUI.
+            const { api } = await import("../../scripts/api.js");
+            res = await api.fetchApi("/imageviewer/timeline_pcm?path=" + encodeURIComponent(file));
+        } catch (_) { return undefined; }
+        if (!res) return undefined;
+        if (res.status === 204) return null;
+        const rate = Number(res.headers && res.headers.get && res.headers.get("X-Pcm-Rate")) || 0;
+        if (!res.ok || !rate || !res.arrayBuffer) return undefined;
+        const bytes = await res.arrayBuffer();
+        const pcm = new Int16Array(bytes, 0, bytes.byteLength >> 1);
+        const data = new Float32Array(pcm.length);
+        for (let i = 0; i < pcm.length; i++) data[i] = pcm[i] / 32767;
+        return { data, rate };
+    },
+
+    // From the server; else decoded by the browser (off the main thread), mixed
+    // down to mono at SR on an OfflineAudioContext (rendered off the main thread too).
     async _eaDecode(file) {
         const ctx = this._eaCtx;
         if (!ctx) return null;
+        const served = await this._eaServerPcm(file);
+        if (served !== undefined) return served;
         const bytes = await this._eaFetch(file);
         if (!bytes) return null;
         const buf = await new Promise((resolve, reject) => {
