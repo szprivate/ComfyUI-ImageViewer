@@ -1,6 +1,6 @@
 // imageViewer_viewTabs.js
 // Tabs whose whole content is a page of the viewer's own, not media: the Agent code reader ("code:<path>", or
-// "code:" for the agent's live feed) and a LoRA Dataset ("dataset:<name>"). They open in the MAIN CANVAS, the way
+// "code:" for the agent's live feed), a LoRA Dataset ("dataset:<name>") and a file's Dependencies ("deps:<path>"). They open in the MAIN CANVAS, the way
 // a Motion scene does (imageViewer_mgPanel.js): one layer over the viewport holds every such tab's element, the
 // tab bar shows them, several can be open at once, and nothing of them lives in a dock panel.
 //
@@ -16,6 +16,7 @@
 export const VT_KINDS = {
     code:    { prefix: "code:",    handler: "_codeTabKind",  icon: "\u{1F4C4} " },
     dataset: { prefix: "dataset:", handler: "_loraTabKind",  icon: "\u{1F5C2} " },
+    deps:    { prefix: "deps:",    handler: "_depsTabKind",  icon: "\u{1F517} " },
 };
 
 export const ViewTabsMixin = {

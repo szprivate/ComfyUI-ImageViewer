@@ -1472,6 +1472,10 @@ export const HistoryMixin = {
         if (batch.length <= 1 && this.mgAddEditItem && imgObj) {
             this.mgAddEditItem(menu, imgObj.path ? imgObj.path : { filename: imgObj.filename, subfolder: imgObj.subfolder, type: imgObj.type }, removeItem);
         }
+        // What it was made from, and what was made from it (DepsPanelMixin).
+        if (batch.length <= 1 && this.depsAddMenuItem && imgObj) {
+            this.depsAddMenuItem(menu, imgObj.path ? imgObj.path : { filename: imgObj.filename, subfolder: imgObj.subfolder, type: imgObj.type }, removeItem);
+        }
         // A picture can be painted on in layers (PaintPanelMixin).
         if (batch.length <= 1 && this.paintAddEditItem && imgObj) {
             this.paintAddEditItem(menu, imgObj.path ? imgObj.path : { filename: imgObj.filename, subfolder: imgObj.subfolder, type: imgObj.type }, removeItem);

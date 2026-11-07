@@ -36,6 +36,7 @@ import { ParamAnimMixin } from "./imageViewer_paramAnim.js";
 import { ParamCurvesMixin } from "./imageViewer_paramCurves.js";
 import { ViewTabsMixin } from "./imageViewer_viewTabs.js";
 import { CodePanelMixin } from "./imageViewer_codePanel.js";
+import { DepsPanelMixin } from "./imageViewer_depsPanel.js";
 import { MgPanelMixin } from "./imageViewer_mgPanel.js";
 import { PaintPanelMixin } from "./imageViewer_paintPanel.js";
 import { LoraPanelMixin } from "./imageViewer_loraPanel.js";
@@ -1522,6 +1523,7 @@ Object.assign(
     ParamCurvesMixin,
     ViewTabsMixin,
     CodePanelMixin,
+    DepsPanelMixin,
     MgPanelMixin,
     PaintPanelMixin,
     LoraPanelMixin,
