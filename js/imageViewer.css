@@ -1947,3 +1947,14 @@ textarea.param-input {
 .dp-label { flex: 0 0 auto; padding: 3px 6px 0; color: #e6e6e6; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dp-meta { flex: 0 0 auto; padding: 0 6px 4px; color: #888; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dp-node.stale .dp-meta { color: #e8912d; }
+.dp-edge-prompt { stroke: #6b7f9a; stroke-dasharray: 4 3; }
+.dp-node.dp-prompt { background: #15181e; border-color: #3a4558; cursor: default; }
+.dp-node.dp-prompt-negative { border-color: #5a3a3a; }
+.dp-prompt-head { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; padding: 3px 4px 2px 6px; }
+.dp-prompt-role { flex: 1 1 auto; color: #8fa6c8; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; }
+.dp-prompt-negative .dp-prompt-role { color: #c88f8f; }
+.dp-prompt-copy { flex: 0 0 auto; background: none; border: 1px solid #3a3a44; border-radius: 3px; color: #aaa; font-size: 10px; padding: 0 5px; cursor: pointer; }
+.dp-prompt-copy:hover { color: #fff; border-color: #777; }
+.dp-prompt-text { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 6px 5px; color: #dde3ec; font-size: 11px; line-height: 1.35;
+    white-space: pre-wrap; word-break: break-word; user-select: text; cursor: text; }
+.dp-bar .dp-prompts-btn.active { border-color: #6b7f9a; color: #cfe0ff; }

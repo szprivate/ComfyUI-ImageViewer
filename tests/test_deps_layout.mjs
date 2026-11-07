@@ -55,3 +55,26 @@ test("an edge to a missing node and a cycle do not break it", () => {
     const L = layout(g);
     assert.equal(L.nodes.length, 2);
 });
+
+test("a file's prompts are text boxes right above it, wired into it", () => {
+    const g = { nodes: [n("plate", { kind: "source" }), n("depth", { kind: "depth", root: true }),
+                        n("render", { kind: "render", prompts: [{ role: "positive", text: "a kitchen at dawn" },
+                                                                 { role: "negative", text: "blurry" }] }),
+                        n("t2i", { kind: "render", prompts: [{ role: "positive", text: "a castle" }] })],
+                edges: [e("plate", "depth", "depth"), e("depth", "render", "render")] };
+    const L = layout(g);
+    const by = Object.fromEntries(L.nodes.map((x) => [x.id, x]));
+    const boxes = L.nodes.filter((x) => x.prompt);
+    assert.equal(boxes.length, 3);
+    const pos = boxes.find((x) => x.text === "a kitchen at dawn");
+    assert.equal(pos.role, "positive");
+    assert.equal(pos.row, by.render.row - 1, "one row above the render, not up with the plate");
+    assert.ok(L.edges.some((x) => x.from === pos.id && x.to === "render" && x.kind === "prompt"));
+    // A render made from nothing but its prompt: the prompt goes on top and the rest moves down.
+    const castle = boxes.find((x) => x.text === "a castle");
+    assert.equal(castle.row, 0);
+    assert.equal(by.t2i.row, 1);
+    assert.ok(by.plate.row >= 0);
+    // Switched off, there are none.
+    assert.equal(layout(g, { prompts: false }).nodes.filter((x) => x.prompt).length, 0);
+});

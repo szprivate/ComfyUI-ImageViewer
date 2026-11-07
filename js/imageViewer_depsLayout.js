@@ -7,7 +7,8 @@
 //   2. order: within a row, nodes follow the average position of their inputs (two sweeps down, one up);
 //   3. fold: more than FOLD_AT siblings of one kind made from the same file, with nothing made from them,
 //      become one "5 depth passes" node until it is unfolded - a plate with a dozen passes stays one row wide;
-//   4. place: rows are centred under each other, at fixed node size.
+//   4. prompts: the prompts a file was made with become text boxes, one row above that file, wired into it;
+//   5. place: rows are centred under each other, at fixed node size.
 
 export const NODE_W = 168;
 export const NODE_H = 128;
@@ -65,6 +66,26 @@ export function foldGraph(graph, open = new Set()) {
     return { nodes, edges: out };
 }
 
+/** Id of the text box of prompt `i` of file `id`. */
+export const promptId = (id, i) => `prompt:${i}:${id}`;
+
+/**
+ * The prompts of each file as nodes of their own: `{id, prompt: true, role, text}`, with an edge (kind
+ * "prompt") into the file. Changes `nodes` and `edges` in place; fold nodes carry no prompts.
+ */
+export function addPrompts(nodes, edges) {
+    for (const n of [...nodes.values()]) {
+        if (n.fold || !Array.isArray(n.prompts)) continue;
+        n.prompts.forEach((p, i) => {
+            if (!p || typeof p.text !== "string" || !p.text.trim()) return;
+            const id = promptId(n.id, i);
+            nodes.set(id, { id, prompt: true, role: p.role || "text", text: p.text, of: n.id, node: p.node || "",
+                            class: p.class || "", exists: true });
+            edges.push({ from: id, to: n.id, kind: "prompt", label: "" });
+        });
+    }
+}
+
 /** Row of each node: one below the lowest of its inputs. Cycles (should not happen) are cut. */
 export function ranks(nodes, edges) {
     const ins = new Map([...nodes.keys()].map((k) => [k, []]));
@@ -81,7 +102,16 @@ export function ranks(nodes, edges) {
         rank.set(id, r);
         return r;
     };
-    for (const id of nodes.keys()) rankOf(id);
+    for (const id of nodes.keys()) if (!nodes.get(id).prompt) rankOf(id);
+    // A prompt sits right above the file it went into, not at the top with the sources.
+    let low = 0;
+    for (const [id, n] of nodes) {
+        if (!n.prompt) continue;
+        const r = (rank.has(n.of) ? rank.get(n.of) : 0) - 1;
+        rank.set(id, r);
+        low = Math.min(low, r);
+    }
+    if (low < 0) for (const [id, r] of rank) rank.set(id, r - low);
     return rank;
 }
 
@@ -90,8 +120,9 @@ export function ranks(nodes, edges) {
  * width, height }. x/y are the node's top-left corner; an edge runs from the bottom middle of its input to
  * the top middle of its output.
  */
-export function layout(graph, { open = new Set() } = {}) {
+export function layout(graph, { open = new Set(), prompts = true } = {}) {
     const { nodes, edges } = foldGraph(graph, open);
+    if (prompts) addPrompts(nodes, edges);
     const rank = ranks(nodes, edges);
     const rows = [];
     for (const [id, r] of rank) (rows[r] = rows[r] || []).push(id);

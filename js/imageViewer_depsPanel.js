@@ -5,7 +5,8 @@
 // Files are the nodes (with their thumbnail), "made from" are the edges, TOP TO BOTTOM: the plate on top, its
 // mask / depth / pose passes below it, the renders made from those below them (imageViewer_depsLayout.js).
 // A node whose source changed since it was made is outlined orange (hover says why); a file that is gone is
-// greyed out. More than a few sibling passes of one kind fold into one node; a click unfolds it.
+// greyed out. More than a few sibling passes of one kind fold into one node; a click unfolds it. The prompts
+// a file was made with are text boxes right above it, wired into it (the "Prompts" button hides them).
 //
 //   click a node        open it in the Viewer tab
 //   double-click        make it the root (walk from there)
@@ -90,7 +91,15 @@ export const DepsPanelMixin = {
             b.onclick = (e) => { e.stopPropagation(); fn(); };
             return b;
         };
-        bar.append(title,
+        const promptsBtn = btn("Prompts", "Show the prompts each file was made with, as text boxes above it", () => {
+            rec.prompts = rec.prompts === false;
+            promptsBtn.classList.toggle("active", rec.prompts !== false);
+            this._depsRender(rec);
+            this._depsFit(rec);
+        });
+        promptsBtn.classList.add("dp-prompts-btn");
+        promptsBtn.classList.toggle("active", rec.prompts !== false);
+        bar.append(title, promptsBtn,
             btn("Fit", "Fit the graph in the view (F)", () => this._depsFit(rec)),
             btn("Look in folder", "Also record older files in this file's folder, then reload", () => this._depsLoad(rec, { scan: true })),
             btn("Reload", "Read the record again", () => this._depsLoad(rec)));
@@ -151,9 +160,10 @@ export const DepsPanelMixin = {
         const doc = ui.stage.ownerDocument;
         for (const el of [...ui.stage.querySelectorAll(".dp-node")]) el.remove();
         ui.svg.innerHTML = "";
-        const L = layout(rec.graph || { nodes: [], edges: [] }, { open: rec.open });
+        const L = layout(rec.graph || { nodes: [], edges: [] }, { open: rec.open, prompts: rec.prompts !== false });
         rec.laid = L;
-        ui.title.textContent = `${baseOf(rec.path || (rec.query && rec.query.filename))} — ${L.nodes.length} file${L.nodes.length === 1 ? "" : "s"}`;
+        const files = L.nodes.filter((x) => !x.prompt).length;
+        ui.title.textContent = `${baseOf(rec.path || (rec.query && rec.query.filename))} — ${files} file${files === 1 ? "" : "s"}`;
         ui.stage.style.width = `${L.width}px`;
         ui.stage.style.height = `${L.height}px`;
         ui.svg.setAttribute("width", String(L.width));
@@ -161,7 +171,7 @@ export const DepsPanelMixin = {
         for (const e of L.edges) {
             const p = doc.createElementNS(SVG, "path");
             p.setAttribute("d", edgePath(e));
-            p.setAttribute("class", "dp-edge");
+            p.setAttribute("class", e.kind === "prompt" ? "dp-edge dp-edge-prompt" : "dp-edge");
             ui.svg.append(p);
             if (e.label) {
                 const t = doc.createElementNS(SVG, "text");
@@ -176,6 +186,7 @@ export const DepsPanelMixin = {
     },
 
     _depsNodeEl(rec, n, doc) {
+        if (n.prompt) return this._depsPromptEl(n, doc);
         const el = doc.createElement("div");
         el.className = "dp-node";
         if (n.root) el.classList.add("root");
@@ -222,6 +233,42 @@ export const DepsPanelMixin = {
             rec.open = new Set();
             this._depsLoad(rec);
         });
+        return el;
+    },
+
+    /** A prompt as a text box: its role on top (with Copy), the text below, selectable and scrollable. */
+    _depsPromptEl(n, doc) {
+        const el = doc.createElement("div");
+        el.className = `dp-node dp-prompt dp-prompt-${n.role === "negative" ? "negative" : "positive"}`;
+        el.style.left = `${n.x}px`;
+        el.style.top = `${n.y}px`;
+        el.style.width = `${n.w}px`;
+        el.style.height = `${n.h}px`;
+        const head = doc.createElement("div");
+        head.className = "dp-prompt-head";
+        const role = doc.createElement("span");
+        role.className = "dp-prompt-role";
+        role.textContent = n.role === "negative" ? "negative prompt" : n.role === "positive" ? "prompt" : "text";
+        const copy = doc.createElement("button");
+        copy.className = "dp-prompt-copy";
+        copy.textContent = "Copy";
+        copy.title = "Copy the prompt";
+        copy.onmousedown = (e) => e.stopPropagation();
+        copy.onclick = (e) => {
+            e.stopPropagation();
+            const done = () => { copy.textContent = "Copied"; setTimeout(() => { copy.textContent = "Copy"; }, 1200); };
+            try { navigator.clipboard.writeText(n.text).then(done, () => {}); } catch (_) { /* no clipboard */ }
+        };
+        head.append(role, copy);
+        const text = doc.createElement("div");
+        text.className = "dp-prompt-text";
+        text.textContent = n.text;
+        // Select and scroll the text without panning the graph.
+        text.addEventListener("mousedown", (e) => e.stopPropagation());
+        text.addEventListener("wheel", (e) => { if (text.scrollHeight > text.clientHeight) e.stopPropagation(); }, { passive: true });
+        el.append(head, text);
+        el.title = [n.class ? `${n.class} (node ${n.node})` : "", `into ${baseOf(n.of)}`].filter(Boolean).join(" · ");
+        el.addEventListener("click", (e) => e.stopPropagation());
         return el;
     },
 

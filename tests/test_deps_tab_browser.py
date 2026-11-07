@@ -31,7 +31,9 @@ STUB = """() => {
       {id: 'D:/in/plate.mp4', file: 'plate.mp4', kind: 'source', exists: true, stale: '', viewable: false},
       {id: 'D:/out/depth.mp4', file: 'depth.mp4', kind: 'depth', exists: true, stale: '', viewable: false, root: true},
       {id: 'D:/out/render.png', file: 'render.png', kind: 'render', exists: true,
-       stale: 'plate.mp4 changed since this was made', viewable: false},
+       stale: 'plate.mp4 changed since this was made', viewable: false,
+       prompts: [{role: 'positive', text: 'a kitchen at dawn, warm light through the window', node: '6', class: 'CLIPTextEncode'},
+                 {role: 'negative', text: 'blurry', node: '7', class: 'CLIPTextEncode'}]},
       ...passes],
     edges: [
       {from: 'D:/in/plate.mp4', to: 'D:/out/depth.mp4', kind: 'depth', label: 'DepthAnythingV2'},
@@ -46,7 +48,7 @@ STUB = """() => {
   };
 }"""
 
-NODES = """() => [...window.__panel.viewport.querySelectorAll('.view-tab-deps .dp-node')].map((el) => ({
+NODES = """() => [...window.__panel.viewport.querySelectorAll('.view-tab-deps .dp-node:not(.dp-prompt)')].map((el) => ({
   label: el.querySelector('.dp-label').textContent, top: parseFloat(el.style.top),
   stale: el.classList.contains('stale'), root: el.classList.contains('root'), fold: el.classList.contains('fold')}))"""
 
@@ -118,11 +120,30 @@ class DepsTabBrowserTests(unittest.TestCase):
         self.assertFalse(nodes["depth.mp4"]["stale"])
         self.assertIn("6 mask passes", nodes)
         self.assertTrue(nodes["6 mask passes"]["fold"])
-        self.assertEqual(len(pg.evaluate("() => [...window.__panel.viewport.querySelectorAll('.view-tab-deps .dp-edge')]")), 3)
+        self.assertEqual(len(pg.evaluate("() => [...window.__panel.viewport.querySelectorAll('.view-tab-deps .dp-edge:not(.dp-edge-prompt)')]")), 3)
         # A click unfolds the passes.
         pg.evaluate("""() => [...window.__panel.viewport.querySelectorAll('.view-tab-deps .dp-node.fold')][0].click()""")
         labels = [n["label"] for n in pg.evaluate(NODES)]
         self.assertEqual(sum(1 for x in labels if x.startswith("mask_")), 6)
+        self.assertEqual(self.errors, [])
+
+    def test_prompts_are_text_boxes_above_their_file(self):
+        pg = self.page()
+        boxes = pg.evaluate("""() => [...window.__panel.viewport.querySelectorAll('.view-tab-deps .dp-prompt')].map((el) => ({
+          role: el.querySelector('.dp-prompt-role').textContent, text: el.querySelector('.dp-prompt-text').textContent,
+          top: parseFloat(el.style.top), neg: el.classList.contains('dp-prompt-negative')}))""")
+        self.assertEqual(sorted(b["text"] for b in boxes), ["a kitchen at dawn, warm light through the window", "blurry"])
+        nodes = {n["label"]: n for n in pg.evaluate(NODES)}
+        for b in boxes:
+            self.assertLess(b["top"], nodes["render.png"]["top"])
+            self.assertGreater(b["top"], nodes["plate.mp4"]["top"])
+        self.assertTrue(any(b["neg"] and b["role"] == "negative prompt" for b in boxes))
+        self.assertEqual(len(pg.evaluate("() => [...window.__panel.viewport.querySelectorAll('.view-tab-deps .dp-edge-prompt')]")), 2)
+        # The Prompts button hides them, and brings them back.
+        pg.evaluate("() => window.__panel.viewport.querySelector('.view-tab-deps .dp-prompts-btn').click()")
+        self.assertEqual(pg.evaluate("() => window.__panel.viewport.querySelectorAll('.view-tab-deps .dp-prompt').length"), 0)
+        pg.evaluate("() => window.__panel.viewport.querySelector('.view-tab-deps .dp-prompts-btn').click()")
+        self.assertEqual(pg.evaluate("() => window.__panel.viewport.querySelectorAll('.view-tab-deps .dp-prompt').length"), 2)
         self.assertEqual(self.errors, [])
 
     def test_history_menu_offers_it(self):
