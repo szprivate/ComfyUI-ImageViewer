@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 _spec = importlib.util.spec_from_file_location(
-    "viewer_code", os.path.join(os.path.dirname(__file__), "..", "viewer_code.py"))
+    "viewer_code", os.path.join(os.path.dirname(__file__), "..", "src", "viewer_code.py"))
 vc = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(vc)
 

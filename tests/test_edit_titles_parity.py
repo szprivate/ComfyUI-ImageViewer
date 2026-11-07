@@ -90,7 +90,7 @@ class TitleParityTests(unittest.TestCase):
         for f in FONTS:
             shutil.copy(os.path.join(src, f), cls.fonts)
         pkg = types.ModuleType("imageviewer_parity")
-        pkg.__path__ = [ROOT]
+        pkg.__path__ = [os.path.join(ROOT, "src")]
         sys.modules["imageviewer_parity"] = pkg
         cls.tr = importlib.import_module("imageviewer_parity.title_render")
         cls.families = cls.tr.scan([cls.fonts])

@@ -2,7 +2,9 @@
 
 [Home](index.md)
 
-One History holds every render from every tab: 100 by default, up to 500 (the number at the foot of the panel). It survives a page reload. Clicking a thumbnail shows it in the tab it was made in.
+<img src="images/history.png" alt="The History panel: two groups, Lookdev and Places" width="240" align="right">
+
+A panel (**ComfyUI ▸ History** in the lower bar). One History holds every render from every tab: 100 by default, up to 500 (the number at the foot of the panel). It survives a page reload. Clicking a thumbnail shows it in the tab it was made in.
 
 ## Groups
 

@@ -23,7 +23,7 @@ def _pkg():
     name = "imageviewer_legacy_under_test"
     if name not in sys.modules:
         pkg = types.ModuleType(name)
-        pkg.__path__ = [ROOT]
+        pkg.__path__ = [os.path.join(ROOT, "src")]
         sys.modules[name] = pkg
     return name
 
@@ -179,12 +179,12 @@ class Page(unittest.TestCase):
 
 class Routes(unittest.TestCase):
     def test_every_route_also_answers_under_the_old_name(self):
-        with open(os.path.join(ROOT, "viewer_api.py"), encoding="utf-8") as fh:
+        with open(os.path.join(ROOT, "src", "viewer_api.py"), encoding="utf-8") as fh:
             src = fh.read()
         self.assertIn('(("/imageviewer/", "/bepic/"), ("/api/imageviewer/", "/api/bepic/"))', src)
 
     def test_the_old_node_ids_are_kept_as_hidden_aliases(self):
-        with open(os.path.join(ROOT, "nodes.py"), encoding="utf-8") as fh:
+        with open(os.path.join(ROOT, "src", "nodes.py"), encoding="utf-8") as fh:
             src = fh.read()
         for old in ("bEpicSendToViewer", "bEpicImageViewerRoto", "bEpicImageViewerSAM3Collector", "bEpicScene3D"):
             self.assertIn(f'"{old}":', src)

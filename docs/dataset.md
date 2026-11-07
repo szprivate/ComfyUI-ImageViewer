@@ -2,14 +2,14 @@
 
 [Home](index.md)
 
-Dataset reviews a LoRA training dataset an agent prepared, and then shows the training. It works on the files directly, so it needs no agentY to open.
+The Dataset panel reviews a LoRA training dataset an agent prepared, and then shows the training. It works on the files directly, so it needs no agentY to open.
 
 ## Opening
 
 - **ComfyUI ▸ Dataset** in the lower bar: the open dataset, else a list of them.
 - Double-click a dataset's `manifest.json` in the file browser, or let agentY show it.
 
-Each dataset has its own tab, with a **Dataset** page and a **Training** page.
+Each dataset opens on its own, with a **Dataset** page and a **Training** page.
 
 ## Reviewing
 

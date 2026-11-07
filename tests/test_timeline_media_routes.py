@@ -47,7 +47,7 @@ def _load(tmp):
     sys.modules.update(folder_paths=fp, server=srv)
     name = "imageviewer_media_routes_under_test"
     pkg = types.ModuleType(name)
-    pkg.__path__ = [ROOT]
+    pkg.__path__ = [os.path.join(ROOT, "src")]
     sys.modules[name] = pkg
     try:
         va = importlib.import_module(name + ".viewer_api")

@@ -2,7 +2,9 @@
 
 [Home](index.md)
 
-The **🖼 Viewer** tab is where pictures, videos and sounds are looked at. Everything you only look at goes here; documents (a cut, a Paint canvas, a 3D or Motion scene) get tabs of their own.
+The **🖼 Viewer** tab is where pictures, videos and sounds are looked at. Everything you only look at goes here; documents (a cut, a Paint canvas, a 3D or Motion scene) get spaces of their own.
+
+![The Viewer, with the History panel on the left](images/viewer.png)
 
 ## Getting things in
 
@@ -37,7 +39,9 @@ Exposure and channels only change what you see, never the file. On a 3D tab they
 
 Videos in a compare play in step. A second source of another size is stretched over the first, so the wipe always covers the frame.
 
-![A contact sheet of six renders](screenshots/viewer_contact_sheet_grid.jpg)
+![A wipe between two History items, the exposure bar above](images/compare-wipe.png)
+
+![Four renders Ctrl-selected in the History, on a contact sheet](images/contact-sheet.png)
 
 ## Playing
 
