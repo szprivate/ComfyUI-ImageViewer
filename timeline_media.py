@@ -3,7 +3,7 @@
 Four readings of a media file, each done in this process through PyAV (a
 ComfyUI dependency - no program is started, so the no-process rule holds) and
 each cached on disk beside the viewer's thumbnails (ComfyUI's temp folder,
-``bEpic_`` prefixed so Clear Cache collects them), keyed by the file's path,
+``ImageViewer_`` prefixed so Clear Cache collects them), keyed by the file's path,
 mtime and size - a changed file is a new key, never a stale answer:
 
 * :func:`probe` - how long a file is and what it holds (picture, sound). Only
@@ -78,7 +78,7 @@ def cache_file(path, kind, ext):
     tmp = folder_paths.get_temp_directory()
     os.makedirs(tmp, exist_ok=True)
     stem = "".join(c for c in os.path.splitext(os.path.basename(path))[0] if c.isalnum() or c in "-_")[:40] or "media"
-    return os.path.join(tmp, f"bEpic_{kind}_{stem}_{_key(path)}.{ext}")
+    return os.path.join(tmp, f"ImageViewer_{kind}_{stem}_{_key(path)}.{ext}")
 
 
 def etag(path, kind):

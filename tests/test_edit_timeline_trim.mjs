@@ -1,9 +1,9 @@
 // node --test tests/test_edit_timeline_trim.mjs
-// Trimming like an editor (bEpicViewer_editTimelineData.js): roll, slip, slide, the source limits of a trim,
+// Trimming like an editor (imageViewer_editTimelineData.js): roll, slip, slide, the source limits of a trim,
 // stills, retime (speed), loop extend, and the in / out of the range played.
 import test from "node:test";
 import assert from "node:assert/strict";
-import * as D from "../js/bEpicViewer_editTimelineData.js";
+import * as D from "../js/imageViewer_editTimelineData.js";
 
 const near = (a, b, eps = 1e-3) => assert.ok(Math.abs(a - b) <= eps, `${a} is not ${b}`);
 const shot = (file, length, extra = {}) => ({ file, name: file, in: 0, length, transition: 0, color: "", volume: 1, ...extra });

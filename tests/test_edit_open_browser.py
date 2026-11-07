@@ -34,8 +34,8 @@ class EditOpenBrowserTests(_Base):
         pg.on("pageerror", lambda e: self.errors.append(str(e)))
         pg.goto(f"http://127.0.0.1:{self.port}/edit.html")
         pg.wait_for_function("window.__ready===true", timeout=20000)
-        pg.evaluate("()=>{const all=document.querySelectorAll('bepic-viewer-panel'); if(all[1]) all[1].style.display='none'}")
-        pg.evaluate("() => { try { localStorage.removeItem('bepic.edit.recent'); } catch (_) {} }")
+        pg.evaluate("()=>{const all=document.querySelectorAll('comfyui-image-viewer-panel'); if(all[1]) all[1].style.display='none'}")
+        pg.evaluate("() => { try { localStorage.removeItem('imageviewer.edit.recent'); } catch (_) {} }")
         pg.evaluate(PREP)
         return pg
 
@@ -76,18 +76,18 @@ class EditOpenBrowserTests(_Base):
         pg.keyboard.press("Control+o")
         pg.wait_for_timeout(300)
         self.assertFalse(pg.evaluate(f"() => !!{PICK}"))
-        keys = pg.evaluate("async () => (await import('/extensions/viewer/bEpicViewer_editKeys.js')).EDIT_KEYS.map((k) => k[0])")
+        keys = pg.evaluate("async () => (await import('/extensions/viewer/imageViewer_editKeys.js')).EDIT_KEYS.map((k) => k[0])")
         self.assertIn("Ctrl+O", keys)
         self.assertEqual(self.errors, [])
 
     def test_open_recent_lists_a_saved_cut_and_opens_it_and_greys_missing(self):
         pg = self.page()
-        pg.evaluate("() => localStorage.removeItem('bepic.edit.recent')")
+        pg.evaluate("() => localStorage.removeItem('imageviewer.edit.recent')")
         pg.evaluate(PREP)
         # A save puts the cut on the list.
         pg.evaluate("async () => { __panel._editTlApply({ ...__panel._editTlCut, name: 'x' }); await __panel._editTlSave(); }")
         self.assertEqual(pg.evaluate("() => __panel.editTlRecent()"), ["D:/out/cut.otio"])
-        pg.evaluate("() => { window.__gone = ['D:/out/gone.otio']; localStorage.setItem('bepic.edit.recent', JSON.stringify(['D:/out/saved.otio', 'D:/out/gone.otio', 'D:/out/cut.otio'])); }")
+        pg.evaluate("() => { window.__gone = ['D:/out/gone.otio']; localStorage.setItem('imageviewer.edit.recent', JSON.stringify(['D:/out/saved.otio', 'D:/out/gone.otio', 'D:/out/cut.otio'])); }")
         pg.evaluate("() => __panel._editTlUi.body.querySelector('.edit-open-recent').click()")
         pg.wait_for_function("() => __panel.container.querySelector('.previz-menu .previz-menu-item')", timeout=5000)
         items = dict(pg.evaluate(MENU_ITEMS))
@@ -115,17 +115,17 @@ class EditOpenBrowserTests(_Base):
 
     def test_the_picker_starts_beside_the_last_opened_cut(self):
         pg = self.bare()
-        pg.evaluate("() => { localStorage.setItem('bepic.edit.recent', JSON.stringify(['D:/elsewhere/old.otio'])); window.__requests.length = 0; }")
+        pg.evaluate("() => { localStorage.setItem('imageviewer.edit.recent', JSON.stringify(['D:/elsewhere/old.otio'])); window.__requests.length = 0; }")
         pg.evaluate("() => __panel.editTlOpenDialog()")
         pg.wait_for_function("() => __panel.container.querySelector('.pick-row.file')", timeout=5000)
-        self.assertTrue(pg.evaluate("() => __requests.some((r) => r.startsWith('/bepic/browse?D:/elsewhere'))"),
+        self.assertTrue(pg.evaluate("() => __requests.some((r) => r.startsWith('/imageviewer/browse?D:/elsewhere'))"),
                         pg.evaluate("() => __requests"))
 
     def test_the_agent_opens_a_cut_and_a_dropped_otio_is_opened(self):
         pg = self.bare()
         # (The harness's extension makes a viewer panel of its own, the second; the message goes to that one.)
-        pg.evaluate("() => __api.dispatch('bepic.edit.open', { path: 'D:/out/saved.otio' })")
-        pg.wait_for_function("() => document.querySelectorAll('bepic-viewer-panel')[1].editTlFilePath() === 'D:/out/saved.otio'", timeout=5000)
+        pg.evaluate("() => __api.dispatch('imageviewer.edit.open', { path: 'D:/out/saved.otio' })")
+        pg.wait_for_function("() => document.querySelectorAll('comfyui-image-viewer-panel')[1].editTlFilePath() === 'D:/out/saved.otio'", timeout=5000)
         # A dropped .otio is uploaded (the stub keeps it as D:/in/edits/<name>) and opened as a cut.
         n = pg.evaluate("async () => { const f = new File(['{}'], 'dropped.otio'); return await __panel.editTlOpenDropped([f]); }")
         self.assertEqual(n, 1)

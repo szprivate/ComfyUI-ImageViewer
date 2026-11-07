@@ -54,7 +54,7 @@ def _free_port():
 class FullscreenBrowserTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.media = tempfile.mkdtemp(prefix="bepic_fs_")
+        cls.media = tempfile.mkdtemp(prefix="imageviewer_fs_")
         subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=400x300:rate=1:duration=1",
                         "-frames:v", "1", os.path.join(cls.media, "p1.png")], check=True)
         cls.port = _free_port()

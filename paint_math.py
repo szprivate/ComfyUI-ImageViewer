@@ -1,7 +1,7 @@
 """Paint's arithmetic: how layers are laid over each other, what an adjustment layer does to the
 picture under it, the filters, and the selection's shapes.
 
-ONE arithmetic, twice: ``js/bEpicViewer_paintData.js`` draws the page with the same formulas,
+ONE arithmetic, twice: ``js/imageViewer_paintData.js`` draws the page with the same formulas,
 in the same order, with the same rounding (``floor(x * 255 + 0.5)`` after every layer), so a
 picture the server writes (an export, the agent's ``edit_image``, an .ora's merged image) is the
 picture the user saw. A change here is a change there; ``tests/test_paint_parity.py`` runs both on

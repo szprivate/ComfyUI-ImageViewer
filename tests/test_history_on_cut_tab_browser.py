@@ -78,7 +78,7 @@ DRAG = """([idx, x, y]) => { const P = __panel;
   target.dispatchEvent(ev('dragover', x, y));
   target.dispatchEvent(ev('drop', x, y));
   tile.dispatchEvent(ev('dragend', x, y));
-  return JSON.parse(dt.getData('application/x-bepic-history') || 'null'); }"""
+  return JSON.parse(dt.getData('application/x-imageviewer-history') || 'null'); }"""
 
 V2 = "() => __panel._editTlCut.tracks.find((k) => k.id === 'V2').clips.map((c) => [c.file, Math.round(c.at * 1000) / 1000])"
 
@@ -131,10 +131,10 @@ class HistoryOnCutTabTests(unittest.TestCase):
         self.errors = []
         self.thumbs = []
         pg.on("pageerror", lambda e: self.errors.append(str(e)))
-        pg.on("request", lambda r: self.thumbs.append(r.url) if "/bepic/thumb" in r.url else None)
+        pg.on("request", lambda r: self.thumbs.append(r.url) if "/imageviewer/thumb" in r.url else None)
         pg.goto(f"http://127.0.0.1:{self.port}/edit.html")
         pg.wait_for_function("window.__ready===true", timeout=20000)
-        pg.evaluate("()=>{const all=document.querySelectorAll('bepic-viewer-panel'); if(all[1]) all[1].style.display='none'}")
+        pg.evaluate("()=>{const all=document.querySelectorAll('comfyui-image-viewer-panel'); if(all[1]) all[1].style.display='none'}")
         self.cut_key = pg.evaluate(SETUP)
         pg.wait_for_function("() => __panel._editTlLay && __panel._editTlLay.total > 0", timeout=10000)
         return pg
@@ -244,7 +244,7 @@ class HistoryOnCutTabTests(unittest.TestCase):
         self.assertEqual(self.strip(pg)["tiles"], [0, 2, 3, 4])
         # agentY's #tags.
         pg.evaluate("""async () => { const P = __panel;
-            const T = await import('/extensions/viewer/bEpicViewer_historyAgentTags.js');
+            const T = await import('/extensions/viewer/imageViewer_historyAgentTags.js');
             P._agentTagIndex = T.buildAgentTagIndex([{ tag: 'hero', path: 'D:/out/r2.mp4' }], null);
             P.setHistoryTagFilter(T.agentFilterValue('hero')); }""")
         self.assertEqual(self.strip(pg)["tiles"], [2])

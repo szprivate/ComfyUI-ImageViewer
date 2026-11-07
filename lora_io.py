@@ -1,4 +1,4 @@
-"""LoRA datasets and training runs for the Dataset panel (bEpicViewer_loraPanel.js).
+"""LoRA datasets and training runs for the Dataset panel (imageViewer_loraPanel.js).
 
 The formats are the contract in agentY-core (``agenty_core/tools/lora_training/formats.py``): a dataset
 folder ``<ComfyUI output>/agent/lora_datasets/<name>`` (manifest.json, review.json, items/) and a run

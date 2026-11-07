@@ -1,11 +1,11 @@
 // node --test tests/test_viewer_state.mjs
 // What the viewer tells agentY it is showing (viewerState) and the marks on it
-// (annotations): bEpicViewer_viewerState.js shapes the snapshot the panel gathers.
+// (annotations): imageViewer_viewerState.js shapes the snapshot the panel gathers.
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
     describeViewerState, annotationReport, describeMark, rawMark, TABS_CAP, MARKS_CAP,
-} from "../js/bEpicViewer_viewerState.js";
+} from "../js/imageViewer_viewerState.js";
 
 const fr = (name, extra = {}) => ({ path: `D:/out/${name}`, filename: name, type: "output", ...extra });
 

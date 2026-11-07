@@ -4,7 +4,7 @@ const types = { ".js": "text/javascript", ".css": "text/css", ".html": "text/htm
                 ".jpg": "image/jpeg", ".mp4": "video/mp4", ".mp3": "audio/mpeg",
                 ".wav": "audio/wav" };
 
-// HARNESS_MEDIA=1: answer /bepic/thumb and /bepic/raw_view with real pictures, made up per path, with the
+// HARNESS_MEDIA=1: answer /imageviewer/thumb and /imageviewer/raw_view with real pictures, made up per path, with the
 // real server's cache headers - a tile is kept for good, a picture is revalidated. THUMB_DELAY_MS holds every
 // tile back that long, the way the thumbnails of renders on a network share arrive
 // (tests/test_history_switch_perf_browser.py).
@@ -34,9 +34,9 @@ const seedOf = (s) => [...String(s)].reduce((a, c) => (a * 31 + c.charCodeAt(0))
 
 function handle(req, res) {
   const u = new URL(req.url, "http://x"); let p = u.pathname;
-  if (MEDIA && (p === "/bepic/thumb" || p === "/bepic/raw_view")) {
+  if (MEDIA && (p === "/imageviewer/thumb" || p === "/imageviewer/raw_view")) {
     const seed = seedOf(u.searchParams.get("path") || u.searchParams.get("filename"));
-    if (p === "/bepic/thumb") {
+    if (p === "/imageviewer/thumb") {
       const send = () => { res.writeHead(200, { "content-type": "image/png", "cache-control": "public, max-age=31536000" }); res.end(png(64, 40, seed)); };
       if (THUMB_DELAY_MS) setTimeout(send, THUMB_DELAY_MS); else send();
     } else {
@@ -52,10 +52,10 @@ function handle(req, res) {
   // ComfyUI's executor - so a seek of a <video> or <audio> takes as long as it does there.
   const MDIR = process.env.HARNESS_MEDIA_DIR;
   const MDELAY = Number(process.env.HARNESS_MEDIA_DELAY_MS || 0);
-  if (MDIR && MDELAY && !req._held && (p.startsWith("/media/") || p === "/bepic/view_file" || p === "/bepic/raw_view")) {
+  if (MDIR && MDELAY && !req._held && (p.startsWith("/media/") || p === "/imageviewer/view_file" || p === "/imageviewer/raw_view")) {
     req._held = true; setTimeout(() => handle(req, res), MDELAY); return;
   }
-  if (MDIR && (p.startsWith("/media/") || p === "/bepic/view_file" || p === "/bepic/raw_view")) {
+  if (MDIR && (p.startsWith("/media/") || p === "/imageviewer/view_file" || p === "/imageviewer/raw_view")) {
     const name = p.startsWith("/media/") ? decodeURIComponent(p.slice(7)) : path.basename(u.searchParams.get("path") || "");
     const f = path.resolve(MDIR, name);
     if (!f.startsWith(path.resolve(MDIR)) || !fs.existsSync(f)) { res.writeHead(404); res.end("nf"); return; }

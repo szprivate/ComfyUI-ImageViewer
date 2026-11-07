@@ -2,8 +2,8 @@
 
 On a network share an `isfile` or a `realpath` can take tens of milliseconds, a new thumbnail far more.
 On the event loop that wait held up every other request: measured on the W: share, a switch's
-/bepic/raw_view took 40 ms alone, 0.6-1.4 s behind twelve thumbnails being made and 4-4.7 s behind one
-/bepic/probe_paths of 166 paths. Here the slow disk is simulated (every check of a "slow" path sleeps)
+/imageviewer/raw_view took 40 ms alone, 0.6-1.4 s behind twelve thumbnails being made and 4-4.7 s behind one
+/imageviewer/probe_paths of 166 paths. Here the slow disk is simulated (every check of a "slow" path sleeps)
 and the event loop must keep turning while those requests are answered.
 
 The REAL viewer_api routes in a private aiohttp app, with ComfyUI's folder_paths and server stubbed.
@@ -47,7 +47,7 @@ def _load(tmp):
     srv.PromptServer = type("PromptServer", (), {"instance": types.SimpleNamespace(app=app)})
     saved = {k: sys.modules.get(k) for k in ("folder_paths", "server")}
     sys.modules.update(folder_paths=fp, server=srv)
-    name = "bepic_routes_under_test"
+    name = "imageviewer_routes_under_test"
     pkg = types.ModuleType(name)
     pkg.__path__ = [ROOT]
     sys.modules[name] = pkg
@@ -125,7 +125,7 @@ class RoutesOffLoopTests(unittest.TestCase):
 
     def test_a_probe_of_the_whole_history_runs_off_the_loop(self):
         async def probe(client):
-            r = await client.post("/bepic/probe_paths", json={"paths": [{"path": p} for p in self._slow_paths()]
+            r = await client.post("/imageviewer/probe_paths", json={"paths": [{"path": p} for p in self._slow_paths()]
                                                               + [{"path": os.path.join(self.dirs["output"], "gone.png")}]})
             return r.status, await r.json()
 
@@ -138,7 +138,7 @@ class RoutesOffLoopTests(unittest.TestCase):
 
     def test_a_strip_of_new_thumbnails_runs_off_the_loop(self):
         async def tile(client, p):
-            r = await client.get("/bepic/thumb", params={"path": p})
+            r = await client.get("/imageviewer/thumb", params={"path": p})
             data = await r.read()
             return r.status, r.headers.get("Cache-Control"), len(data)
 
@@ -152,12 +152,12 @@ class RoutesOffLoopTests(unittest.TestCase):
         async def run():
             async with self._client() as client:
                 out = []
-                for route, path in (("/bepic/raw_view", os.path.join(self.dirs["output"], "nope.png")),
-                                    ("/bepic/raw_view", os.path.join(self.tmp, "elsewhere.png")),
-                                    ("/bepic/raw_view", os.path.join(self.dirs["output"], "notes.txt")),
-                                    ("/bepic/thumb", os.path.join(self.dirs["output"], "nope.png")),
-                                    ("/bepic/view_file", os.path.join(self.dirs["output"], "nope.png")),
-                                    ("/bepic/view_file", os.path.join(self.dirs["output"], "fast.png"))):
+                for route, path in (("/imageviewer/raw_view", os.path.join(self.dirs["output"], "nope.png")),
+                                    ("/imageviewer/raw_view", os.path.join(self.tmp, "elsewhere.png")),
+                                    ("/imageviewer/raw_view", os.path.join(self.dirs["output"], "notes.txt")),
+                                    ("/imageviewer/thumb", os.path.join(self.dirs["output"], "nope.png")),
+                                    ("/imageviewer/view_file", os.path.join(self.dirs["output"], "nope.png")),
+                                    ("/imageviewer/view_file", os.path.join(self.dirs["output"], "fast.png"))):
                     r = await client.get(route, params={"path": path})
                     await r.read()
                     out.append(r.status)

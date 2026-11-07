@@ -8,7 +8,7 @@
 
 The parameter panel displays the parameters of your selected node (s).
 
-If no node is selected on the canvas, the panel falls back to showing the source node of the active viewer tab (i.e. the bEpicSendToViewer node that generated the current image).
+If no node is selected on the canvas, the panel falls back to showing the source node of the active viewer tab (i.e. the ImageViewerSend node that generated the current image).
 
 ## Multi-Node Selection
 

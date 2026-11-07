@@ -15,7 +15,7 @@ Text files: double-click a text/code file in the file browser (kind "Text & code
 (`code:<path>`; several can be open at once, one click only previews). The bar's entry opens the feed tab (`code:`):
 the list of snippets with the one shown, which follows new code while the tab is in front.
 
-Routes: `POST /bepic/code` (a snippet in; pushed live as `bepic.code.update`), `GET /bepic/code` (recent
-snippets, so a freshly opened viewer has the history), `GET /bepic/text?path=` (a file from an allowed
+Routes: `POST /imageviewer/code` (a snippet in; pushed live as `imageviewer.code.update`), `GET /imageviewer/code` (recent
+snippets, so a freshly opened viewer has the history), `GET /imageviewer/text?path=` (a file from an allowed
 folder). Snippets are kept in memory per ComfyUI session. To add "edit and send back" later, call
 `viewer.codePanelAddAction({label, run(snippet)})`.

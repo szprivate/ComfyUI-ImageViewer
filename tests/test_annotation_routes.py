@@ -1,8 +1,8 @@
 """The marks beside a picture or a film, read in words and drawn as a mask, through the REAL routes.
 
-/bepic/video_annotations keeps a picture's marks beside it as it does a film's (``still.png`` ->
+/imageviewer/video_annotations keeps a picture's marks beside it as it does a film's (``still.png`` ->
 ``still.annotations.json``); ``?describe=1`` adds them in words (annotation_io.report, the shape the
-page answers with); POST /bepic/annotation_mask draws the boxes and strokes as a PNG under
+page answers with); POST /imageviewer/annotation_mask draws the boxes and strokes as a PNG under
 ./output/annotation_masks. A file outside what the viewer may show is refused, as for every route.
 
 viewer_api in a private aiohttp app, ComfyUI's folder_paths and server stubbed (as in test_routes_off_loop).
@@ -49,7 +49,7 @@ def _load(tmp):
     srv.PromptServer = type("PromptServer", (), {"instance": types.SimpleNamespace(app=app)})
     saved = {k: sys.modules.get(k) for k in ("folder_paths", "server")}
     sys.modules.update(folder_paths=fp, server=srv)
-    name = "bepic_annot_routes_under_test"
+    name = "imageviewer_annot_routes_under_test"
     pkg = types.ModuleType(name)
     pkg.__path__ = [ROOT]
     sys.modules[name] = pkg
@@ -97,10 +97,10 @@ class AnnotationRoutes(unittest.TestCase):
 
     def test_a_pictures_marks_are_kept_beside_it_and_read_back_in_words(self):
         async def fn(c):
-            r = await c.post("/bepic/video_annotations", json={"path": self.still, "items": [BOX, NOTE],
+            r = await c.post("/imageviewer/video_annotations", json={"path": self.still, "items": [BOX, NOTE],
                                                                "width": 200, "height": 100, "media": "still.png"})
             self.assertEqual(r.status, 200, await r.text())
-            r = await c.get("/bepic/video_annotations", params={"path": self.still, "describe": "1"})
+            r = await c.get("/imageviewer/video_annotations", params={"path": self.still, "describe": "1"})
             return r.status, await r.json()
         status, doc = self._run(fn)
         self.assertEqual(status, 200)
@@ -113,8 +113,8 @@ class AnnotationRoutes(unittest.TestCase):
 
     def test_a_mask_of_the_stored_marks_lands_in_the_output_folder(self):
         async def fn(c):
-            await c.post("/bepic/video_annotations", json={"path": self.still, "items": [BOX, NOTE]})
-            r = await c.post("/bepic/annotation_mask", json={"path": self.still})
+            await c.post("/imageviewer/video_annotations", json={"path": self.still, "items": [BOX, NOTE]})
+            r = await c.post("/imageviewer/annotation_mask", json={"path": self.still})
             return r.status, await r.json()
         status, ans = self._run(fn)
         self.assertEqual(status, 200, ans)
@@ -125,15 +125,15 @@ class AnnotationRoutes(unittest.TestCase):
 
     def test_marks_sent_with_their_size_need_no_file(self):
         async def fn(c):
-            r = await c.post("/bepic/annotation_mask", json={"items": [BOX], "width": 64, "height": 32})
+            r = await c.post("/imageviewer/annotation_mask", json={"items": [BOX], "width": 64, "height": 32})
             return r.status, await r.json()
         status, ans = self._run(fn)
         self.assertEqual((status, ans["width"], ans["marks"]), (200, 64, 1))
 
     def test_a_file_the_viewer_may_not_show_is_refused(self):
         async def fn(c):
-            a = await c.get("/bepic/video_annotations", params={"path": self.outside, "describe": "1"})
-            b = await c.post("/bepic/annotation_mask", json={"path": self.outside})
+            a = await c.get("/imageviewer/video_annotations", params={"path": self.outside, "describe": "1"})
+            b = await c.post("/imageviewer/annotation_mask", json={"path": self.outside})
             return a.status, b.status
         self.assertEqual(self._run(fn), (403, 403))
 

@@ -1,7 +1,7 @@
 """Reading and writing motion-graphics scene files (``*.mgscene.json``) for the Motion panel.
 
 The format and the full validation live in the scene module the editor shares with agentY's
-renderer (js/bEpicViewer_mgScene.js, agenty_core/motion_graphics/schema.py). The viewer's side
+renderer (js/imageViewer_mgScene.js, agenty_core/motion_graphics/schema.py). The viewer's side
 only guards the file: right name, a JSON object that is a scene, written whole or not at all.
 No aiohttp or ComfyUI in here, so it can be tested on its own.
 """

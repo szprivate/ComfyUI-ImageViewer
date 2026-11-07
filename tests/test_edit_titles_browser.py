@@ -79,7 +79,7 @@ class EditTitlesBrowserTests(unittest.TestCase):
         pg.on("pageerror", lambda e: self.errors.append(str(e)))
         pg.goto(f"http://127.0.0.1:{self.port}/edit.html")
         pg.wait_for_function("window.__ready===true", timeout=20000)
-        pg.evaluate("()=>{const all=document.querySelectorAll('bepic-viewer-panel'); if(all[1]) all[1].style.display='none'}")
+        pg.evaluate("()=>{const all=document.querySelectorAll('comfyui-image-viewer-panel'); if(all[1]) all[1].style.display='none'}")
         pg.evaluate(SETUP, 0)
         pg.wait_for_function("() => __panel._emPending === 0 && __panel._emDrawn > 0", timeout=15000)
         sel = pg.evaluate(TITLE)

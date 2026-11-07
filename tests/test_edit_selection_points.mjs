@@ -3,7 +3,7 @@
 // moves by frames, edit points and going from one to the next, deleting several, and snaps that land ON a frame.
 import test from "node:test";
 import assert from "node:assert/strict";
-import * as D from "../js/bEpicViewer_editTimelineData.js";
+import * as D from "../js/imageViewer_editTimelineData.js";
 
 const shot = (name, length, extra = {}) => ({ file: name + ".mp4", name, in: 0, length, transition: 0, color: "", volume: 1, ...extra });
 const placed = (name, at, length, extra = {}) => ({ file: name + ".mp4", name, in: 0, length, at, color: "", volume: 1, ...extra });

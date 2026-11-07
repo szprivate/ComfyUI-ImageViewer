@@ -11,12 +11,12 @@ const SNIPS = [
 let sent = [];
 window.__fetchApi = async (p) => {
   const j = (o, ok=true) => ({ ok, status: ok?200:404, json: async () => o });
-  if (p.startsWith("/bepic/code")) return j({ snippets: window.__history ? SNIPS.slice(1) : [] });
-  if (p.startsWith("/bepic/text")) return j({ path:"D:/x/notes.json", name:"notes.json", language:"json", code:'{\n  "hello": "world",\n  "n": [1, 2, 3]\n}\n', truncated:false });
+  if (p.startsWith("/imageviewer/code")) return j({ snippets: window.__history ? SNIPS.slice(1) : [] });
+  if (p.startsWith("/imageviewer/text")) return j({ path:"D:/x/notes.json", name:"notes.json", language:"json", code:'{\n  "hello": "world",\n  "n": [1, 2, 3]\n}\n', truncated:false });
   return j({}, false);
 };
 window.__SNIPS = SNIPS;
-let v; try { v = await import("/extensions/viewer/bEpicViewer.js"); } catch (e) { document.title = "IMPORT " + e.message; throw e; }
+let v; try { v = await import("/extensions/viewer/imageViewer.js"); } catch (e) { document.title = "IMPORT " + e.message; throw e; }
 window.__v = v;
 const panel = v.mountStandaloneViewer(document.body);
 window.__panel = panel;
@@ -35,7 +35,7 @@ try {
   window.__setupErr = setupErr;
   const api = (await import("/scripts/api.js")).api;
   // the extension's listener is registered in setup(); emulate it the same way it does
-  api.dispatch("bepic.code.update", SNIPS[0]);
+  api.dispatch("imageviewer.code.update", SNIPS[0]);
   await sleep(100);
   if (!panel._code) panel.codePanelReceive(SNIPS[0]);
   const dot = panel.shadowRoot.getElementById("bar-group-comfy")?.classList.contains("has-code");

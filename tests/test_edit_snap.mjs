@@ -1,8 +1,8 @@
 // node --test tests/test_edit_snap.mjs
-// Snapping as Resolve's (bEpicViewer_editTimelineData.js): what a dragged moment can snap to, and where it lands.
+// Snapping as Resolve's (imageViewer_editTimelineData.js): what a dragged moment can snap to, and where it lands.
 import test from "node:test";
 import assert from "node:assert/strict";
-import * as D from "../js/bEpicViewer_editTimelineData.js";
+import * as D from "../js/imageViewer_editTimelineData.js";
 
 const shot = (file, length, extra = {}) => ({ file, name: file, in: 0, length, transition: 0, color: "", volume: 1, ...extra });
 const CUT = { ...D.emptyCut("t"), clips: [shot("a.mp4", 2), shot("b.mp4", 3, { gap: 1 })],

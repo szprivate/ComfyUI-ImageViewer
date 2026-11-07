@@ -2,8 +2,8 @@
 // Run: node --test tests/test_edit_audio_fx.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import * as A from "../js/bEpicViewer_audioFxData.js";
-import * as D from "../js/bEpicViewer_editTimelineData.js";
+import * as A from "../js/imageViewer_audioFxData.js";
+import * as D from "../js/imageViewer_editTimelineData.js";
 
 const near = (a, b, e = 1e-6) => assert.ok(Math.abs(a - b) < e, `${a} != ${b}`);
 

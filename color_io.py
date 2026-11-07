@@ -60,7 +60,7 @@ def _open_config():
         try:
             return ocio.Config.CreateFromEnv(), "$OCIO"
         except Exception as e:
-            print(f"[bEpicViewer] the OCIO config in $OCIO could not be read ({e}); "
+            print(f"[ImageViewer] the OCIO config in $OCIO could not be read ({e}); "
                   "using PyOpenColorIO's built-in one")
     return ocio.Config.CreateFromBuiltinConfig("ocio://default"), "built-in"
 
@@ -117,10 +117,10 @@ def _load():
                              "families": families, "target": target,
                              "view": _srgb_view(cfg), "linear": linear}
                 else:
-                    print("[bEpicViewer] the OCIO config has no sRGB colourspace; "
+                    print("[ImageViewer] the OCIO config has no sRGB colourspace; "
                           "the viewer offers sRGB and Linear only")
             except Exception as e:
-                print(f"[bEpicViewer] OpenColorIO is not usable ({e}); "
+                print(f"[ImageViewer] OpenColorIO is not usable ({e}); "
                       "the viewer offers sRGB and Linear only")
         _state = state
         return _state
@@ -183,7 +183,7 @@ def _apply(cpu, rgb):
         return
     with _lock:
         if _pool is None:
-            _pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="bepic-ocio")
+            _pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="imageviewer-ocio")
     edges = np.linspace(0, rows, parts + 1).astype(int)
     list(_pool.map(lambda ab: cpu.applyRGB(rgb[ab[0]:ab[1]]), zip(edges[:-1], edges[1:])))
 

@@ -29,7 +29,7 @@ const drag = async (a, b) => {
 const items = () => P(() => (window.__panel._annotItems(false) || []).map((i) => ({ ...i })));
 const frame = (f) => P(async (f) => { window.__panel.setFrame(f); await new Promise((r) => setTimeout(r, 250)); }, f);
 const type = async (text) => { await page.keyboard.type(text, { delay: 5 }); };
-const TEXTBOX = "bepic-viewer-panel >> .bepic-annot-text-input";
+const TEXTBOX = "comfyui-image-viewer-panel >> .imageviewer-annot-text-input";
 
 // -- a clip in the viewer, the annotate tool on ------------------------------
 const openVideo = (p) => window.__panel.updateData({ unique_id: "9", tab_name: "agent",

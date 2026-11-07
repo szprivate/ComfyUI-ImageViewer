@@ -3,15 +3,15 @@
 <script>window.addEventListener("error",(e)=>{document.title="ERR "+e.message});</script><script type="module">
 // The REAL viewer (stubbed ComfyUI scripts) with the Motion tab: PORT=8791 node tests/harness/server.mjs <viewer checkout>,
 // then open http://127.0.0.1:8791/motion.html . The scenes come from agentY-core's examples; saves are kept in window.__saves,
-// every /bepic/mgscene request in window.__asked. tests/test_viewer_browser.py drives this page with real pointer input.
+// every /imageviewer/mgscene request in window.__asked. tests/test_viewer_browser.py drives this page with real pointer input.
 window.__saves = [];
 window.__asked = [];
 const SCENES = { title_card: 1, lower_third: 1, logo_reveal: 1 };
 const stemOf = (p) => decodeURIComponent(p).split(/[\/]/).pop().replace(/\.(mgscene\.json|png|mp4|mov|webm)$/i, "");
 window.__fetchApi = async (p, opts) => {
   const j = (o, ok = true) => ({ ok, status: ok ? 200 : 404, json: async () => o });
-  if (p.startsWith("/bepic/mgscene") && opts && opts.method === "POST") { window.__saves.push(JSON.parse(opts.body)); return j({ ok: true }); }
-  if (p.startsWith("/bepic/mgscene")) {
+  if (p.startsWith("/imageviewer/mgscene") && opts && opts.method === "POST") { window.__saves.push(JSON.parse(opts.body)); return j({ ok: true }); }
+  if (p.startsWith("/imageviewer/mgscene")) {
     window.__asked.push(p);
     const q = new URLSearchParams(p.split("?")[1]);
     const ref = q.get("path") || q.get("filename") || "";
@@ -23,7 +23,7 @@ window.__fetchApi = async (p, opts) => {
   }
   return j({}, false);
 };
-let v; try { v = await import("/extensions/viewer/bEpicViewer.js"); } catch (e) { document.title = "IMPORT " + e.message; throw e; }
+let v; try { v = await import("/extensions/viewer/imageViewer.js"); } catch (e) { document.title = "IMPORT " + e.message; throw e; }
 const panel = v.mountStandaloneViewer(document.body);
 window.__panel = panel;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

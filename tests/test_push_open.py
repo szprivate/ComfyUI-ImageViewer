@@ -1,4 +1,4 @@
-"""push_open: what a /bepic/push names. Run: python -m unittest tests.test_push_open"""
+"""push_open: what a /imageviewer/push names. Run: python -m unittest tests.test_push_open"""
 import importlib.util
 import os
 import tempfile

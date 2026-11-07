@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import * as M from "../js/bEpicViewer_mgScene.js";
+import * as M from "../js/imageViewer_mgScene.js";
 
 const here = (p) => new URL(p, import.meta.url);
 const close = (a, b, eps = 1e-6) => {
@@ -31,8 +31,8 @@ test("identical to agentY-core's canonical copy (when the checkout is next door)
     const canon = new URL("../../agentY-core/agenty_core/motion_graphics/renderer/src/mgscene.js", import.meta.url);
     if (!fs.existsSync(canon)) return t.skip("agentY-core is not checked out beside the viewer");
     const norm = (p) => fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n");
-    assert.equal(norm(here("../js/bEpicViewer_mgScene.js")), norm(canon),
-        "copy agentY-core/agenty_core/motion_graphics/renderer/src/mgscene.js over js/bEpicViewer_mgScene.js");
+    assert.equal(norm(here("../js/imageViewer_mgScene.js")), norm(canon),
+        "copy agentY-core/agenty_core/motion_graphics/renderer/src/mgscene.js over js/imageViewer_mgScene.js");
 });
 
 test("scene values cannot break out of the markup they are put into", () => {

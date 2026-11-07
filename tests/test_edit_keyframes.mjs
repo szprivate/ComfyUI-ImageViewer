@@ -1,9 +1,9 @@
 // node --test tests/test_edit_keyframes.mjs
-// Keyframes on a clip's Inspector numbers (bEpicViewer_editTimelineData.js): values, ways of going on,
+// Keyframes on a clip's Inspector numbers (imageViewer_editTimelineData.js): values, ways of going on,
 // auto-key, the diamond, a split dividing them, slip / take / retime leaving them in clip time, undo.
 import test from "node:test";
 import assert from "node:assert/strict";
-import * as D from "../js/bEpicViewer_editTimelineData.js";
+import * as D from "../js/imageViewer_editTimelineData.js";
 
 const shot = (file, length, extra = {}) => ({ file, name: file, in: 0, length, transition: 0, color: "", volume: 1, ...extra });
 const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-6, `${msg || ""} ${a} != ${b}`);

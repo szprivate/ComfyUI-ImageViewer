@@ -1,10 +1,10 @@
 // node --test tests/test_edit_insert_zoom_scrub.mjs
 // The insert edit at the playhead, the zoom about the playhead, the scrub grains and the trim two-up
-// (bEpicViewer_editTimelineData.js, bEpicViewer_editAudio.js).
+// (imageViewer_editTimelineData.js, imageViewer_editAudio.js).
 import test from "node:test";
 import assert from "node:assert/strict";
-import * as D from "../js/bEpicViewer_editTimelineData.js";
-import { SCRUB, scrubRate, planGrain, scrubSources, fillGrain, srcAt } from "../js/bEpicViewer_editAudio.js";
+import * as D from "../js/imageViewer_editTimelineData.js";
+import { SCRUB, scrubRate, planGrain, scrubSources, fillGrain, srcAt } from "../js/imageViewer_editAudio.js";
 
 const shot = (file, length, extra = {}) => ({ file, name: file, in: 0, length, transition: 0, color: "", volume: 1, ...extra });
 const base = () => ({ ...D.emptyCut("t"), clips: [shot("a.mp4", 4), shot("b.mp4", 4, { in: 1 })],

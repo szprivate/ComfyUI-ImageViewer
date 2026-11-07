@@ -1,6 +1,6 @@
 """Titles: clips of the video tracks whose picture is words.
 
-- the .otio: a title is a GeneratorReference clip with its look in metadata.bepic.title, read back the same; the
+- the .otio: a title is a GeneratorReference clip with its look in metadata.imageviewer.title, read back the same; the
   texts of an older cut (markers) come in as titles, keep what agentY wrote into them, and old cuts read unchanged;
 - the render (PyAV: ComfyUI's interpreter) draws them over what is under them, keyed size included, never as a
   cover, never over sound; a missing font falls back and the render says so;
@@ -34,7 +34,7 @@ FPS = 24
 
 
 def _modules():
-    name = "bepic_titles_under_test"
+    name = "imageviewer_titles_under_test"
     if name not in sys.modules:
         pkg = types.ModuleType(name)
         pkg.__path__ = [ROOT]
@@ -47,7 +47,7 @@ def _modules():
 def marker(tio, text, start, length, **look):
     return {"OTIO_SCHEMA": "Marker.2", "name": text, "color": "PURPLE", "marked_range": tio._range(start, length, FPS),
             "metadata": {"agentY": {"kind": "text", "text": text, "preset": "title_rise", "params": {"k": 1}},
-                         **({"bepic": look} if look else {})}}
+                         **({"imageviewer": look} if look else {})}}
 
 
 class TitleFile(unittest.TestCase):
@@ -67,7 +67,7 @@ class TitleFile(unittest.TestCase):
     def test_an_old_cuts_texts_come_in_as_titles_on_tracks_of_their_own(self):
         doc = self.doc([marker(self.tio, "First", 0, 3, size=10, x=0.3, color="#ff0000"),
                         marker(self.tio, "Second", 1, 1), marker(self.tio, "Third", 3, 1)])
-        doc["tracks"]["metadata"] = {"bepic": {"texts_off": True}}
+        doc["tracks"]["metadata"] = {"imageviewer": {"texts_off": True}}
         e = self.tio.editable(doc)
         self.assertEqual(e["texts"], [])
         self.assertFalse(e["off"]["T"])
@@ -91,8 +91,8 @@ class TitleFile(unittest.TestCase):
         self.assertEqual(new["tracks"]["markers"], [], "the marker became the title")
         item = [c for c in new["tracks"]["children"][1]["children"] if c["OTIO_SCHEMA"] == "Clip.1"][0]
         self.assertEqual(item["media_reference"]["OTIO_SCHEMA"], "GeneratorReference.1")
-        self.assertEqual(item["media_reference"]["generator_kind"], "bepic.title")
-        self.assertEqual(item["metadata"]["bepic"]["title"]["align"], "right")
+        self.assertEqual(item["media_reference"]["generator_kind"], "imageviewer.title")
+        self.assertEqual(item["metadata"]["imageviewer"]["title"]["align"], "right")
         self.assertEqual(item["metadata"]["agentY"]["preset"], "title_rise", "what agentY wrote into the marker stays")
         self.assertEqual(item["metadata"]["agentY"]["text"], "Hi\nthere")
         back = self.tio.editable(new)
@@ -144,7 +144,7 @@ class TitleFile(unittest.TestCase):
 class TitleRender(unittest.TestCase):
     def setUp(self):
         self.tio, self.tr = _modules()
-        self.render = importlib.import_module("bepic_titles_under_test.timeline_render")
+        self.render = importlib.import_module("imageviewer_titles_under_test.timeline_render")
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.grey = os.path.join(self.tmp, "grey.mp4").replace("\\", "/")
@@ -230,7 +230,7 @@ class FontRoutes(unittest.TestCase):
         return asyncio.run(go())
 
     def test_the_families_are_listed_without_paths_and_a_face_is_served_by_id_only(self):
-        status, _, body = self.get("/bepic/fonts")
+        status, _, body = self.get("/imageviewer/fonts")
         self.assertEqual(status, 200)
         got = json.loads(body)
         self.assertIn("fonts", got)
@@ -240,14 +240,14 @@ class FontRoutes(unittest.TestCase):
         self.assertNotIn("\"path\"", body.decode("utf-8"))
         fam = next((f for f in got["fonts"] if f["family"] == "Arial"), got["fonts"][0])
         face = next(iter(fam["faces"].values()))
-        self.assertTrue(face["url"].startswith("/bepic/font_file?id="))
+        self.assertTrue(face["url"].startswith("/imageviewer/font_file?id="))
         self.assertGreater(face["asc"], 0)
         status, kind, data = self.get(face["url"])
         self.assertEqual(status, 200)
         self.assertTrue(kind.startswith("font/"))
         self.assertGreater(len(data), 1000)
-        self.assertEqual(self.get("/bepic/font_file?id=../../etc/passwd")[0], 404)
-        self.assertEqual(self.get("/api/bepic/fonts")[0], 200)
+        self.assertEqual(self.get("/imageviewer/font_file?id=../../etc/passwd")[0], 404)
+        self.assertEqual(self.get("/api/imageviewer/fonts")[0], 200)
 
 
 if __name__ == "__main__":

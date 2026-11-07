@@ -3,10 +3,10 @@
 Pure Python (no ComfyUI imports) so it can be tested on its own. viewer_api.py
 puts three routes on top of it:
 
-  POST /bepic/code   a snippet in (agentY sends every piece of code it makes)
-  GET  /bepic/code   the recent snippets, newest first (a freshly opened viewer
+  POST /imageviewer/code   a snippet in (agentY sends every piece of code it makes)
+  GET  /imageviewer/code   the recent snippets, newest first (a freshly opened viewer
                      shows the history)
-  GET  /bepic/text   a text file from an allowed folder (the file browser)
+  GET  /imageviewer/text   a text file from an allowed folder (the file browser)
 
 A snippet is plain data: {id, title, language, code, source, conversation, turn,
 ts}. Nothing here executes it, and the page only ever shows it as text. The shape

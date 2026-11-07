@@ -1,6 +1,6 @@
 """What the viewer tells agentY, in a real browser: the REAL viewer js against stubbed ComfyUI scripts.
 
-window.bEpicViewerApi.viewerState() names the open tab, the item on screen, the frame, the range picked on
+window.imageViewerApi.viewerState() names the open tab, the item on screen, the frame, the range picked on
 the timeline and how many marks the item has; .annotations() hands those marks over in words and
 normalised coordinates. Both read the panel's JS state only, so they answer the same once the viewer is
 popped out into its own window - the case that breaks anything reading the panel's DOM.
@@ -48,7 +48,7 @@ SETUP = """async () => {
 }"""
 
 # The harness mounts its own panel (window.__panel) beside the one the extension's setup() makes and
-# puts behind window.bEpicViewerApi - which stays closed here, and is asked as such below.
+# puts behind window.imageViewerApi - which stays closed here, and is asked as such below.
 STATE = "() => window.__panel.agentViewerState()"
 ANNOT = "(o) => window.__panel.agentViewerAnnotations(o)"
 
@@ -150,8 +150,8 @@ class ViewerStateTests(unittest.TestCase):
 
     def test_the_api_answers_and_a_closed_viewer_says_so(self):
         pg = self.page()
-        api = pg.evaluate("() => [typeof window.bEpicViewerApi.viewerState, typeof window.bEpicViewerApi.annotations,"
-                          " window.bEpicViewerApi.viewerState().display, window.bEpicViewerApi.annotations().count]")
+        api = pg.evaluate("() => [typeof window.imageViewerApi.viewerState, typeof window.imageViewerApi.annotations,"
+                          " window.imageViewerApi.viewerState().display, window.imageViewerApi.annotations().count]")
         self.assertEqual(api, ["function", "function", "closed", 0])
         pg.evaluate("() => window.__panel.setViewerToggleState(false)")
         s = pg.evaluate(STATE)

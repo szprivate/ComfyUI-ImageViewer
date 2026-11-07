@@ -28,7 +28,7 @@ RATE = 48000
 
 
 def _mods():
-    name = "bepic_audio_fx_under_test"
+    name = "imageviewer_audio_fx_under_test"
     if name not in sys.modules:
         pkg = types.ModuleType(name)
         pkg.__path__ = [ROOT]
@@ -38,7 +38,7 @@ def _mods():
 
 
 def js(expr, data):
-    url = "file:///" + os.path.join(ROOT, "js", "bEpicViewer_audioFxData.js").replace("\\", "/")
+    url = "file:///" + os.path.join(ROOT, "js", "imageViewer_audioFxData.js").replace("\\", "/")
     code = (f"import * as A from {json.dumps(url)}; const data = JSON.parse(process.argv[1]);"
             f" process.stdout.write(JSON.stringify({expr}));")
     out = subprocess.run([NODE, "--input-type=module", "-e", code, json.dumps(data)], capture_output=True, text=True, check=True)

@@ -8,13 +8,13 @@
 
 ## Panel Layout
 
-![bEpic ImageViewer main interface](../screenshots/screenshot_01.png)
+![ComfyUI Image Viewer main interface](../screenshots/screenshot_01.png)
 
 ## Regions Explained
 
 ### Tab Bar
 
-The topmost strip holds the tabs. The **active tab** is highlighted orange. Tabs appear automatically when a bEpicSendToViewer node runs or when you open files from the file browser panel. Change the name of the tabs by changing the `tab_name` in the **bEpic Send To Image Viewer** node.
+The topmost strip holds the tabs. The **active tab** is highlighted orange. Tabs appear automatically when a ImageViewerSend node runs or when you open files from the file browser panel. Change the name of the tabs by changing the `tab_name` in the **Send To Image Viewer** node.
 
 | Action | How |
 |---|---|
@@ -40,7 +40,7 @@ The central image display area. Supports:
 
 ### Toggle Overlays
 
-The **Toggle Overlays** button (layers icon, lower bar) or <kbd>S</kbd> turns everything drawn over the picture off and on in one go: the size read-out in the top-left, the exposure bar, the path bar, the tool bar, the 3D view's buttons, the image frame, the wipe line and the contact-sheet hint. The picture, an open page (Edit, Paint, Motion), an active tool's own drawing and the reconnect notice stay. *Settings → bEpic Viewer → View* sets whether the overlays start on.
+The **Toggle Overlays** button (layers icon, lower bar) or <kbd>S</kbd> turns everything drawn over the picture off and on in one go: the size read-out in the top-left, the exposure bar, the path bar, the tool bar, the 3D view's buttons, the image frame, the wipe line and the contact-sheet hint. The picture, an open page (Edit, Paint, Motion), an active tool's own drawing and the reconnect notice stay. *Settings → ComfyUI Image Viewer → View* sets whether the overlays start on.
 
 ### Exposure & Channel Bar
 

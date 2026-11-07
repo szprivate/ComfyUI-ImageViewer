@@ -1,5 +1,5 @@
 """Changes to a Paint document made by name: what the agent's ``edit_image`` sends (``POST
-/bepic/paint/doc``), and what the page asks the server to do where the server does it better (the
+/imageviewer/paint/doc``), and what the page asks the server to do where the server does it better (the
 fill from the surroundings, a resize of every layer).
 
 ``apply_ops(doc, ops, read_image)`` changes *doc* in place, all or none (the caller works on a copy

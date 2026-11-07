@@ -1,6 +1,6 @@
 """A cut changed by agentY lands in the open Edit panel, in a real browser.
 
-POST /bepic/cut saves the cut and sends ComfyUI's `bepic.edit.changed` ({otio, edit, said}); here the
+POST /imageviewer/cut saves the cut and sends ComfyUI's `imageviewer.edit.changed` ({otio, edit, said}); here the
 message is dispatched through the stubbed api, the way the route sends it, with the cut the route would
 answer (a voice-over on A2 at 8 s).
 
@@ -37,7 +37,7 @@ STATE = """() => { const c = __panel._editTlCut;
 class EditCutChangedBrowserTests(tb.EditTakesBrowserTests):
     def changed(self, pg, over=None):
         detail = pg.evaluate(CHANGED, over)
-        pg.evaluate("(d) => { __api.dispatch('bepic.edit.changed', d); }", detail)
+        pg.evaluate("(d) => { __api.dispatch('imageviewer.edit.changed', d); }", detail)
         pg.wait_for_timeout(300)
 
     def test_a_vo_added_by_agentY_shows_on_A2_saved_and_undo_takes_it_out(self):

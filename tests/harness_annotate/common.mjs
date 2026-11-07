@@ -34,7 +34,7 @@ export function makeImage(dir) {
 }
 
 export async function boot({ halted = false } = {}) {
-    const work = fs.mkdtempSync(path.join(os.tmpdir(), "bepic-annot-"));
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), "imageviewer-annot-"));
     const videoPath = makeVideo(path.join(work, "film"));
     const imagePath = makeImage(path.join(work, "film"));
     const server = await startServer({ videoPath, dataDir: path.join(work, "out") });
@@ -43,7 +43,7 @@ export async function boot({ halted = false } = {}) {
     const errors = [];
     page.on("pageerror", (e) => errors.push(String(e)));
     page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
-    await page.goto(server.url + "/page?bepic_viewer_only=1" + (halted ? "&halted=1" : ""));
+    await page.goto(server.url + "/page?image_viewer_only=1" + (halted ? "&halted=1" : ""));
     await page.waitForFunction(() => window.__ready === true, null, { timeout: 20000 });
     return { page, browser, server, work, videoPath, imagePath, errors,
         async close() { await browser.close(); server.close(); } };

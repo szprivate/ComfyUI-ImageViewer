@@ -1,9 +1,9 @@
 // node --test tests/test_edit_gaps_links.mjs
 // V1 with gaps, the Selection mode's lift and overwrite, the Trim mode's ripple / roll / slip / slide
-// next to gaps, and a film's picture and sound split apart (link groups) - bEpicViewer_editTimelineData.js.
+// next to gaps, and a film's picture and sound split apart (link groups) - imageViewer_editTimelineData.js.
 import test from "node:test";
 import assert from "node:assert/strict";
-import * as D from "../js/bEpicViewer_editTimelineData.js";
+import * as D from "../js/imageViewer_editTimelineData.js";
 
 const near = (a, b, eps = 1e-3) => assert.ok(Math.abs(a - b) <= eps, `${a} is not ${b}`);
 const shot = (file, length, extra = {}) => ({ file, name: file, in: 0, length, transition: 0, color: "", volume: 1, ...extra });

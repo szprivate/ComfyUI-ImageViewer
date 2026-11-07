@@ -1,8 +1,8 @@
-// The Contact Sheet grid's layout math and sync rules (js/bEpicViewer_contactGrid.js).
+// The Contact Sheet grid's layout math and sync rules (js/imageViewer_contactGrid.js).
 // Run: node --test tests/test_contact_grid.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { gridLayout, fitRect, cellFrame, followRate, CONTACT_GRID_CAP } from "../js/bEpicViewer_contactGrid.js";
+import { gridLayout, fitRect, cellFrame, followRate, CONTACT_GRID_CAP } from "../js/imageViewer_contactGrid.js";
 
 const W = 1600, H = 900;
 const shape = (n, w = W, h = H, aspects = []) => { const l = gridLayout(n, w, h, aspects); return [l.cols, l.rows]; };

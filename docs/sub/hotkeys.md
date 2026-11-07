@@ -62,7 +62,7 @@ These answer only while a [previz](models-3d.md#previz-building-a-scene) tab is 
 
 ### Everything else, bindable
 
-Every other thing the 3D viewer does is a command as well, listed in **Settings → Keybinding** under *bEpic Viewer: Previz …* and *bEpic Viewer: 3D View …*, with no key until you give it one:
+Every other thing the 3D viewer does is a command as well, listed in **Settings → Keybinding** under *ComfyUI Image Viewer: Previz …* and *ComfyUI Image Viewer: 3D View …*, with no key until you give it one:
 
 - **Scene:** New Scene, Add Model…, Add Camera, Add Image Plane…, Add Group, Add Box / Sphere / Plane / Cylinder / Cone / Torus, Import USD…, Load Scene…, Save Scene…, Export USD…, Render…
 - **Selection:** Show / Hide Selected, Centre Pivot, Freeze Transformations, Look Through Camera / Back To Free View
@@ -143,7 +143,7 @@ While the viewer is hovered it takes the key for itself, so a viewer hotkey no l
 Viewer hotkeys are registered as ComfyUI commands, so they live in ComfyUI's own editor:
 
 1. Open **Settings** (gear icon) → **Keybinding**.
-2. Search for `bEpic` — every viewer action is listed as *bEpic Viewer: …*, with the key it currently answers to.
+2. Search for `bEpic` — every viewer action is listed as *ComfyUI Image Viewer: …*, with the key it currently answers to.
 3. Double-click a row (or use the pencil button) and press the combo you want. Add a second combo with **+**, drop one with the trash button, or undo your change with the reset arrow.
 
 Notes:
@@ -151,7 +151,7 @@ Notes:
 - **A combo you assign works anywhere**, not only over the viewer — it acts on the panel as long as the panel is open. The shipped defaults stay hover-scoped, so plain keys like <kbd>Space</kbd>, <kbd>F</kbd> and <kbd>1</kbd>–<kbd>9</kbd> don't interfere with the canvas.
 - **The tab keys are nine separate rows** (*Switch To Tab 1* … *9*), so you can rebind them individually.
 - <kbd>E</kbd>-drag for exposure is a held modifier rather than a command, so it isn't rebindable.
-- **Toggle bEpic Image Viewer** is in the same list, so you can put opening the panel on a key too.
+- **Toggle ComfyUI Image Viewer** is in the same list, so you can put opening the panel on a key too.
 
 ### Keys Another Extension Already Owns
 

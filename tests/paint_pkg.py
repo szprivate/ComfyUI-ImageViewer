@@ -8,10 +8,10 @@ import types
 import numpy as np  # noqa: F401 - re-exported for the tests
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if "bepic_paint_pkg" not in sys.modules:
-    _pkg = types.ModuleType("bepic_paint_pkg")
+if "imageviewer_paint_pkg" not in sys.modules:
+    _pkg = types.ModuleType("imageviewer_paint_pkg")
     _pkg.__path__ = [_ROOT]
-    sys.modules["bepic_paint_pkg"] = _pkg
-paint_math = importlib.import_module("bepic_paint_pkg.paint_math")
-paint_io = importlib.import_module("bepic_paint_pkg.paint_io")
-paint_ops = importlib.import_module("bepic_paint_pkg.paint_ops")
+    sys.modules["imageviewer_paint_pkg"] = _pkg
+paint_math = importlib.import_module("imageviewer_paint_pkg.paint_math")
+paint_io = importlib.import_module("imageviewer_paint_pkg.paint_io")
+paint_ops = importlib.import_module("imageviewer_paint_pkg.paint_ops")

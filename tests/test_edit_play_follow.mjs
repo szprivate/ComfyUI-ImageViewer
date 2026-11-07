@@ -1,9 +1,9 @@
 // node --test tests/test_edit_play_follow.mjs
-// How the Edit tab's player keeps a <video> or <audio> beside the film's clock (bEpicViewer_editPlay.js):
+// How the Edit tab's player keeps a <video> or <audio> beside the film's clock (imageViewer_editPlay.js):
 // nudged for a little drift, sought only when far off, left alone while a seek settles.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { FOLLOW, followRate, followPlan } from "../js/bEpicViewer_editPlay.js";
+import { FOLLOW, followRate, followPlan } from "../js/imageViewer_editPlay.js";
 
 test("within FOLLOW.ok the rate is the rate", () => {
     assert.equal(followRate(1, 0), 1);

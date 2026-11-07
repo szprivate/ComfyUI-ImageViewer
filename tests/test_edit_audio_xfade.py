@@ -26,7 +26,7 @@ NODE = shutil.which("node")
 
 
 def _modules():
-    name = "bepic_audio_xfade_under_test"
+    name = "imageviewer_audio_xfade_under_test"
     if name not in sys.modules:
         pkg = types.ModuleType(name)
         pkg.__path__ = [ROOT]
@@ -40,7 +40,7 @@ def _modules():
 
 
 def js(expr, data):
-    url = "file:///" + os.path.join(ROOT, "js", "bEpicViewer_editTimelineData.js").replace("\\", "/")
+    url = "file:///" + os.path.join(ROOT, "js", "imageViewer_editTimelineData.js").replace("\\", "/")
     code = (f"import * as D from {json.dumps(url)}; const data = JSON.parse(process.argv[1]);"
             f" process.stdout.write(JSON.stringify({expr}));")
     out = subprocess.run([NODE, "--input-type=module", "-e", code, json.dumps(data)], capture_output=True, text=True, check=True)

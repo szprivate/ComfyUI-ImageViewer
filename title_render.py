@@ -1,8 +1,8 @@
 """Titles: the fonts of this machine, and a title drawn as the Edit panel draws it.
 
 A title is a clip on a video track whose picture is words (``clip.title`` in the
-Edit panel, ``metadata.bepic.title`` in the .otio). Its look is the table below -
-the same as ``TITLE_NUM`` ... in ``js/bEpicViewer_editTitles.js`` - and it is laid
+Edit panel, ``metadata.imageviewer.title`` in the .otio). Its look is the table below -
+the same as ``TITLE_NUM`` ... in ``js/imageViewer_editTitles.js`` - and it is laid
 out and drawn by the same arithmetic as there (:func:`layout` is ``layoutTitle``,
 :func:`render` is ``drawTitle``): glyph by glyph by the font's own linear
 advances (no kerning and no ligatures, which the browser and Pillow cannot be
@@ -14,8 +14,8 @@ a family has no such face. A change to one is a change to the other
 folders - Windows' own and the user's, macOS's, the usual Linux ones - read by
 Pillow (the file's family and style names), cached for the life of the process.
 No program is started for it (the viewer may not start one; ``fc-list`` is not
-asked), so on Linux the folders are walked. ``GET /bepic/fonts`` lists them,
-``GET /bepic/font_file?id=`` hands the browser ONE of those files by its id
+asked), so on Linux the folders are walked. ``GET /imageviewer/fonts`` lists them,
+``GET /imageviewer/font_file?id=`` hands the browser ONE of those files by its id
 (never a path: nothing outside this list can be asked for), a face of a
 collection (.ttc) as a font file of its own.
 """
@@ -29,7 +29,7 @@ import threading
 
 log = logging.getLogger(__name__)
 
-# ── the table (bEpicViewer_editTitles.js, kept in step) ───────────────────────
+# ── the table (imageViewer_editTitles.js, kept in step) ───────────────────────
 
 TITLE_NUM = {
     "size": (6.0, 0.5, 40.0), "track": (0.0, -200.0, 1000.0), "line": (1.2, 0.5, 4.0), "op": (1.0, 0.0, 1.0),
@@ -200,20 +200,20 @@ def fonts(refresh=False):
             try:
                 _FONTS = scan()
             except Exception as exc:  # noqa: BLE001 - no fonts is a list of none, not a failure
-                log.warning("bEpic: the fonts could not be read: %s", exc)
+                log.warning("ImageViewer: the fonts could not be read: %s", exc)
                 _FONTS = []
             _BY_ID = {face["id"]: face for f in _FONTS for face in f["faces"].values()}
         return _FONTS
 
 
 def font_list():
-    """What ``/bepic/fonts`` answers: the families, each face with its id and metrics - no paths."""
+    """What ``/imageviewer/fonts`` answers: the families, each face with its id and metrics - no paths."""
     out = []
     for f in fonts():
         faces = {}
         for kind, face in f["faces"].items():
             faces[kind] = {"id": face["id"], "asc": face["asc"], "desc": face["desc"],
-                           "url": "/bepic/font_file?id=" + face["id"], "file": os.path.basename(face["path"])}
+                           "url": "/imageviewer/font_file?id=" + face["id"], "file": os.path.basename(face["path"])}
         out.append({"family": f["family"], "faces": faces})
     return {"fonts": out, "fallback": list(FALLBACK_FAMILIES)}
 

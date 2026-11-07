@@ -12,7 +12,7 @@ Supported formats: **GLB**, **glTF**, **FBX**, **OBJ**, **STL**, **PLY** (meshes
 
 | From | How |
 |---|---|
-| A 3D node's output | Wire a `MESH` or 3D-file output (`FILE_3D`, `FILE_3D_GLB`, `FILE_3D_FBX`, …) into **bEpic Send To Image Viewer** |
+| A 3D node's output | Wire a `MESH` or 3D-file output (`FILE_3D`, `FILE_3D_GLB`, `FILE_3D_FBX`, …) into **Send To Image Viewer** |
 | Any node with a 3D output | Right-click it → **Send to Image Viewer (run branch)** |
 | **Load 3D**, and other loaders naming a model file | Right-click → **Send to Image Viewer** |
 | Disk | Open it from the [File Browser](other.md#file-browser) (🧊 rows), or drag it in from Explorer / Finder |
@@ -51,7 +51,7 @@ Compare, contact sheet and the drawing tools don't apply to a model tab. Neither
 
 ## Previz: Building a Scene
 
-**Every 3D tab is a scene.** Opening one model gives you a scene holding that model — same outliner, same gizmo, same timeline — and a scene is also what you get from a *bEpic 3D Scene (Previz)* node or from a USD stage. There is no mode to turn on and nothing to switch back to: add a second model, a camera or a shape whenever the shot asks for one.
+**Every 3D tab is a scene.** Opening one model gives you a scene holding that model — same outliner, same gizmo, same timeline — and a scene is also what you get from a *Image Viewer 3D Scene (Previz)* node or from a USD stage. There is no mode to turn on and nothing to switch back to: add a second model, a camera or a shape whenever the shot asks for one.
 
 ![A previz scene: the gizmo on the selected duck, the Outliner and Channel Box on the right, the Animation Curves below](../screenshots/previz_overview.png)
 
@@ -244,7 +244,7 @@ The white line is the current frame, and the graph spans the timeline's range.
 
 ### Rendering the Shot Back Into ComfyUI
 
-The **bEpic 3D Scene (Previz)** node holds the scene and hands the rendered shot to your workflow.
+The **Image Viewer 3D Scene (Previz)** node holds the scene and hands the rendered shot to your workflow.
 
 1. Drop the node in and press **Open in Image Viewer** on it. The viewer opens on that node's tab as an empty scene — no run needed.
 2. Build the shot. The scene is stored on the node, so it is saved with the workflow.
@@ -330,7 +330,7 @@ Alembic has no Python bindings to install and `usd-core` ships without its Alemb
 
 | Scene on… | Kept in | Survives |
 |---|---|---|
-| a **bEpic 3D Scene** node | the node, in the workflow | saving and reopening the workflow, and other machines |
+| a **Image Viewer 3D Scene** node | the node, in the workflow | saving and reopening the workflow, and other machines |
 | any other 3D tab | the viewer's own state | reloading the page |
 | a saved scene file | `output/3d_scenes/<name>.json` | anything |
 

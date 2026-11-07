@@ -1,5 +1,5 @@
 // The viewer's page served without ComfyUI: its own js, stand-ins for ComfyUI's
-// scripts, and stubs for the /bepic routes the annotation tool uses. Sidecar and
+// scripts, and stubs for the /imageviewer routes the annotation tool uses. Sidecar and
 // saved pictures are really written, into `dataDir`, so a test can read them.
 import http from "node:http";
 import fs from "node:fs";
@@ -37,7 +37,7 @@ export function startServer({ videoPath, dataDir, port = 0 }) {
             const b = f.startsWith(ROOT) ? file(f) : null;
             return b ? send(200, b, TYPES[path.extname(f)] || "application/octet-stream") : send(404, "no");
         }
-        if (p === "/bepic/raw_view" || p === "/bepic/view_file") {
+        if (p === "/imageviewer/raw_view" || p === "/imageviewer/view_file") {
             const want = u.searchParams.get("path");
             if (want && !/\.mp4$/i.test(want) && fs.existsSync(want)) {
                 return send(200, fs.readFileSync(want), TYPES[path.extname(want).toLowerCase()] || "application/octet-stream");
@@ -54,7 +54,7 @@ export function startServer({ videoPath, dataDir, port = 0 }) {
             res.writeHead(200, { "Content-Type": "video/mp4", "Accept-Ranges": "bytes", "Content-Length": stat.size });
             return fs.createReadStream(videoPath).pipe(res);
         }
-        if (p === "/bepic/video_annotations") {
+        if (p === "/imageviewer/video_annotations") {
             // The sidecar beside the file asked about (a clip, or a picture): the
             // real route's rule (annotation_io.sidecar_for).
             const sideOf = (media) => media.replace(/\.[^.\\/]+$/, "") + ".annotations.json";
@@ -77,7 +77,7 @@ export function startServer({ videoPath, dataDir, port = 0 }) {
             });
             return;
         }
-        if (p === "/bepic/save_annotation") {
+        if (p === "/imageviewer/save_annotation") {
             let body = "";
             req.on("data", (c) => (body += c));
             req.on("end", () => {
@@ -91,7 +91,7 @@ export function startServer({ videoPath, dataDir, port = 0 }) {
             });
             return;
         }
-        if (p.startsWith("/bepic/")) return send(200, {});
+        if (p.startsWith("/imageviewer/")) return send(200, {});
         send(404, "not found");
     });
     return new Promise((resolve) => srv.listen(port, "127.0.0.1", () => resolve({

@@ -1,7 +1,7 @@
 // node --test tests/test_code_highlight.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { highlight, tokenize, guessLanguage } from "../js/bEpicViewer_codeHighlight.js";
+import { highlight, tokenize, guessLanguage } from "../js/imageViewer_codeHighlight.js";
 
 const join = (lines) => lines.map((l) => l.map((t) => t[1]).join("")).join("\n");
 const types = (code, lang) => Object.fromEntries(tokenize(code, lang).map(([t, s]) => [s, t]));

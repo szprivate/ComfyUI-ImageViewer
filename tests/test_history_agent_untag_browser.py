@@ -134,7 +134,7 @@ class AgentUntagTests(unittest.TestCase):
 
     def thumb(self, pg, n):
         # strip order is newest first: c, b, a
-        return pg.locator("bepic-viewer-panel .history-thumb").nth(n)
+        return pg.locator("comfyui-image-viewer-panel .history-thumb").nth(n)
 
     def menu_rows(self, pg):
         return pg.evaluate("() => [...window.__panel.shadowRoot.querySelectorAll('.thumb-ctx-menu .thumb-ctx-item')].map((e) => e.textContent)")
@@ -153,7 +153,7 @@ class AgentUntagTests(unittest.TestCase):
         rows = self.menu_rows(pg)
         self.assertIn("✕ Remove tag #set", rows)
         self.assertIn("🏷 Manage tags…", rows)
-        pg.locator("bepic-viewer-panel .thumb-ctx-item", has_text="Remove tag #set").click()
+        pg.locator("comfyui-image-viewer-panel .thumb-ctx-item", has_text="Remove tag #set").click()
         pg.wait_for_function("() => window.__panel.shadowRoot.querySelectorAll('.history-thumb')[1].querySelectorAll('.history-agent-tag').length === 0")
         self.assertEqual(pg.evaluate("window.__calls"), [["untag", "set", "D:/out/b.png"]])
         snap = pg.evaluate(SNAP)
@@ -174,20 +174,20 @@ class AgentUntagTests(unittest.TestCase):
     def test_a_canvas_tag_is_cleared_only_after_the_dialog(self):
         pg = self.page()
         self.thumb(pg, 2).click(button="right")
-        pg.locator("bepic-viewer-panel .thumb-ctx-item", has_text="Remove tag #hero_face").click()
-        dlg = pg.locator("bepic-viewer-panel .agenty-untag-dialog")
+        pg.locator("comfyui-image-viewer-panel .thumb-ctx-item", has_text="Remove tag #hero_face").click()
+        dlg = pg.locator("comfyui-image-viewer-panel .agenty-untag-dialog")
         dlg.wait_for(timeout=5000)
         self.assertIn("canvas node #12 'hero tag'", dlg.inner_text())
         self.assertEqual(pg.evaluate("window.__calls"), [["untag", "hero_face", "D:/out/a.png"]])
         self.assertEqual(pg.evaluate(SNAP)["badges"][2], ["#hero_face"])     # still there
         # "Keep it" changes nothing
         dlg.locator("button", has_text="Keep it").click()
-        self.assertEqual(pg.locator("bepic-viewer-panel .agenty-untag-dialog").count(), 0)
+        self.assertEqual(pg.locator("comfyui-image-viewer-panel .agenty-untag-dialog").count(), 0)
         self.assertEqual(len(pg.evaluate("window.__calls")), 1)
         # again, and this time clear the node's field
         self.thumb(pg, 2).click(button="right")
-        pg.locator("bepic-viewer-panel .thumb-ctx-item", has_text="Remove tag #hero_face").click()
-        pg.locator("bepic-viewer-panel .agenty-untag-dialog button", has_text="Clear node #12").click()
+        pg.locator("comfyui-image-viewer-panel .thumb-ctx-item", has_text="Remove tag #hero_face").click()
+        pg.locator("comfyui-image-viewer-panel .agenty-untag-dialog button", has_text="Clear node #12").click()
         pg.wait_for_function("() => window.__panel.shadowRoot.querySelectorAll('.history-thumb')[2].querySelectorAll('.history-agent-tag').length === 0")
         self.assertEqual(pg.evaluate("window.__calls")[-1], ["clear", "hero_face", "D:/out/a.png"])
         self.assertEqual(self.errors, [])
@@ -214,7 +214,7 @@ class AgentUntagTests(unittest.TestCase):
         self.thumb(pg, 1).click(button="right")
         rows = self.menu_rows(pg)
         self.assertFalse([r for r in rows if "Remove tag" in r or "Manage tags" in r], rows)
-        self.assertEqual(pg.locator("bepic-viewer-panel .history-agent-tag-x").count(), 0)
+        self.assertEqual(pg.locator("comfyui-image-viewer-panel .history-agent-tag-x").count(), 0)
 
 
 if __name__ == "__main__":

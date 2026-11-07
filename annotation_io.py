@@ -17,7 +17,7 @@ hold for any resolution. ``width`` / ``height`` are the picture's size when the
 viewer knew it. Nothing here touches ComfyUI: the route in viewer_api.py decides
 whether a file may be written beside, this only validates and reads/writes, says
 what the marks are in words (:func:`report`, the same answer the viewer's page
-gives - bEpicViewer_viewerState.js) and draws the boxes and strokes as a mask
+gives - imageViewer_viewerState.js) and draws the boxes and strokes as a mask
 (:func:`mask_image`).
 """
 
@@ -163,7 +163,7 @@ TEXT_CAP = 500
 
 
 def where_is(x, y):
-    """"top left", "centre", "bottom right"... (bEpicViewer_annotateReport.whereIs)."""
+    """"top left", "centre", "bottom right"... (imageViewer_annotateReport.whereIs)."""
     col = "left" if x < 1 / 3 else "right" if x > 2 / 3 else ""
     row = "top" if y < 1 / 3 else "bottom" if y > 2 / 3 else ""
     return " ".join(p for p in (row, col) if p) or "centre"
@@ -188,7 +188,7 @@ def _bounds(it):
 
 
 def describe_item(it, w=0, h=0):
-    """One mark as a line of text (bEpicViewer_annotateReport.describeItem)."""
+    """One mark as a line of text (imageViewer_annotateReport.describeItem)."""
     t = it.get("type")
     if t == "text":
         return (f"text at {_pct(it['x'])},{_pct(it['y'])} ({int(round(it['x'] * w))},"
@@ -207,7 +207,7 @@ def describe_item(it, w=0, h=0):
 
 
 def describe_mark(it, w=0, h=0):
-    """One mark as the agent reads it (bEpicViewer_viewerState.describeMark)."""
+    """One mark as the agent reads it (imageViewer_viewerState.describeMark)."""
     t = it.get("type")
     m = {"type": {"rect": "box", "pen": "stroke"}.get(t, t)}
     if it.get("color"):
@@ -240,7 +240,7 @@ def report(doc, kind="", width=0, height=0, frame=None, source=""):
 
     ``{kind, source, width, height, fps, frames, count, annotations: [{frame, end,
     timecode, end_timecode, notes, marks}]}`` - the shape the viewer's page
-    answers with (window.bEpicViewerApi.annotations). *frame*: only the marks
+    answers with (window.imageViewerApi.annotations). *frame*: only the marks
     shown on that frame of a film."""
     doc = doc or {}
     fps = float(doc.get("fps") or 0)

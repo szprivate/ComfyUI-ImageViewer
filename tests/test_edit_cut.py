@@ -1,8 +1,8 @@
-"""A cut changed by agentY: timeline_io.apply_ops / change, and POST /bepic/cut.
+"""A cut changed by agentY: timeline_io.apply_ops / change, and POST /imageviewer/cut.
 
 The ops work on the panel's form of the cut and are saved the way the panel saves, so a voice-over
 added on A2 at 8 s reads back from the .otio there - and the open Edit panels are told with
-`bepic.edit.changed` (the browser half: test_edit_cut_browser.py).
+`imageviewer.edit.changed` (the browser half: test_edit_cut_browser.py).
 
 viewer_api in a private aiohttp app, ComfyUI's folder_paths and server stubbed (as in test_edit_takes).
 Run: python -m unittest tests.test_edit_cut
@@ -166,7 +166,7 @@ class CutRoute(unittest.TestCase):
             json.dump(doc, fh)
         del self.sent[:]
 
-    def post(self, body, path="/bepic/cut", headers=None):
+    def post(self, body, path="/imageviewer/cut", headers=None):
         async def go():
             app = web.Application()
             for r in self.app.router.routes():
@@ -189,14 +189,14 @@ class CutRoute(unittest.TestCase):
 
     def test_a_vo_added_at_a_time_is_saved_and_the_pages_are_told(self):
         status, ans = self.post({"otio": self.otio, "ops": [{"op": "add", "file": self.vo, "at": 4, "length": 5}]},
-                                "/api/bepic/cut?client_id=tab1")
+                                "/api/imageviewer/cut?client_id=tab1")
         self.assertEqual(status, 200, ans)
         self.assertTrue(ans["ok"] and ans["saved"] and ans["pushed"])
         clip = ans["edit"]["tracks"][0]["clips"][0]
         self.assertEqual((ans["edit"]["tracks"][0]["id"], clip["at"], clip["length"]), ("A2", 4.0, 5.0))
         self.assertEqual(self.tio.read_editable(self.otio), ans["edit"])
         (event, payload), = self.sent
-        self.assertEqual(event, "bepic.edit.changed")
+        self.assertEqual(event, "imageviewer.edit.changed")
         self.assertEqual((payload["otio"], payload["client_id"], payload["file"]),
                          (os.path.abspath(self.otio), "tab1", "cut.otio"))
         self.assertEqual(payload["edit"], ans["edit"])

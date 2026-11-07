@@ -121,14 +121,14 @@ class HistorySwitchPerfTests(unittest.TestCase):
         self.in_flight = {"now": 0, "max": 0}
 
         def started(r):
-            if "/bepic/thumb" not in r.url:
+            if "/imageviewer/thumb" not in r.url:
                 return
             self.thumb_requests.append(r.url)
             self.in_flight["now"] += 1
             self.in_flight["max"] = max(self.in_flight["max"], self.in_flight["now"])
 
         def ended(r):
-            if "/bepic/thumb" in r.url:
+            if "/imageviewer/thumb" in r.url:
                 self.in_flight["now"] -= 1
         pg.on("request", started)
         pg.on("requestfinished", ended)

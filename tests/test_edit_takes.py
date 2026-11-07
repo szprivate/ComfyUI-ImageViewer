@@ -1,8 +1,8 @@
-"""Takes: the same shot made again, kept beside the first - in the timeline file, and through POST /bepic/take.
+"""Takes: the same shot made again, kept beside the first - in the timeline file, and through POST /imageviewer/take.
 
 timeline_io keeps `takes` per clip (editable -> rebuild -> editable), points the clip's media at the active take (the
 .otio stays valid for any other program), and add_take does on disk what the Edit panel's addTake does in the page.
-The route is fenced like the other timeline routes (path_access) and tells the pages with `bepic.edit.take`.
+The route is fenced like the other timeline routes (path_access) and tells the pages with `imageviewer.edit.take`.
 
 viewer_api in a private aiohttp app, ComfyUI's folder_paths and server stubbed (as in test_annotation_routes).
 Run: python -m unittest tests.test_edit_takes
@@ -27,7 +27,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
 def _tio():
-    name = "bepic_takes_tio_under_test"
+    name = "imageviewer_takes_tio_under_test"
     if name not in sys.modules:
         pkg = types.ModuleType(name)
         pkg.__path__ = [ROOT]
@@ -172,7 +172,7 @@ def _load(tmp, sent):
         app=app, send_sync=lambda event, data: sent.append((event, data)))})
     saved = {k: sys.modules.get(k) for k in ("folder_paths", "server")}
     sys.modules.update(folder_paths=fp, server=srv)
-    name = "bepic_takes_routes_under_test"
+    name = "imageviewer_takes_routes_under_test"
     pkg = types.ModuleType(name)
     pkg.__path__ = [ROOT]
     sys.modules[name] = pkg
@@ -226,7 +226,7 @@ class TakeRoute(unittest.TestCase):
                 return await fn(client)
         return asyncio.run(go())
 
-    def post(self, body, path="/bepic/take"):
+    def post(self, body, path="/imageviewer/take"):
         async def fn(c):
             r = await c.post(path, json=body)
             return r.status, await r.json()
@@ -248,14 +248,14 @@ class TakeRoute(unittest.TestCase):
         self.assertEqual([(t["version"], t["active"]) for t in edit["clips"][0]["takes"]], [(1, False), (2, True)])
         self.assertFalse(os.path.exists(self.otio + ".tmp"))
         (event, payload), = self.sent
-        self.assertEqual(event, "bepic.edit.take")
+        self.assertEqual(event, "imageviewer.edit.take")
         self.assertEqual(payload["otio"], os.path.abspath(self.otio))
         self.assertTrue(payload["saved"])
         self.assertFalse(payload["retime"])
         take, = payload["takes"]
         self.assertEqual((take["from_file"], take["file"], take["version"], take["note"]), (self.a1, self.a2, 2, "warmer"))
         self.assertRegex(take["created"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$")
-        status, ans = self.post(self.body(), "/api/bepic/take")
+        status, ans = self.post(self.body(), "/api/imageviewer/take")
         self.assertEqual(status, 200)
 
     def test_the_version_comes_from_the_name_when_the_request_gives_none(self):
@@ -292,7 +292,7 @@ class TakeRoute(unittest.TestCase):
             status, ans = self.post(body)
             self.assertEqual((status, ans["ok"]), (400, False), body)
         async def fn(c):
-            r = await c.post("/bepic/take", data="not json", headers={"Content-Type": "application/json"})
+            r = await c.post("/imageviewer/take", data="not json", headers={"Content-Type": "application/json"})
             return r.status
         self.assertEqual(self._run(fn), 400)
         self.assertFalse(self.sent)
@@ -306,8 +306,8 @@ class TakeRoute(unittest.TestCase):
     def test_only_comfyuis_own_page_or_no_browser_page_may_write_a_timeline(self):
         # the security audit: a web page of another site must not write into the user's .otio files
         js = {"Content-Type": "application/json"}
-        for path, body in (("/bepic/take", self.body()),
-                           ("/bepic/timeline", {"otio": self.otio, "edit": {"clips": []}})):
+        for path, body in (("/imageviewer/take", self.body()),
+                           ("/imageviewer/timeline", {"otio": self.otio, "edit": {"clips": []}})):
             for headers in ({"Content-Type": "text/plain"},                       # a no-preflight cross-site POST
                             {"Content-Type": "application/x-www-form-urlencoded"},
                             {**js, "Origin": "https://evil.example"},
@@ -320,14 +320,14 @@ class TakeRoute(unittest.TestCase):
 
         async def own(c):          # the page itself: an Origin naming the host it was sent to
             host = f"{c.server.host}:{c.server.port}"
-            r = await c.post("/bepic/take", data=json.dumps(self.body()),
+            r = await c.post("/imageviewer/take", data=json.dumps(self.body()),
                              headers={**js, "Origin": f"http://{host}"})
             return r.status
         self.assertEqual(self._run(own), 200)
 
     def test_client_id_is_read_from_the_query_string(self):
         async def fn(c):
-            r = await c.post("/bepic/take?client_id=tab-7", json=self.body())
+            r = await c.post("/imageviewer/take?client_id=tab-7", json=self.body())
             return r.status
         self.assertEqual(self._run(fn), 200)
         self.assertEqual(self.sent[0][1]["client_id"], "tab-7")
