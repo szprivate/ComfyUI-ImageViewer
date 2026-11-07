@@ -4,6 +4,8 @@
 
 The Editor cuts films on a timeline, the way an NLE does. A cut is an OpenTimelineIO file (`.otio`); it plays in its own tab before anything is rendered.
 
+![A cut: the Edit panel below with a title on V2, three shots on V1 and music on A2, Effects on the left, the Inspector on the right](images/editor.png)
+
 ## Opening a cut
 
 - **Open Edit…** in the lower bar's Timeline menu: the open cut, else the last one, else an empty one.

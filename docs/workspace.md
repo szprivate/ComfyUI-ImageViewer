@@ -11,7 +11,7 @@
 
 ## Panels
 
-History, the file browser, Parameters and each space's panels sit in rails: left, right and along the bottom.
+History, the file browser, Parameters, Agent code, Dataset and each space's panels sit in rails: left, right and along the bottom.
 
 - Drag a panel by its title bar onto an edge of the picture, or above / below another panel. Drop it on the middle of another panel to share its place as a tab.
 - Drag the bars between them to resize. **✕** puts a panel away; the lower bar's menus bring it back.
@@ -27,7 +27,7 @@ The folder button in the lower bar. It lists everything in a folder, with previe
 - Double-click to open, or drag rows onto the picture, onto the graph (a loader node), into a cut or into the agentY chat.
 - A folder of images opens as one sequence.
 
-<img src="screenshots/browser_filter.png" alt="The file browser filtered to *.png *.jpg, one image previewed" width="274">
+<img src="images/file-browser.png" alt="The file browser on ComfyUI's output folder, one picture previewed" width="320">
 
 ### Which folders it can open
 
