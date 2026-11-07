@@ -127,7 +127,7 @@ class EditTimelineBrowserTests(unittest.TestCase):
         pg.on("pageerror", lambda e: self.errors.append(str(e)) or sys.stderr.write("PAGEERR " + str(getattr(e, "stack", "")) + chr(10)))
         pg.goto(f"http://127.0.0.1:{self.port}/edit.html")
         pg.wait_for_function("window.__ready===true", timeout=20000)
-        pg.evaluate("()=>{const all=document.querySelectorAll('bepic-viewer-panel'); if(all[1]) all[1].style.display='none'}")
+        pg.evaluate("()=>{const all=document.querySelectorAll('comfyui-image-viewer-panel'); if(all[1]) all[1].style.display='none'}")
         pg.evaluate(SETUP, zoom)
         self.settle(pg)
         return pg
@@ -159,7 +159,7 @@ class EditTimelineBrowserTests(unittest.TestCase):
         # to a sound track at the same moment, as long as the file is.
         self.assertEqual(c["tracks"]["V2"], [["D:/in/edits/shot.png", 5.0, 3.0]])
         self.assertEqual(c["tracks"]["A2"], [["D:/in/edits/song.wav", 5.0, 6.0]])
-        self.assertTrue(any(r.startswith("/bepic/timeline_upload") for r in pg.evaluate("() => __requests")))
+        self.assertTrue(any(r.startswith("/imageviewer/timeline_upload") for r in pg.evaluate("() => __requests")))
         # Onto V1 a film goes between the shots - near the join at 4 s it lands there.
         x, y = pg.evaluate(WHERE, [4.4, "V1"])
         pg.evaluate(DROP, [x, y, [["film.mp4", "video/mp4"]], ""])
@@ -180,7 +180,7 @@ class EditTimelineBrowserTests(unittest.TestCase):
         # And a history thumbnail's payload, named by ComfyUI's filename alone.
         x, y = pg.evaluate(WHERE, [9.6, "V2"])
         pg.evaluate("""async ([x, y]) => { const root = __panel._editTlUi.body.getRootNode(); const t = root.elementFromPoint(x, y);
-            const dt = new DataTransfer(); dt.setData('application/x-bepic-history', JSON.stringify({ items: [{ filename: 'render_1.mp4', type: 'output', kind: 'video' }] }));
+            const dt = new DataTransfer(); dt.setData('application/x-imageviewer-history', JSON.stringify({ items: [{ filename: 'render_1.mp4', type: 'output', kind: 'video' }] }));
             t.dispatchEvent(new DragEvent('drop', { bubbles: true, composed: true, cancelable: true, clientX: x, clientY: y, dataTransfer: dt })); }""", [x, y])
         pg.wait_for_function("() => __panel._editTlCut.tracks[0].clips.length === 2", timeout=5000)
         self.assertEqual(self.errors, [])
@@ -652,7 +652,7 @@ class EditTimelineBrowserTests(unittest.TestCase):
         pg.wait_for_function("() => __panel._editTlCut.clips.length === 4", timeout=5000)
         self.assertEqual(self.cut(pg)["v1"][3], ["D:/in/edits/shot.png", 0, 3.0])
         payload = """async ([x, y, items]) => { const root = __panel._editTlUi.body.getRootNode(); const t = root.elementFromPoint(x, y);
-            const dt = new DataTransfer(); dt.setData('application/x-bepic-history', JSON.stringify({ items }));
+            const dt = new DataTransfer(); dt.setData('application/x-imageviewer-history', JSON.stringify({ items }));
             t.dispatchEvent(new DragEvent('drop', { bubbles: true, composed: true, cancelable: true, clientX: x, clientY: y, dataTransfer: dt })); }"""
         # A History thumbnail (ComfyUI's output, named by filename).
         pg.evaluate(payload, [*self.x_at(pg, 1.0, "V2"), [{"filename": "hist.png", "type": "output", "subfolder": "", "kind": "image"}]])
@@ -980,7 +980,7 @@ class EditTimelineBrowserTests(unittest.TestCase):
         pg = self.page()
         self.focus_timeline(pg)
         pg.keyboard.press("t")
-        cursors = pg.evaluate("async () => (await import('/extensions/viewer/bEpicViewer_editTrim.js')).TRIM_CURSORS")
+        cursors = pg.evaluate("async () => (await import('/extensions/viewer/imageViewer_editTrim.js')).TRIM_CURSORS")
         h = pg.evaluate("() => __panel._editTlUi.rows.querySelector(\"[data-key='V1:0']\").getBoundingClientRect().height")
         out = self.hover(pg, 4.0, dx=-5)
         self.assertEqual(out[0], cursors["ripple-out"])
@@ -2171,7 +2171,7 @@ class EditTimelineBrowserTests(unittest.TestCase):
           resume() {} close() {} }
         window.AudioContext = Ctx;
         __panel._eaFetch = async () => new ArrayBuffer(16);
-        try { localStorage.removeItem('bepic.viewer.editAudio'); } catch (_) {}
+        try { localStorage.removeItem('imageviewer.viewer.editAudio'); } catch (_) {}
         __panel._eaState = null; }"""
 
     # editScrubAt at film moments on a wall clock that is ours: [t, ms, clock] each.
@@ -2220,12 +2220,12 @@ class EditTimelineBrowserTests(unittest.TestCase):
         pg.evaluate("() => __panel.setFrame(24)")
         pg.keyboard.press("Control+Shift+M")
         self.assertEqual(pg.evaluate(ui)[:2], ["volumeOff", False])
-        self.assertEqual(pg.evaluate("() => JSON.parse(localStorage.getItem('bepic.viewer.editAudio'))"), {"play": False, "scrub": True})
+        self.assertEqual(pg.evaluate("() => JSON.parse(localStorage.getItem('imageviewer.viewer.editAudio'))"), {"play": False, "scrub": True})
         self.assertEqual(pg.evaluate(self.FEED, [[1.0, 9000, 50], [1.04, 9020, 50.2]]), [])
         vol = """() => { const P = __panel; P._editPlayMix(P._ep.at); P._editPlaySounds(1, true);
             return [P.videoBase.volume, P._ep.bed[0].volume]; }"""
         self.assertEqual(pg.evaluate(vol), [0, 0])
-        pg.click("bepic-viewer-panel >> .edit-audio-btn")
+        pg.click("comfyui-image-viewer-panel >> .edit-audio-btn")
         self.assertEqual(pg.evaluate(ui)[:2], ["volume", True])
         self.assertEqual(pg.evaluate(vol), [1, 1])
         pg.evaluate("() => __panel._editPlaySounds(1, false)")
@@ -2235,7 +2235,7 @@ class EditTimelineBrowserTests(unittest.TestCase):
         pg.wait_for_function("window.__ready===true", timeout=20000)
         pg.evaluate(SETUP, 0)
         self.assertEqual(pg.evaluate("() => __panel._editAudio().play"), False)
-        pg.evaluate("() => localStorage.removeItem('bepic.viewer.editAudio')")
+        pg.evaluate("() => localStorage.removeItem('imageviewer.viewer.editAudio')")
         self.assertEqual(self.errors, [])
 
     def test_14_zoom_keys_and_buttons_keep_the_playhead_where_it_is_on_screen(self):
@@ -2245,7 +2245,7 @@ class EditTimelineBrowserTests(unittest.TestCase):
         for how in ("Control+Equal", "Control+Equal", "button", "Control+Minus"):
             x = pg.evaluate(self.HEAD_X)
             if how == "button":
-                pg.click("bepic-viewer-panel >> .edit-btn[title^='Zoom in']")
+                pg.click("comfyui-image-viewer-panel >> .edit-btn[title^='Zoom in']")
             else:
                 pg.keyboard.press(how)
             self.assertAlmostEqual(pg.evaluate(self.HEAD_X), x, delta=1.5, msg=how)
@@ -3107,7 +3107,7 @@ class EditTimelineBrowserTests(unittest.TestCase):
             self.assertNotIn("keys", fx)
         self.assertEqual(pg.evaluate("() => __panel._editTlSelAll().map(s => s.i)"), [1, 2], "the selection stays")
         # The boxes checked are remembered, for this viewer.
-        self.assertEqual(sorted(pg.evaluate("() => JSON.parse(localStorage.getItem('bepic.viewer.pasteAttrs'))")), ["opacity", "zoom"])
+        self.assertEqual(sorted(pg.evaluate("() => JSON.parse(localStorage.getItem('imageviewer.viewer.pasteAttrs'))")), ["opacity", "zoom"])
         pg.keyboard.press("Alt+v")
         pg.wait_for_function(f"() => !!{d}", timeout=3000)
         boxes = pg.evaluate(self.BOXES)
@@ -3394,7 +3394,7 @@ class EditTimelineBrowserTests(unittest.TestCase):
 
     def test_26_the_readout_timecode_or_frames_toggled_and_live(self):
         pg = self.page()
-        pg.evaluate("() => { try { localStorage.removeItem('bepic.viewer.editTimecode'); } catch (_) {} __panel._editTlTcModeNow = null; __panel._editTlTcSet('tc'); __panel.setFrame(25); }")
+        pg.evaluate("() => { try { localStorage.removeItem('imageviewer.viewer.editTimecode'); } catch (_) {} __panel._editTlTcModeNow = null; __panel._editTlTcSet('tc'); __panel.setFrame(25); }")
         self.assertEqual(pg.evaluate(self.TC), "00:00:01:01")
         tc, ruler = pg.evaluate(self.RECT, "tc"), pg.evaluate(self.RECT, "ruler")
         self.assertLessEqual(tc[2], ruler[0], "left of the ruler, over the headers' column")
@@ -3413,19 +3413,19 @@ class EditTimelineBrowserTests(unittest.TestCase):
         pg.wait_for_timeout(30)
         self.assertEqual(pg.evaluate("() => __panel.__tcWrites"), writes, "the same frame: not written again")
         # A click: frames; kept for this viewer.
-        pg.click("bepic-viewer-panel >> .edit-tc")
+        pg.click("comfyui-image-viewer-panel >> .edit-tc")
         self.assertEqual(pg.evaluate(self.TC), "26")
-        self.assertEqual(pg.evaluate("() => localStorage.getItem('bepic.viewer.editTimecode')"), "frames")
+        self.assertEqual(pg.evaluate("() => localStorage.getItem('imageviewer.viewer.editTimecode')"), "frames")
         self.assertEqual(pg.evaluate("() => { __panel._editTlTcModeNow = null; return __panel._editTlTcMode(); }"), "frames")
         pg.evaluate("() => __panel.setFrame(30)")
         self.assertEqual(pg.evaluate(self.TC), "30")
         # Right-click: the choice.
-        pg.click("bepic-viewer-panel >> .edit-tc", button="right")
+        pg.click("comfyui-image-viewer-panel >> .edit-tc", button="right")
         pg.locator(".previz-menu-item", has_text="Timecode").first.click()
         self.assertEqual(pg.evaluate(self.TC), "00:00:01:06")
         # Double-click: typed, Enter goes there (the two clicks of it switch there and back).
         for typed, frame in (("00:00:02:00", 48), ("+12", 60), ("100", 100), ("nonsense", 100)):
-            pg.dblclick("bepic-viewer-panel >> .edit-tc")
+            pg.dblclick("comfyui-image-viewer-panel >> .edit-tc")
             pg.wait_for_function("() => !!__panel._editTlUi.tc.querySelector('input')", timeout=3000)
             pg.keyboard.press("Control+a")
             pg.keyboard.type(typed)
@@ -3434,7 +3434,7 @@ class EditTimelineBrowserTests(unittest.TestCase):
             self.assertEqual(pg.evaluate("() => __panel._editTlTcMode()"), "tc")
         self.assertEqual(pg.evaluate(self.TC), "00:00:04:04")
         # Esc: nowhere.
-        pg.dblclick("bepic-viewer-panel >> .edit-tc")
+        pg.dblclick("comfyui-image-viewer-panel >> .edit-tc")
         pg.wait_for_function("() => !!__panel._editTlUi.tc.querySelector('input')", timeout=3000)
         pg.keyboard.type("5")
         pg.keyboard.press("Escape")

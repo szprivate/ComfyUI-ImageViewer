@@ -1,10 +1,10 @@
 """Previz: scene files and rendered shots for the viewer's 3D scenes.
 
-The scene itself is browser-side data (js/bEpicViewer_scene3d.js) kept on the
-bEpic 3D Scene node. This module only deals with what has to live on disk:
+The scene itself is browser-side data (js/imageViewer_scene3d.js) kept on the
+Image Viewer 3D Scene node. This module only deals with what has to live on disk:
 
   • scene files. They are saved where every export goes (export_rules: the
-    shot's folder, or `output/bepic/scenes`, versioned); `output/3d_scenes` is
+    shot's folder, or `output/imageviewer/scenes`, versioned); `output/3d_scenes` is
     where they went before that and is still read.
   • rendered shots. The viewer plays the shot back through a camera and posts
     one PNG per frame into `output/previz/<name>/` - the take's working folder,

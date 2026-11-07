@@ -1,7 +1,7 @@
 // node --test tests/test_euler_filter.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { eulerFilter } from "../js/bEpicViewer_eulerFilter.js";
+import { eulerFilter } from "../js/imageViewer_eulerFilter.js";
 
 const rad = (d) => (d * Math.PI) / 180;
 // three.js Euler XYZ -> matrix, R = Rx * Ry * Rz

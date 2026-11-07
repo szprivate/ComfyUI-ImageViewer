@@ -1,7 +1,7 @@
 // node --test tests/test_mg_refs.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mgRefQuery, mgMayHaveScene, mgIsSceneFile, mgRefName } from "../js/bEpicViewer_mgRefs.js";
+import { mgRefQuery, mgMayHaveScene, mgIsSceneFile, mgRefName } from "../js/imageViewer_mgRefs.js";
 
 test("a path is named by path, a history item by filename + type + subfolder", () => {
     assert.equal(mgRefQuery("D:/out/a b.mp4"), "path=D%3A%2Fout%2Fa%20b.mp4");

@@ -3,7 +3,7 @@
 //   node --test tests/test_paint_data.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import * as D from "../js/bEpicViewer_paintData.js";
+import * as D from "../js/imageViewer_paintData.js";
 
 const layer = (w, h, rgba = [0, 0, 0, 0]) => { const px = new Uint8ClampedArray(w * h * 4); for (let i = 0; i < w * h; i++) px.set(rgba, i * 4); return px; };
 const stroke = (px, w, h, extra = {}) => ({ px, orig: new Uint8ClampedArray(px), cover: new Float32Array(w * h), lw: w, lh: h, lx: 0, ly: 0,

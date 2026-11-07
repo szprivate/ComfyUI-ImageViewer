@@ -2,7 +2,7 @@
 
 Backs the canvas context-menu action "Send to Image Viewer": the frontend hands
 over the raw widget string of any VHS / native loader node and gets back ready-
-made viewer tab descriptors — the same frame dicts bEpicSendToViewer pushes over
+made viewer tab descriptors — the same frame dicts ImageViewerSend pushes over
 the websocket, so the viewer displays them with no special-casing.
 
 Three widget shapes are covered:
@@ -36,11 +36,11 @@ MODEL_EXTS = {".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply",
 VIDEO_EXTS = {".mp4", ".m4v", ".mov", ".webm", ".mkv", ".ogv", ".avi", ".mpg",
               ".mpeg", ".wmv", ".flv"}
 # Sound files: a viewer tab plays one through its <video>, waveform on screen
-# (js/bEpicViewer_audio.js). Kept in step with path_access.MEDIA_EXTS.
+# (js/imageViewer_audio.js). Kept in step with path_access.MEDIA_EXTS.
 AUDIO_EXTS = {".wav", ".mp3", ".flac", ".ogg", ".oga", ".m4a", ".aac", ".opus", ".weba"}
 
 # Formats an <img> renders directly. Everything else is transcoded to PNG on the
-# fly by /bepic/view_file, so sequences stay lazy (only scrubbed frames convert).
+# fly by /imageviewer/view_file, so sequences stay lazy (only scrubbed frames convert).
 BROWSER_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif",
                       ".ico", ".svg"}
 
@@ -132,14 +132,14 @@ def needs_proxy(path):
 
 def _cache_path(src, kind="proxy"):
     """Deterministic temp-dir PNG path for a derivative of `src`, so the same
-    source file reuses one cache entry instead of piling up copies. The bEpic_
+    source file reuses one cache entry instead of piling up copies. The ImageViewer_
     prefix keeps these collectable by the viewer's Clear Cache button."""
     tmp = folder_paths.get_temp_directory()
     os.makedirs(tmp, exist_ok=True)
     digest = hashlib.sha1(os.path.normcase(src).encode("utf-8", "replace")).hexdigest()[:16]
     stem = "".join(c for c in os.path.splitext(os.path.basename(src))[0]
                    if c.isalnum() or c in "-_")[:40] or "img"
-    return os.path.join(tmp, f"bEpic_{kind}_{stem}_{digest}.png")
+    return os.path.join(tmp, f"ImageViewer_{kind}_{stem}_{digest}.png")
 
 
 def _cached(dst, src):
@@ -324,7 +324,7 @@ def proxy_for_display(path):
             return dst
         except Exception:
             continue
-    print(f"[bEpicViewer] no decoder for {path} — serving it unconverted")
+    print(f"[ImageViewer] no decoder for {path} — serving it unconverted")
     return None
 
 
@@ -450,7 +450,7 @@ def proxy_for_colorspace(path, colorspace, ev=0.0):
 # and the full-resolution file is still what a SELECTED item loads.
 #
 # Same cache discipline as the display proxies above: one deterministic temp-dir
-# entry per source, reused until the source's mtime moves past it, `bEpic_`-prefixed
+# entry per source, reused until the source's mtime moves past it, `ImageViewer_`-prefixed
 # so the Clear Cache button already collects it. Generated on first request, so a
 # 500-frame directory costs nothing until its tiles are actually looked at.
 
@@ -474,7 +474,7 @@ def thumb_for(path, max_side=THUMB_MAX_SIDE, colorspace=None):
         max_side = THUMB_MAX_SIDE
     ext = os.path.splitext(path)[1].lower()
     if ext not in IMAGE_EXTS or ext == ".svg":
-        # Videos get a poster extracted for them elsewhere (/bepic/extract_frame);
+        # Videos get a poster extracted for them elsewhere (/imageviewer/extract_frame);
         # an SVG is a few KB of text that scales itself.
         return None
 
@@ -512,7 +512,7 @@ def thumb_for(path, max_side=THUMB_MAX_SIDE, colorspace=None):
             im.convert("RGB").save(dst, compress_level=4)
         return dst
     except Exception as e:
-        print("[bEpicViewer] could not thumbnail %s: %s" % (path, e))
+        print("[ImageViewer] could not thumbnail %s: %s" % (path, e))
         return None
 
 

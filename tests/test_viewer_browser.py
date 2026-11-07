@@ -75,7 +75,7 @@ class BrowserTests(unittest.TestCase):
         pg.goto(f"http://127.0.0.1:{self.port}/{name}.html")
         pg.wait_for_function("window.__ready===true", timeout=20000)
         # the stub extension's setup() makes a second, floating viewer: keep it out of the way
-        pg.evaluate("()=>{const all=document.querySelectorAll('bepic-viewer-panel'); if(all[1]) all[1].style.display='none'}")
+        pg.evaluate("()=>{const all=document.querySelectorAll('comfyui-image-viewer-panel'); if(all[1]) all[1].style.display='none'}")
         return pg
 
     # ---- #83: the dock drag -----------------------------------------------------------------------------------
@@ -224,9 +224,9 @@ class BrowserTests(unittest.TestCase):
 
     def test_the_agent_open_message_opens_the_scene(self):
         pg = self.page("motion")
-        pg.evaluate("()=>{const all=document.querySelectorAll('bepic-viewer-panel'); all[1].style.display=''}")
-        pg.evaluate("()=>window.__api.dispatch('bepic.mg.open', {path:'D:/out/logo_reveal.mgscene.json'})")
-        pg.wait_for_function("()=>{const g=document.querySelectorAll('bepic-viewer-panel')[1];"
+        pg.evaluate("()=>{const all=document.querySelectorAll('comfyui-image-viewer-panel'); all[1].style.display=''}")
+        pg.evaluate("()=>window.__api.dispatch('imageviewer.mg.open', {path:'D:/out/logo_reveal.mgscene.json'})")
+        pg.wait_for_function("()=>{const g=document.querySelectorAll('comfyui-image-viewer-panel')[1];"
                              " return g.activeTab==='motion:D:/out/logo_reveal.mgscene.json' && g._mgOn}", timeout=10000)
 
 

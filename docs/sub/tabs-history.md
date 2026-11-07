@@ -13,14 +13,14 @@
 
 Every image source gets its own tab. Tabs are created automatically when:
 
-- A **bEpic Send To Image Viewer** node runs — the tab name is set by the node's `tab_name` field (defaults to the node's unique ID if left blank).
+- A **Send To Image Viewer** node runs — the tab name is set by the node's `tab_name` field (defaults to the node's unique ID if left blank).
 - You open files from the **File Browser** panel, or drag them onto the viewport from it — a `folder_*` tab is created, holding a folder's images as one sequence and each video on its own. See [File Browser](other.md#file-browser).
 - You right-click a node on the canvas and choose **Send to Image Viewer** — a loader opens its file directly, any other image-producing node runs its branch first. See [Send to Image Viewer](other.md#send-to-image-viewer).
 
 
 ### Naming Tabs
 
-Give each bEpicSendToViewer node a meaningful `tab_name` — for example `vae_decode`, `upscaled`, `mask`. This label becomes the tab's title in the viewer.
+Give each ImageViewerSend node a meaningful `tab_name` — for example `vae_decode`, `upscaled`, `mask`. This label becomes the tab's title in the viewer.
 
 > [!TIP]
 > Use a consistent naming convention across projects (e.g. stage names) so you can switch between tabs with number keys without having to read the labels.
@@ -76,7 +76,7 @@ Once several are selected:
 
 With the viewer hovered and the history strip open, <kbd>Shift</kbd>+<kbd>Delete</kbd> removes the selected snapshots — or, when nothing is selected, the snapshot currently open in the viewer. Nothing on disk is touched. When there is nothing to delete the key is left alone.
 
-A plain <kbd>Delete</kbd> is not used, so it always reaches ComfyUI's own delete-selected-nodes. The default binding only fires while the viewer is hovered. To change it, or to make it work with the cursor elsewhere, assign your own combo in **Settings → Keybinding** (*bEpic Viewer: Delete Selected History Snapshots*).
+A plain <kbd>Delete</kbd> is not used, so it always reaches ComfyUI's own delete-selected-nodes. The default binding only fires while the viewer is hovered. To change it, or to make it work with the cursor elsewhere, assign your own combo in **Settings → Keybinding** (*ComfyUI Image Viewer: Delete Selected History Snapshots*).
 
 ### History Context Menu
 
@@ -101,7 +101,7 @@ An entry only goes when the server confirms it: the viewer asks whether the file
 
 ### Clearing All History
 
-The **Clear Cache** button in the playback toolbar deletes all temporary bEpic files and wipes every tab's history. A confirmation dialog prevents accidental clearing.
+The **Clear Cache** button in the playback toolbar deletes all temporary viewer files and wipes every tab's history. A confirmation dialog prevents accidental clearing.
 
 ---
 
@@ -132,7 +132,7 @@ The viewer computes a fast signature for each incoming snapshot. If the same ima
 
 When [agentY](https://github.com/szprivate/agentY) is installed (it installs this viewer beside its ComfyUI extension and saves into it by default), the history strip grows a few things. None of them appear without agentY, except the headings.
 
-**One tab, grouped by stage.** Everything agentY saves goes into one tab (`agentY`). Pictures from a hook stage sit under a heading with the stage's name — the hook's title, e.g. *Characters* or *Places* — and a thumbnail wears what it is (a character's name) at its foot. Any node can do the same: `bEpic Send To Image Viewer` has optional `group` and `label` inputs, and a send that names a `tab_name` but has no node on the open graph is filed in the tab of that name.
+**One tab, grouped by stage.** Everything agentY saves goes into one tab (`agentY`). Pictures from a hook stage sit under a heading with the stage's name — the hook's title, e.g. *Characters* or *Places* — and a thumbnail wears what it is (a character's name) at its foot. Any node can do the same: `Send To Image Viewer` has optional `group` and `label` inputs, and a send that names a `tab_name` but has no node on the open graph is filed in the tab of that name.
 
 **Tag for agentY…** Right-click a thumbnail and choose it, give a name, and the picture becomes a reference agentY understands as `#name` — in a hook's prompt, in the `#` menu of a collector, in the project memory. It is the same thing an `agentY add tag` node with *remember* switched on makes, so it works in any workflow, not only the open one. The thumbnail shows the tag as a badge.
 

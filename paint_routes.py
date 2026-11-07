@@ -5,26 +5,26 @@ The server keeps each document that is open in a page as a SESSION (``_Book``): 
 its pixels, under a random token the page holds. Pixels travel raw (straight RGBA, gzip) so that
 nothing is rounded on the way - a canvas' PNG would premultiply them.
 
-- ``POST /bepic/paint/open`` (JSON) - a picture, an .ora or a .psd by ``path`` (or ``filename`` /
+- ``POST /imageviewer/paint/open`` (JSON) - a picture, an .ora or a .psd by ``path`` (or ``filename`` /
   ``subfolder`` / ``type``), or ``new: {w, h, name, fill}``: a session; answers ``token``, ``doc``
   (the description), ``path``, ``notes``.
-- ``GET /bepic/paint/px?token=&layer=<id>`` / ``mask=<id>`` / ``sel=1`` - a session's pixels.
-- ``POST /bepic/paint/stage?token=&part=layer:<id>|mask:<id>|sel`` - pixels from the page, held in
-  the session until the next save (``gzip`` when ``X-Bepic-Enc: gzip``). Nothing is written to disk,
+- ``GET /imageviewer/paint/px?token=&layer=<id>`` / ``mask=<id>`` / ``sel=1`` - a session's pixels.
+- ``POST /imageviewer/paint/stage?token=&part=layer:<id>|mask:<id>|sel`` - pixels from the page, held in
+  the session until the next save (``gzip`` when ``X-ImageViewer-Enc: gzip``). Nothing is written to disk,
   and a token is unguessable, so this needs no more fence than the host check.
-- ``POST /bepic/paint/save`` (JSON) - the page's description plus the staged pixels (the rest,
+- ``POST /imageviewer/paint/save`` (JSON) - the page's description plus the staged pixels (the rest,
   named in ``keep``, as the session has them) become the session's document; ``write`` false stops
   there (``sync``), else it is written: over its own .ora, or - a picture, a .psd, a new document,
   ``as_new`` - as the next version by the export rule (kind ``paint``).
-- ``POST /bepic/paint/export`` (JSON) - the session's document as png / jpg / webp / tif (flat) or
+- ``POST /imageviewer/paint/export`` (JSON) - the session's document as png / jpg / webp / tif (flat) or
   psd (layers; adjustments baked), by the export rule.
-- ``POST /bepic/paint/doc`` (JSON) - the agent's: ``doc`` (a path, or a token) and ``ops``
+- ``POST /imageviewer/paint/doc`` (JSON) - the agent's: ``doc`` (a path, or a token) and ``ops``
   (paint_ops). Without ops: the outline. With ops: applied (all or none), written when the document
   is a file (an .ora over itself; a picture / .psd as a new .ora version beside the rule), and the page
-  told (``bepic.paint.changed``).
-- ``POST /bepic/paint/describe`` (JSON) - ``token``: the session's description as it is now (after the
+  told (``imageviewer.paint.changed``).
+- ``POST /imageviewer/paint/describe`` (JSON) - ``token``: the session's description as it is now (after the
   agent's or the page's ops), to read its pixels again.
-- ``POST /bepic/paint/snapshot`` (JSON) - the picture as it looks and the selection, as PNGs in
+- ``POST /imageviewer/paint/snapshot`` (JSON) - the picture as it looks and the selection, as PNGs in
   ``<input>/paint`` - what a workflow is given to make pixels from (generative fill and friends).
 
 Every POST but ``stage`` is ``path_access.same_origin``; every path is ``path_access.is_allowed``
@@ -297,7 +297,7 @@ def _fonts():
 
 
 def agent_ops(doc_ref, ops, *, resolve, is_allowed, may_serve, export_rules, output_dir, write=True):
-    """What ``/bepic/paint/doc`` does: ``(answer, token or None)``."""
+    """What ``/imageviewer/paint/doc`` does: ``(answer, token or None)``."""
     tok, s = None, None
     if isinstance(doc_ref, str) and _TOKEN.fullmatch(doc_ref):
         s = BOOK.get(doc_ref)
@@ -368,7 +368,7 @@ def describe(tok, s):
 # ── the routes ───────────────────────────────────────────────────────────────
 
 def register(add, *, web, path_access, export_rules, folder_paths, send, resolve):
-    """Add the routes through ``add(method, path, handler)`` (both /bepic and /api/bepic)."""
+    """Add the routes through ``add(method, path, handler)`` (both /imageviewer and /api/imageviewer)."""
     import asyncio
 
     def off(fn, *a, **k):
@@ -451,7 +451,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, send, resolve
             return err("too large", 413)
         data = await request.read()
         try:
-            await off(stage, s, request.query.get("part"), data, request.headers.get("X-Bepic-Enc") == "gzip")
+            await off(stage, s, request.query.get("part"), data, request.headers.get("X-ImageViewer-Enc") == "gzip")
         except (PaintError, OSError, EOFError) as e:
             return err(e)
         return web.json_response({"ok": True})
@@ -498,7 +498,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, send, resolve
             return err(e)
         if body.get("ops"):
             try:
-                send("bepic.paint.changed", {"path": answer.get("path"), "token": tok, "written": bool(answer.get("written")),
+                send("imageviewer.paint.changed", {"path": answer.get("path"), "token": tok, "written": bool(answer.get("written")),
                                              "said": answer.get("said", []), "from": body.get("from") or "agent"})
             except Exception:  # noqa: BLE001 - no page listening is fine
                 pass
@@ -529,5 +529,5 @@ def register(add, *, web, path_access, export_rules, folder_paths, send, resolve
     for method, name, h in (("POST", "open", h_open), ("GET", "px", h_px), ("POST", "stage", h_stage),
                             ("POST", "save", h_save), ("POST", "export", h_export), ("POST", "doc", h_doc),
                             ("POST", "describe", h_describe), ("POST", "snapshot", h_snapshot)):
-        add(method, "/bepic/paint/" + name, h)
-        add(method, "/api/bepic/paint/" + name, h)
+        add(method, "/imageviewer/paint/" + name, h)
+        add(method, "/api/imageviewer/paint/" + name, h)

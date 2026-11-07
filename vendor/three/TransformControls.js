@@ -496,7 +496,7 @@ class TransformControls extends Controls {
 			if ( axis.indexOf( 'Y' ) === - 1 ) this._offset.y = 0;
 			if ( axis.indexOf( 'Z' ) === - 1 ) this._offset.z = 0;
 
-			// bEpic patch: back to world through the SAME rotation the handles are
+			// ImageViewer patch: back to world through the SAME rotation the handles are
 			// drawn with (the decomposed world matrix), then into the parent's
 			// space. Upstream used the object's own quaternion here, which differs
 			// from the drawn frame whenever a scale is negative: a mirrored object
@@ -705,7 +705,7 @@ class TransformControls extends Controls {
 			if ( this.rotationSnap ) this.rotationAngle = Math.round( this.rotationAngle / this.rotationSnap ) * this.rotationSnap;
 
 			// Apply rotate
-			// bEpic patch: always turn about the axis as it is DRAWN, in world
+			// ImageViewer patch: always turn about the axis as it is DRAWN, in world
 			// space, and carry that into the parent's space — mirror included. The
 			// angle above is measured against the drawn axis; upstream then turned
 			// about the object's own local axis, which points the other way on a

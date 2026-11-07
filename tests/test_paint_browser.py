@@ -72,7 +72,7 @@ class PaintBrowserTests(unittest.TestCase):
         async def serve():
             app = web.Application(client_max_size=1 << 28)
             for r in cls.routes_app.router.routes():
-                if "/bepic/" in r.resource.canonical:
+                if "/imageviewer/" in r.resource.canonical:
                     app.router.add_route(r.method, r.resource.canonical, r.handler)
             app.router.add_route("GET", "/{tail:.*}", static)
             cls.runner = web.AppRunner(app)
@@ -120,7 +120,7 @@ class PaintBrowserTests(unittest.TestCase):
         pg.on("pageerror", lambda e: self.errors.append(str(e)))
         pg.goto(f"http://127.0.0.1:{self.port}/paint.html")
         pg.wait_for_function("window.__ready===true", timeout=20000)
-        pg.evaluate("()=>{const all=document.querySelectorAll('bepic-viewer-panel'); if(all[1]) all[1].style.display='none'}")
+        pg.evaluate("()=>{const all=document.querySelectorAll('comfyui-image-viewer-panel'); if(all[1]) all[1].style.display='none'}")
         return pg
 
     def open_photo(self, pg):
@@ -170,14 +170,14 @@ class PaintBrowserTests(unittest.TestCase):
         pg.keyboard.press("Control+s")
         pg.wait_for_function("() => __panel._paintActive().path", timeout=10000)
         path = pg.evaluate("() => __panel._paintActive().path")
-        self.assertRegex(path.replace("\\", "/"), r"/bepic/paint/photo_v\d{3}\.ora$")   # the next version free (tests share the folder)
+        self.assertRegex(path.replace("\\", "/"), r"/imageviewer/paint/photo_v\d{3}\.ora$")   # the next version free (tests share the folder)
         self.assertFalse(pg.evaluate(f"() => {ed}.isDirty()"))
         doc = self.P.read_ora(path)
         self.assertEqual([L["name"] for L in doc.layers], ["Background", "Strokes", "Invert"])
         strokes = doc.layers[1]
         self.assertEqual(int((doc.px[strokes["id"]][..., 3] > 0).sum()), n)
         # The page's picture and the file's look the same (one arithmetic, twice).
-        flat_js = pg.evaluate(f"""async () => {{ const D = await import('/extensions/viewer/bEpicViewer_paintData.js'); const e = {ed};
+        flat_js = pg.evaluate(f"""async () => {{ const D = await import('/extensions/viewer/imageViewer_paintData.js'); const e = {ed};
             const c = D.composite(e.doc, e._pixOf, e._maskOf); return [...c.slice((60*200+60)*4, (60*200+60)*4 + 4)]; }}""")
         flat_py = self.P.composite(doc)[60, 60].tolist()
         self.assertEqual(flat_js, flat_py)
@@ -259,14 +259,14 @@ class PaintBrowserTests(unittest.TestCase):
         pg.evaluate("() => __panel.paintSave(__panel._paintActive())")
         pg.wait_for_function("() => __panel._paintActive().path", timeout=10000)
         path = pg.evaluate("() => __panel._paintActive().path")
-        # What edit_image does: POST /bepic/paint/doc; the server's message is handed to the page as ComfyUI would.
+        # What edit_image does: POST /imageviewer/paint/doc; the server's message is handed to the page as ComfyUI would.
         del self.sent[:]
-        got = pg.evaluate("""async (path) => { const r = await fetch('/bepic/paint/doc', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        got = pg.evaluate("""async (path) => { const r = await fetch('/imageviewer/paint/doc', { method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ doc: path, ops: [{ op: 'add_layer', color: '#00ff00', name: 'Green', opacity: 50 }] }) }); return [r.status, await r.json()]; }""", path)
         self.assertEqual(got[0], 200, got)
-        ev = [d for e, d in self.sent if e == "bepic.paint.changed"]
+        ev = [d for e, d in self.sent if e == "imageviewer.paint.changed"]
         self.assertEqual(len(ev), 1)
-        pg.evaluate("(d) => __api.dispatch('bepic.paint.changed', d)", ev[0])
+        pg.evaluate("(d) => __api.dispatch('imageviewer.paint.changed', d)", ev[0])
         pg.wait_for_function(f"() => {ed}.doc.layers.length === 2", timeout=10000)
         self.assertEqual(pg.evaluate(f"() => {ed}.doc.layers[1].name"), "Green")
         self.assertFalse(pg.evaluate(f"() => {ed}.isDirty()"))      # it is what the file holds
@@ -285,7 +285,7 @@ class PaintBrowserTests(unittest.TestCase):
         self.open_photo(pg)
         ed = self.ED
         # A selection over the red block; heal fills it from around it (blue), here.
-        pg.evaluate(f"""async () => {{ const D = await import('/extensions/viewer/bEpicViewer_paintData.js'); const e = {ed};
+        pg.evaluate(f"""async () => {{ const D = await import('/extensions/viewer/imageViewer_paintData.js'); const e = {ed};
             e.setSelection(D.rectMask ? D.rectMask(200, 120, 40, 20, 120, 80) : null); }}""")
         has_sel = pg.evaluate(f"() => !!{ed}.sel")
         if not has_sel:
@@ -339,7 +339,7 @@ class PaintBrowserTests(unittest.TestCase):
         pg.evaluate("() => __panel.paintBarOpen()")
         self.assertEqual(pg.evaluate("() => __panel.tabOrder.filter((k) => k.startsWith('paint:')).length"), 1)
         # An editor with no picture shows the arrow (the brush hides the pointer only over a picture).
-        cur = pg.evaluate("""async () => { const m = await import('/extensions/viewer/bEpicViewer_paintEditor.js');
+        cur = pg.evaluate("""async () => { const m = await import('/extensions/viewer/imageViewer_paintEditor.js');
             const d = document.createElement('div'); d.style.cssText = 'position:fixed;left:0;top:0;width:300px;height:200px'; document.body.append(d);
             const e = m.createPaintEditor(d, {}); const c = e.wrap.style.cursor; const ec = getComputedStyle(e.wrap.querySelector('.paint-empty')).cursor; e.dispose(); d.remove(); return [c, ec]; }""")
         self.assertEqual(cur, ["default", "default"])

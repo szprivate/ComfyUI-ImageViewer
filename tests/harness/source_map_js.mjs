@@ -1,7 +1,7 @@
 // Helper for tests/test_source_map.py (kept out of tests/*.mjs: it reads stdin) (not a test of its own): what the Edit tab shows on each
 // film frame of a range - the clip (pictureAt's key, every live track counted) and the moment of
 // its source (srcLocal) - for the cuts given on stdin as [{cut, start, end}]. Prints JSON.
-import * as D from "../../js/bEpicViewer_editTimelineData.js";
+import * as D from "../../js/imageViewer_editTimelineData.js";
 
 let raw = "";
 process.stdin.setEncoding("utf8");

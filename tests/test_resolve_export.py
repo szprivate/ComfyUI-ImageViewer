@@ -32,7 +32,7 @@ if web is not None:
 
 def _rx():
     _tio()
-    return importlib.import_module("bepic_takes_tio_under_test.resolve_export")
+    return importlib.import_module("imageviewer_takes_tio_under_test.resolve_export")
 
 
 def T(text):
@@ -566,7 +566,7 @@ class Package(unittest.TestCase):
         return self.calls((path, body, kw))[0]
 
     def run_job(self, body):
-        status, text = self.post("/bepic/timeline_export_resolve", body)
+        status, text = self.post("/imageviewer/timeline_export_resolve", body)
         self.assertEqual(status, 200, text)
         job = self.rx.job_of(json.loads(text)["id"])
         for _ in range(600):
@@ -578,7 +578,7 @@ class Package(unittest.TestCase):
     def test_the_package_has_everything_and_the_originals_are_unchanged(self):
         before = {p: (_digest(p), os.stat(p).st_mtime_ns) for p in (self.a, self.b, self.c)}
         source = self.save(self.a, self.b, self.c, self.a)
-        status, text = self.post("/bepic/timeline_export_resolve_plan", {"source": source})
+        status, text = self.post("/imageviewer/timeline_export_resolve_plan", {"source": source})
         self.assertEqual(status, 200, text)
         plan = json.loads(text)
         self.assertEqual(plan["name"], "my cut_resolve")
@@ -622,7 +622,7 @@ class Package(unittest.TestCase):
         for item in self.tio._every_clip(doc):
             path = self.tio._file(item["media_reference"])
             self.assertTrue(os.path.isfile(path), path)
-            rel = item["metadata"]["bepic"]["package_media"]
+            rel = item["metadata"]["imageviewer"]["package_media"]
             self.assertTrue(os.path.isfile(os.path.join(root, rel)), rel)
         self.assertEqual(len(self.tio.read_editable(os.path.join(root, "my cut_resolve.otio"))["clips"]), 4)
         with open(os.path.join(root, "README.txt"), encoding="utf-8") as fh:
@@ -631,9 +631,9 @@ class Package(unittest.TestCase):
         self.assertIn("NOT TESTED INSIDE RESOLVE", readme)
         self.assertNotIn(".partial", "".join(os.listdir(self.folder)))
         # The next one is the next version, and the name there is refused.
-        again = json.loads(self.post("/bepic/timeline_export_resolve_plan", {"source": source})[1])
+        again = json.loads(self.post("/imageviewer/timeline_export_resolve_plan", {"source": source})[1])
         self.assertEqual(again["name"], "my cut_resolve_v002")
-        status, text = self.post("/bepic/timeline_export_resolve", {"source": source, "name": "my cut_resolve"})
+        status, text = self.post("/imageviewer/timeline_export_resolve", {"source": source, "name": "my cut_resolve"})
         self.assertEqual(status, 409, text)
 
     def test_cancel_cleans_up_and_keeps_the_originals(self):
@@ -666,11 +666,11 @@ class Package(unittest.TestCase):
             return real(job, src, target)
         rx.Job._copy = held
         try:
-            status, text = self.post("/bepic/timeline_export_resolve", {"source": source, "name": "held"})
+            status, text = self.post("/imageviewer/timeline_export_resolve", {"source": source, "name": "held"})
             self.assertEqual(status, 200, text)
             jid = json.loads(text)["id"]
-            (s1, t1), (s2, t2) = self.calls(("/bepic/timeline_export_resolve_status", {"id": jid}, {}),
-                                            ("/bepic/timeline_export_resolve_cancel", {"id": jid}, {}))
+            (s1, t1), (s2, t2) = self.calls(("/imageviewer/timeline_export_resolve_status", {"id": jid}, {}),
+                                            ("/imageviewer/timeline_export_resolve_cancel", {"id": jid}, {}))
             self.assertEqual((s1, s2), (200, 200))
             self.assertEqual(json.loads(t1)["status"], "running", "the request came back while the copy runs")
             hold.set()
@@ -690,7 +690,7 @@ class Package(unittest.TestCase):
         real = self.rx._free_space
         self.rx._free_space = lambda folder: 10
         try:
-            status, text = self.post("/bepic/timeline_export_resolve", {"source": source})
+            status, text = self.post("/imageviewer/timeline_export_resolve", {"source": source})
         finally:
             self.rx._free_space = real
         self.assertEqual(status, 507, text)
@@ -715,9 +715,9 @@ class Package(unittest.TestCase):
         shutil.copy(self.a, gone)
         source = self.save(self.a, gone)
         os.remove(gone)
-        plan = json.loads(self.post("/bepic/timeline_export_resolve_plan", {"source": source})[1])
+        plan = json.loads(self.post("/imageviewer/timeline_export_resolve_plan", {"source": source})[1])
         self.assertEqual(plan["missing"], [gone])
-        status, text = self.post("/bepic/timeline_export_resolve", {"source": source})
+        status, text = self.post("/imageviewer/timeline_export_resolve", {"source": source})
         self.assertEqual(status, 422)
         self.assertIn("gone.mp4", text)
         job = self.run_job({"source": source, "continue_missing": True})
@@ -729,10 +729,10 @@ class Package(unittest.TestCase):
 
     def test_outside_the_roots_is_403_for_the_cut_the_folder_and_a_source(self):
         source = self.save(self.a)
-        status, _ = self.post("/bepic/timeline_export_resolve", {"source": source, "folder": self.outside})
+        status, _ = self.post("/imageviewer/timeline_export_resolve", {"source": source, "folder": self.outside})
         self.assertEqual(status, 403)
         self.assertEqual(os.listdir(self.outside), [])
-        status, _ = self.post("/bepic/timeline_export_resolve_plan", {"source": {"path": os.path.join(self.outside, "x.otio"), "external": 1}})
+        status, _ = self.post("/imageviewer/timeline_export_resolve_plan", {"source": {"path": os.path.join(self.outside, "x.otio"), "external": 1}})
         self.assertEqual(status, 403)
         # A timeline naming a file outside: never copied, whatever the .otio says.
         secret = os.path.join(self.outside, "secret.mp4")
@@ -740,9 +740,9 @@ class Package(unittest.TestCase):
         doc = self.tio._load(self.otio)
         self.tio._track_of(doc, "video")["children"][0]["media_reference"]["target_url"] = self.tio._url(secret)
         self.tio._write_doc(self.otio, doc)
-        plan = json.loads(self.post("/bepic/timeline_export_resolve_plan", {"source": source})[1])
+        plan = json.loads(self.post("/imageviewer/timeline_export_resolve_plan", {"source": source})[1])
         self.assertEqual(len(plan["refused"]), 1)
-        status, text = self.post("/bepic/timeline_export_resolve", {"source": source})
+        status, text = self.post("/imageviewer/timeline_export_resolve", {"source": source})
         self.assertEqual(status, 403, text)
         self.assertEqual(os.listdir(self.folder), ["my cut.otio"])
 
@@ -755,7 +755,7 @@ class Package(unittest.TestCase):
         doc = self.tio._load(self.otio)
         self.tio._track_of(doc, "video")["children"][0]["media_reference"]["target_url"] = self.tio._url(secret)
         self.tio._write_doc(self.otio, doc)
-        status, text = self.post("/bepic/timeline_export_resolve", {"source": source})
+        status, text = self.post("/imageviewer/timeline_export_resolve", {"source": source})
         self.assertEqual(status, 403, text)
 
     def test_traversal_in_the_name_stays_in_the_folder(self):
@@ -767,7 +767,7 @@ class Package(unittest.TestCase):
     def test_every_route_refuses_another_site_and_anything_but_json(self):
         source = self.save(self.a)
         for route in ("_plan", "", "_status", "_cancel"):
-            status, _ = self.post("/bepic/timeline_export_resolve" + route, {"source": source, "id": "x"}, headers={"Origin": "http://evil.example"})
+            status, _ = self.post("/imageviewer/timeline_export_resolve" + route, {"source": source, "id": "x"}, headers={"Origin": "http://evil.example"})
             self.assertEqual(status, 403, route)
 
         async def form():
@@ -775,13 +775,13 @@ class Package(unittest.TestCase):
             for r in self.app.router.routes():
                 app.router.add_route(r.method, r.resource.canonical, r.handler)
             async with TestClient(TestServer(app)) as c:
-                r = await c.post("/bepic/timeline_export_resolve", data="x=1", headers={"Content-Type": "text/plain"})
+                r = await c.post("/imageviewer/timeline_export_resolve", data="x=1", headers={"Content-Type": "text/plain"})
                 return r.status
         self.assertEqual(asyncio.run(form()), 403)
         self.assertEqual(os.listdir(self.folder), ["my cut.otio"])
 
     def test_an_unknown_job_is_404(self):
-        self.assertEqual(self.post("/bepic/timeline_export_resolve_status", {"id": "nope"})[0], 404)
+        self.assertEqual(self.post("/imageviewer/timeline_export_resolve_status", {"id": "nope"})[0], 404)
 
     def test_real_probe_reads_codec_and_rate(self):
         info = self.rx.probe(self.a)

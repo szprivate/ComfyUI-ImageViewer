@@ -1,11 +1,11 @@
-"""A title drawn by the browser (bEpicViewer_editTitles / paintTitle, the Edit tab's preview) and by the render
+"""A title drawn by the browser (imageViewer_editTitles / paintTitle, the Edit tab's preview) and by the render
 (title_render, Pillow) lands in the same place: for each alignment, bold, italic (a real face and a synthetic one),
 underline, tracking, several lines and a box, the bounding box of what is drawn agrees within a few pixels, and so does
 how much is drawn.
 
 Needs Playwright with an installed Edge or Chrome, node for the stub server, Pillow and numpy; skipped without them.
 The fonts are copied out of the machine's font folder into a scratch folder and served from there; the browser gets
-the same list the server's /bepic/fonts would answer (title_render.font_list of that folder).
+the same list the server's /imageviewer/fonts would answer (title_render.font_list of that folder).
 Run: python -m unittest tests.test_edit_titles_parity
 """
 import importlib
@@ -51,7 +51,7 @@ CASES = [
 ]
 
 PAINT = """async ([look, w, h]) => {
-  const F = await import('/extensions/viewer/bEpicViewer_editFonts.js');
+  const F = await import('/extensions/viewer/imageViewer_editFonts.js');
   await F.fontList(true);
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   let f = F.paintTitle(c, look, { x: 0, y: 0, w, h });
@@ -89,10 +89,10 @@ class TitleParityTests(unittest.TestCase):
         os.makedirs(cls.fonts)
         for f in FONTS:
             shutil.copy(os.path.join(src, f), cls.fonts)
-        pkg = types.ModuleType("bepic_parity")
+        pkg = types.ModuleType("imageviewer_parity")
         pkg.__path__ = [ROOT]
-        sys.modules["bepic_parity"] = pkg
-        cls.tr = importlib.import_module("bepic_parity.title_render")
+        sys.modules["imageviewer_parity"] = pkg
+        cls.tr = importlib.import_module("imageviewer_parity.title_render")
         cls.families = cls.tr.scan([cls.fonts])
         listing = {"fonts": [{"family": f["family"], "faces": {k: {"id": v["id"], "asc": v["asc"], "desc": v["desc"],
                                                                     "url": "/media/" + os.path.basename(v["path"])}
@@ -177,7 +177,7 @@ class TitleParityTests(unittest.TestCase):
         a, b = _bbox(rgba[:, :, 3]), _bbox(js)
         for p, q in zip(a, b):
             self.assertLessEqual(abs(p - q), 3)
-        said = self.pg.evaluate("async (l) => (await import('/extensions/viewer/bEpicViewer_editFonts.js')).fontNote(l)", look)
+        said = self.pg.evaluate("async (l) => (await import('/extensions/viewer/imageViewer_editFonts.js')).fontNote(l)", look)
         self.assertIn("not on this machine", said)
 
 

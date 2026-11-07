@@ -66,7 +66,7 @@ def _write_tone(path, seconds=3.0, rate=22050):
 class ViewerAudioTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.media = tempfile.mkdtemp(prefix="bepic_audio_")
+        cls.media = tempfile.mkdtemp(prefix="imageviewer_audio_")
         _write_tone(os.path.join(cls.media, "tone.wav"))
         cls.port = _free_port()
         env = dict(os.environ, PORT=str(cls.port), HARNESS_MEDIA_DIR=cls.media)

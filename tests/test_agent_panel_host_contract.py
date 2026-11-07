@@ -20,26 +20,26 @@ def read(name):
 
 class PanelHostContract(unittest.TestCase):
     def test_panel_body_is_inside_the_shadow_root(self):
-        src = read("bEpicViewer_agentPanel.js")
+        src = read("imageViewer_agentPanel.js")
         self.assertIn("this.shadowRoot.appendChild(style)", src)
         self.assertIn('host.mountInto(body, { where: "viewer"', src)
 
     def test_full_screen_mode_hides_the_page_body(self):
         # why a menu appended to document.body vanishes in the viewer
-        src = read("bEpicViewer.js")
-        self.assertIn("body.bepic-viewer-only > *:not(bepic-viewer-panel)", src)
+        src = read("imageViewer.js")
+        self.assertIn("body.comfyui-image-viewer-only > *:not(comfyui-image-viewer-panel)", src)
 
     def test_viewer_names_what_agenty_reads(self):
-        src = read("bEpicViewer_agentPanel.js")
+        src = read("imageViewer_agentPanel.js")
         for name in ("openAgentPanel", "closeAgentPanel", "extractFrame"):
             self.assertIn(name, src)
 
     def test_viewer_offers_the_history_selection(self):
-        # agentY-comfyuiConnect reads window.bEpicViewerApi.historySelection()
+        # agentY-comfyuiConnect reads window.imageViewerApi.historySelection()
         # with each message and for get_history_selection.
-        src = read("bEpicViewer.js")
+        src = read("imageViewer.js")
         self.assertIn("historySelection: () => globalViewerPanel?.agentHistorySelection?.()", src)
-        self.assertIn("agentHistorySelection()", read("bEpicViewer_agentY.js"))
+        self.assertIn("agentHistorySelection()", read("imageViewer_agentY.js"))
 
 
 if __name__ == "__main__":

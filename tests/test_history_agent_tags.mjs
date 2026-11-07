@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
     buildAgentTagIndex, agentTagsOfSnapshot, agentTagIndexSig, agentFilterValue, agentFilterName, normPath,
-} from "../js/bEpicViewer_historyAgentTags.js";
+} from "../js/imageViewer_historyAgentTags.js";
 
 const list = [
     { tag: "hero_face", path: String.raw`D:\out\Hero.png`, source: "canvas" },
@@ -60,7 +60,7 @@ test("bad input gives an empty index", () => {
 });
 
 test("one tag whatever its spelling: the store files hero_face and Hero-Face alike", async () => {
-    const { buildAgentTagIndex, agentTagKey, agentTagsOfSnapshot } = await import("../js/bEpicViewer_historyAgentTags.js");
+    const { buildAgentTagIndex, agentTagKey, agentTagsOfSnapshot } = await import("../js/imageViewer_historyAgentTags.js");
     assert.equal(agentTagKey("#Hero Face"), "hero-face");
     assert.equal(agentTagKey("hero_face"), agentTagKey("Hero-Face"));
     const index = buildAgentTagIndex([{ tag: "hero_face", path: "D:/out/a.png" }, { tag: "Hero-Face", path: "D:/out/b.png" }],

@@ -110,7 +110,7 @@ def box(f=0, fe=None, **kw):
 
 
 class InWords(unittest.TestCase):
-    """report() answers in the shape the page does (bEpicViewer_viewerState.annotationReport)."""
+    """report() answers in the shape the page does (imageViewer_viewerState.annotationReport)."""
 
     def test_a_film_is_told_per_frame_range_with_timecodes_and_notes(self):
         doc = aio.clean({"fps": 24, "frames": 96, "width": 640, "height": 360,

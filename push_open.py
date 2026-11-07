@@ -1,4 +1,4 @@
-"""What a ``POST /bepic/push`` names, turned into the files to show.
+"""What a ``POST /imageviewer/push`` names, turned into the files to show.
 
 The agent says "show me clip 3" or "open these frames": a file, a folder, an
 image sequence written as ``frame_%04d.png`` / ``frame_####.png`` / ``frame_*.png``,

@@ -1,15 +1,15 @@
 """Which folders the viewer's HTTP routes may read from and write to.
 
-Every /bepic/* route that takes a path checks it here. Those routes answer
+Every /imageviewer/* route that takes a path checks it here. Those routes answer
 anything that can reach ComfyUI's port — another machine when ComfyUI runs with
 --listen, or any page open in the user's own browser — so a path in a request
 is a claim to be checked, never a permission.
 
 Allowed, always: ComfyUI's input, output and temp folders. On top of those, the
 user can allow more folders, e.g. a project drive:
-  - one per line in ~/.bepic_viewer/roots.txt ('#' starts a comment; the file
-    named by BEPIC_VIEWER_ROOTS_FILE instead, when that is set), or
-  - in the BEPIC_VIEWER_ROOTS environment variable, separated by ';' on Windows
+  - one per line in ~/.comfyui_image_viewer/roots.txt ('#' starts a comment; the file
+    named by IMAGE_VIEWER_ROOTS_FILE instead, when that is set), or
+  - in the IMAGE_VIEWER_ROOTS environment variable, separated by ';' on Windows
     and ':' elsewhere — the form a launcher such as AYON can set.
 Both live where ComfyUI's web API can't write — its userdata routes are confined
 to the per-user folder. The file is re-read whenever it changes, so an edit
@@ -23,12 +23,12 @@ stash, and the list was empty again at every start. The old file is still read
 — an install that lists folders there keeps working — and its folders are
 copied to the new file the first time, so they survive the next sweep.
 
-The viewer's settings page edits the file too (/bepic/roots). That is the one
+The viewer's settings page edits the file too (/imageviewer/roots). That is the one
 request that can widen the list, so it is fenced (`may_edit`): answered only
 for a request from the ComfyUI machine itself, sent by ComfyUI's own page —
 another site open in the browser can't — unless the admin allows remote
-editing with BEPIC_VIEWER_ROOTS_REMOTE_EDIT=1, and never when
-BEPIC_VIEWER_ROOTS_LOCKED=1. Folders in the environment variable are shown but
+editing with IMAGE_VIEWER_ROOTS_REMOTE_EDIT=1, and never when
+IMAGE_VIEWER_ROOTS_LOCKED=1. Folders in the environment variable are shown but
 can't be removed from the page: whoever set the variable owns them.
 
 Workflow execution is not affected: a node in a queued prompt still loads any
@@ -43,8 +43,13 @@ from urllib.parse import urlsplit
 
 import folder_paths
 
-ROOTS_ENV  = "BEPIC_VIEWER_ROOTS"
-ROOTS_FILE_ENV = "BEPIC_VIEWER_ROOTS_FILE"
+try:                                    # the viewer's old "bEpic" names (legacy_names.py)
+    from .legacy_names import user_dir as _user_dir
+except ImportError:
+    from legacy_names import user_dir as _user_dir
+
+ROOTS_ENV  = "IMAGE_VIEWER_ROOTS"
+ROOTS_FILE_ENV = "IMAGE_VIEWER_ROOTS_FILE"
 LEGACY_FILE = os.path.join(folder_paths.base_path, "bepic_viewer_roots.txt")
 
 
@@ -52,16 +57,16 @@ def _roots_file():
     custom = os.environ.get(ROOTS_FILE_ENV, "").strip().strip('"')
     if custom:
         return os.path.abspath(os.path.expandvars(os.path.expanduser(custom)))
-    return os.path.join(os.path.expanduser("~"), ".bepic_viewer", "roots.txt")
+    return os.path.join(_user_dir(), "roots.txt")
 
 
 ROOTS_FILE = _roots_file()
-LOCKED_ENV = "BEPIC_VIEWER_ROOTS_LOCKED"
-REMOTE_EDIT_ENV = "BEPIC_VIEWER_ROOTS_REMOTE_EDIT"
+LOCKED_ENV = "IMAGE_VIEWER_ROOTS_LOCKED"
+REMOTE_EDIT_ENV = "IMAGE_VIEWER_ROOTS_REMOTE_EDIT"
 
-_FILE_HEADER = """# Folders the bEpic Image Viewer may open, besides ComfyUI's input, output and
+_FILE_HEADER = """# Folders the ComfyUI Image Viewer may open, besides ComfyUI's input, output and
 # temp folders. One per line; '#' starts a comment. Edited by hand or from
-# ComfyUI's Settings -> bEpic Viewer -> Folders.
+# ComfyUI's Settings -> ComfyUI Image Viewer -> Folders.
 """
 
 _cache = {"key": None, "roots": []}
@@ -114,7 +119,7 @@ def _read_entries(path):
     except FileNotFoundError:
         return []
     except Exception as e:
-        print(f"[bEpicViewer] could not read {path}: {e}")
+        print(f"[ImageViewer] could not read {path}: {e}")
         return []
 
 
@@ -156,7 +161,7 @@ def _adopt_legacy():
         try:
             _write_entries(ROOTS_FILE, both)
         except Exception as e:
-            print(f"[bEpicViewer] could not copy {LEGACY_FILE} to {ROOTS_FILE}: {e}")
+            print(f"[ImageViewer] could not copy {LEGACY_FILE} to {ROOTS_FILE}: {e}")
 
 
 def file_entries():
@@ -279,7 +284,7 @@ def roots():
             if label == path:
                 why = too_broad(path)
                 if why:
-                    print(f"[bEpicViewer] not allowing {path}: {why}. List the project "
+                    print(f"[ImageViewer] not allowing {path}: {why}. List the project "
                           f"folders inside it instead.")
                     continue
             if real not in seen:
@@ -333,7 +338,7 @@ def refusal(path):
     return (f"{path} is outside the folders the viewer may open: ComfyUI's input, "
             f"output and temp folders, plus any listed in {ROOTS_FILE} (one per "
             f"line) or in the {ROOTS_ENV} environment variable. Add the folder "
-            f"in ComfyUI's Settings → bEpic Viewer → Folders (or in that file) "
+            f"in ComfyUI's Settings → ComfyUI Image Viewer → Folders (or in that file) "
             f"to open it here.")
 
 
@@ -491,11 +496,11 @@ def write_file_entries(entries):
     if _read_entries(LEGACY_FILE):
         try:
             _write_entries(LEGACY_FILE, [], comments=[
-                "# The bEpic Image Viewer keeps its folder list per user now:",
+                "# The ComfyUI Image Viewer keeps its folder list per user now:",
                 f"# {ROOTS_FILE}",
                 "# (This file is still read; folders listed here are copied there.)"])
         except Exception as e:
-            print(f"[bEpicViewer] could not empty {LEGACY_FILE}: {e}")
+            print(f"[ImageViewer] could not empty {LEGACY_FILE}: {e}")
     _cache["key"] = None
     _cache["legacy"] = _mtime(LEGACY_FILE)
     return clean

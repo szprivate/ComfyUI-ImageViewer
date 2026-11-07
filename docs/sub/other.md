@@ -14,15 +14,15 @@ It opens on **ComfyUI's input folder**, which the server reports, so it is the r
 
 Out of the box, the browser — and everything else in the viewer that opens a file by its path, such as **Send to Image Viewer** on a loader node — reaches **ComfyUI's input, output and temp folders**, and nothing else. A path outside them is refused with a message saying so.
 
-To open more — a project drive, a plates folder on a share — add the folders in **Settings → bEpic Viewer → Folders**, or list them, one per line, in `~/.bepic_viewer/roots.txt` (the user's home folder on the ComfyUI machine; `BEPIC_VIEWER_ROOTS_FILE` names another file):
+To open more — a project drive, a plates folder on a share — add the folders in **Settings → ComfyUI Image Viewer → Folders**, or list them, one per line, in `~/.comfyui_image_viewer/roots.txt` (the user's home folder on the ComfyUI machine; `IMAGE_VIEWER_ROOTS_FILE` names another file):
 
 ```text
-# Folders the bEpic viewer may open, besides ComfyUI's own
+# Folders the ComfyUI Image Viewer may open, besides ComfyUI's own
 W:\
 \\fileserver\projects
 ```
 
-Or set the `BEPIC_VIEWER_ROOTS` environment variable, folders separated by `;` on Windows (`:` elsewhere) — the handier form for a launcher such as AYON that sets up ComfyUI's environment. Both are read on every request, so an edit needs no restart.
+Or set the `IMAGE_VIEWER_ROOTS` environment variable, folders separated by `;` on Windows (`:` elsewhere) — the handier form for a launcher such as AYON that sets up ComfyUI's environment. Both are read on every request, so an edit needs no restart.
 
 The file is kept per user rather than in ComfyUI's folder because that folder is usually a git checkout a launcher or updater manages: one that stashes untracked files before switching versions took the list with it, and the folders had to be added again after every start. A `bepic_viewer_roots.txt` in ComfyUI's folder — where the list used to live — is still read, and its folders are copied to the new file.
 
@@ -77,7 +77,7 @@ Right-click a node on the canvas and choose **Send to Image Viewer**. Nodes that
 
 ### On a Key
 
-The same thing is available as a command, so it can be given a keyboard shortcut: open **Settings → Keybinding**, search for `bEpic`, and assign a combo to **bEpic Viewer: Send Selected Node To Image Viewer**. It ships without one — every unmodified key is already spoken for.
+The same thing is available as a command, so it can be given a keyboard shortcut: open **Settings → Keybinding**, search for `Image Viewer`, and assign a combo to **ComfyUI Image Viewer: Send Selected Node To Image Viewer**. It ships without one — every unmodified key is already spoken for.
 
 It acts on the canvas selection and behaves exactly as the menu entry would on each node: a loader opens its file, anything else runs its branch. Select several nodes and it sends all of them, skipping any with nothing to show; if none of them has anything, it says so in a toast rather than a dialog.
 
@@ -106,7 +106,7 @@ Any node carrying an `IMAGE`, `MASK`, `VIDEO`, `MESH` or 3D-file output — a VA
 - **Only the branch runs.** The prompt is pruned to the node and its upstream dependencies, so the workflow's other output nodes are left out — viewing a node never writes files as a side effect.
 - **Your graph is never touched.** The capture node is added to the queued prompt only, so node ids, wiring and undo history stay exactly as they were.
 - **Terminal nodes work too.** Save Image and Preview Image have no output slots, so they show what feeds them — a preview of what they would write, without writing it.
-- **Tool nodes show their input picture.** A **bEpic Image Viewer Roto** hands on a matte and a **SAM3 Collector** hands on prompts, so sending one shows the image feeding it instead — the thing you are about to draw over. It lands in that node's own tab, so the Roto / SAM3 tools attach to it immediately and running the workflow later refreshes the same tab. Where a loader feeds the node directly its file opens straight away, with no queue at all.
+- **Tool nodes show their input picture.** A **ComfyUI Image Viewer Roto** hands on a matte and a **SAM3 Collector** hands on prompts, so sending one shows the image feeding it instead — the thing you are about to draw over. It lands in that node's own tab, so the Roto / SAM3 tools attach to it immediately and running the workflow later refreshes the same tab. Where a loader feeds the node directly its file opens straight away, with no queue at all.
 - Unchanged upstream nodes come from ComfyUI's cache, so a second run is usually instant.
 - Re-running lands in the same tab and stacks the previous result in its history strip, which makes it easy to A/B a parameter change against the last one.
 
@@ -120,7 +120,7 @@ Any node carrying an `IMAGE`, `MASK`, `VIDEO`, `MESH` or 3D-file output — a VA
 By default the viewer floats over the canvas. **Docked**, it is a panel of its own beside the canvas: the canvas gets the rest of the window, so nothing is covered and ComfyUI's own side panels (Workflows, Assets, Models, …) still open next to it.
 
 - Click the **Dock** button in the viewer's header (left of Undock) to dock it to the side used last — the right, the first time — and again to float it. **Shift+D** does the same while the viewer is hovered.
-- The layout menu has **Dock right / Dock left / Dock bottom / Float**, and **Settings → bEpic Viewer → Docking** has the same choice.
+- The layout menu has **Dock right / Dock left / Dock bottom / Float**, and **Settings → ComfyUI Image Viewer → Docking** has the same choice.
 - Drag the docked viewer's inner edge to resize it. Side and size are remembered.
 - Hiding the viewer, or undocking it to its own window, gives the space back to the canvas; showing it again takes it back.
 - Applying a layout preset floats the viewer first: a preset says where the *floating* viewer goes.
@@ -151,7 +151,7 @@ Layouts let you save and restore the viewer's panel configuration — position, 
 1. Arrange the viewer panels exactly as you want them.
 2. Click the **Layouts** button in the toolbar (grid icon).
 3. Choose *Save Layout* and give it a name.
-4. The layout is stored in ComfyUI's user data directory as `bEpicViewer_layouts.json`.
+4. The layout is stored in ComfyUI's user data directory as `imageViewer_layouts.json`.
 
 ### Applying a Layout
 
@@ -175,7 +175,7 @@ The **Manage Panel** dialog (from the Layouts menu) lets you:
 
 ## Cache Management
 
-Every image received by bEpicSendToViewer nodes is saved as a temporary PNG in ComfyUI's `temp/` directory, prefixed with `bEpic_`.
+Every image received by ImageViewerSend nodes is saved as a temporary PNG in ComfyUI's `temp/` directory, prefixed with `ImageViewer_`.
 
 ### Automatic collection
 
@@ -183,18 +183,18 @@ All the frames written by one execution share a *run token*, which makes a whole
 
 | Environment variable | Default | Meaning |
 | --- | --- | --- |
-| `BEPIC_TEMP_BUDGET_MB` | `4096` | Megabytes of preview frames kept per node/tab. Roughly four 300-frame 1080p renders. |
-| `BEPIC_TEMP_MAX_RUNS` | `20` | Renders kept per node/tab, matching the history strip's depth. Stops a single-image workflow keeping thousands of tiny runs. |
+| `IMAGE_VIEWER_TEMP_BUDGET_MB` | `4096` | Megabytes of preview frames kept per node/tab. Roughly four 300-frame 1080p renders. |
+| `IMAGE_VIEWER_TEMP_MAX_RUNS` | `20` | Renders kept per node/tab, matching the history strip's depth. Stops a single-image workflow keeping thousands of tiny runs. |
 
 Whichever limit binds first wins. History entries whose frames get collected disappear from the strip on their own — the prune pass confirms with the server before removing anything, so nothing vanishes on a guess.
 
-> Frames are named `bEpic_S_<node>_<tab>_r<token>_<index>.png`. Before this scheme each frame drew its own `random.randint(1, 1000)` suffix, so a re-run could silently overwrite a frame that history still pointed at — around 57 frames of a 300-frame sequence across a full 20-deep history.
+> Frames are named `ImageViewer_S_<node>_<tab>_r<token>_<index>.png`. Before this scheme each frame drew its own `random.randint(1, 1000)` suffix, so a re-run could silently overwrite a frame that history still pointed at — around 57 frames of a 300-frame sequence across a full 20-deep history.
 
 ### Clearing the Cache
 
 1. Click the **Clear Cache** button in the playback toolbar (trash icon).
 2. A confirmation dialog appears — this is irreversible.
-3. Confirm to delete all `bEpic_*` temp files and wipe all history thumbnails.
+3. Confirm to delete all `ImageViewer_*` temp files and wipe all history thumbnails.
 4. The viewer resets to an empty state (all tabs closed, history cleared).
 
 This clears everything at once, across all nodes, rather than waiting for the automatic collection above. It frees disk; it cannot free memory the browser has already spent on frames it downloaded, which no page is able to evict.

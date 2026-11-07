@@ -24,15 +24,15 @@ no agentY to work (agentY is only told what the user decided, when it is running
    `manifest.status` (`approved` / `review` / `cancelled`). The response carries a short `message`; the panel hands
    it to agentY through `window.agentYViewerBridge.feedback` (the "Send to agentY" path: the user's next message
    in the active conversation) and silently skips it when that bridge is not there.
-6. **Edits are pure functions** on the manifest (`bEpicViewer_loraModel.js`: toggle, caption, remove / restore,
+6. **Edits are pure functions** on the manifest (`imageViewer_loraModel.js`: toggle, caption, remove / restore,
    bulk find/replace, trigger word with optional rewrite, crop clamp, summary counts, undo `History`) and the
    training helpers (smoothed loss, sparkline path, durations, new-event filter, poll delay), all node-tested.
-7. **UI = one editor over a host element** (`bEpicViewer_loraEditor.js`, like the Motion editor), mounted by the
-   viewer tab (`bEpicViewer_loraPanel.js` + `bEpicViewer_viewTabs.js`: key `dataset:<name>`, in the main canvas like a
+7. **UI = one editor over a host element** (`imageViewer_loraEditor.js`, like the Motion editor), mounted by the
+   viewer tab (`imageViewer_loraPanel.js` + `imageViewer_viewTabs.js`: key `dataset:<name>`, in the main canvas like a
    Motion scene; no dock panel) and by the standalone harness. Several datasets can be open at once, each in its own
    tab; the Dataset / Training pages are sub-tabs inside the tab. It opens from the bar (*ComfyUI > Dataset*: the open
    tab, else one that lists the datasets), from a double-click on a dataset's `manifest.json` in the file browser, and
-   from `POST /bepic/push` with that `manifest.json` (event `bepic.lora.open`) - an already open dataset is brought
+   from `POST /imageviewer/push` with that `manifest.json` (event `imageviewer.lora.open`) - an already open dataset is brought
    forward, not opened twice. Closing a tab with edits that were not saved asks once (close it again to discard).
    A saved layout that still names the old `loraDataset` panel loads without it.
 8. **Crop** is dragged on the item's thumbnail and stored normalised `[x, y, w, h]` (double-click clears it, the
@@ -43,18 +43,18 @@ no agentY to work (agentY is only told what the user decided, when it is running
    tab is hidden) fire for NEW events only: the last event id per run is remembered (in memory and `localStorage`),
    and a run seen for the first time does not replay its old events.
 
-## Routes (all also under `/api/bepic/lora/...`)
+## Routes (all also under `/api/imageviewer/lora/...`)
 
 | route | request | answer |
 |---|---|---|
-| `GET /bepic/lora/datasets` | | `{datasets: [{name, dir, manifest_path, subject, kind, model, status, trigger_word, count, included, removed, review, cover, updated}]}` |
-| `GET /bepic/lora/dataset?name=` | | `{name, dir, manifest_path, manifest, review, sha}` |
-| `GET /bepic/lora/file?path=` | absolute, or relative to `<output>/agent` | the picture / clip (403 outside the two folders or for other file types) |
-| `POST /bepic/lora/dataset_save` | `{name, manifest}` | `{ok, manifest, review, sha, reset_approval}` |
-| `POST /bepic/lora/review` | `{name, action: approve\|ask\|cancel, note, manifest?}` | `{ok, state, review, manifest, message}` |
-| `GET /bepic/lora/runs` | | `{runs: [{name, status, step, total, pct, dataset, model, updated}]}` |
-| `GET /bepic/lora/run?name=` | | `{name, dir, progress, job, result, control, samples (files get an absolute path), events (last 200), log_tail (last 60 lines)}` |
-| `POST /bepic/lora/control` | `{name, action: "stop", keep}` | `{ok, control}`; writes `control.json` `{action, keep, t, by: "viewer"}`; 409 once the run ended |
+| `GET /imageviewer/lora/datasets` | | `{datasets: [{name, dir, manifest_path, subject, kind, model, status, trigger_word, count, included, removed, review, cover, updated}]}` |
+| `GET /imageviewer/lora/dataset?name=` | | `{name, dir, manifest_path, manifest, review, sha}` |
+| `GET /imageviewer/lora/file?path=` | absolute, or relative to `<output>/agent` | the picture / clip (403 outside the two folders or for other file types) |
+| `POST /imageviewer/lora/dataset_save` | `{name, manifest}` | `{ok, manifest, review, sha, reset_approval}` |
+| `POST /imageviewer/lora/review` | `{name, action: approve\|ask\|cancel, note, manifest?}` | `{ok, state, review, manifest, message}` |
+| `GET /imageviewer/lora/runs` | | `{runs: [{name, status, step, total, pct, dataset, model, updated}]}` |
+| `GET /imageviewer/lora/run?name=` | | `{name, dir, progress, job, result, control, samples (files get an absolute path), events (last 200), log_tail (last 60 lines)}` |
+| `POST /imageviewer/lora/control` | `{name, action: "stop", keep}` | `{ok, control}`; writes `control.json` `{action, keep, t, by: "viewer"}`; 409 once the run ended |
 
 Errors are `{error}` with 400 (bad input), 403 (outside the folders), 404, 409 (busy / ended), 422 (not a dataset,
 nothing included, empty note).

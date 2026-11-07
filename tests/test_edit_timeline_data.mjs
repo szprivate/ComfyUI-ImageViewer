@@ -1,9 +1,9 @@
 // node --test tests/test_edit_timeline_data.mjs
-// The Edit panel's arithmetic (bEpicViewer_editTimelineData.js): the blade, deleting, the undo stack, snapping,
+// The Edit panel's arithmetic (imageViewer_editTimelineData.js): the blade, deleting, the undo stack, snapping,
 // and the deterministic Auto edit modes.
 import test from "node:test";
 import assert from "node:assert/strict";
-import * as D from "../js/bEpicViewer_editTimelineData.js";
+import * as D from "../js/imageViewer_editTimelineData.js";
 
 const near = (a, b, eps = 1e-3) => assert.ok(Math.abs(a - b) <= eps, `${a} is not ${b}`);
 const shot = (file, length, extra = {}) => ({ ref: undefined, file, name: file, in: 0, length, transition: 0, color: "", volume: 1, ...extra });

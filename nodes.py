@@ -49,7 +49,7 @@ _DEFAULT_FORMAT = "png" if "png" in _FILE_FORMATS else _FILE_FORMATS[0]
 # Which of those formats are actually encoded as video. Carried on the fps input
 # spec below so the JS can hide fps for a still-image format without keeping its
 # own copy of this list — it reads it out of /object_info, which ships INPUT_TYPES
-# verbatim. See videoFormatsFromDef / bepicSyncOutputWidgets.
+# verbatim. See videoFormatsFromDef / imageViewerSyncOutputWidgets.
 _VIDEO_FORMATS = file_writer.VIDEO_EXTS if file_writer is not None else ["mp4", "mov", "webm"]
 
 # 3D formats, after the image and video ones: a MESH or 3D-file input is saved
@@ -164,13 +164,13 @@ _PREVIEW_PNG_LEVEL = 1
 # resource actually being consumed and scales itself with resolution: 4 GB is
 # roughly twenty 1080p stills or four 300-frame 1080p sequences, and a 4K
 # sequence is bounded by the same number without anyone re-tuning it.
-_TEMP_BUDGET_MB = max(1, int(os.environ.get("BEPIC_TEMP_BUDGET_MB", "4096")))
+_TEMP_BUDGET_MB = max(1, int(os.environ.get("IMAGE_VIEWER_TEMP_BUDGET_MB", "4096")))
 
 # ...and never more runs than the viewer's history strip can show anyway
-# (HISTORY_LIMIT in bEpicViewer_mixinHistory.js). Without this a single-image
+# (HISTORY_LIMIT in imageViewer_mixinHistory.js). Without this a single-image
 # workflow would keep thousands of tiny runs to fill the byte budget when only
 # the newest 20 are reachable. Whichever limit binds first wins.
-_TEMP_MAX_RUNS = max(1, int(os.environ.get("BEPIC_TEMP_MAX_RUNS", "20")))
+_TEMP_MAX_RUNS = max(1, int(os.environ.get("IMAGE_VIEWER_TEMP_MAX_RUNS", "20")))
 
 # Hex characters in a run token. Fixed width so a token can be told apart from a
 # tab label that happens to end in "_r".
@@ -189,7 +189,7 @@ def _run_group_prefix(unique_id, label):
     """Filename prefix shared by every frame this node has ever written for this
     tab. Everything after it is `<token>_<index>`, which is what makes a single
     execution identifiable — and therefore collectable — as a unit."""
-    return f"bEpic_S_{_sanitize(unique_id, 'anon')}_{_sanitize(label, 'send')}_r"
+    return f"ImageViewer_S_{_sanitize(unique_id, 'anon')}_{_sanitize(label, 'send')}_r"
 
 
 def _run_tag_of(name, prefix):
@@ -348,7 +348,7 @@ def _push_tab(inp, tab_name, unique_id, node_label, group=""):
 
     This is the tool nodes' whole viewer story: they never persist anything, so
     a native VIDEO is decoded to a playable temp file and everything else lands
-    as temp PNGs. Saving frames to ./output stays bEpicSendToViewer's job."""
+    as temp PNGs. Saving frames to ./output stays ImageViewerSend's job."""
     out_dir = folder_paths.get_temp_directory()
     group = " ".join(str(group or tab_name or "").split())
     label = group.replace(" ", "_") if group else "send"
@@ -357,7 +357,7 @@ def _push_tab(inp, tab_name, unique_id, node_label, group=""):
     if file_writer is not None and file_writer.is_video_input(inp):
         try:
             _saved, frames = file_writer.write_video_input(
-                inp, False, "bEpic", "mp4", 24.0)
+                inp, False, "ImageViewer", "mp4", 24.0)
         except Exception as e:
             print(f"\033[91m[{node_label}] video input failed: {e}\033[0m")
             frames = None
@@ -365,7 +365,7 @@ def _push_tab(inp, tab_name, unique_id, node_label, group=""):
         frames = _temp_frames(inp, label, unique_id, out_dir, "temp")
 
     _name_frames(frames, group, "")
-    PromptServer.instance.send_sync("bepic.viewer.update", {
+    PromptServer.instance.send_sync("imageviewer.viewer.update", {
         "tabs": {"tab": frames},
         "unique_id": unique_id,
     })
@@ -416,25 +416,25 @@ def _history_ui(paths, key="images", animated=False):
 
 
 def _format_option_inputs():
-    """bit_depth / compression / quality / compress_level for bEpicSendToViewer,
+    """bit_depth / compression / quality / compress_level for ImageViewerSend,
     from file_writer's per-format tables. Nothing when the writer is missing."""
     fw = file_writer
     if fw is None or not hasattr(fw, "BIT_DEPTHS"):
         return {}
     return {
         "bit_depth": (fw.BIT_DEPTH_MENU, {"default": fw.AUTO,
-                                          "bepic_formats": fw.BIT_DEPTHS}),
+                                          "imageviewer_formats": fw.BIT_DEPTHS}),
         "compression": (fw.COMPRESSION_MENU, {"default": fw.AUTO,
-                                              "bepic_formats": fw.COMPRESSIONS}),
+                                              "imageviewer_formats": fw.COMPRESSIONS}),
         "quality": ("INT", {"default": fw.QUALITY_DEFAULT, "min": 1, "max": 100, "step": 1,
-                            "bepic_formats": fw.QUALITY_FORMATS}),
+                            "imageviewer_formats": fw.QUALITY_FORMATS}),
         "compress_level": ("INT", {"default": fw.COMPRESS_LEVEL_DEFAULT, "min": 0, "max": 9,
-                                   "step": 1, "bepic_formats": fw.COMPRESS_LEVEL_FORMATS}),
+                                   "step": 1, "imageviewer_formats": fw.COMPRESS_LEVEL_FORMATS}),
         # LAST, and it must stay last: a saved workflow holds widget values by
         # position, so anything new goes after what was there. Shown for a
         # container that can hold more than one codec (mov); "auto" is the
         # default every export shares - ProRes for a MOV.
-        "codec": (fw.CODEC_MENU, {"default": fw.AUTO, "bepic_formats": fw.CODECS}),
+        "codec": (fw.CODEC_MENU, {"default": fw.AUTO, "imageviewer_formats": fw.CODECS}),
     }
 
 
@@ -491,10 +491,10 @@ def _write_provenance(frames, saved, unique_id, prompt, extra_pnginfo):
         provenance_write.annotate_async([p for p in outputs + [f.get("path") for f in frames] if p],
                                         unique_id, prompt, extra_pnginfo, pid or "")
     except Exception as e:  # noqa: BLE001
-        print(f"[bEpicSendToViewer] provenance not written: {e}")
+        print(f"[ImageViewerSend] provenance not written: {e}")
 
 
-class bEpicSendToViewer:
+class ImageViewerSend:
     def __init__(self):
         self.output_dir = folder_paths.get_temp_directory()
         self.type = "temp"
@@ -521,20 +521,20 @@ class bEpicSendToViewer:
                 # list carried here.
                 "fps": ("FLOAT", {"default": 24.0, "min": 0.01, "max": 1000.0,
                                   "step": 0.01,
-                                  "bepic_video_formats": _VIDEO_FORMATS,
-                                  "bepic_model_formats": _MODEL_FORMATS}),
-                "filename_prefix": ("STRING", {"default": "bEpic"}),
+                                  "imageviewer_video_formats": _VIDEO_FORMATS,
+                                  "imageviewer_model_formats": _MODEL_FORMATS}),
+                "filename_prefix": ("STRING", {"default": "ImageViewer"}),
                 # Image-sequence naming: prefix.1001.png instead of ComfyUI's
                 # prefix_00001_.png. Only means anything for a still format, so
                 # the JS hides it for video ones — the marker below is how it
-                # knows, the same way fps is driven by bepic_video_formats.
+                # knows, the same way fps is driven by imageviewer_video_formats.
                 "is_sequence": ("BOOLEAN", {"default": False,
-                                            "bepic_still_only": True}),
+                                            "imageviewer_still_only": True}),
                 "first_frame_number": ("INT", {"default": 1001, "min": 0,
                                                "max": 99999999, "step": 1,
-                                               "bepic_sequence_only": True}),
+                                               "imageviewer_sequence_only": True}),
                 "padding": ("INT", {"default": 4, "min": 1, "max": 9, "step": 1,
-                                    "bepic_sequence_only": True}),
+                                    "imageviewer_sequence_only": True}),
             },
             # Per-format settings. Optional, so an API prompt written before
             # they existed still validates; each carries the formats it applies
@@ -562,16 +562,16 @@ class bEpicSendToViewer:
         }
 
     # Straight passthrough. The in-viewer tools used to hang their outputs off
-    # this node; they now live on bEpicImageViewerRoto and
-    # bEpicImageViewerSAM3Collector, which carry their own image input and tab.
+    # this node; they now live on ImageViewerRoto and
+    # ImageViewerSAM3Collector, which carry their own image input and tab.
     RETURN_TYPES = (_ANY, )
     RETURN_NAMES = ("image", )
     FUNCTION = "send"
     OUTPUT_NODE = True
-    CATEGORY = "image/bEpic"
+    CATEGORY = "image/ComfyUI Image Viewer"
 
     def send(self, input, tab_name="", save_to_output=False,
-             file_format="png", fps=24.0, filename_prefix="bEpic",
+             file_format="png", fps=24.0, filename_prefix="ImageViewer",
              is_sequence=False, first_frame_number=1001, padding=4,
              bit_depth="auto", compression="auto", quality=None, compress_level=None,
              codec="auto", group="", label="", unique_id=None, prompt=None,
@@ -589,7 +589,7 @@ class bEpicSendToViewer:
                                     filename_prefix, unique_id, prompt, extra_pnginfo,
                                     file_format, group=group, caption=label)
         if model_writer is not None and model_writer.is_model_format(file_format):
-            print(f"[93m[bEpicSendToViewer] .{file_format} is a 3D format and the input is "
+            print(f"[93m[ImageViewerSend] .{file_format} is a 3D format and the input is "
                   f"not a mesh — saving it as png[0m")
             file_format = "png"
 
@@ -612,7 +612,7 @@ class bEpicSendToViewer:
                     sequence=is_sequence, first_frame=first_frame_number,
                     padding=padding)
             except Exception as e:
-                print(f"\033[91m[bEpicSendToViewer] video input failed: {e}\033[0m")
+                print(f"\033[91m[ImageViewerSend] video input failed: {e}\033[0m")
                 tab_frames = None
         elif save_to_output and file_writer is not None:
             try:
@@ -622,7 +622,7 @@ class bEpicSendToViewer:
                     sequence=is_sequence, first_frame=first_frame_number,
                     padding=padding, options=options)
             except Exception as e:
-                print(f"\033[91m[bEpicSendToViewer] save to output failed: {e}\033[0m")
+                print(f"\033[91m[ImageViewerSend] save to output failed: {e}\033[0m")
                 tab_frames = None
         if tab_frames is None:
             tab_frames = _temp_frames(input, safe_label, unique_id,
@@ -633,7 +633,7 @@ class bEpicSendToViewer:
         _write_provenance(tab_frames, saved, unique_id, prompt, extra_pnginfo)
         tabs = {"tab": tab_frames}
 
-        PromptServer.instance.send_sync("bepic.viewer.update", {
+        PromptServer.instance.send_sync("imageviewer.viewer.update", {
             "tabs": tabs,
             "unique_id": unique_id,
             # The group, for a viewer that cannot find this node on its graph
@@ -674,11 +674,11 @@ class bEpicSendToViewer:
             else:
                 frames = _model_frames(mesh, label, unique_id, self.output_dir)
         except Exception as e:
-            print(f"\033[91m[bEpicSendToViewer] 3D input failed: {e}\033[0m")
+            print(f"\033[91m[ImageViewerSend] 3D input failed: {e}\033[0m")
 
         _name_frames(frames, group, caption)
         _stamp_prompt_id(frames)
-        PromptServer.instance.send_sync("bepic.viewer.update", {
+        PromptServer.instance.send_sync("imageviewer.viewer.update", {
             "tabs": {"tab": frames},
             "unique_id": unique_id,
         })
@@ -691,10 +691,10 @@ _TOOL_GROUP_TIP = ("The group its picture goes into in the viewer's Viewer tab. 
                   "\"Roto\" / \"SAM3\" and the node that feeds this one.")
 
 
-class bEpicImageViewerRoto:
+class ImageViewerRoto:
     """Roto matte drawn in the viewer.
 
-    Shows its input in a viewer tab of its own, exactly as bEpicSendToViewer
+    Shows its input in a viewer tab of its own, exactly as ImageViewerSend
     does, and hands back the matte the viewer's Roto tool drew over that tab.
     The input picture comes back out untouched alongside it, so the node can sit
     inline in a chain instead of hanging off a branch.
@@ -728,15 +728,15 @@ class bEpicImageViewerRoto:
     RETURN_NAMES = ("roto_mask", "image")
     FUNCTION = "run"
     OUTPUT_NODE = True
-    CATEGORY = "image/bEpic"
+    CATEGORY = "image/ComfyUI Image Viewer"
 
     def run(self, image, tab_name="", roto_data="", group="", unique_id=None):
-        _push_tab(image, tab_name, unique_id, "bEpicImageViewerRoto", group)
+        _push_tab(image, tab_name, unique_id, "ImageViewerRoto", group)
         N, H, W = _dims_from_input(image)
         return (_roto_mask(roto_data, N, H, W), image)
 
 
-class bEpicImageViewerSAM3Collector:
+class ImageViewerSAM3Collector:
     """SAM3 point and box prompts placed in the viewer.
 
     Shows its input in a viewer tab of its own and hands back the prompts the
@@ -773,11 +773,11 @@ class bEpicImageViewerSAM3Collector:
                     "positive_bboxes", "negative_bboxes")
     FUNCTION = "run"
     OUTPUT_NODE = True
-    CATEGORY = "image/bEpic"
+    CATEGORY = "image/ComfyUI Image Viewer"
 
     def run(self, image, tab_name="", sam3_positive="[]", sam3_negative="[]",
             sam3_box_positive="[]", sam3_box_negative="[]", group="", unique_id=None):
-        _push_tab(image, tab_name, unique_id, "bEpicImageViewerSAM3Collector", group)
+        _push_tab(image, tab_name, unique_id, "ImageViewerSAM3Collector", group)
         return (
             _points_prompt(sam3_positive, 1),
             _points_prompt(sam3_negative, 0),
@@ -786,7 +786,7 @@ class bEpicImageViewerSAM3Collector:
         )
 
 
-class bEpicScene3D:
+class ImageViewerScene3D:
     """A previz scene: several models, cameras and keyframes, laid out in the
     viewer's 3D tab.
 
@@ -796,7 +796,7 @@ class bEpicScene3D:
     folder back as its IMAGE output — so a camera move can drive a workflow.
 
     An optional `model` input (MESH or 3D file) is pushed to the tab like
-    bEpicSendToViewer does, which adds it to the scene."""
+    ImageViewerSend does, which adds it to the scene."""
 
     @classmethod
     def INPUT_TYPES(s):
@@ -818,7 +818,7 @@ class bEpicScene3D:
     RETURN_NAMES = ("images", "frame_count", "fps")
     FUNCTION = "run"
     OUTPUT_NODE = False
-    CATEGORY = "image/bEpic"
+    CATEGORY = "image/ComfyUI Image Viewer"
 
     def run(self, tab_name="Previz", render_name="shot", model=None,
             scene_data="", unique_id=None):
@@ -828,11 +828,11 @@ class bEpicScene3D:
                 frames = _model_frames(model, tab_name or "previz", unique_id,
                                        folder_paths.get_temp_directory())
             except Exception as e:
-                print(f"[91m[bEpicScene3D] 3D input failed: {e}[0m")
+                print(f"[91m[ImageViewerScene3D] 3D input failed: {e}[0m")
 
         # The viewer gets the scene with the tab, so opening a saved workflow
         # rebuilds the shot without a run having to produce anything.
-        PromptServer.instance.send_sync("bepic.viewer.update", {
+        PromptServer.instance.send_sync("imageviewer.viewer.update", {
             "tabs": {"tab": frames},
             "unique_id": unique_id,
             "scene_data": scene_data or "",
@@ -851,9 +851,9 @@ class bEpicScene3D:
             try:
                 images = previz.load_render(render_name)
             except Exception as e:
-                print(f"[91m[bEpicScene3D] {e}[0m")
+                print(f"[91m[ImageViewerScene3D] {e}[0m")
         if images is None:
-            print(f"[bEpicScene3D] nothing rendered yet for {render_name!r} — "
+            print(f"[ImageViewerScene3D] nothing rendered yet for {render_name!r} — "
                   f"press Render in the viewer's previz panel.")
             images = torch.zeros((1, 64, 64, 3), dtype=torch.float32)
         return (images, int(images.shape[0]), fps)
@@ -862,15 +862,30 @@ class bEpicScene3D:
 # mapping dictionaries for external use (nodes.py imports these)
 
 NODE_CLASS_MAPPINGS = {
-    "bEpicSendToViewer": bEpicSendToViewer,
-    "bEpicImageViewerRoto": bEpicImageViewerRoto,
-    "bEpicImageViewerSAM3Collector": bEpicImageViewerSAM3Collector,
-    "bEpicScene3D": bEpicScene3D,
+    "ImageViewerSend": ImageViewerSend,
+    "ImageViewerRoto": ImageViewerRoto,
+    "ImageViewerSAM3Collector": ImageViewerSAM3Collector,
+    "ImageViewerScene3D": ImageViewerScene3D,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "bEpicSendToViewer": "bEpic Send To Image Viewer",
-    "bEpicImageViewerRoto": "bEpic Image Viewer Roto",
-    "bEpicImageViewerSAM3Collector": "bEpic Image Viewer SAM3 Collector",
-    "bEpicScene3D": "bEpic 3D Scene (Previz)",
+    "ImageViewerSend": "Send To Image Viewer",
+    "ImageViewerRoto": "Image Viewer Roto",
+    "ImageViewerSAM3Collector": "Image Viewer SAM3 Collector",
+    "ImageViewerScene3D": "Image Viewer 3D Scene (Previz)",
 }
+
+# The ids these nodes had before the viewer was renamed (it was "bEpic" until
+# 1.18). Saved workflows and API prompts still name them: each old id runs the
+# same node, hidden from the node search (DEPRECATED). The page renames them in
+# a workflow as it loads (LEGACY_NODE_TYPES in imageViewer.js), so this is for
+# prompts that reach the server without the page - agentY's templates, the API.
+LEGACY_NODE_IDS = {
+    "bEpicSendToViewer": "ImageViewerSend",
+    "bEpicImageViewerRoto": "ImageViewerRoto",
+    "bEpicImageViewerSAM3Collector": "ImageViewerSAM3Collector",
+    "bEpicScene3D": "ImageViewerScene3D",
+}
+for _old, _new in LEGACY_NODE_IDS.items():
+    NODE_CLASS_MAPPINGS[_old] = type(_old, (NODE_CLASS_MAPPINGS[_new],), {"DEPRECATED": True})
+    NODE_DISPLAY_NAME_MAPPINGS[_old] = NODE_DISPLAY_NAME_MAPPINGS[_new] + " (old id)"

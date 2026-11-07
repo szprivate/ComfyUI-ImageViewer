@@ -1,5 +1,5 @@
 // node --test tests/test_atlas_fly.mjs
-// Flying through an Atlas world: the real walkEnter/walkExit/_flyStep from bEpicViewer_world3d.js and the
+// Flying through an Atlas world: the real walkEnter/walkExit/_flyStep from imageViewer_world3d.js and the
 // real Model3DView.reloadModel, on a stand-in view with the vendored three.js (no DOM, no renderer).
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -21,8 +21,8 @@ fs.writeFileSync(path.join(tmp, "scripts", "api.js"), "export const api = { apiU
 fs.writeFileSync(path.join(tmp, "scripts", "app.js"), "export const app = { registerExtension() {}, extensionManager: { toast: { add() {} } }, canvas: {} };");
 const mod = (n) => import(url.pathToFileURL(path.join(tmp, "ext", "js", n)).href);
 const THREE = await import(url.pathToFileURL(path.join(root, "vendor", "three", "three.module.js")).href);
-const { WorldViewMixin } = await mod("bEpicViewer_world3d.js");
-const { Model3DView } = await mod("bEpicViewer_model3d.js");
+const { WorldViewMixin } = await mod("imageViewer_world3d.js");
+const { Model3DView } = await mod("imageViewer_model3d.js");
 
 /** A listener table standing in for window / document / canvas. */
 const target = () => ({
@@ -136,14 +136,14 @@ test("reloadModel re-reads the model's file under a cache-busting URL and leaves
     const entry = { item, object: { old: true } };
     const other = { item: { id: "x", kind: "primitive" }, object: {} };
     const self = Object.assign(Object.create(Model3DView.prototype), {
-        hooks: { srcUrl: (s) => `/bepic/view_file?path=${encodeURIComponent(s.path)}` },
+        hooks: { srcUrl: (s) => `/imageviewer/view_file?path=${encodeURIComponent(s.path)}` },
         _entries: new Map([["w", entry], ["x", other]]), sceneFrame: 0,
         _disposeEntry(e) { e.object = null; }, applyFrame() {}, _updateSceneStats() {}, requestRender() { this.rendered = true; },
         async _loadEntry(e, it) { urls.push(this._srcUrlFor(it)); e.object = { fresh: true }; return e; },
     });
     assert.equal(await self.reloadModel("w"), true);
     assert.equal(urls.length, 1);
-    assert.match(urls[0], /^\/bepic\/view_file\?path=D%3A%2Fo%2Fatlas%2Fcourt%2Fworld\.glb&_=\d+$/);
+    assert.match(urls[0], /^\/imageviewer\/view_file\?path=D%3A%2Fo%2Fatlas%2Fcourt%2Fworld\.glb&_=\d+$/);
     assert.deepEqual(entry.object, { fresh: true });
     assert.deepEqual(other.object, {}, "other items untouched");
     assert.equal(await self.reloadModel("x"), false, "only a model item");
@@ -153,7 +153,7 @@ test("reloadModel re-reads the model's file under a cache-busting URL and leaves
 // A Gaussian splat scene is flown like an Atlas world: Shift+J and the Walk button used to exist only for
 // worlds and world.glb, so on a splat the key did nothing.
 test("a splat scene can be flown (previzCanMove / previzWalkToggle)", async () => {
-    const { PrevizWorldMixin } = await mod("bEpicViewer_previzWorld.js");
+    const { PrevizWorldMixin } = await mod("imageViewer_previzWorld.js");
     const mk = (items, entries) => {
         const calls = [];
         const view = { walking: false, _entries: new Map(entries || []),

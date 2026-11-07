@@ -1,4 +1,4 @@
-"""File-writing backend for bEpicSendToViewer's "save to ./output" mode.
+"""File-writing backend for ImageViewerSend's "save to ./output" mode.
 
 When the node's `save_to_output` toggle is on it persists the incoming frames to
 ComfyUI's output directory in a chosen format instead of only pushing temp PNGs
@@ -67,7 +67,7 @@ def _oiio_writable_exts():
     writable = set()
     for x in exts:
         try:
-            out = oiio.ImageOutput.create("bepic_probe." + x)
+            out = oiio.ImageOutput.create("imageviewer_probe." + x)
         except Exception:
             out = None
         if out is not None:
@@ -438,7 +438,7 @@ def _temp_png_path(tag, kind):
     tmp = folder_paths.get_temp_directory()
     os.makedirs(tmp, exist_ok=True)
     safe = "".join(c for c in (tag or kind) if c.isalnum() or c in "-_") or kind
-    return os.path.join(tmp, f"bEpic_{kind}_{safe}_{random.randint(1, 1_000_000)}.png")
+    return os.path.join(tmp, f"ImageViewer_{kind}_{safe}_{random.randint(1, 1_000_000)}.png")
 
 
 def _thumb_from_frame(frame01, tag):
@@ -451,7 +451,7 @@ def _thumb_from_frame(frame01, tag):
         Image.fromarray(u8, "RGB").save(path, compress_level=4)
         return path
     except Exception as e:
-        print(f"[bEpicSendToViewer] thumbnail write failed: {e}")
+        print(f"[ImageViewerSend] thumbnail write failed: {e}")
         return None
 
 
@@ -480,7 +480,7 @@ def _first_frame_from_video(video_path):
             reader.close()
         return frame[:, :, :3]
     except Exception as e:
-        print(f"[bEpicSendToViewer] first-frame decode failed: {e}")
+        print(f"[ImageViewerSend] first-frame decode failed: {e}")
         return None
 
 
@@ -498,7 +498,7 @@ def _thumb_from_video_file(video_path, tag):
         Image.fromarray(np.asarray(frame)[:, :, :3]).save(path, compress_level=4)
         return path
     except Exception as e:
-        print(f"[bEpicSendToViewer] video thumbnail failed: {e}")
+        print(f"[ImageViewerSend] video thumbnail failed: {e}")
         return None
 
 
@@ -557,10 +557,10 @@ def versioned_prefix(filename_prefix, out_dir, w=0, h=0):
     free - in every place the prefix carries it, so `shot/v003/shot_v003` moves
     to `shot/v004/shot_v004` together. Its digit count is kept. A prefix with no
     version gets `_v001` and the same rule. Returns (prefix, version)."""
-    prefix = _expand_tokens((filename_prefix or "bEpic").strip().strip('"') or "bEpic", w, h)
+    prefix = _expand_tokens((filename_prefix or "ImageViewer").strip().strip('"') or "ImageViewer", w, h)
     parts = [p for p in re.split(r"[\\/]+", prefix) if p]
     if not parts:
-        parts = ["bEpic"]
+        parts = ["ImageViewer"]
     if not any(_version_span(p) for p in parts):
         parts[-1] += "_v001"
     spans = [_version_span(p) for p in parts]
@@ -584,7 +584,7 @@ def _prepare_output(filename_prefix, w, h):
     under ComfyUI's output dir, pre-creating any subfolder in the prefix so
     get_save_image_path's counter scan and the subsequent writes both succeed."""
     out_dir = folder_paths.get_output_directory()
-    prefix = (filename_prefix or "bEpic").strip().strip('"') or "bEpic"
+    prefix = (filename_prefix or "ImageViewer").strip().strip('"') or "ImageViewer"
     sub = os.path.dirname(prefix)
     if sub:
         try:
@@ -658,7 +658,7 @@ def _save_video_even(video_obj, path):
             **kwargs)
         rebuilt.save_to(path)
         note = " (audio preserved)" if getattr(comps, "audio", None) is not None else ""
-        print(f"[bEpicSendToViewer] {w}x{h} is not encodable by h264; padded to "
+        print(f"[ImageViewerSend] {w}x{h} is not encodable by h264; padded to "
               f"{int(padded.shape[2])}x{int(padded.shape[1])}{note}")
 
 
@@ -702,7 +702,7 @@ def write_video_input(video_obj, save_to_output, filename_prefix, file_format, f
         else:
             tmp = folder_paths.get_temp_directory()
             os.makedirs(tmp, exist_ok=True)
-            file = f"bEpic_vid_{random.randint(1, 1_000_000_000)}.mp4"
+            file = f"ImageViewer_vid_{random.randint(1, 1_000_000_000)}.mp4"
             path = os.path.join(tmp, file)
             subfolder = ""
         _save_video_even(video_obj, path)
@@ -724,7 +724,7 @@ def write_video_input(video_obj, save_to_output, filename_prefix, file_format, f
                     saved.append(png_path)
                     thumb = png_path
                 except Exception as e:
-                    print(f"[bEpicSendToViewer] workflow PNG failed: {e}")
+                    print(f"[ImageViewerSend] workflow PNG failed: {e}")
         if thumb is None:
             thumb = _thumb_from_video_file(path, filename if save_to_output else "vid")
 
@@ -733,7 +733,7 @@ def write_video_input(video_obj, save_to_output, filename_prefix, file_format, f
             "kind": "video", "fps": rate, "frames": frames,
             "filename": file, "subfolder": subfolder, "thumb": thumb,
         }
-        print(f"[bEpicSendToViewer] {'saved' if save_to_output else 'buffered'} "
+        print(f"[ImageViewerSend] {'saved' if save_to_output else 'buffered'} "
               f"video {path} ({frames} frames @ {rate} fps)")
         return saved, [vframe]
 
@@ -806,7 +806,7 @@ def write_output(tensor, filename_prefix, file_format, fps,
             saved.append(png_path)
             thumb = png_path
         except Exception as e:
-            print(f"[bEpicSendToViewer] workflow PNG failed: {e}")
+            print(f"[ImageViewerSend] workflow PNG failed: {e}")
             thumb = _thumb_from_frame(frames[0], filename)
         viewer_frames.append({
             "path": path, "type": "output", "kind": "video",
@@ -814,7 +814,7 @@ def write_output(tensor, filename_prefix, file_format, fps,
             "filename": file, "subfolder": subfolder,
             "thumb": thumb,
         })
-        print(f"[bEpicSendToViewer] wrote {path} (+ workflow PNG, {n} frames @ {viewer_frames[0]['fps']} fps)")
+        print(f"[ImageViewerSend] wrote {path} (+ workflow PNG, {n} frames @ {viewer_frames[0]['fps']} fps)")
     else:
         pad = max(1, min(9, int(padding or 4)))
         start = max(0, int(first_frame or 0))
@@ -825,7 +825,7 @@ def write_output(tensor, filename_prefix, file_format, fps,
             _write_image(frames[i], path, ext, prompt, extra_pnginfo, options)
             saved.append(path)
             counter += 1
-        print(f"[bEpicSendToViewer] wrote {n} {ext} file(s) to {full_folder}")
+        print(f"[ImageViewerSend] wrote {n} {ext} file(s) to {full_folder}")
         # The viewer is handed the files themselves. One an <img> cannot show
         # (exr / tiff / dpx / ...) is converted by the file route when its frame
         # is asked for, in the input colourspace picked in the viewer — not

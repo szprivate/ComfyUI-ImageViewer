@@ -1,4 +1,4 @@
-"""Provenance beside what bEpicSendToViewer saves (provenance_write.py): the graph, how it was made, and no secrets.
+"""Provenance beside what ImageViewerSend saves (provenance_write.py): the graph, how it was made, and no secrets.
 
 A saved file gets `agent_metadata/<name>.agenty.json` (only the key "provenance" is set in it; the rest stays) and
 `agent_metadata/<name>.prov.json.gz` (the redacted API graph and UI workflow), in a folder beside it. The node writes it for its temp PNGs and for "save to
@@ -25,7 +25,7 @@ PROMPT = {
     "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "a cat, hf_ABCDEFGHIJKLMNOPQRSTUVWX is not a token", "clip": ["4", 1]}},
     "9": {"class_type": "KlingVideoNode", "inputs": {"api_key": KEY, "prompt": "a dog", "auth_token": "plain-secret-value",
                                                       "note": f"Bearer abcdefghijklmnopqrstuvwxyz0123 and {KEY}"}},
-    "10": {"class_type": "bEpicSendToViewer", "inputs": {"input": ["3", 0], "tab_name": "t"}},
+    "10": {"class_type": "ImageViewerSend", "inputs": {"input": ["3", 0], "tab_name": "t"}},
 }
 WORKFLOW = {"nodes": [
     {"id": 9, "type": "KlingVideoNode", "widgets_values": [KEY, "a dog", "plain-secret-value", 5],
@@ -49,7 +49,7 @@ def slurp(path, mode="rb"):
 
 
 def _mod(name="provenance_write"):
-    pkg = "bepic_prov_under_test"
+    pkg = "imageviewer_prov_under_test"
     if pkg not in sys.modules:
         p = types.ModuleType(pkg)
         p.__path__ = [ROOT]
@@ -84,7 +84,7 @@ class Provenance(unittest.TestCase):
             prov = side["provenance"]
             self.assertEqual(prov["v"], 1)
             self.assertEqual((prov["source"], prov["prompt_id"], prov["output_node"], prov["output_index"], prov["workflow_file"]),
-                             ("bEpicSendToViewer", "pid-1", "10", index, ""))
+                             ("ImageViewerSend", "pid-1", "10", index, ""))
             self.assertEqual(prov["graph_file"], os.path.basename(path) + ".prov.json.gz")
             self.assertRegex(prov["created"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$")
             self.assertIn("comfyui_version", prov)
@@ -189,7 +189,7 @@ def _node_module(tmp):
         send_sync=lambda e, d: sent.append((e, d)), last_prompt_id="run-9")})
     saved = {k: sys.modules.get(k) for k in ("folder_paths", "server")}
     sys.modules.update(folder_paths=fp, server=srv)
-    name = "bepic_nodes_prov_under_test"
+    name = "imageviewer_nodes_prov_under_test"
     pkg = types.ModuleType(name)
     pkg.__path__ = [ROOT]
     sys.modules[name] = pkg
@@ -226,7 +226,7 @@ class NodeWritesProvenance(unittest.TestCase):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def run_node(self, **kw):
-        node = self.nodes.bEpicSendToViewer()
+        node = self.nodes.ImageViewerSend()
         node.send(torch.rand(2, 8, 8, 3), tab_name="shots", unique_id="10", prompt=PROMPT,
                   extra_pnginfo={"workflow": WORKFLOW}, **kw)
         self.nodes.provenance_write.wait()          # written off the node's thread
@@ -269,7 +269,7 @@ class NodeWritesProvenance(unittest.TestCase):
         pw.annotate = lambda paths, uid, prompt, *a: (gate.wait(10), seen.append(prompt))
         try:
             prompt = json.loads(json.dumps(PROMPT))
-            node = self.nodes.bEpicSendToViewer()
+            node = self.nodes.ImageViewerSend()
             node.send(torch.rand(1, 8, 8, 3), tab_name="slow", unique_id="10", prompt=prompt,
                       extra_pnginfo={"workflow": WORKFLOW})
             self.assertFalse(seen)                        # the node returned while the write waits
@@ -281,7 +281,7 @@ class NodeWritesProvenance(unittest.TestCase):
         self.assertTrue(seen and seen[0])                 # the graph as it was when the node ran
 
     def test_without_a_prompt_nothing_is_written(self):
-        node = self.nodes.bEpicSendToViewer()
+        node = self.nodes.ImageViewerSend()
         node.send(torch.rand(1, 8, 8, 3), tab_name="shots2", unique_id="11")
         path = self.sent[-1][1]["tabs"]["tab"][0]["path"]
         self.assertFalse(os.path.exists(SC(path)))

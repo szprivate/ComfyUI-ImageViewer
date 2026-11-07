@@ -1,14 +1,14 @@
-# bEpic ImageViewer — Documentation
+# ComfyUI Image Viewer — Documentation
 
 A professional floating image viewer for ComfyUI — multi-tab, history snapshots, side-by-side comparison, playback timeline, exposure/channel controls, and a live parameter panel.
 
-![bEpic ImageViewer main interface](screenshots/viewer_2d_canvas.jpg)
+![ComfyUI Image Viewer main interface](screenshots/viewer_2d_canvas.jpg)
 
 ---
 
-## What is bEpic ImageViewer?
+## What is ComfyUI Image Viewer?
 
-bEpic ImageViewer is a custom node extension for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) that replaces the built-in preview with a powerful, dockable viewer panel. Instead of hunting through tiny preview nodes scattered across your canvas, every output is routed here — organised into named tabs, kept in a scrollable history, and ready for detailed inspection.
+ComfyUI Image Viewer is a custom node extension for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) that replaces the built-in preview with a powerful, dockable viewer panel. Instead of hunting through tiny preview nodes scattered across your canvas, every output is routed here — organised into named tabs, kept in a scrollable history, and ready for detailed inspection.
 
 ## Key Features
 
@@ -34,15 +34,15 @@ bEpic ImageViewer is a custom node extension for [ComfyUI](https://github.com/co
 
 ## How It Works
 
-The extension registers a floating panel (`<bepic-viewer-panel>`) using the Web Components API with Shadow DOM — so its styles never conflict with ComfyUI's own UI. On the backend, a **bEpic Send To Image Viewer** node converts image tensors to PNG, saves them to ComfyUI's temp directory, and pushes a `bepic.viewer.update` WebSocket message to the frontend. The viewer picks it up and populates the relevant tab automatically.
+The extension registers a floating panel (`<comfyui-image-viewer-panel>`) using the Web Components API with Shadow DOM — so its styles never conflict with ComfyUI's own UI. On the backend, a **Send To Image Viewer** node converts image tensors to PNG, saves them to ComfyUI's temp directory, and pushes a `imageviewer.viewer.update` WebSocket message to the frontend. The viewer picks it up and populates the relevant tab automatically.
 
 All viewer state — open tabs, history stacks, panel positions, layouts — is persisted to `localStorage` so your workspace survives page reloads.
 
 ## Quick Start
 
 1. Install the extension via ComfyUI Manager or git clone into `custom_nodes/`. See [Installation](../README.md#installation).
-2. Click **Toggle bEpic Image Viewer** in the ComfyUI action bar to open the panel.
-3. Add a **bEpic Send To Image Viewer** node to your workflow and connect any image output to its `input` pin.
+2. Click **Toggle ComfyUI Image Viewer** in the ComfyUI action bar to open the panel.
+3. Add a **Send To Image Viewer** node to your workflow and connect any image output to its `input` pin.
 4. Set an optional `tab_name` on the node, then run your workflow. The image appears in the viewer instantly.
 5. Hover the panel and press `?` for the built-in hotkey overlay at any time.
 
@@ -58,7 +58,7 @@ All viewer state — open tabs, history stacks, panel positions, layouts — is 
 | [Parameter Panel](sub/params-panel.md) | Live node params, lock, dock, resize |
 | [3D Models & Previz](sub/models-3d.md) | Viewing and saving meshes; building, animating and rendering a previz shot; USD |
 | [Other Features](sub/other.md) | File browser, send from loader nodes, undocking, layouts, cache management |
-| [Node Reference](sub/nodes.md) | Full input/output spec for the bEpicSendToViewer node |
+| [Node Reference](sub/nodes.md) | Full input/output spec for the ImageViewerSend node |
 | [Keyboard Shortcuts](sub/hotkeys.md) | Complete hotkey reference, and how to rebind the keys in ComfyUI's keybinding editor |
 
 

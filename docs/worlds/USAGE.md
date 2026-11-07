@@ -2,7 +2,7 @@
 
 Updated 2026-09-28
 
-Ask agentY for a world from a picture; it builds it in ComfyUI and opens it in the bEpic viewer, where you walk it, pin notes, and have the agent act on them.
+Ask agentY for a world from a picture; it builds it in ComfyUI and opens it in the ComfyUI Image Viewer, where you walk it, pin notes, and have the agent act on them.
 
 ## Setup
 
@@ -10,7 +10,7 @@ Three pieces, all on master/main and pushed; restart ComfyUI once after pulling 
 
 | Piece | Where | What it does |
 | --- | --- | --- |
-| bEpic Image Viewer | `custom_nodes/ComfyUI-ImageViewer` | Shows worlds: walk, reference overlay, Match, notes |
+| ComfyUI Image Viewer | `custom_nodes/ComfyUI-ImageViewer` | Shows worlds: walk, reference overlay, Match, notes |
 | ComfyUI-bEpicWorlds | `custom_nodes/ComfyUI-bEpicWorlds` | Builds and stores worlds; `/bepic_worlds/*` routes; slot workflows in `slots/` |
 | agentY World Builder | `agentY` repo | Specialist the orchestrator calls with `run_world_builder` |
 
@@ -74,7 +74,7 @@ A run takes 5–15 minutes, mostly the scene model; `world_add_objects` (SAM3 + 
 
 ## Displaying a world
 
-Every new or edited version opens by itself in the bEpic viewer as a **World: &lt;name&gt;** tab; the tab survives reloads. To bring one back, ask the agent to open it ("open the lake world", or version 3 of it), or POST `{"name": "lake"}` to `/bepic_worlds/open`.
+Every new or edited version opens by itself in the ComfyUI Image Viewer as a **World: &lt;name&gt;** tab; the tab survives reloads. To bring one back, ask the agent to open it ("open the lake world", or version 3 of it), or POST `{"name": "lake"}` to `/bepic_worlds/open`.
 
 The tab is a previz scene: orbit it like any 3D scene, pick items in the outliner, and tweak them in the channel box. The toolbar has three world buttons:
 

@@ -189,7 +189,7 @@ def clip_frames(clip, done, count, w, h, fps):
 # ── a clip's transform, cropping and opacity ─────────────────────────────────
 
 def ease_share(p, how):
-    """How far from one key to the next a share *p* is (bEpicViewer_editTimelineData.easeShare)."""
+    """How far from one key to the next a share *p* is (imageViewer_editTimelineData.easeShare)."""
     x = max(0.0, min(1.0, p))
     if how == "hold":
         return 0.0
@@ -407,7 +407,7 @@ def title_frames(clip, done, count, w, h, fps, notes=None):
             if note and notes is not None and note not in notes:
                 notes.append(note)
                 import logging
-                logging.getLogger(__name__).warning("bEpic render: %s", note)
+                logging.getLogger(__name__).warning("ImageViewer render: %s", note)
         yield made[sig]
 
 

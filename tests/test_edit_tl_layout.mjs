@@ -1,10 +1,10 @@
 // node --test tests/test_edit_tl_layout.mjs
-// The timeline's own layout arithmetic (bEpicViewer_editTimelineData.js): the playhead readout left of the
+// The timeline's own layout arithmetic (imageViewer_editTimelineData.js): the playhead readout left of the
 // ruler (timecode or frames, and what is typed into it), Shift + wheel track heights, the splitter between
 // the video and the sound section. The panel side is in tests/test_edit_timeline_browser.py (test_26_*).
 import test from "node:test";
 import assert from "node:assert/strict";
-import * as D from "../js/bEpicViewer_editTimelineData.js";
+import * as D from "../js/imageViewer_editTimelineData.js";
 
 test("the readout: a timecode at the cut's fps, or the frame's number", () => {
     assert.equal(D.playheadLabel(0, 24, "tc"), "00:00:00:00");

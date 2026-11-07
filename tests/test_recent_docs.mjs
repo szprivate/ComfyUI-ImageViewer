@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { recentDocsWith, RECENT_DOCS_MAX } from "../js/bEpicViewer_recentDocs.js";
+import { recentDocsWith, RECENT_DOCS_MAX } from "../js/imageViewer_recentDocs.js";
 
 test("the newest file is first, once, and the list is capped", () => {
     assert.deepEqual(recentDocsWith([], "D:/a.ora"), ["D:/a.ora"]);

@@ -25,7 +25,7 @@ except ImportError:  # pragma: no cover
     sync_playwright = None
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-KEY = "bEpicViewer:state:v1:/restore.html"   # the state is kept per page path
+KEY = "imageViewer:state:v1:/restore.html"   # the state is kept per page path
 
 AGENT = "named:agentY"
 FRAMES = [{"filename": "shot_a.png", "subfolder": "", "type": "output", "path": "D:/out/agent/shot_a.png",

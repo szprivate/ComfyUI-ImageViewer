@@ -3,7 +3,7 @@
 <script>window.addEventListener("error",(e)=>{document.title="ERR "+e.message});</script><script type="module">
 // The REAL viewer (stubbed ComfyUI scripts) with the Agent code and Dataset TABS: PORT=8792 node tests/harness/server.mjs <viewer checkout>,
 // then open http://127.0.0.1:8792/tabs.html . tests/test_viewer_browser.py drives this page with real pointer input.
-// Stubbed here: /bepic/code, /bepic/text, /bepic/lora/*. Window state for the tests: __posts (every POST body), __runs (the runs the stub knows).
+// Stubbed here: /imageviewer/code, /imageviewer/text, /imageviewer/lora/*. Window state for the tests: __posts (every POST body), __runs (the runs the stub knows).
 window.__posts = [];
 const SNIPS = [
   { id: "a1", title: "stitch frames", language: "python", source: "run_python_node", conversation: "t1", turn: "x1", ts: Date.now() / 1000 - 5,
@@ -32,24 +32,24 @@ window.__fetchApi = async (p, opts) => {
   const q = new URLSearchParams(qs || "");
   const body = opts && opts.body ? JSON.parse(opts.body) : null;
   if (body) window.__posts.push({ path, body });
-  if (path === "/bepic/browse") {
+  if (path === "/imageviewer/browse") {
     const file = (name, p) => ({ name, path: p, kind: "text", size: 100, mtime: 1 });
     return j({ path: "D:/x", parent: null, dirs: [], truncated: false, roots: [],
       files: [file("tool.py", "D:/x/tool.py"), file("notes.json", "D:/x/notes.json"),
               file("manifest.json", "D:/out/agent/lora_datasets/demo_dog/manifest.json")] });
   }
-  if (path === "/bepic/code") return j({ snippets: SNIPS.slice(1) });
-  if (path === "/bepic/text") {
+  if (path === "/imageviewer/code") return j({ snippets: SNIPS.slice(1) });
+  if (path === "/imageviewer/text") {
     const f = FILES[q.get("path")];
     return f ? j({ path: q.get("path"), name: q.get("path").split("/").pop(), language: f.language, code: f.code, truncated: false }) : j({ error: "no file" }, false);
   }
-  if (path === "/bepic/lora/datasets") return j({ datasets: Object.keys(DS).map(dsInfo) });
-  if (path === "/bepic/lora/dataset") {
+  if (path === "/imageviewer/lora/datasets") return j({ datasets: Object.keys(DS).map(dsInfo) });
+  if (path === "/imageviewer/lora/dataset") {
     const n = q.get("name");
     return DS[n] ? j({ name: n, dir: dsInfo(n).dir, manifest_path: dsInfo(n).manifest_path, manifest: DS[n], review: REVIEW[n], sha: "s" }) : j({ error: "no dataset" }, false);
   }
-  if (path === "/bepic/lora/dataset_save") { DS[body.name] = body.manifest; return j({ ok: true, manifest: body.manifest, review: REVIEW[body.name], sha: "s2", reset_approval: false }); }
-  if (path === "/bepic/lora/review") {
+  if (path === "/imageviewer/lora/dataset_save") { DS[body.name] = body.manifest; return j({ ok: true, manifest: body.manifest, review: REVIEW[body.name], sha: "s2", reset_approval: false }); }
+  if (path === "/imageviewer/lora/review") {
     if (body.action === "approve") {
       REVIEW[body.name] = { state: "approved" };
       // the training run the agent starts after the approval: a NEW run that the Training page has to follow
@@ -57,8 +57,8 @@ window.__fetchApi = async (p, opts) => {
     }
     return j({ ok: true, state: body.action === "approve" ? "approved" : body.action, review: REVIEW[body.name], manifest: DS[body.name], message: "ok" });
   }
-  if (path === "/bepic/lora/runs") return j({ runs: window.__runs });
-  if (path === "/bepic/lora/run") {
+  if (path === "/imageviewer/lora/runs") return j({ runs: window.__runs });
+  if (path === "/imageviewer/lora/run") {
     const r = window.__runs.find((x) => x.name === q.get("name"));
     if (!r) return j({ error: "no run" }, false);
     return j({ name: r.name, dir: "D:/out/agent/lora_runs/" + r.name, progress: { job: r.name, status: r.status, step: r.step, total: r.total, pct: r.pct, loss_series: [], dataset: r.dataset },
@@ -66,7 +66,7 @@ window.__fetchApi = async (p, opts) => {
   }
   return j({}, false);
 };
-let v; try { v = await import("/extensions/viewer/bEpicViewer.js"); } catch (e) { document.title = "IMPORT " + e.message; throw e; }
+let v; try { v = await import("/extensions/viewer/imageViewer.js"); } catch (e) { document.title = "IMPORT " + e.message; throw e; }
 const panel = v.mountStandaloneViewer(document.body);
 window.__panel = panel;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

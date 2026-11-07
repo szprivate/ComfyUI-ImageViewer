@@ -27,7 +27,7 @@ RATE = 48000
 
 
 def _modules(tmp):
-    name = "bepic_export_sound_under_test"
+    name = "imageviewer_export_sound_under_test"
     if "folder_paths" not in sys.modules:
         fp = types.ModuleType("folder_paths")
         fp.get_temp_directory = fp.get_output_directory = fp.get_input_directory = lambda: tmp
@@ -108,8 +108,8 @@ def tone_level(x, freq, t0, t1):
 
 def panel_cut(film, silent, sound):
     """The cut the Edit panel makes from Add clips: two films inserted on V1 and a sound file onto a
-    sound track - built and saved by the panel's own code (bEpicViewer_editTimelineData.js)."""
-    url = "file:///" + os.path.join(ROOT, "js", "bEpicViewer_editTimelineData.js").replace("\\", "/")
+    sound track - built and saved by the panel's own code (imageViewer_editTimelineData.js)."""
+    url = "file:///" + os.path.join(ROOT, "js", "imageViewer_editTimelineData.js").replace("\\", "/")
     code = (f"import * as D from {json.dumps(url)}; const [film, silent, snd] = JSON.parse(process.argv[1]);"
             " let cut = D.emptyCut('t', 24);"
             " cut = D.insertEdit(cut, [{ file: silent, name: 's', length: 2 }, { file: film, name: 'f', length: 2 }], 0, 'V1', D.editMask(cut)).cut;"

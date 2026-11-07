@@ -1,7 +1,7 @@
 // node --test tests/test_lora_model.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import * as L from "../js/bEpicViewer_loraModel.js";
+import * as L from "../js/imageViewer_loraModel.js";
 
 const mk = () => ({
   version: 1, name: "cat", trigger_word: "ohwx", model: "flux", status: "review",
