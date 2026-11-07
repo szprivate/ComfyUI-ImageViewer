@@ -48,6 +48,10 @@ try:
 except Exception:  # pragma: no cover
     atlas_render = None
 try:
+    from . import deps_relay
+except Exception:  # pragma: no cover
+    deps_relay = None
+try:
     from . import lora_io
 except Exception:  # pragma: no cover
     lora_io = None
@@ -1900,6 +1904,32 @@ try:
                 return web.json_response({"error": "unknown shot"}, status=404)
             return web.json_response(_shots.public(job))
 
+        # --- Dependencies tab (deps_relay.py) ---------------------------------
+        # What a file was made from and what was made from it. The record is agentY's (agenty_core), so this
+        # relays to the agentY host like the Atlas routes below. The root must be a file the viewer may show.
+        async def _imageviewer_deps(request):
+            """GET ?path=<file> (or filename / subfolder / type) [&up=4&down=4&scan=1] ->
+            {"root", "nodes": [{id, file, kind, created, exists, stale, root, viewable}], "edges": [{from, to,
+            kind, label}], "truncated"}."""
+            if deps_relay is None:
+                return web.json_response({"error": "the Dependencies tab is unavailable"}, status=500)
+            q = request.query
+            path = q.get("path") or ""
+            if not path:
+                path = _resolve_comfy_ref(q.get("filename"), q.get("type"), q.get("subfolder")) or ""
+            if not path:
+                return web.json_response({"error": "send ?path=<file>"}, status=400)
+            path = os.path.abspath(path)
+            if not path_access.may_serve(path):
+                return web.json_response({"error": path_access.serve_refusal(path)}, status=403)
+            base = f"{request.scheme}://{request.host}"
+            try:
+                out = await asyncio.to_thread(deps_relay.fetch_graph, base, path, q.get("up", 4), q.get("down", 4),
+                                              q.get("scan") in ("1", "true"), path_access.may_serve)
+            except deps_relay.RelayError as e:
+                return web.json_response({"error": str(e)}, status=e.status)
+            return web.json_response(out)
+
         # --- Render with World Labs Atlas (atlas_render.py) -------------------
         # The viewer has neither agenty_core nor the World Labs key: these two routes relay to the
         # agentY host, which renders (the same core function the agent's atlas_render_view runs).
@@ -3126,6 +3156,7 @@ try:
         _safe_add("POST", "/api/imageviewer/previz_shot", _imageviewer_previz_shot)
         _safe_add("POST", "/imageviewer/previz_shot_done", _imageviewer_previz_shot_done)
         _safe_add("POST", "/api/imageviewer/previz_shot_done", _imageviewer_previz_shot_done)
+        _safe_add("GET", "/imageviewer/deps", _imageviewer_deps)
         _safe_add("POST", "/imageviewer/atlas_render", _imageviewer_atlas_render)
         _safe_add("POST", "/api/imageviewer/atlas_render", _imageviewer_atlas_render)
         _safe_add("GET", "/imageviewer/atlas_render", _imageviewer_atlas_render_state)
