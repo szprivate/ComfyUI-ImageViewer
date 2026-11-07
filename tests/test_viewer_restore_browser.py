@@ -127,6 +127,30 @@ class ViewerRestoreTests(unittest.TestCase):
         self.assertIn(st["keptTabs"], ([AGENT], [VIEWER]), "the saved state was overwritten")
         self.assertEqual(st["keptHistory"], 2)
 
+    def test_a_sequence_is_saved_small_and_comes_back_whole(self):
+        pg = self.new_page()
+        self.open_viewer(pg)
+        seq = [{"filename": f"frame_{1001 + f}.png", "subfolder": "agent/run_7", "type": "output",
+                "path": f"D:/out/agent/run_7/frame_{1001 + f}.png", "group": "Look dev", "label": "turntable"}
+               for f in range(81)]
+        before = pg.evaluate("""(seq) => { const P = window.__panel;
+          P.takeRenderInViewer(seq, { group: 'Look dev' });
+          P.persistViewerState();
+          const kept = JSON.parse(localStorage.getItem(P._getViewerStateStorageKey()));
+          return { live: JSON.stringify(P.history.all[0]), keptFrames: kept.history.all[0].length,
+                   keptFirst: kept.history.all[0][0].path, keptChars: JSON.stringify(kept.history.all[0]).length }; }""", seq)
+        # Saved as one frame (the first, so an older viewer still shows something) and the differences.
+        self.assertEqual(before["keptFrames"], 1)
+        self.assertEqual(before["keptFirst"], seq[0]["path"])
+        self.assertLess(before["keptChars"], len(before["live"]) / 3)
+        pg.reload()
+        pg.wait_for_function("window.__ready===true", timeout=20000)
+        pg.wait_for_timeout(400)
+        after = pg.evaluate("() => JSON.stringify(window.__panel.history.all[0])")
+        self.assertEqual(json.loads(after), json.loads(before["live"]))
+        self.assertEqual(len(json.loads(after)), 81)
+        self.assertEqual(self.errors, [])
+
     def test_agent_tab_and_history_come_back_after_a_slow_start(self):
         pg = self.new_page()
         self.assert_restored(self.open_viewer(pg))

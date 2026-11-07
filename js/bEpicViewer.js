@@ -6,7 +6,7 @@ import { api } from "../../scripts/api.js";
 
 import { LayoutMixin }   from "./bEpicViewer_mixinLayout.js";
 import { HistoryMixin, HISTORY_LIMIT_DEFAULT, HISTORY_LIMIT_OLD_DEFAULT, HISTORY_KEY, HISTORY_VIEW_TAB, VIEWER_TAB_LABEL, clampHistoryLimit }  from "./bEpicViewer_mixinHistory.js";
-import { mergeTabHistories, snapshotTab, isMediaTabKey, isFeedTabKey, foldIntoTab, groupFromLabel } from "./bEpicViewer_historyData.js";
+import { mergeTabHistories, snapshotTab, isMediaTabKey, isFeedTabKey, foldIntoTab, groupFromLabel, packSnapshot, unpackSnapshot } from "./bEpicViewer_historyData.js";
 import { PrevizWorldMixin } from "./bEpicViewer_previzWorld.js";
 import { PlaybackMixin } from "./bEpicViewer_mixinPlayback.js";
 import { ParamsMixin }   from "./bEpicViewer_mixinParams.js";
@@ -354,10 +354,16 @@ class ViewerPanel extends HTMLElement {
                 return out;
             };
             const activeTab = keepKey(this.activeTab) ? (this.activeTab || null) : null;
+            // Sequences in their saved form (packSnapshot, bEpicViewer_historyData.js).
+            const packAll = (obj) => {
+                const out = {};
+                for (const [k, v] of Object.entries(obj)) out[k] = packSnapshot(v);
+                return out;
+            };
             const payload = {
                 version: 1,
-                allTabs: pick(tabs),
-                history,
+                allTabs: packAll(pick(tabs)),
+                history: { [HISTORY_KEY]: history[HISTORY_KEY].map(packSnapshot) },
                 historyCollapsed: [...(this.historyCollapsed instanceof Set ? this.historyCollapsed : (this.historyCollapsed || []))],
                 tabViewState: pick(this.tabViewState),
                 tabLabels: pick(this.tabLabels),
@@ -419,8 +425,15 @@ class ViewerPanel extends HTMLElement {
             this.historyTags = JSON.parse(JSON.stringify(parsed.historyTags));
         }
 
-        const restoredTabs = (parsed.allTabs && typeof parsed.allTabs === 'object') ? parsed.allTabs : {};
-        const restoredHistory = (parsed.history && typeof parsed.history === 'object') ? parsed.history : {};
+        // Sequences come back from their saved form (unpackSnapshot); an older save is read as it is.
+        const unpackAll = (obj, each) => {
+            const out = {};
+            for (const [k, v] of Object.entries(obj)) out[k] = each(v);
+            return out;
+        };
+        const restoredTabs = (parsed.allTabs && typeof parsed.allTabs === 'object') ? unpackAll(parsed.allTabs, unpackSnapshot) : {};
+        const restoredHistory = (parsed.history && typeof parsed.history === 'object')
+            ? unpackAll(parsed.history, (stack) => (Array.isArray(stack) ? stack.map(unpackSnapshot) : stack)) : {};
         const restoredTabViewState = (parsed.tabViewState && typeof parsed.tabViewState === 'object') ? parsed.tabViewState : {};
         const restoredLabels = (parsed.tabLabels && typeof parsed.tabLabels === 'object') ? parsed.tabLabels : {};
         const restoredColors = (parsed.tabColors && typeof parsed.tabColors === 'object') ? parsed.tabColors : {};

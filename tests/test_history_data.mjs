@@ -117,3 +117,27 @@ test("a node's own tab, folded, names the node its snapshots came from", () => {
     assert.equal(snapshotNode(out[0]), "7");
     assert.equal(snapshotNode(out[1]), null);
 });
+
+test("a sequence is saved as its first frame and the differences, and comes back exactly", async () => {
+    const { packSnapshot, unpackSnapshot } = await import("../js/bEpicViewer_historyData.js");
+    const seq = Array.from({ length: 81 }, (_, f) => ({
+        path: `D:/AI/out/run_7/frame_${1001 + f}.png`, filename: `frame_${1001 + f}.png`, subfolder: "agent/run_7",
+        type: "output", group: "agentY", label: "render", ...(f === 5 ? { extra: 1 } : {}), ...(f === 9 ? { n: [1, 2] } : {}) }));
+    seq[0].fromTab = "folder_history";
+    const packed = JSON.parse(JSON.stringify(packSnapshot(seq)));
+    assert.equal(packed.length, 1, "one frame saved");
+    assert.equal(packed[0].path, seq[0].path, "an older viewer sees the first frame");
+    assert.equal(packed[0].fromTab, "folder_history");
+    assert.ok(JSON.stringify(packed).length < JSON.stringify(seq).length / 3);
+    assert.deepEqual(unpackSnapshot(packed), seq);
+    assert.equal(JSON.stringify(unpackSnapshot(packed)), JSON.stringify(seq), "keys in their order");
+    // One frame, an old save and anything that is not a snapshot pass as they are.
+    const one = [{ path: "D:/a.png" }];
+    assert.equal(packSnapshot(one), one);
+    assert.equal(unpackSnapshot(one), one);
+    assert.deepEqual(unpackSnapshot(seq), seq);
+    assert.equal(packSnapshot(null), null);
+    // Shorter and longer strings, a path that changes folder.
+    const odd = [{ p: "a/frame_9.png" }, { p: "a/frame_10.png" }, { p: "b/x.png" }, { p: "" }, { p: "a/frame_9.png" }];
+    assert.deepEqual(unpackSnapshot(JSON.parse(JSON.stringify(packSnapshot(odd)))), odd);
+});
