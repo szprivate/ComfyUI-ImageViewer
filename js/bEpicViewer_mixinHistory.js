@@ -989,7 +989,6 @@ export const HistoryMixin = {
         this._historyPanelSig = newSig;
         this._historyPanelLayoutSig = layoutSig;
 
-        const frag = document.createDocumentFragment();
         // The tag filter in the footer (HistoryTagsMixin).
         if (this._syncHistoryTagFilter) this._syncHistoryTagFilter();
 
@@ -997,10 +996,27 @@ export const HistoryMixin = {
         const visible = this.historyTagVisible ? (s) => this.historyTagVisible(s) : null;
         const sections = historySections(stack, visible, collapsed);
         const anyGroups = sections.some((sec) => sec.group);
-        const makeThumb = (snapshot, idx) => {
-            const imgObj    = (snapshot && snapshot.length > 0) ? snapshot[0] : null;
+
+        // A tile is made ONCE per snapshot and kept (_historyTiles, by the
+        // snapshot itself) for as long as what it shows stays the same: every
+        // new render used to remake the whole strip - twice, switchTab and then
+        // showInViewerTab - and each new tile set its <img> again, so a strip of
+        // N tiles was N elements, N listeners and N decodes per render. Only
+        // what depends on the tile's place (its index, its highlight) is painted
+        // on every pass (paintThumb); the handlers read the index off the tile.
+        const tiles = (this._historyTiles instanceof WeakMap) ? this._historyTiles : (this._historyTiles = new WeakMap());
+        const used = new Set();
+        const tileSig = (snapshot, imgObj, url) => {
+            const from = snapshotTab(snapshot);
+            let agent = '';
+            try { agent = this.historyAgentTagSig ? this.historyAgentTagSig(snapshot) : ''; } catch (e) { /* ignore */ }
+            return [borrowed ? 1 : 0, url || '', snapshotGroup(snapshot), (imgObj && imgObj.label) || '',
+                    (this.historyTagOf && this.historyTagOf(snapshot)) || '', from ? this._historyTabLabel(from) : '', agent].join('\u0002');
+        };
+        const buildThumb = (snapshot, imgObj, url) => {
             const thumb     = document.createElement('div');
             thumb.className = 'history-thumb';
+            const at = () => Number(thumb.dataset.idx);
 
             const imgEl = document.createElement('img');
             if (imgObj) {
@@ -1015,9 +1031,10 @@ export const HistoryMixin = {
                 // A thumbnail is only a hint that something is wrong — a video's
                 // poster is a separate temp file, so it can be gone while the clip
                 // itself is fine. The prune pass checks the real media before
-                // anything is removed.
-                imgEl.onerror = () => this.noteMediaLoadFailed(imgObj);
-                try { this._loadThumb(imgEl, this.thumbUrl(imgObj)); } catch (e) { /* ignore */ }
+                // anything is removed. A failed tile is not kept: the next pass
+                // makes it again, so a file that arrived late still shows.
+                imgEl.onerror = () => { thumb._bepicFailed = true; this.noteMediaLoadFailed(imgObj); };
+                try { this._loadThumb(imgEl, url); } catch (e) { /* ignore */ }
             }
             thumb.appendChild(imgEl);
             const tagDot = this.historyTagDot ? this.historyTagDot(snapshot) : null;
@@ -1026,65 +1043,38 @@ export const HistoryMixin = {
             if (caption) thumb.appendChild(caption);
             const agentTag = this.historyAgentTagBadge ? this.historyAgentTagBadge(document, snapshot) : null;
             if (agentTag) thumb.appendChild(agentTag);
-            thumb.dataset.idx = String(idx);
-            const what = imgObj && imgObj.label ? ` - ${imgObj.label}` : '';
-            const from = snapshotTab(snapshot);
-            const fromWords = from ? `, from ${this._historyTabLabel(from)}` : '';
-            const groupWords = snapshotGroup(snapshot) ? ` (group ${snapshotGroup(snapshot)})` : '';
-            thumb.title = borrowed
-                ? `History ${idx + 1}${what}${fromWords}${groupWords}\n` +
-                  `Drag onto the timeline to add it to the cut\n` +
-                  `Click to select it, Ctrl+click to add to the selection, Shift+click for a range\n` +
-                  `Double-click to open it in its tab\n` +
-                  `Right-click to tag it or move it to another group`
-                : `History ${idx + 1}${what}${fromWords}${groupWords}\n` +
-                          `Click to show it (in its tab), then Ctrl+click to add to the selection, Ctrl+Shift+click for a range\n` +
-                          `Shift+click to compare against the open snapshot\n` +
-                          `C with several Ctrl-selected: compare them (3+: a Contact Sheet of all)\n` +
-                          `Drag onto a group's heading to move it there; right-click to tag it or pick a group`;
             // Drag source: drop onto the ComfyUI graph to make a loader node. The
             // whole snapshot is passed so multi-image sequences map to a sequence
             // loader (see _makeHistoryThumbDraggable / _sequenceDirForSnapshot);
             // key and index let a drag pick up the whole selection at once.
             if (imgObj && this._makeHistoryThumbDraggable) {
-                this._makeHistoryThumbDraggable(thumb, imgObj, snapshot, key, idx);
+                this._makeHistoryThumbDraggable(thumb, imgObj, snapshot, key, at);
             }
             // ...and onto a group's heading, to move it (and the selection it is in).
             thumb.addEventListener('dragstart', () => {
-                this._historyDragSnaps = this.isHistoryItemSelected(key, idx)
+                this._historyDragSnaps = this.isHistoryItemSelected(key, at())
                     ? this.selectedHistorySnapshots(key).map((p) => p.snapshot) : [snapshot];
             });
             thumb.addEventListener('dragend', () => { this._historyDragSnaps = null; });
-
-            const isSelected = !borrowed && (this.currentHistoryKey === key && this.currentHistoryIndex === idx);
-            if (isSelected) {
-                thumb.classList.add('selected');
-                thumb.style.border = '2px solid #f60';
-            }
-
-            if (this.historyCompare && this.historyCompare.key === key) {
-                if (idx === this.historyCompare.baseIdx)  thumb.classList.add('base');
-                if (idx === this.historyCompare.otherIdx) thumb.classList.add('compare');
-            }
-
-            if (this.isHistoryItemSelected(key, idx) && (borrowed || this.historySelectionIndices(key).length > 1)) thumb.classList.add('multi');
 
             // Don't preventDefault here — that would block the native drag start
             // used to drop thumbnails onto the graph. stopPropagation still keeps
             // the mousedown from reaching any parent panel handler.
             thumb.onmousedown  = ev => ev.stopPropagation();
-            thumb.oncontextmenu = (ev) => { ev.preventDefault(); ev.stopPropagation(); this.showThumbContextMenu(ev, imgObj, key, idx); };
+            thumb.oncontextmenu = (ev) => { ev.preventDefault(); ev.stopPropagation(); this.showThumbContextMenu(ev, imgObj, key, at()); };
             // On a cut's tab a click selects and the cut stays on screen; a
             // double-click opens the snapshot in its tab.
             if (borrowed) {
                 thumb.onclick = (ev) => {
                     ev.stopPropagation();
+                    const idx = at();
                     if (ev.shiftKey) this.extendHistorySelection(key, idx);
                     else if (ev.ctrlKey || ev.metaKey) this.toggleHistorySelection(key, idx);
                     else this.startHistorySelection(key, idx);
                 };
                 thumb.ondblclick = (ev) => {
                     ev.stopPropagation();
+                    const idx = at();
                     if (this.historyCompare) this.exitHistoryCompare();
                     this.openHistorySnapshot(key, idx);
                     this.startHistorySelection(key, idx);
@@ -1093,6 +1083,7 @@ export const HistoryMixin = {
             }
             thumb.onclick = (ev) => {
                 ev.stopPropagation();
+                const idx = at();
 
                 // Ctrl/Cmd owns multi-selection so that plain Shift stays with
                 // compare. Neither changes what the viewport is showing.
@@ -1134,27 +1125,86 @@ export const HistoryMixin = {
             };
             return thumb;
         };
+        // What depends on where the tile is: its index, its title, its highlights.
+        const multiOn = borrowed || this.historySelectionIndices(key).length > 1;
+        const paintThumb = (thumb, snapshot, imgObj, idx) => {
+            thumb.dataset.idx = String(idx);
+            const what = imgObj && imgObj.label ? ` - ${imgObj.label}` : '';
+            const from = snapshotTab(snapshot);
+            const fromWords = from ? `, from ${this._historyTabLabel(from)}` : '';
+            const groupWords = snapshotGroup(snapshot) ? ` (group ${snapshotGroup(snapshot)})` : '';
+            thumb.title = borrowed
+                ? `History ${idx + 1}${what}${fromWords}${groupWords}\n` +
+                  `Drag onto the timeline to add it to the cut\n` +
+                  `Click to select it, Ctrl+click to add to the selection, Shift+click for a range\n` +
+                  `Double-click to open it in its tab\n` +
+                  `Right-click to tag it or move it to another group`
+                : `History ${idx + 1}${what}${fromWords}${groupWords}\n` +
+                          `Click to show it (in its tab), then Ctrl+click to add to the selection, Ctrl+Shift+click for a range\n` +
+                          `Shift+click to compare against the open snapshot\n` +
+                          `C with several Ctrl-selected: compare them (3+: a Contact Sheet of all)\n` +
+                          `Drag onto a group's heading to move it there; right-click to tag it or pick a group`;
+            const isSelected = !borrowed && (this.currentHistoryKey === key && this.currentHistoryIndex === idx);
+            thumb.classList.toggle('selected', isSelected);
+            thumb.style.border = isSelected ? '2px solid #f60' : '';
+            const cmp = this.historyCompare && this.historyCompare.key === key ? this.historyCompare : null;
+            thumb.classList.toggle('base', !!cmp && idx === cmp.baseIdx);
+            thumb.classList.toggle('compare', !!cmp && idx === cmp.otherIdx);
+            thumb.classList.toggle('multi', multiOn && this.isHistoryItemSelected(key, idx));
+        };
+        const makeThumb = (snapshot, idx) => {
+            const imgObj = (snapshot && snapshot.length > 0) ? snapshot[0] : null;
+            let url = null;
+            if (imgObj) { try { url = this.thumbUrl(imgObj); } catch (e) { /* ignore */ } }
+            const sig = tileSig(snapshot, imgObj, url);
+            const kept = snapshot && typeof snapshot === 'object' ? tiles.get(snapshot) : null;
+            let thumb = kept && kept.sig === sig && !kept.el._bepicFailed && !used.has(kept.el) ? kept.el : null;
+            if (!thumb) {
+                thumb = buildThumb(snapshot, imgObj, url);
+                if (snapshot && typeof snapshot === 'object' && !(kept && used.has(kept.el))) tiles.set(snapshot, { el: thumb, sig });
+            }
+            used.add(thumb);
+            paintThumb(thumb, snapshot, imgObj, idx);
+            return thumb;
+        };
 
+        // Headings are kept the same way, by what they show.
+        const headsBefore = this._historyHeadings instanceof Map ? this._historyHeadings : new Map();
+        const headsNow = new Map();
+        const nodes = [];
         for (const sec of sections) {
-            const heading = this._historyGroupHeading(document, sec, anyGroups);
-            if (heading) frag.appendChild(heading);
-            for (const idx of sec.indices) frag.appendChild(makeThumb(stack[idx], idx));
+            const hk = `${anyGroups ? 1 : 0}\u0002${sec.group}\u0002${sec.count}\u0002${collapsed.has(sec.group) ? 1 : 0}`;
+            let heading = headsBefore.get(hk);
+            // One with its rename field open is made again: leaving the field redraws to get the name back.
+            if (heading === undefined || headsNow.has(hk) || (heading && heading.querySelector('input'))) {
+                heading = this._historyGroupHeading(document, sec, anyGroups);
+            }
+            headsNow.set(hk, heading);
+            if (heading) {
+                heading.classList.remove('drop');
+                nodes.push(heading);
+            }
+            for (const idx of sec.indices) nodes.push(makeThumb(stack[idx], idx));
         }
+        this._historyHeadings = headsNow;
 
-        // Replace strip contents in one operation
-        this.historyStrip.innerHTML = '';
-        this.historyStrip.appendChild(frag);
-        if (stack.length && !this.historyStrip.childElementCount) {
+        if (stack.length && !nodes.length) {
             const none = document.createElement('div');
             none.className = 'history-tag-empty';
             none.textContent = 'Nothing tagged like that here';
-            this.historyStrip.appendChild(none);
+            nodes.push(none);
         } else if (borrowed && !stack.length) {
             const none = document.createElement('div');
             none.className = 'history-tag-empty';
             none.textContent = 'No history yet. Renders show here, to drag onto the cut.';
-            this.historyStrip.appendChild(none);
+            nodes.push(none);
         }
+        // Replace strip contents in one operation - and not at all when the
+        // tiles are already there in that order (a forced redraw that changed
+        // nothing), so the strip is not laid out again for nothing.
+        const cur = this.historyStrip.children;
+        const same = cur.length === nodes.length && nodes.every((n, i) => cur[i] === n);
+        if (!same) this.historyStrip.replaceChildren(...nodes);
 
         // Only reached when the signature changed, so this rides on real rebuilds
         // — a restore from localStorage, a new output, a tab switch — rather than

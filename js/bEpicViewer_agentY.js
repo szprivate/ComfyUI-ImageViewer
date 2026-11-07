@@ -156,6 +156,15 @@ export const AgentYMixin = {
         return out;
     },
 
+    /** What the badges of historyAgentTagBadge depend on, for the strip to know
+     *  when a kept tile has to be made again. */
+    historyAgentTagSig(snapshot) {
+        const fr = snapshot && snapshot[0];
+        const names = this.agentTagsOf(fr);
+        if (!names.length) return "";
+        return `${framePath(fr) && untagBridge() ? 1 : 0}\u0001${names.map(String).join("\u0001")}`;
+    },
+
     /** The "#name" badges on a picture agentY knows by a tag, each with a × that
      *  takes the tag off (when agentY can). */
     historyAgentTagBadge(doc, snapshot) {

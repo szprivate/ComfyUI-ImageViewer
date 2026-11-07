@@ -307,7 +307,8 @@ export const DnDMixin = {
             // Dragging a thumb that is part of a multi-selection takes the whole
             // selection in one go; dragging any other thumb takes just that one
             // and leaves the selection where it was.
-            const picked = this.isHistoryItemSelected?.(key, idx)
+            // `idx` may be a function: a kept strip tile reads its place when dragged.
+            const picked = this.isHistoryItemSelected?.(key, typeof idx === "function" ? idx() : idx)
                 ? this.selectedHistorySnapshots(key)
                 : [{ imgObj, snapshot }];
             const items = picked
