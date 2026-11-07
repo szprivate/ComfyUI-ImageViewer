@@ -139,8 +139,11 @@ export function layout(graph, { open = new Set(), prompts = true } = {}) {
         const ps = (nb.get(id) || []).filter((p) => pos.has(p));
         return ps.length ? ps.reduce((s, p) => s + pos.get(p), 0) / ps.length : pos.get(id);
     };
+    // Rows `from` up to (not including) `to`, either way. Bounded by the rows that exist, so an empty graph
+    // (an error answer) sweeps nothing - a `r !== to` test once spun forever there and froze the page.
     const sweep = (from, to, step, nb) => {
-        for (let r = from; r !== to; r += step) {
+        for (let r = from; step > 0 ? r < to : r > to; r += step) {
+            if (r < 0 || r >= rows.length) continue;
             const row = rows[r];
             if (!row) continue;
             row.sort((a, b) => (bary(a, nb) - bary(b, nb)) || (pos.get(a) - pos.get(b)));

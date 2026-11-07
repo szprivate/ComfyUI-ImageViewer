@@ -78,3 +78,11 @@ test("a file's prompts are text boxes right above it, wired into it", () => {
     // Switched off, there are none.
     assert.equal(layout(g, { prompts: false }).nodes.filter((x) => x.prompt).length, 0);
 });
+
+test("an empty graph (an error answer) lays out at once instead of spinning", () => {
+    const L = layout({ nodes: [], edges: [] });
+    assert.equal(L.nodes.length, 0);
+    assert.equal(L.edges.length, 0);
+    const one = layout({ nodes: [n("a", { root: true })], edges: [] });
+    assert.equal(one.nodes.length, 1);
+});
