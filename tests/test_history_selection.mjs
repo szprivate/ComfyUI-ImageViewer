@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
     describeHistorySelection, pickedIndices, snapshotItem, frameKind, HISTORY_SELECTION_CAP,
-} from "../js/bEpicViewer_historySelection.js";
+} from "../js/imageViewer_historySelection.js";
 
 const snap = (name, extra = {}) => [{ path: `D:/out/${name}`, filename: name, ...extra }];
 

@@ -9,9 +9,9 @@ numbers) and the pixels beside it (``px[id]`` straight RGBA ``uint8 (h, w, 4)``,
 **The .ora** (OpenRaster 0.0.x, a zip Krita and GIMP open): ``mimetype`` (stored, first),
 ``stack.xml`` (the pixel layers, top first, with their place, opacity, visibility and composite-op),
 ``data/<id>.png``, ``mergedimage.png`` (the picture as it looks: :func:`composite`, the page's own
-arithmetic - paint_math), ``Thumbnails/thumbnail.png``, and ours: ``bepic.json`` (the whole
+arithmetic - paint_math), ``Thumbnails/thumbnail.png``, and ours: ``imageviewer.json`` (the whole
 ``meta``: adjustment layers, masks, text, the selection - what ``stack.xml`` has no words for),
-``data/<id>_mask.png``, ``selection.png``. An .ora from another program has no ``bepic.json``; its
+``data/<id>_mask.png``, ``selection.png``. An .ora from another program has no ``imageviewer.json``; its
 ``stack.xml`` is read (groups flattened, their order kept).
 
 **The .psd** (8-bit RGB, written by :func:`write_psd`, read by :func:`read_psd`): pixel layers
@@ -324,7 +324,7 @@ def write_ora(path, doc):
                 z.writestr(name, data, compress_type=zipfile.ZIP_STORED)
             z.writestr("mergedimage.png", png_bytes(merged), compress_type=zipfile.ZIP_STORED)
             z.writestr("Thumbnails/thumbnail.png", tb.getvalue(), compress_type=zipfile.ZIP_STORED)
-            z.writestr("bepic.json", json.dumps(meta, indent=1), compress_type=zipfile.ZIP_DEFLATED)
+            z.writestr("imageviewer.json", json.dumps(meta, indent=1), compress_type=zipfile.ZIP_DEFLATED)
         os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):
@@ -361,8 +361,10 @@ def read_ora(path):
         names = set(z.namelist())
         root = ET.fromstring(z.read("stack.xml"))
         W, H = int(root.get("w") or 0), int(root.get("h") or 0)
-        if "bepic.json" in names:
-            meta = clean_meta(json.loads(z.read("bepic.json")))
+        # bepic.json: written while the viewer was called "bEpic" (before 1.18)
+        own = next((n for n in ("imageviewer.json", "bepic.json") if n in names), None)
+        if own:
+            meta = clean_meta(json.loads(z.read(own)))
             doc = PaintDoc(meta["w"], meta["h"], meta["name"])
             doc.meta = meta
             for L in meta["layers"]:

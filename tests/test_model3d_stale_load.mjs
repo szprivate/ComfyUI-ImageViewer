@@ -17,7 +17,7 @@ fs.writeFileSync(path.join(tmp, "package.json"), '{"type":"module"}');
 fs.writeFileSync(path.join(tmp, "scripts", "api.js"), "export const api={apiURL:(p)=>p,fileURL:(p)=>p,addEventListener(){},removeEventListener(){}};export const script={};");
 fs.writeFileSync(path.join(tmp, "scripts", "app.js"), "export const app={registerExtension(){}};");
 let M;
-try { M = await import(url.pathToFileURL(path.join(tmp, "ext", "js", "bEpicViewer_model3d.js")).href); }
+try { M = await import(url.pathToFileURL(path.join(tmp, "ext", "js", "imageViewer_model3d.js")).href); }
 catch (e) { M = null; console.warn("model3d import failed:", e.message); }
 
 function fakeView(loads) {

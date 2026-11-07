@@ -3,7 +3,7 @@
 Needs Playwright with an installed Edge or Chrome, and node for the stub server; skipped without them.
 Run: python -m unittest tests.test_edit_takes_browser   (or discover -s tests)
 It serves tests/harness/edit.html (the REAL viewer js against stubbed ComfyUI scripts), on a free port.
-A take arrives the way agentY's does: ComfyUI's `bepic.edit.take` message, dispatched through the stubbed api.
+A take arrives the way agentY's does: ComfyUI's `imageviewer.edit.take` message, dispatched through the stubbed api.
 """
 import os
 import shutil
@@ -105,7 +105,7 @@ class EditTakesBrowserTests(unittest.TestCase):
         pg.on("pageerror", lambda e: self.errors.append(str(e)))
         pg.goto(f"http://127.0.0.1:{self.port}/edit.html")
         pg.wait_for_function("window.__ready===true", timeout=20000)
-        pg.evaluate("()=>{const all=document.querySelectorAll('bepic-viewer-panel'); if(all[1]) all[1].style.display='none'}")
+        pg.evaluate("()=>{const all=document.querySelectorAll('comfyui-image-viewer-panel'); if(all[1]) all[1].style.display='none'}")
         if bridge:
             pg.evaluate("() => { window.__recreated = []; window.agentYViewerBridge = { version: 1, "
                         "recreate: async (a) => { window.__recreated.push(JSON.parse(JSON.stringify(a))); return { ok: true, message: 'Sent to agentY.' }; } }; }")
@@ -135,7 +135,7 @@ class EditTakesBrowserTests(unittest.TestCase):
         return pg.evaluate(CUT)
 
     def land(self, pg, detail):
-        pg.evaluate("(d) => { __api.dispatch('bepic.edit.take', d); }", detail)
+        pg.evaluate("(d) => { __api.dispatch('imageviewer.edit.take', d); }", detail)
         pg.wait_for_function("() => !__panel._editTlTakeBusy", timeout=10000)
         pg.wait_for_timeout(250)
 

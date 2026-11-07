@@ -87,7 +87,7 @@ class ViewerSpacesTests(unittest.TestCase):
         self.addCleanup(pg.close)
         self.errors = []
         # The harness serves no three.js: a 3D tab's viewport cannot load here, which is not what is tested.
-        pg.on("pageerror", lambda e: None if "/bepic/lib/three/" in str(e) else self.errors.append(str(e)))
+        pg.on("pageerror", lambda e: None if "/imageviewer/lib/three/" in str(e) else self.errors.append(str(e)))
         pg.goto(f"http://127.0.0.1:{self.port}/tabs.html")
         pg.wait_for_function("window.__ready===true", timeout=20000)
         pg.evaluate("() => localStorage.clear()")
@@ -134,8 +134,8 @@ class ViewerSpacesTests(unittest.TestCase):
           const P = window.__panel;
           const { app } = await import('/scripts/app.js');
           const mk = (id, type, title) => ({ id, type, title, widgets: [{ name: 'tab_name', value: '' }], inputs: [], outputs: [] });
-          const roto = mk(30, 'bEpicImageViewerRoto', 'Roto'), send = mk(40, 'bEpicSendToViewer', 'Send');
-          const sam = mk(50, 'bEpicImageViewerSAM3Collector', 'SAM3');
+          const roto = mk(30, 'ImageViewerRoto', 'Roto'), send = mk(40, 'ImageViewerSend', 'Send');
+          const sam = mk(50, 'ImageViewerSAM3Collector', 'SAM3');
           app.graph.nodes = [roto, send, sam];
           app.graph.getNodeById = (id) => app.graph.nodes.find((n) => String(n.id) === String(id)) || null;
           const pic = (n) => [{ path: `D:/tmp/${n}.png`, filename: `${n}.png`, type: 'temp' }];
@@ -158,7 +158,7 @@ class ViewerSpacesTests(unittest.TestCase):
     def test_an_old_tab_name_moves_into_group_and_is_hidden(self):
         pg = self.page()
         st = pg.evaluate("""async () => {
-          const { adoptOldTabName } = await import('/extensions/viewer/bEpicViewer_nodeTools.js');
+          const { adoptOldTabName } = await import('/extensions/viewer/imageViewer_nodeTools.js');
           const w = (name, value) => ({ name, value, computeSize: () => [100, 20], options: {} });
           const a = { widgets: [w('tab_name', 'shots'), w('group', '')] };
           const b = { widgets: [w('tab_name', 'old'), w('group', 'Characters')] };

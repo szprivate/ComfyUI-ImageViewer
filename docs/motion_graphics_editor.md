@@ -13,12 +13,12 @@ timeline / keyframe editor. User and agent edit one file, and the preview is the
   (`agentY-promo/video`, Remotion 4.0.532, React 19) is hand code: `PlayUI`, `NodeTag`, `Tech`, `Themes*`
   - all `useCurrentFrame()` + `interpolate`. Renders run `npx remotion render <entry> <id> out.mp4`.
   `run_script` has no node, so a core tool must spawn node itself.
-- **Viewer**: ES-module mixins on one `<bepic-viewer-panel>` custom element (`js/bEpicViewer.js`),
+- **Viewer**: ES-module mixins on one `<comfyui-image-viewer-panel>` custom element (`js/imageViewer.js`),
   docked panels declared in `DOCK_PANELS` (`mixinDock.js`), opened from the bar groups
   (`barGroups.js`). Previz scene = pure data + pure functions (`scene3d.js`: tracks of `{f,v,ease,ti,to}`,
   Hermite segments), edited by the Outliner / Channel Box / **Curve Editor** (`previzCurves.js`, built from
-  `curveUI.js` + `eulerFilter.js`). Files: `/bepic/text` reads, `/bepic/scene_save`-style routes write;
-  `/bepic/push` (agent tool `show_in_viewer`) opens things; heavy work goes to the agentY host through
+  `curveUI.js` + `eulerFilter.js`). Files: `/imageviewer/text` reads, `/imageviewer/scene_save`-style routes write;
+  `/imageviewer/push` (agent tool `show_in_viewer`) opens things; heavy work goes to the agentY host through
   a relay (`atlas_render.py` -> `/agent/host_info` -> `/agentY/...`). Tests: `node --test tests/*.mjs`,
   pytest for the Python side, `tests/harness*` standalone pages for UI.
 
@@ -39,7 +39,7 @@ timeline / keyframe editor. User and agent edit one file, and the preview is the
    `layerSvg()` - the SVG markup of a layer at a frame. The renderer injects exactly that string, the viewer
    preview injects exactly that string, in Chromium both: preview == render. Canonical copy in
    **agenty_core** (`motion_graphics/renderer/src/mgscene.js`); the viewer carries a byte-identical copy
-   (`js/bEpicViewer_mgScene.js`, a test compares them when the sibling checkout exists). Both run the
+   (`js/imageViewer_mgScene.js`, a test compares them when the sibling checkout exists). Both run the
    same golden vectors (`renderer/test/golden.json`) and a Python validator (`schema.py`) is checked
    against the same case list as the JS one. Video / component layers are HTML boxes placed with the same
    matrix (`htmlLayerStyle`): `OffthreadVideo` in the render, `<video>` in the preview.
@@ -55,7 +55,7 @@ timeline / keyframe editor. User and agent edit one file, and the preview is the
    `mg_scene_preview_frame(path, frame)` (a PNG to look at). Skill `motion-graphics-scene`: WRITE the scene
    JSON, validate, look at a still, open it in the viewer (`show_in_viewer` -> the Motion panel), render
    on request.
-5. **Viewer editor** = a **tab** of the viewer (`motion:<scene path>`; `bEpicViewer_mgPanel.js` + `bEpicViewer_mgEditor.js`):
+5. **Viewer editor** = a **tab** of the viewer (`motion:<scene path>`; `imageViewer_mgPanel.js` + `imageViewer_mgEditor.js`):
    the preview (SVG from `layerSvg`, zoom to fit, safe margins, on-canvas gizmo) fills the main canvas, and two normal
    dock panels follow the tab: **Properties** (numbers and colours at the playhead; editing an animated property sets a
    key, the stopwatch toggles animation; **curve editor** for the selected key: value over time, tangent handles, ease
@@ -83,14 +83,14 @@ timeline / keyframe editor. User and agent edit one file, and the preview is the
    editor, which hands them to the same transport (`step` / `play` / `stop`), never plays on its own. Only the
    standalone test page (`tests/harness_mg`) keeps the editor's own small transport.
 
-   Edits are pure functions on the scene (`bEpicViewer_mgModel.js`, node-tested) with an undo stack; Save writes the same
-   file (`POST /bepic/mgscene_save`, allowed folders only). **Render** relays to the agentY host (like Atlas render)
+   Edits are pure functions on the scene (`imageViewer_mgModel.js`, node-tested) with an undo stack; Save writes the same
+   file (`POST /imageviewer/mgscene_save`, allowed folders only). **Render** relays to the agentY host (like Atlas render)
    which runs `mg_render`.
 
    **Poster PNG**: every video `mg_render` writes also gets a `<name>.png` beside it, a still of the scene (its
    `comp.poster` frame, else the middle) that carries the whole scene in an iTXt chunk `mgscene` and the source
    scene file's absolute path in a tEXt chunk `mgscene_path` (like ComfyUI's workflow PNGs), so the video stays
-   editable when only the PNG travels. `GET /bepic/mgscene?path=<file>.png` reads the chunk (up to IDAT, no image
+   editable when only the PNG travels. `GET /imageviewer/mgscene?path=<file>.png` reads the chunk (up to IDAT, no image
    decoding) and answers `{path, scene}`: the source scene file when it still exists, is in an allowed folder and
    holds the same scene (Save then writes the real file), otherwise the embedded scene as
    `<png folder>/<png stem>.mgscene.json` (Save creates it there; assets are relative to the scene file, so they

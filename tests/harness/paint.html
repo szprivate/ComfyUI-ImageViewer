@@ -2,15 +2,15 @@
 <body>
 <script>window.addEventListener("error",(e)=>{document.title="ERR "+e.message});</script><script type="module">
 // The REAL viewer (stubbed ComfyUI scripts) with Paint. Served by tests/test_paint_browser.py, which answers
-// /bepic/paint/* with the REAL routes (paint_routes.py through viewer_api) on the same origin; everything else
+// /imageviewer/paint/* with the REAL routes (paint_routes.py through viewer_api) on the same origin; everything else
 // the viewer asks for is answered here (empty). Feedback to agentY is kept in window.__asked.
 window.__asked = [];
 window.agentYViewerBridge = { feedback: async (m) => { window.__asked.push(m); return { ok: true }; } };
 window.__fetchApi = async (p, opts) => {
-  if (p.startsWith("/bepic/paint/") || p.startsWith("/bepic/browse") || p.startsWith("/bepic/export_")) return fetch(p, opts);
+  if (p.startsWith("/imageviewer/paint/") || p.startsWith("/imageviewer/browse") || p.startsWith("/imageviewer/export_")) return fetch(p, opts);
   return { ok: false, status: 404, json: async () => ({}), text: async () => "" };
 };
-let v; try { v = await import("/extensions/viewer/bEpicViewer.js"); } catch (e) { document.title = "IMPORT " + e.message; throw e; }
+let v; try { v = await import("/extensions/viewer/imageViewer.js"); } catch (e) { document.title = "IMPORT " + e.message; throw e; }
 const panel = v.mountStandaloneViewer(document.body);
 window.__panel = panel;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

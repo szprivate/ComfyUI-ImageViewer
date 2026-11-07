@@ -19,7 +19,7 @@ NODE = shutil.which("node")
 
 
 def _modules():
-    name = "bepic_disabled_keys_under_test"
+    name = "imageviewer_disabled_keys_under_test"
     if name not in sys.modules:
         pkg = types.ModuleType(name)
         pkg.__path__ = [ROOT]
@@ -34,7 +34,7 @@ def _modules():
 
 def js(expr, data):
     """Evaluate `expr` (a JS expression over D and `data`) under node, as JSON."""
-    url = "file:///" + os.path.join(ROOT, "js", "bEpicViewer_editTimelineData.js").replace("\\", "/")
+    url = "file:///" + os.path.join(ROOT, "js", "imageViewer_editTimelineData.js").replace("\\", "/")
     code = (f"import * as D from {json.dumps(url)}; const data = JSON.parse(process.argv[1]);"
             f" process.stdout.write(JSON.stringify({expr}));")
     out = subprocess.run([NODE, "--input-type=module", "-e", code, json.dumps(data)], capture_output=True, text=True, check=True)
@@ -74,7 +74,7 @@ class DisabledClips(unittest.TestCase):
         doc = self.doc(self.edit())
         items = [c for c in doc["tracks"]["children"][0]["children"] if str(c.get("OTIO_SCHEMA", "")).startswith("Clip")]
         self.assertEqual([c.get("enabled", True) for c in items], [True, False, True])
-        self.assertTrue(items[1]["metadata"]["bepic"]["disabled"])
+        self.assertTrue(items[1]["metadata"]["imageviewer"]["disabled"])
         back = self.tio.editable(doc)
         self.assertEqual([bool(c.get("disabled")) for c in back["clips"]], [False, True, False])
         self.assertTrue(back["tracks"][0]["clips"][0]["disabled"])
@@ -83,7 +83,7 @@ class DisabledClips(unittest.TestCase):
         again = self.tio.rebuild(doc, edit, may_use=lambda p: True)
         items = [c for c in again["tracks"]["children"][0]["children"] if str(c.get("OTIO_SCHEMA", "")).startswith("Clip")]
         self.assertEqual([c.get("enabled", True) for c in items], [True, True, True])
-        self.assertNotIn("disabled", items[1]["metadata"].get("bepic", {}))
+        self.assertNotIn("disabled", items[1]["metadata"].get("imageviewer", {}))
 
     @unittest.skipIf(NODE is None, "needs node")
     def test_the_render_and_the_edit_tab_show_the_same_clip_on_every_frame(self):

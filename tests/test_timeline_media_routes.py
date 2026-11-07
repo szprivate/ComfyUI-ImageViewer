@@ -45,7 +45,7 @@ def _load(tmp):
     srv.PromptServer = type("PromptServer", (), {"instance": types.SimpleNamespace(app=app)})
     saved = {k: sys.modules.get(k) for k in ("folder_paths", "server")}
     sys.modules.update(folder_paths=fp, server=srv)
-    name = "bepic_media_routes_under_test"
+    name = "imageviewer_media_routes_under_test"
     pkg = types.ModuleType(name)
     pkg.__path__ = [ROOT]
     sys.modules[name] = pkg
@@ -204,23 +204,23 @@ class TimelineMediaRouteTests(unittest.TestCase):
             loop.close()
 
     def caches(self, kind):
-        return [f for f in os.listdir(self.dirs["temp"]) if f.startswith(f"bEpic_{kind}_")]
+        return [f for f in os.listdir(self.dirs["temp"]) if f.startswith(f"ImageViewer_{kind}_")]
 
     # ── peaks ──
 
     def test_peaks_follow_the_sound_and_are_cached(self):
         async def go(c):
             t0 = time.perf_counter()
-            r = await c.get("/bepic/timeline_peaks", params={"path": self.clip})
+            r = await c.get("/imageviewer/timeline_peaks", params={"path": self.clip})
             cold = time.perf_counter() - t0
             self.assertEqual(r.status, 200, await r.text())
             data = await r.json()
             tag = r.headers["ETag"]
             t0 = time.perf_counter()
-            again = await c.get("/bepic/timeline_peaks", params={"path": self.clip})
+            again = await c.get("/imageviewer/timeline_peaks", params={"path": self.clip})
             warm = time.perf_counter() - t0
             same = await again.json()
-            not_changed = await c.get("/bepic/timeline_peaks", params={"path": self.clip}, headers={"If-None-Match": tag})
+            not_changed = await c.get("/imageviewer/timeline_peaks", params={"path": self.clip}, headers={"If-None-Match": tag})
             return data, same, not_changed.status, cold, warm
         data, same, status304, cold, warm = self.run_async(go)
         print(f"\npeaks of a 4 s clip: cold {cold * 1000:.0f} ms, cached {warm * 1000:.0f} ms", file=sys.stderr)
@@ -240,7 +240,7 @@ class TimelineMediaRouteTests(unittest.TestCase):
 
     def test_a_still_has_no_sound(self):
         async def go(c):
-            r = await c.get("/bepic/timeline_peaks", params={"path": self.still})
+            r = await c.get("/imageviewer/timeline_peaks", params={"path": self.still})
             return r.status, await r.json()
         status, data = self.run_async(go)
         self.assertEqual((status, data["audio"], data["levels"]), (200, False, []))
@@ -250,10 +250,10 @@ class TimelineMediaRouteTests(unittest.TestCase):
         make_clicks(path, seconds=3.0)
 
         async def go(c):
-            a = await (await c.get("/bepic/timeline_peaks", params={"path": path})).json()
+            a = await (await c.get("/imageviewer/timeline_peaks", params={"path": path})).json()
             make_clicks(path, seconds=6.0)
             os.utime(path, (time.time() + 5, time.time() + 5))
-            b = await (await c.get("/bepic/timeline_peaks", params={"path": path})).json()
+            b = await (await c.get("/imageviewer/timeline_peaks", params={"path": path})).json()
             return a, b
         a, b = self.run_async(go)
         self.assertAlmostEqual(a["duration"], 3.0, delta=0.05)
@@ -264,11 +264,11 @@ class TimelineMediaRouteTests(unittest.TestCase):
     def test_strip_holds_frames_at_even_moments(self):
         async def go(c):
             t0 = time.perf_counter()
-            r = await c.get("/bepic/timeline_strip", params={"path": self.clip, "n": "8", "h": "48"})
+            r = await c.get("/imageviewer/timeline_strip", params={"path": self.clip, "n": "8", "h": "48"})
             cold = time.perf_counter() - t0
             body = await r.read()
             t0 = time.perf_counter()
-            again = await c.get("/bepic/timeline_strip", params={"path": self.clip, "n": "8", "h": "48"})
+            again = await c.get("/imageviewer/timeline_strip", params={"path": self.clip, "n": "8", "h": "48"})
             await again.read()
             warm = time.perf_counter() - t0
             return r.status, dict(r.headers), body, cold, warm
@@ -296,7 +296,7 @@ class TimelineMediaRouteTests(unittest.TestCase):
         async def go(c):
             out = []
             for a, b in (("0", "1.5"), ("2.5", "4"), ("1.5", "2.5")):
-                r = await c.get("/bepic/timeline_strip", params={"path": self.clip, "n": "8", "h": "48", "start": a, "end": b})
+                r = await c.get("/imageviewer/timeline_strip", params={"path": self.clip, "n": "8", "h": "48", "start": a, "end": b})
                 out.append((r.status, dict(r.headers), await r.read()))
             return out
         got = self.run_async(go)
@@ -320,7 +320,7 @@ class TimelineMediaRouteTests(unittest.TestCase):
 
     def test_a_still_is_one_tile(self):
         async def go(c):
-            r = await c.get("/bepic/timeline_strip", params={"path": self.still, "n": "64"})
+            r = await c.get("/imageviewer/timeline_strip", params={"path": self.still, "n": "64"})
             return r.status, dict(r.headers), await r.read()
         status, headers, body = self.run_async(go)
         self.assertEqual((status, headers["X-Strip-N"]), (200, "1"))
@@ -338,14 +338,14 @@ class TimelineMediaRouteTests(unittest.TestCase):
                                {"filename": "../../" + os.path.basename(self.outside_dir) + "/secret.mp4", "type": "output"},
                                {"path": os.path.join(self.dirs["output"], "..", "..", os.path.basename(self.outside_dir),
                                                      "secret.mp4")}):
-                    r = await c.get("/bepic/" + route, params=params)
+                    r = await c.get("/imageviewer/" + route, params=params)
                     out.append((route, r.status))
             text = os.path.join(self.dirs["output"], "notes.txt")
             with open(text, "w") as fh:
                 fh.write("not media")
-            r = await c.get("/bepic/timeline_peaks", params={"path": text})
+            r = await c.get("/imageviewer/timeline_peaks", params={"path": text})
             out.append(("text", r.status))
-            r = await c.post("/bepic/timeline_probe", json={"paths": [self.outside, self.clip]})
+            r = await c.post("/imageviewer/timeline_probe", json={"paths": [self.outside, self.clip]})
             probe = await r.json()
             return out, probe
         out, probe = self.run_async(go)
@@ -361,7 +361,7 @@ class TimelineMediaRouteTests(unittest.TestCase):
 
     def test_beats_of_a_click_track(self):
         async def go(c):
-            r = await c.get("/bepic/timeline_beats", params={"path": self.clicks})
+            r = await c.get("/imageviewer/timeline_beats", params={"path": self.clicks})
             return r.status, await r.json()
         status, data = self.run_async(go)
         self.assertEqual(status, 200)
@@ -387,7 +387,7 @@ class TimelineMediaRouteTests(unittest.TestCase):
 
     def test_shots_find_the_cut(self):
         async def go(c):
-            r = await c.get("/bepic/timeline_shots", params={"path": self.clip})
+            r = await c.get("/imageviewer/timeline_shots", params={"path": self.clip})
             return r.status, await r.json()
         status, data = self.run_async(go)
         self.assertEqual(status, 200)
@@ -401,18 +401,18 @@ class TimelineMediaRouteTests(unittest.TestCase):
 
         async def go(c):
             t0 = time.perf_counter()
-            r = await c.get("/bepic/timeline_cuts", params={"path": film})
+            r = await c.get("/imageviewer/timeline_cuts", params={"path": film})
             cold = time.perf_counter() - t0
             data = await r.json()
             t0 = time.perf_counter()
-            await (await c.get("/bepic/timeline_cuts", params={"path": film})).json()
+            await (await c.get("/imageviewer/timeline_cuts", params={"path": film})).json()
             return r.status, data, cold, time.perf_counter() - t0
         status, data, cold, warm = self.run_async(go)
         print(f"\ncut detection of {EDIT_FRAMES} frames: cold {cold * 1000:.0f} ms, cached {warm * 1000:.0f} ms",
               file=sys.stderr)
         self.assertEqual(status, 200)
         fps = data["fps"]
-        # What the panel keeps at its default sensitivity (bEpicViewer_editAuto.js: score >= 0.1, ratio >= 2.5).
+        # What the panel keeps at its default sensitivity (imageViewer_editAuto.js: score >= 0.1, ratio >= 2.5).
         kept = [c for c in data["cuts"] if c["score"] >= 0.1 and c["ratio"] >= 2.5]
         hard = [c for c in kept if c["kind"] == "cut"]
         self.assertEqual(len(hard), len(EDIT_CUTS), data["cuts"])
@@ -440,13 +440,13 @@ class TimelineMediaRouteTests(unittest.TestCase):
                 out.mux(pkt)
 
         async def go(c):
-            return await (await c.get("/bepic/timeline_cuts", params={"path": film})).json()
+            return await (await c.get("/imageviewer/timeline_cuts", params={"path": film})).json()
         data = self.run_async(go)
         self.assertEqual([c for c in data["cuts"] if c["score"] >= 0.1 and c["ratio"] >= 2.5], [], data)
 
     def test_a_sound_has_no_cuts_to_find(self):
         async def go(c):
-            r = await c.get("/bepic/timeline_shots", params={"path": self.clicks})
+            r = await c.get("/imageviewer/timeline_shots", params={"path": self.clicks})
             return r.status
         self.assertEqual(self.run_async(go), 422)
 
@@ -461,7 +461,7 @@ class TimelineMediaRouteTests(unittest.TestCase):
             for name in ("my clip.mp4", "my clip.mp4", "..\\..\\evil.mp4", "run.exe"):
                 form = FormData()
                 form.add_field("file", payload, filename=name, content_type="application/octet-stream")
-                r = await c.post("/bepic/timeline_upload", data=form)
+                r = await c.post("/imageviewer/timeline_upload", data=form)
                 out.append((r.status, await r.json() if r.status == 200 else await r.text()))
             return out
         (s1, a), (s2, b), (s3, c), (s4, _d) = self.run_async(go)
@@ -477,7 +477,7 @@ class TimelineMediaRouteTests(unittest.TestCase):
 
     def test_locate_names_comfy_outputs_by_path(self):
         async def go(c):
-            r = await c.post("/bepic/timeline_locate", json={"items": [
+            r = await c.post("/imageviewer/timeline_locate", json={"items": [
                 {"filename": "red_blue.mp4", "type": "output", "subfolder": ""},
                 {"filename": "../../etc/passwd", "type": "output"},
                 {"filename": "missing.mp4", "type": "output"}]})

@@ -1,11 +1,11 @@
-// The one History, as data (js/bEpicViewer_historyData.js).
+// The one History, as data (js/imageViewer_historyData.js).
 // Run: node --test tests/test_history_data.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
     HISTORY_KEY, snapshotTab, stampSnapshot, snapshotGroup, setSnapshotGroup, historyGroups,
     liveIndexOf, historySections, historyDisplayOrder, mergeTabHistories, isMediaTabKey, foldIntoTab, isFeedTabKey, groupFromLabel, snapshotNode,
-} from "../js/bEpicViewer_historyData.js";
+} from "../js/imageViewer_historyData.js";
 
 const snap = (name, extra = {}) => [{ filename: name, type: "output", ...extra }];
 
@@ -119,7 +119,7 @@ test("a node's own tab, folded, names the node its snapshots came from", () => {
 });
 
 test("a sequence is saved as its first frame and the differences, and comes back exactly", async () => {
-    const { packSnapshot, unpackSnapshot } = await import("../js/bEpicViewer_historyData.js");
+    const { packSnapshot, unpackSnapshot } = await import("../js/imageViewer_historyData.js");
     const seq = Array.from({ length: 81 }, (_, f) => ({
         path: `D:/AI/out/run_7/frame_${1001 + f}.png`, filename: `frame_${1001 + f}.png`, subfolder: "agent/run_7",
         type: "output", group: "agentY", label: "render", ...(f === 5 ? { extra: 1 } : {}), ...(f === 9 ? { n: [1, 2] } : {}) }));

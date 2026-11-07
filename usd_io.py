@@ -1,6 +1,6 @@
 """Previz stages as USD: the viewer's scene written out and read back.
 
-The previz scene (js/bEpicViewer_scene3d.js) is a flat list of items with a
+The previz scene (js/imageViewer_scene3d.js) is a flat list of items with a
 transform, optional keyframes, and either an asset to load or a shape to build.
 That maps onto USD almost directly:
 
@@ -32,7 +32,7 @@ USD_EXTS = {".usd", ".usda", ".usdc", ".usdz"}
 APERTURE_H = 36.0
 APERTURE_V = 24.0
 
-_CUSTOM_KEY = "bEpicViewer"
+_CUSTOM_KEY = "imageViewer"
 
 
 def available():
@@ -613,8 +613,8 @@ def _has_arc(prim):
 def _mark_external(scene):
     """Say that these files are addressed by their own absolute path.
 
-    The viewer has two file routes: /bepic/raw_view, which serves ComfyUI's
-    output and temp folders by a short name, and /bepic/view_file, which serves
+    The viewer has two file routes: /imageviewer/raw_view, which serves ComfyUI's
+    output and temp folders by a short name, and /imageviewer/view_file, which serves
     any absolute path inside the allowed folders (path_access). An item without
     this flag is asked for through the first one, and a stage that lives
     anywhere else — the input folder, a project drive — comes back 403 with no
@@ -940,7 +940,7 @@ def _cache_path(src, prim_path=None):
     digest = hashlib.sha1(key.encode("utf-8", "replace")).hexdigest()[:16]
     stem = "".join(c for c in os.path.splitext(os.path.basename(src))[0]
                    if c.isalnum() or c in "-_")[:40] or "stage"
-    return os.path.join(tmp, f"bEpic_usd_{stem}_{digest}.glb")
+    return os.path.join(tmp, f"ImageViewer_usd_{stem}_{digest}.glb")
 
 
 def display_proxy(path, prim_path=None):

@@ -80,7 +80,7 @@ def _still(path, size):
 class ContactGridBrowserTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.media = tempfile.mkdtemp(prefix="bepic_grid_")
+        cls.media = tempfile.mkdtemp(prefix="imageviewer_grid_")
         _clip(os.path.join(cls.media, "c1.mp4"), 2)
         _clip(os.path.join(cls.media, "c2.mp4"), 3)
         _clip(os.path.join(cls.media, "c3.mp4"), 4)

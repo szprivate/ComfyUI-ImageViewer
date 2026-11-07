@@ -1,11 +1,11 @@
 // node --test tests/test_edit_titles.mjs
-// Titles (bEpicViewer_editTitles.js, bEpicViewer_editTimelineData.js): a title is a clip on a video track and is
+// Titles (imageViewer_editTitles.js, imageViewer_editTimelineData.js): a title is a clip on a video track and is
 // cut, trimmed, moved, switched off, keyed and pasted by the clips' own edits; its look is held to the table; the
 // texts of older cuts come in as titles; the layout puts each line where its alignment says.
 import test from "node:test";
 import assert from "node:assert/strict";
-import * as D from "../js/bEpicViewer_editTimelineData.js";
-import * as T from "../js/bEpicViewer_editTitles.js";
+import * as D from "../js/imageViewer_editTimelineData.js";
+import * as T from "../js/imageViewer_editTitles.js";
 
 const shot = (file, length, extra = {}) => ({ file, name: file, in: 0, length, transition: 0, color: "", volume: 1, ...extra });
 const near = (a, b, msg, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${msg || ""} ${a} != ${b}`);

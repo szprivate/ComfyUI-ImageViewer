@@ -1,0 +1,629 @@
+// imageViewer_paintPanel.js
+// Paint: a picture in layers as a TAB of the viewer - the glue between the editor
+// (imageViewer_paintEditor.js, which does not know the viewer) and everything around it.
+//
+// A picture opened in Paint gets a tab ("paint:<the file>", or "paint:new-<n>" for a new canvas) and the
+// editor covers the main canvas the way the Motion editor does; its two other parts are dock panels -
+// Layers and Properties - that are up only with a Paint tab (they come back the way they were left).
+// Paint has no time: the viewer's bar counts no frames on a Paint tab.
+//
+// The server keeps every open picture as a session (paint_routes.py): the page holds its token, reads the
+// pixels raw from /imageviewer/paint/px and sends changed ones raw to /imageviewer/paint/stage before a save names
+// them. Save writes an .ora (over its own, else the next version by the export rule, kind "paint");
+// Export writes a flat picture or a .psd by the same rule. The agent changes a picture with edit_image
+// (POST /imageviewer/paint/doc), which tells the page (ComfyUI's "imageviewer.paint.changed"): the tab takes the new
+// document as ONE undo step. Generate asks agentY (window.agentYViewerBridge.feedback) to make pixels for
+// the selection from a snapshot of the picture (/imageviewer/paint/snapshot) and put them back with edit_image.
+import { api } from "../../scripts/api.js";
+import { createPaintEditor, PAINT_KEYS } from "./imageViewer_paintEditor.js";
+import { notice, openFilePicker, openExportDialog, canvasContext } from "./imageViewer_exportUI.js";
+import { addRecentDoc } from "./imageViewer_recentDocs.js";
+
+export const PAINT_PREFIX = "paint:";
+/** The dock panels of a Paint tab, and the editor part each one holds. */
+export const PAINT_PANELS = { paintLayers: "layers", paintProps: "props", paintHistory: "history" };
+export { PAINT_KEYS };
+
+const PICTURE_EXTS = [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".tga", ".gif", ".exr", ".hdr", ".dpx"];
+const OPEN_EXTS = [...PICTURE_EXTS, ".ora", ".psd"];
+const EXPORT_FORMATS = [{ value: "png", label: "PNG" }, { value: "jpg", label: "JPEG" }, { value: "webp", label: "WebP" },
+                        { value: "tif", label: "TIFF" }, { value: "psd", label: "Photoshop (.psd)" }, { value: "ora", label: "OpenRaster (.ora)" }];
+const baseOf = (p) => String(p || "").split(/[\\/]/).pop();
+const stemOf = (p) => baseOf(p).replace(/\.[^.]+$/, "");
+const extOf = (p) => { const m = /\.[^.\\/]+$/.exec(String(p || "")); return m ? m[0].toLowerCase() : ""; };
+
+/** May this file open in Paint (a picture, an .ora, a .psd)? */
+export function paintMayOpen(ref) {
+    const name = typeof ref === "string" ? ref : (ref && (ref.path || ref.filename)) || "";
+    return OPEN_EXTS.includes(extOf(name));
+}
+
+async function postJson(route, body) {
+    const res = await api.fetchApi(route, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+}
+
+/** Raw bytes, gzipped where the browser can (CompressionStream), for /imageviewer/paint/stage. */
+async function packed(bytes) {
+    if (typeof CompressionStream === "undefined" || bytes.byteLength < 4096) return { body: bytes, gz: false };
+    try {
+        const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"));
+        return { body: await new Response(stream).arrayBuffer(), gz: true };
+    } catch (_) { return { body: bytes, gz: false }; }
+}
+
+export const PaintPanelMixin = {
+
+    _paintState() {
+        if (!this._paint) {
+            this._paint = { tabs: {}, want: {}, host: null, n: 0 };
+            // The agent changed a picture (edit_image, POST /imageviewer/paint/doc): its tab takes it as one undo step.
+            api.addEventListener("imageviewer.paint.changed", (e) => {
+                const d = e && e.detail;
+                if (d && d.from !== "page") this.paintChanged(d).catch((err) => console.warn("imageViewer: Paint change not taken", err));
+            });
+        }
+        return this._paint;
+    },
+
+    isPaintTab(key = this.activeTab) {
+        return typeof key === "string" && key.startsWith(PAINT_PREFIX);
+    },
+
+    _paintActive() { return this._paintOn ? this._paintState().tabs[this.activeTab] || null : null; },
+
+    // ── opening ──────────────────────────────────────────────────────────────
+
+    /**
+     * Open a picture, an .ora or a .psd in a Paint tab (and show the viewer). `ref` is a path or the
+     * {filename, subfolder, type} a history item is known by. The same file twice is the same tab.
+     */
+    async paintOpen(ref, { quiet = false } = {}) {
+        const st = this._paintState();
+        const want = typeof ref === "string" ? ref : (ref && ref.path) || "";
+        const same = want && Object.entries(st.tabs).find(([, r]) => r.source && r.source.replace(/\\/g, "/").toLowerCase() === want.replace(/\\/g, "/").toLowerCase());
+        if (same && this.allTabs[same[0]]) {
+            this._paintShow(same[0]);
+            return true;
+        }
+        let data;
+        try {
+            data = await postJson("/imageviewer/paint/open", typeof ref === "string" ? { path: ref } : ref);
+        } catch (e) {
+            if (!quiet) notice("error", "Cannot open it in Paint", String(e.message || e));
+            return false;
+        }
+        const source = data.source || want;
+        const key = PAINT_PREFIX + (source || `new-${++st.n}`);
+        const rec = st.tabs[key] || (st.tabs[key] = { el: null, editor: null });
+        Object.assign(rec, { token: data.token, path: data.path || null, source, pending: data });
+        addRecentDoc("paint", data.path || source);
+        this._paintMakeTab(key, data.doc.name || stemOf(source) || "Paint");
+        // The tab is there whatever happens next: a hiccup while it comes up is logged, not shown as "not opened".
+        try { this._paintShow(key); } catch (e) { console.error("imageViewer: Paint tab shown with an error", e); }
+        if (data.notes && data.notes.length) notice("info", "Opened with notes", data.notes.slice(0, 4).join("; "));
+        return true;
+    },
+
+    /** A new canvas in a tab of its own: w x h, its ground white, black or transparent. */
+    async paintNewBlank({ name = "paint", w = 1920, h = 1080, fill = "white" } = {}) {
+        let data;
+        try {
+            data = await postJson("/imageviewer/paint/open", { new: { w: Math.round(w), h: Math.round(h), name: name || "paint", fill } });
+        } catch (e) { notice("error", "No new picture", String(e.message || e)); return false; }
+        const st = this._paintState();
+        const key = PAINT_PREFIX + `new-${++st.n}`;
+        st.tabs[key] = { el: null, editor: null, token: data.token, path: null, source: "", pending: data };
+        this._paintMakeTab(key, data.doc.name);
+        try { this._paintShow(key); } catch (e) { console.error("imageViewer: Paint tab shown with an error", e); }
+        return true;
+    },
+
+    /** A new, empty canvas: its size and ground asked first (straight away with no picture to ask over). */
+    paintNewDialog() {
+        const rec = this._paintActive();
+        const fields = [["name", "Name", "paint", "text"], ["w", "Width", 1920, 1, 16384], ["h", "Height", 1080, 1, 16384],
+                        ["fill", "Ground", "white", ["white", "black", "transparent"]]];
+        if (rec && rec.editor) rec.editor.dialog("New picture", fields, (v) => this.paintNewBlank(v));
+        else this.paintNewBlank();
+    },
+
+    /** The bar's Paint item: the Paint tab that is open, else a new white canvas, 1920 x 1080. */
+    paintBarOpen() {
+        const open = (this.tabOrder || []).find((k) => this.isPaintTab(k) && k !== PAINT_PREFIX && this.allTabs[k]);
+        if (open) { if (this.requestPanelOpen) this.requestPanelOpen(); this.switchTab(open); return Promise.resolve(true); }
+        return this.paintNewBlank();
+    },
+
+    _paintMakeTab(key, label) {
+        this.allTabs[key] = [];
+        this.tabLabels[key] = "\u{1F58C} " + label;
+        if (!this.tabOrder.includes(key)) this.tabOrder.push(key);
+        this._rebuildTabBar(null);
+    },
+
+    _paintShow(key) {
+        if (this.requestPanelOpen) this.requestPanelOpen();
+        this.switchTab(key);
+        // The empty "Paint" tab was only a way to ask for a picture.
+        if (key !== PAINT_PREFIX && this.allTabs[PAINT_PREFIX]) this.closeTab(PAINT_PREFIX);
+    },
+
+    /** The file picker: a picture, an .ora or a .psd. */
+    async paintPickOpen() {
+        await openFilePicker(this.container, {
+            id: "paint", title: "Open in Paint", kind: "paint", exts: OPEN_EXTS, go: "Open",
+            note: "A picture opens as one layer; an .ora (Krita, GIMP, this) or a .psd opens with its layers.",
+            onPick: async ([file]) => {
+                if (!file) return { ok: false, message: "Pick a file." };
+                let ok = false;
+                try { ok = await this.paintOpen(file.path); }
+                catch (e) { console.error("imageViewer: Paint open", e); ok = Object.values(this._paintState().tabs).some((r) => r.source === file.path); }
+                return ok ? { ok: true } : { ok: false, message: `${file.name} could not be opened.` };
+            },
+        });
+    },
+
+    /** The file picker: pictures to add as layers of the picture on screen. */
+    async paintPickAdd() {
+        const rec = this._paintActive();
+        if (!rec || !rec.editor || !rec.editor.doc) { this.paintPickOpen(); return; }
+        await openFilePicker(this.container, {
+            id: "paintAdd", title: "Add as a layer", kind: "image", exts: PICTURE_EXTS, multiple: true, go: "Add",
+            note: "Each picture becomes a layer over the one selected, at the top left.",
+            onPick: async (files) => {
+                if (!files.length) return { ok: false, message: "Pick a picture." };
+                for (const f of files) {
+                    const ok = await this.paintAddImage(rec, f.path);
+                    if (!ok) return { ok: false, message: `${f.name} could not be read.` };
+                }
+                return { ok: true };
+            },
+        });
+    },
+
+    /** One picture as a new layer: the server reads it (EXR and friends too), the bytes come raw. */
+    async paintAddImage(rec, ref) {
+        try {
+            const data = await postJson("/imageviewer/paint/open", typeof ref === "string" ? { path: ref } : ref);
+            const L = data.doc.layers.find((x) => x.kind === "pixel");
+            const px = await this._paintFetch(data.token, { layer: L.id }, L.w * L.h * 4);
+            rec.editor.addPixelLayer(new Uint8ClampedArray(px), L.w, L.h, data.doc.name || "Picture");
+            return true;
+        } catch (e) {
+            notice("error", "Not added", String(e.message || e));
+            return false;
+        }
+    },
+
+    async _paintFetch(token, q, want) {
+        const qs = new URLSearchParams({ token, ...q }).toString();
+        const res = await api.fetchApi(`/imageviewer/paint/px?${qs}`, { cache: "no-store" });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+        const buf = await res.arrayBuffer();
+        if (want != null && buf.byteLength !== want) throw new Error(`the pixels came back the wrong size (${buf.byteLength} for ${want})`);
+        return buf;
+    },
+
+    /** Every layer's pixels, mask and the selection of a session: what setDocument / replaceWith take. */
+    async _paintLoad(token, meta, selection) {
+        const pix = {}, masks = {};
+        const jobs = [];
+        for (const L of meta.layers) {
+            if (L.kind === "pixel") jobs.push(async () => { pix[L.id] = new Uint8ClampedArray(await this._paintFetch(token, { layer: L.id }, L.w * L.h * 4)); });
+            if (L.mask) jobs.push(async () => { masks[L.id] = new Uint8Array(await this._paintFetch(token, { mask: L.id }, L.mask.w * L.mask.h)); });
+        }
+        let sel = null;
+        if (selection) jobs.push(async () => { sel = new Uint8Array(await this._paintFetch(token, { sel: 1 }, meta.w * meta.h)); });
+        // A few at a time: a picture of many layers should not open dozens of requests at once.
+        for (let i = 0; i < jobs.length; i += 4) await Promise.all(jobs.slice(i, i + 4).map((f) => f()));
+        return { doc: meta, pix, masks, selection: sel };
+    },
+
+    // ── the tab on screen ────────────────────────────────────────────────────
+
+    _paintHostEl() {
+        const st = this._paintState();
+        if (st.host && st.host.isConnected) return st.host;
+        const doc = this.viewport.ownerDocument;
+        const host = doc.createElement("div");
+        host.className = "paint-view";
+        // The viewport pans, zooms and swallows the context menu; the editor has its own say over all of it.
+        for (const type of ["mousedown", "pointerdown", "wheel", "contextmenu", "dblclick"]) host.addEventListener(type, (e) => e.stopPropagation());
+        this._paintWireDrop(host);
+        this.viewport.append(host);
+        st.host = host;
+        return host;
+    },
+
+    /** switchTab came to a Paint tab: the editor takes the main canvas, its panels come up. */
+    paintTabEnter(key) {
+        const st = this._paintState();
+        let rec = st.tabs[key];
+        if (!rec) {
+            // A tab that came back with the page: open its file again (a new canvas cannot come back).
+            const src = key.slice(PAINT_PREFIX.length);
+            rec = st.tabs[key] = { el: null, editor: null, token: null, path: null, source: /^new-\d+$/.test(src) ? "" : src };
+        }
+        const first = !this._paintOn;
+        this._paintOn = true;
+        this.viewport.classList.add("paint-mode");
+        const host = this._paintHostEl();
+        host.style.display = "block";
+        if (!rec.el) {
+            rec.el = host.ownerDocument.createElement("div");
+            rec.el.className = "paint-tab";
+            host.append(rec.el);
+        }
+        for (const other of Object.values(st.tabs)) if (other.el) other.el.style.display = other === rec ? "block" : "none";
+        this.stop();
+        if (!rec.editor) this._paintBuild(key, rec);
+        if (this.setPanelDocked) {
+            for (const id of Object.keys(PAINT_PANELS)) {
+                const want = st.want[id] !== false;
+                if (want !== this.isPanelDocked(id)) this.setPanelDocked(id, want);
+            }
+        }
+        this._paintSeat(rec);
+        if (first && this.barGroupsSync) this.barGroupsSync();
+    },
+
+    /** switchTab left a Paint tab (or the last one closed). */
+    paintTabLeave() {
+        if (!this._paintOn) return;
+        const st = this._paintState();
+        this._paintOn = false;
+        this.viewport.classList.remove("paint-mode");
+        if (st.host) st.host.style.display = "none";
+        if (this.isPanelDocked && this.setPanelDocked) {
+            for (const id of Object.keys(PAINT_PANELS)) {
+                st.want[id] = this.isPanelDocked(id);
+                if (this.isPanelDocked(id)) this.setPanelDocked(id, false);
+            }
+        }
+        if (this.barGroupsSync) this.barGroupsSync();
+    },
+
+    /** The panels hold the active tab's editor parts. */
+    _paintSeat(rec) {
+        for (const [id, part] of Object.entries(PAINT_PANELS)) {
+            const panel = this._dockPanelEl ? this._dockPanelEl(id) : null;
+            const slot = panel ? panel.querySelector(":scope > .paint-slot") : null;
+            if (!slot) continue;
+            const el = rec && rec.editor ? rec.editor.parts[part] : null;
+            if (el) { if (slot.firstChild !== el || slot.childNodes.length !== 1) slot.replaceChildren(el); }
+            else {
+                const n = slot.ownerDocument.createElement("div");
+                n.className = "mg-note";
+                n.textContent = "Open a picture in Paint to see its " + ({ layers: "layers", props: "properties", history: "history" }[part] || part) + ".";
+                slot.replaceChildren(n);
+            }
+        }
+    },
+
+    /** The editor for a tab, and its picture when it has one. */
+    async _paintBuild(key, rec) {
+        rec.editor = createPaintEditor(rec.el, this._paintHost(key, rec));
+        if (this.activeTab === key) this._paintSeat(rec);
+        if (!rec.pending && rec.source) {
+            try { rec.pending = await postJson("/imageviewer/paint/open", { path: rec.source }); }
+            catch (e) { notice("error", "Cannot open it in Paint", `${baseOf(rec.source)}: ${e.message || e}`); return; }
+            Object.assign(rec, { token: rec.pending.token, path: rec.pending.path || null });
+        }
+        if (!rec.pending) return;
+        const data = rec.pending;
+        rec.pending = null;
+        try {
+            const loaded = await this._paintLoad(data.token, data.doc, data.selection);
+            rec.editor.setDocument(loaded);
+        } catch (e) {
+            notice("error", "The picture's pixels did not arrive", String(e.message || e));
+        }
+    },
+
+    /** What the editor may ask of the viewer. */
+    _paintHost(key, rec) {
+        return {
+            newDoc: () => this.paintNewDialog(),
+            open: () => this.paintPickOpen(),
+            addImage: () => this.paintPickAdd(),
+            save: () => this.paintSave(rec),
+            saveAs: () => this.paintSaveAs(rec),
+            exportDoc: () => this.paintExport(rec),
+            generate: (kind, opts) => this.paintGenerate(rec, kind, opts || {}),
+            menu: (entries, x, y, anchor) => {
+                if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
+                this._previzOpenMenu(entries, x, y, anchor);
+            },
+            notify: (m, sev) => notice(sev || "info", m),
+            showPanel: (part) => this.paintShowPanel(part),
+            onChange: (dirty) => this._paintMarkTab(key, dirty),
+        };
+    },
+
+    /** A Paint panel up and in front (Shift+F5 opens Fill in Properties). */
+    paintShowPanel(part) {
+        const id = Object.keys(PAINT_PANELS).find((k) => PAINT_PANELS[k] === part);
+        if (!id || !this.setPanelDocked) return;
+        if (!this.isPanelDocked(id)) { this.setPanelDocked(id, true); this._paintSeat(this._paintActive()); }
+        else if (this.isPanelFront && !this.isPanelFront(id) && this.dockTabFront) this.dockTabFront(id);
+    },
+
+    _paintMarkTab(key, dirty) {
+        const container = this.tabsContainer || this.tabBar;
+        const btn = container && container.querySelector(`[data-tab="${CSS.escape(key)}"]`);
+        if (btn) btn.classList.toggle("paint-dirty", !!dirty);
+    },
+
+    // ── saving ───────────────────────────────────────────────────────────────
+
+    /** The page's document into its session (the changed pixels raw, the rest kept). */
+    async _paintSync(rec) {
+        if (!rec.token) throw new Error("this picture has no session - open it again");
+        const s = rec.editor.toSave();
+        const send = async (part, bytes) => {
+            const { body, gz } = await packed(bytes);
+            const res = await api.fetchApi(`/imageviewer/paint/stage?${new URLSearchParams({ token: rec.token, part })}`, {
+                method: "POST", headers: { "Content-Type": "application/octet-stream", ...(gz ? { "X-ImageViewer-Enc": "gzip" } : {}) }, body,
+            });
+            if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+        };
+        for (const [id, b] of Object.entries(s.layers)) await send("layer:" + id, b);
+        for (const [id, b] of Object.entries(s.masks)) await send("mask:" + id, b);
+        await send("sel", s.selection);
+        return s;
+    },
+
+    async paintSave(rec, { asNew = false, name = null } = {}) {
+        if (!rec || !rec.editor || !rec.editor.doc) return null;
+        try {
+            const s = await this._paintSync(rec);
+            const res = await postJson("/imageviewer/paint/save", { token: rec.token, meta: s.meta, keep: s.keep, as_new: asNew,
+                                                               name: name || s.meta.name, context: canvasContext() });
+            rec.path = res.path;
+            addRecentDoc("paint", res.path);
+            rec.editor.markSaved();
+            notice("success", "Saved", res.path);
+            return res.path;
+        } catch (e) {
+            notice("error", "Not saved", String(e.message || e));
+            return null;
+        }
+    },
+
+    paintSaveAs(rec) {
+        if (!rec || !rec.editor || !rec.editor.doc) return;
+        rec.editor.dialog("Save as", [["name", "Name", rec.editor.doc.name || "paint", "text"]],
+            (v) => this.paintSave(rec, { asNew: true, name: v.name }),
+            "Saved as an .ora (layers, masks, adjustments kept): the next version, in the shot's paint folder when the canvas names one.");
+    },
+
+    async paintExport(rec) {
+        if (!rec || !rec.editor || !rec.editor.doc) return;
+        this._paintExportLast = this._paintExportLast || { format: "png" };
+        await openExportDialog(this.container, {
+            title: "Export picture", kind: "paint", name: rec.editor.doc.name || "paint",
+            fixed: EXPORT_FORMATS, values: this._paintExportLast,
+            note: "PNG / JPEG / WebP / TIFF: the picture as it looks. PSD: the layers, their masks and blend modes; "
+                + "an adjustment layer is merged into what is under it (Photoshop's own have other numbers).",
+            onExport: async (v) => {
+                this._paintExportLast = { format: v.format };
+                try {
+                    const s = await this._paintSync(rec);
+                    const res = await postJson("/imageviewer/paint/export", { token: rec.token, meta: s.meta, keep: s.keep, format: v.format,
+                                                                        name: v.name, context: v.context });
+                    notice("success", "Exported", res.path + (res.notes && res.notes.length ? " - " + res.notes.join("; ") : ""));
+                    if (this.exportLanded && v.format !== "psd" && v.format !== "ora") this.exportLanded([res.path]);
+                    return { ok: true };
+                } catch (e) { return { ok: false, message: String(e.message || e) }; }
+            },
+        });
+    },
+
+    // ── the agent, and making pixels ─────────────────────────────────────────
+
+    /** The page is told that the agent changed a picture (edit_image): the tab takes it as one undo step. */
+    async paintChanged(detail) {
+        const st = this._paintState();
+        const norm = (p) => String(p || "").replace(/\\/g, "/").toLowerCase();
+        const entry = Object.entries(st.tabs).find(([, r]) => r.token && detail.token && r.token === detail.token)
+            || Object.entries(st.tabs).find(([, r]) => detail.path && (norm(r.path) === norm(detail.path) || norm(r.source) === norm(detail.path)));
+        if (!entry) {
+            if (detail.path && detail.open !== false) await this.paintOpen(detail.path, { quiet: true });
+            return;
+        }
+        const [key, rec] = entry;
+        if (!rec.editor || !rec.editor.doc) return;
+        try {
+            if (detail.path) rec.path = detail.path;
+            if (!detail.token) {
+                const again = await postJson("/imageviewer/paint/open", { path: detail.path });
+                rec.token = again.token;
+            }
+            const d = await this._paintDescribe(rec);
+            const data = await this._paintLoad(rec.token, d.doc, d.selection);
+            const wasDirty = rec.editor.isDirty();
+            rec.editor.replaceWith(data, detail.label || "agentY");
+            if (detail.written && !wasDirty) rec.editor.markSaved();
+            if (this.activeTab !== key && detail.focus) this.switchTab(key);
+            const said = (detail.said || []).slice(0, 3).join("; ");
+            notice("info", "agentY changed the picture", said);
+        } catch (e) {
+            notice("error", "The agent's change did not arrive", String(e.message || e));
+        }
+    },
+
+    /**
+     * The Generate menu and section. Heal, a plain extend and a plain upscale are done here (the server's
+     * ops on the session); the rest are asked of agentY with a snapshot of the picture and the selection.
+     */
+    async paintGenerate(rec, kind, opts) {
+        const ed = rec && rec.editor;
+        if (!ed || !ed.doc) return;
+        const W = ed.doc.w, H = ed.doc.h;
+        const bottom = ed.doc.layers.find((L) => L.kind === "pixel");
+        const local = async (ops, label) => {
+            try {
+                const s = await this._paintSync(rec);
+                await postJson("/imageviewer/paint/save", { token: rec.token, meta: s.meta, keep: s.keep, write: false });
+                await postJson("/imageviewer/paint/doc", { doc: rec.token, ops, write: false, from: "page" });
+                const d = await this._paintDescribe(rec);
+                const data = await this._paintLoad(rec.token, d.doc, d.selection);
+                ed.replaceWith(data, label);
+            } catch (e) { notice("error", label + " did not work", String(e.message || e)); }
+        };
+        if (kind === "heal") {
+            if (!ed.sel) { notice("warn", "Select what to fill first"); return; }
+            const L = ed.active();
+            await local([{ op: "heal", layer: L && L.kind === "pixel" ? L.id : bottom && bottom.id }], "Fill from the surroundings");
+            return;
+        }
+        if (kind === "extend") {
+            const px = Math.max(1, Math.round(Number(opts.px) || 128));
+            const ops = [{ op: "canvas_size", w: W + 2 * px, h: H + 2 * px, anchor: "center" },
+                         { op: "select", mode: "rect", x: px, y: px, w: W, h: H }, { op: "select", mode: "invert" }];
+            if (!opts.ai && bottom) ops.push({ op: "heal", layer: bottom.id });
+            await local(ops, "Extend the canvas");
+            if (!opts.ai) return;
+            return this._paintAsk(rec, "extend", { ...opts, note: `The canvas was made ${px} px larger on every side; the new border is selected.` });
+        }
+        if (kind === "upscale" && !opts.ai) {
+            await local([{ op: "resize", scale: Number(opts.k) || 2 }], "Upscale");
+            return;
+        }
+        if ((kind === "fill" || kind === "remove") && !ed.sel) { notice("warn", "Select the place first", "Generate works inside the selection."); return; }
+        if (kind === "fill" && !String(opts.prompt || "").trim()) { notice("warn", "Say what to make", "Type it into the prompt in Properties."); return; }
+        return this._paintAsk(rec, kind, opts);
+    },
+
+    /** The session's document as the server has it now: { doc, selection, path }. */
+    _paintDescribe(rec) {
+        return postJson("/imageviewer/paint/describe", { token: rec.token });
+    },
+
+    /** Ask agentY: save, snapshot, a brief with the paths and the edit_image call that brings the result back. */
+    async _paintAsk(rec, kind, opts) {
+        const bridge = window.agentYViewerBridge;
+        if (!bridge || typeof bridge.feedback !== "function") {
+            notice("warn", "agentY is not connected", "Generate asks agentY to make the pixels; open its panel first.");
+            return;
+        }
+        const path = rec.editor.isDirty() || !rec.path ? await this.paintSave(rec) : rec.path;
+        if (!path) return;
+        let snap;
+        try { snap = await postJson("/imageviewer/paint/snapshot", { token: rec.token }); }
+        catch (e) { notice("error", "No snapshot", String(e.message || e)); return; }
+        const box = snap.box ? `${snap.box.w}x${snap.box.h} at ${snap.box.x},${snap.box.y}` : "none";
+        const prompt = String(opts.prompt || "").trim();
+        const call = (...ops) => `edit_image(doc=${JSON.stringify(path)}, ops=[${ops.join(", ")}])`;
+        const k = Number(opts.k) || 2;
+        const how = {
+            fill: `Generative fill: make "${prompt}" inside the selection. Inpaint the picture with the mask (white = change), then put `
+                + `the result back with ${call(`{"op": "add_layer", "file": <result>, "name": ${JSON.stringify(prompt.slice(0, 30) || "Fill")}, "mask": "selection"}`)}.`,
+            remove: "Remove what is selected: inpaint the masked part so that it looks as if it was never there (no new object), then put "
+                + `the result back with ${call('{"op": "add_layer", "file": <result>, "name": "Removed", "mask": "selection"}')}.`,
+            background: "Remove the background: make a matte of the main subject (white = subject) from the picture, then "
+                + `${call('{"op": "mask", "layer": "active", "from": "file", "file": <matte>}')} (a layer mask - nothing is erased).`,
+            select_subject: "Select the subject: make a matte of the main subject (white = subject) from the picture, then "
+                + `${call('{"op": "select", "mode": "file", "file": <matte>}')}.`,
+            extend: `Extend the picture: outpaint the selected border so that it continues the picture${prompt ? ` (${prompt})` : ""}, then put `
+                + `the result back with ${call('{"op": "add_layer", "file": <result>, "name": "Extended", "mask": "selection", "below": "active"}')}.`,
+            upscale: `Upscale ${k}x with detail: run an upscale workflow on the picture, then `
+                + `${call(`{"op": "resize", "scale": ${k}}`, '{"op": "add_layer", "file": <result>, "name": "Upscaled"}')}.`,
+        }[kind];
+        if (!how) return;
+        const text = [`[Paint] ${how}`, `Document: ${path}`, `Picture (as it looks): ${snap.picture} (${snap.w}x${snap.h})`,
+                      snap.selection ? `Mask of the selection: ${snap.selection} (box ${box})` : "No selection.",
+                      opts.note || "", "Do not change the user's other layers. Read the document first with edit_image(doc=...) if you need its layers."]
+            .filter(Boolean).join("\n");
+        try {
+            await bridge.feedback({ text });
+            notice("info", "Asked agentY", "The result comes back as a new layer here.");
+        } catch (e) { notice("error", "agentY was not asked", String(e.message || e)); }
+    },
+
+    // ── keys, drops, closing ─────────────────────────────────────────────────
+
+    /** The editor's keys while a Paint tab is up and the pointer is over the viewer (or the editor has focus). */
+    paintKeyDown(e) {
+        const rec = this._paintActive();
+        if (!rec || !rec.editor) return false;
+        const path = e.composedPath ? e.composedPath() : [];
+        const inPanels = Object.keys(PAINT_PANELS).some((id) => { const p = this._dockPanelEl && this._dockPanelEl(id); return p && path.includes(p); });
+        if (!this.isHovered && !path.includes(rec.el) && !inPanels) return false;
+        if (rec.editor.keyDown(e)) { e.stopImmediatePropagation(); return true; }
+        return false;
+    },
+
+    paintKeyUp(e) {
+        const rec = this._paintActive();
+        return !!(rec && rec.editor && rec.editor.keyUp(e));
+    },
+
+    /** A history / file-browser picture dropped onto the editor: a layer of the picture there, else opened. */
+    _paintWireDrop(host) {
+        if (host.__paintDropWired) return;
+        host.__paintDropWired = true;
+        const TYPE = "application/x-imageviewer-history";
+        const has = (e) => Array.from(e.dataTransfer?.types || []).includes(TYPE);
+        host.addEventListener("dragover", (e) => { if (has(e)) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } });
+        host.addEventListener("drop", async (e) => {
+            if (!has(e)) return;
+            let payload = null;
+            try { payload = JSON.parse(e.dataTransfer.getData(TYPE)); } catch (_) {}
+            const items = (payload && Array.isArray(payload.items) ? payload.items : []).filter((x) => x && paintMayOpen(x));
+            if (!items.length) return;
+            e.preventDefault(); e.stopPropagation();
+            const rec = this._paintActive();
+            const ref = (x) => (x.path ? x.path : { filename: x.filename, subfolder: x.subfolder, type: x.type });
+            if (rec && rec.editor && rec.editor.doc) { for (const it of items) await this.paintAddImage(rec, ref(it)); }
+            else await this.paintOpen(ref(items[0]));
+        });
+    },
+
+    /** "Edit in Paint" on a context menu (history thumbs, the file browser). */
+    paintAddEditItem(menu, ref, before) {
+        if (!menu || !paintMayOpen(ref)) return;
+        const item = menu.ownerDocument.createElement("div");
+        item.className = "thumb-ctx-item paint-edit-item";
+        item.textContent = "\u{1F58C} Edit in Paint";
+        item.onclick = (ev) => { ev.stopPropagation(); menu.remove(); this.paintOpen(ref); };
+        if (before && before.parentNode === menu) menu.insertBefore(item, before); else menu.appendChild(item);
+    },
+
+    /** closeTab asks first: a picture with changes that were not saved says so once and stays. */
+    paintTabClosing(key) {
+        if (!this.isPaintTab(key)) return true;
+        const rec = this._paintState().tabs[key];
+        if (rec && rec.editor && rec.editor.isDirty() && this._paintCloseAsked !== key) {
+            this._paintCloseAsked = key;
+            notice("warn", "Unsaved changes", `${(rec.editor.doc && rec.editor.doc.name) || "The picture"} has changes that were not saved. Close the tab again to throw them away.`);
+            return false;
+        }
+        this._paintCloseAsked = null;
+        return true;
+    },
+
+    paintTabClosed(key) {
+        const st = this._paintState();
+        const rec = st.tabs[key];
+        if (!rec) return;
+        if (rec.editor) { try { rec.editor.dispose(); } catch (_) { /* already gone */ } }
+        if (rec.el) rec.el.remove();
+        delete st.tabs[key];
+        if (this.activeTab === key) this._paintSeat(null);
+    },
+
+    /** viewerState().paint: what the agent reads of the Paint tab on screen. */
+    _agentPaint() {
+        const rec = this._paintActive();
+        if (!rec) return null;
+        const ed = rec.editor, d = ed && ed.doc;
+        if (!d) return { open: true, empty: true };
+        const L = ed.active();
+        return { open: true, path: rec.path || "", source: rec.source || "", name: d.name, w: d.w, h: d.h,
+                 layers: d.layers.length, active: L ? L.name : "", tool: ed.tool, selection: !!ed.sel, dirty: ed.isDirty() };
+    },
+};

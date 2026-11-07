@@ -1,4 +1,4 @@
-"""A marked range of the cut, in the sources: timeline_io.source_map (what /bepic/cut answers as
+"""A marked range of the cut, in the sources: timeline_io.source_map (what /imageviewer/cut answers as
 ``marked`` and agentY's edit_cut / get_viewer_state hand the agent).
 
 The user marks an in and an out on the Edit tab's timeline (film frames) and asks for the shot
@@ -6,7 +6,7 @@ inside it made again; the agent needs the file and ITS frames. Covered: a plain 
 a source in point, retimed 2x and 0.5x, looped and ping-ponged, a clip cut in two (the blade),
 a source at another frame rate than the cut, a range over two clips, a clip of V2 over V1, a
 switched-off clip, stills and titles. The parity test runs the Edit tab's own arithmetic
-(bEpicViewer_editTimelineData.js: pictureAt, srcLocal) under node and checks, frame by frame,
+(imageViewer_editTimelineData.js: pictureAt, srcLocal) under node and checks, frame by frame,
 that the clip on screen and the source moment it shows are what source_map works from; skipped
 without node.
 
@@ -25,7 +25,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
 def _tio():
-    name = "bepic_srcmap_under_test"
+    name = "imageviewer_srcmap_under_test"
     if name not in sys.modules:
         pkg = types.ModuleType(name)
         pkg.__path__ = [ROOT]
@@ -186,7 +186,7 @@ class SourceMapTests(unittest.TestCase):
         self.assertEqual(m["end_s"], 1.0)
 
     def test_read_from_an_otio_file(self):
-        # A cut written the way the panel saves it reads back to the same map (speed in metadata.bepic).
+        # A cut written the way the panel saves it reads back to the same map (speed in metadata.imageviewer).
         import tempfile
         with tempfile.TemporaryDirectory() as td:
             media = os.path.join(td, "a.mp4").replace("\\", "/")
@@ -199,7 +199,7 @@ class SourceMapTests(unittest.TestCase):
         self.assertEqual((p["speed"], p["src_in"], p["src_out"], p["src_fps_known"]), (2.0, 48, 95, True))
 
     def test_the_render_reads_the_same_moments(self):
-        tr_name = "bepic_srcmap_under_test.timeline_render"
+        tr_name = "imageviewer_srcmap_under_test.timeline_render"
         try:
             tr = importlib.import_module(tr_name)
         except ImportError as exc:  # pragma: no cover - numpy / av missing in this interpreter

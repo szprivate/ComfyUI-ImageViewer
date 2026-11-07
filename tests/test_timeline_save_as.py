@@ -51,7 +51,7 @@ class SaveAs(unittest.TestCase):
         return asyncio.run(go())
 
     def test_a_new_save_returns_the_absolute_path_and_the_file_is_there(self):
-        status, text = self.post("/bepic/timeline", {"new": True, "name": "first", "edit": self.edit})
+        status, text = self.post("/imageviewer/timeline", {"new": True, "name": "first", "edit": self.edit})
         self.assertEqual(status, 200, text)
         data = json.loads(text)
         self.assertTrue(os.path.isabs(data["path"]))
@@ -60,12 +60,12 @@ class SaveAs(unittest.TestCase):
         self.assertIn("edits", data["path"])
 
     def test_save_as_to_a_new_name_keeps_the_source_and_refuses_to_overwrite_unasked(self):
-        status, text = self.post("/bepic/timeline", {"new": True, "name": "src", "edit": self.edit})
+        status, text = self.post("/imageviewer/timeline", {"new": True, "name": "src", "edit": self.edit})
         src = json.loads(text)
         before = open(src["path"], encoding="utf-8").read()
         folder = os.path.join(self.out, "there")
         body = {"name": "second", "folder": folder, "edit": self.tio.read_editable(src["path"]), "source": src["target"]}
-        status, text = self.post("/bepic/timeline_save_as", body)
+        status, text = self.post("/imageviewer/timeline_save_as", body)
         self.assertEqual(status, 200, text)
         data = json.loads(text)
         want = os.path.join(folder, "second.otio")
@@ -74,17 +74,17 @@ class SaveAs(unittest.TestCase):
         self.assertTrue(os.path.isfile(want))
         self.assertEqual(open(src["path"], encoding="utf-8").read(), before, "the original is untouched")
         # There now: asked; with overwrite: written.
-        status, text = self.post("/bepic/timeline_save_as", body)
+        status, text = self.post("/imageviewer/timeline_save_as", body)
         self.assertEqual(status, 409)
         self.assertTrue(json.loads(text)["exists"])
-        status, _ = self.post("/bepic/timeline_save_as", {**body, "overwrite": True})
+        status, _ = self.post("/imageviewer/timeline_save_as", {**body, "overwrite": True})
         self.assertEqual(status, 200)
 
     def test_outside_the_roots_and_traversal_in_the_name(self):
-        status, _ = self.post("/bepic/timeline_save_as", {"name": "x", "folder": self.outside, "edit": self.edit})
+        status, _ = self.post("/imageviewer/timeline_save_as", {"name": "x", "folder": self.outside, "edit": self.edit})
         self.assertEqual(status, 403)
         self.assertEqual(os.listdir(self.outside), [])
-        status, text = self.post("/bepic/timeline_save_as", {"name": "../../evil", "folder": self.out, "edit": self.edit})
+        status, text = self.post("/imageviewer/timeline_save_as", {"name": "../../evil", "folder": self.out, "edit": self.edit})
         self.assertEqual(status, 200, text)
         path = json.loads(text)["path"]
         self.assertEqual(os.path.dirname(path), os.path.abspath(self.out))
@@ -93,7 +93,7 @@ class SaveAs(unittest.TestCase):
             self.assertEqual(self.tio.cut_file_name(raw), want, raw)
 
     def test_a_cross_site_post_is_refused(self):
-        status, _ = self.post("/bepic/timeline_save_as", {"name": "x", "folder": self.out, "edit": self.edit}, headers={"Origin": "http://evil.example"})
+        status, _ = self.post("/imageviewer/timeline_save_as", {"name": "x", "folder": self.out, "edit": self.edit}, headers={"Origin": "http://evil.example"})
         self.assertEqual(status, 403)
 
     def test_a_failed_write_says_so_leaves_nothing_and_the_old_file_stands(self):
@@ -102,10 +102,10 @@ class SaveAs(unittest.TestCase):
             raise OSError(24, "Too many open files")
         self.tio.os.replace = boom
         try:
-            status, text = self.post("/bepic/timeline_save_as", {"name": "fail", "folder": self.out, "edit": self.edit})
+            status, text = self.post("/imageviewer/timeline_save_as", {"name": "fail", "folder": self.out, "edit": self.edit})
             self.assertEqual(status, 500)
             self.assertIn("Too many open files", text)
-            status, text = self.post("/bepic/timeline", {"new": True, "name": "fail2", "edit": self.edit})
+            status, text = self.post("/imageviewer/timeline", {"new": True, "name": "fail2", "edit": self.edit})
             self.assertEqual(status, 500)
             self.assertIn("not saved", text)
         finally:
@@ -119,7 +119,7 @@ class SaveAs(unittest.TestCase):
             for r in self.app.router.routes():
                 app.router.add_route(r.method, r.resource.canonical, r.handler)
             async with TestClient(TestServer(app)) as c:
-                r = await c.get("/bepic/browse", params={"path": self.out})
+                r = await c.get("/imageviewer/browse", params={"path": self.out})
                 return await r.json()
         with open(os.path.join(self.out, "listed.otio"), "w", encoding="utf-8") as fh:
             fh.write("{}")

@@ -288,7 +288,7 @@ class EditAudioXfadeBrowserTests(_Base):
         got = pg.evaluate("""() => { const P = __panel, a = document.createElement('audio');
             P._editAfxEnsure(a, P._editTlCut.tracks.find(t => t.id === 'A2').clips[0], 'A2', 0); P._epVol(a, 0.5);
             P._ep = P._ep || {}; const was = P._ep.bed; P._ep.bed = [a]; P._editAfxTick(1); P._ep.bed = was;
-            const ctx = window.__bepicAfxCtx; const bus = ctx && ctx.__buses.A2;
+            const ctx = window.__imageViewerAfxCtx; const bus = ctx && ctx.__buses.A2;
             return [!!a._epAfx, a._epAfx && Math.round(a._epAfx.gain.gain.value * 100) / 100, a.volume, !!bus, bus ? bus.keyed.length : -1]; }""")
         self.assertEqual(got, [True, 0.5, 1, True, 1])
         # Saved with the cut.

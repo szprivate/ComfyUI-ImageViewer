@@ -25,7 +25,7 @@ FPS = 24
 
 
 def _modules():
-    name = "bepic_retime_under_test"
+    name = "imageviewer_retime_under_test"
     if name not in sys.modules:
         pkg = types.ModuleType(name)
         pkg.__path__ = [ROOT]
@@ -138,7 +138,7 @@ class RetimeLoopFileTests(unittest.TestCase):
             item = doc["tracks"]["children"][0]["children"][0]
             warp = [fx for fx in item["effects"] if fx["OTIO_SCHEMA"] == "LinearTimeWarp.1"]
             self.assertEqual(warp[0]["time_scalar"], 0.5)
-            self.assertEqual(item["metadata"]["bepic"]["loop"], "pingpong")
+            self.assertEqual(item["metadata"]["imageviewer"]["loop"], "pingpong")
             # source_range: its start in the source, its duration on the timeline - what a plain reader plays.
             self.assertEqual(item["source_range"]["start_time"]["value"], 12)
             self.assertEqual(item["source_range"]["duration"]["value"], 96)
@@ -151,8 +151,8 @@ class RetimeLoopFileTests(unittest.TestCase):
             plain = tio.rebuild(doc, edit, may_use=lambda p: True)
             item = plain["tracks"]["children"][0]["children"][0]
             self.assertFalse([fx for fx in item["effects"] if fx["OTIO_SCHEMA"] == "LinearTimeWarp.1"])
-            self.assertNotIn("speed", item["metadata"]["bepic"])
-            self.assertNotIn("loop", item["metadata"]["bepic"])
+            self.assertNotIn("speed", item["metadata"]["imageviewer"])
+            self.assertNotIn("loop", item["metadata"]["imageviewer"])
             # Another program's LinearTimeWarp is read as a speed.
             item["effects"].append({"OTIO_SCHEMA": "LinearTimeWarp.1", "name": "", "effect_name": "LinearTimeWarp",
                                     "metadata": {}, "time_scalar": 2.0})

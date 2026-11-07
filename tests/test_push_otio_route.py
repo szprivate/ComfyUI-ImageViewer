@@ -1,5 +1,5 @@
-"""POST /bepic/push with an .otio that has no film beside it opens the cut (the REAL route in a private aiohttp app),
-and a cut dropped from the desktop is kept by /bepic/timeline_upload.
+"""POST /imageviewer/push with an .otio that has no film beside it opens the cut (the REAL route in a private aiohttp app),
+and a cut dropped from the desktop is kept by /imageviewer/timeline_upload.
 
     D:/ai/comfyui/.venv/Scripts/python.exe -m unittest discover -s tests -p test_push_otio_route.py
 """
@@ -68,7 +68,7 @@ class PushOtio(unittest.TestCase):
 
     def push(self, paths, **kw):
         async def go(c):
-            r = await c.post("/bepic/push", json={"paths": paths, **kw})
+            r = await c.post("/imageviewer/push", json={"paths": paths, **kw})
             return r.status, await r.json()
         return self._run(go)
 
@@ -78,7 +78,7 @@ class PushOtio(unittest.TestCase):
         self.assertEqual(status, 200, got)
         self.assertEqual([os.path.normcase(p) for p in got["cuts"]], [os.path.normcase(os.path.abspath(otio))])
         self.assertEqual(got["refused"], [])
-        self.assertEqual([e for e, _ in self.sent], ["bepic.edit.open"])
+        self.assertEqual([e for e, _ in self.sent], ["imageviewer.edit.open"])
         self.assertEqual(os.path.normcase(self.sent[0][1]["path"]), os.path.normcase(os.path.abspath(otio)))
 
     def test_an_otio_with_a_film_beside_it_still_shows_the_film(self):
@@ -103,7 +103,7 @@ class PushOtio(unittest.TestCase):
             from aiohttp import FormData
             form = FormData()
             form.add_field("file", body, filename="my cut.otio", content_type="application/octet-stream")
-            r = await c.post("/bepic/timeline_upload", data=form)
+            r = await c.post("/imageviewer/timeline_upload", data=form)
             return r.status, await r.text()
         s1, t1 = self._run(lambda c: up(c, b'{"a": 1}'))
         s2, t2 = self._run(lambda c: up(c, b'{"a": 2}'))
@@ -121,7 +121,7 @@ class PushOtio(unittest.TestCase):
             from aiohttp import FormData
             form = FormData()
             form.add_field("file", b"x", filename="notes.txt")
-            return (await c.post("/bepic/timeline_upload", data=form)).status
+            return (await c.post("/imageviewer/timeline_upload", data=form)).status
         self.assertEqual(self._run(go), 415)
 
 

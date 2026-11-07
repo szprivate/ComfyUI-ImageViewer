@@ -1,5 +1,5 @@
 """Standalone harness for the Dataset panel: python tests/harness_lora/server.py [port]
-Serves js/ and page.html, and the /bepic/lora/* routes straight from lora_io.py over a demo output
+Serves js/ and page.html, and the /imageviewer/lora/* routes straight from lora_io.py over a demo output
 folder made in a temp dir (a dataset with 6 items, a running training run). No ComfyUI, no agentY."""
 import importlib.util
 import json
@@ -89,23 +89,23 @@ class H(BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
         p = u.path
         try:
-            if method == "GET" and p == "/bepic/lora/datasets":
+            if method == "GET" and p == "/imageviewer/lora/datasets":
                 return self.send(200, {"datasets": io.list_datasets(OUT)}) or True
-            if method == "GET" and p == "/bepic/lora/dataset":
+            if method == "GET" and p == "/imageviewer/lora/dataset":
                 return self.send(200, io.get_dataset(OUT, q.get("name"))) or True
-            if method == "GET" and p == "/bepic/lora/runs":
+            if method == "GET" and p == "/imageviewer/lora/runs":
                 return self.send(200, {"runs": io.list_runs(OUT)}) or True
-            if method == "GET" and p == "/bepic/lora/run":
+            if method == "GET" and p == "/imageviewer/lora/run":
                 return self.send(200, io.get_run(OUT, q.get("name"))) or True
-            if method == "GET" and p == "/bepic/lora/file":
+            if method == "GET" and p == "/imageviewer/lora/file":
                 with open(io.resolve_file(OUT, q.get("path")), "rb") as fh:
                     return self.send(200, fh.read(), "image/png") or True
-            if method == "POST" and p == "/bepic/lora/dataset_save":
+            if method == "POST" and p == "/imageviewer/lora/dataset_save":
                 return self.send(200, io.save_dataset(OUT, body.get("name"), body.get("manifest"))) or True
-            if method == "POST" and p == "/bepic/lora/review":
+            if method == "POST" and p == "/imageviewer/lora/review":
                 return self.send(200, io.review_dataset(OUT, body.get("name"), body.get("action"),
                                                         body.get("note"), body.get("manifest"))) or True
-            if method == "POST" and p == "/bepic/lora/control":
+            if method == "POST" and p == "/imageviewer/lora/control":
                 return self.send(200, io.control_run(OUT, body.get("name"), body.get("action"), body.get("keep"))) or True
         except io.LoraError as e:
             return self.send(e.status, {"error": str(e)}) or True
@@ -113,7 +113,7 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urlparse(self.path)
-        if u.path.startswith("/bepic/"):
+        if u.path.startswith("/imageviewer/"):
             if not self.route("GET", u, None):
                 self.send(404, {"error": "nf"})
             return

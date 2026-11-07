@@ -1,8 +1,8 @@
 // node --test tests/test_edit_takes.mjs
-// Several clips selected, and takes (bEpicViewer_editTimelineData.js): the same shot made again, kept beside the first.
+// Several clips selected, and takes (imageViewer_editTimelineData.js): the same shot made again, kept beside the first.
 import test from "node:test";
 import assert from "node:assert/strict";
-import * as D from "../js/bEpicViewer_editTimelineData.js";
+import * as D from "../js/imageViewer_editTimelineData.js";
 
 const near = (a, b, eps = 1e-3) => assert.ok(Math.abs(a - b) <= eps, `${a} is not ${b}`);
 const shot = (file, length, extra = {}) => ({ file, name: file, in: 0, length, transition: 0, color: "", volume: 1, ...extra });
@@ -189,7 +189,7 @@ test("usesFile finds a file on V1 and on the tracks, by meaning", () => {
 
 // ── what agentY reads ──
 
-import { describeViewerState, EDIT_SELECTED_CAP } from "../js/bEpicViewer_viewerState.js";
+import { describeViewerState, EDIT_SELECTED_CAP } from "../js/imageViewer_viewerState.js";
 
 test("viewerState().edit.selected is a list of the clips, with the .otio; a text stays one object as selected_item", () => {
     const clips = [{ name: "shot_01", file: "D:/out/a.mp4", in: 1, out: 4, track: "V1", id: "V1:0" },

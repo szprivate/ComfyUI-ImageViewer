@@ -1,16 +1,16 @@
-# ComfyUI Image Viewer — bEpic Viewer
+# ComfyUI Image Viewer
 
 An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) with inspection tools, playback controls, image comparison, its own parameters panel — and a 3D previz tool for laying out, animating and rendering shots.
 
 ---
 
-![The bEpic viewer: an image on the canvas, its history of takes on the left, the exposure and channel bar above](docs/screenshots/viewer_2d_canvas.jpg)
+![The ComfyUI Image Viewer: an image on the canvas, its history of takes on the left, the exposure and channel bar above](docs/screenshots/viewer_2d_canvas.jpg)
 
 ## Core Features
 
 ### Viewing
 
-- send any image, mask, video or 3D model to the viewer with the **bEpic Send To Image Viewer** node — or right-click any node and choose **Send to Image Viewer**
+- send any image, mask, video or 3D model to the viewer with the **Send To Image Viewer** node — or right-click any node and choose **Send to Image Viewer**
 - view the outputs of several nodes at once, each node's renders a group of the Viewer tab
 - zoom and pan; undock the viewer into its own browser window for a second monitor
 - each tab keeps a history of up to 20 snapshots automatically
@@ -33,8 +33,8 @@ An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/C
 - what the node writes is **reported to ComfyUI like a save node's output**, so it shows up in the queue history, the Assets panel, and to scripts and agents reading them
 - drag a history thumbnail, a file or the frame on screen onto the graph to get a loader node holding it
 - **Roto** and **SAM3** tools draw mattes and point / box prompts right in the viewer, onto nodes that feed them to the workflow
-- the **Annotation** tool's marks (text, arrows, boxes, freehand) are kept beside the file they are drawn on - `cut.mp4` -> `cut.annotations.json`, `still.png` -> `still.annotations.json` - so they are there after a reload and an agent can read them; `POST /bepic/annotation_mask` draws a file's boxes and strokes as a mask PNG (under `output/annotation_masks`)
-- for agents, `window.bEpicViewerApi.viewerState()` says what is on screen (tab, item, frame, the range picked on the timeline, compare, view, 3D camera) and `.annotations()` the marks on it, in words and normalised coordinates - from the panel's state, so the same docked, full screen or popped out
+- the **Annotation** tool's marks (text, arrows, boxes, freehand) are kept beside the file they are drawn on - `cut.mp4` -> `cut.annotations.json`, `still.png` -> `still.annotations.json` - so they are there after a reload and an agent can read them; `POST /imageviewer/annotation_mask` draws a file's boxes and strokes as a mask PNG (under `output/annotation_masks`)
+- for agents, `window.imageViewerApi.viewerState()` says what is on screen (tab, item, frame, the range picked on the timeline, compare, view, 3D camera) and `.annotations()` the marks on it, in words and normalised coordinates - from the panel's state, so the same docked, full screen or popped out
 
 ### Agent code
 
@@ -49,7 +49,7 @@ An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/C
 
 - **dockable panels** — history, file browser, parameters, and the 3D panels — on either side of the picture or along the bottom, stacked and resized with splitters, arrangement remembered
 - a **file browser** over ComfyUI's folders (and any you allow): every file listed, wildcard and kind filters, previews
-- **Settings → bEpic Viewer**: the folders the viewer may open (add, browse, remove — no restart), and its defaults for playback, compare, history, the file browser, annotation, 3D and previz. These settings are kept per user (`~/.bepic_viewer/settings.json`, or the file named by `BEPIC_VIEWER_SETTINGS`), so they follow you across projects even when a launcher gives each project its own ComfyUI user directory
+- **Settings → ComfyUI Image Viewer**: the folders the viewer may open (add, browse, remove — no restart), and its defaults for playback, compare, history, the file browser, annotation, 3D and previz. These settings are kept per user (`~/.comfyui_image_viewer/settings.json`, or the file named by `IMAGE_VIEWER_SETTINGS`), so they follow you across projects even when a launcher gives each project its own ComfyUI user directory
 - every function has a **hotkey command** you can rebind in *Settings → Keybinding*
 
 ---
@@ -104,7 +104,7 @@ An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/C
    ```
 4. Restart ComfyUI.
 
-After installation a **"Toggle bEpic Image Viewer"** button appears in the ComfyUI action bar. Click it to show or hide the viewer panel.
+After installation a **"Toggle ComfyUI Image Viewer"** button appears in the ComfyUI action bar. Click it to show or hide the viewer panel.
 
 Video encoding (MP4 / MOV / WebM saving and previz renders) needs `imageio-ffmpeg` — VideoHelperSuite installs it; otherwise `pip install imageio-ffmpeg`.
 
@@ -112,13 +112,13 @@ Video encoding (MP4 / MOV / WebM saving and previz renders) needs `imageio-ffmpe
 
 ## Usage
 
-1. Add **bEpic Send To Image Viewer** node to your workflow.
+1. Add **Send To Image Viewer** node to your workflow.
 2. Connect image outputs to it.
-3. Click **"Toggle bEpic Image Viewer"** in the top bar to open the panel.
+3. Click **"Toggle ComfyUI Image Viewer"** in the top bar to open the panel.
 4. Run the workflow — generated images appear in the viewer automatically.
 5. Hover the viewer and press <kbd>?</kbd> for the hotkeys.
 
-For 3D: open a model from the file browser or drop one onto the viewer — or add a **bEpic 3D Scene (Previz)** node and press **Open in Image Viewer** on it to build a shot and render it back into the workflow. See [3D Models & Previz](docs/sub/models-3d.md).
+For 3D: open a model from the file browser or drop one onto the viewer — or add a **Image Viewer 3D Scene (Previz)** node and press **Open in Image Viewer** on it to build a shot and render it back into the workflow. See [3D Models & Previz](docs/sub/models-3d.md).
 
 ---
 

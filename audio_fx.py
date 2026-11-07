@@ -1,5 +1,5 @@
 """The Edit panel's sound effects, for the render: the same table and arithmetic as
-``js/bEpicViewer_audioFxData.js`` (kept in step; ``tests/test_edit_audio_fx.py``).
+``js/imageViewer_audioFxData.js`` (kept in step; ``tests/test_edit_audio_fx.py``).
 
 An effect is ``{"type", "on", "p": {param: value}, "keys": {param: [{"t", "v", "i"}]}}``; a chain is a
 list of them, in order. EQ, compressor and limiter are ffmpeg's own filters (highpass / lowshelf /

@@ -87,7 +87,7 @@ h264 cannot encode a clip whose width or height is odd, and ComfyUI's video writ
 The node now retries such a clip with its frames edge-padded up to an even size, **keeping the audio and frame rate**. A clip that already has even dimensions is written by ComfyUI's own writer untouched, so nothing is re-encoded that did not have to be, and a failure that is not about frame size is still reported rather than swallowed. The padded size is logged:
 
 ```
-[bEpicSendToViewer] 1593x1024 is not encodable by h264; padded to 1594x1024 (audio preserved)
+[ImageViewerSend] 1593x1024 is not encodable by h264; padded to 1594x1024 (audio preserved)
 ```
 
 ---

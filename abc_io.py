@@ -612,7 +612,7 @@ def _cache_path(src, sample, obj_path=None):
     digest = hashlib.sha1(key.encode("utf-8", "replace")).hexdigest()[:16]
     stem = "".join(c for c in os.path.splitext(os.path.basename(src))[0]
                    if c.isalnum() or c in "-_")[:40] or "cache"
-    return os.path.join(tmp, f"bEpic_abc_{stem}_{digest}.glb")
+    return os.path.join(tmp, f"ImageViewer_abc_{stem}_{digest}.glb")
 
 
 def display_proxy(path, sample=0, obj_path=None):
@@ -708,9 +708,9 @@ def import_scene(path):
                 "parent": ids.get(obj.parent.path) if obj.parent else None}
         if obj.is_mesh:
             # `external` picks the route the geometry is asked for through:
-            # /bepic/view_file, which serves any absolute path inside the
+            # /imageviewer/view_file, which serves any absolute path inside the
             # allowed folders and understands `prim` and `frame`. Without it
-            # the viewer asks /bepic/raw_view, which only serves ComfyUI's
+            # the viewer asks /imageviewer/raw_view, which only serves ComfyUI's
             # output and temp — so a cache anywhere else (the input folder, a
             # project drive) answers 403 and the scene comes up empty.
             item["src"] = {"path": os.path.abspath(path), "prim": obj.path,

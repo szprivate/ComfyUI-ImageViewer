@@ -1231,7 +1231,7 @@ def public(plan):
 
 def otio_copy(doc, names, final):
     """*doc* with every media reference pointing into ``<final>/media`` (and
-    ``metadata.bepic.package_media`` saying the same relative to the folder, so the
+    ``metadata.imageviewer.package_media`` saying the same relative to the folder, so the
     folder can be read after a move). Takes that were not copied are dropped from
     the copy; the original .otio keeps them."""
     new = copy.deepcopy(doc)
@@ -1239,7 +1239,7 @@ def otio_copy(doc, names, final):
         ref = item["media_reference"]
         name = names.get(timeline_io.norm_path(timeline_io._file(ref)))
         meta = item.setdefault("metadata", {})
-        note = meta.setdefault("bepic", {}) if isinstance(meta, dict) else None
+        note = meta.setdefault("imageviewer", {}) if isinstance(meta, dict) else None
         if isinstance(note, dict):
             note.pop("takes", None)
         if not name:
@@ -1252,7 +1252,7 @@ def otio_copy(doc, names, final):
 
 def readme(plan, model, final, base):
     lines = [
-        f"{base} - a cut from the bEpic viewer for DaVinci Resolve",
+        f"{base} - a cut from the ComfyUI Image Viewer for DaVinci Resolve",
         "=" * 60, "",
         f"{model['width']}x{model['height']}, {float(model['rate']):.3f} fps, {model['total']} frames.",
         "", "WHAT IS HERE",
@@ -1441,7 +1441,7 @@ def start(doc, plan):
         for key in finished[:max(0, len(_jobs) - MAX_JOBS + 1)]:
             _jobs.pop(key, None)
         _jobs[job.id] = job
-    threading.Thread(target=job.run, name="bepic-resolve-export", daemon=True).start()
+    threading.Thread(target=job.run, name="imageviewer-resolve-export", daemon=True).start()
     return job
 
 

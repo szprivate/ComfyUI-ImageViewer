@@ -17,7 +17,7 @@ called.
 **Where a file goes and what it is called** (:func:`target`). With a sequence
 and shot in hand - a context node on the canvas - it follows the bEpic layout,
 ``<Seq>/<Shot>/<kind>/v###/<shot>_v###_<name>.<ext>``, the same one the path
-nodes build. Without, ``bepic/<kind>/<name>_v###.<ext>``. Both under ComfyUI's
+nodes build. Without, ``imageviewer/<kind>/<name>_v###.<ext>``. Both under ComfyUI's
 output folder, both versioned: an export never writes over an earlier one, it is
 the next version.
 """
@@ -114,7 +114,7 @@ KINDS = {
     "edit": "edits",                               # a cut: its timeline and its film
     "paint": "paint",                              # a picture in layers (.ora) and what is exported of it
 }
-FALLBACK_ROOT = "bepic"
+FALLBACK_ROOT = "imageviewer"
 _VERSION = re.compile(r"v(\d{3,})$", re.I)
 
 

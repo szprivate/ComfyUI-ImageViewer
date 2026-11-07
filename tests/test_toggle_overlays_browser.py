@@ -37,7 +37,7 @@ SHOWN = """() => { const P = window.__panel, vp = P.viewport;
   const on = (el) => !!el && getComputedStyle(el).display !== 'none';
   return { off: vp.classList.contains('overlays-off'), btn: P.overlaysBtn.classList.contains('active'),
     shape: on(q('#shape-overlay')), exposure: on(q('#exposure-control')), path: on(q('.path-bar')),
-    toolbar: on(q('.bepic-toolbar')), frame: on(q('#img-frame')),
+    toolbar: on(q('.imageviewer-toolbar')), frame: on(q('#img-frame')),
     picture: on(P.imgBase) && P.imgBase.naturalWidth > 0 }; }"""
 
 
@@ -52,7 +52,7 @@ def _free_port():
 class ToggleOverlaysBrowserTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.media = tempfile.mkdtemp(prefix="bepic_overlays_")
+        cls.media = tempfile.mkdtemp(prefix="imageviewer_overlays_")
         subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=400x300:rate=1:duration=1",
                         "-frames:v", "1", os.path.join(cls.media, "p1.png")], check=True)
         cls.port = _free_port()
@@ -122,8 +122,8 @@ class ToggleOverlaysBrowserTests(unittest.TestCase):
 
     def test_s_key_runs_the_same_toggle(self):
         pg = self.page()
-        label = pg.evaluate("""async () => (await import('/extensions/viewer/bEpicViewer_keymap.js'))
-            .viewerActionById('bEpic.Viewer.ToggleShape').label""")
+        label = pg.evaluate("""async () => (await import('/extensions/viewer/imageViewer_keymap.js'))
+            .viewerActionById('ImageViewer.ToggleShape').label""")
         self.assertEqual(label, "Toggle Overlays")
         box = pg.evaluate("() => { const r = window.__panel.viewport.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; }")
         pg.mouse.move(*box)

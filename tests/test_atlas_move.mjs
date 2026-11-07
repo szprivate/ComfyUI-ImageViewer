@@ -33,9 +33,9 @@ export const app = { graph: { setDirtyCanvas() {} }, extensionManager: { toast: 
   registerExtension() {}, canvas: {} };
 `);
 const imp = (f) => import(url.pathToFileURL(path.join(tmp, "ext", "js", f)).href);
-const A = await imp("bEpicViewer_atlasRender.js");
-const S = await imp("bEpicViewer_scene3d.js");
-const Mixin = await imp("bEpicViewer_previzAtlas.js");
+const A = await imp("imageViewer_atlasRender.js");
+const S = await imp("imageViewer_scene3d.js");
+const Mixin = await imp("imageViewer_previzAtlas.js");
 const apiStub = await import(url.pathToFileURL(path.join(tmp, "scripts", "api.js")).href);
 const appStub = await import(url.pathToFileURL(path.join(tmp, "scripts", "app.js")).href);
 
@@ -139,13 +139,13 @@ test("the dialog prices first (a dry run), spends only on the button, shows task
     let polls = 0;
     apiStub.script.fetch = async (p, o) => {
         const body = o && o.body ? JSON.parse(o.body) : null;
-        if (p === "/bepic/atlas_camera_move" && o.method === "POST") return ok(body.dry_run ? PLAN : { ok: true, id: "mv1", state: "running" });
-        if (p.startsWith("/bepic/atlas_camera_move?id=")) {
+        if (p === "/imageviewer/atlas_camera_move" && o.method === "POST") return ok(body.dry_run ? PLAN : { ok: true, id: "mv1", state: "running" });
+        if (p.startsWith("/imageviewer/atlas_camera_move?id=")) {
             polls += 1;
             return ok(polls < 2 ? { id: "mv1", state: "running", phase: "Atlas is painting views 1 of 2", tasks_done: 1, tasks_total: 2, elapsed: 4 }
                 : { id: "mv1", state: "done", path: "D:/out/previz/court_move.mp4", tasks_done: 2, tasks_total: 2 });
         }
-        if (p === "/bepic/push") return ok({ ok: true, shown: 1, refused: [] });
+        if (p === "/imageviewer/push") return ok({ ok: true, shown: 1, refused: [] });
         throw new Error("unexpected " + p);
     };
     const ctx = makeViewer();
@@ -155,7 +155,7 @@ test("the dialog prices first (a dry run), spends only on the button, shows task
     assert.ok(dlg, "the dialog is up");
     const price = dlg.find((e) => e.className.includes("atlas-price"));
     assert.match(price.textContent, /Atlas paints 5 views in 2 tasks · about \$0\.20–\$0\.50/);
-    const dry = apiStub.calls.filter((c) => c[0] === "/bepic/atlas_camera_move");
+    const dry = apiStub.calls.filter((c) => c[0] === "/imageviewer/atlas_camera_move");
     assert.equal(dry.length, 1);
     assert.equal(dry[0][1].dry_run, true);
     assert.equal(dry[0][1].confirm_cost, false, "the quote spends nothing");
@@ -169,13 +169,13 @@ test("the dialog prices first (a dry run), spends only on the button, shows task
     sel.value = "high";
     sel.onchange();
     await flush();
-    assert.equal(apiStub.calls.filter((c) => c[0] === "/bepic/atlas_camera_move").length, 2);
+    assert.equal(apiStub.calls.filter((c) => c[0] === "/imageviewer/atlas_camera_move").length, 2);
     await go.onclick();
-    const real = apiStub.calls.filter((c) => c[0] === "/bepic/atlas_camera_move" && c[2] === "POST").pop();
+    const real = apiStub.calls.filter((c) => c[0] === "/imageviewer/atlas_camera_move" && c[2] === "POST").pop();
     assert.equal(real[1].dry_run, false);
     assert.equal(real[1].confirm_cost, true);
     assert.equal(real[1].quality, "high");
-    const push = apiStub.calls.find((c) => c[0] === "/bepic/push");
+    const push = apiStub.calls.find((c) => c[0] === "/imageviewer/push");
     assert.deepEqual(push[1].paths, ["D:/out/previz/court_move.mp4"]);
     assert.equal(push[1].tab_name, "Atlas move: court");
     assert.ok(appStub.toasts.some((t) => /camera move ready/.test(t.summary)));
@@ -202,7 +202,7 @@ test("an over-cap or unconfirmed answer ends the run with the reason, and the di
     apiStub.script.fetch = async (p, o) => {
         const body = o && o.body ? JSON.parse(o.body) : null;
         if (body && body.dry_run) return ok(PLAN);
-        if (p === "/bepic/atlas_camera_move") return ok({ ok: true, id: "mv2", state: "running" });
+        if (p === "/imageviewer/atlas_camera_move") return ok({ ok: true, id: "mv2", state: "running" });
         return ok({ id: "mv2", state: "error", error_kind: "over_cap", message: "above the cap of $5.00" });
     };
     const ctx = makeViewer();

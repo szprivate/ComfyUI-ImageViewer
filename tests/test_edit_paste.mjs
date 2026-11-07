@@ -1,9 +1,9 @@
 // node --test tests/test_edit_paste.mjs
-// Paste Attributes (bEpicViewer_editTimelineData.js): only the checked attributes go, to the targets that can
+// Paste Attributes (imageViewer_editTimelineData.js): only the checked attributes go, to the targets that can
 // take them; keys stand where they stood from the clip's start, cut off at the target's end.
 import test from "node:test";
 import assert from "node:assert/strict";
-import * as D from "../js/bEpicViewer_editTimelineData.js";
+import * as D from "../js/imageViewer_editTimelineData.js";
 
 const shot = (file, length, extra = {}) => ({ file, name: file, in: 0, length, transition: 0, color: "", volume: 1, ...extra });
 const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-6, `${msg || ""} ${a} != ${b}`);

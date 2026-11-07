@@ -1,6 +1,6 @@
 // node --test tests/test_atlas_render.mjs
 // The "Render with Atlas" button: the pure helpers, then the whole click flow (dialog -> camera capture ->
-// POST /bepic/atlas_render -> poll -> push to a tab) against a fake DOM and a fake viewer, with the
+// POST /imageviewer/atlas_render -> poll -> push to a tab) against a fake DOM and a fake viewer, with the
 // viewer's real js copied beside stubbed ComfyUI scripts (the same trick tests/harness uses).
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -33,12 +33,12 @@ export const toasts = [];
 export const app = { graph: { setDirtyCanvas() {} }, extensionManager: { toast: { add: (t) => toasts.push(t) } },
   registerExtension() {}, canvas: {} };
 `);
-const A = await import(url.pathToFileURL(path.join(tmp, "ext", "js", "bEpicViewer_atlasRender.js")).href);
+const A = await import(url.pathToFileURL(path.join(tmp, "ext", "js", "imageViewer_atlasRender.js")).href);
 const apiStub = await import(url.pathToFileURL(path.join(tmp, "scripts", "api.js")).href);
 const appStub = await import(url.pathToFileURL(path.join(tmp, "scripts", "app.js")).href);
-const Mixin = await import(url.pathToFileURL(path.join(tmp, "ext", "js", "bEpicViewer_previzAtlas.js")).href);
+const Mixin = await import(url.pathToFileURL(path.join(tmp, "ext", "js", "imageViewer_previzAtlas.js")).href);
 
-const World = await import(url.pathToFileURL(path.join(tmp, "ext", "js", "bEpicViewer_previzWorld.js")).href);
+const World = await import(url.pathToFileURL(path.join(tmp, "ext", "js", "imageViewer_previzWorld.js")).href);
 
 const M16 = Array.from({ length: 16 }, (_, i) => i);
 const mat = (elements) => ({ elements: Float32Array.from(elements) });
@@ -149,13 +149,13 @@ test("clicking Render sends the current camera, follows the job and shows the pi
     let polls = 0;
     apiStub.script.fetch = async (p, o) => {
         const ok = (body) => ({ ok: true, status: 200, json: async () => body });
-        if (p === "/bepic/atlas_render" && o && o.method === "POST") return ok({ ok: true, id: "job1", state: "running" });
-        if (p.startsWith("/bepic/atlas_render?id=")) {
+        if (p === "/imageviewer/atlas_render" && o && o.method === "POST") return ok({ ok: true, id: "job1", state: "running" });
+        if (p.startsWith("/imageviewer/atlas_render?id=")) {
             polls += 1;
             return ok(polls < 2 ? { id: "job1", state: "running", phase: "Atlas is painting the view", elapsed: 3 }
                 : { id: "job1", state: "done", path: "D:/out/3d_scenes/atlas/court/renders/render_000_x2.png", added_to_world: true });
         }
-        if (p === "/bepic/push") return ok({ ok: true, shown: 1, refused: [] });
+        if (p === "/imageviewer/push") return ok({ ok: true, shown: 1, refused: [] });
         throw new Error("unexpected " + p);
     };
     const { ctx, doc, keys, view } = makeViewer({ through: true });
@@ -178,14 +178,14 @@ test("clicking Render sends the current camera, follows the job and shows the pi
     await flush();
     assert.ok(go.disabled && ctx._atlasBusy, "busy while it runs");
     await done;                                                  // ~2.5 s of polling
-    const post = apiStub.calls.find((c) => c[0] === "/bepic/atlas_render" && c[2] === "POST");
+    const post = apiStub.calls.find((c) => c[0] === "/imageviewer/atlas_render" && c[2] === "POST");
     assert.equal(post[1].world_path, "D:/out/3d_scenes/atlas/court/world.glb");
     assert.equal(post[1].upscale, 2);
     assert.equal(post[1].add_to_world, true);
     assert.deepEqual(post[1].camera.camera_world, M16.map((v) => v + 100));
     assert.deepEqual(post[1].camera.model_world, M16.map((v) => v + 200));
     assert.equal(post[1].camera.gated, true);
-    const push = apiStub.calls.find((c) => c[0] === "/bepic/push");
+    const push = apiStub.calls.find((c) => c[0] === "/imageviewer/push");
     assert.deepEqual(push[1].paths, ["D:/out/3d_scenes/atlas/court/renders/render_000_x2.png"]);
     assert.equal(push[1].tab_name, "Atlas: court");
     assert.equal(push[1].focus, true);
@@ -212,7 +212,7 @@ test("an error keeps the dialog open with the reason, and the button works again
     assert.ok(msg.className.includes("error"));
     assert.equal(go.disabled, false);
     assert.equal(ctx._atlasBusy, false);
-    const post = apiStub.calls.find((c) => c[0] === "/bepic/atlas_render");
+    const post = apiStub.calls.find((c) => c[0] === "/imageviewer/atlas_render");
     assert.equal(post[1].camera.gated, false);
     assert.equal(post[1].camera.fov, 35);                        // the free camera's lens and shape go along
     assert.equal(post[1].camera.aspect, 1.25);
@@ -305,7 +305,7 @@ test("the Walk toggle flies an Atlas world, walks a viewer world, and stops eith
 });
 
 test("a reload asks for the same file under a new URL, and a blob stays as it is", () => {
-    assert.equal(A.bustUrl("/bepic/view_file?path=a%2Fworld.glb", 7), "/bepic/view_file?path=a%2Fworld.glb&_=7");
+    assert.equal(A.bustUrl("/imageviewer/view_file?path=a%2Fworld.glb", 7), "/imageviewer/view_file?path=a%2Fworld.glb&_=7");
     assert.equal(A.bustUrl("/x/world.glb", 7), "/x/world.glb?_=7");
     assert.equal(A.bustUrl("blob:http://h/abc", 7), "blob:http://h/abc");
     assert.equal(A.bustUrl("", 7), "");

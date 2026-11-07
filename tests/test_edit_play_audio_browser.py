@@ -93,7 +93,7 @@ def _ff(*args):
 class EditPlayAudioBrowserTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.media = tempfile.mkdtemp(prefix="bepic_play_")
+        cls.media = tempfile.mkdtemp(prefix="imageviewer_play_")
         m = lambda n: os.path.join(cls.media, n)
         for name, src, hz in (("v1.mp4", "testsrc2", 330), ("v2.mp4", "testsrc", 550)):
             _ff("-f", "lavfi", "-i", f"{src}=size=320x180:rate=24:duration=8", "-f", "lavfi", "-i", f"sine=frequency={hz}:duration=8",

@@ -1,5 +1,5 @@
 """Paint draws the page and the server draws the files with ONE arithmetic (paint_math.py and
-js/bEpicViewer_paintData.js): the same documents - every blend mode, every adjustment, masks,
+js/imageViewer_paintData.js): the same documents - every blend mode, every adjustment, masks,
 opacity, layers off the canvas - composited by both must come out the same, pixel for pixel
 (1 level of 255 is allowed where float rounding in pow / sqrt differs).
 

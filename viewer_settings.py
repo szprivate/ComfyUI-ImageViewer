@@ -3,11 +3,11 @@
 ComfyUI stores settings in its user directory, and a launcher may hand each
 project its own (AYON starts ComfyUI with --user-directory inside the project),
 so a setting changed in one project is back at its default in the next. The
-viewer's own settings (Settings -> bEpic Viewer, ids starting "bEpic.Viewer.")
+viewer's own settings (Settings -> ComfyUI Image Viewer, ids starting "ImageViewer.")
 are therefore mirrored here: the page loads them at startup and writes each
 change back.
 
-Where: ~/.bepic_viewer/settings.json, or the file named by BEPIC_VIEWER_SETTINGS
+Where: ~/.comfyui_image_viewer/settings.json, or the file named by IMAGE_VIEWER_SETTINGS
 (a studio can point every machine at one roaming profile path).
 
 Only preferences live here — scalars under the viewer's own prefix. The folders
@@ -18,8 +18,13 @@ is trusted as a path: a start folder is still checked when it is browsed.
 import json
 import os
 
-ENV = "BEPIC_VIEWER_SETTINGS"
-PREFIX = "bEpic.Viewer."
+try:                                    # the viewer's old "bEpic" names (legacy_names.py)
+    from .legacy_names import user_dir as _user_dir, renamed_setting as _renamed_setting
+except ImportError:
+    from legacy_names import user_dir as _user_dir, renamed_setting as _renamed_setting
+
+ENV = "IMAGE_VIEWER_SETTINGS"
+PREFIX = "ImageViewer."
 MAX_KEYS = 200
 MAX_TEXT = 2000
 
@@ -28,7 +33,7 @@ def path():
     custom = os.environ.get(ENV, "").strip().strip('"')
     if custom:
         return os.path.abspath(os.path.expandvars(os.path.expanduser(custom)))
-    return os.path.join(os.path.expanduser("~"), ".bepic_viewer", "settings.json")
+    return os.path.join(_user_dir(), "settings.json")
 
 
 def load():
@@ -39,7 +44,7 @@ def load():
     except FileNotFoundError:
         return {}
     except Exception as e:
-        print(f"[bEpicViewer] could not read {path()}: {e}")
+        print(f"[ImageViewer] could not read {path()}: {e}")
         return {}
     return _clean(data) if isinstance(data, dict) else {}
 
@@ -48,6 +53,7 @@ def _clean(values):
     """Only what a setting can be: the viewer's own ids, scalar values."""
     out = {}
     for key, value in values.items():
+        key = _renamed_setting(key)
         if not isinstance(key, str) or not key.startswith(PREFIX) or len(key) > 120:
             continue
         if isinstance(value, bool) or value is None:

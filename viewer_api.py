@@ -70,7 +70,7 @@ _AUDIO_EXTS = (getattr(media_resolve, "AUDIO_EXTS", None) if media_resolve is no
     or {".wav", ".mp3", ".flac", ".ogg", ".oga", ".m4a", ".aac", ".opus", ".weba"}
 
 # three.js and its loaders, for the viewer's 3D tabs. Outside js/ so ComfyUI
-# doesn't import them at startup; served by /bepic/lib/three/<name> instead.
+# doesn't import them at startup; served by /imageviewer/lib/three/<name> instead.
 _THREE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor", "three")
 
 # Stands in for a model's history tile until the browser has rendered one.
@@ -145,7 +145,7 @@ def _usd_display_path(path, prim=None, frame=0):
         if usd_io is not None and usd_io.is_usd(path):
             return usd_io.display_proxy(path, prim) or path
     except Exception as e:
-        print(f"[bEpicViewer] could not build a preview of {os.path.basename(path)}: {e}")
+        print(f"[ImageViewer] could not build a preview of {os.path.basename(path)}: {e}")
     return path
 
 
@@ -178,19 +178,19 @@ def _file_response(path, prim=None, frame=0, cs=None, ev=None):
             try:
                 proxy, done = media_resolve.proxy_for_colorspace(path, cs, ev), True
             except Exception as e:
-                print(f"[bEpicViewer] colour transform failed for {path}: {e}")
+                print(f"[ImageViewer] colour transform failed for {path}: {e}")
         if not done:
             try:
                 proxy = media_resolve.proxy_for_display(path)
             except Exception as e:
-                print(f"[bEpicViewer] display proxy failed for {path}: {e}")
+                print(f"[ImageViewer] display proxy failed for {path}: {e}")
         if not proxy:
             # A film a <video> cannot play (ProRes, say) is shown through an
             # H.264 copy; what is exported or cut is always the film itself.
             try:
                 proxy = media_resolve.video_proxy(path)
             except Exception as e:
-                print(f"[bEpicViewer] playable copy failed for {path}: {e}")
+                print(f"[ImageViewer] playable copy failed for {path}: {e}")
         if proxy:
             path = proxy
     from aiohttp import web
@@ -201,20 +201,20 @@ _PROBE_POOL = None
 
 
 def _probe_pool():
-    """A few threads for /bepic/probe_paths: checking a file on a network share is
+    """A few threads for /imageviewer/probe_paths: checking a file on a network share is
     a round trip, not work, so asking about several at once is what makes a
     history of hundreds of paths quick to verify."""
     global _PROBE_POOL
     if _PROBE_POOL is None:
         from concurrent.futures import ThreadPoolExecutor
-        _PROBE_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="bepic-probe")
+        _PROBE_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="imageviewer-probe")
     return _PROBE_POOL
 
 
 def _resolve_raw_path(path):
-    """Resolve a /bepic/raw_view path and say whether it may be served.
+    """Resolve a /imageviewer/raw_view path and say whether it may be served.
 
-    Returns (abs_path, allowed). Split out of the route so /bepic/probe_paths can
+    Returns (abs_path, allowed). Split out of the route so /imageviewer/probe_paths can
     answer the same question without having to provoke the 403/404 it would
     otherwise take to find out.
     """
@@ -354,11 +354,19 @@ try:
             raise RuntimeError("PromptServer.instance.app is not ready yet")
         router = ps.app.router
 
-        def _safe_add(method, path, handler):
+        def _add(method, path, handler):
             try:
                 router.add_route(method, path, handler)
             except Exception as e:
-                print(f"[bEpicViewer] route register failed {method} {path}: {e}")
+                print(f"[ImageViewer] route register failed {method} {path}: {e}")
+
+        def _safe_add(method, path, handler):
+            _add(method, path, handler)
+            # The same route under the viewer's old name ("bEpic", before 1.18),
+            # for a caller that was not updated with it.
+            for new, old in (("/imageviewer/", "/bepic/"), ("/api/imageviewer/", "/api/bepic/")):
+                if path.startswith(new):
+                    _add(method, old + path[len(new):], handler)
 
         async def _off_loop(fn, *args):
             """Run `fn` in a worker thread.
@@ -367,9 +375,9 @@ try:
             an `isfile`, a `realpath` or a thumbnail is quick on a local drive but
             can take tens of milliseconds - and now and then seconds - on a
             network share, and on the event loop that wait holds up EVERY other
-            request. Measured on the W: share: a history switch's /bepic/raw_view
+            request. Measured on the W: share: a history switch's /imageviewer/raw_view
             took 40 ms alone, 180-310 ms while the strip's thumbnails were being
-            answered and 4-4.7 s behind one /bepic/probe_paths of 166 paths.
+            answered and 4-4.7 s behind one /imageviewer/probe_paths of 166 paths.
             """
             return await asyncio.get_running_loop().run_in_executor(None, fn, *args)
 
@@ -379,7 +387,7 @@ try:
             return await asyncio.get_running_loop().run_in_executor(
                 None, _file_response, path, prim, frame, cs, ev)
 
-        async def _bepic_colorspaces(request):
+        async def _imageviewer_colorspaces(request):
             """The input colourspaces the viewer's selector offers, which of
             them is sRGB (nothing done) and which is plain linear."""
             from . import color_io
@@ -411,7 +419,7 @@ try:
                 return media, path_access.within(media, base), None
             return None, False, "missing 'path' or 'filename' parameter"
 
-        async def _bepic_timeline(request):
+        async def _imageviewer_timeline(request):
             """The cut that lies beside a film: its ``.otio``.
 
             Flattened to seconds for drawing, and - under ``edit`` - as the Edit
@@ -447,7 +455,7 @@ try:
             data["otio"] = side
             return web.json_response(data, headers={"Cache-Control": "no-cache"})
 
-        async def _bepic_timeline_save(request):
+        async def _imageviewer_timeline_save(request):
             """Save a cut changed in the Edit panel into the ``.otio`` beside its film.
 
             Only an existing timeline can be saved into, and only its own clips
@@ -519,7 +527,7 @@ try:
                 data["target"] = {"path": side, "external": 1}
             return web.json_response(data, headers={"Cache-Control": "no-cache"})
 
-        async def _bepic_timeline_save_as(request):
+        async def _imageviewer_timeline_save_as(request):
             """Save cut as: the cut into a new ``.otio`` of the user's choosing.
 
             ``{"name", "folder", "edit", "source": <the target of the cut's file, or
@@ -626,7 +634,7 @@ try:
                 super().__init__(text)
                 self.status, self.text = status, text
 
-        async def _bepic_export_resolve_plan(request):
+        async def _imageviewer_export_resolve_plan(request):
             """What Export to Resolve would copy: ``{name, folder, path, exists, size, free,
             files, missing, refused, flagged, left_out, ...}``. Nothing is written."""
             from . import resolve_export
@@ -643,7 +651,7 @@ try:
                 return web.Response(status=500, text=str(exc))
             return web.json_response(resolve_export.public(plan), headers={"Cache-Control": "no-cache"})
 
-        async def _bepic_export_resolve(request):
+        async def _imageviewer_export_resolve(request):
             """Start making the package; the work runs in a thread of its own
             (resolve_export.Job), and ``{"id"}`` is what to ask the status route with.
 
@@ -680,7 +688,7 @@ try:
                 return web.Response(status=500, text=str(exc))
             return web.json_response(job.state(), headers={"Cache-Control": "no-cache"})
 
-        async def _bepic_export_resolve_status(request):
+        async def _imageviewer_export_resolve_status(request):
             """How far a package is: ``{status: running|done|failed|cancelled, done, total, ...}``."""
             from . import resolve_export
             body, refused = await _resolve_body(request)
@@ -691,7 +699,7 @@ try:
                 return web.Response(status=404, text="no such export")
             return web.json_response(job.state(), headers={"Cache-Control": "no-cache"})
 
-        async def _bepic_export_resolve_cancel(request):
+        async def _imageviewer_export_resolve_cancel(request):
             """Stop a package; what it had made so far is removed by its own thread."""
             from . import resolve_export
             body, refused = await _resolve_body(request)
@@ -714,7 +722,7 @@ try:
         async def _media_work(fn, *args):
             if not _media_pool:
                 from concurrent.futures import ThreadPoolExecutor
-                _media_pool.append(ThreadPoolExecutor(max_workers=2, thread_name_prefix="bepic-media"))
+                _media_pool.append(ThreadPoolExecutor(max_workers=2, thread_name_prefix="imageviewer-media"))
             return await asyncio.get_running_loop().run_in_executor(_media_pool[0], fn, *args)
 
         def _media_path(params):
@@ -757,7 +765,7 @@ try:
                 return web.Response(status=500, text=f"not read: {exc}")
             return path, got, tag
 
-        async def _bepic_timeline_peaks(request):
+        async def _imageviewer_timeline_peaks(request):
             """The waveform of a file's sound (timeline_media.peaks), cached by path, mtime and size."""
             from . import timeline_media
             got = await _media_reading(request, "peaks", timeline_media.peaks)
@@ -765,7 +773,7 @@ try:
                 return got
             return web.json_response(got[1], headers={"ETag": got[2], "Cache-Control": "no-cache"})
 
-        async def _bepic_timeline_strip(request):
+        async def _imageviewer_timeline_strip(request):
             """A filmstrip: ``n`` frames of a film side by side on one JPEG (timeline_media.strip).
 
             What the sheet holds is in the headers: ``X-Strip-N`` tiles, each
@@ -787,7 +795,7 @@ try:
                 "X-Strip-Duration": str(meta["duration"]),
                 "X-Strip-Start": str(meta.get("start", 0.0)), "X-Strip-End": str(meta.get("end", meta["duration"]))})
 
-        async def _bepic_timeline_beats(request):
+        async def _imageviewer_timeline_beats(request):
             """Where the beats of a piece of music fall (agentY's read_beats, ported)."""
             from . import timeline_media
             got = await _media_reading(request, "beats", timeline_media.beats)
@@ -795,7 +803,7 @@ try:
                 return got
             return web.json_response(got[1], headers={"ETag": got[2], "Cache-Control": "no-cache"})
 
-        async def _bepic_timeline_shots(request):
+        async def _imageviewer_timeline_shots(request):
             """Where a film cuts: its shot lengths (agentY's read_rhythm, ported)."""
             from . import timeline_media
             try:
@@ -807,7 +815,7 @@ try:
                 return got
             return web.json_response(got[1], headers={"ETag": got[2], "Cache-Control": "no-cache"})
 
-        async def _bepic_timeline_cuts(request):
+        async def _imageviewer_timeline_cuts(request):
             """Scene cut detection: where a film that is already an edit cuts (timeline_media.detect_cuts)."""
             from . import timeline_media
             got = await _media_reading(request, "cuts", timeline_media.detect_cuts)
@@ -815,16 +823,16 @@ try:
                 return got
             return web.json_response(got[1], headers={"ETag": got[2], "Cache-Control": "no-cache"})
 
-        async def _bepic_take(request):
+        async def _imageviewer_take(request):
             """A shot made again: new takes of the clips of a cut that use some file.
 
             ``{"otio": str, "takes": [{"from_file", "file", "version", "note"}], "retime": bool}``.
             agentY's "recreate these shots with changes" posts here once a new version of a
             shot is on disk. Every clip of the cut (``otio``) whose media is ``from_file`` gets
             ``file`` as its next take (timeline_io.add_take) and the timeline is saved
-            (written beside it and moved over). Then ``bepic.edit.take`` goes to the pages,
+            (written beside it and moved over). Then ``imageviewer.edit.take`` goes to the pages,
             so an Edit panel that has the cut open takes the take in as one undo step
-            (bEpicViewer_editTimeline.js: editTlTakeIn). Answers ``{"ok", "saved", "applied",
+            (imageViewer_editTimeline.js: editTlTakeIn). Answers ``{"ok", "saved", "applied",
             "pushed", "notes"}``; the timeline is fenced like the other timeline routes
             (path_access.is_allowed) and every new file like any file the viewer hands back
             (path_access.may_serve). Only ComfyUI's own page or a caller with no browser
@@ -921,22 +929,22 @@ try:
                 return web.json_response({"ok": False, "error": f"not saved: {exc}"}, status=500)
             pushed = False
             try:
-                PromptServer.instance.send_sync("bepic.edit.take", {"otio": otio, "takes": takes, "saved": saved,
+                PromptServer.instance.send_sync("imageviewer.edit.take", {"otio": otio, "takes": takes, "saved": saved,
                                                                      "retime": retime, "client_id": client_id})
                 pushed = True
             except Exception as exc:  # noqa: BLE001 - no page may be listening; the file is saved all the same
                 notes.append(f"the pages could not be told ({exc})")
             return web.json_response({"ok": True, "saved": saved, "applied": applied, "pushed": pushed, "notes": notes})
 
-        async def _bepic_cut(request):
+        async def _imageviewer_cut(request):
             """A cut read, or changed, by agentY (its edit_cut tool): ``{"otio": str, "ops": [...]}``.
 
             No ``ops``: the cut as the Edit panel works on it (``edit``), nothing written.
             With ``ops`` (timeline_io.apply_ops: add a clip at a moment of the film, set a
             clip's in / length / place / volume, remove one) the cut is changed and saved
-            the way the panel saves it (timeline_io.change), and ``bepic.edit.changed``
+            the way the panel saves it (timeline_io.change), and ``imageviewer.edit.changed``
             ({otio, edit, said, client_id}) goes to the pages: an Edit panel that has the
-            cut open takes the new cut in as one undo step (bEpicViewer_editTakes.js:
+            cut open takes the new cut in as one undo step (imageViewer_editTakes.js:
             editTlChangedIn). Answers ``{"ok", "otio", "edit", "length", "saved", "said",
             "pushed"}``. Fenced like the take route: the timeline by path_access.is_allowed,
             every file added by path_access.may_serve, and only ComfyUI's own page or a
@@ -1039,7 +1047,7 @@ try:
                 out["marked"] = sources
             if ops:
                 try:
-                    PromptServer.instance.send_sync("bepic.edit.changed", {
+                    PromptServer.instance.send_sync("imageviewer.edit.changed", {
                         "otio": otio, "edit": edit, "file": os.path.basename(otio), "said": said,
                         "client_id": client_id})
                     out["pushed"] = True
@@ -1047,7 +1055,7 @@ try:
                     out["notes"] = [f"the pages could not be told ({exc})"]
             return web.json_response(out, headers={"Cache-Control": "no-cache"})
 
-        async def _bepic_timeline_probe(request):
+        async def _imageviewer_timeline_probe(request):
             """How long files are and what they hold: ``{"info": {path: {...} | {"error"}}}``.
 
             The Edit panel's lengths come from here (the container's header, read
@@ -1077,7 +1085,7 @@ try:
                 info[str(raw)] = await _media_work(one, raw)
             return web.json_response({"info": info}, headers={"Cache-Control": "no-cache"})
 
-        async def _bepic_timeline_locate(request):
+        async def _imageviewer_timeline_locate(request):
             """Files named the way ComfyUI names its outputs (``filename`` / ``type`` /
             ``subfolder``: the queue's and the history's), as the paths a cut holds."""
             try:
@@ -1098,7 +1106,7 @@ try:
                 return out
             return web.json_response({"paths": await _off_loop(find, items)})
 
-        async def _bepic_timeline_upload(request):
+        async def _imageviewer_timeline_upload(request):
             """A file dropped onto the Edit panel from the desktop, kept in ``<input>/edits``
             (a dropped ``.otio`` cut: in ``<input>/edits/cuts``, opened as a cut, never reusing a
             file of that name unless its bytes are the same).
@@ -1155,7 +1163,7 @@ try:
                 return web.Response(status=500, text=f"not written: {exc}")
             return web.json_response({"path": path, "name": os.path.basename(path), "reused": there})
 
-        async def _bepic_fonts(request):
+        async def _imageviewer_fonts(request):
             """The font families of this machine, for a title's font picker
             (title_render.font_list: families, each face with its id and metrics -
             no paths). Read once (Pillow, the OS's font folders), kept for the
@@ -1166,8 +1174,8 @@ try:
             got = await _off_loop(title_render.font_list)
             return web.json_response(got, headers={"Cache-Control": "no-cache"})
 
-        async def _bepic_font_file(request):
-            """ONE font file of the machine's list (``/bepic/fonts``), by its id -
+        async def _imageviewer_font_file(request):
+            """ONE font file of the machine's list (``/imageviewer/fonts``), by its id -
             never by a path, so nothing outside the OS's font folders can be
             asked for; a face of a collection (.ttc) as a font file of its own.
             The browser draws a title with it, as the render does."""
@@ -1183,11 +1191,11 @@ try:
             return web.Response(body=data, content_type=kind,
                                 headers={"Cache-Control": "private, max-age=86400"})
 
-        async def _bepic_timeline_solid(request):
+        async def _imageviewer_timeline_solid(request):
             """A plain colour as a picture a cut can hold: the Effects panel's generators.
 
             A clip is a piece of a file, so a colour has to be one: a PNG under
-            ``<output>/bepic/edits/solids``, named after its colour and size, so
+            ``<output>/imageviewer/edits/solids``, named after its colour and size, so
             asking twice gives the same file and nothing piles up.
             """
             import re
@@ -1212,7 +1220,7 @@ try:
                 base = None
             if not base:
                 return web.Response(status=500, text="ComfyUI has no output folder")
-            folder = os.path.join(base, "bepic", "edits", "solids")
+            folder = os.path.join(base, "imageviewer", "edits", "solids")
             path = os.path.join(folder, f"solid_{color[1:]}_{w}x{h}.png")
 
             def _make():
@@ -1230,7 +1238,7 @@ try:
                 return web.Response(status=500, text=f"not written: {exc}")
             return web.json_response({"path": path, "name": os.path.basename(path), "color": color})
 
-        async def _bepic_timeline_render(request):
+        async def _imageviewer_timeline_render(request):
             """Render the saved cut of a film into a film of its own.
 
             Done in this process (timeline_render.py, through PyAV): no program
@@ -1290,7 +1298,7 @@ try:
                 done = copy.deepcopy(doc)
                 meta = done.setdefault("metadata", {})
                 if isinstance(meta, dict):
-                    meta["bepic"] = {"rendered": datetime.datetime.now(datetime.timezone.utc)
+                    meta["imageviewer"] = {"rendered": datetime.datetime.now(datetime.timezone.utc)
                                      .isoformat(timespec="seconds"),
                                      "texts_left_out": got["texts_left_out"]}
                 beside = os.path.splitext(out)[0] + ".otio"
@@ -1309,13 +1317,13 @@ try:
             got["relative"], got["version"] = where["relative"], where["version"]
             return web.json_response(got, headers={"Cache-Control": "no-cache"})
 
-        async def _bepic_export_options(request):
+        async def _imageviewer_export_options(request):
             """What an export can be: the formats, the codecs each can hold and
             which is the default, the names quality goes by (export_rules)."""
             from . import export_rules
             return web.json_response(export_rules.options())
 
-        async def _bepic_export_target(request):
+        async def _imageviewer_export_target(request):
             """Where an export WOULD go and what it would be called, for the
             dialog to show before anything is written. Nothing is created."""
             from . import export_rules
@@ -1338,7 +1346,7 @@ try:
                 where = dict(where, relative=seq["relative"], exists=False)
             return web.json_response({k: where[k] for k in ("relative", "version", "layout", "exists")})
 
-        async def _bepic_export_places(request):
+        async def _imageviewer_export_places(request):
             """The folders a kind of file is looked for in (export_rules.places):
             where a picker opens, and the shortcuts it offers."""
             from . import export_rules
@@ -1355,7 +1363,7 @@ try:
                 return web.Response(status=400, text=str(exc))
             return web.json_response({"places": found})
 
-        async def _bepic_export_view(request):
+        async def _imageviewer_export_view(request):
             """Export what is on screen (export_view.py): the frame being looked
             at as a PNG, or the whole clip as a film - by the rule every export
             follows, so as the next version in the shot's folder or the viewer's.
@@ -1443,7 +1451,7 @@ try:
                        version=where["version"], kind="video" if scope == "clip" else "image")
             return web.json_response(got, headers={"Cache-Control": "no-cache"})
 
-        async def _bepic_raw_view(request):
+        async def _imageviewer_raw_view(request):
             params = dict(request.query)
             path = params.get('path') or params.get('filename')
             if not path:
@@ -1455,7 +1463,7 @@ try:
                 # the files it names — a cleaned temp dir, an output root belonging to
                 # another machine — and printing here put one line in the ComfyUI log
                 # per dead entry per redraw of the history strip. The client asks
-                # /bepic/probe_paths instead and drops those entries from the panel.
+                # /imageviewer/probe_paths instead and drops those entries from the panel.
                 if not allowed or not path_access.is_media(cand):
                     return cand, 403
                 if not os.path.exists(cand):
@@ -1472,7 +1480,7 @@ try:
 
             return await _serve(cand, cs=params.get("cs"), ev=params.get("ev"))
 
-        async def _bepic_probe_paths(request):
+        async def _imageviewer_probe_paths(request):
             """Report which of the given paths this server can no longer serve.
 
             Body: {"paths": [{"path": ..., "external": bool}, ...]}; a bare string
@@ -1498,7 +1506,7 @@ try:
                 if not p or not isinstance(p, str):
                     return None
                 # External frames come from the file browser, a loader node or
-                # drag-drop and are served by /bepic/view_file. One outside the
+                # drag-drop and are served by /imageviewer/view_file. One outside the
                 # allowed folders is left out of the answer entirely: reporting it
                 # would get it pruned from history before the user has had a
                 # chance to allow its folder, and answering "gone" or not for it
@@ -1550,7 +1558,7 @@ try:
                     tests.append(lambda name, needle=low: needle in name)
             return lambda name: any(test(name.lower()) for test in tests)
 
-        async def _bepic_browse(request):
+        async def _imageviewer_browse(request):
             """List one directory for the viewer's file browser panel.
 
             No path → ComfyUI's input directory, which is where the browser opens.
@@ -1650,7 +1658,7 @@ try:
                 "filtered": bool(matches or kinds),
             })
 
-        async def _bepic_browse_frames(request):
+        async def _imageviewer_browse_frames(request):
             """Turn browsed paths into viewer frames.
 
             Body: {"paths": [abs path, ...]}. Answers with one frame dict per
@@ -1693,12 +1701,12 @@ try:
                     elif ext in image_exts:
                         frames.append(media_resolve._image_frame(p))
                 except Exception as e:
-                    print(f"[bEpicViewer] browse_frames failed for {p}: {e}")
+                    print(f"[ImageViewer] browse_frames failed for {p}: {e}")
                     missing.append(raw)
 
             return web.json_response({"frames": frames, "missing": missing})
 
-        async def _bepic_push(request):
+        async def _imageviewer_push(request):
             """Show files in a viewer tab that did not come through a save node.
 
             Body: {"paths": [abs path, ...], "group": "...", "label": "..."}. An
@@ -1706,8 +1714,8 @@ try:
             produced the file says which group of the Viewer tab it belongs in
             ("agentY" when nobody says; ``tab_name``, the old name of ``group``,
             is taken when ``group`` is empty). The frames are the ones
-            /bepic/browse_frames builds, sent as the same ``bepic.viewer.update``
-            message bEpicSendToViewer sends, so the page files them exactly as it
+            /imageviewer/browse_frames builds, sent as the same ``imageviewer.viewer.update``
+            message ImageViewerSend sends, so the page files them exactly as it
             does a send from a workflow that is not on the open graph. Only files inside the folders the
             viewer may open (path_access) are shown; the rest come back in
             ``refused``.
@@ -1720,7 +1728,7 @@ try:
             panel on the cut beside the first film that has one), ``panel: "paint"``
             (the pictures open in Paint tabs). They ride on the same message as
             ``open``; the page does the rest. An ``.ora`` / ``.psd`` always opens in
-            Paint (``bepic.paint.open``), answered as ``paint``.
+            Paint (``imageviewer.paint.open``), answered as ``paint``.
             """
             if media_resolve is None:
                 return web.json_response({"error": "media resolver unavailable"}, status=500)
@@ -1780,7 +1788,7 @@ try:
                         refused.append(p)
                         continue
                 except Exception as e:
-                    print(f"[bEpicViewer] push failed for {p}: {e}")
+                    print(f"[ImageViewer] push failed for {p}: {e}")
                     refused.append(p)
                     continue
                 if group:
@@ -1813,15 +1821,15 @@ try:
                 }
                 if opened:
                     msg["open"] = opened
-                PromptServer.instance.send_sync("bepic.viewer.update", msg)
+                PromptServer.instance.send_sync("imageviewer.viewer.update", msg)
             for p in motion:
-                PromptServer.instance.send_sync("bepic.mg.open", {"path": p})
+                PromptServer.instance.send_sync("imageviewer.mg.open", {"path": p})
             for p in lora:
-                PromptServer.instance.send_sync("bepic.lora.open", {"path": p})
+                PromptServer.instance.send_sync("imageviewer.lora.open", {"path": p})
             for p in cuts_open:
-                PromptServer.instance.send_sync("bepic.edit.open", {"path": p})
+                PromptServer.instance.send_sync("imageviewer.edit.open", {"path": p})
             for p in paint_open:
-                PromptServer.instance.send_sync("bepic.paint.open", {"path": p})
+                PromptServer.instance.send_sync("imageviewer.paint.open", {"path": p})
             return web.json_response({"ok": True, "shown": len(frames), "motion": motion, "lora": lora, "cuts": cuts_open,
                                       "paint": paint_open,
                                       "refused": refused,
@@ -1831,7 +1839,7 @@ try:
         # --- Previz shots for an agent (previz_shot.py) ----------------------
         _shots = previz_shot.ShotBook() if previz_shot is not None else None
 
-        async def _bepic_previz_shot(request):
+        async def _imageviewer_previz_shot(request):
             """Open a previz scene in the viewer and (optionally) render a camera through it.
 
             Body: {"scene": {...previz scene...}, "name": "shot", "render": {camera,
@@ -1839,7 +1847,7 @@ try:
             "add_node": true, "focus": true}. The scene is saved under output/3d_scenes,
             sent to the page as the tab ``previz:<name>`` and, when ``render`` is given,
             the page renders it exactly as Export > Render does and reports back. Answers
-            at once with an ``id``; poll GET /bepic/previz_shot?id=<id> for the state
+            at once with an ``id``; poll GET /imageviewer/previz_shot?id=<id> for the state
             (``queued`` | ``rendering`` | ``done`` | ``error``) and, when done, ``path``.
             """
             if _shots is None or previz is None:
@@ -1856,7 +1864,7 @@ try:
                 saved = previz.save_scene(job["name"], job["scene"])
             except OSError as e:
                 return web.json_response({"error": str(e)}, status=500)
-            PromptServer.instance.send_sync("bepic.viewer.update", {
+            PromptServer.instance.send_sync("imageviewer.viewer.update", {
                 "tabs": {job["key"]: []},
                 "unique_id": None,
                 "scene_data": previz_shot.json_dumps(job["scene"]),
@@ -1865,14 +1873,14 @@ try:
                 "focus_tab": bool(job["focus"]),
             })
             if job["render"] is not None:
-                PromptServer.instance.send_sync("bepic.previz.render", {
+                PromptServer.instance.send_sync("imageviewer.previz.render", {
                     "id": job["id"], "key": job["key"], "name": job["name"],
                     "render": job["render"], "add_node": job["add_node"],
                 })
             return web.json_response({"ok": True, "id": job["id"], "key": job["key"],
                                       "scene_file": saved, "state": job["state"]})
 
-        async def _bepic_previz_shot_done(request):
+        async def _imageviewer_previz_shot_done(request):
             """The page's report on a shot it was asked to render (progress or result)."""
             if _shots is None:
                 return web.json_response({"error": "previz unavailable"}, status=500)
@@ -1884,7 +1892,7 @@ try:
                 return web.json_response({"error": "unknown shot"}, status=404)
             return web.json_response({"ok": True})
 
-        async def _bepic_previz_shot_state(request):
+        async def _imageviewer_previz_shot_state(request):
             if _shots is None:
                 return web.json_response({"error": "previz unavailable"}, status=500)
             job = _shots.get(request.query.get("id") or "")
@@ -1895,10 +1903,10 @@ try:
         # --- Render with World Labs Atlas (atlas_render.py) -------------------
         # The viewer has neither agenty_core nor the World Labs key: these two routes relay to the
         # agentY host, which renders (the same core function the agent's atlas_render_view runs).
-        async def _bepic_atlas_render(request):
+        async def _imageviewer_atlas_render(request):
             """Body: {"world_path": ".../world.glb", "camera": {"camera_world": [16], "model_world": [16],
             "fov", "aspect", "gated"}, "upscale": 0|2|4, "add_to_world": false}. Answers at once with an ``id``;
-            poll GET /bepic/atlas_render?id=<id> (``state``: running | done | error, ``path`` when done)."""
+            poll GET /imageviewer/atlas_render?id=<id> (``state``: running | done | error, ``path`` when done)."""
             if atlas_render is None:
                 return web.json_response({"error": "atlas render unavailable"}, status=500)
             try:
@@ -1912,7 +1920,7 @@ try:
                 return web.json_response({"error": str(e)}, status=e.status)
             return web.json_response(out)
 
-        async def _bepic_atlas_render_state(request):
+        async def _imageviewer_atlas_render_state(request):
             if atlas_render is None:
                 return web.json_response({"error": "atlas render unavailable"}, status=500)
             base = f"{request.scheme}://{request.host}"
@@ -1923,10 +1931,10 @@ try:
             return web.json_response(out)
 
         # --- Render camera with Atlas: the previz camera's animation as an Atlas-painted move (atlas_render.py) ---
-        async def _bepic_atlas_move(request):
+        async def _imageviewer_atlas_move(request):
             """Body: {"world_path", "keys": [{"t", "camera_world": [16], "fov", "aspect"}], "model_world": [16],
             "quality", "fps", "name", "dry_run", "confirm_cost"}. A dry run answers with the plan and the price;
-            otherwise an ``id`` to poll GET /bepic/atlas_camera_move?id=<id> (tasks_done / tasks_total)."""
+            otherwise an ``id`` to poll GET /imageviewer/atlas_camera_move?id=<id> (tasks_done / tasks_total)."""
             if atlas_render is None:
                 return web.json_response({"error": "atlas render unavailable"}, status=500)
             try:
@@ -1940,7 +1948,7 @@ try:
                 return web.json_response({"error": str(e)}, status=e.status)
             return web.json_response(out)
 
-        async def _bepic_atlas_move_state(request):
+        async def _imageviewer_atlas_move_state(request):
             if atlas_render is None:
                 return web.json_response({"error": "atlas render unavailable"}, status=500)
             base = f"{request.scheme}://{request.host}"
@@ -1951,7 +1959,7 @@ try:
             return web.json_response(out)
 
         # --- Motion panel: scene files and the Render relay (mg_scene_io.py, mg_render.py) ---
-        async def _bepic_mgscene(request):
+        async def _imageviewer_mgscene(request):
             """GET ?path=<file>.mgscene.json -> {"path", "scene"}.
 
             Also answers for what belongs to a scene: a poster .png that carries it, and the rendered
@@ -1996,7 +2004,7 @@ try:
                 return web.json_response({"error": str(e)}, status=422)
             return web.json_response({"path": path, "scene": scene}, headers={"Cache-Control": "no-cache"})
 
-        async def _bepic_mgscene_save(request):
+        async def _imageviewer_mgscene_save(request):
             """POST {"path", "scene"}: write the scene file the editor changed (allowed folders only)."""
             if mg_scene_io is None:
                 return web.json_response({"error": "motion panel unavailable"}, status=500)
@@ -2020,7 +2028,7 @@ try:
                 return web.json_response({"error": f"not saved: {e}"}, status=500)
             return web.json_response({"ok": True, "path": path})
 
-        async def _bepic_mg_render(request):
+        async def _imageviewer_mg_render(request):
             """POST {"path", "format"?, "scale"?} starts a render on the agentY host; GET ?id= polls it."""
             if mg_render is None:
                 return web.json_response({"error": "motion render unavailable"}, status=500)
@@ -2058,18 +2066,18 @@ try:
                 body = None
             return body if isinstance(body, dict) else {}
 
-        async def _bepic_lora_datasets(request):
+        async def _imageviewer_lora_datasets(request):
             if lora_io is None:
                 return web.json_response({"error": "dataset panel unavailable"}, status=500)
             out = folder_paths.get_output_directory()
             return await _lora_reply(lambda: {"datasets": lora_io.list_datasets(out)})
 
-        async def _bepic_lora_dataset(request):
+        async def _imageviewer_lora_dataset(request):
             if lora_io is None:
                 return web.json_response({"error": "dataset panel unavailable"}, status=500)
             return await _lora_reply(lora_io.get_dataset, folder_paths.get_output_directory(), request.query.get("name"))
 
-        async def _bepic_lora_file(request):
+        async def _imageviewer_lora_file(request):
             if lora_io is None:
                 return web.json_response({"error": "dataset panel unavailable"}, status=500)
             try:
@@ -2078,32 +2086,32 @@ try:
                 return web.json_response({"error": str(e)}, status=e.status)
             return web.FileResponse(p, headers={"Cache-Control": "no-cache"})
 
-        async def _bepic_lora_dataset_save(request):
+        async def _imageviewer_lora_dataset_save(request):
             if lora_io is None:
                 return web.json_response({"error": "dataset panel unavailable"}, status=500)
             b = await _lora_body(request)
             return await _lora_reply(lora_io.save_dataset, folder_paths.get_output_directory(),
                                      b.get("name"), b.get("manifest"))
 
-        async def _bepic_lora_review(request):
+        async def _imageviewer_lora_review(request):
             if lora_io is None:
                 return web.json_response({"error": "dataset panel unavailable"}, status=500)
             b = await _lora_body(request)
             return await _lora_reply(lora_io.review_dataset, folder_paths.get_output_directory(),
                                      b.get("name"), b.get("action"), b.get("note"), b.get("manifest"))
 
-        async def _bepic_lora_runs(request):
+        async def _imageviewer_lora_runs(request):
             if lora_io is None:
                 return web.json_response({"error": "dataset panel unavailable"}, status=500)
             out = folder_paths.get_output_directory()
             return await _lora_reply(lambda: {"runs": lora_io.list_runs(out)})
 
-        async def _bepic_lora_run(request):
+        async def _imageviewer_lora_run(request):
             if lora_io is None:
                 return web.json_response({"error": "dataset panel unavailable"}, status=500)
             return await _lora_reply(lora_io.get_run, folder_paths.get_output_directory(), request.query.get("name"))
 
-        async def _bepic_lora_control(request):
+        async def _imageviewer_lora_control(request):
             if lora_io is None:
                 return web.json_response({"error": "dataset panel unavailable"}, status=500)
             b = await _lora_body(request)
@@ -2113,7 +2121,7 @@ try:
         # --- Agent code panel (viewer_code.py) -------------------------------
         _code_store = viewer_code.CodeStore() if viewer_code is not None else None
 
-        async def _bepic_code_add(request):
+        async def _imageviewer_code_add(request):
             """A snippet of code the agent made, for the Agent code panel."""
             if _code_store is None:
                 return web.json_response({"error": "code panel unavailable"}, status=500)
@@ -2126,12 +2134,12 @@ try:
                 return web.json_response({"error": "bad request"}, status=400)
             if is_new:
                 try:
-                    PromptServer.instance.send_sync("bepic.code.update", snip)
+                    PromptServer.instance.send_sync("imageviewer.code.update", snip)
                 except Exception as e:
-                    print(f"[bEpicViewer] code push failed: {e}")
+                    print(f"[ImageViewer] code push failed: {e}")
             return web.json_response({"ok": True, "id": snip["id"], "new": is_new})
 
-        async def _bepic_code_list(request):
+        async def _imageviewer_code_list(request):
             if _code_store is None:
                 return web.json_response({"snippets": []})
             try:
@@ -2140,7 +2148,7 @@ try:
                 limit = 50
             return web.json_response({"snippets": _code_store.recent(limit=limit)})
 
-        async def _bepic_text(request):
+        async def _imageviewer_text(request):
             """A text file (code, json, notes) from an allowed folder."""
             if viewer_code is None:
                 return web.json_response({"error": "code panel unavailable"}, status=500)
@@ -2158,7 +2166,7 @@ try:
             return web.json_response({"path": path, "name": os.path.basename(path),
                                       "language": language, "code": text, "truncated": cut})
 
-        async def _bepic_view_file(request):
+        async def _imageviewer_view_file(request):
             """Serve a file by absolute path, from inside the allowed folders."""
             params = dict(request.query)
             path = params.get('path') or params.get('filename')
@@ -2166,7 +2174,7 @@ try:
                 return web.Response(status=400, text="missing 'path' parameter")
             path = os.path.abspath(path)
 
-            # Off the event loop, like /bepic/raw_view: a file opened from a
+            # Off the event loop, like /imageviewer/raw_view: a file opened from a
             # project folder is as likely to be on a network share.
             def _check(path):
                 # fonts are served too: a motion-graphics scene draws its text with them
@@ -2190,14 +2198,14 @@ try:
             return await _serve(path, params.get("prim"), _frame_arg(request),
                                 params.get("cs"), params.get("ev"))
 
-        async def _bepic_thumb(request):
+        async def _imageviewer_thumb(request):
             """Serve a small cached stand-in for an image, for the thumbnail strips.
 
             Falls back to the original file whenever a thumbnail cannot be made —
             already small enough, a vector, no decoder — so the client never has to
             know which happened and a tile always shows a picture.
 
-            Reach is deliberately the same as /bepic/view_file — the allowed
+            Reach is deliberately the same as /imageviewer/view_file — the allowed
             folders: this hands back a SHRUNK version of bytes that endpoint would
             give in full, so it widens nothing.
             """
@@ -2228,7 +2236,7 @@ try:
                     return web.Response(status=404, text="file not found")
 
                 if os.path.splitext(path)[1].lower() in _MODEL_EXTS:
-                    # A model's tile is rendered by the browser (/bepic/model_thumb);
+                    # A model's tile is rendered by the browser (/imageviewer/model_thumb);
                     # until then, a generic cube. Neither may be cached for long:
                     # the real one replaces the placeholder under the same URL.
                     thumb = model_writer.cached_thumb(path) if model_writer else None
@@ -2261,12 +2269,12 @@ try:
                             return web.FileResponse(
                                 thumb, headers={"Cache-Control": "public, max-age=31536000"})
                     except Exception as e:
-                        print(f"[bEpicViewer] thumb failed for {path}: {e}")
+                        print(f"[ImageViewer] thumb failed for {path}: {e}")
                 return _file_response(path)
 
             return await _off_loop(_answer, dict(request.query))
 
-        async def _bepic_clear_cache(request):
+        async def _imageviewer_clear_cache(request):
             try:
                 temp_base = folder_paths.get_temp_directory()
             except Exception:
@@ -2277,7 +2285,7 @@ try:
 
             try:
                 for fname in os.listdir(temp_base):
-                    if not fname.startswith('bEpic_'):
+                    if not fname.startswith('ImageViewer_'):
                         continue
                     fpath = os.path.join(temp_base, fname)
                     try:
@@ -2287,21 +2295,21 @@ try:
                     except Exception:
                         continue
             except Exception as e:
-                print(f"[bEpicClearCache] error scanning temp dir: {e}")
+                print(f"[ImageViewerClearCache] error scanning temp dir: {e}")
                 return web.json_response({"deleted": deleted})
 
             return web.json_response({"deleted": deleted})
 
-        async def _bepic_viewer_page(request):
+        async def _image_viewer_page(request):
             """Open the regular ComfyUI app in viewer-only mode.
 
             The viewer extension depends on ComfyUI's full frontend runtime,
             so we redirect to root with a query flag and let JS collapse the
-            UI to only the bEpic viewer panel.
+            UI to only the ComfyUI Image Viewer panel.
             """
-            raise web.HTTPFound('/?bepic_viewer_only=1')
+            raise web.HTTPFound('/?image_viewer_only=1')
 
-        async def _bepic_save_annotation(request):
+        async def _imageviewer_save_annotation(request):
             """Save a PNG produced by the in-viewer Annotation tool to ./output.
 
             Body: JSON { dataurl: "data:image/png;base64,...", filename_prefix }.
@@ -2313,9 +2321,9 @@ try:
             except Exception:
                 return web.json_response({"error": "invalid JSON body"}, status=400)
 
-            prefix = str(data.get("filename_prefix") or "bEpic_annotation")
+            prefix = str(data.get("filename_prefix") or "ImageViewer_annotation")
             # Keep only filesystem-safe characters in the prefix.
-            prefix = "".join(c for c in prefix if c.isalnum() or c in ("_", "-")) or "bEpic_annotation"
+            prefix = "".join(c for c in prefix if c.isalnum() or c in ("_", "-")) or "ImageViewer_annotation"
 
             try:
                 raw, ext = _decode_image_upload(data.get("dataurl"))
@@ -2370,7 +2378,7 @@ try:
                 return None, None, web.Response(status=403, text=path_access.refusal(media))
             return media, annotation_io.sidecar_for(media), None
 
-        async def _bepic_video_annotations(request):
+        async def _imageviewer_video_annotations(request):
             """The marks stored beside a film: {items: [...]} (empty when none)."""
             from . import annotation_io
             media, side, bad = await _off_loop(_annot_target, dict(request.query))
@@ -2383,7 +2391,7 @@ try:
             doc["media_path"] = media
             if request.query.get("describe"):
                 # In words, the way the page answers the agent live
-                # (bEpicViewer_viewerState.annotationReport) - get_viewer_annotations(path=...).
+                # (imageViewer_viewerState.annotationReport) - get_viewer_annotations(path=...).
                 try:
                     frame = int(request.query["frame"]) if request.query.get("frame") not in (None, "") else None
                 except ValueError:
@@ -2448,7 +2456,7 @@ try:
                          "subfolder": subfolder or "", "type": "output", "width": w, "height": h,
                          "marks": used, "frame": frame, "media_path": media or ""}
 
-        async def _bepic_annotation_mask(request):
+        async def _imageviewer_annotation_mask(request):
             """POST {path | filename+subfolder+type, items?, width?, height?, frame?}:
             the drawn regions (boxes, freehand strokes; a closed stroke filled) as a
             white-on-black PNG, for an inpaint mask. Without ``items`` the marks
@@ -2466,7 +2474,7 @@ try:
                 return web.json_response({"error": f"no mask: {exc}"}, status=500)
             return web.json_response(answer, status=status)
 
-        async def _bepic_video_annotations_save(request):
+        async def _imageviewer_video_annotations_save(request):
             """Replace the marks beside a film. No marks removes the file."""
             from . import annotation_io
             try:
@@ -2488,7 +2496,7 @@ try:
             return web.json_response({"ok": True, "file": os.path.basename(side),
                                       "path": side, "media_path": media, "count": len(doc["items"]) if doc else 0})
 
-        async def _bepic_extract_frame(request):
+        async def _imageviewer_extract_frame(request):
             """Write one frame of a clip out as a PNG file and say where it landed.
 
             Backs shift-dragging a frame off the viewer's timeline onto the node
@@ -2570,7 +2578,7 @@ try:
             return web.json_response({"path": os.path.abspath(out),
                                       "filename": os.path.basename(out)})
 
-        async def _bepic_resolve_media(request):
+        async def _imageviewer_resolve_media(request):
             """Resolve a loader node's media into viewer tabs.
 
             Two body/query forms, matching how loaders store their media:
@@ -2643,10 +2651,10 @@ try:
                     f"from ./input, or outside the folders the viewer may open")
             return web.json_response(payload)
 
-        async def _bepic_health(_request):
+        async def _imageviewer_health(_request):
             return web.json_response({"ok": True, "service": "bepic_templates"})
 
-        async def _bepic_three(request):
+        async def _imageviewer_three(request):
             name = request.match_info.get("name", "")
             try:
                 allowed = set(os.listdir(_THREE_DIR))
@@ -2659,7 +2667,7 @@ try:
                 "Cache-Control": "max-age=86400",
             })
 
-        async def _bepic_model_thumb(request):
+        async def _imageviewer_model_thumb(request):
             """Keep the browser's rendering of a model as its history tile."""
             if model_writer is None:
                 return web.json_response({"error": "unavailable"}, status=500)
@@ -2692,14 +2700,14 @@ try:
                 return web.json_response({"error": str(e)}, status=500)
             return web.json_response({"ok": True})
 
-        async def _bepic_scene_list(_request):
+        async def _imageviewer_scene_list(_request):
             """Saved previz scenes (output/3d_scenes)."""
             if previz is None:
                 return web.json_response({"scenes": []})
             return web.json_response({"scenes": [
                 {"name": s["name"], "mtime": s["mtime"]} for s in previz.list_scenes()]})
 
-        async def _bepic_scene_load(request):
+        async def _imageviewer_scene_load(request):
             if previz is None:
                 return web.json_response({"error": "unavailable"}, status=500)
             raw = request.query.get("path", "")
@@ -2727,7 +2735,7 @@ try:
             except Exception as e:
                 return web.json_response({"error": str(e)}, status=400)
 
-        async def _bepic_scene_save(request):
+        async def _imageviewer_scene_save(request):
             if previz is None:
                 return web.json_response({"error": "unavailable"}, status=500)
             try:
@@ -2756,7 +2764,7 @@ try:
                 return web.json_response({"error": str(e)}, status=500)
             return web.json_response({"ok": True, "name": previz._safe_name(name), "path": path})
 
-        async def _bepic_previz_frame(request):
+        async def _imageviewer_previz_frame(request):
             """One rendered frame of a shot, straight from the viewer's canvas.
 
             Like every other upload here the PNG is decoded and re-encoded, so
@@ -2792,7 +2800,7 @@ try:
             return web.json_response({"ok": True, "path": path,
                                       "dir": os.path.dirname(path)})
 
-        async def _bepic_previz_encode(request):
+        async def _imageviewer_previz_encode(request):
             """Encode a finished take into output/previz/<name>.<format>."""
             if previz is None:
                 return web.json_response({"error": "unavailable"}, status=500)
@@ -2837,7 +2845,7 @@ try:
                                       "relative": where["relative"] if where else
                                       f"{previz.RENDERS_DIRNAME}/{os.path.basename(path)}"})
 
-        async def _bepic_previz_publish(request):
+        async def _imageviewer_previz_publish(request):
             """Put a finished take kept as stills where every export goes: its
             frames leave the working folder for the next version's."""
             if previz is None:
@@ -2862,7 +2870,7 @@ try:
                                       "paths": paths, "count": len(paths), "relative": seq["relative"],
                                       "version": seq["version"]})
 
-        async def _bepic_usd_export(request):
+        async def _imageviewer_usd_export(request):
             """Write a previz scene out as a USD stage."""
             if usd_io is None or not usd_io.available():
                 return web.json_response({"error": "this install has no USD (pip install usd-core)"},
@@ -2908,7 +2916,7 @@ try:
                                       "relative": os.path.relpath(written, root).replace("\\", "/")
                                       if inside else ""})
 
-        async def _bepic_usd_import(request):
+        async def _imageviewer_usd_import(request):
             """Read a USD stage — or an Alembic cache — into a previz scene."""
             raw_path = request.query.get("path") or ""
             if abc_io is not None and abc_io.is_abc(raw_path):
@@ -2940,7 +2948,7 @@ try:
                 return web.json_response({"error": str(e)}, status=400)
             return web.json_response({"ok": True, "path": path, "scene": scene})
 
-        async def _bepic_usd_stages(_request):
+        async def _imageviewer_usd_stages(_request):
             """USD stages sitting in output/3d_scenes, for the Load menu."""
             if previz is None:
                 return web.json_response({"stages": []})
@@ -2956,15 +2964,15 @@ try:
             return web.json_response({"stages": out, "dir": folder,
                                       "available": bool(usd_io and usd_io.available())})
 
-        async def _bepic_roots(request):
-            """The folders the viewer may open, for Settings → bEpic Viewer,
+        async def _imageviewer_roots(request):
+            """The folders the viewer may open, for Settings → ComfyUI Image Viewer,
             and whether this request may change them."""
             editable, reason = path_access.may_edit(request)
             out = path_access.describe()
             out.update(editable=editable, reason=reason)
             return web.json_response(out)
 
-        async def _bepic_roots_save(request):
+        async def _imageviewer_roots_save(request):
             """Replace the folders listed in the roots file (path_access.ROOTS_FILE). The one
             request that can widen what every other route will open, so it is
             fenced by path_access.may_edit."""
@@ -2986,7 +2994,7 @@ try:
             out.update(editable=True, reason="")
             return web.json_response(out)
 
-        async def _bepic_roots_folders(request):
+        async def _imageviewer_roots_folders(request):
             """Sub-folders of a path, for the settings page's folder picker.
             Looks outside the allowed folders — that is its job — so it is
             answered only where the list may be edited."""
@@ -3001,13 +3009,13 @@ try:
             except (OSError, ValueError) as e:
                 return web.json_response({"error": str(e)}, status=400)
 
-        async def _bepic_settings(request):
+        async def _imageviewer_settings(request):
             """The viewer's settings as kept per OS user (viewer_settings.py):
             ComfyUI's own store can be per project, these are not."""
             return web.json_response({"values": viewer_settings.load(),
                                       "file": viewer_settings.path()})
 
-        async def _bepic_settings_save(request):
+        async def _imageviewer_settings_save(request):
             try:
                 body = await request.json()
                 values = viewer_settings.update(body.get("values") if isinstance(body, dict) else None)
@@ -3022,142 +3030,142 @@ try:
         # deleting cache files — are POST only. A GET can be set off by a link
         # or an <img> on any page the user has open; a JSON POST from another
         # origin can't get past the browser without a CORS preflight.
-        _safe_add("GET", "/bepic/lib/three/{name}", _bepic_three)
-        _safe_add("GET", "/api/bepic/lib/three/{name}", _bepic_three)
-        _safe_add("POST", "/bepic/model_thumb", _bepic_model_thumb)
-        _safe_add("GET", "/bepic/scenes", _bepic_scene_list)
-        _safe_add("GET", "/api/bepic/scenes", _bepic_scene_list)
-        _safe_add("GET", "/bepic/scene", _bepic_scene_load)
-        _safe_add("GET", "/api/bepic/scene", _bepic_scene_load)
-        _safe_add("POST", "/bepic/scene", _bepic_scene_save)
-        _safe_add("POST", "/api/bepic/scene", _bepic_scene_save)
-        _safe_add("POST", "/bepic/previz_frame", _bepic_previz_frame)
-        _safe_add("POST", "/api/bepic/previz_frame", _bepic_previz_frame)
-        _safe_add("POST", "/bepic/previz_encode", _bepic_previz_encode)
-        _safe_add("POST", "/api/bepic/previz_encode", _bepic_previz_encode)
-        _safe_add("POST", "/bepic/usd_export", _bepic_usd_export)
-        _safe_add("POST", "/api/bepic/usd_export", _bepic_usd_export)
-        _safe_add("GET", "/bepic/usd_import", _bepic_usd_import)
-        _safe_add("GET", "/api/bepic/usd_import", _bepic_usd_import)
-        _safe_add("GET", "/bepic/usd_stages", _bepic_usd_stages)
-        _safe_add("GET", "/api/bepic/usd_stages", _bepic_usd_stages)
-        _safe_add("POST", "/api/bepic/model_thumb", _bepic_model_thumb)
-        _safe_add("GET", "/bepic/timeline", _bepic_timeline)
-        _safe_add("GET", "/api/bepic/timeline", _bepic_timeline)
-        _safe_add("POST", "/bepic/timeline", _bepic_timeline_save)
-        _safe_add("POST", "/api/bepic/timeline", _bepic_timeline_save)
-        for _route, _handler in (("timeline_export_resolve_plan", _bepic_export_resolve_plan),
-                                 ("timeline_export_resolve", _bepic_export_resolve),
-                                 ("timeline_export_resolve_status", _bepic_export_resolve_status),
-                                 ("timeline_export_resolve_cancel", _bepic_export_resolve_cancel)):
-            _safe_add("POST", "/bepic/" + _route, _handler)
-            _safe_add("POST", "/api/bepic/" + _route, _handler)
-        _safe_add("POST", "/bepic/timeline_save_as", _bepic_timeline_save_as)
-        _safe_add("POST", "/api/bepic/timeline_save_as", _bepic_timeline_save_as)
-        _safe_add("POST", "/bepic/take", _bepic_take)
-        _safe_add("POST", "/api/bepic/take", _bepic_take)
-        _safe_add("POST", "/bepic/cut", _bepic_cut)
-        _safe_add("POST", "/api/bepic/cut", _bepic_cut)
-        _safe_add("POST", "/bepic/timeline_render", _bepic_timeline_render)
-        _safe_add("POST", "/bepic/timeline_solid", _bepic_timeline_solid)
-        _safe_add("GET", "/bepic/fonts", _bepic_fonts)
-        _safe_add("GET", "/api/bepic/fonts", _bepic_fonts)
-        _safe_add("GET", "/bepic/font_file", _bepic_font_file)
-        _safe_add("GET", "/api/bepic/font_file", _bepic_font_file)
-        _safe_add("GET", "/bepic/timeline_peaks", _bepic_timeline_peaks)
-        _safe_add("GET", "/api/bepic/timeline_peaks", _bepic_timeline_peaks)
-        _safe_add("GET", "/bepic/timeline_strip", _bepic_timeline_strip)
-        _safe_add("GET", "/api/bepic/timeline_strip", _bepic_timeline_strip)
-        _safe_add("GET", "/bepic/timeline_beats", _bepic_timeline_beats)
-        _safe_add("GET", "/api/bepic/timeline_beats", _bepic_timeline_beats)
-        _safe_add("GET", "/bepic/timeline_shots", _bepic_timeline_shots)
-        _safe_add("GET", "/bepic/timeline_cuts", _bepic_timeline_cuts)
-        _safe_add("GET", "/api/bepic/timeline_cuts", _bepic_timeline_cuts)
-        _safe_add("GET", "/api/bepic/timeline_shots", _bepic_timeline_shots)
-        _safe_add("POST", "/bepic/timeline_probe", _bepic_timeline_probe)
-        _safe_add("POST", "/api/bepic/timeline_probe", _bepic_timeline_probe)
-        _safe_add("POST", "/bepic/timeline_locate", _bepic_timeline_locate)
-        _safe_add("POST", "/api/bepic/timeline_locate", _bepic_timeline_locate)
-        _safe_add("POST", "/bepic/timeline_upload", _bepic_timeline_upload)
-        _safe_add("POST", "/api/bepic/timeline_upload", _bepic_timeline_upload)
-        _safe_add("POST", "/api/bepic/timeline_solid", _bepic_timeline_solid)
-        _safe_add("POST", "/api/bepic/timeline_render", _bepic_timeline_render)
-        _safe_add("GET", "/bepic/export_options", _bepic_export_options)
-        _safe_add("GET", "/api/bepic/export_options", _bepic_export_options)
-        _safe_add("POST", "/bepic/export_target", _bepic_export_target)
-        _safe_add("POST", "/api/bepic/export_target", _bepic_export_target)
-        _safe_add("POST", "/bepic/export_places", _bepic_export_places)
-        _safe_add("POST", "/bepic/export_view", _bepic_export_view)
-        _safe_add("POST", "/api/bepic/export_view", _bepic_export_view)
-        _safe_add("POST", "/api/bepic/export_places", _bepic_export_places)
-        _safe_add("POST", "/bepic/previz_publish", _bepic_previz_publish)
-        _safe_add("POST", "/api/bepic/previz_publish", _bepic_previz_publish)
-        _safe_add("GET", "/bepic/raw_view", _bepic_raw_view)
-        _safe_add("GET", "/api/bepic/raw_view", _bepic_raw_view)
-        _safe_add("GET", "/bepic/video_annotations", _bepic_video_annotations)
-        _safe_add("GET", "/api/bepic/video_annotations", _bepic_video_annotations)
-        _safe_add("POST", "/bepic/video_annotations", _bepic_video_annotations_save)
-        _safe_add("POST", "/api/bepic/video_annotations", _bepic_video_annotations_save)
-        _safe_add("POST", "/bepic/annotation_mask", _bepic_annotation_mask)
-        _safe_add("POST", "/api/bepic/annotation_mask", _bepic_annotation_mask)
-        _safe_add("POST", "/bepic/probe_paths", _bepic_probe_paths)
-        _safe_add("POST", "/api/bepic/probe_paths", _bepic_probe_paths)
-        _safe_add("POST", "/bepic/clear_cache", _bepic_clear_cache)
-        _safe_add("POST", "/api/bepic/clear_cache", _bepic_clear_cache)
-        _safe_add("GET", "/bepic/browse", _bepic_browse)
-        _safe_add("GET", "/api/bepic/browse", _bepic_browse)
-        _safe_add("POST", "/bepic/browse_frames", _bepic_browse_frames)
-        _safe_add("POST", "/bepic/code", _bepic_code_add)
-        _safe_add("POST", "/api/bepic/code", _bepic_code_add)
-        _safe_add("GET", "/bepic/code", _bepic_code_list)
-        _safe_add("GET", "/api/bepic/code", _bepic_code_list)
-        _safe_add("GET", "/bepic/text", _bepic_text)
-        _safe_add("GET", "/api/bepic/text", _bepic_text)
-        _safe_add("POST", "/bepic/push", _bepic_push)
-        _safe_add("POST", "/bepic/previz_shot", _bepic_previz_shot)
-        _safe_add("POST", "/api/bepic/previz_shot", _bepic_previz_shot)
-        _safe_add("POST", "/bepic/previz_shot_done", _bepic_previz_shot_done)
-        _safe_add("POST", "/api/bepic/previz_shot_done", _bepic_previz_shot_done)
-        _safe_add("POST", "/bepic/atlas_render", _bepic_atlas_render)
-        _safe_add("POST", "/api/bepic/atlas_render", _bepic_atlas_render)
-        _safe_add("GET", "/bepic/atlas_render", _bepic_atlas_render_state)
-        _safe_add("GET", "/api/bepic/atlas_render", _bepic_atlas_render_state)
-        _safe_add("POST", "/bepic/atlas_camera_move", _bepic_atlas_move)
-        _safe_add("POST", "/api/bepic/atlas_camera_move", _bepic_atlas_move)
-        _safe_add("GET", "/bepic/atlas_camera_move", _bepic_atlas_move_state)
-        _safe_add("GET", "/api/bepic/atlas_camera_move", _bepic_atlas_move_state)
-        _safe_add("GET", "/bepic/previz_shot", _bepic_previz_shot_state)
-        _safe_add("GET", "/api/bepic/previz_shot", _bepic_previz_shot_state)
-        _safe_add("POST", "/api/bepic/push", _bepic_push)
-        _safe_add("POST", "/api/bepic/browse_frames", _bepic_browse_frames)
-        _safe_add("GET", "/bepic/view_file", _bepic_view_file)
-        _safe_add("GET", "/bepic/colorspaces", _bepic_colorspaces)
-        _safe_add("GET", "/api/bepic/colorspaces", _bepic_colorspaces)
-        _safe_add("GET", "/bepic/thumb", _bepic_thumb)
-        _safe_add("GET", "/api/bepic/thumb", _bepic_thumb)
-        _safe_add("GET", "/api/bepic/view_file", _bepic_view_file)
-        _safe_add("POST", "/bepic/save_annotation", _bepic_save_annotation)
-        _safe_add("POST", "/api/bepic/save_annotation", _bepic_save_annotation)
-        _safe_add("POST", "/bepic/extract_frame", _bepic_extract_frame)
-        _safe_add("POST", "/api/bepic/extract_frame", _bepic_extract_frame)
-        _safe_add("POST", "/bepic/resolve_media", _bepic_resolve_media)
-        _safe_add("POST", "/api/bepic/resolve_media", _bepic_resolve_media)
-        _safe_add("GET", "/bepic/resolve_media", _bepic_resolve_media)
-        _safe_add("GET", "/api/bepic/resolve_media", _bepic_resolve_media)
-        _safe_add("GET", "/bepic/viewer", _bepic_viewer_page)
-        _safe_add("GET", "/api/bepic/viewer", _bepic_viewer_page)
-        _safe_add("GET", "/imageviewer", _bepic_viewer_page)
-        _safe_add("GET", "/api/imageviewer", _bepic_viewer_page)
-        _safe_add("GET", "/bepic/settings", _bepic_settings)
-        _safe_add("GET", "/api/bepic/settings", _bepic_settings)
-        _safe_add("POST", "/bepic/settings", _bepic_settings_save)
-        _safe_add("POST", "/api/bepic/settings", _bepic_settings_save)
-        _safe_add("GET", "/bepic/roots", _bepic_roots)
-        _safe_add("GET", "/api/bepic/roots", _bepic_roots)
-        _safe_add("POST", "/bepic/roots", _bepic_roots_save)
-        _safe_add("POST", "/api/bepic/roots", _bepic_roots_save)
-        _safe_add("POST", "/bepic/roots/folders", _bepic_roots_folders)
-        _safe_add("POST", "/api/bepic/roots/folders", _bepic_roots_folders)
+        _safe_add("GET", "/imageviewer/lib/three/{name}", _imageviewer_three)
+        _safe_add("GET", "/api/imageviewer/lib/three/{name}", _imageviewer_three)
+        _safe_add("POST", "/imageviewer/model_thumb", _imageviewer_model_thumb)
+        _safe_add("GET", "/imageviewer/scenes", _imageviewer_scene_list)
+        _safe_add("GET", "/api/imageviewer/scenes", _imageviewer_scene_list)
+        _safe_add("GET", "/imageviewer/scene", _imageviewer_scene_load)
+        _safe_add("GET", "/api/imageviewer/scene", _imageviewer_scene_load)
+        _safe_add("POST", "/imageviewer/scene", _imageviewer_scene_save)
+        _safe_add("POST", "/api/imageviewer/scene", _imageviewer_scene_save)
+        _safe_add("POST", "/imageviewer/previz_frame", _imageviewer_previz_frame)
+        _safe_add("POST", "/api/imageviewer/previz_frame", _imageviewer_previz_frame)
+        _safe_add("POST", "/imageviewer/previz_encode", _imageviewer_previz_encode)
+        _safe_add("POST", "/api/imageviewer/previz_encode", _imageviewer_previz_encode)
+        _safe_add("POST", "/imageviewer/usd_export", _imageviewer_usd_export)
+        _safe_add("POST", "/api/imageviewer/usd_export", _imageviewer_usd_export)
+        _safe_add("GET", "/imageviewer/usd_import", _imageviewer_usd_import)
+        _safe_add("GET", "/api/imageviewer/usd_import", _imageviewer_usd_import)
+        _safe_add("GET", "/imageviewer/usd_stages", _imageviewer_usd_stages)
+        _safe_add("GET", "/api/imageviewer/usd_stages", _imageviewer_usd_stages)
+        _safe_add("POST", "/api/imageviewer/model_thumb", _imageviewer_model_thumb)
+        _safe_add("GET", "/imageviewer/timeline", _imageviewer_timeline)
+        _safe_add("GET", "/api/imageviewer/timeline", _imageviewer_timeline)
+        _safe_add("POST", "/imageviewer/timeline", _imageviewer_timeline_save)
+        _safe_add("POST", "/api/imageviewer/timeline", _imageviewer_timeline_save)
+        for _route, _handler in (("timeline_export_resolve_plan", _imageviewer_export_resolve_plan),
+                                 ("timeline_export_resolve", _imageviewer_export_resolve),
+                                 ("timeline_export_resolve_status", _imageviewer_export_resolve_status),
+                                 ("timeline_export_resolve_cancel", _imageviewer_export_resolve_cancel)):
+            _safe_add("POST", "/imageviewer/" + _route, _handler)
+            _safe_add("POST", "/api/imageviewer/" + _route, _handler)
+        _safe_add("POST", "/imageviewer/timeline_save_as", _imageviewer_timeline_save_as)
+        _safe_add("POST", "/api/imageviewer/timeline_save_as", _imageviewer_timeline_save_as)
+        _safe_add("POST", "/imageviewer/take", _imageviewer_take)
+        _safe_add("POST", "/api/imageviewer/take", _imageviewer_take)
+        _safe_add("POST", "/imageviewer/cut", _imageviewer_cut)
+        _safe_add("POST", "/api/imageviewer/cut", _imageviewer_cut)
+        _safe_add("POST", "/imageviewer/timeline_render", _imageviewer_timeline_render)
+        _safe_add("POST", "/imageviewer/timeline_solid", _imageviewer_timeline_solid)
+        _safe_add("GET", "/imageviewer/fonts", _imageviewer_fonts)
+        _safe_add("GET", "/api/imageviewer/fonts", _imageviewer_fonts)
+        _safe_add("GET", "/imageviewer/font_file", _imageviewer_font_file)
+        _safe_add("GET", "/api/imageviewer/font_file", _imageviewer_font_file)
+        _safe_add("GET", "/imageviewer/timeline_peaks", _imageviewer_timeline_peaks)
+        _safe_add("GET", "/api/imageviewer/timeline_peaks", _imageviewer_timeline_peaks)
+        _safe_add("GET", "/imageviewer/timeline_strip", _imageviewer_timeline_strip)
+        _safe_add("GET", "/api/imageviewer/timeline_strip", _imageviewer_timeline_strip)
+        _safe_add("GET", "/imageviewer/timeline_beats", _imageviewer_timeline_beats)
+        _safe_add("GET", "/api/imageviewer/timeline_beats", _imageviewer_timeline_beats)
+        _safe_add("GET", "/imageviewer/timeline_shots", _imageviewer_timeline_shots)
+        _safe_add("GET", "/imageviewer/timeline_cuts", _imageviewer_timeline_cuts)
+        _safe_add("GET", "/api/imageviewer/timeline_cuts", _imageviewer_timeline_cuts)
+        _safe_add("GET", "/api/imageviewer/timeline_shots", _imageviewer_timeline_shots)
+        _safe_add("POST", "/imageviewer/timeline_probe", _imageviewer_timeline_probe)
+        _safe_add("POST", "/api/imageviewer/timeline_probe", _imageviewer_timeline_probe)
+        _safe_add("POST", "/imageviewer/timeline_locate", _imageviewer_timeline_locate)
+        _safe_add("POST", "/api/imageviewer/timeline_locate", _imageviewer_timeline_locate)
+        _safe_add("POST", "/imageviewer/timeline_upload", _imageviewer_timeline_upload)
+        _safe_add("POST", "/api/imageviewer/timeline_upload", _imageviewer_timeline_upload)
+        _safe_add("POST", "/api/imageviewer/timeline_solid", _imageviewer_timeline_solid)
+        _safe_add("POST", "/api/imageviewer/timeline_render", _imageviewer_timeline_render)
+        _safe_add("GET", "/imageviewer/export_options", _imageviewer_export_options)
+        _safe_add("GET", "/api/imageviewer/export_options", _imageviewer_export_options)
+        _safe_add("POST", "/imageviewer/export_target", _imageviewer_export_target)
+        _safe_add("POST", "/api/imageviewer/export_target", _imageviewer_export_target)
+        _safe_add("POST", "/imageviewer/export_places", _imageviewer_export_places)
+        _safe_add("POST", "/imageviewer/export_view", _imageviewer_export_view)
+        _safe_add("POST", "/api/imageviewer/export_view", _imageviewer_export_view)
+        _safe_add("POST", "/api/imageviewer/export_places", _imageviewer_export_places)
+        _safe_add("POST", "/imageviewer/previz_publish", _imageviewer_previz_publish)
+        _safe_add("POST", "/api/imageviewer/previz_publish", _imageviewer_previz_publish)
+        _safe_add("GET", "/imageviewer/raw_view", _imageviewer_raw_view)
+        _safe_add("GET", "/api/imageviewer/raw_view", _imageviewer_raw_view)
+        _safe_add("GET", "/imageviewer/video_annotations", _imageviewer_video_annotations)
+        _safe_add("GET", "/api/imageviewer/video_annotations", _imageviewer_video_annotations)
+        _safe_add("POST", "/imageviewer/video_annotations", _imageviewer_video_annotations_save)
+        _safe_add("POST", "/api/imageviewer/video_annotations", _imageviewer_video_annotations_save)
+        _safe_add("POST", "/imageviewer/annotation_mask", _imageviewer_annotation_mask)
+        _safe_add("POST", "/api/imageviewer/annotation_mask", _imageviewer_annotation_mask)
+        _safe_add("POST", "/imageviewer/probe_paths", _imageviewer_probe_paths)
+        _safe_add("POST", "/api/imageviewer/probe_paths", _imageviewer_probe_paths)
+        _safe_add("POST", "/imageviewer/clear_cache", _imageviewer_clear_cache)
+        _safe_add("POST", "/api/imageviewer/clear_cache", _imageviewer_clear_cache)
+        _safe_add("GET", "/imageviewer/browse", _imageviewer_browse)
+        _safe_add("GET", "/api/imageviewer/browse", _imageviewer_browse)
+        _safe_add("POST", "/imageviewer/browse_frames", _imageviewer_browse_frames)
+        _safe_add("POST", "/imageviewer/code", _imageviewer_code_add)
+        _safe_add("POST", "/api/imageviewer/code", _imageviewer_code_add)
+        _safe_add("GET", "/imageviewer/code", _imageviewer_code_list)
+        _safe_add("GET", "/api/imageviewer/code", _imageviewer_code_list)
+        _safe_add("GET", "/imageviewer/text", _imageviewer_text)
+        _safe_add("GET", "/api/imageviewer/text", _imageviewer_text)
+        _safe_add("POST", "/imageviewer/push", _imageviewer_push)
+        _safe_add("POST", "/imageviewer/previz_shot", _imageviewer_previz_shot)
+        _safe_add("POST", "/api/imageviewer/previz_shot", _imageviewer_previz_shot)
+        _safe_add("POST", "/imageviewer/previz_shot_done", _imageviewer_previz_shot_done)
+        _safe_add("POST", "/api/imageviewer/previz_shot_done", _imageviewer_previz_shot_done)
+        _safe_add("POST", "/imageviewer/atlas_render", _imageviewer_atlas_render)
+        _safe_add("POST", "/api/imageviewer/atlas_render", _imageviewer_atlas_render)
+        _safe_add("GET", "/imageviewer/atlas_render", _imageviewer_atlas_render_state)
+        _safe_add("GET", "/api/imageviewer/atlas_render", _imageviewer_atlas_render_state)
+        _safe_add("POST", "/imageviewer/atlas_camera_move", _imageviewer_atlas_move)
+        _safe_add("POST", "/api/imageviewer/atlas_camera_move", _imageviewer_atlas_move)
+        _safe_add("GET", "/imageviewer/atlas_camera_move", _imageviewer_atlas_move_state)
+        _safe_add("GET", "/api/imageviewer/atlas_camera_move", _imageviewer_atlas_move_state)
+        _safe_add("GET", "/imageviewer/previz_shot", _imageviewer_previz_shot_state)
+        _safe_add("GET", "/api/imageviewer/previz_shot", _imageviewer_previz_shot_state)
+        _safe_add("POST", "/api/imageviewer/push", _imageviewer_push)
+        _safe_add("POST", "/api/imageviewer/browse_frames", _imageviewer_browse_frames)
+        _safe_add("GET", "/imageviewer/view_file", _imageviewer_view_file)
+        _safe_add("GET", "/imageviewer/colorspaces", _imageviewer_colorspaces)
+        _safe_add("GET", "/api/imageviewer/colorspaces", _imageviewer_colorspaces)
+        _safe_add("GET", "/imageviewer/thumb", _imageviewer_thumb)
+        _safe_add("GET", "/api/imageviewer/thumb", _imageviewer_thumb)
+        _safe_add("GET", "/api/imageviewer/view_file", _imageviewer_view_file)
+        _safe_add("POST", "/imageviewer/save_annotation", _imageviewer_save_annotation)
+        _safe_add("POST", "/api/imageviewer/save_annotation", _imageviewer_save_annotation)
+        _safe_add("POST", "/imageviewer/extract_frame", _imageviewer_extract_frame)
+        _safe_add("POST", "/api/imageviewer/extract_frame", _imageviewer_extract_frame)
+        _safe_add("POST", "/imageviewer/resolve_media", _imageviewer_resolve_media)
+        _safe_add("POST", "/api/imageviewer/resolve_media", _imageviewer_resolve_media)
+        _safe_add("GET", "/imageviewer/resolve_media", _imageviewer_resolve_media)
+        _safe_add("GET", "/api/imageviewer/resolve_media", _imageviewer_resolve_media)
+        _safe_add("GET", "/imageviewer/viewer", _image_viewer_page)
+        _safe_add("GET", "/api/imageviewer/viewer", _image_viewer_page)
+        _safe_add("GET", "/imageviewer", _image_viewer_page)
+        _safe_add("GET", "/api/imageviewer", _image_viewer_page)
+        _safe_add("GET", "/imageviewer/settings", _imageviewer_settings)
+        _safe_add("GET", "/api/imageviewer/settings", _imageviewer_settings)
+        _safe_add("POST", "/imageviewer/settings", _imageviewer_settings_save)
+        _safe_add("POST", "/api/imageviewer/settings", _imageviewer_settings_save)
+        _safe_add("GET", "/imageviewer/roots", _imageviewer_roots)
+        _safe_add("GET", "/api/imageviewer/roots", _imageviewer_roots)
+        _safe_add("POST", "/imageviewer/roots", _imageviewer_roots_save)
+        _safe_add("POST", "/api/imageviewer/roots", _imageviewer_roots_save)
+        _safe_add("POST", "/imageviewer/roots/folders", _imageviewer_roots_folders)
+        _safe_add("POST", "/api/imageviewer/roots/folders", _imageviewer_roots_folders)
         # Paint: a picture in layers (paint_routes.py; paint_io / paint_ops / paint_math).
         try:
             from . import paint_routes
@@ -3167,26 +3175,26 @@ try:
                                   send=lambda ev, data: PromptServer.instance.send_sync(ev, data),
                                   resolve=lambda p: _resolve_raw_path(str(p))[0] if p else None)
         except Exception as e:  # noqa: BLE001 - the rest of the viewer works without it
-            print(f"[bEpicViewer] Paint routes not registered: {e}")
-        for _m, _h in (("GET", _bepic_mgscene), ("POST", _bepic_mgscene_save)):
-            _safe_add(_m, "/bepic/mgscene", _h)
-            _safe_add(_m, "/api/bepic/mgscene", _h)
+            print(f"[ImageViewer] Paint routes not registered: {e}")
+        for _m, _h in (("GET", _imageviewer_mgscene), ("POST", _imageviewer_mgscene_save)):
+            _safe_add(_m, "/imageviewer/mgscene", _h)
+            _safe_add(_m, "/api/imageviewer/mgscene", _h)
         for _m in ("GET", "POST"):
-            _safe_add(_m, "/bepic/mg_render", _bepic_mg_render)
-            _safe_add(_m, "/api/bepic/mg_render", _bepic_mg_render)
-        for _m, _p, _h in (("GET", "datasets", _bepic_lora_datasets), ("GET", "dataset", _bepic_lora_dataset),
-                           ("GET", "file", _bepic_lora_file), ("POST", "dataset_save", _bepic_lora_dataset_save),
-                           ("POST", "review", _bepic_lora_review), ("GET", "runs", _bepic_lora_runs),
-                           ("GET", "run", _bepic_lora_run), ("POST", "control", _bepic_lora_control)):
-            _safe_add(_m, "/bepic/lora/" + _p, _h)
-            _safe_add(_m, "/api/bepic/lora/" + _p, _h)
-        _safe_add("GET", "/bepic/health", _bepic_health)
-        _safe_add("GET", "/api/bepic/health", _bepic_health)
+            _safe_add(_m, "/imageviewer/mg_render", _imageviewer_mg_render)
+            _safe_add(_m, "/api/imageviewer/mg_render", _imageviewer_mg_render)
+        for _m, _p, _h in (("GET", "datasets", _imageviewer_lora_datasets), ("GET", "dataset", _imageviewer_lora_dataset),
+                           ("GET", "file", _imageviewer_lora_file), ("POST", "dataset_save", _imageviewer_lora_dataset_save),
+                           ("POST", "review", _imageviewer_lora_review), ("GET", "runs", _imageviewer_lora_runs),
+                           ("GET", "run", _imageviewer_lora_run), ("POST", "control", _imageviewer_lora_control)):
+            _safe_add(_m, "/imageviewer/lora/" + _p, _h)
+            _safe_add(_m, "/api/imageviewer/lora/" + _p, _h)
+        _safe_add("GET", "/imageviewer/health", _imageviewer_health)
+        _safe_add("GET", "/api/imageviewer/health", _imageviewer_health)
 
     try:
         register_routes()
     except Exception as e:
-        print(f"[bEpicViewer] could not register viewer routes: {e}")
+        print(f"[ImageViewer] could not register viewer routes: {e}")
         traceback.print_exc()
 except ImportError:
     # aiohttp not available; skip route registration

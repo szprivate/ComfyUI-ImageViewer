@@ -1,5 +1,5 @@
 """
-roto_raster.py — rasterize bEpic Viewer roto data into a MASK tensor.
+roto_raster.py — rasterize ComfyUI Image Viewer roto data into a MASK tensor.
 
 The viewer's Roto tool serializes shapes as coordinates normalized against the
 image — (0,0) its top-left, (1,1) its bottom-right — so the matte is resolution
@@ -51,7 +51,7 @@ except Exception:
 # the Nuke ChannelMerge node in bepic_templates (bEpicChannelMerge), with the
 # shape as A and what the shapes before it made as B, clamped to 0..1 after
 # each one, as a chain of those nodes would be. Must match the viewer's
-# ROTO_MODES (bEpicViewer_roto.js).
+# ROTO_MODES (imageViewer_roto.js).
 MODES = ("union", "plus", "minus", "intersection", "xor")
 
 
@@ -114,7 +114,7 @@ def _bezier(p0, c0, c1, p1, steps):
     return out
 
 
-# ── cubic-bezier keyframe easing (mirrors bezierEase in bEpicViewer_roto.js) ──
+# ── cubic-bezier keyframe easing (mirrors bezierEase in imageViewer_roto.js) ──
 
 def _bezier_axis(t, a1, a2):          # cubic coord with P0=0, P3=1
     mt = 1.0 - t
@@ -541,7 +541,7 @@ def _nonzero_box(a, pad, W, H):
 
 def _workers():
     try:
-        n = int(os.environ.get("BEPIC_ROTO_THREADS", "0"))
+        n = int(os.environ.get("IMAGE_VIEWER_ROTO_THREADS", "0"))
     except ValueError:
         n = 0
     return n if n > 0 else max(1, min(16, (os.cpu_count() or 4)))
@@ -559,7 +559,7 @@ def rasterize(roto_data, W, H, frame_count=1):
     frame's reuses its mask (before the first key, after the last, on Hold);
     and the frames left are rendered on a thread pool — the fill, the distance
     transforms and the blurs run in C with the GIL released. Set
-    BEPIC_ROTO_THREADS to cap the pool.
+    IMAGE_VIEWER_ROTO_THREADS to cap the pool.
     """
     W = int(max(1, W))
     H = int(max(1, H))

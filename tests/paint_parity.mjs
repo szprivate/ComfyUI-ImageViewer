@@ -6,7 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 const [, , inFile, outFile] = process.argv;
 const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/(?=[A-Za-z]:)/, ""));
-const D = await import(pathToFileURL(path.join(here, "..", "js", "bEpicViewer_paintData.js")).href);
+const D = await import(pathToFileURL(path.join(here, "..", "js", "imageViewer_paintData.js")).href);
 const job = JSON.parse(fs.readFileSync(inFile, "utf8"));
 const dec = (b) => new Uint8Array(Buffer.from(b, "base64"));
 const enc = (a) => Buffer.from(a.buffer, a.byteOffset, a.byteLength).toString("base64");

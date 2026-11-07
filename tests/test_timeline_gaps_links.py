@@ -23,7 +23,7 @@ FPS = 24
 
 
 def _modules():
-    name = "bepic_gaps_under_test"
+    name = "imageviewer_gaps_under_test"
     if name not in sys.modules:
         pkg = types.ModuleType(name)
         pkg.__path__ = [ROOT]
@@ -92,13 +92,13 @@ class GapsAndLinksInTheFile(unittest.TestCase):
         self.assertEqual([v["kind"] for v in flat["video"]], ["clip", "gap", "clip"])
         self.assertEqual(flat["duration"], 6.5)
 
-    def test_a_link_group_and_mute_are_in_metadata_bepic(self):
+    def test_a_link_group_and_mute_are_in_metadata_imageviewer(self):
         doc = self.tio.rebuild(self.tio.new_doc("t", FPS), self.edit(), may_use=lambda p: True)
         v = doc["tracks"]["children"][0]["children"][0]
-        self.assertEqual(v["metadata"]["bepic"], {**v["metadata"]["bepic"], "link": "L1", "unlinked": True, "mute": True})
+        self.assertEqual(v["metadata"]["imageviewer"], {**v["metadata"]["imageviewer"], "link": "L1", "unlinked": True, "mute": True})
         sound = [t for t in doc["tracks"]["children"] if t["name"] == "A2"][0]["children"]
         self.assertEqual([c["OTIO_SCHEMA"] for c in sound], ["Gap.1", "Clip.1"])
-        self.assertEqual(sound[1]["metadata"]["bepic"]["link"], "L1")
+        self.assertEqual(sound[1]["metadata"]["imageviewer"]["link"], "L1")
         self.assertEqual(sound[1]["media_reference"]["target_url"], v["media_reference"]["target_url"])   # one file
         back = self.tio.editable(doc)
         self.assertEqual({k: back["clips"][0].get(k) for k in ("link", "unlinked", "mute")},
@@ -108,12 +108,12 @@ class GapsAndLinksInTheFile(unittest.TestCase):
         # Linked again: "unlinked" goes; muted no more: "mute" goes.
         edit = {"clips": [{"ref": 0, "in": 0, "length": 2, "transition": 0, "link": "L1", "unlinked": False, "mute": False},
                           {"ref": 2, "in": 1, "length": 3, "transition": 0, "gap": 0}], "texts": []}
-        note = self.tio.rebuild(doc, edit, may_use=lambda p: True)["tracks"]["children"][0]["children"][0]["metadata"]["bepic"]
+        note = self.tio.rebuild(doc, edit, may_use=lambda p: True)["tracks"]["children"][0]["children"][0]["metadata"]["imageviewer"]
         self.assertEqual(note.get("link"), "L1")
         self.assertNotIn("unlinked", note)
         self.assertNotIn("mute", note)
         # A link name that is not one is left out.
-        bad = self.tio.clip_link({"metadata": {"bepic": {"link": "<script>", "mute": "yes"}}})
+        bad = self.tio.clip_link({"metadata": {"imageviewer": {"link": "<script>", "mute": "yes"}}})
         self.assertEqual(bad, {})
 
     def test_a_fade_to_or_from_black_of_another_program_is_read_as_a_cut(self):

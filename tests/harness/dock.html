@@ -21,7 +21,7 @@ window.agentYPanelHost = {
   toSidebar() { this._where = "sidebar"; },
   where() { return this._where; },
 };
-let v; try { v = await import("/extensions/viewer/bEpicViewer.js"); } catch (e) { document.title = "IMPORT " + e.message; throw e; }
+let v; try { v = await import("/extensions/viewer/imageViewer.js"); } catch (e) { document.title = "IMPORT " + e.message; throw e; }
 const panel = v.mountStandaloneViewer(document.body);
 window.__panel = panel;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

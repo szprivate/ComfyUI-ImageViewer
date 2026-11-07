@@ -12,7 +12,7 @@
     tag: async () => ({ ok: true }), approve: async () => ({ ok: true }),
     feedback: async (a) => { window.__sent.push(a); return { ok: true, message: "Sent to agentY." }; },
   };
-  const m = await import("/ext/viewer/js/bEpicViewer.js");
+  const m = await import("/ext/viewer/js/imageViewer.js");
   const { app } = await import("/ext/scripts/app.js");
   for (const e of app.__extensions) { try { if (e.setup) await e.setup(); } catch (err) { console.warn("setup", e.name, err); } }
   window.__panel = m.mountStandaloneViewer();

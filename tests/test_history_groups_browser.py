@@ -272,9 +272,9 @@ class HistoryGroupsTests(unittest.TestCase):
         out = pg.evaluate("""async () => {
           const P = window.__panel;
           const { app } = await import('/scripts/app.js');
-          const { registerSendToViewerMenu } = await import('/extensions/viewer/bEpicViewer_sendFromNode.js');
+          const { registerSendToViewerMenu } = await import('/extensions/viewer/imageViewer_sendFromNode.js');
           const old = window.__fetchApi;
-          window.__fetchApi = async (p, o) => p === '/bepic/resolve_media'
+          window.__fetchApi = async (p, o) => p === '/imageviewer/resolve_media'
             ? { ok: true, status: 200, json: async () => { const v = JSON.parse(o.body).value;
                 return { tabs: [{ label: v, frames: [{ filename: v, type: 'input' }] }] }; } }
             : old(p, o);

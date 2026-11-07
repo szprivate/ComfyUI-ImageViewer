@@ -1,4 +1,4 @@
-"""Provenance for what bEpicSendToViewer saves: the graph that made a file, kept beside it.
+"""Provenance for what ImageViewerSend saves: the graph that made a file, kept beside it.
 
 agentY's "recreate these shots with changes" re-runs the graph that made a shot, so a
 file has to say how it was made. A file written by a run of the viewer's Send node
@@ -31,7 +31,7 @@ import tempfile
 import time
 
 VERSION = 1
-SOURCE = "bEpicSendToViewer"
+SOURCE = "ImageViewerSend"
 SIDECAR_SUFFIX = ".agenty.json"
 GRAPH_SUFFIX = ".prov.json.gz"
 META_DIR = "agent_metadata"
@@ -255,13 +255,13 @@ def annotate_async(paths, unique_id, prompt, extra_pnginfo, prompt_id=""):
         try:
             annotate(*args)
         except Exception as e:  # noqa: BLE001 - provenance is never worth failing a run
-            print(f"[bEpicSendToViewer] provenance not written: {e}")
+            print(f"[ImageViewerSend] provenance not written: {e}")
         finally:
             with _PENDING_LOCK:
                 if t in _PENDING:
                     _PENDING.remove(t)
 
-    t = threading.Thread(target=run, name="bEpic-provenance", daemon=True)
+    t = threading.Thread(target=run, name="ImageViewer-provenance", daemon=True)
     with _PENDING_LOCK:
         _PENDING.append(t)
     t.start()

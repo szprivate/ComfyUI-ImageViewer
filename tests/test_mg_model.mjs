@@ -1,8 +1,8 @@
 // node --test tests/test_mg_model.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import * as Mo from "../js/bEpicViewer_mgModel.js";
-import { valueAt, validateScene } from "../js/bEpicViewer_mgScene.js";
+import * as Mo from "../js/imageViewer_mgModel.js";
+import { valueAt, validateScene } from "../js/imageViewer_mgScene.js";
 
 const scene = () => ({ mgscene: 1, comp: { width: 1920, height: 1080, fps: 30, duration: 90, background: "#000" }, assets: {}, layers: [] });
 

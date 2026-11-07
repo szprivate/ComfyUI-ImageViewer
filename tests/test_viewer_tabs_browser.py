@@ -3,7 +3,7 @@
 Needs Playwright with an installed Edge or Chrome (``channel``), and node for the stub server; skipped without them.
 Run: python -m unittest tests.test_viewer_tabs_browser
 It serves tests/harness/tabs.html - the REAL viewer js against stubbed ComfyUI scripts - on a free port, so it never
-touches a running ComfyUI. The /bepic/code, /bepic/text, /bepic/browse and /bepic/lora/* routes are stubbed in the page.
+touches a running ComfyUI. The /imageviewer/code, /imageviewer/text, /imageviewer/browse and /imageviewer/lora/* routes are stubbed in the page.
 """
 import os
 import shutil
@@ -75,7 +75,7 @@ class ViewTabTests(unittest.TestCase):
         pg.goto(f"http://127.0.0.1:{self.port}/tabs.html")
         pg.wait_for_function("window.__ready===true", timeout=20000)
         # the stub extension's setup() makes a second, floating viewer: it is the one the agent's messages reach
-        pg.evaluate("()=>{const all=document.querySelectorAll('bepic-viewer-panel'); if(all[1]) all[1].style.display='none'}")
+        pg.evaluate("()=>{const all=document.querySelectorAll('comfyui-image-viewer-panel'); if(all[1]) all[1].style.display='none'}")
         return pg
 
     def agent_page(self):
@@ -88,7 +88,7 @@ class ViewTabTests(unittest.TestCase):
         pg.on("dialog", lambda d: (self.dialogs.append(d.message), d.accept()))
         pg.goto(f"http://127.0.0.1:{self.port}/tabs.html")
         pg.wait_for_function("window.__ready===true", timeout=20000)
-        pg.evaluate("()=>{document.querySelectorAll('bepic-viewer-panel')[0].style.display='none'; const g=document.querySelectorAll('bepic-viewer-panel')[1]; g.style.display=''; window.__g=g; try{window.bEpicViewerApi.show()}catch(e){}}")
+        pg.evaluate("()=>{document.querySelectorAll('comfyui-image-viewer-panel')[0].style.display='none'; const g=document.querySelectorAll('comfyui-image-viewer-panel')[1]; g.style.display=''; window.__g=g; try{window.imageViewerApi.show()}catch(e){}}")
         return pg
 
     @staticmethod
@@ -167,7 +167,7 @@ class ViewTabTests(unittest.TestCase):
     def test_the_bar_entry_opens_the_feed_and_new_code_follows(self):
         pg = self.agent_page()
         g = "__g"
-        pg.evaluate("()=>window.__api.dispatch('bepic.code.update', {id:'n1', title:'first', language:'python', code:'print(1)\\n', source:'run_script', ts:Date.now()/1000})")
+        pg.evaluate("()=>window.__api.dispatch('imageviewer.code.update', {id:'n1', title:'first', language:'python', code:'print(1)\\n', source:'run_script', ts:Date.now()/1000})")
         pg.wait_for_timeout(200)
         # nothing is open: the bar button says there is something new
         self.assertTrue(pg.evaluate("()=>__g.shadowRoot.getElementById('bar-group-comfy').classList.contains('has-code')"))
@@ -180,12 +180,12 @@ class ViewTabTests(unittest.TestCase):
         info = self.covers(pg, g)
         self.assertTrue(info["shown"] and info["covers"], info)
         # code that arrives while the tab is in front is the one shown
-        pg.evaluate("()=>window.__api.dispatch('bepic.code.update', {id:'n2', title:'second', language:'python', code:'print(2)\\n', source:'run_script', ts:Date.now()/1000+5})")
+        pg.evaluate("()=>window.__api.dispatch('imageviewer.code.update', {id:'n2', title:'second', language:'python', code:'print(2)\\n', source:'run_script', ts:Date.now()/1000+5})")
         pg.wait_for_function("()=>__g.shadowRoot.querySelector('.view-tab-code .ac-title')?.textContent==='second'")
         # ...and while another tab is in front it only lights the dot
         pg.evaluate("""()=>{const P=__g;P.allTabs.pic=[{path:'D:/a.png',name:'a.png',external:true}];P.tabLabels.pic='pic';
             P.tabOrder.push('pic');P._rebuildTabBar(null);P.switchTab('pic')}""")
-        pg.evaluate("()=>window.__api.dispatch('bepic.code.update', {id:'n3', title:'third', language:'python', code:'print(3)\\n', source:'run_script', ts:Date.now()/1000+9})")
+        pg.evaluate("()=>window.__api.dispatch('imageviewer.code.update', {id:'n3', title:'third', language:'python', code:'print(3)\\n', source:'run_script', ts:Date.now()/1000+9})")
         pg.wait_for_timeout(200)
         self.assertTrue(pg.evaluate("()=>__g.shadowRoot.getElementById('bar-group-comfy').classList.contains('has-code')"))
         self.assertEqual(self.errors, [])
@@ -193,7 +193,7 @@ class ViewTabTests(unittest.TestCase):
     # ---- Dataset ---------------------------------------------------------------------------------------------------
 
     def open_dataset(self, pg, name="demo_cat"):
-        pg.evaluate("(n)=>window.__api.dispatch('bepic.lora.open', {path:'D:/out/agent/lora_datasets/'+n+'/manifest.json'})", name)
+        pg.evaluate("(n)=>window.__api.dispatch('imageviewer.lora.open', {path:'D:/out/agent/lora_datasets/'+n+'/manifest.json'})", name)
         pg.wait_for_function(f"()=>__g.activeTab==='dataset:{name}'", timeout=10000)
         pg.wait_for_function("()=>__g.shadowRoot.querySelectorAll('.view-tab-dataset[style*=block] .lr-card').length===4", timeout=10000)
 
@@ -207,7 +207,7 @@ class ViewTabTests(unittest.TestCase):
         self.assertEqual(docks["stray"], 0)
         self.assertIn("demo_cat", pg.evaluate("()=>__g.tabLabels[__g.activeTab]"))
         # pushed again: the same tab is focused, not a second one
-        pg.evaluate("()=>window.__api.dispatch('bepic.lora.open', {path:'D:/out/agent/lora_datasets/demo_cat/manifest.json'})")
+        pg.evaluate("()=>window.__api.dispatch('imageviewer.lora.open', {path:'D:/out/agent/lora_datasets/demo_cat/manifest.json'})")
         pg.wait_for_timeout(300)
         self.assertEqual(pg.evaluate("()=>__g.tabOrder"), ["dataset:demo_cat"])
         # a second dataset is a second tab
@@ -231,13 +231,13 @@ class ViewTabTests(unittest.TestCase):
         pg.wait_for_timeout(200)
         self.assertTrue(pg.evaluate("()=>__g._vtState().tabs['dataset:demo_cat'].editor.dirty"))
         pg.get_by_role("button", name="Save", exact=True).click()
-        pg.wait_for_function("()=>window.__posts.some(p=>p.path==='/bepic/lora/dataset_save')")
-        saved = pg.evaluate("()=>window.__posts.find(p=>p.path==='/bepic/lora/dataset_save').body")
+        pg.wait_for_function("()=>window.__posts.some(p=>p.path==='/imageviewer/lora/dataset_save')")
+        saved = pg.evaluate("()=>window.__posts.find(p=>p.path==='/imageviewer/lora/dataset_save').body")
         self.assertEqual(saved["manifest"]["items"][0]["caption"], "ohwx a very good cat")
         self.assertFalse(pg.evaluate("()=>__g._vtState().tabs['dataset:demo_cat'].editor.dirty"))
         # approve & train: the stub starts a NEW run; the Training page follows it and names it
         pg.get_by_role("button", name="Approve & train").click()
-        pg.wait_for_function("()=>window.__posts.some(p=>p.path==='/bepic/lora/review' && p.body.action==='approve')")
+        pg.wait_for_function("()=>window.__posts.some(p=>p.path==='/imageviewer/lora/review' && p.body.action==='approve')")
         pg.wait_for_function("()=>__g._vtState().tabs['dataset:demo_cat'].editor.state.run==='demo_cat_v2'", timeout=10000)
         self.assertEqual(pg.evaluate("()=>__g._vtState().tabs['dataset:demo_cat'].editor.state.tab"), "training")
         label = pg.evaluate("()=>[...__g.shadowRoot.querySelectorAll('.view-tab-dataset option')].map(o=>o.textContent).find(t=>t.includes('demo_cat_v2'))")

@@ -16,6 +16,11 @@ import math
 import os
 import re
 
+try:                                    # the viewer's old "bEpic" names (legacy_names.py)
+    from .legacy_names import renamed_otio as _renamed_otio
+except ImportError:
+    from legacy_names import renamed_otio as _renamed_otio
+
 _MAX_BYTES = 8 * 1024 * 1024
 _MAX_ITEMS = 2000
 
@@ -156,7 +161,7 @@ def read(path):
         raise ValueError("the timeline file is too large")
     with open(path, "r", encoding="utf-8") as fh:
         try:
-            doc = json.load(fh)
+            doc = _renamed_otio(json.load(fh))
         except ValueError:
             raise ValueError("the timeline file is not JSON") from None
     return flatten(doc)
@@ -195,18 +200,18 @@ def _note(obj):
 _COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
-def _bepic(obj):
+def _imageviewer(obj):
     meta = obj.get("metadata") if isinstance(obj, dict) else None
-    note = meta.get("bepic") if isinstance(meta, dict) else None
+    note = meta.get("imageviewer") if isinstance(meta, dict) else None
     return note if isinstance(note, dict) else {}
 
 
 def _is_off(track):
-    """A track that is switched off: ours (``metadata.bepic.off``) or OTIO's ``enabled``."""
-    return bool(track) and (bool(_bepic(track).get("off")) or track.get("enabled") is False)
+    """A track that is switched off: ours (``metadata.imageviewer.off``) or OTIO's ``enabled``."""
+    return bool(track) and (bool(_imageviewer(track).get("off")) or track.get("enabled") is False)
 
 
-# What the Inspector's Video tab sets on a clip (bEpicViewer_editTimelineData.js
+# What the Inspector's Video tab sets on a clip (imageViewer_editTimelineData.js
 # has the same table, FX): each key with its neutral value and the range it is
 # held to. Zoom is a factor; position and anchor point are fractions of the
 # frame (x of its width to the right, y of its height UP); rotation is degrees,
@@ -245,7 +250,7 @@ def clean_fx(given):
     return out
 
 
-# Keyframes (bEpicViewer_editTimelineData.js, cleanKeys / keyValue - kept in step):
+# Keyframes (imageViewer_editTimelineData.js, cleanKeys / keyValue - kept in step):
 # ``fx["keys"] = {param: [{"t", "v", "i"}]}``, ``t`` seconds of CLIP time (from the
 # clip's first frame on the timeline), ``i`` how it goes on to the next key:
 # absent linear, "in", "out", "inout", "hold". "vol" is the clip's volume; "tsize", "ttrack", "tline",
@@ -292,9 +297,9 @@ def _look(item):
         volume = float(_note(item).get("volume", 1.0))
     except (TypeError, ValueError):
         volume = 1.0
-    out = {"color": str(_bepic(item).get("color") or ""), "volume": round(max(0.0, min(4.0, volume)), 4),
-           "fx": clean_fx(_bepic(item).get("fx")), **clip_time(item)}
-    takes = clean_takes(_bepic(item).get("takes"))
+    out = {"color": str(_imageviewer(item).get("color") or ""), "volume": round(max(0.0, min(4.0, volume)), 4),
+           "fx": clean_fx(_imageviewer(item).get("fx")), **clip_time(item)}
+    takes = clean_takes(_imageviewer(item).get("takes"))
     if takes:
         out["takes"] = takes
     out.update(clip_link(item))
@@ -307,7 +312,7 @@ def _look(item):
 # with its own sound muted (``mute``), and a clip of the same file on a sound track
 # carries the sound - at its own place, so it can start earlier or end later (a J
 # or L cut). The two share a link group (``link``); ``unlinked`` says they are
-# moved and trimmed apart, else they go together. All three in ``metadata.bepic``;
+# moved and trimmed apart, else they go together. All three in ``metadata.imageviewer``;
 # the media reference of each is the same file, so any other program reads two
 # plain clips.
 _LINK = re.compile(r"^[A-Za-z0-9_.:-]{1,40}$")
@@ -315,7 +320,7 @@ _LINK = re.compile(r"^[A-Za-z0-9_.:-]{1,40}$")
 
 def clip_link(item):
     """``{"link", "unlinked", "mute"}`` of a clip - only the keys it has."""
-    note = _bepic(item)
+    note = _imageviewer(item)
     out = {}
     link = note.get("link")
     if isinstance(link, str) and _LINK.match(link):
@@ -337,7 +342,7 @@ def _set_link(item, c):
     if not any(k in c for k in ("link", "unlinked", "mute", "disabled")):
         return
     meta = item.setdefault("metadata", {})
-    note = meta.setdefault("bepic", {}) if isinstance(meta, dict) else None
+    note = meta.setdefault("imageviewer", {}) if isinstance(meta, dict) else None
     if not isinstance(note, dict):
         return
     if "link" in c:
@@ -363,14 +368,14 @@ def _set_link(item, c):
             note.pop("disabled", None)
 
 
-# Audio transitions and fades (bEpicViewer_editTimelineData.js, "audio transitions and fades" -
+# Audio transitions and fades (imageViewer_editTimelineData.js, "audio transitions and fades" -
 # the same arithmetic, kept in step; tests/test_edit_audio_xfade.py holds the two to each other).
 # A crossfade lies on the clip coming in, ``xfade = {"len", "curve", "align"}``: "centre" half
 # before the cut and half after, "start" all after (the clip going out plays on past its end),
 # "end" all before (the clip coming in begins early) - the sound beyond the cut is the clips'
 # handles, so nothing moves. ``curve`` "0" (straight), "+3" (equal power, the default) or "-3"
 # (x^1.5). ``fadeIn`` / ``fadeOut``: seconds of the clip, straight lines of gain; a crossfade on a
-# side takes the fade's place. In the file ``metadata.bepic.afade_in`` / ``afade_out`` / ``axfade``;
+# side takes the fade's place. In the file ``metadata.imageviewer.afade_in`` / ``afade_out`` / ``axfade``;
 # the bed's fade out is agentY's own ``metadata.agentY.fade_out`` (1 s where it says nothing).
 XF_CURVES = ("+3", "0", "-3")
 XF_ALIGNS = ("centre", "start", "end")
@@ -450,7 +455,7 @@ def _fade_num(value):
 
 def clip_audio(item):
     """``{"fadeIn", "fadeOut", "xfade"}`` of a clip - only the keys it has."""
-    note = _bepic(item)
+    note = _imageviewer(item)
     out = {}
     fi, fo = _fade_num(note.get("afade_in")), _fade_num(note.get("afade_out"))
     if fi:
@@ -476,7 +481,7 @@ def _set_audio(item, c):
     if not any(k in c for k in ("fadeIn", "fadeOut", "xfade", "afx")):
         return
     meta = item.setdefault("metadata", {})
-    note = meta.setdefault("bepic", {}) if isinstance(meta, dict) else None
+    note = meta.setdefault("imageviewer", {}) if isinstance(meta, dict) else None
     if not isinstance(note, dict):
         return
     for key, name in (("fadeIn", "afade_in"), ("fadeOut", "afade_out")):
@@ -506,7 +511,7 @@ def bed_fades(item):
         fo = float(_note(item).get("fade_out", 1.0))
     except (TypeError, ValueError):
         fo = 1.0
-    return {"fadeIn": _fade_num(_bepic(item).get("afade_in")), "fadeOut": round(max(0.0, fo), 4)}
+    return {"fadeIn": _fade_num(_imageviewer(item).get("afade_in")), "fadeOut": round(max(0.0, fo), 4)}
 
 
 def _set_bed_fades(item, s):
@@ -514,7 +519,7 @@ def _set_bed_fades(item, s):
     if not isinstance(meta, dict):
         return
     if "fadeIn" in s:
-        note = meta.setdefault("bepic", {})
+        note = meta.setdefault("imageviewer", {})
         if isinstance(note, dict):
             v = _fade_num(s.get("fadeIn"))
             if v:
@@ -579,12 +584,12 @@ def audio_envs(edit):
 
 # Tracks for editing: a track LOCKED (nothing on it may be changed) and its AUTO TRACK SELECTOR
 # (off: ripples, inserts, the blade at the playhead leave it alone) - Resolve's two header controls,
-# the panel's (bEpicViewer_editTimelineData.js, trackFlags). ``metadata.bepic.lock`` /
+# the panel's (imageViewer_editTimelineData.js, trackFlags). ``metadata.imageviewer.lock`` /
 # ``auto_select`` on a track (False only when off); texts: the stack's ``texts_lock`` / ``texts_auto``.
 def track_flags(track):
-    note = _bepic(track) if track else {}
+    note = _imageviewer(track) if track else {}
     out = {"lock": bool(note.get("lock")), "auto": note.get("auto_select") is not False}
-    # A sound track's effects (the bEpic viewer's Fairlight-like FX), in metadata.bepic.afx.
+    # A sound track's effects (the ComfyUI Image Viewer's Fairlight-like FX), in metadata.imageviewer.afx.
     chain = _afx().clean_chain(note.get("afx"))
     if chain:
         out["afx"] = chain
@@ -595,7 +600,7 @@ def _set_flags(track, t):
     if track is None:
         return
     meta = track.setdefault("metadata", {})
-    note = meta.setdefault("bepic", {}) if isinstance(meta, dict) else None
+    note = meta.setdefault("imageviewer", {}) if isinstance(meta, dict) else None
     if not isinstance(note, dict):
         return
     if "lock" in t:
@@ -617,9 +622,9 @@ def _set_flags(track, t):
 
 
 # A clip may carry takes: the same shot made again with changes, kept beside the
-# first (``metadata.bepic.takes``). Exactly one is active, and the clip's media
+# first (``metadata.imageviewer.takes``). Exactly one is active, and the clip's media
 # reference names its file, so OTIO stays what it was for any other program.
-# bEpicViewer_editTimelineData.js (addTake / switchTake) is the same arithmetic.
+# imageViewer_editTimelineData.js (addTake / switchTake) is the same arithmetic.
 MAX_TAKES = 50
 
 
@@ -675,7 +680,7 @@ def version_of(path):
 # A clip's speed (retime, "trim to fill": its source in and out kept, its length
 # on the timeline the source it uses divided by the speed) and its loop (past
 # one turn of ``span`` seconds of source the source again - "loop" - or back
-# and forth - "pingpong"). Both in ``metadata.bepic``; the speed also as OTIO's
+# and forth - "pingpong"). Both in ``metadata.imageviewer``; the speed also as OTIO's
 # own LinearTimeWarp, which other programs read. ``source_range`` stays what it
 # is for every clip - its start in the source, its duration on the timeline -
 # so a reader that knows neither plays the plain clip from its in point.
@@ -685,7 +690,7 @@ _WARP = "LinearTimeWarp"
 
 def clip_time(item):
     """``{"speed", "loop", "span"}`` of a clip: 1 / "" / 0 for a plain one."""
-    note = _bepic(item)
+    note = _imageviewer(item)
     speed = note.get("speed")
     if speed is None:
         for fx in item.get("effects") or [] if isinstance(item, dict) else []:
@@ -712,7 +717,7 @@ def clip_time(item):
 def _set_time(item, c):
     """Write a clip's speed and loop, where the edit states them, into *item*."""
     meta = item.setdefault("metadata", {})
-    note = meta.setdefault("bepic", {}) if isinstance(meta, dict) else None
+    note = meta.setdefault("imageviewer", {}) if isinstance(meta, dict) else None
     if not isinstance(note, dict):
         return
     if "speed" in c:
@@ -745,7 +750,7 @@ TEXT_LOOK = {"size": 6.0, "x": 0.5, "y": 0.85, "color": "#ffffff"}
 def text_look(mark):
     """A text's look: ``{"size", "x", "y", "color"}``. ``size`` is a percentage
     of the picture's height, ``x`` / ``y`` where its middle is (0..1)."""
-    note = _bepic(mark)
+    note = _imageviewer(mark)
     out = dict(TEXT_LOOK)
     for key, low, high in (("size", 1.0, 40.0), ("x", 0.0, 1.0), ("y", 0.0, 1.0)):
         try:
@@ -759,18 +764,18 @@ def text_look(mark):
 
 
 # A TITLE is a clip whose picture is words: on a video track, with no file - a
-# GeneratorReference of kind ``bepic.title`` - and its words and look in
-# ``metadata.bepic.title`` (title_render.TITLE_NUM ..., the Edit panel's
-# bEpicViewer_editTitles.js). Every other program reads a generator clip of that
+# GeneratorReference of kind ``imageviewer.title`` - and its words and look in
+# ``metadata.imageviewer.title`` (title_render.TITLE_NUM ..., the Edit panel's
+# imageViewer_editTitles.js). Every other program reads a generator clip of that
 # length. The texts of older cuts (markers on the stack) come in as titles
 # (:func:`texts_to_titles`), and are written as title clips at the next save.
-TITLE_KIND = "bepic.title"
+TITLE_KIND = "imageviewer.title"
 
 
 def title_of(item):
     """The title a clip is (its words and look, every part present), or None for a clip that is not one."""
     from .title_render import clean_title
-    note = _bepic(item)
+    note = _imageviewer(item)
     ref = item.get("media_reference") if isinstance(item, dict) else None
     generator = isinstance(ref, dict) and str(ref.get("OTIO_SCHEMA") or "").startswith("GeneratorReference") \
         and str(ref.get("generator_kind") or "") == TITLE_KIND
@@ -790,12 +795,12 @@ def _new_title(c, what, marks):
         if not 0 <= mark < len(marks) or not isinstance(marks[mark], dict):
             raise ValueError(f"{what} does not name a text of this timeline")
         meta = copy.deepcopy(marks[mark].get("metadata")) if isinstance(marks[mark].get("metadata"), dict) else {}
-        meta.pop("bepic", None)                   # the text's look: the title's own now
+        meta.pop("imageviewer", None)                   # the text's look: the title's own now
     note = meta.setdefault("agentY", {})
     if isinstance(note, dict):
         note.setdefault("kind", "text")
         note["text"] = title["text"]
-    meta["made_by"] = "bEpic viewer"
+    meta["made_by"] = "ComfyUI Image Viewer"
     return {"OTIO_SCHEMA": "Clip.1", "name": "", "metadata": meta, "enabled": True,
             "effects": [], "markers": [], "source_range": None,
             "media_reference": {"OTIO_SCHEMA": "GeneratorReference.1", "name": "title", "metadata": {},
@@ -811,7 +816,7 @@ def _set_title(item, c):
     meta = item.setdefault("metadata", {})
     if not isinstance(meta, dict):
         return
-    note = meta.setdefault("bepic", {})
+    note = meta.setdefault("imageviewer", {})
     if isinstance(note, dict):
         note["title"] = title
     about = meta.setdefault("agentY", {})
@@ -823,7 +828,7 @@ def _set_title(item, c):
 
 
 def texts_to_titles(edit):
-    """*edit* (:func:`editable`) with its texts as title clips - bEpicViewer_editTimelineData.textsToTitles, the
+    """*edit* (:func:`editable`) with its texts as title clips - imageViewer_editTimelineData.textsToTitles, the
     same rule: each looks as the text did, on video tracks of their own above the others (as many as texts
     overlap), ``mark`` naming the marker it came from; the texts' switch is those tracks' switch."""
     from .title_render import title_from_text
@@ -923,7 +928,7 @@ def editable(doc):
     if not isinstance(doc, dict) or not str(doc.get("OTIO_SCHEMA") or "").startswith("Timeline"):
         raise ValueError("not an OpenTimelineIO timeline")
     meta = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
-    stamp = meta.get("bepic") if isinstance(meta.get("bepic"), dict) else {}
+    stamp = meta.get("imageviewer") if isinstance(meta.get("imageviewer"), dict) else {}
     out = {"name": str(doc.get("name") or ""), "fps": _rate(doc) or 24.0, "clips": [], "texts": [],
            "sound": [], "edited": str(stamp.get("edited") or "")}
     video = _track_of(doc, "video")
@@ -988,9 +993,9 @@ def editable(doc):
                                  "file": _file(child.get("media_reference")), **bed_fades(child)})
     out["tracks"] = extra_tracks(doc)
     out["off"] = {"V1": _is_off(video), "A1": _is_off(audio),
-                  "T": bool(_bepic(stack).get("texts_off"))}
+                  "T": bool(_imageviewer(stack).get("texts_off"))}
     flags = {"V1": track_flags(video), "A1": track_flags(audio),
-             "T": {"lock": bool(_bepic(stack).get("texts_lock")), "auto": _bepic(stack).get("texts_auto") is not False}}
+             "T": {"lock": bool(_imageviewer(stack).get("texts_lock")), "auto": _imageviewer(stack).get("texts_auto") is not False}}
     out["lock"] = {k: v["lock"] for k, v in flags.items()}
     out["auto"] = {k: v["auto"] for k, v in flags.items()}
     out["afx"] = {"A1": flags["A1"].get("afx") or []}
@@ -1015,7 +1020,7 @@ def _set_takes(item, given, may_use):
     take's file becomes the media the clip points at."""
     takes = clean_takes(given)
     meta = item.setdefault("metadata", {})
-    note = meta.setdefault("bepic", {}) if isinstance(meta, dict) else None
+    note = meta.setdefault("imageviewer", {}) if isinstance(meta, dict) else None
     if not isinstance(note, dict):
         return
     if not takes:
@@ -1043,7 +1048,7 @@ def _dress(item, c, may_use=None):
         color = str(c.get("color") or "")
         meta = item.setdefault("metadata", {})
         if isinstance(meta, dict):
-            note = meta.setdefault("bepic", {})
+            note = meta.setdefault("imageviewer", {})
             if isinstance(note, dict):
                 if _COLOR.match(color):
                     note["color"] = color.lower()
@@ -1052,7 +1057,7 @@ def _dress(item, c, may_use=None):
     if "fx" in c:
         meta = item.setdefault("metadata", {})
         if isinstance(meta, dict):
-            note = meta.setdefault("bepic", {})
+            note = meta.setdefault("imageviewer", {})
             if isinstance(note, dict):
                 fx = clean_fx(c.get("fx"))
                 if fx:
@@ -1078,7 +1083,7 @@ def _set_off(track, off):
         return
     meta = track.setdefault("metadata", {})
     if isinstance(meta, dict):
-        note = meta.setdefault("bepic", {})
+        note = meta.setdefault("imageviewer", {})
         if isinstance(note, dict):
             note["off"] = bool(off)
     track["enabled"] = not off
@@ -1197,12 +1202,12 @@ def _url(path):
 
 def new_doc(name="cut", fps=24.0):
     """An empty timeline: one video track, nothing on it yet."""
-    return {"OTIO_SCHEMA": "Timeline.1", "name": str(name or "cut"), "metadata": {"made_by": "bEpic viewer"},
+    return {"OTIO_SCHEMA": "Timeline.1", "name": str(name or "cut"), "metadata": {"made_by": "ComfyUI Image Viewer"},
             "global_start_time": None,
             "tracks": {"OTIO_SCHEMA": "Stack.1", "name": "tracks", "metadata": {}, "source_range": None,
                        "effects": [], "markers": [],
                        "children": [{"OTIO_SCHEMA": "Track.1", "name": "V1", "kind": "Video",
-                                     "metadata": {"bepic": {"fps": float(fps or 24.0)}},
+                                     "metadata": {"imageviewer": {"fps": float(fps or 24.0)}},
                                      "source_range": None, "effects": [], "markers": [],
                                      "children": []}]}}
 
@@ -1232,7 +1237,7 @@ def rebuild(doc, edit, stamp="", may_use=None):
     video = _track_of(new, "video")
     if video is None:
         raise ValueError("the timeline has no video track")
-    hint = ((video.get("metadata") or {}).get("bepic") or {}) if isinstance(video.get("metadata"), dict) else {}
+    hint = ((video.get("metadata") or {}).get("imageviewer") or {}) if isinstance(video.get("metadata"), dict) else {}
     rate = _rate(doc) or float(hint.get("fps") or 24.0)
     source = list((_track_of(doc, "video") or {}).get("children") or [])
     clips = edit.get("clips")
@@ -1324,7 +1329,7 @@ def rebuild(doc, edit, stamp="", may_use=None):
         if "T" in off:
             stack_meta = (new.get("tracks") or {}).setdefault("metadata", {})
             if isinstance(stack_meta, dict):
-                note = stack_meta.setdefault("bepic", {})
+                note = stack_meta.setdefault("imageviewer", {})
                 if isinstance(note, dict):
                     note["texts_off"] = bool(off["T"])
     afx = edit.get("afx")
@@ -1339,7 +1344,7 @@ def rebuild(doc, edit, stamp="", may_use=None):
                 _set_flags(track, {flag: given[tid]})
         if "T" in given:
             stack_meta = (new.get("tracks") or {}).setdefault("metadata", {})
-            note = stack_meta.setdefault("bepic", {}) if isinstance(stack_meta, dict) else None
+            note = stack_meta.setdefault("imageviewer", {}) if isinstance(stack_meta, dict) else None
             if isinstance(note, dict):
                 key = "texts_lock" if flag == "lock" else "texts_auto"
                 on = bool(given["T"])
@@ -1360,7 +1365,7 @@ def rebuild(doc, edit, stamp="", may_use=None):
         if ref is None and isinstance(t, dict):
             # A text written in the panel: a marker of its own, said the way agentY says its texts.
             mark = {"OTIO_SCHEMA": "Marker.2", "name": "", "color": "PURPLE", "marked_range": None,
-                    "metadata": {"agentY": {"text": ""}, "made_by": "bEpic viewer"}}
+                    "metadata": {"agentY": {"text": ""}, "made_by": "ComfyUI Image Viewer"}}
         elif not isinstance(ref, int) or isinstance(ref, bool) or not 0 <= ref < len(old_marks):
             raise ValueError(f"text {i} does not name a text of this timeline")
         else:
@@ -1380,7 +1385,7 @@ def rebuild(doc, edit, stamp="", may_use=None):
         if look:
             meta = mark.setdefault("metadata", {})
             if isinstance(meta, dict):
-                note = meta.setdefault("bepic", {})
+                note = meta.setdefault("imageviewer", {})
                 if isinstance(note, dict):
                     note.update(look)
                     note.update(text_look(mark))          # held to what a look may be
@@ -1393,8 +1398,8 @@ def rebuild(doc, edit, stamp="", may_use=None):
         kids[0]["source_range"] = _range(start, film, rate)
     meta = new.setdefault("metadata", {})
     if isinstance(meta, dict):
-        meta["bepic"] = {"edited": str(stamp or ""),
-                         "note": "cut changed in the bEpic viewer; the film beside this file "
+        meta["imageviewer"] = {"edited": str(stamp or ""),
+                         "note": "cut changed in the ComfyUI Image Viewer; the film beside this file "
                                  "has not been rendered again"}
     return new
 
@@ -1404,7 +1409,7 @@ def _load(path):
         raise ValueError("the timeline file is too large")
     with open(path, "r", encoding="utf-8") as fh:
         try:
-            return json.load(fh)
+            return _renamed_otio(json.load(fh))
         except ValueError:
             raise ValueError("the timeline file is not JSON") from None
 
@@ -1503,7 +1508,7 @@ def add_take(doc, from_file, file, version=0, note="", created="", retime=False,
         meta = item.setdefault("metadata", {})
         if not isinstance(meta, dict):
             continue
-        bep = meta.setdefault("bepic", {})
+        bep = meta.setdefault("imageviewer", {})
         if not isinstance(bep, dict):
             continue
         takes = [dict(t, active=False) for t in clean_takes(bep.get("takes"))]

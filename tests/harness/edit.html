@@ -3,17 +3,17 @@
 <script>window.addEventListener("error",(e)=>{document.title="ERR "+e.message});</script><script type="module">
 // The REAL viewer (stubbed ComfyUI scripts) with the Edit panel up on a cut, for tests/test_edit_timeline_browser.py.
 // The server's Edit routes are answered here (window.__fetchApi):
-//   /bepic/timeline_probe   lengths from window.__media[path] ({ duration, audio, video })
-//   /bepic/timeline_peaks   a waveform made up from the file's name (or window.__assets[path].peaks, a URL)
-//   /bepic/timeline_strip   a sheet of coloured frames, one colour per second of the file (or __assets[path].strip[n]);
+//   /imageviewer/timeline_probe   lengths from window.__media[path] ({ duration, audio, video })
+//   /imageviewer/timeline_peaks   a waveform made up from the file's name (or window.__assets[path].peaks, a URL)
+//   /imageviewer/timeline_strip   a sheet of coloured frames, one colour per second of the file (or __assets[path].strip[n]);
 //                           start / end: of that part of the file only (each asked for kept in window.__strips)
-//   /bepic/timeline_beats   window.__beats[path]
-//   /bepic/timeline_cuts    window.__cuts[path]
-//   /bepic/timeline_upload  the dropped file "kept" as D:/in/edits/<name>
-//   /bepic/resolve_media    a canvas node's file, as D:/in/<its widget's value>
-//   /bepic/timeline_render  answered at once; the request kept in window.__rendered
-//   /bepic/fonts            window.__fonts (title_render.font_list's answer; its urls served by the test), else none
-//   POST /bepic/timeline    a save: the cut sent comes back as the file now reads, as D:/out/cut.otio (a clip with
+//   /imageviewer/timeline_beats   window.__beats[path]
+//   /imageviewer/timeline_cuts    window.__cuts[path]
+//   /imageviewer/timeline_upload  the dropped file "kept" as D:/in/edits/<name>
+//   /imageviewer/resolve_media    a canvas node's file, as D:/in/<its widget's value>
+//   /imageviewer/timeline_render  answered at once; the request kept in window.__rendered
+//   /imageviewer/fonts            window.__fonts (title_render.font_list's answer; its urls served by the test), else none
+//   POST /imageviewer/timeline    a save: the cut sent comes back as the file now reads, as D:/out/cut.otio (a clip with
 //                           takes names its active take's file); the request kept in window.__saves
 // Every request is counted in window.__requests; window.__delay holds each answer back that many ms.
 window.__requests = [];
@@ -70,16 +70,16 @@ window.__fetchApi = async (path, opts = {}) => {
   const m = window.__media[p] || {};
   const a = window.__assets[p];
   switch (u.pathname) {
-    case "/bepic/timeline_probe": {
+    case "/imageviewer/timeline_probe": {
       const paths = JSON.parse(opts.body).paths;
       const info = {};
       for (const q of paths) info[q] = window.__media[q] || { error: "not found" };
       return json({ info });
     }
-    case "/bepic/timeline_peaks":
+    case "/imageviewer/timeline_peaks":
       if (a && a.peaks) return fetch(a.peaks);
       return json(m.audio ? fakePeaks(p, m.duration || 4) : { audio: false, duration: 0, levels: [] });
-    case "/bepic/timeline_strip": {
+    case "/imageviewer/timeline_strip": {
       const n = Number(u.searchParams.get("n")), h = Number(u.searchParams.get("h"));
       if (a && a.strip) {
         const key = Object.keys(a.strip).map(Number).sort((x, y) => Math.abs(x - n) - Math.abs(y - n))[0];
@@ -93,29 +93,29 @@ window.__fetchApi = async (path, opts = {}) => {
       (window.__strips ||= []).push({ path: p, n, start: ws == null ? null : Number(ws), end: we == null ? null : Number(we) });
       return fakeStrip(p, n, h, m.duration || 3, !!m.still, ws, we);
     }
-    case "/bepic/timeline_beats": return json(window.__beats[p] || { bpm: 0, beats: [], note: "no beat" });
-    case "/bepic/timeline_cuts": return json(window.__cuts[p] || { cuts: [], fps: 24, duration: m.duration || 0 });
-    case "/bepic/timeline_shots": return json({ shots: [1, 2], cuts: [1], duration: 3 });
-    case "/bepic/timeline_upload": {
+    case "/imageviewer/timeline_beats": return json(window.__beats[p] || { bpm: 0, beats: [], note: "no beat" });
+    case "/imageviewer/timeline_cuts": return json(window.__cuts[p] || { cuts: [], fps: 24, duration: m.duration || 0 });
+    case "/imageviewer/timeline_shots": return json({ shots: [1, 2], cuts: [1], duration: 3 });
+    case "/imageviewer/timeline_upload": {
       const f = opts.body.get("file");
       return json({ path: "D:/in/edits/" + f.name, name: f.name, reused: false });
     }
-    case "/bepic/timeline_locate": return json({ paths: JSON.parse(opts.body).items.map((it) => "D:/out/" + it.filename) });
+    case "/imageviewer/timeline_locate": return json({ paths: JSON.parse(opts.body).items.map((it) => "D:/out/" + it.filename) });
     // A loader node on the canvas: its file, as the server would name it.
-    case "/bepic/resolve_media": {
+    case "/imageviewer/resolve_media": {
       const b = JSON.parse(opts.body); const name = String(b.value || "").split(/[\/]/).pop();
       const kind = /\.(mp4|mov|webm)$/i.test(name) ? "video" : "image";
       return json({ tabs: [{ label: name, kind, frames: [{ path: "D:/in/" + name, name }] }] });
     }
     // Export film: what was asked for is kept in window.__rendered.
-    case "/bepic/timeline_render": {
+    case "/imageviewer/timeline_render": {
       window.__rendered = JSON.parse(opts.body);
       const f = window.__rendered.frames;
       return json({ path: "D:/out/cut_v001.mp4", name: "cut_v001.mp4", relative: "cut_v001.mp4", version: 1, fps: 24,
                     frames: f ? f[1] - f[0] + 1 : 0, texts_left_out: 0 });
     }
     // Export to Resolve: window.__resolve = { plan: overrides, polls: "running" answers before done, fail }.
-    case "/bepic/timeline_export_resolve_plan": {
+    case "/imageviewer/timeline_export_resolve_plan": {
       const body = JSON.parse(opts.body), r = window.__resolve || {};
       (window.__resolvePlans ||= []).push(body);
       const nm = body.name || "cut_resolve", at = body.folder || "D:/out";
@@ -123,12 +123,12 @@ window.__fetchApi = async (path, opts = {}) => {
         files: [{ name: "a.mp4", size: 5 * 1048576, note: "" }], missing: [], refused: [], flagged: [], left_out: [],
         ...(r.plan || {}) });
     }
-    case "/bepic/timeline_export_resolve": {
+    case "/imageviewer/timeline_export_resolve": {
       (window.__resolveStarted ||= []).push(JSON.parse(opts.body));
       window.__resolveState = { polls: (window.__resolve || {}).polls ?? 2, cancelled: false };
       return json({ id: "job1", status: "running", done: 0, total: 5242880 });
     }
-    case "/bepic/timeline_export_resolve_status": {
+    case "/imageviewer/timeline_export_resolve_status": {
       const s = window.__resolveState, r = window.__resolve || {};
       if (s.cancelled) return json({ id: "job1", status: "cancelled", done: 0, total: 5242880 });
       if (s.polls-- > 0) return json({ id: "job1", status: "running", done: 1048576, total: 5242880, current: "a.mp4" });
@@ -137,11 +137,11 @@ window.__fetchApi = async (path, opts = {}) => {
       return json({ id: "job1", status: "done", done: 5242880, total: 5242880, result: { path, fcpxml: path + "/x.fcpxml", files: 1, size: 5242880,
         left_out: ["Clip colours."], flagged: [{ name: "a.mp4", note: "H.264 10-bit 4:2:2" }], missing: [] } });
     }
-    case "/bepic/timeline_export_resolve_cancel": {
+    case "/imageviewer/timeline_export_resolve_cancel": {
       window.__resolveState.cancelled = true;
       return json({ id: "job1", status: "running", done: 0, total: 5242880 });
     }
-    case "/bepic/timeline_save_as": {
+    case "/imageviewer/timeline_save_as": {
       const body = JSON.parse(opts.body);
       if (window.__saveFail) return { ok: false, status: window.__saveFail.status, json: async () => ({}), text: async () => window.__saveFail.text, headers: new Headers() };
       const name = String(body.name).replace(/\.otio$/i, "") + ".otio", full = body.folder + "/" + name;
@@ -152,11 +152,11 @@ window.__fetchApi = async (path, opts = {}) => {
       return json({ edit: { name: name.slice(0, -5), fps: 24, clips, texts: [], sound: [], tracks: [], off: body.edit.off }, file: name, otio: full, path: full, target: { path: full, external: 1 }, duration: 0 });
     }
     // The paths window.__gone names are missing (Open recent greys them).
-    case "/bepic/probe_paths":
+    case "/imageviewer/probe_paths":
       return json({ unreachable: JSON.parse(opts.body).paths.filter((q) => (window.__gone || []).includes(q.path)).map((q) => ({ path: q.path, reason: "gone" })) });
-    case "/bepic/browse":
+    case "/imageviewer/browse":
       return json({ path: "D:/out", parent: null, dirs: [], files: [{ name: "saved.otio", path: "D:/out/saved.otio", ext: ".otio", kind: "cut", size: 10, mtime: 1 }], roots: [] });
-    case "/bepic/timeline": {
+    case "/imageviewer/timeline": {
       if (!opts.body && window.__otio && window.__otio[u.searchParams.get("path")]) {
         const p = u.searchParams.get("path");
         return json({ edit: window.__otio[p], file: p.split("/").pop(), otio: p });
@@ -181,13 +181,13 @@ window.__fetchApi = async (path, opts = {}) => {
                     otio: "D:/out/cut.otio", target: { path: "D:/out/cut.otio", external: 1 }, duration: 0 });
     }
     // The machine's fonts (title_render.font_list): window.__fonts, or none (the web-safe families then).
-    case "/bepic/fonts": return json(window.__fonts || { fonts: [], fallback: [] });
-    case "/bepic/export_options": return json({ formats: { mp4: { codecs: ["h264"] }, mov: { codecs: ["prores"] } }, qualities: ["high"] });
-    case "/bepic/export_target": return json({ path: "D:/out/cut_v001.mp4", relative: "cut_v001.mp4", version: 1 });
+    case "/imageviewer/fonts": return json(window.__fonts || { fonts: [], fallback: [] });
+    case "/imageviewer/export_options": return json({ formats: { mp4: { codecs: ["h264"] }, mov: { codecs: ["prores"] } }, qualities: ["high"] });
+    case "/imageviewer/export_target": return json({ path: "D:/out/cut_v001.mp4", relative: "cut_v001.mp4", version: 1 });
   }
   return { ok: false, status: 404, json: async () => ({}), text: async () => "", headers: new Headers() };
 };
-let v; try { v = await import("/extensions/viewer/bEpicViewer.js"); } catch (e) { document.title = "IMPORT " + e.message; throw e; }
+let v; try { v = await import("/extensions/viewer/imageViewer.js"); } catch (e) { document.title = "IMPORT " + e.message; throw e; }
 const panel = v.mountStandaloneViewer(document.body);
 window.__panel = panel;
 try {

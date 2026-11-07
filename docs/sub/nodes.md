@@ -4,7 +4,7 @@
 
 ---
 
-## bEpic Send To Image Viewer
+## Send To Image Viewer
 
 Sends images, videos and 3D models to the Image Viewer. Lay down the node in the canvas, connect an image / mask to the node's input, and set the tab_name to any name you want.
 If you don't specify a name, the name of the connected node will be used.
@@ -59,7 +59,7 @@ Whatever the node writes is also **reported to ComfyUI as the run's output**, th
 
 ---
 
-## bEpic 3D Scene (Previz)
+## Image Viewer 3D Scene (Previz)
 
 Holds a [previz scene](models-3d.md#previz-building-a-scene) and hands the rendered shot to the workflow.
 
@@ -74,7 +74,7 @@ The scene travels with the workflow because it lives in `scene_data`. Until you 
 
 ---
 
-## bEpic Image Viewer Roto
+## ComfyUI Image Viewer Roto
 
 Gives the viewer's **Roto** tool somewhere to put its matte.
 
@@ -89,7 +89,7 @@ The `roto_mask` output is there from the moment you drop the node in, so you can
 
 ---
 
-## bEpic Image Viewer SAM3 Collector
+## ComfyUI Image Viewer SAM3 Collector
 
 Gives the viewer's **SAM3 points** and **SAM3 boxes** tools somewhere to put their prompts. One node carries both kinds.
 
@@ -137,27 +137,27 @@ Every route that takes a path only reaches ComfyUI's input, output and temp fold
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/bepic/raw_view?path=…` | Serve a file from ComfyUI's output or temp folder |
-| GET | `/bepic/view_file?path=…` | Serve a file from an allowed folder |
-| GET | `/bepic/browse?path=…` | List one allowed directory's sub-folders and media files (no path → ComfyUI's input folder) |
-| POST | `/bepic/browse_frames` | Turn browsed paths into viewer frames — fps, frame count and poster for videos |
-| POST | `/bepic/push` | Show files in a viewer tab that did not come through a save node: `{paths, tab_name, group, label, focus, play, panel}`; a path may be a folder, an image sequence (`f_%04d.png`, `f_####.png`, `f_*.png`) or an `.otio` (its film). Frames are sent as a `bepic.viewer.update`; `focus` brings the viewer up and shows the first item, `play` starts it, `panel: "edit"` opens the Edit panel on the cut beside the first film that has one. Files outside the allowed folders come back in `refused` |
-| POST | `/bepic/previz_shot` | An agent's previz shot: `{scene, name, render?, add_node?, focus?}`. Saves the scene under `output/3d_scenes`, opens it as the tab `previz:<name>` and, with `render` (`camera`, `start`, `end`, `fps`, `width`, `height`, `format`, `quality`, `shading`, `background`, `aa`), has the page render that camera exactly as Export > Render does. Answers with an `id`; poll `GET /bepic/previz_shot?id=` for `state` (`queued`, `rendering`, `done`, `error`), `done`/`total` frames and the clip's `path`. The page reports through `POST /bepic/previz_shot_done` |
-| GET | `/bepic/scenes` | List saved previz scenes |
-| GET | `/bepic/scene?name=…` | Read one saved scene |
-| POST | `/bepic/scene` | Save a scene to `output/3d_scenes` |
-| POST | `/bepic/usd_export` | Write a previz scene out as a USD stage |
-| GET | `/bepic/usd_import?path=…` | Read a USD stage into a previz scene |
-| GET | `/bepic/usd_stages` | List the stages in `output/3d_scenes` |
-| POST | `/bepic/previz_frame` | Write one rendered previz frame into `output/previz/<name>` (decoded and re-encoded) |
-| POST | `/bepic/model_thumb` | Keep the viewer's rendering of a model as its history thumbnail (decoded and re-encoded; allowed folders only) |
-| GET | `/bepic/lib/three/<file>` | The bundled three.js files for 3D tabs |
-| POST | `/bepic/clear_cache` | Delete all `bEpic_*` temp files |
-| POST | `/bepic/extract_frame` | Write one frame of a clip out as a PNG and report where it landed |
-| POST | `/bepic/save_annotation` | Save an Annotation tool PNG to `output/annotations/` (decoded and re-encoded, so only an image is written) |
-| GET / POST | `/bepic/video_annotations` | The Annotation tool's marks over a clip, kept beside it as `<name>.annotations.json` (validated and clamped; no marks removes the file; allowed folders only) |
-| GET | `/bepic/viewer` | Standalone viewer-only HTML page |
-| GET | `/bepic/health` | Health check — returns 200 if running |
+| GET | `/imageviewer/raw_view?path=…` | Serve a file from ComfyUI's output or temp folder |
+| GET | `/imageviewer/view_file?path=…` | Serve a file from an allowed folder |
+| GET | `/imageviewer/browse?path=…` | List one allowed directory's sub-folders and media files (no path → ComfyUI's input folder) |
+| POST | `/imageviewer/browse_frames` | Turn browsed paths into viewer frames — fps, frame count and poster for videos |
+| POST | `/imageviewer/push` | Show files in a viewer tab that did not come through a save node: `{paths, tab_name, group, label, focus, play, panel}`; a path may be a folder, an image sequence (`f_%04d.png`, `f_####.png`, `f_*.png`) or an `.otio` (its film). Frames are sent as a `imageviewer.viewer.update`; `focus` brings the viewer up and shows the first item, `play` starts it, `panel: "edit"` opens the Edit panel on the cut beside the first film that has one. Files outside the allowed folders come back in `refused` |
+| POST | `/imageviewer/previz_shot` | An agent's previz shot: `{scene, name, render?, add_node?, focus?}`. Saves the scene under `output/3d_scenes`, opens it as the tab `previz:<name>` and, with `render` (`camera`, `start`, `end`, `fps`, `width`, `height`, `format`, `quality`, `shading`, `background`, `aa`), has the page render that camera exactly as Export > Render does. Answers with an `id`; poll `GET /imageviewer/previz_shot?id=` for `state` (`queued`, `rendering`, `done`, `error`), `done`/`total` frames and the clip's `path`. The page reports through `POST /imageviewer/previz_shot_done` |
+| GET | `/imageviewer/scenes` | List saved previz scenes |
+| GET | `/imageviewer/scene?name=…` | Read one saved scene |
+| POST | `/imageviewer/scene` | Save a scene to `output/3d_scenes` |
+| POST | `/imageviewer/usd_export` | Write a previz scene out as a USD stage |
+| GET | `/imageviewer/usd_import?path=…` | Read a USD stage into a previz scene |
+| GET | `/imageviewer/usd_stages` | List the stages in `output/3d_scenes` |
+| POST | `/imageviewer/previz_frame` | Write one rendered previz frame into `output/previz/<name>` (decoded and re-encoded) |
+| POST | `/imageviewer/model_thumb` | Keep the viewer's rendering of a model as its history thumbnail (decoded and re-encoded; allowed folders only) |
+| GET | `/imageviewer/lib/three/<file>` | The bundled three.js files for 3D tabs |
+| POST | `/imageviewer/clear_cache` | Delete all `ImageViewer_*` temp files |
+| POST | `/imageviewer/extract_frame` | Write one frame of a clip out as a PNG and report where it landed |
+| POST | `/imageviewer/save_annotation` | Save an Annotation tool PNG to `output/annotations/` (decoded and re-encoded, so only an image is written) |
+| GET / POST | `/imageviewer/video_annotations` | The Annotation tool's marks over a clip, kept beside it as `<name>.annotations.json` (validated and clamped; no marks removes the file; allowed folders only) |
+| GET | `/imageviewer/viewer` | Standalone viewer-only HTML page |
+| GET | `/imageviewer/health` | Health check — returns 200 if running |
 
 ---
 

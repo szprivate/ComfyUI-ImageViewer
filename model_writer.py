@@ -1,4 +1,4 @@
-"""3D inputs for bEpicSendToViewer: ComfyUI MESH and File3D objects.
+"""3D inputs for ImageViewerSend: ComfyUI MESH and File3D objects.
 
 Mirrors what core's "Save 3D Model" (SaveGLB, comfy_extras/nodes_save_3d.py)
 does with the same inputs:
@@ -174,7 +174,7 @@ def _mesh_items(mesh, metadata):
     for i in range(int(mesh.vertices.shape[0])):
         glb = core.mesh_item_to_glb_bytes(mesh, i, metadata)
         if glb is None:
-            print(f"[bEpicSendToViewer] skipping empty mesh at batch index {i}")
+            print(f"[ImageViewerSend] skipping empty mesh at batch index {i}")
             continue
         out.append((glb, "glb"))
     return out
@@ -414,7 +414,7 @@ def save_model_input(inp, filename_prefix, prompt=None, extra_pnginfo=None, file
         head = inp.get_bytes()[:65536] if ext == "ply" else b""
         if is_splat_file(head, ext):
             # A mesh format would keep the points and lose the splats.
-            print(f"\033[93m[bEpicSendToViewer] a gaussian splat can't be saved as .{want}; "
+            print(f"\033[93m[ImageViewerSend] a gaussian splat can't be saved as .{want}; "
                   f"saving the .{ext} it came as\033[0m")
             want = None
 
@@ -439,7 +439,7 @@ def save_model_input(inp, filename_prefix, prompt=None, extra_pnginfo=None, file
             try:
                 written = convert(data, ext, target, full)
             except Exception as e:
-                print(f"\033[93m[bEpicSendToViewer] could not save as .{target} ({e}); "
+                print(f"\033[93m[ImageViewerSend] could not save as .{target} ({e}); "
                       f"saving the .{ext} it came as instead\033[0m")
                 target = ext
                 name = f"{filename}_{counter:05}_.{ext}"
@@ -489,7 +489,7 @@ def thumb_cache_path(path):
                           .encode("utf-8", "replace")).hexdigest()[:16]
     stem = "".join(c for c in os.path.splitext(os.path.basename(path))[0]
                    if c.isalnum() or c in "-_")[:40] or "model"
-    return os.path.join(tmp, f"bEpic_mthumb_{stem}_{digest}.png")
+    return os.path.join(tmp, f"ImageViewer_mthumb_{stem}_{digest}.png")
 
 
 def cached_thumb(path):
