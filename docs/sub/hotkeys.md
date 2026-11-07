@@ -31,9 +31,19 @@ Every key on this page can be changed — see [Changing the Hotkeys](#changing-t
 | <kbd>Shift</kbd>+click thumbnail | Select two history items for side-by-side comparison |
 | <kbd>Ctrl</kbd>+click thumbnail | Add / remove a snapshot from the selection |
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+click thumbnail | Select a range of snapshots |
-| Right-click thumbnail | Context menu — Copy Path / Remove snapshot(s) |
+| Drag thumbnail onto a group heading | Move it (or the selection) into that group |
+| Click a group heading | Fold the group away / show it |
+| Right-click thumbnail | Context menu — Move to group / Show dependencies / Copy Path / Remove snapshot(s) |
 
 See [Selecting Several Snapshots](tabs-history.md#selecting-several-snapshots) for what a selection can then do. <kbd>Shift</kbd>+<kbd>Delete</kbd> works only while the viewer is hovered, so a plain <kbd>Delete</kbd> still goes to ComfyUI's graph.
+
+## Dependencies tab
+
+| Key / Interaction | Action |
+|---|---|
+| <kbd>F</kbd> | Fit the graph |
+| Click a node | Open its file (a folded node: unfold it) |
+| Double-click a node | Centre the graph on that file |
 
 ## 3D scenes
 
@@ -83,7 +93,8 @@ A key you bind there works while the viewer is hovered, and — since a binding 
 | Key | Action |
 |---|---|
 | <kbd>F</kbd> | Toggle fit-to-screen zoom |
-| <kbd>S</kbd> | Toggle tensor shape overlay |
+| <kbd>S</kbd> | Toggle Overlays: everything drawn over the picture off / on |
+| <kbd>Shift</kbd>+<kbd>F</kbd> | Full screen canvas / back (<kbd>Esc</kbd> also leaves) |
 | <kbd>C</kbd> | Toggle compare / split-view mode (with 3+ history snapshots Ctrl-selected: Contact Sheet grid of all, then the two wipes, then off) |
 
 ## Channels & Exposure

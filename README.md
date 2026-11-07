@@ -13,7 +13,8 @@ An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/C
 - send any image, mask, video or 3D model to the viewer with the **Send To Image Viewer** node — or right-click any node and choose **Send to Image Viewer**
 - view the outputs of several nodes at once, each node's renders a group of the Viewer tab
 - zoom and pan; undock the viewer into its own browser window for a second monitor
-- each tab keeps a history of up to 20 snapshots automatically
+- one History for all tabs (100 snapshots by default), sorted into groups you can fold, rename and drag thumbnails between
+- **Toggle Overlays** (<kbd>S</kbd>) hides everything drawn over the picture; **Full screen** (<kbd>Shift</kbd>+<kbd>F</kbd>) gives the canvas the whole screen
 - play image sequences and videos with configurable FPS, and loop a sub-range of the timeline
 - play **sound files** (WAV, MP3, FLAC, OGG, M4A, AAC, Opus) the same way: drop one in, open it from the file browser or send a Load Audio node, and its waveform shows in place of a picture — click it to seek
 - split-screen comparison with a draggable divider — shift-click two tabs or two history items to compare them
@@ -34,6 +35,7 @@ An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/C
 - drag a history thumbnail, a file or the frame on screen onto the graph to get a loader node holding it
 - **Roto** and **SAM3** tools draw mattes and point / box prompts right in the viewer, onto nodes that feed them to the workflow
 - the **Annotation** tool's marks (text, arrows, boxes, freehand) are kept beside the file they are drawn on - `cut.mp4` -> `cut.annotations.json`, `still.png` -> `still.annotations.json` - so they are there after a reload and an agent can read them; `POST /imageviewer/annotation_mask` draws a file's boxes and strokes as a mask PNG (under `output/annotation_masks`)
+- with agentY, **Show dependencies** on a history thumbnail opens a node graph, top to bottom, of what a file was made from and what was made from it, with out-of-date files outlined - see [Dependencies](docs/sub/tabs-history.md#dependencies)
 - for agents, `window.imageViewerApi.viewerState()` says what is on screen (tab, item, frame, the range picked on the timeline, compare, view, 3D camera) and `.annotations()` the marks on it, in words and normalised coordinates - from the panel's state, so the same docked, full screen or popped out
 
 ### Agent code
@@ -104,7 +106,7 @@ An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/C
    ```
 4. Restart ComfyUI.
 
-After installation a **"Toggle ComfyUI Image Viewer"** button appears in the ComfyUI action bar. Click it to show or hide the viewer panel.
+After installation an **"Image Viewer"** button appears in the ComfyUI action bar. Click it to show or hide the viewer panel.
 
 Video encoding (MP4 / MOV / WebM saving and previz renders) needs `imageio-ffmpeg` — VideoHelperSuite installs it; otherwise `pip install imageio-ffmpeg`.
 
@@ -114,7 +116,7 @@ Video encoding (MP4 / MOV / WebM saving and previz renders) needs `imageio-ffmpe
 
 1. Add **Send To Image Viewer** node to your workflow.
 2. Connect image outputs to it.
-3. Click **"Toggle ComfyUI Image Viewer"** in the top bar to open the panel.
+3. Click **"Image Viewer"** in the top bar to open the panel.
 4. Run the workflow — generated images appear in the viewer automatically.
 5. Hover the viewer and press <kbd>?</kbd> for the hotkeys.
 

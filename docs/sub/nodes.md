@@ -6,8 +6,8 @@
 
 ## Send To Image Viewer
 
-Sends images, videos and 3D models to the Image Viewer. Lay down the node in the canvas, connect an image / mask to the node's input, and set the tab_name to any name you want.
-If you don't specify a name, the name of the connected node will be used.
+Sends images, videos and 3D models to the Image Viewer. Lay down the node in the canvas, connect an image / mask to the node's input, and set `group` to any name you want: the pictures go into the Viewer tab under that heading of the History strip. `label` (optional) is shown on the thumbnail.
+If you don't specify a group, the name of the connected node will be used. The old `tab_name` field is still read as the group.
 
 Its only output is `image` — the input passed straight through.
 
@@ -142,6 +142,7 @@ Every route that takes a path only reaches ComfyUI's input, output and temp fold
 | GET | `/imageviewer/browse?path=…` | List one allowed directory's sub-folders and media files (no path → ComfyUI's input folder) |
 | POST | `/imageviewer/browse_frames` | Turn browsed paths into viewer frames — fps, frame count and poster for videos |
 | POST | `/imageviewer/push` | Show files in a viewer tab that did not come through a save node: `{paths, tab_name, group, label, focus, play, panel}`; a path may be a folder, an image sequence (`f_%04d.png`, `f_####.png`, `f_*.png`) or an `.otio` (its film). Frames are sent as a `imageviewer.viewer.update`; `focus` brings the viewer up and shows the first item, `play` starts it, `panel: "edit"` opens the Edit panel on the cut beside the first film that has one. Files outside the allowed folders come back in `refused` |
+| GET | `/imageviewer/deps` | The Dependencies tab's graph: `?path=<file>&up=4&down=4[&scan=1]`, relayed to the agentY host's `/agentY/deps`. Each node comes back marked `viewable` when the viewer may show that file; 503 when agentY is not running |
 | POST | `/imageviewer/previz_shot` | An agent's previz shot: `{scene, name, render?, add_node?, focus?}`. Saves the scene under `output/3d_scenes`, opens it as the tab `previz:<name>` and, with `render` (`camera`, `start`, `end`, `fps`, `width`, `height`, `format`, `quality`, `shading`, `background`, `aa`), has the page render that camera exactly as Export > Render does. Answers with an `id`; poll `GET /imageviewer/previz_shot?id=` for `state` (`queued`, `rendering`, `done`, `error`), `done`/`total` frames and the clip's `path`. The page reports through `POST /imageviewer/previz_shot_done` |
 | GET | `/imageviewer/scenes` | List saved previz scenes |
 | GET | `/imageviewer/scene?name=…` | Read one saved scene |

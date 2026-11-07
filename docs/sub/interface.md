@@ -14,7 +14,7 @@
 
 ### Tab Bar
 
-The topmost strip holds the tabs. The **active tab** is highlighted orange. Tabs appear automatically when a ImageViewerSend node runs or when you open files from the file browser panel. Change the name of the tabs by changing the `tab_name` in the **Send To Image Viewer** node.
+The topmost strip holds the tabs. The **active tab** is highlighted orange. Pictures, videos and sounds are all shown in the one **🖼 Viewer** tab; what a **Send To Image Viewer** node sends goes there as a group named by its `group` input. Documents (a cut, a Paint canvas, a 3D or Motion scene, a code file, a dataset, a Dependencies view) open in tabs of their own. See [The Tab System](tabs-history.md#the-tab-system).
 
 | Action | How |
 |---|---|
@@ -25,11 +25,12 @@ The topmost strip holds the tabs. The **active tab** is highlighted orange. Tabs
 
 ### History Strip
 
-A vertical thumbnail panel on the left side of the viewport. Every time a new image is generated for the active tab, a snapshot thumbnail is added here (up to 20 per tab). The selected snapshot has an orange border.
+A vertical thumbnail panel on the left side of the viewport. Every time a new image arrives, a snapshot thumbnail is added here: one History for all tabs, sorted into groups with a heading each (100 snapshots by default). The selected snapshot has an orange border.
 
 - Navigate with <kbd>↑</kbd> / <kbd>↓</kbd> while hovering the viewer.
 - Click any thumbnail to jump directly to it.
-- Right-click a thumbnail for **Copy Path** / **Remove** options.
+- Drag thumbnails onto a group's heading to move them there; click a heading to fold it.
+- Right-click a thumbnail for **Move to group**, **Show dependencies**, **Copy Path** and **Remove**.
 
 ### Viewport
 
@@ -41,6 +42,10 @@ The central image display area. Supports:
 ### Toggle Overlays
 
 The **Toggle Overlays** button (layers icon, lower bar) or <kbd>S</kbd> turns everything drawn over the picture off and on in one go: the size read-out in the top-left, the exposure bar, the path bar, the tool bar, the 3D view's buttons, the image frame, the wipe line and the contact-sheet hint. The picture, an open page (Edit, Paint, Motion), an active tool's own drawing and the reconnect notice stay. *Settings → ComfyUI Image Viewer → View* sets whether the overlays start on.
+
+### Full Screen
+
+The **Full screen** button in the transport, or <kbd>Shift</kbd>+<kbd>F</kbd>, makes the canvas fill the screen: the picture or film, a compare, the tools' drawing, a Paint, Motion or 3D tab. The panels, tab bar and transport stay behind, and the playback keys still answer. <kbd>Esc</kbd>, the exit button in the corner (it shows when the mouse moves) or <kbd>Shift</kbd>+<kbd>F</kbd> again come back. It works the same in the undocked window.
 
 ### Exposure & Channel Bar
 

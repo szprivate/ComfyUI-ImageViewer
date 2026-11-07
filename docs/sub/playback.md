@@ -80,6 +80,10 @@ The trade is that seeking goes back to the server, so scrubbing a long clip can 
 > [!NOTE]
 > An earlier version read whole clips into memory and played them from there, which did make scrubbing smooth. That memory turned out not to be reliably reclaimable — a `<video>` element keeps a clip alive after the page has dropped every reference to it, and the browser holds a buffer of its own besides — so a long session ended up sitting on RAM the viewer had no way to hand back. The toggle and purge buttons that came with it are gone too; there is nothing left for them to manage.
 
+## Sound Files
+
+WAV, MP3, FLAC, OGG, M4A, AAC and Opus files play in the viewer like a clip: drop one in, open it from the file browser (kind *Audio*), or send a **Load Audio** node. Its **waveform** shows in place of a picture; click it to seek. Play, the timeline, loop modes and the sub-range work as for a video, and the sound is a snapshot of the History like anything else (its thumbnail is the waveform). Dragging it onto the graph makes a Load Audio node.
+
 ### Odd frame sizes
 
 h264 cannot encode a clip whose width or height is odd, and ComfyUI's video writer takes the stream size straight off the image tensor without adjusting it — so a clip at, say, 1593×1024 failed outright with `avcodec_open2("libx264")` / *width not divisible by 2*. This surfaced when adding **audio** to a stream, because audio is what makes ComfyUI hand the node a `VIDEO` object rather than a plain image batch, and only a `VIDEO` object reaches that encoder.
