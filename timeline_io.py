@@ -1000,13 +1000,22 @@ def editable(doc):
 
 def edit_length(edit):
     """How long the film of *edit* is: the clips and the gaps before them, less what the dissolves take -
-    or as far as the last clip on a higher video track reaches, if that is later."""
+    or as far as the last clip on a higher video track, or the last sound of a live sound track, reaches,
+    if that is later (the film is black past its last picture). The same as filmLength in the JS."""
     clips = edit.get("clips") or []
     total = sum(float(c.get("length") or 0) + float(c.get("gap") or 0) for c in clips)
     main = max(0.0, total - sum(float(c.get("transition") or 0) for c in clips[1:]))
-    over = [float(c.get("at") or 0) + float(c.get("length") or 0)
-            for t in (edit.get("tracks") or []) if isinstance(t, dict) and t.get("kind") != "audio"
-            for c in (t.get("clips") or []) if isinstance(c, dict)]
+    over = []
+    for t in edit.get("tracks") or []:
+        if not isinstance(t, dict):
+            continue
+        sound = t.get("kind") == "audio"
+        if sound and t.get("off"):
+            continue                        # a switched-off sound track is not heard
+        for c in t.get("clips") or []:
+            if not isinstance(c, dict) or (sound and (c.get("disabled") or c.get("title") is not None)):
+                continue
+            over.append(float(c.get("at") or 0) + float(c.get("length") or 0))
     return max([main] + over)
 
 

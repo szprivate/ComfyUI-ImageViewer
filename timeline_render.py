@@ -841,6 +841,14 @@ def _size(cut):
     return _even(w), _even(h)
 
 
+def film_total(cut, counts, fps):
+    """The frames of the film: as long as the cut, or as far as the last clip over it - or the last
+    sound of a sound track - reaches. Past its last picture the film is black (:func:`covered`)."""
+    over = [first + count for first, count, _c in _spans(cut["overlays"], fps)]
+    heard = [int(round((float(c["at"]) + float(c["length"])) * fps)) for c in cut.get("sounds") or []]
+    return max([film_frames(counts)] + over + heard)
+
+
 def check(cut, may_use=None):
     """Raise :class:`RenderError` for a cut that cannot be rendered."""
     if not [c for c in cut["clips"] if not c.get("blank")]:
@@ -861,7 +869,7 @@ def check(cut, may_use=None):
         if may_use is not None and not may_use(os.path.abspath(path)):
             raise RenderError(f"{what} is not a file the viewer may use")
     total = max([timeline_io.edit_length(cut)]
-                + [float(c["at"]) + float(c["length"]) for c in cut.get("overlays") or []])
+                + [float(c["at"]) + float(c["length"]) for c in (cut.get("overlays") or []) + (cut.get("sounds") or [])])
     if total > MAX_SECONDS:
         raise RenderError(f"a film of {total / 60:.0f} minutes is longer than this renders "
                           f"({MAX_SECONDS // 60} minutes)")
@@ -897,7 +905,7 @@ def render(doc, out_path, fmt="mp4", may_use=None, codec=None, quality="high", f
     w, h = _size(cut)
     counts = frame_counts(cut["clips"], fps)
     # As long as the cut, or as far as the last clip over it reaches.
-    total = max([film_frames(counts)] + [first + count for first, count, _c in _spans(cut["overlays"], fps)])
+    total = film_total(cut, counts, fps)
     unheard = []                            # files whose sound would not decode: the film is silent there
     sound = film_sound(cut, counts, fps, total, notes=unheard)
     base = iter(()) if cut["v1_off"] else film_pictures(cut["clips"], counts, w, h, fps)
@@ -986,7 +994,7 @@ def render_sound(doc, out_path, only=None, frames=None, fx=True):
     cut = read_cut(doc)
     fps = cut["fps"] if cut["fps"] > 0 else 24.0
     counts = frame_counts(cut["clips"], fps)
-    total = max([film_frames(counts)] + [first + count for first, count, _c in _spans(cut["overlays"], fps)])
+    total = film_total(cut, counts, fps)
     sound = film_sound(cut, counts, fps, total, only=only, fx=fx)
     n = int(round(total / fps * RATE))
     if sound is None:
