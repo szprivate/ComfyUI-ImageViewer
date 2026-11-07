@@ -44,11 +44,14 @@ test("layout on a span: the film takes its share; the bed only under the film", 
     assert.equal(D.layoutCut(CUT()).sound[0].width, 100);
 });
 
-test("a sound running on past the film is on the timeline: contentEnd", () => {
+test("a sound running on past the pictures makes the film longer: it plays and exports to its end", () => {
     const cut = CUT();
     cut.tracks[1].clips[0].at = 20;
-    assert.equal(D.filmLength(cut), 11);
+    assert.equal(D.filmLength(cut), 22);
     assert.equal(D.contentEnd(cut), 22);
+    assert.equal(D.pictureAt(cut, 21).clip, null);      // black past the last picture
+    cut.tracks[1].off = true;                           // a switched-off sound track is not heard
+    assert.equal(D.filmLength(cut), 11);
 });
 
 test("an edit keeps the seconds per pixel; Fit stays Fit", () => {

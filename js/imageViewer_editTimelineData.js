@@ -292,12 +292,18 @@ export function mainLength(cut) {
     return Math.max(0, ...clips.map((c, i) => starts[i] + num(c.length)));
 }
 
-/** How long the film is: the cut, or as far as the last clip on a higher video track reaches. */
+/** How long the film is: the cut, or as far as the last clip on a higher video track - or the last
+ *  sound of a live sound track - reaches, if that is later. Past the last picture the film is black
+ *  (pictureAt has no clip there), so a sound that runs on is played and exported to its end. */
 export function filmLength(cut) {
     let total = mainLength(cut);
     for (const k of (cut && cut.tracks) || []) {
-        if (k.kind === "audio") continue;
-        for (const c of k.clips || []) total = Math.max(total, num(c.at) + num(c.length));
+        const sound = k.kind === "audio";
+        if (sound && k.off) continue;           // a switched-off sound track is not heard: it makes the film no longer
+        for (const c of k.clips || []) {
+            if (sound && (c.disabled || c.title != null)) continue;
+            total = Math.max(total, num(c.at) + num(c.length));
+        }
     }
     return round(total);
 }
