@@ -4,7 +4,7 @@
 
 A small picture editor: layers, brushes, selections, masks, adjustment layers, text, and AI fills through agentY.
 
-![A Paint tab: tools on the left, Layers and Properties on the right](images/paint.png)
+![A Paint tab: tools on the left, the brush's options above, Layers, Properties and History on the right](images/paint.png)
 
 ## Opening a picture
 

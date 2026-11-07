@@ -1,66 +1,46 @@
 # ComfyUI Image Viewer
 
-A viewer panel for [ComfyUI](https://github.com/comfyanonymous/ComfyUI): look at what your workflow makes, compare it, cut it, paint on it, and stage 3D shots, without leaving the graph.
+A viewer panel for [ComfyUI](https://github.com/comfyanonymous/ComfyUI): look at what your workflow makes, compare it, cut it, paint on it and stage 3D shots, without leaving the graph.
 
-![The viewer: a picture on the canvas, the History beside it, the exposure bar above](docs/screenshots/viewer_2d_canvas.jpg)
+![The Viewer with the History beside it](docs/images/viewer.png)
 
-## Spaces
+## Features
 
-| Space | What it is for |
-|---|---|
-| [Viewer](docs/viewer.md) | Pictures, videos and sounds: zoom, full screen, compare, play, exposure and channels |
-| [History](docs/history.md) | Every render, kept in groups you fold, rename and drag between |
-| [Dependencies](docs/dependencies.md) | What a file was made from and what was made from it, with its prompts (with agentY) |
-| [Editor](docs/editor.md) | Cut films on a timeline, with sound, titles and effects |
-| [Paint](docs/paint.md) | Edit a picture in layers, with AI fills through agentY |
-| [3D & Previz](docs/3d.md) | View models, build and animate a shot, render it back into the workflow |
-| [Motion](docs/motion.md) | Edit motion graphics an agent wrote |
-| [Dataset](docs/dataset.md) | Review a LoRA training dataset and watch the training |
-| [Agent code](docs/agent-code.md) | Read the code an agent writes |
+- **Viewer**: pictures, image sequences, videos and sounds. Zoom, full screen, exposure, single channels, OpenColorIO input colourspaces.
+- **Compare**: wipe two renders, or lay up to 16 side by side on a contact sheet. Videos play in step.
+- **History**: every render from every tab, kept in groups you can fold, rename and drag between.
+- **Editor**: cut films on a timeline (OpenTimelineIO), with sound, titles, effects and keyframes. Export the film, or hand it to DaVinci Resolve.
+- **Paint**: a picture in layers, with brushes, selections, masks, adjustment layers and text. Saves `.ora` and `.psd`.
+- **3D & Previz**: open GLB, FBX, OBJ, USD, Alembic and Gaussian splats, build and animate a shot, render it back into the workflow.
+- **Motion**: edit motion graphics scenes an agent wrote.
+- **Drawing tools**: roto mattes, SAM3 prompts and annotations, straight onto the picture.
+- **Panels**: a file browser, the selected node's Parameters, Agent code and Dataset, docked where you like. The viewer docks beside the canvas or opens in its own window.
+- **agentY**: dependency graphs, tags, approvals and AI edits when [agentY](https://github.com/szprivate/agentY) is running.
 
-Also: [Panels & workspace](docs/workspace.md) · [Working with agentY](docs/agentY.md) · [Nodes](docs/nodes.md) · [Hotkeys](docs/hotkeys.md) · [Reference](docs/reference.md)
-
-<p>
-<img src="docs/screenshots/viewer_2d_compare.jpg" alt="A wipe between two versions of a frame" width="49%">
-<img src="docs/screenshots/previz_usd_chess.png" alt="A USD chess set in a 3D tab, with the Outliner and Channel Box" width="49%">
-</p>
-
----
+How it all works: **[the docs](docs/index.md)**.
 
 ## Installation
 
-### Method 1 — ComfyUI Manager (recommended)
-1. Open the **ComfyUI Manager** panel inside ComfyUI.
-2. Search for **ComfyUI-ImageViewer** and click **Install**.
-3. Restart ComfyUI.
+### ComfyUI Manager (recommended)
 
-### Method 2 — Manual installation
-1. Navigate to your ComfyUI custom nodes folder:
-   ```
-   ComfyUI/custom_nodes/
-   ```
-2. Clone or copy this repository into that folder:
-   ```bash
-   git clone https://github.com/szprivate/ComfyUI-ImageViewer.git
-   ```
-3. Install Python dependencies (Pillow, numpy, and `usd-core` for the USD support):
-   ```bash
-   pip install -r ComfyUI-ImageViewer/requirements.txt
-   ```
-4. Restart ComfyUI.
+1. Open the **ComfyUI Manager**, search for **ComfyUI-ImageViewer** and click **Install**.
+2. Restart ComfyUI.
 
-Video encoding (MP4 / MOV / WebM saving and previz renders) needs `imageio-ffmpeg` — VideoHelperSuite installs it; otherwise `pip install imageio-ffmpeg`.
+### Manual
 
----
+```bash
+cd ComfyUI/custom_nodes
+git clone https://github.com/szprivate/ComfyUI-ImageViewer.git
+pip install -r ComfyUI-ImageViewer/requirements.txt
+```
 
-## Usage
+Restart ComfyUI. Use ComfyUI's own Python for the `pip install`.
 
-1. Click **Image Viewer** in ComfyUI's top bar to show or hide the panel.
-2. Add a **Send To Image Viewer** node and wire an image, mask, video or 3D model into it.
-3. Run the workflow. The result shows up in the Viewer.
-4. Hover the panel and press <kbd>?</kbd> for the keys.
+Saving videos and previz renders needs `imageio-ffmpeg` (VideoHelperSuite installs it, or `pip install imageio-ffmpeg`).
 
----
+### First steps
+
+Click **Image Viewer** in ComfyUI's top bar, wire a **Send To Image Viewer** node into your workflow and run it. Hover the panel and press <kbd>?</kbd> for the keys.
 
 ## License, contributing
 
