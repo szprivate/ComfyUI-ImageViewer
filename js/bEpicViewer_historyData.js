@@ -177,3 +177,73 @@ export function foldIntoTab(stack, tabs, viewer, groups = null) {
         return out;
     });
 }
+
+// ── The saved form of a snapshot ─────────────────────────────────────────────
+//
+// A sequence is a snapshot of many frames that differ only in a few characters
+// (frame_1001.png, frame_1002.png ...), and the saved state (localStorage, which
+// ComfyUI's page shares, about 5 MB in all) held every frame in full: 500
+// snapshots with a few 81-frame sequences among them were over 2 MB, written out
+// on every change. Saved, a snapshot of several frames is ONE frame - its first,
+// as it is - carrying the others as differences from the frame before
+// (`_bepicSeq`): a string by what changed between a shared start and end
+// ([start, middle, end]), any other value whole ([value]), a key gone as [].
+// An older viewer reading it sees the first frame. A snapshot of one frame is
+// saved as it is.
+
+const SEQ_KEY = "_bepicSeq";
+
+function stringDelta(a, b) {
+    let p = 0;
+    const n = Math.min(a.length, b.length);
+    while (p < n && a.charCodeAt(p) === b.charCodeAt(p)) p++;
+    let s = 0;
+    while (s < n - p && a.charCodeAt(a.length - 1 - s) === b.charCodeAt(b.length - 1 - s)) s++;
+    return [p, b.slice(p, b.length - s), s];
+}
+
+const plainFrame = (fr) => !!fr && typeof fr === "object" && !Array.isArray(fr);
+
+/** The saved form of a snapshot (see above). Not a sequence: itself. */
+export function packSnapshot(snapshot) {
+    if (!Array.isArray(snapshot) || snapshot.length < 2 || !snapshot.every(plainFrame)) return snapshot;
+    if (Object.prototype.hasOwnProperty.call(snapshot[0], SEQ_KEY)) return snapshot;
+    const diffs = [];
+    for (let i = 1; i < snapshot.length; i++) {
+        const prev = snapshot[i - 1], fr = snapshot[i], d = {};
+        for (const k of Object.keys(fr)) {
+            const a = prev[k], b = fr[k];
+            if (a === b && (a !== undefined || Object.prototype.hasOwnProperty.call(prev, k))) continue;
+            if (a && b && typeof a === "object" && typeof b === "object" && JSON.stringify(a) === JSON.stringify(b)) continue;
+            d[k] = typeof a === "string" && typeof b === "string" ? stringDelta(a, b) : [b];
+        }
+        for (const k of Object.keys(prev)) if (!Object.prototype.hasOwnProperty.call(fr, k)) d[k] = [];
+        diffs.push(d);
+    }
+    return [{ ...snapshot[0], [SEQ_KEY]: diffs }];
+}
+
+/** A snapshot back from its saved form; anything else as it is. */
+export function unpackSnapshot(snapshot) {
+    if (!Array.isArray(snapshot) || snapshot.length !== 1 || !plainFrame(snapshot[0])) return snapshot;
+    const diffs = snapshot[0][SEQ_KEY];
+    if (!Array.isArray(diffs)) return snapshot;
+    const first = { ...snapshot[0] };
+    delete first[SEQ_KEY];
+    const out = [first];
+    for (const d of diffs) {
+        const prev = out[out.length - 1];
+        const fr = { ...prev };
+        for (const [k, v] of Object.entries(d && typeof d === "object" ? d : {})) {
+            if (!Array.isArray(v) || v.length === 0) delete fr[k];
+            else if (v.length === 1) fr[k] = v[0];
+            else {
+                const a = typeof prev[k] === "string" ? prev[k] : "";
+                const [p, mid, s] = v;
+                fr[k] = a.slice(0, p) + String(mid) + (s > 0 ? a.slice(a.length - s) : "");
+            }
+        }
+        out.push(fr);
+    }
+    return out;
+}

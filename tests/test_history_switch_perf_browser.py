@@ -164,6 +164,28 @@ class HistorySwitchPerfTests(unittest.TestCase):
         self.assertLess(max(times), SWITCH_BUDGET_MS * 2.5, times)
         self.assertEqual(self.errors, [])
 
+    def test_a_new_render_keeps_the_tiles_that_were_there(self):
+        # A render used to remake every tile of the strip (twice); now only the new one is made, the others move
+        # down one place and still act on their own snapshot.
+        pg = self.page()
+        pg.wait_for_timeout(300)
+        asked = len(self.thumb_requests)
+        got = pg.evaluate("""() => { const P = window.__panel;
+          P.takeRenderInViewer([{ path: 'D:/out/render_new.png', type: 'output', label: 'new' }], { group: '' });
+          const tiles = [...P.historyStrip.querySelectorAll('.history-thumb')];
+          const t5 = P.historyStrip.querySelector('.history-thumb[data-idx="5"]');
+          t5.click();
+          return { tiles: tiles.length, kept: tiles.filter((t) => t.__orig).length, fresh: tiles.filter((t) => !t.__orig).map((t) => Number(t.dataset.idx)),
+                   titles: tiles.slice(0, 2).map((t) => t.title.split('\\n')[0].split(',')[0]), opened: P.currentHistoryIndex,
+                   openedPath: P.history.all[P.currentHistoryIndex][0].path }; }""")
+        self.assertEqual((got["tiles"], got["kept"], got["fresh"]), (ITEMS + 1, ITEMS, [0]))
+        self.assertEqual(got["titles"], ["History 1 - new", "History 2 - render 0"])
+        self.assertEqual((got["opened"], got["openedPath"]), (5, "D:/out/render_0004.png"))
+        pg.wait_for_timeout(300)
+        # Only the new tile asked for a thumbnail.
+        self.assertEqual([u for u in self.thumb_requests[asked:] if "render_0" in u], [])
+        self.assertEqual(self.errors, [])
+
     def test_tiles_load_as_they_come_into_view_a_few_at_a_time(self):
         pg = self.page()
         pg.wait_for_timeout(300)
@@ -233,13 +255,15 @@ class HistorySwitchPerfTests(unittest.TestCase):
     def test_a_real_change_still_rebuilds(self):
         pg = self.page()
         pg.evaluate(SWITCH, 3)
-        # A new render lands in front: the strip is drawn again, and the open item moves with it.
+        # A new render lands in front: the strip is drawn again, and the open item moves with it. The tiles that
+        # were there are kept (only the new one is made), each painted at its new place.
         pg.evaluate("""() => { const P = window.__panel, key = P.activeTab;
                                P.pushHistorySnapshot('other', [{ path: 'D:/out/new.png', type: 'output' }]);
                                P.renderHistoryPanel(); }""")
         strip = pg.evaluate(STRIP)
         self.assertEqual(strip["tiles"], ITEMS + 1)
-        self.assertEqual(strip["kept"], 0)
+        self.assertEqual(strip["kept"], ITEMS)
+        self.assertEqual(strip["bordered"], [4])
         self.assertEqual((strip["index"], strip["selected"]), (4, [4]))
         self.assertEqual(self.errors, [])
 
