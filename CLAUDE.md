@@ -12,6 +12,8 @@ A ComfyUI custom node pack whose real product is a **frontend viewer panel**: a 
 
 `__init__.py` exports the nodes, imports `viewer_api` (which registers the routes as a side effect of import), and sets `WEB_DIRECTORY = "js"`, which is how ComfyUI serves the frontend from `/extensions/ComfyUI-ImageViewer/`.
 
+The repository root holds only what the ComfyUI custom node layout needs there (`__init__.py`, `pyproject.toml`, `requirements.txt`, `js/`) plus `docs/`, `tests/` and `vendor/`. Every other Python module is in the `src/` package (`src/nodes.py`, `src/viewer_api.py`, ...) and imports its siblings relatively (`from . import timeline_io`); a module named below without a folder is in `src/`.
+
 ## Running and testing
 
 Nothing to build: the JS is plain ES modules served as-is, and Python needs no compilation step. There is a test suite in `tests/` (`D:/AI/agentY/.venv/Scripts/python.exe -m unittest discover -s tests` and `node --test tests/*.mjs` - node's own discovery finds nothing, the files are named `test_*.mjs`); the tests that need PyAV (`test_timeline_media_routes.py`) are skipped there and run with ComfyUI's interpreter, `D:/ai/comfyui/.venv/Scripts/python.exe -m unittest discover -s tests -p "test_timeline_media_routes.py"`. Browser tests serve `tests/harness/*.html` (the real viewer js, ComfyUI stubbed) through `tests/harness/server.mjs` with Playwright. Beyond those, two things stand in for a test runner, and both are worth rebuilding when you change anything non-trivial.
@@ -21,7 +23,7 @@ Use ComfyUI's own interpreter, never a bare `python`:
 ```bash
 D:/ai/comfyui/.venv/Scripts/python.exe -s <script>      # -s: ignore user site-packages
 node --check js/imageViewer_model3d.js                  # the only "lint" the JS has
-D:/ai/comfyui/.venv/Scripts/python.exe -m py_compile viewer_api.py
+D:/ai/comfyui/.venv/Scripts/python.exe -m py_compile src/viewer_api.py
 ```
 
 **Python-side checks** run the real modules with ComfyUI stubbed, in a scratch directory (not in the repo). The pattern each such script follows:
@@ -31,7 +33,7 @@ sys.path.insert(0, r"D:\ai\comfyui")          # for folder_paths and comfy_extra
 import folder_paths
 folder_paths.set_output_directory(tmp); folder_paths.set_input_directory(...)   # scratch dirs
 sys.modules["server"] = <module exposing PromptServer.instance.app + send_sync>
-sys.modules["imageviewer"] = <module whose __path__ is this repo>                     # relative imports
+sys.modules["imageviewer"] = <module whose __path__ is this repo's src/>               # relative imports
 importlib.import_module("imageviewer.viewer_api")   # registers routes onto the aiohttp app
 ```
 Routes are then driven over real HTTP with `aiohttp.test_utils.TestServer/TestClient`. Nodes are exercised by calling their `FUNCTION` directly.

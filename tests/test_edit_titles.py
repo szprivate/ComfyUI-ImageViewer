@@ -37,7 +37,7 @@ def _modules():
     name = "imageviewer_titles_under_test"
     if name not in sys.modules:
         pkg = types.ModuleType(name)
-        pkg.__path__ = [ROOT]
+        pkg.__path__ = [os.path.join(ROOT, "src")]
         sys.modules[name] = pkg
     tio = importlib.import_module(name + ".timeline_io")
     tr = importlib.import_module(name + ".title_render")

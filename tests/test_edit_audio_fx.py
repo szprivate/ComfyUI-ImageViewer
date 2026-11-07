@@ -31,7 +31,7 @@ def _mods():
     name = "imageviewer_audio_fx_under_test"
     if name not in sys.modules:
         pkg = types.ModuleType(name)
-        pkg.__path__ = [ROOT]
+        pkg.__path__ = [os.path.join(ROOT, "src")]
         sys.modules[name] = pkg
     get = lambda m: importlib.import_module(f"{name}.{m}")      # noqa: E731
     return get

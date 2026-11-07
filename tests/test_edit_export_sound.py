@@ -34,7 +34,7 @@ def _modules(tmp):
         sys.modules["folder_paths"] = fp
     if name not in sys.modules:
         pkg = types.ModuleType(name)
-        pkg.__path__ = [ROOT]
+        pkg.__path__ = [os.path.join(ROOT, "src")]
         sys.modules[name] = pkg
     get = lambda m: importlib.import_module(name + "." + m)  # noqa: E731
     return get("timeline_io"), get("timeline_render"), get("media_resolve")

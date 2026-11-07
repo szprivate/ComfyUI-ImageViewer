@@ -5,7 +5,7 @@ import os
 import tempfile
 import unittest
 
-_spec = importlib.util.spec_from_file_location("lora_io", os.path.join(os.path.dirname(__file__), "..", "lora_io.py"))
+_spec = importlib.util.spec_from_file_location("lora_io", os.path.join(os.path.dirname(__file__), "..", "src", "lora_io.py"))
 io = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(io)
 

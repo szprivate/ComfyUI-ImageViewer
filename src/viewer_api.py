@@ -73,9 +73,9 @@ _MODEL_EXTS = {".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply",
 _AUDIO_EXTS = (getattr(media_resolve, "AUDIO_EXTS", None) if media_resolve is not None else None) \
     or {".wav", ".mp3", ".flac", ".ogg", ".oga", ".m4a", ".aac", ".opus", ".weba"}
 
-# three.js and its loaders, for the viewer's 3D tabs. Outside js/ so ComfyUI
+# three.js and its loaders, for the viewer's 3D tabs (vendor/ at the repository root). Outside js/ so ComfyUI
 # doesn't import them at startup; served by /imageviewer/lib/three/<name> instead.
-_THREE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor", "three")
+_THREE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "vendor", "three")
 
 # Stands in for a model's history tile until the browser has rendered one.
 # A film with no poster and no decoder: a tile that says "film" instead of a broken image.

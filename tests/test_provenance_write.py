@@ -52,7 +52,7 @@ def _mod(name="provenance_write"):
     pkg = "imageviewer_prov_under_test"
     if pkg not in sys.modules:
         p = types.ModuleType(pkg)
-        p.__path__ = [ROOT]
+        p.__path__ = [os.path.join(ROOT, "src")]
         sys.modules[pkg] = p
     return importlib.import_module(pkg + "." + name)
 
@@ -191,7 +191,7 @@ def _node_module(tmp):
     sys.modules.update(folder_paths=fp, server=srv)
     name = "imageviewer_nodes_prov_under_test"
     pkg = types.ModuleType(name)
-    pkg.__path__ = [ROOT]
+    pkg.__path__ = [os.path.join(ROOT, "src")]
     sys.modules[name] = pkg
     try:
         mod = importlib.import_module(name + ".nodes")

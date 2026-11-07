@@ -4,7 +4,7 @@ import os
 import unittest
 
 _spec = importlib.util.spec_from_file_location(
-    "previz_shot", os.path.join(os.path.dirname(__file__), "..", "previz_shot.py"))
+    "previz_shot", os.path.join(os.path.dirname(__file__), "..", "src", "previz_shot.py"))
 ps = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ps)
 

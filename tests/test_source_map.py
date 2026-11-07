@@ -28,7 +28,7 @@ def _tio():
     name = "imageviewer_srcmap_under_test"
     if name not in sys.modules:
         pkg = types.ModuleType(name)
-        pkg.__path__ = [ROOT]
+        pkg.__path__ = [os.path.join(ROOT, "src")]
         sys.modules[name] = pkg
     return importlib.import_module(name + ".timeline_io")
 

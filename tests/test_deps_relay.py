@@ -8,7 +8,7 @@ import unittest
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-HERE = os.path.join(os.path.dirname(__file__), "..")
+HERE = os.path.join(os.path.dirname(__file__), "..", "src")
 sys.path.insert(0, HERE)
 _spec = importlib.util.spec_from_file_location("deps_relay", os.path.join(HERE, "deps_relay.py"))
 dr = importlib.util.module_from_spec(_spec)

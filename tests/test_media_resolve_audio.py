@@ -16,10 +16,10 @@ if "folder_paths" not in sys.modules:
     _fp.get_input_directory = _fp.get_output_directory = _fp.get_temp_directory = tempfile.gettempdir
     _fp.base_path = tempfile.gettempdir()
     sys.modules["folder_paths"] = _fp
-_spec = importlib.util.spec_from_file_location("imageviewer_media_resolve", os.path.join(ROOT, "media_resolve.py"))
+_spec = importlib.util.spec_from_file_location("imageviewer_media_resolve", os.path.join(ROOT, "src", "media_resolve.py"))
 mr = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mr)
-_spec = importlib.util.spec_from_file_location("imageviewer_path_access", os.path.join(ROOT, "path_access.py"))
+_spec = importlib.util.spec_from_file_location("imageviewer_path_access", os.path.join(ROOT, "src", "path_access.py"))
 pa = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(pa)
 
