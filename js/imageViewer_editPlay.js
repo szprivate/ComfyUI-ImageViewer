@@ -814,9 +814,14 @@ export const EditPlayMixin = {
         items.forEach((item, k) => {
             let a = ep.bed[k];
             if (!a) { a = ep.bed[k] = doc.createElement("audio"); a.preload = "auto"; }
-            if (a._epFile !== item.file) {
+            // A compressed sound from its WAV copy once there is one (imageViewer_editProxy.js).
+            const src = this._editPlayUrl ? this._editPlayUrl(item.file) : this.buildImgUrl({ path: item.file, external: true }, { noColor: true });
+            if (a._epFile !== item.file || a._epSrc !== src) {
+                const at = a._epFile === item.file ? a.currentTime : null;
                 a._epFile = item.file;
-                a.src = this.buildImgUrl({ path: item.file, external: true }, { noColor: true });
+                a._epSrc = src;
+                a.src = src;
+                if (at != null) { try { a.currentTime = at; } catch (_) {} }
             }
             try {
                 const inside = t >= item.at - 1e-3 && t < item.at + item.length - 1e-3;

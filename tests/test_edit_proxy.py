@@ -170,6 +170,34 @@ class EditProxyTests(unittest.TestCase):
                    (await c.get("/imageviewer/timeline_pcm", params={"path": p})).status
         self.assertEqual(self.run_async(go), (403, 403))
 
+    def test_an_mp3_plays_from_a_wav_copy_of_the_same_length(self):
+        mp3 = os.path.join(self.dirs["output"], "music.mp3")
+        with av.open(self.wav) as src, av.open(mp3, "w") as out:
+            a = out.add_stream("mp3", rate=22050)
+            a.layout = "mono"
+            for f in src.decode(src.streams.audio[0]):
+                f.pts = None
+                for p in a.encode(f):
+                    out.mux(p)
+            for p in a.encode(None):
+                out.mux(p)
+        st = self.run_async(lambda c: self._state_until_made(c, mp3))
+        self.assertEqual(st[-1], "ready")
+        copy = self.mr.edit_proxy_ready(mp3)
+        self.assertTrue(copy.endswith(".wav"))
+        with av.open(copy) as c, av.open(mp3) as o:
+            n = sum(f.samples for f in c.decode(c.streams.audio[0]))
+            m = sum(f.samples for f in o.decode(o.streams.audio[0]))
+            self.assertEqual(c.streams.audio[0].codec_context.name, "pcm_s16le")
+        self.assertLess(abs(n - m), 64, "the same samples, decoded once")
+        async def served(c):
+            r = await c.get("/imageviewer/view_file", params={"path": mp3, "edit": "1"})
+            return await r.read()
+        with open(copy, "rb") as fh:
+            self.assertEqual(self.run_async(served), fh.read(), "edit=1 serves the WAV")
+        self.assertTrue(self.mr.edit_proxy_needed(mp3))
+        self.assertFalse(self.mr.edit_proxy_needed(self.wav), "a WAV is played as it is")
+
     # ── the scrub sound ──
 
     def test_pcm_is_the_sound_in_mono_at_22050(self):

@@ -345,8 +345,23 @@ def _key_gap(c, vs):
     return max((b - a for a, b in zip(edges, edges[1:])), default=last)
 
 
+# A compressed sound (MP3 above all, what music and voice generators write) is
+# played by the Edit panel from a WAV copy: a browser seeks an MP3 by estimate,
+# from its bitrate, and decodes it in frames of 26 ms, so a sound sought to the
+# film's moment is heard tens of milliseconds - a VBR file's more - off it, on
+# every track again at every seek. A WAV is sought to the sample.
+EDIT_SOUND_EXTS = {".mp3", ".ogg", ".oga", ".opus", ".m4a", ".aac", ".weba"}
+
+
+def _is_edit_sound(path):
+    return os.path.splitext(path)[1].lower() in EDIT_SOUND_EXTS
+
+
 def edit_proxy_needed(path):
-    """True when the film at `path` plays and scrubs noticeably better through an edit proxy."""
+    """True when the film at `path` plays and scrubs noticeably better through an edit
+    proxy - or `path` is a compressed sound, played from a WAV copy."""
+    if _is_edit_sound(path):
+        return True
     if os.path.splitext(path)[1].lower() not in VIDEO_EXTS:
         return False
     try:
@@ -378,7 +393,38 @@ def _mtime(path):
 
 
 def edit_proxy_path(path):
-    return os.path.splitext(_cache_path(path, "eproxy"))[0] + ".mp4"
+    return os.path.splitext(_cache_path(path, "eproxy"))[0] + (".wav" if _is_edit_sound(path) else ".mp4")
+
+
+def _write_sound_copy(src_path, dst):
+    """`src_path`'s sound as a 16-bit WAV at its own rate (stereo, or mono for a mono file)."""
+    import av
+    tmp = dst + ".part.wav"
+    try:
+        with av.open(src_path) as src, av.open(tmp, "w", format="wav") as out:
+            ain = src.streams.audio[0]
+            rate = ain.rate or 48000
+            layout = "mono" if (ain.channels or 2) == 1 else "stereo"
+            aout = out.add_stream("pcm_s16le", rate=rate)
+            aout.layout = layout
+            resampler = av.AudioResampler(format="s16", layout=layout, rate=rate)
+            for frame in src.decode(ain):
+                frame.pts = None
+                for piece in resampler.resample(frame):
+                    for p in aout.encode(piece):
+                        out.mux(p)
+            for piece in resampler.resample(None):
+                for p in aout.encode(piece):
+                    out.mux(p)
+            for p in aout.encode(None):
+                out.mux(p)
+        os.replace(tmp, dst)
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
 
 
 def edit_proxy_ready(path):
@@ -389,6 +435,12 @@ def edit_proxy_ready(path):
 
 def _make_edit_proxy(path, dst):
     try:
+        if _is_edit_sound(path):
+            if not _cached(dst, path):              # quick: not held behind a film's copy
+                _write_sound_copy(path, dst)
+            with _EDIT_GUARD:
+                _EDIT_STATE.pop(dst, None)
+            return
         with _EDIT_ONE:
             if not _cached(dst, path):
                 rate = 24.0

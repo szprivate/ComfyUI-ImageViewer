@@ -11,6 +11,9 @@
 //                                       one needed and not there is begun
 // GET /imageviewer/view_file?path&edit=1  the copy (asked for only once it is ready)
 //
+// A compressed sound (an MP3 of a music generator) plays from a WAV copy the
+// same way: a browser seeks an MP3 by estimate and is heard off the picture.
+//
 // The bar's switch turns it off (kept per browser). An older server answers no
 // edit_proxy: every film plays as it is, as before.
 import { api } from "../../scripts/api.js";
@@ -20,6 +23,8 @@ const STORE = "imageviewer.viewer.editProxy";
 const POLL_MS = 1500;
 const POLL_MAX = 800;              // 20 minutes of asking: a long film takes a while
 const FILM_RE = /\.(mp4|m4v|mov|webm|mkv|ogv|avi|mpg|mpeg|wmv|flv)$/i;
+// Compressed sounds play from a WAV copy (media_resolve.EDIT_SOUND_EXTS): a browser seeks an MP3 by estimate.
+const SOUND_RE = /\.(mp3|ogg|oga|opus|m4a|aac|weba)$/i;
 
 export const EditProxyMixin = {
 
@@ -49,7 +54,7 @@ export const EditProxyMixin = {
      */
     _editPlayUrl(file) {
         const url = this.buildImgUrl({ path: file, external: true }, { noColor: true });
-        if (!file || !FILM_RE.test(file) || D.isStill(file) || !this.editProxyOn()) return url;
+        if (!file || !(FILM_RE.test(file) || SOUND_RE.test(file)) || D.isStillImage(file) || !this.editProxyOn()) return url;
         return this._editProxyState(file) === "ready" ? url + "&edit=1" : url;
     },
 

@@ -57,9 +57,11 @@ function handle(req, res) {
   }
   if (MDIR && (p.startsWith("/media/") || p === "/imageviewer/view_file" || p === "/imageviewer/raw_view")) {
     let name = p.startsWith("/media/") ? decodeURIComponent(p.slice(7)) : path.basename(u.searchParams.get("path") || "");
-    // edit=1 (the Edit panel's proxy of a film, media_resolve.edit_proxy_ready): <stem>.proxy.mp4 beside it, when there is one.
+    // edit=1 (the Edit panel's proxy, media_resolve.edit_proxy_ready): <stem>.proxy.mp4 beside a film, <stem>.proxy.wav beside
+    // a compressed sound, when there is one.
     if (u.searchParams.get("edit")) {
-      const px = name.replace(/\.[^.]+$/, "") + ".proxy.mp4";
+      const sound = /\.(mp3|ogg|oga|opus|m4a|aac|weba)$/i.test(name);   // a compressed sound's copy is a WAV
+      const px = name.replace(/\.[^.]+$/, "") + (sound ? ".proxy.wav" : ".proxy.mp4");
       if (fs.existsSync(path.resolve(MDIR, px))) name = px;
     }
     const f = path.resolve(MDIR, name);

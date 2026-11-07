@@ -52,6 +52,8 @@ class EditProxyBrowserTests(unittest.TestCase):
         _ff("-f", "lavfi", "-i", "testsrc2=size=160x90:rate=24:duration=8", "-f", "lavfi", "-i", "sine=frequency=330:duration=8",
             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-g", "12", "-bf", "0", "-c:a", "aac", "-shortest", m("v1.proxy.mp4"))
         _ff("-f", "lavfi", "-i", "sine=frequency=440:duration=8", "-ac", "2", "-ar", "48000", m("a440.wav"))
+        _ff("-f", "lavfi", "-i", "sine=frequency=440:duration=8", "-ac", "2", "-c:a", "libmp3lame", "-q:a", "4", m("m440.mp3"))
+        shutil.copy(m("a440.wav"), m("m440.proxy.wav"))
         cls.port = _free_port()
         env = dict(os.environ, PORT=str(cls.port), HARNESS_MEDIA_DIR=cls.media)
         env.pop("HARNESS_MEDIA", None)
@@ -129,6 +131,20 @@ class EditProxyBrowserTests(unittest.TestCase):
         pg.wait_for_timeout(800)
         self.assertNotIn("edit=1", pg.evaluate(SRC))
         self.assertEqual(pg.evaluate("() => __panel.videoBase.videoWidth"), 320)
+        self.assertEqual(errors, [])
+
+    def test_an_mp3_on_a_sound_track_plays_from_its_wav_copy(self):
+        pg, errors = self.page({"D:/out/m440.mp3": ["making", "ready"]})
+        pg.evaluate("""() => { const P = __panel; __media['D:/out/m440.mp3'] = { duration: 8, audio: true };
+          const k = P._editTlCut.tracks[0];
+          P._editTlApply({ ...P._editTlCut, tracks: [{ ...k, clips: [{ ...k.clips[0], file: 'D:/out/m440.mp3', name: 'm440.mp3' }] }] });
+          P.loopMode = 'once'; P.setFrame(0); P.play(); }""")
+        pg.wait_for_function("""() => { const a = (__panel._ep.bed || [])[0];
+          return a && (a.currentSrc || '').includes('m440.mp3') && a.currentSrc.includes('edit=1') && !a.paused && a.currentTime > 0.3; }""",
+                             timeout=15000)
+        st = pg.evaluate("() => { const P = __panel, a = P._ep.bed[0]; return { d: a.currentTime - P._ep.tNow }; }")
+        self.assertLess(abs(st["d"]), 0.3, st)
+        pg.evaluate("() => __panel.stop()")
         self.assertEqual(errors, [])
 
     def test_scrubbing_reads_the_servers_sound(self):
