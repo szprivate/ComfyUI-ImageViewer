@@ -1,86 +1,29 @@
 # ComfyUI Image Viewer
 
-An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) with inspection tools, playback controls, image comparison, its own parameters panel — and a 3D previz tool for laying out, animating and rendering shots.
+A viewer panel for [ComfyUI](https://github.com/comfyanonymous/ComfyUI): look at what your workflow makes, compare it, cut it, paint on it, and stage 3D shots, without leaving the graph.
 
----
+![The viewer: a picture on the canvas, the History beside it, the exposure bar above](docs/screenshots/viewer_2d_canvas.jpg)
 
-![The ComfyUI Image Viewer: an image on the canvas, its history of takes on the left, the exposure and channel bar above](docs/screenshots/viewer_2d_canvas.jpg)
+## Spaces
 
-## Core Features
+| Space | What it is for |
+|---|---|
+| [Viewer](docs/viewer.md) | Pictures, videos and sounds: zoom, full screen, compare, play, exposure and channels |
+| [History](docs/history.md) | Every render, kept in groups you fold, rename and drag between |
+| [Dependencies](docs/dependencies.md) | What a file was made from and what was made from it, with its prompts (with agentY) |
+| [Editor](docs/editor.md) | Cut films on a timeline, with sound, titles and effects |
+| [Paint](docs/paint.md) | Edit a picture in layers, with AI fills through agentY |
+| [3D & Previz](docs/3d.md) | View models, build and animate a shot, render it back into the workflow |
+| [Motion](docs/motion.md) | Edit motion graphics an agent wrote |
+| [Dataset](docs/dataset.md) | Review a LoRA training dataset and watch the training |
+| [Agent code](docs/agent-code.md) | Read the code an agent writes |
 
-### Viewing
-
-- send any image, mask, video or 3D model to the viewer with the **Send To Image Viewer** node — or right-click any node and choose **Send to Image Viewer**
-- view the outputs of several nodes at once, each node's renders a group of the Viewer tab
-- zoom and pan; undock the viewer into its own browser window for a second monitor
-- one History for all tabs (100 snapshots by default), sorted into groups you can fold, rename and drag thumbnails between
-- **Toggle Overlays** (<kbd>S</kbd>) hides everything drawn over the picture; **Full screen** (<kbd>Shift</kbd>+<kbd>F</kbd>) gives the canvas the whole screen
-- play image sequences and videos with configurable FPS, and loop a sub-range of the timeline
-- play **sound files** (WAV, MP3, FLAC, OGG, M4A, AAC, Opus) the same way: drop one in, open it from the file browser or send a Load Audio node, and its waveform shows in place of a picture — click it to seek
-- split-screen comparison with a draggable divider — shift-click two tabs or two history items to compare them
-- real-time exposure (−4 EV to +4 EV) and isolation of the **Red**, **Green** or **Blue** channel
-
-<p>
-<img src="docs/screenshots/viewer_2d_compare.jpg" alt="Split comparison between two versions of a frame" width="49%">
-<img src="docs/screenshots/viewer_2d_channels.jpg" alt="The red channel on its own, exposure lifted" width="49%">
-</p>
-
-*Left: a wipe between two tabs. Right: the red channel on its own, +0.7 EV.*
-
-### Working with the graph
-
-- a **parameters panel** shows the widgets of the node selected in the graph — lock it to one node, or change a value on every selected node at once
-- **save to output** from the send node: PNG, EXR, TIFF, JPG, DPX, MP4, MOV, WebM, with frame-numbered image sequences (`shot.1001.png`) for a VFX pipeline
-- what the node writes is **reported to ComfyUI like a save node's output**, so it shows up in the queue history, the Assets panel, and to scripts and agents reading them
-- drag a history thumbnail, a file or the frame on screen onto the graph to get a loader node holding it
-- **Roto** and **SAM3** tools draw mattes and point / box prompts right in the viewer, onto nodes that feed them to the workflow
-- the **Annotation** tool's marks (text, arrows, boxes, freehand) are kept beside the file they are drawn on - `cut.mp4` -> `cut.annotations.json`, `still.png` -> `still.annotations.json` - so they are there after a reload and an agent can read them; `POST /imageviewer/annotation_mask` draws a file's boxes and strokes as a mask PNG (under `output/annotation_masks`)
-- with agentY, **Show dependencies** on a history thumbnail opens a node graph, top to bottom, of what a file was made from and what was made from it, with out-of-date files outlined - see [Dependencies](docs/sub/tabs-history.md#dependencies)
-- for agents, `window.imageViewerApi.viewerState()` says what is on screen (tab, item, frame, the range picked on the timeline, compare, view, 3D camera) and `.annotations()` the marks on it, in words and normalised coordinates - from the panel's state, so the same docked, full screen or popped out
-
-### Agent code
-
-- the **Agent code** reader is a tab of the main canvas too: a double-click on a text or code file in the file browser opens it as `code:<file>` (one tab per file, several at once), and the bar's *ComfyUI > Agent code* opens the live feed of what the agent writes - a list of snippets, newest first, and the one shown. Read-only, highlighted, with Copy and Wrap - see [docs/sub/agent-code.md](docs/sub/agent-code.md)
-
-### Motion graphics
-
-- the **Motion** panel (bar: *ComfyUI > Motion*, or double-click a `*.mgscene.json` in the file browser) edits the motion graphics an agent writes as a scene file, as a tab: the preview in the main canvas with on-canvas move / scale / rotate / anchor handles, a properties panel with a curve for the selected key, and a Motion timeline whose left column is the layer list (select, eye, lock, rename, drag to reorder, add / delete) and whose rows carry the keyframes (move, copy, paste, delete). Scrub by clicking or dragging in the ruler, the playhead or an empty track; the viewer's own play / step / scrub bar, fps and last-frame boxes drive the scene; **Render** hands the saved scene to agentY's Remotion renderer. The preview and the render share one module, so what you see is what comes out. Each rendered video also gets a poster `.png` that carries the scene: right-click it in the file browser and pick **Edit in Motion** (or drag it onto the panel) to edit the motion graphic from the PNG alone - see [docs/motion_graphics_editor.md](docs/motion_graphics_editor.md)
-- the **Dataset** view (a tab of the main canvas, one per dataset: bar *ComfyUI > Dataset*, a double-click on a dataset's `manifest.json` in the file browser, or an agent showing it) reviews a LoRA training dataset: thumbnails with editable captions, include / remove / restore, bulk find-replace, trigger word, crop boxes, then **Approve & train** / **Ask the agent** / **Cancel**; its Training page (inside the tab) shows the run (progress, loss curve, sample strip, events) and can stop it - see [docs/lora_dataset_panel.md](docs/lora_dataset_panel.md)
-
-### The interface
-
-- **dockable panels** — history, file browser, parameters, and the 3D panels — on either side of the picture or along the bottom, stacked and resized with splitters, arrangement remembered
-- a **file browser** over ComfyUI's folders (and any you allow): every file listed, wildcard and kind filters, previews
-- **Settings → ComfyUI Image Viewer**: the folders the viewer may open (add, browse, remove — no restart), and its defaults for playback, compare, history, the file browser, annotation, 3D and previz. These settings are kept per user (`~/.comfyui_image_viewer/settings.json`, or the file named by `IMAGE_VIEWER_SETTINGS`), so they follow you across projects even when a launcher gives each project its own ComfyUI user directory
-- every function has a **hotkey command** you can rebind in *Settings → Keybinding*
-
----
-
-## 3D Models and Previz
-
-![A USD chess set in the 3D viewer, with the Outliner and Channel Box beside it](docs/screenshots/previz_usd_chess.png)
-
-*The chess set is the [Open Chess Set](https://github.com/usd-wg/assets/tree/main/full_assets/OpenChessSet), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) by the Academy Software Foundation — imported here straight from its USD stage.*
-
-- view **GLB, glTF, FBX, OBJ, STL, PLY**, **USD** and **Alembic** (`.abc`) files, and save meshes the way ComfyUI's Save 3D Model does — an Alembic cache is read frame by frame, so a deforming cache plays in the viewer
-- every 3D tab is a **previz scene**: models, primitive shapes, groups and cameras, laid out in a Maya-style **Outliner** (drag to reorder and reparent — items keep their place in the world — double-click to rename) and edited in a **Channel Box**
-- move, rotate and scale with a gizmo, around a pivot you can move; **Freeze Transformations**; tumble around the object under the cursor, Maya-style (<kbd>Alt</kbd> + mouse)
-- stand **image planes** in the scene — a plate to match, a reference, a camera backplate that travels with the shot
-- keyframe everything on the viewer's timeline and shape the motion in a **curve editor** with tangents
-- cameras have a **resolution** and show a **resolution gate** when you look through them
-- **render the shot** back into the workflow from a render dialog — any camera, frame range and size, MP4 / MOV / WebM / PNG, shading, transparent backgrounds, supersampled anti-aliasing — and it lands on the graph as a loader node
-- exchange whole shots as **USD** stages with other applications
+Also: [Panels & workspace](docs/workspace.md) · [Working with agentY](docs/agentY.md) · [Nodes](docs/nodes.md) · [Hotkeys](docs/hotkeys.md) · [Reference](docs/reference.md)
 
 <p>
-<img src="docs/screenshots/previz_resolution_gate.png" alt="Looking through a camera, with its resolution gate" width="49%">
-<img src="docs/screenshots/previz_render_dialog.png" alt="The render dialog" width="49%">
+<img src="docs/screenshots/viewer_2d_compare.jpg" alt="A wipe between two versions of a frame" width="49%">
+<img src="docs/screenshots/previz_usd_chess.png" alt="A USD chess set in a 3D tab, with the Outliner and Channel Box" width="49%">
 </p>
-
-*Left: looking through a camera, its 2.39 gate over the shot. Right: the render dialog.*
-
----
-
-**Full documentation:** [docs/index.md](docs/index.md) — every panel, tool, node and hotkey.
 
 ---
 
@@ -106,21 +49,16 @@ An advanced image viewer panel for [ComfyUI](https://github.com/comfyanonymous/C
    ```
 4. Restart ComfyUI.
 
-After installation an **"Image Viewer"** button appears in the ComfyUI action bar. Click it to show or hide the viewer panel.
-
 Video encoding (MP4 / MOV / WebM saving and previz renders) needs `imageio-ffmpeg` — VideoHelperSuite installs it; otherwise `pip install imageio-ffmpeg`.
 
 ---
 
 ## Usage
 
-1. Add **Send To Image Viewer** node to your workflow.
-2. Connect image outputs to it.
-3. Click **"Image Viewer"** in the top bar to open the panel.
-4. Run the workflow — generated images appear in the viewer automatically.
-5. Hover the viewer and press <kbd>?</kbd> for the hotkeys.
-
-For 3D: open a model from the file browser or drop one onto the viewer — or add a **Image Viewer 3D Scene (Previz)** node and press **Open in Image Viewer** on it to build a shot and render it back into the workflow. See [3D Models & Previz](docs/sub/models-3d.md).
+1. Click **Image Viewer** in ComfyUI's top bar to show or hide the panel.
+2. Add a **Send To Image Viewer** node and wire an image, mask, video or 3D model into it.
+3. Run the workflow. The result shows up in the Viewer.
+4. Hover the panel and press <kbd>?</kbd> for the keys.
 
 ---
 
