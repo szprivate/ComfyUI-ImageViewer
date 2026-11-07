@@ -1650,7 +1650,7 @@ app.registerExtension({
     actionBarButtons: [
         {
             icon:    "pi pi-eye",
-            label:   "ComfyUI Image Viewer",
+            label:   "Image Viewer",          // short: the action bar is narrow
             tooltip: "Toggle ComfyUI Image Viewer",
             onClick: () => {
                 _toggleViewerPanelFromUi();
