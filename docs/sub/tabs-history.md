@@ -180,6 +180,10 @@ With [agentY](https://github.com/szprivate/agentY) running, every file it or the
 
 - Each node is a file, with its thumbnail when the viewer may show it, and its kind (source, depth, mask, pose, render…). Each edge says what made it (a model, a workflow).
 - The file you opened from is outlined as the root. A file made from an older version of one of its inputs is outlined as **out of date**, with the reason on hover. A file that is gone is greyed.
+- **Prompts are text boxes.** The prompts a file was made with (positive, negative, and text typed into a pass such as SAM3's subject) sit in text boxes one row above it, wired into it with a dashed line. The text can be selected and scrolled, and **Copy** copies it. The **Prompts** button in the tab's bar hides and shows them. They are read from the graph saved with the file, so every file agentY or the Send node made has them.
+
+  ![Prompts as text boxes above the render they went into](../images/dependencies-prompts.png)
+
 - More than four passes of one kind made from the same file, with nothing made from them, fold into one node (*6 mask passes*). Click it to unfold.
 - Click a node to open its file; double-click it to centre the graph on that file. **Fit** (or <kbd>F</kbd>), **Look in folder** (picks up older files that were made before the record existed) and **Reload** are in the tab's bar.
 
