@@ -383,7 +383,7 @@ export const EditPlayMixin = {
             return;
         }
         const obj = { path: clip.file, external: true, name: clip.name };
-        const url = this.buildImgUrl(obj, { noColor: true });
+        const url = this._editPlayUrl ? this._editPlayUrl(clip.file) : this.buildImgUrl(obj, { noColor: true });   // its proxy, when it has one
         const same = !!ep.at && ep.key === at.key && ep.url === url;
         ep.at = at;
         ep.in = Number(clip.in) || 0;
@@ -518,7 +518,7 @@ export const EditPlayMixin = {
         const slots = this._epSlots;
         let el = null;
         if (u && u.clip) {
-            const url = this.buildImgUrl({ path: u.clip.file, external: true }, { noColor: true });
+            const url = this._editPlayUrl ? this._editPlayUrl(u.clip.file) : this.buildImgUrl({ path: u.clip.file, external: true }, { noColor: true });
             if (D.isStill(u.clip.file)) {
                 el = main === this.imgBase ? this._epImgB : this.imgBase;
                 if (el._epShown !== url) { el._epShown = url; el.src = url; }
@@ -758,7 +758,7 @@ export const EditPlayMixin = {
         const next = D.pictureAt(cut, at.end + 1e-3, this._editPlayLive());
         const clip = next && next.clip;
         if (!clip || next.key === at.key) return;
-        const url = this.buildImgUrl({ path: clip.file, external: true }, { noColor: true });
+        const url = this._editPlayUrl ? this._editPlayUrl(clip.file) : this.buildImgUrl({ path: clip.file, external: true }, { noColor: true });
         if (D.isStill(clip.file)) {
             const img = new ((v.ownerDocument.defaultView || window).Image)();
             img.src = url;

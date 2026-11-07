@@ -218,16 +218,21 @@ def _video_plays(path):
         return ctx.name != "h264" or (ctx.pix_fmt in _PLAYABLE_PIX)
 
 
-def _write_video_proxy(src_path, dst):
+def _write_video_proxy(src_path, dst, height=None, options=None):
+    """An H.264 copy of `src_path` at `dst`: the full picture, or `height` high
+    (the width to its aspect, both even); `options` for libx264 on top of the defaults."""
     import av
     tmp = dst + ".part.mp4"
     try:
         with av.open(src_path) as src, av.open(tmp, "w", format="mp4") as out:
             vin = src.streams.video[0]
             rate = vin.average_rate or vin.guessed_rate or 24
-            vout = out.add_stream("libx264", rate=rate, options={"crf": "20", "preset": "veryfast"})
+            vout = out.add_stream("libx264", rate=rate, options={"crf": "20", "preset": "veryfast", **(options or {})})
             vout.pix_fmt = "yuv420p"
-            vout.width, vout.height = vin.width - vin.width % 2, vin.height - vin.height % 2
+            w, h = vin.width, vin.height
+            if height and h > height:
+                w, h = max(2, int(round(w * height / h))), height
+            vout.width, vout.height = w - w % 2, h - h % 2
             ain = src.streams.audio[0] if src.streams.audio else None
             aout = resampler = None
             if ain is not None:
@@ -293,6 +298,136 @@ def video_proxy(path):
         if not _cached(dst, path):
             _write_video_proxy(path, dst)
     return dst
+
+
+# ── a lighter copy for the Edit panel's player ───────────────────────────────
+#
+# An HD film is heavy to scrub: a <video> sent somewhere new decodes from the
+# key frame before it, and a film written by ffmpeg's defaults has one every
+# ten seconds or so - two cores busy for one drag of the playhead, the picture
+# half a second behind it. The Edit panel plays (and scrubs, and shows in its
+# two-up) a copy as an editor's proxy media is: EDIT_PROXY_HEIGHT high, a key
+# frame every half second, no B-frames - same length, same frames, same sound.
+# Made in the background the first time the Edit panel asks (edit_proxy_state),
+# one at a time, in a few threads; the panel plays the film itself until it is
+# there. Only for a film that needs one (edit_proxy_needed): a small one with
+# key frames close together plays as well as its copy would. Exports, cuts and
+# extracted frames read the film itself, always.
+
+EDIT_PROXY_HEIGHT = 540
+EDIT_PROXY_PIXELS = 1280 * 720      # a film bigger than this gets a copy
+EDIT_PROXY_KEY_GAP = 2.0            # seconds: or one whose key frames lie further apart
+_EDIT_PROXY_SCAN = 30.0             # seconds of the film looked at for its key frames
+_EDIT_NEEDED = {}
+_EDIT_STATE = {}                     # dst -> ("making" | "failed", the film's mtime then)
+_EDIT_GUARD = threading.Lock()
+_EDIT_ONE = threading.Semaphore(1)  # one copy made at a time: it takes CPU the player needs too
+
+
+def _key_gap(c, vs):
+    """The longest stretch between key frames in the first _EDIT_PROXY_SCAN seconds of `vs` (demuxed, not decoded)."""
+    tb = float(vs.time_base) if vs.time_base else 0.0
+    if not tb:
+        return 0.0
+    keys, last = [], None
+    for pkt in c.demux(vs):
+        if pkt.pts is None:
+            continue
+        t = float(pkt.pts) * tb
+        last = t if last is None else max(last, t)
+        if pkt.is_keyframe:
+            keys.append(t)
+        if t > _EDIT_PROXY_SCAN:
+            break
+    if last is None:
+        return 0.0
+    edges = sorted(keys) + [last]
+    return max((b - a for a, b in zip(edges, edges[1:])), default=last)
+
+
+def edit_proxy_needed(path):
+    """True when the film at `path` plays and scrubs noticeably better through an edit proxy."""
+    if os.path.splitext(path)[1].lower() not in VIDEO_EXTS:
+        return False
+    try:
+        key = (os.path.normcase(path), os.path.getmtime(path), os.path.getsize(path))
+    except OSError:
+        return False
+    if key in _EDIT_NEEDED:
+        return _EDIT_NEEDED[key]
+    import av
+    need = False
+    try:
+        with av.open(path) as c:
+            if c.streams.video:
+                vs = c.streams.video[0]
+                need = (vs.width or 0) * (vs.height or 0) > EDIT_PROXY_PIXELS or _key_gap(c, vs) > EDIT_PROXY_KEY_GAP
+    except Exception:  # noqa: BLE001 - a film PyAV cannot read is played as it is
+        need = False
+    if len(_EDIT_NEEDED) > 512:
+        _EDIT_NEEDED.clear()
+    _EDIT_NEEDED[key] = need
+    return need
+
+
+def _mtime(path):
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return None
+
+
+def edit_proxy_path(path):
+    return os.path.splitext(_cache_path(path, "eproxy"))[0] + ".mp4"
+
+
+def edit_proxy_ready(path):
+    """The edit proxy of `path` when it is made and up to date, else None."""
+    dst = edit_proxy_path(path)
+    return dst if _cached(dst, path) else None
+
+
+def _make_edit_proxy(path, dst):
+    try:
+        with _EDIT_ONE:
+            if not _cached(dst, path):
+                rate = 24.0
+                try:
+                    import av
+                    with av.open(path) as c:
+                        vs = c.streams.video[0]
+                        rate = float(vs.average_rate or vs.guessed_rate or 24)
+                except Exception:  # noqa: BLE001
+                    pass
+                _write_video_proxy(path, dst, EDIT_PROXY_HEIGHT, {
+                    "crf": "23", "g": str(max(1, int(round(rate / 2)))), "bf": "0", "threads": "4"})
+        with _EDIT_GUARD:
+            _EDIT_STATE.pop(dst, None)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ImageViewer] edit proxy of {os.path.basename(path)} failed: {exc}")
+        with _EDIT_GUARD:
+            _EDIT_STATE[dst] = ("failed", _mtime(path))
+
+
+def edit_proxy_state(path, start=True):
+    """``"ready"``, ``"making"``, ``"none"`` (the film plays well as it is, or is
+    no film) or ``"failed"``. `start`: a copy needed and not there is begun, in
+    the background."""
+    if not edit_proxy_needed(path):
+        return "none"
+    dst = edit_proxy_path(path)
+    if _cached(dst, path):
+        return "ready"
+    with _EDIT_GUARD:
+        state, mtime = _EDIT_STATE.get(dst, (None, None))
+        if state == "making" or (state == "failed" and mtime == _mtime(path)):   # a changed film is tried again
+            return state
+        if not start:
+            return "none"
+        _EDIT_STATE[dst] = ("making", _mtime(path))
+    threading.Thread(target=_make_edit_proxy, args=(path, dst), daemon=True,
+                     name="imageviewer-edit-proxy").start()
+    return "making"
 
 
 def proxy_for_display(path):

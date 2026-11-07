@@ -224,7 +224,7 @@ export const EditTwoUpMixin = {
         }
         side.none.style.display = "none";
         const clip = f.clip;
-        const url = this.buildImgUrl({ path: clip.file, external: true }, { noColor: true });
+        const url = this._editPlayUrl ? this._editPlayUrl(clip.file) : this.buildImgUrl({ path: clip.file, external: true }, { noColor: true });
         const name = clip.name || String(clip.file || "").split(/[\\/]/).pop();
         box.dataset.frame = String(f.frame);
         box.dataset.srcFrame = f.still ? "" : String(f.srcFrame);

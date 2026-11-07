@@ -56,7 +56,12 @@ function handle(req, res) {
     req._held = true; setTimeout(() => handle(req, res), MDELAY); return;
   }
   if (MDIR && (p.startsWith("/media/") || p === "/imageviewer/view_file" || p === "/imageviewer/raw_view")) {
-    const name = p.startsWith("/media/") ? decodeURIComponent(p.slice(7)) : path.basename(u.searchParams.get("path") || "");
+    let name = p.startsWith("/media/") ? decodeURIComponent(p.slice(7)) : path.basename(u.searchParams.get("path") || "");
+    // edit=1 (the Edit panel's proxy of a film, media_resolve.edit_proxy_ready): <stem>.proxy.mp4 beside it, when there is one.
+    if (u.searchParams.get("edit")) {
+      const px = name.replace(/\.[^.]+$/, "") + ".proxy.mp4";
+      if (fs.existsSync(path.resolve(MDIR, px))) name = px;
+    }
     const f = path.resolve(MDIR, name);
     if (!f.startsWith(path.resolve(MDIR)) || !fs.existsSync(f)) { res.writeHead(404); res.end("nf"); return; }
     const size = fs.statSync(f).size, type = types[path.extname(f).toLowerCase()] || "application/octet-stream";

@@ -180,6 +180,23 @@ window.__fetchApi = async (path, opts = {}) => {
       return json({ edit: { name: body.name || "cut", fps: 24, clips, texts: [], sound: [], tracks, off: body.edit.off }, file: "cut.otio",
                     otio: "D:/out/cut.otio", target: { path: "D:/out/cut.otio", external: 1 }, duration: 0 });
     }
+    // A file's scrub sound (timeline_pcm): window.__pcm[path] = { seconds, freq } - a sine as mono 16-bit at 22050.
+    // None by default: the panel then fetches the file and decodes it itself, as from an older server.
+    case "/imageviewer/timeline_pcm": {
+      const s = (window.__pcm || {})[p];
+      if (!s) return { ok: false, status: 404, json: async () => ({}), text: async () => "", headers: new Headers() };
+      const n = Math.round(s.seconds * 22050), pcm = new Int16Array(n);
+      for (let i = 0; i < n; i++) pcm[i] = Math.round(16000 * Math.sin(2 * Math.PI * s.freq * i / 22050));
+      return new Response(pcm.buffer, { headers: { "Content-Type": "application/octet-stream", "X-Pcm-Rate": "22050" } });
+    }
+    // An Edit proxy's state (media_resolve.edit_proxy_state): window.__proxies[path] - a state, or a list of the
+    // states it answers in turn (["making", "ready"]: made while the panel asks). None by default, as an older server.
+    case "/imageviewer/edit_proxy": {
+      const px = (window.__proxies || {})[p];
+      if (!px) return { ok: false, status: 404, json: async () => ({}), text: async () => "", headers: new Headers() };
+      const state = Array.isArray(px) ? (px.length > 1 ? px.shift() : px[0]) : px;
+      return json({ state });
+    }
     // The machine's fonts (title_render.font_list): window.__fonts, or none (the web-safe families then).
     case "/imageviewer/fonts": return json(window.__fonts || { fonts: [], fallback: [] });
     case "/imageviewer/export_options": return json({ formats: { mp4: { codecs: ["h264"] }, mov: { codecs: ["prores"] } }, qualities: ["high"] });

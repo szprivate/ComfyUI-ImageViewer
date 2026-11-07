@@ -513,9 +513,13 @@ export const EditTimelineMixin = {
         const scrubAudio = button("", "Audio scrubbing on / off (Shift+M)", () => this.editAudioToggle("scrub"));
         scrubAudio.classList.add("edit-scrubaudio-btn");
         setEditIcon(scrubAudio, "scrub");
+        // Proxy playback (imageViewer_editProxy.js): big films play and scrub from a lighter copy.
+        const proxy = button("", "Proxy playback", () => this.editProxyToggle && this.editProxyToggle());
+        proxy.classList.add("edit-proxy-btn");
+        setEditIcon(proxy, "proxy");
         const sep = el("span", "edit-sep");
         bar.append(fresh, opener, recent, out, sep, add, pick, trimBtn, blade, snap, beats, split, undo, redo, auto, cuts, take, sub, badge,
-                   audio, scrubAudio, zoomOut, zoomIn, zoomFit);
+                   audio, scrubAudio, proxy, zoomOut, zoomIn, zoomFit);
 
         // The tracks: their headers in a column that stays, the tracks beside it
         // in a strip that is as wide as the zoom makes it and scrolls sideways.
@@ -676,7 +680,7 @@ export const EditTimelineMixin = {
         });
         this._editTlUi = { host, savedBar, empty, body, sub, badge, out, main, heads, scroll, area, ruler, rows,
                            head, drop, hint, blade, split, undo, redo, auto, cuts, take, pick, trimBtn, snap, beats, zoomOut, zoomIn, zoomFit,
-                           audio, scrubAudio, tc, hbox, headsV, headsA, hsplit, secV, secA, splitter: splitBar, vPinned: true };
+                           audio, scrubAudio, proxy, tc, hbox, headsV, headsA, hsplit, secV, secA, splitter: splitBar, vPinned: true };
         if (this._editTlSecBind) this._editTlSecBind(this._editTlUi);
         this._editTlWatchCanvas();
         return this._editTlUi;
@@ -748,6 +752,7 @@ export const EditTimelineMixin = {
         ui.beats.classList.toggle("on", !!(this._editTlView && this._editTlView.snapBeats));
         ui.beats.disabled = !snapOn;
         if (this._editAudioButtons) this._editAudioButtons(ui);
+        if (this._editProxyButton) this._editProxyButton(ui);
         if (this.editTlAnswerButton) this.editTlAnswerButton(ui.take); else ui.take.style.display = "none";
         ui.badge.textContent = dirty ? (this._editTlSaved ? "changed \u2014 not saved" : "new cut \u2014 not saved") : "";
         ui.badge.className = "edit-badge" + (dirty ? " dirty" : "");

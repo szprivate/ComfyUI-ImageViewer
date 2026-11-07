@@ -237,6 +237,28 @@ def peaks(path):
     return _cached_json(path, "peaks", make)
 
 
+PCM_RATE = 22050       # the Edit panel's scrub sources (js/imageViewer_editAudio.js SCRUB.sr)
+
+
+def pcm(path, rate=PCM_RATE):
+    """``(file, rate)``: *path*'s sound mixed to mono at *rate*, as 16-bit little-endian
+    samples in a cached file - what the Edit panel scrubs from, instead of fetching
+    the whole film to decode it in the browser. None: the file has no sound."""
+    dst = cache_file(path, f"pcm{int(rate)}", "pcm")
+    if os.path.isfile(dst):
+        return dst, rate
+    with _lock(dst):
+        if os.path.isfile(dst):
+            return dst, rate
+        import numpy as np
+        samples = _mono(path, rate)
+        if samples is None:
+            return None
+        data = (np.clip(samples, -1.0, 1.0) * 32767.0).round().astype("<i2").tobytes()
+        _write_atomic(dst, data, binary=True)
+    return dst, rate
+
+
 # ── pictures ─────────────────────────────────────────────────────────────────
 
 def strip_size(n, h):
