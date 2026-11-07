@@ -20,7 +20,7 @@ if av is not None:
 
 def cut_with_long_sound(film, sound, sound_len, at=0.5, off=False, disabled=False):
     """A 2 s film on V1 and *sound* on a sound track from *at*, *sound_len* long - made by the panel's code."""
-    url = "file:///" + os.path.join(ROOT, "js", "bEpicViewer_editTimelineData.js").replace("\\", "/")
+    url = "file:///" + os.path.join(ROOT, "js", "imageViewer_editTimelineData.js").replace("\\", "/")
     code = (f"import * as D from {json.dumps(url)}; const [film, snd, len, at, off, dis] = JSON.parse(process.argv[1]);"
             " let cut = D.emptyCut('t', 24);"
             " cut = D.insertEdit(cut, [{ file: film, name: 'f', length: 2 }], 0, 'V1', D.editMask(cut)).cut;"
