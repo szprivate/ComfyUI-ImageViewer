@@ -122,7 +122,7 @@ A smart filter is kept as a setting on the layer instead of being baked into its
 
 ## Filters
 
-The **Filter** menu works on every picked pixel layer, and only inside the selection when there is one: Gaussian blur, Motion blur, Sharpen, Unsharp Mask, High Pass, Median (despeckle), Add Noise, Pixelate, and the adjustments baked into the pixels. Each one previews live on the picture while you change its numbers. **Cancel** undoes the preview, and **OK** keeps it as one undo step.
+The **Filter** menu works on every picked pixel layer, and only inside the selection when there is one: Gaussian blur, Motion blur, Sharpen, Unsharp Mask, High Pass, Median (despeckle), Add Noise, Pixelate, and the adjustments baked into the pixels. Each number has a slider beside it, and the picture previews the result live while you drag it or type. **Cancel** undoes the preview, and **OK** keeps it as one undo step.
 
 ## Generate
 
