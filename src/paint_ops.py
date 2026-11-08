@@ -20,7 +20,7 @@ from . import paint_math as M
 MAX_OPS = 60
 OPS = ("add_layer", "add_adjustment", "set_layer", "remove_layer", "duplicate_layer", "move_layer", "merge_down",
        "flatten", "select", "mask", "fill", "clear", "heal", "filter", "crop", "canvas_size", "resize",
-       "transform", "add_text", "group", "ungroup", "merge_group")
+       "transform", "add_text", "group", "ungroup", "merge_group", "path")
 ANCHORS = {"top_left": (0, 0), "top": (0.5, 0), "top_right": (1, 0), "left": (0, 0.5), "center": (0.5, 0.5),
            "right": (1, 0.5), "bottom_left": (0, 1), "bottom": (0.5, 1), "bottom_right": (1, 1)}
 
@@ -734,6 +734,8 @@ def _filter(doc, op, _read, _fonts):
 
 
 def _shift_all(doc, dx, dy):
+    if doc.meta.get("paths"):
+        doc.meta["paths"] = M.move_paths(doc.meta["paths"], dx, dy)
     for L in doc.layers:
         if L["kind"] == "pixel":
             L["x"] += dx
@@ -806,6 +808,8 @@ def _resize_doc(doc, op, _read, _fonts):
             L["mask"].update(x=round(L["mask"]["x"] * kx), y=round(L["mask"]["y"] * ky), w=nw, h=nh)
     if doc.selection is not None:
         doc.selection = _resize(doc.selection, w, h, "bilinear")
+    if doc.meta.get("paths"):
+        doc.meta["paths"] = M.move_paths(doc.meta["paths"], 0, 0, kx, ky)
     old = (doc.w, doc.h)
     doc.meta["w"], doc.meta["h"] = w, h
     return f"resized {old[0]}x{old[1]} -> {w}x{h} ({method})"
@@ -893,9 +897,85 @@ def _add_text(doc, op, _read, fonts):
     return f"added text {text.splitlines()[0][:40]!r} at {x},{y}"
 
 
+def _path_points(pts):
+    """[[x, y] | [x, y, ix, iy, ox, oy] | {x, y, ix, iy, ox, oy}, ...] -> anchors."""
+    out = []
+    for p in pts:
+        if isinstance(p, dict):
+            out.append(p)
+        elif isinstance(p, (list, tuple)) and len(p) in (2, 6):
+            x, y = p[0], p[1]
+            ix, iy, ox, oy = (p[2], p[3], p[4], p[5]) if len(p) == 6 else (x, y, x, y)
+            out.append({"x": x, "y": y, "ix": ix, "iy": iy, "ox": ox, "oy": oy, "smooth": len(p) == 6})
+        else:
+            raise OpError("a path point is [x, y] or [x, y, in_x, in_y, out_x, out_y]")
+    return out
+
+
+def _path(doc, op, _read, _fonts):
+    """A pen path: made from points (kept in the document by name) or one kept already, then used."""
+    paths = doc.meta.setdefault("paths", [])
+    ref = op.get("path")
+    if op.get("points") is not None:
+        if not isinstance(op["points"], list) or len(op["points"]) < 2:
+            raise OpError("a path needs 'points': two or more")
+        name = str(op.get("name") or ref or f"Path {len(paths) + 1}")
+        P_ = M.clean_path({"name": name, "closed": op.get("closed", True), "pts": _path_points(op["points"])})
+        old = next((i for i, q in enumerate(paths) if q["name"] == name), None)
+        if old is None:
+            if len(paths) >= M.MAX_PATHS:
+                raise OpError(f"at most {M.MAX_PATHS} paths")
+            paths.append(P_)
+        else:
+            P_["id"] = paths[old]["id"]
+            paths[old] = P_
+    else:
+        P_ = next((q for q in paths if q["name"] == ref or q["id"] == ref), None)
+        if P_ is None:
+            raise OpError(f"no path {ref!r} (the document has: {', '.join(q['name'] for q in paths) or 'none'})")
+    do = str(op.get("do") or "keep").lower()
+    W, H = doc.w, doc.h
+    if do == "keep":
+        return f"path {P_['name']!r}: {len(P_['pts'])} points"
+    if do == "remove":
+        paths.remove(P_)
+        if not paths:
+            doc.meta.pop("paths", None)
+        return f"path {P_['name']!r} removed"
+    if do == "select":
+        how = str(op.get("combine") or "replace").lower()
+        if how not in ("replace", "add", "subtract", "intersect"):
+            raise OpError("'combine' is replace, add, subtract or intersect")
+        sel = M.combine_masks(doc.selection, M.path_mask(W, H, P_), how)
+        if op.get("feather"):
+            sel = M.feather_mask(sel, M._num(op["feather"], 0, 0, 500))
+        doc.selection = sel
+        return f"selected the inside of path {P_['name']!r} ({how})"
+    if do == "mask":
+        L = _unlocked(find_layer(doc, op.get("layer")))
+        L["mask"] = {"enabled": True, "x": 0, "y": 0, "w": W, "h": H, "fill": 0}
+        doc.masks[L["id"]] = M.path_mask(W, H, P_)
+        return f"{L['name']!r}: mask from path {P_['name']!r}"
+    if do in ("fill", "stroke"):
+        L = _unlocked(find_layer(doc, op.get("layer"), "pixel"))
+        col = _color(op.get("color"), (0, 0, 0, 255))
+        if do == "fill":
+            area = M.path_mask(W, H, P_)
+        else:
+            width = M._num(op.get("width"), 3, 0.5, 1000)
+            area = M.stroke_mask(W, H, M.flatten_path(P_), P_["closed"], width)
+        px = _canvas_layer(doc, L)
+        t = _layer_area(doc, L, area)
+        cp = np.zeros_like(px)
+        cp[...] = col
+        doc.px[L["id"]] = _mix(px, cp, t)
+        return f"{'filled' if do == 'fill' else 'stroked'} path {P_['name']!r} on {L['name']!r} with #%02x%02x%02x" % col[:3]
+    raise OpError("'do' is keep, select, mask, fill, stroke or remove")
+
+
 _ONE = {"add_layer": _add_layer, "add_adjustment": _add_adjustment, "set_layer": _set_layer,
         "remove_layer": _remove_layer, "duplicate_layer": _duplicate_layer, "move_layer": _move_layer,
         "merge_down": _merge_down, "flatten": _flatten, "select": _select, "mask": _mask, "fill": _fill,
         "clear": _clear, "heal": _heal, "filter": _filter, "crop": _crop, "canvas_size": _canvas_size,
         "resize": _resize_doc, "transform": _transform, "add_text": _add_text, "group": _group,
-        "ungroup": _ungroup, "merge_group": _merge_group}
+        "ungroup": _ungroup, "merge_group": _merge_group, "path": _path}

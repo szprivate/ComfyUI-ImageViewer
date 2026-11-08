@@ -63,7 +63,7 @@ class PaintParity(unittest.TestCase):
         for name, d in cases.items():
             job["cases"][name] = {"doc": d.meta, "px": {k: b64(v) for k, v in d.px.items()},
                                   "masks": {k: b64(v) for k, v in d.masks.items()},
-                                  "filters": getattr(d, "filters", None)}
+                                  "filters": getattr(d, "filters", None), "path": getattr(d, "path", None)}
         with tempfile.TemporaryDirectory() as tmp:
             a, b = os.path.join(tmp, "in.json"), os.path.join(tmp, "out.json")
             with open(a, "w") as f:
@@ -199,6 +199,30 @@ class PaintParity(unittest.TestCase):
         self.same(M.feather_mask(M.ellipse_mask(w, h, 3, 4, w * 0.6, h * 0.5), 3.5), got["feather"], (h, w), "feather")
         self.same(M.polygon_mask(w, h, poly), got["polygon"], (h, w), "polygon", tol=0)
         self.same(M.ellipse_mask(w, h, 2.5, 3.2, w * 0.7, h * 0.6), got["ellipse"], (h, w), "ellipse", tol=0)
+
+    def test_pen_paths(self):
+        d = rnd_doc(9, [])
+        path = {"name": "p", "closed": True, "pts": [
+            {"x": 3.2, "y": 4.1, "ix": 3.2, "iy": 4.1, "ox": 12.5, "oy": -2, "smooth": False},
+            {"x": 31.7, "y": 9.3, "ix": 28, "iy": 2, "ox": 35.4, "oy": 16.6, "smooth": True},
+            {"x": 18.1, "y": 25.6, "ix": 18.1, "iy": 25.6, "ox": 18.1, "oy": 25.6, "smooth": False},
+            {"x": 6, "y": 20, "ix": 10, "iy": 26, "ox": 2, "oy": 14, "smooth": True}]}
+        W, H = 40, 32
+        d.path = {"path": path, "w": W, "h": H, "width": 3.4}
+        got = self.run_node({"p": d})["p"]
+        Q = M.clean_path(path)
+        line = M.flatten_path(Q)
+        self.assertEqual(len(line), len(got["path_line"]))
+        self.assertLess(float(np.abs(np.array(line) - np.array(got["path_line"])).max()), 1e-9)
+        self.same(M.path_mask(W, H, Q), got["path_fill"], (H, W), "path fill", tol=0)
+        self.same(M.stroke_mask(W, H, line, True, 3.4), got["path_stroke"], (H, W), "path stroke", tol=1)
+        # An open path is filled as if closed by a straight line, and stroked without that line.
+        Q["closed"] = False
+        self.assertEqual(M.flatten_path(Q)[-1], [6, 20])
+        self.assertLess(len(M.flatten_path(Q)), len(line))
+        # A path survives clean_meta (so it is kept in the .ora's imageviewer.json).
+        meta = dict(d.meta, paths=[path, {"pts": []}])
+        self.assertEqual([p["name"] for p in P.clean_meta(meta)["paths"]], ["p"])
 
 
 if __name__ == "__main__":

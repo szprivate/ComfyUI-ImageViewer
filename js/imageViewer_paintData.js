@@ -186,8 +186,11 @@ export function cleanDoc(meta) {
     if (!(w >= 1 && w <= MAX_SIDE && h >= 1 && h <= MAX_SIDE)) throw new Error(`the canvas must be 1..${MAX_SIDE} pixels a side`);
     const layers = fixTree((Array.isArray(meta.layers) ? meta.layers : []).filter((L) => L && typeof L === "object").map(cleanLayer));
     const ids = layers.map((L) => L.id);
-    return { version: 1, w, h, name: String(meta.name || "paint").slice(0, 120), layers,
-             active: ids.includes(meta.active) ? meta.active : (ids[ids.length - 1] || null) };
+    const out = { version: 1, w, h, name: String(meta.name || "paint").slice(0, 120), layers,
+                  active: ids.includes(meta.active) ? meta.active : (ids[ids.length - 1] || null) };
+    const paths = cleanPaths(meta.paths);
+    if (paths.length) out.paths = paths;
+    return out;
 }
 
 // ── the tree ────────────────────────────────────────────────────────────────
@@ -1140,4 +1143,127 @@ export function freshName(doc, base = "Layer") {
     let n = doc.layers.length + 1;
     while (taken.has(`${base} ${n}`)) n++;
     return `${base} ${n}`;
+}
+
+// ── paths (the pen) ─────────────────────────────────────────────────────────
+// A path is anchors with a handle on each side: { x, y, ix, iy (the handle before), ox, oy (after), smooth }.
+// Every segment is a cubic Bezier from an anchor through its out handle and the next one's in handle.
+// paint_math.flatten_path / stroke_mask are the same arithmetic.
+
+export const MAX_PATHS = 100;
+export const MAX_PATH_POINTS = 4000;
+
+export function cleanPath(p) {
+    const f = (v, d) => { const x = Number(v); return Number.isFinite(x) ? Math.max(-1e6, Math.min(1e6, x)) : d; };
+    const pts = (Array.isArray(p && p.pts) ? p.pts : []).slice(0, MAX_PATH_POINTS).filter((a) => a && typeof a === "object").map((a) => {
+        const x = f(a.x, 0), y = f(a.y, 0);
+        return { x, y, ix: f(a.ix, x), iy: f(a.iy, y), ox: f(a.ox, x), oy: f(a.oy, y), smooth: !!a.smooth };
+    });
+    return { id: String((p && p.id) || newId()).slice(0, 40), name: String((p && p.name) || "Path").slice(0, 120), closed: !!(p && p.closed) && pts.length > 2, pts };
+}
+
+export function cleanPaths(list) {
+    const out = [], seen = new Set();
+    for (const p of (Array.isArray(list) ? list : []).slice(0, MAX_PATHS)) {
+        const c = cleanPath(p);
+        if (!c.pts.length || seen.has(c.id)) continue;
+        seen.add(c.id);
+        out.push(c);
+    }
+    return out;
+}
+
+/** How many straight pieces a segment is drawn with: about one per 3 px of its control polygon, 1 when it is straight. */
+export function segmentSteps(a, b) {
+    if (a.ox === a.x && a.oy === a.y && b.ix === b.x && b.iy === b.y) return 1;
+    const len = Math.hypot(a.ox - a.x, a.oy - a.y) + Math.hypot(b.ix - a.ox, b.iy - a.oy) + Math.hypot(b.x - b.ix, b.y - b.iy);
+    return Math.max(1, Math.min(128, Math.ceil(len / 3)));
+}
+
+export function bezierAt(a, b, t) {
+    const u = 1 - t, A = u * u * u, B = 3 * u * u * t, C = 3 * u * t * t, E = t * t * t;
+    return [A * a.x + B * a.ox + C * b.ix + E * b.x, A * a.y + B * a.oy + C * b.iy + E * b.y];
+}
+
+/** The path as a polyline [[x, y], ...]; a closed path's last segment back to the first anchor included (not repeating it). */
+export function flattenPath(path) {
+    const pts = path.pts, out = [];
+    if (!pts.length) return out;
+    out.push([pts[0].x, pts[0].y]);
+    const segs = path.closed ? pts.length : pts.length - 1;
+    for (let i = 0; i < segs; i++) {
+        const a = pts[i], b = pts[(i + 1) % pts.length], n = segmentSteps(a, b);
+        for (let k = 1; k <= n; k++) {
+            if (path.closed && i === segs - 1 && k === n) break;
+            out.push(k === n ? [b.x, b.y] : bezierAt(a, b, k / n));
+        }
+    }
+    return out;
+}
+
+/** The inside of a path (an open one closed by a straight line), even-odd. */
+export function pathMask(w, h, path) { return polygonMask(w, h, flattenPath(path)); }
+
+/** A line `width` px wide along the polyline, antialiased: coverage = width / 2 - distance + 0.5, held to 0..1. */
+export function strokeMask(w, h, line, closed, width) {
+    const m = new Uint8Array(w * h);
+    const n = line.length, r = Math.max(0.5, width / 2);
+    if (!n) return m;
+    const segs = n === 1 ? [[line[0], line[0]]] : [];
+    for (let i = 0; i + 1 < n; i++) segs.push([line[i], line[i + 1]]);
+    if (closed && n > 2) segs.push([line[n - 1], line[0]]);
+    for (const [p, q] of segs) {
+        const x0 = Math.max(0, Math.floor(Math.min(p[0], q[0]) - r - 1)), x1 = Math.min(w - 1, Math.ceil(Math.max(p[0], q[0]) + r + 1));
+        const y0 = Math.max(0, Math.floor(Math.min(p[1], q[1]) - r - 1)), y1 = Math.min(h - 1, Math.ceil(Math.max(p[1], q[1]) + r + 1));
+        const dx = q[0] - p[0], dy = q[1] - p[1], ll = dx * dx + dy * dy;
+        for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+            const cx = x + 0.5 - p[0], cy = y + 0.5 - p[1];
+            let t = ll > 0 ? (cx * dx + cy * dy) / ll : 0;
+            t = t < 0 ? 0 : t > 1 ? 1 : t;
+            const ex = cx - t * dx, ey = cy - t * dy, d = Math.sqrt(ex * ex + ey * ey);
+            const c = r - d + 0.5, v = q8(c < 0 ? 0 : c > 1 ? 1 : c);
+            const i = y * w + x;
+            if (v > m[i]) m[i] = v;
+        }
+    }
+    return m;
+}
+
+/** The anchor, or a handle, of `path` within `tol` of (x, y): { i, part: "a" | "in" | "out" } or null; handles first. */
+export function pathHit(path, x, y, tol, handles = true) {
+    let best = null, bd = tol;
+    path.pts.forEach((a, i) => {
+        const tries = [["a", a.x, a.y]];
+        if (handles) tries.unshift(["in", a.ix, a.iy], ["out", a.ox, a.oy]);
+        for (const [part, px, py] of tries) {
+            if (part !== "a" && px === a.x && py === a.y) continue;
+            const d = Math.hypot(px - x, py - y);
+            if (d < bd || (d === bd && part !== "a" && best && best.part === "a")) { bd = d; best = { i, part }; }
+        }
+    });
+    return best;
+}
+
+/** Move one part of an anchor; an anchor takes its handles along, a smooth anchor's other handle turns with the one dragged. */
+export function movePathPoint(a, part, x, y, free = false) {
+    const out = { ...a };
+    if (part === "a") {
+        const dx = x - a.x, dy = y - a.y;
+        Object.assign(out, { x, y, ix: a.ix + dx, iy: a.iy + dy, ox: a.ox + dx, oy: a.oy + dy });
+        return out;
+    }
+    const [k, o] = part === "in" ? ["i", "o"] : ["o", "i"];
+    out[k + "x"] = x; out[k + "y"] = y;
+    if (a.smooth && !free) {
+        const ol = Math.hypot(a[o + "x"] - a.x, a[o + "y"] - a.y), dl = Math.hypot(x - a.x, y - a.y);
+        if (dl > 0 && ol > 0) { out[o + "x"] = a.x - ((x - a.x) / dl) * ol; out[o + "y"] = a.y - ((y - a.y) / dl) * ol; }
+    }
+    if (free) out.smooth = false;
+    return out;
+}
+
+/** Every anchor and handle scaled by kx, ky, then moved by dx, dy (a crop, canvas size, resize; paint_math.move_paths). */
+export function movePaths(paths, dx = 0, dy = 0, kx = 1, ky = 1) {
+    return (paths || []).map((q) => ({ ...q, pts: q.pts.map((a) => ({ ...a, x: a.x * kx + dx, y: a.y * ky + dy, ix: a.ix * kx + dx, iy: a.iy * ky + dy,
+                                                                     ox: a.ox * kx + dx, oy: a.oy * ky + dy })) }));
 }

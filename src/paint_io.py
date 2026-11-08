@@ -246,6 +246,9 @@ def clean_meta(meta):
     if len(set(ids)) != len(ids):
         raise ValueError("two layers have the same id")
     out["active"] = meta.get("active") if meta.get("active") in ids else (ids[-1] if ids else None)
+    paths = M.clean_paths(meta.get("paths"))
+    if paths:
+        out["paths"] = paths
     return out
 
 
@@ -738,6 +741,8 @@ def _psd_record(L, px, mask, section=None):
 def write_psd(path, doc):
     """A layered .psd (8-bit RGB), groups as Photoshop's layer groups. Returns the notes (what was baked)."""
     layers, notes = baked_for_psd(doc)
+    if doc.meta.get("paths"):
+        notes = list(notes) + [f"{len(doc.meta['paths'])} pen path(s) are kept only in the .ora, not in the .psd"]
     W, H = doc.w, doc.h
     recs, chans = [], []
     kids = {}
@@ -1019,4 +1024,6 @@ def outline(doc):
     sel = M.mask_bbox(doc.selection)
     out = {"w": doc.w, "h": doc.h, "name": doc.meta.get("name"), "layer_count": n, "layers": rows,
            "selection": ({"x": sel[0], "y": sel[1], "w": sel[2], "h": sel[3]} if sel else None)}
+    if doc.meta.get("paths"):
+        out["paths"] = [{"name": q["name"], "points": len(q["pts"]), "closed": q["closed"]} for q in doc.meta["paths"]]
     return out
