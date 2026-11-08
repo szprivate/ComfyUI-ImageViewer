@@ -13,6 +13,7 @@ Pictures are numpy ``uint8`` arrays ``(h, w, 4)``, straight (not premultiplied) 
 from __future__ import annotations
 
 import math
+import uuid
 
 import numpy as np
 
@@ -578,4 +579,108 @@ def heal(px, mask, iterations=None):
     out = px.copy()
     out[..., :3] = np.where(hole[..., None], q8(rgb), px[..., :3])
     out[..., 3] = np.where(hole, q8(ab[..., 0]), px[..., 3])
+    return out
+
+
+# ── paths (the pen) ──────────────────────────────────────────────────────────
+# imageViewer_paintData.js's cleanPath / flattenPath / strokeMask: the same arithmetic.
+
+MAX_PATHS = 100
+MAX_PATH_POINTS = 4000
+
+
+def clean_path(p):
+    p = p if isinstance(p, dict) else {}
+    f = lambda v, d: _num(v, d, -1e6, 1e6)
+    pts = []
+    for a in (p.get("pts") if isinstance(p.get("pts"), list) else [])[:MAX_PATH_POINTS]:
+        if not isinstance(a, dict):
+            continue
+        x, y = f(a.get("x"), 0), f(a.get("y"), 0)
+        pts.append({"x": x, "y": y, "ix": f(a.get("ix"), x), "iy": f(a.get("iy"), y),
+                    "ox": f(a.get("ox"), x), "oy": f(a.get("oy"), y), "smooth": bool(a.get("smooth"))})
+    return {"id": str(p.get("id") or uuid.uuid4().hex[:12])[:40], "name": str(p.get("name") or "Path")[:120],
+            "closed": bool(p.get("closed")) and len(pts) > 2, "pts": pts}
+
+
+def clean_paths(lst):
+    out, seen = [], set()
+    for p in (lst if isinstance(lst, list) else [])[:MAX_PATHS]:
+        c = clean_path(p)
+        if not c["pts"] or c["id"] in seen:
+            continue
+        seen.add(c["id"])
+        out.append(c)
+    return out
+
+
+def segment_steps(a, b):
+    if a["ox"] == a["x"] and a["oy"] == a["y"] and b["ix"] == b["x"] and b["iy"] == b["y"]:
+        return 1
+    ln = (math.hypot(a["ox"] - a["x"], a["oy"] - a["y"]) + math.hypot(b["ix"] - a["ox"], b["iy"] - a["oy"])
+          + math.hypot(b["x"] - b["ix"], b["y"] - b["iy"]))
+    return max(1, min(128, math.ceil(ln / 3)))
+
+
+def bezier_at(a, b, t):
+    u = 1 - t
+    A, B, C, E = u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t
+    return [A * a["x"] + B * a["ox"] + C * b["ix"] + E * b["x"], A * a["y"] + B * a["oy"] + C * b["iy"] + E * b["y"]]
+
+
+def flatten_path(path):
+    pts, out = path["pts"], []
+    if not pts:
+        return out
+    out.append([pts[0]["x"], pts[0]["y"]])
+    segs = len(pts) if path.get("closed") else len(pts) - 1
+    for i in range(segs):
+        a, b = pts[i], pts[(i + 1) % len(pts)]
+        n = segment_steps(a, b)
+        for k in range(1, n + 1):
+            if path.get("closed") and i == segs - 1 and k == n:
+                break
+            out.append([b["x"], b["y"]] if k == n else bezier_at(a, b, k / n))
+    return out
+
+
+def path_mask(w, h, path):
+    return polygon_mask(w, h, flatten_path(path))
+
+
+def stroke_mask(w, h, line, closed, width):
+    """A line ``width`` px wide along the polyline: coverage = width / 2 - distance + 0.5, held to 0..1."""
+    m = np.zeros((h, w), dtype=np.uint8)
+    n, r = len(line), max(0.5, width / 2)
+    if not n:
+        return m
+    segs = [(line[0], line[0])] if n == 1 else []
+    segs += [(line[i], line[i + 1]) for i in range(n - 1)]
+    if closed and n > 2:
+        segs.append((line[-1], line[0]))
+    for p, q in segs:
+        x0 = max(0, math.floor(min(p[0], q[0]) - r - 1)); x1 = min(w - 1, math.ceil(max(p[0], q[0]) + r + 1))
+        y0 = max(0, math.floor(min(p[1], q[1]) - r - 1)); y1 = min(h - 1, math.ceil(max(p[1], q[1]) + r + 1))
+        if x1 < x0 or y1 < y0:
+            continue
+        dx, dy = q[0] - p[0], q[1] - p[1]
+        ll = dx * dx + dy * dy
+        cx = np.arange(x0, x1 + 1, dtype=np.float64)[None, :] + 0.5 - p[0]
+        cy = np.arange(y0, y1 + 1, dtype=np.float64)[:, None] + 0.5 - p[1]
+        t = np.clip((cx * dx + cy * dy) / ll, 0, 1) if ll > 0 else np.zeros_like(cx * cy)
+        ex, ey = cx - t * dx, cy - t * dy
+        c = np.clip(r - np.sqrt(ex * ex + ey * ey) + 0.5, 0, 1)
+        v = np.clip(np.floor(c * 255 + 0.5), 0, 255).astype(np.uint8)
+        sub = m[y0:y1 + 1, x0:x1 + 1]
+        np.maximum(sub, v, out=sub)
+    return m
+
+
+def move_paths(paths, dx=0.0, dy=0.0, kx=1.0, ky=1.0):
+    """Every anchor and handle scaled by kx, ky, then moved by dx, dy (a crop, canvas size, resize)."""
+    out = []
+    for q in paths or []:
+        pts = [{**a, "x": a["x"] * kx + dx, "y": a["y"] * ky + dy, "ix": a["ix"] * kx + dx, "iy": a["iy"] * ky + dy,
+                "ox": a["ox"] * kx + dx, "oy": a["oy"] * ky + dy} for a in q["pts"]]
+        out.append({**q, "pts": pts})
     return out

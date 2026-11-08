@@ -25,6 +25,13 @@ for (const [name, c] of Object.entries(job.cases)) {
         res.polygon = enc(D.polygonMask(L.w, L.h, c.filters.polygon));
         res.ellipse = enc(D.ellipseMask(L.w, L.h, 2.5, 3.2, L.w * 0.7, L.h * 0.6));
     }
+    if (c.path) {
+        const P = D.cleanPath(c.path.path), W = c.path.w, H = c.path.h;
+        const line = D.flattenPath(P);
+        res.path_line = line;
+        res.path_fill = enc(D.pathMask(W, H, P));
+        res.path_stroke = enc(D.strokeMask(W, H, line, P.closed, c.path.width));
+    }
     out[name] = res;
 }
 fs.writeFileSync(outFile, JSON.stringify(out));

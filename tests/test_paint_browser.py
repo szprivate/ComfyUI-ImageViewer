@@ -612,6 +612,81 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(comp(50, 30), before)
         self.assertEqual(self.errors, [])
 
+    def test_pen_paths_select_fill_stroke_and_save(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        x0, y0, w, h = pg.evaluate(f"() => {{ const r = {ed}.canvas.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }}")
+        k = w / 200
+        at = lambda x, y: (x0 + x * k, y0 + y * k)
+        pg.mouse.move(*at(5, 5))
+        pg.keyboard.press("p")
+        self.assertEqual(pg.evaluate(f"() => {ed}.tool"), "pen")
+        # Click, click, drag (a smooth anchor), click, then the first anchor: a closed path of four.
+        pg.mouse.click(*at(20, 20))
+        pg.mouse.click(*at(180, 20))
+        pg.mouse.move(*at(180, 100)); pg.mouse.down(); pg.mouse.move(*at(160, 110), steps=5); pg.mouse.up()
+        pg.mouse.click(*at(20, 100))
+        pg.mouse.click(*at(20, 20))
+        P = pg.evaluate(f"() => {ed}.curPath()")
+        self.assertTrue(P["closed"])
+        self.assertEqual(len(P["pts"]), 4)
+        self.assertTrue(P["pts"][2]["smooth"])
+        self.assertAlmostEqual(P["pts"][2]["ox"], 160, delta=1)
+        self.assertAlmostEqual(P["pts"][2]["ix"], 200, delta=1)
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.slice(-2).map((x) => x.label)"), ["Add anchor", "Close path"])
+        # Ctrl+Enter: the inside as the selection.
+        pg.keyboard.press("Control+Enter")
+        self.assertEqual(pg.evaluate(f"() => [{ed}.sel[60 * 200 + 100], {ed}.sel[5 * 200 + 5], {ed}.sel[60 * 200 + 190]]"), [255, 0, 0])
+        # Ctrl+drag the first anchor; a click on a straight segment adds an anchor, a click on that anchor takes it away.
+        pg.keyboard.down("Control"); pg.mouse.move(*at(20, 20)); pg.mouse.down(); pg.mouse.move(*at(10, 10), steps=4); pg.mouse.up(); pg.keyboard.up("Control")
+        b0 = P["pts"][0]
+        a0 = pg.evaluate(f"() => {ed}.curPath().pts[0]")
+        self.assertAlmostEqual(a0["x"] - b0["x"], -10, delta=0.6)
+        self.assertAlmostEqual(a0["y"] - b0["y"], -10 * k / (h / 120), delta=0.6)
+        pg.mouse.click(*at(95, 15))
+        self.assertEqual(pg.evaluate(f"() => {ed}.curPath().pts.length"), 5)
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Add anchor")
+        pg.mouse.click(*at(95, 15))
+        self.assertEqual(pg.evaluate(f"() => {ed}.curPath().pts.length"), 4)
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Delete anchor")
+        # Fill (Properties' button) paints the inside with the colour; Stroke paints along it on a new layer.
+        pg.evaluate(f"() => {{ {ed}.deselect(); {ed}.fg = [0, 255, 0]; }}")
+        pg.click(".pen-fill")
+        px = lambda x, y, i=0: pg.evaluate(f"() => {{ const e = {ed}, L = e.doc.layers[{i}], b = e.pix.get(L.id), o = (({y} - L.y) * L.w + {x} - L.x) * 4; return [...b.slice(o, o + 4)]; }}")
+        self.assertEqual(px(100, 60), [0, 255, 0, 255])
+        self.assertEqual(px(5, 110), [0, 0, 160, 255])
+        pg.evaluate(f"() => {{ {ed}.newLayer(); {ed}.fg = [255, 0, 0]; {ed}.opts.pen.width = 4; }}")
+        pg.click(".pen-stroke")
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Stroke path")
+        mx, my = pg.evaluate(f"() => {{ const q = {ed}.curPath().pts; return [Math.floor((q[3].x + q[0].x) / 2), Math.floor((q[3].y + q[0].y) / 2)]; }}")
+        self.assertEqual(px(mx, my, 1), [255, 0, 0, 255])
+        self.assertEqual(px(100, 60, 1)[3], 0)
+        # Mask from the path; undo takes it away again.
+        pg.click(".pen-mask")
+        self.assertTrue(pg.evaluate(f"() => !!{ed}.active().mask"))
+        pg.keyboard.press("Control+z")
+        self.assertFalse(pg.evaluate(f"() => !!{ed}.active().mask"))
+        # Saved in the .ora and read back; the server's agent op makes the same selection.
+        pg.evaluate("() => __panel.paintSave(__panel._paintActive())")
+        pg.wait_for_function(f"() => !{ed}.isDirty()", timeout=10000)
+        path = pg.evaluate("() => __panel._paintActive().path")
+        doc = self.P.read_ora(path)
+        self.assertEqual([q["name"] for q in doc.meta["paths"]], ["Path 1"])
+        self.assertEqual(len(doc.meta["paths"][0]["pts"]), 4)
+        from paint_pkg import paint_ops as O
+        O.apply_ops(doc, [{"op": "path", "path": "Path 1", "do": "select"}], read_image=None)
+        js = pg.evaluate(f"""async () => {{ const D = await import('/extensions/viewer/imageViewer_paintData.js');
+            return [...D.pathMask({ed}.doc.w, {ed}.doc.h, {ed}.curPath())]; }}""")
+        self.assertTrue((np.array(js, np.uint8).reshape(doc.selection.shape) == doc.selection).all())
+        # Esc lets go of the path; Delete with it picked deletes it.
+        pg.mouse.move(*at(5, 5))
+        pg.keyboard.press("Escape")
+        self.assertIsNone(pg.evaluate(f"() => {ed}.curPath()"))
+        pg.evaluate(f"() => {ed}.selectPath({ed}.doc.paths[0].id)")
+        pg.keyboard.press("Delete")
+        self.assertFalse(pg.evaluate(f"() => !!{ed}.doc.paths"))
+
     def test_quick_mask_and_mask_handling(self):
         pg = self.page()
         self.open_photo(pg)

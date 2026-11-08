@@ -21,6 +21,7 @@ Its three panels, **Layers**, **Properties** and **History**, show only on a Pai
 | <kbd>V</kbd> | Transform: move, scale, rotate, shear (<kbd>Ctrl</kbd>+<kbd>T</kbd>). <kbd>Enter</kbd> applies, <kbd>Esc</kbd> cancels |
 | <kbd>M</kbd> / <kbd>Shift</kbd>+<kbd>M</kbd> | Rectangle / ellipse select |
 | <kbd>L</kbd> | Lasso |
+| <kbd>P</kbd> | Pen: Bezier paths (see below) |
 | <kbd>W</kbd> | Magic wand |
 | <kbd>C</kbd> | Crop |
 | <kbd>B</kbd> | Brush (reads pen pressure) |
@@ -32,6 +33,14 @@ Its three panels, **Layers**, **Properties** and **History**, show only on a Pai
 | <kbd>H</kbd> or hold <kbd>Space</kbd> | Hand |
 
 <kbd>X</kbd> swaps the two colours, <kbd>D</kbd> resets them.
+
+## The pen
+
+<kbd>P</kbd> draws a path one anchor at a time. Click for a corner and drag for a smooth anchor (Shift holds the handle to 45° steps). Click the first anchor to close the path, or press <kbd>Enter</kbd> or <kbd>Esc</kbd> to leave it open. Click the path to add an anchor, or click an anchor to take it away. Click an end of an open path to carry on drawing from it.
+
+<kbd>Ctrl</kbd>+drag moves an anchor or a handle. <kbd>Alt</kbd>+click turns an anchor into a corner, or a corner into a smooth anchor as you drag. <kbd>Alt</kbd>+drag a handle to move it on its own. <kbd>Del</kbd> deletes the picked anchor, or the whole path when no anchor is picked.
+
+<kbd>Ctrl</kbd>+<kbd>Enter</kbd> makes the inside of the path the selection (<kbd>Shift</kbd> adds to it, <kbd>Alt</kbd> takes away). Properties picks and renames paths and has **Selection** (with how it combines and a feather), **Fill** and **Stroke** (in the colour, on the layer or on its mask while that is picked), and **Mask** (the active layer's mask from the path). Paths are saved in the `.ora`, but not in a `.psd`. A crop or resize moves them with the picture.
 
 ## Layers
 
