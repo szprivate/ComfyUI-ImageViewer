@@ -1183,5 +1183,93 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(own(110, 60), start)
         self.assertEqual(self.errors, [])
 
+    def test_path_tools_flyout_path_and_direct_selection_add_delete_convert(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        # Picture pixels to the screen, as the editor itself turns them back (read each time: the options bar's height follows the tool).
+        at = lambda x, y: tuple(pg.evaluate(f"() => {{ const e = {ed}, r = e.wrap.getBoundingClientRect(); return [r.left + e.view.x + {x} * e.view.zoom, r.top + e.view.y + {y} * e.view.zoom]; }}"))
+        sq = "[[40, 30], [160, 30], [160, 90], [40, 90]].map(([x, y]) => ({ x, y, ix: x, iy: y, ox: x, oy: y, smooth: false }))"
+        pg.evaluate(f"() => {{ const e = {ed}; e.change('Path', () => {{ e.doc.paths = [{{ id: 'p1', name: 'Path 1', closed: true, pts: {sq} }}]; }}); e.selectPath(null); }}")
+        pts = lambda: pg.evaluate(f"() => {ed}.curPath().pts.map((a) => [Math.round(a.x * 10) / 10, Math.round(a.y * 10) / 10])")
+        last = lambda: pg.evaluate(f"() => {ed}.undoStack.at(-1).label")
+        # One place in the toolbar; a right-click opens the six tools as icons, a click picks one and shows it there.
+        slot = ".paint-tools .paint-grouped"
+        self.assertEqual(pg.locator(".paint-tools [data-group]").count(), 1)
+        pg.click(slot, button="right")
+        self.assertEqual(pg.evaluate(f"() => [...{ed}.box.querySelectorAll('.paint-flyout .paint-btn')].map((b) => b.dataset.tool)"),
+                         ["pen", "penadd", "pendel", "penconv", "pathsel", "pathdirect"])
+        self.assertTrue(pg.evaluate(f"() => [...{ed}.box.querySelectorAll('.paint-flyout svg')].length === 6"))
+        pg.click(".paint-flyout [data-tool=pathsel]")
+        self.assertEqual(pg.evaluate(f"() => [{ed}.tool, !!{ed}.box.querySelector('.paint-flyout'), {ed}.box.querySelector('{slot}').dataset.tool]"),
+                         ["pathsel", False, "pathsel"])
+        self.assertTrue(pg.evaluate(f"() => {ed}.box.querySelector('{slot}').classList.contains('on')"))
+        # A click elsewhere puts the flyout away without picking anything.
+        pg.click(slot, button="right")
+        pg.mouse.click(*at(5, 115))
+        self.assertEqual(pg.evaluate(f"() => [{ed}.tool, !!{ed}.box.querySelector('.paint-flyout')]"), ["pathsel", False])
+        # Path selection: a drag on the curve moves the whole path, Alt+drag a copy, the arrows nudge it.
+        pg.mouse.move(*at(100, 30)); pg.mouse.down(); pg.mouse.move(*at(110, 40), steps=5); pg.mouse.up()
+        self.assertEqual(pts(), [[50, 40], [170, 40], [170, 100], [50, 100]])
+        self.assertEqual(last(), "Move path")
+        pg.keyboard.down("Alt"); pg.mouse.move(*at(110, 40)); pg.mouse.down(); pg.mouse.move(*at(100, 30), steps=5); pg.mouse.up(); pg.keyboard.up("Alt")
+        self.assertEqual(pg.evaluate(f"() => {ed}.doc.paths.map((q) => q.name)"), ["Path 1", "Path 1 copy"])
+        self.assertEqual(pts(), [[40, 30], [160, 30], [160, 90], [40, 90]])
+        self.assertEqual(last(), "Duplicate path")
+        pg.keyboard.press("ArrowRight"); pg.keyboard.press("Shift+ArrowDown")
+        self.assertEqual(pts()[0], [41, 40])
+        self.assertEqual(last(), "Nudge path")
+        pg.keyboard.press("Delete")
+        self.assertEqual(pg.evaluate(f"() => {ed}.doc.paths.map((q) => q.name)"), ["Path 1"])
+        # Direct selection (Shift+A): a box picks two anchors, a drag moves both, Shift+click one more, Del takes them away.
+        pg.keyboard.press("Shift+a")
+        self.assertEqual(pg.evaluate(f"() => {ed}.tool"), "pathdirect")
+        pg.mouse.move(*at(150, 30)); pg.mouse.down(); pg.mouse.move(*at(185, 110), steps=6); pg.mouse.up()
+        self.assertEqual(pg.evaluate(f"() => [{ed}.curPath().id, [...{ed}._pathPicked()].sort()]"), ["p1", [1, 2]])
+        pg.mouse.move(*at(170, 40)); pg.mouse.down(); pg.mouse.move(*at(160, 40), steps=4); pg.mouse.up()
+        self.assertEqual(pts(), [[50, 40], [160, 40], [160, 100], [50, 100]])
+        self.assertEqual(last(), "Move anchors")
+        pg.keyboard.press("ArrowUp")
+        self.assertEqual(pts(), [[50, 40], [160, 39], [160, 99], [50, 100]])
+        self.assertEqual(last(), "Nudge anchors")
+        pg.keyboard.down("Shift"); pg.mouse.click(*at(50, 100)); pg.keyboard.up("Shift")
+        self.assertEqual(sorted(pg.evaluate(f"() => [...{ed}._pathPicked()]")), [1, 2, 3])
+        pg.keyboard.press("Delete")
+        self.assertEqual(pts(), [[50, 40]])
+        self.assertEqual(last(), "Delete anchors")
+        pg.keyboard.press("Control+z")
+        self.assertEqual(len(pts()), 4)
+        # A plain click on an anchor picks it alone; a click on nothing lets the path go.
+        pg.mouse.click(*at(50, 40))
+        self.assertEqual(pg.evaluate(f"() => [...{ed}._pathPicked()]"), [0])
+        pg.mouse.click(*at(5, 5))
+        self.assertIsNone(pg.evaluate(f"() => {ed}.pathId"))
+        # Add anchor: a click on the curve; Delete anchor: a click on it; Convert point: a drag from a corner makes it smooth.
+        pg.click(slot, button="right"); pg.click(".paint-flyout [data-tool=penadd]")
+        pg.mouse.click(*at(105, 100))
+        self.assertEqual(len(pts()), 5)
+        self.assertEqual(last(), "Add anchor")
+        pg.click(slot, button="right"); pg.click(".paint-flyout [data-tool=pendel]")
+        pg.mouse.click(*at(105, 100))
+        self.assertEqual(len(pts()), 4)
+        self.assertEqual(last(), "Delete anchor")
+        pg.click(slot, button="right"); pg.click(".paint-flyout [data-tool=penconv]")
+        pg.mouse.move(*at(50, 40)); pg.mouse.down(); pg.mouse.move(*at(60, 30), steps=4); pg.mouse.up()
+        a = pg.evaluate(f"() => {ed}.curPath().pts[0]")
+        self.assertTrue(a["smooth"])
+        self.assertAlmostEqual(a["ix"], 40, delta=1)
+        self.assertEqual(last(), "Smooth anchor")
+        pg.mouse.click(*at(50, 40))
+        self.assertFalse(pg.evaluate(f"() => {ed}.curPath().pts[0].smooth"))
+        self.assertEqual(last(), "Corner anchor")
+        # Shift+P goes round the pen's four; the toolbar's place follows.
+        pg.keyboard.press("p")
+        seen = []
+        for _ in range(4):
+            pg.keyboard.press("Shift+p")
+            seen.append(pg.evaluate(f"() => [{ed}.tool, {ed}.box.querySelector('{slot}').dataset.tool]"))
+        self.assertEqual(seen, [["penadd", "penadd"], ["pendel", "pendel"], ["penconv", "penconv"], ["pen", "pen"]])
+        self.assertEqual(self.errors, [])
+
 if __name__ == "__main__":
     unittest.main()
