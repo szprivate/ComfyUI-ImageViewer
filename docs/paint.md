@@ -12,7 +12,7 @@ A small picture editor: layers, brushes, selections, masks, adjustment layers, t
 - Right-click a History thumbnail ▸ **Edit in Paint**.
 - Open an `.ora` or `.psd` from the file browser.
 
-Its three panels, **Layers**, **Properties** and **History**, show only on a Paint tab. The row under the menus holds the current tool's options.
+Its panels show only on a Paint tab: **Layers**, **History** and, sharing one place as tabs, **Properties** (the active layer, its mask, and Fill while it is open), **Tool options** (the current tool's controls and the two colours), **Effects** (the active layer's style and smart filters) and **Generate** (the prompt, the generate buttons, variations, Workflows…). Click a tab's name to bring it up, or drag a tab out to give it a place of its own; Paint's group in the bottom bar opens and closes each one. Layer style… and Smart filters… bring Effects to the front, Fill (Shift+F5) Properties. The row under the menus holds the current tool's options as well.
 
 ## Tools
 
@@ -45,7 +45,7 @@ On a big picture (more than about two million pixels) seen smaller than half its
 
 ## Brush tips
 
-The brush and the eraser can paint with a picture as their tip instead of a round dab. The tips are in the tool's Properties:
+The brush and the eraser can paint with a picture as their tip instead of a round dab. The tips are in Tool options:
 - **Import .abr…** reads a brush file. Only the sampled tips are read, which are the ones drawn from a picture. Computed round brushes and the brush settings saved with them (dynamics, textures) are not read; the note after the import says what was left out. The file is read in the browser and is not sent to the server.
 - **From selection** makes a tip from the selected part of the picture as it looks. Dark parts paint, light parts do not. **Edit > Define brush tip from the selection** does the same.
 - **Invert** paints with the light parts instead. **Delete** removes the tip.
@@ -77,7 +77,7 @@ The layer's mask goes with it. Press <kbd>Enter</kbd> or double-click to apply, 
 
 ## Smart filters
 
-A smart filter is kept as a setting on the layer instead of being baked into its pixels, so you can change it, switch it off, reorder it or take it away later. Add one from the **Filter** menu ("Smart filter: Gaussian blur", "Sharpen", or "an adjustment…" such as Levels or Hue/Saturation), or with **Add…** in its Properties section. Each filter there has its switch, ▲ ▼ to change the order, × to remove it, and its numbers. A layer with smart filters shows "sf" in the Layers panel. **Bake into the pixels** (or **Layer > Bake smart filters**) applies them for good. A blur reaches past the layer's own box, as it would on a layer the size of the canvas. A `.ora` keeps them; a `.psd` gets them baked in. The agent sets them with `set_layer` `filters`: a list of `{type, params, on}` in order, or null to take them off.
+A smart filter is kept as a setting on the layer instead of being baked into its pixels, so you can change it, switch it off, reorder it or take it away later. Add one from the **Filter** menu ("Smart filter: Gaussian blur", "Sharpen", or "an adjustment…" such as Levels or Hue/Saturation), or with **Add…** in the Effects panel. Each filter there has its switch, ▲ ▼ to change the order, × to remove it, and its numbers. A layer with smart filters shows "sf" in the Layers panel. **Bake into the pixels** (or **Layer > Bake smart filters**) applies them for good. A blur reaches past the layer's own box, as it would on a layer the size of the canvas. A `.ora` keeps them; a `.psd` gets them baked in. The agent sets them with `set_layer` `filters`: a list of `{type, params, on}` in order, or null to take them off.
 
 ## The pen
 
@@ -95,7 +95,7 @@ A smart filter is kept as a setting on the layer instead of being baked into its
 | Path selection (<kbd>A</kbd>) | Click a path to pick it and drag to move the whole path. <kbd>Alt</kbd>+drag moves a copy. The arrows nudge it (<kbd>Shift</kbd>: 10 px) and <kbd>Del</kbd> deletes it. |
 | Direct selection (<kbd>Shift</kbd>+<kbd>A</kbd>) | Click an anchor to pick it, <kbd>Shift</kbd>+click to pick more, or drag a box around anchors. Drag to move the picked anchors together, or drag a handle. A drag on the curve moves the anchors at its two ends. The arrows nudge them, <kbd>Del</kbd> takes them away, and <kbd>Esc</kbd> lets go. <kbd>Shift</kbd> while dragging keeps the move straight. |
 
-<kbd>Ctrl</kbd>+<kbd>Enter</kbd> makes the inside of the path the selection (<kbd>Shift</kbd> adds to it, <kbd>Alt</kbd> takes away). Properties picks and renames paths and has **Selection** (with how it combines and a feather), **Fill** and **Stroke** (in the colour, on the layer or on its mask while that is picked), and **Mask** (the active layer's mask from the path). Paths are saved in the `.ora`, but not in a `.psd`. A crop or resize moves them with the picture.
+<kbd>Ctrl</kbd>+<kbd>Enter</kbd> makes the inside of the path the selection (<kbd>Shift</kbd> adds to it, <kbd>Alt</kbd> takes away). Tool options picks and renames paths and has **Selection** (with how it combines and a feather), **Fill** and **Stroke** (in the colour, on the layer or on its mask while that is picked), and **Mask** (the active layer's mask from the path). Paths are saved in the `.ora`, but not in a `.psd`. A crop or resize moves them with the picture.
 
 ## Layers
 
@@ -130,13 +130,13 @@ A smart filter is kept as a setting on the layer instead of being baked into its
 
 ## Filters
 
-Each adjustment is also in the Filter menu "into the pixels", in a dialog with the same panel and a live preview. Every filter dialog has **Before** (hold it to see the picture without the filter) and **Reset**. A smart filter that is an adjustment (Curves too now) gets the same panel in Properties.
+Each adjustment is also in the Filter menu "into the pixels", in a dialog with the same panel and a live preview. Every filter dialog has **Before** (hold it to see the picture without the filter) and **Reset**. A smart filter that is an adjustment (Curves too now) gets the same panel in Effects.
 
 The **Filter** menu works on every picked pixel layer, and only inside the selection when there is one: Gaussian blur, Motion blur, Sharpen, Unsharp Mask, High Pass, Median (despeckle), Add Noise, Pixelate, and the adjustments baked into the pixels. Each number has a slider beside it, and the picture previews the result live while you drag it or type. **Cancel** undoes the preview, and **OK** keeps it as one undo step.
 
 ## Generate
 
-The **Generate** menu and the Generate part of Properties. **Fill from the surroundings**, a plain **Extend the canvas** and a plain **Upscale** work right here. **Generative fill**, **Remove object**, **Edit** (with the prompt, in the selection or on the whole picture), **Remove background**, **Select subject**, and Extend / Upscale with a workflow each run a ready-made ComfyUI workflow:
+The **Generate** menu and the **Generate** panel. **Fill from the surroundings**, a plain **Extend the canvas** and a plain **Upscale** work right here. **Generative fill**, **Remove object**, **Edit** (with the prompt, in the selection or on the whole picture), **Remove background**, **Select subject**, and Extend / Upscale with a workflow each run a ready-made ComfyUI workflow:
 
 - the part around the selection is cut out (with some room around it), scaled to the size the model works at, and queued in ComfyUI with a new seed each time;
 - the result comes back as a **new layer** at that place, masked to the selection, as one undo step (Remove background gives the layer a mask, Select subject makes the selection);

@@ -24,7 +24,12 @@ import { maskBBox } from "./imageViewer_paintData.js";
 
 export const PAINT_PREFIX = "paint:";
 /** The dock panels of a Paint tab, and the editor part each one holds. */
-export const PAINT_PANELS = { paintLayers: "layers", paintProps: "props", paintHistory: "history" };
+// Dock panel id -> the editor's part it holds. They ship as Layers, History and, sharing one place as tabs,
+// Properties | Tool options | Effects | Generate. The order is the order they are opened in when a Paint tab comes
+// up: in a place shared as tabs the last one opened is in front, so Properties comes after the others.
+export const PAINT_PANELS = { paintLayers: "layers", paintTool: "tool", paintEffects: "effects", paintGenerate: "generate",
+                              paintProps: "props", paintHistory: "history" };
+const PART_NOUN = { layers: "layers", props: "properties", tool: "tool options", effects: "effects", generate: "Generate", history: "history" };
 export { PAINT_KEYS };
 
 const PICTURE_EXTS = [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".tga", ".gif", ".exr", ".hdr", ".dpx"];
@@ -274,6 +279,8 @@ export const PaintPanelMixin = {
                 const want = st.want[id] !== false;
                 if (want !== this.isPanelDocked(id)) this.setPanelDocked(id, want);
             }
+            // The ones that were in front of their tabs when the last Paint tab went away are in front again.
+            if (this.dockTabFront) for (const id of st.front || []) if (this.isPanelDocked(id) && !this.isPanelFront(id)) this.dockTabFront(id);
         }
         this._paintSeat(rec);
         if (first && this.barGroupsSync) this.barGroupsSync();
@@ -287,6 +294,7 @@ export const PaintPanelMixin = {
         this.viewport.classList.remove("paint-mode");
         if (st.host) st.host.style.display = "none";
         if (this.isPanelDocked && this.setPanelDocked) {
+            st.front = Object.keys(PAINT_PANELS).filter((id) => this.isPanelFront && this.isPanelFront(id));
             for (const id of Object.keys(PAINT_PANELS)) {
                 st.want[id] = this.isPanelDocked(id);
                 if (this.isPanelDocked(id)) this.setPanelDocked(id, false);
@@ -306,7 +314,7 @@ export const PaintPanelMixin = {
             else {
                 const n = slot.ownerDocument.createElement("div");
                 n.className = "mg-note";
-                n.textContent = "Open a picture in Paint to see its " + ({ layers: "layers", props: "properties", history: "history" }[part] || part) + ".";
+                n.textContent = "Open a picture in Paint to see its " + (PART_NOUN[part] || part) + ".";
                 slot.replaceChildren(n);
             }
         }
@@ -354,9 +362,9 @@ export const PaintPanelMixin = {
         };
     },
 
-    /** A Paint panel up and in front (Shift+F5 opens Fill in Properties). */
+    /** A Paint panel up and in front (Shift+F5 opens Fill in Properties), by its part ("effects") or its id. */
     paintShowPanel(part) {
-        const id = Object.keys(PAINT_PANELS).find((k) => PAINT_PANELS[k] === part);
+        const id = PAINT_PANELS[part] ? part : Object.keys(PAINT_PANELS).find((k) => PAINT_PANELS[k] === part);
         if (!id || !this.setPanelDocked) return;
         if (!this.isPanelDocked(id)) { this.setPanelDocked(id, true); this._paintSeat(this._paintActive()); }
         else if (this.isPanelFront && !this.isPanelFront(id) && this.dockTabFront) this.dockTabFront(id);

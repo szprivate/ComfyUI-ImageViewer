@@ -726,10 +726,13 @@ class ViewerPanel extends HTMLElement {
             }
             this[prop] = mp;
         }
-        // Paint (imageViewer_paintPanel.js): a picture is a TAB; its Layers and Properties are these
-        // two dock panels, each holding one part of the tab's editor (a .paint-slot the glue fills).
+        // Paint (imageViewer_paintPanel.js): a picture is a TAB; its Layers, Properties, Tool options,
+        // Effects, Generate and History are these dock panels, each holding one part of the tab's editor (a .paint-slot the glue fills).
         for (const [id, prop, cls] of [['paintLayers', 'paintLayersPanel', 'paint-layers'],
                                        ['paintProps', 'paintPropsPanel', 'paint-props-panel'],
+                                       ['paintTool', 'paintToolPanel', 'paint-tool-panel'],
+                                       ['paintEffects', 'paintEffectsPanel', 'paint-effects-panel'],
+                                       ['paintGenerate', 'paintGeneratePanel', 'paint-generate-panel'],
                                        ['paintHistory', 'paintHistoryPanel', 'paint-history-panel']]) {
             let pp = sr.getElementById(`${id}-panel`);
             if (!pp && this.curvesPanel && this.curvesPanel.parentNode) {

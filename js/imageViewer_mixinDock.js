@@ -77,6 +77,10 @@ const DOCK_PANELS = {
     // canvas); these are its other parts, up only with a Paint tab.
     paintLayers: { prop: "paintLayersPanel", label: "Layers", minW: 220, minH: 180, defaultRail: "right", size: 2 },
     paintProps: { prop: "paintPropsPanel", label: "Properties", minW: 240, minH: 200, defaultRail: "right", size: 2 },
+    // `tabWith`: a layout saved before the panel existed gets it as a tab behind that one, not as one more panel.
+    paintTool: { prop: "paintToolPanel", label: "Tool options", minW: 220, minH: 120, defaultRail: "right", size: 2, tabWith: "paintProps" },
+    paintEffects: { prop: "paintEffectsPanel", label: "Effects", minW: 240, minH: 160, defaultRail: "right", size: 2, tabWith: "paintProps" },
+    paintGenerate: { prop: "paintGeneratePanel", label: "Generate", minW: 240, minH: 160, defaultRail: "right", size: 2, tabWith: "paintProps" },
     paintHistory: { prop: "paintHistoryPanel", label: "History", minW: 200, minH: 140, defaultRail: "right", size: 1 },
     // (The drawing tools' options have no panel of their own: while a tool is
     // on they take the Parameters panel over — ToolsMixin._toolShowDock.)
@@ -178,7 +182,10 @@ export const DockMixin = {
                                            { id: "paramCurves", size: 1, hidden: true },
                                            { id: "motionProps", size: 2, hidden: true },
                                            { id: "paintLayers", size: 2, hidden: true },
-                                           { id: "paintProps", size: 2, hidden: true },
+                                           { id: "paintProps", size: 2, hidden: true, tab: "paint", behind: false },
+                                           { id: "paintTool", size: 2, hidden: true, tab: "paint", behind: true },
+                                           { id: "paintEffects", size: 2, hidden: true, tab: "paint", behind: true },
+                                           { id: "paintGenerate", size: 2, hidden: true, tab: "paint", behind: true },
                                            { id: "paintHistory", size: 1, hidden: true },
                                            { id: "params",  size: 1, hidden: false }] },
             // A graph over time wants width: the Curve Editor lives under the picture.
@@ -372,6 +379,17 @@ export const DockMixin = {
             if (seen.has(id)) continue;
             // `size`: its share of the rail's height, until the user drags it.
             const entry = { id, size: spec.size || 1, hidden: true };
+            const near = spec.tabWith ? this._dockEntry(spec.tabWith) : null;
+            if (near) {
+                const list = this.dockLayout[near.side].panels;
+                if (!near.entry.tab) { near.entry.tab = "t" + spec.tabWith; near.entry.behind = false; }
+                Object.assign(entry, { tab: near.entry.tab, behind: true, size: near.entry.size });
+                let at = near.index;
+                list.forEach((p, i) => { if (p.tab === entry.tab) at = i; });
+                list.splice(at + 1, 0, entry);
+                seen.add(id);
+                continue;
+            }
             if (spec.first) this.dockLayout[spec.defaultRail].panels.unshift(entry);
             else this.dockLayout[spec.defaultRail].panels.push(entry);
         }
@@ -568,7 +586,7 @@ export const DockMixin = {
             if (this.paramRefreshCurves) this.paramRefreshCurves();
         } else if (id === "motionProps" || id === "motionTimeline") {
             if (this._mgOn && this._mgSeat) this._mgSeat(this._mgState().tabs[this.activeTab]);
-        } else if (id === "paintLayers" || id === "paintProps" || id === "paintHistory") {
+        } else if (id.startsWith("paint")) {
             if (this._paintOn && this._paintSeat) this._paintSeat(this._paintActive());
         } else if (id === "editTimeline") {
             if (this.editTlRefresh) this.editTlRefresh();
