@@ -148,6 +148,11 @@ def clean_layer(L):
                        "y": int(M._num(m.get("y"), 0)), "w": int(M._num(m.get("w"), 0, 0, MAX_SIDE)),
                        "h": int(M._num(m.get("h"), 0, 0, MAX_SIDE)),
                        "fill": 255 if M._num(m.get("fill"), 0) >= 128 else 0}
+        dn, fe = M._num(m.get("density"), 1, 0, 1), M._num(m.get("feather"), 0, 0, 250)
+        if dn != 1:
+            out["mask"]["density"] = dn
+        if fe > 0:
+            out["mask"]["feather"] = fe
     return out
 
 
@@ -251,6 +256,8 @@ def mask_values(L, mask, x0, y0, x1, y1):
     m = L.get("mask")
     if not m or not m.get("enabled") or mask is None:
         return np.ones((y1 - y0, x1 - x0), dtype=np.float64)
+    if m.get("feather", 0) > 0:
+        mask = M.feather_mask(mask, float(m["feather"]))
     out = np.full((y1 - y0, x1 - x0), m.get("fill", 0) / 255.0, dtype=np.float64)
     mx, my = m["x"], m["y"]
     mh, mw = mask.shape[:2]
@@ -258,6 +265,9 @@ def mask_values(L, mask, x0, y0, x1, y1):
     ax1, ay1 = min(x1, mx + mw), min(y1, my + mh)
     if ax1 > ax0 and ay1 > ay0:
         out[ay0 - y0:ay1 - y0, ax0 - x0:ax1 - x0] = mask[ay0 - my:ay1 - my, ax0 - mx:ax1 - mx] / 255.0
+    dn = float(m.get("density", 1))
+    if dn != 1:
+        out = 1 - dn * (1 - out)
     return out
 
 
@@ -683,6 +693,11 @@ def _psd_record(L, px, mask, section=None):
         planes = [px[..., 3], px[..., 0], px[..., 1], px[..., 2]]
     channel_ids = [-1, 0, 1, 2]
     m = L.get("mask") if mask is not None else None
+    if m and (m.get("feather", 0) > 0 or m.get("density", 1) != 1):
+        # Photoshop's own density and feather are not written: the mask goes as it acts.
+        dn = float(m.get("density", 1))
+        mask = M.q8(1 - dn * (1 - M.feather_mask(mask, float(m.get("feather", 0))) / 255.0))
+        m = dict(m, fill=int(round(255 * (1 - dn * (1 - m.get("fill", 0) / 255)))))
     if m:
         channel_ids.append(-2)
         planes.append(mask)
@@ -990,6 +1005,10 @@ def outline(doc):
             row.update(type=L["adjust"]["type"], params=L["adjust"]["params"])
         if L.get("mask"):
             row["mask"] = "on" if L["mask"]["enabled"] else "off"
+            if L["mask"].get("density", 1) != 1:
+                row["mask_density"] = round(L["mask"]["density"] * 100)
+            if L["mask"].get("feather"):
+                row["mask_feather"] = L["mask"]["feather"]
         if L.get("locked"):
             row["locked"] = True
         if L.get("clip"):

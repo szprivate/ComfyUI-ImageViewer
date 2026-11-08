@@ -136,6 +136,10 @@ export function cleanLayer(L) {
         const m = L.mask;
         out.mask = { enabled: m.enabled !== false, x: Math.trunc(num(m.x, 0)), y: Math.trunc(num(m.y, 0)),
                      w: Math.trunc(num(m.w, 0, 0, MAX_SIDE)), h: Math.trunc(num(m.h, 0, 0, MAX_SIDE)), fill: num(m.fill, 0) >= 128 ? 255 : 0 };
+        // Density (how much it hides, 0..1) and feather (a blur of its edge, px): kept, not baked in.
+        const dn = num(m.density, 1, 0, 1), fe = num(m.feather, 0, 0, 250);
+        if (dn !== 1) out.mask.density = dn;
+        if (fe > 0) out.mask.feather = fe;
     }
     return out;
 }
@@ -288,7 +292,7 @@ export function layPixels(out, W, H, L, px, mask, rx0 = 0, ry0 = 0, rx1 = W, ry1
     if (x1 <= x0 || y1 <= y0) return;
     const mode = L.blend || "normal";
     const m = L.mask && L.mask.enabled && mask ? L.mask : null;
-    const mfill = m ? m.fill / 255 : 1;
+    const mfill = m ? m.fill / 255 : 1, dens = m && m.density != null ? m.density : 1;
     for (let y = y0; y < y1; y++) {
         let si = ((y - ly) * lw + (x0 - lx)) * 4;
         let oi = (y * W + x0) * 4;
@@ -300,6 +304,7 @@ export function layPixels(out, W, H, L, px, mask, rx0 = 0, ry0 = 0, rx1 = W, ry1
             if (m) {
                 const mx = x - m.x, my = y - m.y;
                 mv = (mx >= 0 && my >= 0 && mx < m.w && my < m.h) ? mask[my * m.w + mx] / 255 : mfill;
+                if (dens !== 1) mv = 1 - dens * (1 - mv);
             }
             const as = (sa0 / 255) * (op * mv);
             if (as === 0) { if (out[oi + 3] === 0) out[oi] = out[oi + 1] = out[oi + 2] = 0; continue; }
@@ -431,7 +436,7 @@ export function layAdjust(out, W, H, L, mask, rx0 = 0, ry0 = 0, rx1 = W, ry1 = H
     const p = cleanAdjust(kind, L.adjust.params);
     const tables = kind === "hue_saturation" || kind === "threshold" ? null : (luts || adjustLuts(kind, p));
     const m = L.mask && L.mask.enabled && mask ? L.mask : null;
-    const mfill = m ? m.fill / 255 : 1;
+    const mfill = m ? m.fill / 255 : 1, dens = m && m.density != null ? m.density : 1;
     const x0 = Math.max(0, rx0), y0 = Math.max(0, ry0), x1 = Math.min(W, rx1), y1 = Math.min(H, ry1);
     for (let y = y0; y < y1; y++) {
         let oi = (y * W + x0) * 4;
@@ -440,6 +445,7 @@ export function layAdjust(out, W, H, L, mask, rx0 = 0, ry0 = 0, rx1 = W, ry1 = H
             if (m) {
                 const mx = x - m.x, my = y - m.y;
                 mv = (mx >= 0 && my >= 0 && mx < m.w && my < m.h) ? mask[my * m.w + mx] / 255 : mfill;
+                if (dens !== 1) mv = 1 - dens * (1 - mv);
             }
             const t = op * mv;
             const r = out[oi], g = out[oi + 1], b = out[oi + 2];
@@ -542,7 +548,7 @@ export function layClipped(out, W, H, L, px, mask, rx0 = 0, ry0 = 0, rx1 = W, ry
     if (x1 <= x0 || y1 <= y0) return;
     const mode = L.blend || "normal";
     const m = L.mask && L.mask.enabled && mask ? L.mask : null;
-    const mfill = m ? m.fill / 255 : 1;
+    const mfill = m ? m.fill / 255 : 1, dens = m && m.density != null ? m.density : 1;
     for (let y = y0; y < y1; y++) {
         let si = ((y - ly) * lw + (x0 - lx)) * 4;
         let oi = (y * W + x0) * 4;
@@ -552,6 +558,7 @@ export function layClipped(out, W, H, L, px, mask, rx0 = 0, ry0 = 0, rx1 = W, ry
             if (m) {
                 const mx = x - m.x, my = y - m.y;
                 mv = (mx >= 0 && my >= 0 && mx < m.w && my < m.h) ? mask[my * m.w + mx] / 255 : mfill;
+                if (dens !== 1) mv = 1 - dens * (1 - mv);
             }
             const t = (px[si + 3] / 255) * (op * mv);
             if (t === 0) continue;
@@ -586,7 +593,7 @@ function layGroup(out, doc, G, kids, pix, maskOf, r, depth) {
 
 /** out = out + (res - out) t inside the rectangle, premultiplied (paint_math.mix_back). */
 export function mixBack(out, res, W, H, op, m, mask, r) {
-    const mfill = m ? m.fill / 255 : 1;
+    const mfill = m ? m.fill / 255 : 1, dens = m && m.density != null ? m.density : 1;
     for (let y = r.y0; y < r.y1; y++) {
         let oi = (y * W + r.x0) * 4;
         for (let x = r.x0; x < r.x1; x++, oi += 4) {
@@ -594,6 +601,7 @@ export function mixBack(out, res, W, H, op, m, mask, r) {
             if (m) {
                 const mx = x - m.x, my = y - m.y;
                 mv = (mx >= 0 && my >= 0 && mx < m.w && my < m.h) ? mask[my * m.w + mx] / 255 : mfill;
+                if (dens !== 1) mv = 1 - dens * (1 - mv);
             }
             const t = op * mv;
             const ab = out[oi + 3] / 255, ar = res[oi + 3] / 255;
@@ -747,6 +755,15 @@ export function feather(m, w, h, radius) {
     const out = new Uint8Array(m.length);
     for (let i = 0; i < m.length; i++) out[i] = q8(b[i]);
     return out;
+}
+
+/**
+ * A layer's mask as it acts (paint_io.mask_values): feathered by `L.mask.feather`. Density is applied
+ * where the mask is read (layPixels and the rest). What a composite's `maskOf` hands it.
+ */
+export function maskAsItActs(L, raw) {
+    if (!raw || !L.mask || !(L.mask.feather > 0)) return raw;
+    return feather(raw, L.mask.w, L.mask.h, L.mask.feather);
 }
 
 export function invertMask(m) {

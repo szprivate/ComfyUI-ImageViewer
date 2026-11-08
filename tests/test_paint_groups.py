@@ -181,6 +181,18 @@ class Ops(unittest.TestCase):
             if blend == "normal":
                 self.assertLessEqual(int(np.abs(P.composite(d).astype(int) - before.astype(int)).max()), 1)
 
+    def test_mask_settings_op_and_psd_bakes_them(self):
+        d, G, a, b = doc_with_group()
+        self.apply(d, {"op": "mask", "layer": "a", "from": "all"})
+        d.masks[a["id"]][:, :10] = 0
+        said = self.apply(d, {"op": "mask", "layer": "a", "from": "settings", "density": 40, "feather": 3})
+        self.assertIn("density 40%", said[0])
+        self.assertEqual(P.outline(d)["layers"][3]["mask_density"], 40)
+        path = os.path.join(tempfile.mkdtemp(), "m.psd")
+        P.write_psd(path, d)
+        back = P.read_psd(path)
+        self.assertLessEqual(int(np.abs(P.composite(back).astype(int) - P.composite(d).astype(int)).max()), 2)
+
     def test_merge_down_stays_in_its_group(self):
         d, G, a, b = doc_with_group()
         with self.assertRaises(O.OpError):
