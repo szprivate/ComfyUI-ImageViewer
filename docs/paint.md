@@ -34,6 +34,15 @@ Its three panels, **Layers**, **Properties** and **History**, show only on a Pai
 
 <kbd>X</kbd> swaps the two colours, <kbd>D</kbd> resets them.
 
+## Distort, Perspective and Warp
+
+**Layer** menu, or the buttons in the Transform tool's options:
+- **Distort**: drag each corner of the layer anywhere.
+- **Perspective**: drag a corner, and the corner at the other end of the same edge moves the opposite way, so the edge stays centred.
+- **Warp**: bends the layer with a grid of points (1 x 1 up to 8 x 8). The picture follows a smooth surface that passes through every point.
+
+The layer's mask goes with it. Press <kbd>Enter</kbd> or double-click to apply, as one undo step. <kbd>Esc</kbd> cancels. The agent can distort a layer with the `distort` op, which takes four `corners`.
+
 ## The pen
 
 <kbd>P</kbd> draws a path one anchor at a time. Click for a corner and drag for a smooth anchor (Shift holds the handle to 45° steps). Click the first anchor to close the path, or press <kbd>Enter</kbd> or <kbd>Esc</kbd> to leave it open. Click the path to add an anchor, or click an anchor to take it away. Click an end of an open path to carry on drawing from it.

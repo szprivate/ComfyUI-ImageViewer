@@ -16,6 +16,7 @@ import * as D from "./imageViewer_paintData.js";
 import { paintIcon } from "./imageViewer_paintIcons.js";
 import { FILTERS } from "./imageViewer_paintFilters.js";
 import { PenMixin } from "./imageViewer_paintPen.js";
+import { WarpMixin } from "./imageViewer_paintWarp.js";
 
 export const PAINT_TOOLS = [
     ["move", "transform", "Transform (move, scale, rotate, shear)", "V"], ["marquee", "marquee", "Rectangle select", "M"], ["ellipse", "ellipse", "Ellipse select", "Shift+M"],
@@ -183,6 +184,7 @@ class PaintEditor {
             wand: { tolerance: 32, contiguous: true, all: true },
             select: { feather: 0 },
             pen: { width: 3, feather: 0, combine: "replace" },
+            warp: { n: 3 },
             text: { font: "sans-serif", size: 64, bold: false, italic: false, align: "left" },
         };
         this.fg = [255, 255, 255];
@@ -604,7 +606,8 @@ class PaintEditor {
             c.fillStyle = "#f60"; c.font = "11px system-ui"; c.fillText(`${Math.round(w)} x ${Math.round(h)}  (Enter applies, Esc cancels)`, X(x) + 4, Y(y) - 6);
         }
         // The layer's box and handles (Transform).
-        const g = this.tool === "move" ? this._tfGeom() : null;
+        this._wpDraw(c, X, Y);
+        const g = this.tool === "move" && !this.wp ? this._tfGeom() : null;
         if (g) {
             const m = D.tfMatrix(g.p), cs = D.tfCorners(m, g.w, g.h);
             c.strokeStyle = this.tf ? "#4fd6ee" : "rgba(0,200,255,.8)"; c.lineWidth = 1; c.setLineDash(this.tf ? [] : [3, 3]);
@@ -752,6 +755,7 @@ class PaintEditor {
 
     undo() {
         if (this.tf) { this.tfCancel(); return; }
+        if (this.wp) { this.wpCancel(); return; }
         const e = this.undoStack.pop();
         if (!e) return;
         e.undo();
@@ -761,7 +765,7 @@ class PaintEditor {
     }
 
     redo() {
-        if (this.tf) return;
+        if (this.tf || this.wp) return;
         const e = this.redoStack.pop();
         if (!e) return;
         e.redo();
@@ -1591,6 +1595,7 @@ class PaintEditor {
         if (t !== "crop") this.crop = null;
         if (t !== "text") this._commitText();
         if (t !== "move" && this.tf) this.tfCommit();
+        if (t !== "move" && this.wp) this.wpCommit();
         if (t !== "pen") this._penOpen = false;
         this.tool = t;
         for (const [id, b] of Object.entries(this.toolBtns)) b.classList.toggle("on", id === t);
@@ -1652,6 +1657,7 @@ class PaintEditor {
         w.addEventListener("pointerleave", () => { this._hover = null; this.drawOverlay(); this._status(); });
         w.addEventListener("dblclick", (e) => {
             if (this.tool === "crop" && this.crop) { e.preventDefault(); this.applyCrop(); }
+            else if (this.wp) { e.preventDefault(); this.wpCommit(); }
             else if (this.tool === "move" && this.tf) { e.preventDefault(); this.tfCommit(); }
         });
         for (const t of ["mousedown", "dblclick", "contextmenu"]) w.addEventListener(t, (e) => e.stopPropagation());
@@ -1670,6 +1676,7 @@ class PaintEditor {
         }
         if (e.button !== 0) return;
         this.wrap.setPointerCapture(e.pointerId);
+        if (this.wp) { this._wpDown(p); return; }
         const t = this.tool;
         if ((t === "brush" || t === "fill") && e.altKey) { this._pickAt(p); return; }
         if (t === "clone" && e.altKey) { this.setCloneSource(p.x, p.y); return; }
@@ -1703,6 +1710,7 @@ class PaintEditor {
         const dr = this._drag;
         if (!dr) {
             if (BRUSHES.includes(this.tool) || (this.tool === "pen" && this._penOpen)) this.drawOverlay();
+            else if (this.wp) this._cursor("crosshair");
             else if (this.tool === "move" && !this._space) this._cursor(this._moveSet() ? "move" : this._tfCursor(this._tfHit(p)));
             this._status();
             return;
@@ -1715,6 +1723,7 @@ class PaintEditor {
         }
         if (dr.kind === "pick") { this._pickAt(p); return; }
         if (dr.kind === "pen") { this._penMove(dr, p, e); return; }
+        if (dr.kind === "wp") { this._wpMove(dr, p); return; }
         if (dr.kind === "stroke") {
             // A pen sends far more positions than pointermove fires: take every one, with its pressure.
             const all = (e.getCoalescedEvents && e.getCoalescedEvents()) || [];
@@ -1747,6 +1756,7 @@ class PaintEditor {
         if (dr.kind === "pan") { this.setTool(this.tool); return; }
         if (dr.kind === "stroke") { this._strokeEnd(dr.st); return; }
         if (dr.kind === "pen") { this._penUp(dr); return; }
+        if (dr.kind === "wp") { this._wpUp(); return; }
         if (dr.kind === "marquee" || dr.kind === "ellipse") {
             if (!dr.rect || dr.rect.w < 1 || dr.rect.h < 1) { if (!dr.e.shiftKey && !dr.e.altKey) this.deselect(); else this.drawOverlay(); return; }
             const { x, y, w, h } = dr.rect;
@@ -2006,7 +2016,7 @@ class PaintEditor {
     // by whole pixels resamples nothing. The layer's mask is transformed with it.
 
     /** Anything that changes the document first applies a transform that is under way. */
-    _tfSettle() { if (this.tf) this.tfCommit(); }
+    _tfSettle() { if (this.tf) this.tfCommit(); if (this.wp) this.wpCommit(); }
 
     _tfLayer(quiet = false) {
         const L = this.active();
@@ -2401,8 +2411,10 @@ class PaintEditor {
         if (k === "F5" && e.shiftKey) return take(() => this.openFill());
         if (k === "Enter" && this.crop) return take(() => this.applyCrop());
         if (k === "Enter" && this.tf) return take(() => this.tfCommit());
+        if (k === "Enter" && this.wp) return take(() => this.wpCommit());
         if (k === "Escape") return take(() => {
-            if (this._fillOpen) this.closeFill();
+            if (this.wp) this.wpCancel();
+            else if (this._fillOpen) this.closeFill();
             else if (this.viewMask) this.setViewMask(null);
             else if (this.tf) this.tfCancel();
             else if (this.crop) { this.crop = null; this.drawOverlay(); }
@@ -2523,6 +2535,9 @@ class PaintEditor {
                 { label: "Rotate 90° anticlockwise", disabled: !L || L.kind !== "pixel", run: () => this.rotateLayer(270) },
                 { label: "Rotate 180°", disabled: !L || L.kind !== "pixel", run: () => this.rotateLayer(180) },
                 { label: "Free transform (Ctrl+T)", disabled: !L || L.kind !== "pixel", run: () => { this.setTool("move"); this.tfBegin(); } },
+                { label: "Distort", disabled: !L || L.kind !== "pixel", run: () => this.wpBegin("distort") },
+                { label: "Perspective", disabled: !L || L.kind !== "pixel", run: () => this.wpBegin("perspective") },
+                { label: "Warp", disabled: !L || L.kind !== "pixel", run: () => this.wpBegin("warp", this.opts.warp.n) },
                 { label: "Scale…", disabled: !L || L.kind !== "pixel", run: () => this.dialog("Scale layer", [["k", "Percent", 100, 1, 1600]], (v) => this.scaleLayer(v.k / 100)) },
                 { label: L && L.locked ? "Unlock" : "Lock", disabled: !L, run: () => { const v = !L.locked; this.setPickedProps((x) => { x.locked = v; }, v ? "Lock" : "Unlock"); } }];
     }
@@ -3038,7 +3053,8 @@ class PaintEditor {
             ts.append(go);
             note("Drag a rectangle; drag inside it to move it.");
         } else if (this.tool === "move") {
-            this._tfFields(ts);
+            if (!this.wp) this._tfFields(ts);
+            this._wpOptions(ts, bar);
             note("Drag inside to move, a handle to scale (Shift keeps the shape, Alt scales about the middle), outside to rotate (Shift: 15° steps); "
                  + "Ctrl+drag an edge's handle shears. The arrows nudge. Enter or a double-click applies, Esc cancels.");
         } else if (this.tool === "picker") {
@@ -3344,7 +3360,7 @@ class PaintEditor {
     }
 }
 
-Object.assign(PaintEditor.prototype, PenMixin);
+Object.assign(PaintEditor.prototype, PenMixin, WarpMixin);
 
 // Lucide's rotate-cw, white on black, as the pointer outside a transform's box.
 const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><g stroke="#000" stroke-width="4"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g><g stroke="#fff" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g></svg>')}") 12 12, alias`;

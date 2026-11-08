@@ -612,6 +612,58 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(comp(50, 30), before)
         self.assertEqual(self.errors, [])
 
+    def test_distort_perspective_and_warp(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        x0, y0, w, h = pg.evaluate(f"() => {{ const r = {ed}.canvas.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }}")
+        at = lambda x, y: (x0 + x * w / 200, y0 + y * h / 120)
+        L = lambda: pg.evaluate(f"() => {{ const L = {ed}.doc.layers[0]; return [L.x, L.y, L.w, L.h]; }}")
+        alpha = lambda x, y: pg.evaluate(f"() => {{ const e = {ed}, L = e.doc.layers[0]; if ({x} < L.x || {y} < L.y || {x} >= L.x + L.w || {y} >= L.y + L.h) return 0;"
+                                         f" return e.pix.get(L.id)[(({y} - L.y) * L.w + {x} - L.x) * 4 + 3]; }}")
+        def drag(a, b):
+            pg.mouse.move(*at(*a)); pg.mouse.down(); pg.mouse.move(*at(*b), steps=6); pg.mouse.up()
+        # Distort: the top right corner pulled in; Enter applies it as one step.
+        pg.evaluate(f"() => {ed}.wpBegin('distort')")
+        self.assertEqual(pg.evaluate(f"() => {ed}.tool"), "move")
+        drag((200, 0), (160, 30))
+        pg.mouse.move(*at(100, 60))
+        pg.keyboard.press("Enter")
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Distort")
+        self.assertFalse(pg.evaluate(f"() => !!{ed}.wp"))
+        self.assertEqual(alpha(195, 5), 0)
+        self.assertEqual(alpha(100, 60), 255)
+        self.assertEqual(alpha(5, 115), 255)
+        pg.keyboard.press("Control+z")
+        self.assertEqual(L(), [0, 0, 200, 120])
+        # Perspective: the top left corner dragged right takes the top right one left.
+        pg.evaluate(f"() => {ed}.wpBegin('perspective')")
+        drag((0, 0), (40, 0))
+        q = pg.evaluate(f"() => {ed}.wp.pts")
+        self.assertAlmostEqual(q[0][0], 40, delta=1.5)
+        self.assertAlmostEqual(q[1][0], 160, delta=1.5)
+        pg.keyboard.press("Enter")
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Perspective")
+        self.assertEqual(alpha(5, 2), 0)
+        self.assertEqual(alpha(195, 2), 0)
+        self.assertEqual(alpha(100, 2), 255)
+        pg.keyboard.press("Control+z")
+        # Warp from Properties' button: the middle points pulled down bend the picture; Esc puts it back.
+        pg.click(".wp-warp")
+        self.assertEqual(pg.evaluate(f"() => [{ed}.wp.mode, {ed}.wp.pts.length]"), ["warp", 16])
+        before = pg.evaluate(f"() => [...{ed}.comp]")
+        drag((200 / 3, 40), (200 / 3, 70))
+        self.assertNotEqual(pg.evaluate(f"() => [...{ed}.comp]"), before)
+        pg.keyboard.press("Escape")
+        self.assertFalse(pg.evaluate(f"() => !!{ed}.wp"))
+        self.assertEqual(L(), [0, 0, 200, 120])
+        pg.click(".wp-warp")
+        drag((200 / 3, 0), (200 / 3, 30))
+        pg.mouse.dblclick(*at(100, 60))
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Warp")
+        self.assertEqual(alpha(66, 5), 0)
+        self.assertEqual(alpha(66, 60), 255)
+
     def test_pen_paths_select_fill_stroke_and_save(self):
         pg = self.page()
         self.open_photo(pg)
