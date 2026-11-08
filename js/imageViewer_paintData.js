@@ -196,7 +196,31 @@ export function cleanDoc(meta) {
                   active: ids.includes(meta.active) ? meta.active : (ids[ids.length - 1] || null) };
     const paths = cleanPaths(meta.paths);
     if (paths.length) out.paths = paths;
+    const guides = cleanGuides(meta.guides, w, h);
+    if (guides.length) out.guides = guides;
     return out;
+}
+
+// ── guides ──────────────────────────────────────────────────────────────────
+
+export const MAX_GUIDES = 100;
+
+/** Guides held to what they may be: [{axis: "x" | "y", pos}], on the canvas, at whole or half pixels. */
+export function cleanGuides(list, w, h) {
+    const out = [];
+    for (const g of Array.isArray(list) ? list : []) {
+        if (!g || (g.axis !== "x" && g.axis !== "y")) continue;
+        const pos = Math.round(Number(g.pos) * 2) / 2;
+        if (!Number.isFinite(pos) || pos < 0 || pos > (g.axis === "x" ? w : h)) continue;
+        out.push({ axis: g.axis, pos });
+        if (out.length >= MAX_GUIDES) break;
+    }
+    return out;
+}
+
+/** Guides moved by dx, dy, then scaled by kx, ky (crop, canvas size, image size); clean them after. */
+export function moveGuides(list, dx = 0, dy = 0, kx = 1, ky = 1) {
+    return (list || []).map((g) => ({ axis: g.axis, pos: g.axis === "x" ? (g.pos + dx) * kx : (g.pos + dy) * ky }));
 }
 
 // ── the tree ────────────────────────────────────────────────────────────────

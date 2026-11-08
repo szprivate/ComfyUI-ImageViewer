@@ -9,6 +9,7 @@ const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/(?=[A-Za
 const D = await import(pathToFileURL(path.join(here, "..", "js", "imageViewer_paintData.js")).href);
 const W = await import(pathToFileURL(path.join(here, "..", "js", "imageViewer_paintWarp.js")).href);
 const G = await import(pathToFileURL(path.join(here, "..", "js", "imageViewer_paintDraw.js")).href);
+const S = await import(pathToFileURL(path.join(here, "..", "js", "imageViewer_paintSelect.js")).href);
 const job = JSON.parse(fs.readFileSync(inFile, "utf8"));
 const dec = (b) => new Uint8Array(Buffer.from(b, "base64"));
 const enc = (a) => Buffer.from(a.buffer, a.byteOffset, a.byteLength).toString("base64");
@@ -44,6 +45,13 @@ for (const [name, c] of Object.entries(job.cases)) {
         res.shapes = c.draw.shapes.map((q) => D.flattenPath(D.cleanPath(G.shapePath(q.kind, q.x0, q.y0, q.x1, q.y1, q))));
         res.stops = c.draw.presets.map(([p, fg, bg]) => G.gradientStops(p, fg, bg));
     }
+    if (c.select) {
+        const q = c.select, m = dec(q.mask), sp = new Uint8ClampedArray(dec(q.px));
+        const fn = { expand: S.expandMask, contract: S.contractMask, smooth: S.smoothMask, border: S.borderMask };
+        res.modify = q.modify.map(([k, r]) => enc(fn[k](m, q.w, q.h, r)));
+        res.range = q.range.map(([col, f]) => enc(S.colorRange(sp, q.w, q.h, col, f)));
+    }
+    res.guides = doc.guides || [];
     out[name] = res;
 }
 fs.writeFileSync(outFile, JSON.stringify(out));

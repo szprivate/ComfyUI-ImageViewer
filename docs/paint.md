@@ -89,6 +89,14 @@ The layer's mask goes with it. Press <kbd>Enter</kbd> or double-click to apply, 
 - Double-click a name to rename. **Layer** menu: duplicate (<kbd>Ctrl</kbd>+<kbd>J</kbd>), merge down (<kbd>Ctrl</kbd>+<kbd>E</kbd>), flip, rotate, scale, lock.
 - The **History** panel lists every step; click one to go back to it.
 
+## Selections, guides and snapping
+
+- **Select > Expand / Contract / Smooth / Border…** grow the selection, shrink it, round off its corners and specks, or turn it into a band along its edge. Each is one undo step.
+- **Select > Colour range…** selects the colours near the brush colour (pick it first with the eyedropper, <kbd>I</kbd>). **Fuzziness** sets how far it reaches. It works from the picture or the active layer, and can replace, add to, take from or intersect the selection. It previews while the dialog is up.
+- **View > Rulers** (<kbd>Ctrl</kbd>+<kbd>R</kbd>): drag out of a ruler to make a guide. Drag a guide with the Move tool (<kbd>V</kbd>) to move it, or drag it off the canvas to delete it. **View > New guide…** places one by number, and **Clear guides** removes them all. <kbd>Ctrl</kbd>+<kbd>;</kbd> hides and shows the guides.
+- **Snapping** (on by default, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>;</kbd> turns it off and on) pulls things onto the guides, the canvas's edges and middle, and the other layers' edges. It applies to the rectangle and ellipse selections, moving layers, the free transform's move, gradients, shapes and guides.
+- A `.ora` keeps the guides (a `.psd` does not). Crop, canvas size and image size move them with the picture.
+
 ## Copy and paste
 
 <kbd>Ctrl</kbd>+<kbd>C</kbd> copies the selection of the active layer (all of it with nothing selected), <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> the picture as it looks (merged), and <kbd>Ctrl</kbd>+<kbd>X</kbd> cuts. <kbd>Ctrl</kbd>+<kbd>V</kbd> pastes as a new layer in the middle of the view, and <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> pastes it where it was copied from. A picture copied in another program (a screenshot, an image from a browser) is pasted the same way. What you copy here is also put on the system clipboard, where the browser allows it.

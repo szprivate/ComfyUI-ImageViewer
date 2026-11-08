@@ -255,6 +255,9 @@ def clean_meta(meta):
     paths = M.clean_paths(meta.get("paths"))
     if paths:
         out["paths"] = paths
+    guides = M.clean_guides(meta.get("guides"), w, h)
+    if guides:
+        out["guides"] = guides
     return out
 
 
@@ -1048,4 +1051,6 @@ def outline(doc):
            "selection": ({"x": sel[0], "y": sel[1], "w": sel[2], "h": sel[3]} if sel else None)}
     if doc.meta.get("paths"):
         out["paths"] = [{"name": q["name"], "points": len(q["pts"]), "closed": q["closed"]} for q in doc.meta["paths"]]
+    if doc.meta.get("guides"):
+        out["guides"] = [[g["axis"], g["pos"]] for g in doc.meta["guides"]]
     return out

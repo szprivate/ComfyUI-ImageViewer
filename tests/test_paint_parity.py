@@ -64,7 +64,8 @@ class PaintParity(unittest.TestCase):
             job["cases"][name] = {"doc": d.meta, "px": {k: b64(v) for k, v in d.px.items()},
                                   "masks": {k: b64(v) for k, v in d.masks.items()},
                                   "filters": getattr(d, "filters", None), "path": getattr(d, "path", None),
-                                  "distort": getattr(d, "distort", None), "draw": getattr(d, "draw", None)}
+                                  "distort": getattr(d, "distort", None), "draw": getattr(d, "draw", None),
+                                  "select": getattr(d, "select", None)}
         with tempfile.TemporaryDirectory() as tmp:
             a, b = os.path.join(tmp, "in.json"), os.path.join(tmp, "out.json")
             with open(a, "w") as f:
@@ -258,6 +259,33 @@ class PaintParity(unittest.TestCase):
         got = self.run_node(cases)
         for name, d in cases.items():
             self.same(P.composite(d), got[name]["composite"], (d.h, d.w, 4), f"style {name}")
+
+    def test_select_modify_color_range_and_guides(self):
+        """Expand, contract, smooth, border and Colour range, and the guides a document keeps."""
+        from paint_pkg import paint_select as SEL
+        import base64
+        d = rnd_doc(17, [])
+        rng = np.random.default_rng(17)
+        W, H = 41, 33
+        m = np.zeros((H, W), np.uint8)
+        m[5:20, 6:30] = 255
+        m[22:28, 10:14] = 255
+        m[12, 33] = 255
+        m[14:18, 2:5] = rng.integers(0, 256, (4, 3)).astype(np.uint8)
+        sp = rng.integers(0, 256, (H, W, 4)).astype(np.uint8)
+        modify = [[k, r] for k in SEL.MODIFY for r in (1, 2.5, 4, 40)]
+        rng_cases = [[[int(v) for v in sp[3, 4, :3]], 40], [[128, 128, 128], 90.5], [[0, 0, 0], 1]]
+        b64 = lambda a: base64.b64encode(np.ascontiguousarray(a).tobytes()).decode()
+        d.select = {"w": W, "h": H, "mask": b64(m), "px": b64(sp), "modify": modify, "range": rng_cases}
+        d.meta["guides"] = [{"axis": "x", "pos": 10.26}, {"axis": "y", "pos": -1}, {"axis": "z", "pos": 3}, {"axis": "y", "pos": 7}]
+        d.meta = P.clean_meta(d.meta)
+        self.assertEqual(d.meta["guides"], [{"axis": "x", "pos": 10.5}, {"axis": "y", "pos": 7}])
+        got = self.run_node({"d": d})["d"]
+        self.assertEqual(got["guides"], d.meta["guides"])
+        for i, (k, r) in enumerate(modify):
+            self.same(SEL.modify(m, k, r), got["modify"][i], (H, W), f"{k} {r}", tol=0)
+        for i, (col, f) in enumerate(rng_cases):
+            self.same(SEL.color_range(sp, col, f), got["range"][i], (H, W), f"colour range {col} {f}", tol=1)
 
     def test_gradients_and_shapes(self):
         d = rnd_doc(13, [])
