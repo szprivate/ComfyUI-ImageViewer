@@ -18,6 +18,7 @@ import { FILTERS } from "./imageViewer_paintFilters.js";
 import { PenMixin } from "./imageViewer_paintPen.js";
 import { WarpMixin } from "./imageViewer_paintWarp.js";
 import { HealMixin } from "./imageViewer_paintHeal.js";
+import { TipsMixin } from "./imageViewer_paintAbr.js";
 
 export const PAINT_TOOLS = [
     ["move", "transform", "Transform (move, scale, rotate, shear)", "V"], ["marquee", "marquee", "Rectangle select", "M"], ["ellipse", "ellipse", "Ellipse select", "Shift+M"],
@@ -148,6 +149,9 @@ const STYLE = `
 .paint-sect h4 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #f60; font-weight: 600; }
 .paint-field { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
 .paint-field.wrap { flex-wrap: wrap; }
+.paint-tips { display: flex; flex-wrap: wrap; gap: 3px; margin: 4px 0; }
+.paint-tip { padding: 1px; border: 1px solid #444; background: #1b1b1b; border-radius: 3px; cursor: pointer; line-height: 0; }
+.paint-tip.on { border-color: #4fd6ee; }
 .paint-field > label { flex: 0 0 92px; color: #aaa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .paint-field.wide > label { flex-basis: auto; }
 .paint-field > label.paint-check { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; color: #ddd; cursor: pointer; }
@@ -182,8 +186,8 @@ class PaintEditor {
         this.selSegs = null;
         this.tool = "brush";
         this.opts = {
-            brush: { size: 24, hardness: 80, opacity: 100, spacing: 15, penSize: true, penOpacity: false },
-            eraser: { size: 40, hardness: 80, opacity: 100, spacing: 15, penSize: true, penOpacity: false },
+            brush: { size: 24, hardness: 80, opacity: 100, spacing: 15, penSize: true, penOpacity: false, tip: null, angle: 0, scatter: 0, sizeJitter: 0, angleJitter: 0 },
+            eraser: { size: 40, hardness: 80, opacity: 100, spacing: 15, penSize: true, penOpacity: false, tip: null, angle: 0, scatter: 0, sizeJitter: 0, angleJitter: 0 },
             clone: { size: 40, hardness: 60, opacity: 100, spacing: 10, penSize: true, penOpacity: false, aligned: true, sample: "layer",
                      overlay: true, angle: 0, scale: 100, flip: false },
             spot: { size: 30, hardness: 50, opacity: 100, spacing: 10, penSize: true, penOpacity: false },
@@ -197,6 +201,9 @@ class PaintEditor {
             warp: { n: 3 },
             text: { font: "sans-serif", size: 64, bold: false, italic: false, align: "left" },
         };
+        // Brush tips kept in this browser (imageViewer_paintAbr.js).
+        this.tips = new Map();
+        this._tipsLoad();
         this.fg = [255, 255, 255];
         this.bg = [0, 0, 0];
         this.view = { zoom: 1, x: 0, y: 0 };
@@ -1854,6 +1861,7 @@ class PaintEditor {
         st.spacing = Math.max(0.01, o.spacing / 100);
         st.penSize = o.penSize !== false;
         st.penOpacity = !!o.penOpacity;
+        this._tipInto(st, o);
         const pr = D.pressureOf(e.pointerType, e.pressure);
         st.last = [p.x, p.y, pr];
         st.carry = 0;
@@ -1885,6 +1893,7 @@ class PaintEditor {
         st.spacing = Math.max(0.01, o.spacing / 100);
         st.penSize = o.penSize !== false;
         st.penOpacity = !!o.penOpacity;
+        this._tipInto(st, o);
         const pr = D.pressureOf(e.pointerType, e.pressure);
         st.last = [p.x, p.y, pr];
         st.carry = 0;
@@ -1933,11 +1942,24 @@ class PaintEditor {
         if (r.dabs.length) this._dab(st, r.dabs);
     }
 
+    /** The brush's tip, its angle and its jitter, onto a stroke. */
+    _tipInto(st, o) {
+        st.tip = o.tip && this.tips.get(o.tip) ? this.tips.get(o.tip) : null;
+        st.tipAngle = ((o.angle || 0) * Math.PI) / 180;
+        if (o.scatter || o.sizeJitter || o.angleJitter) {
+            st.jit = { scatter: o.scatter, sizeJitter: o.sizeJitter, angleJitter: o.angleJitter };
+            st.rand = D.seeded((Date.now() ^ Math.floor(Math.random() * 1e9)) >>> 0);
+        }
+    }
+
     _dab(st, dabs) {
         let rect = null;
         for (const [x, y, pr = 1] of dabs) {
             const k = D.pressureScale(pr, st.penSize, st.penOpacity);
-            rect = rectUnion(rect, D.stamp(st, x, y, Math.max(0.5, st.radius * k.r), st.hard, k.a));
+            const r = Math.max(0.5, st.radius * k.r);
+            const j = st.jit ? D.jitter(st.rand, r, st.jit) : null;
+            rect = j ? rectUnion(rect, D.stamp(st, x + j.dx, y + j.dy, Math.max(0.5, r * j.k), st.hard, k.a, (st.tipAngle || 0) + j.da))
+                     : rectUnion(rect, D.stamp(st, x, y, r, st.hard, k.a, st.tipAngle || 0));
         }
         if (!rect) return;
         if (st.onMask) {
@@ -2528,7 +2550,9 @@ class PaintEditor {
                 { label: "Fill… (Shift+F5)", run: () => this.openFill() },
                 { label: "Fill with the colour (Alt+Del)", run: () => this.fillSelection(this.fg) },
                 { label: "Fill with the second colour", run: () => this.fillSelection(this.bg) },
-                { label: "Clear (Del)", disabled: !this.sel, run: () => this.clearSelection() }];
+                { label: "Clear (Del)", disabled: !this.sel, run: () => this.clearSelection() }, "-",
+                { label: "Define brush tip from the selection", disabled: !this.sel, run: () => { this.tipFromSelection(); if (!BRUSHES.includes(this.tool)) this.setTool("brush"); } },
+                { label: "Import brushes (.abr)…", run: () => { if (!BRUSHES.includes(this.tool)) this.setTool("brush"); this.pickAbr(); } }];
     }
 
     _selectMenu() {
@@ -3071,6 +3095,7 @@ class PaintEditor {
             if (b.penSize === undefined) b.penSize = true;
             this._field(ts, "Pen pressure", [check(b, "penSize", "Size"), check(b, "penOpacity", "Opacity")])
                 .title = "A pen tablet's pressure (Wacom, Windows Ink) sets each dab's size and / or opacity. A mouse paints at full.";
+            if (b.tip !== undefined && !bar) this._tipOptions(ts, b, sync);
             if (SOURCED.includes(this.tool)) {
                 const smp = this.el("select", "", { title: "What it takes its pixels from" });
                 for (const [v, t] of [["layer", "This layer"], ["all", "All layers"]]) smp.append(this.el("option", "", { value: v, text: t }));
@@ -3425,7 +3450,7 @@ class PaintEditor {
     }
 }
 
-Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin);
+Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin, TipsMixin);
 
 // Lucide's rotate-cw, white on black, as the pointer outside a transform's box.
 const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><g stroke="#000" stroke-width="4"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g><g stroke="#fff" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g></svg>')}") 12 12, alias`;

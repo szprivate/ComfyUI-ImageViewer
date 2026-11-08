@@ -36,6 +36,17 @@ Its three panels, **Layers**, **Properties** and **History**, show only on a Pai
 
 <kbd>X</kbd> swaps the two colours, <kbd>D</kbd> resets them.
 
+## Brush tips
+
+The brush and the eraser can paint with a picture as their tip instead of a round dab. The tips are in the tool's Properties:
+- **Import .abr…** reads a brush file. Only the sampled tips are read, which are the ones drawn from a picture. Computed round brushes and the brush settings saved with them (dynamics, textures) are not read; the note after the import says what was left out. The file is read in the browser and is not sent to the server.
+- **From selection** makes a tip from the selected part of the picture as it looks. Dark parts paint, light parts do not. **Edit > Define brush tip from the selection** does the same.
+- **Invert** paints with the light parts instead. **Delete** removes the tip.
+
+The tips are kept in this browser (IndexedDB), not in the picture. The tip's longer side is the brush size. With a tip chosen, **Angle** turns it. **Scatter**, **Size jitter** and **Angle jitter** vary each dab.
+
+The .abr reader was written from the file's published layout and tested on files built for the tests. Brush files from other programs may still hold a variant it cannot read; it then says so and reads nothing.
+
 ## Distort, Perspective and Warp
 
 **Layer** menu, or the buttons in the Transform tool's options:
