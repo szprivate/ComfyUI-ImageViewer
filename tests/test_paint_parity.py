@@ -239,6 +239,26 @@ class PaintParity(unittest.TestCase):
         with self.assertRaises(O.OpError):          # a bow tie is no shape a perspective makes
             O.apply_ops(d, [{"op": "distort", "corners": [[0, 0], [10, 0], [0, 10], [10, 10]]}], read_image=None)
 
+    def test_layer_styles(self):
+        """Drop shadow, outer glow, stroke and colour overlay, alone and together, with masks and blends."""
+        cases = {}
+        styles = [{"shadow": {"angle": 135, "distance": 4, "size": 3, "opacity": 0.8, "color": [10, 0, 60]}},
+                  {"glow": {"size": 5, "opacity": 0.6, "color": [255, 200, 0]}},
+                  {"stroke": {"size": 3, "color": [0, 255, 0], "opacity": 0.9}},
+                  {"overlay": {"color": [200, 30, 90], "opacity": 0.4}},
+                  {"shadow": {"angle": -30, "distance": 6.6, "size": 0}, "glow": {"size": 2}, "stroke": {"size": 7}, "overlay": {"opacity": 1}},
+                  {"stroke": {"size": 2, "on": False}}]
+        for k, st in enumerate(styles):
+            d = rnd_doc(500 + k, ["normal", "multiply", "screen"])
+            for j, L in enumerate(d.layers[1:]):
+                L["style"] = st if j != 1 else styles[(k + 2) % len(styles)]
+            d.meta = P.clean_meta(d.meta)
+            self.assertTrue(all("style" in L for L in d.layers[1:]))
+            cases[f"s{k}"] = d
+        got = self.run_node(cases)
+        for name, d in cases.items():
+            self.same(P.composite(d), got[name]["composite"], (d.h, d.w, 4), f"style {name}")
+
     def test_gradients_and_shapes(self):
         d = rnd_doc(13, [])
         rng = np.random.default_rng(13)

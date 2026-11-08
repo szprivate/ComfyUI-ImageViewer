@@ -20,6 +20,8 @@ import { WarpMixin } from "./imageViewer_paintWarp.js";
 import { HealMixin } from "./imageViewer_paintHeal.js";
 import { TipsMixin } from "./imageViewer_paintAbr.js";
 import { DrawMixin, smudgeStart, smudgeDab, SHAPE_KINDS } from "./imageViewer_paintDraw.js";
+import { BUF_VER, STYLE_KINDS, STYLE_LABELS } from "./imageViewer_paintStyle.js";
+import { LayerFxMixin } from "./imageViewer_paintLayerFx.js";
 
 export const PAINT_TOOLS = [
     ["move", "transform", "Transform (move, scale, rotate, shear)", "V"], ["marquee", "marquee", "Rectangle select", "M"], ["ellipse", "ellipse", "Ellipse select", "Shift+M"],
@@ -54,7 +56,8 @@ export const PAINT_KEYS = [
     ["Ctrl+Shift+I", "Invert the selection"], ["Shift / Alt while selecting", "Add to / take from the selection"],
     ["Del", "Clear the selection on the layer"], ["Alt+Del", "Fill the selection with the colour"], ["Ctrl+J", "Duplicate the layer (the selection only, with one)"],
     ["Ctrl+E", "Merge down (several picked: merge them; a group: merge it)"], ["Ctrl+Shift+N", "New layer"],
-    ["Ctrl+G / Ctrl+Shift+G", "Group the picked layers / ungroup"], ["Shift / Ctrl+click in Layers", "Pick a range / one more layer"],
+    ["Ctrl+G / Ctrl+Shift+G", "Group the picked layers / ungroup"],
+    ["Ctrl+C / Ctrl+Shift+C / Ctrl+X", "Copy the selection (of the layer / merged) / cut"], ["Ctrl+V / Ctrl+Shift+V", "Paste as a new layer (in the middle / in place)"], ["Shift / Ctrl+click in Layers", "Pick a range / one more layer"],
     ["Ctrl+Alt+A", "Pick every layer"], ["Q", "Quick Mask: paint the selection (black takes away, white adds); Q again makes it the selection"],
     ["Alt+click a mask's thumbnail", "See the mask on its own (again or Esc: back)"], ["Ctrl+click a thumbnail", "Its pixels (or the mask) as the selection (Ctrl+Shift: add, Ctrl+Alt: take away)"], ["Ctrl+Alt+G / Alt+click in Layers", "Clip the layer to the one under it (or release it)"], ["Arrows", "Nudge the layer (Move; Shift: 10 px)"],
     ["Enter / Esc", "Apply / cancel the crop, the transform or the text"], ["Ctrl+S / Ctrl+Shift+S", "Save / save as"],
@@ -224,7 +227,8 @@ class PaintEditor {
         this.redoStack = [];
         this.version = 0;
         this.savedVersion = 0;
-        this.bufVer = new WeakMap();
+        // Every change of a buffer counted (shared with the layer styles' cache, imageViewer_paintStyle.js).
+        this.bufVer = BUF_VER;
         this.saved = new Map();
         this.editMask = false;
         this.picked = new Set();
@@ -1425,7 +1429,7 @@ class PaintEditor {
         return this.change("Fill", () => {
             const px = this._growToCanvas(L);
             const t = this.sel ? D.maskForLayer(this.sel, this.doc.w, this.doc.h, L) : new Uint8Array(L.w * L.h).fill(255);
-            this.pix.set(L.id, D.fillOver(px, L.w, L.h, [...color, Math.round(alpha * 255)], t, 255));
+            this.pix.set(L.id, this._keepAlpha(L, px, D.fillOver(px, L.w, L.h, [...color, Math.round(alpha * 255)], t, 255)));
         });
     }
 
@@ -1444,6 +1448,7 @@ class PaintEditor {
         const L = this._pixelTarget("Clear");
         if (!L) return false;
         if (!this.sel) { this._notify("Select what to clear first.", "info"); return false; }
+        if (L.lockAlpha) return this.fillSelection(this.bg);      // its transparency is locked: the second colour
         return this.change("Clear", () => {
             const px = new Uint8ClampedArray(this.pix.get(L.id));
             const m = D.maskForLayer(this.sel, this.doc.w, this.doc.h, L);
@@ -1833,8 +1838,8 @@ class PaintEditor {
         if ((clone || heal || TONERS.includes(this.tool)) && onMask) { this._notify(`${what} works on a layer's pixels: pick the layer (not its mask).`, "info"); return; }
         if (clone && !this.cloneSrc) { this._notify(`Alt+click where ${what.toLowerCase()} should take from first.`, "info"); return; }
         if (L.kind === "adjust" && !L.mask) this.addMask("all");
-        if (L.kind === "pixel" && !onMask) {
-            // A layer smaller than the canvas grows first (an undo entry of its own shape).
+        if (L.kind === "pixel" && !onMask && !L.lockAlpha) {
+            // A layer smaller than the canvas grows first (an undo entry of its own shape) - not with its transparency locked: nothing is added outside.
             const W = this.doc.w, H = this.doc.h;
             if (L.x > 0 || L.y > 0 || L.x + L.w < W || L.y + L.h < H) this.change("Grow layer", () => { this._growToCanvas(this.active()); });
         }
@@ -1876,6 +1881,8 @@ class PaintEditor {
             if (heal === "spot") { st.color = [0, 0, 0]; st.opacity = 0.35; }
         }
         if (TONERS.includes(this.tool)) st.tone = { mode: this.tool, range: o.range, sat: o.sat };
+        // Locked transparency: paint only where there is something, its alpha kept (the eraser paints the second colour).
+        if (!onMask && A.lockAlpha) { st.lockAlpha = true; if (st.erase) { st.erase = false; st.color = this.bg; } }
         st.L = A;
         st.radius = Math.max(0.5, o.size / 2);
         if (this.tool === "smudge") st.smudge = smudgeStart(st.radius, o.finger, st.color);
@@ -1992,6 +1999,9 @@ class PaintEditor {
             for (let y = rect.y0; y < rect.y1; y++) for (let x = rect.x0; x < rect.x1; x++) st.mask[y * st.lw + x] = st.px[(y * st.lw + x) * 4];
         }
         st.touched = rectUnion(st.touched, rect);
+        // A styled layer's look is cached by its buffer's version: count the dab so the style follows the stroke.
+        // Its effects reach past the dab (a shadow's offset, a glow's blur): the whole picture is drawn again.
+        if (st.L && st.L.style) { this._bump(st.onMask ? st.mask : st.px); this.requestRedraw(null); return; }
         this.requestRedraw({ x0: rect.x0 + st.lx, y0: rect.y0 + st.ly, x1: rect.x1 + st.lx, y1: rect.y1 + st.ly });
     }
 
@@ -2020,7 +2030,7 @@ class PaintEditor {
         this._push({ label: (s.quick ? "Quick Mask " : "") + label, bytes: before.byteLength * 2,
                      undo: () => paste(buf, before), redo: () => paste(buf, after) });
         this._lastStrokeEnd = { L: s.L.id, x: s.last[0], y: s.last[1] };
-        this.redraw({ x0: r.x0 + s.lx, y0: r.y0 + s.ly, x1: r.x1 + s.lx, y1: r.y1 + s.ly });
+        this.redraw(s.L.style ? null : { x0: r.x0 + s.lx, y0: r.y0 + s.ly, x1: r.x1 + s.lx, y1: r.y1 + s.ly });
         this._thumbsSoon();
     }
 
@@ -2048,7 +2058,7 @@ class PaintEditor {
                 m = D.maskForLayer(full, W, H, L);
             } else m = D.floodMask(px, L.w, L.h, x - L.x, y - L.y, o.tolerance, o.contiguous);
             if (this.sel) { const s = D.maskForLayer(this.sel, W, H, L); for (let i = 0; i < m.length; i++) m[i] = Math.min(m[i], s[i]); }
-            this.pix.set(L.id, D.fillOver(px, L.w, L.h, [...this.fg, 255], m, 255));
+            this.pix.set(L.id, this._keepAlpha(L, px, D.fillOver(px, L.w, L.h, [...this.fg, 255], m, 255)));
         });
     }
 
@@ -2496,6 +2506,10 @@ class PaintEditor {
             if (lk === "d") return take(() => this.deselect());
             if (lk === "i" && e.shiftKey) return take(() => this.invertSelection());
             if (lk === "j") return take(() => this.duplicateLayer());
+            if (lk === "c" && !e.altKey) return take(() => this.copy(e.shiftKey));
+            if (lk === "x" && !e.altKey && !e.shiftKey) return take(() => this.cut());
+            // Not prevented: the browser's paste event must still come (it carries the system clipboard's picture).
+            if (lk === "v" && !e.altKey) { this.pasteKey(e.shiftKey); return true; }
             if (lk === "e") return take(() => this.mergeDown());
             if (lk === "n" && e.shiftKey) return take(() => this.newLayer());
             if (lk === "s") return take(() => (e.shiftKey ? this.host.saveAs && this.host.saveAs() : this.host.save && this.host.save()));
@@ -2581,6 +2595,11 @@ class PaintEditor {
         const u = this.undoStack[this.undoStack.length - 1], r = this.redoStack[this.redoStack.length - 1];
         return [{ label: `Undo${u ? " " + u.label : ""} (Ctrl+Z)`, disabled: !u, run: () => this.undo() },
                 { label: `Redo${r ? " " + r.label : ""} (Ctrl+Shift+Z)`, disabled: !r, run: () => this.redo() }, "-",
+                { label: "Cut (Ctrl+X)", run: () => this.cut() },
+                { label: "Copy (Ctrl+C)", run: () => this.copy(false) },
+                { label: "Copy merged (Ctrl+Shift+C)", run: () => this.copy(true) },
+                { label: "Paste (Ctrl+V)", run: () => this.pasteFromMenu(false) },
+                { label: "Paste in place (Ctrl+Shift+V)", run: () => this.pasteFromMenu(true) }, "-",
                 { label: "Fill… (Shift+F5)", run: () => this.openFill() },
                 { label: "Fill with the colour (Alt+Del)", run: () => this.fillSelection(this.fg) },
                 { label: "Fill with the second colour", run: () => this.fillSelection(this.bg) },
@@ -2649,7 +2668,11 @@ class PaintEditor {
                 { label: "Perspective", disabled: !L || L.kind !== "pixel", run: () => this.wpBegin("perspective") },
                 { label: "Warp", disabled: !L || L.kind !== "pixel", run: () => this.wpBegin("warp", this.opts.warp.n) },
                 { label: "Scale…", disabled: !L || L.kind !== "pixel", run: () => this.dialog("Scale layer", [["k", "Percent", 100, 1, 1600]], (v) => this.scaleLayer(v.k / 100)) },
-                { label: L && L.locked ? "Unlock" : "Lock", disabled: !L, run: () => { const v = !L.locked; this.setPickedProps((x) => { x.locked = v; }, v ? "Lock" : "Unlock"); } }];
+                { label: L && L.locked ? "Unlock" : "Lock", disabled: !L, run: () => { const v = !L.locked; this.setPickedProps((x) => { x.locked = v; }, v ? "Lock" : "Unlock"); } },
+                { label: L && L.lockAlpha ? "Unlock transparency" : "Lock transparency", disabled: !L || L.kind !== "pixel", run: () => this.toggleLockAlpha() }, "-",
+                { label: "Layer style…", disabled: !L || L.kind !== "pixel", run: () => this.openStyle() },
+                ...STYLE_KINDS.map((k) => ({ label: `  ${STYLE_LABELS[k]}`, disabled: !L || L.kind !== "pixel", run: () => this.openStyle(k) })),
+                { label: "Clear layer style", disabled: !L || !L.style, run: () => this.clearStyle(L) }];
     }
 
     _filterMenu() {
@@ -2777,7 +2800,8 @@ class PaintEditor {
             const v = !L.locked;
             this.setPickedProps((X) => { X.locked = v; }, v ? "Lock" : "Unlock");
         });
-        head.append(this.blendSel, this.el("span", "", { text: "Opacity" }), this.opRange, this.opNum, this.lockBtn);
+        this.lockAlphaBtn = this.btn("lockAlpha", "Lock transparent pixels: paint only where the layer has something", () => this.toggleLockAlpha());
+        head.append(this.blendSel, this.el("span", "", { text: "Opacity" }), this.opRange, this.opNum, this.lockAlphaBtn, this.lockBtn);
         this.layerList = this.el("div", "paint-list");
         const foot = this.el("div", "paint-lfoot");
         foot.append(this.btn("plus", "New layer (Ctrl+Shift+N)", () => this.newLayer()),
@@ -2829,6 +2853,8 @@ class PaintEditor {
             this.opRange.value = this.opNum.value = Math.round(L0.opacity * 100);
             this.lockBtn.replaceChildren(paintIcon(this.d, L0.locked ? "lock" : "lockOpen"));
             this.lockBtn.classList.toggle("on", !!L0.locked);
+            this.lockAlphaBtn.classList.toggle("on", !!L0.lockAlpha);
+            this.lockAlphaBtn.disabled = L0.kind !== "pixel";
         }
         this._thumbJobs = [];
         const many = this.pickedLayers().length > 1;
@@ -2900,6 +2926,12 @@ class PaintEditor {
             row.append(nm);
             if (L.text) row.append(this.el("span", "tag", { text: "T" }));
             if (L.blend !== "normal" && !(isG && L.blend === "pass_through")) row.append(this.el("span", "tag", { text: D.BLEND_LABELS[L.blend].split(" ")[0] }));
+            if (L.style) {
+                const fx = this.el("span", "tag fx", { text: "fx", title: "Layer style: click to change it" });
+                fx.addEventListener("click", (e) => { e.stopPropagation(); this.setActive(L.id); this.openStyle(); });
+                row.append(fx);
+            }
+            if (L.lockAlpha) { const la = this.el("span", "lk la", { title: "Transparency locked" }); la.append(paintIcon(this.d, "lockAlpha", 12)); row.append(la); }
             if (L.locked) { const lk = this.el("span", "lk"); lk.append(paintIcon(this.d, "lock", 12)); row.append(lk); }
             row.addEventListener("click", (e) => {
                 // A double-click on the name renames. Counted here, not by dblclick: the first click can draw
@@ -3086,6 +3118,7 @@ class PaintEditor {
         // The layer.
         const L = this.active();
         if (L) box.append(this._layerSection(L));
+        if (L && L.kind === "pixel" && (L.style || this._styleOpen === L.id)) box.append(this._styleSection(L));
         if (L && L.mask) box.append(this._maskSection(L));
         if (this.quick) box.prepend(this.el("div", "paint-note", { text: "Quick Mask is on (Q): the brush, eraser, bucket and Fill paint the selection - black takes away (red), white adds. Q again makes it the selection." }));
         // Generate.
@@ -3503,7 +3536,7 @@ class PaintEditor {
     }
 }
 
-Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin, TipsMixin, DrawMixin);
+Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin, TipsMixin, DrawMixin, LayerFxMixin);
 
 // Lucide's rotate-cw, white on black, as the pointer outside a transform's box.
 const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><g stroke="#000" stroke-width="4"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g><g stroke="#fff" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g></svg>')}") 12 12, alias`;

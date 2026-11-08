@@ -184,10 +184,11 @@ export function smudgeDab(st, cx, cy, radius, hard, strength) {
                 a *= gx >= 0 && gy >= 0 && gx < st.W && gy < st.H ? st.sel[gy * st.W + gx] / 255 : 0;
             }
             const k = a * strength;
-            if (k > 0) {
+            if (k > 0 && !(st.lockAlpha && px[o + 3] === 0)) {
                 const q = [0, 0, 0, 0];
                 for (let c = 0; c < 4; c++) q[c] = p[c] + (sm.buf[b + c] - p[c]) * k;
-                px[o + 3] = D.q8(q[3]);
+                // Locked transparency: the colour changes, the alpha stays.
+                if (!st.lockAlpha) px[o + 3] = D.q8(q[3]);
                 for (let c = 0; c < 3; c++) px[o + c] = D.q8(q[3] > 0 ? q[c] / q[3] : 0);
                 for (let c = 0; c < 4; c++) p[c] = q[c];
                 rect = { x0: Math.min(rect ? rect.x0 : x, x), y0: Math.min(rect ? rect.y0 : y, y), x1: Math.max(rect ? rect.x1 : x + 1, x + 1), y1: Math.max(rect ? rect.y1 : y + 1, y + 1) };
@@ -246,7 +247,7 @@ export const DrawMixin = {
             const px = this._growToCanvas(L);
             const gp = gradientPixels(L.w, L.h, L.x, L.y, g);
             const t = this.sel ? D.maskForLayer(this.sel, W, H, L) : null;
-            this.pix.set(L.id, layOver(px, gp, opacity, t));
+            this.pix.set(L.id, this._keepAlpha(L, px, layOver(px, gp, opacity, t)));
         });
     },
 

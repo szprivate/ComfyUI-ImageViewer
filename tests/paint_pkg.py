@@ -15,3 +15,4 @@ if "imageviewer_paint_pkg" not in sys.modules:
 paint_math = importlib.import_module("imageviewer_paint_pkg.paint_math")
 paint_io = importlib.import_module("imageviewer_paint_pkg.paint_io")
 paint_ops = importlib.import_module("imageviewer_paint_pkg.paint_ops")
+paint_style = importlib.import_module("imageviewer_paint_pkg.paint_style")

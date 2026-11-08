@@ -16,6 +16,7 @@ import numpy as np
 
 from . import paint_io as P
 from . import paint_math as M
+from . import paint_style as S
 
 MAX_OPS = 60
 OPS = ("add_layer", "add_adjustment", "set_layer", "remove_layer", "duplicate_layer", "move_layer", "merge_down",
@@ -317,6 +318,35 @@ def _set_layer(doc, op, _read, _fonts):
         if not L["clip"]:
             L.pop("clip")
         changed.append("clipped to the layer under it" if op["clip"] else "not clipped")
+    if "style" in op:
+        if L["kind"] != "pixel":
+            raise OpError("a layer style goes on a pixel layer")
+        st = op["style"]
+        if st and not isinstance(st, dict):
+            raise OpError("'style' is {shadow, glow, stroke, overlay: {...}} or null")
+        # Merged into what the layer has: an effect given as null is taken off.
+        new = dict(L.get("style") or {})
+        for k, v in (st or {}).items():
+            if k not in S.STYLE_KINDS:
+                raise OpError(f"unknown effect {k!r} (one of {', '.join(S.STYLE_KINDS)})")
+            if v is None:
+                new.pop(k, None)
+            else:
+                new[k] = {**(new.get(k) or {}), **{f: (list(_color(c))[:3] if f == "color" else c) for f, c in v.items()}}
+        cl = S.clean_style(new) if st else None
+        if cl:
+            L["style"] = cl
+        else:
+            L.pop("style", None)
+        changed.append("style " + (", ".join(k for k in S.STYLE_KINDS if cl and k in cl) if cl else "taken off"))
+    if "lock_alpha" in op:
+        if L["kind"] != "pixel":
+            raise OpError("only a pixel layer has transparency to lock")
+        if op["lock_alpha"]:
+            L["lockAlpha"] = True
+        else:
+            L.pop("lockAlpha", None)
+        changed.append("transparency locked" if op["lock_alpha"] else "transparency unlocked")
     if "collapsed" in op and L["kind"] == "group":
         L["collapsed"] = bool(op["collapsed"])
         changed.append("folded" if L["collapsed"] else "opened")
@@ -324,7 +354,7 @@ def _set_layer(doc, op, _read, _fonts):
         doc.meta["active"] = L["id"]
         changed.append("made active")
     if not changed:
-        raise OpError("nothing to change (name, visible, opacity, blend, x, y, params, locked, clip, collapsed, active)")
+        raise OpError("nothing to change (name, visible, opacity, blend, x, y, params, locked, lock_alpha, clip, style, collapsed, active)")
     return f"layer {L['name']!r}: " + ", ".join(changed)
 
 

@@ -83,9 +83,15 @@ The layer's mask goes with it. Press <kbd>Enter</kbd> or double-click to apply, 
 - **Clipping masks**: <kbd>Alt</kbd>+click a layer (or <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>G</kbd>) to clip it to the layer under it, so it only shows where that layer is. Do the same again to release it. Clip an adjustment layer like this and it changes only that one layer. A clipped row is indented with an arrow, and the name of the layer it is clipped to is underlined.
 - Pixel, text and **adjustment** layers (Levels, Curves, Brightness/Contrast, Exposure, Hue/Saturation, Grade, Invert, Threshold), with blend modes and opacity.
 - **Masks**: white shows, black hides. Click the mask's thumbnail to paint on it; while the mask is picked, Fill, Delete and the bucket work on the mask too. <kbd>Alt</kbd>+click the mask's thumbnail to see the mask alone (<kbd>Esc</kbd> or another <kbd>Alt</kbd>+click goes back), <kbd>Shift</kbd>+click switches it off and on. <kbd>Ctrl</kbd>+click a thumbnail makes a selection from the layer's pixels or from its mask (with <kbd>Shift</kbd> it adds, with <kbd>Alt</kbd> it takes away). Properties has the mask's **Density** (how much the black hides) and **Feather** (a soft edge), which change nothing in the mask's pixels; a `.psd` gets them baked in.
+- **Layer styles** (**Layer > Layer style…**, or the "fx" mark on a layer's row): a **drop shadow** (angle, distance, blur), an **outer glow**, a **stroke** round the layer's edge, and a **colour overlay**, each with its colour and opacity. They are settings, not pixels, so they follow what you paint and can be changed or switched off at any time. A `.ora` keeps them; a `.psd` gets them baked into the layer. A layer clipped to another shows without its own style.
+- **Lock transparency** (the checkered button over the list, or the Layer menu): the brush and the other tools then paint only where the layer already has something, and its see-through parts stay see-through. The eraser and Delete paint the second colour instead.
 - **Quick Mask** (<kbd>Q</kbd>, or the button under the tools): the selection is shown as a red tint and painted with the brush, eraser, bucket or Fill. Black takes away, white adds. <kbd>Q</kbd> again turns it back into a selection.
 - Double-click a name to rename. **Layer** menu: duplicate (<kbd>Ctrl</kbd>+<kbd>J</kbd>), merge down (<kbd>Ctrl</kbd>+<kbd>E</kbd>), flip, rotate, scale, lock.
 - The **History** panel lists every step; click one to go back to it.
+
+## Copy and paste
+
+<kbd>Ctrl</kbd>+<kbd>C</kbd> copies the selection of the active layer (all of it with nothing selected), <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> the picture as it looks (merged), and <kbd>Ctrl</kbd>+<kbd>X</kbd> cuts. <kbd>Ctrl</kbd>+<kbd>V</kbd> pastes as a new layer in the middle of the view, and <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> pastes it where it was copied from. A picture copied in another program (a screenshot, an image from a browser) is pasted the same way. What you copy here is also put on the system clipboard, where the browser allows it.
 
 ## Filters
 
