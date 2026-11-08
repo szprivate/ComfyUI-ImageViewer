@@ -1183,5 +1183,61 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(own(110, 60), start)
         self.assertEqual(self.errors, [])
 
+    def test_filter_dialog_adjustment_and_smart_filter_sliders_preview_while_dragged(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        comp = lambda: pg.evaluate(f"() => {{ const e = {ed}, o = (60 * e.doc.w + 100) * 4; return [...e.comp.slice(o, o + 3)]; }}")
+
+        def drag(handle, steps=5):
+            # Pressed on the slider's middle and moved right; what the picture shows is read before it is let go.
+            el = handle.as_element()
+            el.scroll_into_view_if_needed()
+            b = el.bounding_box()
+            x, y = b["x"] + b["width"] / 2, b["y"] + b["height"] / 2
+            pg.mouse.move(x, y); pg.mouse.down()
+            seen = []
+            for k in range(1, steps + 1):
+                pg.mouse.move(x + k * b["width"] / 12, y)
+                pg.wait_for_timeout(60)
+                seen.append(comp())
+            return seen
+
+        # The Filter menu's dialogs have a slider by each number now; its preview follows the drag.
+        start = comp()
+        brighter = "(px, w, h, v) => { const o = new Uint8ClampedArray(px); for (let i = 0; i < o.length; i += 4) { o[i] += v.b; o[i + 1] += v.b; o[i + 2] += v.b; } return o; }"
+        pg.evaluate(f"() => {ed}.filterDialog('Brighter', [['b', 'Brighter', 0, -100, 100]], {brighter})")
+        rng = pg.evaluate_handle(f"() => {ed}.box.querySelector('.paint-dlg .paint-dlg-range')")
+        self.assertTrue(pg.evaluate("(r) => !!r", rng))
+        seen = drag(rng)
+        self.assertNotEqual(seen[1], start, "the preview changes while the slider is still held")
+        self.assertNotEqual(seen[-1], seen[1], "and goes on following it")
+        self.assertEqual(pg.evaluate(f"() => {ed}.box.querySelector('.paint-dlg input[type=number]').value"),
+                         pg.evaluate(f"() => {ed}.box.querySelector('.paint-dlg .paint-dlg-range').value"))
+        pg.mouse.up()
+        pg.click(".paint-dlg .paint-btn:not(.on)")
+        pg.wait_for_timeout(50)
+        self.assertEqual(comp(), start, "Cancel puts it back")
+        # An adjustment layer's slider in Properties: live too.
+        pg.evaluate(f"() => {ed}.addAdjustment('brightness_contrast')")
+        pg.wait_for_timeout(100)
+        sl = pg.evaluate_handle(f"() => [...{ed}.parts.props.querySelectorAll('.paint-sect')].find((x) => /Brightness/i.test(x.querySelector('h4')?.textContent || '')).querySelector('input[type=range]')")
+        seen = drag(sl)
+        self.assertNotEqual(seen[1], start)
+        self.assertNotEqual(seen[-1], seen[1])
+        pg.mouse.up()
+        pg.keyboard.press("Control+z"); pg.keyboard.press("Control+z")
+        pg.wait_for_timeout(50)
+        # A smart filter's slider: live too.
+        pg.evaluate(f"() => {{ const e = {ed}; e.setActive(e.doc.layers[0].id); e.addSmartFilter('brightness_contrast'); }}")
+        pg.wait_for_timeout(100)
+        start = comp()
+        sl = pg.evaluate_handle(f"() => {ed}.parts.props.querySelector('.paint-smart input[type=range]')")
+        seen = drag(sl)
+        self.assertNotEqual(seen[1], start)
+        self.assertNotEqual(seen[-1], seen[1])
+        pg.mouse.up()
+        self.assertEqual(self.errors, [])
+
 if __name__ == "__main__":
     unittest.main()

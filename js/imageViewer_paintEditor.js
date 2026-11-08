@@ -26,6 +26,15 @@ import { SelectGuidesMixin, RULER_PX } from "./imageViewer_paintSelect.js";
 import { SmartMixin } from "./imageViewer_paintSmart.js";
 import { LiquifyMixin } from "./imageViewer_paintLiquify.js";
 
+/** A dialog slider's step for the range a..b: about a thousand steps, a whole number where the range is wide. */
+export function dialogStep(a, b) {
+    const span = b - a;
+    if (span >= 100) return 1;
+    const raw = span / 1000, p = 10 ** Math.floor(Math.log10(raw));
+    return [1, 2, 5, 10].map((k) => k * p).find((s) => s >= raw);
+}
+const roundTo = (v, step) => { const d = Math.max(0, -Math.floor(Math.log10(step) + 1e-9)); return Number(v.toFixed(Math.min(6, d))); };
+
 export const PAINT_TOOLS = [
     ["move", "transform", "Transform (move, scale, rotate, shear)", "V"], ["marquee", "marquee", "Rectangle select", "M"], ["ellipse", "ellipse", "Ellipse select", "Shift+M"],
     ["lasso", "lasso", "Lasso", "L"], ["pen", "pen", "Pen (paths)", "P"], ["wand", "wand", "Magic wand", "W"], ["crop", "crop", "Crop", "C"],
@@ -181,6 +190,8 @@ const STYLE = `
   box-shadow: 0 10px 40px rgba(0,0,0,.6); }
 .paint-dlg h3 { margin: 0 0 10px; font-size: 14px; color: #f60; }
 .paint-dlg .paint-field > label { flex-basis: 110px; }
+.paint-dlg .paint-dlg-range { flex: 1 1 90px; min-width: 70px; background: none; border: 0; padding: 0; accent-color: #f60; }
+.paint-dlg .paint-dlg-range + input[type=number] { width: 64px; flex: 0 0 auto; }
 .paint-dlg .go { display: flex; justify-content: flex-end; gap: 6px; margin-top: 12px; }
 .paint-dlg .note { color: #999; font-size: 11px; margin-top: 6px; }
 `;
@@ -1521,15 +1532,22 @@ class PaintEditor {
             this._dropBelow();
             this.requestRedraw();
         };
-        const later = (v) => { const win = this.d.defaultView; win.clearTimeout(timer); timer = win.setTimeout(() => show(v), 120); };
+        // At most once a frame, with the newest values: shown WHILE a slider is dragged (a wait for the input to rest showed it only when let go).
+        let want = null;
+        const later = (v) => {
+            want = v;
+            if (timer) return;
+            timer = this.d.defaultView.requestAnimationFrame(() => { timer = 0; show(want); });
+        };
         return this.dialog(label, fields, (v) => {
-            this.d.defaultView.clearTimeout(timer);
+            if (timer) this.d.defaultView.cancelAnimationFrame(timer);
+            timer = 0;
             back();
             this.applyFilter(label, (px, w, h) => run(px, w, h, v), T);
         }, T.length > 1 ? `On ${T.length} layers.` : "", {
             preview: true,
             onInput: (v, prev) => { on = prev; later(v); },
-            onCancel: () => { this.d.defaultView.clearTimeout(timer); back(); },
+            onCancel: () => { if (timer) this.d.defaultView.cancelAnimationFrame(timer); timer = 0; back(); },
         });
     }
 
@@ -2767,6 +2785,15 @@ class PaintEditor {
             } else if (a === "text") inp = this.el("input", "", { type: "text", value: def, spellcheck: false });
             else inp = this.el("input", "", { type: "number", value: def, min: a, max: b, step: "any" });
             inputs[k] = inp;
+            // A number with a range: a slider beside it too, so that it can be dragged (and the preview follows the drag).
+            if (typeof a === "number" && typeof b === "number" && Number.isFinite(a) && Number.isFinite(b) && b > a) {
+                const st = dialogStep(a, b);
+                const r = this.el("input", "paint-dlg-range", { type: "range", min: a, max: b, step: st, value: def });
+                r.addEventListener("input", () => { inp.value = String(roundTo(Number(r.value), st)); inp.dispatchEvent(new Event("input")); });
+                r.addEventListener("change", () => inp.dispatchEvent(new Event("change")));
+                inp.addEventListener("input", () => { if (inp.value !== "" && Number.isFinite(Number(inp.value))) r.value = inp.value; });
+                row.append(r);
+            }
             row.append(inp);
             box.append(row);
         }
