@@ -35,6 +35,7 @@ import zipfile
 import numpy as np
 
 from . import paint_math as M
+from . import paint_style as S
 
 VERSION = 1
 MAX_SIDE = 16384
@@ -133,6 +134,11 @@ def clean_layer(L):
                    w=int(M._num(L.get("w"), 0, 0, MAX_SIDE)), h=int(M._num(L.get("h"), 0, 0, MAX_SIDE)))
         if isinstance(L.get("text"), dict):
             out["text"] = clean_text(L["text"])
+        st = S.clean_style(L.get("style"))
+        if st:
+            out["style"] = st
+        if L.get("lockAlpha"):
+            out["lockAlpha"] = True
     elif kind == "group":
         out["blend"] = L.get("blend") if L.get("blend") in M.GROUP_BLENDS else "pass_through"
         if L.get("collapsed"):
@@ -377,6 +383,9 @@ def lay(out, doc, L):
     px = doc.px.get(L["id"])
     if px is None or op <= 0:
         return out
+    if S.style_on(L):
+        st = S.styled_pixels(W, H, L, px, mask_values(L, doc.masks.get(L["id"]), 0, 0, W, H))
+        return M.blend_over(out, st, np.full((H, W), op), L.get("blend", "normal"))
     lx, ly = L.get("x", 0), L.get("y", 0)
     ph, pw = px.shape[:2]
     x0, y0, x1, y1 = max(0, lx), max(0, ly), min(W, lx + pw), min(H, ly + ph)
@@ -680,6 +689,13 @@ def baked_for_psd(doc):
             px = doc.px.get(L["id"])
             if px is None:
                 continue
+            if S.style_on(L):
+                # A layer style is baked: the layer and its effects (and its mask) as one picture.
+                st = S.styled_pixels(doc.w, doc.h, L, px, mask_values(L, doc.masks.get(L["id"]), 0, 0, doc.w, doc.h))
+                meta = {k: v for k, v in L.items() if k not in ("mask", "style")}
+                out.append((dict(meta, x=0, y=0, w=doc.w, h=doc.h), st, None))
+                notes.append(f"the layer style of {L['name']!r} was baked into its pixels")
+                continue
             out.append((L, px, doc.masks.get(L["id"]) if L.get("mask") else None))
     return out, notes
 
@@ -714,8 +730,8 @@ def _psd_record(L, px, mask, section=None):
         cinfo += struct.pack(">hI", cid, len(block))
         cdata += block
     flags = 0 if L.get("visible", True) else 2
-    if L.get("locked"):
-        flags |= 1                  # transparency protected: the nearest Photoshop has
+    if L.get("locked") or L.get("lockAlpha"):
+        flags |= 1                  # transparency protected (also the nearest Photoshop has to a whole lock)
     if section is not None:
         flags |= 8 | 16             # bit 4 (said by bit 3): the pixel data does not matter (a folder)
     if m:
@@ -954,6 +970,8 @@ def read_psd(path):
                                         opacity=rec["opacity"] / 255, visible=not (rec["flags"] & 2),
                                         blend=M.PSD_BLEND_BACK.get(rec["key"], "normal"), clip=bool(rec["clip"]),
                                         **parent)
+                if rec["flags"] & 1:
+                    L["lockAlpha"] = True
                 if rec["key"] not in M.PSD_BLEND_BACK:
                     doc.notes.append(f"{rec['name']!r}: its blend mode {rec['key'].decode('latin-1')!r} is Normal here")
                 if rec["mask"] and -2 in p:
@@ -1016,6 +1034,10 @@ def outline(doc):
                 row["mask_feather"] = L["mask"]["feather"]
         if L.get("locked"):
             row["locked"] = True
+        if L.get("lockAlpha"):
+            row["lock_alpha"] = True
+        if L.get("style"):
+            row["style"] = {k: v for k, v in L["style"].items() if v.get("on")}
         if L.get("clip"):
             row["clipped"] = True
         if L["id"] == doc.meta.get("active"):

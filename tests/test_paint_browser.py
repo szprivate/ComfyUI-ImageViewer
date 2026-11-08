@@ -979,5 +979,75 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertGreater(m[1], 245)
         self.assertEqual(self.errors, [])
 
+    def test_layer_style_lock_transparency_and_the_clipboard(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        x0, y0, w, h = pg.evaluate(f"() => {{ const r = {ed}.canvas.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }}")
+        at = lambda x, y: (x0 + x * w / 200, y0 + y * h / 120)
+        comp = lambda x, y: pg.evaluate(f"() => [...{ed}.comp.slice(({y} * 200 + {x}) * 4, ({y} * 200 + {x}) * 4 + 4)]")
+        label = lambda: pg.evaluate(f"() => {ed}.undoStack.at(-1).label")
+        pg.evaluate(f"""() => {{ const e = {ed}, b = new Uint8ClampedArray(40 * 30 * 4);
+            for (let i = 0; i < 40 * 30; i++) b.set([255, 255, 0, 255], i * 4);
+            e.addPixelLayer(b, 40, 30, 'box', 80, 45); }}""")
+        under = comp(78, 60)
+        # Layer > Stroke: the section in Properties, an edge round the box at once; one undo step.
+        pg.evaluate(f"() => {ed}.openStyle('stroke')")
+        self.assertEqual(label(), "Layer style")
+        self.assertTrue(pg.evaluate(f"() => !!{ed}.parts.props.querySelector('.paint-style .style-on[data-kind=stroke]:checked')"))
+        self.assertEqual(comp(78, 60), [0, 0, 0, 255])
+        self.assertEqual(comp(100, 60), [255, 255, 0, 255])
+        self.assertTrue(pg.evaluate(f"() => [...{ed}.layerList.querySelectorAll('.paint-row .tag.fx')].length === 1"))
+        # A drop shadow switched on by its box; the size slider drags live and keeps one step.
+        pg.evaluate(f"() => {{ const c = {ed}.parts.props.querySelector('.paint-style .style-on[data-kind=shadow]'); c.checked = true; c.dispatchEvent(new Event('change')); }}")
+        self.assertTrue(pg.evaluate(f"() => !!{ed}.active().style.shadow"))
+        n = pg.evaluate(f"() => {ed}.undoStack.length")
+        pg.evaluate(f"""() => {{ const s = [...{ed}.parts.props.querySelectorAll('.paint-style .paint-field')].find((f) => f.textContent.startsWith('Size'));
+            const r = s.querySelector('input[type=range]'); r.value = 5; r.dispatchEvent(new Event('input')); r.value = 6; r.dispatchEvent(new Event('input')); r.dispatchEvent(new Event('change')); }}""")
+        self.assertEqual(pg.evaluate(f"() => [{ed}.active().style.stroke.size, {ed}.undoStack.length]"), [6, n + 1])
+        self.assertEqual(comp(76, 60), [0, 0, 0, 255])
+        # Painting on the styled layer: the edge follows the stroke as it goes.
+        pg.evaluate(f"() => {{ const e = {ed}; e.setTool('brush'); e.fg = [0, 0, 255]; Object.assign(e.opts.brush, {{ size: 6, hardness: 100 }}); }}")
+        pg.mouse.move(*at(130, 60)); pg.mouse.down(); pg.mouse.move(*at(135, 60), steps=3)
+        pg.wait_for_timeout(100)
+        self.assertEqual(comp(140, 60)[:3], [0, 0, 0])
+        pg.mouse.up()
+        # Undo (the stroke, the layer growing for it, the size) takes the size back; Clear the style takes it all.
+        for _ in range(3):
+            pg.keyboard.press("Control+z")
+        self.assertEqual(pg.evaluate(f"() => {ed}.active().style.stroke.size"), 3)
+        pg.evaluate(f"() => {ed}.clearStyle({ed}.active())")
+        self.assertEqual(comp(78, 60), under)
+        # Locked transparency: the brush paints only on the box, the eraser paints the second colour.
+        pg.evaluate(f"() => {{ const e = {ed}; e.toggleLockAlpha(); e.bg = [0, 255, 0]; }}")
+        self.assertEqual(label(), "Lock transparency")
+        self.assertTrue(pg.evaluate(f"() => {ed}.lockAlphaBtn.classList.contains('on')"))
+        px = lambda x, y: pg.evaluate(f"() => {{ const e = {ed}, L = e.active(), b = e.pix.get(L.id), o = (({y} - L.y) * L.w + {x} - L.x) * 4; return {x} >= L.x && {y} >= L.y && {x} < L.x + L.w && {y} < L.y + L.h ? [...b.slice(o, o + 4)] : null; }}")
+        pg.mouse.move(*at(70, 50)); pg.mouse.down(); pg.mouse.move(*at(90, 50), steps=6); pg.mouse.up()
+        self.assertEqual(px(85, 50), [0, 0, 255, 255])
+        self.assertIn(px(75, 50), (None, [0, 0, 0, 0]))
+        self.assertEqual(comp(75, 50), comp(75, 52))                     # nothing painted outside the box
+        pg.keyboard.press("e")
+        pg.mouse.move(*at(100, 70)); pg.mouse.down(); pg.mouse.move(*at(105, 70), steps=3); pg.mouse.up()
+        self.assertEqual(px(102, 70), [0, 255, 0, 255])
+        # The clipboard: Ctrl+C the selected part, Ctrl+V a new layer of it; Ctrl+Shift+V in place.
+        pg.evaluate(f"() => {{ const e = {ed}, m = new Uint8Array(200 * 120); for (let y = 50; y < 60; y++) for (let x = 90; x < 110; x++) m[y * 200 + x] = 255; e.setSelection(m); }}")
+        pg.mouse.move(*at(5, 5))
+        pg.keyboard.press("Control+c")
+        self.assertEqual(pg.evaluate(f"() => [{ed}._clip.w, {ed}._clip.h, {ed}._clip.x, {ed}._clip.y]"), [20, 10, 90, 50])
+        nl = pg.evaluate(f"() => {ed}.doc.layers.length")
+        pg.keyboard.press("Control+Shift+v")
+        pg.wait_for_function(f"() => {ed}.doc.layers.length === {nl + 1}")
+        self.assertEqual(pg.evaluate(f"() => {{ const L = {ed}.active(); return [L.name, L.x, L.y, L.w, L.h]; }}"), ["Pasted 1", 90, 50, 20, 10])
+        self.assertEqual(label(), "Add layer")
+        pg.keyboard.press("Control+v")
+        pg.wait_for_function(f"() => {ed}.doc.layers.length === {nl + 2}")
+        self.assertEqual(pg.evaluate(f"() => {ed}.active().name"), "Pasted 2")
+        # Cut: copied, and cleared from the layer it came from.
+        pg.evaluate(f"() => {{ const e = {ed}; e.setActive(e.doc.layers.find((L) => L.name === 'box').id); e.toggleLockAlpha(); }}")
+        pg.keyboard.press("Control+x")
+        self.assertEqual(px(95, 55)[3], 0)
+        self.assertEqual(self.errors, [])
+
 if __name__ == "__main__":
     unittest.main()
