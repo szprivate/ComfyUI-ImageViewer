@@ -12,6 +12,7 @@
 
 import { cleanStyle, styleOn, styledCached } from "./imageViewer_paintStyle.js";
 import { cleanFilters, smartLayer } from "./imageViewer_paintSmart.js";
+import { cleanSmart } from "./imageViewer_paintSmartLayer.js";
 
 export const BLEND_MODES = ["normal", "multiply", "screen", "overlay", "darken", "lighten", "difference", "add",
     "color_dodge", "color_burn", "soft_light", "hard_light"];
@@ -139,6 +140,9 @@ export function cleanLayer(L) {
         // Smart filters (imageViewer_paintSmart.js): settings, drawn in the composite before the style.
         const fl = cleanFilters(L.filters);
         if (fl) out.filters = fl;
+        // A smart layer (imageViewer_paintSmartLayer.js): its source and how it lies; its pixels are drawn from them.
+        const sm = cleanSmart(L.smart);
+        if (sm) { out.smart = sm; delete out.text; }
     } else if (kind === "group") {
         out.blend = GROUP_BLENDS.includes(L.blend) ? L.blend : "pass_through";
         if (L.collapsed) out.collapsed = true;

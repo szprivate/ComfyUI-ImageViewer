@@ -66,7 +66,7 @@ class PaintParity(unittest.TestCase):
                                   "masks": {k: b64(v) for k, v in d.masks.items()},
                                   "filters": getattr(d, "filters", None), "path": getattr(d, "path", None),
                                   "distort": getattr(d, "distort", None), "draw": getattr(d, "draw", None),
-                                  "select": getattr(d, "select", None)}
+                                  "select": getattr(d, "select", None), "smart": getattr(d, "smart", None)}
         with tempfile.TemporaryDirectory() as tmp:
             a, b = os.path.join(tmp, "in.json"), os.path.join(tmp, "out.json")
             with open(a, "w") as f:
@@ -240,6 +240,35 @@ class PaintParity(unittest.TestCase):
         self.same(d.px[L["id"]], got["distort"], d.px[L["id"]].shape, "distort", tol=1)
         with self.assertRaises(O.OpError):          # a bow tie is no shape a perspective makes
             O.apply_ops(d, [{"op": "distort", "corners": [[0, 0], [10, 0], [0, 10], [10, 10]]}], read_image=None)
+
+    def test_smart_layers(self):
+        """A smart layer's source drawn by a matrix (moved, scaled down past the mip levels, up, turned,
+        sheared, in perspective, mostly off the canvas): the same pixels, box and matrix in both."""
+        from paint_pkg import paint_smartlayer as SL
+        rng = np.random.default_rng(77)
+        sw, sh = 91, 67
+        src = rng.integers(0, 256, (sh, sw, 4), dtype=np.uint8)
+        src[..., 3] = rng.choice([0, 90, 255, 255], (sh, sw)).astype(np.uint8)
+        from math import cos, sin, radians
+        r = radians(23)
+        mats = [SL.move3(3, 4), SL.mul3(SL.move3(5.5, 2), SL.scale3(0.4)), SL.mul3(SL.move3(-2, 1), SL.scale3(0.07, 0.11)),
+                SL.mul3(SL.move3(-30, -10), SL.scale3(1.7)),
+                [cos(r) * 0.8, -sin(r) * 0.6, 20, sin(r) * 0.8, cos(r) * 0.6, -4, 0, 0, 1],
+                [0.5, 0.2, 3, 0.1, 0.45, 5, 0.0012, -0.0008, 1],
+                SL.mul3(SL.move3(-5000, -3000), SL.scale3(100))]
+        d = P.PaintDoc(60, 44, "smart")
+        d.smart = {"src": b64(src), "w": sw, "h": sh, "W": 60, "H": 44, "mats": mats}
+        got = self.run_node({"s": d})["s"]
+        self.same(SL.halve(src), got["halve"], ((sh + 1) // 2, (sw + 1) // 2, 4), "halve", tol=0)
+        for i, (cm, js) in enumerate(zip(mats, got["smart"])):
+            px, box, m, cut = SL.render(src, cm, 60, 44)
+            self.assertEqual(box, js["box"], f"case {i}")
+            self.assertEqual(cut, js["cut"], f"case {i}")
+            self.assertEqual(SL.level_for(cm, sw, sh), js["k"], f"case {i}")
+            for a, b in zip(m, js["m"]):
+                self.assertAlmostEqual(a, b, places=9)
+            self.same(px, js["px"], px.shape, f"smart {i}", tol=1)
+            self.assertTrue(px[..., 3].any(), f"case {i} drew nothing")
 
     def test_layer_styles(self):
         """Drop shadow, outer glow, stroke and colour overlay, alone and together, with masks and blends."""

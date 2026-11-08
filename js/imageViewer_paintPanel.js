@@ -20,7 +20,7 @@ import { api } from "../../scripts/api.js";
 import { createPaintEditor, PAINT_KEYS } from "./imageViewer_paintEditor.js";
 import { notice, openFilePicker, openExportDialog, canvasContext } from "./imageViewer_exportUI.js";
 import { addRecentDoc } from "./imageViewer_recentDocs.js";
-import { maskBBox } from "./imageViewer_paintData.js";
+import { maskBBox, composite } from "./imageViewer_paintData.js";
 
 export const PAINT_PREFIX = "paint:";
 /** The dock panels of a Paint tab, and the editor part each one holds. */
@@ -186,7 +186,7 @@ export const PaintPanelMixin = {
         if (!rec || !rec.editor || !rec.editor.doc) { this.paintPickOpen(); return; }
         await openFilePicker(this.container, {
             id: "paintAdd", title: "Add as a layer", kind: "image", exts: PICTURE_EXTS, multiple: true, go: "Add",
-            note: "Each picture becomes a layer over the one selected, at the top left.",
+            note: "Each picture becomes a smart layer over the one selected, in the middle - fitted inside the canvas when it is bigger, its own pixels kept.",
             onPick: async (files) => {
                 if (!files.length) return { ok: false, message: "Pick a picture." };
                 for (const f of files) {
@@ -204,7 +204,8 @@ export const PaintPanelMixin = {
             const data = await postJson("/imageviewer/paint/open", typeof ref === "string" ? { path: ref } : ref);
             const L = data.doc.layers.find((x) => x.kind === "pixel");
             const px = await this._paintFetch(data.token, { layer: L.id }, L.w * L.h * 4);
-            rec.editor.addPixelLayer(new Uint8ClampedArray(px), L.w, L.h, data.doc.name || "Picture");
+            // A smart layer: the picture keeps its own pixels, in the middle (fitted inside the canvas when bigger).
+            rec.editor.addSmartLayer(new Uint8ClampedArray(px), L.w, L.h, data.doc.name || "Picture");
             return true;
         } catch (e) {
             notice("error", "Not added", String(e.message || e));
@@ -222,18 +223,28 @@ export const PaintPanelMixin = {
     },
 
     /** Every layer's pixels, mask and the selection of a session: what setDocument / replaceWith take. */
-    async _paintLoad(token, meta, selection) {
-        const pix = {}, masks = {};
+    async _paintLoad(token, meta, selection, have = null) {
+        const pix = {}, masks = {}, srcs = {};
         const jobs = [];
         for (const L of meta.layers) {
             if (L.kind === "pixel") jobs.push(async () => { pix[L.id] = new Uint8ClampedArray(await this._paintFetch(token, { layer: L.id }, L.w * L.h * 4)); });
             if (L.mask) jobs.push(async () => { masks[L.id] = new Uint8Array(await this._paintFetch(token, { mask: L.id }, L.mask.w * L.mask.h)); });
+            // A smart layer's source, once (the editor may hold it already: a source never changes).
+            const sm = L.smart;
+            if (sm && !(sm.src in srcs) && !(have && have.has(sm.src))) {
+                srcs[sm.src] = null;
+                jobs.push(async () => {
+                    try { srcs[sm.src] = { px: new Uint8ClampedArray(await this._paintFetch(token, { src: sm.src }, sm.sw * sm.sh * 4)), w: sm.sw, h: sm.sh }; }
+                    catch (_) { delete srcs[sm.src]; }          // the layer is then a plain one
+                });
+            }
         }
         let sel = null;
         if (selection) jobs.push(async () => { sel = new Uint8Array(await this._paintFetch(token, { sel: 1 }, meta.w * meta.h)); });
         // A few at a time: a picture of many layers should not open dozens of requests at once.
         for (let i = 0; i < jobs.length; i += 4) await Promise.all(jobs.slice(i, i + 4).map((f) => f()));
-        return { doc: meta, pix, masks, selection: sel };
+        for (const k of Object.keys(srcs)) if (!srcs[k]) delete srcs[k];
+        return { doc: meta, pix, masks, selection: sel, srcs };
     },
 
     // ── the tab on screen ────────────────────────────────────────────────────
@@ -350,6 +361,7 @@ export const PaintPanelMixin = {
             saveAs: () => this.paintSaveAs(rec),
             exportDoc: () => this.paintExport(rec),
             generate: (kind, opts) => this.paintGenerate(rec, kind, opts || {}),
+            editSmart: (layerId) => this.paintEditSmart(rec, layerId),
             workflows: () => this.paintWorkflowsDialog(rec),
             workflowFor: (kind) => this._paintWfLabel(kind),
             menu: (entries, x, y, anchor) => {
@@ -391,8 +403,56 @@ export const PaintPanelMixin = {
         };
         for (const [id, b] of Object.entries(s.layers)) await send("layer:" + id, b);
         for (const [id, b] of Object.entries(s.masks)) await send("mask:" + id, b);
+        for (const [id, b] of Object.entries(s.sources || {})) await send("src:" + id, b);
         await send("sel", s.selection);
         return s;
+    },
+
+    /**
+     * Edit contents of a smart layer: its source opened as a picture in a Paint tab of its own (a new canvas of
+     * the source's size, the source its one layer). Saving that tab draws the layer again from what was saved
+     * (_paintSmartBack) - every layer that shares the source, corners where they were, one undo step there.
+     */
+    async paintEditSmart(rec, layerId) {
+        const ed = rec && rec.editor, L = ed && ed.doc && ed.doc.layers.find((x) => x.id === layerId);
+        const S = L && L.smart && ed.srcs && ed.srcs.get(L.smart.src);
+        if (!S) { notice("warn", "Not a smart layer", "Its source is not here."); return false; }
+        try {
+            const data = await postJson("/imageviewer/paint/open", { new: { w: S.w, h: S.h, name: `${L.name} contents`, fill: "transparent" } });
+            const lid = data.doc.layers[0].id;
+            data.doc.layers[0].name = L.name;
+            const { body, gz } = await packed(S.px);
+            const res = await api.fetchApi(`/imageviewer/paint/stage?${new URLSearchParams({ token: data.token, part: "layer:" + lid })}`, {
+                method: "POST", headers: { "Content-Type": "application/octet-stream", ...(gz ? { "X-ImageViewer-Enc": "gzip" } : {}) }, body,
+            });
+            if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+            await postJson("/imageviewer/paint/save", { token: data.token, meta: data.doc, keep: [], write: false });
+            const st = this._paintState();
+            const key = PAINT_PREFIX + `new-${++st.n}`;
+            const parentKey = Object.keys(st.tabs).find((k) => st.tabs[k] === rec);
+            st.tabs[key] = { el: null, editor: null, token: data.token, path: null, source: "", pending: data,
+                             smartFor: { key: parentKey, layer: layerId, src: L.smart.src } };
+            this._paintMakeTab(key, `${L.name} (contents)`);
+            this._paintShow(key);
+            notice("info", "Smart layer contents", `Save this tab to update ${L.name}.`);
+            return true;
+        } catch (e) {
+            notice("error", "Could not open the contents", String(e.message || e));
+            return false;
+        }
+    },
+
+    /** A tab opened by Edit contents was saved: the smart layer it came from is drawn again from it. */
+    _paintSmartBack(rec) {
+        const f = rec && rec.smartFor;
+        if (!f) return;
+        const st = this._paintState(), parent = st.tabs[f.key], ped = parent && parent.editor, ed = rec.editor;
+        if (!ped || !ped.doc || !ed || !ed.doc) { notice("warn", "The smart layer was not updated", "Its picture is not open any more."); return; }
+        const flat = composite(ed.doc, ed._pixOf, ed._maskOf);
+        if (!ped.replaceSource(f.src, flat, ed.doc.w, ed.doc.h)) { notice("warn", "The smart layer was not updated", "No layer uses that source any more."); return; }
+        const L = ped.doc.layers.find((x) => x.id === f.layer);
+        if (L && L.smart) f.src = L.smart.src;
+        notice("success", "Smart layer updated", `${L ? L.name : "The layer"} is drawn from what was saved.`);
     },
 
     async paintSave(rec, { asNew = false, name = null } = {}) {
@@ -407,6 +467,7 @@ export const PaintPanelMixin = {
             addRecentDoc("paint", res.path);
             rec.editor.markSaved();
             notice("success", "Saved", res.path);
+            this._paintSmartBack(rec);
             return res.path;
         } catch (e) {
             notice("error", "Not saved", String(e.message || e));
@@ -473,6 +534,7 @@ export const PaintPanelMixin = {
                 rec.path = res.path;
                 addRecentDoc("paint", res.path);
                 ed.markSaved();
+                this._paintSmartBack(rec);
                 this._paintRelabel(rec, res.path);
                 notice("success", "Saved", res.path + (res.notes && res.notes.length ? " - " + res.notes.join("; ") : ""));
                 this._paintLanded(res.path);
@@ -581,7 +643,7 @@ export const PaintPanelMixin = {
                 rec.token = again.token;
             }
             const d = await this._paintDescribe(rec);
-            const data = await this._paintLoad(rec.token, d.doc, d.selection);
+            const data = await this._paintLoad(rec.token, d.doc, d.selection, rec.editor && rec.editor.srcs);
             const wasDirty = rec.editor.isDirty();
             rec.editor.replaceWith(data, detail.label || "agentY");
             // Saved with the page's own unsaved changes in it (handed over first): nothing is unsaved now.
@@ -639,7 +701,7 @@ export const PaintPanelMixin = {
             await postJson("/imageviewer/paint/save", { token: rec.token, meta: s.meta, keep: s.keep, write: false });
             await postJson("/imageviewer/paint/doc", { doc: rec.token, ops, write: false, from: "page" });
             const d = await this._paintDescribe(rec);
-            const data = await this._paintLoad(rec.token, d.doc, d.selection);
+            const data = await this._paintLoad(rec.token, d.doc, d.selection, rec.editor && rec.editor.srcs);
             ed.replaceWith(data, label);
             return true;
         } catch (e) { notice("error", label + " did not work", String(e.message || e)); return false; }

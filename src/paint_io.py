@@ -37,6 +37,7 @@ import numpy as np
 from . import paint_math as M
 from . import paint_style as S
 from . import paint_smart as SM
+from . import paint_smartlayer as SL
 
 VERSION = 1
 MAX_SIDE = 16384
@@ -54,6 +55,7 @@ class PaintDoc:
                      "active": None}
         self.px = {}
         self.masks = {}
+        self.sources = {}         # smart layers' sources by id (paint_smartlayer)
         self.selection = None
         self.notes = []
 
@@ -143,6 +145,10 @@ def clean_layer(L):
         fl = SM.clean_filters(L.get("filters"))
         if fl:
             out["filters"] = fl
+        sm = SL.clean_smart(L.get("smart"))
+        if sm:
+            out["smart"] = sm
+            out.pop("text", None)
     elif kind == "group":
         out["blend"] = L.get("blend") if L.get("blend") in M.GROUP_BLENDS else "pass_through"
         if L.get("collapsed"):
@@ -501,6 +507,18 @@ def write_ora(path, doc):
     for L in meta["layers"]:
         if L.get("mask") and doc.masks.get(L["id"]) is not None:
             files.append((f"data/{L['id']}_mask.png", png_bytes(doc.masks[L["id"]])))
+    # Smart layers' sources, once each (other programs see the drawn layer and never these).
+    put_src = set()
+    for L in meta["layers"]:
+        sm = L.get("smart")
+        if not sm:
+            continue
+        if sm["src"] in doc.sources:
+            if sm["src"] not in put_src:
+                put_src.add(sm["src"])
+                files.append((f"smart/{sm['src']}.png", png_bytes(doc.sources[sm["src"]])))
+        else:
+            L.pop("smart")
     if doc.selection is not None and doc.selection.any():
         files.append(("selection.png", png_bytes(doc.selection)))
         meta["selection"] = True
@@ -579,6 +597,15 @@ def read_ora(path):
                     px = read_png(z.read(src)) if src in names else np.zeros((max(1, L["h"]), max(1, L["w"]), 4), np.uint8)
                     doc.px[L["id"]] = px
                     L["h"], L["w"] = px.shape[:2]
+                    sm = L.get("smart")
+                    if sm:
+                        sn = f"smart/{sm['src']}.png"
+                        if sm["src"] not in doc.sources and sn in names:
+                            doc.sources[sm["src"]] = read_png(z.read(sn))
+                        s = doc.sources.get(sm["src"])
+                        if s is None or s.shape[:2] != (sm["sh"], sm["sw"]):
+                            L.pop("smart")
+                            doc.notes.append(f"the source of the smart layer {L['name']!r} is missing: it is a plain layer")
                 if L.get("mask"):
                     mn = f"data/{L['id']}_mask.png"
                     if mn in names:
@@ -698,6 +725,9 @@ def baked_for_psd(doc):
             px = doc.px.get(L["id"])
             if px is None:
                 continue
+            if L.get("smart"):
+                L = {k: v for k, v in L.items() if k != "smart"}
+                notes.append(f"the smart layer {L['name']!r} is a plain pixel layer in the .psd (its source stays in the .ora)")
             if SM.smart_on(L):
                 # Smart filters are baked: the layer as they draw it, canvas-sized.
                 L, px = SM.smart_layer(doc.w, doc.h, L, px)
@@ -1056,6 +1086,8 @@ def outline(doc):
             row["filters"] = [f["type"] + ("" if f["on"] else " (off)") for f in L["filters"]]
         if L.get("clip"):
             row["clipped"] = True
+        if L.get("smart") and L["kind"] == "pixel":
+            row["smart"] = SL.describe(L)
         if L["id"] == doc.meta.get("active"):
             row["active"] = True
         rows.append(row)

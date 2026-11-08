@@ -64,7 +64,7 @@ MAX_STAGE_BYTES = P.MAX_SIDE * P.MAX_SIDE * 4
 _TOKEN = re.compile(r"[0-9a-f]{32}")
 #: Seconds the agent waits for the page to hand over a picture it has not saved (``sync`` on /paint/doc).
 SYNC_TIMEOUT = 20.0
-_PART = re.compile(r"(layer|mask):([A-Za-z0-9_-]{1,40})|sel")
+_PART = re.compile(r"(layer|mask|src):([A-Za-z0-9_-]{1,40})|sel")
 
 
 class PaintError(ValueError):
@@ -159,7 +159,7 @@ def pixels_of(s, part):
         sel = doc.selection if doc.selection is not None else np.zeros((doc.h, doc.w), np.uint8)
         return np.ascontiguousarray(sel).tobytes()
     kind, lid = m.group(1), m.group(2)
-    src = doc.px if kind == "layer" else doc.masks
+    src = {"layer": doc.px, "mask": doc.masks, "src": doc.sources}[kind]
     a = src.get(lid)
     if a is None:
         raise PaintError(f"no {kind} {lid}")
@@ -213,6 +213,22 @@ def commit(s, meta, keep):
                 doc.masks[lid] = old.masks[lid]
             else:
                 L.pop("mask")
+    # Smart layers' sources: sent once, then kept by the session; a layer whose source is not there is a plain one.
+    for L in meta["layers"]:
+        sm = L.get("smart")
+        if not sm:
+            continue
+        sid = sm["src"]
+        if sid in doc.sources:
+            continue
+        raw = staged.get("src:" + sid)
+        if raw is not None and len(raw) == sm["sw"] * sm["sh"] * 4:
+            doc.sources[sid] = np.frombuffer(raw, np.uint8).reshape(sm["sh"], sm["sw"], 4).copy()
+        elif sid in old.sources and old.sources[sid].shape[:2] == (sm["sh"], sm["sw"]):
+            doc.sources[sid] = old.sources[sid]
+        else:
+            L.pop("smart")
+            doc.notes.append(f"the source of the smart layer {L['name']!r} did not arrive: it is a plain layer")
     raw = staged.get("sel")
     if raw is not None and len(raw) == doc.w * doc.h:
         sel = np.frombuffer(raw, np.uint8).reshape(doc.h, doc.w).copy()
@@ -424,6 +440,7 @@ def _copy(doc):
     out.meta = copy.deepcopy(doc.meta)
     out.px = {k: v.copy() for k, v in doc.px.items()}
     out.masks = {k: v.copy() for k, v in doc.masks.items()}
+    out.sources = dict(doc.sources)       # never changed in place: shared
     out.selection = None if doc.selection is None else doc.selection.copy()
     out.notes = list(doc.notes)
     return out
@@ -527,7 +544,8 @@ def register(add, *, web, path_access, export_rules, folder_paths, send, resolve
         if not s:
             return err("that document is no longer open", 404)
         q = request.query
-        part = "sel" if q.get("sel") else (f"layer:{q['layer']}" if q.get("layer") else f"mask:{q.get('mask', '')}")
+        part = "sel" if q.get("sel") else (f"layer:{q['layer']}" if q.get("layer") else
+                                          f"src:{q['src']}" if q.get("src") else f"mask:{q.get('mask', '')}")
         try:
             raw = await off(pixels_of, s, part)
         except PaintError as e:

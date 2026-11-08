@@ -108,6 +108,7 @@ export const LiquifyMixin = {
         const L = this.active();
         if (!L || L.kind !== "pixel") { this._notify("Liquify works on a pixel layer.", "info"); return null; }
         if (L.locked) { this._notify(`${L.name} is locked.`, "warn"); return null; }
+        if (this._smartRefuses && this._smartRefuses(L, "Liquify")) return null;
         const before = this._snap();
         // The picture may be pushed into the space around a smaller layer: work on the canvas's size.
         const W = this.doc.w, H = this.doc.h;
