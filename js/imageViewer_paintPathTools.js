@@ -15,10 +15,23 @@ import { paintIcon } from "./imageViewer_paintIcons.js";
 
 /** The tools that work on paths (the pen first); every one shows the paths and takes the pen's Properties. */
 export const PATH_TOOLS = ["pen", "penadd", "pendel", "penconv", "pathsel", "pathdirect"];
-/** Tools that share one place in the toolbar: the group's name -> its tools, in the flyout's order. */
-export const TOOL_GROUPS = { pen: PATH_TOOLS };
-/** The group a tool is in, or null. */
-export const toolGroup = (t) => Object.keys(TOOL_GROUPS).find((g) => TOOL_GROUPS[g].includes(t)) || null;
+/** The shapes, each its own entry of the shape tool's place ("shape:<kind>": the shape tool with that shape). */
+export const SHAPE_TOOLS = ["shape:rect", "shape:rounded", "shape:ellipse", "shape:polygon", "shape:line"];
+/**
+ * Tools that share one place in the toolbar: the group's name -> its tools, in the flyout's order. The place
+ * shows the one used last; a right-click opens them all (Sebastian 2026-11-08: the same for the selections,
+ * the brushes and the shapes as for the pen).
+ */
+export const TOOL_GROUPS = {
+    select: ["marquee", "ellipse", "lasso"],
+    paint: ["brush", "spot", "heal", "patch"],
+    pen: PATH_TOOLS,
+    shape: SHAPE_TOOLS,
+};
+/** What a right-click on the group's place offers, for its tooltip. */
+export const GROUP_HINTS = { select: "the other selection tools", paint: "the healing brushes", pen: "the other path tools", shape: "the other shapes" };
+/** The group a tool is in, or null ("shape" is the shape tool, whichever shape it draws). */
+export const toolGroup = (t) => (t === "shape" ? "shape" : Object.keys(TOOL_GROUPS).find((g) => TOOL_GROUPS[g].includes(t)) || null);
 
 /** The anchors of `path` inside the box (any two corners), as indices. */
 export function anchorsInBox(path, x0, y0, x1, y1) {
@@ -281,13 +294,18 @@ export const PathToolsMixin = {
         return b;
     },
 
+    /** The entry of a group that stands for tool `t` now: the shape tool is the entry of the shape it draws. */
+    _groupEntry(t) { return t === "shape" ? `shape:${this.opts.shape.kind}` : t; },
+
     /** The group's slot shows tool `t` (its icon and title). */
     _groupShow(t) {
         const g = toolGroup(t), b = g && this.toolBtns[t];
+        t = this._groupEntry(t);
         if (!b || b.dataset.tool === t) return;
         const L = this._groupLabels[g][t];
+        if (!L) return;
         b.dataset.tool = t;
-        b.title = L.title + " - right-click: the other path tools";
+        b.title = `${L.title} - right-click: ${GROUP_HINTS[g] || "the others"}`;
         b.replaceChildren(paintIcon(this.d, L.icon));
     },
 
@@ -300,7 +318,7 @@ export const PathToolsMixin = {
             const L = this._groupLabels[group][t];
             const b = this.btn(L.icon, L.title, () => { this._closeFlyout(); this.setTool(t); });
             b.dataset.tool = t;
-            if (t === this.tool) b.classList.add("on");
+            if (t === this._groupEntry(this.tool)) b.classList.add("on");
             fly.append(b);
         }
         for (const ev of ["pointerdown", "mousedown", "contextmenu"]) fly.addEventListener(ev, (e) => { e.stopPropagation(); if (ev === "contextmenu") e.preventDefault(); });

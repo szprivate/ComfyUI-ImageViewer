@@ -936,13 +936,13 @@ class PaintBrowserTests(unittest.TestCase):
             for (let y = 20; y < 32; y++) for (let x = 20; x < 32; x++) px.set([0, 0, 0, 255], (y * 200 + x) * 4);
             e.addPixelLayer(px, 200, 120, 'square'); const m = new Uint8Array(200 * 120);
             for (let y = 16; y < 36; y++) for (let x = 16; x < 36; x++) m[y * 200 + x] = 255; e.setSelection(m);
-            const t = await e.tipFromSelection(); return [t.w, t.h, e.opts.brush.tip === t.id, e.tips.size]; }}""")
+            const t = await e.tipFromSelection(); return [t.w, t.h, e.opts.brush.tip === t.id, [...e.tips.values()].filter((x) => !x.builtin).length]; }}""")
         self.assertEqual(n[2:], [True, 2])
         self.assertTrue(12 <= n[0] <= 20 and 12 <= n[1] <= 20, n)
         # Round again, and the tip forgotten.
         pg.evaluate(f"() => {{ const e = {ed}; e.parts.tool.querySelector('.tip-del').click(); }}")
         pg.wait_for_timeout(100)
-        self.assertEqual(pg.evaluate(f"() => [{ed}.tips.size, {ed}.opts.brush.tip || null]"), [1, None])
+        self.assertEqual(pg.evaluate(f"() => [[...{ed}.tips.values()].filter((x) => !x.builtin).length, {ed}.opts.brush.tip || null]"), [1, None])
         self.assertEqual(self.errors, [])
 
     def test_gradient_shapes_dodge_burn_sponge_and_smudge(self):
@@ -1388,8 +1388,8 @@ class PaintBrowserTests(unittest.TestCase):
         pts = lambda: pg.evaluate(f"() => {ed}.curPath().pts.map((a) => [Math.round(a.x * 10) / 10, Math.round(a.y * 10) / 10])")
         last = lambda: pg.evaluate(f"() => {ed}.undoStack.at(-1).label")
         # One place in the toolbar; a right-click opens the six tools as icons, a click picks one and shows it there.
-        slot = ".paint-tools .paint-grouped"
-        self.assertEqual(pg.locator(".paint-tools [data-group]").count(), 1)
+        slot = ".paint-tools [data-group=pen]"
+        self.assertEqual(pg.locator(".paint-tools [data-group]").count(), 4)
         pg.click(slot, button="right")
         self.assertEqual(pg.evaluate(f"() => [...{ed}.box.querySelectorAll('.paint-flyout .paint-btn')].map((b) => b.dataset.tool)"),
                          ["pen", "penadd", "pendel", "penconv", "pathsel", "pathdirect"])
@@ -1813,6 +1813,150 @@ class PaintBrowserTests(unittest.TestCase):
         names = pg.evaluate(f"() => [...{ed}.box.querySelectorAll('.paint-dlg button')].map((b) => b.textContent)")
         self.assertIn("Reset", names)
         self.assertIn("Before", names)
+        self.assertEqual(self.errors, [])
+
+
+    # ── after 1.22.0: popped out, histograms, tool groups, the area eyedropper, brush tips ──────────────────
+
+    def _ink(self, win, x, y):
+        from io import BytesIO
+        from PIL import Image
+        return np.array(Image.open(BytesIO(win.screenshot(clip={"x": x - 1, "y": y - 1, "width": 2, "height": 2}))).convert("RGB"))[0, 0].tolist()
+
+    def test_popped_out_a_stroke_shows_while_it_is_dragged(self):
+        """The viewer in its own window, the main window behind it (its frames stop): the brush is drawn as it moves."""
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        with pg.context.expect_page() as pop:
+            pg.evaluate("() => window.__panel.toggleUndock()")
+        win = pop.value
+        win.wait_for_load_state()
+        pg.wait_for_function(f"() => {ed}.root.ownerDocument !== document", timeout=10000)
+        win.wait_for_timeout(500)
+        self.assertTrue(pg.evaluate(f"() => {ed}.d === {ed}.root.ownerDocument && {ed}.d !== document"))
+        pg.evaluate("() => { window.requestAnimationFrame = () => 0; }")      # the window behind: no frames there
+        pg.evaluate(f"() => {{ const e = {ed}; e.zoomTo(2); e.setTool('brush'); e.opts.brush.size = 20; e.opts.brush.hardness = 100; e.opts.brush.opacity = 100; e.fg = [255, 255, 0]; }}")
+        at = lambda x, y: pg.evaluate(f"() => {{ const r = {ed}.wrap.getBoundingClientRect(), v = {ed}.view; return [r.left + v.x + {x} * v.zoom, r.top + v.y + {y} * v.zoom]; }}")
+        win.mouse.move(*at(20, 60))
+        win.mouse.down()
+        win.mouse.move(*at(150, 60), steps=8)
+        win.wait_for_timeout(250)
+        px = self._ink(win, *at(100, 60))
+        self.assertTrue(px[0] > 200 and px[1] > 200 and px[2] < 80, f"yellow while still pressed, got {px}")
+        win.mouse.up()
+        self.assertEqual(self.errors, [])
+
+    def test_filter_histogram_is_there_before_anything_is_touched(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        pg.evaluate(f"() => {ed}.adjustPixelsDialog('levels')")
+        pg.wait_for_function(f"() => !!{ed}.box.querySelector('.paint-adjdlg canvas.paint-hist')", timeout=5000)
+        pg.wait_for_timeout(150)
+        ink = pg.evaluate(f"""() => {{ const cv = {ed}.box.querySelector('.paint-adjdlg canvas.paint-hist');
+            const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; let n = 0;
+            for (let i = 3; i < d.length; i += 4) if (d[i]) n++; return [cv.width, n]; }}""")
+        self.assertGreater(ink[0], 100)
+        self.assertGreater(ink[1], 50, "the histogram is drawn without moving a slider")
+        self.assertEqual(self.errors, [])
+
+    def test_selections_brushes_and_shapes_share_a_toolbar_place_each(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        groups = pg.evaluate(f"() => [...{ed}.box.querySelectorAll('.paint-tools [data-group]')].map((b) => b.dataset.group)")
+        for g in ("select", "paint", "pen", "shape"):
+            self.assertEqual(groups.count(g), 1, groups)
+        for t in ("marquee", "ellipse", "lasso", "brush", "spot", "heal", "patch"):
+            self.assertEqual(pg.evaluate(f"() => {ed}.box.querySelectorAll('.paint-tools > [data-tool=\"{t}\"]:not([data-group])').length"), 0, t)
+        sizes = {g: pg.evaluate(f"""() => {{ const e = {ed}; const b = e.box.querySelector('.paint-tools [data-group={g}]');
+            b.dispatchEvent(new MouseEvent('contextmenu', {{ bubbles: true, cancelable: true }}));
+            const f = e.box.querySelector('.paint-flyout[data-group={g}]'); const n = f ? [...f.querySelectorAll('[data-tool]')].map((x) => x.dataset.tool) : null;
+            if (f) f.remove(); return n; }}""") for g in ("select", "paint", "shape")}
+        self.assertEqual(sizes["select"], ["marquee", "ellipse", "lasso"])
+        self.assertEqual(sizes["paint"], ["brush", "spot", "heal", "patch"])
+        self.assertEqual(sizes["shape"], ["shape:rect", "shape:rounded", "shape:ellipse", "shape:polygon", "shape:line"])
+        # A shape from the flyout is the shape tool with that shape picked; the slot shows it.
+        r = pg.evaluate(f"""() => {{ const e = {ed}; const b = e.box.querySelector('.paint-tools [data-group=shape]');
+            b.dispatchEvent(new MouseEvent('contextmenu', {{ bubbles: true, cancelable: true }}));
+            e.box.querySelector('.paint-flyout [data-tool="shape:ellipse"]').click();
+            return [e.tool, e.opts.shape.kind, b.dataset.tool]; }}""")
+        self.assertEqual(r, ["shape", "ellipse", "shape:ellipse"])
+        r = pg.evaluate(f"() => {{ const e = {ed}; e.setTool('spot'); return e.box.querySelector('.paint-tools [data-group=paint]').dataset.tool; }}")
+        self.assertEqual(r, "spot")
+        self.assertEqual(self.errors, [])
+
+    def test_eyedropper_dragged_takes_the_average_of_a_box(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        x0, y0, w, h = pg.evaluate(f"() => {{ const r = {ed}.canvas.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }}")
+        at = lambda x, y: (x0 + x * w / 200, y0 + y * h / 120)
+        pg.evaluate(f"() => {ed}.setTool('picker')")
+        # A click: the pixel.
+        pg.mouse.click(*at(10, 10))
+        self.assertEqual(pg.evaluate(f"() => {ed}.fg"), [0, 0, 160])
+        # A box half over the red block (x 50..150): red is about half of 220.
+        pg.mouse.move(*at(0, 40))
+        pg.mouse.down()
+        pg.mouse.move(*at(50, 60), steps=4)
+        pg.mouse.move(*at(100, 80), steps=4)
+        self.assertTrue(pg.evaluate(f"() => !!({ed}._drag && {ed}._drag.box)"), "a box while dragging")
+        pg.mouse.up()
+        fg = pg.evaluate(f"() => {ed}.fg")
+        self.assertEqual(fg[1], 0)
+        self.assertEqual(fg[2], 160)
+        self.assertTrue(100 <= fg[0] <= 120, fg)
+        self.assertEqual(self.errors, [])
+
+    def test_brush_tips_dialog_built_in_tips_and_importing_an_abr(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        pg.evaluate(f"() => {{ {ed}.setTool('brush'); __panel.paintShowPanel('tool'); }}")
+        pg.wait_for_function(f"() => !!{ed}.parts.tool.querySelector('.tip-import')", timeout=5000)
+        self.assertGreaterEqual(pg.evaluate(f"() => {ed}.parts.tool.querySelectorAll('.paint-tip[data-tip^=\"builtin:\"]').length"), 14)
+        pg.evaluate(f"() => {ed}.parts.tool.querySelector('.tip-import').click()")
+        dlg = pg.locator(".paint-tipsdlg")
+        dlg.wait_for(timeout=5000)
+        self.assertEqual(dlg.locator(".paint-tipgrid").first.locator(".paint-tipcell").count(), 14)
+        # An .abr chosen through the dialog's own file input.
+        abr = bytearray()
+        u8 = lambda v: abr.append(v & 255)
+        u16 = lambda v: (u8(v >> 8), u8(v))
+        u32 = lambda v: (u16(v >> 16), u16(v & 0xFFFF))
+        body = bytearray()
+        keep, abr = abr, body
+        u32(0); u16(25); u8(1)
+        for _ in range(8):
+            u8(0)
+        u32(0); u32(0); u32(4); u32(40); u16(8); u8(0)
+        for _ in range(160):
+            u8(255)
+        abr = keep
+        u16(1); u16(1); u16(2); u32(len(body))
+        abr += body
+        path = os.path.join(self.tmp, "bars.abr")
+        with open(path, "wb") as f:
+            f.write(bytes(abr))
+        dlg.locator("input[type=file]").set_input_files(path)
+        pg.wait_for_function("() => /1 tip/.test(document.querySelector('.paint-tipmsg') ? document.querySelector('.paint-tipmsg').textContent : '') || "
+                             f"/1 tip/.test(({ed}.box.querySelector('.paint-tipmsg') || {{}}).textContent || '')", timeout=5000)
+        self.assertEqual(dlg.locator(".paint-tipgrid").nth(1).locator(".paint-tipcell").count(), 1)
+        # A built-in tip chosen in the dialog paints.
+        dlg.locator(".paint-tipcell[data-tip='builtin:square']").click()
+        self.assertEqual(pg.evaluate(f"() => {ed}.opts.brush.tip"), "builtin:square")
+        dlg.locator("button", has_text="Close").click()
+        x0, y0, w, h = pg.evaluate(f"() => {{ const r = {ed}.canvas.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }}")
+        pg.evaluate(f"""() => {{ const e = {ed}; e.addPixelLayer(new Uint8ClampedArray(200 * 120 * 4), 200, 120, 'tips');
+            e.fg = [0, 0, 0]; e.opts.brush.size = 40; e.opts.brush.opacity = 100; }}""")
+        pg.mouse.click(x0 + 100 * w / 200, y0 + 60 * h / 120)
+        a = pg.evaluate(f"() => {{ const e = {ed}, L = e.active(), b = e.pix.get(L.id); const A = (x, y) => b[((y - L.y) * L.w + x - L.x) * 4 + 3]; return [A(100, 60), A(114, 46)]; }}")
+        self.assertGreater(a[0], 200)
+        self.assertGreater(a[1], 200, "a square tip reaches its corner")
+        # Built-in tips cannot be deleted.
+        self.assertFalse(pg.evaluate(f"() => !!{ed}.parts.tool.querySelector('.tip-del')"))
         self.assertEqual(self.errors, [])
 
 

@@ -26,7 +26,7 @@ import { SelectGuidesMixin, RULER_PX } from "./imageViewer_paintSelect.js";
 import { SmartMixin } from "./imageViewer_paintSmart.js";
 import { LiquifyMixin } from "./imageViewer_paintLiquify.js";
 import { PreviewMixin } from "./imageViewer_paintPreview.js";
-import { PathToolsMixin, PATH_TOOLS, TOOL_GROUPS, toolGroup } from "./imageViewer_paintPathTools.js";
+import { PathToolsMixin, PATH_TOOLS, TOOL_GROUPS, GROUP_HINTS, toolGroup } from "./imageViewer_paintPathTools.js";
 import { AdjustUIMixin, ADJUST_CSS } from "./imageViewer_paintAdjustUI.js";
 import { SmartLayerMixin } from "./imageViewer_paintSmartLayer.js";
 
@@ -48,7 +48,9 @@ export const PAINT_TOOLS = [
     ["patch", "patch", "Patch (Shift+J)", "Shift+J"], ["eraser", "eraser", "Eraser", "E"], ["fill", "fill", "Paint bucket", "G"],
     ["gradient", "gradient", "Gradient (Shift+G)", "Shift+G"], ["dodge", "dodge", "Dodge", "O"], ["burn", "burn", "Burn (Shift+O)", "Shift+O"],
     ["sponge", "sponge", "Sponge (Shift+O)", "Shift+O"], ["smudge", "smudge", "Smudge", "R"], ["liquify", "liquify", "Liquify (Shift+Ctrl+X)", "Shift+Ctrl+X"], ["shape", "shape", "Shapes (Shift+U: the next shape)", "U"],
-    ["picker", "picker", "Eyedropper", "I"], ["text", "text", "Text", "T"], ["hand", "hand", "Hand (hold Space)", "H"],
+    ["shape:rect", "shapeRect", "Rectangle", "U"], ["shape:rounded", "shapeRounded", "Rounded rectangle", "Shift+U"], ["shape:ellipse", "shapeEllipse", "Ellipse", "Shift+U"],
+    ["shape:polygon", "shapePolygon", "Polygon", "Shift+U"], ["shape:line", "shapeLine", "Line", "Shift+U"],
+    ["picker", "picker", "Eyedropper (drag: the average of a box)", "I"], ["text", "text", "Text", "T"], ["hand", "hand", "Hand (hold Space)", "H"],
 ];
 const TOOL_KEYS = { v: "move", m: "marquee", l: "lasso", p: "pen", j: "spot", w: "wand", c: "crop", b: "brush", s: "clone", e: "eraser", g: "fill", i: "picker",
                     t: "text", h: "hand", o: "dodge", r: "smudge", u: "shape", a: "pathsel" };
@@ -216,16 +218,34 @@ const STYLE = `
 .paint-dlg .paint-dlg-range + input[type=number] { width: 64px; flex: 0 0 auto; }
 .paint-dlg .go { display: flex; justify-content: flex-end; gap: 6px; margin-top: 12px; }
 .paint-dlg .note { color: #999; font-size: 11px; margin-top: 6px; }
+.paint-tipsdlg { max-width: 560px; width: min(560px, 92%); }
+.paint-tipdrop { border: 1px dashed #666; border-radius: 5px; padding: 12px; display: flex; flex-direction: column; align-items: center; gap: 6px; color: #bbb; }
+.paint-tipdrop.hot { border-color: #f60; background: rgba(255,102,0,.08); }
+.paint-tiplists { max-height: 46vh; overflow-y: auto; margin-top: 8px; }
+.paint-tiphead { color: #f60; font-size: 12px; margin: 8px 0 4px; }
+.paint-tipgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 4px; }
+.paint-tipcell { position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 2px; border: 1px solid #333; border-radius: 4px; background: #18181b; cursor: pointer; font-size: 10px; color: #aaa; text-align: center; }
+.paint-tipcell:hover { border-color: #777; }
+.paint-tipcell.on { border-color: #f60; color: #fff; }
+.paint-tipcell span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.paint-tipx { position: absolute; top: 1px; right: 1px; border: 0; background: none; color: #999; cursor: pointer; font-size: 12px; line-height: 1; padding: 1px 3px; }
+.paint-tipx:hover { color: #f60; }
 `;
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const rectUnion = (a, b) => (!a ? b : !b ? a : { x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1) });
 
 class PaintEditor {
+    /**
+     * The document the editor is in NOW: the viewer pops out into another window and back, and with it
+     * the editor. Frames, timers and new elements must come from that window - the main window's frames
+     * are held back while it is behind the pop-out, so a drag showed nothing until it was let go.
+     */
+    get d() { return this.root.ownerDocument; }
+
     constructor(root, host) {
         this.root = root;
         this.host = host || {};
-        this.d = root.ownerDocument;
         this.doc = null;
         this.pix = new Map();
         this.masks = new Map();
@@ -329,6 +349,7 @@ class PaintEditor {
         const tools = this.el("div", "paint-tools");
         this.toolBtns = {};
         for (const [id, icon, label, key] of PAINT_TOOLS) {
+            if (id === "shape") continue;   // the shape tool's place is its shapes'
             const g = toolGroup(id);
             if (g) {
                 // One place for the group: its first tool here, the others behind a right-click.
@@ -336,8 +357,9 @@ class PaintEditor {
                 const labels = {};
                 for (const t of TOOL_GROUPS[g]) { const T = PAINT_TOOLS.find((x) => x[0] === t); labels[t] = { icon: T[1], title: `${T[2]} (${T[3]})` }; }
                 const b = this._groupSlot(g, labels);
-                b.title += " - right-click: the other path tools";
+                b.title += ` - right-click: ${GROUP_HINTS[g]}`;
                 for (const t of TOOL_GROUPS[g]) this.toolBtns[t] = b;
+                if (g === "shape") this.toolBtns.shape = b;
                 tools.append(b);
                 continue;
             }
@@ -721,6 +743,7 @@ class PaintEditor {
         // The pen's path; the patch being dragged.
         this._penDraw(c, X, Y);
         this._pathBoxDraw(c, X, Y);
+        this._pickBoxDraw(c, X, Y);
         this._drawDraw(c, X, Y);
         this._patchDraw(c, X, Y);
         // The crop.
@@ -1819,6 +1842,8 @@ class PaintEditor {
     // ── tools ────────────────────────────────────────────────────────────────
 
     setTool(t) {
+        // "shape:<kind>" (a shape's own entry): the shape tool with that shape.
+        if (typeof t === "string" && t.startsWith("shape:")) { this.opts.shape.kind = t.slice(6); t = "shape"; }
         if (t !== "crop") this.crop = null;
         if (t !== "text") this._commitText();
         if (t !== "move" && this.tf) this.tfCommit();
@@ -1869,6 +1894,42 @@ class PaintEditor {
         this.setColor("fg", [this.comp[i], this.comp[i + 1], this.comp[i + 2]]);
     }
 
+    /**
+     * The eyedropper: a click takes the colour under it; dragged further than a few pixels it draws a box and
+     * takes the average colour inside it, live while dragged.
+     */
+    _pickMove(dr, p, e) {
+        dr.x1 = p.x; dr.y1 = p.y;
+        if (!dr.box && Math.hypot(e.clientX - dr.sx, e.clientY - dr.sy) > 3) dr.box = true;
+        if (!dr.box) { this._pickAt(p); return; }
+        this._pickArea(dr);
+        this.drawOverlay();
+    }
+
+    _pickArea(dr) {
+        if (!this.doc) return null;
+        const c = D.areaAverage(this.comp, this.doc.w, this.doc.h, dr.x0, dr.y0, dr.x1, dr.y1);
+        if (c) this.setColor("fg", c);
+        dr.avg = c;
+        return c;
+    }
+
+    _pickBoxDraw(c, X, Y) {
+        const dr = this._drag;
+        if (!dr || dr.kind !== "pick" || !dr.box) return;
+        const x = Math.round(X(Math.min(dr.x0, dr.x1))) + 0.5, y = Math.round(Y(Math.min(dr.y0, dr.y1))) + 0.5;
+        const w = Math.abs(dr.x1 - dr.x0) * this.view.zoom, h = Math.abs(dr.y1 - dr.y0) * this.view.zoom;
+        c.lineWidth = 1;
+        c.strokeStyle = "#000"; c.strokeRect(x, y, w, h);
+        c.strokeStyle = "#fff"; c.setLineDash([4, 3]); c.strokeRect(x, y, w, h); c.setLineDash([]);
+        if (dr.avg) {
+            // The colour taken, in a swatch at the box's corner.
+            const sx = x + w + 6, sy = y;
+            c.fillStyle = D.rgbToHex(...dr.avg); c.fillRect(sx, sy, 22, 22);
+            c.strokeStyle = "#fff"; c.strokeRect(sx + 0.5, sy + 0.5, 21, 21);
+        }
+    }
+
     _wirePointer() {
         const w = this.wrap;
         w.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -1916,7 +1977,7 @@ class PaintEditor {
         if (t === "gradient") { this._gradDown(p, e); return; }
         if (t === "liquify") { this._lqDown(p); return; }
         if (t === "shape") { this._shapeDown(p, e); return; }
-        if (t === "picker") { this._pickAt(p); this._drag = { kind: "pick" }; return; }
+        if (t === "picker") { this._pickAt(p); this._drag = { kind: "pick", x0: p.x, y0: p.y, x1: p.x, y1: p.y, sx: e.clientX, sy: e.clientY, box: false }; return; }
         if (BRUSHES.includes(t)) { this._strokeStart(p, e); return; }
         if (t === "fill") { this._bucket(p); return; }
         if (t === "wand") { this._wand(p, e); return; }
@@ -1966,7 +2027,7 @@ class PaintEditor {
             this._applyView();
             return;
         }
-        if (dr.kind === "pick") { this._pickAt(p); return; }
+        if (dr.kind === "pick") { this._pickMove(dr, p, e); return; }
         if (dr.kind === "guide") { this._guideMove(dr, p); return; }
         if (dr.kind === "lq") { this._lqMove(dr, p); this.drawOverlay(); return; }
         if (dr.kind === "pen") { this._penMove(dr, p, e); return; }
@@ -2018,6 +2079,7 @@ class PaintEditor {
         if (dr.kind === "patch") { this._patchUp(dr); return; }
         if (dr.kind === "grad") { this._gradUp(dr); return; }
         if (dr.kind === "shape") { this._shapeUp(dr); return; }
+        if (dr.kind === "pick") { if (dr.box) { this._pickArea(dr); this.drawOverlay(); } return; }
         if (dr.kind === "marquee" || dr.kind === "ellipse") {
             if (!dr.rect || dr.rect.w < 1 || dr.rect.h < 1) { if (!dr.e.shiftKey && !dr.e.altKey) this.deselect(); else this.drawOverlay(); return; }
             const { x, y, w, h } = dr.rect;
@@ -2847,7 +2909,7 @@ class PaintEditor {
                 { label: "Fill with the second colour", run: () => this.fillSelection(this.bg) },
                 { label: "Clear (Del)", disabled: !this.sel, run: () => this.clearSelection() }, "-",
                 { label: "Define brush tip from the selection", disabled: !this.sel, run: () => { this.tipFromSelection(); if (!BRUSHES.includes(this.tool)) this.setTool("brush"); } },
-                { label: "Import brushes (.abr)…", run: () => { if (!BRUSHES.includes(this.tool)) this.setTool("brush"); this.pickAbr(); } }];
+                { label: "Brush tips / Import .abr…", run: () => { if (!BRUSHES.includes(this.tool)) this.setTool("brush"); this.pickAbr(); } }];
     }
 
     _selectMenu() {
@@ -3418,6 +3480,7 @@ class PaintEditor {
 
     /** Properties (the active layer, its mask, Fill), Tool options and Effects (style, smart filters) drawn again. */
     refreshProps() {
+        if (this.tool === "shape") this._groupShow("shape");   // the shape picked in its options
         this._refreshOptBar();
         const L = this.active();
         const box = this.propsBox;
@@ -3574,7 +3637,7 @@ class PaintEditor {
             note("Drag inside to move, a handle to scale (Shift keeps the shape, Alt scales about the middle), outside to rotate (Shift: 15° steps); "
                  + "Ctrl+drag an edge's handle shears. The arrows nudge. Enter or a double-click applies, Esc cancels.");
         } else if (this.tool === "picker") {
-            note("Click or drag over the picture: its colour becomes the brush's.");
+            note("Click: the colour under the pointer becomes the brush's. Drag a box: the average colour inside it.");
         } else if (this.tool === "hand") {
             note("Drag to pan; the wheel zooms.");
         }

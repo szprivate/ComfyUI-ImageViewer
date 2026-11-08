@@ -33,5 +33,13 @@ test("the pen and its five tools share one place, the pen first", () => {
     assert.deepEqual(TOOL_GROUPS.pen, PATH_TOOLS);
     assert.equal(PATH_TOOLS[0], "pen");
     for (const t of PATH_TOOLS) assert.equal(toolGroup(t), "pen");
-    assert.equal(toolGroup("brush"), null);
+    assert.equal(toolGroup("move"), null);
+});
+
+test("selections, the brush with the healing tools, and the shapes have a place each too", () => {
+    assert.deepEqual(TOOL_GROUPS.select, ["marquee", "ellipse", "lasso"]);
+    assert.deepEqual(TOOL_GROUPS.paint, ["brush", "spot", "heal", "patch"]);
+    for (const t of ["brush", "spot", "heal", "patch"]) assert.equal(toolGroup(t), "paint");
+    assert.equal(toolGroup("shape"), "shape");
+    assert.equal(toolGroup("shape:line"), "shape");
 });

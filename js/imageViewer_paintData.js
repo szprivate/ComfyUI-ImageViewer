@@ -1273,6 +1273,28 @@ export function hexToRgb(hex) {
     const v = parseInt(m[1], 16);
     return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
 }
+/**
+ * The average colour of the picture `px` (w x h, straight RGBA) inside the box from (x0, y0) to (x1, y1), any two
+ * corners, in pixels (cut to the picture; a pixel counts when its middle is inside). Weighted by alpha, so what
+ * is see-through counts as little as it shows; null where nothing in the box shows. A big box is read on a
+ * grid of at most `most` pixels, evenly spread.
+ */
+export function areaAverage(px, w, h, x0, y0, x1, y1, most = 262144) {
+    const ax = Math.max(0, Math.round(Math.min(x0, x1))), bx = Math.min(w, Math.round(Math.max(x0, x1)));
+    const ay = Math.max(0, Math.round(Math.min(y0, y1))), by = Math.min(h, Math.round(Math.max(y0, y1)));
+    if (bx <= ax || by <= ay) return null;
+    const step = Math.max(1, Math.ceil(Math.sqrt(((bx - ax) * (by - ay)) / most)));
+    let r = 0, g = 0, b = 0, a = 0;
+    for (let y = ay; y < by; y += step) {
+        for (let x = ax, i = (y * w + ax) * 4; x < bx; x += step, i += 4 * step) {
+            const al = px[i + 3];
+            r += px[i] * al; g += px[i + 1] * al; b += px[i + 2] * al; a += al;
+        }
+    }
+    if (!a) return null;
+    return [Math.round(r / a), Math.round(g / a), Math.round(b / a)];
+}
+
 export const rgbToHex = (r, g, b) => "#" + [r, g, b].map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
 
 // ── the document ────────────────────────────────────────────────────────────
