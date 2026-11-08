@@ -3197,6 +3197,7 @@ try:
         _safe_add("POST", "/imageviewer/previz_shot_done", _imageviewer_previz_shot_done)
         _safe_add("POST", "/api/imageviewer/previz_shot_done", _imageviewer_previz_shot_done)
         _safe_add("GET", "/imageviewer/deps", _imageviewer_deps)
+        _safe_add("GET", "/api/imageviewer/deps", _imageviewer_deps)
         _safe_add("POST", "/imageviewer/atlas_render", _imageviewer_atlas_render)
         _safe_add("POST", "/api/imageviewer/atlas_render", _imageviewer_atlas_render)
         _safe_add("GET", "/imageviewer/atlas_render", _imageviewer_atlas_render_state)
