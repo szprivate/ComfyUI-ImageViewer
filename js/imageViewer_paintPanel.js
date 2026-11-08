@@ -20,6 +20,7 @@ import { api } from "../../scripts/api.js";
 import { createPaintEditor, PAINT_KEYS } from "./imageViewer_paintEditor.js";
 import { notice, openFilePicker, openExportDialog, canvasContext } from "./imageViewer_exportUI.js";
 import { addRecentDoc } from "./imageViewer_recentDocs.js";
+import { queueWithAuth } from "./imageViewer_comfyAuth.js";
 import { maskBBox, composite } from "./imageViewer_paintData.js";
 
 export const PAINT_PREFIX = "paint:";
@@ -858,7 +859,7 @@ export const PaintPanelMixin = {
 
     /** One API graph into ComfyUI's queue: its prompt id. */
     async _paintQueue(graph) {
-        const r = await api.queuePrompt(0, { output: graph, workflow: {} });
+        const r = await queueWithAuth(api, 0, { output: graph, workflow: {} });   // with the sign-in: API nodes need it
         const id = r && (r.prompt_id || r.promptId);
         if (!id) {
             const errs = r && r.node_errors && Object.values(r.node_errors).map((x) => (x.errors || []).map((y) => y.message).join(", ")).join("; ");
