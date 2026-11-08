@@ -68,6 +68,9 @@ const GROUPS = [
         { label: "Open Paint\u2026", run: (p) => p.spaceOpen("paint"), checked: (p) => !!(p.isPaintTab && p.isPaintTab()) },
         { label: "Layers", panel: "paintLayers", needs: "paint" },
         { label: "Properties", panel: "paintProps", needs: "paint" },
+        { label: "Tool options", panel: "paintTool", needs: "paint" },
+        { label: "Effects", panel: "paintEffects", needs: "paint" },
+        { label: "Generate", panel: "paintGenerate", needs: "paint" },
         { label: "History", panel: "paintHistory", needs: "paint" },
     ] },
     { id: "timeline", title: "Timeline", icon: "timeline", items: [

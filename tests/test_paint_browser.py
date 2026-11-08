@@ -255,7 +255,7 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(pg.evaluate(across, 105)[1], 255)
         self.assertGreaterEqual(pg.evaluate(across, 105)[0], 18)
         # The switches are in Properties.
-        self.assertTrue(pg.evaluate("() => [...__panel._paintActive().editor.parts.props.querySelectorAll('label.paint-check')].length === 2"))
+        self.assertTrue(pg.evaluate("() => [...__panel._paintActive().editor.parts.tool.querySelectorAll('label.paint-check')].length === 2"))
         self.assertEqual(self.errors, [])
 
     def test_the_agents_change_is_one_undo_step(self):
@@ -440,7 +440,7 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Clone stamp")
         # The options bar holds the clone stamp's controls, kept in step with Properties.
         bar = pg.evaluate(f"""() => {{ const e = {ed}; const r = e.optBar.querySelector('input[type=range]'); r.value = 33; r.dispatchEvent(new Event('input'));
-            return [e.opts.clone.size, e.parts.props.querySelector('input[type=range]').value, !!e.optBar.querySelector('select')]; }}""")
+            return [e.opts.clone.size, e.parts.tool.querySelector('input[type=range]').value, !!e.optBar.querySelector('select')]; }}""")
         self.assertEqual(bar, [33, "33", True])
         self.assertEqual(self.errors, [])
 
@@ -917,7 +917,7 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(r[0], 1)
         self.assertEqual(r[2:], [40, 4, 25])
         tip = r[1]
-        self.assertTrue(pg.evaluate(f"() => !!{ed}.parts.props.querySelector('.paint-tip[data-tip=\"{tip}\"].on')"))
+        self.assertTrue(pg.evaluate(f"() => !!{ed}.parts.tool.querySelector('.paint-tip[data-tip=\"{tip}\"].on')"))
         # One dab on an empty layer: the bar lies across, then turned 90° it stands.
         pg.evaluate(f"""() => {{ const e = {ed}; e.addPixelLayer(new Uint8ClampedArray(200 * 120 * 4), 200, 120, 'tips');
             e.fg = [0, 0, 0]; e.opts.brush.size = 40; e.opts.brush.hardness = 100; e.opts.brush.opacity = 100; }}""")
@@ -940,7 +940,7 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(n[2:], [True, 2])
         self.assertTrue(12 <= n[0] <= 20 and 12 <= n[1] <= 20, n)
         # Round again, and the tip forgotten.
-        pg.evaluate(f"() => {{ const e = {ed}; e.parts.props.querySelector('.tip-del').click(); }}")
+        pg.evaluate(f"() => {{ const e = {ed}; e.parts.tool.querySelector('.tip-del').click(); }}")
         pg.wait_for_timeout(100)
         self.assertEqual(pg.evaluate(f"() => [{ed}.tips.size, {ed}.opts.brush.tip || null]"), [1, None])
         self.assertEqual(self.errors, [])
@@ -1047,15 +1047,15 @@ class PaintBrowserTests(unittest.TestCase):
         # Layer > Stroke: the section in Properties, an edge round the box at once; one undo step.
         pg.evaluate(f"() => {ed}.openStyle('stroke')")
         self.assertEqual(label(), "Layer style")
-        self.assertTrue(pg.evaluate(f"() => !!{ed}.parts.props.querySelector('.paint-style .style-on[data-kind=stroke]:checked')"))
+        self.assertTrue(pg.evaluate(f"() => !!{ed}.parts.effects.querySelector('.paint-style .style-on[data-kind=stroke]:checked')"))
         self.assertEqual(comp(78, 60), [0, 0, 0, 255])
         self.assertEqual(comp(100, 60), [255, 255, 0, 255])
         self.assertTrue(pg.evaluate(f"() => [...{ed}.layerList.querySelectorAll('.paint-row .tag.fx')].length === 1"))
         # A drop shadow switched on by its box; the size slider drags live and keeps one step.
-        pg.evaluate(f"() => {{ const c = {ed}.parts.props.querySelector('.paint-style .style-on[data-kind=shadow]'); c.checked = true; c.dispatchEvent(new Event('change')); }}")
+        pg.evaluate(f"() => {{ const c = {ed}.parts.effects.querySelector('.paint-style .style-on[data-kind=shadow]'); c.checked = true; c.dispatchEvent(new Event('change')); }}")
         self.assertTrue(pg.evaluate(f"() => !!{ed}.active().style.shadow"))
         n = pg.evaluate(f"() => {ed}.undoStack.length")
-        pg.evaluate(f"""() => {{ const s = [...{ed}.parts.props.querySelectorAll('.paint-style .paint-field')].find((f) => f.textContent.startsWith('Size'));
+        pg.evaluate(f"""() => {{ const s = [...{ed}.parts.effects.querySelectorAll('.paint-style .paint-field')].find((f) => f.textContent.startsWith('Size'));
             const r = s.querySelector('input[type=range]'); r.value = 5; r.dispatchEvent(new Event('input')); r.value = 6; r.dispatchEvent(new Event('input')); r.dispatchEvent(new Event('change')); }}""")
         self.assertEqual(pg.evaluate(f"() => [{ed}.active().style.stroke.size, {ed}.undoStack.length]"), [6, n + 1])
         self.assertEqual(comp(76, 60), [0, 0, 0, 255])
@@ -1185,18 +1185,18 @@ class PaintBrowserTests(unittest.TestCase):
         before = own(100, 60)
         pg.evaluate(f"() => {ed}.addSmartFilter('blur')")
         self.assertEqual(pg.evaluate(f"() => [{ed}.undoStack.length, {ed}.undoStack.at(-1).label]"), [n + 1, "Smart filter"])
-        self.assertTrue(pg.evaluate(f"() => !!{ed}.parts.props.querySelector('.paint-smart .smart-on:checked')"))
+        self.assertTrue(pg.evaluate(f"() => !!{ed}.parts.effects.querySelector('.paint-smart .smart-on:checked')"))
         self.assertTrue(pg.evaluate(f"() => [...{ed}.layerList.querySelectorAll('.paint-row .tag.sf')].length === 1"))
         self.assertEqual(own(100, 60), before)
         # The radius slider drags live and keeps one step.
-        pg.evaluate(f"""() => {{ const s = [...{ed}.parts.props.querySelectorAll('.paint-smart .paint-field')].find((f) => f.textContent.startsWith('Radius'));
+        pg.evaluate(f"""() => {{ const s = [...{ed}.parts.effects.querySelectorAll('.paint-smart .paint-field')].find((f) => f.textContent.startsWith('Radius'));
             const r = s.querySelector('input[type=range]'); r.value = 8; r.dispatchEvent(new Event('input')); r.value = 9; r.dispatchEvent(new Event('input')); r.dispatchEvent(new Event('change')); }}""")
         self.assertEqual(pg.evaluate(f"() => [{ed}.active().filters[0].params.radius, {ed}.undoStack.length]"), [9, n + 2])
         # An adjustment after it; switched off; moved first; taken away.
         pg.evaluate(f"() => {ed}.addSmartFilter('invert')")
         pg.evaluate(f"() => {ed}.requestRedraw(null)"); pg.wait_for_timeout(50)
         inv = comp(100, 60)
-        pg.evaluate(f"() => {{ const c = {ed}.parts.props.querySelectorAll('.paint-smart .smart-on')[1]; c.checked = false; c.dispatchEvent(new Event('change')); }}")
+        pg.evaluate(f"() => {{ const c = {ed}.parts.effects.querySelectorAll('.paint-smart .smart-on')[1]; c.checked = false; c.dispatchEvent(new Event('change')); }}")
         pg.wait_for_timeout(50)
         self.assertNotEqual(comp(100, 60), inv)
         pg.evaluate(f"() => {ed}.setSmartFilter({ed}.active(), 1, {{ move: -1 }})")
@@ -1370,7 +1370,7 @@ class PaintBrowserTests(unittest.TestCase):
         pg.evaluate(f"() => {{ const e = {ed}; e.setActive(e.doc.layers[0].id); e.addSmartFilter('brightness_contrast'); }}")
         pg.wait_for_timeout(100)
         start = comp()
-        sl = pg.evaluate_handle(f"() => {ed}.parts.props.querySelector('.paint-smart input[type=range]')")
+        sl = pg.evaluate_handle(f"() => {ed}.parts.effects.querySelector('.paint-smart input[type=range]')")
         seen = drag(sl)
         self.assertNotEqual(seen[1], start)
         self.assertNotEqual(seen[-1], seen[1])
@@ -1553,6 +1553,47 @@ class PaintBrowserTests(unittest.TestCase):
         pg.wait_for_function("() => !/My workflow: my_upscale/.test(document.querySelector('#pwf').textContent)", timeout=10000)
         self.assertEqual(self.errors, [])
 
+
+    def test_properties_tool_options_effects_and_generate_are_panels_of_their_own(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        ids = ["paintLayers", "paintProps", "paintTool", "paintEffects", "paintGenerate", "paintHistory"]
+        # All up with the Paint tab; Properties, Tool options, Effects and Generate share one place, Properties in front.
+        self.assertEqual(pg.evaluate("(ids) => ids.map((i) => __panel.isPanelDocked(i))", ids), [True] * 6)
+        self.assertEqual(pg.evaluate("(ids) => ids.map((i) => __panel.isPanelFront(i))", ids), [True, True, False, False, False, True])
+        # Each holds its part: the layer in Properties, the tool in Tool options, Generate's buttons in Generate.
+        self.assertTrue(pg.evaluate(f"() => {ed}.parts.props.textContent.includes('200')"))
+        self.assertFalse(pg.evaluate(f"() => !!{ed}.parts.props.querySelector('[data-gen]')"))
+        self.assertTrue(pg.evaluate(f"() => !!{ed}.parts.generate.querySelector('[data-gen=fill]')"))
+        self.assertTrue(pg.evaluate(f"() => {ed}.parts.tool.querySelector('h4').textContent.length > 0"))
+        self.assertTrue(pg.evaluate(f"() => __panel._dockPanelEl('paintTool').contains({ed}.parts.tool)"))
+        # The prompt being typed survives a redraw of the other panels.
+        pg.evaluate(f"() => {{ const t = {ed}.parts.generate.querySelector('textarea'); t.value = 'a cat'; t.dispatchEvent(new Event('input')); {ed}.refreshProps(); }}")
+        self.assertEqual(pg.evaluate(f"() => {ed}.parts.generate.querySelector('textarea').value"), "a cat")
+        # Layer > Layer style brings Effects to the front with the style in it.
+        pg.evaluate(f"() => {ed}.openStyle('stroke')")
+        self.assertTrue(pg.evaluate("() => __panel.isPanelFront('paintEffects') && !__panel.isPanelFront('paintProps')"))
+        self.assertTrue(pg.evaluate(f"() => !!{ed}.parts.effects.querySelector('.paint-style .style-on[data-kind=stroke]:checked')"))
+        # Shift+F5 brings Properties back with Fill.
+        pg.evaluate(f"() => {ed}.openFill()")
+        self.assertTrue(pg.evaluate("() => __panel.isPanelFront('paintProps')"))
+        self.assertTrue(pg.evaluate(f"() => !!{ed}.parts.props.querySelector('.paint-fill')"))
+        pg.evaluate(f"() => {ed}.closeFill()")
+        # Which one is in front survives leaving the tab and coming back.
+        pg.evaluate("() => __panel.paintShowPanel('generate')")
+        pg.evaluate("() => __panel.paintTabLeave()")
+        self.assertFalse(pg.evaluate("() => __panel.isPanelDocked('paintGenerate')"))
+        pg.evaluate("() => __panel.paintTabEnter(__panel.activeTab)")
+        pg.wait_for_timeout(50)
+        self.assertTrue(pg.evaluate("() => __panel.isPanelFront('paintGenerate')"))
+        # A layout saved before these panels existed gets them as tabs behind Properties, not as three more panels.
+        got = pg.evaluate("""() => { const p = __panel;
+            p.applyDockData({ right: { width: 300, panels: [{ id: 'paintLayers', size: 2 }, { id: 'paintProps', size: 2 }, { id: 'paintHistory', size: 1 }] } });
+            return p.dockLayout.right.panels.filter((e) => e.id.startsWith('paint')).map((e) => [e.id, !!e.tab, !!e.behind]); }""")
+        self.assertEqual(got, [["paintLayers", False, False], ["paintProps", True, False], ["paintTool", True, True],
+                               ["paintEffects", True, True], ["paintGenerate", True, True], ["paintHistory", False, False]])
+        self.assertEqual(self.errors, [])
 
     def test_solo_and_dragging_layers_onto_duplicate_and_delete(self):
         pg = self.page()

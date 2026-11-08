@@ -16,7 +16,7 @@ export const LayerFxMixin = {
         this._styleOpen = L.id;
         if (kind && !(L.style && L.style[kind])) this.setStyle(L, kind, { ...STYLE_DEFAULTS[kind] });
         this.refreshProps();
-        if (this.host.showPanel) this.host.showPanel("props");
+        if (this.host.showPanel) this.host.showPanel("effects");
         return true;
     },
 
@@ -86,11 +86,7 @@ export const LayerFxMixin = {
         const row = this.el("div", "paint-field");
         const clr = this.el("button", "paint-btn", { type: "button", text: "Clear the style" });
         clr.addEventListener("click", () => { this.clearStyle(L); this._styleOpen = null; this.refreshProps(); });
-        const close = this.el("button", "paint-btn", { type: "button", text: "Close" });
-        close.addEventListener("click", () => { this._styleOpen = null; this.refreshProps(); });
-        if (L.style) row.append(clr);
-        row.append(close);
-        s.append(row);
+        if (L.style) { row.append(clr); s.append(row); }
         s.append(this.el("div", "paint-note", { text: "Settings, not pixels: change them at any time. The .ora keeps them; a .psd gets them baked in. Under the layer: the shadow, the glow, the stroke; the overlay tints the layer." }));
         return s;
     },

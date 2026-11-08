@@ -83,7 +83,7 @@ export const SmartMixin = {
         if (!f) return false;
         if ((L.filters || []).length >= MAX_SMART) { this._notify(`At most ${MAX_SMART} smart filters on a layer.`, "warn"); return false; }
         const ok = this.change("Smart filter", () => { L.filters = cleanFilters([...(L.filters || []), f]); });
-        if (ok) { this._smartOpen = L.id; if (this.host.showPanel) this.host.showPanel("paintProps"); this.refreshProps(); }
+        if (ok) { this._smartOpen = L.id; if (this.host.showPanel) this.host.showPanel("effects"); this.refreshProps(); }
         return ok;
     },
 
@@ -186,12 +186,9 @@ export const SmartMixin = {
         const add = this.el("button", "paint-btn", { type: "button", text: "Add…" });
         add.addEventListener("click", (e) => { e.stopPropagation(); this._menu(add, this._smartMenu()); });
         const bake = this.el("button", "paint-btn", { type: "button", text: "Bake into the pixels" });
-        bake.addEventListener("click", () => { this.bakeSmartFilters(L); this._smartOpen = null; this.refreshProps(); });
-        const close = this.el("button", "paint-btn", { type: "button", text: "Close" });
-        close.addEventListener("click", () => { this._smartOpen = null; this.refreshProps(); });
+        bake.addEventListener("click", () => { this.bakeSmartFilters(L); this.refreshProps(); });
         row.append(add);
         if (L.filters) row.append(bake);
-        row.append(close);
         s.append(row);
         s.append(this.el("div", "paint-note", { text: "Settings, not pixels: the layer keeps its own pixels and the filters are drawn over them, in this order. The .ora keeps them; a .psd gets them baked in." }));
         return s;

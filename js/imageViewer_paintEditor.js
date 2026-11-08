@@ -200,6 +200,7 @@ const STYLE = `
 .paint-props { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
 .paint-props textarea { width: 100%; box-sizing: border-box; min-height: 52px; resize: vertical; }
 .paint-note { color: #888; font-size: 11px; margin: 4px 0; }
+.paint-fx-for { padding: 6px 8px 0; }
 .paint-gen { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .paint-gen .paint-btn { border-color: #3a3a40; }
 .paint-curve { display: block; width: 100%; max-width: 260px; aspect-ratio: 1; background: #111; border: 1px solid #3a3a40; cursor: crosshair; }
@@ -365,7 +366,10 @@ class PaintEditor {
         this.box.append(bar, this.optBar, main, this.status);
         this.root.append(this.box);
         // The panels.
-        this.parts = { layers: this._buildLayersPart(), props: this._buildPropsPart(), history: this._buildHistoryPart() };
+        // Each part is a dock panel of its own (imageViewer_paintPanel.js PAINT_PANELS): the layers, the active layer's
+        // properties, the tool's options, the layer's effects (style, smart filters), Generate and the history.
+        this.parts = { layers: this._buildLayersPart(), props: this._buildPropsPart(), tool: this._buildToolPart(),
+                       effects: this._buildEffectsPart(), generate: this._buildGeneratePart(), history: this._buildHistoryPart() };
         this._wirePointer();
         this._ro = new (this.d.defaultView.ResizeObserver || ResizeObserver)(() => this._sizeOverlay());
         this._ro.observe(this.wrap);
@@ -2870,7 +2874,7 @@ class PaintEditor {
                 { label: "Layer style…", disabled: !L || L.kind !== "pixel", run: () => this.openStyle() },
                 ...STYLE_KINDS.map((k) => ({ label: `  ${STYLE_LABELS[k]}`, disabled: !L || L.kind !== "pixel", run: () => this.openStyle(k) })),
                 { label: "Clear layer style", disabled: !L || !L.style, run: () => this.clearStyle(L) }, "-",
-                { label: "Smart filters…", disabled: !L || L.kind !== "pixel", run: () => { this._smartOpen = L.id; this.refreshProps(); if (this.host.showPanel) this.host.showPanel("paintProps"); } },
+                { label: "Smart filters…", disabled: !L || L.kind !== "pixel", run: () => { this._smartOpen = L.id; this.refreshProps(); if (this.host.showPanel) this.host.showPanel("effects"); } },
                 { label: "Bake smart filters", disabled: !L || !L.filters, run: () => this.bakeSmartFilters(L) },
                 { label: "Clear smart filters", disabled: !L || !L.filters, run: () => this.clearSmartFilters(L) }];
     }
@@ -2905,6 +2909,7 @@ class PaintEditor {
                 { label: "Upscale…", run: () => this.dialog("Upscale", [["k", "Times", "2", ["2", "4"]], ["ai", "With the workflow (else a plain resize)", "yes", ["yes", "no"]]],
                      (v) => this.host.generate && this.host.generate("upscale", { k: Number(v.k), ai: v.ai === "yes" })) },
                 "-",
+                { label: "Generate panel (prompt, variations)", disabled: !this.host.showPanel, run: () => this.host.showPanel("generate") },
                 { label: "Workflows…", disabled: !this.host.workflows, run: () => this.host.workflows && this.host.workflows() }];
     }
 
@@ -3183,7 +3188,7 @@ class PaintEditor {
             }
             if (L.filters) {
                 const sf = this.el("span", "tag sf", { text: "sf", title: "Smart filters: click to change them" });
-                sf.addEventListener("click", (e) => { e.stopPropagation(); this.setActive(L.id); this._smartOpen = L.id; this.refreshProps(); if (this.host.showPanel) this.host.showPanel("paintProps"); });
+                sf.addEventListener("click", (e) => { e.stopPropagation(); this.setActive(L.id); this._smartOpen = L.id; this.refreshProps(); if (this.host.showPanel) this.host.showPanel("effects"); });
                 row.append(sf);
             }
             if (L.lockAlpha) { const la = this.el("span", "lk la", { title: "Transparency locked" }); la.append(paintIcon(this.d, "lockAlpha", 12)); row.append(la); }
@@ -3298,13 +3303,21 @@ class PaintEditor {
 
     // ── the Properties panel ─────────────────────────────────────────────────
 
-    _buildPropsPart() {
+    /** A panel's box: one scrolling column (a press in it means the Layers panel is not the one keys go to). */
+    _panelBox(cls) {
         const p = this.el("div", "paint-panel");
-        this.propsBox = this.el("div", "paint-props");
-        p.append(this.propsBox);
+        const box = this.el("div", "paint-props " + cls);
+        p.append(box);
         p.addEventListener("pointerdown", () => { this._layersFocus = false; }, true);
-        return p;
+        return [p, box];
     }
+
+    _buildPropsPart() { const [p, box] = this._panelBox("paint-props-layer"); this.propsBox = box; return p; }
+    _buildToolPart() { const [p, box] = this._panelBox("paint-props-tool"); this.toolBox = box; return p; }
+    _buildEffectsPart() { const [p, box] = this._panelBox("paint-props-effects"); this.effectsBox = box; return p; }
+
+    /** Generate is built once: nothing in it depends on the document, and the prompt being typed stays put. */
+    _buildGeneratePart() { const [p, box] = this._panelBox("paint-props-generate"); box.append(this._generateSection()); this.genBox = box; return p; }
 
     _field(parent, label, input, wide = false) {
         const row = this.el("div", "paint-field" + (wide ? " wide" : ""));
@@ -3348,37 +3361,50 @@ class PaintEditor {
         return s;
     }
 
+    /** Properties (the active layer, its mask, Fill), Tool options and Effects (style, smart filters) drawn again. */
     refreshProps() {
         this._refreshOptBar();
-        const box = this.propsBox;
-        if (!box) return;
-        box.replaceChildren();
-        // Fill (Shift+F5), while it is asked for.
-        if (this._fillOpen) box.append(this._fillSection());
-        // The tool: the same controls as the options bar over the picture.
-        const ts = this.el("div", "paint-sect");
-        const tool = PAINT_TOOLS.find((t) => t[0] === this.tool);
-        ts.append(this.el("h4", "", { text: tool ? tool[2] : "Tool" }));
-        this._propsTool = this.el("div");
-        ts.append(this._propsTool);
-        this._toolOptions(this._propsTool, false);
-        const col = this.el("div", "paint-field");
-        const fgc = this.el("input", "", { type: "color", value: D.rgbToHex(...this.fg) });
-        fgc.addEventListener("input", () => { this.fg = D.hexToRgb(fgc.value); this._swatches(); });
-        const bgc = this.el("input", "", { type: "color", value: D.rgbToHex(...this.bg) });
-        bgc.addEventListener("input", () => { this.bg = D.hexToRgb(bgc.value); this._swatches(); });
-        col.append(this.el("label", "", { text: "Colours" }), fgc, bgc);
-        ts.append(col);
-        box.append(ts);
-        // The layer.
         const L = this.active();
-        if (L) box.append(this._layerSection(L));
-        if (L && L.kind === "pixel" && (L.style || this._styleOpen === L.id)) box.append(this._styleSection(L));
-        if (L && L.kind === "pixel" && (L.filters || this._smartOpen === L.id)) box.append(this._smartSection(L));
-        if (L && L.mask) box.append(this._maskSection(L));
-        if (this.quick) box.prepend(this.el("div", "paint-note", { text: "Quick Mask is on (Q): the brush, eraser, bucket and Fill paint the selection - black takes away (red), white adds. Q again makes it the selection." }));
-        // Generate.
-        box.append(this._generateSection());
+        const box = this.propsBox;
+        if (box) {
+            box.replaceChildren();
+            if (this.quick) box.append(this.el("div", "paint-note", { text: "Quick Mask is on (Q): the brush, eraser, bucket and Fill paint the selection - black takes away (red), white adds. Q again makes it the selection." }));
+            // Fill (Shift+F5), while it is asked for.
+            if (this._fillOpen) box.append(this._fillSection());
+            if (L) box.append(this._layerSection(L));
+            if (L && L.mask) box.append(this._maskSection(L));
+            if (!box.childNodes.length) box.append(this.el("div", "paint-note", { text: "Open or make a picture: the active layer's settings come here." }));
+        }
+        // The tool: the same controls as the options bar over the picture.
+        const tb = this.toolBox;
+        if (tb) {
+            tb.replaceChildren();
+            const ts = this.el("div", "paint-sect");
+            const tool = PAINT_TOOLS.find((t) => t[0] === this.tool);
+            ts.append(this.el("h4", "", { text: tool ? tool[2] : "Tool" }));
+            this._propsTool = this.el("div");
+            ts.append(this._propsTool);
+            this._toolOptions(this._propsTool, false);
+            const col = this.el("div", "paint-field");
+            const fgc = this.el("input", "", { type: "color", value: D.rgbToHex(...this.fg) });
+            fgc.addEventListener("input", () => { this.fg = D.hexToRgb(fgc.value); this._swatches(); });
+            const bgc = this.el("input", "", { type: "color", value: D.rgbToHex(...this.bg) });
+            bgc.addEventListener("input", () => { this.bg = D.hexToRgb(bgc.value); this._swatches(); });
+            col.append(this.el("label", "", { text: "Colours" }), fgc, bgc);
+            ts.append(col);
+            tb.append(ts);
+        }
+        // The layer's effects: always there for a pixel layer, so they can be added here as well as from the menus.
+        const eb = this.effectsBox;
+        if (eb) {
+            eb.replaceChildren();
+            if (L && L.kind === "pixel") {
+                eb.append(this.el("div", "paint-note paint-fx-for", { text: `Effects of "${L.name}"` }));
+                eb.append(this._styleSection(L), this._smartSection(L));
+            } else {
+                eb.append(this.el("div", "paint-note", { text: L ? "A layer style and smart filters go on a pixel layer; pick one in Layers." : "Open or make a picture: the active layer's style and smart filters come here." }));
+            }
+        }
     }
 
     /** The options bar over the picture: the tool's name and its controls in one row. */
