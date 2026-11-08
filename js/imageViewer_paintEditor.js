@@ -17,24 +17,29 @@ import { paintIcon } from "./imageViewer_paintIcons.js";
 import { FILTERS } from "./imageViewer_paintFilters.js";
 import { PenMixin } from "./imageViewer_paintPen.js";
 import { WarpMixin } from "./imageViewer_paintWarp.js";
+import { HealMixin } from "./imageViewer_paintHeal.js";
 
 export const PAINT_TOOLS = [
     ["move", "transform", "Transform (move, scale, rotate, shear)", "V"], ["marquee", "marquee", "Rectangle select", "M"], ["ellipse", "ellipse", "Ellipse select", "Shift+M"],
     ["lasso", "lasso", "Lasso", "L"], ["pen", "pen", "Pen (paths)", "P"], ["wand", "wand", "Magic wand", "W"], ["crop", "crop", "Crop", "C"],
-    ["brush", "brush", "Brush", "B"], ["clone", "clone", "Clone stamp", "S"], ["eraser", "eraser", "Eraser", "E"], ["fill", "fill", "Paint bucket", "G"],
+    ["brush", "brush", "Brush", "B"], ["clone", "clone", "Clone stamp", "S"], ["spot", "bandage", "Spot healing brush", "J"], ["heal", "heal", "Healing brush (Shift+J)", "Shift+J"],
+    ["patch", "patch", "Patch (Shift+J)", "Shift+J"], ["eraser", "eraser", "Eraser", "E"], ["fill", "fill", "Paint bucket", "G"],
     ["picker", "picker", "Eyedropper", "I"], ["text", "text", "Text", "T"], ["hand", "hand", "Hand (hold Space)", "H"],
 ];
-const TOOL_KEYS = { v: "move", m: "marquee", l: "lasso", p: "pen", w: "wand", c: "crop", b: "brush", s: "clone", e: "eraser", g: "fill", i: "picker",
+const TOOL_KEYS = { v: "move", m: "marquee", l: "lasso", p: "pen", j: "spot", w: "wand", c: "crop", b: "brush", s: "clone", e: "eraser", g: "fill", i: "picker",
                     t: "text", h: "hand" };
 /** The tools that paint with a round brush (size, hardness, opacity, spacing, the pen). */
-const BRUSHES = ["brush", "clone", "eraser"];
+const BRUSHES = ["brush", "clone", "eraser", "spot", "heal"];
+/** The brushes that take from a source point (Alt+click). */
+const SOURCED = ["clone", "heal"];
 /** The keys, for the viewer's Show Hotkeys while a Paint tab is up. */
 export const PAINT_KEYS = [
     ["V M L P W C", "Transform, select, lasso, pen, magic wand, crop"],
     ["Pen", "Click: corner, drag: smooth anchor, first anchor: close, Enter: stop; Ctrl+drag: move, Alt+click: corner / smooth"],
     ["Ctrl+Enter (pen)", "The path as the selection (Shift: add, Alt: take away)"], ["B S E G I T H", "Brush, clone stamp, eraser, bucket, eyedropper, text, hand"],
     ["[ / ]", "Brush smaller / larger (Shift: softer / harder)"], ["X / D", "Swap / default colours"],
-    ["Alt+click", "Pick a colour (brush, bucket); the clone stamp: where it takes from"],
+    ["Alt+click", "Pick a colour (brush, bucket); the clone stamp and healing brush: where they take from"],
+    ["J / Shift+J", "Spot healing brush / the next of healing brush, patch, spot healing"],
     ["Transform: drag", "Inside: move; a handle: scale (Shift: keep the shape, Alt: about the middle); outside: rotate (Shift: 15°); Ctrl+edge handle: shear"],
     ["Ctrl+T", "Transform the layer"], ["Shift+F5", "Fill… (in Properties)"], ["Del / Backspace in Layers", "Delete the layer (or its mask)"], ["Space+drag", "Pan"], ["Wheel", "Zoom about the pointer"],
     ["Ctrl+0 / Ctrl+1", "Fit / 100%"], ["Ctrl+Z / Ctrl+Shift+Z", "Undo / redo"], ["Ctrl+A / Ctrl+D", "Select all / deselect"],
@@ -179,7 +184,12 @@ class PaintEditor {
         this.opts = {
             brush: { size: 24, hardness: 80, opacity: 100, spacing: 15, penSize: true, penOpacity: false },
             eraser: { size: 40, hardness: 80, opacity: 100, spacing: 15, penSize: true, penOpacity: false },
-            clone: { size: 40, hardness: 60, opacity: 100, spacing: 10, penSize: true, penOpacity: false, aligned: true, sample: "layer" },
+            clone: { size: 40, hardness: 60, opacity: 100, spacing: 10, penSize: true, penOpacity: false, aligned: true, sample: "layer",
+                     overlay: true, angle: 0, scale: 100, flip: false },
+            spot: { size: 30, hardness: 50, opacity: 100, spacing: 10, penSize: true, penOpacity: false },
+            heal: { size: 40, hardness: 50, opacity: 100, spacing: 10, penSize: true, penOpacity: false, aligned: true, sample: "layer",
+                    overlay: true, angle: 0, scale: 100, flip: false },
+            patch: { mode: "source" },
             fill: { tolerance: 32, contiguous: true, all: false },
             wand: { tolerance: 32, contiguous: true, all: true },
             select: { feather: 0 },
@@ -594,8 +604,9 @@ class PaintEditor {
             dr.pts.forEach((p, i) => (i ? c.lineTo(X(p[0]), Y(p[1])) : c.moveTo(X(p[0]), Y(p[1]))));
             c.stroke(); c.setLineDash([]);
         }
-        // The pen's path.
+        // The pen's path; the patch being dragged.
         this._penDraw(c, X, Y);
+        this._patchDraw(c, X, Y);
         // The crop.
         if (this.crop) {
             const { x, y, w, h } = this.crop;
@@ -622,11 +633,12 @@ class PaintEditor {
             c.beginPath(); c.arc(X(g.p.tx), Y(g.p.ty), 3, 0, Math.PI * 2); c.stroke();
         }
         // The clone stamp's source.
-        if (this.tool === "clone" && this.cloneSrc) {
+        if (SOURCED.includes(this.tool) && this.cloneSrc) {
             const h = this._hover;
             const s = h ? this._cloneFrom(h.x, h.y) : this.cloneSrc;
+            if (s && h && this.opts[this.tool].overlay && !(this._drag && this._drag.kind === "stroke")) this._cloneOverlay(c, h, s, dpr);
             if (s) {
-                const sx = X(s.x), sy = Y(s.y), r = Math.max(4, (this.opts.clone.size / 2) * v.zoom);
+                const sx = X(s.x), sy = Y(s.y), r = Math.max(4, (this.opts[this.tool].size / 2) * v.zoom);
                 for (const [col, wd] of [["rgba(0,0,0,.7)", 3], ["#fff", 1]]) {
                     c.strokeStyle = col; c.lineWidth = wd;
                     c.beginPath(); c.moveTo(sx - 8, sy); c.lineTo(sx + 8, sy); c.moveTo(sx, sy - 8); c.lineTo(sx, sy + 8); c.stroke();
@@ -669,7 +681,7 @@ class PaintEditor {
             if (this.editMask) parts.push("<b>painting the mask</b>");
             if (this.quick) parts.push("<b>Quick Mask</b> (Q: back to the selection)");
             if (this.viewMask) parts.push("<b>showing the mask</b> (Esc: the picture)");
-            if (this.tool === "clone") parts.push(this.cloneSrc ? `clone from ${Math.round(this.cloneSrc.x)}, ${Math.round(this.cloneSrc.y)}` : "<b>Alt+click: where to clone from</b>");
+            if (SOURCED.includes(this.tool)) parts.push(this.cloneSrc ? `clone from ${Math.round(this.cloneSrc.x)}, ${Math.round(this.cloneSrc.y)}` : "<b>Alt+click: where to take from</b>");
             if (this.tf) parts.push("<b>transforming</b> (Enter applies, Esc cancels)");
             const L = this.active();
             if (L) parts.push(`layer: ${escapeHtml(L.name)}`);
@@ -1679,7 +1691,8 @@ class PaintEditor {
         if (this.wp) { this._wpDown(p); return; }
         const t = this.tool;
         if ((t === "brush" || t === "fill") && e.altKey) { this._pickAt(p); return; }
-        if (t === "clone" && e.altKey) { this.setCloneSource(p.x, p.y); return; }
+        if (SOURCED.includes(t) && e.altKey) { this.setCloneSource(p.x, p.y); return; }
+        if (t === "patch") { this._patchDown(p, e); return; }
         if (t === "picker") { this._pickAt(p); this._drag = { kind: "pick" }; return; }
         if (BRUSHES.includes(t)) { this._strokeStart(p, e); return; }
         if (t === "fill") { this._bucket(p); return; }
@@ -1724,6 +1737,7 @@ class PaintEditor {
         if (dr.kind === "pick") { this._pickAt(p); return; }
         if (dr.kind === "pen") { this._penMove(dr, p, e); return; }
         if (dr.kind === "wp") { this._wpMove(dr, p); return; }
+        if (dr.kind === "patch") { this._patchMove(dr, p); return; }
         if (dr.kind === "stroke") {
             // A pen sends far more positions than pointermove fires: take every one, with its pressure.
             const all = (e.getCoalescedEvents && e.getCoalescedEvents()) || [];
@@ -1757,6 +1771,7 @@ class PaintEditor {
         if (dr.kind === "stroke") { this._strokeEnd(dr.st); return; }
         if (dr.kind === "pen") { this._penUp(dr); return; }
         if (dr.kind === "wp") { this._wpUp(); return; }
+        if (dr.kind === "patch") { this._patchUp(dr); return; }
         if (dr.kind === "marquee" || dr.kind === "ellipse") {
             if (!dr.rect || dr.rect.w < 1 || dr.rect.h < 1) { if (!dr.e.shiftKey && !dr.e.altKey) this.deselect(); else this.drawOverlay(); return; }
             const { x, y, w, h } = dr.rect;
@@ -1786,9 +1801,10 @@ class PaintEditor {
             return;
         }
         const onMask = this.editMask || L.kind === "adjust" || L.kind === "group";
-        const clone = this.tool === "clone";
-        if (clone && onMask) { this._notify("The clone stamp paints a layer's pixels: pick the layer (not its mask).", "info"); return; }
-        if (clone && !this.cloneSrc) { this._notify("Alt+click where the clone stamp should take from first.", "info"); return; }
+        const clone = SOURCED.includes(this.tool), heal = this.tool === "spot" ? "spot" : this.tool === "heal" ? "heal" : null;
+        const what = { clone: "The clone stamp", spot: "The spot healing brush", heal: "The healing brush" }[this.tool];
+        if ((clone || heal) && onMask) { this._notify(`${what} works on a layer's pixels: pick the layer (not its mask).`, "info"); return; }
+        if (clone && !this.cloneSrc) { this._notify(`Alt+click where ${what.toLowerCase()} should take from first.`, "info"); return; }
         if (L.kind === "adjust" && !L.mask) this.addMask("all");
         if (L.kind === "pixel" && !onMask) {
             // A layer smaller than the canvas grows first (an undo entry of its own shape).
@@ -1817,11 +1833,20 @@ class PaintEditor {
             // Where it takes from: the same offset for every stroke (aligned) once the first one set it, or from
             // the source point again at each stroke. The layer as it was before the stroke, or the picture.
             const off = o.aligned && this._cloneOff ? this._cloneOff
-                : { dx: Math.round(this.cloneSrc.x - p.x), dy: Math.round(this.cloneSrc.y - p.y) };
+                : { dx: Math.round(this.cloneSrc.x - p.x), dy: Math.round(this.cloneSrc.y - p.y), ax: p.x, ay: p.y };
             this._cloneOff = off;
             st.clone = o.sample === "all"
                 ? { src: new Uint8ClampedArray(this.comp), sw: this.doc.w, sh: this.doc.h, sx: 0, sy: 0, dx: off.dx, dy: off.dy }
                 : { src: st.orig, sw: A.w, sh: A.h, sx: A.x, sy: A.y, dx: off.dx, dy: off.dy };
+            // The source turned, scaled or flipped about where the offset was set.
+            const m = D.cloneMatrix(o.angle, o.scale, o.flip);
+            if (m) Object.assign(st.clone, { m, ax: off.ax, ay: off.ay });
+        }
+        if (heal) {
+            st.heal = heal;
+            st.healOpacity = o.opacity / 100;
+            // While painting: the healing brush shows its source, the spot brush a dark wash where it will heal.
+            if (heal === "spot") { st.color = [0, 0, 0]; st.opacity = 0.35; }
         }
         st.L = A;
         st.radius = Math.max(0.5, o.size / 2);
@@ -1845,7 +1870,7 @@ class PaintEditor {
 
     /** A brush or eraser stroke on Quick Mask (white adds to the selection, black takes away; the eraser the other way). */
     _quickStroke(p, e) {
-        if (this.tool === "clone") { this._notify("The clone stamp does not paint Quick Mask: use the brush.", "info"); return; }
+        if (SOURCED.includes(this.tool) || this.tool === "spot") { this._notify("Quick Mask is painted with the brush or the eraser.", "info"); return; }
         const W = this.doc.w, H = this.doc.h, m = this.quick.m;
         const o = this.opts[this.tool], erase = this.tool === "eraser";
         const gray = new Uint8ClampedArray(W * H * 4);
@@ -1939,9 +1964,11 @@ class PaintEditor {
             for (let y = r.y0; y < r.y1; y++) b.set(part.subarray((y - r.y0) * w * ch, (y - r.y0 + 1) * w * ch), (y * lw + r.x0) * ch);
             this._bump(b);
         };
+        if (s.heal) this._healFinish(s);
         const before = cut(origBuf), after = cut(buf);
         this._bump(buf);
-        this._push({ label: (s.quick ? "Quick Mask " : "") + (s.clone ? "Clone stamp" : this.tool === "eraser" ? "Eraser" : "Brush"), bytes: before.byteLength * 2,
+        const label = s.heal === "spot" ? "Spot healing brush" : s.heal ? "Healing brush" : s.clone ? "Clone stamp" : this.tool === "eraser" ? "Eraser" : "Brush";
+        this._push({ label: (s.quick ? "Quick Mask " : "") + label, bytes: before.byteLength * 2,
                      undo: () => paste(buf, before), redo: () => paste(buf, after) });
         this._lastStrokeEnd = { L: s.L.id, x: s.last[0], y: s.last[1] };
         this.redraw({ x0: r.x0 + s.lx, y0: r.y0 + s.ly, x1: r.x1 + s.lx, y1: r.y1 + s.ly });
@@ -2004,9 +2031,33 @@ class PaintEditor {
 
     /** Where the clone stamp takes from for the pointer at (x, y) (canvas pixels), or null. */
     _cloneFrom(x, y) {
-        const o = this.opts.clone;
-        if (this._cloneOff && (o.aligned || (this._drag && this._drag.kind === "stroke"))) return { x: x + this._cloneOff.dx, y: y + this._cloneOff.dy };
+        const o = this.opts[SOURCED.includes(this.tool) ? this.tool : "clone"];
+        const off = this._cloneOff;
+        if (off && (o.aligned || (this._drag && this._drag.kind === "stroke"))) {
+            const m = D.cloneMatrix(o.angle, o.scale, o.flip);
+            if (!m || off.ax == null) return { x: x + off.dx, y: y + off.dy };
+            const ux = x - off.ax, uy = y - off.ay;
+            return { x: off.ax + off.dx + m.a * ux + m.c * uy, y: off.ay + off.dy + m.b * ux + m.d * uy };
+        }
         return this.cloneSrc;
+    }
+
+    /** "Show overlay": what the brush would put down, inside its circle at the pointer (the picture at the source, half seen). */
+    _cloneOverlay(c, h, s, dpr) {
+        const o = this.opts[this.tool], v = this.view, r = Math.max(1, (o.size / 2) * v.zoom);
+        const m = D.cloneMatrix(o.angle, o.scale, o.flip) || { a: 1, b: 0, c: 0, d: 1 };
+        // The source's image point s lands on the pointer h; image point q lands on h + zoom * M^-1 (q - s).
+        const det = m.a * m.d - m.b * m.c;
+        if (!det) return;
+        const ia = m.d / det, ib = -m.b / det, ic = -m.c / det, id = m.a / det, z = v.zoom;
+        c.save();
+        c.beginPath(); c.arc(h.sx, h.sy, r, 0, Math.PI * 2); c.clip();
+        c.globalAlpha = 0.5;
+        c.imageSmoothingEnabled = z < 1;
+        c.setTransform(dpr * z * ia, dpr * z * ib, dpr * z * ic, dpr * z * id,
+                       dpr * (h.sx - z * (ia * s.x + ic * s.y)), dpr * (h.sy - z * (ib * s.x + id * s.y)));
+        c.drawImage(this.canvas, 0, 0);
+        c.restore();
     }
 
     // Transform (the Move tool's place, V): the active pixel layer under p = t + R·Shear·Scale·(u - c)
@@ -2442,6 +2493,7 @@ class PaintEditor {
         if (lk === "x" && !e.altKey) return take(() => this.swapColors());
         if (lk === "d" && !e.altKey) return take(() => this.defaultColors());
         if (lk === "m" && e.shiftKey) return take(() => this.setTool("ellipse"));
+        if (lk === "j" && e.shiftKey && !e.altKey) return take(() => this.setTool({ spot: "heal", heal: "patch", patch: "spot" }[this.tool] || "heal"));
         if (TOOL_KEYS[lk] && !e.altKey && !e.shiftKey) return take(() => this.setTool(TOOL_KEYS[lk]));
         return false;
     }
@@ -3019,15 +3071,21 @@ class PaintEditor {
             if (b.penSize === undefined) b.penSize = true;
             this._field(ts, "Pen pressure", [check(b, "penSize", "Size"), check(b, "penOpacity", "Opacity")])
                 .title = "A pen tablet's pressure (Wacom, Windows Ink) sets each dab's size and / or opacity. A mouse paints at full.";
-            if (this.tool === "clone") {
-                const smp = this.el("select", "", { title: "What the clone stamp takes its pixels from" });
+            if (SOURCED.includes(this.tool)) {
+                const smp = this.el("select", "", { title: "What it takes its pixels from" });
                 for (const [v, t] of [["layer", "This layer"], ["all", "All layers"]]) smp.append(this.el("option", "", { value: v, text: t }));
                 smp.value = b.sample;
                 smp.addEventListener("change", () => { b.sample = smp.value; sync(); });
                 this._field(ts, "Sample", smp);
-                this._field(ts, "", check(b, "aligned", "Aligned", "On: every stroke keeps the same offset from where it takes. Off: each stroke takes from the source point again."));
-                note(this.cloneSrc ? "Paints what lies at the source (the cross). Alt+click sets a new source."
-                                   : "Alt+click where to take from, then paint where it should go.");
+                this._field(ts, "", [check(b, "aligned", "Aligned", "On: every stroke keeps the same offset from where it takes. Off: each stroke takes from the source point again."),
+                                     check(b, "overlay", "Show overlay", "Show what the brush would put down inside its circle before painting"),
+                                     check(b, "flip", "Flip", "Take the source mirrored left to right")]);
+                this._slider(ts, "Source angle °", b.angle, -180, 180, 1, (v) => { b.angle = v; this.drawOverlay(); sync(); });
+                this._slider(ts, "Source scale %", b.scale, 10, 400, 1, (v) => { b.scale = v; this.drawOverlay(); sync(); });
+                note((this.tool === "heal" ? "Paints the texture at the source, taking on the light and colour where it lands (when the stroke ends). " : "Paints what lies at the source (the cross). ")
+                     + (this.cloneSrc ? "Alt+click sets a new source." : "Alt+click where to take from, then paint where it should go."));
+            } else if (this.tool === "spot") {
+                note("Paint over a blemish: when the stroke ends it is filled from a place nearby that looks alike, blended into what is around it.");
             } else note(this.editMask ? "Painting the layer's MASK: white shows, black hides." : "Alt+click picks a colour; Shift+click draws a straight line.");
         } else if (this.tool === "fill" || this.tool === "wand") {
             const f = o[this.tool];
@@ -3035,6 +3093,13 @@ class PaintEditor {
             this._field(ts, "", [check(f, "contiguous", "Contiguous"), check(f, "all", "All layers")]);
         } else if (this.tool === "pen") {
             this._penOptions(ts, bar, sync, note);
+        } else if (this.tool === "patch") {
+            const md = this.el("select", "paint-patchmode", { title: "Source: the selection is filled from where it is dragged to. Destination: it is carried there." });
+            for (const [v, t] of [["source", "Source"], ["destination", "Destination"]]) md.append(this.el("option", "", { value: v, text: t }));
+            md.value = o.patch.mode;
+            md.addEventListener("change", () => { o.patch.mode = md.value; sync(); });
+            this._field(ts, "Patch", md);
+            note("Draw round what to patch (or use any selection), then drag it to a place that looks right: it is filled from there and blended in.");
         } else if (["marquee", "ellipse", "lasso"].includes(this.tool)) {
             this._slider(ts, "Feather", o.select.feather, 0, 200, 0.5, (v) => { o.select.feather = v; sync(); });
             note("Shift adds to the selection, Alt takes from it, both keep what they share.");
@@ -3360,7 +3425,7 @@ class PaintEditor {
     }
 }
 
-Object.assign(PaintEditor.prototype, PenMixin, WarpMixin);
+Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin);
 
 // Lucide's rotate-cw, white on black, as the pointer outside a transform's box.
 const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><g stroke="#000" stroke-width="4"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g><g stroke="#fff" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g></svg>')}") 12 12, alias`;

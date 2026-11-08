@@ -942,9 +942,22 @@ export function stamp(st, cx, cy, radius, hard, flow = 1) {
  * its top left at `c.sx`, `c.sy` on the canvas), `c.dx` / `c.dy` away; -1 outside it.
  */
 export function cloneAt(c, gx, gy) {
-    const qx = gx + c.dx - c.sx, qy = gy + c.dy - c.sy;
+    let qx, qy;
+    if (c.m) {
+        // Turned / scaled / flipped about the destination anchor (ax, ay): source = anchor + offset + M (g - anchor).
+        const ux = gx + 0.5 - c.ax, uy = gy + 0.5 - c.ay;
+        qx = Math.floor(c.ax + c.dx + c.m.a * ux + c.m.c * uy) - c.sx;
+        qy = Math.floor(c.ay + c.dy + c.m.b * ux + c.m.d * uy) - c.sy;
+    } else { qx = gx + c.dx - c.sx; qy = gy + c.dy - c.sy; }
     if (qx < 0 || qy < 0 || qx >= c.sw || qy >= c.sh) return -1;
     return (qy * c.sw + qx) * 4;
+}
+
+/** The clone source's turn (degrees, clockwise), scale (%) and left-right flip as a 2 x 2 {a, b, c, d}; null when it is none. */
+export function cloneMatrix(angle = 0, scale = 100, flip = false) {
+    if (!angle && (scale === 100 || !scale) && !flip) return null;
+    const r = (angle * Math.PI) / 180, k = (scale || 100) / 100, cs = Math.cos(r) * k, sn = Math.sin(r) * k, f = flip ? -1 : 1;
+    return { a: cs * f, b: sn * f, c: -sn, d: cs };
 }
 
 // ── free transform ──────────────────────────────────────────────────────────
