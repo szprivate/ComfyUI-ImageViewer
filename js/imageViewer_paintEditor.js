@@ -2838,19 +2838,25 @@ class PaintEditor {
     }
 
     _generateMenu() {
-        const g = (kind) => () => this.host.generate && this.host.generate(kind, { prompt: this._prompt || "" });
+        const g = (kind) => () => this.host.generate && this.host.generate(kind, { prompt: this._prompt || "", variations: this._variations || 1 });
         return [{ label: "Generative fill (the selection, with the prompt)", run: g("fill") },
                 { label: "Remove object (the selection)", run: g("remove") },
+                { label: "Edit with the prompt (the selection, else the picture)", run: g("edit") },
                 { label: "Fill from the surroundings (here, no AI)", disabled: !this.sel, run: g("heal") },
                 { label: "Remove background", run: g("background") },
                 { label: "Select subject", run: g("select_subject") },
-                { label: "Extend the canvas…", run: () => this.dialog("Extend the canvas", [["px", "Pixels each side", 128, 1, 4096], ["ai", "Fill the new part with agentY", "yes", ["yes", "no"]]],
-                     (v) => this.host.generate && this.host.generate("extend", { px: v.px, ai: v.ai === "yes", prompt: this._prompt || "" })) },
-                { label: "Upscale…", run: () => this.dialog("Upscale", [["k", "Times", "2", ["2", "4"]], ["ai", "With agentY (else a plain resize)", "yes", ["yes", "no"]]],
-                     (v) => this.host.generate && this.host.generate("upscale", { k: Number(v.k), ai: v.ai === "yes" })) }];
+                { label: "Extend the canvas…", run: () => this.dialog("Extend the canvas", [["px", "Pixels each side", 128, 1, 4096], ["ai", "Fill the new part with the workflow", "yes", ["yes", "no"]]],
+                     (v) => this.host.generate && this.host.generate("extend", { px: v.px, ai: v.ai === "yes", prompt: this._prompt || "", variations: this._variations || 1 })) },
+                { label: "Upscale…", run: () => this.dialog("Upscale", [["k", "Times", "2", ["2", "4"]], ["ai", "With the workflow (else a plain resize)", "yes", ["yes", "no"]]],
+                     (v) => this.host.generate && this.host.generate("upscale", { k: Number(v.k), ai: v.ai === "yes" })) },
+                "-",
+                { label: "Workflows…", disabled: !this.host.workflows, run: () => this.host.workflows && this.host.workflows() }];
     }
 
-    /** A small form over the editor: fields [key, label, default, min, max], [key, label, default, [choices]] or [key, label, default, "text"]. */
+    /**
+     * A small form over the editor: fields [key, label, default, min, max], [key, label, default, [choices]] or
+     * [key, label, default, "text"]; a choice is a string or { value, label }.
+     */
     dialog(title, fields, onOk, note = "", opts = {}) {
         const shade = this.el("div", "paint-dlg-shade");
         const box = this.el("div", "paint-dlg");
@@ -2862,7 +2868,10 @@ class PaintEditor {
             let inp;
             if (Array.isArray(a)) {
                 inp = this.el("select");
-                for (const c of a) inp.append(this.el("option", "", { value: c, text: c.replace(/_/g, " ") }));
+                for (const c of a) {
+                    inp.append(typeof c === "object" ? this.el("option", "", { value: c.value, text: c.label })
+                                                     : this.el("option", "", { value: c, text: c.replace(/_/g, " ") }));
+                }
                 inp.value = def;
             } else if (a === "text") inp = this.el("input", "", { type: "text", value: def, spellcheck: false });
             else inp = this.el("input", "", { type: "number", value: def, min: a, max: b, step: "any" });
@@ -3621,25 +3630,37 @@ class PaintEditor {
 
     _generateSection() {
         const s = this.el("div", "paint-sect");
-        s.append(this.el("h4", "", { text: "Generate (agentY)" }));
-        const ta = this.el("textarea", "", { value: this._prompt || "", placeholder: "What to make in the selection - e.g. \"a red umbrella\"" });
+        s.append(this.el("h4", "", { text: "Generate" }));
+        const ta = this.el("textarea", "", { value: this._prompt || "", placeholder: "What to make in the selection, or how to change it - e.g. \"a red umbrella\"" });
         ta.addEventListener("keydown", (e) => e.stopPropagation());
         ta.addEventListener("input", () => { this._prompt = ta.value; });
         s.append(ta);
         const row = this.el("div", "paint-gen");
+        const uses = (kind) => { const w = this.host.workflowFor ? this.host.workflowFor(kind) : ""; return w ? ` (${w})` : ""; };
         const g = (label, kind, title, extra = () => ({})) => {
-            const b = this.el("button", "paint-btn", { type: "button", text: label, title });
-            b.addEventListener("click", () => this.host.generate && this.host.generate(kind, { prompt: this._prompt || "", ...extra() }));
+            const b = this.el("button", "paint-btn", { type: "button", text: label, title: title + uses(kind) });
+            b.dataset.gen = kind;
+            b.addEventListener("pointerenter", () => { b.title = title + uses(kind); });
+            b.addEventListener("click", () => this.host.generate && this.host.generate(kind, { prompt: this._prompt || "", variations: this._variations || 1, ...extra() }));
             row.append(b);
         };
         g("Generative fill", "fill", "Make what the prompt says inside the selection: a new layer, masked to it");
         g("Remove object", "remove", "Take what is selected away and fill the place: a new layer");
+        g("Edit", "edit", "Change the selection (or the whole picture) as the prompt says: a new layer");
         g("Fill around", "heal", "Fill the selection from what is around it, here and without AI");
         g("Remove background", "background", "A mask on the layer that hides the background");
         g("Select subject", "select_subject", "The selection becomes the main subject");
-        g("Extend 128 px", "extend", "A bigger canvas, the new part filled by agentY", () => ({ px: 128, ai: true }));
-        g("Upscale 2x", "upscale", "Twice the size, the detail made by agentY", () => ({ k: 2, ai: true }));
-        s.append(row, this.el("div", "paint-note", { text: "The picture is saved first; agentY makes the pixels and puts them back as a layer here." }));
+        g("Extend 128 px", "extend", "A bigger canvas, the new part filled by the workflow", () => ({ px: 128, ai: true }));
+        g("Upscale 2x", "upscale", "Twice the size, the detail made by the workflow", () => ({ k: 2, ai: true }));
+        const opt = this.el("div", "paint-field");
+        const vs = this.el("select", "", { title: "How many versions to make (each a layer of its own)" });
+        for (const n of [1, 2, 3, 4]) vs.append(this.el("option", "", { value: String(n), text: String(n) }));
+        vs.value = String(this._variations || 1);
+        vs.addEventListener("change", () => { this._variations = Number(vs.value) || 1; });
+        const wf = this.el("button", "paint-btn", { type: "button", text: "Workflows…", title: "Which workflow each of these runs" });
+        wf.addEventListener("click", () => this.host.workflows && this.host.workflows());
+        opt.append(this.el("label", "", { text: "Variations" }), vs, wf);
+        s.append(row, opt, this.el("div", "paint-note", { text: "Each runs a ready-made ComfyUI workflow at the size the model wants; the result comes back as a new layer. Your own workflows go in Settings \u203a ComfyUI Image Viewer \u203a Paint." }));
         return s;
     }
 

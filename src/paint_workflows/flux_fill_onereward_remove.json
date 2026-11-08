@@ -1,0 +1,165 @@
+{
+ "1": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "paint/in.png"
+  },
+  "_meta": {
+   "title": "paint:image"
+  }
+ },
+ "2": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "flux.1-fill-dev-OneReward-transformer_fp8.safetensors",
+   "weight_dtype": "default"
+  }
+ },
+ "3": {
+  "class_type": "DualCLIPLoader",
+  "inputs": {
+   "clip_name1": "clip_l.safetensors",
+   "clip_name2": "t5xxl_fp16.safetensors",
+   "type": "flux",
+   "device": "default"
+  }
+ },
+ "4": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "ae.safetensors"
+  }
+ },
+ "5": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "text": "",
+   "clip": [
+    "3",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "paint:prompt"
+  }
+ },
+ "6": {
+  "class_type": "FluxGuidance",
+  "inputs": {
+   "guidance": 30,
+   "conditioning": [
+    "5",
+    0
+   ]
+  }
+ },
+ "7": {
+  "class_type": "ConditioningZeroOut",
+  "inputs": {
+   "conditioning": [
+    "5",
+    0
+   ]
+  }
+ },
+ "8": {
+  "class_type": "InpaintModelConditioning",
+  "inputs": {
+   "noise_mask": true,
+   "positive": [
+    "6",
+    0
+   ],
+   "negative": [
+    "7",
+    0
+   ],
+   "vae": [
+    "4",
+    0
+   ],
+   "pixels": [
+    "1",
+    0
+   ],
+   "mask": [
+    "1",
+    1
+   ]
+  }
+ },
+ "9": {
+  "class_type": "DifferentialDiffusion",
+  "inputs": {
+   "strength": 1,
+   "model": [
+    "13",
+    0
+   ]
+  }
+ },
+ "10": {
+  "class_type": "KSampler",
+  "inputs": {
+   "seed": 0,
+   "steps": 20,
+   "cfg": 1,
+   "sampler_name": "euler",
+   "scheduler": "normal",
+   "denoise": 1,
+   "model": [
+    "9",
+    0
+   ],
+   "positive": [
+    "8",
+    0
+   ],
+   "negative": [
+    "8",
+    1
+   ],
+   "latent_image": [
+    "8",
+    2
+   ]
+  }
+ },
+ "11": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "10",
+    0
+   ],
+   "vae": [
+    "4",
+    0
+   ]
+  }
+ },
+ "12": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "paint/generate",
+   "images": [
+    "11",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "paint:output"
+  }
+ },
+ "13": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "lora_name": "removal_timestep_alpha-2-1740.safetensors",
+   "strength_model": 1,
+   "model": [
+    "2",
+    0
+   ]
+  }
+ }
+}

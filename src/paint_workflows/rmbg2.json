@@ -1,0 +1,51 @@
+{
+ "1": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "paint/in.png"
+  },
+  "_meta": {
+   "title": "paint:image"
+  }
+ },
+ "2": {
+  "class_type": "RMBG",
+  "inputs": {
+   "image": [
+    "1",
+    0
+   ],
+   "model": "RMBG-2.0",
+   "sensitivity": 1,
+   "process_res": 1024,
+   "mask_blur": 0,
+   "mask_offset": 0,
+   "invert_output": false,
+   "refine_foreground": false,
+   "background": "Alpha",
+   "background_color": "#222222"
+  }
+ },
+ "3": {
+  "class_type": "MaskToImage",
+  "inputs": {
+   "mask": [
+    "2",
+    1
+   ]
+  }
+ },
+ "4": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "paint/generate",
+   "images": [
+    "3",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "paint:output"
+  }
+ }
+}

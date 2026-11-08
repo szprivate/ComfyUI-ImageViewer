@@ -42,6 +42,8 @@ class PaintBrowserTests(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.mkdtemp()
         cls.sent = []
+        cls._flows_was = os.environ.get("IMAGE_VIEWER_PAINT_WORKFLOWS")
+        os.environ["IMAGE_VIEWER_PAINT_WORKFLOWS"] = os.path.join(cls.tmp, "paint_workflows")   # never the user's own
         cls.routes_app, cls.dirs, cls.pkg = _load(cls.tmp, cls.sent)
         import importlib
         cls.P = importlib.import_module(cls.pkg + ".paint_io")
@@ -112,6 +114,10 @@ class PaintBrowserTests(unittest.TestCase):
         for k in [k for k in sys.modules if k == cls.pkg or k.startswith(cls.pkg + ".")]:
             sys.modules.pop(k, None)
         shutil.rmtree(cls.tmp, ignore_errors=True)
+        if cls._flows_was is None:
+            os.environ.pop("IMAGE_VIEWER_PAINT_WORKFLOWS", None)
+        else:
+            os.environ["IMAGE_VIEWER_PAINT_WORKFLOWS"] = cls._flows_was
 
     def page(self):
         pg = self.browser.new_page(viewport={"width": 1500, "height": 950})
@@ -295,7 +301,11 @@ class PaintBrowserTests(unittest.TestCase):
         mid = pg.evaluate(f"() => {{ const e = {ed}; const b = e.pix.get(e.doc.layers[0].id); return [...b.slice((60*200+100)*4, (60*200+100)*4+4)]; }}")
         self.assertLess(mid[0], 60, mid)      # the red is gone
         self.assertGreater(mid[2], 120, mid)  # the blue came in
-        # Generative fill: saved first, a snapshot, and agentY asked with the paths and the call back.
+        # Generative fill with the choice "agentY builds one": saved first, a snapshot, and agentY asked with the
+        # paths and the call back.
+        pg.evaluate("""async () => { await fetch('/imageviewer/paint/workflows', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'fill', choice: 'agent' }) }); __panel._paintWf = null; }""")
+        self.addCleanup(lambda: self._choose("fill", "flux_fill"))
         pg.evaluate(f"() => {{ {ed}._prompt = 'a red umbrella'; }}")
         pg.evaluate(f"() => __panel.paintGenerate(__panel._paintActive(), 'fill', {{ prompt: 'a red umbrella' }})")
         pg.wait_for_function("() => window.__asked.length === 1", timeout=10000)
@@ -1411,6 +1421,95 @@ class PaintBrowserTests(unittest.TestCase):
             seen.append(pg.evaluate(f"() => [{ed}.tool, {ed}.box.querySelector('{slot}').dataset.tool]"))
         self.assertEqual(seen, [["penadd", "penadd"], ["pendel", "pendel"], ["penconv", "penconv"], ["pen", "pen"]])
         self.assertEqual(self.errors, [])
+
+    def _choose(self, action, choice):
+        mod = sys.modules[self.pkg + ".paint_generate"]
+        mod.set_choice(action, choice)
+
+    def test_generate_runs_its_workflow_and_the_result_is_a_new_layer(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        out_dir = os.path.join(self.dirs["output"], "paint", "generate")
+        os.makedirs(out_dir, exist_ok=True)
+        # The built-in FLUX Fill needs models this server does not have: a notice names them, nothing is queued.
+        pg.evaluate("""() => { window.__queued = []; window.__notes = [];
+            __api.queuePrompt = async (n, d) => { window.__queued.push(d.output); return { prompt_id: 'p' + window.__queued.length }; }; }""")
+        pg.evaluate(f"() => {{ const e = {ed}; const m = new Uint8Array(200*120); for (let y = 20; y < 100; y++) for (let x = 40; x < 160; x++) m[y*200+x] = 255; e.setSelection(m); }}")
+        pg.evaluate("""async () => { const { app } = await import('/scripts/app.js'); window.__toasts = [];
+            app.extensionManager.toast.add = (t) => window.__toasts.push(t.summary + ' -- ' + t.detail); }""")
+        pg.evaluate("() => __panel.paintGenerate(__panel._paintActive(), 'fill', { prompt: 'a green box' })")
+        pg.wait_for_function("() => window.__toasts.some((t) => /needs what is not here/.test(t))", timeout=10000)
+        self.assertTrue(pg.evaluate("() => window.__toasts.some((t) => /flux1-fill-dev/.test(t))"))
+        self.assertEqual(pg.evaluate("() => window.__queued.length"), 0)
+        # A workflow of one's own (API format, as Settings takes it): Load Image -> Save Image.
+        graph = {"1": {"class_type": "LoadImage", "inputs": {"image": "x.png"}, "_meta": {"title": "paint:image"}},
+                 "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["9", 0]}, "_meta": {"title": "paint:prompt"}},
+                 "3": {"class_type": "KSampler", "inputs": {"seed": 1, "positive": ["2", 0]}},
+                 "4": {"class_type": "SaveImage", "inputs": {"images": ["1", 0], "filename_prefix": "x"}, "_meta": {"title": "paint:output"}}}
+        got = pg.evaluate("""async (g) => { const r = await fetch('/imageviewer/paint/workflows', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'fill', graph: g, name: 'mine', source: 'file' }) }); __panel._paintWf = null; return r.json(); }""", graph)
+        self.addCleanup(lambda: self._choose("fill", "flux_fill"))
+        self.assertEqual(got["actions"]["fill"]["choice"], "custom")
+        self.assertEqual(got["slots"]["image"], "1")
+        pg.evaluate("() => { window.__gen = __panel.paintGenerate(__panel._paintActive(), 'fill', { prompt: 'a green box', variations: 2 }); }")
+        pg.wait_for_function("() => window.__queued.length === 2", timeout=10000)
+        queued = pg.evaluate("() => window.__queued")
+        self.assertEqual(queued[0]["2"]["inputs"]["text"], "a green box")
+        self.assertNotEqual(queued[0]["3"]["inputs"]["seed"], queued[1]["3"]["inputs"]["seed"])
+        inp = queued[0]["1"]["inputs"]["image"]
+        self.assertTrue(inp.startswith("paint/gen_"), inp)
+        from PIL import Image
+        crop = Image.open(os.path.join(self.dirs["input"], inp))
+        # ComfyUI would run it: a green picture of the crop's size, announced as ComfyUI does.
+        for i, pid in enumerate(("p1", "p2")):
+            g = np.zeros((crop.height, crop.width, 4), np.uint8)
+            g[..., 1] = 200 + i * 20
+            g[..., 3] = 255
+            Image.fromarray(g, "RGBA").save(os.path.join(out_dir, f"fill_{i}.png"))
+            pg.evaluate("""([pid, f]) => __api.dispatch('executed', { prompt_id: pid, node: '4',
+                output: { images: [{ filename: f, subfolder: 'paint/generate', type: 'output' }] } })""", [pid, f"fill_{i}.png"])
+        pg.wait_for_function(f"() => {ed}.doc.layers.length === 3", timeout=10000)
+        names = pg.evaluate(f"() => {ed}.doc.layers.map((L) => L.name)")
+        self.assertIn("a green box", names)
+        self.assertIn("a green box 2", names)
+        self.assertTrue(pg.evaluate(f"() => {ed}.undoStack[{ed}.undoStack.length-1].label.startsWith('Generative fill')"))
+        # One undo takes both layers away.
+        pg.evaluate(f"() => {ed}.undo()")
+        self.assertEqual(pg.evaluate(f"() => {ed}.doc.layers.length"), 1)
+        pg.evaluate(f"() => {ed}.redo()")
+        # The new layer is masked to the selection: inside green, outside the photo.
+        top = pg.evaluate(f"""() => {{ const e = {ed}; return e.doc.layers.filter((L) => L.name === 'a green box 2').map((L) => [L.x, L.y, !!L.mask])[0]; }}""")
+        self.assertTrue(top[2], top)
+        self.assertEqual(self.errors, [])
+
+    def test_settings_page_replaces_a_generate_workflow(self):
+        pg = self.page()
+        # The settings entry's editor (what ComfyUI's dialog renders); "Load API file…" takes an API-format file.
+        pg.evaluate("""async () => { const S = await import('/extensions/viewer/imageViewer_settings.js');
+            document.querySelectorAll('comfyui-image-viewer-panel').forEach((p) => { p.style.display = 'none'; });
+            const el = S.renderPaintWorkflowEditor(); el.id = 'pwf'; document.body.prepend(el); }""")
+        pg.wait_for_function("() => document.querySelectorAll('#pwf .imageviewer-pwf-row').length === 7", timeout=10000)
+        pg.wait_for_function("() => /Not on this machine/.test(document.querySelector('#pwf').textContent)", timeout=5000)
+        graph = {"1": {"class_type": "LoadImage", "inputs": {"image": "x.png"}},
+                 "2": {"class_type": "SaveImage", "inputs": {"images": ["1", 0], "filename_prefix": "x"}}}
+        path = os.path.join(self.tmp, "my_upscale.json")
+        with open(path, "w") as fh:
+            json.dump(graph, fh)
+        rows = pg.locator("#pwf .imageviewer-pwf-row")
+        upscale = rows.filter(has_text="Upscale")
+        with pg.expect_file_chooser() as fc:
+            upscale.get_by_text("Load API file…").click()
+        fc.value.set_files(path)
+        pg.wait_for_function("() => /My workflow: my_upscale/.test(document.querySelector('#pwf').textContent)", timeout=10000)
+        self.addCleanup(lambda: self._choose("upscale", "upscale_model"))
+        self.assertEqual(pg.evaluate("() => [...document.querySelectorAll('#pwf select')].map((s) => s.value)").count("custom"), 1)
+        self.assertIn("picture in: node 1", pg.locator("#pwf").inner_text())
+        # Remove mine: back to the default.
+        rows.filter(has_text="Upscale").get_by_text("Remove mine").click()
+        pg.wait_for_function("() => !/My workflow: my_upscale/.test(document.querySelector('#pwf').textContent)", timeout=10000)
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

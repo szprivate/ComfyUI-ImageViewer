@@ -12,8 +12,10 @@
 // them. Save writes an .ora (over its own, else the next version by the export rule, kind "paint");
 // Export writes a flat picture or a .psd by the same rule. The agent changes a picture with edit_image
 // (POST /imageviewer/paint/doc), which tells the page (ComfyUI's "imageviewer.paint.changed"): the tab takes the new
-// document as ONE undo step. Generate asks agentY (window.agentYViewerBridge.feedback) to make pixels for
-// the selection from a snapshot of the picture (/imageviewer/paint/snapshot) and put them back with edit_image.
+// document as ONE undo step. Generate runs a ready-made workflow for each action (POST /imageviewer/paint/generate
+// fills it in, this page queues it, /imageviewer/paint/generate_place says how the picture goes back - a new
+// layer, a mask, a selection); the choice "agentY builds one" asks agentY (window.agentYViewerBridge.feedback)
+// from a snapshot of the picture (/imageviewer/paint/snapshot), to put the result back with edit_image.
 import { api } from "../../scripts/api.js";
 import { createPaintEditor, PAINT_KEYS } from "./imageViewer_paintEditor.js";
 import { notice, openFilePicker, openExportDialog, canvasContext } from "./imageViewer_exportUI.js";
@@ -41,7 +43,7 @@ export function paintMayOpen(ref) {
 async function postJson(route, body) {
     const res = await api.fetchApi(route, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (!res.ok) { const e = new Error(data.error || `HTTP ${res.status}`); e.status = res.status; e.data = data; throw e; }
     return data;
 }
 
@@ -333,6 +335,8 @@ export const PaintPanelMixin = {
             saveAs: () => this.paintSaveAs(rec),
             exportDoc: () => this.paintExport(rec),
             generate: (kind, opts) => this.paintGenerate(rec, kind, opts || {}),
+            workflows: () => this.paintWorkflowsDialog(rec),
+            workflowFor: (kind) => this._paintWfLabel(kind),
             menu: (entries, x, y, anchor) => {
                 if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
                 this._previzOpenMenu(entries, x, y, anchor);
@@ -456,24 +460,16 @@ export const PaintPanelMixin = {
     },
 
     /**
-     * The Generate menu and section. Heal, a plain extend and a plain upscale are done here (the server's
-     * ops on the session); the rest are asked of agentY with a snapshot of the picture and the selection.
+     * The Generate menu and section. Heal, a plain extend and a plain upscale are done here (the server's ops on
+     * the session); the rest run the workflow picked for them (src/paint_workflows/, or the user's own from
+     * Settings - paint_generate.py), queued from this page; the choice "agentY builds one" asks agentY as before.
      */
     async paintGenerate(rec, kind, opts) {
         const ed = rec && rec.editor;
         if (!ed || !ed.doc) return;
         const W = ed.doc.w, H = ed.doc.h;
         const bottom = ed.doc.layers.find((L) => L.kind === "pixel");
-        const local = async (ops, label) => {
-            try {
-                const s = await this._paintSync(rec);
-                await postJson("/imageviewer/paint/save", { token: rec.token, meta: s.meta, keep: s.keep, write: false });
-                await postJson("/imageviewer/paint/doc", { doc: rec.token, ops, write: false, from: "page" });
-                const d = await this._paintDescribe(rec);
-                const data = await this._paintLoad(rec.token, d.doc, d.selection);
-                ed.replaceWith(data, label);
-            } catch (e) { notice("error", label + " did not work", String(e.message || e)); }
-        };
+        const local = (ops, label) => this._paintApplyOps(rec, ops, label);
         if (kind === "heal") {
             if (!ed.sel) { notice("warn", "Select what to fill first"); return; }
             const L = ed.active();
@@ -485,17 +481,184 @@ export const PaintPanelMixin = {
             const ops = [{ op: "canvas_size", w: W + 2 * px, h: H + 2 * px, anchor: "center" },
                          { op: "select", mode: "rect", x: px, y: px, w: W, h: H }, { op: "select", mode: "invert" }];
             if (!opts.ai && bottom) ops.push({ op: "heal", layer: bottom.id });
-            await local(ops, "Extend the canvas");
-            if (!opts.ai) return;
-            return this._paintAsk(rec, "extend", { ...opts, note: `The canvas was made ${px} px larger on every side; the new border is selected.` });
+            if (!(await local(ops, "Extend the canvas")) || !opts.ai) return;
+            return this._paintRun(rec, "extend", { ...opts, note: `The canvas was made ${px} px larger on every side; the new border is selected.` });
         }
         if (kind === "upscale" && !opts.ai) {
             await local([{ op: "resize", scale: Number(opts.k) || 2 }], "Upscale");
             return;
         }
         if ((kind === "fill" || kind === "remove") && !ed.sel) { notice("warn", "Select the place first", "Generate works inside the selection."); return; }
-        if (kind === "fill" && !String(opts.prompt || "").trim()) { notice("warn", "Say what to make", "Type it into the prompt in Properties."); return; }
-        return this._paintAsk(rec, kind, opts);
+        if ((kind === "fill" || kind === "edit") && !String(opts.prompt || "").trim()) {
+            notice("warn", kind === "fill" ? "Say what to make" : "Say what to change", "Type it into the prompt in Properties.");
+            return;
+        }
+        return this._paintRun(rec, kind, opts);
+    },
+
+    /** Ops on the session (the page's document synced first), the result taken back as ONE undo step. */
+    async _paintApplyOps(rec, ops, label) {
+        const ed = rec.editor;
+        try {
+            const s = await this._paintSync(rec);
+            await postJson("/imageviewer/paint/save", { token: rec.token, meta: s.meta, keep: s.keep, write: false });
+            await postJson("/imageviewer/paint/doc", { doc: rec.token, ops, write: false, from: "page" });
+            const d = await this._paintDescribe(rec);
+            const data = await this._paintLoad(rec.token, d.doc, d.selection);
+            ed.replaceWith(data, label);
+            return true;
+        } catch (e) { notice("error", label + " did not work", String(e.message || e)); return false; }
+    },
+
+    // ── Generate's workflows ─────────────────────────────────────────────────
+
+    /** The workflows table (GET /imageviewer/paint/workflows), kept until a choice changes. */
+    async _paintWorkflows(fresh = false) {
+        if (this._paintWf && !fresh) return this._paintWf;
+        try {
+            const res = await api.fetchApi("/imageviewer/paint/workflows");
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            this._paintWf = await res.json();
+        } catch (_) { this._paintWf = this._paintWf || null; }
+        return this._paintWf;
+    },
+
+    /** What a Generate button runs, for its tooltip ("" while the table is not here). */
+    _paintWfLabel(kind) {
+        const a = this._paintWf && this._paintWf.actions && this._paintWf.actions[kind];
+        if (!a) { this._paintWorkflows(); return ""; }
+        if (a.choice === "agent") return "agentY builds a workflow";
+        if (a.choice === "custom") return (a.custom && a.custom.name) || "My workflow";
+        const w = a.workflows.find((x) => x.id === a.choice);
+        return w ? w.label : a.choice;
+    },
+
+    /** Generate > Workflows…: which workflow each action runs (the same choice as in Settings). */
+    async paintWorkflowsDialog(rec) {
+        const ed = rec && rec.editor;
+        if (!ed) return;
+        const t = await this._paintWorkflows(true);
+        if (!t) { notice("error", "The workflows are not here", "This ComfyUI's viewer is older than the page."); return; }
+        const fields = [];
+        for (const [a, info] of Object.entries(t.actions)) {
+            const opts = info.workflows.map((w) => ({ value: w.id, label: w.label + (w.missing.length ? " - missing " + w.missing.length : "") }));
+            if (info.custom) opts.push({ value: "custom", label: "My workflow: " + (info.custom.name || "custom") });
+            opts.push({ value: "agent", label: "agentY builds one" });
+            fields.push([a, info.label, info.choice, opts]);
+        }
+        ed.dialog("Generate workflows", fields, async (v) => {
+            try {
+                for (const [a, info] of Object.entries(t.actions)) {
+                    if (v[a] && v[a] !== info.choice) await postJson("/imageviewer/paint/workflows", { action: a, choice: v[a] });
+                }
+                await this._paintWorkflows(true);
+                ed.refreshProps && ed.refreshProps();
+            } catch (e) { notice("error", "Not changed", String(e.message || e)); }
+        }, "Your own workflows are added in Settings \u203a ComfyUI Image Viewer \u203a Paint.");
+    },
+
+    /** Run the workflow picked for *kind*: prepared by the server, queued here, the pictures laid back as layers. */
+    async _paintRun(rec, kind, opts) {
+        const t = await this._paintWorkflows();
+        const a = t && t.actions && t.actions[kind];
+        if (!t || (a && a.choice === "agent")) return this._paintAsk(rec, kind, opts);
+        rec.genBusy = (rec.genBusy || 0) + 1;
+        let prep;
+        try {
+            const s = await this._paintSync(rec);
+            await postJson("/imageviewer/paint/save", { token: rec.token, meta: s.meta, keep: s.keep, write: false });
+            prep = await postJson("/imageviewer/paint/generate", { token: rec.token, action: kind, prompt: opts.prompt || "",
+                                                                  workflow: opts.workflow || null, k: Number(opts.k) || 2,
+                                                                  variations: kind === "upscale" ? 1 : Math.max(1, Math.min(4, Number(opts.variations) || 1)) });
+        } catch (e) {
+            rec.genBusy = Math.max(0, (rec.genBusy || 1) - 1);
+            const miss = e.data && e.data.missing;
+            if (miss && miss.length) {
+                notice("error", "The workflow needs what is not here",
+                       miss.map((m) => (m.kind === "model" ? `${m.what} (${m.folder})` : `node ${m.what}`)).join(", ") + " - pick another in Generate \u203a Workflows\u2026");
+            } else notice("error", "Generate did not start", String(e.message || e));
+            return;
+        }
+        notice("info", prep.label, `${prep.workflow} at ${prep.size[0]}x${prep.size[1]}` + (prep.graphs.length > 1 ? `, ${prep.graphs.length} variations` : "")
+               + " - it comes back as a new layer.");
+        const ops = [];
+        let failed = null;
+        try {
+            // Each one listened for from the moment it is queued: a later one may well finish first.
+            const runs = [];
+            for (const g of prep.graphs) {
+                const id = await this._paintQueue(g);
+                const w = this._paintWait(id, prep.output);
+                w.catch(() => {});
+                runs.push(w);
+            }
+            for (let i = 0; i < runs.length; i++) {
+                let img;
+                try { img = await runs[i]; }
+                catch (e) { failed = failed || e; continue; }
+                const placed = await postJson("/imageviewer/paint/generate_place", { job: prep.job, image: img, n: i });
+                ops.push(...placed.ops);
+            }
+        } catch (e) { failed = failed || e; }
+        rec.genBusy = Math.max(0, (rec.genBusy || 1) - 1);
+        if (!ops.length) { notice("error", prep.label + " did not work", String((failed && failed.message) || failed || "no picture came back")); return; }
+        if (!rec.editor || !rec.editor.doc) return;           // the tab was closed meanwhile
+        if (failed) notice("warn", "Not every variation came back", String(failed.message || failed));
+        await this._paintApplyOps(rec, ops, prep.label);
+    },
+
+    /** One API graph into ComfyUI's queue: its prompt id. */
+    async _paintQueue(graph) {
+        const r = await api.queuePrompt(0, { output: graph, workflow: {} });
+        const id = r && (r.prompt_id || r.promptId);
+        if (!id) {
+            const errs = r && r.node_errors && Object.values(r.node_errors).map((x) => (x.errors || []).map((y) => y.message).join(", ")).join("; ");
+            throw new Error(errs || "ComfyUI did not take the workflow");
+        }
+        return id;
+    },
+
+    /** The first picture of the output node of prompt *id*, when it has run: { filename, subfolder, type }. */
+    _paintWait(id, outNode) {
+        return new Promise((resolve, reject) => {
+            let over = false, timer = null;
+            const pick = (out) => {
+                const im = out && out.images && out.images[0];
+                return im && im.filename ? { filename: im.filename, subfolder: im.subfolder || "", type: im.type || "output" } : null;
+            };
+            const end = (fn, v) => {
+                if (over) return;
+                over = true;
+                clearInterval(timer);
+                for (const [n, f] of hooks) api.removeEventListener(n, f);
+                fn(v);
+            };
+            const fromHistory = async () => {
+                try {
+                    const res = await api.fetchApi(`/history/${encodeURIComponent(id)}`);
+                    if (!res.ok) return false;
+                    const h = (await res.json())[id];
+                    if (!h) return false;
+                    const im = pick(h.outputs && h.outputs[outNode]);
+                    if (im) { end(resolve, im); return true; }
+                    const st = h.status || {};
+                    if (st.completed || st.status_str === "error") {
+                        const msg = (st.messages || []).find((m) => m[0] === "execution_error");
+                        end(reject, new Error(msg ? msg[1].exception_message : "the workflow gave no picture"));
+                        return true;
+                    }
+                } catch (_) { /* asked again */ }
+                return false;
+            };
+            const hooks = [
+                ["executed", (e) => { const d = e.detail || {}; if (d.prompt_id === id && String(d.node) === String(outNode)) { const im = pick(d.output); if (im) end(resolve, im); } }],
+                ["execution_error", (e) => { const d = e.detail || {}; if (d.prompt_id === id) end(reject, new Error(d.exception_message || "the workflow failed")); }],
+                ["execution_interrupted", (e) => { const d = e.detail || {}; if (d.prompt_id === id) end(reject, new Error("stopped")); }],
+                ["execution_success", (e) => { const d = e.detail || {}; if (d.prompt_id === id) fromHistory(); }],
+            ];
+            for (const [n, f] of hooks) api.addEventListener(n, f);
+            timer = setInterval(fromHistory, 5000);     // a message missed (the socket reconnected): ComfyUI's history knows
+        });
     },
 
     /** The session's document as the server has it now: { doc, selection, path }. */
@@ -530,6 +693,8 @@ export const PaintPanelMixin = {
                 + `${call('{"op": "select", "mode": "file", "file": <matte>}')}.`,
             extend: `Extend the picture: outpaint the selected border so that it continues the picture${prompt ? ` (${prompt})` : ""}, then put `
                 + `the result back with ${call('{"op": "add_layer", "file": <result>, "name": "Extended", "mask": "selection", "below": "active"}')}.`,
+            edit: `Edit the picture as the prompt says: "${prompt}"${snap.selection ? " (only inside the selection)" : ""}. Use the picture's own size `
+                + `(${snap.w}x${snap.h}), then put the result back with ${call(`{"op": "add_layer", "file": <result>, "name": "Edit", "fit": "cover"${snap.selection ? ', "mask": "selection"' : ""}}`)}.`,
             upscale: `Upscale ${k}x with detail: run an upscale workflow on the picture, then `
                 + `${call(`{"op": "resize", "scale": ${k}}`, '{"op": "add_layer", "file": <result>, "name": "Upscaled"}')}.`,
         }[kind];

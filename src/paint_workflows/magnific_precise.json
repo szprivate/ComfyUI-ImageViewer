@@ -1,0 +1,39 @@
+{
+ "1": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "paint/in.png"
+  },
+  "_meta": {
+   "title": "paint:image"
+  }
+ },
+ "2": {
+  "class_type": "MagnificImageUpscalerPreciseV2Node",
+  "inputs": {
+   "scale_factor": "2x",
+   "flavor": "photo",
+   "sharpen": 7,
+   "smart_grain": 7,
+   "ultra_detail": 30,
+   "auto_downscale": true,
+   "image": [
+    "1",
+    0
+   ]
+  }
+ },
+ "3": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "paint/generate",
+   "images": [
+    "2",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "paint:output"
+  }
+ }
+}

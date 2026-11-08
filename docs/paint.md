@@ -128,7 +128,21 @@ The **Filter** menu works on every picked pixel layer, and only inside the selec
 
 ## Generate
 
-The **Generate** menu: **Fill from the surroundings**, **Extend the canvas** and **Upscale** work right here. **Generative fill**, **Remove object**, **Remove background** and **Select subject** ask agentY and put its answer back as one undo step.
+The **Generate** menu and the Generate part of Properties. **Fill from the surroundings**, a plain **Extend the canvas** and a plain **Upscale** work right here. **Generative fill**, **Remove object**, **Edit** (with the prompt, in the selection or on the whole picture), **Remove background**, **Select subject**, and Extend / Upscale with a workflow each run a ready-made ComfyUI workflow:
+
+- the part around the selection is cut out (with some room around it), scaled to the size the model works at, and queued in ComfyUI with a new seed each time;
+- the result comes back as a **new layer** at that place, masked to the selection, as one undo step (Remove background gives the layer a mask, Select subject makes the selection);
+- **Variations** (1 to 4) makes that many layers;
+- if a model the workflow needs is not on the machine, it says which and runs nothing.
+
+| Action | Comes with |
+|---|---|
+| Generative fill, Remove object, Extend | FLUX.1 Fill dev (also GPT Image 2 inpaint; OneReward removal for Remove) |
+| Edit | FLUX.1 Kontext (also GPT Image 2.5, Nano Banana 2) |
+| Remove background, Select subject | RMBG 2.0 |
+| Upscale | an upscale model (also Magnific) |
+
+**Generate › Workflows…** picks which one each action runs. **Settings › ComfyUI Image Viewer › Paint › Generate workflows** does the same and lets you put **your own** in place of one: **Use the canvas** takes the workflow on the canvas now, **Load API file…** a workflow saved with *Export (API)*. Name its nodes `paint:image` (Load Image), `paint:mask` (Load Image (as Mask), optional), `paint:prompt` (where the words go) and `paint:output` (Save or Preview Image); without those names the first Load Image, the positive prompt and the last Save Image are used. Your workflows are kept on the ComfyUI machine in `~/.comfyui_image_viewer/paint_workflows/`. The choice **agentY builds one** asks agentY instead, as before.
 
 ## Saving
 
