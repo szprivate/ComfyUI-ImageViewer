@@ -41,6 +41,8 @@ Its three panels, **Layers**, **Properties** and **History**, show only on a Pai
 
 <kbd>X</kbd> swaps the two colours, <kbd>D</kbd> resets them.
 
+On a big picture (more than about two million pixels) seen smaller than half its size, moving or transforming a layer, dragging a gradient and pulling a slider show a quick preview at about the screen's resolution while you drag. The full picture is drawn as soon as you let go, or when a slider stays still for a moment.
+
 ## Brush tips
 
 The brush and the eraser can paint with a picture as their tip instead of a round dab. The tips are in the tool's Properties:

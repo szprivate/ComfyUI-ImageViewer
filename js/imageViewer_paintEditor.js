@@ -25,6 +25,7 @@ import { LayerFxMixin } from "./imageViewer_paintLayerFx.js";
 import { SelectGuidesMixin, RULER_PX } from "./imageViewer_paintSelect.js";
 import { SmartMixin } from "./imageViewer_paintSmart.js";
 import { LiquifyMixin } from "./imageViewer_paintLiquify.js";
+import { PreviewMixin } from "./imageViewer_paintPreview.js";
 import { PathToolsMixin, PATH_TOOLS, TOOL_GROUPS, toolGroup } from "./imageViewer_paintPathTools.js";
 
 /** A dialog slider's step for the range a..b: about a thousand steps, a whole number where the range is wide. */
@@ -126,6 +127,10 @@ const STYLE = `
   background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0; box-shadow: 0 0 0 1px #000, 0 4px 24px rgba(0,0,0,.5); }
 .paint-world.pixelated canvas.paint-canvas, .paint-world.pixelated canvas.paint-tint { image-rendering: pixelated; }
 .paint-world canvas.paint-tint { position: absolute; left: 0; top: 0; pointer-events: none; display: none; }
+.paint-world canvas.paint-preview { position: absolute; left: 0; top: 0; pointer-events: none; display: none; background-color: #fff;
+  background-image: linear-gradient(45deg, #ccc 25%, transparent 25%), linear-gradient(-45deg, #ccc 25%, transparent 25%),
+  linear-gradient(45deg, transparent 75%, #ccc 75%), linear-gradient(-45deg, transparent 75%, #ccc 75%);
+  background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0; }
 .paint-btn.quick.on { color: #f66; }
 .paint-overlay { position: absolute; left: 0; top: 0; pointer-events: none; }
 .paint-status { flex: 0 0 auto; display: flex; gap: 14px; padding: 2px 8px; background: #1d1d21; border-top: 1px solid #2b2b30; color: #999; font-size: 11px; white-space: nowrap; overflow: hidden; }
@@ -388,6 +393,7 @@ class PaintEditor {
 
     /** A document from its description and pixels: { doc, pix: {id: Uint8ClampedArray}, masks: {id: Uint8Array}, selection }. */
     setDocument(data, { keepView = false, fresh = true } = {}) {
+        this._belowKept = null;
         this.doc = D.cleanDoc(data.doc);
         this.pix = new Map(Object.entries(data.pix || {}));
         this.masks = new Map(Object.entries(data.masks || {}));
@@ -464,6 +470,11 @@ class PaintEditor {
         const r = rect ? { x0: clamp(Math.floor(rect.x0), 0, W), y0: clamp(Math.floor(rect.y0), 0, H),
                            x1: clamp(Math.ceil(rect.x1), 0, W), y1: clamp(Math.ceil(rect.y1), 0, H) } : { x0: 0, y0: 0, x1: W, y1: H };
         if (r.x1 <= r.x0 || r.y1 <= r.y0) return;
+        if (!rect) {
+            this._previewHide();
+            // A whole redraw asked for at the next frame is this one.
+            if (this._raf && this._pending === null) { this.d.defaultView.cancelAnimationFrame(this._raf); this._raf = 0; this._pending = undefined; }
+        }
         if (this.below && this._belowIdx != null) {
             // While a stroke runs: what is under the layer is kept; lay it and the layers above.
             for (let y = r.y0; y < r.y1; y++) this.comp.set(this.below.subarray((y * W + r.x0) * 4, (y * W + r.x1) * 4), (y * W + r.x0) * 4);
@@ -558,8 +569,12 @@ class PaintEditor {
         this.setSelection(out, fromMask ? "Select the mask" : "Select layer");
     }
 
-    /** Draw again at the next frame (sliders, drags). */
-    requestRedraw(rect = null) {
+    /**
+     * Draw again at the next frame (sliders, drags). A whole redraw during a live edit or a drag on a big
+     * picture is laid as the quick preview instead (`force`: always in full).
+     */
+    requestRedraw(rect = null, force = false) {
+        if (rect === null && !force && this._previewWanted()) { this.requestPreview(); return; }
         this._pending = this._pending === undefined ? rect : (this._pending === null || rect === null ? null : rectUnion(this._pending, rect));
         if (this._raf) return;
         this._raf = this.d.defaultView.requestAnimationFrame(() => {
@@ -575,8 +590,30 @@ class PaintEditor {
         // A clipped layer is laid with its base: no cache either.
         if (L.parent || L.clip) { this._dropBelow(); return; }
         const i = D.layerIndex(this.doc, L.id);
-        this.below = D.composite(this.doc, this._pixOf, this._maskOf, null, null, { to: i });
+        // The last stroke's picture of what was under its layer, when nothing under this one has changed
+        // since (the layers' settings, their buffers and the buffers' versions): on a big picture laying it
+        // again took most of a second at every press.
+        const sig = this._belowSig(i), kept = this._belowKept;
+        this.below = kept && kept.sig === sig ? kept.below : D.composite(this.doc, this._pixOf, this._maskOf, null, null, { to: i });
         this._belowIdx = i;
+        this._belowKept = { sig, below: this.below };
+    }
+
+    /** What the picture under flat index i is made of, as a string (buffers by identity and version). */
+    _belowSig(i) {
+        const ids = this._bufIds || (this._bufIds = new WeakMap());
+        const idOf = (b) => {
+            if (!b) return "-";
+            let v = ids.get(b);
+            if (!v) { v = this._bufN = (this._bufN || 0) + 1; ids.set(b, v); }
+            return `${v}.${this.bufVer.get(b) || 0}`;
+        };
+        const parts = [this.doc.w, this.doc.h, i];
+        for (let j = 0; j < i; j++) {
+            const L = this.doc.layers[j];
+            parts.push(JSON.stringify(L), idOf(this.pix.get(L.id)), idOf(this.masks.get(L.id)));
+        }
+        return parts.join("|");
     }
 
     _dropBelow() { this.below = null; this._belowIdx = null; }
@@ -896,6 +933,7 @@ class PaintEditor {
     }
 
     _restore(s) {
+        this._belowKept = null;
         this.doc = JSON.parse(JSON.stringify(s.doc));
         this.pix = new Map(s.pix);
         this.masks = new Map(s.masks);
@@ -930,6 +968,7 @@ class PaintEditor {
     liveEnd(label) {
         const before = this._liveSnap;
         this._liveSnap = null;
+        this._previewSettle();
         if (!before) return;
         const after = this._snap();
         if (JSON.stringify(before.doc) === JSON.stringify(after.doc)) return;
@@ -1869,6 +1908,7 @@ class PaintEditor {
     _up(e) {
         const dr = this._drag;
         this._drag = null;
+        this._previewSettle();
         if (this.wrap.hasPointerCapture && this.wrap.hasPointerCapture(e.pointerId)) this.wrap.releasePointerCapture(e.pointerId);
         if (!dr) return;
         if (dr.kind === "pan") { this.setTool(this.tool); return; }
@@ -2342,6 +2382,15 @@ class PaintEditor {
         if (!tf) return;
         if (this._tfRaf) { this.d.defaultView.cancelAnimationFrame(this._tfRaf); this._tfRaf = 0; }
         const { L, src, p } = tf;
+        if (!smooth && !D.tfIsMove(p) && this._drag && this._drag.kind === "tf" && this._previewK() > 1) {
+            // Dragged on a big picture: only the preview, at 1/k (the layer itself when let go).
+            this._previewTransform(tf);
+            tf.smooth = false;
+            this.drawOverlay();
+            this._tfFieldsRefresh();
+            return;
+        }
+        this._pvOver = null;
         if (D.tfIsMove(p)) {
             const x = Math.round(p.tx - p.cx), y = Math.round(p.ty - p.cy);
             this.pix.set(L.id, src.px);
@@ -3651,7 +3700,7 @@ class PaintEditor {
     }
 }
 
-Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin, TipsMixin, DrawMixin, LayerFxMixin, SelectGuidesMixin, SmartMixin, LiquifyMixin, PathToolsMixin);
+Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin, TipsMixin, DrawMixin, LayerFxMixin, SelectGuidesMixin, SmartMixin, LiquifyMixin, PathToolsMixin, PreviewMixin);
 
 // Lucide's rotate-cw, white on black, as the pointer outside a transform's box.
 const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><g stroke="#000" stroke-width="4"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g><g stroke="#fff" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g></svg>')}") 12 12, alias`;

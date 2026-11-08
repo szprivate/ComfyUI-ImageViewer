@@ -1183,6 +1183,91 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(own(110, 60), start)
         self.assertEqual(self.errors, [])
 
+    def test_big_picture_previews_while_dragging_and_draws_in_full_when_let_go(self):
+        pg = self.page()
+        pg.evaluate("() => __panel.paintNewBlank({ w: 4000, h: 3000, fill: 'white' })")
+        pg.wait_for_function("() => { const r = __panel._paintActive(); return r && r.editor && r.editor.doc && r.editor.doc.w === 4000; }", timeout=15000)
+        ed = self.ED
+        pg.evaluate(f"() => {ed}.fit()")
+        self.assertGreater(pg.evaluate(f"() => {ed}._previewK()"), 1)
+        scr = lambda x, y: pg.evaluate(f"() => {{ const r = {ed}.wrap.getBoundingClientRect(), v = {ed}.view; return [r.left + v.x + {x} * v.zoom, r.top + v.y + {y} * v.zoom]; }}")
+        comp = lambda x, y: pg.evaluate(f"() => [...{ed}.comp.slice(({y} * 4000 + {x}) * 4, ({y} * 4000 + {x}) * 4 + 4)]")
+        # The preview canvas's pixel at picture (x, y).
+        prev = lambda x, y: pg.evaluate(f"""() => {{ const e = {ed}, c = e._pvCanvas, k = c.width / e.doc.w;
+            return [...c.getContext('2d').getImageData(Math.floor({x} * k), Math.floor({y} * k), 1, 1).data]; }}""")
+        shown = lambda: pg.evaluate(f"() => !!{ed}._pvShown && {ed}._pvCanvas.style.display === 'block'")
+        # A red square on a layer of its own.
+        pg.evaluate(f"""() => {{ const e = {ed}, b = new Uint8ClampedArray(1000 * 1000 * 4);
+            for (let i = 0; i < 1000 * 1000; i++) b.set([255, 0, 0, 255], i * 4);
+            e.addPixelLayer(b, 1000, 1000, 'sq', 1000, 1000); }}""")
+        pg.wait_for_timeout(100)
+        n = pg.evaluate(f"() => {ed}.undoStack.length")
+        # The move tool: while dragged the preview follows the pointer, the canvas is not laid again.
+        pg.evaluate(f"() => {ed}.setTool('move')")
+        pg.mouse.move(*scr(1500, 1500)); pg.mouse.down()
+        pg.mouse.move(*scr(1800, 1500), steps=4); pg.mouse.move(*scr(2000, 1500), steps=2)
+        pg.wait_for_timeout(120)
+        self.assertTrue(shown())
+        self.assertEqual(prev(2400, 1500)[:3], [255, 0, 0])
+        self.assertEqual(prev(1200, 1500)[:3], [255, 255, 255])
+        self.assertEqual(comp(1200, 1500)[:3], [255, 0, 0])        # the full canvas is not drawn while dragging
+        pg.mouse.up()
+        pg.wait_for_function(f"() => !{ed}._pvShown", timeout=5000)
+        pg.keyboard.press("Enter")
+        pg.wait_for_timeout(100)
+        self.assertEqual(pg.evaluate(f"() => [{ed}.active().x, {ed}.undoStack.length, {ed}.undoStack.at(-1).label]"), [1500, n + 1, "Move"])
+        self.assertEqual(comp(2400, 1500)[:3], [255, 0, 0])
+        self.assertEqual(comp(1200, 1500)[:3], [255, 255, 255])
+        # The free transform: the preview turns, the layer is resampled once, when let go.
+        pg.keyboard.press("Control+t")
+        self.assertTrue(pg.evaluate(f"() => !!{ed}.tf"))
+        pg.mouse.move(*scr(2700, 900)); pg.mouse.down()
+        pg.mouse.move(*scr(3200, 1500), steps=5)
+        pg.wait_for_timeout(120)
+        self.assertTrue(shown())
+        self.assertEqual(pg.evaluate(f"() => [{ed}.active().w, {ed}.tf.smooth]"), [1000, False])   # not resampled yet
+        pg.mouse.up()
+        pg.wait_for_function(f"() => !{ed}._pvShown", timeout=5000)
+        self.assertGreater(pg.evaluate(f"() => {ed}.active().w"), 1100)
+        pg.keyboard.press("Enter")
+        pg.wait_for_timeout(100)
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Transform")
+        # The gradient: seen while dragged (nothing was drawn until let go), applied in full when let go.
+        pg.evaluate(f"""() => {{ const e = {ed}; e.addPixelLayer(new Uint8ClampedArray(4000 * 3000 * 4), 4000, 3000, 'g');
+            e.fg = [0, 255, 0]; e.bg = [0, 0, 255]; e.setTool('gradient'); }}""")
+        pg.wait_for_timeout(100)
+        pg.mouse.move(*scr(500, 2500)); pg.mouse.down(); pg.mouse.move(*scr(3500, 2500), steps=5)
+        pg.wait_for_timeout(120)
+        self.assertTrue(shown())
+        self.assertEqual(prev(100, 2500)[:3], [0, 255, 0])
+        self.assertEqual(prev(3900, 2500)[:3], [0, 0, 255])
+        self.assertEqual(comp(100, 2500)[:3], [255, 255, 255])
+        pg.mouse.up()
+        pg.wait_for_function(f"() => !{ed}._pvShown", timeout=8000)
+        pg.wait_for_timeout(100)
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Gradient")
+        self.assertEqual(comp(100, 2500)[:3], [0, 255, 0])
+        self.assertEqual(comp(3900, 2500)[:3], [0, 0, 255])
+        # A slider (the layer's opacity): the preview while it moves, the full picture once it rests.
+        pg.evaluate(f"() => {{ const e = {ed}; e.liveBegin(); e.active().opacity = 0.5; e.requestRedraw(); }}")
+        pg.wait_for_timeout(80)
+        self.assertTrue(shown())
+        g = prev(100, 2500)
+        self.assertTrue(120 < g[0] < 135 and g[1] == 255, g)
+        pg.wait_for_function(f"() => !{ed}._pvShown", timeout=5000)
+        self.assertTrue(120 < comp(100, 2500)[0] < 135)
+        pg.evaluate(f"() => {ed}.liveEnd('Opacity')")
+        # A stroke keeps what is under its layer; the next stroke on it takes it again without laying it.
+        pg.evaluate(f"() => {{ const e = {ed}; e.setTool('brush'); Object.assign(e.opts.brush, {{ size: 40, hardness: 100 }}); }}")
+        for y in (500, 700):
+            pg.mouse.move(*scr(500, y)); pg.mouse.down(); pg.mouse.move(*scr(900, y), steps=3); pg.mouse.up()
+            pg.wait_for_timeout(60)
+            if y == 500:
+                first = pg.evaluate(f"() => {{ window.__below = {ed}._belowKept.below; return !!window.__below; }}")
+        self.assertTrue(first)
+        self.assertTrue(pg.evaluate(f"() => {ed}._belowKept.below === window.__below"))
+        self.assertEqual(self.errors, [])
+
     def test_filter_dialog_adjustment_and_smart_filter_sliders_preview_while_dragged(self):
         pg = self.page()
         self.open_photo(pg)
