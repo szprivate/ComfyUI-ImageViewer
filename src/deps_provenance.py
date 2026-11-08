@@ -407,3 +407,118 @@ def param_index(graph: dict) -> list[dict]:
         if str(node["class_type"]).startswith("CLIPTextEncode") and isinstance(inputs.get("text"), str):
             add(_entry(graph, nid, "text", inputs["text"], "text", "prompt"))
     return entries
+
+
+# ── the models a file was made with (the Dependencies tab's caption) ─────────
+# Viewer-only: agentY-core keeps the same values in ``provenance.models`` / ``partner`` of the sidecar,
+# but for every node of the graph; here only the nodes that fed the file's own output count.
+
+_MAIN_INPUT = re.compile(r"(?i)^(ckpt_name|unet_name|model_name|diffusion_model|model_path)$")
+_LORA_INPUT = re.compile(r"(?i)^lora_name(_\d+)?$")
+_UPSCALE_INPUT = re.compile(r"(?i)^upscale_model(_name)?$")
+_AUX_INPUT = re.compile(r"(?i)^(vae_name|clip_name\d*|text_encoder\d*|clip_vision_name|control_?net_name|"
+                        r"style_model_name|gligen_name)$")
+_PARTNER_CLASS = re.compile(        # agentY-core utils.provenance._PARTNER_CLASS
+    r"^(Kling|Veo|Runway|Luma|Pika|Pixverse|Vidu|Minimax|MiniMax|Moonvalley|Recraft|Ideogram|Stability|"
+    r"BFL|Flux\w*(?:Pro|Ultra|Kontext)|OpenAI|GPTImage|Dalle|Gemini|NanoBanana|ByteDance|Bytedance|"
+    r"Seedance|Seedream|Sora|Grok|Tripo|Rodin|Meshy|ElevenLabs|Magnific|Topaz|Hitpaw|Reve[A-Z_]|"
+    r"Higgsfield|Wavespeed|Sonilo|Veed|Quiver|Hunyuan3D\w*Api)")
+_PARTNER_API = re.compile(r"(?:[a-z0-9]Api|^Api)")
+_PARTNER_NOT = re.compile(r"(?i)^(VHS_|Load|Save|Preview|GetVideo|CreateVideo|SaveVideo|Primitive|Note|Reroute)")
+_PARTNER_MODEL = ("model", "model_name", "model_version", "model_id", "version")
+_ROLE_ORDER = {"partner": 0, "model": 0, "upscale": 1, "lora": 2, "aux": 3}
+_MODELS_CACHE: dict = {}
+_MODELS_CACHE_MAX = 512
+
+
+def is_partner_class(class_type: str) -> bool:
+    ct = str(class_type or "")
+    if not ct or _PARTNER_NOT.match(ct):
+        return False
+    return bool(_PARTNER_CLASS.search(ct) or _PARTNER_API.search(ct))
+
+
+def _model_name(value: str) -> str:
+    """``flux1-dev`` for ``FLUX/flux1-dev.safetensors``."""
+    base = re.split(r"[\\/]", str(value).strip())[-1]
+    stem, ext = os.path.splitext(base)
+    return stem if ext.lower() in _MODEL_EXT else base
+
+
+def _upstream(graph: dict, start: str) -> list[str]:
+    nodes = {nid: inputs for nid, _n, inputs in _nodes(graph)}
+    if start not in nodes:
+        return list(nodes)
+    seen, order, queue = {start}, [start], [start]
+    while queue:
+        for v in nodes.get(queue.pop(0), {}).values():
+            if _is_link(v) and str(v[0]) in nodes and str(v[0]) not in seen:
+                seen.add(str(v[0]))
+                order.append(str(v[0]))
+                queue.append(str(v[0]))
+    return order
+
+
+def graph_models(graph: dict, output_node: str = "") -> list[dict]:
+    """The models of an API graph that fed *output_node* (every node when it is unknown):
+    ``[{"name", "role", "node", "class", "value"}]``, ``role`` one of ``model`` (a checkpoint,
+    UNet, diffusion model), ``partner`` (an API node: its ``model`` input, else its class),
+    ``upscale``, ``lora``, ``aux`` (VAE, text encoders, ControlNets ...); main ones first."""
+    by_id = {nid: (node, inputs) for nid, node, inputs in _nodes(graph)}
+    out: list[dict] = []
+    seen: set = set()
+
+    def add(name, role, nid, ct, value):
+        if not name or (role, name) in seen:
+            return
+        seen.add((role, name))
+        out.append({"name": name[:120], "role": role, "node": nid, "class": ct, "value": str(value)[:240]})
+
+    for nid in _upstream(graph, str(output_node or "")):
+        node, inputs = by_id.get(nid, ({}, {}))
+        ct = str(node.get("class_type") or "")
+        if is_partner_class(ct):
+            pick = next((inputs[k] for k in _PARTNER_MODEL if isinstance(inputs.get(k), str) and inputs[k].strip()), "")
+            add(pick.strip() if pick else re.sub(r"(Node|Api)$", "", ct), "partner", nid, ct, pick or ct)
+            continue
+        for name, v in inputs.items():
+            if _is_link(v) or not isinstance(v, str) or not v.strip():
+                continue
+            short = str(name).rsplit(".", 1)[-1]
+            if _LORA_INPUT.match(short):
+                role = "lora"
+            elif _UPSCALE_INPUT.match(short) or (short == "model_name" and "upscale" in ct.lower()):
+                role = "upscale"
+            elif _MAIN_INPUT.match(short):
+                role = "model"
+            elif _AUX_INPUT.match(short) or v.lower().endswith(_MODEL_EXT):
+                role = "aux"
+            else:
+                continue
+            if v.strip().lower() in ("none", "baked vae"):
+                continue
+            add(_model_name(v), role, nid, ct, v)
+    out.sort(key=lambda m: _ROLE_ORDER.get(m["role"], 9))
+    return out[:24]
+
+
+def models_of(path) -> list[dict]:
+    """:func:`graph_models` of the graph *path* was made with (``[]`` without one). Cached by the
+    file's size and time, so a Dependencies tab redrawn does not read every graph again."""
+    p = str(path)
+    try:
+        st = os.stat(p)
+        key = (p, st.st_mtime_ns, st.st_size)
+    except OSError:
+        return []
+    if key in _MODELS_CACHE:
+        return _MODELS_CACHE[key]
+    try:
+        got = provenance_of(p)
+        out = graph_models(got.get("graph") or {}, got.get("output_node") or "") if got.get("found") else []
+    except Exception:  # noqa: BLE001 - a caption is never worth failing the tab
+        out = []
+    if len(_MODELS_CACHE) >= _MODELS_CACHE_MAX:
+        _MODELS_CACHE.clear()
+    _MODELS_CACHE[key] = out
+    return out

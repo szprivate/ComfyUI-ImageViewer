@@ -20,7 +20,7 @@
 // a file saved by any node that embeds its graph (Save Image, Save Video ...) is worked out the first time it is
 // looked at. Data comes from POST /imageviewer/deps (src/deps_graph.py), read in ComfyUI itself.
 import { api } from "../../scripts/api.js";
-import { layout, edgePath, applyPlacement } from "./imageViewer_depsLayout.js";
+import { layout, edgePath, applyPlacement, depsMediaOf, depsModelCaption } from "./imageViewer_depsLayout.js";
 
 export const DEPS_PREFIX = "deps:";
 const baseOf = (p) => String(p || "").split(/[\\/]/).pop();
@@ -282,7 +282,12 @@ export const DepsPanelMixin = {
             img.loading = "lazy";
             img.draggable = false;
             img.src = api.apiURL(`/imageviewer/thumb?path=${encodeURIComponent(n.id)}`);
-            img.onerror = () => { img.remove(); thumb.textContent = KIND_ICON[n.kind] || "\u{1F4C4}"; };
+            img.onerror = () => {   // an icon in its place; the frame's caption stays
+                const icon = doc.createElement("span");
+                icon.className = "dp-thumb-icon";
+                icon.textContent = KIND_ICON[n.kind] || "\u{1F4C4}";
+                img.replaceWith(icon);
+            };
             thumb.append(img);
         } else {
             thumb.textContent = KIND_ICON[n.kind] || "\u{1F4C4}";
@@ -293,8 +298,29 @@ export const DepsPanelMixin = {
         const meta = doc.createElement("div");
         meta.className = "dp-meta";
         meta.textContent = n.fold ? "click to unfold" : [n.kind, n.stale ? "out of date" : "", n.exists ? "" : "gone"].filter(Boolean).join(" · ");
+        // A coloured frame round the picture says still or film; its caption, the model the file was made with.
+        const media = n.fold ? "" : depsMediaOf(n.file || n.id);
+        const caption = depsModelCaption(n.models);
+        if (media) {
+            thumb.classList.add("dp-media", `dp-media-${media}`);
+            const cap = doc.createElement("div");
+            cap.className = "dp-caption";
+            const tag = doc.createElement("span");
+            tag.className = "dp-caption-tag";
+            tag.textContent = media === "video" ? "VIDEO" : "IMAGE";
+            cap.append(tag);
+            if (caption) {
+                const txt = doc.createElement("span");
+                txt.className = "dp-caption-model";
+                txt.textContent = caption;
+                cap.append(txt);
+            }
+            thumb.append(cap);
+        }
         el.append(thumb, label, meta);
-        el.title = n.fold ? `${n.count} ${n.kind} passes made from the same file` : [n.id, n.stale ? `Out of date: ${n.stale}` : ""].filter(Boolean).join("\n");
+        const modelLines = (n.models || []).map((m) => `${m.role === "aux" ? "uses" : m.role}: ${m.value || m.name}`);
+        el.title = n.fold ? `${n.count} ${n.kind} passes made from the same file`
+            : [n.id, n.stale ? `Out of date: ${n.stale}` : "", ...modelLines].filter(Boolean).join("\n");
         el.addEventListener("click", (e) => {
             e.stopPropagation();
             if (rec.ui && rec.ui.dragged) return;

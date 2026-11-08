@@ -98,3 +98,52 @@ class DepsGraphTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GraphModelsTests(unittest.TestCase):
+    """The models a file was made with: only what fed its own output, main ones first."""
+
+    def test_checkpoint_loras_and_aux_of_the_output_only(self):
+        g = {
+            "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "FLUX/flux1-dev.safetensors"}},
+            "2": {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}},
+            "3": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["1", 0], "lora_name": "style.safetensors"}},
+            "4": {"class_type": "KSampler", "inputs": {"model": ["3", 0], "seed": 1}},
+            "5": {"class_type": "VAEDecode", "inputs": {"samples": ["4", 0], "vae": ["2", 0]}},
+            "6": {"class_type": "SaveImage", "inputs": {"images": ["5", 0]}},
+            "7": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "sdxl.safetensors"}},
+            "8": {"class_type": "SaveImage", "inputs": {"images": ["7", 0]}},
+        }
+        got = dp.graph_models(g, "6")
+        self.assertEqual([(m["role"], m["name"]) for m in got],
+                         [("model", "flux1-dev"), ("lora", "style"), ("aux", "ae")])
+        self.assertIn("sdxl", [m["name"] for m in dp.graph_models(g, "")])   # output unknown: every node
+
+    def test_partner_nodes_name_their_model(self):
+        g = {
+            "1": {"class_type": "Veo3VideoGenerationNode", "inputs": {"prompt": "x", "model": "veo-3.0-generate-001"}},
+            "2": {"class_type": "SaveVideo", "inputs": {"video": ["1", 0]}},
+            "3": {"class_type": "KlingTextToVideoNode", "inputs": {"prompt": "y"}},
+            "4": {"class_type": "SaveVideo", "inputs": {"video": ["3", 0]}},
+        }
+        self.assertEqual([(m["role"], m["name"]) for m in dp.graph_models(g, "2")], [("partner", "veo-3.0-generate-001")])
+        self.assertEqual(dp.graph_models(g, "4")[0]["name"], "KlingTextToVideo")
+
+    def test_upscale_model_and_baked_vae(self):
+        g = {
+            "1": {"class_type": "UpscaleModelLoader", "inputs": {"model_name": "4x-UltraSharp.pth"}},
+            "2": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "a.ckpt", "vae_name": "Baked VAE"}},
+            "3": {"class_type": "ImageUpscaleWithModel", "inputs": {"upscale_model": ["1", 0], "image": ["2", 0]}},
+            "4": {"class_type": "SaveImage", "inputs": {"images": ["3", 0]}},
+        }
+        self.assertEqual([(m["role"], m["name"]) for m in dp.graph_models(g, "4")],
+                         [("model", "a"), ("upscale", "4x-UltraSharp")])
+
+    def test_models_of_reads_the_embedded_graph(self):
+        root = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        _rts, f = fx.build(root)
+        self.assertEqual([m["name"] for m in dp.models_of(f["render"])], ["flux"])
+        self.assertEqual(dp.models_of(f["plate"]), [])
+        self.assertEqual(dp.models_of(os.path.join(root, "nope.png")), [])
+

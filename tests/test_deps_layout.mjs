@@ -103,3 +103,19 @@ test("a moved / resized node keeps its box and its edges follow", async () => {
     const p = S.nodes.find((x) => x.id === "plate");
     assert.deepEqual([p.x, p.y, p.w, p.h], [0, 0, MIN_W, MIN_H], "held to the stage and a minimum size");
 });
+
+test("a node's frame: still or film by its extension, the main models as its caption", async () => {
+    const { depsMediaOf, depsModelCaption } = await import("../js/imageViewer_depsLayout.js");
+    assert.equal(depsMediaOf("C:\\out\\a.MP4"), "video");
+    assert.equal(depsMediaOf("/out/a.png"), "image");
+    assert.equal(depsMediaOf("/out/a.exr"), "image");
+    assert.equal(depsMediaOf("/out/a.wav"), "");
+    assert.equal(depsMediaOf("/out/a.glb"), "");
+    const m = (name, role) => ({ name, role, value: name });
+    assert.equal(depsModelCaption([m("flux1-dev", "model"), m("ae", "aux"), m("a", "lora"), m("b", "lora")]), "flux1-dev + 2 LoRA");
+    assert.equal(depsModelCaption([m("veo-3.0", "partner")]), "veo-3.0");
+    assert.equal(depsModelCaption([m("4x-UltraSharp", "upscale"), m("vae", "aux")]), "4x-UltraSharp");
+    assert.equal(depsModelCaption([m("x", "model"), m("y", "model"), m("z", "model")]), "x + y +1");
+    assert.equal(depsModelCaption([m("vae", "aux")]), "");
+    assert.equal(depsModelCaption(undefined), "");
+});

@@ -29,9 +29,12 @@ STUB = """() => {
   const graph = {root: 'D:/out/depth.mp4', truncated: false,
     nodes: [
       {id: 'D:/in/plate.mp4', file: 'plate.mp4', kind: 'source', exists: true, stale: '', viewable: false},
-      {id: 'D:/out/depth.mp4', file: 'depth.mp4', kind: 'depth', exists: true, stale: '', viewable: false, root: true},
+      {id: 'D:/out/depth.mp4', file: 'depth.mp4', kind: 'depth', exists: true, stale: '', viewable: false, root: true,
+       models: [{name: 'depth_anything_v2_vitl', role: 'model', value: 'depth_anything_v2_vitl.pth'}]},
       {id: 'D:/out/render.png', file: 'render.png', kind: 'render', exists: true,
        stale: 'plate.mp4 changed since this was made', viewable: false,
+       models: [{name: 'flux1-dev', role: 'model', value: 'flux1-dev.safetensors'}, {name: 'ae', role: 'aux', value: 'ae.safetensors'},
+                {name: 'style', role: 'lora', value: 'style.safetensors'}],
        prompts: [{role: 'positive', text: 'a kitchen at dawn, warm light through the window', node: '6', class: 'CLIPTextEncode'},
                  {role: 'negative', text: 'blurry', node: '7', class: 'CLIPTextEncode'}]},
       ...passes],
@@ -187,6 +190,24 @@ class DepsTabBrowserTests(unittest.TestCase):
           .find((b) => b.textContent === 'Tidy').click()""")
         tidy = pg.evaluate(box, 0)
         self.assertEqual((tidy["w"], tidy["h"]), (before["w"], before["h"]))
+        self.assertEqual(self.errors, [])
+
+    def test_frames_say_still_or_film_and_the_model(self):
+        pg = self.page()
+        got = pg.evaluate("""() => Object.fromEntries([...window.__panel.viewport.querySelectorAll('.view-tab-deps .dp-node:not(.dp-prompt):not(.fold)')]
+            .map((el) => { const t = el.querySelector('.dp-thumb'); const c = el.querySelector('.dp-caption');
+              return [el.querySelector('.dp-label').textContent, {
+                media: t.classList.contains('dp-media-video') ? 'video' : t.classList.contains('dp-media-image') ? 'image' : '',
+                caption: c ? c.textContent : null, border: getComputedStyle(t).borderTopColor, title: el.title}]; }))""")
+        self.assertEqual(got["plate.mp4"]["media"], "video")
+        self.assertEqual(got["plate.mp4"]["caption"], "VIDEO")
+        self.assertEqual(got["depth.mp4"]["caption"], "VIDEOdepth_anything_v2_vitl")
+        self.assertEqual(got["render.png"]["media"], "image")
+        self.assertEqual(got["render.png"]["caption"], "IMAGEflux1-dev + 1 LoRA")
+        self.assertNotEqual(got["render.png"]["border"], got["plate.mp4"]["border"])
+        self.assertIn("uses: ae.safetensors", got["render.png"]["title"])
+        if os.environ.get("DEPS_SHOT"):
+            pg.screenshot(path=os.environ["DEPS_SHOT"])
         self.assertEqual(self.errors, [])
 
     def test_history_menu_offers_it(self):
