@@ -173,17 +173,34 @@ test("the eyedropper's box: the average of what is in it, by alpha, clipped to t
     assert.deepEqual(D.areaAverage(layer(1000, 1000, [10, 20, 30, 255]), 1000, 1000, 0, 0, 1000, 1000, 1000), [10, 20, 30]);   // sampled
 });
 
-test("Flow: the tip's way follows the stroke, smoothly, and a wobble of a pixel does not turn it", () => {
+test("Direction: the tip's way follows the stroke, smoothly, and a wobble of a pixel does not turn it", () => {
     let f = { ax: 0, ay: 0, vx: null, vy: null, dir: null };
-    f = D.flowTurn(f, 1, 0, 2);
+    f = D.directionTurn(f, 1, 0, 2);
     assert.equal(f.dir, null);                                   // not far enough yet
-    f = D.flowTurn(f, 0, 10, 2);
+    f = D.directionTurn(f, 0, 10, 2);
     assert.ok(Math.abs(f.dir - Math.PI / 2) < 1e-9);             // straight down
-    const g = D.flowTurn(f, 10, 10, 2);                          // a turn to the right: half way at first
+    const g = D.directionTurn(f, 10, 10, 2);                          // a turn to the right: half way at first
     assert.ok(Math.abs(g.dir - Math.PI / 4) < 1e-9, g.dir);
     let h = g;
-    for (let i = 2; i < 12; i++) h = D.flowTurn(h, 10 * i, 10, 2);
+    for (let i = 2; i < 12; i++) h = D.directionTurn(h, 10 * i, 10, 2);
     assert.ok(Math.abs(h.dir) < 0.01, h.dir);                    // then along the new way
-    const back = D.flowTurn({ ax: 0, ay: 0, vx: 1, vy: 0, dir: 0 }, -5, 0, 2);
+    const back = D.directionTurn({ ax: 0, ay: 0, vx: 1, vy: 0, dir: 0 }, -5, 0, 2);
     assert.ok(Math.abs(Math.abs(back.dir) - Math.PI) < 1e-9);    // turning back on itself takes the new way
+});
+
+test("Flow: each dab lays its share, dabs of one stroke build up, never past the opacity", () => {
+    const w = 20, h = 20, px = layer(w, h);
+    const st = stroke(px, w, h, { color: [0, 0, 0], build: 0.5, opacity: 1 });
+    D.stamp(st, 10, 10, 6, 1);
+    assert.equal(px[(10 * w + 10) * 4 + 3], 128);              // half
+    D.stamp(st, 10, 10, 6, 1);
+    assert.equal(px[(10 * w + 10) * 4 + 3], 191);              // half of what was missing more: 0.75
+    for (let i = 0; i < 20; i++) D.stamp(st, 10, 10, 6, 1);
+    assert.equal(px[(10 * w + 10) * 4 + 3], 255);
+    const px2 = layer(w, h), st2 = stroke(px2, w, h, { color: [0, 0, 0], build: 0.5, opacity: 0.6 });
+    for (let i = 0; i < 20; i++) D.stamp(st2, 10, 10, 6, 1);
+    assert.equal(px2[(10 * w + 10) * 4 + 3], 153);             // held at the opacity
+    const px3 = layer(w, h), st3 = stroke(px3, w, h, { color: [0, 0, 0], opacity: 1 });
+    D.stamp(st3, 10, 10, 6, 1); D.stamp(st3, 10, 10, 6, 1);
+    assert.equal(px3[(10 * w + 10) * 4 + 3], 255);             // without Flow: the most any dab gave
 });

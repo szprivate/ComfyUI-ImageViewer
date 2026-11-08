@@ -399,10 +399,10 @@ export const TipsMixin = {
         }
         ts.append(btns);
         if (b.tip) {
-            const fl = this.el("label", "paint-check tip-flow", { title: "The tip turns to point the way the stroke is going; Angle then turns it further from that way" });
-            const c = this.el("input", "", { type: "checkbox", checked: !!b.flow });
-            c.addEventListener("change", () => { b.flow = c.checked; sync(); });
-            fl.append(c, this.el("span", "", { text: "Flow: follow the stroke" }));
+            const fl = this.el("label", "paint-check tip-direction", { title: "The tip turns to point the way the stroke is going; Angle then turns it further from that way" });
+            const c = this.el("input", "", { type: "checkbox", checked: !!b.direction });
+            c.addEventListener("change", () => { b.direction = c.checked; sync(); });
+            fl.append(c, this.el("span", "", { text: "Direction: follow the stroke" }));
             ts.append(fl);
             this._slider(ts, "Angle °", b.angle || 0, -180, 180, 1, (v) => { b.angle = v; sync(); });
         }

@@ -1960,7 +1960,7 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(self.errors, [])
 
 
-    def test_brush_tip_flow_points_the_tip_along_the_stroke(self):
+    def test_brush_tip_direction_points_the_tip_along_the_stroke(self):
         pg = self.page()
         self.open_photo(pg)
         ed = self.ED
@@ -1969,9 +1969,9 @@ class PaintBrowserTests(unittest.TestCase):
         # A thin horizontal bar as the tip (40 x 4), spaced far apart so each dab can be seen on its own.
         pg.evaluate(f"""async () => {{ const e = {ed}; e.setTool('brush');
             const a = new Uint8Array(40 * 4).fill(255); const t = await e._tipKeep({{ name: 'bar', w: 40, h: 4, a }});
-            Object.assign(e.opts.brush, {{ tip: t.id, size: 30, opacity: 100, hardness: 100, spacing: 300, flow: true, angle: 0 }});
+            Object.assign(e.opts.brush, {{ tip: t.id, size: 30, opacity: 100, hardness: 100, spacing: 300, direction: true, angle: 0 }});
             e.addPixelLayer(new Uint8ClampedArray(200 * 120 * 4), 200, 120, 'flow'); e.fg = [0, 0, 0]; e.refreshProps(); }}""")
-        self.assertTrue(pg.evaluate(f"() => !!{ed}.parts.tool.querySelector('.tip-flow input:checked')"))
+        self.assertTrue(pg.evaluate(f"() => !!{ed}.parts.tool.querySelector('.tip-direction input:checked')"))
         alpha = lambda x, y: pg.evaluate(f"() => {{ const e = {ed}, L = e.active(), b = e.pix.get(L.id); if ({x} < L.x || {y} < L.y || {x} >= L.x + L.w || {y} >= L.y + L.h) return 0; return b[(({y} - L.y) * L.w + {x} - L.x) * 4 + 3]; }}")
         # Down the picture: the bar stands upright at the start of the stroke.
         pg.mouse.move(*at(100, 20))
@@ -1981,15 +1981,41 @@ class PaintBrowserTests(unittest.TestCase):
         pg.mouse.up()
         self.assertGreater(alpha(100, 30), 200)
         self.assertEqual(alpha(112, 20), 0, "not lying across")
-        # Without Flow the same stroke lies across.
+        # Without Direction the same stroke lies across.
         pg.keyboard.press("Control+z")
-        pg.evaluate(f"() => {{ {ed}.opts.brush.flow = false; }}")
+        pg.evaluate(f"() => {{ {ed}.opts.brush.direction = false; }}")
         pg.mouse.move(*at(100, 20))
         pg.mouse.down()
         for yy in range(22, 101, 2):
             pg.mouse.move(*at(100, yy))
         pg.mouse.up()
         self.assertGreater(alpha(112, 20), 200)
+        self.assertEqual(self.errors, [])
+
+
+    def test_brush_flow_builds_up_within_a_stroke_up_to_the_opacity(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        x0, y0, w, h = pg.evaluate(f"() => {{ const r = {ed}.canvas.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }}")
+        at = lambda x, y: (x0 + x * w / 200, y0 + y * h / 120)
+        pg.evaluate(f"""() => {{ const e = {ed}; e.setTool('brush'); __panel.paintShowPanel('tool');
+            Object.assign(e.opts.brush, {{ tip: null, size: 20, hardness: 100, opacity: 80, flow: 30, spacing: 15 }});
+            e.addPixelLayer(new Uint8ClampedArray(200 * 120 * 4), 200, 120, 'flow'); e.fg = [0, 0, 0]; e.refreshProps(); }}""")
+        self.assertTrue(pg.evaluate(f"() => [...{ed}.parts.tool.querySelectorAll('.paint-field > label')].some((l) => l.textContent === 'Flow %')"))
+        alpha = lambda x, y: pg.evaluate(f"() => {{ const e = {ed}, L = e.active(), b = e.pix.get(L.id); if ({x} < L.x || {y} < L.y || {x} >= L.x + L.w || {y} >= L.y + L.h) return 0; return b[(({y} - L.y) * L.w + {x} - L.x) * 4 + 3]; }}")
+        pg.mouse.click(*at(40, 60))
+        one = alpha(40, 60)
+        self.assertTrue(56 <= one <= 66, one)                       # one click: 30 % flow of the 80 % opacity
+        # Back and forth over one place in one stroke: it builds up, held at the opacity (80 %).
+        pg.mouse.move(*at(100, 60))
+        pg.mouse.down()
+        for i in range(6):
+            pg.mouse.move(*at(140, 60), steps=8)
+            pg.mouse.move(*at(100, 60), steps=8)
+        pg.mouse.up()
+        many = alpha(120, 60)
+        self.assertTrue(195 <= many <= 205, many)
         self.assertEqual(self.errors, [])
 
 
