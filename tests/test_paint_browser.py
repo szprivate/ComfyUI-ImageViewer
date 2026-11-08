@@ -612,6 +612,56 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(comp(50, 30), before)
         self.assertEqual(self.errors, [])
 
+    def test_spot_healing_healing_brush_patch_and_clone_overlay(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        x0, y0, w, h = pg.evaluate(f"() => {{ const r = {ed}.canvas.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }}")
+        at = lambda x, y: (x0 + x * w / 200, y0 + y * h / 120)
+        # A striped layer with three red specks.
+        pg.evaluate(f"""() => {{ const e = {ed}, px = new Uint8ClampedArray(200 * 120 * 4);
+            for (let y = 0; y < 120; y++) for (let x = 0; x < 200; x++) px.set(((x >> 3) & 1) ? [200, 200, 200, 255] : [70, 70, 70, 255], (y * 200 + x) * 4);
+            for (const [cx, cy] of [[40, 40], [100, 60], [160, 80]]) for (let y = cy - 3; y < cy + 3; y++) for (let x = cx - 3; x < cx + 3; x++) px.set([255, 0, 0, 255], (y * 200 + x) * 4);
+            e.addPixelLayer(px, 200, 120, 'stripes'); }}""")
+        red = lambda cx, cy: pg.evaluate(f"""() => {{ const e = {ed}, L = e.active(), b = e.pix.get(L.id); let n = 0;
+            for (let y = {cy} - 3; y < {cy} + 3; y++) for (let x = {cx} - 3; x < {cx} + 3; x++) {{ const o = ((y - L.y) * L.w + x - L.x) * 4; if (b[o] - b[o + 1] > 60) n++; }} return n; }}""")
+        self.assertEqual(red(40, 40), 36)
+        # J: the spot healing brush; a dab over the speck takes it away.
+        pg.mouse.move(*at(5, 5))
+        pg.keyboard.press("j")
+        self.assertEqual(pg.evaluate(f"() => {ed}.tool"), "spot")
+        pg.evaluate(f"() => {{ {ed}.opts.spot.size = 14; }}")
+        pg.mouse.move(*at(39, 40)); pg.mouse.down(); pg.mouse.move(*at(41, 40), steps=3); pg.mouse.up()
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Spot healing brush")
+        self.assertEqual(red(40, 40), 0)
+        # Shift+J: the healing brush, from a source (Alt+click); its stroke heals the second speck.
+        pg.keyboard.press("Shift+j")
+        self.assertEqual(pg.evaluate(f"() => {ed}.tool"), "heal")
+        pg.evaluate(f"() => {{ {ed}.opts.heal.size = 14; }}")
+        pg.keyboard.down("Alt"); pg.mouse.click(*at(116, 60)); pg.keyboard.up("Alt")
+        pg.mouse.move(*at(100, 60)); pg.mouse.down(); pg.mouse.move(*at(101, 60), steps=2); pg.mouse.up()
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Healing brush")
+        self.assertEqual(red(100, 60), 0)
+        # Shift+J: the patch; the selection round the third speck dragged 16 px right.
+        pg.keyboard.press("Shift+j")
+        self.assertEqual(pg.evaluate(f"() => {ed}.tool"), "patch")
+        pg.evaluate(f"() => {{ const e = {ed}, m = new Uint8Array(200 * 120); for (let y = 74; y < 86; y++) for (let x = 154; x < 166; x++) m[y * 200 + x] = 255; e.setSelection(m); }}")
+        pg.mouse.move(*at(160, 80)); pg.mouse.down(); pg.mouse.move(*at(176, 80), steps=4); pg.mouse.up()
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Patch")
+        self.assertEqual(red(160, 80), 0)
+        # One step each: undo brings the speck back.
+        pg.keyboard.press("Control+z")
+        self.assertEqual(red(160, 80), 36)
+        # The clone stamp's overlay draws (no error) and a turned source is where the cross goes.
+        pg.evaluate(f"() => {{ const e = {ed}; e.setTool('clone'); e.setCloneSource(50, 50); }}")
+        pg.mouse.move(*at(120, 30))
+        self.assertTrue(pg.evaluate(f"() => {ed}.opts.clone.overlay"))
+        pg.evaluate(f"() => {{ {ed}.opts.clone.angle = 90; }}")
+        pg.mouse.move(*at(30, 30)); pg.mouse.down(); pg.mouse.move(*at(31, 30), steps=2); pg.mouse.up()
+        src = pg.evaluate(f"() => {ed}._cloneFrom(40, 30)")
+        self.assertAlmostEqual(src["x"], 50, delta=1.5)
+        self.assertAlmostEqual(src["y"], 60, delta=1.5)
+
     def test_distort_perspective_and_warp(self):
         pg = self.page()
         self.open_photo(pg)

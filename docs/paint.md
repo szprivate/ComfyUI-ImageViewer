@@ -25,7 +25,9 @@ Its three panels, **Layers**, **Properties** and **History**, show only on a Pai
 | <kbd>W</kbd> | Magic wand |
 | <kbd>C</kbd> | Crop |
 | <kbd>B</kbd> | Brush (reads pen pressure) |
-| <kbd>S</kbd> | Clone stamp: <kbd>Alt</kbd>+click sets the source |
+| <kbd>S</kbd> | Clone stamp: <kbd>Alt</kbd>+click sets the source. Show overlay previews the source inside the brush. The source can be turned, scaled and flipped |
+| <kbd>J</kbd> | Spot healing brush: paint over a blemish and it is filled from a nearby place that looks alike |
+| <kbd>Shift</kbd>+<kbd>J</kbd> | Switches between the healing brush, the patch and the spot healing brush. The **healing brush** paints the texture from a source (<kbd>Alt</kbd>+click) in the light and colour of where it lands. The **patch** fills a selection from wherever you drag it, or carries it there (Destination) |
 | <kbd>E</kbd> | Eraser |
 | <kbd>G</kbd> | Paint bucket |
 | <kbd>I</kbd> | Eyedropper |
