@@ -68,6 +68,14 @@ The agent has both as ops: `gradient` (`from`, `to`, `type`, `colors` or `stops`
 
 The layer's mask goes with it. Press <kbd>Enter</kbd> or double-click to apply, as one undo step. <kbd>Esc</kbd> cancels. The agent can distort a layer with the `distort` op, which takes four `corners`.
 
+## Liquify
+
+**Filter > Liquify** (<kbd>Shift</kbd>+<kbd>Ctrl</kbd>+<kbd>X</kbd>) is a brush that pushes the active layer's pixels about. Its modes are **Forward warp** (drags the picture along the stroke), **Reconstruct** (brushes it back to how it was), **Twirl** clockwise or anticlockwise, **Pucker** (pulls in toward the middle of the brush) and **Bloat** (pushes out). Size (<kbd>[</kbd> / <kbd>]</kbd>) and strength are in the tool's options, along with **Restore all**. Nothing is kept until you press <kbd>Enter</kbd>, which applies everything as one undo step. <kbd>Esc</kbd> throws it away. A layer smaller than the canvas is grown to the canvas first, so pixels can be pushed into the space around it.
+
+## Smart filters
+
+A smart filter is kept as a setting on the layer instead of being baked into its pixels, so you can change it, switch it off, reorder it or take it away later. Add one from the **Filter** menu ("Smart filter: Gaussian blur", "Sharpen", or "an adjustment…" such as Levels or Hue/Saturation), or with **Add…** in its Properties section. Each filter there has its switch, ▲ ▼ to change the order, × to remove it, and its numbers. A layer with smart filters shows "sf" in the Layers panel. **Bake into the pixels** (or **Layer > Bake smart filters**) applies them for good. A blur reaches past the layer's own box, as it would on a layer the size of the canvas. A `.ora` keeps them; a `.psd` gets them baked in. The agent sets them with `set_layer` `filters`: a list of `{type, params, on}` in order, or null to take them off.
+
 ## The pen
 
 <kbd>P</kbd> draws a path one anchor at a time. Click for a corner and drag for a smooth anchor (Shift holds the handle to 45° steps). Click the first anchor to close the path, or press <kbd>Enter</kbd> or <kbd>Esc</kbd> to leave it open. Click the path to add an anchor, or click an anchor to take it away. Click an end of an open path to carry on drawing from it.

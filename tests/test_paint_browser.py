@@ -1119,5 +1119,69 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(doc.meta["guides"], [{"axis": "y", "pos": 60}])
         self.assertEqual(self.errors, [])
 
+    def test_liquify_and_smart_filters(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        pg.evaluate(f"() => {ed}.zoomTo(2)")
+        scr = lambda x, y: pg.evaluate(f"() => {{ const r = {ed}.wrap.getBoundingClientRect(), v = {ed}.view; return [r.left + v.x + {x} * v.zoom, r.top + v.y + {y} * v.zoom]; }}")
+        comp = lambda x, y: pg.evaluate(f"() => [...{ed}.comp.slice(({y} * 200 + {x}) * 4, ({y} * 200 + {x}) * 4 + 4)]")
+        own = lambda x, y: pg.evaluate(f"() => {{ const e = {ed}, L = e.active(), b = e.pix.get(L.id), o = (({y} - L.y) * L.w + {x} - L.x) * 4; return [...b.slice(o, o + 4)]; }}")
+        n = pg.evaluate(f"() => {ed}.undoStack.length")
+        # A smart Gaussian blur from the Filter menu: Properties shows it; the layer keeps its own pixels.
+        before = own(100, 60)
+        pg.evaluate(f"() => {ed}.addSmartFilter('blur')")
+        self.assertEqual(pg.evaluate(f"() => [{ed}.undoStack.length, {ed}.undoStack.at(-1).label]"), [n + 1, "Smart filter"])
+        self.assertTrue(pg.evaluate(f"() => !!{ed}.parts.props.querySelector('.paint-smart .smart-on:checked')"))
+        self.assertTrue(pg.evaluate(f"() => [...{ed}.layerList.querySelectorAll('.paint-row .tag.sf')].length === 1"))
+        self.assertEqual(own(100, 60), before)
+        # The radius slider drags live and keeps one step.
+        pg.evaluate(f"""() => {{ const s = [...{ed}.parts.props.querySelectorAll('.paint-smart .paint-field')].find((f) => f.textContent.startsWith('Radius'));
+            const r = s.querySelector('input[type=range]'); r.value = 8; r.dispatchEvent(new Event('input')); r.value = 9; r.dispatchEvent(new Event('input')); r.dispatchEvent(new Event('change')); }}""")
+        self.assertEqual(pg.evaluate(f"() => [{ed}.active().filters[0].params.radius, {ed}.undoStack.length]"), [9, n + 2])
+        # An adjustment after it; switched off; moved first; taken away.
+        pg.evaluate(f"() => {ed}.addSmartFilter('invert')")
+        pg.evaluate(f"() => {ed}.requestRedraw(null)"); pg.wait_for_timeout(50)
+        inv = comp(100, 60)
+        pg.evaluate(f"() => {{ const c = {ed}.parts.props.querySelectorAll('.paint-smart .smart-on')[1]; c.checked = false; c.dispatchEvent(new Event('change')); }}")
+        pg.wait_for_timeout(50)
+        self.assertNotEqual(comp(100, 60), inv)
+        pg.evaluate(f"() => {ed}.setSmartFilter({ed}.active(), 1, {{ move: -1 }})")
+        self.assertEqual(pg.evaluate(f"() => {ed}.active().filters.map((f) => f.type)"), ["invert", "blur"])
+        pg.evaluate(f"() => {ed}.setSmartFilter({ed}.active(), 0, null)")
+        self.assertEqual(pg.evaluate(f"() => {ed}.active().filters.map((f) => f.type)"), ["blur"])
+        # Saved in the .ora and read back.
+        pg.evaluate("() => __panel.paintSave(__panel._paintActive())")
+        pg.wait_for_function(f"() => !{ed}.isDirty()", timeout=10000)
+        doc = self.P.read_ora(pg.evaluate("() => __panel._paintActive().path"))
+        self.assertEqual([f["type"] for f in doc.layers[0]["filters"]], ["blur"])
+        pg.evaluate(f"() => {ed}.clearSmartFilters({ed}.active())")
+        # Liquify (Shift+Ctrl+X): a drag pushes the pixels; Esc throws it away, Enter keeps it as one step.
+        pg.evaluate(f"""() => {{ const e = {ed}, b = new Uint8ClampedArray(200 * 120 * 4);
+            for (let y = 0; y < 120; y++) for (let x = 98; x < 103; x++) b.set([255, 0, 0, 255], (y * 200 + x) * 4);
+            e.addPixelLayer(b, 200, 120, 'bar', 0, 0); Object.assign(e.opts.liquify, {{ mode: 'push', size: 40, strength: 100 }}); }}""")
+        start = own(110, 60)
+        src = own(100, 60)
+        pg.mouse.move(*scr(100, 60))
+        pg.keyboard.press("Control+Shift+x")
+        self.assertEqual(pg.evaluate(f"() => {ed}.tool"), "liquify")
+        pg.mouse.down(); pg.mouse.move(*scr(110, 60), steps=10); pg.mouse.up()
+        self.assertTrue(pg.evaluate(f"() => !!{ed}.lq"))
+        moved = own(110, 60)
+        self.assertNotEqual(moved, start)
+        self.assertLess(sum(abs(a - b) for a, b in zip(moved, src)), sum(abs(a - b) for a, b in zip(start, src)))
+        k = pg.evaluate(f"() => {ed}.undoStack.length")
+        pg.keyboard.press("Escape")
+        self.assertEqual(own(110, 60), start)
+        self.assertEqual(pg.evaluate(f"() => [!!{ed}.lq, {ed}.undoStack.length]"), [False, k])
+        pg.mouse.move(*scr(100, 60)); pg.mouse.down(); pg.mouse.move(*scr(110, 60), steps=10); pg.mouse.up()
+        pg.mouse.move(*scr(60, 30)); pg.mouse.down(); pg.mouse.move(*scr(60, 40), steps=5); pg.mouse.up()
+        pg.keyboard.press("Enter")
+        self.assertEqual(pg.evaluate(f"() => [!!{ed}.lq, {ed}.undoStack.length, {ed}.undoStack.at(-1).label]"), [False, k + 1, "Liquify"])
+        self.assertEqual(own(110, 60), moved)
+        pg.keyboard.press("Control+z")
+        self.assertEqual(own(110, 60), start)
+        self.assertEqual(self.errors, [])
+
 if __name__ == "__main__":
     unittest.main()
