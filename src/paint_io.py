@@ -19,7 +19,7 @@ with their place, opacity, blend mode, visibility and mask (RLE), the merged pic
 names, and groups as Photoshop's layer groups (Pass Through too). Photoshop has adjustment layers of its own, but not ours with our numbers: an adjustment
 layer is BAKED on export - what is under it and it become one pixel layer, "<name> (merged)" (inside
 a group: that whole group of the document's level), and the answer says so. Reading a .psd takes its
-pixel layers (raw or RLE) and groups; its adjustment layers and clipping are named as left out.
+pixel layers (raw or RLE), groups and clipping masks; its adjustment layers are named as left out.
 """
 from __future__ import annotations
 
@@ -126,6 +126,8 @@ def clean_layer(L):
            "locked": bool(L.get("locked"))}
     if L.get("parent"):
         out["parent"] = str(L["parent"])[:40]
+    if L.get("clip") and kind != "group":
+        out["clip"] = True
     if kind == "pixel":
         out.update(x=int(M._num(L.get("x"), 0)), y=int(M._num(L.get("y"), 0)),
                    w=int(M._num(L.get("w"), 0, 0, MAX_SIDE)), h=int(M._num(L.get("h"), 0, 0, MAX_SIDE)))
@@ -278,14 +280,58 @@ def composite(doc, upto=None, only=None, hidden_ok=False):
 
 
 def _lay_list(out, doc, idxs, kids, only, hidden_ok):
-    for i in idxs:
-        L = doc.layers[i]
-        if only is not None and L["id"] not in only and L["kind"] != "group":
+    k = 0
+    while k < len(idxs):
+        L = doc.layers[idxs[k]]
+        n = 0
+        if L["kind"] != "adjust" and not L.get("clip"):
+            while k + 1 + n < len(idxs) and doc.layers[idxs[k + 1 + n]].get("clip"):
+                n += 1
+        skip = only is not None and L["id"] not in only and L["kind"] != "group"
+        if skip or not (L.get("visible") or hidden_ok):
+            k += 1 + n
             continue
-        if not (L.get("visible") or hidden_ok):
-            continue
-        out = _lay_group(out, doc, L, kids, only, hidden_ok) if L["kind"] == "group" else lay(out, doc, L)
+        clipped = [doc.layers[idxs[k + j]] for j in range(1, n + 1)]
+        clipped = [C for C in clipped if (C.get("visible") or hidden_ok) and (only is None or C["id"] in only)]
+        if clipped:
+            out = _lay_clip_group(out, doc, L, clipped, kids, only, hidden_ok)
+        elif L["kind"] == "group":
+            out = _lay_group(out, doc, L, kids, only, hidden_ok)
+        else:
+            out = lay(out, doc, L)
+        k += 1 + n
     return out
+
+
+def _lay_clip_group(out, doc, B, clipped, kids, only, hidden_ok):
+    """A base and the layers clipped to it (``paintData.layClipGroup``)."""
+    W, H = doc.w, doc.h
+    op = float(B.get("opacity", 1.0))
+    if op <= 0:
+        return out
+    buf = np.zeros((H, W, 4), dtype=np.uint8)
+    if B["kind"] == "group":
+        buf = _lay_group(buf, doc, dict(B, blend="normal", opacity=1.0), kids, only, hidden_ok)
+    else:
+        buf = lay(buf, doc, dict(B, opacity=1.0, blend="normal"))
+    for C in clipped:
+        if C["kind"] == "adjust":
+            buf = lay(buf, doc, C)
+            continue
+        px = doc.px.get(C["id"])
+        cop = float(C.get("opacity", 1.0))
+        if px is None or cop <= 0:
+            continue
+        lx, ly = C.get("x", 0), C.get("y", 0)
+        ph, pw = px.shape[:2]
+        x0, y0, x1, y1 = max(0, lx), max(0, ly), min(W, lx + pw), min(H, ly + ph)
+        if x1 <= x0 or y1 <= y0:
+            continue
+        alpha = cop * mask_values(C, doc.masks.get(C["id"]), x0, y0, x1, y1)
+        buf[y0:y1, x0:x1] = M.clip_over(buf[y0:y1, x0:x1], px[y0 - ly:y1 - ly, x0 - lx:x1 - lx], alpha,
+                                        C.get("blend", "normal"))
+    blend = "normal" if B.get("blend") == "pass_through" else B.get("blend", "normal")
+    return M.blend_over(out, buf, np.full((H, W), op), blend)
 
 
 def _lay_group(out, doc, G, kids, only, hidden_ok):
@@ -669,7 +715,7 @@ def _psd_record(L, px, mask, section=None):
         extra += b"8BIMlsct" + struct.pack(">I", len(lsct)) + lsct
     rec = (struct.pack(">iiiiH", y, x, y + h, x + w, len(channel_ids)) + cinfo + b"8BIM"
            + (b"norm" if section == 3 else key)
-           + struct.pack(">BBBB", int(round(float(L.get("opacity", 1)) * 255)), 0, flags, 0)
+           + struct.pack(">BBBB", int(round(float(L.get("opacity", 1)) * 255)), 1 if L.get("clip") else 0, flags, 0)
            + struct.pack(">I", len(extra)) + extra)
     return rec, cdata
 
@@ -884,11 +930,10 @@ def read_psd(path):
                 if a_ is None:
                     a_ = np.full((rec["h"], rec["w"]), 255, np.uint8)
                 px = np.stack([r_, g_, b_, a_], axis=2)
-                if rec["clip"]:
-                    doc.notes.append(f"{rec['name']!r} was clipped to the layer under it in Photoshop; here it is not")
                 L = doc.add_pixel_layer(px, rec["name"] or "Layer", rec["left"], rec["top"],
                                         opacity=rec["opacity"] / 255, visible=not (rec["flags"] & 2),
-                                        blend=M.PSD_BLEND_BACK.get(rec["key"], "normal"), **parent)
+                                        blend=M.PSD_BLEND_BACK.get(rec["key"], "normal"), clip=bool(rec["clip"]),
+                                        **parent)
                 if rec["key"] not in M.PSD_BLEND_BACK:
                     doc.notes.append(f"{rec['name']!r}: its blend mode {rec['key'].decode('latin-1')!r} is Normal here")
                 if rec["mask"] and -2 in p:
@@ -947,6 +992,8 @@ def outline(doc):
             row["mask"] = "on" if L["mask"]["enabled"] else "off"
         if L.get("locked"):
             row["locked"] = True
+        if L.get("clip"):
+            row["clipped"] = True
         if L["id"] == doc.meta.get("active"):
             row["active"] = True
         rows.append(row)

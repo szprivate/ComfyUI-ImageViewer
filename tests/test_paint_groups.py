@@ -103,6 +103,19 @@ class Files(unittest.TestCase):
             self.assertAlmostEqual(g["opacity"], 0.8, places=2)
             self.assertLessEqual(int(np.abs(P.composite(back).astype(int) - P.composite(d).astype(int)).max()), 2)
 
+    def test_psd_keeps_clipping_masks(self):
+        d, G, a, b = doc_with_group("normal")
+        d.layer(b["id"])["clip"] = True
+        d.meta = P.clean_meta(d.meta)
+        path = os.path.join(self.tmp, "clip.psd")
+        P.write_psd(path, d)
+        back = P.read_psd(path)
+        self.assertEqual([bool(L.get("clip")) for L in back.layers], [False, False, True, False, False])
+        self.assertLessEqual(int(np.abs(P.composite(back).astype(int) - P.composite(d).astype(int)).max()), 2)
+        ora = os.path.join(self.tmp, "clip.ora")
+        P.write_ora(ora, d)
+        self.assertTrue(P.read_ora(ora).layer(b["id"])["clip"])
+
     def test_psd_bakes_a_group_holding_an_adjustment(self):
         d, G, a, b = doc_with_group()
         d.add_adjust_layer("invert", {}, index=3)

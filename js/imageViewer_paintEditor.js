@@ -14,6 +14,7 @@
 // refers to is always back in the state it had then.
 import * as D from "./imageViewer_paintData.js";
 import { paintIcon } from "./imageViewer_paintIcons.js";
+import { FILTERS } from "./imageViewer_paintFilters.js";
 
 export const PAINT_TOOLS = [
     ["move", "transform", "Transform (move, scale, rotate, shear)", "V"], ["marquee", "marquee", "Rectangle select", "M"], ["ellipse", "ellipse", "Ellipse select", "Shift+M"],
@@ -37,7 +38,7 @@ export const PAINT_KEYS = [
     ["Del", "Clear the selection on the layer"], ["Alt+Del", "Fill the selection with the colour"], ["Ctrl+J", "Duplicate the layer (the selection only, with one)"],
     ["Ctrl+E", "Merge down (several picked: merge them; a group: merge it)"], ["Ctrl+Shift+N", "New layer"],
     ["Ctrl+G / Ctrl+Shift+G", "Group the picked layers / ungroup"], ["Shift / Ctrl+click in Layers", "Pick a range / one more layer"],
-    ["Ctrl+Alt+A", "Pick every layer"], ["Arrows", "Nudge the layer (Move; Shift: 10 px)"],
+    ["Ctrl+Alt+A", "Pick every layer"], ["Ctrl+Alt+G / Alt+click in Layers", "Clip the layer to the one under it (or release it)"], ["Arrows", "Nudge the layer (Move; Shift: 10 px)"],
     ["Enter / Esc", "Apply / cancel the crop, the transform or the text"], ["Ctrl+S / Ctrl+Shift+S", "Save / save as"],
 ];
 
@@ -107,6 +108,8 @@ const STYLE = `
 .paint-row.picked { background: #2d2620; }
 .paint-row.active.picked, .paint-row.active { background: #3a2a1d; }
 .paint-row.dimmed .nm, .paint-row.dimmed canvas { opacity: .45; }
+.paint-row .clipmark { color: #f60; flex: 0 0 auto; font-size: 14px; margin-left: -12px; width: 10px; }
+.paint-row .nm.base { text-decoration: underline; text-underline-offset: 2px; }
 .paint-row .caret { width: 14px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; color: #aaa; }
 .paint-row .caret.none { visibility: hidden; }
 .paint-row .grp { flex: 0 0 auto; width: 40px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #444; color: #e0b070; background: #222; }
@@ -383,7 +386,8 @@ class PaintEditor {
 
     _keepBelow(L) {
         // Inside a group what is under the layer is not one picture: no cache, the rectangle is laid whole.
-        if (L.parent) { this._dropBelow(); return; }
+        // A clipped layer is laid with its base: no cache either.
+        if (L.parent || L.clip) { this._dropBelow(); return; }
         const i = D.layerIndex(this.doc, L.id);
         this.below = D.composite(this.doc, this._pixOf, this._maskOf, null, null, { to: i });
         this._belowIdx = i;
@@ -1026,6 +1030,36 @@ class PaintEditor {
         });
     }
 
+    /**
+     * Clip the picked layers to the layer under each (a clipping mask: they show only where it is), or
+     * release them. A group is not clipped; layers can be clipped to a group.
+     */
+    toggleClip() {
+        const P = this.pickedLayers().filter((L) => L.kind !== "group");
+        if (!P.length) { this._notify("Clipping mask: pick a pixel or adjustment layer (a group is not clipped).", "info"); return false; }
+        const A = this.active();
+        const on = !(A && A.clip);
+        if (on) {
+            const lowest = P.find((L) => !this._clipBase(L, P));
+            if (lowest) { this._notify(`${lowest.name} has no layer under it to clip to.`, "warn"); return false; }
+        }
+        return this.setPickedProps((L) => { if (L.kind === "group") return false; if (on) L.clip = true; else delete L.clip; },
+                                   on ? "Create clipping mask" : "Release clipping mask");
+    }
+
+    /** The layer `L` would be clipped to: the nearest one under it in its group that is not clipped (nor in `also`). */
+    _clipBase(L, also = []) {
+        const d = this.doc, i = D.layerIndex(d, L.id);
+        const skip = new Set(also.map((x) => x.id));
+        for (let j = i - 1; j >= 0; j--) {
+            const B = d.layers[j];
+            if ((B.parent || null) !== (L.parent || null)) continue;
+            if (B.clip || skip.has(B.id)) continue;
+            return B.kind === "adjust" ? null : B;
+        }
+        return null;
+    }
+
     /** Open / fold a group in the Layers panel (not an undo step). */
     toggleCollapsed(id) {
         const G = this.doc && this.doc.layers.find((x) => x.id === id);
@@ -1245,25 +1279,70 @@ class PaintEditor {
         });
     }
 
-    /** A filter on the active pixel layer (in the selection when there is one). */
-    filter(kind, p = {}) {
-        const L = this._pixelTarget(kind === "blur" ? "Blur" : "Sharpen");
-        if (!L) return false;
-        return this.change(kind === "blur" ? "Gaussian blur" : kind === "sharpen" ? "Sharpen" : D.ADJUST_LABELS[kind], () => {
-            const px = this.pix.get(L.id);
-            let out;
-            if (kind === "blur") out = D.blurPixels(px, L.w, L.h, p.radius || 4);
-            else if (kind === "sharpen") out = D.sharpenPixels(px, L.w, L.h, p.radius || 2, p.amount == null ? 1 : p.amount);
-            else out = D.adjustPixels(px, L.w, L.h, kind, p);
-            if (this.sel) {
-                const m = D.maskForLayer(this.sel, this.doc.w, this.doc.h, L);
-                for (let i = 0; i < m.length; i++) {
-                    const t = m[i] / 255;
-                    if (t >= 1) continue;
-                    for (let c = 0; c < 4; c++) out[i * 4 + c] = D.q8((px[i * 4 + c] / 255) * (1 - t) + (out[i * 4 + c] / 255) * t);
-                }
+    /** The pixel layers a filter works on: every picked one (unlocked). Null (and said) when there are none. */
+    _filterTargets(what) {
+        const P = this.pickedLayers().filter((L) => L.kind === "pixel");
+        if (!P.length) { this._notify(`${what}: pick a pixel layer (or several).`, "warn"); return null; }
+        const lk = P.find((L) => L.locked);
+        if (lk) { this._notify(`${lk.name} is locked.`, "warn"); return null; }
+        return P;
+    }
+
+    /** `run(px, w, h)` on a layer's pixels `px`, mixed back in by the selection when there is one. */
+    _filtered(L, px, run) {
+        const out = run(px, L.w, L.h);
+        if (this.sel) {
+            const m = D.maskForLayer(this.sel, this.doc.w, this.doc.h, L);
+            for (let i = 0; i < m.length; i++) {
+                const t = m[i] / 255;
+                if (t >= 1) continue;
+                for (let c = 0; c < 4; c++) out[i * 4 + c] = D.q8((px[i * 4 + c] / 255) * (1 - t) + (out[i * 4 + c] / 255) * t);
             }
-            this.pix.set(L.id, out);
+        }
+        return out;
+    }
+
+    /** A filter on every picked pixel layer, as one undo step. */
+    applyFilter(label, run, targets = null) {
+        const T = targets || this._filterTargets(label);
+        if (!T) return false;
+        return this.change(label, () => { for (const L of T) this.pix.set(L.id, this._filtered(L, this.pix.get(L.id), run)); });
+    }
+
+    /** Blur, sharpen or an adjustment baked into the picked pixel layers (in the selection when there is one). */
+    filter(kind, p = {}) {
+        const label = kind === "blur" ? "Gaussian blur" : kind === "sharpen" ? "Sharpen" : D.ADJUST_LABELS[kind];
+        return this.applyFilter(label, (px, w, h) => (kind === "blur" ? D.blurPixels(px, w, h, p.radius || 4)
+            : kind === "sharpen" ? D.sharpenPixels(px, w, h, p.radius || 2, p.amount == null ? 1 : p.amount)
+            : D.adjustPixels(px, w, h, kind, p)));
+    }
+
+    /**
+     * A filter's dialog with a live preview on the picture: `run(px, w, h, values)`. The preview puts the
+     * filtered pixels in place without an undo step; OK makes it one, Cancel puts the pixels back.
+     */
+    filterDialog(label, fields, run) {
+        const T = this._filterTargets(label);
+        if (!T) return null;
+        this._tfSettle();
+        const orig = new Map(T.map((L) => [L.id, this.pix.get(L.id)]));
+        let timer = 0, on = true;
+        const back = () => { for (const [id, b] of orig) this.pix.set(id, b); this._dropBelow(); this.requestRedraw(); };
+        const show = (v) => {
+            if (!on) { back(); return; }
+            for (const L of T) this.pix.set(L.id, this._filtered(L, orig.get(L.id), (px, w, h) => run(px, w, h, v)));
+            this._dropBelow();
+            this.requestRedraw();
+        };
+        const later = (v) => { const win = this.d.defaultView; win.clearTimeout(timer); timer = win.setTimeout(() => show(v), 120); };
+        return this.dialog(label, fields, (v) => {
+            this.d.defaultView.clearTimeout(timer);
+            back();
+            this.applyFilter(label, (px, w, h) => run(px, w, h, v), T);
+        }, T.length > 1 ? `On ${T.length} layers.` : "", {
+            preview: true,
+            onInput: (v, prev) => { on = prev; later(v); },
+            onCancel: () => { this.d.defaultView.clearTimeout(timer); back(); },
         });
     }
 
@@ -2092,6 +2171,7 @@ class PaintEditor {
             if (lk === "z" || lk === "y") return take(() => (lk === "y" ? this.redo() : this.undo()));
             if (lk === "a" && e.altKey) return take(() => this.pickAll());
             if (lk === "a") return take(() => this.selectAll());
+            if (lk === "g" && e.altKey) return take(() => this.toggleClip());
             if (lk === "g") return take(() => (e.shiftKey ? this.ungroup() : this.groupLayers()));
             if (lk === "d") return take(() => this.deselect());
             if (lk === "i" && e.shiftKey) return take(() => this.invertSelection());
@@ -2216,6 +2296,7 @@ class PaintEditor {
                 { label: n > 1 ? `Merge ${n} layers (Ctrl+E)` : grp ? "Merge group (Ctrl+E)" : "Merge down (Ctrl+E)", disabled: !L, run: () => this.mergeDown() }, "-",
                 { label: n > 1 ? `Group ${n} layers (Ctrl+G)` : "Group (Ctrl+G)", disabled: !L, run: () => this.groupLayers() },
                 { label: "Ungroup (Ctrl+Shift+G)", disabled: !grp, run: () => this.ungroup() },
+                { label: L && L.clip ? "Release clipping mask (Ctrl+Alt+G)" : "Create clipping mask (Ctrl+Alt+G)", disabled: !L || grp, run: () => this.toggleClip() },
                 { label: "Pick every layer (Ctrl+Alt+A)", run: () => this.pickAll() }, "-",
                 ...adj, "-",
                 { label: "Add mask (reveal all)", disabled: !L || !!L.mask, run: () => this.addMask("all") },
@@ -2235,13 +2316,18 @@ class PaintEditor {
     }
 
     _filterMenu() {
-        const L = this.active();
-        const off = !L || L.kind !== "pixel";
-        return [{ label: "Gaussian blur…", disabled: off, run: () => this.dialog("Gaussian blur", [["radius", "Radius (px)", 4, 0.1, 250]], (v) => this.filter("blur", v)) },
-                { label: "Sharpen…", disabled: off, run: () => this.dialog("Sharpen", [["radius", "Radius (px)", 2, 0.1, 100], ["amount", "Amount", 1, 0, 10]], (v) => this.filter("sharpen", v)) },
-                "-", ...D.ADJUST_TYPES.filter((t) => t !== "curves").map((t) => ({ label: D.ADJUST_LABELS[t] + " (into the pixels)…", disabled: off,
-                    run: () => (D.ADJUST_FIELDS[t].length ? this.dialog(D.ADJUST_LABELS[t], D.ADJUST_FIELDS[t].map(([k, l, a, b]) => [k, l, triple1(D.ADJUST_DEFAULTS[t][k]), a, b]),
-                        (v) => this.filter(t, expandTriples(t, v))) : this.filter(t, {})) }))];
+        const off = !this.pickedLayers().some((L) => L.kind === "pixel");
+        const fd = (label, fields, run) => ({ label: label + "…", disabled: off, run: () => this.filterDialog(label, fields, run) });
+        const own = (id) => fd(FILTERS[id].label, FILTERS[id].fields, FILTERS[id].run);
+        return [fd("Gaussian blur", [["radius", "Radius (px)", 4, 0.1, 250]], (px, w, h, v) => D.blurPixels(px, w, h, v.radius)),
+                own("motion_blur"), "-",
+                fd("Sharpen", [["radius", "Radius (px)", 2, 0.1, 100], ["amount", "Amount", 1, 0, 10]], (px, w, h, v) => D.sharpenPixels(px, w, h, v.radius, v.amount)),
+                own("unsharp"), own("high_pass"), "-",
+                own("median"), own("noise"), own("pixelate"),
+                "-", ...D.ADJUST_TYPES.filter((t) => t !== "curves").map((t) => (D.ADJUST_FIELDS[t].length
+                    ? fd(D.ADJUST_LABELS[t] + " (into the pixels)", D.ADJUST_FIELDS[t].map(([k, l, a, b]) => [k, l, triple1(D.ADJUST_DEFAULTS[t][k]), a, b]),
+                         (px, w, h, v) => D.adjustPixels(px, w, h, t, expandTriples(t, v)))
+                    : { label: D.ADJUST_LABELS[t] + " (into the pixels)", disabled: off, run: () => this.filter(t, {}) }))];
     }
 
     _generateMenu() {
@@ -2258,7 +2344,7 @@ class PaintEditor {
     }
 
     /** A small form over the editor: fields [key, label, default, min, max], [key, label, default, [choices]] or [key, label, default, "text"]. */
-    dialog(title, fields, onOk, note = "") {
+    dialog(title, fields, onOk, note = "", opts = {}) {
         const shade = this.el("div", "paint-dlg-shade");
         const box = this.el("div", "paint-dlg");
         box.append(this.el("h3", "", { text: title }));
@@ -2278,20 +2364,33 @@ class PaintEditor {
             box.append(row);
         }
         if (note) box.append(this.el("div", "note", { text: note }));
+        let prev = null;
+        if (opts.preview) {
+            const row = this.el("div", "paint-field");
+            prev = this.el("input", "", { type: "checkbox", checked: true });
+            row.append(this.el("label", "", { text: "Preview" }), prev);
+            box.append(row);
+        }
         const go = this.el("div", "go");
         const cancel = this.el("button", "paint-btn", { text: "Cancel", type: "button" });
         const ok = this.el("button", "paint-btn on", { text: "OK", type: "button" });
-        const close = () => shade.remove();
-        const done = () => {
+        const read = () => {
             const v = {};
             for (const [k, , def, a, b] of fields) {
                 const inp = inputs[k];
                 v[k] = Array.isArray(a) || a === "text" ? inp.value : D.num(inp.value, def, a, b);
             }
-            close();
-            onOk(v);
+            return v;
         };
-        cancel.addEventListener("click", close);
+        let over = false;
+        const close = (cancelled = true) => { if (over) return; over = true; shade.remove(); if (cancelled && opts.onCancel) opts.onCancel(); };
+        const done = () => { const v = read(); close(false); onOk(v); };
+        if (opts.onInput) {
+            const tell = () => opts.onInput(read(), prev ? prev.checked : true);
+            for (const inp of [...Object.values(inputs), ...(prev ? [prev] : [])]) { inp.addEventListener("input", tell); inp.addEventListener("change", tell); }
+            setTimeout(tell, 0);
+        }
+        cancel.addEventListener("click", () => close());
         ok.addEventListener("click", done);
         box.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); done(); } else if (e.key === "Escape") close(); });
         go.append(cancel, ok);
@@ -2396,13 +2495,16 @@ class PaintEditor {
         }
         this._thumbJobs = [];
         const many = this.pickedLayers().length > 1;
+        // The bases of clipping masks (their names underlined, as the clipped rows point at them).
+        const clipBases = new Set();
+        for (const L of d.layers) if (L.clip) { const B = this._clipBase(L); if (B) clipBases.add(B.id); }
         for (const { L, depth } of this._panelRows()) {
             const isG = L.kind === "group";
             const row = this.el("div", "paint-row" + (L.id === d.active ? " active" : "") + (many && this.picked.has(L.id) ? " picked" : "")
                 + (D.ancestors(d, L).some((P) => !P.visible) ? " dimmed" : ""));
             row.dataset.id = L.id;
             row.draggable = true;
-            row.style.paddingLeft = (6 + depth * 14) + "px";
+            row.style.paddingLeft = (6 + depth * 14 + (L.clip ? 14 : 0)) + "px";
             const how = (e) => (e.shiftKey ? "range" : (e.ctrlKey || e.metaKey) ? "toggle" : null);
             const eye = this.el("span", "eye" + (L.visible ? "" : " off"), { title: L.visible ? "Hide" : "Show" });
             eye.append(paintIcon(this.d, L.visible ? "eye" : "eyeOff", 15));
@@ -2443,7 +2545,8 @@ class PaintEditor {
                 this._thumbJobs.push([mt, L, true]);
                 row.append(mt);
             }
-            const nm = this.el("span", "nm", { text: L.name, title: "Double-click to rename" });
+            if (L.clip) row.insertBefore(this.el("span", "clipmark", { text: "↳", title: "Clipped to the layer under it (Alt+click releases it)" }), eye.nextSibling);
+            const nm = this.el("span", "nm" + (clipBases.has(L.id) ? " base" : ""), { text: L.name, title: "Double-click to rename" });
             row.append(nm);
             if (L.text) row.append(this.el("span", "tag", { text: "T" }));
             if (L.blend !== "normal" && !(isG && L.blend === "pass_through")) row.append(this.el("span", "tag", { text: D.BLEND_LABELS[L.blend].split(" ")[0] }));
@@ -2454,6 +2557,13 @@ class PaintEditor {
                 const now = Date.now(), last = this._rowClick;
                 this._rowClick = { id: L.id, t: now };
                 const onName = e.target && e.target.closest && e.target.closest(".nm");
+                if (e.altKey && !e.shiftKey && !(e.ctrlKey || e.metaKey)) {
+                    // Alt+click: clip this layer to the one under it, or release it.
+                    if (L.kind === "group") { this._notify("A group is not clipped; clip the layers above it to it.", "info"); return; }
+                    if (!L.clip && !this._clipBase(L)) { this._notify(`${L.name} has no layer under it to clip to.`, "warn"); return; }
+                    this.setLayerProps(L.id, { clip: !L.clip }, L.clip ? "Release clipping mask" : "Create clipping mask");
+                    return;
+                }
                 const h = how(e);
                 this.setActive(L.id, false, h);
                 if (!h && onName && last && last.id === L.id && now - last.t < 450) {
@@ -2811,7 +2921,8 @@ class PaintEditor {
                 } else this._slider(s, label, v, a, b, step, (x) => live({ [k]: x }), end);
             }
             if (!D.ADJUST_FIELDS[t].length && t !== "curves") s.append(this.el("div", "paint-note", { text: "Nothing to set: it inverts what is under it." }));
-            s.append(this.el("div", "paint-note", { text: "It changes every layer under it. Paint its mask (or select first) to limit it." }));
+            s.append(this.el("div", "paint-note", { text: L.clip ? "Clipped: it changes only the layer it is clipped to (Alt+click in Layers releases it)."
+                : "It changes every layer under it. Paint its mask (or select first) to limit it, or Alt+click it in Layers to change only the layer under it." }));
         } else if (L.text) {
             const t = L.text;
             const ta = this.el("textarea", "", { value: t.text });

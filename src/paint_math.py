@@ -98,6 +98,21 @@ def blend_over(back, src, alpha, mode="normal"):
     return out
 
 
+def clip_over(back, src, alpha, mode="normal"):
+    """A clipped layer over its base (``paintData.layClipped``): Co = Cb + (B(Cb, Cs) - Cb) t with
+    t = as x *alpha*, only where the base is (ab > 0); the base's alpha is kept. A new uint8 array."""
+    cb = back[..., :3].astype(np.float64) / 255.0
+    cs = src[..., :3].astype(np.float64) / 255.0
+    t = (src[..., 3].astype(np.float64) / 255.0) * alpha
+    t = np.where(back[..., 3] > 0, t, 0.0)
+    b = blend_fn(mode, cb, cs) if mode != "normal" else cs
+    out = back.copy()
+    co = cb + (b - cb) * t[..., None]
+    keep = (t == 0)[..., None]
+    out[..., :3] = np.where(keep, back[..., :3], q8(co))
+    return out
+
+
 def mix_back(back, res, t):
     """*back* + (*res* - *back*) * *t* (h, w floats), premultiplied: a Pass Through group with an opacity
     under 1 or a mask (``paintData.mixBack``). Returns a new uint8 array."""
