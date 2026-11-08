@@ -384,9 +384,11 @@ export const PaintPanelMixin = {
         if (!rec || !rec.editor || !rec.editor.doc) return null;
         try {
             const s = await this._paintSync(rec);
+            const was = rec.path;
             const res = await postJson("/imageviewer/paint/save", { token: rec.token, meta: s.meta, keep: s.keep, as_new: asNew,
                                                                name: name || s.meta.name, context: canvasContext() });
             rec.path = res.path;
+            if (res.path !== was) this._paintLanded(res.path);
             addRecentDoc("paint", res.path);
             rec.editor.markSaved();
             notice("success", "Saved", res.path);
@@ -397,11 +399,109 @@ export const PaintPanelMixin = {
         }
     },
 
-    paintSaveAs(rec) {
-        if (!rec || !rec.editor || !rec.editor.doc) return;
-        rec.editor.dialog("Save as", [["name", "Name", rec.editor.doc.name || "paint", "text"]],
-            (v) => this.paintSave(rec, { asNew: true, name: v.name }),
-            "Saved as an .ora (layers, masks, adjustments kept): the next version, in the shot's paint folder when the canvas names one.");
+    /**
+     * Save as…: a name, a format (.ora with everything, or .psd) and a folder (typed, or Browse… - the viewer's own
+     * file picker, so the same folders); asks before writing over a file. The tab then works on the new file.
+     */
+    async paintSaveAs(rec) {
+        const ed = rec && rec.editor;
+        if (!ed || !ed.doc) return;
+        const cur = rec.path || "";
+        const dirOf = (p) => String(p || "").replace(/[\\/][^\\/]*$/, "");
+        const stem = cur ? baseOf(cur).replace(/\.[^.]+$/, "") : (ed.doc.name || "paint");
+        let start = cur && /\.(ora|psd)$/i.test(cur) ? dirOf(cur) : "";
+        if (!start) {
+            try {
+                // Where pictures of this kind are kept: the shot's paint folder, else the viewer's own.
+                const res = await api.fetchApi("/imageviewer/export_places", { method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ kind: "paint", context: canvasContext() }) });
+                const places = res.ok ? ((await res.json()).places || []) : [];
+                if (places[0] && places[0].path) start = places[0].path;
+            } catch (_) { /* typed by hand then */ }
+        }
+        const el = (tag, cls, props) => ed.el(tag, cls, props);
+        const shade = el("div", "paint-dlg-shade");
+        const box = el("div", "paint-dlg paint-saveas");
+        box.append(el("h3", "", { text: "Save as" }));
+        const field = (label, ...parts) => { const r = el("div", "paint-field"); r.append(el("label", "", { text: label }), ...parts); box.append(r); return r; };
+        const name = el("input", "paint-saveas-name", { type: "text", value: stem, spellcheck: false });
+        field("Name", name);
+        const fmt = el("select", "paint-saveas-format");
+        fmt.append(el("option", "", { value: "ora", text: "OpenRaster (.ora) - everything kept" }),
+                   el("option", "", { value: "psd", text: "Photoshop (.psd) - adjustments baked" }));
+        fmt.value = cur && /\.psd$/i.test(cur) ? "psd" : "ora";
+        field("Format", fmt);
+        const folder = el("input", "paint-saveas-folder", { type: "text", value: start, spellcheck: false });
+        const browse = el("button", "paint-btn paint-saveas-browse", { type: "button", text: "Browse\u2026" });
+        field("Folder", folder, browse);
+        const note = el("div", "note paint-saveas-note", { text: "The tab works on the new file from then on; the file it came from stays as it is." });
+        box.append(note);
+        const go = el("div", "go");
+        const cancel = el("button", "paint-btn", { type: "button", text: "Cancel" });
+        const over = el("button", "paint-btn paint-saveas-over", { type: "button", text: "Overwrite" });
+        over.style.display = "none";
+        const ok = el("button", "paint-btn on paint-saveas-go", { type: "button", text: "Save" });
+        go.append(cancel, over, ok);
+        box.append(go);
+        shade.append(box);
+        const shut = () => shade.remove();
+        const send = async (overwrite) => {
+            ok.disabled = over.disabled = true;
+            over.style.display = "none";
+            note.classList.remove("error");
+            note.textContent = "Saving\u2026";
+            try {
+                const s = await this._paintSync(rec);
+                const res = await postJson("/imageviewer/paint/save_as", { token: rec.token, meta: s.meta, keep: s.keep, folder: folder.value,
+                                                                          name: name.value, format: fmt.value, overwrite });
+                shut();
+                rec.path = res.path;
+                addRecentDoc("paint", res.path);
+                ed.markSaved();
+                this._paintRelabel(rec, res.path);
+                notice("success", "Saved", res.path + (res.notes && res.notes.length ? " - " + res.notes.join("; ") : ""));
+                this._paintLanded(res.path);
+            } catch (e) {
+                ok.disabled = over.disabled = false;
+                if (e.status === 409 && e.data && e.data.exists) {
+                    note.textContent = `${baseOf(e.data.path)} is there already. Overwrite it?`;
+                    over.style.display = "";
+                    return;
+                }
+                note.textContent = "Not saved: " + String(e.message || e);
+                note.classList.add("error");
+            }
+        };
+        cancel.addEventListener("click", shut);
+        ok.addEventListener("click", () => send(false));
+        over.addEventListener("click", () => send(true));
+        browse.addEventListener("click", () => openFilePicker(this.container, {
+            id: "paintSaveAs", title: "Save as\u2026 into", kind: "paint", start: folder.value, folder: true,
+            exts: [".ora", ".psd"], go: "This folder",
+            onPick: async ([f]) => { if (f && f.path) folder.value = f.path; return { ok: true }; },
+        }));
+        box.addEventListener("keydown", (e) => {
+            e.stopPropagation();
+            if (e.key === "Escape") { e.preventDefault(); shut(); }
+            else if (e.key === "Enter" && e.target.tagName !== "SELECT") { e.preventDefault(); send(false); }
+        });
+        shade.addEventListener("pointerdown", (e) => { e.stopPropagation(); if (e.target === shade) shut(); });
+        ed.box.append(shade);
+        setTimeout(() => { name.focus(); name.select(); }, 0);
+        return shade;
+    },
+
+    /** The tab's name after the file it works on now. */
+    _paintRelabel(rec, path) {
+        const key = Object.entries(this._paintState().tabs).find(([, r]) => r === rec)?.[0];
+        if (!key || !this.tabLabels) return;
+        this.tabLabels[key] = "\u{1F58C} " + baseOf(path);
+        if (this._rebuildTabBar) this._rebuildTabBar(null);
+    },
+
+    /** A saved / exported .ora or .psd into the History, as every export lands there (a picture of how it looks). */
+    _paintLanded(path) {
+        if (this.exportLanded) this.exportLanded([path]).catch?.(() => {});
     },
 
     async paintExport(rec) {
@@ -419,7 +519,7 @@ export const PaintPanelMixin = {
                     const res = await postJson("/imageviewer/paint/export", { token: rec.token, meta: s.meta, keep: s.keep, format: v.format,
                                                                         name: v.name, context: v.context });
                     notice("success", "Exported", res.path + (res.notes && res.notes.length ? " - " + res.notes.join("; ") : ""));
-                    if (this.exportLanded && v.format !== "psd" && v.format !== "ora") this.exportLanded([res.path]);
+                    if (this.exportLanded) this.exportLanded([res.path]);
                     return { ok: true };
                 } catch (e) { return { ok: false, message: String(e.message || e) }; }
             },

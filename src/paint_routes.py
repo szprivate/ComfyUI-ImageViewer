@@ -18,6 +18,9 @@ nothing is rounded on the way - a canvas' PNG would premultiply them.
   ``as_new`` - as the next version by the export rule (kind ``paint``).
 - ``POST /imageviewer/paint/export`` (JSON) - the session's document as png / jpg / webp / tif (flat) or
   psd (layers; adjustments baked), by the export rule.
+- ``POST /imageviewer/paint/save_as`` (JSON) - ``token, meta, keep, folder, name, format (ora | psd), overwrite``:
+  the document into that folder (``is_allowed``), the tab working on that file from then on; 409 ``{exists, path}``
+  when the file is there and ``overwrite`` is not set.
 - ``POST /imageviewer/paint/doc`` (JSON) - the agent's: ``doc`` (a path, or a token) and ``ops``
   (paint_ops). Without ops: the outline. With ops: applied (all or none), written when the document
   is a file (an .ora over itself; a picture / .psd as a new .ora version beside the rule), and the page
@@ -234,6 +237,60 @@ def save(s, export_rules, output_dir, *, as_new=False, name=None, context=None, 
     P.write_ora(path, doc)
     s.path = path
     return {"path": path, "version": version}
+
+
+_NOT_IN_A_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_RESERVED = re.compile(r"^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$", re.I)
+SAVE_AS_FORMATS = ("ora", "psd")
+
+
+class Exists(PaintError):
+    """Save as onto a file that is there: the page asks before writing over it."""
+
+    def __init__(self, path):
+        super().__init__(f"{os.path.basename(path)} is there already")
+        self.path = path
+
+
+def file_name(name, fmt):
+    """A file name from what was typed: no folder in it, the format's extension."""
+    text = _NOT_IN_A_NAME.sub("_", str(name or "")).strip()
+    if text.lower().endswith("." + fmt):
+        text = text[:-len(fmt) - 1]
+    text = text.strip(" .")[:120].strip(" .")
+    if not text.strip("_") or _RESERVED.match(text):
+        text = ("paint_" + text) if text.strip("_") else "paint"
+    return f"{text}.{fmt}"
+
+
+def save_as(s, folder, name, fmt="ora", *, overwrite=False, is_allowed=None):
+    """Save as...: the document into *folder* / *name*.<fmt> (.ora with everything; .psd as Photoshop takes it).
+    The tab then works on that file. Raises Exists when it is there and *overwrite* is not set."""
+    fmt = str(fmt or "ora").lower().lstrip(".")
+    if fmt not in SAVE_AS_FORMATS:
+        raise PaintError(f"Save as writes .ora or .psd, not .{fmt}")
+    if not str(folder or "").strip():
+        raise PaintError("say which folder")
+    folder = os.path.abspath(str(folder))
+    if is_allowed and not is_allowed(folder):
+        raise PaintError("that folder may not be written to (Settings > ComfyUI Image Viewer > Folders)")
+    os.makedirs(folder, exist_ok=True)       # the shot's paint folder before its first version, say
+    path = os.path.join(folder, file_name(name, fmt))
+    if os.path.exists(path) and not overwrite:
+        raise Exists(path)
+    tmp = path + ".part" + fmt
+    try:
+        notes = []
+        if fmt == "psd":
+            notes = list(P.write_psd(tmp, s.doc) or [])
+        else:
+            P.write_ora(tmp, s.doc)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    s.path = path
+    return {"path": path, "notes": notes}
 
 
 def export(s, export_rules, output_dir, fmt, *, name=None, context=None, quality=92):
@@ -480,6 +537,22 @@ def register(add, *, web, path_access, export_rules, folder_paths, send, resolve
         except (PaintError, ValueError, OSError) as e:
             return err(e)
 
+    async def h_save_as(request):
+        body = await guarded_json(request)
+        s = BOOK.get(body.get("token"))
+        if not s:
+            return err("that document is no longer open - open it again", 404)
+        try:
+            if isinstance(body.get("meta"), dict):
+                await off(commit, s, body["meta"], body.get("keep"))
+            res = await off(save_as, s, body.get("folder"), body.get("name"), body.get("format") or "ora",
+                            overwrite=bool(body.get("overwrite")), is_allowed=path_access.is_allowed)
+            return web.json_response({"ok": True, "written": True, **res})
+        except Exists as e:
+            return web.json_response({"error": str(e), "exists": True, "path": e.path}, status=409)
+        except (PaintError, ValueError, OSError) as e:
+            return err(e)
+
     async def h_export(request):
         body = await guarded_json(request)
         s = BOOK.get(body.get("token"))
@@ -597,7 +670,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, send, resolve
         add(method, "/api/imageviewer/paint/" + name, h)
 
     for method, name, h in (("POST", "open", h_open), ("GET", "px", h_px), ("POST", "stage", h_stage),
-                            ("POST", "save", h_save), ("POST", "export", h_export), ("POST", "doc", h_doc),
+                            ("POST", "save", h_save), ("POST", "save_as", h_save_as), ("POST", "export", h_export), ("POST", "doc", h_doc),
                             ("POST", "describe", h_describe), ("POST", "snapshot", h_snapshot)):
         add(method, "/imageviewer/paint/" + name, h)
         add(method, "/api/imageviewer/paint/" + name, h)

@@ -934,7 +934,8 @@ export const BrowserMixin = {
         // Line the answers back up with what was asked for: the server drops
         // anything it couldn't read, so position alone can't be trusted.
         const norm  = (p) => String(p || "").replace(/\\/g, "/").toLowerCase();
-        const byPath = new Map(frames.map(f => [norm(f.path), f]));
+        // An .ora / .psd answers with a picture of it (path) and the file itself (paint).
+        const byPath = new Map(frames.map(f => [norm(f.paint || f.path), f]));
         return paths.map(p => byPath.get(norm(p)) || null);
     },
 

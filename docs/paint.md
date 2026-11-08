@@ -107,6 +107,8 @@ A smart filter is kept as a setting on the layer instead of being baked into its
 - **Layer styles** (**Layer > Layer style…**, or the "fx" mark on a layer's row): a **drop shadow** (angle, distance, blur), an **outer glow**, a **stroke** round the layer's edge, and a **colour overlay**, each with its colour and opacity. They are settings, not pixels, so they follow what you paint and can be changed or switched off at any time. A `.ora` keeps them; a `.psd` gets them baked into the layer. A layer clipped to another shows without its own style.
 - **Lock transparency** (the checkered button over the list, or the Layer menu): the brush and the other tools then paint only where the layer already has something, and its see-through parts stay see-through. The eraser and Delete paint the second colour instead.
 - **Quick Mask** (<kbd>Q</kbd>, or the button under the tools): the selection is shown as a red tint and painted with the brush, eraser, bucket or Fill. Black takes away, white adds. <kbd>Q</kbd> again turns it back into a selection.
+- **Solo**: <kbd>Alt</kbd>+click a layer's eye (or **Solo** in the layer's menu) to see only that layer (with the picked ones, when it is one of them). The eye turns orange. <kbd>Alt</kbd>+click it again, or **End solo**, and every layer is shown or hidden as it was before.
+- **Drag onto the buttons**: drag layers onto the duplicate button under the list to copy them (the whole layer, even with a selection), or onto the bin to delete them.
 - Double-click a name to rename. **Layer** menu: duplicate (<kbd>Ctrl</kbd>+<kbd>J</kbd>), merge down (<kbd>Ctrl</kbd>+<kbd>E</kbd>), flip, rotate, scale, lock.
 - The **History** panel lists every step; click one to go back to it.
 
@@ -149,6 +151,7 @@ The **Generate** menu and the Generate part of Properties. **Fill from the surro
 | | |
 |---|---|
 | **Save** (<kbd>Ctrl</kbd>+<kbd>S</kbd>) | An `.ora` is saved over itself. A picture, a `.psd` or a new canvas is saved as the next version, never over the original |
+| **Save as…** | A name, a format (`.ora` with everything, or `.psd`) and a folder, typed or picked with **Browse…**. It asks before writing over a file. The tab then works on the new file |
 | **Export…** | PNG, JPEG, WebP, TIFF or PSD. Adjustment layers are baked into a PSD |
 
-`.ora` (OpenRaster) opens in Krita and GIMP too. agentY can edit an open picture as well; it waits while you have unsaved changes.
+A new `.ora` or `.psd` (Save as, a new version, an export) also goes into the **History**, shown as a picture of how it looks; **Edit in Paint** on it opens the file itself. `.ora` (OpenRaster) opens in Krita and GIMP too. agentY can edit an open picture as well; it waits while you have unsaved changes.

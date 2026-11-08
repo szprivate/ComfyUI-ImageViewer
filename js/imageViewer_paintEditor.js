@@ -168,6 +168,8 @@ const STYLE = `
 .paint-row .grp.sel { border-color: #fff; box-shadow: 0 0 0 1px #f60; }
 .paint-row .eye { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; color: #bbb; flex: 0 0 auto; }
 .paint-row .eye.off { color: #555; }
+.paint-row .eye.solo { color: #f60; }
+.paint-lfoot .paint-btn.drop-hot { border-color: #f60; color: #f60; background: rgba(255,102,0,.15); }
 .paint-row canvas { flex: 0 0 auto; width: 40px; height: 30px; background: #888; border: 1px solid #444; }
 .paint-row canvas.sel { border-color: #fff; box-shadow: 0 0 0 1px #f60; }
 .paint-row .adj { flex: 0 0 auto; width: 40px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #444; color: #ccc; background: #222; }
@@ -394,6 +396,7 @@ class PaintEditor {
     /** A document from its description and pixels: { doc, pix: {id: Uint8ClampedArray}, masks: {id: Uint8Array}, selection }. */
     setDocument(data, { keepView = false, fresh = true } = {}) {
         this._belowKept = null;
+        this._solo = null;
         this.doc = D.cleanDoc(data.doc);
         this.pix = new Map(Object.entries(data.pix || {}));
         this.masks = new Map(Object.entries(data.masks || {}));
@@ -870,6 +873,7 @@ class PaintEditor {
     }
 
     undo() {
+        this._solo = null;
         if (this.tf) { this.tfCancel(); return; }
         if (this.wp) { this.wpCancel(); return; }
         if (this.lq) { this.lqCancel(); return; }
@@ -882,6 +886,7 @@ class PaintEditor {
     }
 
     redo() {
+        this._solo = null;
         if (this.tf || this.wp || this.lq) return;
         const e = this.redoStack.pop();
         if (!e) return;
@@ -1134,7 +1139,54 @@ class PaintEditor {
         });
     }
 
-    duplicateLayer() {
+    /** Layers dragged onto Duplicate ("dup") or Delete ("del") in the Layers panel. */
+    dropOnButton(ids, act) {
+        const there = ids.filter((id) => this.doc && this.doc.layers.some((L) => L.id === id));
+        if (!there.length) return false;
+        this.picked = new Set(there);
+        this.doc.active = there[there.length - 1];
+        this.editMask = false;
+        return act === "del" ? this.deleteLayer() : this.duplicateLayer({ whole: true });
+    }
+
+    /**
+     * Solo (Alt+click an eye, or the Layers menu): only these layers seen - with the groups they are in and what is
+     * inside them. Again on the same layers: every layer as it was before. Another layer while soloed: that one,
+     * still going back to how it was before the first.
+     */
+    soloLayers(ids) {
+        const d = this.doc;
+        if (!d || !ids || !ids.length) return false;
+        const key = [...ids].sort().join(",");
+        if (this._solo && this._solo.key === key) return this.endSolo();
+        const was = this._solo ? this._solo.was : new Map(d.layers.map((L) => [L.id, !!L.visible]));
+        const keep = new Set();
+        for (const L of D.withInside(d, ids)) keep.add(L.id);
+        for (const id of ids) { const L = d.layers.find((x) => x.id === id); if (L) for (const P of D.ancestors(d, L)) keep.add(P.id); }
+        const ok = this.change("Solo layer", () => { for (const L of d.layers) L.visible = keep.has(L.id); });
+        if (ok !== false) this._solo = { key, ids: [...ids], was };
+        this.refreshLayers();
+        return ok;
+    }
+
+    /** Back from solo: every layer seen or hidden as it was before. */
+    endSolo() {
+        const s = this._solo;
+        this._solo = null;
+        if (!s || !this.doc) { this.refreshLayers(); return false; }
+        const ok = this.change("End solo", () => { for (const L of this.doc.layers) if (s.was.has(L.id)) L.visible = s.was.get(L.id); });
+        this.refreshLayers();
+        return ok;
+    }
+
+    /** The layers soloed now (none when they were changed by hand since). */
+    soloed() {
+        const s = this._solo;
+        if (!s || !this.doc) return [];
+        return s.ids.filter((id) => this.doc.layers.some((L) => L.id === id));
+    }
+
+    duplicateLayer({ whole = false } = {}) {
         const L = this.active();
         if (!L) return false;
         const many = this.pickedLayers().length > 1;
@@ -1164,13 +1216,14 @@ class PaintEditor {
                 this.picked = new Set(made);
             });
         }
-        return this.change(this.sel && L.kind === "pixel" ? "Layer via copy" : "Duplicate layer", () => {
+        const viaSel = !!this.sel && L.kind === "pixel" && !whole;
+        return this.change(viaSel ? "Layer via copy" : "Duplicate layer", () => {
             const C = JSON.parse(JSON.stringify(L));
             C.id = D.newId();
             C.locked = false;
             if (L.kind === "pixel") {
                 let px = new Uint8ClampedArray(this.pix.get(L.id));
-                if (this.sel) {
+                if (viaSel) {
                     // Ctrl+J with a selection: only what is selected.
                     const m = D.maskForLayer(this.sel, this.doc.w, this.doc.h, L);
                     for (let i = 0; i < m.length; i++) px[i * 4 + 3] = D.q8((px[i * 4 + 3] / 255) * (m[i] / 255));
@@ -2786,6 +2839,8 @@ class PaintEditor {
         return [{ label: "New layer (Ctrl+Shift+N)", run: () => this.newLayer() },
                 { label: "New group", run: () => this.newGroup() },
                 { label: "Duplicate (Ctrl+J)", disabled: !L, run: () => this.duplicateLayer() },
+                this._solo ? { label: "End solo (show the others again)", run: () => this.endSolo() }
+                           : { label: n > 1 ? `Solo ${n} layers (Alt+click an eye)` : "Solo (Alt+click the eye)", disabled: !L, run: () => this.soloLayers(this.pickedLayers().map((x) => x.id)) },
                 { label: n > 1 ? `Delete ${n} layers` : "Delete", disabled: !L, run: () => this.deleteLayer() },
                 { label: n > 1 ? `Merge ${n} layers (Ctrl+E)` : grp ? "Merge group (Ctrl+E)" : "Merge down (Ctrl+E)", disabled: !L, run: () => this.mergeDown() }, "-",
                 { label: n > 1 ? `Group ${n} layers (Ctrl+G)` : "Group (Ctrl+G)", disabled: !L, run: () => this.groupLayers() },
@@ -2973,9 +3028,21 @@ class PaintEditor {
                     this.btn("folderPlus", "New group (with several layers picked: group them, Ctrl+G)", () => (this.pickedLayers().length > 1 ? this.groupLayers() : this.newGroup())),
                     this.btn("adjust", "New adjustment layer", (e, b) => this._menu(b, D.ADJUST_TYPES.map((t) => ({ label: D.ADJUST_LABELS[t], run: () => this.addAdjustment(t) })))),
                     this.btn("mask", "Add a mask (from the selection, with one)", () => this.addMask(this.sel ? "selection" : "all")),
-                    this.btn("copy", "Duplicate (Ctrl+J)", () => this.duplicateLayer()),
+                    (this.dupBtn = this.btn("copy", "Duplicate (Ctrl+J) - or drag layers onto it", () => this.duplicateLayer())),
                     this.btn("mergeDown", "Merge down (Ctrl+E)", () => this.mergeDown()),
-                    this.btn("trash", "Delete the picked layers", () => this.deleteLayer()));
+                    (this.trashBtn = this.btn("trash", "Delete the picked layers - or drag layers onto it", () => this.deleteLayer())));
+        // A row dragged onto Duplicate or Delete: those layers copied / taken away (Photoshop's way).
+        for (const [b, act] of [[this.dupBtn, "dup"], [this.trashBtn, "del"]]) {
+            b.addEventListener("dragover", (e) => { if (!this._rowDrag) return; e.preventDefault(); e.dataTransfer.dropEffect = act === "dup" ? "copy" : "move"; b.classList.add("drop-hot"); });
+            b.addEventListener("dragleave", () => b.classList.remove("drop-hot"));
+            b.addEventListener("drop", (e) => {
+                e.preventDefault(); e.stopPropagation();
+                b.classList.remove("drop-hot");
+                const ids = this._rowDrag;
+                this._rowDrag = null;
+                if (ids && ids.length) this.dropOnButton(ids, act);
+            });
+        }
         p.append(head, this.layerList, foot);
         // Del / Backspace act on the layer while the Layers panel was the last thing pressed.
         p.addEventListener("pointerdown", () => { this._layersFocus = true; }, true);
@@ -3036,8 +3103,13 @@ class PaintEditor {
             const how = (e) => (e.shiftKey ? "range" : (e.ctrlKey || e.metaKey) ? "toggle" : null);
             const eye = this.el("span", "eye" + (L.visible ? "" : " off"), { title: L.visible ? "Hide" : "Show" });
             eye.append(paintIcon(this.d, L.visible ? "eye" : "eyeOff", 15));
+            if (this._solo && this._solo.ids.includes(L.id)) { eye.classList.add("solo"); eye.title = "Soloed - Alt+click to show the others again"; }
+            else eye.title += " (Alt+click: solo)";
             eye.addEventListener("click", (e) => {
                 e.stopPropagation();
+                // Alt+click: solo (the picked layers when this is one of them).
+                if (e.altKey) { this.soloLayers(this.picked.has(L.id) && this.picked.size > 1 ? this.pickedLayers().map((x) => x.id) : [L.id]); return; }
+                this._solo = null;                 // seen / hidden by hand: no going back from solo any more
                 // The eye of a picked layer hides / shows every picked one.
                 const v = !L.visible;
                 if (this.picked.has(L.id) && this.picked.size > 1) this.setPickedProps((X) => { X.visible = v; }, v ? "Show layers" : "Hide layers");
