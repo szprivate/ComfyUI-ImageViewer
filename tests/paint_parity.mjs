@@ -8,6 +8,7 @@ const [, , inFile, outFile] = process.argv;
 const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/(?=[A-Za-z]:)/, ""));
 const D = await import(pathToFileURL(path.join(here, "..", "js", "imageViewer_paintData.js")).href);
 const W = await import(pathToFileURL(path.join(here, "..", "js", "imageViewer_paintWarp.js")).href);
+const G = await import(pathToFileURL(path.join(here, "..", "js", "imageViewer_paintDraw.js")).href);
 const job = JSON.parse(fs.readFileSync(inFile, "utf8"));
 const dec = (b) => new Uint8Array(Buffer.from(b, "base64"));
 const enc = (a) => Buffer.from(a.buffer, a.byteOffset, a.byteLength).toString("base64");
@@ -37,6 +38,11 @@ for (const [name, c] of Object.entries(job.cases)) {
         const L = doc.layers[0], r = W.perspectiveLayer(px[L.id], L.w, L.h, c.distort);
         res.distort = enc(r.px);
         res.distort_box = r.box;
+    }
+    if (c.draw) {
+        res.gradients = c.draw.gradients.map((g) => enc(G.gradientPixels(c.draw.w, c.draw.h, c.draw.ox, c.draw.oy, g)));
+        res.shapes = c.draw.shapes.map((q) => D.flattenPath(D.cleanPath(G.shapePath(q.kind, q.x0, q.y0, q.x1, q.y1, q))));
+        res.stops = c.draw.presets.map(([p, fg, bg]) => G.gradientStops(p, fg, bg));
     }
     out[name] = res;
 }

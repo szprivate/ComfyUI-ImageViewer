@@ -950,6 +950,12 @@ export function stamp(st, cx, cy, radius, hard, flow = 1, angle = 0) {
             let t = a * st.opacity;
             const o = i * 4;
             const oa = st.orig[o + 3] / 255;
+            if (st.tone) {
+                // Dodge, burn, sponge: the pixel from before the stroke changed by the dab's share; alpha kept.
+                const v = toneAt(st.tone, st.orig[o] / 255, st.orig[o + 1] / 255, st.orig[o + 2] / 255, t);
+                st.px[o] = q8(v[0]); st.px[o + 1] = q8(v[1]); st.px[o + 2] = q8(v[2]);
+                continue;
+            }
             let col = st.color;
             if (st.clone) {
                 // The clone stamp: the colour of the source at the same offset (cloneAt), its alpha scaling the dab.
@@ -980,6 +986,26 @@ export function stamp(st, cx, cy, radius, hard, flow = 1, angle = 0) {
         }
     }
     return { x0, y0, x1, y1 };
+}
+
+/**
+ * The dodge, burn and sponge brushes on one pixel (0..1), by `t` (the dab's share x the exposure / flow).
+ * tone = { mode: dodge | burn | sponge, range: shadows | midtones | highlights (dodge, burn),
+ * sat: saturate | desaturate (sponge) }. Dodge moves a channel toward white, burn toward black, each by
+ * how much the pixel's light lies in the range (shadows (1 - Y)^2, midtones 4 Y (1 - Y), highlights Y^2);
+ * the sponge moves the channels away from or toward the pixel's grey.
+ */
+export function toneAt(tone, r, g, b, t) {
+    const Y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    const cl = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+    if (tone.mode === "sponge") {
+        const k = tone.sat === "desaturate" ? -t : t;
+        return [cl(Y + (r - Y) * (1 + k)), cl(Y + (g - Y) * (1 + k)), cl(Y + (b - Y) * (1 + k))];
+    }
+    const w = tone.range === "shadows" ? (1 - Y) * (1 - Y) : tone.range === "highlights" ? Y * Y : 4 * Y * (1 - Y);
+    const s = t * w;
+    if (tone.mode === "burn") return [r - s * r, g - s * g, b - s * b];
+    return [r + s * (1 - r), g + s * (1 - g), b + s * (1 - b)];
 }
 
 /**

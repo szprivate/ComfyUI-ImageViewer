@@ -19,18 +19,23 @@ import { PenMixin } from "./imageViewer_paintPen.js";
 import { WarpMixin } from "./imageViewer_paintWarp.js";
 import { HealMixin } from "./imageViewer_paintHeal.js";
 import { TipsMixin } from "./imageViewer_paintAbr.js";
+import { DrawMixin, smudgeStart, smudgeDab, SHAPE_KINDS } from "./imageViewer_paintDraw.js";
 
 export const PAINT_TOOLS = [
     ["move", "transform", "Transform (move, scale, rotate, shear)", "V"], ["marquee", "marquee", "Rectangle select", "M"], ["ellipse", "ellipse", "Ellipse select", "Shift+M"],
     ["lasso", "lasso", "Lasso", "L"], ["pen", "pen", "Pen (paths)", "P"], ["wand", "wand", "Magic wand", "W"], ["crop", "crop", "Crop", "C"],
     ["brush", "brush", "Brush", "B"], ["clone", "clone", "Clone stamp", "S"], ["spot", "bandage", "Spot healing brush", "J"], ["heal", "heal", "Healing brush (Shift+J)", "Shift+J"],
     ["patch", "patch", "Patch (Shift+J)", "Shift+J"], ["eraser", "eraser", "Eraser", "E"], ["fill", "fill", "Paint bucket", "G"],
+    ["gradient", "gradient", "Gradient (Shift+G)", "Shift+G"], ["dodge", "dodge", "Dodge", "O"], ["burn", "burn", "Burn (Shift+O)", "Shift+O"],
+    ["sponge", "sponge", "Sponge (Shift+O)", "Shift+O"], ["smudge", "smudge", "Smudge", "R"], ["shape", "shape", "Shapes (Shift+U: the next shape)", "U"],
     ["picker", "picker", "Eyedropper", "I"], ["text", "text", "Text", "T"], ["hand", "hand", "Hand (hold Space)", "H"],
 ];
 const TOOL_KEYS = { v: "move", m: "marquee", l: "lasso", p: "pen", j: "spot", w: "wand", c: "crop", b: "brush", s: "clone", e: "eraser", g: "fill", i: "picker",
-                    t: "text", h: "hand" };
+                    t: "text", h: "hand", o: "dodge", r: "smudge", u: "shape" };
 /** The tools that paint with a round brush (size, hardness, opacity, spacing, the pen). */
-const BRUSHES = ["brush", "clone", "eraser", "spot", "heal"];
+const BRUSHES = ["brush", "clone", "eraser", "spot", "heal", "dodge", "burn", "sponge", "smudge"];
+/** The brushes that change the pixels under them rather than lay a colour down. */
+const TONERS = ["dodge", "burn", "sponge"];
 /** The brushes that take from a source point (Alt+click). */
 const SOURCED = ["clone", "heal"];
 /** The keys, for the viewer's Show Hotkeys while a Paint tab is up. */
@@ -41,6 +46,8 @@ export const PAINT_KEYS = [
     ["[ / ]", "Brush smaller / larger (Shift: softer / harder)"], ["X / D", "Swap / default colours"],
     ["Alt+click", "Pick a colour (brush, bucket); the clone stamp and healing brush: where they take from"],
     ["J / Shift+J", "Spot healing brush / the next of healing brush, patch, spot healing"],
+    ["G / Shift+G", "Paint bucket / gradient (Shift: 45° steps)"], ["O / Shift+O", "Dodge / the next of burn, sponge, dodge"], ["R", "Smudge"],
+    ["U / Shift+U", "Shapes / the next shape (Shift: square, Alt: from the middle)"],
     ["Transform: drag", "Inside: move; a handle: scale (Shift: keep the shape, Alt: about the middle); outside: rotate (Shift: 15°); Ctrl+edge handle: shear"],
     ["Ctrl+T", "Transform the layer"], ["Shift+F5", "Fill… (in Properties)"], ["Del / Backspace in Layers", "Delete the layer (or its mask)"], ["Space+drag", "Pan"], ["Wheel", "Zoom about the pointer"],
     ["Ctrl+0 / Ctrl+1", "Fit / 100%"], ["Ctrl+Z / Ctrl+Shift+Z", "Undo / redo"], ["Ctrl+A / Ctrl+D", "Select all / deselect"],
@@ -194,6 +201,12 @@ class PaintEditor {
             heal: { size: 40, hardness: 50, opacity: 100, spacing: 10, penSize: true, penOpacity: false, aligned: true, sample: "layer",
                     overlay: true, angle: 0, scale: 100, flip: false },
             patch: { mode: "source" },
+            dodge: { size: 60, hardness: 0, opacity: 50, spacing: 10, penSize: true, penOpacity: false, range: "midtones" },
+            burn: { size: 60, hardness: 0, opacity: 50, spacing: 10, penSize: true, penOpacity: false, range: "midtones" },
+            sponge: { size: 60, hardness: 0, opacity: 50, spacing: 10, penSize: true, penOpacity: false, sat: "desaturate" },
+            smudge: { size: 30, hardness: 50, opacity: 50, spacing: 5, penSize: true, penOpacity: false, finger: false },
+            gradient: { type: "linear", preset: "fg-bg", opacity: 100, reverse: false },
+            shape: { kind: "rect", mode: "pixels", fill: true, stroke: false, width: 4, lineWidth: 4, radius: 20, sides: 6 },
             fill: { tolerance: 32, contiguous: true, all: false },
             wand: { tolerance: 32, contiguous: true, all: true },
             select: { feather: 0 },
@@ -613,6 +626,7 @@ class PaintEditor {
         }
         // The pen's path; the patch being dragged.
         this._penDraw(c, X, Y);
+        this._drawDraw(c, X, Y);
         this._patchDraw(c, X, Y);
         // The crop.
         if (this.crop) {
@@ -1700,6 +1714,8 @@ class PaintEditor {
         if ((t === "brush" || t === "fill") && e.altKey) { this._pickAt(p); return; }
         if (SOURCED.includes(t) && e.altKey) { this.setCloneSource(p.x, p.y); return; }
         if (t === "patch") { this._patchDown(p, e); return; }
+        if (t === "gradient") { this._gradDown(p, e); return; }
+        if (t === "shape") { this._shapeDown(p, e); return; }
         if (t === "picker") { this._pickAt(p); this._drag = { kind: "pick" }; return; }
         if (BRUSHES.includes(t)) { this._strokeStart(p, e); return; }
         if (t === "fill") { this._bucket(p); return; }
@@ -1745,6 +1761,8 @@ class PaintEditor {
         if (dr.kind === "pen") { this._penMove(dr, p, e); return; }
         if (dr.kind === "wp") { this._wpMove(dr, p); return; }
         if (dr.kind === "patch") { this._patchMove(dr, p); return; }
+        if (dr.kind === "grad") { this._gradMove(dr, p, e); return; }
+        if (dr.kind === "shape") { this._shapeMove(dr, p, e); return; }
         if (dr.kind === "stroke") {
             // A pen sends far more positions than pointermove fires: take every one, with its pressure.
             const all = (e.getCoalescedEvents && e.getCoalescedEvents()) || [];
@@ -1779,6 +1797,8 @@ class PaintEditor {
         if (dr.kind === "pen") { this._penUp(dr); return; }
         if (dr.kind === "wp") { this._wpUp(); return; }
         if (dr.kind === "patch") { this._patchUp(dr); return; }
+        if (dr.kind === "grad") { this._gradUp(dr); return; }
+        if (dr.kind === "shape") { this._shapeUp(dr); return; }
         if (dr.kind === "marquee" || dr.kind === "ellipse") {
             if (!dr.rect || dr.rect.w < 1 || dr.rect.h < 1) { if (!dr.e.shiftKey && !dr.e.altKey) this.deselect(); else this.drawOverlay(); return; }
             const { x, y, w, h } = dr.rect;
@@ -1809,8 +1829,8 @@ class PaintEditor {
         }
         const onMask = this.editMask || L.kind === "adjust" || L.kind === "group";
         const clone = SOURCED.includes(this.tool), heal = this.tool === "spot" ? "spot" : this.tool === "heal" ? "heal" : null;
-        const what = { clone: "The clone stamp", spot: "The spot healing brush", heal: "The healing brush" }[this.tool];
-        if ((clone || heal) && onMask) { this._notify(`${what} works on a layer's pixels: pick the layer (not its mask).`, "info"); return; }
+        const what = { clone: "The clone stamp", spot: "The spot healing brush", heal: "The healing brush", dodge: "Dodge", burn: "Burn", sponge: "The sponge" }[this.tool];
+        if ((clone || heal || TONERS.includes(this.tool)) && onMask) { this._notify(`${what} works on a layer's pixels: pick the layer (not its mask).`, "info"); return; }
         if (clone && !this.cloneSrc) { this._notify(`Alt+click where ${what.toLowerCase()} should take from first.`, "info"); return; }
         if (L.kind === "adjust" && !L.mask) this.addMask("all");
         if (L.kind === "pixel" && !onMask) {
@@ -1855,8 +1875,10 @@ class PaintEditor {
             // While painting: the healing brush shows its source, the spot brush a dark wash where it will heal.
             if (heal === "spot") { st.color = [0, 0, 0]; st.opacity = 0.35; }
         }
+        if (TONERS.includes(this.tool)) st.tone = { mode: this.tool, range: o.range, sat: o.sat };
         st.L = A;
         st.radius = Math.max(0.5, o.size / 2);
+        if (this.tool === "smudge") st.smudge = smudgeStart(st.radius, o.finger, st.color);
         st.hard = o.hardness / 100;
         st.spacing = Math.max(0.01, o.spacing / 100);
         st.penSize = o.penSize !== false;
@@ -1912,8 +1934,11 @@ class PaintEditor {
             const out = new Uint8Array(old);
             for (let y = 0; y < mk.h; y++) for (let x = 0; x < mk.w; x++) {
                 const gx = x + mk.x, gy = y + mk.y;
-                const t = area ? (gx >= 0 && gy >= 0 && gx < W && gy < H ? area[gy * W + gx] / 255 : 0) : 1;
-                if (t > 0) { const i = y * mk.w + x; out[i] = Math.round(old[i] + (v - old[i]) * t); }
+                const inside = gx >= 0 && gy >= 0 && gx < W && gy < H;
+                const t = area ? (inside ? area[gy * W + gx] / 255 : 0) : 1;
+                // v: one grey, or a grey per canvas pixel (a gradient).
+                const vv = typeof v === "number" ? v : inside ? v[gy * W + gx] : null;
+                if (t > 0 && vv != null) { const i = y * mk.w + x; out[i] = Math.round(old[i] + (vv - old[i]) * t); }
             }
             return out;
         };
@@ -1957,6 +1982,7 @@ class PaintEditor {
         for (const [x, y, pr = 1] of dabs) {
             const k = D.pressureScale(pr, st.penSize, st.penOpacity);
             const r = Math.max(0.5, st.radius * k.r);
+            if (st.smudge) { rect = rectUnion(rect, smudgeDab(st, x, y, r, st.hard, st.opacity * k.a)); continue; }
             const j = st.jit ? D.jitter(st.rand, r, st.jit) : null;
             rect = j ? rectUnion(rect, D.stamp(st, x + j.dx, y + j.dy, Math.max(0.5, r * j.k), st.hard, k.a, (st.tipAngle || 0) + j.da))
                      : rectUnion(rect, D.stamp(st, x, y, r, st.hard, k.a, st.tipAngle || 0));
@@ -1989,7 +2015,8 @@ class PaintEditor {
         if (s.heal) this._healFinish(s);
         const before = cut(origBuf), after = cut(buf);
         this._bump(buf);
-        const label = s.heal === "spot" ? "Spot healing brush" : s.heal ? "Healing brush" : s.clone ? "Clone stamp" : this.tool === "eraser" ? "Eraser" : "Brush";
+        const label = s.heal === "spot" ? "Spot healing brush" : s.heal ? "Healing brush" : s.clone ? "Clone stamp"
+            : { eraser: "Eraser", dodge: "Dodge", burn: "Burn", sponge: "Sponge", smudge: "Smudge" }[this.tool] || "Brush";
         this._push({ label: (s.quick ? "Quick Mask " : "") + label, bytes: before.byteLength * 2,
                      undo: () => paste(buf, before), redo: () => paste(buf, after) });
         this._lastStrokeEnd = { L: s.L.id, x: s.last[0], y: s.last[1] };
@@ -2515,6 +2542,13 @@ class PaintEditor {
         if (lk === "x" && !e.altKey) return take(() => this.swapColors());
         if (lk === "d" && !e.altKey) return take(() => this.defaultColors());
         if (lk === "m" && e.shiftKey) return take(() => this.setTool("ellipse"));
+        if (lk === "g" && e.shiftKey && !e.altKey) return take(() => this.setTool(this.tool === "gradient" ? "fill" : "gradient"));
+        if (lk === "o" && e.shiftKey && !e.altKey) return take(() => this.setTool({ dodge: "burn", burn: "sponge", sponge: "dodge" }[this.tool] || "burn"));
+        if (lk === "u" && e.shiftKey && !e.altKey) return take(() => {
+            const s = this.opts.shape;
+            if (this.tool === "shape") s.kind = SHAPE_KINDS[(SHAPE_KINDS.indexOf(s.kind) + 1) % SHAPE_KINDS.length];
+            this.setTool("shape");
+        });
         if (lk === "j" && e.shiftKey && !e.altKey) return take(() => this.setTool({ spot: "heal", heal: "patch", patch: "spot" }[this.tool] || "heal"));
         if (TOOL_KEYS[lk] && !e.altKey && !e.shiftKey) return take(() => this.setTool(TOOL_KEYS[lk]));
         return false;
@@ -3090,7 +3124,7 @@ class PaintEditor {
             const b = o[this.tool];
             this._slider(ts, "Size", b.size, 1, 1000, 1, (v) => { b.size = v; this.drawOverlay(); sync(); });
             this._slider(ts, "Hardness", b.hardness, 0, 100, 1, (v) => { b.hardness = v; sync(); });
-            this._slider(ts, "Opacity", b.opacity, 1, 100, 1, (v) => { b.opacity = v; sync(); });
+            this._slider(ts, { dodge: "Exposure", burn: "Exposure", sponge: "Flow", smudge: "Strength" }[this.tool] || "Opacity", b.opacity, 1, 100, 1, (v) => { b.opacity = v; sync(); });
             this._slider(ts, "Spacing %", b.spacing, 1, 100, 1, (v) => { b.spacing = v; sync(); });
             if (b.penSize === undefined) b.penSize = true;
             this._field(ts, "Pen pressure", [check(b, "penSize", "Size"), check(b, "penOpacity", "Opacity")])
@@ -3109,6 +3143,23 @@ class PaintEditor {
                 this._slider(ts, "Source scale %", b.scale, 10, 400, 1, (v) => { b.scale = v; this.drawOverlay(); sync(); });
                 note((this.tool === "heal" ? "Paints the texture at the source, taking on the light and colour where it lands (when the stroke ends). " : "Paints what lies at the source (the cross). ")
                      + (this.cloneSrc ? "Alt+click sets a new source." : "Alt+click where to take from, then paint where it should go."));
+            } else if (this.tool === "dodge" || this.tool === "burn") {
+                const rg = this.el("select", "tone-range", { title: "Which part of the light it works on most" });
+                for (const [v, t] of [["shadows", "Shadows"], ["midtones", "Midtones"], ["highlights", "Highlights"]]) rg.append(this.el("option", "", { value: v, text: t }));
+                rg.value = b.range;
+                rg.addEventListener("change", () => { b.range = rg.value; sync(); });
+                this._field(ts, "Range", rg);
+                note(this.tool === "dodge" ? "Lightens what it paints over; a new stroke lightens again." : "Darkens what it paints over; a new stroke darkens again.");
+            } else if (this.tool === "sponge") {
+                const md = this.el("select", "tone-sat");
+                for (const [v, t] of [["desaturate", "Desaturate"], ["saturate", "Saturate"]]) md.append(this.el("option", "", { value: v, text: t }));
+                md.value = b.sat;
+                md.addEventListener("change", () => { b.sat = md.value; sync(); });
+                this._field(ts, "Mode", md);
+                note("Takes colour out of what it paints over (or puts more in).");
+            } else if (this.tool === "smudge") {
+                this._field(ts, "", [check(b, "finger", "Finger painting", "Each stroke starts with the colour on the brush")]);
+                note("Drags the paint along the stroke, as a finger through wet paint.");
             } else if (this.tool === "spot") {
                 note("Paint over a blemish: when the stroke ends it is filled from a place nearby that looks alike, blended into what is around it.");
             } else note(this.editMask ? "Painting the layer's MASK: white shows, black hides." : "Alt+click picks a colour; Shift+click draws a straight line.");
@@ -3118,6 +3169,8 @@ class PaintEditor {
             this._field(ts, "", [check(f, "contiguous", "Contiguous"), check(f, "all", "All layers")]);
         } else if (this.tool === "pen") {
             this._penOptions(ts, bar, sync, note);
+        } else if (this.tool === "gradient" || this.tool === "shape") {
+            this._drawOptions(ts, bar, sync, note);
         } else if (this.tool === "patch") {
             const md = this.el("select", "paint-patchmode", { title: "Source: the selection is filled from where it is dragged to. Destination: it is carried there." });
             for (const [v, t] of [["source", "Source"], ["destination", "Destination"]]) md.append(this.el("option", "", { value: v, text: t }));
@@ -3450,7 +3503,7 @@ class PaintEditor {
     }
 }
 
-Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin, TipsMixin);
+Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin, TipsMixin, DrawMixin);
 
 // Lucide's rotate-cw, white on black, as the pointer outside a transform's box.
 const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><g stroke="#000" stroke-width="4"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g><g stroke="#fff" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g></svg>')}") 12 12, alias`;
