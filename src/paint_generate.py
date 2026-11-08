@@ -12,9 +12,9 @@ A workflow's inputs are found by node titles, else by what the nodes are (:func:
   inpaint templates wire it.
 - ``paint:mask`` - optional, a LoadImage / LoadImageMask that gets the selection on its own (white =
   change).
-- ``paint:prompt`` - the node whose ``text`` / ``prompt`` gets the words.
+- ``paint:prompt`` - the node whose ``text`` / ``prompt`` (a partner node: ``model.prompt``) gets the words.
 - ``paint:output`` - the SaveImage / PreviewImage whose picture comes back.
-- every ``seed`` / ``noise_seed`` gets a new number each run.
+- every ``seed`` / ``noise_seed`` / ``model.seed`` gets a new number each run (below 2^31).
 
 ``prepare`` cuts out what the action works on (the selection's box and some of what is around it, or
 the whole picture), scales it to the model's working size, writes it into ``<input>/paint`` and fills the
@@ -70,6 +70,9 @@ LOADERS = {      # class -> (input, model folder) a missing file shows up in
 IMAGE_LOADERS = ("LoadImage", "LoadImageOutput")
 MASK_LOADERS = ("LoadImageMask",)
 OUTPUTS = ("SaveImage", "PreviewImage", "SaveImageAdvanced", "Image Save", "SaveImageWebsocket")
+PROMPT_INPUTS = ("prompt", "text", "model.prompt")   # model.*: a partner node's inputs behind its model choice
+SEED_INPUTS = ("seed", "noise_seed", "model.seed")
+SEED_MAX = 2 ** 31 - 1   # the partner nodes take no more (Qwen, Seedream); KSampler takes anything
 ASPECTS = ("1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9")
 
 
@@ -221,20 +224,20 @@ def detect_slots(graph):
             ins, t = graph[k].get("inputs", {}), _title(graph[k])
             if "neg" in t:
                 continue
-            for name in ("prompt", "text"):
+            for name in PROMPT_INPUTS:
                 if isinstance(ins.get(name), str) and graph[k]["class_type"] not in IMAGE_LOADERS:
                     cands.append((0 if ("prompt" in t or "positive" in t) else 1, 0 if ins[name].strip() else 1, k))
                     break
         p = min(cands)[2] if cands else None
     if p is not None:
         ins = graph[p].get("inputs", {})
-        name = "prompt" if "prompt" in ins else ("text" if "text" in ins else None)
+        name = next((n for n in PROMPT_INPUTS if n in ins), None)
         out["prompt"] = [p, name] if name else None
     outs = [k for k in ids if graph[k]["class_type"] in OUTPUTS]
     out["output"] = by_title.get("output") or (outs[-1] if outs else None)
     for k in ids:
         for name, v in (graph[k].get("inputs") or {}).items():
-            if name in ("seed", "noise_seed") and isinstance(v, (int, float)) and not isinstance(v, bool):
+            if name in SEED_INPUTS and isinstance(v, (int, float)) and not isinstance(v, bool):
                 out["seeds"].append([k, name])
     return out
 
@@ -347,7 +350,10 @@ _LOCK = threading.Lock()
 def _work_size(w, h, size):
     """The size the model works at for a w x h crop: about mp megapixels (or as it is), a multiple of mult, within max."""
     mp, mult, mx = size.get("mp"), max(1, int(size.get("mult") or 1)), int(size.get("max") or 2048)
+    mn = int(size.get("min") or 0)
     s = math.sqrt(mp * 1e6 / (w * h)) if mp else 1.0
+    if mn:
+        s = max(s, mn / min(w, h))   # the model's shortest side (Seedream: 1024)
     s = min(s, mx / max(w, h))
     tw = max(mult, int(round(w * s / mult)) * mult)
     th = max(mult, int(round(h * s / mult)) * mult)
@@ -434,6 +440,10 @@ def prepare(s, token, action, input_dir, *, wid=None, prompt="", variations=1, k
         nid, inp = entry["aspect"]
         if nid in g0:
             g0[nid]["inputs"][inp] = _aspect(tw, th)
+    if entry.get("dims"):
+        nid, wi, hi = entry["dims"]
+        if nid in g0:
+            g0[nid]["inputs"][wi], g0[nid]["inputs"][hi] = tw, th
     if entry.get("scale") and action == "upscale":
         nid, inp = entry["scale"]
         if nid in g0:
@@ -445,7 +455,7 @@ def prepare(s, token, action, input_dir, *, wid=None, prompt="", variations=1, k
     for _ in range(max(1, min(4, int(variations or 1)))):
         g = copy.deepcopy(g0)
         for nid, inp in slots["seeds"]:
-            g[nid]["inputs"][inp] = secrets.randbelow(2 ** 50)
+            g[nid]["inputs"][inp] = secrets.randbelow(SEED_MAX + 1)
         graphs.append(g)
     label = f"{LABELS[action]}: {words[:40]}" if words else LABELS[action]
     rec = {"token": token, "action": action, "box": [bx, by, bw, bh], "sel": bool(sb), "k": int(k or 2),

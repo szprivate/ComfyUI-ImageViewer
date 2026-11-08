@@ -1,0 +1,44 @@
+{
+ "1": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "paint/in.png"
+  },
+  "_meta": {
+   "title": "paint:image"
+  }
+ },
+ "2": {
+  "class_type": "QwenImageEditApi",
+  "inputs": {
+   "model": "qwen-image-3.0-pro",
+   "model.images.image_1": [
+    "1",
+    0
+   ],
+   "model.prompt": "",
+   "model.negative_prompt": "",
+   "size": "match input",
+   "n": 1,
+   "seed": 0,
+   "prompt_extend": false,
+   "watermark": false
+  },
+  "_meta": {
+   "title": "paint:prompt"
+  }
+ },
+ "3": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "paint/generate",
+   "images": [
+    "2",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "paint:output"
+  }
+ }
+}

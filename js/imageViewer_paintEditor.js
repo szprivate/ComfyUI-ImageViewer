@@ -29,6 +29,7 @@ import { PreviewMixin } from "./imageViewer_paintPreview.js";
 import { PathToolsMixin, PATH_TOOLS, TOOL_GROUPS, GROUP_HINTS, toolGroup } from "./imageViewer_paintPathTools.js";
 import { AdjustUIMixin, ADJUST_CSS } from "./imageViewer_paintAdjustUI.js";
 import { SmartLayerMixin } from "./imageViewer_paintSmartLayer.js";
+import { GenStatusMixin, GEN_CSS } from "./imageViewer_paintGenStatus.js";
 
 /** A dialog slider's step for the range a..b: about a thousand steps, a whole number where the range is wide. */
 export function dialogStep(a, b) {
@@ -214,6 +215,10 @@ const STYLE = `
   box-shadow: 0 10px 40px rgba(0,0,0,.6); }
 .paint-dlg h3 { margin: 0 0 10px; font-size: 14px; color: #f60; }
 .paint-dlg .paint-field > label { flex-basis: 110px; }
+.paint-dlg .paint-field > select { flex: 1 1 auto; min-width: 0; max-width: 100%; }
+.paint-dlg.wide { width: 560px; max-width: calc(100% - 24px); box-sizing: border-box; }
+.paint-dlg.wide .paint-field { align-items: center; margin: 5px 0; }
+.paint-dlg.wide .paint-field > label { flex: 0 0 170px; white-space: normal; overflow: visible; line-height: 1.25; }
 .paint-dlg .paint-dlg-range { flex: 1 1 90px; min-width: 70px; background: none; border: 0; padding: 0; accent-color: #f60; }
 .paint-dlg .paint-dlg-range + input[type=number] { width: 64px; flex: 0 0 auto; }
 .paint-dlg .go { display: flex; justify-content: flex-end; gap: 6px; margin-top: 12px; }
@@ -321,7 +326,7 @@ class PaintEditor {
 
     _build() {
         const style = this.el("style");
-        style.textContent = STYLE + ADJUST_CSS;
+        style.textContent = STYLE + ADJUST_CSS + GEN_CSS;
         this.box = this.el("div", "paint-root");
         this.box.append(style);
         // The bar: files, the menus, undo.
@@ -3046,7 +3051,7 @@ class PaintEditor {
      */
     dialog(title, fields, onOk, note = "", opts = {}) {
         const shade = this.el("div", "paint-dlg-shade");
-        const box = this.el("div", "paint-dlg");
+        const box = this.el("div", "paint-dlg" + (opts.wide ? " wide" : ""));
         box.append(this.el("h3", "", { text: title }));
         const inputs = {};
         for (const [k, label, def, a, b] of fields) {
@@ -3823,6 +3828,7 @@ class PaintEditor {
             b.dataset.gen = kind;
             b.addEventListener("pointerenter", () => { b.title = title + uses(kind); });
             b.addEventListener("click", () => this.host.generate && this.host.generate(kind, { prompt: this._prompt || "", variations: this._variations || 1, ...extra() }));
+            if (this.genRunning().some((j) => j.kind === kind)) b.classList.add("busy");     // a run going on while this was rebuilt
             row.append(b);
         };
         g("Generative fill", "fill", "Make what the prompt says inside the selection: a new layer, masked to it");
@@ -3909,7 +3915,7 @@ class PaintEditor {
     }
 }
 
-Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin, TipsMixin, DrawMixin, LayerFxMixin, SelectGuidesMixin, SmartMixin, LiquifyMixin, PathToolsMixin, PreviewMixin, AdjustUIMixin, SmartLayerMixin);
+Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin, TipsMixin, DrawMixin, LayerFxMixin, SelectGuidesMixin, SmartMixin, LiquifyMixin, PathToolsMixin, PreviewMixin, AdjustUIMixin, SmartLayerMixin, GenStatusMixin);
 
 // Lucide's rotate-cw, white on black, as the pointer outside a transform's box.
 const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><g stroke="#000" stroke-width="4"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g><g stroke="#fff" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g></svg>')}") 12 12, alias`;

@@ -1526,6 +1526,57 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertTrue(top[2], top)
         self.assertEqual(self.errors, [])
 
+    def test_generate_says_at_once_that_it_runs_and_shows_how_far_it_is(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        out_dir = os.path.join(self.dirs["output"], "paint", "generate")
+        os.makedirs(out_dir, exist_ok=True)
+        pg.evaluate("""() => { window.__queued = []; window.__posted = [];
+            __api.queuePrompt = async (n, d) => { window.__queued.push(d.output); return { prompt_id: 'q' + window.__queued.length }; };
+            const f = window.__fetchApi; window.__fetchApi = async (p, o) => { if (p === '/queue' || p === '/interrupt') window.__posted.push([p, o && o.body]); return f(p, o); }; }""")
+        pg.evaluate(f"() => {{ const e = {ed}; const m = new Uint8Array(200*120); for (let y = 20; y < 100; y++) for (let x = 40; x < 160; x++) m[y*200+x] = 255; e.setSelection(m); }}")
+        graph = {"1": {"class_type": "LoadImage", "inputs": {"image": "x.png"}, "_meta": {"title": "paint:image"}},
+                 "2": {"class_type": "CLIPTextEncode", "inputs": {"text": ""}, "_meta": {"title": "paint:prompt"}},
+                 "3": {"class_type": "KSampler", "inputs": {"seed": 1, "positive": ["2", 0]}},
+                 "4": {"class_type": "SaveImage", "inputs": {"images": ["1", 0], "filename_prefix": "x"}, "_meta": {"title": "paint:output"}}}
+        pg.evaluate("""async (g) => { await fetch('/imageviewer/paint/workflows', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'fill', graph: g, name: 'mine', source: 'file' }) }); __panel._paintWf = null; await __panel._paintWorkflows(true); }""", graph)
+        self.addCleanup(lambda: self._choose("fill", "flux_fill"))
+        # The Generate panel's own button: busy at once, and the bar up.
+        pg.evaluate(f"() => {{ const e = {ed}; e._prompt = 'a green box'; e.parts.generate.querySelector('[data-gen=fill]').click(); }}")
+        btn = f"{ed}.parts.generate.querySelector('[data-gen=fill]')"
+        bar = f"{ed}._genEl"
+        self.assertTrue(pg.evaluate(f"() => {btn}.classList.contains('busy')"))
+        self.assertTrue(pg.evaluate(f"() => {bar}.bar.classList.contains('on')"))
+        pg.wait_for_function(f"() => /queue/.test({bar}.text.textContent)", timeout=10000)
+        self.assertIn("mine", pg.evaluate(f"() => {bar}.what.textContent"))
+        # ComfyUI starts it: the node's name and the sampler's steps, the bar filling.
+        pg.evaluate("""() => { __api.dispatch('execution_start', { prompt_id: 'q1' }); __api.dispatch('executing', { prompt_id: 'q1', node: '3' });
+            __api.dispatch('progress', { prompt_id: 'q1', node: '3', value: 5, max: 20 }); }""")
+        self.assertEqual(pg.evaluate(f"() => {bar}.text.textContent"), "KSampler 5 / 20")
+        self.assertEqual(pg.evaluate(f"() => {bar}.fill.style.width"), "25%")
+        # Stop: interrupted (it had started), the bar says so, the button is free again.
+        pg.evaluate(f"() => {bar}.stop.click()")
+        pg.wait_for_function(f"() => {bar}.bar.dataset.state === 'failed'", timeout=10000)
+        self.assertEqual(pg.evaluate(f"() => {bar}.text.textContent"), "Stopped")
+        self.assertEqual([p for p, _ in pg.evaluate("() => window.__posted")], ["/queue", "/interrupt"])
+        self.assertFalse(pg.evaluate(f"() => {btn}.classList.contains('busy')"))
+        # A second run that comes back: "Done", a new layer.
+        pg.evaluate(f"() => {ed}.parts.generate.querySelector('[data-gen=fill]').click()")
+        pg.wait_for_function("() => window.__queued.length === 2", timeout=10000)
+        from PIL import Image
+        crop = Image.open(os.path.join(self.dirs["input"], pg.evaluate("() => window.__queued[1]['1'].inputs.image")))
+        g = np.zeros((crop.height, crop.width, 4), np.uint8)
+        g[..., 1] = 200
+        g[..., 3] = 255
+        Image.fromarray(g, "RGBA").save(os.path.join(out_dir, "status_0.png"))
+        pg.evaluate("""() => __api.dispatch('executed', { prompt_id: 'q2', node: '4',
+            output: { images: [{ filename: 'status_0.png', subfolder: 'paint/generate', type: 'output' }] } })""")
+        pg.wait_for_function(f"() => {bar}.bar.dataset.state === 'done'", timeout=10000)
+        self.assertEqual(pg.evaluate(f"() => {bar}.text.textContent"), "Done: a new layer")
+        self.assertEqual(self.errors, [])
+
     def test_settings_page_replaces_a_generate_workflow(self):
         pg = self.page()
         # The settings entry's editor (what ComfyUI's dialog renders); "Load API file…" takes an API-format file.
