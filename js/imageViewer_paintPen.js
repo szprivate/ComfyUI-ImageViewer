@@ -10,6 +10,9 @@
 
 import * as D from "./imageViewer_paintData.js";
 
+/** The tools that show and change paths (the pen and the ones beside it, imageViewer_paintPathTools.js). */
+const ON_PATHS = ["pen", "penadd", "pendel", "penconv", "pathsel", "pathdirect"];
+
 /** Pixels on screen within which an anchor or handle is hit. */
 const HIT_PX = 6;
 
@@ -53,11 +56,12 @@ export const PenMixin = {
     /** The path the pen works on (shown on the picture, listed first in Properties). */
     curPath() { return this._paths().find((q) => q.id === this.pathId) || null; },
 
-    _penReset() { this.pathId = null; this.pathPt = null; this._penOpen = false; },
+    _penReset() { this.pathId = null; this.pathPt = null; this._penOpen = false; this._pathPts = null; },
 
     selectPath(id) {
         this.pathId = id && this._paths().some((q) => q.id === id) ? id : null;
         this.pathPt = null;
+        this._pathPts = null;
         this._penOpen = false;
         this.drawOverlay();
         this.refreshProps();
@@ -276,7 +280,7 @@ export const PenMixin = {
 
     /** The keys the pen takes; true when it took one. */
     _penKey(e, take) {
-        if (this.tool !== "pen") return false;
+        if (!ON_PATHS.includes(this.tool)) return false;
         const k = e.key, ctrl = e.ctrlKey || e.metaKey;
         if (k === "Enter" && ctrl) return take(() => this.pathToSelection(e.shiftKey ? "add" : e.altKey ? "subtract" : "replace"));
         if (k === "Enter" && this._penOpen) return take(() => this.penFinish());
@@ -289,7 +293,18 @@ export const PenMixin = {
 
     /** The path on the picture: its curve, anchors (the picked one filled), the handles near the picked one. */
     _penDraw(c, X, Y) {
-        const P = this.curPath();
+        const P = this.curPath(), t = this.tool, onPaths = ON_PATHS.includes(t);
+        // With a path tool up, the other paths too (thin), so that they can be clicked.
+        if (onPaths) {
+            for (const Q of this._paths()) {
+                if (Q === P || !Q.pts.length) continue;
+                c.beginPath();
+                c.moveTo(X(Q.pts[0].x), Y(Q.pts[0].y));
+                const n = Q.closed ? Q.pts.length : Q.pts.length - 1;
+                for (let i = 0; i < n; i++) { const a = Q.pts[i], b = Q.pts[(i + 1) % Q.pts.length]; c.bezierCurveTo(X(a.ox), Y(a.oy), X(b.ix), Y(b.iy), X(b.x), Y(b.y)); }
+                c.lineWidth = 1; c.strokeStyle = "rgba(79,214,238,.55)"; c.stroke();
+            }
+        }
         if (!P || !P.pts.length) return;
         const pts = P.pts, segs = P.closed ? pts.length : pts.length - 1;
         c.beginPath();
@@ -303,10 +318,12 @@ export const PenMixin = {
         if (this._penOpen && h && !this._drag && this.tool === "pen") c.bezierCurveTo(X(last.ox), Y(last.oy), X(h.x), Y(h.y), X(h.x), Y(h.y));
         c.lineWidth = 3; c.strokeStyle = "rgba(0,0,0,.6)"; c.stroke();
         c.lineWidth = 1.25; c.strokeStyle = "#4fd6ee"; c.stroke();
-        if (this.tool !== "pen") return;
+        if (!onPaths) return;
         const near = new Set();
         const sel = this.pathPt != null ? this.pathPt : (this._penOpen ? pts.length - 1 : null);
-        if (sel != null) for (const d of [-1, 0, 1]) near.add((sel + d + pts.length) % pts.length);
+        // Direct selection: every picked anchor (and its neighbours) shows its handles; Path selection: none, every anchor filled.
+        const picked = t === "pathdirect" && this._pathPicked ? this._pathPicked() : new Set(sel != null ? [sel] : []);
+        if (t !== "pathsel") for (const s of picked) for (const d of [-1, 0, 1]) near.add((s + d + pts.length) % pts.length);
         c.lineWidth = 1;
         for (const i of near) {
             const a = pts[i];
@@ -321,7 +338,7 @@ export const PenMixin = {
         }
         pts.forEach((a, i) => {
             const x = Math.round(X(a.x)) - 3.5, y = Math.round(Y(a.y)) - 3.5;
-            c.fillStyle = i === sel ? "#4fd6ee" : "#fff";
+            c.fillStyle = t === "pathsel" || picked.has(i) ? "#4fd6ee" : "#fff";
             c.strokeStyle = "#0a3640";
             c.fillRect(x, y, 7, 7); c.strokeRect(x, y, 7, 7);
         });
@@ -367,7 +384,17 @@ export const PenMixin = {
         b("Mask", "The active layer's mask from the path: the inside shows", () => this.maskFromPath(), "pen-mask");
         if (!bar) b("Delete", "Delete the path", () => this.deletePath(), "pen-del");
         ts.append(row);
-        note("Click: a corner. Drag: a smooth anchor. Click the first anchor to close, Enter to stop. "
-             + "Click the path to add an anchor, an anchor to take it away. Ctrl+drag moves an anchor or handle, Alt+click turns an anchor corner / smooth, Alt+drag moves one handle alone.");
+        const notes = {
+            pen: "Click: a corner. Drag: a smooth anchor. Click the first anchor to close, Enter to stop. "
+                 + "Click the path to add an anchor, an anchor to take it away. Ctrl+drag moves an anchor or handle, Alt+click turns an anchor corner / smooth, Alt+drag moves one handle alone. "
+                 + "Right-click the pen's button for the other path tools.",
+            penadd: "Click a path's curve: a new anchor there (drag to move it on).",
+            pendel: "Click an anchor: it is taken away.",
+            penconv: "Click an anchor: a smooth one becomes a corner; drag from a corner: it becomes smooth. Drag a handle: it moves alone.",
+            pathsel: "Click a path to pick it; drag it to move it whole, Alt+drag a copy. Arrows nudge it (Shift: 10 px), Del deletes it.",
+            pathdirect: "Click an anchor to pick it (Shift+click: more), drag round anchors to pick them; drag to move them, or a handle. "
+                        + "Arrows nudge them (Shift: 10 px), Del takes them away, Esc lets go.",
+        };
+        note(notes[this.tool] || notes.pen);
     },
 };
