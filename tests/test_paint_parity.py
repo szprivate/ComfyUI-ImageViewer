@@ -287,6 +287,29 @@ class PaintParity(unittest.TestCase):
         for i, (col, f) in enumerate(rng_cases):
             self.same(SEL.color_range(sp, col, f), got["range"][i], (H, W), f"colour range {col} {f}", tol=1)
 
+    def test_smart_filters(self):
+        """Smart filters (blur, sharpen, adjustments) in order, switched off, with styles, masks, clipping."""
+        cases = {}
+        lists = [[{"type": "blur", "params": {"radius": 3}}],
+                 [{"type": "sharpen", "params": {"radius": 1.5, "amount": 2}}, {"type": "hue_saturation", "params": {"hue": 40, "saturation": 30}}],
+                 [{"type": "levels", "params": {"in_black": 20, "gamma": 1.4}}, {"type": "blur", "params": {"radius": 6.5}, "on": False},
+                  {"type": "invert"}],
+                 [{"type": "exposure", "params": {"exposure": 1}}, {"type": "blur", "params": {"radius": 2}}]]
+        for k, fl in enumerate(lists):
+            d = rnd_doc(700 + k, ["normal", "multiply", "screen"])
+            for j, L in enumerate(d.layers[1:]):
+                L["filters"] = fl if j != 1 else lists[(k + 1) % len(lists)]
+                if k == 3 and j == 0:
+                    L["style"] = {"stroke": {"size": 2, "color": [0, 255, 0]}}
+                if k == 2 and j == 1:
+                    L["clip"] = True
+            d.meta = P.clean_meta(d.meta)
+            self.assertTrue(all("filters" in L for L in d.layers[1:]))
+            cases[f"f{k}"] = d
+        got = self.run_node(cases)
+        for name, d in cases.items():
+            self.same(P.composite(d), got[name]["composite"], (d.h, d.w, 4), f"smart {name}")
+
     def test_gradients_and_shapes(self):
         d = rnd_doc(13, [])
         rng = np.random.default_rng(13)

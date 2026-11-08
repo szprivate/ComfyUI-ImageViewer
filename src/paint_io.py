@@ -36,6 +36,7 @@ import numpy as np
 
 from . import paint_math as M
 from . import paint_style as S
+from . import paint_smart as SM
 
 VERSION = 1
 MAX_SIDE = 16384
@@ -139,6 +140,9 @@ def clean_layer(L):
             out["style"] = st
         if L.get("lockAlpha"):
             out["lockAlpha"] = True
+        fl = SM.clean_filters(L.get("filters"))
+        if fl:
+            out["filters"] = fl
     elif kind == "group":
         out["blend"] = L.get("blend") if L.get("blend") in M.GROUP_BLENDS else "pass_through"
         if L.get("collapsed"):
@@ -344,6 +348,7 @@ def _lay_clip_group(out, doc, B, clipped, kids, only, hidden_ok):
         cop = float(C.get("opacity", 1.0))
         if px is None or cop <= 0:
             continue
+        C, px = SM.smart_layer(W, H, C, px)
         lx, ly = C.get("x", 0), C.get("y", 0)
         ph, pw = px.shape[:2]
         x0, y0, x1, y1 = max(0, lx), max(0, ly), min(W, lx + pw), min(H, ly + ph)
@@ -386,6 +391,7 @@ def lay(out, doc, L):
     px = doc.px.get(L["id"])
     if px is None or op <= 0:
         return out
+    L, px = SM.smart_layer(W, H, L, px)
     if S.style_on(L):
         st = S.styled_pixels(W, H, L, px, mask_values(L, doc.masks.get(L["id"]), 0, 0, W, H))
         return M.blend_over(out, st, np.full((H, W), op), L.get("blend", "normal"))
@@ -692,6 +698,11 @@ def baked_for_psd(doc):
             px = doc.px.get(L["id"])
             if px is None:
                 continue
+            if SM.smart_on(L):
+                # Smart filters are baked: the layer as they draw it, canvas-sized.
+                L, px = SM.smart_layer(doc.w, doc.h, L, px)
+                L = {k: v for k, v in L.items() if k != "filters"}
+                notes.append(f"the smart filters of {L['name']!r} were baked into its pixels")
             if S.style_on(L):
                 # A layer style is baked: the layer and its effects (and its mask) as one picture.
                 st = S.styled_pixels(doc.w, doc.h, L, px, mask_values(L, doc.masks.get(L["id"]), 0, 0, doc.w, doc.h))
@@ -1041,6 +1052,8 @@ def outline(doc):
             row["lock_alpha"] = True
         if L.get("style"):
             row["style"] = {k: v for k, v in L["style"].items() if v.get("on")}
+        if L.get("filters"):
+            row["filters"] = [f["type"] + ("" if f["on"] else " (off)") for f in L["filters"]]
         if L.get("clip"):
             row["clipped"] = True
         if L["id"] == doc.meta.get("active"):

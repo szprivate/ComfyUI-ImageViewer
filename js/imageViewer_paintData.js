@@ -11,6 +11,7 @@
 // A document: { w, h, name, layers: [bottom .. top], active } - see cleanLayer for a layer.
 
 import { cleanStyle, styleOn, styledCached } from "./imageViewer_paintStyle.js";
+import { cleanFilters, smartLayer } from "./imageViewer_paintSmart.js";
 
 export const BLEND_MODES = ["normal", "multiply", "screen", "overlay", "darken", "lighten", "difference", "add",
     "color_dodge", "color_burn", "soft_light", "hard_light"];
@@ -129,6 +130,9 @@ export function cleanLayer(L) {
         const st = cleanStyle(L.style);
         if (st) out.style = st;
         if (L.lockAlpha) out.lockAlpha = true;
+        // Smart filters (imageViewer_paintSmart.js): settings, drawn in the composite before the style.
+        const fl = cleanFilters(L.filters);
+        if (fl) out.filters = fl;
     } else if (kind === "group") {
         out.blend = GROUP_BLENDS.includes(L.blend) ? L.blend : "pass_through";
         if (L.collapsed) out.collapsed = true;
@@ -555,6 +559,7 @@ function layList(out, doc, list, kids, pix, maskOf, r, depth) {
 
 /** A pixel layer: as it is, or with its style (a canvas-sized picture, kept until something changes). */
 function layPixelLayer(out, W, H, L, px, mask, r) {
+    [L, px] = smartLayer(W, H, L, px);
     if (px && styleOn(L)) {
         layPixels(out, W, H, { x: 0, y: 0, w: W, h: H, opacity: L.opacity, blend: L.blend }, styledCached(W, H, L, px, mask), null, r.x0, r.y0, r.x1, r.y1);
     } else layPixels(out, W, H, L, px, mask, r.x0, r.y0, r.x1, r.y1);
@@ -574,7 +579,7 @@ function layClipGroup(out, doc, B, clipped, kids, pix, maskOf, r, depth) {
     else layPixelLayer(buf, W, H, { ...B, opacity: 1, blend: "normal" }, pix(B), maskOf(B), r);
     for (const C of clipped) {
         if (C.kind === "adjust") layAdjust(buf, W, H, C, maskOf(C), r.x0, r.y0, r.x1, r.y1);
-        else layClipped(buf, W, H, C, pix(C), maskOf(C), r.x0, r.y0, r.x1, r.y1);
+        else { const [C2, cp] = smartLayer(W, H, C, pix(C)); layClipped(buf, W, H, C2, cp, maskOf(C), r.x0, r.y0, r.x1, r.y1); }
     }
     layPixels(out, W, H, { x: 0, y: 0, w: W, h: H, opacity: B.opacity, blend: B.blend === "pass_through" ? "normal" : B.blend }, buf, null, r.x0, r.y0, r.x1, r.y1);
 }

@@ -17,6 +17,7 @@ import numpy as np
 from . import paint_io as P
 from . import paint_math as M
 from . import paint_select as SEL
+from . import paint_smart as SM
 from . import paint_style as S
 
 MAX_OPS = 60
@@ -340,6 +341,21 @@ def _set_layer(doc, op, _read, _fonts):
         else:
             L.pop("style", None)
         changed.append("style " + (", ".join(k for k in S.STYLE_KINDS if cl and k in cl) if cl else "taken off"))
+    if "filters" in op:
+        if L["kind"] != "pixel":
+            raise OpError("smart filters go on a pixel layer")
+        fl = op["filters"]
+        if fl is not None and not isinstance(fl, list):
+            raise OpError("'filters' is a list of {type, params, on} (in order) or null")
+        for f in fl or []:
+            if not isinstance(f, dict) or f.get("type") not in SM.smart_types():
+                raise OpError(f"a smart filter's type is one of {', '.join(SM.smart_types())}")
+        cl = SM.clean_filters(fl)
+        if cl:
+            L["filters"] = cl
+        else:
+            L.pop("filters", None)
+        changed.append("smart filters " + (", ".join(f["type"] for f in cl) if cl else "taken off"))
     if "lock_alpha" in op:
         if L["kind"] != "pixel":
             raise OpError("only a pixel layer has transparency to lock")
@@ -355,7 +371,7 @@ def _set_layer(doc, op, _read, _fonts):
         doc.meta["active"] = L["id"]
         changed.append("made active")
     if not changed:
-        raise OpError("nothing to change (name, visible, opacity, blend, x, y, params, locked, lock_alpha, clip, style, collapsed, active)")
+        raise OpError("nothing to change (name, visible, opacity, blend, x, y, params, locked, lock_alpha, clip, style, filters, collapsed, active)")
     return f"layer {L['name']!r}: " + ", ".join(changed)
 
 

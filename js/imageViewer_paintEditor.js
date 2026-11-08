@@ -23,6 +23,8 @@ import { DrawMixin, smudgeStart, smudgeDab, SHAPE_KINDS } from "./imageViewer_pa
 import { BUF_VER, STYLE_KINDS, STYLE_LABELS } from "./imageViewer_paintStyle.js";
 import { LayerFxMixin } from "./imageViewer_paintLayerFx.js";
 import { SelectGuidesMixin, RULER_PX } from "./imageViewer_paintSelect.js";
+import { SmartMixin } from "./imageViewer_paintSmart.js";
+import { LiquifyMixin } from "./imageViewer_paintLiquify.js";
 
 export const PAINT_TOOLS = [
     ["move", "transform", "Transform (move, scale, rotate, shear)", "V"], ["marquee", "marquee", "Rectangle select", "M"], ["ellipse", "ellipse", "Ellipse select", "Shift+M"],
@@ -30,7 +32,7 @@ export const PAINT_TOOLS = [
     ["brush", "brush", "Brush", "B"], ["clone", "clone", "Clone stamp", "S"], ["spot", "bandage", "Spot healing brush", "J"], ["heal", "heal", "Healing brush (Shift+J)", "Shift+J"],
     ["patch", "patch", "Patch (Shift+J)", "Shift+J"], ["eraser", "eraser", "Eraser", "E"], ["fill", "fill", "Paint bucket", "G"],
     ["gradient", "gradient", "Gradient (Shift+G)", "Shift+G"], ["dodge", "dodge", "Dodge", "O"], ["burn", "burn", "Burn (Shift+O)", "Shift+O"],
-    ["sponge", "sponge", "Sponge (Shift+O)", "Shift+O"], ["smudge", "smudge", "Smudge", "R"], ["shape", "shape", "Shapes (Shift+U: the next shape)", "U"],
+    ["sponge", "sponge", "Sponge (Shift+O)", "Shift+O"], ["smudge", "smudge", "Smudge", "R"], ["liquify", "liquify", "Liquify (Shift+Ctrl+X)", "Shift+Ctrl+X"], ["shape", "shape", "Shapes (Shift+U: the next shape)", "U"],
     ["picker", "picker", "Eyedropper", "I"], ["text", "text", "Text", "T"], ["hand", "hand", "Hand (hold Space)", "H"],
 ];
 const TOOL_KEYS = { v: "move", m: "marquee", l: "lasso", p: "pen", j: "spot", w: "wand", c: "crop", b: "brush", s: "clone", e: "eraser", g: "fill", i: "picker",
@@ -52,6 +54,7 @@ export const PAINT_KEYS = [
     ["G / Shift+G", "Paint bucket / gradient (Shift: 45° steps)"], ["O / Shift+O", "Dodge / the next of burn, sponge, dodge"], ["R", "Smudge"],
     ["U / Shift+U", "Shapes / the next shape (Shift: square, Alt: from the middle)"],
     ["Transform: drag", "Inside: move; a handle: scale (Shift: keep the shape, Alt: about the middle); outside: rotate (Shift: 15°); Ctrl+edge handle: shear"],
+    ["Shift+Ctrl+X", "Liquify (Enter applies, Esc cancels)"], ["Ctrl+R / Ctrl+; / Ctrl+Shift+;", "Rulers / guides / snapping"],
     ["Ctrl+T", "Transform the layer"], ["Shift+F5", "Fill… (in Properties)"], ["Del / Backspace in Layers", "Delete the layer (or its mask)"], ["Space+drag", "Pan"], ["Wheel", "Zoom about the pointer"],
     ["Ctrl+0 / Ctrl+1", "Fit / 100%"], ["Ctrl+Z / Ctrl+Shift+Z", "Undo / redo"], ["Ctrl+A / Ctrl+D", "Select all / deselect"],
     ["Ctrl+Shift+I", "Invert the selection"], ["Shift / Alt while selecting", "Add to / take from the selection"],
@@ -216,6 +219,7 @@ class PaintEditor {
             select: { feather: 0 },
             pen: { width: 3, feather: 0, combine: "replace" },
             warp: { n: 3 },
+            liquify: { mode: "push", size: 100, strength: 50 },
             text: { font: "sans-serif", size: 64, bold: false, italic: false, align: "left" },
         };
         // Brush tips kept in this browser (imageViewer_paintAbr.js).
@@ -674,7 +678,7 @@ class PaintEditor {
             }
         }
         // The brush.
-        if (BRUSHES.includes(this.tool) && this._hover) {
+        if ((BRUSHES.includes(this.tool) || this.tool === "liquify") && this._hover) {
             const o = this.opts[this.tool];
             c.strokeStyle = "rgba(255,255,255,.9)"; c.lineWidth = 1;
             c.beginPath(); c.arc(this._hover.sx, this._hover.sy, Math.max(1, (o.size / 2) * v.zoom), 0, Math.PI * 2); c.stroke();
@@ -796,6 +800,7 @@ class PaintEditor {
     undo() {
         if (this.tf) { this.tfCancel(); return; }
         if (this.wp) { this.wpCancel(); return; }
+        if (this.lq) { this.lqCancel(); return; }
         const e = this.undoStack.pop();
         if (!e) return;
         e.undo();
@@ -805,7 +810,7 @@ class PaintEditor {
     }
 
     redo() {
-        if (this.tf || this.wp) return;
+        if (this.tf || this.wp || this.lq) return;
         const e = this.redoStack.pop();
         if (!e) return;
         e.redo();
@@ -1640,6 +1645,7 @@ class PaintEditor {
         if (t !== "text") this._commitText();
         if (t !== "move" && this.tf) this.tfCommit();
         if (t !== "move" && this.wp) this.wpCommit();
+        if (t !== "liquify" && this.lq) this.lqCommit();
         if (t !== "pen") this._penOpen = false;
         this.tool = t;
         for (const [id, b] of Object.entries(this.toolBtns)) b.classList.toggle("on", id === t);
@@ -1654,7 +1660,7 @@ class PaintEditor {
         if (!this.doc) { this.wrap.style.cursor = "default"; return; }
         if (over) { this.wrap.style.cursor = over; return; }
         const cursors = { hand: "grab", move: "move", text: "text", picker: "copy" };
-        this.wrap.style.cursor = cursors[t] || (BRUSHES.includes(t) ? "none" : "crosshair");
+        this.wrap.style.cursor = cursors[t] || (BRUSHES.includes(t) || t === "liquify" ? "none" : "crosshair");
     }
 
     swapColors() { [this.fg, this.bg] = [this.bg, this.fg]; this._swatches(); this.refreshProps(); }
@@ -1727,6 +1733,7 @@ class PaintEditor {
         if (SOURCED.includes(t) && e.altKey) { this.setCloneSource(p.x, p.y); return; }
         if (t === "patch") { this._patchDown(p, e); return; }
         if (t === "gradient") { this._gradDown(p, e); return; }
+        if (t === "liquify") { this._lqDown(p); return; }
         if (t === "shape") { this._shapeDown(p, e); return; }
         if (t === "picker") { this._pickAt(p); this._drag = { kind: "pick" }; return; }
         if (BRUSHES.includes(t)) { this._strokeStart(p, e); return; }
@@ -1763,9 +1770,9 @@ class PaintEditor {
             if (gi >= 0) this._cursor(this._guides()[gi].axis === "x" ? "col-resize" : "row-resize");
             else if (this._onRuler) this._cursor();
             this._onRuler = onRuler ? "ruler" : gi >= 0 ? "guide" : null;
-            if (BRUSHES.includes(this.tool) || (this.tool === "pen" && this._penOpen) || this.rulers) this.drawOverlay();
+            if (BRUSHES.includes(this.tool) || this.tool === "liquify" || (this.tool === "pen" && this._penOpen) || this.rulers) this.drawOverlay();
             if (onRuler || this._onRuler === "guide") { this._status(); return; }
-            if (BRUSHES.includes(this.tool) || (this.tool === "pen" && this._penOpen)) { /* the overlay draws the pointer */ }
+            if (BRUSHES.includes(this.tool) || this.tool === "liquify" || (this.tool === "pen" && this._penOpen)) { /* the overlay draws the pointer */ }
             else if (this.wp) this._cursor("crosshair");
             else if (this.tool === "move" && !this._space) this._cursor(this._moveSet() ? "move" : this._tfCursor(this._tfHit(p)));
             this._status();
@@ -1779,6 +1786,7 @@ class PaintEditor {
         }
         if (dr.kind === "pick") { this._pickAt(p); return; }
         if (dr.kind === "guide") { this._guideMove(dr, p); return; }
+        if (dr.kind === "lq") { this._lqMove(dr, p); this.drawOverlay(); return; }
         if (dr.kind === "pen") { this._penMove(dr, p, e); return; }
         if (dr.kind === "wp") { this._wpMove(dr, p); return; }
         if (dr.kind === "patch") { this._patchMove(dr, p); return; }
@@ -1819,6 +1827,7 @@ class PaintEditor {
         if (dr.kind === "pan") { this.setTool(this.tool); return; }
         if (dr.kind === "stroke") { this._strokeEnd(dr.st); return; }
         if (dr.kind === "guide") { this._guideUp(dr); return; }
+        if (dr.kind === "lq") { this._thumbsSoon(); this.refreshProps(); return; }
         if (dr.kind === "pen") { this._penUp(dr); return; }
         if (dr.kind === "wp") { this._wpUp(); return; }
         if (dr.kind === "patch") { this._patchUp(dr); return; }
@@ -2021,7 +2030,7 @@ class PaintEditor {
         st.touched = rectUnion(st.touched, rect);
         // A styled layer's look is cached by its buffer's version: count the dab so the style follows the stroke.
         // Its effects reach past the dab (a shadow's offset, a glow's blur): the whole picture is drawn again.
-        if (st.L && st.L.style) { this._bump(st.onMask ? st.mask : st.px); this.requestRedraw(null); return; }
+        if (st.L && (st.L.style || st.L.filters)) { this._bump(st.onMask ? st.mask : st.px); this.requestRedraw(null); return; }
         this.requestRedraw({ x0: rect.x0 + st.lx, y0: rect.y0 + st.ly, x1: rect.x1 + st.lx, y1: rect.y1 + st.ly });
     }
 
@@ -2050,7 +2059,7 @@ class PaintEditor {
         this._push({ label: (s.quick ? "Quick Mask " : "") + label, bytes: before.byteLength * 2,
                      undo: () => paste(buf, before), redo: () => paste(buf, after) });
         this._lastStrokeEnd = { L: s.L.id, x: s.last[0], y: s.last[1] };
-        this.redraw(s.L.style ? null : { x0: r.x0 + s.lx, y0: r.y0 + s.ly, x1: r.x1 + s.lx, y1: r.y1 + s.ly });
+        this.redraw(s.L.style || s.L.filters ? null : { x0: r.x0 + s.lx, y0: r.y0 + s.ly, x1: r.x1 + s.lx, y1: r.y1 + s.ly });
         this._thumbsSoon();
     }
 
@@ -2146,7 +2155,7 @@ class PaintEditor {
     // by whole pixels resamples nothing. The layer's mask is transformed with it.
 
     /** Anything that changes the document first applies a transform that is under way. */
-    _tfSettle() { if (this.tf) this.tfCommit(); if (this.wp) this.wpCommit(); }
+    _tfSettle() { if (this.tf) this.tfCommit(); if (this.wp) this.wpCommit(); if (this.lq) this.lqCommit(); }
 
     _tfLayer(quiet = false) {
         const L = this.active();
@@ -2532,6 +2541,7 @@ class PaintEditor {
             if (lk === "j") return take(() => this.duplicateLayer());
             if (lk === "c" && !e.altKey) return take(() => this.copy(e.shiftKey));
             if (lk === "x" && !e.altKey && !e.shiftKey) return take(() => this.cut());
+            if (lk === "x" && e.shiftKey && !e.altKey) return take(() => this.setTool("liquify"));
             // Not prevented: the browser's paste event must still come (it carries the system clipboard's picture).
             if (lk === "v" && !e.altKey) { this.pasteKey(e.shiftKey); return true; }
             if (lk === "e") return take(() => this.mergeDown());
@@ -2552,8 +2562,10 @@ class PaintEditor {
         if (k === "Enter" && this.crop) return take(() => this.applyCrop());
         if (k === "Enter" && this.tf) return take(() => this.tfCommit());
         if (k === "Enter" && this.wp) return take(() => this.wpCommit());
+        if (k === "Enter" && this.lq) return take(() => this.lqCommit());
         if (k === "Escape") return take(() => {
             if (this.wp) this.wpCancel();
+            else if (this.lq) this.lqCancel();
             else if (this._fillOpen) this.closeFill();
             else if (this.viewMask) this.setViewMask(null);
             else if (this.tf) this.tfCancel();
@@ -2571,7 +2583,7 @@ class PaintEditor {
             return take(() => this.nudge(k === "ArrowLeft" ? -s : k === "ArrowRight" ? s : 0, k === "ArrowUp" ? -s : k === "ArrowDown" ? s : 0));
         }
         if (k === "[" || k === "]") {
-            const o = this.opts[BRUSHES.includes(this.tool) ? this.tool : "brush"];
+            const o = this.opts[BRUSHES.includes(this.tool) || this.tool === "liquify" ? this.tool : "brush"];
             return take(() => {
                 if (e.shiftKey) o.hardness = clamp(o.hardness + (k === "]" ? 10 : -10), 0, 100);
                 else o.size = clamp(Math.round(o.size * (k === "]" ? 1.2 : 1 / 1.2) + (k === "]" ? 1 : -1)), 1, 2000);
@@ -2701,14 +2713,20 @@ class PaintEditor {
                 { label: L && L.lockAlpha ? "Unlock transparency" : "Lock transparency", disabled: !L || L.kind !== "pixel", run: () => this.toggleLockAlpha() }, "-",
                 { label: "Layer style…", disabled: !L || L.kind !== "pixel", run: () => this.openStyle() },
                 ...STYLE_KINDS.map((k) => ({ label: `  ${STYLE_LABELS[k]}`, disabled: !L || L.kind !== "pixel", run: () => this.openStyle(k) })),
-                { label: "Clear layer style", disabled: !L || !L.style, run: () => this.clearStyle(L) }];
+                { label: "Clear layer style", disabled: !L || !L.style, run: () => this.clearStyle(L) }, "-",
+                { label: "Smart filters…", disabled: !L || L.kind !== "pixel", run: () => { this._smartOpen = L.id; this.refreshProps(); if (this.host.showPanel) this.host.showPanel("paintProps"); } },
+                { label: "Bake smart filters", disabled: !L || !L.filters, run: () => this.bakeSmartFilters(L) },
+                { label: "Clear smart filters", disabled: !L || !L.filters, run: () => this.clearSmartFilters(L) }];
     }
 
     _filterMenu() {
         const off = !this.pickedLayers().some((L) => L.kind === "pixel");
         const fd = (label, fields, run) => ({ label: label + "…", disabled: off, run: () => this.filterDialog(label, fields, run) });
         const own = (id) => fd(FILTERS[id].label, FILTERS[id].fields, FILTERS[id].run);
-        return [fd("Gaussian blur", [["radius", "Radius (px)", 4, 0.1, 250]], (px, w, h, v) => D.blurPixels(px, w, h, v.radius)),
+        const sm = this._smartMenu().map((it) => ({ ...it, label: it.label.replace(/^Smart /, "Smart filter: ") }));
+        return [{ label: "Liquify… (Shift+Ctrl+X)", disabled: !this.active() || this.active().kind !== "pixel", run: () => this.lqBegin() }, "-",
+                ...sm.slice(0, 2), { label: "Smart filter: an adjustment…", disabled: sm[0].disabled, run: () => this.smartAdjustDialog() }, "-",
+                fd("Gaussian blur", [["radius", "Radius (px)", 4, 0.1, 250]], (px, w, h, v) => D.blurPixels(px, w, h, v.radius)),
                 own("motion_blur"), "-",
                 fd("Sharpen", [["radius", "Radius (px)", 2, 0.1, 100], ["amount", "Amount", 1, 0, 10]], (px, w, h, v) => D.sharpenPixels(px, w, h, v.radius, v.amount)),
                 own("unsharp"), own("high_pass"), "-",
@@ -2960,6 +2978,11 @@ class PaintEditor {
                 fx.addEventListener("click", (e) => { e.stopPropagation(); this.setActive(L.id); this.openStyle(); });
                 row.append(fx);
             }
+            if (L.filters) {
+                const sf = this.el("span", "tag sf", { text: "sf", title: "Smart filters: click to change them" });
+                sf.addEventListener("click", (e) => { e.stopPropagation(); this.setActive(L.id); this._smartOpen = L.id; this.refreshProps(); if (this.host.showPanel) this.host.showPanel("paintProps"); });
+                row.append(sf);
+            }
             if (L.lockAlpha) { const la = this.el("span", "lk la", { title: "Transparency locked" }); la.append(paintIcon(this.d, "lockAlpha", 12)); row.append(la); }
             if (L.locked) { const lk = this.el("span", "lk"); lk.append(paintIcon(this.d, "lock", 12)); row.append(lk); }
             row.addEventListener("click", (e) => {
@@ -3148,6 +3171,7 @@ class PaintEditor {
         const L = this.active();
         if (L) box.append(this._layerSection(L));
         if (L && L.kind === "pixel" && (L.style || this._styleOpen === L.id)) box.append(this._styleSection(L));
+        if (L && L.kind === "pixel" && (L.filters || this._smartOpen === L.id)) box.append(this._smartSection(L));
         if (L && L.mask) box.append(this._maskSection(L));
         if (this.quick) box.prepend(this.el("div", "paint-note", { text: "Quick Mask is on (Q): the brush, eraser, bucket and Fill paint the selection - black takes away (red), white adds. Q again makes it the selection." }));
         // Generate.
@@ -3229,6 +3253,8 @@ class PaintEditor {
             const f = o[this.tool];
             this._slider(ts, "Tolerance", f.tolerance, 0, 255, 1, (v) => { f.tolerance = v; sync(); });
             this._field(ts, "", [check(f, "contiguous", "Contiguous"), check(f, "all", "All layers")]);
+        } else if (this.tool === "liquify") {
+            this._lqOptions(ts, bar, sync, note);
         } else if (this.tool === "pen") {
             this._penOptions(ts, bar, sync, note);
         } else if (this.tool === "gradient" || this.tool === "shape") {
@@ -3565,7 +3591,7 @@ class PaintEditor {
     }
 }
 
-Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin, TipsMixin, DrawMixin, LayerFxMixin, SelectGuidesMixin);
+Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin, TipsMixin, DrawMixin, LayerFxMixin, SelectGuidesMixin, SmartMixin, LiquifyMixin);
 
 // Lucide's rotate-cw, white on black, as the pointer outside a transform's box.
 const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><g stroke="#000" stroke-width="4"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g><g stroke="#fff" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g></svg>')}") 12 12, alias`;
