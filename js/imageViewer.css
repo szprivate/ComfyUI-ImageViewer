@@ -1940,9 +1940,14 @@ textarea.param-input {
 .dp-node { position: absolute; box-sizing: border-box; display: flex; flex-direction: column; background: #18181c;
     border: 1px solid #33333a; border-radius: 6px; overflow: hidden; cursor: pointer; }
 .dp-node:hover { border-color: #777; }
+.dp-node { cursor: move; user-select: none; }
+.dp-resize { position: absolute; right: 0; bottom: 0; width: 12px; height: 12px; cursor: nwse-resize; opacity: 0;
+             background: linear-gradient(135deg, transparent 50%, #888 50%, #888 60%, transparent 60%, transparent 72%, #888 72%, #888 82%, transparent 82%); }
+.dp-node:hover > .dp-resize { opacity: 1; }
+.dp-prompt-text { user-select: text; cursor: text; }
 .dp-node.root { border-color: #f60; box-shadow: 0 0 0 1px #f60; }
 .dp-node.stale { border-color: #e8912d; box-shadow: 0 0 0 2px rgba(232, 145, 45, 0.55); }
-.dp-node.missing { opacity: 0.45; border-style: dashed; cursor: default; }
+.dp-node.missing { opacity: 0.45; border-style: dashed; }
 .dp-node.fold { background: #1d1d24; border-style: dashed; }
 .dp-thumb { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center;
     background: #0a0a0c; color: #aaa; font-size: 22px; }
@@ -1951,7 +1956,7 @@ textarea.param-input {
 .dp-meta { flex: 0 0 auto; padding: 0 6px 4px; color: #888; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dp-node.stale .dp-meta { color: #e8912d; }
 .dp-edge-prompt { stroke: #6b7f9a; stroke-dasharray: 4 3; }
-.dp-node.dp-prompt { background: #15181e; border-color: #3a4558; cursor: default; }
+.dp-node.dp-prompt { background: #15181e; border-color: #3a4558; }
 .dp-node.dp-prompt-negative { border-color: #5a3a3a; }
 .dp-prompt-head { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; padding: 3px 4px 2px 6px; }
 .dp-prompt-role { flex: 1 1 auto; color: #8fa6c8; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; }

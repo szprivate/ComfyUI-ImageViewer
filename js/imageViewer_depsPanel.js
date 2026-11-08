@@ -10,14 +10,46 @@
 //
 //   click a node        open it in the Viewer tab
 //   double-click        make it the root (walk from there)
-//   drag / wheel        pan / zoom;  F  fit
+//   drag a node         move it (its edges follow);  its lower right corner: resize (Shift keeps the shape)
+//   drag / wheel        pan / zoom;  F  fit;  "Reset layout" puts every node back
+//
+// Moves and sizes are kept per root file in localStorage (DEPS_LAYOUT_KEY), as {id: {x, y, w, h}} in the
+// layout's own coordinates (imageViewer_depsLayout.js placeNodes).
 //
 // The record is agentY's: every output it makes keeps what its graph loaded. Data comes from
 // GET /imageviewer/deps (deps_relay.py), which asks the agentY host.
 import { api } from "../../scripts/api.js";
-import { layout, edgePath } from "./imageViewer_depsLayout.js";
+import { layout, edgePath, placeNodes, clampSize } from "./imageViewer_depsLayout.js";
 
 export const DEPS_PREFIX = "deps:";
+export const DEPS_LAYOUT_KEY = "imageviewer.viewer.depsLayout";
+const LAYOUTS_KEPT = 40;
+
+function readLayouts() {
+    try {
+        const v = JSON.parse(localStorage.getItem(DEPS_LAYOUT_KEY) || "{}");
+        return v && typeof v === "object" ? v : {};
+    } catch (_) { return {}; }
+}
+
+/** The moves kept for root `key` ({} when none). */
+export function loadMoves(key) {
+    const got = key ? readLayouts()[key] : null;
+    return got && got.m && typeof got.m === "object" ? { ...got.m } : {};
+}
+
+/** Keep the moves of root `key` (none: forget it); the newest LAYOUTS_KEPT roots stay. */
+export function saveMoves(key, moves) {
+    if (!key) return;
+    try {
+        const all = readLayouts();
+        if (moves && Object.keys(moves).length) all[key] = { t: Date.now(), m: moves };
+        else delete all[key];
+        const keys = Object.keys(all).sort((a, b) => (all[b].t || 0) - (all[a].t || 0));
+        for (const k of keys.slice(LAYOUTS_KEPT)) delete all[k];
+        localStorage.setItem(DEPS_LAYOUT_KEY, JSON.stringify(all));
+    } catch (_) { /* no storage: the moves last as long as the tab */ }
+}
 const baseOf = (p) => String(p || "").split(/[\\/]/).pop();
 const SVG = "http://www.w3.org/2000/svg";
 const KIND_ICON = {
@@ -45,7 +77,7 @@ export const DepsPanelMixin = {
             build: (rec) => this._depsBuild(rec),
             shown: (rec) => { if (!rec.graph && !rec.loading) this._depsLoad(rec); },
             isDirty: () => false,
-            dispose: (rec) => { rec.ui = null; },
+            dispose: (rec) => { if (rec.offNodeDrag) rec.offNodeDrag(); rec.offNodeDrag = null; rec.ui = null; },
         };
     },
 
@@ -99,7 +131,14 @@ export const DepsPanelMixin = {
         });
         promptsBtn.classList.add("dp-prompts-btn");
         promptsBtn.classList.toggle("active", rec.prompts !== false);
-        bar.append(title, promptsBtn,
+        const resetBtn = btn("Reset layout", "Put every node back where the layout puts it, at its own size", () => {
+            rec.moves = {};
+            saveMoves(this._depsKey(rec), rec.moves);
+            this._depsRender(rec);
+            this._depsFit(rec);
+        });
+        resetBtn.classList.add("dp-reset-btn");
+        bar.append(title, promptsBtn, resetBtn,
             btn("Fit", "Fit the graph in the view (F)", () => this._depsFit(rec)),
             btn("Look in folder", "Also record older files in this file's folder, then reload", () => this._depsLoad(rec, { scan: true })),
             btn("Reload", "Read the record again", () => this._depsLoad(rec)));
@@ -116,8 +155,10 @@ export const DepsPanelMixin = {
         view.append(stage);
         root.append(bar, note, view);
         rec.el.append(root);
-        rec.ui = { title, note, view, stage, svg, scale: 1, tx: 0, ty: 0 };
+        rec.ui = { title, note, view, stage, svg, resetBtn, scale: 1, tx: 0, ty: 0 };
+        if (!rec.moves) rec.moves = loadMoves(this._depsKey(rec));
         this._depsPanZoom(rec);
+        this._depsNodeDrag(rec);
         this._depsLoad(rec);
     },
 
@@ -142,8 +183,10 @@ export const DepsPanelMixin = {
             this._depsRender(rec);
             return;
         }
+        const before = this._depsKey(rec);
         rec.graph = data;
         if (!rec.path && data.root) rec.path = data.root;
+        if (this._depsKey(rec) !== before || !rec.moves) rec.moves = loadMoves(this._depsKey(rec));
         const lone = (data.nodes || []).length <= 1;
         ui.note.textContent = lone
             ? "Nothing recorded for this file yet: no inputs, and nothing made from it. Files agentY makes record "
@@ -160,14 +203,35 @@ export const DepsPanelMixin = {
         const doc = ui.stage.ownerDocument;
         for (const el of [...ui.stage.querySelectorAll(".dp-node")]) el.remove();
         ui.svg.innerHTML = "";
-        const L = layout(rec.graph || { nodes: [], edges: [] }, { open: rec.open, prompts: rec.prompts !== false });
+        rec.auto = layout(rec.graph || { nodes: [], edges: [] }, { open: rec.open, prompts: rec.prompts !== false });
+        const L = placeNodes(rec.auto, rec.moves || {});
         rec.laid = L;
+        if (ui.resetBtn) ui.resetBtn.style.display = L.nodes.some((x) => x.moved) ? "" : "none";
         const files = L.nodes.filter((x) => !x.prompt).length;
         ui.title.textContent = `${baseOf(rec.path || (rec.query && rec.query.filename))} — ${files} file${files === 1 ? "" : "s"}`;
-        ui.stage.style.width = `${L.width}px`;
-        ui.stage.style.height = `${L.height}px`;
+        ui.stage.style.width = `${L.width + L.minX}px`;
+        ui.stage.style.height = `${L.height + L.minY}px`;
+        this._depsEdges(rec);
+        for (const n of L.nodes) ui.stage.append(this._depsNodeEl(rec, n, doc));
+    },
+
+    /** Root key the moves are kept under: the root file's path, else its ComfyUI reference. */
+    _depsKey(rec) {
+        if (rec.path) return rec.path;
+        const q = rec.query || {};
+        return q.filename ? `${q.type || "output"}/${q.subfolder ? q.subfolder + "/" : ""}${q.filename}` : "";
+    },
+
+    /** Draw the edges of rec.laid (again: a node drag redraws only these). */
+    _depsEdges(rec) {
+        const ui = rec.ui, L = rec.laid;
+        const doc = ui.svg.ownerDocument;
+        ui.svg.innerHTML = "";
+        ui.svg.style.left = `${L.minX}px`;
+        ui.svg.style.top = `${L.minY}px`;
         ui.svg.setAttribute("width", String(L.width));
         ui.svg.setAttribute("height", String(L.height));
+        ui.svg.setAttribute("viewBox", `${L.minX} ${L.minY} ${L.width} ${L.height}`);
         for (const e of L.edges) {
             const p = doc.createElementNS(SVG, "path");
             p.setAttribute("d", edgePath(e));
@@ -182,11 +246,25 @@ export const DepsPanelMixin = {
                 ui.svg.append(t);
             }
         }
-        for (const n of L.nodes) ui.stage.append(this._depsNodeEl(rec, n, doc));
     },
 
     _depsNodeEl(rec, n, doc) {
-        if (n.prompt) return this._depsPromptEl(n, doc);
+        const el = n.prompt ? this._depsPromptEl(n, doc) : this._depsFileEl(rec, n, doc);
+        el.dataset.id = n.id;
+        if (n.moved) el.classList.add("moved");
+        const grip = doc.createElement("div");
+        grip.className = "dp-resize";
+        grip.title = "Drag to resize (Shift keeps the shape)";
+        el.append(grip);
+        el.addEventListener("mousedown", (e) => {
+            if (e.button !== 0) return;
+            e.stopPropagation();                    // not a pan
+            this._depsDragStart(rec, n.id, e, e.target === grip ? "size" : "move");
+        });
+        return el;
+    },
+
+    _depsFileEl(rec, n, doc) {
         const el = doc.createElement("div");
         el.className = "dp-node";
         if (n.root) el.classList.add("root");
@@ -231,6 +309,7 @@ export const DepsPanelMixin = {
             rec.path = n.id;
             rec.query = null;
             rec.open = new Set();
+            rec.moves = loadMoves(this._depsKey(rec));
             this._depsLoad(rec);
         });
         return el;
@@ -253,7 +332,7 @@ export const DepsPanelMixin = {
         copy.className = "dp-prompt-copy";
         copy.textContent = "Copy";
         copy.title = "Copy the prompt";
-        copy.onmousedown = (e) => e.stopPropagation();
+        copy.onmousedown = (e) => e.stopPropagation();   // a click, not a move
         copy.onclick = (e) => {
             e.stopPropagation();
             const done = () => { copy.textContent = "Copied"; setTimeout(() => { copy.textContent = "Copy"; }, 1200); };
@@ -279,6 +358,74 @@ export const DepsPanelMixin = {
         } catch (e) { console.warn("imageViewer: could not open", path, e); }
     },
 
+    // ── moving and resizing nodes ───────────────────────────────────────────
+
+    _depsDragStart(rec, id, e, mode) {
+        const ui = rec.ui;
+        const n = rec.laid && rec.laid.nodes.find((x) => x.id === id);
+        if (!ui || !n) return;
+        e.preventDefault();
+        ui.nodeDrag = { id, mode, cx: e.clientX, cy: e.clientY, x: n.x, y: n.y, w: n.w, h: n.h, moved: false };
+        ui.dragged = false;
+    },
+
+    /** One pair of window listeners per tab: the drag a node's mousedown started. */
+    _depsNodeDrag(rec) {
+        const ui = rec.ui;
+        const win = ui.view.ownerDocument.defaultView || window;
+        const onMove = (e) => {
+            const d = rec.ui && rec.ui.nodeDrag;
+            if (!d) return;
+            const dx = (e.clientX - d.cx) / ui.scale, dy = (e.clientY - d.cy) / ui.scale;
+            if (!d.moved && Math.abs(dx) + Math.abs(dy) <= 3 / ui.scale) return;
+            d.moved = true;
+            ui.dragged = true;
+            const m = { ...(rec.moves[d.id] || {}) };
+            if (d.mode === "size") {
+                let w = d.w + dx, h = d.h + dy;
+                if (e.shiftKey) { const k = Math.max(w / d.w, h / d.h); w = d.w * k; h = d.h * k; }
+                Object.assign(m, { x: d.x, y: d.y }, clampSize(w, h));
+            } else {
+                Object.assign(m, { x: Math.round(d.x + dx), y: Math.round(d.y + dy) });
+                if (m.w == null) { m.w = d.w; m.h = d.h; }
+            }
+            rec.moves[d.id] = m;
+            this._depsPlace(rec, d.id);
+        };
+        const onUp = () => {
+            const d = rec.ui && rec.ui.nodeDrag;
+            if (!d) return;
+            ui.nodeDrag = null;
+            if (d.moved) {
+                saveMoves(this._depsKey(rec), rec.moves);
+                if (ui.resetBtn) ui.resetBtn.style.display = "";
+            }
+            setTimeout(() => { if (rec.ui) rec.ui.dragged = false; }, 0);
+        };
+        win.addEventListener("mousemove", onMove);
+        win.addEventListener("mouseup", onUp);
+        if (rec.offNodeDrag) rec.offNodeDrag();
+        rec.offNodeDrag = () => { win.removeEventListener("mousemove", onMove); win.removeEventListener("mouseup", onUp); };
+    },
+
+    /** Put node `id` where rec.moves says and redraw the edges (no other node is rebuilt). */
+    _depsPlace(rec, id) {
+        const ui = rec.ui;
+        rec.laid = placeNodes(rec.auto, rec.moves);
+        const n = rec.laid.nodes.find((x) => x.id === id);
+        const el = [...ui.stage.querySelectorAll(".dp-node")].find((x) => x.dataset.id === id);
+        if (n && el) {
+            el.style.left = `${n.x}px`;
+            el.style.top = `${n.y}px`;
+            el.style.width = `${n.w}px`;
+            el.style.height = `${n.h}px`;
+            el.classList.add("moved");
+        }
+        ui.stage.style.width = `${rec.laid.width + rec.laid.minX}px`;
+        ui.stage.style.height = `${rec.laid.height + rec.laid.minY}px`;
+        this._depsEdges(rec);
+    },
+
     // ── pan / zoom ───────────────────────────────────────────────────────────
 
     _depsApply(rec) {
@@ -292,8 +439,8 @@ export const DepsPanelMixin = {
         const vw = ui.view.clientWidth || 800, vh = ui.view.clientHeight || 600;
         const pad = 32;
         ui.scale = Math.max(0.15, Math.min(1.25, (vw - pad * 2) / Math.max(1, L.width), (vh - pad * 2) / Math.max(1, L.height)));
-        ui.tx = (vw - L.width * ui.scale) / 2;
-        ui.ty = Math.max(pad, (vh - L.height * ui.scale) / 2);
+        ui.tx = (vw - L.width * ui.scale) / 2 - (L.minX || 0) * ui.scale;
+        ui.ty = Math.max(pad, (vh - L.height * ui.scale) / 2) - (L.minY || 0) * ui.scale;
         this._depsApply(rec);
     },
 

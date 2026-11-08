@@ -86,3 +86,25 @@ test("an empty graph (an error answer) lays out at once instead of spinning", ()
     const one = layout({ nodes: [n("a", { root: true })], edges: [] });
     assert.equal(one.nodes.length, 1);
 });
+
+test("a moved and resized node keeps its place; its edges follow and the bounds grow", async () => {
+    const { placeNodes, MIN_W, MIN_H } = await import("../js/imageViewer_depsLayout.js");
+    const g = { nodes: [n("plate"), n("depth", { root: true })], edges: [e("plate", "depth")] };
+    const L = layout(g);
+    const P = placeNodes(L, { plate: { x: -300, y: -50, w: 400, h: 300 }, gone: { x: 1, y: 1 } });
+    const plate = P.nodes.find((x) => x.id === "plate");
+    assert.deepEqual([plate.x, plate.y, plate.w, plate.h, plate.moved], [-300, -50, 400, 300, true]);
+    assert.ok(!P.nodes.find((x) => x.id === "depth").moved);
+    const edge = P.edges[0];
+    assert.equal(edge.x1, -300 + 200);
+    assert.equal(edge.y1, -50 + 300);
+    assert.equal(P.minX, -300);
+    assert.equal(P.minY, -50);
+    assert.ok(P.width >= L.width + 300);
+    // Sizes are held to their limits; nothing moved is the layout itself.
+    const tiny = placeNodes(L, { plate: { w: 1, h: 1 } }).nodes.find((x) => x.id === "plate");
+    assert.deepEqual([tiny.w, tiny.h], [MIN_W, MIN_H]);
+    const same = placeNodes(L, {});
+    assert.deepEqual(same.nodes.map((x) => [x.x, x.y]), L.nodes.map((x) => [x.x, x.y]));
+    assert.equal(same.minX, 0);
+});

@@ -17,8 +17,15 @@ With [agentY](https://github.com/szprivate/agentY) running, every file it or a S
 |---|---|
 | Open a file | Click its node |
 | Centre on a file | Double-click its node |
+| Move a node | Drag it. Its edges follow. |
+| Resize a node | Drag its lower right corner (<kbd>Shift</kbd> keeps the shape). The thumbnail or prompt grows with it. |
+| Put every node back | **Reset layout** (shown once something was moved) |
 | Fit the graph | <kbd>F</kbd>, or **Fit** |
 | Find older files made before the record existed | **Look in folder** |
 | Read it again | **Reload** |
+
+![Nodes moved and resized by hand](images/dependencies-moved.png)
+
+Moves and sizes are kept per file you started from, so the graph comes back the way you left it.
 
 Without agentY running, the tab says so.

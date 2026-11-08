@@ -176,3 +176,49 @@ export function edgePath(e) {
     const dy = Math.max(24, (e.y2 - e.y1) / 2);
     return `M${e.x1},${e.y1} C${e.x1},${e.y1 + dy} ${e.x2},${e.y2 - dy} ${e.x2},${e.y2}`;
 }
+
+// ── nodes moved and resized by hand ───────────────────────────────────────────
+
+export const MIN_W = 80;
+export const MIN_H = 56;
+export const MAX_W = 960;
+export const MAX_H = 960;
+
+/** A size held to MIN..MAX. */
+export const clampSize = (w, h) => ({
+    w: Math.round(Math.max(MIN_W, Math.min(MAX_W, Number(w) || MIN_W))),
+    h: Math.round(Math.max(MIN_H, Math.min(MAX_H, Number(h) || MIN_H))),
+});
+
+/** Edge endpoints from where its two nodes stand: bottom middle of the input, top middle of the output. */
+export function edgeEnds(e, a, b) {
+    return { ...e, x1: a.x + a.w / 2, y1: a.y + a.h, x2: b.x + b.w / 2, y2: b.y };
+}
+
+/**
+ * A laid-out graph with the user's moves on it. `moves`: `{ [id]: {x, y, w, h} }` (any of them; ids of
+ * nodes no longer in the graph are ignored). -> the same shape as `layout`, plus `minX` / `minY`: the
+ * bounds' top-left corner, which a node dragged up or left of the layout takes below 0.
+ */
+export function placeNodes(L, moves = {}) {
+    const by = new Map();
+    const nodes = L.nodes.map((n) => {
+        const m = moves && moves[n.id];
+        let out = n;
+        if (m && typeof m === "object") {
+            const s = (m.w != null || m.h != null) ? clampSize(m.w ?? n.w, m.h ?? n.h) : { w: n.w, h: n.h };
+            out = { ...n, x: Number.isFinite(m.x) ? m.x : n.x, y: Number.isFinite(m.y) ? m.y : n.y, w: s.w, h: s.h,
+                    moved: true };
+        }
+        by.set(out.id, out);
+        return out;
+    });
+    const edges = L.edges.map((e) => (by.has(e.from) && by.has(e.to) ? edgeEnds(e, by.get(e.from), by.get(e.to)) : e));
+    let minX = 0, minY = 0, maxX = L.width, maxY = L.height;
+    for (const n of nodes) {
+        minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
+        maxX = Math.max(maxX, n.x + n.w); maxY = Math.max(maxY, n.y + n.h);
+    }
+    return { nodes, edges, minX, minY, width: maxX - minX, height: maxY - minY };
+}
+

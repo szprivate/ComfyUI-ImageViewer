@@ -146,6 +146,48 @@ class DepsTabBrowserTests(unittest.TestCase):
         self.assertEqual(pg.evaluate("() => window.__panel.viewport.querySelectorAll('.view-tab-deps .dp-prompt').length"), 2)
         self.assertEqual(self.errors, [])
 
+    def test_nodes_move_and_resize_and_stay(self):
+        pg = self.page()
+        box = lambda label: pg.evaluate("""(label) => { const el = [...window.__panel.viewport.querySelectorAll(
+            '.view-tab-deps .dp-node')].find((x) => x.querySelector('.dp-label') && x.querySelector('.dp-label').textContent === label);
+            const r = el.getBoundingClientRect(); return {x: r.x, y: r.y, w: r.width, h: r.height,
+            left: parseFloat(el.style.left), top: parseFloat(el.style.top), wpx: parseFloat(el.style.width)}; }""", label)
+        edge = "() => window.__panel.viewport.querySelector('.view-tab-deps .dp-edge:not(.dp-edge-prompt)').getAttribute('d')"
+        before, d0 = box("plate.mp4"), pg.evaluate(edge)
+        self.assertFalse(pg.evaluate("() => window.__panel.viewport.querySelector('.view-tab-deps .dp-reset-btn').offsetParent !== null"))
+        # move: drag the node's middle 120 px right and 60 down
+        pg.mouse.move(before["x"] + before["w"] / 2, before["y"] + 20)
+        pg.mouse.down()
+        pg.mouse.move(before["x"] + before["w"] / 2 + 60, before["y"] + 50, steps=4)
+        pg.mouse.move(before["x"] + before["w"] / 2 + 120, before["y"] + 80, steps=4)
+        pg.mouse.up()
+        moved = box("plate.mp4")
+        self.assertAlmostEqual(moved["x"] - before["x"], 120, delta=2)
+        self.assertAlmostEqual(moved["y"] - before["y"], 60, delta=2)
+        self.assertNotEqual(pg.evaluate(edge), d0, "the edge follows the node")
+        self.assertEqual(pg.evaluate("() => window.__panel.activeTab").split(":")[0], "deps", "a drag is not a click")
+        # resize: drag the lower right corner
+        pg.mouse.move(moved["x"] + moved["w"] - 4, moved["y"] + moved["h"] - 4)
+        pg.mouse.down()
+        pg.mouse.move(moved["x"] + moved["w"] + 40, moved["y"] + moved["h"] + 30, steps=5)
+        pg.mouse.up()
+        big = box("plate.mp4")
+        self.assertGreater(big["w"], moved["w"] + 30)
+        self.assertAlmostEqual(big["x"], moved["x"], delta=1)
+        # kept: a fresh render (as after a reload) puts it back where it was left
+        saved = pg.evaluate("() => JSON.parse(localStorage.getItem('imageviewer.viewer.depsLayout'))['D:/out/depth.mp4'].m['D:/in/plate.mp4']")
+        self.assertEqual(saved["w"], round(big["wpx"]))
+        pg.evaluate("() => window.__panel.viewport.querySelector('.view-tab-deps .dp-bar .ac-btn:last-child').click()")  # Reload
+        pg.wait_for_timeout(300)
+        again = box("plate.mp4")
+        self.assertEqual((again["left"], again["top"], again["wpx"]), (big["left"], big["top"], big["wpx"]))
+        # reset
+        pg.evaluate("() => window.__panel.viewport.querySelector('.view-tab-deps .dp-reset-btn').click()")
+        back = box("plate.mp4")
+        self.assertEqual((back["left"], back["top"], back["wpx"]), (before["left"], before["top"], before["wpx"]))
+        self.assertIsNone(pg.evaluate("() => (JSON.parse(localStorage.getItem('imageviewer.viewer.depsLayout') || '{}'))['D:/out/depth.mp4'] || null"))
+        self.assertEqual(self.errors, [])
+
     def test_history_menu_offers_it(self):
         pg = self.page()
         got = pg.evaluate("""() => { const P = window.__panel;
