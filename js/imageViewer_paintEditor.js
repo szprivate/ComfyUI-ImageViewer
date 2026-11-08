@@ -28,6 +28,7 @@ import { LiquifyMixin } from "./imageViewer_paintLiquify.js";
 import { PreviewMixin } from "./imageViewer_paintPreview.js";
 import { PathToolsMixin, PATH_TOOLS, TOOL_GROUPS, toolGroup } from "./imageViewer_paintPathTools.js";
 import { AdjustUIMixin, ADJUST_CSS } from "./imageViewer_paintAdjustUI.js";
+import { SmartLayerMixin } from "./imageViewer_paintSmartLayer.js";
 
 /** A dialog slider's step for the range a..b: about a thousand steps, a whole number where the range is wide. */
 export function dialogStep(a, b) {
@@ -178,6 +179,7 @@ const STYLE = `
 .paint-row .nm { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .paint-row .nm input { width: 100%; }
 .paint-row .tag { color: #888; font-size: 10px; flex: 0 0 auto; }
+.paint-row .tag.so { color: #4fd6ee; border: 1px solid #2f6f7a; border-radius: 3px; padding: 0 3px; cursor: pointer; }
 .paint-row .lk { color: #f60; flex: 0 0 auto; display: inline-flex; }
 .paint-hist .paint-row { gap: 8px; }
 .paint-hist .paint-row .hico { color: #888; flex: 0 0 auto; display: inline-flex; }
@@ -405,7 +407,11 @@ class PaintEditor {
         this.doc = D.cleanDoc(data.doc);
         this.pix = new Map(Object.entries(data.pix || {}));
         this.masks = new Map(Object.entries(data.masks || {}));
+        // Smart layers' sources ({ id: { px, w, h } }); a layer whose source did not come is a plain pixel layer.
+        if (fresh || !this.srcs) this.srcs = new Map();
+        for (const [id, s] of Object.entries(data.srcs || {})) this.srcs.set(id, { px: s.px, w: s.w, h: s.h });
         for (const L of this.doc.layers) {
+            if (L.smart && !this.srcs.has(L.smart.src)) delete L.smart;
             if (L.kind === "pixel" && !this.pix.has(L.id)) this.pix.set(L.id, new Uint8ClampedArray(L.w * L.h * 4));
             if (L.mask && !this.masks.has(L.id)) delete L.mask;
         }
@@ -963,8 +969,10 @@ class PaintEditor {
         this._tfSettle();
         const before = this._snap();
         let ok;
-        try { ok = fn(); } catch (e) { this._restore(before); this._notify(String(e.message || e), "error"); return false; }
+        this._smartDrawn = new Set();
+        try { ok = fn(); this._smartUncut(); } catch (e) { this._restore(before); this._notify(String(e.message || e), "error"); return false; }
         if (ok === false) { this._restore(before); return false; }
+        this._smartKeepOrForget(before);
         D.fixTree(this.doc.layers);
         this._prunePicked();
         const after = this._snap();
@@ -980,6 +988,9 @@ class PaintEditor {
         this._liveSnap = null;
         this._previewSettle();
         if (!before) return;
+        this._smartDrawn = new Set();
+        this._smartUncut();
+        this._smartKeepOrForget(before);
         const after = this._snap();
         if (JSON.stringify(before.doc) === JSON.stringify(after.doc)) return;
         this._push({ label, undo: () => this._restore(before), redo: () => this._restore(after) });
@@ -990,6 +1001,7 @@ class PaintEditor {
         this.saved = new Map();
         for (const [id, b] of this.pix) this.saved.set("p:" + id, [b, this.bufVer.get(b) || 0]);
         for (const [id, b] of this.masks) this.saved.set("m:" + id, [b, this.bufVer.get(b) || 0]);
+        for (const id of Object.keys(this.doc ? this.usedSources() : {})) this.saved.set("s:" + id, true);
     }
 
     _bump(buf) { this.bufVer.set(buf, (this.bufVer.get(buf) || 0) + 1); }
@@ -1234,6 +1246,7 @@ class PaintEditor {
                     for (let i = 0; i < m.length; i++) px[i * 4 + 3] = D.q8((px[i * 4 + 3] / 255) * (m[i] / 255));
                     C.name = `${L.name} (selection)`;
                     delete C.text;
+                    delete C.smart;
                 } else C.name = `${L.name} copy`;
                 this.pix.set(C.id, px);
             } else C.name = `${L.name} copy`;
@@ -1429,6 +1442,7 @@ class PaintEditor {
             if (L.kind === "adjust") for (let k = 3; k < out.length; k += 4) out[k] = base[k];
             this.pix.set(B.id, out);
             delete B.text;
+            delete B.smart;
             this.doc.layers.splice(D.layerIndex(this.doc, L.id), 1);
             this.pix.delete(L.id);
             this.masks.delete(L.id);
@@ -1549,11 +1563,12 @@ class PaintEditor {
 
     // ── changes of the pixels ────────────────────────────────────────────────
 
-    _pixelTarget(what) {
+    _pixelTarget(what, { smartOk = false } = {}) {
         const L = this.active();
         if (!L) return null;
         if (L.locked) { this._notify(`${L.name} is locked.`, "warn"); return null; }
         if (L.kind !== "pixel") { this._notify(`${what}: pick a pixel layer (this one is ${L.kind === "group" ? "a group" : "an adjustment layer"}).`, "warn"); return null; }
+        if (!smartOk && this._smartRefuses(L, what)) return null;
         return L;
     }
 
@@ -1604,6 +1619,8 @@ class PaintEditor {
         if (!P.length) { this._notify(`${what}: pick a pixel layer (or several).`, "warn"); return null; }
         const lk = P.find((L) => L.locked);
         if (lk) { this._notify(`${lk.name} is locked.`, "warn"); return null; }
+        const sm = P.find((L) => this.isSmart(L));
+        if (sm && this._smartRefuses(sm, what)) return null;
         return P;
     }
 
@@ -1673,8 +1690,12 @@ class PaintEditor {
     }
 
     flipLayer(axis) {
-        const L = this._pixelTarget("Flip");
+        const L = this._pixelTarget("Flip", { smartOk: true });
         if (!L) return false;
+        if (this.isSmart(L)) {
+            const cx = L.x + L.w / 2, cy = L.y + L.h / 2, f = axis === "h" ? [-1, 1] : [1, -1];
+            return this.change("Flip layer", () => this._smartApply(L, [f[0], 0, cx - f[0] * cx, 0, f[1], cy - f[1] * cy, 0, 0, 1]));
+        }
         return this.change("Flip layer", () => {
             const src = this.pix.get(L.id), out = new Uint8ClampedArray(src.length);
             for (let y = 0; y < L.h; y++) for (let x = 0; x < L.w; x++) {
@@ -1686,8 +1707,16 @@ class PaintEditor {
     }
 
     rotateLayer(deg) {
-        const L = this._pixelTarget("Rotate");
+        const L = this._pixelTarget("Rotate", { smartOk: true });
         if (!L) return false;
+        if (this.isSmart(L)) {
+            const cx = L.x + L.w / 2, cy = L.y + L.h / 2, r = deg * Math.PI / 180;
+            const c = Math.round(Math.cos(r)), s = Math.round(Math.sin(r));
+            return this.change("Rotate layer", () => {
+                this._smartApply(L, [c, -s, cx - c * cx + s * cy, s, c, cy - s * cx - c * cy, 0, 0, 1]);
+                if (L.mask) { delete L.mask; this.masks.delete(L.id); }
+            });
+        }
         return this.change("Rotate layer", () => {
             const src = this.pix.get(L.id);
             const nw = deg === 180 ? L.w : L.h, nh = deg === 180 ? L.h : L.w;
@@ -1706,8 +1735,15 @@ class PaintEditor {
 
     /** Scale the active layer by k (the browser's resampling). */
     scaleLayer(k) {
-        const L = this._pixelTarget("Scale");
+        const L = this._pixelTarget("Scale", { smartOk: true });
         if (!L) return false;
+        if (this.isSmart(L)) {
+            const cx = L.x + L.w / 2, cy = L.y + L.h / 2;
+            return this.change("Scale layer", () => {
+                this._smartApply(L, [k, 0, cx - k * cx, 0, k, cy - k * cy, 0, 0, 1]);
+                if (L.mask) { delete L.mask; this.masks.delete(L.id); }
+            });
+        }
         return this.change("Scale layer", () => {
             const nw = Math.max(1, Math.round(L.w * k)), nh = Math.max(1, Math.round(L.h * k));
             const out = resample(this.d, this.pix.get(L.id), L.w, L.h, nw, nh);
@@ -1756,8 +1792,11 @@ class PaintEditor {
     imageSize(w, h) {
         const kx = w / this.doc.w, ky = h / this.doc.h;
         const ok = this.change("Image size", () => {
+            const ow = this.doc.w, oh = this.doc.h;
+            this.doc.w = w; this.doc.h = h;          // a smart layer is drawn for the new canvas
             for (const L of this.doc.layers) {
-                if (L.kind === "pixel") {
+                if (this.isSmart(L)) this._smartApply(L, [kx, 0, 0, 0, ky, 0, 0, 0, 1]);
+                else if (L.kind === "pixel") {
                     const nw = Math.max(1, Math.round(L.w * kx)), nh = Math.max(1, Math.round(L.h * ky));
                     this.pix.set(L.id, resample(this.d, this.pix.get(L.id), L.w, L.h, nw, nh));
                     Object.assign(L, { x: Math.round(L.x * kx), y: Math.round(L.y * ky), w: nw, h: nh });
@@ -1768,7 +1807,7 @@ class PaintEditor {
                     Object.assign(m, { x: Math.round(m.x * kx), y: Math.round(m.y * ky), w: nw, h: nh });
                 }
             }
-            if (this.sel) this.sel = resampleMask(this.d, this.sel, this.doc.w, this.doc.h, w, h);
+            if (this.sel) this.sel = resampleMask(this.d, this.sel, ow, oh, w, h);
             if (this.doc.paths) this.doc.paths = D.movePaths(this.doc.paths, 0, 0, kx, ky);
             if (this.doc.guides) this._setGuides(D.moveGuides(this.doc.guides, 0, 0, kx, ky), w, h);
             this.doc.w = w; this.doc.h = h;
@@ -2008,6 +2047,7 @@ class PaintEditor {
             return;
         }
         const onMask = this.editMask || L.kind === "adjust" || L.kind === "group";
+        if (!onMask && !this.quick && this._smartRefuses(L, (PAINT_TOOLS.find((t) => t[0] === this.tool) || [, , "Painting"])[2].split(" (")[0])) return;
         const clone = SOURCED.includes(this.tool), heal = this.tool === "spot" ? "spot" : this.tool === "heal" ? "heal" : null;
         const what = { clone: "The clone stamp", spot: "The spot healing brush", heal: "The healing brush", dodge: "Dodge", burn: "Burn", sponge: "The sponge" }[this.tool];
         if ((clone || heal || TONERS.includes(this.tool)) && onMask) { this._notify(`${what} works on a layer's pixels: pick the layer (not its mask).`, "info"); return; }
@@ -2499,6 +2539,12 @@ class PaintEditor {
             return false;
         }
         this.tf = null;
+        if (this.isSmart(tf.L)) {
+            // Drawn again from its source: canvas -> canvas is the session's matrix after where the drawn layer was.
+            const m = D.tfMatrix(p), S = tf.src;
+            this._smartAfterSession(tf.L, [m.a, m.c, m.e - m.a * S.x - m.c * S.y, m.b, m.d, m.f - m.b * S.x - m.d * S.y, 0, 0, 1], S);
+            this.redraw();
+        }
         const before = tf.before, after = this._snap();
         this._push({ label: D.tfIsMove(p) ? "Move" : "Transform", undo: () => this._restore(before), redo: () => this._restore(after),
                      bytes: this._snapBytes(before, after) });
@@ -2874,6 +2920,10 @@ class PaintEditor {
                 { label: "Layer style…", disabled: !L || L.kind !== "pixel", run: () => this.openStyle() },
                 ...STYLE_KINDS.map((k) => ({ label: `  ${STYLE_LABELS[k]}`, disabled: !L || L.kind !== "pixel", run: () => this.openStyle(k) })),
                 { label: "Clear layer style", disabled: !L || !L.style, run: () => this.clearStyle(L) }, "-",
+                { label: "Convert to smart layer", disabled: !L || L.kind !== "pixel" || this.isSmart(L), run: () => this.convertToSmart() },
+                { label: n > 1 ? `Rasterize ${n} layers` : "Rasterize (forget the smart layer's source)", disabled: !this.pickedLayers().some((x) => this.isSmart(x)), run: () => this.rasterize() },
+                { label: "Edit smart layer contents…", disabled: !this.isSmart(L) || !this.host.editSmart, run: () => this.host.editSmart(L.id) },
+                { label: "Reset smart layer", disabled: !this.isSmart(L), run: () => this.resetSmart() }, "-",
                 { label: "Smart filters…", disabled: !L || L.kind !== "pixel", run: () => { this._smartOpen = L.id; this.refreshProps(); if (this.host.showPanel) this.host.showPanel("effects"); } },
                 { label: "Bake smart filters", disabled: !L || !L.filters, run: () => this.bakeSmartFilters(L) },
                 { label: "Clear smart filters", disabled: !L || !L.filters, run: () => this.clearSmartFilters(L) }];
@@ -3186,6 +3236,11 @@ class PaintEditor {
                 fx.addEventListener("click", (e) => { e.stopPropagation(); this.setActive(L.id); this.openStyle(); });
                 row.append(fx);
             }
+            if (this.isSmart(L)) {
+                const so = this.el("span", "tag so", { text: "smart", title: `A smart layer: drawn from its ${L.smart.sw} x ${L.smart.sh} source, so a transform keeps its detail` });
+                so.addEventListener("click", (e) => { e.stopPropagation(); this.setActive(L.id); if (this.host.showPanel) this.host.showPanel("props"); });
+                row.append(so);
+            }
             if (L.filters) {
                 const sf = this.el("span", "tag sf", { text: "sf", title: "Smart filters: click to change them" });
                 sf.addEventListener("click", (e) => { e.stopPropagation(); this.setActive(L.id); this._smartOpen = L.id; this.refreshProps(); if (this.host.showPanel) this.host.showPanel("effects"); });
@@ -3372,6 +3427,7 @@ class PaintEditor {
             // Fill (Shift+F5), while it is asked for.
             if (this._fillOpen) box.append(this._fillSection());
             if (L) box.append(this._layerSection(L));
+            if (this.isSmart(L)) box.append(this._smartLayerSection(L));
             if (L && L.mask) box.append(this._maskSection(L));
             if (!box.childNodes.length) box.append(this.el("div", "paint-note", { text: "Open or make a picture: the active layer's settings come here." }));
         }
@@ -3727,7 +3783,10 @@ class PaintEditor {
             if (L.mask) masks[L.id] = this.masks.get(L.id);
         }
         const selection = this.sel || new Uint8Array(this.doc.w * this.doc.h);
-        return { meta, layers, masks, selection, keep };
+        // Smart layers' sources: sent once (a source never changes; a new one has a new id).
+        const sources = {};
+        for (const [id, S] of Object.entries(this.usedSources())) if (all || !this.saved.has("s:" + id)) sources[id] = S.px;
+        return { meta, layers, masks, selection, keep, sources };
     }
 
     _sameMask(L) {
@@ -3746,7 +3805,11 @@ class PaintEditor {
         const before = this._snap();
         const next = { doc: D.cleanDoc(data.doc), pix: new Map(Object.entries(data.pix || {})), masks: new Map(Object.entries(data.masks || {})),
                        sel: data.selection && data.selection.length === data.doc.w * data.doc.h ? data.selection : null };
-        for (const L of next.doc.layers) if (L.kind === "pixel" && !next.pix.has(L.id)) next.pix.set(L.id, new Uint8ClampedArray(L.w * L.h * 4));
+        for (const [id, s] of Object.entries(data.srcs || {})) this._srcs().set(id, { px: s.px, w: s.w, h: s.h });
+        for (const L of next.doc.layers) {
+            if (L.smart && !this._srcs().has(L.smart.src)) delete L.smart;
+            if (L.kind === "pixel" && !next.pix.has(L.id)) next.pix.set(L.id, new Uint8ClampedArray(L.w * L.h * 4));
+        }
         const sizeChanged = next.doc.w !== this.doc.w || next.doc.h !== this.doc.h;
         this._restore(next);
         const after = this._snap();
@@ -3763,7 +3826,7 @@ class PaintEditor {
     }
 }
 
-Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin, TipsMixin, DrawMixin, LayerFxMixin, SelectGuidesMixin, SmartMixin, LiquifyMixin, PathToolsMixin, PreviewMixin, AdjustUIMixin);
+Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin, TipsMixin, DrawMixin, LayerFxMixin, SelectGuidesMixin, SmartMixin, LiquifyMixin, PathToolsMixin, PreviewMixin, AdjustUIMixin, SmartLayerMixin);
 
 // Lucide's rotate-cw, white on black, as the pointer outside a transform's box.
 const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><g stroke="#000" stroke-width="4"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g><g stroke="#fff" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g></svg>')}") 12 12, alias`;

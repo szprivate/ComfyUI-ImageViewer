@@ -1675,6 +1675,76 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(self.errors, [])
 
 
+    def test_smart_layer_keeps_its_resolution_refuses_the_brush_rasterizes_saves_and_edits_its_contents(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        # A detailed 800 x 480 picture placed as a smart layer: fitted into the 200 x 120 canvas.
+        pg.evaluate(f"""() => {{ const b = new Uint8ClampedArray(800 * 480 * 4); let s = 7;
+            for (let i = 0; i < b.length; i++) {{ s = (s * 1103515245 + 12345) >>> 0; b[i] = (i & 3) === 3 ? 255 : s >>> 24; }}
+            return {ed}.addSmartLayer(b, 800, 480, 'big'); }}""")
+        st = pg.evaluate(f"() => {{ const e = {ed}, L = e.active(); return [L.name, e.isSmart(L), L.x, L.y, L.w, L.h, e.undoStack.at(-1).label]; }}")
+        self.assertEqual(st, ["big", True, 0, 0, 200, 120, "Place smart layer"])
+        self.assertEqual(pg.evaluate(f"() => {ed}.layerList.querySelectorAll('.paint-row .tag.so').length"), 1)
+        self.assertTrue(pg.evaluate(f"() => !!{ed}.parts.props.querySelector('[data-smart=rasterize]')"))
+        pg.evaluate(f"() => {{ window.__s0 = Array.from({ed}.pix.get({ed}.active().id)); }}")
+        # Down to a tenth and up again: drawn from the source each time, so nothing of it is lost.
+        pg.evaluate(f"() => {{ {ed}.tfSet({{ sx: 0.1, sy: 0.1 }}); {ed}.tfCommit(); }}")
+        self.assertEqual(pg.evaluate(f"() => [{ed}.active().w, {ed}.isSmart({ed}.active())]"), [20, True])
+        pg.evaluate(f"() => {{ {ed}.tfSet({{ sx: 10, sy: 10 }}); {ed}.tfCommit(); }}")
+        diff = pg.evaluate(f"""() => {{ const e = {ed}, L = e.active(), b = e.pix.get(L.id), a = window.__s0; let m = 0;
+            if (L.w !== 200 || L.h !== 120) return [L.w, L.h];
+            for (let i = 0; i < a.length; i++) m = Math.max(m, Math.abs(a[i] - b[i])); return m; }}""")
+        self.assertLessEqual(diff, 2)
+        # The brush is refused (the layer stays smart, its pixels as they were).
+        pg.evaluate(f"() => {{ window.__s1 = Array.from({ed}.pix.get({ed}.active().id)); {ed}.setTool('brush'); }}")
+        pg.evaluate(f"() => {ed}.zoomTo(2)")
+        at = lambda x, y: pg.evaluate(f"() => {{ const r = {ed}.wrap.getBoundingClientRect(), v = {ed}.view; return [r.left + v.x + {x} * v.zoom, r.top + v.y + {y} * v.zoom]; }}")
+        pg.mouse.move(*at(50, 50)); pg.mouse.down(); pg.mouse.move(*at(90, 60), steps=5); pg.mouse.up()
+        self.assertTrue(pg.evaluate(f"() => {{ const e = {ed}, b = e.pix.get(e.active().id); return e.isSmart(e.active()) && window.__s1.every((v, i) => v === b[i]); }}"))
+        # Rasterize, and undo it.
+        pg.evaluate(f"() => {ed}.rasterize()")
+        self.assertEqual(pg.evaluate(f"() => [{ed}.isSmart({ed}.active()), {ed}.undoStack.at(-1).label]"), [False, "Rasterize"])
+        pg.keyboard.press("Control+z")
+        self.assertTrue(pg.evaluate(f"() => {ed}.isSmart({ed}.active())"))
+        # Saved: the .ora holds the whole source.
+        pg.evaluate("() => __panel.paintSave(__panel._paintActive())")
+        pg.wait_for_function(f"() => !{ed}.isDirty()", timeout=10000)
+        path = pg.evaluate("() => __panel._paintActive().path")
+        doc = self.P.read_ora(path)
+        L = doc.layers[-1]
+        self.assertEqual((L["smart"]["sw"], L["smart"]["sh"]), (800, 480))
+        self.assertEqual(doc.sources[L["smart"]["src"]].shape, (480, 800, 4))
+        # Edit contents: a tab of its own; filled red and saved, the smart layer is drawn from it.
+        parent = pg.evaluate("() => __panel.activeTab")
+        lid = pg.evaluate(f"() => {ed}.active().id")
+        self.assertTrue(pg.evaluate(f"(id) => __panel.paintEditSmart(__panel._paintActive(), id)", lid))
+        pg.wait_for_function("() => { const r = __panel._paintActive(); return r && r.smartFor && r.editor && r.editor.doc; }", timeout=10000)
+        self.assertEqual(pg.evaluate(f"() => [{ed}.doc.w, {ed}.doc.h]"), [800, 480])
+        pg.evaluate(f"() => {{ const e = {ed}, L = e.active(), b = new Uint8ClampedArray(L.w * L.h * 4); for (let i = 0; i < b.length; i += 4) b.set([255, 0, 0, 255], i); e.change('Fill', () => {{ e.pix.set(L.id, b); }}); }}")
+        pg.evaluate("() => __panel.paintSave(__panel._paintActive())")
+        pg.wait_for_function(f"() => !{ed}.isDirty()", timeout=10000)
+        pg.evaluate("(k) => __panel.switchTab(k)", parent)
+        pg.wait_for_timeout(150)
+        got = pg.evaluate(f"(id) => {{ const e = {ed}, L = e.doc.layers.find((x) => x.id === id), b = e.pix.get(L.id); return [e.isSmart(L), [...b.slice(0, 4)], [L.w, L.h], e.undoStack.at(-1).label]; }}", lid)
+        self.assertTrue(got[0])
+        self.assertEqual(got[1], [255, 0, 0, 255])
+        self.assertEqual(got[2], [200, 120])
+        # An .ora with a smart layer, written by the agent's side, opens as one: its source comes along.
+        import importlib
+        O = importlib.import_module(self.pkg + ".paint_ops")
+        d = self.P.PaintDoc(100, 60)
+        d.add_pixel_layer(np.full((60, 100, 4), 255, np.uint8), "bg")
+        big = np.zeros((300, 500, 4), np.uint8); big[..., 2] = 200; big[..., 3] = 255
+        O.apply_ops(d, [{"op": "add_layer", "file": "x", "name": "agent", "fit": "contain"}], read_image=lambda f: big)
+        ora = os.path.join(self.dirs["output"], "smart_in.ora")
+        self.P.write_ora(ora, d)
+        pg.evaluate("(p) => __panel.paintOpen(p)", ora)
+        pg.wait_for_function("(p) => { const r = __panel._paintActive(); return r && r.path === p && r.editor && r.editor.doc; }", arg=ora, timeout=10000)
+        pg.wait_for_timeout(150)
+        st = pg.evaluate(f"() => {{ const e = {ed}, L = e.doc.layers.find((x) => x.name === 'agent'); return [e.isSmart(L), e.srcs.get(L.smart.src).w]; }}")
+        self.assertEqual(st, [True, 500])
+
     def test_adjustment_panels_histogram_levels_per_channel_curves_presets_and_into_the_pixels(self):
         pg = self.page()
         self.open_photo(pg)

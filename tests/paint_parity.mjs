@@ -10,6 +10,7 @@ const D = await import(pathToFileURL(path.join(here, "..", "js", "imageViewer_pa
 const W = await import(pathToFileURL(path.join(here, "..", "js", "imageViewer_paintWarp.js")).href);
 const G = await import(pathToFileURL(path.join(here, "..", "js", "imageViewer_paintDraw.js")).href);
 const S = await import(pathToFileURL(path.join(here, "..", "js", "imageViewer_paintSelect.js")).href);
+const SL = await import(pathToFileURL(path.join(here, "..", "js", "imageViewer_paintSmartLayer.js")).href);
 const job = JSON.parse(fs.readFileSync(inFile, "utf8"));
 const dec = (b) => new Uint8Array(Buffer.from(b, "base64"));
 const enc = (a) => Buffer.from(a.buffer, a.byteOffset, a.byteLength).toString("base64");
@@ -34,6 +35,12 @@ for (const [name, c] of Object.entries(job.cases)) {
         res.path_line = line;
         res.path_fill = enc(D.pathMask(W, H, P));
         res.path_stroke = enc(D.strokeMask(W, H, line, P.closed, c.path.width));
+    }
+    if (c.smart) {
+        // A source drawn by a canvas matrix: its pixels, box and level, and the halved source.
+        const sp = c.smart, src = { px: new Uint8ClampedArray(dec(sp.src)), w: sp.w, h: sp.h };
+        res.smart = sp.mats.map((cm) => { const r = SL.render(src, cm, sp.W, sp.H); return { px: enc(r.px), box: r.box, m: r.m, cut: r.cut, k: SL.levelFor(cm, sp.w, sp.h) }; });
+        res.halve = enc(SL.halveRGBA(src.px, sp.w, sp.h).px);
     }
     if (c.distort) {
         const L = doc.layers[0], r = W.perspectiveLayer(px[L.id], L.w, L.h, c.distort);

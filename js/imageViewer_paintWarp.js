@@ -226,6 +226,10 @@ export const WarpMixin = {
         this._commitText();
         const L = this._tfLayer();
         if (!L) return null;
+        if (mode === "warp" && this.isSmart && this.isSmart(L)) {
+            this._notify(`Warp: ${L.name} is a smart layer - Rasterize it first (Distort and Perspective keep it smart).`, "warn");
+            return null;
+        }
         const before = this._snap();
         const src = { px: this.pix.get(L.id), x: L.x, y: L.y, w: L.w, h: L.h,
                       mask: L.mask ? { m: this.masks.get(L.id), x: L.mask.x, y: L.mask.y, w: L.mask.w, h: L.mask.h, fill: L.mask.fill } : null };
@@ -307,6 +311,12 @@ export const WarpMixin = {
             this._restore(wp.before);
             this._afterHistory();
             return false;
+        }
+        if (this.isSmart && this.isSmart(wp.L) && wp.mode !== "warp") {
+            // Drawn again from its source: the drawn layer's corners (where they were) to the points.
+            const S = wp.src, Hm = homography([[S.x, S.y], [S.x + S.w, S.y], [S.x + S.w, S.y + S.h], [S.x, S.y + S.h]], wp.pts);
+            if (Hm) this._smartAfterSession(wp.L, [Hm[0], Hm[1], Hm[2], Hm[3], Hm[4], Hm[5], Hm[6], Hm[7], 1], S);
+            this.redraw();
         }
         const before = wp.before, after = this._snap();
         this._push({ label: LABELS[wp.mode], undo: () => this._restore(before), redo: () => this._restore(after), bytes: this._snapBytes(before, after) });

@@ -79,6 +79,16 @@ The layer's mask goes with it. Press <kbd>Enter</kbd> or double-click to apply, 
 
 A smart filter is kept as a setting on the layer instead of being baked into its pixels, so you can change it, switch it off, reorder it or take it away later. Add one from the **Filter** menu ("Smart filter: Gaussian blur", "Sharpen", or "an adjustment…" such as Levels or Hue/Saturation), or with **Add…** in the Effects panel. Each filter there has its switch, ▲ ▼ to change the order, × to remove it, and its numbers. A layer with smart filters shows "sf" in the Layers panel. **Bake into the pixels** (or **Layer > Bake smart filters**) applies them for good. A blur reaches past the layer's own box, as it would on a layer the size of the canvas. A `.ora` keeps them; a `.psd` gets them baked in. The agent sets them with `set_layer` `filters`: a list of `{type, params, on}` in order, or null to take them off.
 
+## Smart layers
+
+A smart layer keeps the picture it was made from at its full size, and remembers how it is placed (moved, scaled, turned, sheared, in perspective) as a setting. Each time you transform it, it is drawn again from that original, so you can shrink it to a thumbnail and make it big again without losing any detail. A picture you add (Layer > Add picture as layer…, or the agent's `add_layer` with a file) comes in as a smart layer. **Layer > Convert to smart layer** turns any pixel layer into one. The Layers panel marks it "smart", and Properties shows its source size and three buttons: **Edit contents**, **Reset** (back to the source's own size, still in the same place) and **Rasterize**.
+
+- **Edit contents** opens the original in a Paint tab of its own. Change it there and save, and every layer made from it is drawn again from what you saved, in the same place, as one undo step.
+- Painting, filters, liquify and warp need pixels, so they are refused on a smart layer: rasterize it first (Layer > Rasterize). Its mask can still be painted. Move, Free transform, Distort, Perspective, flip, rotate and Image size all redraw it from the source.
+- When the agent changes a smart layer's pixels (a fill, a filter), the layer becomes an ordinary one and the answer says so. The agent can also use the `rasterize` op, and `add_layer` with `"smart": false` for a plain layer.
+- A `.ora` keeps the original beside the layer (`smart/<id>.png`). A `.psd` gets the pixels as they are drawn, with a note.
+- A picture can be up to 16384 pixels on a side. A layer blown up far past the canvas is drawn only where the canvas is.
+
 ## The pen
 
 <kbd>P</kbd> draws a path one anchor at a time. Click for a corner and drag for a smooth anchor (Shift holds the handle to 45° steps). Click the first anchor to close the path, or press <kbd>Enter</kbd> or <kbd>Esc</kbd> to leave it open. Click the path to add an anchor, or click an anchor to take it away. Click an end of an open path to carry on drawing from it.

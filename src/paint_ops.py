@@ -18,12 +18,14 @@ from . import paint_io as P
 from . import paint_math as M
 from . import paint_select as SEL
 from . import paint_smart as SM
+from . import paint_smartlayer as SL
 from . import paint_style as S
 
 MAX_OPS = 60
 OPS = ("add_layer", "add_adjustment", "set_layer", "remove_layer", "duplicate_layer", "move_layer", "merge_down",
        "flatten", "select", "mask", "fill", "clear", "heal", "filter", "crop", "canvas_size", "resize",
-       "transform", "add_text", "group", "ungroup", "merge_group", "path", "distort", "gradient", "shape", "guides")
+       "transform", "add_text", "group", "ungroup", "merge_group", "path", "distort", "gradient", "shape", "guides",
+       "rasterize")
 ANCHORS = {"top_left": (0, 0), "top": (0.5, 0), "top_right": (1, 0), "left": (0, 0.5), "center": (0.5, 0.5),
            "right": (1, 0.5), "bottom_left": (0, 1), "bottom": (0.5, 1), "bottom_right": (1, 1)}
 
@@ -207,10 +209,22 @@ def apply_ops(doc, ops, read_image, fonts=None):
         name = str(op.get("op") or "").strip().lower()
         if name not in OPS:
             raise OpError(f"change {n}: unknown op {name!r} (one of {', '.join(OPS)})")
+        smart = {L["id"]: doc.px.get(L["id"]) for L in doc.layers if L.get("smart")}
+        doc._smart_drawn = set()
         try:
-            said.append(_ONE[name](doc, op, read_image, fonts))
+            line = _ONE[name](doc, op, read_image, fonts)
         except OpError as e:
             raise OpError(f"change {n} ({name}): {e}") from None
+        except ValueError as e:          # paint_smartlayer: a transform it cannot draw
+            raise OpError(f"change {n} ({name}): {e}") from None
+        # A smart layer whose pixels the op changed (not drawn from its source) is a plain layer from now on.
+        for L in doc.layers:
+            if L.get("smart") and L["id"] in smart and doc.px.get(L["id"]) is not smart[L["id"]] \
+                    and L["id"] not in doc._smart_drawn:
+                L.pop("smart")
+                line += f" ({L['name']!r} was a smart layer: it is rasterized now)"
+        doc._smart_drawn = None
+        said.append(line)
         P.fix_tree(doc.layers)
     return said
 
@@ -218,13 +232,19 @@ def apply_ops(doc, ops, read_image, fonts=None):
 def _add_layer(doc, op, read_image, _fonts):
     name = str(op.get("name") or "").strip()
     idx = _place_index(doc, op)
+    source = None
     if op.get("file"):
         px = _read_layer_image(read_image, op)
+        # A picture from a file is a SMART layer unless asked otherwise: its own pixels are kept, so a later
+        # transform (or the user's) draws it again from them.
+        sh0, sw0 = px.shape[:2]
+        if op.get("smart", True) is not False and max(sw0, sh0) <= SL.MAX_SRC_SIDE:
+            source = px
         fit = op.get("fit") or "none"
         if op.get("w") or op.get("h"):
             w = int(M._num(op.get("w"), px.shape[1] * (M._num(op.get("h"), px.shape[0]) / px.shape[0]), 1, P.MAX_SIDE))
             h = int(M._num(op.get("h"), px.shape[0] * w / px.shape[1], 1, P.MAX_SIDE))
-            px = _resize(px, w, h)
+            px = px if source is not None else _resize(px, w, h)
         elif fit in ("canvas", "contain", "cover"):
             ph, pw = px.shape[:2]
             if fit == "canvas":
@@ -232,8 +252,10 @@ def _add_layer(doc, op, read_image, _fonts):
             else:
                 k = (min if fit == "contain" else max)(doc.w / pw, doc.h / ph)
                 w, h = max(1, round(pw * k)), max(1, round(ph * k))
-            px = _resize(px, w, h)
-        ph, pw = px.shape[:2]
+            px = px if source is not None else _resize(px, w, h)
+        else:
+            w, h = sw0, sh0
+        ph, pw = (h, w) if source is not None else px.shape[:2]
         if op.get("x") is None and op.get("y") is None:
             x, y = (doc.w - pw) // 2, (doc.h - ph) // 2
         else:
@@ -250,6 +272,12 @@ def _add_layer(doc, op, read_image, _fonts):
     L = doc.add_pixel_layer(px, name[:120], x, y, index=idx, opacity=M._num(op.get("opacity"), 100, 0, 100) / 100,
                             blend=op.get("blend") if op.get("blend") in M.BLEND_MODES else "normal")
     _placed(L, op)
+    if source is not None:
+        sid = "s" + P.new_id()[:20]
+        doc.sources[sid] = np.ascontiguousarray(source, dtype=np.uint8)
+        L["smart"] = {"src": sid, "sw": sw0, "sh": sh0, "m": [1.0, 0, 0, 0, 1.0, 0, 0, 0, 1.0]}
+        SL.draw(doc, L, SL.mul3(SL.move3(x, y), SL.scale3(pw / sw0, ph / sh0)))
+        what += f", a smart layer of the {sw0}x{sh0} picture"
     m = None
     if op.get("mask_file"):
         m = _read_mask(read_image, op, doc)
@@ -878,8 +906,9 @@ def _resize_doc(doc, op, _read, _fonts):
         raise OpError(f"at most {P.MAX_SIDE} pixels a side")
     kx, ky = w / doc.w, h / doc.h
     method = op.get("method") or "lanczos"
+    smart = [L for L in doc.layers if SL.is_smart(doc, L)]
     for L in doc.layers:
-        if L["kind"] == "pixel":
+        if L["kind"] == "pixel" and L not in smart:
             px = doc.px[L["id"]]
             nw, nh = max(1, round(px.shape[1] * kx)), max(1, round(px.shape[0] * ky))
             doc.px[L["id"]] = _resize(px, nw, nh, method)
@@ -895,6 +924,8 @@ def _resize_doc(doc, op, _read, _fonts):
         doc.meta["paths"] = M.move_paths(doc.meta["paths"], 0, 0, kx, ky)
     old = (doc.w, doc.h)
     doc.meta["w"], doc.meta["h"] = w, h
+    for L in smart:
+        SL.apply(doc, L, SL.scale3(kx, ky))          # drawn again from the source, for the new canvas
     if doc.meta.get("guides"):
         _set_guides(doc, M.move_guides(doc.meta["guides"], 0, 0, kx, ky))
     return f"resized {old[0]}x{old[1]} -> {w}x{h} ({method})"
@@ -902,6 +933,8 @@ def _resize_doc(doc, op, _read, _fonts):
 
 def _transform(doc, op, _read, _fonts):
     L = _unlocked(find_layer(doc, op.get("layer"), "pixel"))
+    if SL.is_smart(doc, L):
+        return _transform_smart(doc, L, op)
     px = doc.px[L["id"]]
     done = []
     cx, cy = L["x"] + px.shape[1] / 2, L["y"] + px.shape[0] / 2
@@ -934,6 +967,48 @@ def _transform(doc, op, _read, _fonts):
         doc.masks.pop(L["id"], None)
         done.append("its mask removed")
     return f"{L['name']!r}: " + ", ".join(done)
+
+
+def _transform_smart(doc, L, op):
+    """flip / rotate / scale of a smart layer about its middle: drawn again from its source."""
+    cx, cy = L["x"] + L["w"] / 2, L["y"] + L["h"] / 2
+    G, done = SL.move3(-cx, -cy), []
+    if op.get("flip") in ("h", "horizontal"):
+        G = SL.mul3(SL.scale3(-1, 1), G)
+        done.append("flipped left-right")
+    elif op.get("flip") in ("v", "vertical"):
+        G = SL.mul3(SL.scale3(1, -1), G)
+        done.append("flipped top-bottom")
+    rot = M._num(op.get("rotate"), 0) % 360
+    if rot:
+        import math
+        r = math.radians(rot)
+        c, s = math.cos(r), math.sin(r)
+        if rot % 90 == 0:
+            c, s = round(c), round(s)
+        G = SL.mul3([c, -s, 0, s, c, 0, 0, 0, 1], G)
+        done.append(f"rotated {rot:g} degrees")
+    if op.get("scale"):
+        k = M._num(op["scale"], 1, 0.01, 16)
+        G = SL.mul3(SL.scale3(k), G)
+        done.append(f"scaled x{k:g}")
+    if not done:
+        raise OpError("give flip (h / v), rotate (degrees clockwise) or scale")
+    SL.apply(doc, L, SL.mul3(SL.move3(cx, cy), G))
+    if L.get("mask") and (rot or op.get("scale")):
+        L.pop("mask")
+        doc.masks.pop(L["id"], None)
+        done.append("its mask removed")
+    return f"{L['name']!r} (smart, drawn from its source): " + ", ".join(done)
+
+
+def _rasterize(doc, op, _read, _fonts):
+    """A smart layer keeps its pixels as drawn and forgets its source."""
+    L = _unlocked(find_layer(doc, op.get("layer"), "pixel"))
+    if not L.get("smart"):
+        return f"{L['name']!r} is not a smart layer: nothing to do"
+    L.pop("smart")
+    return f"{L['name']!r} rasterized"
 
 
 def render_text(t, fonts=None):
@@ -1121,6 +1196,20 @@ def _distort(doc, op, _read, _fonts):
         raise OpError("the four corners must make a convex shape, in order around it")
     px = doc.px[L["id"]]
     h, w = px.shape[:2]
+    if SL.is_smart(doc, L):
+        # The drawn layer's corners to these: drawn again from the source (its mask goes as the plain one's).
+        x0, y0 = L["x"], L["y"]
+        Gm = _homography([[x0, y0], [x0 + w, y0], [x0 + w, y0 + h], [x0, y0 + h]], q)
+        if Gm is None:
+            raise OpError("those corners make no shape")
+        said = _distort_plain(doc, L, q, px, w, h, op)          # the mask (and a first drawing) as a plain layer's
+        L.update(x=x0, y=y0, w=w, h=h)
+        SL.apply(doc, L, [float(v) for v in Gm.reshape(-1)])
+        return said + " (smart: drawn from its source)"
+    return _distort_plain(doc, L, q, px, w, h, op)
+
+
+def _distort_plain(doc, L, q, px, w, h, op):
     H = _homography(q, [[0, 0], [w, 0], [w, h], [0, h]])
     if H is None:
         raise OpError("those corners make no shape")
@@ -1243,4 +1332,4 @@ _ONE = {"add_layer": _add_layer, "add_adjustment": _add_adjustment, "set_layer":
         "clear": _clear, "heal": _heal, "filter": _filter, "crop": _crop, "canvas_size": _canvas_size,
         "resize": _resize_doc, "transform": _transform, "add_text": _add_text, "group": _group,
         "ungroup": _ungroup, "merge_group": _merge_group, "path": _path, "distort": _distort,
-        "gradient": _gradient, "shape": _shape, "guides": _guides}
+        "gradient": _gradient, "shape": _shape, "guides": _guides, "rasterize": _rasterize}
