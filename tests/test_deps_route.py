@@ -11,6 +11,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import deps_fixture as fx  # noqa: E402
+import c2pa_fixture as cf  # noqa: E402
 
 try:
     from aiohttp.test_utils import TestClient, TestServer
@@ -73,6 +74,16 @@ class DepsRoute(unittest.TestCase):
             self.assertEqual(names["render_00001_.png"]["prompts"][0]["text"], "a kitchen at dawn")
             self.assertEqual([m["name"] for m in names["render_00001_.png"]["models"]], ["flux"])
             self.assertEqual(names["plate.png"]["models"], [])
+        # A Magnific film downloaded by hand: no graph, its model from its content credentials, tagged.
+        cf.mp4(os.path.join(self.dirs["output"], "magnific_8awndlcIrU.mp4"), cf.store(cf.SEEDANCE))
+        st, g = await call("POST", "/imageviewer/deps", json={"filename": "magnific_8awndlcIrU.mp4", "type": "output"})
+        self.assertEqual(st, 200, g)
+        n = g["nodes"][0]
+        self.assertEqual(n["tags"], ["magnific", "dreamina-seedance-2-5"])
+        self.assertEqual((n["generator"]["source"], n["generator"]["provider"]), ("c2pa", "BytePlus"))
+        self.assertEqual(n["models"][0]["name"], "dreamina-seedance-2-5")
+        self.assertNotIn("tags", next(x for x in (await call("POST", "/imageviewer/deps", json={
+            "filename": "render_00001_.png", "type": "output"}))[1]["nodes"] if x["file"] == "render_00001_.png"))
         # "Look in folder" on the plate's own folder finds nothing new; what was made from it is known now.
         st, g = await call("POST", "/imageviewer/deps", json={"path": os.path.join(self.dirs["input"], "plate.png"), "scan": True})
         self.assertEqual(len(g["nodes"]), 3)

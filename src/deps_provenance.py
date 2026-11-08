@@ -33,8 +33,10 @@ from pathlib import Path
 
 try:
     from . import provenance_write as _pw
+    from . import c2pa_read
 except ImportError:  # loaded on its own (tests)
     import provenance_write as _pw  # type: ignore[no-redef]
+    import c2pa_read  # type: ignore[no-redef]
 
 SIDECAR_SUFFIX = ".agenty.json"
 GRAPH_SUFFIX = ".prov.json.gz"
@@ -522,3 +524,87 @@ def models_of(path) -> list[dict]:
         _MODELS_CACHE.clear()
     _MODELS_CACHE[key] = out
     return out
+
+
+# ── what made a file outside ComfyUI (Magnific, or anything that signs its output) ──
+# Two sources, the first that has it wins:
+# * the sidecar's ``generator`` key - what agentY keeps of a Magnific creation it downloaded (prompt,
+#   model, provider, credits, the creation's link; agentY src/utils/magnific_watch.py);
+# * the file's own C2PA manifest (c2pa_read): the model and the signer's software, from whatever made it
+#   - a manual download from Magnific, or any generator that signs. Read, not verified.
+# Magnific itself is named only by the sidecar, the manifest or the file's name (Magnific's own files
+# are signed by the provider underneath, e.g. BytePlus for Seedance), so a manual download is known as
+# Magnific by its name ("magnific" in it) or a manifest that says so.
+
+_SERVICES = (("magnific", re.compile(r"(?i)magnific|freepik|pikaso")),)
+_GEN_CACHE: dict = {}
+
+
+def _service_in(*texts) -> str:
+    blob = " ".join(str(t or "") for t in texts)
+    for name, pat in _SERVICES:
+        if pat.search(blob):
+            return name
+    return ""
+
+
+def _provider_of(agents) -> str:
+    """``BytePlus`` for ``BytePlus_ModelArk 1.0.0``."""
+    for a in agents or []:
+        word = re.split(r"[\s_/]", str(a).strip())[0]
+        if word:
+            return word[:60]
+    return ""
+
+
+def generator_of(path) -> dict:
+    """``{"service", "model", "provider", "prompt", "created", "source", "ai", "url", "tags"}`` for a
+    file made outside a ComfyUI graph, ``{}`` when nothing says. ``source`` is ``sidecar``, ``c2pa`` or
+    ``name``. Cached by the file's size and time."""
+    p = str(path)
+    try:
+        st = os.stat(p)
+        key = (p, st.st_mtime_ns, st.st_size)
+    except OSError:
+        return {}
+    if key in _GEN_CACHE:
+        return _GEN_CACHE[key]
+    out: dict = {}
+    try:
+        g = read_sidecar(p).get("generator")
+        if isinstance(g, dict) and (g.get("service") or g.get("model")):
+            out = {"service": str(g.get("service") or ""), "model": str(g.get("model") or ""),
+                   "provider": str(g.get("provider") or ""), "prompt": str(g.get("prompt") or "")[:4000],
+                   "created": str(g.get("created") or ""), "url": str(g.get("web_url") or ""),
+                   "ai": True, "source": "sidecar"}
+        else:
+            c = c2pa_read.read(p)
+            name_service = _service_in(os.path.basename(p))
+            if c:
+                agents = c.get("agents") or []
+                out = {"service": _service_in(c.get("generator"), *agents, *c.get("params", {}).values())
+                       or name_service,
+                       "model": c2pa_read.model_of(c), "provider": _provider_of(agents),
+                       "prompt": "", "created": c.get("when", ""), "url": "", "ai": bool(c.get("ai")),
+                       "source": "c2pa"}
+            elif name_service:
+                out = {"service": name_service, "model": "", "provider": "", "prompt": "", "created": "",
+                       "url": "", "ai": True, "source": "name"}
+    except Exception:  # noqa: BLE001 - a caption is never worth failing the tab
+        out = {}
+    if out:
+        out["tags"] = [t for t in dict.fromkeys([out.get("service"), out.get("model")]) if t]
+    if len(_GEN_CACHE) >= _MODELS_CACHE_MAX:
+        _GEN_CACHE.clear()
+    _GEN_CACHE[key] = out
+    return out
+
+
+def generator_models(gen: dict) -> list[dict]:
+    """:func:`generator_of` as :func:`graph_models` entries (the caption reads those)."""
+    if not gen or not gen.get("model"):
+        return []
+    via = " / ".join(x for x in (gen.get("service"), gen.get("provider")) if x)
+    return [{"name": gen["model"][:120], "role": "partner", "node": "", "class": via,
+             "value": f"{gen['model']} ({via}, from {gen.get('source')})" if via else gen["model"]}]
+

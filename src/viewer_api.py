@@ -1983,7 +1983,18 @@ try:
                 for n in g.get("nodes") or []:
                     n["viewable"] = bool(n.get("exists")) and path_access.may_serve(str(n.get("id") or ""))
                     if n["viewable"] and not n.get("fold"):
-                        n["models"] = deps_provenance.models_of(str(n.get("id") or ""))
+                        nid = str(n.get("id") or "")
+                        n["models"] = deps_provenance.models_of(nid)
+                        gen = deps_provenance.generator_of(nid)
+                        if gen:     # made outside a graph: Magnific, or anything that signs its output
+                            n["generator"] = {k: gen[k] for k in ("service", "model", "provider", "created",
+                                                                  "source", "ai", "url") if gen.get(k) not in (None, "")}
+                            n["tags"] = gen.get("tags") or []
+                            if not n["models"]:
+                                n["models"] = deps_provenance.generator_models(gen)
+                            if gen.get("prompt") and not n.get("prompts"):
+                                n["prompts"] = [{"role": "positive", "text": gen["prompt"], "node": "",
+                                                 "class": gen.get("service") or "generator"}]
                 return g
             try:
                 out = await asyncio.get_running_loop().run_in_executor(None, _work)

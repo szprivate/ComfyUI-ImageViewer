@@ -225,3 +225,11 @@ export const depsModelCaption = (models) => {
     const head = main.length ? main.slice(0, 2).join(" + ") + (main.length > 2 ? ` +${main.length - 2}` : "") : ups.slice(0, 1).join("");
     return [head, loras ? `${loras} LoRA` : ""].filter(Boolean).join(" + ");
 };
+
+/** The whole caption: a file's tags (the service that made it, e.g. "magnific", then its model) where it
+ *  has them, else its models ("flux1-dev + 2 LoRA"). Pure. */
+export const depsCaption = (models, tags) => {
+    const t = (Array.isArray(tags) ? tags : []).filter(Boolean);
+    if (t.length) return t.join(" · ");
+    return depsModelCaption(models);
+};

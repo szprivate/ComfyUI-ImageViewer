@@ -119,3 +119,11 @@ test("a node's frame: still or film by its extension, the main models as its cap
     assert.equal(depsModelCaption([m("vae", "aux")]), "");
     assert.equal(depsModelCaption(undefined), "");
 });
+
+test("a file's tags are its caption: the service that made it, then its model", async () => {
+    const { depsCaption } = await import("../js/imageViewer_depsLayout.js");
+    assert.equal(depsCaption([{ name: "dreamina-seedance-2-5", role: "partner" }], ["magnific", "dreamina-seedance-2-5"]),
+        "magnific · dreamina-seedance-2-5");
+    assert.equal(depsCaption([{ name: "flux1-dev", role: "model" }], []), "flux1-dev");
+    assert.equal(depsCaption(undefined, undefined), "");
+});
