@@ -89,5 +89,5 @@ def records(root):
                 with open(p, encoding="utf-8") as fh:
                     doc = json.load(fh)
                 items = [{k: v for k, v in i.items() if k != "created"} for i in doc.get("items") or []]
-                out[key] = json.loads(json.dumps(items).replace(root, "<root>"))
+                out[key] = json.loads(json.dumps(items).replace(root.replace("\\", "\\\\"), "<root>").replace(root, "<root>"))
     return out
