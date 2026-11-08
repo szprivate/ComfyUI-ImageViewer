@@ -81,6 +81,8 @@ def dilate(m, r):
             if hw[dy] != k:
                 continue
             for s in ((dy, -dy) if dy else (0,)):
+                if abs(s) >= out.shape[0]:
+                    continue                    # a row that far away is off the picture
                 if s >= 0:
                     np.maximum(out[:out.shape[0] - s], H[s:], out=out[:out.shape[0] - s])
                 else:

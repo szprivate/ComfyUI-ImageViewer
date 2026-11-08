@@ -603,6 +603,31 @@ def clean_path(p):
             "closed": bool(p.get("closed")) and len(pts) > 2, "pts": pts}
 
 
+MAX_GUIDES = 100
+
+
+def clean_guides(lst, w, h):
+    """Guides held to what they may be: [{axis: "x" | "y", pos}] on the canvas, at whole or half pixels (``cleanGuides``)."""
+    out = []
+    for g in lst if isinstance(lst, list) else []:
+        if not isinstance(g, dict) or g.get("axis") not in ("x", "y"):
+            continue
+        try:
+            pos = math.floor(float(g.get("pos")) * 2 + 0.5) / 2
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(pos) or pos < 0 or pos > (w if g["axis"] == "x" else h):
+            continue
+        out.append({"axis": g["axis"], "pos": pos})
+        if len(out) >= MAX_GUIDES:
+            break
+    return out
+
+
+def move_guides(lst, dx=0.0, dy=0.0, kx=1.0, ky=1.0):
+    return [{"axis": g["axis"], "pos": (g["pos"] + dx) * kx if g["axis"] == "x" else (g["pos"] + dy) * ky} for g in lst or []]
+
+
 def clean_paths(lst):
     out, seen = [], set()
     for p in (lst if isinstance(lst, list) else [])[:MAX_PATHS]:

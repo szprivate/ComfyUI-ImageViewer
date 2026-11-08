@@ -16,12 +16,13 @@ import numpy as np
 
 from . import paint_io as P
 from . import paint_math as M
+from . import paint_select as SEL
 from . import paint_style as S
 
 MAX_OPS = 60
 OPS = ("add_layer", "add_adjustment", "set_layer", "remove_layer", "duplicate_layer", "move_layer", "merge_down",
        "flatten", "select", "mask", "fill", "clear", "heal", "filter", "crop", "canvas_size", "resize",
-       "transform", "add_text", "group", "ungroup", "merge_group", "path", "distort", "gradient", "shape")
+       "transform", "add_text", "group", "ungroup", "merge_group", "path", "distort", "gradient", "shape", "guides")
 ANCHORS = {"top_left": (0, 0), "top": (0.5, 0), "top_right": (1, 0), "left": (0, 0.5), "center": (0.5, 0.5),
            "right": (1, 0.5), "bottom_left": (0, 1), "bottom": (0.5, 1), "bottom_right": (1, 1)}
 
@@ -648,8 +649,34 @@ def _select(doc, op, read_image, _fonts):
             new[y0:y1, x0:x1] = px[y0 - y:y1 - y, x0 - x:x1 - x, 3]
     elif mode == "file":
         new = _read_mask(read_image, op, doc, "file")
+    elif mode in SEL.MODIFY:
+        if doc.selection is None:
+            raise OpError(f"there is no selection to {mode}")
+        r = M._num(op.get("by", op.get("radius")), 4, 1, 200)
+        doc.selection = SEL.modify(doc.selection, mode, r)
+        if not doc.selection.any():
+            doc.selection = None
+        bb = M.mask_bbox(doc.selection) if doc.selection is not None else None
+        return f"selection {mode} by {r:g} px" + (f": {bb[2]}x{bb[3]} at {bb[0]},{bb[1]}" if bb else ": nothing left")
+    elif mode == "color_range":
+        if op.get("color") is None:
+            raise OpError("color_range needs 'color' ([r, g, b] or '#rrggbb')")
+        col = list(_color(op.get("color")))[:3]
+        if str(op.get("sample") or "picture") == "layer":
+            L = find_layer(doc, op.get("layer") or "active", "pixel")
+            src = np.zeros((H, W, 4), np.uint8)
+            px = doc.px[L["id"]]
+            x, y = L["x"], L["y"]
+            h, w = px.shape[:2]
+            x0, y0, x1, y1 = max(0, x), max(0, y), min(W, x + w), min(H, y + h)
+            if x1 > x0 and y1 > y0:
+                src[y0:y1, x0:x1] = px[y0 - y:y1 - y, x0 - x:x1 - x]
+        else:
+            src = P.composite(doc)
+        new = SEL.color_range(src, col, M._num(op.get("fuzziness"), 40, 1, 255))
     else:
-        raise OpError("'mode' is rect, ellipse, polygon, all, none, invert, layer (its alpha) or file (a mask)")
+        raise OpError("'mode' is rect, ellipse, polygon, all, none, invert, layer (its alpha), file (a mask), "
+                      "expand, contract, smooth, border (with 'by' px) or color_range (with 'color', 'fuzziness')")
     sel = M.combine_masks(doc.selection, new, how)
     if op.get("feather"):
         sel = M.feather_mask(sel, M._num(op["feather"], 0, 0, 500))
@@ -763,9 +790,19 @@ def _filter(doc, op, _read, _fonts):
     return f"{L['name']!r}: {what}"
 
 
+def _set_guides(doc, lst):
+    g = M.clean_guides(lst, doc.w, doc.h)
+    if g:
+        doc.meta["guides"] = g
+    else:
+        doc.meta.pop("guides", None)
+
+
 def _shift_all(doc, dx, dy):
     if doc.meta.get("paths"):
         doc.meta["paths"] = M.move_paths(doc.meta["paths"], dx, dy)
+    if doc.meta.get("guides"):
+        _set_guides(doc, M.move_guides(doc.meta["guides"], dx, dy))
     for L in doc.layers:
         if L["kind"] == "pixel":
             L["x"] += dx
@@ -842,6 +879,8 @@ def _resize_doc(doc, op, _read, _fonts):
         doc.meta["paths"] = M.move_paths(doc.meta["paths"], 0, 0, kx, ky)
     old = (doc.w, doc.h)
     doc.meta["w"], doc.meta["h"] = w, h
+    if doc.meta.get("guides"):
+        _set_guides(doc, M.move_guides(doc.meta["guides"], 0, 0, kx, ky))
     return f"resized {old[0]}x{old[1]} -> {w}x{h} ({method})"
 
 
@@ -1169,10 +1208,23 @@ def _shape(doc, op, _read, _fonts):
     return f"added layer {L['name']!r}: a {label.lower()}" + (" filled" if fill else "") + (" with an edge" if stroke else "")
 
 
+def _guides(doc, op, _read, _fonts):
+    """Guides: `add` [{axis: x | y, pos}] (x: a vertical line at that x), `remove` the same, `clear`."""
+    cur = [] if op.get("clear") else list(doc.meta.get("guides") or [])
+    rm = M.clean_guides(op.get("remove"), doc.w, doc.h)
+    cur = [g for g in cur if g not in rm]
+    add = op.get("add")
+    if add is not None and not isinstance(add, list):
+        raise OpError("'add' is a list of {axis: 'x' | 'y', pos}")
+    _set_guides(doc, cur + list(add or []))
+    n = len(doc.meta.get("guides") or [])
+    return f"{n} guide(s)"
+
+
 _ONE = {"add_layer": _add_layer, "add_adjustment": _add_adjustment, "set_layer": _set_layer,
         "remove_layer": _remove_layer, "duplicate_layer": _duplicate_layer, "move_layer": _move_layer,
         "merge_down": _merge_down, "flatten": _flatten, "select": _select, "mask": _mask, "fill": _fill,
         "clear": _clear, "heal": _heal, "filter": _filter, "crop": _crop, "canvas_size": _canvas_size,
         "resize": _resize_doc, "transform": _transform, "add_text": _add_text, "group": _group,
         "ungroup": _ungroup, "merge_group": _merge_group, "path": _path, "distort": _distort,
-        "gradient": _gradient, "shape": _shape}
+        "gradient": _gradient, "shape": _shape, "guides": _guides}

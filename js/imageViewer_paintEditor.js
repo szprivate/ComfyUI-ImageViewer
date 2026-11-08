@@ -22,6 +22,7 @@ import { TipsMixin } from "./imageViewer_paintAbr.js";
 import { DrawMixin, smudgeStart, smudgeDab, SHAPE_KINDS } from "./imageViewer_paintDraw.js";
 import { BUF_VER, STYLE_KINDS, STYLE_LABELS } from "./imageViewer_paintStyle.js";
 import { LayerFxMixin } from "./imageViewer_paintLayerFx.js";
+import { SelectGuidesMixin, RULER_PX } from "./imageViewer_paintSelect.js";
 
 export const PAINT_TOOLS = [
     ["move", "transform", "Transform (move, scale, rotate, shear)", "V"], ["marquee", "marquee", "Rectangle select", "M"], ["ellipse", "ellipse", "Ellipse select", "Shift+M"],
@@ -274,7 +275,7 @@ class PaintEditor {
                    this.btn("save", "Save (Ctrl+S) - the menu: Save as, Export", (e, b) => this._menu(b, this._fileMenu())));
         bar.append(this.el("span", "paint-sep"));
         for (const [label, fn] of [["Edit", () => this._editMenu()], ["Select", () => this._selectMenu()], ["Image", () => this._imageMenu()],
-                                   ["Layer", () => this._layerMenu()], ["Filter", () => this._filterMenu()], ["Generate", () => this._generateMenu()]]) {
+                                   ["Layer", () => this._layerMenu()], ["Filter", () => this._filterMenu()], ["View", () => this._viewMenu()], ["Generate", () => this._generateMenu()]]) {
             const b = this.el("button", "paint-btn paint-menu-btn", { type: "button", text: label });
             b.addEventListener("click", (e) => { e.stopPropagation(); this._menu(b, fn()); });
             bar.append(b);
@@ -686,6 +687,8 @@ class PaintEditor {
                 c.beginPath(); c.moveTo(hx - 4, hy); c.lineTo(hx + 4, hy); c.moveTo(hx, hy - 4); c.lineTo(hx, hy + 4); c.stroke();
             }
         }
+        // Guides and the rulers, over everything.
+        this._guidesDraw(c, X, Y);
     }
 
     _status() {
@@ -960,7 +963,8 @@ class PaintEditor {
         const ids = new Set(this.doc.layers.map((L) => L.id));
         this.picked = new Set([...this.picked].filter((x) => ids.has(x)));
         if (this.doc.active && !ids.has(this.doc.active)) this.doc.active = this.doc.layers.length ? this.doc.layers[this.doc.layers.length - 1].id : null;
-        if (this.doc.active) this.picked.add(this.doc.active);
+        // An active layer not among the picked was made active by itself (a new layer, a paste): it alone is picked.
+        if (this.doc.active && !this.picked.has(this.doc.active)) this.picked = new Set([this.doc.active]);
     }
 
     /** Where a new layer goes: inside the active group (its top) when that is open, else just above the
@@ -1577,6 +1581,7 @@ class PaintEditor {
             if (L.mask) { L.mask.x += dx; L.mask.y += dy; }
         }
         if (this.doc.paths) this.doc.paths = D.movePaths(this.doc.paths, dx, dy);
+        if (this.doc.guides) this._setGuides(D.moveGuides(this.doc.guides, dx, dy), w, h);
         if (this.sel) {
             const old = this.sel, ow = this.doc.w, oh = this.doc.h, s = new Uint8Array(w * h);
             for (let y = 0; y < h; y++) {
@@ -1621,6 +1626,7 @@ class PaintEditor {
             }
             if (this.sel) this.sel = resampleMask(this.d, this.sel, this.doc.w, this.doc.h, w, h);
             if (this.doc.paths) this.doc.paths = D.movePaths(this.doc.paths, 0, 0, kx, ky);
+            if (this.doc.guides) this._setGuides(D.moveGuides(this.doc.guides, 0, 0, kx, ky), w, h);
             this.doc.w = w; this.doc.h = h;
         });
         if (ok) this.fit();
@@ -1714,6 +1720,7 @@ class PaintEditor {
         }
         if (e.button !== 0) return;
         this.wrap.setPointerCapture(e.pointerId);
+        if (this._guideDown(p)) return;
         if (this.wp) { this._wpDown(p); return; }
         const t = this.tool;
         if ((t === "brush" || t === "fill") && e.altKey) { this._pickAt(p); return; }
@@ -1725,7 +1732,7 @@ class PaintEditor {
         if (BRUSHES.includes(t)) { this._strokeStart(p, e); return; }
         if (t === "fill") { this._bucket(p); return; }
         if (t === "wand") { this._wand(p, e); return; }
-        if (t === "marquee" || t === "ellipse") { this._drag = { kind: t, x0: p.x, y0: p.y, rect: null, e }; return; }
+        if (t === "marquee" || t === "ellipse") { const [x0, y0] = this._snapPt(p.x, p.y); this._drag = { kind: t, x0, y0, rect: null, e }; return; }
         if (t === "lasso") { this._drag = { kind: "lasso", pts: [[p.x, p.y]], e }; return; }
         if (t === "pen") { this._penDown(p, e); return; }
         if (t === "move") {
@@ -1750,7 +1757,15 @@ class PaintEditor {
         this._hover = p;
         const dr = this._drag;
         if (!dr) {
-            if (BRUSHES.includes(this.tool) || (this.tool === "pen" && this._penOpen)) this.drawOverlay();
+            const onRuler = this.rulers && (p.sx < RULER_PX || p.sy < RULER_PX);
+            if (onRuler) this._cursor(p.sy < RULER_PX && p.sx >= RULER_PX ? "row-resize" : p.sx < RULER_PX && p.sy >= RULER_PX ? "col-resize" : "default");
+            const gi = !onRuler && this.tool === "move" && !this.tf && !this.wp ? this._guideAt(p.sx, p.sy) : -1;
+            if (gi >= 0) this._cursor(this._guides()[gi].axis === "x" ? "col-resize" : "row-resize");
+            else if (this._onRuler) this._cursor();
+            this._onRuler = onRuler ? "ruler" : gi >= 0 ? "guide" : null;
+            if (BRUSHES.includes(this.tool) || (this.tool === "pen" && this._penOpen) || this.rulers) this.drawOverlay();
+            if (onRuler || this._onRuler === "guide") { this._status(); return; }
+            if (BRUSHES.includes(this.tool) || (this.tool === "pen" && this._penOpen)) { /* the overlay draws the pointer */ }
             else if (this.wp) this._cursor("crosshair");
             else if (this.tool === "move" && !this._space) this._cursor(this._moveSet() ? "move" : this._tfCursor(this._tfHit(p)));
             this._status();
@@ -1763,6 +1778,7 @@ class PaintEditor {
             return;
         }
         if (dr.kind === "pick") { this._pickAt(p); return; }
+        if (dr.kind === "guide") { this._guideMove(dr, p); return; }
         if (dr.kind === "pen") { this._penMove(dr, p, e); return; }
         if (dr.kind === "wp") { this._wpMove(dr, p); return; }
         if (dr.kind === "patch") { this._patchMove(dr, p); return; }
@@ -1776,7 +1792,8 @@ class PaintEditor {
             return;
         }
         if (dr.kind === "marquee" || dr.kind === "ellipse") {
-            let w = p.x - dr.x0, h = p.y - dr.y0;
+            const [px, py] = this._snapPt(p.x, p.y);
+            let w = px - dr.x0, h = py - dr.y0;
             if (e.shiftKey && !dr.e.shiftKey) { const s = Math.max(Math.abs(w), Math.abs(h)); w = Math.sign(w || 1) * s; h = Math.sign(h || 1) * s; }
             dr.rect = { x: Math.min(dr.x0, dr.x0 + w), y: Math.min(dr.y0, dr.y0 + h), w: Math.abs(w), h: Math.abs(h) };
             this.drawOverlay();
@@ -1785,7 +1802,9 @@ class PaintEditor {
         if (dr.kind === "lasso") { dr.pts.push([p.x, p.y]); this.drawOverlay(); return; }
         if (dr.kind === "tf") { this._tfDrag(dr, p, e); return; }
         if (dr.kind === "mmove") {
-            this._shiftLayers(dr.set, Math.round(p.x - dr.p0.x), Math.round(p.y - dr.p0.y), dr.from);
+            let dx = Math.round(p.x - dr.p0.x), dy = Math.round(p.y - dr.p0.y);
+            [dx, dy] = this._snapMove(dr, dx, dy);
+            this._shiftLayers(dr.set, dx, dy, dr.from);
             this.requestRedraw();
             return;
         }
@@ -1799,6 +1818,7 @@ class PaintEditor {
         if (!dr) return;
         if (dr.kind === "pan") { this.setTool(this.tool); return; }
         if (dr.kind === "stroke") { this._strokeEnd(dr.st); return; }
+        if (dr.kind === "guide") { this._guideUp(dr); return; }
         if (dr.kind === "pen") { this._penUp(dr); return; }
         if (dr.kind === "wp") { this._wpUp(); return; }
         if (dr.kind === "patch") { this._patchUp(dr); return; }
@@ -2209,6 +2229,10 @@ class PaintEditor {
         if (dr.hit.kind === "move") {
             P.tx = t0.tx + Math.round(p.x - dr.p0.x);
             P.ty = t0.ty + Math.round(p.y - dr.p0.y);
+            // The box's edges or middle pulled onto a guide, the canvas or another layer.
+            const cs = D.tfCorners(D.tfMatrix(P), src.w, src.h), xs = cs.map((c) => c[0]), ys = cs.map((c) => c[1]);
+            const [sx, sy] = this._snapBox(Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys), new Set([tf.L.id]));
+            P.tx += Math.round(sx); P.ty += Math.round(sy);
         } else if (dr.hit.kind === "rotate") {
             let r = t0.r + (Math.atan2(p.y - t0.ty, p.x - t0.tx) - dr.a0) * 180 / Math.PI;
             if (e.shiftKey) r = Math.round(r / 15) * 15;
@@ -2515,6 +2539,8 @@ class PaintEditor {
             if (lk === "s") return take(() => (e.shiftKey ? this.host.saveAs && this.host.saveAs() : this.host.save && this.host.save()));
             if (lk === "o") return take(() => this.host.open && this.host.open());
             if (lk === "t") return take(() => { this.setTool("move"); this.tfBegin(); });
+            if (lk === "r" && !e.shiftKey && !e.altKey) return take(() => this.toggleRulers());
+            if (e.code === "Semicolon") return take(() => (e.shiftKey ? this.toggleSnap() : this.toggleGuides()));
             if (k === "0") return take(() => this.fit());
             if (k === "1") return take(() => this.zoomTo(1));
             if (k === "=" || k === "+") return take(() => this.zoomTo(this.view.zoom * 1.25));
@@ -2612,7 +2638,10 @@ class PaintEditor {
         return [{ label: "All (Ctrl+A)", run: () => this.selectAll() }, { label: "Deselect (Ctrl+D)", disabled: !this.sel, run: () => this.deselect() },
                 { label: "Invert (Ctrl+Shift+I)", run: () => this.invertSelection() },
                 { label: "Feather…", disabled: !this.sel, run: () => this.dialog("Feather", [["radius", "Radius (px)", 8, 0.5, 500]], (v) => this.featherSelection(v.radius)) },
-                { label: "From the layer's pixels", run: () => this.selectLayerAlpha() }, "-",
+                { label: "From the layer's pixels", run: () => this.selectLayerAlpha() },
+                { label: "Colour range…", run: () => this.colorRangeDialog() }, "-",
+                ...[["expand", "Expand…", "By (px)"], ["contract", "Contract…", "By (px)"], ["smooth", "Smooth…", "Radius (px)"], ["border", "Border…", "Width (px)"]].map(([kind, label, what]) => (
+                    { label, disabled: !this.sel, run: () => this.dialog(label.slice(0, -1), [["r", what, kind === "border" ? 6 : 4, 1, 200]], (v) => this.modifySelection(kind, v.r)) })), "-",
                 { label: "Subject (agentY)…", run: () => this.host.generate && this.host.generate("select_subject", {}) }];
     }
 
@@ -3536,7 +3565,7 @@ class PaintEditor {
     }
 }
 
-Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin, TipsMixin, DrawMixin, LayerFxMixin);
+Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin, TipsMixin, DrawMixin, LayerFxMixin, SelectGuidesMixin);
 
 // Lucide's rotate-cw, white on black, as the pointer outside a transform's box.
 const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><g stroke="#000" stroke-width="4"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g><g stroke="#fff" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g></svg>')}") 12 12, alias`;

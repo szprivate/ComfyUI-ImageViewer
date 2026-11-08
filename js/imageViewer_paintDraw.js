@@ -214,11 +214,12 @@ export const DrawMixin = {
     /** The gradient tool's press: a drag from here to where it is let go. */
     _gradDown(p, e) {
         this._tfSettle();
-        this._drag = { kind: "grad", x0: p.x, y0: p.y, x1: p.x, y1: p.y, e };
+        const [sx, sy] = this._snapPt(p.x, p.y);
+        this._drag = { kind: "grad", x0: sx, y0: sy, x1: sx, y1: sy, e };
     },
 
     _gradMove(dr, p, e) {
-        [dr.x1, dr.y1] = e.shiftKey ? snap45(dr.x0, dr.y0, p.x, p.y) : [p.x, p.y];
+        [dr.x1, dr.y1] = e.shiftKey ? snap45(dr.x0, dr.y0, p.x, p.y) : this._snapPt(p.x, p.y);
         this.drawOverlay();
     },
 
@@ -254,13 +255,14 @@ export const DrawMixin = {
     /** The shape tool's press: a box (Shift square, Alt about the middle) or a line. */
     _shapeDown(p, e) {
         this._tfSettle();
-        this._drag = { kind: "shape", x0: p.x, y0: p.y, x1: p.x, y1: p.y, e, sq: false, ctr: false };
+        const [sx, sy] = this._snapPt(p.x, p.y);
+        this._drag = { kind: "shape", x0: sx, y0: sy, x1: sx, y1: sy, e, sq: false, ctr: false };
     },
 
     _shapeMove(dr, p, e) {
         const line = this.opts.shape.kind === "line";
-        if (line) [dr.x1, dr.y1] = e.shiftKey ? snap45(dr.x0, dr.y0, p.x, p.y) : [p.x, p.y];
-        else { dr.x1 = p.x; dr.y1 = p.y; }
+        if (line) [dr.x1, dr.y1] = e.shiftKey ? snap45(dr.x0, dr.y0, p.x, p.y) : this._snapPt(p.x, p.y);
+        else [dr.x1, dr.y1] = this._snapPt(p.x, p.y);
         dr.sq = e.shiftKey && !line; dr.ctr = e.altKey && !line;
         this.drawOverlay();
     },
