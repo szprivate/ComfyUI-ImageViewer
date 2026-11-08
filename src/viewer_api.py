@@ -48,9 +48,9 @@ try:
 except Exception:  # pragma: no cover
     atlas_render = None
 try:
-    from . import deps_relay
+    from . import deps_graph
 except Exception:  # pragma: no cover
-    deps_relay = None
+    deps_graph = None
 try:
     from . import lora_io
 except Exception:  # pragma: no cover
@@ -1934,30 +1934,58 @@ try:
                 return web.json_response({"error": "unknown shot"}, status=404)
             return web.json_response(_shots.public(job))
 
-        # --- Dependencies tab (deps_relay.py) ---------------------------------
-        # What a file was made from and what was made from it. The record is agentY's (agenty_core), so this
-        # relays to the agentY host like the Atlas routes below. The root must be a file the viewer may show.
+        # --- Dependencies tab (deps_graph.py) ---------------------------------
+        # What a file was made from and what was made from it: read here, from the records beside the files
+        # (the Send node's and agentY's) and the graphs inside them, in the agentY format. The root must be a
+        # file the viewer may show; a node it may not show is listed, without a thumbnail. POST: reading a file
+        # with no record yet writes one (into agent_metadata/ beside it and its inputs), and "scan" records a folder.
         async def _imageviewer_deps(request):
-            """GET ?path=<file> (or filename / subfolder / type) [&up=4&down=4&scan=1] ->
-            {"root", "nodes": [{id, file, kind, created, exists, stale, root, viewable}], "edges": [{from, to,
-            kind, label}], "truncated"}."""
-            if deps_relay is None:
+            """POST {"path": <file>} (or filename / subfolder / type) [, "up": 4, "down": 4, "scan": true] ->
+            {"root", "nodes": [{id, file, kind, created, exists, stale, root, viewable, prompts?}], "edges": [{from,
+            to, kind, label}], "truncated"}."""
+            if deps_graph is None:
                 return web.json_response({"error": "the Dependencies tab is unavailable"}, status=500)
-            q = request.query
-            path = q.get("path") or ""
+            ok, why = path_access.same_origin(request)
+            if not ok:
+                return web.json_response({"error": why}, status=403)
+            try:
+                q = await request.json()
+            except Exception:  # noqa: BLE001
+                q = None
+            if not isinstance(q, dict):
+                return web.json_response({"error": "send a JSON object"}, status=400)
+            path = str(q.get("path") or "")
             if not path:
                 path = _resolve_comfy_ref(q.get("filename"), q.get("type"), q.get("subfolder")) or ""
             if not path:
-                return web.json_response({"error": "send ?path=<file>"}, status=400)
+                return web.json_response({"error": "send a path"}, status=400)
             path = os.path.abspath(path)
             if not path_access.may_serve(path):
                 return web.json_response({"error": path_access.serve_refusal(path)}, status=403)
-            base = f"{request.scheme}://{request.host}"
+            if not os.path.isfile(path):
+                return web.json_response({"error": f"no such file: {os.path.basename(path)}"}, status=404)
+
+            def _int(name, default):
+                try:
+                    return max(0, min(int(q.get(name, default)), 12))
+                except (TypeError, ValueError):
+                    return default
+            up, down, scan = _int("up", 4), _int("down", 4), q.get("scan") in (True, 1, "1", "true")
+
+            def _work():
+                if scan:
+                    try:
+                        deps_graph.reindex(os.path.dirname(path))
+                    except Exception:  # noqa: BLE001
+                        pass
+                g = deps_graph.graph(path, up=up, down=down, limit=200)
+                for n in g.get("nodes") or []:
+                    n["viewable"] = bool(n.get("exists")) and path_access.may_serve(str(n.get("id") or ""))
+                return g
             try:
-                out = await asyncio.to_thread(deps_relay.fetch_graph, base, path, q.get("up", 4), q.get("down", 4),
-                                              q.get("scan") in ("1", "true"), path_access.may_serve)
-            except deps_relay.RelayError as e:
-                return web.json_response({"error": str(e)}, status=e.status)
+                out = await asyncio.get_running_loop().run_in_executor(None, _work)
+            except Exception as e:  # noqa: BLE001
+                return web.json_response({"error": f"could not read the dependencies: {e}"}, status=500)
             return web.json_response(out)
 
         # --- Render with World Labs Atlas (atlas_render.py) -------------------
@@ -3196,8 +3224,8 @@ try:
         _safe_add("POST", "/api/imageviewer/previz_shot", _imageviewer_previz_shot)
         _safe_add("POST", "/imageviewer/previz_shot_done", _imageviewer_previz_shot_done)
         _safe_add("POST", "/api/imageviewer/previz_shot_done", _imageviewer_previz_shot_done)
-        _safe_add("GET", "/imageviewer/deps", _imageviewer_deps)
-        _safe_add("GET", "/api/imageviewer/deps", _imageviewer_deps)
+        _safe_add("POST", "/imageviewer/deps", _imageviewer_deps)
+        _safe_add("POST", "/api/imageviewer/deps", _imageviewer_deps)
         _safe_add("POST", "/imageviewer/atlas_render", _imageviewer_atlas_render)
         _safe_add("POST", "/api/imageviewer/atlas_render", _imageviewer_atlas_render)
         _safe_add("GET", "/imageviewer/atlas_render", _imageviewer_atlas_render_state)

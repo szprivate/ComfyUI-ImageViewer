@@ -16,8 +16,9 @@
 // Moved / resized nodes stay where they were left while the tab is open (also through Reload, unfolding and
 // the Prompts button); a new root starts from the layout again.
 //
-// The record is agentY's: every output it makes keeps what its graph loaded. Data comes from
-// GET /imageviewer/deps (deps_relay.py), which asks the agentY host.
+// The record is the agentY format: every output the Send node or agentY writes keeps what its graph loaded, and
+// a file saved by any node that embeds its graph (Save Image, Save Video ...) is worked out the first time it is
+// looked at. Data comes from POST /imageviewer/deps (src/deps_graph.py), read in ComfyUI itself.
 import { api } from "../../scripts/api.js";
 import { layout, edgePath, applyPlacement } from "./imageViewer_depsLayout.js";
 
@@ -136,11 +137,12 @@ export const DepsPanelMixin = {
         const ui = rec.ui;
         ui.note.textContent = scan ? "Looking through the folder…" : "Reading…";
         ui.note.style.display = "block";
-        const q = new URLSearchParams(rec.path ? { path: rec.path } : rec.query);
-        if (scan) q.set("scan", "1");
+        const q = { ...(rec.path ? { path: rec.path } : rec.query) };
+        if (scan) q.scan = true;
         let data = null, err = "";
         try {
-            const res = await api.fetchApi(`/imageviewer/deps?${q}`);
+            const res = await api.fetchApi("/imageviewer/deps", {
+                method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(q) });
             data = await res.json().catch(() => null);
             if (!res.ok) err = (data && data.error) || `the viewer answered ${res.status}`;
         } catch (e) { err = "the viewer backend did not answer"; }
@@ -155,8 +157,10 @@ export const DepsPanelMixin = {
         if (!rec.path && data.root) rec.path = data.root;
         const lone = (data.nodes || []).length <= 1;
         ui.note.textContent = lone
-            ? "Nothing recorded for this file yet: no inputs, and nothing made from it. Files agentY makes record "
-              + "this as they are written; “Look in folder” records older ones."
+            ? "Nothing recorded for this file: no inputs, and nothing made from it yet. A file says what it was made "
+              + "from when the Send node or agentY saved it, or when its node put the workflow into it (Save Image, "
+              + "Save Video). What was made from it is known once those have been looked at; “Look in folder” "
+              + "reads every file of a folder."
             : (data.truncated ? "The graph is large: only part of it is shown." : "");
         ui.note.style.display = ui.note.textContent ? "block" : "none";
         this._depsRender(rec);

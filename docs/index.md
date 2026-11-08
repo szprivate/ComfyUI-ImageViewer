@@ -22,7 +22,7 @@ A space is a kind of tab: one for looking at things, and one for each kind of do
 | [Paint](paint.md) | Edit a picture in layers |
 | [3D & Previz](3d.md) | View models, build and animate a shot, render it back into the workflow |
 | [Motion](motion.md) | Edit motion graphics an agent wrote |
-| [Dependencies](dependencies.md) | What a file was made from, and what was made from it (with agentY) |
+| [Dependencies](dependencies.md) | What a file was made from, and what was made from it |
 
 ## Panels
 

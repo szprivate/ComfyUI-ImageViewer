@@ -9,7 +9,9 @@ agenty_core.utils.provenance, which reads it):
 * ``agent_metadata/<name>.agenty.json`` - the sidecar; only the key ``"provenance"`` is
   set in it (what else it holds stays), written to a file beside it and moved over;
 * ``agent_metadata/<name>.prov.json.gz`` - gzip of ``{"v": 1, "prompt": <API graph>,
-  "workflow": <UI workflow or null>}``.
+  "workflow": <UI workflow or null>}``;
+* in that sidecar, ``provenance.deps`` (the files the graph loaded), and the file in each such
+  input's ``agent_metadata/<input>.derived.json`` - the Dependencies tab's record (deps_graph.py).
 
 A file that already has an old sidecar right next to it (before 1.18) keeps that one.
 
@@ -223,12 +225,26 @@ def annotate(paths, unique_id, prompt, extra_pnginfo, prompt_id=""):
                     "models": models, "seeds": seeds, "partner": [],
                 }
                 _atomic_write(sidecar, json.dumps(doc, ensure_ascii=False, indent=1).encode("utf-8"))
+                _record_deps(path, red, unique_id, created)
                 done += 1
             except Exception:  # noqa: BLE001 - one file that cannot be annotated does not stop the others
                 continue
         return done
     except Exception:  # noqa: BLE001 - provenance is never worth failing a run
         return 0
+
+
+def _record_deps(path, prompt, unique_id, created):
+    """What *path* was made from (``provenance.deps`` in its sidecar) and *path* in each input's
+    ``.derived.json``, as agentY records them (deps_graph.py), so the Dependencies tab knows both ways."""
+    try:
+        try:
+            from . import deps_graph
+        except ImportError:  # loaded on its own (tests)
+            import deps_graph  # type: ignore[no-redef]
+        deps_graph.record(path, prompt, str(unique_id if unique_id is not None else ""), created=created)
+    except Exception:  # noqa: BLE001 - never worth failing a run
+        pass
 
 
 # ── off the node's thread ────────────────────────────────────────────────────
