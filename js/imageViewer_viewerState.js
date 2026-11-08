@@ -267,6 +267,11 @@ export function describeViewerState(s) {
         for (const k of ["path", "source", "name", "active", "tool"]) if (snap.paint[k]) p[k] = String(snap.paint[k]);
         for (const k of ["w", "h", "layers"]) if (Number.isInteger(snap.paint[k])) p[k] = snap.paint[k];
         for (const k of ["selection", "dirty", "empty"]) if (snap.paint[k]) p[k] = true;
+        // The session's token: edit_image works on the picture as it is on screen with it (the page hands over
+        // what it has not saved first), and the selection's box, for a generation that fills it.
+        if (typeof snap.paint.token === "string" && /^[0-9a-f]{32}$/.test(snap.paint.token)) p.token = snap.paint.token;
+        const b = snap.paint.selection_box;
+        if (b && [b.x, b.y, b.w, b.h].every(Number.isInteger)) p.selection_box = { x: b.x, y: b.y, w: b.w, h: b.h };
         out.paint = p;
     }
 

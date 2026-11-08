@@ -286,6 +286,49 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(state["paint"]["path"], path)
         self.assertEqual(self.errors, [])
 
+    def test_the_agent_works_on_the_unsaved_picture_and_saves_it(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        # The user's unsaved work: a new layer and a selection. The picture was never saved.
+        pg.evaluate(f"() => {{ const e = {ed}; e.newLayer('Mine'); const m = new Uint8Array(200*120); for (let y = 10; y < 40; y++) for (let x = 20; x < 70; x++) m[y*200+x] = 255; e.setSelection(m); }}")
+        self.assertTrue(pg.evaluate(f"() => {ed}.isDirty()"))
+        state = pg.evaluate("() => __panel.agentViewerState().paint")
+        self.assertTrue(state["dirty"])
+        self.assertEqual(state["selection_box"], {"x": 20, "y": 10, "w": 50, "h": 30})
+        tok = state["token"]
+        self.assertRegex(tok, r"^[0-9a-f]{32}$")
+        # edit_image on the live tab: the server asks the page first (imageviewer.paint.sync), as ComfyUI would relay it.
+        del self.sent[:]
+        pg.evaluate("(tok) => { window.__agent = fetch('/imageviewer/paint/doc', { method: 'POST', headers: { 'Content-Type': 'application/json' },"
+                    " body: JSON.stringify({ doc: tok, sync: true, ops: [{ op: 'add_layer', color: '#00ff00', name: 'Agent', opacity: 50 }] }) })"
+                    " .then(async (r) => [r.status, await r.json()]); }", tok)
+        ask = []
+        for _ in range(100):
+            ask = [d for e, d in self.sent if e == "imageviewer.paint.sync"]
+            if ask:
+                break
+            pg.wait_for_timeout(50)
+        self.assertTrue(ask, "the page was not asked for its picture")
+        pg.evaluate("(d) => __api.dispatch('imageviewer.paint.sync', d)", ask[0])
+        got = pg.evaluate("() => window.__agent")
+        self.assertEqual(got[0], 200, got)
+        self.assertEqual([r["name"] for r in got[1]["outline"]["layers"]][:2], ["Agent", "Mine"])
+        self.assertTrue(got[1]["written"])
+        path = got[1]["path"]
+        self.assertTrue(path.endswith(".ora"))
+        ev = [d for e, d in self.sent if e == "imageviewer.paint.changed"]
+        self.assertTrue(ev and ev[0]["synced"])
+        pg.evaluate("(d) => __api.dispatch('imageviewer.paint.changed', d)", ev[0])
+        pg.wait_for_function(f"() => {ed}.doc.layers.some((L) => L.name === 'Agent')", timeout=10000)
+        self.assertFalse(pg.evaluate(f"() => {ed}.isDirty()"))      # saved, with the user's layer in it
+        self.assertEqual(pg.evaluate("() => __panel._paintActive().path"), path)
+        self.assertEqual([L["name"] for L in self.P.read_ora(path).layers][-2:], ["Mine", "Agent"])
+        pg.evaluate(f"() => {ed}.undo()")                             # the agent's change is one step
+        self.assertFalse(pg.evaluate(f"() => {ed}.doc.layers.some((L) => L.name === 'Agent')"))
+        self.assertTrue(pg.evaluate(f"() => {ed}.doc.layers.some((L) => L.name === 'Mine')"))
+        self.assertEqual(self.errors, [])
+
     def test_heal_here_and_fill_asks_agenty(self):
         pg = self.page()
         self.open_photo(pg)

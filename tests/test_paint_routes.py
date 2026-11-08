@@ -197,6 +197,61 @@ class PaintRoutes(unittest.TestCase):
             self.assertEqual(len(self.P.read_ora(path).layers), 3)
         self.run_c(go)
 
+    def test_agent_on_the_live_tab_gets_its_unsaved_changes_first_and_saves_them(self):
+        R = importlib.import_module(self.pkg + ".paint_routes")
+
+        async def go(c):
+            st, d = await self.j(c, "/imageviewer/paint/open", {"new": {"w": 32, "h": 24, "name": "live"}})
+            tok, meta = d["token"], d["doc"]
+            meta["layers"][0]["name"] = "Painted"          # the user's change, not saved anywhere yet
+
+            async def page():                               # what the page does on imageviewer.paint.sync
+                for _ in range(200):
+                    got = [x for x in self.sent if x[0] == "imageviewer.paint.sync"]
+                    if got:
+                        ev = got[-1][1]
+                        self.assertEqual(ev["token"], tok)
+                        return await self.j(c, "/imageviewer/paint/save", {"token": tok, "meta": meta, "keep": [meta["layers"][0]["id"]],
+                                                                           "write": False, "sync_req": ev["req"]})
+                    await asyncio.sleep(0.01)
+                self.fail("the page was never asked")
+            ops = [{"op": "add_layer", "color": "#ff0000", "name": "Agent"}]
+            (st, o), _ = await asyncio.gather(self.j(c, "/imageviewer/paint/doc", {"doc": tok, "sync": True, "ops": ops}), page())
+            self.assertEqual(st, 200, o)
+            self.assertEqual([r["name"] for r in o["outline"]["layers"]], ["Agent", "Painted"])
+            # A new canvas: saved by the export rule, with the user's change in it - nothing to save first.
+            self.assertTrue(o["written"])
+            self.assertTrue(o["path"].endswith(".ora"))
+            self.assertEqual([L["name"] for L in self.P.read_ora(o["path"]).layers], ["Painted", "Agent"])
+            ch = self.sent[-1]
+            self.assertEqual(ch[0], "imageviewer.paint.changed")
+            self.assertTrue(ch[1]["synced"])
+            self.assertEqual(ch[1]["token"], tok)
+
+            # The page cannot hand it over: the agent is told, nothing changes.
+            del self.sent[:]
+
+            async def broken():
+                for _ in range(200):
+                    got = [x for x in self.sent if x[0] == "imageviewer.paint.sync"]
+                    if got:
+                        return await self.j(c, "/imageviewer/paint/save", {"token": tok, "sync_req": got[-1][1]["req"], "failed": "disk on fire"})
+                    await asyncio.sleep(0.01)
+            (st, o), _ = await asyncio.gather(self.j(c, "/imageviewer/paint/doc", {"doc": tok, "sync": True, "ops": ops}), broken())
+            self.assertEqual(st, 400)
+            self.assertIn("disk on fire", o["error"])
+            self.assertFalse([x for x in self.sent if x[0] == "imageviewer.paint.changed"])
+
+            # No page answers at all.
+            was, R.SYNC_TIMEOUT = R.SYNC_TIMEOUT, 0.2
+            try:
+                st, o = await self.j(c, "/imageviewer/paint/doc", {"doc": tok, "sync": True, "ops": ops})
+            finally:
+                R.SYNC_TIMEOUT = was
+            self.assertEqual(st, 400)
+            self.assertIn("did not hand over", o["error"])
+        self.run_c(go)
+
     def test_agent_ops_on_a_picture_make_a_new_ora(self):
         async def go(c):
             st, o = await self.j(c, "/imageviewer/paint/doc", {"doc": self.png, "ops": [{"op": "add_text", "text": "Hi", "size": 12}]})

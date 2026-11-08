@@ -20,6 +20,7 @@ import { api } from "../../scripts/api.js";
 import { createPaintEditor, PAINT_KEYS } from "./imageViewer_paintEditor.js";
 import { notice, openFilePicker, openExportDialog, canvasContext } from "./imageViewer_exportUI.js";
 import { addRecentDoc } from "./imageViewer_recentDocs.js";
+import { maskBBox } from "./imageViewer_paintData.js";
 
 export const PAINT_PREFIX = "paint:";
 /** The dock panels of a Paint tab, and the editor part each one holds. */
@@ -65,6 +66,12 @@ export const PaintPanelMixin = {
             api.addEventListener("imageviewer.paint.changed", (e) => {
                 const d = e && e.detail;
                 if (d && d.from !== "page") this.paintChanged(d).catch((err) => console.warn("imageViewer: Paint change not taken", err));
+            });
+            // The agent is about to work on a picture open here (edit_image on the tab's token): hand over what is
+            // not saved, so it works on the picture as it is on screen and nothing needs saving first.
+            api.addEventListener("imageviewer.paint.sync", (e) => {
+                const d = e && e.detail;
+                if (d && d.token) this.paintHandOver(d.token, d.req).catch((err) => console.warn("imageViewer: Paint hand-over", err));
             });
         }
         return this._paint;
@@ -528,6 +535,18 @@ export const PaintPanelMixin = {
 
     // ── the agent, and making pixels ─────────────────────────────────────────
 
+    /** The server asks for the page's picture before the agent's change (paint_routes page_sync). */
+    async paintHandOver(token, req) {
+        const rec = Object.values(this._paintState().tabs).find((r) => r.token === token);
+        if (!rec || !rec.editor || !rec.editor.doc) return;   // another window has it
+        try {
+            const s = await this._paintSync(rec);
+            await postJson("/imageviewer/paint/save", { token, meta: s.meta, keep: s.keep, write: false, sync_req: req });
+        } catch (e) {
+            await postJson("/imageviewer/paint/save", { token, sync_req: req, failed: String(e.message || e) }).catch(() => {});
+        }
+    },
+
     /** The page is told that the agent changed a picture (edit_image): the tab takes it as one undo step. */
     async paintChanged(detail) {
         const st = this._paintState();
@@ -541,7 +560,14 @@ export const PaintPanelMixin = {
         const [key, rec] = entry;
         if (!rec.editor || !rec.editor.doc) return;
         try {
+            const was = rec.path;
             if (detail.path) rec.path = detail.path;
+            if (detail.path && detail.path !== was && detail.written) {
+                // A new canvas or a picture saved as an .ora for the first time: the tab works on that file now.
+                this._paintRelabel(rec, detail.path);
+                this._paintLanded(detail.path);
+                addRecentDoc("paint", detail.path);
+            }
             if (!detail.token) {
                 const again = await postJson("/imageviewer/paint/open", { path: detail.path });
                 rec.token = again.token;
@@ -550,7 +576,8 @@ export const PaintPanelMixin = {
             const data = await this._paintLoad(rec.token, d.doc, d.selection);
             const wasDirty = rec.editor.isDirty();
             rec.editor.replaceWith(data, detail.label || "agentY");
-            if (detail.written && !wasDirty) rec.editor.markSaved();
+            // Saved with the page's own unsaved changes in it (handed over first): nothing is unsaved now.
+            if (detail.written && (!wasDirty || detail.synced)) rec.editor.markSaved();
             if (this.activeTab !== key && detail.focus) this.switchTab(key);
             const said = (detail.said || []).slice(0, 3).join("; ");
             notice("info", "agentY changed the picture", said);
@@ -881,6 +908,16 @@ export const PaintPanelMixin = {
         if (this.activeTab === key) this._paintSeat(null);
     },
 
+    /** The selection's box, kept while the selection is the same buffer (viewerState is read often). */
+    _paintSelBox(ed) {
+        const c = this._paintSelBoxKept;
+        // Quick Mask paints the selection in place: nothing kept while it is on, or from before it.
+        if (c && c.sel === ed.sel && !ed.quick) return c.box;
+        const box = maskBBox(ed.sel, ed.doc.w, ed.doc.h);
+        this._paintSelBoxKept = ed.quick ? null : { sel: ed.sel, box };
+        return box;
+    },
+
     /** viewerState().paint: what the agent reads of the Paint tab on screen. */
     _agentPaint() {
         const rec = this._paintActive();
@@ -889,6 +926,7 @@ export const PaintPanelMixin = {
         if (!d) return { open: true, empty: true };
         const L = ed.active();
         return { open: true, path: rec.path || "", source: rec.source || "", name: d.name, w: d.w, h: d.h,
-                 layers: d.layers.length, active: L ? L.name : "", tool: ed.tool, selection: !!ed.sel, dirty: ed.isDirty() };
+                 layers: d.layers.length, active: L ? L.name : "", tool: ed.tool, selection: !!ed.sel, dirty: ed.isDirty(),
+                 selection_box: ed.sel ? this._paintSelBox(ed) : null, token: rec.token || "" };
     },
 };

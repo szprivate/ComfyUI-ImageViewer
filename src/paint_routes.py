@@ -62,6 +62,8 @@ EXPORT_FORMATS = {"png": "PNG", "jpg": "JPEG", "webp": "WebP", "tif": "TIFF", "p
 MAX_SESSIONS = 6
 MAX_STAGE_BYTES = P.MAX_SIDE * P.MAX_SIDE * 4
 _TOKEN = re.compile(r"[0-9a-f]{32}")
+#: Seconds the agent waits for the page to hand over a picture it has not saved (``sync`` on /paint/doc).
+SYNC_TIMEOUT = 20.0
 _PART = re.compile(r"(layer|mask):([A-Za-z0-9_-]{1,40})|sel")
 
 
@@ -362,8 +364,9 @@ def _fonts():
     return get
 
 
-def agent_ops(doc_ref, ops, *, resolve, is_allowed, may_serve, export_rules, output_dir, write=True):
-    """What ``/imageviewer/paint/doc`` does: ``(answer, token or None)``."""
+def agent_ops(doc_ref, ops, *, resolve, is_allowed, may_serve, export_rules, output_dir, write=True, save_new=False):
+    """What ``/imageviewer/paint/doc`` does: ``(answer, token or None)``. ``save_new``: a document open in a page
+    that has no .ora yet (a new canvas, a picture) is saved as the next version too (the agent on the live tab)."""
     tok, s = None, None
     if isinstance(doc_ref, str) and _TOKEN.fullmatch(doc_ref):
         s = BOOK.get(doc_ref)
@@ -406,7 +409,7 @@ def agent_ops(doc_ref, ops, *, resolve, is_allowed, may_serve, export_rules, out
             tok = tok2
     else:
         s.doc = work
-        if write and s.path:
+        if write and (s.path or save_new):
             res = save(s, export_rules, output_dir, is_allowed=is_allowed)
             answer.update(path=res["path"], written=True)
         else:
@@ -445,6 +448,32 @@ def register(add, *, web, path_access, export_rules, folder_paths, send, resolve
 
     def output_dir():
         return folder_paths.get_output_directory()
+
+    # The agent on the picture the user is working on (edit_image with the tab's token and "sync"): the page is
+    # asked for what it has not saved (imageviewer.paint.sync), answers with a save that writes nothing (its
+    # sync_req), and only then do the ops run - so nothing of the user's is lost and nothing needs saving first.
+    waiting = {}
+
+    async def page_sync(tok):
+        timeout = SYNC_TIMEOUT
+        req = secrets.token_hex(8)
+        fut = asyncio.get_running_loop().create_future()
+        waiting[req] = fut
+        try:
+            send("imageviewer.paint.sync", {"token": tok, "req": req})
+            return await asyncio.wait_for(fut, timeout)
+        except asyncio.TimeoutError:
+            raise PaintError("the Paint tab did not hand over its picture (is the viewer open?)") from None
+        finally:
+            waiting.pop(req, None)
+
+    def synced(body, failed=None):
+        fut = waiting.get(str(body.get("sync_req") or ""))
+        if fut is not None and not fut.done():
+            if failed:
+                fut.set_exception(PaintError(f"the Paint tab could not hand over its picture: {failed}"))
+            else:
+                fut.set_result(True)
 
     async def guarded_json(request):
         ok, why = path_access.same_origin(request)
@@ -525,11 +554,16 @@ def register(add, *, web, path_access, export_rules, folder_paths, send, resolve
     async def h_save(request):
         body = await guarded_json(request)
         s = BOOK.get(body.get("token"))
+        if body.get("failed"):
+            synced(body, str(body["failed"])[:200])
+            return web.json_response({"ok": False})
         if not s:
+            synced(body, "that document is no longer open")
             return err("that document is no longer open - open it again", 404)
         try:
             await off(commit, s, body.get("meta"), body.get("keep"))
             if body.get("write") is False:
+                synced(body)
                 return web.json_response({"ok": True, "path": s.path, "written": False})
             res = await off(save, s, export_rules, output_dir(), as_new=bool(body.get("as_new")),
                             name=body.get("name"), context=body.get("context"), is_allowed=path_access.is_allowed)
@@ -572,16 +606,22 @@ def register(add, *, web, path_access, export_rules, folder_paths, send, resolve
         ref = body.get("doc") or body.get("path") or body.get("token")
         if not ref:
             return err("'doc' (the .ora / .psd / picture's path) is needed")
+        live = bool(body.get("sync")) and isinstance(ref, str) and bool(_TOKEN.fullmatch(ref))
         try:
+            if live:
+                if not BOOK.get(ref):
+                    return err("that document is no longer open", 404)
+                await page_sync(ref)
             answer, tok = await off(agent_ops, ref, body.get("ops"), resolve=resolve, is_allowed=path_access.is_allowed,
                                     may_serve=path_access.may_serve, export_rules=export_rules, output_dir=output_dir(),
-                                    write=body.get("write") is not False)
+                                    write=body.get("write") is not False, save_new=live)
         except (O.OpError, PaintError, ValueError, OSError) as e:
             return err(e)
         if body.get("ops"):
             try:
                 send("imageviewer.paint.changed", {"path": answer.get("path"), "token": tok, "written": bool(answer.get("written")),
-                                             "said": answer.get("said", []), "from": body.get("from") or "agent"})
+                                             "said": answer.get("said", []), "from": body.get("from") or "agent",
+                                             "synced": live})
             except Exception:  # noqa: BLE001 - no page listening is fine
                 pass
             if tok:
