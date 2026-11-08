@@ -848,5 +848,49 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(self.errors, [])
 
 
+    def test_brush_tips_abr_import_angle_and_tip_from_selection(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        x0, y0, w, h = pg.evaluate(f"() => {{ const r = {ed}.canvas.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }}")
+        at = lambda x, y: (x0 + x * w / 200, y0 + y * h / 120)
+        # A version 1 .abr built byte by byte: one sampled tip, a bar 40 x 4.
+        r = pg.evaluate(f"""async () => {{ const b = [], u8 = (v) => b.push(v & 255), u16 = (v) => {{ u8(v >> 8); u8(v); }}, u32 = (v) => {{ u16(v >>> 16); u16(v & 0xffff); }};
+            const body = []; const B = (f) => {{ const keep = b.length; f(); body.push(...b.splice(keep)); }};
+            B(() => {{ u32(0); u16(25); u8(1); for (let i = 0; i < 8; i++) u8(0); u32(0); u32(0); u32(4); u32(40); u16(8); u8(0); for (let i = 0; i < 160; i++) u8(255); }});
+            u16(1); u16(1); u16(2); u32(body.length); b.push(...body);
+            const e = {ed}; e.setTool('brush'); const res = await e.importAbr(new Uint8Array(b), 'bars.abr');
+            return [res.tips.length, e.opts.brush.tip, e.tips.get(e.opts.brush.tip).w, e.tips.get(e.opts.brush.tip).h, e.opts.brush.spacing]; }}""")
+        self.assertEqual(r[0], 1)
+        self.assertEqual(r[2:], [40, 4, 25])
+        tip = r[1]
+        self.assertTrue(pg.evaluate(f"() => !!{ed}.parts.props.querySelector('.paint-tip[data-tip=\"{tip}\"].on')"))
+        # One dab on an empty layer: the bar lies across, then turned 90° it stands.
+        pg.evaluate(f"""() => {{ const e = {ed}; e.addPixelLayer(new Uint8ClampedArray(200 * 120 * 4), 200, 120, 'tips');
+            e.fg = [0, 0, 0]; e.opts.brush.size = 40; e.opts.brush.hardness = 100; e.opts.brush.opacity = 100; }}""")
+        alpha = lambda x, y: pg.evaluate(f"() => {{ const e = {ed}, L = e.active(), b = e.pix.get(L.id); return b[(({y} - L.y) * L.w + {x} - L.x) * 4 + 3]; }}")
+        pg.mouse.click(*at(100, 60))
+        self.assertGreater(alpha(115, 60), 200)
+        self.assertEqual(alpha(100, 50), 0)
+        pg.keyboard.press("Control+z")
+        self.assertEqual(alpha(115, 60), 0)
+        pg.evaluate(f"() => {{ {ed}.opts.brush.angle = 90; }}")
+        pg.mouse.click(*at(100, 60))
+        self.assertGreater(alpha(100, 50), 200)
+        self.assertEqual(alpha(115, 60), 0)
+        # Define a tip from the selection: a black square in it, kept as a tip of its size, chosen.
+        n = pg.evaluate(f"""async () => {{ const e = {ed}, px = new Uint8ClampedArray(200 * 120 * 4).fill(255);
+            for (let y = 20; y < 32; y++) for (let x = 20; x < 32; x++) px.set([0, 0, 0, 255], (y * 200 + x) * 4);
+            e.addPixelLayer(px, 200, 120, 'square'); const m = new Uint8Array(200 * 120);
+            for (let y = 16; y < 36; y++) for (let x = 16; x < 36; x++) m[y * 200 + x] = 255; e.setSelection(m);
+            const t = await e.tipFromSelection(); return [t.w, t.h, e.opts.brush.tip === t.id, e.tips.size]; }}""")
+        self.assertEqual(n[2:], [True, 2])
+        self.assertTrue(12 <= n[0] <= 20 and 12 <= n[1] <= 20, n)
+        # Round again, and the tip forgotten.
+        pg.evaluate(f"() => {{ const e = {ed}; e.parts.props.querySelector('.tip-del').click(); }}")
+        pg.wait_for_timeout(100)
+        self.assertEqual(pg.evaluate(f"() => [{ed}.tips.size, {ed}.opts.brush.tip || null]"), [1, None])
+        self.assertEqual(self.errors, [])
+
 if __name__ == "__main__":
     unittest.main()

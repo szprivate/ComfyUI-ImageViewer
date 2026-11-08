@@ -813,6 +813,44 @@ export function maskEdge(m, w, h) {
 // the colour laid over it by cover x opacity (the eraser takes alpha away by as much).
 
 /** How much a round dab of radius r and hardness h (0..1) covers a pixel at distance d. */
+/** A brush tip's value (0..1) at (u, v) in its own pixels, bilinear; 0 outside it. */
+export function tipAt(tip, u, v) {
+    const fu = u - 0.5, fv = v - 0.5, u0 = Math.floor(fu), v0 = Math.floor(fv), du = fu - u0, dv = fv - v0, w = tip.w, h = tip.h, a = tip.a;
+    if (u0 < -1 || v0 < -1 || u0 >= w || v0 >= h) return 0;
+    let s = 0;
+    for (let j = 0; j < 2; j++) {
+        const y = v0 + j;
+        if (y < 0 || y >= h) continue;
+        for (let i = 0; i < 2; i++) {
+            const x = u0 + i;
+            if (x < 0 || x >= w) continue;
+            s += a[y * w + x] * (j ? dv : 1 - dv) * (i ? du : 1 - du);
+        }
+    }
+    return s / 255;
+}
+
+/** A dab's jitter (Shape Dynamics): from `rand` (0..1 each call), the dab moved (scatter, a share of the diameter),
+ *  smaller (size, 0..1) and turned (angle, 0..1 of a full turn). { dx, dy, k, da }. */
+export function jitter(rand, radius, o) {
+    const sc = (o.scatter || 0) / 100, sz = (o.sizeJitter || 0) / 100, aj = (o.angleJitter || 0) / 100;
+    const dx = sc ? (rand() * 2 - 1) * sc * 2 * radius : 0, dy = sc ? (rand() * 2 - 1) * sc * 2 * radius : 0;
+    const k = sz ? 1 - sz * rand() : 1, da = aj ? (rand() - 0.5) * aj * Math.PI * 2 : 0;
+    return { dx, dy, k, da };
+}
+
+/** A small seeded random generator (mulberry32). */
+export function seeded(seed) {
+    let a = (seed >>> 0) || 1;
+    return () => {
+        a = (a + 0x6d2b79f5) >>> 0;
+        let t = a;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
 export function dabAt(d, r, hard) {
     if (d >= r) return 0;
     const inner = r * hard;
@@ -884,15 +922,22 @@ export function pressureDabs(x0, y0, p0, x1, y1, p1, radius, spacing, carry = 0,
  * rectangle touched, {x0, y0, x1, y1}, or null. `flow` (0..1, the pen's pressure on the opacity) scales the
  * dab; the stroke still keeps the most any dab gave a pixel, so a lighter press never lightens it.
  */
-export function stamp(st, cx, cy, radius, hard, flow = 1) {
+export function stamp(st, cx, cy, radius, hard, flow = 1, angle = 0) {
     const { lw, lh, lx, ly } = st;
-    const x0 = Math.max(0, Math.floor(cx - radius - lx)), y0 = Math.max(0, Math.floor(cy - radius - ly));
-    const x1 = Math.min(lw, Math.ceil(cx + radius - lx) + 1), y1 = Math.min(lh, Math.ceil(cy + radius - ly) + 1);
+    // A brush tip (st.tip, a grey picture: white paints): its longer side the dab's diameter, turned by `angle`.
+    const tip = st.tip, tk = tip ? (2 * radius) / Math.max(tip.w, tip.h) : 0;
+    const reach = tip ? (tk * Math.hypot(tip.w, tip.h)) / 2 : radius;
+    const ca = Math.cos(angle), sa = Math.sin(angle);
+    const x0 = Math.max(0, Math.floor(cx - reach - lx)), y0 = Math.max(0, Math.floor(cy - reach - ly));
+    const x1 = Math.min(lw, Math.ceil(cx + reach - lx) + 1), y1 = Math.min(lh, Math.ceil(cy + reach - ly) + 1);
     if (x1 <= x0 || y1 <= y0) return null;
     for (let y = y0; y < y1; y++) {
         for (let x = x0; x < x1; x++) {
-            const d = Math.hypot(x + 0.5 + lx - cx, y + 0.5 + ly - cy);
-            let a = dabAt(d, radius, hard) * flow;
+            let a;
+            if (tip) {
+                const dx = x + 0.5 + lx - cx, dy = y + 0.5 + ly - cy;
+                a = tipAt(tip, (ca * dx + sa * dy) / tk + tip.w / 2, (-sa * dx + ca * dy) / tk + tip.h / 2) * flow;
+            } else a = dabAt(Math.hypot(x + 0.5 + lx - cx, y + 0.5 + ly - cy), radius, hard) * flow;
             if (a <= 0) continue;
             if (st.sel) {
                 const gx = x + lx, gy = y + ly;
