@@ -163,6 +163,33 @@ class PaintGenerate(unittest.TestCase):
             self.assertEqual((L["w"], L["h"], L["x"], L["y"]), (104, 82, 28, 0))
         self.run_c(go)
 
+    def test_the_partner_edit_presets_get_the_words_the_size_and_small_seeds(self):
+        names = {e["id"] for e in self.G.builtins()}
+        for wid in ("qwen3_edit", "qwen2511_edit", "qwen2511_lightning_edit", "gpt_image_25_edit", "gpt_image_25_inpaint",
+                    "seedream5_edit", "nano_banana_pro_edit", "nano_banana21_edit"):
+            self.assertIn(wid, names)
+        async def go(c):
+            tok = await self.open_with_selection(c)
+            seen = {}
+            for wid in ("qwen3_edit", "seedream5_edit", "nano_banana21_edit", "qwen2511_lightning_edit"):
+                st, d = await self.j(c, "/imageviewer/paint/generate",
+                                     {"token": tok, "action": "edit", "workflow": wid, "prompt": "make it blue"})
+                self.assertEqual(st, 200, (wid, d))
+                seen[wid] = d
+                g = d["graphs"][0]
+                words = [v for n in g.values() for k, v in n["inputs"].items() if k in ("prompt", "model.prompt") and v]
+                self.assertEqual(words, ["make it blue"], wid)
+                for n in g.values():
+                    for k, v in n["inputs"].items():
+                        if k in self.G.SEED_INPUTS:
+                            self.assertLessEqual(v, 2 ** 31 - 1)
+            # Seedream is told the size it is sent, and no side is under 1024.
+            sd = seen["seedream5_edit"]
+            tw, th = sd["size"]
+            self.assertGreaterEqual(min(tw, th), 1024)
+            self.assertEqual((sd["graphs"][0]["2"]["inputs"]["model.width"], sd["graphs"][0]["2"]["inputs"]["model.height"]), (tw, th))
+        self.run_c(go)
+
     def test_models_in_subfolders_of_other_model_paths_are_found(self):
         # an extra model path (L:) with the files in folders of their own: ComfyUI lists them as
         # "flux\\flux1-fill-dev.safetensors", and the workflow is pointed at that name

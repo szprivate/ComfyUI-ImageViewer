@@ -1,0 +1,192 @@
+{
+ "1": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "paint/in.png"
+  },
+  "_meta": {
+   "title": "paint:image"
+  }
+ },
+ "2": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "qwen_image_edit_2511_fp8mixed.safetensors",
+   "weight_dtype": "default"
+  }
+ },
+ "3": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+   "type": "qwen_image",
+   "device": "default"
+  }
+ },
+ "4": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "qwen_image_vae.safetensors"
+  }
+ },
+ "5": {
+  "class_type": "ModelSamplingAuraFlow",
+  "inputs": {
+   "model": [
+    "2",
+    0
+   ],
+   "shift": 3.1
+  }
+ },
+ "6": {
+  "class_type": "CFGNorm",
+  "inputs": {
+   "model": [
+    "5",
+    0
+   ],
+   "strength": 1.0,
+   "pre_cfg": false
+  }
+ },
+ "7": {
+  "class_type": "TextEncodeQwenImageEditPlus",
+  "inputs": {
+   "clip": [
+    "3",
+    0
+   ],
+   "vae": [
+    "4",
+    0
+   ],
+   "image1": [
+    "1",
+    0
+   ],
+   "prompt": ""
+  },
+  "_meta": {
+   "title": "paint:prompt"
+  }
+ },
+ "8": {
+  "class_type": "TextEncodeQwenImageEditPlus",
+  "inputs": {
+   "clip": [
+    "3",
+    0
+   ],
+   "vae": [
+    "4",
+    0
+   ],
+   "image1": [
+    "1",
+    0
+   ],
+   "prompt": ""
+  },
+  "_meta": {
+   "title": "negative"
+  }
+ },
+ "9": {
+  "class_type": "FluxKontextMultiReferenceLatentMethod",
+  "inputs": {
+   "conditioning": [
+    "7",
+    0
+   ],
+   "reference_latents_method": "index_timestep_zero"
+  }
+ },
+ "10": {
+  "class_type": "FluxKontextMultiReferenceLatentMethod",
+  "inputs": {
+   "conditioning": [
+    "8",
+    0
+   ],
+   "reference_latents_method": "index_timestep_zero"
+  }
+ },
+ "11": {
+  "class_type": "VAEEncode",
+  "inputs": {
+   "pixels": [
+    "1",
+    0
+   ],
+   "vae": [
+    "4",
+    0
+   ]
+  }
+ },
+ "12": {
+  "class_type": "KSampler",
+  "inputs": {
+   "model": [
+    "15",
+    0
+   ],
+   "positive": [
+    "9",
+    0
+   ],
+   "negative": [
+    "10",
+    0
+   ],
+   "latent_image": [
+    "11",
+    0
+   ],
+   "seed": 0,
+   "steps": 4,
+   "cfg": 1.0,
+   "sampler_name": "euler",
+   "scheduler": "simple",
+   "denoise": 1.0
+  }
+ },
+ "13": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "12",
+    0
+   ],
+   "vae": [
+    "4",
+    0
+   ]
+  }
+ },
+ "14": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "paint/generate",
+   "images": [
+    "13",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "paint:output"
+  }
+ },
+ "15": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "model": [
+    "6",
+    0
+   ],
+   "lora_name": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+   "strength_model": 1.0
+  }
+ }
+}

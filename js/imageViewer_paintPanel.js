@@ -666,7 +666,14 @@ export const PaintPanelMixin = {
         if (!ed || !ed.doc) return;
         const W = ed.doc.w, H = ed.doc.h;
         const bottom = ed.doc.layers.find((L) => L.kind === "pixel");
-        const local = (ops, label) => this._paintApplyOps(rec, ops, label);
+        // Heal and the plain extend / upscale are done here: still a line in the bar while they run.
+        const local = async (ops, label) => {
+            const id = ed.genBegin && ed.genBegin(kind, label);
+            if (id) ed.genUpdate(id, { text: "Working on it" });
+            const ok = await this._paintApplyOps(rec, ops, label);
+            if (id) ed.genEnd(id, ok, ok ? "Done" : "Did not work");
+            return ok;
+        };
         if (kind === "heal") {
             if (!ed.sel) { notice("warn", "Select what to fill first"); return; }
             const L = ed.active();
@@ -751,17 +758,25 @@ export const PaintPanelMixin = {
                 await this._paintWorkflows(true);
                 ed.refreshProps && ed.refreshProps();
             } catch (e) { notice("error", "Not changed", String(e.message || e)); }
-        }, "Your own workflows are added in Settings \u203a ComfyUI Image Viewer \u203a Paint.");
+        }, "Your own workflows are added in Settings \u203a ComfyUI Image Viewer \u203a Paint.", { wide: true });
     },
 
     /** Run the workflow picked for *kind*: prepared by the server, queued here, the pictures laid back as layers. */
     async _paintRun(rec, kind, opts) {
+        const ed = rec.editor;
         const t = await this._paintWorkflows();
         const a = t && t.actions && t.actions[kind];
         if (!t || (a && a.choice === "agent")) return this._paintAsk(rec, kind, opts);
+        // Seen at once: the button busy, the bar up (imageViewer_paintGenStatus.js).
+        const what = (a && a.label) || kind;
+        const wfName = this._paintWfLabel(kind);
+        const gid = ed.genBegin ? ed.genBegin(kind, wfName ? `${what} \u00b7 ${wfName}` : what) : 0;
+        const say = (patch) => { if (gid) ed.genUpdate(gid, patch); };
+        const over = (ok, msg) => { if (gid) ed.genEnd(gid, ok, msg); };
         rec.genBusy = (rec.genBusy || 0) + 1;
         let prep;
         try {
+            say({ text: "Getting the picture ready" });
             const s = await this._paintSync(rec);
             await postJson("/imageviewer/paint/save", { token: rec.token, meta: s.meta, keep: s.keep, write: false });
             prep = await postJson("/imageviewer/paint/generate", { token: rec.token, action: kind, prompt: opts.prompt || "",
@@ -771,37 +786,74 @@ export const PaintPanelMixin = {
             rec.genBusy = Math.max(0, (rec.genBusy || 1) - 1);
             const miss = e.data && e.data.missing;
             if (miss && miss.length) {
-                notice("error", "The workflow needs what is not here",
-                       miss.map((m) => (m.kind === "model" ? `${m.what} (${m.folder})` : `node ${m.what}`)).join(", ") + " - pick another in Generate \u203a Workflows\u2026");
-            } else notice("error", "Generate did not start", String(e.message || e));
+                const list = miss.map((m) => (m.kind === "model" ? `${m.what} (${m.folder})` : `node ${m.what}`)).join(", ");
+                notice("error", "The workflow needs what is not here", list + " - pick another in Generate \u203a Workflows\u2026");
+                over(false, "Missing: " + list);
+            } else {
+                notice("error", "Generate did not start", String(e.message || e));
+                over(false, String(e.message || e));
+            }
             return;
         }
-        notice("info", prep.label, `${prep.workflow} at ${prep.size[0]}x${prep.size[1]}` + (prep.graphs.length > 1 ? `, ${prep.graphs.length} variations` : "")
-               + " - it comes back as a new layer.");
+        const n = prep.graphs.length;
         const ops = [];
-        let failed = null;
+        let failed = null, stopped = false;
+        const watches = prep.graphs.map((g) => ({ graph: g, id: null, started: false, done: false, stop: null }));
+        // What the bar says: the run that is going (or the first one waiting), its node and ComfyUI's progress.
+        const show = () => {
+            const left = watches.filter((w) => !w.done);
+            const w = left.find((x) => x.started) || left[0];
+            if (!w) return;
+            const k = watches.indexOf(w), of = n > 1 ? ` (${k + 1} of ${n})` : "";
+            if (!w.started) { say({ text: "Waiting in ComfyUI's queue" + of, share: null, value: null, max: null }); return; }
+            const node = w.node && w.graph[w.node];
+            const name = node ? ((node._meta && node._meta.title && !/^paint:/i.test(node._meta.title) ? node._meta.title : node.class_type)) : "Running";
+            const share = w.max ? (k + w.value / w.max) / n : null;
+            say({ text: `${name}${of}`, share, value: w.max ? w.value : null, max: w.max || null });
+        };
+        const stopAll = async () => {
+            stopped = true;
+            say({ text: "Stopping", share: null, value: null, max: null });
+            for (const w of watches) if (!w.done && w.stop) w.stop();
+        };
+        say({ text: `${prep.workflow} at ${prep.size[0]}x${prep.size[1]}` + (n > 1 ? `, ${n} variations` : ""), stop: stopAll });
         try {
             // Each one listened for from the moment it is queued: a later one may well finish first.
             const runs = [];
-            for (const g of prep.graphs) {
-                const id = await this._paintQueue(g);
-                const w = this._paintWait(id, prep.output);
-                w.catch(() => {});
-                runs.push(w);
+            for (const w of watches) {
+                w.id = await this._paintQueue(w.graph);
+                const p = this._paintWait(w.id, prep.output, {
+                    start: () => { w.started = true; show(); },
+                    node: (nodeId) => { w.started = true; w.node = nodeId; w.value = 0; w.max = 0; show(); },
+                    progress: (v, m, nodeId) => { w.started = true; if (nodeId != null) w.node = nodeId; w.value = v; w.max = m; show(); },
+                    stop: (fn) => { w.stop = fn; },
+                });
+                p.then(() => { w.done = true; show(); }, () => { w.done = true; show(); });
+                runs.push(p);
             }
+            show();
             for (let i = 0; i < runs.length; i++) {
                 let img;
                 try { img = await runs[i]; }
                 catch (e) { failed = failed || e; continue; }
+                say({ text: n > 1 ? `Laying in the result (${i + 1} of ${n})` : "Laying in the result", share: null, value: null, max: null, stop: null });
                 const placed = await postJson("/imageviewer/paint/generate_place", { job: prep.job, image: img, n: i });
                 ops.push(...placed.ops);
             }
         } catch (e) { failed = failed || e; }
         rec.genBusy = Math.max(0, (rec.genBusy || 1) - 1);
-        if (!ops.length) { notice("error", prep.label + " did not work", String((failed && failed.message) || failed || "no picture came back")); return; }
+        const why = String((failed && failed.message) || failed || "no picture came back");
+        if (!ops.length) {
+            if (stopped) { over(false, "Stopped"); return; }
+            notice("error", prep.label + " did not work", why);
+            over(false, why);
+            return;
+        }
         if (!rec.editor || !rec.editor.doc) return;           // the tab was closed meanwhile
-        if (failed) notice("warn", "Not every variation came back", String(failed.message || failed));
-        await this._paintApplyOps(rec, ops, prep.label);
+        if (failed && !stopped) notice("warn", "Not every variation came back", why);
+        const ok = await this._paintApplyOps(rec, ops, prep.label);
+        const made = ops.filter((o) => o.op === "add_layer").length;
+        over(ok, ok ? (made > 1 ? `Done: ${made} new layers` : made ? "Done: a new layer" : "Done") : "The result could not be laid in");
     },
 
     /** One API graph into ComfyUI's queue: its prompt id. */
@@ -816,9 +868,11 @@ export const PaintPanelMixin = {
     },
 
     /** The first picture of the output node of prompt *id*, when it has run: { filename, subfolder, type }. */
-    _paintWait(id, outNode) {
+    _paintWait(id, outNode, tell = {}) {
         return new Promise((resolve, reject) => {
             let over = false, timer = null;
+            let running = false;     // started: an interrupt then hits this prompt, not somebody else's
+            const on = (k, ...v) => { if (k !== "stop") running = true; try { if (tell[k]) tell[k](...v); } catch (_) { /* only the bar */ } };
             const pick = (out) => {
                 const im = out && out.images && out.images[0];
                 return im && im.filename ? { filename: im.filename, subfolder: im.subfolder || "", type: im.type || "output" } : null;
@@ -852,8 +906,21 @@ export const PaintPanelMixin = {
                 ["execution_error", (e) => { const d = e.detail || {}; if (d.prompt_id === id) end(reject, new Error(d.exception_message || "the workflow failed")); }],
                 ["execution_interrupted", (e) => { const d = e.detail || {}; if (d.prompt_id === id) end(reject, new Error("stopped")); }],
                 ["execution_success", (e) => { const d = e.detail || {}; if (d.prompt_id === id) fromHistory(); }],
+                // For the bar: when it starts, which node runs, how far a sampler is.
+                ["execution_start", (e) => { const d = e.detail || {}; if (d.prompt_id === id) on("start"); }],
+                ["executing", (e) => { const d = e.detail || {}; const pid = d.prompt_id, node = d.node ?? d.display_node;
+                                       if (pid === id && node != null) on("node", String(node)); }],
+                ["progress", (e) => { const d = e.detail || {}; if (d.prompt_id === id) on("progress", Number(d.value) || 0, Number(d.max) || 0, d.node != null ? String(d.node) : null); }],
             ];
             for (const [n, f] of hooks) api.addEventListener(n, f);
+            // Stop: out of the queue when it has not started, else interrupted (only this prompt, where ComfyUI knows how).
+            on("stop", async () => {
+                try { await api.fetchApi("/queue", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ delete: [id] }) }); } catch (_) { /* gone already */ }
+                if (running && !over) {
+                    try { await api.fetchApi("/interrupt", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt_id: id }) }); } catch (_) { /* nothing running */ }
+                }
+                end(reject, new Error("stopped"));
+            });
             timer = setInterval(fromHistory, 5000);     // a message missed (the socket reconnected): ComfyUI's history knows
         });
     },

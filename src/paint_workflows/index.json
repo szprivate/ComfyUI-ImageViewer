@@ -70,6 +70,27 @@
   "from": "api_openai_image_1_inpaint"
  },
  {
+  "id": "gpt_image_25_inpaint",
+  "label": "GPT Image 2.5 inpaint (API)",
+  "file": "gpt_image_25_inpaint.json",
+  "api": true,
+  "actions": [
+   "fill",
+   "remove",
+   "extend"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 1536
+  },
+  "prompts": {
+   "remove": "Remove the selected object and fill its place so that it looks as if it was never there. Keep the rest as it is.",
+   "extend": "Continue the picture into the empty border seamlessly: the same scene, light and style."
+  },
+  "from": "api_openai_gpt_image_25_flare_image_edit (with its mask input)"
+ },
+ {
   "id": "flux_kontext_edit",
   "label": "FLUX.1 Kontext dev (local)",
   "file": "flux_kontext_edit.json",
@@ -117,6 +138,103 @@
    "aspect_ratio"
   ],
   "from": "api_i2i_imageEdit_nanoBanana2"
+ },
+ {
+  "id": "qwen3_edit",
+  "label": "Qwen Image 3 Edit (API)",
+  "file": "qwen3_edit.json",
+  "api": true,
+  "actions": [
+   "edit"
+  ],
+  "size": {
+   "mp": 2.0,
+   "mult": 16,
+   "max": 2560,
+   "min": 512
+  },
+  "from": "api_qwen3_image_edit"
+ },
+ {
+  "id": "qwen2511_edit",
+  "label": "Qwen Image Edit 2511 (local)",
+  "file": "qwen2511_edit.json",
+  "api": false,
+  "actions": [
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "from": "image_qwen_image_edit_2511"
+ },
+ {
+  "id": "qwen2511_lightning_edit",
+  "label": "Qwen Image Edit 2511, 4-step Lightning (local)",
+  "file": "qwen2511_lightning_edit.json",
+  "api": false,
+  "actions": [
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "from": "image_qwen_image_edit_2511 (Lightning LoRA switched on)"
+ },
+ {
+  "id": "seedream5_edit",
+  "label": "Seedream 5.0 Pro (API)",
+  "file": "seedream5_edit.json",
+  "api": true,
+  "actions": [
+   "edit"
+  ],
+  "size": {
+   "mp": 4.0,
+   "mult": 16,
+   "max": 4096,
+   "min": 1024
+  },
+  "dims": [
+   "2",
+   "model.width",
+   "model.height"
+  ],
+  "from": "api_bytedance_seedream_5_0_pro_image_edit"
+ },
+ {
+  "id": "nano_banana_pro_edit",
+  "label": "Nano Banana Pro (API)",
+  "file": "nano_banana_pro_edit.json",
+  "api": true,
+  "actions": [
+   "edit"
+  ],
+  "size": {
+   "mp": 4.0,
+   "mult": 8,
+   "max": 4096
+  },
+  "from": "api_nano_banana_pro"
+ },
+ {
+  "id": "nano_banana21_edit",
+  "label": "Nano Banana 2.1 (API)",
+  "file": "nano_banana21_edit.json",
+  "api": true,
+  "actions": [
+   "edit"
+  ],
+  "size": {
+   "mp": 4.0,
+   "mult": 8,
+   "max": 4096
+  },
+  "from": "api_nano_banana_2_1_image_edit"
  },
  {
   "id": "rmbg2",

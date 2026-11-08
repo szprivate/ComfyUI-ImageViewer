@@ -1,0 +1,45 @@
+{
+ "1": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "paint/in.png"
+  },
+  "_meta": {
+   "title": "paint:image"
+  }
+ },
+ "2": {
+  "class_type": "ByteDanceSeedreamNodeV3",
+  "inputs": {
+   "prompt": "",
+   "model": "seedream 5.0 pro",
+   "model.size_preset": "Custom",
+   "model.width": 2048,
+   "model.height": 2048,
+   "model.images.image_1": [
+    "1",
+    0
+   ],
+   "model.prompt_optimization": "standard",
+   "model.seed": 0,
+   "model.watermark": false,
+   "model.thinking": true
+  },
+  "_meta": {
+   "title": "paint:prompt"
+  }
+ },
+ "3": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "paint/generate",
+   "images": [
+    "2",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "paint:output"
+  }
+ }
+}

@@ -153,12 +153,13 @@ The **Generate** menu and the **Generate** panel. **Fill from the surroundings**
 - the part around the selection is cut out (with some room around it), scaled to the size the model works at, and queued in ComfyUI with a new seed each time;
 - the result comes back as a **new layer** at that place, masked to the selection, as one undo step (Remove background gives the layer a mask, Select subject makes the selection);
 - **Variations** (1 to 4) makes that many layers;
-- if a model the workflow needs is not on the machine, it says which and runs nothing.
+- if a model the workflow needs is not on the machine, it says which and runs nothing. A model is found by its file name in any of ComfyUI's model folders and their subfolders, extra model paths included (`flux/flux1-fill-dev.safetensors` counts);
+- the button you pressed shows a spinner while it runs, and a bar above the status line says what is happening: getting the picture ready, waiting in ComfyUI's queue, which node runs and how far a sampler is, laying in the result, and then **Done** or what went wrong. **Stop** on the bar takes the run out of the queue, or interrupts it.
 
 | Action | Comes with |
 |---|---|
-| Generative fill, Remove object, Extend | FLUX.1 Fill dev (also GPT Image 2 inpaint; OneReward removal for Remove) |
-| Edit | FLUX.1 Kontext (also GPT Image 2.5, Nano Banana 2) |
+| Generative fill, Remove object, Extend | FLUX.1 Fill dev (also GPT Image 2 and 2.5 inpaint; OneReward removal for Remove) |
+| Edit | FLUX.1 Kontext (also Qwen Image Edit 2511 local, plain or 4-step Lightning; and through the API: Qwen Image 3, GPT Image 2.5, Seedream 5.0 Pro, Nano Banana 2, Nano Banana Pro, Nano Banana 2.1) |
 | Remove background, Select subject | RMBG 2.0 |
 | Upscale | an upscale model (also Magnific) |
 
