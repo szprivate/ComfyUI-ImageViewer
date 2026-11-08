@@ -900,6 +900,24 @@ export function jitter(rand, radius, o) {
     return { dx, dy, k, da };
 }
 
+/**
+ * The brush tip's Direction: which way the stroke is going, so a tip can point along it. `f` is
+ * { ax, ay (where the way was last read), vx, vy (the way, smoothed; null before the first), dir (radians, null
+ * before) }; the pointer at (x, y). The way is read again only once the pointer is `step` away from where it was last
+ * read (a hand's wobble of a pixel does not turn the tip), and each new reading is blended half and half with the way
+ * before, so a curve turns the tip smoothly. Returns a new f.
+ */
+export function directionTurn(f, x, y, step = 2) {
+    const dx = x - f.ax, dy = y - f.ay, d = Math.hypot(dx, dy);
+    if (!(d >= step)) return f;
+    let vx = dx / d, vy = dy / d;
+    if (f.vx != null) {
+        const mx = f.vx + vx, my = f.vy + vy, m = Math.hypot(mx, my);
+        if (m > 1e-6) { vx = mx / m; vy = my / m; }               // a turn back on itself takes the new way
+    }
+    return { ax: x, ay: y, vx, vy, dir: Math.atan2(vy, vx) };
+}
+
 /** A small seeded random generator (mulberry32). */
 export function seeded(seed) {
     let a = (seed >>> 0) || 1;
@@ -1006,7 +1024,14 @@ export function stamp(st, cx, cy, radius, hard, flow = 1, angle = 0) {
                 if (a <= 0) continue;
             }
             const i = y * lw + x;
-            if (a <= st.cover[i]) continue;
+            if (st.build) {
+                // Flow: each dab lays a share of what is still missing, so the dabs of one stroke build up to the
+                // opacity (going over the same place again in the stroke makes it darker); a dab is never weaker
+                // than what the stroke already laid there.
+                const nc = st.cover[i] + a * st.build * (1 - st.cover[i]);
+                if (nc <= st.cover[i] + 1e-6) continue;
+                a = nc;
+            } else if (a <= st.cover[i]) continue;
             st.cover[i] = a;
             let t = a * st.opacity;
             const o = i * 4;

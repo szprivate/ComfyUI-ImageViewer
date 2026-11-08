@@ -398,7 +398,14 @@ export const TipsMixin = {
             if (!(cur && cur.builtin)) B("Delete", "Forget this tip", () => this.tipDelete(b.tip), "tip-del");
         }
         ts.append(btns);
-        if (b.tip) this._slider(ts, "Angle °", b.angle || 0, -180, 180, 1, (v) => { b.angle = v; sync(); });
+        if (b.tip) {
+            const fl = this.el("label", "paint-check tip-direction", { title: "The tip turns to point the way the stroke is going; Angle then turns it further from that way" });
+            const c = this.el("input", "", { type: "checkbox", checked: !!b.direction });
+            c.addEventListener("change", () => { b.direction = c.checked; sync(); });
+            fl.append(c, this.el("span", "", { text: "Direction: follow the stroke" }));
+            ts.append(fl);
+            this._slider(ts, "Angle °", b.angle || 0, -180, 180, 1, (v) => { b.angle = v; sync(); });
+        }
         this._slider(ts, "Scatter %", b.scatter || 0, 0, 500, 1, (v) => { b.scatter = v; sync(); });
         this._slider(ts, "Size jitter %", b.sizeJitter || 0, 0, 100, 1, (v) => { b.sizeJitter = v; sync(); });
         this._slider(ts, "Angle jitter %", b.angleJitter || 0, 0, 100, 1, (v) => { b.angleJitter = v; sync(); });
