@@ -121,14 +121,14 @@ export const SmartMixin = {
 
     /** Pick which adjustment to add as a smart filter. */
     smartAdjustDialog() {
-        const ts = D.ADJUST_TYPES.filter((t) => t !== "curves");
+        const ts = D.ADJUST_TYPES;
         this.dialog("Smart filter", [["type", "Adjustment", ts[0], ts]], (v) => this.addSmartFilter(v.type),
                     "Kept as a setting on the layer: change it, switch it off or take it away later in Properties.");
     },
 
     _smartMenu() {
         const L = this.active(), ok = !!L && L.kind === "pixel";
-        return [...smartTypes().filter((t) => t !== "curves").map((t) => ({ label: `Smart ${smartLabel(t)}`, disabled: !ok, run: () => this.addSmartFilter(t) }))];
+        return [...smartTypes().map((t) => ({ label: `Smart ${smartLabel(t)}`, disabled: !ok, run: () => this.addSmartFilter(t) }))];
     },
 
     /** The Properties section: each filter's switch, ▲ ▼ ×, its numbers (live while dragged, one step when let go). */
@@ -151,6 +151,25 @@ export const SmartMixin = {
             }
             s.append(head);
             if (!f.on) return;
+            if (D.ADJUST_TYPES.includes(f.type) && this._adjustEditor) {
+                // An adjustment: the same editor as an adjustment layer's, the histogram of the layer's own pixels.
+                let hk = null, hv = null;
+                const hist = () => {
+                    const b = this.pix.get(L.id);
+                    const key = b ? `${this.bufVer.get(b) || 0}` : "";
+                    if (hk !== b || hv?.key !== key) { hk = b; hv = { key, h: b ? this._adjHistOf(b) : null }; }
+                    return hv.h;
+                };
+                const cur = () => { const X = this.active(); return X && X.filters && X.filters[i] ? X.filters[i].params : f.params; };
+                s.append(this._adjustEditor(f.type, cur, (patch) => {
+                    this.liveBegin();
+                    const X = this.active();
+                    if (!X || !X.filters || !X.filters[i]) return;
+                    X.filters[i] = cleanSmart({ ...X.filters[i], params: { ...X.filters[i].params, ...patch } });
+                    this.requestRedraw();
+                }, () => this.liveEnd("Smart filter"), hist));
+                return;
+            }
             for (const [k, label, lo, hi, step] of smartFields(f.type)) {
                 const v = Array.isArray(f.params[k]) ? f.params[k][0] : f.params[k];
                 this._slider(s, label, v, lo, hi, step, (x) => {

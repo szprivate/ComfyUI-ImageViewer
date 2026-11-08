@@ -140,7 +140,7 @@ ADJUST_TYPES = ("levels", "curves", "brightness_contrast", "exposure", "hue_satu
                 "threshold")
 
 ADJUST_DEFAULTS = {
-    "levels": {"in_black": 0, "in_white": 255, "gamma": 1.0, "out_black": 0, "out_white": 255},
+    "levels": {"in_black": 0, "in_white": 255, "gamma": 1.0, "out_black": 0, "out_white": 255, "r": None, "g": None, "b": None},
     "curves": {"rgb": [[0, 0], [255, 255]], "r": None, "g": None, "b": None},
     "brightness_contrast": {"brightness": 0, "contrast": 0},
     "exposure": {"exposure": 0.0, "offset": 0.0, "gamma": 1.0},
@@ -201,10 +201,16 @@ def clean_adjust(kind, params):
     p = params if isinstance(params, dict) else {}
     d = ADJUST_DEFAULTS[kind]
     if kind == "levels":
-        ib = _num(p.get("in_black"), d["in_black"], 0, 254)
-        iw = _num(p.get("in_white"), d["in_white"], ib + 1, 255)
-        return {"in_black": ib, "in_white": iw, "gamma": _num(p.get("gamma"), 1.0, 0.1, 9.99),
-                "out_black": _num(p.get("out_black"), 0, 0, 255), "out_white": _num(p.get("out_white"), 255, 0, 255)}
+        # The RGB levels, then (each None, or levels of its own) Red, Green and Blue after them.
+        def lv(q):
+            ib = _num(q.get("in_black"), 0, 0, 254)
+            iw = _num(q.get("in_white"), 255, ib + 1, 255)
+            return {"in_black": ib, "in_white": iw, "gamma": _num(q.get("gamma"), 1.0, 0.1, 9.99),
+                    "out_black": _num(q.get("out_black"), 0, 0, 255), "out_white": _num(q.get("out_white"), 255, 0, 255)}
+        out = lv(p)
+        for ch in ("r", "g", "b"):
+            out[ch] = lv(p[ch]) if isinstance(p.get(ch), dict) else None
+        return out
     if kind == "curves":
         out = {"rgb": _points(p.get("rgb")) or [[0, 0], [255, 255]]}
         for ch in ("r", "g", "b"):
@@ -279,10 +285,17 @@ def adjust_luts(kind, params):
     p = clean_adjust(kind, params)
     vs = [i / 255.0 for i in range(256)]
     if kind == "levels":
-        ib, iw, ob, ow = p["in_black"] / 255, p["in_white"] / 255, p["out_black"] / 255, p["out_white"] / 255
-        g = 1 / p["gamma"]
-        one = [ob + (ow - ob) * (min(1.0, max(0.0, (v - ib) / (iw - ib))) ** g) for v in vs]
-        return [one, one, one]
+        def lv(q):
+            ib, iw, ob, ow = q["in_black"] / 255, q["in_white"] / 255, q["out_black"] / 255, q["out_white"] / 255
+            g = 1 / q["gamma"]
+            return lambda v: ob + (ow - ob) * (min(1.0, max(0.0, (v - ib) / (iw - ib))) ** g)
+        master = lv(p)
+        mv = [master(v) for v in vs]
+        out = []
+        for ch in ("r", "g", "b"):
+            own = lv(p[ch]) if p[ch] else None
+            out.append([own(m) for m in mv] if own else mv)
+        return out
     if kind == "curves":
         master = _monotone(p["rgb"])
         out = []

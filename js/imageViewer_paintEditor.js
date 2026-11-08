@@ -27,6 +27,7 @@ import { SmartMixin } from "./imageViewer_paintSmart.js";
 import { LiquifyMixin } from "./imageViewer_paintLiquify.js";
 import { PreviewMixin } from "./imageViewer_paintPreview.js";
 import { PathToolsMixin, PATH_TOOLS, TOOL_GROUPS, toolGroup } from "./imageViewer_paintPathTools.js";
+import { AdjustUIMixin, ADJUST_CSS } from "./imageViewer_paintAdjustUI.js";
 
 /** A dialog slider's step for the range a..b: about a thousand steps, a whole number where the range is wide. */
 export function dialogStep(a, b) {
@@ -297,7 +298,7 @@ class PaintEditor {
 
     _build() {
         const style = this.el("style");
-        style.textContent = STYLE;
+        style.textContent = STYLE + ADJUST_CSS;
         this.box = this.el("div", "paint-root");
         this.box.append(style);
         // The bar: files, the menus, undo.
@@ -2886,10 +2887,9 @@ class PaintEditor {
                 fd("Sharpen", [["radius", "Radius (px)", 2, 0.1, 100], ["amount", "Amount", 1, 0, 10]], (px, w, h, v) => D.sharpenPixels(px, w, h, v.radius, v.amount)),
                 own("unsharp"), own("high_pass"), "-",
                 own("median"), own("noise"), own("pixelate"),
-                "-", ...D.ADJUST_TYPES.filter((t) => t !== "curves").map((t) => (D.ADJUST_FIELDS[t].length
-                    ? fd(D.ADJUST_LABELS[t] + " (into the pixels)", D.ADJUST_FIELDS[t].map(([k, l, a, b]) => [k, l, triple1(D.ADJUST_DEFAULTS[t][k]), a, b]),
-                         (px, w, h, v) => D.adjustPixels(px, w, h, t, expandTriples(t, v)))
-                    : { label: D.ADJUST_LABELS[t] + " (into the pixels)", disabled: off, run: () => this.filter(t, {}) }))];
+                "-", ...D.ADJUST_TYPES.map((t) => (t === "invert"
+                    ? { label: D.ADJUST_LABELS[t] + " (into the pixels)", disabled: off, run: () => this.filter(t, {}) }
+                    : { label: D.ADJUST_LABELS[t] + " (into the pixels)…", disabled: off, run: () => this.adjustPixelsDialog(t) }))];
     }
 
     _generateMenu() {
@@ -2944,14 +2944,17 @@ class PaintEditor {
             box.append(row);
         }
         if (note) box.append(this.el("div", "note", { text: note }));
-        let prev = null;
+        let prev = null, beforeBtn = null;
         if (opts.preview) {
             const row = this.el("div", "paint-field");
             prev = this.el("input", "", { type: "checkbox", checked: true });
-            row.append(this.el("label", "", { text: "Preview" }), prev);
+            // Held: the picture without the filter (the preview comes back when let go).
+            beforeBtn = this.el("button", "paint-btn", { type: "button", text: "Before", title: "Hold to see the picture without it" });
+            row.append(this.el("label", "", { text: "Preview" }), prev, beforeBtn);
             box.append(row);
         }
         const go = this.el("div", "go");
+        const resetBtn = opts.preview ? this.el("button", "paint-btn", { text: "Reset", type: "button", title: "Every number back to where it started" }) : null;
         const cancel = this.el("button", "paint-btn", { text: "Cancel", type: "button" });
         const ok = this.el("button", "paint-btn on", { text: "OK", type: "button" });
         const read = () => {
@@ -2970,9 +2973,19 @@ class PaintEditor {
             for (const inp of [...Object.values(inputs), ...(prev ? [prev] : [])]) { inp.addEventListener("input", tell); inp.addEventListener("change", tell); }
             setTimeout(tell, 0);
         }
+        if (beforeBtn && opts.onInput) {
+            beforeBtn.addEventListener("pointerdown", () => opts.onInput(read(), false));
+            for (const ev of ["pointerup", "pointerleave", "pointercancel"]) beforeBtn.addEventListener(ev, () => opts.onInput(read(), prev.checked));
+        }
+        if (resetBtn) {
+            resetBtn.addEventListener("click", () => {
+                for (const [k, , def] of fields) { inputs[k].value = def; inputs[k].dispatchEvent(new Event("input")); }
+            });
+        }
         cancel.addEventListener("click", () => close());
         ok.addEventListener("click", done);
         box.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); done(); } else if (e.key === "Escape") close(); });
+        if (resetBtn) go.append(resetBtn);
         go.append(cancel, ok);
         box.append(go);
         shade.append(box);
@@ -3595,22 +3608,7 @@ class PaintEditor {
             const t = L.adjust.type;
             const live = (patch) => { this.liveBegin(); L.adjust.params = D.cleanAdjust(t, { ...L.adjust.params, ...patch }); this.requestRedraw(); };
             const end = () => this.liveEnd(D.ADJUST_LABELS[t]);
-            if (t === "curves") s.append(this._curveEditor(L, live, end));
-            for (const [k, label, a, b, step] of D.ADJUST_FIELDS[t]) {
-                const v = L.adjust.params[k];
-                if (Array.isArray(v)) {
-                    // Grade: one slider for all three, and a field per channel.
-                    this._slider(s, label, v[0], a, b, step, (x) => live({ [k]: [x, x, x] }), end);
-                    const trio = ["R", "G", "B"].map((c, i) => {
-                        const n = this.el("input", "", { type: "number", min: a, max: b, step, value: v[i], title: c });
-                        n.addEventListener("change", () => { const arr = [...L.adjust.params[k]]; arr[i] = D.num(n.value, v[i], a, b); live({ [k]: arr }); end(); });
-                        n.addEventListener("keydown", (e) => e.stopPropagation());
-                        return n;
-                    });
-                    this._field(s, "  R G B", trio);
-                } else this._slider(s, label, v, a, b, step, (x) => live({ [k]: x }), end);
-            }
-            if (!D.ADJUST_FIELDS[t].length && t !== "curves") s.append(this.el("div", "paint-note", { text: "Nothing to set: it inverts what is under it." }));
+            s.append(this._adjustEditor(t, () => L.adjust.params, live, end, () => this._adjHistUnder(L)));
             s.append(this.el("div", "paint-note", { text: L.clip ? "Clipped: it changes only the layer it is clipped to (Alt+click in Layers releases it)."
                 : "It changes every layer under it. Paint its mask (or select first) to limit it, or Alt+click it in Layers to change only the layer under it." }));
         } else if (L.text) {
@@ -3644,60 +3642,6 @@ class PaintEditor {
             s.append(this.el("div", "paint-note", { text: `${L.w} x ${L.h} at ${L.x}, ${L.y}` + (L.mask ? (L.mask.enabled ? " · mask on" : " · mask off") : "") }));
         }
         return s;
-    }
-
-    _curveEditor(L, live, end) {
-        const wrap = this.el("div");
-        const ch = this.el("select");
-        for (const [v, t] of [["rgb", "RGB"], ["r", "Red"], ["g", "Green"], ["b", "Blue"]]) ch.append(this.el("option", "", { value: v, text: t }));
-        ch.value = this._curveCh || "rgb";
-        ch.addEventListener("change", () => { this._curveCh = ch.value; draw(); });
-        const cv = this.el("canvas", "paint-curve", { width: 256, height: 256, title: "Drag a point; click to add one; right-click takes one away" });
-        const pts = () => L.adjust.params[ch.value] || [[0, 0], [255, 255]];
-        const draw = () => {
-            const g = cv.getContext("2d");
-            g.fillStyle = "#111"; g.fillRect(0, 0, 256, 256);
-            g.strokeStyle = "#2a2a30"; g.lineWidth = 1;
-            for (let i = 1; i < 4; i++) { g.beginPath(); g.moveTo(i * 64 + 0.5, 0); g.lineTo(i * 64 + 0.5, 256); g.moveTo(0, i * 64 + 0.5); g.lineTo(256, i * 64 + 0.5); g.stroke(); }
-            const lut = D.curveLut(pts());
-            g.strokeStyle = { rgb: "#ddd", r: "#f55", g: "#5d5", b: "#58f" }[ch.value]; g.lineWidth = 2;
-            g.beginPath();
-            for (let x = 0; x < 256; x++) { const y = 255 - lut[x] * 255; if (x) g.lineTo(x, y); else g.moveTo(x, y); }
-            g.stroke();
-            g.fillStyle = "#f60";
-            for (const [x, y] of pts()) { g.beginPath(); g.arc(x, 255 - y, 4, 0, Math.PI * 2); g.fill(); }
-        };
-        let dragI = -1;
-        const at = (e) => { const r = cv.getBoundingClientRect(); return [clamp((e.clientX - r.left) * 256 / r.width, 0, 255), clamp(255 - (e.clientY - r.top) * 256 / r.height, 0, 255)]; };
-        cv.addEventListener("pointerdown", (e) => {
-            e.stopPropagation();
-            const [x, y] = at(e);
-            const list = pts().map((p) => p.slice());
-            let i = list.findIndex(([px, py]) => Math.hypot(px - x, py - y) < 10);
-            if (e.button === 2) {
-                if (i > 0 && i < list.length - 1) { list.splice(i, 1); live({ [ch.value]: list }); end(); draw(); }
-                return;
-            }
-            if (i < 0) { list.push([x, y]); list.sort((a, b) => a[0] - b[0]); i = list.findIndex((p) => p[0] === x && p[1] === y); live({ [ch.value]: list }); }
-            dragI = i;
-            cv.setPointerCapture(e.pointerId);
-            draw();
-        });
-        cv.addEventListener("pointermove", (e) => {
-            if (dragI < 0) return;
-            const [x, y] = at(e);
-            const list = pts().map((p) => p.slice());
-            const lo = dragI > 0 ? list[dragI - 1][0] + 1 : 0, hi = dragI < list.length - 1 ? list[dragI + 1][0] - 1 : 255;
-            list[dragI] = [dragI === 0 ? 0 : dragI === list.length - 1 ? 255 : clamp(x, lo, hi), y];
-            if (dragI === 0) list[0][0] = Math.min(list[0][0], hi);
-            live({ [ch.value]: list });
-            draw();
-        });
-        cv.addEventListener("pointerup", () => { if (dragI >= 0) { dragI = -1; end(); } });
-        cv.addEventListener("contextmenu", (e) => e.preventDefault());
-        wrap.append(this._field(wrap, "Channel", ch), cv);
-        draw();
-        return wrap;
     }
 
     _generateSection() {
@@ -3793,19 +3737,13 @@ class PaintEditor {
     }
 }
 
-Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin, TipsMixin, DrawMixin, LayerFxMixin, SelectGuidesMixin, SmartMixin, LiquifyMixin, PathToolsMixin, PreviewMixin);
+Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin, TipsMixin, DrawMixin, LayerFxMixin, SelectGuidesMixin, SmartMixin, LiquifyMixin, PathToolsMixin, PreviewMixin, AdjustUIMixin);
 
 // Lucide's rotate-cw, white on black, as the pointer outside a transform's box.
 const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><g stroke="#000" stroke-width="4"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g><g stroke="#fff" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g></svg>')}") 12 12, alias`;
 
 const ANCHOR = { top_left: [0, 0], top: [0.5, 0], top_right: [1, 0], left: [0, 0.5], center: [0.5, 0.5], right: [1, 0.5],
                  bottom_left: [0, 1], bottom: [0.5, 1], bottom_right: [1, 1] };
-const triple1 = (v) => (Array.isArray(v) ? v[0] : v);
-function expandTriples(t, v) {
-    const out = { ...v };
-    for (const [k] of D.ADJUST_FIELDS[t]) if (Array.isArray(D.ADJUST_DEFAULTS[t][k])) out[k] = [v[k], v[k], v[k]];
-    return out;
-}
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]); }
 
 function canvasOf(doc, w, h) {
