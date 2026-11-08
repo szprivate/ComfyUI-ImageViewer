@@ -135,6 +135,39 @@ class PaintParity(unittest.TestCase):
         for name, d in cases.items():
             self.same(P.composite(d), got[name]["composite"], (d.h, d.w, 4), name)
 
+    def test_clipping_masks(self):
+        """Layers clipped to a pixel layer and to a group: every blend, opacity, masks, an adjustment clipped."""
+        cases = {}
+        for k, (base_blend, clip_blend) in enumerate([("normal", "normal"), ("multiply", "screen"), ("screen", "overlay"),
+                                                      ("normal", "difference"), ("overlay", "soft_light")]):
+            d = rnd_doc(500 + k, [base_blend, clip_blend, "normal", "hard_light"])
+            ids = [L["id"] for L in d.layers]
+            d.layer(ids[2])["clip"] = True                    # l1 onto l0
+            d.layer(ids[3])["clip"] = True                    # and l2
+            d.layer(ids[3])["opacity"] = 0.6
+            A = d.add_adjust_layer("hue_saturation", {"hue": 90, "saturation": 30, "lightness": 0}, index=4)
+            A["clip"] = True
+            d.meta = P.clean_meta(d.meta)
+            cases[f"px_{k}"] = d
+        # A group as the base; a hidden clipped layer; a clipped layer with nothing under it.
+        g = rnd_doc(600, ["normal", "multiply", "screen"])
+        ids = [L["id"] for L in g.layers]
+        G = g.add_group("G", blend="pass_through", index=3, opacity=0.8)
+        g.layer(ids[1])["parent"] = G["id"]
+        g.layer(ids[2])["parent"] = G["id"]
+        g.layer(ids[3])["clip"] = True
+        g.meta = P.clean_meta(g.meta)
+        cases["group_base"] = g
+        h = rnd_doc(601, ["normal", "multiply"])
+        h.layers[0]["clip"] = True
+        h.layers[2]["clip"] = True
+        h.layers[2]["visible"] = False
+        h.meta = P.clean_meta(h.meta)
+        cases["odd"] = h
+        got = self.run_node(cases)
+        for name, d in cases.items():
+            self.same(P.composite(d), got[name]["composite"], (d.h, d.w, 4), name)
+
     def test_filters_and_selection_shapes(self):
         d = rnd_doc(7, [])
         L = d.layers[0]

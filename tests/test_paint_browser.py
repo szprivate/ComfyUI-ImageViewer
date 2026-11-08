@@ -565,6 +565,53 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(names(), ["Background"])
         self.assertEqual(self.errors, [])
 
+    def test_clipping_mask_and_a_filters_live_preview(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        # A small "base" and a red layer over all of it; Alt+click on the red one clips it to the base.
+        pg.evaluate(f"""() => {{ const e = {ed};
+            const b = new Uint8ClampedArray(40 * 30 * 4); for (let i = 0; i < 40 * 30; i++) b.set([0, 255, 0, 255], i * 4);
+            e.addPixelLayer(b, 40, 30, 'base', 10, 10);
+            const r = new Uint8ClampedArray(200 * 120 * 4); for (let i = 0; i < 200 * 120; i++) r.set([255, 0, 0, 255], i * 4);
+            e.addPixelLayer(r, 200, 120, 'red', 0, 0); }}""")
+        comp = lambda x, y: pg.evaluate(f"() => [...{ed}.comp.slice(({y} * 200 + {x}) * 4, ({y} * 200 + {x}) * 4 + 4)]")
+        self.assertEqual(comp(150, 100), [255, 0, 0, 255])
+        r = pg.evaluate(f"""() => {{ const row = [...{ed}.layerList.querySelectorAll('.paint-row')].find((x) => x.querySelector('.nm').textContent === 'red');
+            row.scrollIntoView({{ block: 'nearest' }}); const b = row.getBoundingClientRect(); return [b.left + b.width * 0.6, b.top + b.height / 2]; }}""")
+        pg.keyboard.down("Alt"); pg.mouse.click(*r); pg.keyboard.up("Alt")
+        self.assertTrue(pg.evaluate(f"() => !!{ed}.doc.layers.find((l) => l.name === 'red').clip"))
+        self.assertEqual(comp(20, 20), [255, 0, 0, 255])          # on the base
+        self.assertEqual(comp(150, 100)[:3], [0, 0, 160])         # off it: the photo
+        self.assertTrue(pg.evaluate(f"() => !!{ed}.layerList.querySelector('.paint-row .clipmark') && !!{ed}.layerList.querySelector('.nm.base')"))
+        # Ctrl+Alt+G releases it.
+        pg.mouse.move(r[0], r[1])
+        pg.keyboard.press("Control+Alt+g")
+        self.assertEqual(comp(150, 100), [255, 0, 0, 255])
+        # A filter's preview shows on the picture without an undo step; Cancel puts it back; OK is one step.
+        pg.evaluate(f"() => {ed}.deleteLayer({ed}.doc.layers.find((l) => l.name === 'red').id)")
+        pg.evaluate(f"() => {{ const e = {ed}; e.setActive(e.doc.layers[0].id); }}")
+        n0 = pg.evaluate(f"() => {ed}.undoStack.length")
+        before = comp(50, 30)
+        pg.evaluate(f"() => {ed}._filterMenu().find((m) => m && m.label && m.label.startsWith('Pixelate')).run()")
+        pg.wait_for_function(f"() => !!{ed}.box.querySelector('.paint-dlg')", timeout=3000)
+        pg.evaluate(f"() => {{ const i = {ed}.box.querySelector('.paint-dlg input[type=number]'); i.value = 40; i.dispatchEvent(new Event('input')); }}")
+        pg.wait_for_timeout(400)
+        self.assertNotEqual(comp(50, 30), before)
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.length"), n0)
+        pg.evaluate(f"() => [...{ed}.box.querySelectorAll('.paint-dlg button')].find((b) => b.textContent === 'Cancel').click()")
+        pg.wait_for_timeout(100)
+        self.assertEqual(comp(50, 30), before)
+        pg.evaluate(f"() => {ed}._filterMenu().find((m) => m && m.label && m.label.startsWith('Pixelate')).run()")
+        pg.wait_for_function(f"() => !!{ed}.box.querySelector('.paint-dlg')", timeout=3000)
+        pg.evaluate(f"() => [...{ed}.box.querySelectorAll('.paint-dlg button')].find((b) => b.textContent === 'OK').click()")
+        pg.wait_for_timeout(100)
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Pixelate (mosaic)")
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.length"), n0 + 1)
+        pg.keyboard.press("Control+z")
+        self.assertEqual(comp(50, 30), before)
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

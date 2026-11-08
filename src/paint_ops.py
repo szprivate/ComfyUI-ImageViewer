@@ -310,6 +310,13 @@ def _set_layer(doc, op, _read, _fonts):
         merged = {**L["adjust"]["params"], **(op["params"] if isinstance(op["params"], dict) else {})}
         L["adjust"]["params"] = M.clean_adjust(L["adjust"]["type"], merged)
         changed.append("its numbers")
+    if "clip" in op:
+        if L["kind"] == "group":
+            raise OpError("a group is not clipped to the layer under it here (clip its layers, or clip layers to it)")
+        L["clip"] = bool(op["clip"])
+        if not L["clip"]:
+            L.pop("clip")
+        changed.append("clipped to the layer under it" if op["clip"] else "not clipped")
     if "collapsed" in op and L["kind"] == "group":
         L["collapsed"] = bool(op["collapsed"])
         changed.append("folded" if L["collapsed"] else "opened")
@@ -317,7 +324,7 @@ def _set_layer(doc, op, _read, _fonts):
         doc.meta["active"] = L["id"]
         changed.append("made active")
     if not changed:
-        raise OpError("nothing to change (name, visible, opacity, blend, x, y, params, locked, active)")
+        raise OpError("nothing to change (name, visible, opacity, blend, x, y, params, locked, clip, collapsed, active)")
     return f"layer {L['name']!r}: " + ", ".join(changed)
 
 

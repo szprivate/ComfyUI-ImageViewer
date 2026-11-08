@@ -117,6 +117,8 @@ export function cleanLayer(L) {
                   visible: L.visible !== false, opacity: num(L.opacity, 1, 0, 1),
                   blend: BLEND_MODES.includes(L.blend) ? L.blend : "normal", locked: !!L.locked };
     if (L.parent) out.parent = String(L.parent).slice(0, 40);
+    // A clipping mask: laid only where the layer under it (its base) is. Not for a group.
+    if (L.clip && kind !== "group") out.clip = true;
     if (kind === "pixel") {
         Object.assign(out, { x: Math.trunc(num(L.x, 0)), y: Math.trunc(num(L.y, 0)),
                              w: Math.trunc(num(L.w, 0, 0, MAX_SIDE)), h: Math.trunc(num(L.h, 0, 0, MAX_SIDE)) });
@@ -495,12 +497,70 @@ function scratch(depth, n) {
 
 function layList(out, doc, list, kids, pix, maskOf, r, depth) {
     const W = doc.w, H = doc.h;
-    for (const i of list) {
-        const L = doc.layers[i];
-        if (!L.visible) continue;
+    for (let k = 0; k < list.length; k++) {
+        const L = doc.layers[list[k]];
+        // The layers clipped to this one (the next ones up with `clip`). A clipped layer with no base
+        // under it (the lowest of its level, or over an adjustment layer) is laid as it is.
+        let n = 0;
+        if (L.kind !== "adjust" && !L.clip) while (k + 1 + n < list.length && doc.layers[list[k + 1 + n]].clip) n++;
+        if (!L.visible) { k += n; continue; }
+        const clipped = [];
+        for (let j = 1; j <= n; j++) { const C = doc.layers[list[k + j]]; if (C.visible) clipped.push(C); }
+        if (clipped.length) { layClipGroup(out, doc, L, clipped, kids, pix, maskOf, r, depth); k += n; continue; }
+        k += n;
         if (L.kind === "group") layGroup(out, doc, L, kids, pix, maskOf, r, depth);
         else if (L.kind === "adjust") layAdjust(out, W, H, L, maskOf(L), r.x0, r.y0, r.x1, r.y1);
         else layPixels(out, W, H, L, pix(L), maskOf(L), r.x0, r.y0, r.x1, r.y1);
+    }
+}
+
+/**
+ * A base and the layers clipped to it (paint_io._lay_clip_group): the base laid alone (normal, full
+ * opacity, its mask), each clipped layer on it only where it is (`layClipped`: the base's alpha is kept),
+ * and that picture laid with the base's opacity and blend (a Pass Through group base: Normal).
+ */
+function layClipGroup(out, doc, B, clipped, kids, pix, maskOf, r, depth) {
+    const W = doc.w, H = doc.h;
+    if (B.opacity <= 0) return;
+    const buf = scratch(depth, W * H * 4);
+    for (let y = r.y0; y < r.y1; y++) buf.fill(0, (y * W + r.x0) * 4, (y * W + r.x1) * 4);
+    if (B.kind === "group") layGroup(buf, doc, { ...B, blend: "normal", opacity: 1 }, kids, pix, maskOf, r, depth + 1);
+    else layPixels(buf, W, H, { ...B, opacity: 1, blend: "normal" }, pix(B), maskOf(B), r.x0, r.y0, r.x1, r.y1);
+    for (const C of clipped) {
+        if (C.kind === "adjust") layAdjust(buf, W, H, C, maskOf(C), r.x0, r.y0, r.x1, r.y1);
+        else layClipped(buf, W, H, C, pix(C), maskOf(C), r.x0, r.y0, r.x1, r.y1);
+    }
+    layPixels(out, W, H, { x: 0, y: 0, w: W, h: H, opacity: B.opacity, blend: B.blend === "pass_through" ? "normal" : B.blend }, buf, null, r.x0, r.y0, r.x1, r.y1);
+}
+
+/** A clipped pixel layer over its base (paint_math.clip_over): Co = Cb + (B(Cb, Cs) - Cb) t, the alpha kept. */
+export function layClipped(out, W, H, L, px, mask, rx0 = 0, ry0 = 0, rx1 = W, ry1 = H) {
+    const op = L.opacity;
+    if (!px || op <= 0) return;
+    const lw = L.w, lh = L.h, lx = L.x, ly = L.y;
+    const x0 = Math.max(rx0, lx, 0), y0 = Math.max(ry0, ly, 0), x1 = Math.min(rx1, lx + lw, W), y1 = Math.min(ry1, ly + lh, H);
+    if (x1 <= x0 || y1 <= y0) return;
+    const mode = L.blend || "normal";
+    const m = L.mask && L.mask.enabled && mask ? L.mask : null;
+    const mfill = m ? m.fill / 255 : 1;
+    for (let y = y0; y < y1; y++) {
+        let si = ((y - ly) * lw + (x0 - lx)) * 4;
+        let oi = (y * W + x0) * 4;
+        for (let x = x0; x < x1; x++, si += 4, oi += 4) {
+            if (out[oi + 3] === 0 || px[si + 3] === 0) continue;
+            let mv = 1;
+            if (m) {
+                const mx = x - m.x, my = y - m.y;
+                mv = (mx >= 0 && my >= 0 && mx < m.w && my < m.h) ? mask[my * m.w + mx] / 255 : mfill;
+            }
+            const t = (px[si + 3] / 255) * (op * mv);
+            if (t === 0) continue;
+            for (let c = 0; c < 3; c++) {
+                const cb = out[oi + c] / 255, cs = px[si + c] / 255;
+                const b = mode === "normal" ? cs : blendFn(mode, cb, cs);
+                out[oi + c] = q8(cb + (b - cb) * t);
+            }
+        }
     }
 }
 
