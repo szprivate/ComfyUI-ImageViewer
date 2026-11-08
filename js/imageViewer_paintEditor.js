@@ -38,7 +38,8 @@ export const PAINT_KEYS = [
     ["Del", "Clear the selection on the layer"], ["Alt+Del", "Fill the selection with the colour"], ["Ctrl+J", "Duplicate the layer (the selection only, with one)"],
     ["Ctrl+E", "Merge down (several picked: merge them; a group: merge it)"], ["Ctrl+Shift+N", "New layer"],
     ["Ctrl+G / Ctrl+Shift+G", "Group the picked layers / ungroup"], ["Shift / Ctrl+click in Layers", "Pick a range / one more layer"],
-    ["Ctrl+Alt+A", "Pick every layer"], ["Ctrl+Alt+G / Alt+click in Layers", "Clip the layer to the one under it (or release it)"], ["Arrows", "Nudge the layer (Move; Shift: 10 px)"],
+    ["Ctrl+Alt+A", "Pick every layer"], ["Q", "Quick Mask: paint the selection (black takes away, white adds); Q again makes it the selection"],
+    ["Alt+click a mask's thumbnail", "See the mask on its own (again or Esc: back)"], ["Ctrl+click a thumbnail", "Its pixels (or the mask) as the selection (Ctrl+Shift: add, Ctrl+Alt: take away)"], ["Ctrl+Alt+G / Alt+click in Layers", "Clip the layer to the one under it (or release it)"], ["Arrows", "Nudge the layer (Move; Shift: 10 px)"],
     ["Enter / Esc", "Apply / cancel the crop, the transform or the text"], ["Ctrl+S / Ctrl+Shift+S", "Save / save as"],
 ];
 
@@ -79,7 +80,9 @@ const STYLE = `
   background-image: linear-gradient(45deg, #ccc 25%, transparent 25%), linear-gradient(-45deg, #ccc 25%, transparent 25%),
   linear-gradient(45deg, transparent 75%, #ccc 75%), linear-gradient(-45deg, transparent 75%, #ccc 75%);
   background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0; box-shadow: 0 0 0 1px #000, 0 4px 24px rgba(0,0,0,.5); }
-.paint-world.pixelated canvas.paint-canvas { image-rendering: pixelated; }
+.paint-world.pixelated canvas.paint-canvas, .paint-world.pixelated canvas.paint-tint { image-rendering: pixelated; }
+.paint-world canvas.paint-tint { position: absolute; left: 0; top: 0; pointer-events: none; display: none; }
+.paint-btn.quick.on { color: #f66; }
 .paint-overlay { position: absolute; left: 0; top: 0; pointer-events: none; }
 .paint-status { flex: 0 0 auto; display: flex; gap: 14px; padding: 2px 8px; background: #1d1d21; border-top: 1px solid #2b2b30; color: #999; font-size: 11px; white-space: nowrap; overflow: hidden; }
 .paint-status b { color: #f60; font-weight: 600; }
@@ -258,12 +261,15 @@ class PaintEditor {
         this.fgBtn.addEventListener("click", () => this._chooseColor("fg"));
         this.bgBtn.addEventListener("click", () => this._chooseColor("bg"));
         colors.append(this.bgBtn, this.fgBtn);
-        tools.append(colors, this.btn("swap", "Swap colours (X)", () => this.swapColors()));
+        this.quickBtn = this.btn("mask", "Quick Mask (Q): paint the selection - black takes away, white adds", () => this.toggleQuickMask(), "quick");
+        tools.append(colors, this.btn("swap", "Swap colours (X)", () => this.swapColors()), this.quickBtn);
         // The canvas.
         this.wrap = this.el("div", "paint-wrap", { tabIndex: 0 });
         this.world = this.el("div", "paint-world");
         this.canvas = this.el("canvas", "paint-canvas");
-        this.world.append(this.canvas);
+        // Over the picture: Quick Mask's red, or a layer's mask on its own (Alt+click its thumbnail).
+        this.tint = this.el("canvas", "paint-tint");
+        this.world.append(this.canvas, this.tint);
         this.overlay = this.el("canvas", "paint-overlay");
         this.wrap.append(this.world, this.overlay);
         main.append(tools, this.wrap);
@@ -312,6 +318,8 @@ class PaintEditor {
         this.sel = data.selection && data.selection.length === this.doc.w * this.doc.h ? data.selection : null;
         this.editMask = false;
         this.picked = new Set(this.doc.active ? [this.doc.active] : []);
+        this.quick = null;
+        this.viewMask = null;
         this.crop = null;
         this.tf = null;
         this._cancelText();
@@ -350,7 +358,21 @@ class PaintEditor {
     }
 
     _pixOf = (L) => this.pix.get(L.id);
-    _maskOf = (L) => (L.mask ? this.masks.get(L.id) || null : null);
+    /** A layer's mask as it acts (feathered, cached by the buffer's version); while a stroke paints it, as it is. */
+    _maskOf = (L) => {
+        if (!L.mask) return null;
+        const raw = this.masks.get(L.id) || null;
+        if (!raw || !(L.mask.feather > 0)) return raw;
+        const dr = this._drag;
+        if (dr && dr.kind === "stroke" && dr.st.mask === raw) return raw;
+        const sig = `${this.bufVer.get(raw) || 0}:${L.mask.feather}:${L.mask.w}x${L.mask.h}`;
+        const c = this._featherCache || (this._featherCache = new WeakMap());
+        const hit = c.get(raw);
+        if (hit && hit.sig === sig) return hit.out;
+        const out = D.maskAsItActs(L, raw);
+        c.set(raw, { sig, out });
+        return out;
+    };
     active() { return this.doc ? this.doc.layers.find((L) => L.id === this.doc.active) || null : null; }
 
     // ── drawing ──────────────────────────────────────────────────────────────
@@ -370,6 +392,90 @@ class PaintEditor {
             D.composite(this.doc, this._pixOf, this._maskOf, r, this.comp);
         }
         this.ctx.putImageData(this.imgData, 0, 0, r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0);
+        this._tintDraw(r);
+    }
+
+    // ── Quick Mask and a mask on its own ─────────────────────────────────────
+
+    /**
+     * Q: the selection as a picture to paint on (`quick.m`, W x H, 255 = selected), shown as red where it is
+     * not selected. The brush, eraser, bucket and Fill paint it (black takes away, white adds); Q again
+     * makes it the selection (one undo step). Entered with no selection, everything is selected.
+     */
+    toggleQuickMask() {
+        if (!this.doc) return;
+        const W = this.doc.w, H = this.doc.h;
+        if (!this.quick) {
+            this._tfSettle();
+            this.setViewMask(null);
+            this.quick = { m: this.sel ? new Uint8Array(this.sel) : new Uint8Array(W * H).fill(255) };
+        } else {
+            const m = this.quick.m;
+            this.quick = null;
+            this.setSelection(m.some((v) => v) ? new Uint8Array(m) : null, "Quick Mask");
+        }
+        if (this.quickBtn) this.quickBtn.classList.toggle("on", !!this.quick);
+        this._tintDraw();
+        this.refreshProps();
+        this._status();
+    }
+
+    /** A layer's mask shown on its own over the picture (null: the picture again). */
+    setViewMask(id) {
+        this.viewMask = id && this.doc && (this.doc.layers.find((L) => L.id === id) || {}).mask ? id : null;
+        this._tintDraw();
+        this._status();
+    }
+
+    _tintDraw(r = null) {
+        const t = this.tint;
+        if (!t || !this.doc) return;
+        const W = this.doc.w, H = this.doc.h;
+        const L = this.viewMask ? this.doc.layers.find((x) => x.id === this.viewMask) : null;
+        const on = !!(this.quick || (L && L.mask));
+        t.style.display = on ? "block" : "none";
+        if (!on) return;
+        if (t.width !== W || t.height !== H) { t.width = W; t.height = H; r = null; this._tintImg = null; }
+        if (!this._tintImg || this._tintImg.width !== W || this._tintImg.height !== H) this._tintImg = new ImageData(W, H);
+        const im = this._tintImg.data;
+        const x0 = r ? r.x0 : 0, y0 = r ? r.y0 : 0, x1 = r ? r.x1 : W, y1 = r ? r.y1 : H;
+        if (this.quick) {
+            const m = this.quick.m;
+            for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+                const i = y * W + x, o = i * 4;
+                im[o] = 255; im[o + 1] = 0; im[o + 2] = 0; im[o + 3] = Math.round((255 - m[i]) * 0.5);
+            }
+        } else {
+            const mk = L.mask, m = this._maskOf(L), dn = mk.density == null ? 1 : mk.density;
+            for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+                const mx = x - mk.x, my = y - mk.y;
+                const v0 = mx >= 0 && my >= 0 && mx < mk.w && my < mk.h ? m[my * mk.w + mx] : mk.fill;
+                const v = Math.round(255 - dn * (255 - v0)), o = (y * W + x) * 4;
+                im[o] = im[o + 1] = im[o + 2] = v; im[o + 3] = 255;
+            }
+        }
+        t.getContext("2d").putImageData(this._tintImg, 0, 0, x0, y0, x1 - x0, y1 - y0);
+    }
+
+    /** A thumbnail's pixels (or a mask) as the selection: `how` replace / add / subtract. */
+    loadSelection(L, fromMask, how = "replace") {
+        const W = this.doc.w, H = this.doc.h, m = new Uint8Array(W * H);
+        if (fromMask && L.mask) {
+            const mk = L.mask, raw = this._maskOf(L), dn = mk.density == null ? 1 : mk.density;
+            for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+                const mx = x - mk.x, my = y - mk.y;
+                const v0 = mx >= 0 && my >= 0 && mx < mk.w && my < mk.h ? raw[my * mk.w + mx] : mk.fill;
+                m[y * W + x] = Math.round(255 - dn * (255 - v0));
+            }
+        } else if (L.kind === "pixel") {
+            const px = this.pix.get(L.id);
+            for (let y = 0; y < L.h; y++) for (let x = 0; x < L.w; x++) {
+                const gx = x + L.x, gy = y + L.y;
+                if (gx >= 0 && gy >= 0 && gx < W && gy < H) m[gy * W + gx] = px[(y * L.w + x) * 4 + 3];
+            }
+        } else return;
+        const out = how === "replace" || !this.sel ? (how === "subtract" ? null : m) : D.combineMasks(this.sel, m, how === "add" ? "add" : "subtract");
+        this.setSelection(out, fromMask ? "Select the mask" : "Select layer");
     }
 
     /** Draw again at the next frame (sliders, drags). */
@@ -551,6 +657,8 @@ class PaintEditor {
             const bb = this.sel ? D.maskBBox(this.sel, d.w, d.h) : null;
             if (bb) parts.push(`selection ${bb.w} x ${bb.h}`);
             if (this.editMask) parts.push("<b>painting the mask</b>");
+            if (this.quick) parts.push("<b>Quick Mask</b> (Q: back to the selection)");
+            if (this.viewMask) parts.push("<b>showing the mask</b> (Esc: the picture)");
             if (this.tool === "clone") parts.push(this.cloneSrc ? `clone from ${Math.round(this.cloneSrc.x)}, ${Math.round(this.cloneSrc.y)}` : "<b>Alt+click: where to clone from</b>");
             if (this.tf) parts.push("<b>transforming</b> (Enter applies, Esc cancels)");
             const L = this.active();
@@ -670,6 +778,8 @@ class PaintEditor {
 
     _afterHistory() {
         this._prunePicked();
+        if (this.viewMask && !(this.doc.layers.find((L) => L.id === this.viewMask) || {}).mask) this.viewMask = null;
+        if (this.quick && this.quick.m.length !== this.doc.w * this.doc.h) this.quick = null;
         this._dropBelow();
         this._resizeCanvas();
         this.redraw();
@@ -1124,7 +1234,7 @@ class PaintEditor {
             if (L.kind === "pixel") { lt.x = L.x - B.x; lt.y = L.y - B.y; }
             if (lt.mask) lt.mask = { ...lt.mask, x: lt.mask.x - B.x, y: lt.mask.y - B.y };
             sub.layers = [lb, lt];
-            const out = D.composite(sub, (X) => (X.id === B.id ? base : this.pix.get(X.id)), (X) => (X === lt && lt.mask ? this.masks.get(L.id) : null));
+            const out = D.composite(sub, (X) => (X.id === B.id ? base : this.pix.get(X.id)), (X) => (X === lt && lt.mask ? this._maskOf(L) : null));
             if (L.kind === "adjust") for (let k = 3; k < out.length; k += 4) out[k] = base[k];
             this.pix.set(B.id, out);
             delete B.text;
@@ -1144,7 +1254,7 @@ class PaintEditor {
         const block = D.withInside(this.doc, tops).map((x) => ({ ...x }));
         for (const x of block) if (tops.includes(x.id)) { delete x.parent; if (top) Object.assign(x, top(x)); }
         const sub = { w: this.doc.w, h: this.doc.h, layers: block };
-        return D.composite(sub, this._pixOf, (x) => (x.mask ? this.masks.get(x.id) || null : null));
+        return D.composite(sub, this._pixOf, this._maskOf);
     }
 
     /** The active group made one pixel layer: what it shows, alone, with the group's opacity, blend and mask kept on it. */
@@ -1230,12 +1340,12 @@ class PaintEditor {
         if (cmd === "apply" && L.kind === "pixel") {
             return this.change("Apply mask", () => {
                 const px = new Uint8ClampedArray(this.pix.get(L.id));
-                const m = this.masks.get(L.id), mk = L.mask;
+                const m = this._maskOf(L), mk = L.mask, dn = mk.density == null ? 1 : mk.density;
                 for (let y = 0; y < L.h; y++) for (let x = 0; x < L.w; x++) {
                     const mx = x + L.x - mk.x, my = y + L.y - mk.y;
                     const v = mx >= 0 && my >= 0 && mx < mk.w && my < mk.h ? m[my * mk.w + mx] : mk.fill;
                     const o = (y * L.w + x) * 4 + 3;
-                    px[o] = D.q8((px[o] / 255) * (v / 255));
+                    px[o] = D.q8((px[o] / 255) * (1 - dn * (1 - v / 255)));
                 }
                 this.pix.set(L.id, px);
                 delete L.mask;
@@ -1258,6 +1368,12 @@ class PaintEditor {
 
     /** Colour into the selection (or all of the layer), by `alpha` 0..1. */
     fillSelection(color = this.fg, alpha = 1) {
+        const lum = Math.round(0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2]);
+        if (this._maskUp()) {
+            let area = this.quick ? null : this.sel;
+            if (alpha < 1) area = (area || new Uint8Array(this.doc.w * this.doc.h).fill(255)).map((v) => Math.round(v * alpha));
+            if (this._fillMaskArea(area, lum, "Fill")) return true;
+        }
         const L = this._pixelTarget("Fill");
         if (!L) return false;
         return this.change("Fill", () => {
@@ -1267,7 +1383,18 @@ class PaintEditor {
         });
     }
 
+    /** Is Quick Mask up, or the active layer's mask picked (so fills go there)? */
+    _maskUp() {
+        const L = this.active();
+        return !!this.quick || !!(L && L.mask && (this.editMask || L.kind !== "pixel"));
+    }
+
     clearSelection() {
+        if (this._maskUp()) {
+            // On a mask (Quick Mask too): the selection hidden - black.
+            if (!this.quick && !this.sel) { this._notify("Select what to clear first.", "info"); return false; }
+            return this._fillMaskArea(this.quick ? null : this.sel, 0, "Clear");
+        }
         const L = this._pixelTarget("Clear");
         if (!L) return false;
         if (!this.sel) { this._notify("Select what to clear first.", "info"); return false; }
@@ -1625,6 +1752,7 @@ class PaintEditor {
     // The brush and the eraser: on the layer's pixels, or on its mask (Layers panel: the mask's thumbnail).
     _strokeStart(p, e) {
         this._tfSettle();
+        if (this.quick) { this._quickStroke(p, e); return; }
         const L = this.active();
         if (!L) return;
         if (L.locked) { this._notify(`${L.name} is locked.`, "warn"); return; }
@@ -1690,6 +1818,62 @@ class PaintEditor {
         }
     }
 
+    /** A brush or eraser stroke on Quick Mask (white adds to the selection, black takes away; the eraser the other way). */
+    _quickStroke(p, e) {
+        if (this.tool === "clone") { this._notify("The clone stamp does not paint Quick Mask: use the brush.", "info"); return; }
+        const W = this.doc.w, H = this.doc.h, m = this.quick.m;
+        const o = this.opts[this.tool], erase = this.tool === "eraser";
+        const gray = new Uint8ClampedArray(W * H * 4);
+        for (let i = 0; i < m.length; i++) { gray[i * 4] = gray[i * 4 + 1] = gray[i * 4 + 2] = m[i]; gray[i * 4 + 3] = 255; }
+        const lum = Math.round(0.2126 * this.fg[0] + 0.7152 * this.fg[1] + 0.0722 * this.fg[2]);
+        const v = erase ? 255 - lum : lum;
+        const st = { px: gray, orig: new Uint8ClampedArray(gray), cover: new Float32Array(W * H), lw: W, lh: H, lx: 0, ly: 0,
+                     color: [v, v, v], opacity: o.opacity / 100, erase: false, lockAlpha: true, sel: null, W, H, mask: m, onMask: true, quick: true };
+        st.L = this.active() || { id: "" };
+        st.radius = Math.max(0.5, o.size / 2);
+        st.hard = o.hardness / 100;
+        st.spacing = Math.max(0.01, o.spacing / 100);
+        st.penSize = o.penSize !== false;
+        st.penOpacity = !!o.penOpacity;
+        const pr = D.pressureOf(e.pointerType, e.pressure);
+        st.last = [p.x, p.y, pr];
+        st.carry = 0;
+        st.touched = null;
+        this._drag = { kind: "stroke", st };
+        this._dab(st, [[p.x, p.y, pr]]);
+    }
+
+    /**
+     * What a fill paints when it is not a layer's pixels: Quick Mask, or the active layer's mask while that is
+     * picked. `area` (W x H, 0..255, null = all) at the grey `v`, one undo step. False when neither is up.
+     */
+    _fillMaskArea(area, v, label) {
+        const W = this.doc.w, H = this.doc.h;
+        const put = (old, mk) => {
+            const out = new Uint8Array(old);
+            for (let y = 0; y < mk.h; y++) for (let x = 0; x < mk.w; x++) {
+                const gx = x + mk.x, gy = y + mk.y;
+                const t = area ? (gx >= 0 && gy >= 0 && gx < W && gy < H ? area[gy * W + gx] / 255 : 0) : 1;
+                if (t > 0) { const i = y * mk.w + x; out[i] = Math.round(old[i] + (v - old[i]) * t); }
+            }
+            return out;
+        };
+        if (this.quick) {
+            const before = this.quick.m, after = put(before, { x: 0, y: 0, w: W, h: H });
+            const q = this.quick;
+            this._push({ label: "Quick Mask " + label.toLowerCase(), bytes: before.byteLength * 2,
+                         undo: () => { q.m = before; this._tintDraw(); }, redo: () => { q.m = after; this._tintDraw(); } });
+            q.m = after;
+            this._tintDraw();
+            return true;
+        }
+        const L = this.active();
+        if (!L || !L.mask || !(this.editMask || L.kind !== "pixel")) return false;
+        if (L.locked) { this._notify(`${L.name} is locked.`, "warn"); return true; }
+        this.change(label + " (mask)", () => { this.masks.set(L.id, put(this.masks.get(L.id), L.mask)); });
+        return true;
+    }
+
     _strokeTo(p, pr = 1) {
         const st = this._drag.st;
         const [x0, y0, p0] = st.last;
@@ -1732,7 +1916,7 @@ class PaintEditor {
         };
         const before = cut(origBuf), after = cut(buf);
         this._bump(buf);
-        this._push({ label: s.clone ? "Clone stamp" : this.tool === "eraser" ? "Eraser" : "Brush", bytes: before.byteLength * 2,
+        this._push({ label: (s.quick ? "Quick Mask " : "") + (s.clone ? "Clone stamp" : this.tool === "eraser" ? "Eraser" : "Brush"), bytes: before.byteLength * 2,
                      undo: () => paste(buf, before), redo: () => paste(buf, after) });
         this._lastStrokeEnd = { L: s.L.id, x: s.last[0], y: s.last[1] };
         this.redraw({ x0: r.x0 + s.lx, y0: r.y0 + s.ly, x1: r.x1 + s.lx, y1: r.y1 + s.ly });
@@ -1740,6 +1924,16 @@ class PaintEditor {
     }
 
     _bucket(p) {
+        if (this._maskUp()) {
+            // On a mask: the region of the picture as it looks (the bucket's tolerance), in the colour's grey.
+            const x = Math.floor(p.x), y = Math.floor(p.y), W = this.doc.w, H = this.doc.h;
+            if (x < 0 || y < 0 || x >= W || y >= H) return;
+            const o = this.opts.fill;
+            let area = D.floodMask(this.comp, W, H, x, y, o.tolerance, o.contiguous);
+            if (this.sel && !this.quick) for (let i = 0; i < area.length; i++) area[i] = Math.min(area[i], this.sel[i]);
+            this._fillMaskArea(area, Math.round(0.2126 * this.fg[0] + 0.7152 * this.fg[1] + 0.0722 * this.fg[2]), "Paint bucket");
+            return;
+        }
         const L = this._pixelTarget("Paint bucket");
         if (!L) return;
         const x = Math.floor(p.x), y = Math.floor(p.y), W = this.doc.w, H = this.doc.h;
@@ -2193,6 +2387,7 @@ class PaintEditor {
         if (k === "Enter" && this.tf) return take(() => this.tfCommit());
         if (k === "Escape") return take(() => {
             if (this._fillOpen) this.closeFill();
+            else if (this.viewMask) this.setViewMask(null);
             else if (this.tf) this.tfCancel();
             else if (this.crop) { this.crop = null; this.drawOverlay(); }
             else if (this.sel) this.deselect();
@@ -2215,6 +2410,7 @@ class PaintEditor {
                 this.refreshProps(); this.drawOverlay();
             });
         }
+        if (lk === "q" && !e.altKey && !e.shiftKey) return take(() => this.toggleQuickMask());
         if (lk === "x" && !e.altKey) return take(() => this.swapColors());
         if (lk === "d" && !e.altKey) return take(() => this.defaultColors());
         if (lk === "m" && e.shiftKey) return take(() => this.setTool("ellipse"));
@@ -2525,7 +2721,12 @@ class PaintEditor {
             const selThumb = L.id === d.active && !this.editMask;
             if (L.kind === "pixel") {
                 const th = this.el("canvas", selThumb ? "sel" : "", { width: 40, height: 30, title: "The layer's pixels" });
-                th.addEventListener("click", (e) => { e.stopPropagation(); this.setActive(L.id, false, how(e)); });
+                th.title = "The layer's pixels (Ctrl+click: select them; Ctrl+Shift: add, Ctrl+Alt: take away)";
+                th.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    if (e.ctrlKey || e.metaKey) { this.loadSelection(L, false, e.shiftKey ? "add" : e.altKey ? "subtract" : "replace"); return; }
+                    this.setActive(L.id, false, how(e));
+                });
                 this._thumbJobs.push([th, L, false]);
                 row.append(th);
             } else if (isG) {
@@ -2541,7 +2742,15 @@ class PaintEditor {
                 const mt = this.el("canvas", (L.id === d.active && this.editMask) ? "sel" : "", { width: 40, height: 30,
                     title: "The mask: click to paint on it (white shows, black hides); Shift+click switches it off" });
                 if (!L.mask.enabled) mt.style.opacity = ".35";
-                mt.addEventListener("click", (e) => { e.stopPropagation(); if (e.shiftKey) { this.setActive(L.id); this.maskCmd("toggle"); } else this.setActive(L.id, true); });
+                mt.title = "The mask: click to paint on it (white shows, black hides); Shift+click switches it off; Alt+click shows it alone; Ctrl+click selects it";
+                mt.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    const ctrl = e.ctrlKey || e.metaKey;
+                    if (ctrl) { this.loadSelection(L, true, e.shiftKey ? "add" : e.altKey ? "subtract" : "replace"); return; }
+                    if (e.altKey) { this.setActive(L.id, true); this.setViewMask(this.viewMask === L.id ? null : L.id); return; }
+                    if (e.shiftKey) { this.setActive(L.id); this.maskCmd("toggle"); return; }
+                    this.setActive(L.id, true);
+                });
                 this._thumbJobs.push([mt, L, true]);
                 row.append(mt);
             }
@@ -2687,6 +2896,30 @@ class PaintEditor {
         return this._field(parent, label, [r, n]);
     }
 
+    /** The mask's own settings: density and feather (kept, not baked in), on / off, and the mask commands. */
+    _maskSection(L) {
+        const s = this.el("div", "paint-sect");
+        s.append(this.el("h4", "", { text: "Mask" }));
+        const mk = L.mask;
+        const live = (patch) => { this.liveBegin(); Object.assign(L.mask, patch); this.requestRedraw(); if (this.viewMask === L.id) this._tintDraw(); };
+        this._slider(s, "Density (%)", Math.round((mk.density == null ? 1 : mk.density) * 100), 0, 100, 1,
+                     (v) => live({ density: v / 100 }), () => this.liveEnd("Mask density"));
+        this._slider(s, "Feather (px)", mk.feather || 0, 0, 250, 0.5, (v) => live({ feather: v }), () => this.liveEnd("Mask feather"));
+        const row = this.el("div", "paint-field");
+        for (const [label, run] of [[mk.enabled ? "Switch off" : "Switch on", () => this.maskCmd("toggle")],
+                                     [this.viewMask === L.id ? "Show the picture" : "Show alone", () => { this.setViewMask(this.viewMask === L.id ? null : L.id); this.refreshProps(); }],
+                                     ["Select it", () => this.loadSelection(L, true)], ["Invert", () => this.maskCmd("invert")]]) {
+            const b = this.el("button", "paint-btn", { type: "button", text: label });
+            b.addEventListener("click", run);
+            row.append(b);
+        }
+        s.append(row);
+        s.append(this.el("div", "paint-note", { text: this.editMask || L.kind !== "pixel"
+            ? "Painting the mask: brush, eraser, bucket, Fill and Del work on it (white shows, black hides)."
+            : "Click the mask's thumbnail in Layers to paint it." }));
+        return s;
+    }
+
     refreshProps() {
         this._refreshOptBar();
         const box = this.propsBox;
@@ -2712,6 +2945,8 @@ class PaintEditor {
         // The layer.
         const L = this.active();
         if (L) box.append(this._layerSection(L));
+        if (L && L.mask) box.append(this._maskSection(L));
+        if (this.quick) box.prepend(this.el("div", "paint-note", { text: "Quick Mask is on (Q): the brush, eraser, bucket and Fill paint the selection - black takes away (red), white adds. Q again makes it the selection." }));
         // Generate.
         box.append(this._generateSection());
     }

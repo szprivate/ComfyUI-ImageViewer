@@ -168,6 +168,24 @@ class PaintParity(unittest.TestCase):
         for name, d in cases.items():
             self.same(P.composite(d), got[name]["composite"], (d.h, d.w, 4), name)
 
+    def test_mask_density_and_feather(self):
+        cases = {}
+        for k, (dn, fe) in enumerate([(0.5, 0), (1, 3.5), (0.3, 6), (0, 2)]):
+            d = rnd_doc(700 + k, ["normal", "multiply", "screen"], [("invert", {})])
+            G = d.add_group("G", blend="normal", opacity=0.9, index=3)
+            G["mask"] = {"enabled": True, "x": 0, "y": 0, "w": d.w, "h": d.h, "fill": 0}
+            d.masks[G["id"]] = np.random.default_rng(k).integers(0, 256, (d.h, d.w), dtype=np.uint8)
+            d.layers[1]["parent"] = G["id"]
+            for L in d.layers:
+                if L.get("mask"):
+                    L["mask"]["density"] = dn
+                    L["mask"]["feather"] = fe
+            d.meta = P.clean_meta(d.meta)
+            cases[f"m{k}"] = d
+        got = self.run_node(cases)
+        for name, d in cases.items():
+            self.same(P.composite(d), got[name]["composite"], (d.h, d.w, 4), name)
+
     def test_filters_and_selection_shapes(self):
         d = rnd_doc(7, [])
         L = d.layers[0]

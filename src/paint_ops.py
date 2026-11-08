@@ -640,6 +640,21 @@ def _mask(doc, op, read_image, _fonts):
             raise OpError(f"{L['name']!r} has no mask")
         L["mask"]["enabled"] = how == "on"
         return f"{L['name']!r}: mask {how}"
+    if how == "settings":
+        # Density (0..100 %) and feather (px): kept on the mask, not baked in.
+        if not L.get("mask"):
+            raise OpError(f"{L['name']!r} has no mask")
+        said = []
+        if "density" in op:
+            L["mask"]["density"] = M._num(op["density"], 100, 0, 100) / 100
+            said.append(f"density {round(L['mask']['density'] * 100)}%")
+        if "feather" in op:
+            L["mask"]["feather"] = M._num(op["feather"], 0, 0, 250)
+            said.append(f"feather {L['mask']['feather']:g} px")
+        if not said:
+            raise OpError("give 'density' (0..100) or 'feather' (px)")
+        L["mask"] = P.clean_layer({"mask": L["mask"]})["mask"]
+        return f"{L['name']!r}: mask " + ", ".join(said)
     if how == "invert":
         if not L.get("mask"):
             raise OpError(f"{L['name']!r} has no mask")
@@ -653,7 +668,7 @@ def _mask(doc, op, read_image, _fonts):
     elif how == "all":
         m = np.full((doc.h, doc.w), 255, np.uint8)
     else:
-        raise OpError("'from' is selection, file, all, invert, on, off or remove")
+        raise OpError("'from' is selection, file, all, invert, on, off, remove or settings (density, feather)")
     L["mask"] = {"enabled": True, "x": 0, "y": 0, "w": doc.w, "h": doc.h, "fill": 0 if how != "all" else 255}
     doc.masks[L["id"]] = m
     return f"{L['name']!r}: mask from the {how}"

@@ -16,7 +16,7 @@ for (const [name, c] of Object.entries(job.cases)) {
     const px = {}, masks = {};
     for (const [id, b] of Object.entries(c.px)) px[id] = new Uint8ClampedArray(dec(b));
     for (const [id, b] of Object.entries(c.masks)) masks[id] = dec(b);
-    const res = { composite: enc(D.composite(doc, (L) => px[L.id], (L) => masks[L.id] || null)) };
+    const res = { composite: enc(D.composite(doc, (L) => px[L.id], (L) => D.maskAsItActs(L, masks[L.id] || null))) };
     if (c.filters) {
         const L = doc.layers[0], p = px[L.id];
         res.blur = enc(D.blurPixels(p, L.w, L.h, c.filters.blur));

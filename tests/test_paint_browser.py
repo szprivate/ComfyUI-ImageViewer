@@ -612,6 +612,64 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(comp(50, 30), before)
         self.assertEqual(self.errors, [])
 
+    def test_quick_mask_and_mask_handling(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        x0, y0, w, h = pg.evaluate(f"() => {{ const r = {ed}.canvas.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }}")
+        k = w / 200
+        # Q with nothing selected: all selected (no red). Black brush strokes take away; Q again: the selection.
+        pg.mouse.move(x0 + 5, y0 + 5)
+        pg.keyboard.press("q")
+        self.assertTrue(pg.evaluate(f"() => !!{ed}.quick && {ed}.tint.style.display === 'block'"))
+        pg.evaluate(f"() => {{ const e = {ed}; e.setTool('brush'); e.fg = [0, 0, 0]; e.opts.brush.size = 20; e.opts.brush.hardness = 100; }}")
+        n0 = pg.evaluate(f"() => {ed}.undoStack.length")
+        pg.mouse.move(x0 + 50 * k, y0 + 60 * k); pg.mouse.down()
+        pg.mouse.move(x0 + 150 * k, y0 + 60 * k, steps=10); pg.mouse.up()
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Quick Mask Brush")
+        self.assertEqual(pg.evaluate(f"() => {ed}.quick.m[60 * 200 + 100]"), 0)
+        self.assertEqual(pg.evaluate(f"() => {ed}.tint.getContext('2d').getImageData(100, 60, 1, 1).data[3]"), 128)
+        # The photo's pixels did not change.
+        self.assertEqual(pg.evaluate(f"() => [...{ed}.pix.get({ed}.doc.layers[0].id).slice((60*200+100)*4, (60*200+100)*4+4)]"), [220, 0, 160, 255])
+        pg.keyboard.press("q")
+        self.assertFalse(pg.evaluate(f"() => !!{ed}.quick || {ed}.tint.style.display === 'block'"))
+        self.assertEqual(pg.evaluate(f"() => [{ed}.sel[60 * 200 + 100], {ed}.sel[10 * 200 + 10]]"), [0, 255])
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.length"), n0 + 2)
+        # A mask from the selection on a new layer; Alt+click its thumbnail shows it alone, Esc goes back.
+        pg.evaluate(f"""() => {{ const e = {ed}; const r = new Uint8ClampedArray(200 * 120 * 4); for (let i = 0; i < 200 * 120; i++) r.set([255, 255, 0, 255], i * 4);
+            e.addPixelLayer(r, 200, 120, 'yellow'); e.addMask('selection'); e.deselect(); }}""")
+        comp = lambda x, y: pg.evaluate(f"() => [...{ed}.comp.slice(({y} * 200 + {x}) * 4, ({y} * 200 + {x}) * 4 + 4)]")
+        self.assertEqual(comp(10, 10), [255, 255, 0, 255])
+        self.assertEqual(comp(100, 60), [220, 0, 160, 255])
+        mt = pg.evaluate(f"""() => {{ const r = [...{ed}.layerList.querySelectorAll('.paint-row')].find((x) => x.querySelector('.nm').textContent === 'yellow');
+            r.scrollIntoView({{ block: 'nearest' }}); const c = r.querySelectorAll('canvas')[1].getBoundingClientRect(); return [c.left + c.width / 2, c.top + c.height / 2]; }}""")
+        pg.keyboard.down("Alt"); pg.mouse.click(*mt); pg.keyboard.up("Alt")
+        self.assertEqual(pg.evaluate(f"() => [{ed}.tint.style.display, [...{ed}.tint.getContext('2d').getImageData(100, 60, 1, 1).data]]"), ["block", [0, 0, 0, 255]])
+        pg.mouse.move(x0 + 5, y0 + 5)
+        pg.keyboard.press("Escape")
+        self.assertEqual(pg.evaluate(f"() => {ed}.tint.style.display"), "none")
+        # Ctrl+click the mask's thumbnail: the selection; the bucket and Del paint the mask while it is picked.
+        mt = pg.evaluate(f"""() => {{ const r = [...{ed}.layerList.querySelectorAll('.paint-row')].find((x) => x.querySelector('.nm').textContent === 'yellow');
+            r.scrollIntoView({{ block: 'nearest' }}); const c = r.querySelectorAll('canvas')[1].getBoundingClientRect(); return [c.left + c.width / 2, c.top + c.height / 2]; }}""")
+        pg.keyboard.down("Control"); pg.mouse.click(*mt); pg.keyboard.up("Control")
+        self.assertEqual(pg.evaluate(f"() => [{ed}.sel[60 * 200 + 100], {ed}.sel[10 * 200 + 10]]"), [0, 255])
+        pg.mouse.click(*mt)                                    # the mask picked
+        self.assertTrue(pg.evaluate(f"() => {ed}.editMask"))
+        pg.mouse.move(x0 + 5, y0 + 5)
+        pg.evaluate(f"() => {{ {ed}._layersFocus = false; }}")  # as after a press on the canvas
+        pg.keyboard.press("Delete")                            # the selected part hidden
+        self.assertEqual(comp(10, 10)[:3], [0, 0, 160])
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Clear (mask)")
+        # Density 50 %: what the mask hides shows at half.
+        pg.keyboard.press("Control+z")
+        pg.evaluate(f"""() => {{ const s = [...{ed}.parts.props.querySelectorAll('.paint-sect')].find((x) => x.querySelector('h4').textContent === 'Mask');
+            const r = s.querySelector('input[type=range]'); r.value = 50; r.dispatchEvent(new Event('input')); r.dispatchEvent(new Event('change')); }}""")
+        pg.wait_for_timeout(100)
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Mask density")
+        c = comp(100, 60)
+        self.assertTrue(230 <= c[0] <= 240 and 120 <= c[1] <= 135, c)
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()
