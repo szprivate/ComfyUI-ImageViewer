@@ -41,6 +41,12 @@ export const ADJUST_FIELDS = {
     invert: [],
     curves: [],
 };
+/** A group's blend: Pass Through (its layers lay straight onto what is under the group) or one of the modes
+ * (its layers are laid together first, on nothing, and that picture is laid with the mode). */
+export const GROUP_BLENDS = ["pass_through", ...BLEND_MODES];
+BLEND_LABELS.pass_through = "Pass Through";
+/** How deep groups go inside groups. */
+export const MAX_DEPTH = 12;
 export const MAX_SIDE = 16384;
 export const MAX_LAYERS = 200;
 
@@ -106,14 +112,18 @@ export function cleanText(t) {
 
 /** A layer's description held to what it may be (paint_io.clean_layer). */
 export function cleanLayer(L) {
-    const kind = L.kind === "adjust" ? "adjust" : "pixel";
-    const out = { id: String(L.id || newId()).slice(0, 40), name: String(L.name || "Layer").slice(0, 120), kind,
+    const kind = L.kind === "adjust" ? "adjust" : L.kind === "group" ? "group" : "pixel";
+    const out = { id: String(L.id || newId()).slice(0, 40), name: String(L.name || (kind === "group" ? "Group" : "Layer")).slice(0, 120), kind,
                   visible: L.visible !== false, opacity: num(L.opacity, 1, 0, 1),
                   blend: BLEND_MODES.includes(L.blend) ? L.blend : "normal", locked: !!L.locked };
+    if (L.parent) out.parent = String(L.parent).slice(0, 40);
     if (kind === "pixel") {
         Object.assign(out, { x: Math.trunc(num(L.x, 0)), y: Math.trunc(num(L.y, 0)),
                              w: Math.trunc(num(L.w, 0, 0, MAX_SIDE)), h: Math.trunc(num(L.h, 0, 0, MAX_SIDE)) });
         if (L.text && typeof L.text === "object") out.text = cleanText(L.text);
+    } else if (kind === "group") {
+        out.blend = GROUP_BLENDS.includes(L.blend) ? L.blend : "pass_through";
+        if (L.collapsed) out.collapsed = true;
     } else {
         const a = L.adjust && typeof L.adjust === "object" ? L.adjust : {};
         const t = ADJUST_TYPES.includes(a.type) ? a.type : "levels";
@@ -128,13 +138,112 @@ export function cleanLayer(L) {
     return out;
 }
 
+/**
+ * The layers put in tree order (paint_io.fix_tree), in place: a layer's `parent` names a group or is gone,
+ * and every group's layers lie right under it in the list (bottom .. top: its layers, then the group).
+ * Siblings keep their order (a group counts where the group's own entry is). Too deep or a loop: the
+ * layer comes out of its group.
+ */
+export function fixTree(layers) {
+    const byId = new Map(layers.map((L) => [L.id, L]));
+    for (const L of layers) {
+        if (!L.parent) { delete L.parent; continue; }
+        const P = byId.get(L.parent);
+        if (!P || P.kind !== "group" || P === L) { delete L.parent; continue; }
+    }
+    for (const L of layers) {
+        // A loop, or deeper than MAX_DEPTH: out of the group.
+        let p = L.parent, n = 0;
+        const seen = new Set([L.id]);
+        while (p) {
+            if (seen.has(p) || ++n > MAX_DEPTH) { delete L.parent; break; }
+            seen.add(p);
+            p = byId.get(p).parent;
+        }
+    }
+    const kids = new Map();
+    for (const L of layers) {
+        const k = L.parent || "";
+        if (!kids.has(k)) kids.set(k, []);
+        kids.get(k).push(L);
+    }
+    const out = [];
+    const walk = (k) => { for (const L of kids.get(k) || []) { if (L.kind === "group") walk(L.id); out.push(L); } };
+    walk("");
+    for (let i = 0; i < out.length; i++) layers[i] = out[i];
+    layers.length = out.length;
+    return layers;
+}
+
 export function cleanDoc(meta) {
     const w = Math.trunc(num(meta.w, 0)), h = Math.trunc(num(meta.h, 0));
     if (!(w >= 1 && w <= MAX_SIDE && h >= 1 && h <= MAX_SIDE)) throw new Error(`the canvas must be 1..${MAX_SIDE} pixels a side`);
-    const layers = (Array.isArray(meta.layers) ? meta.layers : []).filter((L) => L && typeof L === "object").map(cleanLayer);
+    const layers = fixTree((Array.isArray(meta.layers) ? meta.layers : []).filter((L) => L && typeof L === "object").map(cleanLayer));
     const ids = layers.map((L) => L.id);
     return { version: 1, w, h, name: String(meta.name || "paint").slice(0, 120), layers,
              active: ids.includes(meta.active) ? meta.active : (ids[ids.length - 1] || null) };
+}
+
+// ── the tree ────────────────────────────────────────────────────────────────
+
+export const isGroup = (L) => !!L && L.kind === "group";
+
+/** The layers of each group (and "" = the document), bottom first, as indexes into doc.layers. */
+export function childIndexes(doc) {
+    const kids = new Map([["", []]]);
+    const groups = new Set(doc.layers.filter(isGroup).map((L) => L.id));
+    doc.layers.forEach((L, i) => {
+        // A parent not in the document (a layer taken out to be laid alone): of the document's level.
+        const k = L.parent && groups.has(L.parent) ? L.parent : "";
+        if (!kids.has(k)) kids.set(k, []);
+        kids.get(k).push(i);
+    });
+    return kids;
+}
+
+/** The group and every layer inside it: [first, last] indexes (last is the group's own). A layer: [i, i]. */
+export function subtreeRange(doc, id) {
+    const i = layerIndex(doc, id);
+    if (i < 0) return null;
+    let a = i;
+    while (a > 0 && isInside(doc, doc.layers[a - 1], id)) a--;
+    return [a, i];
+}
+
+/** Is L inside the group `gid` (at any depth)? */
+export function isInside(doc, L, gid) {
+    let p = L && L.parent, n = 0;
+    while (p && n++ <= MAX_DEPTH) {
+        if (p === gid) return true;
+        const P = doc.layers.find((x) => x.id === p);
+        p = P && P.parent;
+    }
+    return false;
+}
+
+/** The groups a layer is in, the nearest first. */
+export function ancestors(doc, L) {
+    const out = [];
+    let p = L && L.parent;
+    while (p && out.length <= MAX_DEPTH) {
+        const P = doc.layers.find((x) => x.id === p);
+        if (!P) break;
+        out.push(P);
+        p = P.parent;
+    }
+    return out;
+}
+
+/** The layers of `ids` and of every group among them (with what is inside), bottom first - each once. */
+export function withInside(doc, ids) {
+    const want = new Set(ids);
+    return doc.layers.filter((L) => want.has(L.id) || ancestors(doc, L).some((P) => want.has(P.id)));
+}
+
+/** Of `ids`, only those not inside another of them (a group picked with its layers: just the group). */
+export function outermost(doc, ids) {
+    const want = new Set(ids);
+    return doc.layers.filter((L) => want.has(L.id) && !ancestors(doc, L).some((P) => want.has(P.id))).map((L) => L.id);
 }
 
 // ── rounding and the blend modes ────────────────────────────────────────────
@@ -356,7 +465,12 @@ export function adjustPixels(px, w, h, kind, params) {
 /**
  * The document over the rectangle (paint_io.composite): `pix(L)` gives a layer's pixels, `maskOf(L)` its
  * mask. `out` may be given (W x H, cleared inside the rectangle first); `from` / `to`: only the layers
- * with indexes from..to-1, laid on `out` as it stands (a cache of what is below).
+ * (of the document's own level - a group counts at its own entry, with what is inside it) with indexes
+ * from..to-1, laid on `out` as it stands (a cache of what is below).
+ *
+ * A group: Pass Through lays its layers straight on what is under it (with an opacity under 1 or a mask,
+ * on a copy that is then mixed back: Co = Cb + (Cr - Cb) t, premultiplied, t = opacity x mask); any other
+ * mode lays them on nothing first and that picture like a pixel layer the size of the canvas.
  */
 export function composite(doc, pix, maskOf, rect = null, out = null, opts = {}) {
     const W = doc.w, H = doc.h;
@@ -366,13 +480,72 @@ export function composite(doc, pix, maskOf, rect = null, out = null, opts = {}) 
         for (let y = r.y0; y < r.y1; y++) out.fill(0, (y * W + r.x0) * 4, (y * W + r.x1) * 4);
     }
     const from = opts.from || 0, to = opts.to == null ? doc.layers.length : opts.to;
-    for (let i = from; i < to; i++) {
+    const kids = childIndexes(doc);
+    const top = kids.get("").filter((i) => i >= from && i < to);
+    layList(out, doc, top, kids, pix, maskOf, r, 0);
+    return out;
+}
+
+const _scratch = [];
+function scratch(depth, n) {
+    let b = _scratch[depth];
+    if (!b || b.length !== n) b = _scratch[depth] = new Uint8ClampedArray(n);
+    return b;
+}
+
+function layList(out, doc, list, kids, pix, maskOf, r, depth) {
+    const W = doc.w, H = doc.h;
+    for (const i of list) {
         const L = doc.layers[i];
         if (!L.visible) continue;
-        if (L.kind === "adjust") layAdjust(out, W, H, L, maskOf(L), r.x0, r.y0, r.x1, r.y1);
+        if (L.kind === "group") layGroup(out, doc, L, kids, pix, maskOf, r, depth);
+        else if (L.kind === "adjust") layAdjust(out, W, H, L, maskOf(L), r.x0, r.y0, r.x1, r.y1);
         else layPixels(out, W, H, L, pix(L), maskOf(L), r.x0, r.y0, r.x1, r.y1);
     }
-    return out;
+}
+
+function layGroup(out, doc, G, kids, pix, maskOf, r, depth) {
+    const W = doc.w, H = doc.h;
+    const list = kids.get(G.id) || [];
+    if (G.opacity <= 0 || !list.length) return;
+    const mask = maskOf(G);
+    const m = G.mask && G.mask.enabled && mask ? G.mask : null;
+    if (G.blend === "pass_through") {
+        if (G.opacity >= 1 && !m) { layList(out, doc, list, kids, pix, maskOf, r, depth + 1); return; }
+        const buf = scratch(depth, W * H * 4);
+        for (let y = r.y0; y < r.y1; y++) { const a = (y * W + r.x0) * 4, b = (y * W + r.x1) * 4; buf.set(out.subarray(a, b), a); }
+        layList(buf, doc, list, kids, pix, maskOf, r, depth + 1);
+        mixBack(out, buf, W, H, G.opacity, m, mask, r);
+        return;
+    }
+    const buf = scratch(depth, W * H * 4);
+    for (let y = r.y0; y < r.y1; y++) buf.fill(0, (y * W + r.x0) * 4, (y * W + r.x1) * 4);
+    layList(buf, doc, list, kids, pix, maskOf, r, depth + 1);
+    layPixels(out, W, H, { x: 0, y: 0, w: W, h: H, opacity: G.opacity, blend: G.blend, mask: G.mask }, buf, mask, r.x0, r.y0, r.x1, r.y1);
+}
+
+/** out = out + (res - out) t inside the rectangle, premultiplied (paint_math.mix_back). */
+export function mixBack(out, res, W, H, op, m, mask, r) {
+    const mfill = m ? m.fill / 255 : 1;
+    for (let y = r.y0; y < r.y1; y++) {
+        let oi = (y * W + r.x0) * 4;
+        for (let x = r.x0; x < r.x1; x++, oi += 4) {
+            let mv = 1;
+            if (m) {
+                const mx = x - m.x, my = y - m.y;
+                mv = (mx >= 0 && my >= 0 && mx < m.w && my < m.h) ? mask[my * m.w + mx] / 255 : mfill;
+            }
+            const t = op * mv;
+            const ab = out[oi + 3] / 255, ar = res[oi + 3] / 255;
+            const ao = ab + (ar - ab) * t;
+            for (let c = 0; c < 3; c++) {
+                const pb = (out[oi + c] / 255) * ab, pr = (res[oi + c] / 255) * ar;
+                const pc = pb + (pr - pb) * t;
+                out[oi + c] = q8(ao > 0 ? pc / Math.max(ao, 1e-12) : 0);
+            }
+            out[oi + 3] = q8(ao);
+        }
+    }
 }
 
 // ── filters ─────────────────────────────────────────────────────────────────

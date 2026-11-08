@@ -488,6 +488,83 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Fill")
         self.assertEqual(self.errors, [])
 
+    def test_layers_pick_several_group_drag_move_and_save(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        pg.evaluate(f"() => {{ const e = {ed}; e.newLayer('A'); e.newLayer('B'); e.newLayer('C'); }}")
+        names = lambda: pg.evaluate(f"() => {ed}.doc.layers.map((l) => l.name + (l.parent ? '<' + {ed}.doc.layers.find((g) => g.id === l.parent).name : ''))")
+
+        def row(name):
+            # The list is short in the test's window: the row is scrolled to first.
+            return pg.evaluate(f"""(n) => {{ const r = [...{ed}.layerList.querySelectorAll('.paint-row')].find((x) => x.querySelector('.nm').textContent === n);
+                r.scrollIntoView({{ block: 'nearest' }}); const b = r.getBoundingClientRect(); return [b.left + b.width * 0.6, b.top + b.height / 2, b.height]; }}""", name)
+        # Click C, Shift+click A: A, B and C picked; Ctrl+click B: out again.
+        pg.mouse.click(*row("C")[:2])
+        pg.keyboard.down("Shift"); pg.mouse.click(*row("A")[:2]); pg.keyboard.up("Shift")
+        picked = lambda: sorted(pg.evaluate(f"() => {ed}.pickedLayers().map((l) => l.name)"))
+        self.assertEqual(picked(), ["A", "B", "C"])
+        self.assertEqual(pg.evaluate(f"() => {ed}.layerList.querySelectorAll('.paint-row.picked').length"), 3)
+        pg.keyboard.down("Control"); pg.mouse.click(*row("B")[:2]); pg.keyboard.up("Control")
+        self.assertEqual(picked(), ["A", "C"])
+        # Opacity from the panel: both. Ctrl+G: A and C into a group where C was.
+        pg.evaluate(f"() => {{ const e = {ed}; e.opNum.value = 40; e.opNum.dispatchEvent(new Event('change')); }}")
+        self.assertEqual(pg.evaluate(f"() => {ed}.doc.layers.filter((l) => l.opacity === 0.4).map((l) => l.name)"), ["A", "C"])
+        pg.mouse.move(*row("C")[:2])
+        pg.keyboard.press("Control+g")
+        self.assertEqual(names(), ["Background", "B", "A<Group 1", "C<Group 1", "Group 1"])
+        self.assertEqual(pg.evaluate(f"() => {ed}.active().blend"), "pass_through")
+        # Indented under it; folding hides its rows (and is no undo step).
+        undo_n = pg.evaluate(f"() => {ed}.undoStack.length")
+        pg.evaluate(f"() => {ed}.layerList.querySelector('.paint-row .caret:not(.none)').click()")
+        self.assertEqual(pg.evaluate(f"() => [...{ed}.layerList.querySelectorAll('.paint-row .nm')].map((n) => n.textContent)"), ["Group 1", "B", "Background"])
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.length"), undo_n)
+        pg.evaluate(f"() => {ed}.layerList.querySelector('.paint-row .caret:not(.none)').click()")
+        # Drag B onto the group's row (its middle): into the group, at its top.
+        pg.evaluate(f"""() => {{ const e = {ed}; const rows = [...e.layerList.querySelectorAll('.paint-row')];
+            const src = rows.find((r) => r.querySelector('.nm').textContent === 'B'), dst = rows.find((r) => r.querySelector('.nm').textContent === 'Group 1');
+            const dt = new DataTransfer(); const b = dst.getBoundingClientRect();
+            src.dispatchEvent(new DragEvent('dragstart', {{ dataTransfer: dt, bubbles: true }}));
+            dst.dispatchEvent(new DragEvent('dragover', {{ dataTransfer: dt, bubbles: true, cancelable: true, clientY: b.top + b.height / 2 }}));
+            dst.dispatchEvent(new DragEvent('drop', {{ dataTransfer: dt, bubbles: true, cancelable: true, clientY: b.top + b.height / 2 }})); }}""")
+        self.assertEqual(names(), ["Background", "A<Group 1", "C<Group 1", "B<Group 1", "Group 1"])
+        # The Move tool with the group active moves every layer in it, as one undo step.
+        pg.evaluate(f"""() => {{ const e = {ed}; e.setActive(e.doc.layers.find((l) => l.name === 'Group 1').id); e.setTool('move');
+            for (const l of e.doc.layers) if (l.kind === 'pixel' && l.name !== 'Background') {{ const b = e.pix.get(l.id); b.fill(0); for (let i = 0; i < 40; i++) b.set([255, 0, 0, 255], ((20 + i) * 200 + 20) * 4); }} }}""")
+        x0, y0, w, h = pg.evaluate(f"() => {{ const r = {ed}.canvas.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }}")
+        k = w / 200
+        pg.mouse.move(x0 + 100 * k, y0 + 60 * k); pg.mouse.down()
+        pg.mouse.move(x0 + 110 * k, y0 + 65 * k, steps=4); pg.mouse.up()
+        pos = pg.evaluate(f"() => {ed}.doc.layers.filter((l) => l.kind === 'pixel').map((l) => [l.name, l.x, l.y])")
+        self.assertEqual(pos, [["Background", 0, 0], ["A", 10, 5], ["C", 10, 5], ["B", 10, 5]])
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Move layers")
+        # The page's picture with the group equals the server's, saved as an .ora with the group in it.
+        pg.evaluate(f"() => {{ const e = {ed}; e.setLayerProps(e.active().id, {{ blend: 'multiply', opacity: 0.7 }}, 'Group'); }}")
+        pg.evaluate("() => __panel.paintSave(__panel._paintActive())")
+        pg.wait_for_function(f"() => !{ed}.isDirty()", timeout=10000)
+        path = pg.evaluate("() => __panel._paintActive().path")
+        doc = self.P.read_ora(path)
+        self.assertEqual([L["name"] for L in doc.layers], ["Background", "A", "C", "B", "Group 1"])
+        self.assertEqual(doc.layers[-1]["blend"], "multiply")
+        js = pg.evaluate(f"""async () => {{ const D = await import('/extensions/viewer/imageViewer_paintData.js'); const e = {ed};
+            return [...D.composite(e.doc, e._pixOf, e._maskOf)]; }}""")
+        py = self.P.composite(doc)
+        self.assertLessEqual(int(np.abs(np.array(js, np.int32).reshape(py.shape) - py.astype(np.int32)).max()), 1)
+        # Ctrl+E on the group: one layer that looks the same; undo; Ctrl+Shift+G ungroups.
+        before = pg.evaluate(f"() => [...{ed}.comp]")
+        pg.mouse.move(x0 + 50, y0 + 50)
+        pg.keyboard.press("Control+e")
+        self.assertEqual(names(), ["Background", "Group 1"])
+        self.assertEqual(pg.evaluate(f"() => [...{ed}.comp]"), before)
+        pg.keyboard.press("Control+z")
+        pg.keyboard.press("Control+Shift+g")
+        self.assertEqual(names(), ["Background", "A", "C", "B"])
+        self.assertEqual(sorted(pg.evaluate(f"() => {ed}.pickedLayers().map((l) => l.name)")), ["A", "B", "C"])
+        # Delete with several picked: all of them go, in one step.
+        pg.evaluate(f"() => {ed}.deleteLayer()")
+        self.assertEqual(names(), ["Background"])
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,7 +5,7 @@ fill from the surroundings, a resize of every layer).
 ``apply_ops(doc, ops, read_image)`` changes *doc* in place, all or none (the caller works on a copy
 read from the file and writes it only when every op went through), and returns what was done, one
 line per op. Layers are named as the Layers panel shows them: a number from 1 at the TOP, a name,
-or "active". No aiohttp here.
+or "active" - a group counts as a row, and the rows inside it follow it. No aiohttp here.
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from . import paint_math as M
 MAX_OPS = 60
 OPS = ("add_layer", "add_adjustment", "set_layer", "remove_layer", "duplicate_layer", "move_layer", "merge_down",
        "flatten", "select", "mask", "fill", "clear", "heal", "filter", "crop", "canvas_size", "resize",
-       "transform", "add_text")
+       "transform", "add_text", "group", "ungroup", "merge_group")
 ANCHORS = {"top_left": (0, 0), "top": (0.5, 0), "top_right": (1, 0), "left": (0, 0.5), "center": (0.5, 0.5),
            "right": (1, 0.5), "bottom_left": (0, 1), "bottom": (0.5, 1), "bottom_right": (1, 1)}
 
@@ -71,7 +71,8 @@ def find_layer(doc, ref, kind=None):
         if L is None:
             raise OpError(f"no layer is called {s!r}")
     if kind and L["kind"] != kind:
-        raise OpError(f"{L['name']!r} is {'an adjustment' if L['kind'] == 'adjust' else 'a pixel'} layer")
+        what = {"adjust": "an adjustment layer", "group": "a group", "pixel": "a pixel layer"}[L["kind"]]
+        raise OpError(f"{L['name']!r} is {what}")
     return L
 
 
@@ -86,12 +87,29 @@ def _index_of(doc, L):
 
 
 def _place_index(doc, op):
-    """Where a new layer goes (an index from the bottom): above / below a layer, or at the top."""
+    """Where a new layer goes (an index from the bottom): above / below a layer, at the top of a group
+    (``into``), or at the top. Its group is put on the op as ``_parent`` (see :func:`_placed`)."""
+    op.pop("_parent", None)
+    if op.get("into") not in (None, ""):
+        G = find_layer(doc, op["into"], "group")
+        op["_parent"] = G["id"]
+        return _index_of(doc, G)
     if op.get("below") not in (None, ""):
-        return _index_of(doc, find_layer(doc, op["below"]))
+        R = find_layer(doc, op["below"])
+        op["_parent"] = R.get("parent")
+        return _index_of(doc, P.subtree(doc, R)[0])
     if op.get("above") not in (None, ""):
-        return _index_of(doc, find_layer(doc, op["above"])) + 1
+        R = find_layer(doc, op["above"])
+        op["_parent"] = R.get("parent")
+        return _index_of(doc, R) + 1
     return len(doc.layers)
+
+
+def _placed(L, op):
+    """The new layer *L* into the group :func:`_place_index` chose."""
+    if op.get("_parent"):
+        L["parent"] = op["_parent"]
+    return L
 
 
 def _resize(px, w, h, method="lanczos"):
@@ -190,6 +208,7 @@ def apply_ops(doc, ops, read_image, fonts=None):
             said.append(_ONE[name](doc, op, read_image, fonts))
         except OpError as e:
             raise OpError(f"change {n} ({name}): {e}") from None
+        P.fix_tree(doc.layers)
     return said
 
 
@@ -227,6 +246,7 @@ def _add_layer(doc, op, read_image, _fonts):
         what = "filled " + ("#%02x%02x%02x" % col[:3]) if col[3] else "empty"
     L = doc.add_pixel_layer(px, name[:120], x, y, index=idx, opacity=M._num(op.get("opacity"), 100, 0, 100) / 100,
                             blend=op.get("blend") if op.get("blend") in M.BLEND_MODES else "normal")
+    _placed(L, op)
     m = None
     if op.get("mask_file"):
         m = _read_mask(read_image, op, doc)
@@ -245,6 +265,7 @@ def _add_adjustment(doc, op, _read, _fonts):
         raise OpError(f"unknown adjustment {kind!r} (one of {', '.join(M.ADJUST_TYPES)})")
     L = doc.add_adjust_layer(kind, op.get("params") or {}, str(op.get("name") or "").strip() or None,
                              index=_place_index(doc, op), opacity=M._num(op.get("opacity"), 100, 0, 100) / 100)
+    _placed(L, op)
     if op.get("mask") == "selection":
         L["mask"] = {"enabled": True, "x": 0, "y": 0, "w": doc.w, "h": doc.h, "fill": 0}
         doc.masks[L["id"]] = _selection(doc).copy()
@@ -269,15 +290,17 @@ def _set_layer(doc, op, _read, _fonts):
         L["opacity"] = M._num(op["opacity"], 100, 0, 100) / 100
         changed.append(f"opacity {round(L['opacity'] * 100)}%")
     if "blend" in op:
-        if op["blend"] not in M.BLEND_MODES:
-            raise OpError(f"unknown blend mode {op['blend']!r} (one of {', '.join(M.BLEND_MODES)})")
+        modes = M.GROUP_BLENDS if L["kind"] == "group" else M.BLEND_MODES
+        if op["blend"] not in modes:
+            raise OpError(f"unknown blend mode {op['blend']!r} (one of {', '.join(modes)})")
         if L["kind"] == "adjust":
             raise OpError("an adjustment layer has no blend mode here")
         L["blend"] = op["blend"]
         changed.append(f"blend {L['blend']}")
     if "x" in op or "y" in op:
         if L["kind"] != "pixel":
-            raise OpError("an adjustment layer has no place")
+            raise OpError(f"{'a group' if L['kind'] == 'group' else 'an adjustment layer'} has no place of its own"
+                          + (" - move the layers inside it" if L["kind"] == "group" else ""))
         L["x"] = int(M._num(op.get("x"), L["x"]))
         L["y"] = int(M._num(op.get("y"), L["y"]))
         changed.append(f"at {L['x']},{L['y']}")
@@ -287,6 +310,9 @@ def _set_layer(doc, op, _read, _fonts):
         merged = {**L["adjust"]["params"], **(op["params"] if isinstance(op["params"], dict) else {})}
         L["adjust"]["params"] = M.clean_adjust(L["adjust"]["type"], merged)
         changed.append("its numbers")
+    if "collapsed" in op and L["kind"] == "group":
+        L["collapsed"] = bool(op["collapsed"])
+        changed.append("folded" if L["collapsed"] else "opened")
     if op.get("active"):
         doc.meta["active"] = L["id"]
         changed.append("made active")
@@ -297,7 +323,7 @@ def _set_layer(doc, op, _read, _fonts):
 
 def _remove_layer(doc, op, _read, _fonts):
     L = _unlocked(find_layer(doc, op.get("layer")))
-    if len(doc.layers) == 1:
+    if len(P.subtree(doc, L)) >= len(doc.layers):
         raise OpError("the last layer cannot be taken out")
     doc.remove(L["id"])
     return f"removed layer {L['name']!r}"
@@ -305,50 +331,205 @@ def _remove_layer(doc, op, _read, _fonts):
 
 def _duplicate_layer(doc, op, _read, _fonts):
     L = find_layer(doc, op.get("layer"))
-    C = copy.deepcopy(L)
-    C["id"] = P.new_id()
+    block = P.subtree(doc, L)
+    new = {x["id"]: P.new_id() for x in block}
+    at = _index_of(doc, L) + 1
+    copies = []
+    for x in block:
+        C = copy.deepcopy(x)
+        C["id"] = new[x["id"]]
+        if x.get("parent") in new:
+            C["parent"] = new[x["parent"]]
+        C["locked"] = False
+        if x["id"] in doc.px:
+            doc.px[C["id"]] = doc.px[x["id"]].copy()
+        if x["id"] in doc.masks:
+            doc.masks[C["id"]] = doc.masks[x["id"]].copy()
+        copies.append(C)
+    C = copies[-1]
     C["name"] = str(op.get("name") or f"{L['name']} copy")[:120]
-    C["locked"] = False
-    if L["id"] in doc.px:
-        doc.px[C["id"]] = doc.px[L["id"]].copy()
-    if L["id"] in doc.masks:
-        doc.masks[C["id"]] = doc.masks[L["id"]].copy()
-    doc._insert(C, _index_of(doc, L) + 1)
-    return f"duplicated {L['name']!r} as {C['name']!r}"
+    if len(doc.layers) + len(copies) > P.MAX_LAYERS:
+        raise OpError(f"at most {P.MAX_LAYERS} layers")
+    doc.layers[at:at] = copies
+    doc.meta["active"] = C["id"]
+    return f"duplicated {L['name']!r} as {C['name']!r}" + (f" ({len(copies) - 1} layers inside)" if len(copies) > 1 else "")
 
 
 def _move_layer(doc, op, _read, _fonts):
+    """A layer (a group with what is in it) moved: among the layers of its group (top, bottom, up,
+    down), to a place from the top (it takes the place - and the group - of the layer there), or
+    ``into`` a group (its top) / ``into: "none"`` out of every group (just above the group it was in)."""
     L = find_layer(doc, op.get("layer"))
-    i = _index_of(doc, L)
-    to = op.get("to")
-    n = len(doc.layers)
-    if to == "top":
-        j = n - 1
-    elif to == "bottom":
-        j = 0
-    elif to == "up":
-        j = min(n - 1, i + 1)
-    elif to == "down":
-        j = max(0, i - 1)
+    block = P.subtree(doc, L)
+    ids = {x["id"] for x in block}
+    rest = [x for x in doc.layers if x["id"] not in ids]
+    into, to = op.get("into"), op.get("to")
+    if into not in (None, ""):
+        if str(into).lower() in ("none", "document", "top_level"):
+            anc = P.ancestors(doc, L)
+            if not anc:
+                raise OpError(f"{L['name']!r} is in no group")
+            out = anc[-1]
+            L.pop("parent", None)
+            j = next(k for k, x in enumerate(rest) if x["id"] == out["id"]) + 1
+            what = "out of its groups"
+        else:
+            G = find_layer(doc, into, "group")
+            if G["id"] in ids:
+                raise OpError("a group cannot go inside itself")
+            L["parent"] = G["id"]
+            j = next(k for k, x in enumerate(rest) if x["id"] == G["id"])
+            what = f"into the group {G['name']!r}"
+        doc.layers[:] = rest[:j] + block + rest[j:]
+        return f"moved {L['name']!r} {what}"
+    par = L.get("parent")
+    sibs = [x for x in rest if x.get("parent") == par]
+    pos = next((k for k, x in enumerate(doc.layers) if x["id"] == L["id"]), 0)
+    below = [x for x in sibs if _index_of(doc, x) < pos]
+    if to in ("top", "bottom", "up", "down"):
+        if to == "top":
+            ref, side = (sibs[-1] if sibs else None), "above"
+        elif to == "bottom":
+            ref, side = (sibs[0] if sibs else None), "below"
+        elif to == "up":
+            above = [x for x in sibs if _index_of(doc, x) > pos]
+            ref, side = (above[0] if above else None), "above"
+        else:
+            ref, side = (below[-1] if below else None), "below"
     elif isinstance(to, (int, float)) or (isinstance(to, str) and to.isdigit()):
+        n = len(doc.layers)
         k = int(to)
         if not 1 <= k <= n:
             raise OpError(f"'to' is 1 (top) .. {n} (bottom)")
-        j = n - k
+        ref = doc.layers[n - k]
+        if ref["id"] in ids:
+            return f"{L['name']!r} is at place {k} already"
+        L["parent"] = ref.get("parent")
+        if not L["parent"]:
+            L.pop("parent")
+        side = "above" if _index_of(doc, ref) > pos else "below"
     else:
-        raise OpError("'to' is top, bottom, up, down or a place from the top (1 = top)")
-    doc.layers.insert(j, doc.layers.pop(i))
-    return f"moved {L['name']!r} to place {n - j} from the top"
+        raise OpError("'to' is top, bottom, up, down or a place from the top (1 = top); or give 'into' a group")
+    if ref is None:
+        return f"{L['name']!r} stays where it is"
+    rb = P.subtree(doc, ref)
+    if side == "above":
+        j = next(k for k, x in enumerate(rest) if x["id"] == rb[-1]["id"]) + 1
+    else:
+        j = next(k for k, x in enumerate(rest) if x["id"] == rb[0]["id"])
+    doc.layers[:] = rest[:j] + block + rest[j:]
+    place = len(doc.layers) - _index_of(doc, L)
+    return f"moved {L['name']!r} to place {place} from the top"
+
+
+def _group(doc, op, _read, _fonts):
+    """Layers into a new group, where the top one of them was; in the order they are in."""
+    refs = op.get("layers")
+    if refs in (None, ""):
+        refs = [op.get("layer")]
+    if not isinstance(refs, list) or not refs:
+        raise OpError("'layers' is a list of layers to put in the group")
+    picked = [find_layer(doc, r) for r in refs]
+    pid = {x["id"] for x in picked}
+    # A layer whose group is picked too goes with its group.
+    tops = [x for x in doc.layers if x["id"] in pid and not any(a["id"] in pid for a in P.ancestors(doc, x))]
+    top = tops[-1]
+    par = top.get("parent")
+    if len(P.ancestors(doc, top)) >= P.MAX_DEPTH:
+        raise OpError("groups go at most %d deep" % P.MAX_DEPTH)
+    blend = op.get("blend") or "pass_through"
+    if blend not in M.GROUP_BLENDS:
+        raise OpError(f"unknown blend mode {blend!r} (one of {', '.join(M.GROUP_BLENDS)})")
+    G = P.clean_layer({"id": P.new_id(), "name": str(op.get("name") or _fresh_group_name(doc))[:120], "kind": "group",
+                       "blend": blend, "opacity": M._num(op.get("opacity"), 100, 0, 100) / 100,
+                       **({"parent": par} if par else {})})
+    if len(doc.layers) >= P.MAX_LAYERS:
+        raise OpError(f"at most {P.MAX_LAYERS} layers")
+    blocks = [x for T in tops for x in P.subtree(doc, T)]
+    bid = {x["id"] for x in blocks}
+    rest = [x for x in doc.layers if x["id"] not in bid]
+    # Where the top one was: above the layer under it among what is left.
+    j = _index_of(doc, P.subtree(doc, top)[0])
+    j = len([x for x in doc.layers[:j] if x["id"] not in bid])
+    for T in tops:
+        T["parent"] = G["id"]
+    doc.layers[:] = rest[:j] + blocks + [G] + rest[j:]
+    doc.meta["active"] = G["id"]
+    return f"put {len(tops)} layer{'s' if len(tops) != 1 else ''} into the group {G['name']!r}"
+
+
+def _fresh_group_name(doc):
+    taken = {x["name"] for x in doc.layers}
+    n = sum(1 for x in doc.layers if x["kind"] == "group") + 1
+    while f"Group {n}" in taken:
+        n += 1
+    return f"Group {n}"
+
+
+def _ungroup(doc, op, _read, _fonts):
+    G = _unlocked(find_layer(doc, op.get("layer"), "group"))
+    kids = [x for x in doc.layers if x.get("parent") == G["id"]]
+    for x in kids:
+        if G.get("parent"):
+            x["parent"] = G["parent"]
+        else:
+            x.pop("parent", None)
+    if G.get("mask") or G.get("opacity", 1) < 1 or G.get("blend") != "pass_through":
+        doc.notes.append(f"the group {G['name']!r} had its own opacity, blend mode or mask; they went with it")
+    doc.meta["layers"] = [x for x in doc.layers if x["id"] != G["id"]]
+    doc.masks.pop(G["id"], None)
+    doc.meta["active"] = kids[-1]["id"] if kids else (doc.layers[-1]["id"] if doc.layers else None)
+    return f"took the {len(kids)} layer{'s' if len(kids) != 1 else ''} out of the group {G['name']!r}"
+
+
+def _merge_group(doc, op, _read, _fonts):
+    """A group made one pixel layer the size of the canvas: what it shows, as it shows it, alone."""
+    G = _unlocked(find_layer(doc, op.get("layer"), "group"))
+    block = P.subtree(doc, G)
+    sub = P.PaintDoc(doc.w, doc.h)
+    sub.meta["layers"] = [dict(x) for x in block]
+    top = sub.meta["layers"][-1]
+    top.pop("parent", None)
+    top.update(visible=True, opacity=1.0, mask=None)
+    top.pop("mask")
+    top["blend"] = "normal"
+    sub.px = {x["id"]: doc.px[x["id"]] for x in block if x["id"] in doc.px}
+    sub.masks = {x["id"]: doc.masks[x["id"]] for x in block[:-1] if x["id"] in doc.masks}
+    flat = P.composite(sub)
+    at = _index_of(doc, block[0])
+    L = P.clean_layer({"id": P.new_id(), "name": G["name"], "kind": "pixel", "x": 0, "y": 0, "w": doc.w, "h": doc.h,
+                       "opacity": G["opacity"], "visible": G["visible"],
+                       "blend": G["blend"] if G["blend"] in M.BLEND_MODES else "normal",
+                       **({"parent": G["parent"]} if G.get("parent") else {})})
+    if G.get("mask") and G["id"] in doc.masks:
+        L["mask"] = dict(G["mask"])
+    for x in block:
+        doc.px.pop(x["id"], None)
+        if x["id"] != G["id"]:
+            doc.masks.pop(x["id"], None)
+    if G["id"] in doc.masks:
+        doc.masks[L["id"]] = doc.masks.pop(G["id"])
+    ids = {x["id"] for x in block}
+    rest = [x for x in doc.layers if x["id"] not in ids]
+    doc.layers[:] = rest[:at] + [L] + rest[at:]
+    doc.px[L["id"]] = flat
+    doc.meta["active"] = L["id"]
+    if G["blend"] == "pass_through" and any(x["kind"] == "adjust" or x.get("blend") != "normal" for x in block[:-1]):
+        doc.notes.append(f"{G['name']!r} was Pass Through: merged, its layers no longer mix with what is under it")
+    return f"merged the group {G['name']!r} ({len(block) - 1} layers) into one layer"
 
 
 def _merge_down(doc, op, _read, _fonts):
     L = _unlocked(find_layer(doc, op.get("layer")))
+    if L["kind"] == "group":
+        raise OpError(f"{L['name']!r} is a group: merge_group makes it one layer first")
     i = _index_of(doc, L)
-    if i == 0:
-        raise OpError(f"{L['name']!r} is the bottom layer: nothing under it to merge into")
-    B = _unlocked(doc.layers[i - 1])
+    under = [x for x in doc.layers[:i] if x.get("parent") == L.get("parent")]
+    if not under:
+        raise OpError(f"{L['name']!r} is the bottom layer{' of its group' if L.get('parent') else ''}: nothing under it to merge into")
+    B = _unlocked(under[-1])
     if B["kind"] != "pixel":
-        raise OpError(f"the layer under it, {B['name']!r}, is an adjustment layer")
+        raise OpError(f"the layer under it, {B['name']!r}, is {'a group' if B['kind'] == 'group' else 'an adjustment layer'}")
     base = _canvas_layer(doc, B)
     sub = P.PaintDoc(B["w"], B["h"])
     # Both laid on a document the size of the layer underneath (its place as 0, 0).
@@ -685,6 +866,7 @@ def _add_text(doc, op, _read, fonts):
     x = int(M._num(op.get("x"), (doc.w - px.shape[1]) // 2))
     y = int(M._num(op.get("y"), (doc.h - px.shape[0]) // 2))
     L = doc.add_pixel_layer(px, str(op.get("name") or text.splitlines()[0][:40]), x, y, index=_place_index(doc, op))
+    _placed(L, op)
     L["text"] = t
     return f"added text {text.splitlines()[0][:40]!r} at {x},{y}"
 
@@ -693,4 +875,5 @@ _ONE = {"add_layer": _add_layer, "add_adjustment": _add_adjustment, "set_layer":
         "remove_layer": _remove_layer, "duplicate_layer": _duplicate_layer, "move_layer": _move_layer,
         "merge_down": _merge_down, "flatten": _flatten, "select": _select, "mask": _mask, "fill": _fill,
         "clear": _clear, "heal": _heal, "filter": _filter, "crop": _crop, "canvas_size": _canvas_size,
-        "resize": _resize_doc, "transform": _transform, "add_text": _add_text}
+        "resize": _resize_doc, "transform": _transform, "add_text": _add_text, "group": _group,
+        "ungroup": _ungroup, "merge_group": _merge_group}
