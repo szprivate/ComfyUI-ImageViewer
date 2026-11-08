@@ -49,8 +49,9 @@ except Exception:  # pragma: no cover
     atlas_render = None
 try:
     from . import deps_graph
+    from . import deps_provenance
 except Exception:  # pragma: no cover
-    deps_graph = None
+    deps_graph = deps_provenance = None
 try:
     from . import lora_io
 except Exception:  # pragma: no cover
@@ -1981,6 +1982,8 @@ try:
                 g = deps_graph.graph(path, up=up, down=down, limit=200)
                 for n in g.get("nodes") or []:
                     n["viewable"] = bool(n.get("exists")) and path_access.may_serve(str(n.get("id") or ""))
+                    if n["viewable"] and not n.get("fold"):
+                        n["models"] = deps_provenance.models_of(str(n.get("id") or ""))
                 return g
             try:
                 out = await asyncio.get_running_loop().run_in_executor(None, _work)

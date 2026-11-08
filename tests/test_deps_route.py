@@ -71,6 +71,8 @@ class DepsRoute(unittest.TestCase):
             self.assertEqual(set(names), {"plate.png", "depth_00001_.png", "render_00001_.png"})
             self.assertTrue(all(n["viewable"] for n in names.values()))
             self.assertEqual(names["render_00001_.png"]["prompts"][0]["text"], "a kitchen at dawn")
+            self.assertEqual([m["name"] for m in names["render_00001_.png"]["models"]], ["flux"])
+            self.assertEqual(names["plate.png"]["models"], [])
         # "Look in folder" on the plate's own folder finds nothing new; what was made from it is known now.
         st, g = await call("POST", "/imageviewer/deps", json={"path": os.path.join(self.dirs["input"], "plate.png"), "scan": True})
         self.assertEqual(len(g["nodes"]), 3)

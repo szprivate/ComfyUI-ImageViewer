@@ -206,3 +206,22 @@ export function edgePath(e) {
     const dy = Math.max(24, (e.y2 - e.y1) / 2);
     return `M${e.x1},${e.y1} C${e.x1},${e.y1 + dy} ${e.x2},${e.y2 - dy} ${e.x2},${e.y2}`;
 }
+
+// ── a node's frame: still or film, and the model it was made with ──
+
+const VIDEO_EXT = new Set(["mp4", "mov", "webm", "mkv", "m4v", "avi", "gif"]);
+const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "webp", "exr", "tif", "tiff", "bmp", "dpx", "hdr", "avif", "tga"]);
+/** "video", "image" or "" (sound, 3D, anything else gets no frame), by the file's extension. */
+export const depsMediaOf = (name) => {
+    const ext = String(name || "").split(/[\\/]/).pop().split(".").pop().toLowerCase();
+    return VIDEO_EXT.has(ext) ? "video" : IMAGE_EXT.has(ext) ? "image" : "";
+};
+/** The caption of a node's frame: its main models ("flux1-dev + 2 LoRA"), "" with none. Pure. */
+export const depsModelCaption = (models) => {
+    const list = Array.isArray(models) ? models : [];
+    const main = list.filter((m) => m.role === "model" || m.role === "partner").map((m) => m.name);
+    const loras = list.filter((m) => m.role === "lora").length;
+    const ups = list.filter((m) => m.role === "upscale").map((m) => m.name);
+    const head = main.length ? main.slice(0, 2).join(" + ") + (main.length > 2 ? ` +${main.length - 2}` : "") : ups.slice(0, 1).join("");
+    return [head, loras ? `${loras} LoRA` : ""].filter(Boolean).join(" + ");
+};
