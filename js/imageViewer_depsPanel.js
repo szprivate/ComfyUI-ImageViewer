@@ -20,7 +20,7 @@
 // a file saved by any node that embeds its graph (Save Image, Save Video ...) is worked out the first time it is
 // looked at. Data comes from POST /imageviewer/deps (src/deps_graph.py), read in ComfyUI itself.
 import { api } from "../../scripts/api.js";
-import { layout, edgePath, applyPlacement, depsMediaOf, depsModelCaption } from "./imageViewer_depsLayout.js";
+import { layout, edgePath, applyPlacement, depsMediaOf, depsCaption } from "./imageViewer_depsLayout.js";
 
 export const DEPS_PREFIX = "deps:";
 const baseOf = (p) => String(p || "").split(/[\\/]/).pop();
@@ -300,7 +300,8 @@ export const DepsPanelMixin = {
         meta.textContent = n.fold ? "click to unfold" : [n.kind, n.stale ? "out of date" : "", n.exists ? "" : "gone"].filter(Boolean).join(" · ");
         // A coloured frame round the picture says still or film; its caption, the model the file was made with.
         const media = n.fold ? "" : depsMediaOf(n.file || n.id);
-        const caption = depsModelCaption(n.models);
+        const gen = n.generator || null;
+        const caption = depsCaption(n.models, n.tags);
         if (media) {
             thumb.classList.add("dp-media", `dp-media-${media}`);
             const cap = doc.createElement("div");
@@ -318,7 +319,12 @@ export const DepsPanelMixin = {
             thumb.append(cap);
         }
         el.append(thumb, label, meta);
-        const modelLines = (n.models || []).map((m) => `${m.role === "aux" ? "uses" : m.role}: ${m.value || m.name}`);
+        const modelLines = gen && !n.models?.some((m) => m.node)
+            ? [`made with: ${[gen.service, gen.model, gen.provider && `(${gen.provider})`].filter(Boolean).join(" ")}`,
+               gen.source === "c2pa" ? "read from the file's content credentials (C2PA), not verified"
+                   : gen.source === "name" ? "known by its file name" : "recorded when agentY downloaded it",
+               gen.created ? `created: ${gen.created}` : ""].filter(Boolean)
+            : (n.models || []).map((m) => `${m.role === "aux" ? "uses" : m.role}: ${m.value || m.name}`);
         el.title = n.fold ? `${n.count} ${n.kind} passes made from the same file`
             : [n.id, n.stale ? `Out of date: ${n.stale}` : "", ...modelLines].filter(Boolean).join("\n");
         el.addEventListener("click", (e) => {

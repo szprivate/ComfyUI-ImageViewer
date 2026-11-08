@@ -28,7 +28,9 @@ STUB = """() => {
       kind: 'mask', exists: true, stale: '', viewable: false}));
   const graph = {root: 'D:/out/depth.mp4', truncated: false,
     nodes: [
-      {id: 'D:/in/plate.mp4', file: 'plate.mp4', kind: 'source', exists: true, stale: '', viewable: false},
+      {id: 'D:/in/plate.mp4', file: 'plate.mp4', kind: 'source', exists: true, stale: '', viewable: false,
+       tags: ['magnific', 'dreamina-seedance-2-5'], models: [{name: 'dreamina-seedance-2-5', role: 'partner', value: 'x'}],
+       generator: {service: 'magnific', model: 'dreamina-seedance-2-5', provider: 'BytePlus', source: 'c2pa'}},
       {id: 'D:/out/depth.mp4', file: 'depth.mp4', kind: 'depth', exists: true, stale: '', viewable: false, root: true,
        models: [{name: 'depth_anything_v2_vitl', role: 'model', value: 'depth_anything_v2_vitl.pth'}]},
       {id: 'D:/out/render.png', file: 'render.png', kind: 'render', exists: true,
@@ -200,7 +202,9 @@ class DepsTabBrowserTests(unittest.TestCase):
                 media: t.classList.contains('dp-media-video') ? 'video' : t.classList.contains('dp-media-image') ? 'image' : '',
                 caption: c ? c.textContent : null, border: getComputedStyle(t).borderTopColor, title: el.title}]; }))""")
         self.assertEqual(got["plate.mp4"]["media"], "video")
-        self.assertEqual(got["plate.mp4"]["caption"], "VIDEO")
+        self.assertEqual(got["plate.mp4"]["caption"], "VIDEOmagnific · dreamina-seedance-2-5")
+        self.assertIn("made with: magnific dreamina-seedance-2-5 (BytePlus)", got["plate.mp4"]["title"])
+        self.assertIn("content credentials (C2PA), not verified", got["plate.mp4"]["title"])
         self.assertEqual(got["depth.mp4"]["caption"], "VIDEOdepth_anything_v2_vitl")
         self.assertEqual(got["render.png"]["media"], "image")
         self.assertEqual(got["render.png"]["caption"], "IMAGEflux1-dev + 1 LoRA")
