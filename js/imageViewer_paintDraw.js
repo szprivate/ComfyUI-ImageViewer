@@ -220,6 +220,8 @@ export const DrawMixin = {
 
     _gradMove(dr, p, e) {
         [dr.x1, dr.y1] = e.shiftKey ? snap45(dr.x0, dr.y0, p.x, p.y) : this._snapPt(p.x, p.y);
+        // On a big picture the gradient is shown as it is dragged (at about the screen's resolution).
+        this._previewGradient(dr);
         this.drawOverlay();
     },
 
