@@ -30,6 +30,10 @@ Its three panels, **Layers**, **Properties** and **History**, show only on a Pai
 | <kbd>Shift</kbd>+<kbd>J</kbd> | Switches between the healing brush, the patch and the spot healing brush. The **healing brush** paints the texture from a source (<kbd>Alt</kbd>+click) in the light and colour of where it lands. The **patch** fills a selection from wherever you drag it, or carries it there (Destination) |
 | <kbd>E</kbd> | Eraser |
 | <kbd>G</kbd> | Paint bucket |
+| <kbd>Shift</kbd>+<kbd>G</kbd> | Gradient (see below) |
+| <kbd>O</kbd> / <kbd>Shift</kbd>+<kbd>O</kbd> | Dodge (lightens), then burn (darkens) and the sponge (takes colour out or puts more in). Dodge and burn work most on the shadows, the midtones or the highlights; Exposure sets how strongly |
+| <kbd>R</kbd> | Smudge: drags the paint along the stroke. Strength sets how far; Finger painting starts each stroke with the colour |
+| <kbd>U</kbd> / <kbd>Shift</kbd>+<kbd>U</kbd> | Shapes: rectangle, rounded rectangle, ellipse, polygon, line (Shift+U: the next one) |
 | <kbd>I</kbd> | Eyedropper |
 | <kbd>T</kbd> | Text |
 | <kbd>H</kbd> or hold <kbd>Space</kbd> | Hand |
@@ -46,6 +50,14 @@ The brush and the eraser can paint with a picture as their tip instead of a roun
 The tips are kept in this browser (IndexedDB), not in the picture. The tip's longer side is the brush size. With a tip chosen, **Angle** turns it. **Scatter**, **Size jitter** and **Angle jitter** vary each dab.
 
 The .abr reader was written from the file's published layout and tested on files built for the tests. Brush files from other programs may still hold a variant it cannot read; it then says so and reads nothing.
+
+## Gradient and shapes
+
+**Gradient**: drag across the picture. <kbd>Shift</kbd> keeps the line in 45° steps. The types are Linear, Radial, Angle, Reflected and Diamond. The colours are the colour to the second colour, the colour to transparent, colour / second / colour, or black to white; Reverse turns them round. The gradient goes into the selection on the layer. With the mask picked it goes into the mask, as grey.
+
+**Shapes**: drag a box. <kbd>Shift</kbd> makes it square or round, <kbd>Alt</kbd> draws it from the middle. A shape goes onto a new layer of its own, filled with the colour, with an edge in the second colour if Edge is on. A line is drawn in the colour. With Make: A path, the shape becomes a pen path instead, to select, fill, stroke or make a mask from later.
+
+The agent has both as ops: `gradient` (`from`, `to`, `type`, `colors` or `stops`, `opacity`, `reverse`; inside the selection when there is one) and `shape` (`kind`, `box` [x, y, w, h] or `from` / `to` for a line, `fill`, `stroke`, `width`, `radius`, `sides`, `as_path`).
 
 ## Distort, Perspective and Warp
 

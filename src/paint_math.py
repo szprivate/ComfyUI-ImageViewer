@@ -684,3 +684,129 @@ def move_paths(paths, dx=0.0, dy=0.0, kx=1.0, ky=1.0):
                 "ox": a["ox"] * kx + dx, "oy": a["oy"] * ky + dy} for a in q["pts"]]
         out.append({**q, "pts": pts})
     return out
+
+
+# ── gradients and shapes (paintDraw.js: gradientShare / gradientColor / gradientPixels / shapePath) ──
+
+GRADIENT_TYPES = ("linear", "radial", "angle", "reflected", "diamond")
+SHAPE_KINDS = ("rect", "rounded", "ellipse", "polygon", "line")
+KAPPA = 0.5522847498307936
+
+
+def gradient_share(kind, x, y, x0, y0, x1, y1):
+    """Where the points (x, y arrays: pixel middles) lie along a gradient dragged from (x0, y0) to (x1, y1), 0..1."""
+    dx, dy = x1 - x0, y1 - y0
+    ln = math.hypot(dx, dy)
+    px, py = x - x0, y - y0
+    if ln < 1e-9:
+        return np.zeros(np.broadcast(px, py).shape)
+    if kind == "radial":
+        t = np.hypot(px, py) / ln
+    elif kind == "angle":
+        t = (np.arctan2(py, px) - math.atan2(dy, dx)) / (2 * math.pi)
+        return t - np.floor(t)
+    elif kind == "diamond":
+        u = (px * dx + py * dy) / ln
+        v = (px * dy - py * dx) / ln
+        t = (np.abs(u) + np.abs(v)) / ln
+    else:
+        t = (px * dx + py * dy) / (ln * ln)
+        if kind == "reflected":
+            t = np.abs(t)
+    return np.clip(t, 0, 1)
+
+
+def clean_stops(stops):
+    out = []
+    for s in stops if isinstance(stops, list) else []:
+        s = s if isinstance(s, dict) else {}
+        c = list(s.get("c") or [])
+        cc = []
+        for k in range(4):
+            v = c[k] if k < len(c) and c[k] is not None else (255 if k == 3 else 0)
+            cc.append(int(min(255, max(0, math.floor(float(v) + 0.5)))))
+        out.append({"t": min(1.0, max(0.0, float(s.get("t") or 0))), "c": cc})
+    out.sort(key=lambda s: s["t"])
+    if len(out) == 1:
+        out.append({"t": 1.0, "c": list(out[0]["c"])})
+    return out or [{"t": 0.0, "c": [0, 0, 0, 255]}, {"t": 1.0, "c": [255, 255, 255, 255]}]
+
+
+def gradient_color(stops, t):
+    """Straight RGBA 0..1 at t (array), mixed premultiplied between the stops either side."""
+    t = np.asarray(t, dtype=np.float64)
+    n = len(stops)
+    ts = np.array([s["t"] for s in stops])
+    cs = np.array([s["c"] for s in stops], dtype=np.float64) / 255.0
+    # The segment each t lies in, and the share f across it (as the page finds them).
+    idx = np.clip(np.searchsorted(ts, t, side="left") - 1, 0, n - 2) if n > 1 else np.zeros(t.shape, int)
+    a_t, b_t = ts[idx], ts[np.minimum(idx + 1, n - 1)]
+    f = np.where(b_t > a_t, (t - a_t) / np.where(b_t > a_t, b_t - a_t, 1), 1.0)
+    f = np.where(t <= ts[0], 0.0, np.where(t >= ts[-1], 0.0, f))
+    ai = np.where(t <= ts[0], 0, np.where(t >= ts[-1], n - 1, idx))
+    bi = np.where(t <= ts[0], 0, np.where(t >= ts[-1], n - 1, np.minimum(idx + 1, n - 1)))
+    A, B = cs[ai], cs[bi]
+    aa, ba = A[..., 3], B[..., 3]
+    al = aa + (ba - aa) * f
+    out = np.empty(t.shape + (4,))
+    for c in range(3):
+        pa, pb = A[..., c] * aa, B[..., c] * ba
+        out[..., c] = np.where(al > 0, (pa + (pb - pa) * f) / np.where(al > 0, al, 1), A[..., c] + (B[..., c] - A[..., c]) * f)
+    out[..., 3] = al
+    return out
+
+
+def gradient_stops(preset, fg, bg):
+    F, B = list(fg[:3]) + [255], list(bg[:3]) + [255]
+    if preset == "fg-clear":
+        return [{"t": 0, "c": F}, {"t": 1, "c": F[:3] + [0]}]
+    if preset == "bw":
+        return [{"t": 0, "c": [0, 0, 0, 255]}, {"t": 1, "c": [255, 255, 255, 255]}]
+    if preset == "fg-bg-fg":
+        return [{"t": 0, "c": F}, {"t": 0.5, "c": B}, {"t": 1, "c": F}]
+    return [{"t": 0, "c": F}, {"t": 1, "c": B}]
+
+
+def gradient_pixels(w, h, ox, oy, g):
+    """A gradient's RGBA (h, w, 4 uint8) over a box whose top left is at (ox, oy) on the canvas."""
+    xs = np.arange(w, dtype=np.float64)[None, :] + ox + 0.5
+    ys = np.arange(h, dtype=np.float64)[:, None] + oy + 0.5
+    t = gradient_share(g.get("type", "linear"), xs, ys, g["x0"], g["y0"], g["x1"], g["y1"])
+    t = np.broadcast_to(t, (h, w))
+    if g.get("reverse"):
+        t = 1 - t
+    return q8(gradient_color(clean_stops(g.get("stops")), t))
+
+
+def _pt(x, y, ix=None, iy=None, ox=None, oy=None, smooth=False):
+    return {"x": x, "y": y, "ix": x if ix is None else ix, "iy": y if iy is None else iy,
+            "ox": x if ox is None else ox, "oy": y if oy is None else oy, "smooth": smooth}
+
+
+def shape_path(kind, x0, y0, x1, y1, radius=0, sides=6):
+    """A shape's outline as a pen path, as ``paintDraw.shapePath``."""
+    if kind == "line":
+        return {"closed": False, "pts": [_pt(x0, y0), _pt(x1, y1)]}
+    l, r, t, b = min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)
+    w, h, cx, cy = r - l, b - t, (l + r) / 2, (t + b) / 2
+    if kind == "ellipse":
+        kx, ky = KAPPA * w / 2, KAPPA * h / 2
+        return {"closed": True, "pts": [
+            _pt(cx, t, cx - kx, t, cx + kx, t, True), _pt(r, cy, r, cy - ky, r, cy + ky, True),
+            _pt(cx, b, cx + kx, b, cx - kx, b, True), _pt(l, cy, l, cy + ky, l, cy - ky, True)]}
+    if kind == "polygon":
+        n = max(3, min(64, int(math.floor(float(sides or 6) + 0.5))))
+        pts = []
+        for i in range(n):
+            a = -math.pi / 2 + 2 * math.pi * i / n
+            pts.append(_pt(cx + w / 2 * math.cos(a), cy + h / 2 * math.sin(a)))
+        return {"closed": True, "pts": pts}
+    rr = max(0.0, min(float(radius or 0), w / 2, h / 2)) if kind == "rounded" else 0.0
+    if rr <= 0:
+        return {"closed": True, "pts": [_pt(l, t), _pt(r, t), _pt(r, b), _pt(l, b)]}
+    k = KAPPA * rr
+    return {"closed": True, "pts": [
+        _pt(l + rr, t, l + rr - k, t), _pt(r - rr, t, r - rr, t, r - rr + k, t),
+        _pt(r, t + rr, r, t + rr - k), _pt(r, b - rr, r, b - rr, r, b - rr + k),
+        _pt(r - rr, b, r - rr + k, b), _pt(l + rr, b, l + rr, b, l + rr - k, b),
+        _pt(l, b - rr, l, b - rr + k), _pt(l, t + rr, l, t + rr, l, t + rr - k)]}

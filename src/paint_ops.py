@@ -20,7 +20,7 @@ from . import paint_math as M
 MAX_OPS = 60
 OPS = ("add_layer", "add_adjustment", "set_layer", "remove_layer", "duplicate_layer", "move_layer", "merge_down",
        "flatten", "select", "mask", "fill", "clear", "heal", "filter", "crop", "canvas_size", "resize",
-       "transform", "add_text", "group", "ungroup", "merge_group", "path", "distort")
+       "transform", "add_text", "group", "ungroup", "merge_group", "path", "distort", "gradient", "shape")
 ANCHORS = {"top_left": (0, 0), "top": (0.5, 0), "top_right": (1, 0), "left": (0, 0.5), "center": (0.5, 0.5),
            "right": (1, 0.5), "bottom_left": (0, 1), "bottom": (0.5, 1), "bottom_right": (1, 1)}
 
@@ -1066,9 +1066,83 @@ def _distort(doc, op, _read, _fonts):
     return f"distorted {L['name']!r} onto {q}"
 
 
+def _xy(v, what):
+    if not isinstance(v, (list, tuple)) or len(v) != 2:
+        raise OpError(f"{what!r} is [x, y] in canvas pixels")
+    return float(M._num(v[0], 0)), float(M._num(v[1], 0))
+
+
+def _gradient(doc, op, _read, _fonts):
+    """A gradient from 'from' to 'to' onto a pixel layer, inside the selection when there is one."""
+    L = _unlocked(find_layer(doc, op.get("layer"), "pixel"))
+    kind = str(op.get("type") or "linear").lower()
+    if kind not in M.GRADIENT_TYPES:
+        raise OpError(f"'type' is one of {', '.join(M.GRADIENT_TYPES)}")
+    x0, y0 = _xy(op.get("from"), "from")
+    x1, y1 = _xy(op.get("to"), "to")
+    if op.get("stops"):
+        stops = [{"t": s.get("t", 0), "c": list(_color(s.get("color")))} for s in op["stops"] if isinstance(s, dict)]
+    else:
+        cols = op.get("colors") or ["#000000", "#ffffff"]
+        if not isinstance(cols, list) or len(cols) < 2:
+            raise OpError("'colors' is two or more colours (or give 'stops': [{t, color}])")
+        stops = [{"t": i / (len(cols) - 1), "c": list(_color(c))} for i, c in enumerate(cols)]
+    g = {"type": kind, "x0": x0, "y0": y0, "x1": x1, "y1": y1, "stops": stops, "reverse": bool(op.get("reverse"))}
+    px = _canvas_layer(doc, L)
+    h, w = px.shape[:2]
+    gp = M.gradient_pixels(w, h, L["x"], L["y"], g)
+    sel = _selection(doc, need=False)
+    t = _layer_area(doc, L, sel) if sel is not None else np.ones((h, w))
+    doc.px[L["id"]] = M.blend_over(px, gp, t * M._num(op.get("opacity"), 100, 0, 100) / 100, "normal")
+    return f"{kind} gradient on {L['name']!r} from {x0:g},{y0:g} to {x1:g},{y1:g}" + (" in the selection" if sel is not None else "")
+
+
+def _shape(doc, op, _read, _fonts):
+    """A rectangle, rounded rectangle, ellipse, polygon or line: on a new layer, or kept as a path ('as_path')."""
+    kind = str(op.get("kind") or "rect").lower()
+    if kind not in M.SHAPE_KINDS:
+        raise OpError(f"'kind' is one of {', '.join(M.SHAPE_KINDS)}")
+    if kind == "line":
+        x0, y0 = _xy(op.get("from"), "from")
+        x1, y1 = _xy(op.get("to"), "to")
+    else:
+        b = op.get("box")
+        if not isinstance(b, (list, tuple)) or len(b) != 4:
+            raise OpError("'box' is [x, y, w, h] in canvas pixels")
+        x0, y0 = float(M._num(b[0], 0)), float(M._num(b[1], 0))
+        x1, y1 = x0 + float(M._num(b[2], 1, 1)), y0 + float(M._num(b[3], 1, 1))
+    label = {"rect": "Rectangle", "rounded": "Rounded rectangle", "ellipse": "Ellipse", "polygon": "Polygon", "line": "Line"}[kind]
+    name = str(op.get("name") or "").strip()[:120]
+    path = M.clean_path({**M.shape_path(kind, x0, y0, x1, y1, op.get("radius") or 0, op.get("sides") or 6),
+                         "name": name or label})
+    if op.get("as_path"):
+        paths = doc.meta.setdefault("paths", [])
+        if len(paths) >= M.MAX_PATHS:
+            raise OpError(f"at most {M.MAX_PATHS} paths")
+        paths.append(path)
+        return f"path {path['name']!r}: a {label.lower()}"
+    W, H = doc.w, doc.h
+    fill = None if kind == "line" else op.get("fill", "#000000")
+    stroke = op.get("stroke", "#000000" if kind == "line" else None)
+    if not fill and not stroke:
+        raise OpError("give 'fill' and / or 'stroke' (colours)")
+    px = np.zeros((H, W, 4), dtype=np.uint8)
+    if fill:
+        c = np.zeros_like(px); c[...] = _color(fill)
+        px = M.blend_over(px, c, M.path_mask(W, H, path) / 255.0, "normal")
+    if stroke:
+        c = np.zeros_like(px); c[...] = _color(stroke)
+        width = M._num(op.get("width"), 4, 0.5, 1000)
+        px = M.blend_over(px, c, M.stroke_mask(W, H, M.flatten_path(path), path["closed"], width) / 255.0, "normal")
+    L = doc.add_pixel_layer(px, name or label, 0, 0, index=_place_index(doc, op))
+    _placed(L, op)
+    return f"added layer {L['name']!r}: a {label.lower()}" + (" filled" if fill else "") + (" with an edge" if stroke else "")
+
+
 _ONE = {"add_layer": _add_layer, "add_adjustment": _add_adjustment, "set_layer": _set_layer,
         "remove_layer": _remove_layer, "duplicate_layer": _duplicate_layer, "move_layer": _move_layer,
         "merge_down": _merge_down, "flatten": _flatten, "select": _select, "mask": _mask, "fill": _fill,
         "clear": _clear, "heal": _heal, "filter": _filter, "crop": _crop, "canvas_size": _canvas_size,
         "resize": _resize_doc, "transform": _transform, "add_text": _add_text, "group": _group,
-        "ungroup": _ungroup, "merge_group": _merge_group, "path": _path, "distort": _distort}
+        "ungroup": _ungroup, "merge_group": _merge_group, "path": _path, "distort": _distort,
+        "gradient": _gradient, "shape": _shape}

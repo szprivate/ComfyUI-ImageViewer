@@ -64,7 +64,7 @@ class PaintParity(unittest.TestCase):
             job["cases"][name] = {"doc": d.meta, "px": {k: b64(v) for k, v in d.px.items()},
                                   "masks": {k: b64(v) for k, v in d.masks.items()},
                                   "filters": getattr(d, "filters", None), "path": getattr(d, "path", None),
-                                  "distort": getattr(d, "distort", None)}
+                                  "distort": getattr(d, "distort", None), "draw": getattr(d, "draw", None)}
         with tempfile.TemporaryDirectory() as tmp:
             a, b = os.path.join(tmp, "in.json"), os.path.join(tmp, "out.json")
             with open(a, "w") as f:
@@ -238,6 +238,30 @@ class PaintParity(unittest.TestCase):
         self.same(d.px[L["id"]], got["distort"], d.px[L["id"]].shape, "distort", tol=1)
         with self.assertRaises(O.OpError):          # a bow tie is no shape a perspective makes
             O.apply_ops(d, [{"op": "distort", "corners": [[0, 0], [10, 0], [0, 10], [10, 10]]}], read_image=None)
+
+    def test_gradients_and_shapes(self):
+        d = rnd_doc(13, [])
+        rng = np.random.default_rng(13)
+        gs = []
+        for kind in M.GRADIENT_TYPES:
+            for rev in (False, True):
+                stops = [{"t": 0, "c": [int(v) for v in rng.integers(0, 256, 4)]}, {"t": float(rng.uniform(0.2, 0.8)), "c": [int(v) for v in rng.integers(0, 256, 4)]},
+                         {"t": 1, "c": [int(v) for v in rng.integers(0, 256, 3)] + [0]}]
+                gs.append({"type": kind, "x0": float(rng.uniform(0, 30)), "y0": float(rng.uniform(0, 20)),
+                           "x1": float(rng.uniform(5, 40)), "y1": float(rng.uniform(5, 30)), "stops": stops, "reverse": rev})
+        shapes = [{"kind": k, "x0": 3.3, "y0": 30.5, "x1": 41.2, "y1": 4.1, "radius": 7.5, "sides": 5} for k in M.SHAPE_KINDS]
+        presets = [["fg-bg", [200, 10, 30], [0, 90, 255]], ["fg-clear", [1, 2, 3], [4, 5, 6]], ["bw", [9, 9, 9], [8, 8, 8]], ["fg-bg-fg", [255, 0, 0], [0, 0, 255]]]
+        W, H, ox, oy = 37, 29, -3, 2
+        d.draw = {"w": W, "h": H, "ox": ox, "oy": oy, "gradients": gs, "shapes": shapes, "presets": presets}
+        got = self.run_node({"d": d})["d"]
+        for i, g in enumerate(gs):
+            self.same(M.gradient_pixels(W, H, ox, oy, g), got["gradients"][i], (H, W, 4), f"gradient {g['type']} {g['reverse']}", tol=1)
+        for i, q in enumerate(shapes):
+            line = M.flatten_path(M.clean_path(M.shape_path(q["kind"], q["x0"], q["y0"], q["x1"], q["y1"], q["radius"], q["sides"])))
+            self.assertEqual(len(line), len(got["shapes"][i]), q["kind"])
+            self.assertLess(float(np.abs(np.array(line) - np.array(got["shapes"][i])).max()), 1e-9, q["kind"])
+        for i, (p, fg, bg) in enumerate(presets):
+            self.assertEqual([[s["t"], s["c"]] for s in M.gradient_stops(p, fg, bg)], [[s["t"], s["c"]] for s in got["stops"][i]], p)
 
 
 if __name__ == "__main__":
