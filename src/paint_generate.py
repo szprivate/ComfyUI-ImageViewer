@@ -239,26 +239,61 @@ def detect_slots(graph):
     return out
 
 
+FOLDER_ALIASES = {"diffusion_models": ("diffusion_models", "unet"), "text_encoders": ("text_encoders", "clip")}
+
+
+def _base(name):
+    return str(name).replace("\\", "/").rsplit("/", 1)[-1].lower()
+
+
+def locate(folder_paths, folder, name):
+    """The name ComfyUI knows *name* by in *folder*: as it is, else the same file name in any subfolder
+    (an extra model path, `flux/flux1-fill-dev.safetensors`), else None."""
+    for f in FOLDER_ALIASES.get(folder, (folder,)):
+        try:
+            if folder_paths.get_full_path(f, name):
+                return name
+        except Exception:  # noqa: BLE001 - an unknown folder name
+            pass
+    want = _base(name)
+    hits = []
+    for f in FOLDER_ALIASES.get(folder, (folder,)):
+        try:
+            listed = folder_paths.get_filename_list(f) or []
+        except Exception:  # noqa: BLE001
+            listed = []
+        hits += [n for n in listed if _base(n) == want]
+    return min(hits, key=lambda n: (n.count("/") + n.count("\\"), len(n))) if hits else None
+
+
+def resolve_models(graph, folder_paths):
+    """Point every loader of *graph* at the file as ComfyUI lists it (in place); the names not found."""
+    gone = []
+    if folder_paths is None:
+        return gone
+    for v in graph.values():
+        for name, folder in LOADERS.get(v.get("class_type"), []):
+            ins = v.get("inputs") or {}
+            f = ins.get(name)
+            if not isinstance(f, str) or not f:
+                continue
+            got = locate(folder_paths, folder, f)
+            if got:
+                ins[name] = got
+            else:
+                gone.append({"what": f, "kind": "model", "folder": folder})
+    return gone
+
+
 def missing(graph, folder_paths=None, node_classes=None):
-    """What the workflow needs that this ComfyUI does not have: [{what, kind, folder?}]."""
+    """What the workflow needs that this ComfyUI does not have: [{what, kind, folder?}]. Model names are
+    looked for in subfolders too, and the graph is pointed at what was found."""
     out = []
     if node_classes is not None:
         for cls in sorted({v["class_type"] for v in graph.values()}):
             if cls not in node_classes:
                 out.append({"what": cls, "kind": "node"})
-    if folder_paths is not None:
-        for v in graph.values():
-            for name, folder in LOADERS.get(v["class_type"], []):
-                f = (v.get("inputs") or {}).get(name)
-                if not isinstance(f, str) or not f:
-                    continue
-                try:
-                    found = folder_paths.get_full_path(folder, f) or (folder == "diffusion_models" and folder_paths.get_full_path("unet", f)) \
-                        or (folder == "text_encoders" and folder_paths.get_full_path("clip", f))
-                except Exception:  # noqa: BLE001 - an unknown folder name
-                    found = None
-                if not found:
-                    out.append({"what": f, "kind": "model", "folder": folder})
+    out += resolve_models(graph, folder_paths)
     seen, uniq = set(), []
     for m in out:
         if m["what"] not in seen:

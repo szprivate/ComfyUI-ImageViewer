@@ -37,6 +37,8 @@ class PaintGenerate(unittest.TestCase):
         cls.fp = api.folder_paths
         cls.have = set()
         cls.fp.get_full_path = lambda folder, name: (f"/models/{folder}/{name}" if name in cls.have or "*" in cls.have else None)
+        cls.listed = {}
+        cls.fp.get_filename_list = lambda folder: list(cls.listed.get(folder, []))
         from PIL import Image
         cls.png = os.path.join(cls.dirs["output"], "pic.png")
         a = np.zeros((100, 200, 4), np.uint8)
@@ -55,6 +57,7 @@ class PaintGenerate(unittest.TestCase):
         shutil.rmtree(self.flows, ignore_errors=True)
         self.have.clear()
         self.have.add("*")
+        self.listed.clear()
 
     def run_c(self, fn):
         async def go():
@@ -158,6 +161,28 @@ class PaintGenerate(unittest.TestCase):
             self.assertEqual(st, 200, r)
             L = r["outline"]["layers"][0]
             self.assertEqual((L["w"], L["h"], L["x"], L["y"]), (104, 82, 28, 0))
+        self.run_c(go)
+
+    def test_models_in_subfolders_of_other_model_paths_are_found(self):
+        # an extra model path (L:) with the files in folders of their own: ComfyUI lists them as
+        # "flux\\flux1-fill-dev.safetensors", and the workflow is pointed at that name
+        self.have.clear()
+        self.listed.update({"unet": ["FLUX\\Flux1-Fill-Dev.safetensors"],
+                            "clip": ["flux/clip_l.safetensors", "t5/t5xxl_fp16.safetensors", "old/deep/clip_l.safetensors"],
+                            "vae": ["flux/ae.safetensors"]})
+        L = self.G.listing(self.fp, None)
+        flux = next(w for w in L["actions"]["fill"]["workflows"] if w["id"] == "flux_fill")
+        self.assertEqual(flux["missing"], [])
+        async def go(c):
+            tok = await self.open_with_selection(c)
+            st, d = await self.j(c, "/imageviewer/paint/generate", {"token": tok, "action": "fill", "prompt": "a cat"})
+            self.assertEqual(st, 200, d)
+            g = d["graphs"][0]
+            names = {k: v for n in g.values() for k, v in (n.get("inputs") or {}).items() if k.endswith("_name") or k.startswith("clip_name")}
+            self.assertEqual(names["unet_name"], "FLUX\\Flux1-Fill-Dev.safetensors")
+            self.assertEqual(names["clip_name1"], "flux/clip_l.safetensors")
+            self.assertEqual(names["clip_name2"], "t5/t5xxl_fp16.safetensors")
+            self.assertEqual(names["vae_name"], "flux/ae.safetensors")
         self.run_c(go)
 
     def test_a_missing_model_is_named_before_anything_is_queued(self):
