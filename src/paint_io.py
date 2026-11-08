@@ -1067,3 +1067,40 @@ def outline(doc):
     if doc.meta.get("guides"):
         out["guides"] = [[g["axis"], g["pos"]] for g in doc.meta["guides"]]
     return out
+
+
+# ── a picture of the document, for the History and the file browser ────────
+
+PREVIEW_SIDE = 2048
+
+
+def preview_png(path, cache_dir):
+    """A PNG of how the .ora / .psd at *path* looks, cached in *cache_dir* by its path, size and time: what the
+    History shows for it (the file itself is no picture a browser can draw)."""
+    import hashlib
+    st = os.stat(path)
+    key = hashlib.sha1(f"{os.path.abspath(path)}|{st.st_mtime_ns}|{st.st_size}".encode("utf-8", "replace")).hexdigest()[:16]
+    stem = re.sub(r"[^A-Za-z0-9_-]+", "_", os.path.splitext(os.path.basename(path))[0])[:60] or "paint"
+    out = os.path.join(cache_dir, f"ImageViewer_paint_{stem}_{key}.png")
+    if os.path.isfile(out):
+        return out
+    os.makedirs(cache_dir, exist_ok=True)
+    px = None
+    if path.lower().endswith(".ora"):
+        with zipfile.ZipFile(path) as z:
+            if "mergedimage.png" in z.namelist():
+                px = read_png(z.read("mergedimage.png"))
+    if px is None:
+        doc = read_psd(path) if path.lower().endswith(".psd") else read_ora(path)
+        px = composite(doc)
+    h, w = px.shape[:2]
+    if max(w, h) > PREVIEW_SIDE:
+        from PIL import Image
+        k = PREVIEW_SIDE / max(w, h)
+        im = Image.fromarray(np.ascontiguousarray(px), "RGBA").resize((max(1, round(w * k)), max(1, round(h * k))), Image.LANCZOS)
+        px = np.asarray(im)
+    tmp = out + ".part"
+    with open(tmp, "wb") as fh:
+        fh.write(png_bytes(px))
+    os.replace(tmp, out)
+    return out

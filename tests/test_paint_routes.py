@@ -82,6 +82,36 @@ class PaintRoutes(unittest.TestCase):
             self.assertTrue(np.array_equal(got, self.png_px))
         self.run_c(go)
 
+    def test_save_as_into_a_folder_asks_before_overwriting_and_the_file_shows_in_the_history(self):
+        async def go(c):
+            st, d = await self.j(c, "/imageviewer/paint/open", {"path": self.png})
+            tok, meta = d["token"], d["doc"]
+            here = os.path.join(self.dirs["output"], "save_as_here")
+            body = {"token": tok, "meta": meta, "keep": [L["id"] for L in meta["layers"]], "folder": here, "name": "my/pic:1", "format": "psd"}
+            st, res = await self.j(c, "/imageviewer/paint/save_as", body)
+            self.assertEqual(st, 200, res)
+            self.assertEqual(res["path"], os.path.join(here, "my_pic_1.psd"))       # no folder in a name
+            self.assertTrue(os.path.isfile(res["path"]))
+            st, res2 = await self.j(c, "/imageviewer/paint/save_as", body)
+            self.assertEqual(st, 409, res2)
+            self.assertTrue(res2["exists"])
+            st, res3 = await self.j(c, "/imageviewer/paint/save_as", {**body, "overwrite": True, "format": "ora"})
+            self.assertEqual(st, 200, res3)
+            self.assertTrue(res3["path"].endswith("my_pic_1.ora"))
+            # Outside the allowed folders: refused.
+            st, bad = await self.j(c, "/imageviewer/paint/save_as", {**body, "folder": self.outside})
+            self.assertEqual(st, 400, bad)
+            # The History's frame for each: a PNG of how it looks, and the file itself as `paint`.
+            r = await c.post("/imageviewer/browse_frames", json={"paths": [res["path"], res3["path"]]})
+            frames = (await r.json())["frames"]
+            self.assertEqual([f["paint"] for f in frames], [res["path"], res3["path"]])
+            from PIL import Image
+            for f in frames:
+                self.assertTrue(f["path"].endswith(".png"))
+                im = np.asarray(Image.open(f["path"]).convert("RGBA"))
+                self.assertTrue(np.array_equal(im, self.png_px))
+        self.run_c(go)
+
     def test_save_by_the_rule_then_over_itself_with_kept_layers(self):
         async def go(c):
             st, d = await self.j(c, "/imageviewer/paint/open", {"new": {"w": 32, "h": 16, "name": "board", "fill": "#102030"}})

@@ -1511,5 +1511,85 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(self.errors, [])
 
 
+    def test_solo_and_dragging_layers_onto_duplicate_and_delete(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        pg.evaluate(f"() => {{ const e = {ed}; e.newLayer('A'); e.newLayer('B'); e.setLayerProps(e.doc.layers[2].id, {{ visible: false }}, 'Hide'); }}")
+        vis = lambda: pg.evaluate(f"() => {ed}.doc.layers.map((l) => l.name + ':' + (l.visible ? 1 : 0))")
+        self.assertEqual(vis(), ["Background:1", "A:1", "B:0"])
+
+        def rowsel(name):
+            return f"[...{ed}.layerList.querySelectorAll('.paint-row')].find((x) => x.querySelector('.nm').textContent === '{name}')"
+        # Alt+click A's eye: only A seen; the eye is lit. Again: as it was (B still hidden).
+        pg.evaluate(f"() => {{ const r = {rowsel('A')}; r.querySelector('.eye').dispatchEvent(new MouseEvent('click', {{ bubbles: true, altKey: true }})); }}")
+        self.assertEqual(vis(), ["Background:0", "A:1", "B:0"])
+        self.assertTrue(pg.evaluate(f"() => {rowsel('A')}.querySelector('.eye').classList.contains('solo')"))
+        pg.evaluate(f"() => {{ const r = {rowsel('A')}; r.querySelector('.eye').dispatchEvent(new MouseEvent('click', {{ bubbles: true, altKey: true }})); }}")
+        self.assertEqual(vis(), ["Background:1", "A:1", "B:0"])
+        # From the menu: Solo, then End solo.
+        pg.evaluate(f"() => {{ const e = {ed}; e.setActive(e.doc.layers[0].id); e._layerMenu().find((x) => x.label && x.label.startsWith('Solo')).run(); }}")
+        self.assertEqual(vis(), ["Background:1", "A:0", "B:0"])
+        pg.evaluate(f"() => {{ const e = {ed}; e._layerMenu().find((x) => x.label && x.label.startsWith('End solo')).run(); }}")
+        self.assertEqual(vis(), ["Background:1", "A:1", "B:0"])
+        # A row dragged onto Duplicate: copied whole (a selection makes no difference); onto Delete: gone.
+        pg.evaluate(f"() => {{ const e = {ed}; const m = new Uint8Array(200*120); m[0] = 255; e.setSelection(m); }}")
+        def drag(name, title):
+            # HTML5 drag and drop as the browser fires it: dragstart on the row, dragover + drop on the button.
+            pg.evaluate(f"""([n, t]) => {{ const e = {ed}; const dt = new DataTransfer();
+                const r = [...e.layerList.querySelectorAll('.paint-row')].find((x) => x.querySelector('.nm').textContent === n);
+                const b = [...e.parts.layers.querySelectorAll('.paint-lfoot .paint-btn')].find((x) => x.title.startsWith(t));
+                r.dispatchEvent(new DragEvent('dragstart', {{ bubbles: true, dataTransfer: dt }}));
+                const ov = new DragEvent('dragover', {{ bubbles: true, cancelable: true, dataTransfer: dt }});
+                b.dispatchEvent(ov);
+                if (!ov.defaultPrevented) throw new Error('the button does not take the drop');
+                b.dispatchEvent(new DragEvent('drop', {{ bubbles: true, cancelable: true, dataTransfer: dt }}));
+                r.dispatchEvent(new DragEvent('dragend', {{ bubbles: true, dataTransfer: dt }})); }}""", [name, title])
+        drag("A", "Duplicate")
+        pg.wait_for_function(f"() => {ed}.doc.layers.some((l) => l.name === 'A copy')", timeout=5000)
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Duplicate layer")
+        drag("B", "Delete")
+        pg.wait_for_function(f"() => !{ed}.doc.layers.some((l) => l.name === 'B')", timeout=5000)
+        self.assertEqual([n.split(":")[0] for n in vis()], ["Background", "A", "A copy"])
+        self.assertEqual(self.errors, [])
+
+    def test_save_as_dialog_writes_a_psd_asks_before_overwriting_and_lands_in_the_history(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        folder = os.path.join(self.dirs["output"], "saveas_here")
+        pg.evaluate("() => __panel.paintSaveAs(__panel._paintActive())")
+        dlg = f"{ed}.box.querySelector('.paint-saveas')"
+        pg.wait_for_function(f"() => !!{dlg}", timeout=5000)
+
+        def fill_and_go(fmt):
+            pg.evaluate(f"""([folder, fmt]) => {{ const d = {dlg};
+                d.querySelector('.paint-saveas-name').value = 'mine';
+                d.querySelector('.paint-saveas-format').value = fmt;
+                d.querySelector('.paint-saveas-folder').value = folder;
+                d.querySelector('.paint-saveas-go').click(); }}""", [folder, fmt])
+        fill_and_go("psd")
+        target = os.path.join(folder, "mine.psd")
+        pg.wait_for_function(f"() => !{dlg}", timeout=10000)
+        self.assertTrue(os.path.isfile(target))
+        self.assertEqual(pg.evaluate("() => __panel._paintActive().path"), target)
+        self.assertFalse(pg.evaluate(f"() => {ed}.isDirty()"))
+        # It is in the History: a picture of how it looks, with the file itself as `paint`.
+        pg.wait_for_function("(t) => (__panel.history.all || []).some((s) => (s[0] || {}).paint === t)", arg=target, timeout=10000)
+        shown = pg.evaluate("(t) => (__panel.history.all || []).find((s) => (s[0] || {}).paint === t)[0]", target)
+        self.assertTrue(shown["path"].lower().endswith(".png"), shown)
+        self.assertTrue(os.path.isfile(shown["path"]))
+        # The same name again: asked first; Overwrite writes it.
+        pg.evaluate("() => __panel.paintSaveAs(__panel._paintActive())")
+        pg.wait_for_function(f"() => !!{dlg}", timeout=5000)
+        before = os.path.getmtime(target)
+        fill_and_go("psd")
+        pg.wait_for_function(f"() => /there already/.test({dlg}.querySelector('.paint-saveas-note').textContent)", timeout=10000)
+        self.assertEqual(os.path.getmtime(target), before)
+        pg.evaluate(f"() => {dlg}.querySelector('.paint-saveas-over').click()")
+        pg.wait_for_function(f"() => !{dlg}", timeout=10000)
+        self.assertEqual(self.errors, [])
+
+
 if __name__ == "__main__":
     unittest.main()

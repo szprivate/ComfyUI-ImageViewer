@@ -1478,7 +1478,7 @@ export const HistoryMixin = {
         }
         // A picture can be painted on in layers (PaintPanelMixin).
         if (batch.length <= 1 && this.paintAddEditItem && imgObj) {
-            this.paintAddEditItem(menu, imgObj.path ? imgObj.path : { filename: imgObj.filename, subfolder: imgObj.subfolder, type: imgObj.type }, removeItem);
+            this.paintAddEditItem(menu, imgObj.paint || imgObj.path ? (imgObj.paint || imgObj.path) : { filename: imgObj.filename, subfolder: imgObj.subfolder, type: imgObj.type }, removeItem);
         }
 
         const panelRect = this.container.getBoundingClientRect();

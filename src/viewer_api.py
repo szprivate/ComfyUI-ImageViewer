@@ -1735,6 +1735,12 @@ try:
                         frames.append(media_resolve._video_frame(p))
                     elif ext in image_exts:
                         frames.append(media_resolve._image_frame(p))
+                    elif ext in (".ora", ".psd"):
+                        # A picture in layers: shown by a cached PNG of how it looks; `paint` is the file itself
+                        # (Edit in Paint opens that).
+                        from . import paint_io
+                        prev = paint_io.preview_png(p, folder_paths.get_temp_directory())
+                        frames.append({**media_resolve._image_frame(prev), "name": os.path.basename(p), "paint": p})
                 except Exception as e:
                     print(f"[ImageViewer] browse_frames failed for {p}: {e}")
                     missing.append(raw)
