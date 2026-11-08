@@ -1,0 +1,51 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+html,body{margin:0;background:#222;height:100%}
+#gc{position:absolute;left:0;top:0;width:900px;height:900px}
+#graph-canvas{position:absolute;inset:0;width:100%;height:100%;background:#333}
+#pane{position:absolute;inset:0;pointer-events:none}
+.lg-node{position:absolute;pointer-events:auto;background:#556;color:#fff;font:12px sans-serif}
+.dropzone{margin:8px;height:120px;background:#778}
+.dom-widget{position:absolute;left:520px;top:520px;width:200px;height:120px;background:#665}
+comfyui-image-viewer-panel{left:920px!important}
+</style></head>
+<body>
+<!-- The graph as ComfyUI lays it out: the <canvas> and, beside it, the Nodes 2.0 pane whose node elements sit over it.
+     The node's image widget is a drop zone that stops a drop from bubbling, as the real one does.
+     Node 1 is drawn in the pane (Nodes 2.0); node 2 only on the canvas (Nodes 2.0 off), at 500..800 x 100..300;
+     node 3 is on the canvas too, under a classic DOM widget. -->
+<div id="gc"><canvas id="graph-canvas" width="900" height="900"></canvas>
+  <div id="pane"><div class="lg-node" data-node-id="1" style="left:40px;top:40px;width:300px;height:200px">Load Image (Path)
+    <div class="dropzone" id="zone1"></div></div></div>
+  <div class="dom-widget" id="domw"></div>
+</div>
+<script>window.addEventListener("error",(e)=>{document.title="ERR "+e.message});</script><script type="module">
+window.__fetchApi = async () => ({ ok: false, status: 404, json: async () => ({}) });
+const { app } = await import("/scripts/app.js");
+const mk = (id, type, rect) => {
+  const n = { id, type, pos: [rect[0], rect[1]], size: [rect[2], rect[3]],
+    widgets: [{ name: "image", type: "text", value: "old.png", callback(v) { (window.__cb ||= []).push([id, v]); } }],
+    isPointInside(x, y) { return x >= this.pos[0] && x < this.pos[0] + this.size[0] && y >= this.pos[1] && y < this.pos[1] + this.size[1]; } };
+  return n;
+};
+window.__added = [];
+const nodes = [mk(1, "VHS_LoadImagePath", [-5000, -5000, 1, 1]), mk(2, "VHS_LoadImagePath", [500, 100, 300, 200]), mk(3, "VHS_LoadImagePath", [500, 500, 300, 300])];
+const graph = { _nodes: nodes, getNodeById: (id) => nodes.find((n) => n.id == id) || null,
+  getNodeOnPos(x, y, list) { for (let i = list.length - 1; i >= 0; i--) if (list[i].isPointInside(x, y)) return list[i]; return null; },
+  add(n) { window.__added.push(n.type); }, setDirtyCanvas() {}, remove() {} };
+const cv = document.getElementById("graph-canvas");
+Object.assign(app, { graph });
+Object.assign(app.canvas, { canvas: cv, graph, selectNode() {},
+  convertEventToCanvasOffset(e) { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; } });
+window.LiteGraph = { registered_node_types: { VHS_LoadImagePath: {} },
+  createNode: (type) => ({ type, size: [300, 200], pos: [0, 0], widgets: [{ name: "image", value: "" }] }) };
+window.__nodes = nodes;
+// What the real node element and its drop zone do with a drop of their own.
+const zone = document.getElementById("zone1");
+zone.addEventListener("dragover", (e) => e.preventDefault());
+zone.addEventListener("drop", (e) => { e.preventDefault(); e.stopPropagation(); window.__zoneGot = true; });
+document.addEventListener("drop", () => { window.__docGot = true; });
+let v; try { v = await import("/extensions/viewer/imageViewer.js"); } catch (e) { document.title = "IMPORT " + e.message; throw e; }
+const panel = v.mountStandaloneViewer(document.body);
+window.__panel = panel;
+window.__ready = true;
+</script></body></html>
