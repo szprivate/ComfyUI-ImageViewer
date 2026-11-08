@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 const [, , inFile, outFile] = process.argv;
 const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/(?=[A-Za-z]:)/, ""));
 const D = await import(pathToFileURL(path.join(here, "..", "js", "imageViewer_paintData.js")).href);
+const W = await import(pathToFileURL(path.join(here, "..", "js", "imageViewer_paintWarp.js")).href);
 const job = JSON.parse(fs.readFileSync(inFile, "utf8"));
 const dec = (b) => new Uint8Array(Buffer.from(b, "base64"));
 const enc = (a) => Buffer.from(a.buffer, a.byteOffset, a.byteLength).toString("base64");
@@ -31,6 +32,11 @@ for (const [name, c] of Object.entries(job.cases)) {
         res.path_line = line;
         res.path_fill = enc(D.pathMask(W, H, P));
         res.path_stroke = enc(D.strokeMask(W, H, line, P.closed, c.path.width));
+    }
+    if (c.distort) {
+        const L = doc.layers[0], r = W.perspectiveLayer(px[L.id], L.w, L.h, c.distort);
+        res.distort = enc(r.px);
+        res.distort_box = r.box;
     }
     out[name] = res;
 }

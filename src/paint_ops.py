@@ -20,7 +20,7 @@ from . import paint_math as M
 MAX_OPS = 60
 OPS = ("add_layer", "add_adjustment", "set_layer", "remove_layer", "duplicate_layer", "move_layer", "merge_down",
        "flatten", "select", "mask", "fill", "clear", "heal", "filter", "crop", "canvas_size", "resize",
-       "transform", "add_text", "group", "ungroup", "merge_group", "path")
+       "transform", "add_text", "group", "ungroup", "merge_group", "path", "distort")
 ANCHORS = {"top_left": (0, 0), "top": (0.5, 0), "top_right": (1, 0), "left": (0, 0.5), "center": (0.5, 0.5),
            "right": (1, 0.5), "bottom_left": (0, 1), "bottom": (0.5, 1), "bottom_right": (1, 1)}
 
@@ -973,9 +973,102 @@ def _path(doc, op, _read, _fonts):
     raise OpError("'do' is keep, select, mask, fill, stroke or remove")
 
 
+def _homography(frm, to):
+    A, b = [], []
+    for (x, y), (X, Y) in zip(frm, to):
+        A.append([x, y, 1, 0, 0, 0, -X * x, -X * y]); b.append(X)
+        A.append([0, 0, 0, x, y, 1, -Y * x, -Y * y]); b.append(Y)
+    try:
+        return np.append(np.linalg.solve(np.array(A, np.float64), np.array(b, np.float64)), 1.0).reshape(3, 3)
+    except np.linalg.LinAlgError:
+        return None
+
+
+def _convex(q):
+    s = 0
+    for i in range(4):
+        (ax, ay), (bx, by), (cx, cy) = q[i], q[(i + 1) % 4], q[(i + 2) % 4]
+        z = (bx - ax) * (cy - by) - (by - ay) * (cx - bx)
+        if abs(z) < 1e-9 or (s and np.sign(z) != s):
+            return False
+        s = s or np.sign(z)
+    return True
+
+
+def _sample(src, u, v, fill=0):
+    """Bilinear at (u, v) (pixel middles at .5); RGBA premultiplied, or one channel with *fill* outside."""
+    h, w = src.shape[:2]
+    fu, fv = u - 0.5, v - 0.5
+    u0, v0 = np.floor(fu).astype(np.int64), np.floor(fv).astype(np.int64)
+    du, dv = fu - u0, fv - v0
+    rgba = src.ndim == 3
+    acc = np.zeros(u.shape + ((4,) if rgba else ()), np.float64)
+    for j in (0, 1):
+        for i in (0, 1):
+            ux, vy = u0 + i, v0 + j
+            wgt = (dv if j else 1 - dv) * (du if i else 1 - du)
+            ok = (ux >= 0) & (vy >= 0) & (ux < w) & (vy < h)
+            val = src[np.clip(vy, 0, h - 1), np.clip(ux, 0, w - 1)].astype(np.float64)
+            if rgba:
+                a = np.where(ok, val[..., 3], 0) * wgt
+                acc[..., :3] += val[..., :3] * a[..., None]
+                acc[..., 3] += a
+            else:
+                acc += np.where(ok, val, fill) * wgt
+    if not rgba:
+        return np.clip(np.round(acc), 0, 255).astype(np.uint8)
+    al = acc[..., 3]
+    out = np.zeros(u.shape + (4,), np.uint8)
+    seen = al > 0
+    out[..., :3] = np.clip(np.round(np.where(seen[..., None], acc[..., :3] / np.maximum(al, 1e-12)[..., None], 0)), 0, 255)
+    out[..., 3] = np.clip(np.round(al), 0, 255)
+    return out
+
+
+def _distort(doc, op, _read, _fonts):
+    """A pixel layer's four corners put where `corners` says (top left, top right, bottom right, bottom left, canvas px)."""
+    L = _unlocked(find_layer(doc, op.get("layer"), "pixel"))
+    q = op.get("corners")
+    if not isinstance(q, list) or len(q) != 4 or not all(isinstance(p, (list, tuple)) and len(p) == 2 for p in q):
+        raise OpError("'corners' is four [x, y]: top left, top right, bottom right, bottom left")
+    q = [[M._num(p[0], 0, -1e5, 1e5), M._num(p[1], 0, -1e5, 1e5)] for p in q]
+    if not _convex(q):
+        raise OpError("the four corners must make a convex shape, in order around it")
+    px = doc.px[L["id"]]
+    h, w = px.shape[:2]
+    H = _homography(q, [[0, 0], [w, 0], [w, h], [0, h]])
+    if H is None:
+        raise OpError("those corners make no shape")
+    xs, ys = [p[0] for p in q], [p[1] for p in q]
+    bx, by = int(np.floor(min(xs) + 1e-6)), int(np.floor(min(ys) + 1e-6))
+    bw, bh = max(1, int(np.ceil(max(xs) - 1e-6)) - bx), max(1, int(np.ceil(max(ys) - 1e-6)) - by)
+    if bw > 2 * P.MAX_SIDE or bh > 2 * P.MAX_SIDE:
+        raise OpError("far too big")
+
+    def warp(src, fill=None):
+        gx, gy = np.meshgrid(np.arange(bw) + bx + 0.5, np.arange(bh) + by + 0.5)     # canvas pixel middles
+        d = H[2, 0] * gx + H[2, 1] * gy + H[2, 2]
+        u = (H[0, 0] * gx + H[0, 1] * gy + H[0, 2]) / d
+        v = (H[1, 0] * gx + H[1, 1] * gy + H[1, 2]) / d
+        return _sample(src, u, v) if fill is None else _sample(src, u, v, fill)
+
+    doc.px[L["id"]] = warp(px)
+    if L.get("mask") and L["id"] in doc.masks:
+        mk, m = L["mask"], doc.masks[L["id"]]
+        cut = np.full((h, w), mk.get("fill", 0), np.uint8)
+        x0, y0 = max(0, mk["x"] - L["x"]), max(0, mk["y"] - L["y"])
+        x1, y1 = min(w, mk["x"] + mk["w"] - L["x"]), min(h, mk["y"] + mk["h"] - L["y"])
+        if x1 > x0 and y1 > y0:
+            cut[y0:y1, x0:x1] = m[y0 + L["y"] - mk["y"]:y1 + L["y"] - mk["y"], x0 + L["x"] - mk["x"]:x1 + L["x"] - mk["x"]]
+        doc.masks[L["id"]] = warp(cut, mk.get("fill", 0))
+        mk.update(x=bx, y=by, w=bw, h=bh)
+    L.update(x=bx, y=by, w=bw, h=bh)
+    return f"distorted {L['name']!r} onto {q}"
+
+
 _ONE = {"add_layer": _add_layer, "add_adjustment": _add_adjustment, "set_layer": _set_layer,
         "remove_layer": _remove_layer, "duplicate_layer": _duplicate_layer, "move_layer": _move_layer,
         "merge_down": _merge_down, "flatten": _flatten, "select": _select, "mask": _mask, "fill": _fill,
         "clear": _clear, "heal": _heal, "filter": _filter, "crop": _crop, "canvas_size": _canvas_size,
         "resize": _resize_doc, "transform": _transform, "add_text": _add_text, "group": _group,
-        "ungroup": _ungroup, "merge_group": _merge_group, "path": _path}
+        "ungroup": _ungroup, "merge_group": _merge_group, "path": _path, "distort": _distort}

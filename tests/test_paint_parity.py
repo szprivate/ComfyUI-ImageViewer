@@ -63,7 +63,8 @@ class PaintParity(unittest.TestCase):
         for name, d in cases.items():
             job["cases"][name] = {"doc": d.meta, "px": {k: b64(v) for k, v in d.px.items()},
                                   "masks": {k: b64(v) for k, v in d.masks.items()},
-                                  "filters": getattr(d, "filters", None), "path": getattr(d, "path", None)}
+                                  "filters": getattr(d, "filters", None), "path": getattr(d, "path", None),
+                                  "distort": getattr(d, "distort", None)}
         with tempfile.TemporaryDirectory() as tmp:
             a, b = os.path.join(tmp, "in.json"), os.path.join(tmp, "out.json")
             with open(a, "w") as f:
@@ -223,6 +224,20 @@ class PaintParity(unittest.TestCase):
         # A path survives clean_meta (so it is kept in the .ora's imageviewer.json).
         meta = dict(d.meta, paths=[path, {"pts": []}])
         self.assertEqual([p["name"] for p in P.clean_meta(meta)["paths"]], ["p"])
+
+    def test_distort(self):
+        from paint_pkg import paint_ops as O
+        d = rnd_doc(11, [])
+        L = d.layers[0]
+        q = [[L["x"] + 3.5, L["y"] - 2], [L["x"] + 40.2, L["y"] + 5], [L["x"] + 30, L["y"] + 35.7], [L["x"] - 4, L["y"] + 22]]
+        d.distort = q
+        got = self.run_node({"d": d})["d"]
+        O.apply_ops(d, [{"op": "distort", "layer": L["name"], "corners": q}], read_image=None)
+        L2 = d.layer(L["id"])
+        self.assertEqual([L2["x"], L2["y"], L2["w"], L2["h"]], [got["distort_box"][k] for k in "xywh"])
+        self.same(d.px[L["id"]], got["distort"], d.px[L["id"]].shape, "distort", tol=1)
+        with self.assertRaises(O.OpError):          # a bow tie is no shape a perspective makes
+            O.apply_ops(d, [{"op": "distort", "corners": [[0, 0], [10, 0], [0, 10], [10, 10]]}], read_image=None)
 
 
 if __name__ == "__main__":
