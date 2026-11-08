@@ -25,7 +25,15 @@ nothing is rounded on the way - a canvas' PNG would premultiply them.
 - ``POST /imageviewer/paint/describe`` (JSON) - ``token``: the session's description as it is now (after the
   agent's or the page's ops), to read its pixels again.
 - ``POST /imageviewer/paint/snapshot`` (JSON) - the picture as it looks and the selection, as PNGs in
-  ``<input>/paint`` - what a workflow is given to make pixels from (generative fill and friends).
+  ``<input>/paint`` - what agentY is given when it builds the workflow itself (Generate's "agentY" choice).
+- ``GET / POST /imageviewer/paint/workflows`` - the workflows Generate runs (paint_generate.py): the table;
+  POST ``{action, choice}`` picks one, ``{action, graph, name, source}`` stores the user's own (API format;
+  ``graph: null`` forgets it).
+- ``POST /imageviewer/paint/generate`` (JSON) - ``token, action, prompt, workflow?, variations, k``: the crop
+  (and its mask) written into ``<input>/paint``, the workflow filled in, 1-4 graphs for the page to queue;
+  409 ``{missing}`` when a model or node is not on this machine.
+- ``POST /imageviewer/paint/generate_place`` (JSON) - ``job, image {filename, subfolder, type}, n``: the paint
+  ops that lay a result back (a layer at the crop, masked to the selection; a mask; a selection; an upscale).
 
 Every POST but ``stage`` is ``path_access.same_origin``; every path is ``path_access.is_allowed``
 (an .ora / .psd is not media, so not ``may_serve``), a picture read as a layer ``may_serve``.
@@ -41,6 +49,7 @@ import time
 
 import numpy as np
 
+from . import paint_generate as G
 from . import paint_io as P
 from . import paint_ops as O
 from . import paint_math as M
@@ -525,6 +534,67 @@ def register(add, *, web, path_access, export_rules, folder_paths, send, resolve
             return web.json_response(res)
         except (PaintError, ValueError, OSError) as e:
             return err(e)
+
+    # ── Generate with ready-made workflows (paint_generate) ──
+
+    def node_classes():
+        try:
+            import nodes  # ComfyUI's own: what node classes this server has
+            return set(nodes.NODE_CLASS_MAPPINGS)
+        except Exception:  # noqa: BLE001 - not inside ComfyUI (the tests): no check
+            return None
+
+    async def h_workflows(request):
+        if request.method == "GET":
+            return web.json_response(await off(G.listing, folder_paths, node_classes()))
+        body = await guarded_json(request)
+        action = body.get("action")
+        try:
+            if "graph" in body:
+                slots = await off(G.set_custom, action, body.get("graph"), body.get("name") or "", body.get("source") or "file")
+            elif body.get("choice"):
+                await off(G.set_choice, action, str(body["choice"]))
+                slots = None
+            else:
+                return err("'graph' (or null) or 'choice' is needed")
+        except (G.GenerateError, OSError) as e:
+            return err(e)
+        out = await off(G.listing, folder_paths, node_classes())
+        out["slots"] = slots
+        return web.json_response(out)
+
+    async def h_generate(request):
+        body = await guarded_json(request)
+        s = BOOK.get(body.get("token"))
+        if not s:
+            return err("that document is no longer open", 404)
+        try:
+            res = await off(G.prepare, s, body.get("token"), body.get("action"), folder_paths.get_input_directory(),
+                            wid=body.get("workflow") or None, prompt=body.get("prompt") or "",
+                            variations=body.get("variations") or 1, k=body.get("k") or 2,
+                            folder_paths=folder_paths, node_classes=node_classes())
+        except G.Missing as e:
+            return web.json_response({"error": str(e), "missing": e.missing}, status=409)
+        except (G.GenerateError, OSError) as e:
+            return err(e)
+        return web.json_response(res)
+
+    async def h_generate_place(request):
+        body = await guarded_json(request)
+        img = body.get("image") if isinstance(body.get("image"), dict) else {}
+        path = ref_path(img)
+        if not path or not os.path.isfile(path) or not path_access.may_serve(path):
+            return err("the workflow's picture was not found", 404)
+        try:
+            res = await off(G.place, str(body.get("job") or ""), path, folder_paths.get_input_directory(), int(body.get("n") or 0))
+        except (G.GenerateError, OSError, ValueError) as e:
+            return err(e)
+        return web.json_response(res)
+
+    for method, name, h in (("GET", "workflows", h_workflows), ("POST", "workflows", h_workflows),
+                            ("POST", "generate", h_generate), ("POST", "generate_place", h_generate_place)):
+        add(method, "/imageviewer/paint/" + name, h)
+        add(method, "/api/imageviewer/paint/" + name, h)
 
     for method, name, h in (("POST", "open", h_open), ("GET", "px", h_px), ("POST", "stage", h_stage),
                             ("POST", "save", h_save), ("POST", "export", h_export), ("POST", "doc", h_doc),

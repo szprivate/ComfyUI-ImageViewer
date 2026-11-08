@@ -1,0 +1,171 @@
+[
+ {
+  "id": "flux_fill",
+  "label": "FLUX.1 Fill dev (local)",
+  "file": "flux_fill.json",
+  "api": false,
+  "actions": [
+   "fill",
+   "remove",
+   "extend"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "prompts": {
+   "remove": "empty background, nothing there",
+   "extend": "",
+   "fill": ""
+  },
+  "set": {
+   "extend": [
+    [
+     "8",
+     "noise_mask",
+     false
+    ]
+   ]
+  },
+  "from": "flux_fill_inpaint_example / flux_fill_outpaint_example"
+ },
+ {
+  "id": "flux_fill_onereward_remove",
+  "label": "FLUX.1 Fill OneReward + removal LoRA (local)",
+  "file": "flux_fill_onereward_remove.json",
+  "api": false,
+  "actions": [
+   "remove"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "prompts": {
+   "remove": "remove"
+  },
+  "from": "image_flux.1_fill_dev_OneReward"
+ },
+ {
+  "id": "gpt_image_2_inpaint",
+  "label": "GPT Image 2 inpaint (API)",
+  "file": "gpt_image_2_inpaint.json",
+  "api": true,
+  "actions": [
+   "fill",
+   "remove",
+   "extend"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 1536
+  },
+  "prompts": {
+   "remove": "Remove the selected object and fill its place so that it looks as if it was never there. Keep the rest as it is.",
+   "extend": "Continue the picture into the empty border seamlessly: the same scene, light and style."
+  },
+  "from": "api_openai_image_1_inpaint"
+ },
+ {
+  "id": "flux_kontext_edit",
+  "label": "FLUX.1 Kontext dev (local)",
+  "file": "flux_kontext_edit.json",
+  "api": false,
+  "actions": [
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "from": "flux_kontext_dev_basic"
+ },
+ {
+  "id": "gpt_image_25_edit",
+  "label": "GPT Image 2.5 (API)",
+  "file": "gpt_image_25_edit.json",
+  "api": true,
+  "actions": [
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 1536
+  },
+  "from": "api_openai_gpt_image_25_flare_image_edit"
+ },
+ {
+  "id": "nano_banana2_edit",
+  "label": "Nano Banana 2 (API)",
+  "file": "nano_banana2_edit.json",
+  "api": true,
+  "actions": [
+   "edit"
+  ],
+  "size": {
+   "mp": 4.0,
+   "mult": 8,
+   "max": 4096
+  },
+  "aspect": [
+   "2",
+   "aspect_ratio"
+  ],
+  "from": "api_i2i_imageEdit_nanoBanana2"
+ },
+ {
+  "id": "rmbg2",
+  "label": "RMBG-2.0 (local, ComfyUI-RMBG)",
+  "file": "rmbg2.json",
+  "api": false,
+  "actions": [
+   "background",
+   "select_subject"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 2048
+  },
+  "from": "RemoveBackground_RMBG2"
+ },
+ {
+  "id": "upscale_model",
+  "label": "Upscale model 4x-ClearReality (local)",
+  "file": "upscale_model.json",
+  "api": false,
+  "actions": [
+   "upscale"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 2048
+  },
+  "from": "upscale_using_model"
+ },
+ {
+  "id": "magnific_precise",
+  "label": "Magnific Precise (API)",
+  "file": "magnific_precise.json",
+  "api": true,
+  "actions": [
+   "upscale"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 4096
+  },
+  "scale": [
+   "2",
+   "scale_factor"
+  ],
+  "from": "api_magnific_image_upscale_precise"
+ }
+]

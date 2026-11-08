@@ -1,0 +1,45 @@
+{
+ "1": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "paint/in.png"
+  },
+  "_meta": {
+   "title": "paint:image"
+  }
+ },
+ "2": {
+  "class_type": "OpenAIGPTImageNodeV2",
+  "inputs": {
+   "prompt": "",
+   "model": "gpt-image-2.5-flare",
+   "model.size": "auto",
+   "model.custom_width": 1024,
+   "model.custom_height": 1024,
+   "model.background": "auto",
+   "model.quality": "medium",
+   "model.images.image_1": [
+    "1",
+    0
+   ],
+   "n": 1,
+   "seed": 0
+  },
+  "_meta": {
+   "title": "paint:prompt"
+  }
+ },
+ "3": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "paint/generate",
+   "images": [
+    "2",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "paint:output"
+  }
+ }
+}

@@ -13,7 +13,10 @@
 //     two can never disagree;
 //   - the folders the viewer may open, which belong to the SERVER
 //     (~/.comfyui_image_viewer/roots.txt, see path_access.py), not to a setting: that entry
-//     is a custom editor that talks to /imageviewer/roots and stores nothing itself.
+//     is a custom editor that talks to /imageviewer/roots and stores nothing itself;
+//   - the workflows Paint's Generate runs, which are files on the server too
+//     (~/.comfyui_image_viewer/paint_workflows/, paint_generate.py): a custom
+//     editor that talks to /imageviewer/paint/workflows.
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import * as S from "./imageViewer_scene3d.js";
@@ -23,6 +26,7 @@ const CAT = "ComfyUI Image Viewer";
 
 export const PREF = {
     folders:        P + "Folders.Allowed",
+    paintWorkflows: P + "Paint.Workflows",
     browserStart:   P + "Browser.StartFolder",
     browserFold:    P + "Browser.FoldSequences",
     browserKinds:   P + "Browser.Kinds",
@@ -143,6 +147,16 @@ function defs() {
                      "Kept on the ComfyUI machine in ~/.comfyui_image_viewer/roots.txt, not in your settings.",
             type: (name, setter, value) => renderFolderEditor(),
             defaultValue: "", sortOrder: 1000,
+        },
+        // ── Paint ──
+        {
+            id: PREF.paintWorkflows, category: sec("Paint", "Workflows"),
+            name: "Generate workflows",
+            tooltip: "The ComfyUI workflow each of Paint's Generate actions runs: one that comes with the viewer, " +
+                     "one of your own (from the canvas or an API-format file), or agentY building one. " +
+                     "Kept on the ComfyUI machine in ~/.comfyui_image_viewer/paint_workflows/, not in your settings.",
+            type: () => renderPaintWorkflowEditor(),
+            defaultValue: "", sortOrder: 900,
         },
         // ── File browser ──
         {
@@ -413,7 +427,7 @@ async function loadUserSettings() {
 
     const seed = {};
     for (const id of Object.keys(DEFAULTS)) {
-        if (id === PREF.folders) continue;
+        if (id === PREF.folders || id === PREF.paintWorkflows) continue;
         const here = pref(id);
         if (id in stored) {
             // The user's file wins over what this ComfyUI user directory holds.
@@ -568,6 +582,14 @@ const CSS = `
 .imageviewer-roots-pick-item { padding:3px 6px; cursor:pointer; border-radius:3px; white-space:nowrap;
     overflow:hidden; text-overflow:ellipsis; }
 .imageviewer-roots-pick-item:hover { background:rgba(255,102,0,.15); color:#f60; }
+.imageviewer-pwf-row { display:flex; flex-direction:column; gap:4px; padding:6px 8px; border-radius:4px;
+    background:var(--comfy-input-bg, #222); border:1px solid var(--border-color, #444); }
+.imageviewer-pwf-line { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.imageviewer-pwf-name { min-width:150px; font-weight:600; }
+.imageviewer-pwf-line select { flex:1; min-width:180px; background:var(--comfy-input-bg, #222); color:inherit;
+    border:1px solid var(--border-color, #555); border-radius:4px; padding:3px 6px; font-size:12px; }
+.imageviewer-pwf-status { font-size:11px; opacity:.75; line-height:1.4; }
+.imageviewer-pwf-status.imageviewer-pwf-warn { color:#ff9d4d; opacity:1; }
 `;
 
 function h(tag, props = {}, ...kids) {
@@ -591,7 +613,7 @@ async function rootsCall(path, body) {
     let data = null;
     try { data = await res.json(); } catch (e) { /* not JSON */ }
     if (res.status === 404 && !data) {
-        throw new Error("This ComfyUI is still running the viewer's previous version. Restart ComfyUI once to edit the folders here.");
+        throw new Error("This ComfyUI is still running the viewer's previous version. Restart ComfyUI once to change this here.");
     }
     if (!res.ok) throw new Error((data && data.error) || `${res.status} ${res.statusText}`);
     return data;
@@ -735,4 +757,121 @@ function refreshPanelBrowser() {
     if (panel && panel._browserLoaded && panel.browseTo) {
         try { panel.browseTo(panel._browserDir, { force: true }); } catch (e) { /* not open */ }
     }
+}
+
+// ── The workflows of Paint's Generate ────────────────────────────────────────
+//
+// Like the folder editor: rendered by the settings dialog, everything read from the
+// server each time (GET /imageviewer/paint/workflows), every change a POST there.
+
+/** "3 (LoadImage)" for a slot of a graph, from /imageviewer/paint/workflows' `slots`. */
+function slotText(slots) {
+    if (!slots) return "";
+    const p = [`picture in: node ${slots.image || "none"}`];
+    if (slots.mask) p.push(`mask: node ${slots.mask}`);
+    p.push(slots.prompt ? `prompt: node ${slots.prompt[0]}.${slots.prompt[1]}` : "no prompt");
+    p.push(`result: node ${slots.output || "none"}`);
+    if (slots.seeds && slots.seeds.length) p.push(`${slots.seeds.length} seed${slots.seeds.length > 1 ? "s" : ""} new each run`);
+    return p.join(" · ");
+}
+
+function missingText(miss) {
+    return (miss || []).map((m) => (m.kind === "model" ? `${m.what} (${m.folder})` : `node ${m.what}`)).join(", ");
+}
+
+/** The workflow name ComfyUI's tab bar shows for the canvas, else "canvas". */
+function canvasWorkflowName() {
+    try {
+        const w = app.extensionManager && app.extensionManager.workflow && app.extensionManager.workflow.activeWorkflow;
+        const n = w && (w.filename || w.path || w.key);
+        if (n) return String(n).replace(/^.*[\\/]/, "").replace(/\.json$/i, "");
+    } catch (_) { /* older frontend */ }
+    return "canvas";
+}
+
+export function renderPaintWorkflowEditor() {
+    const root = h("div", { className: "imageviewer-roots" }, h("style", { textContent: CSS }));
+    const body = h("div", { className: "imageviewer-roots-note" }, "Reading the workflows…");
+    const err = h("div", { className: "imageviewer-roots-err" });
+    root.append(body);
+    let state = null;
+    const said = {};                      // action -> what the last change said (the slots found)
+
+    const call = async (bodyJson) => {
+        err.textContent = "";
+        try {
+            const data = await rootsCall("/imageviewer/paint/workflows", bodyJson);
+            state = data;
+            if (bodyJson.action && data.slots) said[bodyJson.action] = slotText(data.slots);
+            const panel = _getPanel();
+            if (panel) panel._paintWf = null;          // the Generate buttons ask again
+            draw();
+        } catch (e) { err.textContent = e.message || String(e); }
+    };
+
+    const fromCanvas = async (action) => {
+        let p;
+        try { p = await app.graphToPrompt(); }
+        catch (e) { err.textContent = `The canvas could not be read: ${e.message || e}`; return; }
+        await call({ action, graph: p && p.output ? p.output : p, name: canvasWorkflowName(), source: "canvas" });
+    };
+
+    const fromFile = (action) => {
+        const inp = h("input", { type: "file", accept: ".json,application/json", style: "display:none" });
+        inp.addEventListener("change", async () => {
+            const f = inp.files && inp.files[0];
+            inp.remove();
+            if (!f) return;
+            let graph;
+            try { graph = JSON.parse(await f.text()); }
+            catch (e) { err.textContent = `${f.name} is not JSON: ${e.message || e}`; return; }
+            await call({ action, graph, name: f.name.replace(/\.json$/i, ""), source: "file" });
+        });
+        root.append(inp);
+        inp.click();
+    };
+
+    function draw() {
+        body.className = "";
+        body.replaceChildren(h("div", { className: "imageviewer-roots-h" }, "What each Generate action runs"));
+        for (const [a, info] of Object.entries(state.actions)) {
+            const sel = h("select", { title: "The workflow this action runs" });
+            for (const w of info.workflows) {
+                sel.append(h("option", { value: w.id, textContent: w.label + (w.id === info.default ? " - default" : "")
+                                                                  + (w.missing.length ? " - missing models" : "") }));
+            }
+            if (info.custom) sel.append(h("option", { value: "custom", textContent: `My workflow: ${info.custom.name || "custom"}` }));
+            sel.append(h("option", { value: "agent", textContent: "agentY builds one (asks the agent)" }));
+            sel.value = info.choice;
+            sel.addEventListener("change", () => call({ action: a, choice: sel.value }));
+            const chosen = info.choice === "custom" ? info.custom : info.workflows.find((w) => w.id === info.choice);
+            const miss = chosen && chosen.missing && chosen.missing.length ? missingText(chosen.missing) : "";
+            const lines = [];
+            if (miss) lines.push(h("div", { className: "imageviewer-pwf-status imageviewer-pwf-warn" }, `Not on this machine: ${miss}`));
+            if (info.custom) {
+                const t = said[a] || slotText(info.custom.slots);
+                lines.push(h("div", { className: "imageviewer-pwf-status" },
+                             `Yours (${info.custom.source === "canvas" ? "from the canvas" : "from a file"}${info.custom.saved ? ", " + String(info.custom.saved).slice(0, 16).replace("T", " ") : ""}): ${t}`));
+            }
+            body.append(h("div", { className: "imageviewer-pwf-row" },
+                h("div", { className: "imageviewer-pwf-line" },
+                  h("span", { className: "imageviewer-pwf-name" }, info.label), sel),
+                h("div", { className: "imageviewer-pwf-line" },
+                  h("button", { title: "The workflow on the canvas now (as ComfyUI would queue it) becomes yours for this action",
+                                onclick: () => fromCanvas(a) }, "Use the canvas"),
+                  h("button", { title: "A workflow saved with Export (API)", onclick: () => fromFile(a) }, "Load API file…"),
+                  info.custom ? h("button", { title: "Forget your own; the default is used again", onclick: () => call({ action: a, graph: null }) }, "Remove mine") : null),
+                lines));
+        }
+        body.append(err, h("div", { className: "imageviewer-roots-note" },
+            "Your own workflow needs a picture input and a result: name the nodes paint:image (Load Image), paint:mask (Load Image (as Mask), " +
+            "optional - else the selection is the picture's alpha), paint:prompt (where the words go) and paint:output (Save / Preview Image); " +
+            "without those names the first Load Image, the positive prompt and the last Save Image are taken. Seeds are new on every run. " +
+            `Kept on the ComfyUI machine in ${state.folder}.`));
+    }
+
+    rootsCall("/imageviewer/paint/workflows")
+        .then((data) => { state = data; draw(); })
+        .catch((e) => { body.className = "imageviewer-roots-err"; body.textContent = `Could not read the workflows. ${e.message || e}`; });
+    return root;
 }

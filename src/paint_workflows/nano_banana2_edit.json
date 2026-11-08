@@ -1,0 +1,44 @@
+{
+ "1": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "paint/in.png"
+  },
+  "_meta": {
+   "title": "paint:image"
+  }
+ },
+ "2": {
+  "class_type": "GeminiNanoBanana2",
+  "inputs": {
+   "prompt": "",
+   "model": "Nano Banana 2 (Gemini 3.1 Flash Image)",
+   "seed": 0,
+   "aspect_ratio": "1:1",
+   "resolution": "2K",
+   "response_modalities": "IMAGE",
+   "thinking_level": "MINIMAL",
+   "system_prompt": "You are an expert image editor. Change only what the instruction asks; keep everything else of the picture as it is. Always answer with an image.",
+   "images": [
+    "1",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "paint:prompt"
+  }
+ },
+ "3": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "paint/generate",
+   "images": [
+    "2",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "paint:output"
+  }
+ }
+}
