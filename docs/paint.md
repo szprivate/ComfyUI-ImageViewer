@@ -21,7 +21,8 @@ Its three panels, **Layers**, **Properties** and **History**, show only on a Pai
 | <kbd>V</kbd> | Transform: move, scale, rotate, shear (<kbd>Ctrl</kbd>+<kbd>T</kbd>). <kbd>Enter</kbd> applies, <kbd>Esc</kbd> cancels |
 | <kbd>M</kbd> / <kbd>Shift</kbd>+<kbd>M</kbd> | Rectangle / ellipse select |
 | <kbd>L</kbd> | Lasso |
-| <kbd>P</kbd> | Pen: Bezier paths (see below) |
+| <kbd>P</kbd> / <kbd>Shift</kbd>+<kbd>P</kbd> | Pen: Bezier paths (see below) / add anchor, delete anchor, convert point |
+| <kbd>A</kbd> / <kbd>Shift</kbd>+<kbd>A</kbd> | Path selection / direct selection |
 | <kbd>W</kbd> | Magic wand |
 | <kbd>C</kbd> | Crop |
 | <kbd>B</kbd> | Brush (reads pen pressure) |
@@ -81,6 +82,16 @@ A smart filter is kept as a setting on the layer instead of being baked into its
 <kbd>P</kbd> draws a path one anchor at a time. Click for a corner and drag for a smooth anchor (Shift holds the handle to 45° steps). Click the first anchor to close the path, or press <kbd>Enter</kbd> or <kbd>Esc</kbd> to leave it open. Click the path to add an anchor, or click an anchor to take it away. Click an end of an open path to carry on drawing from it.
 
 <kbd>Ctrl</kbd>+drag moves an anchor or a handle. <kbd>Alt</kbd>+click turns an anchor into a corner, or a corner into a smooth anchor as you drag. <kbd>Alt</kbd>+drag a handle to move it on its own. <kbd>Del</kbd> deletes the picked anchor, or the whole path when no anchor is picked.
+
+**The path tools.** Right-click the pen's button for the tools that change paths; the button then shows the one you picked. With any of them, every path on the picture is drawn, so you can click one to work on it.
+
+| Tool | What it does |
+|---|---|
+| Add anchor point | Click a path's curve to put an anchor there; drag to move it on. |
+| Delete anchor point | Click an anchor to take it away. |
+| Convert point | Click a smooth anchor to make it a corner; drag from a corner to make it smooth. Drag a handle to move it alone. |
+| Path selection (<kbd>A</kbd>) | Click a path to pick it and drag to move the whole path. <kbd>Alt</kbd>+drag moves a copy. The arrows nudge it (<kbd>Shift</kbd>: 10 px) and <kbd>Del</kbd> deletes it. |
+| Direct selection (<kbd>Shift</kbd>+<kbd>A</kbd>) | Click an anchor to pick it, <kbd>Shift</kbd>+click to pick more, or drag a box around anchors. Drag to move the picked anchors together, or drag a handle. A drag on the curve moves the anchors at its two ends. The arrows nudge them, <kbd>Del</kbd> takes them away, and <kbd>Esc</kbd> lets go. <kbd>Shift</kbd> while dragging keeps the move straight. |
 
 <kbd>Ctrl</kbd>+<kbd>Enter</kbd> makes the inside of the path the selection (<kbd>Shift</kbd> adds to it, <kbd>Alt</kbd> takes away). Properties picks and renames paths and has **Selection** (with how it combines and a feather), **Fill** and **Stroke** (in the colour, on the layer or on its mask while that is picked), and **Mask** (the active layer's mask from the path). Paths are saved in the `.ora`, but not in a `.psd`. A crop or resize moves them with the picture.
 

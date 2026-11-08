@@ -25,10 +25,13 @@ import { LayerFxMixin } from "./imageViewer_paintLayerFx.js";
 import { SelectGuidesMixin, RULER_PX } from "./imageViewer_paintSelect.js";
 import { SmartMixin } from "./imageViewer_paintSmart.js";
 import { LiquifyMixin } from "./imageViewer_paintLiquify.js";
+import { PathToolsMixin, PATH_TOOLS, TOOL_GROUPS, toolGroup } from "./imageViewer_paintPathTools.js";
 
 export const PAINT_TOOLS = [
     ["move", "transform", "Transform (move, scale, rotate, shear)", "V"], ["marquee", "marquee", "Rectangle select", "M"], ["ellipse", "ellipse", "Ellipse select", "Shift+M"],
-    ["lasso", "lasso", "Lasso", "L"], ["pen", "pen", "Pen (paths)", "P"], ["wand", "wand", "Magic wand", "W"], ["crop", "crop", "Crop", "C"],
+    ["lasso", "lasso", "Lasso", "L"], ["pen", "pen", "Pen (paths)", "P"], ["penadd", "penAdd", "Add anchor point", "Shift+P"],
+    ["pendel", "penDel", "Delete anchor point", "Shift+P"], ["penconv", "penConv", "Convert point: corner / smooth", "Shift+P"],
+    ["pathsel", "pathSel", "Path selection: the whole path", "A"], ["pathdirect", "pathDirect", "Direct selection: anchors and handles", "Shift+A"], ["wand", "wand", "Magic wand", "W"], ["crop", "crop", "Crop", "C"],
     ["brush", "brush", "Brush", "B"], ["clone", "clone", "Clone stamp", "S"], ["spot", "bandage", "Spot healing brush", "J"], ["heal", "heal", "Healing brush (Shift+J)", "Shift+J"],
     ["patch", "patch", "Patch (Shift+J)", "Shift+J"], ["eraser", "eraser", "Eraser", "E"], ["fill", "fill", "Paint bucket", "G"],
     ["gradient", "gradient", "Gradient (Shift+G)", "Shift+G"], ["dodge", "dodge", "Dodge", "O"], ["burn", "burn", "Burn (Shift+O)", "Shift+O"],
@@ -36,7 +39,7 @@ export const PAINT_TOOLS = [
     ["picker", "picker", "Eyedropper", "I"], ["text", "text", "Text", "T"], ["hand", "hand", "Hand (hold Space)", "H"],
 ];
 const TOOL_KEYS = { v: "move", m: "marquee", l: "lasso", p: "pen", j: "spot", w: "wand", c: "crop", b: "brush", s: "clone", e: "eraser", g: "fill", i: "picker",
-                    t: "text", h: "hand", o: "dodge", r: "smudge", u: "shape" };
+                    t: "text", h: "hand", o: "dodge", r: "smudge", u: "shape", a: "pathsel" };
 /** The tools that paint with a round brush (size, hardness, opacity, spacing, the pen). */
 const BRUSHES = ["brush", "clone", "eraser", "spot", "heal", "dodge", "burn", "sponge", "smudge"];
 /** The brushes that change the pixels under them rather than lay a colour down. */
@@ -47,7 +50,11 @@ const SOURCED = ["clone", "heal"];
 export const PAINT_KEYS = [
     ["V M L P W C", "Transform, select, lasso, pen, magic wand, crop"],
     ["Pen", "Click: corner, drag: smooth anchor, first anchor: close, Enter: stop; Ctrl+drag: move, Alt+click: corner / smooth"],
-    ["Ctrl+Enter (pen)", "The path as the selection (Shift: add, Alt: take away)"], ["B S E G I T H", "Brush, clone stamp, eraser, bucket, eyedropper, text, hand"],
+    ["Ctrl+Enter (pen)", "The path as the selection (Shift: add, Alt: take away)"],
+    ["Right-click the pen", "The path tools: add / delete anchor, convert point, path selection, direct selection"],
+    ["Shift+P", "The next of pen, add anchor, delete anchor, convert point"],
+    ["A / Shift+A", "Path selection (drag: the whole path, Alt: a copy) / direct selection (anchors; Shift+click, box)"],
+    ["Arrows, Del (A)", "Nudge (Shift: 10 px) / delete the path or the picked anchors"], ["B S E G I T H", "Brush, clone stamp, eraser, bucket, eyedropper, text, hand"],
     ["[ / ]", "Brush smaller / larger (Shift: softer / harder)"], ["X / D", "Swap / default colours"],
     ["Alt+click", "Pick a colour (brush, bucket); the clone stamp and healing brush: where they take from"],
     ["J / Shift+J", "Spot healing brush / the next of healing brush, patch, spot healing"],
@@ -94,6 +101,10 @@ const STYLE = `
 .paint-optbar .paint-note { margin: 0; }
 .paint-tools { flex: 0 0 auto; display: flex; flex-direction: column; gap: 2px; padding: 4px 3px; background: #1d1d21; border-right: 1px solid #2b2b30; }
 .paint-tools .paint-btn { width: 30px; height: 28px; padding: 0; }
+.paint-btn.paint-grouped { position: relative; }
+.paint-btn.paint-grouped::after { content: ""; position: absolute; right: 2px; bottom: 2px; border: 3px solid transparent; border-right-color: currentColor; border-bottom-color: currentColor; opacity: .6; }
+.paint-flyout { position: absolute; z-index: 30; display: flex; gap: 2px; padding: 3px; background: #1d1d21; border: 1px solid #3a3a40; border-radius: 4px; box-shadow: 0 4px 14px rgba(0,0,0,.5); }
+.paint-flyout .paint-btn { width: 30px; height: 28px; padding: 0; }
 .paint-colors { position: relative; width: 30px; height: 34px; margin-top: 6px; }
 .paint-swatch { position: absolute; width: 18px; height: 18px; border: 1px solid #aaa; border-radius: 2px; cursor: pointer; padding: 0; }
 .paint-swatch.fg { left: 0; top: 0; z-index: 1; } .paint-swatch.bg { left: 11px; top: 14px; }
@@ -296,6 +307,18 @@ class PaintEditor {
         const tools = this.el("div", "paint-tools");
         this.toolBtns = {};
         for (const [id, icon, label, key] of PAINT_TOOLS) {
+            const g = toolGroup(id);
+            if (g) {
+                // One place for the group: its first tool here, the others behind a right-click.
+                if (id !== TOOL_GROUPS[g][0]) continue;
+                const labels = {};
+                for (const t of TOOL_GROUPS[g]) { const T = PAINT_TOOLS.find((x) => x[0] === t); labels[t] = { icon: T[1], title: `${T[2]} (${T[3]})` }; }
+                const b = this._groupSlot(g, labels);
+                b.title += " - right-click: the other path tools";
+                for (const t of TOOL_GROUPS[g]) this.toolBtns[t] = b;
+                tools.append(b);
+                continue;
+            }
             const b = this.btn(icon, `${label} (${key})`, () => this.setTool(id));
             b.dataset.tool = id;
             this.toolBtns[id] = b;
@@ -635,6 +658,7 @@ class PaintEditor {
         }
         // The pen's path; the patch being dragged.
         this._penDraw(c, X, Y);
+        this._pathBoxDraw(c, X, Y);
         this._drawDraw(c, X, Y);
         this._patchDraw(c, X, Y);
         // The crop.
@@ -1647,8 +1671,11 @@ class PaintEditor {
         if (t !== "move" && this.wp) this.wpCommit();
         if (t !== "liquify" && this.lq) this.lqCommit();
         if (t !== "pen") this._penOpen = false;
+        this._closeFlyout();
         this.tool = t;
-        for (const [id, b] of Object.entries(this.toolBtns)) b.classList.toggle("on", id === t);
+        this._groupShow(t);
+        const on = this.toolBtns[t];
+        for (const b of new Set(Object.values(this.toolBtns))) b.classList.toggle("on", b === on);
         this._cursor();
         this.refreshProps();
         this.drawOverlay();
@@ -1659,7 +1686,7 @@ class PaintEditor {
         const t = this.tool;
         if (!this.doc) { this.wrap.style.cursor = "default"; return; }
         if (over) { this.wrap.style.cursor = over; return; }
-        const cursors = { hand: "grab", move: "move", text: "text", picker: "copy" };
+        const cursors = { hand: "grab", move: "move", text: "text", picker: "copy", pathsel: "default", pathdirect: "default" };
         this.wrap.style.cursor = cursors[t] || (BRUSHES.includes(t) || t === "liquify" ? "none" : "crosshair");
     }
 
@@ -1742,6 +1769,7 @@ class PaintEditor {
         if (t === "marquee" || t === "ellipse") { const [x0, y0] = this._snapPt(p.x, p.y); this._drag = { kind: t, x0, y0, rect: null, e }; return; }
         if (t === "lasso") { this._drag = { kind: "lasso", pts: [[p.x, p.y]], e }; return; }
         if (t === "pen") { this._penDown(p, e); return; }
+        if (PATH_TOOLS.includes(t)) { this._pathToolDown(p, e); return; }
         if (t === "move") {
             const set = this._moveSet();
             if (set) {
@@ -1788,6 +1816,7 @@ class PaintEditor {
         if (dr.kind === "guide") { this._guideMove(dr, p); return; }
         if (dr.kind === "lq") { this._lqMove(dr, p); this.drawOverlay(); return; }
         if (dr.kind === "pen") { this._penMove(dr, p, e); return; }
+        if (dr.kind === "pathmove" || dr.kind === "pathbox") { this._pathToolMove(dr, p, e); return; }
         if (dr.kind === "wp") { this._wpMove(dr, p); return; }
         if (dr.kind === "patch") { this._patchMove(dr, p); return; }
         if (dr.kind === "grad") { this._gradMove(dr, p, e); return; }
@@ -1829,6 +1858,7 @@ class PaintEditor {
         if (dr.kind === "guide") { this._guideUp(dr); return; }
         if (dr.kind === "lq") { this._thumbsSoon(); this.refreshProps(); return; }
         if (dr.kind === "pen") { this._penUp(dr); return; }
+        if (dr.kind === "pathmove" || dr.kind === "pathbox") { this._pathToolUp(dr); return; }
         if (dr.kind === "wp") { this._wpUp(); return; }
         if (dr.kind === "patch") { this._patchUp(dr); return; }
         if (dr.kind === "grad") { this._gradUp(dr); return; }
@@ -2528,6 +2558,7 @@ class PaintEditor {
         if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return false;
         const k = e.key, lk = k.toLowerCase(), ctrl = e.ctrlKey || e.metaKey;
         const take = (fn) => { e.preventDefault(); fn(); return true; };
+        if (this._pathToolKey(e, take)) return true;
         if (this._penKey(e, take)) return true;
         if (ctrl) {
             if (lk === "z" && e.shiftKey) return take(() => this.redo());
@@ -2601,6 +2632,8 @@ class PaintEditor {
             if (this.tool === "shape") s.kind = SHAPE_KINDS[(SHAPE_KINDS.indexOf(s.kind) + 1) % SHAPE_KINDS.length];
             this.setTool("shape");
         });
+        if (lk === "p" && e.shiftKey && !e.altKey) return take(() => this.setTool({ pen: "penadd", penadd: "pendel", pendel: "penconv", penconv: "pen" }[this.tool] || "penadd"));
+        if (lk === "a" && e.shiftKey && !e.altKey) return take(() => this.setTool(this.tool === "pathdirect" ? "pathsel" : "pathdirect"));
         if (lk === "j" && e.shiftKey && !e.altKey) return take(() => this.setTool({ spot: "heal", heal: "patch", patch: "spot" }[this.tool] || "heal"));
         if (TOOL_KEYS[lk] && !e.altKey && !e.shiftKey) return take(() => this.setTool(TOOL_KEYS[lk]));
         return false;
@@ -3255,7 +3288,7 @@ class PaintEditor {
             this._field(ts, "", [check(f, "contiguous", "Contiguous"), check(f, "all", "All layers")]);
         } else if (this.tool === "liquify") {
             this._lqOptions(ts, bar, sync, note);
-        } else if (this.tool === "pen") {
+        } else if (PATH_TOOLS.includes(this.tool)) {
             this._penOptions(ts, bar, sync, note);
         } else if (this.tool === "gradient" || this.tool === "shape") {
             this._drawOptions(ts, bar, sync, note);
@@ -3591,7 +3624,7 @@ class PaintEditor {
     }
 }
 
-Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin, TipsMixin, DrawMixin, LayerFxMixin, SelectGuidesMixin, SmartMixin, LiquifyMixin);
+Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin, TipsMixin, DrawMixin, LayerFxMixin, SelectGuidesMixin, SmartMixin, LiquifyMixin, PathToolsMixin);
 
 // Lucide's rotate-cw, white on black, as the pointer outside a transform's box.
 const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><g stroke="#000" stroke-width="4"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g><g stroke="#fff" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g></svg>')}") 12 12, alias`;
