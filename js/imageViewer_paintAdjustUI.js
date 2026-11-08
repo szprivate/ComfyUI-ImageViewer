@@ -326,8 +326,16 @@ export const AdjustUIMixin = {
 
     /** Draw once the canvas has its size (a section is built before it is in the panel). */
     _adjWhenShown(cv, draw) {
+        // At once (at a default size), then again at the next frame and whenever the canvas changes size -
+        // a panel behind a tab or a dialog laid out later gives it its real size only then.
+        draw();
         const win = this.d.defaultView;
         win.requestAnimationFrame(() => draw());
+        if (win.ResizeObserver && !cv._adjRO) {
+            let w = cv.clientWidth;
+            cv._adjRO = new win.ResizeObserver(() => { if (cv.isConnected && cv.clientWidth && cv.clientWidth !== w) { w = cv.clientWidth; draw(); } });
+            cv._adjRO.observe(cv);
+        }
     },
 
     /** Rebuild an editor in place (after a change that moves several of its controls). */

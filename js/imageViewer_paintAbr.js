@@ -7,8 +7,8 @@
 // 10: "8BIM" sections, the "samp" one holding the sampled tips), each sampled tip a bounding rectangle,
 // a bit depth, and its grey pixels raw or PackBits-compressed per row. Only sampled tips are read
 // (computed round brushes and the brush settings in "desc" are left out, and said so). Nothing of
-// Adobe's or any other program's code is used, and no brushes ship with the viewer: it reads only what
-// the user gives it.
+// Adobe's or any other program's code is used. The tips that ship with the viewer are drawn from numbers
+// when Paint starts (imageViewer_paintTipSet.js): no brush file of anybody else's is shipped.
 //
 // readAbr / packbits / tipFromPixels / shrinkTip are pure (tests/test_paint_abr.mjs); TipsMixin is on the editor.
 
@@ -172,6 +172,8 @@ export function tipFromPixels(px, w, h, mask = null) {
 
 // ── keeping them (IndexedDB, per browser) ───────────────────────────────────
 
+import { builtinTips } from "./imageViewer_paintTipSet.js";
+
 const DB = "imageviewer-paint-tips", STORE = "tips";
 
 function openDb(win) {
@@ -198,6 +200,8 @@ export const TipsMixin = {
     /** The tips kept in this browser, into this.tips (a Map by id); without IndexedDB they live as long as the page. */
     async _tipsLoad() {
         this.tips = this.tips || new Map();
+        // The built-in set first (drawn now, never stored), then the user's own.
+        try { for (const t of builtinTips()) if (!this.tips.has(t.id)) this.tips.set(t.id, t); } catch (_) { /* none */ }
         try {
             const all = await tx(this.d.defaultView, "readonly", (st) => st.getAll());
             for (const t of all || []) this.tips.set(t.id, { ...t, a: new Uint8Array(t.a) });
@@ -214,6 +218,8 @@ export const TipsMixin = {
     },
 
     async tipDelete(id) {
+        const t = this.tips.get(id);
+        if (t && t.builtin) return;
         this.tips.delete(id);
         for (const k of ["brush", "eraser"]) if (this.opts[k].tip === id) this.opts[k].tip = null;
         try { await tx(this.d.defaultView, "readwrite", (st) => st.delete(id)); } catch (_) { /* memory only */ }
@@ -224,8 +230,8 @@ export const TipsMixin = {
         const t = this.tips.get(id);
         if (!t) return;
         const users = ["brush", "eraser"].filter((k) => this.opts[k].tip === id);
-        await this.tipDelete(id);
-        const n = await this._tipKeep({ ...t, a: t.a.map((v) => 255 - v) });
+        if (!t.builtin) await this.tipDelete(id);
+        const n = await this._tipKeep({ ...t, name: t.builtin ? `${t.name} (inverted)` : t.name, a: t.a.map((v) => 255 - v) });
         for (const k of users) this.opts[k].tip = n.id;
         this.refreshProps();
     },
@@ -244,16 +250,113 @@ export const TipsMixin = {
         return { ...r, kept };
     },
 
-    /** Ask for an .abr file (the browser's own file dialog: the file never goes to the server). */
-    pickAbr() {
-        const inp = this.d.createElement("input");
-        inp.type = "file";
+    /** Import brush tips: the dialog (Import .abr…, the Brush menu). */
+    pickAbr() { return this.tipsDialog(); },
+
+    /** .abr files the user gave (picked or dropped): each read and kept; the dialog's line says what came. */
+    async _abrFiles(files) {
+        const said = [];
+        for (const f of files || []) {
+            if (!/\.abr$/i.test(f.name || "")) { said.push(`${f.name}: not an .abr file`); continue; }
+            const r = await this.importAbr(new Uint8Array(await f.arrayBuffer()), f.name);
+            said.push(r ? `${f.name}: ${r.kept.length} tip${r.kept.length === 1 ? "" : "s"}` + (r.notes.length ? ` (${r.notes.join("; ")})` : "") : `${f.name}: could not be read`);
+        }
+        return said;
+    },
+
+    /** A tip drawn small onto a canvas of `side` px (light on dark). */
+    _tipThumb(t, side = 28) {
+        const cv = this.el("canvas");
+        cv.width = cv.height = side;
+        const c = cv.getContext("2d");
+        if (!t) { c.fillStyle = "#ddd"; c.beginPath(); c.arc(side / 2, side / 2, side * 0.36, 0, Math.PI * 2); c.fill(); return cv; }
+        const k = (side - 2) / Math.max(t.w, t.h), w = Math.max(1, Math.round(t.w * k)), h = Math.max(1, Math.round(t.h * k));
+        const im = c.createImageData(w, h);
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+            const v = t.a[Math.min(t.h - 1, Math.floor(y / k)) * t.w + Math.min(t.w - 1, Math.floor(x / k))];
+            im.data.set([221, 221, 221, v], (y * w + x) * 4);
+        }
+        c.putImageData(im, Math.round((side - w) / 2), Math.round((side - h) / 2));
+        return cv;
+    },
+
+    /**
+     * The Brush tips dialog, inside the editor (so a popped-out viewer has it in its own window): Choose .abr
+     * files… (the browser's own file dialog, made in the editor's document: the file never goes to the server),
+     * a drop zone for .abr files, what the last import brought, the built-in tips and the user's own (a click
+     * chooses one for the brush or eraser, × forgets one of the user's).
+     */
+    tipsDialog() {
+        const old = this.box.querySelector(".paint-tipsdlg");
+        if (old) old.closest(".paint-dlg-shade").remove();
+        const tool = this.opts[this.tool] && this.opts[this.tool].tip !== undefined ? this.tool : "brush";
+        const shade = this.el("div", "paint-dlg-shade");
+        const box = this.el("div", "paint-dlg paint-tipsdlg");
+        box.append(this.el("h3", "", { text: "Brush tips" }));
+        const drop = this.el("div", "paint-tipdrop");
+        const inp = this.el("input", "", { type: "file" });
         inp.accept = ".abr";
-        inp.addEventListener("change", async () => {
-            const f = inp.files && inp.files[0];
-            if (f) await this.importAbr(new Uint8Array(await f.arrayBuffer()), f.name);
-        });
-        inp.click();
+        inp.multiple = true;
+        inp.style.display = "none";
+        const choose = this.el("button", "paint-btn on tip-choose", { type: "button", text: "Choose .abr files…", title: "Photoshop brush files: their sampled tips are read here and kept in this browser" });
+        drop.append(this.el("div", "", { text: "Drop .abr files here, or" }), choose, inp);
+        const msg = this.el("div", "note paint-tipmsg", { text: "The tips of an .abr are read in the page and kept in this browser; the brushes' own settings are not read." });
+        box.append(drop, msg);
+        const lists = this.el("div", "paint-tiplists");
+        box.append(lists);
+        const fill = () => {
+            lists.replaceChildren();
+            const section = (title, tips, own) => {
+                lists.append(this.el("div", "paint-tiphead", { text: title }));
+                const grid = this.el("div", "paint-tipgrid");
+                if (!tips.length) grid.append(this.el("div", "note", { text: "None yet." }));
+                for (const t of tips) {
+                    const cell = this.el("div", "paint-tipcell" + (this.opts[tool].tip === t.id ? " on" : ""), { title: `${t.name} (${t.w} x ${t.h}) - click: use it for the ${tool}` });
+                    cell.dataset.tip = t.id;
+                    cell.append(this._tipThumb(t, 44), this.el("span", "", { text: t.name }));
+                    cell.addEventListener("click", () => {
+                        this.opts[tool].tip = t.id;
+                        if (t.spacing) this.opts[tool].spacing = Math.min(100, Math.max(1, t.spacing));
+                        this.refreshProps(); fill();
+                    });
+                    if (own) {
+                        const x = this.el("button", "paint-tipx", { type: "button", text: "×", title: "Forget this tip" });
+                        x.addEventListener("click", async (e) => { e.stopPropagation(); await this.tipDelete(t.id); fill(); });
+                        cell.append(x);
+                    }
+                    grid.append(cell);
+                }
+                lists.append(grid);
+            };
+            const all = [...this.tips.values()];
+            section("Built in", all.filter((t) => t.builtin), false);
+            section("Yours", all.filter((t) => !t.builtin), true);
+        };
+        fill();
+        const take = async (files) => {
+            if (!files || !files.length) return;
+            msg.textContent = "Reading…";
+            const said = await this._abrFiles([...files]);
+            msg.textContent = said.join(" · ") || "Nothing read.";
+            fill();
+        };
+        choose.addEventListener("click", () => inp.click());
+        inp.addEventListener("change", () => { take(inp.files); inp.value = ""; });
+        for (const ev of ["dragenter", "dragover"]) drop.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); drop.classList.add("hot"); });
+        drop.addEventListener("dragleave", () => drop.classList.remove("hot"));
+        drop.addEventListener("drop", (e) => { e.preventDefault(); e.stopPropagation(); drop.classList.remove("hot"); take(e.dataTransfer && e.dataTransfer.files); });
+        const go = this.el("div", "go");
+        const close = this.el("button", "paint-btn", { type: "button", text: "Close" });
+        go.append(close);
+        box.append(go);
+        const end = () => shade.remove();
+        close.addEventListener("click", end);
+        shade.addEventListener("pointerdown", (e) => { if (e.target === shade) end(); });
+        box.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); end(); } });
+        shade.append(box);
+        this.box.append(shade);
+        choose.focus();
+        return { box, take };
     },
 
     /** A tip from what the selection holds of the picture as it looks (Edit > Define brush): dark paints. */
@@ -261,7 +364,7 @@ export const TipsMixin = {
         if (!this.sel) { this._notify("Select what the brush tip should be first.", "info"); return null; }
         const t = tipFromPixels(this.comp, this.doc.w, this.doc.h, this.sel);
         if (!t) { this._notify("The selection holds nothing dark enough to be a tip (dark paints).", "info"); return null; }
-        const tip = await this._tipKeep({ ...shrinkTip(t), name: `Tip ${this.tips.size + 1}` });
+        const tip = await this._tipKeep({ ...shrinkTip(t), name: `Tip ${[...this.tips.values()].filter((x) => !x.builtin).length + 1}` });
         const tool = this.opts[this.tool] && this.opts[this.tool].tip !== undefined ? this.tool : "brush";
         this.opts[tool].tip = tip.id;
         this.refreshProps();
@@ -271,41 +374,28 @@ export const TipsMixin = {
     /** The tip's row of Properties: Round and every tip as a small picture, the buttons, its angle and the jitter. */
     _tipOptions(ts, b, sync) {
         const row = this.el("div", "paint-tips");
-        const add = (id, title, draw) => {
+        const add = (id, title, t) => {
             const btn = this.el("button", "paint-tip" + ((b.tip || null) === id ? " on" : ""), { type: "button", title });
             btn.dataset.tip = id || "round";
-            const cv = this.el("canvas");
-            cv.width = cv.height = 28;
-            draw(cv.getContext("2d"));
-            btn.append(cv);
+            btn.append(this._tipThumb(t, 28));
             btn.addEventListener("click", () => {
                 b.tip = id;
-                const t = id && this.tips.get(id);
                 if (t && t.spacing) b.spacing = Math.min(100, Math.max(1, t.spacing));
                 this.refreshProps(); sync();
             });
             row.append(btn);
         };
-        add(null, "Round (size, hardness)", (c) => { c.fillStyle = "#ddd"; c.beginPath(); c.arc(14, 14, 10, 0, Math.PI * 2); c.fill(); });
-        for (const t of this.tips.values()) {
-            add(t.id, `${t.name} (${t.w} x ${t.h})`, (c) => {
-                const k = 26 / Math.max(t.w, t.h), w = Math.max(1, Math.round(t.w * k)), h = Math.max(1, Math.round(t.h * k));
-                const im = c.createImageData(w, h);
-                for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-                    const v = t.a[Math.min(t.h - 1, Math.floor(y / k)) * t.w + Math.min(t.w - 1, Math.floor(x / k))];
-                    im.data.set([221, 221, 221, v], (y * w + x) * 4);
-                }
-                c.putImageData(im, Math.round((28 - w) / 2), Math.round((28 - h) / 2));
-            });
-        }
+        add(null, "Round (size, hardness)", null);
+        for (const t of this.tips.values()) add(t.id, `${t.name} (${t.w} x ${t.h})` + (t.builtin ? " - built in" : ""), t);
         ts.append(row);
         const btns = this.el("div", "paint-field wrap");
         const B = (text, title, run, cls) => { const x = this.el("button", "paint-btn " + cls, { type: "button", text, title }); x.addEventListener("click", run); btns.append(x); };
-        B("Import .abr…", "Read the sampled brush tips of a brush file (.abr); they are kept in this browser", () => this.pickAbr(), "tip-import");
+        B("Import .abr…", "Brush tips: import the sampled tips of .abr files (kept in this browser), see the built-in ones", () => this.tipsDialog(), "tip-import");
         B("From selection", "Make a tip of what is selected (dark paints)", () => this.tipFromSelection(), "tip-sel");
         if (b.tip) {
+            const cur = this.tips.get(b.tip);
             B("Invert", "Paint with the light parts instead", () => this.tipInvert(b.tip), "tip-invert");
-            B("Delete", "Forget this tip", () => this.tipDelete(b.tip), "tip-del");
+            if (!(cur && cur.builtin)) B("Delete", "Forget this tip", () => this.tipDelete(b.tip), "tip-del");
         }
         ts.append(btns);
         if (b.tip) this._slider(ts, "Angle °", b.angle || 0, -180, 180, 1, (v) => { b.angle = v; sync(); });

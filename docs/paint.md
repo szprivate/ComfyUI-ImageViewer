@@ -35,18 +35,20 @@ Its panels show only on a Paint tab: **Layers**, **History** and, sharing one pl
 | <kbd>O</kbd> / <kbd>Shift</kbd>+<kbd>O</kbd> | Dodge (lightens), then burn (darkens) and the sponge (takes colour out or puts more in). Dodge and burn work most on the shadows, the midtones or the highlights; Exposure sets how strongly |
 | <kbd>R</kbd> | Smudge: drags the paint along the stroke. Strength sets how far; Finger painting starts each stroke with the colour |
 | <kbd>U</kbd> / <kbd>Shift</kbd>+<kbd>U</kbd> | Shapes: rectangle, rounded rectangle, ellipse, polygon, line (Shift+U: the next one) |
-| <kbd>I</kbd> | Eyedropper |
+| <kbd>I</kbd> | Eyedropper: a click takes the colour under the pointer; dragged, it draws a box and takes the average colour inside it |
 | <kbd>T</kbd> | Text |
 | <kbd>H</kbd> or hold <kbd>Space</kbd> | Hand |
 
 <kbd>X</kbd> swaps the two colours, <kbd>D</kbd> resets them.
 
+Tools of one kind share one place in the toolbar: the selections (rectangle, ellipse, lasso), the brush with the healing tools (spot healing brush, healing brush, patch), the path tools, and the shapes (rectangle, rounded rectangle, ellipse, polygon, line). The place shows the tool used last. Right-click it for the others.
+
 On a big picture (more than about two million pixels) seen smaller than half its size, moving or transforming a layer, dragging a gradient and pulling a slider show a quick preview at about the screen's resolution while you drag. The full picture is drawn as soon as you let go, or when a slider stays still for a moment.
 
 ## Brush tips
 
-The brush and the eraser can paint with a picture as their tip instead of a round dab. The tips are in Tool options:
-- **Import .abr…** reads a brush file. Only the sampled tips are read, which are the ones drawn from a picture. Computed round brushes and the brush settings saved with them (dynamics, textures) are not read; the note after the import says what was left out. The file is read in the browser and is not sent to the server.
+The brush and the eraser can paint with a picture as their tip instead of a round dab. The tips are in Tool options. Paint comes with 14 tips of its own (rough round, chalk, charcoal, sponge, splatter, spray, flat bristle, hatching, grass, leaves, star, square, clouds, canvas grain). They are drawn by the viewer when Paint starts, so they carry no other licence. They cannot be deleted.
+- **Import .abr…** (also **Brush > Brush tips / Import .abr…**) opens the Brush tips dialog. **Choose .abr files…** or drop .abr files on it; it says what each file brought. The dialog also lists the built-in tips and yours; a click chooses one, × forgets one of yours. Only the sampled tips of a brush file are read, which are the ones drawn from a picture. Computed round brushes and the brush settings saved with them (dynamics, textures) are not read; the note after the import says what was left out. The file is read in the browser and is not sent to the server.
 - **From selection** makes a tip from the selected part of the picture as it looks. Dark parts paint, light parts do not. **Edit > Define brush tip from the selection** does the same.
 - **Invert** paints with the light parts instead. **Delete** removes the tip.
 

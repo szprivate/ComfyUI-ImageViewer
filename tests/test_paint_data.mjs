@@ -161,3 +161,14 @@ test("transformed pixels: a turn of 90° moves them exactly, a doubling covers t
     assert.equal(mk.length, box.w * box.h);
     assert.equal(mk[1], 200);
 });
+
+test("the eyedropper's box: the average of what is in it, by alpha, clipped to the picture", () => {
+    const w = 10, h = 4, px = layer(w, h, [0, 0, 200, 255]);
+    for (let y = 0; y < h; y++) for (let x = 5; x < w; x++) px.set([200, 0, 0, 255], (y * w + x) * 4);
+    assert.deepEqual(D.areaAverage(px, w, h, 0, 0, 10, 4), [100, 0, 100]);
+    assert.deepEqual(D.areaAverage(px, w, h, 4, 3, -5, -9), [0, 0, 200]);         // either way round, cut to the picture
+    px.set([0, 255, 0, 0], 0);                                                   // a clear pixel counts for nothing
+    assert.deepEqual(D.areaAverage(px, w, h, 0, 0, 2, 1), [0, 0, 200]);
+    assert.equal(D.areaAverage(px, w, h, 20, 20, 30, 30), null);
+    assert.deepEqual(D.areaAverage(layer(1000, 1000, [10, 20, 30, 255]), 1000, 1000, 0, 0, 1000, 1000, 1000), [10, 20, 30]);   // sampled
+});
