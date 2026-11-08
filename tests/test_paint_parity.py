@@ -46,6 +46,7 @@ def rnd_doc(seed, blends, adjust=None, size=(37, 29)):
 
 
 ADJ = [("levels", {"in_black": 20, "in_white": 230, "gamma": 1.4, "out_black": 10, "out_white": 240}),
+       ("levels", {"in_black": 5, "gamma": 0.8, "r": {"in_black": 30, "gamma": 1.6}, "b": {"out_white": 200, "in_white": 220}}),
        ("curves", {"rgb": [[0, 10], [80, 120], [200, 180], [255, 250]], "g": [[0, 0], [128, 100], [255, 255]]}),
        ("brightness_contrast", {"brightness": 25, "contrast": 40}),
        ("brightness_contrast", {"brightness": -30, "contrast": -50}),

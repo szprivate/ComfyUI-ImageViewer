@@ -23,7 +23,7 @@ export const ADJUST_TYPES = ["levels", "curves", "brightness_contrast", "exposur
 export const ADJUST_LABELS = { levels: "Levels", curves: "Curves", brightness_contrast: "Brightness/Contrast",
     exposure: "Exposure", hue_saturation: "Hue/Saturation", grade: "Grade", invert: "Invert", threshold: "Threshold" };
 export const ADJUST_DEFAULTS = {
-    levels: { in_black: 0, in_white: 255, gamma: 1, out_black: 0, out_white: 255 },
+    levels: { in_black: 0, in_white: 255, gamma: 1, out_black: 0, out_white: 255, r: null, g: null, b: null },
     curves: { rgb: [[0, 0], [255, 255]], r: null, g: null, b: null },
     brightness_contrast: { brightness: 0, contrast: 0 },
     exposure: { exposure: 0, offset: 0, gamma: 1 },
@@ -84,9 +84,15 @@ export function cleanAdjust(kind, params) {
     const p = params && typeof params === "object" ? params : {};
     switch (kind) {
         case "levels": {
-            const ib = num(p.in_black, 0, 0, 254);
-            return { in_black: ib, in_white: num(p.in_white, 255, ib + 1, 255), gamma: num(p.gamma, 1, 0.1, 9.99),
-                     out_black: num(p.out_black, 0, 0, 255), out_white: num(p.out_white, 255, 0, 255) };
+            // The RGB levels, then (each null, or levels of its own) Red, Green and Blue after them.
+            const lv = (q) => {
+                const ib = num(q.in_black, 0, 0, 254);
+                return { in_black: ib, in_white: num(q.in_white, 255, ib + 1, 255), gamma: num(q.gamma, 1, 0.1, 9.99),
+                         out_black: num(q.out_black, 0, 0, 255), out_white: num(q.out_white, 255, 0, 255) };
+            };
+            const out = lv(p);
+            for (const ch of ["r", "g", "b"]) out[ch] = p[ch] && typeof p[ch] === "object" ? lv(p[ch]) : null;
+            return out;
         }
         case "curves": return { rgb: points(p.rgb) || [[0, 0], [255, 255]], r: points(p.r), g: points(p.g), b: points(p.b) };
         case "brightness_contrast": return { brightness: num(p.brightness, 0, -100, 100), contrast: num(p.contrast, 0, -100, 100) };
@@ -402,8 +408,17 @@ export function adjustLuts(kind, params) {
     const one = (f) => { const a = new Float64Array(256); for (let i = 0; i < 256; i++) a[i] = f(i / 255); return [a, a, a]; };
     switch (kind) {
         case "levels": {
-            const ib = p.in_black / 255, iw = p.in_white / 255, ob = p.out_black / 255, ow = p.out_white / 255, g = 1 / p.gamma;
-            return one((v) => ob + (ow - ob) * (Math.min(1, Math.max(0, (v - ib) / (iw - ib))) ** g));
+            const lv = (q) => {
+                const ib = q.in_black / 255, iw = q.in_white / 255, ob = q.out_black / 255, ow = q.out_white / 255, g = 1 / q.gamma;
+                return (v) => ob + (ow - ob) * (Math.min(1, Math.max(0, (v - ib) / (iw - ib))) ** g);
+            };
+            const master = lv(p);
+            return ["r", "g", "b"].map((ch) => {
+                const own = p[ch] ? lv(p[ch]) : null;
+                const a = new Float64Array(256);
+                for (let i = 0; i < 256; i++) { const m = master(i / 255); a[i] = own ? own(m) : m; }
+                return a;
+            });
         }
         case "curves": {
             const master = monotone(p.rgb);

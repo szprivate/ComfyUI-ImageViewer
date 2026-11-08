@@ -1310,7 +1310,7 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(pg.evaluate(f"() => {ed}.box.querySelector('.paint-dlg input[type=number]').value"),
                          pg.evaluate(f"() => {ed}.box.querySelector('.paint-dlg .paint-dlg-range').value"))
         pg.mouse.up()
-        pg.click(".paint-dlg .paint-btn:not(.on)")
+        pg.click(".paint-dlg .go .paint-btn:text-is('Cancel')")
         pg.wait_for_timeout(50)
         self.assertEqual(comp(), start, "Cancel puts it back")
         # An adjustment layer's slider in Properties: live too.
@@ -1588,6 +1588,77 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(os.path.getmtime(target), before)
         pg.evaluate(f"() => {dlg}.querySelector('.paint-saveas-over').click()")
         pg.wait_for_function(f"() => !{dlg}", timeout=10000)
+        self.assertEqual(self.errors, [])
+
+
+    def test_adjustment_panels_histogram_levels_per_channel_curves_presets_and_into_the_pixels(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        pg.evaluate("() => __panel.paintShowPanel('props')")
+        pg.evaluate(f"() => {ed}.addAdjustment('levels')")
+        pg.wait_for_function(f"() => !!{ed}.parts.props.querySelector('.paint-adj[data-adjust=levels] canvas.paint-hist')", timeout=5000)
+        pg.wait_for_timeout(100)
+        # The histogram is of what is under it: the photo (blue 160 everywhere, a red block).
+        h = pg.evaluate(f"() => {{ const e = {ed}; const L = e.active(); const h = e._adjHistUnder(L); return [h.n, h.b[160], h.r[220], h.r[0]]; }}")
+        self.assertEqual(h[0], 200 * 120)
+        self.assertEqual(h[1], 200 * 120)
+        self.assertEqual(h[2], 60 * 100)
+        self.assertEqual(h[3], 200 * 120 - 60 * 100)
+
+        def box(sel):
+            return pg.evaluate(f"""(q) => {{ const el = {ed}.parts.props.querySelector(q); el.scrollIntoView({{ block: 'center' }});
+                const r = el.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }}""", sel)
+        # Drag the input black handle to about a quarter: in_black follows, one undo step "Levels".
+        hk = box(".paint-adj[data-adjust=levels] .paint-ltrack:not(.grad) .h.k")
+        track = box(".paint-adj[data-adjust=levels] .paint-ltrack:not(.grad)")
+        n0 = pg.evaluate(f"() => {ed}.undoStack.length")
+        pg.mouse.move(hk[0] + hk[2] / 2, hk[1] + 4)
+        pg.mouse.down()
+        pg.mouse.move(track[0] + track[2] * 0.25, hk[1] + 4, steps=5)
+        pg.mouse.up()
+        ib = pg.evaluate(f"() => {ed}.active().adjust.params.in_black")
+        self.assertTrue(55 <= ib <= 72, ib)
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.length"), n0 + 1)
+        # The red channel: a number of its own; the master stays.
+        pg.evaluate(f"""() => {{ const b = {ed}.parts.props.querySelector('.paint-adj[data-adjust=levels]');
+            const ch = b.querySelector('.paint-hbar select'); ch.value = 'r'; ch.dispatchEvent(new Event('change'));
+            const n = b.querySelector('input[title="Input white"]'); n.value = '200'; n.dispatchEvent(new Event('change')); }}""")
+        p = pg.evaluate(f"() => {ed}.active().adjust.params")
+        self.assertEqual(p["r"]["in_white"], 200)
+        self.assertEqual(p["in_black"], ib)
+        self.assertIsNone(p["g"])
+        # The picture follows: red 220 -> through the master then red's own levels.
+        pg.wait_for_timeout(100)
+        comp = pg.evaluate(f"() => {{ const e = {ed}; const c = D_composite(); return c; }}".replace("D_composite()", "Array.from(e.comp.slice((60*200+100)*4, (60*200+100)*4+3))"))
+        self.assertEqual(comp[0], 255)
+        # Curves: a preset, then a point dragged off the graph goes.
+        pg.evaluate(f"() => {ed}.addAdjustment('curves')")
+        pg.wait_for_function(f"() => !!{ed}.parts.props.querySelector('.paint-adj[data-adjust=curves]')", timeout=5000)
+        pg.evaluate(f"""() => {{ const b = {ed}.parts.props.querySelector('.paint-adj[data-adjust=curves]');
+            const pre = b.querySelectorAll('.paint-hbar select')[1]; pre.value = 'strong'; pre.dispatchEvent(new Event('change')); }}""")
+        self.assertEqual(pg.evaluate(f"() => {ed}.active().adjust.params.rgb.length"), 4)
+        cv = box(".paint-adj[data-adjust=curves] canvas.paint-curve")
+        x, y = cv[0] + cv[2] * 64 / 255, cv[1] + cv[3] * (1 - 40 / 255)
+        pg.mouse.move(x, y); pg.mouse.down(); pg.mouse.move(x - 200, y, steps=4); pg.mouse.up()
+        self.assertEqual(pg.evaluate(f"() => {ed}.active().adjust.params.rgb.length"), 3)
+        # Filter > Curves (into the pixels): the same editor in a dialog; OK bakes it as one step.
+        pg.evaluate(f"() => {{ const e = {ed}; e.setActive(e.doc.layers[0].id); e.adjustPixelsDialog('curves'); }}")
+        pg.wait_for_function(f"() => !!{ed}.box.querySelector('.paint-adjdlg .paint-adj[data-adjust=curves]')", timeout=5000)
+        pg.evaluate(f"""() => {{ const b = {ed}.box.querySelector('.paint-adjdlg');
+            const pre = b.querySelectorAll('.paint-hbar select')[1]; pre.value = 'negative'; pre.dispatchEvent(new Event('change')); }}""")
+        pg.wait_for_timeout(100)
+        before = pg.evaluate(f"() => {ed}.undoStack.length")
+        pg.evaluate(f"() => [...{ed}.box.querySelector('.paint-adjdlg').querySelectorAll('button')].find((b) => b.textContent === 'OK').click()")
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.length"), before + 1)
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Curves")
+        blue = pg.evaluate(f"() => {{ const e = {ed}; return e.pix.get(e.doc.layers[0].id)[2]; }}")
+        self.assertEqual(blue, 255 - 160)
+        # A filter's dialog has Reset and Before.
+        pg.evaluate(f"() => {ed}._filterMenu().find((x) => x.label && x.label.startsWith('Gaussian')).run()")
+        names = pg.evaluate(f"() => [...{ed}.box.querySelectorAll('.paint-dlg button')].map((b) => b.textContent)")
+        self.assertIn("Reset", names)
+        self.assertIn("Before", names)
         self.assertEqual(self.errors, [])
 
 
