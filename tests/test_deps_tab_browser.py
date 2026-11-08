@@ -146,6 +146,48 @@ class DepsTabBrowserTests(unittest.TestCase):
         self.assertEqual(pg.evaluate("() => window.__panel.viewport.querySelectorAll('.view-tab-deps .dp-prompt').length"), 2)
         self.assertEqual(self.errors, [])
 
+    def test_nodes_move_and_resize(self):
+        pg = self.page()
+        sel = ".view-tab-deps .dp-node:not(.dp-prompt):not(.fold)"
+        box = """(i) => { const el = [...window.__panel.viewport.querySelectorAll('%s')][i];
+          return {label: el.querySelector('.dp-label').textContent, x: parseFloat(el.style.left), y: parseFloat(el.style.top),
+                  w: parseFloat(el.style.width), h: parseFloat(el.style.height)}; }""" % sel
+        edges = "() => [...window.__panel.viewport.querySelectorAll('.view-tab-deps .dp-edge')].map((p) => p.getAttribute('d')).join('|')"
+        before, paths0 = pg.evaluate(box, 0), pg.evaluate(edges)
+        node = pg.locator(sel).first
+        r = node.bounding_box()
+        # Move: drag from the middle of the label.
+        pg.mouse.move(r["x"] + r["width"] / 2, r["y"] + r["height"] - 12)
+        pg.mouse.down()
+        pg.mouse.move(r["x"] + r["width"] / 2 + 120, r["y"] + r["height"] - 12 + 80, steps=6)
+        pg.mouse.up()
+        moved = pg.evaluate(box, 0)
+        self.assertEqual(moved["label"], before["label"])
+        self.assertGreater(moved["x"], before["x"] + 20)
+        self.assertGreater(moved["y"], before["y"] + 20)
+        self.assertEqual((moved["w"], moved["h"]), (before["w"], before["h"]))
+        self.assertNotEqual(pg.evaluate(edges), paths0, "the edges follow the node")
+        # The drag's click did not open the file in the Viewer tab.
+        self.assertTrue(pg.evaluate("() => window.__panel.activeTab").startswith("deps:"))
+        # Resize: drag the bottom-right corner.
+        r = node.bounding_box()
+        pg.mouse.move(r["x"] + r["width"] - 3, r["y"] + r["height"] - 3)
+        pg.mouse.down()
+        pg.mouse.move(r["x"] + r["width"] + 90, r["y"] + r["height"] + 60, steps=6)
+        pg.mouse.up()
+        grown = pg.evaluate(box, 0)
+        self.assertGreater(grown["w"], moved["w"] + 20)
+        self.assertGreater(grown["h"], moved["h"] + 20)
+        self.assertEqual((grown["x"], grown["y"]), (moved["x"], moved["y"]))
+        # It stays through a re-render (the Prompts button), and Tidy puts it back.
+        pg.evaluate("() => window.__panel.viewport.querySelector('.view-tab-deps .dp-prompts-btn').click()")
+        self.assertEqual(pg.evaluate(box, 0)["w"], grown["w"])
+        pg.evaluate("""() => [...window.__panel.viewport.querySelectorAll('.view-tab-deps .dp-bar button')]
+          .find((b) => b.textContent === 'Tidy').click()""")
+        tidy = pg.evaluate(box, 0)
+        self.assertEqual((tidy["w"], tidy["h"]), (before["w"], before["h"]))
+        self.assertEqual(self.errors, [])
+
     def test_history_menu_offers_it(self):
         pg = self.page()
         got = pg.evaluate("""() => { const P = window.__panel;

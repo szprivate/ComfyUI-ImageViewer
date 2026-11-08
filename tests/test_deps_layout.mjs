@@ -86,3 +86,20 @@ test("an empty graph (an error answer) lays out at once instead of spinning", ()
     const one = layout({ nodes: [n("a", { root: true })], edges: [] });
     assert.equal(one.nodes.length, 1);
 });
+
+test("a moved / resized node keeps its box and its edges follow", async () => {
+    const { applyPlacement, MIN_W, MIN_H } = await import("../js/imageViewer_depsLayout.js");
+    const g = { nodes: [n("plate"), n("mask", { root: true })], edges: [e("plate", "mask", "mask")] };
+    const L = layout(g);
+    assert.equal(applyPlacement(L, {}), L, "nothing moved: the layout as it is");
+    const P = applyPlacement(L, { mask: { x: 500, y: 400, w: 300, h: 200 }, gone: { x: 1, y: 1 } });
+    const m = P.nodes.find((x) => x.id === "mask");
+    assert.deepEqual([m.x, m.y, m.w, m.h, m.placed], [500, 400, 300, 200, true]);
+    const edge = P.edges[0];
+    assert.deepEqual([edge.x2, edge.y2], [650, 400], "the edge ends at the top middle of the moved node");
+    assert.ok(P.width >= 800 && P.height >= 600, "the stage grows to hold it");
+    assert.equal(L.nodes.find((x) => x.id === "mask").x === 500, false, "the input layout is not changed");
+    const S = applyPlacement(L, { plate: { x: -50, y: -9, w: 10, h: 10 } });
+    const p = S.nodes.find((x) => x.id === "plate");
+    assert.deepEqual([p.x, p.y, p.w, p.h], [0, 0, MIN_W, MIN_H], "held to the stage and a minimum size");
+});

@@ -10,12 +10,16 @@
 //
 //   click a node        open it in the Viewer tab
 //   double-click        make it the root (walk from there)
-//   drag / wheel        pan / zoom;  F  fit
+//   drag a node         move it (a prompt box: by its head); its bottom-right corner resizes it
+//   drag / wheel        pan / zoom;  F  fit;  "Tidy" puts every node back where the layout puts it
+//
+// Moved / resized nodes stay where they were left while the tab is open (also through Reload, unfolding and
+// the Prompts button); a new root starts from the layout again.
 //
 // The record is agentY's: every output it makes keeps what its graph loaded. Data comes from
 // GET /imageviewer/deps (deps_relay.py), which asks the agentY host.
 import { api } from "../../scripts/api.js";
-import { layout, edgePath } from "./imageViewer_depsLayout.js";
+import { layout, edgePath, applyPlacement } from "./imageViewer_depsLayout.js";
 
 export const DEPS_PREFIX = "deps:";
 const baseOf = (p) => String(p || "").split(/[\\/]/).pop();
@@ -101,6 +105,11 @@ export const DepsPanelMixin = {
         promptsBtn.classList.toggle("active", rec.prompts !== false);
         bar.append(title, promptsBtn,
             btn("Fit", "Fit the graph in the view (F)", () => this._depsFit(rec)),
+            btn("Tidy", "Put every moved or resized node back where the layout puts it", () => {
+                rec.place = {};
+                this._depsRender(rec);
+                this._depsFit(rec);
+            }),
             btn("Look in folder", "Also record older files in this file's folder, then reload", () => this._depsLoad(rec, { scan: true })),
             btn("Reload", "Read the record again", () => this._depsLoad(rec)));
         const note = doc.createElement("div");
@@ -159,11 +168,21 @@ export const DepsPanelMixin = {
         if (!ui) return;
         const doc = ui.stage.ownerDocument;
         for (const el of [...ui.stage.querySelectorAll(".dp-node")]) el.remove();
-        ui.svg.innerHTML = "";
-        const L = layout(rec.graph || { nodes: [], edges: [] }, { open: rec.open, prompts: rec.prompts !== false });
+        rec.place = rec.place || {};
+        rec.base = layout(rec.graph || { nodes: [], edges: [] }, { open: rec.open, prompts: rec.prompts !== false });
+        const L = applyPlacement(rec.base, rec.place);
         rec.laid = L;
         const files = L.nodes.filter((x) => !x.prompt).length;
         ui.title.textContent = `${baseOf(rec.path || (rec.query && rec.query.filename))} — ${files} file${files === 1 ? "" : "s"}`;
+        this._depsEdges(rec);
+        for (const n of L.nodes) ui.stage.append(this._depsNodeEl(rec, n, doc));
+    },
+
+    /** The stage's size and the edges, from rec.laid (again on every step of a node drag). */
+    _depsEdges(rec) {
+        const ui = rec.ui, L = rec.laid;
+        const doc = ui.stage.ownerDocument;
+        ui.svg.innerHTML = "";
         ui.stage.style.width = `${L.width}px`;
         ui.stage.style.height = `${L.height}px`;
         ui.svg.setAttribute("width", String(L.width));
@@ -182,11 +201,64 @@ export const DepsPanelMixin = {
                 ui.svg.append(t);
             }
         }
-        for (const n of L.nodes) ui.stage.append(this._depsNodeEl(rec, n, doc));
+    },
+
+    /**
+     * Make a node box movable (drag it) and resizable (drag its bottom-right corner). The new box goes into
+     * rec.place, so it outlasts a re-render; the edges follow on every step. A drag sets ui.dragged, so the
+     * click that ends it does not open the file.
+     */
+    _depsDraggable(rec, el, n) {
+        const doc = el.ownerDocument;
+        const grip = doc.createElement("div");
+        grip.className = "dp-resize";
+        grip.title = "Drag to resize";
+        el.append(grip);
+        el.addEventListener("mousedown", (e) => {
+            if (e.button !== 0 || !rec.ui) return;
+            e.stopPropagation();   // not a pan
+            e.preventDefault();    // no text selection while dragging
+            const ui = rec.ui;
+            try { ui.view.focus({ preventScroll: true }); } catch (_) { /* keep F working */ }
+            const resize = e.target === grip;
+            const box = (rec.laid.nodes.find((x) => x.id === n.id)) || n;
+            const start = { cx: e.clientX, cy: e.clientY, x: box.x, y: box.y, w: box.w, h: box.h };
+            ui.dragged = false;
+            el.classList.add(resize ? "resizing" : "moving");
+            const win = doc.defaultView || window;
+            const move = (ev) => {
+                if (!rec.ui) return;
+                const dx = (ev.clientX - start.cx) / ui.scale, dy = (ev.clientY - start.cy) / ui.scale;
+                if (!ui.dragged && Math.abs(dx) + Math.abs(dy) < 3 / ui.scale) return;
+                ui.dragged = true;
+                rec.place[n.id] = resize
+                    ? { x: start.x, y: start.y, w: start.w + dx, h: start.h + dy }
+                    : { x: start.x + dx, y: start.y + dy, w: start.w, h: start.h };
+                rec.laid = applyPlacement(rec.base, rec.place);
+                const now = rec.laid.nodes.find((x) => x.id === n.id);
+                if (now) {
+                    el.style.left = `${now.x}px`;
+                    el.style.top = `${now.y}px`;
+                    el.style.width = `${now.w}px`;
+                    el.style.height = `${now.h}px`;
+                }
+                this._depsEdges(rec);
+            };
+            const up = () => {
+                win.removeEventListener("mousemove", move);
+                win.removeEventListener("mouseup", up);
+                el.classList.remove("resizing", "moving");
+                // The click after a drag is not a click; clear the flag once it has been seen.
+                setTimeout(() => { if (rec.ui) rec.ui.dragged = false; }, 0);
+            };
+            win.addEventListener("mousemove", move);
+            win.addEventListener("mouseup", up);
+        });
+        return el;
     },
 
     _depsNodeEl(rec, n, doc) {
-        if (n.prompt) return this._depsPromptEl(n, doc);
+        if (n.prompt) return this._depsDraggable(rec, this._depsPromptEl(n, doc), n);
         const el = doc.createElement("div");
         el.className = "dp-node";
         if (n.root) el.classList.add("root");
@@ -231,9 +303,10 @@ export const DepsPanelMixin = {
             rec.path = n.id;
             rec.query = null;
             rec.open = new Set();
+            rec.place = {};
             this._depsLoad(rec);
         });
-        return el;
+        return this._depsDraggable(rec, el, n);
     },
 
     /** A prompt as a text box: its role on top (with Copy), the text below, selectable and scrollable. */

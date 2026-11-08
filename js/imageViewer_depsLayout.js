@@ -171,6 +171,36 @@ export function layout(graph, { open = new Set(), prompts = true } = {}) {
     return { nodes: [...placed.values()], edges: laid, width, height };
 }
 
+export const MIN_W = 96;
+export const MIN_H = 72;
+
+/**
+ * A laid-out graph with the nodes the user moved or resized put where they left them. *place* is
+ * {id: {x?, y?, w?, h?}}; a node it does not name keeps its place, an entry for a node that is not there is
+ * ignored. Sizes are held to MIN_W x MIN_H and corners to x, y >= 0 (the stage starts at 0, 0). The edges
+ * are worked out again from the new boxes, and width / height grow to hold every node. Pure.
+ */
+export function applyPlacement(L, place = {}) {
+    if (!L || !place || !Object.keys(place).length) return L;
+    const nodes = L.nodes.map((n) => {
+        const p = place[n.id];
+        if (!p) return n;
+        const w = Math.max(MIN_W, Number.isFinite(p.w) ? p.w : n.w);
+        const h = Math.max(MIN_H, Number.isFinite(p.h) ? p.h : n.h);
+        const x = Math.max(0, Number.isFinite(p.x) ? p.x : n.x);
+        const y = Math.max(0, Number.isFinite(p.y) ? p.y : n.y);
+        return { ...n, x, y, w, h, placed: true };
+    });
+    const at = new Map(nodes.map((n) => [n.id, n]));
+    const edges = L.edges.map((e) => {
+        const a = at.get(e.from), b = at.get(e.to);
+        return a && b ? { ...e, x1: a.x + a.w / 2, y1: a.y + a.h, x2: b.x + b.w / 2, y2: b.y } : e;
+    });
+    const width = Math.max(L.width, ...nodes.map((n) => n.x + n.w));
+    const height = Math.max(L.height, ...nodes.map((n) => n.y + n.h));
+    return { nodes, edges, width, height };
+}
+
 /** An edge as an SVG path: a vertical S-curve from (x1, y1) down to (x2, y2). */
 export function edgePath(e) {
     const dy = Math.max(24, (e.y2 - e.y1) / 2);
