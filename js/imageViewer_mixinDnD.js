@@ -46,6 +46,11 @@ const _MODEL_RE = /\.(glb|gltf|fbx|obj|stl|ply|usda|usdc|usdz|usd|abc|spz|splat|
 // batch lands as a readable cascade instead of one unreachable pile.
 const DROP_CASCADE = 28;
 
+// Viewer panels that drop onto the graph, oldest first, and whether the
+// page-wide listeners are in (see setupGraphDropTarget).
+const graphDropPanels = [];
+let graphDropListening = false;
+
 export const DnDMixin = {
 
     // ── 1. Explorer → viewer ─────────────────────────────────────────────────
@@ -528,37 +533,70 @@ export const DnDMixin = {
         }
     },
 
+    // Drops onto the graph. Listened for on the window in the capture phase,
+    // not on the canvas: with Nodes 2.0 (Vue nodes) every node is a DOM element
+    // laid over the canvas, so a drop on a node never reaches the <canvas>, and
+    // the image widget's own drop zone stops it from bubbling up to the
+    // document. Capturing sees it first, wherever it lands on the graph, and
+    // works the same with Nodes 2.0 off. Drops anywhere else (the viewer's own
+    // panels, sidebars) are left alone.
+    //
+    // One pair of listeners for the page, however many viewer panels there are
+    // (each would otherwise handle the same drop again); the newest live panel
+    // does the work.
     setupGraphDropTarget() {
         if (this._graphDropBound) return;
-        const attach = () => {
-            const cv = (app.canvas && app.canvas.canvas) ||
-                       app.canvasEl ||
-                       document.getElementById("graph-canvas") ||
-                       document.querySelector("canvas.litegraph");
-            if (!cv) return false;
-            this._graphDropBound = true;
-            cv.addEventListener("dragover", (e) => {
-                if (!this._dragHasHistoryPayload(e)) return;   // let ComfyUI handle its own drops
-                e.preventDefault();
-                try { e.dataTransfer.dropEffect = "copy"; } catch (_) {}
-            });
-            cv.addEventListener("drop", (e) => {
-                if (!this._dragHasHistoryPayload(e)) return;
-                e.preventDefault(); e.stopPropagation();
-                let payload = null;
-                try { payload = JSON.parse(e.dataTransfer.getData("application/x-imageviewer-history")); } catch (_) {}
-                if (!payload) return;
-                // {items:[…]} is what a drag sends; a bare item is tolerated so a
-                // drag that began before a reload cannot land as nothing.
-                this._dropHistoryOntoGraph(
-                    Array.isArray(payload.items) ? payload.items : [payload], e);
-            });
-            return true;
+        this._graphDropBound = true;
+        graphDropPanels.push(this);
+        if (graphDropListening) return;
+        graphDropListening = true;
+        const owner = () => {
+            for (let i = graphDropPanels.length - 1; i >= 0; i--) {
+                if (graphDropPanels[i].isConnected !== false) return graphDropPanels[i];
+            }
+            return graphDropPanels[graphDropPanels.length - 1] || null;
         };
-        if (attach()) return;
-        // The graph canvas may not exist yet at viewer init — retry briefly.
-        let tries = 0;
-        const timer = setInterval(() => { if (attach() || ++tries > 40) clearInterval(timer); }, 250);
+        window.addEventListener("dragover", (e) => {
+            const v = owner();
+            if (!v || !v._dragHasHistoryPayload(e) || !v._isGraphDropTarget(e.target)) return;
+            e.preventDefault(); e.stopPropagation();
+            try { e.dataTransfer.dropEffect = "copy"; } catch (_) {}
+        }, true);
+        window.addEventListener("drop", (e) => {
+            const v = owner();
+            if (!v || !v._dragHasHistoryPayload(e) || !v._isGraphDropTarget(e.target)) return;
+            e.preventDefault(); e.stopPropagation();
+            let payload = null;
+            try { payload = JSON.parse(e.dataTransfer.getData("application/x-imageviewer-history")); } catch (_) {}
+            if (!payload) return;
+            // {items:[…]} is what a drag sends; a bare item is tolerated so a
+            // drag that began before a reload cannot land as nothing.
+            v._dropHistoryOntoGraph(
+                Array.isArray(payload.items) ? payload.items : [payload], e);
+        }, true);
+    },
+
+    // The graph's <canvas>, looked up each time: switching Nodes 2.0 on or off
+    // can rebuild what sits around it.
+    _graphCanvasEl() {
+        return (app.canvas && app.canvas.canvas) ||
+               app.canvasEl ||
+               document.getElementById("graph-canvas") ||
+               document.querySelector("canvas.litegraph");
+    },
+
+    // Whether a drag over `el` is over the graph: the canvas itself, a Nodes 2.0
+    // node element on it, or a DOM widget (textarea, preview) drawn over it.
+    _isGraphDropTarget(el) {
+        if (!(el instanceof Element)) return false;
+        const cv = this._graphCanvasEl();
+        if (!cv) return false;
+        if (el === cv) return true;
+        const nodeEl = el.closest("[data-node-id]");
+        // A node card elsewhere (the node library's preview) has the attribute
+        // too; only the ones beside the canvas are on the graph.
+        if (nodeEl && cv.parentElement && cv.parentElement.contains(nodeEl)) return true;
+        return !!el.closest(".dom-widget");
     },
 
     // Build a fetchable URL for a history payload (mirrors buildImgUrl, no cache-bust).
@@ -843,14 +881,24 @@ export const DnDMixin = {
 
     // ── In-place replacement (drop onto an existing loader node) ──────────────
 
-    // The loader node under the drop point, or null. Uses litegraph hit-testing
+    // The node under the drop point, or null. With Nodes 2.0 the drop lands on
+    // the node's own element, which names it; otherwise litegraph hit-testing
     // in graph space (convertEventToCanvasOffset already maps the event there).
+    // The graph is the one on screen, so a drop inside a subgraph finds its nodes.
     _nodeUnderEvent(e) {
+        const g = (app.canvas && app.canvas.graph) || app.graph;
+        if (!g) return null;
+        try {
+            const nodeEl = e && e.target instanceof Element ? e.target.closest("[data-node-id]") : null;
+            const id = nodeEl && nodeEl.dataset.nodeId;
+            if (id != null && id !== "" && typeof g.getNodeById === "function") {
+                const n = g.getNodeById(id) ?? (isNaN(Number(id)) ? null : g.getNodeById(Number(id)));
+                if (n) return n;
+            }
+        } catch (_) {}
         try {
             const pos = app.canvas && app.canvas.convertEventToCanvasOffset(e);
             if (!pos) return null;
-            const g = app.graph;
-            if (!g) return null;
             if (typeof g.getNodeOnPos === "function") return g.getNodeOnPos(pos[0], pos[1], g._nodes, 2) || null;
             const nodes = g._nodes || [];
             for (let i = nodes.length - 1; i >= 0; i--) {
