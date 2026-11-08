@@ -12,14 +12,14 @@ numbers) and the pixels beside it (``px[id]`` straight RGBA ``uint8 (h, w, 4)``,
 arithmetic - paint_math), ``Thumbnails/thumbnail.png``, and ours: ``imageviewer.json`` (the whole
 ``meta``: adjustment layers, masks, text, the selection - what ``stack.xml`` has no words for),
 ``data/<id>_mask.png``, ``selection.png``. An .ora from another program has no ``imageviewer.json``; its
-``stack.xml`` is read (groups flattened, their order kept).
+``stack.xml`` is read (a stack inside the stack is a group).
 
 **The .psd** (8-bit RGB, written by :func:`write_psd`, read by :func:`read_psd`): pixel layers
 with their place, opacity, blend mode, visibility and mask (RLE), the merged picture, and Unicode
-names. Photoshop has adjustment layers of its own, but not ours with our numbers: an adjustment
-layer is BAKED on export - what is under it and it become one pixel layer, "<name> (merged)",
-and the answer says so. Reading a .psd takes its pixel layers (raw or RLE); its adjustment layers,
-group folders and clipping are named as left out.
+names, and groups as Photoshop's layer groups (Pass Through too). Photoshop has adjustment layers of its own, but not ours with our numbers: an adjustment
+layer is BAKED on export - what is under it and it become one pixel layer, "<name> (merged)" (inside
+a group: that whole group of the document's level), and the answer says so. Reading a .psd takes its
+pixel layers (raw or RLE) and groups; its adjustment layers and clipping are named as left out.
 """
 from __future__ import annotations
 
@@ -89,6 +89,12 @@ class PaintDoc:
         self._insert(L, index)
         return L
 
+    def add_group(self, name="Group", index=None, **props):
+        lid = props.pop("id", None) or new_id()
+        L = clean_layer({"id": lid, "name": name, "kind": "group", **props})
+        self._insert(L, index)
+        return L
+
     def _insert(self, L, index):
         if len(self.layers) >= MAX_LAYERS:
             raise ValueError(f"at most {MAX_LAYERS} layers")
@@ -99,25 +105,36 @@ class PaintDoc:
         self.meta["active"] = L["id"]
 
     def remove(self, lid):
-        self.meta["layers"] = [L for L in self.layers if L["id"] != lid]
-        self.px.pop(lid, None)
-        self.masks.pop(lid, None)
+        """The layer out (a group with everything inside it)."""
+        L = self.layer(lid)
+        gone = {x["id"] for x in subtree(self, L)} if L else {lid}
+        self.meta["layers"] = [x for x in self.layers if x["id"] not in gone]
+        for g in gone:
+            self.px.pop(g, None)
+            self.masks.pop(g, None)
         if self.meta.get("active") == lid:
             self.meta["active"] = self.layers[-1]["id"] if self.layers else None
 
 
 def clean_layer(L):
     """A layer's description held to what it may be (``paintData.cleanLayer`` is the same)."""
-    kind = "adjust" if L.get("kind") == "adjust" else "pixel"
-    out = {"id": str(L.get("id") or new_id())[:40], "name": str(L.get("name") or "Layer")[:120], "kind": kind,
+    kind = L.get("kind") if L.get("kind") in ("adjust", "group") else "pixel"
+    out = {"id": str(L.get("id") or new_id())[:40],
+           "name": str(L.get("name") or ("Group" if kind == "group" else "Layer"))[:120], "kind": kind,
            "visible": L.get("visible") is not False, "opacity": M._num(L.get("opacity"), 1.0, 0, 1),
            "blend": L.get("blend") if L.get("blend") in M.BLEND_MODES else "normal",
            "locked": bool(L.get("locked"))}
+    if L.get("parent"):
+        out["parent"] = str(L["parent"])[:40]
     if kind == "pixel":
         out.update(x=int(M._num(L.get("x"), 0)), y=int(M._num(L.get("y"), 0)),
                    w=int(M._num(L.get("w"), 0, 0, MAX_SIDE)), h=int(M._num(L.get("h"), 0, 0, MAX_SIDE)))
         if isinstance(L.get("text"), dict):
             out["text"] = clean_text(L["text"])
+    elif kind == "group":
+        out["blend"] = L.get("blend") if L.get("blend") in M.GROUP_BLENDS else "pass_through"
+        if L.get("collapsed"):
+            out["collapsed"] = True
     else:
         a = L.get("adjust") if isinstance(L.get("adjust"), dict) else {}
         t = a.get("type") if a.get("type") in M.ADJUST_TYPES else "levels"
@@ -130,6 +147,64 @@ def clean_layer(L):
                        "h": int(M._num(m.get("h"), 0, 0, MAX_SIDE)),
                        "fill": 255 if M._num(m.get("fill"), 0) >= 128 else 0}
     return out
+
+
+MAX_DEPTH = 12
+
+
+def fix_tree(layers):
+    """The layers put in tree order, in place (``paintData.fixTree``): a ``parent`` names a group or is
+    gone, and every group's layers lie right under it (bottom .. top: its layers, then the group).
+    Siblings keep their order; a loop or deeper than MAX_DEPTH: out of the group."""
+    by_id = {L["id"]: L for L in layers}
+    for L in layers:
+        p = L.get("parent")
+        P = by_id.get(p) if p else None
+        if not P or P.get("kind") != "group" or P is L:
+            L.pop("parent", None)
+    for L in layers:
+        p, n, seen = L.get("parent"), 0, {L["id"]}
+        while p:
+            n += 1
+            if p in seen or n > MAX_DEPTH:
+                L.pop("parent", None)
+                break
+            seen.add(p)
+            p = by_id[p].get("parent")
+    kids = {}
+    for L in layers:
+        kids.setdefault(L.get("parent") or "", []).append(L)
+    out = []
+
+    def walk(k):
+        for L in kids.get(k, []):
+            if L.get("kind") == "group":
+                walk(L["id"])
+            out.append(L)
+    walk("")
+    layers[:] = out
+    return layers
+
+
+def ancestors(doc, L):
+    """The groups *L* is in, the nearest first."""
+    out, p = [], L.get("parent")
+    while p and len(out) <= MAX_DEPTH:
+        P = doc.layer(p)
+        if P is None:
+            break
+        out.append(P)
+        p = P.get("parent")
+    return out
+
+
+def subtree(doc, L):
+    """*L* and, for a group, every layer inside it - bottom first (a slice of ``doc.layers``)."""
+    i = next(k for k, x in enumerate(doc.layers) if x["id"] == L["id"])
+    a = i
+    while a > 0 and any(P["id"] == L["id"] for P in ancestors(doc, doc.layers[a - 1])):
+        a -= 1
+    return doc.layers[a:i + 1]
 
 
 TEXT_DEFAULT = {"text": "", "font": "sans-serif", "size": 48, "color": "#ffffff", "bold": False, "italic": False,
@@ -159,7 +234,7 @@ def clean_meta(meta):
     if len(layers) > MAX_LAYERS:
         raise ValueError(f"at most {MAX_LAYERS} layers")
     out = {"version": VERSION, "w": w, "h": h, "name": str(meta.get("name") or "paint")[:120],
-           "layers": [clean_layer(L) for L in layers if isinstance(L, dict)]}
+           "layers": fix_tree([clean_layer(L) for L in layers if isinstance(L, dict)])}
     ids = [L["id"] for L in out["layers"]]
     if len(set(ids)) != len(ids):
         raise ValueError("two layers have the same id")
@@ -185,18 +260,49 @@ def mask_values(L, mask, x0, y0, x1, y1):
 
 
 def composite(doc, upto=None, only=None, hidden_ok=False):
-    """The document as it looks: ``uint8 (H, W, 4)``. *upto*: the layers up to and with this id;
-    *only*: just these ids."""
+    """The document as it looks: ``uint8 (H, W, 4)``. *upto*: the layers of the document's own level up to
+    and with this id (a group with what is inside it); *only*: just these ids (groups are always gone
+    through). A group as ``paintData.composite`` lays it."""
     W, H = doc.w, doc.h
     out = np.zeros((H, W, 4), dtype=np.uint8)
-    for L in doc.layers:
-        if only is not None and L["id"] not in only:
+    kids = {}
+    groups = {L["id"] for L in doc.layers if L["kind"] == "group"}
+    for i, L in enumerate(doc.layers):
+        # A parent not in the document (a layer taken out to be laid alone): of the document's level.
+        kids.setdefault(L.get("parent") if L.get("parent") in groups else "", []).append(i)
+    k = None
+    if upto is not None:
+        k = next((i for i, L in enumerate(doc.layers) if L["id"] == upto), None)
+    top = [i for i in kids.get("", []) if k is None or i <= k]
+    return _lay_list(out, doc, top, kids, only, hidden_ok)
+
+
+def _lay_list(out, doc, idxs, kids, only, hidden_ok):
+    for i in idxs:
+        L = doc.layers[i]
+        if only is not None and L["id"] not in only and L["kind"] != "group":
             continue
-        if L.get("visible") or hidden_ok:
-            out = lay(out, doc, L)
-        if upto is not None and L["id"] == upto:
-            break
+        if not (L.get("visible") or hidden_ok):
+            continue
+        out = _lay_group(out, doc, L, kids, only, hidden_ok) if L["kind"] == "group" else lay(out, doc, L)
     return out
+
+
+def _lay_group(out, doc, G, kids, only, hidden_ok):
+    W, H = doc.w, doc.h
+    ch = kids.get(G["id"], [])
+    op = float(G.get("opacity", 1.0))
+    if op <= 0 or not ch:
+        return out
+    mask = doc.masks.get(G["id"])
+    masked = bool(G.get("mask") and G["mask"].get("enabled") and mask is not None)
+    if G.get("blend") == "pass_through":
+        if op >= 1 and not masked:
+            return _lay_list(out, doc, ch, kids, only, hidden_ok)
+        res = _lay_list(out.copy(), doc, ch, kids, only, hidden_ok)
+        return M.mix_back(out, res, op * mask_values(G, mask, 0, 0, W, H))
+    buf = _lay_list(np.zeros((H, W, 4), dtype=np.uint8), doc, ch, kids, only, hidden_ok)
+    return M.blend_over(out, buf, op * mask_values(G, mask, 0, 0, W, H), G.get("blend", "normal"))
 
 
 def lay(out, doc, L):
@@ -288,18 +394,33 @@ def write_ora(path, doc):
     root = ET.Element("image", {"version": "0.0.3", "w": str(doc.w), "h": str(doc.h), "name": meta["name"]})
     stack = ET.SubElement(root, "stack")
     files = []
-    for L in reversed(meta["layers"]):
-        if L["kind"] != "pixel":
-            continue
-        src = f"data/{L['id']}.png"
-        ET.SubElement(stack, "layer", {
-            "name": L["name"], "src": src, "x": str(L["x"]), "y": str(L["y"]), "opacity": f"{L['opacity']:.4f}",
-            "visibility": "visible" if L["visible"] else "hidden", "composite-op": M.ORA_BLEND[L["blend"]],
-            **({"edit-locked": "true"} if L.get("locked") else {})})
-        px = doc.px.get(L["id"])
-        if px is None:
-            px = np.zeros((max(1, L["h"]), max(1, L["w"]), 4), dtype=np.uint8)
-        files.append((src, png_bytes(px)))
+    kids = {}
+    for L in meta["layers"]:
+        kids.setdefault(L.get("parent") or "", []).append(L)
+
+    def put(parent_el, key):
+        for L in reversed(kids.get(key, [])):
+            vis = "visible" if L["visible"] else "hidden"
+            if L["kind"] == "group":
+                # A group is a stack: Pass Through is "auto" isolation, any other mode isolated.
+                g = ET.SubElement(parent_el, "stack", {
+                    "name": L["name"], "opacity": f"{L['opacity']:.4f}", "visibility": vis,
+                    "composite-op": M.ORA_BLEND.get(L["blend"], "svg:src-over"),
+                    "isolation": "auto" if L["blend"] == "pass_through" else "isolate"})
+                put(g, L["id"])
+                continue
+            if L["kind"] != "pixel":
+                continue
+            src = f"data/{L['id']}.png"
+            ET.SubElement(parent_el, "layer", {
+                "name": L["name"], "src": src, "x": str(L["x"]), "y": str(L["y"]), "opacity": f"{L['opacity']:.4f}",
+                "visibility": vis, "composite-op": M.ORA_BLEND[L["blend"]],
+                **({"edit-locked": "true"} if L.get("locked") else {})})
+            px = doc.px.get(L["id"])
+            if px is None:
+                px = np.zeros((max(1, L["h"]), max(1, L["w"]), 4), dtype=np.uint8)
+            files.append((src, png_bytes(px)))
+    put(stack, "")
     for L in meta["layers"]:
         if L.get("mask") and doc.masks.get(L["id"]) is not None:
             files.append((f"data/{L['id']}_mask.png", png_bytes(doc.masks[L["id"]])))
@@ -332,13 +453,20 @@ def write_ora(path, doc):
     return merged
 
 
-def _ora_layers(stack, z, doc, x0=0, y0=0):
-    """The layers of a stack.xml stack (top first), bottom first into *doc*; groups flattened."""
+def _ora_layers(stack, z, doc, x0=0, y0=0, parent=None):
+    """The layers of a stack.xml stack (top first), bottom first into *doc*; a stack inside is a group."""
     for el in reversed(list(stack)):
         if el.tag == "stack":
-            if el.get("visibility") == "hidden":
-                doc.notes.append(f"the hidden group {el.get('name') or ''!r} was opened with its layers shown as they are")
-            _ora_layers(el, z, doc, x0 + int(float(el.get("x") or 0)), y0 + int(float(el.get("y") or 0)))
+            gx, gy = x0 + int(float(el.get("x") or 0)), y0 + int(float(el.get("y") or 0))
+            op = el.get("composite-op") or "svg:src-over"
+            isolated = el.get("isolation") == "isolate" or op != "svg:src-over"
+            blend = M.ORA_BLEND_BACK.get(op, "normal") if isolated else "pass_through"
+            G = clean_layer({"id": new_id(), "name": el.get("name") or "Group", "kind": "group", "blend": blend,
+                             "opacity": M._num(el.get("opacity"), 1, 0, 1), "visible": el.get("visibility") != "hidden",
+                             **({"parent": parent} if parent else {})})
+            # The group's entry goes above what is in it: put it in after them (fix_tree keeps it so).
+            _ora_layers(el, z, doc, gx, gy, G["id"])
+            doc._insert(G, None)
         elif el.tag == "layer":
             src = el.get("src") or ""
             try:
@@ -353,7 +481,8 @@ def _ora_layers(stack, z, doc, x0=0, y0=0):
             doc.add_pixel_layer(px, el.get("name") or "Layer", x0 + int(float(el.get("x") or 0)),
                                 y0 + int(float(el.get("y") or 0)),
                                 opacity=M._num(el.get("opacity"), 1, 0, 1), visible=el.get("visibility") != "hidden",
-                                blend=blend, locked=el.get("edit-locked") == "true")
+                                blend=blend, locked=el.get("edit-locked") == "true",
+                                **({"parent": parent} if parent else {}))
 
 
 def read_ora(path):
@@ -392,6 +521,9 @@ def read_ora(path):
             _ora_layers(top, z, doc)
         if not doc.layers and "mergedimage.png" in names:
             doc.add_pixel_layer(read_png(z.read("mergedimage.png")), "Background")
+        fix_tree(doc.layers)
+        if doc.layers:
+            doc.meta["active"] = doc.layers[-1]["id"]
         return doc
 
 
@@ -459,71 +591,111 @@ def _unicode_block(name):
 
 def baked_for_psd(doc):
     """The document's layers as Photoshop can take them: an adjustment layer and what is under it
-    become one pixel layer. ``(layers [(meta, pixels, mask)], notes)``."""
+    become one pixel layer (an adjustment inside a group: that group of the document's own level, and
+    what is under it). ``(layers [(meta, pixels, mask)], notes)``, bottom first; a group's entry has
+    pixels None and comes after what is inside it."""
     out, notes = [], []
-    below = []                     # the layers laid so far, as (L)
-    for L in doc.layers:
-        if L["kind"] == "adjust":
-            if not L.get("visible"):
-                notes.append(f"the hidden adjustment layer {L['name']!r} was left out")
-                continue
-            merged = composite(doc, upto=L["id"])
-            nm = f"{L['name']} (merged)"
-            out = [(clean_layer({"id": L["id"], "name": nm, "x": 0, "y": 0, "w": doc.w, "h": doc.h}), merged, None)]
-            label = M.ADJUST_LABELS[L["adjust"]["type"]]
-            what = L["name"] if L["name"] == label else f"{L['name']} ({label})"
+    top = [L for L in doc.layers if not L.get("parent")]
+    for T in top:
+        inside = subtree(doc, T)
+        adjusts = [L for L in inside if L["kind"] == "adjust"]
+        hidden = [L for L in adjusts if not L.get("visible") or any(not P.get("visible") for P in ancestors(doc, L))]
+        for L in hidden:
+            notes.append(f"the hidden adjustment layer {L['name']!r} was left out")
+        if len(adjusts) > len(hidden):
+            merged = composite(doc, upto=T["id"])
+            nm = f"{T['name']} (merged)"
+            out = [(clean_layer({"id": T["id"], "name": nm, "x": 0, "y": 0, "w": doc.w, "h": doc.h}), merged, None)]
+            if T["kind"] == "adjust":
+                label = M.ADJUST_LABELS[T["adjust"]["type"]]
+                what = T["name"] if T["name"] == label else f"{T['name']} ({label})"
+            else:
+                what = f"the group {T['name']!r}, which holds an adjustment layer,"
             notes.append(f"{what} was merged with the layers under it "
                          f"into one layer, {nm!r}: Photoshop's own adjustment layers do not work out the same")
-            below = []
             continue
-        px = doc.px.get(L["id"])
-        if px is None:
-            continue
-        out.append((L, px, doc.masks.get(L["id"]) if L.get("mask") else None))
-        below.append(L)
+        for L in inside:
+            if L["kind"] == "group":
+                out.append((L, None, doc.masks.get(L["id"]) if L.get("mask") else None))
+                continue
+            px = doc.px.get(L["id"])
+            if px is None:
+                continue
+            out.append((L, px, doc.masks.get(L["id"]) if L.get("mask") else None))
     return out, notes
 
 
+def _psd_record(L, px, mask, section=None):
+    """One layer record and its channel data. *section*: the group's lsct type (1 open, 2 closed,
+    3 the end of a group - a divider)."""
+    if px is None:
+        h = w = x = y = 0
+        planes = [np.zeros((0, 0), np.uint8)] * 4
+    else:
+        h, w = px.shape[:2]
+        x, y = int(L.get("x", 0)), int(L.get("y", 0))
+        planes = [px[..., 3], px[..., 0], px[..., 1], px[..., 2]]
+    channel_ids = [-1, 0, 1, 2]
+    m = L.get("mask") if mask is not None else None
+    if m:
+        channel_ids.append(-2)
+        planes.append(mask)
+    cinfo, cdata = b"", b""
+    for cid, plane in zip(channel_ids, planes):
+        if plane.size == 0:
+            block = struct.pack(">H", 0)
+        else:
+            counts, data = _rle_channel(np.ascontiguousarray(plane))
+            block = struct.pack(">H", 1) + counts + data
+        cinfo += struct.pack(">hI", cid, len(block))
+        cdata += block
+    flags = 0 if L.get("visible", True) else 2
+    if L.get("locked"):
+        flags |= 1                  # transparency protected: the nearest Photoshop has
+    if section is not None:
+        flags |= 8 | 16             # bit 4 (said by bit 3): the pixel data does not matter (a folder)
+    if m:
+        mh, mw = mask.shape[:2]
+        mflags = 0 if m.get("enabled") else 2
+        maskdata = struct.pack(">iiiiBBH", m["y"], m["x"], m["y"] + mh, m["x"] + mw, m.get("fill", 0), mflags, 0)
+    else:
+        maskdata = b""
+    blend = L.get("blend", "normal")
+    key = M.PSD_PASS if blend == "pass_through" else M.PSD_BLEND.get(blend, b"norm")
+    extra = (struct.pack(">I", len(maskdata)) + maskdata + struct.pack(">I", 0) + _pascal(L["name"])
+             + _unicode_block(L["name"]))
+    if section is not None:
+        lsct = struct.pack(">I", section) + (b"8BIM" + key if section in (1, 2) else b"")
+        extra += b"8BIMlsct" + struct.pack(">I", len(lsct)) + lsct
+    rec = (struct.pack(">iiiiH", y, x, y + h, x + w, len(channel_ids)) + cinfo + b"8BIM"
+           + (b"norm" if section == 3 else key)
+           + struct.pack(">BBBB", int(round(float(L.get("opacity", 1)) * 255)), 0, flags, 0)
+           + struct.pack(">I", len(extra)) + extra)
+    return rec, cdata
+
+
 def write_psd(path, doc):
-    """A layered .psd (8-bit RGB). Returns the notes (what was baked)."""
+    """A layered .psd (8-bit RGB), groups as Photoshop's layer groups. Returns the notes (what was baked)."""
     layers, notes = baked_for_psd(doc)
     W, H = doc.w, doc.h
     recs, chans = [], []
-    for L, px, mask in layers:
-        h, w = px.shape[:2]
-        x, y = int(L.get("x", 0)), int(L.get("y", 0))
-        channel_ids = [-1, 0, 1, 2]
-        planes = [px[..., 3], px[..., 0], px[..., 1], px[..., 2]]
-        m = L.get("mask") if mask is not None else None
-        if m:
-            channel_ids.append(-2)
-            planes.append(mask)
-        cinfo, cdata = b"", b""
-        for cid, plane in zip(channel_ids, planes):
-            if plane.size == 0:
-                block = struct.pack(">H", 0)
+    kids = {}
+    for e in layers:
+        kids.setdefault(e[0].get("parent") or "", []).append(e)
+
+    def put(key):
+        for L, px, mask in kids.get(key, []):
+            if L["kind"] == "group":
+                r, c = _psd_record({"name": "</Layer group>", "visible": True}, None, None, section=3)
+                recs.append(r)
+                chans.append(c)
+                put(L["id"])
+                r, c = _psd_record(L, None, mask, section=2 if L.get("collapsed") else 1)
             else:
-                counts, data = _rle_channel(np.ascontiguousarray(plane))
-                block = struct.pack(">H", 1) + counts + data
-            cinfo += struct.pack(">hI", cid, len(block))
-            cdata += block
-        flags = 0 if L.get("visible") else 2
-        if L.get("locked"):
-            flags |= 1                  # transparency protected: the nearest Photoshop has
-        if m:
-            mh, mw = mask.shape[:2]
-            mflags = 0 if m.get("enabled") else 2
-            maskdata = struct.pack(">iiiiBBH", m["y"], m["x"], m["y"] + mh, m["x"] + mw, m.get("fill", 0), mflags, 0)
-        else:
-            maskdata = b""
-        extra = (struct.pack(">I", len(maskdata)) + maskdata + struct.pack(">I", 0) + _pascal(L["name"])
-                 + _unicode_block(L["name"]))
-        rec = (struct.pack(">iiiiH", y, x, y + h, x + w, len(channel_ids)) + cinfo + b"8BIM"
-               + M.PSD_BLEND.get(L.get("blend", "normal"), b"norm")
-               + struct.pack(">BBBB", int(round(float(L.get("opacity", 1)) * 255)), 0, flags, 0)
-               + struct.pack(">I", len(extra)) + extra)
-        recs.append(rec)
-        chans.append(cdata)
+                r, c = _psd_record(L, px, mask)
+            recs.append(r)
+            chans.append(c)
+    put("")
     linfo = struct.pack(">h", len(recs)) + b"".join(recs) + b"".join(chans)
     if len(linfo) % 2:
         linfo += b"\0"
@@ -639,6 +811,7 @@ def read_psd(path):
                 pad = (4 - (1 + nlen) % 4) % 4
                 r.take(pad)
                 kinds = set()
+                section, section_key = None, None
                 while r.i + 12 <= ex_end:
                     sig = r.take(4)
                     if sig not in (b"8BIM", b"8B64"):
@@ -649,13 +822,16 @@ def read_psd(path):
                     if ln % 2 and r.i < ex_end:
                         pass
                     kinds.add(k)
+                    if k in (b"lsct", b"lsdk") and len(data) >= 4:
+                        section = struct.unpack(">I", data[:4])[0]
+                        section_key = data[8:12] if len(data) >= 12 else None
                     if k == b"luni" and len(data) >= 4:
                         n_ch, = struct.unpack(">I", data[:4])
                         name = data[4:4 + 2 * n_ch].decode("utf-16-be", "replace")
                 r.i = ex_end
                 recs.append({"top": top, "left": left, "w": right - left, "h": bottom - top, "chans": chans,
                              "key": key, "opacity": opacity, "clip": clip, "flags": flags, "mask": mask,
-                             "name": name, "kinds": kinds})
+                             "name": name, "kinds": kinds, "section": section, "section_key": section_key})
             for rec in recs:
                 planes = {}
                 for cid, ln in rec["chans"]:
@@ -670,9 +846,29 @@ def read_psd(path):
             r.i = li_end
             adjust_keys = {b"levl", b"curv", b"brit", b"hue2", b"hue ", b"expA", b"nvrt", b"thrs", b"blnc", b"vibA",
                            b"mixr", b"selc", b"grdm", b"phfl", b"blwh", b"post", b"clrL", b"SoCo", b"GdFl", b"PtFl"}
+            open_groups = []                  # the ids of the groups being read, the innermost last
             for rec in recs:
-                if b"lsct" in rec["kinds"] or b"lsdk" in rec["kinds"]:
-                    continue                  # a group's folder or its end: the layers are kept in order
+                sec = rec["section"]
+                if sec == 3:                  # the end of a group (records are bottom first): it starts here
+                    open_groups.append(new_id())
+                    continue
+                if sec in (1, 2):             # the group's own record, after what is in it
+                    if not open_groups:
+                        continue
+                    gid = open_groups.pop()
+                    key = rec["section_key"] or rec["key"]
+                    blend = "pass_through" if key == M.PSD_PASS else M.PSD_BLEND_BACK.get(key, "normal")
+                    G = clean_layer({"id": gid, "name": rec["name"] or "Group", "kind": "group", "blend": blend,
+                                     "opacity": rec["opacity"] / 255, "visible": not (rec["flags"] & 2),
+                                     "collapsed": sec == 2, **({"parent": open_groups[-1]} if open_groups else {})})
+                    if rec["mask"] and -2 in rec["planes"]:
+                        G["mask"] = clean_layer({"mask": rec["mask"]})["mask"]
+                        doc.masks[gid] = np.ascontiguousarray(rec["planes"][-2])
+                    doc._insert(G, None)
+                    continue
+                if sec is not None:
+                    continue
+                parent = {"parent": open_groups[-1]} if open_groups else {}
                 if rec["kinds"] & adjust_keys:
                     skipped.append(f"{rec['name']!r} (an adjustment or fill layer)")
                     continue
@@ -692,13 +888,16 @@ def read_psd(path):
                     doc.notes.append(f"{rec['name']!r} was clipped to the layer under it in Photoshop; here it is not")
                 L = doc.add_pixel_layer(px, rec["name"] or "Layer", rec["left"], rec["top"],
                                         opacity=rec["opacity"] / 255, visible=not (rec["flags"] & 2),
-                                        blend=M.PSD_BLEND_BACK.get(rec["key"], "normal"))
+                                        blend=M.PSD_BLEND_BACK.get(rec["key"], "normal"), **parent)
                 if rec["key"] not in M.PSD_BLEND_BACK:
                     doc.notes.append(f"{rec['name']!r}: its blend mode {rec['key'].decode('latin-1')!r} is Normal here")
                 if rec["mask"] and -2 in p:
                     L["mask"] = clean_layer({"mask": rec["mask"]})["mask"]
                     doc.masks[L["id"]] = np.ascontiguousarray(p[-2])
         r.i = lm_end
+    fix_tree(doc.layers)
+    if doc.layers:
+        doc.meta["active"] = doc.layers[-1]["id"]
     if skipped:
         doc.notes.append("left out: " + ", ".join(skipped[:12]) + (" ..." if len(skipped) > 12 else ""))
     if not doc.layers:
@@ -730,9 +929,15 @@ def outline(doc):
     rows = []
     n = len(doc.layers)
     for i, L in enumerate(reversed(doc.layers)):
-        row = {"layer": i + 1, "name": L["name"], "kind": L["kind"] if L["kind"] == "pixel" else "adjustment",
+        row = {"layer": i + 1, "name": L["name"],
+               "kind": {"pixel": "pixel", "adjust": "adjustment", "group": "group"}[L["kind"]],
                "visible": L["visible"], "opacity": round(L["opacity"] * 100, 1)}
-        if L["kind"] == "pixel":
+        if L.get("parent"):
+            P = doc.layer(L["parent"])
+            row["in_group"] = P["name"] if P else None
+        if L["kind"] == "group":
+            row.update(blend=L["blend"], layers_inside=len(subtree(doc, L)) - 1)
+        elif L["kind"] == "pixel":
             row.update(blend=L["blend"], x=L["x"], y=L["y"], w=L["w"], h=L["h"])
             if L.get("text"):
                 row["text"] = L["text"]["text"][:200]

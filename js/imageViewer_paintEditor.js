@@ -35,7 +35,9 @@ export const PAINT_KEYS = [
     ["Ctrl+0 / Ctrl+1", "Fit / 100%"], ["Ctrl+Z / Ctrl+Shift+Z", "Undo / redo"], ["Ctrl+A / Ctrl+D", "Select all / deselect"],
     ["Ctrl+Shift+I", "Invert the selection"], ["Shift / Alt while selecting", "Add to / take from the selection"],
     ["Del", "Clear the selection on the layer"], ["Alt+Del", "Fill the selection with the colour"], ["Ctrl+J", "Duplicate the layer (the selection only, with one)"],
-    ["Ctrl+E", "Merge down"], ["Ctrl+Shift+N", "New layer"], ["Arrows", "Nudge the layer (Move; Shift: 10 px)"],
+    ["Ctrl+E", "Merge down (several picked: merge them; a group: merge it)"], ["Ctrl+Shift+N", "New layer"],
+    ["Ctrl+G / Ctrl+Shift+G", "Group the picked layers / ungroup"], ["Shift / Ctrl+click in Layers", "Pick a range / one more layer"],
+    ["Ctrl+Alt+A", "Pick every layer"], ["Arrows", "Nudge the layer (Move; Shift: 10 px)"],
     ["Enter / Esc", "Apply / cancel the crop, the transform or the text"], ["Ctrl+S / Ctrl+Shift+S", "Save / save as"],
 ];
 
@@ -101,6 +103,14 @@ const STYLE = `
 .paint-row:hover { background: #24242a; }
 .paint-row.active { background: #3a2a1d; }
 .paint-row.drop-above { box-shadow: inset 0 2px 0 #f60; } .paint-row.drop-below { box-shadow: inset 0 -2px 0 #f60; }
+.paint-row.drop-inside { box-shadow: inset 0 0 0 2px #f60; }
+.paint-row.picked { background: #2d2620; }
+.paint-row.active.picked, .paint-row.active { background: #3a2a1d; }
+.paint-row.dimmed .nm, .paint-row.dimmed canvas { opacity: .45; }
+.paint-row .caret { width: 14px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; color: #aaa; }
+.paint-row .caret.none { visibility: hidden; }
+.paint-row .grp { flex: 0 0 auto; width: 40px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #444; color: #e0b070; background: #222; }
+.paint-row .grp.sel { border-color: #fff; box-shadow: 0 0 0 1px #f60; }
 .paint-row .eye { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; color: #bbb; flex: 0 0 auto; }
 .paint-row .eye.off { color: #555; }
 .paint-row canvas { flex: 0 0 auto; width: 40px; height: 30px; background: #888; border: 1px solid #444; }
@@ -174,6 +184,7 @@ class PaintEditor {
         this.bufVer = new WeakMap();
         this.saved = new Map();
         this.editMask = false;
+        this.picked = new Set();
         this.tf = null;
         this.cloneSrc = null;
         this._cloneOff = null;
@@ -297,6 +308,7 @@ class PaintEditor {
         }
         this.sel = data.selection && data.selection.length === this.doc.w * this.doc.h ? data.selection : null;
         this.editMask = false;
+        this.picked = new Set(this.doc.active ? [this.doc.active] : []);
         this.crop = null;
         this.tf = null;
         this._cancelText();
@@ -370,6 +382,8 @@ class PaintEditor {
     }
 
     _keepBelow(L) {
+        // Inside a group what is under the layer is not one picture: no cache, the rectangle is laid whole.
+        if (L.parent) { this._dropBelow(); return; }
         const i = D.layerIndex(this.doc, L.id);
         this.below = D.composite(this.doc, this._pixOf, this._maskOf, null, null, { to: i });
         this._belowIdx = i;
@@ -651,6 +665,7 @@ class PaintEditor {
     }
 
     _afterHistory() {
+        this._prunePicked();
         this._dropBelow();
         this._resizeCanvas();
         this.redraw();
@@ -695,6 +710,8 @@ class PaintEditor {
         let ok;
         try { ok = fn(); } catch (e) { this._restore(before); this._notify(String(e.message || e), "error"); return false; }
         if (ok === false) { this._restore(before); return false; }
+        D.fixTree(this.doc.layers);
+        this._prunePicked();
         const after = this._snap();
         this._push({ label, undo: () => this._restore(before), redo: () => this._restore(after), bytes: this._snapBytes(before, after) });
         this._afterHistory();
@@ -723,29 +740,105 @@ class PaintEditor {
 
     // ── layers ───────────────────────────────────────────────────────────────
 
-    setActive(id, mask = false) {
+    /**
+     * Make a layer the active one. `how`: "toggle" (Ctrl+click: in or out of the picked layers), "range"
+     * (Shift+click: every row from the last one clicked to this one, as the panel lists them), else this
+     * one alone. The active layer is the one tools paint on; the picked ones are what Layers' commands
+     * (delete, duplicate, group, merge, move, opacity, blend, lock, hide) take together.
+     */
+    setActive(id, mask = false, how = null) {
         if (!this.doc) return;
         const L = this.doc.layers.find((x) => x.id === id);
         if (!L) return;
         const em = !!(mask && L.mask) || (L.kind === "adjust" && mask);
-        if (this.doc.active === id && this.editMask === em) return;
+        if (how === "toggle") {
+            this.picked.add(this.doc.active);
+            if (this.picked.has(id) && this.picked.size > 1) {
+                // Out of the picked ones; the active layer stays, unless it is this one.
+                this.picked.delete(id);
+                id = this.doc.active === id ? [...this.picked].pop() : this.doc.active;
+            } else this.picked.add(id);
+            this._pickAnchor = id;
+        } else if (how === "range") {
+            const rows = this._panelRows().map((r) => r.L.id);
+            const a = rows.indexOf(this._pickAnchor || this.doc.active), b = rows.indexOf(id);
+            if (a >= 0 && b >= 0) this.picked = new Set(rows.slice(Math.min(a, b), Math.max(a, b) + 1));
+            else this.picked = new Set([id]);
+        } else {
+            if (this.doc.active === id && this.editMask === em && this.picked.size === 1 && this.picked.has(id)) return;
+            this.picked = new Set([id]);
+            this._pickAnchor = id;
+        }
         if (this.tf && this.tf.L.id !== id) this.tfCommit();
         this.doc.active = id;
-        this.editMask = em;
+        this.editMask = how ? false : em;
         this.refreshPanels();
         this.drawOverlay();
         this._status();
+    }
+
+    /** Every layer picked in the Layers panel (the active one with them), bottom first. */
+    pickedLayers() {
+        if (!this.doc) return [];
+        const out = this.doc.layers.filter((L) => this.picked.has(L.id) || L.id === this.doc.active);
+        return out;
+    }
+
+    /** Ctrl+Alt+A: every layer picked. */
+    pickAll() {
+        if (!this.doc) return;
+        this.picked = new Set(this.doc.layers.map((L) => L.id));
+        this.refreshLayers();
+    }
+
+    _prunePicked() {
+        if (!this.doc) { this.picked = new Set(); return; }
+        const ids = new Set(this.doc.layers.map((L) => L.id));
+        this.picked = new Set([...this.picked].filter((x) => ids.has(x)));
+        if (this.doc.active && !ids.has(this.doc.active)) this.doc.active = this.doc.layers.length ? this.doc.layers[this.doc.layers.length - 1].id : null;
+        if (this.doc.active) this.picked.add(this.doc.active);
+    }
+
+    /** Where a new layer goes: inside the active group (its top) when that is open, else just above the
+     * active layer, in its group. Inside `change`; returns the index and sets L.parent. */
+    _placeNew(L) {
+        const A = this.active();
+        if (!A) return this.doc.layers.length;
+        if (A.kind === "group" && !A.collapsed) {
+            L.parent = A.id;
+            return D.layerIndex(this.doc, A.id);
+        }
+        if (A.parent) L.parent = A.parent; else delete L.parent;
+        return D.layerIndex(this.doc, A.id) + 1;
     }
 
     newLayer(name = null, index = null) {
         return this.change("New layer", () => {
             const L = D.cleanLayer({ id: D.newId(), name: name || D.freshName(this.doc), kind: "pixel", x: 0, y: 0, w: this.doc.w, h: this.doc.h });
             this.pix.set(L.id, new Uint8ClampedArray(L.w * L.h * 4));
-            const i = index == null ? D.layerIndex(this.doc, this.doc.active) + 1 : index;
+            const i = index == null ? this._placeNew(L) : index;
             this.doc.layers.splice(clamp(i, 0, this.doc.layers.length), 0, L);
             this.doc.active = L.id;
             this.editMask = false;
         });
+    }
+
+    /** An empty group where a new layer would go. */
+    newGroup() {
+        return this.change("New group", () => {
+            const G = D.cleanLayer({ id: D.newId(), name: this._groupName(), kind: "group", blend: "pass_through" });
+            const i = this._placeNew(G);
+            this.doc.layers.splice(clamp(i, 0, this.doc.layers.length), 0, G);
+            this.doc.active = G.id;
+            this.editMask = false;
+        });
+    }
+
+    _groupName() {
+        const taken = new Set(this.doc.layers.map((L) => L.name));
+        let n = this.doc.layers.filter((L) => L.kind === "group").length + 1;
+        while (taken.has(`Group ${n}`)) n++;
+        return `Group ${n}`;
     }
 
     /** A layer of these pixels (w x h at x, y), above the active one. */
@@ -753,7 +846,7 @@ class PaintEditor {
         return this.change("Add layer", () => {
             const L = D.cleanLayer({ id: D.newId(), name, kind: "pixel", x, y, w, h, ...extra });
             this.pix.set(L.id, px);
-            const i = this.doc.layers.length ? D.layerIndex(this.doc, this.doc.active) + 1 : 0;
+            const i = this.doc.layers.length ? this._placeNew(L) : 0;
             this.doc.layers.splice(i, 0, L);
             this.doc.active = L.id;
             this.editMask = false;
@@ -767,23 +860,29 @@ class PaintEditor {
                 L.mask = { enabled: true, x: 0, y: 0, w: this.doc.w, h: this.doc.h, fill: 0 };
                 this.masks.set(L.id, new Uint8Array(this.sel));
             }
-            this.doc.layers.splice(D.layerIndex(this.doc, this.doc.active) + 1, 0, L);
+            this.doc.layers.splice(this._placeNew(L), 0, L);
             this.doc.active = L.id;
             this.editMask = false;
         });
     }
 
-    deleteLayer(id = this.doc && this.doc.active) {
-        if (!this.doc || this.doc.layers.length <= 1) { this._notify("The last layer stays.", "warn"); return false; }
-        const L = this.doc.layers.find((x) => x.id === id);
-        if (!L) return false;
-        if (L.locked) { this._notify(`${L.name} is locked.`, "warn"); return false; }
-        return this.change("Delete layer", () => {
-            const i = D.layerIndex(this.doc, id);
-            this.doc.layers.splice(i, 1);
-            this.pix.delete(id);
-            this.masks.delete(id);
-            this.doc.active = (this.doc.layers[Math.max(0, i - 1)] || this.doc.layers[0]).id;
+    /** The picked layers out (a group with what is inside it). */
+    deleteLayer(id = null) {
+        if (!this.doc) return false;
+        const ids = id ? [id] : D.outermost(this.doc, this.pickedLayers().map((L) => L.id));
+        const gone = D.withInside(this.doc, ids);
+        if (!gone.length) return false;
+        if (gone.length >= this.doc.layers.length) { this._notify("The last layer stays.", "warn"); return false; }
+        const locked = gone.find((L) => L.locked);
+        if (locked) { this._notify(`${locked.name} is locked.`, "warn"); return false; }
+        const label = gone.length > 1 ? (ids.length > 1 ? `Delete ${ids.length} layers` : "Delete group") : "Delete layer";
+        return this.change(label, () => {
+            const lowest = D.layerIndex(this.doc, gone[0].id);
+            const g = new Set(gone.map((L) => L.id));
+            this.doc.layers = this.doc.layers.filter((L) => !g.has(L.id));
+            for (const x of g) { this.pix.delete(x); this.masks.delete(x); }
+            this.doc.active = (this.doc.layers[Math.max(0, lowest - 1)] || this.doc.layers[0]).id;
+            this.picked = new Set([this.doc.active]);
             this.editMask = false;
         });
     }
@@ -791,6 +890,33 @@ class PaintEditor {
     duplicateLayer() {
         const L = this.active();
         if (!L) return false;
+        const many = this.pickedLayers().length > 1;
+        if (many || L.kind === "group") {
+            return this.change(many ? "Duplicate layers" : "Duplicate group", () => {
+                const tops = D.outermost(this.doc, this.pickedLayers().map((x) => x.id));
+                const made = [];
+                for (const id of tops) {
+                    const T = this.doc.layers.find((x) => x.id === id);
+                    const block = D.withInside(this.doc, [id]);
+                    const map = new Map(block.map((x) => [x.id, D.newId()]));
+                    const copies = block.map((x) => {
+                        const C = JSON.parse(JSON.stringify(x));
+                        C.id = map.get(x.id);
+                        if (map.has(x.parent)) C.parent = map.get(x.parent);
+                        C.locked = false;
+                        if (this.pix.has(x.id)) this.pix.set(C.id, new Uint8ClampedArray(this.pix.get(x.id)));
+                        if (this.masks.has(x.id)) this.masks.set(C.id, new Uint8Array(this.masks.get(x.id)));
+                        return C;
+                    });
+                    copies[copies.length - 1].name = `${T.name} copy`;
+                    this.doc.layers.splice(D.layerIndex(this.doc, id) + 1, 0, ...copies);
+                    made.push(copies[copies.length - 1].id);
+                }
+                if (this.doc.layers.length > D.MAX_LAYERS) throw new Error(`at most ${D.MAX_LAYERS} layers`);
+                this.doc.active = made[made.length - 1];
+                this.picked = new Set(made);
+            });
+        }
         return this.change(this.sel && L.kind === "pixel" ? "Layer via copy" : "Duplicate layer", () => {
             const C = JSON.parse(JSON.stringify(L));
             C.id = D.newId();
@@ -821,11 +947,107 @@ class PaintEditor {
         });
     }
 
+    /**
+     * Layers (a group with what is in it) moved next to `targetId`: "above" / "below" it, in its group, or
+     * "inside" it (a group: at its top). What the Layers panel's drag and drop does.
+     */
+    moveLayers(ids, targetId, where) {
+        const d = this.doc;
+        const T = d.layers.find((x) => x.id === targetId);
+        if (!T) return false;
+        const tops = D.outermost(d, ids);
+        if (tops.includes(targetId) || tops.some((g) => D.isInside(d, T, g))) return false;
+        if (where === "inside" && T.kind !== "group") where = "above";
+        const n = tops.length;
+        return this.change(n > 1 ? `Move ${n} layers` : (where === "inside" ? "Move into group" : "Move layer"), () => {
+            const block = D.withInside(d, tops);
+            const b = new Set(block.map((x) => x.id));
+            const rest = d.layers.filter((x) => !b.has(x.id));
+            const par = where === "inside" ? T.id : T.parent;
+            if (par && D.ancestors(d, T).length + (where === "inside" ? 1 : 0) + this._depthOf(block, tops) > D.MAX_DEPTH) throw new Error(`Groups go at most ${D.MAX_DEPTH} deep.`);
+            for (const id of tops) { const L = d.layers.find((x) => x.id === id); if (par) L.parent = par; else delete L.parent; }
+            let j;
+            if (where === "inside") j = rest.indexOf(T);
+            else if (where === "above") j = rest.indexOf(T) + 1;
+            else j = rest.indexOf(d.layers[D.subtreeRange(d, T.id)[0]]);
+            d.layers = [...rest.slice(0, j), ...block, ...rest.slice(j)];
+        });
+    }
+
+    _depthOf(block, tops) {
+        // How deep the deepest layer of `block` is below its top.
+        let best = 0;
+        const byId = new Map(block.map((x) => [x.id, x]));
+        for (const L of block) {
+            let n = 0, p = L;
+            while (p && !tops.includes(p.id) && n <= D.MAX_DEPTH) { p = byId.get(p.parent); n++; }
+            best = Math.max(best, n);
+        }
+        return best;
+    }
+
+    /** Ctrl+G: the picked layers into a new group, where the top one of them was. */
+    groupLayers() {
+        const d = this.doc;
+        if (!d || !d.layers.length) return false;
+        const tops = D.outermost(d, this.pickedLayers().map((L) => L.id));
+        if (!tops.length) return false;
+        const topL = d.layers.find((x) => x.id === tops[tops.length - 1]);
+        if (D.ancestors(d, topL).length >= D.MAX_DEPTH) { this._notify(`Groups go at most ${D.MAX_DEPTH} deep.`, "warn"); return false; }
+        return this.change("Group layers", () => {
+            const G = D.cleanLayer({ id: D.newId(), name: this._groupName(), kind: "group", blend: "pass_through" });
+            if (topL.parent) G.parent = topL.parent;
+            const block = D.withInside(d, tops);
+            const b = new Set(block.map((x) => x.id));
+            const lowestTop = d.layers[D.subtreeRange(d, topL.id)[0]];
+            let j = d.layers.slice(0, d.layers.indexOf(lowestTop)).filter((x) => !b.has(x.id)).length;
+            const rest = d.layers.filter((x) => !b.has(x.id));
+            for (const id of tops) d.layers.find((x) => x.id === id).parent = G.id;
+            d.layers = [...rest.slice(0, j), ...block, G, ...rest.slice(j)];
+            d.active = G.id;
+            this.picked = new Set([G.id]);
+            this.editMask = false;
+        });
+    }
+
+    /** Ctrl+Shift+G: the active group's layers out of it, in its place. */
+    ungroup() {
+        const G = this.active();
+        if (!G || G.kind !== "group") { this._notify("Ungroup: pick a group.", "info"); return false; }
+        if (G.locked) { this._notify(`${G.name} is locked.`, "warn"); return false; }
+        return this.change("Ungroup", () => {
+            const kids = this.doc.layers.filter((x) => x.parent === G.id);
+            for (const x of kids) { if (G.parent) x.parent = G.parent; else delete x.parent; }
+            this.doc.layers = this.doc.layers.filter((x) => x.id !== G.id);
+            this.masks.delete(G.id);
+            this.doc.active = kids.length ? kids[kids.length - 1].id : (this.doc.layers[0] || {}).id;
+            this.picked = new Set(kids.map((x) => x.id));
+            this.editMask = false;
+        });
+    }
+
+    /** Open / fold a group in the Layers panel (not an undo step). */
+    toggleCollapsed(id) {
+        const G = this.doc && this.doc.layers.find((x) => x.id === id);
+        if (!G || G.kind !== "group") return;
+        if (G.collapsed) delete G.collapsed; else G.collapsed = true;
+        this.refreshLayers();
+    }
+
     setLayerProps(id, patch, label = "Layer") {
         return this.change(label, () => {
             const L = this.doc.layers.find((x) => x.id === id);
             if (!L) return false;
             Object.assign(L, patch);
+        });
+    }
+
+    /** One change on every picked layer: `fn(L)` (return false to leave one alone). */
+    setPickedProps(fn, label) {
+        return this.change(label, () => {
+            let any = false;
+            for (const L of this.pickedLayers()) if (fn(L) !== false) any = true;
+            return any;
         });
     }
 
@@ -843,13 +1065,18 @@ class PaintEditor {
         return big;
     }
 
+    /** Ctrl+E: several layers picked - merge them; a group - merge it; else this layer into the one under it (in its group). */
     mergeDown() {
         const L = this.active();
         if (!L) return false;
+        if (this.pickedLayers().length > 1) return this.mergeLayers();
+        if (L.kind === "group") return this.mergeGroup();
         const i = D.layerIndex(this.doc, L.id);
-        const B = this.doc.layers[i - 1];
-        if (!B) { this._notify("Nothing under this layer to merge into.", "warn"); return false; }
-        if (B.kind !== "pixel") { this._notify(`${B.name} is an adjustment layer: merge into a pixel layer.`, "warn"); return false; }
+        let j = i - 1;
+        while (j >= 0 && (this.doc.layers[j].parent || null) !== (L.parent || null)) j--;
+        const B = this.doc.layers[j];
+        if (!B) { this._notify(L.parent ? "Nothing under this layer in its group to merge into." : "Nothing under this layer to merge into.", "warn"); return false; }
+        if (B.kind !== "pixel") { this._notify(`${B.name} is ${B.kind === "group" ? "a group" : "an adjustment layer"}: merge into a pixel layer.`, "warn"); return false; }
         if (L.locked || B.locked) { this._notify("A locked layer is not merged.", "warn"); return false; }
         return this.change("Merge down", () => {
             this._growToCanvas(B);
@@ -857,7 +1084,9 @@ class PaintEditor {
             const sub = { w: B.w, h: B.h, layers: [] };
             const lb = { ...B, x: 0, y: 0, opacity: 1, blend: "normal", visible: true };
             delete lb.mask;
+            delete lb.parent;
             const lt = { ...L, visible: true };
+            delete lt.parent;
             if (L.kind === "pixel") { lt.x = L.x - B.x; lt.y = L.y - B.y; }
             if (lt.mask) lt.mask = { ...lt.mask, x: lt.mask.x - B.x, y: lt.mask.y - B.y };
             sub.layers = [lb, lt];
@@ -865,10 +1094,67 @@ class PaintEditor {
             if (L.kind === "adjust") for (let k = 3; k < out.length; k += 4) out[k] = base[k];
             this.pix.set(B.id, out);
             delete B.text;
-            this.doc.layers.splice(i, 1);
+            this.doc.layers.splice(D.layerIndex(this.doc, L.id), 1);
             this.pix.delete(L.id);
             this.masks.delete(L.id);
             this.doc.active = B.id;
+            this.editMask = false;
+        });
+    }
+
+    /**
+     * Layers laid alone (on nothing, as a document of the canvas's size): `tops` and what is in them, each
+     * top as it is but out of its group. The picture they make (W x H).
+     */
+    _layAlone(tops, top = null) {
+        const block = D.withInside(this.doc, tops).map((x) => ({ ...x }));
+        for (const x of block) if (tops.includes(x.id)) { delete x.parent; if (top) Object.assign(x, top(x)); }
+        const sub = { w: this.doc.w, h: this.doc.h, layers: block };
+        return D.composite(sub, this._pixOf, (x) => (x.mask ? this.masks.get(x.id) || null : null));
+    }
+
+    /** The active group made one pixel layer: what it shows, alone, with the group's opacity, blend and mask kept on it. */
+    mergeGroup() {
+        const G = this.active();
+        if (!G || G.kind !== "group") return false;
+        const block = D.withInside(this.doc, [G.id]);
+        if (block.some((x) => x.locked)) { this._notify("A locked layer is not merged.", "warn"); return false; }
+        return this.change("Merge group", () => {
+            const flat = this._layAlone([G.id], (x) => { const o = { visible: true, opacity: 1, blend: "normal" }; delete x.mask; return o; });
+            const L = D.cleanLayer({ id: D.newId(), name: G.name, kind: "pixel", x: 0, y: 0, w: this.doc.w, h: this.doc.h,
+                                     opacity: G.opacity, visible: G.visible, blend: D.BLEND_MODES.includes(G.blend) ? G.blend : "normal",
+                                     parent: G.parent, mask: G.mask });
+            if (G.mask) this.masks.set(L.id, this.masks.get(G.id));
+            const at = D.subtreeRange(this.doc, G.id)[0];
+            const b = new Set(block.map((x) => x.id));
+            for (const x of b) { this.pix.delete(x); this.masks.delete(x); }
+            this.pix.set(L.id, flat);
+            const rest = this.doc.layers.filter((x) => !b.has(x.id));
+            this.doc.layers = [...rest.slice(0, at), L, ...rest.slice(at)];
+            this.doc.active = L.id;
+            this.picked = new Set([L.id]);
+            this.editMask = false;
+        });
+    }
+
+    /** The picked layers made one (Ctrl+E with several): where the top one was, named as it is. Hidden ones are left out (and go). */
+    mergeLayers() {
+        const tops = D.outermost(this.doc, this.pickedLayers().map((x) => x.id));
+        if (tops.length < 2 && !(tops.length === 1 && this.doc.layers.find((x) => x.id === tops[0]).kind === "group")) return false;
+        const block = D.withInside(this.doc, tops);
+        if (block.some((x) => x.locked)) { this._notify("A locked layer is not merged.", "warn"); return false; }
+        const topL = this.doc.layers.find((x) => x.id === tops[tops.length - 1]);
+        return this.change(`Merge ${tops.length} layers`, () => {
+            const flat = this._layAlone(tops);
+            const L = D.cleanLayer({ id: D.newId(), name: topL.name, kind: "pixel", x: 0, y: 0, w: this.doc.w, h: this.doc.h, parent: topL.parent });
+            const b = new Set(block.map((x) => x.id));
+            const at = this.doc.layers.slice(0, D.subtreeRange(this.doc, topL.id)[0]).filter((x) => !b.has(x.id)).length;
+            for (const x of b) { this.pix.delete(x); this.masks.delete(x); }
+            this.pix.set(L.id, flat);
+            const rest = this.doc.layers.filter((x) => !b.has(x.id));
+            this.doc.layers = [...rest.slice(0, at), L, ...rest.slice(at)];
+            this.doc.active = L.id;
+            this.picked = new Set([L.id]);
             this.editMask = false;
         });
     }
@@ -932,7 +1218,7 @@ class PaintEditor {
         const L = this.active();
         if (!L) return null;
         if (L.locked) { this._notify(`${L.name} is locked.`, "warn"); return null; }
-        if (L.kind !== "pixel") { this._notify(`${what}: pick a pixel layer (this one is an adjustment layer).`, "warn"); return null; }
+        if (L.kind !== "pixel") { this._notify(`${what}: pick a pixel layer (this one is ${L.kind === "group" ? "a group" : "an adjustment layer"}).`, "warn"); return null; }
         return L;
     }
 
@@ -1175,7 +1461,18 @@ class PaintEditor {
         if (t === "wand") { this._wand(p, e); return; }
         if (t === "marquee" || t === "ellipse") { this._drag = { kind: t, x0: p.x, y0: p.y, rect: null, e }; return; }
         if (t === "lasso") { this._drag = { kind: "lasso", pts: [[p.x, p.y]], e }; return; }
-        if (t === "move") { this._tfDown(p, e); return; }
+        if (t === "move") {
+            const set = this._moveSet();
+            if (set) {
+                if (set.some((x) => x.locked)) { this._notify("A locked layer is not moved.", "warn"); return; }
+                this.liveBegin();
+                const from = new Map(set.map((L) => [L.id, { x: L.x, y: L.y, mx: L.mask ? L.mask.x : 0, my: L.mask ? L.mask.y : 0 }]));
+                this._drag = { kind: "mmove", set, from, p0: { x: p.x, y: p.y } };
+                return;
+            }
+            this._tfDown(p, e);
+            return;
+        }
         if (t === "crop") { this._cropStart(p); return; }
         if (t === "text") { this._textAt(p); return; }
     }
@@ -1187,7 +1484,7 @@ class PaintEditor {
         const dr = this._drag;
         if (!dr) {
             if (BRUSHES.includes(this.tool)) this.drawOverlay();
-            else if (this.tool === "move" && !this._space) this._cursor(this._tfCursor(this._tfHit(p)));
+            else if (this.tool === "move" && !this._space) this._cursor(this._moveSet() ? "move" : this._tfCursor(this._tfHit(p)));
             this._status();
             return;
         }
@@ -1214,6 +1511,11 @@ class PaintEditor {
         }
         if (dr.kind === "lasso") { dr.pts.push([p.x, p.y]); this.drawOverlay(); return; }
         if (dr.kind === "tf") { this._tfDrag(dr, p, e); return; }
+        if (dr.kind === "mmove") {
+            this._shiftLayers(dr.set, Math.round(p.x - dr.p0.x), Math.round(p.y - dr.p0.y), dr.from);
+            this.requestRedraw();
+            return;
+        }
         if (dr.kind === "crop") { this._cropMove(p); return; }
     }
 
@@ -1237,6 +1539,7 @@ class PaintEditor {
             return;
         }
         if (dr.kind === "tf") { this._tfShow(true); return; }
+        if (dr.kind === "mmove") { this.liveEnd(dr.set.length > 1 ? "Move layers" : "Move"); this.refreshProps(); return; }
         if (dr.kind === "crop") { this.drawOverlay(); return; }
     }
 
@@ -1246,7 +1549,11 @@ class PaintEditor {
         const L = this.active();
         if (!L) return;
         if (L.locked) { this._notify(`${L.name} is locked.`, "warn"); return; }
-        const onMask = this.editMask || L.kind === "adjust";
+        if (L.kind === "group" && !(this.editMask && L.mask)) {
+            this._notify(L.mask ? "A group has no pixels: pick a layer in it, or its mask's thumbnail to paint the mask." : "A group has no pixels: pick a layer in it (or add a mask to the group and paint that).", "info");
+            return;
+        }
+        const onMask = this.editMask || L.kind === "adjust" || L.kind === "group";
         const clone = this.tool === "clone";
         if (clone && onMask) { this._notify("The clone stamp paints a layer's pixels: pick the layer (not its mask).", "info"); return; }
         if (clone && !this.cloneSrc) { this._notify("Alt+click where the clone stamp should take from first.", "info"); return; }
@@ -1651,8 +1958,30 @@ class PaintEditor {
         }
     }
 
+    /** What the Move tool moves when it is more than one layer's transform: every pixel layer (and mask)
+     * of the picked layers and groups. Null when it is one layer (the transform does that). */
+    _moveSet() {
+        const P = this.pickedLayers();
+        if (!P.length || (P.length === 1 && P[0].kind !== "group")) return null;
+        return D.withInside(this.doc, P.map((L) => L.id));
+    }
+
+    _shiftLayers(set, dx, dy, from = null) {
+        for (const L of set) {
+            const f = from ? from.get(L.id) : null;
+            if (L.kind === "pixel") { L.x = (f ? f.x : L.x) + dx; L.y = (f ? f.y : L.y) + dy; }
+            if (L.mask) { L.mask.x = (f ? f.mx : L.mask.x) + dx; L.mask.y = (f ? f.my : L.mask.y) + dy; }
+        }
+    }
+
     nudge(dx, dy) {
         if (this.tf) { this.tf.p.tx += dx; this.tf.p.ty += dy; this._tfShow(true); return; }
+        const set = this._moveSet();
+        if (set) {
+            if (set.some((x) => x.locked)) { this._notify("A locked layer is not moved.", "warn"); return; }
+            this.change("Nudge", () => this._shiftLayers(set, dx, dy));
+            return;
+        }
         const L = this.active();
         if (!L || L.kind !== "pixel" || L.locked) return;
         this.change("Nudge", () => {
@@ -1761,7 +2090,9 @@ class PaintEditor {
         if (ctrl) {
             if (lk === "z" && e.shiftKey) return take(() => this.redo());
             if (lk === "z" || lk === "y") return take(() => (lk === "y" ? this.redo() : this.undo()));
+            if (lk === "a" && e.altKey) return take(() => this.pickAll());
             if (lk === "a") return take(() => this.selectAll());
+            if (lk === "g") return take(() => (e.shiftKey ? this.ungroup() : this.groupLayers()));
             if (lk === "d") return take(() => this.deselect());
             if (lk === "i" && e.shiftKey) return take(() => this.invertSelection());
             if (lk === "j") return take(() => this.duplicateLayer());
@@ -1877,10 +2208,15 @@ class PaintEditor {
     _layerMenu() {
         const L = this.active();
         const adj = D.ADJUST_TYPES.map((t) => ({ label: "New " + D.ADJUST_LABELS[t] + " layer", run: () => this.addAdjustment(t) }));
+        const n = this.pickedLayers().length, grp = !!L && L.kind === "group";
         return [{ label: "New layer (Ctrl+Shift+N)", run: () => this.newLayer() },
+                { label: "New group", run: () => this.newGroup() },
                 { label: "Duplicate (Ctrl+J)", disabled: !L, run: () => this.duplicateLayer() },
-                { label: "Delete", disabled: !L, run: () => this.deleteLayer() },
-                { label: "Merge down (Ctrl+E)", disabled: !L, run: () => this.mergeDown() }, "-",
+                { label: n > 1 ? `Delete ${n} layers` : "Delete", disabled: !L, run: () => this.deleteLayer() },
+                { label: n > 1 ? `Merge ${n} layers (Ctrl+E)` : grp ? "Merge group (Ctrl+E)" : "Merge down (Ctrl+E)", disabled: !L, run: () => this.mergeDown() }, "-",
+                { label: n > 1 ? `Group ${n} layers (Ctrl+G)` : "Group (Ctrl+G)", disabled: !L, run: () => this.groupLayers() },
+                { label: "Ungroup (Ctrl+Shift+G)", disabled: !grp, run: () => this.ungroup() },
+                { label: "Pick every layer (Ctrl+Alt+A)", run: () => this.pickAll() }, "-",
                 ...adj, "-",
                 { label: "Add mask (reveal all)", disabled: !L || !!L.mask, run: () => this.addMask("all") },
                 { label: "Add mask from the selection", disabled: !L || !this.sel, run: () => this.addMask("selection") },
@@ -1895,7 +2231,7 @@ class PaintEditor {
                 { label: "Rotate 180°", disabled: !L || L.kind !== "pixel", run: () => this.rotateLayer(180) },
                 { label: "Free transform (Ctrl+T)", disabled: !L || L.kind !== "pixel", run: () => { this.setTool("move"); this.tfBegin(); } },
                 { label: "Scale…", disabled: !L || L.kind !== "pixel", run: () => this.dialog("Scale layer", [["k", "Percent", 100, 1, 1600]], (v) => this.scaleLayer(v.k / 100)) },
-                { label: L && L.locked ? "Unlock" : "Lock", disabled: !L, run: () => this.setLayerProps(L.id, { locked: !L.locked }, "Lock") }];
+                { label: L && L.locked ? "Unlock" : "Lock", disabled: !L, run: () => { const v = !L.locked; this.setPickedProps((x) => { x.locked = v; }, v ? "Lock" : "Unlock"); } }];
     }
 
     _filterMenu() {
@@ -1976,32 +2312,45 @@ class PaintEditor {
         const p = this.el("div", "paint-panel");
         const head = this.el("div", "paint-lhead");
         this.blendSel = this.el("select", "", { title: "Blend mode" });
-        for (const m of D.BLEND_MODES) this.blendSel.append(this.el("option", "", { value: m, text: D.BLEND_LABELS[m] }));
-        this.blendSel.addEventListener("change", () => { const L = this.active(); if (L) this.setLayerProps(L.id, { blend: this.blendSel.value }, "Blend mode"); });
+        for (const m of D.GROUP_BLENDS) this.blendSel.append(this.el("option", "", { value: m, text: D.BLEND_LABELS[m] }));
+        this.blendSel.addEventListener("change", () => {
+            const v = this.blendSel.value;
+            this.setPickedProps((L) => {
+                if (L.kind === "adjust" || (v === "pass_through" && L.kind !== "group")) return false;
+                L.blend = v;
+            }, "Blend mode");
+        });
         this.opRange = this.el("input", "", { type: "range", min: 0, max: 100, step: 1, title: "Opacity" });
         this.opNum = this.el("input", "", { type: "number", min: 0, max: 100, step: 1, title: "Opacity %" });
         const setOp = (v, end) => {
             const L = this.active();
             if (!L) return;
             this.liveBegin();
-            L.opacity = clamp(Number(v) / 100, 0, 1);
-            this.opRange.value = this.opNum.value = Math.round(L.opacity * 100);
+            const o = clamp(Number(v) / 100, 0, 1);
+            for (const X of this.pickedLayers()) X.opacity = o;
+            this.opRange.value = this.opNum.value = Math.round(o * 100);
             this.requestRedraw();
             if (end) this.liveEnd("Opacity");
         };
         this.opRange.addEventListener("input", () => setOp(this.opRange.value, false));
         this.opRange.addEventListener("change", () => setOp(this.opRange.value, true));
         this.opNum.addEventListener("change", () => setOp(this.opNum.value, true));
-        this.lockBtn = this.btn("lockOpen", "Lock the layer", () => { const L = this.active(); if (L) this.setLayerProps(L.id, { locked: !L.locked }, "Lock"); });
+        this.lockBtn = this.btn("lockOpen", "Lock the layer", () => {
+            const L = this.active();
+            if (!L) return;
+            const v = !L.locked;
+            this.setPickedProps((X) => { X.locked = v; }, v ? "Lock" : "Unlock");
+        });
         head.append(this.blendSel, this.el("span", "", { text: "Opacity" }), this.opRange, this.opNum, this.lockBtn);
         this.layerList = this.el("div", "paint-list");
         const foot = this.el("div", "paint-lfoot");
         foot.append(this.btn("plus", "New layer (Ctrl+Shift+N)", () => this.newLayer()),
+                    this.btn("folderPlus", "New group (with several layers picked: group them, Ctrl+G)", () => (this.pickedLayers().length > 1 ? this.groupLayers() : this.newGroup())),
                     this.btn("adjust", "New adjustment layer", (e, b) => this._menu(b, D.ADJUST_TYPES.map((t) => ({ label: D.ADJUST_LABELS[t], run: () => this.addAdjustment(t) })))),
                     this.btn("mask", "Add a mask (from the selection, with one)", () => this.addMask(this.sel ? "selection" : "all")),
                     this.btn("copy", "Duplicate (Ctrl+J)", () => this.duplicateLayer()),
                     this.btn("mergeDown", "Merge down (Ctrl+E)", () => this.mergeDown()),
-                    this.btn("trash", "Delete the layer", () => this.deleteLayer()));
+                    this.btn("trash", "Delete the picked layers", () => this.deleteLayer()));
         p.append(head, this.layerList, foot);
         // Del / Backspace act on the layer while the Layers panel was the last thing pressed.
         p.addEventListener("pointerdown", () => { this._layersFocus = true; }, true);
@@ -2009,6 +2358,24 @@ class PaintEditor {
     }
 
     refreshPanels() { this.refreshLayers(); this.refreshProps(); }
+
+    /** The Layers panel's rows, top first: {L, depth}, without what is in a folded group. */
+    _panelRows() {
+        const d = this.doc;
+        if (!d) return [];
+        const kids = D.childIndexes(d);
+        const out = [];
+        const walk = (key, depth) => {
+            const list = kids.get(key) || [];
+            for (let k = list.length - 1; k >= 0; k--) {
+                const L = d.layers[list[k]];
+                out.push({ L, depth });
+                if (L.kind === "group" && !L.collapsed) walk(L.id, depth + 1);
+            }
+        };
+        walk("", 0);
+        return out;
+    }
 
     refreshLayers() {
         const list = this.layerList;
@@ -2019,6 +2386,8 @@ class PaintEditor {
         for (const el of [this.blendSel, this.opRange, this.opNum]) el.disabled = !L0;
         if (!d) { list.append(this.el("div", "paint-note", { text: "Open a picture in Paint to see its layers." })); return; }
         if (L0) {
+            // Pass Through is a group's only.
+            for (const o of this.blendSel.options) o.hidden = o.value === "pass_through" && L0.kind !== "group";
             this.blendSel.value = L0.blend;
             this.blendSel.disabled = L0.kind === "adjust";
             this.opRange.value = this.opNum.value = Math.round(L0.opacity * 100);
@@ -2026,21 +2395,43 @@ class PaintEditor {
             this.lockBtn.classList.toggle("on", !!L0.locked);
         }
         this._thumbJobs = [];
-        for (const L of D.panelOrder(d)) {
-            const row = this.el("div", "paint-row" + (L.id === d.active ? " active" : ""));
+        const many = this.pickedLayers().length > 1;
+        for (const { L, depth } of this._panelRows()) {
+            const isG = L.kind === "group";
+            const row = this.el("div", "paint-row" + (L.id === d.active ? " active" : "") + (many && this.picked.has(L.id) ? " picked" : "")
+                + (D.ancestors(d, L).some((P) => !P.visible) ? " dimmed" : ""));
             row.dataset.id = L.id;
             row.draggable = true;
+            row.style.paddingLeft = (6 + depth * 14) + "px";
+            const how = (e) => (e.shiftKey ? "range" : (e.ctrlKey || e.metaKey) ? "toggle" : null);
             const eye = this.el("span", "eye" + (L.visible ? "" : " off"), { title: L.visible ? "Hide" : "Show" });
             eye.append(paintIcon(this.d, L.visible ? "eye" : "eyeOff", 15));
-            eye.addEventListener("click", (e) => { e.stopPropagation(); this.setLayerProps(L.id, { visible: !L.visible }, L.visible ? "Hide layer" : "Show layer"); });
+            eye.addEventListener("click", (e) => {
+                e.stopPropagation();
+                // The eye of a picked layer hides / shows every picked one.
+                const v = !L.visible;
+                if (this.picked.has(L.id) && this.picked.size > 1) this.setPickedProps((X) => { X.visible = v; }, v ? "Show layers" : "Hide layers");
+                else this.setLayerProps(L.id, { visible: v }, v ? "Show layer" : "Hide layer");
+            });
             row.append(eye);
+            const caret = this.el("span", "caret" + (isG ? "" : " none"), { title: isG ? (L.collapsed ? "Open the group" : "Fold the group") : "" });
+            if (isG) {
+                caret.append(paintIcon(this.d, L.collapsed ? "chevronRight" : "chevronDown", 12));
+                caret.addEventListener("click", (e) => { e.stopPropagation(); this.toggleCollapsed(L.id); });
+            }
+            row.append(caret);
+            const selThumb = L.id === d.active && !this.editMask;
             if (L.kind === "pixel") {
-                const th = this.el("canvas", (L.id === d.active && !this.editMask) ? "sel" : "", { width: 40, height: 30, title: "The layer's pixels" });
-                th.addEventListener("click", (e) => { e.stopPropagation(); this.setActive(L.id, false); });
+                const th = this.el("canvas", selThumb ? "sel" : "", { width: 40, height: 30, title: "The layer's pixels" });
+                th.addEventListener("click", (e) => { e.stopPropagation(); this.setActive(L.id, false, how(e)); });
                 this._thumbJobs.push([th, L, false]);
                 row.append(th);
+            } else if (isG) {
+                const g = this.el("span", "grp" + (selThumb ? " sel" : ""), { title: `Group (${D.BLEND_LABELS[L.blend]}) - double-click the arrow or click it to fold` });
+                g.append(paintIcon(this.d, "folder", 18));
+                row.append(g);
             } else {
-                const a = this.el("span", "adj" + ((L.id === d.active && !this.editMask) ? " sel" : ""), { title: D.ADJUST_LABELS[L.adjust.type] });
+                const a = this.el("span", "adj" + (selThumb ? " sel" : ""), { title: D.ADJUST_LABELS[L.adjust.type] });
                 a.append(paintIcon(this.d, "adjust", 18));
                 row.append(a);
             }
@@ -2055,7 +2446,7 @@ class PaintEditor {
             const nm = this.el("span", "nm", { text: L.name, title: "Double-click to rename" });
             row.append(nm);
             if (L.text) row.append(this.el("span", "tag", { text: "T" }));
-            if (L.blend !== "normal") row.append(this.el("span", "tag", { text: D.BLEND_LABELS[L.blend].split(" ")[0] }));
+            if (L.blend !== "normal" && !(isG && L.blend === "pass_through")) row.append(this.el("span", "tag", { text: D.BLEND_LABELS[L.blend].split(" ")[0] }));
             if (L.locked) { const lk = this.el("span", "lk"); lk.append(paintIcon(this.d, "lock", 12)); row.append(lk); }
             row.addEventListener("click", (e) => {
                 // A double-click on the name renames. Counted here, not by dblclick: the first click can draw
@@ -2063,8 +2454,9 @@ class PaintEditor {
                 const now = Date.now(), last = this._rowClick;
                 this._rowClick = { id: L.id, t: now };
                 const onName = e.target && e.target.closest && e.target.closest(".nm");
-                this.setActive(L.id, false);
-                if (onName && last && last.id === L.id && now - last.t < 450) {
+                const h = how(e);
+                this.setActive(L.id, false, h);
+                if (!h && onName && last && last.id === L.id && now - last.t < 450) {
                     this._rowClick = null;
                     const row2 = [...this.layerList.children].find((r) => r.dataset.id === L.id);
                     const nm2 = row2 && row2.querySelector(".nm");
@@ -2072,27 +2464,39 @@ class PaintEditor {
                     if (nm2 && L2 && !nm2.querySelector("input")) this._rename(nm2, L2);
                 }
             });
-            row.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); this.setActive(L.id); if (this.host.menu) this.host.menu(this._layerMenu(), e.clientX, e.clientY, row); });
-            row.addEventListener("dragstart", (e) => { this._rowDrag = L.id; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", L.name); });
+            row.addEventListener("contextmenu", (e) => {
+                e.preventDefault(); e.stopPropagation();
+                if (!this.picked.has(L.id)) this.setActive(L.id);
+                else { this.doc.active = L.id; this.refreshPanels(); }
+                if (this.host.menu) this.host.menu(this._layerMenu(), e.clientX, e.clientY, row);
+            });
+            const zone = (e) => {
+                const r = row.getBoundingClientRect(), f = (e.clientY - r.top) / r.height;
+                if (isG && f > 0.25 && f < 0.75) return "inside";
+                return f < 0.5 ? "above" : "below";
+            };
+            row.addEventListener("dragstart", (e) => {
+                // A picked row drags every picked layer; another row only itself.
+                this._rowDrag = this.picked.has(L.id) ? this.pickedLayers().map((x) => x.id) : [L.id];
+                e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", L.name);
+            });
             row.addEventListener("dragover", (e) => {
                 if (!this._rowDrag) return;
                 e.preventDefault();
-                const r = row.getBoundingClientRect(), above = e.clientY < r.top + r.height / 2;
-                row.classList.toggle("drop-above", above); row.classList.toggle("drop-below", !above);
+                const z = zone(e);
+                row.classList.toggle("drop-above", z === "above"); row.classList.toggle("drop-below", z === "below"); row.classList.toggle("drop-inside", z === "inside");
             });
-            row.addEventListener("dragleave", () => row.classList.remove("drop-above", "drop-below"));
+            row.addEventListener("dragleave", () => row.classList.remove("drop-above", "drop-below", "drop-inside"));
             row.addEventListener("drop", (e) => {
                 e.preventDefault();
-                row.classList.remove("drop-above", "drop-below");
-                const id = this._rowDrag;
+                row.classList.remove("drop-above", "drop-below", "drop-inside");
+                const ids = this._rowDrag;
                 this._rowDrag = null;
-                if (!id || id === L.id) return;
-                const r = row.getBoundingClientRect(), above = e.clientY < r.top + r.height / 2;
-                // The list is top first: above a row is a higher index.
-                const from = D.layerIndex(d, id);
-                let to = D.layerIndex(d, L.id) + (above ? 1 : 0);
-                if (from < to) to -= 1;
-                if (from !== to) this.moveLayer(id, to);
+                if (!ids || ids.includes(L.id)) return;
+                let z = zone(e);
+                // Below an open group's row is inside it, at its top (where the list shows it).
+                if (z === "below" && isG && !L.collapsed && (D.childIndexes(d).get(L.id) || []).length) z = "inside";
+                this.moveLayers(ids, L.id, z);
             });
             row.addEventListener("dragend", () => { this._rowDrag = null; });
             list.append(row);
@@ -2376,7 +2780,17 @@ class PaintEditor {
 
     _layerSection(L) {
         const s = this.el("div", "paint-sect");
-        s.append(this.el("h4", "", { text: L.kind === "adjust" ? D.ADJUST_LABELS[L.adjust.type] : L.text ? "Text layer" : "Layer" }));
+        const n = this.pickedLayers().length;
+        s.append(this.el("h4", "", { text: L.kind === "adjust" ? D.ADJUST_LABELS[L.adjust.type] : L.kind === "group" ? "Group" : L.text ? "Text layer" : "Layer" }));
+        if (n > 1) s.append(this.el("div", "paint-note", { text: `${n} layers picked: Layers' opacity, blend, lock, eye, delete, duplicate, merge (Ctrl+E), group (Ctrl+G) and the Move tool take them all.` }));
+        if (L.kind === "group") {
+            const inside = D.withInside(this.doc, [L.id]).length - 1;
+            s.append(this.el("div", "paint-note", { text: `${inside} layer${inside === 1 ? "" : "s"} inside` + (L.mask ? (L.mask.enabled ? " · mask on" : " · mask off") : "") }));
+            s.append(this.el("div", "paint-note", { text: L.blend === "pass_through"
+                ? "Pass Through: its layers mix with what is under the group as if they were not in one; an adjustment layer in it changes everything under it."
+                : `${D.BLEND_LABELS[L.blend]}: its layers are laid together first, and that picture is laid on what is under the group; an adjustment layer in it changes only the group's layers.` }));
+            return s;
+        }
         if (L.kind === "adjust") {
             const t = L.adjust.type;
             const live = (patch) => { this.liveBegin(); L.adjust.params = D.cleanAdjust(t, { ...L.adjust.params, ...patch }); this.requestRedraw(); };

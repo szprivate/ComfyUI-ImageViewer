@@ -25,12 +25,15 @@ import numpy as np
 
 BLEND_MODES = ("normal", "multiply", "screen", "overlay", "darken", "lighten", "difference", "add",
                "color_dodge", "color_burn", "soft_light", "hard_light")
+#: A group's blend: Pass Through (its layers straight onto what is under it) or one of the modes.
+GROUP_BLENDS = ("pass_through",) + BLEND_MODES
 
 #: Photoshop's four-letter key of each mode (PSD layer records).
 PSD_BLEND = {"normal": b"norm", "multiply": b"mul ", "screen": b"scrn", "overlay": b"over",
              "darken": b"dark", "lighten": b"lite", "difference": b"diff", "add": b"lddg",
              "color_dodge": b"div ", "color_burn": b"idiv", "soft_light": b"sLit", "hard_light": b"hLit"}
 PSD_BLEND_BACK = {v: k for k, v in PSD_BLEND.items()}
+PSD_PASS = b"pass"
 #: OpenRaster's composite-op names (``svg:*``); ours where there is no such name.
 ORA_BLEND = {"normal": "svg:src-over", "multiply": "svg:multiply", "screen": "svg:screen", "overlay": "svg:overlay",
              "darken": "svg:darken", "lighten": "svg:lighten", "difference": "svg:difference", "add": "svg:plus",
@@ -89,6 +92,22 @@ def blend_over(back, src, alpha, mode="normal"):
     ao = a_s + ab * (1 - a_s)
     num = as3 * cs2 + (1 - as3) * ab3 * cb
     co = np.where(ao[..., None] > 0, num / np.maximum(ao[..., None], 1e-12), 0.0)
+    out = np.empty_like(back)
+    out[..., :3] = q8(co)
+    out[..., 3] = q8(ao)
+    return out
+
+
+def mix_back(back, res, t):
+    """*back* + (*res* - *back*) * *t* (h, w floats), premultiplied: a Pass Through group with an opacity
+    under 1 or a mask (``paintData.mixBack``). Returns a new uint8 array."""
+    ab = back[..., 3].astype(np.float64) / 255.0
+    ar = res[..., 3].astype(np.float64) / 255.0
+    ao = ab + (ar - ab) * t
+    pb = (back[..., :3].astype(np.float64) / 255.0) * ab[..., None]
+    pr = (res[..., :3].astype(np.float64) / 255.0) * ar[..., None]
+    pc = pb + (pr - pb) * t[..., None]
+    co = np.where(ao[..., None] > 0, pc / np.maximum(ao[..., None], 1e-12), 0.0)
     out = np.empty_like(back)
     out[..., :3] = q8(co)
     out[..., 3] = q8(ao)

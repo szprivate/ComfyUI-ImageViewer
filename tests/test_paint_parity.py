@@ -101,6 +101,40 @@ class PaintParity(unittest.TestCase):
         got = self.run_node({"all": d})
         self.same(P.composite(d), got["all"]["composite"], (d.h, d.w, 4), "all")
 
+    def test_groups(self):
+        """Groups of every kind of blend, nested, with opacity and masks."""
+        cases = {}
+        rng = np.random.default_rng(5)
+        for k, gb in enumerate(["pass_through", "normal", "multiply", "screen", "overlay", "difference"]):
+            for op, masked in ((1.0, False), (0.6, False), (1.0, True), (0.45, True)):
+                d = rnd_doc(200 + k * 7 + int(op * 10), ["multiply", "screen", "normal", "overlay"],
+                            [("hue_saturation", {"hue": 40, "saturation": 20, "lightness": 0})])
+                ids = [L["id"] for L in d.layers]
+                # ids: bg, l0..l3, adjust. Group l1, l2 and the adjustment; a group inside it holds l2.
+                G = d.add_group("G", blend=gb, opacity=op)
+                if masked:
+                    G["mask"] = {"enabled": True, "x": 3, "y": 2, "w": d.w - 6, "h": d.h - 4, "fill": 0}
+                    d.masks[G["id"]] = rng.integers(0, 256, (d.h - 4, d.w - 6), dtype=np.uint8)
+                inner = d.add_group("inner", blend="pass_through" if k % 2 else "screen", opacity=0.8)
+                for i in (2, 5):
+                    d.layer(ids[i])["parent"] = G["id"]
+                d.layer(ids[3])["parent"] = inner["id"]
+                inner["parent"] = G["id"]
+                d.meta = P.clean_meta(d.meta)
+                cases[f"{gb}_{op}_{masked}"] = d
+        hidden = rnd_doc(400, ["normal", "multiply"])
+        g = hidden.add_group("off", blend="normal")
+        hidden.layers[1]["parent"] = g["id"]
+        g["visible"] = False
+        hidden.meta = P.clean_meta(hidden.meta)
+        cases["hidden"] = hidden
+        empty = rnd_doc(401, ["normal"])
+        empty.add_group("empty", blend="multiply", index=1)
+        cases["empty"] = empty
+        got = self.run_node(cases)
+        for name, d in cases.items():
+            self.same(P.composite(d), got[name]["composite"], (d.h, d.w, 4), name)
+
     def test_filters_and_selection_shapes(self):
         d = rnd_doc(7, [])
         L = d.layers[0]
