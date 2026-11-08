@@ -27,6 +27,7 @@
 import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
 import { nodeToolKind, senderTabInfo } from "./imageViewer_nodeTools.js";
+import { queueWithAuth } from "./imageViewer_comfyAuth.js";
 
 const IMG_EXT = /\.(png|jpe?g|webp|gif|bmp|avif|tiff?|exr|dpx|tga|hdr|svg|ico)$/i;
 const VID_EXT = /\.(mp4|m4v|mov|webm|mkv|ogv|avi|mpe?g|wmv|flv)$/i;
@@ -328,7 +329,7 @@ async function runBranchToViewer(node, target, ctx) {
     if (ctx.showPanel) ctx.showPanel();
 
     try {
-        await api.queuePrompt(0, { output: pruned, workflow: prompt.workflow });
+        await queueWithAuth(api, 0, { output: pruned, workflow: prompt.workflow });   // API nodes need the sign-in
     } catch (e) {
         panel.cancelInlineSend(sinkId);
         const detail = e?.response?.error?.message || e?.response?.error ||
