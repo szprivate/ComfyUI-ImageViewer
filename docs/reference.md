@@ -40,7 +40,7 @@ What a Send node shows is written to ComfyUI's temp folder as `ImageViewer_*` fi
 ## For scripts and agents
 
 - `POST /imageviewer/push` shows files in the viewer: `{paths, group, label, focus, play, panel}`. A path can be a file, a folder, an image sequence (`f_%04d.png`) or an `.otio`. `panel: "edit"` opens the cut beside the first film, `panel: "paint"` opens the picture in Paint.
-- `GET /imageviewer/deps?path=<file>` returns the Dependencies graph (needs agentY).
+- `POST /imageviewer/deps` with `{"path": <file>}` (or `filename` / `subfolder` / `type`, and `scan`) returns the Dependencies graph, read in ComfyUI.
 - `POST /imageviewer/previz_shot` opens and renders a previz shot; poll `GET /imageviewer/previz_shot?id=`.
 - `GET /imageviewer/health` answers 200 when the viewer is running.
 - In the page, `window.imageViewerApi.viewerState()` says what is on screen, and `.annotations()` the marks on it.

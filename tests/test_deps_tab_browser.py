@@ -4,7 +4,7 @@ the stale render outlined; a click on a node opens it; many sibling passes fold 
 Needs Playwright with a browser and node for the stub server; skipped without them.
 Run: python -m unittest tests.test_deps_tab_browser
 It serves tests/harness/tabs.html - the REAL viewer js against stubbed ComfyUI scripts - on a free port, and
-answers /imageviewer/deps from the page (window.__fetchApi), so no agentY host is needed.
+answers /imageviewer/deps from the page (window.__fetchApi).
 """
 import os
 import shutil
@@ -41,7 +41,7 @@ STUB = """() => {
       ...passes.map((p) => ({from: 'D:/in/plate.mp4', to: p.id, kind: 'mask', label: 'mask'}))]};
   window.__fetchApi = async (path, opts) => {
     if (String(path).startsWith('/imageviewer/deps')) {
-      window.__depsAsked.push(String(path));
+      window.__depsAsked.push({path: String(path), method: (opts && opts.method) || 'GET', body: opts && opts.body ? JSON.parse(opts.body) : null});
       return new Response(JSON.stringify(graph), {status: 200, headers: {'Content-Type': 'application/json'}});
     }
     return real(path, opts);
@@ -110,7 +110,8 @@ class DepsTabBrowserTests(unittest.TestCase):
 
     def test_top_to_bottom_with_stale_and_fold(self):
         pg = self.page()
-        self.assertIn("path=D%3A%2Fout%2Fdepth.mp4", pg.evaluate("() => window.__depsAsked[0]"))
+        asked = pg.evaluate("() => window.__depsAsked[0]")
+        self.assertEqual((asked["path"], asked["method"], asked["body"]), ("/imageviewer/deps", "POST", {"path": "D:/out/depth.mp4"}))
         self.assertTrue(pg.evaluate("() => window.__panel.activeTab").startswith("deps:"))
         nodes = {n["label"]: n for n in pg.evaluate(NODES)}
         self.assertLess(nodes["plate.mp4"]["top"], nodes["depth.mp4"]["top"])

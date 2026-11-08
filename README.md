@@ -15,7 +15,8 @@ A viewer panel for [ComfyUI](https://github.com/comfyanonymous/ComfyUI): look at
 - **Motion**: edit motion graphics scenes an agent wrote.
 - **Drawing tools**: roto mattes, SAM3 prompts and annotations, straight onto the picture.
 - **Panels**: a file browser, the selected node's Parameters, Agent code and Dataset, docked where you like. The viewer docks beside the canvas or opens in its own window.
-- **agentY**: dependency graphs, tags, approvals and AI edits when [agentY](https://github.com/szprivate/agentY) is running.
+- **Dependencies**: what a file was made from and what was made from it, from the workflows saved with the files.
+- **agentY**: tags, approvals and AI edits when [agentY](https://github.com/szprivate/agentY) is running.
 
 How it all works: **[the docs](docs/index.md)**.
 
