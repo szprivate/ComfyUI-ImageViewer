@@ -52,7 +52,7 @@ The brush and the eraser can paint with a picture as their tip instead of a roun
 - **From selection** makes a tip from the selected part of the picture as it looks. Dark parts paint, light parts do not. **Edit > Define brush tip from the selection** does the same.
 - **Invert** paints with the light parts instead. **Delete** removes the tip.
 
-The tips are kept in this browser (IndexedDB), not in the picture. The tip's longer side is the brush size. With a tip chosen, **Angle** turns it. **Scatter**, **Size jitter** and **Angle jitter** vary each dab.
+The tips are kept in this browser (IndexedDB), not in the picture. The tip's longer side is the brush size. With a tip chosen, **Angle** turns it, and **Flow: follow the stroke** makes the tip point the way the stroke is going while you paint (Angle then turns it further from that way; a click without a move keeps the tip as it is). **Scatter**, **Size jitter** and **Angle jitter** vary each dab.
 
 The .abr reader was written from the file's published layout and tested on files built for the tests. Brush files from other programs may still hold a variant it cannot read; it then says so and reads nothing.
 

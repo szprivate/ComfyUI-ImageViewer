@@ -253,8 +253,8 @@ class PaintEditor {
         this.selSegs = null;
         this.tool = "brush";
         this.opts = {
-            brush: { size: 24, hardness: 80, opacity: 100, spacing: 15, penSize: true, penOpacity: false, tip: null, angle: 0, scatter: 0, sizeJitter: 0, angleJitter: 0 },
-            eraser: { size: 40, hardness: 80, opacity: 100, spacing: 15, penSize: true, penOpacity: false, tip: null, angle: 0, scatter: 0, sizeJitter: 0, angleJitter: 0 },
+            brush: { size: 24, hardness: 80, opacity: 100, spacing: 15, penSize: true, penOpacity: false, tip: null, angle: 0, flow: false, scatter: 0, sizeJitter: 0, angleJitter: 0 },
+            eraser: { size: 40, hardness: 80, opacity: 100, spacing: 15, penSize: true, penOpacity: false, tip: null, angle: 0, flow: false, scatter: 0, sizeJitter: 0, angleJitter: 0 },
             clone: { size: 40, hardness: 60, opacity: 100, spacing: 10, penSize: true, penOpacity: false, aligned: true, sample: "layer",
                      overlay: true, angle: 0, scale: 100, flip: false },
             spot: { size: 30, hardness: 50, opacity: 100, spacing: 10, penSize: true, penOpacity: false },
@@ -2170,16 +2170,19 @@ class PaintEditor {
         this._tipInto(st, o);
         const pr = D.pressureOf(e.pointerType, e.pressure);
         st.last = [p.x, p.y, pr];
+        if (st.flow) { st.flow.ax = p.x; st.flow.ay = p.y; }
         st.carry = 0;
         st.touched = null;
         this._keepBelow(A);
         this._drag = { kind: "stroke", st };
-        this._dab(st, [[p.x, p.y, pr]]);
         if (e.shiftKey && this._lastStrokeEnd && this._lastStrokeEnd.L === A.id) {
-            // Shift-click: a straight line from where the last stroke ended.
+            // Shift-click: a straight line from where the last stroke ended (Flow: the tip along that line).
             const a = this._lastStrokeEnd;
+            if (st.flow) st.flow = D.flowTurn({ ax: a.x, ay: a.y, vx: null, vy: null, dir: null }, p.x, p.y, 0.5);
+            this._dab(st, [[p.x, p.y, pr]]);
             this._dab(st, D.pressureDabs(a.x, a.y, pr, p.x, p.y, pr, st.radius, st.spacing, 0, st.penSize).dabs);
-        }
+        } else if (st.flow) st.pending = [[p.x, p.y, pr]];      // Flow: the first dab waits until the stroke has a way
+        else this._dab(st, [[p.x, p.y, pr]]);
     }
 
     /** A brush or eraser stroke on Quick Mask (white adds to the selection, black takes away; the eraser the other way). */
@@ -2202,6 +2205,7 @@ class PaintEditor {
         this._tipInto(st, o);
         const pr = D.pressureOf(e.pointerType, e.pressure);
         st.last = [p.x, p.y, pr];
+        if (st.flow) { st.flow.ax = p.x; st.flow.ay = p.y; }
         st.carry = 0;
         st.touched = null;
         this._drag = { kind: "stroke", st };
@@ -2244,6 +2248,10 @@ class PaintEditor {
 
     _strokeTo(p, pr = 1) {
         const st = this._drag.st;
+        if (st.flow) {
+            st.flow = D.flowTurn(st.flow, p.x, p.y, Math.max(2, st.radius * 0.15));
+            if (st.pending && st.flow.dir != null) { const d = st.pending; st.pending = null; this._dab(st, d); }
+        }
         const [x0, y0, p0] = st.last;
         const r = D.pressureDabs(x0, y0, p0, p.x, p.y, pr, st.radius, st.spacing, st.carry, st.penSize);
         st.carry = r.carry;
@@ -2255,6 +2263,8 @@ class PaintEditor {
     _tipInto(st, o) {
         st.tip = o.tip && this.tips.get(o.tip) ? this.tips.get(o.tip) : null;
         st.tipAngle = ((o.angle || 0) * Math.PI) / 180;
+        // Flow: the tip turns with the way the stroke goes (Angle is then on top of that way).
+        st.flow = st.tip && o.flow ? { ax: 0, ay: 0, vx: null, vy: null, dir: null } : null;
         if (o.scatter || o.sizeJitter || o.angleJitter) {
             st.jit = { scatter: o.scatter, sizeJitter: o.sizeJitter, angleJitter: o.angleJitter };
             st.rand = D.seeded((Date.now() ^ Math.floor(Math.random() * 1e9)) >>> 0);
@@ -2268,8 +2278,9 @@ class PaintEditor {
             const r = Math.max(0.5, st.radius * k.r);
             if (st.smudge) { rect = rectUnion(rect, smudgeDab(st, x, y, r, st.hard, st.opacity * k.a)); continue; }
             const j = st.jit ? D.jitter(st.rand, r, st.jit) : null;
-            rect = j ? rectUnion(rect, D.stamp(st, x + j.dx, y + j.dy, Math.max(0.5, r * j.k), st.hard, k.a, (st.tipAngle || 0) + j.da))
-                     : rectUnion(rect, D.stamp(st, x, y, r, st.hard, k.a, st.tipAngle || 0));
+            const ang = (st.tipAngle || 0) + (st.flow && st.flow.dir != null ? st.flow.dir : 0);
+            rect = j ? rectUnion(rect, D.stamp(st, x + j.dx, y + j.dy, Math.max(0.5, r * j.k), st.hard, k.a, ang + j.da))
+                     : rectUnion(rect, D.stamp(st, x, y, r, st.hard, k.a, ang));
         }
         if (!rect) return;
         if (st.onMask) {
@@ -2283,6 +2294,7 @@ class PaintEditor {
     }
 
     _strokeEnd(s) {
+        if (s && s.pending) { const d = s.pending; s.pending = null; this._dab(s, d); }     // a click with Flow: the tip as it is
         this._dropBelow();
         if (!s || !s.touched) { this.redraw(); return; }
         const r = s.touched, lw = s.lw;
