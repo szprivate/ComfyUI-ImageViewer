@@ -154,6 +154,9 @@
 .main-area { flex: 1; display: flex; overflow: hidden; position: relative; width: 100%; }
 .viewport { flex: 1; background: #000; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; width: 100%; cursor: grab; min-width: 0; transform-origin: center center; }
 .viewport:active { cursor: grabbing; }
+/* A picture layer with nothing in it (the Edit tab playing a film leaves the <img> empty) draws nothing:
+   Chrome frames an empty <img> of a set size with a light border, which showed around the timeline viewer. */
+.viewport img.img-layer:not([src]), .viewport img.img-layer[src=""] { visibility: hidden; }
 .img-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; transform-origin: center; user-select: none; pointer-events: none; will-change: transform, clip-path; }
 #img-frame {
     position: absolute;
@@ -1231,9 +1234,15 @@ textarea.param-input {
 /* The Edit panel: the cut that lies beside a film (imageViewer_editTimeline.js).
    A dock panel like the curve editors, so the box and title bar are theirs. */
 .edit-body { display: flex; flex-direction: column; gap: 4px; flex: 1; min-height: 0; padding: 4px 8px 6px; box-sizing: border-box; }
-.edit-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.edit-sub { flex: 1; min-width: 80px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.edit-bar { display: flex; flex: none; align-items: center; gap: 4px; flex-wrap: nowrap; min-width: 0; overflow: hidden; }
+.edit-bar > * { flex: none; }
+/* A caret: the menu of the button before it (Resolve keeps the rarer edits in menus, not on its bar). */
+.edit-btn.edit-caret { padding: 2px 2px; margin-left: -4px; border-left-color: #333; border-top-left-radius: 0; border-bottom-left-radius: 0; font-size: 9px; color: #999; }
+.edit-tools-btn { display: inline-flex; align-items: center; gap: 1px; }
+.edit-caret-in { font-size: 9px; color: #999; }
+.edit-bar > .edit-sub { flex: 1 1 0; min-width: 0; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .edit-badge { font-size: 10px; color: #888; white-space: nowrap; }
+.edit-bar > .edit-badge { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .edit-badge.dirty { color: #ffcf6f; }
 .edit-btn { background: #2a2a2a; color: #ccc; border: 1px solid #444; border-radius: 3px; font-size: 11px; padding: 2px 7px; cursor: pointer; }
 .edit-btn:hover:not(:disabled) { border-color: #6cf; color: #fff; }
@@ -2045,6 +2054,10 @@ audio.src-media { width: 90%; }
 .src-head::before { content: "Source"; font-size: 10px; color: #00b8d4; text-transform: uppercase; letter-spacing: .06em; margin-right: 4px; }
 .src-hbtn { min-height: 0; width: 22px; height: 20px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 .src-hbtn .edit-icon { width: 13px; height: 13px; }
+/* The single / dual switch (and Q's swap): top right of the viewer that stands at the right. */
+.src-viewctl { display: inline-flex; gap: 3px; align-items: center; }
+.viewport > .src-viewctl { position: absolute; top: 8px; right: 8px; z-index: 60; }
+.viewport > .src-viewctl .src-hbtn { background: rgba(26,26,26,.85); }
 /* The Source viewer's edits in the timeline's bar. */
 .edit-srcedits { display: inline-flex; gap: 2px; align-items: center; flex: none; }
 .edit-srcedit:disabled { opacity: .35; }

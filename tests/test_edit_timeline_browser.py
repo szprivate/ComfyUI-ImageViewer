@@ -1751,10 +1751,9 @@ class EditTimelineBrowserTests(unittest.TestCase):
 
     ICONS = {"pick": ["M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z"],
              "blade": ["M5.42 9.42 8 12", "cx=4,cy=8,r=2", "m14 6-8.58 8.58", "cx=4,cy=16,r=2", "M10.8 14.8 14 18", "M16 12h-2", "M22 12h-2"],
-             "split": ["cx=6,cy=6,r=3", "M8.12 8.12 12 12", "M20 4 8.12 15.88", "cx=6,cy=18,r=3", "M14.8 14.8 20 20"],
              "trimBtn": ["x=9,y=9,width=6,height=6,rx=1", "M3 21h18", "M3 3h18"],
              "snap": ["m12 15 4 4", "M2.352 10.648a1.205 1.205 0 0 0 0 1.704l2.296 2.296a1.205 1.205 0 0 0 1.704 0l6.029-6.029a1 1 0 1 1 3 3l-6.029 6.029a1.205 1.205 0 0 0 0 1.704l2.296 2.296a1.205 1.205 0 0 0 1.704 0l6.365-6.367A1 1 0 0 0 8.716 4.282z", "m5 8 4 4"],
-             "beats": ["M2 10v3", "M6 6v11", "M10 3v18", "M14 8v7", "M18 5v13", "M22 10v3"],
+             "tools": ["m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72", "m14 7 3 3", "M5 6v4", "M19 14v4", "M10 2v2", "M7 8H3", "M21 16h-4", "M11 3H9"],
              "zoomOut": ["cx=11,cy=11,r=8", "x1=21,x2=16.65,y1=21,y2=16.65", "x1=8,x2=14,y1=11,y2=11"],
              "zoomIn": ["cx=11,cy=11,r=8", "x1=21,x2=16.65,y1=21,y2=16.65", "x1=11,x2=11,y1=8,y2=14", "x1=8,x2=14,y1=11,y2=11"],
              "zoomFit": ["M3 7V5a2 2 0 0 1 2-2h2", "M17 3h2a2 2 0 0 1 2 2v2", "M21 17v2a2 2 0 0 1-2 2h-2", "M7 21H5a2 2 0 0 1-2-2v-2", "cx=12,cy=12,r=3", "m16 16-1.9-1.9"]}
@@ -2224,7 +2223,7 @@ class EditTimelineBrowserTests(unittest.TestCase):
         pg = self.page()
         pg.evaluate(self.FAKE_AUDIO)
         pg.evaluate("() => __panel.editTlRefresh()")
-        ui = "() => { const u = __panel._editTlUi; return [u.audio.dataset.icon, u.audio.classList.contains('on'), u.scrubAudio.dataset.icon, u.scrubAudio.classList.contains('on')]; }"
+        ui = "() => { const u = __panel._editTlUi; return [u.audio.dataset.icon, u.audio.classList.contains('on'), 'scrub', (() => { const a = __panel._editAudio(); return a.scrub && a.play; })()]; }"
         self.assertEqual(pg.evaluate(ui), ["volume", True, "scrub", True])
         svg = pg.evaluate("() => { const s = __panel._editTlUi.audio.querySelector('svg'); return [s.getAttribute('stroke'), s.getAttribute('stroke-width'), s.getAttribute('viewBox')]; }")
         self.assertEqual(svg, ["currentColor", "2", "0 0 24 24"])

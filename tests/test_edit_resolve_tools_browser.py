@@ -313,6 +313,9 @@ class EditResolveToolsBrowserTests(Base):
         pg.wait_for_function("() => !!__panel.editMixerPanel.querySelector('.mix-body')", timeout=5000)
         # A place of its own: under the picture, right of the timeline (and a layout from before is moved there once).
         self.assertEqual(pg.evaluate("() => { const b = __panel.dockLayout.bottom.panels.map(p => p.id); return [__panel._dockSideOf('editMixer'), b.indexOf('editMixer') === b.indexOf('editTimeline') + 1]; }"), ["bottom", True])
+        # Its title bar (the dock's drag handle) survives every redraw of the strips.
+        title = "() => { const b = __panel.editMixerPanel.querySelector(':scope > .panel-titlebar'); return b ? b.querySelector('.pt-name').textContent : null; }"
+        self.assertEqual(pg.evaluate(title), "Mixer")
         moved = pg.evaluate("""() => { const P = __panel, L = P.dockLayout;
             const [m] = L.bottom.panels.splice(L.bottom.panels.findIndex(p => p.id === 'editMixer'), 1); L.right.panels.push(m);
             localStorage.removeItem('imageviewer.viewer.mixerBottom'); P.applyDockLayout();
@@ -368,6 +371,7 @@ class EditResolveToolsBrowserTests(Base):
         self.assertEqual(got, [True, "-6.0", True, "-60.0"])
         # Only on a cut's tab: the Mixer is one of the Edit panels.
         self.assertIn("editMixer", pg.evaluate("async () => (await import('/extensions/viewer/imageViewer_editTimeline.js')).EDIT_PANELS"))
+        self.assertEqual(pg.evaluate(title), "Mixer", "still there after the faders and switches redrew the strips")
         self.assertEqual(self.errors, [])
 
     # ── match frame ──
@@ -523,6 +527,112 @@ class EditResolveToolsBrowserTests(Base):
         pg.locator(".previz-menu-item", has_text="Decompose in place").first.click()
         pg.wait_for_function("() => __panel._editTlCut.clips.length === 3", timeout=5000)
         self.assertEqual(pg.evaluate(self.V1S), [["a", 0, 96], ["c", 0, 72], ["b", 24, 96]])
+        self.assertEqual(self.errors, [])
+
+    def test_the_bar_is_one_row_with_the_rarer_buttons_in_menus(self):
+        pg = self.page()
+        pg.set_viewport_size({"width": 1600, "height": 900})
+        pg.evaluate("() => { const P = __panel; P.editSrcToggle(true); if (!P.isPanelDocked('editMixer')) P.editTlPanelToggle('editMixer'); P.editTlRefresh(); }")
+        ui = "() => { const bar = __panel._editTlUi.body.querySelector('.edit-bar'); return [bar.getBoundingClientRect().height, bar.scrollWidth <= bar.clientWidth + 1]; }"
+        h, fits = pg.evaluate(ui)
+        self.assertLess(h, 40, "one row")
+        self.assertTrue(fits)
+        self.assertEqual(pg.evaluate("() => [...__panel._editTlUi.srcEdits.querySelectorAll('.edit-srcedit')].map((b) => b.dataset.edit)"),
+                         ["insert", "overwrite", "replace"])
+        menu = "() => [...__panel.shadowRoot.querySelectorAll('.previz-menu-item')].map((b) => b.textContent.trim())"
+        pg.evaluate("() => __panel._editTlUi.tools.click()")
+        items = pg.evaluate(menu)
+        for want in ("Split at the playhead (Ctrl+B, S)", "Auto edit\u2026", "Detect cuts", "Undo (Ctrl+Z)", "Redo (Ctrl+Shift+Z)"):
+            self.assertIn(want, items)
+        # The cut tools work from there: Split cuts the shot under the playhead, one undo step.
+        n = len(pg.evaluate("() => __panel._editTlCut.clips"))
+        pg.evaluate("() => __panel.setFrame(30)")
+        pg.evaluate("() => __panel._editTlUi.tools.click()")
+        pg.locator(".previz-menu-item", has_text="Split at the playhead").first.click()
+        self.assertEqual(len(pg.evaluate("() => __panel._editTlCut.clips")), n + 1)
+        pg.evaluate("() => __panel._editTlUi.body.querySelector('.edit-src-more').click()")
+        items = pg.evaluate(menu)
+        for want in ("Place on top (F12)", "Ripple overwrite (Shift+F10)", "Fit to fill (Shift+F11)", "Append at end (Shift+F12)"):
+            self.assertIn(want, items)
+        pg.locator(".previz-menu-item", has_text="Single viewer").first.click()
+        self.assertEqual(pg.evaluate("() => __panel._editSrcViewer().mode"), "single")
+        pg.evaluate("() => __panel.editSrcViewerMode('dual')")
+        # Snapping to beats and audio scrubbing are ticks in the menus of their buttons.
+        pg.evaluate("() => __panel._editTlUi.body.querySelector('.edit-snap-more').click()")
+        pg.locator(".previz-menu-item", has_text="Snap to the beats").first.click()
+        self.assertTrue(pg.evaluate("() => !!__panel._editTlView.snapBeats"))
+        scrub = pg.evaluate("() => __panel._editAudio().scrub")
+        pg.evaluate("() => __panel._editTlUi.body.querySelector('.edit-audio-more').click()")
+        pg.locator(".previz-menu-item", has_text="Audio scrubbing").first.click()
+        self.assertEqual(pg.evaluate("() => __panel._editAudio().scrub"), not scrub)
+        pg.evaluate("() => localStorage.removeItem('imageviewer.viewer.editAudio')")
+        self.assertEqual(self.errors, [])
+
+    def test_history_clicks_and_drops_from_history_browser_and_canvas_load_the_source_viewer(self):
+        pg = self.page()
+        pg.evaluate("() => { const P = __panel; try { localStorage.removeItem('imageviewer.viewer.editSource'); } catch (_) {} P._editSrc = undefined; P.editSrcViewerMode('dual'); P.editSrcToggle(false); P.editTlRefresh(); }")
+        src = "() => __panel._editSrc ? __panel._editSrc.file : null"
+        tab = pg.evaluate("() => __panel.activeTab")
+        # A plain click on a History thumbnail on the cut's tab: into the Source viewer (opened for it), the cut stays up.
+        pg.evaluate("""() => { const P = __panel;
+            P.pushHistorySnapshot('viewer', [{ filename: 'hist.png', type: 'output', subfolder: '', kind: 'image' }]);
+            P._historyPanelSig = null; P.renderHistoryPanel();
+            const t = P.historyStrip.querySelector('[data-idx="0"]'); t.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })); }""")
+        pg.wait_for_function("() => __panel._editSrc && __panel._editSrc.file === 'D:/out/hist.png'", timeout=5000)
+        self.assertEqual(pg.evaluate("() => [__panel.activeTab, __panel._editSrcUp()]"), [tab, True])
+        # Ctrl+click only adds to the selection.
+        pg.evaluate("""() => { const P = __panel; P._editSrc = null;
+            P.historyStrip.querySelector('[data-idx="0"]').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1, ctrlKey: true })); }""")
+        pg.wait_for_timeout(200)
+        self.assertIsNone(pg.evaluate(src))
+        # A file browser row dropped on it (the same payload as a History thumbnail).
+        drop = """([items]) => { const b = __panel.editSourcePanel.querySelector('.src-body'); const dt = new DataTransfer();
+            dt.setData('application/x-imageviewer-history', JSON.stringify({ items }));
+            b.dispatchEvent(new DragEvent('drop', { bubbles: true, composed: true, cancelable: true, dataTransfer: dt })); }"""
+        pg.evaluate(drop, [[{"path": "D:/pics/browser.jpg", "filename": "browser.jpg", "kind": "image", "external": True}]])
+        pg.wait_for_function("() => __panel._editSrc && __panel._editSrc.file === 'D:/pics/browser.jpg'", timeout=5000)
+        # A node dragged off the canvas and let go over it: its media, the node put back, the cut untouched.
+        before = pg.evaluate("() => JSON.stringify(__panel._editTlCut)")
+        pg.evaluate("""async () => { const { app } = await import('/scripts/app.js');
+            const cv = document.createElement('canvas'); Object.assign(cv.style, { position: 'fixed', left: '0', top: '0', width: '10px', height: '10px' });
+            document.body.append(cv); app.canvas.canvas = cv;
+            const node = { id: 7, type: 'LoadImage', title: 'Load Image', pos: [10, 10], widgets: [{ name: 'image', value: 'house.png', type: 'combo' }], inputs: [], outputs: [] };
+            window.__node = node; app.canvas.node_over = node; app.canvas.selected_nodes = {};
+            __panel._editTlCanvasBound = false; __panel._editTlWatchCanvas(); }""")
+        x, y = pg.evaluate("() => { const r = __panel.editSourcePanel.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }")
+        pg.evaluate("""([x, y]) => { const cv = document.querySelector('body > canvas');
+            cv.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: 3, clientY: 3 }));
+            __node.pos = [300, 300];
+            document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, clientX: x, clientY: y })); }""", [x, y])
+        pg.wait_for_function("() => __panel._editSrc && __panel._editSrc.file === 'D:/in/house.png'", timeout=5000)
+        self.assertEqual(pg.evaluate("() => __node.pos"), [10, 10])
+        self.assertEqual(pg.evaluate("() => JSON.stringify(__panel._editTlCut)"), before)
+        self.assertEqual(self.errors, [])
+
+    def test_the_viewer_switch_stays_at_the_right_in_every_layout_and_no_frame_on_the_timeline_viewer(self):
+        pg = self.page()
+        pg.evaluate("() => { const P = __panel; P.editSrcViewerMode('dual'); P.editSrcToggle(true); P.editTlRefresh(); }")
+        where = """() => { const P = __panel, c = P._editSrcCtl, vp = P.viewport, home = c && c.parentNode;
+            const r = c.getBoundingClientRect(), v = (home === vp ? vp : P.editSourcePanel).getBoundingClientRect();
+            return [home === vp ? 'timeline' : home && home.classList.contains('src-head') ? 'source' : null,
+                    Math.round(v.right - r.right) <= 40, [...c.children].filter(b => getComputedStyle(b).display !== 'none').map(b => b.classList[2])]; }"""
+        # Dual: on the timeline viewer, the right one, at its top right.
+        self.assertEqual(pg.evaluate(where), ["timeline", True, ["src-mode"]])
+        # Single showing the source: the timeline viewer is gone, so it is in the source's head, at its right (beside its close button).
+        pg.evaluate("() => __panel._editSrcCtl.querySelector('.src-mode').click()")
+        self.assertEqual(pg.evaluate("() => [__panel._editSrcViewer().mode, __panel._editSrcViewer().show]"), ["single", "source"])
+        self.assertEqual(pg.evaluate(where), ["source", True, ["src-swap", "src-mode"]])
+        # Q: single showing the timeline - the switch is still there, on the timeline viewer.
+        pg.evaluate("() => __panel._editSrcCtl.querySelector('.src-swap').click()")
+        self.assertEqual(pg.evaluate("() => __panel._editSrcViewer().show"), "timeline")
+        self.assertEqual(pg.evaluate(where), ["timeline", True, ["src-swap", "src-mode"]])
+        pg.evaluate("() => __panel._editSrcCtl.querySelector('.src-mode').click()")
+        self.assertEqual(pg.evaluate("() => __panel._editSrcViewer().mode"), "dual")
+        # Off the cut's tab, or with the Source viewer put away, it is gone.
+        pg.evaluate("() => __panel.editSrcToggle(false)")
+        self.assertIsNone(pg.evaluate("() => __panel._editSrcCtl.parentNode"))
+        # The empty picture layer draws nothing (Chrome framed it in light grey round the timeline viewer).
+        self.assertEqual(pg.evaluate("() => { const i = __panel.imgBase; i.removeAttribute('src'); return getComputedStyle(i).visibility; }"), "hidden")
         self.assertEqual(self.errors, [])
 
 if __name__ == "__main__":
