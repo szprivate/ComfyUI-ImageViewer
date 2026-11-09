@@ -1975,3 +1975,17 @@ textarea.param-input {
 .dp-prompt-text { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 6px 5px; color: #dde3ec; font-size: 11px; line-height: 1.35;
     white-space: pre-wrap; word-break: break-word; user-select: text; cursor: text; }
 .dp-bar .dp-prompts-btn.active { border-color: #6b7f9a; color: #cfe0ff; }
+/* Markers (imageViewer_editMarkers.js): on the ruler, and small flags along the top of a clip. */
+.edit-markers { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
+.edit-marker { position: absolute; bottom: 0; width: 9px; height: 9px; margin-left: -4.5px; pointer-events: auto; cursor: pointer;
+    background: var(--mk, #3d8bff); clip-path: polygon(0 0, 100% 0, 100% 55%, 50% 100%, 0 55%); }
+.edit-marker.span { margin-left: 0; height: 5px; clip-path: none; border-radius: 1px; opacity: .85; min-width: 4px; }
+.edit-marker.sel, .edit-cmarker.sel { outline: 1px solid #fff; outline-offset: 0; filter: brightness(1.25); }
+.edit-cmarker { position: absolute; top: 0; width: 7px; height: 7px; margin-left: -3.5px; z-index: 4; cursor: pointer;
+    background: var(--mk, #3d8bff); clip-path: polygon(0 0, 100% 0, 50% 100%); }
+.edit-cmarker.span { margin-left: 0; height: 3px; clip-path: none; min-width: 3px; }
+.edit-markerdlg { width: 300px; }
+.edit-markerrow { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 11px; color: #bbb; }
+.edit-markerrow > span { width: 110px; flex: none; }
+.edit-markerin { flex: 1; min-width: 0; background: #111; color: #ddd; border: 1px solid #444; border-radius: 2px; font-size: 11px; padding: 2px 4px; }
+.edit-markerdlg .edit-brief { min-height: 54px; }

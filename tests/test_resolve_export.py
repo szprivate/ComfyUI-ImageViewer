@@ -401,6 +401,25 @@ class Generator(unittest.TestCase):
         self.assertEqual(len(m["files"]), 1, "only what the range uses is copied")
         self.assertEqual(T(root.find(".//spine/asset-clip").get("start")), Fraction(12, 24))
 
+    def test_markers_are_markers_of_the_v1_element_they_lie_in(self):
+        edit = {"clips": [clip("a.mp4", 2), clip("b.mp4", 2, start=1, markers=[{"src": 1.5, "len": 0, "name": "clip m", "note": "", "color": "red"}])],
+                "texts": [], "markers": [{"t": 0.5, "len": 0.25, "name": "first", "note": "a <note>", "color": "green"},
+                                         {"t": 3, "len": 0, "name": "", "note": "", "color": "blue"}]}
+        import copy
+        m, root, xml, _p = self.make(copy.deepcopy(edit), {"a.mp4": film(), "b.mp4": film()})
+        self.check_whole(m, root, Fraction(24))
+        a, b = root.findall(".//spine/asset-clip")
+        ma = a.findall("marker")
+        self.assertEqual([(T(x.get("start")), T(x.get("duration")), x.get("value"), x.get("note")) for x in ma],
+                         [(Fraction(1, 2), Fraction(1, 4), "first", "a <note>")])
+        mb = sorted(((T(x.get("start")), x.get("value")) for x in b.findall("marker")))
+        # On b's own timeline, which starts at its in point (1 s): film 2.5 s is b's 1.5 s, film 3 s its 2 s.
+        self.assertEqual(mb, [(Fraction(3, 2), "clip m"), (Fraction(2), "Marker")])
+        self.assertTrue(all(T(x.get("duration")) > 0 for x in root.iter("marker")))
+        # In-out only: shifted, and the ones outside left out.
+        m2, root2, _x, _p = self.make(edit, {"a.mp4": film(), "b.mp4": film()}, frames=[24, 95])
+        self.assertEqual(sorted(x.get("value") for x in root2.iter("marker")), ["Marker", "clip m"])
+
     def test_a_missing_file_leaves_a_gap_and_is_named(self):
         m, root, _x, _p = self.make({"clips": [clip("a.mp4", 2), clip("b.mp4", 2), clip("c.mp4", 2, transition=0.5)], "texts": []},
                                     {"a.mp4": film(), "c.mp4": film()})
