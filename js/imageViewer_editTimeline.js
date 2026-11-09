@@ -106,7 +106,7 @@ const EFFECT_TYPE = "application/x-imageviewer-effect";      // an item of the E
 const AFX_DRAG = "application/x-imageviewer-afx";            // a sound effect of the Effects panel, dragged (imageViewer_editAfx.js)
 const PREFIX = "edit:";                       // an Edit tab's key (EditPlayMixin.isEditTab)
 // The three panels that belong to a cut. They are up only while a cut's tab is.
-export const EDIT_PANELS = ["editTimeline", "editInspector", "editEffects", "editMixer"];
+export const EDIT_PANELS = ["editTimeline", "editInspector", "editEffects", "editMixer", "editSource"];
 const PANELS_STORE = "imageviewer.viewer.editPanels";
 // Tall enough for a filmstrip with the sound under it, and for a waveform.
 export const ROW_HEIGHT = { text: 16, video: 44, audio: 30 };
@@ -156,7 +156,7 @@ export const EditTimelineMixin = {
         if (this._editTlWantedNow) return this._editTlWantedNow;
         let kept = null;
         try { kept = JSON.parse(window.localStorage.getItem(PANELS_STORE) || "null"); } catch (_) {}
-        this._editTlWantedNow = { editTimeline: true, editInspector: true, editEffects: false, editMixer: false,
+        this._editTlWantedNow = { editTimeline: true, editInspector: true, editEffects: false, editMixer: false, editSource: false,
                                   ...((kept && typeof kept === "object") ? kept : {}) };
         return this._editTlWantedNow;
     },
@@ -1267,7 +1267,15 @@ export const EditTimelineMixin = {
             entries.push({ label: "Split at the playhead", disabled: !this._editTlOnScreen(), run: () => this.editTlSplitAtPlayhead() });
             const off = !!(D.clipOf(this._editTlCut, sel) || {}).disabled;
             entries.push({ label: off ? "Enable clip (D)" : "Disable clip (D)", run: () => this.editTlDisableToggle() });
-            if (clip && clip.file && !clip.title) entries.push({ label: "Match frame (F)", disabled: !this._editTlMatchAt(), run: () => this.editTlMatchFrame() });
+            if (clip && clip.file && !clip.title) {
+                entries.push({ label: "Match frame (F)", disabled: !this._editTlMatchAt(), run: () => this.editTlMatchFrame() });
+                entries.push({ label: "Open in Source viewer", run: () => {
+                    const span = D.selSpan(this._editTlCut, sel), fps = this._editTlCut.fps || 24;
+                    const head = ((Number(this.currentFrame) || 0) + 0.5) / fps;
+                    const u = span && head >= span.start && head < span.end ? head - span.start : 0;
+                    this.editSrcLoad({ path: clip.file, name: clip.name }, D.isStillClip(clip) ? 0 : D.srcLocal(clip, u));
+                } });
+            }
             if (clip && !D.isStillClip(clip)) {
                 const m = D.motionOf(clip);
                 entries.push({ label: (m === "freeze" ? "\u2713 " : "") + "Freeze frame", run: () => this.editTlMotion(sel, "freeze") },

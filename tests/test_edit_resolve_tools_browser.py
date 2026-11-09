@@ -391,5 +391,64 @@ class EditResolveToolsBrowserTests(Base):
         self.assertEqual(pg.evaluate("() => [window.__opened[1], window.__sought.length]"), ["D:/out/c.png", 1])
         self.assertEqual(self.errors, [])
 
+    # ── the source viewer ──
+
+    V1S = "() => { const c = __panel._editTlCut; return c.clips.map((x, i) => [x.name, Math.round(x.in * 24), Math.round(x.length * 24)]); }"
+
+    def test_the_source_viewer_three_point_edits_and_match_frame_both_ways(self):
+        # V1: a 0-96 (a film, in 0), c 96-168 (a still), b 168-264 (in 1).
+        pg = self.page()
+        pg.evaluate("() => { const P = __panel; try { localStorage.removeItem('imageviewer.viewer.editSource'); } catch (_) {} P._editSrc = undefined; if (!P.isPanelDocked('editSource')) P.editTlPanelToggle('editSource'); P.editTlRefresh(); }")
+        pg.wait_for_function("() => !!__panel.editSourcePanel.querySelector('.src-body.empty')", timeout=5000)
+        # Loaded at 2 s of b, marked 1 s .. 2 s (its out frame counted in).
+        pg.evaluate("async () => { const P = __panel; await P.editSrcLoad({ path: 'D:/out/b.mp4', name: 'src' }, 2); }")
+        self.assertEqual(pg.evaluate("() => __panel.editSourcePanel.querySelector('.src-body').dataset.head"), "48")
+        pg.evaluate("() => { const P = __panel; P.editSrcSeek(1); P.editSrcMark('in'); P.editSrcSeek(2 - 1 / 24); P.editSrcMark('out'); }")
+        self.assertEqual(pg.evaluate("() => [__panel._editSrc.in, __panel._editSrc.out]"), [1, 2])
+        self.assertIn("(24 fr)", pg.evaluate("() => __panel.editSourcePanel.querySelector('.src-tc').textContent"))
+        # F10 on the timeline at 2 s: overwrite, one step, the playhead after it.
+        n = self.undo_len(pg)
+        self.focus_timeline(pg)
+        pg.evaluate("() => { __panel._editTlSel = null; __panel.setFrame(48); }")
+        pg.keyboard.press("F10")
+        self.assertEqual(pg.evaluate(self.V1S), [["a", 0, 48], ["src", 24, 24], ["a", 72, 24], ["c", 0, 72], ["b", 24, 96]])
+        self.assertEqual(self.undo_len(pg), n + 1)
+        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), 72)
+        # Insert from the button: at the playhead (72), what follows moves on.
+        pg.evaluate("() => __panel.editSourcePanel.querySelector('[data-edit=insert]').click()")
+        self.assertEqual(pg.evaluate(self.V1S)[:4], [["a", 0, 48], ["src", 24, 24], ["src", 24, 24], ["a", 72, 24]])
+        pg.evaluate("() => __panel.editTlUndo()")
+        # A timeline range and one source point: the range's length (three points). Ripple overwrite: the shot replaced.
+        pg.evaluate("() => { const P = __panel; P.editSrcMark(null); P.editSrcSeek(3); P.editSrcMark('in'); P.setFrame(200); }")
+        pg.evaluate("() => __panel.editSrcEdit('ripple')")
+        self.assertEqual(pg.evaluate(self.V1S)[-1], ["src", 72, 48], "no range: from the in to the source's end (5 s)")
+        pg.evaluate("() => __panel.editTlUndo()")
+        # Fit to fill: the source's 1 s .. 3 s retimed into a 1 s range.
+        pg.evaluate("() => { const P = __panel; P.editSrcSeek(1); P.editSrcMark('in'); P.editSrcSeek(3 - 1 / 24); P.editSrcMark('out'); P._editTlSetRange({ start: 0, end: 23 }); }")
+        self.assertTrue(pg.evaluate("() => __panel.editSrcEdit('fit')"))
+        self.assertEqual(pg.evaluate("() => { const c = __panel._editTlCut.clips[0]; return [c.name, c.length, c.speed]; }"), ["src", 1, 2])
+        pg.evaluate("() => { __panel.editTlUndo(); __panel._editTlSetRange(null); }")
+        # Place on top: on V2 (free there).
+        pg.evaluate("() => { __panel.setFrame(24); __panel.editSrcEdit('place'); }")
+        self.assertEqual(pg.evaluate("() => __panel._editTlCut.tracks.find(t => t.id === 'V2').clips.map(c => [c.name, Math.round(c.at * 24), Math.round(c.length * 24)])"), [["src", 24, 48]])
+        pg.evaluate("() => __panel.editTlUndo()")
+        # Reverse match frame (Shift+F): the source's frame at 1.5 s is first shown by the clip F10 laid at 2 s (in 1): frame 48 + 12.
+        pg.evaluate("() => { const P = __panel; P.editSrcSeek(1.5); P.setFrame(0); }")
+        self.focus_timeline(pg)
+        pg.keyboard.press("Shift+F")
+        self.assertEqual(pg.evaluate("() => [__panel.currentFrame, __panel._editTlSel]"), [60, {"kind": "clip", "i": 1}])
+        # Match frame (F) with the Source viewer up loads it there, on the frame.
+        pg.evaluate("() => { __panel._editTlSel = null; __panel.setFrame(30); }")
+        pg.keyboard.press("f")
+        pg.wait_for_function("() => __panel._editSrc && __panel._editSrc.file === 'D:/out/a.mp4'", timeout=5000)
+        self.assertEqual(pg.evaluate("() => [Math.round(__panel._editSrc.head * 24), __panel._editSrc.in, __panel.activeTab.startsWith('edit:')]"), [30, None, True])
+        # A drop of a History thumbnail loads it.
+        pg.evaluate("""() => { const body = __panel.editSourcePanel.querySelector('.src-body'), dt = new DataTransfer();
+            dt.setData('application/x-imageviewer-history', JSON.stringify({ items: [{ path: 'D:/out/c.png', name: 'c' }] }));
+            body.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true })); }""")
+        pg.wait_for_function("() => __panel._editSrc && __panel._editSrc.file === 'D:/out/c.png'", timeout=5000)
+        self.assertTrue(pg.evaluate("() => !!__panel.editSourcePanel.querySelector('img.src-media')"))
+        self.assertEqual(self.errors, [])
+
 if __name__ == "__main__":
     unittest.main()

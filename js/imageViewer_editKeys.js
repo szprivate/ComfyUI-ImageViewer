@@ -52,6 +52,7 @@
 // what says where it happened, since the panel lives in a shadow root (where a
 // document listener only ever sees the host) or in another window.
 import * as D from "./imageViewer_editTimelineData.js";
+import { sourceEditKey } from "./imageViewer_editSource.js";
 
 export const EDIT_KEYS = [
     ["?", "This list (the viewer's Show Hotkeys button too)"],
@@ -81,6 +82,8 @@ export const EDIT_KEYS = [
     ["Inspector diamond \u25c7", "Keyframe the row at the playhead (filled: a key here); \u25c2 \u25b8 the key before / after; once animated, a change makes a key by itself; right-click: ease; its reset takes the keys too"],
     ["Keyframe marks on the selected clip", "Drag along the clip to move a key (snaps to frames and the playhead); click + Del takes it away; right-click: linear / ease in / ease out / ease in-out / hold"],
     ["D", "Disable / enable the selected clips (and their linked sound or picture): dimmed, not seen, not heard, not rendered - the track under shows"],
+    ["Shift+F", "Reverse match frame: the playhead to where the cut shows the Source viewer's frame"],
+    ["F9 / F10 / F11 / F12", "Source viewer: insert / overwrite / replace / place on top, with the source's in-out and the timeline's (three-point editing). Shift+F10 ripple overwrite, Shift+F11 fit to fill, Shift+F12 append at the end"],
     ["F", "Match frame: open the source of the clip under the playhead (the selected one when the playhead is in it, else the picture on top) in the Viewer tab, on the frame the cut shows"],
     ["Ctrl+Alt+L", "Unlink a film's sound onto a sound track / relink it, from either part (the offset stays; right-click: Resync, Merge audio back into clip)"],
     ["M", "A marker at the playhead: on the selected clip when the playhead is inside it (it rides with the picture), else on the timeline; M on a marker opens it"],
@@ -154,7 +157,9 @@ export const EditKeysMixin = {
         const comma = e.code === "Comma" || key === "," || key === "<";
         const period = e.code === "Period" || key === "." || key === ">";
         let done = true;
-        if (alt && ctrl && letter === "l") this.editTlLinkToggle();
+        const srcEdit = !ctrl && !alt ? sourceEditKey(key, shift) : "";
+        if (srcEdit && this.editSrcEdit) this.editSrcEdit(srcEdit);
+        else if (alt && ctrl && letter === "l") this.editTlLinkToggle();
         else if (alt && !ctrl) {
             if (letter === "x") this._editTlSetRange(null);
             else if (letter === "m" && !shift) this.editTlMarkerDeleteHere();
@@ -194,6 +199,7 @@ export const EditKeysMixin = {
         else if (letter === "e" && !shift) this.editTlExtendEdit();
         else if (letter === "d" && !shift) this.editTlDisableToggle();
         else if (letter === "f" && !shift && this.editTlMatchFrame) this.editTlMatchFrame();
+        else if (letter === "f" && shift && this.editSrcMatchBack) this.editSrcMatchBack();
         else if (letter === "y") this.editTlSelectForward(shift ? -1 : 1, false);
         else if (low === "z" && shift) this._editTlZoom(1);
         else if (low === "s" && !shift) this.editTlSplitAtPlayhead();

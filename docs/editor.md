@@ -47,11 +47,38 @@ The middle of a cut rolls it in both modes. Double-click a cut (either side of i
 | Delete, leaving a gap / closing it | <kbd>Del</kbd> / <kbd>Shift</kbd>+<kbd>Del</kbd> |
 | Switch a clip off | <kbd>D</kbd> |
 | See the source of the frame under the playhead (match frame) | <kbd>F</kbd>, or right-click › Match frame |
+| Go from the Source viewer's frame to where the cut shows it | <kbd>Shift</kbd>+<kbd>F</kbd> |
 | Retime a clip | <kbd>Alt</kbd>+drag an edge |
 | Loop a clip longer than its source | <kbd>Ctrl</kbd>+drag its out edge |
 | Set in / out | <kbd>I</kbd> / <kbd>O</kbd>, or <kbd>X</kbd> around the clip |
 | Copy a clip's look onto others | <kbd>Ctrl</kbd>+<kbd>C</kbd>, then <kbd>Alt</kbd>+<kbd>V</kbd> (Paste Attributes) |
 | Undo / redo | <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> |
+
+## The Source viewer
+
+Timeline › Source opens a second viewer for one source clip, like Resolve's source monitor. Drop a clip from the History or the file browser onto it, or right-click a clip on the timeline › Open in Source viewer. While the Source viewer is open, <kbd>F</kbd> (match frame) loads the clip there instead of opening it in the Viewer tab.
+
+Click the Source viewer to give it the keys. Then:
+- <kbd>Space</kbd> plays the source.
+- The arrow keys step through it.
+- <kbd>I</kbd> and <kbd>O</kbd> mark its in and out.
+- <kbd>Alt</kbd>+<kbd>X</kbd> clears both marks.
+
+To bring the marked part into the cut, use the buttons, or these keys from the timeline or the Source viewer:
+
+| Edit | Key | What it does |
+|---|---|---|
+| Insert | <kbd>F9</kbd> | puts it in at the playhead; what follows moves on |
+| Overwrite | <kbd>F10</kbd> | lays it over what is there |
+| Replace | <kbd>F11</kbd> | swaps the clip under the playhead for the source, at the clip's length, so that the two playheads show the same frame |
+| Place on top | <kbd>F12</kbd> | puts it on the first video track above that is free there |
+| Ripple overwrite | <kbd>Shift</kbd>+<kbd>F10</kbd> | swaps the shot under the playhead for the marked part; what follows moves by the difference |
+| Fit to fill | <kbd>Shift</kbd>+<kbd>F11</kbd> | retimes the marked part to fill the timeline's in-out range |
+| Append at end | <kbd>Shift</kbd>+<kbd>F12</kbd> | adds it after the last shot |
+
+This is three-point editing. Of the source's in and out and the timeline's in and out, set any three and the fourth follows. With no timeline in, the playhead counts as one. The menu in front of the buttons sets the track the clip goes to. A sound file goes to a sound track.
+
+Some browsers keep <kbd>F11</kbd> for full screen. If yours does, use the buttons.
 
 ## Markers
 
