@@ -83,6 +83,7 @@ export const EDIT_KEYS = [
     ["Keyframe marks on the selected clip", "Drag along the clip to move a key (snaps to frames and the playhead); click + Del takes it away; right-click: linear / ease in / ease out / ease in-out / hold"],
     ["D", "Disable / enable the selected clips (and their linked sound or picture): dimmed, not seen, not heard, not rendered - the track under shows"],
     ["Shift+F", "Reverse match frame: the playhead to where the cut shows the Source viewer's frame"],
+    ["Q", "Source viewer: in a single viewer, show the source or the timeline (the bar switches single / dual)"],
     ["F9 / F10 / F11 / F12", "Source viewer: insert / overwrite / replace / place on top, with the source's in-out and the timeline's (three-point editing). Shift+F10 ripple overwrite, Shift+F11 fit to fill, Shift+F12 append at the end"],
     ["F", "Match frame: open the source of the clip under the playhead (the selected one when the playhead is in it, else the picture on top) in the Viewer tab, on the frame the cut shows"],
     ["Ctrl+Alt+L", "Unlink a film's sound onto a sound track / relink it, from either part (the offset stays; right-click: Resync, Merge audio back into clip)"],
@@ -201,6 +202,7 @@ export const EditKeysMixin = {
         else if (letter === "f" && !shift && this.editTlMatchFrame) this.editTlMatchFrame();
         else if (letter === "f" && shift && this.editSrcMatchBack) this.editSrcMatchBack();
         else if (letter === "y") this.editTlSelectForward(shift ? -1 : 1, false);
+        else if (letter === "q" && !shift && this.editSrcSwap) this.editSrcSwap();
         else if (low === "z" && shift) this._editTlZoom(1);
         else if (low === "s" && !shift) this.editTlSplitAtPlayhead();
         else if (key === "?") this.toggleHelpOverlay();

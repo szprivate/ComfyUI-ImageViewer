@@ -697,7 +697,7 @@ class ViewerPanel extends HTMLElement {
             this.editTimelinePanel = ep;
         }
         // Its two companions (imageViewer_editPanels.js), made the same way.
-        for (const [prop, id] of [["editInspectorPanel", "edit-inspector-panel"], ["editEffectsPanel", "edit-effects-panel"], ["editMixerPanel", "edit-mixer-panel"], ["editSourcePanel", "edit-source-panel"]]) {
+        for (const [prop, id] of [["editInspectorPanel", "edit-inspector-panel"], ["editEffectsPanel", "edit-effects-panel"], ["editMixerPanel", "edit-mixer-panel"]]) {
             this[prop] = sr.getElementById(id);
             if (!this[prop] && this.curvesPanel && this.curvesPanel.parentNode) {
                 const panel = this.curvesPanel.ownerDocument.createElement('div');
@@ -706,6 +706,18 @@ class ViewerPanel extends HTMLElement {
                 this.curvesPanel.parentNode.insertBefore(panel, this.curvesPanel.nextSibling);
                 this[prop] = panel;
             }
+        }
+        // The Source viewer (imageViewer_editSource.js) is no dock panel: it stands in the main area, left of
+        // the picture, as Resolve's source monitor beside its timeline viewer.
+        this.editSourcePanel = sr.getElementById('edit-source-panel');
+        const vpEl = sr.getElementById('viewport');
+        if (!this.editSourcePanel && vpEl && vpEl.parentNode) {
+            const sm = vpEl.ownerDocument.createElement('div');
+            sm.id = 'edit-source-panel';
+            sm.className = 'src-monitor';
+            sm.style.display = 'none';
+            vpEl.parentNode.insertBefore(sm, vpEl);
+            this.editSourcePanel = sm;
         }
         if (!this.rotoCurvesPanel && this.curvesPanel && this.curvesPanel.parentNode) {
             const rc = this.curvesPanel.ownerDocument.createElement('div');

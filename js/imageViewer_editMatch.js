@@ -26,7 +26,7 @@ export const EditMatchMixin = {
         const hit = this._editTlMatchAt();
         if (!hit) { this._editTlSay("nothing to match here: no clip with a file under the playhead"); return null; }
         // The Source viewer up: there, as Resolve's match frame loads its source monitor.
-        if (this._editSrcUp && this._editSrcUp() && this.editSrcLoad) {
+        if (this._editSrcOn && this._editSrcOn() && this.editSrcLoad) {
             await this.editSrcLoad({ path: hit.file, name: hit.name }, hit.src);
             return hit;
         }

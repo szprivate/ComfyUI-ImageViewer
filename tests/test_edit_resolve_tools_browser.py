@@ -311,6 +311,14 @@ class EditResolveToolsBrowserTests(Base):
         pg = self.page()
         pg.evaluate("() => { const P = __panel; if (!P.isPanelDocked('editMixer')) P.editTlPanelToggle('editMixer'); P.editTlRefresh(); }")
         pg.wait_for_function("() => !!__panel.editMixerPanel.querySelector('.mix-body')", timeout=5000)
+        # A place of its own: under the picture, right of the timeline (and a layout from before is moved there once).
+        self.assertEqual(pg.evaluate("() => { const b = __panel.dockLayout.bottom.panels.map(p => p.id); return [__panel._dockSideOf('editMixer'), b.indexOf('editMixer') === b.indexOf('editTimeline') + 1]; }"), ["bottom", True])
+        moved = pg.evaluate("""() => { const P = __panel, L = P.dockLayout;
+            const [m] = L.bottom.panels.splice(L.bottom.panels.findIndex(p => p.id === 'editMixer'), 1); L.right.panels.push(m);
+            localStorage.removeItem('imageviewer.viewer.mixerBottom'); P.applyDockLayout();
+            const again = (L.right.panels.push(L.bottom.panels.splice(L.bottom.panels.findIndex(p => p.id === 'editMixer'), 1)[0]), P.applyDockLayout(), P._dockSideOf('editMixer'));
+            P.dockPanelTo('editMixer', 'bottom'); return again; }""")
+        self.assertEqual(moved, "right", "moved once; after that where the user puts it")
         strips = pg.evaluate("() => [...__panel.editMixerPanel.querySelectorAll('.mix-strip')].map(s => [s.dataset.track, !!s.querySelector('.mix-fader')])")
         self.assertEqual(strips, [["V1", False], ["A1", True], ["A2", True], ["master", False]])
         self.assertTrue(pg.evaluate("() => __panel._editMixOn()"))
@@ -398,7 +406,7 @@ class EditResolveToolsBrowserTests(Base):
     def test_the_source_viewer_three_point_edits_and_match_frame_both_ways(self):
         # V1: a 0-96 (a film, in 0), c 96-168 (a still), b 168-264 (in 1).
         pg = self.page()
-        pg.evaluate("() => { const P = __panel; try { localStorage.removeItem('imageviewer.viewer.editSource'); } catch (_) {} P._editSrc = undefined; if (!P.isPanelDocked('editSource')) P.editTlPanelToggle('editSource'); P.editTlRefresh(); }")
+        pg.evaluate("() => { const P = __panel; try { localStorage.removeItem('imageviewer.viewer.editSource'); } catch (_) {} P._editSrc = undefined; P.editSrcViewerMode('dual'); P.editSrcToggle(true); P.editTlRefresh(); }")
         pg.wait_for_function("() => !!__panel.editSourcePanel.querySelector('.src-body.empty')", timeout=5000)
         # Loaded at 2 s of b, marked 1 s .. 2 s (its out frame counted in).
         pg.evaluate("async () => { const P = __panel; await P.editSrcLoad({ path: 'D:/out/b.mp4', name: 'src' }, 2); }")
@@ -415,7 +423,7 @@ class EditResolveToolsBrowserTests(Base):
         self.assertEqual(self.undo_len(pg), n + 1)
         self.assertEqual(pg.evaluate("() => __panel.currentFrame"), 72)
         # Insert from the button: at the playhead (72), what follows moves on.
-        pg.evaluate("() => __panel.editSourcePanel.querySelector('[data-edit=insert]').click()")
+        pg.evaluate("() => __panel._editTlUi.srcEdits.querySelector('[data-edit=insert]').click()")
         self.assertEqual(pg.evaluate(self.V1S)[:4], [["a", 0, 48], ["src", 24, 24], ["src", 24, 24], ["a", 72, 24]])
         pg.evaluate("() => __panel.editTlUndo()")
         # A timeline range and one source point: the range's length (three points). Ripple overwrite: the shot replaced.
@@ -432,6 +440,28 @@ class EditResolveToolsBrowserTests(Base):
         pg.evaluate("() => { __panel.setFrame(24); __panel.editSrcEdit('place'); }")
         self.assertEqual(pg.evaluate("() => __panel._editTlCut.tracks.find(t => t.id === 'V2').clips.map(c => [c.name, Math.round(c.at * 24), Math.round(c.length * 24)])"), [["src", 24, 48]])
         pg.evaluate("() => __panel.editTlUndo()")
+        # Track patching in the headers, as Resolve's: the source's V1 box stands on V1; a click on V2's moves it there.
+        self.assertEqual(pg.evaluate("() => [...__panel._editTlUi.heads.querySelectorAll('.edit-hpatch.on')].map(b => [b.dataset.patch, b.textContent])"),
+                         [["V1", "V1"], ["A2", "A1"]])
+        pg.evaluate("() => __panel._editTlUi.heads.querySelector('.edit-hpatch[data-patch=V2]').click()")
+        self.assertEqual(pg.evaluate("() => [...__panel._editTlUi.heads.querySelectorAll('.edit-hpatch.on')].map(b => b.dataset.patch)"), ["V2", "A2"])
+        pg.evaluate("() => { __panel.setFrame(24); __panel._editTlUi.srcEdits.querySelector('[data-edit=overwrite]').click(); }")
+        self.assertEqual(pg.evaluate("() => __panel._editTlCut.tracks.find(t => t.id === 'V2').clips.map(c => [c.name, Math.round(c.at * 24)])"), [["src", 24]])
+        pg.evaluate("() => { __panel.editTlUndo(); __panel.editSrcPatchTo('V1'); }")
+        self.assertFalse(pg.evaluate("() => !!__panel.editSourcePanel.querySelector('.src-dest')"), "no destination menu any more")
+        # The Source viewer stands left of the picture (dual); single: one viewer, Q switches source / timeline.
+        box = pg.evaluate("""() => { const s = __panel.editSourcePanel.getBoundingClientRect(), v = __panel.viewport.getBoundingClientRect();
+            return [Math.round(s.right) <= Math.round(v.left) + 2, s.width > 50, v.width > 50]; }""")
+        self.assertEqual(box, [True, True, True])
+        pg.evaluate("() => __panel.editSrcViewerMode('single')")
+        self.assertEqual(pg.evaluate("() => [__panel.editSourcePanel.style.display, __panel.viewport.style.display]"), ["flex", "none"])
+        self.focus_timeline(pg)
+        pg.keyboard.press("q")
+        self.assertEqual(pg.evaluate("() => [__panel.editSourcePanel.style.display, __panel.viewport.style.display]"), ["none", ""])
+        pg.keyboard.press("q")
+        self.assertEqual(pg.evaluate("() => __panel.viewport.style.display"), "none")
+        pg.evaluate("() => __panel.editSrcViewerMode('dual')")
+        self.assertEqual(pg.evaluate("() => [__panel.editSourcePanel.style.display, __panel.viewport.style.display]"), ["flex", ""])
         # Reverse match frame (Shift+F): the source's frame at 1.5 s is first shown by the clip F10 laid at 2 s (in 1): frame 48 + 12.
         pg.evaluate("() => { const P = __panel; P.editSrcSeek(1.5); P.setFrame(0); }")
         self.focus_timeline(pg)

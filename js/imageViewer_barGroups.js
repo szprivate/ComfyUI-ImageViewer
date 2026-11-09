@@ -78,7 +78,8 @@ const GROUPS = [
         { label: "Edit", panel: "editTimeline", run: (p) => p.editTlToggle() },
         { label: "Effects", panel: "editEffects", needs: "cut", run: (p) => p.editTlPanelToggle("editEffects") },
         { label: "Inspector", panel: "editInspector", needs: "cut", run: (p) => p.editTlPanelToggle("editInspector") },
-        { label: "Source", panel: "editSource", needs: "cut", run: (p) => p.editTlPanelToggle("editSource") },
+        { label: "Source viewer", needs: "cut", run: (p) => p.editSrcToggle(), checked: (p) => !!(p._editSrcOn && p._editSrcOn()) },
+        { label: "Dual viewer", needs: "cut", run: (p) => p.editSrcViewerMode(), checked: (p) => !!(p._editSrcOn && p._editSrcOn() && p._editSrcViewer().mode === "dual") },
         { label: "Mixer", panel: "editMixer", needs: "cut", run: (p) => p.editTlPanelToggle("editMixer") },
     ] },
 ];
