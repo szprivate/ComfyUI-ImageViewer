@@ -1,0 +1,191 @@
+{
+ "id": "14af6003-d4ee-4dee-8e3d-cbff2e5519b3",
+ "revision": 0,
+ "last_node_id": 10,
+ "last_link_id": 9,
+ "nodes": [
+  {
+   "id": 3,
+   "type": "SaveImage",
+   "pos": [
+    1924,
+    4620
+   ],
+   "size": [
+    480,
+    430
+   ],
+   "flags": {},
+   "order": 3,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 8
+    }
+   ],
+   "outputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "links": null
+    }
+   ],
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.11.0",
+    "enableTabs": false,
+    "tabWidth": 65,
+    "tabXOffset": 10,
+    "hasSecondTab": false,
+    "secondTabText": "Send Back",
+    "secondTabOffset": 80,
+    "secondTabWidth": 65,
+    "Node name for S&R": "SaveImage"
+   },
+   "widgets_values": [
+    "Grok"
+   ],
+   "widgets_values_named": {
+    "filename_prefix": "Grok"
+   },
+   "title": "paint:output"
+  },
+  {
+   "id": 6,
+   "type": "LoadImage",
+   "pos": [
+    1138,
+    4620
+   ],
+   "size": [
+    290,
+    400
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      9
+     ]
+    },
+    {
+     "name": "MASK",
+     "type": "MASK",
+     "links": null
+    }
+   ],
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.11.0",
+    "Node name for S&R": "LoadImage",
+    "enableTabs": false,
+    "tabWidth": 65,
+    "tabXOffset": 10,
+    "hasSecondTab": false,
+    "secondTabText": "Send Back",
+    "secondTabOffset": 80,
+    "secondTabWidth": 65
+   },
+   "widgets_values": [
+    "cyberpunk_robot.png",
+    "image"
+   ],
+   "widgets_values_named": {
+    "image": "cyberpunk_robot.png",
+    "upload": "image"
+   },
+   "title": "paint:image"
+  },
+  {
+   "id": 9,
+   "type": "GrokImageEditNodeV2",
+   "pos": [
+    1476,
+    4620
+   ],
+   "size": [
+    400,
+    262
+   ],
+   "flags": {},
+   "order": 2,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "model.images.image_1",
+     "type": "IMAGE",
+     "link": 9
+    },
+    {
+     "name": "model.images.image_2",
+     "shape": 7,
+     "type": "IMAGE",
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      8
+     ]
+    }
+   ],
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.34.0",
+    "Node name for S&R": "GrokImageEditNodeV2"
+   },
+   "widgets_values": [
+    "Keep the original robot design and framing.\nTransform the scene into a cyberpunk night environment.\nReplace the lighting with high-contrast neon lighting, including blue and orange accent lights.\nAdd glowing light strips and illuminated panels on the robot\u2019s body and fingers.\nDarken the background significantly, with subtle smoke and light bloom effects.\nEnhance metallic reflections and sharp edges to give a high-tech, futuristic feel.\n",
+    "grok-imagine-image",
+    "1K",
+    1,
+    "auto",
+    0,
+    "randomize"
+   ],
+   "widgets_values_named": {
+    "prompt": "Keep the original robot design and framing.\nTransform the scene into a cyberpunk night environment.\nReplace the lighting with high-contrast neon lighting, including blue and orange accent lights.\nAdd glowing light strips and illuminated panels on the robot\u2019s body and fingers.\nDarken the background significantly, with subtle smoke and light bloom effects.\nEnhance metallic reflections and sharp edges to give a high-tech, futuristic feel.\n",
+    "model": "grok-imagine-image",
+    "model.resolution": "1K",
+    "model.number_of_images": 1,
+    "model.aspect_ratio": "auto",
+    "seed": 0,
+    "control_after_generate": "randomize"
+   },
+   "color": "#432",
+   "bgcolor": "#653",
+   "title": "paint:prompt"
+  }
+ ],
+ "links": [
+  [
+   8,
+   9,
+   0,
+   3,
+   0,
+   "IMAGE"
+  ],
+  [
+   9,
+   6,
+   0,
+   9,
+   0,
+   "IMAGE"
+  ]
+ ],
+ "groups": [],
+ "config": {},
+ "version": 0.4
+}

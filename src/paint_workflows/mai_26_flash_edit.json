@@ -1,0 +1,182 @@
+{
+ "id": "21fd1a0b-5ad9-4bad-ae7a-e61950b8a15b",
+ "revision": 0,
+ "last_node_id": 13,
+ "last_link_id": 10,
+ "nodes": [
+  {
+   "id": 4,
+   "type": "SaveImageAdvanced",
+   "pos": [
+    40,
+    6200
+   ],
+   "size": [
+    520,
+    145.90625
+   ],
+   "flags": {},
+   "order": 3,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 2
+    }
+   ],
+   "outputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "links": null
+    }
+   ],
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.35.0"
+   },
+   "widgets_values": [
+    "Mai_image_2.6",
+    "png",
+    "8-bit",
+    "sRGB"
+   ],
+   "widgets_values_named": {
+    "filename_prefix": "Mai_image_2.6",
+    "format": "png",
+    "format.bit_depth": "8-bit",
+    "format.input_color_space": "sRGB"
+   },
+   "title": "paint:output"
+  },
+  {
+   "id": 5,
+   "type": "OpenRouterImageNode",
+   "pos": [
+    -410,
+    6200
+   ],
+   "size": [
+    400,
+    260
+   ],
+   "flags": {},
+   "order": 2,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "model.images.image_1",
+     "shape": 7,
+     "type": "IMAGE",
+     "link": 3
+    },
+    {
+     "name": "model.images.image_2",
+     "shape": 7,
+     "type": "IMAGE",
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      2
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "OpenRouterImageNode",
+    "cnr_id": "comfy-core",
+    "ver": "0.35.0"
+   },
+   "widgets_values": [
+    "microsoft/mai-image-2.6-flash",
+    "The clothing presents a realistic 3D effect as if worn on a human figure, rotating slightly to the left, with a white background.",
+    "auto",
+    "1K",
+    1208570941,
+    "randomize",
+    "randomize"
+   ],
+   "widgets_values_named": {
+    "model": "microsoft/mai-image-2.6-flash",
+    "model.prompt": "The clothing presents a realistic 3D effect as if worn on a human figure, rotating slightly to the left, with a white background.",
+    "model.aspect_ratio": "auto",
+    "model.resolution": "1K",
+    "model.seed": 1208570941,
+    "control_after_generate": "randomize"
+   },
+   "color": "#432",
+   "bgcolor": "#653",
+   "title": "paint:prompt"
+  },
+  {
+   "id": 6,
+   "type": "LoadImage",
+   "pos": [
+    -750,
+    6200
+   ],
+   "size": [
+    290,
+    350
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      3
+     ]
+    },
+    {
+     "name": "MASK",
+     "type": "MASK",
+     "links": null
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "LoadImage",
+    "cnr_id": "comfy-core",
+    "ver": "0.35.0"
+   },
+   "widgets_values": [
+    "clothing_shirt_flat.png",
+    "image"
+   ],
+   "widgets_values_named": {
+    "image": "clothing_shirt_flat.png",
+    "upload": "image"
+   },
+   "title": "paint:image"
+  }
+ ],
+ "links": [
+  [
+   2,
+   5,
+   0,
+   4,
+   0,
+   "IMAGE"
+  ],
+  [
+   3,
+   6,
+   0,
+   5,
+   0,
+   "IMAGE"
+  ]
+ ],
+ "groups": [],
+ "config": {},
+ "version": 0.4
+}

@@ -149,20 +149,28 @@ The **Filter** menu works on every picked pixel layer, and only inside the selec
 
 ## Generate
 
-The **Generate** menu and the **Generate** panel. **Fill from the surroundings**, a plain **Extend the canvas** and a plain **Upscale** work right here. **Generative fill**, **Remove object**, **Edit** (with the prompt, in the selection or on the whole picture), **Remove background**, **Select subject**, and Extend / Upscale with a workflow each run a ready-made ComfyUI workflow:
+The **Generate** menu and the **Generate** panel. **Fill from the surroundings**, a plain **Extend the canvas** and a plain **Upscale** work right here. **Generative fill**, **Remove object**, **Edit** (with the prompt, in the selection or on the whole picture), **Remove background**, **Select subject**, **Select objects**, and Extend / Upscale with a workflow each run a ready-made ComfyUI workflow:
 
 - the part around the selection is cut out (with some room around it), scaled to the size the model works at, and queued in ComfyUI with a new seed each time;
-- the result comes back as a **new layer** at that place, masked to the selection, as one undo step (Remove background gives the layer a mask, Select subject makes the selection);
+- **the workflow is put onto ComfyUI's canvas** the first time it is used, as a group of its own ("Paint · <its name>"), and that group is what runs from then on: you can see what Generate did (the picture it sent, the words, the seed), and a change you make to the group's settings there is used the next time. Delete the group and the next run puts a fresh one there;
+- the result comes back as a **new layer** at that place, masked to the selection, as one undo step (Remove background gives the layer a mask, Select subject and Select objects make the selection);
 - **Variations** (1 to 4) makes that many layers;
-- if a model the workflow needs is not on the machine, it says which and runs nothing. A model is found by its file name in any of ComfyUI's model folders and their subfolders, extra model paths included (`flux/flux1-fill-dev.safetensors` counts);
+- if a model file the workflow needs is not on the machine, Paint says which files, how large they are and where they go, and **asks before it downloads them** (only from Hugging Face, into ComfyUI's own model folders; the bar shows how far it is and Stop cancels). The RMBG node pack fetches its own models the first time it runs - Paint says so once before. A model is found by its file name in any of ComfyUI's model folders and their subfolders, extra model paths included (`flux/flux1-fill-dev.safetensors` counts);
+- only the workflows whose nodes this ComfyUI has are offered: install a node pack (ComfyUI-RMBG, say) and its models appear;
 - the button you pressed shows a spinner while it runs, and a bar above the status line says what is happening: getting the picture ready, waiting in ComfyUI's queue, which node runs and how far a sampler is, laying in the result, and then **Done** or what went wrong. **Stop** on the bar takes the run out of the queue, or interrupts it.
+
+**Every image editing model does fill, remove, extend and edit.** An inpaint model (FLUX.1 Fill, the masked GPT Image and Bria ones) is given the selection as its mask. An edit model takes no mask: it is shown the selected place as a flat grey and told to fill the grey, and what it makes is laid in through the selection, so nothing outside it changes.
 
 | Action | Comes with |
 |---|---|
-| Generative fill, Remove object, Extend | FLUX.1 Fill dev (also GPT Image 2 and 2.5 inpaint; OneReward removal for Remove) |
-| Edit | FLUX.1 Kontext (also Qwen Image Edit 2511 local, plain or 4-step Lightning; and through the API: Qwen Image 3, GPT Image 2.5, Seedream 5.0 Pro, Nano Banana 2, Nano Banana Pro, Nano Banana 2.1) |
-| Remove background, Select subject | RMBG 2.0 |
-| Upscale | an upscale model (also Magnific) |
+| Generative fill, Remove object, Extend, Edit | **Inpaint, with the mask:** FLUX.1 Fill dev, GPT Image 2 / 2.5 Flare / 2.5 Sunburst (masked), Bria FIBO edit (masked), OneReward (remove). **Edit models, local:** FLUX.1 Kontext dev, FLUX.2 Klein 4B / 9B, Qwen Image Edit 2511 (plain and Lightning), Qwen Image Edit 2509 Lightning, Qwen Image 2.1 (and Turbo), LongCat Image Edit, FireRed Image Edit 1.1, OmniGen2. **Edit models, API:** FLUX.1 Kontext Pro / Max, FLUX.3, GPT Image 2.5 Flare, Nano Banana 2 / 2 Lite / Pro / 2.1, Qwen Image 3 Edit, Seedream 5.0 Pro / Flash, Grok Imagine (and Image 2), Krea 3, Luma Uni-1, Meta Muse Image, MAI Image 2.6 (and Flash), Hunyuan Image 3.5 preview |
+| Remove background, Select subject | BiRefNet (ComfyUI's own), Bria and Recraft remove background (API), and with the ComfyUI-RMBG pack: RMBG-2.0, INSPYRENET, BEN, BEN2 and its eleven BiRefNet models |
+| Select objects | SAM 3.1: by the words you type, or inside the selection's box |
+| Upscale | an upscale model, SeedVR2 7B (local); Magnific Precise and Creative, Crystal (Clarity AI), Recraft Crisp and Creative, Topaz Bloom 2 and Wonder 3.5, SeedVR2 on WaveSpeed (API) |
+
+**Upscale…** and **Select objects…** (Generate menu, Generate panel; Select › Objects) open a dialog: the model, how many times larger or what to select (the words, or "Look inside the selection's box"), and the model's own settings as ComfyUI describes them (creativity, detail, threshold...). The settings are kept per model, and the model picked there is the one the action runs from then on.
+
+The built-in workflows are copies of ComfyUI's official workflow templates (and a few of agentY's), only with their inputs named for Paint.
 
 **Generate › Workflows…** picks which one each action runs. **Settings › ComfyUI Image Viewer › Paint › Generate workflows** does the same and lets you put **your own** in place of one: **Use the canvas** takes the workflow on the canvas now, **Load API file…** a workflow saved with *Export (API)*. Name its nodes `paint:image` (Load Image), `paint:mask` (Load Image (as Mask), optional), `paint:prompt` (where the words go) and `paint:output` (Save or Preview Image); without those names the first Load Image, the positive prompt and the last Save Image are used. Your workflows are kept on the ComfyUI machine in `~/.comfyui_image_viewer/paint_workflows/`. The choice **agentY builds one** asks agentY instead, as before.
 

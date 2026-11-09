@@ -1,0 +1,182 @@
+{
+ "id": "2c79eff2-e39d-4bd8-8da4-4ed878c06967",
+ "revision": 0,
+ "last_node_id": 7,
+ "last_link_id": 6,
+ "nodes": [
+  {
+   "id": 2,
+   "type": "SaveImageAdvanced",
+   "pos": [
+    2920,
+    -460
+   ],
+   "size": [
+    610,
+    710
+   ],
+   "flags": {},
+   "order": 3,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 2
+    }
+   ],
+   "outputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "links": null
+    }
+   ],
+   "properties": {},
+   "widgets_values": [
+    "FLUX_3_Image",
+    "png",
+    "8-bit",
+    "sRGB"
+   ],
+   "widgets_values_named": {
+    "filename_prefix": "FLUX_3_Image",
+    "format": "png",
+    "format.bit_depth": "8-bit",
+    "format.input_color_space": "sRGB"
+   },
+   "title": "paint:output"
+  },
+  {
+   "id": 3,
+   "type": "Flux3ImageNode",
+   "pos": [
+    2468,
+    -460
+   ],
+   "size": [
+    400,
+    334
+   ],
+   "flags": {},
+   "order": 2,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "images.image_1",
+     "shape": 7,
+     "type": "IMAGE",
+     "link": 3
+    },
+    {
+     "name": "images.image_2",
+     "shape": 7,
+     "type": "IMAGE",
+     "link": null
+    },
+    {
+     "name": "bounding_boxes",
+     "shape": 7,
+     "type": "ARRAY",
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      2
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "Flux3ImageNode"
+   },
+   "widgets_values": [
+    "remove the character's glasses",
+    "auto",
+    "1K",
+    true,
+    4,
+    602733134,
+    "randomize"
+   ],
+   "widgets_values_named": {
+    "prompt": "remove the character's glasses",
+    "aspect_ratio": "auto",
+    "resolution": "1K",
+    "grounding": true,
+    "safety_tolerance": 4,
+    "seed": 602733134,
+    "control_after_generate": "randomize"
+   },
+   "color": "#432",
+   "bgcolor": "#653",
+   "title": "paint:prompt"
+  },
+  {
+   "id": 4,
+   "type": "LoadImage",
+   "pos": [
+    1930,
+    -460
+   ],
+   "size": [
+    490,
+    700
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      3
+     ]
+    },
+    {
+     "name": "MASK",
+     "type": "MASK",
+     "links": null
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "LoadImage"
+   },
+   "widgets_values": [
+    "fashion_model_green_pilot_coat.png",
+    "image"
+   ],
+   "widgets_values_named": {
+    "image": "fashion_model_green_pilot_coat.png",
+    "upload": "image"
+   },
+   "title": "paint:image"
+  }
+ ],
+ "links": [
+  [
+   2,
+   3,
+   0,
+   2,
+   0,
+   "IMAGE"
+  ],
+  [
+   3,
+   4,
+   0,
+   3,
+   0,
+   "IMAGE"
+  ]
+ ],
+ "groups": [],
+ "config": {},
+ "version": 0.4
+}

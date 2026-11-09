@@ -1,0 +1,164 @@
+{
+ "id": "81ccfe3e-3540-49e3-88ae-4fde173b8c87",
+ "revision": 0,
+ "last_node_id": 94,
+ "last_link_id": 178,
+ "nodes": [
+  {
+   "id": 85,
+   "type": "SaveImage",
+   "pos": [
+    1110,
+    930
+   ],
+   "size": [
+    270,
+    270
+   ],
+   "flags": {},
+   "order": 7,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 169
+    }
+   ],
+   "outputs": [],
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.3.65",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "version": "7.1",
+     "input_ue_unconnectable": {}
+    }
+   },
+   "widgets_values": [
+    "ComfyUI"
+   ],
+   "title": "paint:output"
+  },
+  {
+   "id": 83,
+   "type": "FluxKontextProImageNode",
+   "pos": [
+    690,
+    930
+   ],
+   "size": [
+    395.2944030761719,
+    323.6419372558594
+   ],
+   "flags": {},
+   "order": 6,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "input_image",
+     "shape": 7,
+     "type": "IMAGE",
+     "link": 178
+    }
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      169
+     ]
+    }
+   ],
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.3.65",
+    "Node name for S&R": "FluxKontextProImageNode",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "version": "7.1",
+     "input_ue_unconnectable": {}
+    }
+   },
+   "widgets_values": [
+    "Change the image to pop art style poster",
+    "1:1",
+    3,
+    50,
+    1022368309905935,
+    "randomize",
+    false
+   ],
+   "color": "#432",
+   "bgcolor": "#653",
+   "title": "paint:prompt"
+  },
+  {
+   "id": 84,
+   "type": "LoadImage",
+   "pos": [
+    64.27711486816406,
+    928.7723999023438
+   ],
+   "size": [
+    274.080078125,
+    314
+   ],
+   "flags": {},
+   "order": 3,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      178
+     ]
+    },
+    {
+     "name": "MASK",
+     "type": "MASK",
+     "links": null
+    }
+   ],
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.3.65",
+    "Node name for S&R": "LoadImage",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "version": "7.1",
+     "input_ue_unconnectable": {}
+    }
+   },
+   "widgets_values": [
+    "api_bfl_flux_1_kontext_pro_image_input_image.png",
+    "image"
+   ],
+   "title": "paint:image"
+  }
+ ],
+ "links": [
+  [
+   169,
+   83,
+   0,
+   85,
+   0,
+   "IMAGE"
+  ],
+  [
+   178,
+   84,
+   0,
+   83,
+   0,
+   "IMAGE"
+  ]
+ ],
+ "groups": [],
+ "config": {},
+ "version": 0.4
+}

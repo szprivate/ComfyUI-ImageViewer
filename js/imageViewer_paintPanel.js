@@ -22,6 +22,8 @@ import { notice, openFilePicker, openExportDialog, canvasContext } from "./image
 import { addRecentDoc } from "./imageViewer_recentDocs.js";
 import { queueWithAuth } from "./imageViewer_comfyAuth.js";
 import { maskBBox, composite } from "./imageViewer_paintData.js";
+import { app } from "../../scripts/app.js";
+import * as WC from "./imageViewer_paintCanvas.js";
 
 export const PAINT_PREFIX = "paint:";
 /** The dock panels of a Paint tab, and the editor part each one holds. */
@@ -364,6 +366,7 @@ export const PaintPanelMixin = {
             generate: (kind, opts) => this.paintGenerate(rec, kind, opts || {}),
             editSmart: (layerId) => this.paintEditSmart(rec, layerId),
             workflows: () => this.paintWorkflowsDialog(rec),
+            generateDialog: (kind) => this.paintGenerateDialog(rec, kind),
             workflowFor: (kind) => this._paintWfLabel(kind),
             menu: (entries, x, y, anchor) => {
                 if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
@@ -694,6 +697,10 @@ export const PaintPanelMixin = {
             return;
         }
         if ((kind === "fill" || kind === "remove") && !ed.sel) { notice("warn", "Select the place first", "Generate works inside the selection."); return; }
+        if (kind === "select_objects" && !String(opts.prompt || "").trim() && !(opts.box && ed.sel)) {
+            notice("warn", "Say what to select", "Or select around it and let SAM3 look inside the selection's box.");
+            return;
+        }
         if ((kind === "fill" || kind === "edit") && !String(opts.prompt || "").trim()) {
             notice("warn", kind === "fill" ? "Say what to make" : "Say what to change", "Type it into the prompt in Properties.");
             return;
@@ -746,7 +753,7 @@ export const PaintPanelMixin = {
         if (!t) { notice("error", "The workflows are not here", "This ComfyUI's viewer is older than the page."); return; }
         const fields = [];
         for (const [a, info] of Object.entries(t.actions)) {
-            const opts = info.workflows.map((w) => ({ value: w.id, label: w.label + (w.missing.length ? " - missing " + w.missing.length : "") }));
+            const opts = info.workflows.map((w) => ({ value: w.id, label: w.label + (w.missing.length ? (w.missing.every((m) => m.url) ? " - models to download" : " - missing " + w.missing.length) : "") }));
             if (info.custom) opts.push({ value: "custom", label: "My workflow: " + (info.custom.name || "custom") });
             opts.push({ value: "agent", label: "agentY builds one" });
             fields.push([a, info.label, info.choice, opts]);
@@ -776,15 +783,25 @@ export const PaintPanelMixin = {
         const over = (ok, msg) => { if (gid) ed.genEnd(gid, ok, msg); };
         rec.genBusy = (rec.genBusy || 0) + 1;
         let prep;
+        const wid = opts.workflow || (a && a.choice) || null;
+        const item = a && a.workflows.find((w) => w.id === wid);
         try {
+            // Its model files first (asked before anything is fetched), then the workflow onto ComfyUI's canvas.
+            if (item && !(await this._paintModelsReady(rec, item, say))) throw Object.assign(new Error("not now"), { quiet: true });
+            const graph = item ? await this._paintOnCanvas(item, say) : null;
             say({ text: "Getting the picture ready" });
             const s = await this._paintSync(rec);
             await postJson("/imageviewer/paint/save", { token: rec.token, meta: s.meta, keep: s.keep, write: false });
             prep = await postJson("/imageviewer/paint/generate", { token: rec.token, action: kind, prompt: opts.prompt || "",
-                                                                  workflow: opts.workflow || null, k: Number(opts.k) || 2,
+                                                                  workflow: wid, k: Number(opts.k) || 2, graph,
+                                                                  tune: (item && item.tune.length && this._paintTune(wid)) || null,
+                                                                  box: !!opts.box,
                                                                   variations: kind === "upscale" ? 1 : Math.max(1, Math.min(4, Number(opts.variations) || 1)) });
+            // The group on the canvas shows what ran (the picture, the words, the seed): its root nodes' widgets.
+            if (item) { try { WC.writeBack(app, wid, prep.graphs[0]); } catch (_) { /* only the record */ } }
         } catch (e) {
             rec.genBusy = Math.max(0, (rec.genBusy || 1) - 1);
+            if (e.quiet) { over(false, "Not started"); return; }
             const miss = e.data && e.data.missing;
             if (miss && miss.length) {
                 const list = miss.map((m) => (m.kind === "model" ? `${m.what} (${m.folder})` : `node ${m.what}`)).join(", ");
@@ -855,6 +872,193 @@ export const PaintPanelMixin = {
         const ok = await this._paintApplyOps(rec, ops, prep.label);
         const made = ops.filter((o) => o.op === "add_layer").length;
         over(ok, ok ? (made > 1 ? `Done: ${made} new layers` : made ? "Done: a new layer" : "Done") : "The result could not be laid in");
+    },
+
+    // ── the workflow on ComfyUI's canvas, its model files, its settings ───────
+
+    /**
+     * Put the built-in *item* onto ComfyUI's canvas as a group of its own, once (found again by the mark its nodes
+     * carry), and answer the prompt to run: for a canvas-format one what ComfyUI makes of that group - so a change
+     * made there is run -, for an API-format one null (the server's copy runs; the group is the record).
+     */
+    async _paintOnCanvas(item, say) {
+        const there = WC.nodesOf(app, item.id).length > 0;
+        if (!there) {
+            say({ text: "Putting the workflow onto the canvas" });
+            const res = await api.fetchApi(`/imageviewer/paint/workflow?id=${encodeURIComponent(item.id)}`);
+            if (!res.ok) throw new Error(`the workflow ${item.label} is not here (HTTP ${res.status})`);
+            const wf = await res.json();
+            const title = `Paint · ${item.label}`;
+            if (wf.format === "ui") WC.pasteWorkflow(app, item.id, wf.workflow, title);
+            else {
+                try { WC.placeApiWorkflow(app, item.id, wf.workflow, title); }
+                catch (e) { console.warn("[ImageViewer] Paint: the workflow could not be laid onto the canvas", e); }
+            }
+        }
+        if (item.format !== "ui") return null;
+        return WC.promptFromCanvas(app, item.id);
+    },
+
+    /**
+     * Whether the model files *item* needs are here, fetching them when the user says so: asked first, with the
+     * files, where they go and how large they are; the download shown in the bar (it can be stopped).
+     */
+    async _paintModelsReady(rec, item, say) {
+        const ed = rec.editor;
+        const ask = (title, note, okText) => new Promise((resolve) => {
+            let answered = false;
+            ed.dialog(title, [], () => { answered = true; resolve(true); }, note, { onCancel: () => { if (!answered) resolve(false); } });
+            void okText;
+        });
+        if (item.first_run && item.first_run.length) {
+            const key = "imageviewer.paint.firstRun." + item.id;
+            let seen = false;
+            try { seen = localStorage.getItem(key) === "1"; } catch (_) { /* asked again */ }
+            if (!seen) {
+                const yes = await ask("The model downloads itself",
+                    `${item.label} is fetched by its node pack the first time it runs (into models/${item.first_run.join(", models/")}). `
+                    + "That can take a while and some hundred MB. Run it?");
+                if (!yes) return false;
+                try { localStorage.setItem(key, "1"); } catch (_) { /* asked again next time */ }
+            }
+        }
+        const gone = (item.missing || []).filter((m) => m.kind !== "node");
+        if (!gone.length) return true;
+        say({ text: "Looking up the model files" });
+        const plan = await postJson("/imageviewer/paint/models", { workflow: item.id });
+        const files = plan.files.filter((f) => f.url);
+        if (!files.length) return true;            // nothing offered: the run says what is missing
+        const mb = (n) => (n ? (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(n / 1e6))} MB`) : "size not known");
+        const list = files.map((f) => `• ${f.name} (${mb(f.size)}) into models/${f.folder}`).join("\n");
+        const more = plan.unknown.length ? `\nNot offered for download (put them there yourself): ${plan.unknown.join(", ")}` : "";
+        const yes = await ask("Download the models?",
+            `${item.label} needs model files that are not on this machine:\n${list}\nTogether ${mb(plan.total)}, from Hugging Face.${more}`);
+        if (!yes) return false;
+        const { job } = await postJson("/imageviewer/paint/download", { workflow: item.id });
+        let st;
+        let cancelled = false;
+        say({ text: "Downloading the models", share: 0, stop: async () => {
+            cancelled = true;
+            try { await postJson("/imageviewer/paint/download", { job, cancel: true }); } catch (_) { /* gone */ }
+        } });
+        for (;;) {
+            await new Promise((r) => setTimeout(r, 1000));
+            st = await postJson("/imageviewer/paint/download", { job });
+            const total = st.files.reduce((t, f) => t + (f.size || 0), 0);
+            const done = st.files.reduce((t, f) => t + (f.done || 0), 0);
+            const now = st.files.find((f) => f.state === "fetching");
+            say({ text: `Downloading ${now ? now.name : "the models"} · ${mb(done)} of ${mb(total)}`, share: total ? done / total : null });
+            if (st.state !== "running") break;
+        }
+        say({ stop: null });
+        if (st.state === "done") { await this._paintWorkflows(true); return true; }
+        if (st.state === "stopped" || cancelled) return false;
+        throw new Error("the download did not work: " + (st.error || st.state));
+    },
+
+    /** The settings kept for a workflow (its dialog's): {node ref: {input: value}}. */
+    _paintTune(wid, set) {
+        const key = "imageviewer.paint.tune." + wid;
+        try {
+            if (set !== undefined) { localStorage.setItem(key, JSON.stringify(set)); return set; }
+            const v = JSON.parse(localStorage.getItem(key) || "null");
+            return v && typeof v === "object" ? v : null;
+        } catch (_) { return null; }
+    },
+
+    /** The settings a workflow offers in its dialog: [{ref, cls, settings}] from ComfyUI's object_info. */
+    async _paintTuneSpecs(item) {
+        if (!item || !item.tune || !item.tune.length) return [];
+        const res = await api.fetchApi(`/imageviewer/paint/workflow?id=${encodeURIComponent(item.id)}`);
+        if (!res.ok) return [];
+        const wf = await res.json();
+        // What the nodes hold now: the group on the canvas (a canvas-format one), else the server's copy.
+        let graph = wf.format === "ui" ? null : wf.workflow;
+        if (wf.format === "ui" && WC.nodesOf(app, item.id).length) {
+            try { graph = await WC.promptFromCanvas(app, item.id); } catch (_) { graph = null; }
+        }
+        const kept = this._paintTune(item.id) || {};
+        const skip = item.scale ? [item.scale[1]] : [];
+        const out = [];
+        for (const ref of item.tune) {
+            const k = graph ? WC.refIn(graph, ref) : null;
+            const cls = k ? graph[k].class_type : (wf.format === "ui" ? WC.uiClassOf(wf.workflow, ref) : null);
+            if (!cls) continue;
+            let info = null;
+            try {
+                const r = await api.fetchApi(`/object_info/${encodeURIComponent(cls)}`);
+                if (r.ok) info = (await r.json())[cls];
+            } catch (_) { /* no settings for it */ }
+            if (!info) continue;
+            const current = { ...((k && graph[k].inputs) || {}), ...(kept[ref] || {}) };
+            const settings = WC.tuneSettings(info, current, skip);
+            if (settings.length) out.push({ ref: String(ref), cls, title: info.display_name || cls, settings });
+        }
+        return out;
+    },
+
+    /**
+     * Upscale… and Select objects…: the model (any workflow installed for it), what the action takes (times; the
+     * words or the selection's box) and the model's own settings, read from ComfyUI (object_info) and kept per
+     * workflow. Picking another model opens the dialog again with its settings.
+     */
+    async paintGenerateDialog(rec, kind, wid) {
+        const ed = rec && rec.editor;
+        if (!ed) return;
+        const t = await this._paintWorkflows(true);
+        const a = t && t.actions && t.actions[kind];
+        if (!a) { notice("error", "The workflows are not here", "This ComfyUI's viewer is older than the page."); return; }
+        const PLAIN = "__plain";
+        const models = a.workflows.map((w) => ({ value: w.id, label: w.label + (w.missing.length ? " - to download" : "") }));
+        if (kind === "upscale") models.push({ value: PLAIN, label: "Plain resize (no AI)" });
+        const last = this._paintDlgLast || (this._paintDlgLast = {});
+        wid = wid || (last[kind] && models.some((m) => m.value === last[kind]) ? last[kind] : (models.some((m) => m.value === a.choice) ? a.choice : (models[0] && models[0].value)));
+        if (!wid) { notice("warn", "Nothing installed for " + a.label, "Install a node pack for it, or pick agentY in Generate › Workflows…"); return; }
+        const item = a.workflows.find((w) => w.id === wid);
+        let specs = [];
+        try { specs = await this._paintTuneSpecs(item); } catch (_) { specs = []; }
+        const fields = [["wf", "Model", wid, models]];
+        if (kind === "upscale") fields.push(["k", "Times", String(last.k || 2), ["2", "4"]]);
+        if (kind === "select_objects") {
+            fields.push(["text", "What to select", last.text || "", "text"]);
+            fields.push(["box", "Look inside the selection's box", ed.sel ? "yes" : "no", ["yes", "no"]]);
+        }
+        for (const sp of specs) fields.push(...WC.dialogFields(sp.settings, `t:${sp.ref}:`));
+        const note = (kind === "select_objects"
+            ? "SAM3 finds what the words name - or, with the box, what is inside the selection's box - and selects it. "
+            : "") + (specs.length ? "The model's own settings are kept for the next run. " : "")
+            + "The workflow goes onto ComfyUI's canvas as a group of its own.";
+        let shade = null;
+        shade = ed.dialog(a.label, fields, async (v) => {
+            last[kind] = v.wf;
+            // The model picked here is the one the action runs from now on (the Generate panel's button too).
+            if (v.wf !== PLAIN && v.wf !== a.choice) {
+                try { await postJson("/imageviewer/paint/workflows", { action: kind, choice: v.wf }); await this._paintWorkflows(true); }
+                catch (_) { /* this run still uses it */ }
+            }
+            if (kind === "upscale") last.k = Number(v.k) || 2;
+            if (kind === "select_objects") last.text = v.text;
+            if (v.wf === PLAIN) { this.paintGenerate(rec, "upscale", { k: Number(v.k) || 2, ai: false }); return; }
+            if (specs.length) {
+                const tune = {};
+                for (const sp of specs) tune[sp.ref] = WC.readFields(sp.settings, v, `t:${sp.ref}:`);
+                this._paintTune(v.wf, tune);
+            }
+            if (kind === "upscale") this.paintGenerate(rec, "upscale", { k: Number(v.k) || 2, ai: true, workflow: v.wf });
+            else this.paintGenerate(rec, kind, { prompt: v.text || "", box: v.box === "yes", workflow: v.wf });
+        }, note, {
+            wide: true,
+            onInput: (v) => {
+                if (v.wf && v.wf !== wid && shade) {         // another model: its own settings
+                    shade.remove();
+                    shade = null;
+                    last[kind] = v.wf;
+                    if (v.k) last.k = Number(v.k) || 2;
+                    if (v.text !== undefined) last.text = v.text;
+                    this.paintGenerateDialog(rec, kind, v.wf);
+                }
+            },
+        });
     },
 
     /** One API graph into ComfyUI's queue: its prompt id. */
@@ -955,6 +1159,8 @@ export const PaintPanelMixin = {
             background: "Remove the background: make a matte of the main subject (white = subject) from the picture, then "
                 + `${call('{"op": "mask", "layer": "active", "from": "file", "file": <matte>}')} (a layer mask - nothing is erased).`,
             select_subject: "Select the subject: make a matte of the main subject (white = subject) from the picture, then "
+                + `${call('{"op": "select", "mode": "file", "file": <matte>}')}.`,
+            select_objects: `Select ${prompt ? `"${prompt}"` : "what is inside the selection's box"}: make a matte of it (white = it) from the picture, then `
                 + `${call('{"op": "select", "mode": "file", "file": <matte>}')}.`,
             extend: `Extend the picture: outpaint the selected border so that it continues the picture${prompt ? ` (${prompt})` : ""}, then put `
                 + `the result back with ${call('{"op": "add_layer", "file": <result>, "name": "Extended", "mask": "selection", "below": "active"}')}.`,

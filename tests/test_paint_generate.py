@@ -96,16 +96,169 @@ class PaintGenerate(unittest.TestCase):
     def test_every_built_in_workflow_has_its_slots(self):
         for e in self.G.builtins():
             _e, g = self.G._builtin(e["id"])
-            s = self.G.detect_slots(g)
+            for a in e["actions"]:
+                self.assertIn(a, self.G.ACTIONS)
+            if e.get("format") == "ui":
+                # Kept as the canvas has it: the slots are titles, at the top or inside a subgraph.
+                nodes = list(g["nodes"]) + [n for sg in (g.get("definitions") or {}).get("subgraphs", []) for n in sg["nodes"]]
+                titles = {str(n.get("title") or "").lower() for n in nodes}
+                self.assertTrue({"paint:image", "paint:output"} <= titles, e["id"])
+                if set(e["actions"]) & {"fill", "edit"}:
+                    self.assertIn("paint:prompt", titles, e["id"])
+                for ref in (e.get("tune") or []) + (e.get("optional") or []):
+                    self.assertTrue(str(ref).lower() in titles or any(str(n["id"]) == str(ref) for n in nodes), (e["id"], ref))
+                ids = {n["id"] for n in g["nodes"]}
+                for L in g.get("links") or []:
+                    self.assertTrue(L[1] in ids and L[3] in ids, (e["id"], L))
+                continue
+            s = self.G.detect_slots(g, e.get("prompt_input"))
             self.assertTrue(s["image"] and s["output"], e["id"])
             if set(e["actions"]) & {"fill", "edit"}:
                 self.assertTrue(s["prompt"], e["id"])
-            for a in e["actions"]:
-                self.assertIn(a, self.G.ACTIONS)
+            for m in e.get("models") or []:
+                if m.get("url"):
+                    self.assertTrue(self.G._allowed_url(m["url"]), (e["id"], m["url"]))
         # Every action has a default, the first in the table.
         self.assertEqual(self.G.choices()["fill"], "flux_fill")
         self.assertEqual(self.G.choices()["remove"], "flux_fill")
         self.assertEqual(self.G.choices()["upscale"], "upscale_model")
+
+    def test_a_workflow_whose_nodes_are_not_installed_is_not_offered(self):
+        L = self.G.listing(self.fp, {"LoadImage", "SaveImage", "ImageUpscaleWithModel", "UpscaleModelLoader"})
+        ids = [w["id"] for w in L["actions"]["upscale"]["workflows"]]
+        self.assertIn("upscale_model", ids)
+        self.assertNotIn("crystal", ids)                       # its partner node is not here
+        self.assertEqual(L["actions"]["select_objects"]["workflows"], [])
+        self.assertEqual(L["actions"]["select_objects"]["choice"], "agent")
+        # Everything there: every edit model is offered for fill, remove and extend too.
+        L = self.G.listing(self.fp, None)
+        for a in ("fill", "remove", "extend", "edit"):
+            ids = {w["id"] for w in L["actions"][a]["workflows"]}
+            self.assertTrue({"flux_kontext_pro", "qwen3_edit", "nano_banana21_edit", "flux2_klein_9b_edit"} <= ids, a)
+        bg = {w["id"] for w in L["actions"]["background"]["workflows"]}
+        self.assertTrue({"birefnet", "bria_rmbg", "recraft_rmbg", "rmbg2", "rmbg_birefnet_general"} <= bg)
+        up = {w["id"] for w in L["actions"]["upscale"]["workflows"]}
+        self.assertTrue({"magnific_creative", "magnific_precise", "crystal"} <= up)
+
+    def test_an_edit_model_sees_the_place_as_grey_and_is_told_so(self):
+        async def go(c):
+            tok = await self.open_with_selection(c)
+            st, d = await self.j(c, "/imageviewer/paint/generate",
+                                 {"token": tok, "action": "fill", "workflow": "qwen3_edit", "prompt": "a red ball"})
+            self.assertEqual(st, 200, d)
+            self.assertTrue(d["grey"])
+            g = d["graphs"][0]
+            words = [v for n in g.values() for k, v in n["inputs"].items() if k in ("prompt", "model.prompt") and v]
+            self.assertEqual(len(words), 1)
+            self.assertIn("a red ball", words[0])
+            self.assertIn("grey", words[0])
+            name = next(n["inputs"]["image"] for n in g.values() if n["class_type"] == "LoadImage")
+            from PIL import Image
+            im = np.asarray(Image.open(os.path.join(self.dirs["input"], name)).convert("RGBA"))
+            th, tw = im.shape[:2]
+            self.assertEqual(tuple(im[th // 2, tw // 2]), (128, 128, 128, 255))   # the selection: flat grey, opaque
+            self.assertEqual(tuple(im[2, 2, :3]), (0, 0, 200))                    # around it: the picture
+            # It comes back through the selection all the same.
+            st, p = await self.j(c, "/imageviewer/paint/generate_place", {"job": d["job"], "image": self.fake_result(tw, th)})
+            self.assertEqual(p["ops"][0]["mask"], "selection")
+            # A model that takes a mask gets the mask, not grey.
+            st, d = await self.j(c, "/imageviewer/paint/generate",
+                                 {"token": tok, "action": "fill", "workflow": "flux_fill", "prompt": "a red ball"})
+            self.assertFalse(d["grey"])
+        self.run_c(go)
+
+    @staticmethod
+    def sam3_prompt():
+        """What ComfyUI makes of the SAM3 group on the canvas (its subgraph flattened as "99:<inner>")."""
+        return {"79": {"class_type": "LoadImage", "_meta": {"title": "paint:image"}, "inputs": {"image": "x.png", "upload": "image"}},
+                "99:77": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "sam3.1_multiplex_fp16.safetensors"}},
+                "99:78": {"class_type": "CLIPTextEncode", "_meta": {"title": "paint:prompt"}, "inputs": {"text": "guitar", "clip": ["99:77", 1]}},
+                "99:75": {"class_type": "SAM3_Detect", "_meta": {"title": "paint:tune"},
+                          "inputs": {"model": ["99:77", 0], "image": ["79", 0], "conditioning": ["99:78", 0],
+                                     "bboxes": ["901", 0], "threshold": 0.5, "refine_iterations": 2, "individual_masks": False}},
+                "901": {"class_type": "PrimitiveBoundingBox", "_meta": {"title": "paint:box"}, "inputs": {"x": 0, "y": 0, "width": 512, "height": 512}},
+                "902": {"class_type": "MaskToImage", "inputs": {"mask": ["99:75", 0]}},
+                "903": {"class_type": "SaveImage", "_meta": {"title": "paint:output"}, "inputs": {"images": ["902", 0], "filename_prefix": "x"}}}
+
+    def test_select_objects_by_words_or_by_the_selections_box_with_its_settings(self):
+        async def go(c):
+            tok = await self.open_with_selection(c)
+            # Runs from the canvas: without ComfyUI's prompt of the group it is refused.
+            st, d = await self.j(c, "/imageviewer/paint/generate", {"token": tok, "action": "select_objects", "workflow": "sam3", "prompt": "a cup"})
+            self.assertEqual(st, 400, d)
+            st, d = await self.j(c, "/imageviewer/paint/generate", {"token": tok, "action": "select_objects", "workflow": "sam3",
+                                                                    "graph": {"output": self.sam3_prompt()}})
+            self.assertEqual(st, 400, d)                          # neither words nor the box
+            # By words: the box is left out (and the input it fed), the settings applied.
+            st, d = await self.j(c, "/imageviewer/paint/generate", {"token": tok, "action": "select_objects", "workflow": "sam3",
+                                                                    "prompt": "a cup", "graph": self.sam3_prompt(),
+                                                                    "tune": {"paint:tune": {"threshold": 0.3, "model": "no", "nope": 1}}})
+            self.assertEqual(st, 200, d)
+            g = d["graphs"][0]
+            self.assertEqual(g["99:78"]["inputs"]["text"], "a cup")
+            self.assertNotIn("901", g)
+            self.assertNotIn("bboxes", g["99:75"]["inputs"])
+            self.assertEqual(g["99:75"]["inputs"]["threshold"], 0.3)
+            self.assertEqual(g["99:75"]["inputs"]["model"], ["99:77", 0])      # a link is not a setting
+            self.assertEqual(d["box"], [0, 0, 200, 100])                       # the whole picture
+            # By the box: the selection's box (60, 30, 40 x 20), no words, the text node left out.
+            st, d = await self.j(c, "/imageviewer/paint/generate", {"token": tok, "action": "select_objects", "workflow": "sam3",
+                                                                    "box": True, "graph": self.sam3_prompt()})
+            self.assertEqual(st, 200, d)
+            g = d["graphs"][0]
+            sx = d["size"][0] / 200
+            self.assertEqual(g["901"]["inputs"], {"x": round(60 * sx), "y": round(30 * sx), "width": round(40 * sx), "height": round(20 * sx)})
+            self.assertNotIn("99:78", g)
+            self.assertNotIn("conditioning", g["99:75"]["inputs"])
+            # What came back is the selection; nothing found says so.
+            from PIL import Image
+            folder = os.path.join(self.dirs["output"], "paint", "generate")
+            os.makedirs(folder, exist_ok=True)
+            a = np.zeros((100, 200, 3), np.uint8)
+            Image.fromarray(a, "RGB").save(os.path.join(folder, "none.png"))
+            a[30:50, 60:100] = 255
+            Image.fromarray(a, "RGB").save(os.path.join(folder, "cup.png"))
+            st, p = await self.j(c, "/imageviewer/paint/generate_place", {"job": d["job"], "image": {"filename": "none.png", "subfolder": "paint/generate", "type": "output"}})
+            self.assertEqual(st, 400, p)
+            st, p = await self.j(c, "/imageviewer/paint/generate_place", {"job": d["job"], "image": {"filename": "cup.png", "subfolder": "paint/generate", "type": "output"}})
+            self.assertEqual(st, 200, p)
+            self.assertEqual((p["ops"][0]["op"], p["ops"][0]["mode"]), ("select", "file"))
+        self.run_c(go)
+
+    def test_a_matte_is_the_alpha_when_there_is_one_else_the_brightness(self):
+        a = np.zeros((4, 4, 4), np.uint8)
+        a[..., :3] = 255
+        a[..., 3] = 255
+        a[0, 0, 3] = 0
+        m = self.G.matte_of(a)
+        self.assertEqual((m[0, 0], m[1, 1]), (0, 255))
+        b = np.zeros((4, 4, 4), np.uint8)
+        b[..., 3] = 255
+        b[2, 2, :3] = 255
+        m = self.G.matte_of(b)
+        self.assertEqual((m[0, 0], m[2, 2]), (0, 255))
+
+    def test_model_downloads_only_from_hugging_face_into_the_model_folder(self):
+        self.assertTrue(self.G._allowed_url("https://huggingface.co/Comfy-Org/x/resolve/main/a.safetensors"))
+        for bad in ("http://huggingface.co/a", "https://evil.example/a", "https://huggingface.co.evil.example/a", "file:///etc/passwd"):
+            self.assertFalse(self.G._allowed_url(bad), bad)
+        for bad in ("../x.safetensors", "/abs.safetensors", "C:x", "a/../../b"):
+            with self.assertRaises(self.G.GenerateError):
+                self.G._safe_model_name(bad)
+        self.have.clear()
+        root = os.path.join(self.tmp, "models")
+        old = getattr(self.fp, "get_folder_paths", None)
+        self.fp.get_folder_paths = lambda d: [os.path.join(root, d)]
+        try:
+            plan = self.G.download_plan("sam3", self.fp, sizes=False)
+        finally:
+            if old is not None:
+                self.fp.get_folder_paths = old
+        f = plan["files"][0]
+        self.assertEqual((f["name"], f["folder"]), ("sam3.1_multiplex_fp16.safetensors", "checkpoints"))
+        self.assertTrue(f["url"].startswith("https://huggingface.co/"))
+        self.assertEqual(f["to"], os.path.join(root, "checkpoints", "sam3.1_multiplex_fp16.safetensors"))
+        self.assertEqual(plan["unknown"], [])
 
     def test_slots_found_without_titles(self):
         g = {"3": {"class_type": "KSampler", "inputs": {"seed": 5, "steps": 4}},
