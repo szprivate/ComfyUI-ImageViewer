@@ -359,13 +359,46 @@ def film_pictures(clips, counts, w, h, fps):
             if fx:
                 frame = lay(None, frame, fx, box)
             if k < d_in:
-                a = (k + 1) / (d_in + 1)
-                yield (held[k].astype(np.float32) * (1 - a) + frame.astype(np.float32) * a + 0.5).astype(np.uint8)
+                yield transition_frame(clip.get("tfx"), held[k], frame, (k + 1) / (d_in + 1))
             elif k >= n - d_out:
                 keep.append(frame)
             else:
                 yield frame
         held = keep
+
+
+def transition_frame(tfx, out, inn, a):
+    """A frame of a V1 transition `a` (0..1) of the way through: the shot going out
+    (`out`) and the one coming in (`inn`), as the Edit tab shows it
+    (imageViewer_editTimelineData.js transitionLook): a cross dissolve, a dip to a
+    colour (the first half to it, the second from it), or a wipe (the shot coming
+    in uncovered by a straight edge)."""
+    import numpy as np
+    x = timeline_io.clean_tfx(tfx)
+    if x and x["type"] == "wipe":
+        h, w = inn.shape[:2]
+        res = out.copy()
+        if x["dir"] in ("right", "left"):
+            n = int(round(a * w))
+            if x["dir"] == "right":
+                res[:, :n] = inn[:, :n]
+            elif n:
+                res[:, w - n:] = inn[:, w - n:]
+        else:
+            n = int(round(a * h))
+            if x["dir"] == "down":
+                res[:n] = inn[:n]
+            elif n:
+                res[h - n:] = inn[h - n:]
+        return res
+    fo, fi = out.astype(np.float32), inn.astype(np.float32)
+    if x and x["type"] == "dip":
+        rgb = [int(x["color"][i:i + 2], 16) for i in (1, 3, 5)]
+        c = np.empty_like(fi)
+        c[...] = (rgb + [255])[:fi.shape[-1]]
+        mixed = fo * (1 - 2 * a) + c * (2 * a) if a < 0.5 else c * (2 - 2 * a) + fi * (2 * a - 1)
+        return (mixed + 0.5).astype(np.uint8)
+    return (fo * (1 - a) + fi * a + 0.5).astype(np.uint8)
 
 
 def _spans(overlays, fps):
@@ -782,7 +815,8 @@ def read_cut(doc):
                       "transition": 0.0 if gapped or cut_in else c["transition"], "name": c["name"],
                       "speed": c.get("speed", 1.0), "loop": c.get("loop", ""), "span": c.get("span", 0.0),
                       "volume": float(note.get("volume", 1.0)), "fx": c.get("fx") or {},
-                      "mute": bool(c.get("mute")), "env": envs.get(("V1", idx)), "afx": c.get("afx") or []})
+                      "mute": bool(c.get("mute")), "env": envs.get(("V1", idx)), "afx": c.get("afx") or [],
+                      "tfx": timeline_io.clean_tfx(c.get("tfx"))})
         cut_in = False
     off = edit.get("off") or {}
     overlays, sounds = [], []

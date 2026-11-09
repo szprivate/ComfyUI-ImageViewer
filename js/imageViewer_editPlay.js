@@ -273,6 +273,7 @@ export const EditPlayMixin = {
             v.style.display = "none";
         }
         if (this._epHome) this.videoBase = this._epHome;
+        this._editPlayLook(null, null);                   // no wipe's mask, no dip's colour left behind
         for (const a of (this._ep && this._ep.bed) || []) { try { a.pause(); } catch (_) {} }
         for (const el of this._editPlayLayers()) {
             el.style.opacity = "";
@@ -573,9 +574,12 @@ export const EditPlayMixin = {
         const now = this._editPlayT();
         const u = Math.max(0, now - (at.origin || 0)), uu = at.under ? Math.max(0, now - (at.under.origin || 0)) : 0;
         const own = this._editPlayOpacity(at.clip, u);
-        const show = Math.round(a * own * 1000) / 1000;
+        // What the transition is (a cross dissolve, a dip to a colour, a wipe): D.transitionLook, as the render's transition_frame.
+        const look = under && !at.over ? D.transitionLook(at.clip && at.clip.tfx, a) : { inn: a, out: 1 };
+        const show = Math.round(look.inn * own * 1000) / 1000;
         if (main) main.style.opacity = show === 1 && !under ? "" : String(show);
-        if (under) under.style.opacity = String(Math.round(this._editPlayOpacity(at.under.clip, uu) * 1000) / 1000);
+        if (under) under.style.opacity = String(Math.round(look.out * this._editPlayOpacity(at.under.clip, uu) * 1000) / 1000);
+        this._editPlayLook(main, look);
         // A clip whose sound was split off (`mute`) is silent: its sound clip plays, at its own place.
         // The bar's speaker off (EditAudioMixin): everything at 0.
         const gain = this._editAudioGain ? this._editAudioGain() : 1;
@@ -601,6 +605,30 @@ export const EditPlayMixin = {
                 this._epVol(under, at.over ? 0 : loud(at.under.clip, uu) * (1 - a) * D.envGain(uenv, uu));
             }
         } catch (_) {}
+    },
+
+    // A wipe's edge (a mask on the layer coming in) and a dip's colour (the viewport's ground under both
+    // layers); either is put away again on the next frame that has none, and on leaving (editPlayLeave).
+    _editPlayLook(main, look) {
+        const ep = this._ep;
+        if (!ep) return;
+        const wipe = look && look.wipe && main ? look.wipe : null;
+        const clear = (el) => { if (el) { el.style.maskImage = el.style.webkitMaskImage = ""; } };
+        if (ep.masked && ep.masked !== (wipe ? main : null)) { clear(ep.masked); ep.masked = null; }
+        if (wipe) {
+            const to = { right: "right", left: "left", down: "bottom", up: "top" }[wipe.dir] || "right";
+            const p = Math.round(wipe.share * 10000) / 100;
+            main.style.maskImage = main.style.webkitMaskImage = `linear-gradient(to ${to}, #000 ${p}%, transparent ${p}%)`;
+            main.style.maskSize = main.style.webkitMaskSize = "100% 100%";
+            ep.masked = main;
+        }
+        const host = main && main.parentNode;
+        const color = look && look.color ? look.color : "";
+        if (ep.dipHost && (ep.dipHost !== host || !color)) { ep.dipHost.style.backgroundColor = ep.dipWas || ""; ep.dipHost = null; }
+        if (color && host) {
+            if (!ep.dipHost) { ep.dipHost = host; ep.dipWas = host.style.backgroundColor; }
+            host.style.backgroundColor = color;
+        }
     },
 
     // The titles on screen now (titlesAt), each on a canvas of its own laid where

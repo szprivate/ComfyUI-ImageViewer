@@ -359,6 +359,9 @@ function settle(cut) {
         if (gap > 1e-4) c.gap = gap; else delete c.gap;
         // No dissolve into a gap: the clip after one comes in with a cut.
         c.transition = i && !c.gap ? Math.max(0, num(c.transition)) : 0;
+        // What the dissolve is (a dip, a wipe) goes with it.
+        const tfx = c.transition > 0 ? cleanTfx(c.tfx) : null;
+        if (tfx) c.tfx = tfx; else delete c.tfx;
         tidyTime(c);
         tidyLink(c);
     });
@@ -960,7 +963,7 @@ export function sameCut(a, b) {
                          c.afx && c.afx.length ? JSON.stringify(cleanAfx(c.afx)) : "",
                          c.markers && c.markers.length ? JSON.stringify(cleanClipMarkers(c.markers)) : ""];
     const key = (cut) => JSON.stringify({
-        clips: ((cut && cut.clips) || []).map((c) => [Number.isInteger(c.ref) ? c.ref : c.file, c.name, round(num(c.in)), round(num(c.length)), round(num(c.transition)), round(num(c.gap)), ...dress(c)]),
+        clips: ((cut && cut.clips) || []).map((c) => [Number.isInteger(c.ref) ? c.ref : c.file, c.name, round(num(c.in)), round(num(c.length)), round(num(c.transition)), round(num(c.gap)), JSON.stringify(cleanTfx(c.tfx)), ...dress(c)]),
         texts: ((cut && cut.texts) || []).map((t) => [Number.isInteger(t.ref) ? t.ref : "new", t.text, round(num(t.start)), round(num(t.length)), JSON.stringify(textLook(t))]),
         tracks: ((cut && cut.tracks) || []).map((k) => [k.kind, k.name, !!k.off, !!k.lock, k.auto !== false, JSON.stringify(cleanAfx(k.afx)), (k.clips || []).map((c) =>
             [Array.isArray(c.ref) ? c.ref.join(":") : c.title ? "title" : c.file, c.name, round(num(c.at)), round(num(c.in)), round(num(c.length)), ...dress(c)])]),
@@ -991,6 +994,7 @@ export function toSave(cut) {
             name: c.name, in: c.in, length: c.length, transition: c.transition, gap: round(num(c.gap)),
             color: c.color || "", volume: num(c.volume, 1), fx: cleanFx(c.fx), ...timeOf(c),
             ...(takesOf(c).length ? { takes: cleanTakes(c.takes) } : {}),
+            tfx: num(c.transition) > 0 ? cleanTfx(c.tfx) : null,
         })),
         // A text with no `ref` was written here.
         texts: cut.texts.map((t) => ({ ...(Number.isInteger(t.ref) ? { ref: t.ref } : {}),
@@ -1733,6 +1737,7 @@ export function agentLoses(cut) {
     if (all.some((c) => c.title)) out.push("how the titles look (font, style, alignment, outline, shadow, box: agentY draws them as captions or by their preset)");
     if (all.some((c) => c.xfade || num(c.fadeIn) > 0 || num(c.fadeOut) > 0)) out.push("audio crossfades and fades");
     if (cutHasAfx(cut)) out.push("sound effects (EQ, compressor, reverb ... of clips and tracks)");
+    if (((cut && cut.clips) || []).some((c) => num(c.transition) > 0 && cleanTfx(c.tfx))) out.push("dips to a colour and wipes (agentY plays them as cross dissolves)");
     return out;
 }
 
@@ -4749,7 +4754,7 @@ export function swapClip(cut, sel, dir) {
         const lo = Math.min(i, j), hi = lo + 1;
         const next = copy(cut);
         const L = next.clips[lo], R = next.clips[hi];
-        const keep = (c) => ({ gap: c.gap, transition: c.transition });
+        const keep = (c) => ({ gap: c.gap, transition: c.transition, tfx: c.tfx });
         const kl = keep(L), kr = keep(R);
         next.clips[lo] = Object.assign(R, kl);
         next.clips[hi] = Object.assign(L, kr);
@@ -4806,4 +4811,57 @@ export function selectForward(cut, t, track, dir, fps = 24) {
         k.clips.forEach((c, i) => { if (take(num(c.at), num(c.at) + num(c.length))) out.push({ kind: "tclip", track: k.id, i }); });
     }
     return out;
+}
+
+// ── video transitions: dip to colour, wipes ──────────────────────────────────
+//
+// A V1 dissolve (`transition`, the overlap into clip i) is a cross dissolve unless
+// the clip says otherwise in `tfx`: { type: "dip", color } - the shot going out
+// fades to the colour over the first half and the one coming in from it over the
+// second (Resolve's Dip to Color Dissolve) - or { type: "wipe", dir } - the shot
+// coming in is uncovered by a straight edge moving "right" (from the left edge),
+// "left", "down" (from the top) or "up". No `tfx` (or "dissolve") is the cross
+// dissolve. The render does the same (timeline_render.transition_frame, the
+// arithmetic of transitionLook), and the file keeps it in the Transition's
+// metadata.imageviewer.transition (timeline_io.clean_tfx), the OTIO type still
+// SMPTE_Dissolve so that other programs read a dissolve.
+
+export const TRANSITION_TYPES = { dissolve: "Cross Dissolve", dip: "Dip to Color", wipe: "Wipe" };
+export const WIPE_DIRS = { right: "Left to right", left: "Right to left", down: "Top to bottom", up: "Bottom to top" };
+
+/** A transition's look held to what it may be: null for a cross dissolve. */
+export function cleanTfx(x) {
+    if (!x || typeof x !== "object") return null;
+    if (x.type === "dip") {
+        const color = /^#[0-9a-f]{6}$/i.test(String(x.color || "")) ? String(x.color).toLowerCase() : "#000000";
+        return { type: "dip", color };
+    }
+    if (x.type === "wipe") return { type: "wipe", dir: WIPE_DIRS[x.dir] ? x.dir : "right" };
+    return null;
+}
+
+/** Shot i's dissolve made a cross dissolve, a dip or a wipe (`tfx` as cleanTfx takes it). */
+export function setTransitionLook(cut, i, tfx) {
+    const next = copy(cut);
+    const c = next.clips[i];
+    if (!c || !i) return next;
+    const clean = cleanTfx(tfx);
+    if (clean) c.tfx = clean; else delete c.tfx;
+    return settle(next);
+}
+
+/**
+ * How the two shots of a transition are shown `m` (0..1) of the way through it:
+ * { inn, out } the opacities of the shot coming in (over) and the one going out
+ * (under), `color` what lies under both (a dip), `wipe` { dir, share } the part
+ * of the frame the shot coming in has taken (it is then at full opacity).
+ */
+export function transitionLook(tfx, m) {
+    const t = Math.max(0, Math.min(1, num(m)));
+    const x = cleanTfx(tfx);
+    if (x && x.type === "dip") {
+        return t < 0.5 ? { inn: 0, out: 1 - 2 * t, color: x.color } : { inn: 2 * t - 1, out: 0, color: x.color };
+    }
+    if (x && x.type === "wipe") return { inn: 1, out: 1, wipe: { dir: x.dir, share: t } };
+    return { inn: t, out: 1 };
 }

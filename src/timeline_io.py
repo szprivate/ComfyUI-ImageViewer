@@ -290,6 +290,26 @@ def clean_keys(given):
     return out
 
 
+# A V1 dissolve's look (imageViewer_editTimelineData.js, "video transitions"): a cross
+# dissolve, a dip to a colour, or a wipe. Kept on the OTIO Transition in
+# metadata.imageviewer.transition; its transition_type stays SMPTE_Dissolve, so
+# another program reads a dissolve of the same length.
+WIPE_DIRS = ("right", "left", "down", "up")
+_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def clean_tfx(x):
+    """A transition's look held to what it may be (cleanTfx); None for a cross dissolve."""
+    if not isinstance(x, dict):
+        return None
+    if x.get("type") == "dip":
+        color = str(x.get("color") or "")
+        return {"type": "dip", "color": color.lower() if _HEX.match(color) else "#000000"}
+    if x.get("type") == "wipe":
+        return {"type": "wipe", "dir": x.get("dir") if x.get("dir") in WIPE_DIRS else "right"}
+    return None
+
+
 def _look(item):
     """What the panel shows of a clip beyond its range: its colour, its volume,
     and what the Inspector did to its picture (``fx``)."""
@@ -1045,7 +1065,7 @@ def editable(doc):
             before = _seconds(child.get("in_offset") or {})
             after = _seconds(child.get("out_offset") or {})
             out["clips"][-1]["length"] = round(out["clips"][-1]["length"] + after, 4)
-            pending = (before, after)
+            pending = (before, after, clean_tfx(_imageviewer(child).get("transition")))
             continue
         if schema.startswith("Gap"):
             _start, length = _span(child.get("source_range"))
@@ -1068,10 +1088,12 @@ def editable(doc):
             clip["gap"] = round(gap, 4)
             gap = 0.0
         if pending:
-            before, after = pending
+            before, after, tfx = pending
             clip["in"] = max(0.0, start - before * clip["speed"])
             clip["length"] = length + before
             clip["transition"] = round(before + after, 4)
+            if tfx:
+                clip["tfx"] = tfx
             pending = None
         clip["in"], clip["length"] = round(clip["in"], 4), round(clip["length"], 4)
         out["clips"].append(clip)
@@ -1390,7 +1412,10 @@ def rebuild(doc, edit, stamp="", may_use=None):
             children.append({"OTIO_SCHEMA": "Gap.1", "name": "", "metadata": {}, "effects": [], "markers": [],
                              "source_range": _range(0.0, frames / rate, rate)})
         if head or before:
-            children.append({"OTIO_SCHEMA": "Transition.1", "name": "", "metadata": {},
+            tfx = clean_tfx(given.get("tfx")) if isinstance(given, dict) else None
+            children.append({"OTIO_SCHEMA": "Transition.1",
+                             "name": {"dip": "Dip to Color", "wipe": "Wipe"}.get((tfx or {}).get("type"), ""),
+                             "metadata": {"imageviewer": {"transition": tfx}} if tfx else {},
                              "transition_type": "SMPTE_Dissolve",
                              "in_offset": _rt(head, rate), "out_offset": _rt(before, rate)})
         item = copy.deepcopy(ref if isinstance(ref, dict) else source[ref])

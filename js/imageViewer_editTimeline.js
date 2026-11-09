@@ -914,7 +914,10 @@ export const EditTimelineMixin = {
                 }
                 // A dissolve: a bar over the join, as long as the dissolve is.
                 for (const m of lay.mixes) {
-                    const b = block("edit-mix" + (picked("mix", m.i) ? " sel" : ""), m, "Cross Dissolve");
+                    const tfx = D.cleanTfx(cut.clips[m.i] && cut.clips[m.i].tfx);
+                    const b = block("edit-mix" + (picked("mix", m.i) ? " sel" : "") + (tfx ? " " + tfx.type : ""), m,
+                                    D.TRANSITION_TYPES[tfx ? tfx.type : "dissolve"]);
+                    b.dataset.look = tfx ? tfx.type : "dissolve";
                     b.addEventListener("pointerdown", (e) => this._editTlMixDown(e, b, m.i));
                     b.addEventListener("pointermove", (e) => this._editTlMixHover(e, b, m.i));
                     b.addEventListener("pointerleave", () => this._editTlHoverEnd());
@@ -1239,6 +1242,16 @@ export const EditTimelineMixin = {
         const entries = [{ label: sel.kind === "text" ? "Remove this text" : sel.kind === "mix" ? "Remove this dissolve" : "Remove from the cut",
                            disabled: sel.kind === "clip" && this._editTlCut.clips.length <= 1,
                            run: () => this._editTlRemove(sel) }];
+        if (sel.kind === "mix") {
+            // What the transition is: a cross dissolve, a dip to black / white, a wipe (D.setTransitionLook).
+            const now = D.cleanTfx((this._editTlCut.clips[sel.i] || {}).tfx);
+            const looks = [["Cross Dissolve", null], ["Dip to Black", { type: "dip", color: "#000000" }],
+                           ["Dip to White", { type: "dip", color: "#ffffff" }], ["Wipe", { type: "wipe", dir: (now && now.dir) || "right" }]];
+            entries.unshift(...looks.map(([label, look]) => ({
+                label: (JSON.stringify(now) === JSON.stringify(D.cleanTfx(look)) ? "\u2713 " : "") + label,
+                run: () => this._editTlApply(D.setTransitionLook(this._editTlCut, sel.i, look)),
+            })), "-");
+        }
         if (D.isClipSel(sel) || sel.kind === "text") {
             // Resolve's Copy / Paste Attributes (imageViewer_editPaste.js), first.
             entries.unshift({ label: "Copy (Ctrl+C)", run: () => this.editTlCopy(sel) },
