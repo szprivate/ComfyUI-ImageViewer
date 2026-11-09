@@ -385,7 +385,7 @@ def resolve_workflow(action, wid=None, graph=None):
         if isinstance(graph, dict) and isinstance(graph.get("output"), dict):
             graph = graph["output"]
         if not is_api_graph(graph):
-            raise GenerateError("this workflow runs from the canvas: the page sends it as ComfyUI turned it into a prompt")
+            raise GenerateError("the page did not send this workflow as a prompt (reload the page: an older one may be cached)")
         if len(json.dumps(graph)) > MAX_GRAPH_BYTES:
             raise GenerateError("that workflow is too large")
         return e, copy.deepcopy(graph)

@@ -106,7 +106,7 @@ export const SelectGuidesMixin = {
         const m = emptyAround(this.pix.get(L.id), L, this.doc.w, this.doc.h);
         if (!m) { this._notify("The layer covers the whole canvas: nothing is empty around it.", "info"); return false; }
         this.setSelection(m, "Select empty areas");
-        if (this.host.generate) this.host.generate("fill", { prompt: (this._prompt || "").trim() || EMPTY_PROMPT, variations: this._variations || 1 });
+        if (this.host.generate) this.host.generate("fill", { prompt: (this._prompt || "").trim() || EMPTY_PROMPT, variations: this._variations || 1, label: "Extend empty areas" });
         return true;
     },
 
