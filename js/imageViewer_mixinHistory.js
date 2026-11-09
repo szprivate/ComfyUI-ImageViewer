@@ -1070,7 +1070,12 @@ export const HistoryMixin = {
                     const idx = at();
                     if (ev.shiftKey) this.extendHistorySelection(key, idx);
                     else if (ev.ctrlKey || ev.metaKey) this.toggleHistorySelection(key, idx);
-                    else this.startHistorySelection(key, idx);
+                    else {
+                        this.startHistorySelection(key, idx);
+                        // A plain click loads it into the Source viewer, as
+                        // Resolve's media pool does; the cut stays on screen.
+                        if (ev.detail <= 1) this._historyToSource(idx);
+                    }
                 };
                 thumb.ondblclick = (ev) => {
                     ev.stopPropagation();
@@ -1136,7 +1141,7 @@ export const HistoryMixin = {
             thumb.title = borrowed
                 ? `History ${idx + 1}${what}${fromWords}${groupWords}\n` +
                   `Drag onto the timeline to add it to the cut\n` +
-                  `Click to select it, Ctrl+click to add to the selection, Shift+click for a range\n` +
+                  `Click to load it into the Source viewer, Ctrl+click to add to the selection, Shift+click for a range\n` +
                   `Double-click to open it in its tab\n` +
                   `Right-click to tag it or move it to another group`
                 : `History ${idx + 1}${what}${fromWords}${groupWords}\n` +
@@ -1223,6 +1228,15 @@ export const HistoryMixin = {
      * picture is kept in previewBackup and comes back with restoreHistoryView or
      * when the user leaves the tab.
      */
+    /** On a cut's tab: the snapshot at `idx` into the Source viewer (EditSourceMixin). */
+    _historyToSource(idx) {
+        if (!this.editSrcLoadItems || !this._historyDragItem) return;
+        const snapshot = (this.historyStack() || [])[idx];
+        const imgObj = snapshot && snapshot[0];
+        const item = imgObj ? this._historyDragItem(imgObj, snapshot) : null;
+        if (item) this.editSrcLoadItems([item]).catch(() => {});
+    },
+
     openHistorySnapshot(key, index) {
         key = HISTORY_KEY;
         const stack = this.history[key];

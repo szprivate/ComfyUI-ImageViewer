@@ -241,16 +241,21 @@ export const EditSourceMixin = {
         if (!file) return null;
         const still = STILL.test(file), sound = SOUND.test(file);
         let dur = still ? Infinity : 0;
+        const tab = this.activeTab;
         if (!still && this._editTlProbe) {
             const info = (await this._editTlProbe([file]))[file];
             if (info && info.duration > 0) dur = info.duration;
         }
+        // The user left the cut's tab while its length was asked for (a History
+        // double-click goes to the snapshot's tab): kept, shown with the next cut.
+        const left = this.activeTab !== tab;
         const fps = this._editSrcFps();
         const name = item.name || String(file).split(/[\\/]/).pop();
         this._editSrc = { file, name, still, sound, dur: dur || null, in: null, out: null,
                           head: still ? 0 : Math.max(0, Math.floor((Number(src) || 0) * fps + 1e-6) / fps) };
         this._editSrcKeep();
         this._editSrcEl = null;
+        if (left) return this._editSrc;
         if (!this._editSrcOn()) this.editSrcToggle(true);
         else if (!this._editSrcUp()) this.editSrcSwap("source");
         this.editSrcRender();
@@ -493,11 +498,20 @@ export const EditSourceMixin = {
             if (raw) items = (JSON.parse(raw).items) || [];
         } catch (_) {}
         if (!items.length && dt.files && dt.files.length && this._editTlOsItems) items = this._editTlOsItems(dt.files);
-        if (!items.length) return;
+        return this.editSrcLoadItems(items);
+    },
+
+    /**
+     * Load the first of `items` (the History payload's items, a file browser
+     * row, a canvas node's clips) into the Source viewer, its file found first
+     * where it has only filename / type / subfolder. -> the source state or null.
+     */
+    async editSrcLoadItems(items) {
+        if (!items || !items.length) return null;
         const got = this._editTlResolve ? await this._editTlResolve(items.slice(0, 1)) : { items };
         const it = got.items && got.items[0];
-        if (!it || !it.path) { this._editTlSay("cannot load that into the Source viewer"); return; }
-        await this.editSrcLoad({ path: it.path, name: it.name || it.filename }, 0);
+        if (!it || !it.path) { this._editTlSay("cannot load that into the Source viewer"); return null; }
+        return this.editSrcLoad({ path: it.path, name: it.name || it.filename }, 0);
     },
 
     // ── where it goes, and the edit ─────────────────────────────────────────

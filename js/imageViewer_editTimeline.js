@@ -2887,7 +2887,8 @@ export const EditTimelineMixin = {
         let held = null;
         page.addEventListener("pointerdown", (e) => {
             held = null;
-            if (e.button !== 0 || e.target !== canvasEl || !this._editTlOpen()) return;
+            const srcUp = !!(this._editSrcUp && this._editSrcUp());
+            if (e.button !== 0 || e.target !== canvasEl || !(this._editTlOpen() || srcUp)) return;
             const over = app.canvas.node_over;
             if (!over) return;
             const picked = Object.values(app.canvas.selected_nodes || {});
@@ -2898,6 +2899,29 @@ export const EditTimelineMixin = {
             const was = held;
             held = null;
             if (!was || Math.hypot(e.clientX - was.x, e.clientY - was.y) < 12) return;
+            const inside = (el) => {
+                if (!el || el.ownerDocument !== page) return false;
+                const b = el.getBoundingClientRect();
+                return b.width > 0 && e.clientX >= b.left && e.clientX <= b.right && e.clientY >= b.top && e.clientY <= b.bottom;
+            };
+            const putBack = () => {
+                was.nodes.forEach((n, i) => { n.pos[0] = was.pos[i][0]; n.pos[1] = was.pos[i][1]; });
+                if (app.graph && app.graph.setDirtyCanvas) app.graph.setDirtyCanvas(true, true);
+            };
+            // Let go over the Source viewer: the (first) node's media is loaded there.
+            if (this._editSrcUp && this._editSrcUp() && inside(this.editSourcePanel)) {
+                (page.defaultView || window).setTimeout(async () => {
+                    putBack();
+                    const items = [];
+                    for (const node of D.canvasOrder(was.nodes)) {
+                        try { items.push(...await nodeMediaClips(node)); } catch (_) {}
+                        if (items.length) break;
+                    }
+                    if (!items.length) { this._editTlSay("that node holds no file to load (a loader, a saved result or a path does)"); return; }
+                    await this.editSrcLoadItems(items);
+                }, 0);
+                return;
+            }
             const host = this.editTimelinePanel;
             // Only a panel on the canvas's own page can be dropped onto.
             if (!host || host.ownerDocument !== page || !this._editTlOpen()) return;
@@ -2913,8 +2937,7 @@ export const EditTimelineMixin = {
             const room = this._editTlRoomAt(e.clientY);
             // After the canvas has finished its own handling of the release.
             (page.defaultView || window).setTimeout(() => {
-                was.nodes.forEach((n, i) => { n.pos[0] = was.pos[i][0]; n.pos[1] = was.pos[i][1]; });
-                if (app.graph && app.graph.setDirtyCanvas) app.graph.setDirtyCanvas(true, true);
+                putBack();
                 this._editTlAddNodes(was.nodes, at, track === "V1" || track === "T" || track === "A1" ? "" : track, room);
             }, 0);
         }, true);

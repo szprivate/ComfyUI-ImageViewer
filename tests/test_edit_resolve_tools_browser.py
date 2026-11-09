@@ -568,6 +568,47 @@ class EditResolveToolsBrowserTests(Base):
         pg.evaluate("() => localStorage.removeItem('imageviewer.viewer.editAudio')")
         self.assertEqual(self.errors, [])
 
+    def test_history_clicks_and_drops_from_history_browser_and_canvas_load_the_source_viewer(self):
+        pg = self.page()
+        pg.evaluate("() => { const P = __panel; try { localStorage.removeItem('imageviewer.viewer.editSource'); } catch (_) {} P._editSrc = undefined; P.editSrcViewerMode('dual'); P.editSrcToggle(false); P.editTlRefresh(); }")
+        src = "() => __panel._editSrc ? __panel._editSrc.file : null"
+        tab = pg.evaluate("() => __panel.activeTab")
+        # A plain click on a History thumbnail on the cut's tab: into the Source viewer (opened for it), the cut stays up.
+        pg.evaluate("""() => { const P = __panel;
+            P.pushHistorySnapshot('viewer', [{ filename: 'hist.png', type: 'output', subfolder: '', kind: 'image' }]);
+            P._historyPanelSig = null; P.renderHistoryPanel();
+            const t = P.historyStrip.querySelector('[data-idx="0"]'); t.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })); }""")
+        pg.wait_for_function("() => __panel._editSrc && __panel._editSrc.file === 'D:/out/hist.png'", timeout=5000)
+        self.assertEqual(pg.evaluate("() => [__panel.activeTab, __panel._editSrcUp()]"), [tab, True])
+        # Ctrl+click only adds to the selection.
+        pg.evaluate("""() => { const P = __panel; P._editSrc = null;
+            P.historyStrip.querySelector('[data-idx="0"]').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1, ctrlKey: true })); }""")
+        pg.wait_for_timeout(200)
+        self.assertIsNone(pg.evaluate(src))
+        # A file browser row dropped on it (the same payload as a History thumbnail).
+        drop = """([items]) => { const b = __panel.editSourcePanel.querySelector('.src-body'); const dt = new DataTransfer();
+            dt.setData('application/x-imageviewer-history', JSON.stringify({ items }));
+            b.dispatchEvent(new DragEvent('drop', { bubbles: true, composed: true, cancelable: true, dataTransfer: dt })); }"""
+        pg.evaluate(drop, [[{"path": "D:/pics/browser.jpg", "filename": "browser.jpg", "kind": "image", "external": True}]])
+        pg.wait_for_function("() => __panel._editSrc && __panel._editSrc.file === 'D:/pics/browser.jpg'", timeout=5000)
+        # A node dragged off the canvas and let go over it: its media, the node put back, the cut untouched.
+        before = pg.evaluate("() => JSON.stringify(__panel._editTlCut)")
+        pg.evaluate("""async () => { const { app } = await import('/scripts/app.js');
+            const cv = document.createElement('canvas'); Object.assign(cv.style, { position: 'fixed', left: '0', top: '0', width: '10px', height: '10px' });
+            document.body.append(cv); app.canvas.canvas = cv;
+            const node = { id: 7, type: 'LoadImage', title: 'Load Image', pos: [10, 10], widgets: [{ name: 'image', value: 'house.png', type: 'combo' }], inputs: [], outputs: [] };
+            window.__node = node; app.canvas.node_over = node; app.canvas.selected_nodes = {};
+            __panel._editTlCanvasBound = false; __panel._editTlWatchCanvas(); }""")
+        x, y = pg.evaluate("() => { const r = __panel.editSourcePanel.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }")
+        pg.evaluate("""([x, y]) => { const cv = document.querySelector('body > canvas');
+            cv.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: 3, clientY: 3 }));
+            __node.pos = [300, 300];
+            document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, clientX: x, clientY: y })); }""", [x, y])
+        pg.wait_for_function("() => __panel._editSrc && __panel._editSrc.file === 'D:/in/house.png'", timeout=5000)
+        self.assertEqual(pg.evaluate("() => __node.pos"), [10, 10])
+        self.assertEqual(pg.evaluate("() => JSON.stringify(__panel._editTlCut)"), before)
+        self.assertEqual(self.errors, [])
+
     def test_the_viewer_switch_stays_at_the_right_in_every_layout_and_no_frame_on_the_timeline_viewer(self):
         pg = self.page()
         pg.evaluate("() => { const P = __panel; P.editSrcViewerMode('dual'); P.editSrcToggle(true); P.editTlRefresh(); }")

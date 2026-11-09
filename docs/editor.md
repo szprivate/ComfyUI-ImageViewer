@@ -62,7 +62,7 @@ It has two layouts, like Resolve's single and dual viewer modes. Switch between 
 - **Dual**: the source on the left, the timeline's picture on the right.
 - **Single**: one viewer, showing the source or the timeline. <kbd>Q</kbd> switches between them.
 
-Drop a clip from the History or the file browser onto it, or right-click a clip on the timeline › Open in Source viewer. While the Source viewer is open, <kbd>F</kbd> (match frame) loads the clip there instead of opening it in the Viewer tab.
+To load a clip into it, click a History thumbnail while a cut is open (this opens the Source viewer if it is off). You can also drop a clip onto it from the History, the file browser, the desktop or the node canvas, or right-click a clip on the timeline › Open in Source viewer. To see a History item in the Viewer instead, switch to the Viewer tab first, or double-click the thumbnail. While the Source viewer is open, <kbd>F</kbd> (match frame) loads the clip there instead of opening it in the Viewer tab.
 
 Click the Source viewer to give it the keys. Then:
 - <kbd>Space</kbd> plays the source.
