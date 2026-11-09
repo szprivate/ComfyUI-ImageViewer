@@ -100,13 +100,14 @@ export function cleanFx(given) {
 // loop does not stretch them), `v` the value there, `i` how it goes on to the
 // next key: absent "linear", "in" (ease in), "out" (ease out), "inout", "hold".
 // A param with keys ignores its static number. The flips are switches and are
-// not keyed; the speed is one number per clip and is not keyed either.
+// not keyed. The speed ("spd", a multiple of the clip's own: 0.5 = 50 %) may be:
+// a speed ramp - see rampOf.
 // timeline_io.clean_fx / timeline_render.key_value are the same in Python - a
 // change to one is a change to the other (tests/test_edit_disabled_keys.py).
 
-export const KEY_PARAMS = [...Object.keys(FX), "vol", ...Object.keys(TITLE_KEYS)];
+export const KEY_PARAMS = [...Object.keys(FX), "vol", ...Object.keys(TITLE_KEYS), "spd"];
 export const INTERPS = ["linear", "in", "out", "inout", "hold"];
-const KEY_RANGE = (p) => (p === "vol" ? [0, 1] : TITLE_KEYS[p] ? TITLE_NUM[TITLE_KEYS[p]].slice(1) : [FX[p][1], FX[p][2]]);
+const KEY_RANGE = (p) => (p === "vol" ? [0, 1] : p === "spd" ? [MIN_SPEED, MAX_SPEED] : TITLE_KEYS[p] ? TITLE_NUM[TITLE_KEYS[p]].slice(1) : [FX[p][1], FX[p][2]]);
 
 /** Keys held to what they may be: known params, finite, sorted, one per moment (the last wins), at most 1000 each. */
 export function cleanKeys(given) {
@@ -171,6 +172,7 @@ export function paramAt(c, p, u) {
     const list = keysOf(c, p);
     if (list.length) return keyValue(list, u);
     if (p === "vol") return Math.max(0, Math.min(1, c && c.volume != null ? num(c.volume, 1) : 1));
+    if (p === "spd") return speedOf(c);
     if (TITLE_KEYS[p]) return cleanTitle(c && c.title)[TITLE_KEYS[p]];
     const fx = cleanFx(c && c.fx);
     return fx[p] === undefined ? FX[p][0] : fx[p];
@@ -443,6 +445,11 @@ export function trimStart(cut, i, delta) {
 export function outRoom(c, durations) {
     if (!c || isStillClip(c) || loopOf(c) || motionOf(c) === "freeze") return Infinity;
     if (motionOf(c) === "reverse") return Math.max(0, num(c.in) / speedOf(c) - num(c.length));   // back to the source's start
+    const ramp = rampOf(c);
+    if (ramp.length) {
+        const known = num(durations && durations[c.file], 0);
+        return known > 0 ? Math.max(0, (known - num(c.in) - srcUse(c)) / ramp[ramp.length - 1].v) : Infinity;
+    }
     const room = srcRoom(c, durations);
     return Number.isFinite(room) ? Math.max(0, room / speedOf(c) - num(c.length)) : Infinity;
 }
@@ -456,7 +463,8 @@ export function inRoom(c, durations) {
         const known = num(durations && durations[c.file], 0);
         return known > 0 ? Math.max(0, (known - num(c.in)) / speedOf(c)) : Infinity;
     }
-    return num(c.in) / speedOf(c);
+    const ramp = rampOf(c);
+    return num(c.in) / (ramp.length ? ramp[0].v : speedOf(c));
 }
 
 // How far a clip's start may go later: the clip keeps MIN_CLIP (and a loop one turn of it).
@@ -469,7 +477,8 @@ function headSpare(c) {
 // it (at its speed); a loop's turn loses what its head lost.
 function headTrim(c, d) {
     if (!isStillClip(c)) {
-        c.in = num(c.in) + d * stepOf(c);
+        c.in = num(c.in) + srcAdvance(c, d);
+        shiftRamp(c, d);
         if (loopOf(c)) c.span = num(c.span) - d * speedOf(c);
     }
     c.length = num(c.length) - d;
@@ -1332,7 +1341,7 @@ export function splitClip(cut, sel, seconds) {
         const high = num(c.length) - (following > 0 ? following + MIX_MARGIN : MIN_CLIP);
         if (local < low - 1e-6 || local > high + 1e-6) return null;
         const a = next.clips[i];
-        const b = { ...a, in: round(num(a.in) + local * stepOf(a)), length: round(num(a.length) - local), transition: 0 };
+        const b = { ...a, in: round(num(a.in) + srcAdvance(a, local)), length: round(num(a.length) - local), transition: 0 };
         delete b.gap;
         delete b.uid;                                // a piece of its own (undo finds each by its uid)
         delete b.link; delete b.unlinked;            // splitWithLink pairs it again
@@ -1348,7 +1357,7 @@ export function splitClip(cut, sel, seconds) {
         if (loopOf(a)) return null;
         const local = round(t - num(a.at));
         if (local < MIN_CLIP - 1e-6 || local > num(a.length) - MIN_CLIP + 1e-6) return null;
-        const b = { ...a, at: round(num(a.at) + local), in: round(num(a.in) + local * stepOf(a)), length: round(num(a.length) - local) };
+        const b = { ...a, at: round(num(a.at) + local), in: round(num(a.in) + srcAdvance(a, local)), length: round(num(a.length) - local) };
         delete b.uid;
         delete b.link; delete b.unlinked;
         if (a.fx) [a.fx, b.fx] = splitFx(a.fx, local);
@@ -1740,6 +1749,7 @@ export function agentLoses(cut) {
     const all = [...((cut && cut.clips) || []), ...((cut && cut.tracks) || []).flatMap((k) => k.clips || [])];
     if (all.some((c) => Object.keys(cleanFx(c.fx)).length)) out.push("transforms, crops and opacity (the Inspector's Video tab)");
     if (all.some((c) => speedOf(c) !== 1)) out.push("speed changes (retimed clips come back at 100 %)");
+    if (all.some((c) => rampOf(c).length)) out.push("speed ramps (a ramped clip comes back at its own speed)");
     if (all.some((c) => motionOf(c))) out.push("freeze frames and reversed clips (they come back playing forwards)");
     if (all.some((c) => loopOf(c))) out.push("loops (a looped clip comes back played once)");
     const plain = JSON.stringify(textLook({}));
@@ -1761,7 +1771,7 @@ export function agentLoses(cut) {
  * where the clip begins in the film.
  */
 export function cutMarks(cuts, clip, start, sensitivity = 0.5, fps = 24) {
-    if (motionOf(clip)) return [];                      // frozen / reversed: not split at the source's cuts
+    if (motionOf(clip) || rampOf(clip).length) return [];   // frozen / reversed / ramped: not split at the source's cuts
     const from = num(clip && clip.in), len = srcUse(clip), sp = speedOf(clip);
     const edge = Math.max(MIN_CLIP, 1 / (num(fps) > 0 ? num(fps) : 24));
     const need = cutThreshold(sensitivity);
@@ -1824,7 +1834,7 @@ export function speedOf(c) {
 
 /** How a clip loops: "loop", "pingpong" - or "" for not at all (nor while it is frozen or reversed). */
 export function loopOf(c) {
-    return c && (c.loop === "loop" || c.loop === "pingpong") && num(c.span) > 0 && !isStillClip(c) && !motionOf(c) ? c.loop : "";
+    return c && (c.loop === "loop" || c.loop === "pingpong") && num(c.span) > 0 && !isStillClip(c) && !motionOf(c) && !rampOf(c).length ? c.loop : "";
 }
 
 /**
@@ -1837,6 +1847,67 @@ export function motionOf(c) {
     return c && (c.motion === "reverse" || c.motion === "freeze") && !isStillClip(c) ? c.motion : "";
 }
 
+/**
+ * A clip's speed ramp: its "spd" keys (clip time, a multiple of its own speed,
+ * eased as any key) - or [] for none. A ramped clip's source runs at the speed
+ * the keys give at each moment: `srcLocal` is its in point plus the integral of
+ * that speed (rampAdvance), its length stays where it is (Resolve's speed points
+ * ripple it; here the clip keeps its place and what it shows changes). Not on a
+ * still or a title, nor with a freeze / reverse (motion wins); a ramped clip
+ * does not loop, is not retimed by its edges and, as a freeze or a reverse, is
+ * silent - the player steps it frame by frame.
+ */
+export function rampOf(c) {
+    if (!c || isStillClip(c) || (c.motion === "reverse" || c.motion === "freeze")) return [];
+    return keysOf(c, "spd");
+}
+
+// ∫0^x of a key's share curve (easeShare): the source a stretch of a ramp runs over.
+function shareArea(x, how) {
+    if (how === "hold") return 0;
+    if (how === "in") return x * x * x / 3;
+    if (how === "out") return x * x - x * x * x / 3;
+    if (how === "inout") return x * x * x - x * x * x * x / 2;
+    return x * x / 2;
+}
+
+/** Seconds of source a ramp runs over in the clip's first `u` seconds: the integral of keyValue(list, ·) over [0, u]. */
+export function rampAdvance(list, u) {
+    const t = Math.max(0, num(u));
+    if (!list || !list.length) return t;
+    let sum = 0;
+    const first = list[0], last = list[list.length - 1];
+    sum += Math.min(t, first.t) * first.v;
+    for (let k = 0; k + 1 < list.length; k++) {
+        const a = list[k], b = list[k + 1];
+        if (t <= a.t) break;
+        const dt = Math.max(1e-9, b.t - a.t);
+        const x = Math.min(1, (t - a.t) / dt);
+        sum += dt * (a.v * x + (b.v - a.v) * shareArea(x, a.i));
+    }
+    if (t > last.t) sum += (t - last.t) * last.v;
+    return sum;
+}
+
+/** Seconds of source the head of a clip moves over when it moves `d` seconds of the film (negative: earlier). */
+export function srcAdvance(c, d) {
+    const ramp = rampOf(c);
+    if (!ramp.length) return num(d) * stepOf(c);
+    return num(d) >= 0 ? rampAdvance(ramp, d) : num(d) * ramp[0].v;
+}
+
+// A ramp's keys as they lie after the clip's head moved `d` seconds (later: keys earlier, a key at 0 with the value there).
+function shiftRamp(c, d) {
+    const ramp = rampOf(c);
+    if (!ramp.length || !d) return;
+    const v0 = keyValue(ramp, Math.max(0, d));
+    const how = (ramp.filter((k) => k.t <= d + 1e-6).pop() || {}).i;
+    const after = ramp.filter((k) => k.t > d + 1e-6).map((k) => ({ ...k, t: round(k.t - d) }));
+    const keys = d > 0 ? [{ t: 0, v: v0, ...(how ? { i: how } : {}) }, ...after] : ramp.map((k) => ({ ...k, t: round(k.t - d) }));
+    const fx = cleanFx(c.fx);
+    c.fx = { ...fx, keys: { ...(fx.keys || {}), spd: cleanKeys({ spd: keys }).spd } };
+}
+
 /** Seconds of source per second of the clip: its speed, negative reversed, 0 frozen. */
 export function stepOf(c) {
     const m = motionOf(c);
@@ -1846,6 +1917,8 @@ export function stepOf(c) {
 /** How many seconds of its source a clip uses: one turn of a loop, none frozen, else its length at its speed. */
 export function srcUse(c) {
     if (motionOf(c) === "freeze") return 0;
+    const ramp = rampOf(c);
+    if (ramp.length) return rampAdvance(ramp, num(c.length));
     return loopOf(c) ? num(c.span) : num(c && c.length) * speedOf(c);
 }
 
@@ -1868,6 +1941,8 @@ export function srcLocal(c, u) {
     const motion = motionOf(c);
     if (motion === "freeze") return round(num(c.in));
     if (motion === "reverse") return round(Math.max(0, num(c.in) - q));
+    const ramp = rampOf(c);
+    if (ramp.length) return round(num(c.in) + rampAdvance(ramp, u));
     const mode = loopOf(c), span = num(c && c.span);
     if (!mode) return round(num(c && c.in) + q);
     if (mode === "loop") return round(num(c.in) + (q % span));
@@ -1884,6 +1959,7 @@ export function clipSegment(c, u) {
     const speed = speedOf(c), mode = loopOf(c);
     // Frozen or reversed: no run the browser can play - shown frame by frame (rev).
     if (motionOf(c)) return { u0: 0, u1: Infinity, base: num(c.in), rev: true, speed: motionOf(c) === "freeze" ? 0 : speed };
+    if (rampOf(c).length) return { u0: 0, u1: Infinity, base: num(c.in), rev: true, speed: rampOf(c)[0].v };
     if (!mode) return { u0: 0, u1: Infinity, base: num(c && c.in), rev: false, speed };
     const turn = num(c.span) / speed;
     const k = Math.max(0, Math.floor(num(u) / turn + 1e-9));
@@ -1910,7 +1986,7 @@ function clipRef(cut, sel) { return sel && (sel.kind === "clip" || sel.kind === 
 export function retimeClip(cut, sel, length, fromStart) {
     const next = copy(cut);
     const c = clipRef(next, sel);
-    if (!c) return next;
+    if (!c || rampOf(c).length) return next;                // a ramp keeps its speeds: take it off to retime
     const was = num(c.length), sp = speedOf(c);
     let len = Math.max(MIN_CLIP, num(length, was));
     if (!isStillClip(c) && motionOf(c) !== "freeze") {
@@ -1926,7 +2002,7 @@ export function retimeClip(cut, sel, length, fromStart) {
 /** A clip's speed set (1 = its own), its source kept: its length follows. */
 export function setSpeed(cut, sel, speed) {
     const c = clipRef(cut, sel);
-    if (!c || isStillClip(c) || motionOf(c) === "freeze") return copy(cut);
+    if (!c || isStillClip(c) || motionOf(c) === "freeze" || rampOf(c).length) return copy(cut);
     const s = Math.max(MIN_SPEED, Math.min(MAX_SPEED, num(speed, 1)));
     return retimeClip(cut, sel, num(c.length) * speedOf(c) / s);
 }
@@ -2371,7 +2447,7 @@ export function activeTake(c) { return takesOf(c).find((t) => t && t.active) || 
  * shortened (0 when it was not).
  */
 function fitSource(c, durations, retime) {
-    if (isStillClip(c) || motionOf(c)) return 0;
+    if (isStillClip(c) || motionOf(c) || rampOf(c).length) return 0;
     const known = durationFor(durations, c.file);
     if (!(known > 0)) return 0;
     const sp = speedOf(c);
@@ -3736,9 +3812,10 @@ export function autoKey(cut, sel, patch, u) {
     for (const [p, v] of Object.entries(patch)) (KEY_PARAMS.includes(p) && keysOf(c, p).length ? keyed : plain)[p] = v;
     let next = cut;
     if (Object.keys(keyed).length) next = setKeys(next, sel, keyed, u);
-    const vol = plain.vol;
-    delete plain.vol;
+    const vol = plain.vol, spd = plain.spd;
+    delete plain.vol; delete plain.spd;
     if (Object.keys(plain).length) next = setClipFx(next, sel, plain);
+    if (spd !== undefined) next = setSpeed(next, sel, spd);
     if (vol !== undefined) next = setClipProps(next, sel, { volume: vol });
     return next === cut ? copy(cut) : next;
 }
@@ -4157,7 +4234,7 @@ export function xfadeSides(x) {
 
 // May this clip carry a crossfade or have one on its side (a sound that can run on: no loop, no picture)?
 function xfadeable(c, v1) {
-    return !!c && !loopOf(c) && !motionOf(c) && !isStillImage(c.file) && !(v1 && (isStill(c.file) || c.mute));
+    return !!c && !loopOf(c) && !motionOf(c) && !rampOf(c).length && !isStillImage(c.file) && !(v1 && (isStill(c.file) || c.mute));
 }
 
 /** The clip a crossfade into `sel` comes from: the one that ends where it begins on its track (a selection), or null. */
@@ -4384,7 +4461,7 @@ export function envGain(env, u) {
 
 /** The moment of a clip's source at clip time `u`, a crossfade's handle before it included (u < 0). */
 export function srcAt(c, u) {
-    return num(u) < 0 ? round(Math.max(0, num(c && c.in) + num(u) * stepOf(c))) : srcLocal(c, u);
+    return num(u) < 0 ? round(Math.max(0, num(c && c.in) + srcAdvance(c, u))) : srcLocal(c, u);
 }
 
 /** The crossfades of the cut, for drawing: [{ sel, track, cutAt, start, len, b, a, curve, align, left, width, title }] (% of `total`). */
@@ -4604,6 +4681,14 @@ export function cleanClipMarkers(list) {
 export function clipMarkU(c, m) {
     if (!c || !m) return null;
     const still = isStillClip(c);
+    const ramp = still ? [] : rampOf(c);
+    if (ramp.length) {                                    // the moment whose source is m.src: the ramp runs forwards, so halve
+        const want = num(m.src) - num(c.in), L = num(c.length);
+        if (want < -1e-6 || want > rampAdvance(ramp, L) + 1e-6) return null;
+        let lo = 0, hi = L;
+        for (let k = 0; k < 40; k++) { const mid = (lo + hi) / 2; if (rampAdvance(ramp, mid) < want) lo = mid; else hi = mid; }
+        return round(hi);
+    }
     const st = stepOf(c);
     if (!still && st === 0) return null;                   // a frozen clip shows one moment: its markers wait
     const u = still ? num(m.src) : (num(m.src) - num(c.in)) / st;

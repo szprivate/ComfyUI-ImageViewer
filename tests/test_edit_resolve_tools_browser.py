@@ -280,5 +280,30 @@ class EditResolveToolsBrowserTests(Base):
         self.assertEqual(self.errors, [])
 
 
+    # ── speed ramps ──
+
+    def test_a_speed_ramp_from_the_speed_rows_diamond_plays_stepped(self):
+        # V1: a 0-96 (a film, in 0), c 96-168, b 168-264 (frames).
+        pg = self.page()
+        pg.evaluate("() => { const P = __panel; P._editTlSel = { kind: 'clip', i: 0 }; P._editInspTab = 'timing'; P.setFrame(0); P.editTlRefresh(); }")
+        row = "() => __panel.editInspectorPanel.querySelector(\"[data-keys='spd']\")"
+        self.assertTrue(pg.evaluate(row + " !== null"), "the Speed row has its keyframe controls")
+        pg.evaluate("() => __panel.editInspectorPanel.querySelector(\"[data-keys='spd'] .insp-diamond\").click()")
+        self.assertEqual(pg.evaluate("() => __panel._editTlCut.clips[0].fx.keys.spd"), [{"t": 0, "v": 1}])
+        # At frame 48 a speed of 300 %: a second key, the clip keeps its length.
+        pg.evaluate("() => { __panel.setFrame(48); __panel.editTlRefresh(); }")
+        pg.evaluate("""() => { const f = __panel.editInspectorPanel.querySelector("[data-field='speed']"); f.value = '300'; f.dispatchEvent(new Event('change')); }""")
+        got = pg.evaluate("() => { const c = __panel._editTlCut.clips[0]; return [c.fx.keys.spd, c.length]; }")
+        self.assertEqual(got, [[{"t": 0, "v": 1}, {"t": 2, "v": 3}], 4])
+        self.assertIn("ramp", pg.evaluate("() => __panel._editTlUi.rows.querySelector('.edit-shot .edit-badge-time').textContent"))
+        # Played frame by frame: frame 72 (3.02 s into the clip) shows 2 + 2 + 3 x 1.02 seconds of source.
+        at = pg.evaluate("""async () => { const D = await import('/extensions/viewer/imageViewer_editTimelineData.js');
+            __panel.setFrame(72); const ep = __panel._ep; return [ep.at.local, D.srcLocal(__panel._editTlCut.clips[0], 72.5 / 24), ep.stepped]; }""")
+        self.assertEqual(at[0], at[1])
+        self.assertTrue(at[2])
+        self.assertAlmostEqual(at[0], 4 + 3 * 1.0208, places=3)
+        self.assertEqual(self.errors, [])
+
+
 if __name__ == "__main__":
     unittest.main()

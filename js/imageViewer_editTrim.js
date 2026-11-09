@@ -745,21 +745,22 @@ export const EditTrimMixin = {
 
     /** A clip's speed and loop, said on its block: "62 %", "loop x2.5" - and drawn (CSS: .retimed, .looped). */
     _editTlBadges(b, clip) {
-        const sp = D.speedOf(clip), loop = D.loopOf(clip), motion = D.motionOf(clip);
-        b.classList.toggle("retimed", sp !== 1 || !!motion);
+        const sp = D.speedOf(clip), loop = D.loopOf(clip), motion = D.motionOf(clip), ramp = D.rampOf(clip).length > 0;
+        b.classList.toggle("retimed", sp !== 1 || !!motion || ramp);
         b.classList.toggle("looped", !!loop);
         b.classList.toggle("frozen", motion === "freeze");
         b.classList.toggle("reversed", motion === "reverse");
-        if (sp === 1 && !loop && !motion) return;
+        if (sp === 1 && !loop && !motion && !ramp) return;
         const doc = b.ownerDocument;
         const tag = doc.createElement("span");
         tag.className = "edit-badge-time";
         const turns = loop ? Math.round(Number(clip.length) * sp / Number(clip.span) * 10) / 10 : 0;
-        tag.textContent = [motion === "freeze" ? "❚❚ freeze" : motion === "reverse" ? "◀◀" : "",
-                           sp !== 1 ? Math.round(sp * 100) + " %" : "", loop ? (loop === "pingpong" ? "⇄ " : "↻ ") + "×" + turns : ""]
+        tag.textContent = [motion === "freeze" ? "❚❚ freeze" : motion === "reverse" ? "◀◀" : "", ramp ? "ramp" : "",
+                           sp !== 1 && !ramp ? Math.round(sp * 100) + " %" : "", loop ? (loop === "pingpong" ? "⇄ " : "↻ ") + "×" + turns : ""]
             .filter(Boolean).join(" · ");
         tag.title = (motion === "freeze" ? "Freeze frame: one moment of its source held, silent. "
                      : motion === "reverse" ? "Reversed: its source played backwards, silent. " : "")
+            + (ramp ? "Speed ramp: its speed keyed (the Inspector's Timing tab), silent. " : "")
             + (sp !== 1 ? `Retimed: ${Math.round(sp * 100)} % of its own speed (Shift+R: back to 100 %). ` : "")
             + (loop ? `${loop === "pingpong" ? "Ping-pong" : "Looped"}: ${turns} turns of ${D.lengthLabel(clip.span)} of source.` : "");
         b.append(tag);

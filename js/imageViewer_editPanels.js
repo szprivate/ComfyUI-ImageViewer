@@ -605,14 +605,20 @@ export const EditPanelsMixin = {
                 row("Length", seconds(c.length, (v) => apply(placed ? D.trimTrackClipEnd(cut, sel.track, sel.i, v, dur)
                                                                     : D.trimEnd(cut, sel.i, v, dur))));
                 const sp = D.speedOf(c);
+                // A speed ramp (Resolve's speed points): the Speed row's diamond keys the speed; with keys the
+                // number is the speed at the playhead and a change there is a key, the length staying as it is.
+                const ramped = D.rampOf(c).length > 0;
+                const spNow = ramped ? D.paramAt(c, "spd", u) : sp;
                 if (isTitle) { into = null; note("A title has no source: make it longer or shorter by its edges, as any clip."); }
-                const speed = isTitle ? null : numField(sp * 100, 1, (v) => apply(D.setSpeed(cut, sel, v / 100)),
-                                       { step: 1, min: D.MIN_SPEED * 100, max: D.MAX_SPEED * 100, disabled: still,
-                                         title: "percent of its own speed: its source in and out stay, its length follows (Alt+drag an edge; Shift+R: 100 %)" });
+                const speed = isTitle ? null : numField(spNow * 100, 1, (v) => apply(ramped ? D.autoKey(cut, sel, { spd: v / 100 }, u) : D.setSpeed(cut, sel, v / 100)),
+                                       { step: 1, min: D.MIN_SPEED * 100, max: D.MAX_SPEED * 100, disabled: still || D.motionOf(c) === "freeze",
+                                         title: ramped ? "percent of its own speed at the playhead: a speed ramp - a change here is a keyframe, the clip keeps its length"
+                                             : "percent of its own speed: its source in and out stay, its length follows (Alt+drag an edge; Shift+R: 100 %). The diamond starts a speed ramp." });
                 if (!isTitle) {
                 speed.dataset.field = "speed";
-                row("Speed %", speed, sp === 1 ? null : () => apply(D.setSpeed(cut, sel, 1)));
-                const fill = seconds(c.length, (v) => apply(D.retimeClip(cut, sel, v)), still);
+                row("Speed %", speed, sp === 1 ? null : () => apply(D.setSpeed(cut, sel, 1)), still || D.motionOf(c) ? null : ["spd"]);
+                if (ramped) note("A speed ramp: its keys are the diamonds on the clip. The clip keeps its length; what it shows follows the speeds. It plays silent, frame by frame.");
+                const fill = seconds(c.length, (v) => apply(D.retimeClip(cut, sel, v)), still || ramped);
                 fill.title = "a length to fill by retiming: the source stays, the speed follows";
                 fill.dataset.field = "fill";
                 row("Retime to", fill);
@@ -638,7 +644,7 @@ export const EditPanelsMixin = {
                 motion.title = "Reverse: the same frames, last first. Freeze frame: the moment under the playhead held. Both are silent.";
                 motion.addEventListener("change", () => this.editTlMotion(sel, motion.value || D.motionOf(c)));
                 row("Motion", motion, D.motionOf(c) ? () => this.editTlMotion(sel, D.motionOf(c)) : null);
-                loop.disabled = still || !!D.motionOf(c);
+                loop.disabled = still || !!D.motionOf(c) || ramped;
                 row("Loop", [loop, said(D.loopOf(c) ? `${Math.round(Number(c.length) * sp / Number(c.span) * 100) / 100} turns of ${D.lengthLabel(c.span)}`
                                                   : (still ? "a still: just make it longer" : ""))]);
                 }
