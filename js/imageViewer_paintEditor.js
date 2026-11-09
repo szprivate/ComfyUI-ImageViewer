@@ -1042,11 +1042,14 @@ class PaintEditor {
      * (Shift+click: every row from the last one clicked to this one, as the panel lists them), else this
      * one alone. The active layer is the one tools paint on; the picked ones are what Layers' commands
      * (delete, duplicate, group, merge, move, opacity, blend, lock, hide) take together.
+     * While a mask is picked, Ctrl / Shift+click picks more MASKS: the picked layers that have one
+     * (`pickedMasks`), which Delete and the trash take away.
      */
     setActive(id, mask = false, how = null) {
         if (!this.doc) return;
         const L = this.doc.layers.find((x) => x.id === id);
         if (!L) return;
+        const keepMask = !!how && this.editMask && !!(this.active() || {}).mask;
         const em = !!(mask && L.mask) || (L.kind === "adjust" && mask);
         if (how === "toggle") {
             this.picked.add(this.doc.active);
@@ -1066,12 +1069,39 @@ class PaintEditor {
             this.picked = new Set([id]);
             this._pickAnchor = id;
         }
+        if (keepMask) {
+            // Picking masks: only layers that have one count.
+            const withMask = new Set(this.doc.layers.filter((X) => X.mask).map((X) => X.id));
+            this.picked = new Set([...this.picked].filter((x) => withMask.has(x)));
+            if (!withMask.has(id)) id = this.doc.active;
+            this.picked.add(id);
+        }
         if (this.tf && this.tf.L.id !== id) this.tfCommit();
         this.doc.active = id;
-        this.editMask = how ? false : em;
+        this.editMask = how ? keepMask : em;
         this.refreshPanels();
         this.drawOverlay();
         this._status();
+    }
+
+    /** The masks picked (a mask picked, then Ctrl / Shift+click on rows): their layers, bottom first. */
+    pickedMasks() {
+        if (!this.doc || !this.editMask) return [];
+        const L = this.active();
+        if (!L || !L.mask) return [];
+        return this.pickedLayers().filter((X) => X.mask);
+    }
+
+    /** Take the masks of these layers away: one undo step. */
+    deleteMasks(ids) {
+        if (!this.doc) return false;
+        const Ls = this.doc.layers.filter((X) => ids.includes(X.id) && X.mask);
+        if (!Ls.length) return false;
+        return this.change(Ls.length > 1 ? `Delete ${Ls.length} masks` : "Delete mask", () => {
+            for (const X of Ls) { delete X.mask; this.masks.delete(X.id); }
+            if (this.viewMask && Ls.some((X) => X.id === this.viewMask)) this.viewMask = null;
+            this.editMask = false;
+        });
     }
 
     /** Every layer picked in the Layers panel (the active one with them), bottom first. */
@@ -1572,7 +1602,10 @@ class PaintEditor {
         const L = this.active();
         if (!L || !L.mask) return false;
         if (cmd === "toggle") return this.setLayerProps(L.id, { mask: { ...L.mask, enabled: !L.mask.enabled } }, "Mask on / off");
-        if (cmd === "delete") return this.change("Delete mask", () => { delete L.mask; this.masks.delete(L.id); this.editMask = false; });
+        if (cmd === "delete") {
+            const many = this.pickedMasks();
+            return this.deleteMasks(many.length > 1 ? many.map((X) => X.id) : [L.id]);
+        }
         if (cmd === "invert") return this.change("Invert mask", () => { this.masks.set(L.id, D.invertMask(this.masks.get(L.id))); L.mask.fill = 255 - L.mask.fill; });
         if (cmd === "apply" && L.kind === "pixel") {
             return this.change("Apply mask", () => {
@@ -3275,17 +3308,23 @@ class PaintEditor {
                     this.btn("mask", "Add a mask (from the selection, with one)", () => this.addMask(this.sel ? "selection" : "all")),
                     (this.dupBtn = this.btn("copy", "Duplicate (Ctrl+J) - or drag layers onto it", () => this.duplicateLayer())),
                     this.btn("mergeDown", "Merge down (Ctrl+E)", () => this.mergeDown()),
-                    (this.trashBtn = this.btn("trash", "Delete the picked layers - or drag layers onto it", () => this.deleteLayer())));
+                    (this.trashBtn = this.btn("trash", "Delete the picked layers (or the picked masks) - or drag layers or masks onto it",
+                                              () => (this.pickedMasks().length ? this.maskCmd("delete") : this.deleteLayer()))));
         // A row dragged onto Duplicate or Delete: those layers copied / taken away (Photoshop's way).
         for (const [b, act] of [[this.dupBtn, "dup"], [this.trashBtn, "del"]]) {
-            b.addEventListener("dragover", (e) => { if (!this._rowDrag) return; e.preventDefault(); e.dataTransfer.dropEffect = act === "dup" ? "copy" : "move"; b.classList.add("drop-hot"); });
+            // Masks (a mask thumbnail dragged) go only onto Delete.
+            b.addEventListener("dragover", (e) => {
+                if (!this._rowDrag && !(this._maskDrag && act === "del")) return;
+                e.preventDefault(); e.dataTransfer.dropEffect = act === "dup" ? "copy" : "move"; b.classList.add("drop-hot");
+            });
             b.addEventListener("dragleave", () => b.classList.remove("drop-hot"));
             b.addEventListener("drop", (e) => {
                 e.preventDefault(); e.stopPropagation();
                 b.classList.remove("drop-hot");
-                const ids = this._rowDrag;
-                this._rowDrag = null;
-                if (ids && ids.length) this.dropOnButton(ids, act);
+                const ids = this._rowDrag, masks = this._maskDrag;
+                this._rowDrag = null; this._maskDrag = null;
+                if (masks && masks.length && act === "del") this.deleteMasks(masks);
+                else if (ids && ids.length) this.dropOnButton(ids, act);
             });
         }
         p.append(head, this.layerList, foot);
@@ -3388,10 +3427,21 @@ class PaintEditor {
                 row.append(a);
             }
             if (L.mask) {
-                const mt = this.el("canvas", (L.id === d.active && this.editMask) ? "sel" : "", { width: 40, height: 30,
+                const maskPicked = this.editMask && (L.id === d.active || (this.picked.has(L.id) && !!(this.active() || {}).mask));
+            const mt = this.el("canvas", maskPicked ? "sel" : "", { width: 40, height: 30,
                     title: "The mask: click to paint on it (white shows, black hides); Shift+click switches it off" });
                 if (!L.mask.enabled) mt.style.opacity = ".35";
-                mt.title = "The mask: click to paint on it (white shows, black hides); Shift+click switches it off; Alt+click shows it alone; Ctrl+click selects it";
+                mt.title = "The mask: click to paint on it (white shows, black hides); Shift+click switches it off; Alt+click shows it alone; Ctrl+click selects it; Ctrl / Shift+click other rows picks their masks too; drag onto the trash to delete";
+                mt.draggable = true;
+                mt.addEventListener("dragstart", (e) => {
+                    // The mask alone (or every picked mask when it is one of them) - not the layer.
+                    e.stopPropagation();
+                    const many = maskPicked ? this.pickedMasks().map((X) => X.id) : [];
+                    this._maskDrag = many.length ? many : [L.id];
+                    this._rowDrag = null;
+                    e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", L.name + " mask");
+                });
+                mt.addEventListener("dragend", (e) => { e.stopPropagation(); this._maskDrag = null; });
                 mt.addEventListener("click", (e) => {
                     e.stopPropagation();
                     const ctrl = e.ctrlKey || e.metaKey;
@@ -3462,11 +3512,12 @@ class PaintEditor {
             row.addEventListener("dragstart", (e) => {
                 // A picked row drags every picked layer; another row only itself.
                 this._rowDrag = this.picked.has(L.id) ? this.pickedLayers().map((x) => x.id) : [L.id];
-                e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", L.name);
+                e.dataTransfer.effectAllowed = "copyMove"; e.dataTransfer.setData("text/plain", L.name);
             });
             row.addEventListener("dragover", (e) => {
                 if (!this._rowDrag) return;
                 e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
                 const z = zone(e);
                 row.classList.toggle("drop-above", z === "above"); row.classList.toggle("drop-below", z === "below"); row.classList.toggle("drop-inside", z === "inside");
             });

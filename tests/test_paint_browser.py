@@ -1748,6 +1748,66 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual([n.split(":")[0] for n in vis()], ["Background", "A", "A copy"])
         self.assertEqual(self.errors, [])
 
+    def real_drag(self, pg, src_js, dst_js):
+        """A real drag with the mouse (Playwright), so the browser checks effectAllowed against dropEffect -
+        a synthetic DragEvent does not."""
+        pg.evaluate(f"() => ({src_js}).scrollIntoView({{ block: 'nearest' }})")
+        a = pg.evaluate(f"() => {{ const r = ({src_js}).getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; }}")
+        b = pg.evaluate(f"() => {{ const r = ({dst_js}).getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; }}")
+        pg.mouse.move(a[0], a[1])
+        pg.mouse.down()
+        pg.mouse.move(a[0] + 4, a[1] + 4, steps=2)
+        pg.mouse.move(b[0], b[1], steps=8)
+        pg.mouse.move(b[0] + 1, b[1], steps=2)
+        pg.mouse.up()
+
+    def test_real_drag_of_a_layer_onto_duplicate_and_of_masks_onto_the_trash(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        pg.evaluate(f"() => {{ const e = {ed}; e.newLayer('A'); e.newLayer('B'); }}")
+        names = lambda: pg.evaluate(f"() => {ed}.doc.layers.map((l) => l.name)")
+        row = lambda n: f"[...{ed}.layerList.querySelectorAll('.paint-row')].find((x) => x.querySelector('.nm').textContent === '{n}')"
+        btn = lambda t: f"[...{ed}.parts.layers.querySelectorAll('.paint-lfoot .paint-btn')].find((x) => x.title.startsWith('{t}'))"
+        self.real_drag(pg, f"{row('A')}.querySelector('.nm')", btn("Duplicate"))
+        pg.wait_for_function(f"() => {ed}.doc.layers.some((l) => l.name === 'A copy')", timeout=5000)
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Duplicate layer")
+        self.real_drag(pg, f"{row('B')}.querySelector('.nm')", btn("Delete"))
+        pg.wait_for_function(f"() => !{ed}.doc.layers.some((l) => l.name === 'B')", timeout=5000)
+        self.assertEqual(names(), ["Background", "A", "A copy"])
+        # Masks: one dragged alone onto the trash takes only the mask, the layer stays.
+        pg.evaluate(f"() => {{ const e = {ed}; for (const L of e.doc.layers) {{ e.setActive(L.id); e.addMask('all'); }} }}")
+        masked = lambda: pg.evaluate(f"() => {ed}.doc.layers.filter((l) => l.mask).map((l) => l.name)")
+        self.assertEqual(masked(), ["Background", "A", "A copy"])
+        mthumb = lambda n: f"{row(n)}.querySelector('canvas:last-of-type')"
+        self.real_drag(pg, mthumb("Background"), btn("Delete"))
+        pg.wait_for_function(f"() => !{ed}.doc.layers[0].mask", timeout=5000)
+        self.assertEqual(names(), ["Background", "A", "A copy"])
+        self.assertEqual(masked(), ["A", "A copy"])
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Delete mask")
+        # A mask dragged onto Duplicate does nothing.
+        self.real_drag(pg, mthumb("A"), btn("Duplicate"))
+        pg.wait_for_timeout(300)
+        self.assertEqual(names(), ["Background", "A", "A copy"])
+        # Masks only: click A's mask, Ctrl+click the row of A copy - both masks are picked, not the layers.
+        pg.evaluate(f"() => {mthumb('A')}.dispatchEvent(new MouseEvent('click', {{ bubbles: true }}))")
+        pg.evaluate(f"() => {row('A copy')}.querySelector('.nm').dispatchEvent(new MouseEvent('click', {{ bubbles: true, ctrlKey: true }}))")
+        self.assertEqual(pg.evaluate(f"() => {ed}.pickedMasks().map((l) => l.name)"), ["A", "A copy"])
+        self.assertEqual(pg.evaluate(f"() => [...{ed}.layerList.querySelectorAll('.paint-row canvas.sel')].length"), 2)
+        self.real_drag(pg, mthumb("A copy"), btn("Delete"))
+        pg.wait_for_function(f"() => !{ed}.doc.layers.some((l) => l.mask)", timeout=5000)
+        self.assertEqual(names(), ["Background", "A", "A copy"])
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Delete 2 masks")
+        pg.evaluate(f"() => {ed}.undo()")
+        self.assertEqual(masked(), ["A", "A copy"])
+        # The trash pressed with the masks picked takes the masks too, and Delete in the panel likewise.
+        pg.evaluate(f"() => {{ const e = {ed}; e.setActive(e.doc.layers[1].id, true); e.setActive(e.doc.layers[2].id, false, 'toggle'); }}")
+        self.assertEqual(pg.evaluate(f"() => {ed}.pickedMasks().length"), 2)
+        pg.evaluate(f"() => ({btn('Delete')}).click()")
+        self.assertEqual(masked(), [])
+        self.assertEqual(names(), ["Background", "A", "A copy"])
+        self.assertEqual(self.errors, [])
+
     def test_save_as_dialog_writes_a_psd_asks_before_overwriting_and_lands_in_the_history(self):
         pg = self.page()
         self.open_photo(pg)
