@@ -168,7 +168,8 @@ def clip_frames(clip, done, count, w, h, fps):
     go forwards through the file; a ping-pong's way back is read forwards and
     handed out reversed."""
     times = [source_moment(clip, (done + k + 0.5) / fps) for k in range(count)]
-    plain = float(clip.get("speed") or 1.0) == 1.0 and not clip.get("loop") and not clip.get("motion")
+    plain = float(clip.get("speed") or 1.0) == 1.0 and not clip.get("loop") and not clip.get("motion") \
+        and not timeline_io._ramp(clip)
     if plain:
         yield from _pictures_at(clip["file"], times, w, h)
         return
@@ -540,8 +541,8 @@ def clip_sound(clip, seconds):
     """*seconds* of *clip*'s sound as a ``(2, n)`` array (None for none): from its
     in point, at its speed, through its loop (:func:`source_moment`)."""
     import numpy as np
-    if clip.get("motion"):
-        return None                     # frozen or reversed: silent, as the Edit tab plays it
+    if clip.get("motion") or timeline_io._ramp(clip):
+        return None                     # frozen, reversed or ramped: silent, as the Edit tab plays it
     speed = float(clip.get("speed") or 1.0)
     span = float(clip.get("span") or 0)
     loop = clip.get("loop") if span > 0 else ""

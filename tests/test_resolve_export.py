@@ -247,6 +247,20 @@ class Generator(unittest.TestCase):
         self.assertEqual([T(p.get("value")) for p in pts], [1, 1], "one moment, held")
         self.assertTrue(any("Freeze" in line for line in m["left_out"]))
 
+    def test_a_speed_ramp_is_a_time_map_through_its_integral(self):
+        keys = {"spd": [{"t": 0, "v": 1}, {"t": 2, "v": 3}]}
+        m, root, _x, _p = self.make({"clips": [clip("a.mp4", 2, start=1, fx={"keys": keys})], "texts": []}, {"a.mp4": film()})
+        self.check_whole(m, root, Fraction(24))
+        el = root.find(".//spine/asset-clip")
+        self.assertEqual(T(el.get("start")), 0)
+        pts = el.findall("timeMap/timept")
+        self.assertEqual(T(pts[0].get("time")), 0)
+        self.assertEqual(T(pts[0].get("value")), 1)
+        self.assertEqual(T(pts[-1].get("time")), 2)
+        self.assertEqual(T(pts[-1].get("value")), 5, "1 + the speed's integral over 2 s: (1 + 3) / 2 x 2")
+        self.assertEqual(len(pts), 48 // 4 + 1, "a point every four frames")
+        self.assertTrue(any("Speed ramps" in line for line in m["left_out"]))
+
     def test_a_still_is_a_video_element_of_its_length(self):
         m, root, _x, _p = self.make({"clips": [clip("a.png", 3)], "texts": []}, {"a.png": STILL})
         self.check_whole(m, root, Fraction(24))

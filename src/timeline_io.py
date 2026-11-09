@@ -256,7 +256,7 @@ def clean_fx(given):
 # absent linear, "in", "out", "inout", "hold". "vol" is the clip's volume; "tsize", "ttrack", "tline",
 # "tsw" a title's size, tracking, line spacing and outline width (title_render.TITLE_KEYS).
 _TITLE_KEY_RANGES = {"tsize": (0.5, 40.0), "ttrack": (-200.0, 1000.0), "tline": (0.5, 4.0), "tsw": (0.0, 50.0)}
-KEY_PARAMS = tuple(FX) + ("vol",) + tuple(_TITLE_KEY_RANGES)
+KEY_PARAMS = tuple(FX) + ("vol",) + tuple(_TITLE_KEY_RANGES) + ("spd",)
 INTERPS = ("linear", "in", "out", "inout", "hold")
 
 
@@ -269,7 +269,7 @@ def clean_keys(given):
         items = given.get(p)
         if not isinstance(items, list):
             continue
-        low, high = (0.0, 1.0) if p == "vol" else _TITLE_KEY_RANGES[p] if p in _TITLE_KEY_RANGES else FX[p][1:]
+        low, high = (0.0, 1.0) if p == "vol" else (MIN_SPEED, MAX_SPEED) if p == "spd" else _TITLE_KEY_RANGES[p] if p in _TITLE_KEY_RANGES else FX[p][1:]
         by = {}
         for k in items:
             if not isinstance(k, dict):
@@ -2018,6 +2018,44 @@ def _motion(clip):
     return m if m in ("reverse", "freeze") and not _still_clip(clip) else ""
 
 
+def _ramp(clip):
+    """A clip's speed ramp: its "spd" keys (rampOf), or [] - none on a still, a title or a frozen / reversed clip."""
+    if _still_clip(clip) or clip.get("motion") in ("reverse", "freeze") or not isinstance(clip.get("fx"), dict):
+        return []
+    return clean_keys({"spd": (clip["fx"].get("keys") or {}).get("spd")}).get("spd") or []
+
+
+def _share_area(x, how):
+    """The integral from 0 to *x* of a key's share curve (shareArea in the JS)."""
+    if how == "hold":
+        return 0.0
+    if how == "in":
+        return x ** 3 / 3
+    if how == "out":
+        return x * x - x ** 3 / 3
+    if how == "inout":
+        return x ** 3 - x ** 4 / 2
+    return x * x / 2
+
+
+def ramp_advance(keys, u):
+    """Seconds of source a ramp runs over in the clip's first *u* seconds (rampAdvance in the JS)."""
+    t = max(0.0, float(u))
+    if not keys:
+        return t
+    first, last = keys[0], keys[-1]
+    total = min(t, first["t"]) * first["v"]
+    for a, b in zip(keys, keys[1:]):
+        if t <= a["t"]:
+            break
+        dt = max(1e-9, b["t"] - a["t"])
+        x = min(1.0, (t - a["t"]) / dt)
+        total += dt * (a["v"] * x + (b["v"] - a["v"]) * _share_area(x, a.get("i")))
+    if t > last["t"]:
+        total += (t - last["t"]) * last["v"]
+    return total
+
+
 def _step(clip):
     """Seconds of source per second of the clip (stepOf): the speed, negative reversed, 0 frozen.
     Also takes clip_time's answer (a dict with speed and motion and no file)."""
@@ -2033,7 +2071,8 @@ def _loop(clip):
     except (TypeError, ValueError):
         span = 0.0
     mode = clip.get("loop")
-    return (mode, span) if mode in ("loop", "pingpong") and span > 0 and not _still_clip(clip) and not _motion(clip) else ("", 0.0)
+    return (mode, span) if mode in ("loop", "pingpong") and span > 0 and not _still_clip(clip) and not _motion(clip) \
+        and not _ramp(clip) else ("", 0.0)
 
 
 def source_moment(clip, u):
@@ -2048,6 +2087,9 @@ def source_moment(clip, u):
         return start
     if motion == "reverse":
         return max(0.0, start - q)
+    ramp = _ramp(clip)
+    if ramp:
+        return start + ramp_advance(ramp, u)
     mode, span = _loop(clip)
     if mode == "loop":
         q = q % span
@@ -2085,6 +2127,8 @@ def _runs(clip, u0, u1):
         return [(u0, u1, start, start, False)]
     if _motion(clip) == "reverse":
         return [(u0, u1, max(0.0, start - u0 * speed), max(0.0, start - u1 * speed), True)]
+    if _ramp(clip):
+        return [(u0, u1, source_moment(clip, u0), source_moment(clip, u1), False)]
     if not mode:
         return [(u0, u1, start + u0 * speed, start + u1 * speed, False)]
     turn = span / speed

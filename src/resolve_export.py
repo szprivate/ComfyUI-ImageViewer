@@ -178,6 +178,10 @@ def _source_rate(info, rate):
     return Fraction(fps) if fps else rate
 
 
+#: Frames between the points of a speed ramp's timeMap.
+RAMP_STEP = 4
+
+
 def _turns(clip, u0, u1, rate):
     """The stretches of a clip's frames *u0*..*u1* that the source runs without a
     jump: ``[(first, last, source at first, speed)]``; speed < 0 runs backwards.
@@ -188,6 +192,11 @@ def _turns(clip, u0, u1, rate):
         return [(u0, u1, start, Fraction(0))]
     if clip.get("motion") == "reverse":     # backwards from its in point, the moment at its head
         return [(u0, u1, start - Fraction(u0) / rate * speed, -speed)]
+    ramp = timeline_io._ramp(clip)
+    if ramp:                                # a speed ramp: one piece, its timeMap drawn from the ramp (_element)
+        mean = _exact(timeline_io.ramp_advance(ramp, u1 / float(rate)) - timeline_io.ramp_advance(ramp, u0 / float(rate))) \
+            / (Fraction(u1 - u0) / rate) if u1 > u0 else Fraction(1)
+        return [(u0, u1, start + _exact(timeline_io.ramp_advance(ramp, u0 / float(rate))), mean or Fraction(1))]
     span = _exact(clip.get("span") or 0)
     loop = clip.get("loop") if span > 0 else ""
     if not loop:
@@ -222,7 +231,8 @@ def _clip_pieces(c, u0, u1, at, rate, info, track, enabled=True):
              "start": at + a, "dur": b - a, "src": src, "speed": speed, "still": still, "u": a,
              "volume": float(c.get("volume", 1.0) if c.get("volume") is not None else 1.0),
              "mute": bool(c.get("mute")), "fx": c.get("fx") or {}, "enabled": enabled and not c.get("disabled"), "track": track,
-             "looped": bool(c.get("loop")), "motion": "" if still else str(c.get("motion") or "")}
+             "looped": bool(c.get("loop")), "motion": "" if still else str(c.get("motion") or ""),
+             "ramp": [] if still else timeline_io._ramp(c), "ramp_in": c["_src"]}
             for a, b, src, speed in turns]
 
 
@@ -442,6 +452,8 @@ def build_model(doc, probes, frames=None, empty_ok=False):
         say("Retimed sound plays as Resolve retimes it; the viewer plays it like tape, and silent past 4x.")
     if any(p["speed"] < 0 and p.get("looped") for p in every):
         say("Ping-pong loops come as forward and backward clips; a backward clip needs checking in Resolve.")
+    if any(p.get("ramp") for p in every):
+        say("Speed ramps come as a timeMap with a point every few frames; Resolve shows them as retime points to check.")
     if any(p.get("motion") == "reverse" for p in every):
         say("Reversed clips come as a backward timeMap; check them in Resolve.")
     if any(p.get("motion") == "freeze" for p in every):
@@ -792,6 +804,8 @@ def _local_start(p, info):
     if p.get("gap") or p.get("still"):
         return Fraction(0)
     src = p["src"] + Fraction((info or {}).get("tc") or 0)
+    if p.get("ramp"):
+        return Fraction(0)
     if p["speed"] == 1:
         return src
     return src / p["speed"] if p["speed"] > 0 else Fraction(0)
@@ -824,7 +838,17 @@ def _element(parent, p, info, ids, model, offset, lane=None):
     if p.get("role"):
         attrs["audioRole"] = _text(p["role"], 80)        # a baked part's dry originals: "<track> (dry)"
     el = ET.SubElement(parent, tag, attrs)
-    if not p["still"] and p["speed"] != 1:
+    if not p["still"] and p.get("ramp"):
+        # A speed ramp: the source moment every few frames (and at each key), straight between them.
+        tm = ET.SubElement(el, "timeMap")
+        tc = Fraction((info or {}).get("tc") or 0)
+        u0, n = int(p.get("u", 0)), int(p["dur"])
+        marks = set(range(0, n + 1, RAMP_STEP)) | {n}
+        marks |= {int(round(k["t"] * rate)) - u0 for k in p["ramp"] if 0 < int(round(k["t"] * rate)) - u0 < n}
+        for f in sorted(marks):
+            moment = p["ramp_in"] + _exact(timeline_io.ramp_advance(p["ramp"], (u0 + f) / float(rate)))
+            ET.SubElement(tm, "timept", {"time": time_str(Fraction(f) / rate), "value": time_str(tc + moment), "interp": "linear"})
+    elif not p["still"] and p["speed"] != 1:
         tm = ET.SubElement(el, "timeMap")
         length = Fraction(p["dur"]) / rate
         if p["speed"] > 0:
