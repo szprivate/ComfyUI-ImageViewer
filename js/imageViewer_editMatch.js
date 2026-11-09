@@ -15,7 +15,10 @@ export const EditMatchMixin = {
         if (!cut) return null;
         const fps = cut.fps || 24;
         const t = ((Number(this.currentFrame) || 0) + 0.5) / fps;
-        return D.matchFrame(cut, t, this._editTlSel, this._editTlLive ? this._editTlLive() : null);
+        // A compound clip has no file: what it shows there is one of its inner clips, in the cut as it plays.
+        // (its places differ from the panel's, so the selection is not used there).
+        const flat = this._editFlat ? this._editFlat(cut) : cut;
+        return D.matchFrame(flat, t, flat === cut ? this._editTlSel : null, this._editTlLive ? this._editTlLive() : null);
     },
 
     /** F: the source of the frame under the playhead, in the Viewer tab, on that frame. -> the match, or null. */

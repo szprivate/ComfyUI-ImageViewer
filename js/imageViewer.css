@@ -1712,6 +1712,9 @@ textarea.param-input {
     background: repeating-linear-gradient(135deg, rgba(255,154,60,.28) 0 5px, transparent 5px 11px); }
 .edit-shot.retimed { border-color: #ff9a3c; }
 .edit-shot.frozen { border-color: #5fb8ff; }
+.edit-shot.compound { background-image: repeating-linear-gradient(0deg, rgba(255,255,255,0.07) 0 3px, transparent 3px 6px); border-color: #c79bff; }
+.edit-badge-compound { position: absolute; left: 3px; bottom: 2px; z-index: 2; pointer-events: auto; font-size: 9px; line-height: 12px;
+                       padding: 0 3px; border-radius: 2px; background: rgba(0,0,0,0.55); color: #e2ccff; }
 .edit-shot.reversed { border-style: dashed; }
 .edit-shot.looped { border-color: #4de1ff; }
 .edit-badge-time { position: absolute; right: 3px; top: 2px; z-index: 2; pointer-events: auto; font-size: 9px; line-height: 12px;

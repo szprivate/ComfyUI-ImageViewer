@@ -244,7 +244,8 @@ export const EditTimelineMixin = {
 
     /** The tracks that are seen and heard: not switched off, or soloed (liveTracks). */
     _editTlLive() {
-        return D.liveTracks(this._editTlCut, (this._editTlView && this._editTlView.solo) || {});
+        // the cut as it plays: a compound clip's inner tracks follow the track it lies on
+        return D.liveTracks(this._editFlat ? this._editFlat(this._editTlCut) : this._editTlCut, (this._editTlView && this._editTlView.solo) || {});
     },
 
     // A cut gets its tab. `focus`: come up on screen too - not when clips were
@@ -287,6 +288,7 @@ export const EditTimelineMixin = {
         try {
             const res = await api.fetchApi("/imageviewer/timeline" + D.timelineQuery(obj));
             const data = res.ok ? await res.json() : null;
+            if (data && data.edit) data.edit = D.regroupCut(data.edit);     // compound clips are saved flat
             return data && data.edit ? data : null;
         } catch (e) { return null; }
     },
@@ -395,6 +397,7 @@ export const EditTimelineMixin = {
         // the cuts on the undo stack hold their clips by file from now on.
         const h = this._editTlTab && this._editTlHistories && this._editTlHistories[this._editTlTab];
         if (h) this._editTlHistories[this._editTlTab] = { past: h.past.map(D.detach), future: h.future.map(D.detach) };
+        if (data.edit && data.edit.compounds) data.edit = D.regroupCut(data.edit);   // compound clips are saved flat
         this._editTlSaved = data.edit;
         this._editTlCut = data.edit;
         this._editTlFile = data.file || "";
@@ -1282,6 +1285,10 @@ export const EditTimelineMixin = {
                              { label: (m === "reverse" ? "\u2713 " : "") + "Reverse clip", run: () => this.editTlMotion(sel, "reverse") });
             }
             const many = this._editTlSelList().length;
+            // Compound clips (Resolve's): the selection made one, or one taken apart again.
+            entries.push("-", { label: many > 1 ? `New compound clip of ${many} clips` : "New compound clip",
+                                run: () => this.editTlCompound() });
+            if (D.isCompound(clip)) entries.push({ label: "Decompose in place", run: () => this.editTlDecompose(sel) });
             entries.push("-", { label: many > 1 ? `Recreate ${many} shots with changes…` : "Recreate with changes…",
                                 run: () => this.editTlRecreateDialog(sel) });
             entries.push(...this._editTlTakeEntries(sel));
@@ -2082,6 +2089,35 @@ export const EditTimelineMixin = {
         this._editTlApply(got.cut);
         if (list.length > 1) this._editTlSetSelList(list, primary);
         this._editTlSay(`${got.count} clip(s) ${got.off ? "disabled: not seen, not heard, not rendered" : "enabled again"}`);
+    },
+
+    /** New Compound Clip (Resolve's): the selected clips made one clip that holds them (D.makeCompound). */
+    editTlCompound(name) {
+        const cut = this._editTlCut;
+        const list = this._editTlSelAll().filter(D.isClipSel);
+        if (!cut || !list.length) { this._editTlSay("select the clips to make a compound clip of"); return null; }
+        const got = D.makeCompound(cut, list, name);
+        if (got.error) { this._editTlSay(got.error); return null; }
+        this._editTlMulti = null;
+        this._editTlEditSel = null;
+        this._editTlApply(got.cut);
+        this._editTlSel = got.sel;
+        this.editTlRefresh();
+        const c = D.clipOf(got.cut, got.sel);
+        this._editTlSay(`compound clip "${c.name}" made of ${list.length} clip(s)`);
+        return got.sel;
+    },
+
+    /** Decompose in Place: a compound clip's clips back in the cut where it showed them. */
+    editTlDecompose(sel = this._editTlSel) {
+        const cut = this._editTlCut;
+        const got = cut && D.decomposeCompound(cut, sel);
+        if (!got || got.error) { this._editTlSay((got && got.error) || "select a compound clip"); return false; }
+        this._editTlSel = null;
+        this._editTlMulti = null;
+        this._editTlApply(got.cut);
+        this._editTlSay("compound clip taken apart");
+        return true;
     },
 
     /** The mode, as Resolve's: "select" (A, the default), "trim" (T) - either puts the blade (B) away. */

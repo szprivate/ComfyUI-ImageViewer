@@ -896,6 +896,8 @@ export function liveTracks(cut, solo) {
         const soloed = mine.filter((k) => solo && solo[k.id]);
         for (const k of (soloed.length ? soloed : mine.filter((k) => !k.off))) live.add(k.id);
     }
+    // A compound clip's inner tracks (flattenCut) are seen as the track it lies on is.
+    for (const k of all) if (k.under && !(solo && solo[k.id])) { if (live.has(k.under) && !k.off) live.add(k.id); else live.delete(k.id); }
     return live;
 }
 
@@ -979,7 +981,8 @@ export function sameCut(a, b) {
                          takesOf(c).length ? JSON.stringify([c.file, takesOf(c).map((t) => [t.version, !!t.active, t.file])]) : "",
                          String(c.link || ""), !!c.unlinked, !!c.mute, !!c.disabled, c.title ? JSON.stringify(cleanTitle(c.title)) : "", ...audioDress(c),
                          c.afx && c.afx.length ? JSON.stringify(cleanAfx(c.afx)) : "",
-                         c.markers && c.markers.length ? JSON.stringify(cleanClipMarkers(c.markers)) : ""];
+                         c.markers && c.markers.length ? JSON.stringify(cleanClipMarkers(c.markers)) : "",
+                         isCompound(c) ? JSON.stringify([c.compound.id, c.compound.cut]) : ""];
     const key = (cut) => JSON.stringify({
         clips: ((cut && cut.clips) || []).map((c) => [Number.isInteger(c.ref) ? c.ref : c.file, c.name, round(num(c.in)), round(num(c.length)), round(num(c.transition)), round(num(c.gap)), JSON.stringify(cleanTfx(c.tfx)), ...dress(c)]),
         texts: ((cut && cut.texts) || []).map((t) => [Number.isInteger(t.ref) ? t.ref : "new", t.text, round(num(t.start)), round(num(t.length)), JSON.stringify(textLook(t))]),
@@ -1000,12 +1003,18 @@ function timeOf(c) {
     return { speed: round(speedOf(c)), loop: loopOf(c), span: loopOf(c) ? round(num(c.span)) : 0, motion: motionOf(c),
              link: c.link || "", unlinked: !!(c.link && c.unlinked), mute: !!c.mute, disabled: !!c.disabled,
              fadeIn: round(num(c.fadeIn)), fadeOut: round(num(c.fadeOut)), xfade: c.xfade ? cleanXfade(c.xfade) : null,
-             afx: cleanAfx(c.afx), markers: cleanClipMarkers(c.markers) };
+             afx: cleanAfx(c.afx), markers: cleanClipMarkers(c.markers),
+             cpart: c.cpart && typeof c.cpart.id === "string" ? { id: c.cpart.id } : null };
 }
 
 /** What is sent back to be saved: the cut, and nothing the server did not send. */
 export function toSave(cut) {
+    // Compound clips are written flat (flattenCut), their definitions beside the cut.
+    const flat = flattenCut(cut);
+    const compounds = flat !== cut ? flat.compounds || {} : {};
+    cut = flat;
     return {
+        compounds,
         // A clip with no `ref` is new material and is named by its file instead.
         clips: cut.clips.map((c) => ({
             ...(Number.isInteger(c.ref) ? { ref: c.ref } : { file: c.file }),
@@ -1019,6 +1028,7 @@ export function toSave(cut) {
                                        text: t.text, start: t.start, length: t.length, ...textLook(t) })),
         tracks: (cut.tracks || []).map((k) => ({
             id: k.id, kind: k.kind, name: k.name, off: !!k.off, lock: !!k.lock, auto: k.auto !== false, afx: cleanAfx(k.afx),
+            cpart: typeof k.cpart === "string" && k.cpart ? k.cpart : null,
             clips: (k.clips || []).map((c) => ({
                 // A title has no file: a new one is named by its words, and by the marker it came from (`mark`).
                 ...(Array.isArray(c.ref) ? { ref: c.ref } : c.title ? (Number.isInteger(c.mark) ? { mark: c.mark } : {}) : { file: c.file }),
@@ -1829,12 +1839,12 @@ export function isStillClip(c) { return !!(c && c.title) || isStillImage(c && c.
 /** A clip's speed: 1 where it has none. */
 export function speedOf(c) {
     const s = num(c && c.speed, 1);
-    return s > 0 && !isStillClip(c) ? Math.max(MIN_SPEED, Math.min(MAX_SPEED, s)) : 1;
+    return s > 0 && !isStillClip(c) && !isCompound(c) ? Math.max(MIN_SPEED, Math.min(MAX_SPEED, s)) : 1;
 }
 
 /** How a clip loops: "loop", "pingpong" - or "" for not at all (nor while it is frozen or reversed). */
 export function loopOf(c) {
-    return c && (c.loop === "loop" || c.loop === "pingpong") && num(c.span) > 0 && !isStillClip(c) && !motionOf(c) && !rampOf(c).length ? c.loop : "";
+    return c && (c.loop === "loop" || c.loop === "pingpong") && num(c.span) > 0 && !isStillClip(c) && !isCompound(c) && !motionOf(c) && !rampOf(c).length ? c.loop : "";
 }
 
 /**
@@ -1844,7 +1854,7 @@ export function loopOf(c) {
  * clip does not loop.
  */
 export function motionOf(c) {
-    return c && (c.motion === "reverse" || c.motion === "freeze") && !isStillClip(c) ? c.motion : "";
+    return c && (c.motion === "reverse" || c.motion === "freeze") && !isStillClip(c) && !isCompound(c) ? c.motion : "";
 }
 
 /**
@@ -1858,7 +1868,7 @@ export function motionOf(c) {
  * silent - the player steps it frame by frame.
  */
 export function rampOf(c) {
-    if (!c || isStillClip(c) || (c.motion === "reverse" || c.motion === "freeze")) return [];
+    if (!c || isStillClip(c) || isCompound(c) || (c.motion === "reverse" || c.motion === "freeze")) return [];
     return keysOf(c, "spd");
 }
 
@@ -1931,6 +1941,7 @@ export function srcSpan(c) {
 /** How much source there is from a clip's in point (Infinity for a still, or where its length is not known). */
 export function srcRoom(c, durations) {
     if (!c || isStillClip(c)) return Infinity;
+    if (isCompound(c)) return Math.max(0, compoundLength(c) - num(c.in));
     const known = num(durations && durations[c.file], 0);
     return known > 0 ? Math.max(0, known - num(c.in)) : Infinity;
 }
@@ -1986,7 +1997,7 @@ function clipRef(cut, sel) { return sel && (sel.kind === "clip" || sel.kind === 
 export function retimeClip(cut, sel, length, fromStart) {
     const next = copy(cut);
     const c = clipRef(next, sel);
-    if (!c || rampOf(c).length) return next;                // a ramp keeps its speeds: take it off to retime
+    if (!c || rampOf(c).length || isCompound(c)) return next;   // a ramp keeps its speeds: take it off to retime
     const was = num(c.length), sp = speedOf(c);
     let len = Math.max(MIN_CLIP, num(length, was));
     if (!isStillClip(c) && motionOf(c) !== "freeze") {
@@ -2002,7 +2013,7 @@ export function retimeClip(cut, sel, length, fromStart) {
 /** A clip's speed set (1 = its own), its source kept: its length follows. */
 export function setSpeed(cut, sel, speed) {
     const c = clipRef(cut, sel);
-    if (!c || isStillClip(c) || motionOf(c) === "freeze" || rampOf(c).length) return copy(cut);
+    if (!c || isStillClip(c) || isCompound(c) || motionOf(c) === "freeze" || rampOf(c).length) return copy(cut);
     const s = Math.max(MIN_SPEED, Math.min(MAX_SPEED, num(speed, 1)));
     return retimeClip(cut, sel, num(c.length) * speedOf(c) / s);
 }
@@ -2016,7 +2027,7 @@ export function setSpeed(cut, sel, speed) {
 export function loopExtend(cut, sel, length, mode, durations) {
     const next = copy(cut);
     const c = clipRef(next, sel);
-    if (!c) return next;
+    if (!c || isCompound(c)) return next;
     if (motionOf(c)) { c.length = Math.max(MIN_CLIP, num(length, c.length)); return settle(next); }
     if (!isStillClip(c)) {
         if (!loopOf(c)) c.span = Math.min(srcUse(c), srcRoom(c, durations));
@@ -2069,7 +2080,7 @@ export function setMotion(cut, sel, motion, u) {
     const next = copy(cut);
     const c = clipRef(next, sel);
     const to = motion === "reverse" || motion === "freeze" ? motion : "";
-    if (!c || isStillClip(c) || motionOf(c) === to) return next;
+    if (!c || isStillClip(c) || isCompound(c) || motionOf(c) === to) return next;
     const held = srcLocal(c, Math.max(0, Math.min(num(c.length), num(u, 0))));
     if (loopOf(c)) { c.in = to === "freeze" ? held : srcLocal(c, 0); delete c.loop; delete c.span; }
     const from = motionOf(c), L = num(c.length) * speedOf(c);
@@ -5243,4 +5254,353 @@ export function findSource(cut, file, src) {
         }
     });
     return found;
+}
+
+// ── compound clips ──────────────────────────────────────────────────────────
+
+/**
+ * A COMPOUND clip (Resolve's) is a clip of V1 or of a video track that holds a cut
+ * of its own: `c.compound = { id, cut }`, no file; `in` is where in the inner film
+ * it starts, `length` how much of it shows. Its time is fixed: no speed, loop,
+ * reverse, freeze or ramp (speedOf / loopOf / motionOf / rampOf see none); it trims
+ * against the inner film's length (srcRoom), splits, moves, switches off and keeps
+ * a volume like any clip. Its own transform / crop / opacity are not drawn (the
+ * inner clips' are).
+ *
+ * The player plays it FLAT (`flattenCut`): its inner clips laid into the cut in its
+ * place - inner V1 into its place on V1 (or onto its track), the inner tracks on
+ * tracks of their own just above it (`under` = the track they belong to, so solo
+ * and the switch follow it), the inner bed on a sound track. A save writes that
+ * flat cut too, each piece tagged `cpart: { id }` (and the tracks `cpart: id`),
+ * with the compounds' definitions in `compounds` - so the render, Export to Resolve
+ * and agentY see ordinary clips - and `regroupCut` folds the pieces back on open.
+ */
+export function isCompound(c) { return !!(c && c.compound && c.compound.cut && typeof c.compound.cut === "object"); }
+
+/** The length of a compound clip's inner film. */
+export function compoundLength(c) { return isCompound(c) ? filmLength(c.compound.cut) : 0; }
+
+/** Does the cut hold a compound clip anywhere? */
+export function hasCompound(cut) {
+    let any = false;
+    everyClip(cut || { clips: [] }, (c) => { if (isCompound(c)) any = true; });
+    return any;
+}
+
+function newCompoundId(cut) {
+    const used = new Set();
+    const walk = (k) => everyClip(k, (c) => { if (isCompound(c)) { used.add(c.compound.id); walk(c.compound.cut); } });
+    walk(cut);
+    let n = 1;
+    while (used.has("C" + n)) n += 1;
+    return "C" + n;
+}
+
+/**
+ * The selected clips `list` made one compound clip, as Resolve's New Compound Clip:
+ * selected V1 shots (next to each other) with whatever is selected on the tracks
+ * inside their time; or, without V1, clips of the tracks - the compound then lies on
+ * the lowest video track among them (sound alone: the first sound track). Linked
+ * partners come along. -> { cut, sel } or { error }.
+ */
+export function makeCompound(cut, list, name) {
+    if (!cut) return { error: "no cut" };
+    const sels = withPartners(cut, (list || []).filter(isClipSel));
+    if (!sels.length) return { error: "select the clips to make a compound clip of" };
+    const fps = num(cut.fps) > 0 ? num(cut.fps) : 24;
+    const starts = clipStarts(cut);
+    const v1 = sels.filter((s) => s.kind === "clip").map((s) => s.i).sort((a, b) => a - b);
+    const placed = sels.filter((s) => s.kind === "tclip");
+    for (let k = 1; k < v1.length; k++) if (v1[k] !== v1[k - 1] + 1) return { error: "the V1 shots of a compound clip must be next to each other" };
+    const spans = sels.map((s) => selSpan(cut, s));
+    let a = Math.min(...spans.map((s) => s.start)), b = Math.max(...spans.map((s) => s.end));
+    const onV1 = v1.length > 0;
+    if (onV1) {
+        const va = starts[v1[0]], vb = starts[v1[v1.length - 1]] + num(cut.clips[v1[v1.length - 1]].length);
+        if (a < va - 1e-6 || b > vb + 1e-6) return { error: "the clips on other tracks must lie inside the V1 shots" };
+        a = va; b = vb;
+    }
+    let home = "V1";
+    if (!onV1) {
+        const vids = (cut.tracks || []).filter((k) => k.kind === "video").map((k) => k.id);
+        const auds = (cut.tracks || []).filter((k) => k.kind === "audio").map((k) => k.id);
+        const mine = new Set(placed.map((s) => s.track));
+        home = vids.find((id) => mine.has(id)) || auds.find((id) => mine.has(id)) || "";
+        if (!home) return { error: "nothing to make a compound clip of" };
+        const k = trackOf(cut, home);
+        const chosen = new Set(placed.filter((s) => s.track === home).map((s) => s.i));
+        if (k.clips.some((c, i) => !chosen.has(i) && num(c.at) < b - 1e-6 && num(c.at) + num(c.length) > a + 1e-6)) {
+            return { error: `another clip of ${home} lies inside it: select it too, or leave it out of the time` };
+        }
+    }
+    if (sels.some((s) => trackFlags(cut, s.kind === "clip" ? "V1" : s.track).lock)) return { error: "a locked track's clips cannot go into a compound clip" };
+    const id = newCompoundId(cut);
+    const strip = (c) => { const x = { ...c }; delete x.ref; delete x.uid; return x; };
+    // The inner cut: the shots and placed clips, their time from the compound's start.
+    const inner = { ...emptyCut(name || "Compound " + id.slice(1), fps), tracks: [] };
+    v1.forEach((i, k) => {
+        const c = strip(cut.clips[i]);
+        if (!k) { c.gap = round(starts[i] - a); c.transition = 0; }
+        inner.clips.push(c);
+    });
+    const homeKind = home === "V1" ? "video" : (trackOf(cut, home) || {}).kind;
+    for (const k of cut.tracks || []) {
+        const mine = placed.filter((s) => s.track === k.id).map((s) => k.clips[s.i]);
+        if (!mine.length) continue;
+        const clips = mine.map((c) => ({ ...strip(c), at: round(num(c.at) - a) }));
+        if (!onV1 && k.id === home && homeKind === "video") {
+            // The home track's clips are the inner V1, one after the other with gaps between.
+            clips.sort((x, y) => x.at - y.at);
+            let end = 0;
+            for (const c of clips) { const g = round(c.at - end); delete c.at; c.gap = Math.max(0, g); c.transition = 0; inner.clips.push(c); end = round(end + Math.max(0, g) + num(c.length)); }
+            continue;
+        }
+        inner.tracks.push({ id: k.id, kind: k.kind, name: k.name || k.id, off: false, clips });
+    }
+    inner.name = name || "Compound " + id.slice(1);
+    const comp = { file: "", name: inner.name, in: 0, length: round(b - a), transition: 0, color: "", volume: 1, compound: { id, cut: settle(inner) } };
+    // Out of the cut, the compound clip in their place.
+    let next = copy(cut);
+    for (const k of next.tracks) {
+        const gone = new Set(placed.filter((s) => s.track === k.id).map((s) => s.i));
+        if (gone.size) k.clips = k.clips.filter((_, i) => !gone.has(i));
+    }
+    if (onV1) {
+        const first = next.clips[v1[0]];
+        comp.gap = num(first.gap);
+        comp.transition = num(first.transition);
+        next.clips.splice(v1[0], v1.length, comp);
+        return { cut: settle(next), sel: { kind: "clip", i: v1[0] } };
+    }
+    const k = trackOf(next, home);
+    delete comp.transition;
+    k.clips.push({ ...comp, at: round(a) });
+    const done = settle(next);
+    return { cut: done, sel: { kind: "tclip", track: home, i: trackOf(done, home).clips.length - 1 } };
+}
+
+/** A compound clip taken apart (Resolve's Decompose in Place): its inner clips where it showed them. -> { cut } or { error }. */
+export function decomposeCompound(cut, sel) {
+    const c = clipOf(cut, sel);
+    if (!isCompound(c)) return { error: "not a compound clip" };
+    const flat = flattenCut(cut, { only: c.compound.id });
+    // Its pieces become clips of their own: untagged, and the tracks made for them ordinary tracks.
+    const free = (x) => { if (x.cpart && x.cpart.id === c.compound.id) delete x.cpart; };
+    flat.clips.forEach(free);
+    for (const k of flat.tracks) { k.clips.forEach(free); if (k.cpart === c.compound.id) { delete k.cpart; delete k.under; } }
+    flat.tracks = flat.tracks.map((k) => (/~/.test(k.id) ? { ...k, id: nextTrackId({ ...flat, tracks: flat.tracks.filter((t) => !/~/.test(t.id)) }, k.kind), name: undefined } : k));
+    // ids made one by one so that two new tracks do not share one
+    const seen = new Set(), out = [];
+    for (const k of flat.tracks) {
+        let t = k;
+        if (seen.has(k.id) || !k.name) {
+            const id = nextTrackId({ ...flat, tracks: out }, k.kind);
+            t = { ...k, id, name: id };
+        }
+        seen.add(t.id);
+        out.push(t);
+    }
+    flat.tracks = out;
+    delete flat.compounds;
+    return { cut: settle(flat) };
+}
+
+// The inner V1 seen through a window [o, o + L): its pieces with gaps / dissolves from the window's start.
+function windowV1(inner, o, L) {
+    const starts = clipStarts(inner);
+    const got = [];
+    (inner.clips || []).forEach((c0, j) => {
+        const s = starts[j], e = round(s + num(c0.length));
+        if (e <= o + 1e-6 || s >= o + L - 1e-6) return;
+        const c = { ...c0 };
+        const cut = round(Math.max(0, o - s));
+        if (cut > 0) {
+            headCut(c, cut);
+            if (c0.fx) c.fx = splitFx(c0.fx, cut)[1];
+            c.transition = 0;
+        }
+        c.length = round(Math.min(e, o + L) - Math.max(s, o));
+        if (c.length < 1e-4) return;
+        got.push({ c, rel: round(Math.max(s, o) - o) });
+    });
+    let end = 0;
+    got.forEach((p, k) => {
+        const d = round(p.rel - end);
+        if (d >= 0 || !k) { p.c.gap = Math.max(0, d); p.c.transition = 0; } else { p.c.gap = 0; p.c.transition = round(-d); }
+        end = Math.max(end, round(p.rel + num(p.c.length)));
+    });
+    return { pieces: got, tail: round(Math.max(0, L - end)) };
+}
+
+// An inner track's clips seen through [o, o + L), placed from `s` on the outer film.
+function windowTrack(k, o, L, s) {
+    const out = [];
+    for (const c0 of k.clips || []) {
+        const a0 = num(c0.at), e0 = round(a0 + num(c0.length));
+        if (e0 <= o + 1e-6 || a0 >= o + L - 1e-6) continue;
+        const c = { ...c0 };
+        const cut = round(Math.max(0, o - a0));
+        if (cut > 0) { headCut(c, cut); if (c0.fx) c.fx = splitFx(c0.fx, cut)[1]; }
+        c.at = round(s + Math.max(a0, o) - o);
+        c.length = round(Math.min(e0, o + L) - Math.max(a0, o));
+        if (c.length >= 1e-4) out.push(c);
+    }
+    return out;
+}
+
+/**
+ * The cut with its compound clips laid out flat (see isCompound): what the player
+ * plays and what a save writes. Pieces carry `cpart: { id }` (the outermost
+ * compound's), the tracks made for them `cpart` and `under`; `compounds` holds each
+ * outer compound's definition { cut, track, at, in, length, name, color, transition,
+ * volume, disabled }. `opts.only`: lay out that compound alone. A cut without
+ * compounds comes back as it is (the same object).
+ */
+export function flattenCut(cut, opts = {}) {
+    if (!cut || !hasCompound(cut)) return cut;
+    const only = opts.only || null;
+    const next = copy(cut);
+    const defs = {};
+    const tag = (c, id, outer) => {
+        const x = { ...c };
+        delete x.ref; delete x.uid;
+        x.cpart = { id };
+        if (outer.disabled) x.disabled = true;
+        const v = num(outer.volume, 1);
+        if (v !== 1) x.volume = round(num(x.volume, 1) * v);
+        return x;
+    };
+    const newTracks = [];           // [{ after (track id or "V1"), track }]
+    let made = 0;
+    const lay = (inner, c, s, home) => {
+        const id = c.compound.id;
+        const flat = flattenCut(c.compound.cut);
+        const o = num(c.in), L = num(c.length);
+        // `slot`: the home track's place among the tracks of its kind (a file numbers them again on reading).
+        const slot = home === "V1" ? 0 : (cut.tracks || []).filter((k) => !k.cpart && k.kind === (trackOf(cut, home) || {}).kind).findIndex((k) => k.id === home);
+        defs[id] = { cut: c.compound.cut, track: home, slot, at: round(s), in: round(o), length: round(L), name: c.name || "",
+                     color: c.color || "", transition: round(num(c.transition)), volume: num(c.volume, 1), disabled: !!c.disabled };
+        for (const k of flat.tracks || []) {
+            const clips = windowTrack(k, o, L, s).map((x) => tag(x, id, c));
+            if (!clips.length) continue;
+            made += 1;
+            newTracks.push({ after: home, track: { id: `${home}~${made}`, kind: k.kind, name: `${c.name || id} ${k.id}`, off: false,
+                                                   cpart: id, under: k.kind === "video" ? home : "", clips } });
+        }
+        const bed = (flat.sound || []).filter((x) => x && x.file);
+        const bedLen = filmLength(flat);
+        for (const x of bed) {
+            const len = round(Math.min(L, bedLen - o));
+            if (len < 1e-4) continue;
+            made += 1;
+            newTracks.push({ after: home, track: { id: `${home}~${made}`, kind: "audio", name: `${c.name || id} A1`, off: !!(flat.off && flat.off.A1),
+                                                   cpart: id, under: "", clips: [tag({ file: x.file, name: x.name || "", in: round(o), length: len, at: round(s),
+                                                                                       volume: 1, color: "", fadeIn: num(x.fadeIn), fadeOut: num(x.fadeOut) }, id, c)] } });
+        }
+        return windowV1(flat, o, L);
+    };
+    // V1.
+    const starts = clipStarts(cut);
+    const clips = [];
+    let carry = 0;                 // empty time a compound left at its end, before the next shot
+    cut.clips.forEach((c, i) => {
+        if (!isCompound(c) || (only && c.compound.id !== only)) {
+            if (carry > 0) { clips.push({ ...c, gap: round(num(c.gap) + carry), transition: 0 }); carry = 0; } else clips.push(c);
+            return;
+        }
+        const s = starts[i];
+        const w = lay(cut, c, s, "V1");
+        if (!w.pieces.length) { carry = round(carry + num(c.gap) + num(c.length) - (i ? 0 : 0)); return; }
+        w.pieces.forEach((p, k) => {
+            const x = tag(p.c, c.compound.id, c);
+            if (!k) {
+                x.gap = round(num(x.gap) + num(c.gap) + carry);
+                x.transition = num(x.gap) > 0 ? 0 : num(c.transition);
+                carry = 0;
+            }
+            clips.push(x);
+        });
+        carry = w.tail;
+    });
+    next.clips = clips;
+    // A compound left at the end of V1 needs nothing after it: the film ends with its last piece, or a track.
+    // The placed tracks.
+    for (const k of next.tracks) {
+        const out = [];
+        for (const c of k.clips) {
+            if (!isCompound(c) || (only && c.compound.id !== only)) { out.push(c); continue; }
+            const w = lay(cut, c, num(c.at), k.id);
+            if (k.kind === "video") {
+                for (const p of w.pieces) {
+                    const x = tag(p.c, c.compound.id, c);
+                    delete x.gap; delete x.transition;
+                    x.at = round(num(c.at) + p.rel);
+                    out.push(x);
+                }
+            }
+        }
+        k.clips = out;
+    }
+    // The tracks made for them: right above the track they belong to (video), after the sound tracks (sound).
+    const vids = [], auds = [];
+    for (const n of newTracks) (n.track.kind === "video" ? vids : auds).push(n);
+    const order = [];
+    const after = (id) => vids.filter((n) => n.after === id).map((n) => n.track);
+    order.push(...after("V1"));
+    for (const k of next.tracks) {
+        order.push(k);
+        if (k.kind === "video") order.push(...after(k.id));
+    }
+    order.push(...auds.map((n) => n.track));
+    next.tracks = order;
+    if (Object.keys(defs).length) next.compounds = { ...(cut.compounds || {}), ...defs };
+    return settle(next);
+}
+
+/**
+ * The other way: a cut read from a file, its compound pieces (`cpart`) folded back
+ * into the compound clips `cut.compounds` defines - and the tracks made for them
+ * gone, the others numbered again as the file numbers them (V2.., A2.. in order).
+ * A cut without `compounds` comes back as it is.
+ */
+export function regroupCut(cut) {
+    const defs = cut && cut.compounds;
+    if (!defs || typeof defs !== "object" || !Object.keys(defs).length) return cut;
+    let next = copy(cut);
+    const starts = clipStarts(next);
+    const v1 = next.clips.map((c, i) => ({ c, s: starts[i] })).filter((p) => !(p.c.cpart && defs[p.c.cpart.id]));
+    for (const k of next.tracks) k.clips = k.clips.filter((c) => !(c.cpart && defs[c.cpart.id]));
+    next.tracks = next.tracks.filter((k) => !(k.cpart && defs[k.cpart]));
+    // The others numbered as the file does, and the definitions' tracks with them.
+    const count = { video: 1, audio: 1 };
+    next.tracks = next.tracks.map((k) => {
+        count[k.kind] += 1;
+        const id = (k.kind === "video" ? "V" : "A") + count[k.kind];
+        return id === k.id ? k : { ...k, id, name: k.name === k.id ? id : k.name };
+    });
+    for (const [id, d] of Object.entries(defs)) {
+        if (!d || typeof d.cut !== "object") continue;
+        const comp = { file: "", name: String(d.name || ""), in: round(num(d.in)), length: round(Math.max(MIN_CLIP, num(d.length))),
+                       color: String(d.color || ""), volume: num(d.volume, 1), compound: { id, cut: d.cut } };
+        if (d.disabled) comp.disabled = true;
+        if (d.track === "V1" || !d.track) {
+            v1.push({ c: { ...comp, transition: round(num(d.transition)) }, s: round(num(d.at)), mine: true });
+        } else {
+            const kind = /^A/.test(String(d.track)) ? "audio" : "video";
+            const k = Number.isInteger(d.slot) && d.slot >= 0 ? next.tracks.filter((t) => t.kind === kind)[d.slot] : trackOf(next, d.track);
+            if (k) k.clips.push({ ...comp, at: round(num(d.at)) });
+        }
+    }
+    v1.sort((x, y) => x.s - y.s || (x.mine ? -1 : y.mine ? 1 : 0));
+    let end = 0;
+    next.clips = v1.map((p, k) => {
+        const c = { ...p.c };
+        const d = round(p.s - end);
+        if (d >= 0 || !k) { c.gap = Math.max(0, d); if (d > 0 || !k) c.transition = p.mine ? (d > 0 ? 0 : num(c.transition)) : 0; }
+        else { c.gap = 0; c.transition = round(-d); }
+        end = Math.max(end, round(p.s + num(c.length)));
+        return c;
+    });
+    delete next.compounds;
+    return settle(next);
 }
