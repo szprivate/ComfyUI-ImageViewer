@@ -323,6 +323,50 @@ def provenance_of(path, *, use_history: bool = False) -> dict:
     return _result(False, "none", "none")
 
 
+def workflow_of(path) -> dict:
+    """The workflow a file was made with, to load into ComfyUI's canvas again: the UI workflow (with its
+    layout) when one was kept, else the API graph. Same order as :func:`provenance_of`: the sidecar's
+    ``.prov.json.gz``, then what the file embeds (PNG text chunks, video tags). Secrets masked.
+
+    ``{"found", "source", "workflow": <UI workflow or None>, "prompt": <API graph or {}>}``."""
+    p = Path(str(path))
+    none = {"found": False, "source": "none", "workflow": None, "prompt": {}}
+
+    def done(source, prompt, wf):
+        prompt = prompt if _looks_api(prompt) else {}
+        wf = wf if isinstance(wf, dict) and isinstance(wf.get("nodes"), list) else None
+        if not prompt and not wf:
+            return None
+        secret = _pw.secret_nodes(prompt) if prompt else ()
+        return {"found": True, "source": source, "workflow": _pw.redact_workflow(wf, secret) if wf else None,
+                "prompt": _pw.redact_prompt(prompt) if prompt else {}}
+
+    try:
+        sc = sidecar_path(p)
+        doc = _read_json(sc) if sc.is_file() else None
+        prov = doc.get("provenance") if isinstance(doc, dict) else None
+        if isinstance(prov, dict):
+            try:
+                blob = json.loads(gzip.decompress(graph_file_of(p, prov).read_bytes()).decode("utf-8"))
+            except (OSError, ValueError, EOFError, zlib.error):
+                blob = None
+            if isinstance(blob, dict):
+                got = done("sidecar", blob.get("prompt"), blob.get("workflow"))
+                if got:
+                    return got
+        if p.is_file():
+            ext = p.suffix.lower()
+            meta = png_text_chunks(p) if ext in _IMG_EXT else video_tags(p) if ext in _VID_EXT else {}
+            if meta:
+                graph, wf = _pull(meta)
+                got = done("png" if ext in _IMG_EXT else "video", graph, wf)
+                if got:
+                    return got
+    except Exception:  # noqa: BLE001
+        pass
+    return none
+
+
 # ── the prompts of a graph (agentY-core tools.regenerate.param_index, its prompt part) ──
 
 _TEXT_INPUTS = ("text", "prompt", "text_g", "text_l", "positive_prompt", "caption")

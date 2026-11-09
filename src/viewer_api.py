@@ -2008,6 +2008,36 @@ try:
                 return web.json_response({"error": f"could not read the dependencies: {e}"}, status=500)
             return web.json_response(out)
 
+        async def _imageviewer_deps_workflow(request):
+            """POST {"path": <file>} (or filename / subfolder / type) -> {"found", "source", "workflow", "prompt"}:
+            the workflow a file was made with, for the Dependencies tab's "Open workflow" (a new canvas tab)."""
+            if deps_provenance is None:
+                return web.json_response({"error": "the Dependencies tab is unavailable"}, status=500)
+            ok, why = path_access.same_origin(request)
+            if not ok:
+                return web.json_response({"error": why}, status=403)
+            try:
+                q = await request.json()
+            except Exception:  # noqa: BLE001
+                q = None
+            if not isinstance(q, dict):
+                return web.json_response({"error": "send a JSON object"}, status=400)
+            path = str(q.get("path") or "")
+            if not path:
+                path = _resolve_comfy_ref(q.get("filename"), q.get("type"), q.get("subfolder")) or ""
+            if not path:
+                return web.json_response({"error": "send a path"}, status=400)
+            path = os.path.abspath(path)
+            if not path_access.may_serve(path):
+                return web.json_response({"error": path_access.serve_refusal(path)}, status=403)
+            if not os.path.isfile(path):
+                return web.json_response({"error": f"no such file: {os.path.basename(path)}"}, status=404)
+            try:
+                out = await asyncio.get_running_loop().run_in_executor(None, deps_provenance.workflow_of, path)
+            except Exception as e:  # noqa: BLE001
+                return web.json_response({"error": f"could not read the workflow: {e}"}, status=500)
+            return web.json_response(out)
+
         # --- Render with World Labs Atlas (atlas_render.py) -------------------
         # The viewer has neither agenty_core nor the World Labs key: these two routes relay to the
         # agentY host, which renders (the same core function the agent's atlas_render_view runs).
@@ -3246,6 +3276,8 @@ try:
         _safe_add("POST", "/api/imageviewer/previz_shot_done", _imageviewer_previz_shot_done)
         _safe_add("POST", "/imageviewer/deps", _imageviewer_deps)
         _safe_add("POST", "/api/imageviewer/deps", _imageviewer_deps)
+        _safe_add("POST", "/imageviewer/deps/workflow", _imageviewer_deps_workflow)
+        _safe_add("POST", "/api/imageviewer/deps/workflow", _imageviewer_deps_workflow)
         _safe_add("POST", "/imageviewer/atlas_render", _imageviewer_atlas_render)
         _safe_add("POST", "/api/imageviewer/atlas_render", _imageviewer_atlas_render)
         _safe_add("GET", "/imageviewer/atlas_render", _imageviewer_atlas_render_state)

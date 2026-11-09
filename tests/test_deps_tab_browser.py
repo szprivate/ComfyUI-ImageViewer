@@ -133,6 +133,81 @@ class DepsTabBrowserTests(unittest.TestCase):
         self.assertEqual(sum(1 for x in labels if x.startswith("mask_")), 6)
         self.assertEqual(self.errors, [])
 
+    def test_right_click_menu_drops_and_opens_workflow(self):
+        pg = self.page()
+        pg.evaluate("""() => {
+          const p = window.__panel;
+          window.__dropped = []; window.__loaded = []; window.__wfAsked = [];
+          p._browserFramesFor = async (paths) => paths.map((x) => ({path: x, kind: 'video'}));
+          p._dropHistoryOntoGraph = async (items, e) => { window.__dropped.push({items, e}); };
+          const real = window.__fetchApi;
+          window.__fetchApi = async (path, opts) => {
+            if (String(path) === '/imageviewer/deps/workflow') {
+              const body = JSON.parse(opts.body); window.__wfAsked.push(body);
+              const wf = body.path.endsWith('render.png') ? {nodes: [{id: 1}], links: []} : null;
+              return new Response(JSON.stringify({found: true, source: 'png', workflow: wf, prompt: {'1': {class_type: 'X', inputs: {}}}}),
+                                  {status: 200, headers: {'Content-Type': 'application/json'}});
+            }
+            return real(path, opts);
+          };
+        }""")
+        app_ok = pg.evaluate("""async () => {
+          const mod = await import('/scripts/app.js');
+          window.__appMod = mod.app;
+          mod.app.loadGraphData = async (...a) => { window.__loaded.push({how: 'ui', name: a[3], clean: a[1], wf: a[0]}); };
+          mod.app.loadApiJson = async (...a) => { window.__loaded.push({how: 'api', name: a[1], prompt: a[0]}); };
+          return true;
+        }""")
+        self.assertTrue(app_ok)
+
+        def menu_for(label):
+            pg.evaluate("""(label) => {
+              const el = [...window.__panel.viewport.querySelectorAll('.view-tab-deps .dp-node:not(.dp-prompt)')]
+                .find((x) => x.querySelector('.dp-label').textContent === label);
+              const r = el.getBoundingClientRect();
+              el.dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true, button: 2,
+                clientX: r.left + 10, clientY: r.top + 10}));
+            }""", label)
+            return pg.evaluate("""() => [...window.__panel.container.querySelectorAll('#thumb-ctx-menu .thumb-ctx-item')]
+              .map((x) => ({text: x.textContent, disabled: x.classList.contains('disabled')}))""")
+
+        # The stub's nodes are not viewable: both rows there, but greyed out, and a click does nothing.
+        rows = menu_for("render.png")
+        self.assertEqual([r["text"] for r in rows], ["⤵ Drop into canvas", "\U0001F9E9 Open its workflow"])
+        self.assertTrue(all(r["disabled"] for r in rows))
+        pg.keyboard.press("Escape")
+        self.assertEqual(pg.evaluate("() => !!window.__panel.container.querySelector('#thumb-ctx-menu')"), False)
+
+        # Viewable ones: drop goes through the History's graph drop, the workflow opens in a new tab.
+        pg.evaluate("""() => {
+          const p = window.__panel;
+          const orig = p._depsNodeMenu.bind(p);
+          p._depsNodeMenu = (ev, n) => orig(ev, {...n, viewable: true, exists: true});
+        }""")
+        menu_for("render.png")
+        self.assertFalse(any(r["disabled"] for r in pg.evaluate("""() => [...window.__panel.container.querySelectorAll('#thumb-ctx-menu .thumb-ctx-item')]
+              .map((x) => ({disabled: x.classList.contains('disabled')}))""")))
+        pg.evaluate("() => window.__panel.container.querySelectorAll('#thumb-ctx-menu .thumb-ctx-item')[0].click()")
+        pg.wait_for_function("() => window.__dropped.length === 1", timeout=5000)
+        d = pg.evaluate("() => window.__dropped[0]")
+        self.assertIsNone(d["e"])
+        self.assertEqual((d["items"][0]["path"], d["items"][0]["kind"]), ("D:/out/render.png", "video"))
+        self.assertFalse(pg.evaluate("() => !!window.__panel.container.querySelector('#thumb-ctx-menu')"))
+
+        menu_for("render.png")
+        pg.evaluate("() => window.__panel.container.querySelectorAll('#thumb-ctx-menu .thumb-ctx-item')[1].click()")
+        pg.wait_for_function("() => window.__loaded.length === 1", timeout=5000)
+        self.assertEqual(pg.evaluate("() => window.__wfAsked"), [{"path": "D:/out/render.png"}])
+        got = pg.evaluate("() => window.__loaded[0]")
+        self.assertEqual((got["how"], got["name"], got["clean"], got["wf"]["nodes"][0]["id"]), ("ui", "render", True, 1))
+        # No UI workflow kept: the API graph is loaded instead.
+        menu_for("depth.mp4")
+        pg.evaluate("() => window.__panel.container.querySelectorAll('#thumb-ctx-menu .thumb-ctx-item')[1].click()")
+        pg.wait_for_function("() => window.__loaded.length === 2", timeout=5000)
+        got = pg.evaluate("() => window.__loaded[1]")
+        self.assertEqual((got["how"], got["name"]), ("api", "depth"))
+        self.assertEqual(self.errors, [])
+
     def test_prompts_are_text_boxes_above_their_file(self):
         pg = self.page()
         boxes = pg.evaluate("""() => [...window.__panel.viewport.querySelectorAll('.view-tab-deps .dp-prompt')].map((el) => ({
