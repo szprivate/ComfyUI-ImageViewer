@@ -5058,3 +5058,189 @@ export function matchFrame(cut, seconds, sel, live) {
     const at = pictureAt(cut, t, live);
     return at ? of(at.clip, at.origin, at.sel) : null;
 }
+
+// ── the source viewer: three-point edits ────────────────────────────────────
+
+/** The edits the source viewer makes (Resolve's F9..F12 and their Shift keys). */
+export const SOURCE_EDITS = ["insert", "overwrite", "replace", "place", "fit", "append", "ripple"];
+
+/**
+ * Three-point editing: of the source's in / out and the timeline's in / out, the
+ * three given make the fourth. `src` = { in, out, head, dur } (seconds of the
+ * file; in / out null when not marked, `head` the source viewer's playhead, `dur`
+ * its length - Infinity for a still), `tl` = { in, out, head } (film seconds; the
+ * in / out null without a range). Both outs are where the range ENDS. With both
+ * source points the source's length rules (the timeline's out, if any, is left
+ * aside - Fit to fill uses it); with a timeline range and at most one source
+ * point the range's length; else from the source's in (or its playhead) to its
+ * end. A lone timeline OUT back-times the clip (it ends there). -> { in, length,
+ * at } or { error }.
+ */
+export function threePoint(src, tl) {
+    const s = src || {}, l = tl || {};
+    const has = (v) => v !== null && v !== undefined && Number.isFinite(Number(v));
+    const dur = s.dur === Infinity ? Infinity : (has(s.dur) ? num(s.dur) : Infinity);
+    const head = has(s.head) ? num(s.head) : 0;
+    let srcIn, length;
+    if (has(s.in) && has(s.out)) { srcIn = num(s.in); length = num(s.out) - srcIn; }
+    else if (has(l.in) && has(l.out)) {
+        length = num(l.out) - num(l.in);
+        srcIn = has(s.in) ? num(s.in) : has(s.out) ? num(s.out) - length : head;
+    } else {
+        srcIn = has(s.in) ? num(s.in) : head;
+        const end = has(s.out) ? num(s.out) : dur;
+        length = end - srcIn;
+    }
+    if (!Number.isFinite(length)) return { error: "mark an out point: the source has no end of its own" };
+    if (srcIn < -1e-6) return { error: "the source has not that much before its in point" };
+    if (dur !== Infinity && srcIn + length > dur + 1e-6) return { error: "the source is shorter than the range" };
+    if (!(length >= MIN_CLIP - 1e-6)) return { error: "the source range is too short" };
+    const at = has(l.in) ? num(l.in) : has(l.out) ? num(l.out) - length : num(l.head);
+    if (at < -1e-6) return { error: "the clip would begin before the film does" };
+    return { in: round(Math.max(0, srcIn)), length: round(length), at: round(Math.max(0, at)) };
+}
+
+/**
+ * A source edit (the source viewer's buttons and F9..F12): `kind` of SOURCE_EDITS,
+ * `clip` = { file, name, in, length } (from threePoint), `at` film seconds, and
+ * `opts` = { track (the video track the picture goes to, "V1" the default; a
+ * sound source goes to `audio`, a sound track), mask (editMask), head (the
+ * timeline's playhead, for replace / ripple), srcHead (the source's playhead,
+ * replace aligns it to `head`), dur (the source's length), tlIn / tlOut (fit) }.
+ *   insert    - in at `at`, what follows makes room (insertEdit).
+ *   overwrite - laid over what is there (overwriteV1 / overwriteTrack).
+ *   replace   - the clip under the playhead on the track takes the source in its
+ *               place and length, the source's playhead on the timeline's.
+ *   place     - on top: on the lowest video track above `track` that is free
+ *               there, else a new one.
+ *   fit       - fit to fill: the source range retimed into the timeline's range.
+ *   append    - after the last shot of V1 (or of the track).
+ *   ripple    - ripple overwrite: the shot under the playhead replaced by the
+ *               source range, what follows moving by the difference.
+ * -> { cut, sel } or { error }.
+ */
+export function sourceEdit(cut, kind, clip, at, opts = {}) {
+    if (!cut || !clip || !clip.file) return { error: "load a source first" };
+    const sound = !!opts.audio;
+    const track = sound ? String(opts.audio) : String(opts.track || "V1");
+    if (sound && (track === "A1" || (trackOf(cut, track) || {}).kind !== "audio")) return { error: "pick a sound track for a sound source" };
+    if (!sound && track !== "V1" && (trackOf(cut, track) || {}).kind !== "video") return { error: "pick a video track" };
+    const fps = num(cut.fps) > 0 ? num(cut.fps) : 24;
+    const fresh = { file: String(clip.file), name: String(clip.name || ""), in: Math.max(0, num(clip.in)),
+                    length: round(Math.max(MIN_CLIP, num(clip.length))), transition: 0, color: "", volume: 1 };
+    const t = toFrame(Math.max(0, num(at)), fps);
+    const onV1 = !sound && track === "V1";
+    const lastOn = (c, id) => ({ cut: c, sel: { kind: "tclip", track: id, i: trackOf(c, id).clips.length - 1 } });
+    const under = (c, t0) => {
+        if (onV1) { const i = clipAt(c, t0); return i < 0 ? null : { sel: { kind: "clip", i }, start: clipStarts(c)[i] }; }
+        const k = trackOf(c, track);
+        const i = k ? k.clips.findIndex((x) => t0 >= num(x.at) - 1e-6 && t0 < num(x.at) + num(x.length) - 1e-6) : -1;
+        return i < 0 ? null : { sel: { kind: "tclip", track, i }, start: num(k.clips[i].at) };
+    };
+    switch (kind) {
+    case "insert": {
+        if (!sound) { const r = insertEdit(cut, [fresh], t, track, opts.mask); return { cut: r.cut, sel: r.sel }; }
+        let next = copy(cut);
+        const k = trackOf(next, track);
+        const j = k.clips.findIndex((c) => t > num(c.at) + 1e-6 && t < num(c.at) + num(c.length) - 1e-6);
+        if (j >= 0) { const got = splitWithLink(next, { kind: "tclip", track, i: j }, t); if (got) next = got.cut; }
+        for (const c of trackOf(next, track).clips) if (num(c.at) >= t - 1e-6) c.at = round(num(c.at) + fresh.length);
+        const f = { ...fresh }; delete f.transition;
+        trackOf(next, track).clips.push({ ...f, at: t });
+        return lastOn(settle(next), track);
+    }
+    case "overwrite": {
+        if (onV1) { const r = overwriteV1(cut, fresh, t); return { cut: r.cut, sel: { kind: "clip", i: r.i } }; }
+        return lastOn(overwriteTrack(cut, track, fresh, t), track);
+    }
+    case "fit": {
+        const a = num(opts.tlIn), b = num(opts.tlOut);
+        if (!(opts.tlIn !== undefined && opts.tlIn !== null && opts.tlOut !== undefined && opts.tlOut !== null && b - a >= MIN_CLIP - 1e-6)) {
+            return { error: "fit to fill needs an in and an out on the timeline" };
+        }
+        const speed = fresh.length / (b - a);
+        if (speed < MIN_SPEED - 1e-9 || speed > MAX_SPEED + 1e-9) return { error: `it would play at ${Math.round(speed * 100)} % - more than the speeds a clip has` };
+        const fitted = { ...fresh, length: round(b - a) };
+        if (Math.abs(speed - 1) > 1e-6) fitted.speed = round(speed * 1e4) / 1e4;
+        if (onV1) { const r = overwriteV1(cut, fitted, toFrame(a, fps)); return { cut: r.cut, sel: { kind: "clip", i: r.i } }; }
+        return lastOn(overwriteTrack(cut, track, fitted, toFrame(a, fps)), track);
+    }
+    case "append": {
+        if (onV1) { const r = overwriteV1(cut, fresh, mainLength(cut)); return { cut: r.cut, sel: { kind: "clip", i: r.i } }; }
+        const k = trackOf(cut, track);
+        const end = Math.max(0, ...k.clips.map((c) => num(c.at) + num(c.length)));
+        return lastOn(overwriteTrack(cut, track, fresh, round(end)), track);
+    }
+    case "place": {
+        if (sound) return { error: "place on top is for pictures" };
+        const vids = (cut.tracks || []).filter((k) => k.kind === "video");
+        const from = track === "V1" ? 0 : vids.findIndex((k) => k.id === track) + 1;
+        const b = t + fresh.length;
+        const free = vids.slice(from).find((k) => !k.lock && k.clips.every((c) => num(c.at) + num(c.length) <= t + 1e-6 || num(c.at) >= b - 1e-6));
+        let next = cut, id = free && free.id;
+        if (!id) {
+            next = addTrack(cut, "video");
+            id = next.tracks[next.tracks.length - 1].id;
+        }
+        return lastOn(overwriteTrack(next, id, fresh, t), id);
+    }
+    case "replace":
+    case "ripple": {
+        const head = toFrame(num(opts.head !== undefined ? opts.head : at), fps);
+        const hit = under(cut, head + 0.5 / fps);
+        if (!hit) return { error: `no clip under the playhead on ${track}` };
+        const old = clipOf(cut, hit.sel);
+        let srcIn = fresh.in, length = fresh.length;
+        if (kind === "replace") {
+            length = num(old.length);
+            srcIn = num(opts.srcHead !== undefined ? opts.srcHead : fresh.in) - (head - hit.start);
+            if (srcIn < -1e-6) return { error: "the source has not enough before its playhead to fill the clip" };
+            const dur = opts.dur === undefined || opts.dur === null ? Infinity : num(opts.dur, Infinity);
+            if (dur !== Infinity && srcIn + length > dur + 1e-6) return { error: "the source has not enough after its playhead to fill the clip" };
+            srcIn = Math.max(0, srcIn);
+        } else if (!onV1) return { error: "ripple overwrite works on V1" };
+        let next = copy(cut);
+        const c = clipOf(next, hit.sel);
+        for (const key of ["speed", "loop", "span", "motion", "takes", "link", "unlinked", "mute", "markers", "uid", "ref", "xfade", "fadeIn", "fadeOut"]) delete c[key];
+        if (c.fx && c.fx.keys) { delete c.fx.keys.spd; }
+        c.file = fresh.file; c.name = fresh.name; c.in = round(srcIn); c.length = round(length);
+        if (kind === "ripple") {
+            const delta = round(length - num(old.length));
+            next = rippleTracks(settle(next), round(hit.start + num(old.length)), delta, opts.mask);
+            return { cut: next, sel: hit.sel };
+        }
+        return { cut: settle(next), sel: hit.sel };
+    }
+    default:
+        return { error: `unknown edit ${kind}` };
+    }
+}
+
+/**
+ * Reverse match frame (Shift+F): where the cut shows `file` at `src` seconds of it
+ * - the first clip (V1 first, then the tracks) whose stretch of the file holds
+ * that moment, and the film time there. -> { sel, t } or null.
+ */
+export function findSource(cut, file, src) {
+    if (!cut || !file) return null;
+    const s = num(src);
+    let found = null;
+    everyClip(cut, (c, sel) => {
+        if (found || c.file !== file || c.title) return;
+        const span = selSpan(cut, sel);
+        if (!span) return;
+        const len = num(c.length);
+        const fps = num(cut.fps) > 0 ? num(cut.fps) : 24;
+        const step = 1 / fps;
+        // The clip's source is monotonic for a forwards, reversed or ramped clip; a loop repeats: search frame by frame.
+        for (let u = 0; u < len - 1e-9; u += step) {
+            const a = srcLocal(c, u), b = srcLocal(c, Math.min(len, u + step));
+            if ((s >= Math.min(a, b) - 1e-6 && s < Math.max(a, b) - 1e-6) || Math.abs(a - s) < 1e-6) {
+                const share = Math.abs(b - a) > 1e-9 ? Math.max(0, Math.min(1, (s - a) / (b - a))) : 0;
+                found = { sel, t: round(span.start + u + share * Math.min(step, len - u)) };
+                return;
+            }
+        }
+    });
+    return found;
+}

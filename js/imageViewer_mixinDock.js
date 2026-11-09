@@ -65,6 +65,7 @@ const DOCK_PANELS = {
     // a cut's tab is; the bar's Timeline group opens them.
     editInspector: { prop: "editInspectorPanel", label: "Inspector", minW: 290, minH: 200, defaultRail: "right" },
     editEffects: { prop: "editEffectsPanel", label: "Effects", minW: 220, minH: 150, defaultRail: "left" },
+    editSource: { prop: "editSourcePanel", label: "Source", minW: 300, minH: 240, defaultRail: "left" },
     editMixer: { prop: "editMixerPanel", label: "Mixer", minW: 200, minH: 220, defaultRail: "right" },
     // (Agent code and Dataset are tabs of the main canvas, imageViewer_viewTabs.js. A saved layout that still names
     // "agentCode" or "loraDataset" is read without them: unknown ids are dropped by _normaliseDockLayout / applyDockData.)
@@ -577,7 +578,7 @@ export const DockMixin = {
             if (this.renderHistoryPanel) this.renderHistoryPanel();
         } else if (id === "params") {
             if (this.updateParamsPanel) this.updateParamsPanel(true);
-        } else if (id === "editTimeline" || id === "editInspector" || id === "editEffects" || id === "editMixer") {
+        } else if (id === "editTimeline" || id === "editInspector" || id === "editEffects" || id === "editMixer" || id === "editSource") {
             if (this.editTlRefresh) this.editTlRefresh();
         } else if (id === "curves") {
             if (this.previzRefreshCurves) this.previzRefreshCurves();

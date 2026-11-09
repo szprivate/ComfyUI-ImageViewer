@@ -22,6 +22,11 @@ export const EditMatchMixin = {
     async editTlMatchFrame() {
         const hit = this._editTlMatchAt();
         if (!hit) { this._editTlSay("nothing to match here: no clip with a file under the playhead"); return null; }
+        // The Source viewer up: there, as Resolve's match frame loads its source monitor.
+        if (this._editSrcUp && this._editSrcUp() && this.editSrcLoad) {
+            await this.editSrcLoad({ path: hit.file, name: hit.name }, hit.src);
+            return hit;
+        }
         const frames = this._browserFramesFor ? (await this._browserFramesFor([hit.file])).filter(Boolean) : [];
         if (!frames.length || !frames[0].length) { this._editTlSay(`cannot open ${hit.name || hit.file}`); return null; }
         const snap = frames[0];
