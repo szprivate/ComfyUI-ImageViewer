@@ -482,6 +482,11 @@ export const EditTimelineMixin = {
                              () => this.editTlBladeToggle());
         blade.classList.add("edit-blade-btn", "edit-tool");
         setEditIcon(blade, "blade");
+        // Dynamic trim (W, imageViewer_editDynamic.js): J / K / L move the selected edit point or clip as it plays.
+        const dynamic = button("", "Dynamic trim (W): J / K / L trim the selected edit point while it plays - "
+                               + "or slip (Trim mode) / slide (Selection) the selected clip; K stops", () => this.editTlDynamicToggle());
+        dynamic.classList.add("edit-dynamic-btn", "edit-tool");
+        setEditIcon(dynamic, "dynamic");
         const snap = button("", "Snapping (N): drags snap to clip and gap edges, the playhead, the in / out and the texts. "
                             + "Hold S while dragging to snap the other way", () => this.editTlSnapToggle());
         setEditIcon(snap, "snap");
@@ -518,7 +523,7 @@ export const EditTimelineMixin = {
         proxy.classList.add("edit-proxy-btn");
         setEditIcon(proxy, "proxy");
         const sep = el("span", "edit-sep");
-        bar.append(fresh, opener, recent, out, sep, add, pick, trimBtn, blade, snap, beats, split, undo, redo, auto, cuts, take, sub, badge,
+        bar.append(fresh, opener, recent, out, sep, add, pick, trimBtn, blade, dynamic, snap, beats, split, undo, redo, auto, cuts, take, sub, badge,
                    audio, scrubAudio, proxy, zoomOut, zoomIn, zoomFit);
 
         // The tracks: their headers in a column that stays, the tracks beside it
@@ -565,6 +570,8 @@ export const EditTimelineMixin = {
             if (this._editTlKeySel && !(t && t.classList && t.classList.contains("edit-keymark"))) this._editTlKeySel = null;
             // And anywhere but on a marker, the selected marker (imageViewer_editMarkers.js).
             if (this._editTlMarkSel && !(t && t.classList && (t.classList.contains("edit-marker") || t.classList.contains("edit-cmarker")))) this._editTlMarkSel = null;
+            // A press stops a dynamic trim that runs (imageViewer_editDynamic.js).
+            if (this._editTlDyn && this._editTlDynStop) this._editTlDynStop();
             if (t && /^(INPUT|TEXTAREA|SELECT|BUTTON|OPTION)$/.test(t.tagName || "")) return;
             try { body.focus({ preventScroll: true }); } catch (_) {}
         }, true);
@@ -681,7 +688,7 @@ export const EditTimelineMixin = {
             this._editTlAdd((payload && payload.items) || [], at, track, room);
         });
         this._editTlUi = { host, savedBar, empty, body, sub, badge, out, main, heads, scroll, area, ruler, rows,
-                           head, drop, hint, blade, split, undo, redo, auto, cuts, take, pick, trimBtn, snap, beats, zoomOut, zoomIn, zoomFit,
+                           head, drop, hint, blade, dynamic, split, undo, redo, auto, cuts, take, pick, trimBtn, snap, beats, zoomOut, zoomIn, zoomFit,
                            audio, scrubAudio, proxy, tc, hbox, headsV, headsA, hsplit, secV, secA, splitter: splitBar, vPinned: true };
         if (this._editTlSecBind) this._editTlSecBind(this._editTlUi);
         this._editTlWatchCanvas();
@@ -744,6 +751,8 @@ export const EditTimelineMixin = {
         ui.redo.disabled = !cut || !hist.future.length;
         ui.split.disabled = ui.auto.disabled = ui.cuts.disabled = !has;
         ui.blade.classList.toggle("on", !!this._editTlBlade);
+        ui.dynamic.classList.toggle("on", !!this._editTlDynamic);
+        ui.body.classList.toggle("dynamic", !!this._editTlDynamic && has);
         ui.pick.classList.toggle("on", !this._editTlBlade && !this._editTlTrimMode);
         ui.trimBtn.classList.toggle("on", !this._editTlBlade && !!this._editTlTrimMode);
         ui.body.classList.toggle("blade", !!this._editTlBlade && has);

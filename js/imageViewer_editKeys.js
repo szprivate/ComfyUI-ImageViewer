@@ -40,6 +40,8 @@
 //   Del / Shift+Del with nothing selected and an in and out set: lift / extract the range;
 //   Ctrl+Shift+, / . swap the selected clip; Y / Alt+Y / Shift+Y select forward / backward (imageViewer_editRange.js)
 //
+//   W            dynamic trim: J / K / L move the selected edit point or clip (imageViewer_editDynamic.js)
+//
 //   Ctrl+O       Open cut...
 //   ?            Show Hotkeys: the viewer's overlay lists these (EDIT_KEYS) while a cut's tab is up
 //
@@ -94,6 +96,7 @@ export const EDIT_KEYS = [
     ["Ctrl+C", "Copy the selected clip (or text) - for Paste Attributes; also on its right-click menu"],
     ["Alt+V", "Paste Attributes…: the copied clip's zoom, position, anchor, rotation, flip, cropping, opacity, volume, keyframes, speed, name, colour or text look onto the selected clips (one undo step)"],
     ["J K L", "Play backwards / stop / play"],
+    ["W", "Dynamic trim on / off: J / L then move the selected edit point (or slip the clip in the Trim mode, slide it in Selection) frame by frame as it runs, again for 2x / 4x / 8x; K stops - the whole run is one undo step"],
     ["I / O", "Start / end of the range played"],
     ["← →", "A frame back / on (Shift: a second)"],
     ["↑ ↓", "The edit point before / after"],
@@ -207,9 +210,12 @@ export const EditKeysMixin = {
         else if ((key === "Delete" || key === "Backspace") && this._editTlMarkSel && this.editTlMarkerDeleteSelected && this.editTlMarkerDeleteSelected()) done = true;
         else if ((key === "Delete" || key === "Backspace") && this._editTlVolSel && this.editTlVolDelete && this.editTlVolDelete()) done = true;
         else if (key === "Delete" || key === "Backspace") done = this.editTlDelete(shift);
+        else if ((low === "j" || low === "k" || low === "l") && !shift && this.editTlDynKey
+                 && this.editTlDynKey(low === "j" ? -1 : low === "l" ? 1 : 0)) done = true;
         else if (low === "j" && !shift) this._editTlShuttle(-1);
         else if (low === "k" && !shift) this._editTlShuttle(0);
         else if (low === "l" && !shift) this._editTlShuttle(1);
+        else if (letter === "w" && !shift) this.editTlDynamicToggle();
         else if (letter === "i") { if (shift) this._editTlGoMark("in"); else this._editTlMark("in"); }
         else if (letter === "o") { if (shift) this._editTlGoMark("out"); else this._editTlMark("out"); }
         else if (letter === "x") { if (shift) this._editTlSetRange(null); else this.editTlMarkClip(); }
