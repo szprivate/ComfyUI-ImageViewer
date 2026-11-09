@@ -379,6 +379,16 @@ def build_model(doc, probes, frames=None, empty_ok=False):
 
     # In and out.
     total = max([p["start"] + p["dur"] for p in spine + lanes] + [0])
+    # Markers (the timeline's and the clips'), as markers of the timeline at their frame: (frame, frames, name, note).
+    marks = [(frames_of(m["t"], rate), max(1, frames_of(m.get("len") or 0, rate)), str(m.get("name") or ""), str(m.get("note") or ""))
+             for m in timeline_io.film_markers(edit)]
+    if frames:
+        lo0 = max(0, min(total - 1, int(frames[0])))
+        hi0 = max(lo0 + 1, min(total, int(frames[1]) + 1))
+        marks = [(f - lo0, d, n, t) for f, d, n, t in marks if lo0 <= f < hi0]
+    marks = [m for m in marks if 0 <= m[0] < max(total, 1)]
+    if marks:
+        say("Marker colours (Resolve's FCPXML import gives every marker its own default colour); clip markers come as timeline markers.")
     if frames:
         lo = max(0, min(total - 1, int(frames[0])))
         hi = max(lo + 1, min(total, int(frames[1]) + 1))
@@ -459,7 +469,7 @@ def build_model(doc, probes, frames=None, empty_ok=False):
             seen.add(key)
             files.append(p["file"])
     return {"name": str(edit.get("name") or "cut"), "rate": rate, "width": width, "height": height, "total": total,
-            "spine": full, "lanes": lanes, "left_out": left, "files": files}
+            "spine": full, "lanes": lanes, "left_out": left, "files": files, "markers": marks}
 
 
 # ── sound effects, baked ─────────────────────────────────────────────────────
@@ -954,6 +964,13 @@ def fcpxml(model, probes, uris):
                 break
         p, el, info = chosen
         return el, _local_start(p, info) + Fraction(frame - p["start"]) / rate
+    # Markers: on the V1 element they lie in, at that element's own time - before its anchored clips, as the DTD orders them.
+    for frame, dur, name, note in model.get("markers") or []:
+        el, local = host(frame)
+        attrs = {"start": time_str(local), "duration": _grid(dur, rate), "value": _text(name or "Marker", 200)}
+        if note:
+            attrs["note"] = _text(note, 2000)
+        ET.SubElement(el, "marker", attrs)
     styles = 0
     for p in sorted(model["lanes"], key=lambda q: (abs(q["lane"]), q["start"])):
         el, local = host(p["start"])

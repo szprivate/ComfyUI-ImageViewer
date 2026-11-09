@@ -269,6 +269,8 @@ const copy = (cut) => ({
     auto: { ...(cut.auto || {}) },
     // Track effects of the bed (A1); the other tracks carry theirs (k.afx). Chains are replaced, never changed in place.
     afx: { ...(cut.afx || {}) },
+    // Timeline markers (a list replaced, never changed in place - as a clip's own `markers`).
+    markers: [...(cut.markers || [])],
 });
 
 /** A length in seconds, as a person writes it on a shot: 0.5s, 3.2s, 1:04. */
@@ -481,7 +483,7 @@ export function moveClip(cut, from, to) {
 
 /** A cut with nothing in it yet: what dropping the first clip starts. */
 export function emptyCut(name = "cut", fps = 24) {
-    return { name, fps, clips: [], texts: [], sound: [], tracks: [], off: {} };
+    return { name, fps, clips: [], texts: [], sound: [], tracks: [], off: {}, markers: [] };
 }
 
 /**
@@ -955,7 +957,8 @@ export function sameCut(a, b) {
                          round(speedOf(c)), loopOf(c), loopOf(c) ? round(num(c.span)) : 0,
                          takesOf(c).length ? JSON.stringify([c.file, takesOf(c).map((t) => [t.version, !!t.active, t.file])]) : "",
                          String(c.link || ""), !!c.unlinked, !!c.mute, !!c.disabled, c.title ? JSON.stringify(cleanTitle(c.title)) : "", ...audioDress(c),
-                         c.afx && c.afx.length ? JSON.stringify(cleanAfx(c.afx)) : ""];
+                         c.afx && c.afx.length ? JSON.stringify(cleanAfx(c.afx)) : "",
+                         c.markers && c.markers.length ? JSON.stringify(cleanClipMarkers(c.markers)) : ""];
     const key = (cut) => JSON.stringify({
         clips: ((cut && cut.clips) || []).map((c) => [Number.isInteger(c.ref) ? c.ref : c.file, c.name, round(num(c.in)), round(num(c.length)), round(num(c.transition)), round(num(c.gap)), ...dress(c)]),
         texts: ((cut && cut.texts) || []).map((t) => [Number.isInteger(t.ref) ? t.ref : "new", t.text, round(num(t.start)), round(num(t.length)), JSON.stringify(textLook(t))]),
@@ -965,6 +968,7 @@ export function sameCut(a, b) {
         off: [!!(cut && cut.off && cut.off.V1), !!(cut && cut.off && cut.off.A1), !!(cut && cut.off && cut.off.T)],
         flags: ["V1", "A1", "T"].map((id) => [!!(cut && cut.lock && cut.lock[id]), !(cut && cut.auto && cut.auto[id] === false)]),
         afx: JSON.stringify(cleanAfx(cut && cut.afx && cut.afx.A1)),
+        markers: JSON.stringify(cleanMarkers(cut && cut.markers)),
     });
     return key(a) === key(b);
 }
@@ -975,7 +979,7 @@ function timeOf(c) {
     return { speed: round(speedOf(c)), loop: loopOf(c), span: loopOf(c) ? round(num(c.span)) : 0,
              link: c.link || "", unlinked: !!(c.link && c.unlinked), mute: !!c.mute, disabled: !!c.disabled,
              fadeIn: round(num(c.fadeIn)), fadeOut: round(num(c.fadeOut)), xfade: c.xfade ? cleanXfade(c.xfade) : null,
-             afx: cleanAfx(c.afx) };
+             afx: cleanAfx(c.afx), markers: cleanClipMarkers(c.markers) };
 }
 
 /** What is sent back to be saved: the cut, and nothing the server did not send. */
@@ -1007,6 +1011,7 @@ export function toSave(cut) {
         lock: Object.fromEntries(["V1", "A1", "T"].map((id) => [id, !!(cut.lock && cut.lock[id])])),
         auto: Object.fromEntries(["V1", "A1", "T"].map((id) => [id, !(cut.auto && cut.auto[id] === false)])),
         afx: { A1: cleanAfx(cut.afx && cut.afx.A1) },
+        markers: cleanMarkers(cut.markers),
     };
 }
 
@@ -1704,6 +1709,9 @@ export function detach(cut) {
     for (const c of next.clips) delete c.ref;
     for (const t of next.texts) delete t.ref;
     for (const k of next.tracks) for (const c of k.clips) delete c.ref;
+    // The file's markers were written anew too.
+    next.markers = next.markers.map(({ ref, ...m }) => m);
+    everyClip(next, (c) => { if (c.markers) c.markers = c.markers.map(({ ref, ...m }) => m); });
     return next;
 }
 
@@ -2925,6 +2933,7 @@ export function snapTargets(cut, opts = {}) {
         add(t.start, "text", "T:" + i, "text");
         add(num(t.start) + num(t.length), "text", "T:" + i, "text end");
     });
+    for (const m of allMarkers(cut)) add(m.t, "marker", markerId(m.which), m.name ? "marker: " + m.name : "marker");
     if (opts.playhead != null) add(opts.playhead, "playhead", "", "playhead");
     if (opts.range) { add(opts.range[0], "in", "", "in"); add(opts.range[1], "out", "", "out"); }
     for (const b of opts.beats || []) add(b, "beat", "", "beat");
@@ -2942,7 +2951,7 @@ export function snapResolve(seconds, targets, tolerance) {
     return best ? { t: num(best.t), target: best } : { t, target: null };
 }
 // Between two targets at one distance: an edit point before the playhead, before a beat.
-const RANK = { clip: 0, gap: 1, start: 1, text: 2, in: 3, out: 3, playhead: 4, beat: 5 };
+const RANK = { clip: 0, gap: 1, start: 1, text: 2, marker: 3, in: 3, out: 3, playhead: 4, beat: 5 };
 const rank = (g) => (RANK[g.kind] === undefined ? 9 : RANK[g.kind]);
 
 /** A span `length` long beginning at `at`: its start or its end snapped, whichever is nearer. { at, target, edge }. */
@@ -4465,4 +4474,195 @@ export function cutHasAfx(cut) {
     if (afxActive(cleanAfx(cut.afx && cut.afx.A1))) return true;
     if ((cut.clips || []).some((c) => afxActive(cleanAfx(c.afx)))) return true;
     return (cut.tracks || []).some((k) => afxActive(cleanAfx(k.afx)) || (k.clips || []).some((c) => afxActive(cleanAfx(c.afx))));
+}
+
+// ── markers (Resolve's M): on the timeline, and on clips ─────────────────────
+//
+// A TIMELINE marker is a moment of the film: `cut.markers` = [{ t, len, name,
+// note, color, ref? }] (seconds; `len` > 0 a duration marker). It stays where it
+// is when clips move. A CLIP marker is a moment of the clip's SOURCE: `c.markers`
+// = [{ src, len, name, note, color, ref? }] (seconds of the file; `len` in clip
+// seconds), so it rides with the picture through moves, trims, slips and speed
+// changes, and a trim that cuts its moment away hides it (it is kept). `ref`
+// names the OTIO marker it was read from, so what another program wrote into it
+// survives a save. In the file: the V1 track's markers (not the stack's, which
+// are agentY's texts), and each clip's own markers, with `metadata.imageviewer.marker`.
+
+export const MARKER_COLORS = ["blue", "cyan", "green", "yellow", "orange", "red", "pink", "purple", "magenta", "white"];
+export const MARKER_HEX = { blue: "#3d8bff", cyan: "#2ad4e6", green: "#38d36b", yellow: "#f2d43a", orange: "#ff9a2e",
+                            red: "#ff4d4d", pink: "#ff7ab8", purple: "#a77bff", magenta: "#e64de6", white: "#e8e8e8" };
+const MAX_MARKERS = 1000;
+
+function cleanMarkText(m) {
+    const out = { len: Math.max(0, round(num(m.len))), name: String(m.name == null ? "" : m.name).slice(0, 200),
+                  note: String(m.note == null ? "" : m.note).slice(0, 2000),
+                  color: MARKER_COLORS.includes(m.color) ? m.color : "blue" };
+    if (Number.isInteger(m.ref) && m.ref >= 0) out.ref = m.ref;
+    return out;
+}
+
+/** A cut's timeline markers, held to what a marker may be, in time order. */
+export function cleanMarkers(list) {
+    return (Array.isArray(list) ? list : []).filter((m) => m && Number.isFinite(num(m.t, NaN)))
+        .slice(0, MAX_MARKERS).map((m) => ({ t: Math.max(0, round(num(m.t))), ...cleanMarkText(m) }))
+        .sort((a, b) => a.t - b.t);
+}
+
+/** A clip's markers (moments of its source), held to what a marker may be. */
+export function cleanClipMarkers(list) {
+    return (Array.isArray(list) ? list : []).filter((m) => m && Number.isFinite(num(m.src, NaN)))
+        .slice(0, MAX_MARKERS).map((m) => ({ src: Math.max(0, round(num(m.src))), ...cleanMarkText(m) }))
+        .sort((a, b) => a.src - b.src);
+}
+
+/** Where a clip marker lies in its clip (seconds from the clip's first frame), or null while a trim hides it. */
+export function clipMarkU(c, m) {
+    if (!c || !m) return null;
+    const still = isStillClip(c);
+    const u = still ? num(m.src) : (num(m.src) - num(c.in)) / speedOf(c);
+    if (loopOf(c)) { const span = num(c.span); if (num(m.src) < num(c.in) - 1e-6 || num(m.src) > num(c.in) + span + 1e-6) return null;
+                     return round((num(m.src) - num(c.in)) / speedOf(c)); }
+    return u >= -1e-6 && u <= num(c.length) + 1e-6 ? round(Math.max(0, u)) : null;
+}
+
+/** The source moment of the clip `u` seconds in: what a clip marker stores. */
+export function clipMarkSrc(c, u) {
+    return isStillClip(c) ? round(Math.max(0, num(u))) : srcLocal(c, u);
+}
+
+/** Every marker the film shows, in time order: { t, len, name, note, color, which } - `which` names it for the edits below. */
+export function allMarkers(cut) {
+    const out = [];
+    if (!cut) return out;
+    (cut.markers || []).forEach((m, i) => out.push({ ...m, t: num(m.t), which: { kind: "marker", i } }));
+    const starts = clipStarts(cut);
+    everyClip(cut, (c, sel) => {
+        (c.markers || []).forEach((m, i) => {
+            const u = clipMarkU(c, m);
+            if (u == null) return;
+            const start = sel.kind === "clip" ? starts[sel.i] : num(c.at);
+            out.push({ ...m, t: round(start + u), which: { kind: "cmarker", sel, i } });
+        });
+    });
+    return out.sort((a, b) => a.t - b.t);
+}
+
+function markerList(next, which) {
+    if (which.kind === "marker") { next.markers = [...(next.markers || [])]; return next.markers; }
+    const c = clipOf(next, which.sel);
+    if (!c) return null;
+    c.markers = [...(c.markers || [])];
+    return c.markers;
+}
+
+/** A marker's id among the snap targets ("M:2", "CM:V1:0:1"): what a drag of it leaves out. */
+export function markerId(which) {
+    return which.kind === "marker" ? "M:" + which.i : "CM:" + selId(which.sel) + ":" + which.i;
+}
+
+/** The marker `which` names, or null. */
+export function markerOf(cut, which) {
+    if (!cut || !which) return null;
+    const list = which.kind === "marker" ? cut.markers : (clipOf(cut, which.sel) || {}).markers;
+    return (list && list[which.i]) || null;
+}
+
+/**
+ * A marker at the film's moment `t`: on the clip `sel` when one is given and `t`
+ * lies inside it (a clip marker), else on the timeline. A marker already on that
+ * frame is not doubled: { cut, which, made } - `made` false when one was there.
+ */
+export function addMarker(cut, t, opts = {}) {
+    const fps = num(cut && cut.fps, 24) || 24;
+    const at = toFrame(Math.max(0, num(t)), fps);
+    const half = 0.5 / fps;
+    const sel = opts.sel && clipOf(cut, opts.sel) ? opts.sel : null;
+    const next = copy(cut);
+    const look = cleanMarkText({ name: opts.name || "", note: opts.note || "", color: opts.color, len: opts.len });
+    delete look.ref;
+    if (sel) {
+        const c = clipOf(next, sel);
+        const span = selSpan(next, sel);
+        if (at >= span.start - half && at < span.end - half) {
+            const u = at - span.start;
+            const there = (c.markers || []).findIndex((m) => { const v = clipMarkU(c, m); return v != null && Math.abs(v - u) < half; });
+            if (there >= 0) return { cut, which: { kind: "cmarker", sel, i: there }, made: false };
+            const list = markerList(next, { kind: "cmarker", sel });
+            list.push({ src: clipMarkSrc(c, u), ...look });
+            c.markers = cleanClipMarkers(list);
+            const src = clipMarkSrc(c, u);
+            return { cut: next, which: { kind: "cmarker", sel, i: c.markers.findIndex((m) => Math.abs(m.src - src) < 1e-4) }, made: true };
+        }
+    }
+    const there = (next.markers || []).findIndex((m) => Math.abs(num(m.t) - at) < half);
+    if (there >= 0) return { cut, which: { kind: "marker", i: there }, made: false };
+    next.markers = cleanMarkers([...(next.markers || []), { t: at, ...look }]);
+    return { cut: next, which: { kind: "marker", i: next.markers.findIndex((m) => Math.abs(m.t - at) < 1e-4) }, made: true };
+}
+
+/** The marker `which` with `patch` laid over it (name, note, color, len): a new cut. */
+export function editMarker(cut, which, patch) {
+    if (!markerOf(cut, which)) return cut;
+    const next = copy(cut);
+    const list = markerList(next, which);
+    const m = { ...list[which.i], ...patch };
+    list[which.i] = m;
+    if (which.kind === "marker") next.markers = cleanMarkers(list); else clipOf(next, which.sel).markers = cleanClipMarkers(list);
+    return next;
+}
+
+/** The marker `which` moved to the film's moment `t` (a clip marker: within its clip): { cut, which }. */
+export function moveMarker(cut, which, t) {
+    const m = markerOf(cut, which);
+    if (!m) return { cut, which };
+    const fps = num(cut.fps, 24) || 24;
+    const next = copy(cut);
+    const list = markerList(next, which);
+    if (which.kind === "marker") {
+        const at = toFrame(Math.max(0, num(t)), fps);
+        list[which.i] = { ...m, t: at, ref: m.ref };
+        const moved = list[which.i];
+        next.markers = cleanMarkers(list);
+        return { cut: next, which: { kind: "marker", i: next.markers.findIndex((x) => x.t === moved.t && x.name === moved.name && x.note === moved.note) } };
+    }
+    const c = clipOf(next, which.sel);
+    const span = selSpan(next, which.sel);
+    const u = Math.max(0, Math.min(num(c.length) - 1 / fps, toFrame(num(t), fps) - span.start));
+    const src = clipMarkSrc(c, u);
+    list[which.i] = { ...m, src };
+    c.markers = cleanClipMarkers(list);
+    return { cut: next, which: { ...which, i: c.markers.findIndex((x) => Math.abs(x.src - src) < 1e-4 && x.name === m.name) } };
+}
+
+/** The markers `list` (of `which`) taken away: a new cut. */
+export function removeMarkers(cut, list) {
+    const next = copy(cut);
+    const drop = new Map();
+    for (const w of list || []) {
+        if (!markerOf(cut, w)) continue;
+        const key = w.kind === "marker" ? "T" : selId(w.sel);
+        if (!drop.has(key)) drop.set(key, { w, set: new Set() });
+        drop.get(key).set.add(w.i);
+    }
+    for (const { w, set } of drop.values()) {
+        const arr = markerList(next, w);
+        const kept = arr.filter((_, i) => !set.has(i));
+        if (w.kind === "marker") next.markers = kept; else clipOf(next, w.sel).markers = kept;
+    }
+    return next;
+}
+
+/** The next marker after the film's moment `t` (dir 1) or the one before it (dir -1), or null. */
+export function nextMarker(cut, t, dir, fps = 24) {
+    const half = 0.5 / (num(fps) || 24);
+    const all = allMarkers(cut);
+    if (dir > 0) return all.find((m) => m.t > num(t) + half) || null;
+    for (let k = all.length - 1; k >= 0; k--) if (all[k].t < num(t) - half) return all[k];
+    return null;
+}
+
+/** The markers at the film's frame of `t` (within half a frame). */
+export function markersAt(cut, t, fps = 24) {
+    const half = 0.5 / (num(fps) || 24);
+    return allMarkers(cut).filter((m) => Math.abs(m.t - num(t)) < half);
 }

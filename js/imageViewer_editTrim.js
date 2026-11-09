@@ -883,6 +883,7 @@ export const EditTrimMixin = {
             }
             return ui[key];
         };
+        if (this._editTlMarkersDraw) this._editTlMarkersDraw();          // the markers (imageViewer_editMarkers.js)
         const parts = [need("range", "edit-range", ui.ruler), need("markIn", "edit-mark in", ui.ruler), need("markOut", "edit-mark out", ui.ruler),
                        need("lineIn", "edit-markline in", ui.area), need("lineOut", "edit-markline out", ui.area)];
         if (!r || !(lay.total > 0)) { for (const p of parts) p.style.display = "none"; return; }

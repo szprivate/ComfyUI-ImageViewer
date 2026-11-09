@@ -34,6 +34,9 @@
 //   Ctrl+Shift+M audio playback on / off (all of the cut's sound, playing and scrubbing)
 //   Shift+M      audio scrubbing on / off (dragging the playhead or jogging plays grains of the sound)
 //
+//   M            a marker at the playhead (on the selected clip when it is under it); Alt+M takes them away;
+//                Shift+Up / Shift+Down the marker before / after (imageViewer_editMarkers.js)
+//
 //   Ctrl+O       Open cut...
 //   ?            Show Hotkeys: the viewer's overlay lists these (EDIT_KEYS) while a cut's tab is up
 //
@@ -69,6 +72,10 @@ export const EDIT_KEYS = [
     ["Keyframe marks on the selected clip", "Drag along the clip to move a key (snaps to frames and the playhead); click + Del takes it away; right-click: linear / ease in / ease out / ease in-out / hold"],
     ["D", "Disable / enable the selected clips (and their linked sound or picture): dimmed, not seen, not heard, not rendered - the track under shows"],
     ["Ctrl+Alt+L", "Unlink a film's sound onto a sound track / relink it, from either part (the offset stays; right-click: Resync, Merge audio back into clip)"],
+    ["M", "A marker at the playhead: on the selected clip when the playhead is inside it (it rides with the picture), else on the timeline; M on a marker opens it"],
+    ["Alt+M", "Take away the markers at the playhead"],
+    ["Shift+\u2191 / Shift+\u2193", "The marker before / after"],
+    ["A marker", "Click: the playhead goes there (Del takes it away); drag: move it (snapping); double-click: name, colour, notes, duration; right-click: colour, delete, delete all of a colour"],
     ["Ctrl+O", "Open cut\u2026: pick a saved .otio (the Open button on the bar too, its \u25be lists the recent cuts)"],
     ["Ctrl+S", "Save the cut: the bar then says where it went"],
     ["Ctrl+Shift+S", "Save cut as\u2026: another name or folder, and the tab goes on with that file"],
@@ -138,6 +145,7 @@ export const EditKeysMixin = {
         if (alt && ctrl && letter === "l") this.editTlLinkToggle();
         else if (alt && !ctrl) {
             if (letter === "x") this._editTlSetRange(null);
+            else if (letter === "m" && !shift) this.editTlMarkerDeleteHere();
             else if (letter === "i") this._editTlClearMark("in");
             else if (letter === "o") this._editTlClearMark("out");
             else if (letter === "v" && !shift) this.editTlPasteDialog();
@@ -176,6 +184,7 @@ export const EditKeysMixin = {
         else if (key === "?") this.toggleHelpOverlay();
         else if (key === "Escape") {
             if (this._editTlKeySel) { this._editTlKeySel = null; this.editTlRefresh(); }
+            else if (this._editTlMarkSel) { this._editTlMarkSel = null; this.editTlRefresh(); }
             else if (this._editTlVolSel) { this._editTlVolSel = null; this.editTlRefresh(); }
             else if (this._editTlMarks && this.editTlMarksCancel) this.editTlMarksCancel();
             else if (this._editTlBlade) this.editTlBladeToggle(false);
@@ -184,6 +193,7 @@ export const EditKeysMixin = {
             else done = false;
         }
         else if ((key === "Delete" || key === "Backspace") && this._editTlKeySel && this.editTlKeyDelete && this.editTlKeyDelete()) done = true;
+        else if ((key === "Delete" || key === "Backspace") && this._editTlMarkSel && this.editTlMarkerDeleteSelected && this.editTlMarkerDeleteSelected()) done = true;
         else if ((key === "Delete" || key === "Backspace") && this._editTlVolSel && this.editTlVolDelete && this.editTlVolDelete()) done = true;
         else if (key === "Delete" || key === "Backspace") done = this.editTlDelete(shift);
         else if (low === "j" && !shift) this._editTlShuttle(-1);
@@ -194,6 +204,7 @@ export const EditKeysMixin = {
         else if (letter === "x") { if (shift) this._editTlSetRange(null); else this.editTlMarkClip(); }
         else if (letter === "r" && shift) this.editTlSpeedReset();
         else if (letter === "m" && shift) this.editAudioToggle("scrub");
+        else if (letter === "m") this.editTlMarkerAdd();
         else if (comma || period) {
             const fps = this._editTlCut.fps || 24;
             this.editTlNudge((comma ? -1 : 1) * (shift ? Math.round(fps) : 1));
@@ -202,6 +213,7 @@ export const EditKeysMixin = {
             const fps = this._editTlCut.fps || 24;
             this._editTlGoFrame((this.currentFrame || 0) + (key === "ArrowLeft" ? -1 : 1) * (shift ? Math.round(fps) : 1));
         }
+        else if ((key === "ArrowUp" || key === "ArrowDown") && shift) this.editTlMarkerStep(key === "ArrowUp" ? -1 : 1);
         else if (key === "ArrowUp" || key === "ArrowDown") this._editTlJumpEdit(key === "ArrowUp" ? -1 : 1);
         else if (key === "Home") this._editTlGoFrame(0);
         else if (key === "End") this._editTlGoFrame(D.filmFrames(this._editTlCut) - 1);

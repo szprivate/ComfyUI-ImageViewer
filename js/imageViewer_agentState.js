@@ -87,6 +87,10 @@ export const AgentStateMixin = {
                 if (total > picked.length) out.selected_total = total;
             }
             if (this._editTlOtio) out.otio = String(this._editTlOtio);
+            // The markers (M): the timeline's and the clips', in film time.
+            const marks = safe(() => D.allMarkers(cut), []) || [];
+            if (marks.length) out.markers = marks.slice(0, 100).map((m) => ({ t: m.t, len: m.len, name: m.name, note: m.note, color: m.color,
+                                                                         clip: m.which.kind === "cmarker" ? D.selId(m.which.sel) : "" }));
             const sel = picked.length ? null : this._editTlSel;
             if (sel && sel.kind) {
                 const s = { kind: sel.kind, index: sel.i, track: sel.track || "" };

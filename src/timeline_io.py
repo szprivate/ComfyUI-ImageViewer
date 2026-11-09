@@ -304,6 +304,9 @@ def _look(item):
         out["takes"] = takes
     out.update(clip_link(item))
     out.update(clip_audio(item))
+    marks = read_markers(item, clip=True)
+    if marks:
+        out["markers"] = marks
     return out
 
 
@@ -474,6 +477,101 @@ def clip_audio(item):
 def _afx():
     from . import audio_fx
     return audio_fx
+
+
+# Markers (the panel's M, Resolve's): on the timeline - the first video track's
+# markers, in film seconds (the stack's markers are agentY's texts) - and on
+# clips, in seconds of the clip's source (OTIO's own rule for a clip's markers),
+# so they ride with the picture. Every marker of those lists is read; one the
+# panel wrote carries ``metadata.imageviewer.marker`` (its note, its length on the
+# timeline). ``ref`` is its place in the list it came from, so a save keeps what
+# another program wrote into it. The same rules as cleanMarkers in the JS.
+MARKER_COLORS = ("blue", "cyan", "green", "yellow", "orange", "red", "pink", "purple", "magenta", "white")
+_MAX_MARKERS = 1000
+
+
+def _marker_color(value):
+    c = str(value or "").lower()
+    return c if c in MARKER_COLORS else ("magenta" if c == "fuchsia" else "blue")
+
+
+def read_markers(obj, clip=False):
+    """The markers of an OTIO item: ``[{"t" | "src", "len", "name", "note", "color", "ref"}]``, in time order."""
+    out = []
+    marks = obj.get("markers") if isinstance(obj, dict) else None
+    for ref, m in enumerate((marks or [])[:_MAX_MARKERS]):
+        if not isinstance(m, dict) or not str(m.get("OTIO_SCHEMA") or "").startswith("Marker"):
+            continue
+        start, length = _span(m.get("marked_range"))
+        note = _imageviewer(m).get("marker")
+        note = note if isinstance(note, dict) else {}
+        try:
+            span = float(note.get("len", length) or 0)
+        except (TypeError, ValueError):
+            span = length
+        text = note.get("note", m.get("comment"))
+        item = {("src" if clip else "t"): round(max(0.0, start), 4), "len": round(max(0.0, span), 4),
+                "name": str(m.get("name") or "")[:200], "note": str(text or "")[:2000],
+                "color": _marker_color(m.get("color")), "ref": ref}
+        out.append(item)
+    return sorted(out, key=lambda x: x["src" if clip else "t"])
+
+
+def film_markers(edit):
+    """Every marker of an editable cut in film seconds, in time order: ``[{"t", "len", "name", "note", "color", "clip"}]``
+    (``clip`` "V1:2" / "V2:0" for a clip's own; "" for the timeline's). allMarkers in the JS does the same."""
+    out = [{**{k: m.get(k) for k in ("len", "name", "note", "color")}, "t": float(m.get("t") or 0), "clip": ""}
+           for m in edit.get("markers") or []]
+
+    def of_clip(c, start, cid):
+        try:
+            speed = float(c.get("speed") or 1) or 1.0
+        except (TypeError, ValueError):
+            speed = 1.0
+        still = not c.get("file") or c.get("title") is not None
+        for m in c.get("markers") or []:
+            u = float(m.get("src") or 0) if still else (float(m.get("src") or 0) - float(c.get("in") or 0)) / speed
+            if -1e-6 <= u <= float(c.get("length") or 0) + 1e-6:
+                out.append({**{k: m.get(k) for k in ("len", "name", "note", "color")}, "t": round(start + max(0.0, u), 4), "clip": cid})
+    at = 0.0
+    for i, c in enumerate(edit.get("clips") or []):
+        at += float(c.get("gap") or 0)
+        if i:
+            at -= float(c.get("transition") or 0)
+        of_clip(c, at, f"V1:{i}")
+        at += float(c.get("length") or 0)
+    for k in edit.get("tracks") or []:
+        for i, c in enumerate(k.get("clips") or []):
+            of_clip(c, float(c.get("at") or 0), f"{k.get('id')}:{i}")
+    return sorted(out, key=lambda m: m["t"])
+
+
+def _write_markers(obj, given, rate, clip=False, speed=1.0):
+    """Lay the edit's markers (*given*, as read_markers gives them) into OTIO item *obj*'s list."""
+    import copy
+    old = list(obj.get("markers") or []) if isinstance(obj.get("markers"), list) else []
+    out = []
+    for i, m in enumerate((given or [])[:_MAX_MARKERS], 1):
+        if not isinstance(m, dict):
+            continue
+        at = _num(m.get("src" if clip else "t"), f"marker {i}'s moment")
+        span = max(0.0, float(m.get("len") or 0) if isinstance(m.get("len"), (int, float)) else 0.0)
+        ref = m.get("ref")
+        if isinstance(ref, int) and not isinstance(ref, bool) and 0 <= ref < len(old) and isinstance(old[ref], dict):
+            mark = copy.deepcopy(old[ref])
+        else:
+            mark = {"OTIO_SCHEMA": "Marker.2", "metadata": {}}
+        mark["name"] = str(m.get("name") or "")[:200]
+        mark["color"] = _marker_color(m.get("color")).upper()
+        mark["comment"] = str(m.get("note") or "")[:2000]
+        mark["marked_range"] = _range(max(0.0, at), span * (speed if clip else 1.0), rate)
+        meta = mark.setdefault("metadata", {})
+        if isinstance(meta, dict):
+            note = meta.setdefault("imageviewer", {})
+            if isinstance(note, dict):
+                note["marker"] = {"note": mark["comment"], "len": round(span, 4)}
+        out.append(mark)
+    obj["markers"] = out
 
 
 def _set_audio(item, c):
@@ -999,6 +1097,7 @@ def editable(doc):
     out["lock"] = {k: v["lock"] for k, v in flags.items()}
     out["auto"] = {k: v["auto"] for k, v in flags.items()}
     out["afx"] = {"A1": flags["A1"].get("afx") or []}
+    out["markers"] = read_markers(video)
     # The texts (markers) as title clips: the panel, the render and the Resolve export all work on those.
     return texts_to_titles(out)
 
@@ -1051,7 +1150,7 @@ def _set_takes(item, given, may_use):
     ref["available_range"] = None          # it described the media that was there
 
 
-def _dress(item, c, may_use=None):
+def _dress(item, c, may_use=None, rate=None):
     """Write a clip's colour and volume, where the edit states them, into *item*."""
     if "color" in c:
         color = str(c.get("color") or "")
@@ -1076,6 +1175,8 @@ def _dress(item, c, may_use=None):
     _set_time(item, c)
     _set_link(item, c)
     _set_audio(item, c)
+    if "markers" in c:
+        _write_markers(item, c.get("markers"), rate or _rate(item) or 24.0, clip=True, speed=clip_time(item)["speed"])
     if "takes" in c:
         _set_takes(item, c.get("takes"), may_use)
     if c.get("volume") is not None:
@@ -1157,7 +1258,7 @@ def _build_tracks(doc, tracks, rate, may_use):
             length = _num(c.get("length"), f"{what}'s length", _MIN_CLIP)
             if c.get("name") is not None:
                 item["name"] = str(c["name"])[:200]
-            _dress(item, c, may_use)
+            _dress(item, c, may_use, rate)
             if kind == "video":
                 _set_title(item, c)
             if title_of(item) is not None:
@@ -1293,7 +1394,7 @@ def rebuild(doc, edit, stamp="", may_use=None):
                              "transition_type": "SMPTE_Dissolve",
                              "in_offset": _rt(head, rate), "out_offset": _rt(before, rate)})
         item = copy.deepcopy(ref if isinstance(ref, dict) else source[ref])
-        _dress(item, given, may_use)
+        _dress(item, given, may_use, rate)
         speed = clip_time(item)["speed"]
         item["source_range"] = _range(start + head * speed, length - head - tail, rate)
         if name is not None:
@@ -1366,6 +1467,8 @@ def rebuild(doc, edit, stamp="", may_use=None):
     film = edit_length({"clips": [{"length": p[2], "transition": p[3], "gap": p[6]} for p in parsed],
                         "tracks": extra_tracks(new)})
 
+    if "markers" in edit:
+        _write_markers(video, edit.get("markers"), rate)
     stack = new.get("tracks") or {}
     old_marks = list(((doc.get("tracks") or {}).get("markers")) or [])
     marks = []

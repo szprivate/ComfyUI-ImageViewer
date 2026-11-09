@@ -563,6 +563,8 @@ export const EditTimelineMixin = {
             const t = e.composedPath ? e.composedPath()[0] : e.target;
             // A press anywhere but on a keyframe mark lets go of the selected keyframe.
             if (this._editTlKeySel && !(t && t.classList && t.classList.contains("edit-keymark"))) this._editTlKeySel = null;
+            // And anywhere but on a marker, the selected marker (imageViewer_editMarkers.js).
+            if (this._editTlMarkSel && !(t && t.classList && (t.classList.contains("edit-marker") || t.classList.contains("edit-cmarker")))) this._editTlMarkSel = null;
             if (t && /^(INPUT|TEXTAREA|SELECT|BUTTON|OPTION)$/.test(t.tagName || "")) return;
             try { body.focus({ preventScroll: true }); } catch (_) {}
         }, true);
@@ -871,6 +873,7 @@ export const EditTimelineMixin = {
                     b._media = { file: cut.clips[s.i].file, in: Number(cut.clips[s.i].in) || 0, length: s.length,
                                  row: "video", volume: cut.clips[s.i].volume, clip: cut.clips[s.i] };
                     this._editTlBadges(b, cut.clips[s.i]);
+                    if (this._editTlClipMarks) this._editTlClipMarks(b, { kind: "clip", i: s.i }, cut.clips[s.i]);
                     if (picked("clip", s.i) && this._editTlKeyMarks) this._editTlKeyMarks(b, { kind: "clip", i: s.i }, cut.clips[s.i]);
                     this._editTlTakeBadge(b, cut.clips[s.i]);
                     this._editTlLinkBadge(b, cut.clips[s.i], "video");
@@ -931,6 +934,7 @@ export const EditTimelineMixin = {
                     const tc = row.track.items[c.i] && D.trackOf(cut, row.id).clips[c.i];
                     b._media = { file: tc.file, in: Number(tc.in) || 0, length: c.length, row: row.kind, volume: tc.volume, clip: tc };
                     this._editTlBadges(b, tc);
+                    if (this._editTlClipMarks) this._editTlClipMarks(b, { kind: "tclip", track: row.id, i: c.i }, tc);
                     if (picked("tclip", c.i, row.id) && this._editTlKeyMarks) this._editTlKeyMarks(b, { kind: "tclip", track: row.id, i: c.i }, tc);
                     this._editTlTakeBadge(b, tc);
                     this._editTlLinkBadge(b, tc, row.kind);

@@ -257,6 +257,18 @@ export function describeViewerState(s) {
             e.selected = one(snap.edit.selected);
         }
         if (snap.edit.selected_item) e.selected_item = one(snap.edit.selected_item);
+        // The markers: { t (film seconds), len, name, note, color, clip ("V1:2" for a clip's own marker) }.
+        if (Array.isArray(snap.edit.markers) && snap.edit.markers.length) {
+            e.markers = snap.edit.markers.slice(0, 100).map((m) => {
+                const o = { t: r3(m.t) };
+                if (finite(m.len) && m.len > 0) o.len = r3(m.len);
+                put(o, "name", String(m.name || "").slice(0, 200));
+                put(o, "note", String(m.note || "").slice(0, TEXT_CAP));
+                put(o, "color", m.color || "");
+                put(o, "clip", m.clip || "");
+                return o;
+            });
+        }
         put(e, "otio", snap.edit.otio || "");
         out.edit = e;
     }
