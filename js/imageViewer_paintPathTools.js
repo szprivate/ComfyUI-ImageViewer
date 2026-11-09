@@ -23,13 +23,14 @@ export const SHAPE_TOOLS = ["shape:rect", "shape:rounded", "shape:ellipse", "sha
  * the brushes and the shapes as for the pen).
  */
 export const TOOL_GROUPS = {
+    transform: ["move", "tfsel"],
     select: ["marquee", "ellipse", "lasso"],
     paint: ["brush", "spot", "heal", "patch"],
     pen: PATH_TOOLS,
     shape: SHAPE_TOOLS,
 };
 /** What a right-click on the group's place offers, for its tooltip. */
-export const GROUP_HINTS = { select: "the other selection tools", paint: "the healing brushes", pen: "the other path tools", shape: "the other shapes" };
+export const GROUP_HINTS = { transform: "Transform selection", select: "the other selection tools", paint: "the healing brushes", pen: "the other path tools", shape: "the other shapes" };
 /** The group a tool is in, or null ("shape" is the shape tool, whichever shape it draws). */
 export const toolGroup = (t) => (t === "shape" ? "shape" : Object.keys(TOOL_GROUPS).find((g) => TOOL_GROUPS[g].includes(t)) || null);
 
