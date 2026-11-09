@@ -1231,7 +1231,7 @@ textarea.param-input {
 /* The Edit panel: the cut that lies beside a film (imageViewer_editTimeline.js).
    A dock panel like the curve editors, so the box and title bar are theirs. */
 .edit-body { display: flex; flex-direction: column; gap: 4px; flex: 1; min-height: 0; padding: 4px 8px 6px; box-sizing: border-box; }
-.edit-bar { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; min-width: 0; overflow: hidden; }
+.edit-bar { display: flex; flex: none; align-items: center; gap: 4px; flex-wrap: nowrap; min-width: 0; overflow: hidden; }
 .edit-bar > * { flex: none; }
 /* A caret: the menu of the button before it (Resolve keeps the rarer edits in menus, not on its bar). */
 .edit-btn.edit-caret { padding: 2px 2px; margin-left: -4px; border-left-color: #333; border-top-left-radius: 0; border-bottom-left-radius: 0; font-size: 9px; color: #999; }
