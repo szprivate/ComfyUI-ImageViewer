@@ -125,7 +125,7 @@ A smart layer keeps the picture it was made from at its full size, and remembers
 - **Lock transparency** (the checkered button over the list, or the Layer menu): the brush and the other tools then paint only where the layer already has something, and its see-through parts stay see-through. The eraser and Delete paint the second colour instead.
 - **Quick Mask** (<kbd>Q</kbd>, or the button under the tools): the selection is shown as a red tint and painted with the brush, eraser, bucket or Fill. Black takes away, white adds. <kbd>Q</kbd> again turns it back into a selection.
 - **Solo**: <kbd>Alt</kbd>+click a layer's eye (or **Solo** in the layer's menu) to see only that layer (with the picked ones, when it is one of them). The eye turns orange. <kbd>Alt</kbd>+click it again, or **End solo**, and every layer is shown or hidden as it was before.
-- **Drag onto the buttons**: drag layers onto the duplicate button under the list to copy them (the whole layer, even with a selection), or onto the bin to delete them.
+- **Drag onto the buttons**: drag layers onto the duplicate button under the list to copy them (the whole layer, even with a selection), or onto the bin to delete them. A mask's thumbnail can be dragged onto the bin by itself: that deletes the mask, not the layer. To pick several masks, click one mask, then Ctrl+click or Shift+click other rows; the bin, Delete or dragging any of them onto the bin deletes all the picked masks.
 - Double-click a name to rename. **Layer** menu: duplicate (<kbd>Ctrl</kbd>+<kbd>J</kbd>), merge down (<kbd>Ctrl</kbd>+<kbd>E</kbd>), flip, rotate, scale, lock.
 - The **History** panel lists every step; click one to go back to it.
 
