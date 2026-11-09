@@ -2132,6 +2132,8 @@ export const EditTimelineMixin = {
     editTlDelete(ripple) {
         const sel = this._editTlSel;
         const cut = this._editTlCut;
+        // Nothing selected and an in and out set: the range is lifted / extracted (imageViewer_editRange.js).
+        if (!sel && cut && this.editTlLiftRange) return this.editTlLiftRange(ripple);
         if (!sel || !cut) return false;
         if (sel.kind === "mix") {
             this._editTlSel = null;

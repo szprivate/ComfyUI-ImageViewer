@@ -976,6 +976,7 @@ export const EditTrimMixin = {
               run: () => this._editTlSetRange(D.clipRange(this._editTlCut, { kind: "clip", i: at.i }, fps)) },
             "-",
             { label: "Clear in–out (Alt+X)", disabled: !r, run: () => this._editTlSetRange(null) },
+            ...(this._editTlRangeMenuRows ? ["-", ...this._editTlRangeMenuRows()] : []),
         ], e.clientX, e.clientY);
     },
 };
