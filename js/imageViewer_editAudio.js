@@ -210,7 +210,7 @@ export const EditAudioMixin = {
         const cur = { t: Number(seconds) || 0, ms: this._editPlayNow ? this._editPlayNow() : performance.now() };
         const prev = this._eaLast;
         this._eaLast = cur;
-        const sources = scrubSources(this._editTlCut, cur.t, this._editTlLive ? this._editTlLive() : null);
+        const sources = scrubSources(this._editFlat ? this._editFlat(this._editTlCut) : this._editTlCut, cur.t, this._editTlLive ? this._editTlLive() : null);
         for (const s of sources) this._eaWant(s.file);
         const plan = planGrain(prev, cur, this._eaUntil || 0, ctx.currentTime);
         if (!plan || plan.wait) return;

@@ -450,5 +450,50 @@ class EditResolveToolsBrowserTests(Base):
         self.assertTrue(pg.evaluate("() => !!__panel.editSourcePanel.querySelector('img.src-media')"))
         self.assertEqual(self.errors, [])
 
+    # ── compound clips ──
+
+    def test_compound_clip_made_from_the_menu_plays_flat_saves_flat_and_comes_apart(self):
+        # V1: a 0-96 (a film, in 0), c 96-168 (a still), b 168-264 (in 1).
+        pg = self.page()
+        self.fit(pg)
+        pg.evaluate("() => { const P = __panel; P._editTlSel = { kind: 'clip', i: 2 }; P._editTlSetSelList([{ kind: 'clip', i: 1 }, { kind: 'clip', i: 2 }], { kind: 'clip', i: 2 }); P.editTlRefresh(); }")
+        n = self.undo_len(pg)
+        items = self.menu_has(pg, *self.x_at(pg, 9.0))
+        self.assertIn("New compound clip of 2 clips", items)
+        pg.locator(".previz-menu-item", has_text="New compound clip").first.click()
+        pg.wait_for_function("() => __panel._editTlCut.clips.length === 2", timeout=5000)
+        self.assertEqual(self.undo_len(pg), n + 1, "one undo step")
+        got = pg.evaluate("""async () => { const D = await import('/extensions/viewer/imageViewer_editTimelineData.js'); const P = __panel;
+            const cut = P._editTlCut, c = cut.clips[1];
+            P._editPlayOn = true;
+            const flat = P._editPlayCut();
+            const pic = (t) => { const p = D.pictureAt(flat, t, P._editTlLive()); return p && p.clip ? p.clip.file : null; };
+            const row = P._editTlUi.rows.querySelector('.edit-shot.compound');
+            const saved = D.toSave(cut);
+            return { compound: D.isCompound(c), len: Math.round(c.length * 24), shown: !!row,
+                     badge: row ? row.querySelector('.edit-badge-compound').textContent : '',
+                     played: flat ? flat.clips.map((x) => x.file) : null, at: [pic(5), pic(8.5)],
+                     saved: [saved.clips.length, Object.keys(saved.compounds)] }; }""")
+        self.assertTrue(got["compound"])
+        self.assertEqual(got["len"], 168)
+        self.assertTrue(got["shown"])
+        self.assertIn("2", got["badge"])
+        self.assertEqual(got["played"], ["D:/out/a.mp4", "D:/out/c.png", "D:/out/b.mp4"])
+        self.assertEqual(got["at"], ["D:/out/c.png", "D:/out/b.mp4"])
+        self.assertEqual(got["saved"], [3, ["C1"]])
+        # The file read back (flat) is folded back into the compound.
+        back = pg.evaluate("""async () => { const D = await import('/extensions/viewer/imageViewer_editTimelineData.js'); const P = __panel;
+            P._editTlLoaded({ edit: JSON.parse(JSON.stringify(D.flattenCut(P._editTlCut))), file: 'x.otio' });
+            return [P._editTlCut.clips.length, D.isCompound(P._editTlCut.clips[1]), P._editTlDirty()]; }""")
+        self.assertEqual(back, [2, True, False])
+        # Decompose in place: the two shots again, where they were.
+        pg.evaluate("() => __panel.editTlRefresh()")
+        items = self.menu_has(pg, *self.x_at(pg, 9.0))
+        self.assertIn("Decompose in place", items)
+        pg.locator(".previz-menu-item", has_text="Decompose in place").first.click()
+        pg.wait_for_function("() => __panel._editTlCut.clips.length === 3", timeout=5000)
+        self.assertEqual(pg.evaluate(self.V1S), [["a", 0, 96], ["c", 0, 72], ["b", 24, 96]])
+        self.assertEqual(self.errors, [])
+
 if __name__ == "__main__":
     unittest.main()

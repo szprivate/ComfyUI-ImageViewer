@@ -98,7 +98,15 @@ export const EditPlayMixin = {
 
     /** The cut the tab on screen plays; null on any other tab. */
     _editPlayCut() {
-        return (this._editPlayOn && this._editTlTab === this.activeTab && this._editTlCut) || null;
+        const cut = (this._editPlayOn && this._editTlTab === this.activeTab && this._editTlCut) || null;
+        return cut ? this._editFlat(cut) : null;
+    },
+
+    // The cut as it plays: its compound clips laid out flat (D.flattenCut), once per cut.
+    _editFlat(cut) {
+        if (!cut) return cut;
+        if (this._epFlatOf !== cut) { this._epFlatOf = cut; this._epFlat = D.flattenCut(cut); }
+        return this._epFlat;
     },
 
     editPlayFps() {

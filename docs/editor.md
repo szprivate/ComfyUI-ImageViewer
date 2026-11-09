@@ -80,6 +80,12 @@ This is three-point editing. Of the source's in and out and the timeline's in an
 
 Some browsers keep <kbd>F11</kbd> for full screen. If yours does, use the buttons.
 
+## Compound clips
+
+Select several clips, right-click one and choose **New compound clip**. They become one clip that holds them: V1 shots that are next to each other, with whatever you selected on the other tracks during their time. Clips from tracks other than V1 work too; the compound clip then lies on the lowest of their tracks. A compound clip moves, trims, splits, switches off and takes a volume like any clip. Its edges trim against the film inside it. It has no speed, loop, reverse or freeze of its own, because the clips inside keep theirs. It shows a ⧉ badge with the number of clips inside. Right-click it and choose **Decompose in place** to put its clips back where they were.
+
+The cut file stores the clips inside it as ordinary clips, so the render, **Export to Resolve…** and agentY see real clips. The panel puts the compound clip back together when the cut is opened again. You cannot open a compound clip in a timeline of its own yet.
+
 ## Markers
 
 Press <kbd>M</kbd> to put a marker at the playhead. With a clip selected and the playhead inside it, the marker goes on the clip and moves with its picture; otherwise it goes on the timeline (the ruler). Press <kbd>M</kbd> on a marker, or double-click it, to give it a name, a colour, notes and a duration. Drag a marker to move it, click it and press <kbd>Del</kbd> to remove it, or right-click it for colours and "delete all of this colour". <kbd>Alt</kbd>+<kbd>M</kbd> removes the markers at the playhead; <kbd>Shift</kbd>+<kbd>↑</kbd> / <kbd>↓</kbd> jump from marker to marker. Markers are saved in the cut, are snap targets, and go to Resolve with **Export to Resolve…**.

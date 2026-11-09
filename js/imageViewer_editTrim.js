@@ -750,6 +750,16 @@ export const EditTrimMixin = {
         b.classList.toggle("looped", !!loop);
         b.classList.toggle("frozen", motion === "freeze");
         b.classList.toggle("reversed", motion === "reverse");
+        b.classList.toggle("compound", D.isCompound(clip));
+        if (D.isCompound(clip)) {
+            const tag = b.ownerDocument.createElement("span");
+            tag.className = "edit-badge-compound";
+            const inner = clip.compound.cut;
+            const n = inner.clips.length + (inner.tracks || []).reduce((s, k) => s + k.clips.length, 0);
+            tag.textContent = "\u29c9 " + n;
+            tag.title = `Compound clip: ${n} clip${n === 1 ? "" : "s"} inside, ${D.lengthLabel(D.compoundLength(clip))}. Right-click: Decompose in place.`;
+            b.append(tag);
+        }
         if (sp === 1 && !loop && !motion && !ramp) return;
         const doc = b.ownerDocument;
         const tag = doc.createElement("span");

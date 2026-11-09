@@ -202,6 +202,7 @@ export const EditTakesMixin = {
         if (!Array.isArray(edit.texts)) edit.texts = [];
         if (!Array.isArray(edit.tracks)) edit.tracks = [];
         if (!Array.isArray(edit.sound)) edit.sound = [];
+        const cutIn = D.regroupCut(edit);                  // compound clips come flat
         this._editTlStash();
         const all = this._editTlAll();
         const said = (Array.isArray(d.said) ? d.said : []).map(String).filter(Boolean);
@@ -215,9 +216,9 @@ export const EditTakesMixin = {
             const h = this._editTlHistory(key);
             const past = h.past.map(D.detach);
             this._editTlHistories[key] = D.historyPush({ past, future: [] }, D.detach(rec.cut));
-            const next = JSON.parse(JSON.stringify(edit));
+            const next = JSON.parse(JSON.stringify(cutIn));
             rec.cut = next;
-            rec.saved = JSON.parse(JSON.stringify(edit));
+            rec.saved = JSON.parse(JSON.stringify(cutIn));
             if (d.file) rec.file = String(d.file);
             const line = "agentY changed the cut" + (said.length ? ": " + said.slice(0, 3).join("; ") + (said.length > 3 ? ` (+${said.length - 3})` : "") : "")
                 + (dirty ? " - your unsaved changes are one Ctrl+Z back" : " - Ctrl+Z undoes it");

@@ -355,6 +355,10 @@ def clip_link(item):
     # Switched off (the panel's D, Resolve's Clip Enable): ours, or OTIO's own `enabled`.
     if note.get("disabled") is True or item.get("enabled") is False:
         out["disabled"] = True
+    # A piece of a compound clip (saved flat: see compounds_of); the panel folds the pieces back.
+    part = note.get("cpart")
+    if isinstance(part, dict) and isinstance(part.get("id"), str) and _LINK.match(part["id"]):
+        out["cpart"] = {"id": part["id"]}
     return out
 
 
@@ -362,7 +366,7 @@ def _set_link(item, c):
     """Write a clip's link group, mute and switch, where the edit states them, into *item*."""
     if "disabled" in c:
         item["enabled"] = c.get("disabled") is not True
-    if not any(k in c for k in ("link", "unlinked", "mute", "disabled")):
+    if not any(k in c for k in ("link", "unlinked", "mute", "disabled", "cpart")):
         return
     meta = item.setdefault("metadata", {})
     note = meta.setdefault("imageviewer", {}) if isinstance(meta, dict) else None
@@ -389,6 +393,12 @@ def _set_link(item, c):
             note["disabled"] = True
         else:
             note.pop("disabled", None)
+    if "cpart" in c:
+        part = c.get("cpart")
+        if isinstance(part, dict) and isinstance(part.get("id"), str) and _LINK.match(part["id"]):
+            note["cpart"] = {"id": part["id"]}
+        else:
+            note.pop("cpart", None)
 
 
 # Audio transitions and fades (imageViewer_editTimelineData.js, "audio transitions and fades" -
@@ -711,6 +721,9 @@ def track_flags(track):
     chain = _afx().clean_chain(note.get("afx"))
     if chain:
         out["afx"] = chain
+    part = note.get("cpart")
+    if isinstance(part, str) and _LINK.match(part):
+        out["cpart"] = part                     # a track a compound clip's pieces were laid out on
     return out
 
 
@@ -737,6 +750,12 @@ def _set_flags(track, t):
             note["afx"] = chain
         else:
             note.pop("afx", None)
+    if "cpart" in t:
+        part = t.get("cpart")
+        if isinstance(part, str) and _LINK.match(part):
+            note["cpart"] = part
+        else:
+            note.pop("cpart", None)
 
 
 # A clip may carry takes: the same shot made again with changes, kept beside the
@@ -1163,6 +1182,9 @@ def editable(doc):
     out["auto"] = {k: v["auto"] for k, v in flags.items()}
     out["afx"] = {"A1": flags["A1"].get("afx") or []}
     out["markers"] = read_markers(video)
+    compounds = compounds_of(_imageviewer(doc))
+    if compounds:
+        out["compounds"] = compounds
     # The texts (markers) as title clips: the panel, the render and the Resolve export all work on those.
     return texts_to_titles(out)
 
@@ -1580,7 +1602,36 @@ def rebuild(doc, edit, stamp="", may_use=None):
         meta["imageviewer"] = {"edited": str(stamp or ""),
                          "note": "cut changed in the ComfyUI Image Viewer; the film beside this file "
                                  "has not been rendered again"}
+        kept = compounds_of({"compounds": edit.get("compounds")}) if "compounds" in edit else \
+            compounds_of((_imageviewer(doc) or {}))
+        if kept:
+            meta["imageviewer"]["compounds"] = kept
     return new
+
+
+# Compound clips (imageViewer_editTimelineData.js, "compound clips"): saved FLAT - their pieces
+# are ordinary clips (each with ``metadata.imageviewer.cpart = {"id"}``, on V1 or on tracks
+# marked ``cpart``), so the render, the Resolve export and agentY see real clips - and each
+# compound's definition (its inner cut, where it lies, its in and length) is kept here, in the
+# timeline's ``metadata.imageviewer.compounds``, for the panel to fold the pieces back. The
+# definition is the page's own JSON: kept as it is, only its ids and size are checked.
+_MAX_COMPOUNDS_BYTES = 4 * 1024 * 1024
+
+
+def compounds_of(note):
+    given = note.get("compounds") if isinstance(note, dict) else None
+    if not isinstance(given, dict):
+        return {}
+    out = {}
+    for cid, d in list(given.items())[:200]:
+        if isinstance(cid, str) and _LINK.match(cid) and isinstance(d, dict) and isinstance(d.get("cut"), dict):
+            out[cid] = d
+    try:
+        if len(json.dumps(out)) > _MAX_COMPOUNDS_BYTES:
+            raise ValueError("the compound clips are too large to keep")
+    except TypeError:
+        return {}
+    return out
 
 
 def _load(path):
