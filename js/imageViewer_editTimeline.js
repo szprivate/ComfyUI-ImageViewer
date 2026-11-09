@@ -1267,6 +1267,11 @@ export const EditTimelineMixin = {
             entries.push({ label: "Split at the playhead", disabled: !this._editTlOnScreen(), run: () => this.editTlSplitAtPlayhead() });
             const off = !!(D.clipOf(this._editTlCut, sel) || {}).disabled;
             entries.push({ label: off ? "Enable clip (D)" : "Disable clip (D)", run: () => this.editTlDisableToggle() });
+            if (clip && !D.isStillClip(clip)) {
+                const m = D.motionOf(clip);
+                entries.push({ label: (m === "freeze" ? "\u2713 " : "") + "Freeze frame", run: () => this.editTlMotion(sel, "freeze") },
+                             { label: (m === "reverse" ? "\u2713 " : "") + "Reverse clip", run: () => this.editTlMotion(sel, "reverse") });
+            }
             const many = this._editTlSelList().length;
             entries.push("-", { label: many > 1 ? `Recreate ${many} shots with changes…` : "Recreate with changes…",
                                 run: () => this.editTlRecreateDialog(sel) });

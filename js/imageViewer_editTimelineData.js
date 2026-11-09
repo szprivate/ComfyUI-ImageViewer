@@ -404,8 +404,10 @@ function tidyTime(c) {
     if (!(sp > 0) || Math.abs(sp - 1) < 1e-4 || isStillClip(c)) delete c.speed;
     else c.speed = round(Math.max(MIN_SPEED, Math.min(MAX_SPEED, sp)));
     const looped = (c.loop === "loop" || c.loop === "pingpong") && num(c.span) > 0 && !isStillClip(c);
-    if (looped && num(c.length) * speedOf(c) > num(c.span) + 1e-4) c.span = round(num(c.span));
+    if (looped && !motionOf(c) && num(c.length) * speedOf(c) > num(c.span) + 1e-4) c.span = round(num(c.span));
     else { delete c.loop; delete c.span; }
+    if (!motionOf(c)) delete c.motion;
+    else if (c.motion === "freeze") delete c.speed;
 }
 
 // ── edits ────────────────────────────────────────────────────────────────────
@@ -439,14 +441,21 @@ export function trimStart(cut, i, delta) {
 // How far (seconds of the film) a clip's end may go later: to the end of its
 // source when that is known; without end for a still or a loop.
 export function outRoom(c, durations) {
-    if (!c || isStillClip(c) || loopOf(c)) return Infinity;
+    if (!c || isStillClip(c) || loopOf(c) || motionOf(c) === "freeze") return Infinity;
+    if (motionOf(c) === "reverse") return Math.max(0, num(c.in) / speedOf(c) - num(c.length));   // back to the source's start
     const room = srcRoom(c, durations);
     return Number.isFinite(room) ? Math.max(0, room / speedOf(c) - num(c.length)) : Infinity;
 }
 
 // How far (seconds of the film) a clip's start may go earlier: to its source's start.
-export function inRoom(c) {
-    if (!c || isStillClip(c)) return Infinity;
+// (A reversed clip's head is its LATEST moment: earlier on the timeline is later
+// in the source, as far as the source goes - when its length is known.)
+export function inRoom(c, durations) {
+    if (!c || isStillClip(c) || motionOf(c) === "freeze") return Infinity;
+    if (motionOf(c) === "reverse") {
+        const known = num(durations && durations[c.file], 0);
+        return known > 0 ? Math.max(0, (known - num(c.in)) / speedOf(c)) : Infinity;
+    }
     return num(c.in) / speedOf(c);
 }
 
@@ -460,7 +469,7 @@ function headSpare(c) {
 // it (at its speed); a loop's turn loses what its head lost.
 function headTrim(c, d) {
     if (!isStillClip(c)) {
-        c.in = num(c.in) + d * speedOf(c);
+        c.in = num(c.in) + d * stepOf(c);
         if (loopOf(c)) c.span = num(c.span) - d * speedOf(c);
     }
     c.length = num(c.length) - d;
@@ -957,7 +966,7 @@ export function removeText(cut, i) {
 /** Has anything the panel can change been changed? */
 export function sameCut(a, b) {
     const dress = (c) => [String(c.color || ""), round(num(c.volume, 1)), JSON.stringify(Object.entries(cleanFx(c.fx)).sort()),
-                         round(speedOf(c)), loopOf(c), loopOf(c) ? round(num(c.span)) : 0,
+                         round(speedOf(c)), loopOf(c), loopOf(c) ? round(num(c.span)) : 0, motionOf(c),
                          takesOf(c).length ? JSON.stringify([c.file, takesOf(c).map((t) => [t.version, !!t.active, t.file])]) : "",
                          String(c.link || ""), !!c.unlinked, !!c.mute, !!c.disabled, c.title ? JSON.stringify(cleanTitle(c.title)) : "", ...audioDress(c),
                          c.afx && c.afx.length ? JSON.stringify(cleanAfx(c.afx)) : "",
@@ -979,7 +988,7 @@ export function sameCut(a, b) {
 // A clip's speed and loop as they are saved: always stated, so that a speed or
 // a loop taken off is taken off in the file too.
 function timeOf(c) {
-    return { speed: round(speedOf(c)), loop: loopOf(c), span: loopOf(c) ? round(num(c.span)) : 0,
+    return { speed: round(speedOf(c)), loop: loopOf(c), span: loopOf(c) ? round(num(c.span)) : 0, motion: motionOf(c),
              link: c.link || "", unlinked: !!(c.link && c.unlinked), mute: !!c.mute, disabled: !!c.disabled,
              fadeIn: round(num(c.fadeIn)), fadeOut: round(num(c.fadeOut)), xfade: c.xfade ? cleanXfade(c.xfade) : null,
              afx: cleanAfx(c.afx), markers: cleanClipMarkers(c.markers) };
@@ -1323,7 +1332,7 @@ export function splitClip(cut, sel, seconds) {
         const high = num(c.length) - (following > 0 ? following + MIX_MARGIN : MIN_CLIP);
         if (local < low - 1e-6 || local > high + 1e-6) return null;
         const a = next.clips[i];
-        const b = { ...a, in: round(num(a.in) + local * speedOf(a)), length: round(num(a.length) - local), transition: 0 };
+        const b = { ...a, in: round(num(a.in) + local * stepOf(a)), length: round(num(a.length) - local), transition: 0 };
         delete b.gap;
         delete b.uid;                                // a piece of its own (undo finds each by its uid)
         delete b.link; delete b.unlinked;            // splitWithLink pairs it again
@@ -1339,7 +1348,7 @@ export function splitClip(cut, sel, seconds) {
         if (loopOf(a)) return null;
         const local = round(t - num(a.at));
         if (local < MIN_CLIP - 1e-6 || local > num(a.length) - MIN_CLIP + 1e-6) return null;
-        const b = { ...a, at: round(num(a.at) + local), in: round(num(a.in) + local * speedOf(a)), length: round(num(a.length) - local) };
+        const b = { ...a, at: round(num(a.at) + local), in: round(num(a.in) + local * stepOf(a)), length: round(num(a.length) - local) };
         delete b.uid;
         delete b.link; delete b.unlinked;
         if (a.fx) [a.fx, b.fx] = splitFx(a.fx, local);
@@ -1731,6 +1740,7 @@ export function agentLoses(cut) {
     const all = [...((cut && cut.clips) || []), ...((cut && cut.tracks) || []).flatMap((k) => k.clips || [])];
     if (all.some((c) => Object.keys(cleanFx(c.fx)).length)) out.push("transforms, crops and opacity (the Inspector's Video tab)");
     if (all.some((c) => speedOf(c) !== 1)) out.push("speed changes (retimed clips come back at 100 %)");
+    if (all.some((c) => motionOf(c))) out.push("freeze frames and reversed clips (they come back playing forwards)");
     if (all.some((c) => loopOf(c))) out.push("loops (a looped clip comes back played once)");
     const plain = JSON.stringify(textLook({}));
     if (((cut && cut.texts) || []).some((t) => JSON.stringify(textLook(t)) !== plain)) out.push("how the texts look (size, place, colour)");
@@ -1751,6 +1761,7 @@ export function agentLoses(cut) {
  * where the clip begins in the film.
  */
 export function cutMarks(cuts, clip, start, sensitivity = 0.5, fps = 24) {
+    if (motionOf(clip)) return [];                      // frozen / reversed: not split at the source's cuts
     const from = num(clip && clip.in), len = srcUse(clip), sp = speedOf(clip);
     const edge = Math.max(MIN_CLIP, 1 / (num(fps) > 0 ? num(fps) : 24));
     const need = cutThreshold(sensitivity);
@@ -1811,14 +1822,37 @@ export function speedOf(c) {
     return s > 0 && !isStillClip(c) ? Math.max(MIN_SPEED, Math.min(MAX_SPEED, s)) : 1;
 }
 
-/** How a clip loops: "loop", "pingpong" - or "" for not at all. */
+/** How a clip loops: "loop", "pingpong" - or "" for not at all (nor while it is frozen or reversed). */
 export function loopOf(c) {
-    return c && (c.loop === "loop" || c.loop === "pingpong") && num(c.span) > 0 && !isStillClip(c) ? c.loop : "";
+    return c && (c.loop === "loop" || c.loop === "pingpong") && num(c.span) > 0 && !isStillClip(c) && !motionOf(c) ? c.loop : "";
 }
 
-/** How many seconds of its source a clip uses: one turn of a loop, else its length at its speed. */
+/**
+ * How a clip's source runs: "reverse" (backwards from its in point - `in` is the
+ * moment shown at the clip's HEAD), "freeze" (its in point held for the whole
+ * clip) - or "" (forwards). Not on a still or a title; a frozen or reversed
+ * clip does not loop.
+ */
+export function motionOf(c) {
+    return c && (c.motion === "reverse" || c.motion === "freeze") && !isStillClip(c) ? c.motion : "";
+}
+
+/** Seconds of source per second of the clip: its speed, negative reversed, 0 frozen. */
+export function stepOf(c) {
+    const m = motionOf(c);
+    return m === "freeze" ? 0 : m === "reverse" ? -speedOf(c) : speedOf(c);
+}
+
+/** How many seconds of its source a clip uses: one turn of a loop, none frozen, else its length at its speed. */
 export function srcUse(c) {
+    if (motionOf(c) === "freeze") return 0;
     return loopOf(c) ? num(c.span) : num(c && c.length) * speedOf(c);
+}
+
+/** The stretch of its source a clip shows, earliest moment first: { lo, hi } (a reversed clip's head is `hi`). */
+export function srcSpan(c) {
+    const a = num(c && c.in), use = srcUse(c);
+    return motionOf(c) === "reverse" ? { lo: round(Math.max(0, a - use)), hi: round(a) } : { lo: round(a), hi: round(a + use) };
 }
 
 /** How much source there is from a clip's in point (Infinity for a still, or where its length is not known). */
@@ -1831,6 +1865,9 @@ export function srcRoom(c, durations) {
 /** The moment of a clip's source shown `u` seconds into the clip. */
 export function srcLocal(c, u) {
     const q = Math.max(0, num(u)) * speedOf(c);
+    const motion = motionOf(c);
+    if (motion === "freeze") return round(num(c.in));
+    if (motion === "reverse") return round(Math.max(0, num(c.in) - q));
     const mode = loopOf(c), span = num(c && c.span);
     if (!mode) return round(num(c && c.in) + q);
     if (mode === "loop") return round(num(c.in) + (q % span));
@@ -1845,6 +1882,8 @@ export function srcLocal(c, u) {
  */
 export function clipSegment(c, u) {
     const speed = speedOf(c), mode = loopOf(c);
+    // Frozen or reversed: no run the browser can play - shown frame by frame (rev).
+    if (motionOf(c)) return { u0: 0, u1: Infinity, base: num(c.in), rev: true, speed: motionOf(c) === "freeze" ? 0 : speed };
     if (!mode) return { u0: 0, u1: Infinity, base: num(c && c.in), rev: false, speed };
     const turn = num(c.span) / speed;
     const k = Math.max(0, Math.floor(num(u) / turn + 1e-9));
@@ -1874,7 +1913,7 @@ export function retimeClip(cut, sel, length, fromStart) {
     if (!c) return next;
     const was = num(c.length), sp = speedOf(c);
     let len = Math.max(MIN_CLIP, num(length, was));
-    if (!isStillClip(c)) {
+    if (!isStillClip(c) && motionOf(c) !== "freeze") {
         const speed = Math.max(MIN_SPEED, Math.min(MAX_SPEED, sp * was / len));
         len = was * sp / speed;
         c.speed = speed;
@@ -1887,7 +1926,7 @@ export function retimeClip(cut, sel, length, fromStart) {
 /** A clip's speed set (1 = its own), its source kept: its length follows. */
 export function setSpeed(cut, sel, speed) {
     const c = clipRef(cut, sel);
-    if (!c || isStillClip(c)) return copy(cut);
+    if (!c || isStillClip(c) || motionOf(c) === "freeze") return copy(cut);
     const s = Math.max(MIN_SPEED, Math.min(MAX_SPEED, num(speed, 1)));
     return retimeClip(cut, sel, num(c.length) * speedOf(c) / s);
 }
@@ -1902,6 +1941,7 @@ export function loopExtend(cut, sel, length, mode, durations) {
     const next = copy(cut);
     const c = clipRef(next, sel);
     if (!c) return next;
+    if (motionOf(c)) { c.length = Math.max(MIN_CLIP, num(length, c.length)); return settle(next); }
     if (!isStillClip(c)) {
         if (!loopOf(c)) c.span = Math.min(srcUse(c), srcRoom(c, durations));
         c.loop = mode === "pingpong" ? "pingpong" : (mode === "loop" ? "loop" : (c.loop || "loop"));
@@ -1921,6 +1961,7 @@ export function loopOnce(cut, sel, mode, durations) {
 
 /** A clip's loop set ("loop" / "pingpong"), or taken off (""): then it is one turn long. */
 export function setLoop(cut, sel, mode) {
+    if (mode && motionOf(clipRef(cut, sel))) cut = setMotion(cut, sel, "");   // a loop plays forwards
     const c = clipRef(cut, sel);
     if (!c) return copy(cut);
     if (!mode) {
@@ -1932,6 +1973,40 @@ export function setLoop(cut, sel, mode) {
     }
     if (loopOf(c)) { const next = copy(cut); clipRef(next, sel).loop = mode; return settle(next); }
     return loopOnce(cut, sel, mode);
+}
+
+// ── freeze frame, reverse ───────────────────────────────────────────────────
+
+export const MOTIONS = ["", "reverse", "freeze"];
+
+/**
+ * How a clip's source runs (motionOf): "reverse" plays the stretch it shows
+ * backwards - the same frames, last first, so `in` becomes the moment at its
+ * head -, "freeze" holds one moment for the whole clip (the one `u` seconds
+ * into it, the clip's first frame without `u`), "" plays it forwards again
+ * (from a reverse the same stretch; from a freeze, on from the frozen moment).
+ * The clip keeps its place and length. A loop is taken off first; a still or
+ * a title has no motion and comes back as it was. Frozen and reversed clips
+ * are silent, in the player and in the render.
+ */
+export function setMotion(cut, sel, motion, u) {
+    const next = copy(cut);
+    const c = clipRef(next, sel);
+    const to = motion === "reverse" || motion === "freeze" ? motion : "";
+    if (!c || isStillClip(c) || motionOf(c) === to) return next;
+    const held = srcLocal(c, Math.max(0, Math.min(num(c.length), num(u, 0))));
+    if (loopOf(c)) { c.in = to === "freeze" ? held : srcLocal(c, 0); delete c.loop; delete c.span; }
+    const from = motionOf(c), L = num(c.length) * speedOf(c);
+    if (to === "freeze") {
+        c.in = held;
+        delete c.speed;
+    } else if (to === "reverse") {
+        c.in = round(num(c.in) + L);                       // the same stretch, its last moment first
+    } else if (from === "reverse") {
+        c.in = round(Math.max(0, num(c.in) - L));
+    }
+    if (to) c.motion = to; else delete c.motion;
+    return settle(next);
 }
 
 // ── trimming like an editor: roll, slip, slide ───────────────────────────────
@@ -1952,7 +2027,7 @@ function minShot(cut, i) {
 export function rollEdit(cut, i, delta, durations) {
     const a = cut.clips[i - 1], b = cut.clips[i];
     if (!a || !b || num(b.gap) > 0) return copy(cut);           // a gap between them: no cut to roll
-    const lo = Math.max(minShot(cut, i - 1) - num(a.length), -inRoom(b));
+    const lo = Math.max(minShot(cut, i - 1) - num(a.length), -inRoom(b, durations));
     const hi = Math.min(outRoom(a, durations), num(b.length) - minShot(cut, i), headSpare(b));
     const d = Math.max(Math.min(lo, 0), Math.min(Math.max(hi, 0), num(delta)));
     const next = copy(cut);
@@ -1972,6 +2047,11 @@ export function slipClip(cut, sel, delta, durations) {
     const c = clipRef(next, sel);
     if (!c || isStillClip(c)) return next;
     const known = num(durations && durations[c.file], 0);
+    if (motionOf(c) === "reverse") {                       // `in` is the head, the latest moment
+        const top = known > 0 ? known : Infinity;
+        c.in = Math.max(Math.min(srcUse(c), top), Math.min(top, num(c.in) + num(delta)));
+        return settle(next);
+    }
     const top = known > 0 ? Math.max(0, known - srcUse(c)) : Infinity;
     c.in = Math.max(0, Math.min(top, num(c.in) + num(delta)));
     return settle(next);
@@ -1991,7 +2071,7 @@ export function slideClip(cut, i, delta, durations) {
     if (!leftGap && !a) return null;
     const rightGap = num(b.gap) > 0;
     const lo = Math.max(leftGap ? -num(c.gap) : minShot(cut, i - 1) - num(a.length),
-                        rightGap ? -Infinity : -inRoom(b));
+                        rightGap ? -Infinity : -inRoom(b, durations));
     const hi = Math.min(leftGap ? Infinity : outRoom(a, durations),
                         rightGap ? num(b.gap) : Math.min(num(b.length) - minShot(cut, i + 1), headSpare(b)));
     const d = Math.max(Math.min(lo, 0), Math.min(Math.max(hi, 0), num(delta)));
@@ -2240,8 +2320,8 @@ export const SELECTED_CAP = 50;
 export function selectedClips(cut, list) {
     return pruneSel(cut, list).filter(isClipSel).slice(0, SELECTED_CAP).map((s) => {
         const c = clipOf(cut, s);
-        const from = round(num(c.in));
-        return { name: String(c.name || ""), file: String(c.file || ""), in: from, out: round(from + srcUse(c)),
+        const span = srcSpan(c);
+        return { name: String(c.name || ""), file: String(c.file || ""), in: span.lo, out: span.hi, ...(motionOf(c) ? { motion: motionOf(c) } : {}),
                  track: s.kind === "clip" ? "V1" : s.track, id: selId(s) };
     });
 }
@@ -2291,7 +2371,7 @@ export function activeTake(c) { return takesOf(c).find((t) => t && t.active) || 
  * shortened (0 when it was not).
  */
 function fitSource(c, durations, retime) {
-    if (isStillClip(c)) return 0;
+    if (isStillClip(c) || motionOf(c)) return 0;
     const known = durationFor(durations, c.file);
     if (!(known > 0)) return 0;
     const sp = speedOf(c);
@@ -2485,7 +2565,7 @@ export function moveShot(cut, i, at, change = {}) {
     delete keep.gap;
     if (change.in !== undefined) keep.in = Math.max(0, num(change.in));
     if (change.length !== undefined) keep.length = Math.max(MIN_CLIP, num(change.length));
-    for (const k of ["speed", "loop", "span"]) if (change[k] !== undefined) keep[k] = change[k];
+    for (const k of ["speed", "loop", "span", "motion"]) if (change[k] !== undefined) keep[k] = change[k];
     if (cut.clips.length === 1) {
         const next = copy(cut);
         next.clips[0] = { ...keep, gap: round(Math.max(0, num(at))) };
@@ -2584,7 +2664,7 @@ export function rollTrack(cut, id, a, b, delta, durations) {
     const k = trackOf(cut, id);
     const A = k && k.clips[a], B = k && k.clips[b];
     if (!A || !B) return copy(cut);
-    const lo = Math.max(MIN_CLIP - num(A.length), -inRoom(B));
+    const lo = Math.max(MIN_CLIP - num(A.length), -inRoom(B, durations));
     const hi = Math.min(outRoom(A, durations), num(B.length) - MIN_CLIP, headSpare(B));
     const d = Math.max(Math.min(lo, 0), Math.min(Math.max(hi, 0), num(delta)));
     const next = copy(cut);
@@ -2621,7 +2701,7 @@ export function slideTrackClip(cut, id, i, delta, durations) {
     }
     if (t.after >= 0) {
         const B = k.clips[t.after];
-        lo = Math.max(lo, -inRoom(B));
+        lo = Math.max(lo, -inRoom(B, durations));
         hi = Math.min(hi, num(B.length) - MIN_CLIP, headSpare(B));
     }
     const d = Math.max(Math.min(lo, 0), Math.min(Math.max(hi, 0), num(delta)));
@@ -2837,10 +2917,10 @@ export function followLink(before, after, sel, opts = {}) {
     const pSel = theirs[0];
     const p = clipOf(after, pSel), pSpan = selSpan(after, pSel);
     const dS = round(me1.start - me0.start), dE = round(me1.end - me0.end), dIn = round(num(c1.in) - num(c0.in));
-    const timed = speedOf(c1) !== speedOf(c0) || loopOf(c1) !== loopOf(c0) || num(c1.span) !== num(c0.span);
+    const timed = speedOf(c1) !== speedOf(c0) || loopOf(c1) !== loopOf(c0) || num(c1.span) !== num(c0.span) || motionOf(c1) !== motionOf(c0);
     if (!dS && !dE && !dIn && !timed) return after;
     const change = { in: Math.max(0, num(p.in) + dIn), length: Math.max(MIN_CLIP, num(p.length) + dE - dS) };
-    if (timed) Object.assign(change, { speed: c1.speed, loop: c1.loop, span: c1.span });
+    if (timed) Object.assign(change, { speed: c1.speed, loop: c1.loop, span: c1.span, motion: c1.motion || "" });
     if (pSel.kind === "clip") {
         const got = moveShot(after, pSel.i, pSpan.start + dS, change);
         return got ? got.cut : after;
@@ -2852,7 +2932,7 @@ export function followLink(before, after, sel, opts = {}) {
     q.at = Math.max(0, num(q.at) + dS);
     q.in = change.in;
     q.length = change.length;
-    if (timed) { if (c1.speed) q.speed = c1.speed; else delete q.speed; if (loopOf(c1)) { q.loop = c1.loop; q.span = c1.span; } else { delete q.loop; delete q.span; } }
+    if (timed) { if (c1.speed) q.speed = c1.speed; else delete q.speed; if (loopOf(c1)) { q.loop = c1.loop; q.span = c1.span; } else { delete q.loop; delete q.span; } if (motionOf(c1)) q.motion = c1.motion; else delete q.motion; }
     if (opts.ripple && dE - dS) k.clips.forEach((o, j) => { if (j !== pSel.i && num(o.at) >= end0 - 1e-6) o.at = round(Math.max(0, num(o.at) + dE - dS)); });
     return settle(next);
 }
@@ -4077,7 +4157,7 @@ export function xfadeSides(x) {
 
 // May this clip carry a crossfade or have one on its side (a sound that can run on: no loop, no picture)?
 function xfadeable(c, v1) {
-    return !!c && !loopOf(c) && !isStillImage(c.file) && !(v1 && (isStill(c.file) || c.mute));
+    return !!c && !loopOf(c) && !motionOf(c) && !isStillImage(c.file) && !(v1 && (isStill(c.file) || c.mute));
 }
 
 /** The clip a crossfade into `sel` comes from: the one that ends where it begins on its track (a selection), or null. */
@@ -4304,7 +4384,7 @@ export function envGain(env, u) {
 
 /** The moment of a clip's source at clip time `u`, a crossfade's handle before it included (u < 0). */
 export function srcAt(c, u) {
-    return num(u) < 0 ? round(num(c && c.in) + num(u) * speedOf(c)) : srcLocal(c, u);
+    return num(u) < 0 ? round(Math.max(0, num(c && c.in) + num(u) * stepOf(c))) : srcLocal(c, u);
 }
 
 /** The crossfades of the cut, for drawing: [{ sel, track, cutAt, start, len, b, a, curve, align, left, width, title }] (% of `total`). */
@@ -4524,7 +4604,9 @@ export function cleanClipMarkers(list) {
 export function clipMarkU(c, m) {
     if (!c || !m) return null;
     const still = isStillClip(c);
-    const u = still ? num(m.src) : (num(m.src) - num(c.in)) / speedOf(c);
+    const st = stepOf(c);
+    if (!still && st === 0) return null;                   // a frozen clip shows one moment: its markers wait
+    const u = still ? num(m.src) : (num(m.src) - num(c.in)) / st;
     if (loopOf(c)) { const span = num(c.span); if (num(m.src) < num(c.in) - 1e-6 || num(m.src) > num(c.in) + span + 1e-6) return null;
                      return round((num(m.src) - num(c.in)) / speedOf(c)); }
     return u >= -1e-6 && u <= num(c.length) + 1e-6 ? round(Math.max(0, u)) : null;

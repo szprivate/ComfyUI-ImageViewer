@@ -599,7 +599,9 @@ export const EditPanelsMixin = {
                 if (placed) row("Start", seconds(c.at, (v) => apply(D.moveTrackClip(cut, sel.track, sel.i, v))));
                 else row("Start", said(tc(startAt) + "  (by its place in the order)"));
                 if (!isTitle) row("Source in", seconds(c.in, (v) => apply(D.slipClip(cut, sel, v - (Number(c.in) || 0), dur)), still));
-                if (!isTitle) row("Source out", said(still ? "a still: no source length" : tc(Number(c.in) + D.srcUse(c))));
+                if (!isTitle) row("Source out", said(still ? "a still: no source length"
+                    : D.motionOf(c) === "reverse" ? tc(D.srcSpan(c).lo) + "  (played backwards to it)"
+                    : D.motionOf(c) === "freeze" ? "held: a freeze frame" : tc(Number(c.in) + D.srcUse(c))));
                 row("Length", seconds(c.length, (v) => apply(placed ? D.trimTrackClipEnd(cut, sel.track, sel.i, v, dur)
                                                                     : D.trimEnd(cut, sel.i, v, dur))));
                 const sp = D.speedOf(c);
@@ -624,6 +626,19 @@ export const EditPanelsMixin = {
                 loop.disabled = still;
                 loop.title = "Past its source, play it again (Ctrl+drag its out-edge, Ctrl+L: one more turn)";
                 loop.addEventListener("change", () => apply(D.setLoop(cut, sel, loop.value)));
+                const motion = quiet(el("select", "insp-select"));
+                for (const [v, label] of [["", "Forwards"], ["reverse", "Reverse"], ["freeze", "Freeze frame"]]) {
+                    const o = el("option", "", label);
+                    o.value = v;
+                    motion.append(o);
+                }
+                motion.value = D.motionOf(c);
+                motion.disabled = still;
+                motion.dataset.field = "motion";
+                motion.title = "Reverse: the same frames, last first. Freeze frame: the moment under the playhead held. Both are silent.";
+                motion.addEventListener("change", () => this.editTlMotion(sel, motion.value || D.motionOf(c)));
+                row("Motion", motion, D.motionOf(c) ? () => this.editTlMotion(sel, D.motionOf(c)) : null);
+                loop.disabled = still || !!D.motionOf(c);
                 row("Loop", [loop, said(D.loopOf(c) ? `${Math.round(Number(c.length) * sp / Number(c.span) * 100) / 100} turns of ${D.lengthLabel(c.span)}`
                                                   : (still ? "a still: just make it longer" : ""))]);
                 }

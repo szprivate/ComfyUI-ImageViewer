@@ -168,7 +168,7 @@ def clip_frames(clip, done, count, w, h, fps):
     go forwards through the file; a ping-pong's way back is read forwards and
     handed out reversed."""
     times = [source_moment(clip, (done + k + 0.5) / fps) for k in range(count)]
-    plain = float(clip.get("speed") or 1.0) == 1.0 and not clip.get("loop")
+    plain = float(clip.get("speed") or 1.0) == 1.0 and not clip.get("loop") and not clip.get("motion")
     if plain:
         yield from _pictures_at(clip["file"], times, w, h)
         return
@@ -540,6 +540,8 @@ def clip_sound(clip, seconds):
     """*seconds* of *clip*'s sound as a ``(2, n)`` array (None for none): from its
     in point, at its speed, through its loop (:func:`source_moment`)."""
     import numpy as np
+    if clip.get("motion"):
+        return None                     # frozen or reversed: silent, as the Edit tab plays it
     speed = float(clip.get("speed") or 1.0)
     span = float(clip.get("span") or 0)
     loop = clip.get("loop") if span > 0 else ""
@@ -813,7 +815,7 @@ def read_cut(doc):
             continue
         clips.append({"file": c["file"], "in": c["in"], "length": c["length"],
                       "transition": 0.0 if gapped or cut_in else c["transition"], "name": c["name"],
-                      "speed": c.get("speed", 1.0), "loop": c.get("loop", ""), "span": c.get("span", 0.0),
+                      "speed": c.get("speed", 1.0), "loop": c.get("loop", ""), "span": c.get("span", 0.0), "motion": c.get("motion", ""),
                       "volume": float(note.get("volume", 1.0)), "fx": c.get("fx") or {},
                       "mute": bool(c.get("mute")), "env": envs.get(("V1", idx)), "afx": c.get("afx") or [],
                       "tfx": timeline_io.clean_tfx(c.get("tfx"))})
@@ -829,13 +831,13 @@ def read_cut(doc):
             if c.get("title") is not None and track.get("kind") == "audio":
                 continue
             item = {"file": c["file"], "in": c["in"], "length": c["length"], "at": c["at"],
-                    "speed": c.get("speed", 1.0), "loop": c.get("loop", ""), "span": c.get("span", 0.0),
+                    "speed": c.get("speed", 1.0), "loop": c.get("loop", ""), "span": c.get("span", 0.0), "motion": c.get("motion", ""),
                     "volume": float(c.get("volume", 1.0)), "name": c["name"], "order": order,
                     "fx": c.get("fx") or {}, "mute": bool(c.get("mute")),
                     "track": track.get("name") or track.get("id"), "env": envs.get((track.get("id"), ci)),
                     "track_id": track.get("id"), "afx": c.get("afx") or []}
             if c.get("title") is not None:
-                item.update(title=c["title"], file="", speed=1.0, loop="", span=0.0, volume=0.0)
+                item.update(title=c["title"], file="", speed=1.0, loop="", span=0.0, motion="", volume=0.0)
             (sounds if track.get("kind") == "audio" else overlays).append(item)
     bed = None
     audio = timeline_io._track_of(doc, "audio") or {}

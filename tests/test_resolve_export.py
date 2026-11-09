@@ -235,6 +235,18 @@ class Generator(unittest.TestCase):
         pts = back.findall("timeMap/timept")
         self.assertEqual([T(p.get("value")) for p in pts], [3, 1], "from the turn's end back to the in point")
 
+    def test_a_reverse_runs_back_from_its_in_point_and_a_freeze_holds_it(self):
+        m, root, _x, _p = self.make({"clips": [clip("a.mp4", 2, start=3, motion="reverse")], "texts": []}, {"a.mp4": film()})
+        self.check_whole(m, root, Fraction(24))
+        pts = root.find(".//spine/asset-clip").findall("timeMap/timept")
+        self.assertEqual([T(p.get("value")) for p in pts], [3, 1], "from the moment at its head back two seconds")
+        self.assertTrue(any("Reversed" in line for line in m["left_out"]))
+        m, root, _x, _p = self.make({"clips": [clip("a.mp4", 2, start=1, motion="freeze")], "texts": []}, {"a.mp4": film()})
+        self.check_whole(m, root, Fraction(24))
+        pts = root.find(".//spine/asset-clip").findall("timeMap/timept")
+        self.assertEqual([T(p.get("value")) for p in pts], [1, 1], "one moment, held")
+        self.assertTrue(any("Freeze" in line for line in m["left_out"]))
+
     def test_a_still_is_a_video_element_of_its_length(self):
         m, root, _x, _p = self.make({"clips": [clip("a.png", 3)], "texts": []}, {"a.png": STILL})
         self.check_whole(m, root, Fraction(24))
