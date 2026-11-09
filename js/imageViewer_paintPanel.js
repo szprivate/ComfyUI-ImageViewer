@@ -277,6 +277,7 @@ export const PaintPanelMixin = {
         }
         const first = !this._paintOn;
         this._paintOn = true;
+        if (first) this._paintWarm();
         this.viewport.classList.add("paint-mode");
         const host = this._paintHostEl();
         host.style.display = "block";
@@ -735,6 +736,24 @@ export const PaintPanelMixin = {
         return this._paintWf;
     },
 
+    /**
+     * Asked once in the background when Paint comes up: the workflows table and the settings of the models the
+     * dialogs open on, so that Upscale… and Select objects… open with everything at once.
+     */
+    _paintWarm() {
+        if (this._paintWarmed) return;
+        this._paintWarmed = true;
+        this._paintWorkflows().then((t) => {
+            const acts = (t && t.actions) || {};
+            for (const kind of ["upscale", "select_objects"]) {
+                const a = acts[kind];
+                if (!a || !a.workflows) continue;
+                const w = a.workflows.find((x) => x.id === a.choice) || a.workflows[0];
+                if (w) this._paintTuneSpecs(w).catch(() => {});
+            }
+        }).catch(() => {});
+    },
+
     /** What a Generate button runs, for its tooltip ("" while the table is not here). */
     _paintWfLabel(kind) {
         const a = this._paintWf && this._paintWf.actions && this._paintWf.actions[kind];
@@ -749,7 +768,9 @@ export const PaintPanelMixin = {
     async paintWorkflowsDialog(rec) {
         const ed = rec && rec.editor;
         if (!ed) return;
-        const t = await this._paintWorkflows(true);
+        let t = this._paintWf;                              // open at once with what is here, asked again behind it
+        if (t) this._paintWorkflows(true);
+        else t = await this._paintWorkflows(true);
         if (!t) { notice("error", "The workflows are not here", "This ComfyUI's viewer is older than the page."); return; }
         const fields = [];
         for (const [a, info] of Object.entries(t.actions)) {
@@ -966,31 +987,55 @@ export const PaintPanelMixin = {
         } catch (_) { return null; }
     },
 
-    /** The settings a workflow offers in its dialog: [{ref, cls, settings}] from ComfyUI's object_info. */
+    /**
+     * The settings a workflow offers in its dialog: [{ref, cls, settings}] from ComfyUI's object_info. What it
+     * reads (the workflow's file, each class's object_info) is kept for the session, so after the first time
+     * this needs no request: `_paintTuneSpecsNow` answers from what is kept, or null while something is not.
+     */
     async _paintTuneSpecs(item) {
         if (!item || !item.tune || !item.tune.length) return [];
-        const res = await api.fetchApi(`/imageviewer/paint/workflow?id=${encodeURIComponent(item.id)}`);
-        if (!res.ok) return [];
-        const wf = await res.json();
-        // What the nodes hold now: the group on the canvas (a canvas-format one), else the server's copy.
-        let graph = wf.format === "ui" ? null : wf.workflow;
-        if (wf.format === "ui" && WC.nodesOf(app, item.id).length) {
-            try { graph = await WC.promptFromCanvas(app, item.id); } catch (_) { graph = null; }
+        const files = this._paintWfFiles || (this._paintWfFiles = {});
+        const infos = this._paintInfos || (this._paintInfos = {});
+        if (!files[item.id]) {
+            const res = await api.fetchApi(`/imageviewer/paint/workflow?id=${encodeURIComponent(item.id)}`);
+            if (!res.ok) return [];
+            files[item.id] = await res.json();
         }
+        const wf = files[item.id];
+        await Promise.all(item.tune.map(async (ref) => {
+            const cls = this._paintTuneClass(wf, ref);
+            if (!cls || infos[cls] !== undefined) return;
+            try {
+                const r = await api.fetchApi(`/object_info/${encodeURIComponent(cls)}`);
+                infos[cls] = (r.ok && (await r.json())[cls]) || null;
+            } catch (_) { infos[cls] = null; }
+        }));
+        return this._paintTuneSpecsNow(item) || [];
+    },
+
+    _paintTuneClass(wf, ref) {
+        if (wf.format === "ui") return WC.uiClassOf(wf.workflow, ref);
+        const k = WC.refIn(wf.workflow, ref);
+        return k ? wf.workflow[k].class_type : null;
+    },
+
+    _paintTuneSpecsNow(item) {
+        if (!item || !item.tune || !item.tune.length) return [];
+        const wf = this._paintWfFiles && this._paintWfFiles[item.id];
+        if (!wf) return null;
+        const infos = this._paintInfos || {};
         const kept = this._paintTune(item.id) || {};
         const skip = item.scale ? [item.scale[1]] : [];
         const out = [];
         for (const ref of item.tune) {
-            const k = graph ? WC.refIn(graph, ref) : null;
-            const cls = k ? graph[k].class_type : (wf.format === "ui" ? WC.uiClassOf(wf.workflow, ref) : null);
+            const cls = this._paintTuneClass(wf, ref);
             if (!cls) continue;
-            let info = null;
-            try {
-                const r = await api.fetchApi(`/object_info/${encodeURIComponent(cls)}`);
-                if (r.ok) info = (await r.json())[cls];
-            } catch (_) { /* no settings for it */ }
+            if (infos[cls] === undefined) return null;
+            const info = infos[cls];
             if (!info) continue;
-            const current = { ...((k && graph[k].inputs) || {}), ...(kept[ref] || {}) };
+            // What the node holds: the server's copy (an API-format one), then what was kept from the dialog.
+            const k = wf.format === "ui" ? null : WC.refIn(wf.workflow, ref);
+            const current = { ...((k && wf.workflow[k].inputs) || {}), ...(kept[ref] || {}) };
             const settings = WC.tuneSettings(info, current, skip);
             if (settings.length) out.push({ ref: String(ref), cls, title: info.display_name || cls, settings });
         }
@@ -1001,11 +1046,17 @@ export const PaintPanelMixin = {
      * Upscale… and Select objects…: the model (any workflow installed for it), what the action takes (times; the
      * words or the selection's box) and the model's own settings, read from ComfyUI (object_info) and kept per
      * workflow. Picking another model opens the dialog again with its settings.
+     *
+     * It opens AT ONCE: from the workflows table the page already has (asked again behind it) and the settings
+     * known so far; a model whose settings are not known yet gets them a moment later (the dialog opened again
+     * with what was typed kept, `pre`).
      */
-    async paintGenerateDialog(rec, kind, wid) {
+    async paintGenerateDialog(rec, kind, wid, pre = null) {
         const ed = rec && rec.editor;
         if (!ed) return;
-        const t = await this._paintWorkflows(true);
+        let t = this._paintWf;
+        if (t) this._paintWorkflows(true);              // fresh for next time; this one opens with what is here
+        else t = await this._paintWorkflows(true);
         const a = t && t.actions && t.actions[kind];
         if (!a) { notice("error", "The workflows are not here", "This ComfyUI's viewer is older than the page."); return; }
         const PLAIN = "__plain";
@@ -1015,8 +1066,8 @@ export const PaintPanelMixin = {
         wid = wid || (last[kind] && models.some((m) => m.value === last[kind]) ? last[kind] : (models.some((m) => m.value === a.choice) ? a.choice : (models[0] && models[0].value)));
         if (!wid) { notice("warn", "Nothing installed for " + a.label, "Install a node pack for it, or pick agentY in Generate › Workflows…"); return; }
         const item = a.workflows.find((w) => w.id === wid);
-        let specs = [];
-        try { specs = await this._paintTuneSpecs(item); } catch (_) { specs = []; }
+        const known = this._paintTuneSpecsNow(item);
+        const specs = known || [];
         const fields = [["wf", "Model", wid, models]];
         if (kind === "upscale") fields.push(["k", "Times", String(last.k || 2), ["2", "4"]]);
         if (kind === "select_objects") {
@@ -1024,6 +1075,8 @@ export const PaintPanelMixin = {
             fields.push(["box", "Look inside the selection's box", ed.sel ? "yes" : "no", ["yes", "no"]]);
         }
         for (const sp of specs) fields.push(...WC.dialogFields(sp.settings, `t:${sp.ref}:`));
+        if (pre) for (const f of fields) if (f[0] !== "wf" && pre[f[0]] !== undefined) f[2] = pre[f[0]];
+        let cur = null;
         const note = (kind === "select_objects"
             ? "SAM3 finds what the words name - or, with the box, what is inside the selection's box - and selects it. "
             : "") + (specs.length ? "The model's own settings are kept for the next run. " : "")
@@ -1049,16 +1102,26 @@ export const PaintPanelMixin = {
         }, note, {
             wide: true,
             onInput: (v) => {
+                cur = v;
                 if (v.wf && v.wf !== wid && shade) {         // another model: its own settings
                     shade.remove();
                     shade = null;
                     last[kind] = v.wf;
                     if (v.k) last.k = Number(v.k) || 2;
                     if (v.text !== undefined) last.text = v.text;
-                    this.paintGenerateDialog(rec, kind, v.wf);
+                    this.paintGenerateDialog(rec, kind, v.wf, v);
                 }
             },
         });
+        if (!known && item) {
+            // Its settings were not known yet: asked now, and the dialog opened again with them (what was typed kept).
+            this._paintTuneSpecs(item).then((sp) => {
+                if (!sp.length || !shade || !shade.isConnected) return;
+                shade.remove();
+                shade = null;
+                this.paintGenerateDialog(rec, kind, wid, cur);
+            }).catch(() => { /* opened without them */ });
+        }
     },
 
     /** One API graph into ComfyUI's queue: its prompt id. */

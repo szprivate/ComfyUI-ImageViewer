@@ -392,31 +392,64 @@ def resolve_workflow(action, wid=None, graph=None):
     return e, g
 
 
+class _Remembered:
+    """ComfyUI's folder_paths for one pass: each folder's listing and each lookup asked once (a folder on a
+    network drive is slow to list, and a listing asks about the same model folders dozens of times)."""
+
+    def __init__(self, fp):
+        self._fp, self._full, self._lists = fp, {}, {}
+        self.models_dir = getattr(fp, "models_dir", None)
+
+    def get_full_path(self, folder, name):
+        k = (folder, name)
+        if k not in self._full:
+            self._full[k] = self._fp.get_full_path(folder, name)
+        return self._full[k]
+
+    def get_filename_list(self, folder):
+        if folder not in self._lists:
+            self._lists[folder] = self._fp.get_filename_list(folder)
+        return self._lists[folder]
+
+    def get_folder_paths(self, folder):
+        return self._fp.get_folder_paths(folder)
+
+
+def _entry_item(e, folder_paths, node_classes):
+    if e.get("format") == "ui":
+        gone = missing_models(e, folder_paths)
+    else:
+        _e, g = _builtin(e["id"])
+        gone = missing(g, folder_paths, node_classes)
+        urls = {m["name"]: m for m in e.get("models") or []}
+        for m in gone:
+            if m["what"] in urls:
+                m["url"] = urls[m["what"]].get("url") or ""
+    return {"id": e["id"], "label": e["label"], "api": bool(e.get("api")), "from": e.get("from", ""),
+            "format": e.get("format", "api"), "missing": gone, "tune": e.get("tune") or [],
+            "mask": bool(e.get("mask_in")), "first_run": first_run_downloads(e, folder_paths),
+            "scale": e.get("scale") or None, "optional": e.get("optional") or []}
+
+
 def listing(folder_paths=None, node_classes=None):
     """What Settings and the Generate menus show: per action its workflows, the chosen one and the user's own.
     A built-in whose nodes this ComfyUI does not have (a node pack not installed) is left out; one whose model
-    files are not here is listed with them (`missing`, with where they come from, so the page can offer them)."""
+    files are not here is listed with them (`missing`, with where they come from, so the page can offer them).
+    Each built-in is looked at once, however many actions it serves, and each model folder listed once."""
+    if folder_paths is not None:
+        folder_paths = _Remembered(folder_paths)
     ch = choices()
     table = builtins()
+    seen = {}
     out = {}
     for a in ACTIONS:
         items = []
         for e in table:
             if a not in e["actions"] or not installed(e, node_classes):
                 continue
-            if e.get("format") == "ui":
-                gone = missing_models(e, folder_paths)
-            else:
-                _e, g = _builtin(e["id"])
-                gone = missing(g, folder_paths, node_classes)
-                urls = {m["name"]: m for m in e.get("models") or []}
-                for m in gone:
-                    if m["what"] in urls:
-                        m["url"] = urls[m["what"]].get("url") or ""
-            items.append({"id": e["id"], "label": e["label"], "api": bool(e.get("api")), "from": e.get("from", ""),
-                          "format": e.get("format", "api"), "missing": gone, "tune": e.get("tune") or [],
-                          "mask": bool(e.get("mask_in")), "first_run": first_run_downloads(e, folder_paths),
-                          "scale": e.get("scale") or None, "optional": e.get("optional") or []})
+            if e["id"] not in seen:
+                seen[e["id"]] = _entry_item(e, folder_paths, node_classes)
+            items.append(copy.deepcopy(seen[e["id"]]))
         c = custom(a)
         mine = None
         if c:
@@ -745,6 +778,22 @@ def _size_of(url, timeout=10):
         return None
 
 
+_SIZES = {}
+
+
+def _sizes(files):
+    """Each file's size, asked of the host all at once (a few seconds at most), remembered for the process."""
+    from concurrent.futures import ThreadPoolExecutor
+    ask = [f["url"] for f in files if f["url"] not in _SIZES]
+    if ask:
+        with ThreadPoolExecutor(max_workers=min(8, len(ask))) as pool:
+            for url, n in zip(ask, pool.map(lambda u: _size_of(u, timeout=4), ask)):
+                if n:
+                    _SIZES[url] = n
+    for f in files:
+        f["size"] = _SIZES.get(f["url"])
+
+
 def download_plan(wid, folder_paths, sizes=True):
     """What a built-in still needs: {id, label, files: [{name, folder, url, size, to}], total, unknown}."""
     e, _g = _builtin(wid)
@@ -761,9 +810,9 @@ def download_plan(wid, folder_paths, sizes=True):
                 f["to"] = _target(folder_paths, f["folder"], f["name"])
             except GenerateError:
                 f["url"] = ""
-        if f["url"] and sizes:
-            f["size"] = _size_of(f["url"])
         files.append(f)
+    if sizes:
+        _sizes([f for f in files if f["url"]])
     total = sum(f["size"] or 0 for f in files if f["url"])
     return {"id": e["id"], "label": e["label"], "files": files, "total": total,
             "unknown": [f["name"] for f in files if not f["url"]], "first_run": first_run_downloads(e, folder_paths)}
