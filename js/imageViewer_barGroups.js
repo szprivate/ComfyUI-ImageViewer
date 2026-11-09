@@ -9,7 +9,7 @@
 //   3D         Open 3D… · Outliner · Channel Box · Curve Editor   (on a 3D tab)
 //   Motion     Open Motion… · Properties · Timeline
 //   Paint      Open Paint… · Layers · Properties · History
-//   Timeline   Open Edit… · Edit · Effects · Inspector          (Effects and Inspector on a cut's tab)
+//   Timeline   Open Edit… · Edit · Effects · Inspector · Mixer (the last three on a cut's tab)
 //
 // Each space's group starts with its "Open …" item (spaceOpen): the tab of that
 // kind that is open, else the last file of that kind opened or saved, else an
@@ -78,6 +78,7 @@ const GROUPS = [
         { label: "Edit", panel: "editTimeline", run: (p) => p.editTlToggle() },
         { label: "Effects", panel: "editEffects", needs: "cut", run: (p) => p.editTlPanelToggle("editEffects") },
         { label: "Inspector", panel: "editInspector", needs: "cut", run: (p) => p.editTlPanelToggle("editInspector") },
+        { label: "Mixer", panel: "editMixer", needs: "cut", run: (p) => p.editTlPanelToggle("editMixer") },
     ] },
 ];
 
@@ -216,7 +217,7 @@ export const BarGroupsMixin = {
                 const film = !!(this._editTlFilm && !(this.isEditTab && this.isEditTab()));
                 button.classList.toggle("has-cut", film);
                 button.title = film ? "Timeline: this film has a cut beside it - Edit opens it"
-                                    : "Timeline: Edit, Effects, Inspector";
+                                    : "Timeline: Edit, Effects, Inspector, Mixer";
             }
         }
     },

@@ -116,17 +116,43 @@ export const EditAfxPlayMixin = {
     },
 
     // A track's bus: its input stays, its effects are rewired when they change.
+    // Its output goes through the window's master (both with an AnalyserNode beside
+    // them, which the Mixer's meters read) to the speakers.
     _epAfxBus(ctx, id, chain) {
         const buses = ctx.__buses;
         const sig = JSON.stringify(A.cleanAfx(chain));
         let bus = buses[id];
-        if (!bus) { bus = buses[id] = { input: ctx.createGain(), sig: null, keyed: [] }; }
+        if (!bus) {
+            bus = buses[id] = { input: ctx.createGain(), out: ctx.createGain(), meter: this._epAfxMeter(ctx), sig: null, keyed: [] };
+            bus.out.connect(this._epAfxMaster(ctx).input);
+            bus.out.connect(bus.meter);
+        }
         if (bus.sig !== sig) {
             try { bus.input.disconnect(); } catch (_) {}
-            bus.keyed = this._epAfxWire(ctx, chain, bus.input, ctx.destination);
+            bus.keyed = this._epAfxWire(ctx, chain, bus.input, bus.out);
             bus.sig = sig;
         }
         return bus;
+    },
+
+    // An analyser for a meter: a short window, no smoothing (the meter keeps its own peak).
+    _epAfxMeter(ctx) {
+        const a = ctx.createAnalyser();
+        a.fftSize = 1024;
+        a.smoothingTimeConstant = 0;
+        return a;
+    },
+
+    // The window's master: everything the Edit tab plays through WebAudio, metered, to the speakers.
+    _epAfxMaster(ctx) {
+        if (!ctx.__master) {
+            const input = ctx.createGain();
+            const meter = this._epAfxMeter(ctx);
+            input.connect(ctx.destination);
+            input.connect(meter);
+            ctx.__master = { input, meter };
+        }
+        return ctx.__master;
     },
 
     /**
@@ -139,7 +165,9 @@ export const EditAfxPlayMixin = {
         const cut = this._editPlayCut();
         const chain = clip && !clip.title ? A.cleanAfx(clip.afx) : [];
         const tchain = cut && track && D.afxTrack(cut, track) ? D.trackAfx(cut, track) : [];
-        if (!el._epAfx && !A.afxActive(chain) && !A.afxActive(tchain)) return;
+        // The Mixer up: every element goes through its track's bus, so that its meter has something to read.
+        const metered = !!(this._editMixOn && this._editMixOn()) && !!track;
+        if (!el._epAfx && !A.afxActive(chain) && !A.afxActive(tchain) && !metered) return;
         const ctx = this._epAfxCtx(el);
         if (!ctx) return;
         if (!el._epAfx) {
@@ -150,14 +178,14 @@ export const EditAfxPlayMixin = {
             el.volume = 1;
         }
         const r = el._epAfx;
-        const bus = A.afxActive(tchain) ? this._epAfxBus(ctx, track, tchain) : null;
+        const bus = A.afxActive(tchain) || metered || (track && ctx.__buses[track]) ? this._epAfxBus(ctx, track, tchain) : null;
         const sig = JSON.stringify([chain, bus ? track : ""]);
         r.origin = Number(origin) || 0;
         r.track = track;
         if (r.sig !== sig) {
             try { r.src.disconnect(); r.gain.disconnect(); } catch (_) {}
             r.keyed = this._epAfxWire(ctx, chain, r.src, r.gain);
-            r.gain.connect(bus ? bus.input : ctx.destination);
+            r.gain.connect(bus ? bus.input : this._epAfxMaster(ctx).input);
             r.sig = sig;
         }
     },

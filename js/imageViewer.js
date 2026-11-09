@@ -57,6 +57,7 @@ import { EditTrimMixin } from "./imageViewer_editTrim.js";
 import { EditMarkersMixin } from "./imageViewer_editMarkers.js";
 import { EditRangeMixin } from "./imageViewer_editRange.js";
 import { EditDynamicMixin } from "./imageViewer_editDynamic.js";
+import { EditMixerMixin } from "./imageViewer_editMixer.js";
 import { EditAudioMixin } from "./imageViewer_editAudio.js";
 import { EditProxyMixin } from "./imageViewer_editProxy.js";
 import { AudioViewMixin } from "./imageViewer_audio.js";
@@ -694,7 +695,7 @@ class ViewerPanel extends HTMLElement {
             this.editTimelinePanel = ep;
         }
         // Its two companions (imageViewer_editPanels.js), made the same way.
-        for (const [prop, id] of [["editInspectorPanel", "edit-inspector-panel"], ["editEffectsPanel", "edit-effects-panel"]]) {
+        for (const [prop, id] of [["editInspectorPanel", "edit-inspector-panel"], ["editEffectsPanel", "edit-effects-panel"], ["editMixerPanel", "edit-mixer-panel"]]) {
             this[prop] = sr.getElementById(id);
             if (!this[prop] && this.curvesPanel && this.curvesPanel.parentNode) {
                 const panel = this.curvesPanel.ownerDocument.createElement('div');
@@ -1551,6 +1552,7 @@ Object.assign(
     EditMarkersMixin,
     EditRangeMixin,
     EditDynamicMixin,
+    EditMixerMixin,
     EditAudioMixin,
     EditProxyMixin,
     AudioViewMixin,

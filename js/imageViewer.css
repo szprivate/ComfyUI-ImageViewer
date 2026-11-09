@@ -1993,3 +1993,28 @@ textarea.param-input {
 .edit-markerrow > span { width: 110px; flex: none; }
 .edit-markerin { flex: 1; min-width: 0; background: #111; color: #ddd; border: 1px solid #444; border-radius: 2px; font-size: 11px; padding: 2px 4px; }
 .edit-markerdlg .edit-brief { min-height: 54px; }
+
+/* The Edit tab's Mixer (imageViewer_editMixer.js): a strip per sound source, a master meter. */
+#edit-mixer-panel .mix-body { flex: 1 1 auto; min-height: 0; display: flex; gap: 4px; padding: 6px; overflow-x: auto; overflow-y: hidden; box-sizing: border-box; }
+.mix-strip { flex: none; width: 58px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 4px 2px;
+    background: #1c1c1c; border: 1px solid #2c2c2c; border-radius: 3px; box-sizing: border-box; min-height: 0; }
+.mix-strip.mix-master { margin-left: auto; border-color: #3a3a3a; }
+.mix-strip.locked { opacity: .55; }
+.mix-strip.keyed .mix-fader { accent-color: #f0b429; }
+.mix-name { width: 100%; text-align: center; font-size: 10px; color: #ddd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mix-mid { flex: 1 1 auto; min-height: 60px; display: flex; gap: 4px; align-items: stretch; justify-content: center; }
+.mix-meter { position: relative; width: 8px; background: #0d0d0d; border: 1px solid #333; border-radius: 1px; overflow: hidden; }
+.mix-meter-fill { position: absolute; left: 0; right: 0; bottom: 0; height: 0;
+    background: #2fbf71; }
+.mix-meter.hot .mix-meter-fill { background: #e8c547; }
+.mix-meter.over { border-color: #e5534b; }
+.mix-meter.over .mix-meter-fill { background: #e5534b; }
+.mix-meter-hold { position: absolute; left: 0; right: 0; height: 2px; background: #eee; display: none; }
+.mix-fader { writing-mode: vertical-lr; direction: rtl; width: 18px; height: auto; min-height: 0; margin: 0; accent-color: #00b8d4; }
+.mix-db { font-size: 9px; color: #00b8d4; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mix-pan { width: 50px; margin: 0; accent-color: #00b8d4; }
+.mix-fx { min-height: 0; padding: 0 4px; font-size: 9px; }
+.mix-btns { display: flex; gap: 2px; }
+.mix-btn { min-height: 0; width: 22px; padding: 0; font-size: 10px; }
+.mix-btns .mix-btn.on:first-child { background: #5a2626; border-color: #e5534b; color: #fff; }
+.mix-btns .mix-btn.on:last-child { background: #5a4a1a; border-color: #f0b429; color: #fff; }
