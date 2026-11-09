@@ -1529,6 +1529,25 @@ class PaintBrowserTests(unittest.TestCase):
         mod = sys.modules[self.pkg + ".paint_generate"]
         mod.set_choice(action, choice)
 
+    def test_extend_empty_areas_selects_around_the_layer_and_fills_it(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        # The photo made smaller than the canvas: 40 px of nothing on its right.
+        pg.evaluate(f"""() => {{ const e = {ed}; const L = e.active(); const W = L.w - 40, px = e.pix.get(L.id), out = new Uint8ClampedArray(W * L.h * 4);
+            for (let y = 0; y < L.h; y++) out.set(px.subarray(y * L.w * 4, (y * L.w + W) * 4), y * W * 4);
+            L.w = W; e.pix.set(L.id, out); e.redraw();
+            window.__gen = []; e.host.generate = (k, o) => window.__gen.push([k, o]); }}""")
+        btn = pg.evaluate(f"() => [...{ed}.parts.generate.querySelectorAll('button')].some((b) => b.textContent === 'Extend empty areas')")
+        self.assertTrue(btn)
+        pg.evaluate(f"() => [...{ed}.parts.generate.querySelectorAll('button')].find((b) => b.textContent === 'Extend empty areas').click()")
+        got = pg.evaluate(f"""() => {{ const e = {ed}, W = e.doc.w, s = e.sel; return {{ gen: window.__gen,
+            right: s[10 * W + W - 1], inside: s[10 * W + 10], edge: s[10 * W + W - 45], undo: e.undoLabel ? e.undoLabel() : null }}; }}""")
+        self.assertEqual(got["gen"][0][0], "fill")
+        self.assertTrue(got["gen"][0][1]["prompt"])             # the default words when none were typed
+        self.assertEqual((got["right"], got["inside"], got["edge"]), (255, 0, 255))   # grown 8 px into the layer
+        self.assertEqual(self.errors, [])
+
     def test_generate_runs_its_workflow_and_the_result_is_a_new_layer(self):
         pg = self.page()
         self.open_photo(pg)
@@ -1637,7 +1656,7 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(pg.evaluate(f"() => {bar}.text.textContent"), "Done: a new layer")
         self.assertEqual(self.errors, [])
 
-    def test_upscale_dialog_puts_the_workflow_on_the_canvas_once_and_runs_it_from_there(self):
+    def test_upscale_dialog_runs_its_workflow_without_touching_the_canvas(self):
         pg = self.page()
         self.open_photo(pg)
         ed = self.ED
@@ -1651,36 +1670,32 @@ class PaintBrowserTests(unittest.TestCase):
             "seed": ["INT", {"default": 0}]}}}}
         pg.evaluate("""(info) => { const f = window.__fetchApi;
             window.__fetchApi = async (p, o) => (p.startsWith('/object_info/') ? { ok: true, status: 200, json: async () => info } : f(p, o)); }""", info)
-        # The canvas: its paste makes nodes (new ids), graphToPrompt answers ComfyUI's prompt of them.
+        # ComfyUI: a graph class (the root graph's) that takes a workflow, and graphToPrompt of such a graph.
+        # The user's canvas (the root graph) must stay as it is.
         pg.evaluate("""async () => {
             const { app } = await import('/scripts/app.js');
-            window.__queued = []; window.__pastes = 0; window.__groups = [];
+            window.__queued = []; window.__made = 0;
             __api.queuePrompt = async (n, d) => { window.__queued.push(d.output); return { prompt_id: 'u' + window.__queued.length }; };
-            window.LiteGraph = { LGraphGroup: class { constructor(t) { this.title = t; } resizeTo() {} } };
-            const g = { _nodes: [], add(x) { if (x instanceof window.LiteGraph.LGraphGroup) window.__groups.push(x.title); else this._nodes.push(x); } };
-            app.rootGraph = g; app.graph = g;
-            app.canvas = { graph: g, setDirty() {}, _deserializeItems(items, { position }) {
-                window.__pastes++;
-                const created = items.nodes.map((n, i) => ({ id: 500 + i, type: n.type, title: n.title, pos: [position[0], position[1] + i * 100],
-                                                             size: [200, 80], properties: {}, widgets: [] }));
-                g._nodes.push(...created);
-                window.__pasted = items;
-                return { created };
-            } };
-            app.graphToPrompt = async () => {
+            class G { constructor() { this._nodes = []; } configure(ui) { window.__made++; this._nodes = ui.nodes.map((n) => ({ ...n })); } clear() { this._nodes = []; } }
+            const root = new G();
+            root._nodes = [{ id: 1, type: 'TheUsersOwn', title: 'mine' }];
+            app.rootGraph = root; app.graph = root; app.canvas = { graph: root, setDirty() {} };
+            app.graphToPrompt = async (g = root) => {
                 const by = (t) => g._nodes.find((n) => n.title === t);
                 const L = by('paint:image'), T = by('paint:tune'), O = by('paint:output');
+                if (!L) return { output: { '1': { class_type: 'TheUsersOwn', inputs: {} } } };
                 return { output: {
                     [L.id]: { class_type: 'LoadImage', _meta: { title: 'paint:image' }, inputs: { image: 'x.png', upload: 'image' } },
                     [T.id]: { class_type: 'ClarityCrystalUpscaleNode', _meta: { title: 'paint:tune' },
                               inputs: { model: 'crystal-upscaler', 'model.image': [String(L.id), 0], 'model.scale_factor': 4, 'model.creativity': 0, seed: 0 } },
-                    [O.id]: { class_type: 'SaveImageAdvanced', _meta: { title: 'paint:output' }, inputs: { images: [String(T.id), 0], filename_prefix: 'x' } },
-                    '9': { class_type: 'SomebodyElses', inputs: {} } } };
+                    [O.id]: { class_type: 'SaveImageAdvanced', _meta: { title: 'paint:output' }, inputs: { images: [String(T.id), 0], filename_prefix: 'x' } } } };
             };
         }""")
         self.addCleanup(lambda: self._choose("upscale", "upscale_model"))
         pg.evaluate("() => __panel.paintGenerateDialog(__panel._paintActive(), 'upscale', 'crystal')")
         pg.wait_for_function(f"() => !!{ed}.box.querySelector('.paint-dlg h3')", timeout=10000)
+        # It opens at once; the model's own settings come a moment later (asked the first time only).
+        pg.wait_for_function(f"() => [...{ed}.box.querySelectorAll('.paint-dlg .paint-field label')].some((l) => l.textContent === 'creativity')", timeout=10000)
         labels = pg.evaluate(f"() => [...{ed}.box.querySelectorAll('.paint-dlg .paint-field label')].map((l) => l.textContent)")
         self.assertEqual(labels[:2], ["Model", "Times"])
         self.assertIn("creativity", labels)
@@ -1692,12 +1707,11 @@ class PaintBrowserTests(unittest.TestCase):
             box.querySelector('.paint-dlg .go .on').click(); }""", pg.evaluate_handle(f"() => {ed}.box"))
         pg.wait_for_function("() => window.__queued.length === 1", timeout=10000)
         q = pg.evaluate("() => window.__queued[0]")
-        self.assertNotIn("9", q)                              # only Paint's group runs
+        self.assertNotIn("TheUsersOwn", [v["class_type"] for v in q.values()])   # nothing of the user's canvas runs
         tnode = next(v for v in q.values() if v["class_type"] == "ClarityCrystalUpscaleNode")
         self.assertEqual((tnode["inputs"]["model.creativity"], tnode["inputs"]["model.scale_factor"]), (7, 2))
-        self.assertEqual(pg.evaluate("() => window.__groups"), ["Paint \u00b7 Crystal Upscaler, Clarity AI (API)"])
-        marks = pg.evaluate("""async () => { const { app } = await import('/scripts/app.js'); return app.rootGraph._nodes.map((n) => n.properties.imageviewer_paint); }""")
-        self.assertEqual(marks, ["crystal"] * 3)
+        canvas = pg.evaluate("""async () => { const { app } = await import('/scripts/app.js'); return app.rootGraph._nodes.map((n) => n.type); }""")
+        self.assertEqual(canvas, ["TheUsersOwn"])            # the canvas is as it was
         lid = next(k for k, v in q.items() if v["class_type"] == "LoadImage")
         from PIL import Image
         crop = Image.open(os.path.join(self.dirs["input"], q[lid]["inputs"]["image"]))
@@ -1709,10 +1723,10 @@ class PaintBrowserTests(unittest.TestCase):
         pg.evaluate("""(oid) => __api.dispatch('executed', { prompt_id: 'u1', node: oid,
             output: { images: [{ filename: 'up_0.png', subfolder: 'paint/generate', type: 'output' }] } })""", oid)
         pg.wait_for_function(f"() => {ed}.doc.w === 400", timeout=10000)
-        # Again from the Generate panel's button: the group that is there runs, nothing is pasted again; the settings kept.
+        # Again from the Generate panel's button: the prompt made once is used again; the settings kept.
         pg.evaluate(f"() => {ed}.parts.generate.querySelector('[data-gen=upscale]').click()")
         pg.wait_for_function("() => window.__queued.length === 2", timeout=10000)
-        self.assertEqual(pg.evaluate("() => window.__pastes"), 1)
+        self.assertEqual(pg.evaluate("() => window.__made"), 1)
         q2 = pg.evaluate("() => window.__queued[1]")
         tnode = next(v for v in q2.values() if v["class_type"] == "ClarityCrystalUpscaleNode")
         self.assertEqual(tnode["inputs"]["model.creativity"], 7)

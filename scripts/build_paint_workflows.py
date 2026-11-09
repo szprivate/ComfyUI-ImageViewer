@@ -7,8 +7,8 @@ The official templates (``comfyui_workflow_templates_official``, as agentY-core 
 goes, a second reference picture goes or is fed the same picture, and the nodes Paint fills in get titles -
 ``paint:image`` (the picture), ``paint:prompt`` (the words), ``paint:output`` (the result), ``paint:tune``
 (the node whose settings the dialog offers), ``paint:box`` (a box from the selection), ``paint:scale``.
-Templates in ComfyUI's canvas format ("ui") are put onto the canvas as they are and turned into a prompt
-there by ComfyUI itself; the few in the API format ("api") are placed node by node.
+Templates in ComfyUI's canvas format ("ui") are kept as they are and turned into a prompt by ComfyUI's page
+(in a graph of their own, never on the user's canvas); the few in the API format ("api") run as they are.
 
 ``RECIPES`` is the table: what each workflow is called, which actions it does, the size its model works
 at, and how its template is trimmed. ``index.json`` is written from it. The trimmed files and the index

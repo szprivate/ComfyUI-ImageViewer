@@ -35,7 +35,7 @@ nothing is rounded on the way - a canvas' PNG would premultiply them.
 - ``POST /imageviewer/paint/generate`` (JSON) - ``token, action, prompt, workflow?, variations, k``: the crop
   (and its mask) written into ``<input>/paint``, the workflow filled in, 1-4 graphs for the page to queue;
   409 ``{missing}`` when a model or node is not on this machine.
-- ``GET /imageviewer/paint/workflow?id=`` - one built-in workflow as it goes onto the canvas.
+- ``GET /imageviewer/paint/workflow?id=`` - one built-in workflow as the page reads it.
 - ``POST /imageviewer/paint/models`` (JSON) - ``workflow``: the model files it still needs, their sizes and where
   they come from; ``POST /imageviewer/paint/download`` - ``workflow``: fetch them (a job), ``job`` (+ ``cancel``):
   how far it is. Only the files a built-in's template names, only from Hugging Face, into ComfyUI's model folders.

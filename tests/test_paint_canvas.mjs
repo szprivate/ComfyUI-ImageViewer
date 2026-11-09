@@ -1,33 +1,8 @@
-// Paint's Generate workflows on ComfyUI's canvas: the plain helpers of js/imageViewer_paintCanvas.js.
+// Paint's Generate workflows and ComfyUI: the plain helpers of js/imageViewer_paintCanvas.js.
 //     node --test tests/test_paint_canvas.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as WC from "../js/imageViewer_paintCanvas.js";
-
-test("a saved workflow becomes what the canvas' paste takes", () => {
-    const ui = { nodes: [{ id: 1, type: "LoadImage" }], links: [[7, 1, 0, 2, 0, "IMAGE"]], definitions: { subgraphs: [{ id: "s" }] } };
-    const c = WC.toClipboard(ui);
-    assert.deepEqual(c.links, [{ id: 7, origin_id: 1, origin_slot: 0, target_id: 2, target_slot: 0, type: "IMAGE" }]);
-    assert.deepEqual(c.subgraphs, [{ id: "s" }]);
-    c.nodes[0].type = "x";
-    assert.equal(ui.nodes[0].type, "LoadImage");           // a copy
-});
-
-test("only one workflow's nodes are taken out of the canvas' prompt, with what is wired into them", () => {
-    const out = {
-        "5": { class_type: "LoadImage", inputs: { image: "a.png" } },
-        "6:1": { class_type: "Inner", inputs: { image: ["5", 0], extra: ["20", 0] } },
-        "7": { class_type: "SaveImage", inputs: { images: ["6:1", 0] } },
-        "20": { class_type: "UserNode", inputs: {} },
-        "30": { class_type: "SomethingElse", inputs: {} },
-    };
-    assert.deepEqual(Object.keys(WC.promptOf(out, [5, 6, 7])).sort(), ["20", "5", "6:1", "7"]);
-});
-
-test("a new group goes to the right of what is there", () => {
-    assert.deepEqual(WC.freeSpot([]), [0, 0]);
-    assert.deepEqual(WC.freeSpot([{ pos: [0, 50], size: [100, 10] }, { pos: [300, 10], size: [200, 10] }]), [620, 10]);
-});
 
 test("plain inputs, a dynamic combo before what hangs on it", () => {
     assert.deepEqual(WC.plainInputs({ "model.scale_factor": 2, image: ["1", 0], model: "crystal" }).map((x) => x[0]), ["model", "model.scale_factor"]);
@@ -67,10 +42,3 @@ test("a node's settings for a dialog: no seeds, no sockets, no links, a dynamic 
     assert.deepEqual(v, { model: "crystal", "model.creativity": 5, mode: "fast", refine: false });
 });
 
-test("setting a widget calls its callback (a dynamic combo grows its inputs)", () => {
-    let told = null;
-    const n = { widgets: [{ name: "model", value: "a", callback: (v) => { told = v; } }] };
-    assert.equal(WC.setWidget(n, "model", "b"), true);
-    assert.equal(told, "b");
-    assert.equal(WC.setWidget(n, "nope", 1), false);
-});

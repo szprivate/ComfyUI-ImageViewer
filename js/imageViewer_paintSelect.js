@@ -73,7 +73,43 @@ export function rulerStep(zoom, minPx = 50) {
     return 1e8;
 }
 
+/** How far (px) "Extend empty areas" reaches into the layer, so the new part is made to meet it without a seam. */
+export const EMPTY_GROW = 8;
+
+/**
+ * The empty area around a layer, as a selection of the canvas (W x H, 0..255): everything the layer does not cover
+ * - outside its box, and where it is see-through (255 - its alpha, so a soft edge is half selected) - grown by
+ * *grow* px into the layer. Null when the layer covers the whole canvas.
+ */
+export function emptyAround(px, L, W, H, grow = EMPTY_GROW) {
+    const m = new Uint8Array(W * H).fill(255);
+    for (let y = Math.max(0, L.y); y < Math.min(H, L.y + L.h); y++) {
+        for (let x = Math.max(0, L.x); x < Math.min(W, L.x + L.w); x++) {
+            m[y * W + x] = 255 - px[((y - L.y) * L.w + (x - L.x)) * 4 + 3];
+        }
+    }
+    if (!m.some((v) => v)) return null;
+    return grow > 0 ? dilate(m, W, H, grow) : m;
+}
+
+/** The words a fill of the empty area takes when the user gave none. */
+export const EMPTY_PROMPT = "a seamless continuation of the picture around it, the same scene, light and style";
+
 export const SelectGuidesMixin = {
+    /**
+     * Generate › Extend empty areas: select what the active layer leaves empty on the canvas (grown a little into
+     * it) - one undo step - and fill that by the Generative fill workflow, with the prompt (or EMPTY_PROMPT).
+     */
+    extendEmpty() {
+        const L = this.active();
+        if (!this.doc || !L || L.kind !== "pixel") { this._notify("Pick a pixel layer first.", "info"); return false; }
+        const m = emptyAround(this.pix.get(L.id), L, this.doc.w, this.doc.h);
+        if (!m) { this._notify("The layer covers the whole canvas: nothing is empty around it.", "info"); return false; }
+        this.setSelection(m, "Select empty areas");
+        if (this.host.generate) this.host.generate("fill", { prompt: (this._prompt || "").trim() || EMPTY_PROMPT, variations: this._variations || 1 });
+        return true;
+    },
+
     // ── Select > Modify, Colour range ────────────────────────────────────────
 
     /** Expand, contract, smooth or border the selection by r pixels: one undo step. */

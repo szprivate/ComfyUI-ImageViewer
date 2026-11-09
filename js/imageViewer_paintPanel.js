@@ -807,9 +807,9 @@ export const PaintPanelMixin = {
         const wid = opts.workflow || (a && a.choice) || null;
         const item = a && a.workflows.find((w) => w.id === wid);
         try {
-            // Its model files first (asked before anything is fetched), then the workflow onto ComfyUI's canvas.
+            // Its model files first (asked before anything is fetched), then a canvas-format workflow as a prompt.
             if (item && !(await this._paintModelsReady(rec, item, say))) throw Object.assign(new Error("not now"), { quiet: true });
-            const graph = item ? await this._paintOnCanvas(item, say) : null;
+            const graph = item ? await this._paintPrompt(item, say) : null;
             say({ text: "Getting the picture ready" });
             const s = await this._paintSync(rec);
             await postJson("/imageviewer/paint/save", { token: rec.token, meta: s.meta, keep: s.keep, write: false });
@@ -818,8 +818,6 @@ export const PaintPanelMixin = {
                                                                   tune: (item && item.tune.length && this._paintTune(wid)) || null,
                                                                   box: !!opts.box,
                                                                   variations: kind === "upscale" ? 1 : Math.max(1, Math.min(4, Number(opts.variations) || 1)) });
-            // The group on the canvas shows what ran (the picture, the words, the seed): its root nodes' widgets.
-            if (item) { try { WC.writeBack(app, wid, prep.graphs[0]); } catch (_) { /* only the record */ } }
         } catch (e) {
             rec.genBusy = Math.max(0, (rec.genBusy || 1) - 1);
             if (e.quiet) { over(false, "Not started"); return; }
@@ -895,29 +893,26 @@ export const PaintPanelMixin = {
         over(ok, ok ? (made > 1 ? `Done: ${made} new layers` : made ? "Done: a new layer" : "Done") : "The result could not be laid in");
     },
 
-    // ── the workflow on ComfyUI's canvas, its model files, its settings ───────
+    // ── the workflow as a prompt, its model files, its settings ──────────────
 
     /**
-     * Put the built-in *item* onto ComfyUI's canvas as a group of its own, once (found again by the mark its nodes
-     * carry), and answer the prompt to run: for a canvas-format one what ComfyUI makes of that group - so a change
-     * made there is run -, for an API-format one null (the server's copy runs; the group is the record).
+     * The prompt to send for the built-in *item*: for one kept as the canvas saves it, what ComfyUI makes of it in a
+     * graph of its own (never on the user's canvas; kept for the session), for an API-format one null (the server's
+     * copy runs).
      */
-    async _paintOnCanvas(item, say) {
-        const there = WC.nodesOf(app, item.id).length > 0;
-        if (!there) {
-            say({ text: "Putting the workflow onto the canvas" });
+    async _paintPrompt(item, say) {
+        if (item.format !== "ui") return null;
+        const kept = this._paintPrompts || (this._paintPrompts = {});
+        if (kept[item.id]) return kept[item.id];
+        const files = this._paintWfFiles || (this._paintWfFiles = {});
+        if (!files[item.id]) {
+            say({ text: "Getting the workflow" });
             const res = await api.fetchApi(`/imageviewer/paint/workflow?id=${encodeURIComponent(item.id)}`);
             if (!res.ok) throw new Error(`the workflow ${item.label} is not here (HTTP ${res.status})`);
-            const wf = await res.json();
-            const title = `Paint · ${item.label}`;
-            if (wf.format === "ui") WC.pasteWorkflow(app, item.id, wf.workflow, title);
-            else {
-                try { WC.placeApiWorkflow(app, item.id, wf.workflow, title); }
-                catch (e) { console.warn("[ImageViewer] Paint: the workflow could not be laid onto the canvas", e); }
-            }
+            files[item.id] = await res.json();
         }
-        if (item.format !== "ui") return null;
-        return WC.promptFromCanvas(app, item.id);
+        kept[item.id] = await WC.promptOffCanvas(app, files[item.id].workflow);
+        return kept[item.id];
     },
 
     /**
@@ -1079,8 +1074,7 @@ export const PaintPanelMixin = {
         let cur = null;
         const note = (kind === "select_objects"
             ? "SAM3 finds what the words name - or, with the box, what is inside the selection's box - and selects it. "
-            : "") + (specs.length ? "The model's own settings are kept for the next run. " : "")
-            + "The workflow goes onto ComfyUI's canvas as a group of its own.";
+            : "") + (specs.length ? "The model's own settings are kept for the next run." : "");
         let shade = null;
         shade = ed.dialog(a.label, fields, async (v) => {
             last[kind] = v.wf;
