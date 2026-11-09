@@ -804,22 +804,40 @@ def version_of(path):
 # so a reader that knows neither plays the plain clip from its in point.
 MIN_SPEED, MAX_SPEED = 0.1, 10.0
 _WARP = "LinearTimeWarp"
+_FREEZE = "FreezeFrame"
+MOTIONS = ("", "reverse", "freeze")
 
 
 def clip_time(item):
-    """``{"speed", "loop", "span"}`` of a clip: 1 / "" / 0 for a plain one."""
+    """``{"speed", "loop", "span", "motion"}`` of a clip: 1 / "" / 0 / "" for a plain one.
+    ``motion`` "reverse" (the source runs backwards from ``in``, the moment at the clip's
+    head) or "freeze" (``in`` held): ``metadata.imageviewer.motion``, else read off OTIO's
+    own effects - a FreezeFrame, or a LinearTimeWarp of 0 (freeze) or below 0 (reverse)."""
     note = _imageviewer(item)
     speed = note.get("speed")
-    if speed is None:
-        for fx in item.get("effects") or [] if isinstance(item, dict) else []:
-            if isinstance(fx, dict) and str(fx.get("OTIO_SCHEMA") or "").startswith(_WARP):
-                speed = fx.get("time_scalar")
-                break
+    motion = str(note.get("motion") or "")
+    warp = None
+    for fx in item.get("effects") or [] if isinstance(item, dict) else []:
+        if isinstance(fx, dict) and (str(fx.get("OTIO_SCHEMA") or "").startswith((_WARP, _FREEZE))
+                                     or fx.get("effect_name") == _FREEZE):
+            warp = fx
+            break
+    if warp is not None and "motion" not in note:
+        try:
+            ts = float(warp.get("time_scalar") if warp.get("time_scalar") is not None else 1.0)
+        except (TypeError, ValueError):
+            ts = 1.0
+        if str(warp.get("OTIO_SCHEMA") or "").startswith(_FREEZE) or warp.get("effect_name") == _FREEZE or ts == 0:
+            motion = "freeze"
+        elif ts < 0:
+            motion = "reverse"
+    if speed is None and warp is not None:
+        speed = warp.get("time_scalar")
     try:
-        speed = float(speed if speed is not None else 1.0)
+        speed = abs(float(speed if speed is not None else 1.0))
     except (TypeError, ValueError):
         speed = 1.0
-    if not speed > 0:
+    if not speed > 0 or motion == "freeze":
         speed = 1.0
     speed = round(max(MIN_SPEED, min(MAX_SPEED, speed)), 4)
     loop = str(note.get("loop") or "")
@@ -827,9 +845,11 @@ def clip_time(item):
         span = float(note.get("span") or 0)
     except (TypeError, ValueError):
         span = 0.0
-    if loop not in ("loop", "pingpong") or not span > 0:
+    if motion not in MOTIONS:
+        motion = ""
+    if loop not in ("loop", "pingpong") or not span > 0 or motion:
         loop, span = "", 0.0
-    return {"speed": speed, "loop": loop, "span": round(span, 4)}
+    return {"speed": speed, "loop": loop, "span": round(span, 4), "motion": motion}
 
 
 def _set_time(item, c):
@@ -838,19 +858,42 @@ def _set_time(item, c):
     note = meta.setdefault("imageviewer", {}) if isinstance(meta, dict) else None
     if not isinstance(note, dict):
         return
-    if "speed" in c:
-        speed = _num(c.get("speed") or 1.0, "a clip's speed", MIN_SPEED)
-        speed = round(min(MAX_SPEED, speed), 4)
+    if "speed" in c or "motion" in c:
+        was = clip_time(item)
+        motion = str(c.get("motion") or "") if "motion" in c else was["motion"]
+        if motion not in MOTIONS:
+            raise ValueError(f"a clip's motion is one of reverse, freeze or nothing, not {motion!r}")
+        if "speed" in c:
+            speed = _num(c.get("speed") or 1.0, "a clip's speed", MIN_SPEED)
+            speed = round(min(MAX_SPEED, speed), 4)
+        else:
+            speed = was["speed"]
+        if motion == "freeze":
+            speed = 1.0
         effects = [fx for fx in (item.get("effects") or [])
-                   if not (isinstance(fx, dict) and str(fx.get("OTIO_SCHEMA") or "").startswith(_WARP))]
+                   if not (isinstance(fx, dict) and (str(fx.get("OTIO_SCHEMA") or "").startswith((_WARP, _FREEZE))
+                                                     or fx.get("effect_name") == _FREEZE))]
         if abs(speed - 1.0) > 1e-4:
             note["speed"] = speed
-            effects.append({"OTIO_SCHEMA": "LinearTimeWarp.1", "name": "", "effect_name": _WARP,
-                            "metadata": {}, "time_scalar": speed})
         else:
             note.pop("speed", None)
+        if motion:
+            note["motion"] = motion
+            note.pop("loop", None)
+            note.pop("span", None)
+        else:
+            note.pop("motion", None)
+        # OTIO's own effects, which other programs read: a FreezeFrame, or the speed as a
+        # LinearTimeWarp (negative reversed). ``source_range`` starts at the moment at the
+        # clip's head either way, so a reader that knows none of it plays forwards from there.
+        if motion == "freeze":
+            effects.append({"OTIO_SCHEMA": "FreezeFrame.1", "name": "", "effect_name": _FREEZE,
+                            "metadata": {}, "time_scalar": 0.0})
+        elif motion == "reverse" or abs(speed - 1.0) > 1e-4:
+            effects.append({"OTIO_SCHEMA": "LinearTimeWarp.1", "name": "", "effect_name": _WARP,
+                            "metadata": {}, "time_scalar": -speed if motion == "reverse" else speed})
         item["effects"] = effects
-    if "loop" in c:
+    if "loop" in c and not note.get("motion"):
         loop = str(c.get("loop") or "")
         span = _num(c.get("span") or 0, "a clip's loop") if loop else 0.0
         if loop in ("loop", "pingpong") and span > 0:
@@ -1089,7 +1132,7 @@ def editable(doc):
             gap = 0.0
         if pending:
             before, after, tfx = pending
-            clip["in"] = max(0.0, start - before * clip["speed"])
+            clip["in"] = max(0.0, start - before * _step(clip))
             clip["length"] = length + before
             clip["transition"] = round(before + after, 4)
             if tfx:
@@ -1420,8 +1463,7 @@ def rebuild(doc, edit, stamp="", may_use=None):
                              "in_offset": _rt(head, rate), "out_offset": _rt(before, rate)})
         item = copy.deepcopy(ref if isinstance(ref, dict) else source[ref])
         _dress(item, given, may_use, rate)
-        speed = clip_time(item)["speed"]
-        item["source_range"] = _range(start + head * speed, length - head - tail, rate)
+        item["source_range"] = _range(max(0.0, start + head * _step(clip_time(item))), length - head - tail, rate)
         if name is not None:
             item["name"] = name[:200]
         children.append(item)
@@ -1970,6 +2012,20 @@ def _speed(clip):
     return max(MIN_SPEED, min(MAX_SPEED, s)) if s > 0 and not _still_clip(clip) else 1.0
 
 
+def _motion(clip):
+    """"reverse" / "freeze" / "" (the Edit tab's motionOf): not on a still or a title."""
+    m = clip.get("motion")
+    return m if m in ("reverse", "freeze") and not _still_clip(clip) else ""
+
+
+def _step(clip):
+    """Seconds of source per second of the clip (stepOf): the speed, negative reversed, 0 frozen.
+    Also takes clip_time's answer (a dict with speed and motion and no file)."""
+    m = clip.get("motion") if clip.get("motion") in ("reverse", "freeze") and not _still_clip(clip) else ""
+    s = _speed(clip)
+    return 0.0 if m == "freeze" else -s if m == "reverse" else s
+
+
 def _loop(clip):
     """``(mode, span)``: "loop" / "pingpong" and one turn in seconds of source, or ``("", 0.0)`` (loopOf)."""
     try:
@@ -1977,7 +2033,7 @@ def _loop(clip):
     except (TypeError, ValueError):
         span = 0.0
     mode = clip.get("loop")
-    return (mode, span) if mode in ("loop", "pingpong") and span > 0 and not _still_clip(clip) else ("", 0.0)
+    return (mode, span) if mode in ("loop", "pingpong") and span > 0 and not _still_clip(clip) and not _motion(clip) else ("", 0.0)
 
 
 def source_moment(clip, u):
@@ -1987,6 +2043,11 @@ def source_moment(clip, u):
     frames by it (timeline_render.clip_frames)."""
     start = float(clip.get("in") or 0)
     q = max(0.0, float(u)) * _speed(clip)
+    motion = _motion(clip)
+    if motion == "freeze":
+        return start
+    if motion == "reverse":
+        return max(0.0, start - q)
     mode, span = _loop(clip)
     if mode == "loop":
         q = q % span
@@ -2020,6 +2081,10 @@ def _runs(clip, u0, u1):
     speed = _speed(clip)
     mode, span = _loop(clip)
     start = float(clip.get("in") or 0)
+    if _motion(clip) == "freeze":
+        return [(u0, u1, start, start, False)]
+    if _motion(clip) == "reverse":
+        return [(u0, u1, max(0.0, start - u0 * speed), max(0.0, start - u1 * speed), True)]
     if not mode:
         return [(u0, u1, start + u0 * speed, start + u1 * speed, False)]
     turn = span / speed

@@ -745,17 +745,22 @@ export const EditTrimMixin = {
 
     /** A clip's speed and loop, said on its block: "62 %", "loop x2.5" - and drawn (CSS: .retimed, .looped). */
     _editTlBadges(b, clip) {
-        const sp = D.speedOf(clip), loop = D.loopOf(clip);
-        b.classList.toggle("retimed", sp !== 1);
+        const sp = D.speedOf(clip), loop = D.loopOf(clip), motion = D.motionOf(clip);
+        b.classList.toggle("retimed", sp !== 1 || !!motion);
         b.classList.toggle("looped", !!loop);
-        if (sp === 1 && !loop) return;
+        b.classList.toggle("frozen", motion === "freeze");
+        b.classList.toggle("reversed", motion === "reverse");
+        if (sp === 1 && !loop && !motion) return;
         const doc = b.ownerDocument;
         const tag = doc.createElement("span");
         tag.className = "edit-badge-time";
         const turns = loop ? Math.round(Number(clip.length) * sp / Number(clip.span) * 10) / 10 : 0;
-        tag.textContent = [sp !== 1 ? Math.round(sp * 100) + " %" : "", loop ? (loop === "pingpong" ? "⇄ " : "↻ ") + "×" + turns : ""]
+        tag.textContent = [motion === "freeze" ? "❚❚ freeze" : motion === "reverse" ? "◀◀" : "",
+                           sp !== 1 ? Math.round(sp * 100) + " %" : "", loop ? (loop === "pingpong" ? "⇄ " : "↻ ") + "×" + turns : ""]
             .filter(Boolean).join(" · ");
-        tag.title = (sp !== 1 ? `Retimed: ${Math.round(sp * 100)} % of its own speed (Shift+R: back to 100 %). ` : "")
+        tag.title = (motion === "freeze" ? "Freeze frame: one moment of its source held, silent. "
+                     : motion === "reverse" ? "Reversed: its source played backwards, silent. " : "")
+            + (sp !== 1 ? `Retimed: ${Math.round(sp * 100)} % of its own speed (Shift+R: back to 100 %). ` : "")
             + (loop ? `${loop === "pingpong" ? "Ping-pong" : "Looped"}: ${turns} turns of ${D.lengthLabel(clip.span)} of source.` : "");
         b.append(tag);
     },
@@ -785,6 +790,31 @@ export const EditTrimMixin = {
         if (!c) { this._editTlSay("select a clip to reset its speed"); return; }
         if (D.speedOf(c) === 1) { this._editTlSay("it plays at 100 % already"); return; }
         this._editTlApply(D.setSpeed(cut, sel, 1));
+    },
+
+    /**
+     * Freeze frame / reverse (the clip menu, the Inspector's Motion row): the
+     * clip's source held at the moment under the playhead (its first frame with
+     * the playhead off it) or played backwards; the same again takes it off. A
+     * linked partner follows (followLink). One undo step.
+     */
+    editTlMotion(sel, motion) {
+        const cut = this._editTlCut;
+        const c = cut && D.clipOf(cut, sel);
+        if (!c) { this._editTlSay("select a clip"); return; }
+        if (D.isStillClip(c)) { this._editTlSay("a still or a title has no source to freeze or reverse"); return; }
+        const to = D.motionOf(c) === motion ? "" : motion;
+        const fps = cut.fps || 24;
+        const span = D.selSpan(cut, sel);
+        const head = (Number(this.currentFrame) || 0) / fps;
+        const u = head >= span.start - 1e-6 && head < span.end - 1e-6 ? head - span.start + 0.5 / fps : 0;
+        const next = D.followLink(cut, D.setMotion(cut, sel, to, u), sel);
+        if (D.sameCut(next, cut)) return;
+        this._editTlApply(next);
+        const d = D.clipOf(next, sel);
+        this._editTlSay(to === "freeze" ? `frozen at src ${D.timecode(Number(d.in), fps)}`
+            : to === "reverse" ? `reversed: src ${D.timecode(Number(d.in), fps)} back to ${D.timecode(D.srcSpan(d).lo, fps)}`
+            : "plays forwards again");
     },
 
     /** Ctrl+L / Ctrl+Shift+L: one more turn of the selected clip's loop (ping-pong). */

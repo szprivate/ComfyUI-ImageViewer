@@ -77,13 +77,17 @@ export function srcAt(c, u) {
     const q = Math.max(0, Number(u) || 0) * D.speedOf(c);
     const mode = D.loopOf(c), span = Number(c && c.span) || 0;
     const base = Number(c && c.in) || 0;
+    const motion = D.motionOf(c);
+    if (motion === "freeze") return base;
+    if (motion === "reverse") return Math.max(0, base - q);
     if (!mode) return base + q;
     if (mode === "loop") return base + (q % span);
     const p = q % (2 * span);
     return base + (p < span ? p : 2 * span - p);
 }
 
-const audible = (c) => { const sp = D.speedOf(c); return sp >= 0.25 && sp <= 4; };
+// (Frozen and reversed clips are silent, as in playback.)
+const audible = (c) => { const sp = D.speedOf(c); return sp >= 0.25 && sp <= 4 && !D.motionOf(c); };
 
 /**
  * Every source heard at `seconds` of the cut, as the player hears it: the

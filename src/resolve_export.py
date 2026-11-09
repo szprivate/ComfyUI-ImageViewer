@@ -184,6 +184,10 @@ def _turns(clip, u0, u1, rate):
     A loop is what the render plays (timeline_render.source_moment), as clips."""
     speed = _exact(clip.get("speed") or 1) or Fraction(1)
     start = clip["_src"]
+    if clip.get("motion") == "freeze":      # one moment held: a timeMap whose value stands still
+        return [(u0, u1, start, Fraction(0))]
+    if clip.get("motion") == "reverse":     # backwards from its in point, the moment at its head
+        return [(u0, u1, start - Fraction(u0) / rate * speed, -speed)]
     span = _exact(clip.get("span") or 0)
     loop = clip.get("loop") if span > 0 else ""
     if not loop:
@@ -218,7 +222,8 @@ def _clip_pieces(c, u0, u1, at, rate, info, track, enabled=True):
              "start": at + a, "dur": b - a, "src": src, "speed": speed, "still": still, "u": a,
              "volume": float(c.get("volume", 1.0) if c.get("volume") is not None else 1.0),
              "mute": bool(c.get("mute")), "fx": c.get("fx") or {}, "enabled": enabled and not c.get("disabled"), "track": track,
-             "looped": bool(c.get("loop"))} for a, b, src, speed in turns]
+             "looped": bool(c.get("loop")), "motion": "" if still else str(c.get("motion") or "")}
+            for a, b, src, speed in turns]
 
 
 def _clamp(piece, lo, hi, rate):
@@ -435,8 +440,12 @@ def build_model(doc, probes, frames=None, empty_ok=False):
         raise ExportError("no clip of this cut can be read")
     if any(p["speed"] != 1 for p in every):
         say("Retimed sound plays as Resolve retimes it; the viewer plays it like tape, and silent past 4x.")
-    if any(p["speed"] < 0 for p in every):
+    if any(p["speed"] < 0 and p.get("looped") for p in every):
         say("Ping-pong loops come as forward and backward clips; a backward clip needs checking in Resolve.")
+    if any(p.get("motion") == "reverse" for p in every):
+        say("Reversed clips come as a backward timeMap; check them in Resolve.")
+    if any(p.get("motion") == "freeze" for p in every):
+        say("Freeze frames come as a timeMap that holds one moment (Resolve's freeze frame); check them in Resolve.")
     if any(p.get("looped") for p in every):
         say("Loops come as the clip repeated: Resolve has no loop, so they no longer stretch as one clip.")
     if any(effective(p.get("fx")) and (effective(p["fx"])["fh"] or effective(p["fx"])["fv"]) for p in every):

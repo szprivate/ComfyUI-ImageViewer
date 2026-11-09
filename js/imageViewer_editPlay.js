@@ -528,11 +528,12 @@ export const EditPlayMixin = {
                 el = slots.find((s) => s !== main && s._epUrl === url) || slots.find((s) => s !== main);
                 el._epNext = null;
                 if (el._epUrl !== url) this._editPlayLoad(el, url);
-                if (Math.abs((el.currentTime || 0) - u.local) > 0.12) { try { el.currentTime = u.local; } catch (_) {} }
+                const held = !!D.motionOf(u.clip);                   // frozen / reversed: sought, never played
+                if (Math.abs((el.currentTime || 0) - u.local) > (held ? 0.02 : 0.12)) { try { el.currentTime = u.local; } catch (_) {} }
                 el._epWait = (el._epWait || 0) + 1;                 // it is not waiting to become the picture
                 el.style.display = "block";
                 try {
-                    if (this.isPlaying) {
+                    if (this.isPlaying && !held) {
                         el.playbackRate = Math.max(0.0625, Math.min(16, (this.fps || this.editPlayFps()) / this.editPlayFps() * D.speedOf(u.clip)));
                         const p = el.play();
                         if (p && p.catch) p.catch(() => {});

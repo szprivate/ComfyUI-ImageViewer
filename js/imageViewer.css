@@ -1711,6 +1711,8 @@ textarea.param-input {
 .edit-shot.retimed::after { content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 0;
     background: repeating-linear-gradient(135deg, rgba(255,154,60,.28) 0 5px, transparent 5px 11px); }
 .edit-shot.retimed { border-color: #ff9a3c; }
+.edit-shot.frozen { border-color: #5fb8ff; }
+.edit-shot.reversed { border-style: dashed; }
 .edit-shot.looped { border-color: #4de1ff; }
 .edit-badge-time { position: absolute; right: 3px; top: 2px; z-index: 2; pointer-events: auto; font-size: 9px; line-height: 12px;
                    padding: 0 3px; border-radius: 2px; background: rgba(0,0,0,.7); color: #ffcf9a; white-space: nowrap; }

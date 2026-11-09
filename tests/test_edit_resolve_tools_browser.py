@@ -246,5 +246,39 @@ class EditResolveToolsBrowserTests(Base):
         self.assertEqual(self.errors, [])
 
 
+    # ── freeze frame, reverse ──
+
+    def test_reverse_and_freeze_from_the_menu_and_the_inspector_and_how_they_play(self):
+        # V1: a 0-96 (a film, in 0), c 96-168, b 168-264 (frames).
+        pg = self.page()
+        self.fit(pg)
+        items = self.menu_has(pg, *self.x_at(pg, 1.0))
+        self.assertIn("Reverse clip", items)
+        self.assertIn("Freeze frame", items)
+        pg.locator(".previz-menu-item", has_text="Reverse clip").first.click()
+        c = pg.evaluate("() => { const c = __panel._editTlCut.clips[0]; return [c.motion, c.in, c.length]; }")
+        self.assertEqual(c, ["reverse", 4, 4])
+        self.assertEqual(self.undo_len(pg), 1)
+        self.assertIn("\u25c0\u25c0", pg.evaluate("() => __panel._editTlUi.rows.querySelector('.edit-shot.reversed .edit-badge-time').textContent"))
+        # Played backwards: frame 24 shows the source just before 3 s, frame by frame (stepped), silent.
+        at = pg.evaluate("() => { __panel.setFrame(24); const ep = __panel._ep; return [ep.at.local, ep.at.rev, ep.stepped]; }")
+        self.assertEqual(at, [2.9792, True, True], "the middle of frame 24: 4 s less 24.5 / 24")
+        # The Inspector: freeze at the playhead (frame 24 of the reversed clip: 3 s, the frame's middle).
+        pg.evaluate("() => { __panel._editTlSel = { kind: 'clip', i: 0 }; __panel.editTlRefresh(); }")
+        pg.evaluate("""() => { const P = __panel; P._editInspTab = 'timing'; P.editTlRefresh(); }""")
+        pg.evaluate("""() => { const s = __panel.editInspectorPanel.querySelector("[data-field='motion']"); s.value = 'freeze'; s.dispatchEvent(new Event('change')); }""")
+        c = pg.evaluate("() => { const c = __panel._editTlCut.clips[0]; return [c.motion, Math.round(c.in * 48), c.length]; }")
+        self.assertEqual(c, ["freeze", 143, 4], "held at 3 s less half a frame")
+        self.assertEqual(pg.evaluate("() => { __panel.setFrame(80); return __panel._ep.at.local; }"), pg.evaluate("() => __panel._editTlCut.clips[0].in"))
+        items = self.menu_has(pg, *self.x_at(pg, 1.0))
+        self.assertIn("\u2713 Freeze frame", items)
+        pg.keyboard.press("Escape")
+        # Saved: the motion goes to the file; undone, the clip plays forwards from 0 again.
+        pg.evaluate("() => __panel._editTlSave()")
+        pg.wait_for_function("() => (window.__saves || []).length > 0", timeout=5000)
+        self.assertEqual(pg.evaluate("() => window.__saves.at(-1).edit.clips.map(c => c.motion)"), ["freeze", "", ""])
+        self.assertEqual(self.errors, [])
+
+
 if __name__ == "__main__":
     unittest.main()

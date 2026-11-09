@@ -48,8 +48,9 @@ const SOUND_RE = /\.(wav|mp3|flac|ogg|m4a|aac)$/i;
  */
 export function stripWindow(m, dur) {
     const c = m.clip || { in: m.in, length: m.length };
-    const lo = Math.max(0, Number(c.in) || 0);
-    const hi = lo + Math.max(0.001, D.srcUse(c));
+    const span = m.clip ? D.srcSpan(c) : { lo: Number(c.in) || 0, hi: (Number(c.in) || 0) + D.srcUse(c) };
+    const lo = Math.max(0, span.lo);
+    const hi = Math.max(lo + 0.001, span.hi);
     const q = Math.max(0.25, Math.pow(2, Math.ceil(Math.log2(Math.max(0.01, (hi - lo) / 2)))));
     let start = Math.floor(lo / q + 1e-9) * q, end = Math.ceil(hi / q - 1e-9) * q;
     if (dur > 0) end = Math.min(end, Math.ceil(dur * 1000) / 1000);
@@ -249,7 +250,7 @@ export const EditMediaMixin = {
         for (let px = Math.floor(x0); px < x1; px++) {
             const u0 = (px / W) * m.length;
             const t0 = m.clip ? D.srcLocal(m.clip, u0) : m.in + u0;
-            const t1 = t0 + (m.length / W) * (m.clip ? D.speedOf(m.clip) : 1);
+            const t1 = t0 + (m.length / W) * (m.clip ? Math.max(1e-3, Math.abs(D.stepOf(m.clip))) : 1);
             const b0 = Math.floor(t0 * bps);
             if (first === null) first = t0;
             last = t0;

@@ -64,6 +64,8 @@ Press <kbd>M</kbd> to put a marker at the playhead. With a clip selected and the
 
 **Transitions**: the Effects panel has Cross Dissolve, Dip to Black, Dip to White and Wipe. Drop one on a cut. Right-click a transition's bar to change its type, or select it to set its length, its dip colour or its wipe direction in the Inspector. The export renders them; Export to Resolve turns dips and wipes into cross dissolves.
 
+**Freeze frame and reverse**: right-click a clip and pick Freeze frame (the frame under the playhead is held for the whole clip, or its first frame when the playhead is not on it) or Reverse clip (the same frames, last one first). Pick it again to take it off; the Inspector's Timing tab has the same choice under Motion. Both are silent. A reversed clip can still be retimed; a frozen one is just made longer or shorter. They are rendered in the export, saved in the .otio (as OTIO's own FreezeFrame and a negative LinearTimeWarp), and come to Resolve as a held or backward time map.
+
 **Dynamic trim** (<kbd>W</kbd>, or the ⟨…⟩ button on the bar): with it on, <kbd>J</kbd> / <kbd>L</kbd> move the selected cut backwards / forwards frame by frame, as if playing it, and <kbd>K</kbd> stops. Press <kbd>L</kbd> or <kbd>J</kbd> again for 2×, 4×, 8×. With a clip selected and no cut, the clip slips (Trim mode) or slides (Selection). A whole run is one undo step.
 
 <kbd>J</kbd> <kbd>K</kbd> <kbd>L</kbd> play backwards, stop and play. Press <kbd>?</kbd> on a cut's tab for every key.
