@@ -81,6 +81,7 @@ export const EDIT_KEYS = [
     ["Inspector diamond \u25c7", "Keyframe the row at the playhead (filled: a key here); \u25c2 \u25b8 the key before / after; once animated, a change makes a key by itself; right-click: ease; its reset takes the keys too"],
     ["Keyframe marks on the selected clip", "Drag along the clip to move a key (snaps to frames and the playhead); click + Del takes it away; right-click: linear / ease in / ease out / ease in-out / hold"],
     ["D", "Disable / enable the selected clips (and their linked sound or picture): dimmed, not seen, not heard, not rendered - the track under shows"],
+    ["F", "Match frame: open the source of the clip under the playhead (the selected one when the playhead is in it, else the picture on top) in the Viewer tab, on the frame the cut shows"],
     ["Ctrl+Alt+L", "Unlink a film's sound onto a sound track / relink it, from either part (the offset stays; right-click: Resync, Merge audio back into clip)"],
     ["M", "A marker at the playhead: on the selected clip when the playhead is inside it (it rides with the picture), else on the timeline; M on a marker opens it"],
     ["Alt+M", "Take away the markers at the playhead"],
@@ -192,6 +193,7 @@ export const EditKeysMixin = {
         else if (letter === "n" && !shift) this.editTlSnapToggle();
         else if (letter === "e" && !shift) this.editTlExtendEdit();
         else if (letter === "d" && !shift) this.editTlDisableToggle();
+        else if (letter === "f" && !shift && this.editTlMatchFrame) this.editTlMatchFrame();
         else if (letter === "y") this.editTlSelectForward(shift ? -1 : 1, false);
         else if (low === "z" && shift) this._editTlZoom(1);
         else if (low === "s" && !shift) this.editTlSplitAtPlayhead();

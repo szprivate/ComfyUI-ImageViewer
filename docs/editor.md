@@ -46,6 +46,7 @@ The middle of a cut rolls it in both modes. Double-click a cut (either side of i
 | Cut at the playhead | <kbd>Ctrl</kbd>+<kbd>B</kbd> |
 | Delete, leaving a gap / closing it | <kbd>Del</kbd> / <kbd>Shift</kbd>+<kbd>Del</kbd> |
 | Switch a clip off | <kbd>D</kbd> |
+| See the source of the frame under the playhead (match frame) | <kbd>F</kbd>, or right-click › Match frame |
 | Retime a clip | <kbd>Alt</kbd>+drag an edge |
 | Loop a clip longer than its source | <kbd>Ctrl</kbd>+drag its out edge |
 | Set in / out | <kbd>I</kbd> / <kbd>O</kbd>, or <kbd>X</kbd> around the clip |
