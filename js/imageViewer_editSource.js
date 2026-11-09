@@ -1,47 +1,63 @@
 // imageViewer_editSource.js
-// The Edit tab's Source viewer (dock id `editSource`, the bar's Timeline group), as
-// Resolve's source monitor beside the timeline's: a file loaded on its own - a
-// film, a still or a sound - with its own playhead and its own in / out, and the
-// edits that bring the marked part into the cut: three-point editing.
+// The Edit tab's Source viewer, as Resolve's source monitor beside its timeline
+// viewer: a file loaded on its own - a film, a still or a sound - with its own
+// playhead and its own in / out, and the edits that bring the marked part into
+// the cut: three-point editing.
+//
+// It is no dock panel: it stands in the main area LEFT of the picture
+// (`editSourcePanel`, `.src-monitor`, made in imageViewer.js before #viewport),
+// and only with a cut's tab. Two layouts, Resolve's Single / Dual Viewer:
+// dual - the source left, the timeline's picture right, side by side; single -
+// one viewer, showing the source OR the timeline, Q switching (`editSrcSwap`).
+// On / off with the bar's Source viewer button or the Timeline group's item
+// (`editSrcToggle`, kept as `_editTlWanted().editSource`); the layout and what a
+// single viewer shows in localStorage `imageviewer.viewer.editViewer`.
 //
 //   F9  Insert          Shift+F9   -
 //   F10 Overwrite       Shift+F10  Ripple overwrite
 //   F11 Replace         Shift+F11  Fit to fill
 //   F12 Place on top    Shift+F12  Append at end
 //
-// The three points (`D.threePoint`): the source's in / out and the timeline's in /
-// out (the transport's range, `_editTlRangeSeconds`), the timeline's playhead
-// standing in for its in; the fourth follows. The edit itself is `D.sourceEdit`,
-// one undo step through `_editTlApply`; the destination (Resolve's track
-// patching) is the panel's track menu: a picture goes to a video track (V1 the
-// default, else the selected clip's), a sound to a sound track.
+// The edits are buttons in the timeline's own bar (SOURCE_BUTTONS, their icons
+// in imageViewer_editIcons.js). The three points (`D.threePoint`): the source's
+// in / out and the timeline's in / out (the transport's range,
+// `_editTlRangeSeconds`), the timeline's playhead standing in for its in; the
+// fourth follows. The edit itself is `D.sourceEdit`, one undo step through
+// `_editTlApply`. Where it goes is Resolve's track patching: while the Source
+// viewer is up every track header has a patch box at its left; the source's V1
+// box stands on the video track a picture goes to, its A1 box on the sound
+// track a sound goes to, and a click on another track's box moves it there
+// (`editSrcPatchTo`; `view.srcTrack` / `view.srcAudio`, V1 / the first sound
+// track when nothing was patched).
 //
 // Loaded by a drop (the History's thumbnails, the file browser's rows, files
 // from the desktop - the same items a drop on the timeline takes, through
 // `_editTlResolve`), by the clip menu's "Open in Source viewer", and by Match
-// frame (F) while this panel is up. Shift+F is the way back: the playhead to
-// where the cut shows the source's frame (`D.findSource`).
+// frame (F) while it is up. Shift+F is the way back: the playhead to where the
+// cut shows the source's frame (`D.findSource`).
 //
 // The source's time is counted in the cut's frames: its playhead and marks land
 // on 1/fps of the cut. Kept per viewer in localStorage (`imageviewer.viewer.editSource`).
 import * as D from "./imageViewer_editTimelineData.js";
+import { setEditIcon } from "./imageViewer_editIcons.js";
 
 export const SOURCE_ID = "editSource";
 const STORE = "imageviewer.viewer.editSource";
+const VIEWER_STORE = "imageviewer.viewer.editViewer";
 const DRAG_TYPE = "application/x-imageviewer-history";
 const STILL_SECONDS = 3;
 const SOUND = /\.(wav|mp3|flac|ogg|m4a|aac)$/i;
 const STILL = /\.(png|jpe?g|webp|tiff?|gif|bmp|avif|exr)$/i;
 
-/** The edit buttons, in their order: [kind, label, key, shift]. */
+/** The edit buttons, in their order: [kind, label, key, shift, icon]. */
 export const SOURCE_BUTTONS = [
-    ["insert", "Insert", "F9", false],
-    ["overwrite", "Overwrite", "F10", false],
-    ["replace", "Replace", "F11", false],
-    ["place", "Place on top", "F12", false],
-    ["ripple", "Ripple overwrite", "F10", true],
-    ["fit", "Fit to fill", "F11", true],
-    ["append", "Append at end", "F12", true],
+    ["insert", "Insert", "F9", false, "srcInsert"],
+    ["overwrite", "Overwrite", "F10", false, "srcOverwrite"],
+    ["replace", "Replace", "F11", false, "srcReplace"],
+    ["place", "Place on top", "F12", false, "srcPlace"],
+    ["ripple", "Ripple overwrite", "F10", true, "srcRipple"],
+    ["fit", "Fit to fill", "F11", true, "srcFit"],
+    ["append", "Append at end", "F12", true, "srcAppend"],
 ];
 
 /** The edit a function key stands for: (key, shift) -> kind, or "". */
@@ -52,8 +68,107 @@ export function sourceEditKey(key, shift) {
 
 export const EditSourceMixin = {
 
+    /** The Source viewer is wanted on the cut's tab (whether a single viewer shows it or the timeline). */
+    _editSrcOn() {
+        return !!(this.isEditTab && this.isEditTab() && this._editTlWanted && this._editTlWanted()[SOURCE_ID]);
+    },
+
+    /** It is on screen. */
     _editSrcUp() {
-        return !!(this.isPanelDocked && this.isPanelDocked(SOURCE_ID));
+        if (!this._editSrcOn()) return false;
+        const v = this._editSrcViewer();
+        return v.mode === "dual" || v.show === "source";
+    },
+
+    /** { mode: "dual" | "single", show: "source" | "timeline" } (what a single viewer shows). */
+    _editSrcViewer() {
+        if (this._editSrcV) return this._editSrcV;
+        let kept = null;
+        try { kept = JSON.parse(window.localStorage.getItem(VIEWER_STORE) || "null"); } catch (_) {}
+        kept = kept && typeof kept === "object" ? kept : {};
+        this._editSrcV = { mode: kept.mode === "single" ? "single" : "dual", show: kept.show === "timeline" ? "timeline" : "source" };
+        return this._editSrcV;
+    },
+
+    _editSrcViewerKeep() {
+        try { window.localStorage.setItem(VIEWER_STORE, JSON.stringify(this._editSrcViewer())); } catch (_) {}
+    },
+
+    /** The Source viewer on / off (`on` omitted: the other way). */
+    editSrcToggle(on) {
+        if (!this.isEditTab || !this.isEditTab()) return false;
+        const go = on === undefined ? !this._editSrcOn() : !!on;
+        if (this._editTlWant) this._editTlWant(SOURCE_ID, go);
+        if (go && this._editSrcViewer().mode === "single") this._editSrcViewer().show = "source";
+        this._editSrcViewerKeep();
+        this._editSrcLayout();
+        if (this.editTlRefresh) this.editTlRefresh();
+        if (this.barGroupsSync) this.barGroupsSync();
+        return go;
+    },
+
+    /** Single or dual viewer (`mode` omitted: the other one), as Resolve's Workspace > Single Viewer Mode. */
+    editSrcViewerMode(mode) {
+        const v = this._editSrcViewer();
+        v.mode = mode === "single" || mode === "dual" ? mode : v.mode === "dual" ? "single" : "dual";
+        if (v.mode === "single") v.show = "source";
+        this._editSrcViewerKeep();
+        if (!this._editSrcOn()) { this.editSrcToggle(true); return v.mode; }
+        this._editSrcLayout();
+        if (this.editTlRefresh) this.editTlRefresh();
+        return v.mode;
+    },
+
+    /** Q: a single viewer shows the other one - the source or the timeline. In dual mode: nothing. */
+    editSrcSwap(show) {
+        const v = this._editSrcViewer();
+        if (!this._editSrcOn()) { if (show !== "timeline") this.editSrcToggle(true); return; }
+        if (v.mode !== "single") return;
+        v.show = show === "source" || show === "timeline" ? show : v.show === "source" ? "timeline" : "source";
+        if (v.show === "source" && this.isPlaying && this.stop) this.stop();
+        if (v.show === "timeline" && this._editSrcPlaying) this.editSrcPlay(false);
+        this._editSrcViewerKeep();
+        this._editSrcLayout();
+        if (this.editTlRefresh) this.editTlRefresh();
+    },
+
+    /**
+     * Make the main area match: the Source viewer left of the picture (dual), in its place (single,
+     * showing the source), or gone. `onTab` false: a tab that is no cut's came up - it goes.
+     */
+    _editSrcLayout(onTab = true) {
+        const host = this.editSourcePanel, vp = this.viewport;
+        if (!host) return;
+        const up = onTab && this._editSrcUp();
+        const v = this._editSrcViewer();
+        const alone = up && v.mode === "single";
+        const was = host.style.display !== "none", wasHidden = !!(vp && vp.style.display === "none");
+        host.style.display = up ? "flex" : "none";
+        host.classList.toggle("single", alone);
+        host.classList.toggle("dual", up && !alone);
+        if (vp) vp.style.display = alone ? "none" : "";
+        if (up && !was) this.editSrcRender();
+        if (!up && this._editSrcPlaying) this.editSrcPlay(false);
+        if ((was !== up || wasHidden !== alone) && this._afterViewportMoved) this._afterViewportMoved();
+        const ui = this._editTlUi;
+        if (ui && ui.srcView) this._editSrcButtons(ui);
+    },
+
+    /** The bar's Source buttons as things stand (from editTlRefresh). */
+    _editSrcButtons(ui) {
+        const on = this._editSrcOn(), v = this._editSrcViewer();
+        const s = this._editSrcState(), cut = this._editTlCut;
+        ui.srcView.classList.toggle("on", on);
+        ui.srcView.setAttribute("aria-pressed", on ? "true" : "false");
+        const dual = v.mode === "dual";
+        if (ui.srcDual.dataset.icon !== (dual ? "dualViewer" : "singleViewer")) setEditIcon(ui.srcDual, dual ? "dualViewer" : "singleViewer");
+        ui.srcDual.title = dual ? "Dual viewer: the source left, the timeline right - click for one viewer (Q then switches source / timeline)"
+                                : `Single viewer, showing the ${v.show} (Q switches) - click for two side by side`;
+        ui.srcDual.classList.toggle("on", on && !dual);
+        for (const b of ui.srcEdits.querySelectorAll(".edit-srcedit")) {
+            b.disabled = !s || !cut || (!!s.sound && b.dataset.edit === "place");
+        }
+        if (ui.body) ui.body.classList.toggle("patching", on);
     },
 
     _editSrcFps() {
@@ -91,9 +206,11 @@ export const EditSourceMixin = {
         this._editSrc = { file, name, still, sound, dur: dur || null, in: null, out: null,
                           head: still ? 0 : Math.max(0, Math.floor((Number(src) || 0) * fps + 1e-6) / fps) };
         this._editSrcKeep();
-        if (!this._editSrcUp() && this.editTlPanelToggle) this.editTlPanelToggle(SOURCE_ID);
         this._editSrcEl = null;
+        if (!this._editSrcOn()) this.editSrcToggle(true);
+        else if (!this._editSrcUp()) this.editSrcSwap("source");
         this.editSrcRender();
+        if (this.editTlRefresh) this.editTlRefresh();
         return this._editSrc;
     },
 
@@ -128,7 +245,19 @@ export const EditSourceMixin = {
                 body.classList.remove("landing");
                 this._editSrcDrop(e.dataTransfer);
             });
+            const head = el("div", "src-head");
             const name = el("div", "src-name");
+            const small = (icon, title, fn, cls) => {
+                const b = el("button", "edit-btn src-hbtn " + cls);
+                b.title = title;
+                setEditIcon(b, icon);
+                b.addEventListener("click", (e) => { e.stopPropagation(); fn(); });
+                return b;
+            };
+            head.append(name,
+                small("dualViewer", "", () => this.editSrcViewerMode(), "src-mode"),
+                small("timelineView", "Show the timeline in this viewer (Q)", () => this.editSrcSwap("timeline"), "src-swap"),
+                small("close", "Put the Source viewer away", () => this.editSrcToggle(false), "src-close"));
             const view = el("div", "src-view");
             const scrub = el("div", "src-scrub");
             scrub.append(el("div", "src-range"), el("div", "src-line"));
@@ -147,20 +276,7 @@ export const EditSourceMixin = {
                 btn("O", "Mark the source's out at its playhead (O)", () => this.editSrcMark("out")),
                 btn("×", "Clear the source's in and out (Alt+X / Shift+X)", () => this.editSrcMark(null)),
                 tc);
-            const edits = el("div", "src-edits");
-            const dest = el("select", "src-dest");
-            dest.title = "Where the source goes (track patching): a picture to a video track, a sound to a sound track";
-            dest.addEventListener("change", () => {
-                const v = this._editTlView;
-                if (v) { v[this._editSrc && this._editSrc.sound ? "srcAudio" : "srcTrack"] = dest.value; }
-            });
-            edits.append(dest);
-            for (const [kind, label, k, shift] of SOURCE_BUTTONS) {
-                const b = btn(label, `${label} (${shift ? "Shift+" : ""}${k})`, () => this.editSrcEdit(kind), "src-edit");
-                b.dataset.edit = kind;
-                edits.append(b);
-            }
-            body.append(name, view, scrub, row, edits);
+            body.append(head, view, scrub, row);
             host.replaceChildren(body);
             this._editSrcEl = null;
         }
@@ -188,15 +304,12 @@ export const EditSourceMixin = {
             else view.replaceChildren(media);
             this._editSrcEl = media;
         } else if (!s) view.replaceChildren();
-        // The destination menu.
-        const dest = body.querySelector(".src-dest");
-        const opts = this._editSrcTracks(cut, s && s.sound);
-        const want = this._editSrcDest(cut, s && s.sound);
-        dest.replaceChildren(...opts.map((id) => { const o = el("option", "", id); o.value = id; return o; }));
-        dest.value = want;
-        for (const b of body.querySelectorAll(".src-edit")) {
-            b.disabled = !s || !cut || (s.sound && b.dataset.edit === "place");
-        }
+        // The layout buttons.
+        const v = this._editSrcViewer();
+        const mode = body.querySelector(".src-mode");
+        if (mode.dataset.icon !== (v.mode === "dual" ? "dualViewer" : "singleViewer")) setEditIcon(mode, v.mode === "dual" ? "dualViewer" : "singleViewer");
+        mode.title = v.mode === "dual" ? "Dual viewer (source | timeline) - click for a single viewer" : "Single viewer - click for source and timeline side by side";
+        body.querySelector(".src-swap").style.display = v.mode === "single" ? "" : "none";
         this._editSrcDraw();
     },
 
@@ -329,6 +442,7 @@ export const EditSourceMixin = {
         else if (low === "o" && !e.altKey) this.editSrcMark("out");
         else if (low === "x" && (e.altKey || e.shiftKey)) this.editSrcMark(null);
         else if (low === "f" && e.shiftKey) this.editSrcMatchBack();
+        else if (low === "q" && !e.shiftKey && !e.altKey && !e.ctrlKey) this.editSrcSwap();
         else if (e.key === "ArrowLeft" || e.key === "ArrowRight") this.editSrcStep((e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? Math.round(fps) : 1));
         else if (e.key === "Home") this.editSrcSeek(0);
         else if (e.key === "End") this.editSrcSeek(Infinity);
@@ -359,14 +473,31 @@ export const EditSourceMixin = {
         return sound ? tracks.map((k) => k.id) : ["V1", ...tracks.map((k) => k.id)];
     },
 
-    /** The destination: the one picked in the menu, else the selected clip's track, else V1 (a sound: the first sound track). */
+    /** The destination (the track patch): the track patched to, else V1 (a sound: the first sound track). */
     _editSrcDest(cut, sound) {
         const list = this._editSrcTracks(cut, sound);
         const v = this._editTlView || {};
         const picked = sound ? v.srcAudio : v.srcTrack;
         if (picked && list.includes(picked)) return picked;
-        if (!sound && this._editTlInsertTrack) return this._editTlInsertTrack();
         return list[0] || "";
+    },
+
+    /** Patch the source to track `id` (a video track: its picture; a sound track: its sound), as a click on its patch box. */
+    editSrcPatchTo(id) {
+        const cut = this._editTlCut, v = this._editTlView;
+        if (!cut || !v) return false;
+        if (this._editSrcTracks(cut, false).includes(id)) v.srcTrack = id;
+        else if (this._editSrcTracks(cut, true).includes(id)) v.srcAudio = id;
+        else return false;
+        if (this.editTlRefresh) this.editTlRefresh();
+        return true;
+    },
+
+    /** The bar's Source viewer button: on; in a single viewer showing the timeline, the source; else off. */
+    editSrcViewerButton() {
+        const v = this._editSrcViewer();
+        if (this._editSrcOn() && v.mode === "single" && v.show === "timeline") this.editSrcSwap("source");
+        else this.editSrcToggle();
     },
 
     /**

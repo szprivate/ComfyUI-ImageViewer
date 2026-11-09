@@ -56,7 +56,13 @@ The middle of a cut rolls it in both modes. Double-click a cut (either side of i
 
 ## The Source viewer
 
-Timeline › Source opens a second viewer for one source clip, like Resolve's source monitor. Drop a clip from the History or the file browser onto it, or right-click a clip on the timeline › Open in Source viewer. While the Source viewer is open, <kbd>F</kbd> (match frame) loads the clip there instead of opening it in the Viewer tab.
+The Source viewer is a second viewer for one source clip, like Resolve's source monitor. Turn it on with the Source viewer button on the timeline's bar (or Timeline › Source viewer). It stands to the left of the picture.
+
+It has two layouts, like Resolve's single and dual viewer modes. Switch between them with the button next to it on the bar, or the button at the top of the Source viewer:
+- **Dual**: the source on the left, the timeline's picture on the right.
+- **Single**: one viewer, showing the source or the timeline. <kbd>Q</kbd> switches between them.
+
+Drop a clip from the History or the file browser onto it, or right-click a clip on the timeline › Open in Source viewer. While the Source viewer is open, <kbd>F</kbd> (match frame) loads the clip there instead of opening it in the Viewer tab.
 
 Click the Source viewer to give it the keys. Then:
 - <kbd>Space</kbd> plays the source.
@@ -64,7 +70,7 @@ Click the Source viewer to give it the keys. Then:
 - <kbd>I</kbd> and <kbd>O</kbd> mark its in and out.
 - <kbd>Alt</kbd>+<kbd>X</kbd> clears both marks.
 
-To bring the marked part into the cut, use the buttons, or these keys from the timeline or the Source viewer:
+To bring the marked part into the cut, use the buttons on the timeline's bar (right of the Source viewer button), or these keys from the timeline or the Source viewer:
 
 | Edit | Key | What it does |
 |---|---|---|
@@ -76,7 +82,9 @@ To bring the marked part into the cut, use the buttons, or these keys from the t
 | Fit to fill | <kbd>Shift</kbd>+<kbd>F11</kbd> | retimes the marked part to fill the timeline's in-out range |
 | Append at end | <kbd>Shift</kbd>+<kbd>F12</kbd> | adds it after the last shot |
 
-This is three-point editing. Of the source's in and out and the timeline's in and out, set any three and the fourth follows. With no timeline in, the playhead counts as one. The menu in front of the buttons sets the track the clip goes to. A sound file goes to a sound track.
+This is three-point editing. Of the source's in and out and the timeline's in and out, set any three and the fourth follows. With no timeline in, the playhead counts as one.
+
+Which track the clip goes to is set in the track headers, as in Resolve. While the Source viewer is on, each header has a patch box at its left. The source's **V1** box sits on the video track its picture goes to (V1 to begin with), and its **A1** box on the sound track a sound file goes to. Click another track's box to move it there.
 
 Some browsers keep <kbd>F11</kbd> for full screen. If yours does, use the buttons.
 
@@ -116,7 +124,7 @@ Press <kbd>M</kbd> to put a marker at the playhead. With a clip selected and the
 - **Crossfade**: <kbd>Shift</kbd>+<kbd>T</kbd> at a cut between two sound clips.
 - **Sound effects**: drag one from Effects onto a sound clip.
 - **A film's own sound**: <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>L</kbd> unlinks it onto a sound track, and links it back.
-- **Mixer**: Timeline › Mixer opens a strip for each sound track (A1, the bed, and the others) and a master. Each strip has a meter, a fader, a pan, M (switch the track off) and S (solo). The fader and pan are the track's own Gain and Pan effects, so the export and Export to Resolve hear them. If you keyframed them in the Inspector, moving them sets a keyframe at the playhead. V1 has a meter only, because each film plays at its own clip volume. A double-click puts a fader back to 0 dB, or a pan back to the centre.
+- **Mixer**: Timeline › Mixer opens the mixer in its own panel, under the picture to the right of the timeline. Drag its title bar to put it somewhere else. It has a strip for each sound track (A1, the bed, and the others) and a master. Each strip has a meter, a fader, a pan, M (switch the track off) and S (solo). The fader and pan are the track's own Gain and Pan effects, so the export and Export to Resolve hear them. If you keyframed them in the Inspector, moving them sets a keyframe at the playhead. V1 has a meter only, because each film plays at its own clip volume. A double-click puts a fader back to 0 dB, or a pan back to the centre.
 
 ## Look and titles
 

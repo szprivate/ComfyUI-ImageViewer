@@ -69,6 +69,32 @@ export const EDIT_ICONS = {
     afxGain: [P("M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z"),
               P("M16 9a5 5 0 0 1 0 6"), P("M19.364 18.364a9 9 0 0 0 0-12.728")],
     afxPan: [P("m18 8 4 4-4 4"), P("M2 12h20"), P("m6 8-4 4 4 4")],
+    // The Source viewer's edits (Resolve's insert / overwrite / replace ... buttons). Drawn for this bar in
+    // Lucide's manner (24 grid, 2 px strokes): the piece is the block, the track the line under it; a FILLED
+    // block lies over what is there, an outlined one goes in between.
+    srcInsert: [P("M12 2v7"), P("m9 6 3 3 3-3"), ["rect", { x: 9, y: 13, width: 6, height: 8, rx: 1 }],
+                P("M1 17h5"), P("m4 15-2 2 2 2"), P("M18 17h5"), P("m20 15 2 2-2 2")],
+    srcOverwrite: [P("M12 2v7"), P("m9 6 3 3 3-3"), ["rect", { x: 8, y: 13, width: 8, height: 8, rx: 1, fill: "currentColor" }],
+                   P("M2 17h6"), P("M16 17h6")],
+    // lucide replace
+    srcReplace: [P("M14 4a1 1 0 0 1 1-1"), P("M15 10a1 1 0 0 1-1-1"), P("M21 4a1 1 0 0 0-1-1"), P("M21 9a1 1 0 0 1-1 1"),
+                 P("m3 7 3 3 3-3"), P("M6 10V5a2 2 0 0 1 2-2h2"), ["rect", { x: 3, y: 14, width: 7, height: 7, rx: 1 }]],
+    srcPlace: [P("M12 1v6"), P("m9 4 3 3 3-3"), ["rect", { x: 7, y: 10, width: 10, height: 5, rx: 1, fill: "currentColor" }],
+               P("M2 20h20")],
+    srcRipple: [P("M8 2v7"), P("m5 6 3 3 3-3"), ["rect", { x: 4, y: 13, width: 8, height: 8, rx: 1, fill: "currentColor" }],
+                P("M12 17h10"), P("m17 14-3 3 3 3")],
+    srcFit: [["rect", { x: 2, y: 13, width: 20, height: 8, rx: 1 }], P("M6 17h12"), P("m8 15-2 2 2 2"), P("m16 15 2 2-2 2"),
+             P("M12 2v7"), P("m9 6 3 3 3-3")],
+    srcAppend: [P("M17 2v7"), P("m14 6 3 3 3-3"), ["rect", { x: 13, y: 13, width: 8, height: 8, rx: 1 }], P("M2 17h8"), P("M10 14v6")],
+    // tv-minimal-play (the Source viewer), columns-2 (dual viewer), square (single viewer)
+    srcViewer: [P("M15.033 9.44a.647.647 0 0 1 0 1.12l-4.065 2.352a.645.645 0 0 1-.968-.56V7.648a.645.645 0 0 1 .967-.56z"),
+                P("M7 21h10"), ["rect", { width: 20, height: 14, x: 2, y: 3, rx: 2 }]],
+    dualViewer: [["rect", { width: 18, height: 18, x: 3, y: 3, rx: 2 }], P("M12 3v18")],
+    singleViewer: [["rect", { width: 18, height: 18, x: 3, y: 3, rx: 2 }]],
+    // film (the timeline in a single viewer), x (put away)
+    timelineView: [["rect", { width: 18, height: 18, x: 3, y: 3, rx: 2 }], P("M7 3v18"), P("M3 7.5h4"), P("M3 12h18"), P("M3 16.5h4"),
+                   P("M17 3v18"), P("M17 7.5h4"), P("M17 16.5h4")],
+    close: [P("M18 6 6 18"), P("m6 6 12 12")],
     fit: [P("M3 7V5a2 2 0 0 1 2-2h2"), P("M17 3h2a2 2 0 0 1 2 2v2"), P("M21 17v2a2 2 0 0 1-2 2h-2"), P("M7 21H5a2 2 0 0 1-2-2v-2"), C(12, 12, 3), P("m16 16-1.9-1.9")],
 };
 

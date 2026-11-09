@@ -65,8 +65,10 @@ const DOCK_PANELS = {
     // a cut's tab is; the bar's Timeline group opens them.
     editInspector: { prop: "editInspectorPanel", label: "Inspector", minW: 290, minH: 200, defaultRail: "right" },
     editEffects: { prop: "editEffectsPanel", label: "Effects", minW: 220, minH: 150, defaultRail: "left" },
-    editSource: { prop: "editSourcePanel", label: "Source", minW: 300, minH: 240, defaultRail: "left" },
-    editMixer: { prop: "editMixerPanel", label: "Mixer", minW: 200, minH: 220, defaultRail: "right" },
+    // (The Source viewer is no panel: it stands left of the picture, imageViewer_editSource.js. A layout that
+    // still names "editSource" is read without it.)
+    // The Mixer has a place of its own: beside the timeline, under the picture, as Resolve's.
+    editMixer: { prop: "editMixerPanel", label: "Mixer", minW: 200, minH: 220, defaultRail: "bottom", size: 0.4 },
     // (Agent code and Dataset are tabs of the main canvas, imageViewer_viewTabs.js. A saved layout that still names
     // "agentCode" or "loraDataset" is read without them: unknown ids are dropped by _normaliseDockLayout / applyDockData.)
     // The motion-graphics editor (imageViewer_mgPanel.js / imageViewer_mgEditor.js): a scene an agent wrote is a
@@ -375,6 +377,14 @@ export const DockMixin = {
                 }
             }
         } catch (_) { /* no storage: it stays where the layout has it */ }
+        // Once, too: the Mixer's home became the strip under the picture, right of the timeline (it shipped
+        // in the right rail, where it shared the height with the Inspector).
+        try {
+            if (!window.localStorage.getItem("imageviewer.viewer.mixerBottom")) {
+                window.localStorage.setItem("imageviewer.viewer.mixerBottom", "1");
+                this._dockMixerHome();
+            }
+        } catch (_) { /* no storage: it stays where the layout has it */ }
         // A panel the saved layout never mentioned (a viewer upgraded mid-flight)
         // goes back to where it shipped, put away rather than sprung on the user.
         for (const [id, spec] of Object.entries(DOCK_PANELS)) {
@@ -395,6 +405,23 @@ export const DockMixin = {
             if (spec.first) this.dockLayout[spec.defaultRail].panels.unshift(entry);
             else this.dockLayout[spec.defaultRail].panels.push(entry);
         }
+    },
+
+    // The Mixer into the strip under the picture, right after the Edit timeline (its own place there).
+    _dockMixerHome() {
+        let entry = null;
+        for (const side of ["left", "right"]) {
+            const list = this.dockLayout[side].panels;
+            const i = list.findIndex((p) => p.id === "editMixer");
+            if (i >= 0) [entry] = list.splice(i, 1);
+        }
+        if (!entry) return;
+        delete entry.tab;
+        entry.behind = false;
+        const list = this.dockLayout.bottom.panels;
+        const tl = list.findIndex((p) => p.id === "editTimeline");
+        entry.size = tl >= 0 ? Math.max(0.2, (list[tl].size || 1) * 0.4) : DOCK_PANELS.editMixer.size;
+        list.splice(tl >= 0 ? tl + 1 : list.length, 0, entry);
     },
 
     // ── Queries ──────────────────────────────────────────────────────────────

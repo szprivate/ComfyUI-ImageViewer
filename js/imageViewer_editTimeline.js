@@ -94,6 +94,7 @@ import { app } from "../../scripts/app.js";
 import * as D from "./imageViewer_editTimelineData.js";
 import { nodeMediaClips, selectedNodes } from "./imageViewer_sendFromNode.js";
 import { setEditIcon } from "./imageViewer_editIcons.js";
+import { SOURCE_BUTTONS, SOURCE_ID } from "./imageViewer_editSource.js";
 import { canvasContext, exportTarget, notice, openExportDialog, openFilePicker } from "./imageViewer_exportUI.js";
 
 const DOCK_ID = "editTimeline";
@@ -106,7 +107,9 @@ const EFFECT_TYPE = "application/x-imageviewer-effect";      // an item of the E
 const AFX_DRAG = "application/x-imageviewer-afx";            // a sound effect of the Effects panel, dragged (imageViewer_editAfx.js)
 const PREFIX = "edit:";                       // an Edit tab's key (EditPlayMixin.isEditTab)
 // The three panels that belong to a cut. They are up only while a cut's tab is.
-export const EDIT_PANELS = ["editTimeline", "editInspector", "editEffects", "editMixer", "editSource"];
+// (The Source viewer is not a dock panel: it stands left of the picture - imageViewer_editSource.js - and comes
+// and goes with the cut's tab by `_editTlWanted().editSource` too.)
+export const EDIT_PANELS = ["editTimeline", "editInspector", "editEffects", "editMixer"];
 const PANELS_STORE = "imageviewer.viewer.editPanels";
 // Tall enough for a filmstrip with the sound under it, and for a waveform.
 export const ROW_HEIGHT = { text: 16, video: 44, audio: 30 };
@@ -143,6 +146,7 @@ export const EditTimelineMixin = {
 
     /** Show or hide one of the Edit panels (only on a cut's tab), and remember it. */
     editTlPanelToggle(id) {
+        if (id === SOURCE_ID) { if (this.editSrcToggle) this.editSrcToggle(); return; }
         if (!this.isEditTab() || !this.setPanelDocked) return;
         const open = !this.isPanelDocked(id);
         this._editTlWant(id, open);
@@ -347,6 +351,7 @@ export const EditTimelineMixin = {
                 if (this.isPanelDocked(id) && this.isPanelFront && !this.isPanelFront(id)) this.dockTabFront(id);
             }
         }
+        if (this._editSrcLayout) this._editSrcLayout();
         this.editTlRefresh();
     },
 
@@ -363,6 +368,7 @@ export const EditTimelineMixin = {
             if (left) this._editTlWant(id, open);
             if (open) this.setPanelDocked(id, false);
         }
+        if (this._editSrcLayout) this._editSrcLayout(false);
         if (this.barGroupsSync) this.barGroupsSync();
     },
 
@@ -526,7 +532,28 @@ export const EditTimelineMixin = {
         proxy.classList.add("edit-proxy-btn");
         setEditIcon(proxy, "proxy");
         const sep = el("span", "edit-sep");
-        bar.append(fresh, opener, recent, out, sep, add, pick, trimBtn, blade, dynamic, snap, beats, split, undo, redo, auto, cuts, take, sub, badge,
+        // The Source viewer (imageViewer_editSource.js): on / off, one viewer or two, and its edits as
+        // Resolve's buttons over the timeline - insert, overwrite, replace, place on top, ripple overwrite,
+        // fit to fill, append.
+        const srcView = button("", "Source viewer: a clip on its own, left of the picture, with its own in and out "
+                               + "(three-point editing)", () => this.editSrcViewerButton && this.editSrcViewerButton());
+        srcView.classList.add("edit-srcview-btn");
+        setEditIcon(srcView, "srcViewer");
+        const srcDual = button("", "", () => this.editSrcViewerMode && this.editSrcViewerMode());
+        srcDual.classList.add("edit-srcdual-btn");
+        setEditIcon(srcDual, "dualViewer");
+        const srcEdits = el("span", "edit-srcedits");
+        for (const [kind, label, k, shift, iconName] of SOURCE_BUTTONS) {
+            const b = button("", `${label} (${shift ? "Shift+" : ""}${k}): the Source viewer's marked part into the cut`,
+                             () => this.editSrcEdit && this.editSrcEdit(kind));
+            b.classList.add("edit-srcedit");
+            b.dataset.edit = kind;
+            setEditIcon(b, iconName);
+            srcEdits.append(b);
+        }
+        const sep2 = el("span", "edit-sep");
+        bar.append(fresh, opener, recent, out, sep, add, pick, trimBtn, blade, dynamic, snap, beats, split, undo, redo, auto, cuts, take,
+                   sep2, srcView, srcDual, srcEdits, sub, badge,
                    audio, scrubAudio, proxy, zoomOut, zoomIn, zoomFit);
 
         // The tracks: their headers in a column that stays, the tracks beside it
@@ -692,7 +719,7 @@ export const EditTimelineMixin = {
         });
         this._editTlUi = { host, savedBar, empty, body, sub, badge, out, main, heads, scroll, area, ruler, rows,
                            head, drop, hint, blade, dynamic, split, undo, redo, auto, cuts, take, pick, trimBtn, snap, beats, zoomOut, zoomIn, zoomFit,
-                           audio, scrubAudio, proxy, tc, hbox, headsV, headsA, hsplit, secV, secA, splitter: splitBar, vPinned: true };
+                           audio, scrubAudio, proxy, srcView, srcDual, srcEdits, tc, hbox, headsV, headsA, hsplit, secV, secA, splitter: splitBar, vPinned: true };
         if (this._editTlSecBind) this._editTlSecBind(this._editTlUi);
         this._editTlWatchCanvas();
         return this._editTlUi;
@@ -767,6 +794,7 @@ export const EditTimelineMixin = {
         ui.beats.disabled = !snapOn;
         if (this._editAudioButtons) this._editAudioButtons(ui);
         if (this._editProxyButton) this._editProxyButton(ui);
+        if (this._editSrcButtons) this._editSrcButtons(ui);
         if (this.editTlAnswerButton) this.editTlAnswerButton(ui.take); else ui.take.style.display = "none";
         ui.badge.textContent = dirty ? (this._editTlSaved ? "changed \u2014 not saved" : "new cut \u2014 not saved") : "";
         ui.badge.className = "edit-badge" + (dirty ? " dirty" : "");
@@ -1023,6 +1051,30 @@ export const EditTimelineMixin = {
         };
         const cut = this._editTlCut;
         const off = row.track ? !!row.track.off : !!(cut.off && cut.off[row.id]);
+        // Resolve's track patching, while the Source viewer is up: a box at the header's left; the source's
+        // V1 stands on the video track its picture goes to, its A1 on the sound track a sound goes to. A click
+        // on another track's box patches the source there (imageViewer_editSource.js, editSrcPatchTo).
+        if (this._editSrcOn && this._editSrcOn()) {
+            const patch = doc.createElement("button");
+            patch.className = "edit-hpatch";
+            const video = row.kind === "video" && row.id !== "T";
+            const sound = row.kind === "audio" && row.id !== "A1";
+            if (video || sound) {
+                const on = this._editSrcDest(cut, sound) === row.id;
+                patch.classList.toggle("on", on);
+                patch.classList.add(video ? "v" : "a");
+                patch.textContent = on ? (video ? "V1" : "A1") : "";
+                patch.title = on ? (video ? "The source's picture goes to this track (track patching)" : "A sound from the Source viewer goes to this track")
+                                 : (video ? "Patch the source's picture to this track" : "Patch a sound from the Source viewer to this track");
+                patch.dataset.patch = row.id;
+                patch.addEventListener("click", (e) => { e.stopPropagation(); this.editSrcPatchTo(row.id); });
+            } else {
+                patch.disabled = true;
+                patch.classList.add("none");
+                patch.title = row.id === "A1" ? "The bed: the Source viewer's edits do not go here" : "";
+            }
+            hd.append(patch);
+        }
         hd.append(name, small("\u25cf", off ? "Switched off (playback) - click to switch this track on"
                                              : "Switch this track off (playback): not seen, not heard, not rendered - it can still be edited", !off,
                               () => this._editTlApply(D.setTrackOff(cut, row.id, !off))));
