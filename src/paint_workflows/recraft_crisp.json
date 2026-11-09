@@ -1,0 +1,139 @@
+{
+ "id": "b2644242-348b-46e7-80e6-b48d56b98495",
+ "revision": 0,
+ "last_node_id": 7,
+ "last_link_id": 7,
+ "nodes": [
+  {
+   "id": 3,
+   "type": "SaveImage",
+   "pos": [
+    1630.7865757123009,
+    2333.0000586627034
+   ],
+   "size": [
+    640,
+    982.3828125
+   ],
+   "flags": {},
+   "order": 4,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 6
+    }
+   ],
+   "outputs": [],
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.11.1"
+   },
+   "widgets_values": [
+    "ComfyUI"
+   ],
+   "title": "paint:output"
+  },
+  {
+   "id": 2,
+   "type": "LoadImage",
+   "pos": [
+    894.000029911564,
+    2333.0000586627034
+   ],
+   "size": [
+    282.78645833333337,
+    441.6796875
+   ],
+   "flags": {},
+   "order": 2,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      5
+     ]
+    },
+    {
+     "name": "MASK",
+     "type": "MASK",
+     "links": null
+    }
+   ],
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.11.1",
+    "Node name for S&R": "LoadImage"
+   },
+   "widgets_values": [
+    "man_with_rose.png",
+    "image"
+   ],
+   "title": "paint:image"
+  },
+  {
+   "id": 7,
+   "type": "RecraftCrispUpscaleNode",
+   "pos": [
+    1270,
+    2330
+   ],
+   "size": [
+    228.640234375,
+    26
+   ],
+   "flags": {},
+   "order": 3,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "image",
+     "type": "IMAGE",
+     "link": 5
+    }
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      6
+     ]
+    }
+   ],
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.16.1",
+    "Node name for S&R": "RecraftCrispUpscaleNode"
+   },
+   "color": "#432",
+   "bgcolor": "#653",
+   "title": "paint:tune"
+  }
+ ],
+ "links": [
+  [
+   5,
+   2,
+   0,
+   7,
+   0,
+   "IMAGE"
+  ],
+  [
+   6,
+   7,
+   0,
+   3,
+   0,
+   "IMAGE"
+  ]
+ ],
+ "groups": [],
+ "config": {},
+ "version": 0.4
+}

@@ -223,7 +223,7 @@ const STYLE = `
 .paint-dlg .paint-dlg-range { flex: 1 1 90px; min-width: 70px; background: none; border: 0; padding: 0; accent-color: #f60; }
 .paint-dlg .paint-dlg-range + input[type=number] { width: 64px; flex: 0 0 auto; }
 .paint-dlg .go { display: flex; justify-content: flex-end; gap: 6px; margin-top: 12px; }
-.paint-dlg .note { color: #999; font-size: 11px; margin-top: 6px; }
+.paint-dlg .note { color: #999; font-size: 11px; margin-top: 6px; white-space: pre-line; }
 .paint-tipsdlg { max-width: 560px; width: min(560px, 92%); }
 .paint-tipdrop { border: 1px dashed #666; border-radius: 5px; padding: 12px; display: flex; flex-direction: column; align-items: center; gap: 6px; color: #bbb; }
 .paint-tipdrop.hot { border-color: #f60; background: rgba(255,102,0,.08); }
@@ -3067,7 +3067,8 @@ class PaintEditor {
                 { label: "Colour range…", run: () => this.colorRangeDialog() }, "-",
                 ...[["expand", "Expand…", "By (px)"], ["contract", "Contract…", "By (px)"], ["smooth", "Smooth…", "Radius (px)"], ["border", "Border…", "Width (px)"]].map(([kind, label, what]) => (
                     { label, disabled: !this.sel, run: () => this.dialog(label.slice(0, -1), [["r", what, kind === "border" ? 6 : 4, 1, 200]], (v) => this.modifySelection(kind, v.r)) })), "-",
-                { label: "Subject (agentY)…", run: () => this.host.generate && this.host.generate("select_subject", {}) }];
+                { label: "Subject", run: () => this.host.generate && this.host.generate("select_subject", {}) },
+                { label: "Objects (SAM3)…", disabled: !this.host.generateDialog, run: () => this.host.generateDialog("select_objects") }];
     }
 
     selectLayerAlpha() {
@@ -3164,10 +3165,12 @@ class PaintEditor {
                 { label: "Fill from the surroundings (here, no AI)", disabled: !this.sel, run: g("heal") },
                 { label: "Remove background", run: g("background") },
                 { label: "Select subject", run: g("select_subject") },
+                { label: "Select objects (SAM3)…", disabled: !this.host.generateDialog, run: () => this.host.generateDialog("select_objects") },
                 { label: "Extend the canvas…", run: () => this.dialog("Extend the canvas", [["px", "Pixels each side", 128, 1, 4096], ["ai", "Fill the new part with the workflow", "yes", ["yes", "no"]]],
                      (v) => this.host.generate && this.host.generate("extend", { px: v.px, ai: v.ai === "yes", prompt: this._prompt || "", variations: this._variations || 1 })) },
-                { label: "Upscale…", run: () => this.dialog("Upscale", [["k", "Times", "2", ["2", "4"]], ["ai", "With the workflow (else a plain resize)", "yes", ["yes", "no"]]],
-                     (v) => this.host.generate && this.host.generate("upscale", { k: Number(v.k), ai: v.ai === "yes" })) },
+                { label: "Upscale…", run: () => (this.host.generateDialog ? this.host.generateDialog("upscale")
+                    : this.dialog("Upscale", [["k", "Times", "2", ["2", "4"]], ["ai", "With the workflow (else a plain resize)", "yes", ["yes", "no"]]],
+                     (v) => this.host.generate && this.host.generate("upscale", { k: Number(v.k), ai: v.ai === "yes" }))) },
                 "-",
                 { label: "Generate panel (prompt, variations)", disabled: !this.host.showPanel, run: () => this.host.showPanel("generate") },
                 { label: "Workflows…", disabled: !this.host.workflows, run: () => this.host.workflows && this.host.workflows() }];
@@ -3988,6 +3991,16 @@ class PaintEditor {
         g("Select subject", "select_subject", "The selection becomes the main subject");
         g("Extend 128 px", "extend", "A bigger canvas, the new part filled by the workflow", () => ({ px: 128, ai: true }));
         g("Upscale 2x", "upscale", "Twice the size, the detail made by the workflow", () => ({ k: 2, ai: true }));
+        // The two with settings of their own: a dialog (the model, its settings; the words or the selection's box).
+        const d = (label, kind, title) => {
+            const b = this.el("button", "paint-btn", { type: "button", text: label, title });
+            b.dataset.gen = kind;
+            b.addEventListener("click", () => this.host.generateDialog && this.host.generateDialog(kind));
+            if (this.genRunning().some((j) => j.kind === kind)) b.classList.add("busy");
+            row.append(b);
+        };
+        d("Upscale…", "upscale", "Pick the upscaler and its settings");
+        d("Select objects…", "select_objects", "SAM3: select what the words name, or what is inside the selection's box");
         const opt = this.el("div", "paint-field");
         const vs = this.el("select", "", { title: "How many versions to make (each a layer of its own)" });
         for (const n of [1, 2, 3, 4]) vs.append(this.el("option", "", { value: String(n), text: String(n) }));

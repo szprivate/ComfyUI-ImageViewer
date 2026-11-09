@@ -41,10 +41,24 @@ from . import paint_ops as O
 HERE = os.path.dirname(os.path.abspath(__file__))
 BUILTIN_DIR = os.path.join(HERE, "paint_workflows")
 
-ACTIONS = ("fill", "remove", "extend", "edit", "background", "select_subject", "upscale")
+ACTIONS = ("fill", "remove", "extend", "edit", "background", "select_subject", "select_objects", "upscale")
 LABELS = {"fill": "Generative fill", "remove": "Remove object", "extend": "Extend (fill the new border)",
           "edit": "Edit with a prompt", "background": "Remove background", "select_subject": "Select subject",
-          "upscale": "Upscale with detail"}
+          "select_objects": "Select objects", "upscale": "Upscale with detail"}
+# A model that takes no mask (an edit model) is shown the place to change as a flat grey, and told so;
+# its picture is then laid in through the selection, so nothing outside it changes.
+GREY = 128
+GREY_PROMPTS = {
+    "fill": "In the flat grey area, make {prompt}. Keep everything outside the grey area exactly as it is, and match its "
+            "light, perspective and style.",
+    "remove": "Fill the flat grey area so that it matches what is around it, as if nothing had ever been there. Keep "
+              "everything else exactly as it is.",
+    "extend": "Continue the picture into the flat grey border seamlessly: the same scene, light and style{prompt_tail}. "
+              "Keep the middle exactly as it is.",
+}
+MATTES = ("background", "select_subject", "select_objects")
+FRONTEND_ONLY = {"Note", "MarkdownNote", "Reroute", "PrimitiveNode"}
+DOWNLOAD_HOSTS = ("huggingface.co",)
 # What each action works on: the selection's box (with context around it) or the whole picture.
 NEEDS_SEL = ("fill", "remove")
 MASKED = ("fill", "remove", "extend")
@@ -94,11 +108,51 @@ def builtins():
 
 
 def _builtin(wid):
+    """(entry, workflow) of a built-in: the workflow in the API format, or as the canvas has it ("ui")."""
     for e in builtins():
         if e["id"] == wid:
             with open(os.path.join(BUILTIN_DIR, e["file"]), encoding="utf-8") as fh:
                 return e, json.load(fh)
     return None, None
+
+
+def workflow_file(wid):
+    """What the page puts onto the canvas: {id, label, format, workflow, action...}."""
+    e, g = _builtin(wid)
+    if not e:
+        raise GenerateError(f"no built-in workflow {wid!r}")
+    return {"id": e["id"], "label": e["label"], "format": e.get("format", "api"), "workflow": g,
+            "tune": e.get("tune") or [], "api": bool(e.get("api"))}
+
+
+def installed(e, node_classes):
+    """Whether this ComfyUI has every node the built-in *e* uses (None: not known - the tests)."""
+    if node_classes is None:
+        return True
+    return all(n in node_classes or n in FRONTEND_ONLY for n in e.get("nodes") or [])
+
+
+def _models_dir(folder_paths):
+    return getattr(folder_paths, "models_dir", None) if folder_paths is not None else None
+
+
+def missing_models(e, folder_paths):
+    """The model files the built-in *e* names (from its template) that are not here: [{what, kind, folder, url}]."""
+    out = []
+    if folder_paths is None:
+        return out
+    for m in e.get("models") or []:
+        if not locate(folder_paths, m.get("directory") or "", m["name"]):
+            out.append({"what": m["name"], "kind": "model", "folder": m.get("directory") or "", "url": m.get("url") or ""})
+    return out
+
+
+def first_run_downloads(e, folder_paths):
+    """What a node pack fetches for itself on its first run (ComfyUI-RMBG): the folders not there yet."""
+    base = _models_dir(folder_paths)
+    if not base:
+        return []
+    return [p for p in e.get("downloads_itself") or [] if not os.path.isdir(os.path.join(base, *p.split("/")))]
 
 
 def user_folder():
@@ -126,9 +180,9 @@ def _write_json(path, data):
     os.replace(tmp, path)
 
 
-def default_for(action):
+def default_for(action, node_classes=None):
     for e in builtins():
-        if action in e["actions"]:
+        if action in e["actions"] and installed(e, node_classes):
             return e["id"]
     return AGENT
 
@@ -202,7 +256,17 @@ def _title(node):
     return str(((node.get("_meta") or {}).get("title")) or "").strip().lower()
 
 
-def detect_slots(graph):
+def _prompt_input(ins, prefer=None):
+    """Which input of a prompt node takes the words: *prefer*, a known name, else one ending in "prompt"."""
+    if prefer and isinstance(ins.get(prefer), str):
+        return prefer
+    name = next((n for n in PROMPT_INPUTS if isinstance(ins.get(n), str)), None)
+    if name:
+        return name
+    return next((n for n, v in ins.items() if isinstance(v, str) and n.lower().endswith("prompt") and "neg" not in n.lower()), None)
+
+
+def detect_slots(graph, prompt_input=None):
     """Where the picture, the mask, the prompt and the result are: {image, mask, mask_kind, prompt, output, seeds}."""
     ids = sorted(graph, key=lambda k: (0, int(k)) if str(k).isdigit() else (1, str(k)))
     by_title = {}
@@ -230,8 +294,7 @@ def detect_slots(graph):
                     break
         p = min(cands)[2] if cands else None
     if p is not None:
-        ins = graph[p].get("inputs", {})
-        name = next((n for n in PROMPT_INPUTS if n in ins), None)
+        name = _prompt_input(graph[p].get("inputs", {}), prompt_input)
         out["prompt"] = [p, name] if name else None
     outs = [k for k in ids if graph[k]["class_type"] in OUTPUTS]
     out["output"] = by_title.get("output") or (outs[-1] if outs else None)
@@ -305,8 +368,9 @@ def missing(graph, folder_paths=None, node_classes=None):
     return uniq
 
 
-def resolve_workflow(action, wid=None):
-    """(entry, graph) for *action*: the workflow *wid* (a built-in id or "custom"), else the chosen one."""
+def resolve_workflow(action, wid=None, graph=None):
+    """(entry, graph) for *action*: the workflow *wid* (a built-in id or "custom"), else the chosen one. A built-in
+    kept as the canvas has it is turned into a prompt by ComfyUI's own page: *graph* is that prompt."""
     wid = wid or choices()[action]
     if wid == CUSTOM:
         c = custom(action)
@@ -317,28 +381,90 @@ def resolve_workflow(action, wid=None):
     e, g = _builtin(wid)
     if not e or action not in e["actions"]:
         raise GenerateError(f"{wid!r} is not a workflow for {LABELS.get(action, action)}")
+    if e.get("format") == "ui":
+        if isinstance(graph, dict) and isinstance(graph.get("output"), dict):
+            graph = graph["output"]
+        if not is_api_graph(graph):
+            raise GenerateError("this workflow runs from the canvas: the page sends it as ComfyUI turned it into a prompt")
+        if len(json.dumps(graph)) > MAX_GRAPH_BYTES:
+            raise GenerateError("that workflow is too large")
+        return e, copy.deepcopy(graph)
     return e, g
 
 
 def listing(folder_paths=None, node_classes=None):
-    """What Settings and the Generate menus show: per action its workflows, the chosen one and the user's own."""
+    """What Settings and the Generate menus show: per action its workflows, the chosen one and the user's own.
+    A built-in whose nodes this ComfyUI does not have (a node pack not installed) is left out; one whose model
+    files are not here is listed with them (`missing`, with where they come from, so the page can offer them)."""
     ch = choices()
     table = builtins()
     out = {}
     for a in ACTIONS:
         items = []
         for e in table:
-            if a in e["actions"]:
+            if a not in e["actions"] or not installed(e, node_classes):
+                continue
+            if e.get("format") == "ui":
+                gone = missing_models(e, folder_paths)
+            else:
                 _e, g = _builtin(e["id"])
-                items.append({"id": e["id"], "label": e["label"], "api": bool(e.get("api")), "from": e.get("from", ""),
-                              "missing": missing(g, folder_paths, node_classes)})
+                gone = missing(g, folder_paths, node_classes)
+                urls = {m["name"]: m for m in e.get("models") or []}
+                for m in gone:
+                    if m["what"] in urls:
+                        m["url"] = urls[m["what"]].get("url") or ""
+            items.append({"id": e["id"], "label": e["label"], "api": bool(e.get("api")), "from": e.get("from", ""),
+                          "format": e.get("format", "api"), "missing": gone, "tune": e.get("tune") or [],
+                          "mask": bool(e.get("mask_in")), "first_run": first_run_downloads(e, folder_paths),
+                          "scale": e.get("scale") or None, "optional": e.get("optional") or []})
         c = custom(a)
         mine = None
         if c:
             mine = {"name": c.get("name"), "source": c.get("source"), "saved": c.get("saved"),
                     "slots": detect_slots(c["graph"]), "missing": missing(c["graph"], folder_paths, node_classes)}
-        out[a] = {"label": LABELS[a], "choice": ch[a], "default": default_for(a), "workflows": items, "custom": mine}
+        choice = ch[a]
+        if choice not in {w["id"] for w in items} | {AGENT, CUSTOM}:
+            choice = items[0]["id"] if items else AGENT          # the chosen one is not installed here
+        out[a] = {"label": LABELS[a], "choice": choice, "default": default_for(a, node_classes), "workflows": items,
+                  "custom": mine}
     return {"actions": out, "folder": user_folder()}
+
+
+def ref_node(graph, ref):
+    """The node *ref* names in an API graph: its id, else the node of that title (``paint:tune``)."""
+    ref = str(ref)
+    if ref in graph:
+        return ref
+    want = ref.strip().lower()
+    return next((k for k, v in graph.items() if _title(v) == want), None)
+
+
+def drop_nodes(graph, ids):
+    """Take nodes out of an API graph, and every input that comes from them (the inputs they fed are optional)."""
+    ids = set(ids)
+    for k in ids:
+        graph.pop(k, None)
+    for v in graph.values():
+        ins = v.get("inputs") or {}
+        for name in [n for n, x in ins.items() if isinstance(x, list) and len(x) == 2 and str(x[0]) in ids]:
+            del ins[name]
+
+
+def apply_tune(graph, tune):
+    """The dialog's settings: {node ref: {input: value}} onto plain (unlinked) inputs that are there."""
+    done = []
+    for ref, vals in (tune or {}).items():
+        k = ref_node(graph, ref)
+        if not k or not isinstance(vals, dict):
+            continue
+        ins = graph[k].setdefault("inputs", {})
+        for name, v in vals.items():
+            if name not in ins or isinstance(ins[name], list):
+                continue                          # not an input of the node, or a link: not a setting
+            if isinstance(v, (str, int, float, bool)) or v is None:
+                ins[name] = v
+                done.append([k, name])
+    return done
 
 
 # ── one run ──────────────────────────────────────────────────────────────────
@@ -382,19 +508,39 @@ def crop_box(doc, action):
     return (0, 0, doc.w, doc.h), sb
 
 
+def _refs_set(graph, ref, name, value):
+    k = ref_node(graph, ref)
+    if k and name:
+        graph[k].setdefault("inputs", {})[name] = value
+    return k
+
+
 def prepare(s, token, action, input_dir, *, wid=None, prompt="", variations=1, k=2, folder_paths=None,
-            node_classes=None):
-    """The workflow for one Generate, filled in: {job, graphs, output, label, box, api}."""
+            node_classes=None, graph=None, tune=None, box=None):
+    """The workflow for one Generate, filled in: {job, graphs, output, label, box, api, filled}.
+
+    *graph*: the prompt ComfyUI made of a built-in on the canvas; *tune*: the dialog's settings
+    ({node ref: {input: value}}); *box*: for Select objects, whether the selection's box goes in."""
     if action not in ACTIONS:
         raise GenerateError(f"unknown action {action!r}")
-    entry, graph = resolve_workflow(action, wid)
+    entry, graph = resolve_workflow(action, wid, graph)
     gone = missing(graph, folder_paths, node_classes)
     if gone:
+        urls = {m["name"]: m for m in entry.get("models") or []}
+        for m in gone:
+            if m["what"] in urls:
+                m["url"] = urls[m["what"]].get("url") or ""
         raise Missing(gone)
-    slots = detect_slots(graph)
+    slots = detect_slots(graph, entry.get("prompt_input"))
     if not slots["image"] or not slots["output"]:
         raise GenerateError("the workflow has no picture input or no output")
     doc = s.doc
+    words = str(prompt or "").strip()
+    sb_any = doc.selection is not None and doc.selection.any()
+    if action == "select_objects":
+        use_box = bool(box) and sb_any
+        if not words and not use_box:
+            raise GenerateError("say what to select, or select around it and take the selection's box")
     (bx, by, bw, bh), sb = crop_box(doc, action)
     tw, th = _work_size(bw, bh, entry.get("size") or {})
     pic = P.composite(doc)[by:by + bh, bx:bx + bw].copy()
@@ -403,7 +549,12 @@ def prepare(s, token, action, input_dir, *, wid=None, prompt="", variations=1, k
         pic = O._resize(pic, tw, th)
         if sel is not None:
             sel = O._resize(np.ascontiguousarray(sel), tw, th, "bilinear")
-    pic[..., 3] = 255 if sel is None else (255 - sel)
+    grey = sel is not None and action in MASKED and not entry.get("mask_in") and entry.get("id") != CUSTOM
+    if grey:
+        # The model sees the place as a flat grey (it takes no mask); the picture comes back through the selection.
+        a = (sel.astype(np.float32) / 255.0)[..., None]
+        pic[..., :3] = np.clip(pic[..., :3].astype(np.float32) * (1 - a) + GREY * a + 0.5, 0, 255).astype(np.uint8)
+    pic[..., 3] = 255 if (sel is None or grey) else (255 - sel)
     folder = os.path.join(input_dir, "paint")
     os.makedirs(folder, exist_ok=True)
     job = secrets.token_hex(8)
@@ -416,13 +567,14 @@ def prepare(s, token, action, input_dir, *, wid=None, prompt="", variations=1, k
         m = sel if sel is not None else np.zeros((th, tw), np.uint8)
         with open(os.path.join(folder, mask_name), "wb") as fh:
             fh.write(P.png_bytes(m))
-    words = str(prompt or "").strip()
     default_words = (entry.get("prompts") or {}).get(action, "")
     text = words or default_words
     if action == "fill" and not words:
         raise GenerateError("say what to make")
     if action == "edit" and not words:
         raise GenerateError("say what to change")
+    if grey and action in GREY_PROMPTS and not (entry.get("prompts") or {}).get(action):
+        text = GREY_PROMPTS[action].format(prompt=words, prompt_tail=(": " + words) if words else "")
     g0 = graph
     gi = g0[slots["image"]]["inputs"]
     gi["image"] = f"paint/{name}"
@@ -431,23 +583,36 @@ def prepare(s, token, action, input_dir, *, wid=None, prompt="", variations=1, k
         mi["image"] = f"paint/{mask_name}"
         if slots["mask_kind"] == "LoadImageMask":
             mi["channel"] = "red"
+    optional = [str(x) for x in entry.get("optional") or []]
+    drop = []
     if slots["prompt"] and slots["prompt"][1]:
-        g0[slots["prompt"][0]]["inputs"][slots["prompt"][1]] = text
-    for nid, inp, val in (entry.get("set") or {}).get(action, []):
-        if nid in g0:
-            g0[nid]["inputs"][inp] = val
+        if not text and "paint:prompt" in optional:
+            drop.append(slots["prompt"][0])
+        else:
+            g0[slots["prompt"][0]]["inputs"][slots["prompt"][1]] = text
+    if action == "select_objects":
+        kb = ref_node(g0, "paint:box")
+        if kb and use_box:
+            x, y, w, h = M.mask_bbox(doc.selection)
+            sx, sy = tw / bw, th / bh
+            g0[kb]["inputs"].update({"x": int(round((x - bx) * sx)), "y": int(round((y - by) * sy)),
+                                     "width": max(1, int(round(w * sx))), "height": max(1, int(round(h * sy)))})
+        elif kb:
+            drop.append(kb)
+    for ref, inp, val in (entry.get("set") or {}).get(action, []) + (entry.get("set") or {}).get("*", []):
+        _refs_set(g0, ref, inp, val)
     if entry.get("aspect"):
-        nid, inp = entry["aspect"]
-        if nid in g0:
-            g0[nid]["inputs"][inp] = _aspect(tw, th)
+        _refs_set(g0, entry["aspect"][0], entry["aspect"][1], _aspect(tw, th))
     if entry.get("dims"):
-        nid, wi, hi = entry["dims"]
-        if nid in g0:
-            g0[nid]["inputs"][wi], g0[nid]["inputs"][hi] = tw, th
+        kd = ref_node(g0, entry["dims"][0])
+        if kd:
+            g0[kd]["inputs"][entry["dims"][1]], g0[kd]["inputs"][entry["dims"][2]] = tw, th
     if entry.get("scale") and action == "upscale":
-        nid, inp = entry["scale"]
-        if nid in g0:
-            g0[nid]["inputs"][inp] = f"{int(k)}x"
+        sc = entry["scale"]
+        _refs_set(g0, sc[0], sc[1], int(k) if len(sc) > 2 and sc[2] == "number" else f"{int(k)}x")
+    tuned = apply_tune(g0, tune)
+    if drop:
+        drop_nodes(g0, drop)
     out_node = g0[slots["output"]]
     if "filename_prefix" in out_node.get("inputs", {}):
         out_node["inputs"]["filename_prefix"] = f"paint/generate/{action}"
@@ -455,17 +620,19 @@ def prepare(s, token, action, input_dir, *, wid=None, prompt="", variations=1, k
     for _ in range(max(1, min(4, int(variations or 1)))):
         g = copy.deepcopy(g0)
         for nid, inp in slots["seeds"]:
-            g[nid]["inputs"][inp] = secrets.randbelow(SEED_MAX + 1)
+            if nid in g:
+                g[nid]["inputs"][inp] = secrets.randbelow(SEED_MAX + 1)
         graphs.append(g)
     label = f"{LABELS[action]}: {words[:40]}" if words else LABELS[action]
-    rec = {"token": token, "action": action, "box": [bx, by, bw, bh], "sel": bool(sb), "k": int(k or 2),
-           "label": label, "name": (words[:30] or LABELS[action]), "w": doc.w, "h": doc.h, "at": time.time()}
+    rec = {"token": token, "action": action, "box": [bx, by, bw, bh], "sel": bool(sb) and action not in MATTES,
+           "k": int(k or 2), "label": label, "name": (words[:30] or LABELS[action]), "w": doc.w, "h": doc.h, "at": time.time()}
     with _LOCK:
         _JOBS[job] = rec
         while len(_JOBS) > MAX_JOBS:
             _JOBS.pop(next(iter(_JOBS)))
     return {"job": job, "graphs": graphs, "output": slots["output"], "label": label, "box": rec["box"],
-            "api": bool(entry.get("api")), "workflow": entry.get("label"), "size": [tw, th]}
+            "api": bool(entry.get("api")), "workflow": entry.get("label"), "size": [tw, th], "grey": grey,
+            "tuned": tuned, "dropped": drop}
 
 
 def _cover(px, w, h):
@@ -478,6 +645,15 @@ def _cover(px, w, h):
     big = O._resize(px, sw, sh)
     x0, y0 = (sw - w) // 2, (sh - h) // 2
     return big[y0:y0 + h, x0:x0 + w].copy()
+
+
+def matte_of(px):
+    """The matte in a workflow's picture (white = the subject): its transparency when it has any (a cut-out, as
+    the partner nodes answer), else its brightness (a mask saved as a picture)."""
+    if px.ndim == 3 and px.shape[2] == 4 and int(px[..., 3].min()) < 255:
+        return np.ascontiguousarray(px[..., 3])
+    rgb = px[..., :3].astype(np.float32)
+    return np.clip(rgb[..., 0] * 0.299 + rgb[..., 1] * 0.587 + rgb[..., 2] * 0.114 + 0.5, 0, 255).astype(np.uint8)
 
 
 def place(job, result_path, input_dir, n=0):
@@ -502,12 +678,14 @@ def place(job, result_path, input_dir, n=0):
             fh.write(P.png_bytes(_cover(px, W, H)))
         ops = [{"op": "resize", "w": W, "h": H}, {"op": "add_layer", "file": out, "name": f"Upscaled {k}x", "x": 0, "y": 0}]
         return {"token": rec["token"], "ops": ops, "label": rec["label"]}
-    if a in ("background", "select_subject"):
-        m = _cover(px, rec["w"], rec["h"])
+    if a in MATTES:
+        m = matte_of(_cover(px, rec["w"], rec["h"]))
         with open(out, "wb") as fh:
             fh.write(P.png_bytes(m))
         ops = ([{"op": "mask", "layer": "active", "from": "file", "file": out}] if a == "background"
                else [{"op": "select", "mode": "file", "file": out}])
+        if a == "select_objects" and not m.any():
+            raise GenerateError("nothing was found to select")
         return {"token": rec["token"], "ops": ops, "label": rec["label"]}
     px = _cover(px, bw, bh).copy()
     px[..., 3] = 255
@@ -523,3 +701,134 @@ def place(job, result_path, input_dir, n=0):
 
 def safe_name(s):
     return re.sub(r"[^A-Za-z0-9_-]+", "_", str(s or ""))[:60]
+
+
+# ── model files a built-in needs: offered, fetched only when asked ────────────
+
+_DOWNLOADS = {}
+CHUNK = 1 << 20
+
+
+def _safe_model_name(name):
+    parts = str(name).replace("\\", "/").split("/")
+    if not name or any(p in ("", ".", "..") for p in parts) or os.path.isabs(str(name)) or ":" in str(name):
+        raise GenerateError(f"not a model file name: {name!r}")
+    return "/".join(parts)
+
+
+def _allowed_url(url):
+    from urllib.parse import urlparse
+    u = urlparse(str(url or ""))
+    host = (u.hostname or "").lower()
+    return u.scheme == "https" and any(host == h or host.endswith("." + h) for h in DOWNLOAD_HOSTS)
+
+
+def _target(folder_paths, directory, name):
+    try:
+        folders = folder_paths.get_folder_paths(directory)
+    except Exception:  # noqa: BLE001 - an unknown folder name
+        folders = []
+    if not folders:
+        raise GenerateError(f"ComfyUI has no model folder {directory!r}")
+    return os.path.join(folders[0], *_safe_model_name(name).split("/"))
+
+
+def _size_of(url, timeout=10):
+    """Content-Length of *url* (a HEAD, redirects followed), or None."""
+    import urllib.request
+    try:
+        req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "ComfyUI-ImageViewer"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:   # noqa: S310 - https to the hosts allowed only
+            n = r.headers.get("Content-Length")
+            return int(n) if n and n.isdigit() else None
+    except Exception:  # noqa: BLE001 - offline, refused: the size is not known
+        return None
+
+
+def download_plan(wid, folder_paths, sizes=True):
+    """What a built-in still needs: {id, label, files: [{name, folder, url, size, to}], total, unknown}."""
+    e, _g = _builtin(wid)
+    if not e:
+        raise GenerateError(f"no built-in workflow {wid!r}")
+    files = []
+    for m in missing_models(e, folder_paths) if e.get("format") == "ui" else [
+            dict(x, url=next((y.get("url") for y in e.get("models") or [] if y["name"] == x["what"]), ""))
+            for x in missing(_builtin(wid)[1], folder_paths, None)]:
+        url = m.get("url") or ""
+        f = {"name": m["what"], "folder": m.get("folder") or "", "url": url if _allowed_url(url) else "", "size": None}
+        if f["url"]:
+            try:
+                f["to"] = _target(folder_paths, f["folder"], f["name"])
+            except GenerateError:
+                f["url"] = ""
+        if f["url"] and sizes:
+            f["size"] = _size_of(f["url"])
+        files.append(f)
+    total = sum(f["size"] or 0 for f in files if f["url"])
+    return {"id": e["id"], "label": e["label"], "files": files, "total": total,
+            "unknown": [f["name"] for f in files if not f["url"]], "first_run": first_run_downloads(e, folder_paths)}
+
+
+def start_download(wid, folder_paths):
+    """Fetch the files of :func:`download_plan` in a thread of its own: the job's id."""
+    plan = download_plan(wid, folder_paths, sizes=False)
+    files = [f for f in plan["files"] if f["url"]]
+    if not files:
+        raise GenerateError("nothing to download" if not plan["unknown"] else
+                            "these are not offered for download: " + ", ".join(plan["unknown"]))
+    job = secrets.token_hex(8)
+    st = {"id": job, "workflow": wid, "files": [dict(f, done=0, state="waiting") for f in files], "state": "running",
+          "error": None, "cancel": False}
+    with _LOCK:
+        _DOWNLOADS[job] = st
+    threading.Thread(target=_download_all, args=(st,), daemon=True).start()
+    return job
+
+
+def _download_all(st):
+    import urllib.request
+    for f in st["files"]:
+        if st["cancel"]:
+            break
+        tmp = f"{f['to']}.partial-{st['id']}"
+        try:
+            os.makedirs(os.path.dirname(f["to"]), exist_ok=True)
+            if os.path.exists(f["to"]):
+                f["state"] = "there"
+                continue
+            f["state"] = "fetching"
+            req = urllib.request.Request(f["url"], headers={"User-Agent": "ComfyUI-ImageViewer"})
+            with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as fh:   # noqa: S310 - hosts allowed only
+                n = r.headers.get("Content-Length")
+                f["size"] = int(n) if n and n.isdigit() else f.get("size")
+                while not st["cancel"]:
+                    b = r.read(CHUNK)
+                    if not b:
+                        break
+                    fh.write(b)
+                    f["done"] += len(b)
+            if st["cancel"]:
+                os.remove(tmp)
+                f["state"] = "stopped"
+                break
+            os.replace(tmp, f["to"])
+            f["state"] = "done"
+        except Exception as e:  # noqa: BLE001 - said in the job's state
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            f["state"] = "failed"
+            st["error"] = f"{f['name']}: {e}"
+            break
+    st["state"] = "stopped" if st["cancel"] else ("failed" if st["error"] else "done")
+
+
+def download_status(job, cancel=False):
+    with _LOCK:
+        st = _DOWNLOADS.get(job)
+    if not st:
+        raise GenerateError("no such download")
+    if cancel:
+        st["cancel"] = True
+    return {k: v for k, v in st.items() if k != "cancel"} | {"files": [{k: v for k, v in f.items() if k != "to"} for f in st["files"]]}

@@ -1,0 +1,139 @@
+{
+ "id": "b2644242-348b-46e7-80e6-b48d56b98495",
+ "revision": 0,
+ "last_node_id": 8,
+ "last_link_id": 12,
+ "nodes": [
+  {
+   "id": 3,
+   "type": "SaveImage",
+   "pos": [
+    1630.7864882448973,
+    2333.0000586627034
+   ],
+   "size": [
+    640,
+    982.3828125
+   ],
+   "flags": {},
+   "order": 4,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 11
+    }
+   ],
+   "outputs": [],
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.11.1"
+   },
+   "widgets_values": [
+    "ComfyUI"
+   ],
+   "title": "paint:output"
+  },
+  {
+   "id": 2,
+   "type": "LoadImage",
+   "pos": [
+    894.000029911564,
+    2333.0000586627034
+   ],
+   "size": [
+    282.78645833333337,
+    441.6796875
+   ],
+   "flags": {},
+   "order": 2,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      10
+     ]
+    },
+    {
+     "name": "MASK",
+     "type": "MASK",
+     "links": null
+    }
+   ],
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.11.1",
+    "Node name for S&R": "LoadImage"
+   },
+   "widgets_values": [
+    "butterfly_girl.png",
+    "image"
+   ],
+   "title": "paint:image"
+  },
+  {
+   "id": 8,
+   "type": "RecraftCreativeUpscaleNode",
+   "pos": [
+    1270,
+    2330
+   ],
+   "size": [
+    248.80625,
+    26
+   ],
+   "flags": {},
+   "order": 3,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "image",
+     "type": "IMAGE",
+     "link": 10
+    }
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      11
+     ]
+    }
+   ],
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.16.1",
+    "Node name for S&R": "RecraftCreativeUpscaleNode"
+   },
+   "color": "#432",
+   "bgcolor": "#653",
+   "title": "paint:tune"
+  }
+ ],
+ "links": [
+  [
+   10,
+   2,
+   0,
+   8,
+   0,
+   "IMAGE"
+  ],
+  [
+   11,
+   8,
+   0,
+   3,
+   0,
+   "IMAGE"
+  ]
+ ],
+ "groups": [],
+ "config": {},
+ "version": 0.4
+}

@@ -1,0 +1,36 @@
+{
+ "1": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "paint/in.png"
+  },
+  "_meta": {
+   "title": "paint:image"
+  }
+ },
+ "2": {
+  "class_type": "RecraftRemoveBackgroundNode",
+  "inputs": {
+   "image": [
+    "1",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "paint:tune"
+  }
+ },
+ "3": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "paint/generate",
+   "images": [
+    "2",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "paint:output"
+  }
+ }
+}

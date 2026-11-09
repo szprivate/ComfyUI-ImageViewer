@@ -1637,13 +1637,94 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(pg.evaluate(f"() => {bar}.text.textContent"), "Done: a new layer")
         self.assertEqual(self.errors, [])
 
+    def test_upscale_dialog_puts_the_workflow_on_the_canvas_once_and_runs_it_from_there(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        out_dir = os.path.join(self.dirs["output"], "paint", "generate")
+        os.makedirs(out_dir, exist_ok=True)
+        # ComfyUI's object_info for the Crystal node: a model choice with its own settings.
+        info = {"ClarityCrystalUpscaleNode": {"display_name": "Crystal Upscale", "input": {"required": {
+            "model": ["COMFY_DYNAMICCOMBO_V3", {"options": [{"key": "crystal-upscaler", "inputs": {"required": {
+                "image": ["IMAGE"], "scale_factor": ["FLOAT", {"default": 2, "min": 1, "max": 4}],
+                "creativity": ["INT", {"default": 0, "min": 0, "max": 10}]}}}]}],
+            "seed": ["INT", {"default": 0}]}}}}
+        pg.evaluate("""(info) => { const f = window.__fetchApi;
+            window.__fetchApi = async (p, o) => (p.startsWith('/object_info/') ? { ok: true, status: 200, json: async () => info } : f(p, o)); }""", info)
+        # The canvas: its paste makes nodes (new ids), graphToPrompt answers ComfyUI's prompt of them.
+        pg.evaluate("""async () => {
+            const { app } = await import('/scripts/app.js');
+            window.__queued = []; window.__pastes = 0; window.__groups = [];
+            __api.queuePrompt = async (n, d) => { window.__queued.push(d.output); return { prompt_id: 'u' + window.__queued.length }; };
+            window.LiteGraph = { LGraphGroup: class { constructor(t) { this.title = t; } resizeTo() {} } };
+            const g = { _nodes: [], add(x) { if (x instanceof window.LiteGraph.LGraphGroup) window.__groups.push(x.title); else this._nodes.push(x); } };
+            app.rootGraph = g; app.graph = g;
+            app.canvas = { graph: g, setDirty() {}, _deserializeItems(items, { position }) {
+                window.__pastes++;
+                const created = items.nodes.map((n, i) => ({ id: 500 + i, type: n.type, title: n.title, pos: [position[0], position[1] + i * 100],
+                                                             size: [200, 80], properties: {}, widgets: [] }));
+                g._nodes.push(...created);
+                window.__pasted = items;
+                return { created };
+            } };
+            app.graphToPrompt = async () => {
+                const by = (t) => g._nodes.find((n) => n.title === t);
+                const L = by('paint:image'), T = by('paint:tune'), O = by('paint:output');
+                return { output: {
+                    [L.id]: { class_type: 'LoadImage', _meta: { title: 'paint:image' }, inputs: { image: 'x.png', upload: 'image' } },
+                    [T.id]: { class_type: 'ClarityCrystalUpscaleNode', _meta: { title: 'paint:tune' },
+                              inputs: { model: 'crystal-upscaler', 'model.image': [String(L.id), 0], 'model.scale_factor': 4, 'model.creativity': 0, seed: 0 } },
+                    [O.id]: { class_type: 'SaveImageAdvanced', _meta: { title: 'paint:output' }, inputs: { images: [String(T.id), 0], filename_prefix: 'x' } },
+                    '9': { class_type: 'SomebodyElses', inputs: {} } } };
+            };
+        }""")
+        self.addCleanup(lambda: self._choose("upscale", "upscale_model"))
+        pg.evaluate("() => __panel.paintGenerateDialog(__panel._paintActive(), 'upscale', 'crystal')")
+        pg.wait_for_function(f"() => !!{ed}.box.querySelector('.paint-dlg h3')", timeout=10000)
+        labels = pg.evaluate(f"() => [...{ed}.box.querySelectorAll('.paint-dlg .paint-field label')].map((l) => l.textContent)")
+        self.assertEqual(labels[:2], ["Model", "Times"])
+        self.assertIn("creativity", labels)
+        self.assertNotIn("scale factor", labels)          # Times sets it
+        self.assertNotIn("seed", labels)
+        pg.evaluate("""(box) => { const rows = [...box.querySelectorAll('.paint-dlg .paint-field')];
+            const r = rows.find((x) => x.querySelector('label').textContent === 'creativity');
+            const inp = r.querySelector('input[type=number]'); inp.value = '7'; inp.dispatchEvent(new Event('input'));
+            box.querySelector('.paint-dlg .go .on').click(); }""", pg.evaluate_handle(f"() => {ed}.box"))
+        pg.wait_for_function("() => window.__queued.length === 1", timeout=10000)
+        q = pg.evaluate("() => window.__queued[0]")
+        self.assertNotIn("9", q)                              # only Paint's group runs
+        tnode = next(v for v in q.values() if v["class_type"] == "ClarityCrystalUpscaleNode")
+        self.assertEqual((tnode["inputs"]["model.creativity"], tnode["inputs"]["model.scale_factor"]), (7, 2))
+        self.assertEqual(pg.evaluate("() => window.__groups"), ["Paint \u00b7 Crystal Upscaler, Clarity AI (API)"])
+        marks = pg.evaluate("""async () => { const { app } = await import('/scripts/app.js'); return app.rootGraph._nodes.map((n) => n.properties.imageviewer_paint); }""")
+        self.assertEqual(marks, ["crystal"] * 3)
+        lid = next(k for k, v in q.items() if v["class_type"] == "LoadImage")
+        from PIL import Image
+        crop = Image.open(os.path.join(self.dirs["input"], q[lid]["inputs"]["image"]))
+        g = np.zeros((crop.height * 2, crop.width * 2, 4), np.uint8)
+        g[..., 0] = 220
+        g[..., 3] = 255
+        Image.fromarray(g, "RGBA").save(os.path.join(out_dir, "up_0.png"))
+        oid = next(k for k, v in q.items() if v["class_type"] == "SaveImageAdvanced")
+        pg.evaluate("""(oid) => __api.dispatch('executed', { prompt_id: 'u1', node: oid,
+            output: { images: [{ filename: 'up_0.png', subfolder: 'paint/generate', type: 'output' }] } })""", oid)
+        pg.wait_for_function(f"() => {ed}.doc.w === 400", timeout=10000)
+        # Again from the Generate panel's button: the group that is there runs, nothing is pasted again; the settings kept.
+        pg.evaluate(f"() => {ed}.parts.generate.querySelector('[data-gen=upscale]').click()")
+        pg.wait_for_function("() => window.__queued.length === 2", timeout=10000)
+        self.assertEqual(pg.evaluate("() => window.__pastes"), 1)
+        q2 = pg.evaluate("() => window.__queued[1]")
+        tnode = next(v for v in q2.values() if v["class_type"] == "ClarityCrystalUpscaleNode")
+        self.assertEqual(tnode["inputs"]["model.creativity"], 7)
+        self.assertEqual(self.errors, [])
+
     def test_settings_page_replaces_a_generate_workflow(self):
         pg = self.page()
         # The settings entry's editor (what ComfyUI's dialog renders); "Load API file…" takes an API-format file.
         pg.evaluate("""async () => { const S = await import('/extensions/viewer/imageViewer_settings.js');
             document.querySelectorAll('comfyui-image-viewer-panel').forEach((p) => { p.style.display = 'none'; });
             const el = S.renderPaintWorkflowEditor(); el.id = 'pwf'; document.body.prepend(el); }""")
-        pg.wait_for_function("() => document.querySelectorAll('#pwf .imageviewer-pwf-row').length === 7", timeout=10000)
+        pg.wait_for_function("() => document.querySelectorAll('#pwf .imageviewer-pwf-row').length === 8", timeout=10000)
         pg.wait_for_function("() => /Not on this machine/.test(document.querySelector('#pwf').textContent)", timeout=5000)
         graph = {"1": {"class_type": "LoadImage", "inputs": {"image": "x.png"}},
                  "2": {"class_type": "SaveImage", "inputs": {"images": ["1", 0], "filename_prefix": "x"}}}

@@ -847,7 +847,11 @@ export function renderPaintWorkflowEditor() {
             const chosen = info.choice === "custom" ? info.custom : info.workflows.find((w) => w.id === info.choice);
             const miss = chosen && chosen.missing && chosen.missing.length ? missingText(chosen.missing) : "";
             const lines = [];
-            if (miss) lines.push(h("div", { className: "imageviewer-pwf-status imageviewer-pwf-warn" }, `Not on this machine: ${miss}`));
+            if (miss) {
+                const offered = chosen.missing.every((m) => m.url);       // a built-in's model files: offered when it first runs
+                lines.push(h("div", { className: "imageviewer-pwf-status imageviewer-pwf-warn" },
+                             offered ? `Not on this machine: ${miss} - Paint offers to download them when it first runs` : `Not on this machine: ${miss}`));
+            }
             if (info.custom) {
                 const t = said[a] || slotText(info.custom.slots);
                 lines.push(h("div", { className: "imageviewer-pwf-status" },

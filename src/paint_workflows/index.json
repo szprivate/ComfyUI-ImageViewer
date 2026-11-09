@@ -4,6 +4,7 @@
   "label": "FLUX.1 Fill dev (local)",
   "file": "flux_fill.json",
   "api": false,
+  "format": "api",
   "actions": [
    "fill",
    "remove",
@@ -28,13 +29,51 @@
     ]
    ]
   },
-  "from": "flux_fill_inpaint_example / flux_fill_outpaint_example"
+  "from": "flux_fill_inpaint_example / flux_fill_outpaint_example",
+  "mask_in": true,
+  "nodes": [
+   "CLIPTextEncode",
+   "ConditioningZeroOut",
+   "DifferentialDiffusion",
+   "DualCLIPLoader",
+   "FluxGuidance",
+   "InpaintModelConditioning",
+   "KSampler",
+   "LoadImage",
+   "SaveImage",
+   "UNETLoader",
+   "VAEDecode",
+   "VAELoader"
+  ],
+  "models": [
+   {
+    "name": "clip_l.safetensors",
+    "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors",
+    "directory": "text_encoders"
+   },
+   {
+    "name": "t5xxl_fp16.safetensors",
+    "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp16.safetensors",
+    "directory": "text_encoders"
+   },
+   {
+    "name": "ae.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Lumina_Image_2.0_Repackaged/resolve/main/split_files/vae/ae.safetensors",
+    "directory": "vae"
+   },
+   {
+    "name": "flux1-fill-dev.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/flux1-dev/resolve/main/split_files/diffusion_models/flux1-fill-dev.safetensors",
+    "directory": "diffusion_models"
+   }
+  ]
  },
  {
   "id": "flux_fill_onereward_remove",
   "label": "FLUX.1 Fill OneReward + removal LoRA (local)",
   "file": "flux_fill_onereward_remove.json",
   "api": false,
+  "format": "api",
   "actions": [
    "remove"
   ],
@@ -46,56 +85,111 @@
   "prompts": {
    "remove": "remove"
   },
-  "from": "image_flux.1_fill_dev_OneReward"
+  "from": "image_flux.1_fill_dev_OneReward",
+  "mask_in": true,
+  "nodes": [
+   "CLIPTextEncode",
+   "ConditioningZeroOut",
+   "DifferentialDiffusion",
+   "DualCLIPLoader",
+   "FluxGuidance",
+   "InpaintModelConditioning",
+   "KSampler",
+   "LoadImage",
+   "LoraLoaderModelOnly",
+   "SaveImage",
+   "UNETLoader",
+   "VAEDecode",
+   "VAELoader"
+  ],
+  "models": [
+   {
+    "name": "ae.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Lumina_Image_2.0_Repackaged/resolve/main/split_files/vae/ae.safetensors",
+    "directory": "vae"
+   },
+   {
+    "name": "flux.1-fill-dev-OneReward-transformer_fp8.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/OneReward_repackaged/resolve/main/split_files/diffusion_models/flux.1-fill-dev-OneReward-transformer_fp8.safetensors",
+    "directory": "diffusion_models"
+   },
+   {
+    "name": "clip_l.safetensors",
+    "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors?download=true",
+    "directory": "text_encoders"
+   },
+   {
+    "name": "t5xxl_fp16.safetensors",
+    "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp16.safetensors?download=true",
+    "directory": "text_encoders"
+   },
+   {
+    "name": "removal_timestep_alpha-2-1740.safetensors",
+    "url": "https://huggingface.co/lrzjason/ObjectRemovalFluxFill/resolve/main/removal_timestep_alpha-2-1740.safetensors",
+    "directory": "loras"
+   }
+  ]
  },
  {
   "id": "gpt_image_2_inpaint",
   "label": "GPT Image 2 inpaint (API)",
   "file": "gpt_image_2_inpaint.json",
   "api": true,
+  "format": "api",
   "actions": [
    "fill",
    "remove",
-   "extend"
+   "extend",
+   "edit"
   ],
   "size": {
    "mp": 1.0,
    "mult": 16,
    "max": 1536
   },
-  "prompts": {
-   "remove": "Remove the selected object and fill its place so that it looks as if it was never there. Keep the rest as it is.",
-   "extend": "Continue the picture into the empty border seamlessly: the same scene, light and style."
-  },
-  "from": "api_openai_image_1_inpaint"
+  "from": "api_openai_image_1_inpaint",
+  "mask_in": true,
+  "nodes": [
+   "LoadImage",
+   "OpenAIGPTImageNodeV2",
+   "SaveImage"
+  ]
  },
  {
   "id": "gpt_image_25_inpaint",
-  "label": "GPT Image 2.5 inpaint (API)",
+  "label": "GPT Image 2.5 Flare, masked (API)",
   "file": "gpt_image_25_inpaint.json",
   "api": true,
+  "format": "api",
   "actions": [
    "fill",
    "remove",
-   "extend"
+   "extend",
+   "edit"
   ],
   "size": {
    "mp": 1.0,
    "mult": 16,
    "max": 1536
   },
-  "prompts": {
-   "remove": "Remove the selected object and fill its place so that it looks as if it was never there. Keep the rest as it is.",
-   "extend": "Continue the picture into the empty border seamlessly: the same scene, light and style."
-  },
-  "from": "api_openai_gpt_image_25_flare_image_edit (with its mask input)"
+  "from": "api_openai_gpt_image_25_flare_image_edit (with its mask input)",
+  "mask_in": true,
+  "nodes": [
+   "LoadImage",
+   "OpenAIGPTImageNodeV2",
+   "SaveImage"
+  ]
  },
  {
   "id": "flux_kontext_edit",
   "label": "FLUX.1 Kontext dev (local)",
   "file": "flux_kontext_edit.json",
   "api": false,
+  "format": "api",
   "actions": [
+   "fill",
+   "remove",
+   "extend",
    "edit"
   ],
   "size": {
@@ -103,14 +197,54 @@
    "mult": 16,
    "max": 2048
   },
-  "from": "flux_kontext_dev_basic"
+  "from": "flux_kontext_dev_basic",
+  "nodes": [
+   "CLIPTextEncode",
+   "ConditioningZeroOut",
+   "DualCLIPLoader",
+   "FluxGuidance",
+   "KSampler",
+   "LoadImage",
+   "ReferenceLatent",
+   "SaveImage",
+   "UNETLoader",
+   "VAEDecode",
+   "VAEEncode",
+   "VAELoader"
+  ],
+  "models": [
+   {
+    "name": "ae.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Lumina_Image_2.0_Repackaged/resolve/main/split_files/vae/ae.safetensors",
+    "directory": "vae"
+   },
+   {
+    "name": "clip_l.safetensors",
+    "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors",
+    "directory": "text_encoders"
+   },
+   {
+    "name": "t5xxl_fp8_e4m3fn_scaled.safetensors",
+    "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn_scaled.safetensors",
+    "directory": "text_encoders"
+   },
+   {
+    "name": "flux1-dev-kontext_fp8_scaled.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/flux1-kontext-dev_ComfyUI/resolve/main/split_files/diffusion_models/flux1-dev-kontext_fp8_scaled.safetensors",
+    "directory": "diffusion_models"
+   }
+  ]
  },
  {
   "id": "gpt_image_25_edit",
-  "label": "GPT Image 2.5 (API)",
+  "label": "GPT Image 2.5 Flare (API)",
   "file": "gpt_image_25_edit.json",
   "api": true,
+  "format": "api",
   "actions": [
+   "fill",
+   "remove",
+   "extend",
    "edit"
   ],
   "size": {
@@ -118,14 +252,23 @@
    "mult": 16,
    "max": 1536
   },
-  "from": "api_openai_gpt_image_25_flare_image_edit"
+  "from": "api_openai_gpt_image_25_flare_image_edit",
+  "nodes": [
+   "LoadImage",
+   "OpenAIGPTImageNodeV2",
+   "SaveImage"
+  ]
  },
  {
   "id": "nano_banana2_edit",
   "label": "Nano Banana 2 (API)",
   "file": "nano_banana2_edit.json",
   "api": true,
+  "format": "api",
   "actions": [
+   "fill",
+   "remove",
+   "extend",
    "edit"
   ],
   "size": {
@@ -137,14 +280,23 @@
    "2",
    "aspect_ratio"
   ],
-  "from": "api_i2i_imageEdit_nanoBanana2"
+  "from": "api_i2i_imageEdit_nanoBanana2",
+  "nodes": [
+   "GeminiNanoBanana2",
+   "LoadImage",
+   "SaveImage"
+  ]
  },
  {
   "id": "qwen3_edit",
   "label": "Qwen Image 3 Edit (API)",
   "file": "qwen3_edit.json",
   "api": true,
+  "format": "api",
   "actions": [
+   "fill",
+   "remove",
+   "extend",
    "edit"
   ],
   "size": {
@@ -153,14 +305,23 @@
    "max": 2560,
    "min": 512
   },
-  "from": "api_qwen3_image_edit"
+  "from": "api_qwen3_image_edit",
+  "nodes": [
+   "LoadImage",
+   "QwenImageEditApi",
+   "SaveImage"
+  ]
  },
  {
   "id": "qwen2511_edit",
   "label": "Qwen Image Edit 2511 (local)",
   "file": "qwen2511_edit.json",
   "api": false,
+  "format": "api",
   "actions": [
+   "fill",
+   "remove",
+   "extend",
    "edit"
   ],
   "size": {
@@ -168,14 +329,54 @@
    "mult": 16,
    "max": 2048
   },
-  "from": "image_qwen_image_edit_2511"
+  "from": "image_qwen_image_edit_2511",
+  "nodes": [
+   "CFGNorm",
+   "CLIPLoader",
+   "FluxKontextMultiReferenceLatentMethod",
+   "KSampler",
+   "LoadImage",
+   "ModelSamplingAuraFlow",
+   "SaveImage",
+   "TextEncodeQwenImageEditPlus",
+   "UNETLoader",
+   "VAEDecode",
+   "VAEEncode",
+   "VAELoader"
+  ],
+  "models": [
+   {
+    "name": "qwen_image_vae.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors",
+    "directory": "vae"
+   },
+   {
+    "name": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+    "url": "https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+    "directory": "loras"
+   },
+   {
+    "name": "qwen_image_edit_2511_fp8mixed.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors",
+    "directory": "diffusion_models"
+   },
+   {
+    "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/HunyuanVideo_1.5_repackaged/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors",
+    "directory": "text_encoders"
+   }
+  ]
  },
  {
   "id": "qwen2511_lightning_edit",
-  "label": "Qwen Image Edit 2511, 4-step Lightning (local)",
+  "label": "Qwen Image Edit 2511 Lightning (local)",
   "file": "qwen2511_lightning_edit.json",
   "api": false,
+  "format": "api",
   "actions": [
+   "fill",
+   "remove",
+   "extend",
    "edit"
   ],
   "size": {
@@ -183,14 +384,55 @@
    "mult": 16,
    "max": 2048
   },
-  "from": "image_qwen_image_edit_2511 (Lightning LoRA switched on)"
+  "from": "image_qwen_image_edit_2511 (Lightning LoRA switched on)",
+  "nodes": [
+   "CFGNorm",
+   "CLIPLoader",
+   "FluxKontextMultiReferenceLatentMethod",
+   "KSampler",
+   "LoadImage",
+   "LoraLoaderModelOnly",
+   "ModelSamplingAuraFlow",
+   "SaveImage",
+   "TextEncodeQwenImageEditPlus",
+   "UNETLoader",
+   "VAEDecode",
+   "VAEEncode",
+   "VAELoader"
+  ],
+  "models": [
+   {
+    "name": "qwen_image_vae.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors",
+    "directory": "vae"
+   },
+   {
+    "name": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+    "url": "https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+    "directory": "loras"
+   },
+   {
+    "name": "qwen_image_edit_2511_fp8mixed.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors",
+    "directory": "diffusion_models"
+   },
+   {
+    "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/HunyuanVideo_1.5_repackaged/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors",
+    "directory": "text_encoders"
+   }
+  ]
  },
  {
   "id": "seedream5_edit",
   "label": "Seedream 5.0 Pro (API)",
   "file": "seedream5_edit.json",
   "api": true,
+  "format": "api",
   "actions": [
+   "fill",
+   "remove",
+   "extend",
    "edit"
   ],
   "size": {
@@ -204,14 +446,23 @@
    "model.width",
    "model.height"
   ],
-  "from": "api_bytedance_seedream_5_0_pro_image_edit"
+  "from": "api_bytedance_seedream_5_0_pro_image_edit",
+  "nodes": [
+   "ByteDanceSeedreamNodeV3",
+   "LoadImage",
+   "SaveImage"
+  ]
  },
  {
   "id": "nano_banana_pro_edit",
   "label": "Nano Banana Pro (API)",
   "file": "nano_banana_pro_edit.json",
   "api": true,
+  "format": "api",
   "actions": [
+   "fill",
+   "remove",
+   "extend",
    "edit"
   ],
   "size": {
@@ -219,14 +470,23 @@
    "mult": 8,
    "max": 4096
   },
-  "from": "api_nano_banana_pro"
+  "from": "api_nano_banana_pro",
+  "nodes": [
+   "GeminiImage2Node",
+   "LoadImage",
+   "SaveImage"
+  ]
  },
  {
   "id": "nano_banana21_edit",
   "label": "Nano Banana 2.1 (API)",
   "file": "nano_banana21_edit.json",
   "api": true,
+  "format": "api",
   "actions": [
+   "fill",
+   "remove",
+   "extend",
    "edit"
   ],
   "size": {
@@ -234,12 +494,862 @@
    "mult": 8,
    "max": 4096
   },
-  "from": "api_nano_banana_2_1_image_edit"
+  "from": "api_nano_banana_2_1_image_edit",
+  "nodes": [
+   "GeminiNanoBanana2V2",
+   "LoadImage",
+   "SaveImage"
+  ]
  },
  {
-  "id": "rmbg2",
-  "label": "RMBG-2.0 (local, ComfyUI-RMBG)",
-  "file": "rmbg2.json",
+  "id": "flux_kontext_pro",
+  "label": "FLUX.1 Kontext Pro (API)",
+  "api": true,
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "aspect": [
+   "paint:prompt",
+   "aspect_ratio"
+  ],
+  "format": "ui",
+  "from": "api_bfl_flux_1_kontext_pro_image",
+  "file": "flux_kontext_pro.json",
+  "models": [],
+  "nodes": [
+   "FluxKontextProImageNode",
+   "LoadImage",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "flux_kontext_max",
+  "label": "FLUX.1 Kontext Max (API)",
+  "api": true,
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "aspect": [
+   "paint:prompt",
+   "aspect_ratio"
+  ],
+  "format": "ui",
+  "from": "api_bfl_flux_1_kontext_max_image",
+  "file": "flux_kontext_max.json",
+  "models": [],
+  "nodes": [
+   "FluxKontextMaxImageNode",
+   "LoadImage",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "flux3_edit",
+  "label": "FLUX.3 (API)",
+  "api": true,
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "format": "ui",
+  "from": "api_bfl_flux3_image_edit",
+  "file": "flux3_edit.json",
+  "models": [],
+  "nodes": [
+   "Flux3ImageNode",
+   "LoadImage",
+   "SaveImageAdvanced"
+  ]
+ },
+ {
+  "id": "seedream5_flash_edit",
+  "label": "Seedream 5.0 Flash (API)",
+  "api": true,
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 4.0,
+   "mult": 16,
+   "max": 4096,
+   "min": 1024
+  },
+  "format": "ui",
+  "from": "api_bytedance_seedream_5_0_flash_image_edit",
+  "file": "seedream5_flash_edit.json",
+  "models": [],
+  "nodes": [
+   "ByteDanceSeedreamNodeV3",
+   "LoadImage",
+   "SaveImageAdvanced"
+  ]
+ },
+ {
+  "id": "grok_edit",
+  "label": "Grok Imagine (API)",
+  "api": true,
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "format": "ui",
+  "from": "api_grok_image_edit",
+  "file": "grok_edit.json",
+  "models": [],
+  "nodes": [
+   "GrokImageEditNodeV2",
+   "LoadImage",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "grok_imagine2_edit",
+  "label": "Grok Imagine Image 2 (API)",
+  "api": true,
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "format": "ui",
+  "from": "api_grok_imagine_image_2_image_edit",
+  "file": "grok_imagine2_edit.json",
+  "models": [],
+  "nodes": [
+   "GrokImageEditNodeV2",
+   "LoadImage",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "krea3_edit",
+  "label": "Krea 3 (API)",
+  "api": true,
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "format": "ui",
+  "from": "api_krea3_image_edit",
+  "file": "krea3_edit.json",
+  "models": [],
+  "nodes": [
+   "Krea3ImageNode",
+   "LoadImage",
+   "SaveImageAdvanced"
+  ]
+ },
+ {
+  "id": "luma_uni1_edit",
+  "label": "Luma Uni-1 (API)",
+  "api": true,
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "format": "ui",
+  "from": "api_luma_uni_1_image_edit",
+  "file": "luma_uni1_edit.json",
+  "models": [],
+  "nodes": [
+   "LoadImage",
+   "LumaImageEditNode2",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "meta_muse_edit",
+  "label": "Meta Muse Image (API)",
+  "api": true,
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "format": "ui",
+  "from": "api_meta_muse_image_image_edit",
+  "file": "meta_muse_edit.json",
+  "models": [],
+  "nodes": [
+   "LoadImage",
+   "MetaMuseImageEditApi",
+   "SaveImageAdvanced"
+  ]
+ },
+ {
+  "id": "nano_banana2_lite_edit",
+  "label": "Nano Banana 2 Lite (API)",
+  "api": true,
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 4.0,
+   "mult": 8,
+   "max": 4096
+  },
+  "format": "ui",
+  "from": "api_nano_banana_2_lite_image_edit",
+  "file": "nano_banana2_lite_edit.json",
+  "models": [],
+  "nodes": [
+   "GeminiNanoBanana2V2",
+   "LoadImage",
+   "SaveImageAdvanced"
+  ]
+ },
+ {
+  "id": "gpt_image_25_sunburst_edit",
+  "label": "GPT Image 2.5 Sunburst, masked (API)",
+  "api": true,
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 1536
+  },
+  "mask_in": true,
+  "format": "ui",
+  "from": "api_openai_gpt_image_25_sunburst_image_edit",
+  "file": "gpt_image_25_sunburst_edit.json",
+  "models": [],
+  "nodes": [
+   "LoadImage",
+   "OpenAIGPTImageNodeV2",
+   "SaveImageAdvanced"
+  ]
+ },
+ {
+  "id": "mai_26_edit",
+  "label": "MAI Image 2.6 (API)",
+  "api": true,
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "format": "ui",
+  "from": "api_openrouter_mai_image_26_image_edit",
+  "file": "mai_26_edit.json",
+  "models": [],
+  "nodes": [
+   "LoadImage",
+   "OpenRouterImageNode",
+   "SaveImageAdvanced"
+  ]
+ },
+ {
+  "id": "mai_26_flash_edit",
+  "label": "MAI Image 2.6 Flash (API)",
+  "api": true,
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "format": "ui",
+  "from": "api_openrouter_mai_image_26_flash_image_edit",
+  "file": "mai_26_flash_edit.json",
+  "models": [],
+  "nodes": [
+   "LoadImage",
+   "OpenRouterImageNode",
+   "SaveImageAdvanced"
+  ]
+ },
+ {
+  "id": "hunyuan35_edit",
+  "label": "Hunyuan Image 3.5 preview (API)",
+  "api": true,
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "format": "ui",
+  "from": "api_tencent_hy_image_3_5_preview_image_edit",
+  "file": "hunyuan35_edit.json",
+  "models": [],
+  "nodes": [
+   "HunyuanImageEditApi",
+   "LoadImage",
+   "SaveImageAdvanced"
+  ]
+ },
+ {
+  "id": "bria_fibo_edit",
+  "label": "Bria FIBO edit, masked (API)",
+  "api": true,
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "mask_in": true,
+  "format": "ui",
+  "from": "api_bria_image_edit",
+  "file": "bria_fibo_edit.json",
+  "models": [],
+  "nodes": [
+   "BriaImageEditNode",
+   "LoadImage",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "qwen2509_edit",
+  "label": "Qwen Image Edit 2509 Lightning (local)",
+  "api": false,
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "format": "ui",
+  "from": "image_qwen_image_edit_2509",
+  "file": "qwen2509_edit.json",
+  "models": [
+   {
+    "name": "qwen_image_vae.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors",
+    "directory": "vae"
+   },
+   {
+    "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors",
+    "directory": "text_encoders"
+   },
+   {
+    "name": "qwen_image_edit_2509_fp8_e4m3fn.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors",
+    "directory": "diffusion_models"
+   },
+   {
+    "name": "Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors",
+    "url": "https://huggingface.co/lightx2v/Qwen-Image-Lightning/resolve/main/Qwen-Image-Edit-2509/Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors",
+    "directory": "loras"
+   }
+  ],
+  "nodes": [
+   "CFGNorm",
+   "CLIPLoader",
+   "ComfySwitchNode",
+   "FluxKontextImageScale",
+   "KSampler",
+   "LoadImage",
+   "LoraLoaderModelOnly",
+   "MarkdownNote",
+   "ModelSamplingAuraFlow",
+   "PrimitiveBoolean",
+   "PrimitiveFloat",
+   "PrimitiveInt",
+   "SaveImageAdvanced",
+   "TextEncodeQwenImageEditPlus",
+   "UNETLoader",
+   "VAEDecode",
+   "VAEEncode",
+   "VAELoader"
+  ]
+ },
+ {
+  "id": "qwen21_edit",
+  "label": "Qwen Image 2.1 (local)",
+  "api": false,
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "prompt_input": "on_false",
+  "format": "ui",
+  "from": "image_qwen_image_2_1_image_edit",
+  "file": "qwen21_edit.json",
+  "models": [
+   {
+    "name": "qwen_image_2.1_int8_convrot.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/diffusion_models/qwen_image_2.1_int8_convrot.safetensors",
+    "directory": "diffusion_models"
+   },
+   {
+    "name": "qwen3vl_8b_int8_convrot.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3vl_8b_int8_convrot.safetensors",
+    "directory": "text_encoders"
+   },
+   {
+    "name": "qwen_image_2.1_vae_bf16.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors",
+    "directory": "vae"
+   },
+   {
+    "name": "qwen3.5_9b_qwen_image_2.1_pe_i2i.int8_convrot.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3.5_9b_qwen_image_2.1_pe_i2i.int8_convrot.safetensors",
+    "directory": "text_encoders"
+   }
+  ],
+  "nodes": [
+   "BatchImagesNode",
+   "CLIPLoader",
+   "ComfySwitchNode",
+   "EmptyLatentImage",
+   "KSampler",
+   "LoadImage",
+   "PreviewAny",
+   "PrimitiveStringMultiline",
+   "QwenImage21Cache",
+   "SaveImageAdvanced",
+   "TextEncodeQwenImage21",
+   "TextGenerate",
+   "UNETLoader",
+   "VAEDecode",
+   "VAELoader"
+  ]
+ },
+ {
+  "id": "qwen21_turbo_edit",
+  "label": "Qwen Image 2.1 Turbo (local)",
+  "api": false,
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "prompt_input": "on_false",
+  "format": "ui",
+  "from": "image_qwen_image_2_1_turbo_image_edit",
+  "file": "qwen21_turbo_edit.json",
+  "models": [
+   {
+    "name": "qwen_image_2.1_turbo_int8_convrot.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors",
+    "directory": "diffusion_models"
+   },
+   {
+    "name": "qwen3vl_8b_int8_convrot.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3vl_8b_int8_convrot.safetensors",
+    "directory": "text_encoders"
+   },
+   {
+    "name": "qwen_image_2.1_vae_bf16.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors",
+    "directory": "vae"
+   },
+   {
+    "name": "qwen3.5_9b_qwen_image_2.1_pe_i2i.int8_convrot.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3.5_9b_qwen_image_2.1_pe_i2i.int8_convrot.safetensors",
+    "directory": "text_encoders"
+   }
+  ],
+  "nodes": [
+   "BatchImagesNode",
+   "CFGGuider",
+   "CLIPLoader",
+   "ComfySwitchNode",
+   "EmptyLatentImage",
+   "KSamplerSelect",
+   "LoadImage",
+   "ManualSigmas",
+   "PreviewAny",
+   "PrimitiveStringMultiline",
+   "QwenImage21Cache",
+   "RandomNoise",
+   "SamplerCustomAdvanced",
+   "SaveImageAdvanced",
+   "TextEncodeQwenImage21",
+   "TextGenerate",
+   "UNETLoader",
+   "VAEDecode",
+   "VAELoader"
+  ]
+ },
+ {
+  "id": "flux2_klein_4b_edit",
+  "label": "FLUX.2 Klein 4B (local)",
+  "api": false,
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "format": "ui",
+  "from": "image_flux2_klein_image_edit_4b_distilled",
+  "file": "flux2_klein_4b_edit.json",
+  "models": [
+   {
+    "name": "flux-2-klein-4b-fp8.safetensors",
+    "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-4b-fp8/resolve/main/flux-2-klein-4b-fp8.safetensors",
+    "directory": "diffusion_models"
+   },
+   {
+    "name": "qwen_3_4b.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors",
+    "directory": "text_encoders"
+   },
+   {
+    "name": "flux2-vae.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/flux2-dev/resolve/main/split_files/vae/flux2-vae.safetensors",
+    "directory": "vae"
+   }
+  ],
+  "nodes": [
+   "CFGGuider",
+   "CLIPLoader",
+   "CLIPTextEncode",
+   "ConditioningZeroOut",
+   "EmptyFlux2LatentImage",
+   "Flux2Scheduler",
+   "GetImageSize",
+   "ImageScaleToTotalPixels",
+   "KSamplerSelect",
+   "LoadImage",
+   "RandomNoise",
+   "ReferenceLatent",
+   "SamplerCustomAdvanced",
+   "SaveImage",
+   "UNETLoader",
+   "VAEDecode",
+   "VAEEncode",
+   "VAELoader"
+  ]
+ },
+ {
+  "id": "flux2_klein_9b_edit",
+  "label": "FLUX.2 Klein 9B (local)",
+  "api": false,
+  "format": "api",
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "from": "image_flux2_klein_image_edit_9b_distilled",
+  "file": "flux2_klein_9b_edit.json",
+  "nodes": [
+   "CFGGuider",
+   "CLIPLoader",
+   "CLIPTextEncode",
+   "ConditioningZeroOut",
+   "EmptyFlux2LatentImage",
+   "Flux2Scheduler",
+   "GetImageSize",
+   "ImageScaleToTotalPixels",
+   "KSamplerSelect",
+   "LoadImage",
+   "RandomNoise",
+   "ReferenceLatent",
+   "SamplerCustomAdvanced",
+   "SaveImage",
+   "UNETLoader",
+   "VAEDecode",
+   "VAEEncode",
+   "VAELoader"
+  ],
+  "models": [
+   {
+    "name": "flux-2-klein-base-9b-fp8.safetensors",
+    "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8/resolve/main/flux-2-klein-base-9b-fp8.safetensors",
+    "directory": "diffusion_models"
+   },
+   {
+    "name": "qwen_3_8b_fp8mixed.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/flux2-klein-9B/resolve/main/split_files/text_encoders/qwen_3_8b_fp8mixed.safetensors",
+    "directory": "text_encoders"
+   },
+   {
+    "name": "full_encoder_small_decoder.safetensors",
+    "url": "https://huggingface.co/black-forest-labs/FLUX.2-small-decoder/resolve/main/full_encoder_small_decoder.safetensors",
+    "directory": "vae"
+   }
+  ]
+ },
+ {
+  "id": "longcat_edit",
+  "label": "LongCat Image Edit (local)",
+  "api": false,
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "format": "ui",
+  "from": "image_longcat_image_edit",
+  "file": "longcat_edit.json",
+  "models": [
+   {
+    "name": "ae.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors",
+    "directory": "vae"
+   },
+   {
+    "name": "longcat_image_edit_bf16.safetensors",
+    "url": "https://huggingface.co/TalmajM/LongCat-Image-Edit_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/longcat_image_edit_bf16.safetensors",
+    "directory": "diffusion_models"
+   },
+   {
+    "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors",
+    "directory": "text_encoders"
+   }
+  ],
+  "nodes": [
+   "CLIPLoader",
+   "FluxGuidance",
+   "FluxKontextMultiReferenceLatentMethod",
+   "ImageScaleToTotalPixels",
+   "KSampler",
+   "LoadImage",
+   "SaveImage",
+   "TextEncodeQwenImageEdit",
+   "UNETLoader",
+   "VAEDecode",
+   "VAEEncode",
+   "VAELoader"
+  ]
+ },
+ {
+  "id": "firered_edit",
+  "label": "FireRed Image Edit 1.1 (local)",
+  "api": false,
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "format": "ui",
+  "from": "image_firered_image_edit1_1",
+  "file": "firered_edit.json",
+  "models": [
+   {
+    "name": "qwen_image_vae.safetensors",
+    "url": "https://huggingface.co/FireRedTeam/FireRed-Image-Edit-1.0-ComfyUI/resolve/main/qwen_image_vae.safetensors",
+    "directory": "vae"
+   },
+   {
+    "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/HunyuanVideo_1.5_repackaged/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors",
+    "directory": "text_encoders"
+   },
+   {
+    "name": "FireRed-Image-Edit-1.0-Lightning-8steps-v1.0.safetensors",
+    "url": "https://huggingface.co/FireRedTeam/FireRed-Image-Edit-1.0-ComfyUI/resolve/main/FireRed-Image-Edit-1.0-Lightning-8steps-v1.0.safetensors",
+    "directory": "loras"
+   },
+   {
+    "name": "FireRed-Image-Edit-1.1-transformer.safetensors",
+    "url": "https://huggingface.co/FireRedTeam/FireRed-Image-Edit-1.1-ComfyUI/resolve/main/FireRed-Image-Edit-1.1-transformer.safetensors",
+    "directory": "diffusion_models"
+   }
+  ],
+  "nodes": [
+   "CFGNorm",
+   "CLIPLoader",
+   "ComfySwitchNode",
+   "KSampler",
+   "LoadImage",
+   "LoraLoaderModelOnly",
+   "ModelSamplingAuraFlow",
+   "PrimitiveBoolean",
+   "PrimitiveFloat",
+   "PrimitiveInt",
+   "ResizeImageMaskNode",
+   "SaveImage",
+   "TextEncodeQwenImageEditPlus",
+   "UNETLoader",
+   "VAEDecode",
+   "VAEEncode",
+   "VAELoader"
+  ]
+ },
+ {
+  "id": "omnigen2_edit",
+  "label": "OmniGen2 (local)",
+  "api": false,
+  "actions": [
+   "fill",
+   "remove",
+   "extend",
+   "edit"
+  ],
+  "size": {
+   "mp": 1.0,
+   "mult": 16,
+   "max": 2048
+  },
+  "format": "ui",
+  "from": "image_omnigen2_image_edit",
+  "file": "omnigen2_edit.json",
+  "models": [
+   {
+    "name": "ae.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Lumina_Image_2.0_Repackaged/resolve/main/split_files/vae/ae.safetensors",
+    "directory": "vae"
+   },
+   {
+    "name": "qwen_2.5_vl_fp16.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Omnigen2_ComfyUI_repackaged/resolve/main/split_files/text_encoders/qwen_2.5_vl_fp16.safetensors",
+    "directory": "text_encoders"
+   },
+   {
+    "name": "omnigen2_fp16.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/Omnigen2_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/omnigen2_fp16.safetensors",
+    "directory": "diffusion_models"
+   }
+  ],
+  "nodes": [
+   "BasicScheduler",
+   "CLIPLoader",
+   "CLIPTextEncode",
+   "DualCFGGuider",
+   "EmptySD3LatentImage",
+   "GetImageSize",
+   "ImageScaleToTotalPixels",
+   "KSamplerSelect",
+   "LoadImage",
+   "RandomNoise",
+   "ReferenceLatent",
+   "SamplerCustomAdvanced",
+   "SaveImage",
+   "UNETLoader",
+   "VAEDecode",
+   "VAEEncode",
+   "VAELoader"
+  ]
+ },
+ {
+  "id": "birefnet",
+  "label": "BiRefNet (local, ComfyUI)",
   "api": false,
   "actions": [
    "background",
@@ -250,13 +1360,652 @@
    "mult": 1,
    "max": 2048
   },
-  "from": "RemoveBackground_RMBG2"
+  "format": "ui",
+  "from": "utility_birefnet_remove_background",
+  "file": "birefnet.json",
+  "models": [
+   {
+    "name": "birefnet.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/BiRefNet/resolve/main/background_removal/birefnet.safetensors",
+    "directory": "background_removal"
+   }
+  ],
+  "nodes": [
+   "InvertMask",
+   "JoinImageWithAlpha",
+   "LoadBackgroundRemovalModel",
+   "LoadImage",
+   "RemoveBackground",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "bria_rmbg",
+  "label": "Bria remove background (API)",
+  "api": true,
+  "actions": [
+   "background",
+   "select_subject"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 2048
+  },
+  "format": "ui",
+  "from": "utility_bria_remove_image_background",
+  "file": "bria_rmbg.json",
+  "models": [],
+  "nodes": [
+   "BriaRemoveImageBackground",
+   "LoadImage",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "recraft_rmbg",
+  "label": "Recraft remove background (API)",
+  "file": "recraft_rmbg.json",
+  "api": true,
+  "format": "api",
+  "actions": [
+   "background",
+   "select_subject"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 2048
+  },
+  "from": "",
+  "nodes": [
+   "LoadImage",
+   "RecraftRemoveBackgroundNode",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "rmbg2",
+  "label": "RMBG: RMBG-2.0 (local)",
+  "file": "rmbg2.json",
+  "api": false,
+  "format": "api",
+  "actions": [
+   "background",
+   "select_subject"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 2048
+  },
+  "tune": [
+   "2"
+  ],
+  "pack": "ComfyUI-RMBG",
+  "downloads_itself": [
+   "RMBG/RMBG-2.0"
+  ],
+  "from": "RemoveBackground_RMBG2",
+  "nodes": [
+   "LoadImage",
+   "MaskToImage",
+   "RMBG",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "rmbg_inspyrenet",
+  "label": "RMBG: INSPYRENET (local)",
+  "file": "rmbg2.json",
+  "api": false,
+  "format": "api",
+  "actions": [
+   "background",
+   "select_subject"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 2048
+  },
+  "set": {
+   "*": [
+    [
+     "2",
+     "model",
+     "INSPYRENET"
+    ]
+   ]
+  },
+  "tune": [
+   "2"
+  ],
+  "pack": "ComfyUI-RMBG",
+  "downloads_itself": [
+   "RMBG/INSPYRENET"
+  ],
+  "from": "RemoveBackground_RMBG2",
+  "nodes": [
+   "LoadImage",
+   "MaskToImage",
+   "RMBG",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "rmbg_ben",
+  "label": "RMBG: BEN (local)",
+  "file": "rmbg2.json",
+  "api": false,
+  "format": "api",
+  "actions": [
+   "background",
+   "select_subject"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 2048
+  },
+  "set": {
+   "*": [
+    [
+     "2",
+     "model",
+     "BEN"
+    ]
+   ]
+  },
+  "tune": [
+   "2"
+  ],
+  "pack": "ComfyUI-RMBG",
+  "downloads_itself": [
+   "RMBG/BEN"
+  ],
+  "from": "RemoveBackground_RMBG2",
+  "nodes": [
+   "LoadImage",
+   "MaskToImage",
+   "RMBG",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "rmbg_ben2",
+  "label": "RMBG: BEN2 (local)",
+  "file": "rmbg2.json",
+  "api": false,
+  "format": "api",
+  "actions": [
+   "background",
+   "select_subject"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 2048
+  },
+  "set": {
+   "*": [
+    [
+     "2",
+     "model",
+     "BEN2"
+    ]
+   ]
+  },
+  "tune": [
+   "2"
+  ],
+  "pack": "ComfyUI-RMBG",
+  "downloads_itself": [
+   "RMBG/BEN2"
+  ],
+  "from": "RemoveBackground_RMBG2",
+  "nodes": [
+   "LoadImage",
+   "MaskToImage",
+   "RMBG",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "rmbg_birefnet_general",
+  "label": "RMBG: BiRefNet-general (local)",
+  "file": "rmbg_birefnet.json",
+  "api": false,
+  "format": "api",
+  "actions": [
+   "background",
+   "select_subject"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 2048
+  },
+  "set": {
+   "*": [
+    [
+     "2",
+     "model",
+     "BiRefNet-general"
+    ]
+   ]
+  },
+  "tune": [
+   "2"
+  ],
+  "pack": "ComfyUI-RMBG",
+  "downloads_itself": [
+   "RMBG/BiRefNet/BiRefNet-general"
+  ],
+  "from": "ComfyUI-RMBG BiRefNet (RMBG)",
+  "nodes": [
+   "BiRefNetRMBG",
+   "LoadImage",
+   "MaskToImage",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "rmbg_birefnet_512x512",
+  "label": "RMBG: BiRefNet_512x512 (local)",
+  "file": "rmbg_birefnet.json",
+  "api": false,
+  "format": "api",
+  "actions": [
+   "background",
+   "select_subject"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 2048
+  },
+  "set": {
+   "*": [
+    [
+     "2",
+     "model",
+     "BiRefNet_512x512"
+    ]
+   ]
+  },
+  "tune": [
+   "2"
+  ],
+  "pack": "ComfyUI-RMBG",
+  "downloads_itself": [
+   "RMBG/BiRefNet/BiRefNet_512x512"
+  ],
+  "from": "ComfyUI-RMBG BiRefNet (RMBG)",
+  "nodes": [
+   "BiRefNetRMBG",
+   "LoadImage",
+   "MaskToImage",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "rmbg_birefnet_hr",
+  "label": "RMBG: BiRefNet-HR (local)",
+  "file": "rmbg_birefnet.json",
+  "api": false,
+  "format": "api",
+  "actions": [
+   "background",
+   "select_subject"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 2048
+  },
+  "set": {
+   "*": [
+    [
+     "2",
+     "model",
+     "BiRefNet-HR"
+    ]
+   ]
+  },
+  "tune": [
+   "2"
+  ],
+  "pack": "ComfyUI-RMBG",
+  "downloads_itself": [
+   "RMBG/BiRefNet/BiRefNet-HR"
+  ],
+  "from": "ComfyUI-RMBG BiRefNet (RMBG)",
+  "nodes": [
+   "BiRefNetRMBG",
+   "LoadImage",
+   "MaskToImage",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "rmbg_birefnet_portrait",
+  "label": "RMBG: BiRefNet-portrait (local)",
+  "file": "rmbg_birefnet.json",
+  "api": false,
+  "format": "api",
+  "actions": [
+   "background",
+   "select_subject"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 2048
+  },
+  "set": {
+   "*": [
+    [
+     "2",
+     "model",
+     "BiRefNet-portrait"
+    ]
+   ]
+  },
+  "tune": [
+   "2"
+  ],
+  "pack": "ComfyUI-RMBG",
+  "downloads_itself": [
+   "RMBG/BiRefNet/BiRefNet-portrait"
+  ],
+  "from": "ComfyUI-RMBG BiRefNet (RMBG)",
+  "nodes": [
+   "BiRefNetRMBG",
+   "LoadImage",
+   "MaskToImage",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "rmbg_birefnet_matting",
+  "label": "RMBG: BiRefNet-matting (local)",
+  "file": "rmbg_birefnet.json",
+  "api": false,
+  "format": "api",
+  "actions": [
+   "background",
+   "select_subject"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 2048
+  },
+  "set": {
+   "*": [
+    [
+     "2",
+     "model",
+     "BiRefNet-matting"
+    ]
+   ]
+  },
+  "tune": [
+   "2"
+  ],
+  "pack": "ComfyUI-RMBG",
+  "downloads_itself": [
+   "RMBG/BiRefNet/BiRefNet-matting"
+  ],
+  "from": "ComfyUI-RMBG BiRefNet (RMBG)",
+  "nodes": [
+   "BiRefNetRMBG",
+   "LoadImage",
+   "MaskToImage",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "rmbg_birefnet_hr_matting",
+  "label": "RMBG: BiRefNet-HR-matting (local)",
+  "file": "rmbg_birefnet.json",
+  "api": false,
+  "format": "api",
+  "actions": [
+   "background",
+   "select_subject"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 2048
+  },
+  "set": {
+   "*": [
+    [
+     "2",
+     "model",
+     "BiRefNet-HR-matting"
+    ]
+   ]
+  },
+  "tune": [
+   "2"
+  ],
+  "pack": "ComfyUI-RMBG",
+  "downloads_itself": [
+   "RMBG/BiRefNet/BiRefNet-HR-matting"
+  ],
+  "from": "ComfyUI-RMBG BiRefNet (RMBG)",
+  "nodes": [
+   "BiRefNetRMBG",
+   "LoadImage",
+   "MaskToImage",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "rmbg_birefnet_lite",
+  "label": "RMBG: BiRefNet_lite (local)",
+  "file": "rmbg_birefnet.json",
+  "api": false,
+  "format": "api",
+  "actions": [
+   "background",
+   "select_subject"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 2048
+  },
+  "set": {
+   "*": [
+    [
+     "2",
+     "model",
+     "BiRefNet_lite"
+    ]
+   ]
+  },
+  "tune": [
+   "2"
+  ],
+  "pack": "ComfyUI-RMBG",
+  "downloads_itself": [
+   "RMBG/BiRefNet/BiRefNet_lite"
+  ],
+  "from": "ComfyUI-RMBG BiRefNet (RMBG)",
+  "nodes": [
+   "BiRefNetRMBG",
+   "LoadImage",
+   "MaskToImage",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "rmbg_birefnet_lite_2k",
+  "label": "RMBG: BiRefNet_lite-2K (local)",
+  "file": "rmbg_birefnet.json",
+  "api": false,
+  "format": "api",
+  "actions": [
+   "background",
+   "select_subject"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 2048
+  },
+  "set": {
+   "*": [
+    [
+     "2",
+     "model",
+     "BiRefNet_lite-2K"
+    ]
+   ]
+  },
+  "tune": [
+   "2"
+  ],
+  "pack": "ComfyUI-RMBG",
+  "downloads_itself": [
+   "RMBG/BiRefNet/BiRefNet_lite-2K"
+  ],
+  "from": "ComfyUI-RMBG BiRefNet (RMBG)",
+  "nodes": [
+   "BiRefNetRMBG",
+   "LoadImage",
+   "MaskToImage",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "rmbg_birefnet_dynamic",
+  "label": "RMBG: BiRefNet_dynamic (local)",
+  "file": "rmbg_birefnet.json",
+  "api": false,
+  "format": "api",
+  "actions": [
+   "background",
+   "select_subject"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 2048
+  },
+  "set": {
+   "*": [
+    [
+     "2",
+     "model",
+     "BiRefNet_dynamic"
+    ]
+   ]
+  },
+  "tune": [
+   "2"
+  ],
+  "pack": "ComfyUI-RMBG",
+  "downloads_itself": [
+   "RMBG/BiRefNet/BiRefNet_dynamic"
+  ],
+  "from": "ComfyUI-RMBG BiRefNet (RMBG)",
+  "nodes": [
+   "BiRefNetRMBG",
+   "LoadImage",
+   "MaskToImage",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "rmbg_birefnet_lite_matting",
+  "label": "RMBG: BiRefNet_lite-matting (local)",
+  "file": "rmbg_birefnet.json",
+  "api": false,
+  "format": "api",
+  "actions": [
+   "background",
+   "select_subject"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 2048
+  },
+  "set": {
+   "*": [
+    [
+     "2",
+     "model",
+     "BiRefNet_lite-matting"
+    ]
+   ]
+  },
+  "tune": [
+   "2"
+  ],
+  "pack": "ComfyUI-RMBG",
+  "downloads_itself": [
+   "RMBG/BiRefNet/BiRefNet_lite-matting"
+  ],
+  "from": "ComfyUI-RMBG BiRefNet (RMBG)",
+  "nodes": [
+   "BiRefNetRMBG",
+   "LoadImage",
+   "MaskToImage",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "rmbg_birefnet_toonout",
+  "label": "RMBG: BiRefNet_toonout (local)",
+  "file": "rmbg_birefnet.json",
+  "api": false,
+  "format": "api",
+  "actions": [
+   "background",
+   "select_subject"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 2048
+  },
+  "set": {
+   "*": [
+    [
+     "2",
+     "model",
+     "BiRefNet_toonout"
+    ]
+   ]
+  },
+  "tune": [
+   "2"
+  ],
+  "pack": "ComfyUI-RMBG",
+  "downloads_itself": [
+   "RMBG/BiRefNet/BiRefNet_toonout"
+  ],
+  "from": "ComfyUI-RMBG BiRefNet (RMBG)",
+  "nodes": [
+   "BiRefNetRMBG",
+   "LoadImage",
+   "MaskToImage",
+   "SaveImage"
+  ]
  },
  {
   "id": "upscale_model",
-  "label": "Upscale model 4x-ClearReality (local)",
+  "label": "Upscale model (local)",
   "file": "upscale_model.json",
   "api": false,
+  "format": "api",
   "actions": [
    "upscale"
   ],
@@ -265,13 +2014,21 @@
    "mult": 1,
    "max": 2048
   },
-  "from": "upscale_using_model"
+  "from": "upscale_using_model",
+  "nodes": [
+   "ImageUpscaleWithModel",
+   "LoadImage",
+   "SaveImage",
+   "UpscaleModelLoader"
+  ],
+  "models": []
  },
  {
   "id": "magnific_precise",
   "label": "Magnific Precise (API)",
   "file": "magnific_precise.json",
   "api": true,
+  "format": "api",
   "actions": [
    "upscale"
   ],
@@ -284,6 +2041,281 @@
    "2",
    "scale_factor"
   ],
-  "from": "api_magnific_image_upscale_precise"
+  "tune": [
+   "2"
+  ],
+  "from": "api_magnific_image_upscale_precise",
+  "nodes": [
+   "LoadImage",
+   "MagnificImageUpscalerPreciseV2Node",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "magnific_creative",
+  "label": "Magnific Creative (API)",
+  "api": true,
+  "format": "api",
+  "actions": [
+   "upscale"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 4096
+  },
+  "scale": [
+   "paint:tune",
+   "scale_factor"
+  ],
+  "tune": [
+   "paint:tune"
+  ],
+  "from": "api_magnific_image_upscale_creative",
+  "file": "magnific_creative.json",
+  "nodes": [
+   "LoadImage",
+   "MagnificImageUpscalerCreativeNode",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "crystal",
+  "label": "Crystal Upscaler, Clarity AI (API)",
+  "api": true,
+  "actions": [
+   "upscale"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 4096
+  },
+  "scale": [
+   "paint:tune",
+   "model.scale_factor",
+   "number"
+  ],
+  "tune": [
+   "paint:tune"
+  ],
+  "format": "ui",
+  "from": "api_clarity_ai_crystal_upscale",
+  "file": "crystal.json",
+  "models": [],
+  "nodes": [
+   "ClarityCrystalUpscaleNode",
+   "LoadImage",
+   "SaveImageAdvanced"
+  ]
+ },
+ {
+  "id": "recraft_crisp",
+  "label": "Recraft Crisp Upscale (API)",
+  "api": true,
+  "actions": [
+   "upscale"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 4096
+  },
+  "format": "ui",
+  "from": "utility_recraft_crisp_image_upscale",
+  "file": "recraft_crisp.json",
+  "models": [],
+  "nodes": [
+   "LoadImage",
+   "RecraftCrispUpscaleNode",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "recraft_creative",
+  "label": "Recraft Creative Upscale (API)",
+  "api": true,
+  "actions": [
+   "upscale"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 4096
+  },
+  "format": "ui",
+  "from": "utility_recraft_creative_image_upscale",
+  "file": "recraft_creative.json",
+  "models": [],
+  "nodes": [
+   "LoadImage",
+   "RecraftCreativeUpscaleNode",
+   "SaveImage"
+  ]
+ },
+ {
+  "id": "topaz_bloom2",
+  "label": "Topaz Bloom 2 (API)",
+  "api": true,
+  "actions": [
+   "upscale"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 4096
+  },
+  "tune": [
+   "paint:tune"
+  ],
+  "format": "ui",
+  "from": "api_topaz_image_enhance_bloom2",
+  "file": "topaz_bloom2.json",
+  "models": [],
+  "nodes": [
+   "LoadImage",
+   "SaveImageAdvanced",
+   "TopazImageEnhanceV2"
+  ]
+ },
+ {
+  "id": "topaz_wonder35",
+  "label": "Topaz Wonder 3.5 (API)",
+  "api": true,
+  "actions": [
+   "upscale"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 4096
+  },
+  "tune": [
+   "paint:tune"
+  ],
+  "format": "ui",
+  "from": "api_topaz_image_enhance_wonder3_5",
+  "file": "topaz_wonder35.json",
+  "models": [],
+  "nodes": [
+   "LoadImage",
+   "SaveImageAdvanced",
+   "TopazImageEnhanceV2"
+  ]
+ },
+ {
+  "id": "wavespeed_seedvr2",
+  "label": "SeedVR2 on WaveSpeed (API)",
+  "api": true,
+  "actions": [
+   "upscale"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 4096
+  },
+  "tune": [
+   "paint:tune"
+  ],
+  "format": "ui",
+  "from": "api_wavespeed_image_upscale",
+  "file": "wavespeed_seedvr2.json",
+  "models": [],
+  "nodes": [
+   "LoadImage",
+   "SaveImage",
+   "WavespeedImageUpscaleNode"
+  ]
+ },
+ {
+  "id": "seedvr2_7b",
+  "label": "SeedVR2 7B (local)",
+  "api": false,
+  "actions": [
+   "upscale"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 2048
+  },
+  "scale": [
+   "paint:scale",
+   "resize_type.multiplier",
+   "number"
+  ],
+  "tune": [
+   "paint:tune"
+  ],
+  "format": "ui",
+  "from": "utility_seedvr2_7b_int8_upscale_image",
+  "file": "seedvr2_7b.json",
+  "models": [
+   {
+    "name": "seedvr2_ema_vae_fp16.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/SeedVR2/resolve/main/vae/seedvr2_ema_vae_fp16.safetensors",
+    "directory": "vae"
+   },
+   {
+    "name": "seedvr2_7b_int8_convrot.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/SeedVR2/resolve/main/diffusion_models/seedvr2_7b_int8_convrot.safetensors",
+    "directory": "diffusion_models"
+   }
+  ],
+  "nodes": [
+   "JoinImageWithAlpha",
+   "KSampler",
+   "LoadImage",
+   "ResizeImageMaskNode",
+   "SaveImage",
+   "SeedVR2Conditioning",
+   "SeedVR2PostProcessing",
+   "SeedVR2Preprocess",
+   "UNETLoader",
+   "VAEDecodeTiled",
+   "VAEEncodeTiled",
+   "VAELoader"
+  ]
+ },
+ {
+  "id": "sam3",
+  "label": "SAM 3.1 (local)",
+  "api": false,
+  "actions": [
+   "select_objects"
+  ],
+  "size": {
+   "mp": null,
+   "mult": 1,
+   "max": 2048
+  },
+  "prompt_input": "text",
+  "tune": [
+   "paint:tune"
+  ],
+  "optional": [
+   "paint:prompt",
+   "paint:box"
+  ],
+  "format": "ui",
+  "from": "utility_image_segment_sam3",
+  "file": "sam3.json",
+  "models": [
+   {
+    "name": "sam3.1_multiplex_fp16.safetensors",
+    "url": "https://huggingface.co/Comfy-Org/sam3.1/resolve/main/checkpoints/sam3.1_multiplex_fp16.safetensors",
+    "directory": "checkpoints"
+   }
+  ],
+  "nodes": [
+   "CLIPTextEncode",
+   "CheckpointLoaderSimple",
+   "LoadImage",
+   "MaskToImage",
+   "PrimitiveBoundingBox",
+   "SAM3_Detect",
+   "SaveImage"
+  ]
  }
 ]

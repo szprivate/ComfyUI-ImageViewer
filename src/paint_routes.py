@@ -35,6 +35,10 @@ nothing is rounded on the way - a canvas' PNG would premultiply them.
 - ``POST /imageviewer/paint/generate`` (JSON) - ``token, action, prompt, workflow?, variations, k``: the crop
   (and its mask) written into ``<input>/paint``, the workflow filled in, 1-4 graphs for the page to queue;
   409 ``{missing}`` when a model or node is not on this machine.
+- ``GET /imageviewer/paint/workflow?id=`` - one built-in workflow as it goes onto the canvas.
+- ``POST /imageviewer/paint/models`` (JSON) - ``workflow``: the model files it still needs, their sizes and where
+  they come from; ``POST /imageviewer/paint/download`` - ``workflow``: fetch them (a job), ``job`` (+ ``cancel``):
+  how far it is. Only the files a built-in's template names, only from Hugging Face, into ComfyUI's model folders.
 - ``POST /imageviewer/paint/generate_place`` (JSON) - ``job, image {filename, subfolder, type}, n``: the paint
   ops that lay a result back (a layer at the crop, masked to the selection; a mask; a selection; an upscale).
 
@@ -703,7 +707,9 @@ def register(add, *, web, path_access, export_rules, folder_paths, send, resolve
             res = await off(G.prepare, s, body.get("token"), body.get("action"), folder_paths.get_input_directory(),
                             wid=body.get("workflow") or None, prompt=body.get("prompt") or "",
                             variations=body.get("variations") or 1, k=body.get("k") or 2,
-                            folder_paths=folder_paths, node_classes=node_classes())
+                            folder_paths=folder_paths, node_classes=node_classes(), graph=body.get("graph"),
+                            tune=body.get("tune") if isinstance(body.get("tune"), dict) else None,
+                            box=bool(body.get("box")))
         except G.Missing as e:
             return web.json_response({"error": str(e), "missing": e.missing}, status=409)
         except (G.GenerateError, OSError) as e:
@@ -722,8 +728,31 @@ def register(add, *, web, path_access, export_rules, folder_paths, send, resolve
             return err(e)
         return web.json_response(res)
 
+    async def h_workflow(request):
+        try:
+            return web.json_response(await off(G.workflow_file, request.query.get("id") or ""))
+        except G.GenerateError as e:
+            return err(e, 404)
+
+    async def h_models(request):
+        body = await guarded_json(request)
+        try:
+            return web.json_response(await off(G.download_plan, str(body.get("workflow") or ""), folder_paths))
+        except G.GenerateError as e:
+            return err(e)
+
+    async def h_download(request):
+        body = await guarded_json(request)
+        try:
+            if body.get("job"):
+                return web.json_response(await off(G.download_status, str(body["job"]), bool(body.get("cancel"))))
+            return web.json_response({"job": await off(G.start_download, str(body.get("workflow") or ""), folder_paths)})
+        except G.GenerateError as e:
+            return err(e)
+
     for method, name, h in (("GET", "workflows", h_workflows), ("POST", "workflows", h_workflows),
-                            ("POST", "generate", h_generate), ("POST", "generate_place", h_generate_place)):
+                            ("POST", "generate", h_generate), ("POST", "generate_place", h_generate_place),
+                            ("GET", "workflow", h_workflow), ("POST", "models", h_models), ("POST", "download", h_download)):
         add(method, "/imageviewer/paint/" + name, h)
         add(method, "/api/imageviewer/paint/" + name, h)
 
