@@ -37,6 +37,9 @@
 //   M            a marker at the playhead (on the selected clip when it is under it); Alt+M takes them away;
 //                Shift+Up / Shift+Down the marker before / after (imageViewer_editMarkers.js)
 //
+//   Del / Shift+Del with nothing selected and an in and out set: lift / extract the range;
+//   Ctrl+Shift+, / . swap the selected clip; Y / Alt+Y / Shift+Y select forward / backward (imageViewer_editRange.js)
+//
 //   Ctrl+O       Open cut...
 //   ?            Show Hotkeys: the viewer's overlay lists these (EDIT_KEYS) while a cut's tab is up
 //
@@ -62,6 +65,11 @@ export const EDIT_KEYS = [
     ["Ctrl+B, S", "Cut the clip under the playhead"],
     ["Del / Backspace", "Delete everything selected, leaving gaps (a lift) - a linked sound or picture goes with it"],
     ["Shift+Del", "Ripple delete everything selected: what follows closes up (a selected gap: closed)"],
+    ["Del with nothing selected, an in and out set", "Lift the in-out range off the tracks whose Auto Track Selector is on: their clips are cut at the in and the out and the part between goes, leaving a gap"],
+    ["Shift+Del with nothing selected, an in and out set", "Extract the in-out range: the same, and the hole closes - V1, the selected tracks and the markers after the out move up"],
+    ["Ctrl+Shift+, / Ctrl+Shift+.", "Swap the selected clip with the one before / after it on its track (gaps and dissolves stay where they are)"],
+    ["Y / Shift+Y", "Select the clips from the playhead on / before it, on the selected clip's track (else V1)"],
+    ["Alt+Y / Alt+Shift+Y", "Select the clips from the playhead on / before it, on every track"],
     ["Ctrl+click, Shift+click", "Select several, on any tracks: picture, sound, the music, texts"],
     ["Drag from an empty place", "Marquee: everything it touches, on all tracks, is selected (Shift: added); drag one of them: all move"],
     ["Click a cut", "Selects that edit point, green on what moves, in every mode: its outgoing edge, its incoming edge, or the middle (a roll)"],
@@ -149,10 +157,12 @@ export const EditKeysMixin = {
             else if (letter === "i") this._editTlClearMark("in");
             else if (letter === "o") this._editTlClearMark("out");
             else if (letter === "v" && !shift) this.editTlPasteDialog();
+            else if (letter === "y") this.editTlSelectForward(shift ? -1 : 1, true);
             else if (comma || period) this.editTlSlipBy((comma ? -1 : 1) * (shift ? Math.round(this._editTlCut.fps || 24) : 1));
             else done = false;
         }
         else if (alt) done = false;
+        else if (ctrl && shift && (comma || period)) this.editTlSwap(comma ? -1 : 1);
         else if (ctrl && letter === "l") this.editTlLoopOnce(shift ? "pingpong" : "loop");
         else if (ctrl && low === "z") { if (shift) this.editTlRedo(); else this.editTlUndo(); }
         else if (ctrl && low === "y") this.editTlRedo();
@@ -179,6 +189,7 @@ export const EditKeysMixin = {
         else if (letter === "n" && !shift) this.editTlSnapToggle();
         else if (letter === "e" && !shift) this.editTlExtendEdit();
         else if (letter === "d" && !shift) this.editTlDisableToggle();
+        else if (letter === "y") this.editTlSelectForward(shift ? -1 : 1, false);
         else if (low === "z" && shift) this._editTlZoom(1);
         else if (low === "s" && !shift) this.editTlSplitAtPlayhead();
         else if (key === "?") this.toggleHelpOverlay();

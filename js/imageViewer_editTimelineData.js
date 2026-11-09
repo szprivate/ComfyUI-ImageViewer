@@ -4666,3 +4666,144 @@ export function markersAt(cut, t, fps = 24) {
     const half = 0.5 / (num(fps) || 24);
     return allMarkers(cut).filter((m) => Math.abs(m.t - num(t)) < half);
 }
+
+// ── the in-out range, swapping, selecting forward ────────────────────────────
+//
+// As Resolve's Edit page. LIFT (Del with nothing selected and an in and out set)
+// takes what lies between the in and the out off the tracks whose Auto Track
+// Selector is on (editMask): the clips there are cut at the in and at the out
+// (with their linked partners, as the blade cuts them) and the pieces between go,
+// leaving gaps. EXTRACT (Shift+Del) does the same and then closes the hole: V1's
+// next shot moves up by the range's length, and so does what begins after the
+// out on the other selected tracks and the timeline markers after it (those
+// inside it go). The bed (A1) lies under the whole film and is left as it is.
+// SWAP moves a clip one place along its track, the clip there taking its place
+// (gaps stay where they were). SELECT FORWARD takes every clip from the playhead
+// on (or before it) on one track or on all of them.
+
+/**
+ * The in-out range [a, b) (film seconds) lifted, or with `ripple` extracted, on
+ * the tracks in `mask`. { cut, count, kept } - or { error } when nothing there
+ * can be taken, or when a clip on a selected track could not be cut at the in or
+ * the out (a dissolve, a loop).
+ */
+export function liftRange(cut, a, b, ripple, mask, fps = 24) {
+    const A = round(num(a)), B = round(num(b));
+    if (!cut || !(B - A > 1e-6)) return { error: "no in and out set" };
+    const on = mask || editMask(cut);
+    const tol = 0.5 / (num(fps) || 24);
+    let next = cut;
+    for (const t of [B, A]) {
+        const got = splitAt(next, t, null, on);
+        if (got) next = got.cut;
+    }
+    const items = [];
+    let straddle = "";
+    const look = (sel, s, e, track) => {
+        if (!on.has(track) || e <= A + tol || s >= B - tol) return;
+        if (s >= A - tol && e <= B + tol) items.push(sel);
+        else straddle = straddle || track;
+    };
+    const starts = clipStarts(next);
+    next.clips.forEach((c, i) => look({ kind: "clip", i }, starts[i], starts[i] + num(c.length), "V1"));
+    for (const k of next.tracks) k.clips.forEach((c, i) => look({ kind: "tclip", track: k.id, i }, num(c.at), num(c.at) + num(c.length), k.id));
+    if (straddle) return { error: `a clip on ${straddle} cannot be cut at the in or the out (a dissolve or a loop there)` };
+    if (!items.length && !ripple) return { error: "nothing between the in and the out on the selected tracks" };
+    const got = items.length ? deleteSelection(next, items, false, on) : { cut: next, kept: false };
+    let out = copy(got.cut);
+    if (ripple) {
+        const d = round(B - A);
+        if (on.has("V1")) {
+            const st = clipStarts(out);
+            const j = out.clips.findIndex((c, i) => st[i] >= B - tol);
+            if (j >= 0) {
+                // The time V1 is empty before that shot, from the in on, is what goes.
+                const room = Math.max(0, st[j] - Math.max(A, j ? st[j - 1] + num(out.clips[j - 1].length) : 0));
+                out.clips[j].gap = round(Math.max(0, num(out.clips[j].gap) - Math.min(d, room)));
+            }
+        }
+        const rest = new Set([...on].filter((id) => id !== "V1"));
+        out = rippleTracks(out, B - tol, -d, rest);
+        out = copy(out);
+        out.markers = (out.markers || [])
+            .filter((m) => !(num(m.t) >= A - tol && num(m.t) < B - tol))
+            .map((m) => (num(m.t) >= B - tol ? { ...m, t: round(num(m.t) - d) } : m));
+    }
+    const done = settle(out);
+    if (sameCut(done, cut)) return { error: "nothing between the in and the out on the selected tracks" };
+    return { cut: done, count: items.length, kept: got.kept };
+}
+
+/**
+ * The clip `sel` swapped with its neighbour on its track (`dir` -1 the one
+ * before, +1 the one after), as Resolve's Swap Clips: V1's shots trade places,
+ * the gaps and dissolves staying at their joins; on a placed track the two trade
+ * places with the gap between them kept. Linked partners follow. { cut, sel } or null.
+ */
+export function swapClip(cut, sel, dir) {
+    if (!cut || !sel) return null;
+    const step = dir < 0 ? -1 : 1;
+    if (sel.kind === "clip") {
+        const i = sel.i, j = i + step;
+        if (!cut.clips[i] || !cut.clips[j]) return null;
+        const lo = Math.min(i, j), hi = lo + 1;
+        const next = copy(cut);
+        const L = next.clips[lo], R = next.clips[hi];
+        const keep = (c) => ({ gap: c.gap, transition: c.transition });
+        const kl = keep(L), kr = keep(R);
+        next.clips[lo] = Object.assign(R, kl);
+        next.clips[hi] = Object.assign(L, kr);
+        let out = settle(next);
+        out = followLink(cut, out, { kind: "clip", i: lo });
+        out = followLink(cut, out, { kind: "clip", i: hi });
+        return { cut: out, sel: { kind: "clip", i: j } };
+    }
+    if (sel.kind !== "tclip") return null;
+    const k = trackOf(cut, sel.track);
+    const c = k && k.clips[sel.i];
+    if (!c) return null;
+    const a = num(c.at);
+    let j = -1;
+    k.clips.forEach((o, n) => {
+        if (n === sel.i) return;
+        const at = num(o.at);
+        if (step > 0 ? at >= a + num(c.length) - 1e-3 : at + num(o.length) <= a + 1e-3) {
+            if (j < 0 || (step > 0 ? at < num(k.clips[j].at) : at > num(k.clips[j].at))) j = n;
+        }
+    });
+    if (j < 0) return null;
+    const next = copy(cut);
+    const nk = trackOf(next, sel.track);
+    const [first, second] = step > 0 ? [nk.clips[sel.i], nk.clips[j]] : [nk.clips[j], nk.clips[sel.i]];
+    const start = num(first.at), gap = num(second.at) - (start + num(first.length));
+    second.at = round(start);
+    first.at = round(start + num(second.length) + gap);
+    let out = settle(next);
+    out = followLink(cut, out, sel);
+    out = followLink(cut, out, { kind: "tclip", track: sel.track, i: j });
+    return { cut: out, sel: { ...sel } };
+}
+
+/**
+ * The clips from the playhead `t` on (`dir` > 0: every clip that ends after it,
+ * the one under it too) or before it (`dir` < 0: every clip that begins before
+ * it), on the track `track` ("V1", a track id) or on every track (null) - as
+ * Resolve's Select Clips Forward / Backward. Locked tracks, the bed and texts are
+ * left out. A list of selections.
+ */
+export function selectForward(cut, t, track, dir, fps = 24) {
+    if (!cut) return [];
+    const tol = 0.5 / (num(fps) || 24), at = num(t);
+    const locked = lockedTracks(cut);
+    const take = (s, e) => (dir < 0 ? s < at - tol : e > at + tol);
+    const out = [];
+    if ((!track || track === "V1") && !locked.has("V1")) {
+        const st = clipStarts(cut);
+        cut.clips.forEach((c, i) => { if (take(st[i], st[i] + num(c.length))) out.push({ kind: "clip", i }); });
+    }
+    for (const k of cut.tracks || []) {
+        if ((track && k.id !== track) || locked.has(k.id)) continue;
+        k.clips.forEach((c, i) => { if (take(num(c.at), num(c.at) + num(c.length))) out.push({ kind: "tclip", track: k.id, i }); });
+    }
+    return out;
+}

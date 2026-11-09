@@ -56,6 +56,12 @@ The middle of a cut rolls it in both modes. Double-click a cut (either side of i
 
 Press <kbd>M</kbd> to put a marker at the playhead. With a clip selected and the playhead inside it, the marker goes on the clip and moves with its picture; otherwise it goes on the timeline (the ruler). Press <kbd>M</kbd> on a marker, or double-click it, to give it a name, a colour, notes and a duration. Drag a marker to move it, click it and press <kbd>Del</kbd> to remove it, or right-click it for colours and "delete all of this colour". <kbd>Alt</kbd>+<kbd>M</kbd> removes the markers at the playhead; <kbd>Shift</kbd>+<kbd>↑</kbd> / <kbd>↓</kbd> jump from marker to marker. Markers are saved in the cut, are snap targets, and go to Resolve with **Export to Resolve…**.
 
+## The in-out range, swapping, selecting forward
+
+- **Lift / extract**: with an in and out set (<kbd>I</kbd> / <kbd>O</kbd>) and nothing selected, <kbd>Del</kbd> takes what lies between them off every track whose Auto Track Selector is on and leaves a gap; <kbd>Shift</kbd>+<kbd>Del</kbd> also closes the gap, so everything after the out moves up. Both are on the ruler's right-click menu too. The music bed (A1) is left as it is.
+- **Swap clips**: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>,</kbd> / <kbd>.</kbd> swaps the selected clip with the one before / after it on its track.
+- **Select forward**: <kbd>Y</kbd> selects the clips from the playhead on, on the selected clip's track (else V1); <kbd>Alt</kbd>+<kbd>Y</kbd> on every track. <kbd>Shift</kbd>+<kbd>Y</kbd> / <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Y</kbd> select the ones before it (in Resolve that is <kbd>Ctrl</kbd>+<kbd>Y</kbd>, which is Redo here).
+
 <kbd>J</kbd> <kbd>K</kbd> <kbd>L</kbd> play backwards, stop and play. Press <kbd>?</kbd> on a cut's tab for every key.
 
 **Proxy playback** (the lightning button on the Edit bar, on by default): films bigger than 720p, or with key frames far apart, play and scrub from a lighter 540p copy, and compressed sounds (MP3 and the like) from a WAV copy, which stays in step with the picture. The server makes each once, in the background; until it is ready the file itself plays. Exports always use the files themselves.
