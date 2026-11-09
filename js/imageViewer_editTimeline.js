@@ -106,7 +106,7 @@ const EFFECT_TYPE = "application/x-imageviewer-effect";      // an item of the E
 const AFX_DRAG = "application/x-imageviewer-afx";            // a sound effect of the Effects panel, dragged (imageViewer_editAfx.js)
 const PREFIX = "edit:";                       // an Edit tab's key (EditPlayMixin.isEditTab)
 // The three panels that belong to a cut. They are up only while a cut's tab is.
-export const EDIT_PANELS = ["editTimeline", "editInspector", "editEffects"];
+export const EDIT_PANELS = ["editTimeline", "editInspector", "editEffects", "editMixer"];
 const PANELS_STORE = "imageviewer.viewer.editPanels";
 // Tall enough for a filmstrip with the sound under it, and for a waveform.
 export const ROW_HEIGHT = { text: 16, video: 44, audio: 30 };
@@ -156,7 +156,7 @@ export const EditTimelineMixin = {
         if (this._editTlWantedNow) return this._editTlWantedNow;
         let kept = null;
         try { kept = JSON.parse(window.localStorage.getItem(PANELS_STORE) || "null"); } catch (_) {}
-        this._editTlWantedNow = { editTimeline: true, editInspector: true, editEffects: false,
+        this._editTlWantedNow = { editTimeline: true, editInspector: true, editEffects: false, editMixer: false,
                                   ...((kept && typeof kept === "object") ? kept : {}) };
         return this._editTlWantedNow;
     },
@@ -2349,6 +2349,8 @@ export const EditTimelineMixin = {
             if (c && (D.hasKeys(c) || inside !== this._editInspInside)) this.editPanelsRefresh();
             this._editInspInside = inside;
         }
+        // The Mixer's faders show a keyed level at the playhead (drawn again only when it changed: its signature).
+        if (moved && this._editMixRender && this._editMixOn && this._editMixOn()) this._editMixRender();
         const at = D.pictureAt(this._editTlCut, seconds, this._editTlLive());
         const now = at ? at.key : "";
         if (now === this._editTlNow) return;

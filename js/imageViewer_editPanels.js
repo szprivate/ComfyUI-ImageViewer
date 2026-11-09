@@ -89,6 +89,7 @@ export const EditPanelsMixin = {
     editPanelsRefresh() {
         this._editInspRender();
         this._editFxRender();
+        if (this._editMixRender) this._editMixRender();
     },
 
     // ── Inspector ────────────────────────────────────────────────────────────

@@ -82,6 +82,7 @@ Press <kbd>M</kbd> to put a marker at the playhead. With a clip selected and the
 - **Crossfade**: <kbd>Shift</kbd>+<kbd>T</kbd> at a cut between two sound clips.
 - **Sound effects**: drag one from Effects onto a sound clip.
 - **A film's own sound**: <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>L</kbd> unlinks it onto a sound track, and links it back.
+- **Mixer**: Timeline › Mixer opens a strip for each sound track (A1, the bed, and the others) and a master. Each strip has a meter, a fader, a pan, M (switch the track off) and S (solo). The fader and pan are the track's own Gain and Pan effects, so the export and Export to Resolve hear them. If you keyframed them in the Inspector, moving them sets a keyframe at the playhead. V1 has a meter only, because each film plays at its own clip volume. A double-click puts a fader back to 0 dB, or a pan back to the centre.
 
 ## Look and titles
 

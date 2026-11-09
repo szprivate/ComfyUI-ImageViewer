@@ -271,3 +271,46 @@ export function panGains(pan) {
     const x = p * Math.PI / 2;
     return [Math.cos(x), 0, Math.sin(x), 1];
 }
+
+// ── the mixer's fader and pan ────────────────────────────────────────────────
+//
+// The Mixer panel (imageViewer_editMixer.js) is a face over a track's chain, not a
+// second model: its fader is the track's LAST Gain effect, its pan the last Pan
+// effect (there is no track volume beside the chain - the render and the file know
+// only effects). Moved off its rest the effect is made (at the chain's end); moved
+// back to rest, a plain one is taken away again. A keyed one gets a key at `t`.
+
+export const MIXER_PARAMS = { gain: "gain", pan: "pan" };
+
+/** The fader (type "gain", dB) or pan (type "pan", -1..1) of a chain at film time `t`: { v, keyed, i } (i -1: none). */
+export function mixerLevel(list, type, t) {
+    const chain = cleanAfx(list), k = MIXER_PARAMS[type];
+    let i = -1;
+    chain.forEach((fx, j) => { if (fx.type === type) i = j; });
+    if (i < 0) return { v: AFX[type].params[k][0], keyed: false, i };
+    const fx = chain[i];
+    return { v: fx.on === false ? AFX[type].params[k][0] : afxParam(fx, k, t), keyed: !!(fx.keys[k] && fx.keys[k].length), i };
+}
+
+/** The chain with its fader / pan at `v` (held to the param's range). */
+export function setMixerLevel(list, type, v, t) {
+    const chain = cleanAfx(list), k = MIXER_PARAMS[type];
+    const [rest, lo, hi] = AFX[type].params[k];
+    const x = Math.max(lo, Math.min(hi, num(v)));
+    const at = mixerLevel(chain, type, t);
+    if (at.i < 0) {
+        if (Math.abs(x - rest) < 1e-9 || chain.length >= MAX_AFX) return chain;
+        const fx = newAfx(type);
+        fx.p[k] = x;
+        return cleanAfx([...chain, fx]);
+    }
+    if (!at.keyed && Math.abs(x - rest) < 1e-9 && chain[at.i].on !== false) return chain.filter((_, j) => j !== at.i);
+    return patchAfx(chain, at.i, { [k]: x, on: true }, at.keyed ? t : undefined);
+}
+
+/** A meter's reading: the peak of `samples` (-1..1) in dB, held to `floor` .. 0 dB (above 0: over). */
+export function peakDb(samples, floor = -60) {
+    let peak = 0;
+    for (let k = 0; k < (samples ? samples.length : 0); k++) { const a = Math.abs(samples[k]); if (a > peak) peak = a; }
+    return peak > 0 ? Math.max(floor, 20 * Math.log10(peak)) : floor;
+}

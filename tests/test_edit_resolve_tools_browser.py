@@ -305,5 +305,62 @@ class EditResolveToolsBrowserTests(Base):
         self.assertEqual(self.errors, [])
 
 
+    # ── the mixer ──
+
+    def test_the_mixer_faders_pan_mute_solo_and_meters(self):
+        pg = self.page()
+        pg.evaluate("() => { const P = __panel; if (!P.isPanelDocked('editMixer')) P.editTlPanelToggle('editMixer'); P.editTlRefresh(); }")
+        pg.wait_for_function("() => !!__panel.editMixerPanel.querySelector('.mix-body')", timeout=5000)
+        strips = pg.evaluate("() => [...__panel.editMixerPanel.querySelectorAll('.mix-strip')].map(s => [s.dataset.track, !!s.querySelector('.mix-fader')])")
+        self.assertEqual(strips, [["V1", False], ["A1", True], ["A2", True], ["master", False]])
+        self.assertTrue(pg.evaluate("() => __panel._editMixOn()"))
+        CHAIN = "(id) => (id === 'A1' ? (__panel._editTlCut.afx || {}).A1 : __panel._editTlCut.tracks.find(t => t.id === id).afx) || []"
+        SET = """([id, field, v]) => { const f = __panel.editMixerPanel.querySelector(`.mix-strip[data-track="${id}"] [data-field="${field}"]`);
+            f.dispatchEvent(new PointerEvent('pointerdown')); f.value = String(v); f.dispatchEvent(new Event('input')); f.dispatchEvent(new Event('change')); }"""
+        n = self.undo_len(pg)
+        pg.evaluate(SET, ["A2", "gain", -6])
+        self.assertEqual([[f["type"], f["p"]] for f in pg.evaluate(CHAIN, "A2")], [["gain", {"gain": -6}]])
+        self.assertEqual(self.undo_len(pg), n + 1, "one undo step")
+        self.assertEqual(pg.evaluate("() => __panel.editMixerPanel.querySelector('.mix-strip[data-track=\"A2\"] .mix-db').textContent"), "-6.0 dB")
+        pg.evaluate(SET, ["A2", "pan", -0.5])
+        self.assertEqual([f["type"] for f in pg.evaluate(CHAIN, "A2")], ["gain", "pan"])
+        pg.evaluate(SET, ["A1", "gain", 3])
+        self.assertEqual([[f["type"], f["p"]] for f in pg.evaluate(CHAIN, "A1")], [["gain", {"gain": 3}]])
+        # Back at 0 dB (a double-click) the effect goes again.
+        pg.evaluate("() => __panel.editMixerPanel.querySelector('.mix-strip[data-track=\"A2\"] [data-field=gain]').dispatchEvent(new MouseEvent('dblclick'))")
+        self.assertEqual([f["type"] for f in pg.evaluate(CHAIN, "A2")], ["pan"])
+        # The Inspector's keys and the fader are the same thing: keyed, a move is a key at the playhead.
+        pg.evaluate("""() => { const P = __panel, k = P._editTlCut.tracks.find(t => t.id === 'A2');
+            const next = JSON.parse(JSON.stringify(P._editTlCut)); next.tracks.find(t => t.id === 'A2').afx =
+              [...(k.afx || []), { type: 'gain', on: true, p: { gain: 0 }, keys: { gain: [{ t: 0, v: 0 }, { t: 8, v: -16 }] } }];
+            P._editTlApply(next); P.setFrame(96); P.editTlRefresh(); }""")
+        self.assertTrue(pg.evaluate("() => __panel.editMixerPanel.querySelector('.mix-strip[data-track=\"A2\"]').classList.contains('keyed')"))
+        self.assertEqual(pg.evaluate("() => __panel.editMixerPanel.querySelector('.mix-strip[data-track=\"A2\"] [data-field=gain]').value"), "-8")
+        pg.evaluate(SET, ["A2", "gain", -20])
+        self.assertEqual(pg.evaluate(CHAIN, "A2")[-1]["keys"]["gain"], [{"t": 0, "v": 0}, {"t": 4, "v": -20}, {"t": 8, "v": -16}])
+        # M is the track's switch, S its solo.
+        pg.evaluate("() => __panel.editMixerPanel.querySelector('.mix-strip[data-track=\"A2\"] .mix-btn').click()")
+        self.assertTrue(pg.evaluate("() => __panel._editTlCut.tracks.find(t => t.id === 'A2').off"))
+        pg.evaluate("() => [...__panel.editMixerPanel.querySelectorAll('.mix-strip[data-track=\"A1\"] .mix-btn')][1].click()")
+        self.assertEqual(pg.evaluate("() => __panel._editTlView.solo"), {"A1": True})
+        self.assertTrue(pg.evaluate("() => [...__panel.editMixerPanel.querySelectorAll('.mix-strip[data-track=\"A1\"] .mix-btn')][1].classList.contains('on')"))
+        # A locked track's fader does not move.
+        pg.evaluate("() => { const P = __panel, next = JSON.parse(JSON.stringify(P._editTlCut)); next.lock = { ...(next.lock || {}), A1: true }; P._editTlApply(next); P.editTlRefresh(); }")
+        self.assertTrue(pg.evaluate("() => __panel.editMixerPanel.querySelector('.mix-strip[data-track=\"A1\"] [data-field=gain]').disabled"))
+        # Meters: while the Mixer is up an element on a track goes through its bus, and the meters read its analyser.
+        got = pg.evaluate("""async () => { const P = __panel, a = document.createElement('audio');
+            P._editAfxEnsure(a, null, 'A2', 0);
+            const ctx = window.__imageViewerAfxCtx, bus = ctx && ctx.__buses.A2;
+            const meter = bus && bus.meter; if (!meter) return null;
+            meter.getFloatTimeDomainData = (b) => { b.fill(0); b[3] = 0.5; };
+            ctx.__master.meter.getFloatTimeDomainData = (b) => { b.fill(0); b[0] = 1.2; };
+            P.isPlaying = true; P._editMixDraw(false); P.isPlaying = false;
+            const box = (id) => P.editMixerPanel.querySelector(`.mix-meter[data-meter="${id}"]`);
+            return [!!a._epAfx, box('A2').dataset.db, box('master').classList.contains('over'), box('A1').dataset.db]; }""")
+        self.assertEqual(got, [True, "-6.0", True, "-60.0"])
+        # Only on a cut's tab: the Mixer is one of the Edit panels.
+        self.assertIn("editMixer", pg.evaluate("async () => (await import('/extensions/viewer/imageViewer_editTimeline.js')).EDIT_PANELS"))
+        self.assertEqual(self.errors, [])
+
 if __name__ == "__main__":
     unittest.main()
