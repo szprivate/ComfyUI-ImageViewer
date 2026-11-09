@@ -61,6 +61,7 @@ class DepsRoute(unittest.TestCase):
         async def both(call):
             await self._render(call)
             await self._refusals(call)
+            await self._workflow(call)
         self.run_with(both)
 
     async def _render(self, call):
@@ -100,6 +101,37 @@ class DepsRoute(unittest.TestCase):
         st, body = await call("POST", "/imageviewer/deps", json={"filename": "nope.png", "type": "output"})
         self.assertEqual(st, 404, body)
 
+
+    async def _workflow(self, call):
+        """The right-click "Open its workflow": the UI workflow a PNG embeds, else its API graph, secrets masked."""
+        import json
+        ui = {"last_node_id": 9, "nodes": [{"id": 9, "type": "SaveImage", "widgets_values": ["render"]},
+                                           {"id": 4, "type": "PartnerNode", "inputs": [{"name": "api_key", "widget": {"name": "api_key"}}],
+                                            "widgets_values": ["sk-very-secret"]}], "links": []}
+        fx.write_png(os.path.join(self.dirs["output"], "ui_00001_.png"),
+                     {"prompt": json.dumps(fx.RENDER_GRAPH), "workflow": json.dumps(ui)})
+        for route in ("/imageviewer/deps/workflow", "/api/imageviewer/deps/workflow"):
+            st, w = await call("POST", route, json={"filename": "ui_00001_.png", "type": "output"})
+            self.assertEqual(st, 200, w)
+            self.assertEqual((w["found"], w["source"]), (True, "png"))
+            self.assertEqual([n["id"] for n in w["workflow"]["nodes"]], [9, 4])
+            self.assertNotIn("sk-very-secret", json.dumps(w))
+            self.assertEqual(set(w["prompt"]), set(fx.RENDER_GRAPH))
+        # Only an API graph kept: no UI workflow, the graph comes back for loadApiJson.
+        st, w = await call("POST", "/imageviewer/deps/workflow", json={"filename": "render_00001_.png", "type": "output"})
+        self.assertEqual((st, w["found"], w["workflow"]), (200, True, None))
+        self.assertEqual(set(w["prompt"]), set(fx.RENDER_GRAPH))
+        # Nothing kept at all.
+        st, w = await call("POST", "/imageviewer/deps/workflow", json={"path": os.path.join(self.dirs["input"], "plate.png")})
+        self.assertEqual((st, w["found"]), (200, False))
+        # The same refusals as the graph.
+        st, _ = await call("POST", "/imageviewer/deps/workflow", json={"filename": "ui_00001_.png", "type": "output"},
+                          headers={"Origin": "http://evil.example"})
+        self.assertEqual(st, 403)
+        outside = os.path.join(tempfile.mkdtemp(), "x.png")
+        fx.write_png(outside, {"workflow": json.dumps(ui)})
+        self.assertEqual((await call("POST", "/imageviewer/deps/workflow", json={"path": outside}))[0], 403)
+        self.assertEqual((await call("POST", "/imageviewer/deps/workflow", json={"filename": "nope.png", "type": "output"}))[0], 404)
 
 if __name__ == "__main__":
     unittest.main()

@@ -22,6 +22,8 @@ Every file the Send to Image Viewer node or [agentY](https://github.com/szprivat
 |---|---|
 | Open a file | Click its node |
 | Centre on a file | Double-click its node |
+| Put a file on the ComfyUI graph as a loader node | Right-click its node > **Drop into canvas** |
+| Load the workflow a file was made with, in a new workflow tab | Right-click its node > **Open its workflow** |
 | Fit the graph | <kbd>F</kbd>, or **Fit** |
 | Find older files made before the record existed | **Look in folder** |
 | Read it again | **Reload** |

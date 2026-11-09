@@ -12,6 +12,8 @@
 //   double-click        make it the root (walk from there)
 //   drag a node         move it (a prompt box: by its head); its bottom-right corner resizes it
 //   drag / wheel        pan / zoom;  F  fit;  "Tidy" puts every node back where the layout puts it
+//   right-click         "Drop into canvas" (a loader node for it on the ComfyUI graph, as a drag from the History
+//                       does) and "Open its workflow" (the graph it was made with, in a new workflow tab)
 //
 // Moved / resized nodes stay where they were left while the tab is open (also through Reload, unfolding and
 // the Prompts button); a new root starts from the layout again.
@@ -20,6 +22,8 @@
 // a file saved by any node that embeds its graph (Save Image, Save Video ...) is worked out the first time it is
 // looked at. Data comes from POST /imageviewer/deps (src/deps_graph.py), read in ComfyUI itself.
 import { api } from "../../scripts/api.js";
+import { app } from "../../scripts/app.js";
+import { notice } from "./imageViewer_exportUI.js";
 import { layout, edgePath, applyPlacement, depsMediaOf, depsCaption } from "./imageViewer_depsLayout.js";
 
 export const DEPS_PREFIX = "deps:";
@@ -333,6 +337,12 @@ export const DepsPanelMixin = {
             if (n.fold) { rec.open.add(n.id); this._depsRender(rec); return; }
             if (n.viewable) this._depsShowFile(n.id);
         });
+        el.addEventListener("contextmenu", (e) => {
+            if (n.fold) return;
+            e.preventDefault();
+            e.stopPropagation();
+            this._depsNodeMenu(e, n);
+        });
         el.addEventListener("dblclick", (e) => {
             e.stopPropagation();
             if (n.fold || !n.exists) return;
@@ -379,6 +389,95 @@ export const DepsPanelMixin = {
         el.title = [n.class ? `${n.class} (node ${n.node})` : "", `into ${baseOf(n.of)}`].filter(Boolean).join(" · ");
         el.addEventListener("click", (e) => e.stopPropagation());
         return el;
+    },
+
+    /** The right-click menu of a file node: put it on the ComfyUI graph, or open the workflow it was made with. */
+    _depsNodeMenu(ev, n) {
+        const host = this.container;
+        if (!host) return;
+        const doc = host.ownerDocument;
+        const old = host.querySelector("#thumb-ctx-menu");
+        if (old) old.remove();
+        const menu = doc.createElement("div");
+        menu.id = "thumb-ctx-menu";
+        menu.className = "thumb-ctx-menu dp-ctx-menu";
+        const row = (text, tip, enabled, run) => {
+            const el = doc.createElement("div");
+            el.className = "thumb-ctx-item" + (enabled ? "" : " disabled");
+            el.textContent = text;
+            el.title = tip;
+            el.onclick = (e) => { e.stopPropagation(); if (!enabled) return; close(); run(); };
+            menu.append(el);
+            return el;
+        };
+        const media = depsMediaOf(n.file || n.id);
+        const can = !!(n.viewable && n.exists);
+        row("⤵ Drop into canvas", can
+            ? `A loader node for this ${media || "file"} on the ComfyUI graph, as dragging it from the History does`
+            : "The file is gone, or the viewer may not read it", can, () => this._depsDropOnCanvas(n.id));
+        row("\u{1F9E9} Open its workflow", can
+            ? "Load the workflow this file was made with into a new tab of the ComfyUI canvas"
+            : "The file is gone, or the viewer may not read it", can, () => this._depsOpenWorkflow(n.id));
+        const r = host.getBoundingClientRect();
+        menu.style.left = `${ev.clientX - r.left}px`;
+        menu.style.top = `${ev.clientY - r.top}px`;
+        host.appendChild(menu);
+        const win = doc.defaultView || window;
+        const dismiss = (e) => { if (e && e.type === "keydown" && e.key !== "Escape") return; close(); };
+        const close = () => {
+            menu.remove();
+            host.removeEventListener("click", dismiss, true);
+            host.removeEventListener("contextmenu", dismiss, true);
+            win.removeEventListener("keydown", dismiss, true);
+        };
+        setTimeout(() => {
+            if (!menu.isConnected) return;
+            host.addEventListener("click", dismiss, true);
+            host.addEventListener("contextmenu", dismiss, true);
+            win.addEventListener("keydown", dismiss, true);
+        }, 0);
+        return menu;
+    },
+
+    /** "Drop into canvas": the file as a loader node in the middle of the graph on screen (DnDMixin's drop). */
+    async _depsDropOnCanvas(path) {
+        try {
+            const frames = this._browserFramesFor ? (await this._browserFramesFor([path])).filter(Boolean) : [];
+            const item = frames.length && this._historyDragItem ? this._historyDragItem(frames[0], [frames[0]]) : null;
+            if (!item || !this._dropHistoryOntoGraph) {
+                notice("error", "Dependencies", `Could not put ${baseOf(path)} on the canvas.`);
+                return;
+            }
+            await this._dropHistoryOntoGraph([item], null);
+        } catch (e) {
+            console.warn("imageViewer: could not drop", path, e);
+            notice("error", "Dependencies", `Could not put ${baseOf(path)} on the canvas.`);
+        }
+    },
+
+    /** "Open its workflow": the graph a file was made with, in a new workflow tab of the canvas. */
+    async _depsOpenWorkflow(path) {
+        const name = baseOf(path).replace(/\.[^.]+$/, "") || "workflow";
+        let data = null, err = "";
+        try {
+            const res = await api.fetchApi("/imageviewer/deps/workflow", {
+                method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }) });
+            data = await res.json().catch(() => null);
+            if (!res.ok) err = (data && data.error) || `the viewer answered ${res.status}`;
+        } catch (e) { err = "the viewer backend did not answer"; }
+        if (err || !data) { notice("error", "Dependencies", `No workflow for ${baseOf(path)}: ${err || "nothing came back"}`); return; }
+        if (!data.found) {
+            notice("warn", "Dependencies", `${baseOf(path)} keeps no workflow: it was not saved by a node that `
+                + "stores its graph (Save Image, Save Video, the Send node, agentY).");
+            return;
+        }
+        try {
+            if (data.workflow) await app.loadGraphData(data.workflow, true, true, name);
+            else await app.loadApiJson(data.prompt, name);
+        } catch (e) {
+            console.warn("imageViewer: could not load the workflow of", path, e);
+            notice("error", "Dependencies", `Could not load the workflow of ${baseOf(path)}.`);
+        }
     },
 
     async _depsShowFile(path) {
