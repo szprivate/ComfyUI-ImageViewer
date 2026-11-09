@@ -58,6 +58,7 @@ import { EditMarkersMixin } from "./imageViewer_editMarkers.js";
 import { EditRangeMixin } from "./imageViewer_editRange.js";
 import { EditDynamicMixin } from "./imageViewer_editDynamic.js";
 import { EditMixerMixin } from "./imageViewer_editMixer.js";
+import { EditMatchMixin } from "./imageViewer_editMatch.js";
 import { EditAudioMixin } from "./imageViewer_editAudio.js";
 import { EditProxyMixin } from "./imageViewer_editProxy.js";
 import { AudioViewMixin } from "./imageViewer_audio.js";
@@ -1553,6 +1554,7 @@ Object.assign(
     EditRangeMixin,
     EditDynamicMixin,
     EditMixerMixin,
+    EditMatchMixin,
     EditAudioMixin,
     EditProxyMixin,
     AudioViewMixin,

@@ -5032,3 +5032,29 @@ export function transitionLook(tfx, m) {
     if (x && x.type === "wipe") return { inn: 1, out: 1, wipe: { dir: x.dir, share: t } };
     return { inn: t, out: 1 };
 }
+
+// ── match frame ─────────────────────────────────────────────────────────────
+
+/**
+ * Match frame (Resolve's F): the source of what the cut shows at film time `seconds`
+ * - the selected clip `sel` when the moment lies in it, else the picture on top
+ * there (pictureAt, over the live tracks) - as { file, src, sel, name, still }:
+ * `src` the moment of its file in seconds (srcLocal: speed, loops, reverse, a
+ * freeze and a ramp counted; a still's is 0). A title, a gap or nothing: null.
+ */
+export function matchFrame(cut, seconds, sel, live) {
+    if (!cut) return null;
+    const t = num(seconds);
+    const of = (c, start, s) => {
+        if (!c || c.title || !c.file) return null;
+        const still = isStillImage(c.file);
+        return { file: c.file, src: still ? 0 : Math.max(0, srcLocal(c, t - start)), sel: s, name: c.name || "", still };
+    };
+    const span = sel && clipOf(cut, sel) ? selSpan(cut, sel) : null;
+    if (span && t >= span.start - 1e-6 && t < span.end - 1e-6) {
+        const hit = of(clipOf(cut, sel), span.start, sel);
+        if (hit) return hit;
+    }
+    const at = pictureAt(cut, t, live);
+    return at ? of(at.clip, at.origin, at.sel) : null;
+}

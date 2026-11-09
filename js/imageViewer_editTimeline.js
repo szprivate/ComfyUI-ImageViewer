@@ -1267,6 +1267,7 @@ export const EditTimelineMixin = {
             entries.push({ label: "Split at the playhead", disabled: !this._editTlOnScreen(), run: () => this.editTlSplitAtPlayhead() });
             const off = !!(D.clipOf(this._editTlCut, sel) || {}).disabled;
             entries.push({ label: off ? "Enable clip (D)" : "Disable clip (D)", run: () => this.editTlDisableToggle() });
+            if (clip && clip.file && !clip.title) entries.push({ label: "Match frame (F)", disabled: !this._editTlMatchAt(), run: () => this.editTlMatchFrame() });
             if (clip && !D.isStillClip(clip)) {
                 const m = D.motionOf(clip);
                 entries.push({ label: (m === "freeze" ? "\u2713 " : "") + "Freeze frame", run: () => this.editTlMotion(sel, "freeze") },

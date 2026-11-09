@@ -362,5 +362,34 @@ class EditResolveToolsBrowserTests(Base):
         self.assertIn("editMixer", pg.evaluate("async () => (await import('/extensions/viewer/imageViewer_editTimeline.js')).EDIT_PANELS"))
         self.assertEqual(self.errors, [])
 
+    # ── match frame ──
+
+    def test_match_frame_opens_the_source_in_the_viewer_tab_on_its_frame(self):
+        # V1: a 0-96 (a film, in 0), c 96-168 (a still), b 168-264 (in 1).
+        pg = self.page()
+        self.fit(pg)
+        pg.evaluate("""() => { const P = __panel; window.__opened = []; window.__sought = [];
+            P._browserFramesFor = async (paths) => { window.__opened.push(...paths); return paths.map(p => [{ filename: p.split('/').pop(), kind: 'video', path: p, type: 'output' }]); };
+            P._editTlMatchSeek = async (src) => { window.__sought.push(src); }; P.setFrame(200); }""")
+        self.focus_timeline(pg)
+        pg.evaluate("() => { __panel._editTlSel = null; __panel.setFrame(200); }")
+        pg.keyboard.press("f")
+        pg.wait_for_function("() => window.__sought.length === 1", timeout=5000)
+        got = pg.evaluate("() => [window.__opened, window.__sought, __panel.activeTab, __panel.allTabs[__panel.activeTab][0].matchSrc]")
+        # frame 200 of the film is 32.5 frames into b (in 1 s): 1 + 32.5 / 24 seconds of its file.
+        self.assertEqual(got[0], ["D:/out/b.mp4"])
+        self.assertAlmostEqual(got[1][0], 1 + 32.5 / 24, places=4)
+        self.assertEqual(got[2], "folder_history")
+        self.assertAlmostEqual(got[3], 1 + 32.5 / 24, places=4)
+        # From the clip menu, on the shot under the playhead; a still opens without a seek.
+        pg.evaluate("() => { const P = __panel; P.switchTab(Object.keys(P.allTabs).find(k => k.startsWith('edit:'))); P.setFrame(120); }")
+        items = self.menu_has(pg, *self.x_at(pg, 5.0))
+        self.assertIn("Match frame (F)", items)
+        pg.locator(".previz-menu-item", has_text="Match frame").first.click()
+        pg.wait_for_function("() => window.__opened.length === 2", timeout=5000)
+        pg.wait_for_timeout(100)
+        self.assertEqual(pg.evaluate("() => [window.__opened[1], window.__sought.length]"), ["D:/out/c.png", 1])
+        self.assertEqual(self.errors, [])
+
 if __name__ == "__main__":
     unittest.main()
