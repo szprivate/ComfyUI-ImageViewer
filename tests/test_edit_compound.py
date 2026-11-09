@@ -55,7 +55,7 @@ class CompoundsInTheFile(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.files = {}
         for k, ext in (("a", "mp4"), ("b", "mp4"), ("c", "png"), ("s", "wav")):
-            self.files[k] = os.path.join(self.tmp, f"{k}.{ext}")
+            self.files[k] = os.path.join(self.tmp, f"{k}.{ext}").replace("\\", "/")  # timeline_io writes paths with /
             open(self.files[k], "wb").close()
         self.script = os.path.join(self.tmp, "page.mjs")
         with open(self.script, "w") as f:
