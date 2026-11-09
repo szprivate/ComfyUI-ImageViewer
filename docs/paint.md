@@ -19,6 +19,7 @@ Its panels show only on a Paint tab: **Layers**, **History** and, sharing one pl
 | Key | Tool |
 |---|---|
 | <kbd>V</kbd> | Transform: move, scale, rotate, shear (<kbd>Ctrl</kbd>+<kbd>T</kbd>). <kbd>Enter</kbd> applies, <kbd>Esc</kbd> cancels |
+| <kbd>Shift</kbd>+<kbd>V</kbd> | Transform selection (under the Transform tool: right-click it): the selected pixels of the active layer are lifted off it and moved, scaled, rotated or sheared like a layer; the place they came from is left empty. <kbd>Enter</kbd> puts them down into the layer, the selection moved with them (one undo step); <kbd>Esc</kbd> puts everything back |
 | <kbd>M</kbd> / <kbd>Shift</kbd>+<kbd>M</kbd> | Rectangle / ellipse select |
 | <kbd>L</kbd> | Lasso |
 | <kbd>P</kbd> / <kbd>Shift</kbd>+<kbd>P</kbd> | Pen: Bezier paths (see below) / add anchor, delete anchor, convert point |
@@ -41,7 +42,7 @@ Its panels show only on a Paint tab: **Layers**, **History** and, sharing one pl
 
 <kbd>X</kbd> swaps the two colours, <kbd>D</kbd> resets them.
 
-Tools of one kind share one place in the toolbar: the selections (rectangle, ellipse, lasso), the brush with the healing tools (spot healing brush, healing brush, patch), the path tools, and the shapes (rectangle, rounded rectangle, ellipse, polygon, line). The place shows the tool used last. Right-click it for the others.
+Tools of one kind share one place in the toolbar: Transform and Transform selection, the selections (rectangle, ellipse, lasso), the brush with the healing tools (spot healing brush, healing brush, patch), the path tools, and the shapes (rectangle, rounded rectangle, ellipse, polygon, line). The place shows the tool used last. Right-click it for the others.
 
 On a big picture (more than about two million pixels) seen smaller than half its size, moving or transforming a layer, dragging a gradient and pulling a slider show a quick preview at about the screen's resolution while you drag. The full picture is drawn as soon as you let go, or when a slider stays still for a moment.
 

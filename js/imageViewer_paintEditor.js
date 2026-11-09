@@ -41,7 +41,7 @@ export function dialogStep(a, b) {
 const roundTo = (v, step) => { const d = Math.max(0, -Math.floor(Math.log10(step) + 1e-9)); return Number(v.toFixed(Math.min(6, d))); };
 
 export const PAINT_TOOLS = [
-    ["move", "transform", "Transform (move, scale, rotate, shear)", "V"], ["marquee", "marquee", "Rectangle select", "M"], ["ellipse", "ellipse", "Ellipse select", "Shift+M"],
+    ["move", "transform", "Transform (move, scale, rotate, shear)", "V"], ["tfsel", "tfSel", "Transform selection: the selected pixels (Shift+V)", "Shift+V"], ["marquee", "marquee", "Rectangle select", "M"], ["ellipse", "ellipse", "Ellipse select", "Shift+M"],
     ["lasso", "lasso", "Lasso", "L"], ["pen", "pen", "Pen (paths)", "P"], ["penadd", "penAdd", "Add anchor point", "Shift+P"],
     ["pendel", "penDel", "Delete anchor point", "Shift+P"], ["penconv", "penConv", "Convert point: corner / smooth", "Shift+P"],
     ["pathsel", "pathSel", "Path selection: the whole path", "A"], ["pathdirect", "pathDirect", "Direct selection: anchors and handles", "Shift+A"], ["wand", "wand", "Magic wand", "W"], ["crop", "crop", "Crop", "C"],
@@ -64,6 +64,7 @@ const SOURCED = ["clone", "heal"];
 /** The keys, for the viewer's Show Hotkeys while a Paint tab is up. */
 export const PAINT_KEYS = [
     ["V M L P W C", "Transform, select, lasso, pen, magic wand, crop"],
+    ["Shift+V", "Transform selection: move, scale and rotate the selected pixels (right-click the Transform tool)"],
     ["Pen", "Click: corner, drag: smooth anchor, first anchor: close, Enter: stop; Ctrl+drag: move, Alt+click: corner / smooth"],
     ["Ctrl+Enter (pen)", "The path as the selection (Shift: add, Alt: take away)"],
     ["Right-click the pen", "The path tools: add / delete anchor, convert point, path selection, direct selection"],
@@ -762,7 +763,7 @@ class PaintEditor {
         }
         // The layer's box and handles (Transform).
         this._wpDraw(c, X, Y);
-        const g = this.tool === "move" && !this.wp ? this._tfGeom() : null;
+        const g = (this.tool === "move" || this.tool === "tfsel") && !this.wp ? this._tfGeom() : null;
         if (g) {
             const m = D.tfMatrix(g.p), cs = D.tfCorners(m, g.w, g.h);
             c.strokeStyle = this.tf ? "#4fd6ee" : "rgba(0,200,255,.8)"; c.lineWidth = 1; c.setLineDash(this.tf ? [] : [3, 3]);
@@ -1454,29 +1455,32 @@ class PaintEditor {
         if (!B) { this._notify(L.parent ? "Nothing under this layer in its group to merge into." : "Nothing under this layer to merge into.", "warn"); return false; }
         if (B.kind !== "pixel") { this._notify(`${B.name} is ${B.kind === "group" ? "a group" : "an adjustment layer"}: merge into a pixel layer.`, "warn"); return false; }
         if (L.locked || B.locked) { this._notify("A locked layer is not merged.", "warn"); return false; }
-        return this.change("Merge down", () => {
-            this._growToCanvas(B);
-            const base = this.pix.get(B.id);
-            const sub = { w: B.w, h: B.h, layers: [] };
-            const lb = { ...B, x: 0, y: 0, opacity: 1, blend: "normal", visible: true };
-            delete lb.mask;
-            delete lb.parent;
-            const lt = { ...L, visible: true };
-            delete lt.parent;
-            if (L.kind === "pixel") { lt.x = L.x - B.x; lt.y = L.y - B.y; }
-            if (lt.mask) lt.mask = { ...lt.mask, x: lt.mask.x - B.x, y: lt.mask.y - B.y };
-            sub.layers = [lb, lt];
-            const out = D.composite(sub, (X) => (X.id === B.id ? base : this.pix.get(X.id)), (X) => (X === lt && lt.mask ? this._maskOf(L) : null));
-            if (L.kind === "adjust") for (let k = 3; k < out.length; k += 4) out[k] = base[k];
-            this.pix.set(B.id, out);
-            delete B.text;
-            delete B.smart;
-            this.doc.layers.splice(D.layerIndex(this.doc, L.id), 1);
-            this.pix.delete(L.id);
-            this.masks.delete(L.id);
-            this.doc.active = B.id;
-            this.editMask = false;
-        });
+        return this.change("Merge down", () => this._mergeInto(L, B));
+    }
+
+    /** L laid onto the pixel layer B (both in the document, B grown to the canvas), L taken away, B active. */
+    _mergeInto(L, B) {
+        this._growToCanvas(B);
+        const base = this.pix.get(B.id);
+        const sub = { w: B.w, h: B.h, layers: [] };
+        const lb = { ...B, x: 0, y: 0, opacity: 1, blend: "normal", visible: true };
+        delete lb.mask;
+        delete lb.parent;
+        const lt = { ...L, visible: true };
+        delete lt.parent;
+        if (L.kind === "pixel") { lt.x = L.x - B.x; lt.y = L.y - B.y; }
+        if (lt.mask) lt.mask = { ...lt.mask, x: lt.mask.x - B.x, y: lt.mask.y - B.y };
+        sub.layers = [lb, lt];
+        const out = D.composite(sub, (X) => (X.id === B.id ? base : this.pix.get(X.id)), (X) => (X === lt && lt.mask ? this._maskOf(L) : null));
+        if (L.kind === "adjust") for (let k = 3; k < out.length; k += 4) out[k] = base[k];
+        this.pix.set(B.id, out);
+        delete B.text;
+        delete B.smart;
+        this.doc.layers.splice(D.layerIndex(this.doc, L.id), 1);
+        this.pix.delete(L.id);
+        this.masks.delete(L.id);
+        this.doc.active = B.id;
+        this.editMask = false;
     }
 
     /**
@@ -1851,7 +1855,7 @@ class PaintEditor {
         if (typeof t === "string" && t.startsWith("shape:")) { this.opts.shape.kind = t.slice(6); t = "shape"; }
         if (t !== "crop") this.crop = null;
         if (t !== "text") this._commitText();
-        if (t !== "move" && this.tf) this.tfCommit();
+        if (this.tf && (t !== "move" && t !== "tfsel" || !!this.tf.float !== (t === "tfsel"))) this.tfCommit();
         if (t !== "move" && this.wp) this.wpCommit();
         if (t !== "liquify" && this.lq) this.lqCommit();
         if (t !== "pen") this._penOpen = false;
@@ -1863,6 +1867,8 @@ class PaintEditor {
         this._cursor();
         this.refreshProps();
         this.drawOverlay();
+        // Transform selection takes the selected pixels up at once, so their box shows (Photoshop's way).
+        if (t === "tfsel" && !this.tf && this.sel && this.doc) this.tfBegin({ float: true });
     }
 
     /** The pointer's look over the picture: the tool's, none where the brush's circle stands in for it, the arrow with no picture. */
@@ -1955,7 +1961,7 @@ class PaintEditor {
         w.addEventListener("dblclick", (e) => {
             if (this.tool === "crop" && this.crop) { e.preventDefault(); this.applyCrop(); }
             else if (this.wp) { e.preventDefault(); this.wpCommit(); }
-            else if (this.tool === "move" && this.tf) { e.preventDefault(); this.tfCommit(); }
+            else if ((this.tool === "move" || this.tool === "tfsel") && this.tf) { e.preventDefault(); this.tfCommit(); }
         });
         for (const t of ["mousedown", "dblclick", "contextmenu"]) w.addEventListener(t, (e) => e.stopPropagation());
     }
@@ -2002,6 +2008,7 @@ class PaintEditor {
             this._tfDown(p, e);
             return;
         }
+        if (t === "tfsel") { this._tfDown(p, e); return; }
         if (t === "crop") { this._cropStart(p); return; }
         if (t === "text") { this._textAt(p); return; }
     }
@@ -2023,6 +2030,7 @@ class PaintEditor {
             if (BRUSHES.includes(this.tool) || this.tool === "liquify" || (this.tool === "pen" && this._penOpen)) { /* the overlay draws the pointer */ }
             else if (this.wp) this._cursor("crosshair");
             else if (this.tool === "move" && !this._space) this._cursor(this._moveSet() ? "move" : this._tfCursor(this._tfHit(p)));
+            else if (this.tool === "tfsel" && !this._space) this._cursor(this.tf ? this._tfCursor(this._tfHit(p)) : this.sel ? "move" : "default");
             this._status();
             return;
         }
@@ -2432,9 +2440,11 @@ class PaintEditor {
         return L;
     }
 
-    tfBegin() {
-        if (this.tf) return this.tf;
+    tfBegin({ float = false } = {}) {
+        if (this.tf && !!this.tf.float === float) return this.tf;
+        if (this.tf) this.tfCommit();
         this._commitText();
+        if (float) return this._floatBegin();
         const L = this._tfLayer();
         if (!L) return null;
         const before = this._snap();
@@ -2449,6 +2459,7 @@ class PaintEditor {
     /** What the overlay and the hit test go by: the session's transform, else the active layer as it lies. */
     _tfGeom() {
         if (this.tf) return { p: this.tf.p, w: this.tf.src.w, h: this.tf.src.h };
+        if (this.tool === "tfsel") return null;
         const L = this.active();
         if (!L || L.kind !== "pixel") return null;
         return { p: D.tfIdentity(L.x, L.y, L.w, L.h), w: L.w, h: L.h };
@@ -2490,6 +2501,7 @@ class PaintEditor {
     }
 
     _tfDown(p, e) {
+        if (this.tool === "tfsel" && !this.tf && !this.tfBegin({ float: true })) return;
         const hit = this._tfHit(p);
         if (!hit) { this._tfLayer(); return; }
         const tf = this.tf || this.tfBegin();
@@ -2612,6 +2624,7 @@ class PaintEditor {
         const p = tf.p;
         if (!tf.smooth || this._tfRaf) this._tfShow(true);
         const same = p.sx === 1 && p.sy === 1 && !(p.r % 360) && !p.kx && !p.ky && p.tx === tf.src.x + p.cx && p.ty === tf.src.y + p.cy;
+        if (tf.float) return this._floatCommit(tf, same);
         if (same) {
             // Nothing changed: the layer is as it was (its own buffers), and no undo entry.
             this.tf = null;
@@ -2642,6 +2655,85 @@ class PaintEditor {
         this.tf = null;
         this._restore(tf.before);
         this._afterHistory();
+    }
+
+    // Transform selection: the selected pixels of the active layer are lifted onto a floating layer of their own
+    // (cut out where they were), transformed by the same session as a layer, and laid back down into the
+    // layer when it is applied - with the selection moved the same way. One undo step for all of it; Esc
+    // puts everything back as it was.
+
+    _floatBegin() {
+        const L = this._tfLayer();
+        if (!L) return null;
+        if (!this.sel) { this._notify("Transform selection: select the pixels to move first.", "info"); return null; }
+        if (this.isSmart && this.isSmart(L)) { this._notify(`${L.name} is a smart layer: rasterize it to transform a part of it.`, "warn"); return null; }
+        const W = this.doc.w, H = this.doc.h;
+        const m = D.maskForLayer(this.sel, W, H, L);
+        let x0 = L.w, y0 = L.h, x1 = -1, y1 = -1;
+        for (let y = 0; y < L.h; y++) for (let x = 0; x < L.w; x++) if (m[y * L.w + x]) {
+            if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+        }
+        if (x1 < 0) { this._notify("Transform selection: the selection holds nothing of this layer.", "info"); return null; }
+        const before = this._snap();
+        const px = this.pix.get(L.id), fw = x1 - x0 + 1, fh = y1 - y0 + 1;
+        const fl = new Uint8ClampedArray(fw * fh * 4), rest = new Uint8ClampedArray(px);
+        const selCrop = new Uint8Array(fw * fh);
+        let any = false;
+        for (let y = 0; y < fh; y++) for (let x = 0; x < fw; x++) {
+            const i = (y + y0) * L.w + x + x0, o = y * fw + x, t = m[i] / 255;
+            selCrop[o] = m[i];
+            const a = px[i * 4 + 3];
+            fl[o * 4] = px[i * 4]; fl[o * 4 + 1] = px[i * 4 + 1]; fl[o * 4 + 2] = px[i * 4 + 2];
+            fl[o * 4 + 3] = D.q8((a / 255) * t);
+            rest[i * 4 + 3] = D.q8((a / 255) * (1 - t));
+            if (fl[o * 4 + 3]) any = true;
+        }
+        if (!any) { this._notify("Transform selection: the selected part of this layer is empty.", "info"); return null; }
+        const F = { id: D.newId(), kind: "pixel", name: `${L.name} (floating)`, visible: true, opacity: 1, blend: "normal", locked: false,
+                    x: L.x + x0, y: L.y + y0, w: fw, h: fh };
+        if (L.parent) F.parent = L.parent;
+        if (L.clip) F.clip = true;
+        this.pix.set(L.id, rest);
+        this.pix.set(F.id, fl);
+        this.doc.layers.splice(D.layerIndex(this.doc, L.id) + 1, 0, F);
+        this.doc.active = F.id;
+        this.picked = new Set([F.id]);
+        this.sel = null;                                  // the box stands for it while it floats
+        const src = { px: fl, x: F.x, y: F.y, w: fw, h: fh, mask: null };
+        this.tf = { L: F, src, p: D.tfIdentity(F.x, F.y, fw, fh), before, smooth: true, float: { base: L.id, selCrop } };
+        this._selChanged();
+        this.redraw();
+        this.refreshPanels();
+        this.drawOverlay();
+        return this.tf;
+    }
+
+    /** The floating pixels laid into the layer they came from, the selection moved with them: one undo step. */
+    _floatCommit(tf, same) {
+        this.tf = null;
+        if (same) { this._restore(tf.before); this._afterHistory(); return false; }
+        const F = tf.L, B = this.doc.layers.find((x) => x.id === tf.float.base);
+        if (!B) { this._restore(tf.before); this._afterHistory(); return false; }
+        this._mergeInto(F, B);
+        // The selection: the cut-out one under the same matrix, back into the canvas.
+        const W = this.doc.w, H = this.doc.h, m = D.tfMatrix(tf.p), S = tf.src;
+        const box = D.tfBox(m, S.w, S.h), sm = D.tfMask(tf.float.selCrop, S.w, S.h, m, box, 0);
+        const sel = new Uint8Array(W * H);
+        for (let y = 0; y < box.h; y++) {
+            const gy = box.y + y;
+            if (gy < 0 || gy >= H) continue;
+            for (let x = 0; x < box.w; x++) {
+                const gx = box.x + x;
+                if (gx >= 0 && gx < W) sel[gy * W + gx] = sm[y * box.w + x];
+            }
+        }
+        this.sel = sel.some((v) => v) ? sel : null;
+        const before = tf.before, after = this._snap();
+        this._push({ label: D.tfIsMove(tf.p) ? "Move selection" : "Transform selection", undo: () => this._restore(before), redo: () => this._restore(after),
+                     bytes: this._snapBytes(before, after) });
+        this._afterHistory();
+        this._thumbsSoon();
+        return true;
     }
 
     /** The transform's numbers, for the options bar and Properties: kept in step while a handle moves. */
@@ -2699,6 +2791,7 @@ class PaintEditor {
     }
 
     nudge(dx, dy) {
+        if (this.tool === "tfsel" && !this.tf && !this.tfBegin({ float: true })) return;
         if (this.tf) { this.tf.p.tx += dx; this.tf.p.ty += dy; this._tfShow(true); return; }
         const set = this._moveSet();
         if (set) {
@@ -2862,7 +2955,7 @@ class PaintEditor {
             return take(() => (L && L.mask && this.editMask ? this.maskCmd("delete") : this.deleteLayer()));
         }
         if (k === "Delete" || k === "Backspace") return take(() => (e.altKey ? this.fillSelection(this.fg) : this.clearSelection()));
-        if (k.startsWith("Arrow") && this.tool === "move") {
+        if (k.startsWith("Arrow") && (this.tool === "move" || (this.tool === "tfsel" && (this.tf || this.sel)))) {
             const s = e.shiftKey ? 10 : 1;
             return take(() => this.nudge(k === "ArrowLeft" ? -s : k === "ArrowRight" ? s : 0, k === "ArrowUp" ? -s : k === "ArrowDown" ? s : 0));
         }
@@ -2878,6 +2971,7 @@ class PaintEditor {
         if (lk === "x" && !e.altKey) return take(() => this.swapColors());
         if (lk === "d" && !e.altKey) return take(() => this.defaultColors());
         if (lk === "m" && e.shiftKey) return take(() => this.setTool("ellipse"));
+        if (lk === "v" && e.shiftKey && !e.altKey) return take(() => this.setTool(this.tool === "tfsel" ? "move" : "tfsel"));
         if (lk === "g" && e.shiftKey && !e.altKey) return take(() => this.setTool(this.tool === "gradient" ? "fill" : "gradient"));
         if (lk === "o" && e.shiftKey && !e.altKey) return take(() => this.setTool({ dodge: "burn", burn: "sponge", sponge: "dodge" }[this.tool] || "burn"));
         if (lk === "u" && e.shiftKey && !e.altKey) return take(() => {
@@ -2993,6 +3087,7 @@ class PaintEditor {
                 { label: "Rotate 90° anticlockwise", disabled: !L || L.kind !== "pixel", run: () => this.rotateLayer(270) },
                 { label: "Rotate 180°", disabled: !L || L.kind !== "pixel", run: () => this.rotateLayer(180) },
                 { label: "Free transform (Ctrl+T)", disabled: !L || L.kind !== "pixel", run: () => { this.setTool("move"); this.tfBegin(); } },
+                { label: "Transform selection (Shift+V)", disabled: !L || L.kind !== "pixel" || !this.sel, run: () => { this.setTool("tfsel"); this.tfBegin({ float: true }); } },
                 { label: "Distort", disabled: !L || L.kind !== "pixel", run: () => this.wpBegin("distort") },
                 { label: "Perspective", disabled: !L || L.kind !== "pixel", run: () => this.wpBegin("perspective") },
                 { label: "Warp", disabled: !L || L.kind !== "pixel", run: () => this.wpBegin("warp", this.opts.warp.n) },
@@ -3656,6 +3751,10 @@ class PaintEditor {
             go.addEventListener("click", () => this.applyCrop());
             ts.append(go);
             note("Drag a rectangle; drag inside it to move it.");
+        } else if (this.tool === "tfsel") {
+            this._tfFields(ts);
+            note("Takes the selected pixels of the active layer and moves, scales and rotates them; the place they came from is left empty. "
+                 + "Drag inside to move, a handle to scale, outside to rotate (Shift: 15° steps). Enter or a double-click puts them down, Esc puts them back.");
         } else if (this.tool === "move") {
             if (!this.wp) this._tfFields(ts);
             this._wpOptions(ts, bar);
@@ -3834,7 +3933,6 @@ class PaintEditor {
         g("Generative fill", "fill", "Make what the prompt says inside the selection: a new layer, masked to it");
         g("Remove object", "remove", "Take what is selected away and fill the place: a new layer");
         g("Edit", "edit", "Change the selection (or the whole picture) as the prompt says: a new layer");
-        g("Fill around", "heal", "Fill the selection from what is around it, here and without AI");
         g("Remove background", "background", "A mask on the layer that hides the background");
         g("Select subject", "select_subject", "The selection becomes the main subject");
         g("Extend 128 px", "extend", "A bigger canvas, the new part filled by the workflow", () => ({ px: 128, ai: true }));

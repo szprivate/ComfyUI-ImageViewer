@@ -7,6 +7,10 @@ const R = (x, y, width, height, rx = 2) => ["rect", { x, y, width, height, rx }]
 export const PAINT_ICONS = {
     move: [P("M12 2v20"), P("m15 19-3 3-3-3"), P("m19 9 3 3-3 3"), P("M2 12h20"), P("m5 9-3 3 3 3"), P("m9 5 3-3 3 3")],
     transform: [P("M21 3 9 15"), P("M12 3H3v18h18v-9"), P("M16 3h5v5"), P("M14 15H9v-5")],
+    // Transform selection: a dashed square (Lucide's square-dashed) with the move arrows inside it.
+    tfSel: [P("M5 3a2 2 0 0 0-2 2"), P("M19 3a2 2 0 0 1 2 2"), P("M21 19a2 2 0 0 1-2 2"), P("M5 21a2 2 0 0 1-2-2"), P("M9 3h1"), P("M9 21h1"),
+            P("M14 3h1"), P("M14 21h1"), P("M3 9v1"), P("M21 9v1"), P("M3 14v1"), P("M21 14v1"),
+            P("M12 7v10"), P("m10 9 2-2 2 2"), P("m10 15 2 2 2-2"), P("M7 12h10"), P("m9 10-2 2 2 2"), P("m15 10 2 2-2 2")],
     clone: [P("M14 13V8.5C14 7 15 7 15 5a3 3 0 0 0-6 0c0 2 1 2 1 3.5V13"),
             P("M20 15.5a2.5 2.5 0 0 0-2.5-2.5h-11A2.5 2.5 0 0 0 4 15.5V17a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1z"), P("M5 22h14")],
     history: [P("M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"), P("M3 3v5h5"), P("M12 7v5l4 2")],

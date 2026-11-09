@@ -491,6 +491,66 @@ class PaintBrowserTests(unittest.TestCase):
             self.assertAlmostEqual(got, want, delta=2)
         self.assertEqual(self.errors, [])
 
+    def test_transform_selection_lifts_the_selected_pixels_and_puts_them_down(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        x0, y0, k = pg.evaluate(f"() => {{ const r = {ed}.canvas.getBoundingClientRect(); return [r.left, r.top, r.width / {ed}.doc.w]; }}")
+        at = lambda x, y: (x0 + x * k, y0 + y * k)
+        px = f"""([x, y]) => {{ const e = {ed}, L = e.doc.layers[0], b = e.pix.get(L.id), i = ((y - L.y) * L.w + x - L.x) * 4;
+            return x < L.x || y < L.y || x >= L.x + L.w || y >= L.y + L.h ? [0, 0, 0, 0] : [b[i], b[i + 1], b[i + 2], b[i + 3]]; }}"""
+        sel = f"([x, y]) => {ed}.sel ? {ed}.sel[y * {ed}.doc.w + x] : -1"
+        # A square of the red block selected.
+        pg.evaluate(f"""() => {{ const e = {ed}, W = e.doc.w, m = new Uint8Array(W * e.doc.h);
+            for (let y = 40; y < 60; y++) for (let x = 60; x < 80; x++) m[y * W + x] = 255; e.setSelection(m); }}""")
+        # Under the Transform tool's right-click.
+        flyout = pg.evaluate(f"""() => {{ const e = {ed}; const b = e.box.querySelector('.paint-tools [data-group=transform]');
+            b.dispatchEvent(new MouseEvent('contextmenu', {{ bubbles: true, cancelable: true }}));
+            const f = e.box.querySelector('.paint-flyout[data-group=transform]'); const n = [...f.querySelectorAll('[data-tool]')].map((x) => x.dataset.tool);
+            f.querySelector('[data-tool=tfsel]').click(); return n; }}""")
+        self.assertEqual(flyout, ["move", "tfsel"])
+        # Picked: the pixels float at once, a layer of their own over the one they came from, cut out there.
+        st = pg.evaluate(f"() => {{ const e = {ed}; return [e.tool, !!(e.tf && e.tf.float), e.doc.layers.length, e.tf.L.w, e.tf.L.h, e.sel]; }}")
+        self.assertEqual(st, ["tfsel", True, 2, 20, 20, None])
+        self.assertEqual(pg.evaluate(px, [70, 50])[3], 0)
+        # Dragged inside the box 50 px left, put down by Enter: one layer again, one undo step.
+        pg.mouse.move(*at(70, 50)); pg.mouse.down(); pg.mouse.move(*at(20, 50), steps=6); pg.mouse.up()
+        pg.keyboard.press("Enter")
+        st = pg.evaluate(f"() => {{ const e = {ed}; return [!!e.tf, e.doc.layers.length, e.undoStack.at(-1).label]; }}")
+        self.assertEqual(st, [False, 1, "Move selection"])
+        self.assertEqual(pg.evaluate(px, [15, 50])[:3], [220, 0, 160])
+        self.assertEqual(pg.evaluate(px, [70, 50])[3], 0)
+        self.assertEqual(pg.evaluate(px, [55, 50])[:3], [220, 0, 160])
+        # The selection went with them.
+        self.assertEqual([pg.evaluate(sel, [15, 50]), pg.evaluate(sel, [70, 50])], [255, 0])
+        # Undo: as it was before the pixels were taken up.
+        pg.keyboard.press("Control+z")
+        self.assertEqual(pg.evaluate(px, [70, 50])[:3], [220, 0, 160])
+        self.assertEqual(pg.evaluate(px, [15, 50])[:3], [0, 0, 160])
+        self.assertEqual(pg.evaluate(sel, [70, 50]), 255)
+        # A quarter turn by the numbers, then Esc: everything put back, nothing on the undo stack.
+        n = pg.evaluate(f"() => {ed}.undoStack.length")
+        pg.evaluate(f"() => {{ {ed}.setTool('move'); {ed}.setTool('tfsel'); {ed}.tfSet({{ r: 90 }}); }}")
+        self.assertEqual(pg.evaluate(f"() => {ed}.doc.layers.length"), 2)
+        pg.mouse.move(*at(5, 5)); pg.keyboard.press("Escape")
+        st = pg.evaluate(f"() => {{ const e = {ed}; return [!!e.tf, e.doc.layers.length, e.undoStack.length, !!e.sel]; }}")
+        self.assertEqual(st, [False, 1, n, True])
+        self.assertEqual(pg.evaluate(px, [70, 50])[:3], [220, 0, 160])
+        # Shift+V switches between the two; with nothing selected it says so and floats nothing.
+        pg.evaluate(f"() => {{ {ed}.setTool('move'); {ed}.deselect(); }}")
+        pg.mouse.move(*at(100, 60)); pg.keyboard.press("Shift+V")
+        self.assertEqual(pg.evaluate(f"() => [{ed}.tool, !!{ed}.tf]"), ["tfsel", False])
+        pg.mouse.move(*at(100, 60)); pg.mouse.down(); pg.mouse.up()
+        self.assertEqual(pg.evaluate(f"() => [!!{ed}.tf, {ed}.doc.layers.length]"), [False, 1])
+        self.assertEqual(self.errors, [])
+
+    def test_generate_has_no_fill_around_button(self):
+        pg = self.page()
+        self.open_photo(pg)
+        kinds = pg.evaluate(f"() => [...{self.ED}.parts.generate.querySelectorAll('[data-gen]')].map((b) => b.dataset.gen)")
+        self.assertNotIn("heal", kinds)
+        self.assertIn("fill", kinds)
+
     def test_history_panel_rename_fill_and_backspace(self):
         pg = self.page()
         self.open_photo(pg)
@@ -1389,7 +1449,7 @@ class PaintBrowserTests(unittest.TestCase):
         last = lambda: pg.evaluate(f"() => {ed}.undoStack.at(-1).label")
         # One place in the toolbar; a right-click opens the six tools as icons, a click picks one and shows it there.
         slot = ".paint-tools [data-group=pen]"
-        self.assertEqual(pg.locator(".paint-tools [data-group]").count(), 4)
+        self.assertEqual(pg.locator(".paint-tools [data-group]").count(), 5)   # transform, select, paint, pen, shape
         pg.click(slot, button="right")
         self.assertEqual(pg.evaluate(f"() => [...{ed}.box.querySelectorAll('.paint-flyout .paint-btn')].map((b) => b.dataset.tool)"),
                          ["pen", "penadd", "pendel", "penconv", "pathsel", "pathdirect"])
@@ -1917,7 +1977,7 @@ class PaintBrowserTests(unittest.TestCase):
         self.open_photo(pg)
         ed = self.ED
         groups = pg.evaluate(f"() => [...{ed}.box.querySelectorAll('.paint-tools [data-group]')].map((b) => b.dataset.group)")
-        for g in ("select", "paint", "pen", "shape"):
+        for g in ("transform", "select", "paint", "pen", "shape"):
             self.assertEqual(groups.count(g), 1, groups)
         for t in ("marquee", "ellipse", "lasso", "brush", "spot", "heal", "patch"):
             self.assertEqual(pg.evaluate(f"() => {ed}.box.querySelectorAll('.paint-tools > [data-tool=\"{t}\"]:not([data-group])').length"), 0, t)
