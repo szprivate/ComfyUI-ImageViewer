@@ -1272,6 +1272,8 @@ textarea.param-input {
             overflow: hidden; white-space: nowrap; text-shadow: 0 1px 1px #000;
             background: linear-gradient(to top right, rgba(20,30,40,.85) 49%, rgba(255,255,255,.8) 50%, rgba(120,150,180,.7) 51%); }
 .edit-mix:hover { border-color: #6cf; }
+.edit-mix.dip { background: linear-gradient(to right, rgba(120,150,180,.7), rgba(0,0,0,.9) 50%, rgba(120,150,180,.7)); }
+.edit-mix.wipe { background: linear-gradient(to right, rgba(20,30,40,.85) 50%, rgba(120,150,180,.7) 50%); }
 .edit-mix.sel { border-color: #00e5ff; box-shadow: 0 0 0 1px #00e5ff; }
 /* An audio crossfade: a bar over the cut of two sound clips, its two curves drawn in it (imageViewer_editXfade.js). */
 .edit-xfade { position: absolute; z-index: 2; top: 3px; bottom: 3px; min-width: 8px; box-sizing: border-box; cursor: pointer;

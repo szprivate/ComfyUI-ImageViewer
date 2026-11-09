@@ -389,6 +389,8 @@ def build_model(doc, probes, frames=None, empty_ok=False):
     marks = [m for m in marks if 0 <= m[0] < max(total, 1)]
     if marks:
         say("Marker colours (Resolve's FCPXML import gives every marker its own default colour); clip markers come as timeline markers.")
+    if any(timeline_io.clean_tfx(c.get("tfx")) and float(c.get("transition") or 0) > 0 for c in edit.get("clips") or []):
+        say("Dips to a colour and wipes: they come as Cross Dissolves of the same length (FCPXML names no Resolve transition but its dissolve here).")
     if frames:
         lo = max(0, min(total - 1, int(frames[0])))
         hi = max(lo + 1, min(total, int(frames[1]) + 1))

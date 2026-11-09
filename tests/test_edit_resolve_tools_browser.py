@@ -204,5 +204,47 @@ class EditResolveToolsBrowserTests(Base):
         self.assertEqual(self.errors, [])
 
 
+    # ── transitions: dip to a colour, wipes ──
+
+    def test_dip_and_wipe_from_the_menu_and_the_inspector_and_how_they_play(self):
+        # V1: a 0-96, c 96-168, b 168-264 (frames); a second's dissolve into c: c then starts at 72, the dissolve is 72-96.
+        pg = self.page()
+        pg.evaluate("""async () => { const D = await import('/extensions/viewer/imageViewer_editTimelineData.js'); const P = __panel;
+            P._editTlApply(D.setTransition(P._editTlCut, 1, 1)); P._editTlSel = { kind: 'mix', i: 1 }; P.editTlRefresh(); }""")
+        mix = "() => { const b = __panel._editTlUi.rows.querySelector('.edit-mix'); const r = b.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }"
+        items = self.menu_has(pg, *pg.evaluate(mix))
+        self.assertIn("\u2713 Cross Dissolve", items)
+        pg.locator(".previz-menu-item", has_text="Dip to White").first.click()
+        self.assertEqual(pg.evaluate("() => __panel._editTlCut.clips[1].tfx"), {"type": "dip", "color": "#ffffff"})
+        self.assertEqual(pg.evaluate("() => __panel._editTlUi.rows.querySelector('.edit-mix').dataset.look"), "dip")
+        # Played: the first half, the shot going out fades over white; the second, the one coming in from it.
+        look = """(f) => { __panel.setFrame(f); const P = __panel, ep = P._ep, main = ep.still ? P.imgBase : P.videoBase, under = ep.underEl;
+            const host = main.parentNode; return [Number(main.style.opacity || 1), under ? Number(under.style.opacity) : null, host.style.backgroundColor]; }"""
+        inn, out, ground = pg.evaluate(look, 76)
+        self.assertEqual(inn, 0)
+        self.assertGreater(out, 0.3)
+        self.assertEqual(ground, "rgb(255, 255, 255)")
+        inn, out, ground = pg.evaluate(look, 92)
+        self.assertGreater(inn, 0.3)
+        self.assertEqual(out, 0)
+        self.assertEqual(pg.evaluate(look, 130)[2], "", "the ground back to what it was after it")
+        # The Inspector: the type and the wipe's direction.
+        pg.evaluate("() => { __panel._editTlSel = { kind: 'mix', i: 1 }; __panel.editTlRefresh(); }")
+        pg.evaluate("""() => { const s = __panel.editInspectorPanel.querySelector("[data-field='ttype']"); s.value = 'wipe'; s.dispatchEvent(new Event('change')); }""")
+        self.assertEqual(pg.evaluate("() => __panel._editTlCut.clips[1].tfx"), {"type": "wipe", "dir": "right"})
+        pg.evaluate("""() => { const s = __panel.editInspectorPanel.querySelector("[data-field='tdir']"); s.value = 'down'; s.dispatchEvent(new Event('change')); }""")
+        self.assertEqual(pg.evaluate("() => __panel._editTlCut.clips[1].tfx"), {"type": "wipe", "dir": "down"})
+        mask = "(f) => { __panel.setFrame(f); const P = __panel; return [P.imgBase, P.videoBase].map(e => e.style.maskImage || e.style.webkitMaskImage || '').join(''); }"
+        got = pg.evaluate(mask, 84)
+        self.assertIn("52.08%", got)
+        self.assertNotIn("to ", got, "top to bottom: the gradient's own way (the browser drops 'to bottom')")
+        self.assertEqual(pg.evaluate(mask, 130), "", "no mask after it")
+        # Saved: the look goes to the file.
+        pg.evaluate("() => __panel._editTlSave()")
+        pg.wait_for_function("() => (window.__saves || []).length > 0", timeout=5000)
+        self.assertEqual(pg.evaluate("() => window.__saves.at(-1).edit.clips.map(c => c.tfx)"), [None, {"type": "wipe", "dir": "down"}, None])
+        self.assertEqual(self.errors, [])
+
+
 if __name__ == "__main__":
     unittest.main()

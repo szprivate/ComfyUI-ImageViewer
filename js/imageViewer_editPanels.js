@@ -62,6 +62,9 @@ const TOOLBOX = [
         { name: "Cross Dissolve \u00bd s", note: "onto the join between two shots", fx: { type: "dissolve", seconds: 0.5 } },
         { name: "Cross Dissolve 1 s", note: "onto the join between two shots", fx: { type: "dissolve", seconds: 1 } },
         { name: "Cross Dissolve 2 s", note: "onto the join between two shots", fx: { type: "dissolve", seconds: 2 } },
+        { name: "Dip to Black 1 s", note: "the shot fades to black, the next one from it", fx: { type: "dissolve", seconds: 1, look: { type: "dip", color: "#000000" } } },
+        { name: "Dip to White 1 s", note: "the shot fades to white, the next one from it", fx: { type: "dissolve", seconds: 1, look: { type: "dip", color: "#ffffff" } } },
+        { name: "Wipe 1 s", note: "the next shot uncovered from the left", fx: { type: "dissolve", seconds: 1, look: { type: "wipe", dir: "right" } } },
     ] },
     { id: "titles", name: "Titles", items: [
         { name: "Text 2 s", note: "words on the picture, low in it", fx: { type: "text", text: "Text", seconds: 2 } },
@@ -740,9 +743,41 @@ export const EditPanelsMixin = {
             note("The music under the whole film: it fades in from the film's start and out to its end.");
         } else if (sel && sel.kind === "mix" && cut.clips[sel.i] && sel.i > 0) {
             const i = sel.i, c = cut.clips[i];
-            head("Cross Dissolve");
+            const tfx = D.cleanTfx(c.tfx);
+            const kind = D.TRANSITION_TYPES[tfx ? tfx.type : "dissolve"];
+            head(kind);
             tabs([["transition", "Transition", true]]);
-            section("Cross Dissolve", { reset: () => apply(D.setTransition(cut, i, 1)) });
+            section(kind, { reset: () => apply(D.setTransitionLook(D.setTransition(cut, i, 1), i, null)) });
+            const type = quiet(el("select", "insp-select"));
+            type.dataset.field = "ttype";
+            for (const [v, label] of Object.entries(D.TRANSITION_TYPES)) {
+                const o = el("option", "", label);
+                o.value = v;
+                type.append(o);
+            }
+            type.value = tfx ? tfx.type : "dissolve";
+            type.addEventListener("change", () => apply(D.setTransitionLook(cut, i, { type: type.value, color: "#000000", dir: "right" })));
+            row("Type", type);
+            if (tfx && tfx.type === "dip") {
+                const ink = quiet(el("input", "insp-color"));
+                ink.type = "color";
+                ink.dataset.field = "tcolor";
+                ink.value = tfx.color;
+                ink.addEventListener("change", () => apply(D.setTransitionLook(cut, i, { type: "dip", color: ink.value })));
+                row("Colour", ink, () => apply(D.setTransitionLook(cut, i, { type: "dip", color: "#000000" })));
+            }
+            if (tfx && tfx.type === "wipe") {
+                const dir = quiet(el("select", "insp-select"));
+                dir.dataset.field = "tdir";
+                for (const [v, label] of Object.entries(D.WIPE_DIRS)) {
+                    const o = el("option", "", label);
+                    o.value = v;
+                    dir.append(o);
+                }
+                dir.value = tfx.dir;
+                dir.addEventListener("change", () => apply(D.setTransitionLook(cut, i, { type: "wipe", dir: dir.value })));
+                row("Direction", dir);
+            }
             row("Duration", slider(c.transition || 0, 0, Math.max(0.1, Math.min(c.length, cut.clips[i - 1].length) - 0.05), 1 / fps, 3, null,
                                    (v) => apply(D.setTransition(cut, i, D.toFrame(v, fps))), "seconds"));
             row("From", said(cut.clips[i - 1].name || "shot " + i));
@@ -1016,7 +1051,8 @@ export const EditPanelsMixin = {
             if (i < 1) { this._editTlSay("select the shot the dissolve leads into (not the first), or drag it onto a join"); return; }
             // Selected as what it is, so that its bar is lit and the Inspector has its length.
             this._editTlSel = fx.seconds > 0 ? { kind: "mix", i } : { kind: "clip", i };
-            this._editTlApply(D.setTransition(cut, i, fx.seconds));
+            // A dip or a wipe is a dissolve with a look (D.setTransitionLook); a plain one makes it a cross dissolve again.
+            this._editTlApply(D.setTransitionLook(D.setTransition(cut, i, fx.seconds), i, fx.look || null));
             return;
         }
         if (fx.type === "text") {
