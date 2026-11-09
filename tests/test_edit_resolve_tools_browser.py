@@ -568,5 +568,31 @@ class EditResolveToolsBrowserTests(Base):
         pg.evaluate("() => localStorage.removeItem('imageviewer.viewer.editAudio')")
         self.assertEqual(self.errors, [])
 
+    def test_the_viewer_switch_stays_at_the_right_in_every_layout_and_no_frame_on_the_timeline_viewer(self):
+        pg = self.page()
+        pg.evaluate("() => { const P = __panel; P.editSrcViewerMode('dual'); P.editSrcToggle(true); P.editTlRefresh(); }")
+        where = """() => { const P = __panel, c = P._editSrcCtl, vp = P.viewport, home = c && c.parentNode;
+            const r = c.getBoundingClientRect(), v = (home === vp ? vp : P.editSourcePanel).getBoundingClientRect();
+            return [home === vp ? 'timeline' : home && home.classList.contains('src-head') ? 'source' : null,
+                    Math.round(v.right - r.right) <= 40, [...c.children].filter(b => getComputedStyle(b).display !== 'none').map(b => b.classList[2])]; }"""
+        # Dual: on the timeline viewer, the right one, at its top right.
+        self.assertEqual(pg.evaluate(where), ["timeline", True, ["src-mode"]])
+        # Single showing the source: the timeline viewer is gone, so it is in the source's head, at its right (beside its close button).
+        pg.evaluate("() => __panel._editSrcCtl.querySelector('.src-mode').click()")
+        self.assertEqual(pg.evaluate("() => [__panel._editSrcViewer().mode, __panel._editSrcViewer().show]"), ["single", "source"])
+        self.assertEqual(pg.evaluate(where), ["source", True, ["src-swap", "src-mode"]])
+        # Q: single showing the timeline - the switch is still there, on the timeline viewer.
+        pg.evaluate("() => __panel._editSrcCtl.querySelector('.src-swap').click()")
+        self.assertEqual(pg.evaluate("() => __panel._editSrcViewer().show"), "timeline")
+        self.assertEqual(pg.evaluate(where), ["timeline", True, ["src-swap", "src-mode"]])
+        pg.evaluate("() => __panel._editSrcCtl.querySelector('.src-mode').click()")
+        self.assertEqual(pg.evaluate("() => __panel._editSrcViewer().mode"), "dual")
+        # Off the cut's tab, or with the Source viewer put away, it is gone.
+        pg.evaluate("() => __panel.editSrcToggle(false)")
+        self.assertIsNone(pg.evaluate("() => __panel._editSrcCtl.parentNode"))
+        # The empty picture layer draws nothing (Chrome framed it in light grey round the timeline viewer).
+        self.assertEqual(pg.evaluate("() => { const i = __panel.imgBase; i.removeAttribute('src'); return getComputedStyle(i).visibility; }"), "hidden")
+        self.assertEqual(self.errors, [])
+
 if __name__ == "__main__":
     unittest.main()

@@ -150,8 +150,57 @@ export const EditSourceMixin = {
         if (up && !was) this.editSrcRender();
         if (!up && this._editSrcPlaying) this.editSrcPlay(false);
         if ((was !== up || wasHidden !== alone) && this._afterViewportMoved) this._afterViewportMoved();
+        this._editSrcCtlPlace();
         const ui = this._editTlUi;
         if (ui && ui.srcView) this._editSrcButtons(ui);
+    },
+
+    /**
+     * The viewers' layout switch (single / dual) and, in single, the source / timeline swap: ONE small
+     * group at the top right of whichever viewer stands at the right - the timeline's (`#viewport`) while
+     * it is on screen, else the Source viewer's head - so it is always there and always at the right.
+     */
+    _editSrcCtlPlace() {
+        const host = this.editSourcePanel, vp = this.viewport;
+        if (!host) return;
+        const doc = host.ownerDocument;
+        let ctl = this._editSrcCtl;
+        if (!ctl || ctl.ownerDocument !== doc) {
+            if (ctl) ctl.remove();
+            ctl = doc.createElement("div");
+            ctl.className = "src-viewctl";
+            const small = (icon, cls, fn) => {
+                const b = doc.createElement("button");
+                b.className = "edit-btn src-hbtn " + cls;
+                setEditIcon(b, icon);
+                b.addEventListener("pointerdown", (e) => e.stopPropagation());     // not a pan of the viewer
+                b.addEventListener("click", (e) => { e.stopPropagation(); fn(); });
+                return b;
+            };
+            ctl.append(small("timelineView", "src-swap", () => this.editSrcSwap()),
+                       small("dualViewer", "src-mode", () => this.editSrcViewerMode()));
+            this._editSrcCtl = ctl;
+        }
+        const up = this._editSrcOn(), v = this._editSrcViewer();      // on, even while a single viewer shows the timeline
+        const showsSource = v.mode === "single" && v.show === "source";
+        const head = host.querySelector(":scope > .src-body > .src-head");
+        const home = !up ? null : showsSource ? head : vp;
+        if (!home) { ctl.remove(); return; }
+        if (ctl.parentNode !== home) {
+            if (home === head) head.insertBefore(ctl, head.querySelector(".src-close"));
+            else home.append(ctl);
+        }
+        ctl.classList.toggle("in-head", home === head);
+        const dual = v.mode === "dual";
+        const mode = ctl.querySelector(".src-mode");
+        if (mode.dataset.icon !== (dual ? "dualViewer" : "singleViewer")) setEditIcon(mode, dual ? "dualViewer" : "singleViewer");
+        mode.title = dual ? "Dual viewer (source | timeline) - click for a single viewer"
+                          : "Single viewer - click for source and timeline side by side";
+        const swap = ctl.querySelector(".src-swap");
+        swap.style.display = dual ? "none" : "";
+        const icon = showsSource ? "timelineView" : "srcViewer";
+        if (swap.dataset.icon !== icon) setEditIcon(swap, icon);
+        swap.title = showsSource ? "Show the timeline in this viewer (Q)" : "Show the source in this viewer (Q)";
     },
 
     /** The bar's Source buttons as things stand (from editTlRefresh). */
@@ -249,10 +298,7 @@ export const EditSourceMixin = {
                 b.addEventListener("click", (e) => { e.stopPropagation(); fn(); });
                 return b;
             };
-            head.append(name,
-                small("dualViewer", "", () => this.editSrcViewerMode(), "src-mode"),
-                small("timelineView", "Show the timeline in this viewer (Q)", () => this.editSrcSwap("timeline"), "src-swap"),
-                small("close", "Put the Source viewer away", () => this.editSrcToggle(false), "src-close"));
+            head.append(name, small("close", "Put the Source viewer away", () => this.editSrcToggle(false), "src-close"));
             const view = el("div", "src-view");
             const scrub = el("div", "src-scrub");
             scrub.append(el("div", "src-range"), el("div", "src-line"));
@@ -299,12 +345,7 @@ export const EditSourceMixin = {
             else view.replaceChildren(media);
             this._editSrcEl = media;
         } else if (!s) view.replaceChildren();
-        // The layout buttons.
-        const v = this._editSrcViewer();
-        const mode = body.querySelector(".src-mode");
-        if (mode.dataset.icon !== (v.mode === "dual" ? "dualViewer" : "singleViewer")) setEditIcon(mode, v.mode === "dual" ? "dualViewer" : "singleViewer");
-        mode.title = v.mode === "dual" ? "Dual viewer (source | timeline) - click for a single viewer" : "Single viewer - click for source and timeline side by side";
-        body.querySelector(".src-swap").style.display = v.mode === "single" ? "" : "none";
+        this._editSrcCtlPlace();
         this._editSrcDraw();
     },
 

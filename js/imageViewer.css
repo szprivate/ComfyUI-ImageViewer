@@ -154,6 +154,9 @@
 .main-area { flex: 1; display: flex; overflow: hidden; position: relative; width: 100%; }
 .viewport { flex: 1; background: #000; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; width: 100%; cursor: grab; min-width: 0; transform-origin: center center; }
 .viewport:active { cursor: grabbing; }
+/* A picture layer with nothing in it (the Edit tab playing a film leaves the <img> empty) draws nothing:
+   Chrome frames an empty <img> of a set size with a light border, which showed around the timeline viewer. */
+.viewport img.img-layer:not([src]), .viewport img.img-layer[src=""] { visibility: hidden; }
 .img-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; transform-origin: center; user-select: none; pointer-events: none; will-change: transform, clip-path; }
 #img-frame {
     position: absolute;
@@ -2051,6 +2054,10 @@ audio.src-media { width: 90%; }
 .src-head::before { content: "Source"; font-size: 10px; color: #00b8d4; text-transform: uppercase; letter-spacing: .06em; margin-right: 4px; }
 .src-hbtn { min-height: 0; width: 22px; height: 20px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 .src-hbtn .edit-icon { width: 13px; height: 13px; }
+/* The single / dual switch (and Q's swap): top right of the viewer that stands at the right. */
+.src-viewctl { display: inline-flex; gap: 3px; align-items: center; }
+.viewport > .src-viewctl { position: absolute; top: 8px; right: 8px; z-index: 60; }
+.viewport > .src-viewctl .src-hbtn { background: rgba(26,26,26,.85); }
 /* The Source viewer's edits in the timeline's bar. */
 .edit-srcedits { display: inline-flex; gap: 2px; align-items: center; flex: none; }
 .edit-srcedit:disabled { opacity: .35; }
