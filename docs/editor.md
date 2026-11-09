@@ -39,7 +39,7 @@ The film runs until the last picture or the last sound ends, whichever is later.
 | **Trim** | <kbd>T</kbd> | ripples (what follows moves) | upper half slips, lower half slides |
 | **Blade** | <kbd>B</kbd> | | cuts the clip where you click |
 
-The middle of a cut rolls it in both modes. <kbd>N</kbd> turns snapping on and off. While trimming, the two frames either side of the cut are shown over the picture.
+The middle of a cut rolls it in both modes. Double-click a cut (either side of it, its middle, or a dissolve) to go into the Trim mode with that edit selected: <kbd>,</kbd> / <kbd>.</kbd> then ripple or roll it a frame. <kbd>N</kbd> turns snapping on and off. While trimming, the two frames either side of the cut are shown over the picture.
 
 | To | Do |
 |---|---|

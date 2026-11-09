@@ -1389,6 +1389,46 @@ class EditTimelineBrowserTests(unittest.TestCase):
         self.assertTrue(pg.evaluate("() => !!__panel._editTlEditPoint()"))
         self.assertEqual(self.errors, [])
 
+    def test_05_a_double_click_on_a_cut_goes_into_the_trim_mode_on_that_edit(self):
+        pg = self.page()
+        self.focus_timeline(pg)
+        self.assertEqual(self.mode(pg)[0], "select")
+        # The outgoing edge, double-clicked: the Trim mode, that side selected, the playhead on the edit.
+        pg.mouse.dblclick(*self.x_at(pg, 4.0, dx=-5))
+        self.assertEqual(self.mode(pg)[0], "trim")
+        self.assertEqual([m[0] for m in pg.evaluate(self.MARKS)], ["end"])
+        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), 96)
+        self.assertEqual(self.frames(pg)["v1"][0][2], 96, "a double-click trims nothing")
+        self.assertEqual(self.undo_len(pg), 0)
+        pg.keyboard.press("Comma")
+        got = self.frames(pg)["v1"]
+        self.assertEqual(got[0][2], 95)
+        self.assertEqual(got[1][1], 95, "it ripples: what follows moves")
+        pg.keyboard.press("Period")
+        # Back to Selection; the middle of a cut double-clicked: the Trim mode with a roll selected.
+        pg.keyboard.press("a")
+        pg.mouse.dblclick(*self.x_at(pg, 7.0, dx=0))
+        self.assertEqual(self.mode(pg)[0], "trim")
+        self.assertEqual(sorted(m[0] for m in pg.evaluate(self.MARKS)), ["end", "start"])
+        self.assertEqual(pg.evaluate("() => __panel._editTlEditLive(__panel._editTlEditPoint()).act"), "roll")
+        # Two single clicks far apart, or on two different edits, are not a double-click.
+        pg.keyboard.press("a")
+        pg.mouse.click(*self.x_at(pg, 4.0, dx=-5))
+        pg.mouse.click(*self.x_at(pg, 7.0, dx=5))
+        self.assertEqual(self.mode(pg)[0], "select")
+        pg.wait_for_timeout(600)
+        pg.mouse.click(*self.x_at(pg, 7.0, dx=5))
+        self.assertEqual(self.mode(pg)[0], "select")
+        # A double-click on a clip's body is not a cut: no mode change.
+        pg.mouse.dblclick(*self.x_at(pg, 2.0))
+        self.assertEqual(self.mode(pg)[0], "select")
+        # A cut on a higher track.
+        self.on_v2(pg, ["v", 1, 1], ["w", 2, 1])
+        pg.mouse.dblclick(*self.x_at(pg, 2.0, "V2", dx=-5))
+        self.assertEqual(self.mode(pg)[0], "trim")
+        self.assertEqual(pg.evaluate("() => __panel._editTlEditSel.sel.track"), "V2")
+        self.assertEqual(self.errors, [])
+
     def test_06_snaps_land_on_the_exact_frame_by_real_drags_at_several_zooms_and_scrolls(self):
         for zoom in (0.25, 0.5, 1, 4, 16):
             for scroll in ((0, 900) if zoom > 1 else (0,)):

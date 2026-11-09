@@ -36,6 +36,8 @@
 //                          rippling in the Trim mode, a gap opening or closing in
 //                          Selection; E extends it to the playhead; Shift+A / Shift+S
 //                          go on to the edit before / after; Esc lets it go
+//   a double-click on an   puts the Trim mode on with that edit point selected
+//   edge or a cut          (a dissolve's bar: the cut under it, a roll), as Resolve's
 //   Alt + an edge          RETIME ("trim to fill"): the source in and out stay,
 //                          the speed changes to fill the new length
 //   Ctrl + the out-edge    LOOP EXTEND: longer than the source, by playing it
@@ -66,6 +68,13 @@ import * as D from "./imageViewer_editTimelineData.js";
 
 const EDGE_PX = 7;
 const ROLL_PX = 3;
+const DBL_MS = 450;          // two clicks on one edit point this close: a double-click
+
+// Which edit point a click selected - the same for both clicks of a double-click, whatever was redrawn between.
+function editPointKey(info) {
+    const s = (sel) => (sel ? (sel.kind === "clip" ? "V1:" + sel.i : sel.track + ":" + sel.i) : "");
+    return info.act === "roll" ? "roll " + s(info.a) + " " + s(info.b) : info.side + " " + s(info.sel);
+}
 
 // Cursors drawn as an editor's: a bracket on the side that moves. 15 px on a grid
 // of their own - half-pixel coordinates, so that a 1 px stroke falls on whole pixels and stays sharp.
@@ -438,6 +447,7 @@ export const EditTrimMixin = {
                 if (info.act !== "slip" && info.act !== "slide" && info.act !== "retime" && info.act !== "loop") {
                     this._editTlEditSel = info;
                     this._editTlSeek(this._editTlEditTime(info, start));
+                    this._editTlEditClick(info);                    // twice: into the Trim mode on it
                 } else this._editTlSeek(began);
             }
             this.editTlRefresh();
@@ -445,6 +455,29 @@ export const EditTrimMixin = {
         });
         this._etuDrag = true;
         if (this._editTlTrimMode && this.editTwoUpShow) this.editTwoUpShow(info, start);
+        return true;
+    },
+
+    /**
+     * A click that selected an edit point: the second on the same one within
+     * DBL_MS is a double-click, which (as in Resolve) puts the Trim mode on
+     * with that edit point selected - its side, or both for the middle of a
+     * cut (a roll) - so , / . ripple it and the two-up shows it. Counted here
+     * rather than by the browser's dblclick: the first click redraws the
+     * timeline, and the clip under the second is another element.
+     */
+    _editTlEditClick(info) {
+        const now = performance.now();
+        const key = editPointKey(info);
+        const last = this._editTlLastEditClick;
+        this._editTlLastEditClick = { key, t: now };
+        if (!last || last.key !== key || now - last.t > DBL_MS) return false;
+        this._editTlLastEditClick = null;
+        if (!this._editTlTrimMode) this.editTlMode("trim");
+        this._editTlEditSel = info;
+        this._editTlFollow = null;                  // the playhead goes to the edit, and stays with it
+        this._editTlSay(info.act === "roll" ? "Trim mode: the cut is selected - , / . roll it"
+            : `Trim mode: the ${info.side === "end" ? "outgoing" : "incoming"} side is selected - , / . ripple it`);
         return true;
     },
 
@@ -688,8 +721,13 @@ export const EditTrimMixin = {
             this._editTlTrimShow(info, ev.clientX, { delta: D.clipStarts(this._editTlCut)[i] - at0 });
         }, (moved) => {
             this._editTlTrimShow(null);
-            if (!moved) this._editTlSeek(at0);
+            if (!moved) {
+                this._editTlSeek(at0);
+                // Twice: the Trim mode, the cut under the dissolve selected (a roll).
+                if (this._editTlEditClick(info)) this._editTlSel = { kind: "mix", i };
+            }
             this.editTlRefresh();
+            if (this._editTlTrimMode && this.editTwoUpRest) this.editTwoUpRest();
         });
     },
 
