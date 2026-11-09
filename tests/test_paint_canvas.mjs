@@ -42,3 +42,33 @@ test("a node's settings for a dialog: no seeds, no sockets, no links, a dynamic 
     assert.deepEqual(v, { model: "crystal", "model.creativity": 5, mode: "fast", refine: false });
 });
 
+
+test("a workflow with a subgraph: its type is made through the root graph's events, then put back as it was", async () => {
+    const mine = function UsersOwn() {};
+    globalThis.window = { LiteGraph: { registered_node_types: { "sg-1": mine } } };
+    const types = window.LiteGraph.registered_node_types;
+    const events = () => { const t = new EventTarget(); t.dispatch = (name, detail) => t.dispatchEvent(Object.assign(new Event(name), { detail })); return t; };
+    const rootEvents = events();
+    rootEvents.addEventListener("subgraph-created", (e) => { types[e.detail.subgraph.id] = function Detached() {}; });
+    class G {
+        constructor() { this.events = events(); this.made = []; }
+        configure(ui) { for (const s of ui.definitions.subgraphs) this.events.dispatch("subgraph-created", { subgraph: { id: s.id }, data: s }); this.made = ui.nodes; }
+    }
+    const root = new G();
+    root.events = rootEvents;
+    let seen = null;
+    const app = { rootGraph: root, graphToPrompt: async (g) => {
+        seen = { mine: types["sg-1"] === mine, other: !!types["sg-2"] };
+        return { output: { "1": { class_type: "LoadImage", inputs: {} }, "2:5": { class_type: "Inner", inputs: {} } } };
+    } };
+    const ui = { nodes: [{ id: 1 }, { id: 2 }], definitions: { subgraphs: [{ id: "sg-1" }, { id: "sg-2" }] } };
+    const out = await WC.promptOffCanvas(app, ui);
+    assert.deepEqual(Object.keys(out), ["1", "2:5"]);
+    assert.deepEqual(seen, { mine: false, other: true });     // while the prompt is made: the workflow's own types
+    assert.equal(types["sg-1"], mine);                         // afterwards the user's own type is back
+    assert.equal("sg-2" in types, false);                      // and a type made only for it is gone
+    // A node ComfyUI could not make (no class_type) is named, not sent.
+    app.graphToPrompt = async () => ({ output: { "3": { inputs: {}, _meta: { title: "Remove Background" } } } });
+    await assert.rejects(WC.promptOffCanvas(app, ui), /Remove Background/);
+    delete globalThis.window;
+});

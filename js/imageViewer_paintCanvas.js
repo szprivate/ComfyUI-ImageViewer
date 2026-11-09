@@ -71,21 +71,44 @@ export function readFields(settings, v, prefix = "t:") {
 
 /**
  * The prompt ComfyUI makes of a workflow kept as the canvas saves it, WITHOUT putting it on the canvas: the
- * workflow is configured into a graph of its own (the root graph's class, so subgraphs come along) and handed to
- * `app.graphToPrompt(graph)`. The user's canvas is not touched.
+ * workflow is configured into a graph of its own (the root graph's class) and handed to `app.graphToPrompt(graph)`.
+ *
+ * Subgraphs (most of ComfyUI's own templates have one): ComfyUI makes a subgraph's node type only for the ROOT
+ * graph - its `subgraph-created` listener is on `app.rootGraph.events`. Without that type a subgraph node comes
+ * out of graphToPrompt with no class_type and nothing inside it. So the new graph's `subgraph-created` is handed on
+ * to the root graph's events (ComfyUI registers the type, bound to this graph's subgraph), and when the prompt is
+ * made every type that was registered for it is put back as it was (or taken away), so a subgraph of the same id on
+ * the user's canvas keeps its own. The user's canvas itself is not touched.
  */
 export async function promptOffCanvas(app, ui) {
     const root = app && (app.rootGraph || app.graph);
     if (!root || typeof app.graphToPrompt !== "function") throw new Error("ComfyUI's app is not here");
+    const LG = (typeof window !== "undefined" && window.LiteGraph) || null;
+    const types = LG && LG.registered_node_types;
+    const was = new Map();
     const Graph = root.constructor;
     const g = new Graph();
+    const handOn = (e) => {
+        const d = e && e.detail, id = d && d.subgraph && d.subgraph.id;
+        if (!id) return;
+        if (types && !was.has(id)) was.set(id, Object.prototype.hasOwnProperty.call(types, id) ? types[id] : undefined);
+        if (root.events && typeof root.events.dispatch === "function") root.events.dispatch("subgraph-created", d);
+    };
+    if (g.events && root.events && g.events !== root.events) g.events.addEventListener("subgraph-created", handOn);
     try {
         g.configure(JSON.parse(JSON.stringify(ui)));
         const p = await app.graphToPrompt(g);
         const out = p && p.output;
         if (!out || !Object.keys(out).length) throw new Error("ComfyUI made no prompt of it");
+        const bad = Object.entries(out).filter(([, v]) => !v || typeof v.class_type !== "string");
+        if (bad.length) {
+            const names = bad.map(([k, v]) => (v && v._meta && v._meta.title) || `node ${k}`).join(", ");
+            throw new Error(`ComfyUI could not make these nodes of the workflow: ${names} (a node pack missing, or a subgraph this ComfyUI cannot open)`);
+        }
         return out;
     } finally {
+        if (g.events) g.events.removeEventListener("subgraph-created", handOn);
+        for (const [id, t] of was) { if (t) types[id] = t; else delete types[id]; }
         try { if (typeof g.clear === "function") g.clear(); } catch (_) { /* gone with the graph */ }
     }
 }

@@ -797,7 +797,7 @@ export const PaintPanelMixin = {
         const a = t && t.actions && t.actions[kind];
         if (!t || (a && a.choice === "agent")) return this._paintAsk(rec, kind, opts);
         // Seen at once: the button busy, the bar up (imageViewer_paintGenStatus.js).
-        const what = (a && a.label) || kind;
+        const what = opts.label || (a && a.label) || kind;
         const wfName = this._paintWfLabel(kind);
         const gid = ed.genBegin ? ed.genBegin(kind, wfName ? `${what} \u00b7 ${wfName}` : what) : 0;
         const say = (patch) => { if (gid) ed.genUpdate(gid, patch); };
