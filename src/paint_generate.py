@@ -43,7 +43,7 @@ BUILTIN_DIR = os.path.join(HERE, "paint_workflows")
 
 ACTIONS = ("fill", "remove", "extend", "edit", "background", "select_subject", "select_objects", "upscale")
 LABELS = {"fill": "Generative fill", "remove": "Remove object", "extend": "Extend (fill the new border)",
-          "edit": "Edit with a prompt", "background": "Remove background", "select_subject": "Select subject",
+          "edit": "Edit with a prompt", "background": "Remove background", "select_subject": "Select foreground",
           "select_objects": "Select objects", "upscale": "Upscale with detail"}
 # A model that takes no mask (an edit model) is shown the place to change as a flat grey, and told so;
 # its picture is then laid in through the selection, so nothing outside it changes.
@@ -117,7 +117,7 @@ def _builtin(wid):
 
 
 def workflow_file(wid):
-    """What the page puts onto the canvas: {id, label, format, workflow, action...}."""
+    """What the page turns into a prompt (or reads its settings from): {id, label, format, workflow, action...}."""
     e, g = _builtin(wid)
     if not e:
         raise GenerateError(f"no built-in workflow {wid!r}")
@@ -552,7 +552,7 @@ def prepare(s, token, action, input_dir, *, wid=None, prompt="", variations=1, k
             node_classes=None, graph=None, tune=None, box=None):
     """The workflow for one Generate, filled in: {job, graphs, output, label, box, api, filled}.
 
-    *graph*: the prompt ComfyUI made of a built-in on the canvas; *tune*: the dialog's settings
+    *graph*: the prompt ComfyUI's page made of a canvas-format built-in; *tune*: the dialog's settings
     ({node ref: {input: value}}); *box*: for Select objects, whether the selection's box goes in."""
     if action not in ACTIONS:
         raise GenerateError(f"unknown action {action!r}")

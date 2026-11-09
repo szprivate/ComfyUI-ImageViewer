@@ -149,11 +149,11 @@ The **Filter** menu works on every picked pixel layer, and only inside the selec
 
 ## Generate
 
-The **Generate** menu and the **Generate** panel. **Fill from the surroundings**, a plain **Extend the canvas** and a plain **Upscale** work right here. **Generative fill**, **Remove object**, **Edit** (with the prompt, in the selection or on the whole picture), **Remove background**, **Select subject**, **Select objects**, and Extend / Upscale with a workflow each run a ready-made ComfyUI workflow:
+The **Generate** menu and the **Generate** panel. **Fill from the surroundings**, a plain **Extend the canvas** and a plain **Upscale** work right here. **Generative fill**, **Remove object**, **Edit** (with the prompt, in the selection or on the whole picture), **Remove background**, **Select foreground**, **Select objects**, and Extend / Upscale with a workflow each run a ready-made ComfyUI workflow. **Extend empty areas** selects what the active layer leaves empty on the canvas (outside it and where it is see-through, reaching 8 px into it so the new part meets it without a seam) and fills that with Generative fill, with the prompt or, without one, as a continuation of the picture:
 
 - the part around the selection is cut out (with some room around it), scaled to the size the model works at, and queued in ComfyUI with a new seed each time;
-- **the workflow is put onto ComfyUI's canvas** the first time it is used, as a group of its own ("Paint · <its name>"), and that group is what runs from then on: you can see what Generate did (the picture it sent, the words, the seed), and a change you make to the group's settings there is used the next time. Delete the group and the next run puts a fresh one there;
-- the result comes back as a **new layer** at that place, masked to the selection, as one undo step (Remove background gives the layer a mask, Select subject and Select objects make the selection);
+- the workflow runs straight from Paint: nothing is put onto ComfyUI's canvas, and what is on the canvas is left alone (groups named "Paint · …" that an earlier version put there can be deleted);
+- the result comes back as a **new layer** at that place, masked to the selection, as one undo step (Remove background gives the layer a mask, Select foreground and Select objects make the selection);
 - **Variations** (1 to 4) makes that many layers;
 - if a model file the workflow needs is not on the machine, Paint says which files, how large they are and where they go, and **asks before it downloads them** (only from Hugging Face, into ComfyUI's own model folders; the bar shows how far it is and Stop cancels). The RMBG node pack fetches its own models the first time it runs - Paint says so once before. A model is found by its file name in any of ComfyUI's model folders and their subfolders, extra model paths included (`flux/flux1-fill-dev.safetensors` counts);
 - only the workflows whose nodes this ComfyUI has are offered: install a node pack (ComfyUI-RMBG, say) and its models appear;
@@ -164,7 +164,7 @@ The **Generate** menu and the **Generate** panel. **Fill from the surroundings**
 | Action | Comes with |
 |---|---|
 | Generative fill, Remove object, Extend, Edit | **Inpaint, with the mask:** FLUX.1 Fill dev, GPT Image 2 / 2.5 Flare / 2.5 Sunburst (masked), Bria FIBO edit (masked), OneReward (remove). **Edit models, local:** FLUX.1 Kontext dev, FLUX.2 Klein 4B / 9B, Qwen Image Edit 2511 (plain and Lightning), Qwen Image Edit 2509 Lightning, Qwen Image 2.1 (and Turbo), LongCat Image Edit, FireRed Image Edit 1.1, OmniGen2. **Edit models, API:** FLUX.1 Kontext Pro / Max, FLUX.3, GPT Image 2.5 Flare, Nano Banana 2 / 2 Lite / Pro / 2.1, Qwen Image 3 Edit, Seedream 5.0 Pro / Flash, Grok Imagine (and Image 2), Krea 3, Luma Uni-1, Meta Muse Image, MAI Image 2.6 (and Flash), Hunyuan Image 3.5 preview |
-| Remove background, Select subject | BiRefNet (ComfyUI's own), Bria and Recraft remove background (API), and with the ComfyUI-RMBG pack: RMBG-2.0, INSPYRENET, BEN, BEN2 and its eleven BiRefNet models |
+| Remove background, Select foreground | BiRefNet (ComfyUI's own), Bria and Recraft remove background (API), and with the ComfyUI-RMBG pack: RMBG-2.0, INSPYRENET, BEN, BEN2 and its eleven BiRefNet models |
 | Select objects | SAM 3.1: by the words you type, or inside the selection's box |
 | Upscale | an upscale model, SeedVR2 7B (local); Magnific Precise and Creative, Crystal (Clarity AI), Recraft Crisp and Creative, Topaz Bloom 2 and Wonder 3.5, SeedVR2 on WaveSpeed (API) |
 

@@ -3067,7 +3067,7 @@ class PaintEditor {
                 { label: "Colour range…", run: () => this.colorRangeDialog() }, "-",
                 ...[["expand", "Expand…", "By (px)"], ["contract", "Contract…", "By (px)"], ["smooth", "Smooth…", "Radius (px)"], ["border", "Border…", "Width (px)"]].map(([kind, label, what]) => (
                     { label, disabled: !this.sel, run: () => this.dialog(label.slice(0, -1), [["r", what, kind === "border" ? 6 : 4, 1, 200]], (v) => this.modifySelection(kind, v.r)) })), "-",
-                { label: "Subject", run: () => this.host.generate && this.host.generate("select_subject", {}) },
+                { label: "Foreground", run: () => this.host.generate && this.host.generate("select_subject", {}) },
                 { label: "Objects (SAM3)…", disabled: !this.host.generateDialog, run: () => this.host.generateDialog("select_objects") }];
     }
 
@@ -3164,8 +3164,9 @@ class PaintEditor {
                 { label: "Edit with the prompt (the selection, else the picture)", run: g("edit") },
                 { label: "Fill from the surroundings (here, no AI)", disabled: !this.sel, run: g("heal") },
                 { label: "Remove background", run: g("background") },
-                { label: "Select subject", run: g("select_subject") },
+                { label: "Select foreground", run: g("select_subject") },
                 { label: "Select objects (SAM3)…", disabled: !this.host.generateDialog, run: () => this.host.generateDialog("select_objects") },
+                { label: "Extend empty areas (around the layer)", run: () => this.extendEmpty() },
                 { label: "Extend the canvas…", run: () => this.dialog("Extend the canvas", [["px", "Pixels each side", 128, 1, 4096], ["ai", "Fill the new part with the workflow", "yes", ["yes", "no"]]],
                      (v) => this.host.generate && this.host.generate("extend", { px: v.px, ai: v.ai === "yes", prompt: this._prompt || "", variations: this._variations || 1 })) },
                 { label: "Upscale…", run: () => (this.host.generateDialog ? this.host.generateDialog("upscale")
@@ -3988,7 +3989,11 @@ class PaintEditor {
         g("Remove object", "remove", "Take what is selected away and fill the place: a new layer");
         g("Edit", "edit", "Change the selection (or the whole picture) as the prompt says: a new layer");
         g("Remove background", "background", "A mask on the layer that hides the background");
-        g("Select subject", "select_subject", "The selection becomes the main subject");
+        g("Select foreground", "select_subject", "The selection becomes what stands in front (the background left out)");
+        const e = this.el("button", "paint-btn", { type: "button", text: "Extend empty areas", title: "Select what the layer leaves empty on the canvas and fill it there (Generative fill)" + uses("fill") });
+        e.addEventListener("pointerenter", () => { e.title = "Select what the layer leaves empty on the canvas and fill it there (Generative fill)" + uses("fill"); });
+        e.addEventListener("click", () => this.extendEmpty());
+        row.append(e);
         g("Extend 128 px", "extend", "A bigger canvas, the new part filled by the workflow", () => ({ px: 128, ai: true }));
         g("Upscale 2x", "upscale", "Twice the size, the detail made by the workflow", () => ({ k: 2, ai: true }));
         // The two with settings of their own: a dialog (the model, its settings; the words or the selection's box).

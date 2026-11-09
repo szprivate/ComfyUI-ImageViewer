@@ -53,3 +53,19 @@ test("snapping: the nearest target within reach, a span by its start, middle or 
     assert.equal(S.rulerStep(10), 5);
     assert.equal(S.rulerStep(0.1), 500);
 });
+
+test("the empty area around a layer: outside its box and where it is see-through, grown into it", () => {
+    const W = 6, H = 4, L = { x: 1, y: 0, w: 3, h: 4 };
+    const px = new Uint8ClampedArray(L.w * L.h * 4).fill(255);
+    px[(1 * L.w + 1) * 4 + 3] = 0;                         // a hole in the middle of the layer
+    px[(2 * L.w + 1) * 4 + 3] = 128;                       // half see-through
+    const m = S.emptyAround(px, L, W, H, 0);
+    assert.equal(m[0], 255);                               // left of the layer
+    assert.equal(m[5], 255);                               // right of it
+    assert.equal(m[1], 0);                                 // the layer covers it
+    assert.equal(m[1 * W + 2], 255);                       // the hole
+    assert.equal(m[2 * W + 2], 127);
+    const grown = S.emptyAround(px, L, W, H, 1);
+    assert.equal(grown[1], 255);                           // reaches one pixel into the layer
+    assert.equal(S.emptyAround(new Uint8ClampedArray(W * H * 4).fill(255), { x: 0, y: 0, w: W, h: H }, W, H), null);
+});
