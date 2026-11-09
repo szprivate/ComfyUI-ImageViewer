@@ -525,5 +525,44 @@ class EditResolveToolsBrowserTests(Base):
         self.assertEqual(pg.evaluate(self.V1S), [["a", 0, 96], ["c", 0, 72], ["b", 24, 96]])
         self.assertEqual(self.errors, [])
 
+    def test_the_bar_is_one_row_with_the_rarer_buttons_in_menus(self):
+        pg = self.page()
+        pg.set_viewport_size({"width": 1600, "height": 900})
+        pg.evaluate("() => { const P = __panel; P.editSrcToggle(true); if (!P.isPanelDocked('editMixer')) P.editTlPanelToggle('editMixer'); P.editTlRefresh(); }")
+        ui = "() => { const bar = __panel._editTlUi.body.querySelector('.edit-bar'); return [bar.getBoundingClientRect().height, bar.scrollWidth <= bar.clientWidth + 1]; }"
+        h, fits = pg.evaluate(ui)
+        self.assertLess(h, 40, "one row")
+        self.assertTrue(fits)
+        self.assertEqual(pg.evaluate("() => [...__panel._editTlUi.srcEdits.querySelectorAll('.edit-srcedit')].map((b) => b.dataset.edit)"),
+                         ["insert", "overwrite", "replace"])
+        menu = "() => [...__panel.shadowRoot.querySelectorAll('.previz-menu-item')].map((b) => b.textContent.trim())"
+        pg.evaluate("() => __panel._editTlUi.tools.click()")
+        items = pg.evaluate(menu)
+        for want in ("Split at the playhead (Ctrl+B, S)", "Auto edit\u2026", "Detect cuts", "Undo (Ctrl+Z)", "Redo (Ctrl+Shift+Z)"):
+            self.assertIn(want, items)
+        # The cut tools work from there: Split cuts the shot under the playhead, one undo step.
+        n = len(pg.evaluate("() => __panel._editTlCut.clips"))
+        pg.evaluate("() => __panel.setFrame(30)")
+        pg.evaluate("() => __panel._editTlUi.tools.click()")
+        pg.locator(".previz-menu-item", has_text="Split at the playhead").first.click()
+        self.assertEqual(len(pg.evaluate("() => __panel._editTlCut.clips")), n + 1)
+        pg.evaluate("() => __panel._editTlUi.body.querySelector('.edit-src-more').click()")
+        items = pg.evaluate(menu)
+        for want in ("Place on top (F12)", "Ripple overwrite (Shift+F10)", "Fit to fill (Shift+F11)", "Append at end (Shift+F12)"):
+            self.assertIn(want, items)
+        pg.locator(".previz-menu-item", has_text="Single viewer").first.click()
+        self.assertEqual(pg.evaluate("() => __panel._editSrcViewer().mode"), "single")
+        pg.evaluate("() => __panel.editSrcViewerMode('dual')")
+        # Snapping to beats and audio scrubbing are ticks in the menus of their buttons.
+        pg.evaluate("() => __panel._editTlUi.body.querySelector('.edit-snap-more').click()")
+        pg.locator(".previz-menu-item", has_text="Snap to the beats").first.click()
+        self.assertTrue(pg.evaluate("() => !!__panel._editTlView.snapBeats"))
+        scrub = pg.evaluate("() => __panel._editAudio().scrub")
+        pg.evaluate("() => __panel._editTlUi.body.querySelector('.edit-audio-more').click()")
+        pg.locator(".previz-menu-item", has_text="Audio scrubbing").first.click()
+        self.assertEqual(pg.evaluate("() => __panel._editAudio().scrub"), not scrub)
+        pg.evaluate("() => localStorage.removeItem('imageviewer.viewer.editAudio')")
+        self.assertEqual(self.errors, [])
+
 if __name__ == "__main__":
     unittest.main()

@@ -58,7 +58,7 @@ The middle of a cut rolls it in both modes. Double-click a cut (either side of i
 
 The Source viewer is a second viewer for one source clip, like Resolve's source monitor. Turn it on with the Source viewer button on the timeline's bar (or Timeline › Source viewer). It stands to the left of the picture.
 
-It has two layouts, like Resolve's single and dual viewer modes. Switch between them with the button next to it on the bar, or the button at the top of the Source viewer:
+It has two layouts, like Resolve's single and dual viewer modes. Switch between them in the menu (▾) after the edit buttons on the bar, or with the button at the top of the Source viewer:
 - **Dual**: the source on the left, the timeline's picture on the right.
 - **Single**: one viewer, showing the source or the timeline. <kbd>Q</kbd> switches between them.
 
@@ -70,7 +70,7 @@ Click the Source viewer to give it the keys. Then:
 - <kbd>I</kbd> and <kbd>O</kbd> mark its in and out.
 - <kbd>Alt</kbd>+<kbd>X</kbd> clears both marks.
 
-To bring the marked part into the cut, use the buttons on the timeline's bar (right of the Source viewer button), or these keys from the timeline or the Source viewer:
+To bring the marked part into the cut, use the buttons on the timeline's bar (right of the Source viewer button: Insert, Overwrite and Replace, the rest in the ▾ menu beside them, as in Resolve), or these keys from the timeline or the Source viewer:
 
 | Edit | Key | What it does |
 |---|---|---|
@@ -143,6 +143,6 @@ The **Inspector** has the selected clip's zoom, position, rotation, crop, opacit
 
 ## With agentY
 
-- **Auto edit…** cuts on the beat of a sound, to an even rhythm, to the rhythm of another film, or to each shot's best part. **Detect cuts** finds the cuts inside a film.
+- **Auto edit…** (in the wand menu on the timeline's bar, with Split at the playhead, Detect cuts, Undo and Redo) cuts on the beat of a sound, to an even rhythm, to the rhythm of another film, or to each shot's best part. **Detect cuts** finds the cuts inside a film.
 - **Ask agentY…** sends the saved cut and your note to agentY. Its answer opens as a cut you can take in.
 - **Recreate with changes…** (a clip's right-click) asks agentY to make the selected shots again. The new versions come back as **takes** of the clip; switch between them from its right-click menu.

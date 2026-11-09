@@ -1231,9 +1231,15 @@ textarea.param-input {
 /* The Edit panel: the cut that lies beside a film (imageViewer_editTimeline.js).
    A dock panel like the curve editors, so the box and title bar are theirs. */
 .edit-body { display: flex; flex-direction: column; gap: 4px; flex: 1; min-height: 0; padding: 4px 8px 6px; box-sizing: border-box; }
-.edit-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.edit-sub { flex: 1; min-width: 80px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.edit-bar { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; min-width: 0; overflow: hidden; }
+.edit-bar > * { flex: none; }
+/* A caret: the menu of the button before it (Resolve keeps the rarer edits in menus, not on its bar). */
+.edit-btn.edit-caret { padding: 2px 2px; margin-left: -4px; border-left-color: #333; border-top-left-radius: 0; border-bottom-left-radius: 0; font-size: 9px; color: #999; }
+.edit-tools-btn { display: inline-flex; align-items: center; gap: 1px; }
+.edit-caret-in { font-size: 9px; color: #999; }
+.edit-bar > .edit-sub { flex: 1 1 0; min-width: 0; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .edit-badge { font-size: 10px; color: #888; white-space: nowrap; }
+.edit-bar > .edit-badge { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .edit-badge.dirty { color: #ffcf6f; }
 .edit-btn { background: #2a2a2a; color: #ccc; border: 1px solid #444; border-radius: 3px; font-size: 11px; padding: 2px 7px; cursor: pointer; }
 .edit-btn:hover:not(:disabled) { border-color: #6cf; color: #fff; }

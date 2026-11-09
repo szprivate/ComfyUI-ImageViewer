@@ -500,17 +500,45 @@ export const EditTimelineMixin = {
                             + "Hold S while dragging to snap the other way", () => this.editTlSnapToggle());
         setEditIcon(snap, "snap");
         snap.classList.add("edit-snap-btn");
-        const beats = button("", "Snap to the beats of the music too (once Auto edit has read them)", () => this.editTlSnapToggle("beats"));
-        beats.classList.add("edit-snapbeat-btn");
-        setEditIcon(beats, "beats");
-        const split = button("", "Split: cut the clip under the playhead (Ctrl+B, S)", () => this.editTlSplitAtPlayhead());
-        setEditIcon(split, "split");
-        const undo = button("\u21b6", "Undo (Ctrl+Z)", () => this.editTlUndo());
-        const redo = button("\u21b7", "Redo (Ctrl+Shift+Z)", () => this.editTlRedo());
-        const auto = button("Auto edit\u2026", "Cut on the beat, an even rhythm, a reference's rhythm, the best part "
-                            + "of each shot - or ask agentY", () => this.editTlAutoDialog && this.editTlAutoDialog());
-        const cuts = button("Detect cuts", "Scene cut detection: where the selected film - or every film on V1 - "
-                            + "changes shot; shown as marks first, then split", () => this.editTlDetectSelected());
+        // As Resolve's bar: one button per thing done all the time, the rest in a menu beside it (a caret).
+        const caret = (title, entries) => {
+            const b = el("button", "edit-btn edit-caret", "▾");
+            b.title = title;
+            b.addEventListener("click", () => {
+                const r = b.getBoundingClientRect();
+                this._previzOpenMenu(entries(), r.left, r.bottom + 2, b);
+            });
+            return b;
+        };
+        const tick = (on, label) => (on ? "✓ " : "  ") + label;
+        const snapMore = caret("Snapping options", () => {
+            const v = this._editTlView || {};
+            const on = v.snap !== false;
+            return [{ label: tick(on, "Snapping (N)"), run: () => this.editTlSnapToggle() },
+                    { label: tick(!!v.snapBeats, "Snap to the beats too (once Auto edit has read them)"),
+                      disabled: !on, run: () => this.editTlSnapToggle("beats") }];
+        });
+        snapMore.classList.add("edit-snap-more");
+        // Cutting tools that are not modes: a cut at the playhead, Auto edit, cut detection, undo / redo (all on keys too).
+        const has = () => !!this._editTlHas;      // set by editTlRefresh: the cut has something laid out
+        const tools = el("button", "edit-btn edit-tools-btn");
+        tools.title = "Cut tools: split at the playhead, Auto edit…, Detect cuts, undo / redo";
+        setEditIcon(tools, "wand");
+        tools.append(Object.assign(doc.createElement("span"), { className: "edit-caret-in", textContent: "▾" }));
+        tools.addEventListener("click", () => {
+            const r = tools.getBoundingClientRect(), hist = this._editTlHistory();
+            this._previzOpenMenu([
+                { label: "Split at the playhead (Ctrl+B, S)", disabled: !has(), run: () => this.editTlSplitAtPlayhead() },
+                "-",
+                { label: "Auto edit…", title: "Cut on the beat, an even rhythm, a reference's rhythm, the best part of each shot - or ask agentY",
+                  disabled: !has(), run: () => this.editTlAutoDialog && this.editTlAutoDialog() },
+                { label: "Detect cuts", title: "Where the selected film - or every film on V1 - changes shot; shown as marks first, then split",
+                  disabled: !has(), run: () => this.editTlDetectSelected() },
+                "-",
+                { label: "Undo (Ctrl+Z)", disabled: !this._editTlCut || !hist.past.length, run: () => this.editTlUndo() },
+                { label: "Redo (Ctrl+Shift+Z)", disabled: !this._editTlCut || !hist.future.length, run: () => this.editTlRedo() },
+            ], r.left, r.bottom + 2, tools);
+        });
         const take = button("", "", () => this.editTlTakeAnswer && this.editTlTakeAnswer());
         take.classList.add("primary", "edit-take");
         take.style.display = "none";
@@ -520,30 +548,33 @@ export const EditTimelineMixin = {
         setEditIcon(zoomOut, "zoomOut");
         setEditIcon(zoomIn, "zoomIn");
         setEditIcon(zoomFit, "fit");
-        // Sound, as Resolve's two switches: audio playback (all of it, playing and scrubbing) and audio scrubbing.
+        // Sound, as Resolve's: the speaker is audio playback (all of it, playing and scrubbing); audio
+        // scrubbing is in its menu (Resolve keeps it in the Timeline menu).
         const audio = button("", "Audio playback on / off (Ctrl+Shift+M)", () => this.editAudioToggle("play"));
         audio.classList.add("edit-audio-btn");
         setEditIcon(audio, "volume");
-        const scrubAudio = button("", "Audio scrubbing on / off (Shift+M)", () => this.editAudioToggle("scrub"));
-        scrubAudio.classList.add("edit-scrubaudio-btn");
-        setEditIcon(scrubAudio, "scrub");
+        const audioMore = caret("Sound options", () => {
+            const st = this._editAudio();
+            return [{ label: tick(st.play, "Audio playback (Ctrl+Shift+M)"), run: () => this.editAudioToggle("play") },
+                    { label: tick(st.scrub, "Audio scrubbing (Shift+M)"), disabled: !st.play, run: () => this.editAudioToggle("scrub") }];
+        });
+        audioMore.classList.add("edit-audio-more");
         // Proxy playback (imageViewer_editProxy.js): big films play and scrub from a lighter copy.
         const proxy = button("", "Proxy playback", () => this.editProxyToggle && this.editProxyToggle());
         proxy.classList.add("edit-proxy-btn");
         setEditIcon(proxy, "proxy");
         const sep = el("span", "edit-sep");
-        // The Source viewer (imageViewer_editSource.js): on / off, one viewer or two, and its edits as
-        // Resolve's buttons over the timeline - insert, overwrite, replace, place on top, ripple overwrite,
-        // fit to fill, append.
+        // The Source viewer (imageViewer_editSource.js): on / off, and its edits as Resolve's three buttons -
+        // insert, overwrite, replace - with the others (place on top, ripple overwrite, fit to fill, append)
+        // and one viewer or two in the menu beside them.
         const srcView = button("", "Source viewer: a clip on its own, left of the picture, with its own in and out "
                                + "(three-point editing)", () => this.editSrcViewerButton && this.editSrcViewerButton());
         srcView.classList.add("edit-srcview-btn");
         setEditIcon(srcView, "srcViewer");
-        const srcDual = button("", "", () => this.editSrcViewerMode && this.editSrcViewerMode());
-        srcDual.classList.add("edit-srcdual-btn");
-        setEditIcon(srcDual, "dualViewer");
         const srcEdits = el("span", "edit-srcedits");
+        const ON_BAR = new Set(["insert", "overwrite", "replace"]);
         for (const [kind, label, k, shift, iconName] of SOURCE_BUTTONS) {
+            if (!ON_BAR.has(kind)) continue;
             const b = button("", `${label} (${shift ? "Shift+" : ""}${k}): the Source viewer's marked part into the cut`,
                              () => this.editSrcEdit && this.editSrcEdit(kind));
             b.classList.add("edit-srcedit");
@@ -551,10 +582,27 @@ export const EditTimelineMixin = {
             setEditIcon(b, iconName);
             srcEdits.append(b);
         }
+        const srcMore = caret("More source edits; one viewer or two", () => {
+            const s = this._editSrcState && this._editSrcState(), cut = this._editTlCut;
+            const v = this._editSrcViewer ? this._editSrcViewer() : { mode: "dual", show: "timeline" };
+            const rows = SOURCE_BUTTONS.filter(([kind]) => !ON_BAR.has(kind)).map(([kind, label, k, shift]) => ({
+                label: `${label} (${shift ? "Shift+" : ""}${k})`,
+                disabled: !s || !cut || (!!s.sound && kind === "place"),
+                run: () => this.editSrcEdit && this.editSrcEdit(kind),
+            }));
+            return [...rows, "-",
+                    { label: tick(v.mode === "dual", "Dual viewer"), run: () => this.editSrcViewerMode && this.editSrcViewerMode("dual") },
+                    { label: tick(v.mode !== "dual", "Single viewer"), run: () => this.editSrcViewerMode && this.editSrcViewerMode("single") },
+                    { label: "Switch source / timeline (Q)", disabled: v.mode === "dual" || !this._editSrcOn || !this._editSrcOn(),
+                      run: () => this.editSrcSwap && this.editSrcSwap() }];
+        });
+        srcMore.classList.add("edit-src-more");
+        srcEdits.append(srcMore);
         const sep2 = el("span", "edit-sep");
-        bar.append(fresh, opener, recent, out, sep, add, pick, trimBtn, blade, dynamic, snap, beats, split, undo, redo, auto, cuts, take,
-                   sep2, srcView, srcDual, srcEdits, sub, badge,
-                   audio, scrubAudio, proxy, zoomOut, zoomIn, zoomFit);
+        const sep3 = el("span", "edit-sep");
+        bar.append(fresh, opener, recent, out, sep, add, sep2, pick, trimBtn, dynamic, blade, sep3, srcView, srcEdits,
+                   snap, snapMore, tools, take, sub, badge,
+                   audio, audioMore, proxy, zoomOut, zoomIn, zoomFit);
 
         // The tracks: their headers in a column that stays, the tracks beside it
         // in a strip that is as wide as the zoom makes it and scrolls sideways.
@@ -718,8 +766,8 @@ export const EditTimelineMixin = {
             this._editTlAdd((payload && payload.items) || [], at, track, room);
         });
         this._editTlUi = { host, savedBar, empty, body, sub, badge, out, main, heads, scroll, area, ruler, rows,
-                           head, drop, hint, blade, dynamic, split, undo, redo, auto, cuts, take, pick, trimBtn, snap, beats, zoomOut, zoomIn, zoomFit,
-                           audio, scrubAudio, proxy, srcView, srcDual, srcEdits, tc, hbox, headsV, headsA, hsplit, secV, secA, splitter: splitBar, vPinned: true };
+                           head, drop, hint, blade, dynamic, tools, take, pick, trimBtn, snap, zoomOut, zoomIn, zoomFit,
+                           audio, proxy, srcView, srcEdits, tc, hbox, headsV, headsA, hsplit, secV, secA, splitter: splitBar, vPinned: true };
         if (this._editTlSecBind) this._editTlSecBind(this._editTlUi);
         this._editTlWatchCanvas();
         return this._editTlUi;
@@ -767,6 +815,7 @@ export const EditTimelineMixin = {
         }
         const lay = cut ? D.layoutCut(cut, this._editTlView.zoom, span) : null;
         const has = !!(lay && lay.total > 0);
+        this._editTlHas = has;
         const busy = !!this._editTlBusy;
         const dirty = this._editTlDirty();
         for (const part of [ui.main, ui.hint]) part.style.display = has ? "" : "none";
@@ -776,10 +825,6 @@ export const EditTimelineMixin = {
               + "browser, the History, ComfyUI's queue, or a node dragged off the canvas."
             : "No cut is open. New starts one; so does adding or dropping clips here.";
         ui.out.disabled = busy;          // Open cut... is there with nothing open too
-        const hist = this._editTlHistory();
-        ui.undo.disabled = !cut || !hist.past.length;
-        ui.redo.disabled = !cut || !hist.future.length;
-        ui.split.disabled = ui.auto.disabled = ui.cuts.disabled = !has;
         ui.blade.classList.toggle("on", !!this._editTlBlade);
         ui.dynamic.classList.toggle("on", !!this._editTlDynamic);
         ui.body.classList.toggle("dynamic", !!this._editTlDynamic && has);
@@ -790,8 +835,6 @@ export const EditTimelineMixin = {
         const snapOn = !this._editTlView || this._editTlView.snap !== false;
         ui.snap.classList.toggle("on", snapOn);
         ui.snap.setAttribute("aria-pressed", snapOn ? "true" : "false");
-        ui.beats.classList.toggle("on", !!(this._editTlView && this._editTlView.snapBeats));
-        ui.beats.disabled = !snapOn;
         if (this._editAudioButtons) this._editAudioButtons(ui);
         if (this._editProxyButton) this._editProxyButton(ui);
         if (this._editSrcButtons) this._editSrcButtons(ui);

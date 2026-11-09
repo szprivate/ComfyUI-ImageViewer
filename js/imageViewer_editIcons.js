@@ -94,6 +94,9 @@ export const EDIT_ICONS = {
     // film (the timeline in a single viewer), x (put away)
     timelineView: [["rect", { width: 18, height: 18, x: 3, y: 3, rx: 2 }], P("M7 3v18"), P("M3 7.5h4"), P("M3 12h18"), P("M3 16.5h4"),
                    P("M17 3v18"), P("M17 7.5h4"), P("M17 16.5h4")],
+    // wand-sparkles: the cut tools' menu (split, Auto edit, Detect cuts, undo / redo)
+    wand: [P("m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"),
+           P("m14 7 3 3"), P("M5 6v4"), P("M19 14v4"), P("M10 2v2"), P("M7 8H3"), P("M21 16h-4"), P("M11 3H9")],
     close: [P("M18 6 6 18"), P("m6 6 12 12")],
     fit: [P("M3 7V5a2 2 0 0 1 2-2h2"), P("M17 3h2a2 2 0 0 1 2 2v2"), P("M21 17v2a2 2 0 0 1-2 2h-2"), P("M7 21H5a2 2 0 0 1-2-2v-2"), C(12, 12, 3), P("m16 16-1.9-1.9")],
 };

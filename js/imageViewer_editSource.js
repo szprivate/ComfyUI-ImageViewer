@@ -156,15 +156,10 @@ export const EditSourceMixin = {
 
     /** The bar's Source buttons as things stand (from editTlRefresh). */
     _editSrcButtons(ui) {
-        const on = this._editSrcOn(), v = this._editSrcViewer();
+        const on = this._editSrcOn();
         const s = this._editSrcState(), cut = this._editTlCut;
         ui.srcView.classList.toggle("on", on);
         ui.srcView.setAttribute("aria-pressed", on ? "true" : "false");
-        const dual = v.mode === "dual";
-        if (ui.srcDual.dataset.icon !== (dual ? "dualViewer" : "singleViewer")) setEditIcon(ui.srcDual, dual ? "dualViewer" : "singleViewer");
-        ui.srcDual.title = dual ? "Dual viewer: the source left, the timeline right - click for one viewer (Q then switches source / timeline)"
-                                : `Single viewer, showing the ${v.show} (Q switches) - click for two side by side`;
-        ui.srcDual.classList.toggle("on", on && !dual);
         for (const b of ui.srcEdits.querySelectorAll(".edit-srcedit")) {
             b.disabled = !s || !cut || (!!s.sound && b.dataset.edit === "place");
         }

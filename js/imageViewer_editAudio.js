@@ -189,11 +189,6 @@ export const EditAudioMixin = {
         ui.audio.setAttribute("aria-pressed", st.play ? "true" : "false");
         ui.audio.title = st.play ? "Audio playback is on: click (Ctrl+Shift+M) to switch all sound of the cut off - playing and scrubbing"
                                  : "Audio playback is OFF: the cut plays and scrubs silently. Click (Ctrl+Shift+M) to hear it";
-        ui.scrubAudio.classList.toggle("on", st.scrub && st.play);
-        ui.scrubAudio.disabled = !st.play;
-        ui.scrubAudio.setAttribute("aria-pressed", st.scrub ? "true" : "false");
-        ui.scrubAudio.title = st.scrub ? "Audio scrubbing is on (Shift+M): dragging the playhead or jogging plays the sound under it, pitched with the speed"
-                                       : "Audio scrubbing is off (Shift+M): scrubbing is silent";
     },
 
     // ── scrubbing ────────────────────────────────────────────────────────────
