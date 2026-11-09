@@ -62,6 +62,8 @@ Press <kbd>M</kbd> to put a marker at the playhead. With a clip selected and the
 - **Swap clips**: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>,</kbd> / <kbd>.</kbd> swaps the selected clip with the one before / after it on its track.
 - **Select forward**: <kbd>Y</kbd> selects the clips from the playhead on, on the selected clip's track (else V1); <kbd>Alt</kbd>+<kbd>Y</kbd> on every track. <kbd>Shift</kbd>+<kbd>Y</kbd> / <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Y</kbd> select the ones before it (in Resolve that is <kbd>Ctrl</kbd>+<kbd>Y</kbd>, which is Redo here).
 
+**Dynamic trim** (<kbd>W</kbd>, or the ⟨…⟩ button on the bar): with it on, <kbd>J</kbd> / <kbd>L</kbd> move the selected cut backwards / forwards frame by frame, as if playing it, and <kbd>K</kbd> stops. Press <kbd>L</kbd> or <kbd>J</kbd> again for 2×, 4×, 8×. With a clip selected and no cut, the clip slips (Trim mode) or slides (Selection). A whole run is one undo step.
+
 <kbd>J</kbd> <kbd>K</kbd> <kbd>L</kbd> play backwards, stop and play. Press <kbd>?</kbd> on a cut's tab for every key.
 
 **Proxy playback** (the lightning button on the Edit bar, on by default): films bigger than 720p, or with key frames far apart, play and scrub from a lighter 540p copy, and compressed sounds (MP3 and the like) from a WAV copy, which stays in step with the picture. The server makes each once, in the background; until it is ready the file itself plays. Exports always use the files themselves.

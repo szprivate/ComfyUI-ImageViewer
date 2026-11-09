@@ -6,6 +6,8 @@ const C = (cx, cy, r) => ["circle", { cx, cy, r }];
 const L = (x1, x2, y1, y2) => ["line", { x1, x2, y1, y2 }];
 
 export const EDIT_ICONS = {
+    // chevrons-left-right-ellipsis (dynamic trim, W)
+    dynamic: [P("M12 12h.01"), P("M16 12h.01"), P("m17 7 5 5-5 5"), P("m7 7-5 5 5 5"), P("M8 12h.01")],
     // mouse-pointer-2
     select: [P("M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z")],
     // scissors-line-dashed

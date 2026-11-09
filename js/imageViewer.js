@@ -56,6 +56,7 @@ import { EditResolveMixin } from "./imageViewer_editResolve.js";
 import { EditTrimMixin } from "./imageViewer_editTrim.js";
 import { EditMarkersMixin } from "./imageViewer_editMarkers.js";
 import { EditRangeMixin } from "./imageViewer_editRange.js";
+import { EditDynamicMixin } from "./imageViewer_editDynamic.js";
 import { EditAudioMixin } from "./imageViewer_editAudio.js";
 import { EditProxyMixin } from "./imageViewer_editProxy.js";
 import { AudioViewMixin } from "./imageViewer_audio.js";
@@ -1549,6 +1550,7 @@ Object.assign(
     EditTrimMixin,
     EditMarkersMixin,
     EditRangeMixin,
+    EditDynamicMixin,
     EditAudioMixin,
     EditProxyMixin,
     AudioViewMixin,

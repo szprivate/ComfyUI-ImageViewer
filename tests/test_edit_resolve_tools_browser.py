@@ -154,5 +154,55 @@ class EditResolveToolsBrowserTests(Base):
         self.assertEqual(self.errors, [])
 
 
+    # ── dynamic trim ──
+
+    def test_dynamic_trim_moves_the_edit_point_with_j_k_l_as_one_step(self):
+        # V1: a 0-96, c 96-168, b 168-264 (frames).
+        pg = self.page()
+        self.focus_timeline(pg)
+        pg.keyboard.press("t")
+        pg.evaluate("() => __panel.setFrame(0)")
+        for _ in range(3):                    # on to the out of a, the clip before the first cut
+            if pg.evaluate("() => __panel.currentFrame") == 96:
+                break
+            pg.keyboard.press("Shift+s")
+        self.assertEqual(pg.evaluate("() => __panel._editTlEditSel.act"), "trim-out")
+        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), 96)
+        before = self.undo_len(pg)
+        pg.keyboard.press("w")
+        self.assertTrue(pg.evaluate("() => __panel._editTlUi.dynamic.classList.contains('on')"))
+        pg.keyboard.press("j")
+        self.assertTrue(pg.evaluate("() => !!__panel._editTlDyn"))
+        pg.keyboard.press("j")
+        self.assertEqual(pg.evaluate("() => __panel._editTlDyn.rate"), 2, "J again runs faster")
+        pg.wait_for_function("() => __panel._editTlCut.clips[0].length < 3.5")
+        pg.keyboard.press("k")
+        self.assertFalse(pg.evaluate("() => !!__panel._editTlDyn"))
+        got = self.frames(pg)["v1"]
+        self.assertLess(got[0][2], 84)
+        self.assertEqual(got[1][1], got[0][2], "a ripple: c follows a's out")
+        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), got[0][2], "the playhead stays on the edit")
+        self.assertEqual(self.undo_len(pg), before + 1, "the whole run is one step")
+        pg.keyboard.press("Control+z")
+        self.assertEqual(self.frames(pg)["v1"], [["a", 0, 96], ["c", 96, 168], ["b", 168, 264]])
+        # Selection mode, clip c selected, no edit point: J slides it (a gives, b takes).
+        pg.keyboard.press("a")
+        pg.mouse.click(*self.x_at(pg, 5.5))
+        pg.evaluate("() => { __panel._editTlEditSel = null; }")
+        pg.keyboard.press("j")
+        self.assertEqual(pg.evaluate("() => __panel._editTlDyn && __panel._editTlDyn.what"), "slide")
+        pg.wait_for_function("() => __panel._editTlCut.clips[0].length < 3.9")
+        pg.keyboard.press("k")
+        got = self.frames(pg)["v1"]
+        self.assertEqual(got[1][2] - got[1][1], 72, "c keeps its length")
+        self.assertEqual(got[2][2], 264, "the film keeps its length")
+        # W off: J / K / L are the shuttle again.
+        pg.keyboard.press("w")
+        pg.keyboard.press("l")
+        self.assertFalse(pg.evaluate("() => !!__panel._editTlDyn"))
+        pg.keyboard.press("k")
+        self.assertEqual(self.errors, [])
+
+
 if __name__ == "__main__":
     unittest.main()
