@@ -74,7 +74,9 @@ export const EditMixerMixin = {
         master.dataset.track = "master";
         master.append(el("div", "mix-name", "Master"), this._editMixMeter(el, "master"), el("div", "mix-db", ""));
         body.append(master);
-        host.replaceChildren(body);
+        // Only the strips are redrawn: the panel's title bar (the dock's, its drag handle) stays.
+        const old = host.querySelector(":scope > .mix-body");
+        if (old) old.replaceWith(body); else host.append(body);
         this._editMixStart();
     },
 
