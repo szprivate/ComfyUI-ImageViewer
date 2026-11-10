@@ -218,6 +218,18 @@ def _video_plays(path):
         return ctx.name != "h264" or (ctx.pix_fmt in _PLAYABLE_PIX)
 
 
+def _no_picture_type(frame):
+    """Clear a decoded frame's picture type (I / P / B) before it is encoded again."""
+    try:
+        from av.video.frame import PictureType
+        frame.pict_type = PictureType.NONE
+    except Exception:  # noqa: BLE001 - an older PyAV spells it as a string
+        try:
+            frame.pict_type = "NONE"
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _write_video_proxy(src_path, dst, height=None, options=None):
     """An H.264 copy of `src_path` at `dst`: the full picture, or `height` high
     (the width to its aspect, both even); `options` for libx264 on top of the defaults."""
@@ -227,7 +239,10 @@ def _write_video_proxy(src_path, dst, height=None, options=None):
         with av.open(src_path) as src, av.open(tmp, "w", format="mp4") as out:
             vin = src.streams.video[0]
             rate = vin.average_rate or vin.guessed_rate or 24
-            vout = out.add_stream("libx264", rate=rate, options={"crf": "20", "preset": "veryfast", **(options or {})})
+            # A key frame a second (libx264's own default is ten): a seek decodes at
+            # most a second of film. An edit proxy asks for closer ones.
+            vout = out.add_stream("libx264", rate=rate, options={
+                "crf": "20", "preset": "veryfast", "g": str(max(1, int(round(float(rate))))), **(options or {})})
             vout.pix_fmt = "yuv420p"
             w, h = vin.width, vin.height
             if height and h > height:
@@ -244,6 +259,12 @@ def _write_video_proxy(src_path, dst, height=None, options=None):
                 for frame in packet.decode():
                     if packet.stream is vin:
                         pic = frame.reformat(width=vout.width, height=vout.height, format="yuv420p")
+                        # The decoder's picture type goes along with the frame, and libx264
+                        # takes an I as an order to make a key frame there: a ProRes film
+                        # (every frame an I) came out all key frames - quick to scrub, at
+                        # ten times the bitrate, and it stuttered when played. The encoder
+                        # places its own key frames (`g`), as ffmpeg's command line does.
+                        _no_picture_type(pic)
                         # Counted in frames, so in the encoder's own time base: the source's (a
                         # ProRes MOV's 1/12288) squeezed the whole film into its first frame.
                         pic.time_base = vout.codec_context.time_base or 1 / Fraction(rate)
@@ -276,7 +297,8 @@ def video_proxy(path):
     ext = os.path.splitext(path)[1].lower()
     if ext not in VIDEO_EXTS:
         return None
-    dst = os.path.splitext(_cache_path(path, "vproxy"))[0] + ".mp4"
+    # "vproxy2": copies made before their key frames were the encoder's own (_no_picture_type) are not reused.
+    dst = os.path.splitext(_cache_path(path, "vproxy2"))[0] + ".mp4"
     if _cached(dst, path):
         return dst
     # Asked once per film and state of it: a player fetches in many ranges.
@@ -393,7 +415,10 @@ def _mtime(path):
 
 
 def edit_proxy_path(path):
-    return os.path.splitext(_cache_path(path, "eproxy"))[0] + (".wav" if _is_edit_sound(path) else ".mp4")
+    # "eproxy2": copies made before their key frames were the encoder's own (_no_picture_type) are not reused.
+    if _is_edit_sound(path):
+        return os.path.splitext(_cache_path(path, "eproxy"))[0] + ".wav"
+    return os.path.splitext(_cache_path(path, "eproxy2"))[0] + ".mp4"
 
 
 def _write_sound_copy(src_path, dst):
