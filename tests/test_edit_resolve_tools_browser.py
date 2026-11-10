@@ -400,31 +400,29 @@ class EditResolveToolsBrowserTests(Base):
 
     # ── match frame ──
 
-    def test_match_frame_opens_the_source_in_the_viewer_tab_on_its_frame(self):
+    def test_match_frame_loads_the_source_viewer_on_its_frame(self):
         # V1: a 0-96 (a film, in 0), c 96-168 (a still), b 168-264 (in 1).
         pg = self.page()
         self.fit(pg)
-        pg.evaluate("""() => { const P = __panel; window.__opened = []; window.__sought = [];
-            P._browserFramesFor = async (paths) => { window.__opened.push(...paths); return paths.map(p => [{ filename: p.split('/').pop(), kind: 'video', path: p, type: 'output' }]); };
-            P._editTlMatchSeek = async (src) => { window.__sought.push(src); }; P.setFrame(200); }""")
+        # A single viewer on the timeline: F switches it to the source, as Resolve's; the cut's tab stays up.
+        pg.evaluate("() => { const P = __panel; P._editSrc = undefined; P.editSrcViewerMode('single'); P.editSrcSwap('timeline'); }")
+        tab = pg.evaluate("() => __panel.activeTab")
         self.focus_timeline(pg)
         pg.evaluate("() => { __panel._editTlSel = null; __panel.setFrame(200); }")
         pg.keyboard.press("f")
-        pg.wait_for_function("() => window.__sought.length === 1", timeout=5000)
-        got = pg.evaluate("() => [window.__opened, window.__sought, __panel.activeTab, __panel.allTabs[__panel.activeTab][0].matchSrc]")
-        # frame 200 of the film is 32.5 frames into b (in 1 s): 1 + 32.5 / 24 seconds of its file.
-        self.assertEqual(got[0], ["D:/out/b.mp4"])
-        self.assertAlmostEqual(got[1][0], 1 + 32.5 / 24, places=4)
-        self.assertEqual(got[2], "folder_history")
-        self.assertAlmostEqual(got[3], 1 + 32.5 / 24, places=4)
-        # From the clip menu, on the shot under the playhead; a still opens without a seek.
-        pg.evaluate("() => { const P = __panel; P.switchTab(Object.keys(P.allTabs).find(k => k.startsWith('edit:'))); P.setFrame(120); }")
+        pg.wait_for_function("() => __panel._editSrc && __panel._editSrc.file === 'D:/out/b.mp4'", timeout=5000)
+        # frame 200 of the film is 32.5 frames into b (in 1 s): 1 + 32.5 / 24 seconds of its file, on the frame.
+        got = pg.evaluate("() => [__panel._editSrc.head, __panel.activeTab, __panel._editSrcViewer().show, __panel._editSrcUp()]")
+        self.assertAlmostEqual(got[0], int((1 + 32.5 / 24) * 24) / 24, places=4)
+        self.assertEqual(got[1:], [tab, "source", True])
+        # From the clip menu, on the shot under the playhead; a still too.
+        pg.evaluate("() => { __panel.editSrcSwap('timeline'); __panel.setFrame(120); }")
         items = self.menu_has(pg, *self.x_at(pg, 5.0))
         self.assertIn("Match frame (F)", items)
         pg.locator(".previz-menu-item", has_text="Match frame").first.click()
-        pg.wait_for_function("() => window.__opened.length === 2", timeout=5000)
-        pg.wait_for_timeout(100)
-        self.assertEqual(pg.evaluate("() => [window.__opened[1], window.__sought.length]"), ["D:/out/c.png", 1])
+        pg.wait_for_function("() => __panel._editSrc && __panel._editSrc.file === 'D:/out/c.png'", timeout=5000)
+        self.assertEqual(pg.evaluate("() => __panel._editSrc.still"), True)
+        pg.evaluate("() => __panel.editSrcViewerMode('dual')")
         self.assertEqual(self.errors, [])
 
     # ── the source viewer ──
@@ -481,13 +479,14 @@ class EditResolveToolsBrowserTests(Base):
         box = pg.evaluate("""() => { const s = __panel.editSourcePanel.getBoundingClientRect(), v = __panel.viewport.getBoundingClientRect();
             return [Math.round(s.right) <= Math.round(v.left) + 2, s.width > 50, v.width > 50]; }""")
         self.assertEqual(box, [True, True, True])
-        pg.evaluate("() => __panel.editSrcViewerMode('single')")
-        self.assertEqual(pg.evaluate("() => [__panel.editSourcePanel.style.display, __panel.viewport.style.display]"), ["flex", "none"])
+        # Going single keeps the active monitor on screen: the timeline here (the timeline was pressed last).
+        pg.evaluate("() => { __panel.editMonSet('timeline'); __panel.editSrcViewerMode('single'); }")
+        self.assertEqual(pg.evaluate("() => [__panel.editSourcePanel.style.display, __panel.viewport.style.display]"), ["none", ""])
         self.focus_timeline(pg)
         pg.keyboard.press("q")
-        self.assertEqual(pg.evaluate("() => [__panel.editSourcePanel.style.display, __panel.viewport.style.display]"), ["none", ""])
+        self.assertEqual(pg.evaluate("() => [__panel.editSourcePanel.style.display, __panel.viewport.style.display]"), ["flex", "none"])
         pg.keyboard.press("q")
-        self.assertEqual(pg.evaluate("() => __panel.viewport.style.display"), "none")
+        self.assertEqual(pg.evaluate("() => __panel.viewport.style.display"), "")
         pg.evaluate("() => __panel.editSrcViewerMode('dual')")
         self.assertEqual(pg.evaluate("() => [__panel.editSourcePanel.style.display, __panel.viewport.style.display]"), ["flex", ""])
         # Reverse match frame (Shift+F): the source's frame at 1.5 s is first shown by the clip F10 laid at 2 s (in 1): frame 48 + 12.
@@ -578,12 +577,16 @@ class EditResolveToolsBrowserTests(Base):
         items = pg.evaluate(menu)
         for want in ("Place on top (F12)", "Ripple overwrite (Shift+F10)", "Fit to fill (Shift+F11)", "Append at end (Shift+F12)"):
             self.assertIn(want, items)
-        # One toggle in the menu: "Dual viewer", ticked while on; no separate "Single viewer" item.
+        # Single / dual is the monitor's own switch: no viewer items in the menu, no Source viewer button on the bar.
         self.assertNotIn("Single viewer", " ".join(items))
-        self.assertIn("\u2713 Dual viewer", items)
-        pg.locator(".previz-menu-item", has_text="Dual viewer").first.click()
-        self.assertEqual(pg.evaluate("() => __panel._editSrcViewer().mode"), "single")
-        pg.evaluate("() => __panel.editSrcViewerMode('dual')")
+        self.assertNotIn("Dual viewer", " ".join(items))
+        self.assertIsNone(pg.evaluate("() => __panel._editTlUi.body.querySelector('.edit-srcview-btn')"))
+        pg.evaluate("() => __panel._previzCloseAddMenu()")
+        # ... nor in the lower bar's Timeline menu.
+        tl = pg.evaluate("() => __panel.shadowRoot.querySelector('#bar-group-timeline').title")
+        self.assertIn("Mixer", tl)
+        self.assertNotIn("Source viewer", tl)
+        self.assertNotIn("Dual viewer", tl)
         # Snapping to beats and audio scrubbing are ticks in the menus of their buttons.
         pg.evaluate("() => __panel._editTlUi.body.querySelector('.edit-snap-more').click()")
         pg.locator(".previz-menu-item", has_text="Snap to the beats").first.click()
@@ -648,8 +651,8 @@ class EditResolveToolsBrowserTests(Base):
         # The layout switch is ONE toggle: the same button, lit (pressed) while dual, unlit while single.
         lit = "() => { const b = __panel._editSrcCtl.querySelector('.src-mode'); return [b.classList.contains('on'), b.getAttribute('aria-pressed'), b.dataset.icon]; }"
         self.assertEqual(pg.evaluate(lit), [True, "true", "dualViewer"])
-        # Single showing the source: the timeline viewer is gone, so it is in the source's head, at its right (beside its close button).
-        pg.evaluate("() => __panel._editSrcCtl.querySelector('.src-mode').click()")
+        # Single showing the source: the timeline viewer is gone, so it is in the source's head, at its right.
+        pg.evaluate("() => { __panel.editMonSet('source'); __panel._editSrcCtl.querySelector('.src-mode').click(); }")
         self.assertEqual(pg.evaluate("() => [__panel._editSrcViewer().mode, __panel._editSrcViewer().show]"), ["single", "source"])
         self.assertEqual(pg.evaluate(where), ["source", True, ["src-mode"]])
         self.assertEqual(pg.evaluate(lit), [False, "false", "dualViewer"])
@@ -660,9 +663,26 @@ class EditResolveToolsBrowserTests(Base):
         self.assertEqual(pg.evaluate(where), ["timeline", True, ["src-mode"]])
         pg.evaluate("() => __panel._editSrcCtl.querySelector('.src-mode').click()")
         self.assertEqual(pg.evaluate("() => __panel._editSrcViewer().mode"), "dual")
-        # Off the cut's tab, or with the Source viewer put away, it is gone.
-        pg.evaluate("() => __panel.editSrcToggle(false)")
-        self.assertIsNone(pg.evaluate("() => __panel._editSrcCtl.parentNode"))
+        # Single: no close button (one viewer); dual: it makes it single.
+        close = "() => getComputedStyle(__panel.editSourcePanel.querySelector('.src-close')).display"
+        self.assertNotEqual(pg.evaluate(close), "none")
+        pg.evaluate("() => __panel.editSrcViewerMode('single')")
+        pg.evaluate("() => __panel.editSrcSwap('source')")
+        self.assertEqual(pg.evaluate(close), "none")
+        pg.evaluate("() => __panel.editSrcViewerMode('dual')")
+        pg.evaluate("() => __panel.editSourcePanel.querySelector('.src-close').click()")
+        self.assertEqual(pg.evaluate("() => [__panel._editSrcViewer().mode, __panel._editSrcViewer().show]"), ["single", "timeline"])
+        pg.evaluate("() => __panel.editSrcViewerMode('dual')")
+        # Off the cut's tab (Paint, the Viewer tab, ...): no switch, no outline, no monitor bar.
+        gone = """() => { const P = __panel; return [!!(P._editSrcCtl && P._editSrcCtl.isConnected), !!P.shadowRoot.querySelector('.mon-active'),
+            !!(P._editMonBar && P._editMonBar.isConnected), P.viewport.classList.contains('has-monbar'), P.editSourcePanel.style.display]; }"""
+        pg.evaluate("() => __panel.editMonSet('timeline')")
+        self.assertEqual(pg.evaluate(gone), [True, True, True, True, "flex"])
+        cut = pg.evaluate("() => __panel.activeTab")
+        pg.evaluate("() => { const P = __panel; P.allTabs.paint_probe = []; P.switchTab('paint_probe'); }")
+        self.assertEqual(pg.evaluate(gone), [False, False, False, False, "none"])
+        pg.evaluate("(k) => __panel.switchTab(k)", cut)
+        self.assertEqual(pg.evaluate(gone), [True, True, True, True, "flex"])
         # The empty picture layer draws nothing (Chrome framed it in light grey round the timeline viewer).
         self.assertEqual(pg.evaluate("() => { const i = __panel.imgBase; i.removeAttribute('src'); return getComputedStyle(i).visibility; }"), "hidden")
         self.assertEqual(self.errors, [])
@@ -722,7 +742,7 @@ class EditResolveToolsBrowserTests(Base):
         self.assertEqual(pg.evaluate("() => __panel.zoom"), 1)          # the timeline viewer's own zoom is left alone
         self.assertNotEqual(x0, [0, 0])
         # Single: one monitor, no outline; the bar stays with the timeline viewer while it shows.
-        pg.evaluate("() => __panel.editSrcViewerMode('single')")
+        pg.evaluate("() => __panel.editSrcViewerMode('single')")      # the active one (the source) stays on screen
         self.assertEqual(pg.evaluate(act)[:3], ["source", False, False])
         self.assertIsNone(pg.evaluate(bar))
         pg.evaluate("() => __panel.editSrcSwap()")

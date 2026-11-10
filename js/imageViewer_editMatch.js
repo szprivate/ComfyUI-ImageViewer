@@ -1,9 +1,10 @@
 // imageViewer_editMatch.js
 // Match frame (F, Resolve's): the clip under the playhead - the selected one when
 // the playhead is in it, else the picture on top there - is opened from its own
-// file in the Viewer tab, on the frame the cut shows. Its arithmetic is
+// file in the Source viewer (a single viewer switches to it, as Resolve's), on the
+// frame the cut shows; without a Source viewer (an older page), in the Viewer tab. Its arithmetic is
 // `matchFrame` in imageViewer_editTimelineData.js (srcLocal: speed, loops,
-// reverse, freeze and ramps counted). The cut's tab is left, as any Open is;
+// reverse, freeze and ramps counted). Into the Viewer tab, the cut's tab is left, as any Open is;
 // the History's strip and the tab bar bring it back.
 import * as D from "./imageViewer_editTimelineData.js";
 
@@ -25,7 +26,7 @@ export const EditMatchMixin = {
     async editTlMatchFrame() {
         const hit = this._editTlMatchAt();
         if (!hit) { this._editTlSay("nothing to match here: no clip with a file under the playhead"); return null; }
-        // The Source viewer up: there, as Resolve's match frame loads its source monitor.
+        // On a cut's tab: the Source viewer, as Resolve's match frame loads its source monitor.
         if (this._editSrcOn && this._editSrcOn() && this.editSrcLoad) {
             await this.editSrcLoad({ path: hit.file, name: hit.name }, hit.src);
             return hit;

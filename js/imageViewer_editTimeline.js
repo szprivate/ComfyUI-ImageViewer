@@ -566,13 +566,9 @@ export const EditTimelineMixin = {
         proxy.classList.add("edit-proxy-btn");
         setEditIcon(proxy, "proxy");
         const sep = el("span", "edit-sep");
-        // The Source viewer (imageViewer_editSource.js): on / off, and its edits as Resolve's three buttons -
-        // insert, overwrite, replace - with the others (place on top, ripple overwrite, fit to fill, append)
-        // and one viewer or two in the menu beside them.
-        const srcView = button("", "Source viewer: a clip on its own, left of the picture, with its own in and out "
-                               + "(three-point editing)", () => this.editSrcViewerButton && this.editSrcViewerButton());
-        srcView.classList.add("edit-srcview-btn");
-        setEditIcon(srcView, "srcViewer");
+        // The Source viewer's edits (imageViewer_editSource.js) as Resolve's three buttons - insert, overwrite,
+        // replace - with the others (place on top, ripple overwrite, fit to fill, append) in the menu beside
+        // them. Single / dual is the one switch on the monitor itself.
         const srcEdits = el("span", "edit-srcedits");
         const ON_BAR = new Set(["insert", "overwrite", "replace"]);
         for (const [kind, label, k, shift, iconName] of SOURCE_BUTTONS) {
@@ -584,7 +580,7 @@ export const EditTimelineMixin = {
             setEditIcon(b, iconName);
             srcEdits.append(b);
         }
-        const srcMore = caret("More source edits; one viewer or two", () => {
+        const srcMore = caret("More source edits", () => {
             const s = this._editSrcState && this._editSrcState(), cut = this._editTlCut;
             const v = this._editSrcViewer ? this._editSrcViewer() : { mode: "dual", show: "timeline" };
             const rows = SOURCE_BUTTONS.filter(([kind]) => !ON_BAR.has(kind)).map(([kind, label, k, shift]) => ({
@@ -593,15 +589,14 @@ export const EditTimelineMixin = {
                 run: () => this.editSrcEdit && this.editSrcEdit(kind),
             }));
             return [...rows, "-",
-                    { label: tick(v.mode === "dual", "Dual viewer"), run: () => this.editSrcViewerMode && this.editSrcViewerMode() },
-                    { label: "Switch source / timeline (Q)", disabled: v.mode === "dual" || !this._editSrcOn || !this._editSrcOn(),
+                    { label: "Switch source / timeline (Q)", disabled: v.mode === "dual",
                       run: () => this.editSrcSwap && this.editSrcSwap() }];
         });
         srcMore.classList.add("edit-src-more");
         srcEdits.append(srcMore);
         const sep2 = el("span", "edit-sep");
         const sep3 = el("span", "edit-sep");
-        bar.append(fresh, opener, recent, out, sep, add, sep2, pick, trimBtn, dynamic, blade, sep3, srcView, srcEdits,
+        bar.append(fresh, opener, recent, out, sep, add, sep2, pick, trimBtn, dynamic, blade, sep3, srcEdits,
                    snap, snapMore, tools, take, sub, badge,
                    audio, audioMore, proxy, zoomOut, zoomIn, zoomFit);
 
@@ -770,7 +765,7 @@ export const EditTimelineMixin = {
         });
         this._editTlUi = { host, savedBar, empty, body, sub, badge, out, main, heads, scroll, area, ruler, rows,
                            head, drop, hint, blade, dynamic, tools, take, pick, trimBtn, snap, zoomOut, zoomIn, zoomFit,
-                           audio, proxy, srcView, srcEdits, tc, hbox, headsV, headsA, hsplit, secV, secA, splitter: splitBar, vPinned: true };
+                           audio, proxy, srcEdits, tc, hbox, headsV, headsA, hsplit, secV, secA, splitter: splitBar, vPinned: true };
         if (this._editTlSecBind) this._editTlSecBind(this._editTlUi);
         this._editTlWatchCanvas();
         return this._editTlUi;

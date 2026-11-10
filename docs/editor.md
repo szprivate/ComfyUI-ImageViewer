@@ -56,17 +56,15 @@ The middle of a cut rolls it in both modes. Double-click a cut (either side of i
 
 ## The Source viewer
 
-The Source viewer is a second viewer for one source clip, like Resolve's source monitor. Turn it on with the Source viewer button on the timeline's bar (or Timeline › Source viewer). It stands to the left of the picture.
-
-It has two layouts, like Resolve's single and dual viewer modes. Switch between them with the Dual viewer toggle: the button at the top right of the right-hand viewer (it stays there in every layout and is lit while the dual viewer is on), or Dual viewer in the menu (▾) after the edit buttons on the bar:
-- **Dual**: the source on the left, the timeline's picture on the right.
-- **Single**: one viewer, showing the source or the timeline. <kbd>Q</kbd> (or Switch source / timeline in the ▾ menu) switches between them.
+The Edit space has one monitor display, as Resolve's, with two modes. One toggle switches between them: the button at the top right of the right-hand viewer (it stays there in both modes and is lit while the dual mode is on). It shows only in the Edit space.
+- **Dual**: the Source viewer (one source clip, like Resolve's source monitor) on the left, the timeline's picture on the right. The × in the source's head goes back to single.
+- **Single**: one viewer, showing the timeline or the source. Switching to single keeps the viewer you clicked last. <kbd>Q</kbd> (or Switch source / timeline in the ▾ menu after the edit buttons) switches between them, and loading a clip into the source shows it.
 
 Each viewer has its own bar under the picture: the source's scrub bar with its marks, and the timeline's, whose playhead is the Edit timeline's playhead (move one and the other moves). Click a viewer to make it the active one: in the dual layout it gets a white outline, and the playback keys (<kbd>Space</kbd>, <kbd>J</kbd> <kbd>K</kbd> <kbd>L</kbd>, the arrows, <kbd>I</kbd> / <kbd>O</kbd>, <kbd>Home</kbd> / <kbd>End</kbd>) drive it while the pointer is over the viewer. Clicking the Edit timeline makes the timeline viewer the active one.
 
 The Source viewer pans and zooms like the timeline viewer: the wheel zooms at the pointer, a left or middle drag pans, a right drag zooms, and <kbd>F</kbd> fits the picture again.
 
-To load a clip into it, click a History thumbnail while a cut is open (this opens the Source viewer if it is off). You can also drop a clip onto it from the History, the file browser, the desktop or the node canvas, or right-click a clip on the timeline › Open in Source viewer. To see a History item in the Viewer instead, switch to the Viewer tab first, or double-click the thumbnail. While the Source viewer is open, <kbd>F</kbd> (match frame) loads the clip there instead of opening it in the Viewer tab.
+To load a clip into it, click a History thumbnail while a cut is open (a single viewer then shows the source). You can also drop a clip onto it from the History, the file browser, the desktop or the node canvas, or right-click a clip on the timeline › Open in Source viewer. To see a History item in the Viewer instead, switch to the Viewer tab first, or double-click the thumbnail. <kbd>F</kbd> (match frame) loads the clip under the playhead there, on the frame the cut shows.
 
 Click the Source viewer to give it the keys. Then:
 - <kbd>Space</kbd> plays the source; <kbd>L</kbd> plays it (again: faster), <kbd>K</kbd> stops, <kbd>J</kbd> runs it backwards.
@@ -74,7 +72,7 @@ Click the Source viewer to give it the keys. Then:
 - <kbd>I</kbd> and <kbd>O</kbd> mark its in and out.
 - <kbd>Alt</kbd>+<kbd>X</kbd> clears both marks.
 
-To bring the marked part into the cut, use the buttons on the timeline's bar (right of the Source viewer button: Insert, Overwrite and Replace, the rest in the ▾ menu beside them, as in Resolve), or these keys from the timeline or the Source viewer:
+To bring the marked part into the cut, use the buttons on the timeline's bar (Insert, Overwrite and Replace, the rest in the ▾ menu beside them, as in Resolve), or these keys from the timeline or the Source viewer:
 
 | Edit | Key | What it does |
 |---|---|---|
@@ -88,7 +86,7 @@ To bring the marked part into the cut, use the buttons on the timeline's bar (ri
 
 This is three-point editing. Of the source's in and out and the timeline's in and out, set any three and the fourth follows. With no timeline in, the playhead counts as one.
 
-Which track the clip goes to is set in the track headers, as in Resolve. While the Source viewer is on, each header has a patch box at its left. The source's **V1** box sits on the video track its picture goes to (V1 to begin with), and its **A1** box on the sound track a sound file goes to. Click another track's box to move it there.
+Which track the clip goes to is set in the track headers, as in Resolve. Each header has a patch box at its left. The source's **V1** box sits on the video track its picture goes to (V1 to begin with), and its **A1** box on the sound track a sound file goes to. Click another track's box to move it there.
 
 Some browsers keep <kbd>F11</kbd> for full screen. If yours does, use the buttons.
 
