@@ -21,6 +21,7 @@
 //   notify(text, severity)
 import * as C from "./imageViewer_compModel.js";
 import * as O from "./imageViewer_compOps.js";
+import * as CK from "./imageViewer_compColor.js";
 import * as Mo from "./imageViewer_mgModel.js";
 import { MG_CSS } from "./imageViewer_mgEditor.js";
 
@@ -74,6 +75,13 @@ const CSS = `
 .cp-over .cp-pt{fill:#111;stroke:#ffcf3a;stroke-width:1.5px;vector-effect:non-scaling-stroke;pointer-events:all;cursor:move}
 .cp-over .cp-pt.first{fill:#ffcf3a}
 .cp-stage.drawing,.cp-stage.picking{cursor:crosshair}
+.cp-cctabs,.cp-ccrange{display:flex;flex-wrap:wrap;gap:3px;margin:6px 0 4px}
+.cp-cctabs .mg-btn,.cp-ccrange .mg-btn{flex:1 1 auto;padding:2px 6px}
+.cp-ccwheels{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin:4px 0}
+.cp-ccwheel{display:flex;flex-direction:column;align-items:center;gap:2px}
+.cp-ccwheel canvas{width:104px;height:104px;cursor:crosshair;touch-action:none}
+.cp-ccval{font-size:11px;opacity:.75;text-align:center}
+.cp-ccluma{width:100%;height:70px;background:rgba(0,0,0,.25);border-radius:3px}
 .cp-shrow{display:flex;align-items:center;gap:4px;padding:2px 0}
 .cp-shrow input[type=number]{width:52px}
 .cp-shrow .cp-shname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -722,7 +730,7 @@ export function createCompEditor(host, opts = {}) {
             }, { structure: false });
             row.append(sw);
         } else row.append(el(doc, "span", "mg-sw", ""));
-        const lab = el(doc, "label", "", p); if (d.help) lab.title = d.help;
+        const lab = el(doc, "label", "", d.label || p); lab.title = d.help ? `${p}: ${d.help}` : p;
         row.append(lab);
         const cur = C.paramAt(n, p, st.frame);
         const write = (v) => mutate(() => { if (d.key) Mo.setProp(keyHost(), n, p, v, st.frame); else n[p] = v; }, { structure: false });
@@ -798,6 +806,97 @@ export function createCompEditor(host, opts = {}) {
         });
         if (shapes.length) props.append(el(doc, "div", "mg-empty", "Drag a point on the picture to move it. Feather is in pixels; the box ticks a smooth curve."));
     }
+    // ColorCorrect, laid out as Color Finesse is: a tab per kind of correction, a bar of luma ranges.
+    const CC_TABS = [["hsl", "HSL"], ["rgb", "RGB"], ["offsets", "Hue offsets"], ["luma", "Luma ranges"], ["secondary", "Secondaries"]];
+    const CC_RANGE_BAR = [["master", "Master"], ["highlights", "Highlights"], ["midtones", "Midtones"], ["shadows", "Shadows"]];
+    function ccSection(n, params) {
+        const cc = st.cc || (st.cc = { tab: "hsl", range: "master", sec: "secA" });
+        const rows = (pred) => { for (const [p, d] of Object.entries(params)) if (pred(d, p)) props.append(paramRow(n, p, d)); };
+        rows((d) => d.tab === "general");
+        const tabs = el(doc, "div", "cp-cctabs");
+        for (const [id, label] of CC_TABS) tabs.append(btn(label, "", () => { cc.tab = id; renderProps(); }, cc.tab === id ? "on" : ""));
+        props.append(tabs);
+        const bar = (items, cur, set) => { const b = el(doc, "div", "cp-ccrange"); for (const [id, label] of items) b.append(btn(label, "", () => { set(id); renderProps(); }, cur === id ? "on" : "")); props.append(b); };
+        if (cc.tab === "hsl" || cc.tab === "rgb") {
+            bar(CC_RANGE_BAR, cc.range, (id) => { cc.range = id; });
+            rows((d) => d.tab === cc.tab && d.range === cc.range);
+        } else if (cc.tab === "offsets") {
+            const grid = el(doc, "div", "cp-ccwheels");
+            for (const [R, label] of CC_RANGE_BAR) grid.append(ccWheel(n, R, label));
+            props.append(grid);
+            props.append(el(doc, "div", "mg-empty", "Drag in a wheel to push that range towards a colour; double-click puts it back. Shadows lift, the others balance."));
+            rows((d) => d.tab === "offsets");
+        } else if (cc.tab === "luma") {
+            props.append(ccLumaGraph(n));
+            rows((d) => d.tab === "luma");
+            props.append(el(doc, "div", "mg-empty", "View (above) shows a range's weight as grey on the picture."));
+        } else {
+            bar([["secA", "Secondary A"], ["secB", "Secondary B"]], cc.sec, (id) => { cc.sec = id; });
+            rows((d) => d.tab === "secondary" && d.range === cc.sec);
+            props.append(el(doc, "div", "mg-empty", "Turn it on, take the colour with ⌖, and set View to its secondary to see what it holds."));
+        }
+    }
+    function ccWheel(n, R, label) {
+        const box = el(doc, "div", "cp-ccwheel");
+        const S = 104, rad = S / 2 - 4;
+        const cv = el(doc, "canvas"); cv.width = S; cv.height = S;
+        const val = el(doc, "div", "cp-ccval");
+        const draw = () => {
+            const hue = C.paramAt(n, `${R}_tint_hue`, st.frame), amt = C.paramAt(n, `${R}_tint`, st.frame);
+            const g = cv.getContext("2d"), im = g.createImageData(S, S);
+            for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+                const dx = x + 0.5 - S / 2, dy = S / 2 - (y + 0.5), d = Math.hypot(dx, dy) / rad, j = (y * S + x) * 4;
+                if (d > 1) continue;
+                const a = Math.atan2(dy, dx);
+                for (let k = 0; k < 3; k++) im.data[j + k] = Math.round(255 * (0.5 + 0.45 * d * Math.cos(a - (k * 2 * Math.PI) / 3)));
+                im.data[j + 3] = 255;
+            }
+            g.putImageData(im, 0, 0);
+            const a = (hue * Math.PI) / 180, r = (amt / 100) * rad;
+            g.strokeStyle = "rgba(0,0,0,.5)"; g.beginPath(); g.moveTo(S / 2 - 5, S / 2); g.lineTo(S / 2 + 5, S / 2); g.moveTo(S / 2, S / 2 - 5); g.lineTo(S / 2, S / 2 + 5); g.stroke();
+            g.lineWidth = 2; g.strokeStyle = "#fff"; g.beginPath(); g.arc(S / 2 + r * Math.cos(a), S / 2 - r * Math.sin(a), 5, 0, 2 * Math.PI); g.stroke();
+            val.textContent = `${label} ${Math.round(((hue % 360) + 360) % 360)}° ${Math.round(amt)}`;
+        };
+        const set = (ev) => {
+            const b = cv.getBoundingClientRect(), dx = ev.clientX - b.left - (b.width / 2), dy = b.top + b.height / 2 - ev.clientY;
+            let hue = (Math.atan2(dy, dx) * 180) / Math.PI; if (hue < 0) hue += 360;
+            const amt = Math.min(100, (Math.hypot(dx, dy) / ((rad * b.width) / S)) * 100);
+            const nn = node(n.id);
+            Mo.setProp(keyHost(), nn, `${R}_tint_hue`, Math.round(hue * 10) / 10, st.frame);
+            Mo.setProp(keyHost(), nn, `${R}_tint`, Math.round(amt * 10) / 10, st.frame);
+            n = nn; draw(); queueRender();
+        };
+        cv.onpointerdown = (e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            st.hist.push(st.comp);
+            cv.setPointerCapture(e.pointerId);
+            set(e);
+            cv.onpointermove = set;
+            cv.onpointerup = () => { cv.onpointermove = null; cv.onpointerup = null; st.dirty = true; refresh(["bar", "props", "stage", "graph"]); };
+        };
+        cv.ondblclick = () => mutate(() => { const nn = node(n.id); Mo.setProp(keyHost(), nn, `${R}_tint`, 0, st.frame); Mo.setProp(keyHost(), nn, `${R}_tint_hue`, 0, st.frame); }, { structure: false });
+        cv.title = `${label}: drag to push towards a colour, double-click to reset`;
+        draw();
+        box.append(cv, val);
+        return box;
+    }
+    function ccLumaGraph(n) {
+        const W = 220, H = 70, NS = "http://www.w3.org/2000/svg";
+        const svg = doc.createElementNS(NS, "svg");
+        svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("class", "cp-ccluma");
+        const se = C.paramAt(n, "shadow_end", st.frame), hs = C.paramAt(n, "highlight_start", st.frame);
+        const pts = [[], [], []];
+        for (let i = 0; i <= 64; i++) { const Y = i / 64, w = CK.rangeWeights(Y, se, hs); for (let k = 0; k < 3; k++) pts[k].push(`${(Y * W).toFixed(1)},${(H - 4 - w[k] * (H - 8)).toFixed(1)}`); }
+        ["#6a8cff", "#9fd18a", "#ffd27a"].forEach((col, k) => {
+            const pl = doc.createElementNS(NS, "polyline");
+            pl.setAttribute("points", pts[k].join(" ")); pl.setAttribute("fill", "none"); pl.setAttribute("stroke", col); pl.setAttribute("stroke-width", "2");
+            svg.append(pl);
+        });
+        const wrap = el(doc, "div", "cp-cclumawrap");
+        wrap.append(svg, el(doc, "div", "cp-ccval", "Shadows (blue), midtones (green), highlights (yellow) over luma as shown"));
+        return wrap;
+    }
     function renderProps() {
         props.replaceChildren();
         const n = primary();
@@ -822,7 +921,8 @@ export function createCompEditor(host, opts = {}) {
         }
         const ps = Object.entries(t.params);
         if (ps.length) props.append(el(doc, "h4", "", t.label));
-        for (const [p, d] of ps) if (d.kind !== "shapes") props.append(paramRow(n, p, d));
+        if (n.type === "colorcorrect") ccSection(n, t.params);
+        else for (const [p, d] of ps) if (d.kind !== "shapes") props.append(paramRow(n, p, d));
         if (n.type === "roto") rotoSection(n);
         if (n.type === "read") {
             const line = el(doc, "div", "mg-empty", "…");

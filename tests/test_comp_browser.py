@@ -263,6 +263,42 @@ class CompBrowserTests(unittest.TestCase):
         self.assertEqual(tag(), [["Output1", "OUTPUT"]], "clicked again: back to the Output")
         self.assertEqual(self.errors, [])
 
+    def test_colorcorrect_is_laid_out_as_color_finesse_and_its_wheels_push_a_range(self):
+        pg = self.page()
+        self.new_comp(pg)
+        pg.evaluate(f"() => {self.ED}.addNode('colorcorrect')")
+        P = "__panel.compPropsPanel"
+        click = lambda label: pg.evaluate(f"() => Array.from({P}.querySelectorAll('button')).find((b) => b.textContent === {label!r}).click()")
+        labels = lambda: pg.evaluate(f"() => Array.from({P}.querySelectorAll('.mg-prop label')).map((l) => l.textContent)")
+        self.assertIn("Saturation", labels())
+        click("Shadows")
+        self.assertIn("Contrast", labels())
+        click("RGB")
+        self.assertIn("Gamma B", labels())
+        click("Hue offsets")
+        self.assertEqual(pg.evaluate(f"() => {P}.querySelectorAll('.cp-ccwheel canvas').length"), 4)
+        b = pg.evaluate(f"() => {{ const r = {P}.querySelectorAll('.cp-ccwheel canvas')[3].getBoundingClientRect(); return [r.left, r.top, r.width]; }}")
+        pg.evaluate(f"() => {P}.querySelectorAll('.cp-ccwheel canvas')[3].scrollIntoView({{block: 'center'}})")
+        b = pg.evaluate(f"() => {{ const r = {P}.querySelectorAll('.cp-ccwheel canvas')[3].getBoundingClientRect(); return [r.left, r.top, r.width]; }}")
+        cx, cy = b[0] + b[2] / 2, b[1] + b[2] / 2
+        pg.mouse.move(cx, cy); pg.mouse.down(); pg.mouse.move(cx - 10, cy - 10, steps=3); pg.mouse.move(cx - 30, cy, steps=3); pg.mouse.up()
+        n = pg.evaluate(f"() => {self.ED}.comp().nodes.find((n) => n.type === 'colorcorrect')")
+        self.assertAlmostEqual(n["shadows_tint_hue"], 180, delta=3)
+        self.assertGreater(n["shadows_tint"], 50)
+        pg.evaluate(f"() => {self.ED}.undo()")
+        n = pg.evaluate(f"() => {self.ED}.comp().nodes.find((n) => n.type === 'colorcorrect')")
+        self.assertEqual(n["shadows_tint"], 0, "one drag, one undo step")
+        click("Luma ranges")
+        self.assertEqual(pg.evaluate(f"() => {P}.querySelectorAll('.cp-ccluma polyline').length"), 3)
+        click("Secondaries")
+        self.assertIn("Hue tolerance", labels())
+        if SHOTS:
+            click("Hue offsets")
+            pg.wait_for_timeout(200)
+            pg.locator(".cp-cctabs").first.evaluate("(e) => e.scrollIntoView()")
+            pg.screenshot(path=os.path.join(SHOTS, "comp-colorcorrect.png"))
+        self.assertEqual(self.errors, [])
+
     def test_the_graph_in_comfyuis_bottom_panel(self):
         pg = self.page()
         self.new_comp(pg)

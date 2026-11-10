@@ -32,6 +32,7 @@ The **Node Graph** panel is up when a comp opens. The picture runs from top to b
 | Transform | Moves, rotates and scales about a centre |
 | Crop | Keeps a box of the picture, with a soft edge if you like |
 | Grade | Black and white point, lift, gain, multiply, offset, gamma, saturation, mix |
+| ColorCorrect | A colour corrector laid out like After Effects' Color Finesse. **HSL** (hue, saturation, brightness, contrast about a centre) and **RGB** (gain, gamma, pedestal, for all channels and for R, G, B) for Master, Highlights, Midtones and Shadows. **Hue offsets** has a colour wheel per range: drag to push that range towards a colour, double-click to reset. **Luma ranges** sets where shadows end and highlights start, with the curves drawn. **Secondaries** A and B each correct one colour (picked with ⌖), qualified by hue, saturation and luma. *View* shows a range or a secondary's matte as grey |
 | Keyer | Chroma (a screen colour, picked from the picture with ⌖) or luma, with tolerance, softness and despill |
 | Blur | A Gaussian blur, its size in pixels of the comp |
 | MotionBlur | Blurs along the motion while the shutter is open. It takes motion vectors from a Vectors node in its second input, or works them out itself |

@@ -26,6 +26,7 @@
 // transparent. Blur is Paint's (three box blurs, edge repeated; paint_math.blur_float).
 import { valueAt } from "./imageViewer_mgScene.js";
 import * as O from "./imageViewer_compOps.js";
+import { ccParams, colorCorrectImage } from "./imageViewer_compColor.js";
 import { blank, blurImage, boxesForGauss } from "./imageViewer_compOps.js";
 export { blank, blurImage, boxesForGauss };
 
@@ -71,6 +72,7 @@ export const NODE_TYPES = {
         saturation: { kind: "num", def: 1, min: 0, key: true, step: 0.01 },
         mix: { kind: "num", def: 1, min: 0, max: 1, key: true, step: 0.01 },
     } },
+    colorcorrect: { label: "ColorCorrect", cat: "Color", inputs: ["src"], params: ccParams() },
     blur: { label: "Blur", cat: "Filter", inputs: ["src"], params: {
         size: { kind: "num", def: 10, min: 0, max: 500, key: true, step: 0.5, help: "In pixels of the comp" },
     } },
@@ -136,7 +138,7 @@ export const NODE_TYPES = {
     } },
     output: { label: "Output", cat: "Other", inputs: ["src"], params: {} },
 };
-export const TYPE_ORDER = ["read", "constant", "roto", "merge", "copy", "transform", "crop", "grade", "keyer", "blur",
+export const TYPE_ORDER = ["read", "constant", "roto", "merge", "copy", "transform", "crop", "grade", "colorcorrect", "keyer", "blur",
     "motionblur", "depthblur", "defocus", "shuffle", "premult", "unpremult", "retime", "vectors", "output"];
 /** Nodes whose result is kept between renders (keyed by their whole upstream): they take long. */
 export const HEAVY = new Set(["vectors", "motionblur", "depthblur", "defocus"]);
@@ -338,7 +340,7 @@ export function nodeKeyFrames(node) {
 
 // ── the stack the Layers panel shows ─────────────────────────────────────────
 
-const CHAIN = new Set(["transform", "grade", "blur", "crop", "shuffle", "premult", "unpremult", "retime", "keyer", "vectors",
+const CHAIN = new Set(["transform", "grade", "colorcorrect", "blur", "crop", "shuffle", "premult", "unpremult", "retime", "keyer", "vectors",
     "motionblur", "depthblur", "defocus", "copy"]);
 
 /**
@@ -665,6 +667,11 @@ export function renderNode(comp, id, frame, ctx) {
             const p = {};
             for (const k of Object.keys(NODE_TYPES.grade.params)) p[k] = paramAt(n, k, f);
             return gradeImage(run(n.inputs[0], f, d1), p);
+        }
+        case "colorcorrect": {
+            const p = {};
+            for (const k of Object.keys(NODE_TYPES.colorcorrect.params)) p[k] = paramAt(n, k, f);
+            return colorCorrectImage(run(n.inputs[0], f, d1), p);
         }
         case "blur": return blurImage(run(n.inputs[0], f, d1), paramAt(n, "size", f) * scale);
         case "crop": {

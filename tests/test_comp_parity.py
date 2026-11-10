@@ -139,6 +139,19 @@ def new_node_cases(sources):
     for kw in ({"size": 7.3}, {"size": 9, "shape": "polygon", "blades": 6, "rotation": 17, "aspect": 1.4},
                {"size": 6, "shape": "polygon", "blades": 5, "bloom": 3, "threshold": 0.3}, {"size": 0.6}):
         c.append(one(node("defocus", 1, ["Read1"], **kw)))
+    cc = [
+        {"master_hue": 25, "master_saturation": 140, "master_contrast": 120, "master_brightness": 0.02},
+        {"shadows_hue": -40, "midtones_saturation": 50, "highlights_contrast": 80, "shadow_end": 0.35, "highlight_start": 0.6,
+         "shadows_tint_hue": 210, "shadows_tint": 60, "highlights_tint_hue": 40, "highlights_tint": 30, "master_tint_hue": 300, "master_tint": 10},
+        {"master_gain_r": 1.2, "master_gamma_b": 1.4, "midtones_pedestal": 0.03, "highlights_gain": 0.8, "shadows_gamma_g": 0.7,
+         "shadows_pedestal_r": -0.02, "mix": 0.7},
+        {"secA_on": "on", "secA_color": [0.6, 0.2, 0.1, 1], "secA_hue_tol": 40, "secA_sat_tol": 0.5, "secA_lum_tol": 0.6,
+         "secA_hue": 90, "secA_saturation": 30, "secA_brightness": 0.05, "secB_on": "on", "secB_color": [0.1, 0.3, 0.7, 1],
+         "secB_hue_tol": 60, "secB_sat_tol": 0.8, "secB_lum_tol": 0.8, "secB_saturation": 200},
+        {"view": "midtones"}, {"view": "secondary A", "secA_on": "on", "secA_hue_tol": 60, "secA_sat_tol": 1, "secA_lum_tol": 1},
+    ]
+    for kw in cc:
+        c.append(one(node("colorcorrect", 1, ["Read1"], **kw)))
     return c
 
 

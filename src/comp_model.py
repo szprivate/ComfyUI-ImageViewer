@@ -34,6 +34,46 @@ DEFOCUS_SHAPES = ["disc", "polygon"]
 _CH = {"r": 0, "g": 1, "b": 2, "a": 3}
 
 # The node types: the page's NODE_TYPES (kind, default, range, animatable). The parity test compares them.
+CC_RANGES = ["master", "shadows", "midtones", "highlights"]
+CC_SECONDARIES = ["secA", "secB"]
+CC_VIEWS = ["result", "shadows", "midtones", "highlights", "secondary A", "secondary B"]
+_CC_CH = ["", "_r", "_g", "_b"]
+
+
+def cc_params():
+    """ColorCorrect's parameters (js/imageViewer_compColor.js ``ccParams``; the panel's own fields left out)."""
+    P = {}
+    for R in CC_RANGES:
+        def add(name, spec):
+            P[f"{R}_{name}"] = dict(spec, key=True)
+        add("hue", {"kind": "num", "def": 0})
+        add("saturation", {"kind": "num", "def": 100, "min": 0})
+        add("brightness", {"kind": "num", "def": 0})
+        add("contrast", {"kind": "num", "def": 100, "min": 0})
+        for name, d, mn in (("gain", 1, None), ("gamma", 1, 0.01), ("pedestal", 0, None)):
+            for c in _CC_CH:
+                add(name + c, {"kind": "num", "def": d, **({"min": mn} if mn is not None else {})})
+        add("tint_hue", {"kind": "num", "def": 0})
+        add("tint", {"kind": "num", "def": 0, "min": 0, "max": 100})
+    P["contrast_centre"] = {"kind": "num", "def": 0.18, "min": 0.001, "key": True}
+    P["shadow_end"] = {"kind": "num", "def": 0.5, "min": 0.01, "max": 1, "key": True}
+    P["highlight_start"] = {"kind": "num", "def": 0.5, "min": 0, "max": 0.99, "key": True}
+    for S in CC_SECONDARIES:
+        P[f"{S}_on"] = {"kind": "enum", "def": "off", "choices": ["off", "on"]}
+        P[f"{S}_color"] = {"kind": "color", "def": [0.6, 0.12, 0.05, 1] if S == "secA" else [0.05, 0.25, 0.6, 1]}
+        P[f"{S}_hue_tol"] = {"kind": "num", "def": 15, "min": 0, "max": 180, "key": True}
+        P[f"{S}_hue_soft"] = {"kind": "num", "def": 20, "min": 0, "max": 180, "key": True}
+        P[f"{S}_sat_tol"] = {"kind": "num", "def": 0.3, "min": 0, "max": 1, "key": True}
+        P[f"{S}_lum_tol"] = {"kind": "num", "def": 0.4, "min": 0, "max": 1, "key": True}
+        P[f"{S}_soft"] = {"kind": "num", "def": 0.15, "min": 0, "max": 1, "key": True}
+        P[f"{S}_hue"] = {"kind": "num", "def": 0, "key": True}
+        P[f"{S}_saturation"] = {"kind": "num", "def": 100, "min": 0, "key": True}
+        P[f"{S}_brightness"] = {"kind": "num", "def": 0, "key": True}
+    P["mix"] = {"kind": "num", "def": 1, "min": 0, "max": 1, "key": True}
+    P["view"] = {"kind": "enum", "def": "result", "choices": CC_VIEWS}
+    return P
+
+
 NODE_TYPES = {
     "read": {"inputs": [], "params": {
         "file": {"kind": "file", "def": ""},
@@ -54,6 +94,7 @@ NODE_TYPES = {
         "scale": {"kind": "vec2", "def": [1, 1], "key": True},
         "center": {"kind": "vec2", "def": None, "key": True},
     }},
+    "colorcorrect": {"inputs": ["src"], "params": cc_params()},
     "grade": {"inputs": ["src"], "params": {
         "blackpoint": {"kind": "num", "def": 0, "key": True},
         "whitepoint": {"kind": "num", "def": 1, "key": True},
@@ -925,6 +966,120 @@ def defocus_image(img, p):
     return (acc / total).astype(np.float32)
 
 
+def _smooth(e0, e1, x):
+    if not e1 > e0:
+        return np.where(x < e0, 0.0, 1.0)
+    t = np.clip((x - e0) / (e1 - e0), 0, 1)
+    return t * t * (3 - 2 * t)
+
+
+def _cc_luma(r, g, b):
+    l = LUM[0] * r + LUM[1] * g + LUM[2] * b
+    return np.where(l > 0, np.power(np.where(l > 0, l, 1.0), 1 / 2.2), 0.0)
+
+
+def _hue_sat(r, g, b):
+    mx = np.maximum(np.maximum(r, g), b)
+    mn = np.minimum(np.minimum(r, g), b)
+    c = mx - mn
+    sc = np.where(c > 0, c, 1.0)
+    h = np.where(mx == r, 60 * ((g - b) / sc), np.where(mx == g, 60 * ((b - r) / sc + 2), 60 * ((r - g) / sc + 4)))
+    h = np.where(h < 0, h + 360, h)
+    h = np.where(c > 0, h, 0.0)
+    return h, np.where(mx > 0, c / np.where(mx > 0, mx, 1.0), 0.0)
+
+
+def _hue_turn(deg):
+    th = (deg * math.pi) / 180
+    co, si = np.cos(th), np.sin(th)
+    return co + (1 - co) / 3, (1 - co) / 3 - si / math.sqrt(3), (1 - co) / 3 + si / math.sqrt(3)
+
+
+def _tint_of(deg, amount):
+    a = (deg * math.pi) / 180
+    v = [math.cos(a), math.cos(a - (2 * math.pi) / 3), math.cos(a + (2 * math.pi) / 3)]
+    l = LUM[0] * v[0] + LUM[1] * v[1] + LUM[2] * v[2]
+    return [(amount / 100) * (x - l) for x in v]
+
+
+def range_weights(Y, se, hs):
+    ws = 1 - _smooth(0, se, Y)
+    wh = _smooth(hs, 1, Y)
+    wm = np.maximum(1 - ws - wh, 0)
+    total = ws + wm + wh
+    return ws / total, wm / total, wh / total
+
+
+def color_correct_image(img, p):
+    """The page's ``colorCorrectImage``: Color Finesse's primaries per luma range, two secondaries, a mix."""
+    d = img.astype(np.float64)
+    A = d[..., 3]
+    ok = A > 0
+    sa_ = np.where(ok, A, 1.0)
+    r0, g0, b0 = d[..., 0] / sa_, d[..., 1] / sa_, d[..., 2] / sa_
+    v = lambda R, n: p[f"{R}_{n}"]
+    hue = [v(R, "hue") for R in CC_RANGES]
+    sat = [v(R, "saturation") / 100 for R in CC_RANGES]
+    bri = [v(R, "brightness") for R in CC_RANGES]
+    con = [v(R, "contrast") / 100 for R in CC_RANGES]
+    gain = [[v(R, "gain") * v(R, "gain" + _CC_CH[k]) for R in CC_RANGES] for k in (1, 2, 3)]
+    gam = [[v(R, "gamma") * v(R, "gamma" + _CC_CH[k]) for R in CC_RANGES] for k in (1, 2, 3)]
+    ped = [[v(R, "pedestal") + v(R, "pedestal" + _CC_CH[k]) for R in CC_RANGES] for k in (1, 2, 3)]
+    tint = [_tint_of(v(R, "tint_hue"), v(R, "tint")) for R in CC_RANGES]
+    cc, mix, view = p["contrast_centre"], p["mix"], p.get("view") or "result"
+    ws, wm, wh = range_weights(_cc_luma(r0, g0, b0), p["shadow_end"], p["highlight_start"])
+    r, g, b = r0, g0, b0
+    t0, t1, t2 = _hue_turn(hue[0] + (ws * hue[1] + wm * hue[2] + wh * hue[3]))
+    r, g, b = t0 * r + t1 * g + t2 * b, t2 * r + t0 * g + t1 * b, t1 * r + t2 * g + t0 * b
+    s_ = sat[0] * (ws * sat[1] + wm * sat[2] + wh * sat[3])
+    l = LUM[0] * r + LUM[1] * g + LUM[2] * b
+    r, g, b = l + (r - l) * s_, l + (g - l) * s_, l + (b - l) * s_
+    br = bri[0] + (ws * bri[1] + wm * bri[2] + wh * bri[3])
+    r, g, b = r + br, g + br, b + br
+    ct = con[0] * (ws * con[1] + wm * con[2] + wh * con[3])
+
+    def pivot(x):
+        return np.where(x > 0, cc * np.power(np.where(x > 0, x, cc) / cc, ct), x)
+    c = [pivot(r), pivot(g), pivot(b)]
+    for k in range(3):
+        mul = 1 + (tint[0][k] + (wm * tint[2][k] + wh * tint[3][k]))
+        c[k] = c[k] * mul + ws * tint[1][k] * 0.1
+    for k in range(3):
+        G, Ga, Pe = gain[k], gam[k], ped[k]
+        gk = G[0] * (ws * G[1] + wm * G[2] + wh * G[3])
+        ak = Ga[0] * (ws * Ga[1] + wm * Ga[2] + wh * Ga[3])
+        pk = Pe[0] + (ws * Pe[1] + wm * Pe[2] + wh * Pe[3])
+        x = c[k] * gk + pk
+        c[k] = np.where(x > 0, np.power(np.where(x > 0, x, 1.0), 1 / ak), x)
+    q = {"secA": np.zeros_like(r0), "secB": np.zeros_like(r0)}
+    for X in CC_SECONDARIES:
+        if p.get(f"{X}_on") != "on":
+            continue
+        key = p.get(f"{X}_color") or [0, 0, 0, 1]
+        kh, ks = (float(t) for t in _hue_sat(np.float64(key[0]), np.float64(key[1]), np.float64(key[2])))
+        kY = float(_cc_luma(np.float64(key[0]), np.float64(key[1]), np.float64(key[2])))
+        ht, hsft, st, lt, soft = (p[f"{X}_{n}"] for n in ("hue_tol", "hue_soft", "sat_tol", "lum_tol", "soft"))
+        ph, ps = _hue_sat(c[0], c[1], c[2])
+        dh = np.abs(ph - kh)
+        dh = np.where(dh > 180, 360 - dh, dh)
+        m = (1 - _smooth(ht, ht + hsft, dh)) * (1 - _smooth(st, st + soft, np.abs(ps - ks))) \
+            * (1 - _smooth(lt, lt + soft, np.abs(_cc_luma(c[0], c[1], c[2]) - kY)))
+        q[X] = m
+        u0, u1, u2 = (float(t) for t in _hue_turn(np.float64(p[f"{X}_hue"])))
+        xr, xg, xb = u0 * c[0] + u1 * c[1] + u2 * c[2], u2 * c[0] + u0 * c[1] + u1 * c[2], u1 * c[0] + u2 * c[1] + u0 * c[2]
+        ll = LUM[0] * xr + LUM[1] * xg + LUM[2] * xb
+        xs, xb_ = p[f"{X}_saturation"] / 100, p[f"{X}_brightness"]
+        xr, xg, xb = ll + (xr - ll) * xs + xb_, ll + (xg - ll) * xs + xb_, ll + (xb - ll) * xs + xb_
+        on = m > 0
+        c = [np.where(on, c[0] + (xr - c[0]) * m, c[0]), np.where(on, c[1] + (xg - c[1]) * m, c[1]), np.where(on, c[2] + (xb - c[2]) * m, c[2])]
+    if view != "result":
+        m = {"shadows": ws, "midtones": wm, "highlights": wh, "secondary A": q["secA"]}.get(view, q["secB"])
+        out = np.stack([m, m, m, np.ones_like(m)], axis=-1)
+    else:
+        out = np.stack([(r0 + (c[0] - r0) * mix) * A, (g0 + (c[1] - g0) * mix) * A, (b0 + (c[2] - b0) * mix) * A, A], axis=-1)
+    return np.where(ok[..., None], out, d).astype(np.float32)
+
+
 def mix_images(a, b, t):
     x = a.astype(np.float64)
     return (x + (b.astype(np.float64) - x) * t).astype(np.float32)
@@ -985,6 +1140,8 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None):
             return merge_images(Bi, Ai, Mi, n.get("operation") or "over", param_at(n, "mix", f))
         if t == "transform":
             return resample(run(ins[0], f, d1), transform_matrix(n, f, fmt, scale), W, H)
+        if t == "colorcorrect":
+            return color_correct_image(run(ins[0], f, d1), P(n, f, NODE_TYPES["colorcorrect"]["params"]))
         if t == "grade":
             return grade_image(run(ins[0], f, d1), P(n, f, NODE_TYPES["grade"]["params"]))
         if t == "blur":
