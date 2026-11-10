@@ -26,6 +26,10 @@ class ApiAliasTest(unittest.TestCase):
         # paint_routes adds "/api/imageviewer/paint/" + name for each of its routes
         paint = _read(os.path.join(ROOT, "src", "paint_routes.py"))
         self.assertIn('"/api/imageviewer/paint/" + name', paint)
+        # comp_routes adds every route under both prefixes, in one loop
+        comp = _read(os.path.join(ROOT, "src", "comp_routes.py"))
+        self.assertIn('for prefix in ("/imageviewer", "/api/imageviewer"):', comp)
+        served.update("/api/imageviewer/" + n for n in re.findall(r'f"\{prefix\}/([^"?]+)"', comp))
         missing = []
         for js in glob.glob(os.path.join(ROOT, "js", "*.js")):
             for m in re.finditer(r'fetchApi\(\s*[`"\'](/imageviewer/[^`"\'?$]+)', _read(js)):
