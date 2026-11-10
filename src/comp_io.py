@@ -318,8 +318,44 @@ def as_f16(img) -> bytes:
 
 # ── writing a render ─────────────────────────────────────────────────────────
 
-STILL_EXTS = ("png", "exr", "tif", "jpg")
+# The formats and options are the Send to Viewer node's (``file_writer``): one menu, one writer.
+try:
+    from . import file_writer as FW
+except Exception:  # pragma: no cover - comp_io loaded by path, outside the package
+    FW = None
 VIDEO_FORMATS = ("mp4", "mov", "webm")
+ALIASES = {"tif": "tiff", "jpeg": "jpg"}
+FLOAT_DEPTHS = ("16 float", "32 float")
+
+
+def still_formats():
+    """The still formats a render can write here: the node's menu (what this install can write)."""
+    if FW is None:
+        return ["png", "exr", "jpg"]
+    out = [e for e in FW.FILE_FORMATS if e not in FW.VIDEO_EXTS]
+    if "exr" not in out:      # without OpenImageIO a plain half EXR is still written (comp_nuke.exr_bytes)
+        out.insert(1, "exr")
+    return out
+
+
+def formats():
+    """The render dialog's menu and option tables: the node's (``file_writer.formats``), with the stills this
+    install can write here."""
+    base = FW.formats() if FW is not None else {"bit_depths": {}, "compressions": {}, "codecs": {"mov": ["prores", "h264"]},
+                                                 "quality_formats": ["jpg"], "quality_default": 90,
+                                                 "compress_level_formats": ["png"], "compress_level_default": 6,
+                                                 "first_frame_default": 1001, "padding_default": 4}
+    return dict(base, stills=still_formats(), videos=list(VIDEO_FORMATS), floats=["exr", "hdr"],
+                float_depths=list(FLOAT_DEPTHS))
+
+
+def is_float(ext, options=None):
+    """True when *ext* (with these options) keeps linear float values: EXR, HDR, a float TIFF."""
+    ext = ALIASES.get(ext, ext)
+    if ext in ("exr", "hdr"):
+        return True
+    depth = FW._option(options, "bit_depth", FW.BIT_DEPTHS, ext) if FW else None
+    return depth in FLOAT_DEPTHS
 
 
 def _encode(rgb, enc):
@@ -329,45 +365,61 @@ def _encode(rgb, enc):
     return np.clip(enc(rgb), 0, 1)
 
 
-def write_still(img, path, ext, enc=None):
-    """One picture to a file: PNG / TIFF 8-bit (sRGB, or ``enc``'s display) with alpha, JPEG over black, EXR
-    linear (the working space) half float."""
-    ext = ext.lower()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".part"
-    if ext == "exr":
-        try:
-            import OpenImageIO as oiio
-        except ImportError:
-            raise ValueError("EXR needs OpenImageIO, which this ComfyUI does not have - render PNG or a film") from None
-        rgb, a = M.to_straight(img, srgb=False)
-        px = np.ascontiguousarray(np.dstack([rgb, a]), dtype=np.float32)
-        spec = oiio.ImageSpec(px.shape[1], px.shape[0], 4, oiio.HALF)
-        spec.channelnames = ("R", "G", "B", "A")
-        spec.alpha_channel = 3
-        spec.attribute("compression", "zip")
-        out = oiio.ImageOutput.create(tmp + ".exr")
-        if not out or not out.open(tmp + ".exr", spec):
-            raise ValueError("the EXR could not be written")
-        out.write_image(px)
-        out.close()
-        os.replace(tmp + ".exr", path)
-        return path
-    from PIL import Image
-    if ext == "jpg":
-        u8 = (_encode(img[..., :3], enc) * 255 + 0.5).astype(np.uint8)
-        Image.fromarray(u8, "RGB").save(tmp, format="JPEG", quality=95)
+def still_pixels(img, ext, enc=None, options=None):
+    """The [H, W, C] float32 a premultiplied linear picture is written as, in *ext*:
+    a float file (EXR, HDR, float TIFF) the working space's values, premultiplied, as compositors keep them
+    (HDR without alpha); JPEG / BMP the picture over black, display-encoded; the rest straight display values
+    with alpha (sRGB, or ``enc``'s display) - what a ComfyUI IMAGE is."""
+    ext = ALIASES.get(ext, ext)
+    if is_float(ext, options):
+        px = np.asarray(img, dtype=np.float32)
+        return px[..., :3] if ext == "hdr" else px
+    if ext in ("jpg", "bmp"):
+        return _encode(img[..., :3], enc).astype(np.float32)
+    rgb, a = M.to_straight(img, srgb=False)
+    return np.dstack([_encode(rgb, enc), np.clip(a, 0, 1)]).astype(np.float32)
+
+
+def write_still(img, path, ext, enc=None, options=None):
+    """One picture to a file through the Send to Viewer node's writer (``file_writer._write_image``), with its
+    per-format options (bit_depth, compression, quality, compress_level). Written beside and moved over."""
+    ext = ALIASES.get(ext.lower(), ext.lower())
+    options = dict(options or {})
+    if FW is not None and ext in FW.QUALITY_FORMATS and options.get("quality") in (None, ""):
+        options["quality"] = FW.QUALITY_DEFAULT
+    px = np.ascontiguousarray(still_pixels(img, ext, enc, options))
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    stem, dot = os.path.splitext(path)
+    tmp = f"{stem}.part{dot}"
+    try:
+        import OpenImageIO  # noqa: F401
+        has_oiio = True
+    except ImportError:
+        has_oiio = False
+    if not has_oiio and is_float(ext, options):
+        if ext != "exr":
+            raise ValueError(f"a float {ext.upper()} needs OpenImageIO, which this ComfyUI does not have")
+        from . import comp_nuke   # a plain half EXR, written from the file layout
+        with open(tmp, "wb") as fh:
+            fh.write(comp_nuke.exr_bytes(px))
+    elif FW is None:
+        from PIL import Image
+        u8 = (np.clip(px, 0, 1) * 255 + 0.5).astype(np.uint8)
+        Image.fromarray(u8, "RGBA" if u8.shape[-1] == 4 else "RGB").save(tmp)
     else:
-        if enc is None:
-            rgb, a = M.to_straight(img, srgb=True)
-        else:
-            rgb, a = M.to_straight(img, srgb=False)
-            rgb = _encode(rgb, enc)
-        u8 = (np.clip(np.dstack([rgb, a]), 0, 1) * 255 + 0.5).astype(np.uint8)
-        Image.fromarray(u8, "RGBA").save(tmp, format="PNG" if ext == "png" else "TIFF",
-                                         **({"compress_level": 4} if ext == "png" else {"compression": "tiff_deflate"}))
+        FW._write_image(px, tmp, ext, options=options)
     os.replace(tmp, path)
     return path
+
+
+def film_quality(q):
+    """The node's quality (1..100) as the export rule's high / medium / low; a word stays as it is."""
+    if q in (None, ""):
+        return "high"
+    if isinstance(q, str) and not q.strip().lstrip("-").isdigit():
+        return q
+    q = int(q)
+    return "high" if q >= 85 else "medium" if q >= 65 else "low"
 
 
 class VideoWriter:

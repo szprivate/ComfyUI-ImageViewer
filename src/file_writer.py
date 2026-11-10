@@ -19,7 +19,11 @@ import re
 import time
 
 import numpy as np
-import torch
+
+try:  # ComfyUI always has it; a writer used without tensors (Comp's render) does not need it
+    import torch
+except ImportError:  # pragma: no cover
+    torch = None
 
 try:
     import folder_paths
@@ -152,6 +156,19 @@ except Exception:  # run outside the package
     _export_rules = None
     CODECS = {"mov": ["prores", "h264"]}
 CODEC_MENU = _menu(CODECS)
+
+
+def formats():
+    """What the node offers, as data: its format menu split into stills and films, and the per-format
+    tables - for a dialog that saves the way the node saves (Comp's render)."""
+    return {
+        "stills": [e for e in FILE_FORMATS if e not in VIDEO_EXTS],
+        "videos": [e for e in FILE_FORMATS if e in VIDEO_EXTS],
+        "bit_depths": BIT_DEPTHS, "compressions": COMPRESSIONS, "codecs": CODECS,
+        "quality_formats": QUALITY_FORMATS, "quality_default": QUALITY_DEFAULT,
+        "compress_level_formats": COMPRESS_LEVEL_FORMATS, "compress_level_default": COMPRESS_LEVEL_DEFAULT,
+        "first_frame_default": 1001, "padding_default": 4,
+    }
 
 
 def _video_codec(options, ext):

@@ -711,72 +711,125 @@ export const CompPanelMixin = {
         return finished;
     },
 
-    /** The export dialog every export of the viewer uses, for the comp's Output. */
+    /** The Send to Viewer node's formats and per-format options (file_writer, GET comp_formats), asked once. */
+    async _cpFormats() {
+        if (this._cpFormatsKept) return this._cpFormatsKept;
+        try {
+            const r = await api.fetchApi("/imageviewer/comp_formats");
+            if (r.ok) return (this._cpFormatsKept = await r.json());
+        } catch (e) { /* an older server: the fallback below */ }
+        return { stills: ["png", "exr", "tiff", "jpg"], videos: ["mp4", "mov", "webm"], bit_depths: {}, compressions: {},
+            codecs: { mov: ["prores", "h264"] }, quality_formats: ["jpg", "webp", "mp4", "mov", "webm"], quality_default: 90,
+            compress_level_formats: ["png"], compress_level_default: 6, first_frame_default: 1001, padding_default: 4,
+            floats: ["exr", "hdr"], float_depths: ["16 float", "32 float"] };
+    },
+
+    /** The export dialog every export of the viewer uses, for the comp's Output - with the formats and options of
+     * the Send to Viewer node, which writes them (file_writer). */
     async compRenderDialog(rec = this._cpActive()) {
         if (!rec || !rec.editor || !rec.path) return null;
         const ed = rec.editor;
         const st = this._cpState();
         const last = st.last;
+        const lastOpt = last.options || {};
         const frames = ed.comp().format.frames;
         const range = this.playbackRange;
-        let rangeSel, codecSel, qualitySel, canvasBox, colourSel;
+        const F = await this._cpFormats();
+        let rangeSel, canvasBox, colourSel, depthSel, compSel, qualityIn, levelIn, codecSel, firstIn, padIn;
         const ocio = await this._cpOcioInfo();
+        const LABEL = { png: "PNG", exr: "EXR (linear float)", tiff: "TIFF", jpg: "JPEG", dpx: "DPX", tga: "TGA",
+            hdr: "HDR (linear float)", bmp: "BMP", webp: "WebP", mp4: "MP4 film", mov: "MOV film", webm: "WebM film" };
+        const fixed = [...F.stills, ...F.videos].map((f) => ({ value: f, label: LABEL[f] || f.toUpperCase() }));
+        const lastFmt = { tif: "tiff", jpeg: "jpg" }[last.format] || last.format;
+        const isFloat = (fmt) => (F.floats || []).includes(fmt) || (F.float_depths || []).includes(depthSel && depthSel.value);
         return openExportDialog(this.container, {
             title: "Render comp", kind: "comp", name: nameOf(rec.path), go: "Render",
-            fixed: [
-                { value: "png", label: "PNG sequence (8-bit, alpha)" },
-                { value: "exr", label: "EXR sequence (linear, half float)" },
-                { value: "tif", label: "TIFF sequence (8-bit, alpha)" },
-                { value: "mp4", label: "MP4 film" },
-                { value: "mov", label: "MOV film" },
-                { value: "webm", label: "WebM film" },
-            ],
-            values: { format: last.format || "png" },
+            fixed, values: { format: fixed.some((f) => f.value === lastFmt) ? lastFmt : "png" },
             rows: (make) => {
                 const opts = [["all", `All frames (0–${frames - 1})`], ["here", `This frame (${ed.state.frame})`]];
                 if (range && range.end > range.start) opts.splice(1, 0, ["range", `In to out (${range.start}–${range.end})`]);
                 rangeSel = make.select(opts, last.range || "all");
-                codecSel = make.select([["prores", "ProRes 422"], ["h264", "H.264"]], last.codec || "prores");
-                qualitySel = make.select([["high", "High"], ["medium", "Medium"], ["low", "Low"]], last.quality || "high");
-                const film = make.row("Film", make.el("span", "rd-sub", "Codec"), codecSel, make.el("span", "rd-sub", "Quality"), qualitySel);
+                const num = (value, lo, hi) => {
+                    const n = make.el("input", "rd-in rd-num");
+                    Object.assign(n, { type: "number", min: lo, max: hi, step: 1, value });
+                    n.style.width = "6em";
+                    return n;
+                };
+                const pair = (label, ctl) => { const w = make.el("span", "rd-inline"); w.append(make.el("span", "rd-sub", label), ctl); return w; };
+                // One select per table, narrowed to the format's entries when the format changes - as the node does.
+                depthSel = make.select([["auto", "Auto"]], "auto");
+                compSel = make.select([["auto", "Auto"]], "auto");
+                codecSel = make.select([["auto", "Auto"]], "auto");
+                qualityIn = num(lastOpt.quality ?? F.quality_default, 1, 100);
+                levelIn = num(lastOpt.compress_level ?? F.compress_level_default, 0, 9);
+                firstIn = num(last.first_number ?? F.first_frame_default, 0, 99999999);
+                padIn = num(last.padding ?? F.padding_default, 1, 9);
+                const wDepth = pair("Bit depth", depthSel), wComp = pair("Compression", compSel), wQual = pair("Quality", qualityIn),
+                    wLevel = pair("Compress level", levelIn), wCodec = pair("Codec", codecSel);
+                const save = make.row("Save as", wDepth, wComp, wQual, wLevel, wCodec);
+                const numbering = make.row("Numbered", pair("First frame", firstIn), pair("Padding", padIn));
                 const cols = [["", "sRGB (plain)"]];
                 if (ocio && ocio.available) for (const d of ocio.displays) for (const v of d.views) cols.push([`${d.name}\u0001${v}`, `${d.name} · ${v}`]);
                 colourSel = make.select(cols, last.colour ?? ed.state.display ?? "");
-                const colour = make.row("Colour", colourSel, make.el("span", "rd-sub", "for PNG, TIFF and films; EXR stays linear"));
+                colourSel.style.maxWidth = "20em";      // a long display · view name must not push it onto a line of its own
+                colourSel.title = "How the picture is encoded for display-referred files and films; a float file (EXR, HDR, float TIFF) stays linear";
+                const colour = make.row("Colour", colourSel);
                 canvasBox = make.el("input");
                 canvasBox.type = "checkbox";
                 canvasBox.checked = last.canvas !== false;
                 const lab = make.el("label", "rd-inline");
                 lab.append(canvasBox, make.el("span", "", " and a loader node on the ComfyUI canvas"));
-                // The film row is for films only, and the codec choice for MOV only. The format menu is the
-                // dialog's first select (made before these rows).
-                const sync = () => {
-                    const sel = this.container.querySelector(".export-dlg .rd-box select");
-                    const fmt = sel ? sel.value : "";
-                    film.style.display = /^(mp4|mov|webm)$/.test(fmt) ? "" : "none";
-                    colour.style.display = fmt === "exr" || cols.length < 2 ? "none" : "";
-                    for (const n of [codecSel, codecSel.previousSibling]) if (n) n.style.display = fmt === "mov" ? "" : "none";
+                const fill = (sel, values, keep) => {
+                    sel.replaceChildren();
+                    for (const v of ["auto", ...(values || [])]) sel.append(Object.assign(make.el("option"), { value: v, textContent: v === "auto" ? "Auto" : v }));
+                    sel.value = (values || []).includes(keep) ? keep : "auto";
                 };
+                // The format menu is the dialog's first select (made before these rows).
+                const fmtSel = () => this.container.querySelector(".export-dlg .rd-box select");
+                const sync = (first) => {
+                    const fmt = (fmtSel() || {}).value || "";
+                    const film = F.videos.includes(fmt);
+                    fill(depthSel, F.bit_depths[fmt], first ? lastOpt.bit_depth : depthSel.value);
+                    fill(compSel, F.compressions[fmt], first ? lastOpt.compression : compSel.value);
+                    fill(codecSel, F.codecs[fmt], first ? (lastOpt.codec || last.codec) : codecSel.value);
+                    wDepth.style.display = F.bit_depths[fmt] ? "" : "none";
+                    wComp.style.display = F.compressions[fmt] ? "" : "none";
+                    wCodec.style.display = F.codecs[fmt] ? "" : "none";
+                    wQual.style.display = F.quality_formats.includes(fmt) ? "" : "none";
+                    wLevel.style.display = F.compress_level_formats.includes(fmt) ? "" : "none";
+                    save.style.display = [wDepth, wComp, wQual, wLevel, wCodec].some((w) => w.style.display === "") ? "" : "none";
+                    numbering.style.display = film ? "none" : "";
+                    colour.style.display = isFloat(fmt) || cols.length < 2 ? "none" : "";
+                };
+                depthSel.addEventListener("change", () => sync(false));
                 this._viewerWindow().requestAnimationFrame(() => {
-                    const sel = this.container.querySelector(".export-dlg .rd-box select");
-                    if (sel) sel.addEventListener("change", sync);
-                    sync();
+                    const sel = fmtSel();
+                    if (sel) sel.addEventListener("change", () => sync(false));
+                    sync(true);
                 });
-                return [make.row("Frames", rangeSel), film, colour, make.row("Lands in", make.el("span", "rd-sub", "The History"), lab)];
+                return [make.row("Frames", rangeSel), save, numbering, colour, make.row("Lands in", make.el("span", "rd-sub", "The History"), lab)];
             },
-            note: "Rendered here in full float, at full size, whatever the preview's proxy is.",
+            note: "Rendered here in full float, at full size, and saved as the Send to Viewer node saves - its formats, its options.",
             onExport: async (v, ui) => {
                 const which = rangeSel.value;
                 const [first, lastF] = which === "here" ? [ed.state.frame, ed.state.frame]
                     : which === "range" && range ? [range.start, range.end] : [0, frames - 1];
-                Object.assign(st.last, { format: v.format, range: which, codec: codecSel.value, quality: qualitySel.value, canvas: canvasBox.checked, colour: colourSel.value });
-                const [display, view] = colourSel.value ? colourSel.value.split("\u0001") : ["", ""];
+                const fmt = v.format;
+                const options = {};
+                if (F.bit_depths[fmt]) options.bit_depth = depthSel.value;
+                if (F.compressions[fmt]) options.compression = compSel.value;
+                if (F.codecs[fmt]) options.codec = codecSel.value;
+                if (F.quality_formats.includes(fmt)) options.quality = +qualityIn.value || F.quality_default;
+                if (F.compress_level_formats.includes(fmt)) options.compress_level = +levelIn.value;
+                const first_number = Math.max(0, Math.round(+firstIn.value || 0)), padding = Math.max(1, Math.min(9, Math.round(+padIn.value || 4)));
+                Object.assign(st.last, { format: fmt, range: which, canvas: canvasBox.checked, colour: colourSel.value,
+                    options: Object.assign({}, st.last.options, options), first_number, padding });
+                const float = isFloat(fmt);
+                const [display, view] = colourSel.value && !float ? colourSel.value.split("\u0001") : ["", ""];
                 if (ed.isDirty()) await ed.save();
                 if (ed.isDirty()) return { ok: false, message: "The comp could not be saved, so it was not rendered." };
                 const got = await this.compRender(rec.path, {
-                    format: v.format, name: v.name, context: v.context, first, last: lastF,
-                    codec: v.format === "mov" ? codecSel.value : undefined, quality: qualitySel.value,
-                    display: v.format === "exr" ? "" : display, view: v.format === "exr" ? "" : view,
+                    format: fmt, name: v.name, context: v.context, first, last: lastF, options, first_number, padding, display, view,
                 }, (done, total) => ui.progress(done, total, `Frame ${done} of ${total}`));
                 if (!got.ok) return got;
                 this.compLand(got.result, { canvas: canvasBox.checked });

@@ -730,7 +730,7 @@ export function createCompEditor(host, opts = {}) {
             box.style.left = n.x + "px"; box.style.top = n.y + "px";
             box.style.background = CAT_COLOR[t.cat] || "#ccc";
             box.append(el(doc, "span", "cp-nm", n.name || n.id));
-            const sub = n.type === "read" ? C.sourceName(n) : n.type === "merge" ? (n.operation || "over") : n.type === "roto" ? `${(n.shapes || []).length} shape(s)` : "";
+            const sub = n.type === "read" ? C.sourceName(n) : n.type === "merge" ? (n.operation || "over") : n.type === "roto" ? `${((n.roto && n.roto.layers) || []).length} shape(s)` : "";
             if (sub && sub !== (n.name || n.id)) box.append(el(doc, "span", "cp-sub", sub));
             t.inputs.forEach((label, i) => {
                 const p = el(doc, "div", "cp-port in"); p.dataset.port = String(i); p.dataset.id = n.id; p.style.left = portX(n, i) + "px";

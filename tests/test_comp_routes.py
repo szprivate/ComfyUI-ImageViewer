@@ -230,6 +230,46 @@ class CompRoutes(unittest.TestCase):
             self.assertTrue(one["result"]["path"].endswith("seq_v002.png"), one["result"]["path"])
         self.run_c(go)
 
+    def test_render_saves_as_the_send_node_saves(self):
+        """The node's formats and options (file_writer): the menu from comp_formats, frames numbered from the
+        first frame number at the padding, a JPEG's quality, an EXR's linear premultiplied values, a TIFF."""
+        from PIL import Image
+
+        async def go(c):
+            r = await c.get("/imageviewer/comp_formats")
+            f = await r.json()
+            FW = importlib.import_module(self.pkg + ".file_writer")
+            self.assertEqual(f["quality_default"], FW.QUALITY_DEFAULT)
+            self.assertEqual(f["bit_depths"], FW.BIT_DEPTHS)
+            for e in ("png", "exr", "jpg", "tiff"):
+                self.assertIn(e, f["stills"])
+            self.assertEqual(f["videos"], ["mp4", "mov", "webm"])
+            self.assertEqual(f["first_frame_default"], 1001)
+            path = os.path.join(self.dirs["output"], "saves.comp.json")
+            await self.j(c, "/imageviewer/comp", {"path": path, "comp": self.comp_with_plate(2)})
+            s = await self.render(c, path, format="jpg", first_number=1001, padding=4, options={"quality": 40})
+            self.assertEqual(s["state"], "done", s)
+            names = [os.path.basename(p) for p in s["result"]["paths"]]
+            self.assertTrue(names[0].endswith(".1001.jpg") and names[1].endswith(".1002.jpg"), names)
+            self.assertIn(".####.jpg", s["result"]["relative"])
+            low = os.path.getsize(s["result"]["paths"][0])
+            s = await self.render(c, path, format="jpg", first_number=7, padding=6, options={"quality": 100})
+            self.assertTrue(s["result"]["paths"][0].endswith(".000007.jpg"), s["result"]["paths"])
+            self.assertGreater(os.path.getsize(s["result"]["paths"][0]), low)
+            s = await self.render(c, path, format="exr", first=0, last=0)
+            self.assertEqual(s["state"], "done", s)
+            self.assertTrue(s["result"]["path"].endswith(".exr"))
+            with open(s["result"]["path"], "rb") as fh:
+                self.assertEqual(fh.read(4), b"\x76\x2f\x31\x01")      # OpenEXR's magic number
+            s = await self.render(c, path, format="tif", first=0, last=0)     # the old name still works
+            self.assertEqual(s["state"], "done", s)
+            self.assertTrue(s["result"]["path"].endswith(".tiff"), s["result"]["path"])
+            px = np.asarray(Image.open(s["result"]["path"]).convert("RGBA"))
+            self.assertEqual(tuple(px[5, 5]), (255, 0, 0, 255))
+            st, d = await self.j(c, "/imageviewer/comp_render", {"path": path, "format": "xyz"})
+            self.assertEqual(st, 400, d)
+        self.run_c(go)
+
     def test_a_pushed_comp_opens_in_a_comp_tab(self):
         async def go(c):
             path = os.path.join(self.dirs["output"], "pushed.comp.json")

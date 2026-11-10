@@ -535,6 +535,52 @@ class CompBrowserTests(unittest.TestCase):
         self.assertEqual(len(baked), 2)
         self.assertEqual(self.errors, [])
 
+    def test_render_dialog_offers_the_send_nodes_formats_and_options(self):
+        """Render…: the format menu and the per-format rows are the Send to Viewer node's (file_writer); a JPEG
+        sequence is numbered from the first frame number at the padding and written at the quality asked."""
+        pg = self.page()
+        self.new_comp(pg)
+        pg.evaluate("() => __panel.compSetFormat({ duration: 2 })")
+        pg.evaluate("""() => { window.__landed = []; __panel.exportLanded = async (p) => { window.__landed.push(p); };
+            __panel.previzNodeForRender = async () => 'image'; }""")
+        pg.evaluate("() => __panel.compRenderDialog()")
+        pg.wait_for_selector(".export-dlg .rd-box")
+        pg.wait_for_timeout(200)
+        fmts = pg.evaluate("() => Array.from(__panel.container.querySelector('.export-dlg .rd-box select').options).map((o) => o.value)")
+        for f in ("png", "exr", "tiff", "jpg", "mp4", "mov", "webm"):
+            self.assertIn(f, fmts)
+        shown = lambda: pg.evaluate("""() => Array.from(__panel.container.querySelectorAll('.export-dlg .rd-row'))
+            .filter((r) => r.style.display !== 'none' && r.querySelector('.rd-label'))
+            .map((r) => [r.querySelector('.rd-label').textContent, Array.from(r.querySelectorAll(':scope > .rd-inline'))
+                .filter((w) => w.style.display !== 'none').map((w) => w.firstChild.textContent)])""")
+        pick = lambda f: pg.evaluate("""(f) => { const s = __panel.container.querySelector('.export-dlg .rd-box select');
+            s.value = f; s.dispatchEvent(new Event('change')); }""", f)
+        pick("mov")
+        rows = dict(shown())
+        self.assertEqual(rows["Save as"], ["Quality", "Codec"])
+        self.assertNotIn("Numbered", rows)
+        pick("exr")
+        rows = dict(shown())
+        self.assertEqual(rows["Save as"], ["Bit depth", "Compression"])
+        self.assertIn("Numbered", rows)
+        self.assertNotIn("Colour", rows)
+        pick("jpg")
+        rows = dict(shown())
+        self.assertEqual(rows["Save as"], ["Quality"])
+        pg.wait_for_function("() => /\\.jpg$/.test(__panel.container.querySelector('.export-dlg .export-where').textContent)")
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-render-dialog.png"))
+        pg.evaluate("""() => { const nums = __panel.container.querySelectorAll('.export-dlg input[type=number]');
+            const [q, , first, pad] = nums; q.value = 55; first.value = 1001; pad.value = 4; }""")
+        pg.locator(".export-dlg .rd-box button", has_text="Render").last.click()
+        pg.wait_for_function("() => !__panel.container.querySelector('.export-dlg')", timeout=60000)
+        landed = pg.evaluate("() => window.__landed")
+        self.assertEqual(len(landed), 1)
+        names = [os.path.basename(p) for p in landed[0]]
+        self.assertTrue(names[0].endswith(".1001.jpg") and names[1].endswith(".1002.jpg"), names)
+        self.assertEqual(self.errors, [])
+
     def test_a_roto_shape_drawn_with_the_viewers_roto_tool_and_the_new_nodes_rendered_by_the_server(self):
         pg = self.page()
         path = self.new_comp(pg)

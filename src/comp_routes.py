@@ -13,7 +13,9 @@ and a render of its Output by the export rule.
     GET  /imageviewer/comp_lut?src=&dst= | ?src=&display=&view=
                                                           a transform baked for the preview: float32 LUT, gzip;
                                                           X-Lut-Size, X-Lut-Shaper (comp_ocio.bake)
-    POST /imageviewer/comp_render {path, format, codec?, quality?, first?, last?, name?, context?, display?, view?}
+    GET  /imageviewer/comp_formats - the Send to Viewer node's formats and per-format options (file_writer)
+    POST /imageviewer/comp_render {path, format, options? {bit_depth, compression, quality, compress_level, codec},
+                                   first_number?, padding?, first?, last?, name?, context?, display?, view?}
                                                           -> {job}; GET ?job= -> its state; POST {job, cancel}
     POST /imageviewer/comp_export_nuke {path, name?, context?, bake?}
                                                           -> {job}: a .nk by the export rule (kind "comp"), the nodes
@@ -246,7 +248,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
             frames = range(f0, f1 + 1)
             job["total"] = len(frames)
             if fmt in comp_io.VIDEO_FORMATS:
-                how = export_rules.video_settings(fmt, spec.get("codec"), spec.get("quality") or "high")
+                how = export_rules.video_settings(fmt, spec.get("codec"), comp_io.film_quality(spec.get("quality")))
                 t = export_rules.target("comp", name, fmt, out_dir, spec.get("context"))
                 writer = comp_io.VideoWriter(t["path"], how, comp["format"]["fps"], comp["format"]["width"],
                                              comp["format"]["height"], enc)
@@ -257,20 +259,23 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
                 result = {"kind": "image", "path": t["path"], "relative": t["relative"], "version": t["version"]}
             else:
                 seq = export_rules.sequence_target("comp", name, fmt, out_dir, spec.get("context"))
-                result = {"kind": "image", "isSequence": True, "seqDir": seq["folder"], "relative": seq["relative"],
-                          "version": seq["version"]}
+                pad, start = spec["padding"], spec["first_number"]
+                hashes = "#" * pad
+                result = {"kind": "image", "isSequence": True, "seqDir": seq["folder"], "version": seq["version"],
+                          "relative": seq["relative"].replace(".####.", f".{hashes}."), "firstNumber": start}
             for f, img in comp_io.render_frames(comp, frames, sources):
                 if job.get("cancel"):
                     raise InterruptedError
                 if writer is not None:
                     writer.add(img)
                 elif result.get("isSequence"):
-                    p = export_rules.sequence_frame(seq, f)
-                    comp_io.write_still(img, p, fmt, enc)
+                    # Numbered as the node numbers a sequence: from its first frame number, at its padding.
+                    p = os.path.join(seq["folder"], f"{seq['stem']}.{start + f - f0:0{pad}d}.{seq['ext']}")
+                    comp_io.write_still(img, p, fmt, enc, spec["options"])
                     result.setdefault("path", p)
                     result.setdefault("paths", []).append(p)
                 else:
-                    comp_io.write_still(img, result["path"], fmt, enc)
+                    comp_io.write_still(img, result["path"], fmt, enc, spec["options"])
                 job["done"] += 1
             if writer is not None:
                 writer.close(True)
@@ -311,8 +316,16 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
         if not comp["output"]:
             return err("the comp has no Output node", 422)
         fmt = str(body.get("format") or "png").lower()
-        if fmt not in comp_io.STILL_EXTS + comp_io.VIDEO_FORMATS:
-            return err(f"unknown format: {fmt}")
+        fmt = comp_io.ALIASES.get(fmt, fmt)
+        if fmt not in comp_io.still_formats() + list(comp_io.VIDEO_FORMATS):
+            return err(f"this ComfyUI cannot write {fmt}")
+        opts = body.get("options") if isinstance(body.get("options"), dict) else {}
+        options = {k: opts[k] for k in ("bit_depth", "compression", "quality", "compress_level", "codec") if k in opts}
+        try:
+            first_number = max(0, int(body.get("first_number", 1001)))
+            padding = max(1, min(9, int(body.get("padding", 4))))
+        except (TypeError, ValueError):
+            return err("first_number and padding are numbers")
         last = comp["format"]["frames"] - 1
         try:
             f0 = max(0, min(last, int(body.get("first", 0))))
@@ -320,7 +333,9 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
         except (TypeError, ValueError):
             return err("first and last are frame numbers")
         base = os.path.basename(path)[: -len(M.SUFFIX)]
-        spec = {"format": fmt, "first": f0, "last": f1, "codec": body.get("codec"), "quality": body.get("quality"),
+        spec = {"format": fmt, "first": f0, "last": f1, "options": options, "first_number": first_number,
+                "padding": padding, "codec": options.get("codec") or body.get("codec"),
+                "quality": options.get("quality", body.get("quality")),
                 "name": export_rules.slug(body.get("name") or base, "comp"), "context": body.get("context"),
                 "display": str(body.get("display") or ""), "view": str(body.get("view") or "")}
         for k in [k for k, j in jobs.items() if j.get("ended")][: max(0, len(jobs) - MAX_JOBS + 1)]:
@@ -436,7 +451,11 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
             "X-Lut-Size": str(size), "X-Lut-Shaper": shaper, "X-ImageViewer-Enc": "gzip", "Cache-Control": "max-age=60",
             "Access-Control-Expose-Headers": "X-Lut-Size, X-Lut-Shaper, X-ImageViewer-Enc"})
 
+    async def get_formats(request):
+        return web.json_response(comp_io.formats(), headers={"Cache-Control": "no-cache"})
+
     for prefix in ("/imageviewer", "/api/imageviewer"):
+        add("GET", f"{prefix}/comp_formats", get_formats)
         add("GET", f"{prefix}/comp_ocio", get_ocio)
         add("GET", f"{prefix}/comp_lut", get_lut)
         add("GET", f"{prefix}/comp", get_comp)
