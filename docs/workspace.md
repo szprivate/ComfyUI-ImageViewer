@@ -42,3 +42,5 @@ While a drawing tool is on, Parameters holds that tool's options.
 ## Settings
 
 **Settings ▸ ComfyUI Image Viewer** has the allowed folders and the defaults for playback, compare, History, the file browser, annotation, 3D and docking. They are kept per user, so they follow you across ComfyUI installs. Keys are in **Settings ▸ Keybinding** (see [Hotkeys](hotkeys.md)).
+
+**Colours** changes the viewer's look while it is open: the panels' backgrounds, their title bars, the tab bar and the lower bar, buttons, text, borders, the accent and the background behind the picture, and the Edit page's own colours (timeline, track lanes, ruler, track headers, Inspector section headers, video clips, clips on higher tracks, sound clips, selection, playhead). *Use the colours* decides whether the viewer's colours are used only while a cut's tab is up (the default) or everywhere; the Edit page's own colours are always used. A clip you coloured yourself keeps its colour. *Reset colours* puts them all back.

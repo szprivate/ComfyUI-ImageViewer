@@ -341,6 +341,7 @@ export const EditTimelineMixin = {
     // A cut's tab came on screen (EditPlayMixin.editPlayEnter): its panels come
     // up with it, the ones that were up when a cut's tab was last left.
     editTlTabShown(key, fresh) {
+        if (this._themeSync) this._themeSync(true);      // Settings → Colours, "On the Edit page"
         const want = this._editTlWanted();
         if (this.setPanelDocked) {
             for (const id of EDIT_PANELS) {
@@ -359,6 +360,7 @@ export const EditTimelineMixin = {
     // what they show belongs to a cut. `left`: a cut's tab was up until now, so
     // which panels were open is remembered for the next one.
     editTlTabHidden(left) {
+        if (this._themeSync) this._themeSync(false);
         if (!this.isPanelDocked || !this.setPanelDocked) return;
         if (left && this.isPanelFront) {
             this._editTlWanted().front = EDIT_PANELS.filter((id) => this.isPanelFront(id));

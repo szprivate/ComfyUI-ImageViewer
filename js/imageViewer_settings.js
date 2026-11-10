@@ -20,6 +20,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import * as S from "./imageViewer_scene3d.js";
+import { THEME, THEME_SCOPE_ID, makeThemeMixin } from "./imageViewer_theme.js";
 
 const P = "ImageViewer.";
 const CAT = "ComfyUI Image Viewer";
@@ -54,7 +55,10 @@ export const PREF = {
     renderBg:       P + "Previz.RenderBackground",
     renderColor:    P + "Previz.RenderColor",
     atlasMove:      P + "Experimental.AtlasCameraMove",
+    colourScope:    THEME_SCOPE_ID,
+    colourReset:    P + "Colours.Reset",
 };
+const THEME_IDS = new Set(THEME.map((t) => t.id));
 
 const DEFAULTS = {};          // id → defaultValue, filled from the table below
 
@@ -257,6 +261,29 @@ function defs() {
             id: PREF.dockLastSide, category: sec("Docking", "LastSide"),
             name: "Last docked side", type: "hidden", defaultValue: "right",
         },
+        // ── Colours (imageViewer_theme.js) ──
+        {
+            id: PREF.colourScope, category: sec("Colours", "Scope"),
+            name: "Use the colours",
+            tooltip: "The Edit page's own colours (timeline, tracks, clips) are always used. The viewer's " +
+                     "(panels, title bars, bars, buttons) can be used on the Edit page only - while a cut's " +
+                     "tab is up - or everywhere in the viewer.",
+            type: "combo", defaultValue: "edit",
+            options: opts([["edit", "On the Edit page"], ["all", "Everywhere in the viewer"]]),
+            sortOrder: 645, onChange: panelApply(PREF.colourScope),
+        },
+        ...THEME.map((t, i) => ({
+            id: t.id, category: sec("Colours", t.id.slice(P.length + "Colours.".length)),
+            name: t.name, type: "color", defaultValue: t.def,
+            ...(t.tip ? { tooltip: t.tip } : {}),
+            sortOrder: 644 - i, onChange: panelApply(t.id),
+        })),
+        {
+            id: PREF.colourReset, category: sec("Colours", "Reset"),
+            name: "Back to the viewer's own colours",
+            type: () => renderColourReset(),
+            defaultValue: "", sortOrder: 620,
+        },
         // ── Annotate ──
         {
             id: PREF.annotColor, category: sec("Annotate", "Color"),
@@ -365,7 +392,7 @@ export function viewerSettings(getPanel) {
     const list = defs();
     for (const d of list) {
         DEFAULTS[d.id] = d.defaultValue;
-        if (d.id === PREF.folders) continue;          // the server's list, not a setting
+        if (d.id === PREF.folders || d.id === PREF.colourReset) continue;   // not a setting: a list on the server, a button
         // Every change is also written to the per-user file (see below).
         const own = d.onChange;
         d.onChange = (value, old) => {
@@ -427,7 +454,7 @@ async function loadUserSettings() {
 
     const seed = {};
     for (const id of Object.keys(DEFAULTS)) {
-        if (id === PREF.folders || id === PREF.paintWorkflows) continue;
+        if (id === PREF.folders || id === PREF.paintWorkflows || id === PREF.colourReset) continue;
         const here = pref(id);
         if (id in stored) {
             // The user's file wins over what this ComfyUI user directory holds.
@@ -458,6 +485,7 @@ export async function applyStartupPrefs() {
 // A mixin like the others: one flat object of methods on the panel.
 
 export const PrefsMixin = {
+    ...makeThemeMixin(pref),
 
     /** The defaults the panel starts from, before any saved state is restored. */
     _applyStartupViewerPrefs() {
@@ -465,6 +493,7 @@ export const PrefsMixin = {
         this._setLoopUi(pref(PREF.loop));
         this.showOverlays = !!pref(PREF.showInfo);
         this.historyLimit = Number(pref(PREF.historyLimit)) || this.historyLimit;
+        this._themeApply();
     },
 
     _setLoopUi(mode) {
@@ -476,7 +505,10 @@ export const PrefsMixin = {
     /** A setting changed in Settings → ComfyUI Image Viewer while the panel is up. */
     applyViewerPref(id, value) {
         if (!this.container) return;              // still starting; it reads them itself
+        if (THEME_IDS.has(id)) return this._themeApply();
         switch (id) {
+            case PREF.colourScope:
+                return this._themeSync();
             case PREF.fps:
                 // A video or a previz shot has its own rate; it is the image
                 // sequences' default that changed.
@@ -545,6 +577,29 @@ export const PrefsMixin = {
         return ["vertical", "horizontal", "contact"].includes(m) ? m : "vertical";
     },
 };
+
+// ── Colours: one button that puts every colour back ──────────────────────────
+
+function renderColourReset() {
+    const note = h("span", { className: "imageviewer-roots-note" });
+    const btn = h("button", {
+        title: "Every colour above back to its default; the viewer then looks as it did before any was changed.",
+        onclick: async () => {
+            btn.disabled = true;
+            try {
+                for (const t of THEME) {
+                    if (pref(t.id) !== t.def) await app.extensionManager.setting.set(t.id, t.def);
+                }
+                note.textContent = "Done.";
+            } catch (e) {
+                note.textContent = `Not all were reset: ${e && e.message ? e.message : e}`;
+            }
+            btn.disabled = false;
+        },
+    }, "Reset colours");
+    return h("div", { className: "imageviewer-roots", style: "flex-direction:row; align-items:center; min-width:0" },
+             h("style", { textContent: CSS }), btn, note);
+}
 
 // ── The folder editor ────────────────────────────────────────────────────────
 //
