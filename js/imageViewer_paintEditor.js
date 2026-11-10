@@ -86,7 +86,9 @@ export const PAINT_KEYS = [
     ["Ctrl+G / Ctrl+Shift+G", "Group the picked layers / ungroup"],
     ["Ctrl+C / Ctrl+Shift+C / Ctrl+X", "Copy the selection (of the layer / merged) / cut"], ["Ctrl+V / Ctrl+Shift+V", "Paste as a new layer (in the middle / in place)"], ["Shift / Ctrl+click in Layers", "Pick a range / one more layer"],
     ["Ctrl+Alt+A", "Pick every layer"], ["Q", "Quick Mask: paint the selection (black takes away, white adds); Q again makes it the selection"],
-    ["Alt+click a mask's thumbnail", "See the mask on its own (again or Esc: back)"], ["Ctrl+click a thumbnail", "Its pixels (or the mask) as the selection (Ctrl+Shift: add, Ctrl+Alt: take away)"], ["Ctrl+Alt+G / Alt+click in Layers", "Clip the layer to the one under it (or release it)"], ["Arrows", "Nudge the layer (Move; Shift: 10 px)"],
+    ["Alt+click a mask's thumbnail / \\", "See the active layer's mask on the canvas and paint on it (again or Esc: the picture; \\ is # on a German keyboard)"],
+    ["Shift+\\", "The mask over the picture in red, or on its own"],
+    ["Drag a layer onto a layer's middle", "It becomes that layer's mask (its brightness; transparent is black). Alt: keep the layer too"], ["Ctrl+click a thumbnail", "Its pixels (or the mask) as the selection (Ctrl+Shift: add, Ctrl+Alt: take away)"], ["Ctrl+Alt+G / Alt+click in Layers", "Clip the layer to the one under it (or release it)"], ["Arrows", "Nudge the layer (Move; Shift: 10 px)"],
     ["Enter / Esc", "Apply / cancel the crop, the transform or the text"], ["Ctrl+S / Ctrl+Shift+S", "Save / save as"],
 ];
 
@@ -133,6 +135,10 @@ const STYLE = `
   background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0; box-shadow: 0 0 0 1px #000, 0 4px 24px rgba(0,0,0,.5); }
 .paint-world.pixelated canvas.paint-canvas, .paint-world.pixelated canvas.paint-tint { image-rendering: pixelated; }
 .paint-world canvas.paint-tint { position: absolute; left: 0; top: 0; pointer-events: none; display: none; }
+.paint-maskbar { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 6; display: none; align-items: center; gap: 6px;
+  padding: 3px 4px 3px 10px; background: rgba(24,24,28,.94); border: 1px solid #f60; border-radius: 4px; white-space: nowrap; cursor: default; max-width: calc(100% - 16px); }
+.paint-maskbar.on { display: flex; }
+.paint-maskbar b { color: #fff; overflow: hidden; text-overflow: ellipsis; } .paint-maskbar .note { color: #999; }
 .paint-world canvas.paint-preview { position: absolute; left: 0; top: 0; pointer-events: none; display: none; background-color: #fff;
   background-image: linear-gradient(45deg, #ccc 25%, transparent 25%), linear-gradient(-45deg, #ccc 25%, transparent 25%),
   linear-gradient(45deg, transparent 75%, #ccc 75%), linear-gradient(-45deg, transparent 75%, #ccc 75%);
@@ -163,6 +169,8 @@ const STYLE = `
 .paint-row.active { background: #3a2a1d; }
 .paint-row.drop-above { box-shadow: inset 0 2px 0 #f60; } .paint-row.drop-below { box-shadow: inset 0 -2px 0 #f60; }
 .paint-row.drop-inside { box-shadow: inset 0 0 0 2px #f60; }
+.paint-row.drop-mask { position: relative; box-shadow: inset 0 0 0 2px #2bd; background: rgba(34,187,221,.12); }
+.paint-row.drop-mask::after { content: "→ its mask"; position: absolute; right: 6px; top: 50%; transform: translateY(-50%); color: #2bd; font-size: 11px; pointer-events: none; }
 .paint-row.picked { background: #2d2620; }
 .paint-row.active.picked, .paint-row.active { background: #3a2a1d; }
 .paint-row.dimmed .nm, .paint-row.dimmed canvas { opacity: .45; }
@@ -390,7 +398,10 @@ class PaintEditor {
         this.tint = this.el("canvas", "paint-tint");
         this.world.append(this.canvas, this.tint);
         this.overlay = this.el("canvas", "paint-overlay");
-        this.wrap.append(this.world, this.overlay);
+        // The bar over the canvas while a mask is shown on it (setViewMask).
+        this.maskBar = this.el("div", "paint-maskbar");
+        for (const ev of ["pointerdown", "mousedown", "click", "dblclick", "wheel"]) this.maskBar.addEventListener(ev, (e) => e.stopPropagation());
+        this.wrap.append(this.world, this.overlay, this.maskBar);
         main.append(tools, this.wrap);
         this.status = this.el("div", "paint-status");
         this.box.append(bar, this.optBar, main, this.status);
@@ -553,11 +564,61 @@ class PaintEditor {
         this._status();
     }
 
-    /** A layer's mask shown on its own over the picture (null: the picture again). */
-    setViewMask(id) {
-        this.viewMask = id && this.doc && (this.doc.layers.find((L) => L.id === id) || {}).mask ? id : null;
+    /**
+     * A layer's mask shown on the canvas (null: the picture again), to look at and paint on: the mask is made the
+     * active part, so the brush, eraser, bucket, gradient, Fill and Del paint it and the canvas shows it as it
+     * changes. `mode`: "alone" (the mask in grey, white shows) or "overlay" (the picture with red where the mask
+     * hides); kept for the next time. Picking anything but this mask (a layer's pixels, another layer) ends it.
+     */
+    setViewMask(id, mode = null) {
+        if (mode) this.viewMaskMode = mode;
+        const L = id && this.doc ? this.doc.layers.find((x) => x.id === id) : null;
+        if (L && L.mask) {
+            if (this.quick) this.toggleQuickMask();
+            this.viewMask = L.id;
+            if (this.doc.active !== L.id || !this.editMask || this.picked.size !== 1) this.setActive(L.id, true);
+        } else this.viewMask = null;
         this._tintDraw();
+        this._maskBarDraw();
         this._status();
+        if (this.propsBox) this.refreshProps();
+    }
+
+    /** \ : the active layer's mask on the canvas, or the picture again; Shift+\ : over the picture / alone. */
+    toggleViewMask(switchMode = false) {
+        if (!this.doc) return;
+        if (this.viewMask && switchMode) return this.setViewMask(this.viewMask, this.viewMaskMode === "overlay" ? "alone" : "overlay");
+        if (this.viewMask) return this.setViewMask(null);
+        const L = this.active();
+        if (!L || !L.mask) { this._notify(L ? `${L.name} has no mask. Add one in Layers (or drag a layer onto it).` : "No layer.", "info"); return; }
+        this.setViewMask(L.id, switchMode ? "overlay" : null);
+    }
+
+    /** The mask on the canvas follows what is picked: another layer's mask picked shows that one, pixels end it. */
+    _viewMaskFollow() {
+        if (!this.viewMask || !this.doc) return;
+        const A = this.active();
+        const v = this.editMask && A && A.mask ? A.id : null;
+        if (v === this.viewMask) return;
+        this.viewMask = v;
+        this._tintDraw();
+        this._maskBarDraw();
+    }
+
+    _maskBarDraw() {
+        const b = this.maskBar;
+        if (!b) return;
+        const L = this.viewMask && this.doc ? this.doc.layers.find((x) => x.id === this.viewMask) : null;
+        b.classList.toggle("on", !!L);
+        if (!L) { b.replaceChildren(); return; }
+        const over = this.viewMaskMode === "overlay";
+        const mode = this.el("button", "paint-btn", { type: "button", text: over ? "Mask alone" : "Over the picture",
+            title: over ? "Show the mask on its own, in grey (Shift+\\)" : "Show the picture with red where the mask hides (Shift+\\)" });
+        mode.addEventListener("click", () => this.setViewMask(L.id, over ? "alone" : "overlay"));
+        const done = this.el("button", "paint-btn", { type: "button", text: "Show the picture", title: "Back to the picture (\\ or Esc); the mask stays as painted" });
+        done.addEventListener("click", () => this.setViewMask(null));
+        b.replaceChildren(this.el("b", "", { text: `Mask of ${L.name}` }),
+                          this.el("span", "note", { text: L.mask.enabled ? "painting it - white shows, black hides" : "painting it - switched off" }), mode, done);
     }
 
     _tintDraw(r = null) {
@@ -579,12 +640,13 @@ class PaintEditor {
                 im[o] = 255; im[o + 1] = 0; im[o + 2] = 0; im[o + 3] = Math.round((255 - m[i]) * 0.5);
             }
         } else {
-            const mk = L.mask, m = this._maskOf(L), dn = mk.density == null ? 1 : mk.density;
+            const mk = L.mask, m = this._maskOf(L), dn = mk.density == null ? 1 : mk.density, over = this.viewMaskMode === "overlay";
             for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
                 const mx = x - mk.x, my = y - mk.y;
                 const v0 = mx >= 0 && my >= 0 && mx < mk.w && my < mk.h ? m[my * mk.w + mx] : mk.fill;
                 const v = Math.round(255 - dn * (255 - v0)), o = (y * W + x) * 4;
-                im[o] = im[o + 1] = im[o + 2] = v; im[o + 3] = 255;
+                if (over) { im[o] = 255; im[o + 1] = 0; im[o + 2] = 0; im[o + 3] = Math.round((255 - v) * 0.5); }
+                else { im[o] = im[o + 1] = im[o + 2] = v; im[o + 3] = 255; }
             }
         }
         t.getContext("2d").putImageData(this._tintImg, 0, 0, x0, y0, x1 - x0, y1 - y0);
@@ -827,7 +889,7 @@ class PaintEditor {
             if (bb) parts.push(`selection ${bb.w} x ${bb.h}`);
             if (this.editMask) parts.push("<b>painting the mask</b>");
             if (this.quick) parts.push("<b>Quick Mask</b> (Q: back to the selection)");
-            if (this.viewMask) parts.push("<b>showing the mask</b> (Esc: the picture)");
+            if (this.viewMask) parts.push("<b>showing the mask</b> (\\ or Esc: the picture)");
             if (SOURCED.includes(this.tool)) parts.push(this.cloneSrc ? `clone from ${Math.round(this.cloneSrc.x)}, ${Math.round(this.cloneSrc.y)}` : "<b>Alt+click: where to take from</b>");
             if (this.tf) parts.push("<b>transforming</b> (Enter applies, Esc cancels)");
             const L = this.active();
@@ -954,6 +1016,8 @@ class PaintEditor {
         if (this.pathId && !this.curPath()) this._penReset();
         else if (this.pathPt != null && !(this.curPath() && this.curPath().pts[this.pathPt])) this.pathPt = null;
         if (this.viewMask && !(this.doc.layers.find((L) => L.id === this.viewMask) || {}).mask) this.viewMask = null;
+        this._viewMaskFollow();
+        this._maskBarDraw();
         if (this.quick && this.quick.m.length !== this.doc.w * this.doc.h) this.quick = null;
         this._dropBelow();
         this._resizeCanvas();
@@ -1079,6 +1143,7 @@ class PaintEditor {
         if (this.tf && this.tf.L.id !== id) this.tfCommit();
         this.doc.active = id;
         this.editMask = how ? keepMask : em;
+        this._viewMaskFollow();
         this.refreshPanels();
         this.drawOverlay();
         this._status();
@@ -1101,6 +1166,55 @@ class PaintEditor {
             for (const X of Ls) { delete X.mask; this.masks.delete(X.id); }
             if (this.viewMask && Ls.some((X) => X.id === this.viewMask)) this.viewMask = null;
             this.editMask = false;
+        });
+    }
+
+    /**
+     * A pixel layer made the mask of another layer (dragged onto its row's middle in Layers): the mask is the
+     * layer's brightness where it is opaque, black where it is transparent (its own mask, when on, counted in);
+     * the layer's opacity and blend are not. A mask the target had is replaced. The layer goes, unless `keep`
+     * (Alt held when dropped). One undo step; the new mask is what the tools paint after it.
+     */
+    layerToMask(srcId, targetId, { keep = false } = {}) {
+        const d = this.doc;
+        if (!d) return false;
+        const S = d.layers.find((x) => x.id === srcId), T = d.layers.find((x) => x.id === targetId);
+        if (!S || !T || S === T) return false;
+        const px = this.pix.get(S.id);
+        if (S.kind !== "pixel" || !px) { this._notify("Only a pixel layer becomes a mask.", "warn"); return false; }
+        if (T.locked) { this._notify(`${T.name} is locked.`, "warn"); return false; }
+        if (!keep && S.locked) { this._notify(`${S.name} is locked (Alt+drop keeps it and still makes the mask).`, "warn"); return false; }
+        return this.change(T.mask ? "Layer to mask (replaced)" : "Layer to mask", () => {
+            const W = d.w, H = d.h, m = new Uint8Array(W * H);
+            const sk = S.mask && S.mask.enabled !== false ? S.mask : null, sm = sk ? this._maskOf(S) : null;
+            const sdn = sk ? (sk.density == null ? 1 : sk.density) : 0;
+            for (let y = 0; y < S.h; y++) {
+                const dy = S.y + y;
+                if (dy < 0 || dy >= H) continue;
+                for (let x = 0; x < S.w; x++) {
+                    const dx = S.x + x;
+                    if (dx < 0 || dx >= W) continue;
+                    const o = (y * S.w + x) * 4;
+                    let a = px[o + 3] / 255;
+                    if (sk) {
+                        const mx = dx - sk.x, my = dy - sk.y;
+                        const v = mx >= 0 && my >= 0 && mx < sk.w && my < sk.h ? sm[my * sk.w + mx] : sk.fill;
+                        a *= 1 - sdn * (1 - v / 255);
+                    }
+                    m[dy * W + dx] = D.q8((0.299 * px[o] + 0.587 * px[o + 1] + 0.114 * px[o + 2]) / 255 * a);
+                }
+            }
+            T.mask = { enabled: true, x: 0, y: 0, w: W, h: H, fill: 0 };
+            this.masks.set(T.id, m);
+            if (!keep) {
+                d.layers = d.layers.filter((x) => x.id !== S.id);
+                this.pix.delete(S.id);
+                this.masks.delete(S.id);
+                if (this.viewMask === S.id) this.viewMask = null;
+            }
+            d.active = T.id;
+            this.picked = new Set([T.id]);
+            this.editMask = true;
         });
     }
 
@@ -2939,6 +3053,8 @@ class PaintEditor {
         const take = (fn) => { e.preventDefault(); fn(); return true; };
         if (this._pathToolKey(e, take)) return true;
         if (this._penKey(e, take)) return true;
+        // \ (AltGr+ß on a German keyboard, so Ctrl+Alt may come with it; or the key where US has it, # there).
+        if (k === "\\" || (e.code === "Backslash" && !ctrl && !e.altKey)) return take(() => this.toggleViewMask(e.shiftKey));
         if (ctrl) {
             if (lk === "z" && e.shiftKey) return take(() => this.redo());
             if (lk === "z" || lk === "y") return take(() => (lk === "y" ? this.redo() : this.undo()));
@@ -3111,6 +3227,7 @@ class PaintEditor {
                 ...adj, "-",
                 { label: "Add mask (reveal all)", disabled: !L || !!L.mask, run: () => this.addMask("all") },
                 { label: "Add mask from the selection", disabled: !L || !this.sel, run: () => this.addMask("selection") },
+                { label: this.viewMask ? "Show the picture (\\)" : "Show the mask on the canvas (\\)", disabled: !this.viewMask && (!L || !L.mask), run: () => this.toggleViewMask() },
                 { label: "Mask on / off", disabled: !L || !L.mask, run: () => this.maskCmd("toggle") },
                 { label: "Invert the mask", disabled: !L || !L.mask, run: () => this.maskCmd("invert") },
                 { label: "Apply the mask", disabled: !L || !L.mask || L.kind !== "pixel", run: () => this.maskCmd("apply") },
@@ -3435,7 +3552,7 @@ class PaintEditor {
             const mt = this.el("canvas", maskPicked ? "sel" : "", { width: 40, height: 30,
                     title: "The mask: click to paint on it (white shows, black hides); Shift+click switches it off" });
                 if (!L.mask.enabled) mt.style.opacity = ".35";
-                mt.title = "The mask: click to paint on it (white shows, black hides); Shift+click switches it off; Alt+click shows it alone; Ctrl+click selects it; Ctrl / Shift+click other rows picks their masks too; drag onto the trash to delete";
+                mt.title = "The mask: click to paint on it (white shows, black hides); Shift+click switches it off; Alt+click (or \\) shows it on the canvas to paint on; Ctrl+click selects it; Ctrl / Shift+click other rows picks their masks too; drag onto the trash to delete";
                 mt.draggable = true;
                 mt.addEventListener("dragstart", (e) => {
                     // The mask alone (or every picked mask when it is one of them) - not the layer.
@@ -3508,9 +3625,17 @@ class PaintEditor {
                 else { this.doc.active = L.id; this.refreshPanels(); }
                 if (this.host.menu) this.host.menu(this._layerMenu(), e.clientX, e.clientY, row);
             });
+            // One pixel layer dragged onto the middle of another (not a group) row: it becomes that layer's mask.
+            const asMask = () => {
+                const ids = this._rowDrag;
+                if (isG || !ids || ids.length !== 1 || ids[0] === L.id) return false;
+                const S = d.layers.find((x) => x.id === ids[0]);
+                return !!S && S.kind === "pixel";
+            };
             const zone = (e) => {
                 const r = row.getBoundingClientRect(), f = (e.clientY - r.top) / r.height;
                 if (isG && f > 0.25 && f < 0.75) return "inside";
+                if (f > 0.3 && f < 0.7 && asMask()) return "mask";
                 return f < 0.5 ? "above" : "below";
             };
             row.addEventListener("dragstart", (e) => {
@@ -3524,15 +3649,19 @@ class PaintEditor {
                 e.dataTransfer.dropEffect = "move";
                 const z = zone(e);
                 row.classList.toggle("drop-above", z === "above"); row.classList.toggle("drop-below", z === "below"); row.classList.toggle("drop-inside", z === "inside");
+                row.classList.toggle("drop-mask", z === "mask");
+                row.title = z === "mask" ? "Drop: it becomes this layer's mask (Alt: keep the layer too)" : "";
             });
-            row.addEventListener("dragleave", () => row.classList.remove("drop-above", "drop-below", "drop-inside"));
+            row.addEventListener("dragleave", () => { row.classList.remove("drop-above", "drop-below", "drop-inside", "drop-mask"); row.title = ""; });
             row.addEventListener("drop", (e) => {
                 e.preventDefault();
-                row.classList.remove("drop-above", "drop-below", "drop-inside");
+                row.classList.remove("drop-above", "drop-below", "drop-inside", "drop-mask");
+                row.title = "";
                 const ids = this._rowDrag;
+                let z = zone(e);
                 this._rowDrag = null;
                 if (!ids || ids.includes(L.id)) return;
-                let z = zone(e);
+                if (z === "mask") { this.layerToMask(ids[0], L.id, { keep: e.altKey }); return; }
                 // Below an open group's row is inside it, at its top (where the list shows it).
                 if (z === "below" && isG && !L.collapsed && (D.childIndexes(d).get(L.id) || []).length) z = "inside";
                 this.moveLayers(ids, L.id, z);
@@ -3635,7 +3764,7 @@ class PaintEditor {
         this._slider(s, "Feather (px)", mk.feather || 0, 0, 250, 0.5, (v) => live({ feather: v }), () => this.liveEnd("Mask feather"));
         const row = this.el("div", "paint-field");
         for (const [label, run] of [[mk.enabled ? "Switch off" : "Switch on", () => this.maskCmd("toggle")],
-                                     [this.viewMask === L.id ? "Show the picture" : "Show alone", () => { this.setViewMask(this.viewMask === L.id ? null : L.id); this.refreshProps(); }],
+                                     [this.viewMask === L.id ? "Show the picture" : "Show on the canvas", () => this.setViewMask(this.viewMask === L.id ? null : L.id)],
                                      ["Select it", () => this.loadSelection(L, true)], ["Invert", () => this.maskCmd("invert")]]) {
             const b = this.el("button", "paint-btn", { type: "button", text: label });
             b.addEventListener("click", run);
