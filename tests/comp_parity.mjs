@@ -16,7 +16,8 @@ for (const c of cases) {
     const { comp } = C.normalizeComp(c.comp);
     const pics = {};
     for (const [id, s] of Object.entries(c.sources || {})) pics[id] = C.decode8(Uint8ClampedArray.from(s.u8), s.w, s.h, !!s.linear);
-    const img = C.renderNode(comp, comp.output, c.frame, { scale: c.scale || 1, source: (n, f) => pics[`${n.id}@${f}`] || pics[n.id] || null });
+    const img = C.renderNode(comp, comp.output, c.frame, { scale: c.scale || 1, source: (n, f) => pics[`${n.id}@${f}`] || pics[n.id] || null,
+        ocio: c.ocio ? (spec) => (spec.dst === "matrixspace" ? { ...c.ocio.mat, data: Float32Array.from(c.ocio.mat.data) } : { ...c.ocio.lut, data: Float32Array.from(c.ocio.lut.data) }) : null });
     out.pictures.push({ w: img.w, h: img.h, data: Array.from(img.data) });
 }
 writeFileSync(outPath, JSON.stringify(out));

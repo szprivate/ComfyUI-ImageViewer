@@ -378,6 +378,9 @@ export const CompPanelMixin = {
             onComp: () => { if (this.activeTab === key) this._cpSyncBar(); },
             showProps: () => { if (this.setPanelDocked && !this.isPanelDocked("compProps")) this.setPanelDocked("compProps", true); else if (this.dockTabFront) this.dockTabFront("compProps"); },
             loadSource: (node, frame, how) => this._cpLoadSource(rec, node, frame, how),
+            ocioInfo: () => this._cpOcioInfo(),
+            ocioLut: (spec) => this._cpOcioLut(spec),
+            onDisplay: (v) => { try { localStorage.setItem("imageviewer.comp.display", v || ""); } catch (_) { /* not kept */ } },
             sourceInfo: (node) => this._cpSourceInfo(rec, node),
             pickFile: (cb) => this._cpPickFootage(cb),
             pathsOf: (items) => this.compPathsOf(items),
@@ -385,6 +388,7 @@ export const CompPanelMixin = {
             render: () => this.compRenderDialog(rec),
             notify: (m, sev) => notice(sev || "info", m),
         });
+        try { const v = localStorage.getItem("imageviewer.comp.display"); if (v) rec.editor.setDisplay(v); } catch (_) { /* none kept */ }
         const check = rec.editor.load(comp, rec.path);
         if (!check.ok) notice("warn", "The comp has problems", check.errors.slice(0, 3).join("; "));
         if (this.activeTab === key) { this._cpSyncBar(); this._cpSeat(rec); }
@@ -421,6 +425,29 @@ export const CompPanelMixin = {
         const info = await p;
         if (info.kind === "missing") setTimeout(() => st.infos.delete(key), 3000);   // it may be written yet
         return info;
+    },
+
+    /** The server's OCIO config (colourspaces, displays, views, the working space), asked once. */
+    _cpOcioInfo() {
+        const st = this._cpState();
+        if (!st.ocio) {
+            st.ocio = api.fetchApi("/imageviewer/comp_ocio").then((r) => (r.ok ? r.json() : { available: false, colorspaces: [], displays: [] }))
+                .catch(() => ({ available: false, colorspaces: [], displays: [] }));
+        }
+        return st.ocio;
+    },
+
+    /** An OCIO transform baked for the preview: {size, shaper, data} (a 3D LUT behind a shaper, or a matrix), or null. */
+    async _cpOcioLut(spec) {
+        const q = new URLSearchParams({ src: spec.src || "" });
+        if (spec.display) { q.set("display", spec.display); q.set("view", spec.view || "*"); } else q.set("dst", spec.dst || "");
+        const res = await api.fetchApi(`/imageviewer/comp_lut?${q}`);
+        if (!res.ok) return null;
+        let buf = await res.arrayBuffer();
+        if (res.headers.get("X-ImageViewer-Enc") === "gzip" || new Uint8Array(buf, 0, 2)[0] === 0x1f) {
+            buf = await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+        }
+        return { size: Number(res.headers.get("X-Lut-Size")) || 0, shaper: res.headers.get("X-Lut-Shaper") || "lin:0:1", data: new Float32Array(buf) };
     },
 
     async _cpLoadSource(rec, node, frame, how = {}) {
@@ -525,7 +552,8 @@ export const CompPanelMixin = {
         const last = st.last;
         const frames = ed.comp().format.frames;
         const range = this.playbackRange;
-        let rangeSel, codecSel, qualitySel, canvasBox;
+        let rangeSel, codecSel, qualitySel, canvasBox, colourSel;
+        const ocio = await this._cpOcioInfo();
         return openExportDialog(this.container, {
             title: "Render comp", kind: "comp", name: nameOf(rec.path), go: "Render",
             fixed: [
@@ -544,6 +572,10 @@ export const CompPanelMixin = {
                 codecSel = make.select([["prores", "ProRes 422"], ["h264", "H.264"]], last.codec || "prores");
                 qualitySel = make.select([["high", "High"], ["medium", "Medium"], ["low", "Low"]], last.quality || "high");
                 const film = make.row("Film", make.el("span", "rd-sub", "Codec"), codecSel, make.el("span", "rd-sub", "Quality"), qualitySel);
+                const cols = [["", "sRGB (plain)"]];
+                if (ocio && ocio.available) for (const d of ocio.displays) for (const v of d.views) cols.push([`${d.name}\u0001${v}`, `${d.name} · ${v}`]);
+                colourSel = make.select(cols, last.colour ?? ed.state.display ?? "");
+                const colour = make.row("Colour", colourSel, make.el("span", "rd-sub", "for PNG, TIFF and films; EXR stays linear"));
                 canvasBox = make.el("input");
                 canvasBox.type = "checkbox";
                 canvasBox.checked = last.canvas !== false;
@@ -555,6 +587,7 @@ export const CompPanelMixin = {
                     const sel = this.container.querySelector(".export-dlg .rd-box select");
                     const fmt = sel ? sel.value : "";
                     film.style.display = /^(mp4|mov|webm)$/.test(fmt) ? "" : "none";
+                    colour.style.display = fmt === "exr" || cols.length < 2 ? "none" : "";
                     for (const n of [codecSel, codecSel.previousSibling]) if (n) n.style.display = fmt === "mov" ? "" : "none";
                 };
                 requestAnimationFrame(() => {
@@ -562,19 +595,21 @@ export const CompPanelMixin = {
                     if (sel) sel.addEventListener("change", sync);
                     sync();
                 });
-                return [make.row("Frames", rangeSel), film, make.row("Lands in", make.el("span", "rd-sub", "The History"), lab)];
+                return [make.row("Frames", rangeSel), film, colour, make.row("Lands in", make.el("span", "rd-sub", "The History"), lab)];
             },
             note: "Rendered here in full float, at full size, whatever the preview's proxy is.",
             onExport: async (v, ui) => {
                 const which = rangeSel.value;
                 const [first, lastF] = which === "here" ? [ed.state.frame, ed.state.frame]
                     : which === "range" && range ? [range.start, range.end] : [0, frames - 1];
-                Object.assign(st.last, { format: v.format, range: which, codec: codecSel.value, quality: qualitySel.value, canvas: canvasBox.checked });
+                Object.assign(st.last, { format: v.format, range: which, codec: codecSel.value, quality: qualitySel.value, canvas: canvasBox.checked, colour: colourSel.value });
+                const [display, view] = colourSel.value ? colourSel.value.split("\u0001") : ["", ""];
                 if (ed.isDirty()) await ed.save();
                 if (ed.isDirty()) return { ok: false, message: "The comp could not be saved, so it was not rendered." };
                 const got = await this.compRender(rec.path, {
                     format: v.format, name: v.name, context: v.context, first, last: lastF,
                     codec: v.format === "mov" ? codecSel.value : undefined, quality: qualitySel.value,
+                    display: v.format === "exr" ? "" : display, view: v.format === "exr" ? "" : view,
                 }, (done, total) => ui.progress(done, total, `Frame ${done} of ${total}`));
                 if (!got.ok) return got;
                 this.compLand(got.result, { canvas: canvasBox.checked });

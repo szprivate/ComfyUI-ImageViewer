@@ -122,8 +122,20 @@ export function createCompEditor(host, opts = {}) {
     const st = {
         comp: null, path: "", dirty: false, hist: new Mo.History(), sel: [], view: null, frame: 0,
         proxy: "auto", alpha: false, zoom: { s: 1, x: 0, y: 0, fit: true }, graph: { s: 1, x: 40, y: 40, fitted: false },
-        layerSel: null, draw: null, pick: null,
+        layerSel: null, draw: null, pick: null, ocio: null, display: "",
     };
+    const luts = new Map();   // OCIO transforms baked for the preview, by ocioKey (null: the server could not)
+    const displaySpec = () => { if (!st.display) return null; const [display, view] = st.display.split("\u0001"); return { src: "", display, view }; };
+    async function needLuts(specs) {
+        if (!o.ocioLut) return;
+        await Promise.all(specs.map(async (spec) => {
+            const k = C.OC.ocioKey(spec);
+            if (luts.has(k)) return;
+            luts.set(k, null);
+            try { luts.set(k, await o.ocioLut(spec)); } catch (_) { luts.set(k, null); }
+        }));
+    }
+    if (o.ocioInfo) o.ocioInfo().then((info) => { st.ocio = info; if (st.comp) { renderBar(); renderProps(); } }).catch(() => {});
     const heavy = new Map();   // HEAVY nodes' results, kept between renders (renderNode's ctx.cache)
     let lastPics = null;
     let renderGen = 0, renderQueued = false, lastMs = 0, lastScale = 1;
@@ -191,12 +203,21 @@ export function createCompEditor(host, opts = {}) {
         proxy.title = "The picture's resolution while you work (the render is always full size)";
         proxy.onchange = () => { st.proxy = proxy.value; queueRender(); };
         const alpha = btn("A", "Show the alpha (A on the picture)", () => { st.alpha = !st.alpha; renderBar(); queueRender(); }, st.alpha ? "on" : "");
+        let disp = null;
+        if (st.ocio && st.ocio.available && st.ocio.displays.length) {
+            disp = el(doc, "select", "mg-btn");
+            disp.append(new Option("sRGB (plain)", ""));
+            for (const d of st.ocio.displays) for (const v of d.views) disp.append(new Option(`${d.name} · ${v}`, `${d.name}\u0001${v}`));
+            disp.value = st.display;
+            disp.title = `How the picture is shown: plain sRGB, or a display and view of the OCIO config (${st.ocio.source}; working space ${st.ocio.working})`;
+            disp.onchange = () => { st.display = disp.value; if (o.onDisplay) o.onDisplay(st.display); queueRender(); };
+        }
         bar.append(t,
             btn("Save", "Save the comp (Ctrl+S)", save, st.dirty ? "on" : ""),
             btn("Render…", "Render the comp's Output to a file", doRender),
             el(doc, "span", "mg-sep"),
             btn("↶", "Undo (Ctrl+Z)", undo), btn("↷", "Redo (Ctrl+Shift+Z)", redo),
-            el(doc, "span", "mg-sep"), proxy, alpha,
+            el(doc, "span", "mg-sep"), proxy, ...(disp ? [disp] : []), alpha,
             btn("Fit", "Fit the picture (F on the picture)", () => { st.zoom.fit = true; layoutCanvas(); }),
             el(doc, "span", "mg-info", `${fmt().width}×${fmt().height} · ${fmt().fps} fps · ${fmt().frames} f`));
     }
@@ -237,17 +258,28 @@ export function createCompEditor(host, opts = {}) {
                 const p = o.loadSource ? await o.loadSource(n, nf, { scale, format: fmt() }).catch(() => null) : null;
                 pics.set(`${n.id}@${nf}`, p);
             }));
+            const ds = displaySpec();
+            await needLuts(C.ocioNeeds(st.comp, f).map((x) => x.spec).concat(ds ? [ds] : []));
         } catch (_) { /* drawn without */ }
         if (gen !== renderGen || !st.comp) return;
         lastPics = { pics, scale, frame: f };
         const t0 = performance.now();
-        const img = C.renderNode(st.comp, id, f, { scale, source: (n, nf) => pics.get(`${n.id}@${nf}`) || null, cache: heavy });
+        const img = C.renderNode(st.comp, id, f, { scale, source: (n, nf) => pics.get(`${n.id}@${nf}`) || null, cache: heavy,
+            ocio: (spec) => luts.get(C.OC.ocioKey(spec)) || null });
         lastMs = Math.round(performance.now() - t0);
         lastScale = scale;
         if (canvas.width !== img.w || canvas.height !== img.h) { canvas.width = img.w; canvas.height = img.h; }
         const ctx = canvas.getContext("2d");
         const data = ctx.createImageData(img.w, img.h);
-        C.encode8(img, data.data, { alpha: st.alpha });
+        const dl = displaySpec() && luts.get(C.OC.ocioKey(displaySpec()));
+        if (dl && !st.alpha) {
+            // Through the OCIO display and view (the picture over black, as the plain sRGB shows it).
+            const d = img.data, out = data.data, q = (v) => (v <= 0 ? 0 : v >= 1 ? 255 : Math.round(v * 255));
+            for (let i = 0; i < d.length; i += 4) {
+                const c = C.OC.lutColor(dl, d[i], d[i + 1], d[i + 2]);
+                out[i] = q(c[0]); out[i + 1] = q(c[1]); out[i + 2] = q(c[2]); out[i + 3] = 255;
+            }
+        } else C.encode8(img, data.data, { alpha: st.alpha });
         ctx.putImageData(data, 0, 0);
         layoutCanvas();
         const v = node(id);
@@ -745,6 +777,29 @@ export function createCompEditor(host, opts = {}) {
             row.append(pick, numInput(c[3], 0.01, (v) => { if (v !== null) write([c[0], c[1], c[2], Math.max(0, Math.min(1, v))]); }, { min: 0, max: 1 }),
                 btn("⌖", "Take the colour from the picture (what goes into this node)", () => startPick(n.id, p), st.pick && st.pick.node === n.id ? "on" : ""));
             pick.title = "Colour (shown in sRGB, kept linear)";
+        } else if (d.kind === "ocio_cs" || d.kind === "ocio_display" || d.kind === "ocio_view") {
+            const sel = el(doc, "select");
+            const info = st.ocio && st.ocio.available ? st.ocio : null;
+            const value = String(cur ?? d.def ?? "");
+            const opt = (v, label) => sel.append(new Option(label, v));
+            if (d.kind === "ocio_cs") {
+                if (d.choices) for (const ch of d.choices) opt(ch, ch);
+                else opt("", `(working${info ? ": " + info.working : ""})`);
+                if (info) for (const c of info.colorspaces) opt(c.name, c.family ? `${c.family} / ${c.name}` : c.name);
+            } else if (d.kind === "ocio_display") {
+                opt("", `(default${info && info.default_display ? ": " + info.default_display : ""})`);
+                if (info) for (const x of info.displays) opt(x.name, x.name);
+            } else {
+                const dn = C.paramAt(n, "display", st.frame) || (info && info.default_display) || "";
+                const dd = info && info.displays.find((x) => x.name === dn);
+                opt("", `(default${dd ? ": " + dd.default : ""})`);
+                if (dd) for (const v of dd.views) opt(v, v);
+            }
+            if (![...sel.options].some((x) => x.value === value)) opt(value, `${value} (not in this config)`);
+            sel.value = value;
+            if (!info && d.kind !== "ocio_cs") sel.title = "No OpenColorIO on the server: the node passes its picture through";
+            sel.onchange = () => write(sel.value);
+            row.append(sel);
         } else if (d.kind === "enum") {
             const s = el(doc, "select");
             for (const ch of d.choices) s.append(new Option(String(ch), String(ch)));
@@ -1002,6 +1057,7 @@ export function createCompEditor(host, opts = {}) {
     return {
         parts,
         state: st,
+        setDisplay: (v) => { st.display = v || ""; renderBar(); queueRender(); },
         load(raw, path) {
             const { comp: c, errors } = C.normalizeComp(raw);
             st.comp = c; st.path = path || ""; st.dirty = false; st.hist = new Mo.History(); st.sel = []; st.view = null;

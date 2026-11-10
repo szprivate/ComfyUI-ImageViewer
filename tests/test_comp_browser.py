@@ -299,6 +299,27 @@ class CompBrowserTests(unittest.TestCase):
             pg.screenshot(path=os.path.join(SHOTS, "comp-colorcorrect.png"))
         self.assertEqual(self.errors, [])
 
+    def test_ocio_reads_nodes_and_the_viewers_display(self):
+        import importlib.util
+        if importlib.util.find_spec("PyOpenColorIO") is None:
+            self.skipTest("needs PyOpenColorIO")
+        pg = self.page()
+        self.new_comp(pg)
+        pg.wait_for_function(f"() => {self.ED}.state.ocio && {self.ED}.state.ocio.available", timeout=10000)
+        pg.evaluate(f"() => {{ {self.ED}.select(['Constant1']); {self.ED}.addNode('ocio_colorspace'); }}")
+        P = "__panel.compPropsPanel"
+        opts = pg.evaluate(f"() => Array.from({P}.querySelectorAll('select')[0].options).map((o) => o.value)")
+        self.assertIn("ACEScct", opts)
+        # A display and view of the config in the bar: the picture is drawn through its LUT.
+        bar = pg.evaluate(f"() => Array.from(__panel.container.querySelectorAll('select.mg-btn')).map((s) => s.options.length)")
+        self.assertTrue(any(n > 2 for n in bar), bar)
+        pg.evaluate(f"() => {{ const s = Array.from(__panel.container.querySelectorAll('select.mg-btn')).find((s) => s.options[0].text === 'sRGB (plain)'); s.value = s.options[1].value; s.dispatchEvent(new Event('change')); }}")
+        pg.wait_for_timeout(800)
+        self.assertTrue(pg.evaluate(f"() => !!{self.ED}.state.display"))
+        if SHOTS:
+            pg.screenshot(path=os.path.join(SHOTS, "comp-ocio.png"))
+        self.assertEqual(self.errors, [])
+
     def test_the_graph_in_comfyuis_bottom_panel(self):
         pg = self.page()
         self.new_comp(pg)

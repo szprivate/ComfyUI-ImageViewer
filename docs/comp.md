@@ -24,7 +24,7 @@ The **Node Graph** panel is up when a comp opens. The picture runs from top to b
 
 | Node | What it does |
 |---|---|
-| Read | A picture, a film or a numbered sequence. *Offset* slides it in time; *Colourspace* auto treats EXR and HDR as linear, everything else as sRGB; *Fit* lays a picture of another size into the comp |
+| Read | A picture, a film or a numbered sequence. *Offset* slides it in time; *Colourspace* auto treats EXR and HDR as linear, everything else as sRGB, or pick any colourspace of the OCIO config to have it converted into the working space; *Fit* lays a picture of another size into the comp |
 | Constant | A colour over the whole frame |
 | Roto | Shapes drawn on the picture. Without an input it is a white matte, with one it cuts its input out. Each shape adds or subtracts, has a feather and can be animated |
 | Merge | Lays A over B (or plus, multiply, screen, in, out, atop, mask, stencil, and the rest of Nuke's operations), with a mix and an optional mask input |
@@ -33,6 +33,8 @@ The **Node Graph** panel is up when a comp opens. The picture runs from top to b
 | Crop | Keeps a box of the picture, with a soft edge if you like |
 | Grade | Black and white point, lift, gain, multiply, offset, gamma, saturation, mix |
 | ColorCorrect | A colour corrector laid out like After Effects' Color Finesse. **HSL** (hue, saturation, brightness, contrast about a centre) and **RGB** (gain, gamma, pedestal, for all channels and for R, G, B) for Master, Highlights, Midtones and Shadows. **Hue offsets** has a colour wheel per range: drag to push that range towards a colour, double-click to reset. **Luma ranges** sets where shadows end and highlights start, with the curves drawn. **Secondaries** A and B each correct one colour (picked with ⌖), qualified by hue, saturation and luma. *View* shows a range or a secondary's matte as grey |
+| OCIOColorSpace | Converts from one colourspace of the OCIO config to another (empty: the working space) |
+| OCIODisplay | Applies a display and view of the OCIO config (for a look baked into the picture) |
 | Keyer | Chroma (a screen colour, picked from the picture with ⌖) or luma, with tolerance, softness and despill |
 | LumaKeyer | A matte from brightness (luminance, the largest channel, or one channel): transparent below *low*, solid from *low* + *low soft*, and transparent again past *high*. *Clip black* / *clip white* firm it up; *output* matte shows it as grey |
 | ChromaKeyer | A colour-difference key. Pick the screen with ⌖. *Screen gain* takes more as screen, *clip black* cleans the screen and *clip white* firms up the subject. *Despill* holds the screen's channel to the larger (or the mean) of the other two. *Output* gives the keyed picture, the matte, or despill only |
@@ -72,9 +74,13 @@ The picture fills the canvas. **Proxy** draws it smaller while you work (it is a
 
 ComfyUI's bottom panel (the strip under the canvas with the Terminal and the Logs) has a **Comp** tab. It shows the node graph of the comp the viewer is on, with play, step, the frame and a button that brings the viewer up. It is the same graph, moved there while the tab is open, so you can work on the comp beside your workflow. Drag the panel's edge up to give it room. **Show it here** in the viewer's Node Graph panel takes it back.
 
+## Colour (OCIO)
+
+Comp uses the same OpenColorIO config as the viewer: `$OCIO`, else OpenColorIO's built-in one. Its working space is the config's scene-linear space (ACEScg in the ACES configs). The bar's display menu shows the picture as plain sRGB, or through any display and view of the config; it is remembered. In the picture, OCIO transforms are drawn through a LUT made on the server (a matrix where the transform is one), so they are close but not exact. The render applies them exactly. Without OpenColorIO on the server, the OCIO nodes pass their picture through.
+
 ## Rendering
 
-**Render…** opens the export dialog: PNG, EXR (linear half float) or TIFF frames, or an MP4, MOV (ProRes or H.264) or WebM film; all frames, the in-out range, or just this frame. It saves the comp first and renders it on the server at full size, by the same arithmetic as the preview. The result lands where every export goes (versioned, in the shot's folder when there is one), joins the History, and is put on the ComfyUI canvas as a loader node, ready to wire into a workflow.
+**Render…** opens the export dialog: PNG, EXR (linear half float, the working space) or TIFF frames, or an MP4, MOV (ProRes or H.264) or WebM film, the 8-bit ones in plain sRGB or through a display and view of the OCIO config (*Colour*); all frames, the in-out range, or just this frame. It saves the comp first and renders it on the server at full size, by the same arithmetic as the preview. The result lands where every export goes (versioned, in the shot's folder when there is one), joins the History, and is put on the ComfyUI canvas as a loader node, ready to wire into a workflow.
 
 ## Clean room
 

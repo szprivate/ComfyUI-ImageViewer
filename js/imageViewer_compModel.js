@@ -28,6 +28,7 @@ import { valueAt } from "./imageViewer_mgScene.js";
 import * as O from "./imageViewer_compOps.js";
 import { ccParams, colorCorrectImage } from "./imageViewer_compColor.js";
 import * as K from "./imageViewer_compMatte.js";
+import * as OC from "./imageViewer_compOcio.js";
 import { blank, blurImage, boxesForGauss } from "./imageViewer_compOps.js";
 export { blank, blurImage, boxesForGauss };
 
@@ -46,7 +47,7 @@ export const NODE_TYPES = {
     read: { label: "Read", cat: "Image", inputs: [], params: {
         file: { kind: "file", def: "" },
         offset: { kind: "int", def: 0, help: "Frames to slide the footage by: +10 starts it 10 frames later" },
-        colorspace: { kind: "enum", def: "auto", choices: COLORSPACES, help: "auto: EXR / HDR are linear, the rest sRGB" },
+        colorspace: { kind: "ocio_cs", def: "auto", choices: COLORSPACES, help: "What the file holds. auto: EXR / HDR are linear, the rest sRGB; or any colourspace of the OCIO config, converted to the working space" },
         fit: { kind: "enum", def: "fit", choices: FITS, help: "How a picture of another size is laid into the comp" },
     } },
     constant: { label: "Constant", cat: "Image", inputs: [], params: {
@@ -74,6 +75,17 @@ export const NODE_TYPES = {
         mix: { kind: "num", def: 1, min: 0, max: 1, key: true, step: 0.01 },
     } },
     colorcorrect: { label: "ColorCorrect", cat: "Color", inputs: ["src"], params: ccParams() },
+    ocio_colorspace: { label: "OCIOColorSpace", cat: "Color", inputs: ["src"], params: {
+        in_space: { kind: "ocio_cs", def: "", help: "From (empty: the working space)" },
+        out_space: { kind: "ocio_cs", def: "", help: "To (empty: the working space)" },
+        unpremult: { kind: "enum", def: "on", choices: ["on", "off"], help: "Divide by the alpha first (and multiply again after)" },
+    } },
+    ocio_display: { label: "OCIODisplay", cat: "Color", inputs: ["src"], params: {
+        in_space: { kind: "ocio_cs", def: "", help: "What the picture is in (empty: the working space)" },
+        display: { kind: "ocio_display", def: "", help: "The display (empty: the config's default)" },
+        view: { kind: "ocio_view", def: "", help: "The view (empty: the display's default)" },
+        unpremult: { kind: "enum", def: "on", choices: ["on", "off"] },
+    } },
     blur: { label: "Blur", cat: "Filter", inputs: ["src"], params: {
         size: { kind: "num", def: 10, min: 0, max: 500, key: true, step: 0.5, help: "In pixels of the comp" },
     } },
@@ -184,7 +196,7 @@ export const NODE_TYPES = {
     } },
     output: { label: "Output", cat: "Other", inputs: ["src"], params: {} },
 };
-export const TYPE_ORDER = ["read", "constant", "roto", "merge", "copy", "transform", "crop", "grade", "colorcorrect", "keyer", "lumakeyer", "chromakeyer", "blur", "erode", "laplacian",
+export const TYPE_ORDER = ["read", "constant", "roto", "merge", "copy", "transform", "crop", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "keyer", "lumakeyer", "chromakeyer", "blur", "erode", "laplacian",
     "motionblur", "depthblur", "defocus", "shuffle", "channelmerge", "channelmath", "premult", "unpremult", "retime", "vectors", "output"];
 /** Nodes whose result is kept between renders (keyed by their whole upstream): they take long. */
 export const HEAVY = new Set(["vectors", "motionblur", "depthblur", "defocus"]);
@@ -386,7 +398,7 @@ export function nodeKeyFrames(node) {
 
 // ── the stack the Layers panel shows ─────────────────────────────────────────
 
-const CHAIN = new Set(["transform", "grade", "colorcorrect", "lumakeyer", "chromakeyer", "erode", "laplacian", "channelmerge", "channelmath", "blur", "crop", "shuffle", "premult", "unpremult", "retime", "keyer", "vectors",
+const CHAIN = new Set(["transform", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "lumakeyer", "chromakeyer", "erode", "laplacian", "channelmerge", "channelmath", "blur", "crop", "shuffle", "premult", "unpremult", "retime", "keyer", "vectors",
     "motionblur", "depthblur", "defocus", "copy"]);
 
 /**
@@ -659,6 +671,20 @@ export function upstreamKey(comp, id) {
  * look at other times (Retime, Vectors, MotionBlur without vectors) render their input at those frames.
  * Returns a picture of the comp's size x scale.
  */
+/** The OCIO transforms a comp's nodes ask for at frame f: [{spec, key}] (the page fetches their LUTs). */
+export function ocioNeeds(comp, frame) {
+    const out = new Map();
+    for (const n of comp.nodes || []) {
+        if (n.disable || (n.type !== "ocio_colorspace" && n.type !== "ocio_display")) continue;
+        const p = {};
+        for (const k of Object.keys(NODE_TYPES[n.type].params)) p[k] = paramAt(n, k, frame);
+        const spec = OC.ocioSpec(n.type, p);
+        out.set(OC.ocioKey(spec), spec);
+    }
+    return [...out].map(([key, spec]) => ({ key, spec }));
+}
+export { OC };
+
 export function renderNode(comp, id, frame, ctx) {
     const scale = ctx.scale || 1;
     const W = Math.max(1, Math.round(comp.format.width * scale)), H = Math.max(1, Math.round(comp.format.height * scale));
@@ -728,6 +754,13 @@ export function renderNode(comp, id, frame, ctx) {
             const p = {};
             for (const k of Object.keys(NODE_TYPES.channelmerge.params)) p[k] = paramAt(n, k, f);
             return K.channelMergeImage(run(n.inputs[0], f, d1), n.inputs[1] ? run(n.inputs[1], f, d1) : null, p);
+        }
+        case "ocio_colorspace": case "ocio_display": {
+            const p = {};
+            for (const k of Object.keys(NODE_TYPES[n.type].params)) p[k] = paramAt(n, k, f);
+            const src = run(n.inputs[0], f, d1);
+            const lut = ctx.ocio ? ctx.ocio(OC.ocioSpec(n.type, p)) : null;
+            return lut ? OC.ocioImage(src, (r, g, b) => OC.lutColor(lut, r, g, b), p.unpremult !== "off") : src;
         }
         case "colorcorrect": {
             const p = {};

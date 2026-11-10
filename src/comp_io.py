@@ -220,10 +220,17 @@ class Sources:
             return None
         cs = node.get("colorspace") or "auto"
         n = M.source_frame(node, info, frame)
+        ocs = cs not in M.COLORSPACES and _ocio_ok(cs)
         if kind == "video":
             v = self.videos.get(path) or self.videos.setdefault(path, _Video(path))
             u8 = v.frame(n)
-            return M.decode8(u8, linear=cs == "linear") if u8 is not None else None
+            if u8 is None:
+                return None
+            if ocs:
+                from . import comp_ocio
+                raw = u8.astype(np.float32) / 255
+                return M.from_float(comp_ocio.from_space(raw[..., :3], cs), raw[..., 3] if raw.shape[-1] > 3 else None, linear=True)
+            return M.decode8(u8, linear=cs == "linear")
         file = frame_path(path, n) if kind == "sequence" else path
         key = (file, cs)
         if key in self.stills:
@@ -231,8 +238,12 @@ class Sources:
         if not os.path.isfile(file):
             return None
         rgb, alpha = _read_float(file)
-        linear = cs == "linear" or (cs == "auto" and os.path.splitext(file)[1].lower() in LINEAR_EXTS)
-        img = M.from_float(rgb, alpha, linear=linear)
+        if ocs:
+            from . import comp_ocio
+            img = M.from_float(comp_ocio.from_space(rgb, cs), alpha, linear=True)
+        else:
+            linear = cs == "linear" or (cs == "auto" and os.path.splitext(file)[1].lower() in LINEAR_EXTS)
+            img = M.from_float(rgb, alpha, linear=linear)
         if kind == "still":
             self.stills[key] = img
         return img
@@ -243,15 +254,45 @@ class Sources:
         self.videos.clear()
 
 
+def _ocio_ok(cs):
+    try:
+        from . import comp_ocio
+        return comp_ocio.resolve({"src": cs, "dst": ""}) is not None
+    except Exception:  # noqa: BLE001 - no OCIO: the old rule (sRGB unless linear)
+        return False
+
+
+def ocio_hook():
+    """The OCIO nodes' transforms, exact (None without PyOpenColorIO: they pass their picture through)."""
+    try:
+        from . import comp_ocio
+        return comp_ocio.hook if comp_ocio.available() else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def display_encoder(display=None, view=None):
+    """How a render's 8-bit pictures are encoded: the comp's plain sRGB (None), or an OCIO display and view
+    from the working space - a function of straight [..., 3] colours giving display values 0..1."""
+    if not display:
+        return None
+    from . import comp_ocio
+    spec = {"src": "", "display": display, "view": view or "*"}
+    if comp_ocio.processor(spec) is None:
+        raise ValueError(f"the OCIO config has no display {display!r} / view {view!r}")
+    return lambda rgb: comp_ocio.apply_rgb(rgb, spec)
+
+
 def render_frames(comp, frames=None, sources=None, scale=1.0):
     """Yield ``(frame, picture)`` for the comp's Output at each frame (all of them by default)."""
     comp, _ = M.normalize(comp)
     if not comp["output"]:
         raise ValueError("the comp has no Output node")
     frames = list(range(comp["format"]["frames"])) if frames is None else list(frames)
+    hook = ocio_hook()
     try:
         for f in frames:
-            yield f, M.render_node(comp, comp["output"], f, sources, scale)
+            yield f, M.render_node(comp, comp["output"], f, sources, scale, ocio=hook)
     finally:
         if sources is not None:
             sources.close()
@@ -281,8 +322,16 @@ STILL_EXTS = ("png", "exr", "tif", "jpg")
 VIDEO_FORMATS = ("mp4", "mov", "webm")
 
 
-def write_still(img, path, ext):
-    """One picture to a file: PNG / TIFF 8-bit sRGB with alpha, JPEG over black, EXR linear half float."""
+def _encode(rgb, enc):
+    """Straight linear colours to display values 0..1: plain sRGB, or an OCIO display (``display_encoder``)."""
+    if enc is None:
+        return np.clip(M.linear_to_srgb(np.clip(rgb, 0, None)), 0, 1)
+    return np.clip(enc(rgb), 0, 1)
+
+
+def write_still(img, path, ext, enc=None):
+    """One picture to a file: PNG / TIFF 8-bit (sRGB, or ``enc``'s display) with alpha, JPEG over black, EXR
+    linear (the working space) half float."""
     ext = ext.lower()
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".part"
@@ -306,10 +355,14 @@ def write_still(img, path, ext):
         return path
     from PIL import Image
     if ext == "jpg":
-        u8 = (np.clip(M.linear_to_srgb(np.clip(img[..., :3], 0, None)), 0, 1) * 255 + 0.5).astype(np.uint8)
+        u8 = (_encode(img[..., :3], enc) * 255 + 0.5).astype(np.uint8)
         Image.fromarray(u8, "RGB").save(tmp, format="JPEG", quality=95)
     else:
-        rgb, a = M.to_straight(img, srgb=True)
+        if enc is None:
+            rgb, a = M.to_straight(img, srgb=True)
+        else:
+            rgb, a = M.to_straight(img, srgb=False)
+            rgb = _encode(rgb, enc)
         u8 = (np.clip(np.dstack([rgb, a]), 0, 1) * 255 + 0.5).astype(np.uint8)
         Image.fromarray(u8, "RGBA").save(tmp, format="PNG" if ext == "png" else "TIFF",
                                          **({"compress_level": 4} if ext == "png" else {"compression": "tiff_deflate"}))
@@ -321,8 +374,9 @@ class VideoWriter:
     """A film, frame by frame, by the export rule's encoder settings (``export_rules.video_settings``).
     Written beside the target and moved over at ``close``."""
 
-    def __init__(self, path, how, fps, width, height):
+    def __init__(self, path, how, fps, width, height, enc=None):
         import av
+        self.enc = enc
         from fractions import Fraction
         self.path, self.tmp = path, path + ".part." + how["container"]
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -336,7 +390,7 @@ class VideoWriter:
 
     def add(self, img):
         # A film has no alpha: the premultiplied picture is the picture over black.
-        rgb = np.clip(M.linear_to_srgb(np.clip(img[: self.h, : self.w, :3], 0, None)), 0, 1)
+        rgb = _encode(img[: self.h, : self.w, :3], self.enc)
         u8 = np.ascontiguousarray((rgb * 255 + 0.5).astype(np.uint8))
         frame = self.av.VideoFrame.from_ndarray(u8, format="rgb24")
         frame.pts = self.n

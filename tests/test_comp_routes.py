@@ -129,6 +129,51 @@ class CompRoutes(unittest.TestCase):
             self.assertAlmostEqual(float(px[5, 25, 3]), 0.0, places=3)   # the transparent half
         self.run_c(go)
 
+    @unittest.skipIf(importlib.util.find_spec("PyOpenColorIO") is None, "needs PyOpenColorIO")
+    def test_ocio_config_luts_reads_nodes_and_a_display_render(self):
+        from PIL import Image
+
+        async def go(c):
+            r = await c.get("/imageviewer/comp_ocio")
+            info = await r.json()
+            self.assertTrue(info["available"], info)
+            names = [x["name"] for x in info["colorspaces"]]
+            self.assertIn(info["working"], names)
+            self.assertTrue(info["displays"] and info["displays"][0]["views"])
+            # A linear-to-linear transform comes as a matrix, anything else as a 3D LUT behind a shaper.
+            lin = next(n for n in names if "linear" in n.lower() and "rec.709" in n.lower())
+            r = await c.get("/imageviewer/comp_lut", params={"src": "", "dst": lin})
+            self.assertEqual((r.status, r.headers["X-Lut-Shaper"]), (200, "matrix"))
+            self.assertEqual(len(np.frombuffer(gzip.decompress(await r.read()), "<f4")), 12)
+            r = await c.get("/imageviewer/comp_lut", params={"src": "", "display": "*", "view": "*"})
+            self.assertEqual(r.status, 200)
+            n = int(r.headers["X-Lut-Size"])
+            self.assertEqual(len(np.frombuffer(gzip.decompress(await r.read()), "<f4")), n * n * n * 3)
+            r = await c.get("/imageviewer/comp_lut", params={"src": "no such space", "dst": ""})
+            self.assertEqual(r.status, 404)
+            # A Read in a config colourspace is converted into the working space; an OCIOColorSpace node takes
+            # it back, so the render's plain sRGB shows the plate's red again.
+            srgb = next(n for n in names if n.lower().startswith("srgb encoded rec.709"))
+            comp = self.comp_with_plate(1)
+            comp["nodes"][1]["colorspace"] = srgb
+            comp["nodes"].insert(3, {"id": "OCIO1", "type": "ocio_colorspace", "inputs": ["Merge1"], "in_space": "", "out_space": lin})
+            comp["nodes"][-1]["inputs"] = ["OCIO1"]
+            comp["nodes"][0]["color"] = [0, 0, 0, 1]
+            path = os.path.join(self.dirs["output"], "ocio.comp.json")
+            st, _ = await self.j(c, "/imageviewer/comp", {"path": path, "comp": comp})
+            self.assertEqual(st, 200)
+            s = await self.render(c, path, format="png")
+            self.assertEqual(s["state"], "done", s)
+            px = np.asarray(Image.open(s["result"]["path"]).convert("RGBA")).astype(int)
+            self.assertLess(np.abs(px[5, 5] - [255, 0, 0, 255]).max(), 3, px[5, 5])
+            # The same comp encoded through the config's default display and view instead of plain sRGB.
+            d = info["displays"][0]
+            s = await self.render(c, path, format="png", display=d["name"], view=d["default"])
+            self.assertEqual(s["state"], "done", s)
+            s2 = await self.render(c, path, format="png", display="no such display", view="x")
+            self.assertEqual(s2["state"], "error")
+        self.run_c(go)
+
     def render(self, c, path, **spec):
         async def go():
             st, d = await self.j(c, "/imageviewer/comp_render", dict({"path": path}, **spec))

@@ -88,7 +88,7 @@ NODE_TYPES = {
     "read": {"inputs": [], "params": {
         "file": {"kind": "file", "def": ""},
         "offset": {"kind": "int", "def": 0},
-        "colorspace": {"kind": "enum", "def": "auto", "choices": COLORSPACES},
+        "colorspace": {"kind": "ocio_cs", "def": "auto", "choices": COLORSPACES},
         "fit": {"kind": "enum", "def": "fit", "choices": FITS},
     }},
     "constant": {"inputs": [], "params": {
@@ -105,6 +105,17 @@ NODE_TYPES = {
         "center": {"kind": "vec2", "def": None, "key": True},
     }},
     "colorcorrect": {"inputs": ["src"], "params": cc_params()},
+    "ocio_colorspace": {"inputs": ["src"], "params": {
+        "in_space": {"kind": "ocio_cs", "def": ""},
+        "out_space": {"kind": "ocio_cs", "def": ""},
+        "unpremult": {"kind": "enum", "def": "on", "choices": ["on", "off"]},
+    }},
+    "ocio_display": {"inputs": ["src"], "params": {
+        "in_space": {"kind": "ocio_cs", "def": ""},
+        "display": {"kind": "ocio_display", "def": ""},
+        "view": {"kind": "ocio_view", "def": ""},
+        "unpremult": {"kind": "enum", "def": "on", "choices": ["on", "off"]},
+    }},
     "lumakeyer": {"inputs": ["src"], "params": {
         "source": {"kind": "enum", "def": "luminance", "choices": LUMA_SOURCES},
         "low": {"kind": "num", "def": 0.2, "key": True},
@@ -1335,6 +1346,83 @@ def channel_math_image(img, p):
     return out.astype(np.float32)
 
 
+def parse_shaper(s):
+    parts = str(s or "lin:0:1").split(":")
+    kind = "log2" if parts[0] == "log2" else "lin"
+    try:
+        lo, hi = float(parts[1]), float(parts[2])
+    except (IndexError, ValueError):
+        lo, hi = 0.0, 1.0
+    return kind, lo, hi
+
+
+def shaper_forward(shaper, x):
+    kind, lo, hi = parse_shaper(shaper)
+    x = np.asarray(x, dtype=np.float64)
+    if kind == "log2":
+        u = np.where(x > 0, (np.log2(np.where(x > 0, x, 1.0)) - lo) / (hi - lo), 0.0)
+    else:
+        u = (x - lo) / (hi - lo)
+    return np.clip(u, 0, 1)
+
+
+def shaper_inverse(shaper, u):
+    kind, lo, hi = parse_shaper(shaper)
+    u = np.asarray(u, dtype=np.float64)
+    return np.power(2.0, lo + u * (hi - lo)) if kind == "log2" else lo + u * (hi - lo)
+
+
+def apply_lut(rgb, lut):
+    """The page's ``lutColor`` over [..., 3] straight colours: trilinear on the shaper's grid.
+    ``lut`` = (size, shaper, float32 [size^3 * 3], blue fastest)."""
+    N, shaper, L = lut
+    if shaper == "matrix":   # a plain 3 x 3 and offset: exact
+        m = [float(x) for x in np.asarray(L, dtype=np.float32)]
+        r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+        return np.stack([m[0] * r + m[1] * g + m[2] * b + m[9], m[3] * r + m[4] * g + m[5] * b + m[10],
+                         m[6] * r + m[7] * g + m[8] * b + m[11]], axis=-1)
+    L = np.asarray(L, dtype=np.float64).reshape(N, N, N, 3)
+    idx = []
+    for c in range(3):
+        u = shaper_forward(shaper, rgb[..., c]) * (N - 1)
+        i = np.clip(np.floor(u), 0, N - 2).astype(np.int64)
+        idx.append((i, u - i))
+    (ri, rf), (gi, gf), (bi, bf) = idx
+    out = np.empty(rgb.shape[:-1] + (3,))
+    for c in range(3):
+        def v(i, j, k):
+            return L[i, j, k, c]
+        b00 = v(ri, gi, bi) + (v(ri, gi, bi + 1) - v(ri, gi, bi)) * bf
+        b01 = v(ri, gi + 1, bi) + (v(ri, gi + 1, bi + 1) - v(ri, gi + 1, bi)) * bf
+        b10 = v(ri + 1, gi, bi) + (v(ri + 1, gi, bi + 1) - v(ri + 1, gi, bi)) * bf
+        b11 = v(ri + 1, gi + 1, bi) + (v(ri + 1, gi + 1, bi + 1) - v(ri + 1, gi + 1, bi)) * bf
+        g0 = b00 + (b01 - b00) * gf
+        g1 = b10 + (b11 - b10) * gf
+        out[..., c] = g0 + (g1 - g0) * rf
+    return out
+
+
+def ocio_image(img, fn, unpremult=True):
+    """The page's ``ocioImage``: ``fn`` over the straight colours (``unpremult``) or the numbers as they are."""
+    d = img.astype(np.float64)
+    a = d[..., 3]
+    out = d.copy()
+    if unpremult:
+        ok = a > 0
+        u = np.where(ok, a, 1.0)[..., None]
+        c = np.asarray(fn(d[..., :3] / u), dtype=np.float64)
+        out[..., :3] = np.where(ok[..., None], c * u, d[..., :3])
+    else:
+        out[..., :3] = np.asarray(fn(d[..., :3]), dtype=np.float64)
+    return out.astype(np.float32)
+
+
+def ocio_spec(t, p):
+    if t == "ocio_display":
+        return {"src": p.get("in_space") or "", "display": p.get("display") or "*", "view": p.get("view") or "*"}
+    return {"src": p.get("in_space") or "", "dst": p.get("out_space") or ""}
+
+
 def mix_images(a, b, t):
     x = a.astype(np.float64)
     return (x + (b.astype(np.float64) - x) * t).astype(np.float32)
@@ -1347,7 +1435,7 @@ def retime_frame(node, f):
     return start + (f - start) * speed + (node.get("offset") or 0)
 
 
-def render_node(comp, nid, frame, source=None, scale=1.0, memo=None):
+def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None):
     """The picture node ``nid`` makes at ``frame``; ``source(node, frame)`` gives a Read's pixels (a picture at
     their own size) or None. The page's ``renderNode``: nodes that look at other times render their input
     at those frames."""
@@ -1412,6 +1500,11 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None):
         if t == "channelmerge":
             return channel_merge_image(run(ins[0], f, d1), run(ins[1], f, d1) if ins[1] else None,
                                        P(n, f, NODE_TYPES["channelmerge"]["params"]))
+        if t in ("ocio_colorspace", "ocio_display"):
+            p = P(n, f, NODE_TYPES[t]["params"])
+            src = run(ins[0], f, d1)
+            fn = ocio(ocio_spec(t, p)) if ocio else None
+            return ocio_image(src, fn, p.get("unpremult") != "off") if fn else src
         if t == "colorcorrect":
             return color_correct_image(run(ins[0], f, d1), P(n, f, NODE_TYPES["colorcorrect"]["params"]))
         if t == "grade":

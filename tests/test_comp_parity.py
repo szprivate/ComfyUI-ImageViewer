@@ -80,6 +80,27 @@ def cases():
     return c
 
 
+def _synthetic_luts():
+    """A LUT and a matrix standing in for OCIO transforms (both twins apply them the same way)."""
+    n, shaper = 9, "log2:-8:3"
+    axis = M.shaper_inverse(shaper, np.linspace(0, 1, n))
+    R, G, B = np.meshgrid(axis, axis, axis, indexing="ij")
+    lut = np.stack([np.sqrt(R) * 0.8 + 0.1 * G, G * G / (1 + G) + 0.05 * B, 0.3 * R + 0.5 * np.log1p(B)], axis=-1)
+    mat = [0.6, 0.3, 0.1, 0.07, 0.9, 0.03, 0.02, 0.1, 0.88, 0.01, -0.02, 0.0]
+    return {"lut": {"size": n, "shaper": shaper, "data": lut.astype(np.float32).reshape(-1).tolist()},
+            "mat": {"size": 0, "shaper": "matrix", "data": mat}}
+
+
+OCIO_LUTS = _synthetic_luts()
+
+
+def ocio_hook(luts):
+    def hook(spec):
+        lut = luts["mat"] if spec.get("dst") == "matrixspace" else luts["lut"]
+        return lambda rgb: M.apply_lut(rgb, (lut["size"], lut["shaper"], np.asarray(lut["data"], np.float32)))
+    return hook
+
+
 def node(t, i, ins, **kw):
     return dict({"id": f"{t}{i}", "type": t, "inputs": ins}, **kw)
 
@@ -168,6 +189,12 @@ def new_node_cases(sources):
         c.append(one(node("channelmerge", 1, ["Read1", "Read2"], **kw)))
     # divide: on the same picture, where big quotients (float32's last place) do not swamp the comparison
     c.append(one(node("channelmerge", 1, ["Read1", "Read1"], operation="divide", a_channel="g", b_channel="luminance", output="rgba", mix=0.5)))
+    for kw in ({"in_space": "a", "out_space": "b"}, {"in_space": "a", "out_space": "matrixspace"},
+               {"in_space": "a", "out_space": "b", "unpremult": "off"}):
+        cs, srcs = one(node("ocio_colorspace", 1, ["Read1"], **kw))
+        c.append((dict(cs, ocio=OCIO_LUTS), srcs))
+    cs, srcs = one(node("ocio_display", 1, ["Read1"], display="sRGB", view="v"))
+    c.append((dict(cs, ocio=OCIO_LUTS), srcs))
     for op in ("add", "multiply", "power", "invert", "clamp", "min", "max", "abs", "threshold", "set"):
         c.append(one(node("channelmath", 1, ["Read1"], operation=op, value=0.4, channels="rgba" if op == "clamp" else "rgb", mix=0.8)))
     return c
@@ -182,7 +209,7 @@ class CompParity(unittest.TestCase):
         cls.cases = cases()
         payload = []
         for spec_, sources in cls.cases:
-            payload.append({"comp": spec_["comp"], "frame": spec_.get("frame", 0), "scale": spec_.get("scale", 1),
+            payload.append({"comp": spec_["comp"], "frame": spec_.get("frame", 0), "scale": spec_.get("scale", 1), "ocio": spec_.get("ocio"),
                             "sources": {k: {"w": int(v.shape[1]), "h": int(v.shape[0]), "u8": v.reshape(-1).tolist(),
                                             "linear": next((n.get("colorspace") == "linear" for n in spec_["comp"]["nodes"] if n["id"] == k.split("@")[0]), False)}
                                         for k, v in sources.items()}})
@@ -222,7 +249,8 @@ class CompParity(unittest.TestCase):
                     node = M.node_by_id(c, k.split("@")[0])
                     pics[k] = M.decode8(v, linear=(node or {}).get("colorspace") == "linear")
                 img = M.render_node(c, c["output"], spec_.get("frame", 0),
-                                    lambda n, f: pics.get(f"{n['id']}@{f}", pics.get(n["id"])), spec_.get("scale", 1))
+                                    lambda n, f: pics.get(f"{n['id']}@{f}", pics.get(n["id"])), spec_.get("scale", 1),
+                                    ocio=ocio_hook(spec_["ocio"]) if spec_.get("ocio") else None)
                 js = self.js["pictures"][i]
                 self.assertEqual((js["w"], js["h"]), (img.shape[1], img.shape[0]))
                 ref = np.asarray(js["data"], np.float32).reshape(img.shape)

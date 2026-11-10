@@ -9,7 +9,11 @@ and a render of its Output by the export rule.
     GET  /imageviewer/comp_pixels?file=&comp=&frame=&offset=&cs=&max=
                                                           one frame of a Read: float16 premultiplied linear
                                                           RGBA, gzip; X-Comp-W / -H (sent) and -OW / -OH (the file's)
-    POST /imageviewer/comp_render {path, format, codec?, quality?, first?, last?, name?, context?}
+    GET  /imageviewer/comp_ocio                          the OCIO config: {available, working, colorspaces, displays}
+    GET  /imageviewer/comp_lut?src=&dst= | ?src=&display=&view=
+                                                          a transform baked for the preview: float32 LUT, gzip;
+                                                          X-Lut-Size, X-Lut-Shaper (comp_ocio.bake)
+    POST /imageviewer/comp_render {path, format, codec?, quality?, first?, last?, name?, context?, display?, view?}
                                                           -> {job}; GET ?job= -> its state; POST {job, cancel}
 
 A Read's pixels go through the same reader as the render (``comp_io.Sources``), so the preview shows what the
@@ -24,6 +28,8 @@ import os
 import secrets
 import threading
 import time
+
+import numpy as np
 
 from . import comp_io
 from . import comp_model as M
@@ -195,13 +201,14 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
         name = spec["name"]
         writer = None
         try:
+            enc = comp_io.display_encoder(spec.get("display"), spec.get("view"))
             frames = range(f0, f1 + 1)
             job["total"] = len(frames)
             if fmt in comp_io.VIDEO_FORMATS:
                 how = export_rules.video_settings(fmt, spec.get("codec"), spec.get("quality") or "high")
                 t = export_rules.target("comp", name, fmt, out_dir, spec.get("context"))
                 writer = comp_io.VideoWriter(t["path"], how, comp["format"]["fps"], comp["format"]["width"],
-                                             comp["format"]["height"])
+                                             comp["format"]["height"], enc)
                 result = {"kind": "video", "path": t["path"], "relative": t["relative"], "version": t["version"],
                           "label": how["label"]}
             elif len(frames) == 1:
@@ -218,11 +225,11 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
                     writer.add(img)
                 elif result.get("isSequence"):
                     p = export_rules.sequence_frame(seq, f)
-                    comp_io.write_still(img, p, fmt)
+                    comp_io.write_still(img, p, fmt, enc)
                     result.setdefault("path", p)
                     result.setdefault("paths", []).append(p)
                 else:
-                    comp_io.write_still(img, result["path"], fmt)
+                    comp_io.write_still(img, result["path"], fmt, enc)
                 job["done"] += 1
             if writer is not None:
                 writer.close(True)
@@ -273,7 +280,8 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
             return err("first and last are frame numbers")
         base = os.path.basename(path)[: -len(M.SUFFIX)]
         spec = {"format": fmt, "first": f0, "last": f1, "codec": body.get("codec"), "quality": body.get("quality"),
-                "name": export_rules.slug(body.get("name") or base, "comp"), "context": body.get("context")}
+                "name": export_rules.slug(body.get("name") or base, "comp"), "context": body.get("context"),
+                "display": str(body.get("display") or ""), "view": str(body.get("view") or "")}
         for k in [k for k, j in jobs.items() if j.get("ended")][: max(0, len(jobs) - MAX_JOBS + 1)]:
             jobs.pop(k, None)
         jid = secrets.token_hex(8)
@@ -281,7 +289,39 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
         threading.Thread(target=run_job, args=(job, comp, path, spec), daemon=True, name=f"comp-render-{jid}").start()
         return web.json_response({"job": jid, "total": job["total"]})
 
+    # ── OpenColorIO ──────────────────────────────────────────────────────────
+
+    async def get_ocio(request):
+        from . import comp_ocio
+        try:
+            got = await off(comp_ocio.info)
+        except Exception as e:  # noqa: BLE001 - no OCIO here: said, not raised
+            got = {"available": False, "error": str(e), "colorspaces": [], "displays": []}
+        return web.json_response(got, headers={"Cache-Control": "no-cache"})
+
+    async def get_lut(request):
+        from . import comp_ocio
+        q = request.query
+        spec = {"src": q.get("src") or ""}
+        if q.get("display"):
+            spec.update(display=q.get("display"), view=q.get("view") or "*")
+        else:
+            spec["dst"] = q.get("dst") or ""
+        try:
+            got = await off(comp_ocio.bake, spec)
+        except Exception as e:  # noqa: BLE001
+            return err(e, 500)
+        if got is None:
+            return err("the OCIO config cannot do that transform (or OpenColorIO is not installed)", 404)
+        size, shaper, data = got
+        body = await off(lambda: gzip.compress(np.ascontiguousarray(data, dtype="<f4").tobytes(), 1))
+        return web.Response(body=body, content_type="application/octet-stream", headers={
+            "X-Lut-Size": str(size), "X-Lut-Shaper": shaper, "X-ImageViewer-Enc": "gzip", "Cache-Control": "max-age=60",
+            "Access-Control-Expose-Headers": "X-Lut-Size, X-Lut-Shaper, X-ImageViewer-Enc"})
+
     for prefix in ("/imageviewer", "/api/imageviewer"):
+        add("GET", f"{prefix}/comp_ocio", get_ocio)
+        add("GET", f"{prefix}/comp_lut", get_lut)
         add("GET", f"{prefix}/comp", get_comp)
         add("POST", f"{prefix}/comp", save_comp)
         add("POST", f"{prefix}/comp_new", new_comp)
