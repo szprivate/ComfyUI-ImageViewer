@@ -442,6 +442,7 @@ export const CompPanelMixin = {
             pathsOf: (items) => this.compPathsOf(items),
             save: (path, c) => this._cpSave(path, c),
             render: () => this.compRenderDialog(rec),
+            exportNuke: () => this.compNukeDialog(rec),
             notify: (m, sev) => notice(sev || "info", m),
         });
         try { const v = localStorage.getItem("imageviewer.comp.display"); if (v) rec.editor.setDisplay(v); } catch (_) { /* none kept */ }
@@ -672,6 +673,55 @@ export const CompPanelMixin = {
                 return { ok: true };
             },
         });
+    },
+
+    /** Export to Nuke…: the comp as a .nk by the export rule; the nodes Nuke has none for baked to EXR beside it. */
+    async compNukeDialog(rec = this._cpActive()) {
+        if (!rec || !rec.editor || !rec.path) return null;
+        const ed = rec.editor;
+        const st = this._cpState();
+        let bakeBox;
+        return openExportDialog(this.container, {
+            title: "Export to Nuke", kind: "comp", name: nameOf(rec.path), go: "Export",
+            fixed: [{ value: "nk", label: "Nuke script (.nk)" }],
+            values: { format: "nk" },
+            rows: (make) => {
+                bakeBox = make.el("input");
+                bakeBox.type = "checkbox";
+                bakeBox.checked = st.lastNuke?.bake !== false;
+                const lab = make.el("label", "rd-inline");
+                lab.append(bakeBox, make.el("span", "", " Bake what Nuke has no node for (EXR sequences beside the script)"));
+                return [make.row("Bake", lab)];
+            },
+            note: "Stock Nuke nodes where Nuke has one that does the same; the rest rendered here and read back. A README beside the script lists what differs.",
+            onExport: async (v, ui) => {
+                st.lastNuke = { bake: bakeBox.checked };
+                if (ed.isDirty()) await ed.save();
+                if (ed.isDirty()) return { ok: false, message: "The comp could not be saved, so it was not exported." };
+                const got = await this.compJob("/imageviewer/comp_export_nuke", { path: rec.path, name: v.name, context: v.context, bake: bakeBox.checked },
+                    (done, total) => ui.progress(done, total, total > 1 ? `Baking ${done} of ${total - 1}` : "Writing"));
+                if (!got.ok) return got;
+                const r = got.result;
+                notice("success", "Exported to Nuke", "output/" + (r.relative || baseOf(r.path)) + (r.baked.length ? ` · baked: ${r.baked.join(", ")}` : ""));
+                if (r.placeholder && r.placeholder.length) notice("warn", "Not in the script", `${r.placeholder.join(", ")}: written as NoOps`);
+                return { ok: true };
+            },
+        });
+    },
+
+    /** Start a job route and wait for it: {ok, result} or {ok: false, message}. */
+    async compJob(route, body, progress) {
+        const res = await api.fetchApi(route, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) return { ok: false, error: true, message: data.error || `HTTP ${res.status}` };
+        for (;;) {
+            await new Promise((r) => setTimeout(r, 300));
+            const r = await api.fetchApi(`${route}?job=${encodeURIComponent(data.job)}`);
+            const s = await r.json().catch(() => ({}));
+            if (progress) progress(s.done || 0, s.total || 1);
+            if (s.state === "done") return { ok: true, result: s.result };
+            if (s.state !== "running") return { ok: false, error: true, message: s.error || "The export stopped." };
+        }
     },
 
     /** Render the saved comp on the server and wait for it: {ok, result} or {ok: false, message}. */

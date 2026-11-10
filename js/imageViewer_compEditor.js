@@ -241,6 +241,7 @@ export function createCompEditor(host, opts = {}) {
         bar.append(t,
             btn("Save", "Save the comp (Ctrl+S)", save, st.dirty ? "on" : ""),
             btn("Render…", "Render the comp's Output to a file", doRender),
+            ...(o.exportNuke ? [btn("Nuke…", "Export to Nuke: the comp as a .nk script, what Nuke has no node for baked to EXR", doNuke)] : []),
             el(doc, "span", "mg-sep"),
             btn("↶", "Undo (Ctrl+Z)", undo), btn("↷", "Redo (Ctrl+Shift+Z)", redo),
             el(doc, "span", "mg-sep"), proxy, ...(disp ? [disp] : []), alpha,
@@ -257,6 +258,13 @@ export function createCompEditor(host, opts = {}) {
         if (st.dirty || !o.render) return;
         try { const r = await o.render(st.path); if (r && r.message) toast(r.message, "info"); }
         catch (e) { toast("Render failed: " + (e.message || e), "error"); }
+    }
+
+    async function doNuke() {
+        if (st.dirty) await save();
+        if (st.dirty || !o.exportNuke) return;
+        try { await o.exportNuke(st.path); }
+        catch (e) { toast("Export failed: " + (e.message || e), "error"); }
     }
 
     // ── the picture ──────────────────────────────────────────────────────────

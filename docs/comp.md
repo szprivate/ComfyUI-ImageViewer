@@ -85,6 +85,10 @@ Comp uses the same OpenColorIO config as the viewer: `$OCIO`, else OpenColorIO's
 
 **Render…** opens the export dialog: PNG, EXR (linear half float, the working space) or TIFF frames, or an MP4, MOV (ProRes or H.264) or WebM film, the 8-bit ones in plain sRGB or through a display and view of the OCIO config (*Colour*); all frames, the in-out range, or just this frame. It saves the comp first and renders it on the server at full size, by the same arithmetic as the preview. The result lands where every export goes (versioned, in the shot's folder when there is one), joins the History, and is put on the ComfyUI canvas as a loader node, ready to wire into a workflow.
 
+## Export to Nuke
+
+**Nuke…** in the bar writes the comp as a Nuke script (`.nk`), versioned like every export, with a README beside it. Nodes Nuke has a stock node for become that node: Read, Constant, Merge, Transform, Reformat, Crop, Grade, Blur, Shuffle, Copy, Premult, Unpremult, Retime (as TimeWarp), ChannelMath (as Expression), ChannelMerge, the OCIO nodes, Erode/Dilate and the Output (a Write of EXRs beside the script). Keyed values come along as a key on every frame. The rest (Glow, LensFlare, the keyers, Defocus, Vectors and so on) is **baked**: rendered here into an EXR sequence beside the script, and read back there by a Read in its place. Switch *Bake* off to get a NoOp in their place instead. The README names what is baked and what is close but not the same arithmetic (Nuke's filters are cubic, the comp's bilinear).
+
 ## Clean room
 
 Every node is written here from published maths and from how compositing tools behave: Porter–Duff and the usual Merge and Grade formulas, Horn–Schunck optical flow, colour-difference keying, box and Gaussian filters. No code, shaders or assets come from Nuke, After Effects, Color Finesse, Keylight, any other program, or GPL sources.

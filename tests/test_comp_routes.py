@@ -219,6 +219,35 @@ class CompRoutes(unittest.TestCase):
             self.assertIn(("imageviewer.comp.open", {"path": os.path.abspath(path)}), self.sent)
         self.run_c(go)
 
+    def test_export_to_nuke_writes_a_script_and_bakes_what_nuke_lacks(self):
+        async def go(c):
+            path = os.path.join(self.dirs["output"], "tonuke.comp.json")
+            comp = self.comp_with_plate(2)
+            comp["nodes"].insert(3, {"id": "Glow1", "type": "glow", "inputs": ["Merge1"]})
+            comp["nodes"][-1]["inputs"] = ["Glow1"]
+            await self.j(c, "/imageviewer/comp", {"path": path, "comp": comp})
+            st, d = await self.j(c, "/imageviewer/comp_export_nuke", {"path": path})
+            self.assertEqual(st, 200, d)
+            for _ in range(200):
+                r = await c.get("/imageviewer/comp_export_nuke", params={"job": d["job"]})
+                s = await r.json()
+                if s["state"] != "running":
+                    break
+                await asyncio.sleep(0.05)
+            self.assertEqual(s["state"], "done", s)
+            res = s["result"]
+            self.assertTrue(res["path"].endswith("tonuke_v001.nk"), res["path"])
+            text = open(res["path"], encoding="utf-8").read()
+            self.assertIn("Merge2 {", text)
+            self.assertIn("Write {", text)
+            self.assertEqual(res["baked"], ["Glow1"])
+            frames = sorted(os.listdir(os.path.join(res["bake_dir"], "Glow1")))
+            self.assertEqual(frames, ["Glow1.0000.exr", "Glow1.0001.exr"])
+            self.assertTrue(os.path.isfile(res["readme"]))
+            st, _ = await self.j(c, "/imageviewer/comp_export_nuke", {"path": os.path.join(self.outside, "x.comp.json")})
+            self.assertEqual(st, 403)
+        self.run_c(go)
+
     @unittest.skipIf(av is None, "needs PyAV")
     def test_render_a_film(self):
         async def go(c):

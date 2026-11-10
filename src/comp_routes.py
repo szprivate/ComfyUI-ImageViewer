@@ -15,6 +15,10 @@ and a render of its Output by the export rule.
                                                           X-Lut-Size, X-Lut-Shaper (comp_ocio.bake)
     POST /imageviewer/comp_render {path, format, codec?, quality?, first?, last?, name?, context?, display?, view?}
                                                           -> {job}; GET ?job= -> its state; POST {job, cancel}
+    POST /imageviewer/comp_export_nuke {path, name?, context?, bake?}
+                                                          -> {job}: a .nk by the export rule (kind "comp"), the nodes
+                                                          Nuke has none for baked to EXR beside it (comp_nuke);
+                                                          GET ?job= -> its state; POST {job, cancel}
 
 A Read's pixels go through the same reader as the render (``comp_io.Sources``), so the preview shows what the
 render will write - EXR and films included, which a browser cannot decode as floats. Everything that hands
@@ -32,6 +36,7 @@ import time
 import numpy as np
 
 from . import comp_io
+from . import comp_nuke
 from . import comp_model as M
 
 MAX_JOBS = 8
@@ -289,6 +294,82 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
         threading.Thread(target=run_job, args=(job, comp, path, spec), daemon=True, name=f"comp-render-{jid}").start()
         return web.json_response({"job": jid, "total": job["total"]})
 
+    # ── Export to Nuke ───────────────────────────────────────────────────────
+
+    def run_nuke(job, comp, comp_path, spec):
+        sources = comp_io.Sources(comp_path, allow=path_access.may_serve)
+        try:
+            t = export_rules.target("comp", spec["name"], "nk", folder_paths.get_output_directory(), spec.get("context"))
+            nk = t["path"]
+            stem = os.path.splitext(os.path.basename(nk))[0]
+            bake_dir = os.path.join(os.path.dirname(nk), f"{stem}_bake")
+            text, plan = comp_nuke.build(comp, info_of=sources.info, nk_path=nk, bake_dir=bake_dir, bake=spec["bake"])
+            frames = range(comp["format"]["frames"])
+            job["total"] = len(frames) * len(plan["bake"]) + 1
+            hook = comp_io.ocio_hook()
+            for f in frames:
+                memo = {}
+                for b in plan["bake"]:
+                    if job.get("cancel"):
+                        raise InterruptedError
+                    img = M.render_node(comp, b["id"], f, sources, 1.0, memo=memo, ocio=hook)
+                    comp_nuke.write_exr(img, os.path.join(b["dir"], f"{b['name']}.{f:04d}.exr"))
+                    job["done"] += 1
+            os.makedirs(os.path.dirname(nk), exist_ok=True)
+            tmp = nk + ".part"
+            with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(text)
+            os.replace(tmp, nk)
+            readme = os.path.join(os.path.dirname(nk), f"{stem}_README.txt")
+            with open(readme, "w", encoding="utf-8") as fh:
+                fh.write(comp_nuke.readme(plan, os.path.basename(nk)))
+            job["done"] += 1
+            job.update(state="done", result={"path": nk, "relative": t["relative"], "version": t["version"],
+                                             "readme": readme, "bake_dir": bake_dir if plan["bake"] else "",
+                                             "baked": [b["name"] for b in plan["bake"]], "notes": plan["notes"] + sources.notes,
+                                             "placeholder": plan["placeholder"]})
+        except InterruptedError:
+            job.update(state="stopped")
+        except Exception as e:  # noqa: BLE001 - said to the page
+            job.update(state="error", error=str(e))
+        finally:
+            sources.close()
+            job["ended"] = time.time()
+
+    async def export_nuke(request):
+        if request.method == "GET":
+            job = jobs.get(request.query.get("job") or "")
+            if not job:
+                return err("no such export", 404)
+            return web.json_response({k: job.get(k) for k in ("state", "done", "total", "result", "error")})
+        body = await body_of(request)
+        if body.get("job"):
+            job = jobs.get(str(body["job"]))
+            if not job:
+                return err("no such export", 404)
+            if body.get("cancel"):
+                job["cancel"] = True
+            return web.json_response({"ok": True})
+        path = abspath(body.get("path"))
+        why = comp_path_ok(path)
+        if why:
+            return err(why, 403 if M.is_comp_path(path) else 400)
+        try:
+            comp, _ = M.normalize(await off(comp_io.read, path))
+        except (ValueError, OSError) as e:
+            return err(e, 422)
+        if not comp["output"]:
+            return err("the comp has no Output node", 422)
+        base = os.path.basename(path)[: -len(M.SUFFIX)]
+        spec = {"name": export_rules.slug(body.get("name") or base, "comp"), "context": body.get("context"),
+                "bake": body.get("bake") is not False}
+        for k in [k for k, j in jobs.items() if j.get("ended")][: max(0, len(jobs) - MAX_JOBS + 1)]:
+            jobs.pop(k, None)
+        jid = secrets.token_hex(8)
+        job = jobs[jid] = {"state": "running", "done": 0, "total": 1}
+        threading.Thread(target=run_nuke, args=(job, comp, path, spec), daemon=True, name=f"comp-nuke-{jid}").start()
+        return web.json_response({"job": jid})
+
     # ── OpenColorIO ──────────────────────────────────────────────────────────
 
     async def get_ocio(request):
@@ -329,3 +410,5 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
         add("GET", f"{prefix}/comp_pixels", get_pixels)
         add("GET", f"{prefix}/comp_render", render)
         add("POST", f"{prefix}/comp_render", render)
+        add("GET", f"{prefix}/comp_export_nuke", export_nuke)
+        add("POST", f"{prefix}/comp_export_nuke", export_nuke)

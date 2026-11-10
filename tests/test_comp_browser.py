@@ -195,6 +195,27 @@ class CompBrowserTests(unittest.TestCase):
         self.assertEqual(st, {"graph": False, "mode": False})
         self.assertEqual(self.errors, [])
 
+    def test_export_to_nuke_from_the_bar(self):
+        pg = self.page()
+        self.new_comp(pg)
+        pg.evaluate(f"""() => {{ const e = {self.ED}; const c = e.comp(); const out = c.nodes.find((n) => n.type === 'output');
+            const g = e.addNode('glow'); g.inputs = [c.nodes.find((n) => n.type === 'constant').id]; out.inputs = [g.id]; e.refresh(); }}""")
+        pg.evaluate("() => __panel.compSetFormat({ duration: 2 })")
+        pg.locator(".mg-bar button", has_text="Nuke…").click()
+        pg.wait_for_selector(".export-dlg .rd-box")
+        pg.locator(".export-dlg .rd-box button", has_text="Export").last.click()
+        pg.wait_for_function("() => !__panel.container.querySelector('.export-dlg')", timeout=60000)
+        nk = [os.path.join(r, f) for r, _, fs in os.walk(self.dirs["output"]) for f in fs if f.endswith(".nk")]
+        self.assertEqual(len(nk), 1, nk)
+        with open(nk[0], encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("Write {", text)
+        self.assertIn("glow (baked)", text)
+        bake = os.path.splitext(nk[0])[0] + "_bake"
+        baked = [f for r, _, fs in os.walk(bake) for f in fs if f.endswith(".exr")]
+        self.assertEqual(len(baked), 2)
+        self.assertEqual(self.errors, [])
+
     def test_a_roto_shape_drawn_on_the_picture_and_the_new_nodes_rendered_by_the_server(self):
         pg = self.page()
         path = self.new_comp(pg)
