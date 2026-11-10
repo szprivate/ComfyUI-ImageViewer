@@ -54,6 +54,11 @@ const CSS = `
 .cp-plabel{position:absolute;top:-19px;font-size:10px;color:#bbb;pointer-events:none;transform:translateX(-50%)}
 .cp-marquee{position:absolute;border:1px dashed #ffcf3a;background:#ffcf3a14;pointer-events:none}
 .cp-hint{position:absolute;right:8px;bottom:6px;opacity:.45;pointer-events:none}
+.cp-tabmenu > div:last-child{max-height:320px;overflow:auto}
+.cp-gbar{position:absolute;left:6px;top:6px;display:flex;gap:4px;z-index:3}
+.cp-gbar .mg-btn{display:inline-flex;align-items:center;gap:4px}
+.cp-gbar svg{width:14px;height:14px}
+.comp-params .mg-prop label,.mg-side .mg-prop label{width:96px}
 .cp-tabmenu{position:absolute;z-index:30;background:#26262c;border:1px solid #44444c;border-radius:3px;padding:3px;box-shadow:0 4px 14px #0008;width:170px}
 .cp-tabmenu input{width:100%;background:#141418;border:1px solid #ff6a1a;color:#fff;font:inherit;padding:2px 4px}
 .cp-tabmenu div{padding:2px 6px;cursor:pointer}.cp-tabmenu div.on,.cp-tabmenu div:hover{background:#3a2a1c}
@@ -163,7 +168,16 @@ export function createCompEditor(host, opts = {}) {
     const world = el(doc, "div", "cp-world");
     const wires = svgEl(doc, "svg", { class: "cp-wires" });
     world.append(wires);
-    graph.append(world, el(doc, "div", "cp-hint", "Tab: add a node · 1 or 👁: show it in the picture · D: disable · Del: delete · F: frame all"));
+    graph.append(world, el(doc, "div", "cp-hint", "Tab or right-click: add a node · 1 or 👁: show it in the picture · D: disable · Del: delete · F: frame all"));
+    // In and out of a panel are buttons at its top left (Add here): the list Tab opens.
+    const gbar = el(doc, "div", "cp-gbar");
+    const addBtn = el(doc, "button", "mg-btn cp-add");
+    addBtn.title = "Add a node (Tab) - with a node selected, it goes in under it";
+    addBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/></svg><span>Add</span>';
+    addBtn.addEventListener("pointerdown", (e) => e.stopPropagation());
+    addBtn.addEventListener("click", (e) => { e.stopPropagation(); tabMenu({ left: 6, top: 34 }); });
+    gbar.append(addBtn);
+    graph.append(gbar);
     const props = el(doc, "div", "mg-side mg-part"); props.tabIndex = 0;
     const layers = el(doc, "div", "cp-layers"); layers.tabIndex = 0;
     const parts = { graph, props, layers };
@@ -742,7 +756,7 @@ export function createCompEditor(host, opts = {}) {
         i.onblur = () => fin(true);
         i.onpointerdown = (e) => e.stopPropagation();
     }
-    function tabMenu() {
+    function tabMenu(at) {
         closeMenus();
         const m = el(doc, "div", "cp-tabmenu");
         const inp = el(doc, "input"); inp.placeholder = "Add a node…";
@@ -763,7 +777,7 @@ export function createCompEditor(host, opts = {}) {
             else if (e.key === "Enter") { const t = ms[on]; closeMenus(); graph.focus(); if (t) addNodeAt(t, null); }
             else if (e.key === "Escape") { closeMenus(); graph.focus(); }
         };
-        m.style.left = Math.max(4, graph.clientWidth / 2 - 85) + "px"; m.style.top = "30px";
+        m.style.left = (at ? at.left : Math.max(4, graph.clientWidth / 2 - 85)) + "px"; m.style.top = (at ? at.top : 30) + "px";
         graph.append(m); menuEl = m;
         draw_(); inp.focus();
     }

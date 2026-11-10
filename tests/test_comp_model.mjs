@@ -334,3 +334,8 @@ test("reformat lays the picture into a box inside the comp: fit, turned, flopped
     comp.nodes[1].flip = "on";
     assert.equal(a(C.renderNode(comp, "Output1", 0, {}), 20, 17), 1);
 });
+
+test("no node parameter takes a name the node itself uses", () => {
+    const own = new Set(["id", "type", "name", "x", "y", "disable", "inputs", "tracks"]);
+    for (const [t, d] of Object.entries(C.NODE_TYPES)) for (const p of Object.keys(d.params)) assert.ok(!own.has(p), `${t}.${p}`);
+});

@@ -180,7 +180,7 @@ NODE_TYPES = {
         "size": {"kind": "num", "def": 10, "min": 0, "max": 500, "key": True},
     }},
     "reformat": {"inputs": ["src"], "params": {
-        "type": {"kind": "enum", "def": "to format", "choices": REFORMAT_TYPES},
+        "mode": {"kind": "enum", "def": "to format", "choices": REFORMAT_TYPES},
         "width": {"kind": "int", "def": None, "min": 1},
         "height": {"kind": "int", "def": None, "min": 1},
         "scale": {"kind": "num", "def": 1, "min": 0.01, "key": True},
@@ -599,7 +599,7 @@ def reformat_layout(node, frame, fmt, scale=1.0):
     """A Reformat's matrix (the comp-sized input laid into its box) and its box, in pixels of a picture ``scale``
     times the comp's size (the page's ``reformatLayout``)."""
     FW, FH = fmt["width"], fmt["height"]
-    if (param_at(node, "type", frame) or "to format") == "scale":
+    if (param_at(node, "mode", frame) or "to format") == "scale":
         k = param_at(node, "scale", frame) or 1
         bw, bh = FW * k, FH * k
     else:

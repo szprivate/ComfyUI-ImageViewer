@@ -360,11 +360,20 @@ class CompBrowserTests(unittest.TestCase):
         v = pg.evaluate(f"() => {ED}.comp().nodes.find((n) => n.type === 'lensflare').intensity")
         self.assertAlmostEqual(v, 1 + 0.05 * 12, places=5)
         self.assertTrue(pg.evaluate("() => (document.activeElement.shadowRoot ? document.activeElement.shadowRoot.activeElement : document.activeElement)?.dataset?.fk?.endsWith(':intensity')"))
+        # The Add button opens the node list: typed, Enter adds under the selected node.
+        pg.locator("button.cp-add").click()
+        pg.keyboard.type("refor")
+        pg.keyboard.press("Enter")
+        self.assertIn("reformat", pg.evaluate(f"() => {ED}.comp().nodes.map((n) => n.type)"))
+        pg.evaluate(f"() => {ED}.select([{ED}.comp().nodes.find((n) => n.type === 'lensflare').id])")
         # One panel: the Parameters panel shows the comp node, titled by it; ComfyUI's widgets step aside.
         st = pg.evaluate("""() => ({ mode: __panel.paramsPanel.classList.contains('comp-mode'), title: __panel.paramsTitle.innerText,
             inside: __panel.paramsPanel.contains(__panel.compPropsPanel), widgets: getComputedStyle(__panel.paramsPanel.querySelector('.params-content')).display,
             docked: !!(__panel._dockPanelEl && __panel._dockPanelEl('compProps')) })""")
         self.assertEqual(st, {"mode": True, "title": "LensFlare1", "inside": True, "widgets": "none", "docked": False})
+        if SHOTS:
+            pg.wait_for_timeout(400)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-handles.png"))
         self.assertEqual(self.errors, [])
 
     def test_ocio_reads_nodes_and_the_viewers_display(self):

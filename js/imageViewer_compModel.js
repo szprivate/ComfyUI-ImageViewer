@@ -131,10 +131,10 @@ export const NODE_TYPES = {
         size: { kind: "num", def: 10, min: 0, max: 500, key: true, step: 0.5, help: "In pixels of the comp" },
     } },
     reformat: { label: "Reformat", cat: "Transform", inputs: ["src"], params: {
-        type: { kind: "enum", def: "to format", choices: REFORMAT_TYPES, help: "to format: a box of width x height; scale: the comp's size times scale" },
+        mode: { kind: "enum", def: "to format", choices: REFORMAT_TYPES, help: "to format: a box of width x height; scale: the comp's size times scale" },
         width: { kind: "int", def: null, min: 1, help: "The box's width (empty: the comp's)" },
         height: { kind: "int", def: null, min: 1, help: "The box's height (empty: the comp's)" },
-        scale: { kind: "num", def: 1, min: 0.01, key: true, step: 0.05, help: "For type scale" },
+        scale: { kind: "num", def: 1, min: 0.01, key: true, step: 0.05, help: "For mode scale" },
         resize: { kind: "enum", def: "fit", choices: REFORMAT_RESIZE, help: "How the picture fills the box: fit inside, fill it, match its width or height, distort to it, or none (the same size)" },
         center: { kind: "enum", def: "on", choices: ["on", "off"], help: "off: the box sits at the bottom left" },
         flip: { kind: "enum", def: "off", choices: ["off", "on"], help: "Upside down" },
@@ -645,7 +645,7 @@ export function fitMatrix(sw, sh, w, h, fit, k = 1) {
 export function reformatLayout(node, frame, format, scale = 1) {
     const FW = format.width, FH = format.height;
     let bw, bh;
-    if ((paramAt(node, "type", frame) || "to format") === "scale") { const k = paramAt(node, "scale", frame) || 1; bw = FW * k; bh = FH * k; }
+    if ((paramAt(node, "mode", frame) || "to format") === "scale") { const k = paramAt(node, "scale", frame) || 1; bw = FW * k; bh = FH * k; }
     else { bw = paramAt(node, "width", frame) || FW; bh = paramAt(node, "height", frame) || FH; }
     const turn = paramAt(node, "turn", frame) === "on";
     const iw = turn ? FH : FW, ih = turn ? FW : FH;
