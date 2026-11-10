@@ -371,6 +371,36 @@ class CompBrowserTests(unittest.TestCase):
         pg.keyboard.press("Escape")
         self.assertEqual(self.errors, [])
 
+    def test_a_value_shows_while_it_is_typed_and_the_timeline_scrub_redraws(self):
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        pg.evaluate(f"() => {{ const e = {ED}; e.comp().nodes.find((n) => n.id === 'Constant1').color = [1, 1, 1, 1]; e.refresh(); e.select(['Constant1']); }}")
+        pg.wait_for_timeout(300)
+        alpha = pg.locator(".comp-params .mg-prop input[type=number]").first
+        alpha.click()
+        alpha.fill("")
+        pg.keyboard.type("0.25")                    # not committed: no Enter, the field keeps the focus
+        pg.wait_for_timeout(300)
+        px = self.pixel(pg, 0.5, 0.5)
+        self.assertLess(abs(px[0] - 137), 6, f"the picture shows the typed alpha at once (0.25 linear in sRGB): {px}")
+        pg.keyboard.press("Enter")
+        pg.wait_for_timeout(200)
+        self.assertEqual(pg.evaluate(f"() => {ED}.comp().nodes.find((n) => n.id === 'Constant1').color[3]"), 0.25)
+        pg.evaluate(f"() => {ED}.undo()")
+        self.assertEqual(pg.evaluate(f"() => {ED}.comp().nodes.find((n) => n.id === 'Constant1').color[3]"), 1, "one undo step back to before")
+        # The colour keyed over time; the viewer's timeline dragged: the picture follows while it moves.
+        pg.evaluate(f"""() => {{ const e = {ED}; const n = e.comp().nodes.find((x) => x.id === 'Constant1');
+            n.tracks = {{ color: [{{ f: 0, v: [0, 0, 0, 1] }}, {{ f: 40, v: [1, 1, 1, 1] }}] }}; e.refresh(); }}""")
+        seen = pg.evaluate(f"""async () => {{ const e = {ED}; const out = [];
+            for (let f = 0; f <= 40; f += 10) {{ __panel.setFrame(f); await new Promise((r) => setTimeout(r, 160));
+                const c = e.canvas; out.push(c.getContext('2d').getImageData(c.width >> 1, c.height >> 1, 1, 1).data[0]); }}
+            return out; }}""")
+        self.assertEqual(seen, sorted(seen), seen)
+        self.assertLess(seen[0], 20); self.assertGreater(seen[-1], 235)
+        self.assertGreaterEqual(len(set(seen)), 4, seen)
+        self.assertEqual(self.errors, [])
+
     def test_several_selected_nodes_of_one_type_change_together(self):
         pg = self.page()
         self.new_comp(pg)

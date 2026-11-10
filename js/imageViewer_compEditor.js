@@ -180,7 +180,8 @@ export function createCompEditor(host, opts = {}) {
     if (o.ocioInfo) o.ocioInfo().then((info) => { st.ocio = info; if (st.comp) { renderBar(); renderProps(); } }).catch(() => {});
     const heavy = new Map();   // HEAVY nodes' results, kept between renders (renderNode's ctx.cache)
     let lastPics = null;
-    let renderGen = 0, renderQueued = false, lastMs = 0, lastScale = 1;
+    let renderGen = 0, renderQueued = false, lastMs = 0, lastScale = 1, lastShown = 0, drawnGen = 0;
+    const SHOW_EVERY_MS = 120;
     const infos = new Map();
 
     installCompStyles(rootNode);
@@ -251,7 +252,30 @@ export function createCompEditor(host, opts = {}) {
         }
     }
 
+    // ── live edits: a value typed or picked shows at once, and becomes one undo step when it is committed ──
+    const liveBak = new Map();   // "<node id>\0<param>" -> the value and keys before the live edit began
+    const cloneV = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+    function liveWrite(n, p, d, fn) {
+        for (const t of targetsOf(n)) {
+            const k = t.id + "\0" + p;
+            if (!liveBak.has(k)) liveBak.set(k, { v: cloneV(t[p]), had: !!(t.tracks && p in t.tracks), tr: cloneV(t.tracks && t.tracks[p]) });
+        }
+        writeAll(n, p, d, fn);
+        queueRender(); renderOverlay();
+    }
+    /** Puts back what the live edits changed (before the committed change, or when they are dropped). */
+    function liveRestore() {
+        for (const [k, b] of liveBak) {
+            const [id, p] = k.split("\0");
+            const t = node(id);
+            if (!t) continue;
+            if (b.v === undefined) delete t[p]; else t[p] = b.v;
+            if (b.had) { t.tracks = t.tracks || {}; t.tracks[p] = b.tr; } else if (t.tracks) delete t.tracks[p];
+        }
+        liveBak.clear();
+    }
     function mutate(fn, { structure = true } = {}) {
+        if (liveBak.size) liveRestore();
         st.hist.push(st.comp);
         fn();
         st.dirty = true;
@@ -261,8 +285,8 @@ export function createCompEditor(host, opts = {}) {
         st.sel = st.sel.filter((id) => node(id));
         if (st.view && !node(st.view)) st.view = null;
     }
-    function undo() { const s = st.hist.undo(st.comp); if (s) { st.comp = s; st.dirty = true; fixSel(); refresh(); o.onComp && o.onComp(); } }
-    function redo() { const s = st.hist.redo(st.comp); if (s) { st.comp = s; st.dirty = true; fixSel(); refresh(); o.onComp && o.onComp(); } }
+    function undo() { if (liveBak.size) liveRestore(); const s = st.hist.undo(st.comp); if (s) { st.comp = s; st.dirty = true; fixSel(); refresh(); o.onComp && o.onComp(); } }
+    function redo() { if (liveBak.size) liveRestore(); const s = st.hist.redo(st.comp); if (s) { st.comp = s; st.dirty = true; fixSel(); refresh(); o.onComp && o.onComp(); } }
     function refresh(which = ["bar", "graph", "props", "layers", "stage"]) {
         if (!st.comp) return;
         if (which.includes("bar")) renderBar();
@@ -377,7 +401,11 @@ export function createCompEditor(host, opts = {}) {
             const ds = displaySpec();
             await needLuts(C.ocioNeeds(st.comp, f).map((x) => x.spec).concat(ds ? [ds] : []));
         } catch (_) { /* drawn without */ }
-        if (gen !== renderGen || !st.comp) return;
+        if (!st.comp) return;
+        // A newer picture was asked for while this one loaded (the timeline dragged, a value typed): it is drawn
+        // anyway when nothing was drawn for a while, so a scrub shows frames as it goes instead of only at its end.
+        if (gen < drawnGen || (gen !== renderGen && performance.now() - lastShown < SHOW_EVERY_MS)) return;
+        lastShown = performance.now(); drawnGen = gen;
         lastPics = { pics, scale, frame: f };
         const t0 = performance.now();
         const img = C.renderNode(st.comp, id, f, { scale, source: (n, nf) => pics.get(`${n.id}@${nf}`) || null, cache: heavy,
@@ -1050,6 +1078,13 @@ export function createCompEditor(host, opts = {}) {
         if (d.min !== undefined) i.min = d.min; if (d.max !== undefined) i.max = d.max;
         // A field taken out by the redraw its own change caused can report the change again on blur: once only.
         i.onchange = () => { if (i._sent === i.value) return; i._sent = i.value; const v = parseFloat(i.value); onCommit(Number.isFinite(v) ? v : null); };
+        // Typed: shown at once (d.onLive), committed as one undo step at Enter / leaving the field.
+        if (d.onLive) i.oninput = () => {
+            const v = parseFloat(i.value);
+            if (!Number.isFinite(v)) return;
+            const lo = d.min !== undefined ? d.min : -Infinity, hi = d.max !== undefined ? d.max : Infinity;
+            d.onLive(Math.min(hi, Math.max(lo, v)));
+        };
         // Up / Down: a step (Shift x10, Ctrl / Alt x0.1), and the field keeps the focus after the redraw.
         i.addEventListener("keydown", (e) => {
             if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
@@ -1128,7 +1163,8 @@ export function createCompEditor(host, opts = {}) {
                 const v = Math.round(Math.min(hi, Math.max(lo, (Number(old) || 0) + dl)) * 1e6) / 1e6;
                 return d.kind === "int" ? Math.round(v) : v;
             }), { structure: false }) : undefined;
-            const inp = mix(numInput(cur, d.kind === "int" ? 1 : d.step, (v) => { if (v !== null) write(d.kind === "int" ? Math.round(v) : v); }, Object.assign({}, d, { onStep })));
+            const onLive = (v) => liveWrite(n, p, d, () => (d.kind === "int" ? Math.round(v) : v));
+            const inp = mix(numInput(cur, d.kind === "int" ? 1 : d.step, (v) => { if (v !== null) write(d.kind === "int" ? Math.round(v) : v); }, Object.assign({}, d, { onStep, onLive })));
             inp.dataset.fk = `${n.id}:${p}`;
             scrubLabel(lab, inp, n.id, p, d);
             row.append(inp);
@@ -1142,15 +1178,17 @@ export function createCompEditor(host, opts = {}) {
                     if (v === null && mid && !animated) { mutate(() => { for (const t of tg) if (!Mo.isAnimated(t, p)) delete t[p]; }, { structure: false }); return; }
                     if (v === null) return;
                     mutate(() => writeAll(n, p, d, (old) => { const nv = (old || base).slice(); nv[a] = v; return nv; }), { structure: false });
-                }), { title: a ? "y (pixels, down)" : "x (pixels)", fk: `${n.id}:${p}:${a}` });
+                }, { onLive: (v) => liveWrite(n, p, d, (old) => { const nv = (old || base).slice(); nv[a] = v; return nv; }) }), { title: a ? "y (pixels, down)" : "x (pixels)", fk: `${n.id}:${p}:${a}` });
                 if (axisMixed(a)) { i.value = ""; i.placeholder = "—"; i.classList.add("cp-mixed"); }
                 row.append(i);
             }
         } else if (d.kind === "color") {
             const c = cur || [0, 0, 0, 1];
             const pick = el(doc, "input"); pick.type = "color"; pick.value = toHex(c);
+            pick.oninput = () => { const rgb = fromHex(pick.value, 1); liveWrite(n, p, d, (old) => [rgb[0], rgb[1], rgb[2], (old || c)[3]]); };
             pick.onchange = () => { const rgb = fromHex(pick.value, 1); mutate(() => writeAll(n, p, d, (old) => [rgb[0], rgb[1], rgb[2], (old || c)[3]]), { structure: false }); };
-            const alpha = numInput(c[3], 0.01, (v) => { if (v !== null) mutate(() => writeAll(n, p, d, (old) => { const o2 = old || c; return [o2[0], o2[1], o2[2], Math.max(0, Math.min(1, v))]; }), { structure: false }); }, { min: 0, max: 1 });
+            const alpha = numInput(c[3], 0.01, (v) => { if (v !== null) mutate(() => writeAll(n, p, d, (old) => { const o2 = old || c; return [o2[0], o2[1], o2[2], Math.max(0, Math.min(1, v))]; }), { structure: false }); },
+                { min: 0, max: 1, onLive: (v) => liveWrite(n, p, d, (old) => { const o2 = old || c; return [o2[0], o2[1], o2[2], v]; }) });
             if (tg.some((t) => (C.paramAt(t, p, st.frame) || c)[3] !== c[3])) { alpha.value = ""; alpha.placeholder = "—"; alpha.classList.add("cp-mixed"); }
             row.append(pick, alpha,
                 btn("⌖", "Take the colour from the picture (what goes into this node)", () => startPick(n.id, p), st.pick && st.pick.node === n.id ? "on" : ""));
