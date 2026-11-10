@@ -7,7 +7,7 @@
 - **Image Viewer** in ComfyUI's top bar shows and hides it.
 - **Floating**: drag the tab bar's empty area to move it, its edges to resize it.
 - **Docked**: the **Dock** button (or <kbd>Shift</kbd>+<kbd>D</kbd>) makes it a panel beside the canvas, left, right or bottom.
-- **Undocked**: the **Undock** button opens it in its own browser window, for a second screen. Every key works there. Allow pop-ups if nothing happens.
+- **Undocked**: the **Undock** button opens it in its own browser window, for a second screen. Every key works there. Allow pop-ups if nothing happens. A browser won't let that window be dragged into another one; with *Settings > ComfyUI Image Viewer > Docking > Undock opens the viewer in* set to **A browser tab** it opens as a tab instead, which can be dragged into any window of the browser like any other tab.
 
 ## Panels
 

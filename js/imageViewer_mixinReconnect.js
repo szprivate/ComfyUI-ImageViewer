@@ -29,11 +29,18 @@
 //    close — by itself if pop-ups are allowed, else from one click on the
 //    "Reconnect" button it puts up.
 import { api } from "../../scripts/api.js";
+import { PREF, pref } from "./imageViewer_settings.js";
 
 // The popout is opened by name. That is what lets a reloaded tab find the
 // window it left behind: window.open("", name) hands back the existing window
 // instead of opening another one.
 export const POPOUT_NAME = "imageViewer";
+
+// The page the viewer moves into: an empty page of the viewer's own, so the
+// address bar names the viewer rather than saying about:blank. It is opened by
+// name as about:blank first (that is what finds a window a reloaded tab left
+// behind) and then sent here by _freshPopoutDocument.
+export const POPOUT_URL = new URL("./imageViewer_popout.html", import.meta.url).href;
 
 const CHANNEL = "comfyui-image-viewer-popout";
 
@@ -71,7 +78,11 @@ const TEXT = {
 
 // window.open features that put a new popout where `rect` says the old one was
 // (inner size, screen position). Chrome may still keep it on the opener's screen.
-function _popoutFeatures(rect) {
+// No features at all opens a tab instead of a window (Settings: Undock opens
+// the viewer in), which the browser lets the user drag into any other window;
+// a sized window has no tab strip, so it can't be.
+export function _popoutFeatures(rect) {
+    if (pref(PREF.undockAs) === "tab") return "";
     const r = rect || {};
     const size = (v, d) => (Number.isFinite(v) && v > 100 ? Math.round(v) : d);
     const parts = [`width=${size(r.w, 800)}`, `height=${size(r.h, 600)}`];
@@ -215,9 +226,14 @@ function popoutWatchdog(cfg) {
     setInterval(tick, cfg.intervalMs);
 }
 
-function _isBlankPopout(win) {
+// A window with nothing of the viewer's in it yet: one window.open has just
+// made (about:blank), or the viewer's own empty page. `page` asks for the latter.
+function _isBlankPopout(win, page) {
     try {
-        return win.location.href === "about:blank" && !win.__imageViewerWatchdog &&
+        const href = win.location.href;
+        const ok = page ? href === POPOUT_URL : (href === "about:blank" || href === POPOUT_URL);
+        return ok && !win.__imageViewerWatchdog &&
+               (href === "about:blank" || win.document.readyState === "complete") &&
                !!win.document.body && win.document.body.childElementCount === 0;
     } catch (e) {
         return false;
@@ -310,14 +326,43 @@ export const ReconnectMixin = {
         }
     },
 
-    // Make `win` an empty about:blank the viewer can move into. A window found
+    // Make `win` the viewer's empty page (POPOUT_URL) for it to move into. A window found
     // by name may still hold a viewer: the frozen one a reloaded tab left
     // behind. That is cleared by loading a fresh document rather than by
     // emptying the DOM, because the old viewer also left listeners and
     // observers on the window itself, and each of them keeps the dead tab's
     // whole frontend in memory for as long as the window stays open.
     async _freshPopoutDocument(win) {
-        if (_isBlankPopout(win)) return true;
+        if (!_isBlankPopout(win, true)) {
+            let old = null;
+            try { old = win.document; } catch (e) {}
+            try { win.location.replace(POPOUT_URL); } catch (e) { return false; }
+            const started = Date.now();
+            let ready = false;
+            while (!ready && Date.now() - started < 5000) {
+                await new Promise(r => setTimeout(r, 10));
+                if (win.closed) return false;
+                try {
+                    ready = win.document !== old && win.location.href === POPOUT_URL &&
+                            win.document.readyState === "complete" && !!win.document.body;
+                } catch (e) {}
+            }
+            // An older server that doesn't have the page answers 404 with a
+            // page of its own: take about:blank then, as before.
+            if (!ready || !_isBlankPopout(win, true)) return this._blankPopoutDocument(win);
+        }
+        // about:blank took the opener's base URL; this page's base is its own
+        // folder. The viewer's relative URLs (a picture, a stylesheet's url())
+        // must resolve as they did in the ComfyUI page.
+        try {
+            const base = win.document.createElement("base");
+            base.href = document.baseURI;
+            win.document.head.prepend(base);
+        } catch (e) {}
+        return true;
+    },
+
+    async _blankPopoutDocument(win) {
         let old = null;
         try { old = win.document; } catch (e) {}
         try { win.location.replace("about:blank"); } catch (e) { return false; }
