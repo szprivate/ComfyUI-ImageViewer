@@ -238,3 +238,23 @@ test("depth blur leaves the focus sharp and blurs what is far from it", () => {
     assert.ok(Math.abs(at(3) - 1) < 1e-6 && Math.abs(at(4)) < 1e-6, "in focus: the stripes stay");
     assert.ok(Math.abs(at(19) - 0.5) < 0.15 && Math.abs(at(20) - 0.5) < 0.15, "out of focus: the stripes are grey");
 });
+
+test("defocus spreads a point into its aperture, keeping its energy", async () => {
+    const O = await import("../js/imageViewer_compOps.js");
+    const w = 41, h = 41, img = O.blank(w, h);
+    const c = (20 * w + 20) * 4;
+    img.data[c] = 1; img.data[c + 3] = 1;
+    const sum = (im) => { let s = 0; for (let i = 0; i < w * h; i++) s += im.data[i * 4]; return s; };
+    const disc = O.defocusImage(img, { size: 16, shape: "disc", blades: 6, rotation: 0, aspect: 1, bloom: 0, threshold: 1 });
+    assert.ok(Math.abs(sum(disc) - 1) < 1e-5);
+    const at = (im, x, y) => im.data[(y * w + x) * 4];
+    assert.ok(at(disc, 20, 20) > 0 && at(disc, 27, 20) > 0 && at(disc, 30, 20) === 0);
+    // A hexagon with a corner up reaches further up than sideways.
+    const hex = O.defocusImage(img, { size: 16, shape: "polygon", blades: 6, rotation: 0, aspect: 1, bloom: 0, threshold: 1 });
+    assert.ok(at(hex, 20, 28) > 0 && at(hex, 28, 20) === 0);
+    // Bloom brightens a highlight's bokeh.
+    const bl = O.defocusImage(img, { size: 16, shape: "disc", blades: 6, rotation: 0, aspect: 1, bloom: 2, threshold: 0.1 });
+    assert.ok(Math.abs(sum(bl) - (1 + 2 * (0.2126 - 0.1))) < 1e-4);
+    // A heavy node: its result is kept between renders.
+    assert.ok(C.NODE_TYPES.defocus && C.HEAVY.has("defocus"));
+});

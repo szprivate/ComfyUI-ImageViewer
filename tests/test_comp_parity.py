@@ -135,6 +135,10 @@ def new_node_cases(sources):
                              out("motionblur1")], **big), "frame": 3, "scale": 0.5}, frames))
     for ch in ("r", "luminance"):
         c.append(one(node("depthblur", 1, ["Read1", "Read2"], channel=ch, focus=0.4, dof=0.1, falloff=0.25, size=6, layers=5)))
+    c.append(one(node("depthblur", 1, ["Read1", "Read2"], focus=0.4, dof=0.1, falloff=0.25, size=7, layers=4, filter="lens")))
+    for kw in ({"size": 7.3}, {"size": 9, "shape": "polygon", "blades": 6, "rotation": 17, "aspect": 1.4},
+               {"size": 6, "shape": "polygon", "blades": 5, "bloom": 3, "threshold": 0.3}, {"size": 0.6}):
+        c.append(one(node("defocus", 1, ["Read1"], **kw)))
     return c
 
 

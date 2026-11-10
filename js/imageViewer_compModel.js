@@ -123,13 +123,23 @@ export const NODE_TYPES = {
         falloff: { kind: "num", def: 0.3, min: 0.001, key: true, step: 0.01, help: "How much further it takes to reach the full blur" },
         size: { kind: "num", def: 20, min: 0, max: 200, key: true, step: 0.5, help: "The fullest blur, as Blur's size" },
         layers: { kind: "int", def: 6, min: 2, max: 16, help: "Blur sizes between none and the fullest: more is smoother and slower" },
+        filter: { kind: "enum", def: "gaussian", choices: ["gaussian", "lens"], help: "lens: a disc, as Defocus (size is then its diameter)" },
+    } },
+    defocus: { label: "Defocus", cat: "Filter", inputs: ["src"], params: {
+        size: { kind: "num", def: 20, min: 0, max: 400, key: true, step: 0.5, help: "The aperture's diameter, in pixels of the comp" },
+        shape: { kind: "enum", def: "disc", choices: O.DEFOCUS_SHAPES },
+        blades: { kind: "int", def: 6, min: 3, max: 16, help: "The aperture's sides (polygon)" },
+        rotation: { kind: "num", def: 0, key: true, step: 1, help: "The aperture turned, in degrees (polygon)" },
+        aspect: { kind: "num", def: 1, min: 0.1, max: 10, key: true, step: 0.05, help: "Above 1 wider, as an anamorphic lens" },
+        threshold: { kind: "num", def: 1, min: 0, key: true, step: 0.05, help: "Brighter than this is a highlight" },
+        bloom: { kind: "num", def: 0, min: 0, key: true, step: 0.1, help: "How much brighter the highlights' bokeh gets" },
     } },
     output: { label: "Output", cat: "Other", inputs: ["src"], params: {} },
 };
 export const TYPE_ORDER = ["read", "constant", "roto", "merge", "copy", "transform", "crop", "grade", "keyer", "blur",
-    "motionblur", "depthblur", "shuffle", "premult", "unpremult", "retime", "vectors", "output"];
+    "motionblur", "depthblur", "defocus", "shuffle", "premult", "unpremult", "retime", "vectors", "output"];
 /** Nodes whose result is kept between renders (keyed by their whole upstream): they take long. */
-export const HEAVY = new Set(["vectors", "motionblur", "depthblur"]);
+export const HEAVY = new Set(["vectors", "motionblur", "depthblur", "defocus"]);
 export const NODE_W = 120;
 export const NODE_H = 30;
 
@@ -329,7 +339,7 @@ export function nodeKeyFrames(node) {
 // ── the stack the Layers panel shows ─────────────────────────────────────────
 
 const CHAIN = new Set(["transform", "grade", "blur", "crop", "shuffle", "premult", "unpremult", "retime", "keyer", "vectors",
-    "motionblur", "depthblur", "copy"]);
+    "motionblur", "depthblur", "defocus", "copy"]);
 
 /**
  * The comp as layers, top first: [{ kind: "layer" | "background" | "group", merge?, chain: [ids top-down],
@@ -690,6 +700,12 @@ export function renderNode(comp, id, frame, ctx) {
             const src = run(n.inputs[0], f, d1);
             const vec = n.inputs[1] ? run(n.inputs[1], f, d1) : vectorsOf(n.inputs[0], f, d1, { type: "vectors" });
             return O.motionBlurImage(src, vec, paramAt(n, "shutter", f), paramAt(n, "samples", f), n.offset || "centred", scale);
+        }
+        case "defocus": {
+            const p = {};
+            for (const k of Object.keys(NODE_TYPES.defocus.params)) p[k] = paramAt(n, k, f);
+            p.size *= scale;
+            return O.defocusImage(run(n.inputs[0], f, d1), p);
         }
         case "depthblur": {
             const src = run(n.inputs[0], f, d1);

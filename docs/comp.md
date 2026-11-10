@@ -35,14 +35,15 @@ The **Node Graph** panel is up when a comp opens. The picture runs from top to b
 | Keyer | Chroma (a screen colour, picked from the picture with ⌖) or luma, with tolerance, softness and despill |
 | Blur | A Gaussian blur, its size in pixels of the comp |
 | MotionBlur | Blurs along the motion while the shutter is open. It takes motion vectors from a Vectors node in its second input, or works them out itself |
-| DepthBlur | Blurs by the distance from the focus, read from a depth map in its second input (red, any channel, or luminance) |
+| DepthBlur | Blurs by the distance from the focus, read from a depth map in its second input (red, any channel, or luminance). *Filter* lens blurs through a disc, as Defocus does |
+| Defocus | A lens out of focus: every pixel spread over the aperture, a disc or a polygon of 3 to 16 blades (*rotation*, *aspect* for an anamorphic lens). *Bloom* brightens what is above the *threshold* first, so highlights become bright bokeh |
 | Shuffle | Each channel from any channel, or 0 or 1 |
 | Premult / Unpremult | Multiply the colour by the alpha, or divide it back |
 | Retime | Plays its input faster, slower or backwards (*speed*, *start*, *offset*), the nearest frame or two mixed |
 | Vectors | Motion vectors measured from the footage (optical flow): red and green where each pixel goes in the next frame, blue and alpha where it came from. *Detail* half (the default) measures on a picture half the size, which is much faster |
 | Output | What the comp renders |
 
-Vectors, MotionBlur and DepthBlur take seconds a frame at full size. The picture keeps their results while you work further down the graph.
+Vectors, MotionBlur, DepthBlur and Defocus take seconds a frame at full size. The picture keeps their results while you work further down the graph.
 
 ### Drawing a Roto shape
 

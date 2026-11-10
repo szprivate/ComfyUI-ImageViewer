@@ -30,6 +30,7 @@ SHUTTER_OFFSETS = ["centred", "start", "end"]
 DEPTH_CHANNELS = ["r", "g", "b", "a", "luminance"]
 FLOW_DETAIL = {"full": 0, "half": 1, "quarter": 2}
 LUM = (0.2126, 0.7152, 0.0722)
+DEFOCUS_SHAPES = ["disc", "polygon"]
 _CH = {"r": 0, "g": 1, "b": 2, "a": 3}
 
 # The node types: the page's NODE_TYPES (kind, default, range, animatable). The parity test compares them.
@@ -111,6 +112,16 @@ NODE_TYPES = {
         "falloff": {"kind": "num", "def": 0.3, "min": 0.001, "key": True},
         "size": {"kind": "num", "def": 20, "min": 0, "max": 200, "key": True},
         "layers": {"kind": "int", "def": 6, "min": 2, "max": 16},
+        "filter": {"kind": "enum", "def": "gaussian", "choices": ["gaussian", "lens"]},
+    }},
+    "defocus": {"inputs": ["src"], "params": {
+        "size": {"kind": "num", "def": 20, "min": 0, "max": 400, "key": True},
+        "shape": {"kind": "enum", "def": "disc", "choices": DEFOCUS_SHAPES},
+        "blades": {"kind": "int", "def": 6, "min": 3, "max": 16},
+        "rotation": {"kind": "num", "def": 0, "key": True},
+        "aspect": {"kind": "num", "def": 1, "min": 0.1, "max": 10, "key": True},
+        "threshold": {"kind": "num", "def": 1, "min": 0, "key": True},
+        "bloom": {"kind": "num", "def": 0, "min": 0, "key": True},
     }},
     "output": {"inputs": ["src"], "params": {}},
 }
@@ -816,10 +827,102 @@ def depth_blur_image(img, depth, p):
         col = (d * k[..., None]).astype(np.float32)
         wt = k.astype(np.float32)[..., None]   # one channel: the page blurs four alike, each the same numbers
         size = (p["size"] * layer) / (L - 1)
-        num = num + blur_image(col, size)
-        den = den + blur_image(wt, size)[..., 0]
+        if p.get("filter") == "lens":
+            lp = {"size": size, "shape": "disc", "blades": 6, "rotation": 0, "aspect": 1, "bloom": 0, "threshold": 1}
+            num = num + defocus_image(col, lp)
+            den = den + defocus_image(wt, lp)[..., 0]
+        else:
+            num = num + blur_image(col, size)
+            den = den + blur_image(wt, size)[..., 0]
     ok = (den > 1e-6)[..., None]
     return np.where(ok, num / np.where(ok, den[..., None], 1), d).astype(np.float32)
+
+
+def aperture_rows(size, shape, blades, rotation, aspect):
+    """The page's ``apertureRows``: [(dy, l, r)], the aperture's span on each row of pixels."""
+    r = size / 2
+    rows = []
+    if not r > 0:
+        return rows
+    R = int(math.ceil(r))
+    verts = None
+    if shape == "polygon":
+        n = max(3, int(math.floor(blades + 0.5)))
+        rot = (rotation * math.pi) / 180
+        verts = []
+        for k in range(n):
+            a = rot + (2 * math.pi * k) / n - math.pi / 2
+            verts.append((r * aspect * math.cos(a), r * math.sin(a)))
+    for dy in range(-R, R + 1):
+        if verts is None:
+            if abs(dy) > r:
+                continue
+            hw = aspect * math.sqrt(r * r - dy * dy)
+            rows.append((dy, -hw, hw))
+            continue
+        lo, hi = math.inf, -math.inf
+        for k in range(len(verts)):
+            p, q = verts[k], verts[(k + 1) % len(verts)]
+            if (p[1] <= dy) != (q[1] <= dy):
+                x = p[0] + ((dy - p[1]) * (q[0] - p[0])) / (q[1] - p[1])
+                lo = min(lo, x)
+                hi = max(hi, x)
+        if hi > lo:
+            rows.append((dy, lo, hi))
+    return rows
+
+
+def _row_span(l, r):
+    a, b = int(math.floor(l + 0.5)), int(math.floor(r + 0.5))
+    if a == b:
+        return a, b, r - l, 0.0
+    return a, b, a + 0.5 - l, r - (b - 0.5)
+
+
+def defocus_image(img, p):
+    """The page's ``defocusImage``: the mean through the aperture, highlights bloomed first."""
+    rows = [(dy,) + _row_span(l, r) for dy, l, r in aperture_rows(p["size"], p["shape"], p["blades"], p["rotation"], p["aspect"])]
+    if len(rows) <= 1 and (not rows or rows[0][1] == rows[0][2]):
+        return img
+    h, w, C = img.shape
+    s = img.astype(np.float64)
+    reach = 1
+    for _, a, b, _, _ in rows:
+        reach = max(reach, abs(a) + 1, abs(b) + 1)
+    total = 0.0
+    for _, a, b, wa, wb in rows:
+        if a == b:
+            total += wa
+            continue
+        if b - 1 >= a + 1:
+            total += b - 1 - (a + 1) + 1
+        total += wa
+        total += wb
+    Q = np.concatenate([np.repeat(s[:, :1], reach, axis=1), s, np.repeat(s[:, -1:], reach, axis=1)], axis=1)
+    bloom, thr = p.get("bloom") or 0, p["threshold"]
+    if bloom > 0 and C >= 3:
+        L = LUM[0] * Q[..., 0] + LUM[1] * Q[..., 1] + LUM[2] * Q[..., 2]
+        m = np.where(L > thr, 1 + bloom * (L - thr), 1.0)
+        Q = Q.copy()
+        for c in range(3):
+            Q[..., c] = Q[..., c] * m
+    P = np.concatenate([np.zeros((h, 1, C)), np.cumsum(Q, axis=1)], axis=1)
+    # Rows repeated at the top and bottom too, so each kernel row is a slice (a view), not a copy.
+    ry = max(abs(k[0]) for k in rows)
+    yy = np.clip(np.arange(-ry, h + ry), 0, h - 1)
+    Q, P = Q[yy], P[yy]
+    acc = np.zeros((h, w, C))
+    for dy, a, b, wa, wb in rows:
+        Qr, Pr = Q[ry + dy:ry + dy + h], P[ry + dy:ry + dy + h]
+        o = reach
+        if a == b:
+            acc += wa * Qr[:, o + a:o + a + w]
+            continue
+        if b - 1 >= a + 1:
+            acc += Pr[:, o + b:o + b + w] - Pr[:, o + a + 1:o + a + 1 + w]
+        acc += wa * Qr[:, o + a:o + a + w]
+        acc += wb * Qr[:, o + b:o + b + w]
+    return (acc / total).astype(np.float32)
 
 
 def mix_images(a, b, t):
@@ -919,6 +1022,10 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None):
             src = run(ins[0], f, d1)
             vec = run(ins[1], f, d1) if ins[1] else vectors_of(ins[0], f, d1, {"type": "vectors"})
             return motion_blur_image(src, vec, param_at(n, "shutter", f), param_at(n, "samples", f), n.get("offset") or "centred", scale)
+        if t == "defocus":
+            p = P(n, f, NODE_TYPES["defocus"]["params"])
+            p["size"] = p["size"] * scale
+            return defocus_image(run(ins[0], f, d1), p)
         if t == "depthblur":
             src = run(ins[0], f, d1)
             if not ins[1]:

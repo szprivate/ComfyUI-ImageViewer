@@ -467,7 +467,9 @@ export function depthBlurImage(img, depth, p) {
         }
         if (!any) continue;
         const size = (p.size * l) / (L - 1);
-        const bc = blurImage(col, size), bw = blurImage(wt, size);
+        const lens = p.filter === "lens";
+        const blur = (im) => (lens ? defocusImage(im, { size, shape: "disc", blades: 6, rotation: 0, aspect: 1, bloom: 0, threshold: 1 }) : blurImage(im, size));
+        const bc = blur(col), bw = blur(wt);
         for (let i = 0; i < N; i++) {
             const j = i * 4;
             num[j] += bc.data[j]; num[j + 1] += bc.data[j + 1]; num[j + 2] += bc.data[j + 2]; num[j + 3] += bc.data[j + 3];
@@ -479,6 +481,110 @@ export function depthBlurImage(img, depth, p) {
         const j = i * 4;
         if (den[i] > 1e-6) { o[j] = num[j] / den[i]; o[j + 1] = num[j + 1] / den[i]; o[j + 2] = num[j + 2] / den[i]; o[j + 3] = num[j + 3] / den[i]; }
         else { o[j] = d[j]; o[j + 1] = d[j + 1]; o[j + 2] = d[j + 2]; o[j + 3] = d[j + 3]; }
+    }
+    return out;
+}
+
+// ── Defocus: a lens's blur ───────────────────────────────────────────────────
+
+export const DEFOCUS_SHAPES = ["disc", "polygon"];
+
+/**
+ * The aperture as rows: [{dy, l, r}] - for each row of pixels dy (centre) the aperture's span [l, r] there.
+ * A disc of diameter `size` (pixels), or a polygon of `blades` sides (one pointing up, turned by `rotation`
+ * degrees); `aspect` stretches it sideways.
+ */
+export function apertureRows(size, shape, blades, rotation, aspect) {
+    const r = size / 2, rows = [];
+    if (!(r > 0)) return rows;
+    const R = Math.ceil(r);
+    let verts = null;
+    if (shape === "polygon") {
+        const n = Math.max(3, Math.round(blades)), rot = (rotation * Math.PI) / 180;
+        verts = [];
+        for (let k = 0; k < n; k++) { const a = rot + (2 * Math.PI * k) / n - Math.PI / 2; verts.push([r * aspect * Math.cos(a), r * Math.sin(a)]); }
+    }
+    for (let dy = -R; dy <= R; dy++) {
+        if (!verts) {
+            if (Math.abs(dy) > r) continue;
+            const hw = aspect * Math.sqrt(r * r - dy * dy);
+            rows.push({ dy, l: -hw, r: hw });
+            continue;
+        }
+        let lo = Infinity, hi = -Infinity;
+        for (let k = 0; k < verts.length; k++) {
+            const p = verts[k], q = verts[(k + 1) % verts.length];
+            if ((p[1] <= dy) !== (q[1] <= dy)) {
+                const x = p[0] + ((dy - p[1]) * (q[0] - p[0])) / (q[1] - p[1]);
+                if (x < lo) lo = x;
+                if (x > hi) hi = x;
+            }
+        }
+        if (hi > lo) rows.push({ dy, l: lo, r: hi });
+    }
+    return rows;
+}
+
+/** A row's pixels: the first and last it touches and how much of them ({a, b, wa, wb}; a === b: one pixel, weight wa). */
+function rowSpan(row) {
+    const a = Math.floor(row.l + 0.5), b = Math.floor(row.r + 0.5);
+    if (a === b) return { a, b, wa: row.r - row.l, wb: 0 };
+    return { a, b, wa: a + 0.5 - row.l, wb: row.r - (b - 0.5) };
+}
+
+/**
+ * The picture through the aperture: every pixel the mean of the aperture's area around it (the edge
+ * repeated; a row's ends weighted by how much of their pixel it covers). `bloom` first brightens what is
+ * brighter than `threshold` (luminance), so highlights make bright bokeh. Sizes are pixels of this picture.
+ */
+export function defocusImage(img, p) {
+    const rows = apertureRows(p.size, p.shape, p.blades, p.rotation, p.aspect).map((row) => ({ dy: row.dy, ...rowSpan(row) }));
+    if (rows.length <= 1 && (!rows.length || (rows[0].a === rows[0].b))) return img;
+    const w = img.w, h = img.h, s = img.data;
+    let reach = 1;
+    for (const k of rows) reach = Math.max(reach, Math.abs(k.a) + 1, Math.abs(k.b) + 1);
+    let total = 0;
+    for (const k of rows) {
+        if (k.a === k.b) { total += k.wa; continue; }
+        if (k.b - 1 >= k.a + 1) total += k.b - 1 - (k.a + 1) + 1;
+        total += k.wa; total += k.wb;
+    }
+    // The padded rows (edge repeated) and their running sums, per channel.
+    const PW = w + 2 * reach;
+    const Q = new Float64Array(h * PW * 4), P = new Float64Array(h * (PW + 1) * 4);
+    const bloom = p.bloom || 0, thr = p.threshold;
+    for (let y = 0; y < h; y++) {
+        for (let i = 0; i < PW; i++) {
+            let x = i - reach;
+            x = x < 0 ? 0 : x > w - 1 ? w - 1 : x;
+            const si = (y * w + x) * 4, qi = (y * PW + i) * 4;
+            let m = 1;
+            if (bloom > 0) { const L = LUM[0] * s[si] + LUM[1] * s[si + 1] + LUM[2] * s[si + 2]; if (L > thr) m = 1 + bloom * (L - thr); }
+            Q[qi] = s[si] * m; Q[qi + 1] = s[si + 1] * m; Q[qi + 2] = s[si + 2] * m; Q[qi + 3] = s[si + 3];
+        }
+        for (let c = 0; c < 4; c++) {
+            let sum = 0;
+            P[(y * (PW + 1)) * 4 + c] = 0;
+            for (let i = 0; i < PW; i++) { sum += Q[(y * PW + i) * 4 + c]; P[(y * (PW + 1) + i + 1) * 4 + c] = sum; }
+        }
+    }
+    const out = blank(w, h), o = out.data;
+    const acc = [0, 0, 0, 0];
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        acc[0] = acc[1] = acc[2] = acc[3] = 0;
+        for (const k of rows) {
+            let yy = y + k.dy;
+            yy = yy < 0 ? 0 : yy > h - 1 ? h - 1 : yy;
+            const qb = yy * PW, pb = yy * (PW + 1), xo = x + reach;
+            for (let c = 0; c < 4; c++) {
+                if (k.a === k.b) { acc[c] += k.wa * Q[(qb + xo + k.a) * 4 + c]; continue; }
+                if (k.b - 1 >= k.a + 1) acc[c] += P[(pb + xo + k.b) * 4 + c] - P[(pb + xo + k.a + 1) * 4 + c];
+                acc[c] += k.wa * Q[(qb + xo + k.a) * 4 + c];
+                acc[c] += k.wb * Q[(qb + xo + k.b) * 4 + c];
+            }
+        }
+        const i = (y * w + x) * 4;
+        o[i] = acc[0] / total; o[i + 1] = acc[1] / total; o[i + 2] = acc[2] / total; o[i + 3] = acc[3] / total;
     }
     return out;
 }
