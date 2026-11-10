@@ -227,7 +227,7 @@ export const DockMixin = {
                 if (el.parentNode !== rail) rail.appendChild(el);
                 else rail.appendChild(el);           // re-append: array order wins
                 el.style.display = (entry.hidden || entry.behind) ? "none" : "flex";
-                el.style.flex    = `${entry.size || 1} 1 0`;
+                el.style.flex    = `${this._dockGrow(side, entry)} 1 0`;
                 el.style.minHeight = `${DOCK_PANELS[entry.id].minH}px`;
                 // Whichever way the rail runs, the rail owns the other axis.
                 el.style.minWidth = row ? `${DOCK_PANELS[entry.id].minW}px` : "";
@@ -309,6 +309,21 @@ export const DockMixin = {
                 }));
             }
         }
+    },
+
+    /**
+     * A panel's flex-grow in its rail: its `size`, scaled so that the shares of
+     * the panels on show add up to at least 1. CSS gives flex items whose grow
+     * factors sum to less than 1 only that part of the free room and leaves the
+     * rest empty - a panel left alone with a dragged share of 0.86 stopped 14 %
+     * short of the rail's end, a grey band under it.
+     */
+    _dockGrow(side, entry) {
+        const size = entry.size || 1;
+        const sum = this.dockLayout[side].panels
+            .filter((p) => !p.hidden && !p.behind)
+            .reduce((n, p) => n + (p.size || 1), 0);
+        return sum > 0 && sum < 1 ? size / sum : size;
     },
 
     /**
@@ -740,8 +755,8 @@ export const DockMixin = {
                 const newAH = Math.max(aMin, Math.min(total - bMin, aH + dy));
                 a.entry.size = share * (newAH / total);
                 b.entry.size = share - a.entry.size;
-                aEl.style.flex = `${a.entry.size} 1 0`;
-                bEl.style.flex = `${b.entry.size} 1 0`;
+                aEl.style.flex = `${this._dockGrow(side, a.entry)} 1 0`;
+                bEl.style.flex = `${this._dockGrow(side, b.entry)} 1 0`;
             }, () => {
                 sp.classList.remove("dragging");
                 if (this._afterViewportMoved) this._afterViewportMoved();

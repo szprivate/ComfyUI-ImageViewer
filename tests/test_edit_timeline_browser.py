@@ -370,6 +370,27 @@ class EditTimelineBrowserTests(unittest.TestCase):
         self.assertAlmostEqual(left, 9 / 11 * 100, places=2)
         self.assertEqual(self.errors, [])
 
+    # ── the rails ──
+
+    def test_a_panel_whose_share_is_under_one_still_fills_its_rail(self):
+        # Sebastian's saved left rail (2026-11-10): Parameters put away, History alone at a dragged share of 0.86,
+        # on a cut's tab. CSS hands flex items whose grow factors add up to less than 1 only that part of the room:
+        # a grey band was left under the History's footer.
+        pg = self.page()
+        layout = pg.evaluate("()=>JSON.parse(JSON.stringify(__panel.dockLayout))")
+        for side in ("right", "bottom"):
+            layout[side]["panels"] = [p for p in layout[side]["panels"] if p["id"] not in ("params", "history")]
+        layout["left"] = {"width": 327, "panels": [{"id": "params", "size": 1, "hidden": True},
+                                                   {"id": "history", "size": 0.8555623847572219, "hidden": False}]}
+        self.assertTrue(pg.evaluate("(d)=>__panel.applyDockData(d)", layout))
+        pg.wait_for_timeout(200)
+        rail, hist = pg.evaluate("""()=>[__panel.railEl.left, __panel.historyPanel].map(e=>{const r=e.getBoundingClientRect();
+            return [Math.round(r.top), Math.round(r.bottom)]})""")
+        self.assertEqual(hist, rail)
+        # its share is kept as it was: a panel that joins the rail splits it as before
+        self.assertAlmostEqual(pg.evaluate("()=>__panel.dockLayout.left.panels.find(p=>p.id==='history').size"), 0.8555623847572219)
+        self.assertEqual(self.errors, [])
+
     # ── popped out ──
 
     def test_popped_out_strips_draw_and_the_keys_work(self):
