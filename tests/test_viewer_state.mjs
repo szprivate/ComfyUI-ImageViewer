@@ -76,6 +76,21 @@ test("compare, the Edit panel's selection and the 3D camera", () => {
     assert.equal(s.camera.camera_world.length, 16);
 });
 
+test("the Edit panel's playhead, monitors and what the Source monitor holds", () => {
+    const s = describeViewerState({
+        open: true, display: "docked",
+        edit: { open: true, tab: "edit:cut", cut: "cut", clips: 2, fps: 24, playhead: 12.34567,
+                monitors: { mode: "dual", active: "source" },
+                source: { file: "D:/in/take3.mp4", name: "take3", still: false, in: 1.5, out: 4.25, head: 2, duration: 9.5 } },
+    });
+    assert.equal(s.edit.playhead, 12.346);
+    assert.deepEqual(s.edit.monitors, { mode: "dual", active: "source" });
+    assert.deepEqual(s.edit.source, { file: "D:/in/take3.mp4", name: "take3", in: 1.5, out: 4.25, head: 2, duration: 9.5 });
+    const none = describeViewerState({ open: true, display: "docked",
+                                       edit: { open: true, source: { file: "D:/in/a.png", still: true, in: null, out: undefined } } });
+    assert.deepEqual(none.edit.source, { file: "D:/in/a.png", still: true, in: null, out: null, head: null, duration: null });
+});
+
 test("a Contact Sheet of several history items: the count and the indices, small", () => {
     const s = describeViewerState({
         open: true, display: "docked",

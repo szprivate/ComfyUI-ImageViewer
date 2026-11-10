@@ -2004,8 +2004,10 @@ def _op_edit(new, op, what, kind_of_op):
     if op.get("name") is not None:
         clip["name"] = str(op["name"])[:200]
         changed.append(f"name {clip['name']}")
+    changed += _ops().set_more(new, op, what, tid, clip, number)
     if not changed:
-        raise ValueError(f"{what}: nothing to set (in, length, volume, name, and at - or gap on V1)")
+        raise ValueError(f"{what}: nothing to set (in, length, volume, name, speed, motion, and at - or gap, "
+                         "transition, transition_look on V1)")
     if track is not None:
         hit = _clashes(track, float(clip.get("at") or 0), float(clip.get("length") or 0), skip=clip)
         if hit is not None:
@@ -2014,6 +2016,11 @@ def _op_edit(new, op, what, kind_of_op):
     elif number > 1 and float(clip.get("transition") or 0) >= float(clip.get("length") or 0):
         raise ValueError(f"{what}: {label} would be shorter than its dissolve")
     return f"{label} on {tid}: " + ", ".join(changed)
+
+
+def _ops():
+    from . import timeline_ops
+    return timeline_ops
 
 
 def apply_ops(edit, ops, durations=None):
@@ -2031,6 +2038,11 @@ def apply_ops(edit, ops, durations=None):
       trim, rename or set the volume of clip number ``clip`` (from 1) of ``track``; on V1 a new
       ``in`` / ``length`` ripples the clips after it, and ``gap`` is the empty time before it.
     - ``{"op": "remove", "track", "clip"}``: take a clip out (V1 closes up; on A1 a bed goes).
+    - ``set`` also takes ``speed``, ``motion`` (reverse / freeze / none, ``hold_at``), and on V1
+      ``transition`` (the dissolve into the clip, seconds) and ``transition_look``
+      (dissolve | dip {color} | wipe {dir}); ``insert`` / ``overwrite`` (Resolve's edits on V1),
+      ``add_marker`` / ``set_marker`` / ``remove_marker`` and ``mix`` (a fader, pan, mute):
+      timeline_ops.py.
     """
     import copy
     if not isinstance(ops, list) or not ops:
@@ -2050,8 +2062,13 @@ def apply_ops(edit, ops, durations=None):
             said.append(_op_add(new, op, what, durations))
         elif kind_of_op in ("set", "remove"):
             said.append(_op_edit(new, op, what, kind_of_op))
+        elif kind_of_op in _ops().OPS:
+            said.append(_ops().OPS[kind_of_op](new, op, what, durations))
+        elif kind_of_op in _ops().MARKER_OPS:
+            said.append(_ops().MARKER_OPS[kind_of_op](new, op, what))
         else:
-            raise ValueError(f"{what}: 'op' is add, set or remove")
+            raise ValueError(f"{what}: 'op' is add, set, remove, insert, overwrite, add_marker, set_marker, "
+                             "remove_marker or mix")
     return new, said
 
 

@@ -273,6 +273,17 @@ class PaintRoutes(unittest.TestCase):
             self.assertTrue(os.path.isfile(s["picture"]) and os.path.isfile(s["selection"]))
             self.assertEqual(s["box"], {"x": 20, "y": 5, "w": 20, "h": 10})
             self.assertTrue(s["picture"].startswith(os.path.join(self.dirs["input"], "paint")))
+            # The agent's read with snapshot: the same files, beside the outline.
+            st, o = await self.j(c, "/imageviewer/paint/doc", {"doc": tok, "snapshot": True})
+            self.assertEqual(st, 200, o)
+            self.assertIn("outline", o)
+            self.assertEqual(o["snapshot"]["box"], {"x": 20, "y": 5, "w": 20, "h": 10})
+            self.assertTrue(os.path.isfile(o["snapshot"]["picture"]) and os.path.isfile(o["snapshot"]["selection"]))
+            # A file not open in a page: its picture, no selection.
+            st, o = await self.j(c, "/imageviewer/paint/doc", {"doc": self.png, "snapshot": True})
+            self.assertEqual(st, 200, o)
+            self.assertTrue(os.path.isfile(o["snapshot"]["picture"]))
+            self.assertIsNone(o["snapshot"]["selection"])
         self.run_c(go)
 
     def test_fences(self):

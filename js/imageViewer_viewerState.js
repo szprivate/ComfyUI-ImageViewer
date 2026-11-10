@@ -270,6 +270,20 @@ export function describeViewerState(s) {
             });
         }
         put(e, "otio", snap.edit.otio || "");
+        if (finite(snap.edit.playhead)) e.playhead = r3(snap.edit.playhead);
+        // The monitors (single / dual, which one the keys drive) and what the Source monitor holds:
+        // its file, in / out marks and playhead in seconds of the file (null where nothing is marked).
+        const mon = snap.edit.monitors;
+        if (mon && typeof mon === "object") e.monitors = { mode: mon.mode === "dual" ? "dual" : "single",
+                                                           active: mon.active === "source" ? "source" : "timeline" };
+        const src = snap.edit.source;
+        if (src && typeof src === "object" && src.file) {
+            const s = { file: String(src.file) };
+            put(s, "name", String(src.name || "").slice(0, 200));
+            if (src.still) s.still = true;
+            for (const k of ["in", "out", "head", "duration"]) s[k] = finite(src[k]) ? r3(src[k]) : null;
+            e.source = s;
+        }
         out.edit = e;
     }
 
