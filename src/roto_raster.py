@@ -547,11 +547,13 @@ def _workers():
     return n if n > 0 else max(1, min(16, (os.cpu_count() or 4)))
 
 
-def rasterize(roto_data, W, H, frame_count=1):
+def rasterize(roto_data, W, H, frame_count=1, frames=None):
     """Rasterize roto JSON into a float32 mask batch [N, H, W] in 0..1.
 
     frame_count is the input batch size; if any layer is keyframed we render a
-    mask per frame, otherwise the single static matte is broadcast.
+    mask per frame, otherwise the single static matte is broadcast. ``frames``
+    (a list of frame numbers) renders those frames instead of 0..frame_count-1:
+    the mask of frames[i] is out[i] (Comp's Roto node asks for one frame).
 
     Speed: each layer is worked out only inside the region its outline,
     feather, dilate and blur can reach (the full-frame distance transforms and
@@ -563,7 +565,9 @@ def rasterize(roto_data, W, H, frame_count=1):
     """
     W = int(max(1, W))
     H = int(max(1, H))
-    N = int(max(1, frame_count))
+    frames = [int(f) for f in frames] if frames else None
+    N = len(frames) if frames else int(max(1, frame_count))
+    at = (lambda i: frames[i]) if frames else (lambda i: i)
 
     try:
         layers = roto_data.get("layers") if isinstance(roto_data, dict) else None
@@ -636,7 +640,7 @@ def rasterize(roto_data, W, H, frame_count=1):
         # list held every frame twice).
         out = np.empty((N, H, W), dtype=np.float32)
         if not (animated and N > 1):
-            render_frame(plans_for(0), out[0])
+            render_frame(plans_for(at(0)), out[0])
             out[1:] = out[0]
             return out
 
@@ -644,7 +648,7 @@ def rasterize(roto_data, W, H, frame_count=1):
         first_of = {}
         todo, copies = [], []
         for i in range(N):
-            plans = plans_for(i)
+            plans = plans_for(at(i))
             key = tuple(_plan_key(p) for p in plans)
             if key in first_of:
                 copies.append((i, first_of[key]))

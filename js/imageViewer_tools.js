@@ -384,6 +384,9 @@ export const ToolsMixin = {
 
     // ── geometry / mapping ────────────────────────────────────────────────────
     _toolImgSize() {
+        // On a comp's Roto node the picture is the comp's frame (imageViewer_compRoto.js).
+        const comp = this._cpRoto && this._cpRotoImgSize?.();
+        if (comp) return comp;
         // Over a clip the picture is the <video>, whose size imgBase knows nothing of.
         if (this._videoMode && this.videoBase && this.videoBase.videoWidth)
             return { w: this.videoBase.videoWidth, h: this.videoBase.videoHeight };
@@ -396,6 +399,7 @@ export const ToolsMixin = {
     updateToolOverlay() {
         const ref = this._toolRef, draw = this._toolDraw, f = this.imgFrame;
         if (!ref || !draw) return;
+        if (this._cpRoto && this._cpRotoOverlay?.()) return;
         const { w, h } = this._toolImgSize();
         const usable = f && f.style.display !== "none" && w > 0 && h > 0
             && this.sliderMode !== "contact";
@@ -523,6 +527,8 @@ export const ToolsMixin = {
     _toolShowDock(on) {
         const names = { roto: "Roto", sam3: "SAM3 Points", sam3box: "SAM3 Boxes", annotate: "Annotate" };
         const panel = this.paramsPanel;
+        // On a comp the Parameters panel is the comp's, and the Roto tool's options are in its node's section.
+        if (this._cpParamsMode) return;
         if (!panel || !this.setPanelDocked || !this.isPanelDocked) return;
         this._toolPlacePanel();
         const want = !!on && !this._modelMode;
@@ -566,7 +572,9 @@ export const ToolsMixin = {
     _bindActiveTool(opts = {}) {
         if (!this._toolState) return;
         const kind = TOOL_NODE_KIND[this._toolState.active] || null;
-        const node = kind ? ensureToolNode(this, this.activeTab, kind, opts) : null;
+        // A comp's Roto node, while it is on show there (imageViewer_compRoto.js), else the graph's.
+        const node = kind === "roto" && this._cpRoto ? this._cpRoto.fake
+            : kind ? ensureToolNode(this, this.activeTab, kind, opts) : null;
         this._toolState.node = node;
 
         this._sam3 = { pos: [], neg: [], drag: null, hover: null };
@@ -694,6 +702,7 @@ export const ToolsMixin = {
         const sig = ids.slice().sort().join(",");
         if (sig === this._toolFollowSig) return;
         if (this.paramsLocked || this._modelMode || !this._toolState) return;   // re-read once free
+        if (this._cpRoto) return;   // on a comp's Roto node: the comp's selection decides
         this._toolFollowSig = sig;
         const kind = nodeToolKind(leadSelectedNode());
         const active = this._toolState.active;
@@ -714,6 +723,7 @@ export const ToolsMixin = {
         const kind = TOOL_NODE_KIND[this._toolState.active];
         if (!kind) return;
         const bound = this._toolState.node;
+        if (bound && bound._compRoto) return;   // a comp's Roto node: not the graph's to move
         // Locked, the tool stays on its node — unless that node is gone.
         if (this.paramsLocked && bound && nodeInGraph(bound)) return;
         // Two things move the tool: a selection that names a node of this kind,
@@ -737,7 +747,7 @@ export const ToolsMixin = {
      *  then, since a rebind reloads the tool and drops a shape being drawn. */
     _toolRebindIfMoved() {
         const kind = this._toolState && TOOL_NODE_KIND[this._toolState.active];
-        if (!kind) return;
+        if (!kind || (this._toolState.node && this._toolState.node._compRoto)) return;
         const next = ensureToolNode(this, this.activeTab, kind);   // never creates
         if (next === this._toolState.node) return;
         this._bindActiveTool();

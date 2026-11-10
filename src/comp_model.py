@@ -25,7 +25,6 @@ COLORSPACES = ["auto", "srgb", "linear"]
 SHUFFLE_CHOICES = ["r", "g", "b", "a", "0", "1"]
 COPY_CHOICES = ["B", "A.r", "A.g", "A.b", "A.a", "0", "1"]
 KEYER_MODES = ["chroma", "luma"]
-ROTO_MODES = ["add", "subtract"]
 SHUTTER_OFFSETS = ["centred", "start", "end"]
 DEPTH_CHANNELS = ["r", "g", "b", "a", "luminance"]
 FLOW_DETAIL = {"full": 0, "half": 1, "quarter": 2}
@@ -216,7 +215,7 @@ NODE_TYPES = {
         "softness": {"kind": "num", "def": 0.3, "min": 0, "key": True},
         "despill": {"kind": "num", "def": 1, "min": 0, "max": 1, "key": True},
     }},
-    "roto": {"inputs": ["src"], "params": {"shapes": {"kind": "shapes", "def": []}}},
+    "roto": {"inputs": ["src"], "params": {"roto": {"kind": "roto", "def": None}}},
     "vectors": {"inputs": ["src"], "params": {
         "smoothness": {"kind": "num", "def": 0.04, "min": 0.001, "max": 1},
         "iterations": {"kind": "int", "def": 30, "min": 1, "max": 200},
@@ -793,94 +792,29 @@ def key_image(img, p):
     return np.stack([c[0] * na, c[1] * na, c[2] * na, na], axis=2).astype(np.float32)
 
 
-_SUB = 4
-_SPLINE_STEPS = 8
+def roto_matte(data, frame, w, h):
+    """A Roto node's matte at ``frame`` in a w x h picture: the viewer's roto data (coordinates a share of the
+    frame, sizes in comp pixels) through roto_raster, the code the ImageViewerRoto node renders with."""
+    if not isinstance(data, dict) or not data.get("layers"):
+        return np.zeros((h, w), np.float64)
+    return _roto_raster().rasterize(data, w, h, frames=[int(frame)])[0].astype(np.float64)
 
 
-def shape_points(shape, frame):
-    keys = [k for k in (shape.get("keys") or []) if isinstance(k, dict) and isinstance(k.get("pts"), list)]
-    keys.sort(key=lambda k: k["f"])
-    if not keys:
-        return shape.get("pts") if isinstance(shape.get("pts"), list) else []
-    if frame <= keys[0]["f"]:
-        return keys[0]["pts"]
-    if frame >= keys[-1]["f"]:
-        return keys[-1]["pts"]
-    i = 0
-    while keys[i + 1]["f"] <= frame:
-        i += 1
-    a, b = keys[i], keys[i + 1]
-    if len(a["pts"]) != len(b["pts"]):
-        return a["pts"]
-    t = (frame - a["f"]) / (b["f"] - a["f"])
-    return [[p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t] for p, q in zip(a["pts"], b["pts"])]
-
-
-def shape_outline(pts, smooth, scale=1.0):
-    n = len(pts)
-    if not smooth or n < 3:
-        return [[p[0] * scale, p[1] * scale] for p in pts]
-    out = []
-    for i in range(n):
-        p0, p1, p2, p3 = pts[(i - 1) % n], pts[i], pts[(i + 1) % n], pts[(i + 2) % n]
-        for s in range(_SPLINE_STEPS):
-            t = s / _SPLINE_STEPS
-            t2 = t * t
-            t3 = t2 * t
-            q = [0.5 * (2 * p1[k] + (p2[k] - p0[k]) * t + (2 * p0[k] - 5 * p1[k] + 4 * p2[k] - p3[k]) * t2
-                        + (3 * p1[k] - p0[k] - 3 * p2[k] + p3[k]) * t3) for k in (0, 1)]
-            out.append([q[0] * scale, q[1] * scale])
-    return out
-
-
-def polygon_cover(poly, w, h):
-    """The page's polygonCover: even-odd, 4 x 4 sub-samples a pixel."""
-    cov = np.zeros((h, w), np.float64)
-    n = len(poly)
-    if n < 3:
-        return cov
-    P = np.asarray(poly, np.float64)
-    Q = np.roll(P, -1, axis=0)
-    W4 = w * _SUB
-    counts = np.zeros(W4 + 1, np.int64)
-    for sy in range(h * _SUB):
-        yy = (sy + 0.5) / _SUB
-        hit = (P[:, 1] <= yy) != (Q[:, 1] <= yy)
-        if hit.sum() < 2:
-            continue
-        p, q = P[hit], Q[hit]
-        xs = np.sort(p[:, 0] + (yy - p[:, 1]) * (q[:, 0] - p[:, 0]) / (q[:, 1] - p[:, 1]))
-        counts[:] = 0
-        for j in range(0, len(xs) - 1, 2):
-            k0 = max(0, math.ceil(xs[j] * _SUB - 0.5))
-            k1 = min(W4, math.ceil(xs[j + 1] * _SUB - 0.5))
-            if k1 > k0:
-                counts[k0] += 1
-                counts[k1] -= 1
-        inside = np.cumsum(counts[:W4])
-        cov[sy // _SUB] += inside.reshape(w, _SUB).sum(axis=1) / (_SUB * _SUB)
-    return cov
-
-
-def roto_matte(shapes, frame, w, h, scale):
-    M = np.zeros((h, w), np.float64)
-    for sh in shapes if isinstance(shapes, list) else []:
-        if not isinstance(sh, dict) or sh.get("off"):
-            continue
-        pts = shape_points(sh, frame)
-        if not pts or len(pts) < 3:
-            continue
-        m = polygon_cover(shape_outline(pts, sh.get("smooth") is not False, scale), w, h)
-        feather = float(sh.get("feather") or 0) * scale
-        if feather > 0:
-            tmp = np.zeros((h, w, 4), np.float32)
-            tmp[..., 0] = m
-            m = blur_image(tmp, feather)[..., 0].astype(np.float64)
-        if sh.get("mode") == "subtract":
-            M = M * (1 - m)
-        else:
-            M = M + m - M * m
-    return M
+def _roto_raster():
+    try:
+        from . import roto_raster
+        return roto_raster
+    except ImportError:  # loaded on its own, by its path (the tests): roto_raster.py beside it
+        import importlib.util
+        import os
+        import sys
+        mod = sys.modules.get("roto_raster")
+        if mod is None:
+            spec = importlib.util.spec_from_file_location("roto_raster", os.path.join(os.path.dirname(os.path.abspath(__file__)), "roto_raster.py"))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            sys.modules["roto_raster"] = mod
+        return mod
 
 
 def roto_image(matte, src):
@@ -1822,7 +1756,7 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None):
         if t == "keyer":
             return key_image(run(ins[0], f, d1), P(n, f, NODE_TYPES["keyer"]["params"]))
         if t == "roto":
-            return roto_image(roto_matte(n.get("shapes"), f, W, H, scale), run(ins[0], f, d1) if ins[0] else None)
+            return roto_image(roto_matte(n.get("roto"), f, W, H), run(ins[0], f, d1) if ins[0] else None)
         if t == "vectors":
             return vectors_of(ins[0], f, d1, n)
         if t == "motionblur":

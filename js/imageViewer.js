@@ -39,6 +39,7 @@ import { CodePanelMixin } from "./imageViewer_codePanel.js";
 import { DepsPanelMixin } from "./imageViewer_depsPanel.js";
 import { MgPanelMixin } from "./imageViewer_mgPanel.js";
 import { CompPanelMixin } from "./imageViewer_compPanel.js";
+import { CompRotoMixin } from "./imageViewer_compRoto.js";
 import { compBottomTabs } from "./imageViewer_compComfyTab.js";
 import { PaintPanelMixin } from "./imageViewer_paintPanel.js";
 import { LoraPanelMixin } from "./imageViewer_loraPanel.js";
@@ -1576,6 +1577,7 @@ Object.assign(
     DepsPanelMixin,
     MgPanelMixin,
     CompPanelMixin,
+    CompRotoMixin,
     PaintPanelMixin,
     LoraPanelMixin,
     PrevizChannelsMixin,

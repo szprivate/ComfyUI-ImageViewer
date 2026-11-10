@@ -775,7 +775,7 @@ export const RotoMixin = {
             const cv = doc.createElement("canvas");
             cv.className = "imageviewer-roto-mask";
             cv.style.cssText = "position:absolute;left:0;top:0;pointer-events:none;z-index:41;";
-            this.viewport.insertBefore(cv, this._toolDraw);
+            (this._toolDraw.parentNode || this.viewport).insertBefore(cv, this._toolDraw);
             this._rotoMaskCanvas = cv;
             this._rotoScratch = [doc.createElement("canvas"), doc.createElement("canvas")];
         }
@@ -795,7 +795,10 @@ export const RotoMixin = {
         // The viewport, not the draw layer's box: that svg keeps its default
         // 300x150 and draws the rest as overflow; both start at the viewport's
         // top-left, so the paths' coordinates hold on the canvas as they are.
-        const cw = this.viewport.clientWidth, ch = this.viewport.clientHeight;
+        // The draw layer's host: the viewport, or a comp's stage (imageViewer_compRoto.js).
+        const host = this._toolDraw.parentNode || this.viewport;
+        if (this._rotoMaskCanvas && this._rotoMaskCanvas.parentNode !== host) host.insertBefore(this._rotoMaskCanvas, this._toolDraw);
+        const cw = host.clientWidth, ch = host.clientHeight;
         if (!frameD || cw < 2 || ch < 2) { this._rotoHideMask(); return; }
         const k = Math.min(1, Math.sqrt(900000 / (cw * ch)));
         const W = Math.max(1, Math.round(cw * k)), H = Math.max(1, Math.round(ch * k));
@@ -1605,7 +1608,7 @@ function normalizeLayer(l) {
         tangents: l.tangents && typeof l.tangents === "object"
             ? Object.fromEntries(Object.entries(l.tangents)
                 .filter(([, v]) => v && typeof v === "object")
-                .map(([k, v]) => [k, { ox: num(v.ox, 1 / 3), oy: num(v.oy, 1 / 3), ix: num(v.ix, 2 / 3), iy: num(v.iy, 2 / 3) }]))
+                .map(([k, v]) => [k, { ox: num(v.ox, 1 / 3), oy: num(v.oy, 1 / 3), ix: num(v.ix, 2 / 3), iy: num(v.iy, 2 / 3), ...(v.hold ? { hold: true } : {}) }]))
             : undefined,
     };
 }
@@ -1723,4 +1726,31 @@ function checkbox(label, checked, onChange) {
     cb.onchange = () => onChange(cb.checked);
     row.appendChild(cb);
     return { row, cb };
+}
+
+/**
+ * The matte roto data makes at `frame`, drawn by the preview's own code above (_rotoLayerAlpha, rotoMerge):
+ * a Float32Array of W x H, 0..1. The shapes' coordinates are shares of a picture of imgW x imgH, whose
+ * pixels their feather, blur and dilate are counted in; the matte covers that picture at W x H. Comp's
+ * Roto node draws its preview through this (its render goes through roto_raster.py, as the node's does).
+ */
+export function rotoMatte(roto, frame, imgW, imgH, W, H, doc) {
+    const acc = new Float32Array(W * H);
+    const layers = roto && Array.isArray(roto.layers) ? roto.layers.map(normalizeLayer) : [];
+    if (!layers.length || !W || !H || !doc) return acc;
+    const g = Object.assign({ invert: false, blur: 0, dilate: 0, feather: 0 }, (roto && roto.global) || {});
+    const R = Object.create(RotoMixin);
+    R._toolImgSize = () => ({ w: imgW, h: imgH });
+    R._rotoFrame = () => frame;
+    R._normToDraw = (x, y) => ({ x: x * W, y: y * H });
+    const canvas = () => { const c = doc.createElement("canvas"); c.width = W; c.height = H; return c; };
+    const sa = canvas(), sb = canvas();
+    for (const layer of layers) {
+        if (!layer.visible) continue;
+        const a = R._rotoLayerAlpha(layer, sa, sb, 1, W / (imgW || W), g);
+        if (!a) { if (layer.mode === "intersection") acc.fill(0); continue; }
+        rotoMerge(layer.mode, acc, a);
+    }
+    if (g.invert) for (let i = 0; i < acc.length; i++) acc[i] = 1 - acc[i];
+    return acc;
 }

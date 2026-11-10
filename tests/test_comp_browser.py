@@ -535,38 +535,50 @@ class CompBrowserTests(unittest.TestCase):
         self.assertEqual(len(baked), 2)
         self.assertEqual(self.errors, [])
 
-    def test_a_roto_shape_drawn_on_the_picture_and_the_new_nodes_rendered_by_the_server(self):
+    def test_a_roto_shape_drawn_with_the_viewers_roto_tool_and_the_new_nodes_rendered_by_the_server(self):
         pg = self.page()
         path = self.new_comp(pg)
-        # A Roto (no input: a white matte) straight into the Output.
+        # A Roto (no input: a white matte) straight into the Output. Selecting it brings the viewer's Roto tool up.
         pg.evaluate(f"""() => {{ const e = {self.ED}; const c = e.comp(); e.select([]);
             const r = e.addNode('roto'); c.nodes.find((n) => n.type === 'output').inputs = [r.id]; e.select([r.id]); }}""")
-        pg.evaluate("() => __panel.compPropsPanel.querySelectorAll('button').forEach((b) => { if (b.textContent === 'Draw a shape') b.click(); })")
-        self.assertTrue(pg.evaluate(f"() => !!{self.ED}.state.draw"))
+        on = pg.evaluate("() => ({ tool: __panel._toolState.active, comp: !!(__panel._toolState.node && __panel._toolState.node._compRoto),"
+                         " inStage: __panel._toolDraw.parentNode === __panel.compEditor().stage,"
+                         " panel: !!__panel.compPropsPanel.querySelector('.cp-roto-slot .imageviewer-tool-panel .imageviewer-layer-list') })")
+        self.assertEqual(on, {"tool": "roto", "comp": True, "inStage": True, "panel": True})
+        pg.evaluate("() => __panel.compPropsPanel.querySelectorAll('button').forEach((b) => { if (b.textContent === '+ Shape') b.click(); })")
         box = pg.evaluate(f"() => {{ const r = {self.ED}.canvas.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }}")
         at = lambda fx, fy: (box[0] + box[2] * fx, box[1] + box[3] * fy)
         for fx, fy in ((0.2, 0.2), (0.6, 0.2), (0.6, 0.7), (0.2, 0.7), (0.2, 0.2)):   # the last click closes it
             pg.mouse.click(*at(fx, fy))
-        shapes = pg.evaluate(f"() => {self.ED}.comp().nodes.find((n) => n.type === 'roto').shapes")
-        self.assertEqual(len(shapes), 1)
-        self.assertEqual(len(shapes[0]["pts"]), 4)
-        self.assertFalse(pg.evaluate(f"() => !!{self.ED}.state.draw"))
+        roto = lambda: pg.evaluate(f"() => {self.ED}.comp().nodes.find((n) => n.type === 'roto').roto")
+        r = roto()
+        self.assertEqual(len(r["layers"]), 1)
+        pts = r["layers"][0]["points"]
+        self.assertEqual(len(pts), 4)
+        self.assertAlmostEqual(pts[0]["x"], 0.2, delta=0.01)       # shares of the comp's frame, as the viewer's tool keeps them
+        self.assertAlmostEqual(pts[2]["y"], 0.7, delta=0.01)
         pg.wait_for_timeout(600)
         self.assertGreater(self.pixel(pg, 0.4, 0.45)[0], 200, "inside the shape: white")
         self.assertLess(self.pixel(pg, 0.85, 0.45)[0], 30, "outside: black")
-        # Drag a corner: the shape follows, as one undo step.
+        # Drag a corner: the shape follows; the comp's undo takes it back and the tool shows that.
         pg.mouse.move(*at(0.6, 0.7)); pg.mouse.down(); pg.mouse.move(*at(0.8, 0.85), steps=4); pg.mouse.up()
-        moved = pg.evaluate(f"() => {self.ED}.comp().nodes.find((n) => n.type === 'roto').shapes[0].pts[2]")
-        fw, fh = pg.evaluate(f"() => [{self.ED}.comp().format.width, {self.ED}.comp().format.height]")
-        self.assertAlmostEqual(moved[0] / fw, 0.8, delta=0.02)
-        self.assertAlmostEqual(moved[1] / fh, 0.85, delta=0.02)
-        # Animate it: a key at 0, the corner moved at 10 sets a second key.
-        pg.evaluate(f"""() => {{ const e = {self.ED}; e.setFrame(0, {{ fromHost: true }}); }}""")
-        pg.evaluate("() => __panel.compPropsPanel.querySelector('.cp-shrow .mg-sw').click()")
-        pg.evaluate(f"""() => {{ const e = {self.ED}; e.setFrame(10, {{ fromHost: true }}); }}""")
+        moved = roto()["layers"][0]["points"][2]
+        self.assertAlmostEqual(moved["x"], 0.8, delta=0.02)
+        self.assertAlmostEqual(moved["y"], 0.85, delta=0.02)
+        pg.wait_for_timeout(700)    # a new undo step after a pause
+        pg.evaluate(f"() => {self.ED}.undo()")
+        self.assertAlmostEqual(roto()["layers"][0]["points"][2]["x"], 0.6, delta=0.02)
+        self.assertAlmostEqual(pg.evaluate("() => __panel._roto.layers[0].points[2].x"), 0.6, delta=0.02)
+        pg.evaluate(f"() => {self.ED}.redo()")
+        # Animate it with the tool's keys: a key at 0, the corner moved at 10 sets a second key.
+        pg.evaluate(f"() => {{ __panel.setFrame(0); __panel._roto.selLayer = 0; __panel._rotoSetKey(); }}")
+        pg.evaluate("() => __panel.setFrame(10)")
+        self.assertEqual(pg.evaluate(f"() => {self.ED}.state.frame"), 10)
         pg.mouse.move(*at(0.8, 0.85)); pg.mouse.down(); pg.mouse.move(*at(0.7, 0.6), steps=4); pg.mouse.up()
-        keys = pg.evaluate(f"() => {self.ED}.comp().nodes.find((n) => n.type === 'roto').shapes[0].keys.map((k) => k.f)")
+        keys = sorted(int(k) for k in roto()["layers"][0]["keyframes"])
         self.assertEqual(keys, [0, 10])
+        if SHOTS:
+            pg.screenshot(path=os.path.join(SHOTS, "comp-roto.png"))
         # The new nodes through the server's render: the roto cuts a constant, depth blur and a crop after it.
         pg.evaluate(f"""() => {{ const e = {self.ED}; const c = e.comp(); const roto = c.nodes.find((n) => n.type === 'roto');
             const bg = c.nodes.find((n) => n.type === 'constant'); bg.color = [1, 0, 0, 1]; roto.inputs = [bg.id];
@@ -582,8 +594,10 @@ class CompBrowserTests(unittest.TestCase):
         self.assertEqual(tuple(px[int(h * 0.3), int(w * 0.3)]), (255, 0, 0, 255), "inside the shape and the crop")
         self.assertEqual(px[int(h * 0.3), int(w * 0.75), 3], 0, "cropped away")
         self.assertEqual(px[int(h * 0.05), int(w * 0.05), 3], 0, "outside the shape")
-        if SHOTS:
-            pg.screenshot(path=os.path.join(SHOTS, "comp-roto.png"))
+        # Another node selected: the tool goes off and its overlay back into the viewport.
+        pg.evaluate(f"() => {{ const e = {self.ED}; e.select([e.comp().nodes.find((n) => n.type === 'constant').id]); }}")
+        off = pg.evaluate("() => ({ tool: __panel._toolState.active, home: __panel._toolDraw.parentNode === __panel.viewport })")
+        self.assertEqual(off, {"tool": "none", "home": True})
         self.assertEqual(self.errors, [])
 
     def test_the_eye_on_a_node_shows_it_in_the_picture_and_the_viewed_node_is_tagged(self):

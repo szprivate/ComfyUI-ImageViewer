@@ -183,7 +183,9 @@ export const CompPanelMixin = {
             }
         }
         this._cpParams(true);
+        if (this._cpRoto && this._cpRoto.rec !== rec) this._cpRotoUnmount();
         this._cpSeat(rec);
+        if (rec.editor && rec.editor.refresh) rec.editor.refresh();
         this._cpSyncBar();
         if (first && this.barGroupsSync) this.barGroupsSync();
     },
@@ -257,6 +259,7 @@ export const CompPanelMixin = {
         this.viewport.classList.remove("comp-mode");
         if (st.host) st.host.style.display = "none";
         this._cpSeatBottom(null);
+        this._cpRotoUnmount();
         this._cpParams(false);
         if (this.isPanelDocked && this.setPanelDocked) {
             for (const id of Object.keys(COMP_PANELS)) {
@@ -445,6 +448,13 @@ export const CompPanelMixin = {
             onComp: () => { if (this.activeTab === key) this._cpSyncBar(); },
             showProps: () => { if (this.setPanelDocked && !this.isPanelDocked("params")) this.setPanelDocked("params", true); else if (this.dockTabFront) this.dockTabFront("params"); },
             onSelect: (n) => { if (this.activeTab === key) this._cpParamsTitle(n || null); },
+            // The Roto node is the viewer's Roto tool's (imageViewer_compRoto.js).
+            roto: {
+                mount: (n, slot) => { if (this.activeTab === key) this._cpRotoMount(rec, n, slot); },
+                unmount: () => { if (this._cpRoto && this._cpRoto.rec === rec) this._cpRotoUnmount(); },
+            },
+            rotoMatte: (roto, f, cw, ch, W, H, doc) => this._cpRotoMatte(roto, f, cw, ch, W, H, doc),
+            onView: () => { if (this._cpRoto && this._cpRoto.rec === rec) this.updateToolOverlay(); },
             loadSource: (node, frame, how) => this._cpLoadSource(rec, node, frame, how),
             ocioInfo: () => this._cpOcioInfo(),
             ocioLut: (spec) => this._cpOcioLut(spec),

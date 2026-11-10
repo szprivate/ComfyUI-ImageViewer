@@ -30,7 +30,7 @@ The **Node Graph** panel is up when a comp opens. The picture runs from top to b
 |---|---|
 | Read | A picture, a film or a numbered sequence. *Offset* slides it in time; *Colourspace* auto treats EXR and HDR as linear, everything else as sRGB, or pick any colourspace of the OCIO config to have it converted into the working space; *Fit* lays a picture of another size into the comp |
 | Constant | A colour over the whole frame |
-| Roto | Shapes drawn on the picture. Without an input it is a white matte, with one it cuts its input out. Each shape adds or subtracts, has a feather and can be animated |
+| Roto | Shapes drawn on the picture with the viewer's Roto tool. Without an input it is a white matte, with one it cuts its input out. Each shape has a mode (union, plus, minus, intersection, xor), a feather and can be animated |
 | Merge | Lays A over B (or plus, multiply, screen, in, out, atop, mask, stencil, and the rest of Nuke's operations), with a mix and an optional mask input |
 | Copy | B with some of its channels taken from A (for example A's alpha) |
 | Transform | Moves, rotates and scales about a centre |
@@ -63,7 +63,9 @@ Vectors, MotionBlur, DepthBlur and Defocus take seconds a frame at full size. Th
 
 ### Drawing a Roto shape
 
-Select the Roto node and press **Draw a shape** in its Properties, then click the points on the picture. Click the first point again, double-click or press Enter to close the shape; Backspace takes the last point back, Esc stops. Drag a point to move it. The stopwatch beside a shape animates it: moving a point then sets a key at the playhead, and the shape moves in straight lines between keys.
+The Roto node is drawn with the viewer's own **Roto tool**, the same one the Roto node on the ComfyUI canvas uses. Select the Roto node: the tool comes up over the comp's picture and its options (the shapes list, modes, feather, blur, dilate, the global matte, Roto Curves) are in the node's Parameters. **+ Shape**, then click the points (drag to pull out a curve) and click the first one to close it. Everything else works as in the viewer: drag a vertex, Ctrl+drag pulls out its feather, Alt+click an edge inserts a point, right-click deletes one, a box around several points moves, scales and turns them; keys come from the key buttons beside the timeline. Middle-drag pans the picture, the wheel zooms it.
+
+The shapes are kept in the comp as the viewer keeps them (coordinates as shares of the frame, sizes in comp pixels), and Ctrl+Z in the comp takes a change back. The picture shows the matte as the viewer's mask preview draws it; Render and Export to Nuke make it with the code the ComfyUI Roto node renders with (`roto_raster.py`), so the two agree.
 
 ## Properties
 

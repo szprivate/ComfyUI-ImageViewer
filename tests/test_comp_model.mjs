@@ -199,19 +199,6 @@ test("the keyer takes the screen out and keeps the rest; despill takes green out
     assert.ok(luma.data[3] > 0.99 && luma.data[7] > 0.99);
 });
 
-test("a roto shape covers its area, a feather softens it, a subtract cuts it, and its keys move it", () => {
-    const sq = { pts: [[2, 2], [12, 2], [12, 8], [2, 8]], smooth: false };
-    let m = O.rotoMatte([sq], 0, 16, 10, 1);
-    assert.ok(Math.abs(m.reduce((a, b) => a + b, 0) - 60) < 1e-9, "10 x 6 pixels");
-    m = O.rotoMatte([sq, { pts: [[2, 2], [7, 2], [7, 8], [2, 8]], smooth: false, mode: "subtract" }], 0, 16, 10, 1);
-    assert.ok(Math.abs(m.reduce((a, b) => a + b, 0) - 30) < 1e-9);
-    const soft = O.rotoMatte([{ ...sq, feather: 3 }], 0, 16, 10, 1);
-    assert.ok(soft[5 * 16 + 1] > 0.01 && soft[5 * 16 + 1] < 0.5, "the feather reaches out");
-    const moving = { smooth: false, keys: [{ f: 0, pts: sq.pts }, { f: 10, pts: sq.pts.map(([x, y]) => [x + 2, y]) }] };
-    assert.deepEqual(O.shapePoints(moving, 5)[0], [3, 2]);
-    assert.deepEqual(O.shapePoints(moving, 20)[0], [4, 2]);
-});
-
 test("crop, shuffle, copy, premult and unpremult", () => {
     const img = solid(4, 2, [0.2, 0.4, 0.6, 0.5]);
     const cr = O.cropImage(img, 1, 0, 2.5, 2, 0);

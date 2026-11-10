@@ -97,11 +97,6 @@ const CSS = `
 .cp-swatch{width:14px;height:14px;border-radius:2px;flex:none;border:1px solid #0008}
 .cp-note{opacity:.6;padding:6px 2px}
 .cp-over{position:absolute;left:0;top:0;transform-origin:0 0;overflow:visible;pointer-events:none}
-.cp-over .cp-shape{fill:#ff6a1a14;stroke:#ff6a1a;stroke-width:1.5px;vector-effect:non-scaling-stroke}
-.cp-over .cp-shape.sub{stroke:#5ab0ff;fill:#5ab0ff14}
-.cp-over .cp-draft{fill:none;stroke:#ffcf3a;stroke-width:1.5px;stroke-dasharray:4 3;vector-effect:non-scaling-stroke}
-.cp-over .cp-pt{fill:#111;stroke:#ffcf3a;stroke-width:1.5px;vector-effect:non-scaling-stroke;pointer-events:all;cursor:move}
-.cp-over .cp-pt.first{fill:#ffcf3a}
 .cp-over .cp-handle{fill:#0009;stroke:#3ad1ff;stroke-width:1.5px;vector-effect:non-scaling-stroke;pointer-events:all;cursor:move}
 .cp-over .cp-handle.small{stroke:#ffcf3a}
 .cp-over .cp-hline{fill:none;stroke:#3ad1ff;stroke-width:1px;stroke-dasharray:4 3;vector-effect:non-scaling-stroke}
@@ -116,9 +111,6 @@ const CSS = `
 .cp-ccwheel canvas{width:104px;height:104px;cursor:crosshair;touch-action:none}
 .cp-ccval{font-size:11px;opacity:.75;text-align:center}
 .cp-ccluma{width:100%;height:70px;background:rgba(0,0,0,.25);border-radius:3px}
-.cp-shrow{display:flex;align-items:center;gap:4px;padding:2px 0}
-.cp-shrow input[type=number]{width:52px}
-.cp-shrow .cp-shname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 `;
 const CAT_COLOR = { Image: "#9aa6b8", Merge: "#6f9fe0", Transform: "#b39ddb", Color: "#86c98a", Filter: "#e0a060", Other: "#c8c8c8",
     Channel: "#9b8a6a", Time: "#d98fb0", Keyer: "#5fc4b8", Draw: "#d6c86a" };
@@ -429,7 +421,7 @@ export function createCompEditor(host, opts = {}) {
         lastShown = performance.now(); drawnGen = gen;
         lastPics = { pics, scale, frame: f };
         const t0 = performance.now();
-        const img = C.renderNode(st.comp, id, f, { scale, source: (n, nf) => pics.get(`${n.id}@${nf}`) || null, cache: heavy,
+        const img = C.renderNode(st.comp, id, f, { scale, source: (n, nf) => pics.get(`${n.id}@${nf}`) || null, cache: heavy, matte,
             ocio: (spec) => luts.get(C.OC.ocioKey(spec)) || null });
         lastMs = Math.round(performance.now() - t0);
         lastScale = scale;
@@ -463,6 +455,7 @@ export function createCompEditor(host, opts = {}) {
         canvas.style.transform = `translate(${st.zoom.x}px, ${st.zoom.y}px) scale(${st.zoom.s})`;
         over.setAttribute("width", cw); over.setAttribute("height", ch);
         over.style.transform = canvas.style.transform;
+        if (o.onView) o.onView();
     }
     stage.addEventListener("wheel", (e) => {
         e.preventDefault();
@@ -475,47 +468,44 @@ export function createCompEditor(host, opts = {}) {
     }, { passive: false });
     stage.addEventListener("pointerdown", (e) => {
         root.focus({ preventScroll: true });
-        if (e.button === 0 && st.draw) { e.preventDefault(); drawClick(compXY(e)); return; }
         if (e.button === 0 && st.pick) { e.preventDefault(); pickAt(compXY(e)); return; }
-        // Otherwise the left or the middle button pans the picture.
+        // Otherwise the left or the middle button pans the picture - the left one not while the Roto tool owns it.
         if (e.button !== 0 && e.button !== 1) return;
+        if (e.button === 0 && st.toolOn) return;
         e.preventDefault(); stage.setPointerCapture(e.pointerId);
         const sx = e.clientX, sy = e.clientY, ox = st.zoom.x, oy = st.zoom.y;
         stage.onpointermove = (ev) => { st.zoom.fit = false; st.zoom.x = ox + ev.clientX - sx; st.zoom.y = oy + ev.clientY - sy; layoutCanvas(); };
         stage.onpointerup = () => { stage.onpointermove = null; };
     });
-    stage.addEventListener("dblclick", () => { if (st.draw) { finishDraw(); return; } st.zoom.fit = true; layoutCanvas(); });
+    stage.addEventListener("dblclick", () => { if (st.toolOn) return; st.zoom.fit = true; layoutCanvas(); });
 
     // ── on the picture: Roto shapes and the colour picker ────────────────────
     function compXY(e) {
         const r = stage.getBoundingClientRect();
         return [(e.clientX - r.left - st.zoom.x) / st.zoom.s, (e.clientY - r.top - st.zoom.y) / st.zoom.s];
     }
-    const rotoNode = () => { const n = primary(); return n && n.type === "roto" ? n : null; };
+    /** A Roto node's matte for the preview: the page's (the viewer's Roto code), at W x H of the comp's frame. */
+    function matte(n, f, W, H) {
+        return o.rotoMatte ? o.rotoMatte(n.roto, f, fmt().width, fmt().height, W, H, doc) : null;
+    }
+    /** The Roto tool wrote a node's shapes: changes that come close together are one undo step. */
+    let rotoBurst = 0;
+    function setRoto(id, value) {
+        const n = node(id);
+        if (!n) return;
+        if (liveBak.size) liveRestore();
+        if (!rotoBurst) st.hist.push(st.comp);
+        win().clearTimeout(rotoBurst);
+        rotoBurst = win().setTimeout(() => { rotoBurst = 0; }, 600);
+        if (value) n.roto = value; else delete n.roto;
+        st.dirty = true;
+        refresh(["bar", "stage", "graph"]);
+    }
     function renderOverlay() {
         over.replaceChildren();
-        stage.classList.toggle("drawing", !!st.draw);
         stage.classList.toggle("picking", !!st.pick);
-        const n = rotoNode();
-        if (!n) { if (st.draw) st.draw = null; drawHandles(); return; }
-        const r = 4 / (st.zoom.s || 1);
-        (n.shapes || []).forEach((sh, si) => {
-            const pts = O.shapePoints(sh, st.frame);
-            if (!pts || !pts.length) return;
-            const line = O.shapeOutline(pts, sh.smooth !== false, 1);
-            over.append(svgEl(doc, "polygon", { class: "cp-shape" + (sh.mode === "subtract" ? " sub" : ""), points: line.map((p) => p.join(",")).join(" "),
-                opacity: sh.off ? 0.35 : 1 }));
-            pts.forEach((p, pi) => {
-                const c = svgEl(doc, "circle", { class: "cp-pt", cx: p[0], cy: p[1], r });
-                c.dataset.shape = String(si); c.dataset.pt = String(pi);
-                c.addEventListener("pointerdown", (e) => dragPoint(e, n, si, pi));
-                over.append(c);
-            });
-        });
-        if (st.draw && st.draw.pts.length) {
-            over.append(svgEl(doc, "polyline", { class: "cp-draft", points: st.draw.pts.map((p) => p.join(",")).join(" ") }));
-            st.draw.pts.forEach((p, i) => over.append(svgEl(doc, "circle", { class: "cp-pt" + (i ? "" : " first"), cx: p[0], cy: p[1], r })));
-        }
+        drawHandles();
+        if (o.onView) o.onView();
     }
     /** The points of the selected node that are dragged on the picture: [{param, at: [x, y], set(xy) -> value, small?}]. */
     function handlesOf(n) {
@@ -560,7 +550,7 @@ export function createCompEditor(host, opts = {}) {
     }
     /** A handle dragged: the value at the playhead (a key there when animated) while it moves; one undo step. */
     function dragHandle(e, id, h) {
-        if (e.button !== 0 || st.draw || st.pick) return;
+        if (e.button !== 0 || st.pick) return;
         e.preventDefault(); e.stopPropagation();
         stage.setPointerCapture(e.pointerId);
         const d = C.NODE_TYPES[node(id).type].params[h.param];
@@ -579,56 +569,8 @@ export function createCompEditor(host, opts = {}) {
             if (pushed) { st.dirty = true; refresh(["bar", "props", "stage", "graph"]); }
         };
     }
-    function startDraw() {
-        const n = rotoNode();
-        if (!n) return;
-        st.draw = { node: n.id, pts: [] }; st.pick = null;
-        renderOverlay(); renderProps();
-        toast("Click the shape's points on the picture; click the first one, double-click or press Enter to close it", "info");
-    }
-    function drawClick(xy) {
-        const d = st.draw;
-        const first = d.pts[0];
-        if (first && d.pts.length >= 3 && Math.hypot(first[0] - xy[0], first[1] - xy[1]) * st.zoom.s < 9) { finishDraw(); return; }
-        d.pts.push([Math.round(xy[0] * 10) / 10, Math.round(xy[1] * 10) / 10]);
-        renderOverlay();
-    }
-    function finishDraw() {
-        const d = st.draw;
-        st.draw = null;
-        const n = d && node(d.node);
-        if (n && d.pts.length >= 3) mutate(() => { n.shapes = (n.shapes || []).concat([{ name: `Shape ${(n.shapes || []).length + 1}`, pts: d.pts, smooth: true, feather: 0 }]); }, { structure: false });
-        else { renderOverlay(); renderProps(); }
-    }
-    /** A shape's points changed at the playhead: a key there when it is animated, else its points. */
-    function setShapePts(sh, pts) {
-        if (Array.isArray(sh.keys) && sh.keys.length) {
-            const k = sh.keys.find((x) => x.f === st.frame);
-            if (k) k.pts = pts; else { sh.keys.push({ f: st.frame, pts }); sh.keys.sort((a, b) => a.f - b.f); }
-        } else sh.pts = pts;
-    }
-    function dragPoint(e, n, si, pi) {
-        if (e.button !== 0 || st.draw) return;
-        e.preventDefault(); e.stopPropagation();
-        const target = e.currentTarget;
-        stage.setPointerCapture(e.pointerId);
-        const pts = O.shapePoints(n.shapes[si], st.frame).map((p) => p.slice());
-        let moved = false;
-        stage.onpointermove = (ev) => {
-            const xy = compXY(ev);
-            pts[pi] = [Math.round(xy[0] * 10) / 10, Math.round(xy[1] * 10) / 10];
-            moved = true;
-            target.setAttribute("cx", pts[pi][0]); target.setAttribute("cy", pts[pi][1]);
-            const poly = over.querySelectorAll("polygon")[si];
-            if (poly) poly.setAttribute("points", O.shapeOutline(pts, n.shapes[si].smooth !== false, 1).map((p) => p.join(",")).join(" "));
-        };
-        stage.onpointerup = () => {
-            stage.onpointermove = null; stage.onpointerup = null;
-            if (moved) mutate(() => setShapePts(node(n.id).shapes[si], pts), { structure: false });
-        };
-    }
     function startPick(nodeId, param) {
-        st.pick = { node: nodeId, param }; st.draw = null;
+        st.pick = { node: nodeId, param };
         renderOverlay();
         toast("Click the picture to take its colour", "info");
     }
@@ -641,7 +583,7 @@ export function createCompEditor(host, opts = {}) {
         // The colour that goes INTO the node (what a keyer sees), else what is on screen.
         const srcId = n.inputs && n.inputs[0] ? n.inputs[0] : viewedId();
         const { pics, scale, frame } = lastPics;
-        const img = C.renderNode(st.comp, srcId, frame, { scale, source: (s, nf) => pics.get(`${s.id}@${nf}`) || null, cache: heavy });
+        const img = C.renderNode(st.comp, srcId, frame, { scale, source: (s, nf) => pics.get(`${s.id}@${nf}`) || null, cache: heavy, matte });
         const x = Math.max(0, Math.min(img.w - 1, Math.floor(xy[0] * scale))), y = Math.max(0, Math.min(img.h - 1, Math.floor(xy[1] * scale)));
         const i = (y * img.w + x) * 4, a = img.data[i + 3];
         const old = C.paramAt(n, pk.param, st.frame) || [0, 0, 0, 1];
@@ -753,7 +695,6 @@ export function createCompEditor(host, opts = {}) {
     }
     function select(ids, { add = false } = {}) {
         st.sel = add ? [...new Set([...st.sel, ...ids])] : ids.slice();
-        if (st.draw && !(primary() && primary().id === st.draw.node)) st.draw = null;
         refresh(["graph", "props", "layers"]);
         renderOverlay();
         if (o.onSelect) o.onSelect(primary());
@@ -1057,9 +998,7 @@ export function createCompEditor(host, opts = {}) {
         if (t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA")) return false;
         const k = e.key, ctrl = e.ctrlKey || e.metaKey;
         let used = true;
-        if (st.draw && k === "Enter") finishDraw();
-        else if ((st.draw || st.pick) && k === "Escape") { st.draw = null; st.pick = null; renderOverlay(); renderProps(); }
-        else if (st.draw && k === "Backspace") { st.draw.pts.pop(); renderOverlay(); }
+        if (st.pick && k === "Escape") { st.pick = null; renderOverlay(); renderProps(); }
         else if (ctrl && k.toLowerCase() === "z") { if (e.shiftKey) redo(); else undo(); }
         else if (ctrl && k.toLowerCase() === "y") redo();
         else if (ctrl && e.shiftKey && k.toLowerCase() === "s") saveAs();
@@ -1274,46 +1213,12 @@ export function createCompEditor(host, opts = {}) {
         }
         return row;
     }
+    /** The Roto node's shapes are the viewer's Roto tool's: its options go into this slot, its outlines over the picture. */
     function rotoSection(n) {
-        props.append(el(doc, "h4", "", "Shapes"));
-        const top = el(doc, "div", "cp-shrow");
-        top.append(btn(st.draw ? "Drawing… (Enter)" : "Draw a shape", "Click its points on the picture: the first point, a double-click or Enter closes it; Esc stops",
-            () => (st.draw ? finishDraw() : startDraw()), st.draw ? "on" : ""));
-        props.append(top);
-        const shapes = n.shapes || [];
-        if (!shapes.length) props.append(el(doc, "div", "mg-empty", "No shapes yet. Without an input the Roto is a white matte; with one it cuts its input out."));
-        shapes.forEach((sh, si) => {
-            const row = el(doc, "div", "cp-shrow");
-            const anim = Array.isArray(sh.keys) && sh.keys.length > 0;
-            const eye = el(doc, "span", "mg-ic" + (sh.off ? "" : " on"), "👁"); eye.title = "Use this shape";
-            eye.onclick = () => mutate(() => { if (sh.off) delete sh.off; else sh.off = true; }, { structure: false });
-            const sw = el(doc, "span", "mg-sw" + (anim ? " on" : ""), "⏱");
-            sw.title = anim ? "Animated: click to stop (keeps the shape at the playhead)" : "Animate the shape (a key at the playhead; moving a point then sets a key)";
-            sw.onclick = () => mutate(() => {
-                if (anim) { sh.pts = O.shapePoints(sh, st.frame).map((p) => p.slice()); delete sh.keys; }
-                else sh.keys = [{ f: st.frame, pts: (sh.pts || []).map((p) => p.slice()) }];
-            }, { structure: false });
-            const hasKey = anim && sh.keys.some((k) => k.f === st.frame);
-            const key = el(doc, "span", "mg-key", anim ? (hasKey ? "◆" : "◇") : "");
-            key.title = "Key at the playhead (click to add or remove)";
-            key.onclick = () => { if (!anim) return; mutate(() => {
-                if (hasKey) { if (sh.keys.length > 1) sh.keys = sh.keys.filter((k) => k.f !== st.frame); }
-                else setShapePts(sh, O.shapePoints(sh, st.frame).map((p) => p.slice()));
-            }, { structure: false }); };
-            const name = el(doc, "span", "cp-shname", sh.name || `Shape ${si + 1}`);
-            const mode = el(doc, "select");
-            for (const m of O.ROTO_MODES) mode.append(new Option(m, m));
-            mode.value = sh.mode || "add"; mode.title = "Adds to the matte, or cuts it away";
-            mode.onchange = () => mutate(() => { sh.mode = mode.value; }, { structure: false });
-            const fe = numInput(sh.feather || 0, 0.5, (v) => { if (v !== null) mutate(() => { sh.feather = Math.max(0, v); }, { structure: false }); }, { min: 0 });
-            fe.title = "Feather (pixels of the comp)";
-            const sm = el(doc, "input"); sm.type = "checkbox"; sm.checked = sh.smooth !== false; sm.title = "A smooth curve through the points (off: straight lines)";
-            sm.onchange = () => mutate(() => { sh.smooth = sm.checked; }, { structure: false });
-            const del = btn("×", "Delete the shape", () => mutate(() => { n.shapes = shapes.filter((_, j) => j !== si); }, { structure: false }));
-            row.append(eye, sw, key, name, mode, fe, sm, del);
-            props.append(row);
-        });
-        if (shapes.length) props.append(el(doc, "div", "mg-empty", "Drag a point on the picture to move it. Feather is in pixels; the box ticks a smooth curve."));
+        const slot = el(doc, "div", "cp-roto-slot");
+        props.append(slot);
+        if (o.roto && o.roto.mount) o.roto.mount(n, slot);
+        else slot.append(el(doc, "div", "mg-empty", "The shapes are drawn with the viewer's Roto tool."));
     }
     // ColorCorrect, laid out as Color Finesse is: a tab per kind of correction, a bar of luma ranges.
     const CC_TABS = [["hsl", "HSL"], ["rgb", "RGB"], ["offsets", "Hue offsets"], ["luma", "Luma ranges"], ["secondary", "Secondaries"]];
@@ -1437,8 +1342,9 @@ export function createCompEditor(host, opts = {}) {
         const ps = Object.entries(t.params);
         if (ps.length) props.append(el(doc, "h4", "", t.label));
         if (n.type === "colorcorrect") ccSection(n, t.params);
-        else for (const [p, d] of ps) if (d.kind !== "shapes") props.append(paramRow(n, p, d));
+        else for (const [p, d] of ps) if (d.kind !== "roto") props.append(paramRow(n, p, d));
         if (n.type === "roto") rotoSection(n);
+        else if (o.roto && o.roto.unmount) o.roto.unmount();
         if (n.type === "read") {
             const line = el(doc, "div", "mg-empty", "…");
             props.append(line);
@@ -1538,7 +1444,7 @@ export function createCompEditor(host, opts = {}) {
         load(raw, path) {
             const { comp: c, errors } = C.normalizeComp(raw);
             st.comp = c; st.path = path || ""; st.dirty = false; st.hist = new Mo.History(); st.sel = []; st.view = null;
-            st.draw = null; st.pick = null; heavy.clear(); lastPics = null;
+            st.pick = null; heavy.clear(); lastPics = null;
             st.zoom.fit = true; st.graph.fitted = false;
             refresh();
             return { ok: !errors.length, errors };
@@ -1553,6 +1459,13 @@ export function createCompEditor(host, opts = {}) {
         relayout() { layoutCanvas(); if (!st.graph.fitted) frameAll(); if (curvesEl.isConnected) curves().draw(); },
         curves: () => curves(),
         moved,
+        setRoto,
+        node: (id) => node(id),
+        stage,
+        /** The picture's box in the stage's pixels (x, y, w, h) and the comp's size (cw, ch). */
+        canvasBox: () => ({ x: st.zoom.x, y: st.zoom.y, w: fmt().width * st.zoom.s, h: fmt().height * st.zoom.s, cw: fmt().width, ch: fmt().height }),
+        /** The Roto tool is on the picture: the left button is its, not the pan's. */
+        setToolOn(on) { st.toolOn = !!on; },
         /** A key the viewer's window saw first (its hotkeys run in the capture phase): handled here when it is the
          *  comp's own - with the focus in the graph, Layers, Properties or the picture. True when it was. */
         handleKey(e) {

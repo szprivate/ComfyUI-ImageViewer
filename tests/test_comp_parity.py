@@ -137,12 +137,6 @@ def new_node_cases(sources):
     for mode in ("chroma", "luma"):
         c.append(one(node("keyer", 1, ["Read1"], mode=mode, screen=[0.1, 0.8, 0.12, 1], tolerance=0.2, softness=0.35, despill=0.7),
                      {"Read1": green}))
-    shapes = [{"pts": [[2, 2], [24, 3.5], [20, 15], [5, 12]], "smooth": True, "feather": 1.5},
-              {"pts": [[8, 5], [16, 5], [12, 11]], "smooth": False, "mode": "subtract"},
-              {"pts": [[1, 1], [6, 1], [6, 6]], "smooth": False,
-               "keys": [{"f": 0, "pts": [[1, 1], [6, 1], [6, 6]]}, {"f": 10, "pts": [[11, 6], [26, 1], [16, 16]]}]}]
-    c.append(one(node("roto", 1, [None], shapes=shapes), frame=4))
-    c.append(one(node("roto", 1, ["Read1"], shapes=shapes), frame=7, scale=0.5))
     frames = moving(5, range(0, 8))
     big = {"w": 40, "h": 32}
     for kw in ({"speed": 0.5, "offset": 1}, {"speed": 0.75, "start": 2, "blend": "mix"}, {"speed": -1, "offset": 6}):

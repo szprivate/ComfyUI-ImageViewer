@@ -216,7 +216,7 @@ export const NODE_TYPES = {
         despill: { kind: "num", def: 1, min: 0, max: 1, key: true, step: 0.05, help: "Takes the screen's colour out of the edges (chroma)" },
     } },
     roto: { label: "Roto", cat: "Draw", inputs: ["src"], params: {
-        shapes: { kind: "shapes", def: [] },
+        roto: { kind: "roto", def: null, help: "The shapes: drawn and edited on the picture with the viewer's Roto tool" },
     } },
     vectors: { label: "Vectors", cat: "Time", inputs: ["src"], params: {
         smoothness: { kind: "num", def: 0.04, min: 0.001, max: 1, step: 0.005, help: "Higher: smoother, less detailed motion" },
@@ -980,7 +980,8 @@ export function renderNode(comp, id, frame, ctx) {
             return O.keyImage(run(n.inputs[0], f, d1), p);
         }
         case "roto": {
-            const matte = O.rotoMatte(n.shapes, f, W, H, scale);
+            // The matte comes from the page (the viewer's Roto code, imageViewer_roto.js rotoMatte); none: empty.
+            const matte = (ctx.matte && ctx.matte(n, f, W, H)) || new Float64Array(W * H);
             return O.rotoImage(matte, W, H, n.inputs[0] ? run(n.inputs[0], f, d1) : null);
         }
         case "vectors": return vectorsOf(n.inputs[0], f, d1, n);
