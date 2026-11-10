@@ -286,3 +286,29 @@ test("keyers, erode / dilate, laplacian and channel ops", async () => {
     assert.equal(cm.data[3], 0.75);
     assert.equal(K.channelMathImage(px(0.2, 0.4, 0.6, 1), { operation: "invert", value: 1, channels: "rgb", mix: 1 }).data[0], Float32Array.of(0.8)[0]);
 });
+
+test("glow spreads only what is bright; a lens flare lights round its light and its ghosts lie along the axis", async () => {
+    const LT = await import("../js/imageViewer_compLight.js");
+    const O = await import("../js/imageViewer_compOps.js");
+    const w = 41, h = 21, img = O.blank(w, h);
+    const put = (x, y, v) => { const i = (y * w + x) * 4; img.data[i] = img.data[i + 1] = img.data[i + 2] = v; img.data[i + 3] = 1; };
+    put(10, 10, 4); put(30, 10, 0.3);
+    const g = LT.glowImage(img, { threshold: 0.8, softness: 0, size: 6, steps: 3, intensity: 1, tint: [1, 1, 1, 1], source: "luminance", effect_only: "on" });
+    const at = (im, x, y) => im.data[(y * w + x) * 4];
+    assert.ok(at(g, 13, 10) > 0, "the bright one glows");
+    assert.equal(at(g, 33, 10), 0, "the dim one does not");
+    // The same seed, the same ghosts; another seed, others.
+    const p = { seed: 3, ghost_count: 5, ghost_spread: 1, color: [1, 1, 1, 1] };
+    assert.deepEqual(LT.flareGhosts(p), LT.flareGhosts({ ...p }));
+    assert.notDeepEqual(LT.flareGhosts(p), LT.flareGhosts({ ...p, seed: 4 }));
+    const P = Object.fromEntries(Object.entries(C.NODE_TYPES.lensflare.params).map(([k, d]) => [k, d.def]));
+    const f = LT.flareImage(null, null, { ...P, position: [10, 10] }, 64, 40, 1);
+    const fa = (x, y) => f.data[(y * 64 + x) * 4];
+    assert.ok(fa(10, 10) > fa(20, 10) && fa(20, 10) > 0, "brightest at the light");
+    assert.ok(f.data[(10 * 64 + 10) * 4 + 3] > 0, "alone, its brightness is its alpha");
+    // Dirt from the seed is only there with dirt_amount.
+    const d0 = LT.flareImage(null, null, { ...P, position: [10, 10], glow_amount: 0, streak_amount: 0, halo_amount: 0, ghost_amount: 0 }, 64, 40, 1);
+    assert.ok(d0.data.every((v) => v === 0));
+    const d1 = LT.flareImage(null, null, { ...P, position: [10, 10], glow_amount: 0, streak_amount: 0, halo_amount: 0, ghost_amount: 0, dirt_amount: 1 }, 64, 40, 1);
+    assert.ok(d1.data.some((v) => v > 0));
+});

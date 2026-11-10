@@ -195,6 +195,21 @@ def new_node_cases(sources):
         c.append((dict(cs, ocio=OCIO_LUTS), srcs))
     cs, srcs = one(node("ocio_display", 1, ["Read1"], display="sRGB", view="v"))
     c.append((dict(cs, ocio=OCIO_LUTS), srcs))
+    for kw in ({}, {"steps": 1, "size": 7, "source": "max", "tint": [1, 0.6, 0.3, 1], "intensity": 2},
+               {"threshold": 0.4, "softness": 0, "effect_only": "on", "steps": 5, "size": 12}):
+        c.append(one(node("glow", 1, ["Read1"], **kw)))
+    c.append(({"comp": comp([read(1), node("glow", 1, ["Read1"], size=10, threshold=0.5), out("glow1")]), "scale": 0.5}, sources))
+    big = {"w": 64, "h": 40}
+    flares = [
+        ({"position": [20, 12]}, ["Read1", None]),
+        ({"position": [50, 8], "ghost_shape": "disc", "ghost_size": 0.1, "ghost_amount": 0.4, "dirt_amount": 1, "dirt_spots": 60,
+          "seed": 7, "streak_count": 5, "streak_width": 1.3, "halo_amount": 0.3, "halo_radius": 0.3, "halo_width": 0.04}, [None, None]),
+        ({"position": [10, 30], "ghost_size": 0.12, "ghost_amount": 0.5, "blades": 7, "ghost_rotation": 20, "ghost_softness": 0,
+          "dirt_amount": 0.8, "dirt_reach": 0.6, "color": [0.7, 0.9, 1, 1]}, ["Read1", "Read2"]),
+    ]
+    for kw, ins in flares:
+        c.append(one(node("lensflare", 1, ins, **kw), cw=big))
+        c.append(one(node("lensflare", 1, ins, **kw), cw=big, scale=0.5))
     for op in ("add", "multiply", "power", "invert", "clamp", "min", "max", "abs", "threshold", "set"):
         c.append(one(node("channelmath", 1, ["Read1"], operation=op, value=0.4, channels="rgba" if op == "clamp" else "rgb", mix=0.8)))
     return c

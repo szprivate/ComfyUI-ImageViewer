@@ -40,6 +40,8 @@ LAPLACIAN_MODES = ["laplacian", "highpass"]
 CM_CHANNELS = ["r", "g", "b", "a", "luminance"]
 CM_OUTPUTS = ["a", "r", "g", "b", "rgb", "rgba"]
 CM_OPS = ["union", "plus", "minus", "from", "multiply", "divide", "in", "out", "stencil", "max", "min", "absminus", "xor"]
+GLOW_SOURCES = ["luminance", "max"]
+GHOST_SHAPES = ["disc", "polygon"]
 MATH_OPS = ["add", "multiply", "power", "invert", "clamp", "min", "max", "abs", "threshold", "set"]
 _CH = {"r": 0, "g": 1, "b": 2, "a": 3}
 
@@ -229,6 +231,44 @@ NODE_TYPES = {
         "aspect": {"kind": "num", "def": 1, "min": 0.1, "max": 10, "key": True},
         "threshold": {"kind": "num", "def": 1, "min": 0, "key": True},
         "bloom": {"kind": "num", "def": 0, "min": 0, "key": True},
+    }},
+    "glow": {"inputs": ["src"], "params": {
+        "threshold": {"kind": "num", "def": 0.8, "key": True},
+        "softness": {"kind": "num", "def": 0.2, "min": 0, "key": True},
+        "size": {"kind": "num", "def": 30, "min": 0, "max": 500, "key": True},
+        "steps": {"kind": "int", "def": 4, "min": 1, "max": 8},
+        "intensity": {"kind": "num", "def": 1, "min": 0, "key": True},
+        "tint": {"kind": "color", "def": [1, 1, 1, 1]},
+        "source": {"kind": "enum", "def": "luminance", "choices": GLOW_SOURCES},
+        "effect_only": {"kind": "enum", "def": "off", "choices": ["off", "on"]},
+    }},
+    "lensflare": {"inputs": ["src", "dirt"], "params": {
+        "position": {"kind": "vec2", "def": None, "key": True},
+        "color": {"kind": "color", "def": [1, 0.85, 0.7, 1]},
+        "intensity": {"kind": "num", "def": 1, "min": 0, "key": True},
+        "size": {"kind": "num", "def": 1, "min": 0.01, "key": True},
+        "glow_amount": {"kind": "num", "def": 1, "min": 0, "key": True},
+        "glow_size": {"kind": "num", "def": 0.05, "min": 0, "key": True},
+        "streak_count": {"kind": "int", "def": 6, "min": 0, "max": 32},
+        "streak_amount": {"kind": "num", "def": 0.3, "min": 0, "key": True},
+        "streak_length": {"kind": "num", "def": 0.4, "min": 0, "key": True},
+        "streak_width": {"kind": "num", "def": 2, "min": 0.1, "key": True},
+        "streak_angle": {"kind": "num", "def": 15, "key": True},
+        "halo_amount": {"kind": "num", "def": 0.1, "min": 0, "key": True},
+        "halo_radius": {"kind": "num", "def": 0.25, "min": 0, "key": True},
+        "halo_width": {"kind": "num", "def": 0.015, "min": 0.001, "key": True},
+        "ghost_count": {"kind": "int", "def": 6, "min": 0, "max": 16},
+        "ghost_amount": {"kind": "num", "def": 0.15, "min": 0, "key": True},
+        "ghost_size": {"kind": "num", "def": 0.04, "min": 0, "key": True},
+        "ghost_spread": {"kind": "num", "def": 1, "key": True},
+        "ghost_shape": {"kind": "enum", "def": "polygon", "choices": GHOST_SHAPES},
+        "blades": {"kind": "int", "def": 6, "min": 3, "max": 16},
+        "ghost_rotation": {"kind": "num", "def": 0, "key": True},
+        "ghost_softness": {"kind": "num", "def": 0.3, "min": 0, "max": 1, "key": True},
+        "dirt_amount": {"kind": "num", "def": 0, "min": 0, "key": True},
+        "dirt_spots": {"kind": "int", "def": 120, "min": 0, "max": 1000},
+        "dirt_reach": {"kind": "num", "def": 0.3, "min": 0.01, "key": True},
+        "seed": {"kind": "int", "def": 1},
     }},
     "output": {"inputs": ["src"], "params": {}},
 }
@@ -1423,6 +1463,187 @@ def ocio_spec(t, p):
     return {"src": p.get("in_space") or "", "dst": p.get("out_space") or ""}
 
 
+# ── light: Glow and LensFlare (js/imageViewer_compLight.js) ─────────────────────
+
+_M32 = 0xFFFFFFFF
+
+
+def _round_js(x):
+    return int(math.floor(float(x) + 0.5))
+
+
+def mulberry32(seed):
+    """A seeded generator of numbers in [0, 1): the page's ``mulberry32``, number for number."""
+    state = [int(seed) & _M32]
+
+    def imul(x, y):
+        return (x * y) & _M32
+
+    def nxt():
+        a = (state[0] + 0x6D2B79F5) & _M32
+        state[0] = a
+        t = imul(a ^ (a >> 15), 1 | a)
+        t = ((t + imul(t ^ (t >> 7), 61 | t)) & _M32) ^ t
+        return ((t ^ (t >> 14)) & _M32) / 4294967296
+    return nxt
+
+
+def glow_image(img, p):
+    s = img.astype(np.float64)
+    tint = p.get("tint") or [1, 1, 1, 1]
+    if p.get("source") == "max":
+        L = np.maximum(np.maximum(s[..., 0], s[..., 1]), s[..., 2])
+    else:
+        L = LUM[0] * s[..., 0] + LUM[1] * s[..., 1] + LUM[2] * s[..., 2]
+    soft, th = float(p["softness"]), float(p["threshold"])
+    k = np.clip((L - th) / soft, 0, 1) if soft > 0 else np.where(L > th, 1.0, 0.0)
+    hi = np.zeros(img.shape[:2] + (3,), np.float32)   # the page's alpha is 0 here: only rgb is blurred
+    for c in range(3):
+        hi[..., c] = s[..., c] * k * tint[c]
+    steps = max(1, _round_js(p["steps"]))
+    acc = np.zeros(hi.shape, np.float64)
+    size = float(p["size"])
+    for _ in range(steps):
+        acc += blur_image(hi, size)
+        size = size / 2
+    g = float(p["intensity"]) / steps
+    rgb = acc * g
+    out = np.empty(img.shape, np.float32)
+    if p.get("effect_only") == "on":
+        out[..., :3] = rgb
+        out[..., 3] = np.clip(LUM[0] * rgb[..., 0] + LUM[1] * rgb[..., 1] + LUM[2] * rgb[..., 2], 0, 1)
+    else:
+        out[..., :3] = s[..., :3] + rgb
+        out[..., 3] = img[..., 3]
+    return out
+
+
+def flare_ghosts(p):
+    rnd = mulberry32(_round_js(p["seed"]) * 7919 + 17)
+    tint = p.get("color") or [1, 1, 1, 1]
+    out = []
+    for _ in range(_round_js(p["ghost_count"])):
+        t = (rnd() * 1.6 - 0.3) * p["ghost_spread"]
+        r = 0.3 + rnd() * 1.4
+        c = [tint[0] * (0.5 + 0.5 * rnd()), tint[1] * (0.5 + 0.5 * rnd()), tint[2] * (0.5 + 0.5 * rnd())]
+        k = 0.3 + 0.7 * rnd()
+        out.append({"t": t, "r": r, "c": c, "k": k})
+    return out
+
+
+def dirt_spots(p):
+    rnd = mulberry32(_round_js(p["seed"]) * 104729 + 3)
+    out = []
+    for _ in range(_round_js(p["dirt_spots"])):
+        x = rnd()
+        y = rnd()
+        r = 0.002 + rnd() * 0.018
+        k = 0.2 + 0.8 * rnd()
+        out.append({"x": x, "y": y, "r": r, "k": k})
+    return out
+
+
+def _poly_edge(n, rot, a):
+    seg = (2 * math.pi) / n
+    x = np.fmod(a - rot + math.pi / 2, seg)
+    x = np.where(x < 0, x + seg, x)
+    return math.cos(math.pi / n) / np.cos(x - math.pi / n)
+
+
+def flare_image(src, dirt, p, W, H, scale):
+    D = math.hypot(W, H) * p["size"]
+    pos = p.get("position") or [W / scale / 2, H / scale / 2]
+    lx, ly, cx, cy = pos[0] * scale, pos[1] * scale, W / 2, H / 2
+    tint = p.get("color") or [1, 1, 1, 1]
+    I = p["intensity"]
+    X = np.arange(W, dtype=np.float64)[None, :] + 0.5
+    Y = np.arange(H, dtype=np.float64)[:, None] + 0.5
+    dx = np.broadcast_to(X - lx, (H, W))
+    dy = np.broadcast_to(Y - ly, (H, W))
+    r2 = dx * dx + dy * dy
+    r = np.sqrt(r2)
+    core = np.zeros((H, W), np.float64)
+    if p["glow_amount"] > 0:
+        Rg = p["glow_size"] * D
+        Rg2 = Rg * Rg
+        g = Rg2 / (Rg2 + r2)
+        core = core + p["glow_amount"] * g * g
+    if p["streak_amount"] > 0:
+        nS = _round_js(p["streak_count"])
+        Ls = p["streak_length"] * D
+        Ws = max(1e-3, p["streak_width"] * scale)
+        for i in range(nS):
+            a = ((p["streak_angle"] + (360 * i) / max(1, nS)) * math.pi) / 180
+            ux, uy = math.cos(a), math.sin(a)
+            along = dx * ux + dy * uy
+            perp = (-dx * uy + dy * ux) / Ws
+            fo = 1 - along / Ls if Ls != 0 else np.zeros_like(along)
+            add = p["streak_amount"] * np.exp(-(perp * perp)) * fo * fo
+            core = core + np.where((along > 0) & (along < Ls), add, 0.0)
+    c = [core * tint[0], core * tint[1], core * tint[2]]
+    if p["halo_amount"] > 0:
+        Rh = p["halo_radius"] * D
+        Wh = max(1e-3, p["halo_width"] * D)
+        for k in range(3):
+            e = (r - Rh * (1 + (k - 1) * 0.03)) / Wh
+            c[k] = c[k] + p["halo_amount"] * tint[k] * np.exp(-(e * e))
+    if p["ghost_amount"] > 0:
+        poly = p.get("ghost_shape") == "polygon"
+        nB = max(3, _round_js(p["blades"]))
+        rot = (p["ghost_rotation"] * math.pi) / 180
+        soft = min(1.0, max(0.0, float(p["ghost_softness"])))
+        for g in flare_ghosts(p):
+            gx = lx + g["t"] * 2 * (cx - lx)
+            gy = ly + g["t"] * 2 * (cy - ly)
+            R = max(1e-3, g["r"] * p["ghost_size"] * D)
+            x0, x1 = max(0, int(math.floor(gx - 1.5 * R)) - 1), min(W, int(math.ceil(gx + 1.5 * R)) + 1)
+            y0, y1 = max(0, int(math.floor(gy - 1.5 * R)) - 1), min(H, int(math.ceil(gy + 1.5 * R)) + 1)
+            if x0 >= x1 or y0 >= y1:
+                continue
+            qx = np.broadcast_to(X[:, x0:x1] - gx, (y1 - y0, x1 - x0))
+            qy = np.broadcast_to(Y[y0:y1, :] - gy, (y1 - y0, x1 - x0))
+            rho = np.sqrt(qx * qx + qy * qy) / R
+            inside = rho < 1.5
+            if poly:
+                rho = np.where(inside, rho / _poly_edge(nB, rot, np.arctan2(qy, qx)), rho)
+            cover = (1 - _smooth(1 - soft, 1, rho)) * (0.7 + 0.3 * np.where(rho < 1, rho, 1.0))
+            w = np.where(inside & (cover > 0), p["ghost_amount"] * g["k"] * cover, 0.0)
+            for k in range(3):
+                c[k][y0:y1, x0:x1] = c[k][y0:y1, x0:x1] + w * g["c"][k]
+    if p["dirt_amount"] > 0:
+        if dirt is not None:
+            d = dirt.astype(np.float64)
+            dm = LUM[0] * d[..., 0] + LUM[1] * d[..., 1] + LUM[2] * d[..., 2]
+        else:
+            dm = np.zeros((H, W), np.float64)
+            diag = math.hypot(W, H)
+            for sp in dirt_spots(p):
+                sx, sy, rr = sp["x"] * W, sp["y"] * H, sp["r"] * diag
+                x0, x1 = max(0, int(math.floor(sx - rr))), min(W - 1, int(math.ceil(sx + rr)))
+                y0, y1 = max(0, int(math.floor(sy - rr))), min(H - 1, int(math.ceil(sy + rr)))
+                if x0 > x1 or y0 > y1:
+                    continue
+                e = np.hypot(X[:, x0:x1 + 1] - sx, Y[y0:y1 + 1, :] - sy) / rr
+                dm[y0:y1 + 1, x0:x1 + 1] += sp["k"] * (1 - _smooth(0.3, 1, e))
+        Rd = p["dirt_reach"] * D
+        Rd2 = Rd * Rd
+        lit = p["dirt_amount"] * dm * (Rd2 / (Rd2 + r2))
+        for k in range(3):
+            c[k] = c[k] + lit * tint[k]
+    out = np.empty((H, W, 4), np.float32)
+    f = [c[0] * I, c[1] * I, c[2] * I]
+    if src is not None:
+        s = src.astype(np.float64)
+        for k in range(3):
+            out[..., k] = s[..., k] + f[k]
+        out[..., 3] = src[..., 3]
+    else:
+        for k in range(3):
+            out[..., k] = f[k]
+        out[..., 3] = np.clip(LUM[0] * f[0] + LUM[1] * f[1] + LUM[2] * f[2], 0, 1)
+    return out
+
+
 def mix_images(a, b, t):
     x = a.astype(np.float64)
     return (x + (b.astype(np.float64) - x) * t).astype(np.float32)
@@ -1505,6 +1726,14 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None):
             src = run(ins[0], f, d1)
             fn = ocio(ocio_spec(t, p)) if ocio else None
             return ocio_image(src, fn, p.get("unpremult") != "off") if fn else src
+        if t == "glow":
+            p = P(n, f, NODE_TYPES["glow"]["params"])
+            p["size"] = p["size"] * scale
+            return glow_image(run(ins[0], f, d1), p)
+        if t == "lensflare":
+            p = P(n, f, NODE_TYPES["lensflare"]["params"])
+            return flare_image(run(ins[0], f, d1) if ins and ins[0] else None,
+                               run(ins[1], f, d1) if len(ins) > 1 and ins[1] else None, p, W, H, scale)
         if t == "colorcorrect":
             return color_correct_image(run(ins[0], f, d1), P(n, f, NODE_TYPES["colorcorrect"]["params"]))
         if t == "grade":

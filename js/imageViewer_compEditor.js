@@ -757,7 +757,7 @@ export function createCompEditor(host, opts = {}) {
             const sw = el(doc, "span", "mg-sw" + (animated ? " on" : ""), "⏱");
             sw.title = animated ? "Animated: click to stop animating (keeps the value at the playhead)" : "Click to animate (a key at the playhead)";
             sw.onclick = () => mutate(() => {
-                if (!animated && (n[p] === undefined || n[p] === null)) n[p] = C.paramAt(n, p, st.frame) ?? (p === "center" ? [fmt().width / 2, fmt().height / 2] : d.def);
+                if (!animated && (n[p] === undefined || n[p] === null)) n[p] = C.paramAt(n, p, st.frame) ?? (p === "center" || p === "position" ? [fmt().width / 2, fmt().height / 2] : d.def);
                 Mo.toggleAnimated(keyHost(), n, p, st.frame);
             }, { structure: false });
             row.append(sw);
@@ -768,8 +768,9 @@ export function createCompEditor(host, opts = {}) {
         const write = (v) => mutate(() => { if (d.key) Mo.setProp(keyHost(), n, p, v, st.frame); else n[p] = v; }, { structure: false });
         if (d.kind === "num" || d.kind === "int") row.append(numInput(cur, d.kind === "int" ? 1 : d.step, (v) => { if (v !== null) write(d.kind === "int" ? Math.round(v) : v); }, d));
         else if (d.kind === "vec2") {
-            const base = cur || (p === "center" ? [fmt().width / 2, fmt().height / 2] : [0, 0]);
-            for (let a = 0; a < 2; a++) row.append(numInput(cur ? cur[a] : null, d.step, (v) => { if (v === null && p === "center" && !animated) { mutate(() => { delete n.center; }, { structure: false }); return; } const nv = base.slice(); nv[a] = v === null ? base[a] : v; write(nv); }));
+            const mid = p === "center" || p === "position";
+            const base = cur || (mid ? [fmt().width / 2, fmt().height / 2] : [0, 0]);
+            for (let a = 0; a < 2; a++) row.append(numInput(cur ? cur[a] : null, d.step, (v) => { if (v === null && mid && !animated) { mutate(() => { delete n[p]; }, { structure: false }); return; } const nv = base.slice(); nv[a] = v === null ? base[a] : v; write(nv); }));
         } else if (d.kind === "color") {
             const c = cur || [0, 0, 0, 1];
             const pick = el(doc, "input"); pick.type = "color"; pick.value = toHex(c);

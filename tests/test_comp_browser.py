@@ -299,6 +299,28 @@ class CompBrowserTests(unittest.TestCase):
             pg.screenshot(path=os.path.join(SHOTS, "comp-colorcorrect.png"))
         self.assertEqual(self.errors, [])
 
+    def test_a_lens_flare_with_dirt_and_a_glow_are_drawn(self):
+        pg = self.page()
+        self.new_comp(pg)
+        before = self.pixel(pg, 0.5, 0.5)
+        pg.evaluate(f"""() => {{ const e = {self.ED}; e.select(['Constant1']);
+            e.addNode('lensflare', {{ position: [1240, 380], dirt_amount: 1.2, dirt_reach: 0.5, ghost_amount: 0.3, ghost_size: 0.06 }});
+            e.addNode('glow', {{ threshold: 0.6, size: 40 }}); }}""")
+        pg.wait_for_timeout(1500)
+        types = pg.evaluate(f"() => {self.ED}.comp().nodes.map((n) => n.type)")
+        self.assertIn("lensflare", types)
+        self.assertIn("glow", types)
+        at_light = self.pixel(pg, 1240 / 1920, 380 / 1080)
+        self.assertGreater(sum(at_light[:3]), sum(before[:3]) + 100, (at_light, before))
+        P = "__panel.compPropsPanel"
+        pg.evaluate(f"() => {self.ED}.select([{self.ED}.comp().nodes.find((n) => n.type === 'lensflare').id])")
+        labels = pg.evaluate(f"() => Array.from({P}.querySelectorAll('.mg-prop label')).map((l) => l.textContent)")
+        self.assertIn("ghost_shape", labels)
+        if SHOTS:
+            pg.wait_for_timeout(300)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-lensflare.png"))
+        self.assertEqual(self.errors, [])
+
     def test_ocio_reads_nodes_and_the_viewers_display(self):
         import importlib.util
         if importlib.util.find_spec("PyOpenColorIO") is None:

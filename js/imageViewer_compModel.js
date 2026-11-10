@@ -29,6 +29,7 @@ import * as O from "./imageViewer_compOps.js";
 import { ccParams, colorCorrectImage } from "./imageViewer_compColor.js";
 import * as K from "./imageViewer_compMatte.js";
 import * as OC from "./imageViewer_compOcio.js";
+import * as LT from "./imageViewer_compLight.js";
 import { blank, blurImage, boxesForGauss } from "./imageViewer_compOps.js";
 export { blank, blurImage, boxesForGauss };
 
@@ -85,6 +86,44 @@ export const NODE_TYPES = {
         display: { kind: "ocio_display", def: "", help: "The display (empty: the config's default)" },
         view: { kind: "ocio_view", def: "", help: "The view (empty: the display's default)" },
         unpremult: { kind: "enum", def: "on", choices: ["on", "off"] },
+    } },
+    glow: { label: "Glow", cat: "Filter", inputs: ["src"], params: {
+        threshold: { kind: "num", def: 0.8, key: true, step: 0.05, help: "Brighter than this glows" },
+        softness: { kind: "num", def: 0.2, min: 0, key: true, step: 0.05, help: "Fully glowing this much above the threshold" },
+        size: { kind: "num", def: 30, min: 0, max: 500, key: true, step: 1, help: "The widest blur, pixels of the comp" },
+        steps: { kind: "int", def: 4, min: 1, max: 8, help: "Blurs stacked, each half the size of the one before" },
+        intensity: { kind: "num", def: 1, min: 0, key: true, step: 0.05 },
+        tint: { kind: "color", def: [1, 1, 1, 1] },
+        source: { kind: "enum", def: "luminance", choices: LT.GLOW_SOURCES, help: "What brightness is measured on" },
+        effect_only: { kind: "enum", def: "off", choices: ["off", "on"], help: "on: the glow alone" },
+    } },
+    lensflare: { label: "LensFlare", cat: "Draw", inputs: ["src", "dirt"], params: {
+        position: { kind: "vec2", def: null, key: true, step: 1, help: "The light, pixels of the comp (empty: the middle)" },
+        color: { kind: "color", def: [1, 0.85, 0.7, 1] },
+        intensity: { kind: "num", def: 1, min: 0, key: true, step: 0.05 },
+        size: { kind: "num", def: 1, min: 0.01, key: true, step: 0.05, help: "Everything's size, as a share of the frame's diagonal" },
+        glow_amount: { kind: "num", def: 1, min: 0, key: true, step: 0.05 },
+        glow_size: { kind: "num", def: 0.05, min: 0, key: true, step: 0.005 },
+        streak_count: { kind: "int", def: 6, min: 0, max: 32, help: "Rays (the aperture's blades)" },
+        streak_amount: { kind: "num", def: 0.3, min: 0, key: true, step: 0.05 },
+        streak_length: { kind: "num", def: 0.4, min: 0, key: true, step: 0.01 },
+        streak_width: { kind: "num", def: 2, min: 0.1, key: true, step: 0.1, help: "Pixels of the comp" },
+        streak_angle: { kind: "num", def: 15, key: true, step: 1 },
+        halo_amount: { kind: "num", def: 0.1, min: 0, key: true, step: 0.01, help: "A ring round the light, split into its colours" },
+        halo_radius: { kind: "num", def: 0.25, min: 0, key: true, step: 0.01 },
+        halo_width: { kind: "num", def: 0.015, min: 0.001, key: true, step: 0.001 },
+        ghost_count: { kind: "int", def: 6, min: 0, max: 16, help: "Bokeh along the axis through the frame's middle" },
+        ghost_amount: { kind: "num", def: 0.15, min: 0, key: true, step: 0.01 },
+        ghost_size: { kind: "num", def: 0.04, min: 0, key: true, step: 0.005 },
+        ghost_spread: { kind: "num", def: 1, key: true, step: 0.05 },
+        ghost_shape: { kind: "enum", def: "polygon", choices: LT.GHOST_SHAPES },
+        blades: { kind: "int", def: 6, min: 3, max: 16 },
+        ghost_rotation: { kind: "num", def: 0, key: true, step: 1 },
+        ghost_softness: { kind: "num", def: 0.3, min: 0, max: 1, key: true, step: 0.05 },
+        dirt_amount: { kind: "num", def: 0, min: 0, key: true, step: 0.05, help: "Dust on the glass, lit by the light: the dirt input's brightness, or spots from the seed" },
+        dirt_spots: { kind: "int", def: 120, min: 0, max: 1000 },
+        dirt_reach: { kind: "num", def: 0.3, min: 0.01, key: true, step: 0.01, help: "How far the light reaches the dirt" },
+        seed: { kind: "int", def: 1, help: "Another seed, other ghosts and dust" },
     } },
     blur: { label: "Blur", cat: "Filter", inputs: ["src"], params: {
         size: { kind: "num", def: 10, min: 0, max: 500, key: true, step: 0.5, help: "In pixels of the comp" },
@@ -196,8 +235,8 @@ export const NODE_TYPES = {
     } },
     output: { label: "Output", cat: "Other", inputs: ["src"], params: {} },
 };
-export const TYPE_ORDER = ["read", "constant", "roto", "merge", "copy", "transform", "crop", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "keyer", "lumakeyer", "chromakeyer", "blur", "erode", "laplacian",
-    "motionblur", "depthblur", "defocus", "shuffle", "channelmerge", "channelmath", "premult", "unpremult", "retime", "vectors", "output"];
+export const TYPE_ORDER = ["read", "constant", "roto", "merge", "copy", "transform", "crop", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "keyer", "lumakeyer", "chromakeyer", "blur", "glow", "erode", "laplacian",
+    "motionblur", "depthblur", "defocus", "lensflare", "shuffle", "channelmerge", "channelmath", "premult", "unpremult", "retime", "vectors", "output"];
 /** Nodes whose result is kept between renders (keyed by their whole upstream): they take long. */
 export const HEAVY = new Set(["vectors", "motionblur", "depthblur", "defocus"]);
 export const NODE_W = 120;
@@ -398,7 +437,7 @@ export function nodeKeyFrames(node) {
 
 // ── the stack the Layers panel shows ─────────────────────────────────────────
 
-const CHAIN = new Set(["transform", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "lumakeyer", "chromakeyer", "erode", "laplacian", "channelmerge", "channelmath", "blur", "crop", "shuffle", "premult", "unpremult", "retime", "keyer", "vectors",
+const CHAIN = new Set(["transform", "glow", "lensflare", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "lumakeyer", "chromakeyer", "erode", "laplacian", "channelmerge", "channelmath", "blur", "crop", "shuffle", "premult", "unpremult", "retime", "keyer", "vectors",
     "motionblur", "depthblur", "defocus", "copy"]);
 
 /**
@@ -754,6 +793,17 @@ export function renderNode(comp, id, frame, ctx) {
             const p = {};
             for (const k of Object.keys(NODE_TYPES.channelmerge.params)) p[k] = paramAt(n, k, f);
             return K.channelMergeImage(run(n.inputs[0], f, d1), n.inputs[1] ? run(n.inputs[1], f, d1) : null, p);
+        }
+        case "glow": {
+            const p = {};
+            for (const k of Object.keys(NODE_TYPES.glow.params)) p[k] = paramAt(n, k, f);
+            p.size *= scale;
+            return LT.glowImage(run(n.inputs[0], f, d1), p);
+        }
+        case "lensflare": {
+            const p = {};
+            for (const k of Object.keys(NODE_TYPES.lensflare.params)) p[k] = paramAt(n, k, f);
+            return LT.flareImage(n.inputs[0] ? run(n.inputs[0], f, d1) : null, n.inputs[1] ? run(n.inputs[1], f, d1) : null, p, W, H, scale);
         }
         case "ocio_colorspace": case "ocio_display": {
             const p = {};

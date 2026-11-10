@@ -47,6 +47,8 @@ The **Node Graph** panel is up when a comp opens. The picture runs from top to b
 | Shuffle | Each channel from any channel, or 0 or 1 |
 | ChannelMerge | One channel of A with one of B (union, plus, minus, from, multiply, divide, in, out, stencil, max, min, absminus, xor) into B's alpha, a colour channel, rgb or rgba |
 | ChannelMath | Arithmetic on the chosen channels: add, multiply, power, invert, clamp, min, max, abs, threshold, set |
+| Glow | What is brighter than the *threshold* (reached over *softness*), tinted and blurred at *steps* sizes, each half the one before, then added to the picture. *Effect only* gives the glow alone |
+| LensFlare | A flare from a light at *position*: a glow round it, rays (*streak_count*, as many as the aperture has blades), a halo split into its colours, bokeh ghosts along the line through the frame's middle (discs or polygons of *blades*, from the *seed*), and dust on the glass lit by the light: the *dirt* input's brightness, or spots from the seed. On the *src* input it is added to the picture; alone, its brightness is its alpha |
 | Premult / Unpremult | Multiply the colour by the alpha, or divide it back |
 | Retime | Plays its input faster, slower or backwards (*speed*, *start*, *offset*), the nearest frame or two mixed |
 | Vectors | Motion vectors measured from the footage (optical flow): red and green where each pixel goes in the next frame, blue and alpha where it came from. *Detail* half (the default) measures on a picture half the size, which is much faster |
