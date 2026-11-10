@@ -84,6 +84,7 @@ const CSS = `
 .cp-over .cp-hline{fill:none;stroke:#3ad1ff;stroke-width:1px;stroke-dasharray:4 3;vector-effect:non-scaling-stroke}
 .mg-prop label.cp-scrub{cursor:ew-resize;user-select:none}
 .mg-prop label.cp-scrub:hover{opacity:1;color:#3ad1ff}
+.mg-prop input.cp-mixed::placeholder{color:#c9a24a;opacity:1}.mg-prop.cp-mixedrow label{color:#c9a24a}.cp-multi{color:#9aa}
 .cp-stage.drawing,.cp-stage.picking{cursor:crosshair}
 .cp-cctabs,.cp-ccrange{display:flex;flex-wrap:wrap;gap:3px;margin:6px 0 4px}
 .cp-cctabs .mg-btn,.cp-ccrange .mg-btn{flex:1 1 auto;padding:2px 6px}
@@ -189,6 +190,18 @@ export function createCompEditor(host, opts = {}) {
     const node = (id) => C.nodeById(st.comp, id);
     const primary = () => (st.sel.length ? node(st.sel[st.sel.length - 1]) : null);
     const keyHost = () => ({ comp: { width: fmt().width, height: fmt().height } });
+    /** The nodes a Parameters change reaches: every selected node of the shown node's type, the shown one first
+     *  (as ComfyUI's Parameters panel does for several selected nodes). */
+    const targetsOf = (n) => [n, ...st.sel.map(node).filter((x) => x && x !== n && x.type === n.type)];
+    const sameVal = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+    /** Write ``p`` on every target: ``fn(its value now)`` -> its new value (keyed when the param is keyed). */
+    function writeAll(n, p, d, fn) {
+        for (const t of targetsOf(n)) {
+            const v = fn(C.paramAt(t, p, st.frame), t);
+            if (v === undefined) continue;
+            if (d.key) Mo.setProp(keyHost(), t, p, v, st.frame); else t[p] = v;
+        }
+    }
 
     function mutate(fn, { structure = true } = {}) {
         st.hist.push(st.comp);
@@ -843,7 +856,8 @@ export function createCompEditor(host, opts = {}) {
     function numInput(value, step, onCommit, d = {}) {
         const i = el(doc, "input"); i.type = "number"; i.step = step || 0.01; i.value = value === null || value === undefined ? "" : r3(value);
         if (d.min !== undefined) i.min = d.min; if (d.max !== undefined) i.max = d.max;
-        i.onchange = () => { const v = parseFloat(i.value); onCommit(Number.isFinite(v) ? v : null); };
+        // A field taken out by the redraw its own change caused can report the change again on blur: once only.
+        i.onchange = () => { if (i._sent === i.value) return; i._sent = i.value; const v = parseFloat(i.value); onCommit(Number.isFinite(v) ? v : null); };
         // Up / Down: a step (Shift x10, Ctrl / Alt x0.1), and the field keeps the focus after the redraw.
         i.addEventListener("keydown", (e) => {
             if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
@@ -852,6 +866,7 @@ export function createCompEditor(host, opts = {}) {
             const v = (parseFloat(i.value) || 0) + (e.key === "ArrowUp" ? 1 : -1) * (parseFloat(step) || 0.01) * k;
             const lo = d.min !== undefined ? d.min : -Infinity, hi = d.max !== undefined ? d.max : Infinity;
             if (i.dataset.fk) st.refocus = i.dataset.fk;
+            if (d.onStep) { d.onStep((e.key === "ArrowUp" ? 1 : -1) * (parseFloat(step) || 0.01) * k, lo, hi); return; }
             onCommit(Math.round(Math.min(hi, Math.max(lo, v)) * 1e6) / 1e6);
         });
         return i;
@@ -865,7 +880,8 @@ export function createCompEditor(host, opts = {}) {
             if (e.button !== 0) return;
             e.preventDefault();
             const step = d.kind === "int" ? 0.25 : (d.step || 0.01);
-            const v0 = Number(C.paramAt(node(id), p, st.frame)) || 0;
+            const n0 = node(id);
+            const starts = targetsOf(n0).map((t) => [t.id, Number(C.paramAt(t, p, st.frame)) || 0]);
             let last = e.clientX, acc = 0, pushed = false;
             lab.setPointerCapture(e.pointerId);
             lab.onpointermove = (ev) => {
@@ -874,13 +890,16 @@ export function createCompEditor(host, opts = {}) {
                 if (!pushed) { st.hist.push(st.comp); pushed = true; }
                 last = ev.clientX;
                 acc += dx * step * (ev.shiftKey ? 10 : (ev.ctrlKey || ev.metaKey || ev.altKey) ? 0.1 : 1);
-                let v = v0 + acc;
-                if (d.min !== undefined) v = Math.max(d.min, v);
-                if (d.max !== undefined) v = Math.min(d.max, v);
-                v = d.kind === "int" ? Math.round(v) : Math.round(v * 1e4) / 1e4;
-                const n = node(id);
-                if (d.key) Mo.setProp(keyHost(), n, p, v, st.frame); else n[p] = v;
-                inp.value = r3(v);
+                for (const [tid, v0] of starts) {
+                    let v = v0 + acc;
+                    if (d.min !== undefined) v = Math.max(d.min, v);
+                    if (d.max !== undefined) v = Math.min(d.max, v);
+                    v = d.kind === "int" ? Math.round(v) : Math.round(v * 1e4) / 1e4;
+                    const t = node(tid);
+                    if (!t) continue;
+                    if (d.key) Mo.setProp(keyHost(), t, p, v, st.frame); else t[p] = v;
+                    if (tid === id && !inp.classList.contains("cp-mixed")) inp.value = r3(v);
+                }
                 queueRender(); renderOverlay();
             };
             lab.onpointerup = () => {
@@ -892,21 +911,32 @@ export function createCompEditor(host, opts = {}) {
     function paramRow(n, p, d) {
         const row = el(doc, "div", "mg-prop");
         const animated = d.key && Mo.isAnimated(n, p);
+        const tg = targetsOf(n);
+        const cur = C.paramAt(n, p, st.frame);
+        const mixed = tg.some((t) => !sameVal(C.paramAt(t, p, st.frame), cur));
+        if (mixed) { row.classList.add("cp-mixedrow"); row.title = `Differs across the ${tg.length} selected nodes: a change sets it on all of them`; }
         if (d.key) {
             const sw = el(doc, "span", "mg-sw" + (animated ? " on" : ""), "⏱");
             sw.title = animated ? "Animated: click to stop animating (keeps the value at the playhead)" : "Click to animate (a key at the playhead)";
             sw.onclick = () => mutate(() => {
-                if (!animated && (n[p] === undefined || n[p] === null)) n[p] = C.paramAt(n, p, st.frame) ?? (p === "center" || p === "position" ? [fmt().width / 2, fmt().height / 2] : d.def);
-                Mo.toggleAnimated(keyHost(), n, p, st.frame);
+                for (const t of tg) {
+                    if (!!Mo.isAnimated(t, p) !== !!animated) continue;
+                    if (!animated && (t[p] === undefined || t[p] === null)) t[p] = C.paramAt(t, p, st.frame) ?? (p === "center" || p === "position" ? [fmt().width / 2, fmt().height / 2] : d.def);
+                    Mo.toggleAnimated(keyHost(), t, p, st.frame);
+                }
             }, { structure: false });
             row.append(sw);
         } else row.append(el(doc, "span", "mg-sw", ""));
         const lab = el(doc, "label", "", d.label || p); lab.title = d.help ? `${p}: ${d.help}` : p;
         row.append(lab);
-        const cur = C.paramAt(n, p, st.frame);
-        const write = (v) => mutate(() => { if (d.key) Mo.setProp(keyHost(), n, p, v, st.frame); else n[p] = v; }, { structure: false });
+        const write = (v) => mutate(() => writeAll(n, p, d, () => v), { structure: false });
+        const mix = (i) => { if (mixed) { i.value = ""; i.placeholder = "—"; i.classList.add("cp-mixed"); } return i; };
         if (d.kind === "num" || d.kind === "int") {
-            const inp = numInput(cur, d.kind === "int" ? 1 : d.step, (v) => { if (v !== null) write(d.kind === "int" ? Math.round(v) : v); }, d);
+            const onStep = tg.length > 1 ? (dl, lo, hi) => mutate(() => writeAll(n, p, d, (old) => {
+                const v = Math.round(Math.min(hi, Math.max(lo, (Number(old) || 0) + dl)) * 1e6) / 1e6;
+                return d.kind === "int" ? Math.round(v) : v;
+            }), { structure: false }) : undefined;
+            const inp = mix(numInput(cur, d.kind === "int" ? 1 : d.step, (v) => { if (v !== null) write(d.kind === "int" ? Math.round(v) : v); }, Object.assign({}, d, { onStep })));
             inp.dataset.fk = `${n.id}:${p}`;
             scrubLabel(lab, inp, n.id, p, d);
             row.append(inp);
@@ -914,12 +944,23 @@ export function createCompEditor(host, opts = {}) {
         else if (d.kind === "vec2") {
             const mid = p === "center" || p === "position";
             const base = cur || (mid ? [fmt().width / 2, fmt().height / 2] : [0, 0]);
-            for (let a = 0; a < 2; a++) row.append(withFk(numInput(cur ? cur[a] : null, d.step || 1, (v) => { if (v === null && mid && !animated) { mutate(() => { delete n[p]; }, { structure: false }); return; } const nv = base.slice(); nv[a] = v === null ? base[a] : v; write(nv); }), { title: a ? "y (pixels, down)" : "x (pixels)", fk: `${n.id}:${p}:${a}` }));
+            const axisMixed = (a) => tg.some((t) => { const tv = C.paramAt(t, p, st.frame); return (tv ? tv[a] : null) !== (cur ? cur[a] : null); });
+            for (let a = 0; a < 2; a++) {
+                const i = withFk(numInput(cur ? cur[a] : null, d.step || 1, (v) => {
+                    if (v === null && mid && !animated) { mutate(() => { for (const t of tg) if (!Mo.isAnimated(t, p)) delete t[p]; }, { structure: false }); return; }
+                    if (v === null) return;
+                    mutate(() => writeAll(n, p, d, (old) => { const nv = (old || base).slice(); nv[a] = v; return nv; }), { structure: false });
+                }), { title: a ? "y (pixels, down)" : "x (pixels)", fk: `${n.id}:${p}:${a}` });
+                if (axisMixed(a)) { i.value = ""; i.placeholder = "—"; i.classList.add("cp-mixed"); }
+                row.append(i);
+            }
         } else if (d.kind === "color") {
             const c = cur || [0, 0, 0, 1];
             const pick = el(doc, "input"); pick.type = "color"; pick.value = toHex(c);
-            pick.onchange = () => write(fromHex(pick.value, c[3]));
-            row.append(pick, numInput(c[3], 0.01, (v) => { if (v !== null) write([c[0], c[1], c[2], Math.max(0, Math.min(1, v))]); }, { min: 0, max: 1 }),
+            pick.onchange = () => { const rgb = fromHex(pick.value, 1); mutate(() => writeAll(n, p, d, (old) => [rgb[0], rgb[1], rgb[2], (old || c)[3]]), { structure: false }); };
+            const alpha = numInput(c[3], 0.01, (v) => { if (v !== null) mutate(() => writeAll(n, p, d, (old) => { const o2 = old || c; return [o2[0], o2[1], o2[2], Math.max(0, Math.min(1, v))]; }), { structure: false }); }, { min: 0, max: 1 });
+            if (tg.some((t) => (C.paramAt(t, p, st.frame) || c)[3] !== c[3])) { alpha.value = ""; alpha.placeholder = "—"; alpha.classList.add("cp-mixed"); }
+            row.append(pick, alpha,
                 btn("⌖", "Take the colour from the picture (what goes into this node)", () => startPick(n.id, p), st.pick && st.pick.node === n.id ? "on" : ""));
             pick.title = "Colour (shown in sRGB, kept linear)";
         } else if (d.kind === "ocio_cs" || d.kind === "ocio_display" || d.kind === "ocio_view") {
@@ -949,10 +990,11 @@ export function createCompEditor(host, opts = {}) {
             const s = el(doc, "select");
             for (const ch of d.choices) s.append(new Option(String(ch), String(ch)));
             s.value = String(cur ?? d.def);
+            if (mixed) { const o2 = new Option("— (differs)", "\u0000"); o2.disabled = true; s.prepend(o2); s.value = "\u0000"; }
             s.onchange = () => write(typeof d.def === "number" ? Number(s.value) : s.value);
             row.append(s);
         } else if (d.kind === "file") {
-            const i = el(doc, "input"); i.type = "text"; i.value = cur || ""; i.placeholder = "a picture, a film, or shot.####.exr";
+            const i = el(doc, "input"); i.type = "text"; i.value = mixed ? "" : (cur || ""); i.placeholder = mixed ? "— (differs)" : "a picture, a film, or shot.####.exr";
             i.onchange = () => write(i.value.trim());
             const b = btn("…", "Choose a file", () => o.pickFile && o.pickFile((path) => write(path)));
             row.append(i, b);
@@ -960,7 +1002,11 @@ export function createCompEditor(host, opts = {}) {
         if (d.key) {
             const key = el(doc, "span", "mg-key", animated ? (Mo.keyAt(n, p, st.frame) ? "◆" : "◇") : "");
             key.title = "Key at the playhead (click to add or remove)";
-            key.onclick = () => { if (!animated) return; mutate(() => { if (Mo.keyAt(n, p, st.frame)) Mo.removeKey(n, p, st.frame); else Mo.setProp(keyHost(), n, p, C.paramAt(n, p, st.frame), st.frame); }, { structure: false }); };
+            key.onclick = () => {
+                if (!animated) return;
+                const had = Mo.keyAt(n, p, st.frame);
+                mutate(() => { for (const t of tg) { if (!Mo.isAnimated(t, p)) continue; if (had) { if (Mo.keyAt(t, p, st.frame)) Mo.removeKey(t, p, st.frame); } else Mo.setProp(keyHost(), t, p, C.paramAt(t, p, st.frame), st.frame); } }, { structure: false });
+            };
             row.append(key);
         }
         return row;
@@ -1062,8 +1108,10 @@ export function createCompEditor(host, opts = {}) {
             let hue = (Math.atan2(dy, dx) * 180) / Math.PI; if (hue < 0) hue += 360;
             const amt = Math.min(100, (Math.hypot(dx, dy) / ((rad * b.width) / S)) * 100);
             const nn = node(n.id);
-            Mo.setProp(keyHost(), nn, `${R}_tint_hue`, Math.round(hue * 10) / 10, st.frame);
-            Mo.setProp(keyHost(), nn, `${R}_tint`, Math.round(amt * 10) / 10, st.frame);
+            for (const t of targetsOf(nn)) {
+                Mo.setProp(keyHost(), t, `${R}_tint_hue`, Math.round(hue * 10) / 10, st.frame);
+                Mo.setProp(keyHost(), t, `${R}_tint`, Math.round(amt * 10) / 10, st.frame);
+            }
             n = nn; draw(); queueRender();
         };
         cv.onpointerdown = (e) => {
@@ -1075,7 +1123,7 @@ export function createCompEditor(host, opts = {}) {
             cv.onpointermove = set;
             cv.onpointerup = () => { cv.onpointermove = null; cv.onpointerup = null; st.dirty = true; refresh(["bar", "props", "stage", "graph"]); };
         };
-        cv.ondblclick = () => mutate(() => { const nn = node(n.id); Mo.setProp(keyHost(), nn, `${R}_tint`, 0, st.frame); Mo.setProp(keyHost(), nn, `${R}_tint_hue`, 0, st.frame); }, { structure: false });
+        cv.ondblclick = () => mutate(() => { for (const t of targetsOf(node(n.id))) { Mo.setProp(keyHost(), t, `${R}_tint`, 0, st.frame); Mo.setProp(keyHost(), t, `${R}_tint_hue`, 0, st.frame); } }, { structure: false });
         cv.title = `${label}: drag to push towards a colour, double-click to reset`;
         draw();
         box.append(cv, val);
@@ -1110,13 +1158,17 @@ export function createCompEditor(host, opts = {}) {
             return;
         }
         const t = C.NODE_TYPES[n.type];
-        props.append(el(doc, "h4", "", `${n.name || n.id} — ${t.label}`));
+        const tg = targetsOf(n);
+        props.append(el(doc, "h4", "", tg.length > 1 ? `${tg.length} ${t.label} nodes — ${n.name || n.id} shown` : `${n.name || n.id} — ${t.label}`));
+        if (tg.length > 1) props.append(el(doc, "div", "mg-empty cp-multi", `A change goes to all ${tg.length} selected ${t.label} nodes (one undo step); a dash means their values differ. The name is this node's only.`));
+        else if (st.sel.length > 1) props.append(el(doc, "div", "mg-empty cp-multi", "The other selected nodes are of other types: only this one is changed here."));
         const name = el(doc, "input"); name.type = "text"; name.value = n.name || ""; name.placeholder = n.id;
         name.onchange = () => mutate(() => { if (name.value.trim()) n.name = name.value.trim(); else delete n.name; });
         props.append(field("name", name));
         if (n.type !== "output") {
             const dis = el(doc, "input"); dis.type = "checkbox"; dis.checked = !!n.disable;
-            dis.onchange = () => mutate(() => { if (dis.checked) n.disable = true; else delete n.disable; });
+            dis.indeterminate = tg.some((x) => !!x.disable !== !!n.disable);
+            dis.onchange = () => mutate(() => { for (const x of tg) { if (dis.checked) x.disable = true; else delete x.disable; } });
             props.append(field("disable", dis));
         }
         const ps = Object.entries(t.params);

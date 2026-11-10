@@ -63,7 +63,7 @@ Select the Roto node and press **Draw a shape** in its Properties, then click th
 
 ## Properties
 
-The selected node's values at the playhead. They work as in Motion: the stopwatch animates a value, and changing an animated value sets a key there. With nothing selected the panel holds the comp's size, frame rate and length.
+The selected node's values at the playhead. They work as in Motion: the stopwatch animates a value, and changing an animated value sets a key there. With several nodes of one type selected, a change goes to all of them in one undo step (a dash shows where their values differ; the arrow keys and a label drag move each from its own value). With nothing selected the panel holds the comp's size, frame rate and length.
 
 ## Layers
 

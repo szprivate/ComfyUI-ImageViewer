@@ -195,6 +195,37 @@ class CompBrowserTests(unittest.TestCase):
         self.assertEqual(st, {"graph": False, "mode": False})
         self.assertEqual(self.errors, [])
 
+    def test_several_selected_nodes_of_one_type_change_together(self):
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        ids = pg.evaluate(f"""() => {{ const e = {ED}; e.select(['Constant1']);
+            const a = e.addNode('blur', {{ size: 2 }}); const b = e.addNode('blur', {{ size: 8 }}); const g = e.addNode('grade');
+            e.select([g.id, b.id, a.id]); return [a.id, b.id, g.id]; }}""")
+        a, b, g = ids
+        P = "__panel.compPropsPanel"
+        head = pg.evaluate(f"() => {P}.querySelector('h4').textContent")
+        self.assertIn("2 Blur nodes", head)
+        size = pg.locator(f'input[data-fk="{a}:size"]')
+        self.assertEqual(size.input_value(), "")                       # they differ: a dash
+        self.assertEqual(size.get_attribute("placeholder"), "—")
+        size.fill("5"); size.dispatch_event("change")
+        got = pg.evaluate(f"() => {ED}.comp().nodes.filter((n) => n.type === 'blur').map((n) => n.size)")
+        self.assertEqual(got, [5, 5])
+        pg.evaluate(f"() => {ED}.undo()")
+        self.assertEqual(pg.evaluate(f"() => {ED}.comp().nodes.filter((n) => n.type === 'blur').map((n) => n.size)"), [2, 8], "one undo step")
+        # Up steps each by its own value; the label drag moves each from where it was.
+        pg.locator(f'input[data-fk="{a}:size"]').focus()
+        pg.keyboard.press("Shift+ArrowUp")
+        stepped = pg.evaluate(f"() => {ED}.comp().nodes.filter((n) => n.type === 'blur').map((n) => n.size)")
+        self.assertGreater(stepped[0], 2)
+        self.assertAlmostEqual(stepped[1] - stepped[0], 6)            # each by the same step from its own value
+        # The stopwatch keys every one; the Grade (another type) is left alone.
+        pg.locator(f'input[data-fk="{a}:size"]').locator("xpath=..").locator(".mg-sw").click()
+        tracks = pg.evaluate(f"() => {ED}.comp().nodes.filter((n) => n.type === 'blur').map((n) => !!(n.tracks && n.tracks.size))")
+        self.assertEqual(tracks, [True, True])
+        self.assertEqual(self.errors, [])
+
     def test_export_to_nuke_from_the_bar(self):
         pg = self.page()
         self.new_comp(pg)
