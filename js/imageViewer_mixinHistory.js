@@ -16,7 +16,7 @@
 import { api } from "../../scripts/api.js";
 import { setPref, PREF } from "./imageViewer_settings.js";
 import { HISTORY_KEY, snapshotTab, stampSnapshot, snapshotGroup, setSnapshotGroup, historyGroups,
-         liveIndexOf, historySections, historyDisplayOrder, foldIntoTab, groupFromLabel, snapshotNode } from "./imageViewer_historyData.js";
+         liveIndexOf, historySections, historyDisplayOrder, moveGroupInOrder, renameInOrder, foldIntoTab, groupFromLabel, snapshotNode } from "./imageViewer_historyData.js";
 
 export { HISTORY_KEY };
 /** The one Viewer tab: where media sent from a node, opened from the file
@@ -852,7 +852,81 @@ export const HistoryMixin = {
         key = HISTORY_KEY;   // one history: a tab's key (older callers) means it too
         const stack = this.history[key] || [];
         const visible = this.historyTagVisible ? (s) => this.historyTagVisible(s) : null;
-        return historyDisplayOrder(stack, visible, this._historyCollapsedSet());
+        return historyDisplayOrder(stack, visible, this._historyCollapsedSet(), this._historyGroupOrder());
+    },
+
+    /** The order the user dragged the group headings into (group names, "" =
+     *  No group; persisted). Groups not in it come first, newest first. */
+    _historyGroupOrder() {
+        if (!Array.isArray(this.historyGroupOrder)) this.historyGroupOrder = [];
+        return this.historyGroupOrder;
+    },
+
+    /** Move group `group`'s section before `before`'s (null: to the end).
+     *  -> whether anything moved. */
+    moveHistoryGroup(group, before = null) {
+        const stack = this.history[HISTORY_KEY] || [];
+        // Every group as the strip has them, the filter and folding aside, so a
+        // group the filter hides keeps its place.
+        const now = historySections(stack, null, null, this._historyGroupOrder()).map((sec) => sec.group);
+        const next = moveGroupInOrder(now, group, before);
+        if (!next) return false;
+        this.historyGroupOrder = next;
+        this._historyPanelSig = null;
+        this.renderHistoryPanel();
+        this.queuePersistViewerState?.();
+        return true;
+    },
+
+    _historyGroupDropClear() {
+        const strip = this.historyStrip;
+        if (!strip) return;
+        strip.classList.remove('group-drop-end');
+        for (const el of strip.querySelectorAll('.history-group.group-drop-before, .history-group.dragging')) {
+            el.classList.remove('group-drop-before', 'dragging');
+        }
+    },
+
+    /** Where a heading dragged over the strip would land: before the heading
+     *  whose middle is below the pointer, else at the end. */
+    _historyGroupDropAt(clientY) {
+        const heads = [...this.historyStrip.children].filter((el) => el.classList && el.classList.contains('history-group'));
+        const at = heads.find((el) => { const r = el.getBoundingClientRect(); return r.top + r.height / 2 > clientY; });
+        return { el: at || null, before: at ? at.dataset.group : null };
+    },
+
+    /** Headings are dragged within the strip to order the groups (once per strip). */
+    _historyWireGroupDrag() {
+        const strip = this.historyStrip;
+        if (!strip || strip._ivGroupDrag) return;
+        strip._ivGroupDrag = true;
+        strip.addEventListener('dragover', (ev) => {
+            const g = this._historyDragGroup;
+            if (g == null) return;
+            ev.preventDefault();
+            try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
+            const { el, before } = this._historyGroupDropAt(ev.clientY);
+            const stack = this.history[HISTORY_KEY] || [];
+            const now = historySections(stack, null, null, this._historyGroupOrder()).map((sec) => sec.group);
+            const moves = !!moveGroupInOrder(now, g, before);
+            strip.classList.toggle('group-drop-end', moves && !el);
+            for (const h of strip.querySelectorAll('.history-group')) h.classList.toggle('group-drop-before', moves && h === el);
+        });
+        strip.addEventListener('dragleave', (ev) => {
+            if (this._historyDragGroup == null) return;
+            if (ev.relatedTarget && strip.contains(ev.relatedTarget)) return;
+            this._historyGroupDropClear();
+        });
+        strip.addEventListener('drop', (ev) => {
+            const g = this._historyDragGroup;
+            if (g == null) return;
+            ev.preventDefault();
+            ev.stopPropagation();
+            const { before } = this._historyGroupDropAt(ev.clientY);
+            this._historyDragGroup = null;
+            this._historyGroupDropClear();
+            this.moveHistoryGroup(g, before);
+        });
     },
 
     _historyCollapsedSet() {
@@ -930,9 +1004,23 @@ export const HistoryMixin = {
         }
         h.title = `${g ? `Group "${g}"` : 'Not in a group'}: ${section.count} snapshot${section.count === 1 ? '' : 's'}\n`
                 + `Click to ${collapsed ? 'show' : 'fold away'}; drop thumbnails here to move them ${g ? 'into this group' : 'out of their group'}`
+                + '\nDrag the heading up or down to put the group elsewhere'
                 + (g ? '\n✎ or right-click to rename it' : '');
         h.onmousedown = (ev) => ev.stopPropagation();
         h.onclick = (ev) => { ev.stopPropagation(); this.toggleHistoryGroupCollapsed(g); };
+        // Dragged up or down the strip, it puts its group elsewhere (_historyWireGroupDrag).
+        h.draggable = true;
+        h.addEventListener('dragstart', (ev) => {
+            if (ev.target !== h) return;
+            this._historyDragSnaps = null;
+            this._historyDragGroup = g;
+            try {
+                ev.dataTransfer.setData('application/x-imageviewer-group', g);
+                ev.dataTransfer.effectAllowed = 'move';
+            } catch (_) {}
+            h.classList.add('dragging');
+        });
+        h.addEventListener('dragend', () => { this._historyDragGroup = null; this._historyGroupDropClear(); });
         // A thumbnail dragged in the strip (HistoryMixin keeps what it carries).
         h.addEventListener('dragover', (ev) => {
             if (!this._historyDragSnaps) return;
@@ -972,6 +1060,7 @@ export const HistoryMixin = {
         const layoutSig = JSON.stringify({ key, borrowed, len: stack.length, cmp: this.historyCompare,
                                            groups: stack.map((s) => snapshotGroup(s)).join('\u0001'),
                                            collapsed: [...collapsed].sort(),
+                                           order: this._historyGroupOrder(),
                                            tags: this.historyTagSig ? this.historyTagSig(stack) : "" });
         const newSig = `${layoutSig}|${this.currentHistoryIndex}`;
         if (newSig === this._historyPanelSig) return;
@@ -994,7 +1083,15 @@ export const HistoryMixin = {
 
         // One section per group, the group used last first (imageViewer_historyData.js).
         const visible = this.historyTagVisible ? (s) => this.historyTagVisible(s) : null;
-        const sections = historySections(stack, visible, collapsed);
+        // Once the user has ordered the groups, a group new to the order is pinned
+        // where it first shows (on top), so new renders never shuffle the headings.
+        const order = this._historyGroupOrder();
+        if (order.length) {
+            const fresh = historySections(stack, null, null, order).map((sec) => sec.group).filter((g) => !order.includes(g));
+            if (fresh.length) { this.historyGroupOrder = [...fresh, ...order]; this.queuePersistViewerState?.(); }
+        }
+        const sections = historySections(stack, visible, collapsed, this._historyGroupOrder());
+        this._historyWireGroupDrag();
         const anyGroups = sections.some((sec) => sec.group);
 
         // A tile is made ONCE per snapshot and kept (_historyTiles, by the
@@ -1304,7 +1401,9 @@ export const HistoryMixin = {
 
     /** The groups the history holds, the one used last first. */
     historyGroupNames() {
-        return historyGroups(this.history[HISTORY_KEY] || []);
+        const stack = this.history[HISTORY_KEY] || [];
+        if (!this._historyGroupOrder().length) return historyGroups(stack);
+        return historySections(stack, null, null, this._historyGroupOrder()).map((sec) => sec.group).filter(Boolean);
     },
 
     /** Put these snapshots (the stack's own arrays) into `group` ("" takes them
@@ -1335,6 +1434,8 @@ export const HistoryMixin = {
         if (!snaps.length) return false;
         const set = this._historyCollapsedSet();
         const folded = set.has(a);
+        // It keeps its place among the groups (a merge: the place of the one it joins).
+        this.historyGroupOrder = renameInOrder(this._historyGroupOrder(), a, b);
         set.delete(a);
         this.setHistoryGroupOf(snaps, b);
         // A folded group stays folded under its new name (setHistoryGroupOf opens it).
@@ -1350,6 +1451,7 @@ export const HistoryMixin = {
         const input = doc.createElement('input');
         input.className = 'history-group-input';
         input.value = group;
+        h.draggable = false;                         // so the field's text can be selected
         input.title = 'Enter renames the group; a name that is there already merges the two';
         let done = false;
         const finish = (ok) => {

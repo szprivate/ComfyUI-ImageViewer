@@ -375,6 +375,7 @@ class ViewerPanel extends HTMLElement {
                 allTabs: packAll(pick(tabs)),
                 history: { [HISTORY_KEY]: history[HISTORY_KEY].map(packSnapshot) },
                 historyCollapsed: [...(this.historyCollapsed instanceof Set ? this.historyCollapsed : (this.historyCollapsed || []))],
+                historyGroupOrder: Array.isArray(this.historyGroupOrder) ? this.historyGroupOrder.map(String) : [],
                 tabViewState: pick(this.tabViewState),
                 tabLabels: pick(this.tabLabels),
                 tabColors: pick(this.tabColors),
@@ -431,6 +432,7 @@ class ViewerPanel extends HTMLElement {
         }
         if (typeof parsed.historyTagFilter === 'string') this.historyTagFilter = parsed.historyTagFilter;
         if (Array.isArray(parsed.historyCollapsed)) this.historyCollapsed = new Set(parsed.historyCollapsed.map(String));
+        if (Array.isArray(parsed.historyGroupOrder)) this.historyGroupOrder = parsed.historyGroupOrder.map(String);
         if (parsed.historyTags && typeof parsed.historyTags === 'object') {
             this.historyTags = JSON.parse(JSON.stringify(parsed.historyTags));
         }

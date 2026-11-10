@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
     HISTORY_KEY, snapshotTab, stampSnapshot, snapshotGroup, setSnapshotGroup, historyGroups,
-    liveIndexOf, historySections, historyDisplayOrder, mergeTabHistories, isMediaTabKey, foldIntoTab, isFeedTabKey, groupFromLabel, snapshotNode,
+    liveIndexOf, historySections, historyDisplayOrder, moveGroupInOrder, renameInOrder, mergeTabHistories, isMediaTabKey, foldIntoTab, isFeedTabKey, groupFromLabel, snapshotNode,
 } from "../js/imageViewer_historyData.js";
 
 const snap = (name, extra = {}) => [{ filename: name, type: "output", ...extra }];
@@ -49,6 +49,32 @@ test("the filter and folded groups leave snapshots out, and a folded group keeps
     const secs = historySections(stack, visible, new Set(["A"]));
     assert.deepEqual(secs.map((s) => [s.group, s.indices, s.count]), [["B", [0], 1], ["", [1], 1], ["A", [], 1]]);
     assert.deepEqual(historyDisplayOrder(stack, visible, new Set(["A"])), [0, 1]);
+});
+
+test("the user's group order holds; a group not in it comes first, newest first", () => {
+    const stack = [snap("0", { group: "B" }), snap("1"), snap("2", { group: "A" }), snap("3", { group: "B" }), snap("4", { group: "C" })];
+    // Dragged: A, then No group, then B. C is new to the order: on top.
+    const order = ["A", "", "B"];
+    assert.deepEqual(historySections(stack, null, null, order).map((s) => s.group), ["C", "A", "", "B"]);
+    assert.deepEqual(historyDisplayOrder(stack, null, null, order), [4, 2, 1, 0, 3]);
+    // A new render into B does not move B.
+    const more = [snap("n", { group: "B" }), ...stack];
+    assert.deepEqual(historySections(more, null, null, order).map((s) => s.group), ["C", "A", "", "B"]);
+    // Names in the order with no snapshots are passed over; no order = the old rule.
+    assert.deepEqual(historySections(stack, null, null, ["Gone", "B"]).map((s) => s.group), ["", "A", "C", "B"]);
+    assert.deepEqual(historySections(stack, null, null, []).map((s) => s.group), ["B", "", "A", "C"]);
+});
+
+test("a heading dragged before another, or to the end; a rename keeps its place", () => {
+    assert.deepEqual(moveGroupInOrder(["A", "B", "C"], "C", "A"), ["C", "A", "B"]);
+    assert.deepEqual(moveGroupInOrder(["A", "B", "C"], "A", null), ["B", "C", "A"]);
+    assert.deepEqual(moveGroupInOrder(["A", "", "C"], "", "A"), ["", "A", "C"]);
+    assert.equal(moveGroupInOrder(["A", "B", "C"], "A", "B"), null, "before the one after it: no move");
+    assert.equal(moveGroupInOrder(["A", "B"], "B", null), null);
+    assert.equal(moveGroupInOrder(["A", "B"], "X", "A"), null);
+    assert.deepEqual(renameInOrder(["A", "B", "C"], "B", "Z"), ["A", "Z", "C"]);
+    assert.deepEqual(renameInOrder(["A", "B", "C"], "C", "A"), ["A", "B"], "merged: at the place of the one it joins");
+    assert.deepEqual(renameInOrder(["A"], "Q", "Z"), ["A"]);
 });
 
 test("per-tab histories merge in turns, in tab order, each snapshot naming its tab", () => {

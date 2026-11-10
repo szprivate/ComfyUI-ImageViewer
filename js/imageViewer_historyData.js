@@ -68,14 +68,17 @@ export function liveIndexOf(stack, tab) {
 }
 
 /**
- * The strip, in the order it is drawn: one section per group, the group used
- * most recently first, newest first inside each - so the newest render is
- * always at the top. Ungrouped snapshots are a section of their own (group "").
+ * The strip, in the order it is drawn: one section per group, newest first
+ * inside each. The sections come in the user's order (`order`, a list of group
+ * names - "" is "No group" - set by dragging a heading); a group not in it (a
+ * new one) comes before them, the group used most recently first - so with no
+ * order at all, the newest render is always at the top. Ungrouped snapshots
+ * are a section of their own (group "").
  * `visible(snapshot)` is the filter; a section `collapsed` (a Set of group
  * names) lists no indices but is still there, so its heading can open it.
  * -> [{ group, indices: [stackIndex...], count }]
  */
-export function historySections(stack, visible = null, collapsed = null) {
+export function historySections(stack, visible = null, collapsed = null, order = null) {
     const sections = new Map();
     (stack || []).forEach((s, i) => {
         if (visible && !visible(s)) return;
@@ -85,12 +88,48 @@ export function historySections(stack, visible = null, collapsed = null) {
         sec.count++;
         if (!(collapsed && collapsed.has(g))) sec.indices.push(i);
     });
-    return [...sections.values()];
+    const all = [...sections.values()];
+    const rank = new Map();
+    for (const g of Array.isArray(order) ? order : []) {
+        const k = String(g == null ? "" : g).trim();
+        if (!rank.has(k)) rank.set(k, rank.size);
+    }
+    if (!rank.size) return all;
+    const fresh = all.filter((sec) => !rank.has(sec.group));
+    const placed = all.filter((sec) => rank.has(sec.group)).sort((a, b) => rank.get(a.group) - rank.get(b.group));
+    return [...fresh, ...placed];
 }
 
 /** The stack indices as the strip shows them, top to bottom. */
-export function historyDisplayOrder(stack, visible = null, collapsed = null) {
-    return historySections(stack, visible, collapsed).flatMap((s) => s.indices);
+export function historyDisplayOrder(stack, visible = null, collapsed = null, order = null) {
+    return historySections(stack, visible, collapsed, order).flatMap((s) => s.indices);
+}
+
+/**
+ * The group order after the heading of `group` was dragged before the heading
+ * of `before` (null or a group not there: to the end). `current` is the
+ * order the strip shows now - every group, filter or not. -> the new order
+ * (a new array), or null when nothing moves.
+ */
+export function moveGroupInOrder(current, group, before = null) {
+    const list = (current || []).map((g) => String(g == null ? "" : g));
+    const g = String(group == null ? "" : group);
+    const from = list.indexOf(g);
+    if (from < 0 || g === before) return null;
+    const out = list.filter((x) => x !== g);
+    let at = before == null ? -1 : out.indexOf(String(before));
+    if (at < 0) at = out.length;
+    out.splice(at, 0, g);
+    return out.every((x, i) => x === list[i]) ? null : out;
+}
+
+/** The group order with group `from` renamed to `to`; when `to` is in it
+ *  already the two are one, at `to`'s place. */
+export function renameInOrder(order, from, to) {
+    const list = Array.isArray(order) ? order.map(String) : [];
+    if (!list.includes(from)) return list;
+    if (list.includes(to)) return list.filter((x) => x !== from);
+    return list.map((x) => (x === from ? to : x));
 }
 
 /**

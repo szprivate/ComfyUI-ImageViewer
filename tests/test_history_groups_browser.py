@@ -258,6 +258,88 @@ class HistoryGroupsTests(unittest.TestCase):
         self.assertEqual(s["rows"][0], "# Cast (3)")
         self.assertEqual(self.errors, [])
 
+    def drag_heading(self, pg, page, group, onto, upper=True):
+        # A real mouse drag of a heading onto the upper (before it) or lower half of another.
+        src = page.locator(f'.history-group[data-group="{group}"] .history-group-name')
+        dst = page.locator(f'.history-group[data-group="{onto}"]')
+        box = dst.bounding_box()
+        src.drag_to(dst, target_position={"x": box["width"] / 2, "y": 2 if upper else box["height"] - 2})
+
+    def test_a_heading_dragged_up_puts_its_group_there_and_it_stays(self):
+        pg = self.page()
+        self.drag_heading(pg, pg, "Places", "Characters")
+        pg.wait_for_function("window.__panel.historyGroupOrder.length > 0", timeout=3000)
+        s = self.strip(pg)
+        self.assertEqual(s["rows"], ["# Places (1)", 1, "# Characters (2)", 0, 3, "# No group (1)", 2])
+        self.assertEqual(pg.evaluate("() => __panel.historyDisplayIndices()"), [1, 0, 3, 2], "the arrow keys follow it")
+        # "No group" is dragged like any other: onto the lower half of Places = before Characters.
+        self.drag_heading(pg, pg, "", "Places", upper=False)
+        pg.wait_for_function("window.__panel.historyGroupOrder.join() === 'Places,,Characters'", timeout=3000)
+        self.assertEqual(self.strip(pg)["rows"][0:5], ["# Places (1)", 1, "# No group (1)", 2, "# Characters (2)"])
+        # A new render into Characters (the group used last) does not take it to the top.
+        pg.evaluate("() => { const P = __panel; P.pushHistorySnapshot('folder_a', [{ path: 'D:/out/a3.png', filename: 'a3.png', type: 'output', group: 'Characters' }]);"
+                    " P._historyPanelSig = null; P.renderHistoryPanel(); }")
+        self.assertEqual(self.strip(pg)["rows"], ["# Places (1)", 2, "# No group (1)", 3, "# Characters (3)", 0, 1, 4])
+        # A group that is new comes in on top; the others keep their order.
+        pg.evaluate("() => { const P = __panel; P.pushHistorySnapshot('folder_b', [{ path: 'D:/out/b3.png', filename: 'b3.png', type: 'output', group: 'Props' }]);"
+                    " P._historyPanelSig = null; P.renderHistoryPanel(); }")
+        heads = [r for r in self.strip(pg)["rows"] if isinstance(r, str)]
+        self.assertEqual(heads, ["# Props (1)", "# Places (1)", "# No group (1)", "# Characters (3)"])
+        # Another new group comes in above it, and the two never trade places as renders land.
+        pg.evaluate("() => { const P = __panel; P.pushHistorySnapshot('folder_b', [{ path: 'D:/out/b4.png', filename: 'b4.png', type: 'output', group: 'Lights' }]);"
+                    " P.pushHistorySnapshot('folder_b', [{ path: 'D:/out/b5.png', filename: 'b5.png', type: 'output', group: 'Props' }]);"
+                    " P._historyPanelSig = null; P.renderHistoryPanel(); }")
+        heads = [r for r in self.strip(pg)["rows"] if isinstance(r, str)]
+        self.assertEqual(heads, ["# Lights (1)", "# Props (2)", "# Places (1)", "# No group (1)", "# Characters (3)"])
+        pg.evaluate("() => { const P = __panel; P.renameHistoryGroup('Lights', 'Props'); }")
+        # The move-to-group menu lists them in that order.
+        self.assertEqual(pg.evaluate("() => __panel.historyGroupNames()"), ["Props", "Places", "Characters"])
+        # A rename keeps its place.
+        self.assertTrue(pg.evaluate("() => __panel.renameHistoryGroup('Places', 'Sets')"))
+        heads = [r for r in self.strip(pg)["rows"] if isinstance(r, str)]
+        self.assertEqual(heads, ["# Props (3)", "# Sets (1)", "# No group (1)", "# Characters (3)"])
+        # Kept across a reload of the state.
+        pg.evaluate("() => __panel.persistViewerState()")
+        saved = json.loads(pg.evaluate("() => localStorage.getItem(__panel._getViewerStateStorageKey())"))
+        self.assertEqual(saved["historyGroupOrder"], ["Props", "Sets", "", "Characters"], "a new group is pinned where it came in")
+        pg.evaluate("() => { const P = __panel; P.historyGroupOrder = []; P.restoreViewerState(); P._historyPanelSig = null; P.renderHistoryPanel(); }")
+        heads = [r for r in self.strip(pg)["rows"] if isinstance(r, str)]
+        self.assertEqual(heads, ["# Props (3)", "# Sets (1)", "# No group (1)", "# Characters (3)"])
+        self.assertEqual(self.errors, [])
+
+    def test_a_heading_dropped_at_the_end_and_thumbnails_still_move(self):
+        pg = self.page()
+        # Onto the lower half of the last heading = to the end.
+        self.drag_heading(pg, pg, "Characters", "", upper=False)
+        pg.wait_for_function("window.__panel.historyGroupOrder.length > 0", timeout=3000)
+        self.assertEqual(self.strip(pg)["rows"], ["# Places (1)", 1, "# No group (1)", 2, "# Characters (2)", 0, 3])
+        # Dropped where it already is: nothing changes.
+        self.drag_heading(pg, pg, "Places", "Places")
+        self.assertEqual(pg.evaluate("() => __panel.historyGroupOrder"), ["Places", "", "Characters"])
+        # A thumbnail dragged onto a heading still moves into that group, and the order holds.
+        pg.drag_and_drop('.history-thumb[data-idx="2"]', '.history-group[data-group="Characters"] .history-group-name')
+        pg.wait_for_function("window.__panel.history.all[2][0].group === 'Characters'", timeout=3000)
+        self.assertEqual(self.strip(pg)["rows"], ["# Places (1)", 1, "# Characters (3)", 0, 2, 3])
+        self.assertEqual(self.errors, [])
+
+    def test_headings_are_ordered_in_the_popped_out_viewer_too(self):
+        pg = self.page()
+        with pg.context.expect_page() as pop:
+            pg.evaluate("() => window.__panel.toggleUndock()")
+        win = pop.value
+        win.wait_for_load_state()
+        pg.wait_for_function("() => window.__panel.historyStrip.ownerDocument !== document", timeout=10000)
+        win.wait_for_timeout(300)
+        self.drag_heading(pg, win, "Places", "Characters")
+        pg.wait_for_function("window.__panel.historyGroupOrder.length > 0", timeout=3000)
+        self.assertEqual(self.strip(pg)["rows"][0:3], ["# Places (1)", 1, "# Characters (2)"])
+        # Docked back, the order is the same.
+        pg.evaluate("() => window.__panel.toggleUndock()")
+        pg.wait_for_function("() => window.__panel.historyStrip.ownerDocument === document", timeout=10000)
+        pg.evaluate("() => { __panel._historyPanelSig = null; __panel.renderHistoryPanel(); }")
+        self.assertEqual(self.strip(pg)["rows"][0:3], ["# Places (1)", 1, "# Characters (2)"])
+        self.assertEqual(self.errors, [])
+
     def test_clear_clears_the_one_history(self):
         pg = self.page()
         pg.once("dialog", lambda d: d.accept())
