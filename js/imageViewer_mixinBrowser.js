@@ -966,6 +966,10 @@ export const BrowserMixin = {
             this.mgOpenFile(texts[0].path);       // a motion-graphics scene opens in the Motion editor
             return;
         }
+        if (list.length === 0 && texts.length && /\.comp\.json$/i.test(texts[0].path || "") && this.compOpenFile) {
+            this.compOpenFile(texts[0].path);     // a comp opens in a Comp tab
+            return;
+        }
         if (list.length === 0 && texts.length && this.codePanelOpenFile) {
             this.codePanelOpenFile(texts[0]);
             return;

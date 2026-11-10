@@ -38,6 +38,8 @@ import { ViewTabsMixin } from "./imageViewer_viewTabs.js";
 import { CodePanelMixin } from "./imageViewer_codePanel.js";
 import { DepsPanelMixin } from "./imageViewer_depsPanel.js";
 import { MgPanelMixin } from "./imageViewer_mgPanel.js";
+import { CompPanelMixin } from "./imageViewer_compPanel.js";
+import { compBottomTabs } from "./imageViewer_compComfyTab.js";
 import { PaintPanelMixin } from "./imageViewer_paintPanel.js";
 import { LoraPanelMixin } from "./imageViewer_loraPanel.js";
 import { PrevizChannelsMixin } from "./imageViewer_previzChannels.js";
@@ -95,7 +97,7 @@ const watchedNodeIds  = new Set();
 // "edit:" tabs are cuts being worked on in the Edit panel.
 // "motion:" tabs are motion-graphics scenes in the Motion editor; "paint:" tabs are pictures in Paint.
 // "code:" tabs are the Agent code reader (a file, or the agent's feed); "dataset:" tabs are LoRA datasets.
-const USER_TAB_PREFIXES = ["folder_", "dropped_", "loader_", "world:", "previz:", "edit:", "motion:", "paint:", "code:", "dataset:", "named:"];
+const USER_TAB_PREFIXES = ["folder_", "dropped_", "loader_", "world:", "previz:", "edit:", "motion:", "comp:", "paint:", "code:", "dataset:", "named:"];
 let isViewerPanelToggledOn = false;
 let _actionBarStateRetryTimer = null;
 
@@ -746,6 +748,24 @@ class ViewerPanel extends HTMLElement {
             }
             this[prop] = mp;
         }
+        // Comp (imageViewer_compPanel.js): a comp is a TAB; its Node Graph, Properties and Layers are these dock
+        // panels, each holding one part of the tab's editor (a .comp-slot the glue fills).
+        // (A comp node's settings are not a panel of their own: on a comp tab they take the Parameters panel over.)
+        for (const [id, prop, cls] of [['compGraph', 'compGraphPanel', 'comp-graph-panel'],
+                                       ['compLayers', 'compLayersPanel', 'comp-layers-panel']]) {
+            let cp = sr.getElementById(`${id}-panel`);
+            if (!cp && this.curvesPanel && this.curvesPanel.parentNode) {
+                const doc = this.curvesPanel.ownerDocument;
+                cp = doc.createElement('div');
+                cp.id = `${id}-panel`;
+                cp.className = `curves-panel motion-part-panel ${cls} right`;
+                const slot = doc.createElement('div');
+                slot.className = 'comp-slot';
+                cp.appendChild(slot);
+                this.curvesPanel.parentNode.insertBefore(cp, this.curvesPanel.nextSibling);
+            }
+            this[prop] = cp;
+        }
         // Paint (imageViewer_paintPanel.js): a picture is a TAB; its Layers, Properties, Tool options,
         // Effects, Generate and History are these dock panels, each holding one part of the tab's editor (a .paint-slot the glue fills).
         for (const [id, prop, cls] of [['paintLayers', 'paintLayersPanel', 'paint-layers'],
@@ -1087,12 +1107,15 @@ class ViewerPanel extends HTMLElement {
         // On commit, not per keystroke: each is one undoable edit.
         if (endEl && 'value' in endEl) {
             endEl.addEventListener('change', () => {
-                if (!this._mgOn || endEl.readOnly) return;
-                this.mgSetComp({ duration: Math.max(0, Math.round(Number(endEl.value) || 0)) + 1 });
+                if (endEl.readOnly || !(this._mgOn || this._cpOn)) return;
+                const patch = { duration: Math.max(0, Math.round(Number(endEl.value) || 0)) + 1 };
+                if (this._mgOn) this.mgSetComp(patch); else this.compSetFormat(patch);
             });
         }
         sr.getElementById('fps-in').addEventListener('change', (e) => {
-            if (this._mgOn) this.mgSetComp({ fps: Math.max(1, parseInt(e.target.value, 10) || 1) });
+            const fps = Math.max(1, parseInt(e.target.value, 10) || 1);
+            if (this._mgOn) this.mgSetComp({ fps });
+            else if (this._cpOn) this.compSetFormat({ fps });
         });
         sr.getElementById('fps-in').oninput = (e) => {
             let val = parseInt(e.target.value);
@@ -1551,6 +1574,7 @@ Object.assign(
     CodePanelMixin,
     DepsPanelMixin,
     MgPanelMixin,
+    CompPanelMixin,
     PaintPanelMixin,
     LoraPanelMixin,
     PrevizChannelsMixin,
@@ -1678,6 +1702,8 @@ app.registerExtension({
         ...viewerCommands(_activeViewerPanel),
     ],
     keybindings: viewerKeybindings(),
+    // Comp's node graph in ComfyUI's own bottom panel, beside the canvas (imageViewer_compComfyTab.js).
+    bottomPanelTabs: compBottomTabs(() => globalViewerPanel, () => _setViewerPanelToggle(true, { syncDisplay: true })),
     menuCommands: [
         { path: ["Extensions", "ComfyUI Image Viewer"],
           commands: ["ImageViewer.toggleViewer", "ImageViewer.sendSelectionToViewer"] },
@@ -1769,6 +1795,15 @@ app.registerExtension({
                 try { if (bridge.show) bridge.show(); } catch (_) { /* already up */ }
                 if (e.detail && e.detail.path) globalViewerPanel?.mgOpenFile?.(e.detail.path);
             } catch (err) { console.warn("imageViewer: motion scene not opened", err); }
+        });
+
+        // An agent opened a comp (POST /imageviewer/push with a .comp.json).
+        api.addEventListener("imageviewer.comp.open", (e) => {
+            try {
+                const bridge = window.imageViewerApi || {};
+                try { if (bridge.show) bridge.show(); } catch (_) { /* already up */ }
+                if (e.detail && e.detail.path) globalViewerPanel?.compOpenFile?.(e.detail.path);
+            } catch (err) { console.warn("imageViewer: comp not opened", err); }
         });
 
         // An agent opened a picture in Paint (POST /imageviewer/push with an .ora / .psd, or panel "paint").

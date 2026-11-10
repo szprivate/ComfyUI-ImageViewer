@@ -173,6 +173,8 @@ export const PlaybackMixin = {
         if (this._editPlayOn) return this.editPlayFrameCount();
         // A motion tab: the scene's own length (imageViewer_mgPanel.js); the editor plays nothing itself.
         if (this._mgOn) return this._mgFrameCount();
+        // A comp tab: the comp's own length (imageViewer_compPanel.js).
+        if (this._cpOn) return this._cpFrameCount();
         // A Paint tab: a picture, no time.
         if (this._paintOn) return 0;
         // A Contact Sheet of 3+ items: its longest clip (ContactGridMixin).
@@ -489,6 +491,7 @@ export const PlaybackMixin = {
         if (this._editPlayOn) { this.editPlaySetFrame(idx); return; }
         // A motion tab has no media frames: the frame is a moment of the scene.
         if (this._mgOn) { this._mgSetFrame(idx); return; }
+        if (this._cpOn) { this._cpSetFrame(idx); return; }
         if (this._paintOn) return;
         // A Contact Sheet grid: every cell to the same frame (ContactGridMixin).
         if (this._gridOn) { this._gridSetFrame(idx); return; }

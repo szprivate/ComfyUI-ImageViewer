@@ -694,6 +694,13 @@ textarea.param-input {
 .pt-btn > svg { width: 12px; height: 12px; }
 .pt-close:hover { color: #fff; background: rgba(229,72,77,0.75); }
 .pt-btn:disabled { opacity: 0.35; cursor: default; }
+/* Folded: the title bar alone. Maximised: over the viewer, between its tab bar and its transport. */
+.dock-collapsed { min-height: 0 !important; min-width: 0 !important; }
+.dock-collapsed > :not(.panel-titlebar) { display: none !important; }
+.dock-collapsed > .panel-titlebar { border-bottom: none; }
+.dock-rail.bottom > .dock-collapsed { min-width: 140px !important; }
+.dock-max { box-shadow: 0 0 0 1px #333, 0 8px 30px rgba(0,0,0,0.6); }
+.pt-max.on { color: #f60; }
 
 /* Drag-to-dock: a preview of where the panel would land, and a label under the
    cursor. Lives inside .main-area, so it travels with the panel when the whole
@@ -930,6 +937,14 @@ textarea.param-input {
    the Parameters panel's body over while a tool is on (.tool-mode). */
 .params-panel.tool-mode > .params-content,
 .params-panel:not(.tool-mode) > .imageviewer-tool-panel { display: none; }
+/* On a Comp tab the panel shows the selected comp node (imageViewer_compPanel.js, .comp-params): ComfyUI's
+   widgets, a tool's options and the lock step aside. */
+.params-panel.comp-mode > .params-content,
+.params-panel.comp-mode > .imageviewer-tool-panel,
+.params-panel.comp-mode #params-lock-btn,
+.params-panel:not(.comp-mode) > .comp-params { display: none; }
+.params-panel > .comp-params { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+.params-panel > .comp-params > .comp-slot { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
 
 /* Animation Curves: one channel of the selected item drawn over time
    (imageViewer_previzCurves.js). A dock panel, so the graph has room to be
@@ -1637,7 +1652,11 @@ textarea.param-input {
    its layers / properties / timeline are dock panels, each holding one part of it. */
 .motion-view { position: absolute; inset: 0; z-index: 8; display: none; background: #0f0f12; cursor: default; }
 .motion-tab, .motion-stage { position: absolute; inset: 0; }
+/* Comp (imageViewer_compPanel.js): the same shape as Motion. */
+.comp-view { position: absolute; inset: 0; z-index: 8; display: none; background: #0f0f12; cursor: default; }
+.comp-tab, .comp-stage { position: absolute; inset: 0; }
 .viewport.motion-mode #exposure-control,
+.viewport.comp-mode #exposure-control,
 .viewport.view-mode #exposure-control,
 .viewport.view-mode #contact-container,
 .viewport.view-mode #img-frame,
@@ -1645,11 +1664,16 @@ textarea.param-input {
 .viewport.view-mode #rotate-btn,
 .viewport.view-mode .imageviewer-toolbar,
 .viewport.motion-mode #contact-container,
+.viewport.comp-mode #contact-container,
 .viewport.motion-mode #img-frame,
+.viewport.comp-mode #img-frame,
 .viewport.motion-mode #compare-slider,
+.viewport.comp-mode #compare-slider,
 .viewport.motion-mode #rotate-btn,
+.viewport.comp-mode #rotate-btn,
+.viewport.comp-mode .imageviewer-toolbar,
 .viewport.motion-mode .imageviewer-toolbar { display: none !important; }
-.motion-part-panel > .mg-slot { flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden; background: #1b1b1f; }
+.motion-part-panel > .mg-slot, .motion-part-panel > .comp-slot { flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden; background: #1b1b1f; }
 .mg-note { padding: 14px; color: #8a8a92; font: 12px/1.4 system-ui, sans-serif; }
 .mg-open-state { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 14px; padding: 24px; text-align: center; color: #d8d8dc; font: 13px/1.5 system-ui, "Segoe UI", sans-serif; }

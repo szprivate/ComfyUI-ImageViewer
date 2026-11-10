@@ -123,7 +123,7 @@ export const ParamsMixin = {
 
             if (!this.isPanelDocked || !this.isPanelDocked("params")) return;
             // A drawing tool has the panel (ToolsMixin._toolShowDock).
-            if (this.paramsLocked || this._paramsToolMode) return;
+            if (this.paramsLocked || this._paramsToolMode || this._cpParamsMode) return;
 
             const selected = (app && app.canvas) ? app.canvas.selected_nodes : null;
             // If there's no canvas selection available (standalone viewer page),

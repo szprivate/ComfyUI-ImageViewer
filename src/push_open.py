@@ -148,3 +148,17 @@ def split_paint(raw_paths, *, is_allowed):
                 continue
         rest.append(raw)
     return paint, rest
+
+
+def split_comps(raw_paths, *, is_allowed):
+    """(comps, rest): the ``*.comp.json`` files, which open in a Comp tab (not media either: the test is the
+    allowed folders and that the file exists; anything else stays in ``rest``)."""
+    comps, rest = [], []
+    for raw in raw_paths:
+        if isinstance(raw, str) and raw.lower().endswith(".comp.json"):
+            p = os.path.abspath(raw)
+            if is_allowed(p) and os.path.isfile(p):
+                comps.append(p)
+                continue
+        rest.append(raw)
+    return comps, rest

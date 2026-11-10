@@ -13,7 +13,7 @@ A viewer panel for ComfyUI: look at what your workflow makes, compare it, cut it
 
 ## Spaces
 
-A space is a kind of tab: one for looking at things, and one for each kind of document. Open a space from its menu in the lower bar (**Open Edit…**, **Open Paint…**, **Open Motion…**, **Open 3D…**): you get the open one, else the last file you used there, else an empty one.
+A space is a kind of tab: one for looking at things, and one for each kind of document. Open a space from its menu in the lower bar (**Open Edit…**, **Open Paint…**, **Open Motion…**, **Open Comp…**, **Open 3D…**): you get the open one, else the last file you used there, else an empty one.
 
 | Space | What it is for |
 |---|---|
@@ -22,6 +22,7 @@ A space is a kind of tab: one for looking at things, and one for each kind of do
 | [Paint](paint.md) | Edit a picture in layers |
 | [3D & Previz](3d.md) | View models, build and animate a shot, render it back into the workflow |
 | [Motion](motion.md) | Edit motion graphics an agent wrote |
+| [Comp](comp.md) | Layer pictures, films and sequences in a node graph |
 | [Dependencies](dependencies.md) | What a file was made from, and what was made from it |
 
 ## Panels
@@ -36,7 +37,7 @@ Panels sit beside the picture and can be docked, stacked as tabs and stored in l
 | [Agent code](agent-code.md) | Read the code an agent writes |
 | [Dataset](dataset.md) | Review a LoRA training dataset and watch the training |
 
-Each space brings its own panels too: the Editor's Edit, Inspector and Effects, Paint's Layers, Properties and History, the 3D Outliner, Channel Box and Curve Editor.
+Each space brings its own panels too: the Editor's Edit, Inspector and Effects, Paint's Layers, Properties and History, Comp's Node Graph, Properties and Layers, the 3D Outliner, Channel Box and Curve Editor.
 
 ## More
 

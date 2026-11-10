@@ -15,6 +15,7 @@ History, the file browser, Parameters, Agent code, Dataset and each space's pane
 
 - Drag a panel by its title bar onto an edge of the picture, or above / below another panel. Drop it on the middle of another panel to share its place as a tab.
 - Drag the bars between them to resize. **✕** puts a panel away; the lower bar's menus bring it back.
+- The two small buttons left of **✕** fold a panel to its title bar (a double-click on the title does the same, and again opens it) and let one panel fill the viewer between the tab bar and the transport until you press it again. A folded panel stays folded in a saved layout.
 - The **layout** menu stores the whole arrangement under a name, and can make one the default.
 
 The lower bar holds playback on the left, then the menus: **ComfyUI** (History, Parameters, Agent code, Dataset, agentY), **3D**, **Motion**, **Paint** and **Timeline**.

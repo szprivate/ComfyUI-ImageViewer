@@ -543,6 +543,8 @@ export const UIMixin = {
         if (this.editTlTabHidden && !this.isEditTab(k)) this.editTlTabHidden(!!prevTab && this.isEditTab(prevTab));
         // A motion tab's editor sits over the viewport, with its panels (Layers, Properties, Timeline).
         if (this._mgOn && !(this.isMotionTab && this.isMotionTab(k))) this.mgTabLeave();
+        // ...and a comp tab's (CompPanelMixin), with its Node Graph, Properties and Layers.
+        if (this._cpOn && !(this.isCompTab && this.isCompTab(k))) this.compTabLeave();
         // ...and so does a Paint tab's (PaintPanelMixin), with Layers and Properties.
         if (this._paintOn && !(this.isPaintTab && this.isPaintTab(k))) this.paintTabLeave();
         // A code or dataset tab (ViewTabsMixin) is a page over the viewport too.
@@ -618,6 +620,17 @@ export const UIMixin = {
             this.timeline.value = 0;
             this.container.querySelector('#cur-f').innerText = 0;
             this.mgTabEnter(k);
+        } else if (this.isCompTab && this.isCompTab(k)) {
+            // A comp tab has no media either: the picture is the comp's, its time the viewer's bar (compTabEnter).
+            if (this._exitVideoMode) this._exitVideoMode();
+            if (this._exitModelMode) this._exitModelMode();
+            this.imgBase.src = "";
+            this._updatePathBar(null);
+            if (this.updateShapeInfo) this.updateShapeInfo();
+            this.applyTimelineBounds(0);
+            this.timeline.value = 0;
+            this.container.querySelector('#cur-f').innerText = 0;
+            this.compTabEnter(k);
         } else if (this.isEditTab && this.isEditTab(k)) {
             // An Edit tab's picture is its cut, played from the clips' own files.
             this.editPlayEnter(k);

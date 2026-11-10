@@ -33,7 +33,7 @@ const LABEL_W = 176;
 const ROW_H = 22;
 const AMBER = "#ff9d2e";
 
-const CSS = `
+export const MG_CSS = `
 .mg-root{display:flex;flex-direction:column;height:100%;min-height:0;background:#1b1b1f;color:#d8d8dc;font:12px/1.35 system-ui,Segoe UI,sans-serif;outline:none;position:relative}
 .mg-root *{box-sizing:border-box}
 .mg-bar{display:flex;gap:4px;align-items:center;padding:4px 6px;border-bottom:1px solid #2c2c32;flex-wrap:wrap}
@@ -137,7 +137,7 @@ export function createMgEditor(host, opts = {}) {
 
     // -- skeleton ----------------------------------------------------------------------------
     if (!rootNode.querySelector || !rootNode.querySelector("style[data-mg]")) {
-        const style = el(doc, "style"); style.setAttribute("data-mg", "1"); style.textContent = CSS;
+        const style = el(doc, "style"); style.setAttribute("data-mg", "1"); style.textContent = MG_CSS;
         (rootNode.head || rootNode).appendChild(style);
     }
     host.replaceChildren();
