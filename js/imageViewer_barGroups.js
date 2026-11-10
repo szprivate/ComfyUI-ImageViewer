@@ -23,21 +23,14 @@
 import { api } from "../../scripts/api.js";
 import { recentDocs } from "./imageViewer_recentDocs.js";
 import { makeScene } from "./imageViewer_scene3d.js";
+import { spaceIconSvg } from "./imageViewer_spaceIcons.js";
 
-const SVG = (inner) => '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" '
-    + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + inner + "</svg>";
+// The spaces' own icons (imageViewer_spaceIcons.js): the same ones their tabs show.
 const ICONS = {
-    // Lucide "box".
-    box: SVG('<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/>'
-           + '<path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>'),
-    // Lucide "clapperboard".
-    motion: SVG('<path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z"/>'
-              + '<path d="m6.2 5.3 3.1 3.9"/><path d="m12.4 3.4 3.1 4"/><path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>'),
-    // Lucide "paintbrush".
-    paint: SVG('<path d="m14.622 17.897-10.68-2.913"/><path d="M18.376 2.622a1 1 0 1 1 3.002 3.002L17.36 9.643a.5.5 0 0 0 0 .707l.944.944a2.41 2.41 0 0 1 0 3.408l-.944.944a.5.5 0 0 1-.707 0L8.354 7.348a.5.5 0 0 1 0-.707l.944-.944a2.41 2.41 0 0 1 3.408 0l.944.944a.5.5 0 0 0 .707 0z"/>'
-             + '<path d="M9 8c-1.804 2.71-3.97 3.46-6.583 3.948a.507.507 0 0 0-.302.819l7.32 8.883a1 1 0 0 0 1.185.204C12.735 20.405 16 16.792 16 15"/>'),
-    timeline: SVG('<rect x="2" y="5" width="9" height="5" rx="1"/><rect x="13" y="5" width="9" height="5" rx="1"/>'
-                + '<rect x="2" y="14" width="5" height="5" rx="1"/><rect x="9" y="14" width="13" height="5" rx="1"/>'),
+    box: spaceIconSvg("3d"),
+    motion: spaceIconSvg("motion"),
+    paint: spaceIconSvg("paint"),
+    timeline: spaceIconSvg("edit"),
 };
 // ComfyUI's own mark, as its frontend ships it (white on black, as it is drawn).
 const COMFY_LOGO = "/assets/images/comfy-logo-mono.svg";

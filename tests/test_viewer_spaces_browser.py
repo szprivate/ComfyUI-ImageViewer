@@ -189,6 +189,31 @@ class ViewerSpacesTests(unittest.TestCase):
         self.assertEqual(st2, st, "the open cut comes back, no second one")
         self.assertEqual(self.errors, [])
 
+    def test_each_space_tab_shows_its_icon_and_the_bar_the_same(self):
+        pg = self.page()
+        pg.evaluate("() => __send('a', 'agentY')")
+        for kind in ("edit", "motion", "3d"):
+            pg.evaluate(f"async () => {{ await window.__panel.spaceOpen('{kind}'); }}")
+        # A Paint document needs the server's Paint routes, which the harness does not have: its tab is laid in by hand.
+        pg.evaluate("""() => { const P = window.__panel; P.allTabs['paint:D:/out/pic.ora'] = [];
+            P.tabLabels['paint:D:/out/pic.ora'] = '\\u{1F58C} pic.ora'; P.tabOrder.push('paint:D:/out/pic.ora'); P._rebuildTabBar(); }""")
+        tabs = pg.evaluate("""() => [...window.__panel.container.querySelectorAll('.tab')].map((t) => ({
+            space: t.dataset.space || '', icon: !!t.querySelector('.tab-icon svg'),
+            label: t.querySelector('.tab-label').textContent }))""")
+        spaces = {t["space"]: t for t in tabs if t["space"]}
+        self.assertEqual(set(spaces), {"viewer", "edit", "paint", "motion", "3d"}, tabs)
+        for t in spaces.values():
+            self.assertTrue(t["icon"], t)
+            self.assertFalse(t["label"][:1] in "\U0001F5BC\u2702\U0001F58C\U0001F3AC\U0001F9CA", t)
+        self.assertEqual(spaces["viewer"]["label"], "Viewer")
+        # The bar's group of a space wears the same picture as the space's tabs.
+        same = pg.evaluate("""() => { const C = window.__panel.container;
+            const tab = (k) => C.querySelector(`.tab[data-space="${k}"] .tab-icon svg`).innerHTML;
+            const bar = (id) => C.querySelector('#bar-group-' + id + ' svg').innerHTML;
+            return [tab('3d') === bar('3d'), tab('motion') === bar('motion'), tab('paint') === bar('paint'), tab('edit') === bar('timeline')]; }""")
+        self.assertEqual(same, [True, True, True, True])
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

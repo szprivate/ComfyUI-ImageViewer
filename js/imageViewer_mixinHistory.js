@@ -15,6 +15,7 @@
 // thumbnails are dragged onto its timeline; a double-click opens the snapshot.
 import { api } from "../../scripts/api.js";
 import { setPref, PREF } from "./imageViewer_settings.js";
+import { spaceIconSvg, stripSpaceEmoji } from "./imageViewer_spaceIcons.js";
 import { HISTORY_KEY, snapshotTab, stampSnapshot, snapshotGroup, setSnapshotGroup, historyGroups,
          liveIndexOf, historySections, historyDisplayOrder, moveGroupInOrder, renameInOrder, foldIntoTab, groupFromLabel, snapshotNode } from "./imageViewer_historyData.js";
 
@@ -1790,6 +1791,18 @@ export const HistoryMixin = {
         this.queuePersistViewerState();
     },
 
+    /** Which space a tab is ("viewer", "edit", "paint", "motion", "3d"), or "" for any other tab. */
+    _tabSpaceKind(key) {
+        if (key === HISTORY_VIEW_TAB) return "viewer";
+        try {
+            if (this.isEditTab && this.isEditTab(key)) return "edit";
+            if (this.isPaintTab && this.isPaintTab(key)) return "paint";
+            if (this.isMotionTab && this.isMotionTab(key)) return "motion";
+            if (this.isPrevizTab && this.isPrevizTab(key)) return "3d";
+        } catch (_) { /* a tab half made: no icon */ }
+        return "";
+    },
+
     // ── Private: create a draggable tab button element ───────────────────────
     _makeTabButton(key, labelText) {
         const btn = document.createElement('div');
@@ -1797,9 +1810,23 @@ export const HistoryMixin = {
         btn.dataset.tab = key;
         btn.title       = labelText;
 
+        // A space's tab (Viewer, Edit, Paint, Motion, 3D) shows the space's icon
+        // in place of the emoji its label carries (imageViewer_spaceIcons.js).
+        const space = this._tabSpaceKind(key);
+        let text = labelText;
+        if (space) {
+            text = stripSpaceEmoji(labelText);
+            btn.title = text;
+            btn.dataset.space = space;
+            const icon = document.createElement('span');
+            icon.className = 'tab-icon';
+            icon.innerHTML = spaceIconSvg(space, 14);
+            btn.appendChild(icon);
+        }
+
         const span = document.createElement('span');
         span.className = 'tab-label';           // truncated with an ellipsis; the title has it whole
-        span.textContent = labelText;
+        span.textContent = text;
         btn.appendChild(span);
 
         // User-assigned tab color (right-click → pick), applied via CSS custom
