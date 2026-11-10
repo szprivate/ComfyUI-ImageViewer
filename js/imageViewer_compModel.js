@@ -405,6 +405,65 @@ export function connect(comp, dstId, port, srcId) {
 
 export function disconnect(comp, dstId, port) { return connect(comp, dstId, port, null); }
 
+// ── wires: where they run, and a node dropped on one ───────────────────────
+/** Where input ``port`` of a node sits along its top edge (graph units from its left). */
+export function portX(n, i) { return ((i + 1) / ((NODE_TYPES[n.type] || { inputs: [0] }).inputs.length + 1)) * NODE_W; }
+/** A wire's curve (the editor draws the same): from the bottom middle of the source to the input on top of the other. */
+export function wireCurve(x1, y1, x2, y2) {
+    const dy = Math.max(30, Math.abs(y2 - y1) / 2);
+    return [[x1, y1], [x1, y1 + dy], [x2, y2 - dy], [x2, y2]];
+}
+/** Every wire: {src, dst, port, curve}. */
+export function wires(comp) {
+    const out = [];
+    for (const n of comp.nodes) n.inputs.forEach((src, port) => {
+        const s = src && nodeById(comp, src);
+        if (s) out.push({ src, dst: n.id, port, curve: wireCurve(s.x + NODE_W / 2, s.y + NODE_H, n.x + portX(n, port), n.y) });
+    });
+    return out;
+}
+function bez(c, t) {
+    const u = 1 - t, a = u * u * u, b = 3 * u * u * t, d = 3 * u * t * t, e = t * t * t;
+    return [a * c[0][0] + b * c[1][0] + d * c[2][0] + e * c[3][0], a * c[0][1] + b * c[1][1] + d * c[2][1] + e * c[3][1]];
+}
+/** How far a point is from a wire's curve (sampled at 48 steps). */
+export function wireDistance(curve, x, y) {
+    let best = Infinity, prev = bez(curve, 0);
+    for (let i = 1; i <= 48; i++) {
+        const q = bez(curve, i / 48);
+        const dx = q[0] - prev[0], dy = q[1] - prev[1], L = dx * dx + dy * dy;
+        const t = L ? Math.max(0, Math.min(1, ((x - prev[0]) * dx + (y - prev[1]) * dy) / L)) : 0;
+        best = Math.min(best, Math.hypot(x - (prev[0] + t * dx), y - (prev[1] + t * dy)));
+        prev = q;
+    }
+    return best;
+}
+/** Can node ``id`` go into a wire as Nuke lets one: it has an input, its first is free and nothing reads it yet. */
+export function canSplice(comp, id) {
+    const n = nodeById(comp, id);
+    return !!(n && n.type !== "output" && n.inputs.length && !n.inputs[0] && !consumers(comp, id).length);
+}
+/** The wire a node dropped at (x, y) - its middle - goes into: the nearest within ``reach``, none of its own. */
+export function wireUnder(comp, id, x, y, reach) {
+    if (!canSplice(comp, id)) return null;
+    let best = null;
+    for (const w of wires(comp)) {
+        if (w.src === id || w.dst === id) continue;
+        if (reaches(comp, w.src, id) || reaches(comp, id, w.dst)) continue;   // it would make a loop
+        const d = wireDistance(w.curve, x, y);
+        if (d <= reach && (!best || d < best.d)) best = { ...w, d };
+    }
+    return best;
+}
+/** Node ``id`` put into the wire src -> dst.port: it reads src on its first input, dst reads it. */
+export function spliceNode(comp, id, wire) {
+    const n = nodeById(comp, id), dst = nodeById(comp, wire.dst);
+    if (!n || !dst || !canSplice(comp, id) || dst.inputs[wire.port] !== wire.src) return false;
+    n.inputs[0] = wire.src;
+    dst.inputs[wire.port] = id;
+    return true;
+}
+
 /** Delete nodes as Nuke does: what read a node reads its first input instead. */
 export function removeNodes(comp, ids) {
     const gone = new Set(ids);

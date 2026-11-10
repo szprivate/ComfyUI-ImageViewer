@@ -17,6 +17,7 @@ Comp layers pictures, films and image sequences in a node graph, the way Nuke do
 
 The **Node Graph** panel is up when a comp opens. The picture runs from top to bottom: a node's inputs are on its top edge, its output at the bottom.
 
+- Drag a node that is not connected yet onto a **wire**: the wire lights up, and letting go puts the node into it.
 - The graph has a **grid** (its button, or G) and nodes **snap** to it (the magnet, or S; hold Shift while dragging to place one freely). **Align** lines the selected nodes up in a column or a row, by their edges, or spreads three or more out evenly; with nothing selected, *Snap every node to the grid* tidies the whole graph. Each is one undo step.
 - **Tab**, the **Add** button and a right-click on the graph open the node menu. Type to find a node by its name, its category or its id; the arrow keys and Enter pick one, and the list scrolls. With a node selected, a node from Tab or Add goes in under it; from a right-click on an empty spot it lands where you clicked. A right-click on a node puts that node's actions (view, disable, rename, delete) at the top of the same menu.
 - Drag a node to move it. Drag on empty space to select several, or Alt-drag or middle-drag to pan. The wheel zooms.

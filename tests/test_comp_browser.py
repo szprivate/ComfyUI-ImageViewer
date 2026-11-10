@@ -401,6 +401,32 @@ class CompBrowserTests(unittest.TestCase):
         self.assertGreaterEqual(len(set(seen)), 4, seen)
         self.assertEqual(self.errors, [])
 
+    def test_a_node_dropped_on_a_wire_goes_into_the_flow(self):
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        pg.evaluate("() => __panel.setPanelDocked('compGraph', true)")
+        # A free Blur beside the Background -> Output wire.
+        pg.evaluate(f"""() => {{ const e = {ED}; e.select([]); const b = e.addNode('blur'); const n = e.comp().nodes.find((x) => x.type === 'blur');
+            n.x = 400; n.y = 60; n.inputs = [null]; e.select([]); e.refresh(); }}""")
+        pg.wait_for_timeout(200)
+        graph = pg.evaluate_handle("() => __panel.compGraphPanel.querySelector('.cp-graph')")
+        start = graph.evaluate("(g) => { const r = g.querySelector('.cp-node[data-id=Blur1]').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }")
+        wire = graph.evaluate("""(g) => { const p = g.querySelector('.cp-wires path'); const L = p.getTotalLength(), m = p.getPointAtLength(L / 2);
+            const ctm = p.getScreenCTM(); return [m.x * ctm.a + ctm.e, m.y * ctm.d + ctm.f]; }""")
+        pg.mouse.move(*start); pg.mouse.down()
+        pg.mouse.move(*wire, steps=8)
+        self.assertEqual(graph.evaluate("(g) => g.querySelectorAll('.cp-wires path.cp-wire-hot').length"), 1, "the wire lights up")
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-drop-on-wire.png"))
+        pg.mouse.up()
+        ins = pg.evaluate(f"() => {{ const c = {ED}.comp(); const by = (id) => c.nodes.find((n) => n.id === id); return [by('Blur1').inputs, by(c.output).inputs]; }}")
+        self.assertEqual(ins, [["Constant1"], ["Blur1"]])
+        pg.evaluate(f"() => {ED}.undo()")
+        self.assertEqual(pg.evaluate(f"() => {{ const c = {ED}.comp(); return c.nodes.find((n) => n.id === c.output).inputs; }}"), ["Constant1"])
+        self.assertEqual(self.errors, [])
+
     def test_several_selected_nodes_of_one_type_change_together(self):
         pg = self.page()
         self.new_comp(pg)

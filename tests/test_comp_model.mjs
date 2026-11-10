@@ -367,3 +367,26 @@ test("the graph's grid: snapping and lining nodes up", () => {
     C.alignNodes(sn, ["a", "b", "c"], "right", { snap: true });
     assert.deepEqual(sn.nodes.map((n) => n.x), [165, 165, 165]);
 });
+
+test("a free node dropped on a wire goes into it; never into its own wires or into a loop", () => {
+    const comp = { comp: 1, format: {}, output: "Out", nodes: [
+        { id: "A", type: "constant", x: 0, y: 0, inputs: [] },
+        { id: "Out", type: "output", x: 0, y: 300, inputs: ["A"] },
+        { id: "B", type: "blur", x: 300, y: 0, inputs: [null] },
+        { id: "M", type: "merge", x: 600, y: 0, inputs: [null, null, null] }] };
+    const w = C.wires(comp);
+    assert.equal(w.length, 1);
+    const mid = [C.NODE_W / 2, 150 + 15];                   // about halfway down A -> Out
+    assert.ok(C.wireDistance(w[0].curve, mid[0], 165) < 2);
+    assert.equal(C.wireUnder(comp, "B", mid[0] + 40, mid[1], 10), null, "too far");
+    const hit = C.wireUnder(comp, "B", mid[0] + 4, mid[1], 10);
+    assert.deepEqual([hit.src, hit.dst, hit.port], ["A", "Out", 0]);
+    assert.ok(C.spliceNode(comp, "B", hit));
+    assert.deepEqual(C.nodeById(comp, "B").inputs, ["A"]);
+    assert.deepEqual(C.nodeById(comp, "Out").inputs, ["B"]);
+    // B is in use now: it does not go into another wire.
+    assert.equal(C.canSplice(comp, "B"), false);
+    // A node whose first input is taken does not either.
+    C.nodeById(comp, "M").inputs[0] = "A";
+    assert.equal(C.canSplice(comp, "M"), false);
+});

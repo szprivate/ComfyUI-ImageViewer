@@ -54,6 +54,7 @@ const CSS = `
 .cp-port.in{top:-6px}.cp-port.out{bottom:-6px;left:50%}
 .cp-port:hover{background:#ffcf3a}
 .cp-plabel{position:absolute;top:-19px;font-size:10px;color:#bbb;pointer-events:none;transform:translateX(-50%)}
+.cp-wires path.cp-wire-hot{stroke:#ff6a1a!important;stroke-width:3!important}
 .cp-marquee{position:absolute;border:1px dashed #ffcf3a;background:#ffcf3a14;pointer-events:none}
 .cp-hint{position:absolute;right:8px;bottom:6px;opacity:.45;pointer-events:none}
 .cp-gbar{position:absolute;left:6px;top:6px;display:flex;gap:4px;z-index:3}
@@ -683,10 +684,10 @@ export function createCompEditor(host, opts = {}) {
         st.graph = { s, x: (W - (x1 - x0) * s) / 2 - x0 * s, y: (H - (y1 - y0) * s) / 2 - y0 * s, fitted: true };
         placeWorld();
     }
-    const portX = (n, i) => ((i + 1) / (C.NODE_TYPES[n.type].inputs.length + 1)) * C.NODE_W;
+    const portX = (n, i) => C.portX(n, i);
     function wirePath(x1, y1, x2, y2) {
-        const dy = Math.max(30, Math.abs(y2 - y1) / 2);
-        return `M${x1},${y1} C${x1},${y1 + dy} ${x2},${y2 - dy} ${x2},${y2}`;
+        const c = C.wireCurve(x1, y1, x2, y2);
+        return `M${c[0][0]},${c[0][1]} C${c[1][0]},${c[1][1]} ${c[2][0]},${c[2][1]} ${c[3][0]},${c[3][1]}`;
     }
     function renderGraph() {
         for (const n of [...world.querySelectorAll(".cp-node")]) n.remove();
@@ -722,6 +723,8 @@ export function createCompEditor(host, opts = {}) {
                 const path = svgEl(doc, "path", { d: wirePath(s.x + C.NODE_W / 2, s.y + C.NODE_H, n.x + portX(n, i), n.y),
                     fill: "none", stroke: i === 2 ? "#bbb" : i === 1 && (n.type === "merge" || n.type === "copy") ? "#ffcf3a" : i === 1 ? "#8fd0ff" : "#e8e8ea", "stroke-width": 1.6,
                     "stroke-dasharray": i === 2 ? "4 3" : "" });
+                path.dataset.wire = `${src}>${n.id}:${i}`;
+                if (st.wireHot === path.dataset.wire) path.classList.add("cp-wire-hot");
                 wires.append(path);
             });
         }
@@ -798,9 +801,19 @@ export function createCompEditor(host, opts = {}) {
             let dx = x - sx, dy = y - sy;
             if (st.grid.snap && !ev.shiftKey) { dx = C.snapTo(px0 + dx) - px0; dy = C.snapTo(py0 + dy) - py0; }
             for (const [sid, [x0, y0]] of start) { const n = node(sid); if (n) { n.x = Math.round(x0 + dx); n.y = Math.round(y0 + dy); } }
+            // One free node over a wire: the wire lights up, and letting go puts the node into it (Nuke's way).
+            const me = start.size === 1 ? node(id) : null;
+            hotWire = me ? C.wireUnder(st.comp, id, me.x + C.NODE_W / 2, me.y + C.NODE_H / 2, Math.max(8, 12 / st.graph.s)) : null;
+            st.wireHot = hotWire ? `${hotWire.src}>${hotWire.dst}:${hotWire.port}` : null;
             renderGraph();
         };
-        graph.onpointerup = () => { graph.onpointermove = null; if (moved) { st.dirty = true; renderBar(); } };
+        let hotWire = null;
+        graph.onpointerup = () => {
+            graph.onpointermove = null;
+            st.wireHot = null;
+            if (moved && hotWire && C.spliceNode(st.comp, id, hotWire)) { st.dirty = true; refresh(); return; }
+            if (moved) { st.dirty = true; renderBar(); renderGraph(); }
+        };
     }
     function dragWire(e, srcId, from) {
         e.preventDefault(); graph.setPointerCapture(e.pointerId);
