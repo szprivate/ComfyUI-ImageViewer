@@ -35,12 +35,15 @@ Its panels show only on a Paint tab: **Layers**, **History** and, sharing one pl
 | <kbd>Shift</kbd>+<kbd>G</kbd> | Gradient (see below) |
 | <kbd>O</kbd> / <kbd>Shift</kbd>+<kbd>O</kbd> | Dodge (lightens), then burn (darkens) and the sponge (takes colour out or puts more in). Dodge and burn work most on the shadows, the midtones or the highlights; Exposure sets how strongly |
 | <kbd>R</kbd> | Smudge: drags the paint along the stroke. Strength sets how far; Finger painting starts each stroke with the colour |
+| <kbd>Shift</kbd>+<kbd>R</kbd> | Blur brush: softens what it paints over; going over a place again softens it more. Strength sets how much. Works on a layer, on its mask and on Quick Mask (to soften a selection's edge). <kbd>Shift</kbd>+<kbd>R</kbd> again goes back to smudge |
 | <kbd>U</kbd> / <kbd>Shift</kbd>+<kbd>U</kbd> | Shapes: rectangle, rounded rectangle, ellipse, polygon, line (Shift+U: the next one) |
 | <kbd>I</kbd> | Eyedropper: a click takes the colour under the pointer; dragged, it draws a box and takes the average colour inside it |
 | <kbd>T</kbd> | Text |
 | <kbd>H</kbd> or hold <kbd>Space</kbd> | Hand |
 
 <kbd>X</kbd> swaps the two colours, <kbd>D</kbd> resets them.
+
+**Brush size and opacity on the canvas.** With any brush tool (brush, eraser, clone stamp, the healing brushes, dodge, burn, sponge, smudge, blur, also on a mask and on Quick Mask) hold <kbd>B</kbd> and move the mouse, no button needed: sideways changes the size (the circle's edge follows the pointer), up and down the opacity (up is more). Hold <kbd>Shift</kbd> as well to change the hardness instead of the opacity. The circle stays where you started, with its numbers beside it, and the red inside shows the hardness and opacity. Let go of <kbd>B</kbd> to keep the values. Photoshop's own gesture works too: <kbd>Alt</kbd> and the right mouse button, dragged. In Liquify the drag changes the size and the strength. A quick tap of <kbd>B</kbd> without moving still picks the brush, so holding <kbd>B</kbd> on the eraser changes the eraser and tapping it switches to the brush. <kbd>[</kbd> / <kbd>]</kbd> still make the brush smaller / larger in steps.
 
 Tools of one kind share one place in the toolbar: Transform and Transform selection, the selections (rectangle, ellipse, lasso), the brush with the healing tools (spot healing brush, healing brush, patch), the path tools, and the shapes (rectangle, rounded rectangle, ellipse, polygon, line). The place shows the tool used last. Right-click it for the others.
 

@@ -1092,6 +1092,83 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertGreater(m[1], 245)
         self.assertEqual(self.errors, [])
 
+    def test_blur_brush_and_the_size_opacity_drag(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        x0, y0, w, h = pg.evaluate(f"() => {{ const r = {ed}.canvas.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }}")
+        at = lambda x, y: (x0 + x * w / 200, y0 + y * h / 120)
+        px = lambda x, y: pg.evaluate(f"() => {{ const e = {ed}, L = e.active(), b = e.pix.get(L.id), o = (({y} - L.y) * L.w + {x} - L.x) * 4; return [...b.slice(o, o + 4)]; }}")
+        opts = lambda t: pg.evaluate(f"() => {{ const o = {ed}.opts['{t}']; return [o.size, o.opacity, o.hardness]; }}")
+        zoom = pg.evaluate(f"() => {ed}.view.zoom")
+        # A layer black on the left, white on the right.
+        pg.evaluate(f"""() => {{ const e = {ed}, b = new Uint8ClampedArray(200 * 120 * 4);
+            for (let i = 0; i < 200 * 120; i++) b.set(i % 200 < 100 ? [0, 0, 0, 255] : [255, 255, 255, 255], i * 4);
+            e.addPixelLayer(b, 200, 120, 'edge'); Object.assign(e.opts.blur, {{ size: 24, opacity: 100 }}); }}""")
+        # R is smudge, Shift+R the blur brush (Shift+R again: smudge).
+        pg.mouse.move(*at(5, 5))
+        pg.keyboard.press("r"); pg.keyboard.press("Shift+r")
+        self.assertEqual(pg.evaluate(f"() => {ed}.tool"), "blur")
+        pg.mouse.move(*at(100, 20)); pg.mouse.down(); pg.mouse.move(*at(100, 100), steps=12); pg.mouse.up()
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Blur")
+        a, b = px(98, 60)[0], px(101, 60)[0]
+        self.assertTrue(0 < a < 128 < b < 255, (a, b))
+        self.assertEqual(px(10, 60), [0, 0, 0, 255])
+        self.assertEqual(px(190, 60), [255, 255, 255, 255])
+        self.shot_blur = pg.screenshot()
+        pg.keyboard.press("Control+z")
+        self.assertEqual(px(98, 60), [0, 0, 0, 255])
+        # Hold B and move: sideways the size, up the opacity (no button pressed, nothing painted).
+        pg.evaluate(f"() => {{ Object.assign({ed}.opts.blur, {{ size: 20, opacity: 50, hardness: 0 }}); }}")
+        before = pg.evaluate(f"() => {ed}.undoStack.length")
+        pg.mouse.move(*at(100, 60))
+        pg.keyboard.down("b")
+        self.assertTrue(pg.evaluate(f"() => !!{ed}._bd"))
+        sx, sy = at(100, 60)
+        pg.mouse.move(sx + 30, sy - 40, steps=6)
+        self.assertEqual(opts("blur")[:2], [round(20 + 60 / zoom), 70])
+        self.shot_brushdrag = pg.screenshot(clip={"x": x0, "y": y0, "width": w, "height": h})
+        pg.keyboard.up("b")
+        self.assertEqual(pg.evaluate(f"() => [{ed}.tool, !!{ed}._bd, {ed}.undoStack.length]"), ["blur", False, before])
+        # Shift while dragging: the hardness instead.
+        pg.keyboard.down("b"); pg.keyboard.down("Shift")
+        pg.mouse.move(sx + 30, sy - 80, steps=4)
+        pg.keyboard.up("Shift"); pg.keyboard.up("b")
+        self.assertEqual(opts("blur")[1:], [70, 20])     # 40 px up from where B went down
+        # Tapped without moving, on another brush: B picks the brush (on letting go).
+        pg.keyboard.press("e")
+        pg.keyboard.press("b")
+        self.assertEqual(pg.evaluate(f"() => {ed}.tool"), "brush")
+        # Held on the eraser and moved: the eraser's size changes, the tool stays.
+        pg.keyboard.press("e")
+        e0 = opts("eraser")[0]
+        pg.keyboard.down("b"); pg.mouse.move(sx + 50, sy - 80, steps=4); pg.keyboard.up("b")
+        self.assertEqual(pg.evaluate(f"() => {ed}.tool"), "eraser")
+        self.assertGreater(opts("eraser")[0], e0)
+        # Alt+right-drag (Photoshop's on Windows) does the same, for the brush on a MASK too.
+        pg.keyboard.press("b")
+        pg.evaluate(f"() => {{ const e = {ed}; e.addMask('all'); e.editMask = true; Object.assign(e.opts.brush, {{ size: 30, opacity: 100 }}); }}")
+        pg.mouse.move(sx, sy)
+        pg.keyboard.down("Alt"); pg.mouse.down(button="right"); pg.mouse.move(sx - 5, sy + 20, steps=4); pg.mouse.up(button="right"); pg.keyboard.up("Alt")
+        self.assertEqual(opts("brush")[:2], [round(30 - 10 / zoom), 90])
+        self.assertFalse(pg.evaluate(f"() => !!{ed}._bd"))
+        # The blur brush on the mask softens the mask's edge.
+        pg.evaluate(f"""() => {{ const e = {ed}, L = e.active(), m = e.masks.get(L.id);
+            for (let y = 0; y < L.mask.h; y++) for (let x = 0; x < L.mask.w; x++) m[y * L.mask.w + x] = x < 100 ? 0 : 255;
+            e._bump(m); e.redraw(); Object.assign(e.opts.blur, {{ size: 24, opacity: 100, hardness: 0 }}); }}""")
+        pg.keyboard.press("Shift+r")
+        self.assertEqual(pg.evaluate(f"() => {ed}.tool"), "blur")
+        pg.mouse.move(*at(100, 20)); pg.mouse.down(); pg.mouse.move(*at(100, 100), steps=12); pg.mouse.up()
+        mv = pg.evaluate(f"() => {{ const e = {ed}, L = e.active(), m = e.masks.get(L.id); return [m[60 * L.mask.w + 98], m[60 * L.mask.w + 101], m[60 * L.mask.w + 10]]; }}")
+        self.assertTrue(0 < mv[0] < 128 < mv[1] < 255 and mv[2] == 0, mv)
+        self.assertEqual(self.errors, [])
+        out = os.environ.get("PAINT_SHOTS")
+        if out:
+            os.makedirs(out, exist_ok=True)
+            for name, data in (("brush-drag.png", self.shot_brushdrag), ("blur-brush.png", self.shot_blur)):
+                with open(os.path.join(out, name), "wb") as fh:
+                    fh.write(data)
+
     def test_layer_style_lock_transparency_and_the_clipboard(self):
         pg = self.page()
         self.open_photo(pg)

@@ -19,7 +19,7 @@ import { PenMixin } from "./imageViewer_paintPen.js";
 import { WarpMixin } from "./imageViewer_paintWarp.js";
 import { HealMixin } from "./imageViewer_paintHeal.js";
 import { TipsMixin } from "./imageViewer_paintAbr.js";
-import { DrawMixin, smudgeStart, smudgeDab, SHAPE_KINDS } from "./imageViewer_paintDraw.js";
+import { DrawMixin, smudgeStart, smudgeDab, blurDab, SHAPE_KINDS } from "./imageViewer_paintDraw.js";
 import { BUF_VER, STYLE_KINDS, STYLE_LABELS } from "./imageViewer_paintStyle.js";
 import { LayerFxMixin } from "./imageViewer_paintLayerFx.js";
 import { SelectGuidesMixin, RULER_PX } from "./imageViewer_paintSelect.js";
@@ -30,6 +30,7 @@ import { PathToolsMixin, PATH_TOOLS, TOOL_GROUPS, GROUP_HINTS, toolGroup } from 
 import { AdjustUIMixin, ADJUST_CSS } from "./imageViewer_paintAdjustUI.js";
 import { SmartLayerMixin } from "./imageViewer_paintSmartLayer.js";
 import { GenStatusMixin, GEN_CSS } from "./imageViewer_paintGenStatus.js";
+import { BrushDragMixin } from "./imageViewer_paintBrushDrag.js";
 
 /** A dialog slider's step for the range a..b: about a thousand steps, a whole number where the range is wide. */
 export function dialogStep(a, b) {
@@ -48,7 +49,7 @@ export const PAINT_TOOLS = [
     ["brush", "brush", "Brush", "B"], ["clone", "clone", "Clone stamp", "S"], ["spot", "bandage", "Spot healing brush", "J"], ["heal", "heal", "Healing brush (Shift+J)", "Shift+J"],
     ["patch", "patch", "Patch (Shift+J)", "Shift+J"], ["eraser", "eraser", "Eraser", "E"], ["fill", "fill", "Paint bucket", "G"],
     ["gradient", "gradient", "Gradient (Shift+G)", "Shift+G"], ["dodge", "dodge", "Dodge", "O"], ["burn", "burn", "Burn (Shift+O)", "Shift+O"],
-    ["sponge", "sponge", "Sponge (Shift+O)", "Shift+O"], ["smudge", "smudge", "Smudge", "R"], ["liquify", "liquify", "Liquify (Shift+Ctrl+X)", "Shift+Ctrl+X"], ["shape", "shape", "Shapes (Shift+U: the next shape)", "U"],
+    ["sponge", "sponge", "Sponge (Shift+O)", "Shift+O"], ["smudge", "smudge", "Smudge (Shift+R: blur)", "R"], ["blur", "blur", "Blur (Shift+R)", "Shift+R"], ["liquify", "liquify", "Liquify (Shift+Ctrl+X)", "Shift+Ctrl+X"], ["shape", "shape", "Shapes (Shift+U: the next shape)", "U"],
     ["shape:rect", "shapeRect", "Rectangle", "U"], ["shape:rounded", "shapeRounded", "Rounded rectangle", "Shift+U"], ["shape:ellipse", "shapeEllipse", "Ellipse", "Shift+U"],
     ["shape:polygon", "shapePolygon", "Polygon", "Shift+U"], ["shape:line", "shapeLine", "Line", "Shift+U"],
     ["picker", "picker", "Eyedropper (drag: the average of a box)", "I"], ["text", "text", "Text", "T"], ["hand", "hand", "Hand (hold Space)", "H"],
@@ -56,7 +57,7 @@ export const PAINT_TOOLS = [
 const TOOL_KEYS = { v: "move", m: "marquee", l: "lasso", p: "pen", j: "spot", w: "wand", c: "crop", b: "brush", s: "clone", e: "eraser", g: "fill", i: "picker",
                     t: "text", h: "hand", o: "dodge", r: "smudge", u: "shape", a: "pathsel" };
 /** The tools that paint with a round brush (size, hardness, opacity, spacing, the pen). */
-const BRUSHES = ["brush", "clone", "eraser", "spot", "heal", "dodge", "burn", "sponge", "smudge"];
+const BRUSHES = ["brush", "clone", "eraser", "spot", "heal", "dodge", "burn", "sponge", "smudge", "blur"];
 /** The brushes that change the pixels under them rather than lay a colour down. */
 const TONERS = ["dodge", "burn", "sponge"];
 /** The brushes that take from a source point (Alt+click). */
@@ -71,10 +72,11 @@ export const PAINT_KEYS = [
     ["Shift+P", "The next of pen, add anchor, delete anchor, convert point"],
     ["A / Shift+A", "Path selection (drag: the whole path, Alt: a copy) / direct selection (anchors; Shift+click, box)"],
     ["Arrows, Del (A)", "Nudge (Shift: 10 px) / delete the path or the picked anchors"], ["B S E G I T H", "Brush, clone stamp, eraser, bucket, eyedropper, text, hand"],
-    ["[ / ]", "Brush smaller / larger (Shift: softer / harder)"], ["X / D", "Swap / default colours"],
+    ["[ / ]", "Brush smaller / larger (Shift: softer / harder)"],
+    ["Hold B + move / Alt+right-drag", "Any brush (the mask and Quick Mask too): sideways the size, up / down the opacity (Shift: the hardness); Liquify: the strength"], ["X / D", "Swap / default colours"],
     ["Alt+click", "Pick a colour (brush, bucket); the clone stamp and healing brush: where they take from"],
     ["J / Shift+J", "Spot healing brush / the next of healing brush, patch, spot healing"],
-    ["G / Shift+G", "Paint bucket / gradient (Shift: 45° steps)"], ["O / Shift+O", "Dodge / the next of burn, sponge, dodge"], ["R", "Smudge"],
+    ["G / Shift+G", "Paint bucket / gradient (Shift: 45° steps)"], ["O / Shift+O", "Dodge / the next of burn, sponge, dodge"], ["R / Shift+R", "Smudge / blur (Shift+R again: back to smudge)"],
     ["U / Shift+U", "Shapes / the next shape (Shift: square, Alt: from the middle)"],
     ["Transform: drag", "Inside: move; a handle: scale (Shift: keep the shape, Alt: about the middle); outside: rotate (Shift: 15°); Ctrl+edge handle: shear"],
     ["Shift+Ctrl+X", "Liquify (Enter applies, Esc cancels)"], ["Ctrl+R / Ctrl+; / Ctrl+Shift+;", "Rulers / guides / snapping"],
@@ -279,6 +281,7 @@ class PaintEditor {
             burn: { size: 60, hardness: 0, opacity: 50, spacing: 10, penSize: true, penOpacity: false, range: "midtones" },
             sponge: { size: 60, hardness: 0, opacity: 50, spacing: 10, penSize: true, penOpacity: false, sat: "desaturate" },
             smudge: { size: 30, hardness: 50, opacity: 50, spacing: 5, penSize: true, penOpacity: false, finger: false },
+            blur: { size: 40, hardness: 0, opacity: 50, spacing: 15, penSize: true, penOpacity: false },
             gradient: { type: "linear", preset: "fg-bg", opacity: 100, reverse: false },
             shape: { kind: "rect", mode: "pixels", fill: true, stroke: false, width: 4, lineWidth: 4, radius: 20, sides: 6 },
             fill: { tolerance: 32, contiguous: true, all: false },
@@ -292,6 +295,7 @@ class PaintEditor {
         // Brush tips kept in this browser (imageViewer_paintAbr.js).
         this.tips = new Map();
         this._tipsLoad();
+        this._brushTools = BRUSHES;
         this.fg = [255, 255, 255];
         this.bg = [0, 0, 0];
         this.view = { zoom: 1, x: 0, y: 0 };
@@ -854,8 +858,9 @@ class PaintEditor {
                 c.beginPath(); c.arc(sx, sy, r, 0, Math.PI * 2); c.stroke(); c.setLineDash([]);
             }
         }
-        // The brush.
-        if ((BRUSHES.includes(this.tool) || this.tool === "liquify") && this._hover) {
+        // The brush: while its size / opacity is dragged (B held, or Alt+right-drag), at where that began.
+        if (this._bd) this._bdDraw(c);
+        else if ((BRUSHES.includes(this.tool) || this.tool === "liquify") && this._hover) {
             const o = this.opts[this.tool];
             c.strokeStyle = "rgba(255,255,255,.9)"; c.lineWidth = 1;
             c.beginPath(); c.arc(this._hover.sx, this._hover.sy, Math.max(1, (o.size / 2) * v.zoom), 0, Math.PI * 2); c.stroke();
@@ -2116,6 +2121,14 @@ class PaintEditor {
     _down(e) {
         if (!this.doc) return;
         this.wrap.focus({ preventScroll: true });
+        if (this._bd) { this._bdEnd(); return; }       // a press while B is held ends the size drag (and paints nothing)
+        // Alt+right-drag (Photoshop's, on Windows): the brush's size sideways, its opacity up and down.
+        if (e.button === 2 && e.altKey && this._bdTool()) {
+            e.preventDefault();
+            this.wrap.setPointerCapture(e.pointerId);
+            this._bdBegin(e, "mouse");
+            return;
+        }
         const p = this.toImage(e);
         if (e.button === 1 || this._space || this.tool === "hand") {
             e.preventDefault();
@@ -2162,6 +2175,8 @@ class PaintEditor {
 
     _move(e) {
         if (!this.doc) return;
+        this._lastClient = { clientX: e.clientX, clientY: e.clientY };
+        if (this._bdMove(e)) return;
         const p = this.toImage(e);
         this._hover = p;
         const dr = this._drag;
@@ -2224,6 +2239,11 @@ class PaintEditor {
     }
 
     _up(e) {
+        if (this._bd && this._bd.by === "mouse") {
+            if (this.wrap.hasPointerCapture && this.wrap.hasPointerCapture(e.pointerId)) this.wrap.releasePointerCapture(e.pointerId);
+            this._bdEnd();
+            return;
+        }
         const dr = this._drag;
         this._drag = null;
         this._previewSettle();
@@ -2323,6 +2343,7 @@ class PaintEditor {
         st.L = A;
         st.radius = Math.max(0.5, o.size / 2);
         if (this.tool === "smudge") st.smudge = smudgeStart(st.radius, o.finger, st.color);
+        if (this.tool === "blur") st.blur = true;
         st.hard = o.hardness / 100;
         st.spacing = Math.max(0.01, o.spacing / 100);
         st.penSize = o.penSize !== false;
@@ -2358,6 +2379,7 @@ class PaintEditor {
                      color: [v, v, v], opacity: o.opacity / 100, erase: false, lockAlpha: true, sel: null, W, H, mask: m, onMask: true, quick: true };
         st.L = this.active() || { id: "" };
         st.radius = Math.max(0.5, o.size / 2);
+        if (this.tool === "blur") st.blur = true;      // softens Quick Mask's edge
         st.hard = o.hardness / 100;
         st.spacing = Math.max(0.01, o.spacing / 100);
         st.penSize = o.penSize !== false;
@@ -2440,6 +2462,7 @@ class PaintEditor {
             const k = D.pressureScale(pr, st.penSize, st.penOpacity);
             const r = Math.max(0.5, st.radius * k.r);
             if (st.smudge) { rect = rectUnion(rect, smudgeDab(st, x, y, r, st.hard, st.opacity * k.a)); continue; }
+            if (st.blur) { rect = rectUnion(rect, blurDab(st, x, y, r, st.hard, st.opacity * k.a)); continue; }
             const j = st.jit ? D.jitter(st.rand, r, st.jit) : null;
             const ang = (st.tipAngle || 0) + (st.way && st.way.dir != null ? st.way.dir : 0);
             rect = j ? rectUnion(rect, D.stamp(st, x + j.dx, y + j.dy, Math.max(0.5, r * j.k), st.hard, k.a, ang + j.da))
@@ -2478,7 +2501,7 @@ class PaintEditor {
         const before = cut(origBuf), after = cut(buf);
         this._bump(buf);
         const label = s.heal === "spot" ? "Spot healing brush" : s.heal ? "Healing brush" : s.clone ? "Clone stamp"
-            : { eraser: "Eraser", dodge: "Dodge", burn: "Burn", sponge: "Sponge", smudge: "Smudge" }[this.tool] || "Brush";
+            : { eraser: "Eraser", dodge: "Dodge", burn: "Burn", sponge: "Sponge", smudge: "Smudge", blur: "Blur" }[this.tool] || "Brush";
         this._push({ label: (s.quick ? "Quick Mask " : "") + label, bytes: before.byteLength * 2,
                      undo: () => paste(buf, before), redo: () => paste(buf, after) });
         this._lastStrokeEnd = { L: s.L.id, x: s.last[0], y: s.last[1] };
@@ -3083,6 +3106,7 @@ class PaintEditor {
             if (k === "-") return take(() => this.zoomTo(this.view.zoom / 1.25));
             return false;
         }
+        if (lk === "b" && !e.altKey && !e.shiftKey) return take(() => this._bKey(e));
         if (k === " ") { e.preventDefault(); if (!this._space) { this._space = true; this.wrap.style.cursor = "grab"; } return true; }
         if (k === "F5" && e.shiftKey) return take(() => this.openFill());
         if (k === "Enter" && this.crop) return take(() => this.applyCrop());
@@ -3122,6 +3146,7 @@ class PaintEditor {
         if (lk === "m" && e.shiftKey) return take(() => this.setTool("ellipse"));
         if (lk === "v" && e.shiftKey && !e.altKey) return take(() => this.setTool(this.tool === "tfsel" ? "move" : "tfsel"));
         if (lk === "g" && e.shiftKey && !e.altKey) return take(() => this.setTool(this.tool === "gradient" ? "fill" : "gradient"));
+        if (lk === "r" && e.shiftKey && !e.altKey) return take(() => this.setTool(this.tool === "blur" ? "smudge" : "blur"));
         if (lk === "o" && e.shiftKey && !e.altKey) return take(() => this.setTool({ dodge: "burn", burn: "sponge", sponge: "dodge" }[this.tool] || "burn"));
         if (lk === "u" && e.shiftKey && !e.altKey) return take(() => {
             const s = this.opts.shape;
@@ -3135,7 +3160,23 @@ class PaintEditor {
         return false;
     }
 
+    /**
+     * B: held with a brush tool up and the mouse moved, the brush's size (sideways) and opacity (up / down; Shift:
+     * hardness) follow the mouse until it is let go - Photoshop's Alt+right-drag on a key. Tapped, it picks the brush
+     * (on letting go, so a held B on the eraser changes the eraser). With another tool B picks the brush at once,
+     * and holding it on then works the same.
+     */
+    _bKey(e) {
+        if (e.repeat || this._bd) return;
+        const at = this._hover ? this._lastClient : null;     // the pointer over the canvas
+        if (!this._bdTool()) { this.setTool("brush"); this._bdBegin(at, "key"); return; }
+        if (this._drag) return;                                // not in the middle of a stroke
+        const tap = this.tool !== "brush" ? () => this.setTool("brush") : null;
+        if (!this._bdBegin(at, "key", tap) && tap) tap();
+    }
+
     keyUp(e) {
+        if (this._bd && this._bd.by === "key" && (e.key || "").toLowerCase() === "b") { this._bdEnd(); return true; }
         if (e.key === " " && this._space) { this._space = false; this.setTool(this.tool); return true; }
         return false;
     }
@@ -3857,7 +3898,7 @@ class PaintEditor {
             const b = o[this.tool];
             this._slider(ts, "Size", b.size, 1, 1000, 1, (v) => { b.size = v; this.drawOverlay(); sync(); });
             this._slider(ts, "Hardness", b.hardness, 0, 100, 1, (v) => { b.hardness = v; sync(); });
-            this._slider(ts, { dodge: "Exposure", burn: "Exposure", sponge: "Flow", smudge: "Strength" }[this.tool] || "Opacity", b.opacity, 1, 100, 1, (v) => { b.opacity = v; sync(); });
+            this._slider(ts, { dodge: "Exposure", burn: "Exposure", sponge: "Flow", smudge: "Strength", blur: "Strength" }[this.tool] || "Opacity", b.opacity, 1, 100, 1, (v) => { b.opacity = v; sync(); });
             if (this.tool === "brush" || this.tool === "eraser") {
                 // Flow (as a paintbrush): each dab lays this much, and going over a place again in the same stroke
                 // builds it up, never past Opacity.
@@ -3898,9 +3939,12 @@ class PaintEditor {
             } else if (this.tool === "smudge") {
                 this._field(ts, "", [check(b, "finger", "Finger painting", "Each stroke starts with the colour on the brush")]);
                 note("Drags the paint along the stroke, as a finger through wet paint.");
+            } else if (this.tool === "blur") {
+                note("Softens what it paints over; going over a place again softens it more. Works on a layer, its mask and Quick Mask.");
             } else if (this.tool === "spot") {
                 note("Paint over a blemish: when the stroke ends it is filled from a place nearby that looks alike, blended into what is around it.");
             } else note(this.editMask ? "Painting the layer's MASK: white shows, black hides." : "Alt+click picks a colour; Shift+click draws a straight line.");
+            note("Hold B and move the mouse (or Alt+right-drag): sideways the size, up and down the opacity - Shift: the hardness.");
         } else if (this.tool === "fill" || this.tool === "wand") {
             const f = o[this.tool];
             this._slider(ts, "Tolerance", f.tolerance, 0, 255, 1, (v) => { f.tolerance = v; sync(); });
@@ -4211,7 +4255,7 @@ class PaintEditor {
     }
 }
 
-Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin, TipsMixin, DrawMixin, LayerFxMixin, SelectGuidesMixin, SmartMixin, LiquifyMixin, PathToolsMixin, PreviewMixin, AdjustUIMixin, SmartLayerMixin, GenStatusMixin);
+Object.assign(PaintEditor.prototype, PenMixin, WarpMixin, HealMixin, TipsMixin, DrawMixin, LayerFxMixin, SelectGuidesMixin, SmartMixin, LiquifyMixin, PathToolsMixin, PreviewMixin, AdjustUIMixin, SmartLayerMixin, GenStatusMixin, BrushDragMixin);
 
 // Lucide's rotate-cw, white on black, as the pointer outside a transform's box.
 const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><g stroke="#000" stroke-width="4"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g><g stroke="#fff" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></g></svg>')}") 12 12, alias`;
