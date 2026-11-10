@@ -201,6 +201,70 @@ export function smudgeDab(st, cx, cy, radius, hard, strength) {
     return rect;
 }
 
+/**
+ * One dab of the blur brush (Photoshop's Blur tool): the pixels under the dab are softened by a small box blur
+ * (two passes, premultiplied, so a transparent edge does not darken) of what is there NOW, mixed in by the dab's
+ * cover x strength - so going over a place again in the stroke blurs it more. The blur's reach grows with the
+ * brush (`blurReach`). Locked transparency keeps the alpha; the selection limits it. Returns the rect it changed.
+ */
+export function blurDab(st, cx, cy, radius, hard, strength) {
+    const { lw, lh, lx, ly, px } = st;
+    if (strength <= 0) return null;
+    const k = blurReach(radius);
+    const x0 = Math.max(0, Math.floor(cx - radius - lx)), y0 = Math.max(0, Math.floor(cy - radius - ly));
+    const x1 = Math.min(lw, Math.ceil(cx + radius - lx) + 1), y1 = Math.min(lh, Math.ceil(cy + radius - ly) + 1);
+    if (x1 <= x0 || y1 <= y0) return null;
+    // What is read: the dab's box and the blur's reach around it.
+    const ax = Math.max(0, x0 - 2 * k), ay = Math.max(0, y0 - 2 * k), bx = Math.min(lw, x1 + 2 * k), by = Math.min(lh, y1 + 2 * k);
+    const w = bx - ax, h = by - ay;
+    let a = new Float32Array(w * h * 4), b = new Float32Array(w * h * 4);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const o = ((y + ay) * lw + x + ax) * 4, q = (y * w + x) * 4, al = px[o + 3] / 255;
+        a[q] = (px[o] / 255) * al; a[q + 1] = (px[o + 1] / 255) * al; a[q + 2] = (px[o + 2] / 255) * al; a[q + 3] = al;
+    }
+    // A box of 2k+1 along x, then along y; twice (close to a Gaussian). At the layer's edge: the mean of what is there.
+    const pass = (src, dst, horiz) => {
+        const n = horiz ? w : h, m = horiz ? h : w;
+        for (let l = 0; l < m; l++) {
+            const at = (t) => (horiz ? l * w + t : t * w + l) * 4;
+            const sum = [0, 0, 0, 0];
+            let cnt = 0;
+            for (let t = 0; t <= Math.min(k, n - 1); t++) { const q = at(t); for (let c = 0; c < 4; c++) sum[c] += src[q + c]; cnt++; }
+            for (let t = 0; t < n; t++) {
+                const q = at(t);
+                for (let c = 0; c < 4; c++) dst[q + c] = sum[c] / cnt;
+                const add = t + k + 1, drop = t - k;
+                if (add < n) { const r = at(add); for (let c = 0; c < 4; c++) sum[c] += src[r + c]; cnt++; }
+                if (drop >= 0) { const r = at(drop); for (let c = 0; c < 4; c++) sum[c] -= src[r + c]; cnt--; }
+            }
+        }
+    };
+    for (let i = 0; i < 2; i++) { pass(a, b, true); pass(b, a, false); }
+    let rect = null;
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+        let t = D.dabAt(Math.hypot(x + 0.5 + lx - cx, y + 0.5 + ly - cy), radius, hard);
+        if (t > 0 && st.sel) {
+            const gx = x + lx, gy = y + ly;
+            t *= gx >= 0 && gy >= 0 && gx < st.W && gy < st.H ? st.sel[gy * st.W + gx] / 255 : 0;
+        }
+        t *= strength;
+        const o = (y * lw + x) * 4;
+        if (t <= 0 || (st.lockAlpha && px[o + 3] === 0)) continue;
+        const q = ((y - ay) * w + x - ax) * 4, al = px[o + 3] / 255;
+        const p = [(px[o] / 255) * al, (px[o + 1] / 255) * al, (px[o + 2] / 255) * al, al];
+        const v = [0, 0, 0, 0];
+        for (let c = 0; c < 4; c++) v[c] = p[c] + (a[q + c] - p[c]) * t;
+        // Locked transparency (and a mask, whose alpha is always full): the colour softens, the alpha stays.
+        if (!st.lockAlpha) px[o + 3] = D.q8(v[3]);
+        for (let c = 0; c < 3; c++) px[o + c] = D.q8(v[3] > 0 ? Math.min(1, v[c] / v[3]) : 0);
+        rect = { x0: Math.min(rect ? rect.x0 : x, x), y0: Math.min(rect ? rect.y0 : y, y), x1: Math.max(rect ? rect.x1 : x + 1, x + 1), y1: Math.max(rect ? rect.y1 : y + 1, y + 1) };
+    }
+    return rect;
+}
+
+/** How far the blur brush reaches (the box's half width), from the dab's radius: a quarter of it, 1 to 12 px. */
+export function blurReach(radius) { return Math.max(1, Math.min(12, Math.round(radius / 4))); }
+
 /** The smudge brush's buffer for a stroke whose largest dab is `radius` (finger painting: full of `color`). */
 export function smudgeStart(radius, finger, color) {
     const n = 2 * Math.ceil(radius) + 1, buf = new Float32Array(n * n * 4);
