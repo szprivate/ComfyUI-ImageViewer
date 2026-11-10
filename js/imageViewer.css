@@ -2049,6 +2049,7 @@ audio.src-media { width: 90%; }
 /* It stands in the main area left of the picture: half of it beside the timeline's viewer (dual), or all of it (single). */
 .src-monitor { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; background: #0d0d0d; border-right: 2px solid #222; position: relative; }
 .src-monitor.single { border-right: 0; }
+.src-monitor.single .src-close { display: none; }      /* one viewer: nothing to close, the switch makes it two */
 .src-head { display: flex; align-items: center; gap: 3px; flex: none; }
 .src-head .src-name { flex: 1 1 auto; min-width: 0; }
 .src-head::before { content: "Source"; font-size: 10px; color: #00b8d4; text-transform: uppercase; letter-spacing: .06em; margin-right: 4px; }

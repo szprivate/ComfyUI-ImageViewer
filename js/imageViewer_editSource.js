@@ -68,9 +68,12 @@ export function sourceEditKey(key, shift) {
 
 export const EditSourceMixin = {
 
-    /** The Source viewer is wanted on the cut's tab (whether a single viewer shows it or the timeline). */
+    /**
+     * A cut's tab is up: ONE monitor display, as Resolve's - a single viewer (the timeline, or the
+     * source after Q / a load) or two side by side (dual). There is no "Source viewer off".
+     */
     _editSrcOn() {
-        return !!(this.isEditTab && this.isEditTab() && this._editTlWanted && this._editTlWanted()[SOURCE_ID]);
+        return !!(this.isEditTab && this.isEditTab());
     },
 
     /** It is on screen. */
@@ -86,7 +89,13 @@ export const EditSourceMixin = {
         let kept = null;
         try { kept = JSON.parse(window.localStorage.getItem(VIEWER_STORE) || "null"); } catch (_) {}
         kept = kept && typeof kept === "object" ? kept : {};
-        this._editSrcV = { mode: kept.mode === "single" ? "single" : "dual", show: kept.show === "timeline" ? "timeline" : "source" };
+        if (kept.v !== 2) {
+            // Before one monitor display: a Source viewer that was off is a single viewer on the timeline.
+            const wanted = !!(this._editTlWanted && this._editTlWanted()[SOURCE_ID]);
+            kept = wanted ? { mode: kept.mode === "single" ? "single" : "dual", show: kept.show === "timeline" ? "timeline" : "source" }
+                          : { mode: "single", show: "timeline" };
+        }
+        this._editSrcV = { v: 2, mode: kept.mode === "dual" ? "dual" : "single", show: kept.show === "source" ? "source" : "timeline" };
         return this._editSrcV;
     },
 
@@ -94,36 +103,36 @@ export const EditSourceMixin = {
         try { window.localStorage.setItem(VIEWER_STORE, JSON.stringify(this._editSrcViewer())); } catch (_) {}
     },
 
-    /** The Source viewer on / off (`on` omitted: the other way). */
+    /** Dual viewer on / off (`on` omitted: the other way) - the one monitor display's one switch. */
     editSrcToggle(on) {
         if (!this.isEditTab || !this.isEditTab()) return false;
-        const go = on === undefined ? !this._editSrcOn() : !!on;
-        if (this._editTlWant) this._editTlWant(SOURCE_ID, go);
-        if (go && this._editSrcViewer().mode === "single") this._editSrcViewer().show = "source";
+        const dual = on === undefined ? this._editSrcViewer().mode !== "dual" : !!on;
+        return this.editSrcViewerMode(dual ? "dual" : "single") === "dual";
+    },
+
+    /**
+     * Single or dual viewer (`mode` omitted: the other one), as Resolve's Workspace > Single Viewer Mode.
+     * Going single keeps the monitor that was active on screen (the timeline unless the source was).
+     */
+    editSrcViewerMode(mode) {
+        const v = this._editSrcViewer();
+        const was = v.mode, active = this.editMonActive ? this.editMonActive() : "timeline";
+        v.mode = mode === "single" || mode === "dual" ? mode : v.mode === "dual" ? "single" : "dual";
+        if (v.mode === "single" && was === "dual") v.show = active === "source" ? "source" : "timeline";
         this._editSrcViewerKeep();
+        if (!this.isEditTab || !this.isEditTab()) return v.mode;
+        if (v.mode === "single" && v.show === "timeline" && this._editSrcPlaying) this.editSrcPlay(false);
+        if (v.mode === "single" && v.show === "source" && this.isPlaying && this.stop) this.stop();
         this._editSrcLayout();
         if (this.editTlRefresh) this.editTlRefresh();
         if (this.barGroupsSync) this.barGroupsSync();
-        return go;
-    },
-
-    /** Single or dual viewer (`mode` omitted: the other one), as Resolve's Workspace > Single Viewer Mode. */
-    editSrcViewerMode(mode) {
-        const v = this._editSrcViewer();
-        v.mode = mode === "single" || mode === "dual" ? mode : v.mode === "dual" ? "single" : "dual";
-        if (v.mode === "single") v.show = "source";
-        this._editSrcViewerKeep();
-        if (!this._editSrcOn()) { this.editSrcToggle(true); return v.mode; }
-        this._editSrcLayout();
-        if (this.editTlRefresh) this.editTlRefresh();
         return v.mode;
     },
 
     /** Q: a single viewer shows the other one - the source or the timeline. In dual mode: nothing. */
     editSrcSwap(show) {
         const v = this._editSrcViewer();
-        if (!this._editSrcOn()) { if (show !== "timeline") this.editSrcToggle(true); return; }
-        if (v.mode !== "single") return;
+        if (!this._editSrcOn() || v.mode !== "single") return;
         v.show = show === "source" || show === "timeline" ? show : v.show === "source" ? "timeline" : "source";
         if (v.show === "source" && this.isPlaying && this.stop) this.stop();
         if (v.show === "timeline" && this._editSrcPlaying) this.editSrcPlay(false);
@@ -139,6 +148,9 @@ export const EditSourceMixin = {
     _editSrcLayout(onTab = true) {
         const host = this.editSourcePanel, vp = this.viewport;
         if (!host) return;
+        // The cut's tab is being left (switchTab asks while it is still the active tab): the viewer
+        // switch, the timeline viewer's bar and the active monitor's outline go with it.
+        this._editSrcGone = !onTab;
         const up = onTab && this._editSrcUp();
         const v = this._editSrcViewer();
         const alone = up && v.mode === "single";
@@ -152,7 +164,7 @@ export const EditSourceMixin = {
         if ((was !== up || wasHidden !== alone) && this._afterViewportMoved) this._afterViewportMoved();
         this._editSrcCtlPlace();
         const ui = this._editTlUi;
-        if (ui && ui.srcView) this._editSrcButtons(ui);
+        if (ui && ui.srcEdits) this._editSrcButtons(ui);
     },
 
     /**
@@ -181,11 +193,16 @@ export const EditSourceMixin = {
             ctl.append(small("dualViewer", "src-mode", () => this.editSrcViewerMode()));
             this._editSrcCtl = ctl;
         }
-        const up = this._editSrcOn(), v = this._editSrcViewer();      // on, even while a single viewer shows the timeline
+        const up = this._editSrcOn() && !this._editSrcGone, v = this._editSrcViewer();
         const showsSource = v.mode === "single" && v.show === "source";
         const head = host.querySelector(":scope > .src-body > .src-head");
         const home = !up ? null : showsSource ? head : vp;
-        if (!home) { ctl.remove(); return; }
+        if (!home) {
+            ctl.remove();
+            this._editMonBarPlace();
+            this._editMonShow();
+            return;
+        }
         if (ctl.parentNode !== home) {
             if (home === head) head.insertBefore(ctl, head.querySelector(".src-close"));
             else home.append(ctl);
@@ -206,7 +223,7 @@ export const EditSourceMixin = {
 
     /** Both viewers on screen side by side (dual, the Source viewer up on a cut's tab). */
     _editMonDual() {
-        return !!(this._editSrcUp && this._editSrcUp() && this._editSrcViewer().mode === "dual");
+        return !this._editSrcGone && !!(this._editSrcUp && this._editSrcUp() && this._editSrcViewer().mode === "dual");
     },
 
     /** The timeline viewer (#viewport) is on screen on a cut's tab with the Source viewer on. */
@@ -326,7 +343,7 @@ export const EditSourceMixin = {
             }
             this._editMonBar = bar;
         }
-        const show = this._editMonTlShown() && !!(this.isEditTab && this.isEditTab());
+        const show = !this._editSrcGone && this._editMonTlShown() && !!(this.isEditTab && this.isEditTab());
         // The viewer's path line stands where the bar does: the bar says it instead (_editMonBarDraw).
         vp.classList.toggle("has-monbar", show);
         if (!show) { bar.remove(); return; }
@@ -455,8 +472,6 @@ export const EditSourceMixin = {
     _editSrcButtons(ui) {
         const on = this._editSrcOn();
         const s = this._editSrcState(), cut = this._editTlCut;
-        ui.srcView.classList.toggle("on", on);
-        ui.srcView.setAttribute("aria-pressed", on ? "true" : "false");
         for (const b of ui.srcEdits.querySelectorAll(".edit-srcedit")) {
             b.disabled = !s || !cut || (!!s.sound && b.dataset.edit === "place");
         }
@@ -504,8 +519,7 @@ export const EditSourceMixin = {
         this._editSrcKeep();
         this._editSrcEl = null;
         if (left) return this._editSrc;
-        if (!this._editSrcOn()) this.editSrcToggle(true);
-        else if (!this._editSrcUp()) this.editSrcSwap("source");
+        if (!this._editSrcUp()) this.editSrcSwap("source");
         this.editSrcRender();
         if (this.editTlRefresh) this.editTlRefresh();
         return this._editSrc;
@@ -554,7 +568,7 @@ export const EditSourceMixin = {
                 b.addEventListener("click", (e) => { e.stopPropagation(); fn(); });
                 return b;
             };
-            head.append(name, small("close", "Put the Source viewer away", () => this.editSrcToggle(false), "src-close"));
+            head.append(name, small("close", "Single viewer: the timeline alone", () => { this.editMonSet("timeline"); this.editSrcViewerMode("single"); }, "src-close"));
             const view = el("div", "src-view");
             this._editSrcWireView(view);
             this._editSrcZ = { zoom: 1, x: 0, y: 0 };      // a new file fits its viewer
@@ -829,11 +843,9 @@ export const EditSourceMixin = {
         return true;
     },
 
-    /** The bar's Source viewer button: on; in a single viewer showing the timeline, the source; else off. */
+    /** The viewer switch: dual <-> single. */
     editSrcViewerButton() {
-        const v = this._editSrcViewer();
-        if (this._editSrcOn() && v.mode === "single" && v.show === "timeline") this.editSrcSwap("source");
-        else this.editSrcToggle();
+        return this.editSrcViewerMode();
     },
 
     /**
