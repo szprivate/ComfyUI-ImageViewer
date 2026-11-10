@@ -768,11 +768,59 @@ def _mask(doc, op, read_image, _fonts):
         m = _read_mask(read_image, op, doc, "file")
     elif how == "all":
         m = np.full((doc.h, doc.w), 255, np.uint8)
+    elif how == "layer":
+        return _mask_from_layer(doc, L, op)
     else:
-        raise OpError("'from' is selection, file, all, invert, on, off, remove or settings (density, feather)")
+        raise OpError("'from' is selection, file, layer, all, invert, on, off, remove or settings (density, feather)")
     L["mask"] = {"enabled": True, "x": 0, "y": 0, "w": doc.w, "h": doc.h, "fill": 0 if how != "all" else 255}
     doc.masks[L["id"]] = m
     return f"{L['name']!r}: mask from the {how}"
+
+
+def _mask_from_layer(doc, T, op):
+    """``{"op": "mask", "layer": <target>, "from": "layer", "source": <pixel layer>, "keep": false}`` - a pixel
+    layer made the target's mask, as Paint does when one is dropped on another's row (layerToMask): its
+    brightness where it is opaque, black where it is not (its own mask, when on, counted in); a mask the
+    target had is replaced. The source layer goes, unless ``keep``."""
+    if op.get("source") in (None, ""):
+        raise OpError("'source' names the pixel layer that becomes the mask")
+    Src = find_layer(doc, op.get("source"))
+    if Src["id"] == T["id"]:
+        raise OpError("a layer cannot be its own mask")
+    if Src.get("kind") != "pixel" or Src["id"] not in doc.px:
+        raise OpError(f"only a pixel layer becomes a mask ({Src['name']!r} is not one)")
+    keep = bool(op.get("keep"))
+    if not keep:
+        _unlocked(Src)
+        if len(P.subtree(doc, Src)) >= len(doc.layers):
+            raise OpError("the last layer cannot be taken out")
+    px = doc.px[Src["id"]].astype(np.float64)
+    a = px[..., 3] / 255.0
+    sk = Src.get("mask") if Src.get("mask") and Src["mask"].get("enabled", True) is not False else None
+    sh, sw = px.shape[:2]
+    if sk:
+        dn = sk.get("density", 1) if sk.get("density") is not None else 1
+        ys, xs = np.mgrid[0:sh, 0:sw]
+        mx, my = xs + Src["x"] - sk["x"], ys + Src["y"] - sk["y"]
+        inside = (mx >= 0) & (my >= 0) & (mx < sk["w"]) & (my < sk["h"])
+        mk = doc.masks.get(Src["id"])
+        v = np.full((sh, sw), float(sk.get("fill", 0)))
+        if mk is not None:
+            v[inside] = mk[my[inside], mx[inside]]
+        a = a * (1 - dn * (1 - v / 255.0))
+    lum = (0.299 * px[..., 0] + 0.587 * px[..., 1] + 0.114 * px[..., 2]) / 255.0 * a
+    m = np.zeros((doc.h, doc.w), np.uint8)
+    x0, y0 = max(0, Src["x"]), max(0, Src["y"])
+    x1, y1 = min(doc.w, Src["x"] + sw), min(doc.h, Src["y"] + sh)
+    if x1 > x0 and y1 > y0:
+        m[y0:y1, x0:x1] = M.q8(lum[y0 - Src["y"]:y1 - Src["y"], x0 - Src["x"]:x1 - Src["x"]])
+    had = bool(T.get("mask"))
+    T["mask"] = {"enabled": True, "x": 0, "y": 0, "w": doc.w, "h": doc.h, "fill": 0}
+    doc.masks[T["id"]] = m
+    if not keep:
+        doc.remove(Src["id"])
+    return (f"{T['name']!r}: mask from layer {Src['name']!r}" + (" (replaced its mask)" if had else "")
+            + ("" if keep else f"; {Src['name']!r} taken out"))
 
 
 def _fill(doc, op, _read, _fonts):

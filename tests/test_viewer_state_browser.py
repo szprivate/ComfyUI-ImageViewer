@@ -175,6 +175,20 @@ class ViewerStateTests(unittest.TestCase):
         self.assertNotEqual(pg.evaluate(STATE)["display"], "popout")
         self.assertEqual(self.errors, [])
 
+    def test_the_source_monitor_and_the_monitors_reach_the_agent(self):
+        pg = self.page()
+        s = pg.evaluate("""() => {
+          const P = window.__panel;
+          P._editPlayOn = true;
+          P._editSrc = { file: "D:/in/take3.mp4", name: "take3", still: false, sound: true, dur: 9.5, in: 1.5, out: 4.25, head: 2 };
+          return P.agentViewerState();
+        }""")
+        self.assertEqual(s["edit"]["source"], {"file": "D:/in/take3.mp4", "name": "take3", "in": 1.5, "out": 4.25,
+                                               "head": 2, "duration": 9.5})
+        self.assertIn(s["edit"]["monitors"]["mode"], ("single", "dual"))
+        self.assertIn(s["edit"]["monitors"]["active"], ("source", "timeline"))
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

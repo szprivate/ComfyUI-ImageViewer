@@ -87,6 +87,9 @@ export const AgentStateMixin = {
                 if (total > picked.length) out.selected_total = total;
             }
             if (this._editTlOtio) out.otio = String(this._editTlOtio);
+            // The timeline's playhead (seconds of the film): where an insert / overwrite / marker goes.
+            const now = safe(() => (this._editTlNowSeconds ? this._editTlNowSeconds() : null), null);
+            if (Number.isFinite(now)) out.playhead = Math.round(now * 1e4) / 1e4;
             // The markers (M): the timeline's and the clips', in film time.
             const marks = safe(() => D.allMarkers(cut), []) || [];
             if (marks.length) out.markers = marks.slice(0, 100).map((m) => ({ t: m.t, len: m.len, name: m.name, note: m.note, color: m.color,
@@ -108,6 +111,17 @@ export const AgentStateMixin = {
                 }
                 out.selected_item = s;
             }
+        }
+        // The two monitors: single or dual, which one the keys drive, and what the Source monitor holds
+        // (its file, in / out marks and playhead, seconds of the file) - what an insert from the source uses.
+        const view = safe(() => (this._editSrcViewer ? this._editSrcViewer() : null), null);
+        if (view) out.monitors = { mode: view.mode === "dual" ? "dual" : "single",
+                                   active: safe(() => this.editMonActive(), "timeline") };
+        const src = this._editSrc;
+        if (src && src.file) {
+            const n = (v) => (v === null || v === undefined || !Number.isFinite(Number(v)) ? null : Math.round(Number(v) * 1e4) / 1e4);
+            out.source = { file: String(src.file), name: String(src.name || ""), still: !!src.still,
+                           in: n(src.in), out: n(src.out), head: n(src.head), duration: n(src.dur) };
         }
         return out;
     },

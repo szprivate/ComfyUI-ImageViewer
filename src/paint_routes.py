@@ -22,7 +22,8 @@ nothing is rounded on the way - a canvas' PNG would premultiply them.
   the document into that folder (``is_allowed``), the tab working on that file from then on; 409 ``{exists, path}``
   when the file is there and ``overwrite`` is not set.
 - ``POST /imageviewer/paint/doc`` (JSON) - the agent's: ``doc`` (a path, or a token) and ``ops``
-  (paint_ops). Without ops: the outline. With ops: applied (all or none), written when the document
+  (paint_ops). Without ops: the outline (and with ``snapshot: true`` the picture as it looks and the
+  selection as PNGs, as /paint/snapshot). With ops: applied (all or none), written when the document
   is a file (an .ora over itself; a picture / .psd as a new .ora version beside the rule), and the page
   told (``imageviewer.paint.changed``).
 - ``POST /imageviewer/paint/describe`` (JSON) - ``token``: the session's description as it is now (after the
@@ -637,6 +638,13 @@ def register(add, *, web, path_access, export_rules, folder_paths, send, resolve
             answer, tok = await off(agent_ops, ref, body.get("ops"), resolve=resolve, is_allowed=path_access.is_allowed,
                                     may_serve=path_access.may_serve, export_rules=export_rules, output_dir=output_dir(),
                                     write=body.get("write") is not False, save_new=live)
+            if body.get("snapshot") and not body.get("ops"):
+                # The picture as it looks and the selection as PNGs (what Generate hands agentY), from the
+                # document as it is now - the page's unsaved strokes too, with ``sync``.
+                s = BOOK.get(tok) if tok else None
+                if s is None:
+                    s = _Session(await off(P.open_any, answer["path"]), None)
+                answer["snapshot"] = await off(snapshot, s, folder_paths.get_input_directory())
         except (O.OpError, PaintError, ValueError, OSError) as e:
             return err(e)
         if body.get("ops"):

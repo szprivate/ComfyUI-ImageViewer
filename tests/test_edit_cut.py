@@ -128,7 +128,7 @@ class ApplyOps(unittest.TestCase):
 
     def test_bad_ops(self):
         e = self.tio.read_editable(self.otio)
-        for ops, msg in (([], "list of 1"), ([1], "not an object"), ([{"op": "zap"}], "add, set or remove"),
+        for ops, msg in (([], "list of 1"), ([1], "not an object"), ([{"op": "zap"}], "add, set, remove, insert"),
                          ([{"op": "set", "track": "V1", "clip": "x"}], "clip's number"),
                          ([{"op": "set", "track": "V1", "clip": 1}], "nothing to set"),
                          ([{"op": "add", "file": self.vo, "at": -1, "length": 1}], "out of range"),
