@@ -44,6 +44,8 @@ export const COLORSPACES = ["auto", "srgb", "linear"];
  * The node types. `inputs` are the ports' names, in order (a Merge's B is input 0: the pipe runs through B).
  * A param: kind num | int | vec2 | color (linear RGBA) | enum | file | text; `key` = it can be animated.
  */
+export const REFORMAT_TYPES = ["to format", "scale"];
+export const REFORMAT_RESIZE = ["none", "fit", "fill", "width", "height", "distort"];
 export const NODE_TYPES = {
     read: { label: "Read", cat: "Image", inputs: [], params: {
         file: { kind: "file", def: "" },
@@ -127,6 +129,18 @@ export const NODE_TYPES = {
     } },
     blur: { label: "Blur", cat: "Filter", inputs: ["src"], params: {
         size: { kind: "num", def: 10, min: 0, max: 500, key: true, step: 0.5, help: "In pixels of the comp" },
+    } },
+    reformat: { label: "Reformat", cat: "Transform", inputs: ["src"], params: {
+        type: { kind: "enum", def: "to format", choices: REFORMAT_TYPES, help: "to format: a box of width x height; scale: the comp's size times scale" },
+        width: { kind: "int", def: null, min: 1, help: "The box's width (empty: the comp's)" },
+        height: { kind: "int", def: null, min: 1, help: "The box's height (empty: the comp's)" },
+        scale: { kind: "num", def: 1, min: 0.01, key: true, step: 0.05, help: "For type scale" },
+        resize: { kind: "enum", def: "fit", choices: REFORMAT_RESIZE, help: "How the picture fills the box: fit inside, fill it, match its width or height, distort to it, or none (the same size)" },
+        center: { kind: "enum", def: "on", choices: ["on", "off"], help: "off: the box sits at the bottom left" },
+        flip: { kind: "enum", def: "off", choices: ["off", "on"], help: "Upside down" },
+        flop: { kind: "enum", def: "off", choices: ["off", "on"], help: "Mirrored left to right" },
+        turn: { kind: "enum", def: "off", choices: ["off", "on"], help: "Turned 90 degrees anticlockwise first" },
+        black_outside: { kind: "enum", def: "on", choices: ["on", "off"], help: "Nothing outside the box" },
     } },
     crop: { label: "Crop", cat: "Transform", inputs: ["src"], params: {
         topleft: { kind: "vec2", def: [0, 0], key: true, step: 1, help: "The box's top left corner, in pixels of the comp" },
@@ -235,7 +249,7 @@ export const NODE_TYPES = {
     } },
     output: { label: "Output", cat: "Other", inputs: ["src"], params: {} },
 };
-export const TYPE_ORDER = ["read", "constant", "roto", "merge", "copy", "transform", "crop", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "keyer", "lumakeyer", "chromakeyer", "blur", "glow", "erode", "laplacian",
+export const TYPE_ORDER = ["read", "constant", "roto", "merge", "copy", "transform", "reformat", "crop", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "keyer", "lumakeyer", "chromakeyer", "blur", "glow", "erode", "laplacian",
     "motionblur", "depthblur", "defocus", "lensflare", "shuffle", "channelmerge", "channelmath", "premult", "unpremult", "retime", "vectors", "output"];
 /** Nodes whose result is kept between renders (keyed by their whole upstream): they take long. */
 export const HEAVY = new Set(["vectors", "motionblur", "depthblur", "defocus"]);
@@ -437,7 +451,7 @@ export function nodeKeyFrames(node) {
 
 // ── the stack the Layers panel shows ─────────────────────────────────────────
 
-const CHAIN = new Set(["transform", "glow", "lensflare", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "lumakeyer", "chromakeyer", "erode", "laplacian", "channelmerge", "channelmath", "blur", "crop", "shuffle", "premult", "unpremult", "retime", "keyer", "vectors",
+const CHAIN = new Set(["transform", "reformat", "glow", "lensflare", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "lumakeyer", "chromakeyer", "erode", "laplacian", "channelmerge", "channelmath", "blur", "crop", "shuffle", "premult", "unpremult", "retime", "keyer", "vectors",
     "motionblur", "depthblur", "defocus", "copy"]);
 
 /**
@@ -624,6 +638,33 @@ export function fitMatrix(sw, sh, w, h, fit, k = 1) {
     else if (fit === "fill") kx = ky = Math.max(w / sw, h / sh);
     else if (fit === "stretch") { kx = w / sw; ky = h / sh; }
     return mat.mul(mat.t(w / 2, h / 2), mat.mul(mat.s(kx, ky), mat.t(-sw / 2, -sh / 2)));
+}
+
+/** A Reformat's box in the comp ({x0, y0, x1, y1}) and the matrix that lays the comp-sized input into it, in pixels of a
+ *  picture `scale` times the comp's size. The comp keeps one size: the box sits inside it. */
+export function reformatLayout(node, frame, format, scale = 1) {
+    const FW = format.width, FH = format.height;
+    let bw, bh;
+    if ((paramAt(node, "type", frame) || "to format") === "scale") { const k = paramAt(node, "scale", frame) || 1; bw = FW * k; bh = FH * k; }
+    else { bw = paramAt(node, "width", frame) || FW; bh = paramAt(node, "height", frame) || FH; }
+    const turn = paramAt(node, "turn", frame) === "on";
+    const iw = turn ? FH : FW, ih = turn ? FW : FH;
+    let sx = 1, sy = 1;
+    const how = paramAt(node, "resize", frame) || "fit";
+    if (how === "fit") sx = sy = Math.min(bw / iw, bh / ih);
+    else if (how === "fill") sx = sy = Math.max(bw / iw, bh / ih);
+    else if (how === "width") sx = sy = bw / iw;
+    else if (how === "height") sx = sy = bh / ih;
+    else if (how === "distort") { sx = bw / iw; sy = bh / ih; }
+    if (paramAt(node, "flop", frame) === "on") sx = -sx;
+    if (paramAt(node, "flip", frame) === "on") sy = -sy;
+    const centre = paramAt(node, "center", frame) !== "off";
+    const cx = centre ? FW / 2 : bw / 2, cy = centre ? FH / 2 : FH - bh / 2;
+    let m = mat.mul(mat.s(sx, sy), mat.t(-FW / 2, -FH / 2));
+    if (turn) m = mat.mul(mat.s(sx, sy), mat.mul([0, -1, 1, 0, 0, 0], mat.t(-FW / 2, -FH / 2)));
+    m = mat.mul(mat.t(cx, cy), m);
+    m = mat.mul(mat.s(scale, scale), mat.mul(m, mat.s(1 / scale, 1 / scale)));
+    return { m, box: [(cx - bw / 2) * scale, (cy - bh / 2) * scale, (cx + bw / 2) * scale, (cy + bh / 2) * scale] };
 }
 
 /** A Transform node's matrix at `frame`, in pixels of a picture `scale` times the comp's size. */
@@ -818,6 +859,11 @@ export function renderNode(comp, id, frame, ctx) {
             return colorCorrectImage(run(n.inputs[0], f, d1), p);
         }
         case "blur": return blurImage(run(n.inputs[0], f, d1), paramAt(n, "size", f) * scale);
+        case "reformat": {
+            const L = reformatLayout(n, f, comp.format, scale);
+            const out = resample(run(n.inputs[0], f, d1), L.m, W, H);
+            return paramAt(n, "black_outside", f) === "off" ? out : O.cropImage(out, L.box[0], L.box[1], L.box[2], L.box[3], 0);
+        }
         case "crop": {
             const tl = paramAt(n, "topleft", f) || [0, 0];
             const br = paramAt(n, "bottomright", f) || [comp.format.width, comp.format.height];

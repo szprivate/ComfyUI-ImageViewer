@@ -195,6 +195,11 @@ def new_node_cases(sources):
         c.append((dict(cs, ocio=OCIO_LUTS), srcs))
     cs, srcs = one(node("ocio_display", 1, ["Read1"], display="sRGB", view="v"))
     c.append((dict(cs, ocio=OCIO_LUTS), srcs))
+    for kw in ({"type": "to format", "width": 20, "height": 15}, {"type": "scale", "scale": 0.6, "resize": "distort", "flop": "on"},
+               {"width": 12, "height": 20, "resize": "fill", "turn": "on", "center": "off", "black_outside": "off"},
+               {"width": 25, "height": 9, "resize": "height", "flip": "on"}, {"width": 18, "height": 10, "resize": "none"}):
+        c.append(one(node("reformat", 1, ["Read1"], **kw)))
+    c.append(({"comp": comp([read(1), node("reformat", 1, ["Read1"], width=20, height=12, turn="on"), out("reformat1")], w=40, h=24), "scale": 0.5}, sources))
     for kw in ({}, {"steps": 1, "size": 7, "source": "max", "tint": [1, 0.6, 0.3, 1], "intensity": 2},
                {"threshold": 0.4, "softness": 0, "effect_only": "on", "steps": 5, "size": 12}):
         c.append(one(node("glow", 1, ["Read1"], **kw)))

@@ -312,3 +312,25 @@ test("glow spreads only what is bright; a lens flare lights round its light and 
     const d1 = LT.flareImage(null, null, { ...P, position: [10, 10], glow_amount: 0, streak_amount: 0, halo_amount: 0, ghost_amount: 0, dirt_amount: 1 }, 64, 40, 1);
     assert.ok(d1.data.some((v) => v > 0));
 });
+
+test("reformat lays the picture into a box inside the comp: fit, turned, flopped", () => {
+    const comp = { comp: 1, format: { width: 40, height: 20, fps: 24, frames: 1 }, output: "Output1", nodes: [
+        { id: "Constant1", type: "constant", inputs: [], color: [1, 1, 1, 1] },
+        { id: "Reformat1", type: "reformat", inputs: ["Constant1"], width: 20, height: 20 },
+        { id: "Output1", type: "output", inputs: ["Reformat1"] }] };
+    const a = (img, x, y) => img.data[(y * img.w + x) * 4 + 3];
+    const fit = C.renderNode(comp, "Output1", 0, {});
+    assert.equal(a(fit, 20, 10), 1);                    // a 40 x 20 picture fit into 20 x 20: 20 x 10 in the middle
+    assert.equal(a(fit, 20, 3), 0);
+    assert.equal(a(fit, 5, 10), 0);
+    // Turned anticlockwise: a mark at the right ends up at the top.
+    comp.nodes[0] = { id: "Constant1", type: "crop", inputs: ["C0"], topleft: [30, 0], bottomright: [40, 20] };
+    comp.nodes.push({ id: "C0", type: "constant", inputs: [], color: [1, 1, 1, 1] });
+    Object.assign(comp.nodes[1], { width: 20, height: 20, turn: "on" });   // turned: 20 x 40, fit into 20 x 20 = 10 x 20
+    const t = C.renderNode(comp, "Output1", 0, {});
+    assert.equal(a(t, 20, 2), 1);
+    assert.equal(a(t, 20, 17), 0);
+    assert.equal(a(t, 12, 2), 0);
+    comp.nodes[1].flip = "on";
+    assert.equal(a(C.renderNode(comp, "Output1", 0, {}), 20, 17), 1);
+});

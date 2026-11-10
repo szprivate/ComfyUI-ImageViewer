@@ -41,6 +41,8 @@ CM_CHANNELS = ["r", "g", "b", "a", "luminance"]
 CM_OUTPUTS = ["a", "r", "g", "b", "rgb", "rgba"]
 CM_OPS = ["union", "plus", "minus", "from", "multiply", "divide", "in", "out", "stencil", "max", "min", "absminus", "xor"]
 GLOW_SOURCES = ["luminance", "max"]
+REFORMAT_TYPES = ["to format", "scale"]
+REFORMAT_RESIZE = ["none", "fit", "fill", "width", "height", "distort"]
 GHOST_SHAPES = ["disc", "polygon"]
 MATH_OPS = ["add", "multiply", "power", "invert", "clamp", "min", "max", "abs", "threshold", "set"]
 _CH = {"r": 0, "g": 1, "b": 2, "a": 3}
@@ -176,6 +178,18 @@ NODE_TYPES = {
     }},
     "blur": {"inputs": ["src"], "params": {
         "size": {"kind": "num", "def": 10, "min": 0, "max": 500, "key": True},
+    }},
+    "reformat": {"inputs": ["src"], "params": {
+        "type": {"kind": "enum", "def": "to format", "choices": REFORMAT_TYPES},
+        "width": {"kind": "int", "def": None, "min": 1},
+        "height": {"kind": "int", "def": None, "min": 1},
+        "scale": {"kind": "num", "def": 1, "min": 0.01, "key": True},
+        "resize": {"kind": "enum", "def": "fit", "choices": REFORMAT_RESIZE},
+        "center": {"kind": "enum", "def": "on", "choices": ["on", "off"]},
+        "flip": {"kind": "enum", "def": "off", "choices": ["off", "on"]},
+        "flop": {"kind": "enum", "def": "off", "choices": ["off", "on"]},
+        "turn": {"kind": "enum", "def": "off", "choices": ["off", "on"]},
+        "black_outside": {"kind": "enum", "def": "on", "choices": ["on", "off"]},
     }},
     "crop": {"inputs": ["src"], "params": {
         "topleft": {"kind": "vec2", "def": [0, 0], "key": True},
@@ -579,6 +593,44 @@ def transform_matrix(node, frame, fmt, scale=1.0):
     c = param_at(node, "center", frame) or [fmt["width"] / 2, fmt["height"] / 2]
     cx, cy = c[0] * scale, c[1] * scale
     return _mul(_t(t[0] * scale + cx, t[1] * scale + cy), _mul(_r(r), _mul(_s(sc[0], sc[1]), _t(-cx, -cy))))
+
+
+def reformat_layout(node, frame, fmt, scale=1.0):
+    """A Reformat's matrix (the comp-sized input laid into its box) and its box, in pixels of a picture ``scale``
+    times the comp's size (the page's ``reformatLayout``)."""
+    FW, FH = fmt["width"], fmt["height"]
+    if (param_at(node, "type", frame) or "to format") == "scale":
+        k = param_at(node, "scale", frame) or 1
+        bw, bh = FW * k, FH * k
+    else:
+        bw = param_at(node, "width", frame) or FW
+        bh = param_at(node, "height", frame) or FH
+    turn = param_at(node, "turn", frame) == "on"
+    iw, ih = (FH, FW) if turn else (FW, FH)
+    sx = sy = 1
+    how = param_at(node, "resize", frame) or "fit"
+    if how == "fit":
+        sx = sy = min(bw / iw, bh / ih)
+    elif how == "fill":
+        sx = sy = max(bw / iw, bh / ih)
+    elif how == "width":
+        sx = sy = bw / iw
+    elif how == "height":
+        sx = sy = bh / ih
+    elif how == "distort":
+        sx, sy = bw / iw, bh / ih
+    if param_at(node, "flop", frame) == "on":
+        sx = -sx
+    if param_at(node, "flip", frame) == "on":
+        sy = -sy
+    centre = param_at(node, "center", frame) != "off"
+    cx, cy = (FW / 2, FH / 2) if centre else (bw / 2, FH - bh / 2)
+    m = _mul(_s(sx, sy), _t(-FW / 2, -FH / 2))
+    if turn:
+        m = _mul(_s(sx, sy), _mul([0, -1, 1, 0, 0, 0], _t(-FW / 2, -FH / 2)))
+    m = _mul(_t(cx, cy), m)
+    m = _mul(_s(scale, scale), _mul(m, _s(1 / scale, 1 / scale)))
+    return m, [(cx - bw / 2) * scale, (cy - bh / 2) * scale, (cx + bw / 2) * scale, (cy + bh / 2) * scale]
 
 
 def boxes_for_gauss(sigma, n=3):
@@ -1740,6 +1792,10 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None):
             return grade_image(run(ins[0], f, d1), P(n, f, NODE_TYPES["grade"]["params"]))
         if t == "blur":
             return blur_image(run(ins[0], f, d1), param_at(n, "size", f) * scale)
+        if t == "reformat":
+            m, box = reformat_layout(n, f, fmt, scale)
+            img = resample(run(ins[0], f, d1), m, W, H)
+            return img if param_at(n, "black_outside", f) == "off" else crop_image(img, box[0], box[1], box[2], box[3], 0)
         if t == "crop":
             tl = param_at(n, "topleft", f) or [0, 0]
             br = param_at(n, "bottomright", f) or [fmt["width"], fmt["height"]]
