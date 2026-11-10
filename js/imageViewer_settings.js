@@ -59,6 +59,7 @@ export const PREF = {
     colourScope:    THEME_SCOPE_ID,
     colourPreset:   THEME_PRESET_ID,
     colourReset:    P + "Colours.Reset",
+    colourFollowed: P + "Colours.FollowSet",
 };
 const THEME_IDS = new Set(THEME.map((t) => t.id));
 
@@ -273,6 +274,12 @@ function defs() {
             type: "combo", defaultValue: COMFY,
             options: opts([[COMFY, COMFY_NAME], ...Object.entries(PRESETS).map(([k, p]) => [k, p.name]), ["custom", "Custom"]]),
             sortOrder: 646, onChange: (value, old) => { applyPreset(value, old); panelApply(PREF.colourPreset)(value); },
+        },
+        {
+            // Once "Follow ComfyUI" became the default: whether a preset kept from
+            // before (Paint, the old default) was moved to it. State, not a choice.
+            id: PREF.colourFollowed, category: sec("Colours", "FollowSet"),
+            name: "Colour preset moved to Follow ComfyUI", type: "hidden", defaultValue: false,
         },
         {
             id: PREF.colourScope, category: sec("Colours", "Scope"),
@@ -490,7 +497,24 @@ async function loadUserSettings() {
 export async function applyStartupPrefs() {
     await loadUserSettings();
     _userSync = true;
+    await followComfyOnce();
     applySceneDefaults();
+}
+
+/** "Follow ComfyUI" is the default since 2026-11-10 (Sebastian: "make Follow ComfyUI
+ *  the default"). Paint was the default before it, and a viewer that kept "Paint"
+ *  (Reset colours writes the preset) would never see the new default: once, a
+ *  kept Paint whose colours are Paint's own is moved to it. Picked again, Paint stays. */
+async function followComfyOnce() {
+    if (pref(PREF.colourFollowed)) return;
+    try {
+        const values = {};
+        for (const t of THEME) values[t.id] = pref(t.id);
+        if (pref(PREF.colourPreset) === "paint" && matchPreset(values) === "paint") {
+            await app.extensionManager.setting.set(PREF.colourPreset, COMFY);
+        }
+        await app.extensionManager.setting.set(PREF.colourFollowed, true);
+    } catch (e) { console.warn("[ImageViewer] colour preset not moved to Follow ComfyUI", e); }
 }
 
 // ── The panel side ───────────────────────────────────────────────────────────
