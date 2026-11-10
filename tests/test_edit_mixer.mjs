@@ -64,3 +64,31 @@ test("on a cut: the bed and a sound track take it, V1 does not", () => {
     assert.equal(!!D.afxTrack(cut, "V1"), false);
     assert.equal(!!D.afxTrack(cut, "A1"), true);
 });
+
+test("the master: its fader and pan are the cut's master chain, its M the cut's master switch, all saved", () => {
+    const cut = D.emptyCut("t");
+    assert.equal(D.masterActive(cut), false);
+    assert.equal(!!D.afxTrack(cut, D.MASTER), true);
+    let c = D.setTrackAfx(cut, D.MASTER, A.setMixerLevel(D.trackAfx(cut, D.MASTER), "gain", -6, 0));
+    c = D.setTrackAfx(c, D.MASTER, A.setMixerLevel(D.trackAfx(c, D.MASTER), "pan", -0.5, 0));
+    assert.equal(A.mixerLevel(D.trackAfx(c, D.MASTER), "gain", 0).v, -6);
+    assert.equal(A.mixerLevel(D.trackAfx(c, D.MASTER), "pan", 0).v, -0.5);
+    assert.equal(D.masterActive(c), true);
+    assert.equal(D.sameCut(cut, c), false, "a master move is a change (undo, unsaved)");
+    assert.deepEqual(D.toSave(c).afx.master.map((fx) => fx.type), ["gain", "pan"]);
+    assert.deepEqual(D.trackAfx(cut, D.MASTER), [], "the cut it came from is not touched");
+    // Back at rest: nothing left on the master.
+    let r = D.setTrackAfx(c, D.MASTER, A.setMixerLevel(D.trackAfx(c, D.MASTER), "gain", 0, 0));
+    r = D.setTrackAfx(r, D.MASTER, A.setMixerLevel(D.trackAfx(r, D.MASTER), "pan", 0, 0));
+    assert.equal(D.masterActive(r), false);
+    assert.deepEqual(D.toSave(r).afx.master, []);
+    // M.
+    const m = D.setTrackOff(cut, D.MASTER, true);
+    assert.equal(D.masterActive(m), true);
+    assert.equal(D.toSave(m).off.master, true);
+    assert.equal(D.sameCut(cut, m), false);
+    assert.equal(D.masterActive(D.setTrackOff(m, D.MASTER, false)), false);
+    // It is not a track: soloing and switching tracks never see it.
+    assert.equal(D.liveTracks(m, {}).has(D.MASTER), false);
+    assert.ok(D.agentLoses(c).some((s) => /master/.test(s)));
+});

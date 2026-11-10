@@ -323,7 +323,7 @@ class EditResolveToolsBrowserTests(Base):
             P.dockPanelTo('editMixer', 'bottom'); return again; }""")
         self.assertEqual(moved, "right", "moved once; after that where the user puts it")
         strips = pg.evaluate("() => [...__panel.editMixerPanel.querySelectorAll('.mix-strip')].map(s => [s.dataset.track, !!s.querySelector('.mix-fader')])")
-        self.assertEqual(strips, [["V1", False], ["A1", True], ["A2", True], ["master", False]])
+        self.assertEqual(strips, [["V1", False], ["A1", True], ["A2", True], ["master", True]])
         self.assertTrue(pg.evaluate("() => __panel._editMixOn()"))
         CHAIN = "(id) => (id === 'A1' ? (__panel._editTlCut.afx || {}).A1 : __panel._editTlCut.tracks.find(t => t.id === id).afx) || []"
         SET = """([id, field, v]) => { const f = __panel.editMixerPanel.querySelector(`.mix-strip[data-track="${id}"] [data-field="${field}"]`);
@@ -358,6 +358,30 @@ class EditResolveToolsBrowserTests(Base):
         # A locked track's fader does not move.
         pg.evaluate("() => { const P = __panel, next = JSON.parse(JSON.stringify(P._editTlCut)); next.lock = { ...(next.lock || {}), A1: true }; P._editTlApply(next); P.editTlRefresh(); }")
         self.assertTrue(pg.evaluate("() => __panel.editMixerPanel.querySelector('.mix-strip[data-track=\"A1\"] [data-field=gain]').disabled"))
+        # The master: a fader, a pan and M (no S), on the cut's master chain and switch; one undo step each.
+        MCHAIN = "() => (__panel._editTlCut.afx || {}).master || []"
+        n = self.undo_len(pg)
+        pg.evaluate(SET, ["master", "gain", -9])
+        self.assertEqual([[f["type"], f["p"]] for f in pg.evaluate(MCHAIN)], [["gain", {"gain": -9}]])
+        self.assertEqual(self.undo_len(pg), n + 1)
+        pg.evaluate(SET, ["master", "pan", 0.25])
+        self.assertEqual([f["type"] for f in pg.evaluate(MCHAIN)], ["gain", "pan"])
+        self.assertEqual(pg.evaluate("() => [...__panel.editMixerPanel.querySelectorAll('.mix-strip[data-track=\"master\"] .mix-btn')].map(b => b.textContent)"), ["M"])
+        # Through to the speakers: an element with no effects of its own is routed to the master, whose chain is wired.
+        got = pg.evaluate("""() => { const P = __panel, a = document.createElement('audio');
+            const keep = P._editMixOn; P._editMixOn = () => false;
+            const play = P._editPlayCut; P._editPlayCut = () => P._editTlCut;
+            P._editAfxEnsure(a, null, '', 0);
+            const m = window.__imageViewerAfxCtx.__master;
+            const out = [!!a._epAfx, JSON.parse(m.sig).map(f => f.type), m.out.gain.value];
+            P._editMixOn = keep; P._editPlayCut = play; return out; }""")
+        self.assertEqual(got, [True, ["gain", "pan"], 1])
+        pg.evaluate("() => __panel.editMixerPanel.querySelector('.mix-strip[data-track=\"master\"] .mix-btn').click()")
+        self.assertTrue(pg.evaluate("() => __panel._editTlCut.off.master"))
+        self.assertTrue(pg.evaluate("() => __panel.editMixerPanel.querySelector('.mix-strip[data-track=\"master\"] .mix-btn').classList.contains('on')"))
+        self.assertEqual(pg.evaluate("() => { const P = __panel, play = P._editPlayCut; P._editPlayCut = () => P._editTlCut; P._editAfxMasterSync(); P._editPlayCut = play; return window.__imageViewerAfxCtx.__master.out.gain.value; }"), 0)
+        self.assertTrue(pg.evaluate("async () => (await import('/extensions/viewer/imageViewer_editTimelineData.js')).toSave(__panel._editTlCut).off.master"))
+        pg.evaluate("() => __panel.editMixerPanel.querySelector('.mix-strip[data-track=\"master\"] .mix-btn').click()")
         # Meters: while the Mixer is up an element on a track goes through its bus, and the meters read its analyser.
         got = pg.evaluate("""async () => { const P = __panel, a = document.createElement('audio');
             P._editAfxEnsure(a, null, 'A2', 0);

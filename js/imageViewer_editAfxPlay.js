@@ -143,16 +143,50 @@ export const EditAfxPlayMixin = {
         return a;
     },
 
-    // The window's master: everything the Edit tab plays through WebAudio, metered, to the speakers.
+    // The window's master: everything the Edit tab plays through WebAudio -> the master's
+    // effects (the Mixer's master fader and pan: `cut.afx.master`) -> `out` (0 while the
+    // master is switched off) -> the speakers, metered after all of it.
     _epAfxMaster(ctx) {
         if (!ctx.__master) {
             const input = ctx.createGain();
+            const out = ctx.createGain();
             const meter = this._epAfxMeter(ctx);
-            input.connect(ctx.destination);
-            input.connect(meter);
-            ctx.__master = { input, meter };
+            input.connect(out);
+            out.connect(ctx.destination);
+            out.connect(meter);
+            ctx.__master = { input, out, meter, sig: "[]", keyed: [] };
         }
+        this._epAfxMasterWire(ctx, this._editPlayCut ? this._editPlayCut() : this._editTlCut);
         return ctx.__master;
+    },
+
+    // The master's chain and switch from `cut`, rewired only when they changed.
+    _epAfxMasterWire(ctx, cut) {
+        const m = ctx.__master;
+        if (!m || !cut) return;                            // no cut up: it keeps what it had
+        const chain = D.trackAfx(cut, D.MASTER);
+        const sig = JSON.stringify(chain);
+        if (m.sig !== sig) {
+            try { m.input.disconnect(); } catch (_) {}
+            m.keyed = this._epAfxWire(ctx, chain, m.input, m.out);
+            m.sig = sig;
+        }
+        const g = cut.off && cut.off[D.MASTER] ? 0 : 1;
+        if (m.out.gain.value !== g) m.out.gain.value = g;
+    },
+
+    /** The master brought up to date with the cut now (its fader let go, M pressed), and the elements playing routed through it. */
+    _editAfxMasterSync() {
+        const ctx = ((this._viewerWindow && this._viewerWindow()) || window).__imageViewerAfxCtx;
+        const cut = this._editPlayCut ? this._editPlayCut() : this._editTlCut;
+        if (ctx && ctx.__master) this._epAfxMasterWire(ctx, cut);
+        if (!D.masterActive(cut)) return;
+        // An element that was never put through WebAudio does not reach the master: route the ones sounding now.
+        const ep = this._ep, at = ep && ep.at;
+        try {
+            if (at && !ep.still && this.videoBase && !this.videoBase._epAfx) this._editAfxEnsure(this.videoBase, at.clip, D.selTrack(at.sel), at.origin);
+        } catch (_) {}
+        if (ep && this.isPlaying && this._editPlaySounds && ep.tNow != null) { try { this._editPlaySounds(ep.tNow, true); } catch (_) {} }
     },
 
     /**
@@ -167,7 +201,9 @@ export const EditAfxPlayMixin = {
         const tchain = cut && track && D.afxTrack(cut, track) ? D.trackAfx(cut, track) : [];
         // The Mixer up: every element goes through its track's bus, so that its meter has something to read.
         const metered = !!(this._editMixOn && this._editMixOn()) && !!track;
-        if (!el._epAfx && !A.afxActive(chain) && !A.afxActive(tchain) && !metered) return;
+        // The master doing something (a fader off 0 dB, a pan, M): every element has to reach it.
+        const master = D.masterActive(cut);
+        if (!el._epAfx && !A.afxActive(chain) && !A.afxActive(tchain) && !metered && !master) return;
         const ctx = this._epAfxCtx(el);
         if (!ctx) return;
         if (!el._epAfx) {
@@ -210,5 +246,16 @@ export const EditAfxPlayMixin = {
         }
         const ctx = ((this._viewerWindow && this._viewerWindow()) || window).__imageViewerAfxCtx;
         for (const bus of Object.values((ctx && ctx.__buses) || {})) for (const k of bus.keyed) k.set(A.afxParam(k.fx, k.k, t));
+        if (ctx && ctx.__master) {
+            this._epAfxMasterWire(ctx, this._editPlayCut ? this._editPlayCut() : this._editTlCut);
+            for (const k of ctx.__master.keyed) k.set(A.afxParam(k.fx, k.k, t));
+        }
+        // The master changed from anywhere (the Mixer, the Inspector, an undo): the picture's element
+        // reaches it once routed (the sound items are asked again every 200 ms anyway).
+        const ep = this._ep, at = ep && ep.at;
+        if (at && !ep.still && this.videoBase && !this.videoBase._epAfx && !this.videoBase._epAfxFailed
+            && D.masterActive(this._editPlayCut ? this._editPlayCut() : null)) {
+            try { this._editAfxEnsure(this.videoBase, at.clip, D.selTrack(at.sel), at.origin); } catch (_) {}
+        }
     },
 };

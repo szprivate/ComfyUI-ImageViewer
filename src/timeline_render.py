@@ -773,6 +773,12 @@ def film_sound(cut, counts, fps, total_frames, only=None, fx=True, notes=None):
                 sound = audio_fx.apply_chain(np.ascontiguousarray(sound[:, :total]), chains["A1"], 0.0)
             mix += sound[:, :total]
             heard = True
+    # The master (the whole mix only - a part rendered on its own for the Resolve bake is before it):
+    # switched off the film is silent; its chain (the Mixer's master fader and pan) works on the sum.
+    if only is None and cut.get("master_off"):
+        return None
+    if only is None and heard and fx and audio_fx.active(cut.get("master_afx")):
+        mix = audio_fx.apply_chain(mix, cut["master_afx"], 0.0)
     return np.clip(mix, -1.0, 1.0) if heard else None
 
 
@@ -856,6 +862,8 @@ def read_cut(doc):
             "overlays": overlays, "sounds": sounds, "v1_off": bool(off.get("V1")),
             "track_afx": {**{t.get("id"): t.get("afx") or [] for t in edit.get("tracks") or [] if t.get("kind") == "audio"},
                           "A1": (edit.get("afx") or {}).get("A1") or []},
+            # The Mixer's master: on the whole mix (after every track), and its switch.
+            "master_afx": (edit.get("afx") or {}).get("master") or [], "master_off": bool(off.get("master")),
             "texts": titles, "clip_sound": bool(about.get("clip_sound", True)),
             "width": int(about.get("width") or 0), "height": int(about.get("height") or 0)}
 

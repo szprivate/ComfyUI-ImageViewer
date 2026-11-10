@@ -710,14 +710,15 @@ export const EditPanelsMixin = {
         } else if (sel && sel.kind === "track" && D.afxTrack(cut, sel.track)) {
             // A sound track's effects: on the sum of its clips, after theirs. Keys in the film's time.
             const id = sel.track;
-            head(id === "A1" ? "A1 - the music under the film" : (D.trackOf(cut, id) || {}).name || id);
+            head(id === "A1" ? "A1 - the music under the film" : id === D.MASTER ? "Master - the whole mix" : (D.trackOf(cut, id) || {}).name || id);
             tabs([["afx", "Track FX", true]]);
             const chain = D.trackAfx(cut, id);
             const t = this._editTlOnScreen() ? (this.currentFrame || 0) / fps : 0;
             if (chain.length) section("Track FX");
             afxSection(chain, (fn) => apply(D.setTrackAfx(cut, id, fn(D.trackAfx(cut, id)))), t, "track");
             into = null;
-            note("They work on the whole track - every clip of it, after the clips' own effects, volume and fades. Drop one from the Effects panel's Audio FX on the track's header or lane, too. The export to Resolve bakes them in (Resolve's FCPXML has no Fairlight FX).");
+            if (id === D.MASTER) note("They work on the whole mix - every track, after the tracks' own effects - on its way to the speakers and into Export film. The export to Resolve does not carry the master: set it on Resolve's Main bus.");
+            else note("They work on the whole track - every clip of it, after the clips' own effects, volume and fades. Drop one from the Effects panel's Audio FX on the track's header or lane, too. The export to Resolve bakes them in (Resolve's FCPXML has no Fairlight FX).");
         } else if (sel && sel.kind === "xfade" && D.xfadeOf(cut, sel)) {
             // An audio crossfade (Shift+T, the clip menu): its length, curve and alignment, as Resolve's Inspector has them.
             const x = D.xfadeOf(cut, sel);
