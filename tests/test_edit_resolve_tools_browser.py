@@ -554,7 +554,10 @@ class EditResolveToolsBrowserTests(Base):
         items = pg.evaluate(menu)
         for want in ("Place on top (F12)", "Ripple overwrite (Shift+F10)", "Fit to fill (Shift+F11)", "Append at end (Shift+F12)"):
             self.assertIn(want, items)
-        pg.locator(".previz-menu-item", has_text="Single viewer").first.click()
+        # One toggle in the menu: "Dual viewer", ticked while on; no separate "Single viewer" item.
+        self.assertNotIn("Single viewer", " ".join(items))
+        self.assertIn("\u2713 Dual viewer", items)
+        pg.locator(".previz-menu-item", has_text="Dual viewer").first.click()
         self.assertEqual(pg.evaluate("() => __panel._editSrcViewer().mode"), "single")
         pg.evaluate("() => __panel.editSrcViewerMode('dual')")
         # Snapping to beats and audio scrubbing are ticks in the menus of their buttons.
@@ -618,14 +621,19 @@ class EditResolveToolsBrowserTests(Base):
                     Math.round(v.right - r.right) <= 40, [...c.children].filter(b => getComputedStyle(b).display !== 'none').map(b => b.classList[2])]; }"""
         # Dual: on the timeline viewer, the right one, at its top right.
         self.assertEqual(pg.evaluate(where), ["timeline", True, ["src-mode"]])
+        # The layout switch is ONE toggle: the same button, lit (pressed) while dual, unlit while single.
+        lit = "() => { const b = __panel._editSrcCtl.querySelector('.src-mode'); return [b.classList.contains('on'), b.getAttribute('aria-pressed'), b.dataset.icon]; }"
+        self.assertEqual(pg.evaluate(lit), [True, "true", "dualViewer"])
         # Single showing the source: the timeline viewer is gone, so it is in the source's head, at its right (beside its close button).
         pg.evaluate("() => __panel._editSrcCtl.querySelector('.src-mode').click()")
         self.assertEqual(pg.evaluate("() => [__panel._editSrcViewer().mode, __panel._editSrcViewer().show]"), ["single", "source"])
-        self.assertEqual(pg.evaluate(where), ["source", True, ["src-swap", "src-mode"]])
-        # Q: single showing the timeline - the switch is still there, on the timeline viewer.
-        pg.evaluate("() => __panel._editSrcCtl.querySelector('.src-swap').click()")
+        self.assertEqual(pg.evaluate(where), ["source", True, ["src-mode"]])
+        self.assertEqual(pg.evaluate(lit), [False, "false", "dualViewer"])
+        # No "Show the timeline in this viewer" button any more: Q swaps.
+        self.assertIsNone(pg.evaluate("() => __panel._editSrcCtl.querySelector('.src-swap')"))
+        pg.evaluate("() => __panel.editSrcSwap()")
         self.assertEqual(pg.evaluate("() => __panel._editSrcViewer().show"), "timeline")
-        self.assertEqual(pg.evaluate(where), ["timeline", True, ["src-swap", "src-mode"]])
+        self.assertEqual(pg.evaluate(where), ["timeline", True, ["src-mode"]])
         pg.evaluate("() => __panel._editSrcCtl.querySelector('.src-mode').click()")
         self.assertEqual(pg.evaluate("() => __panel._editSrcViewer().mode"), "dual")
         # Off the cut's tab, or with the Source viewer put away, it is gone.
@@ -634,6 +642,70 @@ class EditResolveToolsBrowserTests(Base):
         # The empty picture layer draws nothing (Chrome framed it in light grey round the timeline viewer).
         self.assertEqual(pg.evaluate("() => { const i = __panel.imgBase; i.removeAttribute('src'); return getComputedStyle(i).visibility; }"), "hidden")
         self.assertEqual(self.errors, [])
+
+    def test_both_monitors_have_a_bar_the_active_one_takes_the_keys_and_the_source_pans_and_zooms(self):
+        pg = self.page()
+        pg.evaluate("""async () => { const P = __panel; P.editSrcViewerMode('dual'); P.editSrcToggle(true);
+            await P.editSrcLoad({ path: P._editTlCut.clips[0].file, name: 'a' }, 0); P.editTlRefresh(); }""")
+        pg.wait_for_timeout(300)
+        # The layout switch is larger than the head's small buttons.
+        self.assertGreaterEqual(pg.evaluate("() => __panel._editSrcCtl.querySelector('.src-mode').getBoundingClientRect().width"), 30)
+        # The timeline viewer has its own bar, on the same playhead as the Edit timeline.
+        bar = "() => { const b = __panel._editMonBar; return b && b.isConnected && b.parentNode === __panel.viewport ? b.dataset.head : null; }"
+        pg.evaluate("() => __panel.setFrame(30)")
+        self.assertEqual(pg.evaluate(bar), "30")
+        # Scrubbing it moves the one playhead.
+        pg.evaluate("""() => { const s = __panel._editMonBar.querySelector('.tlm-scrub'), r = s.getBoundingClientRect();
+            s.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: r.left + r.width / 2, clientY: r.top + 4 }));
+            __panel.viewport.ownerDocument.defaultView.dispatchEvent(new PointerEvent('pointerup', { bubbles: true })); }""")
+        frames = pg.evaluate("() => { const P = __panel; return P._editTlCut ? Math.max(1, P.currentFrame) : 0; }")
+        self.assertEqual(pg.evaluate(bar), str(frames))
+        self.assertGreater(frames, 30)
+        # Active monitor: a click on one makes it the active one, outlined in white.
+        act = """() => { const P = __panel; return [P.editMonActive(), P.editSourcePanel.classList.contains('mon-active'),
+            P.viewport.classList.contains('mon-active'),
+            getComputedStyle(P.editSourcePanel.querySelector('.src-view'), '::after').borderTopColor]; }"""
+        pg.evaluate("() => __panel.editSourcePanel.querySelector('.src-view').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))")
+        self.assertEqual(pg.evaluate(act), ["source", True, False, "rgb(255, 255, 255)"])
+        # ... and the playback keys go to it while the viewer is hovered, not to the timeline.
+        f0 = pg.evaluate("() => __panel.currentFrame")
+        pg.evaluate("""() => { const P = __panel; P.isHovered = true; document.body.focus();
+            const k = (key) => window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+            k('ArrowRight'); k('ArrowRight'); }""")
+        self.assertEqual(pg.evaluate("() => [__panel.currentFrame, __panel._editSrcState().head * __panel._editSrcFps()]"), [f0, 2])
+        # A click on the timeline viewer: it is the active one, the keys are the cut's again (J K L, I O too).
+        pg.evaluate("() => __panel.viewport.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))")
+        self.assertEqual(pg.evaluate(act)[:3], ["timeline", False, True])
+        pg.evaluate("""() => { const k = (key) => window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+            k('ArrowRight'); k('i'); }""")
+        self.assertEqual(pg.evaluate("() => [__panel.currentFrame, __panel.playbackRange && __panel.playbackRange.start]"), [f0 + 1, f0 + 1])
+        self.assertEqual(pg.evaluate("() => __panel._editSrcState().head * __panel._editSrcFps()"), 2)
+        # The source pans and zooms as the timeline viewer does: the wheel at the pointer, a drag, F fits.
+        z = """() => { const m = __panel._editSrcEl; return [__panel._editSrcZoomState().zoom, m.style.transform]; }"""
+        pg.evaluate("""() => { const v = __panel.editSourcePanel.querySelector('.src-view'), r = v.getBoundingClientRect();
+            for (let i = 0; i < 5; i++) v.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, clientX: r.left + 20, clientY: r.top + 20, bubbles: true, cancelable: true })); }""")
+        zoom, tr = pg.evaluate(z)
+        self.assertAlmostEqual(zoom, 1.5, places=5)
+        self.assertIn("scale(1.5)", tr)
+        pg.evaluate("""() => { const v = __panel.editSourcePanel.querySelector('.src-view'), w = v.ownerDocument.defaultView;
+            v.dispatchEvent(new MouseEvent('mousedown', { button: 0, clientX: 100, clientY: 100, bubbles: true }));
+            w.dispatchEvent(new MouseEvent('mousemove', { clientX: 130, clientY: 90, bubbles: true }));
+            w.dispatchEvent(new MouseEvent('mouseup', { clientX: 130, clientY: 90, bubbles: true })); }""")
+        x0 = pg.evaluate("() => [__panel._editSrcZoomState().x, __panel._editSrcZoomState().y]")
+        pg.evaluate("() => __panel.editSourcePanel.querySelector('.src-view').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))")
+        pg.evaluate("() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', bubbles: true, cancelable: true }))")
+        self.assertEqual(pg.evaluate(z), [1, ""])
+        self.assertEqual(pg.evaluate("() => __panel.zoom"), 1)          # the timeline viewer's own zoom is left alone
+        self.assertNotEqual(x0, [0, 0])
+        # Single: one monitor, no outline; the bar stays with the timeline viewer while it shows.
+        pg.evaluate("() => __panel.editSrcViewerMode('single')")
+        self.assertEqual(pg.evaluate(act)[:3], ["source", False, False])
+        self.assertIsNone(pg.evaluate(bar))
+        pg.evaluate("() => __panel.editSrcSwap()")
+        self.assertEqual(pg.evaluate(act)[:3], ["timeline", False, False])
+        self.assertIsNotNone(pg.evaluate(bar))
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

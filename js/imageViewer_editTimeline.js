@@ -593,8 +593,7 @@ export const EditTimelineMixin = {
                 run: () => this.editSrcEdit && this.editSrcEdit(kind),
             }));
             return [...rows, "-",
-                    { label: tick(v.mode === "dual", "Dual viewer"), run: () => this.editSrcViewerMode && this.editSrcViewerMode("dual") },
-                    { label: tick(v.mode !== "dual", "Single viewer"), run: () => this.editSrcViewerMode && this.editSrcViewerMode("single") },
+                    { label: tick(v.mode === "dual", "Dual viewer"), run: () => this.editSrcViewerMode && this.editSrcViewerMode() },
                     { label: "Switch source / timeline (Q)", disabled: v.mode === "dual" || !this._editSrcOn || !this._editSrcOn(),
                       run: () => this.editSrcSwap && this.editSrcSwap() }];
         });
@@ -652,6 +651,8 @@ export const EditTimelineMixin = {
             if (this._editTlMarkSel && !(t && t.classList && (t.classList.contains("edit-marker") || t.classList.contains("edit-cmarker")))) this._editTlMarkSel = null;
             // A press stops a dynamic trim that runs (imageViewer_editDynamic.js).
             if (this._editTlDyn && this._editTlDynStop) this._editTlDynStop();
+            // The timeline drives the timeline viewer: that one is the active monitor (imageViewer_editSource.js).
+            if (this.editMonSet && this._editMonTlShown && this._editMonTlShown()) this.editMonSet("timeline");
             if (t && /^(INPUT|TEXTAREA|SELECT|BUTTON|OPTION)$/.test(t.tagName || "")) return;
             try { body.focus({ preventScroll: true }); } catch (_) {}
         }, true);
@@ -2459,6 +2460,7 @@ export const EditTimelineMixin = {
     // The line that follows the frame. Called whenever the frame moves
     // (_toolsFrameChanged), so it has to cost nothing while the panel is away.
     _editTlPlayhead() {
+        if (this._editMonBarDraw) this._editMonBarDraw();       // the timeline viewer's own bar: the same playhead
         const ui = this._editTlUi;
         const lay = this._editTlLay;
         if (!ui || !ui.body.isConnected || !this._editTlOpen()) return;

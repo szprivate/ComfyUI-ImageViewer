@@ -962,6 +962,7 @@ export const EditPlayMixin = {
         for (const v of this._epSlots || []) { try { v.pause(); } catch (_) {} }
         for (const a of ep.bed || []) { try { a.pause(); } catch (_) {} }
         if (this.editTwoUpRest) this.editTwoUpRest();          // stopped on a cut: its two-up is back
+        if (this._editMonBarDraw) this._editMonBarDraw();      // the timeline viewer's play button
     },
 
     // One look at the clock while playing: where the film is, whether the clip

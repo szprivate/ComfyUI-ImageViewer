@@ -2054,10 +2054,20 @@ audio.src-media { width: 90%; }
 .src-head::before { content: "Source"; font-size: 10px; color: #00b8d4; text-transform: uppercase; letter-spacing: .06em; margin-right: 4px; }
 .src-hbtn { min-height: 0; width: 22px; height: 20px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 .src-hbtn .edit-icon { width: 13px; height: 13px; }
-/* The single / dual switch (and Q's swap): top right of the viewer that stands at the right. */
+/* The single / dual switch: top right of the viewer that stands at the right. Larger than the head's buttons. */
 .src-viewctl { display: inline-flex; gap: 3px; align-items: center; }
 .viewport > .src-viewctl { position: absolute; top: 8px; right: 8px; z-index: 60; }
 .viewport > .src-viewctl .src-hbtn { background: rgba(26,26,26,.85); }
+.src-viewctl .src-mode { width: 32px; height: 28px; }
+.src-viewctl .src-mode .edit-icon { width: 20px; height: 20px; }
+.src-viewctl.in-head .src-mode { width: 30px; height: 26px; }
+/* The timeline viewer's own bar (as the Source viewer's scrub bar and row), at the bottom of #viewport. */
+.tl-monbar { position: absolute; left: 6px; right: 6px; bottom: 6px; z-index: 58; display: flex; flex-direction: column; gap: 4px; padding: 4px; box-sizing: border-box; background: #0d0d0d; border-radius: 3px; }
+.viewport.has-monbar > .path-bar { display: none; }
+.tl-monbar .tlm-name { flex: 1 1 auto; min-width: 0; text-align: right; color: #888; font-size: 10px; }
+/* The active monitor (dual): a white outline round its picture. A click on a monitor makes it the active one. */
+.src-monitor.mon-active .src-view::after,
+.viewport.mon-active::after { content: ""; position: absolute; inset: 0; border: 2px solid #fff; pointer-events: none; z-index: 57; }
 /* The Source viewer's edits in the timeline's bar. */
 .edit-srcedits { display: inline-flex; gap: 2px; align-items: center; flex: none; }
 .edit-srcedit:disabled { opacity: .35; }

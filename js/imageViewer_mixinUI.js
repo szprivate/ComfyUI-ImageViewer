@@ -72,6 +72,8 @@ export const UIMixin = {
         if (isTyping) return;
         // The Edit panel's keys, while it has the focus (imageViewer_editKeys.js).
         if (this.editTlKeyDown && this.editTlKeyDown(e)) return;
+        // The Source viewer / timeline viewer - the active monitor's keys (imageViewer_editSource.js).
+        if (this.editMonKeyDown && this.editMonKeyDown(e)) return;
         // Paint's keys, while a Paint tab is up (imageViewer_paintPanel.js).
         if (this._paintOn && this.paintKeyDown && this.paintKeyDown(e)) return;
         // Walking a world takes the keyboard (imageViewer_world3d.js).

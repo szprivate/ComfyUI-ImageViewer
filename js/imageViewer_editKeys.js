@@ -139,7 +139,8 @@ export const EditKeysMixin = {
         const ui = this._editTlUi;
         if (!ui || !ui.body.isConnected || !this._editTlOpen()) return false;
         const path = e.composedPath ? e.composedPath() : [];
-        if (!path.includes(ui.body)) return false;
+        // The timeline viewer active and hovered hands its transport keys here (editMonKeyDown).
+        if (!path.includes(ui.body) && !this._editTlKeyForce) return false;
         // A dialog over the timeline (Paste Attributes, Save cut as...) has its own keys.
         if (path.some((n) => n && n.classList && n.classList.contains("edit-dialog"))) return false;
         const t = path[0];
