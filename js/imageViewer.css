@@ -1925,6 +1925,30 @@ textarea.param-input {
 .viewport.overlays-off .imageviewer-tool-status,
 .viewport.overlays-off .contact-grid-hint,
 .viewport.overlays-off .model-toolbar { display: none !important; }
+/* One overlay off from the button's right-click menu (OVERLAYS in imageViewer_settings.js). */
+.viewport.overlay-hide-shape #shape-overlay,
+.viewport.overlay-hide-exposure #exposure-control,
+.viewport.overlay-hide-path .path-bar,
+.viewport.overlay-hide-toolbar .imageviewer-toolbar,
+.viewport.overlay-hide-toolbar .imageviewer-tool-status,
+.viewport.overlay-hide-frame #img-frame,
+.viewport.overlay-hide-compare #compare-slider,
+.viewport.overlay-hide-compare #rotate-btn,
+.viewport.overlay-hide-contact .contact-grid-hint,
+.viewport.overlay-hide-model .model-toolbar { display: none !important; }
+.overlays-menu { min-width: 200px; }
+.overlays-menu-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 6px 12px 6px 14px; cursor: pointer; white-space: nowrap; }
+.overlays-menu-row:hover { background: rgba(255,102,0,0.18); color: #fff; }
+.overlays-menu-row.all { font-weight: 600; }
+.overlays-menu-row.muted > span { opacity: 0.5; }
+.overlays-menu-sep { height: 1px; margin: 3px 0; background: #2c2c2c; }
+/* A switch, not a tick box. */
+.overlays-switch { appearance: none; -webkit-appearance: none; flex: 0 0 auto; position: relative; width: 28px; height: 16px; margin: 0;
+    border-radius: 8px; background: #3a3a3a; cursor: pointer; transition: background .15s; }
+.overlays-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%;
+    background: #bbb; transition: left .15s, background .15s; }
+.overlays-switch:checked { background: #f60; }
+.overlays-switch:checked::after { left: 14px; background: #fff; }
 
 /* Full screen (imageViewer_fullscreen.js): the viewport alone fills the screen.
    The exit button sits over the canvas and shows while the pointer moves. */

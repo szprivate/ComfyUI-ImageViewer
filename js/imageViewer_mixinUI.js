@@ -8,6 +8,7 @@ import { EDIT_KEYS } from "./imageViewer_editKeys.js";
 import { isViewerSourceNode, senderTabInfo } from "./imageViewer_nodeTools.js";
 import { POPOUT_NAME } from "./imageViewer_mixinReconnect.js";
 import { notice } from "./imageViewer_exportUI.js";
+import { PREF, setPref, OVERLAYS } from "./imageViewer_settings.js";
 
 export const UIMixin = {
 
@@ -162,9 +163,108 @@ export const UIMixin = {
     },
 
     _applyOverlays() {
-        if (this.viewport) this.viewport.classList.toggle('overlays-off', !this.showOverlays);
+        if (this.viewport) {
+            this.viewport.classList.toggle('overlays-off', !this.showOverlays);
+            // Which ones show while the overlays are on: the right-click menu's switches.
+            const hidden = this._hiddenOverlays || new Set();
+            for (const o of OVERLAYS) this.viewport.classList.toggle(`overlay-hide-${o.key}`, hidden.has(o.key));
+        }
         if (this.overlaysBtn) this.overlaysBtn.classList.toggle('active', this.showOverlays);
+        const menu = this.container && this.container.querySelector('#overlays-menu');
+        if (menu && menu._sync) menu._sync();
         this.updateShapeInfo();
+    },
+
+    /** One overlay on or off, as its switch in the button's right-click menu. Kept in the settings. */
+    setOverlayShown(key, on) {
+        if (!OVERLAYS.some(o => o.key === key)) return;
+        const hidden = new Set(this._hiddenOverlays || []);
+        if (on) hidden.delete(key); else hidden.add(key);
+        this._hiddenOverlays = hidden;
+        // Switching one on while they are all off: the overlays come on, or the switch would do nothing to see.
+        if (on && !this.showOverlays) this.showOverlays = true;
+        setPref(PREF.hiddenOverlays, OVERLAYS.filter(o => hidden.has(o.key)).map(o => o.key).join(','));
+        this._applyOverlays();
+    },
+
+    isOverlayShown(key) {
+        return !(this._hiddenOverlays && this._hiddenOverlays.has(key));
+    },
+
+    /** Right-click on Toggle Overlays: a switch for all of them, then one per overlay. */
+    _overlaysMenu(ev) {
+        if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+        const host = this.container;
+        if (!host) return null;
+        const doc = host.ownerDocument;
+        const old = host.querySelector('#overlays-menu');
+        if (old) { old.remove(); return null; }
+        const menu = doc.createElement('div');
+        menu.id = 'overlays-menu';
+        menu.className = 'thumb-ctx-menu overlays-menu';
+        menu.addEventListener('mousedown', (e) => e.stopPropagation());
+        menu.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); });
+        const rows = [];
+        const sw = (key, label, tip, isOn, flip) => {
+            const el = doc.createElement('label');
+            el.className = 'overlays-menu-row' + (key === '*' ? ' all' : '');
+            el.title = tip;
+            el.dataset.overlay = key;
+            const box = doc.createElement('input');
+            box.type = 'checkbox';
+            box.className = 'overlays-switch';
+            const text = doc.createElement('span');
+            text.textContent = label;
+            el.append(text, box);
+            box.onchange = () => { flip(box.checked); sync(); };
+            rows.push(() => {
+                box.checked = isOn();
+                el.classList.toggle('muted', key !== '*' && !this.showOverlays);
+            });
+            menu.append(el);
+        };
+        const sync = () => rows.forEach(r => r());
+        sw('*', 'All overlays', 'The same as a left click on the button (S)',
+           () => this.showOverlays, (on) => this.toggleOverlays(on));
+        const sep = doc.createElement('div');
+        sep.className = 'overlays-menu-sep';
+        menu.append(sep);
+        for (const o of OVERLAYS) {
+            sw(o.key, o.label, o.tip, () => this.isOverlayShown(o.key), (on) => this.setOverlayShown(o.key, on));
+        }
+        sync();
+        host.appendChild(menu);
+        // Above the button, inside the panel.
+        const r = host.getBoundingClientRect();
+        const b = (this.overlaysBtn || ev.target).getBoundingClientRect();
+        const w = menu.offsetWidth, h = menu.offsetHeight;
+        // Inside what shows of the panel: it may run past the window's edge.
+        const view = doc.defaultView || window;
+        const right = Math.min(r.right, view.innerWidth) - r.left;
+        const left = Math.max(4, Math.min(b.left - r.left, right - w - 4));
+        let top = b.top - r.top - h - 4;
+        if (top < 4) top = Math.min(b.bottom - r.top + 4, r.height - h - 4);
+        menu.style.left = `${left}px`;
+        menu.style.top = `${Math.max(4, top)}px`;
+        const win = view;
+        const dismiss = (e) => {
+            if (e.type === 'keydown') { if (e.key !== 'Escape') return; }
+            // The panel is in a shadow root: the document sees its host as the target, the path has the menu.
+            else if ((e.composedPath ? e.composedPath() : [e.target]).includes(menu)) return;
+            close();
+        };
+        const close = () => {
+            menu.remove();
+            doc.removeEventListener('mousedown', dismiss, true);
+            win.removeEventListener('keydown', dismiss, true);
+        };
+        setTimeout(() => {
+            if (!menu.isConnected) return;
+            doc.addEventListener('mousedown', dismiss, true);
+            win.addEventListener('keydown', dismiss, true);
+        }, 0);
+        menu._sync = sync;
+        return menu;
     },
 
     toggleHelpOverlay(force) {

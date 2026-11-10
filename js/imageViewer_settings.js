@@ -36,6 +36,7 @@ export const PREF = {
     loop:           P + "Playback.Loop",
     compareMode:    P + "View.CompareMode",
     showInfo:       P + "View.ShowInfo",
+    hiddenOverlays: P + "View.HiddenOverlays",
     historyLimit:   P + "History.Limit",
     dockSide:       P + "Dock.Side",
     dockLastSide:   P + "Dock.LastSide",
@@ -61,6 +62,29 @@ export const PREF = {
     colourReset:    P + "Colours.Reset",
 };
 const THEME_IDS = new Set(THEME.map((t) => t.id));
+
+/**
+ * The overlays the Toggle Overlays button's right-click menu (_overlaysMenu in
+ * imageViewer_mixinUI.js) has a switch for.
+ * `key` names the `.overlay-hide-<key>` class on the viewport (imageViewer.css)
+ * and is what the hidden list in the settings holds.
+ */
+export const OVERLAYS = [
+    { key: "shape",    label: "Size read-out",     tip: "The picture's size and the pixel under the pointer" },
+    { key: "exposure", label: "Exposure bar",      tip: "Exposure, gamma and the channel picker" },
+    { key: "path",     label: "Path bar",          tip: "The file's path and name" },
+    { key: "toolbar",  label: "Tool bar",          tip: "The tools down the side, and the active tool's hint" },
+    { key: "frame",    label: "Picture frame",     tip: "The outline around the picture" },
+    { key: "compare",  label: "Compare wipe",      tip: "The wipe line and the compare mode button, when comparing" },
+    { key: "contact",  label: "Side by side hint", tip: "The hint over the side by side view" },
+    { key: "model",    label: "3D view buttons",   tip: "The look and tool buttons over a 3D model" },
+];
+
+/** The hidden list as the setting keeps it ("shape,path"), as a set of known keys. */
+export function parseHiddenOverlays(v) {
+    const known = new Set(OVERLAYS.map(o => o.key));
+    return new Set(String(v || "").split(",").map(k => k.trim()).filter(k => known.has(k)));
+}
 
 const DEFAULTS = {};          // id → defaultValue, filled from the table below
 
@@ -220,9 +244,15 @@ function defs() {
             name: "Show the overlays on the canvas",
             tooltip: "Everything drawn over the picture: the size read-out, the exposure bar, " +
                      "the path bar, the tool bar and the rest. The Toggle Overlays button (S) " +
-                     "still toggles them for the session.",
+                     "still toggles them for the session; right-click it to choose which ones show.",
             type: "boolean", defaultValue: true, sortOrder: 690,
             onChange: panelApply(PREF.showInfo),
+        },
+        {
+            // The overlays switched off in the Toggle Overlays button's right-click menu
+            // (OVERLAYS above), comma-separated. State, not a choice here.
+            id: PREF.hiddenOverlays, category: sec("View", "HiddenOverlays"),
+            name: "Overlays switched off", type: "hidden", defaultValue: "",
         },
         {
             id: PREF.historyLimit, category: sec("View", "HistoryLimit"),
@@ -504,6 +534,7 @@ export const PrefsMixin = {
         this._setFpsUi(Math.max(1, Number(pref(PREF.fps)) || 25));
         this._setLoopUi(pref(PREF.loop));
         this.showOverlays = !!pref(PREF.showInfo);
+        this._hiddenOverlays = parseHiddenOverlays(pref(PREF.hiddenOverlays));
         this.historyLimit = Number(pref(PREF.historyLimit)) || this.historyLimit;
         this._themeApply();
     },
