@@ -1,0 +1,739 @@
+// imageViewer_compEditor.js
+// The Comp editor: a node graph (Nuke's way, top to bottom), the same graph as a stack of layers (After
+// Effects' way), the selected node's properties, and the picture, for one *.comp.json.
+//
+// A plain function over a host element, like Motion's editor (imageViewer_mgEditor.js), whose look and key
+// controls it shares: the Properties rows are Motion's (.mg-prop, the stopwatch, the key diamond, the same
+// mgModel functions on a node's params), the composition settings are Motion's, and so are the context menus
+// and the undo History. `host` holds the toolbar and the picture; `parts` = {graph, props, layers} are handed
+// back for the viewer to seat in dock panels of their own (imageViewer_compPanel.js).
+//
+// opts:
+//   transport: {toggle, step(n), first, last}  time is the host's (the viewer's own bar), as in Motion
+//   onFrame(f)                 the user moved the time here (a key's frame); host moves it with setFrame(f, {fromHost})
+//   onComp()                   length / frame rate / size changed
+//   loadSource(node, frame, {scale, format}) -> Promise<picture | null>: a Read's pixels ({w, h, data, ow?, oh?}: shrunk, ow x oh is the file's size)
+//   sourceInfo(node)           -> Promise<{kind, first, last, ...}>: what a Read's file is (for its row)
+//   pickFile(cb)               the viewer's file picker; cb(path)
+//   pathsOf(items)             what a History / file-browser drop names, as Read files (sequences as patterns)
+//   save(path, comp)           -> Promise
+//   render(path)               -> Promise<{message}>
+//   notify(text, severity)
+import * as C from "./imageViewer_compModel.js";
+import * as Mo from "./imageViewer_mgModel.js";
+import { MG_CSS } from "./imageViewer_mgEditor.js";
+
+const CSS = `
+.cp-root{display:flex;flex-direction:column;position:absolute;inset:0;background:#0f0f12;color:#d8d8dc;font:12px/1.35 system-ui,Segoe UI,sans-serif;outline:none}
+.cp-root *{box-sizing:border-box}
+.cp-stage{flex:1;position:relative;overflow:hidden;cursor:default}
+.cp-canvas{position:absolute;left:0;top:0;transform-origin:0 0;image-rendering:auto;box-shadow:0 0 0 1px #444}
+.cp-info{position:absolute;left:8px;bottom:6px;opacity:.7;pointer-events:none;white-space:nowrap}
+.cp-graph,.cp-layers{position:absolute;inset:0;background:#202024;color:#d8d8dc;font:12px/1.35 system-ui,Segoe UI,sans-serif;outline:none;overflow:hidden;user-select:none}
+.cp-graph *,.cp-layers *{box-sizing:border-box}
+.cp-world{position:absolute;left:0;top:0;transform-origin:0 0}
+.cp-wires{position:absolute;left:0;top:0;width:1px;height:1px;overflow:visible;pointer-events:none}
+.cp-node{position:absolute;width:${C.NODE_W}px;height:${C.NODE_H}px;border:1px solid #0008;border-radius:3px;display:flex;align-items:center;justify-content:center;
+  font-weight:600;color:#111;cursor:grab;box-shadow:0 1px 3px #0008;white-space:nowrap;overflow:visible}
+.cp-node .cp-nm{overflow:hidden;text-overflow:ellipsis;max-width:${C.NODE_W - 12}px;pointer-events:none}
+.cp-node.sel{outline:2px solid #ffcf3a;outline-offset:1px}
+.cp-node.viewed:after{content:"";position:absolute;left:-7px;top:9px;width:0;height:0;border:6px solid transparent;border-left:7px solid #ff3b3b}
+.cp-node.off{opacity:.45}.cp-node.off .cp-nm{text-decoration:line-through}
+.cp-node .cp-sub{position:absolute;top:100%;left:0;right:0;text-align:center;font-weight:400;font-size:10px;color:#9a9aa2;margin-top:2px;pointer-events:none;overflow:hidden;text-overflow:ellipsis}
+.cp-port{position:absolute;width:11px;height:11px;margin-left:-5.5px;border-radius:50%;background:#e8e8ea;border:1px solid #000;cursor:crosshair;z-index:2}
+.cp-port.in{top:-6px}.cp-port.out{bottom:-6px;left:50%}
+.cp-port:hover{background:#ffcf3a}
+.cp-plabel{position:absolute;top:-19px;font-size:10px;color:#bbb;pointer-events:none;transform:translateX(-50%)}
+.cp-marquee{position:absolute;border:1px dashed #ffcf3a;background:#ffcf3a14;pointer-events:none}
+.cp-hint{position:absolute;right:8px;bottom:6px;opacity:.45;pointer-events:none}
+.cp-tabmenu{position:absolute;z-index:30;background:#26262c;border:1px solid #44444c;border-radius:3px;padding:3px;box-shadow:0 4px 14px #0008;width:170px}
+.cp-tabmenu input{width:100%;background:#141418;border:1px solid #ff6a1a;color:#fff;font:inherit;padding:2px 4px}
+.cp-tabmenu div{padding:2px 6px;cursor:pointer}.cp-tabmenu div.on,.cp-tabmenu div:hover{background:#3a2a1c}
+.cp-lbar{display:flex;gap:4px;align-items:center;padding:4px 6px;border-bottom:1px solid #2c2c32;flex-wrap:wrap}
+.cp-lrows{position:absolute;top:31px;left:0;right:0;bottom:0;overflow:auto}
+.cp-lrow{display:flex;align-items:center;gap:6px;height:26px;padding:0 6px;border-bottom:1px solid #2a2a30;cursor:pointer}
+.cp-lrow.sel{background:#2b2218}.cp-lrow:hover:not(.sel){background:#25252b}
+.cp-lrow .cp-lname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cp-lrow.off .cp-lname{opacity:.4;text-decoration:line-through}
+.cp-lrow select,.cp-lrow input{background:#141418;border:1px solid #34343c;color:#e6e6ea;border-radius:2px;font:inherit;padding:0 2px;height:20px}
+.cp-lrow input{width:52px}
+.cp-lrow .cp-lkind{font-size:10px;opacity:.55;width:62px;flex:none}
+.cp-swatch{width:14px;height:14px;border-radius:2px;flex:none;border:1px solid #0008}
+.cp-note{opacity:.6;padding:6px 2px}
+`;
+const CAT_COLOR = { Image: "#9aa6b8", Merge: "#6f9fe0", Transform: "#b39ddb", Color: "#86c98a", Filter: "#e0a060", Other: "#c8c8c8" };
+const KIND_ICON = { layer: "▣", background: "▤", group: "⧉" };
+
+const el = (doc, tag, cls, text) => {
+    const n = doc.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+};
+const NS = "http://www.w3.org/2000/svg";
+const svgEl = (doc, tag, attrs = {}) => { const n = doc.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v); return n; };
+const r3 = (x) => Math.round(x * 1000) / 1000;
+const hex2 = (v) => Math.max(0, Math.min(255, Math.round(v * 255))).toString(16).padStart(2, "0");
+const toHex = (c) => "#" + [0, 1, 2].map((i) => hex2(C.linearToSrgb(Math.max(0, Math.min(1, c[i]))))).join("");
+const fromHex = (h, a) => [1, 3, 5].map((i) => C.srgbToLinear(parseInt(h.slice(i, i + 2), 16) / 255)).concat([a]);
+
+/** The editor's look (and Motion's, which it shares) in a document or shadow root, once. The node graph may be
+ *  shown outside the viewer (ComfyUI's bottom panel, imageViewer_compComfyTab.js), so this is not only the viewer's. */
+export function installCompStyles(rootNode) {
+    const doc = rootNode.ownerDocument || rootNode;
+    for (const [attr, text] of [["data-mg", MG_CSS], ["data-comp", CSS]]) {
+        if (!rootNode.querySelector || !rootNode.querySelector(`style[${attr}]`)) {
+            const style = el(doc, "style"); style.setAttribute(attr, "1"); style.textContent = text;
+            (rootNode.head || rootNode).appendChild(style);
+        }
+    }
+}
+
+export function createCompEditor(host, opts = {}) {
+    const o = opts;
+    const doc = host.ownerDocument;
+    const rootNode = host.getRootNode ? host.getRootNode() : doc;
+    const st = {
+        comp: null, path: "", dirty: false, hist: new Mo.History(), sel: [], view: null, frame: 0,
+        proxy: "auto", alpha: false, zoom: { s: 1, x: 0, y: 0, fit: true }, graph: { s: 1, x: 40, y: 40, fitted: false },
+        layerSel: null,
+    };
+    let renderGen = 0, renderQueued = false, lastMs = 0, lastScale = 1;
+    const infos = new Map();
+
+    installCompStyles(rootNode);
+
+    // ── skeleton ─────────────────────────────────────────────────────────────
+    host.replaceChildren();
+    const root = el(doc, "div", "cp-root"); root.tabIndex = 0;
+    const bar = el(doc, "div", "mg-bar");
+    const stage = el(doc, "div", "cp-stage");
+    const canvas = el(doc, "canvas", "cp-canvas");
+    const info = el(doc, "div", "cp-info");
+    stage.append(canvas, info);
+    root.append(bar, stage);
+    host.append(root);
+    const graph = el(doc, "div", "cp-graph"); graph.tabIndex = 0;
+    const world = el(doc, "div", "cp-world");
+    const wires = svgEl(doc, "svg", { class: "cp-wires" });
+    world.append(wires);
+    graph.append(world, el(doc, "div", "cp-hint", "Tab: add a node · 1: view it · D: disable · Del: delete · F: frame all"));
+    const props = el(doc, "div", "mg-side mg-part"); props.tabIndex = 0;
+    const layers = el(doc, "div", "cp-layers"); layers.tabIndex = 0;
+    const parts = { graph, props, layers };
+
+    const btn = (label, title, fn, cls = "") => { const b = el(doc, "button", "mg-btn " + cls, label); b.title = title; b.onclick = fn; return b; };
+    const toast = (m, sev) => { try { o.notify(m, sev); } catch (_) { /* no toasts */ } };
+    const comp = () => st.comp;
+    const fmt = () => st.comp.format;
+    const node = (id) => C.nodeById(st.comp, id);
+    const primary = () => (st.sel.length ? node(st.sel[st.sel.length - 1]) : null);
+    const keyHost = () => ({ comp: { width: fmt().width, height: fmt().height } });
+
+    function mutate(fn, { structure = true } = {}) {
+        st.hist.push(st.comp);
+        fn();
+        st.dirty = true;
+        refresh(structure ? ["bar", "graph", "props", "layers", "stage"] : ["bar", "props", "stage", "graph"]);
+    }
+    function fixSel() {
+        st.sel = st.sel.filter((id) => node(id));
+        if (st.view && !node(st.view)) st.view = null;
+    }
+    function undo() { const s = st.hist.undo(st.comp); if (s) { st.comp = s; st.dirty = true; fixSel(); refresh(); o.onComp && o.onComp(); } }
+    function redo() { const s = st.hist.redo(st.comp); if (s) { st.comp = s; st.dirty = true; fixSel(); refresh(); o.onComp && o.onComp(); } }
+    function refresh(which = ["bar", "graph", "props", "layers", "stage"]) {
+        if (!st.comp) return;
+        if (which.includes("bar")) renderBar();
+        if (which.includes("graph")) renderGraph();
+        if (which.includes("props")) renderProps();
+        if (which.includes("layers")) renderLayers();
+        if (which.includes("stage")) queueRender();
+    }
+
+    // ── toolbar ──────────────────────────────────────────────────────────────
+    function renderBar() {
+        bar.replaceChildren();
+        const t = el(doc, "span", "mg-title", (st.path ? st.path.split(/[\\/]/).pop() : "comp") + (st.dirty ? " •" : ""));
+        t.title = st.path || "";
+        const proxy = el(doc, "select", "mg-btn");
+        for (const [v, label] of [["auto", "Proxy: auto"], ["1", "Full"], ["0.5", "1/2"], ["0.25", "1/4"]]) proxy.append(new Option(label, v));
+        proxy.value = st.proxy;
+        proxy.title = "The picture's resolution while you work (the render is always full size)";
+        proxy.onchange = () => { st.proxy = proxy.value; queueRender(); };
+        const alpha = btn("A", "Show the alpha (A on the picture)", () => { st.alpha = !st.alpha; renderBar(); queueRender(); }, st.alpha ? "on" : "");
+        bar.append(t,
+            btn("Save", "Save the comp (Ctrl+S)", save, st.dirty ? "on" : ""),
+            btn("Render…", "Render the comp's Output to a file", doRender),
+            el(doc, "span", "mg-sep"),
+            btn("↶", "Undo (Ctrl+Z)", undo), btn("↷", "Redo (Ctrl+Shift+Z)", redo),
+            el(doc, "span", "mg-sep"), proxy, alpha,
+            btn("Fit", "Fit the picture (F on the picture)", () => { st.zoom.fit = true; layoutCanvas(); }),
+            el(doc, "span", "mg-info", `${fmt().width}×${fmt().height} · ${fmt().fps} fps · ${fmt().frames} f`));
+    }
+    async function save() {
+        if (!st.path || !o.save) return;
+        try { await o.save(st.path, st.comp); st.dirty = false; renderBar(); toast("Saved", "success"); }
+        catch (e) { toast("Not saved: " + (e.message || e), "error"); }
+    }
+    async function doRender() {
+        if (st.dirty) await save();
+        if (st.dirty || !o.render) return;
+        try { const r = await o.render(st.path); if (r && r.message) toast(r.message, "info"); }
+        catch (e) { toast("Render failed: " + (e.message || e), "error"); }
+    }
+
+    // ── the picture ──────────────────────────────────────────────────────────
+    function viewedId() { return st.view && node(st.view) ? st.view : st.comp.output; }
+    function scaleNow() {
+        if (st.proxy !== "auto") return Number(st.proxy) || 1;
+        const px = fmt().width * fmt().height;
+        return px > 4.2e6 ? 0.25 : px > 1.1e6 ? 0.5 : 1;
+    }
+    function queueRender() {
+        if (renderQueued) return;
+        renderQueued = true;
+        (doc.defaultView || window).requestAnimationFrame(() => { renderQueued = false; draw(); });
+    }
+    async function draw() {
+        if (!st.comp) return;
+        const gen = ++renderGen;
+        const id = viewedId();
+        const f = st.frame;
+        const scale = scaleNow();
+        const pics = new Map();
+        try {
+            const srcs = C.sourcesOf(st.comp, id);
+            await Promise.all(srcs.map(async (n) => {
+                const p = o.loadSource ? await o.loadSource(n, f, { scale, format: fmt() }).catch(() => null) : null;
+                pics.set(n.id, p);
+            }));
+        } catch (_) { /* drawn without */ }
+        if (gen !== renderGen || !st.comp) return;
+        const t0 = performance.now();
+        const img = C.renderNode(st.comp, id, f, { scale, source: (n) => pics.get(n.id) || null });
+        lastMs = Math.round(performance.now() - t0);
+        lastScale = scale;
+        if (canvas.width !== img.w || canvas.height !== img.h) { canvas.width = img.w; canvas.height = img.h; }
+        const ctx = canvas.getContext("2d");
+        const data = ctx.createImageData(img.w, img.h);
+        C.encode8(img, data.data, { alpha: st.alpha });
+        ctx.putImageData(data, 0, 0);
+        layoutCanvas();
+        const v = node(id);
+        info.textContent = `Viewing ${v ? v.name || v.id : "nothing"}${st.alpha ? " · alpha" : ""} · ${scale === 1 ? "full" : "1/" + Math.round(1 / scale)} · ${lastMs} ms`;
+    }
+    function layoutCanvas() {
+        if (!st.comp) return;
+        const W = stage.clientWidth || 1, H = stage.clientHeight || 1;
+        const cw = fmt().width, ch = fmt().height;
+        if (st.zoom.fit) {
+            const s = Math.min((W - 24) / cw, (H - 24) / ch);
+            st.zoom.s = s > 0 ? s : 1;
+            st.zoom.x = (W - cw * st.zoom.s) / 2; st.zoom.y = (H - ch * st.zoom.s) / 2;
+        }
+        canvas.style.width = cw + "px"; canvas.style.height = ch + "px";
+        canvas.style.transform = `translate(${st.zoom.x}px, ${st.zoom.y}px) scale(${st.zoom.s})`;
+    }
+    stage.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        const r = stage.getBoundingClientRect();
+        const px = e.clientX - r.left, py = e.clientY - r.top;
+        const k = Math.exp(-e.deltaY * 0.0015);
+        st.zoom.fit = false;
+        st.zoom.x = px - (px - st.zoom.x) * k; st.zoom.y = py - (py - st.zoom.y) * k; st.zoom.s *= k;
+        layoutCanvas();
+    }, { passive: false });
+    stage.addEventListener("pointerdown", (e) => {
+        // The picture has nothing to pick: the left or the middle button pans it.
+        if (e.button !== 0 && e.button !== 1) return;
+        e.preventDefault(); stage.setPointerCapture(e.pointerId);
+        const sx = e.clientX, sy = e.clientY, ox = st.zoom.x, oy = st.zoom.y;
+        stage.onpointermove = (ev) => { st.zoom.fit = false; st.zoom.x = ox + ev.clientX - sx; st.zoom.y = oy + ev.clientY - sy; layoutCanvas(); };
+        stage.onpointerup = () => { stage.onpointermove = null; };
+    });
+    stage.addEventListener("dblclick", () => { st.zoom.fit = true; layoutCanvas(); });
+
+    // ── the node graph ───────────────────────────────────────────────────────
+    function gxy(e) {
+        const r = graph.getBoundingClientRect();
+        return [(e.clientX - r.left - st.graph.x) / st.graph.s, (e.clientY - r.top - st.graph.y) / st.graph.s];
+    }
+    function placeWorld() { world.style.transform = `translate(${st.graph.x}px, ${st.graph.y}px) scale(${st.graph.s})`; }
+    function frameAll() {
+        const ns = st.comp.nodes;
+        if (!ns.length) return;
+        const xs = ns.map((n) => n.x), ys = ns.map((n) => n.y);
+        const x0 = Math.min(...xs) - 30, x1 = Math.max(...xs) + C.NODE_W + 30, y0 = Math.min(...ys) - 40, y1 = Math.max(...ys) + C.NODE_H + 40;
+        const W = graph.clientWidth || 400, H = graph.clientHeight || 300;
+        const s = Math.max(0.2, Math.min(1.5, Math.min(W / (x1 - x0), H / (y1 - y0))));
+        st.graph = { s, x: (W - (x1 - x0) * s) / 2 - x0 * s, y: (H - (y1 - y0) * s) / 2 - y0 * s, fitted: true };
+        placeWorld();
+    }
+    const portX = (n, i) => ((i + 1) / (C.NODE_TYPES[n.type].inputs.length + 1)) * C.NODE_W;
+    function wirePath(x1, y1, x2, y2) {
+        const dy = Math.max(30, Math.abs(y2 - y1) / 2);
+        return `M${x1},${y1} C${x1},${y1 + dy} ${x2},${y2 - dy} ${x2},${y2}`;
+    }
+    function renderGraph() {
+        for (const n of [...world.querySelectorAll(".cp-node")]) n.remove();
+        wires.replaceChildren();
+        const viewed = viewedId();
+        for (const n of st.comp.nodes) {
+            const t = C.NODE_TYPES[n.type];
+            const box = el(doc, "div", "cp-node" + (st.sel.includes(n.id) ? " sel" : "") + (n.id === viewed ? " viewed" : "") + (n.disable ? " off" : ""));
+            box.dataset.id = n.id;
+            box.style.left = n.x + "px"; box.style.top = n.y + "px";
+            box.style.background = CAT_COLOR[t.cat] || "#ccc";
+            box.append(el(doc, "span", "cp-nm", n.name || n.id));
+            const sub = n.type === "read" ? C.sourceName(n) : n.type === "merge" ? (n.operation || "over") : "";
+            if (sub && sub !== (n.name || n.id)) box.append(el(doc, "span", "cp-sub", sub));
+            t.inputs.forEach((label, i) => {
+                const p = el(doc, "div", "cp-port in"); p.dataset.port = String(i); p.dataset.id = n.id; p.style.left = portX(n, i) + "px";
+                p.title = `${label} input`;
+                box.append(p);
+                if (t.inputs.length > 1) { const l = el(doc, "span", "cp-plabel", label); l.style.left = portX(n, i) + "px"; box.append(l); }
+            });
+            if (n.type !== "output") { const p = el(doc, "div", "cp-port out"); p.dataset.out = n.id; p.title = "Drag onto an input to connect"; box.append(p); }
+            world.append(box);
+            n.inputs.forEach((src, i) => {
+                const s = src && node(src);
+                if (!s) return;
+                const path = svgEl(doc, "path", { d: wirePath(s.x + C.NODE_W / 2, s.y + C.NODE_H, n.x + portX(n, i), n.y),
+                    fill: "none", stroke: i === 2 ? "#bbb" : i === 1 && n.type === "merge" ? "#ffcf3a" : "#e8e8ea", "stroke-width": 1.6,
+                    "stroke-dasharray": i === 2 ? "4 3" : "" });
+                wires.append(path);
+            });
+        }
+        placeWorld();
+        if (!st.graph.fitted && graph.clientWidth) frameAll();
+    }
+    function select(ids, { add = false } = {}) {
+        st.sel = add ? [...new Set([...st.sel, ...ids])] : ids.slice();
+        refresh(["graph", "props", "layers"]);
+        if (o.onSelect) o.onSelect(primary());
+    }
+    graph.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        const r = graph.getBoundingClientRect();
+        const px = e.clientX - r.left, py = e.clientY - r.top;
+        const k = Math.exp(-e.deltaY * 0.0015);
+        const s = Math.max(0.15, Math.min(3, st.graph.s * k));
+        const kk = s / st.graph.s;
+        st.graph.x = px - (px - st.graph.x) * kk; st.graph.y = py - (py - st.graph.y) * kk; st.graph.s = s;
+        placeWorld();
+    }, { passive: false });
+    graph.addEventListener("pointerdown", (e) => {
+        graph.focus({ preventScroll: true });
+        closeMenus();
+        const target = e.target;
+        if (e.button === 1 || (e.button === 0 && e.altKey)) return panGraph(e);
+        if (e.button !== 0) return;
+        if (target.dataset && target.dataset.out) return dragWire(e, target.dataset.out, null);
+        if (target.classList && target.classList.contains("in")) {
+            const dst = node(target.dataset.id), port = Number(target.dataset.port);
+            const src = dst && dst.inputs[port];
+            return dragWire(e, src, { dst: dst.id, port });
+        }
+        const box = target.closest ? target.closest(".cp-node") : null;
+        if (box) return dragNodes(e, box.dataset.id);
+        return marquee(e);
+    });
+    graph.addEventListener("dblclick", (e) => {
+        const box = e.target.closest ? e.target.closest(".cp-node") : null;
+        if (box) { select([box.dataset.id]); if (o.showProps) o.showProps(); }
+    });
+    function panGraph(e) {
+        e.preventDefault(); graph.setPointerCapture(e.pointerId);
+        const sx = e.clientX, sy = e.clientY, ox = st.graph.x, oy = st.graph.y;
+        graph.onpointermove = (ev) => { st.graph.x = ox + ev.clientX - sx; st.graph.y = oy + ev.clientY - sy; placeWorld(); };
+        graph.onpointerup = () => { graph.onpointermove = null; };
+    }
+    function dragNodes(e, id) {
+        e.preventDefault(); graph.setPointerCapture(e.pointerId);
+        if (e.shiftKey || e.ctrlKey) {
+            st.sel = st.sel.includes(id) ? st.sel.filter((x) => x !== id) : [...st.sel, id];
+            refresh(["graph", "props", "layers"]);
+            return;
+        }
+        if (!st.sel.includes(id)) select([id]);
+        else { st.sel = [...st.sel.filter((x) => x !== id), id]; refresh(["props", "layers"]); }
+        const [sx, sy] = gxy(e);
+        const start = new Map(st.sel.map((sid) => [sid, [node(sid).x, node(sid).y]]));
+        let moved = false;
+        graph.onpointermove = (ev) => {
+            const [x, y] = gxy(ev);
+            if (!moved && Math.hypot(x - sx, y - sy) < 3) return;
+            if (!moved) { st.hist.push(st.comp); moved = true; }
+            for (const [sid, [x0, y0]] of start) { const n = node(sid); if (n) { n.x = Math.round(x0 + x - sx); n.y = Math.round(y0 + y - sy); } }
+            renderGraph();
+        };
+        graph.onpointerup = () => { graph.onpointermove = null; if (moved) { st.dirty = true; renderBar(); } };
+    }
+    function dragWire(e, srcId, from) {
+        e.preventDefault(); graph.setPointerCapture(e.pointerId);
+        const src = srcId ? node(srcId) : null;
+        const ghost = svgEl(doc, "path", { fill: "none", stroke: "#ffcf3a", "stroke-width": 1.6, "stroke-dasharray": "5 3" });
+        wires.append(ghost);
+        const fixed = from ? [node(from.dst).x + portX(node(from.dst), from.port), node(from.dst).y] : null;
+        const draw_ = (x, y) => {
+            if (from && !src) ghost.setAttribute("d", wirePath(x, y, fixed[0], fixed[1]));
+            else if (src && !from) ghost.setAttribute("d", wirePath(src.x + C.NODE_W / 2, src.y + C.NODE_H, x, y));
+            else ghost.setAttribute("d", wirePath(src.x + C.NODE_W / 2, src.y + C.NODE_H, x, y));
+        };
+        draw_(...gxy(e));
+        graph.onpointermove = (ev) => draw_(...gxy(ev));
+        graph.onpointerup = (ev) => {
+            graph.onpointermove = null;
+            ghost.remove();
+            const hit = (graph.getRootNode().elementFromPoint ? graph.getRootNode() : doc).elementFromPoint(ev.clientX, ev.clientY);
+            const port = hit && hit.classList && hit.classList.contains("in") ? hit : null;
+            const outHit = hit && hit.dataset && hit.dataset.out ? hit.dataset.out : null;
+            if (from && !src && outHit) { mutate(() => { if (!C.connect(st.comp, from.dst, from.port, outHit)) toast("That would make a loop", "warn"); }); return; }
+            if (port && src) {
+                const dst = port.dataset.id, p = Number(port.dataset.port);
+                mutate(() => {
+                    if (from) C.disconnect(st.comp, from.dst, from.port);
+                    if (!C.connect(st.comp, dst, p, src.id)) toast("That would make a loop", "warn");
+                });
+            } else if (from && src) mutate(() => C.disconnect(st.comp, from.dst, from.port));
+            else renderGraph();
+        };
+    }
+    function marquee(e) {
+        e.preventDefault(); graph.setPointerCapture(e.pointerId);
+        const r = graph.getBoundingClientRect();
+        const box = el(doc, "div", "cp-marquee");
+        const sx = e.clientX - r.left, sy = e.clientY - r.top;
+        let moved = false;
+        graph.onpointermove = (ev) => {
+            const x = ev.clientX - r.left, y = ev.clientY - r.top;
+            if (!moved && Math.hypot(x - sx, y - sy) < 4) return;
+            if (!moved) { graph.append(box); moved = true; }
+            Object.assign(box.style, { left: Math.min(x, sx) + "px", top: Math.min(y, sy) + "px", width: Math.abs(x - sx) + "px", height: Math.abs(y - sy) + "px" });
+        };
+        graph.onpointerup = (ev) => {
+            graph.onpointermove = null;
+            if (!moved) { select([]); return; }
+            box.remove();
+            const toW = (px, py) => [(px - st.graph.x) / st.graph.s, (py - st.graph.y) / st.graph.s];
+            const [ax, ay] = toW(Math.min(sx, ev.clientX - r.left), Math.min(sy, ev.clientY - r.top));
+            const [bx, by] = toW(Math.max(sx, ev.clientX - r.left), Math.max(sy, ev.clientY - r.top));
+            const ids = st.comp.nodes.filter((n) => n.x + C.NODE_W > ax && n.x < bx && n.y + C.NODE_H > ay && n.y < by).map((n) => n.id);
+            select(ids, { add: ev.shiftKey });
+        };
+    }
+
+    // ── menus (Motion's look) ────────────────────────────────────────────────
+    let menuEl = null;
+    function closeMenus() { if (menuEl) { menuEl.remove(); menuEl = null; } }
+    function showMenu(e, container, items) {
+        closeMenus();
+        const m = el(doc, "div", "mg-ctx");
+        for (const it of items) {
+            if (!it) { m.append(el(doc, "hr")); continue; }
+            const d = el(doc, "div", "", it[0]);
+            d.onclick = (ev) => { ev.stopPropagation(); closeMenus(); it[1](); };
+            m.append(d);
+        }
+        const r = container.getBoundingClientRect();
+        m.style.left = Math.max(0, e.clientX - r.left) + "px"; m.style.top = Math.max(0, e.clientY - r.top) + "px";
+        container.append(m);
+        menuEl = m;
+        const mr = m.getBoundingClientRect();
+        if (mr.bottom > r.bottom) m.style.top = Math.max(0, r.height - mr.height - 4) + "px";
+        if (mr.right > r.right) m.style.left = Math.max(0, r.width - mr.width - 4) + "px";
+    }
+    function addNodeAt(type, at) {
+        mutate(() => {
+            const after = primary();
+            const extra = at ? { x: Math.round(at[0] - C.NODE_W / 2), y: Math.round(at[1] - C.NODE_H / 2) } : {};
+            const n = C.insertNode(st.comp, type, at ? null : after && after.id, extra);
+            if (type === "read" && o.pickFile) o.pickFile((path) => mutate(() => { const r = node(n.id); if (r) r.file = path; }, { structure: false }));
+            st.sel = [n.id];
+        });
+    }
+    function addItems(at) {
+        return C.TYPE_ORDER.map((t) => [`Add ${C.NODE_TYPES[t].label}`, () => addNodeAt(t, at)]);
+    }
+    graph.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        const box = e.target.closest ? e.target.closest(".cp-node") : null;
+        const at = gxy(e);
+        if (box) {
+            const id = box.dataset.id;
+            if (!st.sel.includes(id)) select([id]);
+            showMenu(e, graph, [
+                ["View this node (1)", () => setView(id)],
+                [node(id).disable ? "Enable (D)" : "Disable (D)", () => toggleDisable()],
+                ["Rename…", () => renameNode(id)],
+                ["Delete (Del)", () => removeSel()],
+                null, ...addItems(null)]);
+        } else showMenu(e, graph, [...addItems(at), null, ["Frame all (F)", frameAll]]);
+    });
+    function setView(id) { st.view = id === st.comp.output ? null : id; refresh(["graph", "stage"]); }
+    function toggleDisable() { const ids = st.sel.filter((id) => node(id) && node(id).type !== "output"); if (ids.length) mutate(() => { const off = !ids.every((id) => node(id).disable); for (const id of ids) { if (off) node(id).disable = true; else delete node(id).disable; } }); }
+    function removeSel() { const ids = st.sel.filter((id) => node(id)); if (ids.length) mutate(() => { C.removeNodes(st.comp, ids); st.sel = []; fixSel(); }); }
+    function renameNode(id) {
+        const box = world.querySelector(`.cp-node[data-id="${id}"]`);
+        if (!box) return;
+        const i = el(doc, "input", "mg-rename"); i.value = node(id).name || node(id).id;
+        Object.assign(i.style, { position: "absolute", inset: "2px", width: "auto", zIndex: 5, background: "#0f0f12", color: "#fff", border: "1px solid #ff6a1a" });
+        box.append(i); i.focus(); i.select();
+        let done = false;
+        const fin = (keep) => { if (done) return; done = true; const v = i.value.trim(); if (keep && v && v !== (node(id).name || node(id).id)) mutate(() => { node(id).name = v; }); else renderGraph(); };
+        i.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") fin(true); if (e.key === "Escape") fin(false); };
+        i.onblur = () => fin(true);
+        i.onpointerdown = (e) => e.stopPropagation();
+    }
+    function tabMenu() {
+        closeMenus();
+        const m = el(doc, "div", "cp-tabmenu");
+        const inp = el(doc, "input"); inp.placeholder = "Add a node…";
+        const list = el(doc, "div");
+        m.append(inp, list);
+        let on = 0;
+        const matches = () => C.TYPE_ORDER.filter((t) => C.NODE_TYPES[t].label.toLowerCase().includes(inp.value.trim().toLowerCase()));
+        const draw_ = () => {
+            list.replaceChildren();
+            matches().forEach((t, i) => { const d = el(doc, "div", i === on ? "on" : "", C.NODE_TYPES[t].label); d.onclick = () => { closeMenus(); addNodeAt(t, null); }; list.append(d); });
+        };
+        inp.oninput = () => { on = 0; draw_(); };
+        inp.onkeydown = (e) => {
+            e.stopPropagation();
+            const ms = matches();
+            if (e.key === "ArrowDown") { on = Math.min(ms.length - 1, on + 1); draw_(); e.preventDefault(); }
+            else if (e.key === "ArrowUp") { on = Math.max(0, on - 1); draw_(); e.preventDefault(); }
+            else if (e.key === "Enter") { const t = ms[on]; closeMenus(); graph.focus(); if (t) addNodeAt(t, null); }
+            else if (e.key === "Escape") { closeMenus(); graph.focus(); }
+        };
+        m.style.left = Math.max(4, graph.clientWidth / 2 - 85) + "px"; m.style.top = "30px";
+        graph.append(m); menuEl = m;
+        draw_(); inp.focus();
+    }
+
+    // ── keys (graph, layers, properties and the picture) ─────────────────────
+    function keyDown(e) {
+        const t = e.target;
+        if (t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA")) return;
+        const k = e.key, ctrl = e.ctrlKey || e.metaKey;
+        let used = true;
+        if (ctrl && k.toLowerCase() === "z") { if (e.shiftKey) redo(); else undo(); }
+        else if (ctrl && k.toLowerCase() === "y") redo();
+        else if (ctrl && k.toLowerCase() === "s") save();
+        else if (k === "Tab" && e.currentTarget === graph) tabMenu();
+        else if ((k === "Delete" || k === "Backspace") && e.currentTarget !== root) removeSel();
+        else if (k.toLowerCase() === "d" && !ctrl && e.currentTarget === graph) toggleDisable();
+        else if (k === "1" && primary()) setView(primary().id);
+        else if (k.toLowerCase() === "f" && e.currentTarget === graph) frameAll();
+        else if (k.toLowerCase() === "f" && e.currentTarget === root) { st.zoom.fit = true; layoutCanvas(); }
+        else if (k.toLowerCase() === "a" && !ctrl && e.currentTarget === root) { st.alpha = !st.alpha; renderBar(); queueRender(); }
+        else if (k === " " && o.transport) o.transport.toggle();
+        else if (k === "ArrowLeft" && o.transport) o.transport.step(-1);
+        else if (k === "ArrowRight" && o.transport) o.transport.step(1);
+        else used = false;
+        if (used) { e.preventDefault(); e.stopPropagation(); }
+    }
+    for (const part of [graph, layers, props, root]) part.addEventListener("keydown", keyDown);
+
+    // ── drops: History thumbnails / file-browser rows become Reads ───────────
+    const DROP = "application/x-imageviewer-history";
+    function wireDrop(target, place) {
+        target.addEventListener("dragover", (e) => { if (Array.from(e.dataTransfer?.types || []).includes(DROP)) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } });
+        target.addEventListener("drop", (e) => {
+            if (!Array.from(e.dataTransfer?.types || []).includes(DROP)) return;
+            e.preventDefault(); e.stopPropagation();
+            let payload = null;
+            try { payload = JSON.parse(e.dataTransfer.getData(DROP)); } catch (_) { /* not ours */ }
+            const items = payload && Array.isArray(payload.items) ? payload.items : [];
+            const files = o.pathsOf ? o.pathsOf(items) : items.map((it) => it && it.path).filter(Boolean);
+            if (files.length) place(files, e);
+        });
+    }
+    wireDrop(graph, (files, e) => mutate(() => {
+        const [x, y] = gxy(e);
+        st.sel = files.map((f, i) => C.addNode(st.comp, C.makeNode(st.comp, "read", { file: f, x: Math.round(x - C.NODE_W / 2 + i * 140), y: Math.round(y) })).id);
+    }));
+    wireDrop(layers, (files) => mutate(() => { for (const f of files) st.sel = [C.addLayer(st.comp, C.makeNode(st.comp, "read", { file: f })).source.id]; }));
+    wireDrop(stage, (files) => mutate(() => { for (const f of files) st.sel = [C.addLayer(st.comp, C.makeNode(st.comp, "read", { file: f })).source.id]; }));
+
+    // ── properties (Motion's rows) ───────────────────────────────────────────
+    const field = (label, input) => { const r = el(doc, "div", "mg-prop"); r.append(el(doc, "label", "", label), input); return r; };
+    function numInput(value, step, onCommit, d = {}) {
+        const i = el(doc, "input"); i.type = "number"; i.step = step || 0.01; i.value = value === null || value === undefined ? "" : r3(value);
+        if (d.min !== undefined) i.min = d.min; if (d.max !== undefined) i.max = d.max;
+        i.onchange = () => { const v = parseFloat(i.value); onCommit(Number.isFinite(v) ? v : null); };
+        return i;
+    }
+    function paramRow(n, p, d) {
+        const row = el(doc, "div", "mg-prop");
+        const animated = d.key && Mo.isAnimated(n, p);
+        if (d.key) {
+            const sw = el(doc, "span", "mg-sw" + (animated ? " on" : ""), "⏱");
+            sw.title = animated ? "Animated: click to stop animating (keeps the value at the playhead)" : "Click to animate (a key at the playhead)";
+            sw.onclick = () => mutate(() => {
+                if (!animated && (n[p] === undefined || n[p] === null)) n[p] = C.paramAt(n, p, st.frame) ?? (p === "center" ? [fmt().width / 2, fmt().height / 2] : d.def);
+                Mo.toggleAnimated(keyHost(), n, p, st.frame);
+            }, { structure: false });
+            row.append(sw);
+        } else row.append(el(doc, "span", "mg-sw", ""));
+        const lab = el(doc, "label", "", p); if (d.help) lab.title = d.help;
+        row.append(lab);
+        const cur = C.paramAt(n, p, st.frame);
+        const write = (v) => mutate(() => { if (d.key) Mo.setProp(keyHost(), n, p, v, st.frame); else n[p] = v; }, { structure: false });
+        if (d.kind === "num" || d.kind === "int") row.append(numInput(cur, d.kind === "int" ? 1 : d.step, (v) => { if (v !== null) write(d.kind === "int" ? Math.round(v) : v); }, d));
+        else if (d.kind === "vec2") {
+            const base = cur || (p === "center" ? [fmt().width / 2, fmt().height / 2] : [0, 0]);
+            for (let a = 0; a < 2; a++) row.append(numInput(cur ? cur[a] : null, d.step, (v) => { if (v === null && p === "center" && !animated) { mutate(() => { delete n.center; }, { structure: false }); return; } const nv = base.slice(); nv[a] = v === null ? base[a] : v; write(nv); }));
+        } else if (d.kind === "color") {
+            const c = cur || [0, 0, 0, 1];
+            const pick = el(doc, "input"); pick.type = "color"; pick.value = toHex(c);
+            pick.onchange = () => write(fromHex(pick.value, c[3]));
+            row.append(pick, numInput(c[3], 0.01, (v) => { if (v !== null) write([c[0], c[1], c[2], Math.max(0, Math.min(1, v))]); }, { min: 0, max: 1 }));
+            pick.title = "Colour (shown in sRGB, kept linear)";
+        } else if (d.kind === "enum") {
+            const s = el(doc, "select");
+            for (const ch of d.choices) s.append(new Option(String(ch), String(ch)));
+            s.value = String(cur ?? d.def);
+            s.onchange = () => write(typeof d.def === "number" ? Number(s.value) : s.value);
+            row.append(s);
+        } else if (d.kind === "file") {
+            const i = el(doc, "input"); i.type = "text"; i.value = cur || ""; i.placeholder = "a picture, a film, or shot.####.exr";
+            i.onchange = () => write(i.value.trim());
+            const b = btn("…", "Choose a file", () => o.pickFile && o.pickFile((path) => write(path)));
+            row.append(i, b);
+        }
+        if (d.key) {
+            const key = el(doc, "span", "mg-key", animated ? (Mo.keyAt(n, p, st.frame) ? "◆" : "◇") : "");
+            key.title = "Key at the playhead (click to add or remove)";
+            key.onclick = () => { if (!animated) return; mutate(() => { if (Mo.keyAt(n, p, st.frame)) Mo.removeKey(n, p, st.frame); else Mo.setProp(keyHost(), n, p, C.paramAt(n, p, st.frame), st.frame); }, { structure: false }); };
+            row.append(key);
+        }
+        return row;
+    }
+    function renderProps() {
+        props.replaceChildren();
+        const n = primary();
+        if (!n) {
+            const f = fmt();
+            props.append(el(doc, "h4", "", "Composition"));
+            for (const [k, lo, step] of [["width", 4, 1], ["height", 4, 1], ["fps", 1, 1], ["frames", 1, 1]]) {
+                props.append(field(k, numInput(f[k], step, (v) => { if (v !== null && v >= lo) mutate(() => { f[k] = k === "fps" ? v : Math.round(v); }); if (o.onComp) o.onComp(); }, { min: lo })));
+            }
+            props.append(el(doc, "div", "mg-empty", "Select a node to edit it. Tab in the Node graph adds one; a History thumbnail dropped on the graph, the layers or the picture becomes a Read."));
+            return;
+        }
+        const t = C.NODE_TYPES[n.type];
+        props.append(el(doc, "h4", "", `${n.name || n.id} — ${t.label}`));
+        const name = el(doc, "input"); name.type = "text"; name.value = n.name || ""; name.placeholder = n.id;
+        name.onchange = () => mutate(() => { if (name.value.trim()) n.name = name.value.trim(); else delete n.name; });
+        props.append(field("name", name));
+        if (n.type !== "output") {
+            const dis = el(doc, "input"); dis.type = "checkbox"; dis.checked = !!n.disable;
+            dis.onchange = () => mutate(() => { if (dis.checked) n.disable = true; else delete n.disable; });
+            props.append(field("disable", dis));
+        }
+        const ps = Object.entries(t.params);
+        if (ps.length) props.append(el(doc, "h4", "", t.label));
+        for (const [p, d] of ps) props.append(paramRow(n, p, d));
+        if (n.type === "read") {
+            const line = el(doc, "div", "mg-empty", "…");
+            props.append(line);
+            if (o.sourceInfo) o.sourceInfo(n).then((inf) => {
+                line.textContent = !inf || inf.kind === "missing" ? "No such file (yet)." : inf.kind === "refused" ? "Not in the folders the viewer may read."
+                    : inf.kind === "still" ? "A still picture." : `${inf.kind === "video" ? "A film" : "A sequence"}: frames ${inf.first}–${inf.last}${inf.fps ? ` at ${r3(inf.fps)} fps` : ""}.`;
+            }).catch(() => { line.textContent = ""; });
+        }
+        if (n.type === "output") props.append(el(doc, "div", "mg-empty", "What the comp renders: Render… writes it by the export rule, into the History and onto the ComfyUI canvas."));
+        const keys = C.nodeKeyFrames(n);
+        if (keys.length) {
+            const row = el(doc, "div", "mg-prop");
+            row.append(el(doc, "label", "", "keys"));
+            for (const f of keys.slice(0, 24)) { const b = btn(String(f), "Go to this key", () => o.onFrame && o.onFrame(f), f === st.frame ? "on" : ""); row.append(b); }
+            row.style.flexWrap = "wrap";
+            props.append(row);
+        }
+    }
+
+    // ── layers (the same graph, After Effects' way) ──────────────────────────
+    function renderLayers() {
+        layers.replaceChildren();
+        const lbar = el(doc, "div", "cp-lbar");
+        const L = C.layerStack(st.comp);
+        const selIdx = L.findIndex((l) => l.merge && (st.sel.includes(l.merge) || l.chain.some((id) => st.sel.includes(id))));
+        lbar.append(
+            btn("+ Footage…", "A new layer on top: a picture, a film or a sequence", () => o.pickFile && o.pickFile((path) => mutate(() => { st.sel = [C.addLayer(st.comp, C.makeNode(st.comp, "read", { file: path })).source.id]; }))),
+            btn("+ Solid", "A new layer on top: a colour", () => mutate(() => { st.sel = [C.addLayer(st.comp, C.makeNode(st.comp, "constant", { color: [1, 1, 1, 1], name: "Solid" })).source.id]; })),
+            btn("▲", "Move the selected layer up", () => { if (selIdx > 0) mutate(() => C.moveLayer(st.comp, selIdx, -1)); }),
+            btn("▼", "Move the selected layer down", () => { if (selIdx >= 0) mutate(() => C.moveLayer(st.comp, selIdx, 1)); }),
+            btn("🗑", "Delete the selected layer", () => { if (selIdx >= 0) mutate(() => { C.removeLayer(st.comp, selIdx); st.sel = []; }); }));
+        layers.append(lbar);
+        const rows = el(doc, "div", "cp-lrows");
+        if (!L.length) rows.append(el(doc, "div", "cp-note", "Nothing reaches the Output yet. Add footage, or wire a node into the Output in the Node graph."));
+        L.forEach((l, i) => {
+            const m = l.merge ? node(l.merge) : null;
+            const src = l.source ? node(l.source) : null;
+            const row = el(doc, "div", "cp-lrow" + (i === selIdx || (!m && l.chain.some((id) => st.sel.includes(id))) ? " sel" : "") + (m && m.disable ? " off" : ""));
+            const eye = el(doc, "span", "mg-ic" + (m && m.disable ? "" : " on"), "👁");
+            eye.title = m ? "Show / hide the layer (its Merge's disable)" : "The background is always there";
+            eye.onclick = (e) => { e.stopPropagation(); if (m) mutate(() => { if (m.disable) delete m.disable; else m.disable = true; }); };
+            const sw = el(doc, "span", "cp-swatch");
+            sw.style.background = src ? CAT_COLOR[C.NODE_TYPES[src.type].cat] : "#666";
+            row.append(eye, sw, el(doc, "span", "cp-lkind", `${KIND_ICON[l.kind]} ${l.kind}`), el(doc, "span", "cp-lname", l.name));
+            if (l.chain.length > 1) row.lastChild.title = l.chain.map((id) => node(id).name || id).join(" ← ");
+            if (m) {
+                const op = el(doc, "select");
+                for (const x of C.MERGE_OPS) op.append(new Option(x, x));
+                op.value = m.operation || "over";
+                op.onclick = (e) => e.stopPropagation();
+                op.onchange = () => mutate(() => { m.operation = op.value; });
+                const mix = el(doc, "input"); mix.type = "number"; mix.min = 0; mix.max = 1; mix.step = 0.05; mix.value = r3(C.paramAt(m, "mix", st.frame));
+                mix.title = "Opacity (the Merge's mix)";
+                mix.onclick = (e) => e.stopPropagation();
+                mix.onchange = () => { const v = parseFloat(mix.value); if (Number.isFinite(v)) mutate(() => Mo.setProp(keyHost(), m, "mix", Math.max(0, Math.min(1, v)), st.frame), { structure: false }); };
+                row.append(op, mix);
+            }
+            row.onclick = () => select(l.source ? [l.source] : l.chain.slice(0, 1));
+            rows.append(row);
+        });
+        layers.append(rows);
+    }
+
+    // ── time ─────────────────────────────────────────────────────────────────
+    function setFrame(f, { fromHost = false } = {}) {
+        st.frame = Math.max(0, Math.round(f));
+        if (!fromHost && o.onFrame) o.onFrame(st.frame);
+        queueRender();
+        if (primary() && Object.keys(primary().tracks || {}).length) renderProps();
+    }
+
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => { layoutCanvas(); if (!st.graph.fitted) renderGraph(); }) : null;
+    if (ro) { ro.observe(stage); ro.observe(graph); }
+
+    return {
+        parts,
+        state: st,
+        load(raw, path) {
+            const { comp: c, errors } = C.normalizeComp(raw);
+            st.comp = c; st.path = path || ""; st.dirty = false; st.hist = new Mo.History(); st.sel = []; st.view = null;
+            st.zoom.fit = true; st.graph.fitted = false;
+            refresh();
+            return { ok: !errors.length, errors };
+        },
+        comp: () => st.comp,
+        isDirty: () => st.dirty,
+        setFrame,
+        setFormat(patch) { mutate(() => Object.assign(st.comp.format, patch)); if (o.onComp) o.onComp(); },
+        refresh: () => refresh(),
+        relayout() { layoutCanvas(); if (!st.graph.fitted) frameAll(); },
+        rerender: () => queueRender(),
+        frameAll,
+        select: (ids) => select(ids),
+        view: (id) => setView(id),
+        addNode: (type, extra) => { let n; mutate(() => { n = C.insertNode(st.comp, type, primary() && primary().id, extra || {}); st.sel = [n.id]; }); return n; },
+        undo, redo, save,
+        lastRender: () => ({ ms: lastMs, scale: lastScale, width: canvas.width, height: canvas.height }),
+        canvas,
+        dispose() { if (ro) ro.disconnect(); closeMenus(); infos.clear(); },
+    };
+}

@@ -13,6 +13,7 @@ A viewer panel for [ComfyUI](https://github.com/comfyanonymous/ComfyUI): look at
 - **Paint**: a picture in layers, with brushes, selections, masks, adjustment layers and text. Saves `.ora` and `.psd`.
 - **3D & Previz**: open GLB, FBX, OBJ, USD, Alembic and Gaussian splats, build and animate a shot, render it back into the workflow.
 - **Motion**: edit motion graphics scenes an agent wrote.
+- **Comp**: layer pictures, films and sequences in a node graph (Merge, Transform, Grade, Blur, keyed), in linear float. Renders PNG / EXR frames or a film into the History and onto the canvas; the graph can also sit in ComfyUI's bottom panel.
 - **Drawing tools**: roto mattes, SAM3 prompts and annotations, straight onto the picture.
 - **Panels**: a file browser, the selected node's Parameters, Agent code and Dataset, docked where you like. The viewer docks beside the canvas or opens in its own window.
 - **Dependencies**: what a file was made from and what was made from it, from the workflows saved with the files.

@@ -38,6 +38,7 @@ export const AgentStateMixin = {
         if (safe(() => this.vtKindOf && this.vtKindOf(key), "")) return String(this.vtKindOf(key));
         if (key !== this.activeTab) return "";
         if (this._mgOn) return "motion";
+        if (this._cpOn) return "comp";
         if (this._modelMode) return "3d";
         if (this._videoMode) return "video";
         const n = ((this.allTabs || {})[key] || []).length;

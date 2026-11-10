@@ -77,6 +77,12 @@ const DOCK_PANELS = {
     // still names "motionLayers" is read without it - unknown ids are dropped by _normaliseDockLayout / applyDockData.)
     motionProps: { prop: "motionPropsPanel", label: "Properties", minW: 240, minH: 200, defaultRail: "right", size: 2 },
     motionTimeline: { prop: "motionTimelinePanel", label: "Motion timeline", minW: 360, minH: 160, defaultRail: "bottom" },
+    // Comp (imageViewer_compPanel.js / imageViewer_compEditor.js): a comp is a TAB (the picture in the main canvas, the
+    // viewer's bar its time); these are its other parts, up only with a comp tab. The Node Graph is the way in, so it
+    // is up by default, under the picture where a graph has width; Layers is the same graph as a stack, off at first.
+    compGraph: { prop: "compGraphPanel", label: "Node Graph", minW: 320, minH: 160, defaultRail: "bottom", size: 2 },
+    compProps: { prop: "compPropsPanel", label: "Properties", minW: 240, minH: 200, defaultRail: "right", size: 2 },
+    compLayers: { prop: "compLayersPanel", label: "Layers", minW: 220, minH: 140, defaultRail: "right", size: 1 },
     // Paint (imageViewer_paintPanel.js / imageViewer_paintEditor.js): a picture is a TAB (the editor covers the main
     // canvas); these are its other parts, up only with a Paint tab.
     paintLayers: { prop: "paintLayersPanel", label: "Layers", minW: 220, minH: 180, defaultRail: "right", size: 2 },
@@ -185,6 +191,8 @@ export const DockMixin = {
                                            { id: "rotoCurves", size: 1, hidden: true },
                                            { id: "paramCurves", size: 1, hidden: true },
                                            { id: "motionProps", size: 2, hidden: true },
+                                           { id: "compProps", size: 2, hidden: true },
+                                           { id: "compLayers", size: 1, hidden: true },
                                            { id: "paintLayers", size: 2, hidden: true },
                                            { id: "paintProps", size: 2, hidden: true, tab: "paint", behind: false },
                                            { id: "paintTool", size: 2, hidden: true, tab: "paint", behind: true },
@@ -194,7 +202,8 @@ export const DockMixin = {
                                            { id: "params",  size: 1, hidden: false }] },
             // A graph over time wants width: the Curve Editor lives under the picture.
             bottom: { height: 240, panels: [{ id: "curves", size: 1, hidden: true },
-                                            { id: "motionTimeline", size: 1, hidden: true }] },
+                                            { id: "motionTimeline", size: 1, hidden: true },
+                                            { id: "compGraph", size: 1, hidden: true }] },
         };
     },
 
@@ -630,6 +639,8 @@ export const DockMixin = {
             if (this.paramRefreshCurves) this.paramRefreshCurves();
         } else if (id === "motionProps" || id === "motionTimeline") {
             if (this._mgOn && this._mgSeat) this._mgSeat(this._mgState().tabs[this.activeTab]);
+        } else if (id === "compGraph" || id === "compProps" || id === "compLayers") {
+            if (this.compPanelShown) this.compPanelShown();
         } else if (id.startsWith("paint")) {
             if (this._paintOn && this._paintSeat) this._paintSeat(this._paintActive());
         } else if (id === "editTimeline") {

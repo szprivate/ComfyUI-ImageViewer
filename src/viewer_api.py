@@ -1797,6 +1797,8 @@ try:
                 rest, is_allowed=path_access.is_allowed, may_serve=path_access.may_serve, video_exts=video_exts)
             # An .ora / .psd is a picture in layers: it opens in a Paint tab, not as media.
             paint_open, rest = push_open.split_paint(rest, is_allowed=path_access.is_allowed)
+            # A *.comp.json is a comp: it opens in a Comp tab.
+            comp_open, rest = push_open.split_comps(rest, is_allowed=path_access.is_allowed)
             if str(data.get("panel") or "").strip().lower() == "paint":
                 # panel "paint": the pictures open in Paint too, each in a tab of its own.
                 keep = []
@@ -1871,8 +1873,10 @@ try:
                 PromptServer.instance.send_sync("imageviewer.edit.open", {"path": p})
             for p in paint_open:
                 PromptServer.instance.send_sync("imageviewer.paint.open", {"path": p})
+            for p in comp_open:
+                PromptServer.instance.send_sync("imageviewer.comp.open", {"path": p})
             return web.json_response({"ok": True, "shown": len(frames), "motion": motion, "lora": lora, "cuts": cuts_open,
-                                      "paint": paint_open,
+                                      "paint": paint_open, "comp": comp_open,
                                       "refused": refused,
                                       "opened": bool(opened), "edit": bool(opened and opened.get("panel")),
                                       "notes": notes})
@@ -3328,6 +3332,15 @@ try:
                                   resolve=lambda p: _resolve_raw_path(str(p))[0] if p else None)
         except Exception as e:  # noqa: BLE001 - the rest of the viewer works without it
             print(f"[ImageViewer] Paint routes not registered: {e}")
+        # Comp: a node graph of pixel ops, previewed in the page, rendered here (comp_routes.py; comp_io / comp_model).
+        try:
+            from . import comp_routes
+            from . import export_rules as _comp_rules
+            comp_routes.register(_safe_add, web=web, path_access=path_access, export_rules=_comp_rules,
+                                 folder_paths=folder_paths,
+                                 resolve=lambda p: _resolve_raw_path(str(p))[0] if p else None)
+        except Exception as e:  # noqa: BLE001 - the rest of the viewer works without it
+            print(f"[ImageViewer] Comp routes not registered: {e}")
         for _m, _h in (("GET", _imageviewer_mgscene), ("POST", _imageviewer_mgscene_save)):
             _safe_add(_m, "/imageviewer/mgscene", _h)
             _safe_add(_m, "/api/imageviewer/mgscene", _h)

@@ -1747,6 +1747,8 @@ export const HistoryMixin = {
         if (this.editTlTabClosing && this.editTlTabClosing(key) === false) return;
         // ...and so does a motion scene (MgPanelMixin).
         if (this.mgTabClosing && this.mgTabClosing(key) === false) return;
+        // ...and so does a comp (CompPanelMixin).
+        if (this.compTabClosing && this.compTabClosing(key) === false) return;
         // ...and so does a picture in Paint (PaintPanelMixin).
         if (this.paintTabClosing && this.paintTabClosing(key) === false) return;
         // ...and so does a code / dataset tab (ViewTabsMixin).
@@ -1758,6 +1760,7 @@ export const HistoryMixin = {
         // puts it back if it needs it.
         if (this.activeTab === key && this._exitModelMode) this._exitModelMode();
         if (this.activeTab === key && this._mgOn) this.mgTabLeave();
+        if (this.activeTab === key && this._cpOn) this.compTabLeave();
         if (this.activeTab === key && this._paintOn) this.paintTabLeave();
         if (this.activeTab === key && this._vtOn) this.vtLeave();
         this.tabOrder = this.tabOrder.filter(k => k !== key);
@@ -1769,6 +1772,7 @@ export const HistoryMixin = {
         const btn = container && container.querySelector(`[data-tab="${CSS.escape(key)}"]`);
         if (btn) btn.remove();
         if (this.mgTabClosed) this.mgTabClosed(key);
+        if (this.compTabClosed) this.compTabClosed(key);
         if (this.paintTabClosed) this.paintTabClosed(key);
         if (this.vtTabClosed) this.vtTabClosed(key);
         if (this.activeTab === key) {
@@ -1791,13 +1795,14 @@ export const HistoryMixin = {
         this.queuePersistViewerState();
     },
 
-    /** Which space a tab is ("viewer", "edit", "paint", "motion", "3d"), or "" for any other tab. */
+    /** Which space a tab is ("viewer", "edit", "paint", "motion", "comp", "3d"), or "" for any other tab. */
     _tabSpaceKind(key) {
         if (key === HISTORY_VIEW_TAB) return "viewer";
         try {
             if (this.isEditTab && this.isEditTab(key)) return "edit";
             if (this.isPaintTab && this.isPaintTab(key)) return "paint";
             if (this.isMotionTab && this.isMotionTab(key)) return "motion";
+            if (this.isCompTab && this.isCompTab(key)) return "comp";
             if (this.isPrevizTab && this.isPrevizTab(key)) return "3d";
         } catch (_) { /* a tab half made: no icon */ }
         return "";

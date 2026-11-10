@@ -8,6 +8,7 @@
 //   ComfyUI    History · Parameters
 //   3D         Open 3D… · Outliner · Channel Box · Curve Editor   (on a 3D tab)
 //   Motion     Open Motion… · Properties · Timeline
+//   Comp       Open Comp… · Node Graph · Properties · Layers
 //   Paint      Open Paint… · Layers · Properties · History
 //   Timeline   Open Edit… · Edit · Effects · Inspector · Source · Mixer (all but Edit on a cut's tab)
 //
@@ -29,6 +30,7 @@ import { spaceIconSvg } from "./imageViewer_spaceIcons.js";
 const ICONS = {
     box: spaceIconSvg("3d"),
     motion: spaceIconSvg("motion"),
+    comp: spaceIconSvg("comp"),
     paint: spaceIconSvg("paint"),
     timeline: spaceIconSvg("edit"),
 };
@@ -55,6 +57,14 @@ const GROUPS = [
         { label: "Open Motion\u2026", run: (p) => p.spaceOpen("motion"), checked: (p) => !!(p.isMotionTab && p.isMotionTab()) },
         { label: "Properties", panel: "motionProps", needs: "motion" },
         { label: "Timeline", panel: "motionTimeline", needs: "motion" },
+    ] },
+    // A comp is a tab (imageViewer_compPanel.js); its node graph, properties and layers are its parts.
+    { id: "comp", title: "Comp", icon: "comp", items: [
+        { label: "Open Comp\u2026", run: (p) => p.spaceOpen("comp"), checked: (p) => !!(p.isCompTab && p.isCompTab()) },
+        { label: "New comp", run: (p) => p.compNew() },
+        { label: "Node Graph", panel: "compGraph", needs: "comp" },
+        { label: "Properties", panel: "compProps", needs: "comp" },
+        { label: "Layers", panel: "compLayers", needs: "comp" },
     ] },
     // A picture in layers is a tab (imageViewer_paintPanel.js); Layers and Properties are its parts.
     { id: "paint", title: "Paint", icon: "paint", items: [
@@ -84,10 +94,10 @@ export const BarGroupsMixin = {
      */
     async spaceOpen(kind) {
         if (this.requestPanelOpen) this.requestPanelOpen();
-        const is = { paint: "isPaintTab", edit: "isEditTab", motion: "isMotionTab", "3d": "isPrevizTab" }[kind];
+        const is = { paint: "isPaintTab", edit: "isEditTab", motion: "isMotionTab", comp: "isCompTab", "3d": "isPrevizTab" }[kind];
         if (!is || !this[is]) return false;
-        const PAINT_ASK = "paint:", MOTION_ASK = "motion:";
-        const real = (k) => this[is](k) && !!this.allTabs[k] && k !== PAINT_ASK && k !== MOTION_ASK;
+        const ASK = ["paint:", "motion:", "comp:"];   // the tabs that only ask for a document
+        const real = (k) => this[is](k) && !!this.allTabs[k] && !ASK.includes(k);
         if (kind === "edit" && this._editTlWant) this._editTlWant("editTimeline", true);
         if (real(this.activeTab)) return true;
         const open = (this.tabOrder || []).find(real);
@@ -96,19 +106,21 @@ export const BarGroupsMixin = {
         if (last) {
             const ok = kind === "paint" ? await this.paintOpen(last, { quiet: true })
                 : kind === "edit" ? await this.editTlOpenPath(last)
-                : kind === "motion" ? await this.mgOpenFile(last) : false;
+                : kind === "motion" ? await this.mgOpenFile(last)
+                : kind === "comp" ? await this.compOpenFile(last) : false;
             if (ok) return true;
         }
         if (kind === "paint") return this.paintNewBlank();
         if (kind === "edit") return !!this.editTlNew();
         if (kind === "motion") { this.mgBarOpen(); return true; }
+        if (kind === "comp") { this.compBarOpen(); return true; }
         return this.previzNewTab();
     },
 
     /** The newest recent file of `kind` that still exists, or "". */
     async _spaceLastFile(kind) {
         const list = kind === "edit" ? (this.editTlRecent ? this.editTlRecent() : [])
-            : (kind === "paint" || kind === "motion") ? recentDocs(kind) : [];
+            : (kind === "paint" || kind === "motion" || kind === "comp") ? recentDocs(kind) : [];
         if (!list.length) return "";
         const gone = this._editTlRecentGone ? await this._editTlRecentGone(list.slice(0, 3)) : new Set();
         const n = (p) => String(p || "").replace(/\\/g, "/").toLowerCase();
@@ -171,6 +183,7 @@ export const BarGroupsMixin = {
         if (item.needs === "3d") return !!(this.isPrevizTab && this.isPrevizTab());
         if (item.needs === "cut") return !!(this.isEditTab && this.isEditTab());
         if (item.needs === "motion") return !!(this.isMotionTab && this.isMotionTab());
+        if (item.needs === "comp") return !!(this.isCompTab && this.isCompTab());
         if (item.needs === "paint") return !!(this.isPaintTab && this.isPaintTab());
         return true;
     },

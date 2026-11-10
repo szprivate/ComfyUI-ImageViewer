@@ -1637,7 +1637,11 @@ textarea.param-input {
    its layers / properties / timeline are dock panels, each holding one part of it. */
 .motion-view { position: absolute; inset: 0; z-index: 8; display: none; background: #0f0f12; cursor: default; }
 .motion-tab, .motion-stage { position: absolute; inset: 0; }
+/* Comp (imageViewer_compPanel.js): the same shape as Motion. */
+.comp-view { position: absolute; inset: 0; z-index: 8; display: none; background: #0f0f12; cursor: default; }
+.comp-tab, .comp-stage { position: absolute; inset: 0; }
 .viewport.motion-mode #exposure-control,
+.viewport.comp-mode #exposure-control,
 .viewport.view-mode #exposure-control,
 .viewport.view-mode #contact-container,
 .viewport.view-mode #img-frame,
@@ -1645,11 +1649,16 @@ textarea.param-input {
 .viewport.view-mode #rotate-btn,
 .viewport.view-mode .imageviewer-toolbar,
 .viewport.motion-mode #contact-container,
+.viewport.comp-mode #contact-container,
 .viewport.motion-mode #img-frame,
+.viewport.comp-mode #img-frame,
 .viewport.motion-mode #compare-slider,
+.viewport.comp-mode #compare-slider,
 .viewport.motion-mode #rotate-btn,
+.viewport.comp-mode #rotate-btn,
+.viewport.comp-mode .imageviewer-toolbar,
 .viewport.motion-mode .imageviewer-toolbar { display: none !important; }
-.motion-part-panel > .mg-slot { flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden; background: #1b1b1f; }
+.motion-part-panel > .mg-slot, .motion-part-panel > .comp-slot { flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden; background: #1b1b1f; }
 .mg-note { padding: 14px; color: #8a8a92; font: 12px/1.4 system-ui, sans-serif; }
 .mg-open-state { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 14px; padding: 24px; text-align: center; color: #d8d8dc; font: 13px/1.5 system-ui, "Segoe UI", sans-serif; }
