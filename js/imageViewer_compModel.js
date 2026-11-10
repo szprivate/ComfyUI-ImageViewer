@@ -64,6 +64,7 @@ export const NODE_TYPES = {
         translate: { kind: "vec2", def: [0, 0], key: true, step: 1 },
         rotate: { kind: "num", def: 0, key: true, step: 0.5 },
         scale: { kind: "vec2", def: [1, 1], key: true, step: 0.01 },
+        skew: { kind: "vec2", def: [0, 0], key: true, step: 0.01, help: "Shear: x moves with y, then y with x" },
         center: { kind: "vec2", def: null, key: true, step: 1, help: "Empty: the middle of the comp" },
     } },
     grade: { label: "Grade", cat: "Color", inputs: ["src"], params: {
@@ -690,6 +691,8 @@ export const mat = {
     t: (x, y) => [1, 0, 0, 1, x, y],
     s: (x, y) => [x, 0, 0, y, 0, 0],
     r: (deg) => { const a = (deg * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a); return [c, s, -s, c, 0, 0]; },
+    /** Skew: x moves by kx * y first, then y by ky * x (the y skew after the x one). */
+    k: (kx, ky) => [1, ky, kx, kx * ky + 1, 0, 0],
 };
 
 /** `src` drawn through `m` (source pixels -> output pixels) into a w x h picture, bilinear, transparent outside. */
@@ -763,9 +766,10 @@ export function transformMatrix(node, frame, format, scale = 1) {
     const t = paramAt(node, "translate", frame) || [0, 0];
     const r = paramAt(node, "rotate", frame) || 0;
     const sc = paramAt(node, "scale", frame) || [1, 1];
+    const k = paramAt(node, "skew", frame) || [0, 0];
     const c = paramAt(node, "center", frame) || [format.width / 2, format.height / 2];
     const cx = c[0] * scale, cy = c[1] * scale;
-    return mat.mul(mat.t(t[0] * scale + cx, t[1] * scale + cy), mat.mul(mat.r(r), mat.mul(mat.s(sc[0], sc[1]), mat.t(-cx, -cy))));
+    return mat.mul(mat.t(t[0] * scale + cx, t[1] * scale + cy), mat.mul(mat.r(r), mat.mul(mat.s(sc[0], sc[1]), mat.mul(mat.k(k[0], k[1]), mat.t(-cx, -cy)))));
 }
 
 export function gradeImage(img, p) {

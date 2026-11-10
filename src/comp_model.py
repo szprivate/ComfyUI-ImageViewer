@@ -105,6 +105,7 @@ NODE_TYPES = {
         "translate": {"kind": "vec2", "def": [0, 0], "key": True},
         "rotate": {"kind": "num", "def": 0, "key": True},
         "scale": {"kind": "vec2", "def": [1, 1], "key": True},
+        "skew": {"kind": "vec2", "def": [0, 0], "key": True},
         "center": {"kind": "vec2", "def": None, "key": True},
     }},
     "colorcorrect": {"inputs": ["src"], "params": cc_params()},
@@ -540,6 +541,7 @@ def _inv(m):
 
 def _t(x, y): return [1, 0, 0, 1, x, y]
 def _s(x, y): return [x, 0, 0, y, 0, 0]
+def _k(kx, ky): return [1, ky, kx, kx * ky + 1, 0, 0]   # skew: x by kx * y, then y by ky * x
 
 
 def _r(deg):
@@ -589,9 +591,10 @@ def transform_matrix(node, frame, fmt, scale=1.0):
     t = param_at(node, "translate", frame) or [0, 0]
     r = param_at(node, "rotate", frame) or 0
     sc = param_at(node, "scale", frame) or [1, 1]
+    k = param_at(node, "skew", frame) or [0, 0]
     c = param_at(node, "center", frame) or [fmt["width"] / 2, fmt["height"] / 2]
     cx, cy = c[0] * scale, c[1] * scale
-    return _mul(_t(t[0] * scale + cx, t[1] * scale + cy), _mul(_r(r), _mul(_s(sc[0], sc[1]), _t(-cx, -cy))))
+    return _mul(_t(t[0] * scale + cx, t[1] * scale + cy), _mul(_r(r), _mul(_s(sc[0], sc[1]), _mul(_k(k[0], k[1]), _t(-cx, -cy)))))
 
 
 def reformat_layout(node, frame, fmt, scale=1.0):

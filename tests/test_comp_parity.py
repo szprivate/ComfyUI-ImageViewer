@@ -58,6 +58,8 @@ def cases():
         c.append(({"comp": comp([read(3, fit=fit), out("Read3")])}, {"Read3": s3}))
     c.append(({"comp": comp([read(1), {"id": "Transform1", "type": "transform", "inputs": ["Read1"], "translate": [3.25, -2],
                                         "rotate": 17, "scale": [1.3, 0.8], "center": [10, 5]}, out("Transform1")])}, sources))
+    c.append(({"comp": comp([read(1), {"id": "Transform1", "type": "transform", "inputs": ["Read1"], "translate": [1, 2],
+                                        "rotate": -9, "scale": [0.9, 1.1], "skew": [0.3, -0.15], "center": [12, 7]}, out("Transform1")])}, sources))
     c.append(({"comp": comp([read(1), {"id": "Grade1", "type": "grade", "inputs": ["Read1"], "blackpoint": 0.05, "whitepoint": 0.9,
                                         "lift": 0.02, "gain": 1.4, "multiply": 1.1, "offset": -0.01, "gamma": 1.7,
                                         "saturation": 0.4, "mix": 0.8}, out("Grade1")])}, sources))

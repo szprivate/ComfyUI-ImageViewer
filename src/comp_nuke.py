@@ -279,7 +279,10 @@ def _native(n, t, ins, pos, label, write, out, A, W, H, F, y_, note, info_of, nk
         ce = A.knob(n, "center", lambda v: [(v or mid)[0], y_((v or mid)[1])], 2)
         note("Transform: Nuke filters with cubic, the comp with bilinear")
         return out.add("Transform", label, [("inputs", "1"), ("translate", tr), ("rotate", A.knob(n, "rotate", lambda v: -(v or 0))),
-                                            ("scale", A.knob(n, "scale", lambda v: list(v or [1, 1]), 2)), ("center", ce),
+                                            ("scale", A.knob(n, "scale", lambda v: list(v or [1, 1]), 2)),
+                                            ("skewX", A.knob(n, "skew", lambda v: -(v or [0, 0])[0])),
+                                            ("skewY", A.knob(n, "skew", lambda v: -(v or [0, 0])[1])),
+                                            ("skew_order", "XY"), ("center", ce),
                                             ("black_outside", "true")] + dis, [src()], pos)
     if t == "reformat":
         if A.animated(n, "scale"):

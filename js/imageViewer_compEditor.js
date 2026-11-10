@@ -27,6 +27,7 @@ import * as Mo from "./imageViewer_mgModel.js";
 import { MG_CSS } from "./imageViewer_mgEditor.js";
 import { paintIcon } from "./imageViewer_paintIcons.js";
 import { createCompCurves } from "./imageViewer_compCurves.js";
+import * as J from "./imageViewer_compJack.js";
 
 const CSS = `
 .cp-root{display:flex;flex-direction:column;position:absolute;inset:0;background:#0f0f12;color:#d8d8dc;font:12px/1.35 system-ui,Segoe UI,sans-serif;outline:none}
@@ -100,6 +101,22 @@ const CSS = `
 .cp-over .cp-handle{fill:#0009;stroke:#3ad1ff;stroke-width:1.5px;vector-effect:non-scaling-stroke;pointer-events:all;cursor:move}
 .cp-over .cp-handle.small{stroke:#ffcf3a}
 .cp-over .cp-hline{fill:none;stroke:#3ad1ff;stroke-width:1px;stroke-dasharray:4 3;vector-effect:non-scaling-stroke}
+.cp-over .cp-hline.solid{stroke-dasharray:none}
+.cp-over .cp-jfill{fill:transparent;stroke:none;pointer-events:all;cursor:move}
+.cp-over .cp-jring{fill:none;stroke:#3ad1ff;stroke-width:1.5px;vector-effect:non-scaling-stroke;pointer-events:stroke;cursor:nwse-resize}
+.cp-over .cp-jring:hover,.cp-over .cp-jsq:hover,.cp-over .cp-jbar:hover,.cp-over .cp-jctr:hover,.cp-over .cp-cedge:hover{stroke:#fff}
+.cp-over .cp-jaxis{stroke:#3ad1ff;stroke-width:1px;vector-effect:non-scaling-stroke}
+.cp-over .cp-jsq{fill:#0009;stroke:#3ad1ff;stroke-width:1.5px;vector-effect:non-scaling-stroke;pointer-events:all;cursor:ew-resize}
+.cp-over .cp-jsq[data-jack=n],.cp-over .cp-jsq[data-jack=s]{cursor:ns-resize}
+.cp-over .cp-jsq[data-crop=tl],.cp-over .cp-jsq[data-crop=br]{cursor:nwse-resize}
+.cp-over .cp-jsq[data-crop=tr],.cp-over .cp-jsq[data-crop=bl]{cursor:nesw-resize}
+.cp-over .cp-jbar{fill:#0009;stroke:#ffcf3a;stroke-width:1.5px;vector-effect:non-scaling-stroke;pointer-events:all;cursor:grab}
+.cp-over .cp-jbar.skew{stroke:#c98aff;cursor:col-resize}
+.cp-over .cp-jctr{fill:#0006;stroke:#3ad1ff;stroke-width:1.5px;vector-effect:non-scaling-stroke;pointer-events:all;cursor:move}
+.cp-over .cp-cinside{fill:transparent;pointer-events:all;cursor:move}
+.cp-over .cp-cedge{stroke:transparent;pointer-events:stroke;vector-effect:non-scaling-stroke}
+.cp-over .cp-cedge[data-crop=t],.cp-over .cp-cedge[data-crop=b]{cursor:ns-resize}
+.cp-over .cp-cedge[data-crop=l],.cp-over .cp-cedge[data-crop=r]{cursor:ew-resize}
 .mg-prop label.cp-scrub{cursor:ew-resize;user-select:none}
 .mg-prop label.cp-scrub:hover{opacity:1;color:#3ad1ff}
 .mg-prop input.cp-mixed::placeholder{color:#c9a24a;opacity:1}.mg-prop.cp-mixedrow label{color:#c9a24a}.cp-multi{color:#9aa}
@@ -513,33 +530,21 @@ export function createCompEditor(host, opts = {}) {
         const at = (p, def) => C.paramAt(n, p, st.frame) || def;
         const r1 = (v) => Math.round(v * 10) / 10;
         if (n.type === "lensflare") return [{ param: "position", at: at("position", mid), set: (xy) => [r1(xy[0]), r1(xy[1])], title: "The light" }];
-        if (n.type === "transform") {
-            const c = at("center", mid), t = at("translate", [0, 0]);
-            return [{ param: "translate", at: [c[0] + t[0], c[1] + t[1]], set: (xy) => [r1(xy[0] - c[0]), r1(xy[1] - c[1])], title: "Move (translate)" },
-                { param: "center", at: c, set: (xy) => [r1(xy[0]), r1(xy[1])], small: true, title: "The centre it turns and scales about" }];
-        }
-        if (n.type === "crop") {
-            return [{ param: "topleft", at: at("topleft", [0, 0]), set: (xy) => [r1(xy[0]), r1(xy[1])], title: "Top left" },
-                { param: "bottomright", at: at("bottomright", [F.width, F.height]), set: (xy) => [r1(xy[0]), r1(xy[1])], title: "Bottom right" }];
-        }
         return [];
     }
     function drawHandles() {
         const n = primary();
         if (!n || n.disable) return;
+        if (n.type === "transform") { drawJack(n); return; }
+        if (n.type === "crop") { drawCropBox(n); return; }
         const hs = handlesOf(n);
         if (!hs.length) return;
         const z = st.zoom.s || 1;
-        if (n.type === "crop") {
-            const [a, b] = [hs[0].at, hs[1].at];
-            over.append(svgEl(doc, "rect", { class: "cp-hline", x: Math.min(a[0], b[0]), y: Math.min(a[1], b[1]), width: Math.abs(b[0] - a[0]), height: Math.abs(b[1] - a[1]) }));
-        }
-        if (n.type === "transform") over.append(svgEl(doc, "line", { class: "cp-hline", x1: hs[1].at[0], y1: hs[1].at[1], x2: hs[0].at[0], y2: hs[0].at[1] }));
         hs.forEach((h) => {
             const g = svgEl(doc, "circle", { class: "cp-handle" + (h.small ? " small" : ""), cx: h.at[0], cy: h.at[1], r: (h.small ? 4 : 7) / z });
             g.dataset.param = h.param;
             const tip = svgEl(doc, "title", {}); tip.textContent = `${h.title} (${h.param}): drag`; g.append(tip);
-            g.addEventListener("pointerdown", (e) => dragHandle(e, n.id, h));
+            g.addEventListener("pointerdown", (e) => dragPatch(e, n.id, (xy0, xy) => ({ [h.param]: h.set([h.at[0] + xy[0] - xy0[0], h.at[1] + xy[1] - xy0[1]]) })));
             over.append(g);
             if (!h.small) {
                 const k = 11 / z;
@@ -548,20 +553,83 @@ export function createCompEditor(host, opts = {}) {
             }
         });
     }
-    /** A handle dragged: the value at the playhead (a key there when animated) while it moves; one undo step. */
-    function dragHandle(e, id, h) {
+    const tipped = (elm, text) => { const t = svgEl(doc, "title", {}); t.textContent = text; elm.append(t); return elm; };
+    const ROUND = { translate: 10, center: 10, rotate: 100, scale: 1000, skew: 1000, topleft: 10, bottomright: 10 };
+    const rounded = (p, v) => { const k = ROUND[p] || 1000, r = (x) => Math.round(x * k) / k; return Array.isArray(v) ? v.map(r) : r(v); };
+    /** The Transform's jack: move (the middle), the centre (Ctrl), the ring and its squares (scale), the bars (turn, skew). */
+    function drawJack(n) {
+        const z = st.zoom.s || 1;
+        const v = J.transformValues((p) => C.paramAt(n, p, st.frame), fmt());
+        const g = J.jackGeom(v, z);
+        const part = (elm, name, tip) => {
+            elm.dataset.jack = name;
+            tipped(elm, tip);
+            elm.addEventListener("pointerdown", (e) => {
+                const which = name === "move" && (e.ctrlKey || e.metaKey) ? "centre" : name;
+                const v0 = J.transformValues((p) => C.paramAt(node(n.id), p, st.frame), fmt());
+                dragPatch(e, n.id, (xy0, xy, ev) => J.jackDrag(which, v0, xy0, xy, z, { shift: ev.shiftKey }));
+            });
+            over.append(elm);
+            return elm;
+        };
+        const pts = (a) => a.map((p) => p.join(",")).join(" ");
+        // The inside of the ring moves it too (as the middle does); drawn first so the rest lies over it.
+        part(svgEl(doc, "polygon", { class: "cp-jfill", points: pts(g.ring) }), "move", "Drag: move · Shift: along one axis · Ctrl: move the centre only");
+        part(svgEl(doc, "polygon", { class: "cp-jring", points: pts(g.ring) }), "ring", "Drag the ring: scale evenly");
+        over.append(svgEl(doc, "line", { class: "cp-jaxis", x1: g.O[0], y1: g.O[1], x2: g.rot[0], y2: g.rot[1] }));
+        over.append(svgEl(doc, "line", { class: "cp-jaxis", x1: g.O[0], y1: g.O[1], x2: g.skew[0], y2: g.skew[1] }));
+        part(svgEl(doc, "circle", { class: "cp-jbar rot", cx: g.rot[0], cy: g.rot[1], r: 5 / z }), "rot", "Drag: turn (rotate) · Shift: in 15° steps");
+        part(svgEl(doc, "circle", { class: "cp-jbar skew", cx: g.skew[0], cy: g.skew[1], r: 4 / z }), "skew", "Drag sideways: skew");
+        for (const [k, tip] of [["e", "Drag: scale across · Shift: evenly"], ["w", "Drag: scale across · Shift: evenly"], ["n", "Drag: scale up and down · Shift: evenly"], ["s", "Drag: scale up and down · Shift: evenly"]]) {
+            const q = g[k], h = 4 / z;
+            part(svgEl(doc, "rect", { class: "cp-jsq", x: q[0] - h, y: q[1] - h, width: 2 * h, height: 2 * h }), k, tip);
+        }
+        const c = 9 / z;
+        part(svgEl(doc, "circle", { class: "cp-jctr", cx: g.O[0], cy: g.O[1], r: c }), "move", "Drag: move · Shift: along one axis · Ctrl: move the centre only");
+        over.append(svgEl(doc, "line", { class: "cp-hline", x1: g.O[0] - c * 1.6, y1: g.O[1], x2: g.O[0] + c * 1.6, y2: g.O[1] }));
+        over.append(svgEl(doc, "line", { class: "cp-hline", x1: g.O[0], y1: g.O[1] - c * 1.6, x2: g.O[0], y2: g.O[1] + c * 1.6 }));
+    }
+    /** The Crop's box: an edge or a corner moves those sides, inside moves the box. */
+    function drawCropBox(n) {
+        const z = st.zoom.s || 1, F = fmt();
+        const tl = C.paramAt(n, "topleft", st.frame) || [0, 0], br = C.paramAt(n, "bottomright", st.frame) || [F.width, F.height];
+        const x0 = Math.min(tl[0], br[0]), x1 = Math.max(tl[0], br[0]), y0 = Math.min(tl[1], br[1]), y1 = Math.max(tl[1], br[1]);
+        const part = (elm, name, tip) => {
+            elm.dataset.crop = name;
+            tipped(elm, tip);
+            elm.addEventListener("pointerdown", (e) => {
+                const a = (C.paramAt(node(n.id), "topleft", st.frame) || [0, 0]).slice(), b = (C.paramAt(node(n.id), "bottomright", st.frame) || [F.width, F.height]).slice();
+                dragPatch(e, n.id, (xy0, xy) => J.cropDrag(name, a, b, [xy[0] - xy0[0], xy[1] - xy0[1]]));
+            });
+            over.append(elm);
+        };
+        part(svgEl(doc, "rect", { class: "cp-cinside", x: x0, y: y0, width: x1 - x0, height: y1 - y0 }), "inside", "Drag: move the box");
+        const w = 9;   // screen pixels (the stroke does not scale)
+        part(svgEl(doc, "line", { class: "cp-cedge", x1: x0, y1: y0, x2: x1, y2: y0, "stroke-width": w }), "t", "Drag: the top edge");
+        part(svgEl(doc, "line", { class: "cp-cedge", x1: x0, y1: y1, x2: x1, y2: y1, "stroke-width": w }), "b", "Drag: the bottom edge");
+        part(svgEl(doc, "line", { class: "cp-cedge", x1: x0, y1: y0, x2: x0, y2: y1, "stroke-width": w }), "l", "Drag: the left edge");
+        part(svgEl(doc, "line", { class: "cp-cedge", x1: x1, y1: y0, x2: x1, y2: y1, "stroke-width": w }), "r", "Drag: the right edge");
+        over.append(svgEl(doc, "rect", { class: "cp-hline solid", x: x0, y: y0, width: x1 - x0, height: y1 - y0 }));
+        const h = 4 / z;
+        for (const [name, x, y] of [["tl", x0, y0], ["tr", x1, y0], ["bl", x0, y1], ["br", x1, y1]])
+            part(svgEl(doc, "rect", { class: "cp-jsq", x: x - h, y: y - h, width: 2 * h, height: 2 * h }), name, "Drag: this corner");
+    }
+    /** A handle dragged: compute(xy0, xy, ev) gives the values; at the playhead (a key there when animated); one undo step. */
+    function dragPatch(e, id, compute) {
         if (e.button !== 0 || st.pick) return;
         e.preventDefault(); e.stopPropagation();
         stage.setPointerCapture(e.pointerId);
-        const d = C.NODE_TYPES[node(id).type].params[h.param];
-        const xy0 = compXY(e), at0 = h.at.slice();
+        const specs = C.NODE_TYPES[node(id).type].params;
+        const xy0 = compXY(e);
         let pushed = false;
         stage.onpointermove = (ev) => {
             const xy = compXY(ev);
             if (!pushed) { if (Math.hypot(xy[0] - xy0[0], xy[1] - xy0[1]) * (st.zoom.s || 1) < 2) return; st.hist.push(st.comp); pushed = true; }
-            const to = [at0[0] + xy[0] - xy0[0], at0[1] + xy[1] - xy0[1]];
-            const v = h.set(to), n = node(id);
-            if (d.key) Mo.setProp(keyHost(), n, h.param, v, st.frame); else n[h.param] = v;
+            const patch = compute(xy0, xy, ev), n = node(id);
+            for (const [p, raw] of Object.entries(patch)) {
+                const v = rounded(p, raw);
+                if (specs[p] && specs[p].key) Mo.setProp(keyHost(), n, p, v, st.frame); else n[p] = v;
+            }
             renderOverlay(); queueRender();
         };
         stage.onpointerup = () => {

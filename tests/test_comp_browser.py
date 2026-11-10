@@ -692,11 +692,37 @@ class CompBrowserTests(unittest.TestCase):
         self.assertAlmostEqual(pos[1], 540 - 20 / k, delta=1.5)
         pg.evaluate(f"() => {ED}.undo()")
         self.assertEqual(pg.evaluate(f"() => {ED}.comp().nodes.find((n) => n.type === 'lensflare').position"), [960, 540], "one drag, one undo step")
-        # A Transform has a move handle and a centre; a Crop two corners.
+        # A Transform has a jack: the middle moves, Ctrl+drag the centre alone, the ring scales, the bar turns.
         pg.evaluate(f"() => {ED}.addNode('transform')")
-        self.assertEqual(pg.locator(".cp-over circle.cp-handle").count(), 2)
-        pg.evaluate(f"() => {ED}.addNode('crop')")
-        self.assertEqual(pg.locator(".cp-over circle.cp-handle").count(), 2)
+        parts = pg.evaluate("() => Array.from(__panel.compEditor().stage.querySelectorAll('.cp-over [data-jack]')).map((e) => e.dataset.jack)")
+        self.assertEqual(sorted(set(parts)), ["e", "move", "n", "ring", "rot", "s", "skew", "w"])
+        tr = lambda: pg.evaluate(f"() => {{ const n = {ED}.comp().nodes.find((x) => x.type === 'transform'); return [n.translate || [0, 0], n.rotate || 0, n.scale || [1, 1], n.center || null]; }}")
+        mid = lambda sel: (lambda b: (b["x"] + b["width"] / 2, b["y"] + b["height"] / 2))(pg.locator(sel).bounding_box())
+        cx, cy = mid(".cp-over .cp-jctr")
+        pg.mouse.move(cx, cy); pg.mouse.down(); pg.mouse.move(cx + 30, cy + 10, steps=4); pg.mouse.up()
+        t, r, sc, c = tr()
+        self.assertAlmostEqual(t[0], 30 / k, delta=1); self.assertAlmostEqual(t[1], 10 / k, delta=1)
+        bx, by = mid(".cp-over .cp-jbar.rot")
+        cx, cy = mid(".cp-over .cp-jctr")
+        pg.mouse.move(bx, by); pg.mouse.down(); pg.mouse.move(cx, cy + (bx - cx), steps=6); pg.mouse.up()
+        self.assertAlmostEqual(tr()[1], 90, delta=2)
+        ex, ey = mid(".cp-over .cp-jsq[data-jack=n]")
+        pg.mouse.move(ex, ey); pg.mouse.down(); pg.mouse.move(cx + 2 * (ex - cx), cy + 2 * (ey - cy), steps=6); pg.mouse.up()   # twice as far out (it turned with the jack)
+        self.assertAlmostEqual(tr()[2][1], 2, delta=0.08)   # scale up and down: n is its own axis
+        pg.keyboard.down("Control"); pg.mouse.move(cx, cy); pg.mouse.down(); pg.mouse.move(cx + 20, cy, steps=4); pg.mouse.up(); pg.keyboard.up("Control")
+        t2, r2, sc2, c2 = tr()
+        self.assertIsNotNone(c2, "Ctrl+drag moves the centre")
+        if SHOTS:
+            pg.wait_for_timeout(400)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-transform-jack.png"))
+        # A Crop has a box: its edges, corners and inside.
+        pg.evaluate(f"() => {ED}.addNode('crop', {{ topleft: [200, 100], bottomright: [1400, 900] }})")
+        self.assertEqual(pg.locator(".cp-over rect.cp-jsq[data-crop]").count(), 4)
+        lx, ly = mid(".cp-over .cp-cedge[data-crop=l]")
+        pg.mouse.move(lx, ly); pg.mouse.down(); pg.mouse.move(lx + 40, ly, steps=4); pg.mouse.up()
+        crop = pg.evaluate(f"() => {ED}.comp().nodes.find((n) => n.type === 'crop').topleft")
+        self.assertAlmostEqual(crop[0], 200 + 40 / k, delta=1.5)
+        self.assertEqual(crop[1], 100)
         # A number's label dragged to the right raises it; Up in its field steps it and keeps the focus.
         pg.evaluate(f"() => {ED}.select([{ED}.comp().nodes.find((n) => n.type === 'lensflare').id])")
         P = "__panel.compPropsPanel"

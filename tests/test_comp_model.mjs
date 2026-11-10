@@ -377,3 +377,47 @@ test("a free node dropped on a wire goes into it; never into its own wires or in
     C.nodeById(comp, "M").inputs[0] = "A";
     assert.equal(C.canSplice(comp, "M"), false);
 });
+
+test("the Transform jack: move, the centre alone, scale, turn and skew as its handles are dragged", async () => {
+    const J = await import("../js/imageViewer_compJack.js");
+    const v = { t: [10, 0], r: 0, s: [1, 1], k: [0, 0], c: [100, 50] };
+    const g = J.jackGeom(v, 1);
+    assert.deepEqual(g.O, [110, 50]);
+    assert.deepEqual(J.jackDrag("move", v, [110, 50], [130, 45], 1), { translate: [30, -5] });
+    assert.deepEqual(J.jackDrag("move", v, [110, 50], [130, 45], 1, { shift: true }), { translate: [30, 0] });
+    // The ring: twice as far from the middle is twice the size; a square scales its axis only.
+    assert.deepEqual(J.jackDrag("ring", v, g.e, [g.O[0] + 2 * g.R0, g.O[1]], 1).scale, [2, 2]);
+    assert.deepEqual(J.jackDrag("e", v, g.e, [g.O[0] + 1.5 * g.R0, g.O[1] + 9], 1).scale, [1.5, 1]);
+    assert.deepEqual(J.jackDrag("n", v, g.n, [g.O[0], g.O[1] - 0.5 * g.R0], 1).scale, [1, 0.5]);
+    // The bar: a quarter turn clockwise on screen (y down) is +90.
+    assert.ok(Math.abs(J.jackDrag("rot", v, g.rot, [g.O[0], g.O[1] + 50], 1).rotate - 90) < 1e-9);
+    // The centre alone: the picture stays - the matrix maps every point where it did.
+    const turned = { t: [10, 4], r: 30, s: [1.5, 0.8], k: [0.2, 0], c: [100, 50] };
+    const p = J.jackDrag("centre", turned, [0, 0], [17, -9], 1);
+    const map = (q, x) => { const A = J.linearPart(q.r, q.s, q.k), d = [x[0] - q.c[0], x[1] - q.c[1]];
+        return [A[0] * d[0] + A[2] * d[1] + q.c[0] + q.t[0], A[1] * d[0] + A[3] * d[1] + q.c[1] + q.t[1]]; };
+    const moved = { ...turned, c: p.center, t: p.translate };
+    for (const x of [[0, 0], [200, 30], [55, 99]]) {
+        const a = map(turned, x), b = map(moved, x);
+        assert.ok(Math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-9);
+    }
+    const O2 = [p.center[0] + p.translate[0], p.center[1] + p.translate[1]];
+    assert.ok(Math.hypot(O2[0] - 127, O2[1] - 45) < 1e-9, "the jack follows the pointer");
+    // Skew: the top bar dragged to the right by its height shears x by -1 of y... i.e. kx -1.
+    const top = g.skew;
+    const k = J.jackDrag("skew", v, top, [top[0] + (g.O[1] - top[1]), top[1]], 1).skew;
+    assert.ok(Math.abs(k[0] + 1) < 1e-9 && k[1] === 0);
+    // The linear part is the comp's: rotate, scale, then skew.
+    const C = await import("../js/imageViewer_compModel.js");
+    const m = C.transformMatrix({ type: "transform", rotate: 30, scale: [1.5, 0.8], skew: [0.2, -0.1], center: [0, 0] }, 0, { width: 10, height: 10 });
+    const A = J.linearPart(30, [1.5, 0.8], [0.2, -0.1]);
+    for (let i = 0; i < 4; i++) assert.ok(Math.abs(m[i] - A[i]) < 1e-12);
+});
+
+test("the Crop box: an edge, a corner and the inside", async () => {
+    const J = await import("../js/imageViewer_compJack.js");
+    assert.deepEqual(J.cropDrag("l", [10, 10], [50, 40], [5, 3]), { topleft: [15, 10], bottomright: [50, 40] });
+    assert.deepEqual(J.cropDrag("br", [10, 10], [50, 40], [5, 3]), { topleft: [10, 10], bottomright: [55, 43] });
+    assert.deepEqual(J.cropDrag("tr", [10, 10], [50, 40], [5, 3]), { topleft: [10, 13], bottomright: [55, 40] });
+    assert.deepEqual(J.cropDrag("inside", [10, 10], [50, 40], [5, 3]), { topleft: [15, 13], bottomright: [55, 43] });
+});

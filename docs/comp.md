@@ -33,7 +33,7 @@ The **Node Graph** panel is up when a comp opens. The picture runs from top to b
 | Roto | Shapes drawn on the picture with the viewer's Roto tool. Without an input it is a white matte, with one it cuts its input out. Each shape has a mode (union, plus, minus, intersection, xor), a feather and can be animated |
 | Merge | Lays A over B (or plus, multiply, screen, in, out, atop, mask, stencil, and the rest of Nuke's operations), with a mix and an optional mask input |
 | Copy | B with some of its channels taken from A (for example A's alpha) |
-| Transform | Moves, rotates and scales about a centre |
+| Transform | Moves, rotates, scales and skews about a centre (a jack on the picture) |
 | Reformat | Lays the picture into a box: a width x height, or the comp's size times *scale*. *Resize* fits it inside, fills the box, matches its width or height, distorts to it, or leaves the size alone; *flip*, *flop* and *turn* (90° anticlockwise) as well. The comp keeps one size (its format), so the box sits inside it, in the middle or at the bottom left; *black outside* clears the rest. To render at another size, change the comp's format |
 | Crop | Keeps a box of the picture, with a soft edge if you like |
 | Grade | Black and white point, lift, gain, multiply, offset, gamma, saturation, mix |
@@ -60,6 +60,14 @@ The **Node Graph** panel is up when a comp opens. The picture runs from top to b
 | Output | What the comp renders |
 
 Vectors, MotionBlur, DepthBlur and Defocus take seconds a frame at full size. The picture keeps their results while you work further down the graph.
+
+### Handles on the picture
+
+The selected node's handles are drawn over the picture, as a compositor's viewer has them. Each drag is one undo step, and sets a key at the playhead when the value is animated.
+
+- **Transform**: a jack where the picture's centre is. Drag the middle (or anywhere inside the ring) to move it; Shift keeps the move along one axis; Ctrl+drag moves only the centre it turns and scales about, and the picture stays where it is. Drag the ring to scale evenly, a square on it to scale one axis (Shift: evenly), the bar to the right to turn it (Shift: in 15° steps), the bar at the top sideways to skew it.
+- **Crop**: a box. Drag an edge or a corner to move those sides, the inside to move the box.
+- **LensFlare**: the light, dragged where it should be.
 
 ### Drawing a Roto shape
 
