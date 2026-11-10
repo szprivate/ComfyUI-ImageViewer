@@ -554,7 +554,10 @@ class EditResolveToolsBrowserTests(Base):
         items = pg.evaluate(menu)
         for want in ("Place on top (F12)", "Ripple overwrite (Shift+F10)", "Fit to fill (Shift+F11)", "Append at end (Shift+F12)"):
             self.assertIn(want, items)
-        pg.locator(".previz-menu-item", has_text="Single viewer").first.click()
+        # One toggle in the menu: "Dual viewer", ticked while on; no separate "Single viewer" item.
+        self.assertNotIn("Single viewer", " ".join(items))
+        self.assertIn("\u2713 Dual viewer", items)
+        pg.locator(".previz-menu-item", has_text="Dual viewer").first.click()
         self.assertEqual(pg.evaluate("() => __panel._editSrcViewer().mode"), "single")
         pg.evaluate("() => __panel.editSrcViewerMode('dual')")
         # Snapping to beats and audio scrubbing are ticks in the menus of their buttons.
@@ -618,10 +621,14 @@ class EditResolveToolsBrowserTests(Base):
                     Math.round(v.right - r.right) <= 40, [...c.children].filter(b => getComputedStyle(b).display !== 'none').map(b => b.classList[2])]; }"""
         # Dual: on the timeline viewer, the right one, at its top right.
         self.assertEqual(pg.evaluate(where), ["timeline", True, ["src-mode"]])
+        # The layout switch is ONE toggle: the same button, lit (pressed) while dual, unlit while single.
+        lit = "() => { const b = __panel._editSrcCtl.querySelector('.src-mode'); return [b.classList.contains('on'), b.getAttribute('aria-pressed'), b.dataset.icon]; }"
+        self.assertEqual(pg.evaluate(lit), [True, "true", "dualViewer"])
         # Single showing the source: the timeline viewer is gone, so it is in the source's head, at its right (beside its close button).
         pg.evaluate("() => __panel._editSrcCtl.querySelector('.src-mode').click()")
         self.assertEqual(pg.evaluate("() => [__panel._editSrcViewer().mode, __panel._editSrcViewer().show]"), ["single", "source"])
         self.assertEqual(pg.evaluate(where), ["source", True, ["src-swap", "src-mode"]])
+        self.assertEqual(pg.evaluate(lit), [False, "false", "dualViewer"])
         # Q: single showing the timeline - the switch is still there, on the timeline viewer.
         pg.evaluate("() => __panel._editSrcCtl.querySelector('.src-swap').click()")
         self.assertEqual(pg.evaluate("() => __panel._editSrcViewer().show"), "timeline")

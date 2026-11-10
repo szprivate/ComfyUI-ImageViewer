@@ -192,10 +192,12 @@ export const EditSourceMixin = {
         }
         ctl.classList.toggle("in-head", home === head);
         const dual = v.mode === "dual";
+        // ONE toggle, as the bar's other switches: lit while the two viewers stand side by side.
         const mode = ctl.querySelector(".src-mode");
-        if (mode.dataset.icon !== (dual ? "dualViewer" : "singleViewer")) setEditIcon(mode, dual ? "dualViewer" : "singleViewer");
-        mode.title = dual ? "Dual viewer (source | timeline) - click for a single viewer"
-                          : "Single viewer - click for source and timeline side by side";
+        mode.classList.toggle("on", dual);
+        mode.setAttribute("aria-pressed", dual ? "true" : "false");
+        mode.title = dual ? "Dual viewer: on (source | timeline) - click for a single viewer"
+                          : "Dual viewer: off - click for source and timeline side by side";
         const swap = ctl.querySelector(".src-swap");
         swap.style.display = dual ? "none" : "";
         const icon = showsSource ? "timelineView" : "srcViewer";

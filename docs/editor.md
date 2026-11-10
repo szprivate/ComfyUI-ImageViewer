@@ -58,9 +58,9 @@ The middle of a cut rolls it in both modes. Double-click a cut (either side of i
 
 The Source viewer is a second viewer for one source clip, like Resolve's source monitor. Turn it on with the Source viewer button on the timeline's bar (or Timeline › Source viewer). It stands to the left of the picture.
 
-It has two layouts, like Resolve's single and dual viewer modes. Switch between them in the menu (▾) after the edit buttons on the bar, or with the switch at the top right of the right-hand viewer (it stays there in every layout):
+It has two layouts, like Resolve's single and dual viewer modes. Switch between them with the Dual viewer toggle: the button at the top right of the right-hand viewer (it stays there in every layout and is lit while the dual viewer is on), or Dual viewer in the menu (▾) after the edit buttons on the bar:
 - **Dual**: the source on the left, the timeline's picture on the right.
-- **Single**: one viewer, showing the source or the timeline. <kbd>Q</kbd> switches between them.
+- **Single**: one viewer, showing the source or the timeline. <kbd>Q</kbd>, or the button beside the toggle, switches between them.
 
 To load a clip into it, click a History thumbnail while a cut is open (this opens the Source viewer if it is off). You can also drop a clip onto it from the History, the file browser, the desktop or the node canvas, or right-click a clip on the timeline › Open in Source viewer. To see a History item in the Viewer instead, switch to the Viewer tab first, or double-click the thumbnail. While the Source viewer is open, <kbd>F</kbd> (match frame) loads the clip there instead of opening it in the Viewer tab.
 

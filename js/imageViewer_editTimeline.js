@@ -591,8 +591,7 @@ export const EditTimelineMixin = {
                 run: () => this.editSrcEdit && this.editSrcEdit(kind),
             }));
             return [...rows, "-",
-                    { label: tick(v.mode === "dual", "Dual viewer"), run: () => this.editSrcViewerMode && this.editSrcViewerMode("dual") },
-                    { label: tick(v.mode !== "dual", "Single viewer"), run: () => this.editSrcViewerMode && this.editSrcViewerMode("single") },
+                    { label: tick(v.mode === "dual", "Dual viewer"), run: () => this.editSrcViewerMode && this.editSrcViewerMode() },
                     { label: "Switch source / timeline (Q)", disabled: v.mode === "dual" || !this._editSrcOn || !this._editSrcOn(),
                       run: () => this.editSrcSwap && this.editSrcSwap() }];
         });
