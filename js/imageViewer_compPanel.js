@@ -682,7 +682,7 @@ export const CompPanelMixin = {
         const st = this._cpState();
         let bakeBox;
         return openExportDialog(this.container, {
-            title: "Export to Nuke", kind: "comp", name: nameOf(rec.path), go: "Export",
+            title: "Export to Nuke", kind: "comp", name: nameOf(rec.path).replace(/_v\d+$/i, ""), go: "Export",
             fixed: [{ value: "nk", label: "Nuke script (.nk)" }],
             values: { format: "nk" },
             rows: (make) => {
@@ -690,7 +690,8 @@ export const CompPanelMixin = {
                 bakeBox.type = "checkbox";
                 bakeBox.checked = st.lastNuke?.bake !== false;
                 const lab = make.el("label", "rd-inline");
-                lab.append(bakeBox, make.el("span", "", " Bake what Nuke has no node for (EXR sequences beside the script)"));
+                lab.append(bakeBox, make.el("span", "", " the nodes Nuke lacks, as EXRs"));
+                lab.title = "Nodes with no stock Nuke node (Glow, LensFlare, the keyers, Defocus...) are rendered here into EXR sequences beside the script and read back there; off, they are NoOps";
                 return [make.row("Bake", lab)];
             },
             note: "Stock Nuke nodes where Nuke has one that does the same; the rest rendered here and read back. A README beside the script lists what differs.",

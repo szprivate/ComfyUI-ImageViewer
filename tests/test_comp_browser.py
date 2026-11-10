@@ -224,6 +224,19 @@ class CompBrowserTests(unittest.TestCase):
         pg.locator(f'input[data-fk="{a}:size"]').locator("xpath=..").locator(".mg-sw").click()
         tracks = pg.evaluate(f"() => {ED}.comp().nodes.filter((n) => n.type === 'blur').map((n) => !!(n.tracks && n.tracks.size))")
         self.assertEqual(tracks, [True, True])
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.evaluate(f"() => {{ const e = {ED}; const bl = e.comp().nodes.filter((n) => n.type === 'blur'); bl[1].size = 30; e.refresh(); }}")
+            pg.wait_for_timeout(300)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-multi-edit.png"))
+            # The node graph filling the viewer, and Parameters folded to its title bar.
+            pg.evaluate("() => __panel.dockToggleMaximized('compGraph', true)")
+            pg.wait_for_timeout(300)
+            pg.screenshot(path=os.path.join(SHOTS, "panel-maximised.png"))
+            pg.evaluate("() => { __panel.dockToggleMaximized('compGraph', false); __panel.setPanelDocked('compLayers', true); __panel.dockToggleCollapsed('params', true); }")
+            pg.wait_for_timeout(300)
+            pg.screenshot(path=os.path.join(SHOTS, "panel-folded.png"))
+            pg.evaluate("() => __panel.dockToggleCollapsed('params', false)")
         self.assertEqual(self.errors, [])
 
     def test_export_to_nuke_from_the_bar(self):
@@ -234,6 +247,10 @@ class CompBrowserTests(unittest.TestCase):
         pg.evaluate("() => __panel.compSetFormat({ duration: 2 })")
         pg.locator(".mg-bar button", has_text="Nuke…").click()
         pg.wait_for_selector(".export-dlg .rd-box")
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.wait_for_timeout(400)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-nuke-dialog.png"))
         pg.locator(".export-dlg .rd-box button", has_text="Export").last.click()
         pg.wait_for_function("() => !__panel.container.querySelector('.export-dlg')", timeout=60000)
         nk = [os.path.join(r, f) for r, _, fs in os.walk(self.dirs["output"]) for f in fs if f.endswith(".nk")]

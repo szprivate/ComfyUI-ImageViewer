@@ -235,10 +235,13 @@ export const DockMixin = {
                 if (el.parentNode !== rail) rail.appendChild(el);
                 else rail.appendChild(el);           // re-append: array order wins
                 el.style.display = (entry.hidden || entry.behind) ? "none" : "flex";
-                el.style.flex    = `${this._dockGrow(side, entry)} 1 0`;
-                el.style.minHeight = `${DOCK_PANELS[entry.id].minH}px`;
+                // Collapsed: only its title bar, as tall (or, in the bottom rail, as wide) as that.
+                const folded = !!entry.collapsed && !entry.hidden;
+                el.classList.toggle("dock-collapsed", folded);
+                el.style.flex    = folded ? "0 0 auto" : `${this._dockGrow(side, entry)} 1 0`;
+                el.style.minHeight = folded ? "" : `${DOCK_PANELS[entry.id].minH}px`;
                 // Whichever way the rail runs, the rail owns the other axis.
-                el.style.minWidth = row ? `${DOCK_PANELS[entry.id].minW}px` : "";
+                el.style.minWidth = row && !folded ? `${DOCK_PANELS[entry.id].minW}px` : "";
                 el.style.width   = "";
                 el.style.height  = "";
                 el.classList.toggle("left",   side === "left");
@@ -249,6 +252,8 @@ export const DockMixin = {
             // One splitter between each adjacent visible pair.
             shown.forEach((entry, i) => {
                 if (i === 0) return;
+                // A folded panel has no share to give or take.
+                if (entry.collapsed || shown[i - 1].collapsed) return;
                 const el = this._dockPanelEl(entry.id);
                 if (!el) return;
                 const sp = el.ownerDocument.createElement("div");
@@ -263,7 +268,8 @@ export const DockMixin = {
             const active = shown.length > 0;
             rail.style.display = active ? "flex" : "none";
             rail.style.width   = (active && !row) ? `${this._railSize(side)}px` : "";
-            rail.style.height  = (active && row)  ? `${this._railSize(side)}px` : "";
+            // The bottom rail with every panel folded is as low as their title bars.
+            rail.style.height  = (active && row)  ? (shown.every((p) => p.collapsed) ? "auto" : `${this._railSize(side)}px`) : "";
             if (this.railSplitter[side]) {
                 this.railSplitter[side].style.display = active ? "block" : "none";
             }
@@ -273,6 +279,7 @@ export const DockMixin = {
         this.paramsSide  = this._dockSideOf("params")  || this.paramsSide  || "right";
         this.browserSide = this._dockSideOf("browser") || this.browserSide || "right";
         this._syncDockTabs();
+        this._dockMaxSync();
         this._syncPanelToggleButtons();
         this._notifyPanelsShown();
 
@@ -809,9 +816,22 @@ export const DockMixin = {
             hide.id = `${id}-hide-btn`;
             hide.title = "Hide this panel";
             hide.textContent = "\u2715";
+            // Fold to the title bar, and fill the viewer for a while (Houdini's maximise): two small buttons.
+            const fold = doc.createElement("button");
+            fold.className = "pt-btn pt-fold";
+            fold.id = `${id}-fold-btn`;
+            const max = doc.createElement("button");
+            max.className = "pt-btn pt-max";
+            max.id = `${id}-max-btn`;
+            this._dockBarIcons(id, fold, max);
 
-            bar.append(grip, name, hide);
+            bar.append(grip, name, fold, max, hide);
             el.insertBefore(bar, el.firstChild);
+
+            for (const b of [fold, max]) b.addEventListener("pointerdown", (e) => e.stopPropagation());
+            fold.addEventListener("click", (e) => { e.stopPropagation(); this.dockToggleCollapsed(id); });
+            max.addEventListener("click", (e) => { e.stopPropagation(); this.dockToggleMaximized(id); });
+            bar.addEventListener("dblclick", (e) => { if (!e.target.closest("button, select, input, a")) this.dockToggleCollapsed(id); });
 
             hide.addEventListener("pointerdown", (e) => e.stopPropagation());
             hide.addEventListener("click", (e) => { e.stopPropagation(); this.setPanelDocked(id, false); });
@@ -819,6 +839,112 @@ export const DockMixin = {
             bar.addEventListener("pointerdown", (e) => this._onDockHeaderDown(id, bar, e));
         }
         return bar;
+    },
+
+    // ── Folding a panel, and one panel filling the viewer ───────────────────
+
+    _dockEntryOf(id) {
+        for (const side of RAIL_SIDES) {
+            const e = this.dockLayout && this.dockLayout[side].panels.find((p) => p.id === id);
+            if (e) return e;
+        }
+        return null;
+    },
+
+    isPanelCollapsed(id) { const e = this._dockEntryOf(id); return !!(e && e.collapsed); },
+
+    /** Fold a panel to its title bar (kept in the layout), or open it again. A tab group folds as one. */
+    dockToggleCollapsed(id, on) {
+        const e = this._dockEntryOf(id);
+        if (!e) return;
+        const want = on === undefined ? !e.collapsed : !!on;
+        if (want && this._dockMaxId === id) this._dockMaxId = null;
+        const group = e.tab ? RAIL_SIDES.flatMap((s) => this.dockLayout[s].panels).filter((p) => p.tab === e.tab) : [e];
+        for (const p of group) { if (want) p.collapsed = true; else delete p.collapsed; }
+        this.applyDockLayout();
+        if (this.queuePersistViewerState) this.queuePersistViewerState();
+    },
+
+    isPanelMaximized(id) { return this._dockMaxId === id; },
+
+    /** One panel over the whole viewer between its tab bar and its transport, until pressed again (not saved). */
+    dockToggleMaximized(id, on) {
+        const want = on === undefined ? this._dockMaxId !== id : !!on;
+        if (want) {
+            const e = this._dockEntryOf(id);
+            if (!e || e.hidden) return;
+            if (e.collapsed) this.dockToggleCollapsed(id, false);
+            if (e.behind) this.dockTabFront(id);
+        }
+        this._dockMaxId = want ? id : (this._dockMaxId === id ? null : this._dockMaxId);
+        this.applyDockLayout();
+    },
+
+    _dockBarIcons(id, fold, max) {
+        const doc = fold.ownerDocument;
+        const svg = (d) => {
+            const NS = "http://www.w3.org/2000/svg";
+            const s = doc.createElementNS(NS, "svg");
+            s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("fill", "none"); s.setAttribute("stroke", "currentColor");
+            s.setAttribute("stroke-width", "2"); s.setAttribute("stroke-linecap", "round"); s.setAttribute("stroke-linejoin", "round");
+            for (const pd of d) { const p = doc.createElementNS(NS, "path"); p.setAttribute("d", pd); s.append(p); }
+            return s;
+        };
+        const folded = this.isPanelCollapsed(id), maxed = this.isPanelMaximized(id);
+        const fk = folded ? "f1" : "f0", mk = maxed ? "m1" : "m0";
+        // Lucide's chevron-down / chevron-up, maximize-2 / minimize-2 (as shapes, ISC licence).
+        if (fold.dataset.k !== fk) {
+            fold.dataset.k = fk;
+            fold.replaceChildren(svg([folded ? "m6 9 6 6 6-6" : "m18 15-6-6-6 6"]));
+            fold.title = folded ? "Open this panel again (or double-click its title)" : "Fold this panel to its title bar (or double-click its title)";
+        }
+        if (max.dataset.k !== mk) {
+            max.dataset.k = mk;
+            max.replaceChildren(svg(maxed ? ["m14 10 7-7", "M20 10h-6V4", "m3 21 7-7", "M4 14h6v6"] : ["M15 3h6v6", "m21 3-7 7", "m3 21 7-7", "M9 21H3v-6"]));
+            max.title = maxed ? "Put this panel back" : "Fill the viewer with this panel";
+            max.classList.toggle("on", maxed);
+        }
+    },
+
+    /** Lay the maximised panel over the viewer (fixed, so no rail's overflow clips it) and keep it there. */
+    _dockMaxSync() {
+        const id = this._dockMaxId;
+        const e = id && this._dockEntryOf(id);
+        if (id && (!e || e.hidden || e.behind)) this._dockMaxId = null;
+        const cur = this._dockMaxId;
+        for (const pid of Object.keys(DOCK_PANELS)) {
+            const el = this._dockPanelEl(pid);
+            if (!el) continue;
+            const bar = el.querySelector(":scope > .panel-titlebar");
+            const fold = bar && bar.querySelector(":scope > .pt-fold"), max = bar && bar.querySelector(":scope > .pt-max");
+            if (fold && max) this._dockBarIcons(pid, fold, max);
+            const on = pid === cur;
+            if (!on && el.classList.contains("dock-max")) {
+                el.classList.remove("dock-max");
+                for (const k of ["position", "left", "top", "width", "height", "zIndex"]) el.style[k] = "";
+            }
+        }
+        this.container && this.container.classList.toggle("has-dock-max", !!cur);
+        if (!cur) { this._dockMaxPlace = null; return; }
+        const el = this._dockPanelEl(cur);
+        el.classList.add("dock-max");
+        const place = () => {
+            if (this._dockMaxId !== cur || !el.isConnected) return;
+            const c = this.container, sr = this.shadowRoot;
+            const top = sr.querySelector(".main-area"), ctl = sr.querySelector(".controls");
+            const cr = c.getBoundingClientRect();
+            const y0 = top ? top.getBoundingClientRect().top : cr.top;
+            const y1 = ctl && ctl.offsetParent ? ctl.getBoundingClientRect().top : cr.bottom;
+            const want = `${cr.left}|${y0}|${cr.width}|${y1 - y0}`;
+            if (el._maxAt !== want) {
+                el._maxAt = want;
+                Object.assign(el.style, { position: "fixed", left: `${cr.left}px`, top: `${y0}px`, width: `${cr.width}px`,
+                                          height: `${Math.max(60, y1 - y0)}px`, zIndex: "60" });
+            }
+            (el.ownerDocument.defaultView || window).requestAnimationFrame(place);
+        };
+        el._maxAt = "";                      // placed again on the next frame
+        if (this._dockMaxPlace !== cur) { this._dockMaxPlace = cur; place(); }
     },
 
     _bindDockDrag() {
@@ -1043,7 +1169,8 @@ export const DockMixin = {
                 this.dockLayout[side].panels = src.panels
                     .filter(p => p && DOCK_PANELS[p.id])
                     .map(p => ({ id: p.id, size: p.size > 0 ? p.size : 1, hidden: !!p.hidden,
-                                 ...(typeof p.tab === "string" && p.tab ? { tab: p.tab, behind: !!p.behind } : {}) }));
+                                 ...(typeof p.tab === "string" && p.tab ? { tab: p.tab, behind: !!p.behind } : {}),
+                                 ...(p.collapsed ? { collapsed: true } : {}) }));
             }
         }
         this.applyDockLayout();

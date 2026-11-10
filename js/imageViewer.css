@@ -694,6 +694,13 @@ textarea.param-input {
 .pt-btn > svg { width: 12px; height: 12px; }
 .pt-close:hover { color: #fff; background: rgba(229,72,77,0.75); }
 .pt-btn:disabled { opacity: 0.35; cursor: default; }
+/* Folded: the title bar alone. Maximised: over the viewer, between its tab bar and its transport. */
+.dock-collapsed { min-height: 0 !important; min-width: 0 !important; }
+.dock-collapsed > :not(.panel-titlebar) { display: none !important; }
+.dock-collapsed > .panel-titlebar { border-bottom: none; }
+.dock-rail.bottom > .dock-collapsed { min-width: 140px !important; }
+.dock-max { box-shadow: 0 0 0 1px #333, 0 8px 30px rgba(0,0,0,0.6); }
+.pt-max.on { color: #f60; }
 
 /* Drag-to-dock: a preview of where the panel would land, and a label under the
    cursor. Lives inside .main-area, so it travels with the panel when the whole

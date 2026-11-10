@@ -290,6 +290,38 @@ class ViewTabTests(unittest.TestCase):
             self.assertEqual(pg.evaluate("()=>__panel.shadowRoot.querySelectorAll('#agent-code-panel, #lora-panel').length"), 0)
         self.assertEqual(self.errors, [])
 
+    def test_a_panel_folds_to_its_title_bar_and_fills_the_viewer_from_two_buttons(self):
+        pg = self.page()
+        pg.evaluate("()=>{__panel.setPanelDocked('params', true); __panel.setPanelDocked('browser', true)}")
+        pg.wait_for_timeout(200)
+        box = lambda: pg.evaluate("()=>{const r=__panel.paramsPanel.getBoundingClientRect(); return [r.width, r.height]}")
+        h0 = box()[1]
+        sr = "comfyui-image-viewer-panel >> nth=0 >> "
+        # Fold: the real button at the right of the title bar.
+        pg.locator(sr + "#params-fold-btn").click()
+        self.assertTrue(pg.evaluate("()=>__panel.isPanelCollapsed('params')"))
+        self.assertLess(box()[1], 24)
+        self.assertGreater(pg.evaluate("()=>__panel.browserPanel.getBoundingClientRect().height"), h0)   # the other takes the room
+        self.assertTrue(pg.evaluate("()=>__panel.serializeDock().right.panels.find(p=>p.id==='params').collapsed"))
+        # Kept through a layout round trip, and opened again by a double-click on the title.
+        pg.evaluate("()=>__panel.applyDockData(__panel.serializeDock())")
+        self.assertTrue(pg.evaluate("()=>__panel.isPanelCollapsed('params')"))
+        pg.locator(sr + "#params-panel .panel-titlebar .pt-name").dblclick()
+        self.assertFalse(pg.evaluate("()=>__panel.isPanelCollapsed('params')"))
+        # Maximise: over the viewer between the tab bar and the transport; again puts it back.
+        pg.locator(sr + "#params-max-btn").click()
+        pg.wait_for_timeout(100)
+        got = pg.evaluate("""()=>{const sr=__panel.shadowRoot, r=__panel.paramsPanel.getBoundingClientRect(),
+            m=sr.querySelector('.main-area').getBoundingClientRect(), c=__panel.container.getBoundingClientRect();
+            return {w:r.width, cw:c.width, top:r.top, mt:m.top, h:r.height, mh:m.height}}""")
+        self.assertAlmostEqual(got["w"], got["cw"], delta=3)
+        self.assertAlmostEqual(got["top"], got["mt"], delta=1)
+        self.assertGreaterEqual(got["h"], got["mh"] - 1)
+        pg.locator(sr + "#params-max-btn").click()
+        self.assertFalse(pg.evaluate("()=>__panel.isPanelMaximized('params')"))
+        self.assertLess(box()[0], 600)
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()
