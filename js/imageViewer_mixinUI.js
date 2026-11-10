@@ -302,6 +302,8 @@ export const UIMixin = {
             this.shadowRoot.querySelectorAll('style').forEach(s => this.popoutWindow.document.head.appendChild(s.cloneNode(true)));
             this.popoutWindow.document.body.appendChild(this.container);
             Object.assign(this.popoutWindow.document.body.style, { margin: "0", overflow: "hidden", backgroundColor: "#222" });
+            // The colours there too, and kept there: a change made while it is out is written into both.
+            if (this._themeApply) this._themeApply();
 
             try {
                 const hostFont = window.getComputedStyle(this).fontFamily || 'sans-serif';

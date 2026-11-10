@@ -188,6 +188,112 @@ export function matchPreset(values) {
     return "custom";
 }
 
+// ── "Follow ComfyUI" (Sebastian 2026-11-10: "Comfyui has its own color themes by
+// now - let's have the viewer just follow those by default") ──
+// Not a table: the colours are read off ComfyUI's page whenever its palette
+// changes. ComfyUI (Settings > Appearance > Color palette) writes its palette as
+// CSS variables on <html>: the newer frontends their theme tokens (--background,
+// --foreground, --card, --secondary, --border, --primary; resolvePaletteTheme in
+// the frontend's colorPaletteTheme), older ones only the comfy_base ones
+// (--comfy-menu-bg, --fg-color, ...), and the canvas colour is LiteGraph's
+// CLEAR_BACKGROUND_COLOR. Each colour takes the first of its list that is there.
+export const COMFY = "comfy";
+export const COMFY_NAME = "Follow ComfyUI";
+
+// The variables read (without "--"), in order of preference.
+export const COMFY_VARS = {
+    panel: ["interface-panel-surface", "background", "comfy-menu-bg"],
+    card: ["card", "comfy-menu-secondary-bg"],
+    button: ["secondary", "comfy-input-bg", "card"],
+    text: ["foreground", "fg-color", "input-text"],
+    border: ["border", "interface-stroke", "border-color"],
+    accent: ["primary", "p-primary-color"],
+    canvas: ["bg-color"],
+};
+
+/** Every colour (no "#") from ComfyUI's palette. `read(name)` gives the CSS
+ *  variable --name as "#rrggbb", or null when the page has none; `canvas` is the
+ *  graph's background colour, if known. Null when there is no palette to follow
+ *  (no ComfyUI page), so the caller keeps what it has. */
+export function comfyValues(read, canvas) {
+    const get = (k) => {
+        for (const n of COMFY_VARS[k]) { const c = cleanColor(read(n)); if (c) return c; }
+        return null;
+    };
+    const panel = get("panel");
+    if (!panel) return null;
+    const card = get("card") || shade(panel, 0.08);
+    const fg = get("text") || "#dddddd";
+    const light = lightness(panel) > 0.5;
+    const viewer = cleanColor(canvas) || get("canvas") || shade(panel, light ? -0.1 : -0.25);
+    const chrome = {
+        window: shade(panel, light ? -0.06 : -0.12),
+        panel,
+        title: mix(panel, card, 0.4),
+        tabbar: shade(panel, light ? -0.03 : -0.06),
+        lowerbar: mix(panel, card, 0.4),
+        button: get("button") || card,
+        text: mix(fg, panel, 0.12),
+        border: get("border") || mix(panel, fg, 0.15),
+        accent: get("accent") || "#" + BASE_ACCENT,
+        viewer,
+    };
+    const v = Object.fromEntries(Object.entries(chrome).map(([k, c]) => [k, c.slice(1)]));
+    return { ...v, ...editFrom(v, light ? { playhead: fg.slice(1), select: "0077cc" } : { playhead: fg.slice(1) }) };
+}
+
+/** 0..1, how light a "#rrggbb" is (sRGB luma). */
+export function lightness(hex) {
+    const n = parseInt(String(hex).replace(/^#/, ""), 16);
+    return (0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255)) / 255;
+}
+
+/** A reader for comfyValues: CSS variables of `doc`'s <html> as "#rrggbb", whatever
+ *  they hold (a hex, rgb(), var(), color-mix()) - the browser resolves them on a
+ *  probe and a 1-pixel canvas spells the result. Browser only. */
+export function cssColourReader(doc) {
+    const win = doc.defaultView;
+    const root = doc.documentElement;
+    const own = win.getComputedStyle(root);
+    let probe = null, ctx = null;
+    const read = (name) => {
+        if (!String(own.getPropertyValue("--" + name) || "").trim()) return null;
+        if (!probe) {
+            probe = doc.createElement("div");
+            probe.style.cssText = "display:none";
+            root.appendChild(probe);
+            const cv = doc.createElement("canvas");
+            cv.width = cv.height = 1;
+            ctx = cv.getContext("2d", { willReadFrequently: true });
+        }
+        probe.style.color = "";
+        probe.style.color = `var(--${name})`;
+        return spell(ctx, win.getComputedStyle(probe).color);
+    };
+    read.done = () => { if (probe) probe.remove(); probe = null; };
+    return read;
+}
+
+/** Any CSS colour -> "#rrggbb" (null when see-through). */
+export function spell(ctx, colour) {
+    if (!ctx || !colour) return null;
+    ctx.clearRect(0, 0, 1, 1);
+    ctx.fillStyle = "#000";
+    ctx.fillStyle = colour;
+    ctx.fillRect(0, 0, 1, 1);
+    const d = ctx.getImageData(0, 0, 1, 1).data;
+    if (d[3] < 8) return null;
+    return "#" + [d[0], d[1], d[2]].map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+
+/** ComfyUI's colours now, from the main window: null without a palette. */
+export function readComfyColours(doc, canvasColour) {
+    if (!doc || !doc.defaultView) return null;
+    const read = cssColourReader(doc);
+    try { return comfyValues(read, canvasColour); }
+    finally { read.done(); }
+}
+
 const pick = (values, t) => (values ? (values[t.key] !== undefined ? values[t.key] : values[t.id]) : undefined);
 
 /** A colour as a setting holds it ("rrggbb", "#rrggbb", anything else) -> "#rrggbb", or null. */
@@ -243,14 +349,28 @@ export function accentRules(rules, accent) {
     return out;
 }
 
-/** The panel side: two <style>s after the stylesheet, refreshed on a change. */
-export function makeThemeMixin(readPref) {
+/** The panel side: two <style>s after the stylesheet, refreshed on a change.
+ *  `readComfy()` gives ComfyUI's colours now (comfyValues) or null; with the
+ *  preset "Follow ComfyUI" those are the colours, and `onFollow(values)` is told
+ *  them (the settings write them into the colour rows). */
+export function makeThemeMixin(readPref, readComfy = () => null, onFollow = () => {}) {
     return {
+        /** The colours to use now, by key. */
+        _themeValues() {
+            if (readPref(THEME_PRESET_ID) === COMFY) {
+                this._themeWatchComfy();
+                const c = readComfy();
+                if (c) { onFollow(c); return c; }
+            }
+            const values = {};
+            for (const t of THEME) values[t.key] = readPref(t.id);
+            return values;
+        },
+
         _themeApply() {
             const root = this.shadowRoot;
             if (!root) return;
-            const values = {};
-            for (const t of THEME) values[t.key] = readPref(t.id);
+            const values = this._themeValues();
             const css = themeCss(values);
             const accent = cleanColor(values.accent) || "#" + BASE_ACCENT;
             if (accent !== "#" + BASE_ACCENT) {
@@ -263,31 +383,83 @@ export function makeThemeMixin(readPref) {
                     css.chrome = accentRules(rules, accent) + css.chrome;
                 }
             }
-            for (const g of ["edit", "chrome"]) {
-                let el = root.querySelector(`style[data-iv-theme="${g}"]`);
-                if (!el) {
-                    el = root.ownerDocument.createElement("style");
-                    el.dataset.ivTheme = g;
+            this._themeCss = css;
+            this._themeWindow = cleanColor(values.window) || "#" + THEME[0].def;
+            for (const host of this._themeHosts()) {
+                for (const g of ["edit", "chrome"]) {
+                    let el = host.querySelector(`style[data-iv-theme="${g}"]`);
+                    if (!el) {
+                        el = (host.ownerDocument || host).createElement("style");
+                        el.dataset.ivTheme = g;
+                    }
+                    // Always last, so it comes after any style a feature appended meanwhile.
+                    host.appendChild(el);
+                    if (el.textContent !== css[g]) el.textContent = css[g];
                 }
-                // Always last, so it comes after any style a feature appended meanwhile.
-                root.appendChild(el);
-                if (el.textContent !== css[g]) el.textContent = css[g];
             }
+            const pop = this._themePopoutDoc();
+            // The popped-out window's body is what :host is in the page.
+            if (pop && pop.body) pop.body.style.backgroundColor = this._themeWindow;
             this._themeSync();
+        },
+
+        /** Where the two styles go: the shadow root, and while the viewer is popped
+         *  out the other window's <head> - the styles were copied there when it was
+         *  undocked, so a change made later reaches it only by being written there too. */
+        _themeHosts() {
+            const out = [this.shadowRoot];
+            const pop = this._themePopoutDoc();
+            if (pop && pop.head) out.push(pop.head);
+            return out;
+        },
+
+        _themePopoutDoc() {
+            const w = this.popoutWindow;
+            try {
+                if (!w || w.closed || !this.container || this.container.ownerDocument !== w.document) return null;
+                return w.document;
+            } catch (e) { return null; }
+        },
+
+        /** ComfyUI's palette is watched while the preset follows it: <html>'s inline
+         *  style (the variables), its class and data-theme, and <head>'s styles. */
+        _themeWatchComfy() {
+            if (this._themeComfyObs) return;
+            const doc = this.ownerDocument || (typeof document !== "undefined" ? document : null);
+            const MO = doc && doc.defaultView && doc.defaultView.MutationObserver;
+            if (!MO) return;
+            let timer = null;
+            const fire = () => {
+                timer = null;
+                if (readPref(THEME_PRESET_ID) !== COMFY) return;
+                const c = readComfy();
+                const sig = c ? JSON.stringify(c) : "";
+                if (sig === this._themeComfySig) return;
+                this._themeComfySig = sig;
+                this._themeApply();
+            };
+            const obs = new MO(() => { if (!timer) timer = setTimeout(fire, 30); });
+            obs.observe(doc.documentElement, { attributes: true, attributeFilter: ["style", "class", "data-theme"] });
+            if (doc.head) obs.observe(doc.head, { childList: true });
+            this._themeComfyObs = obs;
+            const c = readComfy();
+            this._themeComfySig = c ? JSON.stringify(c) : "";
         },
 
         /** The viewer's colours are on everywhere, or only while a cut's tab is up. */
         //  `onEdit`: whether a cut's tab is (about to be) up; left out, the tab that is up says.
         _themeSync(onEdit) {
             if (onEdit !== undefined) this._themeOnEdit = !!onEdit;
-            const el = this.shadowRoot && this.shadowRoot.querySelector('style[data-iv-theme="chrome"]');
-            if (!el) return;
+            if (!this.shadowRoot) return;
             const everywhere = readPref(THEME_SCOPE_ID) === "all";
             const edit = onEdit !== undefined ? !!onEdit
                 : this._themeOnEdit !== undefined ? this._themeOnEdit
                 : !!(this.isEditTab && this.isEditTab(this.activeTab));
             const on = everywhere || edit;
-            el.media = on ? "all" : "not all";
+            for (const host of this._themeHosts()) {
+                const el = host.querySelector('style[data-iv-theme="chrome"]');
+                if (el) el.media = on ? "all" : "not all";
+            }
         },
     };
 }
