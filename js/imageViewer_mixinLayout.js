@@ -18,16 +18,29 @@ export const LayoutMixin = {
         return (this._viewerWindow && this._viewerWindow()) || window;
     },
 
-    async loadLayouts() {
-        try {
-            const res = await api.getUserData("imageViewer_layouts.json");
-            if (res.status === 200) {
-                this.customLayouts = await res.json();
-                this.refreshLayoutMenu();
-            }
-        } catch (e) {
-            console.log("imageViewer: No saved layouts found in user folder.");
+    /**
+     * A user-data JSON file by its name, else by its name from before the
+     * rename (bEpicViewer_*.json, until 1.18) - null when neither is there.
+     * The first save writes the new name; the old file is left alone.
+     */
+    async _readUserJson(name) {
+        for (const n of [`imageViewer_${name}`, `bEpicViewer_${name}`]) {
+            try {
+                const res = await api.getUserData(n);
+                if (res.status === 200) return await res.json();
+            } catch (e) { /* not there, or not JSON: try the next */ }
         }
+        return null;
+    },
+
+    async loadLayouts() {
+        const saved = await this._readUserJson("layouts.json");
+        if (saved && typeof saved === "object") this.customLayouts = saved;
+        else console.log("imageViewer: No saved layouts found in user folder.");
+        // Always: the menu's own items (Factory Default, dock, Store Current...)
+        // do not depend on a saved file. Built only after a 200 before, so with
+        // no layouts file - every user since the rename - it stayed empty.
+        this.refreshLayoutMenu();
     },
 
     refreshLayoutMenu() {
@@ -102,14 +115,9 @@ export const LayoutMixin = {
     },
 
     async loadFactoryDefault() {
-        try {
-            const res = await api.getUserData("imageViewer_factory_default.json");
-            if (res.status === 200) {
-                this.factoryDefaultLayout = await res.json();
-            }
-        } catch (e) {
-            console.log("imageViewer: no saved factory default layout found");
-        }
+        const saved = await this._readUserJson("factory_default.json");
+        if (saved && typeof saved === "object") this.factoryDefaultLayout = saved;
+        else console.log("imageViewer: no saved factory default layout found");
         if (!this.factoryDefaultLayout) {
             this.factoryDefaultLayout = {
                 top: "60px", left: "60px",
