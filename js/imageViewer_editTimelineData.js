@@ -269,7 +269,8 @@ const copy = (cut) => ({
     off: { ...(cut.off || {}) },
     lock: { ...(cut.lock || {}) },
     auto: { ...(cut.auto || {}) },
-    // Track effects of the bed (A1); the other tracks carry theirs (k.afx). Chains are replaced, never changed in place.
+    // Track effects of the bed (A1) and of the master (the mix, `master`); the other tracks carry theirs (k.afx).
+    // Chains are replaced, never changed in place.
     afx: { ...(cut.afx || {}) },
     // Timeline markers (a list replaced, never changed in place - as a clip's own `markers`).
     markers: [...(cut.markers || [])],
@@ -600,6 +601,7 @@ export function removeTrack(cut, id) {
 export function setTrackOff(cut, id, off) {
     const next = copy(cut);
     if (id === "V1" || id === "A1" || id === "T") next.off[id] = !!off;
+    else if (id === MASTER) { if (off) next.off[MASTER] = true; else delete next.off[MASTER]; }
     else { const k = trackOf(next, id); if (k) k.off = !!off; }
     return next;
 }
@@ -989,9 +991,10 @@ export function sameCut(a, b) {
         tracks: ((cut && cut.tracks) || []).map((k) => [k.kind, k.name, !!k.off, !!k.lock, k.auto !== false, JSON.stringify(cleanAfx(k.afx)), (k.clips || []).map((c) =>
             [Array.isArray(c.ref) ? c.ref.join(":") : c.title ? "title" : c.file, c.name, round(num(c.at)), round(num(c.in)), round(num(c.length)), ...dress(c)])]),
         sound: ((cut && cut.sound) || []).map((s) => [String(s.file || s.name || ""), round(num(s.fadeIn)), round(num(s.fadeOut))]),
-        off: [!!(cut && cut.off && cut.off.V1), !!(cut && cut.off && cut.off.A1), !!(cut && cut.off && cut.off.T)],
+        off: [!!(cut && cut.off && cut.off.V1), !!(cut && cut.off && cut.off.A1), !!(cut && cut.off && cut.off.T), !!(cut && cut.off && cut.off.master)],
         flags: ["V1", "A1", "T"].map((id) => [!!(cut && cut.lock && cut.lock[id]), !(cut && cut.auto && cut.auto[id] === false)]),
         afx: JSON.stringify(cleanAfx(cut && cut.afx && cut.afx.A1)),
+        master: JSON.stringify(cleanAfx(cut && cut.afx && cut.afx.master)),
         markers: JSON.stringify(cleanMarkers(cut && cut.markers)),
     });
     return key(a) === key(b);
@@ -1039,10 +1042,10 @@ export function toSave(cut) {
         })),
         // The bed's clips that are left (one deleted in the panel goes from the file too).
         sound: (cut.sound || []).map((s) => ({ name: s.name || "", file: s.file || "", fadeIn: round(num(s.fadeIn)), fadeOut: round(num(s.fadeOut)) })),
-        off: { V1: !!(cut.off && cut.off.V1), A1: !!(cut.off && cut.off.A1), T: !!(cut.off && cut.off.T) },
+        off: { V1: !!(cut.off && cut.off.V1), A1: !!(cut.off && cut.off.A1), T: !!(cut.off && cut.off.T), master: !!(cut.off && cut.off.master) },
         lock: Object.fromEntries(["V1", "A1", "T"].map((id) => [id, !!(cut.lock && cut.lock[id])])),
         auto: Object.fromEntries(["V1", "A1", "T"].map((id) => [id, !(cut.auto && cut.auto[id] === false)])),
-        afx: { A1: cleanAfx(cut.afx && cut.afx.A1) },
+        afx: { A1: cleanAfx(cut.afx && cut.afx.A1), master: cleanAfx(cut.afx && cut.afx.master) },
         markers: cleanMarkers(cut.markers),
     };
 }
@@ -1767,6 +1770,7 @@ export function agentLoses(cut) {
     if (all.some((c) => c.title)) out.push("how the titles look (font, style, alignment, outline, shadow, box: agentY draws them as captions or by their preset)");
     if (all.some((c) => c.xfade || num(c.fadeIn) > 0 || num(c.fadeOut) > 0)) out.push("audio crossfades and fades");
     if (cutHasAfx(cut)) out.push("sound effects (EQ, compressor, reverb ... of clips and tracks)");
+    if (masterActive(cut)) out.push("the Mixer's master (its fader, pan and switch)");
     if (((cut && cut.clips) || []).some((c) => num(c.transition) > 0 && cleanTfx(c.tfx))) out.push("dips to a colour and wipes (agentY plays them as cross dissolves)");
     return out;
 }
@@ -4615,12 +4619,26 @@ export function setClipAfx(cut, sel, list) {
 
 /** May track `id` carry effects: a sound track, or the bed (A1). */
 export function afxTrack(cut, id) {
-    return id === "A1" || (trackOf(cut, id) || {}).kind === "audio";
+    return id === "A1" || id === MASTER || (trackOf(cut, id) || {}).kind === "audio";
 }
 
-/** A track's effects ("A1": the bed's). */
+/**
+ * The master: the Mixer's last strip, the whole mix on its way out. Its fader and pan are
+ * a chain like a track's (its last Gain and Pan effects, `cut.afx.master`), its M is
+ * `cut.off.master` - the film's sound switched off (not heard, not rendered). It has no
+ * solo and no lock: it is not a track.
+ */
+export const MASTER = "master";
+
+/** Is the master doing anything (a chain with an effect on, or switched off)? */
+export function masterActive(cut) {
+    return !!(cut && cut.off && cut.off[MASTER]) || afxActive(trackAfx(cut, MASTER));
+}
+
+/** A track's effects ("A1": the bed's, "master": the mix's). */
 export function trackAfx(cut, id) {
     if (id === "A1") return cleanAfx(cut && cut.afx && cut.afx.A1);
+    if (id === MASTER) return cleanAfx(cut && cut.afx && cut.afx.master);
     return cleanAfx((trackOf(cut, id) || {}).afx);
 }
 
@@ -4629,6 +4647,7 @@ export function setTrackAfx(cut, id, list) {
     const next = copy(cut);
     const chain = cleanAfx(list);
     if (id === "A1") { if (chain.length) next.afx.A1 = chain; else delete next.afx.A1; return next; }
+    if (id === MASTER) { if (chain.length) next.afx.master = chain; else delete next.afx.master; return next; }
     const k = trackOf(next, id);
     if (!k || k.kind !== "audio") return next;
     if (chain.length) k.afx = chain; else delete k.afx;

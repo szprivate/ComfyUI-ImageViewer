@@ -2,12 +2,14 @@
 // The Edit tab's Mixer (dock id `editMixer`, the bar's Timeline group), as
 // Resolve's: a strip per sound source - V1 (the films' own sound), A1 (the bed)
 // and every sound track - with a meter, a fader, a pan, the track's switch (M)
-// and its solo (S), and a master meter.
+// and its solo (S), and the master: the whole mix on its way out, with a meter,
+// a fader, a pan and its switch (M: the film's sound off, not heard, not rendered).
 //
 // It is a face over what is there, not a second model: the fader is the track's
 // last Gain effect and the pan its last Pan effect (imageViewer_audioFxData.js
 // mixerLevel / setMixerLevel), so the render, the file and Export to Resolve's
-// bake already know them. V1 has no track effects (its sound is each film's own,
+// bake already know them. The master's chain is `cut.afx.master` (D.MASTER), on the
+// mix after every track; its M is `cut.off.master`. V1 has no track effects (its sound is each film's own,
 // at the clip's volume), so its strip is a meter. A keyed fader or pan takes a
 // key at the playhead. A move is one undo step, made when the fader is let go;
 // while it is dragged the bus's gain follows it (`_editMixLive`).
@@ -38,6 +40,7 @@ export const EditMixerMixin = {
         for (const k of (cut && cut.tracks) || []) {
             if (k.kind === "audio") out.push({ id: k.id, name: k.name || k.id, note: "", fader: true });
         }
+        out.push({ id: D.MASTER, name: "Master", note: "the whole mix, after every track", fader: true, master: true });
         return out;
     },
 
@@ -70,10 +73,6 @@ export const EditMixerMixin = {
         };
         const body = el("div", "mix-body");
         for (const s of strips) body.append(this._editMixStrip(doc, el, cut, s, t, view));
-        const master = el("div", "mix-strip mix-master");
-        master.dataset.track = "master";
-        master.append(el("div", "mix-name", "Master"), this._editMixMeter(el, "master"), el("div", "mix-db", ""));
-        body.append(master);
         // Only the strips are redrawn: the panel's title bar (the dock's, its drag handle) stays.
         const old = host.querySelector(":scope > .mix-body");
         if (old) old.replaceWith(body); else host.append(body);
@@ -81,7 +80,7 @@ export const EditMixerMixin = {
     },
 
     _editMixOff(cut, id) {
-        if (id === "V1" || id === "A1") return !!(cut.off && cut.off[id]);
+        if (id === "V1" || id === "A1" || id === D.MASTER) return !!(cut.off && cut.off[id]);
         return !!(D.trackOf(cut, id) || {}).off;
     },
 
@@ -95,7 +94,7 @@ export const EditMixerMixin = {
     },
 
     _editMixStrip(doc, el, cut, s, t, view) {
-        const strip = el("div", "mix-strip");
+        const strip = el("div", "mix-strip" + (s.master ? " mix-master" : ""));
         strip.dataset.track = s.id;
         const name = el("div", "mix-name", s.name);
         name.title = s.note ? `${s.name}: ${s.note}` : s.name;
@@ -115,7 +114,7 @@ export const EditMixerMixin = {
             fader.value = String(Math.max(FLOOR, Math.min(FADER_TOP, g.v)));
             fader.dataset.field = "gain";
             fader.disabled = locked;
-            fader.title = `${s.name}: the track's level (its Gain effect)` + (g.keyed ? " - keyed: a move is a key at the playhead" : "")
+            fader.title = (s.master ? "Master: the level of the whole mix" : `${s.name}: the track's level (its Gain effect)`) + (g.keyed ? " - keyed: a move is a key at the playhead" : "")
                 + ". Double-click: 0 dB.";
             const say = (v) => { read.textContent = (v > 0 ? "+" : "") + (Math.round(v * 10) / 10).toFixed(1) + " dB"; };
             say(g.v);
@@ -163,11 +162,13 @@ export const EditMixerMixin = {
             return b;
         };
         const off = this._editMixOff(cut, s.id);
-        btns.append(btn("M", off ? "Switched off - click to switch it on (as the track header's switch: not heard, not rendered)"
+        btns.append(btn("M", s.master ? (off ? "The film's sound is off - click to switch it on" : "Switch the film's sound off (not heard, not rendered)")
+                               : off ? "Switched off - click to switch it on (as the track header's switch: not heard, not rendered)"
                                  : "Switch this track off (as the track header's switch: not heard, not rendered)", off, () => {
             this._editTlApply(D.setTrackOff(this._editTlCut, s.id, !off));
+            if (s.master && this._editAfxMasterSync) this._editAfxMasterSync();
         }));
-        btns.append(btn("S", "Solo: play only the soloed tracks (not saved, not rendered)", !!(view.solo && view.solo[s.id]), () => {
+        if (!s.master) btns.append(btn("S", "Solo: play only the soloed tracks (not saved, not rendered)", !!(view.solo && view.solo[s.id]), () => {
             const v = this._editTlView;
             if (!v) return;
             v.solo = v.solo || {};
@@ -191,13 +192,14 @@ export const EditMixerMixin = {
         if (JSON.stringify(next) === JSON.stringify(chain)) { this._editMixRender(); return false; }
         const ok = this._editTlApply(D.setTrackAfx(cut, id, next));
         if (ok === false) this._editMixRender();
+        else if (id === D.MASTER && this._editAfxMasterSync) this._editAfxMasterSync();
         return ok !== false;
     },
 
     // While a fader is dragged: the bus's own gain follows it (the chain is set when it is let go).
     _editMixLive(id, db) {
         const ctx = ((this._viewerWindow && this._viewerWindow()) || window).__imageViewerAfxCtx;
-        const bus = ctx && ctx.__buses && ctx.__buses[id];
+        const bus = ctx && (id === D.MASTER ? ctx.__master : ctx.__buses && ctx.__buses[id]);
         if (!bus) return;
         if (db === null) { try { bus.input.gain.value = 1; } catch (_) {} return; }
         const was = A.mixerLevel(D.trackAfx(this._editTlCut, id), "gain", this._editMixTime()).v;

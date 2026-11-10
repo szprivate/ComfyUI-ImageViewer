@@ -1175,18 +1175,42 @@ def editable(doc):
                                  "file": _file(child.get("media_reference")), **bed_fades(child)})
     out["tracks"] = extra_tracks(doc)
     out["off"] = {"V1": _is_off(video), "A1": _is_off(audio),
-                  "T": bool(_imageviewer(stack).get("texts_off"))}
+                  "T": bool(_imageviewer(stack).get("texts_off")),
+                  "master": bool(_imageviewer(stack).get("master_off"))}
     flags = {"V1": track_flags(video), "A1": track_flags(audio),
              "T": {"lock": bool(_imageviewer(stack).get("texts_lock")), "auto": _imageviewer(stack).get("texts_auto") is not False}}
     out["lock"] = {k: v["lock"] for k, v in flags.items()}
     out["auto"] = {k: v["auto"] for k, v in flags.items()}
-    out["afx"] = {"A1": flags["A1"].get("afx") or []}
+    out["afx"] = {"A1": flags["A1"].get("afx") or [],
+                  # The Mixer's master (its fader and pan, and any effect on the whole mix), on the stack.
+                  "master": _afx().clean_chain(_imageviewer(stack).get("master_afx"))}
     out["markers"] = read_markers(video)
     compounds = compounds_of(_imageviewer(doc))
     if compounds:
         out["compounds"] = compounds
     # The texts (markers) as title clips: the panel, the render and the Resolve export all work on those.
     return texts_to_titles(out)
+
+
+def _set_master(doc, values):
+    """The Mixer's master (``master_off``, ``master_afx``) in the stack's metadata.imageviewer; a value
+    at rest (False, an empty chain) is taken out, so a cut that never used it stays as it was."""
+    stack = doc.get("tracks")
+    if not isinstance(stack, dict):
+        return
+    meta = stack.setdefault("metadata", {})
+    if not isinstance(meta, dict):
+        return
+    note = meta.setdefault("imageviewer", {})
+    if not isinstance(note, dict):
+        return
+    for key, value in values.items():
+        if value:
+            note[key] = value
+        else:
+            note.pop(key, None)
+    if not note:
+        meta.pop("imageviewer", None)
 
 
 def edit_length(edit):
@@ -1531,9 +1555,13 @@ def rebuild(doc, edit, stamp="", may_use=None):
                 note = stack_meta.setdefault("imageviewer", {})
                 if isinstance(note, dict):
                     note["texts_off"] = bool(off["T"])
+        if "master" in off:
+            _set_master(new, {"master_off": bool(off["master"])})
     afx = edit.get("afx")
     if isinstance(afx, dict) and "A1" in afx and audio is not None:
         _set_flags(audio, {"afx": afx.get("A1")})
+    if isinstance(afx, dict) and "master" in afx:
+        _set_master(new, {"master_afx": _afx().clean_chain(afx.get("master"))})
     for flag in ("lock", "auto"):
         given = edit.get(flag)
         if not isinstance(given, dict):

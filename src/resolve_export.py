@@ -471,6 +471,11 @@ def build_model(doc, probes, frames=None, empty_ok=False):
     lost = [os.path.basename(str(p.get("missing"))) for p in full if p.get("missing")]
     if lost:
         say("Missing, a gap in its place on V1: " + ", ".join(sorted(set(lost))))
+    from . import audio_fx
+    if (edit.get("off") or {}).get("master"):
+        say("The Mixer's master is switched off: the film is silent in the viewer, the sound comes along in Resolve.")
+    if audio_fx.active((edit.get("afx") or {}).get("master")):
+        say("The Mixer's master (its fader, pan and effects on the whole mix) is not carried: set it on Resolve's Main bus.")
     skipped = sorted({os.path.basename(path) for path in used_files(doc) if info_of(path) is None})
     if skipped:
         say("Files that are not there and so are not in the package: " + ", ".join(skipped))
