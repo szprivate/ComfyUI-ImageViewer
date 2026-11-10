@@ -125,3 +125,116 @@ test("a node with nothing to hang under goes right of the others, not on top of 
     assert.ok(r.x >= bg.x + C.NODE_W, `${r.x}`);
     assert.equal(r.y, Math.min(...comp.nodes.map((n) => n.y)));
 });
+
+// ── the nodes added after the first seven ───────────────────────────────────
+import * as O from "../js/imageViewer_compOps.js";
+
+const solid = (w, h, rgba) => { const p = C.blank(w, h); for (let i = 0; i < w * h * 4; i += 4) p.data.set(rgba, i); return p; };
+/** A smooth pattern moved by (dx, dy) a frame. */
+const pattern = (w, h, f, dx, dy) => {
+    const p = C.blank(w, h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const u = (x - dx * f) / 7, v = (y - dy * f) / 9;
+        const g = 0.5 + 0.25 * Math.sin(u) * Math.cos(v) + 0.2 * Math.sin(u * 0.37 + v * 0.71);
+        p.data.set([g, g * 0.8, g * 0.6, 1], (y * w + x) * 4);
+    }
+    return p;
+};
+
+test("the optical flow finds a picture moving by a pixel and a half to the right and one up", () => {
+    const w = 64, h = 48;
+    const g0 = O.greyOf(pattern(w, h, 0, 1.5, -1)), g1 = O.greyOf(pattern(w, h, 1, 1.5, -1));
+    const { u, v } = O.opticalFlow(g0, g1, w, h);
+    let su = 0, sv = 0, n = 0;
+    for (let y = 8; y < h - 8; y++) for (let x = 8; x < w - 8; x++) { su += u[y * w + x]; sv += v[y * w + x]; n++; }
+    assert.ok(Math.abs(su / n - 1.5) < 0.2, `u ${su / n}`);
+    assert.ok(Math.abs(sv / n + 1) < 0.2, `v ${sv / n}`);
+});
+
+test("Vectors and MotionBlur read the frames around the playhead; a Retime reads the frame it maps to", () => {
+    const comp = C.newComp({ width: 8, height: 8 });
+    const r = C.addNode(comp, read(comp, "a.mov"));
+    const v = C.addNode(comp, C.makeNode(comp, "vectors", { inputs: [r.id] }));
+    const t = C.addNode(comp, C.makeNode(comp, "retime", { inputs: [r.id], speed: 2, start: 1 }));
+    const mb = C.addNode(comp, C.makeNode(comp, "motionblur", { inputs: [r.id, null] }));
+    assert.deepEqual(C.sourceNeeds(comp, v.id, 5).map((x) => x.frame), [4, 5, 6]);
+    assert.deepEqual(C.sourceNeeds(comp, mb.id, 5).map((x) => x.frame), [4, 5, 6]);
+    assert.deepEqual(C.sourceNeeds(comp, t.id, 5).map((x) => x.frame), [9]);
+    t.blend = "mix"; t.speed = 0.5;
+    assert.deepEqual(C.sourceNeeds(comp, t.id, 4).map((x) => x.frame), [2, 3], "1 + 3 x 0.5 = 2.5: frames 2 and 3");
+    const seen = [];
+    C.renderNode(comp, t.id, 4, { scale: 1, source: (n, f) => { seen.push(f); return solid(8, 8, [f / 10, 0, 0, 1]); } });
+    assert.deepEqual(seen.sort(), [2, 3]);
+    const img = C.renderNode(comp, t.id, 4, { scale: 1, source: (n, f) => solid(8, 8, [f / 10, 0, 0, 1]) });
+    assert.ok(Math.abs(img.data[0] - 0.25) < 1e-6, "half way between frame 2 and 3");
+});
+
+test("a heavy node's result is kept between renders and taken again while nothing upstream changed", () => {
+    const comp = C.newComp({ width: 16, height: 16 });
+    const r = C.addNode(comp, read(comp, "a.png"));
+    const d = C.addNode(comp, C.makeNode(comp, "depthblur", { inputs: [r.id, r.id] }));
+    const g = C.addNode(comp, C.makeNode(comp, "grade", { inputs: [d.id] }));
+    const cache = new Map();
+    let calls = 0;
+    const source = () => { calls++; return pattern(16, 16, 0, 0, 0); };
+    C.renderNode(comp, g.id, 0, { scale: 1, source, cache });
+    const after = calls;
+    g.gain = 2;
+    C.renderNode(comp, g.id, 0, { scale: 1, source, cache });
+    assert.equal(calls, after, "the depth blur came from the cache");
+    d.focus = 0.1;
+    C.renderNode(comp, g.id, 0, { scale: 1, source, cache });
+    assert.ok(calls > after, "its own setting changed: made again");
+});
+
+test("the keyer takes the screen out and keeps the rest; despill takes green out of an edge", () => {
+    const p = { mode: "chroma", screen: [0.1, 0.8, 0.1, 1], tolerance: 0.2, softness: 0.3, despill: 1 };
+    const img = C.blank(3, 1);
+    img.data.set([0.1, 0.8, 0.1, 1, 0.6, 0.3, 0.2, 1, 0.4, 0.5, 0.35, 1]);
+    const out = O.keyImage(img, p);
+    assert.ok(out.data[3] < 1e-6, "the screen is gone");
+    assert.ok(out.data[7] > 0.99, "a skin tone stays");
+    assert.ok(out.data[9] <= 0.4 * out.data[11] + 1e-6 || out.data[9] < 0.5, "green pulled down to the larger of red and blue");
+    const luma = O.keyImage(img, { ...p, mode: "luma", tolerance: 0.2, softness: 0.1 });
+    assert.ok(luma.data[3] > 0.99 && luma.data[7] > 0.99);
+});
+
+test("a roto shape covers its area, a feather softens it, a subtract cuts it, and its keys move it", () => {
+    const sq = { pts: [[2, 2], [12, 2], [12, 8], [2, 8]], smooth: false };
+    let m = O.rotoMatte([sq], 0, 16, 10, 1);
+    assert.ok(Math.abs(m.reduce((a, b) => a + b, 0) - 60) < 1e-9, "10 x 6 pixels");
+    m = O.rotoMatte([sq, { pts: [[2, 2], [7, 2], [7, 8], [2, 8]], smooth: false, mode: "subtract" }], 0, 16, 10, 1);
+    assert.ok(Math.abs(m.reduce((a, b) => a + b, 0) - 30) < 1e-9);
+    const soft = O.rotoMatte([{ ...sq, feather: 3 }], 0, 16, 10, 1);
+    assert.ok(soft[5 * 16 + 1] > 0.01 && soft[5 * 16 + 1] < 0.5, "the feather reaches out");
+    const moving = { smooth: false, keys: [{ f: 0, pts: sq.pts }, { f: 10, pts: sq.pts.map(([x, y]) => [x + 2, y]) }] };
+    assert.deepEqual(O.shapePoints(moving, 5)[0], [3, 2]);
+    assert.deepEqual(O.shapePoints(moving, 20)[0], [4, 2]);
+});
+
+test("crop, shuffle, copy, premult and unpremult", () => {
+    const img = solid(4, 2, [0.2, 0.4, 0.6, 0.5]);
+    const cr = O.cropImage(img, 1, 0, 2.5, 2, 0);
+    assert.deepEqual([cr.data[0], cr.data[4 * 1 + 3], cr.data[4 * 2 + 3]].map((x) => Math.round(x * 1e6) / 1e6), [0, 0.5, 0.25]);
+    const sh = O.shuffleImage(img, ["a", "a", "a", "1"]);
+    assert.deepEqual(Array.from(sh.data.slice(0, 4)), [0.5, 0.5, 0.5, 1]);
+    const cp = O.copyImage(img, solid(4, 2, [1, 1, 1, 0.25]), ["B", "B", "0", "A.a"]);
+    assert.deepEqual(Array.from(cp.data.slice(0, 4)).map((x) => Math.round(x * 1e6) / 1e6), [0.2, 0.4, 0, 0.25]);
+    const back = O.premultImage(O.unpremultImage(img));
+    for (let k = 0; k < 4; k++) assert.ok(Math.abs(back.data[k] - img.data[k]) < 1e-6);
+});
+
+test("depth blur leaves the focus sharp and blurs what is far from it", () => {
+    const w = 24, h = 8;
+    const img = C.blank(w, h), depth = C.blank(w, h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4, on = x % 2 ? 1 : 0;
+        img.data.set([on, on, on, 1], i);
+        const z = x < 12 ? 0.5 : 1;
+        depth.data.set([z, z, z, 1], i);
+    }
+    const out = O.depthBlurImage(img, depth, { channel: "r", focus: 0.5, dof: 0.1, falloff: 0.3, size: 6, layers: 6 });
+    const at = (x) => out.data[(4 * w + x) * 4];
+    assert.ok(Math.abs(at(3) - 1) < 1e-6 && Math.abs(at(4)) < 1e-6, "in focus: the stripes stay");
+    assert.ok(Math.abs(at(19) - 0.5) < 0.15 && Math.abs(at(20) - 0.5) < 0.15, "out of focus: the stripes are grey");
+});

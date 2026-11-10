@@ -76,6 +76,65 @@ def cases():
         c.append(({"comp": comp([read(3, fit=fit), out("Read3")], w=40, h=24), "scale": 0.5}, {"Read3": s3}))
     straight = {"Read1": src(9, alpha=False)}
     c.append(({"comp": comp([read(1, colorspace="linear"), out("Read1")])}, straight))
+    c.extend(new_node_cases(sources))
+    return c
+
+
+def node(t, i, ins, **kw):
+    return dict({"id": f"{t}{i}", "type": t, "inputs": ins}, **kw)
+
+
+def moving(seed, frames, w=40, h=32, dx=1.5, dy=-1.0):
+    """A smooth picture moving by (dx, dy) a frame: sources keyed Read1@f."""
+    rng = np.random.default_rng(seed)
+    base = rng.random((6, 6, 3))
+    out = {}
+    for f in frames:
+        ys, xs = np.mgrid[0:h, 0:w].astype(np.float64)
+        u = (xs - dx * f) / w * 5
+        v = (ys - dy * f) / h * 5
+        rgb = sum(base[i, j] * (np.cos(u * (i + 1) * 0.7 + j)[..., None] * np.sin(v * (j + 1) * 0.6 + i)[..., None])
+                  for i in range(3) for j in range(3))
+        rgb = (rgb - rgb.min()) / (rgb.max() - rgb.min())
+        u8 = np.concatenate([(rgb * 255).astype(np.uint8), np.full((h, w, 1), 255, np.uint8)], axis=2)
+        out[f"Read1@{f}"] = u8
+    return out
+
+
+def new_node_cases(sources):
+    c = []
+    one = lambda n, srcs=sources, **kw: ({"comp": comp([read(1), read(2), n, out(n["id"])], **kw.pop("cw", {})), **kw}, srcs)
+    c.append(one(node("crop", 1, ["Read1"], topleft=[3.3, 2.6], bottomright=[20.2, 14.7])))
+    c.append(one(node("crop", 1, ["Read1"], topleft=[3.3, 2.6], softness=2.5)))
+    c.append(one(node("shuffle", 1, ["Read1"], r="b", g="r", b="a", a="1")))
+    c.append(one(node("copy", 1, ["Read1", "Read2"], r="A.r", g="B", b="0", a="A.a")))
+    c.append(one(node("premult", 1, ["Read1"])))
+    c.append(one(node("unpremult", 1, ["Read1"])))
+    green = src(11)
+    green[..., 1] = np.maximum(green[..., 1], 200)
+    green[:8, :, 1] = 40
+    for mode in ("chroma", "luma"):
+        c.append(one(node("keyer", 1, ["Read1"], mode=mode, screen=[0.1, 0.8, 0.12, 1], tolerance=0.2, softness=0.35, despill=0.7),
+                     {"Read1": green}))
+    shapes = [{"pts": [[2, 2], [24, 3.5], [20, 15], [5, 12]], "smooth": True, "feather": 1.5},
+              {"pts": [[8, 5], [16, 5], [12, 11]], "smooth": False, "mode": "subtract"},
+              {"pts": [[1, 1], [6, 1], [6, 6]], "smooth": False,
+               "keys": [{"f": 0, "pts": [[1, 1], [6, 1], [6, 6]]}, {"f": 10, "pts": [[11, 6], [26, 1], [16, 16]]}]}]
+    c.append(one(node("roto", 1, [None], shapes=shapes), frame=4))
+    c.append(one(node("roto", 1, ["Read1"], shapes=shapes), frame=7, scale=0.5))
+    frames = moving(5, range(0, 8))
+    big = {"w": 40, "h": 32}
+    for kw in ({"speed": 0.5, "offset": 1}, {"speed": 0.75, "start": 2, "blend": "mix"}, {"speed": -1, "offset": 6}):
+        c.append(one(node("retime", 1, ["Read1"], **kw), frames, frame=3, cw=big))
+    vec = node("vectors", 1, ["Read1"], iterations=12)
+    for detail in ("full", "half", "quarter"):
+        c.append(({"comp": comp([read(1), dict(vec, detail=detail), out("vectors1")], **big), "frame": 4}, frames))
+    c.append(({"comp": comp([read(1), vec, node("motionblur", 1, ["Read1", "vectors1"], shutter=0.8, samples=7),
+                             out("motionblur1")], **big), "frame": 4}, frames))
+    c.append(({"comp": comp([read(1), node("motionblur", 1, ["Read1", None], shutter=1.2, samples=5, offset="end"),
+                             out("motionblur1")], **big), "frame": 3, "scale": 0.5}, frames))
+    for ch in ("r", "luminance"):
+        c.append(one(node("depthblur", 1, ["Read1", "Read2"], channel=ch, focus=0.4, dof=0.1, falloff=0.25, size=6, layers=5)))
     return c
 
 
@@ -90,7 +149,7 @@ class CompParity(unittest.TestCase):
         for spec_, sources in cls.cases:
             payload.append({"comp": spec_["comp"], "frame": spec_.get("frame", 0), "scale": spec_.get("scale", 1),
                             "sources": {k: {"w": int(v.shape[1]), "h": int(v.shape[0]), "u8": v.reshape(-1).tolist(),
-                                            "linear": next((n.get("colorspace") == "linear" for n in spec_["comp"]["nodes"] if n["id"] == k), False)}
+                                            "linear": next((n.get("colorspace") == "linear" for n in spec_["comp"]["nodes"] if n["id"] == k.split("@")[0]), False)}
                                         for k, v in sources.items()}})
         tmp = tempfile.mkdtemp()
         cls.tmp = tmp
@@ -125,9 +184,10 @@ class CompParity(unittest.TestCase):
                 c, _ = M.normalize(spec_["comp"])
                 pics = {}
                 for k, v in sources.items():
-                    node = M.node_by_id(c, k)
+                    node = M.node_by_id(c, k.split("@")[0])
                     pics[k] = M.decode8(v, linear=(node or {}).get("colorspace") == "linear")
-                img = M.render_node(c, c["output"], spec_.get("frame", 0), lambda n, f: pics.get(n["id"]), spec_.get("scale", 1))
+                img = M.render_node(c, c["output"], spec_.get("frame", 0),
+                                    lambda n, f: pics.get(f"{n['id']}@{f}", pics.get(n["id"])), spec_.get("scale", 1))
                 js = self.js["pictures"][i]
                 self.assertEqual((js["w"], js["h"]), (img.shape[1], img.shape[0]))
                 ref = np.asarray(js["data"], np.float32).reshape(img.shape)

@@ -26,11 +26,27 @@ The **Node Graph** panel is up when a comp opens. The picture runs from top to b
 |---|---|
 | Read | A picture, a film or a numbered sequence. *Offset* slides it in time; *Colourspace* auto treats EXR and HDR as linear, everything else as sRGB; *Fit* lays a picture of another size into the comp |
 | Constant | A colour over the whole frame |
+| Roto | Shapes drawn on the picture. Without an input it is a white matte, with one it cuts its input out. Each shape adds or subtracts, has a feather and can be animated |
 | Merge | Lays A over B (or plus, multiply, screen, in, out, atop, mask, stencil, and the rest of Nuke's operations), with a mix and an optional mask input |
+| Copy | B with some of its channels taken from A (for example A's alpha) |
 | Transform | Moves, rotates and scales about a centre |
+| Crop | Keeps a box of the picture, with a soft edge if you like |
 | Grade | Black and white point, lift, gain, multiply, offset, gamma, saturation, mix |
+| Keyer | Chroma (a screen colour, picked from the picture with ⌖) or luma, with tolerance, softness and despill |
 | Blur | A Gaussian blur, its size in pixels of the comp |
+| MotionBlur | Blurs along the motion while the shutter is open. It takes motion vectors from a Vectors node in its second input, or works them out itself |
+| DepthBlur | Blurs by the distance from the focus, read from a depth map in its second input (red, any channel, or luminance) |
+| Shuffle | Each channel from any channel, or 0 or 1 |
+| Premult / Unpremult | Multiply the colour by the alpha, or divide it back |
+| Retime | Plays its input faster, slower or backwards (*speed*, *start*, *offset*), the nearest frame or two mixed |
+| Vectors | Motion vectors measured from the footage (optical flow): red and green where each pixel goes in the next frame, blue and alpha where it came from. *Detail* half (the default) measures on a picture half the size, which is much faster |
 | Output | What the comp renders |
+
+Vectors, MotionBlur and DepthBlur take seconds a frame at full size. The picture keeps their results while you work further down the graph.
+
+### Drawing a Roto shape
+
+Select the Roto node and press **Draw a shape** in its Properties, then click the points on the picture. Click the first point again, double-click or press Enter to close the shape; Backspace takes the last point back, Esc stops. Drag a point to move it. The stopwatch beside a shape animates it: moving a point then sets a key at the playhead, and the shape moves in straight lines between keys.
 
 ## Properties
 

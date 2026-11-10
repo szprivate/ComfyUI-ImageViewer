@@ -195,6 +195,57 @@ class CompBrowserTests(unittest.TestCase):
         self.assertEqual(st, {"graph": False, "mode": False})
         self.assertEqual(self.errors, [])
 
+    def test_a_roto_shape_drawn_on_the_picture_and_the_new_nodes_rendered_by_the_server(self):
+        pg = self.page()
+        path = self.new_comp(pg)
+        # A Roto (no input: a white matte) straight into the Output.
+        pg.evaluate(f"""() => {{ const e = {self.ED}; const c = e.comp(); e.select([]);
+            const r = e.addNode('roto'); c.nodes.find((n) => n.type === 'output').inputs = [r.id]; e.select([r.id]); }}""")
+        pg.evaluate("() => __panel.compPropsPanel.querySelectorAll('button').forEach((b) => { if (b.textContent === 'Draw a shape') b.click(); })")
+        self.assertTrue(pg.evaluate(f"() => !!{self.ED}.state.draw"))
+        box = pg.evaluate(f"() => {{ const r = {self.ED}.canvas.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }}")
+        at = lambda fx, fy: (box[0] + box[2] * fx, box[1] + box[3] * fy)
+        for fx, fy in ((0.2, 0.2), (0.6, 0.2), (0.6, 0.7), (0.2, 0.7), (0.2, 0.2)):   # the last click closes it
+            pg.mouse.click(*at(fx, fy))
+        shapes = pg.evaluate(f"() => {self.ED}.comp().nodes.find((n) => n.type === 'roto').shapes")
+        self.assertEqual(len(shapes), 1)
+        self.assertEqual(len(shapes[0]["pts"]), 4)
+        self.assertFalse(pg.evaluate(f"() => !!{self.ED}.state.draw"))
+        pg.wait_for_timeout(600)
+        self.assertGreater(self.pixel(pg, 0.4, 0.45)[0], 200, "inside the shape: white")
+        self.assertLess(self.pixel(pg, 0.85, 0.45)[0], 30, "outside: black")
+        # Drag a corner: the shape follows, as one undo step.
+        pg.mouse.move(*at(0.6, 0.7)); pg.mouse.down(); pg.mouse.move(*at(0.8, 0.85), steps=4); pg.mouse.up()
+        moved = pg.evaluate(f"() => {self.ED}.comp().nodes.find((n) => n.type === 'roto').shapes[0].pts[2]")
+        fw, fh = pg.evaluate(f"() => [{self.ED}.comp().format.width, {self.ED}.comp().format.height]")
+        self.assertAlmostEqual(moved[0] / fw, 0.8, delta=0.02)
+        self.assertAlmostEqual(moved[1] / fh, 0.85, delta=0.02)
+        # Animate it: a key at 0, the corner moved at 10 sets a second key.
+        pg.evaluate(f"""() => {{ const e = {self.ED}; e.setFrame(0, {{ fromHost: true }}); }}""")
+        pg.evaluate("() => __panel.compPropsPanel.querySelector('.cp-shrow .mg-sw').click()")
+        pg.evaluate(f"""() => {{ const e = {self.ED}; e.setFrame(10, {{ fromHost: true }}); }}""")
+        pg.mouse.move(*at(0.8, 0.85)); pg.mouse.down(); pg.mouse.move(*at(0.7, 0.6), steps=4); pg.mouse.up()
+        keys = pg.evaluate(f"() => {self.ED}.comp().nodes.find((n) => n.type === 'roto').shapes[0].keys.map((k) => k.f)")
+        self.assertEqual(keys, [0, 10])
+        # The new nodes through the server's render: the roto cuts a constant, depth blur and a crop after it.
+        pg.evaluate(f"""() => {{ const e = {self.ED}; const c = e.comp(); const roto = c.nodes.find((n) => n.type === 'roto');
+            const bg = c.nodes.find((n) => n.type === 'constant'); bg.color = [1, 0, 0, 1]; roto.inputs = [bg.id];
+            e.select([roto.id]); const crop = e.addNode('crop', {{ topleft: [0, 0], bottomright: [c.format.width / 2, c.format.height] }});
+            e.select([crop.id]); e.addNode('depthblur', {{ size: 8 }}); e.refresh(); }}""")
+        pg.evaluate(f"() => {self.ED}.save()")
+        got = pg.evaluate("async (path) => __panel.compRender(path, { format: 'png', first: 0, last: 0 })", path)
+        self.assertTrue(got["ok"], got)
+        from PIL import Image
+        res = got["result"]
+        px = np.asarray(Image.open((res.get("paths") or [res["path"]])[0]).convert("RGBA")).astype(int)
+        h, w = px.shape[:2]
+        self.assertEqual(tuple(px[int(h * 0.3), int(w * 0.3)]), (255, 0, 0, 255), "inside the shape and the crop")
+        self.assertEqual(px[int(h * 0.3), int(w * 0.75), 3], 0, "cropped away")
+        self.assertEqual(px[int(h * 0.05), int(w * 0.05), 3], 0, "outside the shape")
+        if SHOTS:
+            pg.screenshot(path=os.path.join(SHOTS, "comp-roto.png"))
+        self.assertEqual(self.errors, [])
+
     def test_the_graph_in_comfyuis_bottom_panel(self):
         pg = self.page()
         self.new_comp(pg)

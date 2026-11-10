@@ -25,6 +25,9 @@
 // comp's size (times the preview scale). Sampling is bilinear at pixel centres; outside a picture is
 // transparent. Blur is Paint's (three box blurs, edge repeated; paint_math.blur_float).
 import { valueAt } from "./imageViewer_mgScene.js";
+import * as O from "./imageViewer_compOps.js";
+import { blank, blurImage, boxesForGauss } from "./imageViewer_compOps.js";
+export { blank, blurImage, boxesForGauss };
 
 export const COMP_VERSION = 1;
 export const COMP_SUFFIX = ".comp.json";
@@ -71,9 +74,62 @@ export const NODE_TYPES = {
     blur: { label: "Blur", cat: "Filter", inputs: ["src"], params: {
         size: { kind: "num", def: 10, min: 0, max: 500, key: true, step: 0.5, help: "In pixels of the comp" },
     } },
+    crop: { label: "Crop", cat: "Transform", inputs: ["src"], params: {
+        topleft: { kind: "vec2", def: [0, 0], key: true, step: 1, help: "The box's top left corner, in pixels of the comp" },
+        bottomright: { kind: "vec2", def: null, key: true, step: 1, help: "The box's bottom right corner. Empty: the comp's" },
+        softness: { kind: "num", def: 0, min: 0, key: true, step: 0.5, help: "A soft edge this many pixels wide" },
+    } },
+    shuffle: { label: "Shuffle", cat: "Channel", inputs: ["src"], params: {
+        r: { kind: "enum", def: "r", choices: O.SHUFFLE_CHOICES }, g: { kind: "enum", def: "g", choices: O.SHUFFLE_CHOICES },
+        b: { kind: "enum", def: "b", choices: O.SHUFFLE_CHOICES }, a: { kind: "enum", def: "a", choices: O.SHUFFLE_CHOICES },
+    } },
+    copy: { label: "Copy", cat: "Channel", inputs: ["B", "A"], params: {
+        r: { kind: "enum", def: "B", choices: O.COPY_CHOICES }, g: { kind: "enum", def: "B", choices: O.COPY_CHOICES },
+        b: { kind: "enum", def: "B", choices: O.COPY_CHOICES }, a: { kind: "enum", def: "A.a", choices: O.COPY_CHOICES, help: "B's channels, or one of A's" },
+    } },
+    premult: { label: "Premult", cat: "Channel", inputs: ["src"], params: {} },
+    unpremult: { label: "Unpremult", cat: "Channel", inputs: ["src"], params: {} },
+    retime: { label: "Retime", cat: "Time", inputs: ["src"], params: {
+        speed: { kind: "num", def: 1, step: 0.05, help: "2 plays twice as fast, 0.5 half as fast, -1 backwards" },
+        start: { kind: "int", def: 0, help: "The frame that stays where it is" },
+        offset: { kind: "num", def: 0, step: 1, help: "Frames to add to the input's frame" },
+        blend: { kind: "enum", def: "nearest", choices: ["nearest", "mix"], help: "Between frames: the nearest, or the two mixed" },
+    } },
+    keyer: { label: "Keyer", cat: "Keyer", inputs: ["src"], params: {
+        mode: { kind: "enum", def: "chroma", choices: O.KEYER_MODES },
+        screen: { kind: "color", def: [0.1, 0.55, 0.1, 1], key: true, help: "The screen's colour (chroma)" },
+        tolerance: { kind: "num", def: 0.3, min: 0, key: true, step: 0.01, help: "Up to here it is keyed out" },
+        softness: { kind: "num", def: 0.3, min: 0, key: true, step: 0.01, help: "Over this much more it becomes solid" },
+        despill: { kind: "num", def: 1, min: 0, max: 1, key: true, step: 0.05, help: "Takes the screen's colour out of the edges (chroma)" },
+    } },
+    roto: { label: "Roto", cat: "Draw", inputs: ["src"], params: {
+        shapes: { kind: "shapes", def: [] },
+    } },
+    vectors: { label: "Vectors", cat: "Time", inputs: ["src"], params: {
+        smoothness: { kind: "num", def: 0.04, min: 0.001, max: 1, step: 0.005, help: "Higher: smoother, less detailed motion" },
+        iterations: { kind: "int", def: 30, min: 1, max: 200, help: "More: slower, more exact" },
+        levels: { kind: "int", def: 4, min: 1, max: 8, help: "More: finds larger motion" },
+        detail: { kind: "enum", def: "half", choices: Object.keys(O.FLOW_DETAIL), help: "The picture the motion is measured on: smaller is much faster" },
+    } },
+    motionblur: { label: "MotionBlur", cat: "Filter", inputs: ["src", "vectors"], params: {
+        shutter: { kind: "num", def: 0.5, min: 0, max: 2, key: true, step: 0.05, help: "How long the shutter is open, in frames" },
+        samples: { kind: "int", def: 10, min: 1, max: 64, help: "Pictures averaged along the motion" },
+        offset: { kind: "enum", def: "centred", choices: O.SHUTTER_OFFSETS, help: "Where the shutter opens around the frame" },
+    } },
+    depthblur: { label: "DepthBlur", cat: "Filter", inputs: ["src", "depth"], params: {
+        channel: { kind: "enum", def: "r", choices: O.DEPTH_CHANNELS, help: "Where the depth map holds the depth" },
+        focus: { kind: "num", def: 0.5, key: true, step: 0.01, help: "The depth in focus" },
+        dof: { kind: "num", def: 0.05, min: 0, key: true, step: 0.01, help: "How deep the sharp part is" },
+        falloff: { kind: "num", def: 0.3, min: 0.001, key: true, step: 0.01, help: "How much further it takes to reach the full blur" },
+        size: { kind: "num", def: 20, min: 0, max: 200, key: true, step: 0.5, help: "The fullest blur, as Blur's size" },
+        layers: { kind: "int", def: 6, min: 2, max: 16, help: "Blur sizes between none and the fullest: more is smoother and slower" },
+    } },
     output: { label: "Output", cat: "Other", inputs: ["src"], params: {} },
 };
-export const TYPE_ORDER = ["read", "constant", "merge", "transform", "grade", "blur", "output"];
+export const TYPE_ORDER = ["read", "constant", "roto", "merge", "copy", "transform", "crop", "grade", "keyer", "blur",
+    "motionblur", "depthblur", "shuffle", "premult", "unpremult", "retime", "vectors", "output"];
+/** Nodes whose result is kept between renders (keyed by their whole upstream): they take long. */
+export const HEAVY = new Set(["vectors", "motionblur", "depthblur"]);
 export const NODE_W = 120;
 export const NODE_H = 30;
 
@@ -272,7 +328,8 @@ export function nodeKeyFrames(node) {
 
 // ── the stack the Layers panel shows ─────────────────────────────────────────
 
-const CHAIN = new Set(["transform", "grade", "blur"]);
+const CHAIN = new Set(["transform", "grade", "blur", "crop", "shuffle", "premult", "unpremult", "retime", "keyer", "vectors",
+    "motionblur", "depthblur", "copy"]);
 
 /**
  * The comp as layers, top first: [{ kind: "layer" | "background" | "group", merge?, chain: [ids top-down],
@@ -380,7 +437,6 @@ export function removeLayer(comp, i) {
 
 // ── pixels ───────────────────────────────────────────────────────────────────
 
-export function blank(w, h) { return { w, h, data: new Float32Array(w * h * 4) }; }
 
 export function srgbToLinear(c) { return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
 export function linearToSrgb(c) { return c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055; }
@@ -471,54 +527,6 @@ export function transformMatrix(node, frame, format, scale = 1) {
     return mat.mul(mat.t(t[0] * scale + cx, t[1] * scale + cy), mat.mul(mat.r(r), mat.mul(mat.s(sc[0], sc[1]), mat.t(-cx, -cy))));
 }
 
-export function boxesForGauss(sigma, n = 3) {
-    if (sigma <= 0) return new Array(n).fill(1);
-    const wIdeal = Math.sqrt((12 * sigma * sigma) / n + 1);
-    let wl = Math.floor(wIdeal);
-    if (wl % 2 === 0) wl -= 1;
-    const wu = wl + 2;
-    const mIdeal = (12 * sigma * sigma - n * wl * wl - 4 * n * wl - 3 * n) / (-4 * wl - 4);
-    const m = Math.round(mIdeal);
-    return Array.from({ length: n }, (_, i) => (i < m ? wl : wu));
-}
-
-/** Mean over 2r+1 along one axis, the edge value repeated (paint_math._box_axis), in place on a Float64Array. */
-function boxAxis(a, w, h, r, horizontal) {
-    if (r <= 0) return;
-    const n = horizontal ? w : h, lines = horizontal ? h : w;
-    const stride = horizontal ? 4 : w * 4, lineStep = horizontal ? w * 4 : 4;
-    const acc = new Float64Array(n + 2 * r + 2);
-    const div = 2 * r + 1;
-    for (let line = 0; line < lines; line++) {
-        const base = line * lineStep;
-        for (let ch = 0; ch < 4; ch++) {
-            // padded: r+1 copies of the first, the line, r copies of the last; cumulative sums
-            let sum = 0;
-            acc[0] = 0;
-            const P = n + 2 * r + 1;
-            for (let k = 0; k < P; k++) {
-                let idx = k - (r + 1);
-                if (idx < 0) idx = 0; else if (idx >= n) idx = n - 1;
-                sum += a[base + idx * stride + ch];
-                acc[k + 1] = sum;
-            }
-            for (let i = 0; i < n; i++) a[base + i * stride + ch] = (acc[i + 2 * r + 2] - acc[i + 1]) / div;
-        }
-    }
-}
-
-export function blurImage(img, size) {
-    const sigma = Math.max(0, size) / 2;
-    if (sigma <= 0) return img;
-    const a = Float64Array.from(img.data);
-    for (const s of boxesForGauss(sigma)) {
-        const r = (s - 1) >> 1;
-        boxAxis(a, img.w, img.h, r, true);
-        boxAxis(a, img.w, img.h, r, false);
-    }
-    return { w: img.w, h: img.h, data: Float32Array.from(a) };
-}
-
 export function gradeImage(img, p) {
     const out = blank(img.w, img.h), s = img.data, o = out.data;
     const A = (p.multiply * (p.gain - p.lift)) / ((p.whitepoint - p.blackpoint) || 1e-6);
@@ -565,64 +573,179 @@ export function mergeImages(Bimg, Aimg, Mimg, op, mix) {
     return out;
 }
 
+/** The input frame a Retime reads at comp frame `f`: start + (f - start) x speed + offset. */
+export function retimeFrame(node, f) {
+    const start = node.start || 0, speed = node.speed ?? 1, off = node.offset || 0;
+    return start + (f - start) * speed + off;
+}
+
+/** A node's own settings and everything upstream of it, as a string: what a kept result is valid for. */
+export function upstreamKey(comp, id) {
+    const seen = new Set(), parts = [];
+    const walk = (nid) => {
+        if (!nid || seen.has(nid)) return;
+        seen.add(nid);
+        const n = nodeById(comp, nid);
+        if (!n) return;
+        const { x, y, name, ...rest } = n;
+        parts.push(JSON.stringify(rest));
+        for (const s of n.inputs) walk(s);
+    };
+    walk(id);
+    return parts.join("|");
+}
+
 /**
- * The picture `id` makes at `frame`. ctx: { scale, source(node, frame) -> picture | null (a Read's / Input's
- * pixels at their own size, linear premultiplied), cache?: Map }. Returns a picture of the comp's size x scale.
+ * The picture `id` makes at `frame`. ctx: { scale, source(node, frame) -> picture | null (a Read's pixels at
+ * their own size, linear premultiplied), cache?: Map (kept between calls for the HEAVY nodes) }. Nodes that
+ * look at other times (Retime, Vectors, MotionBlur without vectors) render their input at those frames.
+ * Returns a picture of the comp's size x scale.
  */
 export function renderNode(comp, id, frame, ctx) {
     const scale = ctx.scale || 1;
     const W = Math.max(1, Math.round(comp.format.width * scale)), H = Math.max(1, Math.round(comp.format.height * scale));
     const memo = ctx.memo || (ctx.memo = new Map());
-    const run = (nid, depth) => {
+    const keys = new Map();
+    const run = (nid, f, depth) => {
         if (!nid || depth > 256) return blank(W, H);
-        if (memo.has(nid)) return memo.get(nid);
+        const mk = `${nid}@${f}`;
+        if (memo.has(mk)) return memo.get(mk);
         const n = nodeById(comp, nid);
-        let img;
-        if (!n) img = blank(W, H);
-        else if (n.disable) img = NODE_TYPES[n.type].inputs.length ? run(n.inputs[0], depth + 1) : blank(W, H);
-        else if (n.type === "read") {
-            const src = ctx.source ? ctx.source(n, frame) : null;
-            // A source may come shrunk (the page's proxy): `ow` x `oh` is the file's own size then.
-            const k = src ? scale * (src.ow ? src.ow / src.w : 1) : 1;
-            img = src ? resample(src, fitMatrix(src.w, src.h, W, H, n.fit || "fit", k), W, H) : blank(W, H);
-        } else if (n.type === "constant") {
-            const c = paramAt(n, "color", frame) || [0, 0, 0, 1];
-            img = blank(W, H);
-            const a = c[3];
-            for (let i = 0; i < W * H * 4; i += 4) { img.data[i] = c[0] * a; img.data[i + 1] = c[1] * a; img.data[i + 2] = c[2] * a; img.data[i + 3] = a; }
-        } else if (n.type === "merge") {
-            const B = run(n.inputs[0], depth + 1), A = run(n.inputs[1], depth + 1);
-            const M = n.inputs[2] ? run(n.inputs[2], depth + 1) : null;
-            img = mergeImages(B, A, M, n.operation || "over", paramAt(n, "mix", frame));
-        } else if (n.type === "transform") {
-            img = resample(run(n.inputs[0], depth + 1), transformMatrix(n, frame, comp.format, scale), W, H);
-        } else if (n.type === "grade") {
-            const p = {};
-            for (const k of Object.keys(NODE_TYPES.grade.params)) p[k] = paramAt(n, k, frame);
-            img = gradeImage(run(n.inputs[0], depth + 1), p);
-        } else if (n.type === "blur") {
-            img = blurImage(run(n.inputs[0], depth + 1), paramAt(n, "size", frame) * scale);
-        } else if (n.type === "output") img = run(n.inputs[0], depth + 1);
-        else img = blank(W, H);
-        memo.set(nid, img);
+        let ck = null;
+        if (n && !n.disable && HEAVY.has(n.type) && ctx.cache) {
+            if (!keys.has(nid)) keys.set(nid, upstreamKey(comp, nid));
+            ck = `${f}@${scale}@${keys.get(nid)}`;
+            if (ctx.cache.has(ck)) { const kept = ctx.cache.get(ck); memo.set(mk, kept); return kept; }
+        }
+        const img = make(n, f, depth);
+        memo.set(mk, img);
+        if (ck) {
+            ctx.cache.set(ck, img);
+            while (ctx.cache.size > (ctx.cacheMax || 24)) ctx.cache.delete(ctx.cache.keys().next().value);
+        }
         return img;
     };
-    return run(id, 0);
+    const vectorsOf = (srcId, f, depth, n) => O.vectorsImage(run(srcId, f - 1, depth), run(srcId, f, depth), run(srcId, f + 1, depth), {
+        smoothness: paramAt(n, "smoothness", f), iterations: paramAt(n, "iterations", f), levels: paramAt(n, "levels", f),
+        detail: paramAt(n, "detail", f) }, scale);
+    const make = (n, f, depth) => {
+        const d1 = depth + 1;
+        if (!n) return blank(W, H);
+        if (n.disable) return NODE_TYPES[n.type].inputs.length ? run(n.inputs[0], f, d1) : blank(W, H);
+        switch (n.type) {
+        case "read": {
+            const src = ctx.source ? ctx.source(n, f) : null;
+            // A source may come shrunk (the page's proxy): `ow` x `oh` is the file's own size then.
+            const k = src ? scale * (src.ow ? src.ow / src.w : 1) : 1;
+            return src ? resample(src, fitMatrix(src.w, src.h, W, H, n.fit || "fit", k), W, H) : blank(W, H);
+        }
+        case "constant": {
+            const c = paramAt(n, "color", f) || [0, 0, 0, 1];
+            const img = blank(W, H), a = c[3];
+            for (let i = 0; i < W * H * 4; i += 4) { img.data[i] = c[0] * a; img.data[i + 1] = c[1] * a; img.data[i + 2] = c[2] * a; img.data[i + 3] = a; }
+            return img;
+        }
+        case "merge": {
+            const B = run(n.inputs[0], f, d1), A = run(n.inputs[1], f, d1);
+            const M = n.inputs[2] ? run(n.inputs[2], f, d1) : null;
+            return mergeImages(B, A, M, n.operation || "over", paramAt(n, "mix", f));
+        }
+        case "transform": return resample(run(n.inputs[0], f, d1), transformMatrix(n, f, comp.format, scale), W, H);
+        case "grade": {
+            const p = {};
+            for (const k of Object.keys(NODE_TYPES.grade.params)) p[k] = paramAt(n, k, f);
+            return gradeImage(run(n.inputs[0], f, d1), p);
+        }
+        case "blur": return blurImage(run(n.inputs[0], f, d1), paramAt(n, "size", f) * scale);
+        case "crop": {
+            const tl = paramAt(n, "topleft", f) || [0, 0];
+            const br = paramAt(n, "bottomright", f) || [comp.format.width, comp.format.height];
+            return O.cropImage(run(n.inputs[0], f, d1), tl[0] * scale, tl[1] * scale, br[0] * scale, br[1] * scale, paramAt(n, "softness", f) * scale);
+        }
+        case "shuffle": return O.shuffleImage(run(n.inputs[0], f, d1), ["r", "g", "b", "a"].map((k) => n[k] || k));
+        case "copy": {
+            const pick = ["r", "g", "b", "a"].map((k) => n[k] || NODE_TYPES.copy.params[k].def);
+            return O.copyImage(run(n.inputs[0], f, d1), run(n.inputs[1], f, d1), pick);
+        }
+        case "premult": return O.premultImage(run(n.inputs[0], f, d1));
+        case "unpremult": return O.unpremultImage(run(n.inputs[0], f, d1));
+        case "retime": {
+            const t = retimeFrame(n, f);
+            if (n.blend !== "mix") return run(n.inputs[0], Math.floor(t + 0.5), d1);
+            const f0 = Math.floor(t), fr = t - f0;
+            if (fr < 1e-9) return run(n.inputs[0], f0, d1);
+            return mixImages(run(n.inputs[0], f0, d1), run(n.inputs[0], f0 + 1, d1), fr);
+        }
+        case "keyer": {
+            const p = {};
+            for (const k of Object.keys(NODE_TYPES.keyer.params)) p[k] = paramAt(n, k, f);
+            return O.keyImage(run(n.inputs[0], f, d1), p);
+        }
+        case "roto": {
+            const matte = O.rotoMatte(n.shapes, f, W, H, scale);
+            return O.rotoImage(matte, W, H, n.inputs[0] ? run(n.inputs[0], f, d1) : null);
+        }
+        case "vectors": return vectorsOf(n.inputs[0], f, d1, n);
+        case "motionblur": {
+            const src = run(n.inputs[0], f, d1);
+            const vec = n.inputs[1] ? run(n.inputs[1], f, d1) : vectorsOf(n.inputs[0], f, d1, { type: "vectors" });
+            return O.motionBlurImage(src, vec, paramAt(n, "shutter", f), paramAt(n, "samples", f), n.offset || "centred", scale);
+        }
+        case "depthblur": {
+            const src = run(n.inputs[0], f, d1);
+            if (!n.inputs[1]) return src;
+            const p = {};
+            for (const k of Object.keys(NODE_TYPES.depthblur.params)) p[k] = paramAt(n, k, f);
+            p.size *= scale;
+            return O.depthBlurImage(src, run(n.inputs[1], f, d1), p);
+        }
+        case "output": return run(n.inputs[0], f, d1);
+        default: return blank(W, H);
+        }
+    };
+    return run(id, frame, 0);
+}
+
+/** a x (1 - t) + b x t. */
+export function mixImages(a, b, t) {
+    const out = blank(a.w, a.h), o = out.data, x = a.data, y = b.data;
+    for (let i = 0; i < a.w * a.h * 4; i++) o[i] = x[i] + (y[i] - x[i]) * t;
+    return out;
 }
 
 /** The Reads `id` depends on (what has to be loaded before it can be drawn). */
 export function sourcesOf(comp, id) {
     const out = [];
     const seen = new Set();
-    const walk = (nid) => {
-        if (!nid || seen.has(nid)) return;
-        seen.add(nid);
+    for (const { node } of sourceNeeds(comp, id, 0)) if (!seen.has(node.id)) { seen.add(node.id); out.push(node); }
+    return out;
+}
+
+/** Every Read and comp frame `id` reads to be drawn at `frame`: [{node, frame}], each once. */
+export function sourceNeeds(comp, id, frame) {
+    const out = [], seen = new Set();
+    const walk = (nid, f, depth) => {
+        const key = `${nid}@${f}`;
+        if (!nid || depth > 256 || seen.has(key)) return;
+        seen.add(key);
         const n = nodeById(comp, nid);
-        if (!n || n.disable && !n.inputs.length) return;
-        if (n.type === "read") out.push(n);
-        for (const [i, s] of n.inputs.entries()) if (!n.disable || i === 0) walk(s);
+        if (!n) return;
+        if (n.disable) { if (n.inputs.length) walk(n.inputs[0], f, depth + 1); return; }
+        if (n.type === "read") { out.push({ node: n, frame: f }); return; }
+        if (n.type === "retime") {
+            const t = retimeFrame(n, f);
+            if (n.blend !== "mix") walk(n.inputs[0], Math.floor(t + 0.5), depth + 1);
+            else { const f0 = Math.floor(t); walk(n.inputs[0], f0, depth + 1); if (t - f0 >= 1e-9) walk(n.inputs[0], f0 + 1, depth + 1); }
+            return;
+        }
+        if (n.type === "vectors" || (n.type === "motionblur" && !n.inputs[1])) {
+            for (const g of [f - 1, f, f + 1]) walk(n.inputs[0], g, depth + 1);
+            if (n.type === "vectors") return;
+        }
+        if (n.type === "depthblur" && !n.inputs[1]) { walk(n.inputs[0], f, depth + 1); return; }
+        for (const s of n.inputs) walk(s, f, depth + 1);
     };
-    walk(id);
+    walk(id, frame, 0);
     return out;
 }
 
