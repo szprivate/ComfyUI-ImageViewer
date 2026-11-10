@@ -77,6 +77,8 @@ export const UIMixin = {
         if (this.editMonKeyDown && this.editMonKeyDown(e)) return;
         // Paint's keys, while a Paint tab is up (imageViewer_paintPanel.js).
         if (this._paintOn && this.paintKeyDown && this.paintKeyDown(e)) return;
+        // Comp's keys, while the focus is in the comp's graph, Layers, Properties or picture (imageViewer_compPanel.js).
+        if (this._cpOn && this.compKeyDown && this.compKeyDown(e)) return;
         // Walking a world takes the keyboard (imageViewer_world3d.js).
         if (this._model3d && this._model3d.walking) return;
         // The file browser's list is a focusable widget: while it has the focus

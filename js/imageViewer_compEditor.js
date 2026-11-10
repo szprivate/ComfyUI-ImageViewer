@@ -17,6 +17,7 @@
 //   pickFile(cb)               the viewer's file picker; cb(path)
 //   pathsOf(items)             what a History / file-browser drop names, as Read files (sequences as patterns)
 //   save(path, comp)           -> Promise
+//   newComp(), open(), saveAs(comp)   the bar's file buttons (as Paint's: New, Open, Save with its menu)
 //   render(path)               -> Promise<{message}>
 //   notify(text, severity)
 import * as C from "./imageViewer_compModel.js";
@@ -24,6 +25,7 @@ import * as O from "./imageViewer_compOps.js";
 import * as CK from "./imageViewer_compColor.js";
 import * as Mo from "./imageViewer_mgModel.js";
 import { MG_CSS } from "./imageViewer_mgEditor.js";
+import { paintIcon } from "./imageViewer_paintIcons.js";
 
 const CSS = `
 .cp-root{display:flex;flex-direction:column;position:absolute;inset:0;background:#0f0f12;color:#d8d8dc;font:12px/1.35 system-ui,Segoe UI,sans-serif;outline:none}
@@ -57,6 +59,21 @@ const CSS = `
 .cp-gbar{position:absolute;left:6px;top:6px;display:flex;gap:4px;z-index:3}
 .cp-gbar .mg-btn{display:inline-flex;align-items:center;gap:4px}
 .cp-gbar svg{width:14px;height:14px}
+.cp-gbar .cp-ib{padding:2px 5px}
+.cp-ibtn{display:inline-flex;align-items:center;justify-content:center;padding:3px 6px}
+.cp-ibtn svg{width:16px;height:16px}
+.cp-ibtn.dirty{color:#ff6a1a;border-color:#ff6a1a}
+.cp-pop{position:absolute;z-index:40}
+.cp-pop div.off{opacity:.4;cursor:default}.cp-pop div.off:hover{background:none}
+.cp-pop div .cp-k{float:right;margin-left:18px;color:#8a8a92}
+.cp-dlg-shade{position:absolute;inset:0;z-index:50;background:#0008;display:flex;align-items:center;justify-content:center}
+.cp-dlg{background:#26262c;border:1px solid #44444c;border-radius:4px;padding:12px 14px;min-width:380px;max-width:92%;box-shadow:0 8px 28px #000a;color:#d8d8dc;font:12px/1.35 system-ui,Segoe UI,sans-serif}
+.cp-dlg h3{margin:0 0 10px;font-size:13px}
+.cp-dlg .cp-field{display:flex;align-items:center;gap:6px;margin:6px 0}
+.cp-dlg .cp-field label{width:56px;color:#9a9aa2}
+.cp-dlg input{flex:1;background:#141418;border:1px solid #44444c;color:#fff;font:inherit;padding:3px 5px}
+.cp-dlg .cp-note{color:#9a9aa2;margin:8px 0}.cp-dlg .cp-note.error{color:#ff8a7a}
+.cp-dlg .cp-go{display:flex;justify-content:flex-end;gap:6px;margin-top:10px}
 .comp-params .mg-prop label,.mg-side .mg-prop label{width:96px}
 .cp-tabmenu{position:absolute;z-index:30;background:#26262c;border:1px solid #44444c;border-radius:3px;padding:3px;box-shadow:0 4px 14px #0008;width:210px;display:flex;flex-direction:column}
 .cp-tabmenu input{width:100%;background:#141418;border:1px solid #ff6a1a;color:#fff;font:inherit;padding:3px 5px;flex:0 0 auto}
@@ -120,6 +137,15 @@ const fromHex = (h, a) => [1, 3, 5].map((i) => C.srgbToLinear(parseInt(h.slice(i
 
 /** The editor's look (and Motion's, which it shares) in a document or shadow root, once. The node graph may be
  *  shown outside the viewer (ComfyUI's bottom panel, imageViewer_compComfyTab.js), so this is not only the viewer's. */
+const GRID_KEY = "imageviewer.comp.grid";
+/** The node graph's grid: shown, and whether nodes snap to it (per viewer, in localStorage). */
+function loadGrid() {
+    try { const v = JSON.parse(localStorage.getItem(GRID_KEY) || "null"); if (v && typeof v === "object") return { show: v.show !== false, snap: v.snap !== false }; }
+    catch (_) { /* none kept */ }
+    return { show: true, snap: true };
+}
+function keepGrid(g) { try { localStorage.setItem(GRID_KEY, JSON.stringify(g)); } catch (_) { /* not kept */ } }
+
 export function installCompStyles(rootNode) {
     const doc = rootNode.ownerDocument || rootNode;
     for (const [attr, text] of [["data-mg", MG_CSS], ["data-comp", CSS]]) {
@@ -138,6 +164,7 @@ export function createCompEditor(host, opts = {}) {
         comp: null, path: "", dirty: false, hist: new Mo.History(), sel: [], view: null, frame: 0,
         proxy: "auto", alpha: false, zoom: { s: 1, x: 0, y: 0, fit: true }, graph: { s: 1, x: 40, y: 40, fitted: false },
         layerSel: null, draw: null, pick: null, ocio: null, display: "",
+        grid: loadGrid(),
     };
     const luts = new Map();   // OCIO transforms baked for the preview, by ocioKey (null: the server could not)
     const displaySpec = () => { if (!st.display) return null; const [display, view] = st.display.split("\u0001"); return { src: "", display, view }; };
@@ -181,7 +208,24 @@ export function createCompEditor(host, opts = {}) {
     addBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/></svg><span>Add</span>';
     addBtn.addEventListener("pointerdown", (e) => e.stopPropagation());
     addBtn.addEventListener("click", (e) => { e.stopPropagation(); tabMenu({ left: 6, top: 34 }); });
-    gbar.append(addBtn);
+    const ICON = {
+        grid: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>',
+        snap: '<path d="m6 15-4-4 6.75-6.77a7.79 7.79 0 0 1 11 11L13 22l-4-4 6.39-6.36a2.14 2.14 0 0 0-3-3L6 15"/><path d="m5 8 4 4"/><path d="m12 15 4 4"/>',
+        align: '<rect width="6" height="16" x="4" y="6" rx="2"/><rect width="6" height="9" x="14" y="6" rx="2"/><path d="M22 2H2"/>',
+    };
+    const gbtn = (icon, title, fn) => {
+        const b = el(doc, "button", "mg-btn cp-ib");
+        b.title = title;
+        b.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICON[icon]}</svg>`;
+        b.addEventListener("pointerdown", (e) => e.stopPropagation());
+        b.addEventListener("click", (e) => { e.stopPropagation(); fn(b); });
+        return b;
+    };
+    const gridBtn = gbtn("grid", "Show the grid (G)", () => setGrid({ show: !st.grid.show }));
+    const snapBtn = gbtn("snap", "Snap nodes to the grid (S; hold Shift while dragging to place freely)", () => setGrid({ snap: !st.grid.snap }));
+    const alignBtn = gbtn("align", "Align the selected nodes", (b) => popMenu(b, alignItems()));
+    gridBtn.classList.add("cp-grid-btn"); snapBtn.classList.add("cp-snap-btn"); alignBtn.classList.add("cp-align-btn");
+    gbar.append(addBtn, gridBtn, snapBtn, alignBtn);
     graph.append(gbar);
     const props = el(doc, "div", "mg-side mg-part"); props.tabIndex = 0;
     const layers = el(doc, "div", "cp-layers"); layers.tabIndex = 0;
@@ -255,8 +299,18 @@ export function createCompEditor(host, opts = {}) {
             disp.title = `How the picture is shown: plain sRGB, or a display and view of the OCIO config (${st.ocio.source}; working space ${st.ocio.working})`;
             disp.onchange = () => { st.display = disp.value; if (o.onDisplay) o.onDisplay(st.display); queueRender(); };
         }
-        bar.append(t,
-            btn("Save", "Save the comp (Ctrl+S)", save, st.dirty ? "on" : ""),
+        const ib = (icon, title, fn, cls = "") => {
+            const b = el(doc, "button", "mg-btn cp-ibtn " + cls);
+            b.title = title; b.append(paintIcon(doc, icon));
+            b.addEventListener("click", (e) => { e.stopPropagation(); fn(b); });
+            return b;
+        };
+        bar.append(
+            ib("newDoc", "New comp…", () => o.newComp && o.newComp(), "cp-new"),
+            ib("open", "Open… (Ctrl+O) a comp", () => o.open && o.open(), "cp-open"),
+            ib("save", "Save (Ctrl+S) - the menu: Save as, Render, Export to Nuke", (b) => popMenu(b, fileItems()), "cp-save" + (st.dirty ? " dirty" : "")),
+            el(doc, "span", "mg-sep"),
+            t,
             btn("Render…", "Render the comp's Output to a file", doRender),
             ...(o.exportNuke ? [btn("Nuke…", "Export to Nuke: the comp as a .nk script, what Nuke has no node for baked to EXR", doNuke)] : []),
             el(doc, "span", "mg-sep"),
@@ -265,6 +319,12 @@ export function createCompEditor(host, opts = {}) {
             btn("Fit", "Fit the picture (F on the picture)", () => { st.zoom.fit = true; layoutCanvas(); }),
             el(doc, "span", "mg-info", `${fmt().width}×${fmt().height} · ${fmt().fps} fps · ${fmt().frames} f`));
     }
+    function fileItems() {
+        return [["Save", save, !!st.path, "Ctrl+S"], ["Save as…", saveAs, !!o.saveAs, "Ctrl+Shift+S"], null,
+            ["Render…", doRender, !!o.render], ["Export to Nuke…", doNuke, !!o.exportNuke], null,
+            ["Open…", () => o.open && o.open(), !!o.open, "Ctrl+O"], ["New comp", () => o.newComp && o.newComp(), !!o.newComp]];
+    }
+    async function saveAs() { if (st.comp && o.saveAs) await o.saveAs(st.comp); }
     async function save() {
         if (!st.path || !o.save) return;
         try { await o.save(st.path, st.comp); st.dirty = false; renderBar(); toast("Saved", "success"); }
@@ -545,7 +605,46 @@ export function createCompEditor(host, opts = {}) {
         const r = graph.getBoundingClientRect();
         return [(e.clientX - r.left - st.graph.x) / st.graph.s, (e.clientY - r.top - st.graph.y) / st.graph.s];
     }
-    function placeWorld() { world.style.transform = `translate(${st.graph.x}px, ${st.graph.y}px) scale(${st.graph.s})`; }
+    function placeWorld() {
+        world.style.transform = `translate(${st.graph.x}px, ${st.graph.y}px) scale(${st.graph.s})`;
+        // The grid: a line every cell, a stronger one every fourth; the cells are left out when they get too small to see.
+        const g = C.GRID * st.graph.s, G = g * 4;
+        if (!st.grid.show) { graph.style.backgroundImage = ""; graph.dataset.grid = "off"; }
+        else {
+            const line = (c) => [`linear-gradient(${c} 1px, transparent 1px)`, `linear-gradient(90deg, ${c} 1px, transparent 1px)`];
+            const minor = g >= 6;
+            graph.style.backgroundImage = [...line("#ffffff1c"), ...(minor ? line("#ffffff0b") : [])].join(",");
+            graph.style.backgroundSize = [`${G}px ${G}px`, `${G}px ${G}px`, ...(minor ? [`${g}px ${g}px`, `${g}px ${g}px`] : [])].join(",");
+            const at = `${st.graph.x}px ${st.graph.y}px`;
+            graph.style.backgroundPosition = [at, at, ...(minor ? [at, at] : [])].join(",");
+            graph.dataset.grid = minor ? "cells" : "major";
+        }
+        gridBtn.classList.toggle("on", st.grid.show);
+        snapBtn.classList.toggle("on", st.grid.snap);
+    }
+    function setGrid(patch) {
+        Object.assign(st.grid, patch);
+        keepGrid(st.grid);
+        placeWorld();
+    }
+    /** The Align menu: the selected nodes lined up (one undo step); "Snap to grid" takes every node when none is. */
+    function alignItems() {
+        const ids = st.sel.filter((id) => node(id));
+        const n = ids.length;
+        const run = (how) => () => {
+            const which = how === "grid" && !n ? st.comp.nodes.map((x) => x.id) : ids;
+            mutate(() => { C.alignNodes(st.comp, which, how, { snap: st.grid.snap }); }, { structure: false });
+        };
+        return [
+            [n ? `Snap ${n === 1 ? "the node" : `the ${n} nodes`} to the grid` : "Snap every node to the grid", run("grid")],
+            null,
+            ["Align left edges", run("left"), n >= 2], ["Align in a column", run("centre"), n >= 2], ["Align right edges", run("right"), n >= 2],
+            null,
+            ["Align top edges", run("top"), n >= 2], ["Align in a row", run("middle"), n >= 2], ["Align bottom edges", run("bottom"), n >= 2],
+            null,
+            ["Spread out across", run("hspace"), n >= 3], ["Spread out down", run("vspace"), n >= 3],
+        ];
+    }
     function frameAll() {
         const ns = st.comp.nodes;
         if (!ns.length) return;
@@ -662,11 +761,15 @@ export function createCompEditor(host, opts = {}) {
         const [sx, sy] = gxy(e);
         const start = new Map(st.sel.map((sid) => [sid, [node(sid).x, node(sid).y]]));
         let moved = false;
+        const [px0, py0] = start.get(id);
         graph.onpointermove = (ev) => {
             const [x, y] = gxy(ev);
             if (!moved && Math.hypot(x - sx, y - sy) < 3) return;
             if (!moved) { st.hist.push(st.comp); moved = true; }
-            for (const [sid, [x0, y0]] of start) { const n = node(sid); if (n) { n.x = Math.round(x0 + x - sx); n.y = Math.round(y0 + y - sy); } }
+            // Snapping: the pressed node lands on the grid and the others keep their places to it. Shift: freely.
+            let dx = x - sx, dy = y - sy;
+            if (st.grid.snap && !ev.shiftKey) { dx = C.snapTo(px0 + dx) - px0; dy = C.snapTo(py0 + dy) - py0; }
+            for (const [sid, [x0, y0]] of start) { const n = node(sid); if (n) { n.x = Math.round(x0 + dx); n.y = Math.round(y0 + dy); } }
             renderGraph();
         };
         graph.onpointerup = () => { graph.onpointermove = null; if (moved) { st.dirty = true; renderBar(); } };
@@ -728,11 +831,38 @@ export function createCompEditor(host, opts = {}) {
     // ── menus (Motion's look) ────────────────────────────────────────────────
     let menuEl = null;
     function closeMenus() { if (menuEl) { menuEl.remove(); menuEl = null; } }
+    /** A menu dropped from a button: ``items`` = [[label, fn, enabled?, keys?] | null (a line)]. */
+    function popMenu(anchor, items) {
+        if (menuEl && menuEl._from === anchor) { closeMenus(); return null; }
+        closeMenus();
+        const box = anchor.closest(".cp-graph") || root;
+        const m = el(doc, "div", "mg-ctx cp-pop");
+        m._from = anchor;
+        for (const it of items) {
+            if (!it) { m.append(el(doc, "hr")); continue; }
+            const [label, fn, on = true, keys] = it;
+            const d = el(doc, "div", on ? "" : "off", label);
+            if (keys) d.append(el(doc, "span", "cp-k", keys));
+            if (on) d.onclick = (ev) => { ev.stopPropagation(); closeMenus(); fn(); };
+            m.append(d);
+        }
+        for (const t of ["pointerdown", "mousedown", "click", "dblclick", "contextmenu"]) m.addEventListener(t, (ev) => ev.stopPropagation());
+        const a = anchor.getBoundingClientRect(), r = box.getBoundingClientRect();
+        m.style.left = Math.max(0, a.left - r.left) + "px"; m.style.top = (a.bottom - r.top + 2) + "px";
+        box.append(m);
+        menuEl = m;
+        const mr = m.getBoundingClientRect();
+        if (mr.right > r.right) m.style.left = Math.max(0, r.width - mr.width - 4) + "px";
+        if (mr.bottom > r.bottom) { m.style.maxHeight = Math.max(80, r.bottom - mr.top - 4) + "px"; m.style.overflowY = "auto"; }
+        return m;
+    }
+    root.addEventListener("pointerdown", (e) => { if (menuEl && !e.composedPath().includes(menuEl)) closeMenus(); }, true);
     function addNodeAt(type, at) {
         mutate(() => {
             const after = primary();
             const extra = at ? { x: Math.round(at[0] - C.NODE_W / 2), y: Math.round(at[1] - C.NODE_H / 2) } : {};
             const n = C.insertNode(st.comp, type, at ? null : after && after.id, extra);
+            if (st.grid.snap) { n.x = C.snapTo(n.x); n.y = C.snapTo(n.y); }
             if (type === "read" && o.pickFile) o.pickFile((path) => mutate(() => { const r = node(n.id); if (r) r.file = path; }, { structure: false }));
             st.sel = [n.id];
         });
@@ -860,9 +990,10 @@ export function createCompEditor(host, opts = {}) {
     }
 
     // ── keys (graph, layers, properties and the picture) ─────────────────────
-    function keyDown(e) {
+    function keyDown(e, part = e.currentTarget) {
+        if (e._cpDone) return true;
         const t = e.target;
-        if (t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA")) return;
+        if (t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA")) return false;
         const k = e.key, ctrl = e.ctrlKey || e.metaKey;
         let used = true;
         if (st.draw && k === "Enter") finishDraw();
@@ -870,19 +1001,24 @@ export function createCompEditor(host, opts = {}) {
         else if (st.draw && k === "Backspace") { st.draw.pts.pop(); renderOverlay(); }
         else if (ctrl && k.toLowerCase() === "z") { if (e.shiftKey) redo(); else undo(); }
         else if (ctrl && k.toLowerCase() === "y") redo();
+        else if (ctrl && e.shiftKey && k.toLowerCase() === "s") saveAs();
         else if (ctrl && k.toLowerCase() === "s") save();
-        else if (k === "Tab" && e.currentTarget === graph) tabMenu();
-        else if ((k === "Delete" || k === "Backspace") && e.currentTarget !== root) removeSel();
-        else if (k.toLowerCase() === "d" && !ctrl && e.currentTarget === graph) toggleDisable();
+        else if (ctrl && k.toLowerCase() === "o" && o.open) o.open();
+        else if (!ctrl && k.toLowerCase() === "g" && part === graph) setGrid({ show: !st.grid.show });
+        else if (!ctrl && k.toLowerCase() === "s" && part === graph) setGrid({ snap: !st.grid.snap });
+        else if (k === "Tab" && part === graph) tabMenu();
+        else if ((k === "Delete" || k === "Backspace") && part !== root) removeSel();
+        else if (k.toLowerCase() === "d" && !ctrl && part === graph) toggleDisable();
         else if (k === "1" && primary()) setView(primary().id);
-        else if (k.toLowerCase() === "f" && e.currentTarget === graph) frameAll();
-        else if (k.toLowerCase() === "f" && e.currentTarget === root) { st.zoom.fit = true; layoutCanvas(); }
-        else if (k.toLowerCase() === "a" && !ctrl && e.currentTarget === root) { st.alpha = !st.alpha; renderBar(); queueRender(); }
+        else if (k.toLowerCase() === "f" && part === graph) frameAll();
+        else if (k.toLowerCase() === "f" && part === root) { st.zoom.fit = true; layoutCanvas(); }
+        else if (k.toLowerCase() === "a" && !ctrl && part === root) { st.alpha = !st.alpha; renderBar(); queueRender(); }
         else if (k === " " && o.transport) o.transport.toggle();
         else if (k === "ArrowLeft" && o.transport) o.transport.step(-1);
         else if (k === "ArrowRight" && o.transport) o.transport.step(1);
         else used = false;
-        if (used) { e.preventDefault(); e.stopPropagation(); }
+        if (used) { e.preventDefault(); e.stopPropagation(); e._cpDone = true; }
+        return used;
     }
     for (const part of [graph, layers, props, root]) part.addEventListener("keydown", keyDown);
 
@@ -1337,11 +1473,21 @@ export function createCompEditor(host, opts = {}) {
         },
         comp: () => st.comp,
         isDirty: () => st.dirty,
+        /** Saved elsewhere (Save as): nothing left unsaved here. */
+        markSaved() { st.dirty = false; renderBar(); },
         setFrame,
         setFormat(patch) { mutate(() => Object.assign(st.comp.format, patch)); if (o.onComp) o.onComp(); },
         refresh: () => refresh(),
         relayout() { layoutCanvas(); if (!st.graph.fitted) frameAll(); },
         moved,
+        /** A key the viewer's window saw first (its hotkeys run in the capture phase): handled here when it is the
+         *  comp's own - with the focus in the graph, Layers, Properties or the picture. True when it was. */
+        handleKey(e) {
+            const path = e.composedPath ? e.composedPath() : [];
+            const part = [graph, layers, props, root].find((p) => path.includes(p));
+            if (!part) return false;
+            return keyDown(e, part);
+        },
         rerender: () => queueRender(),
         frameAll,
         select: (ids) => select(ids),

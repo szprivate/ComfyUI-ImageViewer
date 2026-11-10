@@ -339,3 +339,31 @@ test("no node parameter takes a name the node itself uses", () => {
     const own = new Set(["id", "type", "name", "x", "y", "disable", "inputs", "tracks"]);
     for (const [t, d] of Object.entries(C.NODE_TYPES)) for (const p of Object.keys(d.params)) assert.ok(!own.has(p), `${t}.${p}`);
 });
+
+test("the graph's grid: snapping and lining nodes up", () => {
+    assert.equal(C.snapTo(22), 15);
+    assert.equal(C.snapTo(23), 30);
+    assert.equal(C.snapTo(-8), -15);
+    const comp = { comp: 1, format: {}, output: "c", nodes: [
+        { id: "a", type: "constant", x: 7, y: 101, inputs: [] },
+        { id: "b", type: "constant", x: 52, y: 40, inputs: [] },
+        { id: "c", type: "output", x: 160, y: 250, inputs: [] }] };
+    const at = () => comp.nodes.map((n) => [n.x, n.y]);
+    const copy = JSON.stringify(comp);
+    assert.equal(C.alignNodes(comp, ["a", "b", "c"], "left"), 2);
+    assert.deepEqual(at().map((p) => p[0]), [7, 7, 7]);
+    assert.equal(C.alignNodes(comp, ["a", "b"], "middle"), 2);
+    assert.deepEqual(at().slice(0, 2).map((p) => p[1]), [71, 71]);         // (101 + 40) / 2, rounded
+    assert.equal(C.alignNodes(comp, ["a"], "top"), 0, "one node has nothing to line up with");
+    C.alignNodes(comp, ["a", "b", "c"], "grid");
+    for (const [x, y] of at()) { assert.equal(x % 15, 0); assert.equal(Math.abs(y % 15), 0); }
+    // Spread: the first and last stay, the one between goes halfway.
+    const sp = JSON.parse(copy);
+    sp.nodes[1].y = 40; sp.nodes[0].y = 101; sp.nodes[2].y = 250;
+    assert.equal(C.alignNodes(sp, ["a", "b", "c"], "vspace"), 1);
+    assert.deepEqual(sp.nodes.map((n) => n.y), [145, 40, 250]);
+    // With snapping on, an aligned column lands on the grid as well.
+    const sn = JSON.parse(copy);
+    C.alignNodes(sn, ["a", "b", "c"], "right", { snap: true });
+    assert.deepEqual(sn.nodes.map((n) => n.x), [165, 165, 165]);
+});

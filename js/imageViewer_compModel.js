@@ -256,6 +256,38 @@ export const HEAVY = new Set(["vectors", "motionblur", "depthblur", "defocus"]);
 export const NODE_W = 120;
 export const NODE_H = 30;
 
+// ── the graph's grid ────────────────────────────────────────────────────────
+/** The node graph's grid, in graph units: a node is 8 cells wide and 2 high. */
+export const GRID = 15;
+export const snapTo = (v, g = GRID) => Math.round(v / g) * g;
+export const ALIGNS = ["grid", "left", "centre", "right", "top", "middle", "bottom", "hspace", "vspace"];
+/**
+ * Lines the nodes ``ids`` up, in place; returns how many moved. "grid": each onto the grid. "left" / "centre" /
+ * "right": one column by their left edges, middles or right edges (the leftmost / the mean / the rightmost);
+ * "top" / "middle" / "bottom" the same as a row. "hspace" / "vspace": the first and the last stay, the ones between
+ * spread evenly. With ``snap`` the result lands on the grid too. Aligning needs two nodes, spreading three.
+ */
+export function alignNodes(comp, ids, how, { snap = false, g = GRID } = {}) {
+    const ns = ids.map((id) => nodeById(comp, id)).filter(Boolean);
+    const before = ns.map((n) => [n.x, n.y]);
+    const mean = (a) => a.reduce((s, v) => s + v, 0) / a.length;
+    const put = (n, k, v) => { n[k] = Math.round(snap ? snapTo(v, g) : v); };
+    if (how === "grid") for (const n of ns) { put(n, "x", snapTo(n.x, g)); put(n, "y", snapTo(n.y, g)); }
+    else if (ns.length >= 2 && ["left", "centre", "right"].includes(how)) {
+        const x = how === "left" ? Math.min(...ns.map((n) => n.x)) : how === "right" ? Math.max(...ns.map((n) => n.x)) : mean(ns.map((n) => n.x));
+        for (const n of ns) put(n, "x", x);
+    } else if (ns.length >= 2 && ["top", "middle", "bottom"].includes(how)) {
+        const y = how === "top" ? Math.min(...ns.map((n) => n.y)) : how === "bottom" ? Math.max(...ns.map((n) => n.y)) : mean(ns.map((n) => n.y));
+        for (const n of ns) put(n, "y", y);
+    } else if (ns.length >= 3 && (how === "hspace" || how === "vspace")) {
+        const k = how === "hspace" ? "x" : "y";
+        const order = [...ns].sort((a, b) => a[k] - b[k]);
+        const a = order[0][k], b = order[order.length - 1][k];
+        order.forEach((n, i) => { if (i > 0 && i < order.length - 1) put(n, k, a + ((b - a) * i) / (order.length - 1)); });
+    }
+    return ns.filter((n, i) => n.x !== before[i][0] || n.y !== before[i][1]).length;
+}
+
 const clone = (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
 const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);

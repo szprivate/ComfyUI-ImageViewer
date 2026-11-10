@@ -269,6 +269,12 @@ export const CompPanelMixin = {
 
     // ── time: the viewer's bar drives the comp ───────────────────────────────
 
+    /** The viewer's key handler asks first: the comp's own keys, while the focus is in one of its parts. */
+    compKeyDown(e) {
+        const rec = this._cpActive();
+        return !!(rec && rec.editor && rec.editor.handleKey && rec.editor.handleKey(e));
+    },
+
     _cpActive() { return this._cpOn ? this._cpState().tabs[this.activeTab] || null : null; },
 
     /** The editor of the comp tab on screen, or null (the agent's state and the tests read it). */
@@ -447,6 +453,9 @@ export const CompPanelMixin = {
             pickFile: (cb) => this._cpPickFootage(cb),
             pathsOf: (items) => this.compPathsOf(items),
             save: (path, c) => this._cpSave(path, c),
+            newComp: () => this.compNew(),
+            open: () => this.compPickFile(),
+            saveAs: (c) => this.compSaveAs(rec, c),
             render: () => this.compRenderDialog(rec),
             exportNuke: () => this.compNukeDialog(rec),
             notify: (m, sev) => notice(sev || "info", m),
@@ -605,6 +614,91 @@ export const CompPanelMixin = {
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
         addRecentDoc("comp", path);
+    },
+
+    /** Save as… (Ctrl+Shift+S, the Save button's menu): a name and a folder; the comp is written there and opens in
+     *  its own tab, the tab it came from closing (its changes are in the new file; the old file stays as it was). */
+    async compSaveAs(rec = this._cpActive(), comp = rec && rec.editor && rec.editor.comp()) {
+        if (!rec || !rec.el || !comp) return null;
+        const doc = rec.el.ownerDocument;
+        const el = (tag, cls, text) => { const e = doc.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+        const dirOf = (p) => String(p || "").replace(/[\\/][^\\/]*$/, "");
+        let start = rec.path ? dirOf(rec.path) : "";
+        if (!start) {
+            try {
+                const res = await api.fetchApi("/imageviewer/export_places", { method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ kind: "comp", context: canvasContext() }) });
+                const places = res.ok ? ((await res.json()).places || []) : [];
+                if (places[0] && places[0].path) start = places[0].path;
+            } catch (_) { /* typed by hand then */ }
+        }
+        const shade = el("div", "cp-dlg-shade");
+        const box = el("div", "cp-dlg cp-saveas");
+        box.append(el("h3", "", "Save comp as"));
+        const field = (label, ...parts) => { const r = el("div", "cp-field"); r.append(el("label", "", label), ...parts); box.append(r); };
+        const name = el("input", "cp-saveas-name"); name.value = rec.path ? nameOf(rec.path) : "comp"; name.spellcheck = false;
+        field("Name", name, el("span", "", COMP_SUFFIX));
+        const folder = el("input", "cp-saveas-folder"); folder.value = start; folder.spellcheck = false;
+        const browse = el("button", "mg-btn", "Browse\u2026");
+        field("Folder", folder, browse);
+        const note = el("div", "cp-note", "The tab goes on with the new file; the file it came from stays as it is.");
+        box.append(note);
+        const go = el("div", "cp-go");
+        const cancel = el("button", "mg-btn", "Cancel");
+        const over = el("button", "mg-btn cp-saveas-over", "Overwrite"); over.style.display = "none";
+        const ok = el("button", "mg-btn on cp-saveas-go", "Save");
+        go.append(cancel, over, ok);
+        box.append(go);
+        shade.append(box);
+        const shut = () => shade.remove();
+        let done = null;
+        const finished = new Promise((r) => { done = r; });
+        const send = async (overwrite) => {
+            ok.disabled = over.disabled = true;
+            over.style.display = "none";
+            note.classList.remove("error");
+            note.textContent = "Saving\u2026";
+            try {
+                const res = await api.fetchApi("/imageviewer/comp_save_as", { method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ folder: folder.value, name: name.value, comp, overwrite }) });
+                const data = await res.json().catch(() => ({}));
+                if (res.status === 409 && data.exists) {
+                    ok.disabled = over.disabled = false;
+                    note.textContent = `${baseOf(data.path)} is there already. Overwrite it?`;
+                    over.style.display = "";
+                    return;
+                }
+                if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+                shut();
+                const oldKey = Object.entries(this._cpState().tabs).find(([, r]) => r === rec)?.[0];
+                if (rec.editor) rec.editor.markSaved();
+                this._cpShowDoc(data.path, comp);
+                if (oldKey && oldKey !== COMP_PREFIX + data.path && this.allTabs[oldKey]) this.closeTab(oldKey);
+                notice("success", "Saved", data.path);
+                done(data.path);
+            } catch (e) {
+                ok.disabled = over.disabled = false;
+                note.textContent = "Not saved: " + String(e.message || e);
+                note.classList.add("error");
+            }
+        };
+        cancel.addEventListener("click", () => { shut(); done(null); });
+        ok.addEventListener("click", () => send(false));
+        over.addEventListener("click", () => send(true));
+        browse.addEventListener("click", () => openFilePicker(this.container, {
+            id: "compSaveAs", title: "Save comp as\u2026 into", kind: "comp", start: folder.value, folder: true,
+            exts: [".json"], go: "This folder",
+            onPick: async ([f]) => { if (f && f.path) folder.value = f.path; return { ok: true }; },
+        }));
+        box.addEventListener("keydown", (e) => {
+            e.stopPropagation();
+            if (e.key === "Escape") { e.preventDefault(); shut(); done(null); }
+            else if (e.key === "Enter") { e.preventDefault(); send(false); }
+        });
+        shade.addEventListener("pointerdown", (e) => { e.stopPropagation(); if (e.target === shade) { shut(); done(null); } });
+        rec.el.append(shade);
+        setTimeout(() => { name.focus(); name.select(); }, 0);
+        return finished;
     },
 
     /** The export dialog every export of the viewer uses, for the comp's Output. */

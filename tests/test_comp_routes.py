@@ -93,6 +93,28 @@ class CompRoutes(unittest.TestCase):
             self.assertEqual((await r.json())["comp"]["format"]["frames"], 99)
         self.run_c(go)
 
+    def test_save_as_writes_a_new_file_and_asks_before_writing_over_one(self):
+        async def go(c):
+            comp = self.M.new_comp()
+            folder = os.path.join(self.dirs["output"], "save_as_here")
+            st, d = await self.j(c, "/imageviewer/comp_save_as", {"folder": folder, "name": "../shot a.comp.json", "comp": comp})
+            self.assertEqual(st, 200, d)
+            self.assertEqual(d["path"], os.path.join(folder, "shot a.comp.json"))
+            self.assertTrue(os.path.isfile(d["path"]))
+            st, d2 = await self.j(c, "/imageviewer/comp_save_as", {"folder": folder, "name": "shot a", "comp": comp})
+            self.assertEqual((st, d2.get("exists"), d2.get("path")), (409, True, d["path"]))
+            comp["format"]["frames"] = 7
+            st, _ = await self.j(c, "/imageviewer/comp_save_as", {"folder": folder, "name": "shot a", "comp": comp, "overwrite": True})
+            self.assertEqual(st, 200)
+            r = await c.get("/imageviewer/comp", params={"path": d["path"]})
+            self.assertEqual((await r.json())["comp"]["format"]["frames"], 7)
+            st, _ = await self.j(c, "/imageviewer/comp_save_as", {"folder": self.outside, "name": "x", "comp": comp})
+            self.assertEqual(st, 403)
+            self.assertFalse(os.path.exists(os.path.join(self.outside, "x.comp.json")))
+            st, _ = await self.j(c, "/imageviewer/comp_save_as", {"folder": folder, "name": "  ", "comp": comp})
+            self.assertEqual(st, 400)
+        self.run_c(go)
+
     def test_fences(self):
         async def go(c):
             bad = os.path.join(self.outside, "x.comp.json")

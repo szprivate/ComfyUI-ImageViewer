@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import gzip
 import os
+import re
 import secrets
 import threading
 import time
@@ -122,6 +123,41 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
         if why:
             return err(why, 403 if M.is_comp_path(path) else 400)
         try:
+            await off(comp_io.write, path, body.get("comp"))
+        except ValueError as e:
+            return err(e, 422)
+        except OSError as e:
+            return err(f"not saved: {e}", 500)
+        return web.json_response({"ok": True, "path": path})
+
+    def save_as_path(folder, name):
+        """``<folder>/<name>.comp.json``: the name keeps no folder of its own and loses what is not a file name's."""
+        stem = os.path.basename(str(name or "").strip().replace("\\", "/"))
+        for end in (M.SUFFIX, ".json"):
+            if stem.lower().endswith(end):
+                stem = stem[: -len(end)]
+        stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", stem).strip(" .")
+        if not stem:
+            raise ValueError("give the comp a name")
+        folder = abspath(folder)
+        if not folder:
+            raise ValueError("give a folder")
+        return os.path.join(folder, stem + M.SUFFIX)
+
+    async def save_as(request):
+        """Save as: the comp written to a new file (409 ``{exists, path}`` when one is there, unless ``overwrite``)."""
+        body = await body_of(request)
+        try:
+            path = save_as_path(body.get("folder"), body.get("name"))
+        except ValueError as e:
+            return err(e)
+        why = comp_path_ok(path)
+        if why:
+            return err(why, 403)
+        if os.path.exists(path) and not body.get("overwrite"):
+            return web.json_response({"error": "there is a file of that name", "exists": True, "path": path}, status=409)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
             await off(comp_io.write, path, body.get("comp"))
         except ValueError as e:
             return err(e, 422)
@@ -406,6 +442,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
         add("GET", f"{prefix}/comp", get_comp)
         add("POST", f"{prefix}/comp", save_comp)
         add("POST", f"{prefix}/comp_new", new_comp)
+        add("POST", f"{prefix}/comp_save_as", save_as)
         add("GET", f"{prefix}/comp_source", get_source)
         add("GET", f"{prefix}/comp_pixels", get_pixels)
         add("GET", f"{prefix}/comp_render", render)

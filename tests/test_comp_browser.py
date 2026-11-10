@@ -281,6 +281,96 @@ class CompBrowserTests(unittest.TestCase):
             pg.screenshot(path=os.path.join(SHOTS, "comp-node-menu.png"))
         self.assertEqual(self.errors, [])
 
+    def test_the_graph_has_a_grid_nodes_snap_and_align_to_it(self):
+        pg = self.page()
+        self.new_comp(pg)
+        pg.evaluate("() => { try { localStorage.removeItem('imageviewer.comp.grid'); } catch (_) {} }")
+        pg.evaluate("() => __panel.setPanelDocked('compGraph', true)")
+        graph = pg.evaluate_handle("() => __panel.compGraphPanel.querySelector('.cp-graph')")
+        st = graph.evaluate("(g) => ({ grid: g.dataset.grid, img: g.style.backgroundImage.length > 0, on: g.querySelector('.cp-grid-btn').classList.contains('on'), snap: g.querySelector('.cp-snap-btn').classList.contains('on') })")
+        self.assertEqual((st["img"], st["on"], st["snap"]), (True, True, True), st)
+        # A node dragged lands on the grid.
+        box = graph.evaluate("(g) => { const r = g.querySelector('.cp-node').getBoundingClientRect(); return [r.left + 20, r.top + 10]; }")
+        pg.mouse.move(*box); pg.mouse.down(); pg.mouse.move(box[0] + 37, box[1] + 23, steps=5); pg.mouse.up()
+        xy = pg.evaluate(f"() => {{ const e = {self.ED}; const n = e.comp().nodes[0]; return [n.x, n.y]; }}")
+        self.assertEqual([xy[0] % 15, xy[1] % 15], [0, 0], xy)
+        self.assertNotEqual(xy, [0, 0])
+        # Shift while dragging: placed freely.
+        box = graph.evaluate("(g) => { const r = g.querySelector('.cp-node').getBoundingClientRect(); return [r.left + 20, r.top + 10]; }")
+        scale = pg.evaluate(f"() => {self.ED}.state.graph.s")
+        pg.mouse.move(*box); pg.mouse.down(); pg.keyboard.down("Shift"); pg.mouse.move(box[0] + 7 * scale, box[1] + 4 * scale, steps=4); pg.mouse.up(); pg.keyboard.up("Shift")
+        xy2 = pg.evaluate(f"() => {{ const n = {self.ED}.comp().nodes[0]; return [n.x, n.y]; }}")
+        self.assertTrue(xy2[0] % 15 or xy2[1] % 15, xy2)
+        # Align: two nodes in a column, one undo step.
+        pg.evaluate(f"""() => {{ const e = {self.ED}; const c = e.comp(); c.nodes[0].x = 47; c.nodes[1].x = 200; e.select(c.nodes.slice(0, 2).map((n) => n.id)); }}""")
+        graph.evaluate("(g) => g.querySelector('.cp-align-btn').click()")
+        items = graph.evaluate("(g) => [...g.querySelectorAll('.cp-pop > div')].map((d) => [d.textContent, d.classList.contains('off')])")
+        self.assertIn(["Align in a column", False], items)
+        self.assertIn(["Spread out across", True], items)            # needs three
+        graph.evaluate("(g) => [...g.querySelectorAll('.cp-pop > div')].find((d) => d.textContent === 'Align in a column').click()")
+        xs = pg.evaluate(f"() => {self.ED}.comp().nodes.slice(0, 2).map((n) => n.x)")
+        self.assertEqual(xs[0], xs[1]); self.assertEqual(xs[0] % 15, 0)
+        pg.evaluate(f"() => {self.ED}.undo ? {self.ED}.undo() : null")
+        # The switches: G hides the grid, S stops snapping; kept for the next comp.
+        corner = graph.evaluate("(g) => { const r = g.getBoundingClientRect(); return [r.right - 30, r.top + 40]; }")
+        pg.mouse.click(*corner)
+        pg.keyboard.press("g"); pg.keyboard.press("s")
+        st = graph.evaluate("(g) => ({ grid: g.dataset.grid, snap: g.querySelector('.cp-snap-btn').classList.contains('on') })")
+        self.assertEqual(st, {"grid": "off", "snap": False})
+        self.assertEqual(pg.evaluate("() => JSON.parse(localStorage.getItem('imageviewer.comp.grid'))"), {"show": False, "snap": False})
+        pg.keyboard.press("g"); pg.keyboard.press("s")
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-grid.png"))
+        self.assertEqual(self.errors, [])
+
+    def test_new_open_and_save_buttons_as_paints_with_save_as(self):
+        pg = self.page()
+        path = self.new_comp(pg)
+        bar = pg.evaluate("() => [...__panel.container.querySelectorAll('.mg-bar .cp-ibtn')].map((b) => [b.className.split(' ').find((c) => c.startsWith('cp-') && c !== 'cp-ibtn'), !!b.querySelector('svg.paint-icon')])")
+        self.assertEqual(bar, [["cp-new", True], ["cp-open", True], ["cp-save", True]])
+        # Save opens Paint's kind of menu.
+        pg.evaluate("() => __panel.container.querySelector('.mg-bar .cp-save').click()")
+        rows = pg.evaluate("() => [...__panel.container.querySelectorAll('.cp-pop > div')].map((d) => d.firstChild.textContent)")
+        self.assertEqual(rows, ["Save", "Save as…", "Render…", "Export to Nuke…", "Open…", "New comp"])
+        # Open: the file picker for comps; New: a new comp tab.
+        pg.evaluate("() => { window.__picked = 0; __panel.compPickFile = () => { window.__picked++; }; }")
+        pg.evaluate("() => __panel.container.querySelector('.cp-pop').remove()")
+        pg.evaluate("() => __panel.container.querySelector('.mg-bar .cp-open').click()")
+        self.assertEqual(pg.evaluate("() => window.__picked"), 1)
+        pg.evaluate("() => __panel.container.querySelector('.mg-bar .cp-new').click()")
+        pg.wait_for_function(f"(p) => __panel.activeTab.startsWith('comp:') && __panel.activeTab !== 'comp:' + p", arg=path, timeout=10000)
+        newer = pg.evaluate("() => __panel.activeTab")
+        # Save as from Ctrl+Shift+S: a dialog, the comp goes on in the new file's tab, the old tab closes.
+        pg.evaluate(f"() => {{ const e = {self.ED}; e.comp().format.frames = 17; }}")
+        pg.evaluate(f"() => {self.ED}.state.dirty = true")
+        root = pg.evaluate_handle("() => __panel.container.querySelector('.comp-tab:not([style*=none]) .cp-root')")
+        root.evaluate("(r) => r.focus()")
+        pg.keyboard.press("Control+Shift+S")
+        pg.wait_for_function("() => !!__panel.container.querySelector('.cp-saveas')", timeout=5000)
+        folder = os.path.join(self.dirs["output"], "saved_as")
+        pg.evaluate("""(f) => { const b = __panel.container.querySelector('.cp-saveas'); b.querySelector('.cp-saveas-name').value = 'other shot';
+            b.querySelector('.cp-saveas-folder').value = f; b.querySelector('.cp-saveas-go').click(); }""", folder)
+        target = os.path.join(folder, "other shot.comp.json")
+        pg.wait_for_function("(t) => __panel.activeTab === 'comp:' + t", arg=target, timeout=10000)
+        self.assertTrue(os.path.isfile(target))
+        import json
+        with open(target) as fh:
+            self.assertEqual(json.load(fh)["format"]["frames"], 17)
+        self.assertNotIn(newer, pg.evaluate("() => __panel.tabOrder"))
+        self.assertFalse(pg.evaluate(f"() => {self.ED}.isDirty()"))
+        # Again into the same name: asked first.
+        pg.evaluate("() => { __panel.compSaveAs(); }")
+        pg.wait_for_function("() => !!__panel.container.querySelector('.cp-saveas')", timeout=5000)
+        pg.evaluate("""(f) => { const b = __panel.container.querySelector('.cp-saveas'); b.querySelector('.cp-saveas-name').value = 'other shot';
+            b.querySelector('.cp-saveas-folder').value = f; b.querySelector('.cp-saveas-go').click(); }""", folder)
+        pg.wait_for_function("() => { const o = __panel.container.querySelector('.cp-saveas-over'); return o && o.style.display !== 'none'; }", timeout=5000)
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-save-as.png"))
+        pg.keyboard.press("Escape")
+        self.assertEqual(self.errors, [])
+
     def test_several_selected_nodes_of_one_type_change_together(self):
         pg = self.page()
         self.new_comp(pg)
