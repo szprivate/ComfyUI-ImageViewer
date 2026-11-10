@@ -83,6 +83,8 @@ const DOCK_PANELS = {
     // A comp node's settings show in the Parameters panel (compPanel's _cpParams), not in a panel of their own.
     compGraph: { prop: "compGraphPanel", label: "Node Graph", minW: 320, minH: 160, defaultRail: "bottom", size: 2 },
     compLayers: { prop: "compLayersPanel", label: "Layers", minW: 220, minH: 140, defaultRail: "right", size: 1 },
+    // The Curve Editor: the selected comp nodes' keys (imageViewer_compCurves.js), off at first, under the picture.
+    compCurves: { prop: "compCurvesPanel", label: "Curve Editor", minW: 320, minH: 140, defaultRail: "bottom", size: 1, tabWith: "compGraph" },
     // Paint (imageViewer_paintPanel.js / imageViewer_paintEditor.js): a picture is a TAB (the editor covers the main
     // canvas); these are its other parts, up only with a Paint tab.
     paintLayers: { prop: "paintLayersPanel", label: "Layers", minW: 220, minH: 180, defaultRail: "right", size: 2 },
@@ -202,7 +204,8 @@ export const DockMixin = {
             // A graph over time wants width: the Curve Editor lives under the picture.
             bottom: { height: 240, panels: [{ id: "curves", size: 1, hidden: true },
                                             { id: "motionTimeline", size: 1, hidden: true },
-                                            { id: "compGraph", size: 1, hidden: true }] },
+                                            { id: "compGraph", size: 1, hidden: true, tab: "comp", behind: false },
+                                            { id: "compCurves", size: 1, hidden: true, tab: "comp", behind: true }] },
         };
     },
 
@@ -646,7 +649,7 @@ export const DockMixin = {
             if (this.paramRefreshCurves) this.paramRefreshCurves();
         } else if (id === "motionProps" || id === "motionTimeline") {
             if (this._mgOn && this._mgSeat) this._mgSeat(this._mgState().tabs[this.activeTab]);
-        } else if (id === "compGraph" || id === "compLayers") {
+        } else if (id === "compGraph" || id === "compLayers" || id === "compCurves") {
             if (this.compPanelShown) this.compPanelShown();
         } else if (id.startsWith("paint")) {
             if (this._paintOn && this._paintSeat) this._paintSeat(this._paintActive());

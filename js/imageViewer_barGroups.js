@@ -65,6 +65,7 @@ const GROUPS = [
         { label: "Node Graph", panel: "compGraph", needs: "comp" },
         { label: "Parameters", panel: "params", needs: "comp" },
         { label: "Layers", panel: "compLayers", needs: "comp" },
+        { label: "Curve Editor", panel: "compCurves", needs: "comp" },
     ] },
     // A picture in layers is a tab (imageViewer_paintPanel.js); Layers and Properties are its parts.
     { id: "paint", title: "Paint", icon: "paint", items: [

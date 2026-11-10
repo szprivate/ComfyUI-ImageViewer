@@ -427,6 +427,45 @@ class CompBrowserTests(unittest.TestCase):
         self.assertEqual(pg.evaluate(f"() => {{ const c = {ED}.comp(); return c.nodes.find((n) => n.id === c.output).inputs; }}"), ["Constant1"])
         self.assertEqual(self.errors, [])
 
+    def test_the_curve_editor_shows_the_selected_nodes_keys_and_edits_them(self):
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        pg.evaluate(f"""() => {{ const e = {ED}; const n = e.comp().nodes.find((x) => x.id === 'Constant1');
+            n.tracks = {{ color: [{{ f: 0, v: [0, 0, 0, 1] }}, {{ f: 40, v: [1, 0.5, 0, 1] }}] }}; e.select(['Constant1']); }}""")
+        pg.evaluate("() => __panel.setPanelDocked('compCurves', true)")
+        pg.wait_for_timeout(300)
+        st = pg.evaluate("""() => { const h = __panel.compCurvesPanel; return { front: __panel.isPanelFront ? __panel.isPanelFront('compCurves') : true,
+            curves: [...h.querySelectorAll('.curves-ch')].map((b) => b.textContent), dots: h.querySelectorAll('.kf-dot').length,
+            paths: h.querySelectorAll('svg path[data-curve]').length }; }""")
+        self.assertTrue(st["front"], st)
+        self.assertEqual(st["curves"], ["Background.color.r", "Background.color.g", "Background.color.b", "Background.color.a"], st)
+        self.assertEqual(st["dots"], 8)
+        self.assertEqual(st["paths"], 4)
+        # Only the red curve, then its last key dragged down: the key changes, one undo step.
+        pg.evaluate("() => [...__panel.compCurvesPanel.querySelectorAll('.curves-ch')][0].click()")
+        dot = pg.evaluate("""() => { const d = __panel.compCurvesPanel.querySelector('.kf-dot[data-f="40"]'); const r = d.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }""")
+        wrap = pg.evaluate("() => { const r = __panel.compCurvesPanel.querySelector('.kf-dot').parentElement.getBoundingClientRect(); return [r.top, r.height]; }")
+        pg.mouse.move(*dot); pg.mouse.down()
+        pg.mouse.move(dot[0], dot[1] + wrap[1] * 0.3, steps=6)
+        pg.mouse.up()
+        red = pg.evaluate(f"() => {ED}.comp().nodes.find((x) => x.id === 'Constant1').tracks.color[1].v")
+        self.assertLess(red[0], 0.9, red)
+        self.assertEqual(red[1:], [0.5, 0, 1], "the other axes are left as they were")
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-curve-editor.png"))
+        pg.evaluate(f"() => {ED}.undo()")
+        self.assertEqual(pg.evaluate(f"() => {ED}.comp().nodes.find((x) => x.id === 'Constant1').tracks.color[1].v"), [1, 0.5, 0, 1])
+        # A tangent: click the key, drag its handle; the curve's ease changes, the keys stay.
+        pg.evaluate("""() => { const d = __panel.compCurvesPanel.querySelector('.kf-dot[data-f="0"]'); d.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: 1, clientY: 1 })); d.ownerDocument.defaultView.dispatchEvent(new PointerEvent('pointerup')); }""")
+        h = pg.evaluate("() => { const t = __panel.compCurvesPanel.querySelector('.kf-tan'); if (!t) return null; const r = t.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }")
+        self.assertIsNotNone(h)
+        pg.mouse.move(*h); pg.mouse.down(); pg.mouse.move(h[0], h[1] - 40, steps=4); pg.mouse.up()
+        k0 = pg.evaluate(f"() => {ED}.comp().nodes.find((x) => x.id === 'Constant1').tracks.color[0]")
+        self.assertIn("to", k0)
+        self.assertEqual(self.errors, [])
+
     def test_several_selected_nodes_of_one_type_change_together(self):
         pg = self.page()
         self.new_comp(pg)

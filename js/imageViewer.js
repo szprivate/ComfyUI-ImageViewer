@@ -752,7 +752,8 @@ class ViewerPanel extends HTMLElement {
         // panels, each holding one part of the tab's editor (a .comp-slot the glue fills).
         // (A comp node's settings are not a panel of their own: on a comp tab they take the Parameters panel over.)
         for (const [id, prop, cls] of [['compGraph', 'compGraphPanel', 'comp-graph-panel'],
-                                       ['compLayers', 'compLayersPanel', 'comp-layers-panel']]) {
+                                       ['compLayers', 'compLayersPanel', 'comp-layers-panel'],
+                                       ['compCurves', 'compCurvesPanel', 'comp-curves-panel']]) {
             let cp = sr.getElementById(`${id}-panel`);
             if (!cp && this.curvesPanel && this.curvesPanel.parentNode) {
                 const doc = this.curvesPanel.ownerDocument;

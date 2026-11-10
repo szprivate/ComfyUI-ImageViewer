@@ -26,6 +26,7 @@ import * as CK from "./imageViewer_compColor.js";
 import * as Mo from "./imageViewer_mgModel.js";
 import { MG_CSS } from "./imageViewer_mgEditor.js";
 import { paintIcon } from "./imageViewer_paintIcons.js";
+import { createCompCurves } from "./imageViewer_compCurves.js";
 
 const CSS = `
 .cp-root{display:flex;flex-direction:column;position:absolute;inset:0;background:#0f0f12;color:#d8d8dc;font:12px/1.35 system-ui,Segoe UI,sans-serif;outline:none}
@@ -231,7 +232,25 @@ export function createCompEditor(host, opts = {}) {
     graph.append(gbar);
     const props = el(doc, "div", "mg-side mg-part"); props.tabIndex = 0;
     const layers = el(doc, "div", "cp-layers"); layers.tabIndex = 0;
-    const parts = { graph, props, layers };
+    const curvesEl = el(doc, "div", "cp-curves-part");
+    const parts = { graph, props, layers, curves: curvesEl };
+    // The Curve Editor: the selected nodes' keys (imageViewer_compCurves.js); every change one undo step here.
+    let curvesUI = null, curvesPushed = false;
+    function curves() {
+        if (curvesUI) return curvesUI;
+        curvesUI = createCompCurves(curvesEl, {
+            nodes: () => (st.comp ? [primary(), ...st.sel.map(node)].filter((n, i, a) => n && a.indexOf(n) === i) : []),
+            specOf: (n, p) => (C.NODE_TYPES[n.type] && C.NODE_TYPES[n.type].params[p]) || null,
+            valueAt: (n, p, f) => C.paramAt(n, p, f),
+            range: () => ({ min: 0, max: Math.max(1, (st.comp ? st.comp.format.frames : 2) - 1) }),
+            frame: () => st.frame,
+            begin: () => { if (liveBak.size) liveRestore(); st.hist.push(st.comp); curvesPushed = true; },
+            changed: () => { queueRender(); renderOverlay(); curvesUI.draw(); },
+            end: () => { if (curvesPushed) { st.dirty = true; curvesPushed = false; refresh(["bar", "props", "stage", "graph", "curves"]); } },
+            seek: (f) => setFrame(f),
+        });
+        return curvesUI;
+    }
 
     const btn = (label, title, fn, cls = "") => { const b = el(doc, "button", "mg-btn " + cls, label); b.title = title; b.onclick = fn; return b; };
     const toast = (m, sev) => { try { o.notify(m, sev); } catch (_) { /* no toasts */ } };
@@ -302,6 +321,7 @@ export function createCompEditor(host, opts = {}) {
         }
         if (which.includes("layers")) renderLayers();
         if (which.includes("stage")) { queueRender(); renderOverlay(); }
+        if (curvesEl.isConnected && (which.includes("curves") || which.includes("props"))) curves().draw();
     }
 
     // ── toolbar ──────────────────────────────────────────────────────────────
@@ -1489,6 +1509,7 @@ export function createCompEditor(host, opts = {}) {
         queueRender();
         renderOverlay();
         if (primary() && (Object.keys(primary().tracks || {}).length || primary().type === "roto")) renderProps();
+        if (curvesEl.isConnected && st.sel.length) curves().draw();
     }
 
     // Made in the window the editor is in, and made again when it moves (an observer of another window's
@@ -1529,7 +1550,8 @@ export function createCompEditor(host, opts = {}) {
         setFrame,
         setFormat(patch) { mutate(() => Object.assign(st.comp.format, patch)); if (o.onComp) o.onComp(); },
         refresh: () => refresh(),
-        relayout() { layoutCanvas(); if (!st.graph.fitted) frameAll(); },
+        relayout() { layoutCanvas(); if (!st.graph.fitted) frameAll(); if (curvesEl.isConnected) curves().draw(); },
+        curves: () => curves(),
         moved,
         /** A key the viewer's window saw first (its hotkeys run in the capture phase): handled here when it is the
          *  comp's own - with the focus in the graph, Layers, Properties or the picture. True when it was. */

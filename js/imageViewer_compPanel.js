@@ -22,9 +22,9 @@ import { COMP_SUFFIX, isCompPath, sourceName } from "./imageViewer_compModel.js"
 
 export const COMP_PREFIX = "comp:";
 /** The dock panels of a comp tab, and the editor part each one holds. */
-export const COMP_PANELS = { compGraph: "graph", compLayers: "layers" };
+export const COMP_PANELS = { compGraph: "graph", compLayers: "layers", compCurves: "curves" };
 /** Which of them are up the first time (the node editor is the default way in). */
-const FIRST_UP = { compGraph: true, compLayers: false };
+const FIRST_UP = { compGraph: true, compLayers: false, compCurves: false };
 
 const baseOf = (p) => String(p || "").split(/[\\/]/).pop();
 const nameOf = (p) => baseOf(p).replace(/\.comp\.json$/i, "");
