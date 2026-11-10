@@ -1066,6 +1066,8 @@ class ViewerPanel extends HTMLElement {
         this.rotateBtn.onclick = () => this.cycleSliderMode();
         if (this.closeBtn) this.closeBtn.onclick = () => { this.style.display = 'none'; };
         this.overlaysBtn.onclick = () => this.toggleOverlays();
+        // Right-click: switches for which overlays show (_overlaysMenu in imageViewer_mixinUI.js).
+        this.overlaysBtn.oncontextmenu = (e) => this._overlaysMenu(e);
 
         // The last-frame box: a readout, except on a previz tab, where it is
         // how long the shot is (see previzSyncTimelineFields).

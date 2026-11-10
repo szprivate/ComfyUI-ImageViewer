@@ -136,5 +136,70 @@ class ToggleOverlaysBrowserTests(unittest.TestCase):
         self.assertTrue(pg.evaluate(SHOWN)["off"])
         self.assertEqual(self.errors, [])
 
+    def _menu(self, pg):
+        # tabs.html holds two panels: the button of window.__panel, right-clicked where it is.
+        x, y = pg.evaluate("""() => { const r = window.__panel.overlaysBtn.getBoundingClientRect();
+            return [r.x + r.width / 2, r.y + r.height / 2]; }""")
+        pg.mouse.click(x, y, button="right")
+        pg.wait_for_selector("#overlays-menu", timeout=3000)
+        return pg.evaluate("""() => [...window.__panel.container.querySelectorAll('#overlays-menu .overlays-menu-row')]
+            .map(r => [r.dataset.overlay, r.querySelector('input').checked])""")
+
+    def test_right_click_menu_switches_single_overlays(self):
+        pg = self.page()
+        rows = self._menu(pg)
+        keys = [k for k, _ in rows]
+        self.assertEqual(keys[0], "*")
+        for k in ("shape", "exposure", "path", "toolbar", "frame", "compare", "contact", "model"):
+            self.assertIn(k, keys)
+        self.assertTrue(all(on for _, on in rows), rows)
+
+        # The size read-out off alone: the others stay, the button stays on, the setting holds it.
+        pg.click("#overlays-menu [data-overlay=shape] input")
+        st = pg.evaluate(SHOWN)
+        self.assertFalse(st["shape"])
+        self.assertTrue(st["exposure"] and st["toolbar"] and st["btn"] and not st["off"], st)
+        self.assertTrue(pg.evaluate("() => window.__panel._hiddenOverlays.has('shape')"))
+        self.assertTrue(pg.is_visible("#overlays-menu"))      # a switch does not close the menu
+
+        # A left click on the button still toggles them all, and back on the size read-out stays off.
+        pg.keyboard.press("Escape")
+        self.assertFalse(pg.is_visible("#overlays-menu"))
+        pg.evaluate("() => window.__panel.overlaysBtn.click()")
+        st = pg.evaluate(SHOWN)
+        self.assertTrue(st["off"] and not st["exposure"], st)
+        pg.evaluate("() => window.__panel.overlaysBtn.click()")
+        st = pg.evaluate(SHOWN)
+        self.assertTrue(st["exposure"] and not st["shape"], st)
+
+        # Switching one on while all are off brings the overlays back.
+        pg.evaluate("() => window.__panel.toggleOverlays(false)")
+        rows = dict(self._menu(pg))
+        self.assertFalse(rows["*"])
+        pg.click("#overlays-menu [data-overlay=shape] input")
+        st = pg.evaluate(SHOWN)
+        self.assertTrue(st["shape"] and st["exposure"] and not st["off"], st)
+        self.assertTrue(dict(pg.evaluate("""() => [...window.__panel.container.querySelectorAll('#overlays-menu .overlays-menu-row')]
+            .map(r => [r.dataset.overlay, r.querySelector('input').checked])"""))["*"])
+
+        # The "All overlays" switch is the left click.
+        pg.click("#overlays-menu [data-overlay='*'] input")
+        self.assertTrue(pg.evaluate(SHOWN)["off"])
+        # A click outside closes it.
+        pg.mouse.click(5, 5)
+        self.assertFalse(pg.is_visible("#overlays-menu"))
+        self.assertEqual(self.errors, [])
+
+    def test_hidden_overlays_come_from_the_setting(self):
+        pg = self.page()
+        pg.evaluate("""async () => { const s = await import('/extensions/viewer/imageViewer_settings.js');
+            const P = window.__panel; P._hiddenOverlays = s.parseHiddenOverlays('path,nope, exposure');
+            P._applyOverlays(); }""")
+        st = pg.evaluate(SHOWN)
+        self.assertFalse(st["path"] or st["exposure"])
+        self.assertTrue(st["shape"] and st["toolbar"], st)
+        self.assertEqual(sorted(pg.evaluate("() => [...window.__panel._hiddenOverlays]")), ["exposure", "path"])
+        self.assertEqual(self.errors, [])
+
 if __name__ == "__main__":
     unittest.main()
