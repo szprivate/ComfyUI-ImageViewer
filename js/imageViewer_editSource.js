@@ -177,8 +177,8 @@ export const EditSourceMixin = {
                 b.addEventListener("click", (e) => { e.stopPropagation(); fn(); });
                 return b;
             };
-            ctl.append(small("timelineView", "src-swap", () => this.editSrcSwap()),
-                       small("dualViewer", "src-mode", () => this.editSrcViewerMode()));
+            // Only the layout switch: Q (and the bar's caret menu) swap a single viewer.
+            ctl.append(small("dualViewer", "src-mode", () => this.editSrcViewerMode()));
             this._editSrcCtl = ctl;
         }
         const up = this._editSrcOn(), v = this._editSrcViewer();      // on, even while a single viewer shows the timeline
@@ -198,11 +198,257 @@ export const EditSourceMixin = {
         mode.setAttribute("aria-pressed", dual ? "true" : "false");
         mode.title = dual ? "Dual viewer: on (source | timeline) - click for a single viewer"
                           : "Dual viewer: off - click for source and timeline side by side";
-        const swap = ctl.querySelector(".src-swap");
-        swap.style.display = dual ? "none" : "";
-        const icon = showsSource ? "timelineView" : "srcViewer";
-        if (swap.dataset.icon !== icon) setEditIcon(swap, icon);
-        swap.title = showsSource ? "Show the timeline in this viewer (Q)" : "Show the source in this viewer (Q)";
+        this._editMonBarPlace();
+        this._editMonShow();
+    },
+
+    // ── the two monitors: the timeline viewer's own bar, which one is active ──
+
+    /** Both viewers on screen side by side (dual, the Source viewer up on a cut's tab). */
+    _editMonDual() {
+        return !!(this._editSrcUp && this._editSrcUp() && this._editSrcViewer().mode === "dual");
+    },
+
+    /** The timeline viewer (#viewport) is on screen on a cut's tab with the Source viewer on. */
+    _editMonTlShown() {
+        if (!this._editSrcOn || !this._editSrcOn()) return false;
+        const v = this._editSrcViewer();
+        return v.mode === "dual" || v.show === "timeline";
+    },
+
+    /**
+     * Which monitor the playback keys drive: "source" or "timeline". With one of them on
+     * screen, that one; side by side, the one clicked last (Resolve's active viewer).
+     */
+    editMonActive() {
+        const src = !!(this._editSrcUp && this._editSrcUp()), tl = this._editMonTlShown();
+        if (src && !tl) return "source";
+        if (!src) return "timeline";
+        return this._editMon === "source" ? "source" : "timeline";
+    },
+
+    /** Make `which` ("source" / "timeline") the active monitor (a click on it does). */
+    editMonSet(which) {
+        this._editMon = which === "source" ? "source" : "timeline";
+        this._editMonShow();
+        return this.editMonActive();
+    },
+
+    /** The white outline round the active monitor's picture - only while both stand side by side. */
+    _editMonShow() {
+        const dual = this._editMonDual(), act = this.editMonActive();
+        if (this.editSourcePanel) this.editSourcePanel.classList.toggle("mon-active", dual && act === "source");
+        if (this.viewport) this.viewport.classList.toggle("mon-active", dual && act === "timeline");
+        this._editMonWire();
+    },
+
+    /** A press on the timeline viewer makes it the active one (once per element; it survives a pop-out). */
+    _editMonWire() {
+        const vp = this.viewport;
+        if (!vp || vp._imageViewerMonWired) return;
+        vp._imageViewerMonWired = true;
+        vp.addEventListener("pointerdown", () => {
+            if (this._editMonTlShown() && this.isEditTab && this.isEditTab()) this.editMonSet("timeline");
+        }, true);
+    },
+
+    /**
+     * A key for the monitors (asked by handleKeyDown after the timeline's own keys): with the
+     * Source viewer focused, or active and the viewer hovered, its keys; with the timeline viewer
+     * active and hovered, the timeline's transport keys (J K L, I O, X, Home End, Up Down, arrows).
+     * -> true when it was taken.
+     */
+    editMonKeyDown(e) {
+        if (!this._editSrcUp || !this._editSrcUp()) return false;
+        if (!this.isEditTab || !this.isEditTab()) return false;
+        const path = e.composedPath ? e.composedPath() : [];
+        const t = path[0];
+        if (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || "") || t.isContentEditable)) return false;
+        if (path.some((n) => n && n.classList && n.classList.contains("edit-dialog"))) return false;
+        const body = this.editSourcePanel.querySelector(":scope > .src-body");
+        const inSrc = !!body && path.includes(body);
+        const act = this.editMonActive();
+        if (inSrc || (act === "source" && this.isHovered)) {
+            if (e.ctrlKey || e.metaKey) return false;
+            this._editSrcKey(e);
+            if (!e.defaultPrevented) return false;
+            e.stopImmediatePropagation();
+            return true;
+        }
+        if (act !== "timeline" || !this.isHovered || !this._editTlCut || !this.editTlKeyDown) return false;
+        if (e.ctrlKey || e.metaKey) return false;
+        const low = String(e.key).toLowerCase();
+        const letter = /^Key[A-Z]$/.test(e.code || "") ? e.code.slice(3).toLowerCase() : low;
+        const transport = ["j", "k", "l", "i", "o", "x"].includes(letter)
+            || ["Home", "End", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key);
+        if (!transport) return false;
+        this._editTlKeyForce = true;
+        try { return !!this.editTlKeyDown(e); } finally { this._editTlKeyForce = false; }
+    },
+
+    /**
+     * The timeline viewer's own bar (as the Source viewer's): the cut's scrub bar with its in / out,
+     * play and the timecode, at the bottom of #viewport while the Source viewer is on - the same
+     * playhead as the Edit timeline's (currentFrame), so the two are one.
+     */
+    _editMonBarPlace() {
+        const vp = this.viewport;
+        if (!vp) return;
+        const doc = vp.ownerDocument;
+        let bar = this._editMonBar;
+        if (!bar || bar.ownerDocument !== doc) {
+            if (bar) bar.remove();
+            const el = (tag, cls, text) => {
+                const n = doc.createElement(tag);
+                if (cls) n.className = cls;
+                if (text !== undefined) n.textContent = text;
+                return n;
+            };
+            bar = el("div", "tl-monbar");
+            const scrub = el("div", "src-scrub tlm-scrub");
+            scrub.append(el("div", "src-range"), el("div", "src-line"));
+            scrub.addEventListener("pointerdown", (e) => this._editMonScrubDown(e, scrub));
+            const row = el("div", "src-row");
+            const play = el("button", "edit-btn src-btn tlm-play", "▶");
+            play.title = "Play / stop the cut (Space, with the timeline viewer active)";
+            play.addEventListener("click", (e) => {
+                e.stopPropagation();
+                this.editMonSet("timeline");
+                if (this.isPlaying) this.stop(); else this.play();
+                this._editMonBarDraw();
+            });
+            const name = el("div", "src-name tlm-name", "Timeline");
+            row.append(play, el("div", "src-tc tlm-tc"), name);
+            bar.append(scrub, row);
+            // Its own presses are not the viewer's pan, zoom or tools.
+            for (const ev of ["mousedown", "pointerdown", "wheel", "dblclick", "contextmenu"]) {
+                bar.addEventListener(ev, (e) => { e.stopPropagation(); if (ev === "pointerdown") this.editMonSet("timeline"); });
+            }
+            this._editMonBar = bar;
+        }
+        const show = this._editMonTlShown() && !!(this.isEditTab && this.isEditTab());
+        // The viewer's path line stands where the bar does: the bar says it instead (_editMonBarDraw).
+        vp.classList.toggle("has-monbar", show);
+        if (!show) { bar.remove(); return; }
+        if (bar.parentNode !== vp) vp.append(bar);
+        this._editMonBarDraw();
+    },
+
+    /** The timeline viewer's bar as the frame stands (from _editTlPlayhead, once a frame). */
+    _editMonBarDraw() {
+        const bar = this._editMonBar, cut = this._editTlCut;
+        if (!bar || !bar.isConnected || !cut) return;
+        const fps = cut.fps || 24;
+        const frames = Math.max(1, D.filmFrames(cut));
+        const f = this.currentFrame || 0;
+        const share = (fr) => Math.max(0, Math.min(1, fr / frames)) * 100;
+        bar.querySelector(".src-line").style.left = share(f) + "%";
+        const range = bar.querySelector(".src-range"), pr = this.playbackRange;
+        if (pr && Number.isFinite(pr.start) && Number.isFinite(pr.end)) {
+            range.style.display = "";
+            range.style.left = share(pr.start) + "%";
+            range.style.width = Math.max(0, share(pr.end + 1) - share(pr.start)) + "%";
+        } else range.style.display = "none";
+        let text = D.timecode(f / fps, fps);
+        if (pr && Number.isFinite(pr.start) && Number.isFinite(pr.end)) {
+            text += `  in ${D.timecode(pr.start / fps, fps)}  out ${D.timecode((pr.end + 1) / fps, fps)}  (${pr.end - pr.start + 1} fr)`;
+        }
+        const tc = bar.querySelector(".tlm-tc");
+        if (tc.textContent !== text) tc.textContent = text;
+        bar.dataset.head = String(f);
+        const play = bar.querySelector(".tlm-play");
+        const p = this.isPlaying ? "■" : "▶";
+        if (play.textContent !== p) play.textContent = p;
+        const name = bar.querySelector(".tlm-name");
+        const pathBar = this.viewport && this.viewport.querySelector(":scope > .path-bar");
+        const label = (pathBar && pathBar.textContent.trim()) || cut.name || "Timeline";
+        if (name.textContent !== label) name.textContent = label;
+    },
+
+    _editMonScrubDown(e, scrub) {
+        const cut = this._editTlCut;
+        if (!cut || e.button !== 0) return;
+        e.preventDefault();
+        const frames = Math.max(1, D.filmFrames(cut));
+        const at = (ev) => {
+            const r = scrub.getBoundingClientRect();
+            return Math.max(0, Math.min(frames - 1, Math.floor(((ev.clientX - r.left) / Math.max(1, r.width)) * frames)));
+        };
+        if (this.isPlaying) this.stop();
+        const go = (ev) => { this.setFrame(at(ev)); if (this.editScrubAt) this.editScrubAt((this.currentFrame || 0) / (cut.fps || 24)); };
+        go(e);
+        const win = scrub.ownerDocument.defaultView || window;
+        const up = () => { win.removeEventListener("pointermove", go); win.removeEventListener("pointerup", up); };
+        win.addEventListener("pointermove", go);
+        win.addEventListener("pointerup", up);
+    },
+
+    // ── the Source viewer's pan and zoom: the timeline viewer's (setupZoomAndPan) ──
+
+    _editSrcZoomState() {
+        if (!this._editSrcZ) this._editSrcZ = { zoom: 1, x: 0, y: 0 };
+        return this._editSrcZ;
+    },
+
+    _editSrcTransform() {
+        const z = this._editSrcZoomState(), m = this._editSrcEl;
+        if (!m) return;
+        m.style.transform = z.zoom === 1 && !z.x && !z.y ? "" : `translate(${z.x}px, ${z.y}px) scale(${z.zoom})`;
+        const host = this.editSourcePanel, body = host && host.querySelector(":scope > .src-body");
+        if (body) body.dataset.zoom = String(Math.round(z.zoom * 100) / 100);
+    },
+
+    /** F: the source fits its viewer again. */
+    editSrcFit() {
+        this._editSrcZ = { zoom: 1, x: 0, y: 0 };
+        this._editSrcTransform();
+    },
+
+    /** Zoom keeping the point under (clientX, clientY) where it is, as the viewer's _zoomAt. */
+    _editSrcZoomAt(zoom, clientX, clientY) {
+        const z = this._editSrcZoomState();
+        const host = this.editSourcePanel, view = host && host.querySelector(".src-view");
+        zoom = Math.max(0.05, Math.min(zoom, 20));
+        if (view) {
+            const r = view.getBoundingClientRect();
+            if (r.width && r.height) {
+                const sx = clientX - r.left - r.width / 2, sy = clientY - r.top - r.height / 2;
+                const ratio = zoom / (z.zoom || 1);
+                z.x = sx - ratio * (sx - z.x);
+                z.y = sy - ratio * (sy - z.y);
+            }
+        }
+        z.zoom = zoom;
+        this._editSrcTransform();
+    },
+
+    /** The wheel zooms at the pointer, a left or middle drag pans, a right drag zooms - as on the timeline viewer. */
+    _editSrcWireView(view) {
+        view.addEventListener("contextmenu", (e) => e.preventDefault());
+        view.addEventListener("wheel", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const z = this._editSrcZoomState();
+            this._editSrcZoomAt(z.zoom + (e.deltaY > 0 ? -0.1 : 0.1), e.clientX, e.clientY);
+        }, { passive: false });
+        view.addEventListener("mousedown", (e) => {
+            if (e.button > 2) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const z = this._editSrcZoomState();
+            const zooming = e.button === 2;
+            const ax = e.clientX, ay = e.clientY;
+            let lx = e.clientX, ly = e.clientY;
+            const win = view.ownerDocument.defaultView || window;
+            const move = (ev) => {
+                if (zooming) this._editSrcZoomAt(z.zoom + (ev.clientX - lx) * 0.005 * z.zoom, ax, ay);
+                else { z.x += ev.clientX - lx; z.y += ev.clientY - ly; this._editSrcTransform(); }
+                lx = ev.clientX; ly = ev.clientY;
+            };
+            const up = () => { win.removeEventListener("mousemove", move); win.removeEventListener("mouseup", up); };
+            win.addEventListener("mousemove", move);
+            win.addEventListener("mouseup", up);
+        });
     },
 
     /** The bar's Source buttons as things stand (from editTlRefresh). */
@@ -285,7 +531,10 @@ export const EditSourceMixin = {
             body.dataset.file = key;
             body.tabIndex = 0;
             body.addEventListener("keydown", (e) => this._editSrcKey(e));
-            body.addEventListener("pointerdown", () => { try { body.focus({ preventScroll: true }); } catch (_) {} });
+            body.addEventListener("pointerdown", () => {
+                this.editMonSet("source");                 // the active monitor: playback keys come here
+                try { body.focus({ preventScroll: true }); } catch (_) {}
+            });
             const carries = (e) => { try { const t = Array.from(e.dataTransfer.types || []); return t.includes(DRAG_TYPE) || t.includes("Files"); } catch (_) { return false; } };
             body.addEventListener("dragover", (e) => { if (!carries(e)) return; e.preventDefault(); body.classList.add("landing"); });
             body.addEventListener("dragleave", (e) => { if (!e.relatedTarget || !body.contains(e.relatedTarget)) body.classList.remove("landing"); });
@@ -307,6 +556,8 @@ export const EditSourceMixin = {
             };
             head.append(name, small("close", "Put the Source viewer away", () => this.editSrcToggle(false), "src-close"));
             const view = el("div", "src-view");
+            this._editSrcWireView(view);
+            this._editSrcZ = { zoom: 1, x: 0, y: 0 };      // a new file fits its viewer
             const scrub = el("div", "src-scrub");
             scrub.append(el("div", "src-range"), el("div", "src-line"));
             scrub.addEventListener("pointerdown", (e) => this._editSrcScrubDown(e, scrub));
@@ -351,6 +602,7 @@ export const EditSourceMixin = {
             if (s.sound) { const note = el("div", "src-sound", "♪ " + s.name); view.replaceChildren(note, media); }
             else view.replaceChildren(media);
             this._editSrcEl = media;
+            this._editSrcTransform();
         } else if (!s) view.replaceChildren();
         this._editSrcCtlPlace();
         this._editSrcDraw();
@@ -429,6 +681,33 @@ export const EditSourceMixin = {
         this._editSrcDraw();
     },
 
+    /**
+     * J / K / L on the source: L plays (again: faster, up to 8x), K stops, J runs it backwards
+     * on a timer (again: faster) - a film cannot be played backwards, only shown frame by frame.
+     */
+    editSrcShuttle(dir) {
+        const s = this._editSrcState(), m = this._editSrcEl;
+        const win = (this.editSourcePanel && this.editSourcePanel.ownerDocument.defaultView) || window;
+        const back = this._editSrcBack;
+        if (back) { win.clearInterval(back.id); this._editSrcBack = null; }
+        if (!s || s.still || !m) return;
+        if (dir === 0) { this.editSrcPlay(false); try { m.playbackRate = 1; } catch (_) {} return; }
+        if (dir > 0) {
+            const rate = this._editSrcPlaying ? Math.min(8, (m.playbackRate || 1) * 2) : 1;
+            try { m.playbackRate = rate; } catch (_) {}
+            if (!this._editSrcPlaying) this.editSrcPlay(true);
+            return;
+        }
+        this.editSrcPlay(false);
+        const rate = back ? Math.min(8, back.rate * 2) : 1;
+        const fps = this._editSrcFps();
+        const id = win.setInterval(() => {
+            if (!s || s.head <= 0) { this.editSrcShuttle(0); return; }
+            this.editSrcStep(-1);
+        }, 1000 / (fps * rate));
+        this._editSrcBack = { id, rate };
+    },
+
     _editSrcStopped() {
         if (!this._editSrcPlaying) return;
         this._editSrcPlaying = false;
@@ -480,7 +759,12 @@ export const EditSourceMixin = {
         let done = true;
         const kind = sourceEditKey(e.key, e.shiftKey);
         if (kind) this.editSrcEdit(kind);
-        else if (e.key === " ") this.editSrcPlay();
+        else if (e.key === " ") {
+            if (this._editSrcBack) this.editSrcShuttle(0);
+            else { if (!this._editSrcPlaying && this._editSrcEl) { try { this._editSrcEl.playbackRate = 1; } catch (_) {} } this.editSrcPlay(); }
+        }
+        else if ((low === "j" || low === "k" || low === "l") && !e.shiftKey && !e.altKey) this.editSrcShuttle(low === "j" ? -1 : low === "l" ? 1 : 0);
+        else if (low === "f" && !e.shiftKey && !e.altKey) this.editSrcFit();
         else if (low === "i" && !e.altKey) this.editSrcMark("in");
         else if (low === "o" && !e.altKey) this.editSrcMark("out");
         else if (low === "x" && (e.altKey || e.shiftKey)) this.editSrcMark(null);

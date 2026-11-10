@@ -60,12 +60,16 @@ The Source viewer is a second viewer for one source clip, like Resolve's source 
 
 It has two layouts, like Resolve's single and dual viewer modes. Switch between them with the Dual viewer toggle: the button at the top right of the right-hand viewer (it stays there in every layout and is lit while the dual viewer is on), or Dual viewer in the menu (▾) after the edit buttons on the bar:
 - **Dual**: the source on the left, the timeline's picture on the right.
-- **Single**: one viewer, showing the source or the timeline. <kbd>Q</kbd>, or the button beside the toggle, switches between them.
+- **Single**: one viewer, showing the source or the timeline. <kbd>Q</kbd> (or Switch source / timeline in the ▾ menu) switches between them.
+
+Each viewer has its own bar under the picture: the source's scrub bar with its marks, and the timeline's, whose playhead is the Edit timeline's playhead (move one and the other moves). Click a viewer to make it the active one: in the dual layout it gets a white outline, and the playback keys (<kbd>Space</kbd>, <kbd>J</kbd> <kbd>K</kbd> <kbd>L</kbd>, the arrows, <kbd>I</kbd> / <kbd>O</kbd>, <kbd>Home</kbd> / <kbd>End</kbd>) drive it while the pointer is over the viewer. Clicking the Edit timeline makes the timeline viewer the active one.
+
+The Source viewer pans and zooms like the timeline viewer: the wheel zooms at the pointer, a left or middle drag pans, a right drag zooms, and <kbd>F</kbd> fits the picture again.
 
 To load a clip into it, click a History thumbnail while a cut is open (this opens the Source viewer if it is off). You can also drop a clip onto it from the History, the file browser, the desktop or the node canvas, or right-click a clip on the timeline › Open in Source viewer. To see a History item in the Viewer instead, switch to the Viewer tab first, or double-click the thumbnail. While the Source viewer is open, <kbd>F</kbd> (match frame) loads the clip there instead of opening it in the Viewer tab.
 
 Click the Source viewer to give it the keys. Then:
-- <kbd>Space</kbd> plays the source.
+- <kbd>Space</kbd> plays the source; <kbd>L</kbd> plays it (again: faster), <kbd>K</kbd> stops, <kbd>J</kbd> runs it backwards.
 - The arrow keys step through it.
 - <kbd>I</kbd> and <kbd>O</kbd> mark its in and out.
 - <kbd>Alt</kbd>+<kbd>X</kbd> clears both marks.
