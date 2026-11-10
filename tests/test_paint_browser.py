@@ -1903,6 +1903,78 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(names(), ["Background", "A", "A copy"])
         self.assertEqual(self.errors, [])
 
+    def test_a_mask_on_the_canvas_is_painted_there_and_a_layer_dropped_on_a_layer_becomes_its_mask(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        x0, y0, w, h = pg.evaluate(f"() => {{ const r = {ed}.canvas.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }}")
+        k = w / 200
+        row = lambda n: f"[...{ed}.layerList.querySelectorAll('.paint-row')].find((x) => x.querySelector('.nm').textContent === '{n}')"
+        tint = lambda x, y: pg.evaluate(f"() => [...{ed}.tint.getContext('2d').getImageData({x}, {y}, 1, 1).data]")
+        state = lambda: pg.evaluate(f"() => [{ed}.viewMask === {ed}.active().id, {ed}.editMask, {ed}.maskBar.classList.contains('on')]")
+        pg.evaluate(f"() => {{ const e = {ed}; e.newLayer('A'); e.pix.get(e.active().id).fill(255); e.addMask('all'); e.setActive(e.active().id, false); e.redraw(); }}")
+        # \ with the layer's PIXELS picked: its mask on the canvas, and the mask is what is painted.
+        pg.mouse.move(x0 + 5, y0 + 5)
+        pg.keyboard.press("Backslash")
+        self.assertEqual(state(), [True, True, True])
+        self.assertIn("Mask of A", pg.evaluate(f"() => {ed}.maskBar.textContent"))
+        self.assertEqual(tint(100, 60), [255, 255, 255, 255])
+        pg.evaluate(f"() => {{ const e = {ed}; e.setTool('brush'); e.fg = [0, 0, 0]; e.opts.brush.size = 20; e.opts.brush.hardness = 100; }}")
+        pg.mouse.move(x0 + 50 * k, y0 + 60 * k); pg.mouse.down()
+        pg.mouse.move(x0 + 150 * k, y0 + 60 * k, steps=10); pg.mouse.up()
+        self.assertEqual(pg.evaluate(f"() => {ed}.masks.get({ed}.active().id)[60 * 200 + 100]"), 0)
+        self.assertEqual(tint(100, 60), [0, 0, 0, 255])
+        self.assertEqual(pg.evaluate(f"() => [...{ed}.pix.get({ed}.active().id).slice((60*200+100)*4, (60*200+100)*4+4)]"), [255, 255, 255, 255])
+        # Shift+\ : the picture with red where the mask hides; the bar's button back to the mask alone.
+        pg.keyboard.press("Shift+Backslash")
+        self.assertEqual(tint(100, 60), [255, 0, 0, 128])
+        self.assertEqual(tint(10, 10)[3], 0)
+        pg.evaluate(f"() => [...{ed}.maskBar.querySelectorAll('button')].find((b) => b.textContent === 'Mask alone').click()")
+        self.assertEqual(tint(100, 60), [0, 0, 0, 255])
+        # Picking the layer's pixels ends it (the brush would paint what is not shown).
+        pg.evaluate(f"() => {row('A')}.querySelector('canvas').dispatchEvent(new MouseEvent('click', {{ bubbles: true }}))")
+        self.assertEqual(pg.evaluate(f"() => [{ed}.viewMask, {ed}.editMask, {ed}.maskBar.classList.contains('on'), {ed}.tint.style.display]"),
+                         [None, False, False, "none"])
+        # Properties' "Show on the canvas" does the same as \ ; Esc gives the picture back.
+        pg.evaluate(f"() => {ed}.setActive({ed}.active().id, true)")
+        pg.evaluate(f"""() => [...{ed}.parts.props.querySelectorAll('.paint-sect button')].find((b) => b.textContent === 'Show on the canvas').click()""")
+        self.assertEqual(state(), [True, True, True])
+        pg.mouse.move(x0 + 5, y0 + 5)
+        pg.keyboard.press("Escape")
+        self.assertEqual(pg.evaluate(f"() => [{ed}.viewMask, {ed}.maskBar.classList.contains('on')]"), [None, False])
+        # A layer dragged onto A's row (its middle) becomes A's mask: white shows, transparent hides; the layer goes.
+        pg.evaluate(f"""() => {{ const e = {ed}; e.newLayer('M'); const b = e.pix.get(e.active().id); b.fill(0);
+            for (let y = 0; y < 120; y++) for (let x = 0; x < 100; x++) b.set([255, 255, 255, 255], (y * 200 + x) * 4);
+            for (let y = 0; y < 120; y++) b.set([128, 128, 128, 255], (y * 200 + 50) * 4); e.redraw(); }}""")
+        names = lambda: pg.evaluate(f"() => {ed}.doc.layers.map((l) => l.name)")
+        self.assertEqual(names(), ["Background", "A", "M"])
+        self.real_drag(pg, f"{row('M')}.querySelector('.nm')", row("A"))
+        pg.wait_for_function(f"() => !{ed}.doc.layers.some((l) => l.name === 'M')", timeout=5000)
+        self.assertEqual(names(), ["Background", "A"])
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Layer to mask (replaced)")
+        mask = pg.evaluate(f"() => {{ const m = {ed}.masks.get({ed}.doc.layers[1].id); return [m[60 * 200 + 20], m[60 * 200 + 50], m[60 * 200 + 180]]; }}")
+        self.assertEqual(mask, [255, 128, 0])
+        self.assertEqual(pg.evaluate(f"() => [{ed}.active().name, {ed}.editMask]"), ["A", True])
+        comp = lambda x, y: pg.evaluate(f"() => [...{ed}.comp.slice(({y} * 200 + {x}) * 4, ({y} * 200 + {x}) * 4 + 4)]")
+        self.assertEqual(comp(20, 60), [255, 255, 255, 255])
+        self.assertEqual(comp(180, 100), [0, 0, 160, 255])
+        pg.evaluate(f"() => {ed}.undo()")
+        self.assertEqual(names(), ["Background", "A", "M"])
+        self.assertEqual(pg.evaluate(f"() => {ed}.masks.get({ed}.doc.layers[1].id)[60 * 200 + 100]"), 0)
+        # Alt held when it is dropped: the layer stays as well. Dropping near a row's edge still reorders.
+        pg.evaluate(f"() => {ed}.layerToMask({ed}.doc.layers[2].id, {ed}.doc.layers[0].id, {{ keep: true }})")
+        self.assertEqual(names(), ["Background", "A", "M"])
+        self.assertEqual(pg.evaluate(f"() => {ed}.masks.get({ed}.doc.layers[0].id)[60 * 200 + 20]"), 255)
+        pg.evaluate(f"() => {row('M')}.scrollIntoView({{ block: 'nearest' }})")
+        a = pg.evaluate(f"() => {{ const r = {row('A')}.querySelector('.nm').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; }}")
+        b = pg.evaluate(f"() => {{ const r = {row('M')}.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height * 0.15]; }}")
+        pg.mouse.move(*a); pg.mouse.down(); pg.mouse.move(a[0] + 4, a[1] - 4, steps=2)
+        pg.mouse.move(b[0], b[1], steps=8); pg.mouse.move(b[0] + 1, b[1], steps=2); pg.mouse.up()
+        pg.wait_for_function(f"() => {ed}.doc.layers[1].name === 'M'", timeout=5000)
+        self.assertEqual(names(), ["Background", "M", "A"])
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Move layer")
+        self.assertEqual(self.errors, [])
+
     def test_save_as_dialog_writes_a_psd_asks_before_overwriting_and_lands_in_the_history(self):
         pg = self.page()
         self.open_photo(pg)
