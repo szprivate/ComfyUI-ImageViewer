@@ -223,3 +223,60 @@ class EditProxyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def make_prores(path, w, h, seconds, fps=24):
+    """A ProRes MOV - every frame an I frame, as the viewer's own MOVs are written."""
+    with av.open(path, "w", format="mov") as out:
+        vs = out.add_stream("prores_ks", rate=fps, options={"profile": "2"})
+        vs.width, vs.height, vs.pix_fmt = w, h, "yuv422p10le"
+        y, x = np.mgrid[0:h, 0:w]
+        for i in range(int(seconds * fps)):
+            img = np.zeros((h, w, 3), dtype=np.uint8)
+            img[..., 0] = (x + i * 8) % 256
+            img[..., 1] = (y + i * 4) % 256
+            vf = av.VideoFrame.from_ndarray(img, format="rgb24")
+            vf.pts = i
+            for pkt in vs.encode(vf):
+                out.mux(pkt)
+        for pkt in vs.encode():
+            out.mux(pkt)
+
+
+@unittest.skipIf(av is None, "needs PyAV, numpy, aiohttp and Pillow (ComfyUI's interpreter)")
+class ProResCopyTests(unittest.TestCase):
+    """A ProRes film's copies place their own key frames. The decoder hands every frame
+    over marked I, and libx264 took that as an order: the copies came out all key frames
+    (scrubbing quick, playback stuttering)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+        cls.tmp = tempfile.mkdtemp()
+        cls.app, cls.va, cls.tm, cls.dirs, cls.pkg = _load(cls.tmp)
+        cls.mr = sys.modules[cls.pkg + ".media_resolve"]
+        cls.film = os.path.join(cls.dirs["output"], "prores.mov")
+        make_prores(cls.film, 1920, 1080, 3)
+
+    @classmethod
+    def tearDownClass(cls):
+        for k in [k for k in sys.modules if k == cls.pkg or k.startswith(cls.pkg + ".")]:
+            sys.modules.pop(k, None)
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_the_playable_copy_has_a_key_frame_a_second(self):
+        copy = self.mr.video_proxy(self.film)
+        self.assertTrue(copy and copy.endswith(".mp4"))
+        gaps = key_gaps(copy)
+        self.assertEqual(len(gaps), 2, gaps)                     # 3 s: key frames at 0, 1, 2
+        for g in gaps:
+            self.assertAlmostEqual(g, 1.0, places=2)
+
+    def test_the_edit_proxy_has_a_key_frame_every_half_second(self):
+        dst = self.mr.edit_proxy_path(self.film)
+        self.mr._make_edit_proxy(self.film, dst)
+        self.assertTrue(os.path.isfile(dst))
+        gaps = key_gaps(dst)
+        self.assertEqual(len(gaps), 5, gaps)
+        for g in gaps:
+            self.assertAlmostEqual(g, 0.5, places=2)
