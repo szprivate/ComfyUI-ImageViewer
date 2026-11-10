@@ -240,6 +240,12 @@ export const CompPanelMixin = {
         this.paramsTitle.innerText = n ? `${n.name || n.id}` : "Comp";
     },
 
+    /** The viewer moved into another window (popped out or back): every comp's editor draws in that one now. */
+    _cpAfterMove() {
+        const st = this._cpState();
+        for (const rec of Object.values(st.tabs)) if (rec.editor && rec.editor.moved) rec.editor.moved();
+    },
+
     compTabLeave() {
         if (!this._cpOn) return;
         const st = this._cpState();
@@ -340,7 +346,7 @@ export const CompPanelMixin = {
             else slot.replaceChildren(this._cpNote(slot.ownerDocument, "Open a comp to see its " + (part === "graph" ? "node graph" : part) + "."));
         }
         this._cpSeatBottom(rec);
-        if (rec && rec.editor) requestAnimationFrame(() => rec.editor.relayout && rec.editor.relayout());
+        if (rec && rec.editor) this._viewerWindow().requestAnimationFrame(() => rec.editor.relayout && rec.editor.relayout());
     },
 
     // ── ComfyUI's bottom panel (imageViewer_compComfyTab.js) ─────────────────
@@ -647,7 +653,7 @@ export const CompPanelMixin = {
                     colour.style.display = fmt === "exr" || cols.length < 2 ? "none" : "";
                     for (const n of [codecSel, codecSel.previousSibling]) if (n) n.style.display = fmt === "mov" ? "" : "none";
                 };
-                requestAnimationFrame(() => {
+                this._viewerWindow().requestAnimationFrame(() => {
                     const sel = this.container.querySelector(".export-dlg .rd-box select");
                     if (sel) sel.addEventListener("change", sync);
                     sync();

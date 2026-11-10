@@ -16,7 +16,7 @@ Comp layers pictures, films and image sequences in a node graph, the way Nuke do
 
 The **Node Graph** panel is up when a comp opens. The picture runs from top to bottom: a node's inputs are on its top edge, its output at the bottom.
 
-- **Tab** opens a list of nodes to add; type to narrow it. With a node selected, the new one goes in under it.
+- **Tab**, the **Add** button and a right-click on the graph open the node menu. Type to find a node by its name, its category or its id; the arrow keys and Enter pick one, and the list scrolls. With a node selected, a node from Tab or Add goes in under it; from a right-click on an empty spot it lands where you clicked. A right-click on a node puts that node's actions (view, disable, rename, delete) at the top of the same menu.
 - Drag a node to move it. Drag on empty space to select several, or Alt-drag or middle-drag to pan. The wheel zooms.
 - Drag from an output to an input to connect them. Drag a connected input away to take the wire off.
 - **1**, or the eye at a node's right edge, shows that node in the picture: it gets a red outline and a VIEWER tag, and the eye again (or viewing the Output) goes back to the comp. **D** switches a node off, **Del** deletes it (what read it reads its first input instead), **F** frames the whole graph.

@@ -195,6 +195,92 @@ class CompBrowserTests(unittest.TestCase):
         self.assertEqual(st, {"graph": False, "mode": False})
         self.assertEqual(self.errors, [])
 
+    def test_popped_out_the_picture_is_drawn(self):
+        """The viewer in its own window, the main window behind it (its frames stop): the picture still draws there,
+        for a comp opened before the pop-out and for one opened after it."""
+        pg = self.page()
+        self.new_comp(pg)
+        with pg.context.expect_page() as pop:
+            pg.evaluate("() => window.__panel.toggleUndock()")
+        win = pop.value
+        win.wait_for_load_state()
+        pg.wait_for_function(f"() => {self.ED}.canvas.ownerDocument !== document", timeout=10000)
+        win.wait_for_timeout(400)
+        pg.evaluate("() => { window.requestAnimationFrame = () => 0; }")      # the window behind: no frames there
+        for color in ([0, 1, 0, 1], [1, 0, 1, 1]):
+            pg.evaluate(f"""(c) => {{ const e = {self.ED}; e.comp().nodes.find((n) => n.type === 'constant').color = c; e.refresh(); }}""", color)
+            win.wait_for_timeout(500)
+            px = self.pixel(pg, 0.5, 0.5)
+            self.assertEqual([px[0] > 200, px[1] > 200, px[2] > 200], [c > 0.5 for c in color[:3]], (color, px))
+            box = pg.evaluate(f"""() => {{ const c = {self.ED}.canvas, r = c.getBoundingClientRect(), s = c.parentElement.getBoundingClientRect();
+                return [r.width, r.height, s.width, s.height]; }}""")
+            self.assertTrue(abs(box[0] - (box[2] - 24)) < 2 or abs(box[1] - (box[3] - 24)) < 2, f"fitted to the stage: {box}")
+        # A second comp, opened while popped out.
+        self.new_comp(pg)
+        pg.evaluate(f"""() => {{ const e = {self.ED}; e.comp().nodes.find((n) => n.type === 'constant').color = [1, 1, 0, 1]; e.refresh(); }}""")
+        win.wait_for_timeout(600)
+        px = self.pixel(pg, 0.5, 0.5)
+        self.assertTrue(px[0] > 200 and px[1] > 200 and px[2] < 60, px)
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            win.screenshot(path=os.path.join(SHOTS, "comp-popped-out.png"))
+        self.assertEqual(self.errors, [])
+
+    def test_the_node_menus_scroll_and_find_a_node_by_typing(self):
+        """The Add button's menu and the graph's right-click menu: one list that scrolls with the wheel (the graph
+        does not zoom under it), a field on top that finds a node by name, category or id, Enter adds it."""
+        pg = self.page()
+        self.new_comp(pg)
+        pg.evaluate("() => __panel.setPanelDocked('compGraph', true)")
+        graph = pg.evaluate_handle("() => __panel.compGraphPanel.querySelector('.cp-graph')")
+        add = graph.evaluate_handle("(g) => g.querySelector('.cp-add')")
+        add.click()
+        menu = graph.evaluate_handle("(g) => g.querySelector('.cp-tabmenu')")
+        info = menu.evaluate("""(m) => { const l = m.querySelector('.cp-tmlist'), r = m.getBoundingClientRect(), g = m.parentElement.getBoundingClientRect();
+            return { scroll: l.scrollHeight > l.clientHeight, inside: r.bottom <= g.bottom + 1, focused: m.getRootNode().activeElement === m.querySelector('input'),
+                     heads: m.querySelectorAll('.cp-tmhead').length }; }""")
+        self.assertTrue(info["scroll"] and info["inside"] and info["focused"], info)
+        self.assertGreater(info["heads"], 3)                        # by category
+        zoom = pg.evaluate(f"() => {self.ED}.state.graph.s")
+        box = menu.evaluate("(m) => { const r = m.querySelector('.cp-tmlist').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }")
+        pg.mouse.move(*box)
+        pg.mouse.wheel(0, 300)
+        pg.wait_for_timeout(300)
+        self.assertGreater(menu.evaluate("(m) => m.querySelector('.cp-tmlist').scrollTop"), 0, "the list scrolled")
+        self.assertEqual(pg.evaluate(f"() => {self.ED}.state.graph.s"), zoom, "the graph did not zoom")
+        # Typing finds it: by name, by category, by id; Enter adds it.
+        pg.keyboard.type("defo")
+        self.assertEqual(menu.evaluate("(m) => [...m.querySelectorAll('.cp-tmrow')].map((d) => d.dataset.type)"), ["defocus"])
+        pg.keyboard.press("Enter")
+        self.assertFalse(graph.evaluate("(g) => !!g.querySelector('.cp-tabmenu')"))
+        self.assertTrue(pg.evaluate(f"() => {self.ED}.comp().nodes.some((n) => n.type === 'defocus')"))
+        # The right-click menu on an empty spot: the same menu, its node placed where it was opened.
+        r = graph.evaluate("(g) => { const r = g.getBoundingClientRect(); return [r.left + r.width * 0.8, r.top + r.height * 0.7]; }")
+        pg.mouse.click(*r, button="right")
+        menu = graph.evaluate_handle("(g) => g.querySelector('.cp-tabmenu')")
+        self.assertIn("Frame all (F)", menu.evaluate("(m) => m.textContent"))
+        pg.keyboard.type("key")
+        types = menu.evaluate("(m) => [...m.querySelectorAll('.cp-tmrow')].map((d) => d.dataset.type)")
+        self.assertEqual(set(types), {"keyer", "lumakeyer", "chromakeyer"}, types)
+        pg.keyboard.press("ArrowDown")
+        pg.keyboard.press("Enter")
+        self.assertTrue(pg.evaluate(f"() => {self.ED}.comp().nodes.some((n) => n.type === '{types[1]}')"))
+        # On a node: its actions come first and are found by typing too.
+        nodebox = graph.evaluate("(g) => { const r = g.querySelector('.cp-node').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }")
+        pg.mouse.click(*nodebox, button="right")
+        menu = graph.evaluate_handle("(g) => g.querySelector('.cp-tabmenu')")
+        self.assertEqual(menu.evaluate("(m) => m.querySelector('.cp-tmrow').textContent"), "View this node (1)")
+        pg.keyboard.type("renam")
+        self.assertEqual(menu.evaluate("(m) => [...m.querySelectorAll('.cp-tmrow')].map((d) => d.textContent)"), ["Rename…"])
+        pg.keyboard.press("Escape")
+        self.assertFalse(graph.evaluate("(g) => !!g.querySelector('.cp-tabmenu')"))
+        if SHOTS:
+            add.click()
+            pg.keyboard.type("blur")
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-node-menu.png"))
+        self.assertEqual(self.errors, [])
+
     def test_several_selected_nodes_of_one_type_change_together(self):
         pg = self.page()
         self.new_comp(pg)

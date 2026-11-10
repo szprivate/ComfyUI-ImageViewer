@@ -54,14 +54,18 @@ const CSS = `
 .cp-plabel{position:absolute;top:-19px;font-size:10px;color:#bbb;pointer-events:none;transform:translateX(-50%)}
 .cp-marquee{position:absolute;border:1px dashed #ffcf3a;background:#ffcf3a14;pointer-events:none}
 .cp-hint{position:absolute;right:8px;bottom:6px;opacity:.45;pointer-events:none}
-.cp-tabmenu > div:last-child{max-height:320px;overflow:auto}
 .cp-gbar{position:absolute;left:6px;top:6px;display:flex;gap:4px;z-index:3}
 .cp-gbar .mg-btn{display:inline-flex;align-items:center;gap:4px}
 .cp-gbar svg{width:14px;height:14px}
 .comp-params .mg-prop label,.mg-side .mg-prop label{width:96px}
-.cp-tabmenu{position:absolute;z-index:30;background:#26262c;border:1px solid #44444c;border-radius:3px;padding:3px;box-shadow:0 4px 14px #0008;width:170px}
-.cp-tabmenu input{width:100%;background:#141418;border:1px solid #ff6a1a;color:#fff;font:inherit;padding:2px 4px}
-.cp-tabmenu div{padding:2px 6px;cursor:pointer}.cp-tabmenu div.on,.cp-tabmenu div:hover{background:#3a2a1c}
+.cp-tabmenu{position:absolute;z-index:30;background:#26262c;border:1px solid #44444c;border-radius:3px;padding:3px;box-shadow:0 4px 14px #0008;width:210px;display:flex;flex-direction:column}
+.cp-tabmenu input{width:100%;background:#141418;border:1px solid #ff6a1a;color:#fff;font:inherit;padding:3px 5px;flex:0 0 auto}
+.cp-tmlist{overflow-y:auto;overscroll-behavior:contain;margin-top:3px}
+.cp-tmrow{padding:2px 8px;cursor:pointer;display:flex;justify-content:space-between;gap:8px;white-space:nowrap}
+.cp-tmrow.on{background:#3a2a1c}.cp-tmrow.act{color:#e8e8ea}
+.cp-tmsub{color:#8a8a92;font-size:10px}
+.cp-tmhead{padding:5px 6px 1px;color:#8a8a92;font-size:10px;text-transform:uppercase;letter-spacing:.04em;cursor:default}
+.cp-tmnone{padding:4px 8px;color:#8a8a92;cursor:default}
 .cp-lbar{display:flex;gap:4px;align-items:center;padding:4px 6px;border-bottom:1px solid #2c2c32;flex-wrap:wrap}
 .cp-lrows{position:absolute;top:31px;left:0;right:0;bottom:0;overflow:auto}
 .cp-lrow{display:flex;align-items:center;gap:6px;height:26px;padding:0 6px;border-bottom:1px solid #2a2a30;cursor:pointer}
@@ -287,10 +291,15 @@ export function createCompEditor(host, opts = {}) {
         const px = fmt().width * fmt().height;
         return px > 4.2e6 ? 0.25 : px > 1.1e6 ? 0.5 : 1;
     }
+    const win = () => (root.ownerDocument && root.ownerDocument.defaultView) || window;
+    let moveGen = 0;
     function queueRender() {
         if (renderQueued) return;
         renderQueued = true;
-        (doc.defaultView || window).requestAnimationFrame(() => { renderQueued = false; draw(); });
+        // The window the picture is in NOW: popped out, the viewer moves into another window, and the one it was
+        // made in stops its frames once it is behind (the picture then stayed empty).
+        const g = moveGen;
+        win().requestAnimationFrame(() => { if (g !== moveGen) return; renderQueued = false; draw(); });
     }
     async function draw() {
         if (!st.comp) return;
@@ -600,6 +609,7 @@ export function createCompEditor(host, opts = {}) {
         if (o.onSelect) o.onSelect(primary());
     }
     graph.addEventListener("wheel", (e) => {
+        if (e.target.closest && e.target.closest(".cp-tabmenu, .mg-ctx")) return;   // a menu scrolls
         e.preventDefault();
         const r = graph.getBoundingClientRect();
         const px = e.clientX - r.left, py = e.clientY - r.top;
@@ -718,23 +728,6 @@ export function createCompEditor(host, opts = {}) {
     // ── menus (Motion's look) ────────────────────────────────────────────────
     let menuEl = null;
     function closeMenus() { if (menuEl) { menuEl.remove(); menuEl = null; } }
-    function showMenu(e, container, items) {
-        closeMenus();
-        const m = el(doc, "div", "mg-ctx");
-        for (const it of items) {
-            if (!it) { m.append(el(doc, "hr")); continue; }
-            const d = el(doc, "div", "", it[0]);
-            d.onclick = (ev) => { ev.stopPropagation(); closeMenus(); it[1](); };
-            m.append(d);
-        }
-        const r = container.getBoundingClientRect();
-        m.style.left = Math.max(0, e.clientX - r.left) + "px"; m.style.top = Math.max(0, e.clientY - r.top) + "px";
-        container.append(m);
-        menuEl = m;
-        const mr = m.getBoundingClientRect();
-        if (mr.bottom > r.bottom) m.style.top = Math.max(0, r.height - mr.height - 4) + "px";
-        if (mr.right > r.right) m.style.left = Math.max(0, r.width - mr.width - 4) + "px";
-    }
     function addNodeAt(type, at) {
         mutate(() => {
             const after = primary();
@@ -744,23 +737,21 @@ export function createCompEditor(host, opts = {}) {
             st.sel = [n.id];
         });
     }
-    function addItems(at) {
-        return C.TYPE_ORDER.map((t) => [`Add ${C.NODE_TYPES[t].label}`, () => addNodeAt(t, at)]);
-    }
     graph.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         const box = e.target.closest ? e.target.closest(".cp-node") : null;
         const at = gxy(e);
+        const r = graph.getBoundingClientRect();
+        const where = { left: e.clientX - r.left, top: e.clientY - r.top };
         if (box) {
             const id = box.dataset.id;
             if (!st.sel.includes(id)) select([id]);
-            showMenu(e, graph, [
+            tabMenu(where, { actions: [
                 ["View this node (1)", () => setView(id)],
                 [node(id).disable ? "Enable (D)" : "Disable (D)", () => toggleDisable()],
                 ["Rename…", () => renameNode(id)],
-                ["Delete (Del)", () => removeSel()],
-                null, ...addItems(null)]);
-        } else showMenu(e, graph, [...addItems(at), null, ["Frame all (F)", frameAll]]);
+                ["Delete (Del)", () => removeSel()]] });
+        } else tabMenu(where, { place: at, actions: [["Frame all (F)", frameAll]] });
     });
     function setView(id) { st.view = id === st.comp.output ? null : id; refresh(["graph", "stage"]); }
     function toggleDisable() { const ids = st.sel.filter((id) => node(id) && node(id).type !== "output"); if (ids.length) mutate(() => { const off = !ids.every((id) => node(id).disable); for (const id of ids) { if (off) node(id).disable = true; else delete node(id).disable; } }); }
@@ -777,30 +768,95 @@ export function createCompEditor(host, opts = {}) {
         i.onblur = () => fin(true);
         i.onpointerdown = (e) => e.stopPropagation();
     }
-    function tabMenu(at) {
+    /** The node menu (Tab, the Add button, a right-click on the graph): a field to type into on top - a node's
+     *  name, its category or its id finds it - and below it the actions given, then every node by category. The
+     *  list scrolls (the graph's wheel zooms everywhere else) and is as tall as the room below it in the graph.
+     *  ``at``: where it opens in the graph ({left, top}); ``place``: where a new node goes in the graph's own
+     *  coordinates (null: under the selected node); ``actions``: [[label, fn]] shown first. */
+    function tabMenu(at, { place = null, actions = [] } = {}) {
         closeMenus();
         const m = el(doc, "div", "cp-tabmenu");
-        const inp = el(doc, "input"); inp.placeholder = "Add a node…";
-        const list = el(doc, "div");
+        const inp = el(doc, "input"); inp.placeholder = "Type to find a node…"; inp.spellcheck = false;
+        const list = el(doc, "div", "cp-tmlist");
         m.append(inp, list);
+        for (const t of ["pointerdown", "mousedown", "click", "dblclick", "contextmenu"]) m.addEventListener(t, (ev) => ev.stopPropagation());
+        m.addEventListener("wheel", (ev) => ev.stopPropagation(), { passive: true });
         let on = 0;
-        const matches = () => C.TYPE_ORDER.filter((t) => C.NODE_TYPES[t].label.toLowerCase().includes(inp.value.trim().toLowerCase()));
-        const draw_ = () => {
-            list.replaceChildren();
-            matches().forEach((t, i) => { const d = el(doc, "div", i === on ? "on" : "", C.NODE_TYPES[t].label); d.onclick = () => { closeMenus(); addNodeAt(t, null); }; list.append(d); });
+        const words = (t) => [C.NODE_TYPES[t].label, C.NODE_TYPES[t].cat || "", t].join(" ").toLowerCase();
+        const rows = () => {
+            const q = inp.value.trim().toLowerCase();
+            const out = [];
+            const acts = actions.filter((a) => a && (!q || a[0].toLowerCase().includes(q)));
+            for (const a of acts) out.push({ label: a[0], run: a[1], act: true });
+            const types = C.TYPE_ORDER.filter((t) => !q || q.split(/\s+/).every((w) => words(t).includes(w)));
+            if (q) {
+                // Names that begin with what is typed first.
+                const starts = (t) => (C.NODE_TYPES[t].label.toLowerCase().startsWith(q) ? 0 : 1);
+                types.sort((a, b) => starts(a) - starts(b));
+                for (const t of types) out.push({ label: C.NODE_TYPES[t].label, sub: C.NODE_TYPES[t].cat, type: t });
+            } else {
+                const cats = [];
+                for (const t of types) { const c = C.NODE_TYPES[t].cat || "Other"; if (!cats.includes(c)) cats.push(c); }
+                for (const c of cats) {
+                    out.push({ head: c });
+                    for (const t of types) if ((C.NODE_TYPES[t].cat || "Other") === c) out.push({ label: C.NODE_TYPES[t].label, type: t });
+                }
+            }
+            return out;
         };
-        inp.oninput = () => { on = 0; draw_(); };
+        const pickable = (r) => r && !r.head;
+        const choose = (r) => {
+            closeMenus(); graph.focus({ preventScroll: true });
+            if (!r) return;
+            if (r.run) r.run(); else addNodeAt(r.type, place);
+        };
+        const draw_ = () => {
+            const rs = rows();
+            const ids = rs.map((r, i) => (pickable(r) ? i : -1)).filter((i) => i >= 0);
+            if (!ids.includes(on)) on = ids.length ? ids[0] : -1;
+            list.replaceChildren();
+            rs.forEach((r, i) => {
+                if (r.head) { list.append(el(doc, "div", "cp-tmhead", r.head)); return; }
+                const d = el(doc, "div", "cp-tmrow" + (i === on ? " on" : "") + (r.act ? " act" : ""), r.label);
+                if (r.sub) d.append(el(doc, "span", "cp-tmsub", r.sub));
+                d.dataset.i = i;
+                if (r.type) d.dataset.type = r.type;
+                d.onclick = () => choose(r);
+                d.onpointermove = () => { if (on !== i) { on = i; for (const x of list.querySelectorAll(".on")) x.classList.remove("on"); d.classList.add("on"); } };
+                list.append(d);
+            });
+            if (!ids.length) list.append(el(doc, "div", "cp-tmnone", "No node by that name"));
+            m._rows = rs;
+        };
+        const step = (dir) => {
+            const rs = m._rows || [];
+            let i = on;
+            do { i += dir; } while (i >= 0 && i < rs.length && !pickable(rs[i]));
+            if (i >= 0 && i < rs.length) on = i;
+            draw_();
+            const d = list.querySelector(".on");
+            if (d) d.scrollIntoView({ block: "nearest" });
+        };
+        inp.oninput = () => { on = -1; draw_(); list.scrollTop = 0; };
         inp.onkeydown = (e) => {
             e.stopPropagation();
-            const ms = matches();
-            if (e.key === "ArrowDown") { on = Math.min(ms.length - 1, on + 1); draw_(); e.preventDefault(); }
-            else if (e.key === "ArrowUp") { on = Math.max(0, on - 1); draw_(); e.preventDefault(); }
-            else if (e.key === "Enter") { const t = ms[on]; closeMenus(); graph.focus(); if (t) addNodeAt(t, null); }
-            else if (e.key === "Escape") { closeMenus(); graph.focus(); }
+            if (e.key === "ArrowDown") { step(1); e.preventDefault(); }
+            else if (e.key === "ArrowUp") { step(-1); e.preventDefault(); }
+            else if (e.key === "PageDown" || e.key === "PageUp") { for (let k = 0; k < 8; k++) step(e.key === "PageDown" ? 1 : -1); e.preventDefault(); }
+            else if (e.key === "Enter") { e.preventDefault(); choose((m._rows || [])[on]); }
+            else if (e.key === "Escape" || e.key === "Tab") { e.preventDefault(); closeMenus(); graph.focus({ preventScroll: true }); }
         };
-        m.style.left = (at ? at.left : Math.max(4, graph.clientWidth / 2 - 85)) + "px"; m.style.top = (at ? at.top : 30) + "px";
+        const W = graph.clientWidth, H = graph.clientHeight;
+        let left = at ? at.left : Math.max(4, W / 2 - 100), top = at ? at.top : 30;
+        left = Math.max(4, Math.min(left, W - 214));
+        // Room below; when there is little of it, the menu opens higher up.
+        const want = 360;
+        if (H - top - 8 < Math.min(want, H * 0.6)) top = Math.max(4, H - 8 - Math.min(want, H - 12));
+        m.style.left = left + "px"; m.style.top = top + "px";
+        list.style.maxHeight = Math.max(80, H - top - 8 - 30) + "px";
         graph.append(m); menuEl = m;
-        draw_(); inp.focus();
+        draw_(); inp.focus({ preventScroll: true });
+        return m;
     }
 
     // ── keys (graph, layers, properties and the picture) ─────────────────────
@@ -1248,8 +1304,24 @@ export function createCompEditor(host, opts = {}) {
         if (primary() && (Object.keys(primary().tracks || {}).length || primary().type === "roto")) renderProps();
     }
 
-    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => { layoutCanvas(); if (!st.graph.fitted) renderGraph(); }) : null;
-    if (ro) { ro.observe(stage); ro.observe(graph); }
+    // Made in the window the editor is in, and made again when it moves (an observer of another window's
+    // elements is not told of their sizes).
+    let ro = null;
+    function observe() {
+        if (ro) ro.disconnect();
+        const RO = win().ResizeObserver || (typeof ResizeObserver !== "undefined" ? ResizeObserver : null);
+        ro = RO ? new RO(() => { layoutCanvas(); if (!st.graph.fitted) renderGraph(); }) : null;
+        if (ro) { ro.observe(stage); ro.observe(graph); }
+    }
+    observe();
+    /** The editor's elements moved into another window (the viewer popped out or back in). */
+    function moved() {
+        moveGen++;                 // a frame asked of the window left behind may never come
+        renderQueued = false;
+        observe();
+        layoutCanvas();
+        queueRender();
+    }
 
     return {
         parts,
@@ -1269,6 +1341,7 @@ export function createCompEditor(host, opts = {}) {
         setFormat(patch) { mutate(() => Object.assign(st.comp.format, patch)); if (o.onComp) o.onComp(); },
         refresh: () => refresh(),
         relayout() { layoutCanvas(); if (!st.graph.fitted) frameAll(); },
+        moved,
         rerender: () => queueRender(),
         frameAll,
         select: (ids) => select(ids),
