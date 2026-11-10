@@ -80,8 +80,8 @@ const DOCK_PANELS = {
     // Comp (imageViewer_compPanel.js / imageViewer_compEditor.js): a comp is a TAB (the picture in the main canvas, the
     // viewer's bar its time); these are its other parts, up only with a comp tab. The Node Graph is the way in, so it
     // is up by default, under the picture where a graph has width; Layers is the same graph as a stack, off at first.
+    // A comp node's settings show in the Parameters panel (compPanel's _cpParams), not in a panel of their own.
     compGraph: { prop: "compGraphPanel", label: "Node Graph", minW: 320, minH: 160, defaultRail: "bottom", size: 2 },
-    compProps: { prop: "compPropsPanel", label: "Properties", minW: 240, minH: 200, defaultRail: "right", size: 2 },
     compLayers: { prop: "compLayersPanel", label: "Layers", minW: 220, minH: 140, defaultRail: "right", size: 1 },
     // Paint (imageViewer_paintPanel.js / imageViewer_paintEditor.js): a picture is a TAB (the editor covers the main
     // canvas); these are its other parts, up only with a Paint tab.
@@ -191,7 +191,6 @@ export const DockMixin = {
                                            { id: "rotoCurves", size: 1, hidden: true },
                                            { id: "paramCurves", size: 1, hidden: true },
                                            { id: "motionProps", size: 2, hidden: true },
-                                           { id: "compProps", size: 2, hidden: true },
                                            { id: "compLayers", size: 1, hidden: true },
                                            { id: "paintLayers", size: 2, hidden: true },
                                            { id: "paintProps", size: 2, hidden: true, tab: "paint", behind: false },
@@ -628,7 +627,8 @@ export const DockMixin = {
             this._historyPanelSig = null;
             if (this.renderHistoryPanel) this.renderHistoryPanel();
         } else if (id === "params") {
-            if (this.updateParamsPanel) this.updateParamsPanel(true);
+            if (this._cpParamsMode) { if (this.compPanelShown) this.compPanelShown(); this._cpParamsTitle?.(); }
+            else if (this.updateParamsPanel) this.updateParamsPanel(true);
         } else if (id === "editTimeline" || id === "editInspector" || id === "editEffects" || id === "editMixer" || id === "editSource") {
             if (this.editTlRefresh) this.editTlRefresh();
         } else if (id === "curves") {
@@ -639,7 +639,7 @@ export const DockMixin = {
             if (this.paramRefreshCurves) this.paramRefreshCurves();
         } else if (id === "motionProps" || id === "motionTimeline") {
             if (this._mgOn && this._mgSeat) this._mgSeat(this._mgState().tabs[this.activeTab]);
-        } else if (id === "compGraph" || id === "compProps" || id === "compLayers") {
+        } else if (id === "compGraph" || id === "compLayers") {
             if (this.compPanelShown) this.compPanelShown();
         } else if (id.startsWith("paint")) {
             if (this._paintOn && this._paintSeat) this._paintSeat(this._paintActive());

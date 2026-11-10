@@ -22,9 +22,9 @@ import { COMP_SUFFIX, isCompPath, sourceName } from "./imageViewer_compModel.js"
 
 export const COMP_PREFIX = "comp:";
 /** The dock panels of a comp tab, and the editor part each one holds. */
-export const COMP_PANELS = { compGraph: "graph", compProps: "props", compLayers: "layers" };
+export const COMP_PANELS = { compGraph: "graph", compLayers: "layers" };
 /** Which of them are up the first time (the node editor is the default way in). */
-const FIRST_UP = { compGraph: true, compProps: true, compLayers: false };
+const FIRST_UP = { compGraph: true, compLayers: false };
 
 const baseOf = (p) => String(p || "").split(/[\\/]/).pop();
 const nameOf = (p) => baseOf(p).replace(/\.comp\.json$/i, "");
@@ -182,9 +182,62 @@ export const CompPanelMixin = {
                 if (want !== this.isPanelDocked(id)) this.setPanelDocked(id, want);
             }
         }
+        this._cpParams(true);
         this._cpSeat(rec);
         this._cpSyncBar();
         if (first && this.barGroupsSync) this.barGroupsSync();
+    },
+
+    // ── the Parameters panel shows the selected comp node ────────────────────
+
+    /** The .comp-params box in the Parameters panel (made once), which holds the tab's properties. */
+    _cpParamsBox() {
+        const panel = this.paramsPanel;
+        if (!panel) return null;
+        let box = panel.querySelector(":scope > .comp-params");
+        if (!box) {
+            const doc = panel.ownerDocument;
+            box = doc.createElement("div");
+            box.className = "comp-params";
+            const slot = doc.createElement("div");
+            slot.className = "comp-slot";
+            box.append(slot);
+            panel.append(box);
+        }
+        this.compPropsPanel = box;
+        return box;
+    },
+
+    /** On a comp tab the Parameters panel is the comp's (open unless it was put away there); off it, ComfyUI's again. */
+    _cpParams(on) {
+        const panel = this.paramsPanel;
+        if (!panel || !this.setPanelDocked || !this.isPanelDocked) return;
+        const st = this._cpState();
+        if (on) {
+            this._cpParamsBox();
+            if (!this._cpParamsMode) {
+                this._cpParamsMode = true;
+                this._cpParamsOpenBefore = this.isPanelDocked("params");
+                panel.classList.add("comp-mode");
+            }
+            const want = st.want.params === undefined ? true : st.want.params;
+            if (want !== this.isPanelDocked("params")) this.setPanelDocked("params", want);
+            this._cpParamsTitle();
+        } else if (this._cpParamsMode) {
+            st.want.params = this.isPanelDocked("params");
+            this._cpParamsMode = false;
+            panel.classList.remove("comp-mode");
+            if (this.paramsTitle) this.paramsTitle.innerText = "No Node Selected";
+            if (this.currentParamNodeId != null) this.updateParamsPanel?.(true);
+            if (this.isPanelDocked("params") !== !!this._cpParamsOpenBefore) this.setPanelDocked("params", !!this._cpParamsOpenBefore);
+        }
+    },
+
+    _cpParamsTitle(n) {
+        if (!this._cpParamsMode || !this.paramsTitle) return;
+        const ed = this.compEditor();
+        if (n === undefined) n = ed && ed.selected ? ed.selected() : null;
+        this.paramsTitle.innerText = n ? `${n.name || n.id}` : "Comp";
     },
 
     compTabLeave() {
@@ -198,6 +251,7 @@ export const CompPanelMixin = {
         this.viewport.classList.remove("comp-mode");
         if (st.host) st.host.style.display = "none";
         this._cpSeatBottom(null);
+        this._cpParams(false);
         if (this.isPanelDocked && this.setPanelDocked) {
             for (const id of Object.keys(COMP_PANELS)) {
                 st.want[id] = this.isPanelDocked(id);
@@ -269,7 +323,7 @@ export const CompPanelMixin = {
     },
 
     _cpSeat(rec) {
-        for (const [id, part] of Object.entries(COMP_PANELS)) {
+        for (const [id, part] of Object.entries(COMP_PANELS).concat([["params", "props"]])) {
             const slot = this._cpSlot(id);
             if (!slot) continue;
             const el = rec && rec.editor && rec.editor.parts ? rec.editor.parts[part] : null;
@@ -331,6 +385,7 @@ export const CompPanelMixin = {
     },
 
     _cpSlot(id) {
+        if (id === "params") { const box = this._cpParamsBox(); return box ? box.querySelector(":scope > .comp-slot") : null; }
         const panel = this._dockPanelEl ? this._dockPanelEl(id) : null;
         return panel ? panel.querySelector(":scope > .comp-slot") : null;
     },
@@ -376,7 +431,8 @@ export const CompPanelMixin = {
             },
             onFrame: (f) => { if (this.activeTab === key) { this.stop(); this.setFrame(f); } },
             onComp: () => { if (this.activeTab === key) this._cpSyncBar(); },
-            showProps: () => { if (this.setPanelDocked && !this.isPanelDocked("compProps")) this.setPanelDocked("compProps", true); else if (this.dockTabFront) this.dockTabFront("compProps"); },
+            showProps: () => { if (this.setPanelDocked && !this.isPanelDocked("params")) this.setPanelDocked("params", true); else if (this.dockTabFront) this.dockTabFront("params"); },
+            onSelect: (n) => { if (this.activeTab === key) this._cpParamsTitle(n || null); },
             loadSource: (node, frame, how) => this._cpLoadSource(rec, node, frame, how),
             ocioInfo: () => this._cpOcioInfo(),
             ocioLut: (spec) => this._cpOcioLut(spec),

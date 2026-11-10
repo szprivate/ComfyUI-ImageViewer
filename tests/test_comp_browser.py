@@ -137,7 +137,7 @@ class CompBrowserTests(unittest.TestCase):
     def test_comp_space_graph_picture_time_layers_and_render(self):
         pg = self.page()
         path = self.new_comp(pg)
-        st = pg.evaluate("""() => ({ graph: __panel.isPanelDocked('compGraph'), props: __panel.isPanelDocked('compProps'),
+        st = pg.evaluate("""() => ({ graph: __panel.isPanelDocked('compGraph'), props: __panel.isPanelDocked("params"),
             layers: __panel.isPanelDocked('compLayers'), mode: __panel.viewport.classList.contains('comp-mode'),
             nodes: __panel.compGraphPanel.querySelectorAll('.cp-node').length, tab: __panel.activeTab,
             frames: __panel.getImgCount() })""")
@@ -319,6 +319,52 @@ class CompBrowserTests(unittest.TestCase):
         if SHOTS:
             pg.wait_for_timeout(300)
             pg.screenshot(path=os.path.join(SHOTS, "comp-lensflare.png"))
+        self.assertEqual(self.errors, [])
+
+    def test_handles_on_the_picture_and_numbers_dragged_by_their_label(self):
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        pg.evaluate(f"() => {{ const e = {ED}; e.select(['Constant1']); e.addNode('lensflare', {{ position: [960, 540] }}); }}")
+        pg.wait_for_timeout(400)
+        h = pg.locator(".cp-over circle.cp-handle[data-param=position]")
+        self.assertEqual(h.count(), 1)
+        b = h.bounding_box()
+        cx, cy = b["x"] + b["width"] / 2, b["y"] + b["height"] / 2
+        k = pg.evaluate(f"() => {ED}.state.zoom.s")
+        pg.mouse.move(cx, cy); pg.mouse.down(); pg.mouse.move(cx + 40, cy - 20, steps=4); pg.mouse.up()
+        pos = pg.evaluate(f"() => {ED}.comp().nodes.find((n) => n.type === 'lensflare').position")
+        self.assertAlmostEqual(pos[0], 960 + 40 / k, delta=1.5)
+        self.assertAlmostEqual(pos[1], 540 - 20 / k, delta=1.5)
+        pg.evaluate(f"() => {ED}.undo()")
+        self.assertEqual(pg.evaluate(f"() => {ED}.comp().nodes.find((n) => n.type === 'lensflare').position"), [960, 540], "one drag, one undo step")
+        # A Transform has a move handle and a centre; a Crop two corners.
+        pg.evaluate(f"() => {ED}.addNode('transform')")
+        self.assertEqual(pg.locator(".cp-over circle.cp-handle").count(), 2)
+        pg.evaluate(f"() => {ED}.addNode('crop')")
+        self.assertEqual(pg.locator(".cp-over circle.cp-handle").count(), 2)
+        # A number's label dragged to the right raises it; Up in its field steps it and keeps the focus.
+        pg.evaluate(f"() => {ED}.select([{ED}.comp().nodes.find((n) => n.type === 'lensflare').id])")
+        P = "__panel.compPropsPanel"
+        lab = pg.locator(f".mg-prop label.cp-scrub", has_text="intensity").first
+        lb = lab.bounding_box()
+        lx, ly = lb["x"] + 10, lb["y"] + lb["height"] / 2
+        pg.mouse.move(lx, ly); pg.mouse.down(); pg.mouse.move(lx + 50, ly, steps=5); pg.mouse.up()
+        v = pg.evaluate(f"() => {ED}.comp().nodes.find((n) => n.type === 'lensflare').intensity")
+        self.assertAlmostEqual(v, 1 + 50 * 0.05, delta=0.06)
+        pg.evaluate(f"() => {ED}.undo()")
+        self.assertEqual(pg.evaluate(f"() => {ED}.comp().nodes.find((n) => n.type === 'lensflare').intensity"), 1)
+        inp = pg.locator('input[data-fk$=":intensity"]')
+        inp.focus()
+        pg.keyboard.press("ArrowUp"); pg.keyboard.press("ArrowUp"); pg.keyboard.press("Shift+ArrowUp")
+        v = pg.evaluate(f"() => {ED}.comp().nodes.find((n) => n.type === 'lensflare').intensity")
+        self.assertAlmostEqual(v, 1 + 0.05 * 12, places=5)
+        self.assertTrue(pg.evaluate("() => (document.activeElement.shadowRoot ? document.activeElement.shadowRoot.activeElement : document.activeElement)?.dataset?.fk?.endsWith(':intensity')"))
+        # One panel: the Parameters panel shows the comp node, titled by it; ComfyUI's widgets step aside.
+        st = pg.evaluate("""() => ({ mode: __panel.paramsPanel.classList.contains('comp-mode'), title: __panel.paramsTitle.innerText,
+            inside: __panel.paramsPanel.contains(__panel.compPropsPanel), widgets: getComputedStyle(__panel.paramsPanel.querySelector('.params-content')).display,
+            docked: !!(__panel._dockPanelEl && __panel._dockPanelEl('compProps')) })""")
+        self.assertEqual(st, {"mode": True, "title": "LensFlare1", "inside": True, "widgets": "none", "docked": False})
         self.assertEqual(self.errors, [])
 
     def test_ocio_reads_nodes_and_the_viewers_display(self):

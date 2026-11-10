@@ -63,7 +63,7 @@ const GROUPS = [
         { label: "Open Comp\u2026", run: (p) => p.spaceOpen("comp"), checked: (p) => !!(p.isCompTab && p.isCompTab()) },
         { label: "New comp", run: (p) => p.compNew() },
         { label: "Node Graph", panel: "compGraph", needs: "comp" },
-        { label: "Properties", panel: "compProps", needs: "comp" },
+        { label: "Parameters", panel: "params", needs: "comp" },
         { label: "Layers", panel: "compLayers", needs: "comp" },
     ] },
     // A picture in layers is a tab (imageViewer_paintPanel.js); Layers and Properties are its parts.

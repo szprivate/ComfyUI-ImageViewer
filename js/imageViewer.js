@@ -750,8 +750,8 @@ class ViewerPanel extends HTMLElement {
         }
         // Comp (imageViewer_compPanel.js): a comp is a TAB; its Node Graph, Properties and Layers are these dock
         // panels, each holding one part of the tab's editor (a .comp-slot the glue fills).
+        // (A comp node's settings are not a panel of their own: on a comp tab they take the Parameters panel over.)
         for (const [id, prop, cls] of [['compGraph', 'compGraphPanel', 'comp-graph-panel'],
-                                       ['compProps', 'compPropsPanel', 'comp-props-panel'],
                                        ['compLayers', 'compLayersPanel', 'comp-layers-panel']]) {
             let cp = sr.getElementById(`${id}-panel`);
             if (!cp && this.curvesPanel && this.curvesPanel.parentNode) {

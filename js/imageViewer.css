@@ -930,6 +930,14 @@ textarea.param-input {
    the Parameters panel's body over while a tool is on (.tool-mode). */
 .params-panel.tool-mode > .params-content,
 .params-panel:not(.tool-mode) > .imageviewer-tool-panel { display: none; }
+/* On a Comp tab the panel shows the selected comp node (imageViewer_compPanel.js, .comp-params): ComfyUI's
+   widgets, a tool's options and the lock step aside. */
+.params-panel.comp-mode > .params-content,
+.params-panel.comp-mode > .imageviewer-tool-panel,
+.params-panel.comp-mode #params-lock-btn,
+.params-panel:not(.comp-mode) > .comp-params { display: none; }
+.params-panel > .comp-params { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+.params-panel > .comp-params > .comp-slot { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 
 /* Animation Curves: one channel of the selected item drawn over time
    (imageViewer_previzCurves.js). A dock panel, so the graph has room to be

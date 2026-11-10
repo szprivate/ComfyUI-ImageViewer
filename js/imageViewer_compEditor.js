@@ -74,6 +74,11 @@ const CSS = `
 .cp-over .cp-draft{fill:none;stroke:#ffcf3a;stroke-width:1.5px;stroke-dasharray:4 3;vector-effect:non-scaling-stroke}
 .cp-over .cp-pt{fill:#111;stroke:#ffcf3a;stroke-width:1.5px;vector-effect:non-scaling-stroke;pointer-events:all;cursor:move}
 .cp-over .cp-pt.first{fill:#ffcf3a}
+.cp-over .cp-handle{fill:#0009;stroke:#3ad1ff;stroke-width:1.5px;vector-effect:non-scaling-stroke;pointer-events:all;cursor:move}
+.cp-over .cp-handle.small{stroke:#ffcf3a}
+.cp-over .cp-hline{fill:none;stroke:#3ad1ff;stroke-width:1px;stroke-dasharray:4 3;vector-effect:non-scaling-stroke}
+.mg-prop label.cp-scrub{cursor:ew-resize;user-select:none}
+.mg-prop label.cp-scrub:hover{opacity:1;color:#3ad1ff}
 .cp-stage.drawing,.cp-stage.picking{cursor:crosshair}
 .cp-cctabs,.cp-ccrange{display:flex;flex-wrap:wrap;gap:3px;margin:6px 0 4px}
 .cp-cctabs .mg-btn,.cp-ccrange .mg-btn{flex:1 1 auto;padding:2px 6px}
@@ -187,7 +192,14 @@ export function createCompEditor(host, opts = {}) {
         if (!st.comp) return;
         if (which.includes("bar")) renderBar();
         if (which.includes("graph")) renderGraph();
-        if (which.includes("props")) renderProps();
+        if (which.includes("props")) {
+            renderProps();
+            if (st.refocus) {
+                const f = [...props.querySelectorAll("[data-fk]")].find((x) => x.dataset.fk === st.refocus);
+                st.refocus = null;
+                if (f) { f.focus({ preventScroll: true }); f.select && f.select(); }
+            }
+        }
         if (which.includes("layers")) renderLayers();
         if (which.includes("stage")) { queueRender(); renderOverlay(); }
     }
@@ -332,7 +344,7 @@ export function createCompEditor(host, opts = {}) {
         stage.classList.toggle("drawing", !!st.draw);
         stage.classList.toggle("picking", !!st.pick);
         const n = rotoNode();
-        if (!n) { if (st.draw) st.draw = null; return; }
+        if (!n) { if (st.draw) st.draw = null; drawHandles(); return; }
         const r = 4 / (st.zoom.s || 1);
         (n.shapes || []).forEach((sh, si) => {
             const pts = O.shapePoints(sh, st.frame);
@@ -351,6 +363,68 @@ export function createCompEditor(host, opts = {}) {
             over.append(svgEl(doc, "polyline", { class: "cp-draft", points: st.draw.pts.map((p) => p.join(",")).join(" ") }));
             st.draw.pts.forEach((p, i) => over.append(svgEl(doc, "circle", { class: "cp-pt" + (i ? "" : " first"), cx: p[0], cy: p[1], r })));
         }
+    }
+    /** The points of the selected node that are dragged on the picture: [{param, at: [x, y], set(xy) -> value, small?}]. */
+    function handlesOf(n) {
+        const F = fmt(), mid = [F.width / 2, F.height / 2];
+        const at = (p, def) => C.paramAt(n, p, st.frame) || def;
+        const r1 = (v) => Math.round(v * 10) / 10;
+        if (n.type === "lensflare") return [{ param: "position", at: at("position", mid), set: (xy) => [r1(xy[0]), r1(xy[1])], title: "The light" }];
+        if (n.type === "transform") {
+            const c = at("center", mid), t = at("translate", [0, 0]);
+            return [{ param: "translate", at: [c[0] + t[0], c[1] + t[1]], set: (xy) => [r1(xy[0] - c[0]), r1(xy[1] - c[1])], title: "Move (translate)" },
+                { param: "center", at: c, set: (xy) => [r1(xy[0]), r1(xy[1])], small: true, title: "The centre it turns and scales about" }];
+        }
+        if (n.type === "crop") {
+            return [{ param: "topleft", at: at("topleft", [0, 0]), set: (xy) => [r1(xy[0]), r1(xy[1])], title: "Top left" },
+                { param: "bottomright", at: at("bottomright", [F.width, F.height]), set: (xy) => [r1(xy[0]), r1(xy[1])], title: "Bottom right" }];
+        }
+        return [];
+    }
+    function drawHandles() {
+        const n = primary();
+        if (!n || n.disable) return;
+        const hs = handlesOf(n);
+        if (!hs.length) return;
+        const z = st.zoom.s || 1;
+        if (n.type === "crop") {
+            const [a, b] = [hs[0].at, hs[1].at];
+            over.append(svgEl(doc, "rect", { class: "cp-hline", x: Math.min(a[0], b[0]), y: Math.min(a[1], b[1]), width: Math.abs(b[0] - a[0]), height: Math.abs(b[1] - a[1]) }));
+        }
+        if (n.type === "transform") over.append(svgEl(doc, "line", { class: "cp-hline", x1: hs[1].at[0], y1: hs[1].at[1], x2: hs[0].at[0], y2: hs[0].at[1] }));
+        hs.forEach((h) => {
+            const g = svgEl(doc, "circle", { class: "cp-handle" + (h.small ? " small" : ""), cx: h.at[0], cy: h.at[1], r: (h.small ? 4 : 7) / z });
+            g.dataset.param = h.param;
+            const tip = svgEl(doc, "title", {}); tip.textContent = `${h.title} (${h.param}): drag`; g.append(tip);
+            g.addEventListener("pointerdown", (e) => dragHandle(e, n.id, h));
+            over.append(g);
+            if (!h.small) {
+                const k = 11 / z;
+                over.append(svgEl(doc, "line", { class: "cp-hline", x1: h.at[0] - k, y1: h.at[1], x2: h.at[0] + k, y2: h.at[1] }));
+                over.append(svgEl(doc, "line", { class: "cp-hline", x1: h.at[0], y1: h.at[1] - k, x2: h.at[0], y2: h.at[1] + k }));
+            }
+        });
+    }
+    /** A handle dragged: the value at the playhead (a key there when animated) while it moves; one undo step. */
+    function dragHandle(e, id, h) {
+        if (e.button !== 0 || st.draw || st.pick) return;
+        e.preventDefault(); e.stopPropagation();
+        stage.setPointerCapture(e.pointerId);
+        const d = C.NODE_TYPES[node(id).type].params[h.param];
+        const xy0 = compXY(e), at0 = h.at.slice();
+        let pushed = false;
+        stage.onpointermove = (ev) => {
+            const xy = compXY(ev);
+            if (!pushed) { if (Math.hypot(xy[0] - xy0[0], xy[1] - xy0[1]) * (st.zoom.s || 1) < 2) return; st.hist.push(st.comp); pushed = true; }
+            const to = [at0[0] + xy[0] - xy0[0], at0[1] + xy[1] - xy0[1]];
+            const v = h.set(to), n = node(id);
+            if (d.key) Mo.setProp(keyHost(), n, h.param, v, st.frame); else n[h.param] = v;
+            renderOverlay(); queueRender();
+        };
+        stage.onpointerup = () => {
+            stage.onpointermove = null; stage.onpointerup = null;
+            if (pushed) { st.dirty = true; refresh(["bar", "props", "stage", "graph"]); }
+        };
     }
     function startDraw() {
         const n = rotoNode();
@@ -748,7 +822,50 @@ export function createCompEditor(host, opts = {}) {
         const i = el(doc, "input"); i.type = "number"; i.step = step || 0.01; i.value = value === null || value === undefined ? "" : r3(value);
         if (d.min !== undefined) i.min = d.min; if (d.max !== undefined) i.max = d.max;
         i.onchange = () => { const v = parseFloat(i.value); onCommit(Number.isFinite(v) ? v : null); };
+        // Up / Down: a step (Shift x10, Ctrl / Alt x0.1), and the field keeps the focus after the redraw.
+        i.addEventListener("keydown", (e) => {
+            if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+            e.preventDefault(); e.stopPropagation();
+            const k = e.shiftKey ? 10 : (e.ctrlKey || e.metaKey || e.altKey) ? 0.1 : 1;
+            const v = (parseFloat(i.value) || 0) + (e.key === "ArrowUp" ? 1 : -1) * (parseFloat(step) || 0.01) * k;
+            const lo = d.min !== undefined ? d.min : -Infinity, hi = d.max !== undefined ? d.max : Infinity;
+            if (i.dataset.fk) st.refocus = i.dataset.fk;
+            onCommit(Math.round(Math.min(hi, Math.max(lo, v)) * 1e6) / 1e6);
+        });
         return i;
+    }
+    const withFk = (i, o2) => { i.title = o2.title; i.dataset.fk = o2.fk; return i; };
+    /** A number's label dragged left / right changes it live (Shift x10, Ctrl / Alt x0.1); one undo step. */
+    function scrubLabel(lab, inp, id, p, d) {
+        lab.classList.add("cp-scrub");
+        lab.title = `${lab.title} - drag left or right to change it (Shift faster, Ctrl finer)`;
+        lab.onpointerdown = (e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            const step = d.kind === "int" ? 0.25 : (d.step || 0.01);
+            const v0 = Number(C.paramAt(node(id), p, st.frame)) || 0;
+            let last = e.clientX, acc = 0, pushed = false;
+            lab.setPointerCapture(e.pointerId);
+            lab.onpointermove = (ev) => {
+                const dx = ev.clientX - last;
+                if (!pushed && Math.abs(ev.clientX - e.clientX) < 3) return;
+                if (!pushed) { st.hist.push(st.comp); pushed = true; }
+                last = ev.clientX;
+                acc += dx * step * (ev.shiftKey ? 10 : (ev.ctrlKey || ev.metaKey || ev.altKey) ? 0.1 : 1);
+                let v = v0 + acc;
+                if (d.min !== undefined) v = Math.max(d.min, v);
+                if (d.max !== undefined) v = Math.min(d.max, v);
+                v = d.kind === "int" ? Math.round(v) : Math.round(v * 1e4) / 1e4;
+                const n = node(id);
+                if (d.key) Mo.setProp(keyHost(), n, p, v, st.frame); else n[p] = v;
+                inp.value = r3(v);
+                queueRender(); renderOverlay();
+            };
+            lab.onpointerup = () => {
+                lab.onpointermove = null; lab.onpointerup = null;
+                if (pushed) { st.dirty = true; refresh(["bar", "props", "stage", "graph"]); }
+            };
+        };
     }
     function paramRow(n, p, d) {
         const row = el(doc, "div", "mg-prop");
@@ -766,11 +883,16 @@ export function createCompEditor(host, opts = {}) {
         row.append(lab);
         const cur = C.paramAt(n, p, st.frame);
         const write = (v) => mutate(() => { if (d.key) Mo.setProp(keyHost(), n, p, v, st.frame); else n[p] = v; }, { structure: false });
-        if (d.kind === "num" || d.kind === "int") row.append(numInput(cur, d.kind === "int" ? 1 : d.step, (v) => { if (v !== null) write(d.kind === "int" ? Math.round(v) : v); }, d));
+        if (d.kind === "num" || d.kind === "int") {
+            const inp = numInput(cur, d.kind === "int" ? 1 : d.step, (v) => { if (v !== null) write(d.kind === "int" ? Math.round(v) : v); }, d);
+            inp.dataset.fk = `${n.id}:${p}`;
+            scrubLabel(lab, inp, n.id, p, d);
+            row.append(inp);
+        }
         else if (d.kind === "vec2") {
             const mid = p === "center" || p === "position";
             const base = cur || (mid ? [fmt().width / 2, fmt().height / 2] : [0, 0]);
-            for (let a = 0; a < 2; a++) row.append(numInput(cur ? cur[a] : null, d.step, (v) => { if (v === null && mid && !animated) { mutate(() => { delete n[p]; }, { structure: false }); return; } const nv = base.slice(); nv[a] = v === null ? base[a] : v; write(nv); }));
+            for (let a = 0; a < 2; a++) row.append(withFk(numInput(cur ? cur[a] : null, d.step || 1, (v) => { if (v === null && mid && !animated) { mutate(() => { delete n[p]; }, { structure: false }); return; } const nv = base.slice(); nv[a] = v === null ? base[a] : v; write(nv); }), { title: a ? "y (pixels, down)" : "x (pixels)", fk: `${n.id}:${p}:${a}` }));
         } else if (d.kind === "color") {
             const c = cur || [0, 0, 0, 1];
             const pick = el(doc, "input"); pick.type = "color"; pick.value = toHex(c);
@@ -1076,6 +1198,7 @@ export function createCompEditor(host, opts = {}) {
         rerender: () => queueRender(),
         frameAll,
         select: (ids) => select(ids),
+        selected: () => primary(),
         view: (id) => setView(id),
         addNode: (type, extra) => { let n; mutate(() => { n = C.insertNode(st.comp, type, primary() && primary().id, extra || {}); st.sel = [n.id]; }); return n; },
         undo, redo, save,
