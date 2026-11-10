@@ -6,7 +6,7 @@ import { app } from "../../scripts/app.js";
 import { resolveViewerAction, viewerHelpRows } from "./imageViewer_keymap.js";
 import { EDIT_KEYS } from "./imageViewer_editKeys.js";
 import { isViewerSourceNode, senderTabInfo } from "./imageViewer_nodeTools.js";
-import { POPOUT_NAME } from "./imageViewer_mixinReconnect.js";
+import { POPOUT_NAME, _popoutFeatures } from "./imageViewer_mixinReconnect.js";
 import { notice } from "./imageViewer_exportUI.js";
 import { PREF, setPref, OVERLAYS } from "./imageViewer_settings.js";
 
@@ -383,7 +383,7 @@ export const UIMixin = {
             this.popoutWindow.close();
             this.restoreDock();
         } else {
-            const win = window.open("", POPOUT_NAME, "width=800,height=600");
+            const win = window.open("", POPOUT_NAME, _popoutFeatures());
             if (win) this._undockInto(win);
         }
     },

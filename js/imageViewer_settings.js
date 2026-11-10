@@ -42,6 +42,7 @@ export const PREF = {
     dockLastSide:   P + "Dock.LastSide",
     dockWidth:      P + "Dock.Width",
     dockHeight:     P + "Dock.Height",
+    undockAs:       P + "Undock.OpenAs",
     annotColor:     P + "Annotate.Color",
     annotSize:      P + "Annotate.BrushSize",
     annotTextSize:  P + "Annotate.TextSize",
@@ -288,6 +289,19 @@ function defs() {
             tooltip: "In pixels. Also set by dragging the docked viewer's top edge.",
             type: "number", defaultValue: 360, attrs: { min: 240, max: 4000, step: 10 }, sortOrder: 650,
             onChange: panelApply(PREF.dockHeight),
+        },
+        {
+            // Read at each undock (imageViewer_mixinUI.js toggleUndock, _popoutFeatures).
+            id: PREF.undockAs, category: sec("Docking", "UndockOpenAs"),
+            name: "Undock opens the viewer in",
+            tooltip: "Window: a window of its own, without a tab strip, so the browser will not let " +
+                     "it be dragged into another window. Tab: a browser tab next to ComfyUI, which " +
+                     "can be dragged out into a window of its own or into any other window of this " +
+                     "browser, like any tab. While the viewer's tab is in front of ComfyUI's in the " +
+                     "same window, ComfyUI's tab is in the background and the browser runs it slower.",
+            type: "combo", defaultValue: "window",
+            options: opts([["window", "A window of its own"], ["tab", "A browser tab"]]),
+            sortOrder: 645,
         },
         {
             // Which side the header button docks to: the last one used. State, not a choice.
