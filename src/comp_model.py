@@ -31,6 +31,16 @@ DEPTH_CHANNELS = ["r", "g", "b", "a", "luminance"]
 FLOW_DETAIL = {"full": 0, "half": 1, "quarter": 2}
 LUM = (0.2126, 0.7152, 0.0722)
 DEFOCUS_SHAPES = ["disc", "polygon"]
+LUMA_SOURCES = ["luminance", "max", "red", "green", "blue"]
+KEY_OUTPUTS = ["premultiplied", "matte", "despilled"]
+DESPILL_LIMITS = ["max", "average"]
+ERODE_SHAPES = ["box", "disc"]
+ERODE_CHANNELS = ["rgba", "alpha"]
+LAPLACIAN_MODES = ["laplacian", "highpass"]
+CM_CHANNELS = ["r", "g", "b", "a", "luminance"]
+CM_OUTPUTS = ["a", "r", "g", "b", "rgb", "rgba"]
+CM_OPS = ["union", "plus", "minus", "from", "multiply", "divide", "in", "out", "stencil", "max", "min", "absminus", "xor"]
+MATH_OPS = ["add", "multiply", "power", "invert", "clamp", "min", "max", "abs", "threshold", "set"]
 _CH = {"r": 0, "g": 1, "b": 2, "a": 3}
 
 # The node types: the page's NODE_TYPES (kind, default, range, animatable). The parity test compares them.
@@ -95,6 +105,51 @@ NODE_TYPES = {
         "center": {"kind": "vec2", "def": None, "key": True},
     }},
     "colorcorrect": {"inputs": ["src"], "params": cc_params()},
+    "lumakeyer": {"inputs": ["src"], "params": {
+        "source": {"kind": "enum", "def": "luminance", "choices": LUMA_SOURCES},
+        "low": {"kind": "num", "def": 0.2, "key": True},
+        "low_soft": {"kind": "num", "def": 0.1, "min": 0, "key": True},
+        "high": {"kind": "num", "def": 10, "key": True},
+        "high_soft": {"kind": "num", "def": 0, "min": 0, "key": True},
+        "clip_black": {"kind": "num", "def": 0, "min": 0, "max": 1, "key": True},
+        "clip_white": {"kind": "num", "def": 1, "min": 0, "max": 1, "key": True},
+        "invert": {"kind": "enum", "def": "off", "choices": ["off", "on"]},
+        "output": {"kind": "enum", "def": "premultiplied", "choices": ["premultiplied", "matte"]},
+    }},
+    "chromakeyer": {"inputs": ["src"], "params": {
+        "screen": {"kind": "color", "def": [0.1, 0.55, 0.1, 1]},
+        "screen_gain": {"kind": "num", "def": 1, "min": 0, "key": True},
+        "clip_black": {"kind": "num", "def": 0, "min": 0, "max": 1, "key": True},
+        "clip_white": {"kind": "num", "def": 1, "min": 0, "max": 1, "key": True},
+        "despill": {"kind": "num", "def": 1, "min": 0, "max": 1, "key": True},
+        "despill_limit": {"kind": "enum", "def": "max", "choices": DESPILL_LIMITS},
+        "invert": {"kind": "enum", "def": "off", "choices": ["off", "on"]},
+        "output": {"kind": "enum", "def": "premultiplied", "choices": KEY_OUTPUTS},
+    }},
+    "erode": {"inputs": ["src"], "params": {
+        "size": {"kind": "num", "def": -1, "min": -100, "max": 100, "key": True},
+        "shape": {"kind": "enum", "def": "box", "choices": ERODE_SHAPES},
+        "channels": {"kind": "enum", "def": "rgba", "choices": ERODE_CHANNELS},
+    }},
+    "laplacian": {"inputs": ["src"], "params": {
+        "mode": {"kind": "enum", "def": "laplacian", "choices": LAPLACIAN_MODES},
+        "size": {"kind": "num", "def": 0, "min": 0, "max": 200, "key": True},
+        "gain": {"kind": "num", "def": 1, "key": True},
+        "offset": {"kind": "num", "def": 0, "key": True},
+    }},
+    "channelmerge": {"inputs": ["B", "A"], "params": {
+        "a_channel": {"kind": "enum", "def": "a", "choices": CM_CHANNELS},
+        "b_channel": {"kind": "enum", "def": "a", "choices": CM_CHANNELS},
+        "operation": {"kind": "enum", "def": "union", "choices": CM_OPS},
+        "output": {"kind": "enum", "def": "a", "choices": CM_OUTPUTS},
+        "mix": {"kind": "num", "def": 1, "min": 0, "max": 1, "key": True},
+    }},
+    "channelmath": {"inputs": ["src"], "params": {
+        "operation": {"kind": "enum", "def": "multiply", "choices": MATH_OPS},
+        "value": {"kind": "num", "def": 1, "key": True},
+        "channels": {"kind": "enum", "def": "rgb", "choices": CM_OUTPUTS},
+        "mix": {"kind": "num", "def": 1, "min": 0, "max": 1, "key": True},
+    }},
     "grade": {"inputs": ["src"], "params": {
         "blackpoint": {"kind": "num", "def": 0, "key": True},
         "whitepoint": {"kind": "num", "def": 1, "key": True},
@@ -1080,6 +1135,206 @@ def color_correct_image(img, p):
     return np.where(ok[..., None], out, d).astype(np.float32)
 
 
+def _clip_matte(m, black, white):
+    if not white > black:
+        return np.where(m < black, 0.0, 1.0)
+    return np.clip((m - black) / (white - black), 0, 1)
+
+
+def _ramp_up(x, lo, soft):
+    if soft > 0:
+        return np.clip((x - lo) / soft, 0, 1)
+    return np.where(x >= lo, 1.0, 0.0)
+
+
+def _key_out(d, m, output, c=None):
+    if output == "matte":
+        return np.stack([m, m, m, np.ones_like(m)], axis=-1).astype(np.float32)
+    a = d[..., 3]
+    if c is not None:
+        k = a if output == "despilled" else a * m
+        return np.stack([c[0] * k, c[1] * k, c[2] * k, k], axis=-1).astype(np.float32)
+    return np.stack([d[..., 0] * m, d[..., 1] * m, d[..., 2] * m, a * m], axis=-1).astype(np.float32)
+
+
+def _straight(d):
+    u = np.where(d[..., 3] > 0, d[..., 3], 1.0)
+    return d[..., 0] / u, d[..., 1] / u, d[..., 2] / u
+
+
+def luma_key_image(img, p):
+    d = img.astype(np.float64)
+    r, g, b = _straight(d)
+    src = p["source"]
+    Y = (np.maximum(np.maximum(r, g), b) if src == "max" else r if src == "red" else g if src == "green" else b if src == "blue"
+         else LUM[0] * r + LUM[1] * g + LUM[2] * b)
+    m = _ramp_up(Y, p["low"], p["low_soft"]) * (1 - _ramp_up(Y, p["high"], p["high_soft"]))
+    m = _clip_matte(m, p["clip_black"], p["clip_white"])
+    if p.get("invert") == "on":
+        m = 1 - m
+    return _key_out(d, m, p["output"])
+
+
+def chroma_key_image(img, p):
+    d = img.astype(np.float64)
+    sc = p.get("screen") or [0, 1, 0, 1]
+    k = 1 if sc[1] >= sc[0] and sc[1] >= sc[2] else 2 if sc[2] >= sc[0] else 0
+    k1, k2 = (k + 1) % 3, (k + 2) % 3
+    S = sc[k] - max(sc[k1], sc[k2])
+    c = list(_straight(d))
+    lim = (c[k1] + c[k2]) / 2 if p["despill_limit"] == "average" else np.maximum(c[k1], c[k2])
+    diff = c[k] - np.maximum(c[k1], c[k2])
+    t = np.clip((diff / S) * p["screen_gain"], 0, 1) if S > 0 else np.zeros_like(diff)
+    m = _clip_matte(1 - t, p["clip_black"], p["clip_white"])
+    sp = c[k] - lim
+    c[k] = np.where(sp > 0, c[k] - sp * p["despill"], c[k])
+    return _key_out(d, 1 - m if p.get("invert") == "on" else m, p["output"], c)
+
+
+def _morph_rows(img, radii, shape, grow, chans):
+    """Erode / dilate at each whole radius in ``radii`` (the extremes along the rows shared between them):
+    the edge repeated, as the page's ``morph``."""
+    h, w = img.shape[:2]
+    pick = np.maximum if grow else np.minimum
+    R = max(radii)
+    s = img[..., chans]
+    sp = np.concatenate([np.repeat(s[:, :1], R, axis=1), s, np.repeat(s[:, -1:], R, axis=1)], axis=1)
+    H = [s]
+    for k in range(1, R + 1):
+        H.append(pick(H[k - 1], pick(sp[:, R - k:R - k + w], sp[:, R + k:R + k + w])))
+    outs = []
+    for r in radii:
+        if r <= 0:
+            outs.append(img)
+            continue
+        v = None
+        for dy in range(-r, r + 1):
+            hw = int(math.floor(math.sqrt(r * r - dy * dy) + 1e-9)) if shape == "disc" else r
+            Hp = H[hw]
+            if dy == 0:
+                row = Hp
+            elif dy < 0:
+                row = np.concatenate([np.repeat(Hp[:1], -dy, axis=0), Hp[:h + dy]], axis=0) if -dy < h else np.repeat(Hp[:1], h, axis=0)
+            else:
+                row = np.concatenate([Hp[dy:], np.repeat(Hp[-1:], dy, axis=0)], axis=0) if dy < h else np.repeat(Hp[-1:], h, axis=0)
+            v = row if v is None else pick(v, row, out=v if v is not row and v is not Hp else None)
+        out = img.copy()
+        out[..., chans] = v
+        outs.append(out)
+    return outs
+
+
+def erode_image(img, p):
+    size = p["size"]
+    r = abs(size)
+    lo = int(math.floor(r))
+    fr = r - lo
+    if r <= 0:
+        return img
+    chans = [3] if p["channels"] == "alpha" else [0, 1, 2, 3]
+    grow = size > 0
+    if fr <= 1e-9:
+        return _morph_rows(img, [lo], p["shape"], grow, chans)[0]
+    A, B = _morph_rows(img, [lo, lo + 1], p["shape"], grow, chans)
+    a = A.astype(np.float64)
+    return (a + (B.astype(np.float64) - a) * fr).astype(np.float32)
+
+
+def laplacian_image(img, p):
+    s = img.astype(np.float64)
+    B = (blur_image(img, p["size"]) if p["size"] > 0 else img).astype(np.float64)
+    h, w = img.shape[:2]
+    if p["mode"] == "highpass":
+        v = s[..., :3] - B[..., :3]
+    else:
+        xl, xr = np.clip(np.arange(w) - 1, 0, w - 1), np.clip(np.arange(w) + 1, 0, w - 1)
+        yu, yd = np.clip(np.arange(h) - 1, 0, h - 1), np.clip(np.arange(h) + 1, 0, h - 1)
+        b = B[..., :3]
+        v = 4 * b - (b[:, xl] + b[:, xr] + b[yu] + b[yd])
+    out = np.empty(s.shape)
+    out[..., :3] = v * p["gain"] + p["offset"]
+    out[..., 3] = s[..., 3]
+    return out.astype(np.float32)
+
+
+def _ch_of(d, ch):
+    if ch == "luminance":
+        return LUM[0] * d[..., 0] + LUM[1] * d[..., 1] + LUM[2] * d[..., 2]
+    return d[..., _CH[ch]]
+
+
+def _out_chans(out):
+    return [0, 1, 2, 3] if out == "rgba" else [0, 1, 2] if out == "rgb" else [_CH[out]]
+
+
+def _cm_op(op, A, B):
+    if op == "union":
+        return A + B - A * B
+    if op == "plus":
+        return A + B
+    if op == "minus":
+        return A - B
+    if op == "from":
+        return B - A
+    if op in ("multiply", "in"):
+        return A * B
+    if op == "divide":
+        return np.where(B != 0, A / np.where(B != 0, B, 1.0), 0.0)
+    if op == "out":
+        return A * (1 - B)
+    if op == "stencil":
+        return B * (1 - A)
+    if op == "max":
+        return np.maximum(A, B)
+    if op == "min":
+        return np.minimum(A, B)
+    if op == "absminus":
+        return np.abs(A - B)
+    if op == "xor":
+        return A + B - 2 * A * B
+    return A
+
+
+def channel_merge_image(b, a, p):
+    bd = b.astype(np.float64)
+    A = _ch_of(a.astype(np.float64), p["a_channel"]) if a is not None else np.zeros(bd.shape[:2])
+    v = _cm_op(p["operation"], A, _ch_of(bd, p["b_channel"]))
+    out = bd.copy()
+    for c in _out_chans(p["output"]):
+        out[..., c] = bd[..., c] + (v - bd[..., c]) * p["mix"]
+    return out.astype(np.float32)
+
+
+def channel_math_image(img, p):
+    d = img.astype(np.float64)
+    out = d.copy()
+    v, op = p["value"], p["operation"]
+    for c in _out_chans(p["channels"]):
+        x = d[..., c]
+        if op == "add":
+            y = x + v
+        elif op == "multiply":
+            y = x * v
+        elif op == "power":
+            y = np.where(x > 0, np.power(np.where(x > 0, x, 1.0), v), x)
+        elif op == "invert":
+            y = v - x
+        elif op == "clamp":
+            y = np.where(x < 0, 0.0, np.where(x > v, v, x))
+        elif op == "min":
+            y = np.minimum(x, v)
+        elif op == "max":
+            y = np.maximum(x, v)
+        elif op == "abs":
+            y = np.abs(x)
+        elif op == "threshold":
+            y = np.where(x >= v, 1.0, 0.0)
+        else:
+            y = np.full_like(x, v)
+        out[..., c] = x + (y - x) * p["mix"]
+    return out.astype(np.float32)
+
+
 def mix_images(a, b, t):
     x = a.astype(np.float64)
     return (x + (b.astype(np.float64) - x) * t).astype(np.float32)
@@ -1140,6 +1395,23 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None):
             return merge_images(Bi, Ai, Mi, n.get("operation") or "over", param_at(n, "mix", f))
         if t == "transform":
             return resample(run(ins[0], f, d1), transform_matrix(n, f, fmt, scale), W, H)
+        if t in ("lumakeyer", "chromakeyer", "erode", "laplacian", "channelmath"):
+            p = P(n, f, NODE_TYPES[t]["params"])
+            src = run(ins[0], f, d1)
+            if t == "lumakeyer":
+                return luma_key_image(src, p)
+            if t == "chromakeyer":
+                return chroma_key_image(src, p)
+            if t == "erode":
+                p["size"] = p["size"] * scale
+                return erode_image(src, p)
+            if t == "laplacian":
+                p["size"] = p["size"] * scale
+                return laplacian_image(src, p)
+            return channel_math_image(src, p)
+        if t == "channelmerge":
+            return channel_merge_image(run(ins[0], f, d1), run(ins[1], f, d1) if ins[1] else None,
+                                       P(n, f, NODE_TYPES["channelmerge"]["params"]))
         if t == "colorcorrect":
             return color_correct_image(run(ins[0], f, d1), P(n, f, NODE_TYPES["colorcorrect"]["params"]))
         if t == "grade":

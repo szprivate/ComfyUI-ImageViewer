@@ -34,11 +34,17 @@ The **Node Graph** panel is up when a comp opens. The picture runs from top to b
 | Grade | Black and white point, lift, gain, multiply, offset, gamma, saturation, mix |
 | ColorCorrect | A colour corrector laid out like After Effects' Color Finesse. **HSL** (hue, saturation, brightness, contrast about a centre) and **RGB** (gain, gamma, pedestal, for all channels and for R, G, B) for Master, Highlights, Midtones and Shadows. **Hue offsets** has a colour wheel per range: drag to push that range towards a colour, double-click to reset. **Luma ranges** sets where shadows end and highlights start, with the curves drawn. **Secondaries** A and B each correct one colour (picked with ⌖), qualified by hue, saturation and luma. *View* shows a range or a secondary's matte as grey |
 | Keyer | Chroma (a screen colour, picked from the picture with ⌖) or luma, with tolerance, softness and despill |
+| LumaKeyer | A matte from brightness (luminance, the largest channel, or one channel): transparent below *low*, solid from *low* + *low soft*, and transparent again past *high*. *Clip black* / *clip white* firm it up; *output* matte shows it as grey |
+| ChromaKeyer | A colour-difference key. Pick the screen with ⌖. *Screen gain* takes more as screen, *clip black* cleans the screen and *clip white* firms up the subject. *Despill* holds the screen's channel to the larger (or the mean) of the other two. *Output* gives the keyed picture, the matte, or despill only |
 | Blur | A Gaussian blur, its size in pixels of the comp |
 | MotionBlur | Blurs along the motion while the shutter is open. It takes motion vectors from a Vectors node in its second input, or works them out itself |
 | DepthBlur | Blurs by the distance from the focus, read from a depth map in its second input (red, any channel, or luminance). *Filter* lens blurs through a disc, as Defocus does |
 | Defocus | A lens out of focus: every pixel spread over the aperture, a disc or a polygon of 3 to 16 blades (*rotation*, *aspect* for an anamorphic lens). *Bloom* brightens what is above the *threshold* first, so highlights become bright bokeh |
+| Erode/Dilate | Shrinks (size below 0) or grows (above 0) the picture's light parts, by a box or a disc; *channels* alpha works on the matte alone. Fractional sizes are smooth |
+| Laplacian | *laplacian*: the edges, the picture less its neighbours, after a blur by *size* (a Laplacian of Gaussian). *highpass*: the picture less its blur. Then *gain* and *offset* (0.5 for the usual grey) |
 | Shuffle | Each channel from any channel, or 0 or 1 |
+| ChannelMerge | One channel of A with one of B (union, plus, minus, from, multiply, divide, in, out, stencil, max, min, absminus, xor) into B's alpha, a colour channel, rgb or rgba |
+| ChannelMath | Arithmetic on the chosen channels: add, multiply, power, invert, clamp, min, max, abs, threshold, set |
 | Premult / Unpremult | Multiply the colour by the alpha, or divide it back |
 | Retime | Plays its input faster, slower or backwards (*speed*, *start*, *offset*), the nearest frame or two mixed |
 | Vectors | Motion vectors measured from the footage (optical flow): red and green where each pixel goes in the next frame, blue and alpha where it came from. *Detail* half (the default) measures on a picture half the size, which is much faster |
@@ -69,3 +75,8 @@ ComfyUI's bottom panel (the strip under the canvas with the Terminal and the Log
 ## Rendering
 
 **Render…** opens the export dialog: PNG, EXR (linear half float) or TIFF frames, or an MP4, MOV (ProRes or H.264) or WebM film; all frames, the in-out range, or just this frame. It saves the comp first and renders it on the server at full size, by the same arithmetic as the preview. The result lands where every export goes (versioned, in the shot's folder when there is one), joins the History, and is put on the ComfyUI canvas as a loader node, ready to wire into a workflow.
+
+## Clean room
+
+Every node is written here from published maths and from how compositing tools behave: Porter–Duff and the usual Merge and Grade formulas, Horn–Schunck optical flow, colour-difference keying, box and Gaussian filters. No code, shaders or assets come from Nuke, After Effects, Color Finesse, Keylight, any other program, or GPL sources.
+

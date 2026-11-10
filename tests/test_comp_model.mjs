@@ -258,3 +258,31 @@ test("defocus spreads a point into its aperture, keeping its energy", async () =
     // A heavy node: its result is kept between renders.
     assert.ok(C.NODE_TYPES.defocus && C.HEAVY.has("defocus"));
 });
+
+test("keyers, erode / dilate, laplacian and channel ops", async () => {
+    const K = await import("../js/imageViewer_compMatte.js");
+    const px = (...v) => ({ w: v.length / 4, h: 1, data: Float32Array.from(v) });
+    // ChromaKeyer: the screen goes, a grey stays, spill on the subject is held to its other channels.
+    const ck = K.chromaKeyImage(px(0.1, 0.55, 0.1, 1, 0.4, 0.4, 0.4, 1, 0.5, 0.6, 0.3, 1),
+        { screen: [0.1, 0.55, 0.1, 1], screen_gain: 1, clip_black: 0, clip_white: 1, despill: 1, despill_limit: "max", output: "premultiplied" });
+    assert.equal(ck.data[3], 0);
+    assert.equal(ck.data[7], 1);
+    assert.ok(Math.abs(ck.data[9] - ck.data[8] * 1) < 1e-6 || ck.data[9] <= ck.data[8] + 1e-6, "green held to red");
+    // LumaKeyer: dark goes, bright stays.
+    const lk = K.lumaKeyImage(px(0.05, 0.05, 0.05, 1, 0.8, 0.8, 0.8, 1), { source: "luminance", low: 0.2, low_soft: 0.1, high: 10, high_soft: 0, clip_black: 0, clip_white: 1, output: "premultiplied" });
+    assert.deepEqual([lk.data[3], lk.data[7]], [0, 1]);
+    // Erode / dilate: a lone white pixel grows to 3 wide, a white row loses its ends.
+    const dot = { w: 5, h: 1, data: new Float32Array(20) };
+    dot.data[2 * 4 + 3] = 1;
+    const grown = K.erodeImage(dot, { size: 1, shape: "box", channels: "alpha" });
+    assert.deepEqual(Array.from({ length: 5 }, (_, i) => grown.data[i * 4 + 3]), [0, 1, 1, 1, 0]);
+    const shrunk = K.erodeImage(grown, { size: -1, shape: "box", channels: "alpha" });
+    assert.deepEqual(Array.from({ length: 5 }, (_, i) => shrunk.data[i * 4 + 3]), [0, 0, 1, 0, 0]);
+    // Laplacian of a flat picture is 0 (+ offset); high pass the same.
+    const flat = px(0.3, 0.3, 0.3, 1, 0.3, 0.3, 0.3, 1, 0.3, 0.3, 0.3, 1);
+    assert.ok(Math.abs(K.laplacianImage(flat, { mode: "laplacian", size: 0, gain: 1, offset: 0.5 }).data[4] - 0.5) < 1e-6);
+    // ChannelMerge: A's alpha stencils B's.
+    const cm = K.channelMergeImage(px(1, 1, 1, 1), px(0, 0, 0, 0.25), { a_channel: "a", b_channel: "a", operation: "stencil", output: "a", mix: 1 });
+    assert.equal(cm.data[3], 0.75);
+    assert.equal(K.channelMathImage(px(0.2, 0.4, 0.6, 1), { operation: "invert", value: 1, channels: "rgb", mix: 1 }).data[0], Float32Array.of(0.8)[0]);
+});

@@ -27,6 +27,7 @@
 import { valueAt } from "./imageViewer_mgScene.js";
 import * as O from "./imageViewer_compOps.js";
 import { ccParams, colorCorrectImage } from "./imageViewer_compColor.js";
+import * as K from "./imageViewer_compMatte.js";
 import { blank, blurImage, boxesForGauss } from "./imageViewer_compOps.js";
 export { blank, blurImage, boxesForGauss };
 
@@ -89,6 +90,30 @@ export const NODE_TYPES = {
         r: { kind: "enum", def: "B", choices: O.COPY_CHOICES }, g: { kind: "enum", def: "B", choices: O.COPY_CHOICES },
         b: { kind: "enum", def: "B", choices: O.COPY_CHOICES }, a: { kind: "enum", def: "A.a", choices: O.COPY_CHOICES, help: "B's channels, or one of A's" },
     } },
+    erode: { label: "Erode/Dilate", cat: "Filter", inputs: ["src"], params: {
+        size: { kind: "num", def: -1, min: -100, max: 100, key: true, step: 0.5, help: "Pixels of the comp: below 0 erodes (shrinks), above dilates (grows)" },
+        shape: { kind: "enum", def: "box", choices: K.ERODE_SHAPES },
+        channels: { kind: "enum", def: "rgba", choices: K.ERODE_CHANNELS },
+    } },
+    laplacian: { label: "Laplacian", cat: "Filter", inputs: ["src"], params: {
+        mode: { kind: "enum", def: "laplacian", choices: K.LAPLACIAN_MODES, help: "laplacian: edges (of the picture blurred by size); highpass: the picture less its blur" },
+        size: { kind: "num", def: 0, min: 0, max: 200, key: true, step: 0.5, help: "Blur size, pixels of the comp" },
+        gain: { kind: "num", def: 1, key: true, step: 0.1 },
+        offset: { kind: "num", def: 0, key: true, step: 0.05, help: "0.5 for a grey-centred result" },
+    } },
+    channelmerge: { label: "ChannelMerge", cat: "Channel", inputs: ["B", "A"], params: {
+        a_channel: { kind: "enum", def: "a", choices: K.CM_CHANNELS },
+        b_channel: { kind: "enum", def: "a", choices: K.CM_CHANNELS },
+        operation: { kind: "enum", def: "union", choices: K.CM_OPS, help: "A's channel with B's: union is A + B - AB, stencil B(1 - A), out A(1 - B)" },
+        output: { kind: "enum", def: "a", choices: K.CM_OUTPUTS, help: "B's channels the result goes into" },
+        mix: { kind: "num", def: 1, min: 0, max: 1, key: true, step: 0.01 },
+    } },
+    channelmath: { label: "ChannelMath", cat: "Channel", inputs: ["src"], params: {
+        operation: { kind: "enum", def: "multiply", choices: K.MATH_OPS },
+        value: { kind: "num", def: 1, key: true, step: 0.01, help: "The other number (clamp: the top; invert: what it is taken from)" },
+        channels: { kind: "enum", def: "rgb", choices: K.CM_OUTPUTS },
+        mix: { kind: "num", def: 1, min: 0, max: 1, key: true, step: 0.01 },
+    } },
     premult: { label: "Premult", cat: "Channel", inputs: ["src"], params: {} },
     unpremult: { label: "Unpremult", cat: "Channel", inputs: ["src"], params: {} },
     retime: { label: "Retime", cat: "Time", inputs: ["src"], params: {
@@ -96,6 +121,27 @@ export const NODE_TYPES = {
         start: { kind: "int", def: 0, help: "The frame that stays where it is" },
         offset: { kind: "num", def: 0, step: 1, help: "Frames to add to the input's frame" },
         blend: { kind: "enum", def: "nearest", choices: ["nearest", "mix"], help: "Between frames: the nearest, or the two mixed" },
+    } },
+    lumakeyer: { label: "LumaKeyer", cat: "Keyer", inputs: ["src"], params: {
+        source: { kind: "enum", def: "luminance", choices: K.LUMA_SOURCES, help: "What brightness is measured on" },
+        low: { kind: "num", def: 0.2, key: true, step: 0.01, help: "Transparent below this" },
+        low_soft: { kind: "num", def: 0.1, min: 0, key: true, step: 0.01, help: "Solid from low + this" },
+        high: { kind: "num", def: 10, key: true, step: 0.01, help: "Transparent again from here" },
+        high_soft: { kind: "num", def: 0, min: 0, key: true, step: 0.01, help: "Over this much past high" },
+        clip_black: { kind: "num", def: 0, min: 0, max: 1, key: true, step: 0.01, help: "The matte below this is 0" },
+        clip_white: { kind: "num", def: 1, min: 0, max: 1, key: true, step: 0.01, help: "The matte above this is 1" },
+        invert: { kind: "enum", def: "off", choices: ["off", "on"] },
+        output: { kind: "enum", def: "premultiplied", choices: ["premultiplied", "matte"], help: "matte: the matte as grey" },
+    } },
+    chromakeyer: { label: "ChromaKeyer", cat: "Keyer", inputs: ["src"], params: {
+        screen: { kind: "color", def: [0.1, 0.55, 0.1, 1], help: "The screen's colour: ⌖ takes it from the picture" },
+        screen_gain: { kind: "num", def: 1, min: 0, key: true, step: 0.05, help: "Above 1 takes more as screen" },
+        clip_black: { kind: "num", def: 0, min: 0, max: 1, key: true, step: 0.01, help: "The matte below this is 0: cleans the screen" },
+        clip_white: { kind: "num", def: 1, min: 0, max: 1, key: true, step: 0.01, help: "The matte above this is 1: firms up the subject" },
+        despill: { kind: "num", def: 1, min: 0, max: 1, key: true, step: 0.05, help: "How much of the screen's spill is taken out" },
+        despill_limit: { kind: "enum", def: "max", choices: K.DESPILL_LIMITS, help: "The screen channel is held to the larger, or the mean, of the other two" },
+        invert: { kind: "enum", def: "off", choices: ["off", "on"] },
+        output: { kind: "enum", def: "premultiplied", choices: K.KEY_OUTPUTS, help: "matte: the matte as grey; despilled: despill only" },
     } },
     keyer: { label: "Keyer", cat: "Keyer", inputs: ["src"], params: {
         mode: { kind: "enum", def: "chroma", choices: O.KEYER_MODES },
@@ -138,8 +184,8 @@ export const NODE_TYPES = {
     } },
     output: { label: "Output", cat: "Other", inputs: ["src"], params: {} },
 };
-export const TYPE_ORDER = ["read", "constant", "roto", "merge", "copy", "transform", "crop", "grade", "colorcorrect", "keyer", "blur",
-    "motionblur", "depthblur", "defocus", "shuffle", "premult", "unpremult", "retime", "vectors", "output"];
+export const TYPE_ORDER = ["read", "constant", "roto", "merge", "copy", "transform", "crop", "grade", "colorcorrect", "keyer", "lumakeyer", "chromakeyer", "blur", "erode", "laplacian",
+    "motionblur", "depthblur", "defocus", "shuffle", "channelmerge", "channelmath", "premult", "unpremult", "retime", "vectors", "output"];
 /** Nodes whose result is kept between renders (keyed by their whole upstream): they take long. */
 export const HEAVY = new Set(["vectors", "motionblur", "depthblur", "defocus"]);
 export const NODE_W = 120;
@@ -340,7 +386,7 @@ export function nodeKeyFrames(node) {
 
 // ── the stack the Layers panel shows ─────────────────────────────────────────
 
-const CHAIN = new Set(["transform", "grade", "colorcorrect", "blur", "crop", "shuffle", "premult", "unpremult", "retime", "keyer", "vectors",
+const CHAIN = new Set(["transform", "grade", "colorcorrect", "lumakeyer", "chromakeyer", "erode", "laplacian", "channelmerge", "channelmath", "blur", "crop", "shuffle", "premult", "unpremult", "retime", "keyer", "vectors",
     "motionblur", "depthblur", "defocus", "copy"]);
 
 /**
@@ -667,6 +713,21 @@ export function renderNode(comp, id, frame, ctx) {
             const p = {};
             for (const k of Object.keys(NODE_TYPES.grade.params)) p[k] = paramAt(n, k, f);
             return gradeImage(run(n.inputs[0], f, d1), p);
+        }
+        case "lumakeyer": case "chromakeyer": case "erode": case "laplacian": case "channelmath": {
+            const p = {};
+            for (const k of Object.keys(NODE_TYPES[n.type].params)) p[k] = paramAt(n, k, f);
+            const src = run(n.inputs[0], f, d1);
+            if (n.type === "lumakeyer") return K.lumaKeyImage(src, p);
+            if (n.type === "chromakeyer") return K.chromaKeyImage(src, p);
+            if (n.type === "erode") { p.size *= scale; return K.erodeImage(src, p); }
+            if (n.type === "laplacian") { p.size *= scale; return K.laplacianImage(src, p); }
+            return K.channelMathImage(src, p);
+        }
+        case "channelmerge": {
+            const p = {};
+            for (const k of Object.keys(NODE_TYPES.channelmerge.params)) p[k] = paramAt(n, k, f);
+            return K.channelMergeImage(run(n.inputs[0], f, d1), n.inputs[1] ? run(n.inputs[1], f, d1) : null, p);
         }
         case "colorcorrect": {
             const p = {};

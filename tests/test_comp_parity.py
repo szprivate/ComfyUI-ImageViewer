@@ -152,6 +152,24 @@ def new_node_cases(sources):
     ]
     for kw in cc:
         c.append(one(node("colorcorrect", 1, ["Read1"], **kw)))
+    for kw in ({}, {"source": "max", "low": 0.3, "low_soft": 0.2, "high": 0.8, "high_soft": 0.1, "clip_black": 0.1, "clip_white": 0.9},
+               {"source": "green", "low_soft": 0, "invert": "on", "output": "matte"}):
+        c.append(one(node("lumakeyer", 1, ["Read1"], **kw)))
+    for kw in ({}, {"screen": [0.7, 0.2, 0.1, 1], "screen_gain": 1.4, "clip_black": 0.1, "clip_white": 0.8, "despill_limit": "average", "despill": 0.6},
+               {"screen": [0.1, 0.2, 0.6, 1], "output": "despilled"}, {"output": "matte", "invert": "on"}):
+        c.append(one(node("chromakeyer", 1, ["Read1"], **kw)))
+    for kw in ({"size": -2}, {"size": 2.5, "shape": "disc"}, {"size": -3.25, "shape": "disc", "channels": "alpha"}, {"size": 4, "shape": "disc"}):
+        c.append(one(node("erode", 1, ["Read1"], **kw)))
+    c.append(({"comp": comp([read(1), node("erode", 1, ["Read1"], size=3.5, shape="disc"), out("erode1")]), "scale": 0.5}, sources))
+    for kw in ({}, {"size": 3, "gain": 2, "offset": 0.5}, {"mode": "highpass", "size": 6, "offset": 0.5}):
+        c.append(one(node("laplacian", 1, ["Read1"], **kw)))
+    for kw in ({}, {"a_channel": "luminance", "b_channel": "r", "operation": "stencil", "output": "rgb", "mix": 0.6},
+               {"operation": "xor"}, {"operation": "absminus", "output": "g"}):
+        c.append(one(node("channelmerge", 1, ["Read1", "Read2"], **kw)))
+    # divide: on the same picture, where big quotients (float32's last place) do not swamp the comparison
+    c.append(one(node("channelmerge", 1, ["Read1", "Read1"], operation="divide", a_channel="g", b_channel="luminance", output="rgba", mix=0.5)))
+    for op in ("add", "multiply", "power", "invert", "clamp", "min", "max", "abs", "threshold", "set"):
+        c.append(one(node("channelmath", 1, ["Read1"], operation=op, value=0.4, channels="rgba" if op == "clamp" else "rgb", mix=0.8)))
     return c
 
 
