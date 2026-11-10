@@ -246,6 +246,23 @@ class CompBrowserTests(unittest.TestCase):
             pg.screenshot(path=os.path.join(SHOTS, "comp-roto.png"))
         self.assertEqual(self.errors, [])
 
+    def test_the_eye_on_a_node_shows_it_in_the_picture_and_the_viewed_node_is_tagged(self):
+        pg = self.page()
+        self.new_comp(pg)
+        g = "__panel.compGraphPanel"
+        tag = lambda: pg.evaluate(f"() => Array.from({g}.querySelectorAll('.cp-vtag')).map((t) => [t.closest('.cp-node').dataset.id, t.textContent])")
+        self.assertEqual(tag(), [["Output1", "OUTPUT"]])
+        pg.evaluate(f"() => {g}.querySelector('.cp-node[data-id=Constant1] .cp-eye').dispatchEvent(new PointerEvent('pointerdown', {{ bubbles: true, button: 0 }}))")
+        self.assertEqual(tag(), [["Constant1", "VIEWER"]])
+        self.assertEqual(pg.evaluate(f"() => {self.ED}.state.view"), "Constant1")
+        if SHOTS:
+            pg.mouse.move(10, 10)
+            pg.wait_for_timeout(300)
+            pg.locator(".cp-graph").first.screenshot(path=os.path.join(SHOTS, "comp-viewer-tag.png")) if pg.locator(".cp-graph").count() else None
+        pg.evaluate(f"() => {g}.querySelector('.cp-node[data-id=Constant1] .cp-eye').dispatchEvent(new PointerEvent('pointerdown', {{ bubbles: true, button: 0 }}))")
+        self.assertEqual(tag(), [["Output1", "OUTPUT"]], "clicked again: back to the Output")
+        self.assertEqual(self.errors, [])
+
     def test_the_graph_in_comfyuis_bottom_panel(self):
         pg = self.page()
         self.new_comp(pg)

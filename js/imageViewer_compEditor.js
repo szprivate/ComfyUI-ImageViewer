@@ -38,7 +38,13 @@ const CSS = `
   font-weight:600;color:#111;cursor:grab;box-shadow:0 1px 3px #0008;white-space:nowrap;overflow:visible}
 .cp-node .cp-nm{overflow:hidden;text-overflow:ellipsis;max-width:${C.NODE_W - 12}px;pointer-events:none}
 .cp-node.sel{outline:2px solid #ffcf3a;outline-offset:1px}
+.cp-node.viewed{box-shadow:0 0 0 2px #ff3b3b,0 1px 3px #0008}
 .cp-node.viewed:after{content:"";position:absolute;left:-7px;top:9px;width:0;height:0;border:6px solid transparent;border-left:7px solid #ff3b3b}
+.cp-vtag{position:absolute;right:100%;margin-right:9px;top:7px;font-size:10px;font-weight:700;color:#fff;background:#ff3b3b;border-radius:2px;padding:0 4px;pointer-events:none;letter-spacing:.03em}
+.cp-eye{position:absolute;right:2px;top:50%;transform:translateY(-50%);width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-size:11px;line-height:1;background:#0003;color:#111;cursor:pointer;opacity:0;z-index:3}
+.cp-node:hover .cp-eye{opacity:.8}.cp-eye:hover{opacity:1!important;background:#ff3b3b;color:#fff}
+.cp-node.viewed .cp-eye{opacity:1;background:#ff3b3b;color:#fff}
 .cp-node.off{opacity:.45}.cp-node.off .cp-nm{text-decoration:line-through}
 .cp-node .cp-sub{position:absolute;top:100%;left:0;right:0;text-align:center;font-weight:400;font-size:10px;color:#9a9aa2;margin-top:2px;pointer-events:none;overflow:hidden;text-overflow:ellipsis}
 .cp-port{position:absolute;width:11px;height:11px;margin-left:-5.5px;border-radius:50%;background:#e8e8ea;border:1px solid #000;cursor:crosshair;z-index:2}
@@ -132,7 +138,7 @@ export function createCompEditor(host, opts = {}) {
     const world = el(doc, "div", "cp-world");
     const wires = svgEl(doc, "svg", { class: "cp-wires" });
     world.append(wires);
-    graph.append(world, el(doc, "div", "cp-hint", "Tab: add a node · 1: view it · D: disable · Del: delete · F: frame all"));
+    graph.append(world, el(doc, "div", "cp-hint", "Tab: add a node · 1 or 👁: show it in the picture · D: disable · Del: delete · F: frame all"));
     const props = el(doc, "div", "mg-side mg-part"); props.tabIndex = 0;
     const layers = el(doc, "div", "cp-layers"); layers.tabIndex = 0;
     const parts = { graph, props, layers };
@@ -417,6 +423,13 @@ export function createCompEditor(host, opts = {}) {
                 if (t.inputs.length > 1) { const l = el(doc, "span", "cp-plabel", label); l.style.left = portX(n, i) + "px"; box.append(l); }
             });
             if (n.type !== "output") { const p = el(doc, "div", "cp-port out"); p.dataset.out = n.id; p.title = "Drag onto an input to connect"; box.append(p); }
+            const isViewed = n.id === viewed;
+            const eye = el(doc, "span", "cp-eye", "👁");
+            eye.dataset.eye = n.id;
+            eye.title = isViewed ? (n.id === st.comp.output ? "The picture shows the comp's Output" : "Shown in the picture: click to show the Output again")
+                : "Show this node in the picture (1)";
+            box.append(eye);
+            if (isViewed) box.append(el(doc, "span", "cp-vtag", n.id === st.comp.output ? "OUTPUT" : "VIEWER"));
             world.append(box);
             n.inputs.forEach((src, i) => {
                 const s = src && node(src);
@@ -453,6 +466,11 @@ export function createCompEditor(host, opts = {}) {
         const target = e.target;
         if (e.button === 1 || (e.button === 0 && e.altKey)) return panGraph(e);
         if (e.button !== 0) return;
+        if (target.dataset && target.dataset.eye) {
+            e.preventDefault(); e.stopPropagation();
+            const id = target.dataset.eye;
+            return setView(id === viewedId() ? st.comp.output : id);
+        }
         if (target.dataset && target.dataset.out) return dragWire(e, target.dataset.out, null);
         if (target.classList && target.classList.contains("in")) {
             const dst = node(target.dataset.id), port = Number(target.dataset.port);

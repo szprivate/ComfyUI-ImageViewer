@@ -19,7 +19,7 @@ The **Node Graph** panel is up when a comp opens. The picture runs from top to b
 - **Tab** opens a list of nodes to add; type to narrow it. With a node selected, the new one goes in under it.
 - Drag a node to move it. Drag on empty space to select several, or Alt-drag or middle-drag to pan. The wheel zooms.
 - Drag from an output to an input to connect them. Drag a connected input away to take the wire off.
-- **1** shows the selected node in the picture (a red mark on its left), **D** switches it off, **Del** deletes it (what read it reads its first input instead), **F** frames the whole graph.
+- **1**, or the eye at a node's right edge, shows that node in the picture: it gets a red outline and a VIEWER tag, and the eye again (or viewing the Output) goes back to the comp. **D** switches a node off, **Del** deletes it (what read it reads its first input instead), **F** frames the whole graph.
 - Drop History thumbnails or file browser rows on the graph to make Read nodes. A frame of a numbered sequence brings the whole sequence (`shot.####.exr`).
 
 | Node | What it does |
