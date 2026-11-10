@@ -20,7 +20,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import * as S from "./imageViewer_scene3d.js";
-import { THEME, THEME_SCOPE_ID, makeThemeMixin } from "./imageViewer_theme.js";
+import { THEME, THEME_SCOPE_ID, THEME_PRESET_ID, PRESETS, matchPreset, makeThemeMixin } from "./imageViewer_theme.js";
 
 const P = "ImageViewer.";
 const CAT = "ComfyUI Image Viewer";
@@ -56,6 +56,7 @@ export const PREF = {
     renderColor:    P + "Previz.RenderColor",
     atlasMove:      P + "Experimental.AtlasCameraMove",
     colourScope:    THEME_SCOPE_ID,
+    colourPreset:   THEME_PRESET_ID,
     colourReset:    P + "Colours.Reset",
 };
 const THEME_IDS = new Set(THEME.map((t) => t.id));
@@ -263,12 +264,21 @@ function defs() {
         },
         // ── Colours (imageViewer_theme.js) ──
         {
+            id: PREF.colourPreset, category: sec("Colours", "Preset"),
+            name: "Colour preset",
+            tooltip: "Sets every colour below at once, for the whole viewer (panels, bars, the Edit page, Paint, " +
+                     "Dependencies). The colours stay editable; changed by hand, this reads Custom.",
+            type: "combo", defaultValue: "paint",
+            options: opts([...Object.entries(PRESETS).map(([k, p]) => [k, p.name]), ["custom", "Custom"]]),
+            sortOrder: 646, onChange: (value, old) => applyPreset(value, old),
+        },
+        {
             id: PREF.colourScope, category: sec("Colours", "Scope"),
             name: "Use the colours",
-            tooltip: "The Edit page's own colours (timeline, tracks, clips) are always used. The viewer's " +
-                     "(panels, title bars, bars, buttons) can be used on the Edit page only - while a cut's " +
-                     "tab is up - or everywhere in the viewer.",
-            type: "combo", defaultValue: "edit",
+            tooltip: "The Edit page's own colours (timeline, tracks, clips) are always used. The rest " +
+                     "(panels, title bars, bars, buttons, Paint, Dependencies) everywhere in the viewer, or " +
+                     "on the Edit page only - while a cut's tab is up.",
+            type: "combo", defaultValue: "all",
             options: opts([["edit", "On the Edit page"], ["all", "Everywhere in the viewer"]]),
             sortOrder: 645, onChange: panelApply(PREF.colourScope),
         },
@@ -276,11 +286,11 @@ function defs() {
             id: t.id, category: sec("Colours", t.id.slice(P.length + "Colours.".length)),
             name: t.name, type: "color", defaultValue: t.def,
             ...(t.tip ? { tooltip: t.tip } : {}),
-            sortOrder: 644 - i, onChange: panelApply(t.id),
+            sortOrder: 644 - i, onChange: (value, old) => { panelApply(t.id)(value); colourChanged(old); },
         })),
         {
             id: PREF.colourReset, category: sec("Colours", "Reset"),
-            name: "Back to the viewer's own colours",
+            name: "Back to the preset's colours",
             type: () => renderColourReset(),
             defaultValue: "", sortOrder: 620,
         },
@@ -578,18 +588,53 @@ export const PrefsMixin = {
     },
 };
 
-// ── Colours: one button that puts every colour back ──────────────────────────
+// ── Colours: presets, and one button that puts every colour back ─────────────
+
+let _presetWriting = false;    // the preset's own writes are not changes "by hand"
+
+/** Every colour setting to preset k's. */
+async function writePreset(k) {
+    const p = PRESETS[k];
+    if (!p) return;
+    _presetWriting = true;
+    try {
+        for (const t of THEME) {
+            if (String(pref(t.id)).replace(/^#/, "").toLowerCase() !== p.values[t.key]) {
+                await app.extensionManager.setting.set(t.id, p.values[t.key]);
+            }
+        }
+    } finally { _presetWriting = false; }
+}
+
+/** The preset picked: write its colours. ComfyUI also calls this at load (old
+ *  undefined), and the user's file sets it at startup: neither writes. */
+function applyPreset(value, old) {
+    if (old === undefined || value === old || !PRESETS[value] || _presetWriting || !_userSync) return;
+    writePreset(value).catch((e) => console.warn("[ImageViewer] colour preset not applied", e));
+}
+
+/** A colour changed by hand: the preset says which one these are now, or Custom. */
+function colourChanged(old) {
+    if (old === undefined || _presetWriting || !_userSync) return;
+    const values = {};
+    for (const t of THEME) values[t.id] = pref(t.id);
+    const k = matchPreset(values);
+    if (pref(PREF.colourPreset) === k) return;
+    _presetWriting = true;
+    Promise.resolve(app.extensionManager.setting.set(PREF.colourPreset, k))
+        .catch(() => {}).finally(() => { _presetWriting = false; });
+}
 
 function renderColourReset() {
     const note = h("span", { className: "imageviewer-roots-note" });
     const btn = h("button", {
-        title: "Every colour above back to its default; the viewer then looks as it did before any was changed.",
+        title: "Every colour above back to the preset's (to Paint's when the preset is Custom).",
         onclick: async () => {
             btn.disabled = true;
             try {
-                for (const t of THEME) {
-                    if (pref(t.id) !== t.def) await app.extensionManager.setting.set(t.id, t.def);
-                }
+                const k = PRESETS[pref(PREF.colourPreset)] ? pref(PREF.colourPreset) : "paint";
+                await writePreset(k);
+                await app.extensionManager.setting.set(PREF.colourPreset, k);
                 note.textContent = "Done.";
             } catch (e) {
                 note.textContent = `Not all were reset: ${e && e.message ? e.message : e}`;

@@ -338,6 +338,8 @@ export const PaintPanelMixin = {
     /** The editor for a tab, and its picture when it has one. */
     async _paintBuild(key, rec) {
         rec.editor = createPaintEditor(rec.el, this._paintHost(key, rec));
+        // Paint brings its own style sheet: the accent is found in it too.
+        if (this._themeApply) this._themeApply();
         if (this.activeTab === key) this._paintSeat(rec);
         if (!rec.pending && rec.source) {
             try { rec.pending = await postJson("/imageviewer/paint/open", { path: rec.source }); }
