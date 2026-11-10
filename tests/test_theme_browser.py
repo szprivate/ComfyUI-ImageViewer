@@ -13,10 +13,14 @@ import test_paint_browser as paint_base  # noqa: E402
 # ComfyUI's settings store, stubbed: the harness has none, so pref() would answer the defaults.
 STORE = """async () => {
     const { app } = await import('/scripts/app.js');
-    const vals = {};
+    // "Custom": the colours below are the settings' (the default follows ComfyUI's palette).
+    const vals = { 'ImageViewer.Colours.Preset': 'custom' };
     app.extensionManager.setting = { get: (id) => vals[id], set: async (id, v) => { vals[id] = v; } };
     window.__setPref = async (id, v) => { vals[id] = v; __panel.applyViewerPref(id, v); };
 }"""
+# A ComfyUI palette as the frontend (1.58) puts it on <html>: theme tokens, one through var() / color-mix().
+PALETTE = """(p) => { const s = document.documentElement.style;
+    for (const [k, v] of Object.entries(p)) s.setProperty('--' + k, v); }"""
 BG = "(sel) => getComputedStyle(__panel.shadowRoot.querySelector(sel)).backgroundColor"
 CHROME = "() => __panel.shadowRoot.querySelector('style[data-iv-theme=\"chrome\"]').media"
 
@@ -69,6 +73,69 @@ class ThemeBrowserTests(_Base):
         for key in ("Panel", "Clip", "Heads", "Timeline", "Button"):
             pg.evaluate("(k) => __setPref('ImageViewer.Colours.' + k, undefined)", key)
         self.assertEqual(pg.evaluate(BG, panel), "rgb(27, 27, 31)")
+        self.assertEqual(self.errors, [])
+
+
+    def test_follow_comfyui_takes_its_palette_and_changes_with_it(self):
+        pg = self.page()
+        pg.evaluate(STORE)
+        pg.evaluate(PALETTE, {"background": "#2b2f38", "card": "#3a3f4a", "foreground": "#f0f0f0",
+                              "secondary": "var(--card)", "border": "color-mix(in srgb, #2b2f38 50%, #ffffff)",
+                              "primary": "#0b8ce9"})
+        pg.evaluate("() => __setPref('ImageViewer.Colours.Preset', 'comfy')")
+        panel = ".history-panel"
+        self.assertEqual(pg.evaluate(BG, panel), "rgb(43, 47, 56)")
+        # var() and color-mix() are resolved: the buttons are the card's colour, the border half way to white.
+        cols = pg.evaluate("""async () => {
+            const { THEME } = await import('/extensions/viewer/imageViewer_theme.js');
+            const { app } = await import('/scripts/app.js');
+            return Object.fromEntries(THEME.map((t) => [t.key, app.extensionManager.setting.get(t.id)]));
+        }""")
+        self.assertEqual(cols["button"], "3a3f4a", "the colour rows show ComfyUI's colours")
+        self.assertEqual(cols["border"], "95979c")
+        self.assertEqual(cols["accent"], "0b8ce9")
+        # ComfyUI's palette switched: the viewer follows at once, without a setting touched.
+        pg.evaluate(PALETTE, {"background": "#ffffff", "foreground": "#171718", "card": "#eeeeee"})
+        pg.wait_for_function("(s) => getComputedStyle(__panel.shadowRoot.querySelector(s)).backgroundColor === 'rgb(255, 255, 255)'",
+                             arg=panel, timeout=3000)
+        # A colour changed by hand: Custom, and the palette no longer followed.
+        pg.evaluate("() => __setPref('ImageViewer.Colours.Preset', 'custom')")
+        pg.evaluate("() => __setPref('ImageViewer.Colours.Panel', '404040')")
+        self.assertEqual(pg.evaluate(BG, panel), "rgb(64, 64, 64)")
+        pg.evaluate(PALETTE, {"background": "#101010"})
+        pg.wait_for_timeout(200)
+        self.assertEqual(pg.evaluate(BG, panel), "rgb(64, 64, 64)")
+        self.assertEqual(self.errors, [])
+
+    def test_a_change_reaches_the_popped_out_viewer_at_once(self):
+        pg = self.page()
+        pg.evaluate(STORE)
+        with pg.context.expect_page() as pop:
+            pg.evaluate("() => window.__panel.toggleUndock()")
+        win = pop.value
+        win.wait_for_load_state()
+        pg.wait_for_function("() => __panel.container.ownerDocument !== document", timeout=10000)
+        POP = "(sel) => getComputedStyle(__panel.container.ownerDocument.querySelector(sel) " \
+              "|| __panel.container.querySelector(sel)).backgroundColor"
+        pg.evaluate("() => __setPref('ImageViewer.Colours.Title', '602020')")
+        self.assertEqual(pg.evaluate(POP, ".panel-titlebar"), "rgb(96, 32, 32)")
+        pg.evaluate("() => __setPref('ImageViewer.Colours.Window', '203040')")
+        self.assertEqual(pg.evaluate("() => __panel.container.ownerDocument.body.style.backgroundColor"), "rgb(32, 48, 64)")
+        # A preset picked while it is out, and ComfyUI's palette followed there too.
+        pg.evaluate("""async () => {
+            const { PRESETS, THEME } = await import('/extensions/viewer/imageViewer_theme.js');
+            for (const t of THEME) await __setPref(t.id, PRESETS.midnight.values[t.key]);
+        }""")
+        self.assertEqual(pg.evaluate(POP, ".panel-titlebar"), "rgb(28, 34, 48)")
+        pg.evaluate(PALETTE, {"background": "#3a2020", "card": "#3a2020", "foreground": "#ffffff"})
+        pg.evaluate("() => __setPref('ImageViewer.Colours.Preset', 'comfy')")
+        self.assertEqual(pg.evaluate(POP, ".history-panel"), "rgb(58, 32, 32)")
+        pg.evaluate(PALETTE, {"background": "#203a20", "card": "#203a20"})
+        pg.wait_for_function("(s) => getComputedStyle(__panel.container.querySelector(s)).backgroundColor === 'rgb(32, 58, 32)'",
+                             arg=".history-panel", timeout=3000)
+        # Docked again, the shadow root has the colours too.
+        pg.evaluate("() => __panel.toggleUndock()")
+        self.assertEqual(pg.evaluate(BG, ".history-panel"), "rgb(32, 58, 32)")
         self.assertEqual(self.errors, [])
 
 

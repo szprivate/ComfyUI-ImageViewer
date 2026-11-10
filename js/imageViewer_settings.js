@@ -20,7 +20,8 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import * as S from "./imageViewer_scene3d.js";
-import { THEME, THEME_SCOPE_ID, THEME_PRESET_ID, PRESETS, matchPreset, makeThemeMixin } from "./imageViewer_theme.js";
+import { THEME, THEME_SCOPE_ID, THEME_PRESET_ID, PRESETS, COMFY, COMFY_NAME, matchPreset, makeThemeMixin,
+         readComfyColours } from "./imageViewer_theme.js";
 
 const P = "ImageViewer.";
 const CAT = "ComfyUI Image Viewer";
@@ -267,10 +268,11 @@ function defs() {
             id: PREF.colourPreset, category: sec("Colours", "Preset"),
             name: "Colour preset",
             tooltip: "Sets every colour below at once, for the whole viewer (panels, bars, the Edit page, Paint, " +
-                     "Dependencies). The colours stay editable; changed by hand, this reads Custom.",
-            type: "combo", defaultValue: "paint",
-            options: opts([...Object.entries(PRESETS).map(([k, p]) => [k, p.name]), ["custom", "Custom"]]),
-            sortOrder: 646, onChange: (value, old) => applyPreset(value, old),
+                     "Dependencies). Follow ComfyUI takes them from ComfyUI's own colour palette (Appearance) " +
+                     "and changes with it. The colours stay editable; changed by hand, this reads Custom.",
+            type: "combo", defaultValue: COMFY,
+            options: opts([[COMFY, COMFY_NAME], ...Object.entries(PRESETS).map(([k, p]) => [k, p.name]), ["custom", "Custom"]]),
+            sortOrder: 646, onChange: (value, old) => { applyPreset(value, old); panelApply(PREF.colourPreset)(value); },
         },
         {
             id: PREF.colourScope, category: sec("Colours", "Scope"),
@@ -495,7 +497,7 @@ export async function applyStartupPrefs() {
 // A mixin like the others: one flat object of methods on the panel.
 
 export const PrefsMixin = {
-    ...makeThemeMixin(pref),
+    ...makeThemeMixin(pref, comfyColours, followComfy),
 
     /** The defaults the panel starts from, before any saved state is restored. */
     _applyStartupViewerPrefs() {
@@ -515,8 +517,13 @@ export const PrefsMixin = {
     /** A setting changed in Settings → ComfyUI Image Viewer while the panel is up. */
     applyViewerPref(id, value) {
         if (!this.container) return;              // still starting; it reads them itself
-        if (THEME_IDS.has(id)) return this._themeApply();
+        if (THEME_IDS.has(id)) {
+            // Following ComfyUI, the rows only show its colours (followComfy wrote them).
+            return pref(PREF.colourPreset) === COMFY ? undefined : this._themeApply();
+        }
         switch (id) {
+            case PREF.colourPreset:
+                return this._themeApply();
             case PREF.colourScope:
                 return this._themeSync();
             case PREF.fps:
@@ -606,6 +613,35 @@ async function writePreset(k) {
     } finally { _presetWriting = false; }
 }
 
+/** ComfyUI's palette as the viewer's colours, read off the main window's page. */
+function comfyColours() {
+    let canvas = null;
+    try { canvas = app.canvas && app.canvas.clear_background_color; } catch (e) { /* no canvas yet */ }
+    try { return readComfyColours(document, canvas); } catch (e) { return null; }
+}
+
+/** Following ComfyUI: its colours into the colour rows, so that Settings shows
+ *  them and a change by hand starts from them (and makes the preset Custom). */
+let _following = Promise.resolve();
+let _followSig = "";
+function followComfy(values) {
+    if (!_userSync) return;
+    const sig = JSON.stringify(values);
+    if (sig === _followSig) return;
+    _followSig = sig;
+    _following = _following.then(async () => {
+        if (pref(PREF.colourPreset) !== COMFY) return;
+        _presetWriting = true;
+        try {
+            for (const t of THEME) {
+                if (String(pref(t.id)).replace(/^#/, "").toLowerCase() !== values[t.key]) {
+                    await app.extensionManager.setting.set(t.id, values[t.key]);
+                }
+            }
+        } finally { _presetWriting = false; }
+    }).catch((e) => console.warn("[ImageViewer] ComfyUI's colours not written", e));
+}
+
 /** The preset picked: write its colours. ComfyUI also calls this at load (old
  *  undefined), and the user's file sets it at startup: neither writes. */
 function applyPreset(value, old) {
@@ -628,13 +664,20 @@ function colourChanged(old) {
 function renderColourReset() {
     const note = h("span", { className: "imageviewer-roots-note" });
     const btn = h("button", {
-        title: "Every colour above back to the preset's (to Paint's when the preset is Custom).",
+        title: "Every colour above back to the preset's (ComfyUI's when following it, Paint's when the preset is Custom).",
         onclick: async () => {
             btn.disabled = true;
             try {
-                const k = PRESETS[pref(PREF.colourPreset)] ? pref(PREF.colourPreset) : "paint";
-                await writePreset(k);
-                await app.extensionManager.setting.set(PREF.colourPreset, k);
+                const now = pref(PREF.colourPreset);
+                if (now === COMFY) {
+                    _followSig = "";
+                    const c = comfyColours();
+                    if (c) { followComfy(c); await _following; }
+                } else {
+                    const k = PRESETS[now] ? now : "paint";
+                    await writePreset(k);
+                    await app.extensionManager.setting.set(PREF.colourPreset, k);
+                }
                 note.textContent = "Done.";
             } catch (e) {
                 note.textContent = `Not all were reset: ${e && e.message ? e.message : e}`;

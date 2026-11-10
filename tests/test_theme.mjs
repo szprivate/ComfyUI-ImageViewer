@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { THEME, PRESETS, themeCss, matchPreset, cleanColor, shade, mix, swapAccent, accentRules } from "../js/imageViewer_theme.js";
+import { THEME, PRESETS, themeCss, matchPreset, cleanColor, shade, mix, swapAccent, accentRules,
+         comfyValues, COMFY_VARS, lightness } from "../js/imageViewer_theme.js";
 
 // The viewer's stylesheet and Paint's (a string in the editor's module).
 const CSS = readFileSync(new URL("../js/imageViewer.css", import.meta.url), "utf8") + "\n" +
@@ -91,4 +92,34 @@ test("the accent takes the stylesheet's orange wherever a rule has it", () => {
     ];
     assert.equal(accentRules(rules, "#4c9aff"),
                  ".bar-group.active { color: rgb(76, 154, 255); }\n.x { stroke: rgb(76, 154, 255) !important; }\n");
+});
+
+test("Follow ComfyUI: every colour from its palette, the newer tokens before the older names", () => {
+    const vars = (o) => (n) => (n in o ? o[n] : null);
+    // No palette on the page (not ComfyUI): nothing to follow.
+    assert.equal(comfyValues(vars({})), null);
+    // ComfyUI's own dark palette (1.58): theme tokens and the older comfy_base names both there.
+    const dark = { background: "#171718", "comfy-menu-bg": "#171718", card: "#262729", secondary: "#262729",
+                   foreground: "#ffffff", border: "#494a50", "border-color": "#4e4e4e", primary: "#0b8ce9",
+                   "bg-color": "#202020" };
+    const v = comfyValues(vars(dark), "#141414");
+    for (const t of THEME) assert.equal(cleanColor(v[t.key]), "#" + v[t.key], t.key);
+    assert.equal(v.panel, "171718");
+    assert.equal(v.button, "262729");
+    assert.equal(v.border, "494a50", "the token, not the older name");
+    assert.equal(v.accent, "0b8ce9");
+    assert.equal(v.viewer, "141414", "the graph's background");
+    assert.equal(v.timeline, v.panel);
+    // An older frontend: only the comfy_base names.
+    const old = comfyValues(vars({ "comfy-menu-bg": "#242730", "fg-color": "#fff", "border-color": "#6e7581" }));
+    assert.equal(old.panel, "242730");
+    assert.equal(old.border, "6e7581");
+    assert.equal(old.accent, "ff6600", "no primary colour: the viewer's own orange");
+    assert.equal(old.viewer, shade("#242730", -0.25).slice(1));
+    // A light palette: the playhead is the text colour, not white on white.
+    const light = comfyValues(vars({ background: "#ffffff", foreground: "#171718" }));
+    assert.ok(lightness("#" + light.panel) > 0.5);
+    assert.equal(light.playhead, "171718");
+    assert.equal(matchPreset(light), "custom");
+    for (const list of Object.values(COMFY_VARS)) assert.ok(list.length > 0);
 });
