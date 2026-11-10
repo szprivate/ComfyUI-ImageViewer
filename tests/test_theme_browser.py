@@ -107,6 +107,26 @@ class ThemeBrowserTests(_Base):
         self.assertEqual(pg.evaluate(BG, panel), "rgb(64, 64, 64)")
         self.assertEqual(self.errors, [])
 
+    def test_a_paint_preset_kept_from_before_moves_to_follow_comfyui_once(self):
+        pg = self.page()
+        res = pg.evaluate("""async () => {
+            const { app } = await import('/scripts/app.js');
+            const S = await import('/extensions/viewer/imageViewer_settings.js');
+            const run = async (vals) => {
+                app.extensionManager.setting = { get: (id) => vals[id], set: async (id, v) => { vals[id] = v; } };
+                await S.applyStartupPrefs();
+                return vals;
+            };
+            const P = 'ImageViewer.Colours.Preset', F = 'ImageViewer.Colours.FollowSet';
+            const kept = await run({ [P]: 'paint' });
+            const again = await run({ [P]: 'paint', [F]: true });          // picked Paint since: it stays
+            const grey = await run({ [P]: 'grey' });                        // another preset: left alone
+            const changed = await run({ [P]: 'paint', 'ImageViewer.Colours.Panel': '404040' });
+            return [kept[P], kept[F], again[P], grey[P], grey[F], changed[P]];
+        }""")
+        self.assertEqual(res, ["comfy", True, "paint", "grey", True, "paint"])
+        self.assertEqual(self.errors, [])
+
     def test_a_change_reaches_the_popped_out_viewer_at_once(self):
         pg = self.page()
         pg.evaluate(STORE)
