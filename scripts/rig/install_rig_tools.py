@@ -56,9 +56,9 @@ PINS = ["numpy==1.26.4", "networkx>=3", "pyglet<2"]
 SHIMS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shims")
 
 
-def run(cmd, cwd=None):
+def run(cmd, cwd=None, env=None):
     print("$", " ".join(str(c) for c in cmd), flush=True)
-    subprocess.check_call([str(c) for c in cmd], cwd=cwd)
+    subprocess.check_call([str(c) for c in cmd], cwd=cwd, env=None if env is None else {**os.environ, **env})
 
 
 def fetch(url, timeout=60):
@@ -94,10 +94,11 @@ def venv_python(folder):
 
 
 def version_of(python):
-    """(major, minor) of an interpreter given as a list (a command) or a path, or None when it does not run."""
+    """(major, minor, path) of an interpreter given as a list (a command), or None when it does not run or
+    cannot make a venv (ComfyUI's portable Python has no venv module)."""
     cmd = python if isinstance(python, list) else [python]
     try:
-        out = subprocess.check_output([*cmd, "-c", "import sys; print(sys.version_info[0], sys.version_info[1], sys.executable)"],
+        out = subprocess.check_output([*cmd, "-c", "import sys, venv, ensurepip; print(sys.version_info[0], sys.version_info[1], sys.executable)"],
                                       text=True, timeout=60, stderr=subprocess.DEVNULL)
     except Exception:
         return None
@@ -321,8 +322,21 @@ def install_kimodo(root, python, cuda, model, sysname):
         env = {"KIMODO_DEVICE": "cpu"}
     else:
         run([py, "-m", "pip", "install", "torch", "--index-url", TORCH_INDEX.format(cuda=cuda)])
-    run([py, "-m", "pip", "install", f"git+{KIMODO_GIT}", "huggingface_hub"])
-    out = {"python": py, "model": model, "text_encoder_device": "cpu"}
+    # Kimodo builds a C++ extension (motion_correction, its optional clean-up of foot contacts and
+    # constraints) with CMake: CMake comes from pip, a C++ compiler must be on the machine (Visual Studio's
+    # Build Tools on Windows, Xcode's command line tools on a Mac). Without one, Kimodo goes in without it;
+    # the viewer cleans the feet up itself.
+    run([py, "-m", "pip", "install", "cmake", "ninja", "huggingface_hub"])
+    bindir = os.path.dirname(py)
+    try:
+        run([py, "-m", "pip", "install", f"git+{KIMODO_GIT}"], env={"PATH": bindir + os.pathsep + os.environ.get("PATH", "")})
+        corrected = True
+    except subprocess.CalledProcessError:
+        print("!! Kimodo's motion_correction extension did not build (no C++ compiler?): Kimodo without it.",
+              flush=True)
+        run([py, "-m", "pip", "install", f"git+{KIMODO_GIT}"], env={"SKIP_MOTION_CORRECTION_IN_SETUP": "1"})
+        corrected = False
+    out = {"python": py, "model": model, "text_encoder_device": "cpu", "motion_correction": corrected}
     if env:
         out["env"] = env
     return out

@@ -88,6 +88,8 @@ export async function exportTarget(kind, name, ext, context, version, sequence) 
  *   spec.rows       (make) => [elements] - the feature's own rows, built with the dialog's helpers
  *   spec.note       a line under the rows (what this export leaves out, say)
  *   spec.go         the button's word; "Export" unless it takes long enough to be "Render"
+ *   spec.plain      true: no Name and Format rows (a dialog that runs something rather than writing a file)
+ *   spec.background true: it may be closed while it runs (the work goes on, on the server)
  *   spec.onExport   async (values, ui) => ({ ok, message, error }) - `ui.progress(done, total, text)`
  *
  * Returns { close }. Closing is refused while an export runs.
@@ -152,7 +154,8 @@ export async function openExportDialog(host, spec) {
     const foot = el("div", "rd-row export-foot");
     foot.append(cancel, go);
 
-    box.append(head, row("Name", name), row("Format", format, codecWrap, spec.fixed ? "" : qualityWrap));
+    box.append(head);
+    if (!spec.plain) box.append(row("Name", name), row("Format", format, codecWrap, spec.fixed ? "" : qualityWrap));
     for (const extra of (spec.rows ? spec.rows(make) : [])) box.append(extra);
     if (spec.where !== false) box.append(row("Goes to", where));
     if (spec.note) box.append(el("div", "rd-hint export-note", spec.note));
@@ -201,7 +204,7 @@ export async function openExportDialog(host, spec) {
                 : "No sequence and shot on the canvas, so it goes to the viewer's own folder. An AYON context or Set Path node on the canvas puts it with the shot.";
         }, 180);
     };
-    const close = () => { if (!busy) shade.remove(); };
+    const close = () => { if (!busy || spec.background) shade.remove(); };
 
     codec.addEventListener("change", () => { picked = codec.value; });
     format.addEventListener("change", () => { syncCodec(); syncWhere(); });
@@ -332,7 +335,7 @@ export async function openFilePicker(host, spec) {
     let here = { path: "", parent: null, dirs: [], files: [] };
     let picked = new Set();
     let asked = 0;
-    const close = () => { if (!busy) shade.remove(); };
+    const close = () => { if (!busy || spec.background) shade.remove(); };
     // `spec.folder`: the folder shown is what is picked (the files are there to look at).
     const chosen = () => (spec.folder ? [{ path: here.path }] : here.files.filter((f) => picked.has(f.path)));
     const paint = () => {

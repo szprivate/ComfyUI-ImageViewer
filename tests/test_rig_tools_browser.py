@@ -180,8 +180,17 @@ class RigToolsBrowserTests(unittest.TestCase):
         state = {}
 
         def tools(route, request):
+            ready = getattr(self, "installed", True)
             route.fulfill(status=200, content_type="application/json", body=json.dumps({
-                "unirig": {"ready": True, "why": ""}, "kimodo": {"ready": True, "why": "", "model": "Kimodo-SOMA-RP-v1.2"}}))
+                "unirig": {"ready": ready, "why": "" if ready else "UniRig is not set up"},
+                "kimodo": {"ready": ready, "why": "" if ready else "Kimodo is not set up", "model": "Kimodo-SOMA-RP-v1.2"},
+                "install": {"root": "D:/AI/rigtools", "hf_token": False, "running": None}}))
+
+        def install(route, request):
+            self.requests.append(("install", json.loads(request.post_data or "{}")))
+            state["install_polls"] = 0
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({"job": "inst", "kind": "install", "state": "running", "log": [], "share": 0}))
 
         def start(kind):
             def handler(route, request):
@@ -197,6 +206,15 @@ class RigToolsBrowserTests(unittest.TestCase):
             return handler
 
         def job(route, request):
+            if "job=inst" in request.url:
+                state["install_polls"] += 1
+                if state["install_polls"] < 3:
+                    body = {"job": "inst", "state": "running", "log": ["$ pip install torch"], "share": 0.4}
+                else:
+                    self.installed = True
+                    body = {"job": "inst", "state": "done", "log": ["== written"], "share": 1.0}
+                route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+                return
             route.fulfill(status=200, content_type="application/json",
                           body=json.dumps({"job": "x", "state": "done", "log": ["done"], "result": state["result"]}))
 
@@ -207,6 +225,7 @@ class RigToolsBrowserTests(unittest.TestCase):
         pg.route("**/imageviewer/rig/agent_done", agent_done)
         pg.route("**/imageviewer/rig/export", export)
         pg.route("**/imageviewer/rig/tools", tools)
+        pg.route("**/imageviewer/rig/install", install)
         pg.route("**/imageviewer/rig/autorig", start("autorig"))
         pg.route("**/imageviewer/rig/motion", start("motion"))
         pg.route("**/imageviewer/rig/job*", job)
@@ -339,6 +358,33 @@ class RigToolsBrowserTests(unittest.TestCase):
             box.locator(sel).first.fill(str(value))
         box.locator("button.rd-go").click()
         box.wait_for(state="detached", timeout=30000)
+
+    def test_install_from_the_auto_rig_dialog(self):
+        """Not set up: Auto-rig… offers the install, which runs and then opens the Auto-rig dialog."""
+        self.installed = False
+        pg = self.page()
+        try:
+            pg.evaluate(OPEN, ["statue.glb", "Statue"])
+            self._menu(pg, "Auto-rig")
+            box = pg.locator('.rd-box[aria-label="Set up the character tools"]')
+            box.wait_for(state="visible", timeout=10000)
+            text = box.inner_text()
+            self.assertEqual(box.locator('input[type="password"]').count(), 1)
+            box.locator('input[type="password"]').fill("hf_" + "b" * 30)
+            box.locator("button.rd-go").click()
+            rig = pg.locator('.rd-box[aria-label="Auto-rig (UniRig)"]')
+            rig.wait_for(state="visible", timeout=20000)
+            gone = box.count()
+        finally:
+            pg.close()
+            self.installed = True
+        self.assertIn("not set up on this machine", text)
+        body = [b for k, b in self.requests if k == "install"][0]
+        self.assertEqual(body["root"], "D:/AI/rigtools")                # the server's suggestion
+        self.assertEqual(body["hf_token"], "hf_" + "b" * 30)
+        self.assertIsNone(body["only"])                       # "also AI motion" was ticked
+        self.assertEqual(gone, 0)
+        self.assertEqual(self.errors, [])
 
     def test_drive_everything_from_the_rig_menu(self):
         """The same road as the agent's, by hand: Rig menu, dialogs, their buttons."""

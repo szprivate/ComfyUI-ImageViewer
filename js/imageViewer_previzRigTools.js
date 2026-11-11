@@ -115,6 +115,96 @@ export const PrevizRigToolsMixin = {
         return job;
     },
 
+    // ── Setting the tools up ──────────────────────────────────────────────
+
+    /**
+     * The Install dialog: sets UniRig and / or Kimodo up on the machine ComfyUI runs on
+     * (scripts/rig/install_rig_tools.py, as a server job) and then goes on with `then`.
+     * `need` is the tool the user asked for ("unirig" or "kimodo"), or null from the Rig menu.
+     */
+    async previzRigInstallDialog(tools = null, need = null, then = null) {
+        tools = tools || await this._previzRigTools();
+        if (!tools.install) { notice("warn", "The character tools cannot be installed from here", "The viewer could not ask the server."); return; }
+        const missing = ["unirig", "kimodo"].filter((t) => !(tools[t] && tools[t].ready));
+        let folder, both, token;
+        const NAMES = { unirig: "auto-rigging (UniRig)", kimodo: "AI motion (Kimodo)" };
+        await openExportDialog(this.container, {
+            title: "Set up the character tools",
+            kind: "character",
+            plain: true,
+            background: true,
+            where: false,
+            fixed: [{ value: "install", label: "" }],
+            go: tools.install.running ? "Watch the install" : "Install",
+            rows: ({ el, row }) => {
+                const what = need
+                    ? `${NAMES[need][0].toUpperCase()}${NAMES[need].slice(1)} is not set up on this machine yet.`
+                    : (missing.length ? `Not set up yet: ${missing.map((t) => NAMES[t]).join(" and ")}.` : "Both are set up; installing again updates them.");
+                const rows = [el("div", "rd-hint", what)];
+                folder = Object.assign(el("input", "rd-in rd-text"), { value: tools.install.root, spellcheck: false });
+                folder.style.width = "100%";
+                rows.push(row("Folder", folder));
+                const others = missing.filter((t) => t !== need);
+                if (need && others.length) {
+                    both = Object.assign(el("input"), { type: "checkbox", checked: true });
+                    const lb = el("label", "rd-sub"); lb.append(both, ` Also ${NAMES[others[0]]}`);
+                    rows.push(row("Tools", lb));
+                }
+                if (!tools.install.hf_token) {
+                    token = Object.assign(el("input", "rd-in rd-text"), { type: "password", placeholder: "hf_…", autocomplete: "off" });
+                    token.style.width = "100%";
+                    rows.push(row("Hugging Face", token));
+                    rows.push(el("div", "rd-hint",
+                        "AI motion's text encoder is Meta's Llama 3 8B Instruct, a gated model: ask for access on its Hugging Face "
+                        + "page (meta-llama/Meta-Llama-3-8B-Instruct), then paste a read token from huggingface.co/settings/tokens. "
+                        + "It is saved where Hugging Face's own tools keep it, on this machine only."));
+                }
+                return rows;
+            },
+            note: "Each tool gets its own Python environment in the folder (they need versions of PyTorch that ComfyUI's must not get). "
+                + "About 15-20 GB with the models, 20-40 minutes. ComfyUI keeps running and nothing needs a restart; "
+                + "closing this window leaves the install running.",
+            onExport: async (_v, { progress }) => {
+                let job;
+                if (tools.install.running) {
+                    job = { job: tools.install.running, state: "running" };
+                } else {
+                    const only = need && !(both && both.checked) ? need
+                        : (!need && missing.length === 1 ? missing[0] : null);
+                    const res = await fetch(api.apiURL("/imageviewer/rig/install"), {
+                        method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ root: folder.value.trim(), only, hf_token: token && token.value.trim() || undefined }),
+                    });
+                    job = await res.json().catch(() => ({}));
+                    if (!res.ok) return { ok: false, message: job.error || `HTTP ${res.status}` };
+                }
+                progress(0.02, 1, "Starting…");
+                const out = await this._previzRigInstallWait(job, progress);
+                if (out.state !== "done") return { ok: false, message: out.state === "cancelled" ? "Cancelled." : (out.error || out.state) };
+                const now = await this._previzRigTools();
+                if (need && !(now[need] && now[need].ready)) return { ok: false, message: (now[need] && now[need].why) || "Still not set up." };
+                notice("success", "Character tools set up", need ? `${NAMES[need]} is ready.` : "Auto-rigging and AI motion are ready.");
+                if (then) setTimeout(() => then(), 0);
+                return { ok: true };
+            },
+        });
+    },
+
+    /** Follow an install job: the bar follows the commands it has run, the text its last line. */
+    async _previzRigInstallWait(job, progress) {
+        let n = 0;
+        while (job.state === "running") {
+            await sleep(Math.min(2000, 400 + n++ * 200));
+            const r = await fetch(api.apiURL(`/imageviewer/rig/job?job=${encodeURIComponent(job.job)}`));
+            const next = await r.json().catch(() => null);
+            if (!next) continue;           // a missed poll while pip keeps the server busy
+            job = next;
+            const line = (job.log || []).filter((l) => l.trim()).pop() || "";
+            progress(job.share != null ? job.share : 0.5, 1, line.length > 140 ? line.slice(0, 137) + "…" : line);
+        }
+        return job;
+    },
+
     // ── Auto-rig ──────────────────────────────────────────────────────────
 
     async previzAutoRigDialog(modelId = this.previzRigModelOf()) {
@@ -123,8 +213,8 @@ export const PrevizRigToolsMixin = {
         if (!model) { notice("info", "Select the model to rig."); return; }
         const tools = await this._previzRigTools();
         if (!tools.unirig || !tools.unirig.ready) {
-            notice("warn", "Auto-rigging is not set up", (tools.unirig && tools.unirig.why) || "The viewer could not ask the server.");
-            return;
+            if (!tools.unirig) { notice("warn", "Auto-rigging is not set up", "The viewer could not ask the server."); return; }
+            return this.previzRigInstallDialog(tools, "unirig", () => this.previzAutoRigDialog(modelId));
         }
         let seed, humanoid;
         await openExportDialog(this.container, {
@@ -202,8 +292,8 @@ export const PrevizRigToolsMixin = {
         }
         const tools = await this._previzRigTools();
         if (!tools.kimodo || !tools.kimodo.ready) {
-            notice("warn", "AI motion is not set up", (tools.kimodo && tools.kimodo.why) || "The viewer could not ask the server.");
-            return;
+            if (!tools.kimodo) { notice("warn", "AI motion is not set up", "The viewer could not ask the server."); return; }
+            return this.previzRigInstallDialog(tools, "kimodo", () => this.previzMotionDialog(modelId, mode));
         }
         const fps = scene.fps || 24;
         const now = Math.round(this.currentFrame || 0);
