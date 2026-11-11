@@ -66,6 +66,11 @@ const CSS = `
 .cp-ibtn{display:inline-flex;align-items:center;justify-content:center;padding:3px 6px}
 .cp-ibtn svg{width:16px;height:16px}
 .cp-ibtn.dirty{color:#ff6a1a;border-color:#ff6a1a}
+.cp-display{max-width:13em;text-overflow:ellipsis}
+.cp-exposure{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.cp-ev-lbl{opacity:.7;font-size:11px}
+.cp-ev{width:92px;accent-color:#ff6600;height:14px}
+.cp-ev-val{min-width:46px;font-size:11px;font-variant-numeric:tabular-nums;cursor:default}
 .cp-pop{position:absolute;z-index:40}
 .cp-pop div.off{opacity:.4;cursor:default}.cp-pop div.off:hover{background:none}
 .cp-pop div .cp-k{float:right;margin-left:18px;color:#8a8a92}
@@ -173,19 +178,33 @@ export function createCompEditor(host, opts = {}) {
     const rootNode = host.getRootNode ? host.getRootNode() : doc;
     const st = {
         comp: null, path: "", dirty: false, hist: new Mo.History(), sel: [], view: null, frame: 0,
-        proxy: "auto", alpha: false, zoom: { s: 1, x: 0, y: 0, fit: true }, graph: { s: 1, x: 40, y: 40, fitted: false },
+        proxy: "auto", channel: "rgb", ev: 0, zoom: { s: 1, x: 0, y: 0, fit: true }, graph: { s: 1, x: 40, y: 40, fitted: false },
         layerSel: null, draw: null, pick: null, ocio: null, display: "",
         grid: loadGrid(),
     };
-    const luts = new Map();   // OCIO transforms baked for the preview, by ocioKey (null: the server could not)
+    // OCIO transforms baked for the preview, by ocioKey: {lut, at, why} once answered, the promise while asked.
+    // Every draw waits for the SAME request (a second draw during a slow first bake once found nothing, drew
+    // the plain picture, and the first draw - stale by then - was thrown away: the display menu did nothing);
+    // a refusal is asked again after LUT_RETRY_MS, and said in the info line.
+    const luts = new Map(), lutAsk = new Map();
+    const LUT_RETRY_MS = 15000;
+    const lutOf = (spec) => { const e = luts.get(C.OC.ocioKey(spec)); return (e && e.lut) || null; };
     const displaySpec = () => { if (!st.display) return null; const [display, view] = st.display.split("\u0001"); return { src: "", display, view }; };
     async function needLuts(specs) {
         if (!o.ocioLut) return;
-        await Promise.all(specs.map(async (spec) => {
+        await Promise.all(specs.map((spec) => {
             const k = C.OC.ocioKey(spec);
-            if (luts.has(k)) return;
-            luts.set(k, null);
-            try { luts.set(k, await o.ocioLut(spec)); } catch (_) { luts.set(k, null); }
+            const had = luts.get(k);
+            if (had && (had.lut || performance.now() - had.at < LUT_RETRY_MS)) return null;
+            if (!lutAsk.has(k)) {
+                lutAsk.set(k, (async () => {
+                    let lut = null, why = "";
+                    try { lut = await o.ocioLut(spec); if (!lut) why = "the server could not bake it"; } catch (e) { why = String((e && e.message) || e); }
+                    luts.set(k, { lut, at: performance.now(), why });
+                    lutAsk.delete(k);
+                })());
+            }
+            return lutAsk.get(k);
         }));
     }
     if (o.ocioInfo) o.ocioInfo().then((info) => { st.ocio = info; if (st.comp) { renderBar(); renderProps(); } }).catch(() => {});
@@ -334,6 +353,19 @@ export function createCompEditor(host, opts = {}) {
     }
 
     // ── toolbar ──────────────────────────────────────────────────────────────
+    function evLabel() { return `${st.ev > 0 ? "+" : ""}${st.ev.toFixed(1)} EV`; }
+    function setExposure(v, label) {
+        st.ev = Math.max(-6, Math.min(6, Math.round((Number(v) || 0) * 10) / 10));
+        if (label) label.textContent = evLabel();
+        else renderBar();
+        if (o.onView) o.onView({ ev: st.ev, channel: st.channel });
+        queueRender();
+    }
+    function setChannel(c) {
+        st.channel = C.VIEW_CHANNELS.some((x) => x[0] === c) ? c : "rgb";
+        if (o.onView) o.onView({ ev: st.ev, channel: st.channel });
+        renderBar(); queueRender();
+    }
     function renderBar() {
         bar.replaceChildren();
         const t = el(doc, "span", "mg-title", (st.path ? st.path.split(/[\\/]/).pop() : "comp") + (st.dirty ? " •" : ""));
@@ -343,10 +375,24 @@ export function createCompEditor(host, opts = {}) {
         proxy.value = st.proxy;
         proxy.title = "The picture's resolution while you work (the render is always full size)";
         proxy.onchange = () => { st.proxy = proxy.value; queueRender(); };
-        const alpha = btn("A", "Show the alpha (A on the picture)", () => { st.alpha = !st.alpha; renderBar(); queueRender(); }, st.alpha ? "on" : "");
+        // Exposure and channels, as the viewer's own bar has them (they change only what is shown).
+        const exp = el(doc, "span", "cp-exposure");
+        const evIn = el(doc, "input", "cp-ev");
+        evIn.type = "range"; evIn.min = "-6"; evIn.max = "6"; evIn.step = "0.1"; evIn.value = String(st.ev);
+        evIn.title = "Exposure in stops (only what is shown; double-click: 0)";
+        const evOut = el(doc, "span", "cp-ev-val", evLabel());
+        evOut.title = "Double-click: back to 0";
+        evIn.oninput = () => setExposure(Number(evIn.value), evOut);
+        evIn.ondblclick = evOut.ondblclick = () => { evIn.value = "0"; setExposure(0, evOut); };
+        exp.append(el(doc, "span", "cp-ev-lbl", "Exposure"), evIn, evOut);
+        const chan = el(doc, "select", "mg-btn cp-channel");
+        for (const [v, label] of C.VIEW_CHANNELS) chan.append(new Option(label, v));
+        chan.value = st.channel;
+        chan.title = "The channel shown (R G B on the picture: that channel, again: all; A: the alpha)";
+        chan.onchange = () => setChannel(chan.value);
         let disp = null;
         if (st.ocio && st.ocio.available && st.ocio.displays.length) {
-            disp = el(doc, "select", "mg-btn");
+            disp = el(doc, "select", "mg-btn cp-display");
             disp.append(new Option("sRGB (plain)", ""));
             for (const d of st.ocio.displays) for (const v of d.views) disp.append(new Option(`${d.name} · ${v}`, `${d.name}\u0001${v}`));
             disp.value = st.display;
@@ -367,7 +413,7 @@ export function createCompEditor(host, opts = {}) {
             t,
             el(doc, "span", "mg-sep"),
             btn("↶", "Undo (Ctrl+Z)", undo), btn("↷", "Redo (Ctrl+Shift+Z)", redo),
-            el(doc, "span", "mg-sep"), proxy, ...(disp ? [disp] : []), alpha,
+            el(doc, "span", "mg-sep"), proxy, ...(disp ? [disp] : []), exp, chan,
             btn("Fit", "Fit the picture (F on the picture)", () => { st.zoom.fit = true; layoutCanvas(); }),
             el(doc, "span", "mg-info", `${fmt().width}×${fmt().height} · ${fmt().fps} fps · ${fmt().frames} f`));
     }
@@ -437,25 +483,24 @@ export function createCompEditor(host, opts = {}) {
         lastPics = { pics, scale, frame: f };
         const t0 = performance.now();
         const img = C.renderNode(st.comp, id, f, { scale, source: (n, nf) => pics.get(`${n.id}@${nf}`) || null, cache: heavy, matte,
-            ocio: (spec) => luts.get(C.OC.ocioKey(spec)) || null });
+            ocio: lutOf });
         lastMs = Math.round(performance.now() - t0);
         lastScale = scale;
         if (canvas.width !== img.w || canvas.height !== img.h) { canvas.width = img.w; canvas.height = img.h; }
         const ctx = canvas.getContext("2d");
         const data = ctx.createImageData(img.w, img.h);
-        const dl = displaySpec() && luts.get(C.OC.ocioKey(displaySpec()));
-        if (dl && !st.alpha) {
-            // Through the OCIO display and view (the picture over black, as the plain sRGB shows it).
-            const d = img.data, out = data.data, q = (v) => (v <= 0 ? 0 : v >= 1 ? 255 : Math.round(v * 255));
-            for (let i = 0; i < d.length; i += 4) {
-                const c = C.OC.lutColor(dl, d[i], d[i + 1], d[i + 2]);
-                out[i] = q(c[0]); out[i + 1] = q(c[1]); out[i + 2] = q(c[2]); out[i + 3] = 255;
-            }
-        } else C.encode8(img, data.data, { alpha: st.alpha });
+        const ds = displaySpec(), dl = ds && lutOf(ds);
+        // Exposure and the channel are the viewer's, not the comp's: the render never sees them.
+        C.viewEncode(img, data.data, { gain: Math.pow(2, st.ev), channel: st.channel,
+            color: dl ? (r, g, b) => C.OC.lutColor(dl, r, g, b) : null });
         ctx.putImageData(data, 0, 0);
         layoutCanvas();
         const v = node(id);
-        info.textContent = `Viewing ${v ? v.name || v.id : "nothing"}${st.alpha ? " · alpha" : ""} · ${scale === 1 ? "full" : "1/" + Math.round(1 / scale)} · ${lastMs} ms`;
+        const chan = st.channel === "rgb" ? "" : " · " + C.VIEW_CHANNELS.find((c) => c[0] === st.channel)[1].toLowerCase();
+        const ev = st.ev && st.channel !== "a" ? ` · ${st.ev > 0 ? "+" : ""}${st.ev.toFixed(1)} EV` : "";
+        const lutFail = ds && !dl && luts.get(C.OC.ocioKey(ds));
+        const shown = ds ? (dl ? ` · ${ds.display} / ${ds.view}` : lutFail ? ` · OCIO display failed (${lutFail.why}): plain sRGB` : " · OCIO display loading…") : "";
+        info.textContent = `Viewing ${v ? v.name || v.id : "nothing"}${chan}${ev}${shown} · ${scale === 1 ? "full" : "1/" + Math.round(1 / scale)} · ${lastMs} ms`;
     }
     function layoutCanvas() {
         if (!st.comp) return;
@@ -1078,7 +1123,7 @@ export function createCompEditor(host, opts = {}) {
         else if (k === "1" && primary()) setView(primary().id);
         else if (k.toLowerCase() === "f" && part === graph) frameAll();
         else if (k.toLowerCase() === "f" && part === root) { st.zoom.fit = true; layoutCanvas(); }
-        else if (k.toLowerCase() === "a" && !ctrl && part === root) { st.alpha = !st.alpha; renderBar(); queueRender(); }
+        else if (!ctrl && !e.altKey && part === root && "rgba".includes(k.toLowerCase()) && k.length === 1) setChannel(st.channel === k.toLowerCase() ? "rgb" : k.toLowerCase());
         else if (k === " " && o.transport) o.transport.toggle();
         else if (k === "ArrowLeft" && o.transport) o.transport.step(-1);
         else if (k === "ArrowRight" && o.transport) o.transport.step(1);
@@ -1507,6 +1552,10 @@ export function createCompEditor(host, opts = {}) {
         parts,
         state: st,
         setDisplay: (v) => { st.display = v || ""; renderBar(); queueRender(); },
+        /** How the picture is looked at: {ev, channel} (either may be left out). */
+        setViewing: (v) => { if (!v) return; if (v.ev !== undefined) st.ev = Math.max(-6, Math.min(6, Number(v.ev) || 0));
+            if (v.channel !== undefined) st.channel = C.VIEW_CHANNELS.some((x) => x[0] === v.channel) ? v.channel : "rgb";
+            renderBar(); queueRender(); },
         load(raw, path) {
             const { comp: c, errors } = C.normalizeComp(raw);
             st.comp = c; st.path = path || ""; st.dirty = false; st.hist = new Mo.History(); st.sel = []; st.view = null;

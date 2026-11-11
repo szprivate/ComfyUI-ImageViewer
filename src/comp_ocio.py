@@ -131,8 +131,10 @@ def shaper_for(spec):
         enc = cfg.getColorSpace(r["src"]).getEncoding() or ""
     except Exception:  # noqa: BLE001 - OCIO before 2.1
         enc = ""
-    if not enc:
-        enc = "scene-linear" if "lin" in r["src"].lower() or r["src"] in ("ACEScg", "ACES2065-1") else ""
+    if not enc:   # a v1 config (ACES 1.x) says no encoding: the working space, or a name that says linear
+        low = r["src"].lower()
+        lin = (r["src"] == _cfg()[1]["linear"] or "lin" in low or "acescg" in low or "aces2065" in low)
+        enc = "scene-linear" if lin else ""
     return "log2:-12:6" if enc == "scene-linear" else "lin:0:1.25"
 
 

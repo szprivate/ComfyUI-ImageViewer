@@ -459,6 +459,7 @@ export const CompPanelMixin = {
             ocioInfo: () => this._cpOcioInfo(),
             ocioLut: (spec) => this._cpOcioLut(spec),
             onDisplay: (v) => { try { localStorage.setItem("imageviewer.comp.display", v || ""); } catch (_) { /* not kept */ } },
+            onView: (v) => { try { localStorage.setItem("imageviewer.comp.viewing", JSON.stringify(v)); } catch (_) { /* not kept */ } },
             sourceInfo: (node) => this._cpSourceInfo(rec, node),
             pickFile: (cb) => this._cpPickFootage(cb),
             pathsOf: (items) => this.compPathsOf(items),
@@ -471,6 +472,7 @@ export const CompPanelMixin = {
             notify: (m, sev) => notice(sev || "info", m),
         });
         try { const v = localStorage.getItem("imageviewer.comp.display"); if (v) rec.editor.setDisplay(v); } catch (_) { /* none kept */ }
+        try { const v = JSON.parse(localStorage.getItem("imageviewer.comp.viewing") || "null"); if (v) rec.editor.setViewing(v); } catch (_) { /* none kept */ }
         const check = rec.editor.load(comp, rec.path);
         if (!check.ok) notice("warn", "The comp has problems", check.errors.slice(0, 3).join("; "));
         if (this.activeTab === key) { this._cpSyncBar(); this._cpSeat(rec); }
@@ -524,7 +526,11 @@ export const CompPanelMixin = {
         const q = new URLSearchParams({ src: spec.src || "" });
         if (spec.display) { q.set("display", spec.display); q.set("view", spec.view || "*"); } else q.set("dst", spec.dst || "");
         const res = await api.fetchApi(`/imageviewer/comp_lut?${q}`);
-        if (!res.ok) return null;
+        if (!res.ok) {
+            let why = `HTTP ${res.status}`;
+            try { const j = await res.json(); if (j && j.error) why = j.error; } catch (_) { /* not JSON */ }
+            throw new Error(why);
+        }
         let buf = await res.arrayBuffer();
         if (res.headers.get("X-ImageViewer-Enc") === "gzip" || new Uint8Array(buf, 0, 2)[0] === 0x1f) {
             buf = await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();

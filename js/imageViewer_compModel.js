@@ -670,14 +670,33 @@ export function decode8(u8, w, h, linear = false) {
 
 /** A picture -> 8-bit RGBA for the screen: premultiplied colour over black, sRGB; `alpha` shows the alpha. */
 export function encode8(img, out, { alpha = false } = {}) {
-    const d = img.data;
+    return viewEncode(img, out, { channel: alpha ? "a" : "rgb" });
+}
+
+/** The channels the picture can be looked at in (the viewer's channel menu, with alpha). */
+export const VIEW_CHANNELS = [["rgb", "RGB"], ["r", "Red"], ["g", "Green"], ["b", "Blue"], ["a", "Alpha"]];
+
+/**
+ * The picture as the viewer shows it, into 8-bit RGBA (`out`): its rgb times `gain` (2^exposure; alpha is not
+ * touched), one channel as grey when `channel` is r / g / b, then encoded - through `color(r, g, b)` -> display
+ * values 0..1 (an OCIO display / view) when given, else the sRGB curve. The alpha ("a") is shown as it is, grey:
+ * no exposure and no display transform - it is a matte, not a picture. Over black (premultiplied as it stands).
+ */
+export function viewEncode(img, out, { gain = 1, channel = "rgb", color = null } = {}) {
+    const d = img.data, n = img.w * img.h * 4;
     const lut = new Uint8ClampedArray(4096);
     for (let i = 0; i < 4096; i++) lut[i] = Math.round(linearToSrgb(i / 4095) * 255);
     const q = (v) => (v <= 0 ? 0 : v >= 1 ? 255 : lut[(v * 4095 + 0.5) | 0]);
-    for (let i = 0; i < img.w * img.h * 4; i += 4) {
-        if (alpha) { const a = q(d[i + 3]); out[i] = out[i + 1] = out[i + 2] = a; }
-        else { out[i] = q(d[i]); out[i + 1] = q(d[i + 1]); out[i + 2] = q(d[i + 2]); }
+    const qd = (v) => (v <= 0 ? 0 : v >= 1 ? 255 : Math.round(v * 255));
+    const one = channel === "r" ? 0 : channel === "g" ? 1 : channel === "b" ? 2 : -1;
+    for (let i = 0; i < n; i += 4) {
         out[i + 3] = 255;
+        if (channel === "a") { const a = q(d[i + 3]); out[i] = out[i + 1] = out[i + 2] = a; continue; }
+        let r, g, b;
+        if (one >= 0) r = g = b = d[i + one] * gain;
+        else { r = d[i] * gain; g = d[i + 1] * gain; b = d[i + 2] * gain; }
+        if (color) { const c = color(r, g, b); out[i] = qd(c[0]); out[i + 1] = qd(c[1]); out[i + 2] = qd(c[2]); }
+        else { out[i] = q(r); out[i + 1] = q(g); out[i + 2] = q(b); }
     }
     return out;
 }

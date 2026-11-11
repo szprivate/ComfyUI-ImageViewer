@@ -118,6 +118,20 @@ test("the screen shows premultiplied colour over black in sRGB; A shows the alph
     assert.equal(C.encode8(img, new Uint8ClampedArray(4), { alpha: true })[0], Math.round(C.linearToSrgb(0.5) * 255));
 });
 
+test("the viewer's exposure and channels change only what is shown", () => {
+    const img = { w: 1, h: 1, data: Float32Array.from([0.1, 0.2, 0.05, 0.5]) };
+    const px = (o) => Array.from(C.viewEncode(img, new Uint8ClampedArray(4), o)).slice(0, 3);
+    const s = (v) => Math.round(C.linearToSrgb(v) * 255);
+    assert.deepEqual(px({ gain: 4 }), [s(0.4), s(0.8), s(0.2)]);                 // +2 stops
+    assert.deepEqual(px({ channel: "g" }), [s(0.2), s(0.2), s(0.2)]);            // green as grey
+    assert.deepEqual(px({ channel: "r", gain: 2 }), [s(0.2), s(0.2), s(0.2)]);
+    assert.deepEqual(px({ channel: "a", gain: 8 }), [s(0.5), s(0.5), s(0.5)]);   // the alpha takes no exposure
+    // Through a display transform: the colour after the exposure goes into it.
+    assert.deepEqual(px({ gain: 2, color: (r, g, b) => [r, g, b] }), [51, 102, 26]);
+    assert.deepEqual(img.data, Float32Array.from([0.1, 0.2, 0.05, 0.5]));        // the picture itself untouched
+    assert.deepEqual(C.VIEW_CHANNELS.map((c) => c[0]), ["rgb", "r", "g", "b", "a"]);
+});
+
 test("a node with nothing to hang under goes right of the others, not on top of one", () => {
     const comp = C.newComp();
     const r = C.insertNode(comp, "read", null);

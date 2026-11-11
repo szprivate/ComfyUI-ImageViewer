@@ -819,11 +819,53 @@ class CompBrowserTests(unittest.TestCase):
         # A display and view of the config in the bar: the picture is drawn through its LUT.
         bar = pg.evaluate(f"() => Array.from(__panel.container.querySelectorAll('select.mg-btn')).map((s) => s.options.length)")
         self.assertTrue(any(n > 2 for n in bar), bar)
-        pg.evaluate(f"() => {{ const s = Array.from(__panel.container.querySelectorAll('select.mg-btn')).find((s) => s.options[0].text === 'sRGB (plain)'); s.value = s.options[1].value; s.dispatchEvent(new Event('change')); }}")
-        pg.wait_for_timeout(800)
+        # A mid grey (linear 0.18) shown plainly, then through a display / view that is not the plain sRGB curve.
+        pg.evaluate(f"() => {{ const e = {self.ED}; e.comp().nodes = e.comp().nodes.filter((n) => n.type !== 'ocio_colorspace'); const c = e.comp().nodes.find((n) => n.id === 'Constant1'); c.color = [0.18, 0.18, 0.18, 1]; e.comp().nodes.find((n) => n.type === 'output').inputs = ['Constant1']; e.refresh(); }}")
+        pg.wait_for_timeout(500)
+        plain = self.pixel(pg, 0.5, 0.5)
+        views = pg.evaluate("() => Array.from(Array.from(__panel.container.querySelectorAll('select.mg-btn')).find((s) => s.options[0].text === 'sRGB (plain)').options).map((o) => o.value)")
+        pick = next(v for v in views if v and "ACES" in v and "sRGB" in v.split("\u0001")[0])
+        # The bake is slow the first time (an ACES config reads its LUT files): redraws asked for meanwhile wait
+        # for the same answer - once they drew the plain picture and the menu seemed to do nothing.
+        pg.evaluate("() => { const was = __panel._cpOcioLut.bind(__panel); __panel._cpOcioLut = async (spec) => { await new Promise((r) => setTimeout(r, 700)); return was(spec); }; }")
+        pg.evaluate("(v) => { const s = Array.from(__panel.container.querySelectorAll('select.mg-btn')).find((s) => s.options[0].text === 'sRGB (plain)'); s.value = v; s.dispatchEvent(new Event('change')); }", pick)
+        for _ in range(4):
+            pg.wait_for_timeout(120)
+            pg.evaluate(f"() => {self.ED}.refresh()")
+        pg.wait_for_function(f"(p) => {{ const c = {self.ED}.canvas; const d = c.getContext('2d').getImageData(Math.floor(c.width / 2), Math.floor(c.height / 2), 1, 1).data; return Math.abs(d[0] - p[0]) > 6; }}", arg=plain, timeout=8000)
         self.assertTrue(pg.evaluate(f"() => !!{self.ED}.state.display"))
         if SHOTS:
             pg.screenshot(path=os.path.join(SHOTS, "comp-ocio.png"))
+        self.assertEqual(self.errors, [])
+
+    def test_exposure_and_channels_in_the_bar_change_only_what_is_shown(self):
+        pg = self.page()
+        self.new_comp(pg)
+        pg.evaluate(f"() => {{ const e = {self.ED}; const c = e.comp().nodes.find((n) => n.id === 'Constant1'); c.color = [0.1, 0.2, 0.05, 1]; e.comp().nodes.find((n) => n.type === 'output').inputs = ['Constant1']; e.refresh(); }}")
+        pg.wait_for_timeout(400)
+        before = self.pixel(pg, 0.5, 0.5)
+        C = "__panel.container"
+        # The exposure slider: +2 stops is the colour times four (0.1 -> 0.4: sRGB 170).
+        pg.evaluate(f"() => {{ const r = {C}.querySelector('.mg-bar input.cp-ev'); r.value = '2'; r.dispatchEvent(new Event('input')); }}")
+        pg.wait_for_function(f"() => {{ const c = {self.ED}.canvas; return c.getContext('2d').getImageData(Math.floor(c.width / 2), Math.floor(c.height / 2), 1, 1).data[0] > 160; }}", timeout=5000)
+        self.assertIn("+2.0 EV", pg.evaluate(f"() => {C}.querySelector('.mg-bar .cp-ev-val').textContent"))
+        px = self.pixel(pg, 0.5, 0.5)
+        self.assertLess(abs(px[0] - 170), 3, px)
+        # The channel menu: green as grey.
+        pg.evaluate(f"() => {{ const s = {C}.querySelector('.mg-bar select.cp-channel'); s.value = 'g'; s.dispatchEvent(new Event('change')); }}")
+        pg.wait_for_timeout(300)
+        px = self.pixel(pg, 0.5, 0.5)
+        self.assertEqual(px[0], px[1]); self.assertEqual(px[1], px[2])
+        self.assertGreater(px[0], 220, px)                        # 0.2 x 4 = 0.8
+        if SHOTS:
+            pg.evaluate(f"() => {{ const s = {C}.querySelector('.mg-bar select.cp-channel'); s.value = 'rgb'; s.dispatchEvent(new Event('change')); }}")
+            pg.wait_for_timeout(300)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-exposure-channels.png"))
+        # Double-click the value: back to 0; the comp itself never changed.
+        pg.evaluate(f"() => {{ const s = {C}.querySelector('.mg-bar select.cp-channel'); s.value = 'rgb'; s.dispatchEvent(new Event('change')); {C}.querySelector('.mg-bar .cp-ev-val').dispatchEvent(new MouseEvent('dblclick')); }}")
+        pg.wait_for_timeout(300)
+        self.assertEqual(self.pixel(pg, 0.5, 0.5), before)
+        self.assertEqual(pg.evaluate(f"() => {self.ED}.comp().nodes.find((n) => n.id === 'Constant1').color"), [0.1, 0.2, 0.05, 1])
         self.assertEqual(self.errors, [])
 
     def test_the_graph_in_comfyuis_bottom_panel(self):

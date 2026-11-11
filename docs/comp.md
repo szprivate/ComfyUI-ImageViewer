@@ -93,7 +93,7 @@ ComfyUI's bottom panel (the strip under the canvas with the Terminal and the Log
 
 ## Colour (OCIO)
 
-Comp uses the same OpenColorIO config as the viewer: `$OCIO`, else OpenColorIO's built-in one. Its working space is the config's scene-linear space (ACEScg in the ACES configs). The bar's display menu shows the picture as plain sRGB, or through any display and view of the config; it is remembered. In the picture, OCIO transforms are drawn through a LUT made on the server (a matrix where the transform is one), so they are close but not exact. The render applies them exactly. Without OpenColorIO on the server, the OCIO nodes pass their picture through.
+Comp uses the same OpenColorIO config as the viewer: `$OCIO`, else OpenColorIO's built-in one. Its working space is the config's scene-linear space (ACEScg in the ACES configs). The bar's display menu shows the picture as plain sRGB, or through any display and view of the config; it is remembered. Beside it are an exposure slider (in stops; double-click the value for 0) and a channel menu (RGB, Red, Green, Blue, Alpha; R, G, B and A on the picture do the same, and again goes back to RGB), as in the viewer. Both change only what is shown, never the comp or its render. If the display can't be made, the line under the picture says why. In the picture, OCIO transforms are drawn through a LUT made on the server (a matrix where the transform is one), so they are close but not exact. The render applies them exactly. Without OpenColorIO on the server, the OCIO nodes pass their picture through.
 
 ## Rendering
 
