@@ -1,5 +1,5 @@
 // imageViewer_clipVfx.js
-// VFX on a clip of the History: right-click a film › VFX › Alpha matte / SDR to HDR / Reframe… / Upscale…
+// VFX on a clip of the History: right-click a film › Convert Footage › Alpha matte / SDR to HDR / Reframe… / Upscale…
 // Each runs LTX-2.5's IC-LoRA workflow for it (src/clip_vfx.py, src/clip_vfx_workflows/): the server makes the
 // graphs (the clip cut to 8n + 1 frames, a long clip's alpha in runs of 121), the page queues them with the
 // sign-in as Generate does (PaintPanelMixin._paintQueue / _paintWait - one `this`) and hands the outputs back;
@@ -30,20 +30,20 @@ export const ClipVfxMixin = {
         return this._clipVfxOffered;
     },
 
-    /** "✨ VFX ▸" on the thumbnail menu of a film: its rows open below it, the menu stays up. */
+    /** "✨ Convert Footage ▸" on the thumbnail menu of a film: its rows open below it, the menu stays up. */
     clipVfxMenuRow(doc, menu, snap, before) {
         const fr = snap && snap[0];
         if (!V.isClip(fr) || !V.clipRef(fr)) return;
         const head = doc.createElement("div");
         head.className = "thumb-ctx-item thumb-ctx-group thumb-ctx-keep clip-vfx-item";
-        head.textContent = "✨ VFX ▸";
+        head.textContent = "✨ Convert Footage ▸";
         head.title = "LTX-2.5 passes on this clip: alpha matte, SDR to HDR, reframe, upscale";
         const rows = [];
         const labels = { alpha: "Alpha matte", hdr: "SDR to HDR", reframe: "Reframe…", upscale: "Upscale…" };
         head.onclick = (e) => {
             e.stopPropagation();
-            if (rows.length) { rows.forEach((r) => r.remove()); rows.length = 0; head.textContent = "✨ VFX ▸"; return; }
-            head.textContent = "✨ VFX ▾";
+            if (rows.length) { rows.forEach((r) => r.remove()); rows.length = 0; head.textContent = "✨ Convert Footage ▸"; return; }
+            head.textContent = "✨ Convert Footage ▾";
             let at = head;
             for (const a of V.ACTION_ORDER) {
                 const el = doc.createElement("div");
@@ -63,7 +63,7 @@ export const ClipVfxMixin = {
         if (!host) return;
         const offer = await this._clipVfxOffer();
         if (!offer || !offer.actions || !offer.actions[action]) {
-            notice("error", "VFX is not available", "The viewer's server does not offer it (restart ComfyUI after an update).");
+            notice("error", "Convert Footage is not available", "The viewer's server does not offer it (restart ComfyUI after an update).");
             return;
         }
         const info = offer.actions[action];
@@ -200,7 +200,7 @@ export const ClipVfxMixin = {
                 ? "Not here: " + miss.map((m) => (m.kind === "model" ? `${m.what} (models/${m.folder})` : `node ${m.what}`)).join(", ")
                 : String(e.message || e);
             say(why, "error");
-            notice("error", "VFX did not start", why);
+            notice("error", "Convert Footage did not start", why);
             return false;
         }
         const n = prep.graphs.length;

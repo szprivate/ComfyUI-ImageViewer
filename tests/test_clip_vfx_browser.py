@@ -1,8 +1,8 @@
-"""VFX on a clip of the History in the REAL viewer, against the REAL routes: right-click a film › VFX ›
+"""VFX on a clip of the History in the REAL viewer, against the REAL routes: right-click a film › Convert Footage ›
 Upscale…, pick Restore, Run - the graph queued names the clip's 8n + 1 frames (written into the input folder by
 the Edit panel's renderer) and the restore LoRA; ComfyUI's answer (an `executed` of the SaveVideo node) brings
 the result into the History in the source's group, the dialog says Done. A missing model is said before
-anything is queued, and pictures get no VFX row.
+anything is queued, and pictures get no Convert Footage row.
 
     python -m unittest discover -s tests -p test_clip_vfx_browser.py   (Playwright, aiohttp, PyAV; skipped without)
 """
@@ -152,9 +152,9 @@ class ClipVfxBrowserTests(unittest.TestCase):
     def test_upscale_a_clip_from_its_menu_and_the_result_lands_beside_it(self):
         pg = self.page()
         rows = self.menu(pg, 1)
-        self.assertFalse(any("VFX" in r for r in rows), rows)          # a picture has none
+        self.assertFalse(any("Convert Footage" in r for r in rows), rows)          # a picture has none
         rows = self.menu(pg, 0)
-        self.assertTrue(any("VFX" in r for r in rows), rows)
+        self.assertTrue(any("Convert Footage" in r for r in rows), rows)
         R = "__panel.shadowRoot"
         pg.evaluate(f"() => {R}.querySelector('.clip-vfx-item').click()")
         subs = pg.evaluate(f"() => [...{R}.querySelectorAll('[data-vfx]')].map((e) => e.dataset.vfx)")

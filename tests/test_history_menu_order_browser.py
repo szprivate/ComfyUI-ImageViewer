@@ -116,7 +116,7 @@ class HistoryMenuOrderTests(unittest.TestCase):
         pg = self.page()
         self.assertEqual(self.menu(pg, 0), [
             "Copy image path", "Remove from history", "Move to group", "--",
-            "VFX", "Show dependencies", "Load workflow", "--",
+            "Convert Footage", "Show dependencies", "Load workflow", "--",
             "Tag as asset…", "(colours)",
         ])
         self.assertEqual(self.errors, [])
