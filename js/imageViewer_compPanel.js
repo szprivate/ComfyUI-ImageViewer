@@ -31,6 +31,9 @@ const nameOf = (p) => baseOf(p).replace(/\.comp\.json$/i, "");
 const MEDIA_EXTS = [".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".exr", ".hdr", ".bmp",
     ".mp4", ".mov", ".webm", ".mkv", ".m4v", ".avi"];
 const CACHE_BYTES = 768 * 1024 * 1024;
+// The viewer's channel menu (`channelView`) <-> the comp's (`VIEW_CHANNELS`).
+const VIEW_CHANNEL = { rgb: "all", r: "red", g: "green", b: "blue", a: "alpha" };
+const COMP_CHANNEL = { all: "rgb", red: "r", green: "g", blue: "b", alpha: "a" };
 /** A picked file that looks like one frame of a numbered still sequence (shot.0012.exr, plate_1001.png). */
 const SEQ_FRAME = /[._]\d{3,}\.(exr|png|jpe?g|tiff?|hdr|webp|bmp)$/i;
 
@@ -257,6 +260,7 @@ export const CompPanelMixin = {
         const endEl = this.container.querySelector("#total-f");
         if (endEl) { endEl.readOnly = true; endEl.classList.remove("editable"); endEl.title = "Last frame"; }
         this.viewport.classList.remove("comp-mode");
+        this._cpExposureHome();
         if (st.host) st.host.style.display = "none";
         this._cpSeatBottom(null);
         this._cpRotoUnmount();
@@ -337,7 +341,37 @@ export const CompPanelMixin = {
         if (Object.keys(f).length) rec.editor.setFormat(f);
     },
 
+    /** The viewer's exposure and channel into the comp on screen (from `applyExposure`, and when one is built). */
+    compViewSync() {
+        if (!this._cpOn) return;
+        const rec = this._cpState().tabs[this.activeTab];
+        if (rec && rec.editor && rec.editor.setViewing) {
+            rec.editor.setViewing({ ev: this.exposure || 0, channel: COMP_CHANNEL[this.channelView] || "rgb" });
+        }
+    },
+
+    // The viewer's own exposure bar (#exposure-control: the same element, its handlers, E + drag) over the comp's
+    // picture, at the top of it as over the viewer's; put back where it was when Comp is left.
+    _cpExposureSeat(rec) {
+        const ctl = this.exposureControl;
+        const stage = rec && rec.editor && rec.editor.stage;
+        if (!ctl || !stage) return;
+        if (!this._cpExpHome) {
+            this._cpExpHome = { parent: ctl.parentNode, next: ctl.nextSibling };
+            // The comp's picture pans and zooms on a press and the wheel: not from the bar.
+            for (const t of ["pointerdown", "wheel", "dblclick"]) ctl.addEventListener(t, (e) => { if (this._cpOn) e.stopPropagation(); });
+        }
+        if (ctl.parentNode !== stage) stage.append(ctl);
+        this.compViewSync();
+    },
+    _cpExposureHome() {
+        const h = this._cpExpHome, ctl = this.exposureControl;
+        if (!h || !ctl || ctl.parentNode === h.parent) return;
+        h.parent.insertBefore(ctl, h.next && h.next.parentNode === h.parent ? h.next : null);
+    },
+
     _cpSeat(rec) {
+        this._cpExposureSeat(rec);
         for (const [id, part] of Object.entries(COMP_PANELS).concat([["params", "props"]])) {
             const slot = this._cpSlot(id);
             if (!slot) continue;
@@ -459,7 +493,9 @@ export const CompPanelMixin = {
             ocioInfo: () => this._cpOcioInfo(),
             ocioLut: (spec) => this._cpOcioLut(spec),
             onDisplay: (v) => { try { localStorage.setItem("imageviewer.comp.display", v || ""); } catch (_) { /* not kept */ } },
-            onView: (v) => { try { localStorage.setItem("imageviewer.comp.viewing", JSON.stringify(v)); } catch (_) { /* not kept */ } },
+            setChannel: (c) => this.setChannelView(VIEW_CHANNEL[c] || "all"),
+            exposureHeld: () => !!this.isExposureModifierActive,
+            nudgeExposure: (d) => this.setExposure((this.exposure || 0) + d),
             sourceInfo: (node) => this._cpSourceInfo(rec, node),
             pickFile: (cb) => this._cpPickFootage(cb),
             pathsOf: (items) => this.compPathsOf(items),
@@ -472,7 +508,7 @@ export const CompPanelMixin = {
             notify: (m, sev) => notice(sev || "info", m),
         });
         try { const v = localStorage.getItem("imageviewer.comp.display"); if (v) rec.editor.setDisplay(v); } catch (_) { /* none kept */ }
-        try { const v = JSON.parse(localStorage.getItem("imageviewer.comp.viewing") || "null"); if (v) rec.editor.setViewing(v); } catch (_) { /* none kept */ }
+        this.compViewSync();
         const check = rec.editor.load(comp, rec.path);
         if (!check.ok) notice("warn", "The comp has problems", check.errors.slice(0, 3).join("; "));
         if (this.activeTab === key) { this._cpSyncBar(); this._cpSeat(rec); }

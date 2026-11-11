@@ -31,7 +31,7 @@ export const UIMixin = {
     },
 
     setChannelView(mode) {
-        const allowed = new Set(['all', 'red', 'green', 'blue']);
+        const allowed = new Set(['all', 'red', 'green', 'blue', 'alpha']);
         const next = allowed.has(mode) ? mode : 'all';
         this.channelView = next;
         if (this.rgbChannelSel && this.rgbChannelSel.value !== next) this.rgbChannelSel.value = next;
@@ -47,6 +47,7 @@ export const UIMixin = {
         if (this.channelView === 'red') channelFilter = 'url(#imageviewer-channel-red)';
         else if (this.channelView === 'green') channelFilter = 'url(#imageviewer-channel-green)';
         else if (this.channelView === 'blue') channelFilter = 'url(#imageviewer-channel-blue)';
+        else if (this.channelView === 'alpha') channelFilter = 'url(#imageviewer-channel-alpha)';
 
         for (const el of [this.imgBase, this.imgCompare, this.videoBase]) {
             if (!el) continue;
@@ -57,6 +58,8 @@ export const UIMixin = {
         // The Contact Sheet grid's cells take the same look (ContactGridMixin).
         if (this._gridApplyFilter) this._gridApplyFilter();
         if (this._applyModelLook) this._applyModelLook();
+        // A comp draws its own picture: it takes the exposure and channel there (imageViewer_compPanel.js).
+        if (this._cpOn && this.compViewSync) this.compViewSync();
     },
 
     // ── Hotkeys ──────────────────────────────────────────────────────────────

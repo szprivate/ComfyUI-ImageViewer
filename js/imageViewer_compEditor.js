@@ -67,10 +67,6 @@ const CSS = `
 .cp-ibtn svg{width:16px;height:16px}
 .cp-ibtn.dirty{color:#ff6a1a;border-color:#ff6a1a}
 .cp-display{max-width:13em;text-overflow:ellipsis}
-.cp-exposure{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
-.cp-ev-lbl{opacity:.7;font-size:11px}
-.cp-ev{width:92px;accent-color:#ff6600;height:14px}
-.cp-ev-val{min-width:46px;font-size:11px;font-variant-numeric:tabular-nums;cursor:default}
 .cp-pop{position:absolute;z-index:40}
 .cp-pop div.off{opacity:.4;cursor:default}.cp-pop div.off:hover{background:none}
 .cp-pop div .cp-k{float:right;margin-left:18px;color:#8a8a92}
@@ -353,18 +349,12 @@ export function createCompEditor(host, opts = {}) {
     }
 
     // ── toolbar ──────────────────────────────────────────────────────────────
-    function evLabel() { return `${st.ev > 0 ? "+" : ""}${st.ev.toFixed(1)} EV`; }
-    function setExposure(v, label) {
-        st.ev = Math.max(-6, Math.min(6, Math.round((Number(v) || 0) * 10) / 10));
-        if (label) label.textContent = evLabel();
-        else renderBar();
-        if (o.onView) o.onView({ ev: st.ev, channel: st.channel });
-        queueRender();
-    }
+    // Exposure and the channel shown are the VIEWER's (its exposure bar, seated over this picture by the panel,
+    // and E + drag): `setViewing` is how they reach here. Without a viewer the R G B A keys still work.
     function setChannel(c) {
-        st.channel = C.VIEW_CHANNELS.some((x) => x[0] === c) ? c : "rgb";
-        if (o.onView) o.onView({ ev: st.ev, channel: st.channel });
-        renderBar(); queueRender();
+        c = C.VIEW_CHANNELS.some((x) => x[0] === c) ? c : "rgb";
+        if (o.setChannel) o.setChannel(c);
+        else { st.channel = c; queueRender(); }
     }
     function renderBar() {
         bar.replaceChildren();
@@ -375,21 +365,6 @@ export function createCompEditor(host, opts = {}) {
         proxy.value = st.proxy;
         proxy.title = "The picture's resolution while you work (the render is always full size)";
         proxy.onchange = () => { st.proxy = proxy.value; queueRender(); };
-        // Exposure and channels, as the viewer's own bar has them (they change only what is shown).
-        const exp = el(doc, "span", "cp-exposure");
-        const evIn = el(doc, "input", "cp-ev");
-        evIn.type = "range"; evIn.min = "-6"; evIn.max = "6"; evIn.step = "0.1"; evIn.value = String(st.ev);
-        evIn.title = "Exposure in stops (only what is shown; double-click: 0)";
-        const evOut = el(doc, "span", "cp-ev-val", evLabel());
-        evOut.title = "Double-click: back to 0";
-        evIn.oninput = () => setExposure(Number(evIn.value), evOut);
-        evIn.ondblclick = evOut.ondblclick = () => { evIn.value = "0"; setExposure(0, evOut); };
-        exp.append(el(doc, "span", "cp-ev-lbl", "Exposure"), evIn, evOut);
-        const chan = el(doc, "select", "mg-btn cp-channel");
-        for (const [v, label] of C.VIEW_CHANNELS) chan.append(new Option(label, v));
-        chan.value = st.channel;
-        chan.title = "The channel shown (R G B on the picture: that channel, again: all; A: the alpha)";
-        chan.onchange = () => setChannel(chan.value);
         let disp = null;
         if (st.ocio && st.ocio.available && st.ocio.displays.length) {
             disp = el(doc, "select", "mg-btn cp-display");
@@ -413,7 +388,7 @@ export function createCompEditor(host, opts = {}) {
             t,
             el(doc, "span", "mg-sep"),
             btn("↶", "Undo (Ctrl+Z)", undo), btn("↷", "Redo (Ctrl+Shift+Z)", redo),
-            el(doc, "span", "mg-sep"), proxy, ...(disp ? [disp] : []), exp, chan,
+            el(doc, "span", "mg-sep"), proxy, ...(disp ? [disp] : []),
             btn("Fit", "Fit the picture (F on the picture)", () => { st.zoom.fit = true; layoutCanvas(); }),
             el(doc, "span", "mg-info", `${fmt().width}×${fmt().height} · ${fmt().fps} fps · ${fmt().frames} f`));
     }
@@ -528,6 +503,14 @@ export function createCompEditor(host, opts = {}) {
     }, { passive: false });
     stage.addEventListener("pointerdown", (e) => {
         root.focus({ preventScroll: true });
+        // E held: a drag sideways changes the exposure, as in the viewer.
+        if (e.button === 0 && o.exposureHeld && o.exposureHeld()) {
+            e.preventDefault(); stage.setPointerCapture(e.pointerId);
+            let lx = e.clientX;
+            stage.onpointermove = (ev) => { o.nudgeExposure((ev.clientX - lx) * 0.02); lx = ev.clientX; };
+            stage.onpointerup = () => { stage.onpointermove = null; };
+            return;
+        }
         if (e.button === 0 && st.pick) { e.preventDefault(); pickAt(compXY(e)); return; }
         // Otherwise the left or the middle button pans the picture - the left one not while the Roto tool owns it.
         if (e.button !== 0 && e.button !== 1) return;
@@ -1553,9 +1536,12 @@ export function createCompEditor(host, opts = {}) {
         state: st,
         setDisplay: (v) => { st.display = v || ""; renderBar(); queueRender(); },
         /** How the picture is looked at: {ev, channel} (either may be left out). */
-        setViewing: (v) => { if (!v) return; if (v.ev !== undefined) st.ev = Math.max(-6, Math.min(6, Number(v.ev) || 0));
-            if (v.channel !== undefined) st.channel = C.VIEW_CHANNELS.some((x) => x[0] === v.channel) ? v.channel : "rgb";
-            renderBar(); queueRender(); },
+        stage,
+        /** How the picture is looked at: {ev, channel} (either may be left out) - only what is shown. */
+        setViewing: (v) => { if (!v) return; let changed = false;
+            if (v.ev !== undefined) { const ev = Math.max(-6, Math.min(6, Number(v.ev) || 0)); changed = changed || ev !== st.ev; st.ev = ev; }
+            if (v.channel !== undefined) { const c = C.VIEW_CHANNELS.some((x) => x[0] === v.channel) ? v.channel : "rgb"; changed = changed || c !== st.channel; st.channel = c; }
+            if (changed) queueRender(); },
         load(raw, path) {
             const { comp: c, errors } = C.normalizeComp(raw);
             st.comp = c; st.path = path || ""; st.dirty = false; st.hist = new Mo.History(); st.sel = []; st.view = null;

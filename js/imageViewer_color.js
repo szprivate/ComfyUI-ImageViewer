@@ -130,7 +130,7 @@ export const ColorMixin = {
         this._exposureTimer = win.setTimeout(() => {
             this._exposureTimer = null;
             const o = this._colorFrame;
-            if (!o || !this._colorInfo) return;
+            if (!o || !this._colorInfo || this._cpOn) return;   // a comp draws its own picture
             const cs = this.colorParam(o);
             if (cs && cs !== this._colorInfo.target) this.refreshView();
         }, 140);

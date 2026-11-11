@@ -1656,7 +1656,7 @@ textarea.param-input {
 .comp-view { position: absolute; inset: 0; z-index: 8; display: none; background: #0f0f12; cursor: default; }
 .comp-tab, .comp-stage { position: absolute; inset: 0; }
 .viewport.motion-mode #exposure-control,
-.viewport.comp-mode #exposure-control,
+.viewport.comp-mode #color-in-sel,
 .viewport.view-mode #exposure-control,
 .viewport.view-mode #contact-container,
 .viewport.view-mode #img-frame,

@@ -838,34 +838,66 @@ class CompBrowserTests(unittest.TestCase):
             pg.screenshot(path=os.path.join(SHOTS, "comp-ocio.png"))
         self.assertEqual(self.errors, [])
 
-    def test_exposure_and_channels_in_the_bar_change_only_what_is_shown(self):
+    def test_the_viewers_exposure_bar_works_over_the_comp_picture(self):
         pg = self.page()
         self.new_comp(pg)
         pg.evaluate(f"() => {{ const e = {self.ED}; const c = e.comp().nodes.find((n) => n.id === 'Constant1'); c.color = [0.1, 0.2, 0.05, 1]; e.comp().nodes.find((n) => n.type === 'output').inputs = ['Constant1']; e.refresh(); }}")
         pg.wait_for_timeout(400)
         before = self.pixel(pg, 0.5, 0.5)
-        C = "__panel.container"
-        # The exposure slider: +2 stops is the colour times four (0.1 -> 0.4: sRGB 170).
-        pg.evaluate(f"() => {{ const r = {C}.querySelector('.mg-bar input.cp-ev'); r.value = '2'; r.dispatchEvent(new Event('input')); }}")
+        # The viewer's own bar (the same element) sits at the top of the comp's picture, the input colourspace hidden.
+        st = pg.evaluate(f"""() => {{ const c = __panel.exposureControl, r = c.getBoundingClientRect(), s = {self.ED}.stage.getBoundingClientRect();
+            return {{ inStage: {self.ED}.stage.contains(c), shown: getComputedStyle(c).display !== 'none', top: r.top - s.top,
+                centre: Math.abs((r.left + r.right) / 2 - (s.left + s.right) / 2), cs: getComputedStyle(__panel.colorInSel || c).display,
+                chans: Array.from(__panel.rgbChannelSel.options).map((o) => o.text) }}; }}""")
+        self.assertTrue(st["inStage"] and st["shown"], st)
+        self.assertLess(abs(st["top"] - 10), 3, st)
+        self.assertLess(st["centre"], 3, st)
+        self.assertEqual(st["chans"], ["RGB", "Red", "Green", "Blue", "Alpha"])
+        if pg.evaluate("() => !!__panel.colorInSel"):
+            self.assertEqual(st["cs"], "none")
+        # Its slider: +2 stops is the colour times four (0.1 -> 0.4: sRGB 170); the label as the viewer writes it.
+        pg.evaluate("() => { const r = __panel.exposureSlider; r.value = '2'; r.dispatchEvent(new Event('input')); }")
         pg.wait_for_function(f"() => {{ const c = {self.ED}.canvas; return c.getContext('2d').getImageData(Math.floor(c.width / 2), Math.floor(c.height / 2), 1, 1).data[0] > 160; }}", timeout=5000)
-        self.assertIn("+2.0 EV", pg.evaluate(f"() => {C}.querySelector('.mg-bar .cp-ev-val').textContent"))
-        px = self.pixel(pg, 0.5, 0.5)
-        self.assertLess(abs(px[0] - 170), 3, px)
-        # The channel menu: green as grey.
-        pg.evaluate(f"() => {{ const s = {C}.querySelector('.mg-bar select.cp-channel'); s.value = 'g'; s.dispatchEvent(new Event('change')); }}")
+        self.assertEqual(pg.evaluate("() => __panel.exposureValue.textContent"), "2.0 EV")
+        self.assertLess(abs(self.pixel(pg, 0.5, 0.5)[0] - 170), 3)
+        # Its channel menu: green as grey.
+        pg.evaluate("() => { const s = __panel.rgbChannelSel; s.value = 'green'; s.dispatchEvent(new Event('change')); }")
         pg.wait_for_timeout(300)
         px = self.pixel(pg, 0.5, 0.5)
         self.assertEqual(px[0], px[1]); self.assertEqual(px[1], px[2])
         self.assertGreater(px[0], 220, px)                        # 0.2 x 4 = 0.8
         if SHOTS:
-            pg.evaluate(f"() => {{ const s = {C}.querySelector('.mg-bar select.cp-channel'); s.value = 'rgb'; s.dispatchEvent(new Event('change')); }}")
+            pg.evaluate("() => { const s = __panel.rgbChannelSel; s.value = 'all'; s.dispatchEvent(new Event('change')); }")
             pg.wait_for_timeout(300)
             pg.screenshot(path=os.path.join(SHOTS, "comp-exposure-channels.png"))
-        # Double-click the value: back to 0; the comp itself never changed.
-        pg.evaluate(f"() => {{ const s = {C}.querySelector('.mg-bar select.cp-channel'); s.value = 'rgb'; s.dispatchEvent(new Event('change')); {C}.querySelector('.mg-bar .cp-ev-val').dispatchEvent(new MouseEvent('dblclick')); }}")
+        # A click on the bar (not the slider) sets it back to 0, as in the viewer; the picture does not pan.
+        z = pg.evaluate(f"() => JSON.stringify({self.ED}.state.zoom)")
+        box = pg.evaluate("() => { const r = __panel.exposureValue.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }")
+        pg.mouse.click(box[0], box[1])
+        pg.wait_for_timeout(300)
+        self.assertEqual(pg.evaluate("() => __panel.exposure"), 0)
+        self.assertEqual(pg.evaluate(f"() => JSON.stringify({self.ED}.state.zoom)"), z)
+        # E held and a drag sideways on the picture: the exposure, as in the viewer.
+        s = pg.evaluate(f"() => {{ const r = {self.ED}.stage.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }}")
+        pg.mouse.move(s[0], s[1])
+        pg.keyboard.down("e")
+        pg.mouse.down(); pg.mouse.move(s[0] + 50, s[1], steps=5); pg.mouse.up()
+        pg.keyboard.up("e")
+        self.assertAlmostEqual(pg.evaluate("() => __panel.exposure"), 1.0, places=1)
+        self.assertEqual(pg.evaluate(f"() => JSON.stringify({self.ED}.state.zoom)"), z)
+        # The R G B A keys on the picture pick the viewer's channel; again: all of them.
+        pg.evaluate(f"() => {self.ED}.stage.closest('.cp-root').focus()")
+        pg.keyboard.press("a")
+        self.assertEqual(pg.evaluate("() => __panel.channelView"), "alpha")
+        pg.keyboard.press("a")
+        self.assertEqual(pg.evaluate("() => __panel.channelView"), "all")
+        # Leaving Comp puts the bar back in the viewer; the comp itself never changed.
+        pg.evaluate("() => __panel.resetExposure()")
         pg.wait_for_timeout(300)
         self.assertEqual(self.pixel(pg, 0.5, 0.5), before)
         self.assertEqual(pg.evaluate(f"() => {self.ED}.comp().nodes.find((n) => n.id === 'Constant1').color"), [0.1, 0.2, 0.05, 1])
+        pg.evaluate("() => __panel.compTabLeave()")
+        self.assertTrue(pg.evaluate("() => __panel.exposureControl.parentNode === __panel.viewport"))
         self.assertEqual(self.errors, [])
 
     def test_the_graph_in_comfyuis_bottom_panel(self):

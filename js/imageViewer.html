@@ -32,6 +32,7 @@
                     <option value="red">Red</option>
                     <option value="green">Green</option>
                     <option value="blue">Blue</option>
+                    <option value="alpha">Alpha</option>
                 </select>
                 <select id="color-in-sel" title="Input colourspace — what the picture is in. It is shown as sRGB."></select>
             </div>
@@ -45,6 +46,9 @@
                     </filter>
                     <filter id="imageviewer-channel-blue">
                         <feColorMatrix type="matrix" values="0 0 1 0 0  0 0 1 0 0  0 0 1 0 0  0 0 0 1 0"/>
+                    </filter>
+                    <filter id="imageviewer-channel-alpha">
+                        <feColorMatrix type="matrix" values="0 0 0 1 0  0 0 0 1 0  0 0 0 1 0  0 0 0 0 1"/>
                     </filter>
                 </defs>
             </svg>
