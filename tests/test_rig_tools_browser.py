@@ -617,6 +617,14 @@ class RigToolsBrowserTests(unittest.TestCase):
             keyed = pg.evaluate("() => window.__panel.previzRigKeyedFrames(window.__hero)")
             pg.evaluate("async () => window.__panel.previzRigAgentRun({ id: 'p2', action: 'pose', args: { model: 'Statue', preset: 'fly' } })")
             pg.evaluate("async () => window.__panel.previzRigAgentRun({ id: 'p3', action: 'pose_presets', args: {} })")
+            # A side plank on the right hand, the hand straight under its shoulder; asked for twice, it stays the same.
+            plank = """async () => window.__panel.previzRigAgentRun({ id: 'p4', action: 'pose', args: { model: 'Statue', frame: 30,
+                         joints: { hips: { side: -70, turn: 30 }, 'upperArm.L': { down: -80 } },
+                         contacts: [{ part: 'right hand', under: true }, 'left foot'] } })"""
+            pg.evaluate(plank)
+            once = pg.evaluate("() => ['Hips', 'RightHand', 'RightArm', 'LeftFoot'].map((b) => window.__boneAt(b, 30))")
+            pg.evaluate(plank)
+            twice = pg.evaluate("() => ['Hips', 'RightHand', 'RightArm', 'LeftFoot'].map((b) => window.__boneAt(b, 30))")
         finally:
             pg.close()
         done = {b["id"]: b for k, b in self.requests if k == "agent_done" and b["state"] in ("done", "error")}
@@ -641,6 +649,16 @@ class RigToolsBrowserTests(unittest.TestCase):
         names = [p["name"] for p in done["p3"]["result"]["presets"]]
         self.assertIn("arms_crossed", names)
         self.assertIn("upperArm", done["p3"]["result"]["parts"])
+        self.assertIn("hand.R", done["p3"]["result"]["contacts"])
+        self.assertEqual(done["p4"]["state"], "done", done["p4"])
+        self.assertEqual(done["p4"]["result"]["contacts"], ["hand.R", "foot.L"])
+        hips, hand, shoulder, foot = once
+        floor = f0[1]                                            # the ankle at rest
+        self.assertLess(abs(hand[1] - floor), 0.08 * stand, (hand, floor))
+        self.assertLess(math.hypot(hand[0] - shoulder[0], hand[2] - shoulder[2]), 0.12 * stand, (hand, shoulder))
+        self.assertLess(abs(foot[1] - floor), 0.08 * stand, (foot, floor))
+        for a, b in zip(once, twice):
+            self.assertLess(math.dist(a, b), 1e-3 * stand, "the same pose asked for again turns nothing further")
         self.assertEqual(self.errors, [])
 
 

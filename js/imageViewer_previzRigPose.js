@@ -8,6 +8,10 @@ import * as M from "./imageViewer_rigMotion.js";
 import * as P from "./imageViewer_rigPoseSpec.js";
 import { notice, openExportDialog } from "./imageViewer_exportUI.js";
 
+// The parts the dialog can put on the floor (imageViewer_rigPoseFix.js CONTACT_LIMBS).
+const FLOOR_PARTS = [["hand.L", "left hand"], ["hand.R", "right hand"], ["knee.L", "left knee"],
+                     ["foot.L", "left foot"], ["foot.R", "right foot"], ["knee.R", "right knee"]];
+
 export const PrevizRigPoseMixin = {
 
     /**
@@ -18,6 +22,7 @@ export const PrevizRigPoseMixin = {
      * { ok, frame, keys, unknown, layer } or { ok: false, message }.
      */
     async previzRigPose(modelId, { preset = null, joints = null, hips = null, mirror = null, ground = true,
+                                   contacts = null, limits = true,
                                    frame = null, prompt = "", seed = null, layer = null, progress = null } = {}) {
         const scene = this.previzScene();
         const info = this._previzRigMotionRest && this._previzRigMotionRest(modelId);
@@ -30,26 +35,29 @@ export const PrevizRigPoseMixin = {
         const k0 = M.poseToSoma(p0.pose, rest, scale, origin);
         const model = (scene.items || []).find((it) => it.id === modelId);
         const heading = P.poseBaseHeading(model, M.headingOf(k0));
-        let motion, unknown = [];
+        let motion, unknown = [], placed = [];
         const words = String(prompt || "").trim();
         if (words && !preset && !(joints && Object.keys(joints).length)) {
             motion = await this._previzRigPoseFromPrompt(words, { k0, heading, seed, progress });
             if (!motion.samples) return { ok: false, message: motion.message };
         } else {
-            const r = P.resolvePose({ preset, joints, hips, mirror });
+            const r = P.resolvePose({ preset, joints, hips, mirror, contacts });
             unknown = r.unknown;
             if (!Object.keys(r.parts).length && !(preset && [].concat(preset).some((p) => /^t[_\s-]?pose$/i.test(String(p).trim())))) {
                 return { ok: false, message: `Nothing to pose${unknown.length ? ` (not understood: ${unknown.join(", ")})` : ""}. `
                     + `Name a preset (${Object.keys(P.PRESETS).join(", ")}) or joints.` };
             }
-            motion = P.poseMotion(P.solvePoseSpec(r.parts, { heading, ground, hips: r.hips }));
+            const solved = P.solvePoseSpec(r.parts, { heading, ground, hips: r.hips, limits, contacts: r.contacts });
+            motion = P.poseMotion(solved);
+            placed = solved.contacts;
+            unknown = unknown.concat((solved.unknownContacts || []).map((c) => `contact ${c}`));
         }
         if (scene.length < f + 1) { scene.length = f + 1; scene.lengthSet = true; }
         const out = this.previzRigApplyMotion(modelId, motion, { from: f, to: f, origin, feet: false, mode: "pose", label: "Pose", layer });
         if (!out.ok) return out;
         P.rememberPoseBase(model, f, heading, motion);
         this.setFrame?.(f);
-        return { ok: true, frame: f, keys: out.keys, layer: out.layer || null, unknown };
+        return { ok: true, frame: f, keys: out.keys, layer: out.layer || null, unknown, contacts: placed };
     },
 
     /** Kimodo makes about two seconds from where the character stands; its last frame, in place, is the pose. */
@@ -78,7 +86,7 @@ export const PrevizRigPoseMixin = {
         }
         const tools = await this._previzRigTools();
         const kimodo = !!(tools.kimodo && tools.kimodo.ready);
-        let boxes = [], prompt, at, onLayer;
+        let boxes = [], prompt, at, onLayer, floor = [], limitBox;
         await openExportDialog(this.container, {
             title: "Pose the character", kind: "character", where: false, name: "pose", go: "Pose",
             rows: ({ el, row }) => {
@@ -94,16 +102,28 @@ export const PrevizRigPoseMixin = {
                     placeholder: kimodo ? "or in words: a person sits and reads a book" : "in words needs Kimodo (Rig → Set up…)" });
                 prompt.style.width = "100%";
                 at = Object.assign(el("input", "rd-in rd-num"), { type: "number", value: Math.round(this.currentFrame || 0), min: 0 });
-                const rows = [row("Poses", grid), row("Words", prompt), row("Frame", at)];
+                const fl = el("div", "rd-sub");
+                fl.style.cssText = "display:grid;grid-template-columns:repeat(3,auto);gap:2px 12px";
+                floor = FLOOR_PARTS.map(([key, label]) => {
+                    const b = Object.assign(el("input"), { type: "checkbox" });
+                    const l = el("label", "rd-sub"); l.append(b, ` ${label}`);
+                    fl.append(l);
+                    return { key, b };
+                });
+                limitBox = Object.assign(el("input"), { type: "checkbox", checked: true });
+                const ll = el("label", "rd-sub"); ll.append(limitBox, " Keep joints in their natural range");
+                const rows = [row("Poses", grid), row("Words", prompt), row("On the floor", fl), row("Limits", ll), row("Frame", at)];
                 if (this.previzLayersAvailable && this.previzLayersAvailable()) rows.push(row("Layer", (onLayer = this._previzLayerBox(el, false)).label));
                 return rows;
             },
-            note: "Ticked poses are laid over each other in order (sit + arms crossed). The pose is keyed on that frame; the body is put on the floor.",
+            note: "Ticked poses are laid over each other in order (sit + arms crossed). The pose is keyed on that frame; the body is put on the floor, "
+                + "on the first part ticked under On the floor, and the others are reached down to it.",
             onExport: async (_v, { progress }) => {
                 const preset = boxes.filter((x) => x.b.checked).map((x) => x.name);
                 const out = await this.previzRigPose(modelId, {
                     preset: preset.length ? preset : null, prompt: preset.length ? "" : prompt.value,
                     frame: Number(at.value), layer: onLayer && onLayer.box.checked ? "new" : null,
+                    contacts: floor.filter((x) => x.b.checked).map((x) => x.key), limits: limitBox.checked,
                     progress: (line) => progress(0.5, 1, line),
                 });
                 if (!out.ok) return { ok: false, message: out.message };
