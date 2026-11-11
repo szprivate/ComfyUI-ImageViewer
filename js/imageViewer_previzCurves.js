@@ -38,6 +38,10 @@ import * as S from "./imageViewer_scene3d.js";
 import { eulerFilter } from "./imageViewer_eulerFilter.js";
 import { notice } from "./imageViewer_exportUI.js";
 import { buildCurvePanel, svgLine, tangentArm } from "./imageViewer_curveUI.js";
+import * as A from "./imageViewer_animTools.js";
+
+const INFINITY_LABELS = [["constant", "Constant"], ["linear", "Linear"], ["cycle", "Cycle"],
+                         ["offset", "Cycle with offset"], ["oscillate", "Oscillate"]];
 
 // Every channel an item can have, in the order they are listed. Colour is by
 // axis, shaded by property, so translate.x and rotate.x are never the same
@@ -160,6 +164,8 @@ export const PrevizCurvesMixin = {
      * the strip's behaviour, and it made the panel feel broken.
      */
     previzRefreshCurves() {
+        // The Dope Sheet is redrawn by everything that redraws the curves.
+        if (this.previzRefreshDopeSheet) this.previzRefreshDopeSheet();
         const host = this._previzCurveHost();
         if (!host) return;
         if (!this.isPrevizTab()) { this._previzHideCurves(); return; }
@@ -206,7 +212,137 @@ export const PrevizCurvesMixin = {
         this._previzCurveWrap = ui.wrap;
         this._previzCurveSvg = ui.svg;
         this._previzCurveUI = ui;
+        this._previzCurveToolbar(ui);
         return ui;
+    },
+
+    // ── Tools: buffer curves, simplify, infinity, retime, Euler ─────────────
+
+    /** The bar over the graph. Every tool works on the curves on screen. */
+    _previzCurveToolbar(ui) {
+        const doc = ui.sub.ownerDocument;
+        const bar = doc.createElement("div");
+        bar.className = "curves-tools";
+        const btn = (label, title, run) => {
+            const b = doc.createElement("button");
+            b.className = "previz-btn curves-tool";
+            b.textContent = label;
+            b.title = title;
+            b.onclick = (e) => { e.stopPropagation(); run(b); };
+            bar.append(b);
+            return b;
+        };
+        const menuAt = (b, entries) => {
+            const r = b.getBoundingClientRect();
+            this._previzOpenMenu(entries, r.left, r.bottom + 2, b);
+        };
+        ui.bufferBtn = btn("Buffer", "Keep a copy of the curves on screen (drawn grey behind them)",
+            () => this.previzCurveBufferSnap());
+        ui.swapBtn = btn("Swap", "Trade the curves with the buffer copy - press again to trade back",
+            () => this.previzCurveBufferSwap());
+        btn("Simplify\u2026", "Fewer keys for the same curve: drops what the curve does not need",
+            (b) => this._dsAskNumber(b, "Keep within (% of each channel's range)", this._previzSimplifyTol ?? 1,
+                (v) => { this._previzSimplifyTol = v; this.previzCurveSimplify(v / 100); }, { step: 0.1, min: 0.01 }));
+        for (const [side, label] of [["pre", "Pre \u221e"], ["post", "Post \u221e"]]) {
+            btn(`${label} \u25be`, side === "pre" ? "What the curves do before their first key"
+                                                : "What the curves do after their last key",
+                (b) => menuAt(b, INFINITY_LABELS.map(([mode, name]) => ({
+                    label: name, run: () => this.previzCurveInfinity(side, mode) }))));
+        }
+        btn("Retime\u2026", "Spread or squeeze the keys between two frames; what comes after moves along",
+            (b) => {
+                const shown = this._previzCurveTrackList();
+                const fr = shown.flatMap(({ id, prop }) => S.track(S.itemById(this.previzScene(), id), prop).map((k) => k.f));
+                const lo = fr.length ? Math.min(...fr) : 0, hi = fr.length ? Math.max(...fr) : 24;
+                this._dsAskFields(b, [
+                    { name: "from", label: "From frame", value: lo },
+                    { name: "to", label: "To frame", value: hi },
+                    { name: "newTo", label: "Ends on frame", value: hi },
+                    { name: "ripple", label: "Move later keys too", type: "checkbox", value: true },
+                ], (v) => this.previzCurveRetime(v.from, v.to, v.newTo, v.ripple));
+            });
+        btn("Euler", EULER_TIP, () => this.previzEulerFilter());
+        ui.sub.parentNode.insertBefore(bar, ui.sub);
+        ui.tools = bar;
+    },
+
+    /** The tracks behind the curves on screen: one {id, prop} each. */
+    _previzCurveTrackList() {
+        const seen = new Set(), out = [];
+        for (const l of this._previzCurveLines()) {
+            const k = `${l.item.id}|${l.prop}`;
+            if (seen.has(k)) continue;
+            seen.add(k);
+            out.push({ id: l.item.id, prop: l.prop });
+        }
+        return out;
+    },
+
+    _previzCurveNeedTracks(what) {
+        const tracks = this._previzCurveTrackList().filter(({ id, prop }) =>
+            S.track(S.itemById(this.previzScene(), id), prop).length);
+        if (!tracks.length) notice("info", what, "Show an animated channel in the Curve Editor first.");
+        return tracks;
+    },
+
+    previzCurveBufferSnap() {
+        const tracks = this._previzCurveNeedTracks("Buffer curve");
+        if (!tracks.length) return 0;
+        this._previzCurveBuffer = A.snapshotTracks(this.previzScene().items, tracks);
+        this.previzRefreshCurves();
+        notice("info", "Buffer curve", `Kept ${tracks.length} curve${tracks.length === 1 ? "" : "s"}.`);
+        return tracks.length;
+    },
+
+    previzCurveBufferSwap() {
+        const buf = this._previzCurveBuffer;
+        if (!buf || !buf.size) { notice("info", "Swap with buffer", "Press Buffer first to keep a copy."); return 0; }
+        this.previzSnapshot("swap buffer curves");
+        const { buffer, swapped } = A.swapTracks(this.previzScene().items, buf);
+        this._previzCurveBuffer = buffer;
+        this.previzChanged();
+        return swapped;
+    },
+
+    previzCurveSimplify(tolerance = 0.01) {
+        const tracks = this._previzCurveNeedTracks("Simplify");
+        if (!tracks.length) return null;
+        const scene = this.previzScene();
+        this.previzSnapshot("simplify curves");
+        let before = 0, after = 0, skipped = 0;
+        for (const { id, prop } of tracks) {
+            const r = A.simplifyTrack(S.itemById(scene, id), prop, tolerance);
+            before += r.before; after += r.after; if (r.skipped) skipped++;
+        }
+        this._previzCurveKey = null;
+        this.previzChanged();
+        notice("success", "Simplify", `${before} keys \u2192 ${after}` +
+               (skipped ? ` (${skipped} stepped curve${skipped === 1 ? "" : "s"} left as they were)` : "") + ".");
+        return { before, after, skipped };
+    },
+
+    previzCurveInfinity(side, mode) {
+        const tracks = this._previzCurveNeedTracks("Infinity");
+        if (!tracks.length) return 0;
+        const scene = this.previzScene();
+        this.previzSnapshot(`${side === "pre" ? "pre" : "post"}-infinity ${mode}`);
+        for (const { id, prop } of tracks) S.setInfinity(S.itemById(scene, id), prop, { [side]: mode });
+        this.previzChanged();
+        return tracks.length;
+    },
+
+    previzCurveRetime(from, to, newTo, ripple = true) {
+        const tracks = this._previzCurveNeedTracks("Retime");
+        if (!tracks.length) return 0;
+        if (!(Number(to) > Number(from)) || !(Number(newTo) > Number(from))) {
+            notice("info", "Retime", "The range has to end after it starts.");
+            return 0;
+        }
+        this.previzSnapshot("retime keys");
+        const n = A.retimeKeys(this.previzScene().items, tracks, Number(from), Number(to), Number(newTo), !!ripple);
+        this._previzCurveKey = null;
+        this.previzChanged();
+        return n;
     },
 
     /** Show or hide one channel of one object. Plain click picks it alone. */
@@ -277,6 +413,13 @@ export const PrevizCurvesMixin = {
             const item = ch.item;
             const keys = S.track(item, ch.prop);
             if (!keys.length) { see(S.componentOf(S.valueAt(item, ch.prop, bounds.min), ch.axis)); continue; }
+            // A curve that goes on past its keys is drawn to the ends of the shot.
+            const inf = S.infinityOf(item, ch.prop);
+            if (keys.length > 1 && (inf.pre !== "constant" || inf.post !== "constant")) {
+                for (let n = 0; n <= 48; n++) {
+                    see(S.componentOf(S.valueAt(item, ch.prop, bounds.min + (span * n) / 48), ch.axis));
+                }
+            }
             for (const k of keys) see(S.componentOf(k.v, ch.axis));
             // A curve with handles can leave the band its keys sit in, so the
             // drawn shape is sampled rather than guessed at.
@@ -322,6 +465,23 @@ export const PrevizCurvesMixin = {
                    "stroke-dasharray": "2 2", opacity: 0.22 });
         }
 
+        // The buffer copies first, grey and dashed under the live curves.
+        const buf = this._previzCurveBuffer;
+        if (buf && buf.size) {
+            for (const ch of g.lines) {
+                const keys = buf.get(`${ch.item.id}|${ch.prop}`);
+                if (!keys || !keys.length) continue;
+                let d = "";
+                for (let i = 0; i <= 160; i++) {
+                    const f = g.bounds.min + (g.span * i) / 160;
+                    const v = S.componentOf(A.bufferValueAt(ch.item, ch.prop, keys, f), ch.axis);
+                    d += (d === "" ? "M " : "L ") + g.X(f).toFixed(2) + " " + g.Y(v).toFixed(2) + " ";
+                }
+                line({ tag: "path", d, fill: "none", "stroke-width": 1.5, stroke: "#8a8a8a",
+                       "stroke-dasharray": "4 3", opacity: 0.7, class: "curves-buffer" });
+            }
+        }
+
         // The curves themselves, sampled through the scene's own interpolation —
         // so smooth, linear, hold and a dragged handle all look here exactly as
         // they play.
@@ -343,6 +503,23 @@ export const PrevizCurvesMixin = {
             }
             line({ tag: "path", d, fill: "none", "stroke-width": 2, stroke: ch.color,
                    opacity: keys.length ? 1 : 0.5 });
+            // Before the first key and after the last: what the infinity makes of it, dashed.
+            if (keys.length > 1) {
+                const inf = S.infinityOf(item, ch.prop);
+                for (const [side, a, b] of [["pre", g.bounds.min, keys[0].f],
+                                            ["post", keys[keys.length - 1].f, g.bounds.max]]) {
+                    if (inf[side] === "constant" || b <= a) continue;
+                    let e = "";
+                    const n = Math.max(2, Math.min(240, Math.round((b - a) * 2)));
+                    for (let i = 0; i <= n; i++) {
+                        const f = a + ((b - a) * i) / n;
+                        const v = S.componentOf(S.valueAt(item, ch.prop, f), ch.axis);
+                        e += (e === "" ? "M " : "L ") + g.X(f).toFixed(2) + " " + g.Y(v).toFixed(2) + " ";
+                    }
+                    line({ tag: "path", d: e, fill: "none", "stroke-width": 1.5, stroke: ch.color,
+                           "stroke-dasharray": "5 3", opacity: 0.6, class: `curves-infinity ${side}` });
+                }
+            }
         }
 
         const playhead = g.X(Math.round(this.currentFrame || 0));

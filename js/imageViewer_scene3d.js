@@ -611,9 +611,90 @@ function _lerp(a, b, t, angles) {
     return a + (b - a) * t;
 }
 
+// ── Before the first key and after the last ("infinity") ──────────────────────
+//
+// What a track does outside its keys is set per item and property:
+// `item.infinity = { position: { pre: "constant", post: "cycle" }, ... }`.
+// A missing entry is "constant" - the value of the end key, which is what
+// every scene written before this did. The other words are the usual ones:
+//   linear    - goes on along the end key's tangent
+//   cycle     - the keys over again, end to end
+//   offset    - cycles, each turn starting where the last one ended
+//               (a walk that keeps walking)
+//   oscillate - forwards, then backwards, then forwards
+export const INFINITY_MODES = ["constant", "linear", "cycle", "offset", "oscillate"];
+
+/** `{ pre, post }` of one property, "constant" where nothing is set. */
+export function infinityOf(item, prop) {
+    const own = item && item.infinity && item.infinity[prop];
+    const pick = (m) => (INFINITY_MODES.includes(m) ? m : "constant");
+    return { pre: pick(own && own.pre), post: pick(own && own.post) };
+}
+
+/** Set one or both sides; back at constant / constant the entry goes. */
+export function setInfinity(item, prop, patch = {}) {
+    if (!item || !TRACKS.includes(prop)) return item;
+    const next = { ...infinityOf(item, prop) };
+    for (const side of ["pre", "post"]) {
+        if (patch[side] !== undefined) next[side] = INFINITY_MODES.includes(patch[side]) ? patch[side] : "constant";
+    }
+    if (!item.infinity) item.infinity = {};
+    if (next.pre === "constant" && next.post === "constant") delete item.infinity[prop];
+    else item.infinity[prop] = next;
+    if (!Object.keys(item.infinity).length) delete item.infinity;
+    return item;
+}
+
+/** Does any property of this item go on past its keys? (Baking then needs the whole shot.) */
+export function hasInfinity(item) {
+    return TRACKS.some((p) => {
+        const inf = infinityOf(item, p);
+        return track(item, p).length > 1 && (inf.pre !== "constant" || inf.post !== "constant");
+    });
+}
+
+const _addV = (a, b, k) => (Array.isArray(a) ? a.map((x, i) => x + componentOf(b, i) * k) : a + b * k);
+const _subV = (a, b) => (Array.isArray(a) ? a.map((x, i) => x - componentOf(b, i)) : a - b);
+
+/** `frame` outside the keys, read through the infinity mode. Null when the keys say it. */
+function _beyond(item, prop, keys, frame) {
+    const first = keys[0], last = keys[keys.length - 1];
+    const before = frame < first.f;
+    if (!before && frame <= last.f) return null;
+    const mode = infinityOf(item, prop)[before ? "pre" : "post"];
+    const span = last.f - first.f;
+    if (mode === "constant" || span <= 0) return null;
+    if (mode === "linear") {
+        const end = before ? first : last;
+        const side = before ? "out" : "in";
+        const slope = Array.isArray(end.v)
+            ? end.v.map((_, a) => tangentAt(item, prop, end.f, a, side))
+            : tangentAt(item, prop, end.f, 0, side);
+        return _addV(_clone(end.v), slope, frame - end.f);
+    }
+    const rel = frame - first.f;
+    const turns = Math.floor(rel / span);
+    let local = rel - turns * span;                  // 0..span
+    if (mode === "oscillate" && (((turns % 2) + 2) % 2) === 1) local = span - local;
+    const v = _inside(item, prop, keys, first.f + local);
+    if (mode !== "offset") return v;
+    // Each turn starts where the one before it ended.
+    return _addV(v, _subV(last.v, first.v), turns);
+}
+
 /** The value of one property at `frame`, animated or not. */
 export function valueAt(item, prop, frame) {
     const keys = track(item, prop);
+    if (keys.length > 1) {
+        const out = _beyond(item, prop, keys, frame);
+        // The IK / FK blend stays a blend however far a line runs on.
+        if (out !== null) return prop === "ikfk" ? Math.max(0, Math.min(1, out)) : out;
+    }
+    return _inside(item, prop, keys, frame);
+}
+
+/** valueAt without the infinity: what the keys themselves say. */
+function _inside(item, prop, keys, frame) {
     // A scene written before pivots existed simply has none, which is the
     // same thing as one at the origin.
     const stat = prop === "fov" ? (item.fov ?? 35)
@@ -780,6 +861,12 @@ export function parseScene(raw) {
             if (keys.length) {
                 keys.sort((a, b) => a.f - b.f);
                 item.tracks[prop] = keys;
+            }
+        }
+        if (raw.infinity && typeof raw.infinity === "object") {
+            for (const prop of TRACKS) {
+                const inf = raw.infinity[prop];
+                if (inf && typeof inf === "object") setInfinity(item, prop, { pre: inf.pre, post: inf.post });
             }
         }
         // A model (or an image plane) with no file left to point at is

@@ -219,6 +219,10 @@ const ACTION_DEFS = [
       enabled: _previz, run: (p) => p.previzExportUsd() },
     { key: "PrevizRender",    label: "Previz: Render…",
       enabled: _previz, run: (p) => p.previzRenderDialog() },
+    { key: "PrevizPlayblast", label: "Previz: Playblast…",
+      enabled: _previz, run: (p) => p.previzPlayblastDialog() },
+    { key: "View3DDopeSheet", label: "3D View: Show / Hide Dope Sheet",
+      enabled: _previz, run: (p) => p.togglePanelDocked("dopeSheet") },
 
     { key: "ExportView",      label: "Export Frame or Clip…", run: (p) => p.exportViewDialog() },
 

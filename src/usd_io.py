@@ -215,6 +215,79 @@ def _component(value, axis):
     return value[axis] if isinstance(value, (list, tuple)) else value
 
 
+INFINITY_MODES = ("constant", "linear", "cycle", "offset", "oscillate")
+_TRACKS = ("position", "rotation", "scale", "pivot", "fov", "ikfk")
+
+
+def infinity_of(item, prop):
+    """(pre, post) of one property: scene3d.js ``infinityOf``."""
+    own = (item.get("infinity") or {}).get(prop) or {}
+    pick = lambda m: m if m in INFINITY_MODES else "constant"  # noqa: E731
+    return pick(own.get("pre")), pick(own.get("post"))
+
+
+def has_infinity(item):
+    for prop in _TRACKS:
+        keys = ((item.get("tracks") or {}).get(prop)) or []
+        if len(keys) > 1 and infinity_of(item, prop) != ("constant", "constant"):
+            return True
+    return False
+
+
+def _tangent_at(keys, i, axis, side):
+    """scene3d.js ``tangentAt`` for key i: hand-set, else what the ease implies."""
+    key = keys[i]
+    own = key.get("ti" if side == "in" else "to")
+    if own is not None:
+        return _component(own, axis)
+    j = i - 1 if side == "in" else i + 1
+    if j < 0 or j >= len(keys):
+        return 0.0
+    frm, to = (keys[j], key) if side == "in" else (key, keys[j])
+    return _auto_slope(frm.get("ease", "smooth"), _component(frm["v"], axis),
+                       _component(to["v"], axis), to["f"] - frm["f"])
+
+
+def _add(a, b, k):
+    if isinstance(a, (list, tuple)):
+        return [x + _component(b, i) * k for i, x in enumerate(a)]
+    return a + b * k
+
+
+def _beyond(item, prop, keys, frame):
+    """``frame`` outside the keys through the infinity mode, or None (scene3d.js ``_beyond``)."""
+    first, last = keys[0], keys[-1]
+    before = frame < first["f"]
+    if not before and frame <= last["f"]:
+        return None
+    pre, post = infinity_of(item, prop)
+    mode = pre if before else post
+    span = last["f"] - first["f"]
+    if mode == "constant" or span <= 0:
+        return None
+    if mode == "linear":
+        i, side = (0, "out") if before else (len(keys) - 1, "in")
+        end = keys[i]
+        if isinstance(end["v"], (list, tuple)):
+            slope = [_tangent_at(keys, i, a, side) for a in range(len(end["v"]))]
+        else:
+            slope = _tangent_at(keys, i, 0, side)
+        return _add(end["v"], slope, frame - end["f"])
+    rel = frame - first["f"]
+    turns = math.floor(rel / span)
+    local = rel - turns * span
+    if mode == "oscillate" and turns % 2 == 1:
+        local = span - local
+    v = _inside(item, prop, keys, first["f"] + local)
+    if mode != "offset":
+        return v
+    if isinstance(last["v"], (list, tuple)):
+        step = [x - _component(first["v"], i) for i, x in enumerate(last["v"])]
+    else:
+        step = last["v"] - first["v"]
+    return _add(v, step, turns)
+
+
 def value_at(item, prop, frame):
     """What `prop` is at `frame` — the same answer the viewer draws.
 
@@ -223,6 +296,14 @@ def value_at(item, prop, frame):
     with the viewport, or an exported stage would not match what was previewed.
     """
     keys = ((item.get("tracks") or {}).get(prop)) or []
+    if len(keys) > 1:
+        out = _beyond(item, prop, keys, frame)
+        if out is not None:
+            return max(0.0, min(1.0, out)) if prop == "ikfk" else out
+    return _inside(item, prop, keys, frame)
+
+
+def _inside(item, prop, keys, frame):
     static = item.get("fov", 35) if prop == "fov" else item.get(prop)
     if not keys:
         return static
@@ -464,6 +545,9 @@ def export_scene(scene, path, bake=True):
 
         offset = _offset_matrix(item)
         span = _animated_range(item) if bake else None
+        if span is not None and has_infinity(item):
+            # A track that goes on past its keys moves over the whole shot.
+            span = (0, length - 1)
         if span is None:
             pos = _with_pivot(item.get("position") or [0, 0, 0], item.get("rotation") or [0, 0, 0],
                               item.get("scale") or [1, 1, 1], item.get("pivot"))
