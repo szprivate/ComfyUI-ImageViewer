@@ -209,6 +209,19 @@ def kind_logs(kind):
 INSTALL_STEPS = {"unirig": 10, "kimodo": 5}
 
 
+
+def kimodo_why(text):
+    """Say plainly when Kimodo stopped on a gated Hugging Face model."""
+    if "gated repo" not in text:
+        return text
+    m = re.search(r"huggingface\.co/([\w.-]+/[\w.-]+)", text)
+    repo = m.group(1).rstrip(".") if m else "the text encoder model"
+    if "awaiting a review" in text:
+        return (f"Kimodo needs access to {repo}, and your request is still waiting for its "
+                f"authors to approve it. Try again once https://huggingface.co/{repo} says you have access.")
+    return (f"Kimodo needs access to the gated model {repo}. Request it at "
+            f"https://huggingface.co/{repo}, then run `hf auth login` in the Kimodo venv.")
+
 class _Job:
     def __init__(self, kind):
         self.id = secrets.token_hex(8)
@@ -311,7 +324,7 @@ class _KimodoWorker:
                 if line.startswith("@@"):
                     msg = json.loads(line[2:])
                     if "error" in msg:
-                        raise RuntimeError(msg["error"])
+                        raise RuntimeError(kimodo_why(msg["error"]))
                     if msg.get("done"):
                         return
                     continue
@@ -321,7 +334,7 @@ class _KimodoWorker:
             if job.cancelled:
                 self.stop()
                 raise RuntimeError("cancelled")
-            raise RuntimeError("Kimodo stopped: " + " | ".join(job.log[-4:]))
+            raise RuntimeError(kimodo_why("Kimodo stopped: " + " | ".join(job.log[-4:])))
 
     def stop(self):
         proc, self.proc = self.proc, None

@@ -375,6 +375,19 @@ class RigRoutes(unittest.TestCase):
         st, body = self.run_c(lambda c: go(c, "thing.stl"))
         self.assertEqual(st, 400, body)
 
+    def test_kimodo_says_plainly_when_llama_access_is_pending(self):
+        raw = ("Kimodo stopped: hydra.errors.InstantiationException: Error in call to target "
+               "'kimodo.model.llm2vec.llm2vec_wrapper.LLM2VecEncoder': | OSError('You are trying to access a gated repo."
+               "\\nMake sure to have access to it at https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct.\\n"
+               "Your request to access model meta-llama/Meta-Llama-3-8B-Instruct is awaiting a review from the repo authors.')")
+        said = self.routes.kimodo_why(raw)
+        self.assertIn("meta-llama/Meta-Llama-3-8B-Instruct", said)
+        self.assertIn("waiting for its authors to approve", said)
+        self.assertIn("https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct says", said)
+        self.assertNotIn("hydra", said)
+        self.assertIn("hf auth login", self.routes.kimodo_why("gated repo https://huggingface.co/a/b."))
+        self.assertEqual(self.routes.kimodo_why("other failure"), "other failure")
+
     def test_motion_keeps_one_worker_and_sends_constraints(self):
         key = {"frame": 0, "joints": {"Spine1": [0, 0, 0.3826834, 0.9238795]}, "root": [0, 1, 0]}
 
