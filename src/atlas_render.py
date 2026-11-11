@@ -284,7 +284,61 @@ def _viewer_camera(cam) -> dict:
     return {"viewer": viewer}
 
 
-def clean_chisel_request(data, image: str = "", mask: str = "", style: str = "") -> dict:
+MAX_DEPTH_PIXELS = 1280 * 720
+
+
+def decode_depth(depth) -> tuple:
+    """The page's depth map, ``{"w", "h", "data": base64 little-endian float32, row 0 at the top}``,
+    as (floats, w, h): planar depth in the world mesh's units, 0 where nothing is."""
+    import base64
+    import numpy as np
+    if not isinstance(depth, dict):
+        raise RelayError("bad depth map", 400)
+    try:
+        w, h = int(depth.get("w")), int(depth.get("h"))
+    except (TypeError, ValueError):
+        raise RelayError("bad depth map size", 400)
+    if w < 1 or h < 1 or w * h > MAX_DEPTH_PIXELS:
+        raise RelayError("bad depth map size", 400)
+    try:
+        raw = base64.b64decode(str(depth.get("data") or ""), validate=True)
+    except Exception:
+        raise RelayError("bad depth map data", 400)
+    if len(raw) != w * h * 4:
+        raise RelayError("the depth map's data does not match its size", 400)
+    z = np.frombuffer(raw, dtype="<f4").astype(np.float64).reshape(h, w)
+    z[~np.isfinite(z)] = 0.0
+    z[z < 0] = 0.0
+    return z, w, h
+
+
+def write_log_depth(z, out_dir: str) -> tuple:
+    """Save planar depth ``z`` (2-D array, 0 = nothing there) as the log-depth PNG Atlas Chisel reads:
+    16-bit grey, v = (ln z - ln zmax) / (ln zmin - ln zmax), so white is zMin and black is zMax / no surface.
+    Answers (path, z_min, z_max)."""
+    import time
+    import uuid
+    import numpy as np
+    from PIL import Image
+    hit = z[z > 0]
+    if hit.size < 16:
+        raise RelayError("there is no geometry in front of the camera to build on", 400)
+    zmin = max(float(np.percentile(hit, 0.5)), 1e-3)
+    zmax = float(hit.max())
+    if zmax <= zmin * 1.001:
+        zmax = zmin * 1.01
+    zc = np.clip(z, zmin, zmax)
+    v = (np.log(zc) - np.log(zmax)) / (np.log(zmin) - np.log(zmax))
+    v[z <= 0] = 0.0
+    px = np.round(np.clip(v, 0.0, 1.0) * 65535.0).astype(np.uint16)
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, f"chisel_depth_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}.png")
+    Image.fromarray(px).save(path)
+    return path, zmin, zmax
+
+
+def clean_chisel_request(data, image: str = "", mask: str = "", style: str = "",
+                         depth: tuple | None = None) -> dict:
     """The body forwarded to the host for a Chisel picture. ``image`` / ``mask`` / ``style`` are absolute
     paths the route resolved and checked (path_access); the page's own references are never passed on."""
     if not isinstance(data, dict):
@@ -295,6 +349,13 @@ def clean_chisel_request(data, image: str = "", mask: str = "", style: str = "")
         raise RelayError("say what Atlas should paint or change", 400)
     if mask and not image:
         raise RelayError("a mask needs the picture it was painted on", 400)
+    if not image and not depth:
+        raise RelayError("give Chisel something to build on: the scene's geometry or a picture", 400)
+    try:
+        voxel = float(data.get("voxel_size") or 0.0)
+    except (TypeError, ValueError):
+        raise RelayError("voxel_size must be a number", 400)
+    voxel = min(max(voxel, 0.0), 0.4)
     try:
         seed = int(data.get("seed") if data.get("seed") not in (None, "") else -1)
     except (TypeError, ValueError):
@@ -302,12 +363,22 @@ def clean_chisel_request(data, image: str = "", mask: str = "", style: str = "")
     return {"world": world, "camera": _viewer_camera(data.get("camera")), "prompt": prompt,
             "image_path": image or "", "mask_path": mask or "", "style_image": style or "",
             "context": data.get("context", True) is not False, "seed": seed if seed >= 0 else -1,
-            "enhance_prompt": data.get("enhance_prompt", True) is not False}
+            "enhance_prompt": data.get("enhance_prompt", True) is not False,
+            "depth_path": depth[0] if depth else "", "z_min": depth[1] if depth else None,
+            "z_max": depth[2] if depth else None, "voxel_size": voxel}
 
 
-def start_chisel(comfy_base: str, data, image: str = "", mask: str = "", style: str = "") -> dict:
-    return call_host(comfy_base, "POST", body=clean_chisel_request(data, image, mask, style), route=CHISEL_ROUTE,
-                     timeout=60.0)
+def start_chisel(comfy_base: str, data, image: str = "", mask: str = "", style: str = "",
+                 depth_dir: str = "") -> dict:
+    """``depth_dir``: where to save the page's depth map (``data["depth"]``) as a log-depth PNG."""
+    depth = None
+    if isinstance(data, dict) and data.get("depth"):
+        if not depth_dir:
+            raise RelayError("no folder to keep the depth map in", 500)
+        z, _w, _h = decode_depth(data["depth"])
+        depth = write_log_depth(z, depth_dir)
+    return call_host(comfy_base, "POST", body=clean_chisel_request(data, image, mask, style, depth),
+                     route=CHISEL_ROUTE, timeout=60.0)
 
 
 def chisel_state(comfy_base: str, job_id: str) -> dict:

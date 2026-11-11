@@ -2173,6 +2173,83 @@ export class Model3DView {
         }
     }
 
+    /**
+     * The scene's depth at `width` x `height`, through the render's camera:
+     * {w, h, data} with data a Float32Array, row 0 at the top, holding each
+     * pixel's distance along the camera's view axis in scene units (planar
+     * depth), 0 where nothing is. Only solid geometry counts: meshes, not
+     * splats, helpers, lines or the hidden boxes that stand in for splats.
+     * Called inside beginRender … endRender. Null if the graphics card
+     * cannot render to float.
+     */
+    renderDepth(width, height) {
+        const r = this._rendering;
+        if (!r || !this.renderer) return null;
+        const { THREE } = this.libs;
+        this._renderHideOverlays();
+        const cam = r.cam;
+        const W = Math.max(1, Math.round(width)), H = Math.max(1, Math.round(height));
+        cam.aspect = W / H;
+        if (r.item) cam.fov = evaluate(r.item, this.sceneFrame).fov || 35;
+        cam.updateProjectionMatrix();
+
+        const hidden = [];
+        const hide = (obj) => { hidden.push(obj); obj.visible = false; };
+        const invisible = (m) => (Array.isArray(m) ? m.every((x) => x && x.visible === false) : m && m.visible === false);
+        this.scene.traverse((obj) => {
+            if (!obj.visible || obj === this.scene) return;
+            if (obj.userData && (obj.userData.imageViewerSplat || obj.userData.imageViewerSplatBounds)) return hide(obj);
+            if (obj.name === "splatbounds" || obj.name === "imageplane") return hide(obj);
+            if (obj === this._spark) return hide(obj);
+            if (obj.isMesh) { if (invisible(obj.material)) hide(obj); return; }
+            if (obj.isLine || obj.isPoints || obj.isSprite) hide(obj);     // helpers, gizmos, labels
+        });
+
+        const material = new THREE.ShaderMaterial({
+            side: THREE.DoubleSide,
+            vertexShader: "varying float vDepth;\nvoid main() {\n  vec4 mv = modelViewMatrix * vec4(position, 1.0);\n  vDepth = -mv.z;\n  gl_Position = projectionMatrix * mv;\n}",
+            fragmentShader: "varying float vDepth;\nvoid main() { gl_FragColor = vec4(vDepth, 0.0, 0.0, 1.0); }",
+        });
+        const target = new THREE.WebGLRenderTarget(W, H, {
+            type: THREE.FloatType, format: THREE.RGBAFormat,
+            minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: true,
+        });
+        const background = this.scene.background, override = this.scene.overrideMaterial;
+        const clear = this.renderer.getClearColor(new THREE.Color()), clearAlpha = this.renderer.getClearAlpha();
+        const before = this.renderer.getRenderTarget();
+        let out = null;
+        try {
+            this.scene.background = null;
+            this.scene.overrideMaterial = material;
+            this.renderer.setRenderTarget(target);
+            this.renderer.setClearColor(0x000000, 0);
+            this.renderer.clear(true, true, true);
+            this.renderer.render(this.scene, cam);
+            const px = new Float32Array(W * H * 4);
+            this.renderer.readRenderTargetPixels(target, 0, 0, W, H, px);
+            const data = new Float32Array(W * H);
+            for (let y = 0; y < H; y++) {
+                const src = (H - 1 - y) * W;            // GL rows run bottom-up
+                for (let x = 0; x < W; x++) {
+                    const z = px[(src + x) * 4];
+                    data[y * W + x] = Number.isFinite(z) && z > 0 ? z : 0;
+                }
+            }
+            out = { w: W, h: H, data };
+        } catch (e) {
+            console.warn("[ImageViewer] could not render depth", e);
+        } finally {
+            this.renderer.setRenderTarget(before);
+            this.renderer.setClearColor(clear, clearAlpha);
+            this.scene.background = background;
+            this.scene.overrideMaterial = override;
+            for (const obj of hidden) obj.visible = true;
+            target.dispose();
+            material.dispose();
+        }
+        return out;
+    }
+
     /** Put the view back the way it was before beginRender. */
     endRender() {
         const r = this._rendering;

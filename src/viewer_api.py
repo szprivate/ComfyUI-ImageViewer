@@ -2131,7 +2131,8 @@ try:
         async def _imageviewer_atlas_chisel(request):
             """Body: {"world_path", "camera": {camera_world, model_world, fov, aspect, gated}, "prompt",
             "image" / "mask" / "style": {path} | {filename, type, subfolder} (each optional; a mask needs the
-            image), "context": bool, "seed", "enhance_prompt"}. Answers at once with an ``id``; poll
+            image), "depth": {w, h, data: base64 float32} (planar depth from the 3D space), "voxel_size",
+            "context": bool, "seed", "enhance_prompt"}. Answers at once with an ``id``; poll
             GET /imageviewer/atlas_chisel?id=<id> (``path`` when done)."""
             if atlas_render is None:
                 return web.json_response({"error": "atlas unavailable"}, status=500)
@@ -2145,8 +2146,14 @@ try:
             try:
                 d = data if isinstance(data, dict) else {}
                 pics = {k: (_atlas_picture(d[k]) if d.get(k) else "") for k in ("image", "mask", "style")}
+                depth_dir = ""
+                if d.get("depth"):
+                    try:
+                        depth_dir = os.path.join(folder_paths.get_input_directory(), "edits")
+                    except Exception:
+                        depth_dir = ""
                 out = await asyncio.to_thread(atlas_render.start_chisel, base, data, pics["image"], pics["mask"],
-                                              pics["style"])
+                                              pics["style"], depth_dir)
             except atlas_render.RelayError as e:
                 return web.json_response({"error": str(e)}, status=e.status)
             return web.json_response(out)

@@ -1283,6 +1283,12 @@ textarea.param-input {
                      justify-content: center; gap: 6px; padding: 16px; color: #8a8a8a; font-size: 12px; text-align: center; }
 .atlas-stage-big { font-size: 14px; color: #bbb; }
 .atlas-stage.has-pic .atlas-stage-empty { display: none; }
+.atlas-stage-depth { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
+.atlas-stage.has-depth .atlas-stage-depth { display: block; }
+.atlas-stage.has-depth .atlas-stage-empty { justify-content: flex-end; padding-bottom: 10px;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.75), rgba(0, 0, 0, 0) 45%); text-shadow: 0 1px 2px #000; }
+.atlas-geo .atlas-voxel { width: 110px; accent-color: #f60; }
+.atlas-voxel-val { min-width: 3.2em; }
 .atlas-chisel-box.drop-on .atlas-stage { border-color: #f60; }
 .atlas-masktools .rd-btn.active { border-color: #f60; color: #f60; }
 .atlas-brush { width: 120px; accent-color: #f60; }

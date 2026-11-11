@@ -1,7 +1,8 @@
 // imageViewer_atlasChisel.js
 // "Chisel this view" in the 3D space: with an Atlas world open, World Labs Atlas Chisel paints the view the
-// camera looks through - from words alone, or by changing only the part of a picture of that view you paint
-// over (white in the mask Atlas gets: "change this"). The picture is the view as the 3D space draws it (one
+// camera looks through. It builds the picture on the 3D space's geometry seen from that camera (a depth map of
+// the world mesh and every box or model placed there, rendered here) - from words alone, or by changing only
+// the part of a picture of that view you paint over (white in the mask Atlas gets: "change this"). The picture is the view as the 3D space draws it (one
 // click), or one you bring: dropped from Windows Explorer / the desktop / the History, picked, or the
 // History's selection (e.g. an earlier Atlas render of this camera). A style picture is optional, and the
 // world's nearest views go along so the result stays the same place.
@@ -27,24 +28,33 @@ const postChisel = async (body) => asJson(await api.fetchApi("/imageviewer/atlas
 const getChisel = async (id) => asJson(await api.fetchApi(`/imageviewer/atlas_chisel?id=${encodeURIComponent(id)}`));
 
 const MODE_HINT = {
-    paint: "No picture: Atlas paints this view from the words, with the world's nearest views as the place. "
-         + "Add a picture to change only part of it.",
+    paint: "No picture: Atlas paints this view from the words on the scene's geometry (the depth shown), with the "
+         + "world's nearest views as the place. Move boxes or models in the 3D space to shape it.",
+    none: "Nothing to build on: there is no geometry in front of the camera. Turn the camera to the world, "
+        + "or bring a picture of this view.",
     restyle: "Atlas repaints the whole picture from the words. Paint over a part of it to change only that part.",
     edit: "Atlas changes only the painted part and keeps the rest of the picture.",
 };
 
 export const AtlasChiselMixin = {
 
-    /** The view as the 3D space draws it, at 1280 x 720, and the camera of exactly that picture. */
-    _atlasChiselSnapshot(item) {
+    /**
+     * The view at 1280 x 720 through the camera you look through: the camera of exactly that frame, its depth
+     * in the world mesh's units (null if nothing solid is in front), and with `picture` the picture as the 3D
+     * space draws it.
+     */
+    _atlasChiselSnapshot(item, { picture = true } = {}) {
         const view = this._modelView();
         if (!view) throw new Error("the 3D view is not up");
         const camera = A.chiselCamera(A.captureCamera(view, item));
         if (!view.beginRender({ grid: false, helpers: false })) throw new Error("the 3D view is busy (a render is running)");
-        let url = null;
-        try { url = view.renderFrame(null, A.CHISEL_W, A.CHISEL_H); } finally { view.endRender(); }
-        if (!url) throw new Error("could not read the view back");
-        return { url, camera };
+        let url = null, raw = null;
+        try {
+            if (picture) url = view.renderFrame(null, A.CHISEL_W, A.CHISEL_H);
+            raw = view.renderDepth ? view.renderDepth(A.CHISEL_W, A.CHISEL_H) : null;
+        } finally { view.endRender(); }
+        if (picture && !url) throw new Error("could not read the view back");
+        return { url, camera, depth: A.depthInMeshUnits(raw, camera.model_world) };
     },
 
     /** Open the dialog (the Previz panel's "Chisel" button, the 3D menu's "Chisel this view…"). */
@@ -70,6 +80,10 @@ export const AtlasChiselMixin = {
         const worldName = A.atlasWorldName(item.src.path);
         // pic: {path | filename..., name, url, camera?, w, h} - camera only when it is a picture of this view made here.
         let pic = null, style = null, painted = false, erase = false;
+        // The geometry Chisel builds on, from the camera now ({camera, depth}); a snapshot carries its own.
+        let geo = null;
+        try { geo = this._atlasChiselSnapshot(item, { picture: false }); }
+        catch (e) { console.warn("[ImageViewer] chisel: no depth from the 3D view", e); }
 
         const shade = el("div", "rd-shade atlas-dlg atlas-chisel");
         const box = el("div", "rd-box atlas-chisel-box");
@@ -86,10 +100,18 @@ export const AtlasChiselMixin = {
         img.alt = "";
         const mask = el("canvas", "atlas-stage-mask");
         const empty = el("div", "atlas-stage-empty");
-        empty.append(el("div", "atlas-stage-big", "No picture — Atlas paints this view fresh"),
+        const depthView = el("canvas", "atlas-stage-depth");
+        const emptyBig = el("div", "atlas-stage-big", "");
+        empty.append(emptyBig,
                      el("div", "", "Drop a picture of this view here (Windows Explorer, the desktop, the History), "
                         + "or take the view as it is shown"));
-        stage.append(img, mask, empty);
+        stage.append(depthView, img, mask, empty);
+        const drawDepth = (d) => {
+            if (!d) { depthView.width = depthView.height = 0; return; }
+            depthView.width = d.w;
+            depthView.height = d.h;
+            depthView.getContext("2d").putImageData(new ImageData(A.depthPreviewPixels(d), d.w, d.h), 0, 0);
+        };
         const picTools = el("div", "atlas-tools");
         const viewBtn = el("button", "rd-btn", "Use this view");
         viewBtn.title = "The view as the 3D space draws it now (1280 × 720), with its camera";
@@ -139,6 +161,19 @@ export const AtlasChiselMixin = {
         seed.placeholder = "random";
         seed.inputMode = "numeric";
         seed.title = "A fixed seed paints the same picture again (empty: a new one each time)";
+        const geoOn = el("input");
+        geoOn.type = "checkbox";
+        geoOn.checked = true;
+        const geoWrap = el("label", "rd-inline");
+        geoWrap.append(geoOn, el("span", "rd-sub", "Build on the scene's geometry (depth from this camera)"));
+        geoWrap.title = "The world mesh and every box or model in the 3D space, as seen from the camera";
+        const voxel = el("input", "atlas-voxel");
+        voxel.type = "range"; voxel.min = "0"; voxel.max = "0.4"; voxel.step = "0.02"; voxel.value = "0";
+        voxel.title = "Loosen the geometry: 0 follows it exactly, more lets Atlas stray from rough boxes";
+        const voxelVal = el("span", "rd-sub atlas-voxel-val", "exact");
+        const geoRow = el("div", "rd-row atlas-geo");
+        geoRow.append(geoWrap, el("span", "atlas-gap"), el("span", "rd-sub", "Loosen"), voxel, voxelVal);
+        voxel.oninput = () => { voxelVal.textContent = Number(voxel.value) ? Number(voxel.value).toFixed(2) : "exact"; };
         const optRow = el("div", "rd-row atlas-opts");
         optRow.append(ctxWrap, enhWrap, el("span", "atlas-gap"), el("span", "rd-sub", "Seed"), seed);
 
@@ -151,12 +186,14 @@ export const AtlasChiselMixin = {
         const go = el("button", "rd-btn rd-go", "Chisel");
         const foot = el("div", "rd-row export-foot");
         foot.append(cancel, go);
-        box.append(head, stage, picTools, maskTools, prompt, styleRow, optRow, hint, progress, message, foot);
+        box.append(head, stage, picTools, maskTools, prompt, geoRow, styleRow, optRow, hint, progress, message, foot);
         shade.append(box);
         host.append(shade);
         this._atlasChiselDlg = shade;
 
-        const mode = () => A.chiselMode({ image: pic, mask: pic && painted });
+        /** The depth that goes with the request: the snapshot's own for a picture made here, else the camera's now. */
+        const depthNow = () => (!geoOn.checked ? null : pic && pic.snapshot ? pic.depth : geo && geo.depth);
+        const mode = () => A.chiselMode({ image: pic, mask: pic && painted, depth: depthNow() });
         const refresh = () => {
             const busy = !!this._atlasChiselBusy;
             stage.classList.toggle("has-pic", !!pic);
@@ -169,11 +206,21 @@ export const AtlasChiselMixin = {
             eraseBtn.classList.toggle("active", erase);
             styleChip.style.display = style ? "" : "none";
             styleDrop.style.display = style ? "none" : "";
-            hint.textContent = MODE_HINT[mode()] + " One billed World Labs task; the picture is 1280 × 720.";
-            go.textContent = { paint: "Paint the view", restyle: "Repaint the picture", edit: "Change the painted part" }[mode()];
-            go.disabled = busy || !prompt.value.trim();
+            const d = depthNow();
+            stage.classList.toggle("has-depth", !pic && !!d);
+            emptyBig.textContent = d ? "No picture — Atlas paints this view on the geometry shown"
+                : geoOn.checked ? "No picture, and no geometry in front of the camera" : "No picture";
+            voxel.disabled = busy || !geoOn.checked;
+            const m = mode();
+            hint.textContent = m === "none" && !geoOn.checked
+                ? "Nothing to build on: turn the geometry on, or bring a picture of this view."
+                : MODE_HINT[m] + (m === "none" ? "" : " One billed World Labs task; the picture is 1280 × 720.");
+            go.textContent = { paint: "Paint the view", restyle: "Repaint the picture", edit: "Change the painted part", none: "Chisel" }[m];
+            go.disabled = busy || !prompt.value.trim() || m === "none";
         };
         prompt.oninput = refresh;
+        geoOn.onchange = refresh;
+        drawDepth(geo && geo.depth);
 
         const setPicture = (p) => {
             pic = p;
@@ -214,7 +261,9 @@ export const AtlasChiselMixin = {
         viewBtn.onclick = () => {
             try {
                 const snap = this._atlasChiselSnapshot(item);
-                setPicture({ url: snap.url, camera: snap.camera, name: "this view", snapshot: true });
+                geo = { camera: snap.camera, depth: snap.depth };
+                drawDepth(snap.depth);
+                setPicture({ url: snap.url, camera: snap.camera, depth: snap.depth, name: "this view", snapshot: true });
                 message.classList.remove("error");
                 message.textContent = "";
             } catch (e) {
@@ -333,18 +382,20 @@ export const AtlasChiselMixin = {
             if (this._atlasChiselBusy) return;
             let camera;
             try {
-                // A picture made here carries its own camera; anything else is taken to be from the camera NOW.
-                camera = pic && pic.camera ? pic.camera : A.captureCamera(this._modelView(), item);
+                // A picture made here carries its own camera; anything else is taken to be from the camera NOW -
+                // the 16:9 frame the depth was rendered for when the geometry goes along.
+                camera = pic && pic.camera ? pic.camera
+                    : depthNow() && geo ? geo.camera : A.captureCamera(this._modelView(), item);
             } catch (e) { status((e && e.message) || String(e), true); return; }
             this._atlasChiselBusy = true;
-            for (const n of [go, prompt, viewBtn, addBtn, histBtn, noneBtn, styleBtn, ctx, enh, seed]) n.disabled = true;
+            for (const n of [go, prompt, viewBtn, addBtn, histBtn, noneBtn, styleBtn, ctx, enh, seed, geoOn, voxel]) n.disabled = true;
             box.classList.add("rendering");
             status("Getting the pictures ready…", false);
             bar.style.width = "8%";
             const fail = (e) => {
                 status(A.explainError(e), true);
                 box.classList.remove("rendering");
-                for (const n of [prompt, viewBtn, addBtn, histBtn, styleBtn, ctx, enh, seed]) n.disabled = false;
+                for (const n of [prompt, viewBtn, addBtn, histBtn, styleBtn, ctx, enh, seed, geoOn]) n.disabled = false;
                 this._atlasChiselBusy = false;
                 refresh();
             };
@@ -356,7 +407,8 @@ export const AtlasChiselMixin = {
                 }
                 const maskItem = image && painted ? await uploadPicture(await maskFile()) : null;
                 const body = A.buildChiselRequest({ item, camera, prompt: prompt.value, image, mask: maskItem, style,
-                                                    context: ctx.checked, seed: seed.value, enhance: enh.checked });
+                                                    context: ctx.checked, seed: seed.value, enhance: enh.checked,
+                                                    depth: depthNow(), voxel: voxel.value });
                 if (body.error) throw new Error(body.error);
                 status("Sending it to agentY…", false);
                 bar.style.width = "20%";

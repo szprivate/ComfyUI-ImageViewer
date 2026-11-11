@@ -165,7 +165,8 @@ test("a chisel picture made here carries the 16:9 camera of exactly that picture
 test("the chisel request: modes, refs only, and what it refuses", () => {
     const item = { src: { path: "D:/o/court/world.glb" } };
     const camera = { camera_world: Array(16).fill(0), fov: 50, aspect: 16 / 9, gated: true, label: "shot" };
-    assert.equal(A.chiselMode({}), "paint");
+    assert.equal(A.chiselMode({}), "none");
+    assert.equal(A.chiselMode({ depth: {} }), "paint");
     assert.equal(A.chiselMode({ image: {} }), "restyle");
     assert.equal(A.chiselMode({ image: {}, mask: {} }), "edit");
     const b = A.buildChiselRequest({ item, camera, prompt: " a fountain ",
@@ -175,9 +176,38 @@ test("the chisel request: modes, refs only, and what it refuses", () => {
         prompt: "a fountain", context: false, enhance_prompt: false, seed: 12,
         image: { path: "D:/in/edits/v.png" }, mask: { path: "D:/in/edits/m.png" },
         style: { filename: "s.png", type: "input", subfolder: "" } });
-    assert.equal(A.buildChiselRequest({ item, camera, prompt: "x" }).seed, -1);
+    const depth = { w: 1, h: 1, data: new Float32Array([2]) };
+    assert.equal(A.buildChiselRequest({ item, camera, prompt: "x", depth }).seed, -1);
+    assert.ok(A.buildChiselRequest({ item, camera, prompt: "x" }).error, "nothing to build on");
     assert.ok(A.buildChiselRequest({ item, camera, prompt: "" }).error);
     assert.ok(A.buildChiselRequest({ item, camera, prompt: "x", mask: { path: "m.png" } }).error);
-    assert.ok(A.buildChiselRequest({ item, camera, prompt: "x", seed: "1.5" }).error);
+    assert.ok(A.buildChiselRequest({ item, camera, prompt: "x", depth, seed: "1.5" }).error);
     assert.ok(A.buildChiselRequest({ item: null, camera, prompt: "x" }).error);
+});
+
+test("depth from the 3D space: mesh units, base64 float32, a preview", () => {
+    const mw = [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 5, 1, 0, 1];   // the world mesh drawn twice its size
+    assert.equal(A.modelScale(mw), 2);
+    assert.equal(A.modelScale(null), 1);
+    const data = new Float32Array(20).fill(0);
+    for (let i = 0; i < 16; i++) data[i] = 4 + i;                 // 16 pixels hit, 4 empty
+    const d = A.depthInMeshUnits({ w: 5, h: 4, data }, mw);
+    assert.equal(d.data[0], 2);
+    assert.equal(d.data[19], 0);
+    assert.equal(d.coverage, 0.8);
+    assert.equal(d.zmin, 2);
+    assert.equal(d.zmax, 9.5);
+    assert.equal(A.depthInMeshUnits({ w: 2, h: 2, data: new Float32Array(4) }, mw), null, "nothing solid");
+    const back = new Float32Array(new Uint8Array(Buffer.from(A.floatsToBase64(d.data), "base64")).buffer);
+    assert.deepEqual(Array.from(back), Array.from(d.data));
+    const px = A.depthPreviewPixels(d);
+    assert.equal(px[0], 255);                                     // nearest is white
+    assert.equal(px[15 * 4], 40);                                 // farthest is dark grey
+    assert.equal(px[19 * 4], 0);                                  // nothing is black
+    const item = { src: { path: "D:/o/court/world.glb" } };
+    const camera = { camera_world: Array(16).fill(0), fov: 50, aspect: 16 / 9, gated: true };
+    const b = A.buildChiselRequest({ item, camera, prompt: "a fountain", depth: d, voxel: 0.9 });
+    assert.equal(b.depth.w, 5);
+    assert.equal(b.voxel_size, 0.4);
+    assert.equal(typeof b.depth.data, "string");
 });

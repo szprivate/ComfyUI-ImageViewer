@@ -298,21 +298,74 @@ export function chiselCamera(camera) {
     return { ...cam, aspect: ATLAS_ASPECT, gated: true };
 }
 
-/** What the request will do, in the words the dialog shows. */
-export function chiselMode({ image, mask } = {}) {
+/** What the request will do, in the words the dialog shows: "none" when there is nothing to build on. */
+export function chiselMode({ image, mask, depth } = {}) {
     if (image && mask) return "edit";
     if (image) return "restyle";
-    return "paint";
+    return depth ? "paint" : "none";
+}
+
+// ── Depth from the 3D space: what Chisel builds the picture on ──
+
+/** How many scene units one unit of the world mesh is: the length of model_world's first axis. */
+export function modelScale(modelWorld) {
+    if (!Array.isArray(modelWorld) || modelWorld.length !== 16) return 1;
+    const s = Math.hypot(modelWorld[0], modelWorld[1], modelWorld[2]);
+    return Number.isFinite(s) && s > 1e-9 ? s : 1;
+}
+
+/**
+ * The view's planar depth ({w, h, data: Float32Array}, scene units, 0 = nothing) in the world mesh's units,
+ * with how much of the picture it covers. Null when nothing solid is in front of the camera.
+ */
+export function depthInMeshUnits(depth, modelWorld) {
+    if (!depth || !depth.data || !depth.w || !depth.h) return null;
+    const s = modelScale(modelWorld);
+    const out = new Float32Array(depth.data.length);
+    let hit = 0, zmin = Infinity, zmax = 0;
+    for (let i = 0; i < out.length; i++) {
+        const z = depth.data[i];
+        if (!(z > 0) || !Number.isFinite(z)) continue;
+        const m = z / s;
+        out[i] = m;
+        hit++;
+        if (m < zmin) zmin = m;
+        if (m > zmax) zmax = m;
+    }
+    if (hit < 16) return null;
+    return { w: depth.w, h: depth.h, data: out, coverage: hit / out.length, zmin, zmax };
+}
+
+/** A Float32Array as base64 (little-endian float32: what the viewer route decodes). */
+export function floatsToBase64(data) {
+    const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+}
+
+/** The depth map as grey RGBA pixels to look at: near is light, far dark, nothing black (the PNG Atlas gets, in 8 bits). */
+export function depthPreviewPixels(depth) {
+    const px = new Uint8ClampedArray(depth.w * depth.h * 4);
+    const lo = Math.log(Math.max(depth.zmin, 1e-6)), hi = Math.log(Math.max(depth.zmax, depth.zmin * 1.01, 1e-6));
+    for (let i = 0; i < depth.data.length; i++) {
+        const z = depth.data[i];
+        const v = z > 0 ? Math.round(40 + 215 * (hi - Math.log(z)) / Math.max(hi - lo, 1e-9)) : 0;
+        px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = v;
+        px[i * 4 + 3] = 255;
+    }
+    return px;
 }
 
 /** The POST body for /imageviewer/atlas_chisel, or { error }. `image` / `mask` / `style` are picture items. */
 export function buildChiselRequest({ item, camera, prompt, image = null, mask = null, style = null, context = true,
-                                     seed = "", enhance = true }) {
+                                     seed = "", enhance = true, depth = null, voxel = 0 }) {
     const p = String(prompt || "").trim();
     if (!item || !item.src || !item.src.path) return { error: "Open an Atlas world first." };
     if (!camera || !Array.isArray(camera.camera_world)) return { error: "There is no camera to chisel from." };
     if (!p) return { error: "Say what Atlas should paint or change." };
     if (mask && !image) return { error: "A mask needs the picture it was painted on." };
+    if (!image && !depth) return { error: "Chisel needs something to build on: the scene's geometry in front of the camera, or a picture." };
     const s = String(seed ?? "").trim();
     if (s && !/^\d+$/.test(s)) return { error: "The seed is a whole number (or empty for a random one)." };
     const { label, ...cam } = camera;
@@ -321,6 +374,10 @@ export function buildChiselRequest({ item, camera, prompt, image = null, mask = 
     for (const [k, v] of [["image", image], ["mask", mask], ["style", style]]) {
         const ref = v ? pictureRef(v) : null;
         if (ref) body[k] = ref;
+    }
+    if (depth) {
+        body.depth = { w: depth.w, h: depth.h, data: floatsToBase64(depth.data) };
+        body.voxel_size = Math.min(0.4, Math.max(0, Number(voxel) || 0));
     }
     return body;
 }

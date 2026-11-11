@@ -100,7 +100,7 @@ FAKE_WORLD = """() => {
   P.setViewerToggleState(true);
   const m = (e) => ({ elements: e });
   const cam = { fov: 50, aspect: 1.6, matrixWorld: m([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,1.6,4,1]), updateMatrixWorld() {} };
-  const body = { matrixWorld: m([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]), updateWorldMatrix() {} };
+  const body = { matrixWorld: m([2,0,0,0, 0,2,0,0, 0,0,2,0, 0,0,0,1]), updateWorldMatrix() {} };
   const picture = () => {
     const c = document.createElement('canvas'); c.width = 1280; c.height = 720;
     const g = c.getContext('2d');
@@ -113,9 +113,24 @@ FAKE_WORLD = """() => {
     g.fillStyle = '#2f4a22'; for (const x of [90, 520, 790, 1210]) { g.beginPath(); g.arc(x, 400, 70, 0, 7); g.fill(); }
     return c.toDataURL('image/png');
   };
+  // The same scene as depth (what renderDepth gives): the lawn running off to the horizon, two buildings, the
+  // bench, nothing in the sky. The world is drawn at twice its size (body scale 2).
+  const depth = (W, H) => {
+    const d = new Float32Array(W * H);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const Y = y * 720 / H, X = x * 1280 / W;
+      let z = Y > 432 ? 1.6 * 900 / (Y - 430) : 0;
+      if ((X > 140 && X < 470 && Y > 250 && Y < 440) || (X > 860 && X < 1160 && Y > 220 && Y < 440)) z = 30;
+      if (X > 560 && X < 730 && Y > 500 && Y < 560) z = 7;
+      d[y * W + x] = Math.min(z, 80);
+    }
+    return { w: W, h: H, data: d };
+  };
+  window.__depthCalls = 0;
   const view = { scene3d: { activeCamera: null }, _entries: new Map([['w', { item: null }]]), _walk: false,
                  activeCameraObject: () => cam, _bodyOf: () => body,
-                 beginRender: () => true, renderFrame: () => picture(), endRender() {} };
+                 beginRender: () => true, renderFrame: () => picture(),
+                 renderDepth: (w, h) => { window.__depthCalls++; return depth(w, h); }, endRender() {} };
   P.isPrevizTab = () => true;
   P.previzAtlasItem = () => ({ id: 'w', kind: 'model', src: { path: 'D:/o/court/world.glb' } });
   P._modelView = () => view;
@@ -265,6 +280,7 @@ class AtlasCreateTests(unittest.TestCase):
         go = f"{root}.querySelector('.atlas-chisel .rd-go')"
         self.assertEqual(pg.evaluate(f"() => [{go}.textContent, {go}.disabled]"), ["Paint the view", True])
         pg.evaluate(f"""() => [...{root}.querySelectorAll('.atlas-chisel .rd-btn')].find((b) => b.textContent === 'Use this view').click()""")
+        self.assertEqual(pg.evaluate("() => window.__depthCalls"), 2, "depth on opening, and again with the view")
         pg.wait_for_function(f"() => {root}.querySelector('.atlas-stage-mask').width === 1280")
         box = pg.evaluate(f"""() => {{ const r = {root}.querySelector('.atlas-stage-mask').getBoundingClientRect();
                                        return [r.left, r.top, r.width, r.height]; }}""")
@@ -298,6 +314,7 @@ class AtlasCreateTests(unittest.TestCase):
                          ("D:/o/court/world.glb", "an old stone fountain on the lawn", "chisel_view_", "chisel_mask_",
                           True, round(16 / 9, 4), True, -1))
         self.assertEqual(len(b["camera"]["camera_world"]), 16)
+        self.assertEqual((b["depth"]["w"], b["depth"]["h"], b["voxel_size"]), (1280, 720, 0))
         self.assertEqual(pg.evaluate("() => window.__shown"), [["D:/o/court/chisel/chisel_001.png", "court", "Atlas chisel"]])
         self.assertEqual(self.errors, [])
 
@@ -320,7 +337,47 @@ class AtlasCreateTests(unittest.TestCase):
         b = next(c for c in pg.evaluate("() => window.__atlasCalls") if c[1])[1]
         self.assertEqual(b["image"], {"path": "D:/in/edits/render.png"})
         self.assertNotIn("mask", b)
+        self.assertIn("depth", b, "the geometry goes along with a picture too")
         self.assertEqual(pg.evaluate("() => window.__uploads"), ["render.png"])
+        self.assertEqual(self.errors, [])
+
+    def test_chisel_paints_on_the_scene_geometry_without_a_picture(self):
+        pg = self.page()
+        pg.evaluate(CHISEL_STUB)
+        pg.evaluate(UPLOAD_STUB)
+        pg.evaluate(FAKE_WORLD)
+        root = "window.__panel.shadowRoot"
+        pg.evaluate("() => window.__panel.atlasChiselDialog()")
+        pg.wait_for_function(f"() => !!{root}.querySelector('.atlas-chisel')")
+        stage = f"{root}.querySelector('.atlas-stage')"
+        self.assertTrue(pg.evaluate(f"() => {stage}.classList.contains('has-depth')"), "the depth is shown")
+        self.assertEqual(pg.evaluate(f"() => {root}.querySelector('.atlas-stage-depth').width"), 1280)
+        go = f"{root}.querySelector('.atlas-chisel .rd-go')"
+        pg.evaluate_handle(f"() => {root}.querySelector('.atlas-chisel-prompt')").as_element().fill(
+            "a sunlit cloister courtyard with a stone fountain")
+        geo = f"{root}.querySelector('.atlas-geo input[type=checkbox]')"
+        pg.evaluate(f"() => {{ {geo}.click(); }}")
+        self.assertEqual(pg.evaluate(f"() => [{go}.disabled, {stage}.classList.contains('has-depth')]"), [True, False],
+                         "no geometry, no picture: nothing to build on")
+        pg.evaluate(f"() => {{ {geo}.click(); }}")
+        pg.evaluate(f"""() => {{ const v = {root}.querySelector('.atlas-voxel'); v.value = '0.1';
+                                 v.dispatchEvent(new Event('input')); }}""")
+        self.assertEqual(pg.evaluate(f"() => [{go}.textContent, {go}.disabled]"), ["Paint the view", False])
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.screenshot(path=os.path.join(SHOTS, "chisel-on-geometry.png"))
+        pg.evaluate(f"() => {go}.click()")
+        pg.wait_for_function(f"() => !{root}.querySelector('.atlas-chisel')", timeout=15000)
+        b = next(c for c in pg.evaluate("() => window.__atlasCalls") if c[1])[1]
+        self.assertNotIn("image", b)
+        self.assertEqual((b["depth"]["w"], b["depth"]["h"], b["voxel_size"], round(b["camera"]["aspect"], 4)),
+                         (1280, 720, 0.1, round(16 / 9, 4)))
+        z = pg.evaluate("""(s) => { const b = Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+                                     const f = new Float32Array(b.buffer); return [f[0], f[600 * 1280 + 100], f[530 * 1280 + 640]]; }""",
+                        b["depth"]["data"])
+        self.assertEqual(z[0], 0, "sky: nothing")
+        self.assertAlmostEqual(z[2], 3.5, places=4)              # the bench: 7 scene units = 3.5 world-mesh units
+        self.assertEqual(pg.evaluate("() => window.__uploads"), [], "nothing to upload")
         self.assertEqual(self.errors, [])
 
 
