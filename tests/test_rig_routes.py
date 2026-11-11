@@ -31,7 +31,11 @@ FAKE_UNIRIG = {
         import argparse, shutil
         ap = argparse.ArgumentParser(); ap.add_argument('--task'); ap.add_argument('--seed'); ap.add_argument('--input')
         ap.add_argument('--output'); ap.add_argument('--npz_dir'); ap.add_argument('--data_name')
-        a = ap.parse_args(); print('predicting', a.task, a.seed); shutil.copyfile(a.input, a.output)
+        a = ap.parse_args(); print('predicting', a.task, a.seed)
+        import os
+        if os.environ.get('FAKE_SKIN_FAIL') and 'skin' in a.task:
+            raise RuntimeError('CUDA error: no kernel image is available')
+        shutil.copyfile(a.input, a.output)
     """,
     "src/__init__.py": "",
     "src/data/__init__.py": "",
@@ -352,6 +356,19 @@ class RigRoutes(unittest.TestCase):
         self.assertIn("could not read the mesh", job["error"])
         self.assertIn("could not load the file", job["error"])
         self.assertNotIn("predicting the skeleton", " ".join(job["log"]))
+        # A step that fails says why, and the whole run is in a log file.
+        os.environ["FAKE_SKIN_FAIL"] = "1"
+        try:
+            st, job = self.run_c(lambda c: go(c, "statue.glb"))
+        finally:
+            os.environ.pop("FAKE_SKIN_FAIL", None)
+        self.assertEqual(job["state"], "error", job)
+        self.assertIn("no kernel image is available", job["error"])
+        self.assertIn("full log:", job["error"])
+        with open(job["log_file"], encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("Traceback", text)
+        self.assertIn("predicting the skeleton", text)
         # A format it does not read at all is refused up front.
         with open(os.path.join(self.dirs["input"], "thing.stl"), "wb") as fh:
             fh.write(b"solid x")

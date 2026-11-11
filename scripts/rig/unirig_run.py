@@ -15,6 +15,7 @@ imported by it, only run.
 """
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -43,9 +44,18 @@ def step(title, args, cwd, fatal=True):
     proc.stdout.close()
     code = proc.wait()
     if code != 0 and fatal:
-        print(f"!! {title} failed ({code})", flush=True)
+        print(f"!! {title} failed ({code}): {why_failed()}", flush=True)
         sys.exit(code)
     return code
+
+
+def why_failed():
+    """The last error a step printed: the exception line of its traceback, else its last lines."""
+    errs = [l.strip() for l in TAIL if re.match(r"^\s*[A-Za-z_.]*(Error|Exception)\b", l) or "Error:" in l]
+    if errs:
+        return errs[-1][:400]
+    rest = [l.strip() for l in TAIL if l.strip()]
+    return " | ".join(rest[-3:])[:400] or "no output"
 
 
 TAIL = []
@@ -155,7 +165,7 @@ def predict(title, repo, task, dev, args, voxels=False):
         code = step(label, ["run.py", f"--task={task_for(repo, task, d, vox)}", *args], repo, fatal=last)
         if code == 0:
             return
-        print(f"!! {label} failed ({code})", flush=True)
+        print(f"!! {label} failed ({code}): {why_failed()}", flush=True)
 
 
 def extract(repo, model, npz_dir, faces):
