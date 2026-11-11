@@ -167,6 +167,69 @@ class ViewerAudioTests(unittest.TestCase):
         self.assertNotIn("extractFrame", item["current"], "a sound is dragged as the file, not a frame of it")
         self.assertEqual(self.errors, [])
 
+    def test_the_bars_speaker_switches_the_viewers_sound_apart_from_the_edit_page(self):
+        pg = self.page()
+        pg.evaluate("() => localStorage.removeItem('imageviewer.viewer.viewerAudio')")
+        pg.evaluate(SHOW, ["D:/out/tone.wav", "tone.wav"])
+        pg.wait_for_function("() => window.__panel.videoBase.duration > 0", timeout=15000)
+        order = pg.evaluate("""() => { const b = window.__panel.shadowRoot.getElementById('audio-btn');
+          return [b.previousElementSibling.id, b.id, b.nextElementSibling.id, b.nextElementSibling.nextElementSibling.id]; }""")
+        self.assertEqual(order, ["overlays-btn", "audio-btn", "audio-more-btn", "fullscreen-btn"],
+                         "the speaker and its caret stand right of Toggle Overlays")
+        st = lambda: pg.evaluate("""() => { const P = window.__panel, b = P.audioBtn;
+          return { muted: P.videoBase.muted, icon: b.dataset.icon, on: b.classList.contains('on'),
+                   kept: localStorage.getItem('imageviewer.viewer.viewerAudio'), edit: P._editAudio().play }; }""")
+        s = st()
+        self.assertEqual((s["muted"], s["icon"], s["on"]), (False, "volume", True), "heard by default")
+        pg.evaluate("() => window.__panel.audioBtn.click()")
+        s = st()
+        self.assertEqual((s["muted"], s["icon"], s["on"]), (True, "volumeOff", False), "the speaker mutes the viewer")
+        self.assertIn('"play":false', s["kept"])
+        self.assertTrue(s["edit"], "the Edit page's own switch is not touched")
+        # It stays off for the next film shown, and while it plays.
+        pg.evaluate(SHOW, ["D:/out/tone.wav", "tone2.wav"])
+        pg.evaluate("() => window.__panel.play()")
+        self.assertTrue(pg.evaluate("() => window.__panel.videoBase.muted"))
+        pg.evaluate("() => window.__panel.stop()")
+        # The Edit page's switch does not reach the viewer either.
+        pg.evaluate("() => { window.__panel.editAudioToggle('play', true); window.__panel.editAudioToggle('play', false); }")
+        self.assertTrue(pg.evaluate("() => window.__panel.videoBase.muted"))
+        pg.evaluate("() => window.__panel.editAudioToggle('play', true)")
+        # The caret's menu: playback and scrubbing, as the Edit page's.
+        pg.evaluate("() => window.__panel.audioMoreBtn.click()")
+        rows = pg.evaluate("""() => [...window.__panel.shadowRoot.querySelectorAll('.previz-menu .previz-menu-item')]
+          .map(r => r.textContent.trim())""")
+        self.assertTrue(any("Audio playback" in r for r in rows) and any("Audio scrubbing" in r for r in rows), rows)
+        pg.evaluate("() => window.__panel.audioBtn.click()")
+        self.assertFalse(pg.evaluate("() => window.__panel.videoBase.muted"), "on again")
+        self.assertEqual(self.errors, [])
+
+    def test_scrubbing_the_timeline_plays_grains_of_the_sound(self):
+        pg = self.page()
+        pg.evaluate("() => localStorage.removeItem('imageviewer.viewer.viewerAudio')")
+        pg.evaluate(SHOW, ["D:/out/tone.wav", "tone.wav"])
+        pg.wait_for_function("() => window.__panel.videoBase.duration > 0", timeout=15000)
+        # Opening it is silent; moves are heard once its sound is read.
+        self.assertEqual(pg.evaluate("() => (window.__panel._eaGrains || []).length"), 0)
+        got = pg.evaluate("""async () => { const P = window.__panel;
+          for (let i = 0; i < 80; i++) {
+            P.setFrame(10 + (i % 40));
+            if ((P._eaGrains || []).length) break;
+            await new Promise(r => setTimeout(r, 60));
+          }
+          return (P._eaGrains || []).map(g => ({ files: g.files, t: g.t, rate: g.rate })); }""")
+        self.assertTrue(got, "a grain was played")
+        self.assertEqual(got[-1]["files"], ["D:/out/tone.wav"])
+        self.assertGreater(got[-1]["t"], 0.3)
+        # Scrubbing off: no more grains.
+        pg.evaluate("() => window.__panel.viewerAudioToggle('scrub', false)")
+        n = pg.evaluate("""async () => { const P = window.__panel, n = P._eaGrains.length;
+          for (let i = 0; i < 10; i++) { P.setFrame(5 + i * 3); await new Promise(r => setTimeout(r, 60)); }
+          return P._eaGrains.length - n; }""")
+        self.assertEqual(n, 0)
+        self.assertFalse(pg.evaluate("() => window.__panel.videoBase.muted"), "playback stays on")
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

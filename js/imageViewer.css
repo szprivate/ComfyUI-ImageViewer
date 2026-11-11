@@ -32,6 +32,13 @@
 
 #overlays-btn.active, #params-btn.active, #range-btn.active, #history-toggle-btn.active { color: #f60; }
 #overlays-btn.active > svg, #params-btn.active > svg, #range-btn.active > svg, #history-toggle-btn.active > svg { stroke: #f60; }
+/* The viewer's sound switch (imageViewer_viewerAudio.js): the Edit page's speaker and caret, in the bar's size. */
+#audio-btn:not(.on) { color: #ff8a7a; }
+#audio-btn > svg { width: 18px; height: 18px; display: block; pointer-events: none; }
+#audio-btn { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.transport > #audio-more-btn { height: 32px; min-width: 0; width: 14px; padding: 0; margin-left: -4px; font-size: 9px; color: #999;
+    border-left-color: #333; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+#audio-more-btn:hover { color: #eee; }
 #refresh { color: #eee; }
 #refresh > svg { stroke: #eee; }
 #refresh.running { animation: spin 1s linear infinite; }
@@ -1446,7 +1453,7 @@ textarea.param-input {
    moved out from under the code that made it. */
 .transport > .bar-group { order: 5; }
 .transport > .bar-spacer { order: 6; flex: 1 1 8px; min-width: 8px; }
-.transport > .layout-picker-wrap, .transport > #layout-btn, .transport > #overlays-btn, .transport > #fullscreen-btn, .transport > #pagedock-btn,
+.transport > .layout-picker-wrap, .transport > #layout-btn, .transport > #overlays-btn, .transport > #audio-btn, .transport > #audio-more-btn, .transport > #fullscreen-btn, .transport > #pagedock-btn,
 .transport > #browser-toggle-btn, .transport > #history-toggle-btn, .transport > #refresh, .transport > #clear-cache-btn { order: 7; }
 .bar-group.active { color: #f60; box-shadow: inset 0 -2px 0 #f60; }
 .bar-group.has-cut:not(.active) { color: #ffcf6f; }

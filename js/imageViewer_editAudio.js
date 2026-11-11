@@ -211,9 +211,14 @@ export const EditAudioMixin = {
         if (!plan || plan.wait) return;
         const ready = sources.filter((s) => this._eaHave(s.file));
         if (!ready.length) return;
+        this._eaPlayGrain(ctx, plan, ready, cur.t);
+    },
+
+    /** One grain of `ready` sources read from `t` (seconds), played as `plan` says. Shared with the viewer's scrubbing. */
+    _eaPlayGrain(ctx, plan, ready, t) {
         const sr = SCRUB.sr;
         const fade = Math.round(SCRUB.fade * plan.rate * sr);
-        const data = fillGrain(plan.samples, ready, cur.t, plan.dir, sr, (f) => this._eaHave(f), fade);
+        const data = fillGrain(plan.samples, ready, t, plan.dir, sr, (f) => this._eaHave(f), fade);
         try {
             const buf = ctx.createBuffer(1, data.length, sr);
             if (buf.copyToChannel) buf.copyToChannel(data, 0); else buf.getChannelData(0).set(data);
@@ -226,7 +231,7 @@ export const EditAudioMixin = {
             (this._eaNodes ||= []).push(node);
             if (this._eaNodes.length > 8) this._eaNodes.shift();
             // What was played, for the tests and for anyone looking: the last few grains.
-            (this._eaGrains ||= []).push({ t: cur.t, rate: plan.rate, dir: plan.dir, start: plan.start, samples: data.length,
+            (this._eaGrains ||= []).push({ t, rate: plan.rate, dir: plan.dir, start: plan.start, samples: data.length,
                                            files: ready.map((s) => s.file), gains: ready.map((s) => s.gain) });
             if (this._eaGrains.length > 64) this._eaGrains.shift();
         } catch (_) {}
@@ -302,7 +307,9 @@ export const EditAudioMixin = {
 
     /** The file's bytes (a film's too: its sound track is what is decoded). Null where it cannot be read. */
     async _eaFetch(file) {
-        const url = this.buildImgUrl({ path: file, external: true }, { noColor: true });
+        // A viewer frame registered by the viewer's scrubbing (_eaRefs) is read as the viewer reads it.
+        const ref = this._eaRefs && this._eaRefs.get(file);
+        const url = this.buildImgUrl(ref || { path: file, external: true }, { noColor: true });
         const res = await fetch(url);
         if (!res.ok) return null;
         const size = Number(res.headers.get("content-length") || 0);
@@ -319,7 +326,13 @@ export const EditAudioMixin = {
         try {
             // Imported here, not at the top: the pure part of this file is tested under node, with no ComfyUI.
             const { api } = await import("../../scripts/api.js");
-            res = await api.fetchApi("/imageviewer/timeline_pcm?path=" + encodeURIComponent(file));
+            const ref = this._eaRefs && this._eaRefs.get(file);
+            if (ref && ref.url) return undefined;               // a dropped file's blob: only the browser has it
+            const q = !ref ? "path=" + encodeURIComponent(file)
+                : ref.path ? "path=" + encodeURIComponent(ref.path)
+                : "filename=" + encodeURIComponent(ref.filename || "") + "&type=" + encodeURIComponent(ref.type || "output")
+                  + (ref.subfolder ? "&subfolder=" + encodeURIComponent(ref.subfolder) : "");
+            res = await api.fetchApi("/imageviewer/timeline_pcm?" + q);
         } catch (_) { return undefined; }
         if (!res) return undefined;
         if (res.status === 204) return null;
