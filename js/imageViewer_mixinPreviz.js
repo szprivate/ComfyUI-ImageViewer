@@ -693,7 +693,10 @@ export const PrevizMixin = {
         const frame = Math.round(this.currentFrame || 0);
         for (const item of items) {
             const props = prop ? [prop] : (item.kind === "camera"
-                ? ["position", "rotation", "fov"] : ["position", "rotation", "scale"]);
+                ? ["position", "rotation", "fov"]
+                : item.kind === "control"
+                    ? (item.control && item.control.type === "ik" ? ["position", "rotation", "ikfk"] : ["position", "rotation"])
+                    : ["position", "rotation", "scale"]);
             for (const p of props) {
                 S.setKeyframe(item, p, frame, S.valueAt(item, p, frame), this._previzEase || "smooth");
             }
@@ -1053,6 +1056,11 @@ export const PrevizMixin = {
         outBtn.textContent = "\u2193";
         this._setIcon(outBtn, "icon-save");
         outBtn.onclick = () => this._previzToggleExportMenu(outBtn);
+        // Characters: controls, IK / FK, AI motion, FBX / Alembic (imageViewer_previzRig.js).
+        const rigBtn = el("button", "previz-btn previz-rig", "Rig");
+        rigBtn.title = "Rig a character: animation controls, IK / FK, AI in-betweens and text-to-motion, "
+                     + "FBX and Alembic export";
+        rigBtn.onclick = () => this._previzToggleRigMenu(rigBtn);
         this._previzBindDrops(host);
         const undoBtn = el("button", "previz-btn previz-step");
         undoBtn.textContent = "↩";              // stands in if the skin is missing
@@ -1102,7 +1110,7 @@ export const PrevizMixin = {
                              + "only the part of a picture of it you paint over (drop pictures from Explorer or the History)";
         atlasChiselBtn.style.display = "none";
         atlasChiselBtn.onclick = () => this.atlasChiselDialog();
-        actions.append(newBtn, addBtn, editBtn, outBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn, atlasMoveBtn,
+        actions.append(newBtn, addBtn, editBtn, outBtn, rigBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn, atlasMoveBtn,
                        atlasChiselBtn, atlasNewBtn);
 
         const list = el("div", "previz-list");
@@ -1128,7 +1136,7 @@ export const PrevizMixin = {
         this._previzCloseAddMenu();
         host.querySelectorAll(":scope > .previz-body").forEach((n) => n.remove());
         host.appendChild(root);
-        this._previzUI = { root, list, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn, atlasMoveBtn, atlasChiselBtn };
+        this._previzUI = { root, list, rigBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn, atlasMoveBtn, atlasChiselBtn };
         return this._previzUI;
     },
 
@@ -1601,6 +1609,7 @@ export const PrevizMixin = {
         const mark = item.kind === "camera" ? "\ud83c\udfa5"
             : item.kind === "group" ? "\ud83d\udcc1"
             : item.kind === "imageplane" ? "\ud83d\uddbc"
+            : item.kind === "control" ? "\u25ce"
             : "\ud83e\uddca";
         name.textContent = `${mark} ${item.name}`;
         name.title = item.kind === "model" && item.src ? (item.src.path || item.src.filename || "") : item.name;
@@ -1761,6 +1770,8 @@ export const PrevizMixin = {
             .multiply(new THREE.Matrix4().makeTranslation(-pv[0], -pv[1], -pv[2]));
         const off = S.offsetOf(item);
         if (off) m.multiply(new THREE.Matrix4().fromArray(off));
+        // A rig control's rest sits above its channels.
+        if (Array.isArray(item.rest)) m.premultiply(new THREE.Matrix4().fromArray(item.rest));
         return m;
     },
 
@@ -1785,6 +1796,7 @@ export const PrevizMixin = {
         const { THREE } = this._modelView().libs;
         const pv = S.evaluate(item, frame).pivot || [0, 0, 0];
         const k = local.clone();
+        if (Array.isArray(item.rest)) k.premultiply(new THREE.Matrix4().fromArray(item.rest).invert());
         const off = S.offsetOf(item);
         if (off) k.multiply(new THREE.Matrix4().fromArray(off).invert());
         k.multiply(new THREE.Matrix4().makeTranslation(pv[0], pv[1], pv[2]));

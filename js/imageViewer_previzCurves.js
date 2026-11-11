@@ -56,6 +56,7 @@ const CHANNELS = [
     { key: "pivot.1", prop: "pivot", axis: 1, label: "pivot.y", color: "#a5c98a" },
     { key: "pivot.2", prop: "pivot", axis: 2, label: "pivot.z", color: "#8aa8c9" },
     { key: "fov", prop: "fov", axis: 0, label: "fov", color: "#ffd24d" },
+    { key: "ikfk", prop: "ikfk", axis: 0, label: "ikBlend", color: "#4dff9a" },
 ];
 
 const EULER_TIP = "Euler filter — removes 180° flips between rotation keys so turns interpolate " +
@@ -90,8 +91,11 @@ export const PrevizCurvesMixin = {
 
     /** Which channels an item can show at all: no field of view on a box. */
     _previzChannelsFor(item) {
+        const ik = item.kind === "control" && item.control && item.control.type === "ik";
         return CHANNELS.filter((c) => (c.prop !== "fov" || item.kind === "camera")
-                                   && (c.prop !== "pivot" || item.kind !== "camera"));
+                                   && (c.prop !== "pivot" || (item.kind !== "camera" && item.kind !== "control"))
+                                   && (c.prop !== "scale" || item.kind !== "control")
+                                   && (c.prop !== "ikfk" || ik));
     },
 
     /** The objects the editor is showing: everything selected, in scene order. */

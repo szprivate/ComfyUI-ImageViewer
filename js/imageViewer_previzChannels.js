@@ -54,6 +54,8 @@ const fmt = (v) => {
 /** The channels an item of this kind shows, in the order Maya lists them. */
 function transformChannels(item) {
     if (item.kind === "camera") return TRANSFORM.slice(0, 6);
+    // A rig control moves and turns its bone; it never scales it.
+    if (item.kind === "control") return TRANSFORM.slice(0, 6);
     return [...TRANSFORM, ...PIVOT];
 }
 
@@ -222,6 +224,10 @@ export const PrevizChannelsMixin = {
             row.append(tag, sel);
             t.append(row);
             ui.rows.set("preset", { row, input: sel, kind: "preset" });
+        } else if (item.kind === "control" && item.control && item.control.type === "ik") {
+            // 1 follows this IK control, 0 the limb's FK controls; keyable.
+            const t = shape(`${item.name}Shape`);
+            numberRow("ikfk", "ikfk", null, "IK Blend", 0.1, t);
         } else if (item.kind === "imageplane") {
             const t = shape(`${item.name}Shape`);
             const row = doc.createElement("div");
@@ -359,6 +365,11 @@ export const PrevizChannelsMixin = {
                 const res = S.cameraResolution(item);
                 res[comp] = Math.max(1, Math.round(v));
                 item.resolution = res;
+                continue;
+            }
+            if (prop === "ikfk") {
+                if (!(item.kind === "control" && item.control && item.control.type === "ik")) continue;
+                this._cbWrite(item, "ikfk", Math.min(1, Math.max(0, v)), frame);
                 continue;
             }
             if (prop === "fov") {
@@ -516,6 +527,8 @@ export const PrevizChannelsMixin = {
         for (const item of items) {
             for (const p of props) {
                 if (p === "fov" && item.kind !== "camera") continue;
+                if (p === "ikfk" && !(item.kind === "control" && item.control && item.control.type === "ik")) continue;
+                if (item.kind === "control" && (p === "scale" || p === "pivot")) continue;
                 if (item.kind === "camera" && (p === "scale" || p === "pivot")) continue;
                 S.setKeyframe(item, p, frame, S.valueAt(item, p, frame), this._previzEase || "smooth");
             }

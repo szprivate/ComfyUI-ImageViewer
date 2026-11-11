@@ -50,6 +50,8 @@ import { PrevizAtlasMixin } from "./imageViewer_previzAtlas.js";
 import { AtlasCreateMixin } from "./imageViewer_atlasCreate.js";
 import { AtlasChiselMixin } from "./imageViewer_atlasChisel.js";
 import { PrevizUndoMixin } from "./imageViewer_previzUndo.js";
+import { PrevizRigMixin } from "./imageViewer_previzRig.js";
+import { PrevizRigToolsMixin } from "./imageViewer_previzRigTools.js";
 import { EditTimelineMixin } from "./imageViewer_editTimeline.js";
 import { EditPlayMixin } from "./imageViewer_editPlay.js";
 import { EditPanelsMixin } from "./imageViewer_editPanels.js";
@@ -1589,6 +1591,8 @@ Object.assign(
     AtlasCreateMixin,
     AtlasChiselMixin,
     PrevizUndoMixin,
+    PrevizRigMixin,
+    PrevizRigToolsMixin,
     EditTimelineMixin,
     EditPlayMixin,
     EditPanelsMixin,
@@ -1781,6 +1785,12 @@ app.registerExtension({
         api.addEventListener("imageviewer.world.calibrate", (e) => {
             const name = e.detail && e.detail.name;
             if (name && globalViewerPanel.previzMatchWorld) globalViewerPanel.previzMatchWorld(name);
+        });
+
+        // An agent's request for a character (rig_routes.py): rig, animate, clean, export it, and report back.
+        api.addEventListener("imageviewer.rig.agent", (e) => {
+            try { globalViewerPanel?.previzRigAgentRun?.(e.detail); }
+            catch (err) { console.warn("imageViewer: rig request not run", err); }
         });
 
         // A previz shot an agent asked for (previz_shot.py): render it and report back.

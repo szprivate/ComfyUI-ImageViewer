@@ -114,6 +114,7 @@ KINDS = {
     "edit": "edits",                               # a cut: its timeline and its film
     "paint": "paint",                              # a picture in layers (.ora) and what is exported of it
     "comp": "comps",                               # a comp (.comp.json) and what is rendered of it
+    "character": "characters",                     # a rigged character exported from the 3D space (FBX, Alembic)
 }
 FALLBACK_ROOT = "imageviewer"
 _VERSION = re.compile(r"v(\d{3,})$", re.I)

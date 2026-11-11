@@ -21,6 +21,7 @@ import { evaluate, cameraResolution, offsetOf, planeSettings } from "./imageView
 import { WorldViewMixin } from "./imageViewer_world3d.js";
 import { bustUrl } from "./imageViewer_atlasRender.js";
 import { WorldMatchMixin } from "./imageViewer_worldMatch.js";
+import { Rig3DMixin } from "./imageViewer_rig3d.js";
 
 let _libsPromise = null;
 
@@ -624,9 +625,19 @@ export class Model3DView {
         ray.params.Line.threshold = 0.05 * (this.activeCameraObject().position.length() || 1);
         const hits = ray.intersectObjects(roots, true);
         if (!hits.length) return null;
-        let node = hits[0].object;
-        while (node && !node.userData.imageViewerItemId) node = node.parent;
-        return node ? node.userData.imageViewerItemId : null;
+        const idOf = (hit) => {
+            let node = hit.object;
+            while (node && !node.userData.imageViewerItemId) node = node.parent;
+            return node ? node.userData.imageViewerItemId : null;
+        };
+        // Rig controls are drawn over the character, so they win the click
+        // even when the body is nearer.
+        for (const hit of hits) {
+            const id = idOf(hit);
+            const e = id && this._entries.get(id);
+            if (e && e.isControl && e.root.visible) return id;
+        }
+        return idOf(hits[0]);
     }
 
     _disposeRenderer() {
@@ -1075,6 +1086,11 @@ export class Model3DView {
                     this._worldDispose(entry);
                     pending.push(this._tracked(this._worldBuild(entry, item)));
                 }
+            } else if (item.kind === "control") {
+                if (entry.key !== JSON.stringify(item.control && item.control.shape)) {
+                    this._disposeEntry(entry, false);
+                    this._rigBuildControl(entry, item);
+                }
             } else if (item.kind === "primitive") {
                 const type = (item.primitive && item.primitive.type) || "box";
                 if (entry.key !== type) {
@@ -1172,7 +1188,9 @@ export class Model3DView {
         const wanted = (item.kind !== "camera" && item.parent && this._entries.get(item.parent))
             ? this._bodyOf(this._entries.get(item.parent))
             : this.scene;
-        if (entry.root.parent !== wanted) wanted.add(entry.root);
+        // A rig control hangs under its rest node (imageViewer_rig3d.js).
+        const node = entry.top || entry.root;
+        if (node.parent !== wanted) wanted.add(node);
     }
 
     /** Place every entry — after an add, or when a parent has changed. */
@@ -1216,6 +1234,16 @@ export class Model3DView {
         root.userData.imageViewerItemId = item.id;
         this.scene.add(root);
         const entry = { item, root, key: "", mixer: null, clips: [], camera: null, helper: null, stats: null };
+        if (item.kind === "control") {
+            // Its rest matrix sits ABOVE its channels: the gizmo moves the root
+            // inside this node, so the channels it writes read zero at rest.
+            entry.top = new THREE.Group();
+            entry.top.name = "rest";
+            entry.top.matrixAutoUpdate = false;
+            if (Array.isArray(item.rest)) entry.top.matrix.fromArray(item.rest);
+            this.scene.add(entry.top);
+            entry.top.add(root);
+        }
         // A camera IS its root, so it has no body to offset; nothing hangs
         // inside one anyway.
         if (item.kind !== "camera") {
@@ -1247,6 +1275,11 @@ export class Model3DView {
 
         if (item.kind === "primitive") {
             this._buildPrimitive(entry, item);
+            return entry;
+        }
+
+        if (item.kind === "control") {
+            this._rigBuildControl(entry, item);
             return entry;
         }
 
@@ -1436,6 +1469,8 @@ export class Model3DView {
             this._bodyOf(entry).add(loaded.object);
             entry.object = loaded.object;
             entry.stats = this._statsOf(loaded.object, format);
+            // Its bones as the file has them: the rest pose a rig is built on.
+            this._rigCapture(entry);
             loaded.object.traverse((c) => { if (c.isMesh) this._originals.set(c, c.material); });
             if (loaded.animations && loaded.animations.length) {
                 const { THREE } = this.libs;
@@ -1476,8 +1511,9 @@ export class Model3DView {
         if (entry.helper) { this.scene.remove(entry.helper); entry.helper.dispose(); entry.helper = null; }
         if (this.gizmo && this.gizmo.object === entry.root) this.gizmo.detach();
         // It may hang under a group rather than at the top of the scene.
-        if (entry.root.parent) entry.root.parent.remove(entry.root);
-        else this.scene.remove(entry.root);
+        const top = entry.top || entry.root;
+        if (top.parent) top.parent.remove(top);
+        else this.scene.remove(top);
     }
 
     _aspect() {
@@ -1503,6 +1539,10 @@ export class Model3DView {
             // ends up, whatever R and S do — and the body takes it back off.
             const pv = at.pivot || [0, 0, 0];
             if (entry.body) entry.body.position.set(-pv[0], -pv[1], -pv[2]);
+            if (entry.top && Array.isArray(item.rest)) {
+                entry.top.matrix.fromArray(item.rest);
+                entry.top.matrixWorldNeedsUpdate = true;
+            }
             if (entry.inner) {
                 const off = offsetOf(item);
                 if (off) entry.inner.matrix.fromArray(off);
@@ -1538,12 +1578,17 @@ export class Model3DView {
             }
             // Clips are scrubbed, not played, so a frame always looks the same
             // whether it was reached by playing or by dragging the timeline.
-            if (entry.mixer) entry.mixer.setTime(Math.max(0, frame / fps));
+            // A rigged character is posed by its controls instead.
+            if (entry.mixer && !(entry.bones && entry.bones.size && this._rigged(item.id))) {
+                entry.mixer.setTime(Math.max(0, frame / fps));
+            }
             // A cache holds a different shape per frame, so it is re-read.
             if (this._isCache(item) && entry.cacheFrame !== Math.round(frame)) {
                 this._queueCacheReload(entry, item);
             }
         }
+        // Characters with controls: pose their bones now that every control is placed.
+        this._rigApplyAll();
         // The gizmo is a controller, not an object; its handles live in the
         // helper, which has to be told the item moved under it.
         if (this.gizmoHelper && this.gizmo && this.gizmo.object) this.gizmoHelper.updateMatrixWorld();
@@ -1825,6 +1870,7 @@ export class Model3DView {
     setAlsoSelected(ids) {
         const wanted = new Set(ids || []);
         wanted.delete(this.selected);
+        this._alsoIds = wanted;
         if (!this.libs) { this._alsoWanted = wanted; return; }
         const { THREE } = this.libs;
         if (!this._alsoBoxes) this._alsoBoxes = new Map();
@@ -1836,13 +1882,16 @@ export class Model3DView {
         }
         for (const id of wanted) {
             const entry = this._entries.get(id);
-            if (!entry || this._alsoBoxes.has(id)) continue;
+            // A control lights up instead (_rigSyncHighlight): a box round
+            // every one of forty selected controls would hide the character.
+            if (!entry || entry.isControl || this._alsoBoxes.has(id)) continue;
             const box = new THREE.BoxHelper(entry.root, 0xff8a00);
             box.userData.imageViewerItemId = id;
             this.scene.add(box);
             this._alsoBoxes.set(id, box);
         }
         this._refreshAlsoBoxes();
+        this._rigSyncHighlight();
         this.requestRender();
     }
 
@@ -1936,6 +1985,7 @@ export class Model3DView {
         for (const e of this._entries.values()) {
             if (e.axes) e.axes.visible = (e === entry);
         }
+        this._rigSyncHighlight();
         // No scene, or nothing selected: no gizmo to show.
         if (!entry || !this.scene3d) {
             if (this.gizmo) this.gizmo.detach();
@@ -2130,6 +2180,8 @@ export class Model3DView {
                 hide(entry.axes);
             }
         }
+        // Rig controls are for the animator, never in the picture.
+        for (const entry of this._entries.values()) if (entry.isControl) hide(entry.top || entry.root);
     }
 
     /**
@@ -2323,3 +2375,4 @@ export class Model3DView {
 // Object.assign, because the mixin has a getter (`walking`).
 Object.defineProperties(Model3DView.prototype, Object.getOwnPropertyDescriptors(WorldViewMixin));
 Object.assign(Model3DView.prototype, WorldMatchMixin);
+Object.assign(Model3DView.prototype, Rig3DMixin);

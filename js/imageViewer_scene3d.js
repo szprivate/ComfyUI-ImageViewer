@@ -62,6 +62,7 @@
 // objects the same way and lets the engine compose the matrices.
 
 import { WORLD_KINDS, readWorldItem, referenceSettings, walkSettings, worldInfo } from "./imageViewer_worldData.js";
+import { readRigFields } from "./imageViewer_rigData.js";
 
 export const SCENE_VERSION = 1;
 export const DEFAULT_RESOLUTION = [1920, 1080];
@@ -146,7 +147,11 @@ export function setNewSceneDefaults({ fps, length, resolution } = {}) {
     NEW_SCENE.resolution = Array.isArray(resolution) && resolution.length === 2 && resolution.every((v) => v > 0)
         ? resolution.map((v) => Math.round(v)) : DEFAULT_RESOLUTION.slice();
 }
-export const TRACKS = ["position", "rotation", "scale", "pivot", "fov"];
+export const TRACKS = ["position", "rotation", "scale", "pivot", "fov", "ikfk"];
+// Channels that hold one number rather than [x, y, z]: a camera's field of
+// view, and an IK control's IK/FK blend (imageViewer_rigData.js).
+export const SCALAR_TRACKS = ["fov", "ikfk"];
+const _isScalar = (prop) => SCALAR_TRACKS.includes(prop);
 
 // Blocking shapes the viewer can make on its own — no file, no loader. Each is
 // built at unit size and placed by its transform, so the gizmo's scale handles
@@ -611,6 +616,7 @@ export function valueAt(item, prop, frame) {
     // A scene written before pivots existed simply has none, which is the
     // same thing as one at the origin.
     const stat = prop === "fov" ? (item.fov ?? 35)
+               : prop === "ikfk" ? (item.ikfk ?? 1)
                : prop === "pivot" ? _clone(item.pivot || [0, 0, 0])
                : _clone(item[prop]);
     if (keys.length === 0) return stat;
@@ -645,6 +651,8 @@ export function evaluate(item, frame) {
         scale: valueAt(item, "scale", frame),
         pivot: valueAt(item, "pivot", frame),
         fov: item.kind === "camera" ? valueAt(item, "fov", frame) : undefined,
+        ikfk: item.kind === "control" && item.control && item.control.type === "ik"
+            ? valueAt(item, "ikfk", frame) : undefined,
     };
 }
 
@@ -690,17 +698,20 @@ export function parseScene(raw) {
         const isPrim = raw.kind === "primitive";
         const isGroup = raw.kind === "group";
         const isPlane = raw.kind === "imageplane";
+        // A character rig's control (imageViewer_rigData.js): a transform
+        // with a rest matrix above its channels and the bone it drives.
+        const isCtrl = raw.kind === "control";
         // Worlds (imageViewer_worldData.js): an environment, a terrain, a
         // scatter or a depth mesh carries its own settings block and no src.
         const isWorld = WORLD_KINDS.includes(raw.kind);
         const item = {
             id: typeof raw.id === "string" && raw.id ? raw.id
-                : newId(isCam ? "c" : isPrim ? "p" : isGroup ? "g" : isPlane ? "ip" : "m"),
+                : newId(isCam ? "c" : isPrim ? "p" : isGroup ? "g" : isPlane ? "ip" : isCtrl ? "k" : "m"),
             kind: isCam ? "camera" : isPrim ? "primitive" : isGroup ? "group"
-                : isPlane ? "imageplane" : isWorld ? raw.kind : "model",
+                : isPlane ? "imageplane" : isWorld ? raw.kind : isCtrl ? "control" : "model",
             name: typeof raw.name === "string" && raw.name ? raw.name
                 : (isCam ? "Camera" : isPrim ? "Shape" : isGroup ? "Group"
-                   : isPlane ? "Image plane" : isWorld ? raw.kind : "model"),
+                   : isPlane ? "Image plane" : isWorld ? raw.kind : isCtrl ? "control" : "model"),
             parent: typeof raw.parent === "string" && raw.parent ? raw.parent : null,
             position: vec(raw.position, [0, 0, 0]),
             rotation: vec(raw.rotation, [0, 0, 0]),
@@ -721,7 +732,10 @@ export function parseScene(raw) {
         if (isCam) {
             // (the camera's fields are read above)
         } else if (isGroup) {
-            // A group is its transform. Nothing else to read.
+            // A group is its transform - and, for a rig's group, which character it rigs.
+            readRigFields(item, raw);
+        } else if (isCtrl) {
+            readRigFields(item, raw);
         } else if (isWorld) {
             readWorldItem(item, raw);
         } else if (isPrim) {
@@ -744,16 +758,18 @@ export function parseScene(raw) {
             const keys = [];
             for (const k of list) {
                 if (!k || !Number.isFinite(Number(k.f))) continue;
-                const v = prop === "fov" ? num(k.v, item.fov ?? 35) : vec(k.v, item[prop]);
+                const v = prop === "fov" ? num(k.v, item.fov ?? 35)
+                    : prop === "ikfk" ? Math.max(0, Math.min(1, num(k.v, item.ikfk ?? 1)))
+                    : vec(k.v, item[prop]);
                 const key = { f: Math.round(Number(k.f)), v,
                               ease: k.ease === "linear" || k.ease === "hold" ? k.ease : "smooth" };
                 // Hand-set tangents, in the same shape as the value. Anything
                 // else is left off, and the ease speaks for the key again.
-                const zero = prop === "fov" ? 0 : [0, 0, 0];
+                const zero = _isScalar(prop) ? 0 : [0, 0, 0];
                 for (const side of ["ti", "to"]) {
                     if (k[side] === undefined) continue;
-                    const t = prop === "fov" ? num(k[side], undefined) : vec(k[side], zero);
-                    if (prop === "fov" ? Number.isFinite(t) : Array.isArray(t)) key[side] = t;
+                    const t = _isScalar(prop) ? num(k[side], undefined) : vec(k[side], zero);
+                    if (_isScalar(prop) ? Number.isFinite(t) : Array.isArray(t)) key[side] = t;
                 }
                 keys.push(key);
             }
@@ -765,7 +781,7 @@ export function parseScene(raw) {
         // A model (or an image plane) with no file left to point at is
         // dropped: it would show as an invisible row the user can't fix. A
         // shape carries its own geometry, so it has nothing to lose.
-        if (!isCam && !isPrim && !isGroup && !isWorld && !item.src) continue;
+        if (!isCam && !isPrim && !isGroup && !isWorld && !isCtrl && !item.src) continue;
         items.push(item);
     }
 
