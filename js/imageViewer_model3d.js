@@ -26,6 +26,7 @@ import { WorldViewMixin } from "./imageViewer_world3d.js";
 import { bustUrl } from "./imageViewer_atlasRender.js";
 import { WorldMatchMixin } from "./imageViewer_worldMatch.js";
 import { Rig3DMixin } from "./imageViewer_rig3d.js";
+import { Rig3DExtrasMixin } from "./imageViewer_rig3dExtras.js";
 import { View3DToolsMixin } from "./imageViewer_view3dTools.js";
 import { displayStates, isPickable } from "./imageViewer_sceneLayers.js";
 import { constrainedLocals } from "./imageViewer_constraints.js";
@@ -1611,7 +1612,9 @@ export class Model3DView {
         for (const item of this.scene3d.items || []) {
             const entry = this._entries.get(item.id);
             if (!entry) continue;
-            const at = evaluateIn(this.scene3d, item, frame);
+            // Set-driven keys add to the channels, and a model's blendshapes go on (imageViewer_rig3dExtras.js).
+            const base = evaluateIn(this.scene3d, item, frame);
+            const at = this._rigDriven ? this._rigDriven(item, base, frame, entry) : base;
             entry.at = at;
             // The root sits at position+pivot — which IS where the pivot point
             // ends up, whatever R and S do — and the body takes it back off.
@@ -1672,7 +1675,8 @@ export class Model3DView {
         // Constraints (imageViewer_constraints.js) move their items now that
         // everything they follow has its own channels in place.
         this._applyConstraints(frame);
-        // Characters with controls: pose their bones now that every control is placed.
+        // Controls in another space follow it; then characters with controls: pose their bones.
+        if (this._rigApplySpaces) this._rigApplySpaces(frame);
         this._rigApplyAll();
         // The gizmo is a controller, not an object; its handles live in the
         // helper, which has to be told the item moved under it.
@@ -2146,6 +2150,8 @@ export class Model3DView {
             if (entry && entry.helper) entry.helper.update();
             // A control (or the rig group above them) poses its character while
             // it is dragged, not only when the mouse lets go.
+            // Whatever it drives (set-driven keys: a facial control's blendshapes) follows too.
+            if (this._rigDriveLive) this._rigDriveLive();
             if (entry && entry.item && (entry.item.kind === "control" || entry.item.rig) && this._rigApplyAll) {
                 this.scene.updateMatrixWorld(true);
                 this._rigApplyAll();
@@ -2564,4 +2570,5 @@ export class Model3DView {
 Object.defineProperties(Model3DView.prototype, Object.getOwnPropertyDescriptors(WorldViewMixin));
 Object.assign(Model3DView.prototype, WorldMatchMixin);
 Object.assign(Model3DView.prototype, Rig3DMixin);
+Object.assign(Model3DView.prototype, Rig3DExtrasMixin);
 Object.assign(Model3DView.prototype, View3DToolsMixin);

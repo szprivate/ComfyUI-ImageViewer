@@ -89,7 +89,7 @@ export const PrevizChannelsMixin = {
         const scene = this.previzScene();
         const looking = !!(item && scene && scene.activeCamera === item.id);
         // Everything that decides WHICH rows there are. Values are not in it.
-        const sig = item ? `${ids.join(",")}|${item.kind}|${looking}|${this._cbConstraintSig ? this._cbConstraintSig(item) : ""}` : "";
+        const sig = item ? `${ids.join(",")}|${item.kind}|${looking}|${this._cbConstraintSig ? this._cbConstraintSig(item) : ""}|${Object.keys(item.attrs || {}).join(",")}|${this._cbMorphs(item).length}` : "";
         if (sig !== ui.sig) {
             ui.sig = sig;
             this._cbBuildRows(ui, item, ids, looking);
@@ -277,6 +277,24 @@ export const PrevizChannelsMixin = {
             t.append(row);
             ui.rows.set("color", { row, input: swatch, kind: "color" });
         }
+        // Custom attributes (any item; a rig control's usually) and a model's blendshapes:
+        // the extra channels of imageViewer_scene3d.js, keyable like the rest.
+        const attrs = Object.keys(item.attrs || {});
+        if (attrs.length) {
+            root.append(Object.assign(doc.createElement("div"), { className: "cb-section", textContent: "ATTRIBUTES" }));
+            const t = doc.createElement("div");
+            t.className = "cb-table";
+            root.append(t);
+            for (const n of attrs) numberRow(`attr:${n}`, `attr:${n}`, null, n, 0.1, t);
+        }
+        const morphs = this._cbMorphs(item);
+        if (morphs.length) {
+            root.append(Object.assign(doc.createElement("div"), { className: "cb-section", textContent: "BLENDSHAPES" }));
+            const t = doc.createElement("div");
+            t.className = "cb-table";
+            root.append(t);
+            for (const n of morphs) numberRow(`bs:${n}`, `bs:${n}`, null, n, 0.01, t);
+        }
         // World settings, and a camera's reference (imageViewer_previzWorld.js).
         if (this._cbWorldRows) this._cbWorldRows(ui, item, shape, doc);
         // Constraints on the item: their weights and settings (imageViewer_previzConstraints.js).
@@ -325,6 +343,14 @@ export const PrevizChannelsMixin = {
                 }
             }
         }
+    },
+
+    /** A model's blendshape (morph target) names, as its file has them. */
+    _cbMorphs(item) {
+        if (!item || item.kind !== "model") return [];
+        const view = this._modelView && this._modelView();
+        const names = view && view.rigMorphNames ? view.rigMorphNames(item.id) : [];
+        return names.slice().sort((a, b) => a.localeCompare(b));
     },
 
     _cbValue(item, prop, comp) {
@@ -376,11 +402,13 @@ export const PrevizChannelsMixin = {
                 continue;
             }
             if (S.isExtraProp(prop)) {
-                // A constraint's weight (or another extra channel): only on the
-                // items that have it, held to its range.
+                // A constraint's weight, a custom attribute or a blendshape:
+                // only on the items that have it, held to its range.
                 const w = parseWeightProp(prop);
                 if (w && !constraintOf(item, w.cid)) continue;
-                const [lo, hi] = w ? weightRange(prop) : [-Infinity, Infinity];
+                if (prop.startsWith("attr:") && !(item.attrs && item.attrs[prop.slice(5)])) continue;
+                if (prop.startsWith("bs:") && item.kind !== "model") continue;
+                const [lo, hi] = w ? weightRange(prop) : S.extraRange(item, prop);
                 this._cbWrite(item, prop, Math.min(hi, Math.max(lo, v)), frame);
                 continue;
             }
@@ -572,6 +600,8 @@ export const PrevizChannelsMixin = {
             for (const p of props) {
                 if (p === "fov" && item.kind !== "camera") continue;
                 if (p === "ikfk" && !(item.kind === "control" && item.control && item.control.type === "ik")) continue;
+                if (p.startsWith("attr:") && !(item.attrs && item.attrs[p.slice(5)])) continue;
+                if (p.startsWith("bs:") && item.kind !== "model") continue;
                 if (item.kind === "control" && (p === "scale" || p === "pivot")) continue;
                 if (item.kind === "camera" && (p === "scale" || p === "pivot")) continue;
                 S.keyPose(scene, item, p, frame, S.currentValue(scene, item, p, frame), this._previzEase || "smooth");

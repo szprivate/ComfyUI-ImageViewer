@@ -3492,6 +3492,12 @@ try:
                                 send=lambda ev, data: PromptServer.instance.send_sync(ev, data))
         except Exception as e:  # noqa: BLE001 - the rest of the viewer works without it
             print(f"[ImageViewer] Rig routes not registered: {e}")
+        # The rigs' pose library, kept per OS user (rig_poses.py).
+        try:
+            from . import rig_poses
+            rig_poses.register(_safe_add, web=web, path_access=path_access)
+        except Exception as e:  # noqa: BLE001
+            print(f"[ImageViewer] Pose library routes not registered: {e}")
         for _m, _h in (("GET", _imageviewer_mgscene), ("POST", _imageviewer_mgscene_save)):
             _safe_add(_m, "/imageviewer/mgscene", _h)
             _safe_add(_m, "/api/imageviewer/mgscene", _h)

@@ -241,8 +241,8 @@ export const Rig3DMixin = {
         for (const ik of iks) {
             const [na, nb, nc] = ik.control.chain;
             if (!fk.has(na) || !fk.has(nb) || !fk.has(nc) || !cw.has(ik.id)) continue;
-            // The whole stack's IK/FK blend: animation layers can key it too.
-            const ikAt = evaluateIn(this.scene3d, ik, frame).ikfk;
+            // The whole stack's IK/FK blend: animation layers can key it, drivers add to it.
+            const ikAt = this._rigBlendOf ? this._rigBlendOf(ik, frame) : evaluateIn(this.scene3d, ik, frame).ikfk;
             const blend = Math.max(0, Math.min(1, ikAt !== undefined ? ikAt
                 : ik.tracks && ik.tracks.ikfk && ik.tracks.ikfk.length
                     ? this._rigScalarAt(ik, "ikfk", frame) : (ik.ikfk ?? 1)));
