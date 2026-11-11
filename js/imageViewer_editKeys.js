@@ -257,7 +257,10 @@ export const EditKeysMixin = {
     _editTlTransport() {
         if (!this._editTlTab || !this.allTabs[this._editTlTab]) return false;
         if (!this._editTlOnScreen()) this.switchTab(this._editTlTab);
-        return this._editTlOnScreen();
+        if (!this._editTlOnScreen()) return false;
+        // The timeline's transport shows the timeline: a single viewer on the source swaps (#106).
+        if (this._editSrcToTimeline) this._editSrcToTimeline();
+        return true;
     },
 
     _editTlGoFrame(frame) {

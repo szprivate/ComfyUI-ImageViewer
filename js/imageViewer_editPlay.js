@@ -935,6 +935,8 @@ export const EditPlayMixin = {
     editPlayStart() {
         const cut = this._editPlayCut();
         if (!cut || !cut.clips.length || !this._ep) return;
+        // The cut plays where it is seen: a single viewer on the source swaps to the timeline (#106).
+        if (this._editSrcToTimeline) this._editSrcToTimeline();
         this.isPlaying = true;
         if (this._eaSilence) this._eaSilence();               // no scrub grains under playback
         this._setIcon(this.playBtn, "icon-pause");
