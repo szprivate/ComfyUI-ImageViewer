@@ -499,6 +499,8 @@ export const PlaybackMixin = {
         // Previz: the frame is a moment in the shot, and the scene places every
         // item itself — so this runs even for a tab with no media frames of its
         // own, which is what a scene built from scratch is.
+        // The Viewer tab got a scene when it showed a model; showing a picture or a film there now ends it.
+        if (this._viewerTabDropScene) this._viewerTabDropScene();
         if (this.isPrevizTab && this.isPrevizTab()) {
             const bounds = this.getTimelineBounds();
             this.currentFrame = Math.max(bounds.min, Math.min(Math.round(idx), bounds.max));

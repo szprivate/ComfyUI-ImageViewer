@@ -38,6 +38,23 @@ export const PrevizMixin = {
         return !!this.previzScene(key);
     },
 
+    /**
+     * The Viewer tab is made into a scene when it shows a 3D model (an Atlas world's world.glb lands there).
+     * That scene is only the model's: once the tab shows a picture or a film, it goes, or every History item
+     * opened there would come up in the 3D view (Sebastian 2026-11-11). Answers whether it went.
+     */
+    _viewerTabDropScene(key = this.activeTab) {
+        if (key !== "folder_history" || !this.previzScene(key)) return false;
+        const frames = this.allTabs && this.allTabs[key];
+        const list = Array.isArray(frames) ? frames : frames ? [frames] : [];
+        if (!list.length || list.some((f) => f && this._frameIsModel(f))) return false;
+        this._setScene(key, null);
+        if (this._exitModelMode) this._exitModelMode();
+        if (this._previzRenderPanel) this._previzRenderPanel();
+        if (this.queuePersistViewerState) this.queuePersistViewerState();
+        return true;
+    },
+
     /** Frames the timeline covers while previz is on. */
     previzFrameCount(key = this.activeTab) {
         const scene = this.previzScene(key);
