@@ -859,6 +859,29 @@ class ImageViewerScene3D:
         return (images, int(images.shape[0]), fps)
 
 
+class ImageViewerBodyPose:
+    """The first person SAM 3D Body found, handed to the viewer: the end of the graph the Pose
+    dialog queues for a pose from a picture (body_pose.graph). It returns no outputs, only its
+    ``ui`` answer (``imageviewer_body``: the people as MediaPipe's 33 landmarks), which the page
+    reads off the prompt's ``executed`` message."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"mhr_pose_data": ("MHR_POSE_DATA",)}}
+
+    RETURN_TYPES = ()
+    FUNCTION = "hand_over"
+    OUTPUT_NODE = True
+    CATEGORY = "image/ComfyUI Image Viewer"
+    DESCRIPTION = "Hands the poses SAM 3D Body found to the Image Viewer's Pose dialog (a pose from a picture)."
+
+    def hand_over(self, mhr_pose_data):
+        from . import body_pose
+        people = body_pose.people_of(mhr_pose_data, 0)
+        size = (mhr_pose_data or {}).get("image_size") or (0, 0)
+        return {"ui": {"imageviewer_body": [{"people": people, "height": int(size[0]), "width": int(size[1])}]}}
+
+
 # mapping dictionaries for external use (nodes.py imports these)
 
 NODE_CLASS_MAPPINGS = {
@@ -866,6 +889,7 @@ NODE_CLASS_MAPPINGS = {
     "ImageViewerRoto": ImageViewerRoto,
     "ImageViewerSAM3Collector": ImageViewerSAM3Collector,
     "ImageViewerScene3D": ImageViewerScene3D,
+    "ImageViewerBodyPose": ImageViewerBodyPose,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -873,6 +897,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ImageViewerRoto": "Image Viewer Roto",
     "ImageViewerSAM3Collector": "Image Viewer SAM3 Collector",
     "ImageViewerScene3D": "Image Viewer 3D Scene (Previz)",
+    "ImageViewerBodyPose": "Image Viewer Body Pose (from SAM 3D Body)",
 }
 
 # The ids these nodes had before the viewer was renamed (it was "bEpic" until

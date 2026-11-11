@@ -834,6 +834,25 @@ def start_download(wid, folder_paths):
     return job
 
 
+def start_file_download(files, folder_paths, what="models"):
+    """Fetch named files ([{name, folder, url}]; Hugging Face only, into ComfyUI's model folders) in a
+    thread of its own, as start_download does for a built-in: the job's id (download_status polls it)."""
+    todo = []
+    for f in files:
+        if not _allowed_url(f.get("url")):
+            raise GenerateError(f"not offered for download: {f.get('name')}")
+        todo.append({"name": _safe_model_name(f["name"]), "folder": f["folder"], "url": f["url"], "size": None,
+                     "to": _target(folder_paths, f["folder"], f["name"]), "done": 0, "state": "waiting"})
+    if not todo:
+        raise GenerateError("nothing to download")
+    job = secrets.token_hex(8)
+    st = {"id": job, "workflow": what, "files": todo, "state": "running", "error": None, "cancel": False}
+    with _LOCK:
+        _DOWNLOADS[job] = st
+    threading.Thread(target=_download_all, args=(st,), daemon=True).start()
+    return job
+
+
 def _download_all(st):
     import urllib.request
     for f in st["files"]:

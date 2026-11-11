@@ -1136,11 +1136,12 @@ export const PaintPanelMixin = {
         return new Promise((resolve, reject) => {
             let over = false, timer = null;
             let running = false;     // started: an interrupt then hits this prompt, not somebody else's
-            const on = (k, ...v) => { if (k !== "stop") running = true; try { if (tell[k]) tell[k](...v); } catch (_) { /* only the bar */ } };
-            const pick = (out) => {
+            const on = (k, ...v) => { if (k !== "stop") running = true; try { if (tell[k] && k !== "pick") tell[k](...v); } catch (_) { /* only the bar */ } };
+            // What the output node answered: its first picture, unless the caller reads something else (tell.pick).
+            const pick = tell.pick || ((out) => {
                 const im = out && out.images && out.images[0];
                 return im && im.filename ? { filename: im.filename, subfolder: im.subfolder || "", type: im.type || "output" } : null;
-            };
+            });
             const end = (fn, v) => {
                 if (over) return;
                 over = true;
