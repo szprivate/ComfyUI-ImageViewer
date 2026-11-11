@@ -28,7 +28,8 @@ export const PrevizRigPoseMixin = {
         const h = p0.pose.get(rest.roles.hips);
         const origin = [h[12], h[14]];
         const k0 = M.poseToSoma(p0.pose, rest, scale, origin);
-        const heading = M.headingOf(k0);
+        const model = (scene.items || []).find((it) => it.id === modelId);
+        const heading = P.poseBaseHeading(model, M.headingOf(k0));
         let motion, unknown = [];
         const words = String(prompt || "").trim();
         if (words && !preset && !(joints && Object.keys(joints).length)) {
@@ -46,6 +47,7 @@ export const PrevizRigPoseMixin = {
         if (scene.length < f + 1) { scene.length = f + 1; scene.lengthSet = true; }
         const out = this.previzRigApplyMotion(modelId, motion, { from: f, to: f, origin, feet: false, mode: "pose", label: "Pose", layer });
         if (!out.ok) return out;
+        P.rememberPoseBase(model, f, heading, motion);
         this.setFrame?.(f);
         return { ok: true, frame: f, keys: out.keys, layer: out.layer || null, unknown };
     },

@@ -1219,6 +1219,14 @@ export function parseScene(raw) {
             // How an Atlas world is shown (imageViewer_atlas3d.js): as a point cloud, and with its views.
             if (raw.atlasPoints === true) item.atlasPoints = true;
             if (raw.atlasViews === false) item.atlasViews = false;
+            // Where single poses started from (imageViewer_previzRigPose.js): frame -> [base heading, posed heading].
+            if (raw.rigPoseBase && typeof raw.rigPoseBase === "object" && !Array.isArray(raw.rigPoseBase)) {
+                const kept = {};
+                for (const [f, v] of Object.entries(raw.rigPoseBase).slice(0, 500)) {
+                    if (Array.isArray(v) && v.length === 2 && v.every((x) => Number.isFinite(Number(x)))) kept[f] = [Number(v[0]), Number(v[1])];
+                }
+                if (Object.keys(kept).length) item.rigPoseBase = kept;
+            }
         }
 
         // Custom attributes (on controls) and blendshape weights (on models).
