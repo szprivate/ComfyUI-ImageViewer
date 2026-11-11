@@ -2389,3 +2389,9 @@ audio.src-media { width: 90%; }
 .al-key.keyed { color: #b8646b; }
 .al-key.now { color: #ff7a85; }
 .al-empty { color: #777; padding: 6px 4px; line-height: 1.4; }
+
+/* The Atlas dialogs float: no backdrop, the viewer under them (the History strip) stays usable, the header moves them. */
+.rd-shade.rd-float { background: transparent; pointer-events: none; }
+.rd-shade.rd-float > .rd-box { pointer-events: auto; }
+.rd-shade.rd-float > .rd-box.rd-moved { position: absolute; margin: 0; }
+.rd-head.rd-grab { cursor: move; user-select: none; }

@@ -13,7 +13,7 @@
 import { api } from "../../scripts/api.js";
 import { notice, openFilePicker } from "./imageViewer_exportUI.js";
 import * as A from "./imageViewer_atlasRender.js";
-import { canvasFile, uploadPicture, wirePictureDrop } from "./imageViewer_atlasDrops.js";
+import { canvasFile, floatDialog, uploadPicture, wirePictureDrop } from "./imageViewer_atlasDrops.js";
 
 async function asJson(res) {
     let body = {};
@@ -188,6 +188,8 @@ export const AtlasChiselMixin = {
         foot.append(cancel, go);
         box.append(head, stage, picTools, maskTools, prompt, geoRow, styleRow, optRow, hint, progress, message, foot);
         shade.append(box);
+        // Not modal: the History and the rest of the viewer stay usable while it is open.
+        floatDialog(shade, box, head);
         host.append(shade);
         this._atlasChiselDlg = shade;
 

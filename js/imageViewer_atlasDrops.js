@@ -46,9 +46,46 @@ export function historyPictures(dt) {
 const isFileDrag = (e) => !!(e.dataTransfer && Array.from(e.dataTransfer.types || []).some((t) => t === "Files" || t === HISTORY_TYPE));
 
 /**
+ * Make an Atlas dialog float: the viewer under it stays usable (the History strip above all, so a thumbnail
+ * can be dragged into it), and its header moves it out of the way. `shade` is the dialog's full-size layer,
+ * which then takes no pointer events itself; only `box` does.
+ */
+export function floatDialog(shade, box, head) {
+    shade.classList.add("rd-float");
+    head.classList.add("rd-grab");
+    head.title = "Drag to move";
+    head.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0 || e.target.closest("button, input, select, textarea")) return;
+        e.preventDefault();
+        const sr = shade.getBoundingClientRect();
+        const br = box.getBoundingClientRect();
+        const dx = e.clientX - br.left, dy = e.clientY - br.top;
+        box.classList.add("rd-moved");
+        const place = (x, y) => {
+            const left = Math.max(0, Math.min(x - sr.left - dx, sr.width - 60));
+            const top = Math.max(0, Math.min(y - sr.top - dy, sr.height - 30));
+            box.style.left = `${left}px`;
+            box.style.top = `${top}px`;
+        };
+        place(e.clientX, e.clientY);
+        try { head.setPointerCapture(e.pointerId); } catch (_) { /* gone */ }
+        const move = (ev) => place(ev.clientX, ev.clientY);
+        const up = () => {
+            head.removeEventListener("pointermove", move);
+            head.removeEventListener("pointerup", up);
+            head.removeEventListener("pointercancel", up);
+        };
+        head.addEventListener("pointermove", move);
+        head.addEventListener("pointerup", up);
+        head.addEventListener("pointercancel", up);
+    });
+}
+
+/**
  * Make `target` take dropped pictures. `onItems(items, event)` gets picture items ({path} after an upload,
  * or History refs); `onStatus(text, isError)` is told while desktop files are copied in. `shade` (the dialog's
- * backdrop) swallows drops that miss the target, so a file let go beside the box is not opened by the browser.
+ * backdrop), when it takes pointer events, swallows drops that miss the target, so a file let go beside the box
+ * is not opened by the browser; a floating dialog's (floatDialog) lets them through to the viewer.
  * Returns the number of pictures it left out (not png / jpg / webp) through `onSkipped(n)`.
  */
 export function wirePictureDrop(target, { onItems, onStatus, onSkipped, shade, hot = "drop-on" } = {}) {
