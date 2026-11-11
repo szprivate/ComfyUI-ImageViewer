@@ -491,13 +491,28 @@ export const DepsPanelMixin = {
         }
     },
 
-    /** "Open its workflow": the graph a file was made with, in a new workflow tab of the canvas. */
-    async _depsOpenWorkflow(path) {
+    /** "Load workflow" on a context menu (history thumbs): the same as the tab's "Open its workflow". */
+    depsAddLoadWorkflowItem(menu, ref, before) {
+        if (!menu || !depsMayOpen(ref)) return;
+        const item = menu.ownerDocument.createElement("div");
+        item.className = "thumb-ctx-item deps-load-workflow-item";
+        item.textContent = "\u{1F9E9} Load workflow";
+        item.title = "Load the workflow this file was made with into a new tab of the ComfyUI canvas";
+        item.onclick = (ev) => { ev.stopPropagation(); menu.remove(); this._depsOpenWorkflow(ref); };
+        if (before && before.parentNode === menu) menu.insertBefore(item, before); else menu.appendChild(item);
+    },
+
+    /** "Open its workflow": the graph a file was made with, in a new workflow tab of the canvas.
+     *  `ref` is a path, or {filename, subfolder, type} as History items without a path carry. */
+    async _depsOpenWorkflow(ref) {
+        const path = typeof ref === "string" ? ref : (ref && ref.filename) || "";
+        const body = typeof ref === "string" ? { path: ref }
+            : { filename: ref.filename, subfolder: ref.subfolder || "", type: ref.type || "output" };
         const name = baseOf(path).replace(/\.[^.]+$/, "") || "workflow";
         let data = null, err = "";
         try {
             const res = await api.fetchApi("/imageviewer/deps/workflow", {
-                method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }) });
+                method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
             data = await res.json().catch(() => null);
             if (!res.ok) err = (data && data.error) || `the viewer answered ${res.status}`;
         } catch (e) { err = "the viewer backend did not answer"; }

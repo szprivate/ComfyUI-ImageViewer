@@ -1624,17 +1624,21 @@ export const HistoryMixin = {
         // outside one acts on the item under the cursor, as it always did.
         const batch = this.isHistoryItemSelected(key, idx)
             ? this.historySelectionIndices(key) : [];
+        const picked = batch.length > 1 ? batch : [idx];
+        const one = batch.length <= 1 && !!imgObj;
+        const ref = one ? (imgObj.path ? imgObj.path : { filename: imgObj.filename, subfolder: imgObj.subfolder, type: imgObj.type }) : null;
+        // Three sections, in this order (a separator between them; an empty
+        // section shows no extra line, see .thumb-ctx-sep in the CSS):
+        //   Copy path, Remove, Move to group
+        //   VFX, Show dependencies, Load workflow, Edit in Motion / Paint
+        //   Tag as asset, colour tags, agentY: approve (only while a run waits)
+        const sep = () => {
+            const el = doc.createElement('div');
+            el.className = 'thumb-ctx-sep';
+            menu.appendChild(el);
+            return el;
+        };
 
-        // agentY: tag the picture, approve it at a review stop (AgentYMixin).
-        if (this.agentYMenuItems) {
-            for (const el of this.agentYMenuItems(doc, menu, key, batch.length > 1 ? batch : [idx])) menu.appendChild(el);
-        }
-        // Colour tags (HistoryTagsMixin), for the same items Remove acts on.
-        if (this.historyTagMenuRow) {
-            menu.appendChild(this.historyTagMenuRow(doc, menu, key, batch.length > 1 ? batch : [idx]));
-        }
-        // Another group for it, after the fact (the strip is sorted by group).
-        menu.appendChild(this._historyGroupMenuRows(doc, menu, key, batch.length > 1 ? batch : [idx]));
         const removeItem = doc.createElement('div');
         removeItem.className = 'thumb-ctx-item';
         removeItem.textContent = batch.length > 1
@@ -1647,22 +1651,39 @@ export const HistoryMixin = {
             else this.removeHistoryItem(key, idx);
         };
         menu.appendChild(removeItem);
-        // A scene, or the film / poster of one, can be edited in the Motion editor (MgPanelMixin).
-        if (batch.length <= 1 && this.mgAddEditItem && imgObj) {
-            this.mgAddEditItem(menu, imgObj.path ? imgObj.path : { filename: imgObj.filename, subfolder: imgObj.subfolder, type: imgObj.type }, removeItem);
-        }
-        // What it was made from, and what was made from it (DepsPanelMixin).
-        if (batch.length <= 1 && this.depsAddMenuItem && imgObj) {
-            this.depsAddMenuItem(menu, imgObj.path ? imgObj.path : { filename: imgObj.filename, subfolder: imgObj.subfolder, type: imgObj.type }, removeItem);
-        }
+        // Another group for it, after the fact (the strip is sorted by group).
+        menu.appendChild(this._historyGroupMenuRows(doc, menu, key, picked));
+
+        sep();
+        const actionsEnd = sep();   // the actions go in between the two lines, in order
         // A film: LTX-2.5 VFX passes on it, the result into its group (ClipVfxMixin).
         if (batch.length <= 1 && this.clipVfxMenuRow) {
-            this.clipVfxMenuRow(doc, menu, (this.history[HISTORY_KEY] || [])[idx], removeItem);
+            this.clipVfxMenuRow(doc, menu, (this.history[HISTORY_KEY] || [])[idx], actionsEnd);
         }
-        // A picture can be painted on in layers (PaintPanelMixin).
-        if (batch.length <= 1 && this.paintAddEditItem && imgObj) {
-            this.paintAddEditItem(menu, imgObj.paint || imgObj.path ? (imgObj.paint || imgObj.path) : { filename: imgObj.filename, subfolder: imgObj.subfolder, type: imgObj.type }, removeItem);
+        // What it was made from, and what was made from it (DepsPanelMixin).
+        if (one && this.depsAddMenuItem) this.depsAddMenuItem(menu, ref, actionsEnd);
+        // The workflow it was made with, as the Dependencies tab's "Open its workflow".
+        if (one && this.depsAddLoadWorkflowItem) this.depsAddLoadWorkflowItem(menu, ref, actionsEnd);
+        // A scene, or the film / poster of one, can be edited in the Motion editor
+        // (MgPanelMixin; the row comes once the server answers).
+        if (one && this.mgAddEditItem) this.mgAddEditItem(menu, ref, actionsEnd);
+        // A picture can be painted on in layers (PaintPanelMixin). Paint opens a
+        // picture's paint document when it has one.
+        if (one && this.paintAddEditItem) {
+            this.paintAddEditItem(menu, imgObj.paint || ref, actionsEnd);
         }
+
+        // agentY: tag the picture (AgentYMixin).
+        if (this.agentYMenuItems) {
+            for (const el of this.agentYMenuItems(doc, menu, key, picked)) menu.appendChild(el);
+        }
+        // Colour tags (HistoryTagsMixin), for the same items Remove acts on.
+        if (this.historyTagMenuRow) {
+            menu.appendChild(this.historyTagMenuRow(doc, menu, key, picked));
+        }
+        // agentY: approve, only while a run is stopped at a review step.
+        const approve = this.agentYApproveItem ? this.agentYApproveItem(doc, menu, key, picked) : null;
+        if (approve) menu.appendChild(approve);
 
         const panelRect = this.container.getBoundingClientRect();
         menu.style.left = `${ev.clientX - panelRect.left}px`;

@@ -1,6 +1,7 @@
 // imageViewer_agentY.js
-// The viewer as agentY's viewer: stage labels in the history strip, "Tag for
-// agentY..." and "Approve for agentY" in a thumbnail's right-click menu.
+// The viewer as agentY's viewer: stage labels in the history strip, "Tag as
+// asset..." and (while a run waits at a review stop) "agentY: approve" in a
+// thumbnail's right-click menu.
 //
 // agentY is a separate ComfyUI extension (agentY-comfyuiConnect). The two meet in
 // ONE small object it puts on the page, and nothing else is shared:
@@ -201,31 +202,34 @@ export const AgentYMixin = {
 
     // ── the right-click rows ─────────────────────────────────────────────────
 
-    /** Rows for the thumbnail menu; `indices` are what the menu acts on. */
+    /** One row of the thumbnail menu; a disabled row says why in its tooltip. */
+    _agentYMenuRow(doc, menu, text, title, enabled, run) {
+        const el = doc.createElement("div");
+        el.className = "thumb-ctx-item" + (enabled ? "" : " disabled");
+        el.textContent = text;
+        el.title = title;
+        el.onclick = (e) => {
+            e.stopPropagation();
+            if (!enabled) return;
+            menu.remove();
+            run();
+        };
+        return el;
+    },
+
+    /** The tag rows of the thumbnail menu (Tag as asset, its tags, Manage tags); `indices` are what the menu acts on. */
     agentYMenuItems(doc, menu, key, indices) {
         key = this.historyKey();   // the one history, whatever key was given
         const b = bridge();
         if (!b) return [];
         const stack = this.history[key] || [];
         const items = [];
-        const row = (text, title, enabled, run) => {
-            const el = doc.createElement("div");
-            el.className = "thumb-ctx-item" + (enabled ? "" : " disabled");
-            el.textContent = text;
-            el.title = title;
-            el.onclick = (e) => {
-                e.stopPropagation();
-                if (!enabled) return;
-                menu.remove();
-                run();
-            };
-            items.push(el);
-        };
+        const row = (...a) => items.push(this._agentYMenuRow(doc, menu, ...a));
         if (indices.length === 1) {
             const snap = stack[indices[0]] || [];
             const fr = snap[0];
             const path = framePath(fr);
-            row("# Tag for agentY…",
+            row("# Tag as asset…",
                 path ? "Give this picture a name agentY can use as #name in a prompt"
                      : "This picture has no file on disk, so it cannot be tagged",
                 !!path, () => this.agentYTagDialog(fr));
@@ -241,17 +245,27 @@ export const AgentYMixin = {
             row("🏷 Manage tags…", "Every agentY tag, its pictures, rename, merge and delete", true,
                 () => this.agentYManageTags());
         }
+        return items;
+    },
+
+    /**
+     * "agentY: approve" for the thumbnail menu, or null: the row is there only
+     * while a run is actually stopped at a review step.
+     */
+    agentYApproveItem(doc, menu, key, indices) {
+        key = this.historyKey();
+        const b = bridge();
+        if (!b) return null;
         let state = { halted: false };
         try { state = b.state() || state; } catch (e) { /* keep */ }
+        if (!state.halted) return null;
         const files = this.agentYFilesOf(key, indices);
         const n = indices.length;
-        row(n > 1 ? `✔ Approve ${n} for agentY` : "✔ Approve for agentY",
-            !state.halted ? "agentY is not waiting at a review stop"
-                : !files.length ? "These pictures have no file on disk"
+        return this._agentYMenuRow(doc, menu, n > 1 ? `✔ agentY: approve ${n}` : "✔ agentY: approve",
+            !files.length ? "These pictures have no file on disk"
                 : "Continue the stopped run with " + (n > 1 ? "these pictures" : "this picture")
                   + " - the same as editing the review collector and pressing Continue",
-            !!state.halted && files.length > 0, () => this.agentYApprove(files));
-        return items;
+            files.length > 0, () => this.agentYApprove(files));
     },
 
     /** The files of the snapshots at `indices`, in strip order, without repeats. */
