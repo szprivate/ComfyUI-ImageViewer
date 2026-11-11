@@ -17,7 +17,7 @@
 // this file.
 
 import { quat } from "./imageViewer_rigData.js";
-import { SOMA_T, SOMA_HIPS, MOTION_FPS } from "./imageViewer_rigMotion.js";
+import { SOMA_T, SOMA_HIPS, MOTION_FPS, headingOf } from "./imageViewer_rigMotion.js";
 
 // The joints a pose drives, parents first, and each one's parent.
 const PARENT = {
@@ -281,4 +281,30 @@ export function poseMotion(solved) {
 /** The named poses, for the agent and the dialog: [{ name, note }]. */
 export function presetList() {
     return Object.entries(PRESETS).map(([name, p]) => ({ name, note: p.note }));
+}
+
+/**
+ * The way the character faces before a pose is laid on: the hips' heading at the frame,
+ * unless that heading is one a pose of ours made - then the heading that pose started
+ * from. Otherwise a pose's own hips turn would be taken as where the character faces and
+ * asking for the same pose twice would turn it twice.
+ */
+export function poseBaseHeading(model, now) {
+    const seen = model && model.rigPoseBase;
+    if (!seen) return now;
+    for (const [base, posed] of Object.values(seen)) {
+        if (Math.abs(Math.atan2(Math.sin(now - posed), Math.cos(now - posed))) < 0.01) return base;
+    }
+    return now;
+}
+
+/** Keep where the pose on frame `f` started from and the heading it gave the hips. */
+export function rememberPoseBase(model, f, base, motion) {
+    if (!model) return;
+    const s = motion && motion.samples && motion.samples[0];
+    const i = motion && motion.joints ? motion.joints.indexOf("Hips") : -1;
+    const q = s && i >= 0 && s.rot[0] && s.rot[0][i];
+    if (!q) return;
+    const posed = headingOf({ joints: { Hips: q } });
+    model.rigPoseBase = { ...(model.rigPoseBase || {}), [f]: [Math.round(base * 1e6) / 1e6, Math.round(posed * 1e6) / 1e6] };
 }

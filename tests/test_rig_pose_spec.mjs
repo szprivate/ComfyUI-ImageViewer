@@ -110,3 +110,28 @@ test("mirror copies one side onto the other", () => {
     near(s.at("LeftHand")[1], s.at("RightHand")[1], 0.005, "both hands up");
     near(s.at("LeftHand")[0], -s.at("RightHand")[0], 0.005, "mirrored");
 });
+
+test("asking for the same pose twice does not turn the character twice", () => {
+    const model = {};
+    const motionOf = (spec, heading) => {
+        const r = P.resolvePose(spec);
+        return P.poseMotion(P.solvePoseSpec(r.parts, { heading, hips: r.hips }));
+    };
+    const hipsHeading = (m) => {
+        const q = m.samples[0].rot[0][m.joints.indexOf("Hips")];
+        const f = quat.rotate(q, [0, 0, 1]);
+        return Math.atan2(f[0], f[2]);
+    };
+    const spec = { joints: { hips: { turn: 40 } } };
+    let now = 0.3;                        // where the character faces before any pose
+    for (let i = 0; i < 3; i++) {
+        const base = P.poseBaseHeading(model, now);
+        near(base, 0.3, 1e-6, `base heading, request ${i + 1}`);
+        const m = motionOf(spec, base);
+        P.rememberPoseBase(model, 24, base, m);
+        now = hipsHeading(m);
+        near(now, 0.3 + 40 * Math.PI / 180, 1e-4, `posed heading, request ${i + 1}`);
+    }
+    // Turned by hand since: that is where it faces now.
+    assert.equal(P.poseBaseHeading(model, 1.5), 1.5);
+});
