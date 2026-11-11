@@ -24,6 +24,11 @@ Every file the Send to Image Viewer node or [agentY](https://github.com/szprivat
 | Centre on a file | Double-click its node |
 | Put a file on the ComfyUI graph as a loader node | Right-click its node > **Drop into canvas** |
 | Load the workflow a file was made with, in a new workflow tab | Right-click its node > **Open its workflow** |
+| Select several files | Drag a box on empty canvas; hold <kbd>Shift</kbd> or <kbd>Ctrl</kbd> to add to what is selected |
+| Add or take one file out of the selection | <kbd>Ctrl</kbd>+click its node |
+| Select all / none | <kbd>Ctrl</kbd>+<kbd>A</kbd> / <kbd>Esc</kbd>, or click empty canvas |
+| Move several files | Drag one of the selected nodes |
+| Pan | Drag with the middle button, or <kbd>Alt</kbd> / <kbd>Space</kbd> + drag |
 | Fit the graph | <kbd>F</kbd>, or **Fit** |
 | Find older files made before the record existed | **Look in folder** |
 | Read it again | **Reload** |

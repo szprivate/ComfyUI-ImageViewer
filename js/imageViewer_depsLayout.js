@@ -205,6 +205,13 @@ export function applyPlacement(L, place = {}) {
     return { nodes, edges, width, height, x0, y0 };
 }
 
+/** The ids of the nodes a box ({x0, y0, x1, y1}, stage pixels, any corner order) touches. Pure. */
+export function nodesInBox(L, box) {
+    const ax = Math.min(box.x0, box.x1), bx = Math.max(box.x0, box.x1);
+    const ay = Math.min(box.y0, box.y1), by = Math.max(box.y0, box.y1);
+    return ((L && L.nodes) || []).filter((n) => n.x + n.w > ax && n.x < bx && n.y + n.h > ay && n.y < by).map((n) => n.id);
+}
+
 /** An edge as an SVG path: a vertical S-curve from (x1, y1) down to (x2, y2). */
 export function edgePath(e) {
     const dy = Math.max(24, (e.y2 - e.y1) / 2);

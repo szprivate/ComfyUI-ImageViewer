@@ -281,6 +281,58 @@ class DepsTabBrowserTests(unittest.TestCase):
         self.assertEqual((tidy["w"], tidy["h"]), (before["w"], before["h"]))
         self.assertEqual(self.errors, [])
 
+    def test_marquee_picks_nodes_and_they_move_together(self):
+        pg = self.page()
+        files = ".view-tab-deps .dp-node:not(.dp-prompt):not(.fold)"
+        picked = "() => [...window.__panel.viewport.querySelectorAll('.view-tab-deps .dp-node.picked')].map((el) => el.dataset.id).sort()"
+        place = "(id) => { const el = [...window.__panel.viewport.querySelectorAll('.view-tab-deps .dp-node')].find((x) => x.dataset.id === id); return [parseFloat(el.style.left), parseFloat(el.style.top)]; }"
+        boxes = pg.locator(files)
+        a, b = boxes.nth(0).bounding_box(), boxes.nth(1).bounding_box()
+        view = pg.locator(".view-tab-deps .dp-view").bounding_box()
+        # A box from empty canvas (left of / above both) round the first two file nodes.
+        x0 = min(a["x"], b["x"]) - 12
+        y0 = min(a["y"], b["y"]) - 12
+        x1 = max(a["x"] + a["width"], b["x"] + b["width"]) - 20
+        y1 = max(a["y"] + 30, b["y"] + 30)
+        self.assertGreater(x0, view["x"]); self.assertGreater(y0, view["y"])
+        pg.mouse.move(x0, y0); pg.mouse.down(); pg.mouse.move(x1, y1, steps=6)
+        self.assertTrue(pg.evaluate("() => !!window.__panel.viewport.querySelector('.view-tab-deps .dp-marquee')"))
+        pg.mouse.up()
+        sel = pg.evaluate(picked)
+        self.assertGreaterEqual(len(sel), 2, sel)
+        self.assertFalse(pg.evaluate("() => !!window.__panel.viewport.querySelector('.view-tab-deps .dp-marquee')"))
+        self.assertTrue(pg.evaluate("() => window.__panel.activeTab").startswith("deps:"), "the box opened nothing")
+        # Dragging one of them moves all of them by the same amount.
+        before = {i: pg.evaluate(place, i) for i in sel}
+        r = pg.locator(".view-tab-deps .dp-node.picked").first.bounding_box()
+        pg.mouse.move(r["x"] + r["width"] / 2, r["y"] + r["height"] - 12); pg.mouse.down()
+        pg.mouse.move(r["x"] + r["width"] / 2 + 90, r["y"] + r["height"] - 12 + 40, steps=6); pg.mouse.up()
+        for i in sel:
+            x, y = pg.evaluate(place, i)
+            self.assertGreater(x - before[i][0], 30, i)
+            self.assertGreater(y - before[i][1], 10, i)
+        self.assertEqual(pg.evaluate(picked), sel, "still picked after the move")
+        # Ctrl+click takes one out, without opening it.
+        first = pg.locator(".view-tab-deps .dp-node.picked").first
+        fr = first.bounding_box()
+        pg.keyboard.down("Control"); pg.mouse.click(fr["x"] + fr["width"] / 2, fr["y"] + fr["height"] - 12); pg.keyboard.up("Control")
+        self.assertEqual(len(pg.evaluate(picked)), len(sel) - 1)
+        self.assertTrue(pg.evaluate("() => window.__panel.activeTab").startswith("deps:"))
+        # The middle button pans and keeps the selection; Esc lets go; a click on nothing too.
+        t0 = pg.evaluate("() => window.__panel.viewport.querySelector('.view-tab-deps .dp-stage').style.transform")
+        pg.mouse.move(view["x"] + 20, view["y"] + view["height"] - 20); pg.mouse.down(button="middle")
+        pg.mouse.move(view["x"] + 120, view["y"] + view["height"] - 60, steps=4); pg.mouse.up(button="middle")
+        self.assertNotEqual(pg.evaluate("() => window.__panel.viewport.querySelector('.view-tab-deps .dp-stage').style.transform"), t0)
+        self.assertEqual(len(pg.evaluate(picked)), len(sel) - 1)
+        pg.keyboard.press("Control+a")
+        self.assertGreater(len(pg.evaluate(picked)), len(sel))
+        pg.keyboard.press("Escape")
+        self.assertEqual(pg.evaluate(picked), [])
+        pg.keyboard.press("Control+a")
+        pg.mouse.click(view["x"] + 8, view["y"] + view["height"] - 8)
+        self.assertEqual(pg.evaluate(picked), [])
+        self.assertEqual(self.errors, [])
+
     def test_frames_say_still_or_film_and_the_model(self):
         pg = self.page()
         got = pg.evaluate("""() => Object.fromEntries([...window.__panel.viewport.querySelectorAll('.view-tab-deps .dp-node:not(.dp-prompt):not(.fold)')]

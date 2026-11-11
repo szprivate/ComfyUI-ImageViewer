@@ -128,3 +128,12 @@ test("a file's tags are its caption: the service that made it, then its model", 
     assert.equal(depsCaption([{ name: "flux1-dev", role: "model" }], []), "flux1-dev");
     assert.equal(depsCaption(undefined, undefined), "");
 });
+
+test("a box picks the nodes it touches, drawn either way round", async () => {
+    const { nodesInBox } = await import("../js/imageViewer_depsLayout.js");
+    const L = { nodes: [{ id: "a", x: 0, y: 0, w: 100, h: 50 }, { id: "b", x: 300, y: 0, w: 100, h: 50 }] };
+    assert.deepEqual(nodesInBox(L, { x0: -10, y0: -10, x1: 20, y1: 20 }), ["a"]);
+    assert.deepEqual(nodesInBox(L, { x0: 350, y0: 40, x1: 50, y1: 10 }), ["a", "b"]);
+    assert.deepEqual(nodesInBox(L, { x0: 150, y0: 0, x1: 250, y1: 60 }), []);
+    assert.deepEqual(nodesInBox(null, { x0: 0, y0: 0, x1: 1, y1: 1 }), []);
+});

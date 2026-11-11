@@ -24,7 +24,7 @@
 import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
 import { notice } from "./imageViewer_exportUI.js";
-import { layout, edgePath, applyPlacement, depsMediaOf, depsCaption } from "./imageViewer_depsLayout.js";
+import { layout, edgePath, applyPlacement, depsMediaOf, depsCaption, nodesInBox } from "./imageViewer_depsLayout.js";
 
 export const DEPS_PREFIX = "deps:";
 const baseOf = (p) => String(p || "").split(/[\\/]/).pop();
@@ -184,6 +184,7 @@ export const DepsPanelMixin = {
         ui.title.textContent = `${baseOf(rec.path || (rec.query && rec.query.filename))} — ${files} file${files === 1 ? "" : "s"}`;
         this._depsEdges(rec);
         for (const n of L.nodes) ui.stage.append(this._depsNodeEl(rec, n, doc));
+        this._depsSelSync(rec);
     },
 
     /** The stage's size and the edges, from rec.laid (again on every step of a node drag). */
@@ -229,8 +230,21 @@ export const DepsPanelMixin = {
             const ui = rec.ui;
             try { ui.view.focus({ preventScroll: true }); } catch (_) { /* keep F working */ }
             const resize = e.target === grip;
-            const box = (rec.laid.nodes.find((x) => x.id === n.id)) || n;
+            rec.sel = rec.sel || new Set();
+            if (!resize && (e.ctrlKey || e.metaKey || e.shiftKey)) {   // picking, not moving
+                if (rec.sel.has(n.id)) rec.sel.delete(n.id); else rec.sel.add(n.id);
+                ui.dragged = true;   // the click that follows does not open the file
+                this._depsSelSync(rec);
+                setTimeout(() => { if (rec.ui) rec.ui.dragged = false; }, 0);
+                return;
+            }
+            // A node pressed outside the selection becomes the selection; inside it the whole selection moves.
+            if (!rec.sel.has(n.id)) { rec.sel = new Set([n.id]); this._depsSelSync(rec); }
+            const boxOf = (id) => rec.laid.nodes.find((x) => x.id === id);
+            const box = boxOf(n.id) || n;
             const start = { cx: e.clientX, cy: e.clientY, x: box.x, y: box.y, w: box.w, h: box.h };
+            const group = resize ? [] : [...rec.sel].filter((id) => id !== n.id).map((id) => boxOf(id)).filter(Boolean)
+                .map((b) => ({ id: b.id, x: b.x, y: b.y, w: b.w, h: b.h }));
             ui.dragged = false;
             el.classList.add(resize ? "resizing" : "moving");
             const win = doc.defaultView || window;
@@ -242,13 +256,16 @@ export const DepsPanelMixin = {
                 rec.place[n.id] = resize
                     ? { x: start.x, y: start.y, w: start.w + dx, h: start.h + dy }
                     : { x: start.x + dx, y: start.y + dy, w: start.w, h: start.h };
+                for (const g of group) rec.place[g.id] = { x: g.x + dx, y: g.y + dy, w: g.w, h: g.h };
                 rec.laid = applyPlacement(rec.base, rec.place);
-                const now = rec.laid.nodes.find((x) => x.id === n.id);
-                if (now) {
-                    el.style.left = `${now.x}px`;
-                    el.style.top = `${now.y}px`;
-                    el.style.width = `${now.w}px`;
-                    el.style.height = `${now.h}px`;
+                for (const id of [n.id, ...group.map((g) => g.id)]) {
+                    const now = boxOf(id);
+                    const box = id === n.id ? el : this._depsNodeById(rec, id);
+                    if (!now || !box) continue;
+                    box.style.left = `${now.x}px`;
+                    box.style.top = `${now.y}px`;
+                    box.style.width = `${now.w}px`;
+                    box.style.height = `${now.h}px`;
                 }
                 this._depsEdges(rec);
             };
@@ -266,6 +283,25 @@ export const DepsPanelMixin = {
     },
 
     _depsNodeEl(rec, n, doc) {
+        const el = this._depsNodeBox(rec, n, doc);
+        el.dataset.id = n.id;
+        el.classList.toggle("picked", !!(rec.sel && rec.sel.has(n.id)));
+        return el;
+    },
+
+    _depsNodeById(rec, id) {
+        return [...rec.ui.stage.querySelectorAll(".dp-node")].find((x) => x.dataset.id === id) || null;
+    },
+
+    /** The selection drawn: `.picked` on the nodes in rec.sel (and rec.sel held to the nodes there are). */
+    _depsSelSync(rec) {
+        if (!rec.ui) return;
+        const ids = new Set(((rec.laid && rec.laid.nodes) || []).map((x) => x.id));
+        rec.sel = new Set([...(rec.sel || [])].filter((id) => ids.has(id)));
+        for (const el of rec.ui.stage.querySelectorAll(".dp-node")) el.classList.toggle("picked", rec.sel.has(el.dataset.id));
+    },
+
+    _depsNodeBox(rec, n, doc) {
         if (n.prompt) return this._depsDraggable(rec, this._depsPromptEl(n, doc), n);
         const el = doc.createElement("div");
         el.className = "dp-node";
@@ -509,12 +545,21 @@ export const DepsPanelMixin = {
     _depsPanZoom(rec) {
         const ui = rec.ui;
         let drag = null;
+        let space = false;
         ui.view.addEventListener("mousedown", (e) => {
             if (e.button !== 0 && e.button !== 1) return;
+            try { ui.view.focus({ preventScroll: true }); } catch (_) { /* keys */ }
+            // The left button on empty canvas draws a box that picks the nodes it touches (Shift / Ctrl add);
+            // the middle button, Alt + left or Space + left pan.
+            if (e.button === 0 && !e.altKey && !space) { e.preventDefault(); this._depsMarquee(rec, e); return; }
+            e.preventDefault();
             drag = { x: e.clientX, y: e.clientY, tx: ui.tx, ty: ui.ty };
+            ui.view.classList.add("panning");
             ui.dragged = false;
         });
         const win = ui.view.ownerDocument.defaultView || window;
+        win.addEventListener("keyup", (e) => { if (e.code === "Space") space = false; });
+        win.addEventListener("blur", () => { space = false; });
         win.addEventListener("mousemove", (e) => {
             if (!drag || !rec.ui) return;
             const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
@@ -523,7 +568,7 @@ export const DepsPanelMixin = {
             ui.ty = drag.ty + dy;
             this._depsApply(rec);
         });
-        win.addEventListener("mouseup", () => { drag = null; setTimeout(() => { if (rec.ui) rec.ui.dragged = false; }, 0); });
+        win.addEventListener("mouseup", () => { drag = null; ui.view.classList.remove("panning"); setTimeout(() => { if (rec.ui) rec.ui.dragged = false; }, 0); });
         ui.view.addEventListener("wheel", (e) => {
             e.preventDefault();
             const r = ui.view.getBoundingClientRect();
@@ -536,7 +581,49 @@ export const DepsPanelMixin = {
             this._depsApply(rec);
         }, { passive: false });
         ui.view.addEventListener("keydown", (e) => {
+            if (e.target && e.target.closest && e.target.closest("input, textarea")) return;
             if (e.key === "f" || e.key === "F") { e.preventDefault(); e.stopPropagation(); this._depsFit(rec); }
+            else if (e.code === "Space") { e.preventDefault(); e.stopPropagation(); space = true; }
+            else if (e.key === "Escape" && rec.sel && rec.sel.size) {
+                e.preventDefault(); e.stopPropagation(); rec.sel = new Set(); this._depsSelSync(rec);
+            } else if ((e.ctrlKey || e.metaKey) && (e.key === "a" || e.key === "A")) {
+                e.preventDefault(); e.stopPropagation();
+                rec.sel = new Set(((rec.laid && rec.laid.nodes) || []).map((x) => x.id));
+                this._depsSelSync(rec);
+            }
         });
+    },
+
+    /** A box drawn from a press on empty canvas: the nodes it touches become the selection (Shift / Ctrl: added). */
+    _depsMarquee(rec, e) {
+        const ui = rec.ui, doc = ui.view.ownerDocument, win = doc.defaultView || window;
+        const r = ui.view.getBoundingClientRect();
+        const sx = e.clientX - r.left, sy = e.clientY - r.top;
+        const add = e.shiftKey || e.ctrlKey || e.metaKey;
+        const before = new Set(add ? (rec.sel || []) : []);
+        const box = doc.createElement("div");
+        box.className = "dp-marquee";
+        let moved = false;
+        const toStage = (x, y) => [(x - ui.tx) / ui.scale, (y - ui.ty) / ui.scale];
+        const move = (ev) => {
+            if (!rec.ui) return;
+            const x = ev.clientX - r.left, y = ev.clientY - r.top;
+            if (!moved && Math.abs(x - sx) + Math.abs(y - sy) < 4) return;
+            if (!moved) { ui.view.append(box); moved = true; ui.dragged = true; }
+            Object.assign(box.style, { left: `${Math.min(x, sx)}px`, top: `${Math.min(y, sy)}px`,
+                width: `${Math.abs(x - sx)}px`, height: `${Math.abs(y - sy)}px` });
+            const [x0, y0] = toStage(sx, sy), [x1, y1] = toStage(x, y);
+            rec.sel = new Set([...before, ...nodesInBox(rec.laid, { x0, y0, x1, y1 })]);
+            this._depsSelSync(rec);
+        };
+        const up = () => {
+            win.removeEventListener("mousemove", move);
+            win.removeEventListener("mouseup", up);
+            box.remove();
+            if (!moved && !add) { rec.sel = new Set(); this._depsSelSync(rec); }   // a click on nothing lets go
+            setTimeout(() => { if (rec.ui) rec.ui.dragged = false; }, 0);
+        };
+        win.addEventListener("mousemove", move);
+        win.addEventListener("mouseup", up);
     },
 };
