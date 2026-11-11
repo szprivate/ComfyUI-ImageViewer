@@ -12,7 +12,7 @@
 import { api } from "../../scripts/api.js";
 import { notice, openFilePicker } from "./imageViewer_exportUI.js";
 import * as A from "./imageViewer_atlasRender.js";
-import { wirePictureDrop } from "./imageViewer_atlasDrops.js";
+import { floatDialog, wirePictureDrop } from "./imageViewer_atlasDrops.js";
 
 async function asJson(res) {
     let body = {};
@@ -104,6 +104,8 @@ export const AtlasCreateMixin = {
         foot.append(cancel, go);
         box.append(head, composer, nameRow, hint, progress, message, foot);
         shade.append(box);
+        // Not modal: the History and the rest of the viewer stay usable while it is open.
+        floatDialog(shade, box, head);
         host.append(shade);
         this._atlasCreateDlg = shade;
 

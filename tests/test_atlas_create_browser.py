@@ -264,9 +264,56 @@ class AtlasCreateTests(unittest.TestCase):
         pg.wait_for_function(f"() => {root}.querySelectorAll('.atlas-create .atlas-pic').length === 1")
         self.assertEqual(pg.evaluate("() => window.__uploads"), ["beach.png"], "only the picture is copied in")
         self.assertEqual(pg.evaluate(f"() => {root}.querySelector('.atlas-create .atlas-name').value"), "beach")
-        # A file let go on the backdrop beside the box is swallowed, not opened by the browser.
-        prevented = pg.evaluate(DROP_FILES % (f"{root}.querySelector('.atlas-create')", "['x.png']"))
-        self.assertTrue(prevented)
+        self.assertEqual(self.errors, [])
+
+    def test_the_new_world_dialog_leaves_the_history_usable_and_takes_a_thumbnail_dragged_in(self):
+        pg = self.page()
+        pg.evaluate(STUB)
+        pg.evaluate("""async () => {
+          const P = window.__panel;
+          const { app } = await import('/scripts/app.js');
+          app.graph.nodes = app.graph.nodes || []; app.graph.links = app.graph.links || {};
+          P.setViewerToggleState(true);
+          P.updateData({ unique_id: '50', tab_name: 'agentY', tabs: { tab: [
+            { path: 'D:/out/room.png', filename: 'room.png', type: 'output' }] } }, null);
+          P.spaceOpen('3d');
+          if (!P.isPanelDocked('history')) P.setPanelDocked('history', true);
+          P.atlasCreateDialog({ images: [] });
+        }""")
+        root = "window.__panel.shadowRoot"
+        pg.wait_for_function(f"() => !!{root}.querySelector('.atlas-create .rd-box')")
+        # Nothing covers the viewer: the History thumbnail is what is under the pointer, not a backdrop.
+        hit = pg.evaluate(f"""() => {{
+          const t = {root}.querySelector('#history-strip .history-thumb');
+          if (!t) return 'no thumb';
+          const r = t.getBoundingClientRect();
+          const el = {root}.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          return t.contains(el) ? 'thumb' : (el ? el.tagName + '.' + el.className : 'none');
+        }}""")
+        self.assertEqual(hit, "thumb")
+        # The thumbnail dragged onto the dialog becomes one of its pictures.
+        centre = """(el) => { const r = el.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }"""
+        a = pg.evaluate(f"() => ({centre})({root}.querySelector('#history-strip .history-thumb'))")
+        b = pg.evaluate(f"() => ({centre})({root}.querySelector('.atlas-create .atlas-dropzone'))")
+        pg.mouse.move(*a)
+        pg.mouse.down()
+        pg.mouse.move(a[0] + 10, a[1] + 10, steps=3)
+        pg.mouse.move(*b, steps=10)
+        pg.mouse.up()
+        pg.wait_for_function(f"() => {root}.querySelectorAll('.atlas-create .atlas-pic').length === 1", timeout=5000)
+        # The header moves the box.
+        before = pg.evaluate(f"() => {root}.querySelector('.atlas-create-box').getBoundingClientRect().left")
+        head = pg.evaluate(f"""() => {{ const r = {root}.querySelector('.atlas-create .rd-title').getBoundingClientRect();
+                                         return [r.left + 5, r.top + r.height / 2]; }}""")
+        pg.mouse.move(*head)
+        pg.mouse.down()
+        pg.mouse.move(head[0] - 200, head[1] + 40, steps=5)
+        pg.mouse.up()
+        after = pg.evaluate(f"() => {root}.querySelector('.atlas-create-box').getBoundingClientRect().left")
+        self.assertAlmostEqual(after, before - 200, delta=3)
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.screenshot(path=os.path.join(SHOTS, "new-atlas-world-floating.png"))
         self.assertEqual(self.errors, [])
 
     def test_chisel_this_view_paints_a_mask_on_the_view_and_sends_it(self):
