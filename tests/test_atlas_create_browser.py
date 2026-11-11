@@ -544,6 +544,30 @@ class AtlasCreateTests(unittest.TestCase):
         self.assertTrue(out["tab"].startswith("previz"), out)
         self.assertEqual((out["active"], out["shown"], out["model"]), ("folder_history", "room.png", False))
 
+    def test_a_picture_opened_from_the_history_after_a_model_shows_in_2d(self):
+        # The Viewer tab is made into a scene while it shows world.glb; opening a picture there must end it.
+        pg = self.page()
+        out = pg.evaluate("""async () => {
+          const P = window.__panel;
+          const { app } = await import('/scripts/app.js');
+          app.graph.nodes = app.graph.nodes || []; app.graph.links = app.graph.links || {};
+          P.setViewerToggleState(true);
+          P.showInViewerTab([[{ path: 'D:/out/room.png', filename: 'room.png', type: 'output' }]]);
+          P.showInViewerTab([[{ path: 'D:/out/3d_scenes/atlas/court/world.glb', filename: 'world.glb', type: 'output' }]]);
+          await P.enterPreviz('folder_history');
+          const had = P.isPrevizTab('folder_history');
+          const stack = P.history.folder_history || P.history[Object.keys(P.history)[0]];
+          const i = stack.findIndex((s) => ((Array.isArray(s) ? s[0] : s) || {}).filename === 'room.png');
+          P.openHistorySnapshot('folder_history', i);
+          const now = (P.allTabs[P.activeTab] || [])[0];
+          return { had, i, active: P.activeTab, shown: now && now.filename, scene: P.isPrevizTab('folder_history'),
+                   model: !!P._modelMode };
+        }""")
+        self.assertTrue(out["had"], out)
+        self.assertGreaterEqual(out["i"], 0, out)
+        self.assertEqual((out["active"], out["shown"], out["scene"], out["model"]),
+                         ("folder_history", "room.png", False, False))
+
 
 if __name__ == "__main__":
     unittest.main()
