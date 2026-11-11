@@ -1187,6 +1187,19 @@ textarea.param-input {
 }
 .cb-shape { color: #ddd; font-weight: bold; padding: 1px 4px 3px; }
 .cb-color { width: 100%; height: 17px; padding: 0; border: 1px solid #1e1e1e; background: #2b2b2b; }
+/* Channels a constraint drives (Maya tints them blue); keyed wins, since the key is what is stored. */
+.cb-row.constrained:not(.keyed) .cb-val { background: #5f8fb8; color: #111; border-color: #456a8a; }
+.cb-constraint { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
+.cb-constraint .cb-cname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cb-con-on { margin: 0; }
+.cb-con-btn {
+    background: #2b2b2b; color: #bbb; border: 1px solid #1e1e1e; font: inherit; font-size: 11px;
+    line-height: 14px; padding: 0 4px; cursor: pointer;
+}
+.cb-con-btn:hover { color: #fff; border-color: #f60; }
+.cb-axes { display: flex; gap: 6px; align-items: center; background: none; border: none; }
+.cb-axes label { display: flex; align-items: center; gap: 2px; color: #bbb; }
+.cb-axes input { margin: 0; }
 
 /* ── The resolution gate ─────────────────────────────────────────────────────
    Drawn over the canvas while looking through a camera: the shot's frame, the

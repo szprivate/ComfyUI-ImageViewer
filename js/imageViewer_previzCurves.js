@@ -92,10 +92,13 @@ export const PrevizCurvesMixin = {
     /** Which channels an item can show at all: no field of view on a box. */
     _previzChannelsFor(item) {
         const ik = item.kind === "control" && item.control && item.control.type === "ik";
-        return CHANNELS.filter((c) => (c.prop !== "fov" || item.kind === "camera")
+        const own = CHANNELS.filter((c) => (c.prop !== "fov" || item.kind === "camera")
                                    && (c.prop !== "pivot" || (item.kind !== "camera" && item.kind !== "control"))
                                    && (c.prop !== "scale" || item.kind !== "control")
                                    && (c.prop !== "ikfk" || ik));
+        // A constraint's weights are channels too (imageViewer_previzConstraints.js).
+        const extra = this._previzConstraintCurveChannels ? this._previzConstraintCurveChannels(item) : [];
+        return extra.length ? [...own, ...extra] : own;
     },
 
     /** The objects the editor is showing: everything selected, in scene order. */

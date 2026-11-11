@@ -64,6 +64,7 @@
 import { WORLD_KINDS, readWorldItem, referenceSettings, walkSettings, worldInfo } from "./imageViewer_worldData.js";
 import { readRigFields } from "./imageViewer_rigData.js";
 import { readItemRef, readSceneLayers } from "./imageViewer_sceneLayers.js";
+import { pruneConstraints, readConstraints, readWeightStatic, writeWeightStatic } from "./imageViewer_constraintData.js";
 
 export const SCENE_VERSION = 1;
 export const DEFAULT_RESOLUTION = [1920, 1080];
@@ -152,7 +153,49 @@ export const TRACKS = ["position", "rotation", "scale", "pivot", "fov", "ikfk"];
 // Channels that hold one number rather than [x, y, z]: a camera's field of
 // view, and an IK control's IK/FK blend (imageViewer_rigData.js).
 export const SCALAR_TRACKS = ["fov", "ikfk"];
-const _isScalar = (prop) => SCALAR_TRACKS.includes(prop);
+const _isScalar = (prop) => SCALAR_TRACKS.includes(prop) || isExtraProp(prop);
+
+// EXTRA TRACKS
+// Channels other features hang on an item without this module knowing them:
+// a constraint's weights ("cw:<constraint>:<target>", "ce:<constraint>",
+// imageViewer_constraintData.js), and anything else spelled "<kind>:<name>".
+// Every one is a single number, keyed like any other channel. Where its value
+// lives when it is NOT animated is the owner's business: it registers a reader
+// (and a writer) here, so this module never has to import it.
+export function isExtraProp(prop) {
+    return typeof prop === "string" && /^[A-Za-z][\w]*:[^|]+$/.test(prop);
+}
+const _staticReaders = [];
+const _staticWriters = [];
+/** fn(item, prop) -> the channel's static value, or undefined when it is not yours. */
+export function addStaticReader(fn) { if (!_staticReaders.includes(fn)) _staticReaders.push(fn); }
+/** fn(item, prop, value) -> true when it took the value. */
+export function addStaticWriter(fn) { if (!_staticWriters.includes(fn)) _staticWriters.push(fn); }
+// A constraint's weights (imageViewer_constraintData.js) are the first extra channels.
+addStaticReader(readWeightStatic);
+addStaticWriter(writeWeightStatic);
+function _extraStatic(item, prop) {
+    for (const fn of _staticReaders) {
+        const v = fn(item, prop);
+        if (v !== undefined) return v;
+    }
+    return 0;
+}
+/** Set a channel's value where it lives when it does not animate. */
+export function setStaticValue(item, prop, value) {
+    if (!item) return item;
+    if (isExtraProp(prop)) {
+        for (const fn of _staticWriters) if (fn(item, prop, value)) return item;
+        return item;
+    }
+    item[prop] = Array.isArray(value) ? value.slice() : value;
+    return item;
+}
+/** Every channel this item can have keys on: the fixed ones, then its extra ones. */
+export function trackProps(item) {
+    const extra = item && item.tracks ? Object.keys(item.tracks).filter(isExtraProp) : [];
+    return extra.length ? [...TRACKS, ...extra] : TRACKS;
+}
 
 // Blocking shapes the viewer can make on its own — no file, no loader. Each is
 // built at unit size and placed by its transform, so the gizmo's scale handles
@@ -461,7 +504,7 @@ export function isAnimated(item, prop) {
 /** Every frame this item has a key on, sorted, without duplicates. */
 export function keyframeFrames(item) {
     const out = new Set();
-    for (const prop of TRACKS) for (const k of track(item, prop)) out.add(k.f);
+    for (const prop of trackProps(item)) for (const k of track(item, prop)) out.add(k.f);
     return [...out].sort((a, b) => a - b);
 }
 
@@ -470,7 +513,7 @@ export function keyframeFrames(item) {
  * its easing unless a new one is given. Returns the scene item for chaining.
  */
 export function setKeyframe(item, prop, frame, value, ease) {
-    if (!item || !TRACKS.includes(prop)) return item;
+    if (!item || !(TRACKS.includes(prop) || isExtraProp(prop))) return item;
     const f = Math.round(frame);
     if (!item.tracks) item.tracks = {};
     const list = Array.isArray(item.tracks[prop]) ? item.tracks[prop] : [];
@@ -540,7 +583,7 @@ export function tangentAt(item, prop, frame, axis, side = "out") {
 export function removeKeyframe(item, frame, prop) {
     if (!item || !item.tracks) return item;
     const f = Math.round(frame);
-    for (const p of prop ? [prop] : TRACKS) {
+    for (const p of prop ? [prop] : trackProps(item)) {
         const list = item.tracks[p];
         if (!Array.isArray(list)) continue;
         const left = list.filter((k) => k.f !== f);
@@ -619,6 +662,7 @@ export function valueAt(item, prop, frame) {
     const stat = prop === "fov" ? (item.fov ?? 35)
                : prop === "ikfk" ? (item.ikfk ?? 1)
                : prop === "pivot" ? _clone(item.pivot || [0, 0, 0])
+               : isExtraProp(prop) ? _extraStatic(item, prop)
                : _clone(item[prop]);
     if (keys.length === 0) return stat;
     if (frame <= keys[0].f) return _clone(keys[0].v);
@@ -756,7 +800,7 @@ export function parseScene(raw) {
         }
 
         const tracks = raw.tracks && typeof raw.tracks === "object" ? raw.tracks : {};
-        for (const prop of TRACKS) {
+        for (const prop of [...TRACKS, ...Object.keys(tracks).filter(isExtraProp)]) {
             const list = Array.isArray(tracks[prop]) ? tracks[prop] : null;
             if (!list) continue;
             const keys = [];
@@ -764,6 +808,7 @@ export function parseScene(raw) {
                 if (!k || !Number.isFinite(Number(k.f))) continue;
                 const v = prop === "fov" ? num(k.v, item.fov ?? 35)
                     : prop === "ikfk" ? Math.max(0, Math.min(1, num(k.v, item.ikfk ?? 1)))
+                    : isExtraProp(prop) ? num(k.v, 0)
                     : vec(k.v, item[prop]);
                 const key = { f: Math.round(Number(k.f)), v,
                               ease: k.ease === "linear" || k.ease === "hold" ? k.ease : "smooth" };
@@ -786,6 +831,9 @@ export function parseScene(raw) {
         // dropped: it would show as an invisible row the user can't fix. A
         // shape carries its own geometry, so it has nothing to lose.
         if (!isCam && !isPrim && !isGroup && !isWorld && !isCtrl && !item.src) continue;
+        // Constraints (imageViewer_constraintData.js) ride on the item they move.
+        const cons = readConstraints(raw.constraints, item.kind);
+        if (cons.length) item.constraints = cons;
         items.push(item);
     }
 
@@ -805,6 +853,7 @@ export function parseScene(raw) {
     repairTree(scene);
     // Display layers, selection sets and references, their members held to the items there are.
     readSceneLayers(scene, data);
+    pruneConstraints(scene);
     return scene;
 }
 

@@ -13,6 +13,8 @@ import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
 import * as S from "./imageViewer_scene3d.js";
 import * as L from "./imageViewer_sceneLayers.js";
+import { pruneConstraints } from "./imageViewer_constraintData.js";
+import { bakedCopy } from "./imageViewer_constraints.js";
 import { pref, PREF } from "./imageViewer_settings.js";
 import { notice, openExportDialog, openFilePicker } from "./imageViewer_exportUI.js";
 
@@ -576,6 +578,8 @@ export const PrevizMixin = {
         this.previzSnapshot(label);
         scene.items = scene.items.filter((it) => !gone.has(it));
         L.pruneMembers(scene);
+        // Constraints on what is left lose the targets that went.
+        pruneConstraints(scene);
         if ([...gone].some((it) => it.id === scene.activeCamera)) scene.activeCamera = null;
         this._previzSelection = scene.items.length ? scene.items[0].id : null;
         if (this._previzAlso) this._previzAlso.clear();
@@ -786,7 +790,7 @@ export const PrevizMixin = {
             for (const id of this.previzSelectedIds()) {
                 const item = S.itemById(this.previzScene(), id);
                 if (!item) continue;
-                for (const prop of S.TRACKS) {
+                for (const prop of S.trackProps(item)) {
                     for (const k of S.track(item, prop)) if (k.f === frame) k.ease = ease.value;
                 }
             }
@@ -1074,6 +1078,11 @@ export const PrevizMixin = {
         rigBtn.title = "Rig a character: animation controls, IK / FK, AI in-betweens and text-to-motion, "
                      + "FBX and Alembic export";
         rigBtn.onclick = () => this._previzToggleRigMenu(rigBtn);
+        // Constraints: parent, point, orient, aim, scale (imageViewer_previzConstraints.js).
+        const conBtn = el("button", "previz-btn previz-constrain", "Constrain");
+        conBtn.title = "Constrain: select the target(s), then the item that should follow them, and pick parent, "
+                     + "point, orient, aim or scale. Bake or remove constraints here too";
+        conBtn.onclick = () => this._previzToggleConstrainMenu(conBtn);
         this._previzBindDrops(host);
         const undoBtn = el("button", "previz-btn previz-step");
         undoBtn.textContent = "↩";              // stands in if the skin is missing
@@ -1123,7 +1132,7 @@ export const PrevizMixin = {
                              + "only the part of a picture of it you paint over (drop pictures from Explorer or the History)";
         atlasChiselBtn.style.display = "none";
         atlasChiselBtn.onclick = () => this.atlasChiselDialog();
-        actions.append(newBtn, addBtn, editBtn, outBtn, rigBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn, atlasMoveBtn,
+        actions.append(newBtn, addBtn, editBtn, outBtn, rigBtn, conBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn, atlasMoveBtn,
                        atlasChiselBtn, atlasNewBtn);
 
         const list = el("div", "previz-list");
@@ -2128,7 +2137,8 @@ export const PrevizMixin = {
                 const res = await fetch(api.apiURL("/imageviewer/usd_export"), {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ scene, name: v.name, format: v.format, rule: true, context: v.context }),
+                    // The stage carries keys, not constraints: those are baked into a copy first.
+                    body: JSON.stringify({ scene: bakedCopy(scene), name: v.name, format: v.format, rule: true, context: v.context }),
                 });
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) return { ok: false, message: `Could not export the stage: ${data.error || res.status}` };
