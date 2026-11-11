@@ -20,6 +20,7 @@ encoder (LLM2Vec on Llama 3) is under Meta's Llama 3 licence. None of it is part
 import argparse
 import json
 import math
+import os
 import sys
 import traceback
 
@@ -93,15 +94,35 @@ def key_constraints(keys, names, parents):
              "root_positions": roots.tolist(), "smooth_root_2d": roots[:, [0, 2]].tolist()}]
 
 
+def pick_device(torch):
+    """KIMODO_DEVICE (cuda, mps, cpu), else CUDA, else Apple's MPS, else the CPU."""
+    want = os.environ.get("KIMODO_DEVICE", "").strip().lower()
+    if want in ("cuda", "cuda:0"):
+        return "cuda:0"
+    if want in ("mps", "cpu"):
+        return want
+    if torch.cuda.is_available():
+        return "cuda:0"
+    mps = getattr(getattr(torch, "backends", None), "mps", None)
+    return "mps" if mps is not None and mps.is_available() else "cpu"
+
+
 class Generator:
     def __init__(self, model_name):
         import torch
         from kimodo import load_model
         from kimodo.skeleton import SOMASkeleton77
         self.torch = torch
-        self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        self.device = pick_device(torch)
         print(f"Kimodo on {self.device}, loading {model_name}", flush=True)
-        self.model = load_model(model_name, device=self.device, default_family="Kimodo")
+        try:
+            self.model = load_model(model_name, device=self.device, default_family="Kimodo")
+        except Exception as e:
+            if self.device != "mps":
+                raise
+            print(f"!! Kimodo would not load on MPS ({type(e).__name__}: {e}); on the CPU", flush=True)
+            self.device = "cpu"
+            self.model = load_model(model_name, device=self.device, default_family="Kimodo")
         self.skel = SOMASkeleton77()
         self.names = list(self.skel.bone_order_names)
         self.parents = [self.names.index(self.skel.bone_parents[n]) if self.skel.bone_parents[n] else -1
