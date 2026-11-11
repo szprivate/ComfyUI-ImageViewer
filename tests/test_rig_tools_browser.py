@@ -92,6 +92,28 @@ def fake_motion(frames):
     return {"fps": 30.0, "joints": SOMA, "parents": [], "rest": [], "samples": [{"rot": rot, "root": root, "contacts": contacts}]}
 
 
+# MediaPipe's landmarks of a person in the model's T-pose (y down, z away), walking across the picture.
+_TPOSE = {11: (0.165, 0.429, -0.013), 12: (-0.164, 0.429, -0.012), 13: (0.453, 0.429, -0.013), 14: (-0.452, 0.429, -0.012),
+          15: (0.724, 0.429, -0.013), 16: (-0.723, 0.429, -0.012), 17: (0.82, 0.429, -0.02), 18: (-0.82, 0.429, -0.02),
+          19: (0.82, 0.429, 0.0), 20: (-0.82, 0.429, 0.0), 23: (0.1, -0.084, 0.026), 24: (-0.1, -0.083, 0.026),
+          25: (0.1, -0.517, 0.018), 26: (-0.1, -0.517, 0.018), 27: (0.1, -0.938, -0.017), 28: (-0.1, -0.938, -0.017),
+          29: (0.1, -0.98, -0.07), 30: (-0.1, -0.98, -0.07), 31: (0.1, -0.989, 0.115), 32: (-0.1, -0.989, 0.116),
+          7: (0.07, 0.63, 0.01), 8: (-0.07, 0.63, 0.01), 0: (0.0, 0.6, 0.11)}
+
+
+def fake_track(frames=25):
+    out = []
+    for i in range(frames):
+        world, image = [], []
+        for j in range(33):
+            x, y, z = _TPOSE.get(j, (0.0, 0.0, 0.0))
+            v = 0.95 if j in _TPOSE else 0.0
+            world.append([x, -y, -z, v])
+            image.append([0.5 + 0.1 * x + 0.01 * i, 0.5 - 0.1 * y, 0.0, v])
+        out.append({"i": i, "t": i / 25, "world": world, "image": image})
+    return {"fps": 25.0, "width": 1280, "height": 720, "frames": out}
+
+
 def _free_port():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -184,6 +206,7 @@ class RigToolsBrowserTests(unittest.TestCase):
             route.fulfill(status=200, content_type="application/json", body=json.dumps({
                 "unirig": {"ready": ready, "why": "" if ready else "UniRig is not set up"},
                 "kimodo": {"ready": ready, "why": "" if ready else "Kimodo is not set up", "model": "Kimodo-SOMA-RP-v1.2"},
+                "posetrack": {"ready": ready, "why": "" if ready else "Motion from video is not set up"},
                 "install": {"root": "D:/AI/rigtools", "hf_token": False, "running": None}}))
 
         def install(route, request):
@@ -198,6 +221,8 @@ class RigToolsBrowserTests(unittest.TestCase):
                 self.requests.append((kind, body))
                 if kind == "motion":
                     state["result"] = fake_motion(int(body["frames"]))
+                elif kind == "video_pose":
+                    state["result"] = fake_track()
                 else:
                     state["result"] = {"path": "D:/out/characters/statue_rig.glb", "relative": "characters/statue_rig.glb",
                                        "name": "statue_rig.glb"}
@@ -229,6 +254,16 @@ class RigToolsBrowserTests(unittest.TestCase):
         pg.route("**/imageviewer/rig/autorig", start("autorig"))
         pg.route("**/imageviewer/rig/motion", start("motion"))
         pg.route("**/imageviewer/rig/job*", job)
+        pg.route("**/imageviewer/rig/video_pose", start("video_pose"))
+
+        def lipsync(route, request):
+            body = json.loads(request.post_data or "{}")
+            self.requests.append(("lipsync", body))
+            n = 10
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({
+                "frames": n, "fps": body["fps"], "open": [0, 0.2, 0.9, 1, 0.5, 0, 0.8, 0.8, 0.2, 0],
+                "round": [0] * 6 + [1, 1, 0, 0], "wide": [0] * n, "closed": [0, 0, 0, 0, 0, 1, 0, 0, 0, 0], "hiss": [0] * n}))
+        pg.route("**/imageviewer/rig/lipsync", lipsync)
         pg.goto(f"http://127.0.0.1:{self.port}/tabs.html")
         pg.wait_for_function("() => window.__panel && window.__panel.container", timeout=20000)
         return pg
@@ -423,6 +458,95 @@ class RigToolsBrowserTests(unittest.TestCase):
         self.assertGreater(len(keyed), 20)
         self.assertEqual([m["format"] for k, m in self.requests if k == "export"], ["fbx", "abc"])
         self.assertIn("export", kinds)
+        self.assertEqual(self.errors, [])
+
+    def test_restyle_video_motion_lip_sync_and_layers(self):
+        """Restyle, motion from a film and lip sync, each taken onto a layer; the agent's scene-wide ops."""
+        pg = self.page()
+        try:
+            pg.evaluate(OPEN, ["statue.glb", "Statue"])
+            pg.evaluate("async () => window.__panel.previzAutoRig(window.__hero, { seed: 7 })")
+            pg.evaluate(HELP)
+            pg.evaluate("""async () => window.__panel.previzRigGenerateMotion(window.__hero,
+                             { mode: 'text', prompt: 'A person walks forward.', from: 0, to: 48 })""")
+            # Agent: layers asked for before the layers feature is in the viewer say so.
+            had_layers = pg.evaluate("() => typeof window.__panel.previzLayerAdd === 'function'")
+            had_poses = pg.evaluate("() => typeof window.__panel.previzPoseList === 'function'")
+            pg.evaluate("async () => window.__panel.previzRigAgentRun({ id: 'l0', action: 'layer_add', args: { name: 'x' } })")
+            # A stand-in for the layers mixin: records which layer each bake went to.
+            pg.evaluate("""() => { const p = window.__panel; window.__layers = [];
+                p.previzLayerAdd = (o) => { window.__layers.push({ add: o.name, mode: o.mode }); return 'L' + window.__layers.length; };
+                p.previzWithLayer = (id, fn) => { window.__layers.push({ into: id }); return fn(); }; }""")
+            entries = pg.evaluate("""() => window.__panel.previzRigAIEntries(window.__hero, { rigged: true }).map((e) => e.label)""")
+            restyle = pg.evaluate("""async () => window.__panel.previzRigRestyle(window.__hero,
+                                       { prompt: 'A tired old man walks.', strength: 'medium', layer: 'new' })""")
+            film = pg.evaluate("""async () => window.__panel.previzRigVideoMotion(window.__hero,
+                                    { src: { filename: 'walk.mp4', type: 'input' }, at: 60, smooth: 0, layer: 'new' })""")
+            hips60, hips84 = pg.evaluate("() => [window.__boneAt('Hips', 60), window.__boneAt('Hips', 84)]")
+            arm = pg.evaluate("() => [window.__boneAt('LeftArm', 70), window.__boneAt('LeftHand', 70)]")
+            layers = pg.evaluate("() => window.__layers")
+            # Lip sync: a character with ARKit mouth shapes, keyed through "bs:" tracks (the rig extras' scene model).
+            pg.evaluate("""() => { const p = window.__panel;
+                p._previzMorphNames = () => ['jawOpen', 'mouthFunnel', 'mouthClose', 'eyeBlinkLeft'];
+                p._previzCanKeyMorphs = () => true;
+                window.__keys = {};
+                const it = p.previzScene().items.find((i) => i.id === window.__hero);
+                it.tracks = it.tracks || {};
+                window.__hero_item = it; }""")
+            # (until the scene model knows "bs:" tracks, keys are written straight into the item for the test)
+            pg.evaluate("""() => { const p = window.__panel; const orig = p.previzRigLipSync.bind(p);
+                window.__lip = async (o) => orig(o); }""")
+            lips = pg.evaluate("""async () => window.__panel.previzRigLipSync(window.__hero,
+                                    { src: { filename: 'line.wav', type: 'input' }, at: 5, lead: 0 })""")
+            # The agent's road for the new actions.
+            pg.evaluate("""async () => window.__panel.previzRigAgentRun({ id: 'a3', action: 'restyle',
+                             args: { model: 'Statue', prompt: 'A soldier marches.', strength: 'close' } })""")
+            pg.evaluate("async () => window.__panel.previzRigAgentRun({ id: 'a4', action: 'layer_add', args: { name: 'Fix', mode: 'additive' } })")
+            pg.evaluate("async () => window.__panel.previzRigAgentRun({ id: 'a5', action: 'pose_list', args: {} })")
+            pg.evaluate("async () => window.__panel.previzRigAgentRun({ id: 'a6', action: 'list_constraints', args: {} })")
+        finally:
+            pg.close()
+        self.assertEqual(entries, ["Restyle motion…", "Motion from video…", "Lip sync from audio…"])
+        motions = [b for k, b in self.requests if k == "motion"]
+        r = motions[1]
+        self.assertEqual(r["mode"], "restyle")
+        self.assertEqual(r["prompt"], "A tired old man walks.")
+        self.assertEqual(r["path"]["frames"][0], 0)
+        self.assertEqual(r["path"]["frames"][-1], r["frames"] - 1)
+        self.assertTrue(all(k.get("effectors") for k in r["keys"][1:]))
+        self.assertTrue(restyle["ok"], restyle)
+        self.assertEqual(restyle["layer"], "L1")
+        vp = [b for k, b in self.requests if k == "video_pose"][0]
+        self.assertEqual(vp["src"], {"filename": "walk.mp4", "type": "input"})
+        self.assertTrue(film["ok"], film)
+        self.assertEqual(film["layer"], "L3")
+        self.assertEqual(layers[0], {"add": "AI restyle · Statue", "mode": "override"})
+        self.assertEqual(layers[1], {"into": "L1"})
+        self.assertEqual(layers[2]["add"], "Video motion · Statue")
+        # 25 film frames at 25 fps = 1 s = 24 scene frames; the person moved across the picture (+X here)
+        self.assertGreater(hips84[0] - hips60[0], 0.05)
+        # T-posed arm in the film: the character's left arm points out sideways (+X)
+        d = [arm[1][i] - arm[0][i] for i in range(3)]
+        self.assertGreater(d[0], 0.8 * math.hypot(*d))
+        self.assertTrue(lips["ok"], lips)
+        self.assertEqual(lips["set"], "arkit")
+        self.assertEqual(lips["shapes"], 3)
+        lip = [b for k, b in self.requests if k == "lipsync"][0]
+        self.assertEqual(lip["src"], {"filename": "line.wav", "type": "input"})
+        done = {b["id"]: b for k, b in self.requests if k == "agent_done" and b["state"] in ("done", "error")}
+        if not had_layers:
+            self.assertEqual(done["l0"]["state"], "error")
+            self.assertIn("Animation layers", done["l0"]["error"])
+        self.assertEqual(done["a3"]["state"], "done", done["a3"])
+        self.assertEqual(done["a4"]["state"], "done", done["a4"])
+        self.assertEqual(done["a4"]["result"]["layer"], "L5")
+        if had_poses:
+            self.assertEqual(done["a5"]["state"], "done", done["a5"])
+        else:
+            self.assertEqual(done["a5"]["state"], "error")
+            self.assertIn("pose library", done["a5"]["error"])
+        self.assertEqual(done["a6"]["state"], "done", done["a6"])        # constraints are in the viewer (#110)
+        self.assertEqual(done["a6"]["result"]["constraints"], [])
         self.assertEqual(self.errors, [])
 
 

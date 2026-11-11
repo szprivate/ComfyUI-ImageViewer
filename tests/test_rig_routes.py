@@ -103,6 +103,51 @@ FAKE_KIMODO = {
 }
 
 
+# Just enough of OpenCV and MediaPipe for scripts/rig/video_pose_run.py: a film of 5 frames, one person.
+FAKE_POSETRACK = {
+    "cv2/__init__.py": """
+        import numpy as np
+        CAP_PROP_FPS, CAP_PROP_FRAME_COUNT, CAP_PROP_FRAME_WIDTH, CAP_PROP_FRAME_HEIGHT, COLOR_BGR2RGB = 1, 2, 3, 4, 5
+        class VideoCapture:
+            def __init__(self, path): self.n = 0; self.path = path
+            def isOpened(self): return self.path.endswith('.mp4')
+            def get(self, k): return {1: 25.0, 2: 5, 3: 640, 4: 360}[k]
+            def read(self):
+                self.n += 1
+                return (self.n <= 5), np.zeros((360, 640, 3), np.uint8)
+            def release(self): pass
+        def cvtColor(f, code): return f
+    """,
+    "mediapipe/__init__.py": """
+        class ImageFormat: SRGB = 1
+        class Image:
+            def __init__(self, image_format=None, data=None): self.data = data
+    """,
+    "mediapipe/tasks/__init__.py": "",
+    "mediapipe/tasks/python/__init__.py": """
+        class BaseOptions:
+            def __init__(self, model_asset_path=None): self.model_asset_path = model_asset_path
+    """,
+    "mediapipe/tasks/python/vision.py": """
+        class _P:
+            def __init__(self, x, y, z): self.x, self.y, self.z, self.visibility = x, y, z, 0.9
+        class _R:
+            def __init__(self, t):
+                self.pose_world_landmarks = [[_P(0.01 * i, -0.02 * i, 0.0) for i in range(33)]] if t != 2000 // 25 * 1 else []
+                self.pose_landmarks = [[_P(0.5, 0.5, 0.0) for i in range(33)]]
+        class RunningMode: VIDEO = 2
+        class PoseLandmarkerOptions:
+            def __init__(self, **kw): self.kw = kw
+        class PoseLandmarker:
+            @staticmethod
+            def create_from_options(o): return PoseLandmarker()
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def detect_for_video(self, image, ms): return _R(ms)
+    """,
+}
+
+
 def _tree(root, files):
     for rel, text in files.items():
         p = os.path.join(root, rel)
@@ -125,6 +170,14 @@ class RigRoutes(unittest.TestCase):
         fake = os.path.join(cls.tmp, "fakemods")
         _tree(unirig, FAKE_UNIRIG)
         _tree(fake, FAKE_KIMODO)
+        posefake = os.path.join(cls.tmp, "posefake")
+        _tree(posefake, FAKE_POSETRACK)
+        task = os.path.join(cls.tmp, "pose_landmarker_heavy.task")
+        with open(task, "wb") as fh:
+            fh.write(b"model")
+        cls.film = os.path.join(cls.dirs["input"], "dance.mp4")
+        with open(cls.film, "wb") as fh:
+            fh.write(b"not really a film")
         cls.model = os.path.join(cls.dirs["input"], "statue.glb")
         with open(cls.model, "wb") as fh:
             fh.write(rig_fixture.build(skinned=False))
@@ -135,7 +188,8 @@ class RigRoutes(unittest.TestCase):
         cfg = os.path.join(cls.tmp, "rig_tools.json")
         with open(cfg, "w", encoding="utf-8") as fh:
             json.dump({"unirig": {"python": sys.executable, "repo": unirig},
-                       "kimodo": {"python": sys.executable, "env": {"PYTHONPATH": fake}, "text_encoder_device": "cpu"}}, fh)
+                       "kimodo": {"python": sys.executable, "env": {"PYTHONPATH": fake}, "text_encoder_device": "cpu"},
+                       "posetrack": {"python": sys.executable, "env": {"PYTHONPATH": posefake}, "model": task}}, fh)
         os.environ.update(IMAGE_VIEWER_RIG_TOOLS=cfg, FAKE_RIGGED=rigged, FAKE_KIMODO_LOG=cls.log, UNIRIG_DEVICE="cuda")
 
     @classmethod
@@ -424,6 +478,92 @@ class RigRoutes(unittest.TestCase):
         np.testing.assert_allclose(c["local_joints_rot"][0][2], [0, 0, 0], atol=1e-9)
         # The model was loaded once for both.
         self.assertEqual(sum(1 for line in first["log"] + second["log"] if line.startswith("loading ")), 1)
+
+    def test_restyle_sends_the_path_and_the_hands_and_feet(self):
+        key0 = {"frame": 0, "joints": {"Spine1": [0, 0, 0, 1]}, "root": [0, 1, 0]}
+        key15 = {"frame": 15, "joints": {"Spine1": [0, 0, 0, 1]}, "root": [0, 1, 0.5], "effectors": ["Spine1", "Nope"]}
+        path = {"frames": [0, 15, 30, 99], "xz": [[0, 0], [0, 0.5], [0, 1], [0, 9]]}
+
+        async def go(c):
+            bad = await c.post("/imageviewer/rig/motion", json={"mode": "restyle", "prompt": "", "frames": 31, "path": path})
+            nopath = await c.post("/imageviewer/rig/motion", json={"mode": "restyle", "prompt": "Sneaks.", "frames": 31})
+            r = await c.post("/imageviewer/rig/motion", json={"mode": "restyle", "prompt": "A person sneaks.", "frames": 31,
+                                                                 "keys": [key0, key15], "path": path})
+            return bad.status, nopath.status, await self.wait(c, await r.json())
+        open(self.log, "w").close()
+        try:
+            bad, nopath, done = self.run_c(go)
+        finally:
+            for w in self.routes.WORKERS:
+                w.stop()
+        self.assertEqual((bad, nopath), (400, 400))
+        self.assertEqual(done["state"], "done", done)
+        with open(self.log) as fh:
+            cons = [json.loads(line) for line in fh][-1]["constraints"]
+        kinds = {c["type"]: c for c in cons}
+        self.assertEqual(kinds["fullbody"]["frame_indices"], [0])
+        self.assertEqual(kinds["end-effector"]["frame_indices"], [15])
+        self.assertEqual(kinds["end-effector"]["joint_names"], ["Spine1"])      # names the skeleton lacks left out
+        # the path: frames past the motion's end are dropped
+        self.assertEqual(kinds["root2d"]["frame_indices"], [0, 15, 30])
+        self.assertEqual(kinds["root2d"]["smooth_root_2d"][-1], [0, 1])
+
+    def test_clean_path_checks_its_numbers(self):
+        cp = self.routes.clean_path
+        self.assertIsNone(cp(None, 10))
+        self.assertEqual(cp({"frames": [0, 0, 3], "xz": [[1, 2], [3, 4], [5, 6]]}, 10), {"frames": [0, 3], "xz": [[1, 2], [5, 6]]})
+        with self.assertRaises(ValueError):
+            cp({"frames": [0], "xz": []}, 10)
+        with self.assertRaises(ValueError):
+            cp({"frames": ["a"], "xz": [[0, 0]]}, 10)
+
+    def test_video_pose_runs_the_tracker_on_a_film(self):
+        async def go(c):
+            tools = await (await c.get("/imageviewer/rig/tools")).json()
+            missing = await c.post("/imageviewer/rig/video_pose", json={"src": {"filename": "gone.mp4", "type": "input"}})
+            notfilm = await c.post("/imageviewer/rig/video_pose", json={"src": {"filename": "statue.glb", "type": "input"}})
+            r = await c.post("/imageviewer/rig/video_pose", json={"src": {"filename": "dance.mp4", "type": "input"}, "step": 1})
+            return tools, missing.status, notfilm.status, await self.wait(c, await r.json())
+        tools, missing, notfilm, done = self.run_c(go)
+        self.assertTrue(tools["posetrack"]["ready"], tools)
+        self.assertEqual(missing, 404)
+        self.assertIn(notfilm, (400, 403))
+        self.assertEqual(done["state"], "done", done)
+        res = done["result"]
+        self.assertEqual((res["fps"], res["width"], res["height"]), (25.0, 640, 360))
+        self.assertEqual([f["i"] for f in res["frames"]], [0, 1, 2, 3, 4])
+        self.assertEqual(len(res["frames"][0]["world"]), 33)
+        self.assertIsNone(res["frames"][2]["world"])          # the frame at 80 ms had nobody in it
+
+    def test_lipsync_reads_a_sound_into_mouth_curves(self):
+        try:
+            import av  # noqa: F401
+        except ImportError:
+            self.skipTest("needs PyAV")
+        import wave
+        rate = 16000
+        t = np.arange(int(rate * 0.4)) / rate
+        voice = 0.3 * np.sin(2 * np.pi * 700 * t) + 0.15 * np.sin(2 * np.pi * 1400 * t)
+        sig = np.concatenate([np.zeros(int(rate * 0.3)), voice, np.zeros(int(rate * 0.06)), voice, np.zeros(int(rate * 0.3))])
+        path = os.path.join(self.dirs["input"], "line.wav")
+        with wave.open(path, "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate)
+            w.writeframes((sig * 32767).astype("<i2").tobytes())
+
+        async def go(c):
+            r = await c.post("/imageviewer/rig/lipsync", json={"src": {"filename": "line.wav", "type": "input"}, "fps": 25, "lead": 0})
+            bad = await c.post("/imageviewer/rig/lipsync", json={"src": {"filename": "line.wav", "type": "input"}, "fps": 500})
+            return r.status, await r.json(), bad.status
+        status, out, bad = self.run_c(go)
+        self.assertEqual(status, 200, out)
+        self.assertEqual(bad, 400)
+        n = out["frames"]
+        self.assertEqual(n, len(out["open"]))
+        self.assertAlmostEqual(n / 25, len(sig) / rate, delta=0.08)
+        self.assertLess(max(out["open"][:5]), 0.1, "silence: closed")
+        self.assertGreater(max(out["open"][10:16]), 0.8, "the voice opens the mouth")
+        dip = int((0.3 + 0.4 + 0.03) * 25)
+        self.assertEqual(max(out["closed"][dip - 1:dip + 2]), 1.0, "the short drop between two sounds shuts the lips")
 
 
 if __name__ == "__main__":

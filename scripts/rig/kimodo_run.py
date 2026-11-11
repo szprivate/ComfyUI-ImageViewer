@@ -6,8 +6,11 @@ Run by the viewer (src/rig_routes.py) with Kimodo's own Python:
     python kimodo_run.py --serve [--model ...]     one {"request", "output"} JSON per stdin line;
                                                    answers "@@{"done": true}" or "@@{"error": ...}"
 
-The request: {prompt, frames (at Kimodo's 30 fps), keys: [{frame, joints: {SOMA joint: [x,y,z,w]}, root: [x,y,z]}],
-seed, steps, samples, heading, postprocess}. A key's joint rotations are global rotations away from SOMA's
+The request: {prompt, frames (at Kimodo's 30 fps), keys: [{frame, joints: {SOMA joint: [x,y,z,w]}, root: [x,y,z],
+effectors?: [SOMA joint]}], path?: {frames: [int], xz: [[x, z]]}, seed, steps, samples, heading, postprocess}.
+A key with ``effectors`` holds only those joints (an end-effector constraint); ``path`` is the hips' way over
+the ground (a root2d constraint) - the viewer's restyle keeps a motion's path and timing and lets the prompt
+change how it is done. A key's joint rotations are global rotations away from SOMA's
 standard T-pose (Y up, facing +Z, the left side at +X); joints a key leaves out turn with their parent.
 Its root is the hips' position in metres, relative to where the motion starts.
 
@@ -70,28 +73,50 @@ def mat_to_axis_angle(m):
     return axis * angle
 
 
-def key_constraints(keys, names, parents):
-    """The keyed poses as one Kimodo full-body constraint (local axis-angle per joint, hips positions)."""
-    frames, rots, roots = [], [], []
+def _local_rots(key, names, parents):
+    """A key's global rotations (joints it leaves out turn with their parent) -> local axis-angle per joint."""
+    g = np.repeat(np.eye(3)[None], len(names), axis=0)
+    given = key.get("joints") or {}
+    for j, name in enumerate(names):              # parents come first
+        if name in given:
+            g[j] = quat_to_mat(given[name])
+        elif parents[j] >= 0:
+            g[j] = g[parents[j]]
+    local = np.empty_like(g)
+    for j in range(len(names)):
+        local[j] = g[j] if parents[j] < 0 else g[parents[j]].T @ g[j]
+    return mat_to_axis_angle(local)
+
+
+def key_constraints(keys, names, parents, path=None):
+    """The keyed poses as Kimodo constraints (local axis-angle per joint, hips positions).
+
+    Keys without ``effectors`` together make one full-body constraint; keys naming ``effectors``
+    (SOMA joints, e.g. ["LeftFoot", "RightHand"]) are grouped by them into end-effector constraints,
+    which hold only those joints (and the hips' height and heading). ``path`` {frames, xz} is the hips'
+    way over the ground, a root2d constraint: the motion keeps to it whatever the prompt says.
+    """
+    groups = {}
     for key in sorted(keys, key=lambda k: int(k["frame"])):
-        g = np.repeat(np.eye(3)[None], len(names), axis=0)
-        given = key.get("joints") or {}
-        for j, name in enumerate(names):              # parents come first
-            if name in given:
-                g[j] = quat_to_mat(given[name])
-            elif parents[j] >= 0:
-                g[j] = g[parents[j]]
-        local = np.empty_like(g)
-        for j in range(len(names)):
-            local[j] = g[j] if parents[j] < 0 else g[parents[j]].T @ g[j]
-        frames.append(int(key["frame"]))
-        rots.append(mat_to_axis_angle(local))
-        roots.append([float(v) for v in key["root"]])
-    if not frames:
-        return []
-    roots = np.array(roots)
-    return [{"type": "fullbody", "frame_indices": frames, "local_joints_rot": np.array(rots).tolist(),
-             "root_positions": roots.tolist(), "smooth_root_2d": roots[:, [0, 2]].tolist()}]
+        eff = tuple(str(n) for n in (key.get("effectors") or []) if str(n) in names)
+        groups.setdefault(eff, []).append(key)
+    out = []
+    for eff, group in groups.items():
+        frames = [int(k["frame"]) for k in group]
+        rots = [_local_rots(k, names, parents) for k in group]
+        roots = np.array([[float(v) for v in k["root"]] for k in group])
+        c = {"type": "end-effector" if eff else "fullbody", "frame_indices": frames,
+             "local_joints_rot": np.array(rots).tolist(), "root_positions": roots.tolist(),
+             "smooth_root_2d": roots[:, [0, 2]].tolist()}
+        if eff:
+            c["joint_names"] = list(eff)
+        out.append(c)
+    if path and path.get("frames"):
+        frames = [int(f) for f in path["frames"]]
+        xz = [[float(p[0]), float(p[1])] for p in path["xz"]]
+        if len(frames) == len(xz):
+            out.append({"type": "root2d", "frame_indices": frames, "smooth_root_2d": xz})
+    return out
 
 
 def pick_device(torch):
@@ -143,7 +168,7 @@ class Generator:
         texts = [t.strip() + "." for t in str(req["prompt"]).split(".") if t.strip()]
         per = [frames // len(texts)] * len(texts)
         per[-1] += frames - sum(per)
-        constraints = key_constraints(req.get("keys") or [], self.names, self.parents)
+        constraints = key_constraints(req.get("keys") or [], self.names, self.parents, req.get("path"))
         lst = load_constraints_lst(constraints, self.model.skeleton, device=self.device) if constraints else []
         if req.get("seed") is not None:
             seed_everything(int(req["seed"]))
@@ -151,7 +176,7 @@ class Generator:
         kw = {}
         if req.get("heading"):
             kw["first_heading_angle"] = torch.full((samples,), float(req["heading"]), device=self.device)
-        print(f"generating {frames} frames: {' '.join(texts)} ({len(constraints and constraints[0]['frame_indices'])} keys)",
+        print(f"generating {frames} frames: {' '.join(texts)} ({sum(len(c['frame_indices']) for c in constraints)} constrained frames)",
               flush=True)
         out = self.model(texts, per, constraint_lst=lst, num_denoising_steps=int(req.get("steps") or 100),
                          num_samples=samples, multi_prompt=True, post_processing=bool(req.get("postprocess", True)) and self.corrects,

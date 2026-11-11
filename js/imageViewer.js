@@ -58,6 +58,7 @@ import { PrevizUndoMixin } from "./imageViewer_previzUndo.js";
 import { PrevizRigMixin } from "./imageViewer_previzRig.js";
 import { PrevizConstraintsMixin } from "./imageViewer_previzConstraints.js";
 import { PrevizRigToolsMixin } from "./imageViewer_previzRigTools.js";
+import { PrevizRigAIMixin } from "./imageViewer_previzRigAI.js";
 import { EditTimelineMixin } from "./imageViewer_editTimeline.js";
 import { EditPlayMixin } from "./imageViewer_editPlay.js";
 import { EditPanelsMixin } from "./imageViewer_editPanels.js";
@@ -1629,6 +1630,7 @@ Object.assign(
     PrevizRigMixin,
     PrevizConstraintsMixin,
     PrevizRigToolsMixin,
+    PrevizRigAIMixin,
     EditTimelineMixin,
     EditPlayMixin,
     EditPanelsMixin,

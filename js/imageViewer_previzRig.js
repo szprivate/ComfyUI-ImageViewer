@@ -464,6 +464,7 @@ export const PrevizRigMixin = {
             { label: "AI in-between…", disabled: !rigged, run: () => this.previzMotionDialog && this.previzMotionDialog(modelId, "inbetween") },
             { label: "Generate motion from text…", disabled: !rigged, run: () => this.previzMotionDialog && this.previzMotionDialog(modelId, "text") },
             { label: "Clean up feet", disabled: !rigged, run: () => this.previzRigCleanFeet && this.previzRigCleanFeet(modelId) },
+            ...(this.previzRigAIEntries ? this.previzRigAIEntries(modelId, { rigged, model }) : []),
             "-",
             { label: "Export FBX…", disabled: !bones, run: () => this.previzExportCharacter && this.previzExportCharacter(modelId, "fbx") },
             { label: "Export Alembic…", disabled: !model, run: () => this.previzExportCharacter && this.previzExportCharacter(modelId, "abc") },

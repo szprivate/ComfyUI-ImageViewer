@@ -1,4 +1,5 @@
-"""Set up the 3D space's character tools on this machine: UniRig (auto-rigging) and Kimodo (AI motion).
+"""Set up the 3D space's character tools on this machine: UniRig (auto-rigging), Kimodo (AI motion) and
+MediaPipe's Pose Landmarker (motion from a film).
 
 Each gets a Python environment of its own under --root (they pin torch and CUDA extensions that ComfyUI's
 own environment must not get), and the viewer is told where they are: rig_tools.json in the viewer's user
@@ -33,7 +34,8 @@ What each needs that this script cannot do for you:
 
 Licences (none of this is part of the viewer, which only runs it): UniRig MIT (code and weights; its
 pipeline uses Blender's bpy module, GPL, inside its own environment); Kimodo Apache-2.0, its SOMA models
-under the NVIDIA Open Model License, the text encoder under Meta's Llama 3 licence; flash-attention BSD.
+under the NVIDIA Open Model License, the text encoder under Meta's Llama 3 licence; flash-attention BSD;
+MediaPipe and its Pose Landmarker (BlazePose GHUM 3D) Apache-2.0.
 """
 import argparse
 import json
@@ -361,6 +363,27 @@ def install_kimodo(root, python, cuda, model, sysname):
     return out
 
 
+POSE_MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
+                  "pose_landmarker_{size}/float16/latest/pose_landmarker_{size}.task")
+
+
+def install_posetrack(root, python, size="heavy"):
+    """Google's MediaPipe Pose Landmarker (Apache-2.0 code and model), for motion from a film."""
+    folder = os.path.join(root, "posetrack")
+    os.makedirs(folder, exist_ok=True)
+    py = make_venv(os.path.join(folder, ".venv"), find_python((3, 11), python) or python)
+    run([py, "-m", "pip", "install", "mediapipe", "opencv-python-headless", "numpy"])
+    model = os.path.join(folder, f"pose_landmarker_{size}.task")
+    if not os.path.isfile(model):
+        url = POSE_MODEL_URL.format(size=size)
+        print("$ download", url, flush=True)
+        req = urllib.request.Request(url, headers={"User-Agent": "rig-tools-installer"})
+        with urllib.request.urlopen(req, timeout=300) as r, open(model + ".part", "wb") as fh:
+            shutil.copyfileobj(r, fh)
+        os.replace(model + ".part", model)
+    return {"python": py, "model": model}
+
+
 def config_path():
     custom = os.environ.get("IMAGE_VIEWER_RIG_TOOLS", "").strip().strip('"')
     if custom:
@@ -371,7 +394,8 @@ def config_path():
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--root", required=True, help="where the tools' folders go")
-    ap.add_argument("--only", choices=["unirig", "kimodo"])
+    ap.add_argument("--only", choices=["unirig", "kimodo", "posetrack"])
+    ap.add_argument("--pose-model", default="heavy", choices=["lite", "full", "heavy"])
     ap.add_argument("--cuda", default="auto",
                     help="auto (from the GPU), cpu, or a PyTorch wheel index: cu118, cu121, cu124, cu126, cu128...")
     ap.add_argument("--python", default=sys.executable, help="the interpreter the environments are made from")
@@ -404,6 +428,9 @@ def main():
         save()
     if a.only in (None, "kimodo"):
         cfg["kimodo"] = install_kimodo(root, a.python, cuda, a.kimodo_model, sysname)
+        save()
+    if a.only in (None, "posetrack"):
+        cfg["posetrack"] = install_posetrack(root, a.python, a.pose_model)
         save()
     print("   Kimodo needs access to meta-llama/Meta-Llama-3-8B-Instruct on Hugging Face and `hf auth login`.")
 

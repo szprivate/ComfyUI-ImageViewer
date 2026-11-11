@@ -125,9 +125,9 @@ export const PrevizRigToolsMixin = {
     async previzRigInstallDialog(tools = null, need = null, then = null) {
         tools = tools || await this._previzRigTools();
         if (!tools.install) { notice("warn", "The character tools cannot be installed from here", "The viewer could not ask the server."); return; }
-        const missing = ["unirig", "kimodo"].filter((t) => !(tools[t] && tools[t].ready));
+        const missing = ["unirig", "kimodo", "posetrack"].filter((t) => tools[t] && !tools[t].ready);
         let folder, both, token;
-        const NAMES = { unirig: "auto-rigging (UniRig)", kimodo: "AI motion (Kimodo)" };
+        const NAMES = { unirig: "auto-rigging (UniRig)", kimodo: "AI motion (Kimodo)", posetrack: "motion from video (MediaPipe pose)" };
         await openExportDialog(this.container, {
             title: "Set up the character tools",
             kind: "character",
@@ -139,7 +139,7 @@ export const PrevizRigToolsMixin = {
             rows: ({ el, row }) => {
                 const what = need
                     ? `${NAMES[need][0].toUpperCase()}${NAMES[need].slice(1)} is not set up on this machine yet.`
-                    : (missing.length ? `Not set up yet: ${missing.map((t) => NAMES[t]).join(" and ")}.` : "Both are set up; installing again updates them.");
+                    : (missing.length ? `Not set up yet: ${missing.map((t) => NAMES[t]).join(" and ")}.` : "All are set up; installing again updates them.");
                 const rows = [el("div", "rd-hint", what)];
                 folder = Object.assign(el("input", "rd-in rd-text"), { value: tools.install.root, spellcheck: false });
                 folder.style.width = "100%";
@@ -147,7 +147,7 @@ export const PrevizRigToolsMixin = {
                 const others = missing.filter((t) => t !== need);
                 if (need && others.length) {
                     both = Object.assign(el("input"), { type: "checkbox", checked: true });
-                    const lb = el("label", "rd-sub"); lb.append(both, ` Also ${NAMES[others[0]]}`);
+                    const lb = el("label", "rd-sub"); lb.append(both, ` Also ${others.map((t) => NAMES[t]).join(" and ")}`);
                     rows.push(row("Tools", lb));
                 }
                 if (!tools.install.hf_token) {
@@ -313,7 +313,7 @@ export const PrevizRigToolsMixin = {
             }
             a = before[before.length - 1]; b = after[0];
         }
-        let prompt, from, to, seed, feet, start;
+        let prompt, from, to, seed, feet, start, onLayer;
         await openExportDialog(this.container, {
             title: mode === "inbetween" ? "AI in-between (Kimodo)" : "Motion from text (Kimodo)",
             kind: "character",
@@ -331,6 +331,7 @@ export const PrevizRigToolsMixin = {
                 feet = Object.assign(el("input"), { type: "checkbox", checked: true });
                 const lf = el("label", "rd-sub"); lf.append(feet, " Pin the feet where they stand, keep them above the floor");
                 const rows = [row("Motion", prompt), row("Frames", from, el("span", "rd-sub", "to"), to), row("Seed", seed), row("Feet", lf)];
+                if (this.previzLayersAvailable && this.previzLayersAvailable()) rows.push(row("Layer", (onLayer = this._previzLayerBox(el, true)).label));
                 if (mode === "text") {
                     start = Object.assign(el("input"), { type: "checkbox", checked: true });
                     const ls = el("label", "rd-sub"); ls.append(start, " Start from the pose on the first frame");
@@ -345,6 +346,7 @@ export const PrevizRigToolsMixin = {
                 const out = await this.previzRigGenerateMotion(modelId, {
                     mode, prompt: prompt.value, from: Number(from.value), to: Number(to.value),
                     seed: seed.value === "" ? null : Number(seed.value), feet: feet.checked, fromPose: !start || start.checked,
+                    layer: onLayer && onLayer.box.checked ? "new" : null,
                     progress: (line) => progress(0.5, 1, line),
                 });
                 if (!out.ok) return { ok: false, message: out.message };
@@ -362,7 +364,7 @@ export const PrevizRigToolsMixin = {
      * alone, starting where (and, with fromPose, as) the character is at `from`.
      */
     async previzRigGenerateMotion(modelId, { mode = "text", prompt = "", from = 0, to = 48, seed = null, feet = true,
-                                             fromPose = true, progress = null, samples = 1, sample = 0 } = {}) {
+                                             fromPose = true, progress = null, samples = 1, sample = 0, layer = null } = {}) {
         const scene = this.previzScene();
         const info = this._previzRigMotionRest(modelId);
         if (!info) return { ok: false, message: "The character needs humanoid controls." };
@@ -391,11 +393,12 @@ export const PrevizRigToolsMixin = {
             frames, keys, seed, samples, heading,
         }, { progress });
         if (job.state !== "done") return { ok: false, message: `The motion was not generated: ${job.error || job.state}` };
-        return this.previzRigApplyMotion(modelId, job.result, { from, to, origin, feet, sample, mode });
+        return this.previzRigApplyMotion(modelId, job.result, { from, to, origin, feet, sample, mode, layer });
     },
 
     /** Put a motion from the model onto the character and key it on its controls. */
-    previzRigApplyMotion(modelId, motion, { from, to, origin = [0, 0], feet = true, sample = 0, mode = "text" } = {}) {
+    previzRigApplyMotion(modelId, motion, { from, to, origin = [0, 0], feet = true, sample = 0, mode = "text",
+                                           layer = null, keepEnds = mode === "inbetween", label = null } = {}) {
         const scene = this.previzScene();
         const info = this._previzRigMotionRest(modelId);
         if (!info || !motion || !motion.samples || !motion.samples[sample]) return { ok: false, message: "No motion to apply." };
@@ -403,15 +406,19 @@ export const PrevizRigToolsMixin = {
         const fps = scene.fps || 24;
         const index = new Map(motion.joints.map((n, i) => [n, i]));
         const count = to - from + 1;
-        const frames = M.resample(motion.samples[sample], fps, from, count).map((fr) => ({
+        const frames = M.resample(motion.samples[sample], fps, from, count, motion.fps || M.MOTION_FPS).map((fr) => ({
             f: fr.f, contacts: fr.contacts, pose: M.somaToPose(fr.rot, fr.root, index, rest, scale, origin),
         }));
         if (feet) M.cleanFeet(frames, rest);
         // An in-between keeps the keys it was made between; what is between them is the model's.
-        const bake = mode === "inbetween" ? frames.filter((fr) => fr.f > from && fr.f < to) : frames;
+        const bake = keepEnds ? frames.filter((fr) => fr.f > from && fr.f < to) : frames;
         if (scene.length < to + 1) { scene.length = to + 1; scene.lengthSet = true; }
-        const keys = this.previzRigBakePoses(modelId, bake, { label: mode === "inbetween" ? "AI in-between" : "AI motion", moveCog: true, ikfk: 0 });
-        return { ok: true, frames: bake.length, keys };
+        const name = label || (mode === "inbetween" ? "AI in-between" : "AI motion");
+        // On an animation layer of its own when asked (and the scene has layers): the keys under it stay.
+        const { keys, layer: onLayer } = this._previzRigBakeInto
+            ? this._previzRigBakeInto(modelId, bake, { label: name, moveCog: true, ikfk: 0 }, layer)
+            : { keys: this.previzRigBakePoses(modelId, bake, { label: name, moveCog: true, ikfk: 0 }), layer: null };
+        return { ok: true, frames: bake.length, keys, layer: onLayer };
     },
 
     // ── The agent ─────────────────────────────────────────────────────────
@@ -439,7 +446,8 @@ export const PrevizRigToolsMixin = {
         const a = req.args || {};
         try {
             const model = this._previzRigFind(a.model);
-            if (!model) throw new Error(a.model ? `no model named ${a.model} in the 3D scene` : "name the model (more than one in the scene, none selected)");
+            const sceneWide = this.previzRigSceneAction && this.previzRigSceneAction(req.action);
+            if (!model && !sceneWide) throw new Error(a.model ? `no model named ${a.model} in the 3D scene` : "name the model (more than one in the scene, none selected)");
             await report({ state: "running" });
             const num = (v, d) => (v === undefined || v === null || v === "" ? d : Number(v));
             const scene = this.previzScene();
@@ -468,10 +476,12 @@ export const PrevizRigToolsMixin = {
                     result = await this.previzRigExport(model.id, a.format === "abc" ? "abc" : "fbx",
                         { first: num(a.from, 0), last: num(a.to, end), name: a.name || null });
                     break;
-                default: throw new Error(`unknown action ${req.action}`);
+                default:
+                    if (!this.previzRigAgentExtra) throw new Error(`unknown action ${req.action}`);
+                    result = await this.previzRigAgentExtra(req.action, model, a);
             }
             if (result && result.ok === false) throw new Error(result.message || "it did not work");
-            await report({ state: "done", result: { model: model.name, ...(result || {}) } });
+            await report({ state: "done", result: { ...(model ? { model: model.name } : {}), ...(result || {}) } });
         } catch (e) {
             await report({ state: "error", error: String((e && e.message) || e) });
         }
