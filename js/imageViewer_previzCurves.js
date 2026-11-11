@@ -174,7 +174,7 @@ export const PrevizCurvesMixin = {
         this._previzSyncChannelList(ui, items, lines);
         const anyKeys = items.some((it) => S.keyframeFrames(it).length > 0);
         const what = items.length === 1 ? items[0].name : `${items.length} objects`;
-        ui.subText.textContent = anyKeys
+        ui.sub.textContent = anyKeys
             ? `${what} · ${lines.length} channel${lines.length === 1 ? "" : "s"}`
             : `${what} · no keyframes yet`;
         this._previzDrawCurves(lines);
