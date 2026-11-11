@@ -499,9 +499,10 @@ export const DepsPanelMixin = {
         if (!ui || !L) return;
         const vw = ui.view.clientWidth || 800, vh = ui.view.clientHeight || 600;
         const pad = 32;
-        ui.scale = Math.max(0.15, Math.min(1.25, (vw - pad * 2) / Math.max(1, L.width), (vh - pad * 2) / Math.max(1, L.height)));
-        ui.tx = (vw - L.width * ui.scale) / 2;
-        ui.ty = Math.max(pad, (vh - L.height * ui.scale) / 2);
+        const x0 = L.x0 || 0, y0 = L.y0 || 0, w = L.width - x0, h = L.height - y0;
+        ui.scale = Math.max(0.15, Math.min(1.25, (vw - pad * 2) / Math.max(1, w), (vh - pad * 2) / Math.max(1, h)));
+        ui.tx = (vw - w * ui.scale) / 2 - x0 * ui.scale;
+        ui.ty = Math.max(pad, (vh - h * ui.scale) / 2) - y0 * ui.scale;
         this._depsApply(rec);
     },
 

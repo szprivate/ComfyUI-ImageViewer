@@ -250,6 +250,18 @@ class DepsTabBrowserTests(unittest.TestCase):
         self.assertNotEqual(pg.evaluate(edges), paths0, "the edges follow the node")
         # The drag's click did not open the file in the Viewer tab.
         self.assertTrue(pg.evaluate("() => window.__panel.activeTab").startswith("deps:"))
+        # No edge to the stage: it goes left of and above where the layout began.
+        r = node.bounding_box()
+        pg.mouse.move(r["x"] + r["width"] / 2, r["y"] + r["height"] - 12)
+        pg.mouse.down()
+        pg.mouse.move(r["x"] + r["width"] / 2 - 120 - (moved["x"] + 200) * 1.3, r["y"] + r["height"] - 12 - 80 - (moved["y"] + 200) * 1.3, steps=8)
+        pg.mouse.up()
+        out = pg.evaluate(box, 0)
+        self.assertLess(out["x"], -50, "moved left of the layout's edge")
+        self.assertLess(out["y"], -50, "moved above the layout's edge")
+        pg.keyboard.press("f")
+        self.assertGreater(node.bounding_box()["y"], 0, "Fit brings it back into view")
+        moved = out
         # Resize: drag the bottom-right corner.
         r = node.bounding_box()
         pg.mouse.move(r["x"] + r["width"] - 3, r["y"] + r["height"] - 3)

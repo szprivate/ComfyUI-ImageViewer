@@ -101,7 +101,8 @@ test("a moved / resized node keeps its box and its edges follow", async () => {
     assert.equal(L.nodes.find((x) => x.id === "mask").x === 500, false, "the input layout is not changed");
     const S = applyPlacement(L, { plate: { x: -50, y: -9, w: 10, h: 10 } });
     const p = S.nodes.find((x) => x.id === "plate");
-    assert.deepEqual([p.x, p.y, p.w, p.h], [0, 0, MIN_W, MIN_H], "held to the stage and a minimum size");
+    assert.deepEqual([p.x, p.y, p.w, p.h], [-50, -9, MIN_W, MIN_H], "no bound on the place, a minimum size");
+    assert.deepEqual([S.x0, S.y0], [-50, -9], "the drawing begins where the moved node does");
 });
 
 test("a node's frame: still or film by its extension, the main models as its caption", async () => {

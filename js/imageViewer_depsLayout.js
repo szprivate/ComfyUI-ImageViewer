@@ -187,8 +187,9 @@ export function applyPlacement(L, place = {}) {
         if (!p) return n;
         const w = Math.max(MIN_W, Number.isFinite(p.w) ? p.w : n.w);
         const h = Math.max(MIN_H, Number.isFinite(p.h) ? p.h : n.h);
-        const x = Math.max(0, Number.isFinite(p.x) ? p.x : n.x);
-        const y = Math.max(0, Number.isFinite(p.y) ? p.y : n.y);
+        // No bound on where a node goes: left of / above the layout too (the stage is not a frame).
+        const x = Number.isFinite(p.x) ? p.x : n.x;
+        const y = Number.isFinite(p.y) ? p.y : n.y;
         return { ...n, x, y, w, h, placed: true };
     });
     const at = new Map(nodes.map((n) => [n.id, n]));
@@ -198,7 +199,10 @@ export function applyPlacement(L, place = {}) {
     });
     const width = Math.max(L.width, ...nodes.map((n) => n.x + n.w));
     const height = Math.max(L.height, ...nodes.map((n) => n.y + n.h));
-    return { nodes, edges, width, height };
+    // x0 / y0: where the drawing begins, below 0 when a node was moved left of / above the layout.
+    const x0 = Math.min(0, ...nodes.map((n) => n.x));
+    const y0 = Math.min(0, ...nodes.map((n) => n.y));
+    return { nodes, edges, width, height, x0, y0 };
 }
 
 /** An edge as an SVG path: a vertical S-curve from (x1, y1) down to (x2, y2). */
