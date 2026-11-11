@@ -1,12 +1,15 @@
 // imageViewer_previzRigPose.js
 // One pose on a humanoid character, keyed on one frame: from named poses ("sit",
-// "arms_crossed" ...) and joints described in words (imageViewer_rigPoseSpec.js), or
-// from a prompt through Kimodo (a short motion made from where the character stands,
+// "arms_crossed" ...) and joints described in words (imageViewer_rigPoseSpec.js), from
+// a picture of a person (MediaPipe's Pose Landmarker through /imageviewer/rig/video_pose,
+// solved by solvePicturePose), or from a prompt through Kimodo (a short motion made from where the character stands,
 // its last frame kept). Mixed into the panel after PrevizRigAIMixin; the Rig menu's
 // "Pose…" and the agent's `pose` action come here.
 import * as M from "./imageViewer_rigMotion.js";
 import * as P from "./imageViewer_rigPoseSpec.js";
 import { notice, openExportDialog } from "./imageViewer_exportUI.js";
+
+const PICTURE_EXTS = [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"];
 
 // The parts the dialog can put on the floor (imageViewer_rigPoseFix.js CONTACT_LIMBS).
 const FLOOR_PARTS = [["hand.L", "left hand"], ["hand.R", "right hand"], ["knee.L", "left knee"],
@@ -17,12 +20,15 @@ export const PrevizRigPoseMixin = {
     /**
      * Pose the character on `frame` (default the current one) and key it there.
      * { preset: name | [names], joints: { part: { move: degrees } }, hips: { height, offset },
-     *   mirror: "L" | "R", ground, prompt, seed, layer }. A prompt is used only when no
-     * preset or joints are given: then the pose comes from Kimodo. Answers
+     *   mirror: "L" | "R", ground, contacts, limits, image, landmarks, facing, prompt, seed, layer }.
+     * `image` (a picture: {path} or {filename, subfolder, type}) or `landmarks` (its 33
+     * MediaPipe world landmarks) takes the pose from the picture; `facing: "picture"` keeps
+     * the turn the picture shows. A prompt is used only when none of those, no preset and no
+     * joints are given: then the pose comes from Kimodo. Answers
      * { ok, frame, keys, unknown, layer } or { ok: false, message }.
      */
     async previzRigPose(modelId, { preset = null, joints = null, hips = null, mirror = null, ground = true,
-                                   contacts = null, limits = true,
+                                   contacts = null, limits = true, image = null, landmarks = null, facing = "keep",
                                    frame = null, prompt = "", seed = null, layer = null, progress = null } = {}) {
         const scene = this.previzScene();
         const info = this._previzRigMotionRest && this._previzRigMotionRest(modelId);
@@ -37,7 +43,30 @@ export const PrevizRigPoseMixin = {
         const heading = P.poseBaseHeading(model, M.headingOf(k0));
         let motion, unknown = [], placed = [];
         const words = String(prompt || "").trim();
-        if (words && !preset && !(joints && Object.keys(joints).length)) {
+        if (image || landmarks) {
+            let lm = landmarks;
+            if (!lm) {
+                const tools = await this._previzRigTools();
+                if (!tools.posetrack || !tools.posetrack.ready) {
+                    return { ok: false, message: `A pose from a picture needs the pose tracker: ${(tools.posetrack && tools.posetrack.why) || "Rig → Set up…"}` };
+                }
+                const job = await this._previzRigJob("/imageviewer/rig/video_pose", { src: image }, { progress });
+                if (job.state !== "done") return { ok: false, message: `The picture was not read: ${job.error || job.state}` };
+                const fr = (job.result.frames || [])[0];
+                lm = fr && fr.world;
+                if (!lm) return { ok: false, message: "No person was found in the picture." };
+            }
+            const r = P.resolvePose({ contacts });
+            let solved;
+            try {
+                solved = P.solvePicturePose(lm, { heading, facing, ground, limits, contacts: r.contacts });
+            } catch (e) {
+                return { ok: false, message: String(e.message || e) };
+            }
+            motion = P.poseMotion(solved);
+            placed = solved.contacts;
+            unknown = (solved.unknownContacts || []).map((c) => `contact ${c}`);
+        } else if (words && !preset && !(joints && Object.keys(joints).length)) {
             motion = await this._previzRigPoseFromPrompt(words, { k0, heading, seed, progress });
             if (!motion.samples) return { ok: false, message: motion.message };
         } else {
@@ -86,7 +115,8 @@ export const PrevizRigPoseMixin = {
         }
         const tools = await this._previzRigTools();
         const kimodo = !!(tools.kimodo && tools.kimodo.ready);
-        let boxes = [], prompt, at, onLayer, floor = [], limitBox;
+        let boxes = [], prompt, at, onLayer, floor = [], limitBox, picture, facePic;
+        const tracker = !!(tools.posetrack && tools.posetrack.ready);
         await openExportDialog(this.container, {
             title: "Pose the character", kind: "character", where: false, name: "pose", go: "Pose",
             rows: ({ el, row }) => {
@@ -110,17 +140,27 @@ export const PrevizRigPoseMixin = {
                     fl.append(l);
                     return { key, b };
                 });
+                picture = this._previzRigMediaRow(el, row, { label: "Picture", exts: PICTURE_EXTS, kind: "picture", auto: false });
+                facePic = Object.assign(el("input"), { type: "checkbox", checked: false });
+                const lfp = el("label", "rd-sub"); lfp.append(facePic, " Turn the character as the person in the picture is turned");
+                if (!tracker) {
+                    picture.row.title = "Pose from a picture needs the pose tracker (Rig → Set up…, Motion from video)";
+                    picture.row.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+                }
                 limitBox = Object.assign(el("input"), { type: "checkbox", checked: true });
                 const ll = el("label", "rd-sub"); ll.append(limitBox, " Keep joints in their natural range");
-                const rows = [row("Poses", grid), row("Words", prompt), row("On the floor", fl), row("Limits", ll), row("Frame", at)];
+                const rows = [row("Poses", grid), row("Words", prompt), picture.row, row("Picture facing", lfp), row("On the floor", fl), row("Limits", ll), row("Frame", at)];
                 if (this.previzLayersAvailable && this.previzLayersAvailable()) rows.push(row("Layer", (onLayer = this._previzLayerBox(el, false)).label));
                 return rows;
             },
-            note: "Ticked poses are laid over each other in order (sit + arms crossed). The pose is keyed on that frame; the body is put on the floor, "
+            note: "Ticked poses are laid over each other in order (sit + arms crossed); a picture picked is used instead of them "
+                + "(one person, whole body in view). The pose is keyed on that frame; the body is put on the floor, "
                 + "on the first part ticked under On the floor, and the others are reached down to it.",
             onExport: async (_v, { progress }) => {
                 const preset = boxes.filter((x) => x.b.checked).map((x) => x.name);
+                const pic = tracker ? picture.get() : null;
                 const out = await this.previzRigPose(modelId, {
+                    image: pic, facing: facePic.checked ? "picture" : "keep",
                     preset: preset.length ? preset : null, prompt: preset.length ? "" : prompt.value,
                     frame: Number(at.value), layer: onLayer && onLayer.box.checked ? "new" : null,
                     contacts: floor.filter((x) => x.b.checked).map((x) => x.key), limits: limitBox.checked,

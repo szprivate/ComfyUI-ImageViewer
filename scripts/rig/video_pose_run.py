@@ -1,4 +1,5 @@
-"""Read a person's body pose from a film, frame by frame, for the viewer's motion from video.
+"""Read a person's body pose from a film, frame by frame, for the viewer's motion from video,
+or from one picture, for its pose from a picture (--video names a picture: .png, .jpg ...).
 
 Run by the viewer (src/rig_routes.py) with the posetrack environment's own Python
 (scripts/rig/install_rig_tools.py --only posetrack):
@@ -18,7 +19,43 @@ Nothing here is the viewer's code: it only runs it and reads the numbers back.
 """
 import argparse
 import json
+import os
 import sys
+
+PICTURE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+
+
+def four(pts):
+    return [[round(p.x, 5), round(p.y, 5), round(p.z, 5), round(float(getattr(p, "visibility", 1.0) or 0.0), 3)]
+            for p in pts]
+
+
+def read_picture(a, cv2, mp, mp_python, vision):
+    """One picture, the Landmarker in its image mode: the answer has one frame."""
+    frame = cv2.imread(a.video, cv2.IMREAD_COLOR)
+    if frame is None:
+        print(f"!! could not open the picture: {a.video}", flush=True)
+        return 3
+    height, width = frame.shape[:2]
+    options = vision.PoseLandmarkerOptions(
+        base_options=mp_python.BaseOptions(model_asset_path=a.model),
+        running_mode=vision.RunningMode.IMAGE, num_poses=1,
+        min_pose_detection_confidence=0.5, min_pose_presence_confidence=0.5)
+    print(f"picture {width}x{height}", flush=True)
+    with vision.PoseLandmarker.create_from_options(options) as marker:
+        image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        res = marker.detect(image)
+    world = res.pose_world_landmarks[0] if res.pose_world_landmarks else None
+    img = res.pose_landmarks[0] if res.pose_landmarks else None
+    if not world:
+        print("!! no person was found in the picture", flush=True)
+        return 4
+    out = {"fps": 0, "width": width, "height": height, "picture": True,
+           "frames": [{"i": 0, "t": 0, "world": four(world), "image": four(img) if img else None}]}
+    with open(a.output, "w", encoding="utf-8") as fh:
+        json.dump(out, fh)
+    print("done: 1 picture", flush=True)
+    return 0
 
 
 def main():
@@ -30,6 +67,7 @@ def main():
     ap.add_argument("--end", type=int, default=-1)
     ap.add_argument("--step", type=int, default=1)
     a = ap.parse_args()
+    picture = os.path.splitext(a.video)[1].lower() in PICTURE_EXTS
     try:
         import cv2
         import mediapipe as mp
@@ -39,6 +77,8 @@ def main():
         print(f"!! the posetrack environment lacks {e.name}: run the installer with --only posetrack", flush=True)
         sys.exit(2)
 
+    if picture:
+        sys.exit(read_picture(a, cv2, mp, mp_python, vision))
     cap = cv2.VideoCapture(a.video)
     if not cap.isOpened():
         print(f"!! could not open the film: {a.video}", flush=True)
@@ -68,8 +108,6 @@ def main():
                 res = marker.detect_for_video(image, int(round(i * 1000.0 / fps)))
                 world = res.pose_world_landmarks[0] if res.pose_world_landmarks else None
                 img = res.pose_landmarks[0] if res.pose_landmarks else None
-                four = lambda pts: [[round(p.x, 5), round(p.y, 5), round(p.z, 5),
-                                     round(float(getattr(p, "visibility", 1.0) or 0.0), 3)] for p in pts]
                 out["frames"].append({"i": i, "t": round(i / fps, 5),
                                       "world": four(world) if world else None,
                                       "image": four(img) if img else None})

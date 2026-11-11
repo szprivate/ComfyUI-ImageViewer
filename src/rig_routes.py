@@ -17,7 +17,8 @@
                                         samples?, heading?} -> {job}: Kimodo; the result is the motion on its own
                                         skeleton (scripts/rig/kimodo_run.py), retargeted in the page
     POST /imageviewer/rig/video_pose    {src, start?, end?, step?} -> {job}: MediaPipe's Pose Landmarker on a film
-                                        (scripts/rig/video_pose_run.py); the result is the landmarks per frame,
+                                        or one picture (scripts/rig/video_pose_run.py); the result is the landmarks per frame
+                                        (one frame for a picture),
                                         solved onto the character in the page (imageViewer_rigVideo.js)
     POST /imageviewer/rig/lipsync       {src, fps, start?, seconds?, lead?, smooth?, strength?} -> mouth curves per
                                         frame (lipsync.py, in this process), put on blendshapes in the page
@@ -452,6 +453,7 @@ AGENT_ACTIONS = ("rig", "remove_rig", "autorig", "motion", "inbetween", "clean_f
                  "pose_list", "pose_save", "pose_apply", "pose_delete", "flip_pose", "add_motion",
                  "pose", "pose_presets")
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
+PICTURE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 SOUND_EXTS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".opus"} | VIDEO_EXTS
 
 
@@ -796,7 +798,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         if not status["ready"]:
             return err(status["why"], 501)
         try:
-            src = media_src(body, VIDEO_EXTS, "film")
+            src = media_src(body, VIDEO_EXTS | PICTURE_EXTS, "film or picture")
         except LookupError as e:
             return err(e, 404)
         except PermissionError as e:

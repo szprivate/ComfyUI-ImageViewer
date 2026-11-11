@@ -117,6 +117,8 @@ FAKE_POSETRACK = {
                 return (self.n <= 5), np.zeros((360, 640, 3), np.uint8)
             def release(self): pass
         def cvtColor(f, code): return f
+        IMREAD_COLOR = 1
+        def imread(path, flag=1): return np.zeros((480, 320, 3), np.uint8) if path.endswith('.png') else None
     """,
     "mediapipe/__init__.py": """
         class ImageFormat: SRGB = 1
@@ -135,7 +137,7 @@ FAKE_POSETRACK = {
             def __init__(self, t):
                 self.pose_world_landmarks = [[_P(0.01 * i, -0.02 * i, 0.0) for i in range(33)]] if t != 2000 // 25 * 1 else []
                 self.pose_landmarks = [[_P(0.5, 0.5, 0.0) for i in range(33)]]
-        class RunningMode: VIDEO = 2
+        class RunningMode: VIDEO = 2; IMAGE = 1
         class PoseLandmarkerOptions:
             def __init__(self, **kw): self.kw = kw
         class PoseLandmarker:
@@ -144,6 +146,7 @@ FAKE_POSETRACK = {
             def __enter__(self): return self
             def __exit__(self, *a): return False
             def detect_for_video(self, image, ms): return _R(ms)
+            def detect(self, image): return _R(0)
     """,
 }
 
@@ -576,6 +579,21 @@ class RigRoutes(unittest.TestCase):
         self.assertEqual([f["i"] for f in res["frames"]], [0, 1, 2, 3, 4])
         self.assertEqual(len(res["frames"][0]["world"]), 33)
         self.assertIsNone(res["frames"][2]["world"])          # the frame at 80 ms had nobody in it
+
+    def test_video_pose_reads_one_picture(self):
+        with open(os.path.join(self.dirs["input"], "dancer.png"), "wb") as fh:
+            fh.write(b"\x89PNG\r\n\x1a\n")
+
+        async def go(c):
+            r = await c.post("/imageviewer/rig/video_pose", json={"src": {"filename": "dancer.png", "type": "input"}})
+            return await self.wait(c, await r.json())
+        done = self.run_c(go)
+        self.assertEqual(done["state"], "done", done)
+        res = done["result"]
+        self.assertTrue(res["picture"])
+        self.assertEqual((res["width"], res["height"]), (320, 480))
+        self.assertEqual(len(res["frames"]), 1)
+        self.assertEqual(len(res["frames"][0]["world"]), 33)
 
     def test_lipsync_reads_a_sound_into_mouth_curves(self):
         try:

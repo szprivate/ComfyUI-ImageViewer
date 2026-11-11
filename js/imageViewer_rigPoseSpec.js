@@ -19,6 +19,7 @@
 import { quat } from "./imageViewer_rigData.js";
 import * as F from "./imageViewer_rigPoseFix.js";
 import { SOMA_T, SOMA_HIPS, MOTION_FPS, headingOf } from "./imageViewer_rigMotion.js";
+import { solvePose as solveLandmarks, toCanonicalPoints, LM } from "./imageViewer_rigVideo.js";
 
 // The joints a pose drives, parents first, and each one's parent.
 const PARENT = {
@@ -271,6 +272,34 @@ export function solvePoseSpec(parts, { heading = 0, ground = true, hips = {}, fl
     const joints = {};
     for (const j of POSE_JOINTS) joints[j] = global[j].map((v) => Math.round(v * 1e6) / 1e6);
     return { joints, root, points: at, contacts: fixed.contacts, unknownContacts: fixed.unknown };
+}
+
+/**
+ * A pose read off a picture: MediaPipe's 33 world landmarks ([[x, y, z, visibility]], metres
+ * about the hips, y down, z away - scripts/rig/video_pose_run.py) solved into the same answer
+ * as solvePoseSpec. The person's lean and limbs are kept; where they face is the character's
+ * `heading` (`facing: "picture"` keeps the turn the picture shows, measured from facing the
+ * camera). The limbs are made to bend about their hinges, held to the joint limits, then put
+ * on the floor as solvePoseSpec does (`contacts`, `ground`).
+ */
+export function solvePicturePose(landmarks, { heading = 0, facing = "keep", ground = true, limits = true, contacts = [], minVis = 0.35 } = {}) {
+    if (!Array.isArray(landmarks) || landmarks.length < 33) throw new Error("the picture's landmarks are not 33 points");
+    const P = toCanonicalPoints(landmarks);
+    if (Math.min(P[LM.hipL][3], P[LM.hipR][3], P[LM.shoulderL][3], P[LM.shoulderR][3]) < 0.1) {
+        throw new Error("the person's hips and shoulders are not in the picture");
+    }
+    const q = solveLandmarks(P, null, { minVis });
+    const seen = headingOf({ joints: { Hips: q.Hips } });
+    const turn = quat.axisAngle([0, 1, 0], facing === "picture" ? heading : heading - seen);
+    const global = {};
+    for (const j of Object.keys(PARENT)) {
+        const g = q[j] || global[PARENT[j]] || [0, 0, 0, 1];
+        global[j] = q[j] ? quat.norm(quat.mul(turn, g)) : g;
+    }
+    const fixed = F.fixPose(global, { limits, contacts, hinges: true, rootY: ground === false ? SOMA_HIPS : null });
+    const joints = {};
+    for (const j of POSE_JOINTS) joints[j] = fixed.joints[j].map((v) => Math.round(v * 1e6) / 1e6);
+    return { joints, root: [0, fixed.rootY, 0], points: fixed.points, contacts: fixed.contacts, unknownContacts: fixed.unknown };
 }
 
 /** A solved pose as a one-frame motion, shaped as the motion model's answer. */
