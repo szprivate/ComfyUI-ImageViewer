@@ -261,6 +261,48 @@ class RigRoutes(unittest.TestCase):
         v, _ = self.abc_io.to_mesh(abc["path"], sample=2)
         np.testing.assert_allclose(v[1], [-1, 1, 0], atol=1e-5)
 
+    def test_usd_export_and_the_rig_coming_back(self):
+        """FBX and USD carry the viewer's rig (meta.live); read_motion hands it back, with a USD's animation."""
+        live = {"v": 1, "kind": "imageviewer.rig", "items": [{"id": "c1", "kind": "control"}], "model": {"bones": ["a", "b"]}}
+
+        async def go(c):
+            out = {}
+            for fmt in ("fbx", "usd"):
+                meta, parts = self.payload(fmt)
+                meta["live"] = live
+                form = aiohttp.FormData()
+                form.add_field("meta", json.dumps(meta), content_type="application/json")
+                for k, v in parts.items():
+                    form.add_field(k, v, filename=k, content_type="application/octet-stream")
+                r = await c.post("/imageviewer/rig/export", data=form, headers={"X-ImageViewer-Rig": "1"})
+                self.assertEqual(r.status, 200, await r.text())
+                path = (await r.json())["path"]
+                r = await c.post("/imageviewer/rig/read_motion", json={"path": path})
+                self.assertEqual(r.status, 200, await r.text())
+                out[fmt] = (path, await r.json())
+            note = os.path.join(self.dirs["output"], "notes.txt")
+            with open(note, "w") as fh:
+                fh.write("x")
+            r1 = await c.post("/imageviewer/rig/read_motion", json={"path": note})
+            r2 = await c.post("/imageviewer/rig/read_motion", json={"path": os.path.join(self.tmp, "rigged.glb")})
+            r3 = await c.post("/imageviewer/rig/read_motion", json={"path": os.path.join(self.dirs["output"], "none.fbx")})
+            return out, r1.status, r2.status, r3.status
+        out, txt, outside, missing = self.run_c(go)
+        fbx_path, fbx = out["fbx"]
+        usd_path, usd = out["usd"]
+        self.assertTrue(usd_path.endswith(".usd"), usd_path)
+        self.assertEqual(fbx["live"], live)
+        self.assertEqual((fbx["fps"], fbx["unit_cm"], fbx["up"]), (24, 100.0, "y"))
+        self.assertEqual(usd["live"], live)
+        self.assertEqual([j["name"] for j in usd["joints"]], ["a", "b"])
+        self.assertEqual(usd["frames"], [0.0, 1.0, 2.0])
+        # Frame 2: bone b turned 90 degrees about Z, as it was written.
+        q = usd["anim"][2][1][3:7]
+        np.testing.assert_allclose(np.abs(q), [0, 0, np.sin(np.pi / 4), np.cos(np.pi / 4)], atol=1e-6)
+        self.assertEqual(txt, 403)          # not a 3D file: nothing is read
+        self.assertEqual(outside, 403)      # outside the folders the viewer may serve
+        self.assertEqual(missing, 404)
+
     def test_tools_and_bad_requests(self):
         async def go(c):
             form = aiohttp.FormData()

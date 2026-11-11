@@ -2875,6 +2875,33 @@ class AnimationParser {
 
 		if ( curves.x !== undefined && curves.y !== undefined && curves.z !== undefined ) {
 
+			// ComfyUI Image Viewer patch: interpolateRotations walks curve x's keys only, so a rotation
+			// keyed on Z alone (Blender writes a constant axis with two keys) lost its motion. The three
+			// curves are put on the union of their key times first (each read linearly between its keys).
+			const same = ( a, b ) => a.times.length === b.times.length && a.times.every( ( t, i ) => t === b.times[ i ] );
+			if ( ! same( curves.x, curves.y ) || ! same( curves.x, curves.z ) ) {
+
+				const all = [ ...new Set( [ ...curves.x.times, ...curves.y.times, ...curves.z.times ] ) ].sort( ( a, b ) => a - b );
+				const onto = ( c ) => {
+
+					const v = all.map( ( t ) => {
+
+						const ts = c.times, vs = c.values;
+						if ( t <= ts[ 0 ] ) return vs[ 0 ];
+						if ( t >= ts[ ts.length - 1 ] ) return vs[ vs.length - 1 ];
+						let k = 1;
+						while ( ts[ k ] < t ) k ++;
+						const u = ( t - ts[ k - 1 ] ) / ( ts[ k ] - ts[ k - 1 ] );
+						return vs[ k - 1 ] + ( vs[ k ] - vs[ k - 1 ] ) * u;
+
+					} );
+					return { ...c, times: all, values: v };
+
+				};
+				curves = { x: onto( curves.x ), y: onto( curves.y ), z: onto( curves.z ) };
+
+			}
+
 			const result = this.interpolateRotations( curves.x, curves.y, curves.z, eulerOrder );
 
 			times = result[ 0 ];

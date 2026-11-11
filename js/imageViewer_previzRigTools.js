@@ -1,5 +1,5 @@
 // imageViewer_previzRigTools.js
-// The Rig menu's tools that reach past the page: export (FBX, Alembic), auto-rigging
+// The Rig menu's tools that reach past the page: export (FBX, USD, Alembic), auto-rigging
 // (UniRig) and AI motion (Kimodo: in-betweens and motion from text), plus the feet
 // clean-up. Mixed into the panel after PrevizRigMixin.
 //
@@ -29,48 +29,72 @@ export const PrevizRigToolsMixin = {
         return view.rigExportData(modelId, frames);
     },
 
-    /** Export a character: FBX (skeleton, skin, keys on every frame) or Alembic (the meshes baked). */
+    /**
+     * Export a character: FBX or USD (skeleton, skin, keys on every frame - what Maya, Blender
+     * and Unreal read) or Alembic (the meshes baked). FBX and USD also carry the viewer's rig,
+     * live, for the way back (imageViewer_previzRigRoundTrip.js).
+     */
     async previzExportCharacter(modelId = this.previzRigModelOf(), fmt = "fbx") {
         const scene = this.previzScene();
         const model = modelId && S.itemById(scene, modelId);
         if (!model) { notice("info", "Select a character to export."); return; }
         const last = Math.max(0, (scene.length || 1) - 1);
-        let rangeFirst, rangeLast;
+        const rigged = R.isRigged(scene, modelId);
+        let rangeFirst, rangeLast, keep;
+        const FIXED = {
+            abc: [{ value: "abc", label: "Alembic, baked meshes (.abc)" }],
+            fbx: [{ value: "fbx", label: "FBX, skeleton + skin + keys (.fbx)" }],
+            usd: [{ value: "usd", label: "USD, UsdSkel skeleton + skin + keys (.usd)" }],
+        };
         await openExportDialog(this.container, {
-            title: fmt === "abc" ? "Export Alembic" : "Export FBX",
+            title: { abc: "Export Alembic", fbx: "Export FBX", usd: "Export USD" }[fmt] || "Export FBX",
             kind: "character",
             name: model.name,
-            fixed: fmt === "abc" ? [{ value: "abc", label: "Alembic, baked meshes (.abc)" }]
-                                 : [{ value: "fbx", label: "FBX, skeleton + skin + keys (.fbx)" }],
+            fixed: FIXED[fmt] || FIXED.fbx,
             rows: ({ el, row }) => {
                 rangeFirst = Object.assign(el("input", "rd-in rd-num"), { type: "number", value: 0, min: 0 });
                 rangeLast = Object.assign(el("input", "rd-in rd-num"), { type: "number", value: last, min: 0 });
-                return [row("Frames", rangeFirst, el("span", "rd-sub", "to"), rangeLast)];
+                const rows = [row("Frames", rangeFirst, el("span", "rd-sub", "to"), rangeLast)];
+                if (fmt !== "abc") {
+                    keep = Object.assign(el("input"), { type: "checkbox", checked: rigged, disabled: !rigged });
+                    const lab = el("label", "rd-sub");
+                    lab.append(keep, document.createTextNode(rigged ? " Keep the rig in the file, for bringing it back here"
+                                                                    : " (no rig on this character: only the motion goes)"));
+                    rows.push(row("Viewer rig", lab));
+                }
+                return rows;
             },
             note: fmt === "abc" ? "Every mesh of the character as the rig deforms it, one sample per frame."
-                                : "The bones keyed on every frame, the meshes skinned to them, in metres (Y up).",
+                : (fmt === "usd" ? "UsdSkel, in metres (Y up), time codes = frames. " : "The bones keyed on every frame, the meshes skinned to them, in metres (Y up). ")
+                  + "Other applications get the motion baked (layers and constraints included); the viewer's rig rides along unchanged.",
             onExport: async (v, { progress }) => {
                 const a = Math.max(0, Math.round(Number(rangeFirst.value) || 0));
                 const b = Math.max(a, Math.round(Number(rangeLast.value) || 0));
                 progress(0, 2, "Reading the character…");
-                const out = await this.previzRigExport(modelId, v.format, { first: a, last: b, name: v.name, context: v.context });
+                const out = await this.previzRigExport(modelId, v.format, { first: a, last: b, name: v.name, context: v.context,
+                                                                          live: !!(keep && keep.checked) });
                 if (!out.ok) return { ok: false, message: out.message };
-                notice("success", fmt === "abc" ? "Alembic exported" : "FBX exported", out.relative ? "output/" + out.relative : out.path);
+                notice("success", { abc: "Alembic exported", usd: "USD exported" }[fmt] || "FBX exported",
+                       out.relative ? "output/" + out.relative : out.path);
                 return { ok: true };
             },
         });
     },
 
     /** The export without the dialog (the agent's tool and tests use it): { ok, path, relative } or { ok: false, message }. */
-    async previzRigExport(modelId, format = "fbx", { first = 0, last = null, name = null, context = null } = {}) {
+    async previzRigExport(modelId, format = "fbx", { first = 0, last = null, name = null, context = null, live = true } = {}) {
         const scene = this.previzScene();
         const model = S.itemById(scene, modelId);
         if (!model) return { ok: false, message: "no such character" };
         const end = last == null ? Math.max(0, (scene.length || 1) - 1) : last;
         const data = this.previzRigExportData(modelId, first, end);
         if (!data) return { ok: false, message: "The character is not loaded." };
-        if (format === "fbx" && !data.meta.bones.length) return { ok: false, message: "FBX export needs a skeleton: rig the character first." };
+        if (format !== "abc" && !data.meta.bones.length) return { ok: false, message: `${format.toUpperCase()} export needs a skeleton: rig the character first.` };
         const meta = { ...data.meta, format, name: name || model.name, fps: scene.fps || 24, context };
+        if (live && format !== "abc" && this.previzRigLivePayload) {
+            const rig = this.previzRigLivePayload(modelId, data);
+            if (rig) meta.live = rig;
+        }
         const body = new FormData();
         body.append("meta", new Blob([JSON.stringify(meta)], { type: "application/json" }));
         for (const [k, arr] of Object.entries(data.parts)) body.append(k, new Blob([arr.buffer.slice(arr.byteOffset, arr.byteOffset + arr.byteLength)]), k);
@@ -492,8 +516,13 @@ export const PrevizRigToolsMixin = {
                     break;
                 case "clean_feet": result = this.previzRigCleanFeet(model.id, { from: a.from == null ? null : num(a.from), to: a.to == null ? null : num(a.to) }); break;
                 case "export":
-                    result = await this.previzRigExport(model.id, a.format === "abc" ? "abc" : "fbx",
-                        { first: num(a.from, 0), last: num(a.to, end), name: a.name || null });
+                    result = await this.previzRigExport(model.id, ["abc", "usd"].includes(a.format) ? a.format : "fbx",
+                        { first: num(a.from, 0), last: num(a.to, end), name: a.name || null, live: a.live !== false });
+                    break;
+                case "add_motion":
+                    if (!a.path) throw new Error("name the file: path");
+                    result = await this.previzRigAddMotion(model.id, { path: a.path },
+                        { how: ["restore", "bake"].includes(a.how) ? a.how : "auto", start: a.from == null ? null : num(a.from) });
                     break;
                 default:
                     if (!this.previzRigAgentExtra) throw new Error(`unknown action ${req.action}`);

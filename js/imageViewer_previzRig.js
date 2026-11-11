@@ -466,7 +466,9 @@ export const PrevizRigMixin = {
             { label: "Clean up feet", disabled: !rigged, run: () => this.previzRigCleanFeet && this.previzRigCleanFeet(modelId) },
             ...(this.previzRigAIEntries ? this.previzRigAIEntries(modelId, { rigged, model }) : []),
             "-",
+            { label: "Add motion from file…", disabled: !bones, run: () => this.previzAddMotionDialog && this.previzAddMotionDialog(modelId) },
             { label: "Export FBX…", disabled: !bones, run: () => this.previzExportCharacter && this.previzExportCharacter(modelId, "fbx") },
+            { label: "Export USD…", disabled: !bones, run: () => this.previzExportCharacter && this.previzExportCharacter(modelId, "usd") },
             { label: "Export Alembic…", disabled: !model, run: () => this.previzExportCharacter && this.previzExportCharacter(modelId, "abc") },
         ];
         // A greyed-out entry says why when hovered.
