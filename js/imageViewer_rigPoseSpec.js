@@ -17,6 +17,7 @@
 // this file.
 
 import { quat } from "./imageViewer_rigData.js";
+import * as F from "./imageViewer_rigPoseFix.js";
 import { SOMA_T, SOMA_HIPS, MOTION_FPS, headingOf } from "./imageViewer_rigMotion.js";
 
 // The joints a pose drives, parents first, and each one's parent.
@@ -217,7 +218,8 @@ export function resolvePose(spec = {}) {
         for (const [k, v] of Object.entries(out)) if (k.endsWith(`.${mirror}`)) out[k.slice(0, -1) + other] = { ...v };
     }
     if (spec.hips && typeof spec.hips === "object") hips = { ...hips, ...spec.hips };
-    return { parts: out, hips, unknown };
+    const contacts = [].concat(spec.contacts || []);
+    return { parts: out, hips, unknown, contacts };
 }
 
 /**
@@ -229,7 +231,7 @@ export function resolvePose(spec = {}) {
  * lowest joint is on the floor, unless a height is given. `flatFeet` (default true)
  * keeps a foot the pose does not point level while its shin stands roughly upright.
  */
-export function solvePoseSpec(parts, { heading = 0, ground = true, hips = {}, flatFeet = true } = {}) {
+export function solvePoseSpec(parts, { heading = 0, ground = true, hips = {}, flatFeet = true, limits = true, contacts = [] } = {}) {
     const local = {};
     const footSet = new Set();
     for (const [k, moves] of Object.entries(parts)) {
@@ -254,22 +256,21 @@ export function solvePoseSpec(parts, { heading = 0, ground = true, hips = {}, fl
             l = quat.mul(quat.conj(global[p]), quat.axisAngle([0, 1, 0], yaw + turn));
         }
         global[j] = quat.norm(p ? quat.mul(global[p], l) : quat.mul(head, l));
-        if (!p) { at[j] = [0, 0, 0]; continue; }
-        const d = SOMA_T[j].map((v, i) => v - SOMA_T[p][i]);
-        const r = quat.rotate(global[p], d);
-        at[j] = at[p].map((v, i) => v + r[i]);
     }
-    let y = SOMA_HIPS;
+    // Held to what a body can do, then hands / feet put on the floor (imageViewer_rigPoseFix.js).
     const h = Number(hips.height);
-    if (Number.isFinite(h)) y = SOMA_HIPS * h;
-    else if (ground !== false) y = -Math.min(...Object.values(at).map((p) => p[1]));
+    const fixed = F.fixPose(global, { limits, contacts,
+        rootY: Number.isFinite(h) ? SOMA_HIPS * h : ground === false ? SOMA_HIPS : null });
+    Object.assign(global, fixed.joints);
+    Object.assign(at, fixed.points);
+    const y = fixed.rootY;
     const off = Array.isArray(hips.offset) ? hips.offset.map((v) => Number(v) || 0) : [0, 0, 0];
     // The offset is in the character's own directions (x its left, z its front).
     const o = quat.rotate(head, [off[0] || 0, 0, off[2] || 0]);
     const root = [o[0], y + (off[1] || 0), o[2]];
     const joints = {};
     for (const j of POSE_JOINTS) joints[j] = global[j].map((v) => Math.round(v * 1e6) / 1e6);
-    return { joints, root, points: at };
+    return { joints, root, points: at, contacts: fixed.contacts, unknownContacts: fixed.unknown };
 }
 
 /** A solved pose as a one-frame motion, shaped as the motion model's answer. */

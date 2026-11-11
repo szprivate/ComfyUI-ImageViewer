@@ -22,6 +22,7 @@ import * as M from "./imageViewer_rigMotion.js";
 import * as V from "./imageViewer_rigVideo.js";
 import * as L from "./imageViewer_rigLipsync.js";
 import * as P from "./imageViewer_rigPoseSpec.js";
+import * as PF from "./imageViewer_rigPoseFix.js";
 import { api } from "../../scripts/api.js";
 import { notice, openExportDialog, openFilePicker } from "./imageViewer_exportUI.js";
 
@@ -480,13 +481,19 @@ export const PrevizRigAIMixin = {
             case "pose": {
                 const out = await need("previzRigPose", "Single poses")(model.id, { preset: a.preset || null, joints: a.joints || null,
                     hips: a.hips || null, mirror: a.mirror || null, ground: a.ground !== false,
+                    contacts: a.contacts || null, limits: a.limits !== false,
                     frame: a.frame == null ? (a.from == null ? null : num(a.from)) : num(a.frame),
                     prompt: a.prompt || "", seed: a.seed == null ? null : Number(a.seed), layer: layerOpt });
                 if (!out.ok) throw new Error(out.message);
-                return { frame: out.frame, keys: out.keys, layer: out.layer, not_understood: out.unknown };
+                return { frame: out.frame, keys: out.keys, layer: out.layer, not_understood: out.unknown,
+                         contacts: out.contacts || [] };
             }
             case "pose_presets":
-                return { presets: P.presetList(), parts: Object.fromEntries(Object.entries(P.PARTS).map(([k, v]) => [k, { moves: v.moves, sided: !!v.sided }])) };
+                return { presets: P.presetList(), parts: Object.fromEntries(Object.entries(P.PARTS).map(([k, v]) => [k, { moves: v.moves, sided: !!v.sided }])),
+                         contacts: Object.keys(PF.CONTACT_LIMBS),
+                         notes: "contacts: [\"hand.R\", {\"part\": \"hand.L\", \"under\": true}, \"foot.L\"] puts those on the floor "
+                              + "(under = straight below its shoulder / hip; the first one sets the body's height). "
+                              + "Joint limits are on unless limits is false: elbows and knees bend one way only." };
             case "flip_pose":
                 need("previzRigFlipPose", "Flip pose")(model.id);
                 return {};
