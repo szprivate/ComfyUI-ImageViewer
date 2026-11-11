@@ -85,8 +85,8 @@ export const PrevizRigAIMixin = {
     },
 
     /** A dialog row for a film / sound: its name, From History and Browse… Answers { row, get }. */
-    _previzRigMediaRow(el, row, { label, exts, kind }) {
-        let ref = this._previzRigMediaFromHistory(exts);
+    _previzRigMediaRow(el, row, { label, exts, kind, auto = true }) {
+        let ref = auto ? this._previzRigMediaFromHistory(exts) : null;
         const name = el("span", "rd-sub", ref ? nameOf(ref) : "none picked");
         const hist = el("button", "rd-btn", "From History");
         hist.type = "button";
@@ -479,7 +479,10 @@ export const PrevizRigAIMixin = {
                 await need("previzPoseDelete", "The pose library")(a.name);
                 return { deleted: a.name };
             case "pose": {
+                const image = a.image || a.picture || null;
                 const out = await need("previzRigPose", "Single poses")(model.id, { preset: a.preset || null, joints: a.joints || null,
+                    image: typeof image === "string" ? { path: image } : image, landmarks: a.landmarks || null,
+                    facing: a.facing === "picture" ? "picture" : "keep",
                     hips: a.hips || null, mirror: a.mirror || null, ground: a.ground !== false,
                     contacts: a.contacts || null, limits: a.limits !== false,
                     frame: a.frame == null ? (a.from == null ? null : num(a.from)) : num(a.frame),
@@ -493,7 +496,9 @@ export const PrevizRigAIMixin = {
                          contacts: Object.keys(PF.CONTACT_LIMBS),
                          notes: "contacts: [\"hand.R\", {\"part\": \"hand.L\", \"under\": true}, \"foot.L\"] puts those on the floor "
                               + "(under = straight below its shoulder / hip; the first one sets the body's height). "
-                              + "Joint limits are on unless limits is false: elbows and knees bend one way only." };
+                              + "Joint limits are on unless limits is false: elbows and knees bend one way only. "
+                              + "image: a picture's path takes the whole pose from the person in it (MediaPipe; "
+                              + "facing \"picture\" also turns the character as they are turned); contacts and limits apply to it too." };
             case "flip_pose":
                 need("previzRigFlipPose", "Flip pose")(model.id);
                 return {};

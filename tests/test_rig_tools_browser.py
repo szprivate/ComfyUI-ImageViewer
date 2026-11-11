@@ -114,6 +114,24 @@ def fake_track(frames=25):
     return {"fps": 25.0, "width": 1280, "height": 720, "frames": out}
 
 
+def fake_sitter():
+    """One picture: a person sitting on a chair (thighs forward, shins down), the arms hanging, facing the camera."""
+    pts = {k: list(v) for k, v in _TPOSE.items()}             # canonical: y up, +z towards the camera
+    for sh, el, wr, ix, pk in ((11, 13, 15, 19, 17), (12, 14, 16, 20, 18)):
+        x, y, z = pts[sh]
+        pts[el], pts[wr] = [x, y - 0.29, z], [x, y - 0.56, z]
+        pts[ix], pts[pk] = [x, y - 0.66, z + 0.02], [x, y - 0.66, z - 0.02]
+    for hp, kn, an, he, to in ((23, 25, 27, 29, 31), (24, 26, 28, 30, 32)):
+        x, y, z = pts[hp]
+        pts[kn] = [x, y, z + 0.43]
+        pts[an] = [x, y - 0.42, z + 0.43]
+        pts[he] = [x, y - 0.47, z + 0.38]
+        pts[to] = [x, y - 0.47, z + 0.55]
+    world = [[pts[j][0], -pts[j][1], -pts[j][2], 0.95] if j in pts else [0.0, 0.0, 0.0, 0.0] for j in range(33)]
+    return {"fps": 0, "width": 640, "height": 480, "picture": True,
+            "frames": [{"i": 0, "t": 0, "world": world, "image": None}]}
+
+
 def _free_port():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -222,7 +240,8 @@ class RigToolsBrowserTests(unittest.TestCase):
                 if kind == "motion":
                     state["result"] = fake_motion(int(body["frames"]))
                 elif kind == "video_pose":
-                    state["result"] = fake_track()
+                    src = body.get("src") or {}
+                    state["result"] = fake_sitter() if str(src.get("path", "")).endswith(".png") else fake_track()
                 else:
                     state["result"] = {"path": "D:/out/characters/statue_rig.glb", "relative": "characters/statue_rig.glb",
                                        "name": "statue_rig.glb"}
@@ -625,6 +644,10 @@ class RigToolsBrowserTests(unittest.TestCase):
             once = pg.evaluate("() => ['Hips', 'RightHand', 'RightArm', 'LeftFoot'].map((b) => window.__boneAt(b, 30))")
             pg.evaluate(plank)
             twice = pg.evaluate("() => ['Hips', 'RightHand', 'RightArm', 'LeftFoot'].map((b) => window.__boneAt(b, 30))")
+            # A pose from a picture of somebody sitting, arms hanging.
+            pg.evaluate("""async () => window.__panel.previzRigAgentRun({ id: 'p5', action: 'pose',
+                             args: { model: 'Statue', frame: 50, image: 'D:/refs/sitter.png' } })""")
+            pic = pg.evaluate("() => ['Hips', 'LeftHand', 'LeftArm', 'LeftFoot', 'LeftLeg'].map((b) => window.__boneAt(b, 50))")
         finally:
             pg.close()
         done = {b["id"]: b for k, b in self.requests if k == "agent_done" and b["state"] in ("done", "error")}
@@ -659,6 +682,13 @@ class RigToolsBrowserTests(unittest.TestCase):
         self.assertLess(abs(foot[1] - floor), 0.08 * stand, (foot, floor))
         for a, b in zip(once, twice):
             self.assertLess(math.dist(a, b), 1e-3 * stand, "the same pose asked for again turns nothing further")
+        self.assertEqual(done["p5"]["state"], "done", done["p5"])
+        self.assertEqual([b["src"] for k, b in self.requests if k == "video_pose"][-1], {"path": "D:/refs/sitter.png"})
+        hips, hand, shoulder, foot, thigh = pic
+        self.assertLess(hips[1] - foot[1], 0.75 * stand)         # sitting down
+        self.assertLess(abs(foot[1] - floor), 0.08 * stand, (foot, floor))
+        self.assertLess(hand[1], shoulder[1] - 0.35 * stand)     # the arms hang
+        self.assertLess(math.hypot(hand[0] - shoulder[0], hand[2] - shoulder[2]), 0.15 * stand)
         self.assertEqual(self.errors, [])
 
 
