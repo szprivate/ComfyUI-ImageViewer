@@ -143,3 +143,29 @@ class FindPythonTests(unittest.TestCase):
         finally:
             I.run, I.version_of = old_run, old_ver
         self.assertEqual(calls[0], ["/py311", "-m", "venv", folder])
+
+
+class MainTests(unittest.TestCase):
+    def test_triton_windows_follows_torch(self):
+        self.assertEqual(I.triton_windows_spec("2.6.0"), "triton-windows<3.3")
+        self.assertEqual(I.triton_windows_spec("2.8.1"), "triton-windows<3.5")
+        self.assertEqual(I.triton_windows_spec("weird"), "triton-windows")
+
+    def test_a_tool_that_installed_stays_set_up_when_the_next_one_fails(self):
+        import json
+        import subprocess
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = os.path.join(tmp, "rig_tools.json")
+
+            def kimodo(*_a):
+                raise subprocess.CalledProcessError(1, "pip")
+            with mock.patch.dict(os.environ, {"IMAGE_VIEWER_RIG_TOOLS": cfg}), \
+                 mock.patch.object(I, "install_unirig", lambda *a: {"python": "u", "repo": "r"}), \
+                 mock.patch.object(I, "install_kimodo", kimodo), \
+                 mock.patch.object(sys, "argv", ["x", "--root", tmp, "--cuda", "cpu"]):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    I.main()
+            with open(cfg) as fh:
+                self.assertEqual(json.load(fh), {"unirig": {"python": "u", "repo": "r"}})

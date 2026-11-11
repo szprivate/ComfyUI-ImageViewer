@@ -1969,6 +1969,12 @@ export class Model3DView {
                 this.hooks.onTransform(this.selected, this.readTransform(entry.root, entry.item), true);
             }
             if (entry && entry.helper) entry.helper.update();
+            // A control (or the rig group above them) poses its character while
+            // it is dragged, not only when the mouse lets go.
+            if (entry && entry.item && (entry.item.kind === "control" || entry.item.rig) && this._rigApplyAll) {
+                this.scene.updateMatrixWorld(true);
+                this._rigApplyAll();
+            }
             this.requestRender();
         });
         const helper = gizmo.getHelper ? gizmo.getHelper() : gizmo;

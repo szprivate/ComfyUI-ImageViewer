@@ -35,7 +35,17 @@ FAKE_UNIRIG = {
     """,
     "src/__init__.py": "",
     "src/data/__init__.py": "",
-    "src/data/extract.py": "import sys; print('extract', [x for x in sys.argv if x.startswith('--input')])",
+    "src/data/extract.py": """
+        import os, sys
+        given = [x.split('=', 1)[1] for x in sys.argv if x.startswith('--input=')][0]
+        print('extract', given)
+        if os.environ.get('FAKE_EXTRACT_FAIL'):
+            print('RuntimeError: could not load the file')   # UniRig prints its error and exits 0
+        else:
+            out = os.path.splitext(given)[0]
+            os.makedirs(out, exist_ok=True)
+            open(os.path.join(out, 'raw_data.npz'), 'wb').close()
+    """,
     "src/inference/__init__.py": "",
     "src/inference/merge.py": """
         import argparse, os, shutil
@@ -315,6 +325,38 @@ class RigRoutes(unittest.TestCase):
         log = " ".join(job["log"])
         for step in ("reading the mesh", "predicting the skeleton", "predicting the skin weights", "merging onto the model"):
             self.assertIn(step, log)
+
+    def test_autorig_reads_alembic_and_says_why_it_failed(self):
+        # An Alembic is handed to UniRig as an OBJ of its first frame.
+        async def export_abc(c):
+            st, abc = await self.post_export(c, "abc")
+            return abc
+        abc = self.run_c(export_abc)
+        dst = os.path.join(self.dirs["input"], "stick.abc")
+        shutil.copyfile(abc["path"], dst)
+
+        async def go(c, name):
+            r = await c.post("/imageviewer/rig/autorig", json={"src": {"filename": name, "type": "input"}, "name": "stick"})
+            body = await r.json()
+            return (r.status, body) if r.status != 200 else (200, await self.wait(c, body))
+        st, job = self.run_c(lambda c: go(c, "stick.abc"))
+        self.assertEqual(job["state"], "done", job)
+        self.assertIn("model.obj", " ".join(job["log"]))
+        # A mesh UniRig cannot read: the job says so, instead of a missing raw_data.npz further on.
+        os.environ["FAKE_EXTRACT_FAIL"] = "1"
+        try:
+            st, job = self.run_c(lambda c: go(c, "statue.glb"))
+        finally:
+            os.environ.pop("FAKE_EXTRACT_FAIL", None)
+        self.assertEqual(job["state"], "error", job)
+        self.assertIn("could not read the mesh", job["error"])
+        self.assertIn("could not load the file", job["error"])
+        self.assertNotIn("predicting the skeleton", " ".join(job["log"]))
+        # A format it does not read at all is refused up front.
+        with open(os.path.join(self.dirs["input"], "thing.stl"), "wb") as fh:
+            fh.write(b"solid x")
+        st, body = self.run_c(lambda c: go(c, "thing.stl"))
+        self.assertEqual(st, 400, body)
 
     def test_motion_keeps_one_worker_and_sends_constraints(self):
         key = {"frame": 0, "joints": {"Spine1": [0, 0, 0.3826834, 0.9238795]}, "root": [0, 1, 0]}

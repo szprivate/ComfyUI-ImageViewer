@@ -115,6 +115,23 @@ def tool_status(cfg=None):
     return out
 
 
+UNIRIG_READS = {".obj", ".fbx", ".dae", ".glb", ".gltf", ".vrm"}
+
+
+def abc_to_obj(src, dst):
+    """An Alembic's first sample, every mesh in world space, as one OBJ (UniRig cannot read Alembic)."""
+    try:
+        from . import abc_io
+    except ImportError:  # pragma: no cover - run outside the package
+        import abc_io
+    verts, faces = abc_io.to_mesh(src, sample=0)
+    if not faces:
+        raise RuntimeError("the Alembic has no mesh in it")
+    with open(dst, "w", encoding="utf-8") as fh:
+        fh.write("".join(f"v {x:.6f} {y:.6f} {z:.6f}\n" for x, y, z in verts))
+        fh.write("".join(f"f {a + 1} {b + 1} {c + 1}\n" for a, b, c in faces))
+
+
 def default_root(folder_paths):
     """Where the Install button puts the tools by default: beside ComfyUI's folder (D:/AI/comfyui ->
     D:/AI/rigtools), so they are not inside it; or the folder an earlier install used."""
@@ -523,11 +540,20 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         seed = int(body.get("seed") or 12345)
         job = new_job("autorig")
 
+        ext = os.path.splitext(src)[1].lower()
+        if ext not in UNIRIG_READS and ext != ".abc":
+            return err(f"UniRig reads {', '.join(sorted(UNIRIG_READS))} or Alembic, not {ext or 'this file'}", 400)
+
         def work():
             os.makedirs(os.path.dirname(where["path"]), exist_ok=True)
             with tempfile.TemporaryDirectory(prefix="unirig_") as tmp:
+                given = src
+                if ext == ".abc":
+                    given = os.path.join(tmp, "source.obj")
+                    job.say("== Alembic: its first frame as a mesh for UniRig")
+                    abc_to_obj(src, given)
                 cmd = [cfg["python"], "-u", os.path.join(SCRIPTS, "unirig_run.py"), "--repo", cfg["repo"],
-                       "--input", src, "--output", where["path"], "--work", tmp, "--seed", str(seed)]
+                       "--input", given, "--output", where["path"], "--work", tmp, "--seed", str(seed)]
                 env = dict(os.environ, PYTHONUNBUFFERED="1")
                 for k, v in (cfg.get("env") or {}).items():
                     env[str(k)] = str(v)
@@ -540,7 +566,8 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
                 if job.cancelled:
                     raise RuntimeError("cancelled")
                 if code != 0 or not os.path.isfile(where["path"]):
-                    raise RuntimeError("UniRig failed: " + " | ".join(job.log[-4:]))
+                    said = [l for l in job.log if l.startswith("!! ")]
+                    raise RuntimeError("UniRig failed: " + (said[0][3:] if said else " | ".join(job.log[-4:])))
             return {"path": where["path"], "relative": relative(where["path"]), "name": os.path.basename(where["path"])}
 
         spawn(job, work)
