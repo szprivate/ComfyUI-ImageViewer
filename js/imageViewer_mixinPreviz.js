@@ -12,6 +12,7 @@
 import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
 import * as S from "./imageViewer_scene3d.js";
+import * as L from "./imageViewer_sceneLayers.js";
 import { pref, PREF } from "./imageViewer_settings.js";
 import { notice, openExportDialog, openFilePicker } from "./imageViewer_exportUI.js";
 
@@ -270,6 +271,8 @@ export const PrevizMixin = {
         if (!item) return null;
         const text = String(wanted == null ? "" : wanted).trim();
         if (!text || text === item.name) { this._previzRenderPanel(); return null; }
+        const refused = this._plRefusal ? this._plRefusal([item.id], "rename") : "";
+        if (refused) { notice("info", "Not renamed", refused); this._previzRenderPanel(); return null; }
         const name = S.uniqueName(scene, text, item.id);
         this.previzSnapshot(`rename ${item.name}`);
         item.name = name;
@@ -526,6 +529,8 @@ export const PrevizMixin = {
         const newId = new Map();
         const copies = branch.map((src) => {
             const copy = JSON.parse(JSON.stringify(src));
+            // A copy of a referenced item is the shot's own.
+            delete copy.ref;
             copy.id = S.newId(src.kind === "camera" ? "c" : src.kind === "group" ? "g" : "m");
             copy.name = S.uniqueName(scene, src.name);
             newId.set(src.id, copy.id);
@@ -549,7 +554,13 @@ export const PrevizMixin = {
     previzDelete(id = null) {
         const scene = this.previzScene();
         if (!scene) return;
-        const ids = this._previzIdList(id);
+        let ids = this._previzIdList(id);
+        // A referenced item belongs to its file: it goes with its reference, not on its own.
+        const refused = this._plRefusal ? this._plRefusal(ids, "delete") : "";
+        if (refused) {
+            ids = ids.filter((one) => !(S.itemById(scene, one) || {}).ref);
+            notice("info", ids.length ? "Some were not deleted" : "Not deleted", refused);
+        }
         const gone = new Set();
         for (const one of ids) {
             const item = S.itemById(scene, one);
@@ -564,6 +575,7 @@ export const PrevizMixin = {
                              : `delete ${first.name}`);
         this.previzSnapshot(label);
         scene.items = scene.items.filter((it) => !gone.has(it));
+        L.pruneMembers(scene);
         if ([...gone].some((it) => it.id === scene.activeCamera)) scene.activeCamera = null;
         this._previzSelection = scene.items.length ? scene.items[0].id : null;
         if (this._previzAlso) this._previzAlso.clear();
@@ -1005,6 +1017,8 @@ export const PrevizMixin = {
         if (this.isPanelDocked("previz")) this.setPanelDocked("previz", false);
         // The Channel Box is the same scene's numbers, so it goes too.
         if (this._previzHideChannels) this._previzHideChannels();
+        // Layers and the Character Picker too, to come back with the next 3D tab.
+        if (this._plHide) this._plHide();
         // The curves describe the same scene, so they go with it.
         if (this._previzHideCurves) this._previzHideCurves();
         // And the timeline's last-frame box goes back to being a readout.
@@ -1384,6 +1398,10 @@ export const PrevizMixin = {
         entries.push("-");
         // These two REPLACE the scene rather than add to it - "Open", in the
         // viewer's vocabulary - and sit last for that reason.
+        // Into the scene, linked to its file: a character for this shot.
+        entries.push({ label: "Reference scene\u2026", title: "Bring a saved scene in under a namespace, linked: "
+                       + "a newer version of the file is picked up here", run: () => this.previzReferenceDialog() });
+        entries.push("-");
         entries.push({ label: "Open scene\u2026", run: () => this.previzLoadSceneFile() });
         entries.push({ label: "Open USD / Alembic\u2026", run: () => this.previzImportUsd() });
         const a = anchor.getBoundingClientRect();
@@ -1414,6 +1432,9 @@ export const PrevizMixin = {
         this.previzSnapshot("new scene");
         scene.items = [];
         scene.activeCamera = null;
+        delete scene.displayLayers;
+        delete scene.selectionSets;
+        delete scene.references;
         this._previzSelection = null;
         if (this._previzCollapsed) this._previzCollapsed.clear();
         this.previzChanged({ reload: true });
@@ -1530,6 +1551,7 @@ export const PrevizMixin = {
             this._previzPanelOn = true;
             this.setPanelDocked("previz", true);
             this.setPanelDocked("channels", true);
+            if (this._plRestore) this._plRestore();
         }
         // Before the early return below: the timeline's fields and the keying
         // buttons belong to the tab, and a previz panel put away by hand must
@@ -1537,6 +1559,10 @@ export const PrevizMixin = {
         this.previzSyncTimelineFields();
         // The Channel Box is its own panel, open or shut independently.
         if (this._previzRenderChannels) this._previzRenderChannels();
+        // Layers and the picker, each open or shut on its own; references are looked at.
+        if (this._plRender) this._plRender();
+        if (this._pkRender) this._pkRender();
+        if (this._plMaybeCheck) this._plMaybeCheck();
         if (!this.isPanelDocked("previz")) return;
         const scene = this.previzScene();
         const doc = ui.root.ownerDocument;
@@ -1633,8 +1659,24 @@ export const PrevizMixin = {
             : "\ud83e\uddca";
         name.textContent = `${mark} ${item.name}`;
         name.title = item.kind === "model" && item.src ? (item.src.path || item.src.filename || "") : item.name;
+        if (item.ref) {
+            const ref = L.referenceById(scene, item.ref.id);
+            name.classList.add("ref");
+            name.title = `${item.name}\nReferenced from ${ref ? ref.path : "a scene file"}`;
+        }
 
         row.append(twisty, eye, name);
+        // Its display layer: a swatch, with T or R when the layer says template or reference.
+        const layer = L.layerOf(scene, item.id);
+        if (layer) {
+            const tag = doc.createElement("span");
+            tag.className = `previz-layer ${layer.mode}` + (layer.visible ? "" : " hidden");
+            tag.textContent = L.MODE_LABEL[layer.mode];
+            if (layer.color) tag.style.setProperty("--layer", layer.color);
+            tag.title = `On display layer ${layer.name}` + (layer.mode !== "normal" ? ` (${layer.mode})` : "")
+                + (layer.visible ? "" : ", hidden");
+            row.append(tag);
+        }
         if (this._previzRenaming && this._previzRenaming.id === item.id) {
             this._previzMountRename(row, name, item);
         }
@@ -1824,6 +1866,13 @@ export const PrevizMixin = {
         if (!scene || !list.length) return false;
         if (!list.every((id) => S.canParent(scene, id, parentId))) return false;
         if (beforeId && list.includes(beforeId)) return false;
+        // Inside a reference the file says what hangs where; only its top items can be put elsewhere.
+        const inner = list.map((id) => S.itemById(scene, id)).find((it) => it.ref && it.ref.base && it.ref.base.parent);
+        if (inner) {
+            notice("info", "Not moved", `${inner.name} is inside a reference: change its place in the reference's own file.`);
+            this._previzRenderPanel();
+            return false;
+        }
         const into = parentId ? S.itemById(scene, parentId) : null;
         const what = list.length > 1 ? `${list.length} items` : S.itemById(scene, list[0]).name;
         // Tried on a copy first: dropped where it already was, nothing

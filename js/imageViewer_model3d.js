@@ -23,6 +23,7 @@ import { bustUrl } from "./imageViewer_atlasRender.js";
 import { WorldMatchMixin } from "./imageViewer_worldMatch.js";
 import { Rig3DMixin } from "./imageViewer_rig3d.js";
 import { View3DToolsMixin } from "./imageViewer_view3dTools.js";
+import { displayStates, isPickable } from "./imageViewer_sceneLayers.js";
 
 let _libsPromise = null;
 
@@ -646,7 +647,14 @@ export class Model3DView {
         ray.params.Line.threshold = 0.05 * (this.activeCameraObject().position.length() || 1);
         // What the Display menu hides cannot be clicked either.
         ray.layers.mask = this._dispMask();
-        const hits = ray.intersectObjects(roots, true);
+        // A template or a reference layer's items are seen through: the click
+        // goes on to whatever is behind them.
+        const layers = this._layerStates || null;
+        const hits = ray.intersectObjects(roots, true).filter((hit) => {
+            let node = hit.object;
+            while (node && !node.userData.imageViewerItemId) node = node.parent;
+            return !node || isPickable(layers, node.userData.imageViewerItemId);
+        });
         if (!hits.length) return null;
         const idOf = (hit) => {
             let node = hit.object;
@@ -1028,6 +1036,8 @@ export class Model3DView {
         for (const [mesh, original] of this._originals) {
             // A splat's bounds box stays unseen whatever the look.
             if (mesh.name === "imageplane" || mesh.name === "splatbounds") continue;
+            // A templated item keeps its wire, whatever the look of the rest.
+            if (this._templated && this._templated.has(mesh)) continue;
             mesh.material = this.materialMode === "original"
                 ? original : this.materials[this.materialMode];
         }
@@ -1556,6 +1566,9 @@ export class Model3DView {
         const D = Math.PI / 180;
         const activeId = this.scene3d.activeCamera;
         const fps = this.scene3d.fps || 24;
+        // Display layers (imageViewer_sceneLayers.js): hidden, template, reference.
+        const layers = displayStates(this.scene3d);
+        this._layerStates = layers;
         for (const item of this.scene3d.items || []) {
             const entry = this._entries.get(item.id);
             if (!entry) continue;
@@ -1590,14 +1603,15 @@ export class Model3DView {
                     local.decompose(entry.root.position, entry.root.quaternion, entry.root.scale);
                 }
             }
-            entry.root.visible = item.visible !== false && this._visibleInTree(item);
+            const shownByLayer = !(layers.get(item.id) && !layers.get(item.id).visible);
+            entry.root.visible = item.visible !== false && this._visibleInTree(item) && shownByLayer;
             if (entry.camera) {
                 this._applyLens(entry, at.fov);
                 // Drawing the camera you are looking through would put its own
                 // frustum lines across the shot.
                 const active = item.id === activeId;
                 if (entry.helper) {
-                    entry.helper.visible = !active && item.visible !== false;
+                    entry.helper.visible = !active && item.visible !== false && shownByLayer;
                     entry.helper.update();
                 }
             }
@@ -1612,6 +1626,7 @@ export class Model3DView {
                 this._queueCacheReload(entry, item);
             }
         }
+        this._syncTemplates(layers);
         // Characters with controls: pose their bones now that every control is placed.
         this._rigApplyAll();
         // The gizmo is a controller, not an object; its handles live in the
@@ -1817,6 +1832,64 @@ export class Model3DView {
         const { THREE } = this.libs;
         const inv = new THREE.Matrix4().copy(this._rotScale(at)).invert();
         return this._pivotShiftLocal(at, d.clone().applyMatrix4(inv));
+    }
+
+    /**
+     * Draw the items on a template layer as a wire in the layer's colour (grey
+     * without one) and the rest as the look says. Only an item's OWN meshes
+     * are touched: what hangs under it is another item, with its own state.
+     * `_templated` maps mesh -> the colour it was given, so a change of colour
+     * or of look is put right and nothing is redone every frame.
+     */
+    _syncTemplates(layers) {
+        const { THREE } = this.libs;
+        const now = this._templated || (this._templated = new Map());
+        const want = new Map();
+        for (const [id, st] of layers) {
+            if (!st.visible || st.mode !== "template") continue;
+            const entry = this._entries.get(id);
+            if (!entry || entry.isControl || entry.camera) continue;
+            const color = st.color || "#8a8a8a";
+            const walk = (node) => {
+                for (const child of node.children) {
+                    const owner = child.userData && child.userData.imageViewerItemId;
+                    if (owner && owner !== id) continue;            // another item's
+                    if (child.isMesh && this._originals.has(child)) want.set(child, color);
+                    walk(child);
+                }
+            };
+            walk(entry.root);
+        }
+        let changed = false;
+        for (const [mesh] of now) {
+            if (want.has(mesh)) continue;
+            const original = this._originals.get(mesh);
+            if (original) mesh.material = this.materialMode === "original" ? original : this.materials[this.materialMode];
+            now.delete(mesh);
+            changed = true;
+        }
+        const mats = this._templateMats || (this._templateMats = new Map());
+        for (const [mesh, color] of want) {
+            if (now.get(mesh) === color) continue;
+            if (!mats.has(color)) {
+                mats.set(color, new THREE.MeshBasicMaterial({
+                    color: new THREE.Color(color), wireframe: true, transparent: true, opacity: 0.45, depthWrite: false }));
+            }
+            mesh.material = mats.get(color);
+            now.set(mesh, color);
+            changed = true;
+        }
+        if (changed) this.requestRender();
+    }
+
+    /** Is a mesh drawn as a template now? (For tests and the render.) */
+    isTemplated(id) {
+        for (const mesh of (this._templated || new Map()).keys()) {
+            let node = mesh;
+            while (node && !(node.userData && node.userData.imageViewerItemId)) node = node.parent;
+            if (node && node.userData.imageViewerItemId === id) return true;
+        }
+        return false;
     }
 
     /**
@@ -2223,6 +2296,8 @@ export class Model3DView {
         }
         // Rig controls are for the animator, never in the picture.
         for (const entry of this._entries.values()) if (entry.isControl) hide(entry.top || entry.root);
+        // Nor is a template: it is there to be worked against.
+        for (const mesh of (this._templated || new Map()).keys()) hide(mesh);
     }
 
     /**

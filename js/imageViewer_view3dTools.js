@@ -19,6 +19,8 @@
 // only because it was put out of the way while working.
 
 // Layer per kind. 0 is everything else (the grid, the gizmo, the lights).
+import { isPickable } from "./imageViewer_sceneLayers.js";
+
 export const DISPLAY_KINDS = [
     { key: "polygons",    label: "Polygons",     layer: 1 },
     { key: "curves",      label: "Curves",       layer: 2, tip: "Rig controls and any lines a model brings" },
@@ -434,6 +436,8 @@ export const View3DToolsMixin = {
         for (const [id, entry] of this._entries) {
             const item = entry.item;
             if (!item || item.kind === "group" || id === lookingThrough) continue;
+            // A template or reference layer's items are not picked, by a box either.
+            if (this._layerStates && !isPickable(this._layerStates, id)) continue;
             if (entry.isControl ? !(entry.root.visible && this._shownUp(entry.root)) : !this._shownUp(entry.root)) continue;
             const drawn = [];
             const take = (o) => {
@@ -487,7 +491,8 @@ export const View3DToolsMixin = {
             }
         }
         // In the order the scene lists them, so a selection reads the same every time.
-        return [...this._entries.keys()].filter((id) => found.has(id));
+        return [...this._entries.keys()].filter((id) => found.has(id)
+            && !(this._layerStates && !isPickable(this._layerStates, id)));
     },
 
     // ── Scrubbing with K ─────────────────────────────────────────────────────

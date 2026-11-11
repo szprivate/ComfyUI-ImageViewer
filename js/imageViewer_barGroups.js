@@ -56,6 +56,8 @@ const GROUPS = [
         { label: "Outliner", panel: "previz", needs: "3d" },
         { label: "Channel Box", panel: "channels", needs: "3d" },
         { label: "Curve Editor", panel: "curves", needs: "3d" },
+        { label: "Layers", panel: "layers3d", needs: "3d" },
+        { label: "Character Picker", panel: "picker", needs: "3d" },
     ] },
     // A motion-graphics scene is a tab; "Open scene" asks for one, the three panels are its parts.
     { id: "motion", title: "Motion", icon: "motion", items: [
