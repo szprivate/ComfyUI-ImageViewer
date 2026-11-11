@@ -400,7 +400,9 @@ export function matchByShape(bones) {
             let best = null, bestScore = -Infinity;
             for (const c of k) {
                 const d = v3.norm(v3.sub(byName.get(c).head, head));
-                const score = v3.dot(d, dir) + 0.01 * _subtree(kids, c);
+                // Direction decides; the size of what hangs below only breaks a tie (an arm with five
+                // fingers must not win over the neck going straight up).
+                const score = v3.dot(d, dir) + 1e-3 * Math.min(_subtree(kids, c), 20);
                 if (score > bestScore) { bestScore = score; best = c; }
             }
             if (best === null || bestScore < 0.2) break;
