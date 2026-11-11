@@ -45,6 +45,7 @@ import { PaintPanelMixin } from "./imageViewer_paintPanel.js";
 import { ClipVfxMixin } from "./imageViewer_clipVfx.js";
 import { LoraPanelMixin } from "./imageViewer_loraPanel.js";
 import { PrevizChannelsMixin } from "./imageViewer_previzChannels.js";
+import { PrevizHotkeysMixin } from "./imageViewer_previzHotkeys.js";
 import { PrevizRenderMixin } from "./imageViewer_previzRender.js";
 import { PrevizShotMixin } from "./imageViewer_previzShot.js";
 import { PrevizAtlasMixin } from "./imageViewer_previzAtlas.js";
@@ -594,6 +595,9 @@ class ViewerPanel extends HTMLElement {
         // cursor) — otherwise hotkeys silently die while over the canvas.
         this.container.onmousemove  = () => { if (!this.isHovered) this.isHovered = true; };
         this.container.onmouseleave = () => { this.isHovered = false; };
+        // What the pointer is over, for keys that mean one thing over a panel and
+        // another over the picture (F in the 3D space: imageViewer_previzHotkeys.js).
+        this.container.addEventListener('pointermove', (e) => { this._hoverTarget = e.composedPath()[0]; }, true);
         // Capture phase: ComfyUI's global keybinding handler also sits on window,
         // in the bubble phase and registered earlier, so this is the only place a
         // hotkey the viewer claims can be stopped before ComfyUI acts on it too.
@@ -1587,6 +1591,7 @@ Object.assign(
     ClipVfxMixin,
     LoraPanelMixin,
     PrevizChannelsMixin,
+    PrevizHotkeysMixin,
     PrevizRenderMixin,
     PrevizShotMixin,
     PrevizAtlasMixin,

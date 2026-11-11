@@ -38,6 +38,12 @@ export const ModelMixin = {
                 // view makes is handed back to it instead of kept in three.
                 srcUrl: (src) => this.buildImgUrl(src, { noColor: true }),
                 onPick: (id, add) => this.previzSelect(id, { add }),
+                // Clicks and boxes, with Maya's modifiers (imageViewer_view3dTools.js).
+                onMarquee: (ids, mode) => this.previzSelectMany(ids, mode),
+                // K held + drag scrubs the timeline (imageViewer_previzHotkeys.js).
+                scrubHeld: () => !!this._previzKHeld,
+                onScrubStart: () => this.previzScrubStart(),
+                onScrub: (frame) => this.previzScrubTo(frame),
                 // `props` arrives when the view knows which ones it changed —
                 // moving a pivot writes the position too.
                 onTransform: (id, transform, live, props) =>
