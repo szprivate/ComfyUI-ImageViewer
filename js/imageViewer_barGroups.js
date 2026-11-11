@@ -48,11 +48,8 @@ const GROUPS = [
     ] },
     { id: "3d", title: "3D", icon: "box", items: [
         { label: "Open 3D\u2026", run: (p) => p.spaceOpen("3d"), checked: (p) => !!(p.isPrevizTab && p.isPrevizTab()) },
-        // A World Labs Atlas world from a prompt or pictures, made by the agentY host (imageViewer_atlasCreate.js).
-        { label: "New Atlas world\u2026", run: (p) => p.atlasCreateDialog() },
-        // Atlas Chisel at the camera you look through: paint the view, or change a painted part of a picture of it.
-        { label: "Chisel this view\u2026", run: (p) => p.atlasChiselDialog(),
-          needs: "3d" },
+        // Every World Labs Atlas tool, as a submenu (imageViewer_previzAtlasOrient.js previzAtlasMenuEntries).
+        { label: "Atlas", sub: (p) => p.previzAtlasMenuEntries() },
         { label: "Outliner", panel: "previz", needs: "3d" },
         { label: "Channel Box", panel: "channels", needs: "3d" },
         { label: "Anim Layers", panel: "animLayers", needs: "3d" },
@@ -202,7 +199,7 @@ export const BarGroupsMixin = {
 
     _barGroupMenu(group, button) {
         if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
-        const entries = group.items.map((item) => ({
+        const entries = group.items.map((item) => item.sub ? { label: "   " + item.label, sub: item.sub(this) } : ({
             label: ((item.panel ? this.isPanelDocked(item.panel) : (item.checked && item.checked(this))) ? "✓  " : "   ") + item.label,
             disabled: !this._barGroupCan(item),
             run: () => {

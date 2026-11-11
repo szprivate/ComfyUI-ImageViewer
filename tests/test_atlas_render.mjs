@@ -172,7 +172,7 @@ test("clicking Render sends the current camera, follows the job and shows the pi
     assert.deepEqual(choices, ["0", "2", "4"]);
     select.value = "2";
     const check = dlg.find((e) => e.tagName === "input");
-    check.checked = true;
+    assert.equal(check.checked, true, "'Add this view to the world' is on by default");
     const go = dlg.find((e) => e.className.includes("rd-go"));
     const done = go.onclick();
     await flush();
@@ -188,7 +188,7 @@ test("clicking Render sends the current camera, follows the job and shows the pi
     const push = apiStub.calls.find((c) => c[0] === "/imageviewer/push");
     assert.deepEqual(push[1].paths, ["D:/out/3d_scenes/atlas/court/renders/render_000_x2.png"]);
     assert.equal(push[1].tab_name, "Atlas: court");
-    assert.equal(push[1].focus, true);
+    assert.equal(push[1].focus, false, "the 3D space stays up: the render only joins the History");
     assert.equal(ctx._atlasBusy, false);
     assert.equal(doc.body.find((e) => e.className.includes("atlas-dlg")), null, "the dialog closes when done");
     assert.ok(appStub.toasts.some((t) => /Atlas render ready/.test(t.summary)));

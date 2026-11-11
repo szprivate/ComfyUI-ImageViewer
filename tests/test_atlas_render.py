@@ -304,5 +304,73 @@ class ChiselTests(unittest.TestCase):
         ar.chisel_state(stub.base, "abc")
         self.assertEqual(stub.seen[1][:2], ("GET", "/agentY/atlas_chisel?id=abc"))
 
+
+def _quat(R):
+    """XYZW of a rotation matrix (rows), for a world.json camera."""
+    import math
+    t = R[0][0] + R[1][1] + R[2][2]
+    s = math.sqrt(t + 1.0) * 2
+    return [(R[2][1] - R[1][2]) / s, (R[0][2] - R[2][0]) / s, (R[1][0] - R[0][1]) / s, 0.25 * s]
+
+
+class WorldCameraTests(unittest.TestCase):
+    """The world's cameras in its mesh frame (the first meshed frame's camera frame), for auto-orient."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = world_on_disk(self.tmp.name)
+
+    def write(self, frames):
+        json.dump({"name": "court", "frames": frames}, open(os.path.join(self.dir, "world.json"), "w"))
+
+    def test_cameras_come_in_the_first_meshed_cameras_frame(self):
+        import math
+        c, s = math.cos(math.radians(30)), math.sin(math.radians(30))
+        pitched = [[1, 0, 0], [0, c, -s], [0, s, c]]            # 30 degrees about X: looking up
+        cam = lambda R, t: {"extrinsics": {"position": t, "quaternion": _quat(R), "coordinateSystem": "rub"},  # noqa: E731
+                            "intrinsics": {"fx": 1, "fy": 1, "cx": 0, "cy": 0, "width": 2, "height": 2}}
+        self.write([{"id": 0, "camera": cam([[1, 0, 0], [0, 1, 0], [0, 0, 1]], [9, 9, 9])},     # no depth: not meshed
+                    {"id": 1, "camera": cam(pitched, [1, 2, 3]), "depth": "d1.exr"},
+                    {"id": 2, "camera": cam([[1, 0, 0], [0, 1, 0], [0, 0, 1]], [1, 2, 1]), "depth": "d2.exr"}])
+        out = ar.world_cameras(os.path.join(self.dir, "world.glb"))
+        self.assertEqual(out["frames"], 2)
+        base, other = out["cameras"]
+        np.testing.assert_allclose(base["up"], [0, 1, 0], atol=1e-9)
+        np.testing.assert_allclose(base["pos"], [0, 0, 0], atol=1e-9)
+        # The level camera, seen from the pitched one: its up leans back by 30 degrees, and it stands 2 m
+        # behind along world -Z, i.e. in front of the base camera tilted.
+        np.testing.assert_allclose(other["up"], [0, c, -s], atol=1e-9)
+        np.testing.assert_allclose(other["pos"], np.array(pitched).T @ np.array([0, 0, -2]), atol=1e-9)
+        np.testing.assert_allclose(other["fwd"], np.array(pitched).T @ np.array([0, 0, -1]), atol=1e-9)
+
+    def test_a_world_without_meshed_frames_has_no_cameras(self):
+        self.write([{"id": 0}])
+        self.assertEqual(ar.world_cameras(self.dir), {"frames": 0, "cameras": []})
+
+
+class SplatRelayTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.glb = os.path.join(world_on_disk(self.tmp.name), "world.glb")
+
+    def test_clean_splat_request(self):
+        out = ar.clean_splat_request({"world_path": self.glb, "refine": False, "name": "a b/c", "dry_run": 1})
+        self.assertEqual((out["refine"], out["name"], out["dry_run"], out["confirm_cost"], out["check_consistency"]),
+                         (False, "a_b_c", True, False, True))
+        with self.assertRaises(ar.RelayError):
+            ar.clean_splat_request({"world_path": self.tmp.name})
+
+    def test_start_and_poll_use_the_splat_route(self):
+        stub = Stub()
+        self.addCleanup(stub.close)
+        self.assertEqual(ar.start_splat(stub.base, {"world_path": self.glb, "confirm_cost": True})["id"], "abc")
+        method, path, token, body = stub.seen[0]
+        self.assertEqual((method, path, token, body["confirm_cost"]), ("POST", "/agentY/atlas_splat", "tok", True))
+        ar.splat_state(stub.base, "a/b?c")
+        self.assertEqual(stub.seen[1][:2], ("GET", "/agentY/atlas_splat?id=abc"))
+
+
 if __name__ == "__main__":
     unittest.main()

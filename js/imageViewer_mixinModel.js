@@ -60,6 +60,8 @@ export const ModelMixin = {
                 thumbFrame: () => (this.allTabs[this.activeTab] || [])
                     .find((f) => this._frameIsModel(f)) || null,
                 onClipFrames: (id, frames) => this.previzFitClipLength(frames),
+                // An Atlas world just loaded: set it upright when it has new cameras (imageViewer_previzAtlasOrient.js).
+                onModelLoaded: (id) => { if (this.previzAtlasMaybeOrient) this.previzAtlasMaybeOrient(id); },
                 // Worlds (imageViewer_previzWorld.js).
                 onWalkChange: (on) => this._onWalkChange(on),
                 onWalkToggle: () => this.previzWalkToggle(),

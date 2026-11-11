@@ -2188,6 +2188,50 @@ try:
                 return web.json_response({"error": str(e)}, status=e.status)
             return web.json_response(out)
 
+        # --- The world's cameras in its mesh frame, for auto-orient (atlas_render.world_cameras) ---
+        async def _imageviewer_atlas_world(request):
+            """GET ?path=<world.glb>: {"frames": n, "cameras": [{"right", "up", "fwd", "pos"}]} (mesh frame)."""
+            if atlas_render is None:
+                return web.json_response({"error": "atlas unavailable"}, status=500)
+            path = os.path.abspath(str(request.query.get("path") or ""))
+            if not path_access.is_allowed(path):
+                return web.json_response({"error": "outside the folders the viewer may read"}, status=403)
+            try:
+                out = await asyncio.to_thread(atlas_render.world_cameras, path)
+            except atlas_render.RelayError as e:
+                return web.json_response({"error": str(e)}, status=e.status)
+            return web.json_response(out)
+
+        # --- Export a Gaussian splat of the world: World Labs posedImages2Splats, by the agentY host ---
+        async def _imageviewer_atlas_splat(request):
+            """Body: {"world_path", "refine", "check_consistency", "name", "dry_run", "confirm_cost"}. A dry run
+            answers with the plan and the price; otherwise an ``id`` to poll GET /imageviewer/atlas_splat?id=."""
+            if atlas_render is None:
+                return web.json_response({"error": "atlas unavailable"}, status=500)
+            try:
+                data = await request.json()
+            except Exception:
+                data = None
+            path = os.path.abspath(str((data or {}).get("world_path") or "")) if isinstance(data, dict) else ""
+            if not path or not path_access.is_allowed(path):
+                return web.json_response({"error": "outside the folders the viewer may read"}, status=403)
+            base = f"{request.scheme}://{request.host}"
+            try:
+                out = await asyncio.to_thread(atlas_render.start_splat, base, data)
+            except atlas_render.RelayError as e:
+                return web.json_response({"error": str(e)}, status=e.status)
+            return web.json_response(out)
+
+        async def _imageviewer_atlas_splat_state(request):
+            if atlas_render is None:
+                return web.json_response({"error": "atlas unavailable"}, status=500)
+            base = f"{request.scheme}://{request.host}"
+            try:
+                out = await asyncio.to_thread(atlas_render.splat_state, base, request.query.get("id") or "")
+            except atlas_render.RelayError as e:
+                return web.json_response({"error": str(e)}, status=e.status)
+            return web.json_response(out)
+
         async def _imageviewer_atlas_move_state(request):
             if atlas_render is None:
                 return web.json_response({"error": "atlas render unavailable"}, status=500)
@@ -3424,6 +3468,12 @@ try:
         _safe_add("POST", "/api/imageviewer/atlas_camera_move", _imageviewer_atlas_move)
         _safe_add("GET", "/imageviewer/atlas_camera_move", _imageviewer_atlas_move_state)
         _safe_add("GET", "/api/imageviewer/atlas_camera_move", _imageviewer_atlas_move_state)
+        _safe_add("GET", "/imageviewer/atlas_world", _imageviewer_atlas_world)
+        _safe_add("GET", "/api/imageviewer/atlas_world", _imageviewer_atlas_world)
+        _safe_add("POST", "/imageviewer/atlas_splat", _imageviewer_atlas_splat)
+        _safe_add("POST", "/api/imageviewer/atlas_splat", _imageviewer_atlas_splat)
+        _safe_add("GET", "/imageviewer/atlas_splat", _imageviewer_atlas_splat_state)
+        _safe_add("GET", "/api/imageviewer/atlas_splat", _imageviewer_atlas_splat_state)
         _safe_add("GET", "/imageviewer/previz_shot", _imageviewer_previz_shot_state)
         _safe_add("GET", "/api/imageviewer/previz_shot", _imageviewer_previz_shot_state)
         _safe_add("POST", "/api/imageviewer/push", _imageviewer_push)

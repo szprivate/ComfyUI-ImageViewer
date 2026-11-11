@@ -56,6 +56,8 @@ import { PrevizShotMixin } from "./imageViewer_previzShot.js";
 import { PrevizAtlasMixin } from "./imageViewer_previzAtlas.js";
 import { AtlasCreateMixin } from "./imageViewer_atlasCreate.js";
 import { AtlasChiselMixin } from "./imageViewer_atlasChisel.js";
+import { AtlasSplatMixin } from "./imageViewer_atlasSplat.js";
+import { PrevizAtlasOrientMixin } from "./imageViewer_previzAtlasOrient.js";
 import { PrevizUndoMixin } from "./imageViewer_previzUndo.js";
 import { PrevizRigMixin } from "./imageViewer_previzRig.js";
 import { PrevizConstraintsMixin } from "./imageViewer_previzConstraints.js";
@@ -1651,6 +1653,8 @@ Object.assign(
     PrevizAtlasMixin,
     AtlasCreateMixin,
     AtlasChiselMixin,
+    AtlasSplatMixin,
+    PrevizAtlasOrientMixin,
     PrevizUndoMixin,
     PrevizRigMixin,
     PrevizConstraintsMixin,

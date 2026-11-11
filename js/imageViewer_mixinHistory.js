@@ -1840,6 +1840,7 @@ export const HistoryMixin = {
         if (this.paintTabClosing && this.paintTabClosing(key) === false) return;
         // ...and so does a code / dataset tab (ViewTabsMixin).
         if (this.vtTabClosing && this.vtTabClosing(key) === false) return;
+        const was3d = !!(this.isPrevizTab && this.isPrevizTab(key));
         if (this._revokeDroppedTab) this._revokeDroppedTab(key);   // free blob: URLs of dropped files
         // A 3D tab's picture is an overlay, not an <img>: closing the tab has to
         // take it down, or it keeps hanging over whatever comes next (or over an
@@ -1865,7 +1866,12 @@ export const HistoryMixin = {
         if (this.activeTab === key) {
             const remaining = Object.keys(this.allTabs);
             if (remaining.length > 0) {
-                try { this.switchTab(remaining[0]); } catch (e) { console.error("imageViewer: switching after a closed tab", e); }
+                // A 3D tab closed goes back to the Viewer tab, in 2D (Sebastian 2026-11-11): the Viewer tab may be
+                // holding a 3D model itself (an Atlas world's world.glb lands in the History when it is made),
+                // which kept the 3D view up after the world's own tab was closed.
+                const next = was3d && remaining.includes(HISTORY_VIEW_TAB) ? HISTORY_VIEW_TAB : remaining[0];
+                try { this.switchTab(next); } catch (e) { console.error("imageViewer: switching after a closed tab", e); }
+                if (was3d && next === HISTORY_VIEW_TAB) this._viewerTabTo2d();
             } else {
                 this.activeTab = null;
                 if (this.imgBase)  this.imgBase.src = '';
@@ -1880,6 +1886,22 @@ export const HistoryMixin = {
             this.renderHistoryPanel();
         }
         this.queuePersistViewerState();
+    },
+
+    /** The Viewer tab showing a 3D model: show the newest picture or film of the History made there instead. */
+    _viewerTabTo2d() {
+        const frames = this.allTabs[HISTORY_VIEW_TAB];
+        const first = Array.isArray(frames) ? frames[0] : frames;
+        if (!first || !this._frameIsModel || !this._frameIsModel(first)) return false;
+        const stack = this.history[HISTORY_KEY] || [];
+        for (let i = 0; i < stack.length; i++) {
+            const snap = stack[i];
+            const f = Array.isArray(snap) ? snap[0] : snap;
+            if (!f || this._frameIsModel(f) || this._historyTabFor(snap) !== HISTORY_VIEW_TAB) continue;
+            this.openHistorySnapshot(HISTORY_KEY, i);
+            return true;
+        }
+        return false;
     },
 
     /** Which space a tab is ("viewer", "edit", "paint", "motion", "comp", "3d"), or "" for any other tab. */

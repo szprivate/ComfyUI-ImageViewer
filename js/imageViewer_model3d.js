@@ -1525,6 +1525,11 @@ export class Model3DView {
                 if (frames > 1 && this.hooks.onClipFrames) this.hooks.onClipFrames(item.id, frames);
             }
             this.setMaterialMode(this.materialMode);
+            // Told once the model is in place (an Atlas world is set upright then, imageViewer_previzAtlasOrient.js).
+            if (this.hooks.onModelLoaded) {
+                const id = item.id;
+                Promise.resolve().then(() => this.hooks.onModelLoaded(id)).catch(() => {});
+            }
         } catch (e) {
             if (entry.loadSeq !== seq) return entry;         // superseded: its failure is not the entry's
             console.warn(`[ImageViewer] could not load ${item.name}`, e);
