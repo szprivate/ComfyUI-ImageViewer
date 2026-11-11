@@ -350,18 +350,17 @@ export const CompPanelMixin = {
         }
     },
 
-    // The viewer's own exposure bar (#exposure-control: the same element, its handlers, E + drag) over the comp's
-    // picture, at the top of it as over the viewer's; put back where it was when Comp is left.
+    // The viewer's own exposure bar (#exposure-control: the same element, its handlers, E + drag) in the comp's
+    // bar after the display menu (`o.barControl`, so a rebuilt bar keeps it); put back where it was when Comp is left.
     _cpExposureSeat(rec) {
         const ctl = this.exposureControl;
-        const stage = rec && rec.editor && rec.editor.stage;
-        if (!ctl || !stage) return;
+        if (!ctl || !rec || !rec.editor || !rec.editor.barRefresh) return;
         if (!this._cpExpHome) {
             this._cpExpHome = { parent: ctl.parentNode, next: ctl.nextSibling };
-            // The comp's picture pans and zooms on a press and the wheel: not from the bar.
+            // The comp's keys and picture stay out of it.
             for (const t of ["pointerdown", "wheel", "dblclick"]) ctl.addEventListener(t, (e) => { if (this._cpOn) e.stopPropagation(); });
         }
-        if (ctl.parentNode !== stage) stage.append(ctl);
+        rec.editor.barRefresh();
         this.compViewSync();
     },
     _cpExposureHome() {
@@ -495,6 +494,7 @@ export const CompPanelMixin = {
             onDisplay: (v) => { try { localStorage.setItem("imageviewer.comp.display", v || ""); } catch (_) { /* not kept */ } },
             setChannel: (c) => this.setChannelView(VIEW_CHANNEL[c] || "all"),
             exposureHeld: () => !!this.isExposureModifierActive,
+            barControl: () => (this._cpOn && this.activeTab === key && this._cpExpHome ? this.exposureControl : null),
             nudgeExposure: (d) => this.setExposure((this.exposure || 0) + d),
             sourceInfo: (node) => this._cpSourceInfo(rec, node),
             pickFile: (cb) => this._cpPickFootage(cb),

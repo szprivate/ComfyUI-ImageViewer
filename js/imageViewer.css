@@ -236,6 +236,9 @@
     white-space: nowrap;
 }
 
+/* In the Comp bar (imageViewer_compPanel.js): the same bar, in line with the bar's buttons. */
+.mg-bar #exposure-control { position: static; transform: none; flex: 0 0 auto; padding: 2px 8px; }
+
 #rgb-channel-sel,
 #color-in-sel {
     background: #111;

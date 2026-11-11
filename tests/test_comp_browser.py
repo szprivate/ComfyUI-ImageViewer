@@ -844,17 +844,22 @@ class CompBrowserTests(unittest.TestCase):
         pg.evaluate(f"() => {{ const e = {self.ED}; const c = e.comp().nodes.find((n) => n.id === 'Constant1'); c.color = [0.1, 0.2, 0.05, 1]; e.comp().nodes.find((n) => n.type === 'output').inputs = ['Constant1']; e.refresh(); }}")
         pg.wait_for_timeout(400)
         before = self.pixel(pg, 0.5, 0.5)
-        # The viewer's own bar (the same element) sits at the top of the comp's picture, the input colourspace hidden.
-        st = pg.evaluate(f"""() => {{ const c = __panel.exposureControl, r = c.getBoundingClientRect(), s = {self.ED}.stage.getBoundingClientRect();
-            return {{ inStage: {self.ED}.stage.contains(c), shown: getComputedStyle(c).display !== 'none', top: r.top - s.top,
-                centre: Math.abs((r.left + r.right) / 2 - (s.left + s.right) / 2), cs: getComputedStyle(__panel.colorInSel || c).display,
-                chans: Array.from(__panel.rgbChannelSel.options).map((o) => o.text) }}; }}""")
-        self.assertTrue(st["inStage"] and st["shown"], st)
-        self.assertLess(abs(st["top"] - 10), 3, st)
-        self.assertLess(st["centre"], 3, st)
+        # The viewer's own bar (the same element) sits in the comp's bar, after the display menu; the input
+        # colourspace hidden; on one row with the bar's buttons.
+        st = pg.evaluate(f"""() => {{ const c = __panel.exposureControl, bar = c.parentNode, r = c.getBoundingClientRect(),
+                p = bar.querySelector('select.mg-btn').getBoundingClientRect();
+            return {{ inBar: bar.classList.contains('mg-bar') && bar.parentNode === {self.ED}.stage.parentNode, after: !!(c.previousElementSibling && c.previousElementSibling.tagName === 'SELECT'),
+                shown: getComputedStyle(c).display !== 'none', pos: getComputedStyle(c).position, row: Math.abs((r.top + r.bottom) / 2 - (p.top + p.bottom) / 2),
+                cs: getComputedStyle(__panel.colorInSel || c).display, chans: Array.from(__panel.rgbChannelSel.options).map((o) => o.text) }}; }}""")
+        self.assertTrue(st["inBar"] and st["after"] and st["shown"], st)
+        self.assertEqual(st["pos"], "static")
+        self.assertLess(st["row"], 3, st)
         self.assertEqual(st["chans"], ["RGB", "Red", "Green", "Blue", "Alpha"])
         if pg.evaluate("() => !!__panel.colorInSel"):
             self.assertEqual(st["cs"], "none")
+        # A redraw of the bar (the comp marked changed) keeps it there.
+        pg.evaluate(f"() => {{ const e = {self.ED}; e.comp().nodes.find((n) => n.id === 'Constant1').name = 'Plate'; e.refresh(); }}")
+        self.assertTrue(pg.evaluate("() => __panel.exposureControl.parentNode.classList.contains('mg-bar')"))
         # Its slider: +2 stops is the colour times four (0.1 -> 0.4: sRGB 170); the label as the viewer writes it.
         pg.evaluate("() => { const r = __panel.exposureSlider; r.value = '2'; r.dispatchEvent(new Event('input')); }")
         pg.wait_for_function(f"() => {{ const c = {self.ED}.canvas; return c.getContext('2d').getImageData(Math.floor(c.width / 2), Math.floor(c.height / 2), 1, 1).data[0] > 160; }}", timeout=5000)

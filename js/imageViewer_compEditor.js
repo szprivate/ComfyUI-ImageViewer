@@ -388,7 +388,7 @@ export function createCompEditor(host, opts = {}) {
             t,
             el(doc, "span", "mg-sep"),
             btn("↶", "Undo (Ctrl+Z)", undo), btn("↷", "Redo (Ctrl+Shift+Z)", redo),
-            el(doc, "span", "mg-sep"), proxy, ...(disp ? [disp] : []),
+            el(doc, "span", "mg-sep"), proxy, ...(disp ? [disp] : []), ...[o.barControl && o.barControl()].filter(Boolean),
             btn("Fit", "Fit the picture (F on the picture)", () => { st.zoom.fit = true; layoutCanvas(); }),
             el(doc, "span", "mg-info", `${fmt().width}×${fmt().height} · ${fmt().fps} fps · ${fmt().frames} f`));
     }
@@ -1537,6 +1537,7 @@ export function createCompEditor(host, opts = {}) {
         setDisplay: (v) => { st.display = v || ""; renderBar(); queueRender(); },
         /** How the picture is looked at: {ev, channel} (either may be left out). */
         stage,
+        barRefresh: () => renderBar(),
         /** How the picture is looked at: {ev, channel} (either may be left out) - only what is shown. */
         setViewing: (v) => { if (!v) return; let changed = false;
             if (v.ev !== undefined) { const ev = Math.max(-6, Math.min(6, Number(v.ev) || 0)); changed = changed || ev !== st.ev; st.ev = ev; }
