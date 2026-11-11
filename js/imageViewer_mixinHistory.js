@@ -1593,6 +1593,10 @@ export const HistoryMixin = {
         if (batch.length <= 1 && this.depsAddMenuItem && imgObj) {
             this.depsAddMenuItem(menu, imgObj.path ? imgObj.path : { filename: imgObj.filename, subfolder: imgObj.subfolder, type: imgObj.type }, removeItem);
         }
+        // A film: LTX-2.5 VFX passes on it, the result into its group (ClipVfxMixin).
+        if (batch.length <= 1 && this.clipVfxMenuRow) {
+            this.clipVfxMenuRow(doc, menu, (this.history[HISTORY_KEY] || [])[idx], removeItem);
+        }
         // A picture can be painted on in layers (PaintPanelMixin).
         if (batch.length <= 1 && this.paintAddEditItem && imgObj) {
             this.paintAddEditItem(menu, imgObj.paint || imgObj.path ? (imgObj.paint || imgObj.path) : { filename: imgObj.filename, subfolder: imgObj.subfolder, type: imgObj.type }, removeItem);

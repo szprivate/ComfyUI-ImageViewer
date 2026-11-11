@@ -1,0 +1,555 @@
+{
+  "9102": {
+    "inputs": {
+      "file": ""
+    },
+    "class_type": "LoadVideo",
+    "_meta": {
+      "title": "Load SDR video",
+      "cnr_id": "comfy-core",
+      "ver": "0.10.0"
+    }
+  },
+  "9108": {
+    "inputs": {
+      "fps": [
+        "5548:9006",
+        2
+      ],
+      "bit_depth": "auto",
+      "color_space": "HDR",
+      "codec": "none",
+      "images": [
+        "5518:9111",
+        0
+      ],
+      "audio": [
+        "5548:9006",
+        1
+      ]
+    },
+    "class_type": "CreateVideo",
+    "_meta": {
+      "title": "CreateVideo (HLG)",
+      "cnr_id": "comfy-core",
+      "ver": "0.43.0"
+    }
+  },
+  "9109": {
+    "inputs": {
+      "filename_prefix": "ltx_vfx/sdr_to_hdr_hlg",
+      "format": "auto",
+      "format.codec": "auto",
+      "codec": "auto",
+      "video": [
+        "9108",
+        0
+      ]
+    },
+    "class_type": "SaveVideo",
+    "_meta": {
+      "title": "Save video (HLG)",
+      "cnr_id": "comfy-core",
+      "ver": "0.43.0"
+    }
+  },
+  "9117": {
+    "inputs": {
+      "transfer": "acescct",
+      "exposure": 0,
+      "save_exr": true,
+      "exr_color_space": "acescg",
+      "output_dir": "ltx_vfx/hdr_exr",
+      "filename_prefix": "frame",
+      "half_precision": true,
+      "image": [
+        "5518:5538",
+        0
+      ]
+    },
+    "class_type": "LTXVHDRDecodePostprocess",
+    "_meta": {
+      "title": "Save EXR (ACEScg)",
+      "cnr_id": "ComfyUI-LTXVideo",
+      "ver": "220e1d45aa0469f518e982102fca4dca92a61862"
+    }
+  },
+  "5004:5600": {
+    "inputs": {
+      "vae_name": "LTX2\\ltx-2.5-audio-vae-bf16.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE - Audio",
+      "cnr_id": "comfy-core",
+      "ver": "0.43.0"
+    }
+  },
+  "5004:5601": {
+    "inputs": {
+      "vae_name": "LTX2\\ltx-2.5-video-vae-bf16.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE - Video",
+      "cnr_id": "comfy-core",
+      "ver": "0.43.0"
+    }
+  },
+  "5004:5602": {
+    "inputs": {
+      "unet_name": "LTX2\\ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model",
+      "cnr_id": "comfy-core",
+      "ver": "0.43.0"
+    }
+  },
+  "5004:5606": {
+    "inputs": {
+      "lora_name": "ltx-2.5-22b-ic-lora-sdr-to-hdr-1.0.safetensors",
+      "strength_model": 1,
+      "model": [
+        "5004:5602",
+        0
+      ]
+    },
+    "class_type": "LTXICLoRALoaderModelOnly",
+    "_meta": {
+      "title": "🅛🅣🅧 IC-LoRA Loader Model Only",
+      "cnr_id": "ComfyUI-LTXVideo",
+      "ver": "220e1d45aa0469f518e982102fca4dca92a61862"
+    }
+  },
+  "5004:9112": {
+    "inputs": {
+      "vae": [
+        "5004:5601",
+        0
+      ]
+    },
+    "class_type": "LTXVVAEForceFloat32",
+    "_meta": {
+      "title": "VAE float32 (HDR)",
+      "cnr_id": "ComfyUI-LTXVideo",
+      "ver": "220e1d45aa0469f518e982102fca4dca92a61862"
+    }
+  },
+  "5004:9115": {
+    "inputs": {
+      "file_name": "ltx-2.5-22b-ic-lora-sdr-to-hdr-scene-emb.safetensors",
+      "device": "cpu"
+    },
+    "class_type": "LTXVLoadConditioning",
+    "_meta": {
+      "title": "Load scene embeddings",
+      "cnr_id": "ComfyUI-LTXVideo",
+      "ver": "220e1d45aa0469f518e982102fca4dca92a61862"
+    }
+  },
+  "5548:9006": {
+    "inputs": {
+      "video": [
+        "9102",
+        0
+      ]
+    },
+    "class_type": "GetVideoComponents",
+    "_meta": {
+      "title": "Get Video Components",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.75"
+    }
+  },
+  "5548:5029": {
+    "inputs": {
+      "image": [
+        "5548:5026",
+        0
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "Get Image Size",
+      "cnr_id": "comfy-core",
+      "ver": "0.16.0"
+    }
+  },
+  "5548:9010": {
+    "inputs": {
+      "source": "sRGB",
+      "destination": "HDR ACEScct",
+      "image": [
+        "5548:9006",
+        0
+      ]
+    },
+    "class_type": "ImageColorSpace",
+    "_meta": {
+      "title": "SDR → ACEScct",
+      "cnr_id": "comfy-core",
+      "ver": "0.43.0"
+    }
+  },
+  "5548:5026": {
+    "inputs": {
+      "resize_type": "scale to multiple",
+      "resize_type.multiple": 32,
+      "scale_method": "lanczos",
+      "input": [
+        "5548:9010",
+        0
+      ]
+    },
+    "class_type": "ResizeImageMaskNode",
+    "_meta": {
+      "title": "Resize Image/Mask",
+      "cnr_id": "comfy-core",
+      "ver": "0.43.0"
+    }
+  },
+  "9002:4528": {
+    "inputs": {
+      "video_latent": [
+        "9002:5012",
+        2
+      ],
+      "audio_latent": [
+        "9002:9009",
+        0
+      ]
+    },
+    "class_type": "LTXVConcatAVLatent",
+    "_meta": {
+      "title": "Concat AV Latent",
+      "cnr_id": "comfy-core",
+      "ver": "0.10.0"
+    }
+  },
+  "9002:3059": {
+    "inputs": {
+      "width": [
+        "5548:5029",
+        0
+      ],
+      "height": [
+        "5548:5029",
+        1
+      ],
+      "length": [
+        "5548:5029",
+        2
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyLTXVLatentVideo",
+    "_meta": {
+      "title": "Empty LTXV Latent Video",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.43"
+    }
+  },
+  "9002:5012": {
+    "inputs": {
+      "frame_idx": 0,
+      "strength": 1,
+      "latent_downscale_factor": [
+        "5004:5606",
+        1
+      ],
+      "crop": "disabled",
+      "use_tiled_encode": false,
+      "tile_size": 256,
+      "tile_overlap": 64,
+      "use_streaming": false,
+      "tile_frames": 97,
+      "positive": [
+        "9002:9005",
+        0
+      ],
+      "negative": [
+        "9002:9005",
+        1
+      ],
+      "vae": [
+        "5004:9112",
+        0
+      ],
+      "latent": [
+        "9002:3159",
+        0
+      ],
+      "image": [
+        "5548:5026",
+        0
+      ]
+    },
+    "class_type": "LTXAddVideoICLoRAGuide",
+    "_meta": {
+      "title": "🅛🅣🅧 Add Video IC-LoRA Guide",
+      "cnr_id": "ComfyUI-LTXVideo",
+      "ver": "220e1d45aa0469f518e982102fca4dca92a61862"
+    }
+  },
+  "9002:9005": {
+    "inputs": {
+      "frame_rate": [
+        "9002:9114",
+        0
+      ],
+      "positive": [
+        "5004:9115",
+        0
+      ],
+      "negative": [
+        "5004:9115",
+        0
+      ]
+    },
+    "class_type": "LTXVConditioning",
+    "_meta": {
+      "title": "LTXVConditioning",
+      "cnr_id": "comfy-core",
+      "ver": "0.3.28"
+    }
+  },
+  "9002:9100": {
+    "inputs": {
+      "width": 64,
+      "height": 9,
+      "batch_size": 57,
+      "color": 0
+    },
+    "class_type": "EmptyImage",
+    "_meta": {
+      "title": "I2V unused placeholder",
+      "cnr_id": "comfy-core",
+      "ver": "0.43.0"
+    }
+  },
+  "9002:3159": {
+    "inputs": {
+      "strength": 0.7,
+      "bypass": true,
+      "vae": [
+        "5004:9112",
+        0
+      ],
+      "image": [
+        "9002:9100",
+        0
+      ],
+      "latent": [
+        "9002:3059",
+        0
+      ]
+    },
+    "class_type": "LTXVImgToVideoInplace",
+    "_meta": {
+      "title": "LTXVImgToVideoInplace",
+      "cnr_id": "comfy-core",
+      "ver": "0.43.0"
+    }
+  },
+  "9002:9009": {
+    "inputs": {
+      "frames_number": [
+        "5548:5029",
+        2
+      ],
+      "frame_rate": [
+        "5548:9006",
+        2
+      ],
+      "batch_size": 1,
+      "audio_vae": [
+        "5004:5600",
+        0
+      ]
+    },
+    "class_type": "LTXVEmptyLatentAudio",
+    "_meta": {
+      "title": "empty audio latent (works with silent video)",
+      "cnr_id": "comfy-core",
+      "ver": "0.43.0"
+    }
+  },
+  "9002:9114": {
+    "inputs": {
+      "expression": "a if a <= 30 else 30",
+      "values.a": [
+        "5548:9006",
+        2
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "Conditioning FPS (≤30 keep, >30 → 30)",
+      "cnr_id": "comfy-core",
+      "ver": "0.43.0"
+    }
+  },
+  "5516:4832": {
+    "inputs": {
+      "noise_seed": 42
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "RandomNoise",
+      "cnr_id": "comfy-core",
+      "ver": "0.14.1"
+    }
+  },
+  "5516:4828": {
+    "inputs": {
+      "cfg": 1,
+      "model": [
+        "5004:5606",
+        0
+      ],
+      "positive": [
+        "9002:5012",
+        0
+      ],
+      "negative": [
+        "9002:5012",
+        1
+      ]
+    },
+    "class_type": "CFGGuider",
+    "_meta": {
+      "title": "CFG Guider",
+      "cnr_id": "comfy-core",
+      "ver": "0.14.1"
+    }
+  },
+  "5516:4831": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "KSamplerSelect",
+      "cnr_id": "comfy-core",
+      "ver": "0.14.1"
+    }
+  },
+  "5516:4984": {
+    "inputs": {
+      "sigmas": "1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0"
+    },
+    "class_type": "ManualSigmas",
+    "_meta": {
+      "title": "ManualSigmas",
+      "cnr_id": "comfy-core",
+      "ver": "0.14.1"
+    }
+  },
+  "5516:4829": {
+    "inputs": {
+      "noise": [
+        "5516:4832",
+        0
+      ],
+      "guider": [
+        "5516:4828",
+        0
+      ],
+      "sampler": [
+        "5516:4831",
+        0
+      ],
+      "sigmas": [
+        "5516:4984",
+        0
+      ],
+      "latent_image": [
+        "9002:4528",
+        0
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "SamplerCustomAdvanced",
+      "cnr_id": "comfy-core",
+      "ver": "0.14.1"
+    }
+  },
+  "5516:4845": {
+    "inputs": {
+      "av_latent": [
+        "5516:4829",
+        0
+      ]
+    },
+    "class_type": "LTXVSeparateAVLatent",
+    "_meta": {
+      "title": "Separate AV Latent",
+      "cnr_id": "comfy-core",
+      "ver": "0.10.0"
+    }
+  },
+  "5516:5000": {
+    "inputs": {
+      "positive": [
+        "9002:5012",
+        0
+      ],
+      "negative": [
+        "9002:5012",
+        1
+      ],
+      "latent": [
+        "5516:4845",
+        0
+      ]
+    },
+    "class_type": "LTXVCropGuides",
+    "_meta": {
+      "title": "LTXVCropGuides",
+      "cnr_id": "comfy-core",
+      "ver": "0.43.0"
+    }
+  },
+  "5518:5538": {
+    "inputs": {
+      "tile_size": 512,
+      "overlap": 64,
+      "temporal_size": 128,
+      "temporal_overlap": 32,
+      "samples": [
+        "5516:5000",
+        2
+      ],
+      "vae": [
+        "5004:9112",
+        0
+      ]
+    },
+    "class_type": "VAEDecodeTiled",
+    "_meta": {
+      "title": "VAE Decode (Tiled)",
+      "cnr_id": "comfy-core",
+      "ver": "0.43.0"
+    }
+  },
+  "5518:9111": {
+    "inputs": {
+      "source": "HDR ACEScct",
+      "destination": "HDR",
+      "image": [
+        "5518:5538",
+        0
+      ]
+    },
+    "class_type": "ImageColorSpace",
+    "_meta": {
+      "title": "ACEScct → HDR (HLG)",
+      "cnr_id": "comfy-core",
+      "ver": "0.43.0"
+    }
+  }
+}
