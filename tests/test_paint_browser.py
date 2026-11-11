@@ -1118,31 +1118,35 @@ class PaintBrowserTests(unittest.TestCase):
         self.shot_blur = pg.screenshot()
         pg.keyboard.press("Control+z")
         self.assertEqual(px(98, 60), [0, 0, 0, 255])
-        # Hold B and move: sideways the size, up the opacity (no button pressed, nothing painted).
+        # Hold B and drag with the left button: sideways the size, up the opacity, nothing painted.
         pg.evaluate(f"() => {{ Object.assign({ed}.opts.blur, {{ size: 20, opacity: 50, hardness: 0 }}); }}")
         before = pg.evaluate(f"() => {ed}.undoStack.length")
-        pg.mouse.move(*at(100, 60))
-        pg.keyboard.down("b")
-        self.assertTrue(pg.evaluate(f"() => !!{ed}._bd"))
         sx, sy = at(100, 60)
+        pg.mouse.move(sx, sy)
+        pg.keyboard.down("b")
+        pg.mouse.move(sx + 30, sy - 40, steps=6)                 # B held, no button: nothing changes
+        self.assertEqual(pg.evaluate(f"() => [!!{ed}._bd, {ed}.opts.blur.size]"), [False, 20])
+        pg.mouse.move(sx, sy)
+        pg.mouse.down()
+        self.assertTrue(pg.evaluate(f"() => !!{ed}._bd"))
         pg.mouse.move(sx + 30, sy - 40, steps=6)
         self.assertEqual(opts("blur")[:2], [round(20 + 60 / zoom), 70])
         self.shot_brushdrag = pg.screenshot(clip={"x": x0, "y": y0, "width": w, "height": h})
-        pg.keyboard.up("b")
+        pg.mouse.up(); pg.keyboard.up("b")
         self.assertEqual(pg.evaluate(f"() => [{ed}.tool, !!{ed}._bd, {ed}.undoStack.length]"), ["blur", False, before])
         # Shift while dragging: the hardness instead.
-        pg.keyboard.down("b"); pg.keyboard.down("Shift")
+        pg.keyboard.down("b"); pg.mouse.move(sx + 30, sy - 40); pg.mouse.down(); pg.keyboard.down("Shift")
         pg.mouse.move(sx + 30, sy - 80, steps=4)
-        pg.keyboard.up("Shift"); pg.keyboard.up("b")
-        self.assertEqual(opts("blur")[1:], [70, 20])     # 40 px up from where B went down
+        pg.keyboard.up("Shift"); pg.mouse.up(); pg.keyboard.up("b")
+        self.assertEqual(opts("blur")[1:], [70, 20])     # 40 px up from the press
         # Tapped without moving, on another brush: B picks the brush (on letting go).
         pg.keyboard.press("e")
         pg.keyboard.press("b")
         self.assertEqual(pg.evaluate(f"() => {ed}.tool"), "brush")
-        # Held on the eraser and moved: the eraser's size changes, the tool stays.
+        # Held on the eraser and dragged: the eraser's size changes, the tool stays.
         pg.keyboard.press("e")
         e0 = opts("eraser")[0]
-        pg.keyboard.down("b"); pg.mouse.move(sx + 50, sy - 80, steps=4); pg.keyboard.up("b")
+        pg.keyboard.down("b"); pg.mouse.move(sx, sy); pg.mouse.down(); pg.mouse.move(sx + 50, sy - 80, steps=4); pg.mouse.up(); pg.keyboard.up("b")
         self.assertEqual(pg.evaluate(f"() => {ed}.tool"), "eraser")
         self.assertGreater(opts("eraser")[0], e0)
         # Alt+right-drag (Photoshop's on Windows) does the same, for the brush on a MASK too.
