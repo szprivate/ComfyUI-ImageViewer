@@ -26,6 +26,8 @@ import { ReconnectMixin } from "./imageViewer_mixinReconnect.js";
 import { ModelMixin }    from "./imageViewer_mixinModel.js";
 import { PrevizMixin }   from "./imageViewer_mixinPreviz.js";
 import { PrevizCurvesMixin } from "./imageViewer_previzCurves.js";
+import { PrevizDopeSheetMixin } from "./imageViewer_previzDopeSheet.js";
+import { PrevizPlayblastMixin } from "./imageViewer_previzPlayblast.js";
 import { RotoCurvesMixin } from "./imageViewer_rotoCurves.js";
 import { HistoryTagsMixin } from "./imageViewer_historyTags.js";
 import { AgentYMixin, namedTabInfo } from "./imageViewer_agentY.js";
@@ -734,6 +736,15 @@ class ViewerPanel extends HTMLElement {
             sm.style.display = 'none';
             vpEl.parentNode.insertBefore(sm, vpEl);
             this.editSourcePanel = sm;
+        }
+        // The 3D space's Dope Sheet (imageViewer_previzDopeSheet.js), a tab beside the Curve Editor.
+        this.dopeSheetPanel = sr.getElementById('dope-sheet-panel');
+        if (!this.dopeSheetPanel && this.curvesPanel && this.curvesPanel.parentNode) {
+            const ds = this.curvesPanel.ownerDocument.createElement('div');
+            ds.id = 'dope-sheet-panel';
+            ds.className = 'curves-panel dope-sheet-panel';
+            this.curvesPanel.parentNode.insertBefore(ds, this.curvesPanel.nextSibling);
+            this.dopeSheetPanel = ds;
         }
         if (!this.rotoCurvesPanel && this.curvesPanel && this.curvesPanel.parentNode) {
             const rc = this.curvesPanel.ownerDocument.createElement('div');
@@ -1587,6 +1598,8 @@ Object.assign(
     ModelMixin,
     PrevizMixin,
     PrevizCurvesMixin,
+    PrevizDopeSheetMixin,
+    PrevizPlayblastMixin,
     RotoCurvesMixin,
     HistoryTagsMixin,
     AgentYMixin,

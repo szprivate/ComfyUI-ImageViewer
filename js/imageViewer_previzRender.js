@@ -370,7 +370,7 @@ export const PrevizRenderMixin = {
      * from the scene's saved ones). Returns { ok, frames, stopped, error,
      * message }. `onProgress(done, total)` is told as each frame goes up.
      */
-    async previzRender(settings = {}, { onProgress = null } = {}) {
+    async previzRender(settings = {}, { onProgress = null, frameFilter = null, label = "Shot rendered" } = {}) {
         const scene = this.previzScene();
         if (!scene || this._previzRendering) return null;
         const st = { ...S.renderSettings(scene), ...settings };
@@ -395,8 +395,10 @@ export const PrevizRenderMixin = {
             for (let f = start; f <= end; f++) {
                 if (this._previzRenderStop) { result.stopped = true; break; }
                 if (onProgress) onProgress(done, count);
-                const dataurl = view.renderFrame(f, w, h);
-                if (!dataurl) throw new Error("the renderer produced no image");
+                const drawn = view.renderFrame(f, w, h);
+                if (!drawn) throw new Error("the renderer produced no image");
+                // A playblast writes its heads-up display over each frame (imageViewer_previzPlayblast.js).
+                const dataurl = frameFilter ? await frameFilter(drawn, f, { w, h, start, end, fps, cameraId }) : drawn;
                 const res = await fetch(api.apiURL("/imageviewer/previz_frame"), {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -457,7 +459,7 @@ export const PrevizRenderMixin = {
             result.ok = done > 0;
             // Like every export: said once with its path, and put in History.
             if (result.ok && !result.stopped && result.where) {
-                notice("success", "Shot rendered", result.where);
+                notice("success", label, result.where);
                 if (result.landed && this.exportLanded) this.exportLanded(result.landed);
             }
             // The shot goes back to the graph it was built for, as dragging a

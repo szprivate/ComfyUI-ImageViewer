@@ -78,6 +78,8 @@ export const UIMixin = {
         if (this.editTlKeyDown && this.editTlKeyDown(e)) return;
         // The Source viewer / timeline viewer - the active monitor's keys (imageViewer_editSource.js).
         if (this.editMonKeyDown && this.editMonKeyDown(e)) return;
+        // The 3D Dope Sheet's keys, while it has the focus (imageViewer_previzDopeSheet.js).
+        if (this.previzDopeKeyDown && this.previzDopeKeyDown(e)) return;
         // Paint's keys, while a Paint tab is up (imageViewer_paintPanel.js).
         if (this._paintOn && this.paintKeyDown && this.paintKeyDown(e)) return;
         // Comp's keys, while the focus is in the comp's graph, Layers, Properties or picture (imageViewer_compPanel.js).
