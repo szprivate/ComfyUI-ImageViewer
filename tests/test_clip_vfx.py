@@ -168,6 +168,27 @@ class ClipVfx(unittest.TestCase):
         st, r = self.run_c(lambda c: self.j(c, "/imageviewer/clip_vfx/finish", {"job": d["job"], "results": refs[:2]}))
         self.assertEqual(st, 400)
 
+    def test_every_load_image_reads_a_picture_that_is_there(self):
+        # ComfyUI checks the file a LoadImage names even with "use image" off (seen on ws26 2026-11-11:
+        # "Invalid image file: 2875b7cd-....png" for alpha and reframe).
+        for action in ("alpha", "reframe"):
+            st, d = self.prepare(action)
+            self.assertEqual(st, 200, d)
+            loads = [v for g in d["graphs"] for v in g.values() if v["class_type"] == "LoadImage"]
+            self.assertTrue(loads, action)
+            for v in loads:
+                path = os.path.join(self.dirs["input"], *v["inputs"]["image"].split("/"))
+                self.assertTrue(os.path.isfile(path), path)
+                with open(path, "rb") as fh:
+                    self.assertEqual(fh.read(8), b"\x89PNG\r\n\x1a\n")
+        try:
+            from PIL import Image
+        except ImportError:
+            return
+        with Image.open(path) as im:
+            self.assertEqual(im.size, (64, 64))
+            im.load()
+
     def test_a_clip_in_the_input_folder_of_8n_plus_1_frames_is_read_as_it_is(self):
         self.facts.update(frames=97)
         src = os.path.join(self.dirs["input"], "plate.mov")
