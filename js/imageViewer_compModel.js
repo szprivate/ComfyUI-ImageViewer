@@ -30,6 +30,7 @@ import { ccParams, colorCorrectImage } from "./imageViewer_compColor.js";
 import * as K from "./imageViewer_compMatte.js";
 import * as OC from "./imageViewer_compOcio.js";
 import * as LT from "./imageViewer_compLight.js";
+import * as CH from "./imageViewer_compChannels.js";
 import { blank, blurImage, boxesForGauss } from "./imageViewer_compOps.js";
 export { blank, blurImage, boxesForGauss };
 
@@ -55,6 +56,7 @@ export const NODE_TYPES = {
     } },
     constant: { label: "Constant", cat: "Image", inputs: [], params: {
         color: { kind: "color", def: [0, 0, 0, 1], key: true },
+        write: { kind: "target", def: "rgba", label: "channel", help: "What it writes into: rgba (its whole picture, as before), one channel, or a layer (its r g b a); the rest of what comes in passes" },
     } },
     merge: { label: "Merge", cat: "Merge", inputs: ["B", "A", "mask"], params: {
         operation: { kind: "enum", def: "over", choices: MERGE_OPS },
@@ -127,6 +129,7 @@ export const NODE_TYPES = {
         dirt_spots: { kind: "int", def: 120, min: 0, max: 1000 },
         dirt_reach: { kind: "num", def: 0.3, min: 0.01, key: true, step: 0.01, help: "How far the light reaches the dirt" },
         seed: { kind: "int", def: 1, help: "Another seed, other ghosts and dust" },
+        write: { kind: "target", def: "rgba", label: "channel", help: "What it writes into: rgba (its whole picture, as before), one channel, or a layer (its r g b a); the rest of what comes in passes" },
     } },
     blur: { label: "Blur", cat: "Filter", inputs: ["src"], params: {
         size: { kind: "num", def: 10, min: 0, max: 500, key: true, step: 0.5, help: "In pixels of the comp" },
@@ -149,8 +152,17 @@ export const NODE_TYPES = {
         softness: { kind: "num", def: 0, min: 0, key: true, step: 0.5, help: "A soft edge this many pixels wide" },
     } },
     shuffle: { label: "Shuffle", cat: "Channel", inputs: ["src"], params: {
-        r: { kind: "enum", def: "r", choices: O.SHUFFLE_CHOICES }, g: { kind: "enum", def: "g", choices: O.SHUFFLE_CHOICES },
-        b: { kind: "enum", def: "b", choices: O.SHUFFLE_CHOICES }, a: { kind: "enum", def: "a", choices: O.SHUFFLE_CHOICES },
+        out: { kind: "layer", def: "rgba", help: "The layer written: rgba, or a layer of extra channels (made if it is not there)" },
+        r: { kind: "chan", def: "r", help: "Any channel of what comes in, 0, 1, or - (not written)" }, g: { kind: "chan", def: "g" },
+        b: { kind: "chan", def: "b" }, a: { kind: "chan", def: "a" },
+    } },
+    addchannels: { label: "AddChannels", cat: "Channel", inputs: ["src"], params: {
+        channels: { kind: "chanlist", def: "mask.a", help: "Channels or layers to add, commas between: mask.a, depth.z, or a layer name (its r g b a)" },
+        value: { kind: "num", def: 0, step: 0.1, help: "What the new channels hold" },
+    } },
+    removechannels: { label: "Remove", cat: "Channel", inputs: ["src"], params: {
+        operation: { kind: "enum", def: "remove", choices: ["remove", "keep"], help: "remove: the channels named go; keep: all others go (r g b a cannot go: they turn black)" },
+        channels: { kind: "chanlist", def: "", help: "Channels or layers, commas between: mask, depth.z, rgba" },
     } },
     copy: { label: "Copy", cat: "Channel", inputs: ["B", "A"], params: {
         r: { kind: "enum", def: "B", choices: O.COPY_CHOICES }, g: { kind: "enum", def: "B", choices: O.COPY_CHOICES },
@@ -198,6 +210,7 @@ export const NODE_TYPES = {
         clip_white: { kind: "num", def: 1, min: 0, max: 1, key: true, step: 0.01, help: "The matte above this is 1" },
         invert: { kind: "enum", def: "off", choices: ["off", "on"] },
         output: { kind: "enum", def: "premultiplied", choices: ["premultiplied", "matte"], help: "matte: the matte as grey" },
+        write: { kind: "target", def: "rgba", label: "channel", help: "What it writes into: rgba (its whole picture, as before), one channel, or a layer (its r g b a); the rest of what comes in passes" },
     } },
     chromakeyer: { label: "ChromaKeyer", cat: "Keyer", inputs: ["src"], params: {
         screen: { kind: "color", def: [0.1, 0.55, 0.1, 1], help: "The screen's colour: ⌖ takes it from the picture" },
@@ -208,6 +221,7 @@ export const NODE_TYPES = {
         despill_limit: { kind: "enum", def: "max", choices: K.DESPILL_LIMITS, help: "The screen channel is held to the larger, or the mean, of the other two" },
         invert: { kind: "enum", def: "off", choices: ["off", "on"] },
         output: { kind: "enum", def: "premultiplied", choices: K.KEY_OUTPUTS, help: "matte: the matte as grey; despilled: despill only" },
+        write: { kind: "target", def: "rgba", label: "channel", help: "What it writes into: rgba (its whole picture, as before), one channel, or a layer (its r g b a); the rest of what comes in passes" },
     } },
     keyer: { label: "Keyer", cat: "Keyer", inputs: ["src"], params: {
         mode: { kind: "enum", def: "chroma", choices: O.KEYER_MODES },
@@ -215,15 +229,19 @@ export const NODE_TYPES = {
         tolerance: { kind: "num", def: 0.3, min: 0, key: true, step: 0.01, help: "Up to here it is keyed out" },
         softness: { kind: "num", def: 0.3, min: 0, key: true, step: 0.01, help: "Over this much more it becomes solid" },
         despill: { kind: "num", def: 1, min: 0, max: 1, key: true, step: 0.05, help: "Takes the screen's colour out of the edges (chroma)" },
+        write: { kind: "target", def: "rgba", label: "channel", help: "What it writes into: rgba (its whole picture, as before), one channel, or a layer (its r g b a); the rest of what comes in passes" },
     } },
     roto: { label: "Roto", cat: "Draw", inputs: ["src"], params: {
         roto: { kind: "roto", def: null, help: "The shapes: drawn and edited on the picture with the viewer's Roto tool" },
+        write: { kind: "target", def: "rgba", label: "channel", help: "What it writes into: rgba (its whole picture, as before), one channel, or a layer (its r g b a); the rest of what comes in passes" },
+        premult: { kind: "enum", def: "on", choices: ["on", "off"], help: "on: what comes in is multiplied by the matte (cut out); off: it stays as it is, the matte only written" },
     } },
     vectors: { label: "Vectors", cat: "Time", inputs: ["src"], params: {
         smoothness: { kind: "num", def: 0.04, min: 0.001, max: 1, step: 0.005, help: "Higher: smoother, less detailed motion" },
         iterations: { kind: "int", def: 30, min: 1, max: 200, help: "More: slower, more exact" },
         levels: { kind: "int", def: 4, min: 1, max: 8, help: "More: finds larger motion" },
         detail: { kind: "enum", def: "half", choices: Object.keys(O.FLOW_DETAIL), help: "The picture the motion is measured on: smaller is much faster" },
+        write: { kind: "target", def: "rgba", label: "channel", help: "What it writes into: rgba (its whole picture, as before), one channel, or a layer (its r g b a); the rest of what comes in passes" },
     } },
     motionblur: { label: "MotionBlur", cat: "Filter", inputs: ["src", "vectors"], params: {
         shutter: { kind: "num", def: 0.5, min: 0, max: 2, key: true, step: 0.05, help: "How long the shutter is open, in frames" },
@@ -251,7 +269,7 @@ export const NODE_TYPES = {
     output: { label: "Output", cat: "Other", inputs: ["src"], params: {} },
 };
 export const TYPE_ORDER = ["read", "constant", "roto", "merge", "copy", "transform", "reformat", "crop", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "keyer", "lumakeyer", "chromakeyer", "blur", "glow", "erode", "laplacian",
-    "motionblur", "depthblur", "defocus", "lensflare", "shuffle", "channelmerge", "channelmath", "premult", "unpremult", "retime", "vectors", "output"];
+    "motionblur", "depthblur", "defocus", "lensflare", "shuffle", "addchannels", "removechannels", "channelmerge", "channelmath", "premult", "unpremult", "retime", "vectors", "output"];
 /** Nodes whose result is kept between renders (keyed by their whole upstream): they take long. */
 export const HEAVY = new Set(["vectors", "motionblur", "depthblur", "defocus"]);
 export const NODE_W = 120;
@@ -465,6 +483,55 @@ export function spliceNode(comp, id, wire) {
     return true;
 }
 
+// ── gestures: lay out by dragging, cut wires by stroking (Houdini's, as on ComfyUI's canvas) ──
+/** The gap between nodes the layout gesture leaves: two grid cells, so a laid-out row stays on the grid. */
+export const LAYOUT_GAP = 2 * GRID;
+/**
+ * Where the layout gesture puts ``items`` = [{id, x, y, batch}] (batch: when the node joined the selection -
+ * nodes picked together, by one box, share one): "h" one row from the left, "v" one column from the top, in
+ * the order they were picked (inside a batch by where they stand), from the selection's top left corner.
+ * Returns [{id, x, y}]; pure, so the same axis always gives the same places.
+ */
+export function layoutTargets(items, axis, { gap = LAYOUT_GAP, snap = false, g = GRID } = {}) {
+    if (!items.length) return [];
+    let left = Math.min(...items.map((s) => s.x)), top = Math.min(...items.map((s) => s.y));
+    if (snap) { left = snapTo(left, g); top = snapTo(top, g); }
+    const pos = axis === "h" ? (a, b) => (a.x - b.x) || (a.y - b.y) : (a, b) => (a.y - b.y) || (a.x - b.x);
+    const order = [...items].sort((a, b) => ((a.batch ?? Infinity) - (b.batch ?? Infinity)) || pos(a, b));
+    return order.map((s, i) => axis === "h" ? { id: s.id, x: left + i * (NODE_W + gap), y: top } : { id: s.id, x: left, y: top + i * (NODE_H + gap) });
+}
+/** The axis a layout drag means: null until it is ``least`` graph units long, then the longer of the two. */
+export function layoutAxis(dx, dy, least = 6) {
+    if (Math.abs(dx) < least && Math.abs(dy) < least) return null;
+    return Math.abs(dx) >= Math.abs(dy) ? "h" : "v";
+}
+function segCross(a, b, c, d) {
+    const den = (d[1] - c[1]) * (b[0] - a[0]) - (d[0] - c[0]) * (b[1] - a[1]);
+    if (den === 0) return false;
+    const ua = ((d[0] - c[0]) * (a[1] - c[1]) - (d[1] - c[1]) * (a[0] - c[0])) / den;
+    const ub = ((b[0] - a[0]) * (a[1] - c[1]) - (b[1] - a[1]) * (a[0] - c[0])) / den;
+    return ua >= 0 && ua <= 1 && ub >= 0 && ub <= 1;
+}
+/** The wires a stroke from ``a`` to ``b`` crosses (each wire's curve as 24 straight pieces): [{src, dst, port}]. */
+export function wiresCrossed(comp, a, b) {
+    const out = [];
+    for (const w of wires(comp)) {
+        let prev = bez(w.curve, 0);
+        for (let i = 1; i <= 24; i++) {
+            const q = bez(w.curve, i / 24);
+            if (segCross(a, b, prev, q)) { out.push({ src: w.src, dst: w.dst, port: w.port }); break; }
+            prev = q;
+        }
+    }
+    return out;
+}
+/** Cut the wires ``cut`` (from wiresCrossed): each input that still reads what it read is left empty. */
+export function cutWires(comp, cut) {
+    let n = 0;
+    for (const w of cut) { const d = nodeById(comp, w.dst); if (d && d.inputs[w.port] === w.src) { d.inputs[w.port] = null; n++; } }
+    return n;
+}
+
 /** Delete nodes as Nuke does: what read a node reads its first input instead. */
 export function removeNodes(comp, ids) {
     const gone = new Set(ids);
@@ -543,7 +610,7 @@ export function nodeKeyFrames(node) {
 
 // ── the stack the Layers panel shows ─────────────────────────────────────────
 
-const CHAIN = new Set(["transform", "reformat", "glow", "lensflare", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "lumakeyer", "chromakeyer", "erode", "laplacian", "channelmerge", "channelmath", "blur", "crop", "shuffle", "premult", "unpremult", "retime", "keyer", "vectors",
+const CHAIN = new Set(["transform", "reformat", "glow", "lensflare", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "lumakeyer", "chromakeyer", "erode", "laplacian", "channelmerge", "channelmath", "blur", "crop", "shuffle", "addchannels", "removechannels", "premult", "unpremult", "retime", "keyer", "vectors",
     "motionblur", "depthblur", "defocus", "copy"]);
 
 /**
@@ -877,13 +944,52 @@ export function ocioNeeds(comp, frame) {
     }
     return [...out].map(([key, spec]) => ({ key, spec }));
 }
-export { OC };
+export { OC, CH };
+
+/** Nodes that make something and so have a "write" (the channel or layer it goes into). */
+export const WRITES = new Set(Object.keys(NODE_TYPES).filter((t) => NODE_TYPES[t].params.write));
+/** Nodes that move pixels: the extra channels are moved with the picture. */
+const SPATIAL = new Set(["transform", "reformat", "crop", "blur"]);
+const TWO_IN = new Set(["merge", "copy", "channelmerge"]);
+
+/**
+ * The extra channels' names at node ``id``'s output (no pixels: from the graph and the settings alone), in
+ * the order a render makes them - what the channel menus offer.
+ */
+export function channelsAt(comp, id, depth = 0) {
+    const n = id && nodeById(comp, id);
+    if (!n || depth > 256) return [];
+    const ins = (i) => channelsAt(comp, n.inputs[i], depth + 1);
+    const t = NODE_TYPES[n.type] || { inputs: [] };
+    if (n.disable) return t.inputs.length ? ins(0) : [];
+    let have = t.inputs.length ? ins(0) : [];
+    if (TWO_IN.has(n.type)) for (const c of ins(1)) if (!have.includes(c)) have = [...have, c];
+    if (n.type === "addchannels") {
+        for (const c of CH.expandChannels(CH.parseChannels(n.channels ?? t.params.channels.def), have, true)) if (!CH.RGBA.includes(c) && !have.includes(c)) have = [...have, c];
+    } else if (n.type === "removechannels") {
+        const named = CH.expandChannels(CH.parseChannels(n.channels), have, false);
+        have = have.filter((c) => (n.operation === "keep" ? named.includes(c) : !named.includes(c)));
+    } else if (n.type === "shuffle") {
+        const out = n.out || "rgba";
+        if (out !== "rgba" && CH.isLayer(out)) CH.layerChannels(out).forEach((c, k) => { const pk = n["rgba"[k]] || "rgba"[k]; if (pk !== "-" && !have.includes(c)) have = [...have, c]; });
+    }
+    if (WRITES.has(n.type)) {
+        const w = n.write || "rgba";
+        const add = w === "rgba" || !CH.isTarget(w) ? [] : CH.isLayer(w) ? CH.layerChannels(w) : CH.RGBA.includes(w) ? [] : [w];
+        for (const c of add) if (!have.includes(c)) have = [...have, c];
+    }
+    return have;
+}
 
 export function renderNode(comp, id, frame, ctx) {
     const scale = ctx.scale || 1;
     const W = Math.max(1, Math.round(comp.format.width * scale)), H = Math.max(1, Math.round(comp.format.height * scale));
     const memo = ctx.memo || (ctx.memo = new Map());
+    const xmemo = ctx.xmemo || (ctx.xmemo = new Map());   // the extra channels beside each picture
     const keys = new Map();
+    // A node's result with its own extra channels (otherwise its first input's are taken, moved for SPATIAL ones).
+    const X = (img, ex) => ({ __x: true, img, ex });
+    const exOf = (nid, f) => (nid && xmemo.get(`${nid}@${f}`)) || {};
     const run = (nid, f, depth) => {
         if (!nid || depth > 256) return blank(W, H);
         const mk = `${nid}@${f}`;
@@ -893,16 +999,32 @@ export function renderNode(comp, id, frame, ctx) {
         if (n && !n.disable && HEAVY.has(n.type) && ctx.cache) {
             if (!keys.has(nid)) keys.set(nid, upstreamKey(comp, nid));
             ck = `${f}@${scale}@${keys.get(nid)}`;
-            if (ctx.cache.has(ck)) { const kept = ctx.cache.get(ck); memo.set(mk, kept); return kept; }
+            if (ctx.cache.has(ck)) { const kept = ctx.cache.get(ck); memo.set(mk, kept.img); xmemo.set(mk, kept.ex); return kept.img; }
         }
-        const img = make(n, f, depth);
+        let img = make(n, f, depth), ex;
+        if (img && img.__x) { ex = img.ex; img = img.img; }
+        else if (!n || !NODE_TYPES[n.type] || !NODE_TYPES[n.type].inputs.length || !n.inputs[0]) ex = {};
+        else {
+            ex = exOf(n.inputs[0], f);
+            if (!n.disable && TWO_IN.has(n.type)) ex = CH.unionExtras(ex, exOf(n.inputs[1], f));
+        }
+        if (n && !n.disable && WRITES.has(n.type) && n.type !== "roto") {
+            const w = n.write || "rgba";
+            if (w !== "rgba") {
+                const base = n.inputs[0] ? run(n.inputs[0], f, depth + 1) : blank(W, H);
+                [img, ex] = CH.writeTarget(base, exOf(n.inputs[0], f), img, w);
+            }
+        }
         memo.set(mk, img);
+        xmemo.set(mk, ex);
         if (ck) {
-            ctx.cache.set(ck, img);
+            ctx.cache.set(ck, { img, ex });
             while (ctx.cache.size > (ctx.cacheMax || 24)) ctx.cache.delete(ctx.cache.keys().next().value);
         }
         return img;
     };
+    // A SPATIAL node: its picture and every extra channel through the same operation.
+    const spatial = (srcId, f, d1, fn) => { const src = run(srcId, f, d1); return X(fn(src), CH.mapExtras(exOf(srcId, f), src.w, src.h, fn)); };
     const vectorsOf = (srcId, f, depth, n) => O.vectorsImage(run(srcId, f - 1, depth), run(srcId, f, depth), run(srcId, f + 1, depth), {
         smoothness: paramAt(n, "smoothness", f), iterations: paramAt(n, "iterations", f), levels: paramAt(n, "levels", f),
         detail: paramAt(n, "detail", f) }, scale);
@@ -928,7 +1050,7 @@ export function renderNode(comp, id, frame, ctx) {
             const M = n.inputs[2] ? run(n.inputs[2], f, d1) : null;
             return mergeImages(B, A, M, n.operation || "over", paramAt(n, "mix", f));
         }
-        case "transform": return resample(run(n.inputs[0], f, d1), transformMatrix(n, f, comp.format, scale), W, H);
+        case "transform": { const m = transformMatrix(n, f, comp.format, scale); return spatial(n.inputs[0], f, d1, (p) => resample(p, m, W, H)); }
         case "grade": {
             const p = {};
             for (const k of Object.keys(NODE_TYPES.grade.params)) p[k] = paramAt(n, k, f);
@@ -972,18 +1094,32 @@ export function renderNode(comp, id, frame, ctx) {
             for (const k of Object.keys(NODE_TYPES.colorcorrect.params)) p[k] = paramAt(n, k, f);
             return colorCorrectImage(run(n.inputs[0], f, d1), p);
         }
-        case "blur": return blurImage(run(n.inputs[0], f, d1), paramAt(n, "size", f) * scale);
+        case "blur": { const sz = paramAt(n, "size", f) * scale; return spatial(n.inputs[0], f, d1, (p) => blurImage(p, sz)); }
         case "reformat": {
-            const L = reformatLayout(n, f, comp.format, scale);
-            const out = resample(run(n.inputs[0], f, d1), L.m, W, H);
-            return paramAt(n, "black_outside", f) === "off" ? out : O.cropImage(out, L.box[0], L.box[1], L.box[2], L.box[3], 0);
+            const L = reformatLayout(n, f, comp.format, scale), off = paramAt(n, "black_outside", f) === "off";
+            return spatial(n.inputs[0], f, d1, (p) => { const out = resample(p, L.m, W, H); return off ? out : O.cropImage(out, L.box[0], L.box[1], L.box[2], L.box[3], 0); });
         }
         case "crop": {
             const tl = paramAt(n, "topleft", f) || [0, 0];
             const br = paramAt(n, "bottomright", f) || [comp.format.width, comp.format.height];
-            return O.cropImage(run(n.inputs[0], f, d1), tl[0] * scale, tl[1] * scale, br[0] * scale, br[1] * scale, paramAt(n, "softness", f) * scale);
+            const soft = paramAt(n, "softness", f) * scale;
+            return spatial(n.inputs[0], f, d1, (p) => O.cropImage(p, tl[0] * scale, tl[1] * scale, br[0] * scale, br[1] * scale, soft));
         }
-        case "shuffle": return O.shuffleImage(run(n.inputs[0], f, d1), ["r", "g", "b", "a"].map((k) => n[k] || k));
+        case "shuffle": {
+            const src = run(n.inputs[0], f, d1);
+            const [img, ex] = CH.shuffleChannels(src, exOf(n.inputs[0], f), n.out || "rgba", ["r", "g", "b", "a"].map((k) => n[k] || k));
+            return X(img, ex);
+        }
+        case "addchannels": {
+            const src = run(n.inputs[0], f, d1);
+            const [img, ex] = CH.addChannels(src, exOf(n.inputs[0], f), CH.parseChannels(n.channels ?? NODE_TYPES.addchannels.params.channels.def), paramAt(n, "value", f) || 0);
+            return X(img, ex);
+        }
+        case "removechannels": {
+            const src = run(n.inputs[0], f, d1);
+            const [img, ex] = CH.removeChannels(src, exOf(n.inputs[0], f), CH.parseChannels(n.channels), n.operation === "keep");
+            return X(img, ex);
+        }
         case "copy": {
             const pick = ["r", "g", "b", "a"].map((k) => n[k] || NODE_TYPES.copy.params[k].def);
             return O.copyImage(run(n.inputs[0], f, d1), run(n.inputs[1], f, d1), pick);
@@ -991,11 +1127,13 @@ export function renderNode(comp, id, frame, ctx) {
         case "premult": return O.premultImage(run(n.inputs[0], f, d1));
         case "unpremult": return O.unpremultImage(run(n.inputs[0], f, d1));
         case "retime": {
-            const t = retimeFrame(n, f);
-            if (n.blend !== "mix") return run(n.inputs[0], Math.floor(t + 0.5), d1);
+            const t = retimeFrame(n, f), s0 = n.inputs[0];
+            const at = (g) => X(run(s0, g, d1), exOf(s0, g));
+            if (n.blend !== "mix") return at(Math.floor(t + 0.5));
             const f0 = Math.floor(t), fr = t - f0;
-            if (fr < 1e-9) return run(n.inputs[0], f0, d1);
-            return mixImages(run(n.inputs[0], f0, d1), run(n.inputs[0], f0 + 1, d1), fr);
+            if (fr < 1e-9) return at(f0);
+            const a = run(s0, f0, d1), b = run(s0, f0 + 1, d1);
+            return X(mixImages(a, b, fr), CH.mixExtras(exOf(s0, f0), exOf(s0, f0 + 1), fr, W * H));
         }
         case "keyer": {
             const p = {};
@@ -1005,7 +1143,9 @@ export function renderNode(comp, id, frame, ctx) {
         case "roto": {
             // The matte comes from the page (the viewer's Roto code, imageViewer_roto.js rotoMatte); none: empty.
             const matte = (ctx.matte && ctx.matte(n, f, W, H)) || new Float64Array(W * H);
-            return O.rotoImage(matte, W, H, n.inputs[0] ? run(n.inputs[0], f, d1) : null);
+            const src = n.inputs[0] ? run(n.inputs[0], f, d1) : null;
+            const [img, ex] = CH.rotoWrite(matte, W, H, src, exOf(n.inputs[0], f), n.write || "rgba", n.premult !== "off");
+            return X(img, ex);
         }
         case "vectors": return vectorsOf(n.inputs[0], f, d1, n);
         case "motionblur": {
@@ -1031,7 +1171,8 @@ export function renderNode(comp, id, frame, ctx) {
         default: return blank(W, H);
         }
     };
-    return run(id, frame, 0);
+    const img = run(id, frame, 0);
+    return { w: img.w, h: img.h, data: img.data, ch: exOf(id, frame) };
 }
 
 /** a x (1 - t) + b x t. */

@@ -466,48 +466,108 @@ class CompBrowserTests(unittest.TestCase):
         self.assertIn("to", k0)
         self.assertEqual(self.errors, [])
 
-    def test_several_selected_nodes_of_one_type_change_together(self):
+    def test_several_selected_nodes_each_have_a_panel_of_their_own(self):
+        """Nuke's Properties bin: a panel per selected node, the one picked last on top; a change is that node's."""
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        a, b, g = pg.evaluate(f"""() => {{ const e = {ED}; e.select(['Constant1']);
+            const a = e.addNode('blur', {{ size: 2 }}); const b = e.addNode('blur', {{ size: 8 }}); const g = e.addNode('grade');
+            e.select([g.id, b.id, a.id]); return [a.id, b.id, g.id]; }}""")
+        P = "__panel.compPropsPanel"
+        panes = pg.evaluate(f"() => [...{P}.querySelectorAll('.cp-pane')].map((x) => x.dataset.pane)")
+        self.assertEqual(panes, [a, b, g])
+        self.assertEqual(pg.locator(f'input[data-fk="{a}:size"]').input_value(), "2")
+        self.assertEqual(pg.locator(f'input[data-fk="{b}:size"]').input_value(), "8")
+        size = pg.locator(f'input[data-fk="{b}:size"]')
+        size.fill("5"); size.dispatch_event("change")
+        got = pg.evaluate(f"() => {ED}.comp().nodes.filter((n) => n.type === 'blur').map((n) => n.size)")
+        self.assertEqual(got, [2, 5], "only the node of that panel changes")
+        # Folding a panel, and closing one (the node leaves the selection).
+        pg.locator(f'.cp-pane[data-pane="{g}"] .cp-panehead .cp-panename').click()
+        self.assertEqual(pg.locator(f'.cp-pane[data-pane="{g}"] .mg-prop').count(), 0)
+        pg.locator(f'.cp-pane[data-pane="{b}"] .cp-panehead button').click()
+        panes = pg.evaluate(f"() => [...{P}.querySelectorAll('.cp-pane')].map((x) => x.dataset.pane)")
+        self.assertEqual(panes, [a, g])
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-panels-per-node.png"))
+        self.assertEqual(self.errors, [])
+
+    def test_extra_channels_shuffle_roto_write_and_the_layer_shown(self):
         pg = self.page()
         self.new_comp(pg)
         ED = self.ED
         ids = pg.evaluate(f"""() => {{ const e = {ED}; e.select(['Constant1']);
-            const a = e.addNode('blur', {{ size: 2 }}); const b = e.addNode('blur', {{ size: 8 }}); const g = e.addNode('grade');
-            e.select([g.id, b.id, a.id]); return [a.id, b.id, g.id]; }}""")
-        a, b, g = ids
-        P = "__panel.compPropsPanel"
-        head = pg.evaluate(f"() => {P}.querySelector('h4').textContent")
-        self.assertIn("2 Blur nodes", head)
-        size = pg.locator(f'input[data-fk="{a}:size"]')
-        self.assertEqual(size.input_value(), "")                       # they differ: a dash
-        self.assertEqual(size.get_attribute("placeholder"), "—")
-        size.fill("5"); size.dispatch_event("change")
-        got = pg.evaluate(f"() => {ED}.comp().nodes.filter((n) => n.type === 'blur').map((n) => n.size)")
-        self.assertEqual(got, [5, 5])
-        pg.evaluate(f"() => {ED}.undo()")
-        self.assertEqual(pg.evaluate(f"() => {ED}.comp().nodes.filter((n) => n.type === 'blur').map((n) => n.size)"), [2, 8], "one undo step")
-        # Up steps each by its own value; the label drag moves each from where it was.
-        pg.locator(f'input[data-fk="{a}:size"]').focus()
-        pg.keyboard.press("Shift+ArrowUp")
-        stepped = pg.evaluate(f"() => {ED}.comp().nodes.filter((n) => n.type === 'blur').map((n) => n.size)")
-        self.assertGreater(stepped[0], 2)
-        self.assertAlmostEqual(stepped[1] - stepped[0], 6)            # each by the same step from its own value
-        # The stopwatch keys every one; the Grade (another type) is left alone.
-        pg.locator(f'input[data-fk="{a}:size"]').locator("xpath=..").locator(".mg-sw").click()
-        tracks = pg.evaluate(f"() => {ED}.comp().nodes.filter((n) => n.type === 'blur').map((n) => !!(n.tracks && n.tracks.size))")
-        self.assertEqual(tracks, [True, True])
+            const c = e.comp().nodes.find((n) => n.id === 'Constant1'); c.color = [1, 0, 0, 1];
+            const add = e.addNode('addchannels', {{ channels: 'mask.a', value: 0.5 }});
+            const sh = e.addNode('shuffle'); e.select([sh.id]); return [add.id, sh.id]; }}""")
+        add, sh = ids
+        opts = pg.evaluate(f"() => [...__panel.compPropsPanel.querySelectorAll('.cp-pane.first select')].map((s) => [...s.options].map((o) => o.value))")
+        self.assertTrue(any("mask.a" in o for o in opts), opts)
+        # Shuffle mask.a into green: the picture turns yellow-ish (red + half green).
+        pg.evaluate(f"() => {{ const e = {ED}; const n = e.node('{sh}'); n.g = 'mask.a'; e.view('{sh}'); e.refresh(); }}")
+        pg.wait_for_timeout(500)
+        px = self.pixel(pg, 0.5, 0.5)
+        self.assertGreater(px[0], 200); self.assertGreater(px[1], 120); self.assertLess(px[2], 30)
+        # The layer menu offers the extra layer; it shows as grey.
+        pg.evaluate(f"() => {{ const e = {ED}; const n = e.node('{sh}'); n.g = 'g'; e.refresh(); }}")
+        pg.wait_for_timeout(400)
+        sel = pg.locator(".cp-layer")
+        self.assertIn("mask", sel.evaluate("(s) => [...s.options].map((o) => o.value)"))
+        sel.select_option("mask")
+        pg.wait_for_timeout(400)
         if SHOTS:
             os.makedirs(SHOTS, exist_ok=True)
-            pg.evaluate(f"() => {{ const e = {ED}; const bl = e.comp().nodes.filter((n) => n.type === 'blur'); bl[1].size = 30; e.refresh(); }}")
+            pg.evaluate(f"() => {ED}.select(['{sh}'])")
             pg.wait_for_timeout(300)
-            pg.screenshot(path=os.path.join(SHOTS, "comp-multi-edit.png"))
-            # The node graph filling the viewer, and Parameters folded to its title bar.
-            pg.evaluate("() => __panel.dockToggleMaximized('compGraph', true)")
-            pg.wait_for_timeout(300)
-            pg.screenshot(path=os.path.join(SHOTS, "panel-maximised.png"))
-            pg.evaluate("() => { __panel.dockToggleMaximized('compGraph', false); __panel.setPanelDocked('compLayers', true); __panel.dockToggleCollapsed('params', true); }")
-            pg.wait_for_timeout(300)
-            pg.screenshot(path=os.path.join(SHOTS, "panel-folded.png"))
-            pg.evaluate("() => __panel.dockToggleCollapsed('params', false)")
+            pg.screenshot(path=os.path.join(SHOTS, "comp-shuffle-layer-mask.png"))
+        px = self.pixel(pg, 0.5, 0.5)
+        self.assertTrue(abs(px[0] - px[1]) < 3 and abs(px[1] - px[2]) < 3 and 150 < px[0] < 220, px)
+        sel.select_option("rgba")
+        # Roto has the channel menu and the premult switch.
+        rid = pg.evaluate(f"() => {{ const e = {ED}; const r = e.addNode('roto'); e.select([r.id]); return r.id; }}")
+        fks = pg.evaluate(f"() => [...__panel.compPropsPanel.querySelectorAll('.cp-pane.first .mg-prop label')].map((l) => l.textContent)")
+        self.assertIn("channel", fks); self.assertIn("premult", fks)
+        if SHOTS:
+            pg.screenshot(path=os.path.join(SHOTS, "comp-roto-channel-premult.png"))
+        self.assertEqual(pg.evaluate(f"() => {ED}.node('{rid}').write || 'rgba'"), "rgba")
+        self.assertEqual(self.errors, [])
+
+    def test_a_drag_lays_out_the_selection_and_y_stroke_cuts_wires(self):
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        ids = pg.evaluate(f"""() => {{ const e = {ED}; e.select(['Constant1']);
+            const a = e.addNode('blur'); const b = e.addNode('grade');
+            const n = (id) => e.node(id); n(a.id).x = 300; n(a.id).y = 40; n(b.id).x = 20; n(b.id).y = 260; n('Constant1').x = 150; n('Constant1').y = 150;
+            e.refresh(); e.select([b.id]); return [a.id, b.id]; }}""")
+        a, b = ids
+        g = pg.locator(".cp-graph").first
+        g.click(position={"x": 5, "y": 5})
+        pg.evaluate(f"() => {ED}.select(['{b}'])")
+        # Pick b, then Constant1 and a with ctrl: the order the row is laid out in.
+        for nid in ("Constant1", a):
+            pg.locator(f'.cp-node[data-id="{nid}"]').click(modifiers=["Control"])
+        box = g.bounding_box()
+        pg.keyboard.down("a")
+        pg.mouse.move(box["x"] + 60, box["y"] + box["height"] - 20)
+        pg.mouse.down(); pg.mouse.move(box["x"] + 260, box["y"] + box["height"] - 25, steps=6); pg.mouse.up()
+        pg.keyboard.up("a")
+        pg.wait_for_timeout(400)
+        pos = pg.evaluate(f"() => ['{b}', 'Constant1', '{a}'].map((id) => [{ED}.node(id).x, {ED}.node(id).y])")
+        self.assertEqual(len({p[1] for p in pos}), 1, pos)
+        self.assertTrue(pos[0][0] < pos[1][0] < pos[2][0], pos)
+        pg.evaluate(f"() => {ED}.undo()")
+        self.assertEqual(pg.evaluate(f"() => {ED}.node('{b}').x"), 20, "one undo step")
+        # Y + a stroke across the Constant -> blur wire cuts it.
+        pg.evaluate(f"() => {{ const e = {ED}; e.node('{a}').inputs[0] = 'Constant1'; e.refresh(); }}")
+        wire = pg.locator(f'path[data-wire="Constant1>{a}:0"]').bounding_box()
+        mx, my = wire["x"] + wire["width"] / 2, wire["y"] + wire["height"] / 2
+        pg.keyboard.down("y")
+        pg.mouse.move(mx - 40, my - 6); pg.mouse.down(); pg.mouse.move(mx + 40, my + 6, steps=8); pg.mouse.up()
+        pg.keyboard.up("y")
+        self.assertIsNone(pg.evaluate(f"() => {ED}.node('{a}').inputs[0]"))
         self.assertEqual(self.errors, [])
 
     def test_export_to_nuke_from_the_bar(self):

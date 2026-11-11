@@ -21,6 +21,8 @@ The **Node Graph** panel is up when a comp opens. The picture runs from top to b
 - Drag a node that is not connected yet onto a **wire**: the wire lights up, and letting go puts the node into it.
 - The graph has a **grid** (its button, or G) and nodes **snap** to it (the magnet, or S; hold Shift while dragging to place one freely). **Align** lines the selected nodes up in a column or a row, by their edges, or spreads three or more out evenly; with nothing selected, *Snap every node to the grid* tidies the whole graph. Each is one undo step.
 - **Tab**, the **Add** button and a right-click on the graph open the node menu. Type to find a node by its name, its category or its id; the arrow keys and Enter pick one, and the list scrolls. With a node selected, a node from Tab or Add goes in under it; from a right-click on an empty spot it lands where you clicked. A right-click on a node puts that node's actions (view, disable, rename, delete) at the top of the same menu.
+- **Hold A and drag** over the graph to lay the selected nodes out: a drag across puts them in one row, a drag down in one column, in the order you picked them (click one, then Ctrl / Shift+click the rest; nodes picked together by one box keep their order on screen). They glide into place, and the row or column follows the drag while it lasts. One undo step.
+- **Hold Y and drag** a stroke across wires: the wires it crosses light red and are cut when you let go. One undo step.
 - Drag a node to move it. Drag on empty space to select several, or Alt-drag or middle-drag to pan. The wheel zooms.
 - Drag from an output to an input to connect them. Drag a connected input away to take the wire off.
 - **1**, or the eye at a node's right edge, shows that node in the picture: it gets a red outline and a VIEWER tag, and the eye again (or viewing the Output) goes back to the comp. **D** switches a node off, **Del** deletes it (what read it reads its first input instead), **F** frames the whole graph.
@@ -49,7 +51,9 @@ The **Node Graph** panel is up when a comp opens. The picture runs from top to b
 | Defocus | A lens out of focus: every pixel spread over the aperture, a disc or a polygon of 3 to 16 blades (*rotation*, *aspect* for an anamorphic lens). *Bloom* brightens what is above the *threshold* first, so highlights become bright bokeh |
 | Erode/Dilate | Shrinks (size below 0) or grows (above 0) the picture's light parts, by a box or a disc; *channels* alpha works on the matte alone. Fractional sizes are smooth |
 | Laplacian | *laplacian*: the edges, the picture less its neighbours, after a blur by *size* (a Laplacian of Gaussian). *highpass*: the picture less its blur. Then *gain* and *offset* (0.5 for the usual grey) |
-| Shuffle | Each channel from any channel, or 0 or 1 |
+| Shuffle | One layer (rgba, or an extra one) from any channel, 0, 1, or not written |
+| AddChannels | Adds extra channels (see *Channels*) |
+| Remove | Takes channels away, or keeps only the ones named |
 | ChannelMerge | One channel of A with one of B (union, plus, minus, from, multiply, divide, in, out, stencil, max, min, absminus, xor) into B's alpha, a colour channel, rgb or rgba |
 | ChannelMath | Arithmetic on the chosen channels: add, multiply, power, invert, clamp, min, max, abs, threshold, set |
 | Glow | What is brighter than the *threshold* (reached over *softness*), tinted and blurred at *steps* sizes, each half the one before, then added to the picture. *Effect only* gives the glow alone |
@@ -77,7 +81,20 @@ The shapes are kept in the comp as the viewer keeps them (coordinates as shares 
 
 ## Properties
 
-The selected node's values at the playhead. They work as in Motion: the stopwatch animates a value, and changing an animated value sets a key there. With several nodes of one type selected, a change goes to all of them in one undo step (a dash shows where their values differ; the arrow keys and a label drag move each from its own value). With nothing selected the panel holds the comp's size, frame rate and length.
+The selected node's values at the playhead. They work as in Motion: the stopwatch animates a value, and changing an animated value sets a key there. With several nodes selected each has a panel of its own, stacked as in Nuke's Properties bin: the one picked last on top, a click on a panel's title folds it, its × takes the node out of the selection, and a change goes to that node only. With nothing selected the panel holds the comp's size, frame rate and length.
+
+## Channels
+
+Beside red, green, blue and alpha a picture can carry any number of **extra channels**, named `layer.channel` (`mask.a`, `depth.z`, `motion.r`). They flow down the graph with the picture: Transform, Reformat, Crop and Blur move them with it, Retime takes them from the same frames, a Merge or Copy brings B's and A's, and every other node passes them on.
+
+- **AddChannels** adds the channels it lists (a layer name adds its r g b a), filled with a value.
+- **Remove** takes the channels it lists away, or with *keep* everything else. Red, green, blue and alpha cannot go: they turn black.
+- **Shuffle** writes one layer (rgba, or an extra layer it makes) from any channel of what comes in, 0, 1, or `-` (not written).
+- Every node that makes something (Constant, Roto, the keyers, Vectors, LensFlare) has a **channel** menu: *rgba* is its whole picture, as before; a single channel takes the node's channel of the same letter (any other name its alpha); a layer takes its r g b a. Everything else of what comes in passes. *New channel or layer…* types a new name.
+- **Roto** has a **premult** switch too. On, what comes in is cut by the matte; off, its colour stays as it is and the matte only goes into the channel chosen (the alpha, for rgba).
+- The bar's **layer** menu shows an extra layer in the picture (a layer of one channel as grey); the viewer's R G B A keys pick within it.
+
+Extra channels are not written into renders or the Nuke script yet: a render writes the rgba, and a Shuffle or Constant that writes into extra channels is baked for Nuke.
 
 ## Layers
 

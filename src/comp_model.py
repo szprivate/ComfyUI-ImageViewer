@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import copy
 import math
+import re
 
 import numpy as np
 
@@ -96,6 +97,7 @@ NODE_TYPES = {
     }},
     "constant": {"inputs": [], "params": {
         "color": {"kind": "color", "def": [0, 0, 0, 1], "key": True},
+        "write": {"kind": "target", "def": "rgba"},
     }},
     "merge": {"inputs": ["B", "A", "mask"], "params": {
         "operation": {"kind": "enum", "def": "over", "choices": MERGE_OPS},
@@ -130,6 +132,7 @@ NODE_TYPES = {
         "clip_white": {"kind": "num", "def": 1, "min": 0, "max": 1, "key": True},
         "invert": {"kind": "enum", "def": "off", "choices": ["off", "on"]},
         "output": {"kind": "enum", "def": "premultiplied", "choices": ["premultiplied", "matte"]},
+        "write": {"kind": "target", "def": "rgba"},
     }},
     "chromakeyer": {"inputs": ["src"], "params": {
         "screen": {"kind": "color", "def": [0.1, 0.55, 0.1, 1]},
@@ -140,6 +143,7 @@ NODE_TYPES = {
         "despill_limit": {"kind": "enum", "def": "max", "choices": DESPILL_LIMITS},
         "invert": {"kind": "enum", "def": "off", "choices": ["off", "on"]},
         "output": {"kind": "enum", "def": "premultiplied", "choices": KEY_OUTPUTS},
+        "write": {"kind": "target", "def": "rgba"},
     }},
     "erode": {"inputs": ["src"], "params": {
         "size": {"kind": "num", "def": -1, "min": -100, "max": 100, "key": True},
@@ -196,7 +200,15 @@ NODE_TYPES = {
         "bottomright": {"kind": "vec2", "def": None, "key": True},
         "softness": {"kind": "num", "def": 0, "min": 0, "key": True},
     }},
-    "shuffle": {"inputs": ["src"], "params": {k: {"kind": "enum", "def": k, "choices": SHUFFLE_CHOICES} for k in "rgba"}},
+    "shuffle": {"inputs": ["src"], "params": dict({"out": {"kind": "layer", "def": "rgba"}}, **{k: {"kind": "chan", "def": k} for k in "rgba"})},
+    "addchannels": {"inputs": ["src"], "params": {
+        "channels": {"kind": "chanlist", "def": "mask.a"},
+        "value": {"kind": "num", "def": 0},
+    }},
+    "removechannels": {"inputs": ["src"], "params": {
+        "operation": {"kind": "enum", "def": "remove", "choices": ["remove", "keep"]},
+        "channels": {"kind": "chanlist", "def": ""},
+    }},
     "copy": {"inputs": ["B", "A"], "params": {
         "r": {"kind": "enum", "def": "B", "choices": COPY_CHOICES}, "g": {"kind": "enum", "def": "B", "choices": COPY_CHOICES},
         "b": {"kind": "enum", "def": "B", "choices": COPY_CHOICES}, "a": {"kind": "enum", "def": "A.a", "choices": COPY_CHOICES},
@@ -215,13 +227,19 @@ NODE_TYPES = {
         "tolerance": {"kind": "num", "def": 0.3, "min": 0, "key": True},
         "softness": {"kind": "num", "def": 0.3, "min": 0, "key": True},
         "despill": {"kind": "num", "def": 1, "min": 0, "max": 1, "key": True},
+        "write": {"kind": "target", "def": "rgba"},
     }},
-    "roto": {"inputs": ["src"], "params": {"roto": {"kind": "roto", "def": None}}},
+    "roto": {"inputs": ["src"], "params": {
+        "roto": {"kind": "roto", "def": None},
+        "write": {"kind": "target", "def": "rgba"},
+        "premult": {"kind": "enum", "def": "on", "choices": ["on", "off"]},
+    }},
     "vectors": {"inputs": ["src"], "params": {
         "smoothness": {"kind": "num", "def": 0.04, "min": 0.001, "max": 1},
         "iterations": {"kind": "int", "def": 30, "min": 1, "max": 200},
         "levels": {"kind": "int", "def": 4, "min": 1, "max": 8},
         "detail": {"kind": "enum", "def": "half", "choices": list(FLOW_DETAIL)},
+        "write": {"kind": "target", "def": "rgba"},
     }},
     "motionblur": {"inputs": ["src", "vectors"], "params": {
         "shutter": {"kind": "num", "def": 0.5, "min": 0, "max": 2, "key": True},
@@ -283,6 +301,7 @@ NODE_TYPES = {
         "dirt_spots": {"kind": "int", "def": 120, "min": 0, "max": 1000},
         "dirt_reach": {"kind": "num", "def": 0.3, "min": 0.01, "key": True},
         "seed": {"kind": "int", "def": 1},
+        "write": {"kind": "target", "def": "rgba"},
     }},
     "output": {"inputs": ["src"], "params": {}},
 }
@@ -1645,7 +1664,200 @@ def retime_frame(node, f):
     return start + (f - start) * speed + (node.get("offset") or 0)
 
 
-def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None):
+# ── channels (js/imageViewer_compChannels.js) ──────────────────────────────
+# Beside its rgba a picture carries named extra channels ("mask.a", "depth.z": "<layer>.<channel>"), each an
+# [H, W] float32; render_node keeps them per node and frame. The page's rules, name for name.
+
+RGBA = ["r", "g", "b", "a"]
+_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def is_channel(s):
+    if s in _CH:
+        return True
+    if not isinstance(s, str) or "." not in s:
+        return False
+    i = s.index(".")
+    return i > 0 and bool(_NAME.match(s[:i])) and bool(_NAME.match(s[i + 1:])) and s[:i] != "rgba"
+
+
+def is_layer(s):
+    return s == "rgba" or (isinstance(s, str) and bool(_NAME.match(s)) and s not in _CH and s != "rgb")
+
+
+def layer_of(name):
+    return "rgba" if name in _CH else name[:name.index(".")]
+
+
+def layer_channels(layer):
+    return list(RGBA) if layer == "rgba" else [f"{layer}.{c}" for c in RGBA]
+
+
+def is_target(t):
+    return is_channel(t) or is_layer(t)
+
+
+def parse_channels(text):
+    out = []
+    for t in re.split(r"[\s,;]+", str(text or "")):
+        if t and (is_channel(t) or is_layer(t) or t == "rgb") and t not in out:
+            out.append(t)
+    return out
+
+
+def expand_channels(tokens, have, create=False):
+    out = []
+
+    def put(c):
+        if c not in out:
+            out.append(c)
+    for t in tokens:
+        if t == "rgba":
+            for c in RGBA:
+                put(c)
+        elif t == "rgb":
+            for c in "rgb":
+                put(c)
+        elif is_channel(t):
+            put(t)
+        elif is_layer(t):
+            mine = [n for n in have if layer_of(n) == t]
+            for c in (mine if mine or not create else layer_channels(t)):
+                put(c)
+    return out
+
+
+def channel_of(img, ex, name):
+    if name in _CH:
+        return img[..., _CH[name]].copy()
+    return (ex or {}).get(name)
+
+
+class _State:
+    def __init__(self, img, ex):
+        self.img, self.own, self.ex = img, False, dict(ex or {})
+
+    def put(self, name, v):
+        h, w = self.img.shape[:2]
+        if name in _CH:
+            if not self.own:
+                self.img = self.img.copy()
+                self.own = True
+            self.img[..., _CH[name]] = v
+        else:
+            a = np.empty((h, w), np.float32)
+            a[...] = v
+            self.ex[name] = a
+
+
+def add_channels(img, ex, tokens, value):
+    s = _State(img, ex)
+    for c in expand_channels(tokens, list(s.ex), True):
+        if c not in _CH and c not in s.ex:
+            s.put(c, value)
+    return s.img, s.ex
+
+
+def remove_channels(img, ex, tokens, keep):
+    s = _State(img, ex)
+    named = expand_channels(tokens, list(s.ex), False)
+    gone = [c for c in RGBA + list(s.ex) if c not in named] if keep else named
+    for c in gone:
+        if c in _CH:
+            s.put(c, 0)
+        else:
+            s.ex.pop(c, None)
+    return s.img, s.ex
+
+
+def shuffle_channels(img, ex, out, picks):
+    s = _State(img, ex)
+    read = []
+    for p in picks:
+        if p == "-":
+            read.append(None)
+        elif p in ("0", "1"):
+            read.append(float(p))
+        else:
+            v = channel_of(img, ex, p)
+            read.append(0.0 if v is None else v)
+    for k, c in enumerate(layer_channels(out if is_layer(out) else "rgba")):
+        if read[k] is not None:
+            s.put(c, read[k])
+    return s.img, s.ex
+
+
+def write_target(base, bex, P, target):
+    if not is_target(target) or target == "rgba":
+        return P, dict(bex or {})
+    s = _State(base, bex)
+    if is_layer(target):
+        for k, c in enumerate(layer_channels(target)):
+            s.put(c, P[..., k])
+    else:
+        letter = target if target in _CH else target[target.index(".") + 1:]
+        s.put(target, P[..., _CH[letter] if letter in _CH else 3])
+    return s.img, s.ex
+
+
+def map_extras(ex, fn):
+    names = list(ex or {})
+    out = {}
+    for g in range(0, len(names), 4):
+        grp = names[g:g + 4]
+        h, w = ex[grp[0]].shape
+        pic = np.zeros((h, w, 4), np.float32)
+        for k, nm in enumerate(grp):
+            pic[..., k] = ex[nm]
+        r = fn(pic)
+        for k, nm in enumerate(grp):
+            out[nm] = np.ascontiguousarray(r[..., k], np.float32)
+    return out
+
+
+def union_extras(bex, aex):
+    out = dict(bex or {})
+    for k, v in (aex or {}).items():
+        if k not in out:
+            out[k] = v
+    return out
+
+
+def mix_extras(ax, bx, t, shape):
+    out = {}
+    zero = np.zeros(shape, np.float32)
+    names = list(ax or {}) + [k for k in (bx or {}) if k not in (ax or {})]
+    for k in names:
+        x = (ax or {}).get(k, zero).astype(np.float64)
+        y = (bx or {}).get(k, zero).astype(np.float64)
+        out[k] = (x + (y - x) * t).astype(np.float32)
+    return out
+
+
+def roto_write(m, src, sex, target, premult):
+    h, w = m.shape
+    P = np.repeat(m[..., None], 4, axis=2).astype(np.float32)
+    ex = dict(sex or {})
+    if not is_target(target) or target == "rgba":
+        if src is None:
+            return P, ex
+        if premult:
+            return (src.astype(np.float64) * m[..., None]).astype(np.float32), ex
+        out = src.copy()
+        out[..., 3] = m
+        return out, ex
+    base = src if src is not None else blank(w, h)
+    if src is not None and premult:
+        base = src.copy()
+        base[..., :3] = (src[..., :3].astype(np.float64) * m[..., None]).astype(np.float32)
+    return write_target(base, ex, P, target)
+
+
+WRITES = {t for t, d in NODE_TYPES.items() if "write" in d["params"]}
+_TWO_IN = {"merge", "copy", "channelmerge"}
+
+
+def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, channels=False):
     """The picture node ``nid`` makes at ``frame``; ``source(node, frame)`` gives a Read's pixels (a picture at
     their own size) or None. The page's ``renderNode``: nodes that look at other times render their input
     at those frames."""
@@ -1654,14 +1866,37 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None):
     H = max(1, int(math.floor(fmt["height"] * scale + 0.5)))
     memo = {} if memo is None else memo
 
+    def ex_of(i, f):
+        return memo.get(("x", i, f)) or {} if i else {}
+
     def run(i, f, depth):
         if not i or depth > 256:
             return blank(W, H)
         if (i, f) in memo:
             return memo[(i, f)]
-        img = make(node_by_id(comp, i), f, depth + 1)
+        n = node_by_id(comp, i)
+        img = make(n, f, depth + 1)
+        if isinstance(img, tuple):
+            img, ex = img
+        elif not n or n.get("type") not in NODE_TYPES or not NODE_TYPES[n["type"]]["inputs"] or not (n.get("inputs") or [None])[0]:
+            ex = {}
+        else:
+            ex = ex_of(n["inputs"][0], f)
+            if not n.get("disable") and n["type"] in _TWO_IN:
+                ex = union_extras(ex, ex_of(n["inputs"][1], f))
+        if n and not n.get("disable") and n.get("type") in WRITES and n["type"] != "roto":
+            w = n.get("write") or "rgba"
+            if w != "rgba":
+                i0 = (n.get("inputs") or [None])[0]
+                base = run(i0, f, depth + 1) if i0 else blank(W, H)
+                img, ex = write_target(base, ex_of(i0, f), img, w)
         memo[(i, f)] = img
+        memo[("x", i, f)] = ex
         return img
+
+    def spatial(i0, f, d1, fn):
+        src = run(i0, f, d1)
+        return fn(src), map_extras(ex_of(i0, f), fn)
 
     def P(n, f, names):
         return {k: param_at(n, k, f) for k in names}
@@ -1692,7 +1927,8 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None):
             Mi = run(ins[2], f, d1) if ins[2] else None
             return merge_images(Bi, Ai, Mi, n.get("operation") or "over", param_at(n, "mix", f))
         if t == "transform":
-            return resample(run(ins[0], f, d1), transform_matrix(n, f, fmt, scale), W, H)
+            m = transform_matrix(n, f, fmt, scale)
+            return spatial(ins[0], f, d1, lambda p: resample(p, m, W, H))
         if t in ("lumakeyer", "chromakeyer", "erode", "laplacian", "channelmath"):
             p = P(n, f, NODE_TYPES[t]["params"])
             src = run(ins[0], f, d1)
@@ -1728,18 +1964,31 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None):
         if t == "grade":
             return grade_image(run(ins[0], f, d1), P(n, f, NODE_TYPES["grade"]["params"]))
         if t == "blur":
-            return blur_image(run(ins[0], f, d1), param_at(n, "size", f) * scale)
+            sz = param_at(n, "size", f) * scale
+            return spatial(ins[0], f, d1, lambda p: blur_image(p, sz))
         if t == "reformat":
             m, box = reformat_layout(n, f, fmt, scale)
-            img = resample(run(ins[0], f, d1), m, W, H)
-            return img if param_at(n, "black_outside", f) == "off" else crop_image(img, box[0], box[1], box[2], box[3], 0)
+            off = param_at(n, "black_outside", f) == "off"
+
+            def ref(p):
+                img = resample(p, m, W, H)
+                return img if off else crop_image(img, box[0], box[1], box[2], box[3], 0)
+            return spatial(ins[0], f, d1, ref)
         if t == "crop":
             tl = param_at(n, "topleft", f) or [0, 0]
             br = param_at(n, "bottomright", f) or [fmt["width"], fmt["height"]]
-            return crop_image(run(ins[0], f, d1), tl[0] * scale, tl[1] * scale, br[0] * scale, br[1] * scale,
-                              param_at(n, "softness", f) * scale)
+            soft = param_at(n, "softness", f) * scale
+            return spatial(ins[0], f, d1, lambda p: crop_image(p, tl[0] * scale, tl[1] * scale, br[0] * scale, br[1] * scale, soft))
         if t == "shuffle":
-            return shuffle_image(run(ins[0], f, d1), [n.get(k) or k for k in "rgba"])
+            src = run(ins[0], f, d1)
+            return shuffle_channels(src, ex_of(ins[0], f), n.get("out") or "rgba", [n.get(k) or k for k in "rgba"])
+        if t == "addchannels":
+            src = run(ins[0], f, d1)
+            text = n.get("channels") if n.get("channels") is not None else NODE_TYPES["addchannels"]["params"]["channels"]["def"]
+            return add_channels(src, ex_of(ins[0], f), parse_channels(text), param_at(n, "value", f) or 0)
+        if t == "removechannels":
+            src = run(ins[0], f, d1)
+            return remove_channels(src, ex_of(ins[0], f), parse_channels(n.get("channels")), n.get("operation") == "keep")
         if t == "copy":
             pick = [n.get(k) or NODE_TYPES["copy"]["params"][k]["def"] for k in "rgba"]
             return copy_image(run(ins[0], f, d1), run(ins[1], f, d1), pick)
@@ -1749,17 +1998,23 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None):
             return unpremult_image(run(ins[0], f, d1))
         if t == "retime":
             tf = retime_frame(n, f)
+            s0 = ins[0]
+
+            def at(g):
+                return run(s0, g, d1), ex_of(s0, g)
             if n.get("blend") != "mix":
-                return run(ins[0], int(math.floor(tf + 0.5)), d1)
+                return at(int(math.floor(tf + 0.5)))
             f0 = int(math.floor(tf))
             fr = tf - f0
             if fr < 1e-9:
-                return run(ins[0], f0, d1)
-            return mix_images(run(ins[0], f0, d1), run(ins[0], f0 + 1, d1), fr)
+                return at(f0)
+            a, b = run(s0, f0, d1), run(s0, f0 + 1, d1)
+            return mix_images(a, b, fr), mix_extras(ex_of(s0, f0), ex_of(s0, f0 + 1), fr, (H, W))
         if t == "keyer":
             return key_image(run(ins[0], f, d1), P(n, f, NODE_TYPES["keyer"]["params"]))
         if t == "roto":
-            return roto_image(roto_matte(n.get("roto"), f, W, H), run(ins[0], f, d1) if ins[0] else None)
+            src = run(ins[0], f, d1) if ins[0] else None
+            return roto_write(roto_matte(n.get("roto"), f, W, H), src, ex_of(ins[0], f), n.get("write") or "rgba", n.get("premult") != "off")
         if t == "vectors":
             return vectors_of(ins[0], f, d1, n)
         if t == "motionblur":
@@ -1780,7 +2035,8 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None):
         if t == "output":
             return run(ins[0], f, d1)
         return blank(W, H)
-    return run(nid, frame, 0)
+    img = run(nid, frame, 0)
+    return (img, ex_of(nid, frame)) if channels else img
 
 
 def sources_of(comp, nid):

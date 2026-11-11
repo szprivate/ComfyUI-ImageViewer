@@ -46,6 +46,34 @@ def merge(i, b, a, m=None, **kw):
     return dict({"id": f"Merge{i}", "type": "merge", "inputs": [b, a, m]}, **kw)
 
 
+def channel_cases(sources):
+    """Extra channels: made, shuffled, written into by the nodes that make something, moved with the picture,
+    merged, mixed over time, removed. The extras are compared too."""
+    c = []
+    N = node
+    c.append(({"comp": comp([read(1), N("addchannels", 1, ["Read1"], channels="mask.a, depth.z", value=0.25),
+                             N("shuffle", 1, ["addchannels1"], r="mask.a", g="r", b="1", a="depth.z"), out("shuffle1")])}, sources))
+    c.append(({"comp": comp([read(1), N("keyer", 1, ["Read1"], write="mask.a", tolerance=0.2),
+                             N("transform", 1, ["keyer1"], translate=[2.5, -1.25], rotate=9),
+                             N("blur", 1, ["transform1"], size=3), N("shuffle", 1, ["blur1"], a="mask.a"), out("shuffle1")])}, sources))
+    c.append(({"comp": comp([read(1), N("lumakeyer", 1, ["Read1"], write="matte"),
+                             N("reformat", 1, ["lumakeyer1"], width=20, height=12, resize="fill"),
+                             N("crop", 1, ["reformat1"], topleft=[2, 3], softness=1.5),
+                             N("removechannels", 1, ["crop1"], channels="matte.r matte.g"), out("removechannels1")])}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("addchannels", 1, ["Read1"], channels="bx", value=0.5),
+                             N("keyer", 1, ["Read2"], write="ax.a"), merge(1, "addchannels1", "keyer1"),
+                             N("removechannels", 1, ["Merge1"], operation="keep", channels="ax, bx.g, rgb"), out("removechannels1")])}, sources))
+    moved = moving(5, [1, 2, 3])
+    c.append(({"comp": comp([read(1), N("lumakeyer", 1, ["Read1"], write="k.a", low=0.3),
+                             N("retime", 1, ["lumakeyer1"], speed=0.5, blend="mix"), out("retime1")], w=40, h=32), "frame": 3}, moved))
+    c.append(({"comp": comp([N("constant", 1, [], color=[0.2, 0.4, 0.6, 0.8], write="a"), out("constant1")])}, {}))
+    c.append(({"comp": comp([N("constant", 1, [], color=[0.2, 0.4, 0.6, 0.8], write="c.g"), out("constant1")])}, {}))
+    c.append(({"comp": comp([read(1), N("shuffle", 1, ["Read1"], out="lay", r="-", g="a", b="0", a="g"),
+                             N("shuffle", 2, ["shuffle1"], out="rgba", r="lay.a", g="-", b="lay.r", a="lay.g"), out("shuffle2")])}, sources))
+    c.append(({"comp": comp([read(1), N("lensflare", 1, ["Read1", None], position=[10, 8], write="flare"), out("lensflare1")])}, sources))
+    return c
+
+
 def cases():
     s1, s2, s3 = src(1), src(2), src(3, 11, 7)
     sources = {"Read1": s1, "Read2": s2}
@@ -213,6 +241,7 @@ def new_node_cases(sources):
         c.append(one(node("lensflare", 1, ins, **kw), cw=big, scale=0.5))
     for op in ("add", "multiply", "power", "invert", "clamp", "min", "max", "abs", "threshold", "set"):
         c.append(one(node("channelmath", 1, ["Read1"], operation=op, value=0.4, channels="rgba" if op == "clamp" else "rgb", mix=0.8)))
+    c.extend(channel_cases(sources))
     return c
 
 
@@ -264,14 +293,18 @@ class CompParity(unittest.TestCase):
                 for k, v in sources.items():
                     node = M.node_by_id(c, k.split("@")[0])
                     pics[k] = M.decode8(v, linear=(node or {}).get("colorspace") == "linear")
-                img = M.render_node(c, c["output"], spec_.get("frame", 0),
-                                    lambda n, f: pics.get(f"{n['id']}@{f}", pics.get(n["id"])), spec_.get("scale", 1),
-                                    ocio=ocio_hook(spec_["ocio"]) if spec_.get("ocio") else None)
+                img, ex = M.render_node(c, c["output"], spec_.get("frame", 0),
+                                        lambda n, f: pics.get(f"{n['id']}@{f}", pics.get(n["id"])), spec_.get("scale", 1),
+                                        ocio=ocio_hook(spec_["ocio"]) if spec_.get("ocio") else None, channels=True)
                 js = self.js["pictures"][i]
                 self.assertEqual((js["w"], js["h"]), (img.shape[1], img.shape[0]))
                 ref = np.asarray(js["data"], np.float32).reshape(img.shape)
                 diff = float(np.max(np.abs(ref - img))) if img.size else 0.0
                 self.assertLess(diff, 2e-5, f"case {i}: max difference {diff}")
+                self.assertEqual(list(js["ch"]), list(ex), f"case {i}: the extra channels")
+                for k, v in ex.items():
+                    d = float(np.max(np.abs(np.asarray(js["ch"][k], np.float32).reshape(v.shape) - v))) if v.size else 0.0
+                    self.assertLess(d, 2e-5, f"case {i}: channel {k} differs by {d}")
 
 
 if __name__ == "__main__":

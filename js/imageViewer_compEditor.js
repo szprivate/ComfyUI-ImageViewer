@@ -57,6 +57,8 @@ const CSS = `
 .cp-port:hover{background:#ffcf3a}
 .cp-plabel{position:absolute;top:-19px;font-size:10px;color:#bbb;pointer-events:none;transform:translateX(-50%)}
 .cp-wires path.cp-wire-hot{stroke:#ff6a1a!important;stroke-width:3!important}
+.cp-wires path.cp-wire-cut{stroke:#ff3b30!important;stroke-width:3!important;stroke-dasharray:4 3!important}
+.cp-wires polyline.cp-cutline{stroke:#ff3b30;stroke-width:2;vector-effect:non-scaling-stroke;stroke-linecap:round;stroke-linejoin:round}
 .cp-marquee{position:absolute;border:1px dashed #ffcf3a;background:#ffcf3a14;pointer-events:none}
 .cp-hint{position:absolute;right:8px;bottom:6px;opacity:.45;pointer-events:none}
 .cp-gbar{position:absolute;left:6px;top:6px;display:flex;gap:4px;z-index:3}
@@ -120,6 +122,14 @@ const CSS = `
 .cp-over .cp-cedge[data-crop=l],.cp-over .cp-cedge[data-crop=r]{cursor:ew-resize}
 .mg-prop label.cp-scrub{cursor:ew-resize;user-select:none}
 .mg-prop label.cp-scrub:hover{opacity:1;color:#3ad1ff}
+.cp-pane{border:1px solid #ffffff14;border-radius:4px;margin:0 0 8px;background:#ffffff05}
+.cp-pane.first{border-color:#ffcf3a55}
+.cp-panehead{display:flex;align-items:center;gap:6px;padding:4px 6px;background:#ffffff0d;cursor:pointer;user-select:none;font-weight:600}
+.cp-panehead .cp-panename{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cp-panehead .cp-panetype{color:#9aa;font-weight:400;font-size:11px}
+.cp-panehead button{padding:0 6px;min-width:0}
+.cp-pane > .mg-prop,.cp-pane > .mg-empty,.cp-pane > div{margin-left:4px;margin-right:4px}
+input.cp-newch{flex:1;min-width:0}
 .mg-prop input.cp-mixed::placeholder{color:#c9a24a;opacity:1}.mg-prop.cp-mixedrow label{color:#c9a24a}.cp-multi{color:#9aa}
 .cp-stage.drawing,.cp-stage.picking{cursor:crosshair}
 .cp-cctabs,.cp-ccrange{display:flex;flex-wrap:wrap;gap:3px;margin:6px 0 4px}
@@ -174,9 +184,11 @@ export function createCompEditor(host, opts = {}) {
     const rootNode = host.getRootNode ? host.getRootNode() : doc;
     const st = {
         comp: null, path: "", dirty: false, hist: new Mo.History(), sel: [], view: null, frame: 0,
-        proxy: "auto", channel: "rgb", ev: 0, zoom: { s: 1, x: 0, y: 0, fit: true }, graph: { s: 1, x: 40, y: 40, fitted: false },
+        proxy: "auto", channel: "rgb", ev: 0, layer: "rgba", zoom: { s: 1, x: 0, y: 0, fit: true }, graph: { s: 1, x: 40, y: 40, fitted: false },
         layerSel: null, draw: null, pick: null, ocio: null, display: "",
         grid: loadGrid(),
+        held: null,                 // "a" (lay out) / "y" (cut wires) while that key is held over the graph
+        batch: new Map(), batchN: 0, // when each selected node joined the selection (one box = one batch)
     };
     // OCIO transforms baked for the preview, by ocioKey: {lut, at, why} once answered, the promise while asked.
     // Every draw waits for the SAME request (a second draw during a slow first bake once found nothing, drew
@@ -285,7 +297,9 @@ export function createCompEditor(host, opts = {}) {
     const keyHost = () => ({ comp: { width: fmt().width, height: fmt().height } });
     /** The nodes a Parameters change reaches: every selected node of the shown node's type, the shown one first
      *  (as ComfyUI's Parameters panel does for several selected nodes). */
-    const targetsOf = (n) => [n, ...st.sel.map(node).filter((x) => x && x !== n && x.type === n.type)];
+    // Every selected node has a panel of its own (Nuke's Properties bin): a change goes to that node only.
+    const targetsOf = (n) => [n];
+    let pane = null;   // the panel being filled
     const sameVal = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
     /** Write ``p`` on every target: ``fn(its value now)`` -> its new value (keyed when the param is keyed). */
     function writeAll(n, p, d, fn) {
@@ -356,6 +370,18 @@ export function createCompEditor(host, opts = {}) {
         if (o.setChannel) o.setChannel(c);
         else { st.channel = c; queueRender(); }
     }
+    let layerSel = null, lastLayers = [];
+    function fillLayers(layers) {
+        lastLayers = layers;
+        if (!layerSel) return;
+        const want = ["rgba", ...layers];
+        if (st.layer !== "rgba" && !want.includes(st.layer)) want.push(st.layer);
+        if ([...layerSel.options].map((x) => x.value).join("|") !== want.join("|")) {
+            layerSel.replaceChildren(...want.map((l) => new Option(l === st.layer && !["rgba", ...layers].includes(l) ? `${l} (not here)` : l, l)));
+        }
+        layerSel.value = st.layer;
+        layerSel.style.display = want.length > 1 ? "" : "none";
+    }
     function renderBar() {
         bar.replaceChildren();
         const t = el(doc, "span", "mg-title", (st.path ? st.path.split(/[\\/]/).pop() : "comp") + (st.dirty ? " •" : ""));
@@ -374,6 +400,11 @@ export function createCompEditor(host, opts = {}) {
             disp.title = `How the picture is shown: plain sRGB, or a display and view of the OCIO config (${st.ocio.source}; working space ${st.ocio.working})`;
             disp.onchange = () => { st.display = disp.value; if (o.onDisplay) o.onDisplay(st.display); queueRender(); };
         }
+        // The layer the picture shows: rgba, or a layer of extra channels of the node on show (filled at each draw).
+        layerSel = el(doc, "select", "mg-btn cp-layer");
+        layerSel.title = "The layer shown: rgba, or a layer of extra channels (one channel shows as grey)";
+        fillLayers(lastLayers);
+        layerSel.onchange = () => { st.layer = layerSel.value; queueRender(); };
         const ib = (icon, title, fn, cls = "") => {
             const b = el(doc, "button", "mg-btn cp-ibtn " + cls);
             b.title = title; b.append(paintIcon(doc, icon));
@@ -388,7 +419,7 @@ export function createCompEditor(host, opts = {}) {
             t,
             el(doc, "span", "mg-sep"),
             btn("↶", "Undo (Ctrl+Z)", undo), btn("↷", "Redo (Ctrl+Shift+Z)", redo),
-            el(doc, "span", "mg-sep"), proxy, ...(disp ? [disp] : []), ...[o.barControl && o.barControl()].filter(Boolean),
+            el(doc, "span", "mg-sep"), proxy, ...(disp ? [disp] : []), layerSel, ...[o.barControl && o.barControl()].filter(Boolean),
             btn("Fit", "Fit the picture (F on the picture)", () => { st.zoom.fit = true; layoutCanvas(); }),
             el(doc, "span", "mg-info", `${fmt().width}×${fmt().height} · ${fmt().fps} fps · ${fmt().frames} f`));
     }
@@ -466,12 +497,16 @@ export function createCompEditor(host, opts = {}) {
         const data = ctx.createImageData(img.w, img.h);
         const ds = displaySpec(), dl = ds && lutOf(ds);
         // Exposure and the channel are the viewer's, not the comp's: the render never sees them.
-        C.viewEncode(img, data.data, { gain: Math.pow(2, st.ev), channel: st.channel,
+        const layers = C.CH.layersOf(Object.keys(img.ch || {}));
+        fillLayers(layers);
+        const shownImg = layers.includes(st.layer) ? C.CH.layerPicture(img, img.ch, st.layer) : img;
+        C.viewEncode(shownImg, data.data, { gain: Math.pow(2, st.ev), channel: st.channel,
             color: dl ? (r, g, b) => C.OC.lutColor(dl, r, g, b) : null });
         ctx.putImageData(data, 0, 0);
         layoutCanvas();
         const v = node(id);
-        const chan = st.channel === "rgb" ? "" : " · " + C.VIEW_CHANNELS.find((c) => c[0] === st.channel)[1].toLowerCase();
+        const lay = st.layer !== "rgba" ? (layers.includes(st.layer) ? ` · ${st.layer}` : ` · no ${st.layer} here: rgba`) : "";
+        const chan = lay + (st.channel === "rgb" ? "" : " · " + C.VIEW_CHANNELS.find((c) => c[0] === st.channel)[1].toLowerCase());
         const ev = st.ev && st.channel !== "a" ? ` · ${st.ev > 0 ? "+" : ""}${st.ev.toFixed(1)} EV` : "";
         const lutFail = ds && !dl && luts.get(C.OC.ocioKey(ds));
         const shown = ds ? (dl ? ` · ${ds.display} / ${ds.view}` : lutFail ? ` · OCIO display failed (${lutFail.why}): plain sRGB` : " · OCIO display loading…") : "";
@@ -787,8 +822,17 @@ export function createCompEditor(host, opts = {}) {
         placeWorld();
         if (!st.graph.fitted && graph.clientWidth) frameAll();
     }
+    /** Each selected node's batch: the nodes that joined the selection together share one (the layout gesture's order). */
+    function syncBatches() {
+        const live = new Set(st.sel);
+        for (const id of [...st.batch.keys()]) if (!live.has(id)) st.batch.delete(id);
+        let fresh = false;
+        for (const id of st.sel) if (!st.batch.has(id)) { if (!fresh) { st.batchN++; fresh = true; } st.batch.set(id, st.batchN); }
+    }
     function select(ids, { add = false } = {}) {
         st.sel = add ? [...new Set([...st.sel, ...ids])] : ids.slice();
+        if (!add) st.batch.clear();
+        syncBatches();
         refresh(["graph", "props", "layers"]);
         renderOverlay();
         if (o.onSelect) o.onSelect(primary());
@@ -810,6 +854,8 @@ export function createCompEditor(host, opts = {}) {
         const target = e.target;
         if (e.button === 1 || (e.button === 0 && e.altKey)) return panGraph(e);
         if (e.button !== 0) return;
+        if (st.held === "y") return cutDrag(e);
+        if (st.held === "a" && st.sel.filter((id) => node(id)).length >= 2) return layoutDrag(e);
         if (target.dataset && target.dataset.eye) {
             e.preventDefault(); e.stopPropagation();
             const id = target.dataset.eye;
@@ -838,7 +884,10 @@ export function createCompEditor(host, opts = {}) {
     function dragNodes(e, id) {
         e.preventDefault(); graph.setPointerCapture(e.pointerId);
         if (e.shiftKey || e.ctrlKey) {
+            // (A gesture before this one left its handlers: a marquee's let-go once emptied the selection here.)
+            graph.onpointermove = null; graph.onpointerup = null;
             st.sel = st.sel.includes(id) ? st.sel.filter((x) => x !== id) : [...st.sel, id];
+            syncBatches();
             refresh(["graph", "props", "layers"]);
             return;
         }
@@ -897,6 +946,65 @@ export function createCompEditor(host, opts = {}) {
                     if (!C.connect(st.comp, dst, p, src.id)) toast("That would make a loop", "warn");
                 });
             } else if (from && src) mutate(() => C.disconnect(st.comp, from.dst, from.port));
+            else renderGraph();
+        };
+    }
+    /** A held + drag: the selected nodes in one row (a drag across) or one column (a drag down), in the order they
+     *  were picked, gliding there; the axis follows the drag and can change while it lasts. One undo step. */
+    const LAYOUT_MS = 180;
+    function layoutDrag(e) {
+        e.preventDefault(); e.stopPropagation(); graph.setPointerCapture(e.pointerId);
+        syncBatches();
+        const [sx, sy] = gxy(e);
+        const items = st.sel.map(node).filter(Boolean).map((n) => ({ id: n.id, x: n.x, y: n.y, batch: st.batch.get(n.id) }));
+        const before = cloneV(st.comp);
+        let axis = null, tween = null, moved = false;
+        const step = () => {
+            if (!tween) return;
+            const t = Math.min(1, (performance.now() - tween.t0) / LAYOUT_MS), k = 1 - Math.pow(1 - t, 3);
+            for (const it of tween.items) { const n = node(it.id); if (n) { n.x = Math.round(it.fx + (it.tx - it.fx) * k); n.y = Math.round(it.fy + (it.ty - it.fy) * k); } }
+            renderGraph();
+            if (t < 1) win().requestAnimationFrame(step); else tween = null;
+        };
+        graph.onpointermove = (ev) => {
+            const [x, y] = gxy(ev);
+            const a = C.layoutAxis(x - sx, y - sy);
+            if (!a || a === axis) return;
+            axis = a; moved = true;
+            const to = new Map(C.layoutTargets(items, axis, { snap: st.grid.snap }).map((p) => [p.id, p]));
+            const going = !tween;
+            tween = { t0: performance.now(), items: items.map((it) => { const n = node(it.id); return { id: it.id, fx: n.x, fy: n.y, tx: to.get(it.id).x, ty: to.get(it.id).y }; }) };
+            if (going) win().requestAnimationFrame(step);
+        };
+        graph.onpointerup = () => {
+            graph.onpointermove = null;
+            if (!moved) return;
+            if (tween) { tween.t0 = -1e9; step(); }
+            st.hist.push(before);
+            st.dirty = true; renderBar(); renderGraph();
+        };
+    }
+    /** Y held + drag: a red stroke; every wire it crosses is cut when let go. One undo step. */
+    function cutDrag(e) {
+        e.preventDefault(); e.stopPropagation(); graph.setPointerCapture(e.pointerId);
+        let prev = gxy(e);
+        const pts = [prev], cut = new Map();
+        const line = svgEl(doc, "polyline", { class: "cp-cutline", fill: "none" });
+        wires.append(line);
+        const draw_ = () => {
+            line.setAttribute("points", pts.map((p) => p.join(",")).join(" "));
+            for (const p of wires.querySelectorAll("path[data-wire]")) p.classList.toggle("cp-wire-cut", cut.has(p.dataset.wire));
+        };
+        graph.onpointermove = (ev) => {
+            const q = gxy(ev);
+            for (const w of C.wiresCrossed(st.comp, prev, q)) cut.set(`${w.src}>${w.dst}:${w.port}`, w);
+            pts.push(q); prev = q;
+            draw_();
+        };
+        graph.onpointerup = () => {
+            graph.onpointermove = null;
+            line.remove();
+            if (cut.size) mutate(() => { C.cutWires(st.comp, [...cut.values()]); });
             else renderGraph();
         };
     }
@@ -1098,6 +1206,7 @@ export function createCompEditor(host, opts = {}) {
         else if (ctrl && e.shiftKey && k.toLowerCase() === "s") saveAs();
         else if (ctrl && k.toLowerCase() === "s") save();
         else if (ctrl && k.toLowerCase() === "o" && o.open) o.open();
+        else if (!ctrl && !e.altKey && (k.toLowerCase() === "a" || k.toLowerCase() === "y") && part === graph) st.held = k.toLowerCase();
         else if (!ctrl && k.toLowerCase() === "g" && part === graph) setGrid({ show: !st.grid.show });
         else if (!ctrl && k.toLowerCase() === "s" && part === graph) setGrid({ snap: !st.grid.snap });
         else if (k === "Tab" && part === graph) tabMenu();
@@ -1115,6 +1224,10 @@ export function createCompEditor(host, opts = {}) {
         return used;
     }
     for (const part of [graph, layers, props, root]) part.addEventListener("keydown", keyDown);
+    // The gesture keys are let go: a keyup anywhere (a held key's up comes where the focus is), or the window's blur.
+    const letGo = (e) => { if (!e || !e.key || ["a", "y"].includes(e.key.toLowerCase())) st.held = null; };
+    root.addEventListener("keyup", letGo, true);
+    graph.addEventListener("blur", () => { if (!graph.onpointermove) st.held = null; });
 
     // ── drops: History thumbnails / file-browser rows become Reads ───────────
     const DROP = "application/x-imageviewer-history";
@@ -1289,6 +1402,14 @@ export function createCompEditor(host, opts = {}) {
             if (mixed) { const o2 = new Option("— (differs)", "\u0000"); o2.disabled = true; s.prepend(o2); s.value = "\u0000"; }
             s.onchange = () => write(typeof d.def === "number" ? Number(s.value) : s.value);
             row.append(s);
+        } else if (d.kind === "chan" || d.kind === "target" || d.kind === "layer") {
+            row.append(channelSelect(n, p, d, String(cur ?? d.def), write));
+        } else if (d.kind === "chanlist") {
+            const i = el(doc, "input"); i.type = "text"; i.value = cur ?? d.def ?? ""; i.placeholder = "mask.a, depth.z";
+            const have = C.channelsAt(st.comp, n.inputs[0]);
+            i.title = `${d.help || ""}${have.length ? `\nComing in: ${have.join(", ")}` : "\nNothing but r g b a comes in"}`;
+            i.onchange = () => write(i.value.trim());
+            row.append(i);
         } else if (d.kind === "file") {
             const i = el(doc, "input"); i.type = "text"; i.value = mixed ? "" : (cur || ""); i.placeholder = mixed ? "— (differs)" : "a picture, a film, or shot.####.exr";
             i.onchange = () => write(i.value.trim());
@@ -1307,10 +1428,50 @@ export function createCompEditor(host, opts = {}) {
         }
         return row;
     }
+    /**
+     * A channel menu. "chan": a channel of what comes in (or 0 / 1, and - for Shuffle's "not written");
+     * "target": where a node writes - rgba, one channel, a layer, or a new one typed in; "layer": a layer only.
+     */
+    function channelSelect(n, p, d, value, write) {
+        const have = C.channelsAt(st.comp, n.inputs[0]);
+        const s = el(doc, "select");
+        const add = (v, label, parent = s) => parent.append(new Option(label || v, v));
+        const group = (label) => { const g = doc.createElement("optgroup"); g.label = label; s.append(g); return g; };
+        if (d.kind === "chan") {
+            for (const c of C.CH.RGBA) add(c);
+            if (have.length) { const g = group("extra"); for (const c of have) add(c, c, g); }
+            const g = group("constant");
+            add("0", "0 (black)", g); add("1", "1 (white)", g);
+            if (n.type === "shuffle") add("-", "- (not written)", g);
+        } else {
+            add("rgba", "rgba (the whole picture)");
+            const layers = C.CH.layersOf(have);
+            if (d.kind === "target") { const g = group("one channel"); for (const c of C.CH.RGBA) add(c, c, g); for (const c of have) add(c, c, g); }
+            if (layers.length) { const g = group("layer"); for (const l of layers) add(l, l, g); }
+            add("\u0001", d.kind === "layer" ? "New layer…" : "New channel or layer…");
+        }
+        if (![...s.options].some((x) => x.value === value)) add(value, `${value} (not there)`);
+        s.value = value;
+        s.onchange = () => {
+            if (s.value !== "\u0001") { write(s.value); return; }
+            const i = el(doc, "input"); i.type = "text"; i.placeholder = d.kind === "layer" ? "a layer: mask" : "mask.a, or a layer: mask";
+            i.className = "cp-newch";
+            const done = (ok) => {
+                const v = i.value.trim();
+                if (ok && (d.kind === "layer" ? C.CH.isLayer(v) : C.CH.isTarget(v))) write(v);
+                else { if (ok && v) toast(`"${v}" is not a ${d.kind === "layer" ? "layer" : "channel"} name: letters, digits and _, a channel as layer.name`, "warn"); renderProps(); }
+            };
+            i.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") done(true); if (e.key === "Escape") done(false); };
+            i.onblur = () => done(true);
+            s.replaceWith(i);
+            i.focus();
+        };
+        return s;
+    }
     /** The Roto node's shapes are the viewer's Roto tool's: its options go into this slot, its outlines over the picture. */
     function rotoSection(n) {
         const slot = el(doc, "div", "cp-roto-slot");
-        props.append(slot);
+        pane.append(slot);
         if (o.roto && o.roto.mount) o.roto.mount(n, slot);
         else slot.append(el(doc, "div", "mg-empty", "The shapes are drawn with the viewer's Roto tool."));
     }
@@ -1319,29 +1480,29 @@ export function createCompEditor(host, opts = {}) {
     const CC_RANGE_BAR = [["master", "Master"], ["highlights", "Highlights"], ["midtones", "Midtones"], ["shadows", "Shadows"]];
     function ccSection(n, params) {
         const cc = st.cc || (st.cc = { tab: "hsl", range: "master", sec: "secA" });
-        const rows = (pred) => { for (const [p, d] of Object.entries(params)) if (pred(d, p)) props.append(paramRow(n, p, d)); };
+        const rows = (pred) => { for (const [p, d] of Object.entries(params)) if (pred(d, p)) pane.append(paramRow(n, p, d)); };
         rows((d) => d.tab === "general");
         const tabs = el(doc, "div", "cp-cctabs");
         for (const [id, label] of CC_TABS) tabs.append(btn(label, "", () => { cc.tab = id; renderProps(); }, cc.tab === id ? "on" : ""));
-        props.append(tabs);
-        const bar = (items, cur, set) => { const b = el(doc, "div", "cp-ccrange"); for (const [id, label] of items) b.append(btn(label, "", () => { set(id); renderProps(); }, cur === id ? "on" : "")); props.append(b); };
+        pane.append(tabs);
+        const bar = (items, cur, set) => { const b = el(doc, "div", "cp-ccrange"); for (const [id, label] of items) b.append(btn(label, "", () => { set(id); renderProps(); }, cur === id ? "on" : "")); pane.append(b); };
         if (cc.tab === "hsl" || cc.tab === "rgb") {
             bar(CC_RANGE_BAR, cc.range, (id) => { cc.range = id; });
             rows((d) => d.tab === cc.tab && d.range === cc.range);
         } else if (cc.tab === "offsets") {
             const grid = el(doc, "div", "cp-ccwheels");
             for (const [R, label] of CC_RANGE_BAR) grid.append(ccWheel(n, R, label));
-            props.append(grid);
-            props.append(el(doc, "div", "mg-empty", "Drag in a wheel to push that range towards a colour; double-click puts it back. Shadows lift, the others balance."));
+            pane.append(grid);
+            pane.append(el(doc, "div", "mg-empty", "Drag in a wheel to push that range towards a colour; double-click puts it back. Shadows lift, the others balance."));
             rows((d) => d.tab === "offsets");
         } else if (cc.tab === "luma") {
-            props.append(ccLumaGraph(n));
+            pane.append(ccLumaGraph(n));
             rows((d) => d.tab === "luma");
-            props.append(el(doc, "div", "mg-empty", "View (above) shows a range's weight as grey on the picture."));
+            pane.append(el(doc, "div", "mg-empty", "View (above) shows a range's weight as grey on the picture."));
         } else {
             bar([["secA", "Secondary A"], ["secB", "Secondary B"]], cc.sec, (id) => { cc.sec = id; });
             rows((d) => d.tab === "secondary" && d.range === cc.sec);
-            props.append(el(doc, "div", "mg-empty", "Turn it on, take the colour with ⌖, and set View to its secondary to see what it holds."));
+            pane.append(el(doc, "div", "mg-empty", "Turn it on, take the colour with ⌖, and set View to its secondary to see what it holds."));
         }
     }
     function ccWheel(n, R, label) {
@@ -1419,42 +1580,68 @@ export function createCompEditor(host, opts = {}) {
             props.append(el(doc, "div", "mg-empty", "Select a node to edit it. Tab in the Node graph adds one; a History thumbnail dropped on the graph, the layers or the picture becomes a Read."));
             return;
         }
+        // One panel per selected node, the one picked last on top (Nuke's Properties bin), at most MAX_PANES.
+        const shown = [n, ...st.sel.slice(0, -1).reverse().map(node).filter((x) => x && x !== n)].slice(0, MAX_PANES);
+        shown.forEach((m, i) => nodePane(m, i === 0));
+        if (st.sel.length > MAX_PANES) props.append(el(doc, "div", "mg-empty cp-multi", `${st.sel.length - MAX_PANES} more selected: their panels are not shown.`));
+    }
+    const MAX_PANES = 10;
+    function nodePane(n, first) {
         const t = C.NODE_TYPES[n.type];
-        const tg = targetsOf(n);
-        props.append(el(doc, "h4", "", tg.length > 1 ? `${tg.length} ${t.label} nodes — ${n.name || n.id} shown` : `${n.name || n.id} — ${t.label}`));
-        if (tg.length > 1) props.append(el(doc, "div", "mg-empty cp-multi", `A change goes to all ${tg.length} selected ${t.label} nodes (one undo step); a dash means their values differ. The name is this node's only.`));
-        else if (st.sel.length > 1) props.append(el(doc, "div", "mg-empty cp-multi", "The other selected nodes are of other types: only this one is changed here."));
+        const box = el(doc, "div", "cp-pane" + (first ? " first" : ""));
+        box.dataset.pane = n.id;
+        props.append(box);
+        const folded = st.folded && st.folded.has(n.id);
+        const head = el(doc, "div", "cp-panehead" + (folded ? " folded" : ""));
+        const fold = el(doc, "span", "cp-panefold", folded ? "▸" : "▾");
+        head.append(fold, el(doc, "span", "cp-panename", `${n.name || n.id}`), el(doc, "span", "cp-panetype", t.label));
+        const x = btn("×", "Close this panel (the node leaves the selection)", () => select(st.sel.filter((id) => id !== n.id)));
+        head.append(x);
+        head.onclick = (e) => {
+            if (e.target === x) return;
+            st.folded = st.folded || new Set();
+            if (st.folded.has(n.id)) st.folded.delete(n.id); else st.folded.add(n.id);
+            renderProps();
+        };
+        head.title = "Click to fold / unfold";
+        box.append(head);
+        if (folded) return;
+        pane = box;
+        try { paneBody(n, t, first); } finally { pane = null; }
+    }
+    function paneBody(n, t, first) {
         const name = el(doc, "input"); name.type = "text"; name.value = n.name || ""; name.placeholder = n.id;
         name.onchange = () => mutate(() => { if (name.value.trim()) n.name = name.value.trim(); else delete n.name; });
-        props.append(field("name", name));
+        pane.append(field("name", name));
         if (n.type !== "output") {
             const dis = el(doc, "input"); dis.type = "checkbox"; dis.checked = !!n.disable;
-            dis.indeterminate = tg.some((x) => !!x.disable !== !!n.disable);
-            dis.onchange = () => mutate(() => { for (const x of tg) { if (dis.checked) x.disable = true; else delete x.disable; } });
-            props.append(field("disable", dis));
+            dis.onchange = () => mutate(() => { if (dis.checked) n.disable = true; else delete n.disable; });
+            pane.append(field("disable", dis));
         }
         const ps = Object.entries(t.params);
-        if (ps.length) props.append(el(doc, "h4", "", t.label));
         if (n.type === "colorcorrect") ccSection(n, t.params);
-        else for (const [p, d] of ps) if (d.kind !== "roto") props.append(paramRow(n, p, d));
-        if (n.type === "roto") rotoSection(n);
-        else if (o.roto && o.roto.unmount) o.roto.unmount();
+        else for (const [p, d] of ps) if (d.kind !== "roto") pane.append(paramRow(n, p, d));
+        if (n.type === "roto") {
+            if (first) rotoSection(n);
+            else pane.append(el(doc, "div", "mg-empty", "The shapes are drawn in the panel on top: click this node in the graph to bring it there."));
+        }
+        if (first && n.type !== "roto" && o.roto && o.roto.unmount) o.roto.unmount();
         if (n.type === "read") {
             const line = el(doc, "div", "mg-empty", "…");
-            props.append(line);
+            pane.append(line);
             if (o.sourceInfo) o.sourceInfo(n).then((inf) => {
                 line.textContent = !inf || inf.kind === "missing" ? "No such file (yet)." : inf.kind === "refused" ? "Not in the folders the viewer may read."
                     : inf.kind === "still" ? "A still picture." : `${inf.kind === "video" ? "A film" : "A sequence"}: frames ${inf.first}–${inf.last}${inf.fps ? ` at ${r3(inf.fps)} fps` : ""}.`;
             }).catch(() => { line.textContent = ""; });
         }
-        if (n.type === "output") props.append(el(doc, "div", "mg-empty", "What the comp renders: Render… writes it by the export rule, into the History and onto the ComfyUI canvas."));
+        if (n.type === "output") pane.append(el(doc, "div", "mg-empty", "What the comp renders: Render… writes it by the export rule, into the History and onto the ComfyUI canvas."));
         const keys = C.nodeKeyFrames(n);
         if (keys.length) {
             const row = el(doc, "div", "mg-prop");
             row.append(el(doc, "label", "", "keys"));
             for (const f of keys.slice(0, 24)) { const b = btn(String(f), "Go to this key", () => o.onFrame && o.onFrame(f), f === st.frame ? "on" : ""); row.append(b); }
             row.style.flexWrap = "wrap";
-            props.append(row);
+            pane.append(row);
         }
     }
 

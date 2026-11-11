@@ -131,6 +131,10 @@ def _bakeable(n):
     t = n.get("type")
     if t not in NATIVE:
         return f"{t}: no stock Nuke node does the same"
+    if t == "shuffle" and ((n.get("out") or "rgba") != "rgba" or any((n.get(k) or k) not in _SHUF for k in "rgba")):
+        return "shuffle: extra channels are not written into the Nuke script (its rgba is baked)"
+    if t == "constant" and (n.get("write") or "rgba") != "rgba":
+        return "constant: writing into a channel is not written into the Nuke script (its rgba is baked)"
     if t == "channelmerge":
         if "luminance" in (n.get("a_channel"), n.get("b_channel")) or n.get("output") in ("rgb", "rgba"):
             return "channelmerge: Nuke's ChannelMerge takes one channel of each and writes one (no luminance)"

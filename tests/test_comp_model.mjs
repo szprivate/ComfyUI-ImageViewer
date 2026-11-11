@@ -435,3 +435,70 @@ test("the Crop box: an edge, a corner and the inside", async () => {
     assert.deepEqual(J.cropDrag("tr", [10, 10], [50, 40], [5, 3]), { topleft: [10, 13], bottomright: [55, 40] });
     assert.deepEqual(J.cropDrag("inside", [10, 10], [50, 40], [5, 3]), { topleft: [15, 13], bottomright: [55, 43] });
 });
+
+test("the layout gesture lays the picked nodes in a row or a column, in the order they were picked", () => {
+    const items = [{ id: "c", x: 400, y: 10, batch: 1 }, { id: "a", x: 0, y: 200, batch: 2 }, { id: "b", x: 100, y: 50, batch: 2 }];
+    const row = C.layoutTargets(items, "h");
+    assert.deepEqual(row.map((p) => p.id), ["c", "a", "b"], "batch first, then left to right inside a batch");
+    assert.deepEqual(row.map((p) => [p.x, p.y]), [[0, 10], [C.NODE_W + C.LAYOUT_GAP, 10], [2 * (C.NODE_W + C.LAYOUT_GAP), 10]]);
+    const col = C.layoutTargets(items, "v");
+    assert.deepEqual(col.map((p) => p.id), ["c", "b", "a"], "inside a batch top to bottom for a column");
+    assert.deepEqual(col.map((p) => p.y), [10, 10 + C.NODE_H + C.LAYOUT_GAP, 10 + 2 * (C.NODE_H + C.LAYOUT_GAP)]);
+    assert.equal(C.layoutAxis(3, 2), null);
+    assert.equal(C.layoutAxis(30, -10), "h");
+    assert.equal(C.layoutAxis(5, -40), "v");
+});
+
+test("a stroke across wires cuts the ones it crosses", () => {
+    const c = C.newComp({ width: 64, height: 32, fps: 24, frames: 1 });
+    const r = C.addNode(c, read(c, "a.png"));
+    r.x = 0; r.y = 0;
+    const b = C.addNode(c, C.makeNode(c, "blur", { x: 0, y: 200 }));
+    b.inputs[0] = r.id;
+    const crossed = C.wiresCrossed(c, [-50, 120], [200, 120]);
+    assert.ok(crossed.some((w) => w.src === r.id && w.dst === b.id));
+    assert.equal(C.wiresCrossed(c, [-50, -40], [200, -40]).filter((w) => w.dst === b.id).length, 0);
+    assert.equal(C.cutWires(c, crossed.filter((w) => w.dst === b.id)), 1);
+    assert.equal(b.inputs[0], null);
+});
+
+test("channelsAt follows the graph: added, shuffled, written into, merged and removed channels", () => {
+    const c = C.newComp({ width: 64, height: 32, fps: 24, frames: 1 });
+    const r = C.addNode(c, read(c, "a.png"));
+    const add = C.addNode(c, C.makeNode(c, "addchannels", { channels: "mask.a, depth.z", inputs: [r.id] }));
+    const key = C.addNode(c, C.makeNode(c, "keyer", { write: "matte", inputs: [add.id] }));
+    const sh = C.addNode(c, C.makeNode(c, "shuffle", { out: "lay", r: "-", g: "a", b: "0", a: "1", inputs: [key.id] }));
+    const rm = C.addNode(c, C.makeNode(c, "removechannels", { channels: "matte, depth", inputs: [sh.id] }));
+    assert.deepEqual(C.channelsAt(c, add.id), ["mask.a", "depth.z"]);
+    assert.deepEqual(C.channelsAt(c, key.id), ["mask.a", "depth.z", "matte.r", "matte.g", "matte.b", "matte.a"]);
+    assert.deepEqual(C.channelsAt(c, sh.id).slice(-3), ["lay.g", "lay.b", "lay.a"]);
+    assert.deepEqual(C.channelsAt(c, rm.id), ["mask.a", "lay.g", "lay.b", "lay.a"]);
+    rm.operation = "keep";
+    assert.deepEqual(C.channelsAt(c, rm.id), ["depth.z", "matte.r", "matte.g", "matte.b", "matte.a"]);
+});
+
+test("channel rules: names, lists, a write into one channel or a layer, the Roto node's premult", () => {
+    const { CH } = C;
+    assert.ok(CH.isChannel("mask.a") && CH.isChannel("a") && !CH.isChannel("rgba.a") && !CH.isChannel("mask"));
+    assert.ok(CH.isLayer("mask") && CH.isLayer("rgba") && !CH.isLayer("a") && !CH.isLayer("rgb"));
+    assert.deepEqual(CH.parseChannels("mask.a, depth.z;; bad! rgb"), ["mask.a", "depth.z", "rgb"]);
+    assert.deepEqual(CH.expandChannels(["mask"], [], true), ["mask.r", "mask.g", "mask.b", "mask.a"]);
+    assert.deepEqual(CH.expandChannels(["depth"], ["depth.z"], true), ["depth.z"]);
+    const P = { w: 1, h: 1, data: Float32Array.from([0.1, 0.2, 0.3, 0.4]) };
+    const base = { w: 1, h: 1, data: Float32Array.from([1, 1, 1, 1]) };
+    let [img, ex] = CH.writeTarget(base, {}, P, "a");
+    assert.deepEqual(Array.from(img.data).map((v) => +v.toFixed(3)), [1, 1, 1, 0.4]);
+    [img, ex] = CH.writeTarget(base, {}, P, "m.g");
+    assert.equal(+ex["m.g"][0].toFixed(3), 0.2);
+    assert.equal(img, base, "the picture is untouched when only an extra channel is written");
+    [img, ex] = CH.writeTarget(base, {}, P, "m.z");
+    assert.equal(+ex["m.z"][0].toFixed(3), 0.4, "a channel of another letter takes the alpha");
+    const src = { w: 1, h: 1, data: Float32Array.from([0.8, 0.6, 0.4, 1]) };
+    [img] = CH.rotoWrite(Float64Array.from([0.5]), 1, 1, src, {}, "rgba", true);
+    assert.deepEqual(Array.from(img.data).map((v) => +v.toFixed(3)), [0.4, 0.3, 0.2, 0.5]);
+    [img] = CH.rotoWrite(Float64Array.from([0.5]), 1, 1, src, {}, "rgba", false);
+    assert.deepEqual(Array.from(img.data).map((v) => +v.toFixed(3)), [0.8, 0.6, 0.4, 0.5], "premult off: the colour stays, the matte is the alpha");
+    [img, ex] = CH.rotoWrite(Float64Array.from([0.5]), 1, 1, src, {}, "mask.a", false);
+    assert.deepEqual(Array.from(img.data).map((v) => +v.toFixed(3)), [0.8, 0.6, 0.4, 1]);
+    assert.equal(ex["mask.a"][0], 0.5);
+});
