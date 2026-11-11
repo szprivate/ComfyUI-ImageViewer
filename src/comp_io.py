@@ -124,7 +124,33 @@ def source_info(path) -> dict:
                         "width": s.codec_context.width, "height": s.codec_context.height}
         except Exception as e:  # noqa: BLE001
             return {"kind": "missing", "error": str(e)}
-    return {"kind": "still", "first": 0, "last": 0}
+    info = {"kind": "still", "first": 0, "last": 0}
+    size = _still_size(path)
+    if size:
+        info["width"], info["height"] = size
+    return info
+
+
+def _still_size(path):
+    """(width, height) of a picture from its header (Pillow, else OpenImageIO for EXR and the like), or None."""
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            return int(im.size[0]), int(im.size[1])
+    except Exception:  # noqa: BLE001 - not a format Pillow reads
+        pass
+    try:
+        import OpenImageIO as oiio
+        inp = oiio.ImageInput.open(path)
+        if inp:
+            try:
+                spec = inp.spec()
+                return int(spec.width), int(spec.height)
+            finally:
+                inp.close()
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 
 
 def _read_float(path):

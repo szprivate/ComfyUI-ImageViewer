@@ -14,6 +14,7 @@
 // only selects - plain, Ctrl, Shift for a range - so the cut stays on screen while
 // thumbnails are dragged onto its timeline; a double-click opens the snapshot.
 import { api } from "../../scripts/api.js";
+import { notice } from "./imageViewer_exportUI.js";
 import { setPref, PREF } from "./imageViewer_settings.js";
 import { spaceIconSvg, stripSpaceEmoji } from "./imageViewer_spaceIcons.js";
 import { HISTORY_KEY, snapshotTab, stampSnapshot, snapshotGroup, setSnapshotGroup, historyGroups,
@@ -1627,10 +1628,11 @@ export const HistoryMixin = {
         const picked = batch.length > 1 ? batch : [idx];
         const one = batch.length <= 1 && !!imgObj;
         const ref = one ? (imgObj.path ? imgObj.path : { filename: imgObj.filename, subfolder: imgObj.subfolder, type: imgObj.type }) : null;
-        // Three sections, in this order (a separator between them; an empty
+        // Four sections, in this order (a separator between them; an empty
         // section shows no extra line, see .thumb-ctx-sep in the CSS):
-        //   Copy path, Remove, Move to group
-        //   VFX, Show dependencies, Load workflow, Edit in Motion / Paint
+        //   Copy path, Remove, Recreate thumbnail, Move to group
+        //   Show dependencies, Load workflow
+        //   Convert Footage, Edit in Paint / Comp / Motion, Open in 3D
         //   Tag as asset, colour tags, agentY: approve (only while a run waits)
         const sep = () => {
             const el = doc.createElement('div');
@@ -1651,27 +1653,50 @@ export const HistoryMixin = {
             else this.removeHistoryItem(key, idx);
         };
         menu.appendChild(removeItem);
+        // The tile made again from the file (a stale or blank one).
+        const remake = doc.createElement('div');
+        remake.className = 'thumb-ctx-item thumb-recreate-item';
+        remake.textContent = picked.length > 1 ? `🖼 Recreate ${picked.length} thumbnails` : '🖼 Recreate thumbnail';
+        remake.title = 'Make the thumbnail again from the file';
+        remake.onclick = (e) => { e.stopPropagation(); menu.remove(); this.recreateHistoryThumbs(picked); };
+        menu.appendChild(remake);
         // Another group for it, after the fact (the strip is sorted by group).
         menu.appendChild(this._historyGroupMenuRows(doc, menu, key, picked));
 
         sep();
-        const actionsEnd = sep();   // the actions go in between the two lines, in order
+        const infoEnd = sep();      // what it was made from / with, between these two lines
+        // What it was made from, and what was made from it (DepsPanelMixin).
+        if (one && this.depsAddMenuItem) this.depsAddMenuItem(menu, ref, infoEnd);
+        // The workflow it was made with, as the Dependencies tab's "Open its workflow".
+        if (one && this.depsAddLoadWorkflowItem) this.depsAddLoadWorkflowItem(menu, ref, infoEnd);
+        const actionsEnd = sep();   // and where else it can go, between the next two
         // A film: LTX-2.5 VFX passes on it, the result into its group (ClipVfxMixin).
         if (batch.length <= 1 && this.clipVfxMenuRow) {
             this.clipVfxMenuRow(doc, menu, (this.history[HISTORY_KEY] || [])[idx], actionsEnd);
         }
-        // What it was made from, and what was made from it (DepsPanelMixin).
-        if (one && this.depsAddMenuItem) this.depsAddMenuItem(menu, ref, actionsEnd);
-        // The workflow it was made with, as the Dependencies tab's "Open its workflow".
-        if (one && this.depsAddLoadWorkflowItem) this.depsAddLoadWorkflowItem(menu, ref, actionsEnd);
-        // A scene, or the film / poster of one, can be edited in the Motion editor
-        // (MgPanelMixin; the row comes once the server answers).
-        if (one && this.mgAddEditItem) this.mgAddEditItem(menu, ref, actionsEnd);
         // A picture can be painted on in layers (PaintPanelMixin). Paint opens a
         // picture's paint document when it has one.
         if (one && this.paintAddEditItem) {
             this.paintAddEditItem(menu, imgObj.paint || ref, actionsEnd);
         }
+        // A picture or a film into a new comp (CompPanelMixin).
+        const snapNow = (this.history[HISTORY_KEY] || [])[idx];
+        const dragItem = one && this._historyDragItem ? this._historyDragItem(imgObj, snapNow) : null;
+        if (dragItem && this.compAddEditItem) this.compAddEditItem(menu, dragItem, actionsEnd);
+        // A scene, or the film / poster of one, can be edited in the Motion editor
+        // (MgPanelMixin; the row comes once the server answers, before Open in 3D
+        // when that is there).
+        // A 3D asset or a splat into a 3D scene of its own (BarGroupsMixin).
+        let open3d = null;
+        if (one && this._frameIsModel && this._frameIsModel(imgObj) && this.previzOpenAsset) {
+            open3d = doc.createElement('div');
+            open3d.className = 'thumb-ctx-item open-3d-item';
+            open3d.textContent = '\u{1F9CA} Open in 3D';
+            open3d.title = 'A new 3D scene with this in it';
+            open3d.onclick = (e) => { e.stopPropagation(); menu.remove(); this.previzOpenAsset(imgObj); };
+            menu.insertBefore(open3d, actionsEnd);
+        }
+        if (one && this.mgAddEditItem) this.mgAddEditItem(menu, ref, open3d || actionsEnd);
 
         // agentY: tag the picture (AgentYMixin).
         if (this.agentYMenuItems) {
@@ -1696,6 +1721,50 @@ export const HistoryMixin = {
             menu.remove(); this.container.removeEventListener('click', dismiss, true);
         };
         setTimeout(() => this.container.addEventListener('click', dismiss, true), 0);
+    },
+
+    /**
+     * History > Recreate thumbnail: forget the server's cached tiles of each
+     * snapshot's file (/imageviewer/thumb_recreate) and point its tile at a new
+     * URL, so the strip asks for - and the server makes - a new one. A film's
+     * poster kept in temp is let go of, so its tile comes from the film. A model
+     * on screen is captured again at once; any other gets its new tile the next
+     * time it is shown.
+     */
+    async recreateHistoryThumbs(indices) {
+        const stack = this.history[HISTORY_KEY] || [];
+        const frames = [...new Set(indices)].map((i) => stack[i] && stack[i][0]).filter(Boolean);
+        let failed = 0;
+        await Promise.all(frames.map(async (fr) => {
+            const body = fr.path ? { path: fr.path }
+                : fr.filename ? { filename: fr.filename, type: fr.type || 'output', subfolder: fr.subfolder || '' } : null;
+            if (!body || fr.dropped) return;
+            try {
+                const res = await api.fetchApi('/imageviewer/thumb_recreate', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+                });
+                if (!res.ok) failed++;
+            } catch (_) { failed++; }
+        }));
+        const now = Date.now();
+        for (const fr of frames) {
+            // A temp poster (not an inline one) is what a film's tile pointed at; the film itself makes it now.
+            if (fr.thumb && !/^(data:|blob:)/.test(fr.thumb)) fr.thumb = null;
+            fr.thumbV = now;
+            if (this._modelThumbsSent && fr.path) this._modelThumbsSent.delete(fr.path);
+            if (this._frameIsModel && this._frameIsModel(fr) && this._model3d && this._model3d.visible && this._storeModelThumbnail) {
+                const shown = (this.allTabs[this.activeTab] || []).find((f) => this._frameIsModel(f));
+                if (shown && shown.path && shown.path === fr.path) {
+                    const url = this._model3d.captureThumbnail && this._model3d.captureThumbnail(256);
+                    if (url) this._storeModelThumbnail(fr, url);
+                }
+            }
+        }
+        this._historyPanelSig = null;   // a real rebuild: the tiles' URLs changed
+        this.renderHistoryPanel();
+        this.queuePersistViewerState();
+        if (failed) notice('warn', 'Recreate thumbnail', `${failed} thumbnail${failed > 1 ? 's' : ''} could not be made again (file gone, or not in the folders the viewer may read).`);
+        return frames.length - failed;
     },
 
     /** Remove several snapshots of one tab in a single go. */

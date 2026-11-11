@@ -136,12 +136,33 @@ class CompRoutes(unittest.TestCase):
             self.assertEqual(r.status, 403)
         self.run_c(go)
 
+    def test_recreate_thumbnail_forgets_the_tiles_and_thumb_makes_them_again(self):
+        # History > Recreate thumbnail (viewer_api /imageviewer/thumb_recreate), here beside the other routes on a picture.
+        async def go(c):
+            r = await c.get("/imageviewer/thumb", params={"path": self.png, "max": 32})
+            self.assertEqual(r.status, 200)
+            tmp = self.dirs["temp"]
+            made = [f for f in os.listdir(tmp) if f.startswith("ImageViewer_thumb32_plate_")]
+            self.assertEqual(len(made), 1)
+            st, body = await self.j(c, "/imageviewer/thumb_recreate", {"path": self.png})
+            self.assertEqual((st, body["ok"], body["removed"] >= 1), (200, True, True), body)
+            self.assertFalse(os.path.exists(os.path.join(tmp, made[0])))
+            r = await c.get("/imageviewer/thumb", params={"path": self.png, "max": 32})
+            self.assertEqual(r.status, 200)
+            self.assertTrue(os.path.exists(os.path.join(tmp, made[0])))
+            # The same fences as /imageviewer/thumb: outside the folders, nothing; not JSON from elsewhere, nothing.
+            st, _ = await self.j(c, "/imageviewer/thumb_recreate", {"path": os.path.join(self.outside, "x.png")})
+            self.assertIn(st, (403, 404))
+            r = await c.post("/imageviewer/thumb_recreate", json={"path": self.png}, headers={"Origin": "http://evil.example"})
+            self.assertEqual(r.status, 403)
+        self.run_c(go)
+
     def test_pixels_of_a_read(self):
         async def go(c):
             comp_path = os.path.join(self.dirs["output"], "p.comp.json")
             r = await c.get("/imageviewer/comp_source", params={"file": "plate.png", "comp": comp_path})
             info = await r.json()
-            self.assertEqual((r.status, info["kind"]), (200, "still"), info)
+            self.assertEqual((r.status, info["kind"], info.get("width"), info.get("height")), (200, "still", 60, 40), info)
             r = await c.get("/imageviewer/comp_pixels", params={"file": "plate.png", "comp": comp_path, "max": 30})
             self.assertEqual(r.status, 200)
             w, h = int(r.headers["X-Comp-W"]), int(r.headers["X-Comp-H"])

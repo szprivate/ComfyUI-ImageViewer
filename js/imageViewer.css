@@ -1447,7 +1447,7 @@ textarea.param-input {
 .transport > .bar-group { order: 5; }
 .transport > .bar-spacer { order: 6; flex: 1 1 8px; min-width: 8px; }
 .transport > .layout-picker-wrap, .transport > #layout-btn, .transport > #overlays-btn, .transport > #fullscreen-btn, .transport > #pagedock-btn,
-.transport > #browser-toggle-btn, .transport > #refresh, .transport > #clear-cache-btn { order: 7; }
+.transport > #browser-toggle-btn, .transport > #history-toggle-btn, .transport > #refresh, .transport > #clear-cache-btn { order: 7; }
 .bar-group.active { color: #f60; box-shadow: inset 0 -2px 0 #f60; }
 .bar-group.has-cut:not(.active) { color: #ffcf6f; }
 .bar-group.bar-letter { font-weight: 700; font-size: 13px; }

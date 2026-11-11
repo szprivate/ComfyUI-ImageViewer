@@ -2586,6 +2586,47 @@ try:
 
             return await _off_loop(_answer, dict(request.query))
 
+        async def _imageviewer_thumb_recreate(request):
+            """History > Recreate thumbnail: forget the cached tiles of one file.
+
+            POST JSON {path} or {filename, type, subfolder}. Deletes only the
+            viewer's own cached tiles of that file (media_resolve.forget_thumbs,
+            a model's browser-rendered tile); the page then asks
+            /imageviewer/thumb again, which makes them anew from the file.
+            Same reach as /imageviewer/thumb (may_serve)."""
+            allowed, why = path_access.same_origin(request)
+            if not allowed:
+                return web.json_response({"error": why}, status=403)
+            try:
+                data = await request.json()
+            except Exception:
+                data = None
+            if not isinstance(data, dict):
+                return web.json_response({"error": "bad request"}, status=400)
+
+            def _do(data):
+                path = data.get("path") if isinstance(data.get("path"), str) else None
+                if not path:
+                    path = _resolve_comfy_ref(data.get("filename"), data.get("type"), data.get("subfolder"))
+                    if path is None:
+                        return web.json_response({"error": "missing 'path', or an unresolvable filename"}, status=400)
+                path = os.path.abspath(path)
+                if not path_access.may_serve(path):
+                    return web.json_response({"error": path_access.serve_refusal(path)}, status=403)
+                if not os.path.isfile(path):
+                    return web.json_response({"error": "file not found"}, status=404)
+                removed = media_resolve.forget_thumbs(path) if media_resolve is not None else 0
+                model = os.path.splitext(path)[1].lower() in _MODEL_EXTS
+                if model and model_writer is not None:
+                    try:
+                        os.remove(model_writer.thumb_cache_path(path))
+                        removed += 1
+                    except OSError:
+                        pass
+                return web.json_response({"ok": True, "removed": removed, "model": model})
+
+            return await _off_loop(_do, data)
+
         async def _imageviewer_clear_cache(request):
             try:
                 temp_base = folder_paths.get_temp_directory()
@@ -3371,6 +3412,8 @@ try:
         _safe_add("GET", "/imageviewer/lib/three/{name}", _imageviewer_three)
         _safe_add("GET", "/api/imageviewer/lib/three/{name}", _imageviewer_three)
         _safe_add("POST", "/imageviewer/model_thumb", _imageviewer_model_thumb)
+        _safe_add("POST", "/imageviewer/thumb_recreate", _imageviewer_thumb_recreate)
+        _safe_add("POST", "/api/imageviewer/thumb_recreate", _imageviewer_thumb_recreate)
         _safe_add("GET", "/imageviewer/scenes", _imageviewer_scene_list)
         _safe_add("GET", "/api/imageviewer/scenes", _imageviewer_scene_list)
         _safe_add("GET", "/imageviewer/scene", _imageviewer_scene_load)

@@ -88,6 +88,15 @@ export const PlaybackMixin = {
     // nothing to check for here. Selecting an item still loads the full file —
     // that path goes through buildImgUrl, not this.
     thumbUrl(imgObj) {
+        const url = this._thumbUrlBase(imgObj);
+        // History > Recreate thumbnail stamps the frame: a new URL, so neither the
+        // browser's cache (a year, for a picture's tile) nor a kept tile stands in.
+        const v = imgObj && Number(imgObj.thumbV);
+        if (!v || !url || /^(data:|blob:)/.test(url)) return url;
+        return url + (url.includes('?') ? '&' : '?') + 'tv=' + v;
+    },
+
+    _thumbUrlBase(imgObj) {
         // A model dropped from the desktop has no server copy to render a tile of.
         const modelTile = this._modelThumbUrl && this._frameIsModel(imgObj) && this._modelThumbUrl(imgObj);
         if (modelTile) return modelTile;
