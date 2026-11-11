@@ -5,6 +5,7 @@
 // and the in-viewer help overlay — so a rebind shows up in all three at once.
 import { app } from "../../scripts/app.js";
 import { PRIMITIVES } from "./imageViewer_scene3d.js";
+import { DISPLAY_KINDS } from "./imageViewer_view3dTools.js";
 
 export const VIEWER_CMD_PREFIX = "ImageViewer.";
 
@@ -112,8 +113,8 @@ const ACTION_DEFS = [
     // what lets R stay the red-channel key everywhere else (see effectiveMap:
     // a combo can carry more than one action, and the first one whose `enabled`
     // passes wins).
-    { key: "GizmoSelect", label: "Previz: Select (no gizmo)", combo: { key: "q" },
-      enabled: _previz, run: (p) => p.previzSetGizmoMode("none") },
+    { key: "GizmoSelect", label: "Previz: Select Tool (click / box, no gizmo)", combo: { key: "q" },
+      enabled: _previz, run: (p) => p.previzSetGizmoMode("select") },
     { key: "GizmoMove",   label: "Previz: Move Tool",         combo: { key: "w" },
       enabled: _previz, run: (p) => p.previzSetGizmoMode("translate") },
     { key: "GizmoRotate", label: "Previz: Rotate Tool",       combo: { key: "e" },
@@ -163,6 +164,11 @@ const ACTION_DEFS = [
     // Keying. Shift+W / E / R key one channel, as Maya's do.
     { key: "PrevizKey",       label: "Previz: Key Selected",
       enabled: _sel, run: (p) => p.previzKeyAll() },
+    // Maya's S keys everything of the selection; Shift+S the Channel Box's selected channels.
+    { key: "PrevizKeyS",      label: "Previz: Set Key (all channels)", combo: { key: "s" },
+      enabled: _sel, run: (p) => p.previzKeyAll() },
+    { key: "PrevizKeyChannels", label: "Previz: Set Key On Selected Channels", combo: { key: "S", shift: true },
+      enabled: _sel, run: (p) => p.previzKeySelectedChannels() },
     { key: "PrevizKeyMove",   label: "Previz: Key Translate",   combo: { key: "W", shift: true },
       enabled: _sel, run: (p) => p.previzKeyAll("position") },
     { key: "PrevizKeyRotate", label: "Previz: Key Rotate",      combo: { key: "E", shift: true },
@@ -233,11 +239,20 @@ const ACTION_DEFS = [
       enabled: _previz, run: (p) => p.togglePanelDocked("previz") },
     { key: "View3DCurvesPanel", label: "3D View: Show / Hide Curve Editor",
       enabled: _previz, run: (p) => p.togglePanelDocked("curves") },
+    { key: "View3DDisplayMenu", label: "3D View: Display Menu",
+      enabled: _previz, run: (p) => p._model3d && p._model3d.toggleDisplayMenu() },
+    // Shift+1 .. Shift+8 are taken by the key's place in the 3D space (previzKeyDown), so they
+    // work on every keyboard layout; these commands are there to be bound to something else too.
+    ...DISPLAY_KINDS.map((k) => ({
+        key: `View3DShow${k.key[0].toUpperCase()}${k.key.slice(1)}`, label: `3D View: Show / Hide ${k.label}`,
+        enabled: _previz, run: (p) => p.previzToggleDisplay(k.key),
+    })),
     { key: "View3DChannelBox", label: "3D View: Show / Hide Channel Box",
       enabled: _previz, run: (p) => p.togglePanelDocked("channels") },
 
-    { key: "FitView",      label: "Fit Image To Viewport",   combo: { key: "f" },
-      run: (p) => p.fitView() },
+    // On a 3D tab F frames the selection (over the Outliner: shows it there) - imageViewer_previzHotkeys.js.
+    { key: "FitView",      label: "Fit Image To Viewport / Frame Selection (3D)", combo: { key: "f" },
+      run: (p) => { if (_previz(p) && p.previzFKey) p.previzFKey(); else p.fitView(); } },
     { key: "CycleCompare", label: "Cycle Compare Mode",      combo: { key: "c" },
       run: (p) => p.cycleCompareMode() },
     { key: "ChannelRed",   label: "Isolate Red Channel",     combo: { key: "r" },

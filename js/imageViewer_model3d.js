@@ -22,6 +22,7 @@ import { WorldViewMixin } from "./imageViewer_world3d.js";
 import { bustUrl } from "./imageViewer_atlasRender.js";
 import { WorldMatchMixin } from "./imageViewer_worldMatch.js";
 import { Rig3DMixin } from "./imageViewer_rig3d.js";
+import { View3DToolsMixin } from "./imageViewer_view3dTools.js";
 
 let _libsPromise = null;
 
@@ -202,19 +203,23 @@ export class Model3DView {
         channelsBtn.onclick = () => { if (this.hooks.onPanelToggle) this.hooks.onPanelToggle("channels"); };
         if (this.hooks.setIcon) this.hooks.setIcon(channelsBtn, "icon-channelbox");
 
-        look.append(modeSel, gridBtn, resetBtn, panelBtn, channelsBtn, curvesBtn);
+        const displayBtn = this._dispBuildButton(el);
+        look.append(modeSel, gridBtn, displayBtn, resetBtn, panelBtn, channelsBtn, curvesBtn);
 
         // The gizmo tools. They used to sit in the previz panel, a rail away
         // from the object they act on; here they are over the canvas, beside
         // the view controls, and they follow the same keys (W / E / R / X).
         const toolBtns = {};
         for (const [mode, label, key, icon] of [
+            ["select", "Select", "Q", "icon-pointer"],
             ["translate", "Move", "W", "icon-move3d"],
             ["rotate", "Rotate", "E", "icon-rotate3d"],
             ["scale", "Scale", "R", "icon-scale3d"],
         ]) {
             const b = el("button", "model-btn model-icon-btn", label);
-            b.title = `${label} the selected item (${key})`;
+            b.title = mode === "select"
+                ? "Select: click or drag a box, no gizmo (Q) - Shift toggles, Ctrl takes out, Ctrl+Shift adds"
+                : `${label} the selected item (${key})`;
             b.onclick = () => this.setGizmoMode(mode);
             if (this.hooks.setIcon) this.hooks.setIcon(b, icon);
             toolBtns[mode] = b;
@@ -257,7 +262,7 @@ export class Model3DView {
 
         root.append(gate, bar, status);
         this.root = root;
-        this.ui = { modeSel, gridBtn, resetBtn, panelBtn, channelsBtn, curvesBtn, toolBtns, spaceBtn, pivotBtn, walkBtn, status,
+        this.ui = { look, displayBtn, modeSel, gridBtn, resetBtn, panelBtn, channelsBtn, curvesBtn, toolBtns, spaceBtn, pivotBtn, walkBtn, status,
                     gate, shades, gateFrame, gateLabel };
         this._syncToolbar();
         this.host.appendChild(root);
@@ -267,6 +272,7 @@ export class Model3DView {
         if (!this.ui) return;
         this.ui.modeSel.value = this.materialMode;
         this.ui.gridBtn.classList.toggle("active", this.showGrid);
+        if (this._dispMenuSync) this._dispMenuSync();
         for (const [mode, btn] of Object.entries(this.ui.toolBtns || {})) {
             btn.classList.toggle("active", mode === this.gizmoMode);
         }
@@ -467,7 +473,19 @@ export class Model3DView {
     _onPointerDown(e) {
         this._applyNavButtons(e.altKey);
         this._downAt = { x: e.clientX, y: e.clientY, button: e.button, alt: e.altKey };
+        this._mqJustBoxed = false;
+        // K held: the drag scrubs the timeline, and nothing else may have it.
+        if (!e.altKey && this._kscrubDown(e)) {
+            this._downAt = null;
+            e.stopImmediatePropagation();
+            e.preventDefault();
+            return;
+        }
         if (e.altKey && e.button === 0) this._tumbleStart(e);
+        else if (this.scene3d && this._mqDown(e) && this.gizmoMode === "select") {
+            // The Select tool has no gizmo to hand the press to.
+            e.stopImmediatePropagation();
+        }
     }
 
     // ── Tumbling about what is under the cursor ──────────────────────────────
@@ -583,6 +601,7 @@ export class Model3DView {
         const d = this._downAt;
         this._downAt = null;
         if (!d || d.button !== 0 || d.alt || !this.scene3d) return;
+        if (this._mqJustBoxed) { this._mqJustBoxed = false; return; }
         if (Math.abs(e.clientX - d.x) > 3 || Math.abs(e.clientY - d.y) > 3) return;
         if (this.gizmo && this.gizmo.dragging) return;
         if (this._walk) return;
@@ -595,9 +614,11 @@ export class Model3DView {
             return;
         }
         const hit = this._pick(e);
-        // Shift adds to the selection rather than replacing it — the scene's
-        // own modifier, clear of Alt, which is navigation's.
-        if (this.hooks.onPick) this.hooks.onPick(hit, !!e.shiftKey);
+        // Maya's modifiers: Shift toggles, Ctrl takes out, Ctrl+Shift adds -
+        // all clear of Alt, which is navigation's.
+        const mode = e.ctrlKey || e.metaKey ? (e.shiftKey ? "add" : "remove") : e.shiftKey ? "toggle" : "replace";
+        if (this.hooks.onMarquee) this.hooks.onMarquee(hit ? [hit] : [], mode);
+        else if (this.hooks.onPick) this.hooks.onPick(hit, !!e.shiftKey);
     }
 
     /** Why an item has nothing on screen, or "" when it is fine. */
@@ -623,6 +644,8 @@ export class Model3DView {
             if (entry.helper && entry.helper.visible) roots.push(entry.helper);
         }
         ray.params.Line.threshold = 0.05 * (this.activeCameraObject().position.length() || 1);
+        // What the Display menu hides cannot be clicked either.
+        ray.layers.mask = this._dispMask();
         const hits = ray.intersectObjects(roots, true);
         if (!hits.length) return null;
         const idOf = (hit) => {
@@ -749,7 +772,9 @@ export class Model3DView {
         if (this.controls && this.controls.enabled && this.controls.update(dt)) again = true;
         // Wind and walking run the loop for as long as they last.
         if (this._worldTick(dt)) again = true;
-        this._worldRender(this.activeCameraObject());
+        const cam = this.activeCameraObject();
+        this._dispApply(cam);
+        this._worldRender(cam);
         if (again) this.requestRender();
     }
 
@@ -1870,7 +1895,10 @@ export class Model3DView {
     setAlsoSelected(ids) {
         const wanted = new Set(ids || []);
         wanted.delete(this.selected);
-        this._alsoIds = wanted;
+        // The Select tool shows no gizmo, so the primary is boxed like the rest.
+        if (this.gizmoMode === "select" && this.selected) wanted.add(this.selected);
+        this._alsoIds = new Set(wanted);
+        this._alsoIds.delete(this.selected);
         if (!this.libs) { this._alsoWanted = wanted; return; }
         const { THREE } = this.libs;
         if (!this._alsoBoxes) this._alsoBoxes = new Map();
@@ -1906,8 +1934,10 @@ export class Model3DView {
     }
 
     setGizmoMode(mode) {
-        this.gizmoMode = ["translate", "rotate", "scale"].includes(mode) ? mode : "translate";
-        if (this.gizmo) this.gizmo.setMode(this.gizmoMode);
+        this.gizmoMode = ["select", "translate", "rotate", "scale"].includes(mode) ? mode : "translate";
+        if (this.gizmo && this.gizmoMode !== "select") this.gizmo.setMode(this.gizmoMode);
+        this._syncSelection();
+        this.setAlsoSelected([...(this._alsoIds || [])]);
         this._syncToolbar();
         this.requestRender();
     }
@@ -1928,7 +1958,7 @@ export class Model3DView {
         if (this.gizmo || !this.libs || !this.renderer) return;
         const { TransformControls } = this.libs;
         const gizmo = new TransformControls(this.activeCameraObject(), this.canvas);
-        gizmo.setMode(this.gizmoMode);
+        gizmo.setMode(this.gizmoMode === "select" ? "translate" : this.gizmoMode);
         gizmo.setSpace(this.gizmoSpace || "local");
         gizmo.addEventListener("change", () => this.requestRender());
         // The orbit controls and the gizmo both want the drag; the gizmo wins
@@ -2003,6 +2033,7 @@ export class Model3DView {
         // You cannot drag the camera you are looking through — there would be
         // no handles on screen to grab.
         if (entry.item.kind === "camera" && entry.item.id === this.scene3d.activeCamera) this.gizmo.detach();
+        else if (this.gizmoMode === "select") this.gizmo.detach();
         else if (this.pivotMode && entry.body) {
             // A stand-in at the pivot point: dragging the item's own root would
             // move the item, which is the one thing moving a pivot must not do.
@@ -2097,8 +2128,8 @@ export class Model3DView {
 
     /** Frame the selected item, or the whole scene when nothing is selected. */
     frameSelected() {
-        const entry = this.selected ? this._entries.get(this.selected) : null;
-        this.resetView(entry && entry.object ? entry.root : null);
+        const ids = [...(this._alsoIds || []), this.selected].filter(Boolean);
+        if (!ids.length || !this.frameItems(ids)) this.resetView();
     }
 
     // ── Thumbnail ────────────────────────────────────────────────────────────
@@ -2158,6 +2189,9 @@ export class Model3DView {
         r.cam = cam;
         r.item = item;
         keep(cam, "fov"); keep(cam, "aspect");
+        // The Display menu is for working: a render sees every layer.
+        keep(cam.layers, "mask");
+        cam.layers.enableAll();
 
         this._sizeBackup = { w: this.canvas.width, h: this.canvas.height, ratio: this.renderer.getPixelRatio() };
         r.clear = this.renderer.getClearColor(new THREE.Color());
@@ -2180,6 +2214,7 @@ export class Model3DView {
         hide(this._pivotMark);
         hide(this._pinGroup);           // feedback pins are notes, not part of the shot
         for (const box of (this._alsoBoxes || new Map()).values()) hide(box);
+        for (const j of (this._joints || new Map()).values()) hide(j.group);
         if (!r.opts.helpers) {
             for (const entry of this._entries.values()) {
                 hide(entry.helper);
@@ -2382,3 +2417,4 @@ export class Model3DView {
 Object.defineProperties(Model3DView.prototype, Object.getOwnPropertyDescriptors(WorldViewMixin));
 Object.assign(Model3DView.prototype, WorldMatchMixin);
 Object.assign(Model3DView.prototype, Rig3DMixin);
+Object.assign(Model3DView.prototype, View3DToolsMixin);

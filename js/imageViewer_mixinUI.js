@@ -97,6 +97,9 @@ export const UIMixin = {
 
         if (!this.isHovered || !this.isViewerVisible()) return;
 
+        // The 3D space's K (scrub) and Shift+1..8 (Display) - imageViewer_previzHotkeys.js.
+        if (this._modelMode && this.previzKeyDown && this.previzKeyDown(e)) return;
+
         // Ctrl/Cmd+Enter queues a prompt (matching ComfyUI). In the docked panel
         // ComfyUI's own global shortcut already fires, so only handle it here for
         // the undocked popout (which has no such shortcut) to avoid queuing the
@@ -127,6 +130,7 @@ export const UIMixin = {
     },
 
     handleKeyUp(e) {
+        if (this.previzKeyUp) this.previzKeyUp(e);
         if (this._paintOn && this.paintKeyUp && this.paintKeyUp(e)) return;
         if (e.key === 'e' || e.key === 'E') {
             this.isExposureModifierActive = false;

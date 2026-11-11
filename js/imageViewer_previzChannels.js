@@ -162,6 +162,9 @@ export const PrevizChannelsMixin = {
                 if (input.dataset.cancel) { delete input.dataset.cancel; this._previzRenderChannels(); return; }
                 // The live item: undo and redo replace the objects under unchanged rows.
                 const now = this.previzSelectedItem() || item;
+                // Typed into one of several selected channels: the value goes to all of them.
+                const sel = this._cbSel && this._cbSel.has(id) && this._cbSel.size > 1 ? [...this._cbSel] : null;
+                if (sel) { this.previzSetChannels(sel, input.value); return; }
                 const v = this._cbParse(input.value, this._cbValue(now, prop, comp));
                 if (v === null) { this._previzRenderChannels(); return; }
                 this.previzSetChannel(prop, comp, v);
@@ -401,6 +404,31 @@ export const PrevizChannelsMixin = {
         } else {
             this.previzChanged();
         }
+    },
+
+    /**
+     * Maya's Channel Box with several channels selected: what is typed into one
+     * of them is set on every one (on every selected item). A relative form
+     * (+=2, *=2) works from each channel's own value. One undo step.
+     */
+    previzSetChannels(channelIds, text) {
+        const rows = (channelIds || []).map((ch) => this._cbUI && this._cbUI.rows.get(ch))
+            .filter((r) => r && r.kind === "number");
+        const items = this._cbItems();
+        if (!rows.length || !items.length) return false;
+        const probe = this._cbParse(text, 0);
+        if (probe === null) { this._previzRenderChannels(); return false; }
+        this.previzBeginDrag("set channels");
+        for (const r of rows) {
+            const from = new Map(items.map((it) => [it.id, this._cbValue(it, r.prop, r.comp)]));
+            this.previzSetChannel(r.prop, r.comp, (start) => {
+                const v = this._cbParse(text, start);
+                return v === null ? start : v;
+            }, { live: true, from });
+        }
+        this.previzEndDrag();
+        this.previzChanged();
+        return true;
     },
 
     /** Write a value the way every edit does: a key when it animates. */

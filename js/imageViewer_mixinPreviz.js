@@ -192,12 +192,11 @@ export const PrevizMixin = {
         return done;
     },
 
-    /** Gizmo mode from a hotkey (W / E / R), and Q for no gizmo at all. */
+    /** Gizmo mode from a hotkey (W / E / R), and Q for the Select tool (no gizmo). */
     previzSetGizmoMode(mode) {
         if (!this.isPrevizTab()) return;
         const view = this._modelView();
-        if (mode === "none") this.previzSelect(null);
-        else view.setGizmoMode(mode);
+        view.setGizmoMode(mode === "none" ? "select" : mode);
         this._previzRenderPanel();
     },
 

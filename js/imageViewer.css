@@ -2196,3 +2196,24 @@ audio.src-media { width: 90%; }
 .edit-hpatch.on.v { background: #1f6f80; color: #fff; border-color: #00b8d4; }
 .edit-hpatch.on.a { background: #7a2a2a; color: #fff; border-color: #e5534b; }
 .edit-hpatch.none { visibility: hidden; cursor: default; }
+
+/* The 3D view's Display menu (imageViewer_view3dTools.js): kinds of things on / off. */
+.model-display-btn.partial { color: #f60; }
+.model-display-menu {
+    position: absolute; top: 100%; right: 0; margin-top: 4px; z-index: 5; min-width: 190px;
+    padding: 4px 0; background: #1e1e1e; border: 1px solid #444; border-radius: 4px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5); font-size: 12px; color: #ccc;
+}
+.model-display-row { display: flex; align-items: center; gap: 6px; padding: 3px 10px; cursor: pointer; user-select: none; }
+.model-display-row:hover { background: #2c2c2c; color: #fff; }
+.model-display-row input { margin: 0; accent-color: #f60; }
+.model-display-row span:first-of-type { flex: 1; }
+.model-display-key { color: #777; font-size: 11px; }
+.model-display-sep { height: 1px; margin: 4px 0; background: #333; }
+/* The marquee: a box drawn while dragging over the 3D view. */
+.model-marquee {
+    position: absolute; z-index: 3; pointer-events: none;
+    border: 1px dashed #fff; background: rgba(255, 255, 255, 0.06);
+}
+/* K held: the drag scrubs the timeline. */
+.model-view.scrub-ready .model-canvas, .model-view.scrubbing .model-canvas { cursor: ew-resize; }
