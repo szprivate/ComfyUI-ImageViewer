@@ -63,6 +63,7 @@
 
 import { WORLD_KINDS, readWorldItem, referenceSettings, walkSettings, worldInfo } from "./imageViewer_worldData.js";
 import { readRigFields } from "./imageViewer_rigData.js";
+import { readItemRef, readSceneLayers } from "./imageViewer_sceneLayers.js";
 
 export const SCENE_VERSION = 1;
 export const DEFAULT_RESOLUTION = [1920, 1080];
@@ -720,6 +721,9 @@ export function parseScene(raw) {
             visible: raw.visible !== false,
             tracks: {},
         };
+        // Brought in from another scene file (imageViewer_sceneLayers.js).
+        const ref = readItemRef(raw.ref);
+        if (ref) item.ref = ref;
         if (isCam) {
             item.fov = num(raw.fov, 35);
             item.resolution = cameraResolution(raw);
@@ -799,6 +803,8 @@ export function parseScene(raw) {
     if (world) scene.world = world;
     if (scene.activeCamera && !itemById(scene, scene.activeCamera)) scene.activeCamera = null;
     repairTree(scene);
+    // Display layers, selection sets and references, their members held to the items there are.
+    readSceneLayers(scene, data);
     return scene;
 }
 
