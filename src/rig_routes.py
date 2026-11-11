@@ -200,6 +200,11 @@ def _kill_tree(proc):
         proc.kill()
 
 
+def kind_logs(kind):
+    """The jobs that run a model or an install keep a log file; an export is quick and says its error."""
+    return kind in ("autorig", "motion", "install")
+
+
 # How many commands (the installer's "$ " lines) a full install of each tool runs: for the progress bar.
 INSTALL_STEPS = {"unirig": 10, "kimodo": 5}
 
@@ -216,9 +221,42 @@ class _Job:
         self.cancelled = False
         self.started = time.time()
         self.share = None
+        self.log_path = None
+        self._fh = None
+
+    def open_log(self):
+        """Everything the job prints also goes to a file (the page only sees the last lines):
+        <viewer user folder>/rig_logs/<kind>_<time>.log, the last 20 kept."""
+        try:
+            folder = os.path.join(os.path.dirname(config_path()), "rig_logs")
+            os.makedirs(folder, exist_ok=True)
+            old = sorted(f for f in os.listdir(folder) if f.endswith(".log"))
+            for f in old[:max(0, len(old) - 19)]:
+                try:
+                    os.remove(os.path.join(folder, f))
+                except OSError:
+                    pass
+            self.log_path = os.path.join(folder, f"{time.strftime('%Y%m%d_%H%M%S')}_{self.kind}_{self.id[:6]}.log")
+            self._fh = open(self.log_path, "a", encoding="utf-8", errors="replace")
+        except OSError:
+            self.log_path, self._fh = None, None
+
+    def close_log(self):
+        if self._fh:
+            try:
+                self._fh.close()
+            except OSError:
+                pass
+            self._fh = None
 
     def say(self, line):
         line = str(line).rstrip()
+        if self._fh:
+            try:
+                self._fh.write(line + "\n")
+                self._fh.flush()
+            except OSError:
+                pass
         if line:
             self.log.append(line)
             del self.log[:-LOG_LINES]
@@ -228,6 +266,8 @@ class _Job:
                "seconds": round(time.time() - self.started, 1)}
         if self.share is not None:
             out["share"] = round(self.share, 3)
+        if self.log_path:
+            out["log_file"] = self.log_path
         if self.result is not None:
             out["result"] = self.result
         if self.error:
@@ -389,6 +429,13 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
             except Exception as e:  # noqa: BLE001 - reported to the page
                 job.state = "cancelled" if job.cancelled else "error"
                 job.error = str(e)
+                job.say(f"!! {e}")
+                if job.log_path and not job.cancelled:
+                    job.error += f" (full log: {job.log_path})"
+            finally:
+                job.close_log()
+        if kind_logs(job.kind):
+            job.open_log()
         threading.Thread(target=run, daemon=True, name=f"rig-{job.kind}").start()
 
     # ── export ───────────────────────────────────────────────────────────────
@@ -567,7 +614,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
                     raise RuntimeError("cancelled")
                 if code != 0 or not os.path.isfile(where["path"]):
                     said = [l for l in job.log if l.startswith("!! ")]
-                    raise RuntimeError("UniRig failed: " + (said[0][3:] if said else " | ".join(job.log[-4:])))
+                    raise RuntimeError("UniRig failed: " + (" / ".join(l[3:] for l in said[-2:]) if said else " | ".join(job.log[-4:])))
             return {"path": where["path"], "relative": relative(where["path"]), "name": os.path.basename(where["path"])}
 
         spawn(job, work)
