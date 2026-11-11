@@ -2103,8 +2103,9 @@ try:
             the world in the 3D space itself)."""
             if atlas_render is None:
                 return web.json_response({"error": "atlas unavailable"}, status=500)
-            if not path_access.same_origin(request):
-                return web.json_response({"error": "cross-origin request refused"}, status=403)
+            ok, why = path_access.same_origin(request)        # (allowed, reason): a tuple is always true
+            if not ok:
+                return web.json_response({"error": why}, status=403)
             try:
                 data = await request.json()
             except Exception:
@@ -2136,8 +2137,9 @@ try:
             GET /imageviewer/atlas_chisel?id=<id> (``path`` when done)."""
             if atlas_render is None:
                 return web.json_response({"error": "atlas unavailable"}, status=500)
-            if not path_access.same_origin(request):
-                return web.json_response({"error": "cross-origin request refused"}, status=403)
+            ok, why = path_access.same_origin(request)        # (allowed, reason): a tuple is always true
+            if not ok:
+                return web.json_response({"error": why}, status=403)
             try:
                 data = await request.json()
             except Exception:
@@ -3445,6 +3447,13 @@ try:
                                  resolve=lambda p: _resolve_raw_path(str(p))[0] if p else None)
         except Exception as e:  # noqa: BLE001 - the rest of the viewer works without it
             print(f"[ImageViewer] Comp routes not registered: {e}")
+        # VFX on a clip of the History: LTX-2.5's IC-LoRA workflows (clip_vfx_routes.py; clip_vfx).
+        try:
+            from . import clip_vfx_routes
+            clip_vfx_routes.register(_safe_add, web=web, path_access=path_access, folder_paths=folder_paths,
+                                     resolve=lambda p: _resolve_raw_path(str(p))[0] if p else None)
+        except Exception as e:  # noqa: BLE001 - the rest of the viewer works without it
+            print(f"[ImageViewer] Clip VFX routes not registered: {e}")
         # Characters: FBX / Alembic export, UniRig auto-rigging, Kimodo motion (rig_routes.py; rig_export).
         try:
             from . import rig_routes
