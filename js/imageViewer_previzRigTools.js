@@ -228,7 +228,13 @@ export const PrevizRigToolsMixin = {
                 humanoid = Object.assign(el("input"), { type: "checkbox", checked: true });
                 const lab = el("label", "rd-sub");
                 lab.append(humanoid, " Humanoid controls when it reads as one");
-                return [row("Seed", seed, el("span", "rd-sub", "another seed, another skeleton")), row("Controls", lab)];
+                const rows = [row("Seed", seed, el("span", "rd-sub", "another seed, another skeleton")), row("Controls", lab)];
+                if (this.previzHasSkeleton(modelId)) {
+                    const n = this._modelView()._entries.get(modelId).bones.size;
+                    rows.unshift(el("div", "rd-hint", `${model.name} already has a skeleton (${n} bones). `
+                        + "Auto-rigging replaces it with UniRig's; to animate the one it has, use Rig → Add controls instead."));
+                }
+                return rows;
             },
             note: "UniRig predicts a skeleton and skin weights for any character - people, animals, creatures. It runs on this machine's GPU and takes a minute or two.",
             onExport: async (v, { progress }) => {

@@ -303,8 +303,27 @@ def install_unirig(root, python, cuda, flash_wheel, sysname):
         print("!! flash_attn did not install: UniRig will use the viewer's stand-in for it (slower skinning).",
               flush=True)
     install_shims(py)   # only used for what is missing
-    run([py, "-m", "pip", "install", *PINS])
+    run([py, "-m", "pip", "install", *PINS, "hf_xet"])
+    if sysname == "win":
+        # Triton has no Windows wheels of its own; UniRig's CUDA path wants it. triton-windows
+        # follows torch: torch 2.N goes with triton 3.(N-4)..3.(N-3).
+        try:
+            run([py, "-m", "pip", "install", triton_windows_spec(tv)])
+        except subprocess.CalledProcessError:
+            print("!! triton-windows did not install: try `pip install triton-windows` in UniRig's venv.", flush=True)
     return {"python": py, "repo": repo, "device": "cuda"}
+
+
+def triton_windows_spec(torch_version):
+    """The triton-windows that goes with a torch version: 2.6 -> <3.3, 2.7 -> <3.4, 2.8 -> <3.5 ..."""
+    try:
+        major, minor = (int(x) for x in str(torch_version).split(".")[:2])
+    except ValueError:
+        return "triton-windows"
+    if major != 2 or minor < 6:
+        return "triton-windows"
+    return f"triton-windows<3.{minor - 3}"
+
 
 
 # ── Kimodo ────────────────────────────────────────────────────────────────────
@@ -326,7 +345,7 @@ def install_kimodo(root, python, cuda, model, sysname):
     # constraints) with CMake: CMake comes from pip, a C++ compiler must be on the machine (Visual Studio's
     # Build Tools on Windows, Xcode's command line tools on a Mac). Without one, Kimodo goes in without it;
     # the viewer cleans the feet up itself.
-    run([py, "-m", "pip", "install", "cmake", "ninja", "huggingface_hub"])
+    run([py, "-m", "pip", "install", "cmake", "ninja", "huggingface_hub", "hf_xet"])
     bindir = os.path.dirname(py)
     try:
         run([py, "-m", "pip", "install", f"git+{KIMODO_GIT}"], env={"PATH": bindir + os.pathsep + os.environ.get("PATH", "")})
@@ -373,14 +392,19 @@ def main():
     if os.path.isfile(path):
         with open(path, encoding="utf-8") as fh:
             cfg = json.load(fh)
+    def save():
+        # After EACH tool: one that installed stays set up when the next one fails.
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(cfg, fh, indent=2)
+        print(f"== written {path}", flush=True)
+
     if a.only in (None, "unirig"):
         cfg["unirig"] = install_unirig(root, a.python, cuda, a.flash_attn_wheel, sysname)
+        save()
     if a.only in (None, "kimodo"):
         cfg["kimodo"] = install_kimodo(root, a.python, cuda, a.kimodo_model, sysname)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(cfg, fh, indent=2)
-    print(f"== written {path}")
+        save()
     print("   Kimodo needs access to meta-llama/Meta-Llama-3-8B-Instruct on Hugging Face and `hf auth login`.")
 
 

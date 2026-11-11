@@ -27,14 +27,28 @@ SKIN_TASK = "configs/task/quick_inference_unirig_skin.yaml"
 
 
 def step(title, args, cwd, fatal=True):
+    """Run one UniRig command, its output passed through; its last lines are kept in TAIL."""
     print(f"== {title}", flush=True)
     cmd = [sys.executable, *args]
-    env = dict(os.environ, PYTORCH_ENABLE_MPS_FALLBACK=os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK", "1"))
-    code = subprocess.call(cmd, cwd=cwd, env=env)
+    env = dict(os.environ, PYTORCH_ENABLE_MPS_FALLBACK=os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK", "1"),
+               PYTHONUNBUFFERED="1")
+    TAIL.clear()
+    proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, encoding="utf-8", errors="replace", bufsize=1)
+    for line in proc.stdout:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        TAIL.append(line.rstrip())
+        del TAIL[:-80]
+    proc.stdout.close()
+    code = proc.wait()
     if code != 0 and fatal:
         print(f"!! {title} failed ({code})", flush=True)
         sys.exit(code)
     return code
+
+
+TAIL = []
 
 
 def device():
@@ -149,6 +163,15 @@ def extract(repo, model, npz_dir, faces):
                               "--force_override=true", "--num_runs=1", "--id=0",
                               f"--time={time.strftime('%Y_%m_%d_%H_%M_%S')}", f"--faces_target_count={faces}",
                               f"--input={model}", f"--output_dir={npz_dir}"], repo)
+    # UniRig's extract catches its own errors and goes on: without this the next step fails on a
+    # missing raw_data.npz and the reason is long gone from the log. (With an absolute input,
+    # UniRig puts the npz beside the input, not in npz_dir.)
+    want = [os.path.join(os.path.splitext(model)[0], "raw_data.npz"),
+            os.path.join(npz_dir, os.path.splitext(os.path.basename(model))[0], "raw_data.npz")]
+    if not any(os.path.isfile(w) for w in want):
+        why = [l for l in TAIL if "Error" in l or "error" in l or "Traceback" in l] or TAIL[-6:]
+        print("!! UniRig could not read the mesh: " + " | ".join(why[-4:]), flush=True)
+        sys.exit(1)
 
 
 def main():

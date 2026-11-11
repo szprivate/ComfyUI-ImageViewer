@@ -1185,7 +1185,14 @@ export const PrevizMixin = {
             b.textContent = e.label;
             if (e.title) b.title = e.title;
             b.disabled = !!e.disabled;
-            b.onclick = () => { this._previzCloseAddMenu(); e.run(); };
+            b.onclick = () => {
+                this._previzCloseAddMenu();
+                // A command that fails says so, instead of nothing happening.
+                Promise.resolve().then(() => e.run()).catch((err) => {
+                    console.error(`[ImageViewer] ${e.label}:`, err);
+                    notice("error", `${e.label.replace(/\u2026$/, "")} did not work`, String((err && err.message) || err));
+                });
+            };
             menu.append(b);
         }
         host.appendChild(menu);
@@ -1533,7 +1540,10 @@ export const PrevizMixin = {
         const drawLevel = (parentId, depth) => {
             for (const item of S.childrenOf(scene, parentId)) {
                 ui.list.append(this._previzOutlinerRow(item, depth, doc, scene));
-                if (!collapsed.has(item.id)) drawLevel(item.id, depth + 1);
+                if (!collapsed.has(item.id)) {
+                    if (item.kind === "model") this._previzSkeletonRows(item, depth + 1, doc, scene, ui.list);
+                    drawLevel(item.id, depth + 1);
+                }
             }
         };
         drawLevel(null, 0);
@@ -1582,10 +1592,11 @@ export const PrevizMixin = {
         row.oncontextmenu = (e) => this._previzItemMenu(item.id, e);
 
         const kids = S.childrenOf(scene, item.id);
+        const folds = kids.length || (item.kind === "model" && this._previzBonesOf(item.id).length);
         const twisty = doc.createElement("span");
-        twisty.className = "previz-twisty" + (kids.length ? "" : " empty");
-        twisty.textContent = kids.length ? (collapsed.has(item.id) ? "\u25b8" : "\u25be") : "";
-        if (kids.length) {
+        twisty.className = "previz-twisty" + (folds ? "" : " empty");
+        twisty.textContent = folds ? (collapsed.has(item.id) ? "\u25b8" : "\u25be") : "";
+        if (folds) {
             twisty.title = collapsed.has(item.id) ? "Show what is inside" : "Fold this away";
             twisty.onclick = (e) => {
                 e.stopPropagation();
@@ -1674,6 +1685,77 @@ export const PrevizMixin = {
             if (drop) this.previzMoveItems(this._previzDragIds(), drop.parent, drop.before);
         };
         return row;
+    },
+
+    /** A loaded model's bones as [{ name, parent }], parents first; [] without a skeleton. */
+    _previzBonesOf(modelId) {
+        const view = this._model3d;
+        const e = view && view._entries && view._entries.get(modelId);
+        if (!e || !e.bones || !e.bones.size) return [];
+        const names = e.boneOrder || [...e.bones.keys()];
+        return names.map((n) => {
+            const b = e.bones.get(n);
+            return { name: n, parent: b && b.parent && b.parent.isBone ? b.parent.name : null };
+        });
+    },
+
+    /**
+     * The skeleton under a model in the outliner: one "Skeleton" row (folded at
+     * first) and its bones as a tree. Bones are the file's, not scene items, so
+     * the rows only show them; a click selects the bone's FK control when the
+     * character is rigged, else the model.
+     */
+    _previzSkeletonRows(model, depth, doc, scene, list) {
+        const bones = this._previzBonesOf(model.id);
+        if (!bones.length) return;
+        const open = this._previzSkelOpen || (this._previzSkelOpen = new Set());
+        const fk = new Map();
+        for (const it of scene.items) {
+            if (it.kind === "control" && it.control && it.control.model === model.id && it.control.type === "fk") fk.set(it.control.bone, it);
+        }
+        // The Skeleton row starts folded (open set); bones start unfolded (closed set).
+        const closed = this._previzSkelClosed || (this._previzSkelClosed = new Set());
+        const rowFor = (label, d, title, onclick, fold) => {
+            const row = doc.createElement("div");
+            row.className = "previz-item previz-bone";
+            row.style.paddingLeft = `${4 + d * 12}px`;
+            const tw = doc.createElement("span");
+            tw.className = "previz-twisty" + (fold ? "" : " empty");
+            tw.textContent = fold ? (fold.isOpen ? "\u25be" : "\u25b8") : "";
+            if (fold) tw.onclick = (e) => { e.stopPropagation(); fold.toggle(); this._previzRenderPanel(); };
+            const name = doc.createElement("span");
+            name.className = "previz-name";
+            name.textContent = label;
+            name.title = title;
+            row.append(tw, name);
+            row.onclick = onclick;
+            list.append(row);
+        };
+        const skelKey = `${model.id}:skeleton`;
+        rowFor(`\ud83e\uddb4 Skeleton (${bones.length} bones)`, depth,
+            fk.size ? "The file's bones; click one to select its control." : "The file's bones. Rig → Add controls to animate them.",
+            () => this.previzSelect(model.id),
+            { isOpen: open.has(skelKey), toggle: () => (open.has(skelKey) ? open.delete(skelKey) : open.add(skelKey)) });
+        if (!open.has(skelKey)) return;
+        const kidsOf = new Map();
+        const known = new Set(bones.map((b) => b.name));
+        for (const b of bones) {
+            const p = b.parent && known.has(b.parent) ? b.parent : null;
+            if (!kidsOf.has(p)) kidsOf.set(p, []);
+            kidsOf.get(p).push(b.name);
+        }
+        const walk = (parent, d) => {
+            for (const n of kidsOf.get(parent) || []) {
+                const key = `${model.id}:bone:${n}`;
+                const ctrl = fk.get(n);
+                const hasKids = (kidsOf.get(n) || []).length > 0;
+                rowFor(`\u2022 ${n}`, d, ctrl ? `${n}: selects ${ctrl.name}` : n,
+                    (e) => this.previzSelect(ctrl ? ctrl.id : model.id, { add: e.shiftKey || e.ctrlKey || e.metaKey }),
+                    hasKids && { isOpen: !closed.has(key), toggle: () => (closed.has(key) ? closed.delete(key) : closed.add(key)) });
+                if (hasKids && !closed.has(key)) walk(n, d + 1);
+            }
+        };
+        walk(null, depth + 1);
     },
 
     _previzClearDropMarks() {

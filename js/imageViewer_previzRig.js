@@ -285,19 +285,45 @@ export const PrevizRigMixin = {
             if (c.control.type === "fk") return all.find((o) => o.control.type === "fk" && o.control.bone === flip(c.control.bone));
             return all.find((o) => o.control.type === c.control.type && o.control.role === flip(c.control.role));
         };
-        this.previzSnapshot("mirror pose");
-        const frame = Math.round(this.currentFrame || 0);
+        // Mirrored in model space, across the character's X: each selected control's bones get
+        // their change from rest reflected (S·D·S, S = diag(-1, 1, 1)) and put on the twin
+        // bones' own rest, so the bone axes the two sides were built with do not matter.
+        // The twin controls are then placed where those bones are.
+        const view = this._modelView();
+        const pose = view && view.rigPose(modelId);
+        const skel = this._previzRigSkeletonCache(modelId);
+        if (!pose || !skel) return;
+        const rest = new Map(skel.bones.map((b) => [b.name, b.world]));
+        const flipName = (s) => String(s || "").replace(/(Left|Right|left|right|\.L\b|\.R\b|\.l\b|\.r\b|_l\b|_r\b|_L\b|_R\b|\bL_|\bR_|\bl_|\br_)/g,
+            (m) => ({ Left: "Right", Right: "Left", left: "right", right: "left", ".L": ".R", ".R": ".L", ".l": ".r", ".r": ".l",
+                      _l: "_r", _r: "_l", _L: "_R", _R: "_L", L_: "R_", R_: "L_", l_: "r_", r_: "l_" }[m] || m));
+        const bonesOf = (c) => c.control.type === "fk" ? [c.control.bone]
+            : c.control.type === "ik" ? (c.control.chain || [])
+            : c.control.type === "pole" ? ((S.itemById(scene, c.control.ik) || { control: {} }).control.chain || []) : [];
+        const S3 = [-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+        const mirrored = new Map(pose);
+        const targets = new Set();
         for (const c of ctrls) {
             const o = twin(c);
             if (!o || o === c) continue;
-            // Controls are built mirror-wise from mirrored bones: across the
-            // character's X, a rotation (x, y, z) mirrors to (x, -y, -z) and a
-            // move (x, y, z) to (-x, y, z) for world-aligned controls. Bone-
-            // aligned FK controls mirror their rotation as it is.
-            const p = S.valueAt(c, "position", frame), r = S.valueAt(c, "rotation", frame);
-            const world = c.control.type !== "fk";
-            this._previzRigWrite(o, "position", world ? [-p[0], p[1], p[2]] : p.slice(), frame);
-            this._previzRigWrite(o, "rotation", world ? [r[0], -r[1], -r[2]] : r.slice(), frame);
+            targets.add(o.id);
+            for (const b of bonesOf(c)) {
+                const t = flipName(b);
+                if (t === b || !pose.has(b) || !rest.has(b) || !rest.has(t)) continue;
+                const delta = R.mat4.mul(pose.get(b), R.mat4.invert(rest.get(b)));
+                mirrored.set(t, R.mat4.mul(R.mat4.mul(R.mat4.mul(S3, delta), S3), rest.get(t)));
+            }
+        }
+        if (!targets.size) return;
+        this.previzSnapshot("mirror pose");
+        const frame = Math.round(this.currentFrame || 0);
+        const chans = this._previzRigChannelsFor(modelId, mirrored, frame);
+        for (const id of targets) {
+            const o = S.itemById(scene, id);
+            const ch = chans.get(id);
+            if (!o || !ch) continue;
+            this._previzRigWrite(o, "position", ch.position, frame);
+            this._previzRigWrite(o, "rotation", ch.rotation, frame);
         }
         this.previzChanged();
     },
@@ -408,7 +434,11 @@ export const PrevizRigMixin = {
     _previzToggleRigMenu(anchor) {
         if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
         const scene = this.previzScene();
-        const modelId = this.previzRigModelOf();
+        // Nothing of a character selected: the scene's only character (or only rigged one) is meant.
+        const models = scene.items.filter((it) => it.kind === "model");
+        const riggedModels = models.filter((m) => R.isRigged(scene, m.id));
+        const modelId = this.previzRigModelOf()
+            || (models.length === 1 ? models[0].id : riggedModels.length === 1 ? riggedModels[0].id : null);
         const model = modelId && S.itemById(scene, modelId);
         const rigged = !!(modelId && R.isRigged(scene, modelId));
         const bones = !!(modelId && this.previzHasSkeleton(modelId));
@@ -418,7 +448,7 @@ export const PrevizRigMixin = {
             { label: model ? `Add controls to ${model.name}` : "Add controls", disabled: !bones,
               run: () => this.previzRigCharacter(modelId) },
             { label: "Add FK controls only", disabled: !bones, run: () => this.previzRigCharacter(modelId, { humanoid: false }) },
-            { label: "Auto-rig…", disabled: !model || bones,
+            { label: "Auto-rig…", disabled: !model,
               run: () => this.previzAutoRigDialog && this.previzAutoRigDialog(modelId) },
             { label: "Set up auto-rig and AI motion…", run: () => this.previzRigInstallDialog && this.previzRigInstallDialog() },
             { label: "Remove rig", disabled: !rigged, run: () => this.previzRemoveRig(modelId) },
@@ -438,6 +468,17 @@ export const PrevizRigMixin = {
             { label: "Export FBX…", disabled: !bones, run: () => this.previzExportCharacter && this.previzExportCharacter(modelId, "fbx") },
             { label: "Export Alembic…", disabled: !model, run: () => this.previzExportCharacter && this.previzExportCharacter(modelId, "abc") },
         ];
+        // A greyed-out entry says why when hovered.
+        const why = !model ? "Select a character (a model, its rig or one of its controls) first."
+            : !rigged ? `${model.name} has no controls yet: Add controls (or Auto-rig) first.` : "";
+        for (const e of entries) {
+            if (e && e.disabled && !e.title) {
+                e.title = !bones && /controls|Export FBX/.test(e.label) && model
+                    ? `${model.name} has no skeleton: Auto-rig it first.`
+                    : e.label === "Mirror pose" && rigged ? "Select a control to mirror."
+                    : /limb/.test(e.label) && rigged ? "Select an arm or leg control." : why;
+            }
+        }
         const a = anchor.getBoundingClientRect();
         this._previzOpenMenu(entries, a.left, a.bottom + 2, anchor);
     },

@@ -202,5 +202,80 @@ class RigBrowserTests(unittest.TestCase):
         self.assertEqual(errors, [])
 
 
+    def test_outliner_mirror_and_live_drag(self):
+        pg = self.browser.new_page(viewport={"width": 1600, "height": 1000})
+        errors = []
+        pg.on("pageerror", lambda e: errors.append(str(e)))
+        try:
+            pg.goto(f"http://127.0.0.1:{self.port}/tabs.html")
+            pg.wait_for_function("() => window.__panel && window.__panel.container", timeout=20000)
+            pg.evaluate(OPEN, "hero.glb")
+            pg.evaluate("() => {" + HELP + "}")
+            # The skeleton shows under the model before any rig: one folded row, its bones once opened.
+            skel = pg.evaluate("""async () => {
+              const P = window.__panel;
+              const rows = () => [...P.previzPanel.querySelectorAll('.previz-item')].map((r) => r.textContent);
+              const folded = rows();
+              const row = [...P.previzPanel.querySelectorAll('.previz-bone')].find((r) => r.textContent.includes('Skeleton'));
+              row.querySelector('.previz-twisty').click();
+              return { folded, open: rows() };
+            }""")
+            pg.evaluate(RIG)
+            # Mirror: the left arm swung forward (about Y), mirrored onto the right arm.
+            mir = pg.evaluate("""async () => {
+              const P = window.__panel;
+              P.setFrame(0);
+              window.__ctrl('arm_L_ik').ikfk = 0; window.__ctrl('arm_R_ik').ikfk = 0;
+              const c = window.__ctrl('mixamorigLeftArm_fk');
+              P.previzSelect(c.id);
+              P.previzSetChannel('rotation', 1, -60);
+              const left = window.__boneAt('LeftHand');
+              P.previzRigMirrorPose([c.id]);
+              return { left, right: window.__boneAt('RightHand') };
+            }""")
+            # A clicked bone row selects its control once rigged.
+            picked = pg.evaluate("""() => {
+              const P = window.__panel;
+              const row = [...P.previzPanel.querySelectorAll('.previz-bone')].find((r) => r.textContent.trim().endsWith('mixamorigLeftForeArm'));
+              row.click();
+              return P.previzSelectedItem().name;
+            }""")
+            # Dragging a control poses the character while the mouse is still down.
+            drag = pg.evaluate("""async () => {
+              const P = window.__panel;
+              const view = P._modelView();
+              const c = window.__ctrl('leg_L_ik');
+              P.previzSelect(c.id);
+              await new Promise((r) => setTimeout(r, 100));
+              const before = window.__boneAt('LeftFoot');
+              const g = view.gizmo;
+              g.object.position.y += 0.25;
+              g.object.updateMatrixWorld(true);
+              g.dispatchEvent({ type: 'objectChange' });
+              return { before, during: window.__boneAt('LeftFoot'), attached: !!g.object };
+            }""")
+            pg.evaluate("() => { window.__panel._previzSelection = null; }")
+            pg.locator("button.previz-rig").first.click()
+            items = pg.locator("button.previz-menu-item")
+            menu = {items.nth(i).text_content(): items.nth(i).is_disabled() for i in range(items.count())}
+        finally:
+            pg.close()
+        self.assertTrue(any("Skeleton (%d bones)" % len(rig_fixture.BONES) in r for r in skel["folded"]), skel)
+        self.assertFalse(any(r.strip().endswith("mixamorigHips") for r in skel["folded"]))
+        self.assertTrue(any(r.strip().endswith("mixamorigLeftHand") for r in skel["open"]))
+        # The right hand is the left one reflected across X: forward stays forward.
+        self.assertGreater(abs(mir["left"][2]), 0.2, mir)
+        self.assertAlmostEqual(mir["right"][0], -mir["left"][0], places=2)
+        self.assertAlmostEqual(mir["right"][1], mir["left"][1], places=2)
+        self.assertAlmostEqual(mir["right"][2], mir["left"][2], places=2)
+        self.assertEqual(picked, "mixamorigLeftForeArm_fk")
+        self.assertTrue(drag["attached"])
+        self.assertAlmostEqual(drag["during"][1] - drag["before"][1], 0.25, places=2)
+        # Nothing selected, one character in the scene: the menu works on it.
+        self.assertIn("AI in-between…", menu, menu)
+        self.assertFalse(menu["AI in-between…"])
+        self.assertFalse(menu["Auto-rig…"])
+        self.assertEqual(errors, [])
+
 if __name__ == "__main__":
     unittest.main()
