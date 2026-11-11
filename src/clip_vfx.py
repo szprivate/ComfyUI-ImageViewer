@@ -110,12 +110,37 @@ def clean_options(action, opts):
     return out
 
 
+STILL = "clip_vfx/still.png"     # what an unused LoadImage reads (in the input folder)
+
+
+def still_in(input_dir):
+    """Write the picture an unused LoadImage reads, once: ComfyUI checks that the file named is there even
+    when the graph switches the picture off (alpha and reframe have "use image" off)."""
+    path = os.path.join(input_dir, *STILL.split("/"))
+    if not os.path.isfile(path):
+        import zlib, struct
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        def chunk(kind, data):
+            return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+        raw = b"".join(b"\0" + b"\0\0\0" * 64 for _ in range(64))
+        png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 64, 64, 8, 2, 0, 0, 0))
+               + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+        tmp = path + ".tmp"
+        with open(tmp, "wb") as fh:
+            fh.write(png)
+        os.replace(tmp, path)
+    return STILL
+
+
 def graph_for(action, opts, video, prefix, exr_dir=""):
     """The API graph of *action* reading *video* (a name in ComfyUI's input folder) and saving as *prefix*
-    (in the output folder). -> (graph, id of the SaveVideo node)."""
+    (in the output folder). -> (graph, id of the SaveVideo node). Every LoadImage reads ``STILL``."""
     opts = clean_options(action, opts)
     g = copy.deepcopy(workflow(ACTIONS[action]["files"][opts.get("mode", "")]))
     g[_only(g, "LoadVideo")]["inputs"]["file"] = video
+    for v in g.values():
+        if v.get("class_type") == "LoadImage":
+            v["inputs"]["image"] = STILL
     save = _only(g, "SaveVideo")
     g[save]["inputs"]["filename_prefix"] = prefix
     if "prompt" in opts:
@@ -261,6 +286,8 @@ def prepare(source, action, opts, input_dir, output_dir, *, folder_paths=None, n
         raise VfxError("the workflow needs what is not here", 409, missing=miss)
     whole = len(runs) == 1 and runs[0] == (0, f["frames"])
     staged, made = [], []
+    if any(v.get("class_type") == "LoadImage" for v in g0.values()):
+        still_in(input_dir)
     if whole and _inside(source, input_dir):
         staged.append(os.path.relpath(source, input_dir).replace(os.sep, "/"))
     else:
