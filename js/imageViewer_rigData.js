@@ -703,18 +703,22 @@ function _frame(x, y) {
  * T-pose. Built from where the bones' heads are.
  *
  * `rest`  Map role -> { q: model-space rest rotation, head: [x,y,z], childHead }
+ * `dirs`  role -> the direction the bone points in the T-pose wanted, where
+ *         it is not the role's own (a skeleton's T-pose to retarget onto).
  */
-export function canonicalAlign(rest) {
+export function canonicalAlign(rest, dirs = null) {
     const out = {};
     for (const r of HUMANOID) {
         const b = rest[r.role];
         if (!b) continue;
-        if (!b.childHead) { out[r.role] = [0, 0, 0, 1]; continue; }
+        // An end bone (a hand, a head with no child role) carries on the
+        // way its parent was turned.
+        if (!b.childHead) { out[r.role] = (r.parent && (out[r.parent] || (r.parent === "upperChest" && out.chest))) || [0, 0, 0, 1]; continue; }
         const dir = v3.sub(b.childHead, b.head);
         // Swing the bone's direction onto the canonical one; then twist about
         // it so its second axis (the elbow's forward, the foot's toe) lines up
         // too, read from the bone's rest frame.
-        const swing = quat.between(dir, r.dir);
+        const swing = quat.between(dir, (dirs && dirs[r.role]) || r.dir);
         out[r.role] = swing;
     }
     // Hips and the spine carry the facing of the whole body: take it from the

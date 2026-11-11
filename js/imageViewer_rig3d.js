@@ -367,6 +367,128 @@ export const Rig3DMixin = {
         return this._rigControlWorlds(entry, controlsOf(this.scene3d, modelId));
     },
 
+    /** The bones' poses at several frames (one walk through them): [{ f, pose: Map name -> 4x4 }]. */
+    rigPosesAt(modelId, frames) {
+        const was = this.sceneFrame;
+        const entry = this._entries.get(modelId);
+        const out = [];
+        if (!entry || !entry.bones || !entry.bones.size) return out;
+        for (const f of frames) {
+            this.applyFrame(f);
+            if (this._rigged(modelId)) out.push({ f, pose: new Map(entry.rigPose || []) });
+            else { entry.object.updateMatrixWorld(true); out.push({ f, pose: new Map(this.rigPose(modelId)) }); }
+        }
+        this.applyFrame(was);
+        return out;
+    },
+
+    /**
+     * A character as numbers, for src/rig_export.py: its bones at rest (local
+     * TRS under their parent bone, or in model space at the top), its meshes as
+     * they lie at rest in model space (skin weights by bone index; a mesh that
+     * is not skinned but hangs under a bone is weighted fully to it), and every
+     * bone's local TRS on each of `frames`, plus where the model is in the
+     * scene. Answers { meta, parts } (parts: name -> typed array) or null.
+     */
+    rigExportData(modelId, frames) {
+        const entry = this._entries.get(modelId);
+        if (!entry || !entry.object) return null;
+        const { THREE } = this.libs;
+        const was = this.sceneFrame;
+        const names = entry.boneOrder || [];
+        const index = new Map(names.map((n, i) => [n, i]));
+        const parentOf = (n) => {
+            const b = entry.bones.get(n);
+            return b.parent && b.parent.isBone && index.has(b.parent.name) ? index.get(b.parent.name) : -1;
+        };
+        const trs = (m) => {
+            const t = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+            m.decompose(t, q, s);
+            return { t: t.toArray(), q: q.toArray(), s: s.toArray() };
+        };
+        const local = (worlds, i, p) => (p >= 0 ? new THREE.Matrix4().copy(worlds[p]).invert().multiply(worlds[i]) : worlds[i].clone());
+
+        // Rest: the bones as the file has them.
+        for (const [name, bone] of entry.bones) {
+            const r = entry.boneRest.get(name);
+            bone.position.fromArray(r.p); bone.quaternion.fromArray(r.q); bone.scale.fromArray(r.s);
+        }
+        entry.object.updateMatrixWorld(true);
+        let inv = this._rigModelInverse(entry);
+        const restW = names.map((n) => new THREE.Matrix4().multiplyMatrices(inv, entry.bones.get(n).matrixWorld));
+        const bones = names.map((n, i) => {
+            const p = parentOf(n);
+            return { name: n, parent: p, rest: trs(local(restW, i, p)), bind: restW[i].toArray() };
+        });
+
+        const parts = {};
+        const meshes = [];
+        const v = new THREE.Vector3();
+        entry.object.traverse((o) => {
+            if (!o.isMesh || !o.geometry || !o.geometry.attributes.position || o.userData.imageViewerHelper) return;
+            const g = o.geometry, pos = g.attributes.position, n = pos.count, k = meshes.length;
+            const out = new Float32Array(n * 3);
+            const toModel = new THREE.Matrix4().multiplyMatrices(inv, o.matrixWorld);
+            for (let i = 0; i < n; i++) {
+                v.fromBufferAttribute(pos, i);
+                if (o.isSkinnedMesh) o.applyBoneTransform(i, v);
+                v.applyMatrix4(toModel);
+                out[i * 3] = v.x; out[i * 3 + 1] = v.y; out[i * 3 + 2] = v.z;
+            }
+            const m = { name: o.name || `mesh${k}`, positions: `f32:p${k}`, indices: `u32:i${k}` };
+            parts[`p${k}`] = out;
+            parts[`i${k}`] = g.index ? Uint32Array.from(g.index.array) : Uint32Array.from({ length: n }, (_, i) => i);
+            if (g.attributes.uv) { parts[`u${k}`] = Float32Array.from(g.attributes.uv.array); m.uvs = `f32:u${k}`; }
+            let joints = null, weights = null;
+            if (o.isSkinnedMesh && g.attributes.skinIndex && g.attributes.skinWeight) {
+                const si = g.attributes.skinIndex, sw = g.attributes.skinWeight;
+                joints = new Uint32Array(n * 4); weights = new Float32Array(n * 4);
+                const map = o.skeleton.bones.map((b) => (index.has(b.name) ? index.get(b.name) : 0));
+                for (let i = 0; i < n; i++) for (let c = 0; c < 4; c++) {
+                    joints[i * 4 + c] = map[si.getComponent(i, c)] || 0;
+                    weights[i * 4 + c] = sw.getComponent(i, c);
+                }
+            } else if (names.length) {
+                let a = o.parent;
+                while (a && !(a.isBone && index.has(a.name))) a = a.parent;
+                if (a) {
+                    joints = new Uint32Array(n * 4); weights = new Float32Array(n * 4);
+                    for (let i = 0; i < n; i++) { joints[i * 4] = index.get(a.name); weights[i * 4] = 1; }
+                }
+            }
+            if (joints) { parts[`j${k}`] = joints; parts[`w${k}`] = weights; m.joints = `u32:j${k}`; m.weights = `f32:w${k}`; }
+            meshes.push(m);
+        });
+
+        // The frames.
+        const F = frames.length, B = names.length;
+        const anim = new Float32Array(F * B * 10), rootAnim = new Float32Array(F * 10);
+        let rootMatrix = null;
+        frames.forEach((f, fi) => {
+            this.applyFrame(f);
+            entry.object.updateMatrixWorld(true);
+            const body = this._bodyOf(entry);
+            body.updateWorldMatrix(true, false);
+            if (!rootMatrix) rootMatrix = body.matrixWorld.toArray();
+            const r = trs(body.matrixWorld);
+            rootAnim.set([...r.t, ...r.q, ...r.s], fi * 10);
+            inv = new THREE.Matrix4().copy(body.matrixWorld).invert();
+            const w = names.map((n) => new THREE.Matrix4().multiplyMatrices(inv, entry.bones.get(n).matrixWorld));
+            names.forEach((n, i) => {
+                const l = trs(local(w, i, bones[i].parent));
+                anim.set([...l.t, ...l.q, ...l.s], (fi * B + i) * 10);
+            });
+        });
+        this.applyFrame(was);
+        if (B) parts.anim = anim;
+        parts.rootAnim = rootAnim;
+        const root = trs(new THREE.Matrix4().fromArray(rootMatrix || new THREE.Matrix4().toArray()));
+        return {
+            meta: { frames, bones, meshes, root, rootMatrix, anim: B ? "f32:anim" : null, rootAnim: "f32:rootAnim" },
+            parts,
+        };
+    },
+
     /** A model item's skinned meshes, for export: [{ mesh, name }]. */
     rigMeshes(modelId) {
         const entry = this._entries.get(modelId);

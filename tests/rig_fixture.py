@@ -73,7 +73,8 @@ def _box(c0, c1, r):
     return v, f
 
 
-def build(prefix="", names="mixamo"):
+def build(prefix="", names="mixamo", skinned=True):
+    """The figure as a .glb; skinned=False: the same mesh with no skeleton (a model to auto-rig)."""
     index = {b[0]: i for i, b in enumerate(BONES)}
     heads = {b[0]: b[2] for b in BONES}
 
@@ -147,19 +148,25 @@ def build(prefix="", names="mixamo"):
     a_idx = add(indices, "I", len(indices), 5125, "SCALAR", 34963)
     a_ibm = add(ibm, "f", len(BONES), 5126, "MAT4")
 
+    if not skinned:
+        nodes = [{"name": "Body", "mesh": 0}]
+        arm_node = 0
     gltf = {
         "asset": {"version": "2.0", "generator": "imageviewer rig fixture"},
         "scene": 0,
         "scenes": [{"nodes": [arm_node]}],
         "nodes": nodes,
         "meshes": [{"name": "Body", "primitives": [{
-            "attributes": {"POSITION": a_pos, "NORMAL": a_nrm, "JOINTS_0": a_jnt, "WEIGHTS_0": a_wgt},
+            "attributes": dict({"POSITION": a_pos, "NORMAL": a_nrm},
+                               **({"JOINTS_0": a_jnt, "WEIGHTS_0": a_wgt} if skinned else {})),
             "indices": a_idx}]}],
-        "skins": [{"joints": list(range(len(BONES))), "inverseBindMatrices": a_ibm, "skeleton": 0}],
+        "skins": [{"joints": list(range(len(BONES))), "inverseBindMatrices": a_ibm, "skeleton": 0}] if skinned else [],
         "buffers": [{"byteLength": sum(len(b) for b in blobs)}],
         "bufferViews": views,
         "accessors": accessors,
     }
+    if not skinned:
+        del gltf["skins"]
     js = json.dumps(gltf, separators=(",", ":")).encode()
     while len(js) % 4:
         js += b" "

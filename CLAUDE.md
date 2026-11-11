@@ -219,6 +219,16 @@ The contract is the scene schema — `SCHEMA.md` there, `imageViewer_worldData.j
   clip it); with `sky.lighting` it is also the world's PMREM environment, and `render.reflections: "sky"` keeps the
   cube capture from replacing it (`_worldSkyLight` / `_worldDropSkyLight`).
 
+### Character rigs (3D space)
+
+- Controls are scene items of kind `control` (`imageViewer_rigData.js`, pure: names -> humanoid roles, `buildRig`, two-bone IK, canonical T-pose space, key thinning; `tests/test_rig_data.mjs`). Each has `rest` (a 4x4 above its channels), `control {model, type: root|cog|fk|ik|pole, bone, chain, bind, hinge, lengths}`, and an IK control an `ikfk` scalar track. The rig group carries `rig {model, humanoid, roles}`. A skeleton whose names say nothing (an auto-rigger's) is matched by shape.
+- `imageViewer_rig3d.js` (mixed into Model3DView) draws the controls and POSES the bones every frame (FK, then IK blended in); `rigPosesAt`, `rigSkeleton`, `rigExportData` read from it. `imageViewer_previzRig.js` is the Rig menu (rig, remove, key, mirror, IK/FK switch with no jump, bake poses onto the controls); `imageViewer_previzRigTools.js` the tools that reach the server.
+- Server: `rig_routes.py` (`/imageviewer/rig/export|tools|autorig|motion|job`). Export = the page collects, `rig_export.py` writes FBX 7.4 binary (bones keyed every frame, skin clusters, bind pose; metres, Y up) or Alembic Ogawa (meshes skinned in numpy per frame) by the export rule, kind `character`. The export is multipart, guarded by own host + Origin + the `X-ImageViewer-Rig: 1` header (same_origin wants JSON).
+- Models run OUTSIDE ComfyUI's Python, from `rig_tools.json` in the viewer's user folder (or IMAGE_VIEWER_RIG_TOOLS / IMAGE_VIEWER_UNIRIG_PYTHON / _DIR / IMAGE_VIEWER_KIMODO_PYTHON) - never from the page. `scripts/rig/install_rig_tools.py` makes the venvs and writes it. UniRig (MIT; `scripts/rig/unirig_run.py`: skeleton, skin, merge to .glb) per job; Kimodo (Apache-2.0 code, NVIDIA Open Model License weights, Llama 3 text encoder; `scripts/rig/kimodo_run.py --serve`) as ONE kept worker, a request per stdin line, `@@{done|error}` answers.
+- AI motion is humanoid only. `imageViewer_rigMotion.js` (pure; `tests/test_rig_motion.mjs`): SOMA joint per role, the character aligned bone by bone to SOMA's own T-pose (`SOMA_T`), poses to SOMA keys (in-between constraints, hips relative to the first key, heading as Kimodo measures it) and back (`somaToPose`, sized by hips height), `cleanFeet` (pin standing feet, floor clamp, leg IK). An in-between keeps its two outer keys and replaces what is between.
+- Clean-room: nothing from Rigify, Cascadeur, Mixamo or GPL code; UniRig's own pipeline uses bpy (GPL) only inside its own venv.
+- Tests: `test_rig_browser.py`, `test_rig_tools_browser.py` (routes answered in-test with the real writers; FBX loaded back with FBXLoader, Alembic with abc_io), `test_rig_routes.py` (real runners against a stand-in UniRig folder and stand-in torch/kimodo modules).
+
 ### Keys and curves (previz and roto)
 
 - One key bar in the transport (Set Key, Delete Key, Autokey, ease menu), built in `previzEnsureKeyBar`; `_keyBarContext()` decides whether a press keys the previz scene or the roto tool's shapes, and `keyBarSync()` shows it for whichever is up.

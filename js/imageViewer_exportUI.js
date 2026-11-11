@@ -154,7 +154,7 @@ export async function openExportDialog(host, spec) {
 
     box.append(head, row("Name", name), row("Format", format, codecWrap, spec.fixed ? "" : qualityWrap));
     for (const extra of (spec.rows ? spec.rows(make) : [])) box.append(extra);
-    box.append(row("Goes to", where));
+    if (spec.where !== false) box.append(row("Goes to", where));
     if (spec.note) box.append(el("div", "rd-hint export-note", spec.note));
     box.append(progress, message, foot);
     shade.append(box);
@@ -188,6 +188,7 @@ export async function openExportDialog(host, spec) {
     };
     // Where it will land, asked from the server so the dialog cannot disagree with the rule.
     const syncWhere = () => {
+        if (spec.where === false) return;
         const mine = ++asked;
         win.setTimeout(async () => {
             if (mine !== asked) return;
