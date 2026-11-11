@@ -559,7 +559,7 @@ class RigToolsBrowserTests(unittest.TestCase):
             pg.evaluate("async () => window.__panel.previzRigAgentRun({ id: 'a6', action: 'list_constraints', args: {} })")
         finally:
             pg.close()
-        self.assertEqual(entries, ["Restyle motion…", "Motion from video…", "Lip sync from audio…"])
+        self.assertEqual(entries, ["Pose…", "Restyle motion…", "Motion from video…", "Lip sync from audio…"])
         motions = [b for k, b in self.requests if k == "motion"]
         r = motions[1]
         self.assertEqual(r["mode"], "restyle")
@@ -600,6 +600,47 @@ class RigToolsBrowserTests(unittest.TestCase):
             self.assertIn("pose library", done["a5"]["error"])
         self.assertEqual(done["a6"]["state"], "done", done["a6"])        # constraints are in the viewer (#110)
         self.assertEqual(done["a6"]["result"]["constraints"], [])
+        self.assertEqual(self.errors, [])
+
+    def test_the_agent_poses_the_character_on_one_frame(self):
+        """A pose from named poses and joints in words, keyed on one frame, through the agent's road."""
+        pg = self.page()
+        try:
+            pg.evaluate(OPEN, ["statue.glb", "Statue"])
+            pg.evaluate("async () => window.__panel.previzAutoRig(window.__hero, { seed: 7 })")
+            pg.evaluate(HELP)
+            rest = pg.evaluate("() => ['Hips', 'LeftHand', 'RightHand', 'LeftFoot', 'LeftUpLeg'].map((b) => window.__boneAt(b, 10))")
+            pg.evaluate("""async () => window.__panel.previzRigAgentRun({ id: 'p1', action: 'pose',
+                             args: { model: 'Statue', preset: ['sit', 'arms_crossed'], frame: 10,
+                                     joints: { head: { turn: 25 }, tail: { wag: 1 } } } })""")
+            posed = pg.evaluate("() => ['Hips', 'LeftHand', 'RightHand', 'LeftFoot', 'LeftUpLeg'].map((b) => window.__boneAt(b, 10))")
+            keyed = pg.evaluate("() => window.__panel.previzRigKeyedFrames(window.__hero)")
+            pg.evaluate("async () => window.__panel.previzRigAgentRun({ id: 'p2', action: 'pose', args: { model: 'Statue', preset: 'fly' } })")
+            pg.evaluate("async () => window.__panel.previzRigAgentRun({ id: 'p3', action: 'pose_presets', args: {} })")
+        finally:
+            pg.close()
+        done = {b["id"]: b for k, b in self.requests if k == "agent_done" and b["state"] in ("done", "error")}
+        self.assertEqual(done["p1"]["state"], "done", done["p1"])
+        self.assertEqual(done["p1"]["result"]["frame"], 10)
+        self.assertEqual(done["p1"]["result"]["not_understood"], ["tail"])
+        self.assertEqual(keyed, [10])
+        (h0, l0, r0, f0, _), (h1, l1, r1, f1, _) = rest, posed
+        stand = h0[1] - f0[1]
+        # Sitting: the hips come down to about knee height, the feet stay on the floor.
+        self.assertLess(h1[1] - f1[1], 0.75 * stand)
+        self.assertLess(abs(f1[1] - f0[1]), 0.15 * stand)
+        # Arms crossed: each hand has gone over to the other side of the body.
+        across = [r0[i] - l0[i] for i in range(3)]               # from the left hand to the right one at rest
+        dot = lambda a, b: sum(x * y for x, y in zip(a, b))
+        side = [x / math.sqrt(dot(across, across)) for x in across]
+        mid = [(l0[i] + r0[i]) / 2 for i in range(3)]
+        self.assertGreater(dot([l1[i] - mid[i] for i in range(3)], side), -0.02 * stand)
+        self.assertLess(dot([r1[i] - mid[i] for i in range(3)], side), 0.02 * stand)
+        self.assertEqual(done["p2"]["state"], "error")
+        self.assertIn("sit", done["p2"]["error"])
+        names = [p["name"] for p in done["p3"]["result"]["presets"]]
+        self.assertIn("arms_crossed", names)
+        self.assertIn("upperArm", done["p3"]["result"]["parts"])
         self.assertEqual(self.errors, [])
 
 

@@ -449,7 +449,8 @@ def _usd_ok():
 AGENT_ACTIONS = ("rig", "remove_rig", "autorig", "motion", "inbetween", "clean_feet", "export",
                  "restyle", "video_motion", "lipsync",
                  "layer_add", "layer_list", "constrain", "remove_constraint", "list_constraints", "bake_constraints",
-                 "pose_list", "pose_save", "pose_apply", "pose_delete", "flip_pose", "add_motion")
+                 "pose_list", "pose_save", "pose_apply", "pose_delete", "flip_pose", "add_motion",
+                 "pose", "pose_presets")
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
 SOUND_EXTS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".opus"} | VIDEO_EXTS
 

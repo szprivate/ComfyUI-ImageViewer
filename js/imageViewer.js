@@ -61,6 +61,7 @@ import { PrevizRigMixin } from "./imageViewer_previzRig.js";
 import { PrevizConstraintsMixin } from "./imageViewer_previzConstraints.js";
 import { PrevizRigToolsMixin } from "./imageViewer_previzRigTools.js";
 import { PrevizRigAIMixin } from "./imageViewer_previzRigAI.js";
+import { PrevizRigPoseMixin } from "./imageViewer_previzRigPose.js";
 import { PrevizRigRoundTripMixin } from "./imageViewer_previzRigRoundTrip.js";
 import { PrevizRigExtrasMixin } from "./imageViewer_previzRigExtras.js";
 import { EditTimelineMixin } from "./imageViewer_editTimeline.js";
@@ -1655,6 +1656,7 @@ Object.assign(
     PrevizConstraintsMixin,
     PrevizRigToolsMixin,
     PrevizRigAIMixin,
+    PrevizRigPoseMixin,
     PrevizRigRoundTripMixin,
     PrevizRigExtrasMixin,
     EditTimelineMixin,

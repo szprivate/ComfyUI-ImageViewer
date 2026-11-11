@@ -21,6 +21,7 @@ import * as R from "./imageViewer_rigData.js";
 import * as M from "./imageViewer_rigMotion.js";
 import * as V from "./imageViewer_rigVideo.js";
 import * as L from "./imageViewer_rigLipsync.js";
+import * as P from "./imageViewer_rigPoseSpec.js";
 import { api } from "../../scripts/api.js";
 import { notice, openExportDialog, openFilePicker } from "./imageViewer_exportUI.js";
 
@@ -391,6 +392,7 @@ export const PrevizRigAIMixin = {
     /** The Rig menu's entries for this file (inserted after the AI motion ones). */
     previzRigAIEntries(modelId, { rigged }) {
         return [
+            ...(this.previzPoseDialog ? [{ label: "Pose…", disabled: !rigged, run: () => this.previzPoseDialog(modelId) }] : []),
             { label: "Restyle motion…", disabled: !rigged, run: () => this.previzRestyleDialog(modelId) },
             { label: "Motion from video…", disabled: !rigged, run: () => this.previzVideoMotionDialog(modelId) },
             { label: "Lip sync from audio…", disabled: !modelId, run: () => this.previzLipSyncDialog(modelId) },
@@ -475,6 +477,16 @@ export const PrevizRigAIMixin = {
             case "pose_delete":
                 await need("previzPoseDelete", "The pose library")(a.name);
                 return { deleted: a.name };
+            case "pose": {
+                const out = await need("previzRigPose", "Single poses")(model.id, { preset: a.preset || null, joints: a.joints || null,
+                    hips: a.hips || null, mirror: a.mirror || null, ground: a.ground !== false,
+                    frame: a.frame == null ? (a.from == null ? null : num(a.from)) : num(a.frame),
+                    prompt: a.prompt || "", seed: a.seed == null ? null : Number(a.seed), layer: layerOpt });
+                if (!out.ok) throw new Error(out.message);
+                return { frame: out.frame, keys: out.keys, layer: out.layer, not_understood: out.unknown };
+            }
+            case "pose_presets":
+                return { presets: P.presetList(), parts: Object.fromEntries(Object.entries(P.PARTS).map(([k, v]) => [k, { moves: v.moves, sided: !!v.sided }])) };
             case "flip_pose":
                 need("previzRigFlipPose", "Flip pose")(model.id);
                 return {};
@@ -486,4 +498,4 @@ export const PrevizRigAIMixin = {
 
 /** Actions the agent may ask for that work on the scene rather than on one character. */
 export const SCENE_ACTIONS = new Set(["layer_add", "layer_list", "constrain", "remove_constraint", "list_constraints",
-                                      "bake_constraints", "pose_list", "pose_delete"]);
+                                      "bake_constraints", "pose_list", "pose_delete", "pose_presets"]);
