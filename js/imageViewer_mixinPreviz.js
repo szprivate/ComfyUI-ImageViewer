@@ -1091,7 +1091,12 @@ export const PrevizMixin = {
                            + "animation and the move is rendered through them (the price is shown first)";
         atlasMoveBtn.style.display = "none";
         atlasMoveBtn.onclick = () => this.previzAtlasMoveDialog();
-        actions.append(newBtn, addBtn, editBtn, outBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn, atlasMoveBtn);
+        // A new Atlas world from a prompt or pictures, without the agent (imageViewer_atlasCreate.js).
+        const atlasNewBtn = el("button", "previz-btn previz-world", "New world");
+        atlasNewBtn.title = "New Atlas world: describe a place or bring pictures of it, and World Labs Atlas makes a "
+                          + "3D world of it that opens here (needs agentY running and a World Labs key)";
+        atlasNewBtn.onclick = () => this.atlasCreateDialog();
+        actions.append(newBtn, addBtn, editBtn, outBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn, atlasMoveBtn, atlasNewBtn);
 
         const list = el("div", "previz-list");
         // The space below the tree is "no parent": dropping a row here lifts it

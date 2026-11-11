@@ -208,3 +208,49 @@ def render_state(comfy_base: str, job_id: str) -> dict:
     if not job_id:
         raise RelayError("no render id", 400)
     return call_host(comfy_base, "GET", query=f"id={job_id}")
+
+
+# ── "New Atlas world": a world made from a prompt or pictures, from the 3D space (no agent turn) ──
+
+CREATE_ROUTE = "atlas_create"
+ASPECTS = ("16:9", "9:16", "4:3", "3:4", "1:1")
+MAX_CREATE_IMAGES = 8
+MAX_PROMPT = 2000
+
+
+def clean_create_request(data, images=None) -> dict:
+    """The body forwarded to the host for a new world. ``images`` are the pictures' absolute paths,
+    already resolved and checked by the route (path_access); the page's own list is not trusted here."""
+    if not isinstance(data, dict):
+        raise RelayError("bad request", 400)
+    prompt = str(data.get("prompt") or "").strip()[:MAX_PROMPT]
+    imgs = [str(p) for p in (images or []) if str(p or "").strip()]
+    if len(imgs) > MAX_CREATE_IMAGES:
+        raise RelayError(f"at most {MAX_CREATE_IMAGES} pictures for one world", 400)
+    if not imgs and not prompt:
+        raise RelayError("describe the place, or add a picture of it", 400)
+    aspect = str(data.get("aspect_ratio") or "16:9")
+    if aspect not in ASPECTS:
+        raise RelayError("aspect_ratio is one of " + ", ".join(ASPECTS), 400)
+    name = "".join(c if (c.isalnum() or c in "_- ") else "_" for c in str(data.get("name") or "")).strip()[:60]
+    if not name:
+        raise RelayError("give the world a name", 400)
+    try:
+        detail = int(data.get("mesh_detail") or 4)
+    except (TypeError, ValueError):
+        raise RelayError("mesh_detail must be a number", 400)
+    if detail not in (2, 4, 8):
+        raise RelayError("mesh_detail is 2 (fine), 4 or 8 (light)", 400)
+    return {"name": name, "prompt": prompt, "image_paths": imgs, "aspect_ratio": aspect, "mesh_detail": detail,
+            "open_in_viewer": data.get("open_in_viewer", True) is not False}
+
+
+def start_create(comfy_base: str, data, images=None) -> dict:
+    return call_host(comfy_base, "POST", body=clean_create_request(data, images), route=CREATE_ROUTE, timeout=60.0)
+
+
+def create_state(comfy_base: str, job_id: str) -> dict:
+    job_id = "".join(c for c in str(job_id or "") if c.isalnum())[:32]
+    if not job_id:
+        raise RelayError("no job id", 400)
+    return call_host(comfy_base, "GET", query=f"id={job_id}", route=CREATE_ROUTE)

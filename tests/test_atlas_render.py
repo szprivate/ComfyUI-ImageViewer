@@ -192,5 +192,40 @@ class MoveRelayTests(unittest.TestCase):
         self.assertIn("too old", str(cm.exception))
 
 
+
+class CreateTests(unittest.TestCase):
+    """New Atlas world: the body the host gets, and the create route."""
+
+    def test_clean_create_request(self):
+        ok = ar.clean_create_request({"name": "court yard!", "prompt": " a courtyard ", "aspect_ratio": "4:3",
+                                      "mesh_detail": "8"}, [])
+        self.assertEqual(ok, {"name": "court yard_", "prompt": "a courtyard", "image_paths": [], "aspect_ratio": "4:3",
+                              "mesh_detail": 8, "open_in_viewer": True})
+        self.assertEqual(ar.clean_create_request({"name": "r"}, ["C:/a.png"])["image_paths"], ["C:/a.png"])
+        for body, imgs in ((None, []), ({"name": "w"}, []), ({"name": "", "prompt": "x"}, []),
+                           ({"name": "w", "prompt": "x", "aspect_ratio": "2:1"}, []),
+                           ({"name": "w", "prompt": "x", "mesh_detail": 5}, []),
+                           ({"name": "w"}, ["p.png"] * (ar.MAX_CREATE_IMAGES + 1))):
+            with self.assertRaises(ar.RelayError) as cm:
+                ar.clean_create_request(body, imgs)
+            self.assertEqual(cm.exception.status, 400)
+
+    def test_the_page_cannot_name_the_pictures_itself(self):
+        body = ar.clean_create_request({"name": "w", "prompt": "x", "image_paths": ["C:/secret.png"]}, None)
+        self.assertEqual(body["image_paths"], [])        # only what the route resolved and checked is passed on
+
+    def test_start_and_poll_use_the_create_route(self):
+        stub = Stub()
+        self.addCleanup(stub.close)
+        self.assertEqual(ar.start_create(stub.base, {"name": "w", "prompt": "a hall"}, [])["id"], "abc")
+        method, path, token, body = stub.seen[0]
+        self.assertEqual((method, path, token), ("POST", "/agentY/atlas_create", "tok"))
+        self.assertEqual(body["prompt"], "a hall")
+        ar.create_state(stub.base, "abc")
+        self.assertEqual(stub.seen[1][:2], ("GET", "/agentY/atlas_create?id=abc"))
+        with self.assertRaises(ar.RelayError):
+            ar.create_state(stub.base, "../")
+
+
 if __name__ == "__main__":
     unittest.main()

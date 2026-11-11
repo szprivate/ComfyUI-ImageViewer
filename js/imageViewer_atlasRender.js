@@ -238,3 +238,52 @@ export function planOrThrow(answer) {
     e.kind = (answer && answer.error_kind) || "";
     throw e;
 }
+
+// ── "New Atlas world": a world from a prompt or pictures, from the 3D space ─────────────────────────────
+
+export const CREATE_ASPECTS = ["16:9", "9:16", "4:3", "3:4", "1:1"];
+export const CREATE_DETAILS = [[2, "Fine (big file)"], [4, "Standard"], [8, "Light"]];
+export const CREATE_MAX_IMAGES = 8;
+const PICTURE_EXT = /\.(png|jpe?g|webp)$/i;
+
+/** A world name from what the user typed: the first few words, made safe for a folder. */
+export function worldNameFrom(prompt, images = []) {
+    const words = String(prompt || "").toLowerCase().replace(/[^a-z0-9\s_-]+/g, " ").split(/\s+/)
+        .filter((w) => w && !["a", "an", "the", "of", "with", "in", "on", "and", "at"].includes(w)).slice(0, 4);
+    let name = words.join("_");
+    if (!name && images.length) {
+        const first = String(images[0].name || images[0].filename || images[0].path || "").split(/[\\/]/).pop();
+        name = first.replace(/\.[^.]+$/, "").toLowerCase().replace(/[^a-z0-9_-]+/g, "_");
+    }
+    return (name || "world").slice(0, 40).replace(/^_+|_+$/g, "") || "world";
+}
+
+/** Whether a picture item (a {path} or ComfyUI's {filename, type, subfolder}) is one Atlas reads. */
+export function isAtlasPicture(item) {
+    const n = String((item && (item.path || item.filename || item.name)) || "");
+    return PICTURE_EXT.test(n);
+}
+
+/** One picture item as the route takes it (no URLs, no blobs: the server finds the file). */
+export function pictureRef(item) {
+    if (!item) return null;
+    if (item.path) return { path: String(item.path) };
+    if (item.filename) return { filename: String(item.filename), type: String(item.type || "output"), subfolder: String(item.subfolder || "") };
+    return null;
+}
+
+/** The POST body for /imageviewer/atlas_create, or { error }. */
+export function buildCreateRequest({ name, prompt, images = [], aspect = "16:9", detail = 4 }) {
+    const refs = images.map(pictureRef).filter(Boolean);
+    const p = String(prompt || "").trim();
+    if (!refs.length && !p) return { error: "Describe the place, or add a picture of it." };
+    if (refs.length > CREATE_MAX_IMAGES) return { error: `At most ${CREATE_MAX_IMAGES} pictures for one world.` };
+    const n = String(name || "").trim() || worldNameFrom(p, images);
+    return { name: n, prompt: p, images: refs, aspect_ratio: CREATE_ASPECTS.includes(aspect) ? aspect : "16:9",
+             mesh_detail: [2, 4, 8].includes(Number(detail)) ? Number(detail) : 4 };
+}
+
+/** What the dialog says while a world is being made. */
+export function createProgress(s) {
+    return `${(s && s.phase) || "Atlas is making the world"}… ${clock((s && s.elapsed) || 0)}`;
+}
