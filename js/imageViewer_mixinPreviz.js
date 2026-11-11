@@ -1184,7 +1184,17 @@ export const PrevizMixin = {
             b.className = "previz-menu-item";
             b.textContent = e.label;
             if (e.title) b.title = e.title;
-            b.disabled = !!e.disabled;
+            // An entry that cannot run now still answers a click: it says why, so nothing is silent.
+            if (e.disabled) {
+                b.classList.add("off");
+                b.setAttribute("aria-disabled", "true");
+                b.onclick = () => {
+                    this._previzCloseAddMenu();
+                    notice("info", `${e.label.replace(/\u2026$/, "")} is not available`, e.title || "Not for what is selected.");
+                };
+                menu.append(b);
+                continue;
+            }
             b.onclick = () => {
                 this._previzCloseAddMenu();
                 // A command that fails says so, instead of nothing happening.

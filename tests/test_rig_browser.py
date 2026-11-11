@@ -257,7 +257,7 @@ class RigBrowserTests(unittest.TestCase):
             pg.evaluate("() => { window.__panel._previzSelection = null; }")
             pg.locator("button.previz-rig").first.click()
             items = pg.locator("button.previz-menu-item")
-            menu = {items.nth(i).text_content(): items.nth(i).is_disabled() for i in range(items.count())}
+            menu = {items.nth(i).text_content(): "off" in (items.nth(i).get_attribute("class") or "") for i in range(items.count())}
         finally:
             pg.close()
         self.assertTrue(any("Skeleton (%d bones)" % len(rig_fixture.BONES) in r for r in skel["folded"]), skel)

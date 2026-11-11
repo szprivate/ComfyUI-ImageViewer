@@ -14,7 +14,7 @@ PICK = "__panel.container.querySelector(':scope > .rd-shade.pick-dlg .rd-box')"
 OTIO = ("{ name: 'saved', fps: 24, clips: [{ ref: 0, file: 'D:/out/a.mp4', name: 'a', in: 0, length: 2, transition: 0 }],"
         " texts: [], sound: [], tracks: [], off: {} }")
 PREP = f"() => {{ window.__otio = {{ 'D:/out/saved.otio': {OTIO}, 'D:/in/edits/dropped.otio': {OTIO} }}; }}"
-MENU_ITEMS = "() => [...__panel.container.querySelectorAll('.previz-menu .previz-menu-item')].map((b) => [b.textContent, b.disabled])"
+MENU_ITEMS = "() => [...__panel.container.querySelectorAll('.previz-menu .previz-menu-item')].map((b) => [b.textContent, b.disabled || b.classList.contains('off')])"
 
 
 class _Base(base.EditTimelineBrowserTests):
