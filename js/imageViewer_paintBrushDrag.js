@@ -1,6 +1,6 @@
 // imageViewer_paintBrushDrag.js
 // Paint: change the brush's size and opacity on the canvas while painting, as Photoshop's Alt+right-drag does
-// (Windows; Ctrl+Option+drag on a Mac): hold B (or Alt and the right mouse button) and move the mouse -
+// (Windows; Ctrl+Option+drag on a Mac): hold B and drag with the left button (or Alt and the right button) -
 // sideways the size, up and down the opacity (Shift held: the hardness). Every brush tool, the eraser on a
 // mask and Quick Mask included, and Liquify (its strength). `brushDragValues` is the arithmetic (pure, tested
 // in tests/test_paint_brushdrag.mjs); `BrushDragMixin` goes onto the editor. Written from what the tool does.
@@ -9,7 +9,7 @@
 export const DRAG_MAX_SIZE = 2000;
 /** Screen pixels of vertical drag for the whole 0..100 of opacity / hardness. */
 export const DRAG_PX_PER_100 = 200;
-/** How far the pointer moves (screen px) while B is held before it is a drag and not a tap (a tap picks the brush). */
+/** How far the pointer moves (screen px) after the press before the values follow it. */
 export const DRAG_TAP_PX = 4;
 
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -43,7 +43,7 @@ export const BrushDragMixin = {
         return this._brushTools.includes(tool) || tool === "liquify" ? tool : null;
     },
 
-    /** Begin a drag at the pointer (screen point `c` = {clientX, clientY}); `by` "key" or "mouse". */
+    /** Begin a drag at the pointer (screen point `c` = {clientX, clientY}); `by` "mouse" (B + left button, Alt + right button). */
     _bdBegin(c, by, tap = null) {
         const tool = this._bdTool();
         if (!tool || !this.doc || !c) return false;
