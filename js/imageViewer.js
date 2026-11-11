@@ -1091,6 +1091,11 @@ class ViewerPanel extends HTMLElement {
         else if (this.historyToggleBtn && this.historyToggleBtn.parentNode) {
             this.historyToggleBtn.parentNode.insertBefore(this.browserToggleBtn, this.historyToggleBtn.nextSibling);
         }
+        // The History panel serves every space: its button stands right of the file browser's.
+        if (this.historyToggleBtn && this.browserToggleBtn.parentNode) {
+            this.browserToggleBtn.after(this.historyToggleBtn);
+            this.historyToggleBtn.title = 'Toggle History Panel';
+        }
 
         // layout-sel doesn't exist in HTML — create it as an invisible overlay
         // on top of the layout button so native dropdown behavior stays intact.

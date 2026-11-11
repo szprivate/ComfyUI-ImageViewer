@@ -18,7 +18,7 @@ import { api } from "../../scripts/api.js";
 import { createCompEditor } from "./imageViewer_compEditor.js";
 import { canvasContext, notice, openExportDialog, openFilePicker } from "./imageViewer_exportUI.js";
 import { addRecentDoc } from "./imageViewer_recentDocs.js";
-import { COMP_SUFFIX, isCompPath, sourceName } from "./imageViewer_compModel.js";
+import { COMP_SUFFIX, addLayer, isCompPath, makeNode, sourceName } from "./imageViewer_compModel.js";
 
 export const COMP_PREFIX = "comp:";
 /** The dock panels of a comp tab, and the editor part each one holds. */
@@ -115,6 +115,63 @@ export const CompPanelMixin = {
             return data.path;
         } catch (e) {
             notice("error", "No new comp", String(e.message || e));
+            return null;
+        }
+    },
+
+    /** Can "Edit in Comp" take this History item: a picture or a film the server can read. */
+    compMayEdit(item) {
+        if (!item || item.dropped || !(item.path || item.filename)) return false;
+        return item.kind === "image" || item.kind === "video";
+    },
+
+    /** "Edit in Comp" on a context menu (the History's thumbnails). */
+    compAddEditItem(menu, item, before) {
+        if (!menu || !this.compMayEdit(item)) return;
+        const row = menu.ownerDocument.createElement("div");
+        row.className = "thumb-ctx-item comp-edit-item";
+        row.textContent = "\u{1F39E}\u{FE0F} Edit in Comp";
+        row.title = "A new comp with this as a Read merged over the background, at its size and length";
+        row.onclick = (ev) => { ev.stopPropagation(); menu.remove(); this.compEditMedia(item); };
+        if (before && before.parentNode === menu) menu.insertBefore(row, before); else menu.appendChild(row);
+    },
+
+    /**
+     * A new comp (by the export rule, like New comp) made for one picture, film or
+     * sequence: its format is the file's size, rate and length, and the file is a
+     * Read merged over the Background. Saved, then opened in a Comp tab.
+     */
+    async compEditMedia(item) {
+        const [file] = await this.compPathsOf([item]);
+        if (!file) { notice("error", "Cannot edit in Comp", "The file was not found on the server."); return null; }
+        let info = {};
+        try {
+            const res = await api.fetchApi(`/imageviewer/comp_source?file=${encodeURIComponent(file)}`);
+            if (res.ok) info = await res.json();
+        } catch (_) { /* format from the defaults */ }
+        if (info.kind === "refused" || info.kind === "missing") {
+            notice("error", "Cannot edit in Comp", info.kind === "refused" ? "The file is not in the folders the viewer may read." : "The file was not found.");
+            return null;
+        }
+        const fmt = {};
+        if (info.width > 0 && info.height > 0) { fmt.width = info.width; fmt.height = info.height; }
+        if (info.fps > 0) fmt.fps = Math.round(info.fps * 1000) / 1000;
+        if (Number.isFinite(info.first) && Number.isFinite(info.last) && info.last > info.first) fmt.frames = info.last - info.first + 1;
+        const name = baseOf(file).replace(/\.[^.]+$/, "").replace(/[._-]*(#+|%0?\d*d|@+)$/, "") || "comp";
+        try {
+            const res = await api.fetchApi("/imageviewer/comp_new", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name, context: canvasContext(), ...fmt }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+            const comp = data.comp;
+            addLayer(comp, makeNode(comp, "read", { file }));
+            await this._cpSave(data.path, comp);
+            this._cpShowDoc(data.path, comp);
+            return data.path;
+        } catch (e) {
+            notice("error", "No comp made", String(e.message || e));
             return null;
         }
     },

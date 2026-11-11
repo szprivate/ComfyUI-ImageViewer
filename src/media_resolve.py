@@ -142,6 +142,30 @@ def _cache_path(src, kind="proxy"):
     return os.path.join(tmp, f"ImageViewer_{kind}_{stem}_{digest}.png")
 
 
+def forget_thumbs(src):
+    """Delete every cached strip tile of `src` (each size and colourspace, a film's
+    poster), so the next /imageviewer/thumb makes them again from the file.
+
+    History > Recreate thumbnail. Only the viewer's own temp files are touched:
+    the names come from `_cache_path`, nothing else in temp matches them.
+    Returns how many were removed."""
+    import glob
+    try:
+        poster = _cache_path(src, "poster")
+    except Exception:
+        return 0
+    tmp, name = os.path.split(poster)
+    tail = name[len("ImageViewer_poster"):]           # _<stem>_<digest>.png
+    removed = 0
+    for cand in [poster] + glob.glob(os.path.join(glob.escape(tmp), "ImageViewer_thumb*" + glob.escape(tail))):
+        try:
+            os.remove(cand)
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
 def _cached(dst, src):
     """True when `dst` already holds an up-to-date derivative of `src`."""
     try:

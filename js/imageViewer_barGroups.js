@@ -136,13 +136,22 @@ export const BarGroupsMixin = {
         return list.slice(0, 3).find((p) => !gone.has(n(p))) || "";
     },
 
-    /** A new, empty 3D scene in a tab of its own. */
-    previzNewTab() {
+    /** "Open in 3D" (the History's menu): a 3D asset or a splat in a new 3D scene of its own. */
+    async previzOpenAsset(frame) {
+        if (!frame || !this._frameIsModel || !this._frameIsModel(frame)) return false;
+        if (this.requestPanelOpen) this.requestPanelOpen();
+        const name = String(frame.name || frame.filename || frame.path || "").split(/[\\/]/).pop().replace(/\.[^.]+$/, "");
+        this.previzNewTab(name);
+        return (await this.previzAddModels([frame])) > 0;
+    },
+
+    /** A new, empty 3D scene in a tab of its own (named `name` when given). */
+    previzNewTab(name = "") {
         let n = 1;
         while (this.allTabs[`previz:new-${n}`]) n++;
         const key = `previz:new-${n}`;
         this.allTabs[key] = [];
-        this.tabLabels[key] = "\u{1F9CA} 3D" + (n > 1 ? " " + n : "");
+        this.tabLabels[key] = "\u{1F9CA} " + (name || ("3D" + (n > 1 ? " " + n : "")));
         if (!this.tabOrder.includes(key)) this.tabOrder.push(key);
         if (this._setScene) this._setScene(key, makeScene());
         this._previzSelection = null;
@@ -182,9 +191,10 @@ export const BarGroupsMixin = {
         const spacer = doc.createElement("div");
         spacer.className = "bar-spacer";
         bar.append(spacer);
-        // The buttons these groups stand in for stay where they are, out of
-        // sight: their handlers and their lit state are still what toggles.
-        for (const old of [this.historyToggleBtn, this.paramsBtn]) if (old) old.style.display = "none";
+        // The button this group stands in for stays where it is, out of
+        // sight: its handler and its lit state are still what toggles. History
+        // keeps its own button (beside the file browser's): every space uses it.
+        if (this.paramsBtn) this.paramsBtn.style.display = "none";
         this.barGroupsSync();
     },
 
