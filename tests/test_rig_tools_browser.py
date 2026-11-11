@@ -200,6 +200,11 @@ class RigToolsBrowserTests(unittest.TestCase):
             route.fulfill(status=200, content_type="application/json",
                           body=json.dumps({"job": "x", "state": "done", "log": ["done"], "result": state["result"]}))
 
+        def agent_done(route, request):
+            self.requests.append(("agent_done", json.loads(request.post_data or "{}")))
+            route.fulfill(status=200, content_type="application/json", body='{"ok": true}')
+
+        pg.route("**/imageviewer/rig/agent_done", agent_done)
         pg.route("**/imageviewer/rig/export", export)
         pg.route("**/imageviewer/rig/tools", tools)
         pg.route("**/imageviewer/rig/autorig", start("autorig"))
@@ -286,6 +291,10 @@ class RigToolsBrowserTests(unittest.TestCase):
             inb = pg.evaluate("""async () => window.__panel.previzRigGenerateMotion(window.__hero,
                                    { mode: 'inbetween', from: 0, to: 48 })""")
             feet = pg.evaluate("() => window.__panel.previzRigCleanFeet(window.__hero)")
+            # The agent's road: a request as rig_routes sends it, answered to /rig/agent_done.
+            pg.evaluate("""async () => window.__panel.previzRigAgentRun({ id: 'a1', action: 'export',
+                             args: { model: 'statue', format: 'abc', to: 4 } })""")
+            pg.evaluate("""async () => window.__panel.previzRigAgentRun({ id: 'a2', action: 'motion', args: { model: 'nobody' } })""")
         finally:
             pg.close()
         self.assertFalse(before)
@@ -309,6 +318,65 @@ class RigToolsBrowserTests(unittest.TestCase):
         self.assertAlmostEqual(inbetween["keys"][1]["root"][2], 1.0, delta=0.02)
         self.assertTrue(inb["ok"], inb)
         self.assertTrue(feet["ok"], feet)
+        done = [b for k, b in self.requests if k == "agent_done"]
+        a1 = [b for b in done if b["id"] == "a1"]
+        self.assertEqual([b["state"] for b in a1], ["running", "done"])
+        self.assertTrue(a1[-1]["result"]["path"].endswith(".abc"))
+        self.assertEqual(a1[-1]["result"]["model"], "Statue")
+        a2 = [b for b in done if b["id"] == "a2"]
+        self.assertEqual(a2[-1]["state"], "error")
+        self.assertIn("nobody", a2[-1]["error"])
+        self.assertEqual(self.errors, [])
+
+    def _menu(self, pg, label):
+        pg.locator("button.previz-rig").first.click()
+        pg.locator("button.previz-menu-item", has_text=label).first.click()
+
+    def _go(self, pg, title, fill=None):
+        box = pg.locator(f'.rd-box[aria-label="{title}"]')
+        box.wait_for(state="visible", timeout=10000)
+        for sel, value in (fill or {}).items():
+            box.locator(sel).first.fill(str(value))
+        box.locator("button.rd-go").click()
+        box.wait_for(state="detached", timeout=30000)
+
+    def test_drive_everything_from_the_rig_menu(self):
+        """The same road as the agent's, by hand: Rig menu, dialogs, their buttons."""
+        pg = self.page()
+        try:
+            pg.evaluate(OPEN, ["statue.glb", "Statue"])
+            self._menu(pg, "Auto-rig")
+            self._go(pg, "Auto-rig (UniRig)", {"input.rd-num": 9})
+            pg.wait_for_function("() => window.__panel.previzScene().items.some((it) => it.kind === 'control')", timeout=30000)
+            pg.evaluate("() => window.__panel.setFrame(0)")
+            self._menu(pg, "Generate motion from text")
+            self._go(pg, "Motion from text (Kimodo)", {"textarea": "A person walks forward."})
+            keyed = pg.evaluate("() => window.__panel.previzRigKeyedFrames(window.__hero)")
+            pg.evaluate("() => window.__panel.setFrame(20)")
+            for t in ("Clean up feet",):
+                self._menu(pg, t)
+            # Keep frames 0 and 48 only, then ask for what is between them.
+            pg.evaluate("""() => { for (const it of window.__panel.previzScene().items) if (it.kind === 'control')
+                           for (const p of Object.keys(it.tracks || {})) it.tracks[p] = it.tracks[p].filter((k) => k.f === 0 || k.f === 48); }""")
+            self._menu(pg, "AI in-between")
+            self._go(pg, "AI in-between (Kimodo)")
+            self._menu(pg, "Export FBX")
+            self._go(pg, "Export FBX")
+            self._menu(pg, "Export Alembic")
+            self._go(pg, "Export Alembic")
+        finally:
+            pg.close()
+        kinds = [k for k, _ in self.requests]
+        self.assertEqual([b["seed"] for k, b in self.requests if k == "autorig"], [9])
+        motions = [b for k, b in self.requests if k == "motion"]
+        self.assertEqual(len(motions), 2)
+        self.assertEqual(motions[0]["prompt"], "A person walks forward.")
+        self.assertEqual(motions[0]["mode"], "text")
+        self.assertEqual(motions[1]["mode"], "inbetween")
+        self.assertEqual((keyed[0], keyed[-1]), (0, 48))           # keyed over the shot (reduced where it is straight)
+        self.assertGreater(len(keyed), 20)
+        self.assertEqual([m["format"] for k, m in self.requests if k == "export"], ["fbx", "abc"])
+        self.assertIn("export", kinds)
         self.assertEqual(self.errors, [])
 
 

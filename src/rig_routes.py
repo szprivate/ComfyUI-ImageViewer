@@ -11,6 +11,10 @@
                                         skeleton (scripts/rig/kimodo_run.py), retargeted in the page
     GET  /imageviewer/rig/job?job=      -> {state: running|done|error|cancelled, log, result?, error?}
     POST /imageviewer/rig/job           {job, cancel: true}
+    POST /imageviewer/rig/agent         {action: rig|remove_rig|autorig|motion|inbetween|clean_feet|export, model?,
+                                        ...} -> {id}: sent to the open page (event imageviewer.rig.agent), which
+                                        does it on its 3D scene and reports to POST /imageviewer/rig/agent_done;
+                                        GET /imageviewer/rig/agent?id= -> {state: sent|running|done|error, result?}
 
 The models run outside ComfyUI's Python, each in an environment of its own
 (they pin torch, CUDA extensions and in UniRig's case Blender's ``bpy``): the
@@ -234,8 +238,12 @@ def resolve_src(src, folder_paths, resolve=None):
     return ""
 
 
-def register(add, *, web, path_access, export_rules, folder_paths, resolve=None):
-    """Add the routes through ``add(method, path, handler)``; each under /imageviewer and /api/imageviewer."""
+AGENT_ACTIONS = ("rig", "remove_rig", "autorig", "motion", "inbetween", "clean_feet", "export")
+
+
+def register(add, *, web, path_access, export_rules, folder_paths, resolve=None, send=None):
+    """Add the routes through ``add(method, path, handler)``; each under /imageviewer and /api/imageviewer.
+    ``send(event, data)`` reaches the open pages (PromptServer.send_sync): the agent's requests go there."""
     import asyncio
 
     jobs = {}
@@ -462,6 +470,53 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
             elif job.kind == "motion":
                 kimodo.stop()
         return web.json_response(job.view())
+
+    # ── the agent ─────────────────────────────────────────────────────────────
+    # The rig lives in the page, so an agent's request is sent there and the page reports back.
+    asks = {}
+
+    async def agent(request):
+        body = await body_of(request)
+        action = body.get("action")
+        if action not in AGENT_ACTIONS:
+            return err(f"action is one of {', '.join(AGENT_ACTIONS)}")
+        if send is None:
+            return err("the viewer's page cannot be reached", 501)
+        for old in [k for k, v in asks.items() if v["state"] in ("done", "error")][:max(0, len(asks) - 40)]:
+            asks.pop(old, None)
+        aid = secrets.token_hex(8)
+        args = {k: v for k, v in body.items() if k != "action"}
+        asks[aid] = {"id": aid, "action": action, "state": "sent", "sent": time.time()}
+        send("imageviewer.rig.agent", {"id": aid, "action": action, "args": args})
+        return web.json_response(asks[aid])
+
+    async def agent_state(request):
+        ask = asks.get(request.query.get("id") or "")
+        if not ask:
+            return err("no such request", 404)
+        out = dict(ask)
+        if out["state"] == "sent" and time.time() - out["sent"] > 30:
+            out["note"] = "no page has taken it yet: is the viewer open on its 3D scene?"
+        return web.json_response(out)
+
+    async def agent_done(request):
+        body = await body_of(request)
+        ask = asks.get(str(body.get("id") or ""))
+        if not ask:
+            return err("no such request", 404)
+        state = body.get("state")
+        if state not in ("running", "done", "error"):
+            return err("state is running, done or error")
+        ask["state"] = state
+        for k in ("result", "error", "progress"):
+            if k in body:
+                ask[k] = body[k]
+        return web.json_response({"ok": True})
+
+    for method, path, handler in (("POST", "rig/agent", agent), ("GET", "rig/agent", agent_state),
+                                  ("POST", "rig/agent_done", agent_done)):
+        add(method, f"/imageviewer/{path}", handler)
+        add(method, f"/api/imageviewer/{path}", handler)
 
     for method, path, handler in (("POST", "rig/export", export), ("GET", "rig/tools", tools),
                                   ("POST", "rig/autorig", autorig), ("POST", "rig/motion", motion),

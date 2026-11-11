@@ -347,6 +347,17 @@ export function describeViewerState(s) {
         if (Object.keys(c).length) out.camera = c;
     }
 
+    // The 3D scene's characters: which have a skeleton, a rig, keys (what the agent's rig tool works on).
+    if (Array.isArray(snap.characters) && snap.characters.length) {
+        out.characters = snap.characters.slice(0, 20).map((c) => {
+            const o = { id: String(c.id || ""), name: String(c.name || ""), skeleton: !!c.skeleton, rigged: !!c.rigged };
+            if (c.rigged) { o.humanoid = !!c.humanoid; o.controls = c.controls | 0; }
+            if (Array.isArray(c.keyed) && c.keyed.length) o.keyed_frames = c.keyed.length > 12
+                ? { count: c.keyed.length, first: c.keyed[0], last: c.keyed[c.keyed.length - 1] } : c.keyed.slice();
+            return o;
+        });
+    }
+
     const an = snap.annotations;
     if (an && an.count > 0) {
         out.annotations = { count: an.count };

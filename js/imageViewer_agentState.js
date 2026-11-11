@@ -179,6 +179,23 @@ export const AgentStateMixin = {
         };
     },
 
+    /** The previz scene's model items, as the rig tools see them. */
+    _agentCharacters() {
+        if (!this._modelMode || !this.isPrevizTab || !this.isPrevizTab()) return null;
+        const scene = this.previzScene && this.previzScene();
+        if (!scene || !Array.isArray(scene.items)) return null;
+        return scene.items.filter((it) => it.kind === "model").map((it) => {
+            const group = scene.items.find((g) => g.rig && g.rig.model === it.id);
+            const controls = scene.items.filter((c) => c.kind === "control" && c.control && c.control.model === it.id).length;
+            return {
+                id: it.id, name: it.name,
+                skeleton: safe(() => !!this.previzHasSkeleton(it.id), false),
+                rigged: controls > 0, humanoid: !!(group && group.rig.humanoid), controls,
+                keyed: controls ? safe(() => this.previzRigKeyedFrames(it.id), []) : [],
+            };
+        });
+    },
+
     _agentAnnotCounts() {
         const items = safe(() => this._annotItems(false), null) || [];
         if (!items.length) return null;
@@ -229,6 +246,7 @@ export const AgentStateMixin = {
         snap.view = { zoom: this.zoom, panX: this.panX, panY: this.panY,
                       channel: this.channelView, exposure: this.exposure };
         snap.camera = safe(() => this._agentCamera(), null);
+        snap.characters = safe(() => this._agentCharacters(), null);
         snap.annotations = this._agentAnnotCounts();
         return snap;
     },

@@ -1783,6 +1783,12 @@ app.registerExtension({
             if (name && globalViewerPanel.previzMatchWorld) globalViewerPanel.previzMatchWorld(name);
         });
 
+        // An agent's request for a character (rig_routes.py): rig, animate, clean, export it, and report back.
+        api.addEventListener("imageviewer.rig.agent", (e) => {
+            try { globalViewerPanel?.previzRigAgentRun?.(e.detail); }
+            catch (err) { console.warn("imageViewer: rig request not run", err); }
+        });
+
         // A previz shot an agent asked for (previz_shot.py): render it and report back.
         api.addEventListener("imageviewer.previz.render", (e) => {
             try { globalViewerPanel?.previzShotRun?.(e.detail); }

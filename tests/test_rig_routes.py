@@ -214,6 +214,23 @@ class RigRoutes(unittest.TestCase):
         self.assertFalse(missing_cfg["unirig"]["ready"])
         self.assertFalse(missing_cfg["kimodo"]["ready"])
 
+    def test_agent_requests_go_to_the_page_and_back(self):
+        async def go(c):
+            r = await c.post("/imageviewer/rig/agent", json={"action": "motion", "model": "Hero", "prompt": "walks"})
+            ask = await r.json()
+            bad = await c.post("/imageviewer/rig/agent", json={"action": "explode"})
+            await c.post("/imageviewer/rig/agent_done", json={"id": ask["id"], "state": "done", "result": {"keys": 12}})
+            r2 = await c.get(f"/imageviewer/rig/agent?id={ask['id']}")
+            return ask, bad.status, await r2.json()
+        del self.sent[:]
+        ask, bad, state = self.run_c(go)
+        self.assertEqual(ask["state"], "sent")
+        self.assertEqual(bad, 400)
+        self.assertEqual(state["state"], "done")
+        self.assertEqual(state["result"], {"keys": 12})
+        ev = [d for e, d in self.sent if e == "imageviewer.rig.agent"]
+        self.assertEqual(ev, [{"id": ask["id"], "action": "motion", "args": {"model": "Hero", "prompt": "walks"}}])
+
     async def wait(self, c, job):
         for _ in range(200):
             r = await c.get(f"/imageviewer/rig/job?job={job['job']}")

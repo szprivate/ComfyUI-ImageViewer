@@ -3347,7 +3347,8 @@ try:
             from . import export_rules as _rig_rules
             rig_routes.register(_safe_add, web=web, path_access=path_access, export_rules=_rig_rules,
                                 folder_paths=folder_paths,
-                                resolve=lambda p: _resolve_raw_path(str(p))[0] if p else None)
+                                resolve=lambda p: _resolve_raw_path(str(p))[0] if p else None,
+                                send=lambda ev, data: PromptServer.instance.send_sync(ev, data))
         except Exception as e:  # noqa: BLE001 - the rest of the viewer works without it
             print(f"[ImageViewer] Rig routes not registered: {e}")
         for _m, _h in (("GET", _imageviewer_mgscene), ("POST", _imageviewer_mgscene_save)):

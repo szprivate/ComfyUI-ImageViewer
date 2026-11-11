@@ -318,6 +318,69 @@ export const PrevizRigToolsMixin = {
         return { ok: true, frames: bake.length, keys };
     },
 
+    // ── The agent ─────────────────────────────────────────────────────────
+
+    /** The model item an agent names (id or name), else the selected one, else the scene's only one. */
+    _previzRigFind(which) {
+        const scene = this.previzScene();
+        const models = ((scene && scene.items) || []).filter((it) => it.kind === "model");
+        if (which) {
+            const w = String(which).toLowerCase();
+            return models.find((m) => m.id === which) || models.find((m) => String(m.name || "").toLowerCase() === w) || null;
+        }
+        const sel = this.previzRigModelOf && this.previzRigModelOf();
+        return (sel && models.find((m) => m.id === sel)) || (models.length === 1 ? models[0] : null);
+    },
+
+    /** A request from rig_routes' /imageviewer/rig/agent: { id, action, args }. Reported to /rig/agent_done. */
+    async previzRigAgentRun(req) {
+        if (!req || !req.id) return;
+        // One page answers: the one whose 3D scene is up (every open page gets the message).
+        if (!this._modelMode || !this.isPrevizTab || !this.isPrevizTab()) return;
+        const report = (body) => fetch(api.apiURL("/imageviewer/rig/agent_done"), {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: req.id, ...body }),
+        }).catch(() => {});
+        const a = req.args || {};
+        try {
+            const model = this._previzRigFind(a.model);
+            if (!model) throw new Error(a.model ? `no model named ${a.model} in the 3D scene` : "name the model (more than one in the scene, none selected)");
+            await report({ state: "running" });
+            const num = (v, d) => (v === undefined || v === null || v === "" ? d : Number(v));
+            const scene = this.previzScene();
+            const end = Math.max(0, (scene.length || 1) - 1);
+            let result;
+            switch (req.action) {
+                case "rig": {
+                    const rig = await this.previzRigCharacter(model.id, { humanoid: a.humanoid !== false });
+                    if (!rig) throw new Error("the model has no skeleton: use action autorig");
+                    result = { humanoid: !!rig.humanoid, missing: rig.missing || [] };
+                    break;
+                }
+                case "remove_rig": this.previzRemoveRig(model.id); result = {}; break;
+                case "autorig": result = await this.previzAutoRig(model.id, { seed: num(a.seed, 12345), humanoid: a.humanoid !== false }); break;
+                case "motion":
+                case "inbetween":
+                    result = await this.previzRigGenerateMotion(model.id, {
+                        mode: req.action === "motion" ? "text" : "inbetween", prompt: a.prompt || "",
+                        from: num(a.from, req.action === "motion" ? Math.round(this.currentFrame || 0) : 0),
+                        to: num(a.to, end), seed: a.seed == null ? null : Number(a.seed), feet: a.feet !== false,
+                        fromPose: a.from_pose !== false,
+                    });
+                    break;
+                case "clean_feet": result = this.previzRigCleanFeet(model.id, { from: a.from == null ? null : num(a.from), to: a.to == null ? null : num(a.to) }); break;
+                case "export":
+                    result = await this.previzRigExport(model.id, a.format === "abc" ? "abc" : "fbx",
+                        { first: num(a.from, 0), last: num(a.to, end), name: a.name || null });
+                    break;
+                default: throw new Error(`unknown action ${req.action}`);
+            }
+            if (result && result.ok === false) throw new Error(result.message || "it did not work");
+            await report({ state: "done", result: { model: model.name, ...(result || {}) } });
+        } catch (e) {
+            await report({ state: "error", error: String((e && e.message) || e) });
+        }
+    },
+
     // ── Feet ──────────────────────────────────────────────────────────────
 
     /** Pin the standing feet and keep them out of the floor, over the shot (or [from, to]), re-keyed. */
