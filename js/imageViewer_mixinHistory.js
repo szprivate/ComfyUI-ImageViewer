@@ -1182,7 +1182,18 @@ export const HistoryMixin = {
                 // itself is fine. The prune pass checks the real media before
                 // anything is removed. A failed tile is not kept: the next pass
                 // makes it again, so a file that arrived late still shows.
-                imgEl.onerror = () => { thumb._imageViewerFailed = true; this.noteMediaLoadFailed(imgObj); };
+                // A poster kept in ComfyUI's temp folder is gone after a restart
+                // (ComfyUI empties temp when it starts): the tile is then made
+                // from the media itself, once, before it counts as failed.
+                const fallback = imgObj.thumb && this.thumbUrl ? this.thumbUrl({ ...imgObj, thumb: null }) : null;
+                imgEl.onerror = () => {
+                    if (fallback && fallback !== url && !imgEl._imageViewerFellBack) {
+                        imgEl._imageViewerFellBack = true;
+                        imgEl.src = fallback;
+                        return;
+                    }
+                    thumb._imageViewerFailed = true; this.noteMediaLoadFailed(imgObj);
+                };
                 try { this._loadThumb(imgEl, url); } catch (e) { /* ignore */ }
             }
             thumb.appendChild(imgEl);
