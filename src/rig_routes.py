@@ -5,14 +5,19 @@
                                         -> {ok, path, relative, version}: by the export rule (kind "character")
     GET  /imageviewer/rig/tools         -> {unirig: {ready, why}, kimodo: {ready, why, model},
                                             install: {root, hf_token: bool, running: job id | null}}
-    POST /imageviewer/rig/install       {root?, only?: unirig|kimodo, hf_token?} -> {job}: runs
+    POST /imageviewer/rig/install       {root?, only?: unirig|kimodo|posetrack, hf_token?} -> {job}: runs
                                         scripts/rig/install_rig_tools.py (an Install button in the page);
                                         a token is written where huggingface_hub reads it, never answered
     POST /imageviewer/rig/autorig       {src, name?, context?, seed?} -> {job}: UniRig on the model's file;
                                         the job's result is {path, relative}, a skinned .glb by the export rule
-    POST /imageviewer/rig/motion        {mode: text|inbetween, prompt, frames, keys?, seed?, steps?, samples?,
-                                        heading?} -> {job}: Kimodo; the result is the motion on its own
+    POST /imageviewer/rig/motion        {mode: text|inbetween|restyle, prompt, frames, keys?, path?, seed?, steps?,
+                                        samples?, heading?} -> {job}: Kimodo; the result is the motion on its own
                                         skeleton (scripts/rig/kimodo_run.py), retargeted in the page
+    POST /imageviewer/rig/video_pose    {src, start?, end?, step?} -> {job}: MediaPipe's Pose Landmarker on a film
+                                        (scripts/rig/video_pose_run.py); the result is the landmarks per frame,
+                                        solved onto the character in the page (imageViewer_rigVideo.js)
+    POST /imageviewer/rig/lipsync       {src, fps, start?, seconds?, lead?, smooth?, strength?} -> mouth curves per
+                                        frame (lipsync.py, in this process), put on blendshapes in the page
     GET  /imageviewer/rig/job?job=      -> {state: running|done|error|cancelled, log, result?, error?}
     POST /imageviewer/rig/job           {job, cancel: true}
     POST /imageviewer/rig/agent         {action: rig|remove_rig|autorig|motion|inbetween|clean_feet|export, model?,
@@ -86,7 +91,9 @@ def tools_config():
         pass
     env = os.environ
     for tool, key, var in (("unirig", "python", "IMAGE_VIEWER_UNIRIG_PYTHON"), ("unirig", "repo", "IMAGE_VIEWER_UNIRIG_DIR"),
-                           ("kimodo", "python", "IMAGE_VIEWER_KIMODO_PYTHON"), ("kimodo", "model", "IMAGE_VIEWER_KIMODO_MODEL")):
+                           ("kimodo", "python", "IMAGE_VIEWER_KIMODO_PYTHON"), ("kimodo", "model", "IMAGE_VIEWER_KIMODO_MODEL"),
+                           ("posetrack", "python", "IMAGE_VIEWER_POSETRACK_PYTHON"),
+                           ("posetrack", "model", "IMAGE_VIEWER_POSETRACK_MODEL")):
         if env.get(var):
             cfg.setdefault(tool, {})[key] = env[var]
     return cfg
@@ -112,6 +119,15 @@ def tool_status(cfg=None):
         out["kimodo"] = {"ready": False, "why": f"Kimodo's Python is not there: {k['python']}", "model": model}
     else:
         out["kimodo"] = {"ready": True, "why": "", "model": model}
+    p = cfg.get("posetrack") or {}
+    if not p.get("python"):
+        out["posetrack"] = {"ready": False, "why": "Motion from video is not set up (scripts/rig/install_rig_tools.py --only posetrack)"}
+    elif not os.path.isfile(p["python"]):
+        out["posetrack"] = {"ready": False, "why": f"The pose tracker's Python is not there: {p['python']}"}
+    elif not p.get("model") or not os.path.isfile(p["model"]):
+        out["posetrack"] = {"ready": False, "why": "The pose tracker's model (.task) is not there"}
+    else:
+        out["posetrack"] = {"ready": True, "why": ""}
     return out
 
 
@@ -184,6 +200,30 @@ def save_hf_token(token):
         pass
 
 
+def clean_path(path, frames):
+    """A motion's hips path for Kimodo's root2d constraint: {frames: [int], xz: [[x, z]]}, inside [0, frames)."""
+    if not path:
+        return None
+    if not isinstance(path, dict):
+        raise ValueError("path is {frames, xz}")
+    fs, xz = path.get("frames"), path.get("xz")
+    if not isinstance(fs, list) or not isinstance(xz, list) or len(fs) != len(xz) or len(fs) > 1800:
+        raise ValueError("path: frames and xz of the same length (at most 1800)")
+    out_f, out_xz, seen = [], [], set()
+    for f, p in zip(fs, xz):
+        try:
+            f = int(f)
+            x, z = float(p[0]), float(p[1])
+        except (TypeError, ValueError, IndexError):
+            raise ValueError("path: whole frames and [x, z] pairs")
+        if not 0 <= f < frames or f in seen or not (abs(x) < 1e4 and abs(z) < 1e4):
+            continue
+        seen.add(f)
+        out_f.append(f)
+        out_xz.append([round(x, 5), round(z, 5)])
+    return {"frames": out_f, "xz": out_xz} if out_f else None
+
+
 def _kill_tree(proc):
     """Stop a process and what it started (the installer runs pip, which runs more)."""
     if proc is None or proc.poll() is not None:
@@ -202,11 +242,11 @@ def _kill_tree(proc):
 
 def kind_logs(kind):
     """The jobs that run a model or an install keep a log file; an export is quick and says its error."""
-    return kind in ("autorig", "motion", "install")
+    return kind in ("autorig", "motion", "install", "video_pose")
 
 
 # How many commands (the installer's "$ " lines) a full install of each tool runs: for the progress bar.
-INSTALL_STEPS = {"unirig": 10, "kimodo": 5}
+INSTALL_STEPS = {"unirig": 10, "kimodo": 5, "posetrack": 3}
 
 
 
@@ -390,7 +430,12 @@ def resolve_src(src, folder_paths, resolve=None):
     return ""
 
 
-AGENT_ACTIONS = ("rig", "remove_rig", "autorig", "motion", "inbetween", "clean_feet", "export")
+AGENT_ACTIONS = ("rig", "remove_rig", "autorig", "motion", "inbetween", "clean_feet", "export",
+                 "restyle", "video_motion", "lipsync",
+                 "layer_add", "layer_list", "constrain", "remove_constraint", "list_constraints", "bake_constraints",
+                 "pose_list", "pose_save", "pose_apply", "pose_delete", "flip_pose")
+VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
+SOUND_EXTS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".opus"} | VIDEO_EXTS
 
 
 def register(add, *, web, path_access, export_rules, folder_paths, resolve=None, send=None):
@@ -539,8 +584,8 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         if os.path.isfile(root):
             return err(f"{root} is a file")
         only = body.get("only")
-        if only not in (None, "", "unirig", "kimodo"):
-            return err("only is unirig or kimodo")
+        if only not in (None, "", "unirig", "kimodo", "posetrack"):
+            return err("only is unirig, kimodo or posetrack")
         if body.get("hf_token"):
             try:
                 save_hf_token(body["hf_token"])
@@ -640,8 +685,8 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         if not status["ready"]:
             return err(status["why"], 501)
         mode = body.get("mode")
-        if mode not in ("text", "inbetween"):
-            return err("mode is text or inbetween")
+        if mode not in ("text", "inbetween", "restyle"):
+            return err("mode is text, inbetween or restyle")
         try:
             frames = int(body.get("frames") or 0)
         except (TypeError, ValueError):
@@ -651,6 +696,14 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         if mode == "inbetween" and not body.get("keys"):
             return err("an in-between needs the keyed poses")
         try:
+            path = clean_path(body.get("path"), frames)
+        except ValueError as e:
+            return err(str(e))
+        if mode == "restyle" and not path:
+            return err("a restyle needs the motion's path")
+        if mode == "restyle" and not str(body.get("prompt") or "").strip():
+            return err("describe the style (a person walks like a tired old man)")
+        try:
             steps, samples = int(body.get("steps") or 100), int(body.get("samples") or 1)
             heading = float(body.get("heading") or 0.0)
         except (TypeError, ValueError):
@@ -659,6 +712,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
             "prompt": str(body.get("prompt") or ("A person moves naturally." if mode == "inbetween" else "")).strip(),
             "frames": frames,
             "keys": body.get("keys") or [],
+            "path": path,
             "seed": body.get("seed"),
             "steps": max(10, min(200, steps)),
             "samples": max(1, min(4, samples)),
@@ -682,6 +736,100 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         spawn(job, work)
         return web.json_response(job.view())
 
+    def media_src(body, exts, what):
+        """A film or sound named by the page ({path} or {filename, subfolder, type} or a /view URL) -> its file."""
+        src = resolve_src(body.get("src"), folder_paths, resolve)
+        if not src or not os.path.isfile(src):
+            raise LookupError(f"the {what} was not found")
+        if not path_access.is_allowed(src) or not path_access.may_serve(src):
+            raise PermissionError(path_access.refusal(src))
+        ext = os.path.splitext(src)[1].lower()
+        if ext not in exts:
+            raise ValueError(f"not a {what}: {ext or 'no extension'}")
+        return src
+
+    async def video_pose(request):
+        body = await body_of(request)
+        cfg = dict(tools_config().get("posetrack") or {})
+        status = tool_status({"posetrack": cfg})["posetrack"]
+        if not status["ready"]:
+            return err(status["why"], 501)
+        try:
+            src = media_src(body, VIDEO_EXTS, "film")
+        except LookupError as e:
+            return err(e, 404)
+        except PermissionError as e:
+            return err(e, 403)
+        except ValueError as e:
+            return err(e)
+        try:
+            start, end = int(body.get("start") or 0), int(body.get("end") if body.get("end") is not None else -1)
+            step = max(1, min(8, int(body.get("step") or 1)))
+        except (TypeError, ValueError):
+            return err("start, end and step are whole frames")
+        job = new_job("video_pose")
+
+        def work():
+            with tempfile.TemporaryDirectory(prefix="posetrack_") as tmp:
+                out = os.path.join(tmp, "pose.json")
+                cmd = [cfg["python"], "-u", os.path.join(SCRIPTS, "video_pose_run.py"), "--model", cfg["model"],
+                       "--video", src, "--output", out, "--start", str(max(0, start)), "--end", str(end),
+                       "--step", str(step)]
+                env = dict(os.environ, PYTHONUNBUFFERED="1")
+                for k, v in (cfg.get("env") or {}).items():
+                    env[str(k)] = str(v)
+                job.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                            bufsize=1, env=env, **_no_window())
+                for line in job.proc.stdout:
+                    job.say(line)
+                code = job.proc.wait()
+                job.proc.stdout.close()
+                if job.cancelled:
+                    raise RuntimeError("cancelled")
+                if code != 0 or not os.path.isfile(out):
+                    said = [l for l in job.log if l.startswith("!! ")]
+                    raise RuntimeError(said[-1][3:] if said else "the pose tracker failed: " + " | ".join(job.log[-3:]))
+                with open(out, encoding="utf-8") as fh:
+                    return json.load(fh)
+
+        spawn(job, work)
+        return web.json_response(job.view())
+
+    async def lipsync_route(request):
+        body = await body_of(request)
+        try:
+            src = media_src(body, SOUND_EXTS, "sound")
+        except LookupError as e:
+            return err(e, 404)
+        except PermissionError as e:
+            return err(e, 403)
+        except ValueError as e:
+            return err(e)
+        try:
+            fps = float(body.get("fps") or 24)
+            start = float(body.get("start") or 0)
+            seconds = float(body["seconds"]) if body.get("seconds") else None
+            lead = int(body.get("lead") if body.get("lead") is not None else 1)
+            smooth = float(body.get("smooth") if body.get("smooth") is not None else 1.0)
+            strength = float(body.get("strength") or 1.0)
+        except (TypeError, ValueError):
+            return err("fps, start, seconds, lead, smooth and strength are numbers")
+        if not 1 <= fps <= 240:
+            return err("fps between 1 and 240")
+        try:
+            from . import lipsync
+        except ImportError:  # pragma: no cover - run outside the package
+            import lipsync
+        try:
+            out = await off(lipsync.from_file, src, fps, start=max(0.0, start), seconds=seconds,
+                            lead=max(0, min(6, lead)), smooth=max(0.0, min(4.0, smooth)),
+                            strength=max(0.1, min(2.0, strength)))
+        except Exception as e:  # noqa: BLE001 - a file PyAV cannot read
+            return err(f"the sound could not be read: {e}", 422)
+        out["fps"] = fps
+        out["name"] = os.path.basename(src)
+        return web.json_response(out)
+
     async def job_state(request):
         job = jobs.get(request.query.get("job") or "")
         if not job:
@@ -697,7 +845,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
             job.cancelled = True
             if job.kind == "install":
                 _kill_tree(job.proc)
-            elif job.kind == "autorig" and job.proc and job.proc.poll() is None:
+            elif job.kind in ("autorig", "video_pose") and job.proc and job.proc.poll() is None:
                 job.proc.kill()
             elif job.kind == "motion":
                 kimodo.stop()
@@ -752,6 +900,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
 
     for method, path, handler in (("POST", "rig/export", export), ("GET", "rig/tools", tools), ("POST", "rig/install", install),
                                   ("POST", "rig/autorig", autorig), ("POST", "rig/motion", motion),
+                                  ("POST", "rig/video_pose", video_pose), ("POST", "rig/lipsync", lipsync_route),
                                   ("GET", "rig/job", job_state), ("POST", "rig/job", job_cancel)):
         add(method, f"/imageviewer/{path}", handler)
         add(method, f"/api/imageviewer/{path}", handler)

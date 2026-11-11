@@ -154,15 +154,15 @@ export function somaToPose(rot, root, motionIndex, rest, scale, origin = [0, 0])
 }
 
 /**
- * Motion frames (at the model's 30 fps) onto scene frames: sample `count`
+ * Motion frames (at the model's 30 fps, or `srcFps`) onto scene frames: sample `count`
  * scene frames from `start` at `fps`, each the motion at that time (rotations
  * slerped, the hips lerped). Answers [{ f, rot, root, contacts }].
  */
-export function resample(sample, fps, start, count) {
+export function resample(sample, fps, start, count, srcFps = MOTION_FPS) {
     const n = sample.rot.length;
     const out = [];
     for (let k = 0; k < count; k++) {
-        const t = Math.min(n - 1, (k / fps) * MOTION_FPS);
+        const t = Math.min(n - 1, (k / fps) * srcFps);
         const i = Math.floor(t), j = Math.min(n - 1, i + 1), a = t - i;
         const rot = sample.rot[i].map((q, x) => (a < 1e-6 ? q : quat.slerp(q, sample.rot[j][x], a)));
         const root = sample.root[i].map((v, x) => v + (sample.root[j][x] - v) * a);
@@ -276,4 +276,50 @@ export function inbetweenKeys(poses, rest, scale, fps) {
     const keys = poses.map((p) => ({ frame: Math.round((p.f - first) / fps * MOTION_FPS), ...poseToSoma(p.pose, rest, scale, origin) }));
     const last = poses[poses.length - 1].f;
     return { keys, origin, heading: headingOf(keys[0]), frames: Math.max(8, Math.round((last - first) / fps * MOTION_FPS) + 1) };
+}
+
+// ── Restyle ──────────────────────────────────────────────────────────────────
+
+/** How closely a restyle keeps to the motion it starts from: what it hands the model as constraints. */
+export const RESTYLE_STRENGTHS = {
+    // The hips' way over the ground and the first pose: the prompt decides the rest.
+    loose: { every: 0, effectors: null },
+    // ...and the hands and feet every half second: the same steps and reaches, done another way.
+    medium: { every: 15, effectors: ["LeftFoot", "RightFoot", "LeftHand", "RightHand"] },
+    // ...and the whole body every third of a second: the same motion, a little of the style.
+    close: { every: 10, effectors: null, full: true },
+};
+
+/**
+ * A restyle's request from the motion as it is: `poses` [{ f, pose }] on every
+ * scene frame of the range (first to last). Answers { keys, path, origin,
+ * heading, frames }: the path is the hips over the ground on every model frame
+ * the range has (Kimodo's root2d constraint, so the timing and the way stay),
+ * the keys are what `strength` keeps of the poses (the first is always all of it).
+ */
+export function restyleRequest(poses, rest, scale, fps, strength = "medium") {
+    if (poses.length < 2) return null;
+    const s = RESTYLE_STRENGTHS[strength] || RESTYLE_STRENGTHS.medium;
+    const first = poses[0].f;
+    const h0 = head(poses[0].pose.get(rest.roles.hips));
+    const origin = [h0[0], h0[2]];
+    const frames = Math.max(8, Math.round((poses[poses.length - 1].f - first) / fps * MOTION_FPS) + 1);
+    const path = { frames: [], xz: [] };
+    const keys = [];
+    let lastKey = -Infinity;
+    for (let i = 0; i < poses.length; i++) {
+        const p = poses[i];
+        const mf = Math.min(frames - 1, Math.round((p.f - first) / fps * MOTION_FPS));
+        if (path.frames.length && path.frames[path.frames.length - 1] === mf) continue;
+        const k = poseToSoma(p.pose, rest, scale, origin);
+        path.frames.push(mf);
+        path.xz.push([k.root[0], k.root[2]]);
+        const end = i === poses.length - 1;
+        if (mf === 0) { keys.push({ frame: 0, ...k }); lastKey = 0; continue; }
+        if (s.every && (mf - lastKey >= s.every || (end && mf - lastKey >= s.every / 2))) {
+            keys.push({ frame: mf, ...k, ...(s.full ? {} : { effectors: s.effectors }) });
+            lastKey = mf;
+        }
+    }
+    return { keys, path, origin, heading: headingOf(keys[0]), frames };
 }
