@@ -56,6 +56,8 @@ const DOCK_PANELS = {
     curves:  { prop: "curvesPanel",  label: "Curve Editor", minW: 220, minH: 190, defaultRail: "bottom" },
     // Timing: keys as diamonds over time (imageViewer_previzDopeSheet.js), a tab beside the Curve Editor.
     dopeSheet: { prop: "dopeSheetPanel", label: "Dope Sheet", minW: 320, minH: 140, defaultRail: "bottom", tabWith: "curves" },
+    // The Clip Sequencer (imageViewer_previzClips.js): clips on tracks, under the picture where time has width.
+    clips: { prop: "clipsPanel", label: "Clip Sequencer", minW: 320, minH: 150, defaultRail: "bottom", tabWith: "curves" },
     // The roto shapes' timing, the same editor's look (imageViewer_rotoCurves.js);
     // the roto tool opens and closes it.
     rotoCurves: { prop: "rotoCurvesPanel", label: "Roto Curves", minW: 220, minH: 170, defaultRail: "right" },
@@ -211,6 +213,7 @@ export const DockMixin = {
             // A graph over time wants width: the Curve Editor lives under the picture.
             bottom: { height: 240, panels: [{ id: "curves", size: 1, hidden: true, tab: "tcurves", behind: false },
                                             { id: "dopeSheet", size: 1, hidden: true, tab: "tcurves", behind: true },
+                                            { id: "clips", size: 1, hidden: true, tab: "tcurves", behind: true },
                                             { id: "motionTimeline", size: 1, hidden: true },
                                             { id: "compGraph", size: 1, hidden: true, tab: "comp", behind: false },
                                             { id: "compCurves", size: 1, hidden: true, tab: "comp", behind: true }] },
@@ -653,6 +656,8 @@ export const DockMixin = {
             if (this.previzRefreshCurves) this.previzRefreshCurves();
         } else if (id === "dopeSheet") {
             if (this.previzRefreshDopeSheet) this.previzRefreshDopeSheet();
+        } else if (id === "clips") {
+            if (this.previzRefreshClips) this.previzRefreshClips();
         } else if (id === "rotoCurves") {
             if (this.rotoRefreshCurves) this.rotoRefreshCurves();
         } else if (id === "paramCurves") {

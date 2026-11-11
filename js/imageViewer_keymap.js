@@ -251,6 +251,8 @@ const ACTION_DEFS = [
         key: `View3DShow${k.key[0].toUpperCase()}${k.key.slice(1)}`, label: `3D View: Show / Hide ${k.label}`,
         enabled: _previz, run: (p) => p.previzToggleDisplay(k.key),
     })),
+    { key: "View3DClipsPanel", label: "3D View: Show / Hide Clip Sequencer",
+      enabled: _previz, run: (p) => p.togglePanelDocked("clips") },
     { key: "View3DChannelBox", label: "3D View: Show / Hide Channel Box",
       enabled: _previz, run: (p) => p.togglePanelDocked("channels") },
 

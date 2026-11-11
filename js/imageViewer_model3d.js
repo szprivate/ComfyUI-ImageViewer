@@ -17,7 +17,9 @@
 import { api } from "../../scripts/api.js";
 import { pref, PREF } from "./imageViewer_settings.js";
 import { app } from "../../scripts/app.js";
-import { evaluate, cameraResolution, offsetOf, planeSettings } from "./imageViewer_scene3d.js";
+import { evaluateIn, cameraResolution, offsetOf, planeSettings } from "./imageViewer_scene3d.js";
+// The clip sequencer registers itself with the scene model on import (evaluateIn plays its clips).
+import "./imageViewer_clipSeqData.js";
 import { WorldViewMixin } from "./imageViewer_world3d.js";
 import { bustUrl } from "./imageViewer_atlasRender.js";
 import { WorldMatchMixin } from "./imageViewer_worldMatch.js";
@@ -722,7 +724,7 @@ export class Model3DView {
         // A scene camera's lens depends on the viewport too, when you are
         // looking through it: the gate is fitted inside, and the view around it.
         for (const entry of this._entries.values()) {
-            if (entry.camera) this._applyLens(entry, evaluate(entry.item, this.sceneFrame).fov);
+            if (entry.camera) this._applyLens(entry, evaluateIn(this.scene3d, entry.item, this.sceneFrame).fov);
         }
         this._syncGate();
         this.requestRender();
@@ -1529,6 +1531,40 @@ export class Model3DView {
         return entry;
     }
 
+    /**
+     * Pose a model by its file's animations as the clip sequencer weighs them:
+     * [{ clip (index), frame (in the clip, scene frames), weight }]. What the
+     * weights leave over is the model's rest pose. With no clip any more, the
+     * file's first animation plays along the timeline again, as before.
+     */
+    _seqDriveMixer(entry, list, fps) {
+        const mixer = entry.mixer;
+        const clips = entry.clips || [];
+        if (!list.length) {
+            if (entry.seqDriven) {
+                entry.seqDriven = false;
+                mixer.stopAllAction();
+                if (clips[0]) mixer.clipAction(clips[0]).play();
+            }
+            mixer.setTime(Math.max(0, (this.sceneFrame || 0) / fps));
+            return;
+        }
+        entry.seqDriven = true;
+        const want = new Map();
+        for (const x of list) if (clips[x.clip]) want.set(x.clip, x);
+        clips.forEach((clip, i) => {
+            const action = mixer.clipAction(clip);
+            const x = want.get(i);
+            if (!x) { if (action.isScheduled()) action.stop(); return; }
+            if (!action.isScheduled()) action.play();
+            action.enabled = true;
+            action.setEffectiveTimeScale(0);
+            action.setEffectiveWeight(Math.max(0, Math.min(1, x.weight)));
+            action.time = Math.max(0, Math.min(clip.duration, x.frame / fps));
+        });
+        mixer.update(0);
+    }
+
     _disposeEntry(entry, full) {
         if (entry.mixer) { entry.mixer.stopAllAction(); entry.mixer = null; }
         if (entry.worldExtras || entry.envApplied || entry.terrain || entry.motion) this._worldDispose(entry);
@@ -1573,7 +1609,8 @@ export class Model3DView {
         for (const item of this.scene3d.items || []) {
             const entry = this._entries.get(item.id);
             if (!entry) continue;
-            const at = evaluate(item, frame);
+            const at = evaluateIn(this.scene3d, item, frame);
+            entry.at = at;
             // The root sits at position+pivot — which IS where the pivot point
             // ends up, whatever R and S do — and the body takes it back off.
             const pv = at.pivot || [0, 0, 0];
@@ -1620,7 +1657,9 @@ export class Model3DView {
             // whether it was reached by playing or by dragging the timeline.
             // A rigged character is posed by its controls instead.
             if (entry.mixer && !(entry.bones && entry.bones.size && this._rigged(item.id))) {
-                entry.mixer.setTime(Math.max(0, frame / fps));
+                // The sequencer may play the file's own animations, weighted (imageViewer_clipSeqData.js).
+                if (at.fileClips || entry.seqDriven) this._seqDriveMixer(entry, at.fileClips || [], fps);
+                else entry.mixer.setTime(Math.max(0, frame / fps));
             }
             // A cache holds a different shape per frame, so it is re-read.
             if (this._isCache(item) && entry.cacheFrame !== Math.round(frame)) {
@@ -1819,7 +1858,7 @@ export class Model3DView {
         const centre = box.getCenter(new THREE.Vector3());
         entry.body.updateWorldMatrix(true, false);
         centre.applyMatrix4(new THREE.Matrix4().copy(entry.body.matrixWorld).invert());
-        const at = evaluate(entry.item, this.sceneFrame);
+        const at = evaluateIn(this.scene3d, entry.item, this.sceneFrame);
         const pv = at.pivot || [0, 0, 0];
         return this._pivotShiftLocal(at, centre.clone().sub(new THREE.Vector3(...pv)));
     }
@@ -2075,7 +2114,7 @@ export class Model3DView {
             // every mouse move would add the whole journey again.
             const entry = this.selected && this._entries.get(this.selected);
             this._pivotDragFrom = (e.value && entry && this.pivotMode && entry.body)
-                ? { root: entry.root.position.clone(), at: evaluate(entry.item, this.sceneFrame) }
+                ? { root: entry.root.position.clone(), at: evaluateIn(this.scene3d, entry.item, this.sceneFrame) }
                 : null;
             if (!e.value && this.hooks.onTransformEnd) this.hooks.onTransformEnd(this.selected);
         });
@@ -2085,7 +2124,7 @@ export class Model3DView {
             // position takes up the slack.
             if (entry && this.pivotMode && this._pivotHandleObj && gizmo.object === this._pivotHandleObj) {
                 const from = this._pivotDragFrom
-                    || { root: entry.root.position.clone(), at: evaluate(entry.item, this.sceneFrame) };
+                    || { root: entry.root.position.clone(), at: evaluateIn(this.scene3d, entry.item, this.sceneFrame) };
                 const at = from.at;
                 const d = this._pivotHandleObj.position.clone().sub(from.root);
                 if (this.hooks.onTransform) {
@@ -2157,7 +2196,7 @@ export class Model3DView {
         // jumps by its pivot the moment anything is dragged.
         const entry = item ? this._entries.get(item.id) : null;
         if (entry && entry.body && object === entry.root) {
-            const pv = evaluate(item, this.sceneFrame).pivot || [0, 0, 0];
+            const pv = evaluateIn(this.scene3d, item, this.sceneFrame).pivot || [0, 0, 0];
             return {
                 position: [object.position.x - pv[0], object.position.y - pv[1], object.position.z - pv[2]],
                 rotation: [object.rotation.x * R, object.rotation.y * R, object.rotation.z * R],
@@ -2352,7 +2391,7 @@ export class Model3DView {
         cam.aspect = width / height;
         // A scene camera renders its gate: its own fov, not the overscanned
         // one the viewport shows around it.
-        if (r.item) cam.fov = evaluate(r.item, this.sceneFrame).fov || 35;
+        if (r.item) cam.fov = evaluateIn(this.scene3d, r.item, this.sceneFrame).fov || 35;
         cam.updateProjectionMatrix();
         // Rendered as the viewport draws it: bloom and tone mapping included.
         this._worldResize(W, H);
@@ -2389,7 +2428,7 @@ export class Model3DView {
         const cam = r.cam;
         const W = Math.max(1, Math.round(width)), H = Math.max(1, Math.round(height));
         cam.aspect = W / H;
-        if (r.item) cam.fov = evaluate(r.item, this.sceneFrame).fov || 35;
+        if (r.item) cam.fov = evaluateIn(this.scene3d, r.item, this.sceneFrame).fov || 35;
         cam.updateProjectionMatrix();
 
         const hidden = [];

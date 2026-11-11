@@ -28,6 +28,7 @@ import { PrevizMixin }   from "./imageViewer_mixinPreviz.js";
 import { PrevizCurvesMixin } from "./imageViewer_previzCurves.js";
 import { PrevizDopeSheetMixin } from "./imageViewer_previzDopeSheet.js";
 import { PrevizPlayblastMixin } from "./imageViewer_previzPlayblast.js";
+import { PrevizClipsMixin } from "./imageViewer_previzClips.js";
 import { RotoCurvesMixin } from "./imageViewer_rotoCurves.js";
 import { HistoryTagsMixin } from "./imageViewer_historyTags.js";
 import { AgentYMixin, namedTabInfo } from "./imageViewer_agentY.js";
@@ -705,6 +706,15 @@ class ViewerPanel extends HTMLElement {
             pc.className = 'curves-panel right';
             this.curvesPanel.parentNode.insertBefore(pc, this.curvesPanel.nextSibling);
             this.paramCurvesPanel = pc;
+        }
+        // The 3D space's Clip Sequencer (imageViewer_previzClips.js), made here: no markup carries it.
+        this.clipsPanel = sr.getElementById('clips-panel');
+        if (!this.clipsPanel && this.curvesPanel && this.curvesPanel.parentNode) {
+            const cp = this.curvesPanel.ownerDocument.createElement('div');
+            cp.id = 'clips-panel';
+            cp.className = 'curves-panel clips-panel right';
+            this.curvesPanel.parentNode.insertBefore(cp, this.curvesPanel.nextSibling);
+            this.clipsPanel = cp;
         }
         // The Edit panel (the cut beside a film) is always made here: no markup carries it.
         this.editTimelinePanel = sr.getElementById('edit-timeline-panel');
@@ -1601,6 +1611,7 @@ Object.assign(
     PrevizCurvesMixin,
     PrevizDopeSheetMixin,
     PrevizPlayblastMixin,
+    PrevizClipsMixin,
     RotoCurvesMixin,
     HistoryTagsMixin,
     AgentYMixin,

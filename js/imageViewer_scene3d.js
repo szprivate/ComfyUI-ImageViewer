@@ -782,6 +782,24 @@ export function evaluate(item, frame) {
     };
 }
 
+// ── Scene-level evaluators (clip sequencer, animation layers) ──
+const _SCENE_EVALUATORS = [];
+export function registerSceneEvaluator(name, order, fn) {
+    const i = _SCENE_EVALUATORS.findIndex((e) => e.name === name);
+    if (i >= 0) _SCENE_EVALUATORS.splice(i, 1);
+    _SCENE_EVALUATORS.push({ name, order, fn });
+    _SCENE_EVALUATORS.sort((a, b) => a.order - b.order);
+}
+export function evaluateIn(scene, item, frame) {
+    let at = evaluate(item, frame);
+    if (!scene) return at;
+    for (const e of _SCENE_EVALUATORS) at = e.fn(scene, item, frame, at) || at;
+    return at;
+}
+export function valueIn(scene, item, prop, frame) {
+    return evaluateIn(scene, item, frame)[prop];
+}
+
 /** Frames where anything in the scene has a key — the timeline's tick marks. */
 export function sceneKeyframes(scene) {
     const out = new Set();
@@ -936,6 +954,8 @@ export function parseScene(raw) {
     if (data.walk && typeof data.walk === "object") scene.walk = walkSettings(data);
     const world = worldInfo(data);
     if (world) scene.world = world;
+    // The clip sequencer's tracks and sources (imageViewer_clipSeqData.js tidies them).
+    if (data.sequencer && typeof data.sequencer === "object") scene.sequencer = JSON.parse(JSON.stringify(data.sequencer));
     if (scene.activeCamera && !itemById(scene, scene.activeCamera)) scene.activeCamera = null;
     repairTree(scene);
     // Display layers, selection sets and references, their members held to the items there are.

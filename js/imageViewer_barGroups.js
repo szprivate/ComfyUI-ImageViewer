@@ -60,6 +60,7 @@ const GROUPS = [
         { label: "Character Picker", panel: "picker", needs: "3d" },
         { label: "Dope Sheet", panel: "dopeSheet", needs: "3d" },
         { label: "Playblast\u2026", run: (p) => p.previzPlayblastDialog(), needs: "3d" },
+        { label: "Clip Sequencer", panel: "clips", needs: "3d" },
     ] },
     // A motion-graphics scene is a tab; "Open scene" asks for one, the three panels are its parts.
     { id: "motion", title: "Motion", icon: "motion", items: [

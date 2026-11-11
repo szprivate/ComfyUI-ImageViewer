@@ -240,7 +240,10 @@ export const Rig3DMixin = {
         for (const ik of iks) {
             const [na, nb, nc] = ik.control.chain;
             if (!fk.has(na) || !fk.has(nb) || !fk.has(nc) || !cw.has(ik.id)) continue;
-            const blend = Math.max(0, Math.min(1, ik.tracks && ik.tracks.ikfk && ik.tracks.ikfk.length
+            // What the item was placed with this frame (keys, clips, layers), else its own keys.
+            const placed = frame === this.sceneFrame && this._entries.get(ik.id) && this._entries.get(ik.id).at;
+            const blend = Math.max(0, Math.min(1, placed && Number.isFinite(placed.ikfk) ? placed.ikfk
+                : ik.tracks && ik.tracks.ikfk && ik.tracks.ikfk.length
                 ? this._rigScalarAt(ik, "ikfk", frame) : (ik.ikfk ?? 1)));
             if (blend <= 0) continue;
             const A = mat4.decompose(fk.get(na)), B = mat4.decompose(fk.get(nb)), C = mat4.decompose(fk.get(nc));
