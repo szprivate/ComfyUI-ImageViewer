@@ -59,6 +59,7 @@ def why_failed():
 
 
 TAIL = []
+LAUNCH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "unirig_launch.py")
 
 
 def device():
@@ -162,7 +163,7 @@ def predict(title, repo, task, dev, args, voxels=False):
     for n, (d, vox) in enumerate(tries):
         last = n == len(tries) - 1
         label = title if n == 0 else f"{title} (again: {d}{', open3d voxels' if vox else ''})"
-        code = step(label, ["run.py", f"--task={task_for(repo, task, d, vox)}", *args], repo, fatal=last)
+        code = step(label, [LAUNCH, "run.py", f"--task={task_for(repo, task, d, vox)}", *args], repo, fatal=last)
         if code == 0:
             return
         print(f"!! {label} failed ({code}): {why_failed()}", flush=True)
