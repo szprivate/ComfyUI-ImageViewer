@@ -20,6 +20,8 @@ import { app } from "../../scripts/app.js";
 import { evaluateIn, cameraResolution, offsetOf, planeSettings } from "./imageViewer_scene3d.js";
 // The clip sequencer registers itself with the scene model on import (evaluateIn plays its clips).
 import "./imageViewer_clipSeqData.js";
+// Animation layers register their blend with the scene model on import.
+import "./imageViewer_animLayers.js";
 import { WorldViewMixin } from "./imageViewer_world3d.js";
 import { bustUrl } from "./imageViewer_atlasRender.js";
 import { WorldMatchMixin } from "./imageViewer_worldMatch.js";

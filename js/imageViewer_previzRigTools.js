@@ -283,7 +283,9 @@ export const PrevizRigToolsMixin = {
     previzRigKeyedFrames(modelId) {
         const frames = new Set();
         for (const c of R.controlsOf(this.previzScene(), modelId)) {
-            for (const p of ["position", "rotation"]) for (const k of S.track(c, p)) frames.add(k.f);
+            // Poses keyed on any animation layer (an AI take lies on a layer of its own).
+            const sets = [c.tracks, ...Object.values(c.layerTracks || {})];
+            for (const set of sets) for (const p of ["position", "rotation"]) for (const k of (set && set[p]) || []) frames.add(k.f);
         }
         return [...frames].sort((a, b) => a - b);
     },
@@ -420,6 +422,7 @@ export const PrevizRigToolsMixin = {
         if (feet) M.cleanFeet(frames, rest);
         // An in-between keeps the keys it was made between; what is between them is the model's.
         const bake = keepEnds ? frames.filter((fr) => fr.f > from && fr.f < to) : frames;
+        if (!bake.length) return { ok: false, message: "No frames to key between those poses." };
         if (scene.length < to + 1) { scene.length = to + 1; scene.lengthSet = true; }
         const what = label || (mode === "inbetween" ? "AI in-between" : "AI motion");
         // A take that lands as a clip: the controls' own keys are put back after it is taken off them.
@@ -437,6 +440,14 @@ export const PrevizRigToolsMixin = {
         const { keys, layer: onLayer } = this._previzRigBakeInto
             ? this._previzRigBakeInto(modelId, bake, { label: what, moveCog: true, ikfk: 0 }, layer)
             : { keys: this.previzRigBakePoses(modelId, bake, { label: what, moveCog: true, ikfk: 0 }), layer: null };
+        // A new layer for the take weighs 1 over the frames it covers and 0 outside
+        // them: an override layer would hold the take's end pose for ever otherwise.
+        const L = layer === "new" && onLayer && (scene.animLayers || []).find((l) => l.id === onLayer);
+        if (L) {
+            const lo = bake[0].f, hi = bake[bake.length - 1].f;
+            L.tracks = { ...(L.tracks || {}), weight: [{ f: lo - 1, v: 0, ease: "hold" }, { f: lo, v: 1, ease: "hold" }, { f: hi + 1, v: 0, ease: "hold" }] };
+            this.previzLayersChanged?.();
+        }
         return { ok: true, frames: bake.length, keys, layer: onLayer };
     },
 

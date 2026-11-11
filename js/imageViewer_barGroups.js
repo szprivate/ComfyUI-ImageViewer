@@ -55,6 +55,7 @@ const GROUPS = [
           needs: "3d" },
         { label: "Outliner", panel: "previz", needs: "3d" },
         { label: "Channel Box", panel: "channels", needs: "3d" },
+        { label: "Anim Layers", panel: "animLayers", needs: "3d" },
         { label: "Curve Editor", panel: "curves", needs: "3d" },
         { label: "Layers", panel: "layers3d", needs: "3d" },
         { label: "Character Picker", panel: "picker", needs: "3d" },

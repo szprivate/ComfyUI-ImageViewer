@@ -58,6 +58,17 @@
 // transform and nothing else: it draws no geometry and exists to hold others,
 // which is what a USD Xform or an assembly comes in as.
 //
+// ANIMATION LAYERS
+// A scene may carry `animLayers` (bottom first) above the item's own tracks,
+// which are the BASE layer. Each layer is {id, name, mode: "additive" |
+// "override", weight, mute, solo, lock, tracks: {weight: keys}} and an item's
+// keys on it are `item.layerTracks[layerId][prop]`, shaped as `item.tracks`.
+// `scene.activeLayer` (an id, or null for the base) is where keys go: every
+// key-editing function below (track, setKeyframe, removeKeyframe, the
+// tangents) works on the active layer of the scene the item is bound to
+// (bindScene). Evaluation is explicit: evaluate() is the base alone,
+// evaluateIn(scene, …) the whole stack (imageViewer_animLayers.js blends it).
+//
 // Nothing here walks the tree to place an item — the view parents three.js
 // objects the same way and lets the engine compose the matrices.
 
@@ -193,7 +204,9 @@ export function setStaticValue(item, prop, value) {
 }
 /** Every channel this item can have keys on: the fixed ones, then its extra ones. */
 export function trackProps(item) {
-    const extra = item && item.tracks ? Object.keys(item.tracks).filter(isExtraProp) : [];
+    // (Also the extras keyed on the animation layer being edited.)
+    const sets = [item && item.tracks, _readSet(item)].filter(Boolean);
+    const extra = [...new Set(sets.flatMap((t) => Object.keys(t).filter(isExtraProp)))];
     return extra.length ? [...TRACKS, ...extra] : TRACKS;
 }
 
@@ -491,20 +504,104 @@ function _withComponent(value, axis, x) {
     return out;
 }
 
-/** Keyframes of one property, oldest first. Never null. */
+// ── Which layer an edit goes to ─────────────────────────────────────────────
+
+// Items know their scene only through this map (bindScene), so a scene without
+// layers costs nothing and a stray item edits its base keys, as it always did.
+const _SCENE_OF = new WeakMap();
+
+/** Tell the key-editing functions which scene (and so which active layer) each item is in. */
+export function bindScene(scene) {
+    if (scene && Array.isArray(scene.items)) for (const it of scene.items) if (it && typeof it === "object") _SCENE_OF.set(it, scene);
+    return scene;
+}
+
+export function sceneOf(item) {
+    return (item && _SCENE_OF.get(item)) || null;
+}
+
+/** The layer keys of `scene` go to (null = the base). */
+export function activeLayerOf(scene) {
+    if (!scene || !scene.activeLayer || !Array.isArray(scene.animLayers)) return null;
+    return scene.animLayers.find((l) => l.id === scene.activeLayer) || null;
+}
+
+/** The layer an item's key edits go to: its scene's active layer, or null for the base. */
+export function editLayer(item) {
+    return activeLayerOf(sceneOf(item));
+}
+
+/** The track set edits of this item read: the active layer's keys, else its own. */
+function _readSet(item) {
+    if (!item) return null;
+    const layer = editLayer(item);
+    if (!layer) return item.tracks || null;
+    return (item.layerTracks && item.layerTracks[layer.id]) || null;
+}
+
+/** The track set an edit writes into, made when missing; null when the active layer is locked. */
+function _writeSet(item) {
+    if (!item) return null;
+    const layer = editLayer(item);
+    if (!layer) {
+        if (!item.tracks) item.tracks = {};
+        return item.tracks;
+    }
+    if (layer.lock) return null;
+    if (!item.layerTracks) item.layerTracks = {};
+    if (!item.layerTracks[layer.id]) item.layerTracks[layer.id] = {};
+    return item.layerTracks[layer.id];
+}
+
+/** Whether a key edit of this item would be refused (its active layer is locked). */
+export function editLocked(item) {
+    const layer = editLayer(item);
+    return !!(layer && layer.lock);
+}
+
+/** Keyframes of one property on the layer being edited, oldest first. Never null. */
 export function track(item, prop) {
+    // Extra channels (constraint weights, …) are read by their owners from the
+    // base: they stay there whatever layer is edited.
+    const set = isExtraProp(prop) ? (item && item.tracks) : _readSet(item);
+    const t = set && set[prop];
+    return Array.isArray(t) ? t : [];
+}
+
+/** Keyframes of one property on the base layer, whatever layer is being edited. */
+export function baseTrack(item, prop) {
     const t = item && item.tracks && item.tracks[prop];
     return Array.isArray(t) ? t : [];
+}
+
+/** Replace a whole track on the layer being edited (an empty list drops it). */
+export function setTrack(item, prop, keys) {
+    const set = isExtraProp(prop) ? (item.tracks || (item.tracks = {})) : _writeSet(item);
+    if (!set) return item;
+    if (Array.isArray(keys) && keys.length) set[prop] = keys.slice().sort((a, b) => a.f - b.f);
+    else delete set[prop];
+    return item;
 }
 
 export function isAnimated(item, prop) {
     return track(item, prop).length > 0;
 }
 
-/** Every frame this item has a key on, sorted, without duplicates. */
+/** Every frame this item has a key on (on the layer being edited), sorted, without duplicates. */
 export function keyframeFrames(item) {
     const out = new Set();
     for (const prop of trackProps(item)) for (const k of track(item, prop)) out.add(k.f);
+    return [...out].sort((a, b) => a - b);
+}
+
+/** Every frame this item has a key on, on ANY layer (the base, every layer). */
+export function allKeyframeFrames(item) {
+    const out = new Set();
+    const sets = [item && item.tracks, ...Object.values((item && item.layerTracks) || {})];
+    for (const set of sets) {
+        if (!set) continue;
+        for (const prop of Object.keys(set)) for (const k of Array.isArray(set[prop]) ? set[prop] : []) out.add(k.f);
+    }
     return [...out].sort((a, b) => a - b);
 }
 
@@ -515,8 +612,9 @@ export function keyframeFrames(item) {
 export function setKeyframe(item, prop, frame, value, ease) {
     if (!item || !(TRACKS.includes(prop) || isExtraProp(prop))) return item;
     const f = Math.round(frame);
-    if (!item.tracks) item.tracks = {};
-    const list = Array.isArray(item.tracks[prop]) ? item.tracks[prop] : [];
+    const set = isExtraProp(prop) ? (item.tracks || (item.tracks = {})) : _writeSet(item);
+    if (!set) return item;          // a locked layer takes no keys
+    const list = Array.isArray(set[prop]) ? set[prop] : [];
     const at = list.findIndex((k) => k.f === f);
     const key = { f, v: _clone(value), ease: ease || (at >= 0 ? list[at].ease : "smooth") };
     // Moving a key keeps the shape its handles were given; only the editor's
@@ -526,7 +624,7 @@ export function setKeyframe(item, prop, frame, value, ease) {
     if (at >= 0) list[at] = key;
     else list.push(key);
     list.sort((a, b) => a.f - b.f);
-    item.tracks[prop] = list;
+    set[prop] = list;
     return item;
 }
 
@@ -538,6 +636,7 @@ export function setKeyframe(item, prop, frame, value, ease) {
  * gives you by accident.
  */
 export function setTangent(item, prop, frame, axis, slope, { side = "out", broken = false } = {}) {
+    if (editLocked(item)) return null;
     const key = track(item, prop).find((k) => k.f === Math.round(frame));
     if (!key) return null;
     const blank = Array.isArray(key.v) ? key.v.map(() => 0) : 0;
@@ -552,6 +651,7 @@ export function setTangent(item, prop, frame, axis, slope, { side = "out", broke
 
 /** Back to what the key's ease says — the handles stop being hand-set. */
 export function clearTangents(item, prop, frame) {
+    if (editLocked(item)) return null;
     const key = track(item, prop).find((k) => k.f === Math.round(frame));
     if (!key) return null;
     delete key.ti;
@@ -564,7 +664,11 @@ export function clearTangents(item, prop, frame) {
  * What the editor draws its handles from.
  */
 export function tangentAt(item, prop, frame, axis, side = "out") {
-    const keys = track(item, prop);
+    return _keysTangent(track(item, prop), frame, axis, side);
+}
+
+/** tangentAt on a key list of its own (the base's, for infinity, whatever layer is edited). */
+function _keysTangent(keys, frame, axis, side = "out") {
     const i = keys.findIndex((k) => k.f === Math.round(frame));
     if (i < 0) return 0;
     const key = keys[i];
@@ -581,14 +685,16 @@ export function tangentAt(item, prop, frame, axis, side = "out") {
 
 /** Drop the key at `frame` (all properties when `prop` is omitted). */
 export function removeKeyframe(item, frame, prop) {
-    if (!item || !item.tracks) return item;
+    if (!item) return item;
     const f = Math.round(frame);
     for (const p of prop ? [prop] : trackProps(item)) {
-        const list = item.tracks[p];
+        // Extra channels live on the base; the rest on the layer being edited.
+        const set = isExtraProp(p) ? item.tracks : (_readSet(item) ? _writeSet(item) : null);
+        const list = set && set[p];
         if (!Array.isArray(list)) continue;
         const left = list.filter((k) => k.f !== f);
-        if (left.length) item.tracks[p] = left;
-        else delete item.tracks[p];
+        if (left.length) set[p] = left;
+        else delete set[p];
     }
     return item;
 }
@@ -597,13 +703,15 @@ export function removeKeyframe(item, frame, prop) {
 export function clearTracks(item, frame) {
     if (!item) return item;
     if (frame !== undefined) {
-        const at = evaluate(item, frame);
+        // Where it is on screen, every layer counted.
+        const at = evaluateIn(sceneOf(item), item, frame);
         item.position = at.position;
         item.rotation = at.rotation;
         item.scale = at.scale;
         if (item.kind === "camera") item.fov = at.fov;
     }
     item.tracks = {};
+    delete item.layerTracks;
     return item;
 }
 
@@ -665,6 +773,7 @@ function _lerp(a, b, t, angles) {
 //   offset    - cycles, each turn starting where the last one ended
 //               (a walk that keeps walking)
 //   oscillate - forwards, then backwards, then forwards
+// It applies to the BASE layer's keys (an animation layer's curve holds its ends).
 export const INFINITY_MODES = ["constant", "linear", "cycle", "offset", "oscillate"];
 
 /** `{ pre, post }` of one property, "constant" where nothing is set. */
@@ -692,14 +801,14 @@ export function setInfinity(item, prop, patch = {}) {
 export function hasInfinity(item) {
     return TRACKS.some((p) => {
         const inf = infinityOf(item, p);
-        return track(item, p).length > 1 && (inf.pre !== "constant" || inf.post !== "constant");
+        return baseTrack(item, p).length > 1 && (inf.pre !== "constant" || inf.post !== "constant");
     });
 }
 
 const _addV = (a, b, k) => (Array.isArray(a) ? a.map((x, i) => x + componentOf(b, i) * k) : a + b * k);
 const _subV = (a, b) => (Array.isArray(a) ? a.map((x, i) => x - componentOf(b, i)) : a - b);
 
-/** `frame` outside the keys, read through the infinity mode. Null when the keys say it. */
+/** `frame` outside the (base) keys, read through the infinity mode. Null when the keys say it. */
 function _beyond(item, prop, keys, frame) {
     const first = keys[0], last = keys[keys.length - 1];
     const before = frame < first.f;
@@ -711,8 +820,8 @@ function _beyond(item, prop, keys, frame) {
         const end = before ? first : last;
         const side = before ? "out" : "in";
         const slope = Array.isArray(end.v)
-            ? end.v.map((_, a) => tangentAt(item, prop, end.f, a, side))
-            : tangentAt(item, prop, end.f, 0, side);
+            ? end.v.map((_, a) => _keysTangent(keys, end.f, a, side))
+            : _keysTangent(keys, end.f, 0, side);
         return _addV(_clone(end.v), slope, frame - end.f);
     }
     const rel = frame - first.f;
@@ -725,9 +834,20 @@ function _beyond(item, prop, keys, frame) {
     return _addV(v, _subV(last.v, first.v), turns);
 }
 
-/** The value of one property at `frame`, animated or not. */
+/** The item's own (static) value of a property: what it holds without keys. */
+export function staticValue(item, prop) {
+    // A scene written before pivots existed simply has none, which is the
+    // same thing as one at the origin.
+    return prop === "fov" ? (item.fov ?? 35)
+         : prop === "ikfk" ? (item.ikfk ?? 1)
+         : prop === "pivot" ? _clone(item.pivot || [0, 0, 0])
+         : isExtraProp(prop) ? _extraStatic(item, prop)
+         : _clone(item[prop]);
+}
+
+/** The value of one property at `frame` on the BASE layer, animated or not. */
 export function valueAt(item, prop, frame) {
-    const keys = track(item, prop);
+    const keys = baseTrack(item, prop);
     if (keys.length > 1) {
         const out = _beyond(item, prop, keys, frame);
         // The IK / FK blend stays a blend however far a line runs on.
@@ -738,14 +858,33 @@ export function valueAt(item, prop, frame) {
 
 /** valueAt without the infinity: what the keys themselves say. */
 function _inside(item, prop, keys, frame) {
-    // A scene written before pivots existed simply has none, which is the
-    // same thing as one at the origin.
-    const stat = prop === "fov" ? (item.fov ?? 35)
-               : prop === "ikfk" ? (item.ikfk ?? 1)
-               : prop === "pivot" ? _clone(item.pivot || [0, 0, 0])
-               : isExtraProp(prop) ? _extraStatic(item, prop)
-               : _clone(item[prop]);
-    if (keys.length === 0) return stat;
+    return keysValueAt(keys, prop, frame, staticValue(item, prop));
+}
+
+/**
+ * The value of the layer being edited at `frame`: the base's for the base, a
+ * layer's own curve for a layer (its offset on an additive one). What the curve
+ * editor draws.
+ */
+export function editValueAt(item, prop, frame) {
+    const layer = editLayer(item);
+    if (!layer) return valueAt(item, prop, frame);
+    const rest = layer.mode === "additive" ? layerIdentity(prop, item) : valueAt(item, prop, frame);
+    return keysValueAt(track(item, prop), prop, frame, rest);
+}
+
+/** What an additive layer adds when it holds nothing: zero, or 1 for scale. */
+export function layerIdentity(prop, item) {
+    if (prop === "scale") return [1, 1, 1];
+    if (_isScalar(prop)) return 0;
+    const v = item ? staticValue(item, prop) : null;
+    return Array.isArray(v) ? v.map(() => 0) : [0, 0, 0];
+}
+
+/** A key list's value at `frame` — the curve itself; `stat` when there are no keys. */
+export function keysValueAt(keys, prop, frame, stat) {
+    keys = Array.isArray(keys) ? keys : [];
+    if (keys.length === 0) return _clone(stat);
     if (frame <= keys[0].f) return _clone(keys[0].v);
     const last = keys[keys.length - 1];
     if (frame >= last.f) return _clone(last.v);
@@ -800,10 +939,91 @@ export function valueIn(scene, item, prop, frame) {
     return evaluateIn(scene, item, frame)[prop];
 }
 
+/** valueIn, falling back to the base value for a prop the item's kind does not evaluate. */
+export function currentValue(scene, item, prop, frame) {
+    const v = valueIn(scene, item, prop, frame);
+    return v !== undefined ? v : valueAt(item, prop, frame);
+}
+
+/**
+ * What to key on the layer being edited at `frame` so that the WHOLE stack
+ * shows `wanted` there - a pose made with the gizmo or the Channel Box lands
+ * where it was made, whatever layers lie above or below.
+ *
+ * Every blend is affine in the edited layer's value (additive adds, override
+ * mixes, scale multiplies), so two probes give the line and one more corrects
+ * whatever is not quite (a clamp, a sequencer's blend). A layer that cannot move
+ * the result (weight 0, muted, overridden from above) is keyed with `wanted`.
+ */
+export function solvePose(scene, item, prop, frame, wanted) {
+    if (!scene || !_SCENE_EVALUATORS.length || !item) return _clone(wanted);
+    const f = Math.round(frame);
+    const layer = activeLayerOf(scene);
+    const probe = (x) => {
+        const copy = { ...item };
+        const one = [{ f, v: _clone(x), ease: "hold" }];
+        if (layer) {
+            const lt = { ...(item.layerTracks || {}) };
+            lt[layer.id] = { ...(lt[layer.id] || {}), [prop]: one };
+            copy.layerTracks = lt;
+        } else {
+            copy.tracks = { ...(item.tracks || {}), [prop]: one };
+        }
+        return currentValue(scene, copy, prop, f);
+    };
+    const vec = Array.isArray(wanted);
+    const at = (v, i) => (vec ? v[i] : v);
+    const n = vec ? wanted.length : 1;
+    const fill = (fn) => (vec ? wanted.map((_, i) => fn(i)) : fn(0));
+    // Pairs of probe values, tried in turn per component until one moves the
+    // result (a clamp, e.g. ikfk's 0..1, can hide the first pair's effect).
+    const pairs = [[0, 1], [-1, 0], [(i) => at(wanted, i) - 1, (i) => at(wanted, i)], [-2, -1], [1, 2]];
+    const xa = new Array(n), slope = new Array(n).fill(0), ca = new Array(n);
+    for (const [pa, pb] of pairs) {
+        const va = fill((i) => (typeof pa === "function" ? pa(i) : pa));
+        const vb = fill((i) => (typeof pb === "function" ? pb(i) : pb));
+        const ra = probe(va), rb = probe(vb);
+        let open = false;
+        for (let i = 0; i < n; i++) {
+            if (Math.abs(slope[i]) >= 1e-9) continue;
+            const a = (at(rb, i) - at(ra, i)) / ((at(vb, i) - at(va, i)) || 1);
+            xa[i] = at(va, i); ca[i] = at(ra, i); slope[i] = a;
+            if (Math.abs(a) < 1e-9) open = true;
+        }
+        if (!open) break;
+    }
+    const out = [];
+    for (let i = 0; i < n; i++) {
+        out.push(Math.abs(slope[i]) < 1e-9 ? at(wanted, i) : xa[i] + (at(wanted, i) - ca[i]) / slope[i]);
+    }
+    // One correction for anything not quite affine (a sequencer's blend).
+    const check = probe(vec ? out : out[0]);
+    for (let i = 0; i < n; i++) {
+        const err = at(wanted, i) - at(check, i);
+        if (Math.abs(slope[i]) >= 1e-9 && Math.abs(err) > 1e-7) out[i] += err / slope[i];
+    }
+    return vec ? out : out[0];
+}
+
+/** Key `prop` on the layer being edited so the stack shows `wanted` at `frame`. */
+export function keyPose(scene, item, prop, frame, wanted, ease) {
+    return setKeyframe(item, prop, frame, solvePose(scene, item, prop, frame, wanted), ease);
+}
+
+/**
+ * Put `prop` where `wanted` says at `frame`: a key when `key` is asked for, the
+ * property is keyed on the layer being edited, or that layer is not the base
+ * (a layer holds animation only); else the item's own static value.
+ */
+export function setPose(scene, item, prop, frame, wanted, { key = false, ease } = {}) {
+    if (key || isAnimated(item, prop) || activeLayerOf(scene)) return keyPose(scene, item, prop, frame, wanted, ease);
+    return setStaticValue(item, prop, solvePose(scene, item, prop, frame, wanted));
+}
+
 /** Frames where anything in the scene has a key — the timeline's tick marks. */
 export function sceneKeyframes(scene) {
     const out = new Set();
-    for (const it of (scene && scene.items) || []) for (const f of keyframeFrames(it)) out.add(f);
+    for (const it of (scene && scene.items) || []) for (const f of allKeyframeFrames(it)) out.add(f);
     return [...out].sort((a, b) => a - b);
 }
 
@@ -812,6 +1032,42 @@ export function isAnimatedScene(scene) {
 }
 
 // ── Serialization ────────────────────────────────────────────────────────────
+
+export const LAYER_MODES = ["additive", "override"];
+
+/** The animation layers a scene file holds, cleaned: bottom first, unique ids, weights 0..1. */
+export function readAnimLayers(data) {
+    const list = data && Array.isArray(data.animLayers) ? data.animLayers : [];
+    const out = [];
+    const seen = new Set();
+    for (const raw of list) {
+        if (!raw || typeof raw !== "object") continue;
+        const id = typeof raw.id === "string" && raw.id && !seen.has(raw.id) ? raw.id : newId("L");
+        seen.add(id);
+        const w = Number(raw.weight);
+        const layer = {
+            id,
+            name: typeof raw.name === "string" && raw.name.trim() ? raw.name.trim().slice(0, 80) : `AnimLayer${out.length + 1}`,
+            mode: LAYER_MODES.includes(raw.mode) ? raw.mode : "additive",
+            weight: Number.isFinite(w) ? Math.max(0, Math.min(1, w)) : 1,
+            mute: raw.mute === true,
+            solo: raw.solo === true,
+            lock: raw.lock === true,
+            tracks: {},
+        };
+        const wk = raw.tracks && Array.isArray(raw.tracks.weight) ? raw.tracks.weight : [];
+        const keys = [];
+        for (const k of wk) {
+            if (!k || !Number.isFinite(Number(k.f)) || !Number.isFinite(Number(k.v))) continue;
+            keys.push({ f: Math.round(Number(k.f)), v: Math.max(0, Math.min(1, Number(k.v))),
+                        ease: k.ease === "linear" || k.ease === "hold" ? k.ease : "smooth" });
+        }
+        if (keys.length) layer.tracks.weight = keys.sort((a, b) => a.f - b.f);
+        out.push(layer);
+    }
+    return out;
+}
+
 
 /**
  * A scene read from a file, a node widget or an older viewer state, with
@@ -898,33 +1154,49 @@ export function parseScene(raw) {
             item.src = raw.src && typeof raw.src === "object" ? raw.src : null;
         }
 
-        const tracks = raw.tracks && typeof raw.tracks === "object" ? raw.tracks : {};
-        for (const prop of [...TRACKS, ...Object.keys(tracks).filter(isExtraProp)]) {
-            const list = Array.isArray(tracks[prop]) ? tracks[prop] : null;
-            if (!list) continue;
-            const keys = [];
-            for (const k of list) {
-                if (!k || !Number.isFinite(Number(k.f))) continue;
-                const v = prop === "fov" ? num(k.v, item.fov ?? 35)
-                    : prop === "ikfk" ? Math.max(0, Math.min(1, num(k.v, item.ikfk ?? 1)))
-                    : isExtraProp(prop) ? num(k.v, 0)
-                    : vec(k.v, item[prop]);
-                const key = { f: Math.round(Number(k.f)), v,
-                              ease: k.ease === "linear" || k.ease === "hold" ? k.ease : "smooth" };
-                // Hand-set tangents, in the same shape as the value. Anything
-                // else is left off, and the ease speaks for the key again.
-                const zero = _isScalar(prop) ? 0 : [0, 0, 0];
-                for (const side of ["ti", "to"]) {
-                    if (k[side] === undefined) continue;
-                    const t = _isScalar(prop) ? num(k[side], undefined) : vec(k[side], zero);
-                    if (_isScalar(prop) ? Number.isFinite(t) : Array.isArray(t)) key[side] = t;
+        const readSet = (tracks, onLayer = false) => {
+            const out = {};
+            tracks = tracks && typeof tracks === "object" ? tracks : {};
+            for (const prop of [...TRACKS, ...Object.keys(tracks).filter(isExtraProp)]) {
+                const list = Array.isArray(tracks[prop]) ? tracks[prop] : null;
+                if (!list) continue;
+                const keys = [];
+                for (const k of list) {
+                    if (!k || !Number.isFinite(Number(k.f))) continue;
+                    const v = prop === "fov" ? num(k.v, item.fov ?? 35)
+                        : prop === "ikfk" ? Math.max(onLayer ? -1 : 0, Math.min(1, num(k.v, onLayer ? 0 : (item.ikfk ?? 1))))
+                        : isExtraProp(prop) ? num(k.v, 0)
+                        : vec(k.v, item[prop]);
+                    const key = { f: Math.round(Number(k.f)), v,
+                                  ease: k.ease === "linear" || k.ease === "hold" ? k.ease : "smooth" };
+                    // Hand-set tangents, in the same shape as the value. Anything
+                    // else is left off, and the ease speaks for the key again.
+                    const zero = _isScalar(prop) ? 0 : [0, 0, 0];
+                    for (const side of ["ti", "to"]) {
+                        if (k[side] === undefined) continue;
+                        const t = _isScalar(prop) ? num(k[side], undefined) : vec(k[side], zero);
+                        if (_isScalar(prop) ? Number.isFinite(t) : Array.isArray(t)) key[side] = t;
+                    }
+                    keys.push(key);
                 }
-                keys.push(key);
+                if (keys.length) {
+                    keys.sort((a, b) => a.f - b.f);
+                    out[prop] = keys;
+                }
             }
-            if (keys.length) {
-                keys.sort((a, b) => a.f - b.f);
-                item.tracks[prop] = keys;
+            return out;
+        };
+        item.tracks = readSet(raw.tracks);
+        // Keys on animation layers: the same shapes, one set per layer id
+        // (layers that are not in the scene are dropped below).
+        if (raw.layerTracks && typeof raw.layerTracks === "object") {
+            const lt = {};
+            for (const [lid, set] of Object.entries(raw.layerTracks)) {
+                if (typeof lid !== "string" || !lid) continue;
+                const one = readSet(set, true);
+                if (Object.keys(one).length) lt[lid] = one;
             }
+            if (Object.keys(lt).length) item.layerTracks = lt;
         }
         if (raw.infinity && typeof raw.infinity === "object") {
             for (const prop of TRACKS) {
@@ -957,10 +1229,25 @@ export function parseScene(raw) {
     // The clip sequencer's tracks and sources (imageViewer_clipSeqData.js tidies them).
     if (data.sequencer && typeof data.sequencer === "object") scene.sequencer = JSON.parse(JSON.stringify(data.sequencer));
     if (scene.activeCamera && !itemById(scene, scene.activeCamera)) scene.activeCamera = null;
+    // Animation layers (imageViewer_animLayers.js blends them).
+    const layers = readAnimLayers(data);
+    if (layers.length) {
+        scene.animLayers = layers;
+        if (typeof data.activeLayer === "string" && layers.some((l) => l.id === data.activeLayer)) {
+            scene.activeLayer = data.activeLayer;
+        }
+    }
+    const known = new Set(layers.map((l) => l.id));
+    for (const it of items) {
+        if (!it.layerTracks) continue;
+        for (const lid of Object.keys(it.layerTracks)) if (!known.has(lid)) delete it.layerTracks[lid];
+        if (!Object.keys(it.layerTracks).length) delete it.layerTracks;
+    }
     repairTree(scene);
     // Display layers, selection sets and references, their members held to the items there are.
     readSceneLayers(scene, data);
     pruneConstraints(scene);
+    bindScene(scene);
     return scene;
 }
 

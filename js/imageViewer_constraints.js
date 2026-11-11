@@ -300,7 +300,7 @@ export function solver(scene, frame) {
     function raw(id) {
         if (rawMemo.has(id)) return rawMemo.get(id);
         const item = byId.get(id);
-        const ch = S.evaluate(item, frame);
+        const ch = S.evaluateIn(scene, item, frame);
         const root = multiply(parentFrame(item, false), localMatrix(ch));
         const out = { root, inner: innerOf(item, root, ch.pivot), local: ch };
         rawMemo.set(id, out);
@@ -314,7 +314,7 @@ export function solver(scene, frame) {
         if (busy.has(id)) { loops.add(id); return raw(id); }
         busy.add(id);
         const P = parentFrame(item, true);
-        let ch = S.evaluate(item, frame);
+        let ch = S.evaluateIn(scene, item, frame);
         if (isConstrained(item)) ch = applyConstraints(item, ch, P, frame, world, byId);
         const root = multiply(P, localMatrix(ch));
         const out = { root, inner: innerOf(item, root, ch.pivot), local: ch };
@@ -517,7 +517,7 @@ export function captureOffsets(scene, item, c, frame) {
     const parent = item.parent ? sv.world(item.parent) : null;
     let P = parent ? parent.inner : identity();
     if (Array.isArray(item.rest) && item.rest.length === 16) P = multiply(P, item.rest.map(Number));
-    let ch = S.evaluate(item, frame);
+    let ch = S.evaluateIn(scene, item, frame);
     if (before.constraints.length) ch = applyConstraints(before, ch, P, frame, sv.world, byId);
     const W = multiply(P, localMatrix(ch));
     const d = decompose(W);

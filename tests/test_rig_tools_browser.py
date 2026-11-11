@@ -475,10 +475,13 @@ class RigToolsBrowserTests(unittest.TestCase):
             for t in ("Clean up feet",):
                 self._menu(pg, t)
             # Keep frames 0 and 48 only, then ask for what is between them.
+            # (The text motion went onto an animation layer of its own: its keys are filtered too.)
             pg.evaluate("""() => { for (const it of window.__panel.previzScene().items) if (it.kind === 'control')
-                           for (const p of Object.keys(it.tracks || {})) it.tracks[p] = it.tracks[p].filter((k) => k.f === 0 || k.f === 48); }""")
+                           for (const set of [it.tracks || {}, ...Object.values(it.layerTracks || {})])
+                           for (const p of Object.keys(set)) set[p] = set[p].filter((k) => k.f === 0 || k.f === 48); }""")
             self._menu(pg, "AI in-between")
             self._go(pg, "AI in-between (Kimodo)")
+            self.layers = pg.evaluate("() => window.__panel.previzScene().animLayers || []")
             self._menu(pg, "Export FBX")
             self._go(pg, "Export FBX")
             self._menu(pg, "Export Alembic")
@@ -491,6 +494,9 @@ class RigToolsBrowserTests(unittest.TestCase):
         self.assertEqual(len(motions), 2)
         self.assertEqual(motions[0]["prompt"], "A person walks forward.")
         self.assertEqual(motions[0]["mode"], "text")
+        # Each AI take landed on an override layer of its own.
+        self.assertEqual([(l["name"].split(" ")[0:2], l["mode"]) for l in self.layers],
+                         [(["AI", "motion"], "override"), (["AI", "in-between"], "override")])
         self.assertEqual(motions[1]["mode"], "inbetween")
         self.assertEqual((keyed[0], keyed[-1]), (0, 48))           # keyed over the shot (reduced where it is straight)
         self.assertGreater(len(keyed), 20)

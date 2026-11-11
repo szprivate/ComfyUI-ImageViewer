@@ -49,6 +49,7 @@ import { ClipVfxMixin } from "./imageViewer_clipVfx.js";
 import { LoraPanelMixin } from "./imageViewer_loraPanel.js";
 import { PrevizChannelsMixin } from "./imageViewer_previzChannels.js";
 import { PrevizLayersMixin } from "./imageViewer_previzLayers.js";
+import { AnimLayersMixin } from "./imageViewer_animLayersPanel.js";
 import { PrevizHotkeysMixin } from "./imageViewer_previzHotkeys.js";
 import { PrevizRenderMixin } from "./imageViewer_previzRender.js";
 import { PrevizShotMixin } from "./imageViewer_previzShot.js";
@@ -844,6 +845,15 @@ class ViewerPanel extends HTMLElement {
             }
             this[prop] = lp;
         }
+        // Anim Layers, the same way (a cached older markup lacks it).
+        this.animLayersPanel = sr.getElementById('anim-layers-panel');
+        if (!this.animLayersPanel && this.channelsPanel && this.channelsPanel.parentNode) {
+            const al = this.channelsPanel.ownerDocument.createElement('div');
+            al.id = 'anim-layers-panel';
+            al.className = 'previz-panel anim-layers-panel right';
+            this.channelsPanel.parentNode.insertBefore(al, this.channelsPanel.nextSibling);
+            this.animLayersPanel = al;
+        }
     }
 
     /** Set inline SVG icon on an element from the loaded skin. */
@@ -1631,6 +1641,7 @@ Object.assign(
     LoraPanelMixin,
     PrevizChannelsMixin,
     PrevizLayersMixin,
+    AnimLayersMixin,
     PrevizHotkeysMixin,
     PrevizRenderMixin,
     PrevizShotMixin,

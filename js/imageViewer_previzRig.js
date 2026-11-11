@@ -112,11 +112,13 @@ export const PrevizRigMixin = {
     previzRigKeyAll(modelId = this.previzRigModelOf()) {
         const ctrls = R.controlsOf(this.previzScene(), modelId);
         if (!ctrls.length) return;
+        if (this.previzLayerRefuseLocked && this.previzLayerRefuseLocked()) return;
         this.previzSnapshot("key rig");
         const frame = Math.round(this.currentFrame || 0);
+        const scene = this.previzScene();
         for (const c of ctrls) {
             for (const p of c.control.type === "ik" ? ["position", "rotation", "ikfk"] : ["position", "rotation"]) {
-                S.setKeyframe(c, p, frame, S.valueAt(c, p, frame), this._previzEase || "smooth");
+                S.keyPose(scene, c, p, frame, S.currentValue(scene, c, p, frame), this._previzEase || "smooth");
             }
         }
         this.previzChanged();
@@ -136,9 +138,9 @@ export const PrevizRigMixin = {
     },
 
     _previzRigWrite(item, prop, value, frame, { key = false } = {}) {
-        if (key || this._previzAutokey || S.isAnimated(item, prop)) {
-            S.setKeyframe(item, prop, frame, value, this._previzEase || "smooth");
-        } else item[prop] = Array.isArray(value) ? value.slice() : value;
+        // Through the animation layers: what makes the whole stack show `value`.
+        S.setPose(this.previzScene(), item, prop, frame, value,
+                  { key: key || this._previzAutokey, ease: this._previzEase || "smooth" });
     },
 
     /** The model-space world matrix of an item's parent (a control's parent: another control or the rig group). */
@@ -151,7 +153,7 @@ export const PrevizRigMixin = {
             chain.unshift(p);
         }
         for (const p of chain) {
-            const at = S.evaluate(p, frame);
+            const at = S.evaluateIn(this.previzScene(), p, frame);
             const local = p.kind === "control" ? R.controlLocal(p, at)
                 : R.mat4.mul(R.mat4.mul(R.mat4.compose(R.v3.add(at.position, at.pivot), R.quat.fromEulerDeg(at.rotation), at.scale),
                                         R.mat4.compose(R.v3.scale(at.pivot, -1), [0, 0, 0, 1], [1, 1, 1])),
@@ -176,7 +178,7 @@ export const PrevizRigMixin = {
         const roles = (rigGroup && rigGroup.rig && rigGroup.rig.roles) || {};
         for (const c of ctrls) {
             const parentW = this._previzRigParentWorld(scene, c, worlds, frame);
-            const at = S.evaluate(c, frame);
+            const at = S.evaluateIn(this.previzScene(), c, frame);
             let want = null;
             const t = c.control.type;
             if (t === "fk" && pose.has(c.control.bone) && c.control.bind) {
@@ -229,7 +231,7 @@ export const PrevizRigMixin = {
         if (!ik) { notice("info", "Select a limb's IK control, pole or FK control to switch it."); return; }
         const modelId = ik.control.model;
         const frame = Math.round(this.currentFrame || 0);
-        const now = S.valueAt(ik, "ikfk", frame);
+        const now = S.currentValue(scene, ik, "ikfk", frame);
         const target = to === "ik" ? 1 : to === "fk" ? 0 : (now >= 0.5 ? 0 : 1);
         const pose = this._modelView().rigPose(modelId);
         if (!pose) return;
@@ -250,12 +252,12 @@ export const PrevizRigMixin = {
         // The blend: keyed with a hold when the limb is animated, so the
         // switch happens on this frame and not over the frames before it.
         if (S.isAnimated(ik, "ikfk") || this._previzAutokey || S.keyframeFrames(ik).length) {
-            S.setKeyframe(ik, "ikfk", frame, target, "hold");
+            S.keyPose(scene, ik, "ikfk", frame, target, "hold");
             const keys = S.track(ik, "ikfk");
             const prev = keys.filter((k) => k.f < frame).pop();
             if (prev) prev.ease = "hold";
-            else if (frame > 0) S.setKeyframe(ik, "ikfk", Math.max(0, frame - 1), 1 - target, "hold");
-        } else ik.ikfk = target;
+            else if (frame > 0) S.keyPose(scene, ik, "ikfk", Math.max(0, frame - 1), 1 - target, "hold");
+        } else S.setPose(scene, ik, "ikfk", frame, target);
         this.previzChanged();
     },
 
@@ -335,18 +337,19 @@ export const PrevizRigMixin = {
      * can be switched afterwards without a jump. The keys are thinned to the
      * ones that matter (`tolerance` in degrees / scene units).
      */
-    previzRigBakePoses(modelId, frames, { label = "bake", tolerance = 0.05, ikfk = 0, moveCog = false } = {}) {
+    previzRigBakePoses(modelId, frames, { label = "bake", tolerance = 0.05, ikfk = 0, moveCog = false, snapshot = true } = {}) {
         const scene = this.previzScene();
         const ctrls = R.controlsOf(scene, modelId);
         if (!ctrls.length || !frames.length) return 0;
-        this.previzSnapshot(label);
+        if (this.previzLayerRefuseLocked && this.previzLayerRefuseLocked()) return 0;
+        if (snapshot) this.previzSnapshot(label);
         const lo = frames[0].f, hi = frames[frames.length - 1].f;
         // Clear what was there over the range, so the bake is all that is left on it.
         for (const c of ctrls) {
             for (const p of ["position", "rotation", "ikfk"]) {
+                // On the layer being edited (an AI take on a layer of its own leaves the base alone).
                 const keys = S.track(c, p);
-                if (keys.length) c.tracks[p] = keys.filter((k) => k.f < lo || k.f > hi);
-                if (c.tracks[p] && !c.tracks[p].length) delete c.tracks[p];
+                if (keys.length) S.setTrack(c, p, keys.filter((k) => k.f < lo || k.f > hi));
             }
         }
         const samples = new Map(ctrls.map((c) => [c.id, { position: [], rotation: [] }]));
@@ -371,13 +374,15 @@ export const PrevizRigMixin = {
                 if (prop === "position" && c.control.type === "fk"
                     && s[prop].every((k) => Math.abs(k.v[0]) + Math.abs(k.v[1]) + Math.abs(k.v[2]) < 1e-4 * height)) continue;
                 for (const k of R.reduceKeys(s[prop], tol)) {
-                    S.setKeyframe(c, prop, k.f, k.v, "linear");
+                    // Solved through the layers, so the stack shows the pose
+                    // whatever layer (and weight) is being keyed.
+                    S.keyPose(scene, c, prop, k.f, k.v, "linear");
                     keys++;
                 }
             }
             if (c.control.type === "ik") {
-                S.setKeyframe(c, "ikfk", lo, ikfk, "hold");
-                if (hi > lo) S.setKeyframe(c, "ikfk", hi, ikfk, "hold");
+                S.keyPose(scene, c, "ikfk", lo, ikfk, "hold");
+                if (hi > lo) S.keyPose(scene, c, "ikfk", hi, ikfk, "hold");
             }
         }
         this.previzChanged();
@@ -457,7 +462,7 @@ export const PrevizRigMixin = {
             { label: "Key all controls", disabled: !rigged, run: () => this.previzRigKeyAll(modelId) },
             { label: "Rest pose", disabled: !rigged, run: () => this.previzRigToRest(modelId) },
             { label: "Mirror pose", disabled: !rigged || !sel || sel.kind !== "control", run: () => this.previzRigMirrorPose() },
-            { label: ik ? (S.valueAt(ik, "ikfk", Math.round(this.currentFrame || 0)) >= 0.5 ? "Switch limb to FK" : "Switch limb to IK") : "Switch limb IK / FK",
+            { label: ik ? (S.currentValue(this.previzScene(), ik, "ikfk", Math.round(this.currentFrame || 0)) >= 0.5 ? "Switch limb to FK" : "Switch limb to IK") : "Switch limb IK / FK",
               disabled: !ik, run: () => this.previzRigSwitchIkFk(sel.id) },
             { label: "Bake file's animation to controls", disabled: !rigged, run: () => this.previzRigBakeClip(modelId) },
             "-",
