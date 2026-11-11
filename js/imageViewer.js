@@ -54,6 +54,7 @@ import { AtlasCreateMixin } from "./imageViewer_atlasCreate.js";
 import { AtlasChiselMixin } from "./imageViewer_atlasChisel.js";
 import { PrevizUndoMixin } from "./imageViewer_previzUndo.js";
 import { PrevizRigMixin } from "./imageViewer_previzRig.js";
+import { PrevizConstraintsMixin } from "./imageViewer_previzConstraints.js";
 import { PrevizRigToolsMixin } from "./imageViewer_previzRigTools.js";
 import { EditTimelineMixin } from "./imageViewer_editTimeline.js";
 import { EditPlayMixin } from "./imageViewer_editPlay.js";
@@ -1613,6 +1614,7 @@ Object.assign(
     AtlasChiselMixin,
     PrevizUndoMixin,
     PrevizRigMixin,
+    PrevizConstraintsMixin,
     PrevizRigToolsMixin,
     EditTimelineMixin,
     EditPlayMixin,

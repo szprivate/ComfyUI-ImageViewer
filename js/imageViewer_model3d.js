@@ -24,6 +24,7 @@ import { WorldMatchMixin } from "./imageViewer_worldMatch.js";
 import { Rig3DMixin } from "./imageViewer_rig3d.js";
 import { View3DToolsMixin } from "./imageViewer_view3dTools.js";
 import { displayStates, isPickable } from "./imageViewer_sceneLayers.js";
+import { constrainedLocals } from "./imageViewer_constraints.js";
 
 let _libsPromise = null;
 
@@ -1627,6 +1628,9 @@ export class Model3DView {
             }
         }
         this._syncTemplates(layers);
+        // Constraints (imageViewer_constraints.js) move their items now that
+        // everything they follow has its own channels in place.
+        this._applyConstraints(frame);
         // Characters with controls: pose their bones now that every control is placed.
         this._rigApplyAll();
         // The gizmo is a controller, not an object; its handles live in the
@@ -1636,6 +1640,33 @@ export class Model3DView {
         this._syncPivotMark();
         this._syncGate();
         this.requestRender();
+    }
+
+    /**
+     * Put every constrained item where its constraints say. The solver works
+     * on the scene data with the same transform chain this view builds, so
+     * it only hands back channels: written into the root here (a camera,
+     * which lives at the top in world space, gets its world matrix).
+     */
+    _applyConstraints(frame) {
+        const locals = this.scene3d ? constrainedLocals(this.scene3d, frame) : new Map();
+        this._constrainedNow = locals;
+        if (!locals.size) return;
+        const { THREE } = this.libs;
+        const D = Math.PI / 180;
+        for (const [id, ch] of locals) {
+            const entry = this._entries.get(id);
+            if (!entry) continue;
+            if (entry.camera) {
+                new THREE.Matrix4().fromArray(ch.root).decompose(entry.root.position, entry.root.quaternion, entry.root.scale);
+                continue;
+            }
+            const pv = ch.pivot || [0, 0, 0];
+            entry.root.position.set(ch.position[0] + pv[0], ch.position[1] + pv[1], ch.position[2] + pv[2]);
+            entry.root.rotation.set(ch.rotation[0] * D, ch.rotation[1] * D, ch.rotation[2] * D);
+            entry.root.scale.set(...ch.scale);
+        }
+        this.scene.updateMatrixWorld(true);
     }
 
     // ── Cameras: the lens and the gate ───────────────────────────────────────

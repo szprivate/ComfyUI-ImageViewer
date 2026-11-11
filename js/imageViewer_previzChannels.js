@@ -18,6 +18,7 @@
 // so playback — which comes through here every frame — neither rebuilds the
 // panel nor steals the field you are typing in.
 import * as S from "./imageViewer_scene3d.js";
+import { constraintOf, parseWeightProp, weightRange } from "./imageViewer_constraintData.js";
 
 // id → [prop, component, label, step]; component is null for a lone number.
 const TRANSFORM = [
@@ -88,7 +89,7 @@ export const PrevizChannelsMixin = {
         const scene = this.previzScene();
         const looking = !!(item && scene && scene.activeCamera === item.id);
         // Everything that decides WHICH rows there are. Values are not in it.
-        const sig = item ? `${ids.join(",")}|${item.kind}|${looking}` : "";
+        const sig = item ? `${ids.join(",")}|${item.kind}|${looking}|${this._cbConstraintSig ? this._cbConstraintSig(item) : ""}` : "";
         if (sig !== ui.sig) {
             ui.sig = sig;
             this._cbBuildRows(ui, item, ids, looking);
@@ -278,6 +279,8 @@ export const PrevizChannelsMixin = {
         }
         // World settings, and a camera's reference (imageViewer_previzWorld.js).
         if (this._cbWorldRows) this._cbWorldRows(ui, item, shape, doc);
+        // Constraints on the item: their weights and settings (imageViewer_previzConstraints.js).
+        if (this._cbConstraintRows) this._cbConstraintRows(ui, item, doc, numberRow);
         if (item.kind !== "camera" && S.offsetOf(item)) {
             root.append(Object.assign(doc.createElement("div"), {
                 className: "cb-note", textContent: "Transformations frozen (Edit → Freeze).",
@@ -291,6 +294,7 @@ export const PrevizChannelsMixin = {
     /** Put the current numbers in, and colour what is keyed. */
     _cbFillValues(ui, item) {
         if (!item) return;
+        if (this._cbConstraintTint) this._cbConstraintTint(ui, item);
         const doc = ui.root.ownerDocument;
         const focused = doc.activeElement;
         const frame = Math.round(this.currentFrame || 0);
@@ -355,7 +359,7 @@ export const PrevizChannelsMixin = {
     previzSetChannel(prop, comp, value, { live = false, from = null } = {}) {
         const items = this._cbItems();
         if (!items.length) return;
-        const label = prop === "fov" ? "field of view" : prop;
+        const label = prop === "fov" ? "field of view" : S.isExtraProp(prop) ? "constraint weight" : prop;
         if (live) this.previzBeginDrag(`set ${label}`);
         else if (!this._previzDragging) this.previzSnapshot(`set ${label}`);
         const frame = Math.round(this.currentFrame || 0);
@@ -368,6 +372,15 @@ export const PrevizChannelsMixin = {
                 const res = S.cameraResolution(item);
                 res[comp] = Math.max(1, Math.round(v));
                 item.resolution = res;
+                continue;
+            }
+            if (S.isExtraProp(prop)) {
+                // A constraint's weight (or another extra channel): only on the
+                // items that have it, held to its range.
+                const w = parseWeightProp(prop);
+                if (w && !constraintOf(item, w.cid)) continue;
+                const [lo, hi] = w ? weightRange(prop) : [-Infinity, Infinity];
+                this._cbWrite(item, prop, Math.min(hi, Math.max(lo, v)), frame);
                 continue;
             }
             if (prop === "ikfk") {
@@ -434,7 +447,7 @@ export const PrevizChannelsMixin = {
     /** Write a value the way every edit does: a key when it animates. */
     _cbWrite(item, prop, value, frame) {
         if (this._previzAutokey || S.isAnimated(item, prop)) S.setKeyframe(item, prop, frame, value);
-        else item[prop] = Array.isArray(value) ? value.slice() : value;
+        else S.setStaticValue(item, prop, value);
     },
 
     previzSetVisible(on) {
@@ -575,7 +588,7 @@ export const PrevizChannelsMixin = {
                     // The channel stops animating and keeps the value it has here.
                     const hold = S.valueAt(item, p, frame);
                     if (item.tracks) delete item.tracks[p];
-                    item[p] = Array.isArray(hold) ? hold.slice() : hold;
+                    S.setStaticValue(item, p, hold);
                 } else {
                     S.removeKeyframe(item, frame, p);
                 }
