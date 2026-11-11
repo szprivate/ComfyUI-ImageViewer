@@ -621,11 +621,26 @@ export const CompPanelMixin = {
         });
     },
 
-    /** Something dragged out of the History onto a comp: the files it names, as paths (sequences as patterns). */
-    compPathsOf(items) {
+    /**
+     * Something dragged out of the History onto a comp: the files it names, as
+     * paths (sequences as patterns). An item named the way ComfyUI names its
+     * outputs (filename / subfolder / type, no path) is found on the server.
+     */
+    async compPathsOf(items) {
+        const list = (items || []).filter(Boolean).map((it) => ({ ...it }));
+        const find = list.filter((it) => !it.path && it.filename);
+        if (find.length) {
+            try {
+                const res = await api.fetchApi("/imageviewer/timeline_locate", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ items: find.map((it) => ({ filename: it.filename, type: it.type, subfolder: it.subfolder })) }),
+                });
+                const paths = res.ok ? ((await res.json()).paths || []) : [];
+                find.forEach((it, k) => { it.path = paths[k] || ""; });
+            } catch (_) { /* not found: left out */ }
+        }
         const out = [];
-        for (const it of items || []) {
-            if (!it) continue;
+        for (const it of list) {
             let p = it.path || "";
             if (it.isSequence && p) p = asSequencePattern(p, true);
             if (p) out.push(p);
