@@ -30,6 +30,10 @@ class ApiAliasTest(unittest.TestCase):
         comp = _read(os.path.join(ROOT, "src", "comp_routes.py"))
         self.assertIn('for prefix in ("/imageviewer", "/api/imageviewer"):', comp)
         served.update("/api/imageviewer/" + n for n in re.findall(r'f"\{prefix\}/([^"?]+)"', comp))
+        # clip_vfx_routes adds each (method, path, handler) under both prefixes, by concatenation
+        vfx = _read(os.path.join(ROOT, "src", "clip_vfx_routes.py"))
+        self.assertIn('add(method, "/api/imageviewer/" + path, h)', vfx)
+        served.update("/api/imageviewer/" + n for n in re.findall(r'\("(?:GET|POST)", "([^"]+)", h_', vfx))
         missing = []
         for js in glob.glob(os.path.join(ROOT, "js", "*.js")):
             for m in re.finditer(r'fetchApi\(\s*[`"\'](/imageviewer/[^`"\'?$]+)', _read(js)):
