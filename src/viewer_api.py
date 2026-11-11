@@ -2981,6 +2981,32 @@ try:
             except Exception as e:
                 return web.json_response({"error": str(e)}, status=400)
 
+        async def _imageviewer_scene_ref(request):
+            """A referenced scene: the file it names, or with follow=latest the newest
+            version of it (previz.resolve_reference), with its mtime so the page can
+            tell whether it changed since it last read it."""
+            if previz is None:
+                return web.json_response({"error": "unavailable"}, status=500)
+            raw = request.query.get("path", "")
+            follow = "pinned" if request.query.get("follow") == "pinned" else "latest"
+            if not raw:
+                return web.json_response({"error": "missing path"}, status=400)
+            path = os.path.abspath(raw)
+            if os.path.splitext(path)[1].lower() != ".json":
+                return web.json_response({"error": "a scene is a .json file"}, status=400)
+            if not path_access.is_allowed(path):
+                return web.json_response({"error": path_access.refusal(path)}, status=403)
+            found = previz.resolve_reference(path, follow)
+            if not found:
+                return web.json_response({"error": "no such scene"}, status=404)
+            if not path_access.is_allowed(found["path"]):
+                return web.json_response({"error": path_access.refusal(found["path"])}, status=403)
+            try:
+                scene = previz.load_scene_at(found["path"])
+            except Exception as e:
+                return web.json_response({"error": str(e)}, status=400)
+            return web.json_response({**found, "name": os.path.basename(found["path"]), "scene": scene})
+
         async def _imageviewer_scene_save(request):
             if previz is None:
                 return web.json_response({"error": "unavailable"}, status=500)
@@ -3283,6 +3309,8 @@ try:
         _safe_add("GET", "/api/imageviewer/scenes", _imageviewer_scene_list)
         _safe_add("GET", "/imageviewer/scene", _imageviewer_scene_load)
         _safe_add("GET", "/api/imageviewer/scene", _imageviewer_scene_load)
+        _safe_add("GET", "/imageviewer/scene_ref", _imageviewer_scene_ref)
+        _safe_add("GET", "/api/imageviewer/scene_ref", _imageviewer_scene_ref)
         _safe_add("POST", "/imageviewer/scene", _imageviewer_scene_save)
         _safe_add("POST", "/api/imageviewer/scene", _imageviewer_scene_save)
         _safe_add("POST", "/imageviewer/previz_frame", _imageviewer_previz_frame)

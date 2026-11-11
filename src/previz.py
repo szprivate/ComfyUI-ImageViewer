@@ -95,6 +95,77 @@ def load_scene_at(path):
     return scene
 
 
+_PLAIN_V = re.compile(r"^(?P<name>.+?)_v(?P<v>\d{3,})\.json$", re.I)
+_SHOT_V = re.compile(r"^(?P<shot>.+?)_v(?P<v>\d{3,})_(?P<name>.+)\.json$", re.I)
+_VDIR = re.compile(r"^v(\d{3,})$", re.I)
+
+
+def scene_versions(path):
+    """Every version of the scene file at *path*, as ``[(version, path)]``, oldest first.
+
+    The export rules number a saved scene two ways (export_rules.target): beside
+    each other, ``<name>_v003.json``, or in a shot, ``.../v003/<shot>_v003_<name>.json``
+    with a folder per version. A file named neither way has one version: itself.
+    """
+    path = os.path.abspath(path)
+    folder, base = os.path.split(path)
+    shot = _SHOT_V.match(base)
+    if shot and _VDIR.match(os.path.basename(folder)):
+        root = os.path.dirname(folder)
+        want = re.compile(re.escape(shot.group("shot")) + r"_v(\d{3,})_" + re.escape(shot.group("name")) + r"\.json$", re.I)
+        found = []
+        try:
+            for vdir in os.listdir(root):
+                if not _VDIR.match(vdir):
+                    continue
+                d = os.path.join(root, vdir)
+                try:
+                    names = os.listdir(d)
+                except OSError:
+                    continue
+                for n in names:
+                    m = want.match(n)
+                    if m and os.path.isfile(os.path.join(d, n)):
+                        found.append((int(m.group(1)), os.path.join(d, n)))
+        except OSError:
+            pass
+        if found:
+            return sorted(found)
+    plain = _PLAIN_V.match(base)
+    if plain:
+        want = re.compile(re.escape(plain.group("name")) + r"_v(\d{3,})\.json$", re.I)
+        found = []
+        try:
+            for n in os.listdir(folder):
+                m = want.match(n)
+                if m and os.path.isfile(os.path.join(folder, n)):
+                    found.append((int(m.group(1)), os.path.join(folder, n)))
+        except OSError:
+            pass
+        if found:
+            return sorted(found)
+    return [(None, path)] if os.path.isfile(path) else []
+
+
+def resolve_reference(path, follow="latest"):
+    """The file a reference reads: the newest version of *path*'s scene when
+    *follow* is "latest", else *path* itself. ``{"path", "version", "mtime"}``,
+    or None when there is no such file."""
+    path = os.path.abspath(path)
+    if follow == "latest":
+        versions = scene_versions(path)
+        if versions:
+            version, path = versions[-1]
+        else:
+            version = None
+    else:
+        m = _SHOT_V.match(os.path.basename(path)) or _PLAIN_V.match(os.path.basename(path))
+        version = int(m.group("v")) if m else None
+    if not os.path.isfile(path):
+        return None
+    return {"path": path, "version": version, "mtime": os.path.getmtime(path)}
+
+
 def save_scene(name, scene):
     """Write a scene as JSON. `scene` is already-parsed data, not a string."""
     os.makedirs(scenes_dir(), exist_ok=True)

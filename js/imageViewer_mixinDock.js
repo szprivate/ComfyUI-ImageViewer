@@ -48,6 +48,9 @@ const DOCK_PANELS = {
     // live next door, in the Channel Box, so each can be sized on its own.
     previz:  { prop: "previzPanel",  label: "Outliner",   minW: 190, minH: 140, defaultRail: "right" },
     channels: { prop: "channelsPanel", label: "Channel Box", minW: 190, minH: 160, defaultRail: "right" },
+    // Display layers, selection sets and references; and a character's picker (imageViewer_previzLayers.js).
+    layers3d: { prop: "layers3dPanel", label: "Layers", minW: 190, minH: 140, defaultRail: "right" },
+    picker: { prop: "pickerPanel", label: "Picker", minW: 190, minH: 200, defaultRail: "right", size: 2 },
     // A graph is only readable with some height under it, so this one asks for
     // more than the rest; the channel buttons set the width.
     curves:  { prop: "curvesPanel",  label: "Curve Editor", minW: 220, minH: 190, defaultRail: "bottom" },
@@ -190,6 +193,8 @@ export const DockMixin = {
             right:  { width: 300, panels: [{ id: "browser", size: 1, hidden: true  },
                                            { id: "previz",  size: 1, hidden: true  },
                                            { id: "channels", size: 1, hidden: true },
+                                           { id: "layers3d", size: 1, hidden: true },
+                                           { id: "picker", size: 2, hidden: true },
                                            { id: "rotoCurves", size: 1, hidden: true },
                                            { id: "paramCurves", size: 1, hidden: true },
                                            { id: "motionProps", size: 2, hidden: true },
@@ -657,6 +662,10 @@ export const DockMixin = {
             if (this.editTlRefresh) this.editTlRefresh();
         } else if (id === "channels") {
             if (this._previzRenderChannels) this._previzRenderChannels();
+        } else if (id === "layers3d") {
+            if (this._plRender) this._plRender(true);
+        } else if (id === "picker") {
+            if (this._pkRender) this._pkRender(true);
         } else if (id === "agentChat") {
             if (this._agentPanelMount) this._agentPanelMount();
         } else if (id === "previz") {

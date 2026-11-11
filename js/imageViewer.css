@@ -2217,3 +2217,75 @@ audio.src-media { width: 90%; }
 }
 /* K held: the drag scrubs the timeline. */
 .model-view.scrub-ready .model-canvas, .model-view.scrubbing .model-canvas { cursor: ew-resize; }
+
+/* ── Layers panel and Character Picker (imageViewer_previzLayers.js) ───────── */
+.pl-body, .pk-body {
+    flex: 1 1 auto; min-height: 0; overflow: hidden;
+    display: flex; flex-direction: column; gap: 5px;
+    padding: 6px; box-sizing: border-box; font-size: 11px;
+}
+.pl-tabs { display: flex; gap: 2px; border-bottom: 1px solid #333; }
+.pl-tab {
+    background: none; border: none; border-bottom: 2px solid transparent; color: #999;
+    padding: 3px 8px; font-size: 11px; cursor: pointer;
+}
+.pl-tab:hover { color: #ddd; }
+.pl-tab.active { color: #fff; border-bottom-color: #f60; }
+.pl-bar { display: flex; gap: 4px; flex-wrap: wrap; }
+.pl-btn.off { opacity: 0.45; }
+.pl-list {
+    flex: 1 1 auto; min-height: 40px; overflow-y: auto;
+    border: 1px solid #333; border-radius: 3px; background: #161616;
+}
+.pl-row { display: flex; align-items: center; gap: 4px; padding: 2px 4px; cursor: pointer; min-height: 20px; }
+.pl-row:hover { background: #242424; }
+.pl-row.selected { background: #33230f; }
+.pl-row.ref .pl-name { color: #8cc4ff; }
+.pl-row.failed .pl-file { color: #e66; }
+.pl-name { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-rename { width: 100%; box-sizing: border-box; background: #111; color: #eee; border: 1px solid #f60; font: inherit; padding: 1px 3px; }
+.pl-count { color: #888; font-size: 10px; min-width: 14px; text-align: right; }
+.pl-file { color: #999; font-size: 10px; max-width: 45%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-vis, .pl-mode {
+    width: 20px; height: 18px; padding: 0; font-size: 10px; font-weight: bold; text-align: center;
+}
+.pl-vis.on { color: #ddd; }
+.pl-mode.template { color: #9ad; border-color: #567; }
+.pl-mode.reference { color: #e9b44c; border-color: #7a6030; }
+.pl-swatch { width: 14px; height: 14px; padding: 0; border: 1px solid #555; border-radius: 2px; }
+.pl-follow { font-size: 10px; padding: 1px 5px; }
+.pl-follow.latest { color: #7c7; }
+.pl-follow.pinned { color: #e9b44c; }
+/* In the Outliner: the item's display layer, and a referenced item's name. */
+.previz-layer {
+    flex: 0 0 auto; min-width: 10px; height: 10px; padding: 0 2px; border-radius: 2px;
+    background: var(--layer, #666); color: #000; font-size: 8px; font-weight: bold; line-height: 10px; text-align: center;
+}
+.previz-layer.hidden { opacity: 0.35; }
+.previz-name.ref { color: #8cc4ff; }
+
+.pk-head { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.pk-char { max-width: 140px; }
+.pk-wrap {
+    flex: 1 1 auto; min-height: 80px; display: flex; align-items: center; justify-content: center;
+    background: #121212; border: 1px solid #333; border-radius: 3px; overflow: hidden; container-type: size;
+}
+.pk-stage {
+    position: relative; height: 100%; max-width: 100%; max-height: 100%;
+    background: radial-gradient(ellipse at 50% 45%, #1e1e1e, #141414 70%);
+}
+.pk-stage > .previz-empty { position: absolute; inset: 0; padding: 10px; width: 160px; }
+.pk-btn {
+    position: absolute; transform: translate(-50%, -50%); box-sizing: border-box;
+    min-width: 9px; min-height: 9px; padding: 0; cursor: pointer;
+    background: color-mix(in srgb, var(--pk) 35%, transparent);
+    border: 1.5px solid var(--pk); border-radius: 50%;
+}
+.pk-btn.ik { border-radius: 2px; }
+.pk-btn.pole { border-radius: 1px; transform: translate(-50%, -50%) rotate(45deg); }
+.pk-btn.root, .pk-btn.cog { border-radius: 4px; }
+.pk-btn:hover { background: color-mix(in srgb, var(--pk) 65%, transparent); z-index: 2; }
+.pk-btn.on { background: #fff; border-color: #fff; box-shadow: 0 0 0 1px #f60; z-index: 3; }
+.pk-marquee { position: absolute; border: 1px dashed #f60; background: rgba(255, 102, 0, 0.08); pointer-events: none; z-index: 5; }
+.pk-sets { display: flex; gap: 3px; flex-wrap: wrap; }
+.pk-set.on { color: #f60; border-color: #f60; }
