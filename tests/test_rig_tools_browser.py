@@ -382,6 +382,44 @@ class RigToolsBrowserTests(unittest.TestCase):
         self.assertIn("nobody", a2[-1]["error"])
         self.assertEqual(self.errors, [])
 
+    def test_ai_takes_land_as_clips_in_the_clip_sequencer(self):
+        pg = self.page()
+        try:
+            pg.evaluate(OPEN, ["statue.glb", "Statue"])
+            pg.evaluate("async () => window.__panel.previzAutoRig(window.__hero, { seed: 7 })")
+            pg.evaluate(HELP)
+            keyed = pg.evaluate("""async () => { const r = await window.__panel.previzRigGenerateMotion(window.__hero,
+                                     { mode: 'text', prompt: 'A person walks forward.', from: 0, to: 48 });
+                                   return [r, window.__boneAt('Hips', 0), window.__boneAt('Hips', 48)]; }""")
+            pg.evaluate("() => window.__panel.previzUndo()")
+            take = pg.evaluate("""async () => { const P = window.__panel;
+                const keysBefore = P.previzScene().items.filter((it) => it.kind === 'control').reduce((n, it) => n + Object.keys(it.tracks || {}).length, 0);
+                const r = await P.previzRigGenerateMotion(window.__hero,
+                    { mode: 'text', prompt: 'A person walks forward.', from: 0, to: 48, asClip: true });
+                const keysAfter = P.previzScene().items.filter((it) => it.kind === 'control').reduce((n, it) => n + Object.keys(it.tracks || {}).length, 0);
+                const q = P.previzScene().sequencer;
+                return { r, keysBefore, keysAfter, tracks: q.tracks.map((t) => [t.name, t.clips.map((c) => [c.start, c.length])]),
+                         made: q.sources.map((s) => s.made), hips0: window.__boneAt('Hips', 0), hips48: window.__boneAt('Hips', 48),
+                         blocks: P.clipsPanel.querySelectorAll('.cs-clip').length }; }""")
+            second = pg.evaluate("""async () => { const P = window.__panel;
+                await P.previzRigGenerateMotion(window.__hero, { mode: 'text', prompt: 'A person walks forward.', from: 0, to: 48, asClip: true });
+                return P.previzScene().sequencer.tracks.map((t) => t.name); }""")
+        finally:
+            pg.close()
+        r, hips0, hips48 = keyed
+        self.assertTrue(take["r"]["ok"], take["r"])
+        self.assertEqual(take["r"]["clip"], "AI takes")
+        self.assertEqual(take["keysAfter"], take["keysBefore"], "the character's own keys are as they were")
+        self.assertEqual(take["tracks"], [["AI takes", [[0, 48]]]])
+        self.assertEqual(take["made"], ["ai"])
+        self.assertEqual(take["blocks"], 1)
+        # The clip plays what the keys played.
+        for a, b in ((take["hips0"], hips0), (take["hips48"], hips48)):
+            for x, y in zip(a, b):
+                self.assertAlmostEqual(x, y, delta=1e-3)
+        self.assertEqual(second, ["AI takes", "AI takes 2"], "a second take stacks above the first")
+        self.assertEqual(self.errors, [])
+
     def _menu(self, pg, label):
         pg.locator("button.previz-rig").first.click()
         pg.locator("button.previz-menu-item", has_text=label).first.click()

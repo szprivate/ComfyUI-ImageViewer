@@ -507,6 +507,7 @@ export const PlaybackMixin = {
             this._previzRenderPanel();
             this._previzRenderTicks();
             this.previzRefreshCurves();
+            if (this.previzClipsFrame) this.previzClipsFrame();
             this.timeline.value = this.currentFrame;
             this.container.querySelector('#cur-f').innerText = this.currentFrame;
             return;

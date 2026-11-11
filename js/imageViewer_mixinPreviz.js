@@ -15,6 +15,7 @@ import * as S from "./imageViewer_scene3d.js";
 import * as L from "./imageViewer_sceneLayers.js";
 import { pruneConstraints } from "./imageViewer_constraintData.js";
 import { bakedCopy } from "./imageViewer_constraints.js";
+import * as Q from "./imageViewer_clipSeqData.js";
 import { pref, PREF } from "./imageViewer_settings.js";
 import { notice, openExportDialog, openFilePicker } from "./imageViewer_exportUI.js";
 
@@ -188,6 +189,7 @@ export const PrevizMixin = {
         else this._previzRenderPanel();
         this._previzRenderTicks();
         this.previzRefreshCurves();
+        if (this.previzRefreshClips && !light) this.previzRefreshClips();
         if (persist) {
             this.previzPersist();
             this.queuePersistViewerState();
@@ -1025,6 +1027,7 @@ export const PrevizMixin = {
         if (this._plHide) this._plHide();
         // The curves describe the same scene, so they go with it.
         if (this._previzHideCurves) this._previzHideCurves();
+        if (this._previzHideClips) this._previzHideClips();
         // And the timeline's last-frame box goes back to being a readout.
         this.previzSyncTimelineFields();
     },
@@ -2137,8 +2140,8 @@ export const PrevizMixin = {
                 const res = await fetch(api.apiURL("/imageviewer/usd_export"), {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    // The stage carries keys, not constraints: those are baked into a copy first.
-                    body: JSON.stringify({ scene: bakedCopy(scene), name: v.name, format: v.format, rule: true, context: v.context }),
+                    // The stage carries keys, not constraints or clips: those are baked into a copy first.
+                    body: JSON.stringify({ scene: bakedCopy(Q.withClipsBaked(scene)), name: v.name, format: v.format, rule: true, context: v.context }),
                 });
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) return { ok: false, message: `Could not export the stage: ${data.error || res.status}` };

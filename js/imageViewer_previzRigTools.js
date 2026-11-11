@@ -313,7 +313,7 @@ export const PrevizRigToolsMixin = {
             }
             a = before[before.length - 1]; b = after[0];
         }
-        let prompt, from, to, seed, feet, start, onLayer;
+        let prompt, from, to, seed, feet, start, onLayer, asClip;
         await openExportDialog(this.container, {
             title: mode === "inbetween" ? "AI in-between (Kimodo)" : "Motion from text (Kimodo)",
             kind: "character",
@@ -336,6 +336,10 @@ export const PrevizRigToolsMixin = {
                     start = Object.assign(el("input"), { type: "checkbox", checked: true });
                     const ls = el("label", "rd-sub"); ls.append(start, " Start from the pose on the first frame");
                     rows.push(row("Start", ls));
+                    // A take as a clip of the Clip Sequencer (imageViewer_previzClips.js) instead of keys.
+                    asClip = Object.assign(el("input"), { type: "checkbox", checked: !!this._rigTakeAsClip });
+                    const lc = el("label", "rd-sub"); lc.append(asClip, " Land as a clip in the Clip Sequencer (each take a clip you can blend, loop and compare)");
+                    rows.push(row("Take", lc));
                 }
                 return rows;
             },
@@ -347,11 +351,14 @@ export const PrevizRigToolsMixin = {
                     mode, prompt: prompt.value, from: Number(from.value), to: Number(to.value),
                     seed: seed.value === "" ? null : Number(seed.value), feet: feet.checked, fromPose: !start || start.checked,
                     layer: onLayer && onLayer.box.checked ? "new" : null,
+                    asClip: !!(asClip && asClip.checked),
                     progress: (line) => progress(0.5, 1, line),
                 });
                 if (!out.ok) return { ok: false, message: out.message };
+                if (asClip) this._rigTakeAsClip = asClip.checked;
                 notice("success", mode === "inbetween" ? "In-between generated" : "Motion generated",
-                    `${out.frames} frames keyed on ${model.name} (${out.keys} keys).`);
+                    out.clip ? `${out.frames} frames, a clip on the Clip Sequencer's “${out.clip}” track.`
+                             : `${out.frames} frames keyed on ${model.name} (${out.keys} keys).`);
                 return { ok: true };
             },
         });
@@ -364,7 +371,7 @@ export const PrevizRigToolsMixin = {
      * alone, starting where (and, with fromPose, as) the character is at `from`.
      */
     async previzRigGenerateMotion(modelId, { mode = "text", prompt = "", from = 0, to = 48, seed = null, feet = true,
-                                             fromPose = true, progress = null, samples = 1, sample = 0, layer = null } = {}) {
+                                             fromPose = true, progress = null, samples = 1, sample = 0, layer = null, asClip = false } = {}) {
         const scene = this.previzScene();
         const info = this._previzRigMotionRest(modelId);
         if (!info) return { ok: false, message: "The character needs humanoid controls." };
@@ -393,12 +400,13 @@ export const PrevizRigToolsMixin = {
             frames, keys, seed, samples, heading,
         }, { progress });
         if (job.state !== "done") return { ok: false, message: `The motion was not generated: ${job.error || job.state}` };
-        return this.previzRigApplyMotion(modelId, job.result, { from, to, origin, feet, sample, mode, layer });
+        return this.previzRigApplyMotion(modelId, job.result, { from, to, origin, feet, sample, mode, layer,
+            asClip: asClip && mode === "text", name: String(prompt || "").trim() });
     },
 
-    /** Put a motion from the model onto the character and key it on its controls. */
+    /** Put a motion from the model onto the character and key it on its controls (or, with asClip, as a clip of the Clip Sequencer). */
     previzRigApplyMotion(modelId, motion, { from, to, origin = [0, 0], feet = true, sample = 0, mode = "text",
-                                           layer = null, keepEnds = mode === "inbetween", label = null } = {}) {
+                                           layer = null, keepEnds = mode === "inbetween", label = null, asClip = false, name = "" } = {}) {
         const scene = this.previzScene();
         const info = this._previzRigMotionRest(modelId);
         if (!info || !motion || !motion.samples || !motion.samples[sample]) return { ok: false, message: "No motion to apply." };
@@ -413,11 +421,22 @@ export const PrevizRigToolsMixin = {
         // An in-between keeps the keys it was made between; what is between them is the model's.
         const bake = keepEnds ? frames.filter((fr) => fr.f > from && fr.f < to) : frames;
         if (scene.length < to + 1) { scene.length = to + 1; scene.lengthSet = true; }
-        const name = label || (mode === "inbetween" ? "AI in-between" : "AI motion");
+        const what = label || (mode === "inbetween" ? "AI in-between" : "AI motion");
+        // A take that lands as a clip: the controls' own keys are put back after it is taken off them.
+        const saved = asClip && this.previzClipsLandTake
+            ? new Map(R.controlsOf(scene, modelId).map((c) => [c.id, JSON.parse(JSON.stringify(c.tracks || {}))])) : null;
+        if (saved) {
+            const keys = this.previzRigBakePoses(modelId, bake, { label: what, moveCog: true, ikfk: 0 });
+            const words = name.length > 28 ? `${name.slice(0, 27)}\u2026` : name;
+            const c = this.previzClipsLandTake(modelId, from, to, saved, `AI: ${words || "motion"}${sample ? ` #${sample + 1}` : ""}`);
+            const q = scene.sequencer;
+            const t = c && q && q.tracks.find((tr) => tr.clips.includes(c));
+            return { ok: true, frames: bake.length, keys, clip: t ? t.name : "AI takes" };
+        }
         // On an animation layer of its own when asked (and the scene has layers): the keys under it stay.
         const { keys, layer: onLayer } = this._previzRigBakeInto
-            ? this._previzRigBakeInto(modelId, bake, { label: name, moveCog: true, ikfk: 0 }, layer)
-            : { keys: this.previzRigBakePoses(modelId, bake, { label: name, moveCog: true, ikfk: 0 }), layer: null };
+            ? this._previzRigBakeInto(modelId, bake, { label: what, moveCog: true, ikfk: 0 }, layer)
+            : { keys: this.previzRigBakePoses(modelId, bake, { label: what, moveCog: true, ikfk: 0 }), layer: null };
         return { ok: true, frames: bake.length, keys, layer: onLayer };
     },
 
@@ -468,7 +487,7 @@ export const PrevizRigToolsMixin = {
                         mode: req.action === "motion" ? "text" : "inbetween", prompt: a.prompt || "",
                         from: num(a.from, req.action === "motion" ? Math.round(this.currentFrame || 0) : 0),
                         to: num(a.to, end), seed: a.seed == null ? null : Number(a.seed), feet: a.feet !== false,
-                        fromPose: a.from_pose !== false,
+                        fromPose: a.from_pose !== false, asClip: !!a.as_clip,
                     });
                     break;
                 case "clean_feet": result = this.previzRigCleanFeet(model.id, { from: a.from == null ? null : num(a.from), to: a.to == null ? null : num(a.to) }); break;

@@ -329,7 +329,9 @@ export const PrevizChannelsMixin = {
 
     _cbValue(item, prop, comp) {
         if (prop === "resolution") return S.cameraResolution(item)[comp];
-        const v = S.valueAt(item, prop, Math.round(this.currentFrame || 0));
+        // What the item shows at the frame: its keys with the clips and layers on top (scene3d.evaluateIn).
+        const f = Math.round(this.currentFrame || 0);
+        const v = (S.valueIn && S.valueIn(this.previzScene(), item, prop, f)) ?? S.valueAt(item, prop, f);
         return comp === null ? v : v[comp];
     },
 
