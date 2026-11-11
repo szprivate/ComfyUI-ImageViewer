@@ -5,12 +5,14 @@
 // runs the same function as the agent's atlas_create_world; when the world is made the host opens it in the
 // 3D space, where the Previz panel's Atlas button paints new views of it.
 //
-// Pictures come from the History selection, the file picker or the desktop (dropped files are kept in
+// Pictures come from the History selection, the file picker, or are dropped from Windows Explorer / the
+// desktop / the History anywhere on the dialog (imageViewer_atlasDrops.js: desktop files are kept in
 // <input>/edits by /imageviewer/timeline_upload, like the Edit panel's drops). The arithmetic is in
 // imageViewer_atlasRender.js (buildCreateRequest, worldNameFrom), tested under node.
 import { api } from "../../scripts/api.js";
 import { notice, openFilePicker } from "./imageViewer_exportUI.js";
 import * as A from "./imageViewer_atlasRender.js";
+import { wirePictureDrop } from "./imageViewer_atlasDrops.js";
 
 async function asJson(res) {
     let body = {};
@@ -69,6 +71,7 @@ export const AtlasCreateMixin = {
         prompt.placeholder = "Describe a place — e.g. a sunlit stone courtyard with climbing ivy and a well";
         prompt.value = String(opts.prompt || "");
         const strip = el("div", "atlas-pics");
+        const dropZone = el("div", "atlas-dropzone", "Drop pictures here — from Windows Explorer, the desktop or the History");
         const tools = el("div", "atlas-tools");
         const addBtn = el("button", "rd-btn", "+ Pictures…");
         addBtn.title = "Pick pictures from the folders the viewer can open";
@@ -82,7 +85,7 @@ export const AtlasCreateMixin = {
         for (const [v, label] of A.CREATE_DETAILS) detail.append(Object.assign(el("option"), { value: String(v), textContent: label }));
         detail.value = "4";
         tools.append(addBtn, histBtn, el("span", "atlas-gap"), aspect, detail);
-        composer.append(prompt, strip, tools);
+        composer.append(prompt, strip, dropZone, tools);
 
         const nameIn = el("input", "rd-in atlas-name");
         nameIn.placeholder = "world name";
@@ -120,6 +123,9 @@ export const AtlasCreateMixin = {
                 strip.append(chip);
             });
             strip.style.display = images.length ? "" : "none";
+            dropZone.style.display = images.length >= A.CREATE_MAX_IMAGES ? "none" : "";
+            dropZone.textContent = images.length ? `Drop more pictures here (up to ${A.CREATE_MAX_IMAGES})`
+                : "Drop pictures here — from Windows Explorer, the desktop or the History";
             aspect.disabled = images.length > 0;
             addBtn.disabled = histBtn.disabled = images.length >= A.CREATE_MAX_IMAGES || this._atlasCreateBusy;
             if (!nameTouched) nameIn.value = A.worldNameFrom(prompt.value, images);
@@ -160,45 +166,12 @@ export const AtlasCreateMixin = {
                 return { ok: true };
             },
         });
-        // Desktop files and History thumbnails dropped onto the dialog.
-        const dropKeep = async (file) => {
-            const fd = new FormData();
-            fd.append("file", file, file.name);
-            const res = await api.fetchApi("/imageviewer/timeline_upload", { method: "POST", body: fd });
-            if (!res.ok) throw new Error(await res.text().catch(() => "") || `upload answered ${res.status}`);
-            const body = await res.json();
-            return { path: body.path, name: body.name };
-        };
-        box.addEventListener("dragover", (e) => { e.preventDefault(); box.classList.add("drop-on"); });
-        box.addEventListener("dragleave", (e) => { if (e.target === box) box.classList.remove("drop-on"); });
-        box.addEventListener("drop", async (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            box.classList.remove("drop-on");
-            const dt = e.dataTransfer;
-            const hist = dt && dt.getData && dt.getData("application/x-imageviewer-history");
-            if (hist) {
-                try {
-                    const list = JSON.parse(hist);
-                    const items = (Array.isArray(list) ? list : (list.items || [list])).flatMap((s) => (Array.isArray(s) ? s.slice(0, 1) : [s]));
-                    addItems(items.map((f) => ({ ...A.pictureRef(f), name: f.filename || String(f.path || "").split(/[\\/]/).pop(), _obj: f }))
-                        .filter((f) => f.path || f.filename));
-                } catch (_) { /* not ours */ }
-                return;
-            }
-            const files = Array.from((dt && dt.files) || []);
-            if (!files.length) return;
-            message.textContent = "Copying the pictures in…";
-            try {
-                const kept = [];
-                for (const f of files.filter((f) => A.isAtlasPicture({ name: f.name }))) kept.push(await dropKeep(f));
-                addItems(kept);
-                if (kept.length < files.length) notice("warn", "New Atlas world", "Only pictures (png, jpg, webp) are used.");
-                message.textContent = "";
-            } catch (err) {
-                message.classList.add("error");
-                message.textContent = (err && err.message) || String(err);
-            }
+        // Files from Windows Explorer / the desktop and History thumbnails, dropped anywhere on the dialog.
+        wirePictureDrop(box, {
+            shade,
+            onItems: (items) => addItems(items),
+            onSkipped: (n) => notice("warn", "New Atlas world", `${n} file(s) left out: only pictures (png, jpg, webp).`),
+            onStatus: (text, bad) => { message.classList.toggle("error", !!bad); message.textContent = text; },
         });
 
         const win = this._viewerWindow ? this._viewerWindow() : window;

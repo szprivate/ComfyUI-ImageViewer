@@ -151,3 +151,33 @@ test("an error stays in the dialog and it can be tried again", async () => {
     assert.equal(go.disabled, false);
     assert.ok(doc.body.find((e) => e.className.includes("atlas-create")), "still up");
 });
+
+// ── Chisel this view (imageViewer_atlasChisel.js): the pure helpers ──
+test("a chisel picture made here carries the 16:9 camera of exactly that picture", () => {
+    const cam = { camera_world: Array(16).fill(0), model_world: Array(16).fill(1), fov: 40, aspect: 0.8, gated: false, label: "" };
+    const c = A.chiselCamera(cam);
+    assert.equal(c.aspect, A.ATLAS_ASPECT);
+    assert.equal(c.gated, true);
+    assert.equal(c.fov, 40);
+    assert.equal("label" in c, false);
+});
+
+test("the chisel request: modes, refs only, and what it refuses", () => {
+    const item = { src: { path: "D:/o/court/world.glb" } };
+    const camera = { camera_world: Array(16).fill(0), fov: 50, aspect: 16 / 9, gated: true, label: "shot" };
+    assert.equal(A.chiselMode({}), "paint");
+    assert.equal(A.chiselMode({ image: {} }), "restyle");
+    assert.equal(A.chiselMode({ image: {}, mask: {} }), "edit");
+    const b = A.buildChiselRequest({ item, camera, prompt: " a fountain ",
+        image: { path: "D:/in/edits/v.png", url: "blob:x", _obj: {} }, mask: { path: "D:/in/edits/m.png" },
+        style: { filename: "s.png", type: "input" }, context: false, seed: "12", enhance: false });
+    assert.deepEqual(b, { world_path: "D:/o/court/world.glb", camera: { camera_world: Array(16).fill(0), fov: 50, aspect: 16 / 9, gated: true },
+        prompt: "a fountain", context: false, enhance_prompt: false, seed: 12,
+        image: { path: "D:/in/edits/v.png" }, mask: { path: "D:/in/edits/m.png" },
+        style: { filename: "s.png", type: "input", subfolder: "" } });
+    assert.equal(A.buildChiselRequest({ item, camera, prompt: "x" }).seed, -1);
+    assert.ok(A.buildChiselRequest({ item, camera, prompt: "" }).error);
+    assert.ok(A.buildChiselRequest({ item, camera, prompt: "x", mask: { path: "m.png" } }).error);
+    assert.ok(A.buildChiselRequest({ item, camera, prompt: "x", seed: "1.5" }).error);
+    assert.ok(A.buildChiselRequest({ item: null, camera, prompt: "x" }).error);
+});

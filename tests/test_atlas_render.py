@@ -227,5 +227,50 @@ class CreateTests(unittest.TestCase):
             ar.create_state(stub.base, "../")
 
 
+
+class ChiselTests(unittest.TestCase):
+    """Chisel this view: the body the host gets, and the chisel route."""
+    CAM = {"camera_world": list(range(16)), "model_world": list(range(16)), "fov": 50, "aspect": 16 / 9, "gated": True}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.glb = os.path.join(world_on_disk(self.tmp.name), "world.glb")
+
+    def test_clean_chisel_request(self):
+        body = ar.clean_chisel_request({"world_path": self.glb, "camera": self.CAM, "prompt": " a fountain ",
+                                        "seed": "7", "enhance_prompt": False, "context": False},
+                                       "C:/v.png", "C:/m.png", "")
+        self.assertEqual(body["world"], os.path.dirname(self.glb))
+        self.assertEqual(body["camera"], {"viewer": {"camera_world": [float(i) for i in range(16)],
+                                                     "model_world": [float(i) for i in range(16)],
+                                                     "fov": 50.0, "aspect": 16 / 9, "gated": True}})
+        self.assertEqual((body["prompt"], body["image_path"], body["mask_path"], body["style_image"], body["seed"],
+                          body["enhance_prompt"], body["context"]),
+                         ("a fountain", "C:/v.png", "C:/m.png", "", 7, False, False))
+        self.assertEqual(ar.clean_chisel_request({"world_path": self.glb, "camera": self.CAM, "prompt": "x"})["seed"], -1)
+        for data, img, mask in ((None, "", ""), ({"world_path": self.glb, "camera": self.CAM}, "", ""),
+                                ({"world_path": self.glb, "prompt": "x"}, "", ""),
+                                ({"world_path": self.glb, "camera": {"camera_world": [1]}, "prompt": "x"}, "", ""),
+                                ({"world_path": self.glb, "camera": self.CAM, "prompt": "x", "seed": "a"}, "", ""),
+                                ({"world_path": self.glb, "camera": self.CAM, "prompt": "x"}, "", "C:/m.png")):
+            with self.assertRaises(ar.RelayError) as cm:
+                ar.clean_chisel_request(data, img, mask)
+            self.assertEqual(cm.exception.status, 400)
+
+    def test_the_page_cannot_name_the_pictures_itself(self):
+        body = ar.clean_chisel_request({"world_path": self.glb, "camera": self.CAM, "prompt": "x",
+                                        "image_path": "C:/secret.png", "mask_path": "C:/m.png"})
+        self.assertEqual((body["image_path"], body["mask_path"]), ("", ""))
+
+    def test_start_and_poll_use_the_chisel_route(self):
+        stub = Stub()
+        self.addCleanup(stub.close)
+        self.assertEqual(ar.start_chisel(stub.base, {"world_path": self.glb, "camera": self.CAM, "prompt": "a hall"})["id"], "abc")
+        method, path, token, body = stub.seen[0]
+        self.assertEqual((method, path, token, body["prompt"]), ("POST", "/agentY/atlas_chisel", "tok", "a hall"))
+        ar.chisel_state(stub.base, "abc")
+        self.assertEqual(stub.seen[1][:2], ("GET", "/agentY/atlas_chisel?id=abc"))
+
 if __name__ == "__main__":
     unittest.main()

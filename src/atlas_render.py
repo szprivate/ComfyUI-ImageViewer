@@ -254,3 +254,64 @@ def create_state(comfy_base: str, job_id: str) -> dict:
     if not job_id:
         raise RelayError("no job id", 400)
     return call_host(comfy_base, "GET", query=f"id={job_id}", route=CREATE_ROUTE)
+
+
+# ── "Chisel this view": an Atlas Chisel picture at the camera the viewer looks through (no agent turn) ──
+
+CHISEL_ROUTE = "atlas_chisel"
+MAX_CHISEL_PROMPT = 2000
+
+
+def _viewer_camera(cam) -> dict:
+    """The camera the page sent, as the host's ``{"viewer": {...}}`` camera spec (raw matrices, checked)."""
+    if not isinstance(cam, dict):
+        raise RelayError("send the camera", 400)
+    cw = _num_list(cam.get("camera_world"), 16)
+    if cw is None:
+        raise RelayError("camera_world must be the camera's 16 matrix numbers", 400)
+    viewer = {"camera_world": cw}
+    if cam.get("model_world") is not None:
+        viewer["model_world"] = _num_list(cam.get("model_world"), 16)
+        if viewer["model_world"] is None:
+            raise RelayError("model_world must be the model's 16 matrix numbers", 400)
+    for k in ("fov", "aspect"):
+        try:
+            if cam.get(k) is not None:
+                viewer[k] = float(cam[k])
+        except (TypeError, ValueError):
+            raise RelayError(f"{k} must be a number", 400)
+    viewer["gated"] = bool(cam.get("gated"))
+    return {"viewer": viewer}
+
+
+def clean_chisel_request(data, image: str = "", mask: str = "", style: str = "") -> dict:
+    """The body forwarded to the host for a Chisel picture. ``image`` / ``mask`` / ``style`` are absolute
+    paths the route resolved and checked (path_access); the page's own references are never passed on."""
+    if not isinstance(data, dict):
+        raise RelayError("bad request", 400)
+    world = world_dir_of(data.get("world_path") or data.get("world"))
+    prompt = str(data.get("prompt") or "").strip()[:MAX_CHISEL_PROMPT]
+    if not prompt:
+        raise RelayError("say what Atlas should paint or change", 400)
+    if mask and not image:
+        raise RelayError("a mask needs the picture it was painted on", 400)
+    try:
+        seed = int(data.get("seed") if data.get("seed") not in (None, "") else -1)
+    except (TypeError, ValueError):
+        raise RelayError("seed must be a whole number", 400)
+    return {"world": world, "camera": _viewer_camera(data.get("camera")), "prompt": prompt,
+            "image_path": image or "", "mask_path": mask or "", "style_image": style or "",
+            "context": data.get("context", True) is not False, "seed": seed if seed >= 0 else -1,
+            "enhance_prompt": data.get("enhance_prompt", True) is not False}
+
+
+def start_chisel(comfy_base: str, data, image: str = "", mask: str = "", style: str = "") -> dict:
+    return call_host(comfy_base, "POST", body=clean_chisel_request(data, image, mask, style), route=CHISEL_ROUTE,
+                     timeout=60.0)
+
+
+def chisel_state(comfy_base: str, job_id: str) -> dict:
+    job_id = "".join(c for c in str(job_id or "") if c.isalnum())[:32]
+    if not job_id:
+        raise RelayError("no job id", 400)
+    return call_host(comfy_base, "GET", query=f"id={job_id}", route=CHISEL_ROUTE)

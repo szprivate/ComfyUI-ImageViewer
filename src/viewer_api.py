@@ -2077,22 +2077,24 @@ try:
             """The pictures the page names, as absolute paths the viewer may serve: a {path}, or ComfyUI's
             {filename, type, subfolder}. Anything else is refused, so the host is only ever handed media files
             inside the folders the viewer already shows."""
-            out = []
-            for it in (items or [])[: atlas_render.MAX_CREATE_IMAGES + 1]:
-                it = it if isinstance(it, dict) else {"path": it}
-                if it.get("filename") and not it.get("path"):
-                    path = _resolve_comfy_ref(it.get("filename"), it.get("type") or "output", it.get("subfolder") or "")
-                else:
-                    path = os.path.abspath(os.path.expanduser(str(it.get("path") or "").strip().strip('"')))
-                name = os.path.basename(path or "") or "?"
-                if not path or not os.path.isfile(path):
-                    raise atlas_render.RelayError(f"no such picture: {name}", 404)
-                if not path_access.may_serve(path):
-                    raise atlas_render.RelayError(path_access.serve_refusal(path), 403)
-                if os.path.splitext(path)[1].lower() not in (".png", ".jpg", ".jpeg", ".webp"):
-                    raise atlas_render.RelayError(f"{name} is not a picture Atlas reads (png, jpg, webp)", 415)
-                out.append(path)
-            return out
+            return [_atlas_picture(it) for it in (items or [])[: atlas_render.MAX_CREATE_IMAGES + 1]]
+
+        def _atlas_picture(it):
+            """One picture the page names ({path}, or ComfyUI's {filename, type, subfolder}) as an absolute path
+            the viewer may serve, with an extension Atlas reads; anything else is refused."""
+            it = it if isinstance(it, dict) else {"path": it}
+            if it.get("filename") and not it.get("path"):
+                path = _resolve_comfy_ref(it.get("filename"), it.get("type") or "output", it.get("subfolder") or "")
+            else:
+                path = os.path.abspath(os.path.expanduser(str(it.get("path") or "").strip().strip('"')))
+            name = os.path.basename(path or "") or "?"
+            if not path or not os.path.isfile(path):
+                raise atlas_render.RelayError(f"no such picture: {name}", 404)
+            if not path_access.may_serve(path):
+                raise atlas_render.RelayError(path_access.serve_refusal(path), 403)
+            if os.path.splitext(path)[1].lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+                raise atlas_render.RelayError(f"{name} is not a picture Atlas reads (png, jpg, webp)", 415)
+            return path
 
         async def _imageviewer_atlas_create(request):
             """Body: {"name", "prompt", "images": [{path} | {filename, type, subfolder}], "aspect_ratio",
@@ -2121,6 +2123,40 @@ try:
             base = f"{request.scheme}://{request.host}"
             try:
                 out = await asyncio.to_thread(atlas_render.create_state, base, request.query.get("id") or "")
+            except atlas_render.RelayError as e:
+                return web.json_response({"error": str(e)}, status=e.status)
+            return web.json_response(out)
+
+        # --- Chisel this view: an Atlas Chisel picture at the viewer's camera, by the agentY host (atlas_render.py) ---
+        async def _imageviewer_atlas_chisel(request):
+            """Body: {"world_path", "camera": {camera_world, model_world, fov, aspect, gated}, "prompt",
+            "image" / "mask" / "style": {path} | {filename, type, subfolder} (each optional; a mask needs the
+            image), "context": bool, "seed", "enhance_prompt"}. Answers at once with an ``id``; poll
+            GET /imageviewer/atlas_chisel?id=<id> (``path`` when done)."""
+            if atlas_render is None:
+                return web.json_response({"error": "atlas unavailable"}, status=500)
+            if not path_access.same_origin(request):
+                return web.json_response({"error": "cross-origin request refused"}, status=403)
+            try:
+                data = await request.json()
+            except Exception:
+                data = None
+            base = f"{request.scheme}://{request.host}"
+            try:
+                d = data if isinstance(data, dict) else {}
+                pics = {k: (_atlas_picture(d[k]) if d.get(k) else "") for k in ("image", "mask", "style")}
+                out = await asyncio.to_thread(atlas_render.start_chisel, base, data, pics["image"], pics["mask"],
+                                              pics["style"])
+            except atlas_render.RelayError as e:
+                return web.json_response({"error": str(e)}, status=e.status)
+            return web.json_response(out)
+
+        async def _imageviewer_atlas_chisel_state(request):
+            if atlas_render is None:
+                return web.json_response({"error": "atlas unavailable"}, status=500)
+            base = f"{request.scheme}://{request.host}"
+            try:
+                out = await asyncio.to_thread(atlas_render.chisel_state, base, request.query.get("id") or "")
             except atlas_render.RelayError as e:
                 return web.json_response({"error": str(e)}, status=e.status)
             return web.json_response(out)
@@ -3343,6 +3379,10 @@ try:
         _safe_add("POST", "/api/imageviewer/atlas_create", _imageviewer_atlas_create)
         _safe_add("GET", "/imageviewer/atlas_create", _imageviewer_atlas_create_state)
         _safe_add("GET", "/api/imageviewer/atlas_create", _imageviewer_atlas_create_state)
+        _safe_add("POST", "/imageviewer/atlas_chisel", _imageviewer_atlas_chisel)
+        _safe_add("POST", "/api/imageviewer/atlas_chisel", _imageviewer_atlas_chisel)
+        _safe_add("GET", "/imageviewer/atlas_chisel", _imageviewer_atlas_chisel_state)
+        _safe_add("GET", "/api/imageviewer/atlas_chisel", _imageviewer_atlas_chisel_state)
         _safe_add("POST", "/imageviewer/atlas_camera_move", _imageviewer_atlas_move)
         _safe_add("POST", "/api/imageviewer/atlas_camera_move", _imageviewer_atlas_move)
         _safe_add("GET", "/imageviewer/atlas_camera_move", _imageviewer_atlas_move_state)

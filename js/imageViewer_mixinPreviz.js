@@ -1096,7 +1096,14 @@ export const PrevizMixin = {
         atlasNewBtn.title = "New Atlas world: describe a place or bring pictures of it, and World Labs Atlas makes a "
                           + "3D world of it that opens here (needs agentY running and a World Labs key)";
         atlasNewBtn.onclick = () => this.atlasCreateDialog();
-        actions.append(newBtn, addBtn, editBtn, outBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn, atlasMoveBtn, atlasNewBtn);
+        // Atlas Chisel at this camera: paint the view, or change the part of a picture of it you paint over.
+        const atlasChiselBtn = el("button", "previz-btn previz-world", "Chisel");
+        atlasChiselBtn.title = "Chisel this view with Atlas: World Labs paints what you see from this camera, or changes "
+                             + "only the part of a picture of it you paint over (drop pictures from Explorer or the History)";
+        atlasChiselBtn.style.display = "none";
+        atlasChiselBtn.onclick = () => this.atlasChiselDialog();
+        actions.append(newBtn, addBtn, editBtn, outBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn, atlasMoveBtn,
+                       atlasChiselBtn, atlasNewBtn);
 
         const list = el("div", "previz-list");
         // The space below the tree is "no parent": dropping a row here lifts it
@@ -1121,7 +1128,7 @@ export const PrevizMixin = {
         this._previzCloseAddMenu();
         host.querySelectorAll(":scope > .previz-body").forEach((n) => n.remove());
         host.appendChild(root);
-        this._previzUI = { root, list, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn, atlasMoveBtn };
+        this._previzUI = { root, list, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn, atlasMoveBtn, atlasChiselBtn };
         return this._previzUI;
     },
 
@@ -1476,6 +1483,7 @@ export const PrevizMixin = {
             ui.walkBtn.classList.toggle("active", !!(this._model3d && this._model3d.walking));
         }
         if (ui.atlasBtn) ui.atlasBtn.style.display = this.previzAtlasItem && this.previzAtlasItem() ? "" : "none";
+        if (ui.atlasChiselBtn) ui.atlasChiselBtn.style.display = this.previzAtlasItem && this.previzAtlasItem() ? "" : "none";
         if (ui.atlasMoveBtn) {
             const atlas = !!(this.previzAtlasItem && this.previzAtlasItem());
             // Experimental and off by default (Settings -> ComfyUI Image Viewer -> Experimental).

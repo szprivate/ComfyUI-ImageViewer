@@ -287,3 +287,45 @@ export function buildCreateRequest({ name, prompt, images = [], aspect = "16:9",
 export function createProgress(s) {
     return `${(s && s.phase) || "Atlas is making the world"}… ${clock((s && s.elapsed) || 0)}`;
 }
+
+// ── "Chisel this view": an Atlas Chisel picture at the camera the viewer looks through ───────────────────
+
+export const CHISEL_W = 1280, CHISEL_H = 720;   // Atlas Chisel paints 1280 x 720 only
+
+/** The camera of a picture rendered here at 1280 x 720: the same lens, the 16:9 frame (what the picture shows). */
+export function chiselCamera(camera) {
+    const { label, ...cam } = camera || {};
+    return { ...cam, aspect: ATLAS_ASPECT, gated: true };
+}
+
+/** What the request will do, in the words the dialog shows. */
+export function chiselMode({ image, mask } = {}) {
+    if (image && mask) return "edit";
+    if (image) return "restyle";
+    return "paint";
+}
+
+/** The POST body for /imageviewer/atlas_chisel, or { error }. `image` / `mask` / `style` are picture items. */
+export function buildChiselRequest({ item, camera, prompt, image = null, mask = null, style = null, context = true,
+                                     seed = "", enhance = true }) {
+    const p = String(prompt || "").trim();
+    if (!item || !item.src || !item.src.path) return { error: "Open an Atlas world first." };
+    if (!camera || !Array.isArray(camera.camera_world)) return { error: "There is no camera to chisel from." };
+    if (!p) return { error: "Say what Atlas should paint or change." };
+    if (mask && !image) return { error: "A mask needs the picture it was painted on." };
+    const s = String(seed ?? "").trim();
+    if (s && !/^\d+$/.test(s)) return { error: "The seed is a whole number (or empty for a random one)." };
+    const { label, ...cam } = camera;
+    const body = { world_path: item.src.path, camera: cam, prompt: p, context: context !== false,
+                   enhance_prompt: enhance !== false, seed: s ? Number(s) : -1 };
+    for (const [k, v] of [["image", image], ["mask", mask], ["style", style]]) {
+        const ref = v ? pictureRef(v) : null;
+        if (ref) body[k] = ref;
+    }
+    return body;
+}
+
+/** What the dialog says while Atlas works. */
+export function chiselProgress(s) {
+    return `${(s && s.phase) || "Atlas is painting"}… ${clock((s && s.elapsed) || 0)}`;
+}

@@ -1,4 +1,4 @@
-"""New Atlas world, in a real browser: the 3D space's bar and Previz panel open the dialog, a History
+"""New Atlas world and Chisel this view, in a real browser: the 3D space's bar and Previz panel open the dialog, a History
 selection comes in as pictures, Create posts to /imageviewer/atlas_create and follows the job.
 
 The REAL viewer js against stubbed ComfyUI scripts (tests/harness/tabs.html); the viewer server's routes are
@@ -37,6 +37,90 @@ STUB = """() => {
     }
     return real(p, opts);
   };
+}"""
+
+
+UPLOAD_STUB = """() => {
+  const real = window.__fetchApi;
+  window.__uploads = [];
+  window.__fetchApi = async (p, opts) => {
+    if (p === '/imageviewer/timeline_upload') {
+      const f = opts.body.get('file');
+      window.__uploads.push(f.name);
+      if (/^chisel_mask_/.test(f.name)) {
+        const bm = await createImageBitmap(f);
+        const c = document.createElement('canvas'); c.width = bm.width; c.height = bm.height;
+        const g = c.getContext('2d'); g.drawImage(bm, 0, 0);
+        const d = g.getImageData(0, 0, c.width, c.height).data;
+        let white = 0, black = 0;
+        for (let i = 0; i < d.length; i += 4) { if (d[i] > 200) white++; else if (d[i] < 50) black++; }
+        window.__maskStats = { w: c.width, h: c.height, white, black };
+      }
+      return new Response(JSON.stringify({ path: 'D:/in/edits/' + f.name, name: f.name }), { status: 200 });
+    }
+    return real(p, opts);
+  };
+}"""
+
+# Files dropped as Windows Explorer drops them: a DataTransfer of Files, dragenter / dragover / drop on `target`.
+DROP_FILES = """() => {
+  const target = %s;
+  const dt = new DataTransfer();
+  for (const n of %s) dt.items.add(new File([new Uint8Array([137, 80, 78, 71])], n, { type: n.endsWith('.png') ? 'image/png' : 'text/plain' }));
+  const opts = { bubbles: true, cancelable: true, composed: true, dataTransfer: dt };
+  target.dispatchEvent(new DragEvent('dragenter', opts));
+  target.dispatchEvent(new DragEvent('dragover', opts));
+  const drop = new DragEvent('drop', opts);
+  target.dispatchEvent(drop);
+  return drop.defaultPrevented;
+}"""
+
+CHISEL_STUB = """() => {
+  const real = window.__fetchApi;
+  window.__atlasCalls = [];
+  let polls = 0;
+  window.__fetchApi = async (p, opts) => {
+    if (p.startsWith('/imageviewer/atlas_chisel')) {
+      const body = opts && opts.body ? JSON.parse(opts.body) : null;
+      window.__atlasCalls.push([p, body]);
+      const ok = (b) => new Response(JSON.stringify(b), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (body) return ok({ ok: true, id: 'c1', state: 'running' });
+      polls += 1;
+      return ok(polls < 2 ? { id: 'c1', state: 'running', phase: 'Atlas is changing the masked part', elapsed: 4 }
+                          : { id: 'c1', state: 'done', path: 'D:/o/court/chisel/chisel_001.png' });
+    }
+    return real(p, opts);
+  };
+}"""
+
+# An Atlas world "open" in a 3D tab: the harness has no three.js, so the view is a stand-in with the parts
+# captureCamera and the snapshot use (the camera's matrices, the world's body, a 1280 x 720 picture).
+FAKE_WORLD = """() => {
+  const P = window.__panel;
+  P.setViewerToggleState(true);
+  const m = (e) => ({ elements: e });
+  const cam = { fov: 50, aspect: 1.6, matrixWorld: m([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,1.6,4,1]), updateMatrixWorld() {} };
+  const body = { matrixWorld: m([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]), updateWorldMatrix() {} };
+  const picture = () => {
+    const c = document.createElement('canvas'); c.width = 1280; c.height = 720;
+    const g = c.getContext('2d');
+    const sky = g.createLinearGradient(0, 0, 0, 430); sky.addColorStop(0, '#6d9fd6'); sky.addColorStop(1, '#d9e6ef');
+    g.fillStyle = sky; g.fillRect(0, 0, 1280, 430);
+    const lawn = g.createLinearGradient(0, 430, 0, 720); lawn.addColorStop(0, '#6f8f45'); lawn.addColorStop(1, '#3f5a26');
+    g.fillStyle = lawn; g.fillRect(0, 430, 1280, 290);
+    g.fillStyle = '#8b8378'; g.fillRect(140, 250, 330, 190); g.fillRect(860, 220, 300, 220);
+    g.fillStyle = '#5a4a3a'; g.fillRect(560, 500, 170, 26); g.fillRect(575, 526, 12, 34); g.fillRect(703, 526, 12, 34);
+    g.fillStyle = '#2f4a22'; for (const x of [90, 520, 790, 1210]) { g.beginPath(); g.arc(x, 400, 70, 0, 7); g.fill(); }
+    return c.toDataURL('image/png');
+  };
+  const view = { scene3d: { activeCamera: null }, _entries: new Map([['w', { item: null }]]), _walk: false,
+                 activeCameraObject: () => cam, _bodyOf: () => body,
+                 beginRender: () => true, renderFrame: () => picture(), endRender() {} };
+  P.isPrevizTab = () => true;
+  P.previzAtlasItem = () => ({ id: 'w', kind: 'model', src: { path: 'D:/o/court/world.glb' } });
+  P._modelView = () => view;
+  window.__shown = [];
+  P.previzAtlasShow = async (state, world, label) => { window.__shown.push([state.path, world, label]); return 'shown'; };
 }"""
 
 
@@ -151,6 +235,92 @@ class AtlasCreateTests(unittest.TestCase):
         self.assertFalse(pg.evaluate(f"() => {root}.querySelector('.atlas-create .rd-go').disabled"))
         pg.keyboard.press("Escape")
         self.assertFalse(pg.evaluate(f"() => !!{root}.querySelector('.atlas-create')"))
+        self.assertEqual(self.errors, [])
+
+
+    def test_pictures_dropped_from_explorer_come_into_the_new_world_dialog(self):
+        pg = self.page()
+        pg.evaluate(STUB)
+        pg.evaluate(UPLOAD_STUB)
+        pg.evaluate("() => { window.__panel.setViewerToggleState(true); window.__panel.atlasCreateDialog(); }")
+        root = "window.__panel.shadowRoot"
+        self.assertTrue(pg.evaluate(f"() => !!{root}.querySelector('.atlas-create .atlas-dropzone')"))
+        pg.evaluate(DROP_FILES % (f"{root}.querySelector('.atlas-create .atlas-composer')", "['beach.png', 'notes.txt']"))
+        pg.wait_for_function(f"() => {root}.querySelectorAll('.atlas-create .atlas-pic').length === 1")
+        self.assertEqual(pg.evaluate("() => window.__uploads"), ["beach.png"], "only the picture is copied in")
+        self.assertEqual(pg.evaluate(f"() => {root}.querySelector('.atlas-create .atlas-name').value"), "beach")
+        # A file let go on the backdrop beside the box is swallowed, not opened by the browser.
+        prevented = pg.evaluate(DROP_FILES % (f"{root}.querySelector('.atlas-create')", "['x.png']"))
+        self.assertTrue(prevented)
+        self.assertEqual(self.errors, [])
+
+    def test_chisel_this_view_paints_a_mask_on_the_view_and_sends_it(self):
+        pg = self.page()
+        pg.evaluate(CHISEL_STUB)
+        pg.evaluate(UPLOAD_STUB)
+        pg.evaluate(FAKE_WORLD)
+        root = "window.__panel.shadowRoot"
+        pg.evaluate("() => window.__panel.atlasChiselDialog()")
+        pg.wait_for_function(f"() => !!{root}.querySelector('.atlas-chisel')")
+        go = f"{root}.querySelector('.atlas-chisel .rd-go')"
+        self.assertEqual(pg.evaluate(f"() => [{go}.textContent, {go}.disabled]"), ["Paint the view", True])
+        pg.evaluate(f"""() => [...{root}.querySelectorAll('.atlas-chisel .rd-btn')].find((b) => b.textContent === 'Use this view').click()""")
+        pg.wait_for_function(f"() => {root}.querySelector('.atlas-stage-mask').width === 1280")
+        box = pg.evaluate(f"""() => {{ const r = {root}.querySelector('.atlas-stage-mask').getBoundingClientRect();
+                                       return [r.left, r.top, r.width, r.height]; }}""")
+        x0, y0, w, h = box
+        pg.mouse.move(x0 + w * 0.42, y0 + h * 0.70)
+        pg.mouse.down()
+        for i in range(12):
+            pg.mouse.move(x0 + w * (0.42 + i * 0.012), y0 + h * (0.70 - (i % 3) * 0.02))
+        pg.mouse.up()
+        pg.evaluate_handle(f"() => {root}.querySelector('.atlas-chisel-prompt')").as_element().fill(
+            "an old stone fountain on the lawn")
+        self.assertEqual(pg.evaluate(f"() => {go}.textContent"), "Change the painted part")
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.screenshot(path=os.path.join(SHOTS, "chisel-this-view.png"))
+        pg.evaluate(f"() => {go}.click()")
+        pg.wait_for_function(f"() => !{root}.querySelector('.atlas-chisel')", timeout=15000)
+        ups = pg.evaluate("() => window.__uploads")
+        self.assertEqual(len(ups), 2)
+        self.assertTrue(ups[0].startswith("chisel_view_") and ups[1].startswith("chisel_mask_"), ups)
+        mask = pg.evaluate("() => window.__maskStats")
+        self.assertEqual((mask["w"], mask["h"]), (1280, 720))
+        self.assertGreater(mask["white"], 0)
+        self.assertGreater(mask["black"], mask["white"], "only the painted part is white")
+        post = next(c for c in pg.evaluate("() => window.__atlasCalls") if c[1])
+        self.assertEqual(post[0], "/imageviewer/atlas_chisel")
+        b = post[1]
+        self.assertEqual((b["world_path"], b["prompt"], b["image"]["path"].split("/")[-1][:12],
+                          b["mask"]["path"].split("/")[-1][:12], b["camera"]["gated"], round(b["camera"]["aspect"], 4),
+                          b["context"], b["seed"]),
+                         ("D:/o/court/world.glb", "an old stone fountain on the lawn", "chisel_view_", "chisel_mask_",
+                          True, round(16 / 9, 4), True, -1))
+        self.assertEqual(len(b["camera"]["camera_world"]), 16)
+        self.assertEqual(pg.evaluate("() => window.__shown"), [["D:/o/court/chisel/chisel_001.png", "court", "Atlas chisel"]])
+        self.assertEqual(self.errors, [])
+
+    def test_chisel_takes_a_picture_dropped_from_explorer_and_needs_a_world(self):
+        pg = self.page()
+        pg.evaluate(CHISEL_STUB)
+        pg.evaluate(UPLOAD_STUB)
+        root = "window.__panel.shadowRoot"
+        pg.evaluate("() => { window.__panel.setViewerToggleState(true); window.__panel.atlasChiselDialog(); }")
+        self.assertFalse(pg.evaluate(f"() => !!{root}.querySelector('.atlas-chisel')"), "no world, no dialog")
+        pg.evaluate(FAKE_WORLD)
+        pg.evaluate("() => window.__panel.atlasChiselDialog()")
+        pg.evaluate(DROP_FILES % (f"{root}.querySelector('.atlas-stage')", "['render.png']"))
+        pg.wait_for_function(f"() => {root}.querySelector('.atlas-stage').classList.contains('has-pic')")
+        go = f"{root}.querySelector('.atlas-chisel .rd-go')"
+        pg.evaluate_handle(f"() => {root}.querySelector('.atlas-chisel-prompt')").as_element().fill("at night")
+        self.assertEqual(pg.evaluate(f"() => {go}.textContent"), "Repaint the picture")
+        pg.evaluate(f"() => {go}.click()")
+        pg.wait_for_function(f"() => !{root}.querySelector('.atlas-chisel')", timeout=15000)
+        b = next(c for c in pg.evaluate("() => window.__atlasCalls") if c[1])[1]
+        self.assertEqual(b["image"], {"path": "D:/in/edits/render.png"})
+        self.assertNotIn("mask", b)
+        self.assertEqual(pg.evaluate("() => window.__uploads"), ["render.png"])
         self.assertEqual(self.errors, [])
 
 
