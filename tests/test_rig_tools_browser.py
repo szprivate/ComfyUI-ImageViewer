@@ -648,6 +648,25 @@ class RigToolsBrowserTests(unittest.TestCase):
             pg.evaluate("""async () => window.__panel.previzRigAgentRun({ id: 'p5', action: 'pose',
                              args: { model: 'Statue', frame: 50, image: 'D:/refs/sitter.png' } })""")
             pic = pg.evaluate("() => ['Hips', 'LeftHand', 'LeftArm', 'LeftFoot', 'LeftLeg'].map((b) => window.__boneAt(b, 50))")
+            # The same picture read by ComfyUI's SAM 3D Body nodes: the graph the server hands over is queued,
+            # and its ImageViewerBodyPose answer read (ComfyUI's queue stood in for here).
+            body_asks = []
+
+            def body_pose(route, request):
+                body_asks.append(json.loads(request.post_data or "{}"))
+                route.fulfill(status=200, content_type="application/json", body=json.dumps(
+                    {"graph": {"4": {"class_type": "ImageViewerBodyPose", "inputs": {}}}, "output": "4", "image": "rig_pose/x.png"}))
+            pg.route("**/imageviewer/rig/body_pose", body_pose)
+            pg.evaluate("""(world) => {
+                const p = window.__panel, tools = p._previzRigTools.bind(p);
+                p._previzRigTools = async () => Object.assign(await tools(), { sam3dbody: { ready: true, missing: [] } });
+                p._paintQueue = async (g) => { window.__queued = g; return 'pid'; };
+                p._paintWait = async (id, out, tell) => tell.pick({ imageviewer_body: [{ people: [{ landmarks: world }] }] });
+            }""", fake_sitter()["frames"][0]["world"])
+            pg.evaluate("""async () => window.__panel.previzRigAgentRun({ id: 'p6', action: 'pose',
+                             args: { model: 'Statue', frame: 70, image: 'D:/refs/sitter.png', fov: 40 } })""")
+            sam = pg.evaluate("() => ['Hips', 'LeftHand', 'LeftArm', 'LeftFoot', 'LeftLeg'].map((b) => window.__boneAt(b, 70))")
+            queued = pg.evaluate("() => window.__queued")
         finally:
             pg.close()
         done = {b["id"]: b for k, b in self.requests if k == "agent_done" and b["state"] in ("done", "error")}
@@ -689,6 +708,13 @@ class RigToolsBrowserTests(unittest.TestCase):
         self.assertLess(abs(foot[1] - floor), 0.08 * stand, (foot, floor))
         self.assertLess(hand[1], shoulder[1] - 0.35 * stand)     # the arms hang
         self.assertLess(math.hypot(hand[0] - shoulder[0], hand[2] - shoulder[2]), 0.15 * stand)
+        self.assertEqual(done["p5"]["result"].get("read_with"), "mediapipe")
+        self.assertEqual(done["p6"]["state"], "done", done["p6"])
+        self.assertEqual(done["p6"]["result"]["read_with"], "sam3d")
+        self.assertEqual(body_asks, [{"src": {"path": "D:/refs/sitter.png"}, "fov": 40}])
+        self.assertEqual(queued["4"]["class_type"], "ImageViewerBodyPose")
+        for a, b in zip(pic, sam):                                # the same landmarks: the same pose
+            self.assertLess(math.dist(a, b), 1e-3 * stand)
         self.assertEqual(self.errors, [])
 
 

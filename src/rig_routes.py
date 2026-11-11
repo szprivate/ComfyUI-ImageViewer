@@ -20,6 +20,10 @@
                                         or one picture (scripts/rig/video_pose_run.py); the result is the landmarks per frame
                                         (one frame for a picture),
                                         solved onto the character in the page (imageViewer_rigVideo.js)
+    POST /imageviewer/rig/body_pose     {src, fov?} -> {graph, output, image}: the graph that reads a pose off a
+                                        picture with ComfyUI's own SAM 3D Body nodes (body_pose.py), for the page to
+                                        queue; 409 {missing} without its nodes / weights. /rig/body_pose_download
+                                        fetches the weights ({} -> {job}; {job, cancel?} -> how far)
     POST /imageviewer/rig/lipsync       {src, fps, start?, seconds?, lead?, smooth?, strength?} -> mouth curves per
                                         frame (lipsync.py, in this process), put on blendshapes in the page
     GET  /imageviewer/rig/job?job=      -> {state: running|done|error|cancelled, log, result?, error?}
@@ -61,6 +65,7 @@ import atexit
 import urllib.parse
 from struct import error as struct_error
 
+from . import body_pose
 from . import rig_export
 from . import rig_import
 
@@ -610,6 +615,10 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
 
     async def tools(request):
         out = tool_status()
+        gone, _m = body_pose_needs()
+        out["sam3dbody"] = {"ready": not gone, "missing": gone,
+                            "why": "" if not gone else ("update ComfyUI (no SAM 3D Body nodes)" if any(m["kind"] == "node" for m in gone)
+                                                         else f"SAM 3D Body's weights are not in models/{body_pose.MODEL['folder']}")}
         run = installing()
         out["install"] = {"root": default_root(folder_paths), "hf_token": has_hf_token(),
                           "running": run.id if run else None}
@@ -838,6 +847,68 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         spawn(job, work)
         return web.json_response(job.view())
 
+    def body_pose_needs():
+        """What a pose through SAM 3D Body lacks here: ComfyUI's nodes, the weights. [{what, kind, ...}]."""
+        out = []
+        try:
+            import nodes as comfy_nodes                        # ComfyUI's own registry
+            have = getattr(comfy_nodes, "NODE_CLASS_MAPPINGS", {}) or {}
+        except Exception:  # noqa: BLE001 - outside ComfyUI
+            have = {}
+        for n in body_pose.NODES + ("ImageViewerBodyPose",):
+            if n not in have:
+                out.append({"what": n, "kind": "node"})
+        try:
+            names = folder_paths.get_filename_list(body_pose.MODEL["folder"])
+        except Exception:  # noqa: BLE001 - no detection folder: an older ComfyUI
+            names = []
+        model = body_pose.find_model(names)
+        if not model:
+            out.append(dict(body_pose.MODEL, what=body_pose.MODEL["name"], kind="model"))
+        return out, model
+
+    async def body_pose_route(request):
+        """{src, fov?} -> {graph, output}: the graph that reads a person's pose off a picture with SAM 3D Body,
+        for the page to queue; 409 {missing} when this ComfyUI lacks its nodes or weights."""
+        body = await body_of(request)
+        missing, model = body_pose_needs()
+        if missing:
+            nodes_gone = [m["what"] for m in missing if m["kind"] == "node"]
+            why = ("this ComfyUI has no SAM 3D Body nodes (update ComfyUI): " + ", ".join(nodes_gone) if nodes_gone
+                   else f"SAM 3D Body's weights are not in models/{body_pose.MODEL['folder']}")
+            return web.json_response({"error": why, "missing": missing}, status=409)
+        try:
+            src = media_src(body, PICTURE_EXTS, "picture")
+        except LookupError as e:
+            return err(e, 404)
+        except PermissionError as e:
+            return err(e, 403)
+        except ValueError as e:
+            return err(e)
+        try:
+            fov = float(body.get("fov") or 0.0)
+        except (TypeError, ValueError):
+            return err("fov is a number of degrees")
+        name = await off(body_pose.place_in_input, src, folder_paths.get_input_directory())
+        return web.json_response({"graph": body_pose.graph(name, model, max(0.0, min(170.0, fov))),
+                                  "output": body_pose.OUTPUT_NODE, "image": name})
+
+    async def body_pose_download(request):
+        """{} -> {job}: fetch SAM 3D Body's weights (Comfy-Org's, from Hugging Face); {job, cancel?} -> how far."""
+        from . import paint_generate as G
+        body = await body_of(request)
+        try:
+            if body.get("job"):
+                return web.json_response(G.download_status(str(body["job"]), bool(body.get("cancel"))))
+            missing, _m = body_pose_needs()
+            files = [m for m in missing if m["kind"] == "model"]
+            if not files:
+                return web.json_response({"state": "done", "files": []})
+            return web.json_response({"job": G.start_file_download(files, folder_paths, "sam3d_body"),
+                                      "files": [{"name": f["name"], "folder": f["folder"]} for f in files]})
+        except G.GenerateError as e:
+            return err(e)
+
     async def lipsync_route(request):
         body = await body_of(request)
         try:
@@ -944,6 +1015,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
     for method, path, handler in (("POST", "rig/export", export), ("POST", "rig/read_motion", read_motion), ("GET", "rig/tools", tools), ("POST", "rig/install", install),
                                   ("POST", "rig/autorig", autorig), ("POST", "rig/motion", motion),
                                   ("POST", "rig/video_pose", video_pose), ("POST", "rig/lipsync", lipsync_route),
+                                  ("POST", "rig/body_pose", body_pose_route), ("POST", "rig/body_pose_download", body_pose_download),
                                   ("GET", "rig/job", job_state), ("POST", "rig/job", job_cancel)):
         add(method, f"/imageviewer/{path}", handler)
         add(method, f"/api/imageviewer/{path}", handler)

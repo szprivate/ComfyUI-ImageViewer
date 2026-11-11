@@ -595,6 +595,51 @@ class RigRoutes(unittest.TestCase):
         self.assertEqual(len(res["frames"]), 1)
         self.assertEqual(len(res["frames"][0]["world"]), 33)
 
+    def test_body_pose_hands_the_page_a_sam3d_body_graph(self):
+        import types
+        fp = importlib.import_module(self.pkg + ".viewer_api").folder_paths
+        with open(os.path.join(self.dirs["output"], "hero.png"), "wb") as fh:
+            fh.write(b"\x89PNG\r\n\x1a\nhero")
+        saved_nodes, saved_list = sys.modules.get("nodes"), getattr(fp, "get_filename_list", None)
+
+        async def go(c):
+            src = {"src": {"filename": "hero.png", "type": "output"}, "fov": 45}
+            none = await c.post("/imageviewer/rig/body_pose", json=src)
+            sys.modules["nodes"] = types.SimpleNamespace(NODE_CLASS_MAPPINGS={
+                "SAM3DBody_Loader": 1, "SAM3DBody_Predict": 1, "ImageViewerBodyPose": 1})
+            fp.get_filename_list = lambda folder: []
+            weights = await c.post("/imageviewer/rig/body_pose", json=src)
+            tools = await (await c.get("/imageviewer/rig/tools")).json()
+            fp.get_filename_list = lambda folder: ["sam_3d_body_dinov3_bf16.safetensors"] if folder == "detection" else []
+            ok = await c.post("/imageviewer/rig/body_pose", json=src)
+            film = await c.post("/imageviewer/rig/body_pose", json={"src": {"filename": "dance.mp4", "type": "input"}})
+            return (none.status, await none.json(), weights.status, await weights.json(), tools,
+                    ok.status, await ok.json(), film.status)
+        try:
+            none_s, none, w_s, w, tools, ok_s, ok, film_s = self.run_c(go)
+        finally:
+            if saved_nodes is None:
+                sys.modules.pop("nodes", None)
+            else:
+                sys.modules["nodes"] = saved_nodes
+            if saved_list is None:
+                del fp.get_filename_list
+            else:
+                fp.get_filename_list = saved_list
+        self.assertEqual(none_s, 409)
+        self.assertIn("SAM3DBody_Predict", [m["what"] for m in none["missing"]])
+        self.assertEqual(w_s, 409)
+        self.assertEqual([m["what"] for m in w["missing"]], ["sam_3d_body_dinov3_bf16.safetensors"])
+        self.assertTrue(w["missing"][0]["url"].startswith("https://huggingface.co/Comfy-Org/"))
+        self.assertFalse(tools["sam3dbody"]["ready"])
+        self.assertEqual(ok_s, 200, ok)
+        self.assertEqual(ok["output"], "4")
+        self.assertEqual(ok["graph"]["3"]["inputs"]["fov"], 45.0)
+        self.assertTrue(ok["image"].startswith("rig_pose/"), ok)
+        self.assertTrue(os.path.isfile(os.path.join(self.dirs["input"], *ok["image"].split("/"))))
+        self.assertEqual(ok["graph"]["1"]["inputs"]["image"], ok["image"])
+        self.assertEqual(film_s, 400)
+
     def test_lipsync_reads_a_sound_into_mouth_curves(self):
         try:
             import av  # noqa: F401

@@ -482,14 +482,14 @@ export const PrevizRigAIMixin = {
                 const image = a.image || a.picture || null;
                 const out = await need("previzRigPose", "Single poses")(model.id, { preset: a.preset || null, joints: a.joints || null,
                     image: typeof image === "string" ? { path: image } : image, landmarks: a.landmarks || null,
-                    facing: a.facing === "picture" ? "picture" : "keep",
+                    facing: a.facing === "picture" ? "picture" : "keep", via: a.via || "auto", fov: num(a.fov, 0),
                     hips: a.hips || null, mirror: a.mirror || null, ground: a.ground !== false,
                     contacts: a.contacts || null, limits: a.limits !== false,
                     frame: a.frame == null ? (a.from == null ? null : num(a.from)) : num(a.frame),
                     prompt: a.prompt || "", seed: a.seed == null ? null : Number(a.seed), layer: layerOpt });
                 if (!out.ok) throw new Error(out.message);
                 return { frame: out.frame, keys: out.keys, layer: out.layer, not_understood: out.unknown,
-                         contacts: out.contacts || [] };
+                         contacts: out.contacts || [], ...(out.via ? { read_with: out.via } : {}) };
             }
             case "pose_presets":
                 return { presets: P.presetList(), parts: Object.fromEntries(Object.entries(P.PARTS).map(([k, v]) => [k, { moves: v.moves, sided: !!v.sided }])),
@@ -497,7 +497,8 @@ export const PrevizRigAIMixin = {
                          notes: "contacts: [\"hand.R\", {\"part\": \"hand.L\", \"under\": true}, \"foot.L\"] puts those on the floor "
                               + "(under = straight below its shoulder / hip; the first one sets the body's height). "
                               + "Joint limits are on unless limits is false: elbows and knees bend one way only. "
-                              + "image: a picture's path takes the whole pose from the person in it (MediaPipe; "
+                              + "image: a picture's path takes the whole pose from the person in it (via \"sam3d\" = ComfyUI's SAM 3D Body, "
+                              + "\"mediapipe\", or \"auto\": SAM 3D Body when it is there; fov in degrees helps SAM 3D Body; "
                               + "facing \"picture\" also turns the character as they are turned); contacts and limits apply to it too." };
             case "flip_pose":
                 need("previzRigFlipPose", "Flip pose")(model.id);
