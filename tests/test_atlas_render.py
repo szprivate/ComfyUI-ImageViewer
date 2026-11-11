@@ -348,6 +348,40 @@ class WorldCameraTests(unittest.TestCase):
         self.write([{"id": 0}])
         self.assertEqual(ar.world_cameras(self.dir), {"frames": 0, "cameras": []})
 
+    def test_views_are_every_framed_picture_with_its_lens(self):
+        import math
+        cam = lambda t: {"extrinsics": {"position": t, "quaternion": [0, 0, 0, 1], "coordinateSystem": "rub"},  # noqa: E731
+                         "intrinsics": {"fx": 500, "fy": 500, "cx": 640, "cy": 360, "width": 1280, "height": 720}}
+        for name in ("v0.png", "v1.png"):
+            open(os.path.join(self.dir, name), "wb").close()
+        self.write([{"id": 0, "image": "v0.png", "camera": cam([0, 0, 0]), "depth": "d0.exr", "source": "create"},
+                    {"id": 1, "image": "v1.png", "camera": cam([1, 0, 0]), "source": "render"},      # a render: no depth
+                    {"id": 2, "image": "gone.png", "camera": cam([2, 0, 0])},                         # picture missing
+                    {"id": 3, "image": "v1.png"}])                                                    # no camera
+        out = ar.world_cameras(self.dir)
+        self.assertEqual(out["frames"], 1)
+        self.assertEqual([v["id"] for v in out["views"]], [0, 1])
+        v = out["views"][1]
+        self.assertEqual(v["image"], os.path.join(self.dir, "v1.png"))
+        self.assertAlmostEqual(v["aspect"], 1280 / 720)
+        self.assertAlmostEqual(v["fov"], math.degrees(2 * math.atan(360 / 500)))
+        self.assertEqual((v["source"], v["has_depth"]), ("render", False))
+        np.testing.assert_allclose(v["pos"], [1, 0, 0], atol=1e-9)
+
+
+class RebuildRelayTests(unittest.TestCase):
+    def test_rebuild_goes_to_the_hosts_rebuild_route_with_the_world_folder(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        wd = world_on_disk(tmp.name)
+        stub = Stub()
+        self.addCleanup(stub.close)
+        ar.rebuild_mesh(stub.base, {"world_path": os.path.join(wd, "world.glb")})
+        method, path, token, body = stub.seen[0]
+        self.assertEqual((method, path, body["world"]), ("POST", "/agentY/atlas_rebuild", wd))
+        with self.assertRaises(ar.RelayError):
+            ar.rebuild_mesh(stub.base, {"world_path": tmp.name + "/nowhere"})
+
 
 class SplatRelayTests(unittest.TestCase):
     def setUp(self):

@@ -1216,6 +1216,9 @@ export function parseScene(raw) {
             if (raw.atlasOrient && Number.isFinite(Number(raw.atlasOrient.frames))) {
                 item.atlasOrient = { frames: Math.max(0, Math.round(Number(raw.atlasOrient.frames))) };
             }
+            // How an Atlas world is shown (imageViewer_atlas3d.js): as a point cloud, and with its views.
+            if (raw.atlasPoints === true) item.atlasPoints = true;
+            if (raw.atlasViews === false) item.atlasViews = false;
         }
 
         // Custom attributes (on controls) and blendshape weights (on models).

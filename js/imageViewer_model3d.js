@@ -28,6 +28,7 @@ import { WorldMatchMixin } from "./imageViewer_worldMatch.js";
 import { Rig3DMixin } from "./imageViewer_rig3d.js";
 import { Rig3DExtrasMixin } from "./imageViewer_rig3dExtras.js";
 import { View3DToolsMixin } from "./imageViewer_view3dTools.js";
+import { Atlas3DMixin } from "./imageViewer_atlas3d.js";
 import { displayStates, isPickable } from "./imageViewer_sceneLayers.js";
 import { constrainedLocals } from "./imageViewer_constraints.js";
 
@@ -1689,6 +1690,8 @@ export class Model3DView {
         this._refreshAlsoBoxes();
         this._syncPivotMark();
         this._syncGate();
+        // An Atlas world's views and point cloud (imageViewer_atlas3d.js).
+        this._atlasSync();
         this.requestRender();
     }
 
@@ -2371,6 +2374,8 @@ export class Model3DView {
         hide(this._pinGroup);           // feedback pins are notes, not part of the shot
         for (const box of (this._alsoBoxes || new Map()).values()) hide(box);
         for (const j of (this._joints || new Map()).values()) hide(j.group);
+        // An Atlas world's views are there to see where its pictures were taken, never in a picture.
+        for (const st of (this._atlasViewsShown || new Map()).values()) hide(st.group);
         if (!r.opts.helpers) {
             for (const entry of this._entries.values()) {
                 hide(entry.helper);
@@ -2444,6 +2449,8 @@ export class Model3DView {
         if (r.item) cam.fov = evaluateIn(this.scene3d, r.item, this.sceneFrame).fov || 35;
         cam.updateProjectionMatrix();
 
+        // A world shown as points is measured by its meshes.
+        const atlasBack = this._atlasDepthBegin();
         const hidden = [];
         const hide = (obj) => { hidden.push(obj); obj.visible = false; };
         const invisible = (m) => (Array.isArray(m) ? m.every((x) => x && x.visible === false) : m && m.visible === false);
@@ -2495,6 +2502,7 @@ export class Model3DView {
             this.scene.background = background;
             this.scene.overrideMaterial = override;
             for (const obj of hidden) obj.visible = true;
+            atlasBack();
             target.dispose();
             material.dispose();
         }
@@ -2577,3 +2585,4 @@ Object.assign(Model3DView.prototype, WorldMatchMixin);
 Object.assign(Model3DView.prototype, Rig3DMixin);
 Object.assign(Model3DView.prototype, Rig3DExtrasMixin);
 Object.assign(Model3DView.prototype, View3DToolsMixin);
+Object.assign(Model3DView.prototype, Atlas3DMixin);
