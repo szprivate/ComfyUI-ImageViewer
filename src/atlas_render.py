@@ -208,3 +208,181 @@ def render_state(comfy_base: str, job_id: str) -> dict:
     if not job_id:
         raise RelayError("no render id", 400)
     return call_host(comfy_base, "GET", query=f"id={job_id}")
+
+
+# ── "New Atlas world": a world made from a prompt or pictures, from the 3D space (no agent turn) ──
+
+CREATE_ROUTE = "atlas_create"
+ASPECTS = ("16:9", "9:16", "4:3", "3:4", "1:1")
+MAX_CREATE_IMAGES = 8
+MAX_PROMPT = 2000
+
+
+def clean_create_request(data, images=None) -> dict:
+    """The body forwarded to the host for a new world. ``images`` are the pictures' absolute paths,
+    already resolved and checked by the route (path_access); the page's own list is not trusted here."""
+    if not isinstance(data, dict):
+        raise RelayError("bad request", 400)
+    prompt = str(data.get("prompt") or "").strip()[:MAX_PROMPT]
+    imgs = [str(p) for p in (images or []) if str(p or "").strip()]
+    if len(imgs) > MAX_CREATE_IMAGES:
+        raise RelayError(f"at most {MAX_CREATE_IMAGES} pictures for one world", 400)
+    if not imgs and not prompt:
+        raise RelayError("describe the place, or add a picture of it", 400)
+    aspect = str(data.get("aspect_ratio") or "16:9")
+    if aspect not in ASPECTS:
+        raise RelayError("aspect_ratio is one of " + ", ".join(ASPECTS), 400)
+    name = "".join(c if (c.isalnum() or c in "_- ") else "_" for c in str(data.get("name") or "")).strip()[:60]
+    if not name:
+        raise RelayError("give the world a name", 400)
+    try:
+        detail = int(data.get("mesh_detail") or 4)
+    except (TypeError, ValueError):
+        raise RelayError("mesh_detail must be a number", 400)
+    if detail not in (2, 4, 8):
+        raise RelayError("mesh_detail is 2 (fine), 4 or 8 (light)", 400)
+    return {"name": name, "prompt": prompt, "image_paths": imgs, "aspect_ratio": aspect, "mesh_detail": detail,
+            "open_in_viewer": data.get("open_in_viewer", True) is not False}
+
+
+def start_create(comfy_base: str, data, images=None) -> dict:
+    return call_host(comfy_base, "POST", body=clean_create_request(data, images), route=CREATE_ROUTE, timeout=60.0)
+
+
+def create_state(comfy_base: str, job_id: str) -> dict:
+    job_id = "".join(c for c in str(job_id or "") if c.isalnum())[:32]
+    if not job_id:
+        raise RelayError("no job id", 400)
+    return call_host(comfy_base, "GET", query=f"id={job_id}", route=CREATE_ROUTE)
+
+
+# ── "Chisel this view": an Atlas Chisel picture at the camera the viewer looks through (no agent turn) ──
+
+CHISEL_ROUTE = "atlas_chisel"
+MAX_CHISEL_PROMPT = 2000
+
+
+def _viewer_camera(cam) -> dict:
+    """The camera the page sent, as the host's ``{"viewer": {...}}`` camera spec (raw matrices, checked)."""
+    if not isinstance(cam, dict):
+        raise RelayError("send the camera", 400)
+    cw = _num_list(cam.get("camera_world"), 16)
+    if cw is None:
+        raise RelayError("camera_world must be the camera's 16 matrix numbers", 400)
+    viewer = {"camera_world": cw}
+    if cam.get("model_world") is not None:
+        viewer["model_world"] = _num_list(cam.get("model_world"), 16)
+        if viewer["model_world"] is None:
+            raise RelayError("model_world must be the model's 16 matrix numbers", 400)
+    for k in ("fov", "aspect"):
+        try:
+            if cam.get(k) is not None:
+                viewer[k] = float(cam[k])
+        except (TypeError, ValueError):
+            raise RelayError(f"{k} must be a number", 400)
+    viewer["gated"] = bool(cam.get("gated"))
+    return {"viewer": viewer}
+
+
+MAX_DEPTH_PIXELS = 1280 * 720
+
+
+def decode_depth(depth) -> tuple:
+    """The page's depth map, ``{"w", "h", "data": base64 little-endian float32, row 0 at the top}``,
+    as (floats, w, h): planar depth in the world mesh's units, 0 where nothing is."""
+    import base64
+    import numpy as np
+    if not isinstance(depth, dict):
+        raise RelayError("bad depth map", 400)
+    try:
+        w, h = int(depth.get("w")), int(depth.get("h"))
+    except (TypeError, ValueError):
+        raise RelayError("bad depth map size", 400)
+    if w < 1 or h < 1 or w * h > MAX_DEPTH_PIXELS:
+        raise RelayError("bad depth map size", 400)
+    try:
+        raw = base64.b64decode(str(depth.get("data") or ""), validate=True)
+    except Exception:
+        raise RelayError("bad depth map data", 400)
+    if len(raw) != w * h * 4:
+        raise RelayError("the depth map's data does not match its size", 400)
+    z = np.frombuffer(raw, dtype="<f4").astype(np.float64).reshape(h, w)
+    z[~np.isfinite(z)] = 0.0
+    z[z < 0] = 0.0
+    return z, w, h
+
+
+def write_log_depth(z, out_dir: str) -> tuple:
+    """Save planar depth ``z`` (2-D array, 0 = nothing there) as the log-depth PNG Atlas Chisel reads:
+    16-bit grey, v = (ln z - ln zmax) / (ln zmin - ln zmax), so white is zMin and black is zMax / no surface.
+    Answers (path, z_min, z_max)."""
+    import time
+    import uuid
+    import numpy as np
+    from PIL import Image
+    hit = z[z > 0]
+    if hit.size < 16:
+        raise RelayError("there is no geometry in front of the camera to build on", 400)
+    zmin = max(float(np.percentile(hit, 0.5)), 1e-3)
+    zmax = float(hit.max())
+    if zmax <= zmin * 1.001:
+        zmax = zmin * 1.01
+    zc = np.clip(z, zmin, zmax)
+    v = (np.log(zc) - np.log(zmax)) / (np.log(zmin) - np.log(zmax))
+    v[z <= 0] = 0.0
+    px = np.round(np.clip(v, 0.0, 1.0) * 65535.0).astype(np.uint16)
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, f"chisel_depth_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}.png")
+    Image.fromarray(px).save(path)
+    return path, zmin, zmax
+
+
+def clean_chisel_request(data, image: str = "", mask: str = "", style: str = "",
+                         depth: tuple | None = None) -> dict:
+    """The body forwarded to the host for a Chisel picture. ``image`` / ``mask`` / ``style`` are absolute
+    paths the route resolved and checked (path_access); the page's own references are never passed on."""
+    if not isinstance(data, dict):
+        raise RelayError("bad request", 400)
+    world = world_dir_of(data.get("world_path") or data.get("world"))
+    prompt = str(data.get("prompt") or "").strip()[:MAX_CHISEL_PROMPT]
+    if not prompt:
+        raise RelayError("say what Atlas should paint or change", 400)
+    if mask and not image:
+        raise RelayError("a mask needs the picture it was painted on", 400)
+    if not image and not depth:
+        raise RelayError("give Chisel something to build on: the scene's geometry or a picture", 400)
+    try:
+        voxel = float(data.get("voxel_size") or 0.0)
+    except (TypeError, ValueError):
+        raise RelayError("voxel_size must be a number", 400)
+    voxel = min(max(voxel, 0.0), 0.4)
+    try:
+        seed = int(data.get("seed") if data.get("seed") not in (None, "") else -1)
+    except (TypeError, ValueError):
+        raise RelayError("seed must be a whole number", 400)
+    return {"world": world, "camera": _viewer_camera(data.get("camera")), "prompt": prompt,
+            "image_path": image or "", "mask_path": mask or "", "style_image": style or "",
+            "context": data.get("context", True) is not False, "seed": seed if seed >= 0 else -1,
+            "enhance_prompt": data.get("enhance_prompt", True) is not False,
+            "depth_path": depth[0] if depth else "", "z_min": depth[1] if depth else None,
+            "z_max": depth[2] if depth else None, "voxel_size": voxel}
+
+
+def start_chisel(comfy_base: str, data, image: str = "", mask: str = "", style: str = "",
+                 depth_dir: str = "") -> dict:
+    """``depth_dir``: where to save the page's depth map (``data["depth"]``) as a log-depth PNG."""
+    depth = None
+    if isinstance(data, dict) and data.get("depth"):
+        if not depth_dir:
+            raise RelayError("no folder to keep the depth map in", 500)
+        z, _w, _h = decode_depth(data["depth"])
+        depth = write_log_depth(z, depth_dir)
+    return call_host(comfy_base, "POST", body=clean_chisel_request(data, image, mask, style, depth),
+                     route=CHISEL_ROUTE, timeout=60.0)
+
+
+def chisel_state(comfy_base: str, job_id: str) -> dict:
+    job_id = "".join(c for c in str(job_id or "") if c.isalnum())[:32]
+    if not job_id:
+        raise RelayError("no job id", 400)
+    return call_host(comfy_base, "GET", query=f"id={job_id}", route=CHISEL_ROUTE)

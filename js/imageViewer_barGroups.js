@@ -48,6 +48,11 @@ const GROUPS = [
     ] },
     { id: "3d", title: "3D", icon: "box", items: [
         { label: "Open 3D\u2026", run: (p) => p.spaceOpen("3d"), checked: (p) => !!(p.isPrevizTab && p.isPrevizTab()) },
+        // A World Labs Atlas world from a prompt or pictures, made by the agentY host (imageViewer_atlasCreate.js).
+        { label: "New Atlas world\u2026", run: (p) => p.atlasCreateDialog() },
+        // Atlas Chisel at the camera you look through: paint the view, or change a painted part of a picture of it.
+        { label: "Chisel this view\u2026", run: (p) => p.atlasChiselDialog(),
+          needs: "3d" },
         { label: "Outliner", panel: "previz", needs: "3d" },
         { label: "Channel Box", panel: "channels", needs: "3d" },
         { label: "Curve Editor", panel: "curves", needs: "3d" },
