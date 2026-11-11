@@ -516,7 +516,10 @@ class CompBrowserTests(unittest.TestCase):
         pg.evaluate(f"""() => {{ const e = {self.ED}; const c = e.comp(); const out = c.nodes.find((n) => n.type === 'output');
             const g = e.addNode('glow'); g.inputs = [c.nodes.find((n) => n.type === 'constant').id]; out.inputs = [g.id]; e.refresh(); }}""")
         pg.evaluate("() => __panel.compSetFormat({ duration: 2 })")
-        pg.locator(".mg-bar button", has_text="Nuke…").click()
+        self.assertEqual(pg.locator(".mg-bar button", has_text="Nuke…").count(), 0)   # in Save's menu only
+        self.assertEqual(pg.locator(".mg-bar button", has_text="Render…").count(), 0)
+        pg.locator(".mg-bar .cp-save").click()
+        pg.locator("text=Export to Nuke…").last.click()
         pg.wait_for_selector(".export-dlg .rd-box")
         if SHOTS:
             os.makedirs(SHOTS, exist_ok=True)

@@ -365,8 +365,6 @@ export function createCompEditor(host, opts = {}) {
             ib("save", "Save (Ctrl+S) - the menu: Save as, Render, Export to Nuke", (b) => popMenu(b, fileItems()), "cp-save" + (st.dirty ? " dirty" : "")),
             el(doc, "span", "mg-sep"),
             t,
-            btn("Render…", "Render the comp's Output to a file", doRender),
-            ...(o.exportNuke ? [btn("Nuke…", "Export to Nuke: the comp as a .nk script, what Nuke has no node for baked to EXR", doNuke)] : []),
             el(doc, "span", "mg-sep"),
             btn("↶", "Undo (Ctrl+Z)", undo), btn("↷", "Redo (Ctrl+Shift+Z)", redo),
             el(doc, "span", "mg-sep"), proxy, ...(disp ? [disp] : []), alpha,
