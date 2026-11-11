@@ -88,6 +88,12 @@ export const PrevizRigMixin = {
             for (const d of S.descendantsOf(scene, group.id)) gone.add(d.id);
         }
         scene.items = scene.items.filter((it) => !gone.has(it.id));
+        // Set-driven keys read from those controls go with them (a face rig's on the model).
+        for (const it of scene.items) {
+            if (!it.drivers) continue;
+            it.drivers = it.drivers.filter((d) => !gone.has(d.driver.id));
+            if (!it.drivers.length) delete it.drivers;
+        }
         // The bones the controls were posing go back to the file's rest pose.
         const view = this._modelView();
         const e = view && view._entries && view._entries.get(modelId);
@@ -476,6 +482,8 @@ export const PrevizRigMixin = {
             { label: "Export USD…", disabled: !bones, run: () => this.previzExportCharacter && this.previzExportCharacter(modelId, "usd") },
             { label: "Export Alembic…", disabled: !model, run: () => this.previzExportCharacter && this.previzExportCharacter(modelId, "abc") },
         ];
+        // Poses, spaces, set-driven keys, attributes, facial controls (imageViewer_previzRigExtras.js).
+        if (this._previzRigMenuExtras) this._previzRigMenuExtras(entries, { modelId, model, rigged, bones, sel, ik, anchor });
         // A greyed-out entry says why when hovered.
         const why = !model ? "Select a character (a model, its rig or one of its controls) first."
             : !rigged ? `${model.name} has no controls yet: Add controls (or Auto-rig) first.` : "";

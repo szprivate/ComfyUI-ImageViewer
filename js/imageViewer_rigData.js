@@ -830,7 +830,7 @@ export function readRigFields(item, raw) {
     const c = raw.control && typeof raw.control === "object" ? raw.control : {};
     item.rest = m16(raw.rest) || mat4.identity();
     const out = {
-        model: String(c.model || ""), type: ["root", "cog", "fk", "ik", "pole"].includes(c.type) ? c.type : "fk",
+        model: String(c.model || ""), type: ["root", "cog", "fk", "ik", "pole", "face"].includes(c.type) ? c.type : "fk",
         role: typeof c.role === "string" ? c.role : null, side: ["L", "R", "C"].includes(c.side) ? c.side : "C",
     };
     if (typeof c.bone === "string") out.bone = c.bone;
@@ -840,6 +840,9 @@ export function readRigFields(item, raw) {
     if (Array.isArray(c.lengths) && c.lengths.length === 2) out.lengths = c.lengths.map(Number);
     if (typeof c.pole === "string") out.pole = c.pole;
     if (typeof c.ik === "string") out.ik = c.ik;
+    // The spaces it can follow (imageViewer_rigExtras.js) and, for a facial control, what it is.
+    if (Array.isArray(c.spaces)) out.spaces = c.spaces.filter((x) => typeof x === "string" && x).slice(0, 32);
+    if (typeof c.face === "string") out.face = c.face.slice(0, 80);
     const sh = c.shape && typeof c.shape === "object" ? c.shape : {};
     out.shape = {
         type: ["circle", "square", "root", "cube", "foot", "diamond"].includes(sh.type) ? sh.type : "circle",

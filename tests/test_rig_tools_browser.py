@@ -266,6 +266,15 @@ class RigToolsBrowserTests(unittest.TestCase):
         pg.route("**/imageviewer/rig/lipsync", lipsync)
         pg.goto(f"http://127.0.0.1:{self.port}/tabs.html")
         pg.wait_for_function("() => window.__panel && window.__panel.container", timeout=20000)
+        # The pose library's store (src/rig_poses.py, tested in test_rig_poses.py), stood in for by the page.
+        pg.evaluate("""() => { const before = window.__fetchApi, store = [];
+            window.__fetchApi = async (p, opts) => {
+                if (p !== '/imageviewer/rig/poses') return before(p, opts);
+                const b = JSON.parse(opts.body), j = (o) => ({ ok: true, status: 200, json: async () => o });
+                if (b.op === 'save') { store.unshift(b.pose); return j({ ok: true, pose: b.pose }); }
+                if (b.op === 'delete') return j({ ok: true });
+                return j({ poses: store.slice() });
+            }; }""")
         return pg
 
     def test_export_fbx_and_alembic(self):

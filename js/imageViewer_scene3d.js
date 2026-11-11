@@ -76,6 +76,7 @@ import { WORLD_KINDS, readWorldItem, referenceSettings, walkSettings, worldInfo 
 import { readRigFields } from "./imageViewer_rigData.js";
 import { readItemRef, readSceneLayers } from "./imageViewer_sceneLayers.js";
 import { pruneConstraints, readConstraints, readWeightStatic, writeWeightStatic } from "./imageViewer_constraintData.js";
+import { readDrivers } from "./imageViewer_rigDrivers.js";
 
 export const SCENE_VERSION = 1;
 export const DEFAULT_RESOLUTION = [1920, 1080];
@@ -160,10 +161,11 @@ export function setNewSceneDefaults({ fps, length, resolution } = {}) {
     NEW_SCENE.resolution = Array.isArray(resolution) && resolution.length === 2 && resolution.every((v) => v > 0)
         ? resolution.map((v) => Math.round(v)) : DEFAULT_RESOLUTION.slice();
 }
-export const TRACKS = ["position", "rotation", "scale", "pivot", "fov", "ikfk"];
+export const TRACKS = ["position", "rotation", "scale", "pivot", "fov", "ikfk", "space"];
 // Channels that hold one number rather than [x, y, z]: a camera's field of
-// view, and an IK control's IK/FK blend (imageViewer_rigData.js).
-export const SCALAR_TRACKS = ["fov", "ikfk"];
+// view, an IK control's IK/FK blend and a control's space (imageViewer_rigData.js,
+// imageViewer_rigExtras.js).
+export const SCALAR_TRACKS = ["fov", "ikfk", "space"];
 const _isScalar = (prop) => SCALAR_TRACKS.includes(prop) || isExtraProp(prop);
 
 // EXTRA TRACKS
@@ -209,6 +211,47 @@ export function trackProps(item) {
     const extra = [...new Set(sets.flatMap((t) => Object.keys(t).filter(isExtraProp)))];
     return extra.length ? [...TRACKS, ...extra] : TRACKS;
 }
+export const setStatic = setStaticValue;
+/** Whether `prop` names a channel that can carry keys. */
+export function isTrackProp(prop) {
+    return TRACKS.includes(prop) || isExtraProp(prop);
+}
+
+// The rig's own extra channels (imageViewer_rigExtras.js):
+//   "attr:<name>"  a custom attribute of a rig control (item.attrs[name] = { value, min, max })
+//   "bs:<morph>"   a blendshape (morph target) weight of a model (item.blendshapes[morph] = 0..1)
+// The rig's own extra channels: custom attributes and blendshape weights.
+/** The range a rig extra channel is held to. */
+export function extraRange(item, prop) {
+    if (prop.startsWith("bs:")) return [0, 1];
+    const a = prop.startsWith("attr:") && item && item.attrs && item.attrs[prop.slice(5)];
+    return [a && Number.isFinite(a.min) ? a.min : -Infinity, a && Number.isFinite(a.max) ? a.max : Infinity];
+}
+addStaticReader((item, prop) => {
+    if (prop.startsWith("attr:")) {
+        const a = item.attrs && item.attrs[prop.slice(5)];
+        return a && Number.isFinite(a.value) ? a.value : 0;
+    }
+    if (prop.startsWith("bs:")) {
+        const w = item.blendshapes && item.blendshapes[prop.slice(3)];
+        return Number.isFinite(w) ? w : 0;
+    }
+    return undefined;
+});
+addStaticWriter((item, prop, value) => {
+    if (!prop.startsWith("attr:") && !prop.startsWith("bs:")) return false;
+    const [lo, hi] = extraRange(item, prop);
+    const v = Math.max(lo, Math.min(hi, Number(value) || 0));
+    if (prop.startsWith("attr:")) {
+        const name = prop.slice(5);
+        if (!item.attrs) item.attrs = {};
+        item.attrs[name] = { ...(item.attrs[name] || {}), value: v };
+    } else {
+        if (!item.blendshapes) item.blendshapes = {};
+        item.blendshapes[prop.slice(3)] = v;
+    }
+    return true;
+});
 
 // Blocking shapes the viewer can make on its own — no file, no loader. Each is
 // built at unit size and placed by its transform, so the gizmo's scale handles
@@ -840,6 +883,7 @@ export function staticValue(item, prop) {
     // same thing as one at the origin.
     return prop === "fov" ? (item.fov ?? 35)
          : prop === "ikfk" ? (item.ikfk ?? 1)
+         : prop === "space" ? (item.space ?? 0)
          : prop === "pivot" ? _clone(item.pivot || [0, 0, 0])
          : isExtraProp(prop) ? _extraStatic(item, prop)
          : _clone(item[prop]);
@@ -910,7 +954,7 @@ export function keysValueAt(keys, prop, frame, stat) {
 
 /** Everything the view needs to place one item at `frame`. */
 export function evaluate(item, frame) {
-    return {
+    const at = {
         position: valueAt(item, "position", frame),
         rotation: valueAt(item, "rotation", frame),
         scale: valueAt(item, "scale", frame),
@@ -919,6 +963,22 @@ export function evaluate(item, frame) {
         ikfk: item.kind === "control" && item.control && item.control.type === "ik"
             ? valueAt(item, "ikfk", frame) : undefined,
     };
+    // A control's space and the named channels (custom attributes, blendshapes):
+    // only where the item has them, so an ordinary item evaluates as before.
+    if (item.kind === "control" && ((item.control && item.control.spaces && item.control.spaces.length) || isAnimated(item, "space"))) {
+        at.space = valueAt(item, "space", frame);
+    }
+    for (const prop of namedProps(item)) at[prop] = valueAt(item, prop, frame);
+    return at;
+}
+
+/** Every named channel an item has: its custom attributes, its blendshapes, and any keyed. */
+export function namedProps(item) {
+    const out = new Set();
+    for (const n of Object.keys((item && item.attrs) || {})) out.add(`attr:${n}`);
+    for (const n of Object.keys((item && item.blendshapes) || {})) out.add(`bs:${n}`);
+    for (const p of Object.keys((item && item.tracks) || {})) if (isExtraProp(p)) out.add(p);
+    return [...out];
 }
 
 // ── Scene-level evaluators (clip sequencer, animation layers) ──
@@ -1154,6 +1214,30 @@ export function parseScene(raw) {
             item.src = raw.src && typeof raw.src === "object" ? raw.src : null;
         }
 
+        // Custom attributes (on controls) and blendshape weights (on models).
+        if (raw.attrs && typeof raw.attrs === "object" && !Array.isArray(raw.attrs)) {
+            const attrs = {};
+            for (const [n, a] of Object.entries(raw.attrs).slice(0, 500)) {
+                if (!n || n.length > 190 || !a || typeof a !== "object") continue;
+                const lo = Number.isFinite(Number(a.min)) && a.min !== null ? Number(a.min) : undefined;
+                const hi = Number.isFinite(Number(a.max)) && a.max !== null ? Number(a.max) : undefined;
+                attrs[n] = { value: num(a.value, 0) };
+                if (lo !== undefined) attrs[n].min = lo;
+                if (hi !== undefined) attrs[n].max = hi;
+            }
+            if (Object.keys(attrs).length) item.attrs = attrs;
+        }
+        if (raw.blendshapes && typeof raw.blendshapes === "object" && !Array.isArray(raw.blendshapes)) {
+            const bs = {};
+            for (const [n, w] of Object.entries(raw.blendshapes).slice(0, 2000)) {
+                if (n && n.length <= 190 && Number.isFinite(Number(w))) bs[n] = Math.max(0, Math.min(1, Number(w)));
+            }
+            if (Object.keys(bs).length) item.blendshapes = bs;
+        }
+        if (Number.isFinite(Number(raw.space)) && Number(raw.space) > 0) item.space = Math.round(Number(raw.space));
+        if (Array.isArray(raw.drivers)) item.drivers = readDrivers(raw.drivers);
+        if (!item.drivers || !item.drivers.length) delete item.drivers;
+
         const readSet = (tracks, onLayer = false) => {
             const out = {};
             tracks = tracks && typeof tracks === "object" ? tracks : {};
@@ -1165,6 +1249,7 @@ export function parseScene(raw) {
                     if (!k || !Number.isFinite(Number(k.f))) continue;
                     const v = prop === "fov" ? num(k.v, item.fov ?? 35)
                         : prop === "ikfk" ? Math.max(onLayer ? -1 : 0, Math.min(1, num(k.v, onLayer ? 0 : (item.ikfk ?? 1))))
+                        : prop === "space" ? Math.max(0, Math.round(num(k.v, 0)))
                         : isExtraProp(prop) ? num(k.v, 0)
                         : vec(k.v, item[prop]);
                     const key = { f: Math.round(Number(k.f)), v,

@@ -73,8 +73,10 @@ def _box(c0, c1, r):
     return v, f
 
 
-def build(prefix="", names="mixamo", skinned=True):
-    """The figure as a .glb; skinned=False: the same mesh with no skeleton (a model to auto-rig)."""
+def build(prefix="", names="mixamo", skinned=True, morphs=()):
+    """The figure as a .glb; skinned=False: the same mesh with no skeleton (a model to auto-rig).
+    `morphs`: blendshape (morph target) names; each moves the head's box - the first one down
+    0.05, every other one along +X by 0.01 x its place - so a weight is easy to read off it."""
     index = {b[0]: i for i, b in enumerate(BONES)}
     heads = {b[0]: b[2] for b in BONES}
 
@@ -147,6 +149,15 @@ def build(prefix="", names="mixamo", skinned=True):
     a_wgt = add([c for p in weights for c in p], "f", len(weights), 5126, "VEC4", 34962)
     a_idx = add(indices, "I", len(indices), 5125, "SCALAR", 34963)
     a_ibm = add(ibm, "f", len(BONES), 5126, "MAT4")
+    targets = []
+    # The head's box: 8 vertices for every boxed bone before it.
+    start = 8 * sum(1 for name, _, _ in BONES[:index["Head"]] if children[name])
+    for k, mname in enumerate(morphs):
+        d = (0.0, -0.05, 0.0) if k == 0 else (0.01 * k, 0.0, 0.0)
+        delta = [(d if start <= i < start + 8 else (0.0, 0.0, 0.0)) for i in range(len(positions))]
+        lo = [min(v[c] for v in delta) for c in range(3)]
+        hi = [max(v[c] for v in delta) for c in range(3)]
+        targets.append({"POSITION": add([c for v in delta for c in v], "f", len(delta), 5126, "VEC3", 34962, (lo, hi))})
 
     if not skinned:
         nodes = [{"name": "Body", "mesh": 0}]
@@ -159,7 +170,8 @@ def build(prefix="", names="mixamo", skinned=True):
         "meshes": [{"name": "Body", "primitives": [{
             "attributes": dict({"POSITION": a_pos, "NORMAL": a_nrm},
                                **({"JOINTS_0": a_jnt, "WEIGHTS_0": a_wgt} if skinned else {})),
-            "indices": a_idx}]}],
+            "indices": a_idx, **({"targets": targets} if targets else {})}],
+            **({"extras": {"targetNames": list(morphs)}, "weights": [0.0] * len(morphs)} if morphs else {})}],
         "skins": [{"joints": list(range(len(BONES))), "inverseBindMatrices": a_ibm, "skeleton": 0}] if skinned else [],
         "buffers": [{"byteLength": sum(len(b) for b in blobs)}],
         "bufferViews": views,
