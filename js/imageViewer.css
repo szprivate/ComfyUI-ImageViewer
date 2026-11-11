@@ -2395,3 +2395,13 @@ audio.src-media { width: 90%; }
 .rd-shade.rd-float > .rd-box { pointer-events: auto; }
 .rd-shade.rd-float > .rd-box.rd-moved { position: absolute; margin: 0; }
 .rd-head.rd-grab { cursor: move; user-select: none; }
+
+/* Submenus of the previz / bar menus (an entry with `sub`): beside their row, on hover or a click. */
+.previz-menu-subwrap { position: relative; display: flex; flex-direction: column; }
+.previz-menu-item.has-sub::after { content: "\25B8"; float: right; margin-left: 14px; color: #888; }
+.previz-submenu { display: none; top: -4px; left: calc(100% + 2px); }
+.previz-submenu.left { left: auto; right: calc(100% + 2px); }
+.previz-menu-subwrap.open > .previz-submenu { display: flex; }
+.previz-menu-subwrap.open > .previz-menu-item.has-sub { background: #333; color: #fff; }
+.previz-menu.bar-menu .previz-submenu .previz-menu-item { white-space: nowrap; }
+.previz-btn.previz-atlas-menu.has-world { border-color: #f60; }

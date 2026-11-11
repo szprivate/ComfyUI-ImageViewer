@@ -386,3 +386,85 @@ def chisel_state(comfy_base: str, job_id: str) -> dict:
     if not job_id:
         raise RelayError("no job id", 400)
     return call_host(comfy_base, "GET", query=f"id={job_id}", route=CHISEL_ROUTE)
+
+
+# --- The world's cameras, for auto-orient (imageViewer_previzAtlasOrient.js) --------------------------------------
+# world.json keeps every frame's camera in the Atlas world frame (camera-to-world, RUB, quaternion XYZW); the
+# mesh (world.glb) is built in the first meshed frame's camera frame (core's build_world_mesh: the frames with
+# a camera and a depth map, the first of them as the base). The page gets each camera's axes and position in
+# THAT frame, which is the frame the mesh's vertices are in.
+
+def _quat_to_mat(q):
+    x, y, z, w = [float(v) for v in q]
+    n = (x * x + y * y + z * z + w * w) ** 0.5 or 1.0
+    x, y, z, w = x / n, y / n, z / n, w / n
+    return [[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]]
+
+
+def _cam_rt(cam):
+    ex = (cam or {}).get("extrinsics") or {}
+    R = _quat_to_mat(ex["quaternion"])
+    if str(ex.get("coordinateSystem", "rub")).lower() == "rdf":
+        R = [[r[0], -r[1], -r[2]] for r in R]
+    return R, [float(v) for v in ex["position"]]
+
+
+MAX_ORIENT_CAMERAS = 400
+
+
+def world_cameras(path) -> dict:
+    """``{"frames": n, "cameras": [{"right", "up", "fwd", "pos"}]}`` in the mesh frame, the base camera first."""
+    wd = world_dir_of(path)
+    try:
+        with open(os.path.join(wd, "world.json"), encoding="utf-8") as f:
+            world = json.load(f)
+    except (OSError, ValueError):
+        raise RelayError("the world's world.json could not be read", 400)
+    frames = [fr for fr in (world.get("frames") or []) if isinstance(fr, dict) and fr.get("camera") and fr.get("depth")]
+    if not frames:
+        return {"frames": 0, "cameras": []}
+    try:
+        R0, t0 = _cam_rt(frames[0]["camera"])
+    except (KeyError, TypeError, ValueError):
+        raise RelayError("the world's first camera could not be read", 400)
+    tr0 = [[R0[j][i] for j in range(3)] for i in range(3)]
+    mv = lambda m, v: [sum(m[i][k] * v[k] for k in range(3)) for i in range(3)]  # noqa: E731
+    cams = []
+    for fr in frames[:MAX_ORIENT_CAMERAS]:
+        try:
+            R, t = _cam_rt(fr["camera"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        col = lambda j: mv(tr0, [R[0][j], R[1][j], R[2][j]])  # noqa: E731
+        back = col(2)
+        cams.append({"id": fr.get("id"), "right": col(0), "up": col(1), "fwd": [-v for v in back],
+                     "pos": mv(tr0, [t[i] - t0[i] for i in range(3)])})
+    return {"frames": len(frames), "cameras": cams}
+
+
+# --- Export a Gaussian splat of the world (World Labs posedImages2Splats, by the agentY host) --------------------
+SPLAT_ROUTE = "atlas_splat"
+
+
+def clean_splat_request(data) -> dict:
+    if not isinstance(data, dict):
+        raise RelayError("bad request", 400)
+    world = world_dir_of(data.get("world_path") or data.get("world"))
+    name = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in str(data.get("name") or ""))[:60]
+    return {"world": world, "refine": data.get("refine", True) is not False, "name": name,
+            "check_consistency": data.get("check_consistency", True) is not False,
+            "dry_run": bool(data.get("dry_run")), "confirm_cost": bool(data.get("confirm_cost"))}
+
+
+def start_splat(comfy_base: str, data) -> dict:
+    body = clean_splat_request(data)
+    return call_host(comfy_base, "POST", body=body, route=SPLAT_ROUTE, timeout=120.0 if body["dry_run"] else 30.0)
+
+
+def splat_state(comfy_base: str, job_id: str) -> dict:
+    job_id = "".join(c for c in str(job_id or "") if c.isalnum())[:32]
+    if not job_id:
+        raise RelayError("no export id", 400)
+    return call_host(comfy_base, "GET", query=f"id={job_id}", route=SPLAT_ROUTE)

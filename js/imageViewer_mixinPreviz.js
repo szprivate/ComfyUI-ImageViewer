@@ -1127,31 +1127,12 @@ export const PrevizMixin = {
         const noteBtn = el("button", "previz-btn previz-world", "Note");
         noteBtn.title = "Pin a note to a spot — Shift+N. The agent that built the world reads it, with a snapshot";
         noteBtn.onclick = () => this.previzFeedbackPlace();
-        // An Atlas world (world.glb from an Atlas folder): paint a new view from the camera you look through.
-        const atlasBtn = el("button", "previz-btn previz-world", "Atlas");
-        atlasBtn.title = "Render with Atlas: World Labs paints a new picture of this place from the camera "
-                       + "you are looking through";
-        atlasBtn.style.display = "none";
-        atlasBtn.onclick = () => this.previzAtlasDialog();
-        // ... and the camera's whole keyframed animation: Atlas paints views along the path, the move is rendered.
-        const atlasMoveBtn = el("button", "previz-btn previz-world", "Atlas move");
-        atlasMoveBtn.title = "Render camera with Atlas: World Labs paints views along the camera's keyframed "
-                           + "animation and the move is rendered through them (the price is shown first)";
-        atlasMoveBtn.style.display = "none";
-        atlasMoveBtn.onclick = () => this.previzAtlasMoveDialog();
-        // A new Atlas world from a prompt or pictures, without the agent (imageViewer_atlasCreate.js).
-        const atlasNewBtn = el("button", "previz-btn previz-world", "New world");
-        atlasNewBtn.title = "New Atlas world: describe a place or bring pictures of it, and World Labs Atlas makes a "
-                          + "3D world of it that opens here (needs agentY running and a World Labs key)";
-        atlasNewBtn.onclick = () => this.atlasCreateDialog();
-        // Atlas Chisel at this camera: paint the view, or change the part of a picture of it you paint over.
-        const atlasChiselBtn = el("button", "previz-btn previz-world", "Chisel");
-        atlasChiselBtn.title = "Chisel this view with Atlas: World Labs paints what you see from this camera, or changes "
-                             + "only the part of a picture of it you paint over (drop pictures from Explorer or the History)";
-        atlasChiselBtn.style.display = "none";
-        atlasChiselBtn.onclick = () => this.atlasChiselDialog();
-        actions.append(newBtn, addBtn, editBtn, outBtn, rigBtn, conBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn, atlasMoveBtn,
-                       atlasChiselBtn, atlasNewBtn);
+        // Every Atlas tool in one menu (imageViewer_previzAtlasOrient.js previzAtlasMenuEntries): New world, Render
+        // view / camera, Chisel, Auto-orient, Export Gaussian splat. The bar's 3D menu has the same as a submenu.
+        const atlasBtn = el("button", "previz-btn previz-world previz-atlas-menu", "Atlas \u25BE");
+        atlasBtn.title = "Atlas: new world, render this view, chisel, auto-orient, export a Gaussian splat";
+        atlasBtn.onclick = () => this.previzAtlasMenu(atlasBtn);
+        actions.append(newBtn, addBtn, editBtn, outBtn, rigBtn, conBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn);
 
         const list = el("div", "previz-list");
         // The space below the tree is "no parent": dropping a row here lifts it
@@ -1176,7 +1157,7 @@ export const PrevizMixin = {
         this._previzCloseAddMenu();
         host.querySelectorAll(":scope > .previz-body").forEach((n) => n.remove());
         host.appendChild(root);
-        this._previzUI = { root, list, rigBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn, atlasMoveBtn, atlasChiselBtn };
+        this._previzUI = { root, list, rigBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn };
         return this._previzUI;
     },
 
@@ -1215,36 +1196,68 @@ export const PrevizMixin = {
 
         const menu = doc.createElement("div");
         menu.className = "previz-menu";
-        for (const e of entries) {
-            if (e === "-") {
-                menu.append(Object.assign(doc.createElement("div"), { className: "previz-menu-sep" }));
-                continue;
-            }
-            const b = doc.createElement("button");
-            b.className = "previz-menu-item";
-            b.textContent = e.label;
-            if (e.title) b.title = e.title;
-            // An entry that cannot run now still answers a click: it says why, so nothing is silent.
-            if (e.disabled) {
-                b.classList.add("off");
-                b.setAttribute("aria-disabled", "true");
+        // An entry with `sub` (a list of entries) is a submenu: it opens beside its row, on hover or a click.
+        const fill = (box, list) => {
+            for (const e of list) {
+                if (e === "-") {
+                    box.append(Object.assign(doc.createElement("div"), { className: "previz-menu-sep" }));
+                    continue;
+                }
+                const b = doc.createElement("button");
+                b.className = "previz-menu-item";
+                b.textContent = e.label;
+                if (e.title) b.title = e.title;
+                if (!Array.isArray(e.sub)) {
+                    b.addEventListener("mouseenter", () => {
+                        for (const o of box.querySelectorAll(":scope > .previz-menu-subwrap.open")) o.classList.remove("open");
+                    });
+                }
+                if (Array.isArray(e.sub)) {
+                    const wrap = doc.createElement("div");
+                    wrap.className = "previz-menu-subwrap";
+                    b.classList.add("has-sub");
+                    const sub = doc.createElement("div");
+                    sub.className = "previz-menu previz-submenu";
+                    fill(sub, e.sub);
+                    const open = () => {
+                        for (const o of box.querySelectorAll(":scope > .previz-menu-subwrap.open")) if (o !== wrap) o.classList.remove("open");
+                        wrap.classList.add("open");
+                        // Beside the row, on the side with room; pulled up if it would run past the bottom.
+                        sub.classList.remove("left");
+                        sub.style.top = "";
+                        const h = host.getBoundingClientRect(), r = sub.getBoundingClientRect();
+                        if (r.right > h.right - 4) sub.classList.add("left");
+                        if (r.bottom > h.bottom - 12) sub.style.top = `${Math.min(0, h.bottom - 12 - r.bottom)}px`;
+                    };
+                    wrap.addEventListener("mouseenter", open);
+                    b.onclick = (ev) => { ev.stopPropagation(); open(); };
+                    wrap.append(b, sub);
+                    box.append(wrap);
+                    continue;
+                }
+                // An entry that cannot run now still answers a click: it says why, so nothing is silent.
+                if (e.disabled) {
+                    b.classList.add("off");
+                    b.setAttribute("aria-disabled", "true");
+                    b.onclick = () => {
+                        this._previzCloseAddMenu();
+                        notice("info", `${e.label.trim().replace(/^\u2713\s*/, "").replace(/\u2026$/, "")} is not available`, e.title || "Not for what is selected.");
+                    };
+                    box.append(b);
+                    continue;
+                }
                 b.onclick = () => {
                     this._previzCloseAddMenu();
-                    notice("info", `${e.label.replace(/\u2026$/, "")} is not available`, e.title || "Not for what is selected.");
+                    // A command that fails says so, instead of nothing happening.
+                    Promise.resolve().then(() => e.run()).catch((err) => {
+                        console.error(`[ImageViewer] ${e.label}:`, err);
+                        notice("error", `${e.label.replace(/\u2026$/, "")} did not work`, String((err && err.message) || err));
+                    });
                 };
-                menu.append(b);
-                continue;
+                box.append(b);
             }
-            b.onclick = () => {
-                this._previzCloseAddMenu();
-                // A command that fails says so, instead of nothing happening.
-                Promise.resolve().then(() => e.run()).catch((err) => {
-                    console.error(`[ImageViewer] ${e.label}:`, err);
-                    notice("error", `${e.label.replace(/\u2026$/, "")} did not work`, String((err && err.message) || err));
-                });
-            };
-            menu.append(b);
-        }
+        };
+        fill(menu, entries);
         host.appendChild(menu);
 
         // Where it was asked for, then pulled back inside the viewer.
@@ -1554,23 +1567,8 @@ export const PrevizMixin = {
             ui.matchBtn.style.display = world ? "" : "none";
             ui.walkBtn.classList.toggle("active", !!(this._model3d && this._model3d.walking));
         }
-        if (ui.atlasBtn) ui.atlasBtn.style.display = this.previzAtlasItem && this.previzAtlasItem() ? "" : "none";
-        if (ui.atlasChiselBtn) ui.atlasChiselBtn.style.display = this.previzAtlasItem && this.previzAtlasItem() ? "" : "none";
-        if (ui.atlasMoveBtn) {
-            const atlas = !!(this.previzAtlasItem && this.previzAtlasItem());
-            // Experimental and off by default (Settings -> ComfyUI Image Viewer -> Experimental).
-            const moveOn = pref(PREF.atlasMove) === true;
-            ui.atlasMoveBtn.style.display = atlas && moveOn ? "" : "none";
-            // Needs a keyframed camera; the title says so instead of failing in a dialog.
-            const sc = atlas ? this.previzScene() : null;
-            const animated = !!(sc && sc.items.some((i) => i.kind === "camera"
-                && (S.isAnimated(i, "position") || S.isAnimated(i, "rotation"))));
-            ui.atlasMoveBtn.style.opacity = atlas && !animated ? "0.55" : "";
-            ui.atlasMoveBtn.title = animated || !atlas
-                ? "Render camera with Atlas: World Labs paints views along the camera's keyframed animation and the "
-                  + "move is rendered through them (the price is shown first)"
-                : "Render camera with Atlas needs a camera with keyframes on the timeline (two at least)";
-        }
+        // The Atlas menu is always there (New Atlas world needs no world); lit while an Atlas world is open.
+        if (ui.atlasBtn) ui.atlasBtn.classList.toggle("has-world", !!(this.previzAtlasItem && this.previzAtlasItem()));
         // Previz coming on is what opens the panel. After that the dock owns
         // it, so one put away by hand stays away — and stays undrawn, which is
         // worth having while playback calls through here every frame.

@@ -1212,6 +1212,10 @@ export function parseScene(raw) {
             item.plane = planeSettings(raw);
         } else {
             item.src = raw.src && typeof raw.src === "object" ? raw.src : null;
+            // An Atlas world set upright: with how many of its cameras (imageViewer_previzAtlasOrient.js).
+            if (raw.atlasOrient && Number.isFinite(Number(raw.atlasOrient.frames))) {
+                item.atlasOrient = { frames: Math.max(0, Math.round(Number(raw.atlasOrient.frames))) };
+            }
         }
 
         // Custom attributes (on controls) and blendshape weights (on models).

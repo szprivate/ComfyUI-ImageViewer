@@ -205,12 +205,12 @@ class AtlasCreateTests(unittest.TestCase):
           P.startHistorySelection('all', 0);
           P.spaceOpen('3d');
         }""")
-        # The Previz panel's button is there on any 3D tab, the 3D menu has the entry too.
-        has_btn = pg.evaluate("""() => [...window.__panel.shadowRoot.querySelectorAll('.previz-btn')]
-                                  .some((b) => b.textContent === 'New world')""")
+        # The Previz panel's Atlas menu is there on any 3D tab; its first entry is New Atlas world.
+        has_btn = pg.evaluate("""() => !!window.__panel.shadowRoot.querySelector('.previz-btn.previz-atlas-menu')""")
         self.assertTrue(has_btn)
-        pg.evaluate("""() => [...window.__panel.shadowRoot.querySelectorAll('.previz-btn')]
-                          .find((b) => b.textContent === 'New world').click()""")
+        pg.evaluate("""() => window.__panel.shadowRoot.querySelector('.previz-btn.previz-atlas-menu').click()""")
+        pg.evaluate("""() => [...window.__panel.shadowRoot.querySelectorAll('.previz-menu .previz-menu-item')]
+                          .find((b) => b.textContent.startsWith('New Atlas world')).click()""")
         root = "window.__panel.shadowRoot"
         pg.wait_for_function(f"() => !!{root}.querySelector('.atlas-create')")
         st = pg.evaluate(f"""() => {{
@@ -426,6 +426,123 @@ class AtlasCreateTests(unittest.TestCase):
         self.assertAlmostEqual(z[2], 3.5, places=4)              # the bench: 7 scene units = 3.5 world-mesh units
         self.assertEqual(pg.evaluate("() => window.__uploads"), [], "nothing to upload")
         self.assertEqual(self.errors, [])
+
+
+    def test_the_atlas_menu_has_every_atlas_tool_and_the_3d_bar_menu_has_it_as_a_submenu(self):
+        pg = self.page()
+        pg.evaluate("""async () => {
+          const P = window.__panel;
+          const { app } = await import('/scripts/app.js');
+          app.graph.nodes = app.graph.nodes || []; app.graph.links = app.graph.links || {};
+          P.setViewerToggleState(true);
+          P.spaceOpen('3d');
+          P.previzAtlasItem = () => ({ id: 'w', kind: 'model', src: { path: 'D:/o/court/world.glb' } });
+        }""")
+        root = "window.__panel.shadowRoot"
+        labels = pg.evaluate(f"""() => {{ {root}.querySelector('.previz-btn.previz-atlas-menu').click();
+          return [...{root}.querySelectorAll('.previz-menu .previz-menu-item')].map((b) => b.textContent.trim()
+            + (b.classList.contains('off') ? ' (off)' : '')); }}""")
+        self.assertEqual(labels, ["New Atlas world\u2026", "Render view with Atlas\u2026", "Chisel this view\u2026",
+                                  "Auto-orient world", "Export Gaussian splat\u2026"])
+        pg.keyboard.press("Escape")
+        # The bar's 3D menu: one "Atlas" row, whose submenu is the same list.
+        sub = pg.evaluate(f"""() => {{
+          const b = [...{root}.querySelectorAll('.bar-group')].find((x) => /^3D/.test(x.title || ''));
+          b.click();
+          const row = [...{root}.querySelectorAll('.bar-menu .previz-menu-item.has-sub')].find((x) => x.textContent.trim() === 'Atlas');
+          if (!row) return null;
+          row.click();
+          const menu = row.parentNode.querySelector('.previz-submenu');
+          return {{ shown: getComputedStyle(menu).display !== 'none',
+                    items: [...menu.querySelectorAll('.previz-menu-item')].map((x) => x.textContent.trim()) }};
+        }}""")
+        self.assertIsNotNone(sub)
+        self.assertTrue(sub["shown"])
+        self.assertEqual(sub["items"][0], "New Atlas world\u2026")
+        self.assertIn("Export Gaussian splat\u2026", sub["items"])
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.screenshot(path=os.path.join(SHOTS, "atlas-submenu.png"))
+        # Old bar entries are gone: Atlas lives only in its submenu.
+        top = pg.evaluate(f"() => [...{root}.querySelectorAll('.bar-menu > .previz-menu-item')].map((x) => x.textContent.trim())")
+        self.assertNotIn("New Atlas world\u2026", top)
+        self.assertEqual(self.errors, [])
+
+    def test_auto_orient_stands_the_world_up_and_carries_the_camera_along(self):
+        pg = self.page()
+        out = pg.evaluate("""async () => {
+          const P = window.__panel;
+          const S = await import('/extensions/viewer/imageViewer_scene3d.js');
+          const O = await import('/extensions/viewer/imageViewer_atlasOrient.js');
+          // A 3D tab holding the world and its camera, and a mesh whose floor the first photo saw 30 degrees down.
+          const scene = S.makeScene();
+          const world = S.makeModelItem({ path: 'D:/o/court/world.glb' }, 'Atlas: court');
+          world.id = 'w';
+          const cam = S.makeCameraItem('Atlas camera');
+          cam.position = [0, 0, 0]; cam.rotation = [0, 0, 0];      // the first picture's viewpoint, as agentY opens it
+          scene.items.push(world, cam);
+          const key = 'previz:court';
+          P.allTabs[key] = [{ previz: true, filename: 'court', scene }];
+          P.previzScene = (k) => (k === undefined || k === key || k === P.activeTab) ? scene : null;
+          P.activeTab = key;
+          P.previzChanged = async () => {};
+          P.isPrevizTab = () => true;
+          P.previzAtlasItem = () => world;
+          const R = O.matrixXYZ([30, 0, 0]);                 // true -> mesh: the first camera pitched down 30
+          const pts = [];
+          for (let i = 0; i < 2000; i++) {
+            const p = [Math.random() * 6 - 3, -1.6, Math.random() * 6 - 4];
+            pts.push(...R.map((r) => r[0] * p[0] + r[1] * p[1] + r[2] * p[2]));
+          }
+          P._atlasMeshPoints = () => pts;
+          const real = window.__fetchApi;
+          window.__fetchApi = async (p, o) => p.startsWith('/imageviewer/atlas_world')
+            ? new Response(JSON.stringify({ frames: 1, cameras: [{ right: [1, 0, 0], up: [0, 1, 0], fwd: [0, 0, -1], pos: [0, 0, 0] }] }),
+                           { status: 200 })
+            : real(p, o);
+          window.__notes = [];
+          const done = await P.previzAtlasOrient({ force: false }).catch((e) => 'threw ' + e);
+          const again = await P.previzAtlasOrient({ force: false });     // same cameras: nothing to do
+          return { done, again, rot: world.rotation, pos: world.position, camRot: cam.rotation, camPos: cam.position,
+                   orient: world.atlasOrient, saved: JSON.parse(S.serializeScene(scene)).items[0].atlasOrient,
+                   parsed: S.parseScene(S.serializeScene(scene)).items[0].atlasOrient };
+        }""")
+        self.assertIsInstance(out["done"], dict, out)
+        self.assertAlmostEqual(out["done"]["tilt"], 30, delta=1.5)
+        self.assertIsNone(out["again"], "oriented with as many cameras: left alone")
+        self.assertAlmostEqual(out["rot"][0], -30, delta=1.5)
+        self.assertAlmostEqual(out["pos"][1], 1.6, delta=0.05)
+        # The camera (the first picture's viewpoint, at the mesh origin) turns with the world: it looks down
+        # 30 degrees again and stands 1.6 m above the floor.
+        self.assertAlmostEqual(out["camRot"][0], -30, delta=1.5)
+        self.assertAlmostEqual(out["camPos"][1], 1.6, delta=0.05)
+        self.assertEqual(out["orient"], {"frames": 1})
+        self.assertEqual(out["parsed"], {"frames": 1}, "kept in the scene file")
+        self.assertEqual(self.errors, [])
+
+
+    def test_closing_a_3d_tab_goes_back_to_the_viewer_tab_in_2d(self):
+        pg = self.page()
+        out = pg.evaluate("""async () => {
+          const P = window.__panel;
+          const { app } = await import('/scripts/app.js');
+          app.graph.nodes = app.graph.nodes || []; app.graph.links = app.graph.links || {};
+          P.setViewerToggleState(true);
+          // A picture, then an Atlas world's world.glb, land in the Viewer tab (the glb is on screen there).
+          P.showInViewerTab([[{ path: 'D:/out/room.png', filename: 'room.png', type: 'output' }]]);
+          P.showInViewerTab([[{ path: 'D:/out/3d_scenes/atlas/court/world.glb', filename: 'world.glb', type: 'output' }]]);
+          const before = (P.allTabs.folder_history || [])[0];
+          // The world's own 3D tab opens, and is closed again.
+          P.previzNewTab();
+          const tab = P.activeTab;
+          P.closeTab(tab);
+          const now = (P.allTabs[P.activeTab] || [])[0];
+          return { before: before && before.filename, tab, active: P.activeTab, shown: now && now.filename,
+                   model: !!P._modelMode };
+        }""")
+        self.assertEqual(out["before"], "world.glb")
+        self.assertTrue(out["tab"].startswith("previz"), out)
+        self.assertEqual((out["active"], out["shown"], out["model"]), ("folder_history", "room.png", False))
 
 
 if __name__ == "__main__":

@@ -78,6 +78,7 @@ export const PrevizAtlasMixin = {
         for (const [v, label] of A.UPSCALE_CHOICES) up.append(Object.assign(el("option"), { value: String(v), textContent: label }));
         const add = el("input");
         add.type = "checkbox";
+        add.checked = true;            // on by default (Sebastian 2026-11-11): later renders stay consistent
         const addWrap = el("label", "rd-inline");
         addWrap.append(add, el("span", "rd-sub", "Add this view to the world (later renders stay consistent with it)"));
         const hint = el("div", "rd-hint", "Atlas paints one new 1280 × 720 view from this camera — it bills the World Labs "
@@ -292,17 +293,17 @@ export const PrevizAtlasMixin = {
         }
     },
 
-    /** The finished picture, into its own tab, selected and shown large. */
+    /** The finished picture, into the History. The 3D space stays up (Sebastian 2026-11-11: no switch to the Viewer). */
     async previzAtlasShow(state, worldName, label = "Atlas render") {
         if (!state || !state.path) return "the file is under the world's renders folder";
         try {
             const res = await api.fetchApi("/imageviewer/push", {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ paths: [state.path], tab_name: `${label === "Atlas render" ? "Atlas" : label}: ${worldName}`.slice(0, 60),
-                                       group: "Atlas renders", label, focus: true }),
+                                       group: "Atlas renders", label, focus: false }),
             });
             const body = await res.json().catch(() => ({}));
-            if (res.ok && body.shown) return `shown in the "${label === "Atlas render" ? "Atlas" : label}: ${worldName}" tab.`;
+            if (res.ok && body.shown) return "it is in the History (Atlas renders).";
             return body.refused && body.refused.length
                 ? `saved to ${state.path} (the viewer may not open that folder).` : "saved.";
         } catch (e) {
