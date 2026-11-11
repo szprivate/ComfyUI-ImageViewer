@@ -1091,10 +1091,10 @@ export const PrevizMixin = {
         outBtn.textContent = "\u2193";
         this._setIcon(outBtn, "icon-save");
         outBtn.onclick = () => this._previzToggleExportMenu(outBtn);
-        // Characters: controls, IK / FK, AI motion, FBX / Alembic (imageViewer_previzRig.js).
+        // Characters: controls, IK / FK, AI motion, FBX / USD / Alembic, motion from files (imageViewer_previzRig.js).
         const rigBtn = el("button", "previz-btn previz-rig", "Rig");
         rigBtn.title = "Rig a character: animation controls, IK / FK, AI in-betweens and text-to-motion, "
-                     + "FBX and Alembic export";
+                     + "FBX, USD and Alembic export, motion from FBX / USD / glTF files";
         rigBtn.onclick = () => this._previzToggleRigMenu(rigBtn);
         // Constraints: parent, point, orient, aim, scale (imageViewer_previzConstraints.js).
         const conBtn = el("button", "previz-btn previz-constrain", "Constrain");

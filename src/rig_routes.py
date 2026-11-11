@@ -1,8 +1,11 @@
 """Character rigs: export, auto-rigging and AI motion for the 3D space.
 
     POST /imageviewer/rig/export        multipart: a "meta" JSON part + binary parts it names
-                                        ({format: fbx|abc, name, context, ...} + rig_export.parse_payload)
+                                        ({format: fbx|usd|abc, name, context, ...} + rig_export.parse_payload)
                                         -> {ok, path, relative, version}: by the export rule (kind "character")
+    POST /imageviewer/rig/read_motion   {path} -> rig_import.read: an FBX / USD file's settings, the viewer's rig
+                                        carried in it (live), and a USD skeleton's animation (the page reads an
+                                        FBX's motion itself, with FBXLoader); may_serve-guarded
     GET  /imageviewer/rig/tools         -> {unirig: {ready, why}, kimodo: {ready, why, model},
                                             install: {root, hf_token: bool, running: job id | null}}
     POST /imageviewer/rig/install       {root?, only?: unirig|kimodo|posetrack, hf_token?} -> {job}: runs
@@ -20,7 +23,7 @@
                                         frame (lipsync.py, in this process), put on blendshapes in the page
     GET  /imageviewer/rig/job?job=      -> {state: running|done|error|cancelled, log, result?, error?}
     POST /imageviewer/rig/job           {job, cancel: true}
-    POST /imageviewer/rig/agent         {action: rig|remove_rig|autorig|motion|inbetween|clean_feet|export, model?,
+    POST /imageviewer/rig/agent         {action: rig|remove_rig|autorig|motion|inbetween|clean_feet|export|add_motion, model?,
                                         ...} -> {id}: sent to the open page (event imageviewer.rig.agent), which
                                         does it on its 3D scene and reports to POST /imageviewer/rig/agent_done;
                                         GET /imageviewer/rig/agent?id= -> {state: sent|running|done|error, result?}
@@ -55,8 +58,10 @@ import threading
 import time
 import atexit
 import urllib.parse
+from struct import error as struct_error
 
 from . import rig_export
+from . import rig_import
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.join(os.path.dirname(HERE), "scripts", "rig")
@@ -430,10 +435,21 @@ def resolve_src(src, folder_paths, resolve=None):
     return ""
 
 
+WRITERS = {"fbx": "write_fbx", "usd": "write_usd", "abc": "write_abc"}
+
+
+def _usd_ok():
+    try:
+        from pxr import UsdSkel  # noqa: F401
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 AGENT_ACTIONS = ("rig", "remove_rig", "autorig", "motion", "inbetween", "clean_feet", "export",
                  "restyle", "video_motion", "lipsync",
                  "layer_add", "layer_list", "constrain", "remove_constraint", "list_constraints", "bake_constraints",
-                 "pose_list", "pose_save", "pose_apply", "pose_delete", "flip_pose")
+                 "pose_list", "pose_save", "pose_apply", "pose_delete", "flip_pose", "add_motion")
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
 SOUND_EXTS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".opus"} | VIDEO_EXTS
 
@@ -544,8 +560,10 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         if not isinstance(meta, dict):
             return err("no meta part")
         fmt = str(meta.get("format") or "fbx").lower()
-        if fmt not in ("fbx", "abc"):
+        if fmt not in WRITERS:
             return err(f"unknown format {fmt}")
+        if fmt == "usd" and not _usd_ok():
+            return err("USD needs usd-core in ComfyUI's Python (pip install usd-core)", 501)
         try:
             data = rig_export.parse_payload(meta, blobs)
             where = export_rules.target("character", meta.get("name") or "character", fmt,
@@ -554,11 +572,33 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
             return err(e)
         os.makedirs(os.path.dirname(where["path"]), exist_ok=True)
         try:
-            await off(rig_export.write_fbx if fmt == "fbx" else rig_export.write_abc, where["path"], data)
+            await off(getattr(rig_export, WRITERS[fmt]), where["path"], data)
         except Exception as e:  # noqa: BLE001
             return err(f"could not write the {fmt.upper()}: {e}", 500)
         return web.json_response({"ok": True, "path": where["path"], "relative": relative(where["path"]),
                                   "version": where.get("version"), "name": os.path.basename(where["path"])})
+
+    async def read_motion(request):
+        """POST {path}: what an FBX / USD file brings back - its settings, the viewer's rig if it
+        carries one, and (USD) the skeleton's animation. A file the viewer may serve, nothing else."""
+        body = await body_of(request)
+        raw = str(body.get("path") or "")
+        p = resolve_src({"path": raw}, folder_paths, resolve) if raw else resolve_src(body.get("src"), folder_paths, resolve)
+        if not p or not os.path.isfile(p):
+            return err("no such file", 404)
+        if not path_access.may_serve(p):
+            return web.Response(status=403, text=path_access.serve_refusal(p))
+        if os.path.splitext(p)[1].lower() in (".usd", ".usda", ".usdc", ".usdz") and not _usd_ok():
+            return err("USD needs usd-core in ComfyUI's Python (pip install usd-core)", 501)
+        try:
+            out = await off(rig_import.read, p)
+        except (ValueError, OSError, struct_error) as e:
+            return err(f"could not read {os.path.basename(p)}: {e}", 422)
+        except Exception as e:  # noqa: BLE001 - pxr raises its own errors
+            return err(f"could not read {os.path.basename(p)}: {e}", 422)
+        out["path"] = p
+        out["name"] = os.path.basename(p)
+        return web.json_response(out)
 
     # ── the tools ────────────────────────────────────────────────────────────
 
@@ -898,7 +938,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         add(method, f"/imageviewer/{path}", handler)
         add(method, f"/api/imageviewer/{path}", handler)
 
-    for method, path, handler in (("POST", "rig/export", export), ("GET", "rig/tools", tools), ("POST", "rig/install", install),
+    for method, path, handler in (("POST", "rig/export", export), ("POST", "rig/read_motion", read_motion), ("GET", "rig/tools", tools), ("POST", "rig/install", install),
                                   ("POST", "rig/autorig", autorig), ("POST", "rig/motion", motion),
                                   ("POST", "rig/video_pose", video_pose), ("POST", "rig/lipsync", lipsync_route),
                                   ("GET", "rig/job", job_state), ("POST", "rig/job", job_cancel)):

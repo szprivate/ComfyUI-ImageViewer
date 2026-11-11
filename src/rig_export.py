@@ -1,4 +1,4 @@
-"""Animated characters out of the 3D space: FBX (skeleton, skin, keys) and Alembic (baked meshes).
+"""Animated characters out of the 3D space: FBX and USD (skeleton, skin, keys) and Alembic (baked meshes).
 
 The browser has the character — its meshes, its skeleton, and the pose the rig
 puts it in at every frame — so it does the sampling and posts the numbers here
@@ -21,6 +21,24 @@ FBX (binary, version 7.4)
     one unit = 100 cm). Rotations are Euler degrees in FBX's default order
     (X first, then Y, then Z).
 
+USD (UsdSkel)
+    A SkelRoot for the character (its place in the scene as its transform), a
+    Skeleton under it (joint paths, bind and rest transforms), a SkelAnimation
+    keyed on every frame (local translations, rotations, scales) and the
+    meshes bound to the skeleton by `skel:jointIndices` / `skel:jointWeights`
+    (four per point). Metres, Y up, time codes = frames. Written through pxr
+    (usd-core, already a requirement for USD stages).
+
+The viewer's rig, live
+    Every app sees the baked motion above. The viewer's own rig (its controls,
+    their keys, whatever animation layers and constraints hang on it) is
+    carried beside it, so the same file brought back into the viewer gives the
+    rig back as it was rather than a bake: `meta.live` (any JSON) is packed by
+    `pack_live` and stored as the character's user property `ImageViewerRig`
+    (FBX: a KString "U" property on its Null, which Maya keeps as an extra
+    attribute and Blender as a custom property) or as the SkelRoot's
+    customData `imageViewer:rig` (USD). `rig_import.py` reads it back.
+
 Alembic (Ogawa)
     The container abc_io.py reads: groups and data blocks, an object tree
     with packed property headers. Each mesh is an Xform holding a PolyMesh
@@ -29,7 +47,9 @@ Alembic (Ogawa)
     written in Alembic's winding (the reverse of glTF's).
 """
 
+import base64
 import hashlib
+import json
 import math
 import struct
 import time
@@ -69,6 +89,32 @@ def _unwrap(seq):
         out.append(e)
         prev = e
     return out
+
+
+LIVE_PROP = "ImageViewerRig"
+LIVE_KEY = "imageViewer:rig"
+_LIVE_TAG = "ivz1:"
+MAX_LIVE = 64 << 20                    # unpacked JSON: no rig comes near it
+
+
+def pack_live(obj):
+    """The viewer's rig as one ASCII string: zlib-packed JSON in base64, tagged with its version."""
+    raw = json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return _LIVE_TAG + base64.b64encode(zlib.compress(raw, 9)).decode("ascii")
+
+
+def unpack_live(text):
+    """`pack_live`'s string back to JSON; None for anything else (another tool's property of that name)."""
+    if not isinstance(text, str) or not text.startswith(_LIVE_TAG):
+        return None
+    try:
+        d = zlib.decompressobj()
+        raw = d.decompress(base64.b64decode(text[len(_LIVE_TAG):], validate=False), MAX_LIVE + 1)
+        if len(raw) > MAX_LIVE or d.unconsumed_tail:
+            return None
+        return json.loads(raw.decode("utf-8"))
+    except (ValueError, zlib.error, UnicodeDecodeError):
+        return None
 
 
 # ── FBX ──────────────────────────────────────────────────────────────────────
@@ -269,7 +315,9 @@ def write_fbx(path, data):
     rt = root.get("t") or [0, 0, 0]
     rq = root.get("q") or [0, 0, 0, 1]
     rs = root.get("s") or [1, 1, 1]
-    char_id = model(data.get("name") or "character", "Null", rt, _euler_fbx(rq), rs)
+    live = data.get("live")
+    extra = [(LIVE_PROP, "KString", "", "U", pack_live(live))] if live is not None else []
+    char_id = model(data.get("name") or "character", "Null", rt, _euler_fbx(rq), rs, extra)
     na = objects.add("NodeAttribute", _T("L", nid()), "\x00\x01NodeAttribute", "Null")
     na.add("TypeFlags", "Null")
     count("NodeAttribute")
@@ -375,8 +423,12 @@ def write_fbx(path, data):
             c.add("UserData", "", "")
             c.add("Indexes", _T("i", vtx))
             c.add("Weights", _T("d", w))
-            c.add("Transform", _T("d", g0.ravel(order="F")))
+            # TransformLink is the bone at bind time (scene space); Transform is the mesh
+            # as the bone saw it then - the mesh in the bone's space, inverse(link) . mesh -
+            # which is how the SDK's own files have it (Blender's importer and ufbx read it
+            # so; three.js reads TransformLink alone).
             link_m = g0 @ np.array(b["bind"], dtype=np.float64).reshape(4, 4, order="F")
+            c.add("Transform", _T("d", (np.linalg.inv(link_m) @ g0).ravel(order="F")))
             c.add("TransformLink", _T("d", link_m.ravel(order="F")))
             count("Deformer")
             link(cid, skin)
@@ -466,6 +518,137 @@ def write_fbx(path, data):
     top.append(takes)
     with open(path, "wb") as fh:
         fh.write(_fbx_bytes(top))
+    return path
+
+
+# ── USD (UsdSkel) ────────────────────────────────────────────────────────────
+
+
+def _usd_ident(name, used):
+    """A prim / joint name USD accepts (letters, digits, _; not starting with a digit), unique in `used`."""
+    out = "".join(c if (c.isascii() and (c.isalnum() or c == "_")) else "_" for c in str(name or "")) or "joint"
+    if out[0].isdigit():
+        out = "_" + out
+    base, n = out, 1
+    while out in used:
+        n += 1
+        out = f"{base}_{n}"
+    used.add(out)
+    return out
+
+
+def _gf_matrix(Gf, m):
+    """A three.js column-major 4x4 (translation in 12..14) as a Gf.Matrix4d. USD multiplies row
+    vectors, so its row-major matrix is the transpose: the same 16 numbers in the same order."""
+    return Gf.Matrix4d(*[float(v) for v in np.asarray(m, dtype=np.float64).ravel()])
+
+
+def _gf_trs(Gf, t, q, s):
+    return _gf_matrix(Gf, _trs_matrix(t, q, s).T.ravel())
+
+
+def write_usd(path, data):
+    """Write a character as a UsdSkel stage (.usda / .usdc / .usd by the path). `data` is what `parse_payload` returns."""
+    from pxr import Gf, Sdf, Usd, UsdGeom, UsdSkel, Vt
+
+    fps = float(data.get("fps") or 24)
+    frames = [int(f) for f in (data.get("frames") or [0])]
+    bones = data["bones"]
+    meshes = data["meshes"]
+    stage = Usd.Stage.CreateNew(str(path))
+    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.y)
+    UsdGeom.SetStageMetersPerUnit(stage, 1.0)
+    stage.SetTimeCodesPerSecond(fps)
+    stage.SetFramesPerSecond(fps)
+    stage.SetStartTimeCode(frames[0])
+    stage.SetEndTimeCode(frames[-1])
+    stage.GetRootLayer().customLayerData = {"creator": "ComfyUI Image Viewer"}
+
+    used = set()
+    root_name = _usd_ident(data.get("name") or "character", used)
+    root_path = Sdf.Path("/" + root_name)
+    skel_root = UsdSkel.Root.Define(stage, root_path)
+    stage.SetDefaultPrim(skel_root.GetPrim())
+    xf = UsdGeom.Xformable(skel_root)
+    op = xf.AddTransformOp()
+    ra = data.get("rootAnim")
+    g0 = np.array(data.get("rootMatrix") or np.eye(4).ravel(order="F"), dtype=np.float64)
+    if ra is not None and len(frames) > 1 and np.ptp(ra.reshape(len(frames), 10), axis=0).max() > 1e-7:
+        for f, r in zip(frames, ra.reshape(len(frames), 10)):
+            op.Set(_gf_trs(Gf, r[0:3], r[3:7], r[7:10]), Usd.TimeCode(f))
+    else:
+        op.Set(_gf_matrix(Gf, g0))
+    if data.get("live") is not None:
+        skel_root.GetPrim().SetCustomDataByKey(LIVE_KEY, pack_live(data["live"]))
+
+    # Joints: each a path of its ancestors' names, which is how UsdSkel knows the hierarchy.
+    joint_paths = []
+    kid_names = {}
+    for i, b in enumerate(bones):
+        p = b["parent"]
+        seg = _usd_ident(b["name"], kid_names.setdefault(p, set()))
+        joint_paths.append(seg if p < 0 else joint_paths[p] + "/" + seg)
+    skel = UsdSkel.Skeleton.Define(stage, root_path.AppendChild("Skeleton"))
+    names = [b["name"] for b in bones]
+    if bones:
+        skel.CreateJointsAttr(Vt.TokenArray(joint_paths))
+        skel.CreateJointNamesAttr(Vt.TokenArray([p.rsplit("/", 1)[-1] for p in joint_paths]))
+        skel.CreateBindTransformsAttr(Vt.Matrix4dArray([_gf_matrix(Gf, b["bind"]) for b in bones]))
+        skel.CreateRestTransformsAttr(Vt.Matrix4dArray([_gf_trs(Gf, b["rest"]["t"], b["rest"]["q"], b["rest"]["s"]) for b in bones]))
+        # The names as the file had them (mixamorig:Hips): USD's joint names cannot hold a colon.
+        skel.GetPrim().SetCustomDataByKey("imageViewer:jointNames", Vt.StringArray(names))
+    binding_root = UsdSkel.BindingAPI.Apply(skel_root.GetPrim())
+    binding_root.CreateSkeletonRel().SetTargets([skel.GetPath()])
+
+    anim = data.get("anim")
+    if bones and anim is not None:
+        arr = anim.reshape(len(frames), len(bones), 10)
+        sa = UsdSkel.Animation.Define(stage, skel.GetPath().AppendChild("Anim"))
+        sa.CreateJointsAttr(Vt.TokenArray(joint_paths))
+        tr, ro, sc = sa.CreateTranslationsAttr(), sa.CreateRotationsAttr(), sa.CreateScalesAttr()
+        for fi, f in enumerate(frames):
+            t = Usd.TimeCode(f)
+            a = arr[fi]
+            tr.Set(Vt.Vec3fArray([Gf.Vec3f(*map(float, x[0:3])) for x in a]), t)
+            # Gf.Quatf is (real, imaginary): [x, y, z, w] -> (w, x, y, z).
+            ro.Set(Vt.QuatfArray([Gf.Quatf(float(x[6]), float(x[3]), float(x[4]), float(x[5])) for x in a]), t)
+            sc.Set(Vt.Vec3hArray([Gf.Vec3h(*map(float, x[7:10])) for x in a]), t)
+        UsdSkel.BindingAPI.Apply(skel.GetPrim()).CreateAnimationSourceRel().SetTargets([sa.GetPath()])
+
+    mesh_names = set(["Skeleton"])
+    for mesh in meshes:
+        pos = mesh["positions"].reshape(-1, 3).astype(np.float64)
+        idx = mesh["indices"].reshape(-1, 3).astype(np.int64)
+        um = UsdGeom.Mesh.Define(stage, root_path.AppendChild(_usd_ident(mesh.get("name"), mesh_names)))
+        um.CreatePointsAttr(Vt.Vec3fArray.FromNumpy(pos.astype(np.float32)))
+        um.CreateFaceVertexCountsAttr(Vt.IntArray([3] * len(idx)))
+        um.CreateFaceVertexIndicesAttr(Vt.IntArray([int(v) for v in idx.ravel()]))
+        um.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+        lo, hi = pos.min(axis=0) if len(pos) else np.zeros(3), pos.max(axis=0) if len(pos) else np.zeros(3)
+        um.CreateExtentAttr(Vt.Vec3fArray([Gf.Vec3f(*map(float, lo)), Gf.Vec3f(*map(float, hi))]))
+        if mesh.get("normals") is not None:
+            um.CreateNormalsAttr(Vt.Vec3fArray.FromNumpy(mesh["normals"].reshape(-1, 3).astype(np.float32)))
+            um.SetNormalsInterpolation(UsdGeom.Tokens.vertex)
+        if mesh.get("uvs") is not None:
+            st = UsdGeom.PrimvarsAPI(um).CreatePrimvar("st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.vertex)
+            st.Set(Vt.Vec2fArray.FromNumpy(mesh["uvs"].reshape(-1, 2).astype(np.float32)))
+        joints, weights = mesh.get("joints"), mesh.get("weights")
+        if joints is None or weights is None or not bones:
+            continue
+        j = joints.reshape(-1, 4).astype(np.int32)
+        w = weights.reshape(-1, 4).astype(np.float64)
+        tot = w.sum(axis=1, keepdims=True)
+        w = np.where(tot > 0, w / np.where(tot > 0, tot, 1), 0)
+        # A point no bone holds stays with the first one, still (UsdSkel wants weights that add up to 1).
+        bare = tot[:, 0] <= 0
+        w[bare, 0] = 1.0
+        j[bare, 0] = 0
+        bind = UsdSkel.BindingAPI.Apply(um.GetPrim())
+        bind.CreateSkeletonRel().SetTargets([skel.GetPath()])
+        bind.CreateJointIndicesPrimvar(False, 4).Set(Vt.IntArray([int(v) for v in j.ravel()]))
+        bind.CreateJointWeightsPrimvar(False, 4).Set(Vt.FloatArray([float(v) for v in w.ravel()]))
+        bind.CreateGeomBindTransformAttr(Gf.Matrix4d(1.0))
+    stage.GetRootLayer().Save()
     return path
 
 
