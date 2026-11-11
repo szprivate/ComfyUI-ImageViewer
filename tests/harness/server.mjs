@@ -80,6 +80,8 @@ function handle(req, res) {
   }
   let file = p.startsWith("/scenes/") ? path.join(VIEWER, "..", "agentY-core", "agenty_core", "motion_graphics", "examples", p.slice(8))
            : p.startsWith("/extensions/viewer/") ? path.join(VIEWER, "js", p.slice("/extensions/viewer/".length))
+           // three.js as the server hands it out (viewer_api's /imageviewer/lib/three/<name>), for the 3D space.
+           : p.startsWith("/imageviewer/lib/three/") ? path.join(VIEWER, "vendor", "three", path.basename(p))
            : path.join(HERE, p);
   fs.readFile(file, (err, buf) => {
     if (err) { res.writeHead(404); res.end("nf"); return; }
