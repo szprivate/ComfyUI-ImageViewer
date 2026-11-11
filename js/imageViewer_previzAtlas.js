@@ -227,7 +227,7 @@ export const PrevizAtlasMixin = {
             keys = A.sampleMove({
                 start: mv.start, end: mv.end, fps: mv.fps,
                 applyFrame: (f) => view.applyFrame(f), cameraObject: () => entry.camera,
-                fovAt: (f) => S.valueAt(cam, "fov", f), restoreFrame: view.sceneFrame || 0,
+                fovAt: (f) => S.currentValue(this.previzScene(), cam, "fov", f), restoreFrame: view.sceneFrame || 0,
             });
             modelWorld = Array.from(body.matrixWorld.elements);
         };

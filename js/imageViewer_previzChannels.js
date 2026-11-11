@@ -329,9 +329,8 @@ export const PrevizChannelsMixin = {
 
     _cbValue(item, prop, comp) {
         if (prop === "resolution") return S.cameraResolution(item)[comp];
-        // What the item shows at the frame: its keys with the clips and layers on top (scene3d.evaluateIn).
-        const f = Math.round(this.currentFrame || 0);
-        const v = (S.valueIn && S.valueIn(this.previzScene(), item, prop, f)) ?? S.valueAt(item, prop, f);
+        // What is on screen: every animation layer counted.
+        const v = S.currentValue(this.previzScene(), item, prop, Math.round(this.currentFrame || 0));
         return comp === null ? v : v[comp];
     },
 
@@ -400,7 +399,7 @@ export const PrevizChannelsMixin = {
                 // A pivot is where a thing turns, not where it is: the item
                 // stays put and its position makes up the difference.
                 if (!view._pivotShiftLocal || !view.libs) continue;
-                const at = S.evaluate(item, frame);
+                const at = S.evaluateIn(this.previzScene(), item, frame);
                 const now = at.pivot || [0, 0, 0];
                 const e = [0, 0, 0];
                 e[comp] = v - now[comp];
@@ -409,7 +408,7 @@ export const PrevizChannelsMixin = {
                 this._cbWrite(item, "pivot", shifted.pivot, frame);
                 continue;
             }
-            const next = S.valueAt(item, prop, frame).slice();
+            const next = S.currentValue(this.previzScene(), item, prop, frame).slice();
             next[comp] = v;
             this._cbWrite(item, prop, next, frame);
         }
@@ -448,8 +447,8 @@ export const PrevizChannelsMixin = {
 
     /** Write a value the way every edit does: a key when it animates. */
     _cbWrite(item, prop, value, frame) {
-        if (this._previzAutokey || S.isAnimated(item, prop)) S.setKeyframe(item, prop, frame, value);
-        else S.setStaticValue(item, prop, value);
+        // Through the animation layers, as the gizmo does (scene3d.setPose).
+        S.setPose(this.previzScene(), item, prop, frame, value, { key: this._previzAutokey });
     },
 
     previzSetVisible(on) {
@@ -565,15 +564,17 @@ export const PrevizChannelsMixin = {
     previzKeyChannels(props) {
         const items = this._cbItems();
         if (!items.length || !props.length) return;
+        if (this.previzLayerRefuseLocked && this.previzLayerRefuseLocked()) return;
         this.previzSnapshot("key selected");
         const frame = Math.round(this.currentFrame || 0);
+        const scene = this.previzScene();
         for (const item of items) {
             for (const p of props) {
                 if (p === "fov" && item.kind !== "camera") continue;
                 if (p === "ikfk" && !(item.kind === "control" && item.control && item.control.type === "ik")) continue;
                 if (item.kind === "control" && (p === "scale" || p === "pivot")) continue;
                 if (item.kind === "camera" && (p === "scale" || p === "pivot")) continue;
-                S.setKeyframe(item, p, frame, S.valueAt(item, p, frame), this._previzEase || "smooth");
+                S.keyPose(scene, item, p, frame, S.currentValue(scene, item, p, frame), this._previzEase || "smooth");
             }
         }
         this.previzChanged();
@@ -582,11 +583,16 @@ export const PrevizChannelsMixin = {
     previzDeleteChannelKeys(props, { all = false } = {}) {
         const items = this._cbItems();
         if (!items.length || !props.length) return;
+        if (this.previzLayerRefuseLocked && this.previzLayerRefuseLocked()) return;
         this.previzSnapshot(all ? "delete keys" : "delete key");
         const frame = Math.round(this.currentFrame || 0);
+        const onLayer = !!S.activeLayerOf(this.previzScene());
         for (const item of items) {
             for (const p of props) {
-                if (all) {
+                if (all && onLayer) {
+                    // On an animation layer the channel simply leaves the layer.
+                    S.setTrack(item, p, []);
+                } else if (all) {
                     // The channel stops animating and keeps the value it has here.
                     const hold = S.valueAt(item, p, frame);
                     if (item.tracks) delete item.tracks[p];

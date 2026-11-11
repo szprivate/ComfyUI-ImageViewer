@@ -133,7 +133,7 @@ export const PrevizCurvesMixin = {
             return 0;
         }
         this.previzSnapshot("Euler filter");
-        for (const { it, r } of results) it.tracks.rotation = r.keys;
+        for (const { it, r } of results) S.setTrack(it, "rotation", r.keys);
         this.previzChanged();
         notice("success", "Euler filter", `${total} key${total === 1 ? "" : "s"} changed on ` +
                `${targets.length} object${targets.length === 1 ? "" : "s"}.`);
@@ -415,12 +415,12 @@ export const PrevizCurvesMixin = {
         for (const ch of lines) {
             const item = ch.item;
             const keys = S.track(item, ch.prop);
-            if (!keys.length) { see(S.componentOf(S.valueAt(item, ch.prop, bounds.min), ch.axis)); continue; }
+            if (!keys.length) { see(S.componentOf(S.editValueAt(item, ch.prop, bounds.min), ch.axis)); continue; }
             // A curve that goes on past its keys is drawn to the ends of the shot.
             const inf = S.infinityOf(item, ch.prop);
             if (keys.length > 1 && (inf.pre !== "constant" || inf.post !== "constant")) {
                 for (let n = 0; n <= 48; n++) {
-                    see(S.componentOf(S.valueAt(item, ch.prop, bounds.min + (span * n) / 48), ch.axis));
+                    see(S.componentOf(S.editValueAt(item, ch.prop, bounds.min + (span * n) / 48), ch.axis));
                 }
             }
             for (const k of keys) see(S.componentOf(k.v, ch.axis));
@@ -429,7 +429,7 @@ export const PrevizCurvesMixin = {
             for (let i = 0; i < keys.length - 1; i++) {
                 for (let n = 1; n < 8; n++) {
                     const f = keys[i].f + ((keys[i + 1].f - keys[i].f) * n) / 8;
-                    see(S.componentOf(S.valueAt(item, ch.prop, f), ch.axis));
+                    see(S.componentOf(S.editValueAt(item, ch.prop, f), ch.axis));
                 }
             }
         }
@@ -493,21 +493,22 @@ export const PrevizCurvesMixin = {
             const keys = S.track(item, ch.prop);
             let d = "";
             if (!keys.length) {
-                const v = S.componentOf(S.valueAt(item, ch.prop, g.bounds.min), ch.axis);
+                const v = S.componentOf(S.editValueAt(item, ch.prop, g.bounds.min), ch.axis);
                 d = `M 0 ${g.Y(v).toFixed(2)} L 100 ${g.Y(v).toFixed(2)}`;
             } else {
                 const first = keys[0].f, last = keys[keys.length - 1].f;
                 const steps = Math.max(2, Math.min(240, Math.round((last - first) * 2) || 2));
                 for (let i = 0; i <= steps; i++) {
                     const f = first + ((last - first) * i) / steps;
-                    const v = S.componentOf(S.valueAt(item, ch.prop, f), ch.axis);
+                    const v = S.componentOf(S.editValueAt(item, ch.prop, f), ch.axis);
                     d += (d === "" ? "M " : "L ") + g.X(f).toFixed(2) + " " + g.Y(v).toFixed(2) + " ";
                 }
             }
             line({ tag: "path", d, fill: "none", "stroke-width": 2, stroke: ch.color,
                    opacity: keys.length ? 1 : 0.5 });
             // Before the first key and after the last: what the infinity makes of it, dashed.
-            if (keys.length > 1) {
+            // Infinity is the base layer's (an animation layer's curve holds its ends).
+            if (keys.length > 1 && !S.editLayer(item)) {
                 const inf = S.infinityOf(item, ch.prop);
                 for (const [side, a, b] of [["pre", g.bounds.min, keys[0].f],
                                             ["post", keys[keys.length - 1].f, g.bounds.max]]) {

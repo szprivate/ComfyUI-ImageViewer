@@ -175,7 +175,7 @@ export function describeMove(scene, S) {
         return { error: "The scene has no camera animation: key a camera on the timeline (two keyframes at least) "
             + "and look through it." };
     }
-    const frames = S.keyframeFrames(camera);
+    const frames = S.allKeyframeFrames(camera);
     const start = frames[0], end = frames[frames.length - 1];
     if (!(end > start)) return { error: "The camera needs keyframes at two different frames." };
     const fps = Number(scene.fps) || 24;

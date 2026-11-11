@@ -51,6 +51,8 @@ const DOCK_PANELS = {
     // Display layers, selection sets and references; and a character's picker (imageViewer_previzLayers.js).
     layers3d: { prop: "layers3dPanel", label: "Layers", minW: 190, minH: 140, defaultRail: "right" },
     picker: { prop: "pickerPanel", label: "Picker", minW: 190, minH: 200, defaultRail: "right", size: 2 },
+    // The scene's animation layers (imageViewer_animLayersPanel.js).
+    animLayers: { prop: "animLayersPanel", label: "Anim Layers", minW: 240, minH: 120, defaultRail: "right" },
     // A graph is only readable with some height under it, so this one asks for
     // more than the rest; the channel buttons set the width.
     curves:  { prop: "curvesPanel",  label: "Curve Editor", minW: 220, minH: 190, defaultRail: "bottom" },
@@ -199,6 +201,7 @@ export const DockMixin = {
                                            { id: "channels", size: 1, hidden: true },
                                            { id: "layers3d", size: 1, hidden: true },
                                            { id: "picker", size: 2, hidden: true },
+                                           { id: "animLayers", size: 1, hidden: true },
                                            { id: "rotoCurves", size: 1, hidden: true },
                                            { id: "paramCurves", size: 1, hidden: true },
                                            { id: "motionProps", size: 2, hidden: true },
@@ -676,6 +679,8 @@ export const DockMixin = {
             if (this._plRender) this._plRender(true);
         } else if (id === "picker") {
             if (this._pkRender) this._pkRender(true);
+        } else if (id === "animLayers") {
+            if (this._alRender) this._alRender();
         } else if (id === "agentChat") {
             if (this._agentPanelMount) this._agentPanelMount();
         } else if (id === "previz") {

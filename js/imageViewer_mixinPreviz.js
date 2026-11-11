@@ -16,6 +16,8 @@ import * as L from "./imageViewer_sceneLayers.js";
 import { pruneConstraints } from "./imageViewer_constraintData.js";
 import { bakedCopy } from "./imageViewer_constraints.js";
 import * as Q from "./imageViewer_clipSeqData.js";
+// Registers the layers' blend with the scene model (evaluateIn).
+import "./imageViewer_animLayers.js";
 import { pref, PREF } from "./imageViewer_settings.js";
 import { notice, openExportDialog, openFilePicker } from "./imageViewer_exportUI.js";
 
@@ -25,7 +27,11 @@ export const PrevizMixin = {
     // ── Scene per tab ────────────────────────────────────────────────────────
 
     previzScene(key = this.activeTab) {
-        return (this._scenes && this._scenes[key]) || null;
+        const scene = (this._scenes && this._scenes[key]) || null;
+        // Key edits go to the scene's active animation layer; the items have to
+        // know their scene for that (scene3d.bindScene). Nothing to do without layers.
+        if (scene && scene.animLayers && scene.animLayers.length) S.bindScene(scene);
+        return scene;
     },
 
     isPrevizTab(key = this.activeTab) {
@@ -607,7 +613,7 @@ export const PrevizMixin = {
         const view = this._modelView();
         if (!item || !view._pivotShiftLocal || !view.libs) return;
         const frame = Math.round(this.currentFrame || 0);
-        const at = S.evaluate(item, frame);
+        const at = S.evaluateIn(this.previzScene(), item, frame);
         const { THREE } = view.libs;
         const now = at.pivot || [0, 0, 0];
         const e = new THREE.Vector3(pivot[0] - now[0], pivot[1] - now[1], pivot[2] - now[2]);
@@ -652,9 +658,10 @@ export const PrevizMixin = {
         if (live) this.previzBeginDrag(`move ${item.name}`);
         else if (!this._previzDragging) this.previzSnapshot(`move ${item.name}`);
         const frame = Math.round(this.currentFrame || 0);
+        // Through the animation layers: what is keyed (or set) is what makes the
+        // whole stack show `value` here (scene3d.setPose).
         const write = (target, prop, value) => {
-            if (this._previzAutokey || S.isAnimated(target, prop)) S.setKeyframe(target, prop, frame, value);
-            else target[prop] = Array.isArray(value) ? value.slice() : value;
+            S.setPose(scene, target, prop, frame, value, { key: this._previzAutokey });
         };
         // Everything else that is selected comes along, by the same amount.
         // Anything inside a selected group is left out: its parent is already
@@ -670,9 +677,9 @@ export const PrevizMixin = {
             const value = transform[prop];
             if (value === undefined) continue;
             if (movers.length && Array.isArray(value) && prop !== "pivot") {
-                const before = S.valueAt(item, prop, frame);
+                const before = S.currentValue(scene, item, prop, frame);
                 for (const other of movers) {
-                    const ov = S.valueAt(other, prop, frame);
+                    const ov = S.currentValue(scene, other, prop, frame);
                     // Scale is a ratio — adding it would make a small thing
                     // huge and a huge thing wrong.
                     const next = prop === "scale"
@@ -698,14 +705,18 @@ export const PrevizMixin = {
         // The Channel Box only writes values into rows it already has, and
         // leaves alone the one being typed in.
         if (this._previzRenderChannels) this._previzRenderChannels();
+        // The Anim Layers panel's weights at this frame.
+        if (this._alRefreshValues) this._alRefreshValues();
     },
 
     /** Key every animatable property of the selection at the current frame. */
     /** Key everything selected — one key press, one step, however many items. */
     previzKeyAll(prop) {
+        const scene = this.previzScene();
         const items = this.previzSelectedIds()
-            .map((id) => S.itemById(this.previzScene(), id)).filter(Boolean);
+            .map((id) => S.itemById(scene, id)).filter(Boolean);
         if (!items.length) return;
+        if (this.previzLayerRefuseLocked && this.previzLayerRefuseLocked()) return;
         this.previzSnapshot(prop ? `key ${prop}` : "key");
         const frame = Math.round(this.currentFrame || 0);
         for (const item of items) {
@@ -715,7 +726,8 @@ export const PrevizMixin = {
                     ? (item.control && item.control.type === "ik" ? ["position", "rotation", "ikfk"] : ["position", "rotation"])
                     : ["position", "rotation", "scale"]);
             for (const p of props) {
-                S.setKeyframe(item, p, frame, S.valueAt(item, p, frame), this._previzEase || "smooth");
+                // What is on screen, keyed on the layer being edited.
+                S.keyPose(scene, item, p, frame, S.currentValue(scene, item, p, frame), this._previzEase || "smooth");
             }
         }
         this.previzChanged();
@@ -725,6 +737,7 @@ export const PrevizMixin = {
         const items = this.previzSelectedIds()
             .map((id) => S.itemById(this.previzScene(), id)).filter(Boolean);
         if (!items.length) return;
+        if (this.previzLayerRefuseLocked && this.previzLayerRefuseLocked()) return;
         this.previzSnapshot("delete key");
         const frame = Math.round(this.currentFrame || 0);
         for (const item of items) S.removeKeyframe(item, frame);
@@ -1025,6 +1038,8 @@ export const PrevizMixin = {
         if (this._previzHideChannels) this._previzHideChannels();
         // Layers and the Character Picker too, to come back with the next 3D tab.
         if (this._plHide) this._plHide();
+        // And the scene's animation layers.
+        if (this._previzHideLayers) this._previzHideLayers();
         // The curves describe the same scene, so they go with it.
         if (this._previzHideCurves) this._previzHideCurves();
         if (this._previzHideClips) this._previzHideClips();
@@ -1319,7 +1334,7 @@ export const PrevizMixin = {
         this.previzSnapshot(ok.length > 1 ? `freeze ${ok.length} items` : `freeze ${ok[0].name}`);
         const frame = Math.round(this.currentFrame || 0);
         for (const item of ok) {
-            const at = S.evaluate(item, frame);
+            const at = S.evaluateIn(this.previzScene(), item, frame);
             const pv = at.pivot || [0, 0, 0];
             // T(position + pivot) · R · S · T(-pivot): the local matrix the
             // channels stand for, now handed to the offset.
@@ -1575,6 +1590,8 @@ export const PrevizMixin = {
         if (this._plRender) this._plRender();
         if (this._pkRender) this._pkRender();
         if (this._plMaybeCheck) this._plMaybeCheck();
+        // So is Anim Layers (imageViewer_animLayersPanel.js).
+        if (this._alRender) this._alRender();
         if (!this.isPanelDocked("previz")) return;
         const scene = this.previzScene();
         const doc = ui.root.ownerDocument;
@@ -1708,11 +1725,11 @@ export const PrevizMixin = {
             warn.title = `This file could not be loaded:\n${failed}`;
             row.append(warn);
         }
-        if (S.keyframeFrames(item).length) {
+        if (S.allKeyframeFrames(item).length) {
             const dot = doc.createElement("span");
             dot.className = "previz-anim";
             dot.textContent = "\u2022";
-            dot.title = `${S.keyframeFrames(item).length} keyframes`;
+            dot.title = `${S.allKeyframeFrames(item).length} keyframes`;
             row.append(dot);
         }
 
@@ -1914,7 +1931,7 @@ export const PrevizMixin = {
     _previzLocalMatrix(item, frame) {
         const view = this._modelView();
         const { THREE } = view.libs;
-        const at = S.evaluate(item, frame);
+        const at = S.evaluateIn(this.previzScene(), item, frame);
         const pv = at.pivot || [0, 0, 0];
         const m = new THREE.Matrix4()
             .makeTranslation(at.position[0] + pv[0], at.position[1] + pv[1], at.position[2] + pv[2])
@@ -1946,7 +1963,7 @@ export const PrevizMixin = {
      */
     _previzValuesFromMatrix(item, local, frame, near) {
         const { THREE } = this._modelView().libs;
-        const pv = S.evaluate(item, frame).pivot || [0, 0, 0];
+        const pv = S.evaluateIn(this.previzScene(), item, frame).pivot || [0, 0, 0];
         const k = local.clone();
         if (Array.isArray(item.rest)) k.premultiply(new THREE.Matrix4().fromArray(item.rest).invert());
         const off = S.offsetOf(item);

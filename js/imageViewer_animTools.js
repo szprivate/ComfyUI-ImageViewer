@@ -78,7 +78,7 @@ function _remapTrack(item, prop, frames, fn, stretch = 1) {
     }
     const out = still.filter((k) => !landed.has(k.f)).concat([...landed.values()]);
     out.sort((a, b) => a.f - b.f);
-    item.tracks[prop] = out;
+    S.setTrack(item, prop, out);              // on the animation layer being edited
     return [...landed.keys()];
 }
 
@@ -283,7 +283,7 @@ function _samples(item, prop, first, last) {
     const out = [];
     let prev = null;
     for (let f = first; f <= last; f++) {
-        let v = S.valueAt(item, prop, f);
+        let v = S.editValueAt(item, prop, f);
         if (rot && prev) {
             // Keep the turn going: a key's own number may be a whole turn away
             // from the curve that runs into it.
@@ -377,7 +377,7 @@ export function simplifyTrack(item, prop, tolerance = 0.01) {
         chosen.add(at);
     }
     if (cand.length >= before) return { before, after: before, skipped: false };
-    item.tracks[prop] = cand;
+    S.setTrack(item, prop, cand);
     return { before, after: cand.length, skipped: false };
 }
 
@@ -408,9 +408,7 @@ export function swapTracks(items, buffer) {
         const it = byId.get(id);
         if (!it) continue;
         live.set(key, S.track(it, prop).map((k) => ({ ...k, v: _clone(k.v) })));
-        if (!it.tracks) it.tracks = {};
-        if (keys.length) it.tracks[prop] = keys.map((k) => ({ ...k, v: _clone(k.v) }));
-        else delete it.tracks[prop];
+        S.setTrack(it, prop, keys.map((k) => ({ ...k, v: _clone(k.v) })));
         n++;
     }
     return { buffer: live, swapped: n };
