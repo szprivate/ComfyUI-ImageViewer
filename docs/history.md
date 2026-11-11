@@ -30,6 +30,6 @@ The strip is sorted into groups, each with a heading. A group is the `group` of 
 
 - **Drag it onto the graph** for a loader node holding it (a selection gives one node each). Drop it onto a loader to swap its file.
 - **Drag it into a cut, a Paint canvas, a 3D scene** or the agentY chat.
-- **Right-click** for Move to group, **Show dependencies** (see [Dependencies](dependencies.md)), **Edit in Paint**, Copy path and Remove. With agentY: **Tag for agentY…** and **Approve for agentY** (see [Working with agentY](agentY.md)).
+- **Right-click** a thumbnail for, in this order: Copy image path, Remove from history, Move to group; then (for a film) **Convert Footage** (LTX-2.5 passes: alpha matte, SDR to HDR, reframe, upscale), **Show dependencies** (see [Dependencies](dependencies.md)), **Load workflow** (the workflow it was made with, in a new canvas tab, as in the Dependencies tab), Edit in Motion / **Edit in Paint**; then, with agentY, **Tag as asset…**, the colour tags, and **agentY: approve** while a run waits at a review step (see [Working with agentY](agentY.md)).
 
 A thumbnail whose file is gone is dropped from the strip, after the server confirms it twice. The same render arriving twice is kept once.

@@ -855,8 +855,11 @@ textarea.param-input {
 .thumb-ctx-menu { position: absolute; z-index: 9999; background: #1e1e1e; border: 1px solid #444; border-radius: 5px; padding: 4px 0; min-width: 170px; box-shadow: 0 4px 14px rgba(0,0,0,0.7); font-size: 12px; color: #ddd; }
 .thumb-ctx-item { padding: 7px 14px; cursor: pointer; white-space: nowrap; }
 .thumb-ctx-item:hover { background: rgba(255,102,0,0.18); color: #fff; }
+/* A line between the menu's sections; none twice, none at an end (a section may be empty). */
+.thumb-ctx-sep { height: 1px; background: #2c2c2c; margin: 4px 0; }
+.thumb-ctx-sep:first-child, .thumb-ctx-sep:last-child, .thumb-ctx-sep + .thumb-ctx-sep { display: none; }
 /* Colour tags on history snapshots (imageViewer_historyTags.js). */
-.thumb-ctx-tags { display: flex; gap: 6px; align-items: center; padding: 6px 14px; border-top: 1px solid #2c2c2c; border-bottom: 1px solid #2c2c2c; margin: 3px 0; }
+.thumb-ctx-tags { display: flex; gap: 6px; align-items: center; padding: 6px 14px; }
 .thumb-ctx-tag { width: 14px; height: 14px; border-radius: 50%; cursor: pointer; box-sizing: border-box; border: 1px solid rgba(0,0,0,0.5); flex: 0 0 auto; }
 .thumb-ctx-tag:hover { transform: scale(1.2); }
 .thumb-ctx-tag.sel { box-shadow: 0 0 0 2px #fff; }
