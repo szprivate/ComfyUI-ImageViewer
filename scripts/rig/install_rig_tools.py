@@ -9,7 +9,9 @@ the file on every request.
     python scripts/rig/install_rig_tools.py --root ~/rigtools --only kimodo
     python scripts/rig/install_rig_tools.py --root D:/AI/rigtools --cuda cu128    # instead of what the GPU says
 
-Run it with the Python the environments should be made from (UniRig wants 3.11; Kimodo 3.10 or later).
+Any Python runs it. UniRig needs Python 3.11 (bpy 4.2 is built only for it): the script finds one (the
+Windows py launcher, python3.11 on PATH, or uv, which installs one when there is none) or says how to get
+it; --python names one. Kimodo uses the same 3.11 when there is one (it wants 3.10 or later).
 
 Windows and Linux with an NVIDIA GPU: the CUDA build follows the GPU (--cuda auto: cu128 for RTX 50 /
 Blackwell, cu126 otherwise). UniRig's skinning needs flash_attn, which has no wheel on PyPI: the script
@@ -38,6 +40,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import urllib.request
@@ -90,8 +93,56 @@ def venv_python(folder):
     return os.path.join(folder, "Scripts", "python.exe") if os.name == "nt" else os.path.join(folder, "bin", "python")
 
 
+def version_of(python):
+    """(major, minor) of an interpreter given as a list (a command) or a path, or None when it does not run."""
+    cmd = python if isinstance(python, list) else [python]
+    try:
+        out = subprocess.check_output([*cmd, "-c", "import sys; print(sys.version_info[0], sys.version_info[1], sys.executable)"],
+                                      text=True, timeout=60, stderr=subprocess.DEVNULL)
+    except Exception:
+        return None
+    major, minor, exe = out.strip().split(" ", 2)
+    return int(major), int(minor), exe
+
+
+def find_python(want, given):
+    """An interpreter of version `want` (3, 11): the one given, the Windows py launcher, pythonX.Y on PATH,
+    one uv knows or installs. Its path, or None."""
+    tries = [[given]]
+    if os.name == "nt":
+        tries.append(["py", f"-{want[0]}.{want[1]}"])
+    tries += [[f"python{want[0]}.{want[1]}"], ["uv", "python", "find", f"{want[0]}.{want[1]}"]]
+    for cmd in tries:
+        if cmd[0] == "uv":
+            try:
+                exe = subprocess.check_output(cmd, text=True, timeout=60, stderr=subprocess.DEVNULL).strip()
+            except Exception:
+                continue
+            cmd = [exe]
+        v = version_of(cmd)
+        if v and v[:2] == tuple(want):
+            return v[2]
+    if shutil.which("uv"):
+        print(f"== no Python {want[0]}.{want[1]} here: uv installs one", flush=True)
+        try:
+            run(["uv", "python", "install", f"{want[0]}.{want[1]}"])
+            exe = subprocess.check_output(["uv", "python", "find", f"{want[0]}.{want[1]}"], text=True).strip()
+            v = version_of([exe])
+            if v and v[:2] == tuple(want):
+                return v[2]
+        except Exception as e:
+            print(f"!! uv could not install it: {e}", flush=True)
+    return None
+
+
 def make_venv(folder, python):
     py = venv_python(folder)
+    want = version_of([python])
+    have = version_of([py]) if os.path.isfile(py) else None
+    if have and want and have[:2] != want[:2]:
+        # A venv this script made earlier with another Python: made again.
+        print(f"== {folder} has Python {have[0]}.{have[1]}; made again with {want[0]}.{want[1]}", flush=True)
+        shutil.rmtree(folder)
     if not os.path.isfile(py):
         run([python, "-m", "venv", folder])
     run([py, "-m", "pip", "install", "--upgrade", "pip", "wheel", "setuptools"])
@@ -197,10 +248,16 @@ def install_unirig(root, python, cuda, flash_wheel, sysname):
     repo = os.path.join(root, "UniRig")
     if not os.path.isdir(os.path.join(repo, ".git")):
         run(["git", "clone", "--depth", "1", UNIRIG_GIT, repo])
-    py = make_venv(os.path.join(repo, ".venv"), python)
+    py311 = find_python((3, 11), python)
+    if not py311:
+        sys.exit("!! UniRig needs Python 3.11 (its bpy 4.2 is built only for 3.11), and none was found.\n"
+                 "   Install one, then run this again:\n"
+                 "     Windows: winget install Python.Python.3.11   (or: conda create -n py311 python=3.11)\n"
+                 "     macOS:   brew install python@3.11\n"
+                 "   or pass it: --python <path to python 3.11>")
+    print(f"== UniRig's Python: {py311}", flush=True)
+    py = make_venv(os.path.join(repo, ".venv"), py311)
     tag = py_tag(py)
-    if tag != "cp311":
-        print(f"!! UniRig is tested on Python 3.11 (bpy 4.2 has wheels only for it); this is {tag}.", flush=True)
     reqs = unirig_requirements(repo)
     if cuda == "cpu" or sysname == "mac":
         if sysname == "mac":
@@ -254,7 +311,7 @@ def install_unirig(root, python, cuda, flash_wheel, sysname):
 def install_kimodo(root, python, cuda, model, sysname):
     folder = os.path.join(root, "kimodo")
     os.makedirs(folder, exist_ok=True)
-    py = make_venv(os.path.join(folder, ".venv"), python)
+    py = make_venv(os.path.join(folder, ".venv"), find_python((3, 11), python) or python)
     env = {}
     if sysname == "mac":
         run([py, "-m", "pip", "install", "torch"])

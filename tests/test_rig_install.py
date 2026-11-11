@@ -114,3 +114,32 @@ class UnirigConfigTests(unittest.TestCase):
         task = self.load(self.U.task_for(self.repo, "configs/task/skel.yaml", "cuda", "open3d"))
         self.assertEqual(task["trainer"]["accelerator"], "gpu")
         self.assertNotEqual(task["components"]["transform"], "tf")
+
+
+class FindPythonTests(unittest.TestCase):
+    def test_the_given_one_when_it_is_the_version(self):
+        v = sys.version_info
+        self.assertEqual(os.path.realpath(I.find_python((v[0], v[1]), sys.executable)), os.path.realpath(sys.executable))
+
+    def test_none_when_there_is_no_such_python(self):
+        old = I.shutil.which
+        try:
+            I.shutil.which = lambda name: None                    # and no uv to install one
+            self.assertIsNone(I.find_python((2, 1), sys.executable))
+        finally:
+            I.shutil.which = old
+
+    def test_a_venv_of_another_python_is_made_again(self):
+        import tempfile
+        folder = os.path.join(tempfile.mkdtemp(), "venv")
+        calls = []
+        old_run, old_ver = I.run, I.version_of
+        try:
+            os.makedirs(os.path.dirname(I.venv_python(folder)))
+            open(I.venv_python(folder), "w").close()
+            I.version_of = lambda cmd: (3, 13, "x") if cmd[0] == I.venv_python(folder) else (3, 11, "y")
+            I.run = lambda cmd, cwd=None: calls.append(cmd)
+            I.make_venv(folder, "/py311")
+        finally:
+            I.run, I.version_of = old_run, old_ver
+        self.assertEqual(calls[0], ["/py311", "-m", "venv", folder])
