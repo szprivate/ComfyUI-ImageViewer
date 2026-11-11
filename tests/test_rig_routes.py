@@ -103,7 +103,7 @@ class RigRoutes(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.mkdtemp()
         cls.sent = []
-        cls.env = {k: os.environ.get(k) for k in ("IMAGE_VIEWER_RIG_TOOLS", "FAKE_RIGGED", "FAKE_KIMODO_LOG")}
+        cls.env = {k: os.environ.get(k) for k in ("IMAGE_VIEWER_RIG_TOOLS", "FAKE_RIGGED", "FAKE_KIMODO_LOG", "UNIRIG_DEVICE")}
         cls.app, cls.dirs, cls.pkg = _load(cls.tmp, cls.sent)
         cls.routes = importlib.import_module(cls.pkg + ".rig_routes")
         cls.abc_io = importlib.import_module(cls.pkg + ".abc_io")
@@ -122,7 +122,7 @@ class RigRoutes(unittest.TestCase):
         with open(cfg, "w", encoding="utf-8") as fh:
             json.dump({"unirig": {"python": sys.executable, "repo": unirig},
                        "kimodo": {"python": sys.executable, "env": {"PYTHONPATH": fake}, "text_encoder_device": "cpu"}}, fh)
-        os.environ.update(IMAGE_VIEWER_RIG_TOOLS=cfg, FAKE_RIGGED=rigged, FAKE_KIMODO_LOG=cls.log)
+        os.environ.update(IMAGE_VIEWER_RIG_TOOLS=cfg, FAKE_RIGGED=rigged, FAKE_KIMODO_LOG=cls.log, UNIRIG_DEVICE="cuda")
 
     @classmethod
     def tearDownClass(cls):
@@ -239,6 +239,68 @@ class RigRoutes(unittest.TestCase):
                 return job
             await asyncio.sleep(0.05)
         return job
+
+    def test_install_runs_the_installer_and_keeps_the_token(self):
+        fake = os.path.join(self.tmp, "fake_install.py")
+        with open(fake, "w") as fh:
+            fh.write(textwrap.dedent("""
+                import json, sys, time
+                args = sys.argv[1:]
+                if "--slow" in open(__file__).read() and "slow" in args[1]:
+                    import subprocess
+                    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+                    print("$ pip install torch", flush=True); time.sleep(60)
+                for i in range(7):
+                    print(f"$ step {i}", flush=True)
+                print("== written", flush=True)
+                json.dump(args, open(args[1] + ".args.json", "w"))
+            """) + "# --slow\n")
+        token_file = os.path.join(self.tmp, "hf", "token")
+        old = (self.routes.INSTALLER, os.environ.get("HF_TOKEN_PATH"), os.environ.get("HF_TOKEN"))
+        self.routes.INSTALLER = fake
+        os.environ["HF_TOKEN_PATH"] = token_file
+        os.environ.pop("HF_TOKEN", None)
+        root = os.path.join(self.tmp, "rigtools")
+        slow = os.path.join(self.tmp, "slow")
+
+        async def go(c):
+            t0 = await (await c.get("/imageviewer/rig/tools")).json()
+            bad = await c.post("/imageviewer/rig/install", json={"root": root, "hf_token": "not-a-token"})
+            r = await c.post("/imageviewer/rig/install", json={"root": root, "only": "kimodo",
+                                                               "hf_token": "hf_" + "a" * 30})
+            job = await r.json()
+            again = await (await c.post("/imageviewer/rig/install", json={"root": "/elsewhere"})).json()
+            done = await self.wait(c, job)
+            t1 = await (await c.get("/imageviewer/rig/tools")).json()
+            # A cancel stops the installer and what it started.
+            sj = await (await c.post("/imageviewer/rig/install", json={"root": slow})).json()
+            await asyncio.sleep(0.5)
+            await c.post("/imageviewer/rig/job", json={"job": sj["job"], "cancel": True})
+            stopped = await self.wait(c, sj)
+            return t0, bad.status, job, again, done, t1, stopped
+        try:
+            t0, bad, job, again, done, t1, stopped = self.run_c(go)
+        finally:
+            self.routes.INSTALLER = old[0]
+            for k, v in (("HF_TOKEN_PATH", old[1]), ("HF_TOKEN", old[2])):
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        self.assertFalse(t0["install"]["hf_token"])
+        self.assertIsNone(t0["install"]["running"])
+        self.assertTrue(t0["install"]["root"])
+        self.assertEqual(bad, 400)
+        self.assertEqual(again["job"], job["job"])                 # one install at a time: the running one
+        self.assertEqual(done["state"], "done", done)
+        self.assertEqual(done["share"], 1.0)
+        self.assertNotIn("hf_", json.dumps(done))                   # the token is never answered
+        with open(token_file) as fh:
+            self.assertEqual(fh.read(), "hf_" + "a" * 30)
+        with open(root + ".args.json") as fh:
+            self.assertEqual(json.load(fh), ["--root", root, "--only", "kimodo"])
+        self.assertTrue(t1["install"]["hf_token"])
+        self.assertEqual(stopped["state"], "cancelled", stopped)
 
     def test_autorig_runs_unirig_steps(self):
         async def go(c):

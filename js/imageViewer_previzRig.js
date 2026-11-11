@@ -420,6 +420,7 @@ export const PrevizRigMixin = {
             { label: "Add FK controls only", disabled: !bones, run: () => this.previzRigCharacter(modelId, { humanoid: false }) },
             { label: "Auto-rig…", disabled: !model || bones,
               run: () => this.previzAutoRigDialog && this.previzAutoRigDialog(modelId) },
+            { label: "Set up auto-rig and AI motion…", run: () => this.previzRigInstallDialog && this.previzRigInstallDialog() },
             { label: "Remove rig", disabled: !rigged, run: () => this.previzRemoveRig(modelId) },
             "-",
             { label: "Select all controls", disabled: !rigged, run: () => this.previzRigSelectControls(modelId) },

@@ -3,7 +3,11 @@
     POST /imageviewer/rig/export        multipart: a "meta" JSON part + binary parts it names
                                         ({format: fbx|abc, name, context, ...} + rig_export.parse_payload)
                                         -> {ok, path, relative, version}: by the export rule (kind "character")
-    GET  /imageviewer/rig/tools         -> {unirig: {ready, why}, kimodo: {ready, why, model}}
+    GET  /imageviewer/rig/tools         -> {unirig: {ready, why}, kimodo: {ready, why, model},
+                                            install: {root, hf_token: bool, running: job id | null}}
+    POST /imageviewer/rig/install       {root?, only?: unirig|kimodo, hf_token?} -> {job}: runs
+                                        scripts/rig/install_rig_tools.py (an Install button in the page);
+                                        a token is written where huggingface_hub reads it, never answered
     POST /imageviewer/rig/autorig       {src, name?, context?, seed?} -> {job}: UniRig on the model's file;
                                         the job's result is {path, relative}, a skinned .glb by the export rule
     POST /imageviewer/rig/motion        {mode: text|inbetween, prompt, frames, keys?, seed?, steps?, samples?,
@@ -36,6 +40,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import signal
 import secrets
 import subprocess
 import sys
@@ -49,6 +55,7 @@ from . import rig_export
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.join(os.path.dirname(HERE), "scripts", "rig")
+INSTALLER = os.path.join(SCRIPTS, "install_rig_tools.py")
 MAX_JOBS = 8
 LOG_LINES = 60
 DEFAULT_KIMODO_MODEL = "Kimodo-SOMA-RP-v1.2"
@@ -108,6 +115,78 @@ def tool_status(cfg=None):
     return out
 
 
+def default_root(folder_paths):
+    """Where the Install button puts the tools by default: beside ComfyUI's folder (D:/AI/comfyui ->
+    D:/AI/rigtools), so they are not inside it; or the folder an earlier install used."""
+    cfg = tools_config()
+    for tool, key in (("unirig", "repo"), ("kimodo", "python")):
+        path = (cfg.get(tool) or {}).get(key)
+        if path:
+            # <root>/UniRig, or <root>/kimodo/.venv/<bin>/python
+            up = os.path.dirname(path) if tool == "unirig" else os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(path))))
+            if up:
+                return up
+    base = getattr(folder_paths, "base_path", None)
+    if base:
+        return os.path.join(os.path.dirname(os.path.abspath(base)), "rigtools")
+    return os.path.join(os.path.dirname(config_path()), "rigtools")
+
+
+def hf_token_path():
+    """Where huggingface_hub reads the token: HF_TOKEN_PATH, else HF_HOME/token, else ~/.cache/huggingface/token."""
+    if os.environ.get("HF_TOKEN_PATH"):
+        return os.path.expanduser(os.environ["HF_TOKEN_PATH"])
+    home = os.environ.get("HF_HOME") or os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache"), "huggingface")
+    return os.path.join(os.path.expanduser(home), "token")
+
+
+def has_hf_token():
+    if os.environ.get("HF_TOKEN"):
+        return True
+    try:
+        with open(hf_token_path(), encoding="utf-8") as fh:
+            return bool(fh.read().strip())
+    except OSError:
+        return False
+
+
+HF_TOKEN_RE = re.compile(r"^hf_[A-Za-z0-9]{20,}$")
+
+
+def save_hf_token(token):
+    token = str(token or "").strip()
+    if not HF_TOKEN_RE.match(token):
+        raise ValueError("That is not a Hugging Face token (they start with hf_).")
+    path = hf_token_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(token)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def _kill_tree(proc):
+    """Stop a process and what it started (the installer runs pip, which runs more)."""
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.call(["taskkill", "/T", "/F", "/PID", str(proc.pid)], stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, **_no_window())
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except Exception:  # noqa: BLE001 - fall back to the one process
+        pass
+    if proc.poll() is None:
+        proc.kill()
+
+
+# How many commands (the installer's "$ " lines) a full install of each tool runs: for the progress bar.
+INSTALL_STEPS = {"unirig": 10, "kimodo": 5}
+
+
 class _Job:
     def __init__(self, kind):
         self.id = secrets.token_hex(8)
@@ -119,6 +198,7 @@ class _Job:
         self.proc = None
         self.cancelled = False
         self.started = time.time()
+        self.share = None
 
     def say(self, line):
         line = str(line).rstrip()
@@ -129,6 +209,8 @@ class _Job:
     def view(self):
         out = {"job": self.id, "kind": self.kind, "state": self.state, "log": self.log[-12:],
                "seconds": round(time.time() - self.started, 1)}
+        if self.share is not None:
+            out["share"] = round(self.share, 3)
         if self.result is not None:
             out["result"] = self.result
         if self.error:
@@ -358,8 +440,69 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
 
     # ── the tools ────────────────────────────────────────────────────────────
 
+    def installing():
+        return next((j for j in jobs.values() if j.kind == "install" and j.state == "running"), None)
+
     async def tools(request):
-        return web.json_response(tool_status())
+        out = tool_status()
+        run = installing()
+        out["install"] = {"root": default_root(folder_paths), "hf_token": has_hf_token(),
+                          "running": run.id if run else None}
+        return web.json_response(out)
+
+    async def install(request):
+        body = await body_of(request)
+        run = installing()
+        if run:
+            return web.json_response(run.view())
+        root = str(body.get("root") or default_root(folder_paths)).strip().strip('"')
+        root = os.path.abspath(os.path.expanduser(root))
+        if not os.path.isabs(root) or os.path.dirname(root) == root:
+            return err("choose a folder for the tools (not a drive's top folder)")
+        if os.path.isfile(root):
+            return err(f"{root} is a file")
+        only = body.get("only")
+        if only not in (None, "", "unirig", "kimodo"):
+            return err("only is unirig or kimodo")
+        if body.get("hf_token"):
+            try:
+                save_hf_token(body["hf_token"])
+            except ValueError as e:
+                return err(e)
+        script = INSTALLER
+        cmd = [sys.executable, "-u", script, "--root", root]
+        if only:
+            cmd += ["--only", only]
+        steps = INSTALL_STEPS[only] if only else sum(INSTALL_STEPS.values())
+        job = new_job("install")
+
+        def work():
+            env = dict(os.environ, PYTHONUNBUFFERED="1")
+            extra = {"start_new_session": True} if os.name != "nt" else {}
+            flags = _no_window()
+            if os.name == "nt":
+                flags["creationflags"] = flags.get("creationflags", 0) | subprocess.CREATE_NEW_PROCESS_GROUP
+            job.proc = subprocess.Popen(cmd, cwd=os.path.dirname(script), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        text=True, bufsize=1, env=env, encoding="utf-8", errors="replace",
+                                        **extra, **flags)
+            ran = 0
+            job.share = 0.0
+            for line in job.proc.stdout:
+                job.say(line)
+                if line.startswith("$ "):
+                    ran += 1
+                    job.share = min(0.97, ran / max(1, steps))
+            code = job.proc.wait()
+            job.proc.stdout.close()
+            if job.cancelled:
+                raise RuntimeError("cancelled")
+            if code != 0:
+                raise RuntimeError("The install stopped: " + " | ".join(l for l in job.log[-5:] if l.strip()))
+            job.share = 1.0
+            return tool_status()
+
+        spawn(job, work)
+        return web.json_response(job.view())
 
     async def autorig(request):
         body = await body_of(request)
@@ -465,7 +608,9 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
             return err("no such job", 404)
         if body.get("cancel") and job.state == "running":
             job.cancelled = True
-            if job.kind == "autorig" and job.proc and job.proc.poll() is None:
+            if job.kind == "install":
+                _kill_tree(job.proc)
+            elif job.kind == "autorig" and job.proc and job.proc.poll() is None:
                 job.proc.kill()
             elif job.kind == "motion":
                 kimodo.stop()
@@ -518,7 +663,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         add(method, f"/imageviewer/{path}", handler)
         add(method, f"/api/imageviewer/{path}", handler)
 
-    for method, path, handler in (("POST", "rig/export", export), ("GET", "rig/tools", tools),
+    for method, path, handler in (("POST", "rig/export", export), ("GET", "rig/tools", tools), ("POST", "rig/install", install),
                                   ("POST", "rig/autorig", autorig), ("POST", "rig/motion", motion),
                                   ("GET", "rig/job", job_state), ("POST", "rig/job", job_cancel)):
         add(method, f"/imageviewer/{path}", handler)

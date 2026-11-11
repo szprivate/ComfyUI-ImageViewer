@@ -128,6 +128,11 @@ class Generator:
         self.parents = [self.names.index(self.skel.bone_parents[n]) if self.skel.bone_parents[n] else -1
                         for n in self.names]
         self.rest = np.asarray(self.skel.neutral_joints.cpu().numpy(), dtype=np.float64)
+        # Kimodo's own clean-up needs its C++ extension, which only builds where there is a compiler.
+        import importlib.util
+        self.corrects = importlib.util.find_spec("motion_correction") is not None
+        if not self.corrects:
+            print("Kimodo without motion_correction: no post-processing (the viewer cleans the feet up)", flush=True)
         print("Kimodo ready", flush=True)
 
     def generate(self, req):
@@ -149,7 +154,7 @@ class Generator:
         print(f"generating {frames} frames: {' '.join(texts)} ({len(constraints and constraints[0]['frame_indices'])} keys)",
               flush=True)
         out = self.model(texts, per, constraint_lst=lst, num_denoising_steps=int(req.get("steps") or 100),
-                         num_samples=samples, multi_prompt=True, post_processing=bool(req.get("postprocess", True)),
+                         num_samples=samples, multi_prompt=True, post_processing=bool(req.get("postprocess", True)) and self.corrects,
                          return_numpy=True, **kw)
         rots = np.asarray(out["global_rot_mats"])
         joints = np.asarray(out["posed_joints"])
