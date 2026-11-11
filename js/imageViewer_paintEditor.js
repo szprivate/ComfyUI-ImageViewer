@@ -73,7 +73,7 @@ export const PAINT_KEYS = [
     ["A / Shift+A", "Path selection (drag: the whole path, Alt: a copy) / direct selection (anchors; Shift+click, box)"],
     ["Arrows, Del (A)", "Nudge (Shift: 10 px) / delete the path or the picked anchors"], ["B S E G I T H", "Brush, clone stamp, eraser, bucket, eyedropper, text, hand"],
     ["[ / ]", "Brush smaller / larger (Shift: softer / harder)"],
-    ["Hold B + move / Alt+right-drag", "Any brush (the mask and Quick Mask too): sideways the size, up / down the opacity (Shift: the hardness); Liquify: the strength"], ["X / D", "Swap / default colours"],
+    ["Hold B + drag / Alt+right-drag", "Any brush (the mask and Quick Mask too): sideways the size, up / down the opacity (Shift: the hardness); Liquify: the strength"], ["X / D", "Swap / default colours"],
     ["Alt+click", "Pick a colour (brush, bucket); the clone stamp and healing brush: where they take from"],
     ["J / Shift+J", "Spot healing brush / the next of healing brush, patch, spot healing"],
     ["G / Shift+G", "Paint bucket / gradient (Shift: 45° steps)"], ["O / Shift+O", "Dodge / the next of burn, sponge, dodge"], ["R / Shift+R", "Smudge / blur (Shift+R again: back to smudge)"],
@@ -2121,9 +2121,11 @@ class PaintEditor {
     _down(e) {
         if (!this.doc) return;
         this.wrap.focus({ preventScroll: true });
-        if (this._bd) { this._bdEnd(); return; }       // a press while B is held ends the size drag (and paints nothing)
-        // Alt+right-drag (Photoshop's, on Windows): the brush's size sideways, its opacity up and down.
-        if (e.button === 2 && e.altKey && this._bdTool()) {
+        if (this._bd) { this._bdEnd(); return; }       // another press during the size drag ends it (and paints nothing)
+        // B held + left-drag, or Alt+right-drag (Photoshop's, on Windows): the brush's size sideways, its opacity
+        // up and down.
+        if (((e.button === 0 && this._bArm) || (e.button === 2 && e.altKey)) && this._bdTool()) {
+            if (this._bArm) this._bArm.used = true;
             e.preventDefault();
             this.wrap.setPointerCapture(e.pointerId);
             this._bdBegin(e, "mouse");
@@ -3161,22 +3163,29 @@ class PaintEditor {
     }
 
     /**
-     * B: held with a brush tool up and the mouse moved, the brush's size (sideways) and opacity (up / down; Shift:
-     * hardness) follow the mouse until it is let go - Photoshop's Alt+right-drag on a key. Tapped, it picks the brush
-     * (on letting go, so a held B on the eraser changes the eraser). With another tool B picks the brush at once,
-     * and holding it on then works the same.
+     * B: held with a brush tool up, a left-drag on the canvas changes the brush's size (sideways) and opacity
+     * (up / down; Shift: hardness) instead of painting - Photoshop's Alt+right-drag on a key. Tapped (no drag while
+     * it was down), it picks the brush on letting go, so a held B on the eraser changes the eraser. With another
+     * tool B picks the brush at once, and holding it on then works the same.
      */
     _bKey(e) {
-        if (e.repeat || this._bd) return;
-        const at = this._hover ? this._lastClient : null;     // the pointer over the canvas
-        if (!this._bdTool()) { this.setTool("brush"); this._bdBegin(at, "key"); return; }
-        if (this._drag) return;                                // not in the middle of a stroke
-        const tap = this.tool !== "brush" ? () => this.setTool("brush") : null;
-        if (!this._bdBegin(at, "key", tap) && tap) tap();
+        if (e.repeat || this._bArm) return;
+        if (this._drag || this._bd) return;                    // not in the middle of a stroke
+        if (!this._bdTool()) { this.setTool("brush"); this._bArm = { used: false, tap: null }; }
+        else this._bArm = { used: false, tap: this.tool !== "brush" ? () => this.setTool("brush") : null };
+        // The key's release may never come here (the window left with B down): leaving the window lets go of it.
+        const win = this.d.defaultView, arm = this._bArm;
+        const off = () => { win.removeEventListener("blur", off); if (this._bArm === arm) this._bArm = null; };
+        win.addEventListener("blur", off);
     }
 
     keyUp(e) {
-        if (this._bd && this._bd.by === "key" && (e.key || "").toLowerCase() === "b") { this._bdEnd(); return true; }
+        if (this._bArm && (e.key || "").toLowerCase() === "b") {
+            const arm = this._bArm;
+            this._bArm = null;
+            if (!arm.used && !this._bd && arm.tap) arm.tap();
+            return true;
+        }
         if (e.key === " " && this._space) { this._space = false; this.setTool(this.tool); return true; }
         return false;
     }
@@ -3944,7 +3953,7 @@ class PaintEditor {
             } else if (this.tool === "spot") {
                 note("Paint over a blemish: when the stroke ends it is filled from a place nearby that looks alike, blended into what is around it.");
             } else note(this.editMask ? "Painting the layer's MASK: white shows, black hides." : "Alt+click picks a colour; Shift+click draws a straight line.");
-            note("Hold B and move the mouse (or Alt+right-drag): sideways the size, up and down the opacity - Shift: the hardness.");
+            note("Hold B and drag on the canvas (or Alt+right-drag): sideways the size, up and down the opacity - Shift: the hardness.");
         } else if (this.tool === "fill" || this.tool === "wand") {
             const f = o[this.tool];
             this._slider(ts, "Tolerance", f.tolerance, 0, 255, 1, (v) => { f.tolerance = v; sync(); });

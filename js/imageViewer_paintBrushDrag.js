@@ -1,6 +1,6 @@
 // imageViewer_paintBrushDrag.js
 // Paint: change the brush's size and opacity on the canvas while painting, as Photoshop's Alt+right-drag does
-// (Windows; Ctrl+Option+drag on a Mac): hold B (or Alt and the right mouse button) and move the mouse -
+// (Windows; Ctrl+Option+drag on a Mac): hold B and drag with the left button (or Alt and the right button) -
 // sideways the size, up and down the opacity (Shift held: the hardness). Every brush tool, the eraser on a
 // mask and Quick Mask included, and Liquify (its strength). `brushDragValues` is the arithmetic (pure, tested
 // in tests/test_paint_brushdrag.mjs); `BrushDragMixin` goes onto the editor. Written from what the tool does.
