@@ -29,7 +29,11 @@ class ApiAliasTest(unittest.TestCase):
         # comp_routes adds every route under both prefixes, in one loop
         comp = _read(os.path.join(ROOT, "src", "comp_routes.py"))
         self.assertIn('for prefix in ("/imageviewer", "/api/imageviewer"):', comp)
-        served.update("/api/imageviewer/" + n for n in re.findall(r'f"\{prefix\}/([^"?]+)"', comp))
+        # comp_routes, rig_poses and others add each route under both prefixes in such a loop
+        for py in glob.glob(os.path.join(ROOT, "src", "*.py")):
+            src = _read(py)
+            if 'for prefix in ("/imageviewer", "/api/imageviewer"):' in src:
+                served.update("/api/imageviewer/" + n for n in re.findall(r'f"\{prefix\}/([^"?]+)"', src))
         # clip_vfx_routes adds each (method, path, handler) under both prefixes, by concatenation
         vfx = _read(os.path.join(ROOT, "src", "clip_vfx_routes.py"))
         self.assertIn('add(method, "/api/imageviewer/" + path, h)', vfx)
