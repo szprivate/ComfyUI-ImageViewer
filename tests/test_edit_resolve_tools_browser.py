@@ -639,6 +639,51 @@ class EditResolveToolsBrowserTests(Base):
         self.assertEqual(pg.evaluate("() => JSON.stringify(__panel._editTlCut)"), before)
         self.assertEqual(self.errors, [])
 
+    def test_a_single_viewer_goes_back_and_forth_between_history_clicks_and_the_timeline(self):
+        """Issue #106: a History click shows its source; working the timeline afterwards shows the timeline again."""
+        pg = self.page()
+        pg.evaluate("() => { const P = __panel; try { localStorage.removeItem('imageviewer.viewer.editSource'); } catch (_) {} P._editSrc = undefined; P.editSrcViewerMode('single'); P.editSrcSwap('timeline'); P.editTlRefresh(); }")
+        shows = """() => { const P = __panel; return [P._editSrcViewer().show, P.viewport.style.display !== 'none',
+            P.editSourcePanel.style.display !== 'none', P.editMonActive()]; }"""
+        on_tl, on_src = ["timeline", True, False, "timeline"], ["source", False, True, "source"]
+        self.assertEqual(pg.evaluate(shows), on_tl)
+        click = """(n) => { const P = __panel;
+            P.pushHistorySnapshot('viewer', [{ filename: 'hist' + n + '.png', type: 'output', subfolder: '', kind: 'image' }]);
+            P._historyPanelSig = null; P.renderHistoryPanel();
+            P.historyStrip.querySelector('[data-idx="0"]').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })); }"""
+        for n in range(2):
+            # A History click: the single viewer shows the source.
+            pg.evaluate(click, n)
+            pg.wait_for_function("(n) => __panel._editSrc && __panel._editSrc.file === 'D:/out/hist' + n + '.png'", arg=n, timeout=5000)
+            self.assertEqual(pg.evaluate(shows), on_src)
+            # A scrub on the ruler: back on the timeline, the playhead where it was let go.
+            x, _ = self.x_at(pg, 5.0)
+            y = pg.evaluate("() => { const r = __panel._editTlUi.ruler.getBoundingClientRect(); return r.top + r.height / 2; }")
+            pg.mouse.move(x - 40, y)
+            pg.mouse.down()
+            pg.mouse.move(x, y, steps=4)
+            pg.mouse.up()
+            self.assertEqual(pg.evaluate(shows), on_tl)
+            self.assertAlmostEqual(pg.evaluate("() => __panel.currentFrame"), 120, delta=2)
+        # The transport keys, and playing, with the timeline focused, do too.
+        pg.evaluate(click, 2)
+        pg.wait_for_function("() => __panel._editSrc && __panel._editSrc.file === 'D:/out/hist2.png'", timeout=5000)
+        pg.evaluate("() => __panel._editTlUi.body.focus()")
+        self.assertEqual(pg.evaluate(shows), on_src)
+        pg.evaluate("() => __panel._editTlGoFrame(48)")
+        self.assertEqual(pg.evaluate(shows), on_tl)
+        self.assertEqual(pg.evaluate("() => __panel.currentFrame"), 48)
+        pg.evaluate("() => __panel.editSrcSwap('source')")
+        pg.evaluate("() => { __panel.play(); __panel.stop(); }")
+        self.assertEqual(pg.evaluate(shows), on_tl)
+        # Q still swaps by hand, and dual stays dual.
+        pg.evaluate("() => __panel.editSrcSwap()")
+        self.assertEqual(pg.evaluate(shows), on_src)
+        pg.evaluate("() => __panel.editSrcViewerMode('dual')")
+        self.focus_timeline(pg)
+        self.assertEqual(pg.evaluate("() => __panel._editSrcViewer().mode"), "dual")
+        self.assertEqual(self.errors, [])
+
     def test_the_viewer_switch_stays_at_the_right_in_every_layout_and_no_frame_on_the_timeline_viewer(self):
         pg = self.page()
         pg.evaluate("() => { const P = __panel; P.editSrcViewerMode('dual'); P.editSrcToggle(true); P.editTlRefresh(); }")

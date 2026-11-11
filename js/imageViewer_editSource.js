@@ -129,6 +129,24 @@ export const EditSourceMixin = {
         return v.mode;
     },
 
+    /**
+     * The timeline was worked (a press on the Edit timeline, its transport keys, play, reverse
+     * match frame): a single viewer that shows the source goes back to the timeline, as Resolve's
+     * does. Without this a History click (which loads the source) left the single viewer on the
+     * source while the timeline scrubbed unseen (issue #106). -> true when it switched.
+     */
+    _editSrcToTimeline() {
+        if (!this._editSrcOn() || this._editSrcGone) return false;
+        const v = this._editSrcViewer();
+        if (v.mode !== "single" || v.show !== "source") return false;
+        v.show = "timeline";
+        if (this._editSrcPlaying) this.editSrcPlay(false);
+        this._editSrcViewerKeep();
+        this._editSrcLayout();          // no editTlRefresh: it would replace the rows under a press
+        this.editMonSet("timeline");
+        return true;
+    },
+
     /** Q: a single viewer shows the other one - the source or the timeline. In dual mode: nothing. */
     editSrcSwap(show) {
         const v = this._editSrcViewer();
@@ -905,6 +923,7 @@ export const EditSourceMixin = {
         if (!hit) { this._editTlSay(`the cut does not show ${s.name} at ${D.timecode(s.head, fps)}`); return null; }
         this._editTlSel = hit.sel;
         this._editTlMulti = null;
+        if (this._editSrcToTimeline) this._editSrcToTimeline();   // the way back shows the timeline
         if (this._editTlSeek) this._editTlSeek(Math.floor(hit.t * fps + 1e-6) / fps);
         this.editTlRefresh();
         return hit;

@@ -647,6 +647,8 @@ export const EditTimelineMixin = {
             // A press stops a dynamic trim that runs (imageViewer_editDynamic.js).
             if (this._editTlDyn && this._editTlDynStop) this._editTlDynStop();
             // The timeline drives the timeline viewer: that one is the active monitor (imageViewer_editSource.js).
+            // A single viewer showing the source goes back to the timeline when the tracks or the ruler are pressed (#106).
+            if (t && main.contains(t) && this._editSrcToTimeline) this._editSrcToTimeline();
             if (this.editMonSet && this._editMonTlShown && this._editMonTlShown()) this.editMonSet("timeline");
             if (t && /^(INPUT|TEXTAREA|SELECT|BUTTON|OPTION)$/.test(t.tagName || "")) return;
             try { body.focus({ preventScroll: true }); } catch (_) {}
