@@ -97,6 +97,7 @@ import { EditAfxMixin } from "./imageViewer_editAfx.js";
 import { BarGroupsMixin } from "./imageViewer_barGroups.js";
 import { ExportViewMixin } from "./imageViewer_exportView.js";
 import { FullscreenMixin } from "./imageViewer_fullscreen.js";
+import { ViewerAudioMixin } from "./imageViewer_viewerAudio.js";
 import { SendFromNodeMixin, registerSendToViewerMenu, sendSelectionToViewer } from "./imageViewer_sendFromNode.js";
 import {
     registerSendNode, registerToolNode, senderTabInfo, isViewerSourceNode, IMAGE_VIEWER_SCENE_NODE,
@@ -646,6 +647,9 @@ class ViewerPanel extends HTMLElement {
         this._bindToolbarHandlers();
         try { this._initFullscreen(); }
         catch (e) { console.warn('imageViewer: full screen failed to start', e); }
+        // The sound switches, right of Toggle Overlays (before full screen, made just above).
+        try { this._initViewerAudio(); }
+        catch (e) { console.warn('imageViewer: the sound switches failed to start', e); }
 
         this.setupZoomAndPan();
         this.setupResizing();
@@ -1700,6 +1704,7 @@ Object.assign(
     BarGroupsMixin,
     ExportViewMixin,
     FullscreenMixin,
+    ViewerAudioMixin,
     PrevizWorldMixin,
     PrefsMixin,
 );

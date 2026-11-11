@@ -547,6 +547,8 @@ export const PlaybackMixin = {
         // the wipe (the early return used to skip the compare update below).
         if (this._frameIsVideo(imgs[0])) {
             this._videoSeek(idx, imgs[0]);
+            // Moved without playing: a grain of its sound there, if scrubbing is on (ViewerAudioMixin).
+            if (!this.isPlaying) this.viewerScrubAt?.(imgs[0], this._videoTimeForFrame(this.currentFrame));
             this._updatePathBar(imgs[0]);
             this._updateCompareFrame(this.currentFrame);
             // A clip that is already decoded can report its size now; one that
@@ -799,7 +801,9 @@ export const PlaybackMixin = {
         const audio = isAudioFrame(imgObj);
         v.style.display = audio ? "none" : "block";
         v.loop  = (this.loopMode === "loop" || this.loopMode === "ping-pong");
+        // Heard unless the bar's speaker is off (ViewerAudioMixin).
         v.muted = false;
+        this._viewerAudioApply?.();
 
         if (!this._videoHandlersBound) {
             v.addEventListener("timeupdate",     () => { this._videoOnTimeUpdate(); this._audioDraw?.(); });
@@ -1014,6 +1018,9 @@ export const PlaybackMixin = {
             this.isPlaying = true;
             this._setIcon(this.playBtn, 'icon-pause');
             const v = this.videoBase;
+            // No scrub grain under the film; muted or not as the bar's speaker says.
+            this._vaSilence?.();
+            this._viewerAudioApply?.();
             const fps = this._videoFps || 24;
             if (this.playbackRange) {
                 // Region playback: manage looping manually (see _videoOnTimeUpdate),
