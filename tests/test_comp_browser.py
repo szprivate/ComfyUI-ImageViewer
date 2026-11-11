@@ -865,6 +865,30 @@ class CompBrowserTests(unittest.TestCase):
             pg.screenshot(path=os.path.join(SHOTS, "comp-handles.png"))
         self.assertEqual(self.errors, [])
 
+    def test_a_reformat_makes_the_picture_its_new_size_and_the_jack_after_it_sits_in_its_middle(self):
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        pg.evaluate(f"() => {{ const e = {ED}; e.select(['Constant1']); e.addNode('reformat', {{ width: 640, height: 640, resize: 'fill' }}); }}")
+        pg.wait_for_function(f"() => {ED}.lastRender().width > 0 && {ED}.lastRender().width === {ED}.lastRender().height", timeout=5000)
+        r = pg.evaluate(f"() => {ED}.lastRender()")
+        self.assertEqual(r["width"], round(640 * r["scale"]))      # a square picture, not 1920 x 1080 with black around it
+        info = pg.evaluate(f"() => {ED}.stage.innerText")
+        self.assertIn("640×640", info)
+        box = pg.evaluate(f"() => {{ const b = {ED}.canvas.getBoundingClientRect(); return [b.width, b.height]; }}")
+        self.assertAlmostEqual(box[0], box[1], delta=1.5)
+        # A Transform after it: its jack in the middle of the square picture (its own pixels), turning about it.
+        pg.evaluate(f"() => {ED}.addNode('transform')")
+        pg.wait_for_timeout(300)
+        jc = pg.locator(".cp-over .cp-jctr").bounding_box()
+        cb = pg.evaluate(f"() => {{ const b = {ED}.canvas.getBoundingClientRect(); return [b.x, b.y, b.width, b.height]; }}")
+        self.assertAlmostEqual(jc["x"] + jc["width"] / 2, cb[0] + cb[2] / 2, delta=2)
+        self.assertAlmostEqual(jc["y"] + jc["height"] / 2, cb[1] + cb[3] / 2, delta=2)
+        if SHOTS:
+            pg.wait_for_timeout(300)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-reformat-own-size.png"))
+        self.assertEqual(self.errors, [])
+
     def test_ocio_reads_nodes_and_the_viewers_display(self):
         import importlib.util
         if importlib.util.find_spec("PyOpenColorIO") is None:

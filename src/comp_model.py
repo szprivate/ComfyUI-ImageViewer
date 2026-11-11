@@ -193,7 +193,6 @@ NODE_TYPES = {
         "flip": {"kind": "enum", "def": "off", "choices": ["off", "on"]},
         "flop": {"kind": "enum", "def": "off", "choices": ["off", "on"]},
         "turn": {"kind": "enum", "def": "off", "choices": ["off", "on"]},
-        "black_outside": {"kind": "enum", "def": "on", "choices": ["on", "off"]},
     }},
     "crop": {"inputs": ["src"], "params": {
         "topleft": {"kind": "vec2", "def": [0, 0], "key": True},
@@ -616,16 +615,20 @@ def transform_matrix(node, frame, fmt, scale=1.0):
     return _mul(_t(t[0] * scale + cx, t[1] * scale + cy), _mul(_r(r), _mul(_s(sc[0], sc[1]), _mul(_k(k[0], k[1]), _t(-cx, -cy)))))
 
 
-def reformat_layout(node, frame, fmt, scale=1.0):
-    """A Reformat's matrix (the comp-sized input laid into its box) and its box, in pixels of a picture ``scale``
-    times the comp's size (the page's ``reformatLayout``)."""
-    FW, FH = fmt["width"], fmt["height"]
+def reformat_size(node, frame, in_fmt):
+    """The size a Reformat makes, in pixels of the comp, from the size that comes in (the page's ``reformatSize``)."""
     if (param_at(node, "mode", frame) or "to format") == "scale":
         k = param_at(node, "scale", frame) or 1
-        bw, bh = FW * k, FH * k
-    else:
-        bw = param_at(node, "width", frame) or FW
-        bh = param_at(node, "height", frame) or FH
+        return max(1, _round_js(in_fmt["width"] * k)), max(1, _round_js(in_fmt["height"] * k))
+    return (max(1, _round_js(param_at(node, "width", frame) or in_fmt["width"])),
+            max(1, _round_js(param_at(node, "height", frame) or in_fmt["height"])))
+
+
+def reformat_layout(node, frame, in_fmt, scale=1.0):
+    """A Reformat: the picture that comes in (``in_fmt`` big) laid into a NEW picture of reformat_size; the matrix
+    (input pixels -> output pixels) and the output's size in pixels (the page's ``reformatLayout``)."""
+    FW, FH = in_fmt["width"], in_fmt["height"]
+    bw, bh = reformat_size(node, frame, in_fmt)
     turn = param_at(node, "turn", frame) == "on"
     iw, ih = (FH, FW) if turn else (FW, FH)
     sx = sy = 1
@@ -640,18 +643,52 @@ def reformat_layout(node, frame, fmt, scale=1.0):
         sx = sy = bh / ih
     elif how == "distort":
         sx, sy = bw / iw, bh / ih
+    lw, lh = iw * sx, ih * sy
     if param_at(node, "flop", frame) == "on":
         sx = -sx
     if param_at(node, "flip", frame) == "on":
         sy = -sy
     centre = param_at(node, "center", frame) != "off"
-    cx, cy = (FW / 2, FH / 2) if centre else (bw / 2, FH - bh / 2)
+    cx, cy = (bw / 2, bh / 2) if centre else (lw / 2, bh - lh / 2)
     m = _mul(_s(sx, sy), _t(-FW / 2, -FH / 2))
     if turn:
         m = _mul(_s(sx, sy), _mul([0, -1, 1, 0, 0, 0], _t(-FW / 2, -FH / 2)))
     m = _mul(_t(cx, cy), m)
     m = _mul(_s(scale, scale), _mul(m, _s(1 / scale, 1 / scale)))
-    return m, [(cx - bw / 2) * scale, (cy - bh / 2) * scale, (cx + bw / 2) * scale, (cy + bh / 2) * scale]
+    return m, max(1, _round_js(bw * scale)), max(1, _round_js(bh * scale))
+
+
+def format_at(comp, nid, depth=0):
+    """The size of the picture node ``nid`` makes, in pixels of the comp (the page's ``formatAt``)."""
+    F = {"width": comp["format"]["width"], "height": comp["format"]["height"]}
+    n = node_by_id(comp, nid) if nid and depth < 256 else None
+    if not n or n.get("type") not in NODE_TYPES:
+        return F
+    ins = n.get("inputs") or []
+
+    def up():
+        return format_at(comp, ins[0], depth + 1) if NODE_TYPES[n["type"]]["inputs"] and ins and ins[0] else F
+    if n.get("disable") or n["type"] != "reformat":
+        return F if n["type"] in ("read", "constant") else up()
+    w, h = reformat_size(n, 0, up())
+    return {"width": w, "height": h}
+
+
+def conform(img, w, h):
+    """``img`` laid into an h x w picture, bottom left on bottom left (the page's ``conform``); a 2-D plane too."""
+    if img is None or (img.shape[0] == h and img.shape[1] == w):
+        return img
+    out = np.zeros((h, w) + img.shape[2:], img.dtype)
+    dy = h - img.shape[0]
+    cw = min(w, img.shape[1])
+    y0, y1 = max(0, dy), min(h, img.shape[0] + dy)
+    if y1 > y0 and cw > 0:
+        out[y0:y1, :cw] = img[y0 - dy:y1 - dy, :cw]
+    return out
+
+
+def _conform_extras(ex, w, h):
+    return {k: conform(v, w, h) for k, v in (ex or {}).items()}
 
 
 def boxes_for_gauss(sigma, n=3):
@@ -1882,14 +1919,14 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             ex = {}
         else:
             ex = ex_of(n["inputs"][0], f)
-            if not n.get("disable") and n["type"] in _TWO_IN:
-                ex = union_extras(ex, ex_of(n["inputs"][1], f))
+            if not n.get("disable") and n["type"] in _TWO_IN and len(n["inputs"]) > 1 and n["inputs"][1]:
+                ex = union_extras(ex, _conform_extras(ex_of(n["inputs"][1], f), img.shape[1], img.shape[0]))
         if n and not n.get("disable") and n.get("type") in WRITES and n["type"] != "roto":
             w = n.get("write") or "rgba"
             if w != "rgba":
                 i0 = (n.get("inputs") or [None])[0]
                 base = run(i0, f, depth + 1) if i0 else blank(W, H)
-                img, ex = write_target(base, ex_of(i0, f), img, w)
+                img, ex = write_target(base, ex_of(i0, f), conform(img, base.shape[1], base.shape[0]), w)
         memo[(i, f)] = img
         memo[("x", i, f)] = ex
         return img
@@ -1905,6 +1942,10 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
         return vectors_image(run(src, f - 1, d1), run(src, f, d1), run(src, f + 1, d1),
                              {"smoothness": param_at(n, "smoothness", f), "iterations": int(param_at(n, "iterations", f)),
                               "levels": int(param_at(n, "levels", f)), "detail": param_at(n, "detail", f)}, scale)
+
+    def in_fmt(n, k=0):
+        ins = n.get("inputs") or []
+        return format_at(comp, ins[k] if len(ins) > k else None)
 
     def make(n, f, d1):
         if not n:
@@ -1923,12 +1964,13 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             img[...] = np.array([c[0] * c[3], c[1] * c[3], c[2] * c[3], c[3]], np.float32)
             return img
         if t == "merge":
-            Bi, Ai = run(ins[0], f, d1), run(ins[1], f, d1)
-            Mi = run(ins[2], f, d1) if ins[2] else None
+            Bi = run(ins[0], f, d1)
+            Ai = conform(run(ins[1], f, d1), Bi.shape[1], Bi.shape[0])
+            Mi = conform(run(ins[2], f, d1), Bi.shape[1], Bi.shape[0]) if ins[2] else None
             return merge_images(Bi, Ai, Mi, n.get("operation") or "over", param_at(n, "mix", f))
         if t == "transform":
-            m = transform_matrix(n, f, fmt, scale)
-            return spatial(ins[0], f, d1, lambda p: resample(p, m, W, H))
+            m = transform_matrix(n, f, in_fmt(n), scale)
+            return spatial(ins[0], f, d1, lambda p: resample(p, m, p.shape[1], p.shape[0]))
         if t in ("lumakeyer", "chromakeyer", "erode", "laplacian", "channelmath"):
             p = P(n, f, NODE_TYPES[t]["params"])
             src = run(ins[0], f, d1)
@@ -1944,7 +1986,8 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
                 return laplacian_image(src, p)
             return channel_math_image(src, p)
         if t == "channelmerge":
-            return channel_merge_image(run(ins[0], f, d1), run(ins[1], f, d1) if ins[1] else None,
+            Bi = run(ins[0], f, d1)
+            return channel_merge_image(Bi, conform(run(ins[1], f, d1), Bi.shape[1], Bi.shape[0]) if ins[1] else None,
                                        P(n, f, NODE_TYPES["channelmerge"]["params"]))
         if t in ("ocio_colorspace", "ocio_display"):
             p = P(n, f, NODE_TYPES[t]["params"])
@@ -1957,8 +2000,10 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             return glow_image(run(ins[0], f, d1), p)
         if t == "lensflare":
             p = P(n, f, NODE_TYPES["lensflare"]["params"])
-            return flare_image(run(ins[0], f, d1) if ins and ins[0] else None,
-                               run(ins[1], f, d1) if len(ins) > 1 and ins[1] else None, p, W, H, scale)
+            src = run(ins[0], f, d1) if ins and ins[0] else None
+            w, h = (src.shape[1], src.shape[0]) if src is not None else (W, H)
+            dirt = conform(run(ins[1], f, d1), w, h) if len(ins) > 1 and ins[1] else None
+            return flare_image(src, dirt, p, w, h, scale)
         if t == "colorcorrect":
             return color_correct_image(run(ins[0], f, d1), P(n, f, NODE_TYPES["colorcorrect"]["params"]))
         if t == "grade":
@@ -1967,16 +2012,12 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             sz = param_at(n, "size", f) * scale
             return spatial(ins[0], f, d1, lambda p: blur_image(p, sz))
         if t == "reformat":
-            m, box = reformat_layout(n, f, fmt, scale)
-            off = param_at(n, "black_outside", f) == "off"
-
-            def ref(p):
-                img = resample(p, m, W, H)
-                return img if off else crop_image(img, box[0], box[1], box[2], box[3], 0)
-            return spatial(ins[0], f, d1, ref)
+            m, rw, rh = reformat_layout(n, f, in_fmt(n), scale)
+            return spatial(ins[0], f, d1, lambda p: resample(p, m, rw, rh))
         if t == "crop":
             tl = param_at(n, "topleft", f) or [0, 0]
-            br = param_at(n, "bottomright", f) or [fmt["width"], fmt["height"]]
+            F = in_fmt(n)
+            br = param_at(n, "bottomright", f) or [F["width"], F["height"]]
             soft = param_at(n, "softness", f) * scale
             return spatial(ins[0], f, d1, lambda p: crop_image(p, tl[0] * scale, tl[1] * scale, br[0] * scale, br[1] * scale, soft))
         if t == "shuffle":
@@ -1991,7 +2032,8 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             return remove_channels(src, ex_of(ins[0], f), parse_channels(n.get("channels")), n.get("operation") == "keep")
         if t == "copy":
             pick = [n.get(k) or NODE_TYPES["copy"]["params"][k]["def"] for k in "rgba"]
-            return copy_image(run(ins[0], f, d1), run(ins[1], f, d1), pick)
+            Bi = run(ins[0], f, d1)
+            return copy_image(Bi, conform(run(ins[1], f, d1), Bi.shape[1], Bi.shape[0]), pick)
         if t == "premult":
             return premult_image(run(ins[0], f, d1))
         if t == "unpremult":
@@ -2009,18 +2051,21 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             if fr < 1e-9:
                 return at(f0)
             a, b = run(s0, f0, d1), run(s0, f0 + 1, d1)
-            return mix_images(a, b, fr), mix_extras(ex_of(s0, f0), ex_of(s0, f0 + 1), fr, (H, W))
+            return mix_images(a, b, fr), mix_extras(ex_of(s0, f0), ex_of(s0, f0 + 1), fr, a.shape[:2])
         if t == "keyer":
             return key_image(run(ins[0], f, d1), P(n, f, NODE_TYPES["keyer"]["params"]))
         if t == "roto":
             src = run(ins[0], f, d1) if ins[0] else None
-            return roto_write(roto_matte(n.get("roto"), f, W, H), src, ex_of(ins[0], f), n.get("write") or "rgba", n.get("premult") != "off")
+            m = roto_matte(n.get("roto"), f, W, H)
+            if src is not None:
+                m = conform(m, src.shape[1], src.shape[0])
+            return roto_write(m, src, ex_of(ins[0], f), n.get("write") or "rgba", n.get("premult") != "off")
         if t == "vectors":
             return vectors_of(ins[0], f, d1, n)
         if t == "motionblur":
             src = run(ins[0], f, d1)
             vec = run(ins[1], f, d1) if ins[1] else vectors_of(ins[0], f, d1, {"type": "vectors"})
-            return motion_blur_image(src, vec, param_at(n, "shutter", f), param_at(n, "samples", f), n.get("offset") or "centred", scale)
+            return motion_blur_image(src, conform(vec, src.shape[1], src.shape[0]), param_at(n, "shutter", f), param_at(n, "samples", f), n.get("offset") or "centred", scale)
         if t == "defocus":
             p = P(n, f, NODE_TYPES["defocus"]["params"])
             p["size"] = p["size"] * scale
@@ -2031,7 +2076,7 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
                 return src
             p = P(n, f, NODE_TYPES["depthblur"]["params"])
             p["size"] = p["size"] * scale
-            return depth_blur_image(src, run(ins[1], f, d1), p)
+            return depth_blur_image(src, conform(run(ins[1], f, d1), src.shape[1], src.shape[0]), p)
         if t == "output":
             return run(ins[0], f, d1)
         return blank(W, H)

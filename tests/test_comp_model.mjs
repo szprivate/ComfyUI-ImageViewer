@@ -314,26 +314,68 @@ test("glow spreads only what is bright; a lens flare lights round its light and 
     assert.ok(d1.data.some((v) => v > 0));
 });
 
-test("reformat lays the picture into a box inside the comp: fit, turned, flopped", () => {
+test("reformat makes a picture of its own size: fit, turned, flopped, scaled, at the bottom left", () => {
     const comp = { comp: 1, format: { width: 40, height: 20, fps: 24, frames: 1 }, output: "Output1", nodes: [
         { id: "Constant1", type: "constant", inputs: [], color: [1, 1, 1, 1] },
         { id: "Reformat1", type: "reformat", inputs: ["Constant1"], width: 20, height: 20 },
         { id: "Output1", type: "output", inputs: ["Reformat1"] }] };
     const a = (img, x, y) => img.data[(y * img.w + x) * 4 + 3];
     const fit = C.renderNode(comp, "Output1", 0, {});
-    assert.equal(a(fit, 20, 10), 1);                    // a 40 x 20 picture fit into 20 x 20: 20 x 10 in the middle
-    assert.equal(a(fit, 20, 3), 0);
-    assert.equal(a(fit, 5, 10), 0);
+    assert.deepEqual([fit.w, fit.h], [20, 20]);          // the new size, not the comp's with black around
+    assert.deepEqual(C.formatAt(comp, "Output1"), { width: 20, height: 20 });
+    assert.equal(a(fit, 10, 10), 1);                    // a 40 x 20 picture fit into 20 x 20: 20 x 10 in the middle
+    assert.equal(a(fit, 10, 2), 0);
+    assert.equal(a(fit, 10, 17), 0);
+    // At half the proxy scale the pixels halve too.
+    const half = C.renderNode(comp, "Output1", 0, { scale: 0.5 });
+    assert.deepEqual([half.w, half.h], [10, 10]);
     // Turned anticlockwise: a mark at the right ends up at the top.
     comp.nodes[0] = { id: "Constant1", type: "crop", inputs: ["C0"], topleft: [30, 0], bottomright: [40, 20] };
     comp.nodes.push({ id: "C0", type: "constant", inputs: [], color: [1, 1, 1, 1] });
     Object.assign(comp.nodes[1], { width: 20, height: 20, turn: "on" });   // turned: 20 x 40, fit into 20 x 20 = 10 x 20
     const t = C.renderNode(comp, "Output1", 0, {});
-    assert.equal(a(t, 20, 2), 1);
-    assert.equal(a(t, 20, 17), 0);
-    assert.equal(a(t, 12, 2), 0);
+    assert.equal(a(t, 10, 2), 1);
+    assert.equal(a(t, 10, 17), 0);
+    assert.equal(a(t, 2, 2), 0);
     comp.nodes[1].flip = "on";
-    assert.equal(a(C.renderNode(comp, "Output1", 0, {}), 20, 17), 1);
+    assert.equal(a(C.renderNode(comp, "Output1", 0, {}), 10, 17), 1);
+    // scale mode: the size that comes in times scale, the whole picture in it.
+    const s = { ...comp, nodes: [{ id: "C0", type: "constant", inputs: [], color: [1, 1, 1, 1] },
+        { id: "Reformat1", type: "reformat", inputs: ["C0"], mode: "scale", scale: 0.5 },
+        { id: "Output1", type: "output", inputs: ["Reformat1"] }] };
+    const sc = C.renderNode(s, "Output1", 0, {});
+    assert.deepEqual([sc.w, sc.h], [20, 10]);
+    assert.ok(sc.data.every((v) => v === 1));
+    // center off, resize none: the picture's bottom left on the new one's bottom left.
+    s.nodes[1] = { id: "Reformat1", type: "reformat", inputs: ["C0"], width: 50, height: 30, resize: "none", center: "off" };
+    const bl = C.renderNode(s, "Output1", 0, {});
+    assert.deepEqual([bl.w, bl.h], [50, 30]);
+    assert.equal(a(bl, 1, 28), 1); assert.equal(a(bl, 39, 11), 1); assert.equal(a(bl, 41, 28), 0); assert.equal(a(bl, 1, 8), 0);
+});
+
+test("a smaller picture is laid at the bottom left of the one it meets: merge, transform about its own middle", () => {
+    const comp = { comp: 1, format: { width: 40, height: 20, fps: 24, frames: 1 }, output: "Output1", nodes: [
+        { id: "B", type: "constant", inputs: [], color: [0, 0, 1, 1] },
+        { id: "A", type: "constant", inputs: [], color: [1, 0, 0, 1] },
+        { id: "Small", type: "reformat", inputs: ["A"], width: 10, height: 4, resize: "distort" },
+        { id: "Merge1", type: "merge", inputs: ["B", "Small", null] },
+        { id: "Output1", type: "output", inputs: ["Merge1"] }] };
+    const px = (img, x, y) => Array.from(img.data.slice((y * img.w + x) * 4, (y * img.w + x) * 4 + 4));
+    const m = C.renderNode(comp, "Output1", 0, {});
+    assert.deepEqual([m.w, m.h], [40, 20]);
+    assert.deepEqual(px(m, 2, 18), [1, 0, 0, 1]);       // A at the bottom left
+    assert.deepEqual(px(m, 12, 18), [0, 0, 1, 1]);
+    assert.deepEqual(px(m, 2, 14), [0, 0, 1, 1]);
+    // Merged the other way round, B decides the size.
+    comp.nodes[3].inputs = ["Small", "B", null];
+    assert.deepEqual(C.formatAt(comp, "Output1"), { width: 10, height: 4 });
+    assert.deepEqual([C.renderNode(comp, "Output1", 0, {}).w, C.renderNode(comp, "Output1", 0, {}).h], [10, 4]);
+    // A Transform keeps the size that comes in and turns about its middle.
+    comp.nodes.push({ id: "T", type: "transform", inputs: ["Small"], rotate: 180 });
+    comp.output = "T";
+    const t = C.renderNode(comp, "T", 0, {});
+    assert.deepEqual([t.w, t.h], [10, 4]);
+    assert.ok(t.data.every((v, i) => Math.abs(v - [1, 0, 0, 1][i % 4]) < 1e-6));
 });
 
 test("no node parameter takes a name the node itself uses", () => {

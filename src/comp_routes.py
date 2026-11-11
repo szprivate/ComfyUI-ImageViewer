@@ -250,8 +250,8 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
             if fmt in comp_io.VIDEO_FORMATS:
                 how = export_rules.video_settings(fmt, spec.get("codec"), comp_io.film_quality(spec.get("quality")))
                 t = export_rules.target("comp", name, fmt, out_dir, spec.get("context"))
-                writer = comp_io.VideoWriter(t["path"], how, comp["format"]["fps"], comp["format"]["width"],
-                                             comp["format"]["height"], enc)
+                size = M.format_at(comp, comp.get("output"))   # a Reformat before the Output changes it
+                writer = comp_io.VideoWriter(t["path"], how, comp["format"]["fps"], size["width"], size["height"], enc)
                 result = {"kind": "video", "path": t["path"], "relative": t["relative"], "version": t["version"],
                           "label": how["label"]}
             elif len(frames) == 1:

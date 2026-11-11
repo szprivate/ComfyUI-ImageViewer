@@ -68,6 +68,7 @@ class _Anim:
 
     def __init__(self, comp):
         self.frames = list(range(int(comp["format"]["frames"])))
+        self.comp = comp
 
     def animated(self, node, p):
         tr = node.get("tracks") if isinstance(node.get("tracks"), dict) else {}
@@ -277,10 +278,13 @@ def _native(n, t, ins, pos, label, write, out, A, W, H, F, y_, note, info_of, nk
         knobs = [("inputs", "2+1" if m else "2"), ("operation", n.get("operation") or "over"),
                  ("mix", A.knob(n, "mix"))] + dis
         return out.add("Merge2", label, knobs, [b, a] + ([m] if m else []), pos)
+    # The size that comes in: a node's numbers are in its pixels (y up from ITS bottom, as Nuke's are).
+    fi = M.format_at(A.comp, ins[0]) if ins and ins[0] else {"width": W, "height": H}
+    IW, IH = fi["width"], fi["height"]
     if t == "transform":
-        mid = [W / 2, H / 2]
+        mid = [IW / 2, IH / 2]
         tr = A.knob(n, "translate", lambda v: [(v or [0, 0])[0], -(v or [0, 0])[1]], 2)
-        ce = A.knob(n, "center", lambda v: [(v or mid)[0], y_((v or mid)[1])], 2)
+        ce = A.knob(n, "center", lambda v: [(v or mid)[0], IH - (v or mid)[1]], 2)
         note("Transform: Nuke filters with cubic, the comp with bilinear")
         return out.add("Transform", label, [("inputs", "1"), ("translate", tr), ("rotate", A.knob(n, "rotate", lambda v: -(v or 0))),
                                             ("scale", A.knob(n, "scale", lambda v: list(v or [1, 1]), 2)),
@@ -295,23 +299,18 @@ def _native(n, t, ins, pos, label, write, out, A, W, H, F, y_, note, info_of, nk
         if P("mode") == "scale":
             ks += [("type", "scale"), ("scale", _num(P("scale") or 1))]
         else:
-            ks += [("type", '"to box"'), ("box_width", _num(P("width") or W)), ("box_height", _num(P("height") or H)),
+            ks += [("type", '"to box"'), ("box_width", _num(P("width") or IW)), ("box_height", _num(P("height") or IH)),
                    ("box_fixed", "true")]
-        ks += [("resize", P("resize") or "fit"), ("center", "true"), ("flip", "true" if P("flip") == "on" else "false"),
-               ("flop", "true" if P("flop") == "on" else "false"), ("turn", "true" if P("turn") == "on" else "false"),
-               ("black_outside", "true" if P("black_outside") != "off" else "false")]
-        r = out.add("Reformat", label, ks + dis, [src()], pos)
-        # The comp keeps one size: the box goes back into the comp's format, in the middle or at the bottom left.
-        return out.add("Reformat", f"{label}_into_comp", [("inputs", "1"), ("format", f'"{W} {H} 0 0 {W} {H} 1 comp_{W}x{H}"'),
-                                                         ("resize", "none"), ("center", "true" if P("center") != "off" else "false"),
-                                                         ("black_outside", "true" if P("black_outside") != "off" else "false")] + dis,
-                       [r], (x, y + 40))
+        ks += [("resize", P("resize") or "fit"), ("center", "true" if P("center") != "off" else "false"),
+               ("flip", "true" if P("flip") == "on" else "false"), ("flop", "true" if P("flop") == "on" else "false"),
+               ("turn", "true" if P("turn") == "on" else "false"), ("black_outside", "true")]
+        return out.add("Reformat", label, ks + dis, [src()], pos)
     if t == "crop":
         if any(A.animated(n, p) for p in ("topleft", "bottomright")):
             box = "{" + " ".join("{curve x0 " + " ".join(_num(v) for v in vals) + "}" for vals in zip(*[
-                _crop_box(M.param_at(n, "topleft", f), M.param_at(n, "bottomright", f), W, H) for f in A.frames])) + "}"
+                _crop_box(M.param_at(n, "topleft", f), M.param_at(n, "bottomright", f), IW, IH) for f in A.frames])) + "}"
         else:
-            box = _value(_crop_box(P("topleft"), P("bottomright"), W, H))
+            box = _value(_crop_box(P("topleft"), P("bottomright"), IW, IH))
         if P("softness"):
             note("Crop: Nuke's softness is not the comp's ramp")
         return out.add("Crop", label, [("inputs", "1"), ("box", box), ("softness", A.knob(n, "softness")), ("reformat", "false"),

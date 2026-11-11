@@ -75,6 +75,21 @@ class NukeScript(unittest.TestCase):
         self.assertEqual(t["center"], "{20 40}")
         self.assertEqual(t["rotate"], "-30")
 
+    def test_a_reformat_is_one_reformat_and_what_follows_works_in_its_size(self):
+        c = comp([{"id": "C", "type": "constant", "inputs": []},
+                  {"id": "R", "type": "reformat", "inputs": ["C"], "width": 40, "height": 30, "center": "off"},
+                  {"id": "T", "type": "transform", "inputs": ["R"], "rotate": 10},
+                  {"id": "K", "type": "crop", "inputs": ["T"], "topleft": [5, 5]},
+                  {"id": "Output1", "type": "output", "inputs": ["K"]}])
+        text, _ = N.build(c)
+        rs = [k for cls, k, _ in blocks(text) if cls == "Reformat"]
+        self.assertEqual(len(rs), 1)                       # no second Reformat back into the comp's format
+        self.assertEqual((rs[0]["box_width"], rs[0]["box_height"], rs[0]["center"]), ("40", "30", "false"))
+        t = [k for cls, k, _ in blocks(text) if cls == "Transform"][0]
+        self.assertEqual(t["center"], "{20 15}")           # the middle of the 40 x 30 picture, not of the comp
+        k = [k for cls, k, _ in blocks(text) if cls == "Crop"][0]
+        self.assertEqual(k["box"], "{5 0 40 25}")
+
     def test_keys_are_written_as_a_curve_with_a_key_on_every_frame(self):
         c = comp([{"id": "C", "type": "constant", "inputs": []},
                   {"id": "B", "type": "blur", "inputs": ["C"], "size": 0,

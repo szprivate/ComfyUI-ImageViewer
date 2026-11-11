@@ -67,7 +67,7 @@ export const NODE_TYPES = {
         rotate: { kind: "num", def: 0, key: true, step: 0.5 },
         scale: { kind: "vec2", def: [1, 1], key: true, step: 0.01 },
         skew: { kind: "vec2", def: [0, 0], key: true, step: 0.01, help: "Shear: x moves with y, then y with x" },
-        center: { kind: "vec2", def: null, key: true, step: 1, help: "Empty: the middle of the comp" },
+        center: { kind: "vec2", def: null, key: true, step: 1, help: "Empty: the middle of the picture that comes in" },
     } },
     grade: { label: "Grade", cat: "Color", inputs: ["src"], params: {
         blackpoint: { kind: "num", def: 0, key: true, step: 0.01 },
@@ -135,20 +135,19 @@ export const NODE_TYPES = {
         size: { kind: "num", def: 10, min: 0, max: 500, key: true, step: 0.5, help: "In pixels of the comp" },
     } },
     reformat: { label: "Reformat", cat: "Transform", inputs: ["src"], params: {
-        mode: { kind: "enum", def: "to format", choices: REFORMAT_TYPES, help: "to format: a box of width x height; scale: the comp's size times scale" },
-        width: { kind: "int", def: null, min: 1, help: "The box's width (empty: the comp's)" },
-        height: { kind: "int", def: null, min: 1, help: "The box's height (empty: the comp's)" },
+        mode: { kind: "enum", def: "to format", choices: REFORMAT_TYPES, help: "to format: a picture of width x height; scale: the size that comes in times scale" },
+        width: { kind: "int", def: null, min: 1, help: "The new picture's width (empty: the one that comes in)" },
+        height: { kind: "int", def: null, min: 1, help: "The new picture's height (empty: the one that comes in)" },
         scale: { kind: "num", def: 1, min: 0.01, key: true, step: 0.05, help: "For mode scale" },
-        resize: { kind: "enum", def: "fit", choices: REFORMAT_RESIZE, help: "How the picture fills the box: fit inside, fill it, match its width or height, distort to it, or none (the same size)" },
-        center: { kind: "enum", def: "on", choices: ["on", "off"], help: "off: the box sits at the bottom left" },
+        resize: { kind: "enum", def: "fit", choices: REFORMAT_RESIZE, help: "How the picture fills the new one: fit inside, fill it, match its width or height, distort to it, or none (the same size)" },
+        center: { kind: "enum", def: "on", choices: ["on", "off"], help: "off: the picture sits at the bottom left" },
         flip: { kind: "enum", def: "off", choices: ["off", "on"], help: "Upside down" },
         flop: { kind: "enum", def: "off", choices: ["off", "on"], help: "Mirrored left to right" },
         turn: { kind: "enum", def: "off", choices: ["off", "on"], help: "Turned 90 degrees anticlockwise first" },
-        black_outside: { kind: "enum", def: "on", choices: ["on", "off"], help: "Nothing outside the box" },
     } },
     crop: { label: "Crop", cat: "Transform", inputs: ["src"], params: {
-        topleft: { kind: "vec2", def: [0, 0], key: true, step: 1, help: "The box's top left corner, in pixels of the comp" },
-        bottomright: { kind: "vec2", def: null, key: true, step: 1, help: "The box's bottom right corner. Empty: the comp's" },
+        topleft: { kind: "vec2", def: [0, 0], key: true, step: 1, help: "The box's top left corner, in pixels of the picture that comes in" },
+        bottomright: { kind: "vec2", def: null, key: true, step: 1, help: "The box's bottom right corner. Empty: the picture's" },
         softness: { kind: "num", def: 0, min: 0, key: true, step: 0.5, help: "A soft edge this many pixels wide" },
     } },
     shuffle: { label: "Shuffle", cat: "Channel", inputs: ["src"], params: {
@@ -820,13 +819,21 @@ export function fitMatrix(sw, sh, w, h, fit, k = 1) {
     return mat.mul(mat.t(w / 2, h / 2), mat.mul(mat.s(kx, ky), mat.t(-sw / 2, -sh / 2)));
 }
 
-/** A Reformat's box in the comp ({x0, y0, x1, y1}) and the matrix that lays the comp-sized input into it, in pixels of a
- *  picture `scale` times the comp's size. The comp keeps one size: the box sits inside it. */
-export function reformatLayout(node, frame, format, scale = 1) {
-    const FW = format.width, FH = format.height;
-    let bw, bh;
-    if ((paramAt(node, "mode", frame) || "to format") === "scale") { const k = paramAt(node, "scale", frame) || 1; bw = FW * k; bh = FH * k; }
-    else { bw = paramAt(node, "width", frame) || FW; bh = paramAt(node, "height", frame) || FH; }
+/** The size a Reformat makes, in pixels of the comp, from the size that comes in (``inFmt``: {width, height}). */
+export function reformatSize(node, frame, inFmt) {
+    if ((paramAt(node, "mode", frame) || "to format") === "scale") {
+        const k = paramAt(node, "scale", frame) || 1;
+        return [Math.max(1, Math.round(inFmt.width * k)), Math.max(1, Math.round(inFmt.height * k))];
+    }
+    return [Math.max(1, Math.round(paramAt(node, "width", frame) || inFmt.width)), Math.max(1, Math.round(paramAt(node, "height", frame) || inFmt.height))];
+}
+
+/** A Reformat: the picture that comes in (``inFmt`` big, in pixels of the comp) laid into a NEW picture of
+ *  reformatSize: {m (input pixels -> output pixels, both ``scale`` times their size), w, h (output pixels), bw, bh}.
+ *  centre on: the middle on the middle; off: its bottom left on the bottom left. */
+export function reformatLayout(node, frame, inFmt, scale = 1) {
+    const FW = inFmt.width, FH = inFmt.height;
+    const [bw, bh] = reformatSize(node, frame, inFmt);
     const turn = paramAt(node, "turn", frame) === "on";
     const iw = turn ? FH : FW, ih = turn ? FW : FH;
     let sx = 1, sy = 1;
@@ -836,18 +843,59 @@ export function reformatLayout(node, frame, format, scale = 1) {
     else if (how === "width") sx = sy = bw / iw;
     else if (how === "height") sx = sy = bh / ih;
     else if (how === "distort") { sx = bw / iw; sy = bh / ih; }
+    const lw = iw * sx, lh = ih * sy;
     if (paramAt(node, "flop", frame) === "on") sx = -sx;
     if (paramAt(node, "flip", frame) === "on") sy = -sy;
     const centre = paramAt(node, "center", frame) !== "off";
-    const cx = centre ? FW / 2 : bw / 2, cy = centre ? FH / 2 : FH - bh / 2;
+    const cx = centre ? bw / 2 : lw / 2, cy = centre ? bh / 2 : bh - lh / 2;
     let m = mat.mul(mat.s(sx, sy), mat.t(-FW / 2, -FH / 2));
     if (turn) m = mat.mul(mat.s(sx, sy), mat.mul([0, -1, 1, 0, 0, 0], mat.t(-FW / 2, -FH / 2)));
     m = mat.mul(mat.t(cx, cy), m);
     m = mat.mul(mat.s(scale, scale), mat.mul(m, mat.s(1 / scale, 1 / scale)));
-    return { m, box: [(cx - bw / 2) * scale, (cy - bh / 2) * scale, (cx + bw / 2) * scale, (cy + bh / 2) * scale] };
+    return { m, w: Math.max(1, Math.round(bw * scale)), h: Math.max(1, Math.round(bh * scale)), bw, bh };
 }
 
-/** A Transform node's matrix at `frame`, in pixels of a picture `scale` times the comp's size. */
+/**
+ * The size of the picture node ``id`` makes, in pixels of the comp ({width, height}), from the graph alone: a
+ * Reformat sets it, a node with no input is the comp's format, every other node keeps what comes in (a Merge:
+ * B's). Pictures of other sizes are laid at the bottom left of the one they meet (``conform``).
+ */
+export function formatAt(comp, id, depth = 0) {
+    const F = { width: comp.format.width, height: comp.format.height };
+    const n = id && depth < 256 && nodeById(comp, id);
+    if (!n || !NODE_TYPES[n.type]) return F;
+    const up = () => (NODE_TYPES[n.type].inputs.length && n.inputs[0] ? formatAt(comp, n.inputs[0], depth + 1) : F);
+    if (n.disable || n.type !== "reformat") return n.type === "read" || n.type === "constant" ? F : up();
+    const [w, h] = reformatSize(n, 0, up());
+    return { width: w, height: h };
+}
+
+/** ``img`` laid into a w x h picture with its bottom left on the bottom left (as a compositor lays a picture
+ *  of another size): cut where it is bigger, transparent where it is smaller. */
+export function conform(img, w, h) {
+    if (!img || (img.w === w && img.h === h)) return img;
+    const out = blank(w, h), dy = h - img.h, cw = Math.min(w, img.w);
+    for (let y = Math.max(0, dy); y < Math.min(h, img.h + dy); y++) {
+        const s = (y - dy) * img.w * 4;
+        out.data.set(img.data.subarray(s, s + cw * 4), y * w * 4);
+    }
+    return out;
+}
+/** One channel of w0 x h0 numbers laid into w x h the same way. */
+export function conformPlane(a, w0, h0, w, h) {
+    if (w0 === w && h0 === h) return a;
+    const out = new a.constructor(w * h), dy = h - h0, cw = Math.min(w, w0);
+    for (let y = Math.max(0, dy); y < Math.min(h, h0 + dy); y++) out.set(a.subarray((y - dy) * w0, (y - dy) * w0 + cw), y * w);
+    return out;
+}
+const conformExtras = (ex, w0, h0, w, h) => {
+    if (w0 === w && h0 === h) return ex;
+    const out = {};
+    for (const [k, v] of Object.entries(ex || {})) out[k] = conformPlane(v, w0, h0, w, h);
+    return out;
+};
+
+/** A Transform node's matrix at `frame`, in pixels of a picture `scale` times ``format`` (the size that comes in). */
 export function transformMatrix(node, frame, format, scale = 1) {
     const t = paramAt(node, "translate", frame) || [0, 0];
     const r = paramAt(node, "rotate", frame) || 0;
@@ -930,7 +978,7 @@ export function upstreamKey(comp, id) {
  * The picture `id` makes at `frame`. ctx: { scale, source(node, frame) -> picture | null (a Read's pixels at
  * their own size, linear premultiplied), cache?: Map (kept between calls for the HEAVY nodes) }. Nodes that
  * look at other times (Retime, Vectors, MotionBlur without vectors) render their input at those frames.
- * Returns a picture of the comp's size x scale.
+ * Returns a picture of its own size (formatAt) x scale.
  */
 /** The OCIO transforms a comp's nodes ask for at frame f: [{spec, key}] (the page fetches their LUTs). */
 export function ocioNeeds(comp, frame) {
@@ -1006,13 +1054,17 @@ export function renderNode(comp, id, frame, ctx) {
         else if (!n || !NODE_TYPES[n.type] || !NODE_TYPES[n.type].inputs.length || !n.inputs[0]) ex = {};
         else {
             ex = exOf(n.inputs[0], f);
-            if (!n.disable && TWO_IN.has(n.type)) ex = CH.unionExtras(ex, exOf(n.inputs[1], f));
+            if (!n.disable && TWO_IN.has(n.type) && n.inputs[1]) {
+                // The other input's channels laid as its picture is, at the bottom left of this one.
+                const a = run(n.inputs[1], f, depth + 1);
+                ex = CH.unionExtras(ex, conformExtras(exOf(n.inputs[1], f), a.w, a.h, img.w, img.h));
+            }
         }
         if (n && !n.disable && WRITES.has(n.type) && n.type !== "roto") {
             const w = n.write || "rgba";
             if (w !== "rgba") {
                 const base = n.inputs[0] ? run(n.inputs[0], f, depth + 1) : blank(W, H);
-                [img, ex] = CH.writeTarget(base, exOf(n.inputs[0], f), img, w);
+                [img, ex] = CH.writeTarget(base, exOf(n.inputs[0], f), conform(img, base.w, base.h), w);
             }
         }
         memo.set(mk, img);
@@ -1028,6 +1080,8 @@ export function renderNode(comp, id, frame, ctx) {
     const vectorsOf = (srcId, f, depth, n) => O.vectorsImage(run(srcId, f - 1, depth), run(srcId, f, depth), run(srcId, f + 1, depth), {
         smoothness: paramAt(n, "smoothness", f), iterations: paramAt(n, "iterations", f), levels: paramAt(n, "levels", f),
         detail: paramAt(n, "detail", f) }, scale);
+    // The size that comes into input k of node n, in pixels of the comp.
+    const inFmt = (n, k = 0) => formatAt(comp, n.inputs[k]);
     const make = (n, f, depth) => {
         const d1 = depth + 1;
         if (!n) return blank(W, H);
@@ -1046,11 +1100,11 @@ export function renderNode(comp, id, frame, ctx) {
             return img;
         }
         case "merge": {
-            const B = run(n.inputs[0], f, d1), A = run(n.inputs[1], f, d1);
-            const M = n.inputs[2] ? run(n.inputs[2], f, d1) : null;
+            const B = run(n.inputs[0], f, d1), A = conform(run(n.inputs[1], f, d1), B.w, B.h);
+            const M = n.inputs[2] ? conform(run(n.inputs[2], f, d1), B.w, B.h) : null;
             return mergeImages(B, A, M, n.operation || "over", paramAt(n, "mix", f));
         }
-        case "transform": { const m = transformMatrix(n, f, comp.format, scale); return spatial(n.inputs[0], f, d1, (p) => resample(p, m, W, H)); }
+        case "transform": { const m = transformMatrix(n, f, inFmt(n), scale); return spatial(n.inputs[0], f, d1, (p) => resample(p, m, p.w, p.h)); }
         case "grade": {
             const p = {};
             for (const k of Object.keys(NODE_TYPES.grade.params)) p[k] = paramAt(n, k, f);
@@ -1069,7 +1123,8 @@ export function renderNode(comp, id, frame, ctx) {
         case "channelmerge": {
             const p = {};
             for (const k of Object.keys(NODE_TYPES.channelmerge.params)) p[k] = paramAt(n, k, f);
-            return K.channelMergeImage(run(n.inputs[0], f, d1), n.inputs[1] ? run(n.inputs[1], f, d1) : null, p);
+            const B = run(n.inputs[0], f, d1);
+            return K.channelMergeImage(B, n.inputs[1] ? conform(run(n.inputs[1], f, d1), B.w, B.h) : null, p);
         }
         case "glow": {
             const p = {};
@@ -1080,7 +1135,9 @@ export function renderNode(comp, id, frame, ctx) {
         case "lensflare": {
             const p = {};
             for (const k of Object.keys(NODE_TYPES.lensflare.params)) p[k] = paramAt(n, k, f);
-            return LT.flareImage(n.inputs[0] ? run(n.inputs[0], f, d1) : null, n.inputs[1] ? run(n.inputs[1], f, d1) : null, p, W, H, scale);
+            // On a picture: that picture's size (the light in its pixels); without one, the comp's.
+            const src = n.inputs[0] ? run(n.inputs[0], f, d1) : null, w = src ? src.w : W, h = src ? src.h : H;
+            return LT.flareImage(src, n.inputs[1] ? conform(run(n.inputs[1], f, d1), w, h) : null, p, w, h, scale);
         }
         case "ocio_colorspace": case "ocio_display": {
             const p = {};
@@ -1096,12 +1153,12 @@ export function renderNode(comp, id, frame, ctx) {
         }
         case "blur": { const sz = paramAt(n, "size", f) * scale; return spatial(n.inputs[0], f, d1, (p) => blurImage(p, sz)); }
         case "reformat": {
-            const L = reformatLayout(n, f, comp.format, scale), off = paramAt(n, "black_outside", f) === "off";
-            return spatial(n.inputs[0], f, d1, (p) => { const out = resample(p, L.m, W, H); return off ? out : O.cropImage(out, L.box[0], L.box[1], L.box[2], L.box[3], 0); });
+            const L = reformatLayout(n, f, inFmt(n), scale);
+            return spatial(n.inputs[0], f, d1, (p) => resample(p, L.m, L.w, L.h));
         }
         case "crop": {
             const tl = paramAt(n, "topleft", f) || [0, 0];
-            const br = paramAt(n, "bottomright", f) || [comp.format.width, comp.format.height];
+            const F = inFmt(n), br = paramAt(n, "bottomright", f) || [F.width, F.height];
             const soft = paramAt(n, "softness", f) * scale;
             return spatial(n.inputs[0], f, d1, (p) => O.cropImage(p, tl[0] * scale, tl[1] * scale, br[0] * scale, br[1] * scale, soft));
         }
@@ -1122,7 +1179,8 @@ export function renderNode(comp, id, frame, ctx) {
         }
         case "copy": {
             const pick = ["r", "g", "b", "a"].map((k) => n[k] || NODE_TYPES.copy.params[k].def);
-            return O.copyImage(run(n.inputs[0], f, d1), run(n.inputs[1], f, d1), pick);
+            const B = run(n.inputs[0], f, d1);
+            return O.copyImage(B, conform(run(n.inputs[1], f, d1), B.w, B.h), pick);
         }
         case "premult": return O.premultImage(run(n.inputs[0], f, d1));
         case "unpremult": return O.unpremultImage(run(n.inputs[0], f, d1));
@@ -1133,7 +1191,7 @@ export function renderNode(comp, id, frame, ctx) {
             const f0 = Math.floor(t), fr = t - f0;
             if (fr < 1e-9) return at(f0);
             const a = run(s0, f0, d1), b = run(s0, f0 + 1, d1);
-            return X(mixImages(a, b, fr), CH.mixExtras(exOf(s0, f0), exOf(s0, f0 + 1), fr, W * H));
+            return X(mixImages(a, b, fr), CH.mixExtras(exOf(s0, f0), exOf(s0, f0 + 1), fr, a.w * a.h));
         }
         case "keyer": {
             const p = {};
@@ -1142,16 +1200,18 @@ export function renderNode(comp, id, frame, ctx) {
         }
         case "roto": {
             // The matte comes from the page (the viewer's Roto code, imageViewer_roto.js rotoMatte); none: empty.
-            const matte = (ctx.matte && ctx.matte(n, f, W, H)) || new Float64Array(W * H);
-            const src = n.inputs[0] ? run(n.inputs[0], f, d1) : null;
-            const [img, ex] = CH.rotoWrite(matte, W, H, src, exOf(n.inputs[0], f), n.write || "rgba", n.premult !== "off");
+            // The shapes are drawn on the comp's format; on a picture of another size the matte is laid as it would be.
+            let matte = (ctx.matte && ctx.matte(n, f, W, H)) || new Float64Array(W * H);
+            const src = n.inputs[0] ? run(n.inputs[0], f, d1) : null, w = src ? src.w : W, h = src ? src.h : H;
+            if (w !== W || h !== H) matte = conformPlane(matte, W, H, w, h);
+            const [img, ex] = CH.rotoWrite(matte, w, h, src, exOf(n.inputs[0], f), n.write || "rgba", n.premult !== "off");
             return X(img, ex);
         }
         case "vectors": return vectorsOf(n.inputs[0], f, d1, n);
         case "motionblur": {
             const src = run(n.inputs[0], f, d1);
             const vec = n.inputs[1] ? run(n.inputs[1], f, d1) : vectorsOf(n.inputs[0], f, d1, { type: "vectors" });
-            return O.motionBlurImage(src, vec, paramAt(n, "shutter", f), paramAt(n, "samples", f), n.offset || "centred", scale);
+            return O.motionBlurImage(src, conform(vec, src.w, src.h), paramAt(n, "shutter", f), paramAt(n, "samples", f), n.offset || "centred", scale);
         }
         case "defocus": {
             const p = {};
@@ -1165,7 +1225,7 @@ export function renderNode(comp, id, frame, ctx) {
             const p = {};
             for (const k of Object.keys(NODE_TYPES.depthblur.params)) p[k] = paramAt(n, k, f);
             p.size *= scale;
-            return O.depthBlurImage(src, run(n.inputs[1], f, d1), p);
+            return O.depthBlurImage(src, conform(run(n.inputs[1], f, d1), src.w, src.h), p);
         }
         case "output": return run(n.inputs[0], f, d1);
         default: return blank(W, H);

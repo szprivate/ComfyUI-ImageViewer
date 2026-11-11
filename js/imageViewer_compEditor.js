@@ -450,6 +450,12 @@ export function createCompEditor(host, opts = {}) {
 
     // ── the picture ──────────────────────────────────────────────────────────
     function viewedId() { return st.view && node(st.view) ? st.view : st.comp.output; }
+    /** The size of the picture on screen, in pixels of the comp (a Reformat upstream changes it). */
+    const viewFmt = () => C.formatAt(st.comp, viewedId());
+    /** The size that comes into node n (the pixels its numbers are in); without an input, the comp's. */
+    const inFmt = (n) => (n && n.inputs && n.inputs[0] ? C.formatAt(st.comp, n.inputs[0]) : fmt());
+    /** How far down the picture on screen a picture of size f lies (both laid with their bottom lefts together). */
+    const downBy = (f) => viewFmt().height - f.height;
     function scaleNow() {
         if (st.proxy !== "auto") return Number(st.proxy) || 1;
         const px = fmt().width * fmt().height;
@@ -504,18 +510,19 @@ export function createCompEditor(host, opts = {}) {
             color: dl ? (r, g, b) => C.OC.lutColor(dl, r, g, b) : null });
         ctx.putImageData(data, 0, 0);
         layoutCanvas();
-        const v = node(id);
+        const v = node(id), vf = viewFmt();
+        const size = vf.width !== fmt().width || vf.height !== fmt().height ? ` · ${vf.width}×${vf.height}` : "";
         const lay = st.layer !== "rgba" ? (layers.includes(st.layer) ? ` · ${st.layer}` : ` · no ${st.layer} here: rgba`) : "";
         const chan = lay + (st.channel === "rgb" ? "" : " · " + C.VIEW_CHANNELS.find((c) => c[0] === st.channel)[1].toLowerCase());
         const ev = st.ev && st.channel !== "a" ? ` · ${st.ev > 0 ? "+" : ""}${st.ev.toFixed(1)} EV` : "";
         const lutFail = ds && !dl && luts.get(C.OC.ocioKey(ds));
         const shown = ds ? (dl ? ` · ${ds.display} / ${ds.view}` : lutFail ? ` · OCIO display failed (${lutFail.why}): plain sRGB` : " · OCIO display loading…") : "";
-        info.textContent = `Viewing ${v ? v.name || v.id : "nothing"}${chan}${ev}${shown} · ${scale === 1 ? "full" : "1/" + Math.round(1 / scale)} · ${lastMs} ms`;
+        info.textContent = `Viewing ${v ? v.name || v.id : "nothing"}${size}${chan}${ev}${shown} · ${scale === 1 ? "full" : "1/" + Math.round(1 / scale)} · ${lastMs} ms`;
     }
     function layoutCanvas() {
         if (!st.comp) return;
         const W = stage.clientWidth || 1, H = stage.clientHeight || 1;
-        const cw = fmt().width, ch = fmt().height;
+        const vf = viewFmt(), cw = vf.width, ch = vf.height;
         if (st.zoom.fit) {
             const s = Math.min((W - 24) / cw, (H - 24) / ch);
             st.zoom.s = s > 0 ? s : 1;
@@ -587,15 +594,19 @@ export function createCompEditor(host, opts = {}) {
     }
     /** The points of the selected node that are dragged on the picture: [{param, at: [x, y], set(xy) -> value, small?}]. */
     function handlesOf(n) {
-        const F = fmt(), mid = [F.width / 2, F.height / 2];
+        const F = inFmt(n), mid = [F.width / 2, F.height / 2];
         const at = (p, def) => C.paramAt(n, p, st.frame) || def;
         const r1 = (v) => Math.round(v * 10) / 10;
         if (n.type === "lensflare") return [{ param: "position", at: at("position", mid), set: (xy) => [r1(xy[0]), r1(xy[1])], title: "The light" }];
         return [];
     }
+    let layer = over;   // where the handles go: a group in the pixels of the selected node's input
     function drawHandles() {
         const n = primary();
         if (!n || n.disable) return;
+        st.hoff = downBy(inFmt(n));
+        layer = svgEl(doc, "g", { transform: `translate(0 ${st.hoff})` });
+        over.append(layer);
         if (n.type === "transform") { drawJack(n); return; }
         if (n.type === "crop") { drawCropBox(n); return; }
         const hs = handlesOf(n);
@@ -606,11 +617,11 @@ export function createCompEditor(host, opts = {}) {
             g.dataset.param = h.param;
             const tip = svgEl(doc, "title", {}); tip.textContent = `${h.title} (${h.param}): drag`; g.append(tip);
             g.addEventListener("pointerdown", (e) => dragPatch(e, n.id, (xy0, xy) => ({ [h.param]: h.set([h.at[0] + xy[0] - xy0[0], h.at[1] + xy[1] - xy0[1]]) })));
-            over.append(g);
+            layer.append(g);
             if (!h.small) {
                 const k = 11 / z;
-                over.append(svgEl(doc, "line", { class: "cp-hline", x1: h.at[0] - k, y1: h.at[1], x2: h.at[0] + k, y2: h.at[1] }));
-                over.append(svgEl(doc, "line", { class: "cp-hline", x1: h.at[0], y1: h.at[1] - k, x2: h.at[0], y2: h.at[1] + k }));
+                layer.append(svgEl(doc, "line", { class: "cp-hline", x1: h.at[0] - k, y1: h.at[1], x2: h.at[0] + k, y2: h.at[1] }));
+                layer.append(svgEl(doc, "line", { class: "cp-hline", x1: h.at[0], y1: h.at[1] - k, x2: h.at[0], y2: h.at[1] + k }));
             }
         });
     }
@@ -620,25 +631,25 @@ export function createCompEditor(host, opts = {}) {
     /** The Transform's jack: move (the middle), the centre (Ctrl), the ring and its squares (scale), the bars (turn, skew). */
     function drawJack(n) {
         const z = st.zoom.s || 1;
-        const v = J.transformValues((p) => C.paramAt(n, p, st.frame), fmt());
+        const v = J.transformValues((p) => C.paramAt(n, p, st.frame), inFmt(n));
         const g = J.jackGeom(v, z);
         const part = (elm, name, tip) => {
             elm.dataset.jack = name;
             tipped(elm, tip);
             elm.addEventListener("pointerdown", (e) => {
                 const which = name === "move" && (e.ctrlKey || e.metaKey) ? "centre" : name;
-                const v0 = J.transformValues((p) => C.paramAt(node(n.id), p, st.frame), fmt());
+                const v0 = J.transformValues((p) => C.paramAt(node(n.id), p, st.frame), inFmt(n));
                 dragPatch(e, n.id, (xy0, xy, ev) => J.jackDrag(which, v0, xy0, xy, z, { shift: ev.shiftKey }));
             });
-            over.append(elm);
+            layer.append(elm);
             return elm;
         };
         const pts = (a) => a.map((p) => p.join(",")).join(" ");
         // The inside of the ring moves it too (as the middle does); drawn first so the rest lies over it.
         part(svgEl(doc, "polygon", { class: "cp-jfill", points: pts(g.ring) }), "move", "Drag: move · Shift: along one axis · Ctrl: move the centre only");
         part(svgEl(doc, "polygon", { class: "cp-jring", points: pts(g.ring) }), "ring", "Drag the ring: scale evenly");
-        over.append(svgEl(doc, "line", { class: "cp-jaxis", x1: g.O[0], y1: g.O[1], x2: g.rot[0], y2: g.rot[1] }));
-        over.append(svgEl(doc, "line", { class: "cp-jaxis", x1: g.O[0], y1: g.O[1], x2: g.skew[0], y2: g.skew[1] }));
+        layer.append(svgEl(doc, "line", { class: "cp-jaxis", x1: g.O[0], y1: g.O[1], x2: g.rot[0], y2: g.rot[1] }));
+        layer.append(svgEl(doc, "line", { class: "cp-jaxis", x1: g.O[0], y1: g.O[1], x2: g.skew[0], y2: g.skew[1] }));
         part(svgEl(doc, "circle", { class: "cp-jbar rot", cx: g.rot[0], cy: g.rot[1], r: 5 / z }), "rot", "Drag: turn (rotate) · Shift: in 15° steps");
         part(svgEl(doc, "circle", { class: "cp-jbar skew", cx: g.skew[0], cy: g.skew[1], r: 4 / z }), "skew", "Drag sideways: skew");
         for (const [k, tip] of [["e", "Drag: scale across · Shift: evenly"], ["w", "Drag: scale across · Shift: evenly"], ["n", "Drag: scale up and down · Shift: evenly"], ["s", "Drag: scale up and down · Shift: evenly"]]) {
@@ -647,12 +658,12 @@ export function createCompEditor(host, opts = {}) {
         }
         const c = 9 / z;
         part(svgEl(doc, "circle", { class: "cp-jctr", cx: g.O[0], cy: g.O[1], r: c }), "move", "Drag: move · Shift: along one axis · Ctrl: move the centre only");
-        over.append(svgEl(doc, "line", { class: "cp-hline", x1: g.O[0] - c * 1.6, y1: g.O[1], x2: g.O[0] + c * 1.6, y2: g.O[1] }));
-        over.append(svgEl(doc, "line", { class: "cp-hline", x1: g.O[0], y1: g.O[1] - c * 1.6, x2: g.O[0], y2: g.O[1] + c * 1.6 }));
+        layer.append(svgEl(doc, "line", { class: "cp-hline", x1: g.O[0] - c * 1.6, y1: g.O[1], x2: g.O[0] + c * 1.6, y2: g.O[1] }));
+        layer.append(svgEl(doc, "line", { class: "cp-hline", x1: g.O[0], y1: g.O[1] - c * 1.6, x2: g.O[0], y2: g.O[1] + c * 1.6 }));
     }
     /** The Crop's box: an edge or a corner moves those sides, inside moves the box. */
     function drawCropBox(n) {
-        const z = st.zoom.s || 1, F = fmt();
+        const z = st.zoom.s || 1, F = inFmt(n);
         const tl = C.paramAt(n, "topleft", st.frame) || [0, 0], br = C.paramAt(n, "bottomright", st.frame) || [F.width, F.height];
         const x0 = Math.min(tl[0], br[0]), x1 = Math.max(tl[0], br[0]), y0 = Math.min(tl[1], br[1]), y1 = Math.max(tl[1], br[1]);
         const part = (elm, name, tip) => {
@@ -662,7 +673,7 @@ export function createCompEditor(host, opts = {}) {
                 const a = (C.paramAt(node(n.id), "topleft", st.frame) || [0, 0]).slice(), b = (C.paramAt(node(n.id), "bottomright", st.frame) || [F.width, F.height]).slice();
                 dragPatch(e, n.id, (xy0, xy) => J.cropDrag(name, a, b, [xy[0] - xy0[0], xy[1] - xy0[1]]));
             });
-            over.append(elm);
+            layer.append(elm);
         };
         part(svgEl(doc, "rect", { class: "cp-cinside", x: x0, y: y0, width: x1 - x0, height: y1 - y0 }), "inside", "Drag: move the box");
         const w = 9;   // screen pixels (the stroke does not scale)
@@ -670,7 +681,7 @@ export function createCompEditor(host, opts = {}) {
         part(svgEl(doc, "line", { class: "cp-cedge", x1: x0, y1: y1, x2: x1, y2: y1, "stroke-width": w }), "b", "Drag: the bottom edge");
         part(svgEl(doc, "line", { class: "cp-cedge", x1: x0, y1: y0, x2: x0, y2: y1, "stroke-width": w }), "l", "Drag: the left edge");
         part(svgEl(doc, "line", { class: "cp-cedge", x1: x1, y1: y0, x2: x1, y2: y1, "stroke-width": w }), "r", "Drag: the right edge");
-        over.append(svgEl(doc, "rect", { class: "cp-hline solid", x: x0, y: y0, width: x1 - x0, height: y1 - y0 }));
+        layer.append(svgEl(doc, "rect", { class: "cp-hline solid", x: x0, y: y0, width: x1 - x0, height: y1 - y0 }));
         const h = 4 / z;
         for (const [name, x, y] of [["tl", x0, y0], ["tr", x1, y0], ["bl", x0, y1], ["br", x1, y1]])
             part(svgEl(doc, "rect", { class: "cp-jsq", x: x - h, y: y - h, width: 2 * h, height: 2 * h }), name, "Drag: this corner");
@@ -681,10 +692,12 @@ export function createCompEditor(host, opts = {}) {
         e.preventDefault(); e.stopPropagation();
         stage.setPointerCapture(e.pointerId);
         const specs = C.NODE_TYPES[node(id).type].params;
-        const xy0 = compXY(e);
+        // In the pixels of the node's input (the handles' group is shifted by st.hoff).
+        const at = (ev) => { const p = compXY(ev); return [p[0], p[1] - (st.hoff || 0)]; };
+        const xy0 = at(e);
         let pushed = false;
         stage.onpointermove = (ev) => {
-            const xy = compXY(ev);
+            const xy = at(ev);
             if (!pushed) { if (Math.hypot(xy[0] - xy0[0], xy[1] - xy0[1]) * (st.zoom.s || 1) < 2) return; st.hist.push(st.comp); pushed = true; }
             const patch = compute(xy0, xy, ev), n = node(id);
             for (const [p, raw] of Object.entries(patch)) {
@@ -713,7 +726,8 @@ export function createCompEditor(host, opts = {}) {
         const srcId = n.inputs && n.inputs[0] ? n.inputs[0] : viewedId();
         const { pics, scale, frame } = lastPics;
         const img = C.renderNode(st.comp, srcId, frame, { scale, source: (s, nf) => pics.get(`${s.id}@${nf}`) || null, cache: heavy, matte });
-        const x = Math.max(0, Math.min(img.w - 1, Math.floor(xy[0] * scale))), y = Math.max(0, Math.min(img.h - 1, Math.floor(xy[1] * scale)));
+        const dy = downBy(C.formatAt(st.comp, srcId));   // the picture clicked on and the one read may differ in size
+        const x = Math.max(0, Math.min(img.w - 1, Math.floor(xy[0] * scale))), y = Math.max(0, Math.min(img.h - 1, Math.floor((xy[1] - dy) * scale)));
         const i = (y * img.w + x) * 4, a = img.data[i + 3];
         const old = C.paramAt(n, pk.param, st.frame) || [0, 0, 0, 1];
         const c = a > 0 ? [img.data[i] / a, img.data[i + 1] / a, img.data[i + 2] / a, old[3]] : [img.data[i], img.data[i + 1], img.data[i + 2], old[3]];
@@ -1327,7 +1341,7 @@ export function createCompEditor(host, opts = {}) {
             sw.onclick = () => mutate(() => {
                 for (const t of tg) {
                     if (!!Mo.isAnimated(t, p) !== !!animated) continue;
-                    if (!animated && (t[p] === undefined || t[p] === null)) t[p] = C.paramAt(t, p, st.frame) ?? (p === "center" || p === "position" ? [fmt().width / 2, fmt().height / 2] : d.def);
+                    if (!animated && (t[p] === undefined || t[p] === null)) t[p] = C.paramAt(t, p, st.frame) ?? (p === "center" || p === "position" ? [inFmt(t).width / 2, inFmt(t).height / 2] : d.def);
                     Mo.toggleAnimated(keyHost(), t, p, st.frame);
                 }
             }, { structure: false });
@@ -1350,7 +1364,7 @@ export function createCompEditor(host, opts = {}) {
         }
         else if (d.kind === "vec2") {
             const mid = p === "center" || p === "position";
-            const base = cur || (mid ? [fmt().width / 2, fmt().height / 2] : [0, 0]);
+            const base = cur || (mid ? [inFmt(n).width / 2, inFmt(n).height / 2] : [0, 0]);
             const axisMixed = (a) => tg.some((t) => { const tv = C.paramAt(t, p, st.frame); return (tv ? tv[a] : null) !== (cur ? cur[a] : null); });
             for (let a = 0; a < 2; a++) {
                 const i = withFk(numInput(cur ? cur[a] : null, d.step || 1, (v) => {
@@ -1752,7 +1766,8 @@ export function createCompEditor(host, opts = {}) {
         node: (id) => node(id),
         stage,
         /** The picture's box in the stage's pixels (x, y, w, h) and the comp's size (cw, ch). */
-        canvasBox: () => ({ x: st.zoom.x, y: st.zoom.y, w: fmt().width * st.zoom.s, h: fmt().height * st.zoom.s, cw: fmt().width, ch: fmt().height }),
+        // The comp's format on screen (where the Roto tool draws): at the bottom left of the picture shown.
+        canvasBox: () => ({ x: st.zoom.x, y: st.zoom.y + (st.comp ? downBy(fmt()) : 0) * st.zoom.s, w: fmt().width * st.zoom.s, h: fmt().height * st.zoom.s, cw: fmt().width, ch: fmt().height }),
         /** The Roto tool is on the picture: the left button is its, not the pan's. */
         setToolOn(on) { st.toolOn = !!on; },
         /** A key the viewer's window saw first (its hotkeys run in the capture phase): handled here when it is the

@@ -325,5 +325,24 @@ class CompRoutes(unittest.TestCase):
         self.run_c(go)
 
 
+    def test_a_reformat_before_the_output_renders_at_its_size(self):
+        from PIL import Image
+
+        async def go(c):
+            comp = self.comp_with_plate(2)
+            comp["nodes"].insert(3, {"id": "Reformat1", "type": "reformat", "inputs": ["Merge1"], "width": 30, "height": 22})
+            comp["nodes"][-1]["inputs"] = ["Reformat1"]
+            path = os.path.join(self.dirs["output"], "small.comp.json")
+            await self.j(c, "/imageviewer/comp", {"path": path, "comp": comp})
+            s = await self.render(c, path, format="png", first=0, last=0)
+            self.assertEqual(s["state"], "done", s)
+            self.assertEqual(Image.open(s["result"]["path"]).size, (30, 22))
+            s = await self.render(c, path, format="mp4", quality="low")
+            self.assertEqual(s["state"], "done", s)
+            with av.open(s["result"]["path"]) as f:
+                v = f.streams.video[0]
+                self.assertEqual((v.codec_context.width, v.codec_context.height), (30, 22))
+        self.run_c(go)
+
 if __name__ == "__main__":
     unittest.main()

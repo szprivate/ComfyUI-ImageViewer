@@ -220,10 +220,26 @@ def new_node_cases(sources):
     cs, srcs = one(node("ocio_display", 1, ["Read1"], display="sRGB", view="v"))
     c.append((dict(cs, ocio=OCIO_LUTS), srcs))
     for kw in ({"mode": "to format", "width": 20, "height": 15}, {"mode": "scale", "scale": 0.6, "resize": "distort", "flop": "on"},
-               {"width": 12, "height": 20, "resize": "fill", "turn": "on", "center": "off", "black_outside": "off"},
+               {"width": 12, "height": 20, "resize": "fill", "turn": "on", "center": "off"},
+               {"width": 50, "height": 31, "resize": "none", "center": "off"},
                {"width": 25, "height": 9, "resize": "height", "flip": "on"}, {"width": 18, "height": 10, "resize": "none"}):
         c.append(one(node("reformat", 1, ["Read1"], **kw)))
     c.append(({"comp": comp([read(1), node("reformat", 1, ["Read1"], width=20, height=12, turn="on"), out("reformat1")], w=40, h=24), "scale": 0.5}, sources))
+    # Pictures of their own size: a smaller A over B (laid at its bottom left), B smaller than A, a Transform,
+    # Crop and Blur on a reformatted picture, a mask of another size, channels carried across.
+    N = node
+    c.append(({"comp": comp([read(1), read(2), N("reformat", 1, ["Read2"], width=13, height=9, resize="distort"),
+                             N("transform", 1, ["reformat1"], rotate=20, scale=[1.2, 0.9]),
+                             N("merge", 1, ["Read1", "transform1", None], operation="over"), out("merge1")])}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("reformat", 1, ["Read1"], mode="scale", scale=0.5),
+                             N("crop", 1, ["reformat1"], topleft=[1, 2], softness=1), N("blur", 1, ["crop1"], size=2),
+                             N("merge", 1, ["blur1", "Read2", "Read1"], operation="plus", mix=0.7), out("merge1")])}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("addchannels", 1, ["Read2"], channels="mask.a", value=0.5),
+                             N("reformat", 1, ["addchannels1"], width=30, height=40, resize="fit"),
+                             N("copy", 1, ["Read1", "reformat1"], a="A.a"), N("shuffle", 1, ["copy1"], g="mask.a"), out("shuffle1")])}, sources))
+    c.append(({"comp": comp([read(1), N("reformat", 1, ["Read1"], width=21, height=13),
+                             N("constant", 1, [], color=[0.2, 0.4, 0.6, 1]), N("channelmerge", 1, ["reformat1", "constant1"]),
+                             out("channelmerge1")]), "scale": 0.5}, sources))
     for kw in ({}, {"steps": 1, "size": 7, "source": "max", "tint": [1, 0.6, 0.3, 1], "intensity": 2},
                {"threshold": 0.4, "softness": 0, "effect_only": "on", "steps": 5, "size": 12}):
         c.append(one(node("glow", 1, ["Read1"], **kw)))
