@@ -15,6 +15,7 @@ No aiohttp or ComfyUI in here, so it can be tested on its own.
 from __future__ import annotations
 
 import json
+import math
 import os
 import urllib.error
 import urllib.request
@@ -431,17 +432,51 @@ def world_cameras(path) -> dict:
         raise RelayError("the world's first camera could not be read", 400)
     tr0 = [[R0[j][i] for j in range(3)] for i in range(3)]
     mv = lambda m, v: [sum(m[i][k] * v[k] for k in range(3)) for i in range(3)]  # noqa: E731
+    def place(fr):
+        R, t = _cam_rt(fr["camera"])
+        col = lambda j: mv(tr0, [R[0][j], R[1][j], R[2][j]])  # noqa: E731
+        back = col(2)
+        return {"id": fr.get("id"), "right": col(0), "up": col(1), "fwd": [-v for v in back],
+                "pos": mv(tr0, [t[i] - t0[i] for i in range(3)])}
+
     cams = []
     for fr in frames[:MAX_ORIENT_CAMERAS]:
         try:
-            R, t = _cam_rt(fr["camera"])
+            cams.append(place(fr))
         except (KeyError, TypeError, ValueError):
             continue
-        col = lambda j: mv(tr0, [R[0][j], R[1][j], R[2][j]])  # noqa: E731
-        back = col(2)
-        cams.append({"id": fr.get("id"), "right": col(0), "up": col(1), "fwd": [-v for v in back],
-                     "pos": mv(tr0, [t[i] - t0[i] for i in range(3)])})
-    return {"frames": len(frames), "cameras": cams}
+    # Every view of the world with a camera - depth or not, Atlas renders added to it too - as Atlas' own
+    # Viewfinder shows them: a camera frustum with its picture (Sebastian 2026-11-11).
+    views = []
+    for fr in (world.get("frames") or [])[:MAX_ORIENT_CAMERAS]:
+        if not (isinstance(fr, dict) and fr.get("camera") and fr.get("image")):
+            continue
+        try:
+            v = place(fr)
+            K = fr["camera"]["intrinsics"]
+            w, h, fy = float(K["width"]), float(K["height"]), float(K["fy"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if w <= 0 or h <= 0 or fy <= 0:
+            continue
+        img = os.path.join(wd, os.path.basename(str(fr["image"])))
+        if not os.path.isfile(img):
+            continue
+        v.update({"image": img, "aspect": w / h, "fov": math.degrees(2 * math.atan(h / 2 / fy)),
+                  "source": str(fr.get("source") or ""), "has_depth": bool(fr.get("depth"))})
+        views.append(v)
+    return {"frames": len(frames), "cameras": cams, "views": views}
+
+
+# --- Rebuild the world's mesh (the cleaned depth meshes of agentY-core), by the agentY host -----------------------
+REBUILD_ROUTE = "atlas_rebuild"
+
+
+def rebuild_mesh(comfy_base: str, data) -> dict:
+    if not isinstance(data, dict):
+        raise RelayError("bad request", 400)
+    world = world_dir_of(data.get("world_path") or data.get("world"))
+    return call_host(comfy_base, "POST", body={"world": world}, route=REBUILD_ROUTE, timeout=600.0)
 
 
 # --- Export a Gaussian splat of the world (World Labs posedImages2Splats, by the agentY host) --------------------

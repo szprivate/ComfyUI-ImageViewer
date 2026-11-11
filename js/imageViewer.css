@@ -1244,6 +1244,8 @@ textarea.param-input {
 .rd-inline { display: inline-flex; align-items: center; gap: 5px; flex-wrap: wrap; }
 .rd-sub { color: #888; }
 .rd-hint { color: #888; font-size: 11px; }
+.rd-hint.warn { color: #e0b050; }
+.rd-hint.error { color: #e06060; }
 .rd-in {
     background: #111; color: #ddd; border: 1px solid #3a3a3a; border-radius: 3px;
     padding: 2px 4px; font: inherit; min-height: 20px; box-sizing: border-box;

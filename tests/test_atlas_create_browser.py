@@ -443,7 +443,8 @@ class AtlasCreateTests(unittest.TestCase):
           return [...{root}.querySelectorAll('.previz-menu .previz-menu-item')].map((b) => b.textContent.trim()
             + (b.classList.contains('off') ? ' (off)' : '')); }}""")
         self.assertEqual(labels, ["New Atlas world\u2026", "Render view with Atlas\u2026", "Chisel this view\u2026",
-                                  "Auto-orient world", "Export Gaussian splat\u2026"])
+                                  "Auto-orient world", "\u2713 Show views", "Show as point cloud", "Camera from view",
+                                  "Rebuild mesh", "Export Gaussian splat\u2026"])
         pg.keyboard.press("Escape")
         # The bar's 3D menu: one "Atlas" row, whose submenu is the same list.
         sub = pg.evaluate(f"""() => {{
@@ -567,6 +568,56 @@ class AtlasCreateTests(unittest.TestCase):
         self.assertGreaterEqual(out["i"], 0, out)
         self.assertEqual((out["active"], out["shown"], out["scene"], out["model"]),
                          ("folder_history", "room.png", False, False))
+
+    def test_the_splat_export_says_twelve_views_and_runs_on_when_its_dialog_is_closed(self):
+        pg = self.page()
+        out = pg.evaluate("""async () => {
+          const P = window.__panel;
+          P.setViewerToggleState(true);
+          P.previzAtlasItem = () => ({ id: 'w', kind: 'model', src: { path: 'D:/o/court/world.glb' } });
+          const real = window.__fetchApi;
+          window.__pushed = [];
+          let polls = 0, release = null;
+          const gate = new Promise((r) => { release = r; });
+          window.__release = release;
+          const ok = (b) => new Response(JSON.stringify(b), { status: 200, headers: { 'Content-Type': 'application/json' } });
+          window.__fetchApi = async (p, o) => {
+            if (p === '/imageviewer/atlas_splat') {
+              const b = JSON.parse(o.body);
+              return ok(b.dry_run ? { plan: { frame_count: 5, estimate: { usd: 1.2, credits: 1200 } } } : { id: 's1', state: 'running' });
+            }
+            if (p.startsWith('/imageviewer/atlas_splat?')) {
+              polls += 1;
+              if (polls < 2) return ok({ id: 's1', state: 'running', phase: 'World Labs is building the splat', elapsed: 7 });
+              await gate;
+              return ok({ id: 's1', state: 'done', ply: 'D:/o/court/splats/court.ply', spz: 'D:/o/court/splats/court.spz' });
+            }
+            if (p === '/imageviewer/push') { window.__pushed.push(JSON.parse(o.body)); return ok({ ok: true }); }
+            return real(p, o);
+          };
+          P.atlasSplatDialog();
+          const root = P.shadowRoot;
+          const dlg = () => root.querySelector('.atlas-splat');
+          for (let i = 0; i < 50 && !dlg().querySelector('.rd-go:not([disabled])'); i++) await new Promise((r) => setTimeout(r, 50));
+          const price = dlg().querySelector('.atlas-price');
+          const hint = [...dlg().querySelectorAll('.rd-hint')].map((x) => x.textContent).join(' ');
+          const said = { price: price.textContent, warn: price.classList.contains('warn'), hint };
+          dlg().querySelector('.rd-go').click();
+          for (let i = 0; i < 50 && !P._atlasSplatRun?.elapsed; i++) await new Promise((r) => setTimeout(r, 50));
+          // Closed while it runs: the dialog goes, the export does not.
+          dlg().querySelector('.rd-x').click();
+          const closed = { gone: !dlg(), busy: !!P._atlasSplatBusy };
+          window.__release();
+          for (let i = 0; i < 200 && P._atlasSplatBusy; i++) await new Promise((r) => setTimeout(r, 50));
+          return { said, closed, busy: !!P._atlasSplatBusy, pushed: window.__pushed };
+        }""")
+        self.assertIn("at least 12", out["said"]["hint"])
+        self.assertIn("Only 5 views", out["said"]["price"])
+        self.assertTrue(out["said"]["warn"])
+        self.assertEqual(out["closed"], {"gone": True, "busy": True})
+        self.assertFalse(out["busy"])
+        self.assertEqual([p["paths"] for p in out["pushed"]], [["D:/o/court/splats/court.ply"]])
+        self.assertEqual(self.errors, [])
 
 
 if __name__ == "__main__":

@@ -2222,6 +2222,28 @@ try:
                 return web.json_response({"error": str(e)}, status=e.status)
             return web.json_response(out)
 
+        # --- Rebuild the world's mesh from its depth maps (agentY-core's cleaned meshes), by the agentY host ---
+        async def _imageviewer_atlas_rebuild(request):
+            """Body: {"world_path"}. Answers {"ok", "glb", "mesh"} once world.glb is written again."""
+            if atlas_render is None:
+                return web.json_response({"error": "atlas unavailable"}, status=500)
+            ok, why = path_access.same_origin(request)
+            if not ok:
+                return web.json_response({"error": why}, status=403)
+            try:
+                data = await request.json()
+            except Exception:
+                data = None
+            path = os.path.abspath(str((data or {}).get("world_path") or "")) if isinstance(data, dict) else ""
+            if not path or not path_access.is_allowed(path):
+                return web.json_response({"error": "outside the folders the viewer may read"}, status=403)
+            base = f"{request.scheme}://{request.host}"
+            try:
+                out = await asyncio.to_thread(atlas_render.rebuild_mesh, base, data)
+            except atlas_render.RelayError as e:
+                return web.json_response({"error": str(e)}, status=e.status)
+            return web.json_response(out)
+
         async def _imageviewer_atlas_splat_state(request):
             if atlas_render is None:
                 return web.json_response({"error": "atlas unavailable"}, status=500)
@@ -3472,6 +3494,8 @@ try:
         _safe_add("GET", "/api/imageviewer/atlas_world", _imageviewer_atlas_world)
         _safe_add("POST", "/imageviewer/atlas_splat", _imageviewer_atlas_splat)
         _safe_add("POST", "/api/imageviewer/atlas_splat", _imageviewer_atlas_splat)
+        _safe_add("POST", "/imageviewer/atlas_rebuild", _imageviewer_atlas_rebuild)
+        _safe_add("POST", "/api/imageviewer/atlas_rebuild", _imageviewer_atlas_rebuild)
         _safe_add("GET", "/imageviewer/atlas_splat", _imageviewer_atlas_splat_state)
         _safe_add("GET", "/api/imageviewer/atlas_splat", _imageviewer_atlas_splat_state)
         _safe_add("GET", "/imageviewer/previz_shot", _imageviewer_previz_shot_state)

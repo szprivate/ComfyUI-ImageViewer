@@ -52,6 +52,68 @@ BOX_DEPTH = """async () => {
            near: Math.min(...zs), far: Math.max(...zs), hit, canvasW: view.canvas.width };
 }"""
 
+# An Atlas world stand-in: a textured quad (an OBJ with uvs, its picture half red, half blue) loaded as a model,
+# then its views and its point cloud (imageViewer_atlas3d.js).
+ATLAS_SHOW = """async () => {
+  const P = window.__panel;
+  const { app } = await import('/scripts/app.js');
+  app.graph.nodes = app.graph.nodes || []; app.graph.links = app.graph.links || {};
+  P.setViewerToggleState(true);
+  await P.spaceOpen('3d');
+  const S = await import('/extensions/viewer/imageViewer_scene3d.js');
+  const obj = 'v -1 -1 -5\\nv 1 -1 -5\\nv 1 1 -5\\nv -1 1 -5\\nvt 0 0\\nvt 1 0\\nvt 1 1\\nvt 0 1\\nf 1/1 2/2 3/3\\nf 1/1 3/3 4/4\\n';
+  const url = URL.createObjectURL(new Blob([obj], { type: 'text/plain' }));
+  const world = S.makeModelItem({ url, name: 'world.obj' }, 'Atlas: court');
+  const scene = P.previzScene();
+  scene.items.push(world);
+  await P.previzChanged();
+  const view = P._modelView();
+  for (let i = 0; i < 100; i++) {
+    const e = view._entries.get(world.id);
+    if (e && e.object) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  const entry = view._entries.get(world.id);
+  if (!entry || !entry.object) return { error: 'no model ' + (entry && entry.error) };
+  const { THREE } = view.libs;
+  // Its picture: left half red, right half blue.
+  const cv = document.createElement('canvas'); cv.width = 64; cv.height = 64;
+  const g = cv.getContext('2d'); g.fillStyle = '#ff0000'; g.fillRect(0, 0, 32, 64); g.fillStyle = '#0000ff'; g.fillRect(32, 0, 32, 64);
+  const tex = new THREE.CanvasTexture(cv);
+  entry.object.traverse((o) => { if (o.isMesh) { const m = view._originals.get(o) || o.material; (Array.isArray(m) ? m[0] : m).map = tex; } });
+  view.atlasSetViews(world.id, [
+    { id: 0, right: [1, 0, 0], up: [0, 1, 0], fwd: [0, 0, -1], pos: [0, 0, 0], image: 'D:/o/court/view_000.png', aspect: 16 / 9, fov: 50 },
+    { id: 1, right: [0, 0, 1], up: [0, 1, 0], fwd: [1, 0, 0], pos: [-2, 0, -5], image: 'D:/o/court/view_001.png', aspect: 1, fov: 40 },
+  ]);
+  view.applyFrame(view.sceneFrame);
+  const views = view.atlasViewsInfo(world.id);
+  // The point cloud.
+  world.atlasPoints = true;
+  view.applyFrame(view.sceneFrame);
+  const pts = [];
+  entry.object.traverse((o) => { if (o.isPoints) pts.push(o); });
+  const meshesShown = (() => { let n = 0; entry.object.traverse((o) => { if (o.isMesh && o.visible) n++; }); return n; })();
+  const colours = pts.length ? Array.from(pts[0].geometry.attributes.color.array) : [];
+  const xs = pts.length ? Array.from(pts[0].geometry.attributes.position.array).filter((_, i) => i % 3 === 0) : [];
+  // The depth pass still sees the mesh, and no view.
+  const cam = view.activeCameraObject();
+  cam.position.set(0, 0, 0); cam.lookAt(0, 0, -5); cam.updateMatrixWorld(true);
+  if (!view.beginRender({ grid: false, helpers: true })) return { error: 'busy' };
+  let d, viewsInRender;
+  try {
+    d = view.renderDepth(64, 36);
+    viewsInRender = view._atlasViewsShown.get(world.id).group.visible;
+  } finally { view.endRender(); }
+  const viewsAfter = view._atlasViewsShown.get(world.id).group.visible;
+  world.atlasPoints = false;
+  world.atlasViews = false;
+  view.applyFrame(view.sceneFrame);
+  let ptsLeft = 0; entry.object.traverse((o) => { if (o.isPoints) ptsLeft++; });
+  return { views, points: pts.length, meshesShown, colours, xs, centre: d && d.data[18 * 64 + 32],
+           viewsInRender, viewsAfter, viewsOff: view.atlasViewsInfo(world.id), ptsLeft,
+           parsed: S.parseScene(S.serializeScene({ ...scene, items: [{ ...world, atlasPoints: true, atlasViews: false }] })).items[0] };
+}"""
+
 
 def _free_port():
     with socket.socket() as s:
@@ -114,6 +176,38 @@ class ChiselDepthTests(unittest.TestCase):
         self.assertEqual(st["corner"], 0, "the sky is nothing")
         self.assertGreater(st["hit"], 50)
         self.assertLess(st["hit"], 160 * 90, "the grid and the floor of nothing do not count")
+        self.assertEqual(errors, [])
+
+    def test_an_atlas_world_shows_its_views_and_as_a_point_cloud(self):
+        pg = self.browser.new_page(viewport={"width": 1600, "height": 1000})
+        errors = []
+        pg.on("pageerror", lambda e: errors.append(str(e)))
+        try:
+            pg.goto(f"http://127.0.0.1:{self.port}/tabs.html")
+            pg.wait_for_function("() => window.__panel && window.__panel.container", timeout=20000)
+            st = pg.evaluate(ATLAS_SHOW)
+        finally:
+            pg.close()
+        self.assertNotIn("error", st)
+        self.assertEqual(st["views"]["count"], 2)
+        self.assertEqual(st["views"]["ids"], [0, 1])
+        self.assertTrue(st["views"]["shown"])
+        self.assertGreater(st["points"], 0)
+        self.assertEqual(st["meshesShown"], 0, "the mesh is drawn as its points")
+        # Each vertex coloured from the picture: the left ones red, the right ones blue.
+        cols = [st["colours"][i:i + 3] for i in range(0, len(st["colours"]), 3)]
+        for x, c in zip(st["xs"], cols):
+            if x < 0:
+                self.assertGreater(c[0], 0.9, (x, c)); self.assertLess(c[2], 0.1)
+            else:
+                self.assertGreater(c[2], 0.9, (x, c)); self.assertLess(c[0], 0.1)
+        self.assertAlmostEqual(st["centre"], 5, delta=0.05, msg="the depth pass measures the mesh, not the points")
+        self.assertFalse(st["viewsInRender"], "views are never in a picture")
+        self.assertTrue(st["viewsAfter"])
+        self.assertEqual(st["viewsOff"]["count"], 0)
+        self.assertEqual(st["ptsLeft"], 0)
+        self.assertTrue(st["parsed"].get("atlasPoints"))
+        self.assertIs(st["parsed"].get("atlasViews"), False)
         self.assertEqual(errors, [])
 
 

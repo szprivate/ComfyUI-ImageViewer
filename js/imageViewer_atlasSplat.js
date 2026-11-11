@@ -21,6 +21,9 @@ const postSplat = async (body) => asJson(await api.fetchApi("/imageviewer/atlas_
 }));
 const getSplat = async (id) => asJson(await api.fetchApi(`/imageviewer/atlas_splat?id=${encodeURIComponent(id)}`));
 
+/** World Labs: "at least 12 frames are recommended to get good coverage" for a splat (Sebastian 2026-11-11). */
+export const SPLAT_MIN_VIEWS = 12;
+
 export const SPLAT_QUALITIES = [["refined", "Refined (best)"], ["draft", "Draft (fast, cheap)"]];
 
 /** What the dry run's plan says, in a line. */
@@ -28,15 +31,32 @@ export function describeSplatPlan(plan) {
     if (!plan) return "";
     const est = plan.estimate || {};
     const left = ((plan.consistency || {}).excluded || []).length;
-    return `${plan.frame_count} views go to World Labs${left ? ` (${left} left out: they disagree with the others)` : ""}. `
+    const n = Number(plan.frame_count) || 0;
+    const few = n < SPLAT_MIN_VIEWS
+        ? ` Only ${n} view${n === 1 ? "" : "s"}: World Labs recommends at least ${SPLAT_MIN_VIEWS} for good coverage, `
+            + "so parts the views do not see will be missing or blurred. Add views with Render view with Atlas first."
+        : "";
+    return `${n} views go to World Labs${left ? ` (${left} left out: they disagree with the others)` : ""}. `
         + `About US$ ${Number(est.usd || 0).toFixed(2)} (${Number(est.credits || 0).toLocaleString("en")} credits; `
-        + "failed runs are free). It takes 10-20 minutes.";
+        + "failed runs are free). It takes 10-20 minutes." + few;
+}
+
+/** Whether the plan has fewer views than World Labs recommends. */
+export function splatTooFewViews(plan) {
+    return !!plan && (Number(plan.frame_count) || 0) < SPLAT_MIN_VIEWS;
 }
 
 export const AtlasSplatMixin = {
 
     atlasSplatDialog() {
-        if (this._atlasSplatDlg && this._atlasSplatDlg.isConnected) { if (!this._atlasSplatBusy) this._atlasSplatDlg.remove(); return; }
+        if (this._atlasSplatDlg && this._atlasSplatDlg.isConnected) { this._atlasSplatDlg.remove(); return; }
+        // One export at a time; a closed dialog's export runs on, and says when it is done.
+        if (this._atlasSplatBusy) {
+            const run = this._atlasSplatRun || {};
+            notice("info", "Gaussian splat export running", `${run.phase || "World Labs is building the splat"}`
+                + `${run.elapsed ? ` (${A.clock(run.elapsed)})` : ""}. You will be told when it is ready; the PLY joins the History.`);
+            return;
+        }
         const item = this.previzAtlasItem && this.previzAtlasItem();
         const host = this.container;
         if (!item || !host) { notice("warn", "Export Gaussian splat", "Open an Atlas world in the 3D space first."); return; }
@@ -71,8 +91,10 @@ export const AtlasSplatMixin = {
         const nameIn = el("input", "rd-in atlas-splat-name");
         nameIn.value = `${worldName}_splat`.slice(0, 60);
         const price = el("div", "rd-hint atlas-price", "Asking agentY for the plan and the price…");
-        const hint = el("div", "rd-hint", "World Labs reconstructs the splat from the world's views and their depth. The "
-            + "SPZ (Y up, as the world) and a PLY for the viewer go into the world's splats folder; the PLY joins the History.");
+        const hint = el("div", "rd-hint", "World Labs reconstructs the splat from the world's views and their depth, and "
+            + `recommends at least ${SPLAT_MIN_VIEWS} views for good coverage. The SPZ (Y up, as the world) and a PLY for `
+            + "the viewer go into the world's splats folder; the PLY joins the History. Closing this dialog does not "
+            + "stop an export: it runs on and you are told when it is ready.");
         const message = el("div", "rd-message");
         const progress = el("div", "rd-progress");
         const bar = el("div", "rd-bar");
@@ -91,9 +113,13 @@ export const AtlasSplatMixin = {
         const win = this._viewerWindow ? this._viewerWindow() : window;
         const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } };
         const close = () => {
-            if (this._atlasSplatBusy) return;
+            if (!shade.isConnected) return;
             shade.remove();
             win.removeEventListener("keydown", onKey, true);
+            if (this._atlasSplatBusy) {
+                notice("info", "Gaussian splat export runs on", "World Labs keeps building it; you will be told when it "
+                    + "is ready, and the PLY joins the History.");
+            }
         };
         win.addEventListener("keydown", onKey, true);
         x.onclick = close;
@@ -115,6 +141,7 @@ export const AtlasSplatMixin = {
                 plan = out.plan || null;
                 if (!plan) throw new Error("agentY gave no plan");
                 price.textContent = describeSplatPlan(plan);
+                price.classList.toggle("warn", splatTooFewViews(plan));
                 go.textContent = `Export splat (US$ ${Number((plan.estimate || {}).usd || 0).toFixed(2)})`;
                 go.disabled = false;
             } catch (e) {
@@ -130,6 +157,7 @@ export const AtlasSplatMixin = {
         go.onclick = async () => {
             if (this._atlasSplatBusy || !plan) return;
             this._atlasSplatBusy = true;
+            this._atlasSplatRun = { phase: "Sending the views to World Labs", elapsed: 0 };
             go.disabled = quality.disabled = check.disabled = nameIn.disabled = true;
             box.classList.add("rendering");
             message.classList.remove("error");
@@ -140,6 +168,7 @@ export const AtlasSplatMixin = {
                     post: postSplat, get: getSplat, request: request({ confirm_cost: true }),
                     pollMs: 5000, timeoutMs: 45 * 60 * 1000,
                     onState: (s) => {
+                        this._atlasSplatRun = { phase: s.phase || "", elapsed: s.elapsed || 0 };
                         message.textContent = `${s.phase || "World Labs is building the splat"}… ${A.clock(s.elapsed)}`;
                         bar.style.width = "50%";
                     },
@@ -159,11 +188,12 @@ export const AtlasSplatMixin = {
                        (state.message ? state.message + " " : "") + (state.spz || file || "in the world's splats folder"));
                 close();
             } catch (e) {
+                this._atlasSplatBusy = false;
+                if (!shade.isConnected) { notice("error", "Gaussian splat export failed", A.explainError(e)); return; }
                 message.classList.add("error");
                 message.textContent = A.explainError(e);
                 box.classList.remove("rendering");
                 go.disabled = quality.disabled = check.disabled = nameIn.disabled = false;
-                this._atlasSplatBusy = false;
             }
         };
     },

@@ -116,6 +116,8 @@ export const PrevizAtlasOrientMixin = {
         if (!this.isPrevizTab || !this.isPrevizTab()) return;
         const item = this.previzAtlasItem && this.previzAtlasItem();
         if (!item || item.id !== itemId) return;
+        // Its views (the pictures at their cameras), read again: a render added to the world is one more.
+        if (this.previzAtlasLoadViews) this.previzAtlasLoadViews(item);
         this.previzAtlasOrient({ force: false, quiet: true });
     },
 
@@ -146,6 +148,7 @@ export const PrevizAtlasOrientMixin = {
             { label: "Auto-orient world", disabled: !world, title: world ? "Stand the world upright with its floor at 0 "
                 + "(done by itself when it opens and when it gets a new view)" : need,
               run: () => this.previzAtlasOrient({ force: true }) },
+            ...(this.previzAtlasViewEntries ? ["-", ...this.previzAtlasViewEntries(world), "-"] : []),
             { label: "Export Gaussian splat…", disabled: !world, title: world ? "World Labs builds a Gaussian splat "
                 + "from the world's views (posedImages2Splats)" : need, run: () => this.atlasSplatDialog() },
         );
