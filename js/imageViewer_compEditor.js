@@ -15,7 +15,7 @@
 //   loadSource(node, frame, {scale, format}) -> Promise<picture | null>: a Read's pixels ({w, h, data, ow?, oh?}: shrunk, ow x oh is the file's size)
 //   sourceInfo(node)           -> Promise<{kind, first, last, ...}>: what a Read's file is (for its row)
 //   pickFile(cb)               the viewer's file picker; cb(path)
-//   pathsOf(items)             what a History / file-browser drop names, as Read files (sequences as patterns)
+//   pathsOf(items)             what a History / file-browser drop names, as Read files (sequences as patterns); may return a promise
 //   save(path, comp)           -> Promise
 //   newComp(), open(), saveAs(comp)   the bar's file buttons (as Paint's: New, Open, Save with its menu)
 //   render(path)               -> Promise<{message}>
@@ -1253,8 +1253,9 @@ export function createCompEditor(host, opts = {}) {
             let payload = null;
             try { payload = JSON.parse(e.dataTransfer.getData(DROP)); } catch (_) { /* not ours */ }
             const items = payload && Array.isArray(payload.items) ? payload.items : [];
-            const files = o.pathsOf ? o.pathsOf(items) : items.map((it) => it && it.path).filter(Boolean);
-            if (files.length) place(files, e);
+            // pathsOf may have to ask the server (an item with no path): a promise then.
+            Promise.resolve(o.pathsOf ? o.pathsOf(items) : items.map((it) => it && it.path).filter(Boolean))
+                .then((files) => { if (files && files.length) place(files, e); });
         });
     }
     wireDrop(graph, (files, e) => mutate(() => {

@@ -56,6 +56,18 @@ const THUMB_LOADS_MAX = 4;
 // How far outside the strip's visible part a tile already loads.
 const THUMB_NEAR_MARGIN = '300px';
 
+/**
+ * Make `parent`'s children `nodes`, in that order, moving as few as it can: the
+ * ones that go are taken out, and one that stays is not moved unless the order
+ * needs it. (replaceChildren took every tile out and put it back, which ends a
+ * drag that starts from one of them.)
+ */
+function placeChildren(parent, nodes) {
+    const keep = new Set(nodes);
+    for (const c of [...parent.children]) if (!keep.has(c)) c.remove();
+    nodes.forEach((n, i) => { if (parent.children[i] !== n) parent.insertBefore(n, parent.children[i] || null); });
+}
+
 export const HistoryMixin = {
 
     // ── One history for every tab ────────────────────────────────────────────
@@ -897,6 +909,39 @@ export const HistoryMixin = {
     },
 
     /** Headings are dragged within the strip to order the groups (once per strip). */
+    /**
+     * Note a press on a tile (and the drag it may become) so renderHistoryPanel
+     * waits for its end. Wired once on the strip; the release is heard on the
+     * strip's own document, the pop-out's when popped out.
+     */
+    _historyWirePress() {
+        const strip = this.historyStrip;
+        if (!strip || strip._ivPressWatch) return;
+        strip._ivPressWatch = true;
+        strip.addEventListener('pointerdown', (e) => {
+            if (e.button !== 0 || !(e.target && e.target.closest && e.target.closest('.history-thumb'))) return;
+            const doc = strip.ownerDocument;
+            let drag = false, timer = null;
+            const end = () => {
+                doc.removeEventListener('pointerup', up, true);
+                doc.removeEventListener('dragstart', start, true);
+                doc.removeEventListener('dragend', end, true);
+                clearTimeout(timer);
+                this._historyHeld = false;
+                if (this._historyRenderOwed) { this._historyRenderOwed = false; this.renderHistoryPanel(); }
+            };
+            // A drag takes the pointer over (pointercancel, no pointerup): its dragend ends it.
+            const up = () => { if (!drag) end(); };
+            const start = () => { drag = true; };
+            doc.addEventListener('pointerup', up, true);
+            doc.addEventListener('dragstart', start, true);
+            doc.addEventListener('dragend', end, true);
+            // Never held for good, whatever the browser leaves out.
+            timer = setTimeout(end, 60000);
+            this._historyHeld = true;
+        }, true);
+    },
+
     _historyWireGroupDrag() {
         const strip = this.historyStrip;
         if (!strip || strip._ivGroupDrag) return;
@@ -1044,6 +1089,12 @@ export const HistoryMixin = {
 
     renderHistoryPanel() {
         if (!this.historyStrip) return;
+        // A tile pressed or dragged must stay in the page: Chrome starts no drag
+        // (and a running one ends) when its source leaves the document, which a
+        // render in between - the missing-file check, a new output - did. The
+        // render is made when the press or the drag is over (_historyWirePress).
+        this._historyWirePress();
+        if (this._historyHeld) { this._historyRenderOwed = true; return; }
         // On a cut's tab a click only selects (historyBorrows, at the top).
         const borrowed = this.historyBorrows();
         const key   = HISTORY_KEY;
@@ -1131,7 +1182,18 @@ export const HistoryMixin = {
                 // itself is fine. The prune pass checks the real media before
                 // anything is removed. A failed tile is not kept: the next pass
                 // makes it again, so a file that arrived late still shows.
-                imgEl.onerror = () => { thumb._imageViewerFailed = true; this.noteMediaLoadFailed(imgObj); };
+                // A poster kept in ComfyUI's temp folder is gone after a restart
+                // (ComfyUI empties temp when it starts): the tile is then made
+                // from the media itself, once, before it counts as failed.
+                const fallback = imgObj.thumb && this.thumbUrl ? this.thumbUrl({ ...imgObj, thumb: null }) : null;
+                imgEl.onerror = () => {
+                    if (fallback && fallback !== url && !imgEl._imageViewerFellBack) {
+                        imgEl._imageViewerFellBack = true;
+                        imgEl.src = fallback;
+                        return;
+                    }
+                    thumb._imageViewerFailed = true; this.noteMediaLoadFailed(imgObj);
+                };
                 try { this._loadThumb(imgEl, url); } catch (e) { /* ignore */ }
             }
             thumb.appendChild(imgEl);
@@ -1307,7 +1369,7 @@ export const HistoryMixin = {
         // nothing), so the strip is not laid out again for nothing.
         const cur = this.historyStrip.children;
         const same = cur.length === nodes.length && nodes.every((n, i) => cur[i] === n);
-        if (!same) this.historyStrip.replaceChildren(...nodes);
+        if (!same) placeChildren(this.historyStrip, nodes);
 
         // Only reached when the signature changed, so this rides on real rebuilds
         // — a restore from localStorage, a new output, a tab switch — rather than

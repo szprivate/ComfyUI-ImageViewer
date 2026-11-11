@@ -133,6 +133,47 @@ class GraphDropTests(unittest.TestCase):
         self.assertEqual(s["values"], ["old.png", "old.png", "old.png"])
         self.assertEqual(s["added"], ["VHS_LoadImagePath"])
 
+    def _watch_tiles(self, pg):
+        # Two more snapshots, so one can go while another is pressed; every tile taken out of the strip is counted.
+        pg.evaluate("""async () => { const P = window.__panel;
+            for (const n of ['b', 'c']) P.pushHistorySnapshot('folder_a', [{ path: `D:/out/${n}.png`, filename: `${n}.png`, type: 'output' }]);
+            P._historyPanelSig = null; P.renderHistoryPanel(); await new Promise((r) => setTimeout(r, 100));
+            window.__gone = [];
+            new MutationObserver((ms) => ms.forEach((m) => m.removedNodes.forEach((n) => window.__gone.push(n.title || n.className))))
+              .observe(P.historyStrip, { childList: true }); }""")
+
+    def test_a_render_while_a_tile_is_pressed_waits_and_keeps_the_tile(self):
+        # Chrome starts no drag from a tile taken out of the page between the press and the move (a render then:
+        # the missing-file check took a snapshot away, and replaceChildren took every tile out and back).
+        pg = self.page()
+        self._watch_tiles(pg)
+        n0 = pg.evaluate("() => window.__panel.historyStrip.querySelectorAll('.history-thumb').length")
+        box = pg.locator(THUMB).last.bounding_box()
+        pg.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        pg.mouse.down()
+        pg.evaluate("() => { const P = window.__panel; P.removeHistoryItem(P.historyKey(), 0); P._historyPanelSig = null; P.renderHistoryPanel(); }")
+        held = pg.evaluate("() => ({ n: window.__panel.historyStrip.querySelectorAll('.history-thumb').length, gone: window.__gone.length })")
+        self.assertEqual(held, {"n": n0, "gone": 0}, "nothing leaves the strip while the tile is pressed")
+        pg.mouse.up()
+        pg.wait_for_timeout(100)
+        after = pg.evaluate("() => ({ n: window.__panel.historyStrip.querySelectorAll('.history-thumb').length, gone: window.__gone.length })")
+        self.assertEqual(after["n"], n0 - 1, "let go, the render is made")
+        self.assertEqual(self.errors, [])
+
+    def test_a_render_during_a_drag_waits_and_the_drop_still_lands(self):
+        pg = self.page()
+        self._watch_tiles(pg)
+        pg.evaluate("""() => { const P = window.__panel; window.addEventListener('drop', () => { window.__goneAtDrop = window.__gone.length; }, true);
+            P.historyStrip.addEventListener('dragstart', () => setTimeout(() => {
+            P.removeHistoryItem(P.historyKey(), 0); P._historyPanelSig = null; P.renderHistoryPanel(); window.__rendered = true; }, 0)); }""")
+        s = self.drop(pg, "#graph-canvas", 200, 700)
+        self.assertTrue(pg.evaluate("() => !!window.__rendered"))
+        self.assertEqual(s["added"], ["VHS_LoadImagePath"])
+        self.assertEqual(pg.evaluate("() => window.__goneAtDrop"), 0, "no tile left the strip during the drag")
+        self.assertEqual(pg.evaluate("() => window.__panel.historyStrip.querySelectorAll('.history-thumb').length"), 2,
+                         "the render was made after it")
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

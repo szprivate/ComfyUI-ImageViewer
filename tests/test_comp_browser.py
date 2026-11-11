@@ -427,6 +427,23 @@ class CompBrowserTests(unittest.TestCase):
         self.assertEqual(pg.evaluate(f"() => {{ const c = {ED}.comp(); return c.nodes.find((n) => n.id === c.output).inputs; }}"), ["Constant1"])
         self.assertEqual(self.errors, [])
 
+    def test_a_history_item_without_a_path_dropped_on_the_graph_is_a_read(self):
+        # A node's output in the History often names its file only as filename / subfolder / type.
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        pg.evaluate("() => __panel.setPanelDocked('compGraph', true)")
+        pg.wait_for_timeout(200)
+        pg.evaluate("""() => { const g = __panel.compGraphPanel.querySelector('.cp-graph'), r = g.getBoundingClientRect();
+            const dt = new DataTransfer();
+            dt.setData('application/x-imageviewer-history', JSON.stringify({ items: [{ path: null, filename: 'plate.png', subfolder: '', type: 'output', kind: 'image' }] }));
+            g.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true, composed: true,
+                clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 })); }""")
+        pg.wait_for_function(f"() => {ED}.comp().nodes.some((n) => n.type === 'read')", timeout=5000)
+        files = pg.evaluate(f"() => {ED}.comp().nodes.filter((n) => n.type === 'read').map((n) => n.file)")
+        self.assertEqual([os.path.normcase(os.path.abspath(f)) for f in files], [os.path.normcase(os.path.abspath(self.png))])
+        self.assertEqual(self.errors, [])
+
     def test_the_curve_editor_shows_the_selected_nodes_keys_and_edits_them(self):
         pg = self.page()
         self.new_comp(pg)

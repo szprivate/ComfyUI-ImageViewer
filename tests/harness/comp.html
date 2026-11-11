@@ -7,7 +7,8 @@
 window.__asked = [];
 window.agentYViewerBridge = { feedback: async (m) => { window.__asked.push(m); return { ok: true }; } };
 window.__fetchApi = async (p, opts) => {
-  if (p.startsWith("/imageviewer/comp") || p.startsWith("/imageviewer/browse") || p.startsWith("/imageviewer/export_")) return fetch(p, opts);
+  if (p.startsWith("/imageviewer/comp") || p.startsWith("/imageviewer/browse") || p.startsWith("/imageviewer/export_")
+      || p === "/imageviewer/timeline_locate") return fetch(p, opts);
   return { ok: false, status: 404, json: async () => ({}), text: async () => "" };
 };
 let v; try { v = await import("/extensions/viewer/imageViewer.js"); } catch (e) { document.title = "IMPORT " + e.message; throw e; }
