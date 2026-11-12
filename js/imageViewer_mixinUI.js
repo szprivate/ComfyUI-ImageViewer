@@ -9,6 +9,7 @@ import { isViewerSourceNode, senderTabInfo } from "./imageViewer_nodeTools.js";
 import { POPOUT_NAME, _popoutFeatures } from "./imageViewer_mixinReconnect.js";
 import { notice } from "./imageViewer_exportUI.js";
 import { PREF, setPref, OVERLAYS } from "./imageViewer_settings.js";
+import { spaceColor } from "./imageViewer_spaceIcons.js";
 
 export const UIMixin = {
 
@@ -576,6 +577,12 @@ export const UIMixin = {
         } catch (e) {}
 
         this.activeTab = k;
+        // The panels' title bars take a slight accent of the space that is up (imageViewer.css).
+        try {
+            const tint = this._tabSpaceKind ? spaceColor(this._tabSpaceKind(k)) : "";
+            if (tint) this.container.style.setProperty('--panel-accent', tint);
+            else this.container.style.removeProperty('--panel-accent');
+        } catch (_) { /* no container yet */ }
         this.tabBar.querySelectorAll('.tab').forEach(t => {
             t.classList.toggle('active', t.dataset.tab === k);
         });

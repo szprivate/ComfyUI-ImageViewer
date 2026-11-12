@@ -107,6 +107,20 @@ class PanelSwitchTests(unittest.TestCase):
         self.assertEqual(info["border"], "solid")
         self.assertEqual((info["tag"], info["first"]), ("BUTTON", "pt-switch"), "the switch stands left of the name")
 
+    def test_the_title_bar_wears_a_slight_accent_of_the_space(self):
+        pg = self.page()
+        js = """()=>{const sr=__panel.shadowRoot, el=sr.getElementById('params-panel');
+            const bar=el.querySelector(':scope > .panel-titlebar');
+            const rgb=(c)=>{const x=document.createElement('canvas').getContext('2d');x.fillStyle=c;x.fillRect(0,0,1,1);
+                return [...x.getImageData(0,0,1,1).data].slice(0,3)};
+            return {bar: rgb(getComputedStyle(bar).backgroundColor), panel: rgb(getComputedStyle(el).backgroundColor)}}"""
+        pg.evaluate("()=>__panel.switchTab('folder_history')")       # the Viewer tab: blue
+        c = pg.evaluate(js)
+        self.assertNotEqual(c["bar"], c["panel"], "the top row is not the panel's own ground")
+        r, g, b = c["bar"]
+        self.assertGreater(b, r + 10, "the Viewer space's blue is mixed in")
+        self.assertLess(max(c["bar"]) - max(c["panel"]), 40, "only slightly")
+
     def test_the_menu_lists_the_panels_with_this_one_ticked(self):
         pg = self.page()
         items = self.open_switch(pg, "params")

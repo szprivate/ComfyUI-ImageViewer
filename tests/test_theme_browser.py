@@ -3,6 +3,7 @@
 Run: python -m unittest tests.test_theme_browser   (Playwright with Edge or Chrome and node; skipped without)
 """
 import os
+import re
 import sys
 import unittest
 
@@ -138,7 +139,14 @@ class ThemeBrowserTests(_Base):
         POP = "(sel) => getComputedStyle(__panel.container.ownerDocument.querySelector(sel) " \
               "|| __panel.container.querySelector(sel)).backgroundColor"
         pg.evaluate("() => __setPref('ImageViewer.Colours.Title', '602020')")
-        self.assertEqual(pg.evaluate(POP, ".panel-titlebar"), "rgb(96, 32, 32)")
+        # The title bar wears a slight accent over its colour (color-mix), so: near #602020, not equal.
+        def near_title(want):
+            got = pg.evaluate(POP, ".panel-titlebar")
+            m = re.match(r"color\(srgb ([\d.]+) ([\d.]+) ([\d.]+)", got)
+            self.assertIsNotNone(m, got)
+            for have, w in zip((float(v) * 255 for v in m.groups()), want):
+                self.assertLess(abs(have - w), 30, got)
+        near_title((96, 32, 32))
         pg.evaluate("() => __setPref('ImageViewer.Colours.Window', '203040')")
         self.assertEqual(pg.evaluate("() => __panel.container.ownerDocument.body.style.backgroundColor"), "rgb(32, 48, 64)")
         # A preset picked while it is out, and ComfyUI's palette followed there too.
@@ -146,7 +154,7 @@ class ThemeBrowserTests(_Base):
             const { PRESETS, THEME } = await import('/extensions/viewer/imageViewer_theme.js');
             for (const t of THEME) await __setPref(t.id, PRESETS.midnight.values[t.key]);
         }""")
-        self.assertEqual(pg.evaluate(POP, ".panel-titlebar"), "rgb(28, 34, 48)")
+        near_title((28, 34, 48))
         pg.evaluate(PALETTE, {"background": "#3a2020", "card": "#3a2020", "foreground": "#ffffff"})
         pg.evaluate("() => __setPref('ImageViewer.Colours.Preset', 'comfy')")
         self.assertEqual(pg.evaluate(POP, ".history-panel"), "rgb(58, 32, 32)")

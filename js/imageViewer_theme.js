@@ -50,6 +50,12 @@ export function shade(hex, amt) {
     return "#" + ch.map((c) => Math.max(0, Math.min(255, c)).toString(16).padStart(2, "0")).join("");
 }
 
+/** A title bar's colour with a slight accent mixed in: the space's that is up
+ *  (--panel-accent, set by switchTab), else `accent`. */
+export function titleTint(c, accent, pct) {
+    return `color-mix(in srgb, var(--panel-accent, ${accent || "#ff6600"}) ${pct}%, ${c})`;
+}
+
 // key, name, base (the stylesheet's, no "#"), group, tooltip,
 // rules(c, v) -> [[selector, declarations]] (v: every colour by key, "#rrggbb")
 export const THEME = [
@@ -66,8 +72,9 @@ export const THEME = [
                      [".paint-dlg", `background: ${shade(c, 0.03)}`],
                      [".dp-node", `background: ${shade(c, -0.05)}`], [".dp-node.fold", `background: ${shade(c, 0.04)}`]] },
     { key: "title", name: "Panel title bars", base: "141414", group: "chrome",
-      rules: (c) => [[".panel-titlebar", `background: ${c}`],
-                     [".panel-titlebar:hover", `background: ${shade(c, 0.04)}`],
+      // A slight accent of the space that is up (--panel-accent), else the accent colour.
+      rules: (c, v) => [[".panel-titlebar", `background: ${titleTint(c, v.accent, 12)}`],
+                     [".panel-titlebar:hover", `background: ${titleTint(shade(c, 0.04), v.accent, 16)}`],
                      [".pt-tab.on", `background: ${shade(c, 0.08)}`],
                      [".paint-bar", `background: ${c}`], [".paint-tools", `background: ${c}`],
                      [".paint-status", `background: ${c}`], [".paint-flyout", `background: ${c}`],
@@ -85,9 +92,9 @@ export const THEME = [
                      [".paint-root", `color: ${c}`], [".paint-panel", `color: ${c}`], [".paint-dlg", `color: ${c}`],
                      [".dp-title", `color: ${c}`], [".dp-label", `color: ${c}`]] },
     { key: "border", name: "Borders", base: "333333", group: "chrome",
-      rules: (c) => [[sel(PANELS), `border-color: ${c}`], [".tab-bar", `border-bottom-color: ${c}`],
+      rules: (c, v) => [[sel(PANELS), `border-color: ${c}`], [".tab-bar", `border-bottom-color: ${c}`],
                      [".controls", `border-top-color: ${c}`], [".dock-rail.bottom", `border-top-color: ${c}`],
-                     [".panel-titlebar", `border-bottom-color: ${c}`],
+                     [".panel-titlebar", `border-bottom-color: ${titleTint(c, v.accent, 28)}`],
                      [".paint-bar", `border-bottom-color: ${c}`], [".paint-optbar", `border-bottom-color: ${c}`],
                      [".paint-tools", `border-right-color: ${c}`], [".paint-status", `border-top-color: ${c}`],
                      [".paint-lhead", `border-bottom-color: ${c}`], [".paint-sect", `border-bottom-color: ${c}`],
