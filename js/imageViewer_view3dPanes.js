@@ -378,6 +378,7 @@ export const View3DPanesMixin = {
         r.clear();
         r.setClearColor(cc, ca);
         r.setScissorTest(true);
+        const active = this._paneState().active;
         for (const p of this._paneRects()) {
             if (p.w < 2 || p.h < 2) continue;
             const cam = this._paneCamera(p.kind);
@@ -392,7 +393,10 @@ export const View3DPanesMixin = {
             }
             this._paneGizmoFit(cam, p);
             this._dispApply(cam);
-            r.render(this.scene, cam);
+            // Path traced shading traces the active pane (imageViewer_view3dPathTrace.js); null = raster.
+            const traced = p.slot === active && this._ptViewportTick ? this._ptViewportTick(cam, p) : null;
+            if (traced === null) r.render(this.scene, cam);
+            else if (traced) this._ptMore = true;
         }
         r.setScissorTest(false);
         r.setViewport(0, 0, W, H);

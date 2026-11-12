@@ -158,6 +158,57 @@ class PathTraceTests(unittest.TestCase):
         self.assertEqual(kept, "1")
         self.assertEqual(self.errors, [])
 
+    def test_a_split_layout_traces_the_active_pane(self):
+        pg = self._page()
+        try:
+            pg.evaluate("() => { const v = window.__panel._modelView(); v.setPaneLayout('quad'); v.setMaterialMode('pathtraced'); }")
+            pg.wait_for_function("() => window.__panel._modelView().ptSamples() >= 1", timeout=240000)
+            state = pg.evaluate("""() => { const v = window.__panel._modelView(); const box = v._paneActiveBox();
+                const pr = v.renderer.getPixelRatio(); const size = new v.libs.THREE.Vector2(); v._pt._pathTracer.getSize(size);
+                return { badge: v._ptBadgeEl.textContent, w: size.x, h: size.y, pw: Math.floor(box.w * pr), ph: Math.floor(box.h * pr),
+                         cam: v._pt.camera === v.activeCameraObject(), failed: !!v._ptFailed }; }""")
+            if SHOTS:
+                pg.evaluate_handle("() => window.__panel._modelView().root").as_element().screenshot(
+                    path=os.path.join(SHOTS, "path-traced-quad.png"))
+            # Back to one view: the tracer takes the whole canvas again.
+            pg.evaluate("() => window.__panel._modelView().setPaneLayout('single')")
+            pg.wait_for_function("() => { const v = window.__panel._modelView(); const s = new v.libs.THREE.Vector2(); v._pt._pathTracer.getSize(s);"
+                                 " return s.x === v.renderer.getDrawingBufferSize(new v.libs.THREE.Vector2()).x; }", timeout=60000)
+            single = pg.evaluate("() => window.__panel._modelView()._ptBadgeEl.textContent")
+        finally:
+            pg.close()
+        self.assertFalse(state["failed"])
+        self.assertTrue(state["badge"].startswith("Path traced (active view) · "), state["badge"])
+        self.assertEqual((state["w"], state["h"]), (state["pw"], state["ph"]))
+        self.assertTrue(state["cam"])
+        self.assertNotIn("active view", single)
+        self.assertEqual(self.errors, [])
+
+    def test_default_lights_off_leaves_only_the_scenes_own_lights(self):
+        pg = self._page()
+        read = """() => { const v = window.__panel._modelView(); v._tick(); const m = v._pt._pathTracer.material;
+            return { env: m.environmentIntensity, lights: m.lights.count }; }"""
+        try:
+            pg.evaluate("() => window.__panel._modelView().setMaterialMode('pathtraced')")
+            pg.wait_for_function("() => !!window.__panel._modelView()._pt && window.__panel._modelView()._ptSig", timeout=240000)
+            on = pg.evaluate(read)
+            pg.evaluate("() => window.__panel.previzSetDefaultLights('off')")
+            off = pg.evaluate(read)
+            # A light of the scene's own shines; switched off (its root hidden) it does not.
+            pg.evaluate("() => { const P = window.__panel; P.previzAddLight('point'); }")
+            lit = pg.evaluate(read)
+            pg.evaluate("""() => { const P = window.__panel; const it = P.previzScene().items.find((i) => i.kind === 'light');
+                it.visible = false; P.previzChanged(); P._modelView().requestRender(); }""")
+            dark = pg.evaluate(read)
+        finally:
+            pg.close()
+        self.assertGreater(on["env"], 0)
+        self.assertEqual(on["lights"], 1)       # the studio key (its four fills are not traced)
+        self.assertEqual(off, {"env": 0, "lights": 0})
+        self.assertEqual(lit, {"env": 0, "lights": 1})
+        self.assertEqual(dark, {"env": 0, "lights": 0})
+        self.assertEqual(self.errors, [])
+
     def test_a_render_frame_is_traced(self):
         pg = self._page()
         try:
