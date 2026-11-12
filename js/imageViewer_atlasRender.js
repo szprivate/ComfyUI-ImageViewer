@@ -244,6 +244,16 @@ export function planOrThrow(answer) {
 export const CREATE_ASPECTS = ["16:9", "9:16", "4:3", "3:4", "1:1"];
 export const CREATE_DETAILS = [[2, "Fine (big file)"], [4, "Standard"], [8, "Light"]];
 export const CREATE_MAX_IMAGES = 8;
+// The second world generator: SpAItial Echo (one picture, a 360 panorama or words -> a splat world).
+export const ENGINES = [["atlas", "Atlas — World Labs"], ["echo", "Echo — SpAItial"]];
+export const ECHO_MODELS = [["echo-2", "Standard (about 8 min, US$ 1.60)"], ["echo-hq", "High detail (about 1 h, US$ 8)"]];
+export const ECHO_PANO = [["auto", "Panorama: detect"], ["true", "It is a 360 panorama"], ["false", "Not a panorama"]];
+export const ECHO_MESH = [["", "Splat only"], ["mesh-simplified", "+ simplified mesh"], ["mesh", "+ full mesh"]];
+
+/** How many pictures a world of this engine takes. */
+export function maxImagesFor(engine) {
+    return engine === "echo" ? 1 : CREATE_MAX_IMAGES;
+}
 const PICTURE_EXT = /\.(png|jpe?g|webp)$/i;
 
 /** A world name from what the user typed: the first few words, made safe for a folder. */
@@ -272,20 +282,43 @@ export function pictureRef(item) {
     return null;
 }
 
-/** The POST body for /imageviewer/atlas_create, or { error }. */
-export function buildCreateRequest({ name, prompt, images = [], aspect = "16:9", detail = 4 }) {
+/** The POST body for /imageviewer/atlas_create, or { error }. `engine` "echo" is SpAItial Echo: one picture
+ *  OR words (the words are not sent beside a picture), its model, panorama and mesh choices. */
+export function buildCreateRequest({ name, prompt, images = [], aspect = "16:9", detail = 4, engine = "atlas",
+                                     model = "echo-2", pano = "auto", mesh = "" }) {
     const refs = images.map(pictureRef).filter(Boolean);
     const p = String(prompt || "").trim();
     if (!refs.length && !p) return { error: "Describe the place, or add a picture of it." };
-    if (refs.length > CREATE_MAX_IMAGES) return { error: `At most ${CREATE_MAX_IMAGES} pictures for one world.` };
     const n = String(name || "").trim() || worldNameFrom(p, images);
+    if (engine === "echo") {
+        if (refs.length > 1) return { error: "Echo makes a world from ONE picture (or a panorama, or words)." };
+        const pick = (v, list, d) => (list.some(([k]) => k === v) ? v : d);
+        return { engine: "echo", name: n, prompt: refs.length ? "" : p, images: refs,
+                 model: pick(model, ECHO_MODELS, "echo-2"), is_pano: pick(String(pano), ECHO_PANO, "auto"),
+                 mesh: pick(String(mesh || ""), ECHO_MESH, "") };
+    }
+    if (refs.length > CREATE_MAX_IMAGES) return { error: `At most ${CREATE_MAX_IMAGES} pictures for one world.` };
     return { name: n, prompt: p, images: refs, aspect_ratio: CREATE_ASPECTS.includes(aspect) ? aspect : "16:9",
              mesh_detail: [2, 4, 8].includes(Number(detail)) ? Number(detail) : 4 };
 }
 
 /** What the dialog says while a world is being made. */
 export function createProgress(s) {
-    return `${(s && s.phase) || "Atlas is making the world"}… ${clock((s && s.elapsed) || 0)}`;
+    const what = s && s.engine === "echo" ? "Echo is making the world" : "Atlas is making the world";
+    return `${(s && s.phase) || what}… ${clock((s && s.elapsed) || 0)}`;
+}
+
+/** An Echo error in words (the kinds agentY-core's spaitial_echo gives). */
+export function explainEchoError(err) {
+    const msg = (err && err.message) || String(err);
+    const hints = {
+        auth: "The SpAItial key is missing or wrong (SPAITIAL_API_KEY in agentY's Settings > API keys).",
+        balance: "The SpAItial account has too few credits (developers.spaitial.ai).",
+        scope: "This SpAItial key may not use that model; try Standard.",
+        content_refusal: "SpAItial's moderation declined the picture or the words.",
+    };
+    const kind = err && err.kind;
+    return hints[kind] && !msg.includes(hints[kind]) ? `${hints[kind]} (${msg})` : msg;
 }
 
 // ── "Chisel this view": an Atlas Chisel picture at the camera the viewer looks through ───────────────────

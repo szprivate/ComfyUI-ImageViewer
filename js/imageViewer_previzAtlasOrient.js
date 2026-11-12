@@ -127,7 +127,10 @@ export const PrevizAtlasOrientMixin = {
         const need = "Open an Atlas world in the 3D space first (New Atlas world, or atlas_open_in_viewer).";
         const entries = [
             { label: "New Atlas world…", title: "Describe a place or bring pictures of it; World Labs Atlas makes a world",
-              run: () => this.atlasCreateDialog() },
+              run: () => this.atlasCreateDialog({ engine: "atlas" }) },
+            { label: "New Echo world…", title: "Describe a place or bring one picture or a 360 panorama; SpAItial Echo "
+                + "makes a Gaussian-splat world (the second world generator)",
+              run: () => this.atlasCreateDialog({ engine: "echo" }) },
             "-",
             { label: "Render view with Atlas…", disabled: !world, title: world ? "World Labs paints a new picture from "
                 + "the camera you look through" : need, run: () => this.previzAtlasDialog() },

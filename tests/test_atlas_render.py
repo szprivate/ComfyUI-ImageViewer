@@ -214,6 +214,24 @@ class CreateTests(unittest.TestCase):
                 ar.clean_create_request(body, imgs)
             self.assertEqual(cm.exception.status, 400)
 
+    def test_clean_create_request_for_echo(self):
+        """SpAItial Echo, the second world generator: one picture or words, its own options."""
+        ok = ar.clean_create_request({"name": "r", "prompt": "words", "engine": "echo", "model": "echo-hq",
+                                      "is_pano": "true", "mesh": "mesh-simplified", "aspect_ratio": "nonsense"},
+                                     ["C:/a.png"])
+        self.assertEqual(ok, {"engine": "echo", "name": "r", "prompt": "", "image_paths": ["C:/a.png"],
+                              "model": "echo-hq", "is_pano": "true", "mesh": "mesh-simplified", "open_in_viewer": True})
+        self.assertEqual(ar.clean_create_request({"name": "r", "prompt": "a hall", "engine": "echo"}, [])["prompt"],
+                         "a hall")
+        for body, imgs in (({"name": "w", "engine": "echo"}, ["C:/a.png", "C:/b.png"]),
+                           ({"name": "w", "prompt": "x", "engine": "echo", "model": "echo-3"}, []),
+                           ({"name": "w", "prompt": "x", "engine": "echo", "is_pano": "1"}, []),
+                           ({"name": "w", "prompt": "x", "engine": "echo", "mesh": "obj"}, []),
+                           ({"name": "w", "prompt": "x", "engine": "marble"}, [])):
+            with self.assertRaises(ar.RelayError, msg=body) as cm:
+                ar.clean_create_request(body, imgs)
+            self.assertEqual(cm.exception.status, 400)
+
     def test_the_page_cannot_name_the_pictures_itself(self):
         body = ar.clean_create_request({"name": "w", "prompt": "x", "image_paths": ["C:/secret.png"]}, None)
         self.assertEqual(body["image_paths"], [])        # only what the route resolved and checked is passed on
@@ -262,6 +280,24 @@ class ChiselTests(unittest.TestCase):
                                 ({"world_path": self.glb, "camera": self.CAM, "prompt": "x"}, "", "")):  # nothing to build on
             with self.assertRaises(ar.RelayError) as cm:
                 ar.clean_chisel_request(data, img, mask)
+            self.assertEqual(cm.exception.status, 400)
+
+    def test_clean_create_request_for_echo(self):
+        """SpAItial Echo, the second world generator: one picture or words, its own options."""
+        ok = ar.clean_create_request({"name": "r", "prompt": "words", "engine": "echo", "model": "echo-hq",
+                                      "is_pano": "true", "mesh": "mesh-simplified", "aspect_ratio": "nonsense"},
+                                     ["C:/a.png"])
+        self.assertEqual(ok, {"engine": "echo", "name": "r", "prompt": "", "image_paths": ["C:/a.png"],
+                              "model": "echo-hq", "is_pano": "true", "mesh": "mesh-simplified", "open_in_viewer": True})
+        self.assertEqual(ar.clean_create_request({"name": "r", "prompt": "a hall", "engine": "echo"}, [])["prompt"],
+                         "a hall")
+        for body, imgs in (({"name": "w", "engine": "echo"}, ["C:/a.png", "C:/b.png"]),
+                           ({"name": "w", "prompt": "x", "engine": "echo", "model": "echo-3"}, []),
+                           ({"name": "w", "prompt": "x", "engine": "echo", "is_pano": "1"}, []),
+                           ({"name": "w", "prompt": "x", "engine": "echo", "mesh": "obj"}, []),
+                           ({"name": "w", "prompt": "x", "engine": "marble"}, [])):
+            with self.assertRaises(ar.RelayError, msg=body) as cm:
+                ar.clean_create_request(body, imgs)
             self.assertEqual(cm.exception.status, 400)
 
     def test_the_page_cannot_name_the_pictures_itself(self):
