@@ -380,7 +380,7 @@ class RigBrowserTests(unittest.TestCase):
             }""")
             pg.evaluate("() => { window.__panel._previzSelection = null; }")
             menus = {}
-            for which in ("rig", "anim"):
+            for which in ("rig", "anim", "mb-file"):
                 pg.locator(f"button.previz-{which}").first.click()
                 items = pg.locator("button.previz-menu-item")
                 menus[which] = {items.nth(i).text_content(): "off" in (items.nth(i).get_attribute("class") or "")
@@ -409,8 +409,11 @@ class RigBrowserTests(unittest.TestCase):
         self.assertIn("Set Driven Key…", menus["rig"])
         self.assertNotIn("AI in-between…", menus["rig"])
         for label in ("AI in-between…", "Pose library…", "Motion from video…", "Lip sync from audio…",
-                      "Add motion from file…", "Export FBX…", "Match FK to IK"):
+                      "Add motion from file…", "Match FK to IK"):
             self.assertIn(label, menus["anim"])
+        # The character's exports are in the menu bar's File menu (Export character ▸).
+        self.assertIn("Export FBX…", menus["mb-file"])
+        self.assertNotIn("Export FBX…", menus["anim"])
         self.assertTrue(any(k.startswith("Switch limb") for k in menus["anim"]), menus["anim"])
         self.assertNotIn("Auto-rig…", menus["anim"])
         self.assertEqual(errors, [])

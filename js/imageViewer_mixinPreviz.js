@@ -1084,76 +1084,9 @@ export const PrevizMixin = {
         };
         const root = el("div", "previz-body");
 
-        const actions = el("div", "previz-actions");
-        const newBtn = el("button", "previz-btn previz-icon");
-        newBtn.title = "New scene — empties this one (Ctrl+Z brings it back)";
-        newBtn.textContent = "\u25a1";          // stands in if the skin is missing
-        this._setIcon(newBtn, "icon-file");
-        newBtn.onclick = () => this.previzNewScene();
-        const editBtn = el("button", "previz-btn previz-icon");
-        editBtn.title = "Edit: the pivot, and freezing transformations";
-        editBtn.textContent = "\u270e";         // stands in if the skin is missing
-        this._setIcon(editBtn, "icon-square-pen");
-        editBtn.onclick = () => this._previzToggleEditMenu(editBtn);
-        // In and out, as buttons of the bar's own size: Add beside New (both
-        // put something into the shot), Save / Export / Render beside Edit.
-        // The Edit panel has the same ones in the same place.
-        const addBtn = el("button", "previz-btn previz-icon");
-        addBtn.title = "Add a model, a camera, a group or a shape - or open a scene";
-        addBtn.textContent = "+";               // stands in if the skin is missing
-        this._setIcon(addBtn, "icon-circle-plus");
-        addBtn.onclick = () => this._previzToggleAddMenu(addBtn);
-        const outBtn = el("button", "previz-btn previz-icon");
-        outBtn.title = "Save the scene, export it as USD, or render this shot";
-        outBtn.textContent = "\u2193";
-        this._setIcon(outBtn, "icon-save");
-        outBtn.onclick = () => this._previzToggleExportMenu(outBtn);
-        // Characters: controls, IK / FK, AI motion, FBX / USD / Alembic, motion from files (imageViewer_previzRig.js).
-        // Two menus over the same entries: Rig builds the character, Animation moves it.
-        const rigBtn = el("button", "previz-btn previz-rig", "Rig");
-        rigBtn.title = "Rig a character: animation controls, auto-rig, set-driven keys, attributes, facial controls";
-        rigBtn.onclick = () => this._previzToggleRigMenu(rigBtn, "rig");
-        const animBtn = el("button", "previz-btn previz-anim", "Animation");
-        animBtn.title = "Animate a character: poses, IK / FK, AI in-betweens, text-to-motion, motion from video, "
-                      + "lip sync, motion from FBX / USD / glTF files, FBX, USD and Alembic export";
-        animBtn.onclick = () => this._previzToggleRigMenu(animBtn, "anim");
-        // Constraints: parent, point, orient, aim, scale (imageViewer_previzConstraints.js).
-        const conBtn = el("button", "previz-btn previz-constrain", "Constrain");
-        conBtn.title = "Constrain: select the target(s), then the item that should follow them, and pick parent, "
-                     + "point, orient, aim or scale. Bake or remove constraints here too";
-        conBtn.onclick = () => this._previzToggleConstrainMenu(conBtn);
+        // Everything that used to be a button here is in the 3D canvas's menu bar now
+        // (imageViewer_previzMenuBar.js): the Outliner is the tree.
         this._previzBindDrops(host);
-        const undoBtn = el("button", "previz-btn previz-step");
-        undoBtn.textContent = "↩";              // stands in if the skin is missing
-        this._setIcon(undoBtn, "icon-undo");
-        undoBtn.onclick = () => this.previzUndo();
-        const redoBtn = el("button", "previz-btn previz-step");
-        redoBtn.textContent = "↪";
-        this._setIcon(redoBtn, "icon-redo");
-        redoBtn.onclick = () => this.previzRedo();
-
-        // Duplicate and Delete live on the item itself, under a right-click —
-        // they act on one row, so they belong on the row rather than on a bar
-        // that has to guess which one you mean.
-        // Worlds: walk one, and leave a note about it. Shown only on a scene
-        // that has world items (see _previzRenderPanel).
-        const walkBtn = el("button", "previz-btn previz-world", "Walk");
-        walkBtn.title = "Walk through the world — Shift+J (W A S D, mouse to look, Shift run, F note, Esc stop). "
-                      + "An Atlas world is flown: W S along the view, E/Q up/down, wheel sets the speed";
-        walkBtn.onclick = () => this.previzWalkToggle();
-        const matchBtn = el("button", "previz-btn previz-world", "Match");
-        matchBtn.title = "Measure the world against its reference picture and set exposure, light, fog and "
-                       + "surface glow to match — saved as a new version";
-        matchBtn.onclick = () => this.previzMatchReference();
-        const noteBtn = el("button", "previz-btn previz-world", "Note");
-        noteBtn.title = "Pin a note to a spot — Shift+N. The agent that built the world reads it, with a snapshot";
-        noteBtn.onclick = () => this.previzFeedbackPlace();
-        // Every Atlas tool in one menu (imageViewer_previzAtlasOrient.js previzAtlasMenuEntries): New world, Render
-        // view / camera, Chisel, Auto-orient, Export Gaussian splat. The bar's 3D menu has the same as a submenu.
-        const atlasBtn = el("button", "previz-btn previz-world previz-atlas-menu", "Atlas \u25BE");
-        atlasBtn.title = "Atlas: new world, render this view, chisel, auto-orient, export a Gaussian splat";
-        atlasBtn.onclick = () => this.previzAtlasMenu(atlasBtn);
-        actions.append(newBtn, addBtn, editBtn, outBtn, rigBtn, animBtn, conBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn);
 
         const list = el("div", "previz-list");
         // The space below the tree is "no parent": dropping a row here lifts it
@@ -1172,13 +1105,13 @@ export const PrevizMixin = {
             this.previzMoveItems(this._previzDragIds(), null, null);
         };
 
-        root.append(actions, list);
+        root.append(list);
         // The title bar the dock built is a sibling and stays; only previz's own
         // body is replaced.
         this._previzCloseAddMenu();
         host.querySelectorAll(":scope > .previz-body").forEach((n) => n.remove());
         host.appendChild(root);
-        this._previzUI = { root, list, rigBtn, animBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn };
+        this._previzUI = { root, list };
         return this._previzUI;
     },
 
@@ -1310,17 +1243,21 @@ export const PrevizMixin = {
     /** What changes an item without adding or removing anything. */
     _previzToggleEditMenu(anchor) {
         if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
+        const a = anchor.getBoundingClientRect();
+        this._previzOpenMenu(this._previzEditMenuEntries(), a.left, a.bottom + 2, anchor);
+    },
+
+    _previzEditMenuEntries() {
         const ids = this.previzSelectedIds();
         const frozen = this._previzFreezable(ids);
-        const a = anchor.getBoundingClientRect();
-        this._previzOpenMenu([
+        return [
             { label: "Centre Pivot", disabled: !ids.length, run: () => this.previzCentrePivot() },
             { label: (this._previzPivotMode ? "\u2713 " : "") + "Move Pivot",
               disabled: !ids.length && !this._previzPivotMode, run: () => this.previzTogglePivotMode() },
             "-",
             { label: "Freeze Transformations", disabled: !frozen.ok.length,
               run: () => this.previzFreezeTransforms() },
-        ], a.left, a.bottom + 2, anchor);
+        ];
     },
 
     /**
@@ -1444,6 +1381,11 @@ export const PrevizMixin = {
     /** Everything that puts something INTO the scene, under one button. */
     _previzToggleAddMenu(anchor) {
         if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
+        const a = anchor.getBoundingClientRect();
+        this._previzOpenMenu(this._previzAddMenuEntries(), a.left, a.bottom + 2, anchor);
+    },
+
+    _previzAddMenuEntries() {
         const entries = [
             { label: "Model\u2026", run: () => this.previzAddFromBrowser() },
             { label: "Camera", run: () => this.previzAddCamera() },
@@ -1455,18 +1397,9 @@ export const PrevizMixin = {
             entries.push({ label: spec.label, run: () => this.previzAddPrimitive(spec.type) });
         }
         entries.push("-");
-        entries.push(...this._previzWorldMenuEntries());
-        entries.push("-");
-        // These two REPLACE the scene rather than add to it - "Open", in the
-        // viewer's vocabulary - and sit last for that reason.
-        // Into the scene, linked to its file: a character for this shot.
-        entries.push({ label: "Reference scene\u2026", title: "Bring a saved scene in under a namespace, linked: "
-                       + "a newer version of the file is picked up here", run: () => this.previzReferenceDialog() });
-        entries.push("-");
-        entries.push({ label: "Open scene\u2026", run: () => this.previzLoadSceneFile() });
-        entries.push({ label: "Open USD / Alembic\u2026", run: () => this.previzImportUsd() });
-        const a = anchor.getBoundingClientRect();
-        this._previzOpenMenu(entries, a.left, a.bottom + 2, anchor);
+        // The world items as one submenu; opening and referencing scenes is File's.
+        entries.push({ label: "World", sub: this._previzWorldMenuEntries().map((e) => ({ ...e, label: e.label.replace(/^World: /, "") })) });
+        return entries;
     },
 
     /** ...and everything that takes something OUT of it. */
@@ -1588,8 +1521,8 @@ export const PrevizMixin = {
             ui.matchBtn.style.display = world ? "" : "none";
             ui.walkBtn.classList.toggle("active", !!(this._model3d && this._model3d.walking));
         }
-        // The Atlas menu is always there (New Atlas world needs no world); lit while an Atlas world is open.
-        if (ui.atlasBtn) ui.atlasBtn.classList.toggle("has-world", !!(this.previzAtlasItem && this.previzAtlasItem()));
+        // The menu bar's World menu is lit while an Atlas world is open.
+        if (this._previzMenuBarSync) this._previzMenuBarSync();
         // Previz coming on is what opens the panel. After that the dock owns
         // it, so one put away by hand stays away — and stays undrawn, which is
         // worth having while playback calls through here every frame.

@@ -442,6 +442,8 @@ class AtlasCreateTests(unittest.TestCase):
         labels = pg.evaluate(f"""() => {{ {root}.querySelector('.previz-btn.previz-atlas-menu').click();
           return [...{root}.querySelectorAll('.previz-menu .previz-menu-item')].map((b) => b.textContent.trim()
             + (b.classList.contains('off') ? ' (off)' : '')); }}""")
+        # The menu bar's World menu: walking and notes first, then the Atlas tools under their heading.
+        labels = labels[labels.index("Atlas (off)") + 1:]
         self.assertEqual(labels, ["New Atlas world\u2026", "Render view with Atlas\u2026", "Chisel this view\u2026",
                                   "Auto-orient world", "\u2713 Show views", "Show as point cloud", "Camera from view",
                                   "Rebuild mesh", "Export Gaussian splat\u2026"])

@@ -2036,7 +2036,7 @@ textarea.param-input {
 .viewport.overlays-off .imageviewer-toolbar,
 .viewport.overlays-off .imageviewer-tool-status,
 .viewport.overlays-off .contact-grid-hint,
-.viewport.overlays-off .model-toolbar { display: none !important; }
+.viewport.overlays-off .model-toolcol, .viewport.overlays-off .model-pane-label { display: none !important; }
 /* One overlay off from the button's right-click menu (OVERLAYS in imageViewer_settings.js). */
 .viewport.overlay-hide-shape #shape-overlay,
 .viewport.overlay-hide-exposure #exposure-control,
@@ -2047,7 +2047,7 @@ textarea.param-input {
 .viewport.overlay-hide-compare #compare-slider,
 .viewport.overlay-hide-compare #rotate-btn,
 .viewport.overlay-hide-contact .contact-grid-hint,
-.viewport.overlay-hide-model .model-toolbar { display: none !important; }
+.viewport.overlay-hide-model .model-toolcol { display: none !important; }
 .overlays-menu { min-width: 200px; }
 .overlays-menu-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 6px 12px 6px 14px; cursor: pointer; white-space: nowrap; }
 .overlays-menu-row:hover { background: rgba(255,102,0,0.18); color: #fff; }
@@ -2423,3 +2423,61 @@ audio.src-media { width: 90%; }
 .previz-menu-subwrap.open > .previz-menu-item.has-sub { background: #333; color: #fff; }
 .previz-menu.bar-menu .previz-submenu .previz-menu-item { white-space: nowrap; }
 .previz-btn.previz-atlas-menu.has-world { border-color: #f60; }
+
+/* The 3D view's menu bar, tool column and panes (imageViewer_model3d.js, imageViewer_view3dPanes.js,
+   the menus from imageViewer_previzMenuBar.js). The bar is above the stage, not over it. */
+.model-menubar {
+    position: absolute; top: 0; left: 0; right: 0; height: 30px; z-index: 3; box-sizing: border-box;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 6px;
+    background: #1d1d1d; border-bottom: 1px solid #333; cursor: default;
+}
+.model-mb-menus { display: flex; align-items: center; gap: 1px; min-width: 0; overflow: hidden; }
+.model-mb-btn {
+    height: 24px; padding: 0 9px; box-sizing: border-box; flex: none;
+    background: transparent; color: #ccc; border: 1px solid transparent; border-radius: 3px;
+    font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+.model-mb-btn:hover, .model-mb-btn.open { background: #333; color: #fff; }
+.model-mb-btn.has-world { color: #f60; }
+.model-mb-right { position: relative; display: flex; align-items: center; gap: 4px; flex: none; }
+.model-mb-right select, .model-mb-right .model-btn {
+    height: 22px; padding: 0 7px; box-sizing: border-box;
+    background: #222; color: #ccc; border: 1px solid #444; border-radius: 3px; font-size: 12px; cursor: pointer;
+}
+.model-mb-right .model-icon-btn { min-width: 24px; padding: 0 4px; }
+.model-mb-right .model-icon-btn svg { width: 14px; height: 14px; }
+.model-stage { position: absolute; top: 30px; left: 0; right: 0; bottom: 0; overflow: hidden; }
+.model-toolcol {
+    position: absolute; top: 38px; left: 8px; z-index: 3;
+    display: flex; flex-direction: column; gap: 3px; padding: 4px;
+    background: rgba(0, 0, 0, 0.7); border: 1px solid #333; border-radius: 4px;
+}
+.model-toolcol .model-btn {
+    width: 30px; height: 28px; min-width: 0; padding: 0; box-sizing: border-box;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: #222; color: #ccc; border: 1px solid #444; border-radius: 3px; font-size: 10px; cursor: pointer;
+}
+.model-toolcol .model-btn svg { width: 16px; height: 16px; }
+.model-toolcol .model-btn:hover { background: #333; color: #fff; }
+.model-toolcol .model-btn.active { color: #f60; border-color: #f60; }
+.model-toolcol-sep { height: 1px; margin: 2px 0; background: #444; }
+.model-panes { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+.model-pane { position: absolute; box-sizing: border-box; }
+.model-pane.active { box-shadow: inset 0 0 0 1px rgba(255, 102, 0, 0.8); }
+.model-pane-label {
+    position: absolute; top: 6px; right: 8px; pointer-events: auto;
+    height: auto; min-height: 0; padding: 2px 7px; box-sizing: border-box;
+    background: rgba(0, 0, 0, 0.55); color: #ddd; border: 1px solid #444; border-radius: 3px;
+    font-size: 11px; line-height: 15px; cursor: pointer;
+}
+.model-pane-label:hover { background: #333; color: #fff; }
+.model-pane-split { position: absolute; z-index: 2; pointer-events: auto; }
+.model-pane-split.x { cursor: col-resize; }
+.model-pane-split.y { cursor: row-resize; }
+.viewport.model-mode #shape-overlay { top: auto; bottom: 10px; left: 10px; }
+.model-axes { position: absolute; right: 6px; bottom: 6px; pointer-events: auto; cursor: pointer; overflow: visible; }
+.model-axes-bg { fill: transparent; transition: fill 0.12s; }
+.model-axes:hover .model-axes-bg { fill: rgba(255, 255, 255, 0.08); }
+.model-axis text { font: bold 10px sans-serif; fill: #111; pointer-events: none; user-select: none; }
+.model-axis:hover circle { stroke: #fff; stroke-width: 1.5; }
+.viewport.overlays-off .model-axes { display: none !important; }

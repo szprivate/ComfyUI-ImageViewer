@@ -138,6 +138,9 @@ class RigRoundTripBrowserTests(unittest.TestCase):
             # The menu has the entries.
             pg.locator("button.previz-anim").first.click()          # the Animation menu
             labels = pg.locator("button.previz-menu-item").all_inner_texts()
+            pg.evaluate("() => window.__panel._previzCloseAddMenu()")
+            pg.locator("button.previz-mb-file").first.click()       # File > Export character
+            labels += pg.locator("button.previz-menu-item").all_inner_texts()
         finally:
             pg.close()
         self.assertIn("31 frames", note)

@@ -248,6 +248,11 @@ export const PrevizConstraintsMixin = {
 
     _previzToggleConstrainMenu(anchor) {
         if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
+        const a = anchor.getBoundingClientRect();
+        this._previzOpenMenu(this._previzConstrainMenuEntries(), a.left, a.bottom + 2, anchor);
+    },
+
+    _previzConstrainMenuEntries() {
         const scene = this.previzScene();
         const ids = this.previzSelectedIds();
         const item = S.itemById(scene, this._previzSelection);
@@ -281,8 +286,7 @@ export const PrevizConstraintsMixin = {
               title: constrained.length ? "" : "Select an item that has a constraint.",
               run: () => this.previzRemoveConstraint(null) },
         ];
-        const a = anchor.getBoundingClientRect();
-        this._previzOpenMenu(entries, a.left, a.bottom + 2, anchor);
+        return entries;
     },
 
     // ── The Channel Box's CONSTRAINTS section ─────────────────────────────
