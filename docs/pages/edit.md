@@ -4,7 +4,7 @@
 
 Cuts films on a timeline, as an NLE does. A cut is an OpenTimelineIO file (`.otio`) and plays in its own tab before anything is rendered.
 
-![A cut: the Source viewer and the timeline viewer above, the Edit timeline below](../images/edit.png)
+![A cut: the Source viewer and the timeline viewer above, the Edit timeline below](../images/edit.jpg)
 
 ## Opening a cut
 

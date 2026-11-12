@@ -4,7 +4,7 @@
 
 What a file was made from, and what was made from it, as a graph: inputs above, results below. Right-click a History thumbnail ▸ **Show dependencies**.
 
-![The Dependencies tab](../images/dependencies-tab.png)
+![The Dependencies tab](../images/dependencies-tab.jpg)
 
 The Send To Image Viewer node and agentY record this when they save. Files saved by other nodes with their workflow inside (Save Image, Save Video, VHS Video Combine) are worked out the first time you look. It runs in ComfyUI, without agentY.
 

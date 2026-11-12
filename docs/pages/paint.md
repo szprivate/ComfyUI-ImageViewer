@@ -4,7 +4,7 @@
 
 A picture editor in layers: brushes, selections, masks, adjustment layers, text, filters, and AI fills from ready-made ComfyUI workflows.
 
-![A Paint tab: tools on the left, the tool's options above, Layers and Properties on the right](../images/paint.png)
+![A Paint tab: tools on the left, the tool's options above, Layers and Properties on the right](../images/paint.jpg)
 
 ## Opening
 

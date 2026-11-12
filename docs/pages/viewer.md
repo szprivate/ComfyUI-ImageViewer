@@ -4,7 +4,7 @@
 
 The **🖼 Viewer** tab shows pictures, image sequences, videos and sounds. Everything you only look at goes here; documents get spaces of their own.
 
-![The Viewer, with the History panel beside it](../images/viewer.png)
+![The Viewer, with the History panel beside it](../images/viewer.jpg)
 
 ## Getting things in
 
@@ -39,8 +39,8 @@ Exposure and channels change only what you see.
 Videos in a compare play in step.
 
 <p>
-<img src="../images/compare-wipe.png" alt="A wipe between two renders" width="49%">
-<img src="../images/contact-sheet.png" alt="Renders on a contact sheet" width="49%">
+<img src="../images/compare-wipe.jpg" alt="A wipe between two renders" width="49%">
+<img src="../images/contact-sheet.jpg" alt="Renders on a contact sheet" width="49%">
 </p>
 
 ## Playing

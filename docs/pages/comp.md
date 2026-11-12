@@ -4,7 +4,7 @@
 
 Layers pictures, films and image sequences in a node graph, as Nuke does, in linear float with keys over time. A comp is a file (`*.comp.json`); its nodes never go onto ComfyUI's canvas.
 
-![A comp: the picture with its handles, the node's Parameters, the Node Graph below](../images/comp.png)
+![A comp: the picture with its handles, the node's Parameters, the Node Graph below](../images/comp.jpg)
 
 ## Opening
 

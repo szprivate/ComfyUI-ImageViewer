@@ -2,7 +2,7 @@
 
 A panel for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) to look at what a workflow makes, compare it, cut it, paint on it, comp it and stage 3D shots, without leaving the graph.
 
-![The Viewer with the History beside it](docs/images/viewer.png)
+![The Viewer with the History beside it](docs/images/viewer.jpg)
 
 ## Spaces
 
