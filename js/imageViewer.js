@@ -100,6 +100,7 @@ import { BarGroupsMixin } from "./imageViewer_barGroups.js";
 import { ExportViewMixin } from "./imageViewer_exportView.js";
 import { FullscreenMixin } from "./imageViewer_fullscreen.js";
 import { ViewerAudioMixin } from "./imageViewer_viewerAudio.js";
+import { FrameMasksMixin } from "./imageViewer_frameMasks.js";
 import { SendFromNodeMixin, registerSendToViewerMenu, sendSelectionToViewer } from "./imageViewer_sendFromNode.js";
 import {
     registerSendNode, registerToolNode, senderTabInfo, isViewerSourceNode, IMAGE_VIEWER_SCENE_NODE,
@@ -652,6 +653,9 @@ class ViewerPanel extends HTMLElement {
         // The sound switches, right of Toggle Overlays (before full screen, made just above).
         try { this._initViewerAudio(); }
         catch (e) { console.warn('imageViewer: the sound switches failed to start', e); }
+        // The framing mask's button, right of Toggle Overlays (imageViewer_frameMasks.js).
+        try { this._initFrameMasks(); }
+        catch (e) { console.warn('imageViewer: the framing masks failed to start', e); }
 
         this.setupZoomAndPan();
         this.setupResizing();
@@ -1707,6 +1711,7 @@ Object.assign(
     ExportViewMixin,
     FullscreenMixin,
     ViewerAudioMixin,
+    FrameMasksMixin,
     PrevizWorldMixin,
     PrefsMixin,
 );

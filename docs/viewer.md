@@ -21,6 +21,7 @@ A new render is put on screen only while you are looking at the newest one. Look
 | Zoom | The zoom menu, or <kbd>F</kbd> to fit |
 | Pan | Drag the picture |
 | Hide everything drawn over the picture | <kbd>S</kbd>, or **Toggle Overlays** in the lower bar |
+| Show a framing mask (4:3, 16:9, 1.85, 21:9, 2.39, 9:16, 1:1, 4:5 or your own ratio) | **Framing mask** right of Toggle Overlays, or <kbd>Shift</kbd>+<kbd>G</kbd>; its ▾ (or a right-click) picks the ratio and the opacity. It is drawn in the Edit space too, and in 3D inside the camera gate |
 | Full screen | <kbd>Shift</kbd>+<kbd>F</kbd>, or the button in the transport. <kbd>Esc</kbd> comes back |
 | Exposure | The slider at the top (−4 to +4 EV), or hold <kbd>E</kbd> and drag. Right-click resets |
 | One channel | <kbd>R</kbd>, <kbd>G</kbd>, <kbd>B</kbd> (again for RGB) |
