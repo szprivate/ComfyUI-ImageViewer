@@ -28,6 +28,10 @@ export const PT_VIEW_MAX = 1024;
 /** Bounces of light the viewport traces: enough for interiors, still quick. */
 export const PT_VIEW_BOUNCES = 5;
 
+/** How long after the last change "Raster while moving" waits before tracing again. */
+export const PT_RESUME_MS = 300;
+const MOVE_KEY = "imageviewer.viewer.ptRasterWhileMoving";
+
 let _ptPromise = null;
 function loadPathTracer() {
     if (!_ptPromise) {
@@ -49,6 +53,47 @@ export const View3DPathTraceMixin = {
     /** Samples the viewport's traced picture holds (0 when not tracing). */
     ptSamples() {
         return this._pt && this.ptActive() ? Math.floor(this._pt.samples) : 0;
+    },
+
+    /**
+     * "Raster while moving" (View menu, off by default): while an object is
+     * dragged or the scene plays, the view is drawn raster - no rebuild of the
+     * tracer's scene per frame - and tracing starts again PT_RESUME_MS after
+     * the last change. Kept per viewer in localStorage.
+     */
+    ptRasterWhileMoving() {
+        if (this._ptMoveOpt === undefined) {
+            try { this._ptMoveOpt = (this.win || window).localStorage.getItem(MOVE_KEY) === "1"; }
+            catch (e) { this._ptMoveOpt = false; }
+        }
+        return this._ptMoveOpt;
+    },
+
+    ptSetRasterWhileMoving(on) {
+        this._ptMoveOpt = !!on;
+        try { (this.win || window).localStorage.setItem(MOVE_KEY, on ? "1" : "0"); } catch (e) { /* private window */ }
+        this._ptMovingUntil = 0;
+        this._ptLastSig = undefined;
+        this.requestRender();
+    },
+
+    /** With the option on: whether the scene is moving now (raster this tick). */
+    _ptMoving(cam) {
+        if (!this.ptRasterWhileMoving()) return false;
+        this.scene.updateMatrixWorld(true);
+        const sig = this._ptSceneSig(this._ptContent(cam));
+        const now = performance.now();
+        if ((this._ptLastSig !== undefined && sig !== this._ptLastSig) || (this.gizmo && this.gizmo.dragging)) {
+            this._ptMovingUntil = now + PT_RESUME_MS;
+        }
+        this._ptLastSig = sig;
+        if (now >= (this._ptMovingUntil || 0)) return false;
+        // Come back when it has been still long enough, even if nothing else asks for a frame.
+        const win = this.win || window;
+        if (this._ptResumeTimer) win.clearTimeout(this._ptResumeTimer);
+        this._ptResumeTimer = win.setTimeout(() => { this._ptResumeTimer = 0; this.requestRender(); },
+                                             Math.max(16, this._ptMovingUntil - now + 5));
+        return true;
     },
 
     /** Load the library and make a tracer for this renderer. Resolves to it, or null. */
@@ -333,6 +378,10 @@ export const View3DPathTraceMixin = {
             return null;
         }
         const pt = this._pt;
+        if (this._ptMoving(cam)) {
+            this._ptBadge("Path traced · raster while moving");
+            return null;
+        }
         if (this._ptLimit !== PT_VIEW_MAX) { this._ptLimit = PT_VIEW_MAX; pt.bounces = PT_VIEW_BOUNCES; }
         try {
             this._ptSync(cam);

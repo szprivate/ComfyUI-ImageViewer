@@ -125,6 +125,39 @@ class PathTraceTests(unittest.TestCase):
         self.assertEqual(badge_off, "none")
         self.assertEqual(self.errors, [])
 
+    def test_raster_while_moving_is_an_option(self):
+        pg = self._page()
+        try:
+            default = pg.evaluate("() => window.__panel._modelView().ptRasterWhileMoving()")
+            pg.evaluate("() => { const v = window.__panel._modelView(); v.ptSetRasterWhileMoving(true); v.setMaterialMode('pathtraced'); }")
+            pg.wait_for_function("() => window.__panel._modelView().ptSamples() >= 1", timeout=240000)
+            # Move the box a little every frame for a while: raster meanwhile, no rebuild.
+            moving = pg.evaluate("""async () => { const P = window.__panel; const v = P._modelView();
+                const box = P.previzScene().items.find((i) => i.name === 'Box');
+                const ent = v._entries.get(box.id); const builds = []; let badge = '';
+                const orig = v._pt.setScene.bind(v._pt); v._pt.setScene = (...a) => { builds.push(1); return orig(...a); };
+                for (let i = 0; i < 8; i++) {
+                    ent.root.position.x += 0.05; v.requestRender();
+                    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+                    badge = v._ptBadgeEl.textContent;
+                }
+                return { builds: builds.length, badge }; }""")
+            pg.wait_for_function("() => window.__panel._modelView()._ptBadgeEl.textContent.startsWith('Path traced · ') && "
+                                 "!window.__panel._modelView()._ptBadgeEl.textContent.includes('moving') && "
+                                 "window.__panel._modelView().ptSamples() >= 1", timeout=240000)
+            pg.evaluate("() => window.__panel.previzMenuBarOpen('view')")
+            pg.wait_for_timeout(100)
+            menu = [t for t in pg.locator("button.previz-menu-item").all_inner_texts() if "raster while moving" in t]
+            kept = pg.evaluate("() => localStorage.getItem('imageviewer.viewer.ptRasterWhileMoving')")
+        finally:
+            pg.close()
+        self.assertFalse(default)
+        self.assertEqual(moving["builds"], 0)
+        self.assertEqual(moving["badge"], "Path traced · raster while moving")
+        self.assertEqual(menu, ["✓ Path traced: raster while moving"])
+        self.assertEqual(kept, "1")
+        self.assertEqual(self.errors, [])
+
     def test_a_render_frame_is_traced(self):
         pg = self._page()
         try:
