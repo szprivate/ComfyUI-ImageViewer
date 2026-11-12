@@ -672,8 +672,17 @@ textarea.param-input {
     font-size: 11px; color: #999;
     cursor: grab; user-select: none;
 }
+/* A slight accent on the title bar (Sebastian 2026-11-12: the top row should not
+   be the panel's own ground): the colour of the space that is up
+   (--panel-accent, set on the container by switchTab from SPACE_COLORS), else
+   the viewer's accent, mixed into the bar's grey. imageViewer_theme.js writes
+   the same mix over the chosen title-bar colour. */
+.panel-titlebar {
+    background: color-mix(in srgb, var(--panel-accent, #ff6600) 12%, #141414);
+    border-bottom-color: color-mix(in srgb, var(--panel-accent, #ff6600) 28%, #262626);
+}
 .panel-titlebar.dragging, .panel-titlebar:active { cursor: grabbing; }
-.panel-titlebar:hover { background: #191919; color: #ccc; }
+.panel-titlebar:hover { background: color-mix(in srgb, var(--panel-accent, #ff6600) 16%, #191919); color: #ccc; }
 /* The switch at the bar's left: which panel this place shows (_dockSwitchMenu).
    The panel is a container; this changes what is in it. */
 .pt-switch {
