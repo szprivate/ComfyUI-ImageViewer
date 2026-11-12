@@ -189,7 +189,7 @@ export const PrevizRigPoseMixin = {
         const tracker = !!((tools.posetrack && tools.posetrack.ready) || sam.ready);
         let viaSel;
         await openExportDialog(this.container, {
-            title: "Pose the character", kind: "character", where: false, name: "pose", go: "Pose",
+            title: "Pose the character", kind: "character", plain: true, where: false, go: "Pose",
             rows: ({ el, row }) => {
                 const grid = el("div", "rd-sub");
                 grid.style.cssText = "display:grid;grid-template-columns:repeat(3,auto);gap:2px 12px";

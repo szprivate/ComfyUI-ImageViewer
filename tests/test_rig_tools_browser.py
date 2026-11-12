@@ -682,6 +682,26 @@ class RigToolsBrowserTests(unittest.TestCase):
         self.assertEqual(done["a6"]["result"]["constraints"], [])
         self.assertEqual(self.errors, [])
 
+    def test_the_pose_and_video_dialogs_ask_for_no_film_format(self):
+        """Pose… and Motion from video… write no file: no Name, Format, Codec or Quality rows."""
+        pg = self.page()
+        try:
+            pg.evaluate(OPEN, ["statue.glb", "Statue"])
+            pg.evaluate("async () => window.__panel.previzAutoRig(window.__hero, { seed: 7 })")
+            for opener, title in (("previzPoseDialog", "Pose the character"), ("previzVideoMotionDialog", "Motion from video")):
+                pg.evaluate(f"() => {{ window.__panel.{opener}(window.__hero); }}")
+                box = pg.locator(f'.rd-box[aria-label="{title}"]')
+                box.wait_for(state="visible", timeout=10000)
+                labels = box.locator(".rd-label").all_inner_texts()
+                for word in ("Name", "Format", "Goes to"):
+                    self.assertNotIn(word, labels, f"{title} shows {word}")
+                for word in ("Codec", "Quality", "MP4"):
+                    self.assertNotIn(word, box.inner_text(), f"{title} shows {word}")
+                box.locator(".rd-x").click()
+                box.wait_for(state="detached", timeout=5000)
+        finally:
+            pg.close()
+
     def test_the_agent_poses_the_character_on_one_frame(self):
         """A pose from named poses and joints in words, keyed on one frame, through the agent's road."""
         pg = self.page()

@@ -102,7 +102,7 @@ export const PrevizRigAIMixin = {
         const browse = el("button", "rd-btn", "Browse…");
         browse.type = "button";
         browse.onclick = () => openFilePicker(this.container, {
-            id: `rig-${kind}`, title: `A ${kind}`, kind: "video", exts, go: "Pick",
+            id: `rig-${kind}`, title: `A ${kind}`, kind: kind === "picture" ? "image" : "video", exts, go: "Pick",
             onPick: async (files) => { if (files[0]) { ref = { path: files[0].path }; name.textContent = files[0].name; } return { ok: true }; },
         });
         return { row: row(label, name, hist, browse), get: () => ref };
@@ -191,7 +191,7 @@ export const PrevizRigAIMixin = {
         const sam = tools.sam3dbody || {}, mpReady = !!(tools.posetrack && tools.posetrack.ready);
         let media, at, step, inPlace, smooth, clean, prompt, feet, onLayer, filmFrom, filmTo, viaSel;
         await openExportDialog(this.container, {
-            title: "Motion from video", kind: "character", where: false, name: model.name, go: "Track",
+            title: "Motion from video", kind: "character", plain: true, where: false, go: "Track",
             rows: ({ el, row }) => {
                 media = this._previzRigMediaRow(el, row, { label: "Film", exts: FILM_EXTS, kind: "film" });
                 viaSel = el("select", "rd-in");
