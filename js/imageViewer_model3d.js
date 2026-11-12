@@ -658,6 +658,9 @@ export class Model3DView {
         // goes on to whatever is behind them.
         const layers = this._layerStates || null;
         const hits = ray.intersectObjects(roots, true).filter((hit) => {
+            // Three's raycaster does not ask `visible`: a hidden control (a limb's
+            // unused IK or FK side, _rigSyncIdle) is not there to click.
+            if (hit.object.isLine && hit.object.visible === false) return false;
             let node = hit.object;
             while (node && !node.userData.imageViewerItemId) node = node.parent;
             return !node || isPickable(layers, node.userData.imageViewerItemId);

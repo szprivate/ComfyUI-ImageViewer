@@ -11,7 +11,7 @@
 //     controls: FK controls turn their bones, IK controls solve their limbs
 //     (two-bone, with a pole), and IK/FK blends the two.
 // Rendering a shot hides the controls, as it hides every other helper.
-import { mat4, quat, v3, solveTwoBone, controlsOf } from "./imageViewer_rigData.js";
+import { mat4, quat, v3, solveTwoBone, controlsOf, idleControls } from "./imageViewer_rigData.js";
 import { evaluateIn } from "./imageViewer_scene3d.js";
 
 const CTRL_ORDER = 999;
@@ -101,6 +101,37 @@ export const Rig3DMixin = {
             if (!e.isControl || !e.object || !e.object.material) continue;
             e.object.material.color.set(sel.has(id) ? "#ffffff" : e.object.userData.baseColor);
         }
+        this._rigSyncIdle();
+    },
+
+    /**
+     * A limb shows the controls it is using: its FK controls are hidden while
+     * it is wholly on IK, its IK control and pole while it is wholly on FK
+     * (rigData.idleControls). A selected one stays in sight. Hidden lines are
+     * not picked either (_pick asks `visible`).
+     */
+    _rigSyncIdle() {
+        const idle = new Set();
+        for (const e of this._entries.values()) if (e.rigIdle) for (const id of e.rigIdle) idle.add(id);
+        const sel = new Set([this.selected, ...(this._alsoIds || [])]);
+        for (const [id, e] of this._entries) {
+            if (!e.isControl || !e.object) continue;
+            e.object.visible = this.rigShowIdle === true || !idle.has(id) || sel.has(id);
+        }
+    },
+
+    /** The controls of a model the view hides now, as a Set of ids (empty for none). */
+    rigIdleControls(modelId) {
+        const e = this._entries.get(modelId);
+        return new Set((e && e.rigIdle) || []);
+    },
+
+    /** A limb's IK blend at a frame, 0 FK .. 1 IK: what _rigSolve blends by. */
+    _rigIkBlend(ik, frame = this.sceneFrame) {
+        const ikAt = this._rigBlendOf ? this._rigBlendOf(ik, frame) : evaluateIn(this.scene3d, ik, frame).ikfk;
+        return Math.max(0, Math.min(1, ikAt !== undefined ? ikAt
+            : ik.tracks && ik.tracks.ikfk && ik.tracks.ikfk.length
+                ? this._rigScalarAt(ik, "ikfk", frame) : (ik.ikfk ?? 1)));
     },
 
     /** Whether the scene has controls for this model item. */
@@ -242,10 +273,7 @@ export const Rig3DMixin = {
             const [na, nb, nc] = ik.control.chain;
             if (!fk.has(na) || !fk.has(nb) || !fk.has(nc) || !cw.has(ik.id)) continue;
             // The whole stack's IK/FK blend: animation layers can key it, drivers add to it.
-            const ikAt = this._rigBlendOf ? this._rigBlendOf(ik, frame) : evaluateIn(this.scene3d, ik, frame).ikfk;
-            const blend = Math.max(0, Math.min(1, ikAt !== undefined ? ikAt
-                : ik.tracks && ik.tracks.ikfk && ik.tracks.ikfk.length
-                    ? this._rigScalarAt(ik, "ikfk", frame) : (ik.ikfk ?? 1)));
+            const blend = this._rigIkBlend(ik, frame);
             if (blend <= 0) continue;
             const A = mat4.decompose(fk.get(na)), B = mat4.decompose(fk.get(nb)), C = mat4.decompose(fk.get(nc));
             const endWorld = mat4.mul(cw.get(ik.id), ik.control.bind || mat4.identity());
@@ -326,6 +354,8 @@ export const Rig3DMixin = {
         const worlds = this._rigSolve(entry, controls);
         entry.rigPose = worlds;
         this._rigSetPose(entry, worlds);
+        entry.rigIdle = idleControls(controls, (ik) => this._rigIkBlend(ik));
+        this._rigSyncIdle();
     },
 
     /**

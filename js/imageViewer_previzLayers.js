@@ -719,6 +719,24 @@ export const PrevizLayersMixin = {
         // The selection only lights buttons; it never rebuilds them.
         const sel = new Set(this.previzSelectedIds());
         for (const [id, b] of ui.buttons) b.classList.toggle("on", sel.has(id));
+        // A limb's unused side (its FK controls while on IK, its IK and pole
+        // while on FK) is dimmed, as the view hides it; the switch says which.
+        const view3 = this._modelView && this._modelView();
+        const idle = ch && view3 && view3.rigIdleControls ? view3.rigIdleControls(ch.id) : new Set();
+        for (const [id, b] of ui.buttons) b.classList.toggle("idle", idle.has(id));
+        const frame = Math.round(this.currentFrame || 0);
+        for (const [ikId, el] of ui.limbs || []) {
+            const ik = S.itemById(scene, ikId);
+            if (!ik) continue;
+            const blend = view3 && view3._rigIkBlend ? view3._rigIkBlend(ik, frame)
+                : Number(S.currentValue(scene, ik, "ikfk", frame) ?? 1);
+            const mode = blend >= 0.5 ? "IK" : "FK";
+            if (el.textContent !== mode) el.textContent = mode;
+            el.classList.toggle("fk", mode === "FK");
+            el.title = `${(ik.control && ik.control.role) || ik.name} is on ${mode}`
+                     + (blend > 0 && blend < 1 ? ` (${Math.round(blend * 100)} % IK)` : "")
+                     + `: click to switch it to ${mode === "IK" ? "FK" : "IK"} without a jump`;
+        }
         for (const b of ui.sets.querySelectorAll(".pk-set")) {
             const set = L.setById(scene, b.dataset.setId);
             b.classList.toggle("on", !!(set && set.members.length && set.members.every((id) => sel.has(id))));
@@ -773,6 +791,20 @@ export const PrevizLayersMixin = {
             };
             ui.stage.append(el);
             ui.buttons.set(b.id, el);
+        }
+        // Each limb's IK / FK switch: what it shows is set by _pkRender, every frame.
+        ui.limbs = new Map();
+        for (const l of lay.limbs || []) {
+            const el = doc.createElement("button");
+            el.className = "pk-ikfk";
+            el.dataset.ik = l.ik;
+            el.style.left = `${l.x * 100}%`;
+            el.style.top = `${l.y * 100}%`;
+            el.style.setProperty("--pk", COLOR[l.side] || "#ffd24d");
+            el.onpointerdown = (e) => e.stopPropagation();
+            el.onclick = (e) => { e.stopPropagation(); this.previzRigSwitchIkFk && this.previzRigSwitchIkFk(l.ik); };
+            ui.stage.append(el);
+            ui.limbs.set(l.ik, el);
         }
         const mine = new Set([ch.id, ...ctrls.map((c) => c.id)]);
         for (const set of L.setsWithin(scene, [...mine])) {

@@ -2308,6 +2308,15 @@ audio.src-media { width: 90%; }
 .pk-btn.root, .pk-btn.cog { border-radius: 4px; }
 .pk-btn:hover { background: color-mix(in srgb, var(--pk) 65%, transparent); z-index: 2; }
 .pk-btn.on { background: #fff; border-color: #fff; box-shadow: 0 0 0 1px #f60; z-index: 3; }
+.pk-btn.idle:not(.on) { opacity: 0.3; }
+.pk-ikfk {
+    position: absolute; transform: translate(-50%, -50%); z-index: 4;
+    padding: 0 4px; min-width: 22px; min-height: 0; height: 14px; line-height: 12px; box-sizing: border-box;
+    font: 600 9px/12px system-ui, sans-serif; color: #111; cursor: pointer;
+    background: var(--pk); border: 1px solid var(--pk); border-radius: 7px;
+}
+.pk-ikfk.fk { background: transparent; color: var(--pk); }
+.pk-ikfk:hover { filter: brightness(1.25); }
 .pk-marquee { position: absolute; border: 1px dashed #f60; background: rgba(255, 102, 0, 0.08); pointer-events: none; z-index: 5; }
 .pk-sets { display: flex; gap: 3px; flex-wrap: wrap; }
 .pk-set.on { color: #f60; border-color: #f60; }

@@ -136,7 +136,7 @@ class RigRoundTripBrowserTests(unittest.TestCase):
             box.wait_for(state="detached", timeout=30000)
             restored = pg.evaluate(RIG_STATE)
             # The menu has the entries.
-            pg.locator("button.previz-rig").first.click()
+            pg.locator("button.previz-anim").first.click()          # the Animation menu
             labels = pg.locator("button.previz-menu-item").all_inner_texts()
         finally:
             pg.close()

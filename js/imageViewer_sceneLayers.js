@@ -352,7 +352,7 @@ const _I = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 export function pickerLayout(scene, modelId, view = "front") {
     const items = (scene && scene.items) || [];
     const ctrls = items.filter((it) => it.kind === "control" && it.control && it.control.model === modelId);
-    if (!ctrls.length) return { buttons: [], aspect: 1 };
+    if (!ctrls.length) return { buttons: [], limbs: [], aspect: 1 };
     const byId = new Map(ctrls.map((c) => [c.id, c]));
     const world = new Map();
     const at = (c, depth = 0) => {
@@ -393,7 +393,24 @@ export function pickerLayout(scene, modelId, view = "front") {
     }));
     // The root sits under the feet rather than on top of the COG.
     for (const b of buttons) if (b.type === "root") b.y = Math.min(0.97, Math.max(b.y, 0.95));
-    return { buttons, aspect: w / h };
+    // An IK control sits where its hand or foot is, on top of that FK button:
+    // seen from the front it moves out to the side, beside it. Each limb also
+    // gets an IK / FK switch (`limbs`) beside its IK button, on the side
+    // towards the middle (under a hand, over a foot), so it stays inside.
+    const aspect = w / h;
+    const cogB = buttons.find((b) => b.type === "cog");
+    const mid = cogB ? cogB.x : 0.5;
+    const limbs = [];
+    for (const b of buttons) {
+        if (b.type !== "ik") continue;
+        if (view === "front") {
+            const out = b.x >= mid ? 1 : -1;
+            b.x = Math.min(0.98, Math.max(0.02, b.x + out * b.r * 2.6));
+        }
+        limbs.push({ ik: b.id, side: b.side, role: b.role, x: b.x,
+                     y: b.y + (b.y < 0.5 ? 1 : -1) * Math.max(b.r * aspect * 2.2, 0.06) });
+    }
+    return { buttons, limbs, aspect };
 }
 
 // ── References ───────────────────────────────────────────────────────────────

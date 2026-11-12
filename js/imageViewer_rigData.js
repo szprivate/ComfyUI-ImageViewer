@@ -800,6 +800,30 @@ export function isRigged(scene, modelId) {
     return controlsOf(scene, modelId).length > 0;
 }
 
+/**
+ * The controls a limb is not using: its FK controls (upper, lower, end) while it
+ * is wholly on IK, its IK control and pole while wholly on FK. Between the two
+ * both are in use. `blendOf(ik)` answers the limb's IK blend now (0 FK .. 1 IK).
+ * Answers a Set of control ids, which the view hides and the Picker dims.
+ */
+export function idleControls(controls, blendOf) {
+    const idle = new Set();
+    const fkByBone = new Map();
+    for (const c of controls) if (c.control && c.control.type === "fk" && c.control.bone) fkByBone.set(c.control.bone, c.id);
+    for (const ik of controls) {
+        if (!ik.control || ik.control.type !== "ik" || !Array.isArray(ik.control.chain)) continue;
+        const b = Number(blendOf(ik));
+        if (!Number.isFinite(b)) continue;
+        if (b >= 1) {
+            for (const bone of ik.control.chain) if (fkByBone.has(bone)) idle.add(fkByBone.get(bone));
+        } else if (b <= 0) {
+            idle.add(ik.id);
+            if (ik.control.pole) idle.add(ik.control.pole);
+        }
+    }
+    return idle;
+}
+
 /** The control a bone's FK hangs on. */
 export function fkControlFor(scene, modelId, bone) {
     return controlsOf(scene, modelId).find((c) => c.control.type === "fk" && c.control.bone === bone) || null;
