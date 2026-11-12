@@ -2018,19 +2018,21 @@ export const PrevizMixin = {
     },
 
     /** An image plane's own settings — opacity, lighting, which sides show. */
-    previzSetPlane(id, patch) {
+    previzSetPlane(id, patch, { live = false } = {}) {
         const scene = this.previzScene();
         const ids = this._previzIdList(id);
         const planes = ids.map((one) => S.itemById(scene, one))
             .filter((it) => it && it.kind === "imageplane");
         if (!planes.length) return;
-        this.previzSnapshot("image plane");
+        // A drag of the Opacity row's name is one undo step (previzEndDrag at its end).
+        if (live) this.previzBeginDrag("image plane");
+        else if (!this._previzDragging) this.previzSnapshot("image plane");
         const view = this._modelView();
         for (const item of planes) {
             item.plane = S.planeSettings({ plane: { ...S.planeSettings(item), ...patch } });
             if (view && view.syncImagePlane) view.syncImagePlane(item);
         }
-        this.previzChanged();
+        this.previzChanged(live ? { light: true, persist: false } : {});
     },
 
     previzAddFromBrowser() {

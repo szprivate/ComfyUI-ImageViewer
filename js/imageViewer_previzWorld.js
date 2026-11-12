@@ -17,6 +17,10 @@ import {
     worldFields, lightSettings, LIGHT_DEFAULTS, LIGHT_TYPES, LIGHT_LABELS, DEFAULT_LIGHTS,
 } from "./imageViewer_worldData.js";
 
+// A world field's name dragged one pixel moves it by this share of its step (a sun's azimuth,
+// step 5, turns a degree a pixel).
+const WORLD_DRAG_SHARE = 0.2;
+
 const SCATTER_LABELS = { pine: "Pines", tree: "Trees", bush: "Bushes", grass: "Grass", rock: "Rocks",
                          column: "Columns", lamp: "Lamps", model: "Model…" };
 
@@ -182,12 +186,14 @@ export const PrevizWorldMixin = {
     },
 
     /** Set one world setting on the selection (or `id`), rebuilding what it changes. */
-    previzSetWorldField(path, value, id = null) {
+    previzSetWorldField(path, value, id = null, { live = false } = {}) {
         const scene = this.previzScene();
         if (!scene) return;
         const items = this._previzIdList(id).map((one) => S.itemById(scene, one)).filter(Boolean);
         if (!items.length) return;
-        this.previzSnapshot(`set ${path}`);
+        // A drag of the row's name: one undo step for all of it (previzEndDrag at the end).
+        if (live) this.previzBeginDrag(`set ${path}`);
+        else if (!this._previzDragging) this.previzSnapshot(`set ${path}`);
         for (const item of items) {
             const fields = WORLD_FIELDS[item.kind] || [];
             if (!fields.some((f) => f.path === path)) continue;
@@ -202,10 +208,35 @@ export const PrevizWorldMixin = {
         if (path.startsWith("reference.")) {
             const view = this._modelView();
             view._syncGate();
-            this.previzChanged();
+            this.previzChanged(live ? { light: true, persist: false } : {});
             return;
         }
+        if (live) { this._worldLiveReload(); return; }
         this.previzChanged({ reload: true });
+    },
+
+    /**
+     * The view rebuilt in the middle of a drag: at most one rebuild at a time (a terrain
+     * takes a while), and one more with the latest numbers when moves came in meanwhile.
+     */
+    _worldLiveReload() {
+        if (this._worldReloading) { this._worldReloadAgain = true; return; }
+        this._worldReloading = true;
+        Promise.resolve(this.previzChanged({ reload: true, light: true, persist: false }))
+            .catch(() => {})
+            .finally(() => {
+                this._worldReloading = false;
+                if (this._worldReloadAgain) { this._worldReloadAgain = false; this._worldLiveReload(); }
+            });
+    },
+
+    /** A typed or dragged number for a world field, held to its range and step. */
+    _worldFieldNumber(f, v) {
+        if (!Number.isFinite(v)) return null;
+        if (f.min != null) v = Math.max(f.min, v);
+        if (f.max != null) v = Math.min(f.max, v);
+        if (Number.isInteger(f.step)) return Math.round(v);
+        return Math.round(v * 1e4) / 1e4;
     },
 
     // ── Channel box ──────────────────────────────────────────────────────────
@@ -219,7 +250,8 @@ export const PrevizWorldMixin = {
         for (const f of fields) {
             const row = doc.createElement("div");
             row.className = "cb-row";
-            row.append(Object.assign(doc.createElement("span"), { className: "cb-label", textContent: f.label }));
+            const tag = Object.assign(doc.createElement("span"), { className: "cb-label", textContent: f.label });
+            row.append(tag);
             let input;
             if (f.type === "select" || f.type === "bool") {
                 input = doc.createElement("select");
@@ -240,13 +272,24 @@ export const PrevizWorldMixin = {
                 if (f.min != null) input.min = String(f.min);
                 if (f.max != null) input.max = String(f.max);
                 input.onchange = () => {
-                    let v = Number(input.value);
-                    if (!Number.isFinite(v)) { this._previzRenderChannels(); return; }
-                    if (f.min != null) v = Math.max(f.min, v);
-                    if (f.max != null) v = Math.min(f.max, v);
-                    if (Number.isInteger(f.step)) v = Math.round(v);
+                    const v = this._worldFieldNumber(f, Number(input.value));
+                    if (v === null) { this._previzRenderChannels(); return; }
                     this.previzSetWorldField(f.path, v);
                 };
+                // Its name is a slider, as a channel's is (_cbScrub).
+                this._cbScrub(tag, {
+                    step: (f.step || 1) * WORLD_DRAG_SHARE,
+                    read: () => {
+                        const now = this.previzSelectedItem() || item;
+                        const v = Number(getPath(now, f.path));
+                        return Number.isFinite(v) ? v : null;
+                    },
+                    write: (v) => {
+                        const n = this._worldFieldNumber(f, v);
+                        if (n !== null) this.previzSetWorldField(f.path, n, null, { live: true });
+                    },
+                    end: () => { this.previzEndDrag(); this.previzChanged({ reload: true }); },
+                });
             }
             input.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") input.blur(); });
             row.append(input);
