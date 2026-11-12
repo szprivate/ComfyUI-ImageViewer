@@ -239,6 +239,7 @@ export const WorldViewMixin = {
             this.renderer.shadowMap.enabled = env;
         }
         if (this.grid) this.grid.visible = this.showGrid && !ground;
+        if (this._gridOriginSync) this._gridOriginSync();
         this._worldSyncRender();
     },
 

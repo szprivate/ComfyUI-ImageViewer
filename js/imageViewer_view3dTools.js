@@ -145,6 +145,8 @@ export const View3DToolsMixin = {
                 entry.helper.userData.imageViewerCameraHelper = true;
                 entry.helper.traverse((o) => sort(o, item));
             }
+            // A camera's look-at target and its line go with the cameras.
+            if (entry.aimViz) entry.aimViz.traverse((o) => { if (o !== entry.aimViz) sort(o, item); });
         }
         this._jointsSync();
         if (cam && cam.layers) cam.layers.mask = this._rendering ? 0xffffffff : this._dispMask();
@@ -366,6 +368,8 @@ export const View3DToolsMixin = {
     _mqDown(e) {
         if (e.button !== 0 || e.altKey || this._walk || this._placingNote) return false;
         if (this.gizmo && this.gizmo.object && this.gizmo.axis && this.gizmoMode !== "select") return false;
+        // A camera's look-at target has a gizmo of its own, in every tool (imageViewer_cameraAim3d.js).
+        if (this._aimGizmoHot && this._aimGizmoHot()) return false;
         if (this.gizmoMode !== "select" && this._pick(e)) return false;
         const rect = this.canvas.getBoundingClientRect();
         this._mq = { x: e.clientX, y: e.clientY, rect, id: e.pointerId, box: null,

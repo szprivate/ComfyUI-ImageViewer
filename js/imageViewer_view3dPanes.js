@@ -359,6 +359,7 @@ export const View3DPanesMixin = {
                 else grid.rotation.set(0, 0, 0);
             }
             if (this.gizmo) this.gizmo.camera = cam;
+            if (this._aimGizmo) this._aimGizmo.camera = cam;
             this._dispApply(cam);
             r.render(this.scene, cam);
         }
@@ -366,6 +367,7 @@ export const View3DPanesMixin = {
         r.setViewport(0, 0, W, H);
         if (grid && rot) grid.rotation.copy(rot);
         if (this.gizmo) this.gizmo.camera = this.activeCameraObject();
+        if (this._aimGizmo) this._aimGizmo.camera = this.activeCameraObject();
         // The perspective camera's aspect goes back to the active pane's, which picking reads.
         const act = this._paneActiveBox();
         if (act) this._paneFitCam(this.activeCameraObject(), this.paneActiveKind(), act.w, act.h);

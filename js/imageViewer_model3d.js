@@ -31,6 +31,7 @@ import { View3DToolsMixin } from "./imageViewer_view3dTools.js";
 import { View3DPanesMixin } from "./imageViewer_view3dPanes.js";
 import { View3DGridMixin } from "./imageViewer_view3dGrid.js";
 import { Atlas3DMixin } from "./imageViewer_atlas3d.js";
+import { CameraAim3DMixin } from "./imageViewer_cameraAim3d.js";
 import { displayStates, isPickable } from "./imageViewer_sceneLayers.js";
 import { constrainedLocals } from "./imageViewer_constraints.js";
 
@@ -364,6 +365,9 @@ export class Model3DView {
         this.grid = this._gridMake(THREE);
         this.grid.visible = this.showGrid;
         scene.add(this.grid);
+        this.scene = scene;
+        // The world origin's marker, beside the grid (imageViewer_view3dGrid.js).
+        this._gridOriginSync();
 
         this.camera = new THREE.PerspectiveCamera(35, 1, 0.01, 10000);
         this.camera.position.set(10, 10, 10);
@@ -430,15 +434,20 @@ export class Model3DView {
             // A flat view's camera is its own, not the scene's.
             if (!id || !this.hooks.onCameraMoved || this._paneOrthoActive()) return;
             const entry = this._entries.get(id);
-            this.hooks.onCameraMoved(id, this.readTransform(this.activeCameraObject(),
-                                                            entry && entry.item), live);
+            this.hooks.onCameraMoved(id, this._aimReported(id, this.readTransform(this.activeCameraObject(),
+                                                            entry && entry.item)), live);
         };
         this._reportCamera = reportCamera;
         controls.addEventListener("change", () => {
-            if (this._navigating) reportCamera(true);
+            // The controls looked at their centre: a scene camera's roll goes back on.
+            if (this._navigating) { this._aimNavChange(); reportCamera(true); }
             this.requestRender();
         });
-        controls.addEventListener("start", () => { this._navigating = true; });
+        controls.addEventListener("start", () => {
+            this._navigating = true;
+            // Their centre onto the camera's view axis, or its target (imageViewer_cameraAim3d.js).
+            this._aimNavStart();
+        });
         controls.addEventListener("end", () => {
             this._navigating = false;
             reportCamera(false);
@@ -535,8 +544,12 @@ export class Model3DView {
         const hit = this._surfaceUnder(e);
         const pos = cam.getWorldPosition(new THREE.Vector3());
         const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.getWorldQuaternion(new THREE.Quaternion()));
+        // A scene camera: the orbit centre on its view axis first; one with a
+        // look-at target tumbles about that target, whatever is under the cursor.
+        this._aimNavStart();
+        const aimed = this._aimNav && this._entries.get(this._aimNav.id) && this._entries.get(this._aimNav.id).aimTarget;
         let pivot;
-        if (hit) {
+        if (hit && !aimed) {
             pivot = hit.clone();
             // The orbit centre onto the view axis, at the hit's depth: nothing
             // on screen moves, and the controls stay consistent.
@@ -627,6 +640,8 @@ export class Model3DView {
         if (this._mqJustBoxed) { this._mqJustBoxed = false; return; }
         if (Math.abs(e.clientX - d.x) > 3 || Math.abs(e.clientY - d.y) > 3) return;
         if (this.gizmo && this.gizmo.dragging) return;
+        // A press on a camera target's gizmo is that gizmo's, not a pick.
+        if (this._aimGizmoHot()) return;
         if (this._walk) return;
         const pin = this.pickFeedbackPin(e);
         if (pin && this.hooks.onPinClick) { this.hooks.onPinClick(pin); return; }
@@ -720,6 +735,8 @@ export class Model3DView {
             this.scene.remove(this.gizmoHelper);
             this.gizmoHelper = null;
         }
+        // The camera target's gizmo is bound to the canvas too.
+        this._aimDisposeGizmo();
         // Spark's renderer belongs to the WebGL renderer it was made with; the
         // rebuilt one gets its own (_ensureSpark, from _initRenderer).
         if (this._spark) {
@@ -815,7 +832,18 @@ export class Model3DView {
         // sets each mixer to the frame, so scrubbing and playing agree.
         // update() reports whether damping moved the camera; keep going until
         // it has settled.
-        if (this.controls && this.controls.enabled && this.controls.update(dt)) again = true;
+        //
+        // Not while they drive a scene camera looked through: update() makes
+        // the camera look at the controls' centre, and doing that every frame
+        // is what made every camera look at a target, its own rotation and
+        // roll overruled (Sebastian 2026-11-12). The controls still update it
+        // on each step of a drag, which _aimNavStart / _aimNavChange keep
+        // true to the camera (imageViewer_cameraAim3d.js); no damping there,
+        // since a coast after the drag would move the camera unreported.
+        const sceneCam = !!(this.controls && this.controls.object && this.controls.object !== this.camera
+            && this.controls.object.userData && this.controls.object.userData.imageViewerItemId);
+        if (this.controls) this.controls.enableDamping = !sceneCam;
+        if (this.controls && this.controls.enabled && !sceneCam && this.controls.update(dt)) again = true;
         // Wind and walking run the loop for as long as they last.
         if (this._worldTick(dt)) again = true;
         if (!this._paneRenderAll()) {
@@ -1058,8 +1086,10 @@ export class Model3DView {
         // to hear about it.
         if (cam !== this.camera && this.hooks.onCameraMoved) {
             const moved = this._entries.get(this.scene3d.activeCamera);
-            this.hooks.onCameraMoved(this.scene3d.activeCamera,
-                                     this.readTransform(cam, moved && moved.item));
+            const t = this.readTransform(cam, moved && moved.item);
+            // A camera with a look-at target now looks at the middle of the scene.
+            if (moved && moved.aimTarget) t.aimTarget = center.toArray();
+            this.hooks.onCameraMoved(this.scene3d.activeCamera, t);
         }
 
         // ComfyUI's grid is a fixed 20 units. Scaled by powers of ten here, so a
@@ -1096,6 +1126,7 @@ export class Model3DView {
     setGrid(on) {
         this.showGrid = !!on;
         if (this.grid) this.grid.visible = this.showGrid;
+        this._gridOriginSync();
         this._syncToolbar();
         this._gridMenuSync();
         this.requestRender();
@@ -1632,6 +1663,7 @@ export class Model3DView {
         if (!full) return;
         if (entry.axes) { this._bodyOf(entry).remove(entry.axes); entry.axes.dispose && entry.axes.dispose(); entry.axes = null; }
         if (entry.helper) { this.scene.remove(entry.helper); entry.helper.dispose(); entry.helper = null; }
+        this._aimDrop(entry);
         if (this.gizmo && this.gizmo.object === entry.root) this.gizmo.detach();
         // It may hang under a group rather than at the top of the scene.
         const top = entry.top || entry.root;
@@ -1694,6 +1726,8 @@ export class Model3DView {
                     local.decompose(entry.root.position, entry.root.quaternion, entry.root.scale);
                 }
             }
+            // A camera with its look-at on faces its target (imageViewer_cameraAim3d.js).
+            if (entry.camera) this._aimApply(entry);
             const shownByLayer = !(layers.get(item.id) && !layers.get(item.id).visible);
             entry.root.visible = item.visible !== false && this._visibleInTree(item) && shownByLayer;
             if (entry.camera) {
@@ -1734,6 +1768,8 @@ export class Model3DView {
         this._syncGate();
         // An Atlas world's views and point cloud (imageViewer_atlas3d.js).
         this._atlasSync();
+        // Cameras' look-at targets: the cross, the line, the selected one's gizmo.
+        this._aimSync();
         this.requestRender();
     }
 
@@ -2213,9 +2249,12 @@ export class Model3DView {
             // `live`: the object is already where the gizmo put it, so the scene
             // only has to take the numbers — rebuilding the panel and rewriting
             // the node's widget on every mouse move is what that would cost.
+            // A camera with a look-at target keeps facing it while it is moved (only its roll turns).
+            if (entry && entry.camera && entry.aimTarget) this._aimOrient(entry.root, entry.aimTarget);
             if (entry && this.hooks.onTransform) {
                 this.hooks.onTransform(this.selected, this.readTransform(entry.root, entry.item), true);
             }
+            if (entry && entry.aimTarget) this._aimSync();
             if (entry && entry.helper) entry.helper.update();
             // A control (or the rig group above them) poses its character while
             // it is dragged, not only when the mouse lets go.
@@ -2245,6 +2284,7 @@ export class Model3DView {
         // No scene, or nothing selected: no gizmo to show.
         if (!entry || !this.scene3d) {
             if (this.gizmo) this.gizmo.detach();
+            this._aimSync();
             return;
         }
         this._ensureGizmo();
@@ -2263,6 +2303,8 @@ export class Model3DView {
             this.gizmo.setMode(this.gizmoMode);
             this.gizmo.attach(entry.root);
         }
+        // The look-at target's gizmo follows the selection.
+        this._aimSync();
     }
 
     /** The transform of a three object, in the scene's own units (degrees). */
@@ -2334,7 +2376,11 @@ export class Model3DView {
             if (this.gizmo) this.gizmo.camera = cam;
             // Looking through a camera, the orbit pivot sits in front of it, so
             // dragging turns the shot rather than swinging it around the origin.
-            if (id) {
+            // A camera with a look-at target orbits that target.
+            const aimEntry = id ? this._entries.get(id) : null;
+            if (aimEntry && aimEntry.aimTarget) {
+                this.controls.target.copy(aimEntry.aimTarget);
+            } else if (id) {
                 const dir = new this.libs.THREE.Vector3(0, 0, -1).applyQuaternion(cam.getWorldQuaternion(new this.libs.THREE.Quaternion()));
                 const at = cam.getWorldPosition(new this.libs.THREE.Vector3()).add(dir.multiplyScalar(5));
                 this.controls.target.copy(at);
@@ -2429,9 +2475,12 @@ export class Model3DView {
         const r = this._rendering;
         if (!r) return;
         const hide = (obj) => { if (obj && obj.visible) { r.restore.push([obj, "visible", true]); obj.visible = false; } };
-        if (!r.opts.grid) hide(this.grid);
+        if (!r.opts.grid) { hide(this.grid); hide(this.gridOrigin); }
         hide(this.gizmoHelper);
+        hide(this._aimGizmoHelper);
         hide(this._pivotMark);
+        // Cameras' look-at targets are handles, never in a picture.
+        for (const entry of this._entries.values()) hide(entry.aimViz);
         hide(this._pinGroup);           // feedback pins are notes, not part of the shot
         for (const box of (this._alsoBoxes || new Map()).values()) hide(box);
         for (const j of (this._joints || new Map()).values()) hide(j.group);
@@ -2649,3 +2698,4 @@ Object.assign(Model3DView.prototype, View3DToolsMixin);
 Object.assign(Model3DView.prototype, View3DPanesMixin);
 Object.assign(Model3DView.prototype, View3DGridMixin);
 Object.assign(Model3DView.prototype, Atlas3DMixin);
+Object.assign(Model3DView.prototype, CameraAim3DMixin);

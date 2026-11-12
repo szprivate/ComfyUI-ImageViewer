@@ -357,7 +357,7 @@ class MenuBarPaneTests(unittest.TestCase):
         self.assertEqual(after["lay"]["divisions"], 80)
         self.assertEqual(after["scale"], 1)
         self.assertTrue(after["inScene"] and after["visible"])
-        self.assertEqual(after["kept"], {"size": 40, "spacing": 0.5, "major": 10, "auto": False})
+        self.assertEqual(after["kept"], {"size": 40, "spacing": 0.5, "major": 10, "auto": False, "origin": True})
         self.assertIn("40 across", after["note"])
         self.assertEqual(mode_before, mode_after)
         self.assertTrue(closed)

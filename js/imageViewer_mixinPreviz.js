@@ -14,6 +14,7 @@ import { app } from "../../scripts/app.js";
 import * as S from "./imageViewer_scene3d.js";
 import * as L from "./imageViewer_sceneLayers.js";
 import { pruneConstraints } from "./imageViewer_constraintData.js";
+import { AIM_PROPS, aimOn } from "./imageViewer_cameraAim.js";
 import { bakedCopy } from "./imageViewer_constraints.js";
 import * as Q from "./imageViewer_clipSeqData.js";
 // Registers the layers' blend with the scene model (evaluateIn).
@@ -713,6 +714,10 @@ export const PrevizMixin = {
             }
             write(item, prop, value);
         }
+        // Navigating through a camera with a look-at target moves the target too.
+        if (Array.isArray(transform.aimTarget) && aimOn(item)) {
+            AIM_PROPS.forEach((p, i) => write(item, p, transform.aimTarget[i]));
+        }
         // Mid-drag the scene only needs the numbers; the panel, the node widget
         // and the saved state catch up when the drag ends (onTransformEnd).
         if (live) this._previzRefreshFields();
@@ -744,7 +749,7 @@ export const PrevizMixin = {
         const frame = Math.round(this.currentFrame || 0);
         for (const item of items) {
             const props = prop ? [prop] : (item.kind === "camera"
-                ? ["position", "rotation", "fov"]
+                ? ["position", "rotation", "fov", ...(aimOn(item) ? AIM_PROPS : [])]
                 : item.kind === "control"
                     ? (item.control && item.control.type === "ik" ? ["position", "rotation", "ikfk"] : ["position", "rotation"])
                     : ["position", "rotation", "scale"]);

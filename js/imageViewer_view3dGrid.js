@@ -8,12 +8,20 @@
 // the ▾ beside the Grid button and from View > Grid options…, and kept per
 // viewer in localStorage.
 //
+// The world origin is marked (Sebastian 2026-11-12, "Show origin", on by
+// default): the X axis drawn red and the Z axis blue across the grid, a short
+// green Y stub and a dot where they meet - its own object beside the grid, in
+// world axes, so a flat pane's turned grid does not turn it.
+//
 // The pure part (cleanGridOptions, gridLayout) is tested under node in
 // tests/test_view3d_grid.mjs; the mixin goes onto Model3DView.
 
 export const GRID_KEY = "imageviewer.viewer.grid3d";
 
-export const GRID_DEFAULTS = Object.freeze({ size: 20, spacing: 1, major: 10, auto: true });
+export const GRID_DEFAULTS = Object.freeze({ size: 20, spacing: 1, major: 10, auto: true, origin: true });
+
+// The origin's colours: the axes as the gizmo and the orientation axes draw them.
+export const ORIGIN_COLORS = Object.freeze({ x: 0xe0464b, y: 0x5ec461, z: 0x4a86e8 });
 
 // Limits: a grid of more than MAX_LINES lines per side is drawn as that many
 // (the spacing grows), so a typo cannot build a million-line helper.
@@ -36,6 +44,7 @@ export function cleanGridOptions(o) {
         spacing: num(src.spacing, GRID_LIMITS.spacing, GRID_DEFAULTS.spacing),
         major: Math.round(num(src.major, GRID_LIMITS.major, GRID_DEFAULTS.major)),
         auto: src.auto === undefined ? GRID_DEFAULTS.auto : !!src.auto,
+        origin: src.origin === undefined ? GRID_DEFAULTS.origin : !!src.origin,
     };
 }
 
@@ -46,6 +55,21 @@ export function cleanGridOptions(o) {
  * the lines would be more than MAX_LINES), and `majors`: the line indices
  * from the centre (positive) that are brighter.
  */
+/**
+ * The origin marker's lines, in the grid's units before its scale: the X axis
+ * and the Z axis across the grid (from edge to edge), and Y a stub of two cells
+ * up from the floor. Each is [from, to, axis].
+ */
+export function originLines(lay) {
+    const h = lay.size / 2;
+    const up = Math.min(h, lay.spacing * 2);
+    return [
+        [[-h, 0, 0], [h, 0, 0], "x"],
+        [[0, 0, 0], [0, up, 0], "y"],
+        [[0, 0, -h], [0, 0, h], "z"],
+    ];
+}
+
 export function gridLayout(opts) {
     const o = cleanGridOptions(opts);
     let spacing = o.spacing;
@@ -85,6 +109,7 @@ export const View3DGridMixin = {
         saveOptions(next);
         if (!next.auto) this._gridAutoScale = 1;
         this._gridRebuild();
+        this._gridOriginSync();
         this._gridMenuSync();
         return { ...next };
     },
@@ -95,6 +120,55 @@ export const View3DGridMixin = {
     _gridSetAutoScale(scale) {
         this._gridAutoScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
         if (this.grid) this.grid.scale.setScalar(this.gridOptions().auto ? this._gridAutoScale : 1);
+        this._gridOriginSync();
+    },
+
+    /**
+     * The world origin's marker: made (or remade, when the grid's layout
+     * changed) beside the grid, scaled and shown with it.
+     */
+    _gridOriginSync() {
+        if (!this.libs || !this.scene || !this.grid) return;
+        const { THREE } = this.libs;
+        const lay = this.grid.userData.gridLayout || gridLayout(this.gridOptions());
+        const key = `${lay.size}|${lay.spacing}`;
+        let o = this.gridOrigin;
+        if (o && o.userData.key !== key) {
+            o.parent && o.parent.remove(o);
+            o.traverse((c) => { c.geometry && c.geometry.dispose(); c.material && c.material.dispose(); });
+            o = this.gridOrigin = null;
+        }
+        if (!o) {
+            o = new THREE.Group();
+            o.name = "gridorigin";
+            o.userData.key = key;
+            const pos = [], col = [];
+            for (const [a, b, axis] of originLines(lay)) {
+                const c = new THREE.Color(ORIGIN_COLORS[axis]);
+                pos.push(...a, ...b);
+                col.push(c.r, c.g, c.b, c.r, c.g, c.b);
+            }
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+            geo.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+            const lines = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ vertexColors: true }));
+            lines.name = "gridorigin-axes";
+            // Drawn after the grid, so on its centre lines the colour wins (equal depth passes).
+            lines.renderOrder = 1;
+            const dotGeo = new THREE.BufferGeometry();
+            dotGeo.setAttribute("position", new THREE.Float32BufferAttribute([0, 0, 0], 3));
+            const dot = new THREE.Points(dotGeo, new THREE.PointsMaterial({ color: 0xffffff, size: 6, sizeAttenuation: false }));
+            dot.name = "gridorigin-dot";
+            dot.renderOrder = 1;
+            o.add(lines, dot);
+            this.scene.add(o);
+            this.gridOrigin = o;
+        }
+        // The scene can be made again under it (two calls racing to load three).
+        if (o.parent !== this.scene) this.scene.add(o);
+        o.scale.copy(this.grid.scale);
+        o.visible = !!(this.grid.visible && this.gridOptions().origin);
+        this.requestRender && this.requestRender();
     },
 
     /** A THREE.GridHelper for the options, with brighter lines every `major` cells. */
@@ -220,6 +294,16 @@ export const View3DGridMixin = {
         syncs.push(() => { autoBox.checked = this.gridOptions().auto; });
         menu.append(mk("div", "model-display-sep"), auto);
 
+        const origin = mk("label", "model-display-row");
+        origin.title = "Mark the world origin: the X axis red and the Z axis blue across the grid, Y a short green line up";
+        const originBox = mk("input");
+        originBox.type = "checkbox";
+        originBox.dataset.grid = "origin";
+        originBox.onchange = () => this.setGridOptions({ origin: originBox.checked });
+        origin.append(originBox, mk("span", "", "Show origin"));
+        syncs.push(() => { originBox.checked = this.gridOptions().origin; });
+        menu.append(origin);
+
         const note = mk("div", "model-grid-note");
         syncs.push(() => {
             const e = this.gridEffective();
@@ -233,7 +317,7 @@ export const View3DGridMixin = {
         menu.append(note);
 
         const reset = mk("button", "model-btn model-grid-reset", "Reset");
-        reset.title = "Back to 20 units, a line every unit, scaled with the model";
+        reset.title = "Back to 20 units, a line every unit, scaled with the model, the origin shown";
         reset.onclick = () => this.resetGridOptions();
         menu.append(reset);
 

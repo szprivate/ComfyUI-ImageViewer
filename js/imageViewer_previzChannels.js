@@ -19,6 +19,7 @@
 // panel nor steals the field you are typing in.
 import * as S from "./imageViewer_scene3d.js";
 import { constraintOf, parseWeightProp, weightRange } from "./imageViewer_constraintData.js";
+import { AIM_LABELS, AIM_PROPS, aimOn, aimSettings, defaultAimTarget, isAimProp } from "./imageViewer_cameraAim.js";
 
 // id → [prop, component, label, step]; component is null for a lone number.
 const TRANSFORM = [
@@ -135,7 +136,7 @@ export const PrevizChannelsMixin = {
         const scene = this.previzScene();
         const looking = !!(item && scene && scene.activeCamera === item.id);
         // Everything that decides WHICH rows there are. Values are not in it.
-        const sig = item ? `${ids.join(",")}|${item.kind}|${looking}|${this._cbConstraintSig ? this._cbConstraintSig(item) : ""}|${Object.keys(item.attrs || {}).join(",")}|${this._cbMorphs(item).length}` : "";
+        const sig = item ? `${ids.join(",")}|${item.kind}|${looking}|${this._cbConstraintSig ? this._cbConstraintSig(item) : ""}|${Object.keys(item.attrs || {}).join(",")}|${this._cbMorphs(item).length}|${aimOn(item)}` : "";
         if (sig !== ui.sig) {
             ui.sig = sig;
             this._cbBuildRows(ui, item, ids, looking);
@@ -274,6 +275,26 @@ export const PrevizChannelsMixin = {
             row.append(tag, sel);
             t.append(row);
             ui.rows.set("preset", { row, input: sel, kind: "preset" });
+            // Look At: off by default; on, the camera faces its target and the
+            // target's numbers are channels (imageViewer_cameraAim.js).
+            {
+                valid.add("aim");
+                const r2 = doc.createElement("div");
+                r2.className = "cb-row";
+                r2.dataset.ch = "aim";
+                const tag2 = Object.assign(doc.createElement("span"), { className: "cb-label", textContent: "Look At" });
+                tag2.title = "On: the camera turns to face its target, which is dragged in the viewport while the camera is selected; Rotate Z is then its roll";
+                const aimSel = doc.createElement("select");
+                aimSel.className = "cb-val cb-sel";
+                for (const v of ["off", "on"]) aimSel.append(Object.assign(doc.createElement("option"), { value: v, textContent: v }));
+                aimSel.onchange = () => this.previzSetAimOn(aimSel.value === "on");
+                r2.append(tag2, aimSel);
+                t.append(r2);
+                ui.rows.set("aim", { row: r2, input: aimSel, kind: "aim" });
+            }
+            if (aimOn(item)) {
+                AIM_PROPS.forEach((p, i) => numberRow(p, p, null, AIM_LABELS[i], 0.1, t));
+            }
         } else if (item.kind === "control" && item.control && item.control.type === "ik") {
             // 1 follows this IK control, 0 the limb's FK controls; keyable.
             const t = shape(`${item.name}Shape`);
@@ -373,6 +394,8 @@ export const PrevizChannelsMixin = {
                 r.row.classList.toggle("keyed-now", keys.some((k) => k.f === frame));
             } else if (r.kind === "visible") {
                 r.input.value = item.visible === false ? "off" : "on";
+            } else if (r.kind === "aim") {
+                if (focused !== r.input) r.input.value = aimOn(item) ? "on" : "off";
             } else if (r.kind === "preset") {
                 const [w, h] = S.cameraResolution(item);
                 const match = RESOLUTION_PRESETS.find(([, pw, ph]) => pw === w && ph === h);
@@ -432,7 +455,8 @@ export const PrevizChannelsMixin = {
     previzSetChannel(prop, comp, value, { live = false, from = null } = {}) {
         const items = this._cbItems();
         if (!items.length) return;
-        const label = prop === "fov" ? "field of view" : S.isExtraProp(prop) ? "constraint weight" : prop;
+        const label = prop === "fov" ? "field of view" : isAimProp(prop) ? "look-at target"
+            : S.isExtraProp(prop) ? "constraint weight" : prop;
         if (live) this.previzBeginDrag(`set ${label}`);
         else if (!this._previzDragging) this.previzSnapshot(`set ${label}`);
         const frame = Math.round(this.currentFrame || 0);
@@ -445,6 +469,12 @@ export const PrevizChannelsMixin = {
                 const res = S.cameraResolution(item);
                 res[comp] = Math.max(1, Math.round(v));
                 item.resolution = res;
+                continue;
+            }
+            if (isAimProp(prop)) {
+                // A camera's look-at target: only on cameras that look at one.
+                if (!aimOn(item)) continue;
+                this._cbWrite(item, prop, v, frame);
                 continue;
             }
             if (S.isExtraProp(prop)) {
@@ -531,6 +561,55 @@ export const PrevizChannelsMixin = {
         this.previzSnapshot(on ? "show" : "hide");
         for (const item of items) item.visible = !!on;
         this.previzChanged();
+    },
+
+    /**
+     * Switch a look-at target on or off, for every selected camera. On, the
+     * target goes where the camera already looks (so nothing jumps) unless it
+     * has one; off, the camera keeps the direction it faced, written into its
+     * rotation at this frame.
+     */
+    previzSetAimOn(on) {
+        const cams = this._cbItems().filter((it) => it.kind === "camera" && aimOn(it) !== !!on);
+        if (!cams.length) return;
+        this.previzSnapshot(on ? "look at on" : "look at off");
+        const frame = Math.round(this.currentFrame || 0);
+        const scene = this.previzScene();
+        const view = this._modelView && this._modelView();
+        for (const cam of cams) {
+            if (on) {
+                const had = cam.aim && Array.isArray(cam.aim.target);
+                const at = S.evaluateIn(scene, cam, frame);
+                // Looking through it, the orbit centre is where the view is looking.
+                let d = null;
+                if (view && view.controls && scene.activeCamera === cam.id) {
+                    const t = view.controls.target, p = at.position;
+                    d = Math.hypot(t.x - p[0], t.y - p[1], t.z - p[2]);
+                }
+                cam.aim = { on: true, target: had ? aimSettings(cam).target : defaultAimTarget({ position: at.position, rotation: at.rotation }, d) };
+            } else {
+                // What the view shows now (the aimed direction), kept as its rotation.
+                const entry = view && view._entries && view._entries.get(cam.id);
+                if (entry && entry.root && view.readTransform) {
+                    this._cbWrite(cam, "rotation", view.readTransform(entry.root, cam).rotation, frame);
+                }
+                cam.aim = { ...aimSettings(cam), on: false };
+            }
+        }
+        this.previzChanged();
+    },
+
+    /** A camera's look-at target dragged in the viewport: its three channels. */
+    previzSetAimTarget(id, target, { live = false } = {}) {
+        const scene = this.previzScene();
+        const cam = S.itemById(scene, id);
+        if (!cam || !aimOn(cam) || !Array.isArray(target)) return;
+        if (live) this.previzBeginDrag(`move ${cam.name}'s target`);
+        else if (!this._previzDragging) this.previzSnapshot(`move ${cam.name}'s target`);
+        const frame = Math.round(this.currentFrame || 0);
+        AIM_PROPS.forEach((p, i) => this._cbWrite(cam, p, Number(target[i]) || 0, frame));
+        if (live) this._previzRefreshFields();
+        else this.previzChanged();
     },
 
     /** A camera's picture size, for every selected camera. */
@@ -648,6 +727,7 @@ export const PrevizChannelsMixin = {
                 if (p === "ikfk" && !(item.kind === "control" && item.control && item.control.type === "ik")) continue;
                 if (p.startsWith("attr:") && !(item.attrs && item.attrs[p.slice(5)])) continue;
                 if (p.startsWith("bs:") && item.kind !== "model") continue;
+                if (isAimProp(p) && !aimOn(item)) continue;
                 if (item.kind === "control" && (p === "scale" || p === "pivot")) continue;
                 if (item.kind === "camera" && (p === "scale" || p === "pivot")) continue;
                 S.keyPose(scene, item, p, frame, S.currentValue(scene, item, p, frame), this._previzEase || "smooth");
