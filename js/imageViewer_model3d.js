@@ -33,6 +33,7 @@ import { View3DGridMixin } from "./imageViewer_view3dGrid.js";
 import { Atlas3DMixin } from "./imageViewer_atlas3d.js";
 import { View3DPathTraceMixin } from "./imageViewer_view3dPathTrace.js";
 import { CameraAim3DMixin } from "./imageViewer_cameraAim3d.js";
+import { View3DVideoPlaneMixin, isVideoSrc } from "./imageViewer_view3dVideoPlane.js";
 import { displayStates, isPickable } from "./imageViewer_sceneLayers.js";
 import { constrainedLocals } from "./imageViewer_constraints.js";
 
@@ -1468,8 +1469,18 @@ export class Model3DView {
             return entry;
         }
         try {
-            const texture = await this._loadTexture(url);
-            if (!this._entries.has(item.id)) { texture.dispose(); return entry; }
+            // A film is a plane too, its frame the scene's (imageViewer_view3dVideoPlane.js).
+            const film = isVideoSrc(item.src);
+            const texture = film ? await this._loadVideoTexture(url) : await this._loadTexture(url);
+            if (!this._entries.has(item.id) || entry.plane !== mesh) {
+                if (film) { const v = texture.userData.imageViewerVideo; try { v.removeAttribute("src"); v.load(); } catch (_) {} }
+                texture.dispose();
+                return entry;
+            }
+            if (film) {
+                entry.video = texture.userData.imageViewerVideo;
+                this._videoPlaneSeek(entry, item, this.sceneFrame || 0);
+            }
             texture.colorSpace = THREE.SRGBColorSpace;
             material.map = texture;
             material.needsUpdate = true;
@@ -1664,6 +1675,7 @@ export class Model3DView {
     }
 
     _disposeEntry(entry, full) {
+        if (entry.video) this._videoPlaneDrop(entry);
         if (entry.mixer) { entry.mixer.stopAllAction(); entry.mixer = null; }
         if (entry.worldExtras || entry.envApplied || entry.terrain || entry.motion) this._worldDispose(entry);
         if (entry.object) {
@@ -1764,6 +1776,8 @@ export class Model3DView {
                 if (at.fileClips || entry.seqDriven) this._seqDriveMixer(entry, at.fileClips || [], fps);
                 else entry.mixer.setTime(Math.max(0, frame / fps));
             }
+            // A film on an image plane is sought to the frame, never played.
+            if (entry.video) this._videoPlaneSeek(entry, item, frame);
             // A cache holds a different shape per frame, so it is re-read.
             if (this._isCache(item) && entry.cacheFrame !== Math.round(frame)) {
                 this._queueCacheReload(entry, item);
@@ -2736,3 +2750,4 @@ Object.assign(Model3DView.prototype, View3DGridMixin);
 Object.assign(Model3DView.prototype, Atlas3DMixin);
 Object.assign(Model3DView.prototype, View3DPathTraceMixin);
 Object.assign(Model3DView.prototype, CameraAim3DMixin);
+Object.assign(Model3DView.prototype, View3DVideoPlaneMixin);

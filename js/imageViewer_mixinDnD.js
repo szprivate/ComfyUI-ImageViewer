@@ -110,24 +110,12 @@ export const DnDMixin = {
             const items = Array.isArray(payload.items) ? payload.items : [payload];
             // Dropped onto a cut that is playing, they are clips for it.
             if (this.isEditTab && this.isEditTab() && this._editTlAdd) { this._editTlAdd(items, null); return; }
-            // Dropped onto a previz scene, models join the scene instead of
-            // replacing what the tab is showing.
-            if (this.isPrevizTab && this.isPrevizTab() && items.some((it) => this._frameIsModel(it))) {
-                this.previzAddModels(items.filter((it) => this._frameIsModel(it)));
+            // Dropped onto the 3D space, it goes INTO the scene instead of
+            // replacing what the tab shows: models, splats and 3D files are
+            // imported, pictures and films become image planes.
+            if (this.isPrevizTab && this.isPrevizTab() && this.previzAddDropped) {
+                this.previzAddDropped(items);
                 return;
-            }
-            // ...and a picture becomes an image plane, for the same reason: on
-            // a 3D tab what you are dropping onto is the scene.
-            if (this.isPrevizTab && this.isPrevizTab() && this.previzAddImagePlane) {
-                const pictures = items.filter((it) => it && it.path
-                    && !this._frameIsModel(it) && !this._frameIsVideo(it));
-                if (pictures.length === items.length && pictures.length) {
-                    for (const pic of pictures) {
-                        this.previzAddImagePlane({ path: pic.path, name: pic.filename || pic.name
-                            || this._basename(pic.path), external: true });
-                    }
-                    return;
-                }
             }
             this._openDragItemsInViewer(items);
         });
