@@ -653,20 +653,38 @@ class RigToolsBrowserTests(unittest.TestCase):
             body_asks = []
 
             def body_pose(route, request):
-                body_asks.append(json.loads(request.post_data or "{}"))
-                route.fulfill(status=200, content_type="application/json", body=json.dumps(
-                    {"graph": {"4": {"class_type": "ImageViewerBodyPose", "inputs": {}}}, "output": "4", "image": "rig_pose/x.png"}))
+                ask = json.loads(request.post_data or "{}")
+                body_asks.append(ask)
+                if str(ask["src"].get("path", "")).endswith(".mp4"):           # a film: two parts of 15 and 10 frames
+                    answer = {"film": True, "fps": 25.0, "width": 1280, "height": 720, "frames": list(range(25)),
+                              "parts": [{"graph": {"4": {"class_type": "ImageViewerBodyPose", "inputs": {}}, "part": [a, n]},
+                                         "output": "4", "first": a, "count": n} for a, n in ((0, 15), (15, 10))]}
+                else:
+                    answer = {"graph": {"4": {"class_type": "ImageViewerBodyPose", "inputs": {}}}, "output": "4", "image": "rig_pose/x.png"}
+                route.fulfill(status=200, content_type="application/json", body=json.dumps(answer))
             pg.route("**/imageviewer/rig/body_pose", body_pose)
-            pg.evaluate("""(world) => {
+            pg.evaluate("""([world, film]) => {
                 const p = window.__panel, tools = p._previzRigTools.bind(p);
                 p._previzRigTools = async () => Object.assign(await tools(), { sam3dbody: { ready: true, missing: [] } });
-                p._paintQueue = async (g) => { window.__queued = g; return 'pid'; };
-                p._paintWait = async (id, out, tell) => tell.pick({ imageviewer_body: [{ people: [{ landmarks: world }] }] });
-            }""", fake_sitter()["frames"][0]["world"])
+                window.__parts = [];
+                p._paintQueue = async (g) => { window.__queued = g; if (g.part) window.__parts.push(g.part); return 'pid'; };
+                p._paintWait = async (id, out, tell) => {
+                    const g = window.__queued;
+                    if (!g.part) return tell.pick({ imageviewer_body: [{ people: [{ landmarks: world }] }] });
+                    const frames = film.frames.slice(g.part[0], g.part[0] + g.part[1]).map((f) => ({ world: f.world, image: f.image }));
+                    return tell.pick({ imageviewer_body: [{ people: [], frames, width: 960, height: 540 }] });
+                };
+            }""", [fake_sitter()["frames"][0]["world"], fake_track()])
             pg.evaluate("""async () => window.__panel.previzRigAgentRun({ id: 'p6', action: 'pose',
                              args: { model: 'Statue', frame: 70, image: 'D:/refs/sitter.png', fov: 40 } })""")
             sam = pg.evaluate("() => ['Hips', 'LeftHand', 'LeftArm', 'LeftFoot', 'LeftLeg'].map((b) => window.__boneAt(b, 70))")
             queued = pg.evaluate("() => window.__queued")
+            # A film read by SAM 3D Body: a graph per part, every frame's person put together and solved.
+            pg.evaluate("""async () => window.__panel.previzRigAgentRun({ id: 'v1', action: 'video_motion',
+                             args: { model: 'Statue', from: 100, path: 'D:/refs/walk.mp4', via: 'sam3d', film_to: 24,
+                                     step: 1, smooth: 0, fov: 45 } })""")
+            film_hips = pg.evaluate("() => [window.__boneAt('Hips', 100), window.__boneAt('Hips', 124)]")
+            parts = pg.evaluate("() => window.__parts")
         finally:
             pg.close()
         done = {b["id"]: b for k, b in self.requests if k == "agent_done" and b["state"] in ("done", "error")}
@@ -711,10 +729,15 @@ class RigToolsBrowserTests(unittest.TestCase):
         self.assertEqual(done["p5"]["result"].get("read_with"), "mediapipe")
         self.assertEqual(done["p6"]["state"], "done", done["p6"])
         self.assertEqual(done["p6"]["result"]["read_with"], "sam3d")
-        self.assertEqual(body_asks, [{"src": {"path": "D:/refs/sitter.png"}, "fov": 40}])
+        self.assertEqual(body_asks[0], {"src": {"path": "D:/refs/sitter.png"}, "fov": 40})
         self.assertEqual(queued["4"]["class_type"], "ImageViewerBodyPose")
         for a, b in zip(pic, sam):                                # the same landmarks: the same pose
             self.assertLess(math.dist(a, b), 1e-3 * stand)
+        self.assertEqual(done["v1"]["state"], "done", done["v1"])
+        self.assertEqual(done["v1"]["result"]["read_with"], "sam3d")
+        self.assertEqual(body_asks[-1], {"src": {"path": "D:/refs/walk.mp4"}, "start": 0, "end": 24, "step": 1, "fov": 45})
+        self.assertEqual(parts, [[0, 15], [15, 10]])
+        self.assertGreater(film_hips[1][0] - film_hips[0][0], 0.05)   # the person moved across the picture
         self.assertEqual(self.errors, [])
 
 

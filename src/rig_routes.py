@@ -22,7 +22,9 @@
                                         solved onto the character in the page (imageViewer_rigVideo.js)
     POST /imageviewer/rig/body_pose     {src, fov?} -> {graph, output, image}: the graph that reads a pose off a
                                         picture with ComfyUI's own SAM 3D Body nodes (body_pose.py), for the page to
-                                        queue; 409 {missing} without its nodes / weights. /rig/body_pose_download
+                                        queue; a film ({src, start?, end?, step?, smooth?}) -> {film, fps, width,
+                                        height, frames, parts: [{graph, output, first, count}]}, a graph per part
+                                        (Motion from video); 409 {missing} without its nodes / weights. /rig/body_pose_download
                                         fetches the weights ({} -> {job}; {job, cancel?} -> how far)
     POST /imageviewer/rig/lipsync       {src, fps, start?, seconds?, lead?, smooth?, strength?} -> mouth curves per
                                         frame (lipsync.py, in this process), put on blendshapes in the page
@@ -878,7 +880,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
                    else f"SAM 3D Body's weights are not in models/{body_pose.MODEL['folder']}")
             return web.json_response({"error": why, "missing": missing}, status=409)
         try:
-            src = media_src(body, PICTURE_EXTS, "picture")
+            src = media_src(body, PICTURE_EXTS | VIDEO_EXTS, "picture or film")
         except LookupError as e:
             return err(e, 404)
         except PermissionError as e:
@@ -889,8 +891,27 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
             fov = float(body.get("fov") or 0.0)
         except (TypeError, ValueError):
             return err("fov is a number of degrees")
+        fov = max(0.0, min(170.0, fov))
+        if os.path.splitext(src)[1].lower() in VIDEO_EXTS:
+            # A film: cut into short parts in ComfyUI's input folder, a graph per part for the page to queue.
+            try:
+                start, end = int(body.get("start") or 0), int(body.get("end") if body.get("end") is not None else -1)
+                step = max(1, min(8, int(body.get("step") or 1)))
+                smooth = float(body.get("smooth", 1.0) if body.get("smooth") is not None else 1.0)
+            except (TypeError, ValueError):
+                return err("start, end and step are whole frames, smooth a share 0..1")
+            try:
+                film = await off(body_pose.film_parts, src, folder_paths.get_input_directory(), start, end, step)
+            except ValueError as e:
+                return err(e)
+            except Exception as e:  # noqa: BLE001 - PyAV could not read it
+                return err(f"the film could not be read: {e}")
+            parts = [{"graph": body_pose.video_graph(p["name"], model, fov, smooth), "output": body_pose.OUTPUT_NODE,
+                      "first": p["first"], "count": p["count"], "film": p["name"]} for p in film["parts"]]
+            return web.json_response({"film": True, "fps": film["fps"], "width": film["width"], "height": film["height"],
+                                      "frames": film["frames"], "parts": parts})
         name = await off(body_pose.place_in_input, src, folder_paths.get_input_directory())
-        return web.json_response({"graph": body_pose.graph(name, model, max(0.0, min(170.0, fov))),
+        return web.json_response({"graph": body_pose.graph(name, model, fov),
                                   "output": body_pose.OUTPUT_NODE, "image": name})
 
     async def body_pose_download(request):

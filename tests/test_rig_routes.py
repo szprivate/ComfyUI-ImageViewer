@@ -601,6 +601,20 @@ class RigRoutes(unittest.TestCase):
         with open(os.path.join(self.dirs["output"], "hero.png"), "wb") as fh:
             fh.write(b"\x89PNG\r\n\x1a\nhero")
         saved_nodes, saved_list = sys.modules.get("nodes"), getattr(fp, "get_filename_list", None)
+        try:
+            import av
+        except ImportError:
+            av = None
+        if av is not None:                                     # a film of 12 frames at 25 fps, 640 x 360
+            oc = av.open(os.path.join(self.dirs["input"], "dance.mp4"), "w")
+            vs = oc.add_stream("libx264", rate=25)
+            vs.width, vs.height, vs.pix_fmt = 640, 360, "yuv420p"
+            for i in range(12):
+                for pkt in vs.encode(av.VideoFrame.from_ndarray(np.full((360, 640, 3), i * 20, np.uint8), format="rgb24")):
+                    oc.mux(pkt)
+            for pkt in vs.encode():
+                oc.mux(pkt)
+            oc.close()
 
         async def go(c):
             src = {"src": {"filename": "hero.png", "type": "output"}, "fov": 45}
@@ -612,11 +626,13 @@ class RigRoutes(unittest.TestCase):
             tools = await (await c.get("/imageviewer/rig/tools")).json()
             fp.get_filename_list = lambda folder: ["sam_3d_body_dinov3_bf16.safetensors"] if folder == "detection" else []
             ok = await c.post("/imageviewer/rig/body_pose", json=src)
-            film = await c.post("/imageviewer/rig/body_pose", json={"src": {"filename": "dance.mp4", "type": "input"}})
+            film = await c.post("/imageviewer/rig/body_pose", json={"src": {"filename": "dance.mp4", "type": "input"},
+                                                                     "start": 1, "end": 10, "step": 2, "smooth": 0.5})
+            sound = await c.post("/imageviewer/rig/body_pose", json={"src": {"filename": "hero.wav", "type": "output"}})
             return (none.status, await none.json(), weights.status, await weights.json(), tools,
-                    ok.status, await ok.json(), film.status)
+                    ok.status, await ok.json(), film.status, await film.json(), sound.status)
         try:
-            none_s, none, w_s, w, tools, ok_s, ok, film_s = self.run_c(go)
+            none_s, none, w_s, w, tools, ok_s, ok, film_s, film, sound_s = self.run_c(go)
         finally:
             if saved_nodes is None:
                 sys.modules.pop("nodes", None)
@@ -638,7 +654,22 @@ class RigRoutes(unittest.TestCase):
         self.assertTrue(ok["image"].startswith("rig_pose/"), ok)
         self.assertTrue(os.path.isfile(os.path.join(self.dirs["input"], *ok["image"].split("/"))))
         self.assertEqual(ok["graph"]["1"]["inputs"]["image"], ok["image"])
-        self.assertEqual(film_s, 400)
+        self.assertIn(sound_s, (400, 404))
+        if av is None:
+            return
+        # A film: cut into parts in the input folder, a LoadVideo -> ... -> ImageViewerBodyPose graph each.
+        self.assertEqual(film_s, 200, film)
+        self.assertTrue(film["film"])
+        self.assertEqual(film["frames"], [1, 3, 5, 7, 9])
+        self.assertEqual((film["width"], film["height"], film["fps"]), (640, 360, 25.0))
+        part = film["parts"][0]
+        self.assertEqual((part["first"], part["count"]), (0, 5))
+        g = part["graph"]
+        self.assertEqual(g["1"]["class_type"], "LoadVideo")
+        self.assertTrue(os.path.isfile(os.path.join(self.dirs["input"], *g["1"]["inputs"]["file"].split("/"))))
+        self.assertEqual(g["3"]["inputs"]["image"], ["5", 0])
+        self.assertEqual(g["6"]["inputs"]["strength"], 0.5)
+        self.assertEqual(g[part["output"]]["inputs"]["mhr_pose_data"], ["6", 0])
 
     def test_lipsync_reads_a_sound_into_mouth_curves(self):
         try:

@@ -4,8 +4,10 @@
 //   * Restyle motion…     the motion the character has, done another way (Kimodo: the hips'
 //                         path and timing - and, as close as asked, the hands, feet or whole
 //                         body every few frames - are its constraints, the prompt is the style);
-//   * Motion from video…  a person's motion in a film (MediaPipe's Pose Landmarker on the
-//                         server, solved onto the character here: imageViewer_rigVideo.js),
+//   * Motion from video…  a person's motion in a film (ComfyUI's own SAM 3D Body nodes, a graph
+//                         per part of the film queued from here - body_pose.py -, or MediaPipe's
+//                         Pose Landmarker on the server; solved onto the character here:
+//                         imageViewer_rigVideo.js),
 //                         optionally smoothed by Kimodo into motion that stands on its feet;
 //   * Lip sync from audio… mouth shapes read off a sound (src/lipsync.py) keyed on the
 //                         character's own blendshapes (imageViewer_rigLipsync.js);
@@ -178,15 +180,25 @@ export const PrevizRigAIMixin = {
     // ── Motion from a film ────────────────────────────────────────────────
 
     async previzVideoMotionDialog(modelId = this.previzRigModelOf()) {
-        const ready = await this._previzRigAIReady(modelId, "posetrack", () => this.previzVideoMotionDialog(modelId));
+        // SAM 3D Body (ComfyUI's own nodes) or the MediaPipe tracker: either will do.
+        const first = await this._previzRigTools();
+        const samReady = !!(first.sam3dbody && first.sam3dbody.ready);
+        const ready = samReady ? await this._previzRigAIReady(modelId, "sam3dbody", null)
+            : await this._previzRigAIReady(modelId, "posetrack", () => this.previzVideoMotionDialog(modelId));
         if (!ready) return;
         const { model, tools } = ready;
-        let media, at, step, inPlace, smooth, clean, prompt, feet, onLayer, filmFrom, filmTo;
+        const sam = tools.sam3dbody || {}, mpReady = !!(tools.posetrack && tools.posetrack.ready);
+        let media, at, step, inPlace, smooth, clean, prompt, feet, onLayer, filmFrom, filmTo, viaSel;
         await openExportDialog(this.container, {
             title: "Motion from video", kind: "character", where: false, name: model.name, go: "Track",
-            fixed: [{ value: "posetrack", label: "MediaPipe Pose Landmarker" }],
             rows: ({ el, row }) => {
                 media = this._previzRigMediaRow(el, row, { label: "Film", exts: FILM_EXTS, kind: "film" });
+                viaSel = el("select", "rd-in");
+                for (const [v, t, ok] of [["sam3d", "SAM 3D Body (ComfyUI)", sam.ready], ["mediapipe", "MediaPipe Pose Landmarker", mpReady]]) {
+                    const o = el("option", "", ok ? t : `${t} - not set up`); o.value = v; o.disabled = !ok; viaSel.append(o);
+                }
+                viaSel.value = sam.ready ? "sam3d" : "mediapipe";
+                if (!sam.ready && sam.why) viaSel.title = `SAM 3D Body: ${sam.why} (the Pose dialog fetches its weights)`;
                 filmFrom = Object.assign(el("input", "rd-in rd-num"), { type: "number", value: 0, min: 0 });
                 filmTo = Object.assign(el("input", "rd-in rd-num"), { type: "number", value: "", placeholder: "end" });
                 at = Object.assign(el("input", "rd-in rd-num"), { type: "number", value: Math.round(this.currentFrame || 0), min: 0 });
@@ -205,7 +217,7 @@ export const PrevizRigAIMixin = {
                 prompt.style.width = "100%";
                 feet = Object.assign(el("input"), { type: "checkbox", checked: true });
                 const lf = el("label", "rd-sub"); lf.append(feet, " Pin the feet where they stand");
-                const rows = [media.row, row("Film frames", filmFrom, el("span", "rd-sub", "to"), filmTo), row("Scene frame", at),
+                const rows = [media.row, row("Read with", viaSel), row("Film frames", filmFrom, el("span", "rd-sub", "to"), filmTo), row("Scene frame", at),
                               row("Read", step), row("Smoothing", smooth, el("span", "rd-sub", "frames")), row("Travel", lp),
                               row("Clean-up", lc), row("Clean-up prompt", prompt), row("Feet", lf)];
                 if (this.previzLayersAvailable()) rows.push(row("Layer", (onLayer = this._previzLayerBox(el, true)).label));
@@ -220,30 +232,51 @@ export const PrevizRigAIMixin = {
                     src, at: Number(at.value), filmFrom: Number(filmFrom.value) || 0,
                     filmTo: filmTo.value === "" ? null : Number(filmTo.value), step: Number(step.value) || 1,
                     smooth: Number(smooth.value), inPlace: inPlace.checked, clean: clean.checked, prompt: prompt.value,
-                    feet: feet.checked, layer: onLayer && onLayer.box.checked ? "new" : null,
+                    feet: feet.checked, layer: onLayer && onLayer.box.checked ? "new" : null, via: viaSel.value,
                     progress: (line) => progress(0.5, 1, line),
                 });
                 if (!out.ok) return { ok: false, message: out.message };
-                notice("success", "Motion from video", `${out.frames} frames keyed on ${model.name}${out.layer ? " on a new layer" : ""}.`);
+                notice("success", "Motion from video", `${out.frames} frames keyed on ${model.name}${out.layer ? " on a new layer" : ""}`
+                    + ` (read with ${out.via === "sam3d" ? "SAM 3D Body" : "MediaPipe"}).`);
                 return { ok: true };
             },
         });
     },
 
-    /** Track the person in a film and key their motion on the character from scene frame `at`. */
+    /**
+     * Track the person in a film and key their motion on the character from scene frame `at`.
+     * `via`: "sam3d" (ComfyUI's SAM 3D Body nodes), "mediapipe" (the pose tracker) or "auto"
+     * (SAM 3D Body when it is there). Answers { ok, frames, via, ... } or { ok: false, message }.
+     */
     async previzRigVideoMotion(modelId, { src, at = 0, filmFrom = 0, filmTo = null, step = 1, smooth = 1.5, inPlace = false,
-                                          clean = false, prompt = "", feet = true, layer = null, progress = null, fov = 50 } = {}) {
+                                          clean = false, prompt = "", feet = true, layer = null, progress = null, fov = 50,
+                                          via = "auto" } = {}) {
         const scene = this.previzScene();
         const info = this._previzRigMotionRest(modelId);
         if (!info) return { ok: false, message: "The character needs humanoid controls." };
         if (!src) return { ok: false, message: "No film." };
-        const job = await this._previzRigJob("/imageviewer/rig/video_pose", {
-            src, start: Math.max(0, Math.round(filmFrom)), end: filmTo == null ? -1 : Math.round(filmTo), step,
-        }, { progress });
-        if (job.state !== "done") return { ok: false, message: `The film was not tracked: ${job.error || job.state}` };
+        const range = { start: Math.max(0, Math.round(filmFrom)), end: filmTo == null ? -1 : Math.round(filmTo), step };
+        const tools = await this._previzRigTools();
+        const sam = !!(tools.sam3dbody && tools.sam3dbody.ready), mp = !!(tools.posetrack && tools.posetrack.ready);
+        const use = via === "sam3d" || via === "mediapipe" ? via : sam ? "sam3d" : mp ? "mediapipe" : null;
+        if (!use) {
+            return { ok: false, message: "Motion from video needs SAM 3D Body (its weights in models/detection: the Pose dialog fetches them) "
+                + "or the pose tracker (Rig → Set up…)." };
+        }
+        let track;
+        if (use === "sam3d") {
+            const got = await this._previzRigFilmSam3d(src, { ...range, fov, progress });
+            if (!got.ok) return got;
+            track = got.track;
+        } else {
+            if (!mp) return { ok: false, message: `The pose tracker is not set up: ${(tools.posetrack && tools.posetrack.why) || "Rig → Set up…"}` };
+            const job = await this._previzRigJob("/imageviewer/rig/video_pose", { src, ...range }, { progress });
+            if (job.state !== "done") return { ok: false, message: `The film was not tracked: ${job.error || job.state}` };
+            track = job.result;
+        }
         let motion;
         try {
-            motion = V.solveFilm(job.result, { smooth, inPlace, fov });
+            motion = V.solveFilm(track, { smooth, inPlace, fov });
         } catch (e) {
             return { ok: false, message: String(e.message || e) };
         }
@@ -265,8 +298,51 @@ export const PrevizRigAIMixin = {
             if (job2.state !== "done") return { ok: false, message: `Kimodo's clean-up failed: ${job2.error || job2.state}` };
             motion = job2.result;
         }
-        return this.previzRigApplyMotion(modelId, motion, { from, to, origin, feet, mode: "video", layer, keepEnds: false,
-                                                             label: "Video motion" });
+        const out = this.previzRigApplyMotion(modelId, motion, { from, to, origin, feet, mode: "video", layer, keepEnds: false,
+                                                                 label: "Video motion" });
+        return out && out.ok ? { ...out, via: use, read_with: use } : out;
+    },
+
+    /**
+     * A film read by ComfyUI's own SAM 3D Body nodes: the server cuts it into short parts in the
+     * input folder (/imageviewer/rig/body_pose, body_pose.film_parts), each part's graph is queued
+     * like Paint's Generate and its ImageViewerBodyPose answer carries every frame's person. Answers
+     * { ok, track } in the pose tracker's shape ({fps, width, height, frames: [{i, t, world, image}]}).
+     */
+    async _previzRigFilmSam3d(src, { start = 0, end = -1, step = 1, fov = 0, progress = null } = {}) {
+        if (progress) progress("Cutting the film for SAM 3D Body…");
+        const res = await fetch(api.apiURL("/imageviewer/rig/body_pose"), {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ src, start, end, step, fov }),
+        });
+        const prep = await res.json().catch(() => ({}));
+        if (!res.ok) return { ok: false, message: prep.error || `HTTP ${res.status}` };
+        if (!prep.film || !Array.isArray(prep.parts)) return { ok: false, message: "The server did not read that as a film." };
+        const fps = Number(prep.fps) || 24, total = (prep.frames || []).length;
+        const frames = (prep.frames || []).map((i) => ({ i, t: Math.round((i / fps) * 1e5) / 1e5, world: null, image: null }));
+        for (let p = 0; p < prep.parts.length; p++) {
+            const part = prep.parts[p];
+            const say = (t) => { if (progress) progress(`SAM 3D Body, frames ${part.first + 1}-${part.first + part.count} of ${total}${t ? `: ${t}` : ""}`); };
+            say("");
+            let answer;
+            try {
+                const id = await this._paintQueue(part.graph);
+                answer = await this._paintWait(id, part.output, {
+                    pick: (out) => (out && out.imageviewer_body && out.imageviewer_body[0]) || null,
+                    node: () => say("running"),
+                });
+            } catch (e) {
+                return { ok: false, message: `SAM 3D Body did not run: ${e.message || e}` };
+            }
+            const got = (answer && answer.frames) || (answer && answer.people && answer.people[0]
+                ? [{ world: answer.people[0].landmarks, image: null }] : []);
+            for (let k = 0; k < part.count && k < got.length; k++) {
+                const f = frames[part.first + k];
+                if (f && got[k]) { f.world = got[k].world || null; f.image = got[k].image || null; }
+            }
+        }
+        if (!frames.some((f) => f.world)) return { ok: false, message: "SAM 3D Body found no person in the film." };
+        return { ok: true, track: { fps, width: prep.width, height: prep.height, frames } };
     },
 
     // ── Lip sync ──────────────────────────────────────────────────────────
@@ -437,7 +513,8 @@ export const PrevizRigAIMixin = {
                 return this.previzRigVideoMotion(model.id, { src: a.src || (a.path ? { path: a.path } : null),
                     at: num(a.from, Math.round(this.currentFrame || 0)), filmFrom: num(a.film_from, 0),
                     filmTo: a.film_to == null ? null : num(a.film_to), step: num(a.step, 1), smooth: num(a.smooth, 1.5),
-                    inPlace: !!a.in_place, clean: !!a.clean, prompt: a.prompt || "", feet: a.feet !== false, layer: layerOpt });
+                    inPlace: !!a.in_place, clean: !!a.clean, prompt: a.prompt || "", feet: a.feet !== false, layer: layerOpt,
+                    via: a.via || "auto", fov: num(a.fov, 50) });
             case "lipsync":
                 return this.previzRigLipSync(model.id, { src: a.src || (a.path ? { path: a.path } : null),
                     at: num(a.from, Math.round(this.currentFrame || 0)), start: num(a.start, 0),

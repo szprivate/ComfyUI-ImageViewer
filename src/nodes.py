@@ -861,7 +861,8 @@ class ImageViewerScene3D:
 
 class ImageViewerBodyPose:
     """The first person SAM 3D Body found, handed to the viewer: the end of the graph the Pose
-    dialog queues for a pose from a picture (body_pose.graph). It returns no outputs, only its
+    dialog queues for a pose from a picture (body_pose.graph), and of Motion from video's graphs, one
+    per part of the film (body_pose.video_graph: every frame's person as ``frames``). It returns no outputs, only its
     ``ui`` answer (``imageviewer_body``: the people as MediaPipe's 33 landmarks), which the page
     reads off the prompt's ``executed`` message."""
 
@@ -877,9 +878,7 @@ class ImageViewerBodyPose:
 
     def hand_over(self, mhr_pose_data):
         from . import body_pose
-        people = body_pose.people_of(mhr_pose_data, 0)
-        size = (mhr_pose_data or {}).get("image_size") or (0, 0)
-        return {"ui": {"imageviewer_body": [{"people": people, "height": int(size[0]), "width": int(size[1])}]}}
+        return {"ui": {"imageviewer_body": [body_pose.hand_over(mhr_pose_data)]}}
 
 
 # mapping dictionaries for external use (nodes.py imports these)

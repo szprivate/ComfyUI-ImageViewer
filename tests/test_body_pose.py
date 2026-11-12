@@ -57,6 +57,65 @@ class BodyPose(unittest.TestCase):
         self.assertEqual(g["1"]["inputs"]["image"], "rig_pose/x.png")
         self.assertEqual(g["2"]["inputs"]["model_file"], "sam.safetensors")
 
+    def test_a_film_hands_over_every_frames_person_with_its_place_in_the_picture(self):
+        kp2 = [[i * 10.0, i * 5.0] for i in range(70)]
+        person = {"bbox": [0, 0, 100, 200], "pred_keypoints_3d": mhr70(), "pred_keypoints_2d": kp2}
+        data = {"frames": [[person], [], [person]], "image_size": (500, 1000)}
+        track = B.track_of(data)
+        self.assertEqual(len(track), 3)
+        self.assertEqual(track[1], {"world": None, "image": None})
+        self.assertEqual(len(track[0]["world"]), 33)
+        self.assertEqual(track[0]["image"][16], [0.41, 0.41, 0.0, 1.0])     # right wrist: MHR70 41 at (410, 205)
+        self.assertEqual(track[0]["image"][1], [0.0, 0.0, 0.0, 0.0])
+        out = B.hand_over(data)
+        self.assertEqual((out["width"], out["height"]), (1000, 500))
+        self.assertNotIn("kp2d", out["people"][0])
+        self.assertEqual(len(out["frames"]), 3)
+        self.assertNotIn("frames", B.hand_over({"frames": [[person]], "image_size": (500, 1000)}))
+
+    def test_the_film_graph_reads_its_part_and_smooths_when_asked(self):
+        g = B.video_graph("rig_pose/film/a_p000.mp4", "sam.safetensors", 0, 1.0)
+        self.assertEqual(g["1"], {"class_type": "LoadVideo", "inputs": {"file": "rig_pose/film/a_p000.mp4"}})
+        self.assertEqual(g["5"]["class_type"], "GetVideoComponents")
+        self.assertEqual(g["6"]["class_type"], "SAM3DBody_Smooth")
+        self.assertEqual(g[B.OUTPUT_NODE]["inputs"]["mhr_pose_data"], ["6", 0])
+        raw = B.video_graph("x.mp4", "sam.safetensors", 0, 0)
+        self.assertNotIn("6", raw)
+        self.assertEqual(raw[B.OUTPUT_NODE]["inputs"]["mhr_pose_data"], ["3", 0])
+
+    def test_a_film_is_cut_into_parts_once(self):
+        try:
+            import av
+            import numpy as np
+        except ImportError:
+            self.skipTest("needs PyAV")
+        tmp = tempfile.mkdtemp()
+        try:
+            src = os.path.join(tmp, "walk.mp4")
+            oc = av.open(src, "w")
+            vs = oc.add_stream("libx264", rate=24)
+            vs.width, vs.height, vs.pix_fmt = 1920, 1080, "yuv420p"
+            for i in range(20):
+                for pkt in vs.encode(av.VideoFrame.from_ndarray(np.full((1080, 1920, 3), i * 10, np.uint8), format="rgb24")):
+                    oc.mux(pkt)
+            for pkt in vs.encode():
+                oc.mux(pkt)
+            oc.close()
+            inp = os.path.join(tmp, "input")
+            got = B.film_parts(src, inp, 2, 15, 3, side=960, part=3)
+            self.assertEqual(got["frames"], [2, 5, 8, 11, 14])
+            self.assertEqual([(p["first"], p["count"]) for p in got["parts"]], [(0, 3), (3, 2)])
+            with av.open(os.path.join(inp, *got["parts"][0]["name"].split("/"))) as c:
+                frames = list(c.decode(video=0))
+            self.assertEqual((len(frames), frames[0].width, frames[0].height), (3, 960, 540))
+            mtime = os.path.getmtime(os.path.join(inp, *got["parts"][1]["name"].split("/")))
+            self.assertEqual(B.film_parts(src, inp, 2, 15, 3, side=960, part=3), got)
+            self.assertEqual(os.path.getmtime(os.path.join(inp, *got["parts"][1]["name"].split("/"))), mtime)
+            with self.assertRaises(ValueError):
+                B.film_parts(src, inp, 30, -1, 1)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_a_picture_is_put_where_loadimage_reads_it(self):
         tmp = tempfile.mkdtemp()
         try:
