@@ -17,7 +17,8 @@
 // empty one - a white canvas, an empty cut, an empty scene. A second document is
 // still a second tab (the file browser, Open cut…, Edit in Paint, ...).
 //
-// A group's button is lit while one of its panels is up. Everything else that
+// A group's button is lit while one of its panels is up; a space's button is
+// underlined in its colour only while a tab of that space is open (has-tab). Everything else that
 // is not playback - layout, the shape overlay, docking, files, run, clear -
 // stands at the right end of the bar (CSS `order`, so nothing is re-parented and
 // every other piece of code still finds its button where it put it).
@@ -265,7 +266,10 @@ export const BarGroupsMixin = {
     /** Light each group whose panel is up. Called whenever the dock layout is applied. */
     barGroupsSync() {
         if (!this._barGroups || !this.isPanelDocked) return;
+        // The spaces that have a tab open: only their buttons carry the underline.
+        const open = new Set((this.tabOrder || []).map((k) => this._tabSpaceKind ? this._tabSpaceKind(k) : ""));
         for (const { group, button } of this._barGroups) {
+            if (button.dataset.space) button.classList.toggle("has-tab", open.has(button.dataset.space));
             button.classList.toggle("active", group.items.some((item) => item.panel ? this.isPanelDocked(item.panel)
                 : !!(item.checked && item.checked(this))));
             if (group.id === "timeline") {

@@ -214,6 +214,26 @@ class ViewerSpacesTests(unittest.TestCase):
         self.assertEqual(same, [True, True, True, True])
         self.assertEqual(self.errors, [])
 
+    def test_a_space_button_is_underlined_only_while_a_tab_of_it_is_open(self):
+        pg = self.page()
+        marks = """() => { const C = window.__panel.container; const o = {};
+            for (const id of ['3d', 'motion', 'comp', 'paint', 'timeline']) {
+                const b = C.querySelector('#bar-group-' + id);
+                o[id] = b.classList.contains('has-tab') && getComputedStyle(b).boxShadow !== 'none'; }
+            return o; }"""
+        # Panels of every space up, but no tab of any space: no underline.
+        pg.evaluate("() => { const P = window.__panel; P.isPanelDocked = () => true; P.barGroupsSync(); }")
+        self.assertEqual(pg.evaluate(marks), {"3d": False, "motion": False, "comp": False, "paint": False, "timeline": False})
+        pg.evaluate("async () => { await window.__panel.spaceOpen('3d'); }")
+        pg.evaluate("async () => { await window.__panel.spaceOpen('edit'); }")
+        pg.wait_for_timeout(200)
+        self.assertEqual(pg.evaluate(marks), {"3d": True, "motion": False, "comp": False, "paint": False, "timeline": True})
+        # Closing the 3D tab (not the one up) takes its underline away.
+        pg.evaluate("() => window.__panel.closeTab('previz:new-1')")
+        self.assertEqual(pg.evaluate(marks)["3d"], False)
+        self.assertEqual(pg.evaluate(marks)["timeline"], True)
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

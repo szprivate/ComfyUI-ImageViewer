@@ -554,6 +554,8 @@ export const UIMixin = {
 
     switchTab(k) {
         const prevTab = this.activeTab;
+        // A tab just opened comes up here: the space buttons' underlines follow the open tabs.
+        if (this.barGroupsSync) this.barGroupsSync();
         if (prevTab && prevTab !== k) this.captureTabViewState(prevTab);
         // An Edit tab hands the viewport back before anything else is shown.
         if (this._editPlayOn && !(prevTab === k && this.isEditTab(k))) this.editPlayLeave();

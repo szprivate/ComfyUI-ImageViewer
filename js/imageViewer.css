@@ -1621,11 +1621,14 @@ textarea.param-input {
 .transport > #browser-toggle-btn, .transport > #history-toggle-btn, .transport > #refresh, .transport > #clear-cache-btn { order: 7; }
 .bar-group.active { color: #f60; box-shadow: inset 0 -2px 0 #f60; }
 /* A space's group: its icon in the space's accent (SPACE_COLORS), lit with an
-   underline of the same colour. The button's ground is the bar's. */
+   underline of the same colour while a tab of the space is open. The button's ground is the bar's. */
 .bar-group[data-space] { color: var(--space-color); }
 .bar-group[data-space] > svg { opacity: 0.8; }
 .bar-group[data-space]:hover > svg, .bar-group[data-space].active > svg { opacity: 1; }
-.bar-group[data-space].active { color: var(--space-color); box-shadow: inset 0 -2px 0 var(--space-color); }
+/* The underline says a tab of that space is open (barGroupsSync, has-tab); a panel
+   being up only brightens the icon. */
+.bar-group[data-space].active { color: var(--space-color); box-shadow: none; }
+.bar-group[data-space].has-tab { box-shadow: inset 0 -2px 0 var(--space-color); }
 /* A film with a cut beside it: a dot on the Edit group (its icon is amber already). */
 .bar-group.has-cut { position: relative; }
 .bar-group.has-cut:not(.active)::after { content: ""; position: absolute; top: 4px; right: 4px; width: 6px; height: 6px; border-radius: 50%; background: var(--space-color, #ffcf6f); }

@@ -1592,7 +1592,8 @@ class ViewerPanel extends HTMLElement {
             this.switchTab(this.activeTab);
         }
         this.updateTabHighlights();
-
+        // The space buttons' underlines follow the tabs that are open.
+        if (this.barGroupsSync) this.barGroupsSync();
     }
 
     _resolveTabLabel(k, node) {
