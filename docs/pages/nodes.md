@@ -1,6 +1,6 @@
 # Nodes
 
-[Home](index.md)
+[Home](../index.md)
 
 ## Send To Image Viewer
 

@@ -1,6 +1,6 @@
 # Working with agentY
 
-[Home](index.md)
+[Home](../index.md)
 
 With [agentY](https://github.com/szprivate/agentY) installed, the viewer and the agent share their work. None of this shows without it.
 
