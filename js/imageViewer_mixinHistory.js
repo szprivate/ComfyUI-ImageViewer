@@ -1954,6 +1954,8 @@ export const HistoryMixin = {
             this._historyPanelSig = null;
             this.renderHistoryPanel();
         }
+        // The last tab of a space gone: its button loses the underline.
+        if (this.barGroupsSync) this.barGroupsSync();
         this.queuePersistViewerState();
     },
 
