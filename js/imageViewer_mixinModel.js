@@ -51,6 +51,8 @@ export const ModelMixin = {
                 onTransform: (id, transform, live, props) =>
                     this.previzApplyTransform(id, transform, props || null, { live }),
                 onTransformEnd: () => { this.previzEndDrag(); this.previzChanged(); },
+                // A camera's look-at target dragged in the canvas (imageViewer_cameraAim3d.js).
+                onAimTarget: (id, target, live) => this.previzSetAimTarget(id, target, { live }),
                 onCameraMoved: (id, transform, live) =>
                     this.previzApplyTransform(id, transform, ["position", "rotation"], { live }),
                 onPanelToggle: (id) => this.togglePanelDocked(id),

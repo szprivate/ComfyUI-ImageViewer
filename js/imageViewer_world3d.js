@@ -250,6 +250,7 @@ export const WorldViewMixin = {
         // (or an environment) is lit by those, unless View > Default lights says otherwise.
         this._lightsFrame(env);
         if (this.grid) this.grid.visible = this.showGrid && !ground;
+        if (this._gridOriginSync) this._gridOriginSync();
         this._worldSyncRender();
     },
 

@@ -77,6 +77,7 @@ import { readRigFields } from "./imageViewer_rigData.js";
 import { readItemRef, readSceneLayers } from "./imageViewer_sceneLayers.js";
 import { pruneConstraints, readConstraints, readWeightStatic, writeWeightStatic } from "./imageViewer_constraintData.js";
 import { readDrivers } from "./imageViewer_rigDrivers.js";
+import { readAim, readAimStatic, writeAimStatic } from "./imageViewer_cameraAim.js";
 
 export const SCENE_VERSION = 1;
 export const DEFAULT_RESOLUTION = [1920, 1080];
@@ -187,6 +188,9 @@ export function addStaticWriter(fn) { if (!_staticWriters.includes(fn)) _staticW
 // A constraint's weights (imageViewer_constraintData.js) are the first extra channels.
 addStaticReader(readWeightStatic);
 addStaticWriter(writeWeightStatic);
+// A camera's look-at target, "aim:x" / "aim:y" / "aim:z" (imageViewer_cameraAim.js).
+addStaticReader(readAimStatic);
+addStaticWriter(writeAimStatic);
 function _extraStatic(item, prop) {
     for (const fn of _staticReaders) {
         const v = fn(item, prop);
@@ -1189,6 +1193,9 @@ export function parseScene(raw) {
             // The picture this camera's view has to match (a world's reference).
             const ref = referenceSettings(raw);
             if (ref) item.reference = ref;
+            // Its look-at target, off unless switched on (imageViewer_cameraAim.js).
+            const aim = readAim(raw.aim);
+            if (aim) item.aim = aim;
         } else if (offsetOf(raw)) {
             item.offset = offsetOf(raw);
         }
