@@ -218,9 +218,14 @@ export const PrevizCurvesMixin = {
             hint: "Click a key, Shift+click to add or take one away, Ctrl+click to take one away, or drag a box " +
                   "on the empty graph. Drag a selected key to move them all - sideways retimes, up and down " +
                   "changes the values (Shift holds one direction). Drag a handle to shape every selected " +
-                  "key's tangent, Alt to break it, double-click it for the ease again. Del removes the selected keys.",
+                  "key's tangent, Alt to break it, double-click it for the ease again. Del removes the selected keys. " +
+                  "Wheel zooms (Shift: time only, Ctrl: values only), middle or Alt+drag pans, F fits.",
         });
-        // Focusable, so Del / Ctrl+A / Esc reach previzCurveKeyDown.
+        // Zoom and pan: taken in the capture phase, before a key or the box sees the press.
+        ui.wrap.addEventListener("mousedown", (e) => this._previzCurveNavDown(e), true);
+        ui.wrap.addEventListener("wheel", (e) => this._previzCurveWheel(e), { passive: false });
+        ui.wrap.addEventListener("contextmenu", (e) => { if (e.altKey) e.preventDefault(); });
+        // Focusable, so Del / Ctrl+A / Esc / F reach previzCurveKeyDown.
         ui.body.tabIndex = -1;
         ui.body.addEventListener("mousedown", () => { try { ui.body.focus({ preventScroll: true }); } catch (_) {} }, true);
         this._previzCurveWrap = ui.wrap;
@@ -276,6 +281,8 @@ export const PrevizCurvesMixin = {
                 ], (v) => this.previzCurveRetime(v.from, v.to, v.newTo, v.ripple));
             });
         btn("Euler", EULER_TIP, () => this.previzEulerFilter());
+        ui.fitBtn = btn("Fit", "Show the whole timeline and every curve again (F). Wheel zooms, " +
+            "middle or Alt+drag pans, Alt+right drag zooms", () => this.previzCurveFit());
         btn("Tangents \u25be", "Give every selected key this tangent",
             (b) => menuAt(b, [["smooth", "Smooth"], ["linear", "Linear"], ["hold", "Stepped"], ["flat", "Flat"]]
                 .map(([mode, name]) => ({ label: name, run: () => this.previzCurveSetTangents(mode) }))));
@@ -362,8 +369,21 @@ export const PrevizCurvesMixin = {
         return n;
     },
 
-    /** Show or hide one channel of one object. Plain click picks it alone. */
+    /**
+     * Shift+click in the list: every channel row from the one clicked last to
+     * this one is shown (the rest hidden), as a list's range select.
+     */
+    _previzRangeChannels(ui, id) {
+        const rows = [...ui.list.querySelectorAll(".curves-ch")].map((r) => r.dataset.ch);
+        const a = rows.indexOf(this._previzCurveAnchor), b = rows.indexOf(id);
+        if (a < 0 || b < 0) { this._previzToggleChannel(id, false); return; }
+        this._previzCurveShown = new Set(rows.slice(Math.min(a, b), Math.max(a, b) + 1));
+        this.previzRefreshCurves();
+    },
+
+    /** Show or hide one channel of one object. Plain click picks it alone, Ctrl+click adds / takes away. */
     _previzToggleChannel(id, add) {
+        this._previzCurveAnchor = id;
         let shown = this._previzCurveShown;
         if (!shown || !shown.size) {
             // The first click starts from what is on screen, so nothing jumps.
@@ -411,7 +431,12 @@ export const PrevizCurvesMixin = {
                 row.title = `Show or hide ${item.name}.${ch.label}`;
                 row.classList.toggle("on", on.has(id));
                 row.classList.toggle("animated", S.isAnimated(item, ch.prop));
-                row.onclick = (e) => this._previzToggleChannel(id, e.shiftKey || e.ctrlKey || e.metaKey);
+                if (items.length > 1) row.classList.add("nested");
+                row.dataset.ch = id;
+                row.onclick = (e) => {
+                    if (e.shiftKey && !(e.ctrlKey || e.metaKey)) this._previzRangeChannels(ui, id);
+                    else this._previzToggleChannel(id, e.ctrlKey || e.metaKey);
+                };
                 ui.list.append(row);
             }
         });
@@ -452,11 +477,163 @@ export const PrevizCurvesMixin = {
         const pad = (hi - lo) * 0.12;
         lo -= pad; hi += pad;
 
-        const X = (f) => ((f - bounds.min) / span) * 100;
+        // Zoomed or panned: the view the user made, in place of the fit.
+        const timeline = bounds;
+        const view = this._previzCurveViewFor(lines);
+        let view0 = bounds, vspan = span;
+        if (view) {
+            view0 = { min: view.f0, max: view.f1 };
+            vspan = view.f1 - view.f0;
+            lo = view.v0; hi = view.v1;
+        }
+        const X = (f) => ((f - view0.min) / vspan) * 100;
         const Y = (v) => GRAPH.bottom - ((v - lo) / (hi - lo)) * (GRAPH.bottom - GRAPH.top);
-        const frameAt = (xPct) => Math.round(bounds.min + (xPct / 100) * span);
+        const frameAt = (xPct) => Math.round(view0.min + (xPct / 100) * vspan);
         const valueAt = (yPct) => lo + ((GRAPH.bottom - yPct) / (GRAPH.bottom - GRAPH.top)) * (hi - lo);
-        return { bounds, span, lo, hi, X, Y, frameAt, valueAt, lines };
+        return { bounds: view0, timeline, span: vspan, lo, hi, X, Y, frameAt, valueAt, lines, zoomed: !!view };
+    },
+
+    // ── Zoom and pan ─────────────────────────────────────────────────────────
+    //
+    // `_previzCurveView` = {key, f0, f1, v0, v1}: the frames and values the
+    // graph spans once zoomed or panned; null (or made for other objects) is
+    // the fit - the timeline's range across, every curve's band up and down.
+    // Wheel zooms about the pointer (Shift: time only, Ctrl: values only);
+    // the middle button or Alt + left drag pans; Alt + right drag zooms
+    // (sideways time, up and down values); F or Fit goes back to the fit.
+
+    _previzCurveViewKey(lines) {
+        return [...new Set((lines || []).map((l) => l.item.id))].join("|");
+    },
+
+    _previzCurveViewFor(lines) {
+        const v = this._previzCurveView;
+        if (!v || v.key !== this._previzCurveViewKey(lines)) return null;
+        return v;
+    },
+
+    /** The view as it stands now, as numbers that can be changed. */
+    _previzCurveViewNow() {
+        const lines = this._previzCurveLines();
+        const g = this._previzCurveGeom(lines);
+        return { key: this._previzCurveViewKey(lines), f0: g.bounds.min, f1: g.bounds.max, v0: g.lo, v1: g.hi };
+    },
+
+    _previzCurveSetView(v) {
+        const MIN_F = 2, MIN_V = 1e-6;
+        if (v) {
+            if (v.f1 - v.f0 < MIN_F) { const m = (v.f0 + v.f1) / 2; v.f0 = m - MIN_F / 2; v.f1 = m + MIN_F / 2; }
+            if (v.v1 - v.v0 < MIN_V) { const m = (v.v0 + v.v1) / 2; v.v0 = m - MIN_V / 2; v.v1 = m + MIN_V / 2; }
+        }
+        this._previzCurveView = v;
+        this.previzRefreshCurves();
+    },
+
+    /** Back to the fit: the timeline's range, every curve's values. */
+    previzCurveFit() { this._previzCurveSetView(null); },
+
+    /**
+     * Zoom by `kx` in time and `ky` in value (below 1 zooms in) about a point
+     * given as shares of the graph (0..1 from the left, 0..1 from the top).
+     */
+    previzCurveZoom(kx, ky, ax = 0.5, ay = 0.5) {
+        const v = this._previzCurveViewNow();
+        const fa = v.f0 + ax * (v.f1 - v.f0);
+        const vy = (GRAPH.bottom - ay * 100) / (GRAPH.bottom - GRAPH.top);
+        const va = v.v0 + vy * (v.v1 - v.v0);
+        this._previzCurveSetView({ key: v.key,
+            f0: fa - (fa - v.f0) * kx, f1: fa + (v.f1 - fa) * kx,
+            v0: va - (va - v.v0) * ky, v1: va + (v.v1 - va) * ky });
+    },
+
+    /** Pan by `df` frames and `dv` values. */
+    previzCurvePan(df, dv) {
+        const v = this._previzCurveViewNow();
+        this._previzCurveSetView({ key: v.key, f0: v.f0 + df, f1: v.f1 + df, v0: v.v0 + dv, v1: v.v1 + dv });
+    },
+
+    _previzCurveWheel(e) {
+        const wrap = this._previzCurveWrap;
+        if (!wrap) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const r = wrap.getBoundingClientRect();
+        const ax = (e.clientX - r.left) / (r.width || 1), ay = (e.clientY - r.top) / (r.height || 1);
+        const d = e.deltaY || e.deltaX;
+        const k = Math.exp(Math.max(-0.5, Math.min(0.5, d * 0.0015)));
+        const ctrl = e.ctrlKey || e.metaKey;
+        this.previzCurveZoom(ctrl ? 1 : k, e.shiftKey ? 1 : k, ax, ay);
+    },
+
+    /** Middle / Alt+left drag pans, Alt+right drag zooms. Taken before the keys and the box see the press. */
+    _previzCurveNavDown(e) {
+        const pan = e.button === 1 || (e.button === 0 && e.altKey && !e.target.closest(".kf-tan"));
+        const zoom = e.button === 2 && e.altKey;
+        if (!pan && !zoom) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const wrap = this._previzCurveWrap;
+        const win = this._viewerWindow();
+        const r = wrap.getBoundingClientRect();
+        const start = this._previzCurveViewNow();
+        const fpp = (start.f1 - start.f0) / (r.width || 1);
+        const vpp = (start.v1 - start.v0) / (((GRAPH.bottom - GRAPH.top) / 100) * (r.height || 1));
+        const ax = (e.clientX - r.left) / (r.width || 1), ay = (e.clientY - r.top) / (r.height || 1);
+        const fa = start.f0 + ax * (start.f1 - start.f0);
+        const va = start.v0 + ((GRAPH.bottom - ay * 100) / (GRAPH.bottom - GRAPH.top)) * (start.v1 - start.v0);
+        wrap.classList.add(pan ? "panning" : "zooming");
+        const onMove = (evt) => {
+            const dx = evt.clientX - e.clientX, dy = evt.clientY - e.clientY;
+            if (pan) {
+                this._previzCurveSetView({ key: start.key, f0: start.f0 - dx * fpp, f1: start.f1 - dx * fpp,
+                                           v0: start.v0 + dy * vpp, v1: start.v1 + dy * vpp });
+            } else {
+                const kx = Math.exp(-dx * 0.005), ky = Math.exp(dy * 0.005);
+                this._previzCurveSetView({ key: start.key,
+                    f0: fa - (fa - start.f0) * kx, f1: fa + (start.f1 - fa) * kx,
+                    v0: va - (va - start.v0) * ky, v1: va + (start.v1 - va) * ky });
+            }
+        };
+        const onUp = () => {
+            win.removeEventListener("mousemove", onMove);
+            win.removeEventListener("mouseup", onUp);
+            wrap.classList.remove("panning", "zooming");
+        };
+        win.addEventListener("mousemove", onMove);
+        win.addEventListener("mouseup", onUp);
+    },
+
+    /** Frame and value numbers along the graph's bottom and left edges. */
+    _previzCurveTicks(g) {
+        const wrap = this._previzCurveWrap;
+        wrap.querySelectorAll(".curves-tick").forEach((n) => n.remove());
+        const doc = wrap.ownerDocument;
+        const r = wrap.getBoundingClientRect();
+        const step = (span, px, want) => {
+            const raw = span / Math.max(1, px / want);
+            const p = Math.pow(10, Math.floor(Math.log10(raw)));
+            for (const m of [1, 2, 5, 10]) if (m * p >= raw) return m * p;
+            return 10 * p;
+        };
+        const fs = Math.max(1, step(g.span, r.width || 400, 70));
+        for (let f = Math.ceil(g.bounds.min / fs) * fs; f <= g.bounds.max; f += fs) {
+            const t = doc.createElement("div");
+            t.className = "curves-tick frame";
+            t.style.left = g.X(f) + "%";
+            t.textContent = String(Math.round(f));
+            wrap.append(t);
+        }
+        const vs = step(g.hi - g.lo, ((GRAPH.bottom - GRAPH.top) / 100) * (r.height || 100), 28);
+        const digits = Math.max(0, Math.min(6, -Math.floor(Math.log10(vs))));
+        for (let v = Math.ceil(g.lo / vs) * vs; v <= g.hi; v += vs) {
+            const y = g.Y(v);
+            if (y < 4 || y > 96) continue;
+            const t = doc.createElement("div");
+            t.className = "curves-tick value";
+            t.style.top = y + "%";
+            t.textContent = (Math.abs(v) < vs / 2 ? 0 : v).toFixed(digits);
+            wrap.append(t);
+        }
     },
 
     // ── Drawing ──────────────────────────────────────────────────────────────
@@ -542,6 +719,8 @@ export const PrevizCurvesMixin = {
 
         const playhead = g.X(Math.round(this.currentFrame || 0));
         line({ x1: playhead, y1: 0, x2: playhead, y2: 100, stroke: "#fff", opacity: 0.6 });
+        this._previzCurveTicks(g);
+        if (this._previzCurveUI && this._previzCurveUI.fitBtn) this._previzCurveUI.fitBtn.classList.toggle("on", !!g.zoomed);
 
         this._previzLayoutCurveDots(g);
     },
@@ -711,6 +890,7 @@ export const PrevizCurvesMixin = {
         if ((k === "Delete" || k === "Backspace") && this._previzCurveSelList().length) this.previzCurveDeleteSelected();
         else if (mod && (k === "a" || k === "A")) this.previzCurveSelectAll();
         else if (k === "Escape" && this._previzCurveSelList().length) { this._previzCurveSetSel([]); this.previzRefreshCurves(); }
+        else if (!mod && !e.altKey && (k === "f" || k === "F")) this.previzCurveFit();
         else done = false;
         if (done) { e.preventDefault(); e.stopImmediatePropagation(); }
         return done;
@@ -869,7 +1049,7 @@ export const PrevizCurvesMixin = {
         const rect = wrap.getBoundingClientRect();
         const g = geom;
         const perValue = (GRAPH.bottom - GRAPH.top) / 100 * rect.height / ((g.hi - g.lo) || 1);
-        const dfMin = Math.min(0, g.bounds.min - minF), dfMax = Math.max(0, g.bounds.max - maxF);
+        const dfMin = Math.min(0, g.timeline.min - minF), dfMax = Math.max(0, g.timeline.max - maxF);
         let moved = false, applied = 0, lock = null;
         this._previzCurveDragging = true;
         this.previzBeginDrag(sel.length > 1 ? "move keys" : "move key");

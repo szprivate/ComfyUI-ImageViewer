@@ -232,6 +232,117 @@ class CurveMultiSelectTests(unittest.TestCase):
         finally:
             pg.close()
 
+    def test_the_wheel_zooms_the_middle_button_pans_and_f_fits(self):
+        pg = self._page()
+        try:
+            st = pg.evaluate(STATE)
+            g = st["graph"]
+            cx, cy = (g["l"] + g["r"]) / 2, (g["t"] + g["b"]) / 2
+            view = "() => window.__panel._previzCurveView"
+            mid = lambda s: self._dot(s, 0, 10)
+            before = mid(st)
+            self.assertIsNone(pg.evaluate(view))
+            fit = pg.evaluate("() => window.__panel._previzCurveViewNow()")
+            # Wheel up over the middle key zooms in about the pointer: the keys spread out.
+            cx = before["x"]
+            pg.mouse.move(cx, cy)
+            for _ in range(4):
+                pg.mouse.wheel(0, -200)
+            v = pg.evaluate(view)
+            self.assertIsNotNone(v)
+            self.assertLess(v["f1"] - v["f0"], (fit["f1"] - fit["f0"]) * 0.7, "fewer frames across")
+            spread0 = self._dot(st, 0, 20)["x"] - self._dot(st, 0, 0)["x"]
+            st = pg.evaluate(STATE)
+            spread1 = self._dot(st, 0, 20)["x"] - self._dot(st, 0, 0)["x"]
+            self.assertGreater(spread1, spread0 * 1.5, "the keys spread out")
+            self.assertTrue(pg.evaluate("() => window.__panel.curvesPanel.querySelectorAll('.curves-tick.frame').length > 0"))
+            self.assertTrue(pg.evaluate("() => window.__panel.curvesPanel.querySelectorAll('.curves-tick.value').length > 0"))
+            self._shot(pg, "5-zoomed.png")
+
+            # Ctrl+wheel zooms the values only.
+            f0, f1 = v["f0"], v["f1"]
+            pg.keyboard.down("Control")
+            pg.mouse.wheel(0, -200)
+            pg.keyboard.up("Control")
+            v2 = pg.evaluate(view)
+            self.assertAlmostEqual(v2["f0"], f0, places=6)
+            self.assertAlmostEqual(v2["f1"], f1, places=6)
+            self.assertLess(v2["v1"] - v2["v0"], v["v1"] - v["v0"])
+
+            # A middle-button drag to the right pans: the view moves to earlier frames, the key follows the pointer.
+            st = pg.evaluate(STATE)
+            m0 = mid(st)
+            pg.mouse.move(cx, cy)
+            pg.mouse.down(button="middle")
+            for i in range(1, 6):
+                pg.mouse.move(cx + i * 12, cy + i * 4)
+            pg.mouse.up(button="middle")
+            v3 = pg.evaluate(view)
+            self.assertLess(v3["f0"], v2["f0"])
+            m1 = mid(pg.evaluate(STATE))
+            self.assertAlmostEqual(m1["x"] - m0["x"], 60, delta=2)
+            self.assertAlmostEqual(m1["y"] - m0["y"], 20, delta=2)
+            self.assertEqual([k["f"] for k in pg.evaluate(STATE)["keys"]], [0, 10, 20], "a pan moves no key")
+            self._shot(pg, "6-panned.png")
+
+            # F (with the panel focused) goes back to the fit.
+            pg.mouse.click(g["l"] + 3, g["t"] + 3)
+            pg.keyboard.press("f")
+            self.assertIsNone(pg.evaluate(view))
+            back = mid(pg.evaluate(STATE))
+            self.assertAlmostEqual(back["x"], before["x"], delta=1)
+            self.assertAlmostEqual(back["y"], before["y"], delta=1)
+            self.assertEqual(self.errors, [])
+        finally:
+            pg.close()
+
+    def test_ctrl_click_in_the_list_toggles_shift_click_takes_a_range_and_channels_sit_in(self):
+        pg = self._page()
+        try:
+            pg.evaluate("""async () => { const P = window.__panel;
+                const a = P.previzSelectedItem().id;
+                await P.previzAddPrimitive('sphere');
+                const b = P.previzSelectedItem().id;
+                P.previzSelectMany([a, b], 'replace');
+                P.previzRefreshCurves(); }""")
+            rows = """() => [...window.__panel.curvesPanel.querySelectorAll('.curves-ch')].map((r) => {
+                const b = r.getBoundingClientRect(), t = r.ownerDocument.createRange();
+                t.selectNodeContents(r); const tb = t.getBoundingClientRect();
+                return { ch: r.dataset.ch, on: r.classList.contains('on'), nested: r.classList.contains('nested'),
+                         x: b.left + b.width / 2, y: b.top + b.height / 2, text: tb.left }; })"""
+            heads = """() => [...window.__panel.curvesPanel.querySelectorAll('.curves-obj')].map((r) => {
+                const t = r.ownerDocument.createRange(); t.selectNodeContents(r); return t.getBoundingClientRect().left; })"""
+            rs = pg.evaluate(rows)
+            hs = pg.evaluate(heads)
+            self.assertEqual(len(hs), 2, "two objects, two names")
+            self.assertTrue(all(r["nested"] for r in rs))
+            self.assertGreater(rs[0]["text"] - hs[0], 8, "a channel's name sits clearly further in than its object's")
+            self._shot(pg, "7-list-indent.png")
+
+            # A plain click shows one channel; Ctrl+click adds a second, Ctrl+click again takes it away.
+            pg.mouse.click(rs[0]["x"], rs[0]["y"])
+            on = lambda: [r["ch"] for r in pg.evaluate(rows) if r["on"]]
+            self.assertEqual(on(), [rs[0]["ch"]])
+            pg.keyboard.down("Control")
+            pg.mouse.click(rs[2]["x"], rs[2]["y"])
+            pg.keyboard.up("Control")
+            self.assertEqual(on(), [rs[0]["ch"], rs[2]["ch"]])
+            pg.keyboard.down("Control")
+            pg.mouse.click(rs[2]["x"], rs[2]["y"])
+            pg.keyboard.up("Control")
+            self.assertEqual(on(), [rs[0]["ch"]])
+
+            # Shift+click takes the range from the row clicked last.
+            pg.mouse.click(rs[1]["x"], rs[1]["y"])
+            pg.keyboard.down("Shift")
+            pg.mouse.click(rs[3]["x"], rs[3]["y"])
+            pg.keyboard.up("Shift")
+            self.assertEqual(on(), [rs[1]["ch"], rs[2]["ch"], rs[3]["ch"]])
+            self._shot(pg, "8-list-range.png")
+            self.assertEqual(self.errors, [])
+        finally:
+            pg.close()
+
 
 if __name__ == "__main__":
     unittest.main()
