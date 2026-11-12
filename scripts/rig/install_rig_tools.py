@@ -361,9 +361,11 @@ def triton_windows_spec(torch_version):
 # What SkinTokens imports but its requirements.txt does not name: gradio brought these in, and the viewer
 # leaves gradio out (ws26, 2026-11-12: "No module named 'scipy'").
 SKINTOKENS_EXTRAS = ("scipy", "requests")
+# Upper bounds its requirements leave out: diffusers 0.36+ no longer has the LayerNorm its Tripo2 encoder imports.
+SKINTOKENS_PINS = ("diffusers<0.36",)
 # Modules the runner needs at once; checked after the install so a missing one is said there, not at the first rig.
 SKINTOKENS_IMPORTS = ("scipy", "requests", "numpy", "trimesh", "open3d", "bpy", "transformers", "diffusers",
-                      "lightning", "omegaconf", "einops", "tqdm", "box", "addict", "fast_simplification")
+                      "diffusers.models.normalization:LayerNorm", "lightning", "omegaconf", "einops", "tqdm", "box", "addict", "fast_simplification")
 
 
 def skintokens_requirements(repo):
@@ -373,15 +375,18 @@ def skintokens_requirements(repo):
     reqs = [r.strip() for r in open(os.path.join(repo, "requirements.txt"), encoding="utf-8") if r.strip()]
     reqs = [r for r in reqs if not r.lower().startswith(skip)]
     named = {re.split(r"[<>=!~\[ ;]", r, 1)[0].lower() for r in reqs}
-    return reqs + [x for x in SKINTOKENS_EXTRAS if x not in named]
+    return reqs + [x for x in SKINTOKENS_EXTRAS if x not in named] + list(SKINTOKENS_PINS)
 
 
 SKINTOKENS_CHECK = """
 import importlib, sys
 missing = []
 for m in sys.argv[1:]:
+    mod, _, name = m.partition(":")
     try:
-        importlib.import_module(m)
+        got = importlib.import_module(mod)
+        if name:
+            getattr(got, name)
     except Exception as e:
         missing.append(f"{m} ({type(e).__name__}: {e})")
 if missing:
