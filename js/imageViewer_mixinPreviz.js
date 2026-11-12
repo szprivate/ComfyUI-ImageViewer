@@ -1143,7 +1143,7 @@ export const PrevizMixin = {
 
     /**
      * Put `entries` on screen at (x, y) in client coordinates.
-     * An entry is { label, run, disabled } or the string "-" for a separator.
+     * An entry is { label, run, disabled }, the string "-" for a separator, or { head } for a heading.
      * `anchor`, when given, is the button that opened it: a press on it closes
      * the menu rather than immediately reopening it.
      */
@@ -1160,6 +1160,10 @@ export const PrevizMixin = {
             for (const e of list) {
                 if (e === "-") {
                     box.append(Object.assign(doc.createElement("div"), { className: "previz-menu-sep" }));
+                    continue;
+                }
+                if (e && e.head !== undefined) {
+                    box.append(Object.assign(doc.createElement("div"), { className: "previz-menu-head", textContent: e.head }));
                     continue;
                 }
                 const b = doc.createElement("button");
