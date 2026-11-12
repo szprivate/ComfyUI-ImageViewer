@@ -122,6 +122,8 @@ export const View3DPathTraceMixin = {
         pt.fadeDuration = 0;
         pt.dynamicLowRes = true;
         pt.lowResScale = 0.25;
+        // Sized by _ptSetSize: a split layout traces one pane, not the whole canvas.
+        pt.synchronizeRenderSize = false;
         // The raster pass under the first samples is the viewport's own (with its overlays).
         pt.rasterizeScene = false;
         this._pt = pt;
@@ -207,7 +209,21 @@ export const View3DPathTraceMixin = {
      */
     _ptFillLights() {
         const rig = (this.lights || []).filter((l) => l.isDirectionalLight && l.visible);
-        return rig.slice(1);
+        return [...rig.slice(1), ...this._ptUnseenLights()];
+    },
+
+    /**
+     * Lights that are visible themselves but under something hidden (a light
+     * item switched off hides its root). The tracer looks at each light's own
+     * `visible` only, so these would still shine; they are hidden around it.
+     */
+    _ptUnseenLights() {
+        const out = [];
+        this.scene.traverse((o) => {
+            if (!o.isLight || !o.visible) return;
+            for (let p = o.parent; p; p = p.parent) if (!p.visible) { out.push(o); return; }
+        });
+        return out;
     },
 
     /** Every visible mesh the tracer must not see, beside the overlays. */
@@ -241,10 +257,12 @@ export const View3DPathTraceMixin = {
         const { THREE } = this.libs;
         const scene = this.scene;
         const env = scene.environment, envI = scene.environmentIntensity, bg = scene.background;
-        if (!env) {
-            const ambient = (this.lights || []).find((l) => l.isAmbientLight);
+        // Only while the default lights are on (View > Default lights, studioLightsOn): with
+        // them off the scene is lit by its own lights alone, as raster draws it.
+        const ambient = (this.lights || []).find((l) => l.isAmbientLight);
+        if (!env && ambient && ambient.visible) {
             scene.environment = this._ptDefaultEnv();
-            scene.environmentIntensity = ambient ? Math.max(0.15, Math.min(2, ambient.intensity * 0.5)) : 0.8;
+            scene.environmentIntensity = Math.max(0.15, Math.min(2, ambient.intensity * 0.5));
         }
         if (!bg && !transparent) {
             const c = this.renderer.getClearColor(new THREE.Color());
@@ -281,7 +299,9 @@ export const View3DPathTraceMixin = {
         const parts = [];
         this.scene.traverse((o) => {
             if (!o.isLight) return;
-            parts.push(o.id, o.visible ? 1 : 0, o.color.getHex(), round(o.intensity), ...o.matrixWorld.elements.slice(12, 15).map(round));
+            let shown = o.visible;
+            for (let p = o.parent; p && shown; p = p.parent) shown = p.visible;
+            parts.push(o.id, shown ? 1 : 0, o.color.getHex(), round(o.intensity), ...o.matrixWorld.elements.slice(12, 15).map(round));
             if (o.target) parts.push(...o.target.matrixWorld.elements.slice(12, 15).map(round));
             if (o.isSpotLight) parts.push(round(o.angle), round(o.penumbra));
             if (o.isRectAreaLight) parts.push(round(o.width), round(o.height));
@@ -299,22 +319,26 @@ export const View3DPathTraceMixin = {
      * Bring the tracer up to date with the scene as `cam` sees it. Returns
      * true when anything changed (and the samples started again).
      */
-    _ptSync(cam, { transparent = false } = {}) {
+    _ptSync(cam, { transparent = false, size = null } = {}) {
         const pt = this._pt;
         this.scene.updateMatrixWorld(true);
         cam.updateMatrixWorld();
         const content = this._ptContent(cam);
-        const size = this.renderer.getDrawingBufferSize(new this.libs.THREE.Vector2());
+        if (!size) size = this.renderer.getDrawingBufferSize(new this.libs.THREE.Vector2());
+        this._ptSetSize(size.x, size.y);
         const sceneSig = this._ptSceneSig(content) + "|" + (transparent ? "t" : "o");
         const lightSig = this._ptLightSig();
         const camSig = this._ptCamSig(cam, size.x, size.y);
         const was = this._ptSig || {};
-        if (was.scene !== sceneSig || was.cam !== cam) {
+        if (was.scene !== sceneSig) {
             this._ptHidden([...this._ptExcluded(content), ...this._ptFillLights()], () =>
                 this._ptWithSceneLook(transparent, () => pt.setScene(this.scene, cam)));
         } else if (was.lights !== lightSig) {
             this._ptHidden(this._ptFillLights(), () =>
                 this._ptWithSceneLook(transparent, () => { pt.updateLights(); pt.updateEnvironment(); }));
+        } else if (was.cam !== cam) {
+            // Another pane made active: the same scene seen through its camera.
+            pt.setCamera(cam);
         } else if (was.camSig !== camSig) {
             pt.updateCamera();
         } else {
@@ -324,6 +348,19 @@ export const View3DPathTraceMixin = {
         this._ptContentNow = content;
         this._ptSig = { scene: sceneSig, lights: lightSig, camSig, cam };
         return true;
+    },
+
+    /** The traced picture's size in device pixels (the tracer and its low-resolution twin). */
+    _ptSetSize(w, h) {
+        const pt = this._pt;
+        w = Math.max(1, Math.floor(w));
+        h = Math.max(1, Math.floor(h));
+        const cur = new this.libs.THREE.Vector2();
+        pt._pathTracer.getSize(cur);
+        if (cur.x === w && cur.y === h) return;
+        pt._pathTracer.setSize(w, h);
+        pt._lowResPathTracer.setSize(Math.max(1, Math.floor(w * pt.lowResScale)), Math.max(1, Math.floor(h * pt.lowResScale)));
+        pt.reset();
     },
 
     /**
@@ -367,11 +404,14 @@ export const View3DPathTraceMixin = {
     /**
      * One viewport tick while tracing: bring the tracer up to date, add a
      * sample, draw the overlays. Returns null when it cannot trace (not loaded
-     * yet, a split layout) - the caller rasterises then - else whether another
-     * tick is wanted.
+     * yet, failed, moving with "raster while moving") - the caller rasterises
+     * then - else whether another tick is wanted. `pane`: in a split layout
+     * the active pane's box (CSS px), whose viewport and scissor are set; the
+     * tracer then works at that pane's size and draws into it.
      */
-    _ptViewportTick(cam) {
+    _ptViewportTick(cam, pane = null) {
         if (!this.ptActive()) return null;
+        if (pane) this._ptSplit = true;
         if (!this._pt || this._ptFor !== this.renderer) {
             this.ptEnsure().then((pt) => { if (pt) this.requestRender(); });
             this._ptBadge("Loading the path tracer…");
@@ -384,9 +424,14 @@ export const View3DPathTraceMixin = {
         }
         if (this._ptLimit !== PT_VIEW_MAX) { this._ptLimit = PT_VIEW_MAX; pt.bounces = PT_VIEW_BOUNCES; }
         try {
-            this._ptSync(cam);
+            const pr = this.renderer.getPixelRatio();
+            const size = pane ? { x: pane.w * pr, y: pane.h * pr } : null;
+            this._ptSync(cam, { size });
             // The raster picture under the low-resolution samples: the viewport as it is.
-            if (pt.samples < 1) this._worldRender(cam);
+            if (pt.samples < 1) {
+                if (pane) this.renderer.render(this.scene, cam);
+                else this._worldRender(cam);
+            }
             pt.pausePathTracing = pt.samples >= PT_VIEW_MAX;
             pt.renderSample();
             this._ptDrawOverlays(cam);
@@ -414,12 +459,11 @@ export const View3DPathTraceMixin = {
         b.style.display = "";
         if (text) b.textContent = text;
         else if (this._ptFailed) b.textContent = "Path tracing is not available on this graphics card - shown raster";
-        else if (this._ptSplit) b.textContent = "Path traced: one view only - split views are raster";
         else if (!this._pt) b.textContent = "Loading the path tracer…";
         else if (this._pt.isCompiling) b.textContent = "Path traced · compiling…";
         else {
             const n = Math.floor(this._pt.samples);
-            b.textContent = `Path traced · ${n} sample${n === 1 ? "" : "s"}${n >= PT_VIEW_MAX ? " (done)" : ""}`;
+            b.textContent = `Path traced${this._ptSplit ? " (active view)" : ""} · ${n} sample${n === 1 ? "" : "s"}${n >= PT_VIEW_MAX ? " (done)" : ""}`;
         }
         b.dataset.samples = this._pt ? String(Math.floor(this._pt.samples)) : "0";
     },

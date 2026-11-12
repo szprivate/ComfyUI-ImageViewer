@@ -852,6 +852,7 @@ export class Model3DView {
         // Wind and walking run the loop for as long as they last.
         if (this._worldTick(dt)) again = true;
         this._ptSplit = false;
+        this._ptMore = false;
         // The studio lights, the shadow map and shadow casters follow the scene's own lights (imageViewer_world3d.js).
         if (this._lightsFrame) this._lightsFrame();
         if (!this._paneRenderAll()) {
@@ -861,9 +862,9 @@ export class Model3DView {
             const traced = this._ptViewportTick(cam);
             if (traced === null) this._worldRender(cam);
             else if (traced) again = true;
-        } else if (this.materialMode === "pathtraced") {
-            this._ptSplit = true;
-            this._ptBadge();
+        } else if (this._ptMore) {
+            // Split views: the active pane is traced (_paneRenderAll), the others are raster.
+            again = true;
         }
         this._paneAxesDraw();
         if (again) this.requestRender();
