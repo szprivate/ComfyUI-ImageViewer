@@ -136,7 +136,7 @@ export const PrevizChannelsMixin = {
         const scene = this.previzScene();
         const looking = !!(item && scene && scene.activeCamera === item.id);
         // Everything that decides WHICH rows there are. Values are not in it.
-        const sig = item ? `${ids.join(",")}|${item.kind}|${looking}|${this._cbConstraintSig ? this._cbConstraintSig(item) : ""}|${Object.keys(item.attrs || {}).join(",")}|${this._cbMorphs(item).length}|${aimOn(item)}` : "";
+        const sig = item ? `${ids.join(",")}|${item.kind}|${looking}|${this._cbConstraintSig ? this._cbConstraintSig(item) : ""}|${Object.keys(item.attrs || {}).join(",")}|${this._cbMorphs(item).length}|${item.kind === "light" && item.light ? `${item.light.type}:${(item.light.fixture || {}).shape}` : ""}|${aimOn(item)}` : "";
         if (sig !== ui.sig) {
             ui.sig = sig;
             this._cbBuildRows(ui, item, ids, looking);

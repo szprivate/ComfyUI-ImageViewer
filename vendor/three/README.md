@@ -11,6 +11,7 @@ Upstream: https://github.com/mrdoob/three.js, npm package `three@0.180.0`
 | `fflate.module.js` | `three@0.180.0/examples/jsm/libs/` (FBXLoader and EXRLoader need it) |
 | `EffectComposer.js`, `Pass.js`, `ShaderPass.js`, `MaskPass.js`, `RenderPass.js`, `UnrealBloomPass.js`, `OutputPass.js` | `three@0.180.0/examples/jsm/postprocessing/` (worlds: bloom and tone mapping) |
 | `CopyShader.js`, `LuminosityHighPassShader.js`, `OutputShader.js` | `three@0.180.0/examples/jsm/shaders/` (the passes above need them) |
+| `RectAreaLightUniformsLib.js`, `RectAreaLightTexturesLib.js` | `three@0.180.0/examples/jsm/lights/` (3D space: area lights; loaded with the first one) |
 
 `spark.module.js` is **Spark 2.3.0** (`@sparkjsdev/spark`, World Labs, MIT — see
 `LICENSE.spark`), the Gaussian-splat renderer ComfyUI's own 3D viewer uses; it

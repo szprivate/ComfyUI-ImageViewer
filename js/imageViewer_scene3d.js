@@ -1333,6 +1333,8 @@ export function parseScene(raw) {
     if (data.walk && typeof data.walk === "object") scene.walk = walkSettings(data);
     const world = worldInfo(data);
     if (world) scene.world = world;
+    // The studio lights: left out = "auto" (imageViewer_worldData.js studioLightsOn).
+    if (data.defaultLights === "on" || data.defaultLights === "off") scene.defaultLights = data.defaultLights;
     // The clip sequencer's tracks and sources (imageViewer_clipSeqData.js tidies them).
     if (data.sequencer && typeof data.sequencer === "object") scene.sequencer = JSON.parse(JSON.stringify(data.sequencer));
     if (scene.activeCamera && !itemById(scene, scene.activeCamera)) scene.activeCamera = null;

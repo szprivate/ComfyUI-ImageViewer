@@ -1419,6 +1419,8 @@ export const PrevizMixin = {
             entries.push({ label: spec.label, cmd: `PrevizAdd${spec.label}`, run: () => this.previzAddPrimitive(spec.type) });
         }
         entries.push("-");
+        // Lights (imageViewer_worldData.js LIGHT_TYPES): plain three.js lights, so a path tracer can read them too.
+        if (this._previzLightMenuEntries) entries.push({ label: "Light", sub: this._previzLightMenuEntries() });
         // The world items as one submenu; opening and referencing scenes is File's.
         entries.push({ label: "World", sub: this._previzWorldMenuEntries().map((e) => ({ ...e, label: e.label.replace(/^World: /, "") })) });
         return entries;

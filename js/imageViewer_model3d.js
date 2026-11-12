@@ -846,6 +846,8 @@ export class Model3DView {
         if (this.controls && this.controls.enabled && !sceneCam && this.controls.update(dt)) again = true;
         // Wind and walking run the loop for as long as they last.
         if (this._worldTick(dt)) again = true;
+        // The studio lights, the shadow map and shadow casters follow the scene's own lights (imageViewer_world3d.js).
+        if (this._lightsFrame) this._lightsFrame();
         if (!this._paneRenderAll()) {
             const cam = this.activeCameraObject();
             this._dispApply(cam);
@@ -2490,6 +2492,10 @@ export class Model3DView {
             for (const entry of this._entries.values()) {
                 hide(entry.helper);
                 hide(entry.axes);
+                // A light's glyph is for finding it; its light is what the picture gets.
+                if (entry.item && entry.item.kind === "light" && entry.object) {
+                    for (const c of entry.object.children) if (c.userData.imageViewerLightGlyph) hide(c);
+                }
             }
         }
         // Rig controls are for the animator, never in the picture.
@@ -2509,6 +2515,7 @@ export class Model3DView {
         if (frame !== undefined && frame !== null) this.applyFrame(frame);
         // applyFrame shows the helpers again as it places things.
         this._renderHideOverlays();
+        if (this._lightsFrame) this._lightsFrame();
         const cam = r.cam;
         const max = (this.renderer.capabilities && this.renderer.capabilities.maxTextureSize) || 8192;
         let aa = Math.max(1, Math.min(4, Math.round(r.opts.aa || 1)));
