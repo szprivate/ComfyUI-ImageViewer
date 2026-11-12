@@ -23,7 +23,8 @@ except ImportError:  # pragma: no cover
     sync_playwright = None
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-SHOTS = None
+# A folder to write screenshots of the grid options and File > Import Model… into (VIEW3D_SHOTS).
+SHOTS = os.environ.get("VIEW3D_SHOTS") or None
 
 SETUP = """async () => {
   const P = window.__panel;
@@ -295,6 +296,114 @@ class MenuBarPaneTests(unittest.TestCase):
         self.assertTrue(after["widgets"])
         self.assertFalse(after["box"])
         self.assertEqual(self.errors, [])
+
+    def _shot(self, pg, name):
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.screenshot(path=os.path.join(SHOTS, name))
+
+    def test_the_grid_has_a_size_and_a_spacing(self):
+        pg = self._page()
+        try:
+            V = "window.__panel._modelView()"
+            pg.evaluate("() => localStorage.removeItem('imageviewer.viewer.grid3d')")
+            before = pg.evaluate(f"() => ({V}.grid.userData.gridLayout)")
+            # The caret beside Grid opens the options.
+            pg.evaluate_handle(f"() => {V}.root.querySelector('.model-grid-more')").as_element().click()
+            pg.wait_for_timeout(100)
+            menu = f"{V}.root.querySelector('.model-grid-menu')"
+            opened = pg.evaluate(f"() => !!{menu}")
+            size = pg.evaluate_handle(f"() => {menu}.querySelector('input[data-grid=size]')").as_element()
+            size.fill("40")
+            size.press("Enter")
+            spacing = pg.evaluate_handle(f"() => {menu}.querySelector('input[data-grid=spacing]')").as_element()
+            spacing.fill("0.5")
+            spacing.press("Enter")
+            # Typing W in a field does not switch the tool.
+            mode_before = pg.evaluate(f"() => {V}.gizmoMode")
+            spacing.press("w")
+            mode_after = pg.evaluate(f"() => {V}.gizmoMode")
+            pg.evaluate_handle(f"() => {menu}.querySelector('input[data-grid=auto]')").as_element().click()
+            pg.wait_for_timeout(100)
+            if SHOTS:
+                # Back off a little, so the picture shows the grid around the box.
+                pg.evaluate(f"() => {{ const v = {V}; v.camera.position.set(4, 3, 4); v.controls.update(); v.requestRender(); }}")
+                pg.wait_for_timeout(200)
+            self._shot(pg, "grid-options.png")
+            after = pg.evaluate(f"() => ({{ lay: {V}.grid.userData.gridLayout, scale: {V}.grid.scale.x, "
+                                f"inScene: {V}.grid.parent === {V}.scene, visible: {V}.grid.visible, "
+                                f"note: {menu}.querySelector('.model-grid-note').textContent, "
+                                "kept: JSON.parse(localStorage.getItem('imageviewer.viewer.grid3d')) })")
+            pg.keyboard.press("Escape")
+            pg.wait_for_timeout(50)
+            closed = pg.evaluate(f"() => !{menu}")
+            # View > Grid options… opens the same box.
+            pg.evaluate("() => window.__panel.previzMenuBarOpen('view')")
+            pg.wait_for_timeout(50)
+            pg.locator("button.previz-menu-item", has_text="Grid options").click()
+            pg.wait_for_timeout(100)
+            from_view = pg.evaluate(f"() => !!{menu}")
+            pg.keyboard.press("Escape")
+            # Reset puts ComfyUI's 20 x 20 back.
+            pg.evaluate(f"() => {V}.resetGridOptions()")
+            reset = pg.evaluate(f"() => {V}.grid.userData.gridLayout")
+            count = pg.evaluate(f"() => {V}.scene.children.filter((c) => c.name === 'grid').length")
+        finally:
+            pg.close()
+        self.assertEqual(before["divisions"], 20)
+        self.assertTrue(opened)
+        self.assertEqual(after["lay"]["size"], 40)
+        self.assertEqual(after["lay"]["spacing"], 0.5)
+        self.assertEqual(after["lay"]["divisions"], 80)
+        self.assertEqual(after["scale"], 1)
+        self.assertTrue(after["inScene"] and after["visible"])
+        self.assertEqual(after["kept"], {"size": 40, "spacing": 0.5, "major": 10, "auto": False})
+        self.assertIn("40 across", after["note"])
+        self.assertEqual(mode_before, mode_after)
+        self.assertTrue(closed)
+        self.assertTrue(from_view)
+        self.assertEqual(reset["divisions"], 20)
+        self.assertEqual(count, 1)
+        self.assertEqual(self.errors, [])
+
+    def test_models_come_in_through_file_import_model(self):
+        pg = self._page()
+        try:
+            create = self._labels_of(pg, "create")
+            file_items = self._labels_of(pg, "file")
+            pg.evaluate("() => window.__panel.previzMenuBarOpen('file')")
+            pg.wait_for_timeout(50)
+            self._shot(pg, "file-import-model.png")
+            pg.locator("button.previz-menu-item", has_text="Import Model").click()
+            pg.wait_for_timeout(300)
+            picker = pg.evaluate("""() => { const d = window.__panel.container.querySelector('.pick-dlg');
+                return d && { title: d.querySelector('.rd-title').textContent, go: d.querySelector('.rd-go').textContent }; }""")
+            self._shot(pg, "import-model-picker.png")
+            pg.keyboard.press("Escape")
+            # With models selected in the File Browser they go in at once.
+            added = pg.evaluate("""async () => { const P = window.__panel; const seen = [];
+                P._selectedBrowserFiles = () => [{ kind: 'model', path: '/x/robot.glb', name: 'robot.glb' }, { kind: 'image', path: '/x/a.png' }];
+                const was = P.previzAddModels; P.previzAddModels = async (items) => { seen.push(...items); return items.length; };
+                await P.previzImportModel(); P.previzAddModels = was; delete P._selectedBrowserFiles;
+                return seen.map((s) => s.name); }""")
+        finally:
+            pg.close()
+        self.assertNotIn("Model…", create)
+        self.assertIn("Camera", create)
+        self.assertIn("Import Model…", file_items)
+        self.assertLess(file_items.index("Open USD / Alembic…"), file_items.index("Import Model…"))
+        self.assertEqual(picker, {"title": "Import Model", "go": "Import"})
+        self.assertEqual(added, ["robot.glb"])
+        self.assertEqual(self.errors, [])
+
+    def _labels_of(self, pg, menu):
+        pg.evaluate(f"() => window.__panel.previzMenuBarOpen('{menu}')")
+        pg.wait_for_timeout(50)
+        out = pg.locator("button.previz-menu-item").all_inner_texts()
+        pg.keyboard.press("Escape")
+        pg.mouse.click(800, 600)
+        pg.wait_for_timeout(50)
+        return [t.split("\n")[0].strip() for t in out]
 
 
 if __name__ == "__main__":
