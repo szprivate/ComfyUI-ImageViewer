@@ -40,6 +40,8 @@ export const ModelMixin = {
                 onPick: (id, add) => this.previzSelect(id, { add }),
                 // Clicks and boxes, with Maya's modifiers (imageViewer_view3dTools.js).
                 onMarquee: (ids, mode) => this.previzSelectMany(ids, mode),
+                // What a framing mask masks: the gate, or the whole view (imageViewer_frameMasks.js).
+                onGate: (g) => { if (this._frameMaskGate) this._frameMaskGate(g); },
                 // K held + drag scrubs the timeline (imageViewer_previzHotkeys.js).
                 scrubHeld: () => !!this._previzKHeld,
                 onScrubStart: () => this.previzScrubStart(),

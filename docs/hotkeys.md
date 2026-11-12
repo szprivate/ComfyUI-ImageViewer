@@ -14,6 +14,7 @@ Keys work while the pointer is over the viewer, and not while you type in a fiel
 | <kbd>1</kbd>–<kbd>9</kbd> | Switch tab |
 | <kbd>F</kbd> | Fit to screen |
 | <kbd>S</kbd> | Toggle overlays |
+| <kbd>Shift</kbd>+<kbd>G</kbd> | Framing mask on / off |
 | <kbd>Shift</kbd>+<kbd>F</kbd> | Full screen (<kbd>Esc</kbd> leaves) |
 | <kbd>C</kbd> | Compare on / off, then through the modes |
 | <kbd>R</kbd> <kbd>G</kbd> <kbd>B</kbd> | One channel (again for RGB) |

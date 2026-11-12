@@ -1821,9 +1821,11 @@ export class Model3DView {
         if (!entry || !entry.camera || !this._panePlain()) {
             ui.gate.style.display = "none";
             this._syncReference(null, null);
+            this._gateTell(null);
             return;
         }
         const g = this._gateRect(entry.item);
+        this._gateTell(g);
         this._syncReference(entry, g);
         const [rw, rh] = cameraResolution(entry.item);
         const px = (v) => `${Math.round(v)}px`;
@@ -1835,6 +1837,22 @@ export class Model3DView {
         Object.assign(right.style, { left: px(g.x + g.w), top: px(g.y), width: px(g.vw - g.x - g.w), height: px(g.h) });
         Object.assign(ui.gateFrame.style, { left: px(g.x), top: px(g.y), width: px(g.w), height: px(g.h) });
         ui.gateLabel.textContent = `${entry.item.name}  ${rw} × ${rh}`;
+    }
+
+    /**
+     * Tell the panel what a framing mask (imageViewer_frameMasks.js) masks: the
+     * gate `g` while looking through a camera, else the whole stage with one
+     * view on it, else (split panes) nothing.
+     */
+    _gateTell(g) {
+        if (!this.hooks.onGate) return;
+        let r = null;
+        if (g) r = { x: g.x, y: g.y, w: g.w, h: g.h };
+        else if (this.stage && this._panePlain()) r = { x: 0, y: 0, w: this.stage.clientWidth, h: this.stage.clientHeight };
+        const sig = r ? `${r.x}|${r.y}|${r.w}|${r.h}` : "";
+        if (sig === this._gateTellSig) return;
+        this._gateTellSig = sig;
+        this.hooks.onGate(r);
     }
 
     // ── The pivot ────────────────────────────────────────────────────────────

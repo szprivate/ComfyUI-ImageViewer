@@ -99,6 +99,8 @@ export const EDIT_ICONS = {
            P("m14 7 3 3"), P("M5 6v4"), P("M19 14v4"), P("M10 2v2"), P("M7 8H3"), P("M21 16h-4"), P("M11 3H9")],
     close: [P("M18 6 6 18"), P("m6 6 12 12")],
     fit: [P("M3 7V5a2 2 0 0 1 2-2h2"), P("M17 3h2a2 2 0 0 1 2 2v2"), P("M21 17v2a2 2 0 0 1-2 2h-2"), P("M7 21H5a2 2 0 0 1-2-2v-2"), C(12, 12, 3), P("m16 16-1.9-1.9")],
+    // a frame with letterbox bars: the Viewer's framing mask (imageViewer_frameMasks.js)
+    frameMask: [["rect", { width: 20, height: 16, x: 2, y: 4, rx: 2 }], P("M2 8.5h20"), P("M2 15.5h20")],
 };
 
 /** Put icon `name` on button `b`, in place of its text. */

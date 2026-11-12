@@ -174,8 +174,9 @@ class ViewerAudioTests(unittest.TestCase):
         pg.wait_for_function("() => window.__panel.videoBase.duration > 0", timeout=15000)
         order = pg.evaluate("""() => { const b = window.__panel.shadowRoot.getElementById('audio-btn');
           return [b.previousElementSibling.id, b.id, b.nextElementSibling.id, b.nextElementSibling.nextElementSibling.id]; }""")
-        self.assertEqual(order, ["overlays-btn", "audio-btn", "audio-more-btn", "fullscreen-btn"],
-                         "the speaker and its caret stand right of Toggle Overlays")
+        # Toggle Overlays, the framing mask's button and caret (imageViewer_frameMasks.js), then the speaker.
+        self.assertEqual(order, ["frame-mask-more-btn", "audio-btn", "audio-more-btn", "fullscreen-btn"],
+                         "the speaker and its caret stand right of Toggle Overlays and the framing mask")
         st = lambda: pg.evaluate("""() => { const P = window.__panel, b = P.audioBtn;
           return { muted: P.videoBase.muted, icon: b.dataset.icon, on: b.classList.contains('on'),
                    kept: localStorage.getItem('imageviewer.viewer.viewerAudio'), edit: P._editAudio().play }; }""")

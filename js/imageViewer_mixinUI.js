@@ -1250,6 +1250,7 @@ export const UIMixin = {
         const nat = this._baseMediaSize ? this._baseMediaSize() : { w: 0, h: 0 };
         if (this.sliderMode === 'contact' || !el || !nat.w || !nat.h) {
             this.imgFrame.style.display = 'none';
+            if (this.frameMaskClear) this.frameMaskClear();
             return;
         }
 
@@ -1259,6 +1260,7 @@ export const UIMixin = {
         const elH = el.clientHeight;
         if (!elW || !elH) {
             this.imgFrame.style.display = 'none';
+            if (this.frameMaskClear) this.frameMaskClear();
             return;
         }
 
@@ -1292,6 +1294,8 @@ export const UIMixin = {
         this.imgFrame.style.height = `${drawH}px`;
         this.imgFrame.style.transform = el.style.transform || '';
         this.imgFrame.style.display = 'block';
+        // The framing mask over the same picture (imageViewer_frameMasks.js).
+        if (this.frameMaskSync) this.frameMaskSync({ x: left, y: top, w: drawW, h: drawH });
     },
 
     // ── Zoom & pan ────────────────────────────────────────────────────────────
