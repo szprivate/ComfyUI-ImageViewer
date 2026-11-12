@@ -2251,10 +2251,18 @@ export class Model3DView {
             // `live`: the object is already where the gizmo put it, so the scene
             // only has to take the numbers — rebuilding the panel and rewriting
             // the node's widget on every mouse move is what that would cost.
-            // A camera with a look-at target keeps facing it while it is moved (only its roll turns).
-            if (entry && entry.camera && entry.aimTarget) this._aimOrient(entry.root, entry.aimTarget);
+            // A camera with a look-at target keeps facing it while it is moved;
+            // the Rotate tool turns only its roll, which goes to its Roll channel.
+            let aimRoll = null;
+            if (entry && entry.camera && entry.aimTarget) {
+                if (this.gizmoMode === "rotate") entry.aimRoll = this._aimRollOf(entry.root.quaternion);
+                this._aimOrient(entry.root, entry.aimTarget, entry.aimRoll ?? null);
+                if (this.gizmoMode === "rotate") aimRoll = entry.aimRoll * 180 / Math.PI;
+            }
             if (entry && this.hooks.onTransform) {
-                this.hooks.onTransform(this.selected, this.readTransform(entry.root, entry.item), true);
+                const t = this.readTransform(entry.root, entry.item);
+                if (aimRoll !== null) t.aimRoll = aimRoll;
+                this.hooks.onTransform(this.selected, t, true);
             }
             if (entry && entry.aimTarget) this._aimSync();
             if (entry && entry.helper) entry.helper.update();

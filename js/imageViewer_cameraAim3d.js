@@ -3,8 +3,9 @@
 // side is imageViewer_cameraAim.js). Mixed onto Model3DView.
 //
 //   - A camera whose target is on is turned to face it in applyFrame
-//     (_aimOrient), keeping the roll its own Rotate channels give (_aimRollOf:
-//     the twist about the view axis, measured against looking level with +Y up).
+//     (_aimOrient), then rolled by its Roll channel ("aim:roll"); _aimRollOf
+//     measures a roll (the twist about the view axis, against looking level
+//     with +Y up), which is what the Rotate tool's drag on such a camera sets.
 //   - Its target is drawn as a small cross with a line from the camera, and
 //     while that camera is selected a second gizmo (translate, world axes) sits
 //     on the target, so it is dragged in the canvas like any object
@@ -17,7 +18,7 @@
 //     the move is reported with the target (_aimReported).
 //
 // Clean-room: written from what a look-at camera does, not from any program's code.
-import { aimOn, AIM_PROPS } from "./imageViewer_cameraAim.js";
+import { aimOn, AIM_PROPS, ROLL_PROP } from "./imageViewer_cameraAim.js";
 import { currentValue } from "./imageViewer_scene3d.js";
 
 const MARK_COLOR = 0xd9b44a;        // the target, as the cameras' frustums are drawn
@@ -44,12 +45,20 @@ export const CameraAim3DMixin = {
         return 2 * Math.atan2(twist.z, twist.w);
     },
 
-    /** Turn a camera object to face `target` (a Vector3, world), keeping its roll. */
-    _aimOrient(cam, target) {
+    /** A look-at camera's roll at `frame`, in degrees. */
+    aimRollOf(item, frame = this.sceneFrame) {
+        return item ? Number(currentValue(this.scene3d, item, ROLL_PROP, Math.round(frame || 0))) || 0 : 0;
+    },
+
+    /**
+     * Turn a camera object to face `target` (a Vector3, world), then roll it by
+     * `roll` radians - or by the roll it has now when none is given.
+     */
+    _aimOrient(cam, target, roll = null) {
         const { THREE } = this.libs;
         const pos = cam.getWorldPosition(new THREE.Vector3());
         if (pos.distanceToSquared(target) < 1e-12) return false;
-        const roll = this._aimRollOf(cam.quaternion);
+        if (roll === null) roll = this._aimRollOf(cam.quaternion);
         cam.up.set(0, 1, 0);
         cam.lookAt(target);
         if (roll) cam.rotateZ(roll);
@@ -69,7 +78,8 @@ export const CameraAim3DMixin = {
         if (this._aimGizmo && this._aimGizmo.dragging && this._aimGizmo.object && this._aimEntryId === item.id) {
             entry.aimTarget.copy(this._aimGizmo.object.position);
         }
-        this._aimOrient(entry.root, entry.aimTarget);
+        entry.aimRoll = this.aimRollOf(item) * Math.PI / 180;
+        this._aimOrient(entry.root, entry.aimTarget, entry.aimRoll);
     },
 
     // ── Drawing the target ──────────────────────────────────────────────────
@@ -162,7 +172,7 @@ export const CameraAim3DMixin = {
             if (!entry || !this._aimHandle) return;
             const t = this._aimHandle.position;
             entry.aimTarget = t.clone();
-            this._aimOrient(entry.root, entry.aimTarget);
+            this._aimOrient(entry.root, entry.aimTarget, entry.aimRoll ?? null);
             if (entry.helper) entry.helper.update();
             if (this.hooks.onAimTarget) this.hooks.onAimTarget(entry.item.id, t.toArray(), true);
             this._aimSync();

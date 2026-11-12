@@ -19,7 +19,7 @@
 // panel nor steals the field you are typing in.
 import * as S from "./imageViewer_scene3d.js";
 import { constraintOf, parseWeightProp, weightRange } from "./imageViewer_constraintData.js";
-import { AIM_LABELS, AIM_PROPS, aimOn, aimSettings, defaultAimTarget, isAimProp } from "./imageViewer_cameraAim.js";
+import { AIM_LABELS, AIM_PROPS, ROLL_PROP, aimOn, aimSettings, defaultAimTarget, isAimProp } from "./imageViewer_cameraAim.js";
 
 // id → [prop, component, label, step]; component is null for a lone number.
 const TRANSFORM = [
@@ -294,6 +294,8 @@ export const PrevizChannelsMixin = {
             }
             if (aimOn(item)) {
                 AIM_PROPS.forEach((p, i) => numberRow(p, p, null, AIM_LABELS[i], 0.1, t));
+                // Turns the camera about the line to its target, in degrees.
+                numberRow(ROLL_PROP, ROLL_PROP, null, "Roll", 1, t);
             }
         } else if (item.kind === "control" && item.control && item.control.type === "ik") {
             // 1 follows this IK control, 0 the limb's FK controls; keyable.
@@ -455,7 +457,7 @@ export const PrevizChannelsMixin = {
     previzSetChannel(prop, comp, value, { live = false, from = null } = {}) {
         const items = this._cbItems();
         if (!items.length) return;
-        const label = prop === "fov" ? "field of view" : isAimProp(prop) ? "look-at target"
+        const label = prop === "fov" ? "field of view" : prop === ROLL_PROP ? "roll" : isAimProp(prop) ? "look-at target"
             : S.isExtraProp(prop) ? "constraint weight" : prop;
         if (live) this.previzBeginDrag(`set ${label}`);
         else if (!this._previzDragging) this.previzSnapshot(`set ${label}`);
@@ -586,7 +588,11 @@ export const PrevizChannelsMixin = {
                     const t = view.controls.target, p = at.position;
                     d = Math.hypot(t.x - p[0], t.y - p[1], t.z - p[2]);
                 }
-                cam.aim = { on: true, target: had ? aimSettings(cam).target : defaultAimTarget({ position: at.position, rotation: at.rotation }, d) };
+                // Its roll now, so switching on does not tilt the picture.
+                const entry = view && view._entries && view._entries.get(cam.id);
+                const roll = entry && entry.root && view._aimRollOf ? view._aimRollOf(entry.root.quaternion) * 180 / Math.PI : 0;
+                cam.aim = { on: true, target: had ? aimSettings(cam).target : defaultAimTarget({ position: at.position, rotation: at.rotation }, d),
+                            roll: Math.round(roll * 1000) / 1000 };
             } else {
                 // What the view shows now (the aimed direction), kept as its rotation.
                 const entry = view && view._entries && view._entries.get(cam.id);

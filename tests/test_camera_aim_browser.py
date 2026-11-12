@@ -189,6 +189,16 @@ class CameraAimOriginTests(unittest.TestCase):
             pg.wait_for_timeout(200)
             typed = pg.evaluate("() => window.__panel.previzSelectedItem().aim.target")
             facing_typed = pg.evaluate(self.FACING, cid)
+            # Roll turns it about the line to its target, still facing it.
+            roll_in = pg.evaluate_handle(f"() => {cb}.querySelector('.cb-row[data-ch=\"aim:roll\"] input')").as_element()
+            roll_in.scroll_into_view_if_needed()
+            roll_in.fill("30")
+            roll_in.press("Enter")
+            pg.wait_for_timeout(200)
+            rolled = pg.evaluate(self.FACING, cid)
+            roll_in.fill("0")
+            roll_in.press("Enter")
+            pg.wait_for_timeout(150)
             self._shot(pg, "camera-look-at.png")
 
             # The target's gizmo, dragged with the mouse by its centre (moves in the view's plane).
@@ -231,13 +241,15 @@ class CameraAimOriginTests(unittest.TestCase):
         self.assertFalse(default["gizmo"])
         self.assertAlmostEqual(facing_off["fwd"][2], -1, places=5)     # no target: it looks where it was turned
         self.assertTrue(on["aim"]["on"])
-        self.assertEqual(on["labels"], ["aim", "aim:x", "aim:y", "aim:z"])
+        self.assertEqual(on["labels"], ["aim", "aim:x", "aim:y", "aim:z", "aim:roll"])
         self.assertTrue(on["gizmo"] and on["viz"])
         self.assertAlmostEqual(facing_on["dot"], 1, places=5)
         # Switched on, the target lands where it already looked: nothing jumps.
         self.assertAlmostEqual(facing_on["fwd"][2], -1, places=5)
         self.assertEqual(typed, [0, 0.5, 0])
         self.assertAlmostEqual(facing_typed["dot"], 1, places=5)
+        self.assertAlmostEqual(rolled["roll"], 30, places=3)
+        self.assertAlmostEqual(rolled["dot"], 1, places=5)
         self.assertIsNotNone(hot)
         self.assertNotEqual(dragged["target"], [0, 0.5, 0])
         self.assertEqual(dragged["selected"], "camera")

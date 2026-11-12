@@ -1,7 +1,7 @@
 // A camera's look-at target (imageViewer_cameraAim.js), the pure parts.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AIM_PROPS, aimOn, aimSettings, defaultAimTarget, forwardOf, readAim } from "../js/imageViewer_cameraAim.js";
+import { AIM_PROPS, ROLL_PROP, aimOn, aimSettings, defaultAimTarget, forwardOf, readAim } from "../js/imageViewer_cameraAim.js";
 import * as S from "../js/imageViewer_scene3d.js";
 
 const near = (a, b, eps = 1e-9) => a.every((v, i) => Math.abs(v - b[i]) < eps);
@@ -55,4 +55,17 @@ test("a scene keeps a camera's look-at, and a camera without one stays without",
     assert.equal(b.aim, undefined);
     assert.equal(c.aim, undefined);
     assert.equal(readAim({ on: false, target: [0, 0, 0] }).on, false);
+});
+
+test("the roll is a channel of its own, kept with the scene", () => {
+    const cam = S.makeCameraItem("Cam", { aim: { on: true, target: [0, 0, 0] } });
+    assert.equal(S.staticValue(cam, ROLL_PROP), 0);
+    S.setStaticValue(cam, ROLL_PROP, 30);
+    assert.equal(cam.aim.roll, 30);
+    assert.deepEqual(cam.aim.target, [0, 0, 0]);
+    S.setKeyframe(cam, ROLL_PROP, 0, 0);
+    S.setKeyframe(cam, ROLL_PROP, 10, 90);
+    assert.equal(S.valueAt(cam, ROLL_PROP, 10), 90);
+    const back = S.parseScene({ items: [{ id: "c", kind: "camera", aim: { on: true, target: [1, 2, 3], roll: 15 } }] });
+    assert.deepEqual(back.items[0].aim, { on: true, target: [1, 2, 3], roll: 15 });
 });
