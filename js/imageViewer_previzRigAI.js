@@ -212,7 +212,7 @@ export const PrevizRigAIMixin = {
                 clean = Object.assign(el("input"), { type: "checkbox", checked: !!(tools.kimodo && tools.kimodo.ready) });
                 clean.disabled = !(tools.kimodo && tools.kimodo.ready);
                 const lc = el("label", "rd-sub"); lc.append(clean, " Clean up with Kimodo (smooth, on its feet)");
-                if (clean.disabled) lc.title = "Kimodo is not set up (Rig › Set up…)";
+                if (clean.disabled) lc.title = "Kimodo is not set up (Rig › Install AI rigging / motion models…)";
                 prompt = Object.assign(el("input", "rd-in rd-text"), { value: "", placeholder: "Optional, for the clean-up: a person dances" });
                 prompt.style.width = "100%";
                 feet = Object.assign(el("input"), { type: "checkbox", checked: true });
@@ -261,7 +261,7 @@ export const PrevizRigAIMixin = {
         const use = via === "sam3d" || via === "mediapipe" ? via : sam ? "sam3d" : mp ? "mediapipe" : null;
         if (!use) {
             return { ok: false, message: "Motion from video needs SAM 3D Body (its weights in models/detection: the Pose dialog fetches them) "
-                + "or the pose tracker (Rig → Set up…)." };
+                + "or the pose tracker (Rig › Install AI rigging / motion models…)." };
         }
         let track;
         if (use === "sam3d") {
@@ -269,7 +269,7 @@ export const PrevizRigAIMixin = {
             if (!got.ok) return got;
             track = got.track;
         } else {
-            if (!mp) return { ok: false, message: `The pose tracker is not set up: ${(tools.posetrack && tools.posetrack.why) || "Rig → Set up…"}` };
+            if (!mp) return { ok: false, message: `The pose tracker is not set up: ${(tools.posetrack && tools.posetrack.why) || "Rig › Install AI rigging / motion models…"}` };
             const job = await this._previzRigJob("/imageviewer/rig/video_pose", { src, ...range }, { progress });
             if (job.state !== "done") return { ok: false, message: `The film was not tracked: ${job.error || job.state}` };
             track = job.result;

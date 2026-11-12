@@ -407,6 +407,7 @@ class RigBrowserTests(unittest.TestCase):
         # Two menus: Rig builds the character, Animation moves it.
         self.assertIn("Auto-rig…", menus["rig"])
         self.assertIn("Set Driven Key…", menus["rig"])
+        self.assertEqual(list(menus["rig"])[0], "Install AI rigging / motion models…")   # Sebastian 2026-11-12
         self.assertNotIn("AI in-between…", menus["rig"])
         for label in ("AI in-between…", "Pose library…", "Motion from video…", "Lip sync from audio…",
                       "Add motion from file…", "Match FK to IK"):

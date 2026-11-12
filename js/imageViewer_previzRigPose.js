@@ -99,10 +99,10 @@ export const PrevizRigPoseMixin = {
         const use = via === "sam3d" || via === "mediapipe" ? via : sam ? "sam3d" : mp ? "mediapipe" : null;
         if (!use) {
             return { ok: false, message: "A pose from a picture needs SAM 3D Body (its weights in models/detection: the Pose dialog fetches them) "
-                + "or the pose tracker (Rig → Set up…)." };
+                + "or the pose tracker (Rig › Install AI rigging / motion models…)." };
         }
         if (use === "mediapipe") {
-            if (!mp) return { ok: false, message: `The pose tracker is not set up: ${(tools.posetrack && tools.posetrack.why) || "Rig → Set up…"}` };
+            if (!mp) return { ok: false, message: `The pose tracker is not set up: ${(tools.posetrack && tools.posetrack.why) || "Rig › Install AI rigging / motion models…"}` };
             const job = await this._previzRigJob("/imageviewer/rig/video_pose", { src: image }, { progress });
             if (job.state !== "done") return { ok: false, message: `The picture was not read: ${job.error || job.state}` };
             const fr = (job.result.frames || [])[0];
@@ -161,7 +161,7 @@ export const PrevizRigPoseMixin = {
     /** Kimodo makes about two seconds from where the character stands; its last frame, in place, is the pose. */
     async _previzRigPoseFromPrompt(prompt, { k0, heading, seed, progress }) {
         const tools = await this._previzRigTools();
-        if (!tools.kimodo || !tools.kimodo.ready) return { message: "A pose from a prompt needs Kimodo (Rig → Set up…); name a preset or joints instead." };
+        if (!tools.kimodo || !tools.kimodo.ready) return { message: "A pose from a prompt needs Kimodo (Rig › Install AI rigging / motion models…); name a preset or joints instead." };
         const frames = 2 * M.MOTION_FPS + 1;
         const job = await this._previzRigJob("/imageviewer/rig/motion", {
             mode: "text", prompt: `${prompt.replace(/[.\s]+$/, "")}, then holds still.`,
@@ -200,7 +200,7 @@ export const PrevizRigPoseMixin = {
                     return { name, b };
                 });
                 prompt = Object.assign(el("input", "rd-in"), { type: "text", disabled: !kimodo,
-                    placeholder: kimodo ? "or in words: a person sits and reads a book" : "in words needs Kimodo (Rig → Set up…)" });
+                    placeholder: kimodo ? "or in words: a person sits and reads a book" : "in words needs Kimodo (Rig › Install AI rigging / motion models…)" });
                 prompt.style.width = "100%";
                 at = Object.assign(el("input", "rd-in rd-num"), { type: "number", value: Math.round(this.currentFrame || 0), min: 0 });
                 const fl = el("div", "rd-sub");
@@ -215,7 +215,7 @@ export const PrevizRigPoseMixin = {
                 facePic = Object.assign(el("input"), { type: "checkbox", checked: false });
                 const lfp = el("label", "rd-sub"); lfp.append(facePic, " Turn the character as the person in the picture is turned");
                 viaSel = el("select", "rd-in");
-                for (const [v, t, ok] of [["sam3d", "SAM 3D Body (ComfyUI)", sam.ready], ["mediapipe", "MediaPipe (Rig › Set up…)", tools.posetrack && tools.posetrack.ready]]) {
+                for (const [v, t, ok] of [["sam3d", "SAM 3D Body (ComfyUI)", sam.ready], ["mediapipe", "MediaPipe (Rig › Install AI rigging / motion models…)", tools.posetrack && tools.posetrack.ready]]) {
                     const o = el("option", "", ok ? t : `${t} - not set up`); o.value = v; o.disabled = !ok; viaSel.append(o);
                 }
                 viaSel.value = sam.ready ? "sam3d" : "mediapipe";

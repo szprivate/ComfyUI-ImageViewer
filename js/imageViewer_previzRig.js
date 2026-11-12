@@ -473,7 +473,7 @@ export const PrevizRigMixin = {
             { label: "Add FK controls only", disabled: !bones, run: () => this.previzRigCharacter(modelId, { humanoid: false }) },
             { label: "Auto-rig…", disabled: !model,
               run: () => this.previzAutoRigDialog && this.previzAutoRigDialog(modelId) },
-            { label: "Set up auto-rig and AI motion…", run: () => this.previzRigInstallDialog && this.previzRigInstallDialog() },
+            { label: "Install AI rigging / motion models…", run: () => this.previzRigInstallDialog && this.previzRigInstallDialog() },
             { label: "Remove rig", disabled: !rigged, run: () => this.previzRemoveRig(modelId) },
             "-",
             { label: "Select all controls", disabled: !rigged, run: () => this.previzRigSelectControls(modelId) },
@@ -518,7 +518,8 @@ export const PrevizRigMixin = {
  */
 const RIG_MENUS = {
     rig: [
-        [/^Add controls/, /^Add FK controls/, /^Auto-rig/, /^Set up auto-rig/, /^Remove rig/],
+        [/^Install AI rigging/],
+        [/^Add controls/, /^Add FK controls/, /^Auto-rig/, /^Remove rig/],
         [/^Set Driven Key/, /^Add attribute/, /facial controls$/],
     ],
     anim: [

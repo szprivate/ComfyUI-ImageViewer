@@ -153,7 +153,7 @@ export const PrevizRigToolsMixin = {
         let folder, both, token;
         const NAMES = { unirig: "auto-rigging (UniRig)", kimodo: "AI motion (Kimodo)", posetrack: "motion from video (MediaPipe pose)" };
         await openExportDialog(this.container, {
-            title: "Set up the character tools",
+            title: "Install AI rigging / motion models",
             kind: "character",
             plain: true,
             background: true,

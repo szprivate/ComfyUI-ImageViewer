@@ -477,7 +477,7 @@ class RigToolsBrowserTests(unittest.TestCase):
         try:
             pg.evaluate(OPEN, ["statue.glb", "Statue"])
             self._menu(pg, "Auto-rig")
-            box = pg.locator('.rd-box[aria-label="Set up the character tools"]')
+            box = pg.locator('.rd-box[aria-label="Install AI rigging / motion models"]')
             box.wait_for(state="visible", timeout=10000)
             text = box.inner_text()
             self.assertEqual(box.locator('input[type="password"]').count(), 1)
