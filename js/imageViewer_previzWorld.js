@@ -14,6 +14,7 @@ import { SPLAT_FORMATS, modelFormatOf } from "./imageViewer_model3d.js";
 import {
     WORLD_KINDS, WORLD_FIELDS, SCATTER_TYPES, makeEnvironmentItem, makeTerrainItem, makeScatterItem,
     makeDepthMeshItem, makeLightItem, getPath, setPath, referenceSettings,
+    worldFields, lightSettings, LIGHT_DEFAULTS, LIGHT_TYPES, LIGHT_LABELS, DEFAULT_LIGHTS,
 } from "./imageViewer_worldData.js";
 
 const SCATTER_LABELS = { pine: "Pines", tree: "Trees", bush: "Bushes", grass: "Grass", rock: "Rocks",
@@ -64,6 +65,32 @@ export const PrevizWorldMixin = {
         return entries;
     },
 
+    /** Create > Light: one row per light type. */
+    _previzLightMenuEntries() {
+        return LIGHT_TYPES.map((t) => ({ label: LIGHT_LABELS[t].replace(/ light$/, ""), run: () => this.previzAddLight(t) }));
+    },
+
+    /** Add a light of `type` (point, spot, directional, area, dome) and select it. */
+    previzAddLight(type = "point") {
+        return this.previzAddWorldItem("light", LIGHT_TYPES.includes(type) ? type : "point");
+    },
+
+    /** The scene's default (studio) lights: "auto" (off once the scene has a light of its own), "on" or "off". */
+    previzDefaultLights() {
+        const scene = this.previzScene();
+        return scene && DEFAULT_LIGHTS.includes(scene.defaultLights) ? scene.defaultLights : "auto";
+    },
+
+    previzSetDefaultLights(mode) {
+        const scene = this.previzScene();
+        if (!scene || !DEFAULT_LIGHTS.includes(mode) || this.previzDefaultLights() === mode) return;
+        this.previzSnapshot("default lights");
+        if (mode === "auto") delete scene.defaultLights; else scene.defaultLights = mode;
+        this.previzChanged();
+        const view = this._modelView();
+        if (view && view._worldSyncStudio) { view._worldSyncStudio(); view.requestRender(); }
+    },
+
     _worldId(scene, base) {
         const taken = new Set((scene.items || []).map((i) => i.id));
         if (!taken.has(base)) return base;
@@ -106,10 +133,12 @@ export const PrevizWorldMixin = {
                 item.name = `${picked[0].name} scatter`;
             }
         } else if (kind === "light") {
-            item = makeLightItem(this._worldId(scene, "light"));
+            // `type` here is the light's (Create > Light); the World kit's Lamp passes none.
+            const lightType = LIGHT_TYPES.includes(type) ? type : null;
+            item = makeLightItem(this._worldId(scene, "light"), lightType);
             const view = this._modelView();
             const at = view && view.viewFocus && view.viewFocus();
-            if (at) item.position = [at[0], at[1] + 3, at[2]];
+            if (at) item.position = [at[0] + item.position[0], at[1] + item.position[1] - (lightType ? 1 : 0), at[2] + item.position[2]];
         } else if (kind === "depthmesh") {
             const pics = this._previzPictures();
             const depth = pics.find((p) => /depth|disp/i.test(p.name || "")) || pics[1];
@@ -163,6 +192,11 @@ export const PrevizWorldMixin = {
             const fields = WORLD_FIELDS[item.kind] || [];
             if (!fields.some((f) => f.path === path)) continue;
             setPath(item, path, value);
+            // Another type of light starts at that type's brightness: a sun's 3 lux is no bulb's 100 cd.
+            if (path === "light.type" && LIGHT_DEFAULTS[value]) {
+                item.light = { ...item.light, ...LIGHT_DEFAULTS[value] };
+                item.light = lightSettings(item);
+            }
         }
         // The reference overlay is HTML over the view; it only needs a redraw.
         if (path.startsWith("reference.")) {
@@ -178,9 +212,9 @@ export const PrevizWorldMixin = {
 
     /** The rows for a world item's settings (or a camera's reference). */
     _cbWorldRows(ui, item, shape, doc) {
-        const fields = (WORLD_FIELDS[item.kind] || []).filter((f) => !f.needs || getPath(item, f.needs));
+        const fields = worldFields(item).filter((f) => !f.needs || getPath(item, f.needs));
         if (!fields.length) return;
-        const title = item.kind === "camera" ? "Reference" : `${item.name}Settings`;
+        const title = item.kind === "camera" ? "Reference" : `${item.name} settings`;
         const t = shape(title);
         for (const f of fields) {
             const row = doc.createElement("div");
