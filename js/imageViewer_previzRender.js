@@ -417,6 +417,8 @@ export const PrevizRenderMixin = {
             for (let f = start; f <= end; f++) {
                 if (this._previzRenderStop) { result.stopped = true; break; }
                 if (onProgress) onProgress(done, count);
+                // Films on image planes seeked to this frame first.
+                if (view.prepareVideoPlanes) { view.applyFrame(f); await view.prepareVideoPlanes(f); }
                 const drawn = traced
                     ? await view.renderFramePathTraced(f, w, h, {
                         samples: st.samples, bounces: st.bounces,

@@ -1383,23 +1383,66 @@ export const PrevizMixin = {
         });
     },
 
-    /** Put dropped files into the scene; says what it left out. */
-    previzAddDropped(items) {
-        if (!this.previzScene()) return 0;
-        const models = (items || []).filter((it) => it && this._frameIsModel(it));
-        const pictures = (items || []).filter((it) => it && it.path && !this._frameIsModel(it)
-            && !this._frameIsVideo(it) && !it.isSequence);
-        if (models.length) this.previzAddModels(models);
-        for (const pic of pictures) {
-            this.previzAddImagePlane({ path: pic.path, name: pic.filename || pic.name
-                || String(pic.path).split(/[\\/]/).pop(), external: true });
+    /**
+     * Put dropped files into the scene; says what it left out (Sebastian
+     * 2026-11-12): a model, a splat or a 3D file is imported as File > Import
+     * Model does it, a picture or a film becomes an image plane with it as
+     * the texture, shaped to it. History items that only name a ComfyUI file
+     * (filename / subfolder / type) come in as they are; a desktop file the
+     * History holds on a blob: URL is copied into ./input/3d first, so the
+     * scene can find it after a reload. A sequence comes in as the frame
+     * dragged. One undo step for the lot.
+     */
+    async previzAddDropped(items) {
+        const scene = this.previzScene();
+        if (!scene) return 0;
+        const list = (items || []).filter(Boolean);
+        const usable = (it) => !!(it.path || it.filename || it.url);
+        const models = list.filter((it) => usable(it) && this._frameIsModel(it));
+        const planes = list.filter((it) => usable(it) && !this._frameIsModel(it)
+            && it.kind !== "audio");
+        if (models.length || planes.length) {
+            const n = models.length + planes.length;
+            this.previzSnapshot(n > 1 ? `add ${n} items` : (models.length ? "add model" : "add image plane"));
         }
-        const left = (items || []).length - models.length - pictures.length;
+        const wasEmpty = scene.items.length === 0;
+        let added = 0, last = null;
+        for (const it of models) {
+            const src = await this._previzSrcFor(it);
+            if (!src || (!src.path && !src.filename && !src.url)) continue;
+            const item = S.makeModelItem(src, src.name);
+            item.name = S.uniqueName(scene, item.name);
+            scene.items.push(item);
+            last = item; added++;
+        }
+        const view = this._modelView();
+        const at = view && view.viewFocus && view.viewFocus();
+        let k = 0;
+        for (const it of planes) {
+            const src = it.url && !it.path ? await this._previzSrcFor(it) : this._srcOfFrame(it);
+            if (!src || (!src.path && !src.filename && !src.url)) continue;
+            if (this._frameIsVideo(it)) src.kind = "video";
+            const name = it.filename || it.name || (it.path ? this._basename(it.path) : "") || "Image plane";
+            src.name = src.name || name;
+            const item = S.makeImagePlaneItem(src, S.uniqueName(scene, this._basename(name)));
+            // Facing the view where it looks; several side by side.
+            if (at) item.position = [at[0], item.position[1] + at[1], at[2]];
+            if (k) item.position = [item.position[0] + k * 2, item.position[1], item.position[2]];
+            k++;
+            scene.items.push(item);
+            last = item; added++;
+        }
+        if (last) this._previzSelection = last.id;
+        if (added) {
+            await this.previzChanged({ reload: true });
+            if (wasEmpty && this._model3d) this._model3d.resetView();
+        }
+        const left = list.length - added;
         if (left > 0) {
             notice("warn", "Not everything was added",
-                   `${left} item${left === 1 ? "" : "s"} left out: a scene takes models and single pictures.`);
+                   `${left} item${left === 1 ? "" : "s"} left out: a scene takes models, splats, pictures and films.`);
         }
-        return models.length + pictures.length;
+        return added;
     },
 
     /** Everything that puts something INTO the scene, under one button. */
