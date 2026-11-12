@@ -275,7 +275,7 @@ export const View3DPanesMixin = {
         this.controls.target.copy(target);
         this.controls.enableRotate = kind === "persp";
         this.controls.update();
-        if (this.gizmo) this.gizmo.camera = cam;
+        this._paneGizmoFit(cam, this._paneActiveBox());
         this._applyNavButtons(false);
         this.requestRender();
     },
@@ -325,6 +325,34 @@ export const View3DPanesMixin = {
         } });
     },
 
+    /**
+     * Put the gizmos (the transform gizmo and a camera's look-at gizmo) on
+     * `cam` for a pane of box `p` (null: one view fills the stage) and bring
+     * their handles up to date.
+     *
+     * three's TransformControls sizes its handles as a share of the view's
+     * HEIGHT, so in a pane half the stage's height they came out half as big -
+     * and their invisible pick shapes with them, which is what made an axis
+     * hard to hit. The size is scaled by stage height / pane height, so the
+     * handles keep the pixel size they have in a single view. The handles'
+     * matrices are also what the hover and the press test the ray against:
+     * after drawing every pane they were left as the LAST pane drew them
+     * (another camera, another scale), so they are made again for the pane
+     * the mouse is in.
+     */
+    _paneGizmoFit(cam, p) {
+        const H = Math.max(1, this.stage ? this.stage.clientHeight : 1);
+        const k = p && p.h > 0 ? H / p.h : 1;
+        for (const [g, helper] of [[this.gizmo, this.gizmoHelper], [this._aimGizmo, this._aimGizmoHelper]]) {
+            if (!g) continue;
+            if (g._ivBaseSize === undefined) g._ivBaseSize = g.size;
+            if (cam) g.camera = cam;
+            const size = g._ivBaseSize * k;
+            if (Math.abs(g.size - size) > 1e-6) g.size = size;
+            if (helper && g.object) helper.updateMatrixWorld();
+        }
+    },
+
     // ── Drawing ──────────────────────────────────────────────────────────────
 
     /**
@@ -332,7 +360,11 @@ export const View3DPanesMixin = {
      * _tick draws as it always did (through bloom when the world has it).
      */
     _paneRenderAll() {
-        if (this._panePlain() || !this.renderer) return false;
+        if (this._panePlain() || !this.renderer) {
+            // Back to one view: the gizmos' own size again.
+            if (this.gizmo && this.gizmo._ivBaseSize !== undefined && this.gizmo.size !== this.gizmo._ivBaseSize) this._paneGizmoFit(null, null);
+            return false;
+        }
         const r = this.renderer;
         const W = Math.max(1, this.stage.clientWidth), H = Math.max(1, this.stage.clientHeight);
         const grid = this.grid;
@@ -358,19 +390,18 @@ export const View3DPanesMixin = {
                 else if (p.kind === "right" || p.kind === "left") grid.rotation.set(0, 0, Math.PI / 2);
                 else grid.rotation.set(0, 0, 0);
             }
-            if (this.gizmo) this.gizmo.camera = cam;
-            if (this._aimGizmo) this._aimGizmo.camera = cam;
+            this._paneGizmoFit(cam, p);
             this._dispApply(cam);
             r.render(this.scene, cam);
         }
         r.setScissorTest(false);
         r.setViewport(0, 0, W, H);
         if (grid && rot) grid.rotation.copy(rot);
-        if (this.gizmo) this.gizmo.camera = this.activeCameraObject();
-        if (this._aimGizmo) this._aimGizmo.camera = this.activeCameraObject();
-        // The perspective camera's aspect goes back to the active pane's, which picking reads.
+        // The perspective camera's aspect goes back to the active pane's, which picking reads,
+        // and the gizmos' handles to how that pane drew them, which the hover and press test.
         const act = this._paneActiveBox();
         if (act) this._paneFitCam(this.activeCameraObject(), this.paneActiveKind(), act.w, act.h);
+        this._paneGizmoFit(this.activeCameraObject(), act);
         return true;
     },
 
