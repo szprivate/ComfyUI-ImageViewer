@@ -24,7 +24,7 @@ export const PrevizHotkeysMixin = {
      * curves) stays the one it was when it is still selected; otherwise it is
      * the first of what was added.
      */
-    previzSelectMany(ids, mode = "replace") {
+    previzSelectMany(ids, mode = "replace", { primary: want = null } = {}) {
         const scene = this.previzScene();
         if (!scene) return;
         const list = (ids || []).filter((id) => S.itemById(scene, id));
@@ -36,7 +36,8 @@ export const PrevizHotkeysMixin = {
         else { next = new Set(now); for (const id of list) { if (next.has(id)) next.delete(id); else next.add(id); } }
         const keep = this._previzSelection && next.has(this._previzSelection) ? this._previzSelection : null;
         const fresh = list.find((id) => next.has(id) && !now.has(id));
-        const primary = keep && mode !== "replace" ? keep
+        const primary = want && next.has(want) ? want
+            : keep && mode !== "replace" ? keep
             : (fresh || (keep && next.has(keep) ? keep : [...next][0] || null));
         const also = this._previzAlso || (this._previzAlso = new Set());
         also.clear();

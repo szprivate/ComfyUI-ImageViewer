@@ -195,6 +195,68 @@ class OutlinerTests(unittest.TestCase):
         self.assertIn("Table", [r["name"] for r in rows_all])
         self.assertEqual(self.errors, [])
 
+    def _row_xy(self, pg, name):
+        return pg.evaluate("""(name) => { const r = [...window.__panel.previzPanel.querySelectorAll('.previz-list > .previz-item')]
+            .find((x) => x.querySelector('.previz-name').textContent === name).querySelector('.previz-name').getBoundingClientRect();
+            return [r.left + Math.min(20, r.width / 2), r.top + r.height / 2]; }""", name)
+
+    def _click(self, pg, name, *mods):
+        for m in mods:
+            pg.keyboard.down(m)
+        pg.mouse.click(*self._row_xy(pg, name))
+        for m in reversed(mods):
+            pg.keyboard.up(m)
+        pg.wait_for_timeout(450)  # past the hand-timed double-click
+        return sorted(pg.evaluate("() => window.__panel.previzSelectedIds().map((id) => window.__panel.previzScene().items.find((i) => i.id === id).name)"))
+
+    def test_shift_selects_a_range_and_ctrl_toggles(self):
+        """Real mouse clicks with real modifier keys held, as a file list takes them."""
+        pg = self._page()
+        try:
+            one = self._click(pg, "Crate")
+            rng = self._click(pg, "Table", "Shift")
+            primary = pg.evaluate("() => window.__panel.previzSelectedItem().name")
+            self._shot(pg, "4-shift-range.png")
+            back = self._click(pg, "Set dressing", "Shift")  # same anchor (Crate), upwards
+            toggled = self._click(pg, "Boulder", "Control")
+            toggled_back = self._click(pg, "Boulder", "Control")
+            added = self._click(pg, "shotCam", "Control", "Shift")  # anchor is now Boulder
+            plain = self._click(pg, "Props")
+            # Right-click on the empty space below the tree: Create and Import Model.
+            xy = pg.evaluate("""() => { const l = window.__panel.previzPanel.querySelector('.previz-list').getBoundingClientRect();
+                const rows = [...window.__panel.previzPanel.querySelectorAll('.previz-list > .previz-item')];
+                const last = rows[rows.length - 1].getBoundingClientRect();
+                return [l.left + l.width / 2, Math.min(l.bottom - 6, last.bottom + 30)]; }""")
+            pg.mouse.click(*xy, button="right")
+            pg.wait_for_timeout(150)
+            labels = pg.evaluate("() => [...window.__panel.container.querySelectorAll('.previz-menu:not(.previz-submenu) > .previz-menu-item, .previz-menu:not(.previz-submenu) > .previz-menu-subwrap > .previz-menu-item')].map((b) => b.textContent)")
+            create = pg.locator(".previz-menu-item.has-sub", has_text="Create")
+            create.hover()
+            pg.wait_for_timeout(150)
+            self._shot(pg, "5-space-menu.png")
+            n0 = pg.evaluate("() => window.__panel.previzScene().items.length")
+            pg.locator(".previz-submenu .previz-menu-item", has_text="Camera").first.click()
+            pg.wait_for_timeout(150)
+            n1 = pg.evaluate("() => window.__panel.previzScene().items.length")
+            # A right-click on a row is still the row's menu.
+            pg.mouse.click(*self._row_xy(pg, "Crate"), button="right")
+            pg.wait_for_timeout(150)
+            row_menu = pg.evaluate("() => [...window.__panel.container.querySelectorAll('.previz-menu > .previz-menu-item')].map((b) => b.textContent)")
+        finally:
+            pg.close()
+        self.assertEqual(one, ["Crate"])
+        self.assertEqual(rng, ["Boulder", "Crate", "Props", "Table"])
+        self.assertEqual(primary, "Table")
+        self.assertEqual(back, ["Crate", "Set dressing"])
+        self.assertEqual(toggled, ["Boulder", "Crate", "Set dressing"])
+        self.assertEqual(toggled_back, ["Crate", "Set dressing"])
+        self.assertEqual(added, ["Boulder", "Crate", "Props", "Set dressing", "Table", "shotCam"])
+        self.assertEqual(plain, ["Props"])
+        self.assertEqual(labels, ["Create", "Import Model\u2026"])
+        self.assertEqual(n1, n0 + 1)
+        self.assertIn("Rename", row_menu)
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()
