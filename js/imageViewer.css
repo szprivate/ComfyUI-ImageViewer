@@ -624,7 +624,15 @@ textarea.param-input {
 .dock-rail > .curves-panel,
 .dock-rail > .history-panel {
     width: auto; min-width: 0; flex-shrink: 1;
-    margin: 0; border-radius: 0;
+    margin: 0;
+}
+/* Every panel in a rail is a card of its own (Sebastian 2026-11-12: "slightly rounded outlines"):
+   a thin outline, rounded corners, its contents clipped to them, and a little room
+   around it, so the window's own background shows between the panels. */
+/* content-box: the rail's width is the panels' own, the room around them comes on top. */
+.dock-rail { padding: 3px; }
+.dock-rail > :not(.stack-splitter) {
+    border: 1px solid #333; border-radius: 7px; overflow: hidden; box-sizing: border-box;
 }
 .rail-splitter {
     display: none;                 /* shown alongside a rail that has panels */
@@ -636,7 +644,7 @@ textarea.param-input {
 .dock-rail.bottom {
     flex-direction: row;
     width: 100%; min-height: 0;
-    border-top: 1px solid #333;
+    border-top: 1px solid transparent;
 }
 .dock-rail.bottom > .params-panel,
 .dock-rail.bottom > .browser-panel,
@@ -646,14 +654,10 @@ textarea.param-input {
     height: auto; min-height: 0; flex-shrink: 1;
 }
 .stack-splitter {
-    flex: 0 0 6px;
-    cursor: row-resize; background: #111;
-    border-top: 1px solid #222; border-bottom: 1px solid #222;
+    flex: 0 0 5px;
+    cursor: row-resize; background: transparent; border-radius: 3px;
 }
-.stack-splitter.horizontal {
-    cursor: col-resize;
-    border: none; border-left: 1px solid #222; border-right: 1px solid #222;
-}
+.stack-splitter.horizontal { cursor: col-resize; }
 .rail-splitter:hover, .rail-splitter.dragging,
 .stack-splitter:hover, .stack-splitter.dragging { background: rgba(255,102,0,0.30); }
 
@@ -663,36 +667,48 @@ textarea.param-input {
 .panel-titlebar {
     flex: 0 0 auto;
     display: flex; align-items: center; gap: 4px;
-    height: 18px; padding: 0 4px; box-sizing: border-box;
+    height: 26px; padding: 0 5px 0 4px; box-sizing: border-box;
     background: #141414; border-bottom: 1px solid #262626;
-    font-size: 10px; color: #999;
+    font-size: 11px; color: #999;
     cursor: grab; user-select: none;
 }
 .panel-titlebar.dragging, .panel-titlebar:active { cursor: grabbing; }
 .panel-titlebar:hover { background: #191919; color: #ccc; }
-.pt-grip {
-    flex: 0 0 auto; width: 9px; height: 9px;
-    background-image: radial-gradient(currentColor 1px, transparent 1px);
-    background-size: 3px 3px; opacity: 0.5;
+/* The switch at the bar's left: which panel this place shows (_dockSwitchMenu).
+   The panel is a container; this changes what is in it. */
+.pt-switch {
+    flex: 0 0 auto; display: inline-flex; align-items: center; gap: 1px;
+    min-height: 0; height: 20px; padding: 0 3px 0 4px; margin: 0;
+    background: transparent; border: 1px solid transparent; border-radius: 5px;
+    color: #8a8a8a; cursor: pointer;
 }
-.pt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pt-switch > svg { width: 13px; height: 13px; }
+.pt-switch > svg.pt-caret { width: 9px; height: 9px; opacity: 0.7; }
+.pt-switch:hover, .pt-switch.open { color: #fff; background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.10); }
+.pt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; letter-spacing: 0.01em; }
 /* Panels that share a place: their names side by side in the bar, the one in
    front lit. */
-.pt-name.pt-tabs { display: flex; align-items: stretch; gap: 2px; height: 100%; }
-.pt-tab { flex: 0 1 auto; min-width: 0; min-height: 0; height: 100%; padding: 0 7px; border: none; border-radius: 3px 3px 0 0;
-          background: transparent; color: #888; font-size: 10px; line-height: 17px; cursor: pointer;
+.pt-name.pt-tabs { display: flex; align-items: center; gap: 2px; height: 100%; }
+.pt-tab { flex: 0 1 auto; min-width: 0; min-height: 0; height: 20px; padding: 0 8px; border: none; border-radius: 5px;
+          background: transparent; color: #888; font-size: 11px; line-height: 20px; cursor: pointer;
           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pt-tab:hover { color: #fff; background: #222; }
-.pt-tab.on { background: #262626; color: #eee; cursor: grab; box-shadow: inset 0 2px 0 #f60; }
+.pt-tab.on { background: #262626; color: #eee; cursor: grab; box-shadow: inset 0 -2px 0 #f60; }
 /* min-height, because the blanket `button` rule sets 32px and that beats height. */
 .pt-btn {
     flex: 0 0 auto; background: transparent; border: none; color: #888;
-    min-width: 14px; min-height: 14px; height: 14px; padding: 0;
-    cursor: pointer; font-size: 10px; line-height: 1; border-radius: 2px;
+    min-width: 20px; min-height: 0; height: 20px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer; font-size: 11px; line-height: 1; border-radius: 5px;
 }
 .pt-btn:hover { color: #fff; background: rgba(255,255,255,0.08); }
-.pt-btn > svg { width: 12px; height: 12px; }
+.pt-btn > svg { width: 13px; height: 13px; }
 .pt-close:hover { color: #fff; background: rgba(229,72,77,0.75); }
+/* A narrow panel (the History strip at its thumbnail width): the bar keeps the switch and the close
+   button, the name and the rest step aside in that order. */
+.panel-titlebar { container-type: inline-size; }
+@container (max-width: 130px) { .pt-max, .pt-switch > svg.pt-caret { display: none; } }
+@container (max-width: 100px) { .pt-fold, .pt-name { display: none; } .pt-close { margin-left: auto; } }
 .pt-btn:disabled { opacity: 0.35; cursor: default; }
 /* Folded: the title bar alone. Maximised: over the viewer, between its tab bar and its transport. */
 .dock-collapsed { min-height: 0 !important; min-width: 0 !important; }
@@ -1067,47 +1083,164 @@ textarea.param-input {
 }
 .previz-menu-item[data-key]:hover::after { color: #bbb; }
 .previz-menu-sep { height: 1px; margin: 3px 2px; background: #3a3a3a; }
+/* A heading inside a menu ({ head: "3D" }): names the rows under it, not pressable. */
+.previz-menu-head { padding: 5px 8px 2px; font-size: 9.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #707070; user-select: none; }
+.previz-menu-sep + .previz-menu-head { padding-top: 3px; }
 .previz-btn, .previz-sel {
     background: #222; color: #ccc; border: 1px solid #444; border-radius: 3px;
     padding: 2px 6px; font-size: 11px; cursor: pointer;
 }
 .previz-btn:hover, .previz-sel:hover { background: #333; color: #fff; }
 .previz-btn.active { color: #f60; border-color: #f60; }
-.previz-list {
-    flex: 1 1 auto; min-height: 60px; overflow-y: auto;
-    border: 1px solid #333; border-radius: 3px; background: #161616;
+/* The Outliner (imageViewer_previzOutliner.js): a search field and a filter
+   over the tree. Its own look, clean-room: rows of one height, a line per
+   level, an icon per kind, the eye and the buttons at the right. Shades are
+   white on the panel's own ground, so a colour preset carries it. */
+.ol-head { display: flex; gap: 4px; align-items: center; flex: 0 0 auto; }
+.ol-searchbox {
+    flex: 1 1 auto; min-width: 0; height: 24px; display: flex; align-items: center; gap: 4px;
+    padding: 0 4px 0 7px; box-sizing: border-box; cursor: text;
+    background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.09); border-radius: 12px;
 }
-.previz-item { display: flex; align-items: center; gap: 4px; padding: 3px 4px; cursor: pointer; }
-.previz-item:hover { background: #242424; }
+.ol-searchbox:focus-within { border-color: #f60; background: rgba(0, 0, 0, 0.25); }
+.ol-searchicon { width: 13px; height: 13px; flex: 0 0 auto; color: #808080; }
+.ol-search {
+    flex: 1 1 auto; min-width: 0; height: 20px; padding: 0; border: none; outline: none;
+    background: transparent; color: #e6e6e6; font: inherit; font-size: 11.5px;
+}
+.ol-search::placeholder { color: #707070; }
+.ol-search::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
+.ol-clear {
+    visibility: hidden; flex: 0 0 auto; width: 16px; height: 16px; padding: 0; min-height: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: rgba(255, 255, 255, 0.08); border: none; border-radius: 50%; color: #aaa; cursor: pointer;
+}
+.ol-clear:hover { background: rgba(255, 255, 255, 0.18); color: #fff; }
+.ol-clear .ol-icon { width: 10px; height: 10px; stroke-width: 2.6; }
+.ol-filter-btn {
+    flex: 0 0 auto; width: 26px; height: 24px; padding: 0; min-height: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; border: 1px solid transparent; border-radius: 6px; color: #9a9a9a; cursor: pointer;
+}
+.ol-filter-btn:hover, .ol-filter-btn.open { background: rgba(255, 255, 255, 0.07); color: #eee; border-color: transparent; }
+.ol-filter-btn .ol-icon { width: 14px; height: 14px; }
+.ol-filter-btn.on { color: #f60; }
+.ol-filter-btn.on .ol-icon { fill: rgba(255, 102, 0, 0.25); }
+.ol-icon { display: block; width: 14px; height: 14px; }
+
+/* The filter's popover, hung off the panel container like the other menus. */
+.ol-menu {
+    position: absolute; z-index: 300; width: 252px; padding: 8px; box-sizing: border-box;
+    display: flex; flex-direction: column; gap: 6px;
+    background: #1c1c1c; border: 1px solid #3c3c3c; border-radius: 8px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55); color: #ddd; font-size: 11px;
+}
+.ol-menu-title { color: #8a8a8a; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; padding: 0 2px; }
+.ol-kinds { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; }
+.ol-kind-toggle {
+    display: flex; align-items: center; gap: 6px; min-height: 0; padding: 4px 6px;
+    background: rgba(255, 255, 255, 0.03); border: 1px solid transparent; border-radius: 5px;
+    color: #777; font-size: 11px; text-align: left; cursor: pointer;
+}
+.ol-kind-toggle:hover { background: rgba(255, 255, 255, 0.08); border-color: transparent; }
+.ol-kind-toggle.on { color: #e0e0e0; background: rgba(255, 255, 255, 0.07); }
+.ol-kind-toggle:not(.on) .ol-kind { opacity: 0.35; }
+.ol-seg { display: flex; padding: 2px; gap: 2px; background: rgba(0, 0, 0, 0.3); border-radius: 6px; }
+.ol-seg-btn {
+    flex: 1 1 0; min-height: 0; padding: 3px 0; border: none; border-radius: 4px;
+    background: transparent; color: #999; font-size: 11px; cursor: pointer;
+}
+.ol-seg-btn:hover { color: #eee; }
+.ol-seg-btn.on { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.ol-menu-foot { display: flex; gap: 3px; border-top: 1px solid #333; padding-top: 6px; }
+.ol-menu button:focus, .ol-menu button:focus-visible, .ol-head button:focus { outline: none; }
+.ol-menu-act {
+    display: inline-flex; align-items: center; gap: 4px; min-height: 0; padding: 3px 6px; white-space: nowrap;
+    background: transparent; border: none; border-radius: 4px; color: #bbb; font-size: 11px; cursor: pointer;
+}
+.ol-menu-act:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.ol-menu-act .ol-icon { width: 12px; height: 12px; }
+.ol-menu-act.reset { margin-left: auto; color: #888; }
+
+.previz-list {
+    flex: 1 1 auto; min-height: 60px; overflow-y: auto; padding: 2px 0;
+    border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 6px; background: rgba(0, 0, 0, 0.22);
+}
+.previz-item {
+    display: flex; align-items: center; gap: 3px; height: 22px; padding: 0 4px 0 4px;
+    box-sizing: border-box; cursor: pointer; position: relative; color: #d6d6d6;
+}
+.previz-item.odd { background: rgba(255, 255, 255, 0.022); }
+.previz-item:hover { background: rgba(255, 255, 255, 0.06); }
 /* Everything selected is lit; the primary — the one the gizmo and the fields
-   belong to — is outlined. */
-.previz-item.selected { background: #2a1e12; }
-.previz-item.selected.primary { background: #33230f; outline: 1px solid #f60; }
-/* The hierarchy: a twisty per row that has children, and the drop mark that
-   says which group a dragged row would land in. */
-.previz-twisty { width: 10px; flex: 0 0 10px; color: #888; font-size: 9px; text-align: center; }
-.previz-twisty:hover { color: #f60; }
+   belong to — is brighter, with a bar at its left. */
+.previz-item.selected { background: rgba(255, 102, 0, 0.13); color: #fff; }
+.previz-item.selected.primary { background: rgba(255, 102, 0, 0.2); box-shadow: inset 2px 0 0 #f60; }
+.previz-item.selected:hover { background: rgba(255, 102, 0, 0.3); }
+/* Shown only because something inside it matches the search or the filter. */
+.previz-item.context > .previz-name { color: #7c7c7c; }
+.previz-item.hidden-item > .previz-name, .previz-item.hidden-item > .ol-kind { opacity: 0.45; }
+/* One guide line per level, at the middle of the arrow column above it. */
+.ol-indent {
+    flex: 0 0 auto; align-self: stretch;
+    background-image: linear-gradient(90deg, transparent 6px, rgba(255, 255, 255, 0.09) 6px, rgba(255, 255, 255, 0.09) 7px, transparent 7px);
+    background-size: 14px 100%; background-repeat: repeat-x;
+}
+/* The fold arrow: a chevron that turns down when open. */
+.previz-twisty {
+    width: 14px; height: 18px; flex: 0 0 14px; color: #8a8a8a;
+    display: inline-flex; align-items: center; justify-content: center; border-radius: 3px;
+}
+.previz-twisty .ol-icon { width: 11px; height: 11px; stroke-width: 2.6; transition: transform 0.12s ease; }
+.previz-twisty.open .ol-icon { transform: rotate(90deg); }
+.previz-twisty:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
 .previz-twisty.empty { pointer-events: none; }
+/* The kind's icon, each kind its own colour. */
+.ol-kind { flex: 0 0 auto; width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; color: #a8a8a8; }
+.ol-kind .ol-icon { width: 13px; height: 13px; }
+.ol-kind[data-kind="model"] { color: #e8a65a; }
+.ol-kind[data-kind="primitive"] { color: #d8b878; }
+.ol-kind[data-kind="camera"] { color: #74b0f0; }
+.ol-kind[data-kind="imageplane"] { color: #b996f0; }
+.ol-kind[data-kind="group"] { color: #a7adb4; }
+.ol-kind[data-kind="control"] { color: #5ccfa0; }
+.ol-kind[data-kind="light"] { color: #f0d062; }
+.ol-kind[data-kind="world"] { color: #79bf6e; }
+.ol-kind[data-kind="bones"] { color: #c8bfae; }
+/* A joint under a skeleton: a small ring, not a whole icon per bone. */
+.ol-kind.joint::before { content: ""; width: 5px; height: 5px; border: 1.5px solid currentColor; border-radius: 50%; opacity: 0.8; }
 .previz-item.dragging { opacity: 0.45; }
-.previz-item.drop-into { background: #1d2a33; outline: 1px solid #4a9; }
+.previz-item.drop-into { background: rgba(68, 170, 153, 0.18); box-shadow: inset 0 0 0 1px #4a9; }
 /* Between rows: a line where the item will land. */
 .previz-item.drop-before { box-shadow: inset 0 2px 0 #4a9; }
 .previz-item.drop-after { box-shadow: inset 0 -2px 0 #4a9; }
 .previz-list.drop-into { outline: 1px solid #4a9; }
-.previz-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.previz-name { flex: 1 1 auto; min-width: 0; padding-left: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
+.ol-hit { background: rgba(255, 102, 0, 0.32); color: #fff; border-radius: 2px; padding: 0 1px; }
 /* Renaming in place: the field takes the name's room in the row. */
 .previz-rename {
-    flex: 1 1 auto; min-width: 0;
-    background: #111; color: #eee; border: 1px solid #f60; border-radius: 2px;
-    padding: 0 3px; font: inherit; font-size: 11px; outline: none;
+    flex: 1 1 auto; min-width: 0; height: 18px; box-sizing: border-box;
+    background: #111; color: #eee; border: 1px solid #f60; border-radius: 4px;
+    padding: 0 4px; font: inherit; font-size: 11px; outline: none;
 }
+/* The right-hand side: marks, then the buttons, the eye last. */
+.ol-end { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 2px; margin-left: 2px; }
 .previz-eye, .previz-look {
-    background: none; border: none; color: #888; cursor: pointer; font-size: 12px; padding: 0 2px;
+    width: 20px; height: 18px; padding: 0; min-height: 0; border-radius: 4px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: none; border: none; color: #6f6f6f; cursor: pointer;
 }
-.previz-eye.off { color: #555; }
-.previz-look.active, .previz-eye:hover, .previz-look:hover { color: #f60; }
+.previz-item:hover .previz-eye, .previz-item.selected .previz-eye { color: #a8a8a8; }
+.previz-eye .ol-icon, .previz-look .ol-icon { width: 13px; height: 13px; }
+.previz-eye.off, .previz-item:hover .previz-eye.off { color: #4a4a4a; }
+.previz-look { opacity: 0; }
+.previz-item:hover .previz-look, .previz-look.active { opacity: 1; }
+.previz-eye:hover, .previz-look:hover { color: #fff; background: rgba(255, 255, 255, 0.1); }
+.previz-look.active { color: #f60; }
+/* Animated: a small key diamond. */
 .previz-anim { color: #f60; }
-.previz-empty { padding: 8px; color: #777; text-align: center; }
+.ol-keys { width: 6px; height: 6px; margin: 0 4px; background: #f60; transform: rotate(45deg); border-radius: 1px; flex: 0 0 auto; }
+.previz-empty { padding: 14px 8px; color: #777; text-align: center; }
 .previz-props { display: flex; flex-direction: column; gap: 4px; }
 .previz-label { width: 42px; color: #999; flex: 0 0 auto; }
 .previz-num { width: 46px; background: #1b1b1b; color: #ddd; border: 1px solid #444; border-radius: 3px; padding: 2px 3px; font-size: 11px; }
@@ -2375,6 +2508,10 @@ audio.src-media { width: 90%; }
 .ds-over { position: absolute; top: 0; bottom: 0; pointer-events: none; }
 .ds-cursor { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,0.6); }
 .ds-marquee { position: absolute; border: 1px dashed #ff8a00; background: rgba(255,138,0,0.08); }
+/* The Curve Editor's box select. */
+.curves-marquee { position: absolute; z-index: 6; pointer-events: none; box-sizing: border-box;
+                  border: 1px dashed #ff8a00; background: rgba(255,138,0,0.08); }
+.curves-body:focus { outline: none; }
 .ds-pop { position: absolute; z-index: 40; display: flex; flex-direction: column; gap: 6px; padding: 8px;
     background: #1b1b1b; border: 1px solid #444; border-radius: 4px; box-shadow: 0 6px 18px rgba(0,0,0,0.5);
     min-width: 200px; font-size: 11px; color: #ccc; }

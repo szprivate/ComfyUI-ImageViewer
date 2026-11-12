@@ -203,6 +203,32 @@ export const BarGroupsMixin = {
         this.barGroupsSync();
     },
 
+    /**
+     * What a panel's switch (the button left of its name, mixinDock's _dockSwitchMenu) offers:
+     * the panels that can be up now, by space - the viewer's own ones always, a space's only
+     * on its tab (as the groups' menus have them). [{ title, items: [{ id, label }] }].
+     */
+    panelSwitchGroups() {
+        const seen = new Set(), out = [];
+        const has = (id) => !!(this._dockPanelEl && this._dockPanelEl(id));
+        const add = (title, items) => {
+            const list = items.filter((it) => has(it.id) && !seen.has(it.id));
+            for (const it of list) seen.add(it.id);
+            if (list.length) out.push({ title, items: list });
+        };
+        const in3d = !!(this.isPrevizTab && this.isPrevizTab());
+        add("Viewer", [{ id: "history", label: "History" }, { id: "browser", label: "Files" },
+                       { id: "params", label: in3d ? "Channel Box" : "Parameters" }, { id: "agentChat", label: "agentY" }]);
+        for (const g of GROUPS) {
+            if (g.id === "comfy") continue;
+            add(g.title, g.items.filter((it) => it.panel && this._barGroupCan(it)
+                    // The Edit timeline belongs to a cut; off a cut's tab the bar's Edit goes to one, a place cannot.
+                    && (it.panel !== "editTimeline" || !!(this.isEditTab && this.isEditTab())))
+                .map((it) => ({ id: it.panel, label: it.label })));
+        }
+        return out;
+    },
+
     _barGroupCan(item) {
         if (item.needs === "3d") return !!(this.isPrevizTab && this.isPrevizTab());
         if (item.needs === "cut") return !!(this.isEditTab && this.isEditTab());

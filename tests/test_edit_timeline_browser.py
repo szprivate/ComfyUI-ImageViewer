@@ -384,8 +384,10 @@ class EditTimelineBrowserTests(unittest.TestCase):
                                                    {"id": "history", "size": 0.8555623847572219, "hidden": False}]}
         self.assertTrue(pg.evaluate("(d)=>__panel.applyDockData(d)", layout))
         pg.wait_for_timeout(200)
-        rail, hist = pg.evaluate("""()=>[__panel.railEl.left, __panel.historyPanel].map(e=>{const r=e.getBoundingClientRect();
-            return [Math.round(r.top), Math.round(r.bottom)]})""")
+        # (the rail's content box: since 2026-11-12 a rail has padding round its panels, which are cards)
+        rail, hist = pg.evaluate("""()=>[__panel.railEl.left, __panel.historyPanel].map((e, i)=>{const r=e.getBoundingClientRect();
+            const cs=getComputedStyle(e), pt=i?0:parseFloat(cs.paddingTop), pb=i?0:parseFloat(cs.paddingBottom);
+            return [Math.round(r.top+pt), Math.round(r.bottom-pb)]})""")
         self.assertEqual(hist, rail)
         # its share is kept as it was: a panel that joins the rail splits it as before
         self.assertAlmostEqual(pg.evaluate("()=>__panel.dockLayout.left.panels.find(p=>p.id==='history').size"), 0.8555623847572219)
