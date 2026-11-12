@@ -37,6 +37,10 @@
 // share of the rail is the front one's `size`.
 import { api } from "../../scripts/api.js";
 
+// Names that are another panel now: the Channel Box lives in the Parameters panel (Sebastian 2026-11-12).
+const DOCK_ALIASES = { channels: "params" };
+const _dockId = (id) => DOCK_ALIASES[id] || id;
+
 // The dockable panels, and the room each one needs to stay usable.
 const DOCK_PANELS = {
     history: { prop: "historyPanel", label: "History",    minW: 60,  minH: 90,  defaultRail: "left" },
@@ -47,7 +51,8 @@ const DOCK_PANELS = {
     // The outliner: the scene's tree and the buttons over it. Its numbers
     // live next door, in the Channel Box, so each can be sized on its own.
     previz:  { prop: "previzPanel",  label: "Outliner",   minW: 190, minH: 140, defaultRail: "right" },
-    channels: { prop: "channelsPanel", label: "Channel Box", minW: 190, minH: 160, defaultRail: "right" },
+    // The Channel Box is no panel of its own: on a 3D tab it is what the Parameters panel shows
+    // (imageViewer_previzChannels.js _cbParams). "channels" is still accepted as a name for it (DOCK_ALIASES).
     // Display layers, selection sets and references; and a character's picker (imageViewer_previzLayers.js).
     layers3d: { prop: "layers3dPanel", label: "Layers", minW: 190, minH: 140, defaultRail: "right" },
     picker: { prop: "pickerPanel", label: "Picker", minW: 190, minH: 200, defaultRail: "right", size: 2 },
@@ -198,7 +203,6 @@ export const DockMixin = {
             left:   { width: 88,  panels: [{ id: "history", size: 1, hidden: true  }] },
             right:  { width: 300, panels: [{ id: "browser", size: 1, hidden: true  },
                                            { id: "previz",  size: 1, hidden: true  },
-                                           { id: "channels", size: 1, hidden: true },
                                            { id: "layers3d", size: 1, hidden: true },
                                            { id: "picker", size: 2, hidden: true },
                                            { id: "animLayers", size: 1, hidden: true },
@@ -490,12 +494,14 @@ export const DockMixin = {
     },
 
     isPanelDocked(id) {
+        id = _dockId(id);
         const found = this._dockEntry(id);
         return !!(found && !found.entry.hidden);
     },
 
     /** Is the panel open AND the one drawn in its place (not behind another's tab)? */
     isPanelFront(id) {
+        id = _dockId(id);
         const found = this._dockEntry(id);
         return !!(found && !found.entry.hidden && !found.entry.behind);
     },
@@ -560,6 +566,7 @@ export const DockMixin = {
 
     /** Show or hide a panel, keeping the slot it had. */
     setPanelDocked(id, visible) {
+        id = _dockId(id);
         const found = this._dockEntry(id);
         if (!found) return;
         found.entry.hidden = !visible;
@@ -652,6 +659,7 @@ export const DockMixin = {
             if (this.renderHistoryPanel) this.renderHistoryPanel();
         } else if (id === "params") {
             if (this._cpParamsMode) { if (this.compPanelShown) this.compPanelShown(); this._cpParamsTitle?.(); }
+            else if (this._cbParamsMode) { if (this._previzRenderChannels) this._previzRenderChannels(); }
             else if (this.updateParamsPanel) this.updateParamsPanel(true);
         } else if (id === "editTimeline" || id === "editInspector" || id === "editEffects" || id === "editMixer" || id === "editSource") {
             if (this.editTlRefresh) this.editTlRefresh();
@@ -673,8 +681,6 @@ export const DockMixin = {
             if (this._paintOn && this._paintSeat) this._paintSeat(this._paintActive());
         } else if (id === "editTimeline") {
             if (this.editTlRefresh) this.editTlRefresh();
-        } else if (id === "channels") {
-            if (this._previzRenderChannels) this._previzRenderChannels();
         } else if (id === "layers3d") {
             if (this._plRender) this._plRender(true);
         } else if (id === "picker") {

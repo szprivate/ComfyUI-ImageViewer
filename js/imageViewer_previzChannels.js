@@ -62,6 +62,52 @@ function transformChannels(item) {
 
 export const PrevizChannelsMixin = {
 
+    // ── The Parameters panel is the Channel Box on a 3D tab ──────────────────
+    // As a Comp tab shows its node there (imageViewer_compPanel.js _cpParams): ComfyUI's
+    // widgets, a tool's options and the lock step aside (.cb-mode), the selection monitor
+    // stands down (_cbParamsMode), and #channels-panel is the .cb-params box inside the panel.
+
+    /** The Channel Box's box inside the Parameters panel (moved there once). */
+    _cbParamsBox() {
+        const panel = this.paramsPanel;
+        const box = this.channelsPanel;
+        if (!panel || !box) return null;
+        if (box.parentNode !== panel) {
+            box.className = "cb-params";
+            panel.append(box);
+        }
+        return box;
+    },
+
+    /** On a 3D tab the Parameters panel is the Channel Box (open unless put away there); off it, ComfyUI's again. */
+    _cbParams(on) {
+        const panel = this.paramsPanel;
+        if (!panel || !this.setPanelDocked || !this.isPanelDocked) return;
+        if (on) {
+            if (this._cbParamsMode || !this._cbParamsBox()) return;
+            this._cbParamsMode = true;
+            this._cbParamsOpenBefore = this.isPanelDocked("params");
+            panel.classList.add("cb-mode");
+            const want = this._cbParamsWant === undefined ? this._cbParamsOpenBefore : this._cbParamsWant;
+            if (want !== this.isPanelDocked("params")) this.setPanelDocked("params", want);
+            this._cbParamsTitle();
+            this._previzRenderChannels();
+        } else if (this._cbParamsMode) {
+            this._cbParamsWant = this.isPanelDocked("params");
+            this._cbParamsMode = false;
+            panel.classList.remove("cb-mode");
+            if (this.paramsTitle) this.paramsTitle.innerText = "No Node Selected";
+            if (this.currentParamNodeId != null) this.updateParamsPanel?.(true);
+            if (this.isPanelDocked("params") !== !!this._cbParamsOpenBefore) this.setPanelDocked("params", !!this._cbParamsOpenBefore);
+        }
+    },
+
+    _cbParamsTitle() {
+        if (!this._cbParamsMode || !this.paramsTitle) return;
+        const t = "Channel Box";
+        if (this.paramsTitle.innerText !== t) this.paramsTitle.innerText = t;
+    },
+
     /** The Channel Box panel's body — built on first use, like the Outliner's. */
     _cbBuild() {
         const host = this.channelsPanel;
@@ -81,7 +127,7 @@ export const PrevizChannelsMixin = {
     /** Draw or refresh the Channel Box for the current selection. */
     _previzRenderChannels() {
         if (!this.isPrevizTab || !this.isPrevizTab()) return;
-        if (!this.isPanelDocked || !this.isPanelDocked("channels")) return;
+        if (!this._cbParamsMode || !this.isPanelDocked || !this.isPanelDocked("params")) return;
         const ui = (this._cbUI && this._cbUI.root.isConnected) ? this._cbUI : this._cbBuild();
         if (!ui) return;
         const item = this.previzSelectedItem();
@@ -636,6 +682,6 @@ export const PrevizChannelsMixin = {
     },
 
     _previzHideChannels() {
-        if (this.isPanelDocked && this.isPanelDocked("channels")) this.setPanelDocked("channels", false);
+        // The Parameters panel goes back to ComfyUI's node when the 3D tab is left (_cbParams).
     },
 };

@@ -259,7 +259,7 @@ const ACTION_DEFS = [
     { key: "View3DClipsPanel", label: "3D View: Show / Hide Clip Sequencer",
       enabled: _previz, run: (p) => p.togglePanelDocked("clips") },
     { key: "View3DChannelBox", label: "3D View: Show / Hide Channel Box",
-      enabled: _previz, run: (p) => p.togglePanelDocked("channels") },
+      enabled: _previz, run: (p) => p.togglePanelDocked("params") },
 
     // On a 3D tab F frames the selection (over the Outliner: shows it there) - imageViewer_previzHotkeys.js.
     { key: "FitView",      label: "Fit Image To Viewport / Frame Selection (3D)", combo: { key: "f" },

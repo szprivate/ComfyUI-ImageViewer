@@ -257,6 +257,45 @@ class MenuBarPaneTests(unittest.TestCase):
         self.assertTrue(plain["playing"])
         self.assertEqual(self.errors, [])
 
+    def test_the_channel_box_is_the_parameters_panel(self):
+        pg = self._page()
+        try:
+            pg.evaluate("() => window.__panel.previzSelectAll()")
+            pg.wait_for_timeout(100)
+            st = pg.evaluate("""() => { const P = window.__panel, pp = P.paramsPanel, box = pp.querySelector(':scope > .cb-params');
+                const vis = (el) => !!el && getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().height > 0;
+                return { docked: P.isPanelDocked('params'), mode: pp.classList.contains('cb-mode'), box: vis(box),
+                         name: box && box.querySelector('.cb-name') ? box.querySelector('.cb-name').value : null,
+                         rows: box ? box.querySelectorAll('.cb-row').length : 0,
+                         widgets: vis(pp.querySelector('.params-content')), title: P.paramsTitle.innerText,
+                         ids: Object.values(P.dockLayout).flatMap((r) => r.panels.map((x) => x.id)),
+                         alias: P.isPanelDocked('channels') === P.isPanelDocked('params') }; }""")
+            # The Windows menu's Channel Box puts the Parameters panel away and back.
+            pg.evaluate("() => { const P = window.__panel; P.previzMenuBarOpen('windows'); [...P.shadowRoot.querySelectorAll('button.previz-menu-item')].find((b) => /Channel Box/.test(b.textContent)).click(); }")
+            off = pg.evaluate("() => window.__panel.isPanelDocked('params')")
+            pg.evaluate("() => window.__panel.togglePanelDocked('channels')")
+            on = pg.evaluate("() => window.__panel.isPanelDocked('params')")
+            # Off the 3D tab the panel is ComfyUI's node parameters again.
+            pg.evaluate("() => window.__panel._exitModelMode()")
+            after = pg.evaluate("""() => { const pp = window.__panel.paramsPanel; return { mode: pp.classList.contains('cb-mode'),
+                widgets: getComputedStyle(pp.querySelector('.params-content')).display !== 'none',
+                box: getComputedStyle(pp.querySelector(':scope > .cb-params')).display !== 'none' }; }""")
+        finally:
+            pg.close()
+        self.assertTrue(st["docked"] and st["mode"] and st["box"], st)
+        self.assertFalse(st["widgets"])
+        self.assertEqual(st["title"], "Channel Box")
+        self.assertTrue(st["name"])
+        self.assertGreater(st["rows"], 5)
+        self.assertNotIn("channels", st["ids"])
+        self.assertTrue(st["alias"])
+        self.assertFalse(off)
+        self.assertTrue(on)
+        self.assertFalse(after["mode"])
+        self.assertTrue(after["widgets"])
+        self.assertFalse(after["box"])
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

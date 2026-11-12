@@ -1534,14 +1534,15 @@ export const PrevizMixin = {
         if (!this._previzPanelOn) {
             this._previzPanelOn = true;
             this.setPanelDocked("previz", true);
-            this.setPanelDocked("channels", true);
+            // The Parameters panel, which is the Channel Box on a 3D tab.
+            this.setPanelDocked("params", true);
             if (this._plRestore) this._plRestore();
         }
         // Before the early return below: the timeline's fields and the keying
         // buttons belong to the tab, and a previz panel put away by hand must
         // not take them with it.
         this.previzSyncTimelineFields();
-        // The Channel Box is its own panel, open or shut independently.
+        // The Channel Box: the Parameters panel's body on a 3D tab, open or shut with it.
         if (this._previzRenderChannels) this._previzRenderChannels();
         // Layers and the picker, each open or shut on its own; references are looked at.
         if (this._plRender) this._plRender();

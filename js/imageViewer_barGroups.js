@@ -51,7 +51,8 @@ const GROUPS = [
         // Every World Labs Atlas tool, as a submenu (imageViewer_previzAtlasOrient.js previzAtlasMenuEntries).
         { label: "Atlas", sub: (p) => p.previzAtlasMenuEntries() },
         { label: "Outliner", panel: "previz", needs: "3d" },
-        { label: "Channel Box", panel: "channels", needs: "3d" },
+        // The Channel Box is the Parameters panel on a 3D tab.
+        { label: "Channel Box", panel: "params", needs: "3d" },
         { label: "Anim Layers", panel: "animLayers", needs: "3d" },
         { label: "Curve Editor", panel: "curves", needs: "3d" },
         { label: "Layers", panel: "layers3d", needs: "3d" },
