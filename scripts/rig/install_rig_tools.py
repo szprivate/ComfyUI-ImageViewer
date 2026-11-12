@@ -358,11 +358,40 @@ def triton_windows_spec(torch_version):
 
 # ── SkinTokens ────────────────────────────────────────────────────────────────
 
+# What SkinTokens imports but its requirements.txt does not name: gradio brought these in, and the viewer
+# leaves gradio out (ws26, 2026-11-12: "No module named 'scipy'").
+SKINTOKENS_EXTRAS = ("scipy", "requests")
+# Modules the runner needs at once; checked after the install so a missing one is said there, not at the first rig.
+SKINTOKENS_IMPORTS = ("scipy", "requests", "numpy", "trimesh", "open3d", "bpy", "transformers", "diffusers",
+                      "lightning", "omegaconf", "einops", "tqdm", "box", "addict", "fast_simplification")
+
+
 def skintokens_requirements(repo):
-    """SkinTokens' requirements, less what the viewer does not run (its Gradio demo and the bpy server)."""
+    """SkinTokens' requirements, less what the viewer does not run (its Gradio demo and the bpy server),
+    plus what its code imports that only gradio pulled in."""
     skip = ("gradio", "bottle", "tornado", "flash_attn", "flash-attn", "#")
     reqs = [r.strip() for r in open(os.path.join(repo, "requirements.txt"), encoding="utf-8") if r.strip()]
-    return [r for r in reqs if not r.lower().startswith(skip)]
+    reqs = [r for r in reqs if not r.lower().startswith(skip)]
+    named = {re.split(r"[<>=!~\[ ;]", r, 1)[0].lower() for r in reqs}
+    return reqs + [x for x in SKINTOKENS_EXTRAS if x not in named]
+
+
+SKINTOKENS_CHECK = """
+import importlib, sys
+missing = []
+for m in sys.argv[1:]:
+    try:
+        importlib.import_module(m)
+    except Exception as e:
+        missing.append(f"{m} ({type(e).__name__}: {e})")
+if missing:
+    sys.exit("!! SkinTokens' Python cannot import: " + "; ".join(missing))
+print("== SkinTokens' modules import", flush=True)
+"""
+
+
+def check_skintokens(py):
+    run([py, "-c", SKINTOKENS_CHECK, *SKINTOKENS_IMPORTS])
 
 
 def recent_torch(w):
@@ -404,6 +433,7 @@ def install_skintokens(root, python, cuda, flash_wheel, sysname):
             run([py, "-m", "pip", "install", "torch", "torchvision", "--index-url", TORCH_INDEX.format(cuda="cpu")])
         run([py, "-m", "pip", "install", *reqs, "hf_xet"])
         install_shims(py)
+        check_skintokens(py)
         download_skintokens(py, repo)
         return {"python": py, "repo": repo, "device": device,
                 "env": {"SKINTOKENS_DEVICE": device, "PYTORCH_ENABLE_MPS_FALLBACK": "1"}}
@@ -436,6 +466,7 @@ def install_skintokens(root, python, cuda, flash_wheel, sysname):
         print("!! flash_attn did not install: SkinTokens will use PyTorch's own attention and the viewer's "
               "stand-in (slower).", flush=True)
     install_shims(py)   # only used for what is missing
+    check_skintokens(py)
     download_skintokens(py, repo)
     return {"python": py, "repo": repo, "device": "cuda"}
 

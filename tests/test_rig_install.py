@@ -76,7 +76,10 @@ class SkinTokensInstallTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with open(os.path.join(tmp, "requirements.txt"), "w") as fh:
                 fh.write("transformers>=4.57.0\ngradio\nbpy>=4.2\nbottle\ntornado\nflash-attn\nopen3d\n")
-            self.assertEqual(I.skintokens_requirements(tmp), ["transformers>=4.57.0", "bpy>=4.2", "open3d"])
+            self.assertEqual(I.skintokens_requirements(tmp), ["transformers>=4.57.0", "bpy>=4.2", "open3d", "scipy", "requests"])
+            with open(os.path.join(tmp, "requirements.txt"), "w") as fh:
+                fh.write("scipy>=1.11\nrequests\n")
+            self.assertEqual(I.skintokens_requirements(tmp), ["scipy>=1.11", "requests"])
 
     def test_a_full_run_installs_it_only_with_a_14_gb_gpu(self):
         from unittest import mock

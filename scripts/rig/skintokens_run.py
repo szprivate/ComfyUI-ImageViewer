@@ -329,6 +329,8 @@ def main(argv=None):
         last = f"{type(e).__name__}: {e}".splitlines()[0][:400]
         if "out of memory" in last.lower():
             last += f" (SkinTokens asks for an NVIDIA GPU with {MIN_VRAM_GB} GB: UniRig needs less)"
+        elif isinstance(e, ModuleNotFoundError):
+            last += " (set SkinTokens up again: Rig > Install AI rigging / motion models…, or install_rig_tools.py --only skintokens)"
         fail(last)
 
 
