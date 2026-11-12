@@ -6,13 +6,16 @@
     POST /imageviewer/rig/read_motion   {path} -> rig_import.read: an FBX / USD file's settings, the viewer's rig
                                         carried in it (live), and a USD skeleton's animation (the page reads an
                                         FBX's motion itself, with FBXLoader); may_serve-guarded
-    GET  /imageviewer/rig/tools         -> {unirig: {ready, why}, kimodo: {ready, why, model},
+    GET  /imageviewer/rig/tools         -> {unirig: {ready, why}, skintokens: {ready, why}, kimodo: {ready, why, model},
                                             install: {root, hf_token: bool, running: job id | null}}
-    POST /imageviewer/rig/install       {root?, only?: unirig|kimodo|posetrack, hf_token?} -> {job}: runs
+    POST /imageviewer/rig/install       {root?, only?: unirig|skintokens|kimodo|posetrack, hf_token?} -> {job}: runs
                                         scripts/rig/install_rig_tools.py (an Install button in the page);
                                         a token is written where huggingface_hub reads it, never answered
-    POST /imageviewer/rig/autorig       {src, name?, context?, seed?} -> {job}: UniRig on the model's file;
-                                        the job's result is {path, relative}, a skinned .glb by the export rule
+    POST /imageviewer/rig/autorig       {src, name?, context?, seed?, engine?: unirig|skintokens, keep_skeleton?}
+                                        -> {job}: UniRig (scripts/rig/unirig_run.py) or SkinTokens
+                                        (scripts/rig/skintokens_run.py; keep_skeleton = skin weights only, onto
+                                        the model's own skeleton) on the model's file; the job's result is
+                                        {path, relative, engine}, a skinned .glb by the export rule
     POST /imageviewer/rig/motion        {mode: text|inbetween|restyle, prompt, frames, keys?, path?, seed?, steps?,
                                         samples?, heading?} -> {job}: Kimodo; the result is the motion on its own
                                         skeleton (scripts/rig/kimodo_run.py), retargeted in the page
@@ -40,10 +43,11 @@ The models run outside ComfyUI's Python, each in an environment of its own
 viewer starts the runner script under scripts/rig/ with that environment's
 interpreter. Which interpreter is an admin's setting, never the page's: it is
 read from ``rig_tools.json`` in the viewer's user folder (or the file named by
-IMAGE_VIEWER_RIG_TOOLS), or from the IMAGE_VIEWER_UNIRIG_PYTHON / _DIR and
-IMAGE_VIEWER_KIMODO_PYTHON environment variables::
+IMAGE_VIEWER_RIG_TOOLS), or from the IMAGE_VIEWER_UNIRIG_PYTHON / _DIR,
+IMAGE_VIEWER_SKINTOKENS_PYTHON / _DIR and IMAGE_VIEWER_KIMODO_PYTHON environment variables::
 
     {"unirig": {"python": "D:/AI/rigtools/UniRig/.venv/Scripts/python.exe", "repo": "D:/AI/rigtools/UniRig"},
+     "skintokens": {"python": "D:/AI/rigtools/SkinTokens/.venv/Scripts/python.exe", "repo": "D:/AI/rigtools/SkinTokens"},
      "kimodo": {"python": "D:/AI/rigtools/kimodo/.venv/Scripts/python.exe",
                 "model": "Kimodo-SOMA-RP-v1.2", "text_encoder_device": "cpu"}}
 
@@ -104,6 +108,8 @@ def tools_config():
         pass
     env = os.environ
     for tool, key, var in (("unirig", "python", "IMAGE_VIEWER_UNIRIG_PYTHON"), ("unirig", "repo", "IMAGE_VIEWER_UNIRIG_DIR"),
+                           ("skintokens", "python", "IMAGE_VIEWER_SKINTOKENS_PYTHON"),
+                           ("skintokens", "repo", "IMAGE_VIEWER_SKINTOKENS_DIR"),
                            ("kimodo", "python", "IMAGE_VIEWER_KIMODO_PYTHON"), ("kimodo", "model", "IMAGE_VIEWER_KIMODO_MODEL"),
                            ("posetrack", "python", "IMAGE_VIEWER_POSETRACK_PYTHON"),
                            ("posetrack", "model", "IMAGE_VIEWER_POSETRACK_MODEL")):
@@ -124,6 +130,15 @@ def tool_status(cfg=None):
         out["unirig"] = {"ready": False, "why": "UniRig's folder (with run.py) is not set"}
     else:
         out["unirig"] = {"ready": True, "why": ""}
+    t = cfg.get("skintokens") or {}
+    if not t.get("python"):
+        out["skintokens"] = {"ready": False, "why": "SkinTokens is not set up (scripts/rig/install_rig_tools.py --only skintokens)"}
+    elif not os.path.isfile(t["python"]):
+        out["skintokens"] = {"ready": False, "why": f"SkinTokens' Python is not there: {t['python']}"}
+    elif not t.get("repo") or not os.path.isfile(os.path.join(t["repo"], SKINTOKENS_CKPT)):
+        out["skintokens"] = {"ready": False, "why": "SkinTokens' folder (with its checkpoint) is not set"}
+    else:
+        out["skintokens"] = {"ready": True, "why": "", "vram_gb": SKINTOKENS_VRAM_GB}
     k = cfg.get("kimodo") or {}
     model = k.get("model") or DEFAULT_KIMODO_MODEL
     if not k.get("python"):
@@ -145,6 +160,11 @@ def tool_status(cfg=None):
 
 
 UNIRIG_READS = {".obj", ".fbx", ".dae", ".glb", ".gltf", ".vrm"}
+SKINTOKENS_READS = UNIRIG_READS          # scripts/rig/skintokens_run.py READS (a .vrm read as .glb)
+SKINTOKENS_CKPT = os.path.join("experiments", "articulation_xl_quantization_256_token_4", "grpo_1400.ckpt")
+SKINTOKENS_VRAM_GB = 14
+ENGINES = {"unirig": ("UniRig", "unirig_run.py", UNIRIG_READS),
+           "skintokens": ("SkinTokens", "skintokens_run.py", SKINTOKENS_READS)}
 
 
 def abc_to_obj(src, dst):
@@ -165,11 +185,11 @@ def default_root(folder_paths):
     """Where the Install button puts the tools by default: beside ComfyUI's folder (D:/AI/comfyui ->
     D:/AI/rigtools), so they are not inside it; or the folder an earlier install used."""
     cfg = tools_config()
-    for tool, key in (("unirig", "repo"), ("kimodo", "python")):
+    for tool, key in (("unirig", "repo"), ("skintokens", "repo"), ("kimodo", "python")):
         path = (cfg.get(tool) or {}).get(key)
         if path:
-            # <root>/UniRig, or <root>/kimodo/.venv/<bin>/python
-            up = os.path.dirname(path) if tool == "unirig" else os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(path))))
+            # <root>/UniRig, <root>/SkinTokens, or <root>/kimodo/.venv/<bin>/python
+            up = os.path.dirname(path) if tool != "kimodo" else os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(path))))
             if up:
                 return up
     base = getattr(folder_paths, "base_path", None)
@@ -259,7 +279,8 @@ def kind_logs(kind):
 
 
 # How many commands (the installer's "$ " lines) a full install of each tool runs: for the progress bar.
-INSTALL_STEPS = {"unirig": 10, "kimodo": 9, "kimodo-text": 4, "posetrack": 3}
+INSTALL_STEPS = {"unirig": 10, "skintokens": 7, "kimodo": 9, "kimodo-text": 4, "posetrack": 3}
+INSTALL_TOOLS = tuple(INSTALL_STEPS)
 
 
 
@@ -639,8 +660,8 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         if os.path.isfile(root):
             return err(f"{root} is a file")
         only = body.get("only")
-        if only not in (None, "", "unirig", "kimodo", "kimodo-text", "posetrack"):
-            return err("only is unirig, kimodo, kimodo-text or posetrack")
+        if only not in (None, "", *INSTALL_TOOLS):
+            return err("only is " + ", ".join(INSTALL_TOOLS[:-1]) + " or " + INSTALL_TOOLS[-1])
         if body.get("hf_token"):
             try:
                 save_hf_token(body["hf_token"])
@@ -683,8 +704,15 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
 
     async def autorig(request):
         body = await body_of(request)
-        cfg = tools_config().get("unirig") or {}
-        status = tool_status({"unirig": cfg})["unirig"]
+        engine = str(body.get("engine") or "unirig").lower()
+        if engine not in ENGINES:
+            return err("engine is unirig or skintokens")
+        label, runner, reads = ENGINES[engine]
+        keep = bool(body.get("keep_skeleton"))
+        if keep and engine != "skintokens":
+            return err("only SkinTokens keeps the model's own skeleton (engine: skintokens)")
+        cfg = tools_config().get(engine) or {}
+        status = tool_status({engine: cfg})[engine]
         if not status["ready"]:
             return err(status["why"], 501)
         src = resolve_src(body.get("src"), folder_paths, resolve)
@@ -701,19 +729,23 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         job = new_job("autorig")
 
         ext = os.path.splitext(src)[1].lower()
-        if ext not in UNIRIG_READS and ext != ".abc":
-            return err(f"UniRig reads {', '.join(sorted(UNIRIG_READS))} or Alembic, not {ext or 'this file'}", 400)
+        if ext not in reads and ext != ".abc":
+            return err(f"{label} reads {', '.join(sorted(reads))} or Alembic, not {ext or 'this file'}", 400)
+        if keep and ext == ".abc":
+            return err("an Alembic has no skeleton to keep", 400)
 
         def work():
             os.makedirs(os.path.dirname(where["path"]), exist_ok=True)
-            with tempfile.TemporaryDirectory(prefix="unirig_") as tmp:
+            with tempfile.TemporaryDirectory(prefix=engine + "_") as tmp:
                 given = src
                 if ext == ".abc":
                     given = os.path.join(tmp, "source.obj")
-                    job.say("== Alembic: its first frame as a mesh for UniRig")
+                    job.say(f"== Alembic: its first frame as a mesh for {label}")
                     abc_to_obj(src, given)
-                cmd = [cfg["python"], "-u", os.path.join(SCRIPTS, "unirig_run.py"), "--repo", cfg["repo"],
+                cmd = [cfg["python"], "-u", os.path.join(SCRIPTS, runner), "--repo", cfg["repo"],
                        "--input", given, "--output", where["path"], "--work", tmp, "--seed", str(seed)]
+                if keep:
+                    cmd.append("--use-skeleton")
                 env = dict(os.environ, PYTHONUNBUFFERED="1")
                 for k, v in (cfg.get("env") or {}).items():
                     env[str(k)] = str(v)
@@ -727,8 +759,9 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
                     raise RuntimeError("cancelled")
                 if code != 0 or not os.path.isfile(where["path"]):
                     said = [l for l in job.log if l.startswith("!! ")]
-                    raise RuntimeError("UniRig failed: " + (" / ".join(l[3:] for l in said[-2:]) if said else " | ".join(job.log[-4:])))
-            return {"path": where["path"], "relative": relative(where["path"]), "name": os.path.basename(where["path"])}
+                    raise RuntimeError(f"{label} failed: " + (" / ".join(l[3:] for l in said[-2:]) if said else " | ".join(job.log[-4:])))
+            return {"path": where["path"], "relative": relative(where["path"]), "name": os.path.basename(where["path"]),
+                    "engine": engine}
 
         spawn(job, work)
         return web.json_response(job.view())

@@ -1,5 +1,5 @@
-"""Set up the 3D space's character tools on this machine: UniRig (auto-rigging), Kimodo (AI motion) and
-MediaPipe's Pose Landmarker (motion from a film).
+"""Set up the 3D space's character tools on this machine: UniRig and SkinTokens (auto-rigging), Kimodo (AI
+motion) and MediaPipe's Pose Landmarker (motion from a film).
 
 Each gets a Python environment of its own under --root (they pin torch and CUDA extensions that ComfyUI's
 own environment must not get), and the viewer is told where they are: rig_tools.json in the viewer's user
@@ -8,6 +8,7 @@ the file on every request.
 
     python scripts/rig/install_rig_tools.py --root D:/AI/rigtools                 # both
     python scripts/rig/install_rig_tools.py --root ~/rigtools --only kimodo
+    python scripts/rig/install_rig_tools.py --root D:/AI/rigtools --only skintokens
     python scripts/rig/install_rig_tools.py --root D:/AI/rigtools --cuda cu128    # instead of what the GPU says
 
 Any Python runs it. UniRig needs Python 3.11 (bpy 4.2 is built only for it): the script finds one (the
@@ -25,6 +26,11 @@ the viewer's pure-PyTorch stand-ins for flash_attn, spconv, torch_scatter and to
 (scripts/rig/shims, put on UniRig's environment by a .pth file); Kimodo runs on MPS. Slower than a CUDA
 GPU, but the same models and results.
 
+SkinTokens (UniRig's successor: skeleton and skin weights from one model) asks for an NVIDIA GPU with 14 GB.
+A run of every tool leaves it out on a machine with less (or none); --only skintokens installs it anyway.
+It needs flash_attn too (the same prebuilt wheels, torch 2.7 or later) and Python 3.11 for bpy; its weights
+(VAST-AI/SkinTokens, about 1.6 GB) and the Qwen3-0.6B config it is built on download during the install.
+
 What each needs that this script cannot do for you:
   * Kimodo's text encoder is LLM2Vec on Meta-Llama-3-8B-Instruct, which is gated on Hugging Face. The
     script puts it in <root>/kimodo/text_encoders (scripts/rig/kimodo_text_encoder.py): from Meta's repo
@@ -36,7 +42,8 @@ What each needs that this script cannot do for you:
     Hugging Face), so the first run takes a while.
 
 Licences (none of this is part of the viewer, which only runs it): UniRig MIT (code and weights; its
-pipeline uses Blender's bpy module, GPL, inside its own environment); Kimodo Apache-2.0, its SOMA models
+pipeline uses Blender's bpy module, GPL, inside its own environment); SkinTokens MIT (code and weights; bpy
+inside its own environment the same way; the Qwen3-0.6B config Apache-2.0); Kimodo Apache-2.0, its SOMA models
 under the NVIDIA Open Model License, the text encoder under Meta's Llama 3 licence; flash-attention BSD;
 MediaPipe and its Pose Landmarker (BlazePose GHUM 3D) Apache-2.0.
 """
@@ -51,6 +58,13 @@ import sys
 import urllib.request
 
 UNIRIG_GIT = "https://github.com/VAST-AI-Research/UniRig.git"
+SKINTOKENS_GIT = "https://github.com/VAST-AI-Research/SkinTokens.git"
+SKINTOKENS_HF = "VAST-AI/SkinTokens"
+SKINTOKENS_FILES = ["experiments/skin_vae_2_10_32768/last.ckpt",
+                    "experiments/articulation_xl_quantization_256_token_4/grpo_1400.ckpt"]
+SKINTOKENS_LLM = ("Qwen/Qwen3-0.6B", "models/Qwen3-0.6B")
+SKINTOKENS_MIN_TORCH = (2, 7)
+SKINTOKENS_VRAM_GB = 14
 KIMODO_GIT = "https://github.com/nv-tlabs/kimodo.git"
 FLASH_INDEX = "https://raw.githubusercontent.com/mjun0812/flash-attention-prebuild-wheels/main/doc/packages.md"
 TORCH_INDEX = "https://download.pytorch.org/whl/{cuda}"
@@ -92,6 +106,17 @@ def gpu_cuda():
     if not caps:
         return None
     return "cu128" if max(caps) >= 12.0 else "cu126"
+
+
+def gpu_memory_gb():
+    """The largest NVIDIA GPU's memory in GB, or None without one."""
+    try:
+        out = subprocess.check_output(["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+                                      text=True, timeout=20)
+    except Exception:
+        return None
+    mib = [float(x) for x in re.findall(r"\d+(?:\.\d+)?", out)]
+    return max(mib) / 1024 if mib else None
 
 
 def venv_python(folder):
@@ -331,6 +356,102 @@ def triton_windows_spec(torch_version):
 
 
 
+# ── SkinTokens ────────────────────────────────────────────────────────────────
+
+def skintokens_requirements(repo):
+    """SkinTokens' requirements, less what the viewer does not run (its Gradio demo and the bpy server)."""
+    skip = ("gradio", "bottle", "tornado", "flash_attn", "flash-attn", "#")
+    reqs = [r.strip() for r in open(os.path.join(repo, "requirements.txt"), encoding="utf-8") if r.strip()]
+    return [r for r in reqs if not r.lower().startswith(skip)]
+
+
+def recent_torch(w):
+    return _ver(w["torch"])[:2] >= SKINTOKENS_MIN_TORCH
+
+
+SKINTOKENS_DOWNLOAD = """
+import sys
+from huggingface_hub import hf_hub_download, snapshot_download
+repo, files, llm, llm_dir = sys.argv[1], sys.argv[2].split(","), sys.argv[3], sys.argv[4]
+for f in files:
+    print("==", f, hf_hub_download(repo_id=repo, filename=f, local_dir="."), flush=True)
+print("==", llm, snapshot_download(repo_id=llm, local_dir=llm_dir, ignore_patterns=["*.bin", "*.safetensors"]), flush=True)
+"""
+
+
+def download_skintokens(py, repo):
+    """The two checkpoints into experiments/, Qwen3-0.6B's config (no weights: SkinTokens has its own) into models/."""
+    run([py, "-c", SKINTOKENS_DOWNLOAD, SKINTOKENS_HF, ",".join(SKINTOKENS_FILES), *SKINTOKENS_LLM], cwd=repo)
+
+
+def install_skintokens(root, python, cuda, flash_wheel, sysname):
+    repo = os.path.join(root, "SkinTokens")
+    if not os.path.isdir(os.path.join(repo, ".git")):
+        run(["git", "clone", "--depth", "1", SKINTOKENS_GIT, repo])
+    py311 = find_python((3, 11), python)
+    if not py311:
+        sys.exit("!! SkinTokens needs Python 3.11 (bpy), and none was found: see the UniRig message above, "
+                 "or pass --python <path to python 3.11>")
+    print(f"== SkinTokens' Python: {py311}", flush=True)
+    py = make_venv(os.path.join(repo, ".venv"), py311)
+    tag = py_tag(py)
+    reqs = skintokens_requirements(repo)
+    if cuda == "cpu" or sysname == "mac":
+        device = "mps" if sysname == "mac" else "cpu"
+        if sysname == "mac":
+            run([py, "-m", "pip", "install", "torch", "torchvision"])
+        else:
+            run([py, "-m", "pip", "install", "torch", "torchvision", "--index-url", TORCH_INDEX.format(cuda="cpu")])
+        run([py, "-m", "pip", "install", *reqs, "hf_xet"])
+        install_shims(py)
+        download_skintokens(py, repo)
+        return {"python": py, "repo": repo, "device": device,
+                "env": {"SKINTOKENS_DEVICE": device, "PYTORCH_ENABLE_MPS_FALLBACK": "1"}}
+
+    plat = wheel_platform(sysname)
+    torch_ver, wheel = None, flash_wheel
+    if not wheel:
+        try:
+            # No torch_scatter / torch_cluster here: only torch and flash_attn have to match.
+            wheels = [w for w in flash_wheels(fetch(FLASH_INDEX), plat) if recent_torch(w)]
+            found = pick_flash(wheels, tag, cuda, plat, torch_available, lambda *a: True)
+        except Exception as e:  # the index could not be read
+            print(f"!! could not read the flash_attn wheel list: {e}", flush=True)
+            found = None
+        if found:
+            torch_ver, cuda, wheel = found["torch"], found["cuda"], found["url"]
+            print(f"== flash_attn {found['flash']} for torch {torch_ver} + {cuda}, {tag}: {wheel}", flush=True)
+        else:
+            print(f"!! no prebuilt flash_attn for {tag} / {cuda} / {plat} with torch 2.7+: flash_attn built from "
+                  "source (needs the CUDA toolkit), or pass --flash-attn-wheel.", flush=True)
+    spec = f"torch=={torch_ver}.*" if torch_ver else "torch>=2.7"
+    run([py, "-m", "pip", "install", spec, "torchvision", "--index-url", TORCH_INDEX.format(cuda=cuda)])
+    run([py, "-m", "pip", "install", *reqs, "hf_xet"])
+    try:
+        if wheel:
+            run([py, "-m", "pip", "install", wheel])
+        else:
+            run([py, "-m", "pip", "install", "flash_attn", "--no-build-isolation"])
+    except subprocess.CalledProcessError:
+        print("!! flash_attn did not install: SkinTokens will use PyTorch's own attention and the viewer's "
+              "stand-in (slower).", flush=True)
+    install_shims(py)   # only used for what is missing
+    download_skintokens(py, repo)
+    return {"python": py, "repo": repo, "device": "cuda"}
+
+
+def skintokens_in_full_run(cuda, sysname):
+    """A run of every tool installs SkinTokens only where it can run as its authors ask: a 14 GB NVIDIA GPU."""
+    if sysname == "mac" or cuda == "cpu":
+        return False, "no NVIDIA GPU"
+    gb = gpu_memory_gb()
+    if gb is None:
+        return False, "the GPU's memory could not be read"
+    if gb < SKINTOKENS_VRAM_GB - 0.5:
+        return False, f"the GPU has {gb:.0f} GB, SkinTokens asks for {SKINTOKENS_VRAM_GB}"
+    return True, ""
+
+
 # ── Kimodo ────────────────────────────────────────────────────────────────────
 
 def install_kimodo(root, python, cuda, model, sysname):
@@ -420,7 +541,7 @@ def config_path():
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--root", required=True, help="where the tools' folders go")
-    ap.add_argument("--only", choices=["unirig", "kimodo", "kimodo-text", "posetrack"],
+    ap.add_argument("--only", choices=["unirig", "skintokens", "kimodo", "kimodo-text", "posetrack"],
                     help="kimodo-text: only Kimodo's text encoder (Kimodo itself set up already)")
     ap.add_argument("--llama", default="auto",
                     help="Kimodo's Llama 3 weights: auto (Meta's when you have access, else the copy), meta, "
@@ -429,7 +550,7 @@ def main():
     ap.add_argument("--cuda", default="auto",
                     help="auto (from the GPU), cpu, or a PyTorch wheel index: cu118, cu121, cu124, cu126, cu128...")
     ap.add_argument("--python", default=sys.executable, help="the interpreter the environments are made from")
-    ap.add_argument("--flash-attn-wheel", default="", help="your own flash_attn wheel (path or URL) for UniRig")
+    ap.add_argument("--flash-attn-wheel", default="", help="your own flash_attn wheel (path or URL) for UniRig / SkinTokens")
     ap.add_argument("--kimodo-model", default="Kimodo-SOMA-RP-v1.2")
     a = ap.parse_args()
     sysname = system()
@@ -456,6 +577,16 @@ def main():
     if a.only in (None, "unirig"):
         cfg["unirig"] = install_unirig(root, a.python, cuda, a.flash_attn_wheel, sysname)
         save()
+    if a.only == "skintokens":
+        cfg["skintokens"] = install_skintokens(root, a.python, cuda, a.flash_attn_wheel, sysname)
+        save()
+    elif a.only is None:
+        ok, why = skintokens_in_full_run(cuda, sysname)
+        if ok:
+            cfg["skintokens"] = install_skintokens(root, a.python, cuda, a.flash_attn_wheel, sysname)
+            save()
+        else:
+            print(f"== SkinTokens left out ({why}); --only skintokens installs it anyway", flush=True)
     if a.only in (None, "kimodo"):
         cfg["kimodo"] = install_kimodo(root, a.python, cuda, a.kimodo_model, sysname)
         save()

@@ -1,6 +1,6 @@
 // imageViewer_previzRigTools.js
 // The Rig menu's tools that reach past the page: export (FBX, USD, Alembic), auto-rigging
-// (UniRig) and AI motion (Kimodo: in-betweens and motion from text), plus the feet
+// (UniRig or SkinTokens) and AI motion (Kimodo: in-betweens and motion from text), plus the feet
 // clean-up. Mixed into the panel after PrevizRigMixin.
 //
 // The page does the character's part - it has the meshes, the bones and the rig's
@@ -15,6 +15,30 @@ import * as M from "./imageViewer_rigMotion.js";
 import { notice, openExportDialog } from "./imageViewer_exportUI.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** The auto-riggers: the server's engine name, the label, the dialog's line about it. */
+export const AUTORIG_ENGINES = {
+    skintokens: { label: "SkinTokens", hint: "UniRig's successor: skeleton and skin weights from one model, cleaner weights. Needs an NVIDIA GPU with 14 GB." },
+    unirig: { label: "UniRig", hint: "Skeleton, then skin weights. Runs on about 8 GB, and on a Mac." },
+};
+const ENGINE_KEY = "imageviewer.viewer.autorigEngine";
+
+/** The engine to offer first: the one chosen last if it is set up, else SkinTokens if it is, else UniRig. */
+export function pickAutorigEngine(tools, remembered) {
+    const ready = (e) => !!(tools && tools[e] && tools[e].ready);
+    if (remembered && AUTORIG_ENGINES[remembered] && ready(remembered)) return remembered;
+    if (ready("skintokens")) return "skintokens";
+    if (ready("unirig")) return "unirig";
+    return remembered && AUTORIG_ENGINES[remembered] ? remembered : "unirig";
+}
+
+function rememberedEngine() {
+    try { return localStorage.getItem(ENGINE_KEY); } catch (_) { return null; }
+}
+
+function rememberEngine(engine) {
+    try { localStorage.setItem(ENGINE_KEY, engine); } catch (_) { /* private window */ }
+}
 
 export const PrevizRigToolsMixin = {
 
@@ -149,9 +173,10 @@ export const PrevizRigToolsMixin = {
     async previzRigInstallDialog(tools = null, need = null, then = null) {
         tools = tools || await this._previzRigTools();
         if (!tools.install) { notice("warn", "The character tools cannot be installed from here", "The viewer could not ask the server."); return; }
-        const missing = ["unirig", "kimodo", "posetrack"].filter((t) => tools[t] && !tools[t].ready);
+        const missing = ["unirig", "skintokens", "kimodo", "posetrack"].filter((t) => tools[t] && !tools[t].ready);
         let folder, both, token;
-        const NAMES = { unirig: "auto-rigging (UniRig)", kimodo: "AI motion (Kimodo)", posetrack: "motion from video (MediaPipe pose)" };
+        const NAMES = { unirig: "auto-rigging (UniRig)", skintokens: "auto-rigging (SkinTokens, 14 GB GPU)",
+            kimodo: "AI motion (Kimodo)", posetrack: "motion from video (MediaPipe pose)" };
         await openExportDialog(this.container, {
             title: "Install AI rigging / motion models",
             kind: "character",
@@ -237,47 +262,91 @@ export const PrevizRigToolsMixin = {
         const model = modelId && S.itemById(scene, modelId);
         if (!model) { notice("info", "Select the model to rig."); return; }
         const tools = await this._previzRigTools();
-        if (!tools.unirig || !tools.unirig.ready) {
-            if (!tools.unirig) { notice("warn", "Auto-rigging is not set up", "The viewer could not ask the server."); return; }
-            return this.previzRigInstallDialog(tools, "unirig", () => this.previzAutoRigDialog(modelId));
-        }
-        let seed, humanoid;
+        if (!tools.unirig) { notice("warn", "Auto-rigging is not set up", "The viewer could not ask the server."); return; }
+        const anyReady = Object.keys(AUTORIG_ENGINES).some((e) => tools[e] && tools[e].ready);
+        if (!anyReady) return this.previzRigInstallDialog(tools, "unirig", () => this.previzAutoRigDialog(modelId));
+        const hasSkel = this.previzHasSkeleton(modelId);
+        let seed, humanoid, engine, keep, keepRow, hint, skelHint;
+        const first = pickAutorigEngine(tools, rememberedEngine());
         await openExportDialog(this.container, {
-            title: "Auto-rig (UniRig)",
+            title: "Auto-rig",
             kind: "character",
             name: model.name,
             go: "Rig",
             fixed: [{ value: "glb", label: "A skinned copy of the model (.glb)" }],
             rows: ({ el, row }) => {
+                engine = el("select", "rd-in rig-engine");
+                for (const [value, e] of Object.entries(AUTORIG_ENGINES)) {
+                    const ready = tools[value] && tools[value].ready;
+                    const o = Object.assign(el("option"), { value, textContent: ready ? e.label : `${e.label} (not set up: choose it to set it up)` });
+                    engine.append(o);
+                }
+                engine.value = first;
+                hint = el("span", "rd-sub", "");
                 seed = Object.assign(el("input", "rd-in rd-num"), { type: "number", value: 12345 });
                 humanoid = Object.assign(el("input"), { type: "checkbox", checked: true });
                 const lab = el("label", "rd-sub");
                 lab.append(humanoid, " Humanoid controls when it reads as one");
-                const rows = [row("Seed", seed, el("span", "rd-sub", "another seed, another skeleton")), row("Controls", lab)];
-                if (this.previzHasSkeleton(modelId)) {
+                const rows = [row("Engine", engine, hint), row("Seed", seed, el("span", "rd-sub", "another seed, another skeleton")), row("Controls", lab)];
+                if (hasSkel) {
                     const n = this._modelView()._entries.get(modelId).bones.size;
-                    rows.unshift(el("div", "rd-hint", `${model.name} already has a skeleton (${n} bones). `
-                        + "Auto-rigging replaces it with UniRig's; to animate the one it has, use Rig → Add controls instead."));
+                    keep = Object.assign(el("input"), { type: "checkbox", checked: false });
+                    const kl = el("label", "rd-sub");
+                    kl.append(keep, " Keep its skeleton: new skin weights only");
+                    keepRow = row("Skeleton", kl);
+                    rows.splice(1, 0, keepRow);
+                    skelHint = el("div", "rd-hint", "");
+                    rows.unshift(skelHint);
+                    skelHint.dataset.bones = String(n);
                 }
+                const sync = () => {
+                    const e = engine.value;
+                    hint.textContent = AUTORIG_ENGINES[e].hint;
+                    if (keepRow) {
+                        keepRow.style.display = e === "skintokens" ? "" : "none";
+                        if (e !== "skintokens") keep.checked = false;
+                        const n = skelHint.dataset.bones;
+                        skelHint.textContent = keep.checked
+                            ? `${model.name}'s skeleton (${n} bones) stays; SkinTokens weights the mesh to it.`
+                            : `${model.name} already has a skeleton (${n} bones). Auto-rigging replaces it with ${AUTORIG_ENGINES[e].label}'s`
+                              + (e === "skintokens" ? " unless you keep it below" : "; to animate the one it has, use Rig → Add controls instead") + ".";
+                    }
+                };
+                engine.addEventListener("change", sync);
+                if (keep) keep.addEventListener("change", sync);
+                sync();
                 return rows;
             },
-            note: "UniRig predicts a skeleton and skin weights for any character - people, animals, creatures. It runs on this machine's GPU and takes a minute or two.",
+            note: "Auto-rigging predicts a skeleton and skin weights for any character - people, animals, creatures. It runs on this machine's GPU and takes a minute or two.",
             onExport: async (v, { progress }) => {
+                const e = engine.value;
+                if (!(tools[e] && tools[e].ready)) {
+                    setTimeout(() => this.previzRigInstallDialog(tools, e, () => this.previzAutoRigDialog(modelId)), 0);
+                    return { ok: true };
+                }
+                rememberEngine(e);
                 const out = await this.previzAutoRig(modelId, { name: v.name, context: v.context, seed: Number(seed.value) || 12345,
-                    humanoid: humanoid.checked, progress: (line) => progress(0.5, 1, line) });
+                    humanoid: humanoid.checked, engine: e, keepSkeleton: !!(keep && keep.checked),
+                    progress: (line) => progress(0.5, 1, line) });
                 if (!out.ok) return { ok: false, message: out.message };
                 return { ok: true };
             },
         });
     },
 
-    /** Rig a model with UniRig and put the rigged copy in its place, with controls. */
-    async previzAutoRig(modelId, { name = null, context = null, seed = 12345, humanoid = true, progress = null } = {}) {
+    /** Rig a model with UniRig or SkinTokens and put the rigged copy in its place, with controls.
+     * `engine` null = the one the dialog would offer first; `keepSkeleton` (SkinTokens) = skin weights only. */
+    async previzAutoRig(modelId, { name = null, context = null, seed = 12345, humanoid = true, progress = null,
+        engine = null, keepSkeleton = false } = {}) {
         const scene = this.previzScene();
         const model = S.itemById(scene, modelId);
         if (!model) return { ok: false, message: "no such model" };
+        if (!engine) engine = pickAutorigEngine(await this._previzRigTools(), rememberedEngine());
+        if (!AUTORIG_ENGINES[engine]) return { ok: false, message: `engine is ${Object.keys(AUTORIG_ENGINES).join(" or ")}` };
+        if (keepSkeleton && engine !== "skintokens") return { ok: false, message: "only SkinTokens keeps the model's own skeleton" };
+        if (keepSkeleton && !this.previzHasSkeleton(modelId)) return { ok: false, message: "the model has no skeleton to keep" };
         const job = await this._previzRigJob("/imageviewer/rig/autorig",
-            { src: model.src, name: name || model.name, context, seed }, { progress });
+            { src: model.src, name: name || model.name, context, seed, engine, keep_skeleton: !!keepSkeleton }, { progress });
         if (job.state !== "done") return { ok: false, message: `Auto-rigging failed: ${job.error || job.state}` };
         this.previzSnapshot("auto-rig");
         model.src = { path: job.result.path, name: job.result.name, format: "glb" };
@@ -287,8 +356,9 @@ export const PrevizRigToolsMixin = {
         if (this._rigSkelCache) this._rigSkelCache.delete(modelId);
         if (!this.previzHasSkeleton(modelId)) return { ok: false, message: "The rigged model has no skeleton." };
         const rig = await this.previzRigCharacter(modelId, { humanoid });
-        notice("success", "Character rigged", `${rig && rig.humanoid ? "Humanoid" : "FK"} controls on ${model.name}. The rigged model is output/${job.result.relative || job.result.name}.`);
-        return { ok: true, path: job.result.path, humanoid: !!(rig && rig.humanoid) };
+        const by = AUTORIG_ENGINES[job.result.engine || engine].label;
+        notice("success", "Character rigged", `${by}: ${rig && rig.humanoid ? "humanoid" : "FK"} controls on ${model.name}. The rigged model is output/${job.result.relative || job.result.name}.`);
+        return { ok: true, path: job.result.path, humanoid: !!(rig && rig.humanoid), engine: job.result.engine || engine };
     },
 
     // ── AI motion ─────────────────────────────────────────────────────────
@@ -516,7 +586,8 @@ export const PrevizRigToolsMixin = {
                     break;
                 }
                 case "remove_rig": this.previzRemoveRig(model.id); result = {}; break;
-                case "autorig": result = await this.previzAutoRig(model.id, { seed: num(a.seed, 12345), humanoid: a.humanoid !== false }); break;
+                case "autorig": result = await this.previzAutoRig(model.id, { seed: num(a.seed, 12345), humanoid: a.humanoid !== false,
+                    engine: a.engine || null, keepSkeleton: !!a.keep_skeleton }); break;
                 case "motion":
                 case "inbetween":
                     result = await this.previzRigGenerateMotion(model.id, {
