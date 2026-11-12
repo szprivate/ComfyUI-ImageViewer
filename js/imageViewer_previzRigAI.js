@@ -26,6 +26,7 @@ import * as L from "./imageViewer_rigLipsync.js";
 import * as P from "./imageViewer_rigPoseSpec.js";
 import * as PF from "./imageViewer_rigPoseFix.js";
 import { api } from "../../scripts/api.js";
+import { SCENE_AGENT_ACTIONS } from "./imageViewer_previzAgentScene.js";
 import { notice, openExportDialog, openFilePicker } from "./imageViewer_exportUI.js";
 
 const FILM_EXTS = [".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"];
@@ -480,7 +481,7 @@ export const PrevizRigAIMixin = {
 
     /** Whether an agent action works on the scene rather than one character (no model needed). */
     previzRigSceneAction(action) {
-        return SCENE_ACTIONS.has(action);
+        return SCENE_ACTIONS.has(action) || SCENE_AGENT_ACTIONS.has(action);
     },
 
     /**
@@ -489,6 +490,8 @@ export const PrevizRigAIMixin = {
      * which call those mixins when they are there. Answers the result, or throws.
      */
     async previzRigAgentExtra(action, model, a) {
+        // The scene's own actions (clips, cameras, renders, keys, ...): imageViewer_previzAgentScene.js.
+        if (SCENE_AGENT_ACTIONS.has(action) && this.previzSceneAgent) return this.previzSceneAgent(action, a);
         if (!model && !SCENE_ACTIONS.has(action)) throw new Error("name the model");
         const num = (v, d) => (v === undefined || v === null || v === "" ? d : Number(v));
         const need = (fn, what) => {

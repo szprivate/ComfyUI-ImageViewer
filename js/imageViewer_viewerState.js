@@ -358,6 +358,30 @@ export function describeViewerState(s) {
         });
     }
 
+    // The rest of the 3D scene: shot, cameras, clips, layers (what the agent's scene tool works on).
+    const s3 = snap.scene3d;
+    if (s3 && typeof s3 === "object") {
+        const o = { fps: s3.fps, length: s3.length };
+        if (s3.active_camera) o.active_camera = String(s3.active_camera);
+        const cams = (s3.items || []).filter((i) => i.kind === "camera").map((i) => String(i.name));
+        if (cams.length) o.cameras = cams.slice(0, 12);
+        const q = s3.clips;
+        if (q && Array.isArray(q.tracks)) {
+            const clips = [];
+            for (const t of q.tracks) for (const c of t.clips || []) clips.push({ name: String(c.name), track: String(t.name), from: c.from, to: c.to, ...(c.mute || t.mute ? { mute: true } : {}) });
+            if (clips.length) o.clips = clips.slice(0, 24);
+            if ((q.sources || []).length) o.clip_sources = q.sources.length;
+        }
+        if (Array.isArray(s3.anim_layers) && s3.anim_layers.length) {
+            o.anim_layers = s3.anim_layers.slice(0, 12).map((l) => ({ name: String(l.name), mode: l.mode, weight: r3(Number(l.weight) || 0),
+                ...(l.mute ? { mute: true } : {}), ...(l.solo ? { solo: true } : {}), ...(l.lock ? { lock: true } : {}) }));
+        }
+        if (Array.isArray(s3.display_layers) && s3.display_layers.length) {
+            o.display_layers = s3.display_layers.slice(0, 12).map((l) => ({ name: String(l.name), visible: !!l.visible, mode: l.mode }));
+        }
+        out.scene3d = o;
+    }
+
     const an = snap.annotations;
     if (an && an.count > 0) {
         out.annotations = { count: an.count };
