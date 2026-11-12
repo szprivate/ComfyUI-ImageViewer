@@ -26,9 +26,12 @@ the viewer's pure-PyTorch stand-ins for flash_attn, spconv, torch_scatter and to
 GPU, but the same models and results.
 
 What each needs that this script cannot do for you:
-  * Kimodo's text encoder is LLM2Vec on Meta-Llama-3-8B-Instruct, a gated model: ask for access on its
-    Hugging Face page, then `hf auth login` (or put the token in ~/.cache/huggingface/token). With less
-    than ~17 GB of VRAM keep "text_encoder_device": "cpu" (written by default): under 3 GB on the GPU.
+  * Kimodo's text encoder is LLM2Vec on Meta-Llama-3-8B-Instruct, which is gated on Hugging Face. The
+    script puts it in <root>/kimodo/text_encoders (scripts/rig/kimodo_text_encoder.py): from Meta's repo
+    when your Hugging Face login has access, else from NousResearch's ungated copy of the same weights
+    (--llama auto, the default; meta / mirror choose). Once Meta has said yes, `--only kimodo-text
+    --llama meta` swaps the base and nothing else. With less than ~17 GB of VRAM keep
+    "text_encoder_device": "cpu" (written by default): under 3 GB on the GPU.
   * The models' weights download on first use (UniRig's from VAST-AI/UniRig, Kimodo's from nvidia/ on
     Hugging Face), so the first run takes a while.
 
@@ -363,6 +366,29 @@ def install_kimodo(root, python, cuda, model, sysname):
     return out
 
 
+def install_kimodo_text(root, kimodo, llama="auto"):
+    """Kimodo's text encoder into <root>/kimodo/text_encoders (kimodo_text_encoder.py, in Kimodo's venv);
+    TEXT_ENCODERS_DIR in its env makes Kimodo load it from there. `kimodo` is its config entry, changed."""
+    folder = os.path.join(root, "kimodo", "text_encoders")
+    cmd = [kimodo["python"], "-u", os.path.join(os.path.dirname(os.path.abspath(__file__)), "kimodo_text_encoder.py"),
+           "--dir", folder, "--base", llama]
+    print("$", " ".join(cmd), flush=True)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+                            encoding="utf-8", errors="replace")
+    said = None
+    for line in proc.stdout:
+        if line.startswith("@@"):
+            said = json.loads(line[2:])
+        else:
+            print(line, end="", flush=True)
+    if proc.wait() != 0 or not said:
+        raise subprocess.CalledProcessError(proc.returncode or 1, cmd)
+    out = dict(kimodo)
+    out["env"] = {**(kimodo.get("env") or {}), "TEXT_ENCODERS_DIR": said["dir"]}
+    out["text_encoder_base"] = said["base"]
+    return out
+
+
 POSE_MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
                   "pose_landmarker_{size}/float16/latest/pose_landmarker_{size}.task")
 
@@ -394,7 +420,11 @@ def config_path():
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--root", required=True, help="where the tools' folders go")
-    ap.add_argument("--only", choices=["unirig", "kimodo", "posetrack"])
+    ap.add_argument("--only", choices=["unirig", "kimodo", "kimodo-text", "posetrack"],
+                    help="kimodo-text: only Kimodo's text encoder (Kimodo itself set up already)")
+    ap.add_argument("--llama", default="auto",
+                    help="Kimodo's Llama 3 weights: auto (Meta's when you have access, else the copy), meta, "
+                         "mirror (NousResearch's ungated copy), or a Hugging Face repo id")
     ap.add_argument("--pose-model", default="heavy", choices=["lite", "full", "heavy"])
     ap.add_argument("--cuda", default="auto",
                     help="auto (from the GPU), cpu, or a PyTorch wheel index: cu118, cu121, cu124, cu126, cu128...")
@@ -429,10 +459,24 @@ def main():
     if a.only in (None, "kimodo"):
         cfg["kimodo"] = install_kimodo(root, a.python, cuda, a.kimodo_model, sysname)
         save()
+    if a.only in (None, "kimodo", "kimodo-text"):
+        if not (cfg.get("kimodo") or {}).get("python"):
+            raise SystemExit("!! Kimodo is not set up yet: run with --only kimodo first")
+        try:
+            cfg["kimodo"] = install_kimodo_text(root, cfg["kimodo"], a.llama)
+            save()
+        except subprocess.CalledProcessError:
+            if a.only == "kimodo-text":
+                raise
+            print("!! Kimodo's text encoder did not download: Kimodo will try Hugging Face on its first run "
+                  "(rerun with --only kimodo-text).", flush=True)
     if a.only in (None, "posetrack"):
         cfg["posetrack"] = install_posetrack(root, a.python, a.pose_model)
         save()
-    print("   Kimodo needs access to meta-llama/Meta-Llama-3-8B-Instruct on Hugging Face and `hf auth login`.")
+    base = (cfg.get("kimodo") or {}).get("text_encoder_base")
+    if base and base != "meta-llama/Meta-Llama-3-8B-Instruct":
+        print(f"   Kimodo's Llama 3 weights are {base}'s copy. Once Meta grants you access: "
+              "--only kimodo-text --llama meta.")
 
 
 if __name__ == "__main__":

@@ -169,3 +169,101 @@ class MainTests(unittest.TestCase):
                     I.main()
             with open(cfg) as fh:
                 self.assertEqual(json.load(fh), {"unirig": {"python": "u", "repo": "r"}})
+
+
+import json  # noqa: E402
+import tempfile  # noqa: E402
+import types  # noqa: E402
+from unittest import mock  # noqa: E402
+
+import kimodo_text_encoder as K  # noqa: E402
+
+
+def fake_hub(access, got):
+    """A huggingface_hub stand-in: snapshot_download writes what the McGill adapters / the base would hold."""
+    hub = types.ModuleType("huggingface_hub")
+
+    def hf_hub_download(repo, name):
+        if not access:
+            raise PermissionError("Your request to access model meta-llama/... is awaiting a review")
+        return "/cache/config.json"
+
+    def snapshot_download(repo, local_dir, allow_patterns=None):
+        got.append(repo)
+        os.makedirs(local_dir, exist_ok=True)
+        if repo.endswith("-mntp"):
+            with open(os.path.join(local_dir, "adapter_config.json"), "w") as fh:
+                json.dump({"base_model_name_or_path": K.META, "r": 16}, fh)
+            with open(os.path.join(local_dir, "config.json"), "w") as fh:
+                json.dump({"_name_or_path": K.META}, fh)
+        return local_dir
+    hub.hf_hub_download = hf_hub_download
+    hub.snapshot_download = snapshot_download
+    return hub
+
+
+class TextEncoderTests(unittest.TestCase):
+    def run_main(self, access, base="auto"):
+        got = []
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.dict(sys.modules, {"huggingface_hub": fake_hub(access, got)}):
+            K.main(["--dir", tmp, "--base", base])
+            mntp = os.path.join(tmp, "McGill-NLP", "LLM2Vec-Meta-Llama-3-8B-Instruct-mntp")
+            with open(os.path.join(mntp, "adapter_config.json")) as fh:
+                adapter = json.load(fh)
+            with open(os.path.join(mntp, "config.json")) as fh:
+                name = json.load(fh)["_name_or_path"]
+            return got, adapter, name, tmp
+
+    def test_without_metas_yes_the_ungated_copy_is_the_base(self):
+        got, adapter, name, tmp = self.run_main(access=False)
+        self.assertEqual(got[-1], K.MIRROR)
+        self.assertEqual(adapter["base_model_name_or_path"],
+                         os.path.join(tmp, "base", "NousResearch", "Meta-Llama-3-8B-Instruct").replace("\\", "/"))
+        self.assertEqual(adapter["r"], 16)                  # the rest of the adapter's config is kept
+        self.assertEqual(name, K.META)                      # so LLM2Vec still uses Llama 3's chat format
+
+    def test_with_access_metas_own_repo_is_the_base(self):
+        got, adapter, _name, _tmp = self.run_main(access=True)
+        self.assertEqual(got, [*K.ADAPTERS, K.META])
+        self.assertTrue(adapter["base_model_name_or_path"].endswith("base/meta-llama/Meta-Llama-3-8B-Instruct"))
+
+    def test_mirror_and_meta_can_be_asked_for(self):
+        self.assertEqual(self.run_main(access=True, base="mirror")[0][-1], K.MIRROR)
+        self.assertEqual(self.run_main(access=False, base="meta")[0][-1], K.META)
+
+
+class KimodoTextInstallTests(unittest.TestCase):
+    def test_only_kimodo_text_adds_the_folder_to_kimodos_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = os.path.join(tmp, "rig_tools.json")
+            with open(cfg, "w") as fh:
+                json.dump({"kimodo": {"python": "k", "env": {"KIMODO_DEVICE": "cpu"}}}, fh)
+            seen = {}
+
+            def text(root, kimodo, llama):
+                seen.update(root=root, llama=llama)
+                return {**kimodo, "env": {**kimodo["env"], "TEXT_ENCODERS_DIR": "/te"}, "text_encoder_base": K.MIRROR}
+            with mock.patch.dict(os.environ, {"IMAGE_VIEWER_RIG_TOOLS": cfg}), \
+                 mock.patch.object(I, "install_kimodo_text", text), \
+                 mock.patch.object(I, "install_kimodo", lambda *a: self.fail("Kimodo itself is not reinstalled")), \
+                 mock.patch.object(sys, "argv", ["x", "--root", tmp, "--cuda", "cpu", "--only", "kimodo-text",
+                                                 "--llama", "mirror"]):
+                I.main()
+            with open(cfg) as fh:
+                k = json.load(fh)["kimodo"]
+            self.assertEqual(seen["llama"], "mirror")
+            self.assertEqual(k["env"], {"KIMODO_DEVICE": "cpu", "TEXT_ENCODERS_DIR": "/te"})
+            self.assertEqual(k["text_encoder_base"], K.MIRROR)
+
+    def test_install_kimodo_text_reads_the_helpers_answer(self):
+        class P:
+            returncode = 0
+            stdout = iter(["== hello\n", '@@{"dir": "/r/te", "base": "%s", "base_dir": "/b"}\n' % K.MIRROR])
+
+            def wait(self):
+                return 0
+        with mock.patch.object(I.subprocess, "Popen", lambda *a, **k: P()):
+            out = I.install_kimodo_text("/r", {"python": "k", "model": "m"}, "auto")
+        self.assertEqual(out, {"python": "k", "model": "m", "env": {"TEXT_ENCODERS_DIR": "/r/te"},
+                               "text_encoder_base": K.MIRROR})

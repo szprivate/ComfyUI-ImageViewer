@@ -259,7 +259,7 @@ def kind_logs(kind):
 
 
 # How many commands (the installer's "$ " lines) a full install of each tool runs: for the progress bar.
-INSTALL_STEPS = {"unirig": 10, "kimodo": 5, "posetrack": 3}
+INSTALL_STEPS = {"unirig": 10, "kimodo": 9, "kimodo-text": 4, "posetrack": 3}
 
 
 
@@ -350,7 +350,8 @@ class _KimodoWorker:
         self.lock = threading.Lock()
 
     def _start(self, cfg, job):
-        key = (cfg["python"], cfg.get("model"), cfg.get("text_encoder_device"))
+        key = (cfg["python"], cfg.get("model"), cfg.get("text_encoder_device"),
+               json.dumps(cfg.get("env") or {}, sort_keys=True))   # a new text encoder starts a new process
         if self.proc and self.proc.poll() is None and self.key == key:
             return
         self.stop()
@@ -638,8 +639,8 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         if os.path.isfile(root):
             return err(f"{root} is a file")
         only = body.get("only")
-        if only not in (None, "", "unirig", "kimodo", "posetrack"):
-            return err("only is unirig, kimodo or posetrack")
+        if only not in (None, "", "unirig", "kimodo", "kimodo-text", "posetrack"):
+            return err("only is unirig, kimodo, kimodo-text or posetrack")
         if body.get("hf_token"):
             try:
                 save_hf_token(body["hf_token"])
@@ -649,7 +650,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         cmd = [sys.executable, "-u", script, "--root", root]
         if only:
             cmd += ["--only", only]
-        steps = INSTALL_STEPS[only] if only else sum(INSTALL_STEPS.values())
+        steps = INSTALL_STEPS[only] if only else sum(v for k, v in INSTALL_STEPS.items() if k != "kimodo-text")
         job = new_job("install")
 
         def work():

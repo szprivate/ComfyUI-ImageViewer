@@ -179,9 +179,10 @@ export const PrevizRigToolsMixin = {
                     token.style.width = "100%";
                     rows.push(row("Hugging Face", token));
                     rows.push(el("div", "rd-hint",
-                        "AI motion's text encoder is Meta's Llama 3 8B Instruct, a gated model: ask for access on its Hugging Face "
-                        + "page (meta-llama/Meta-Llama-3-8B-Instruct), then paste a read token from huggingface.co/settings/tokens. "
-                        + "It is saved where Hugging Face's own tools keep it, on this machine only."));
+                        "AI motion's text encoder is Meta's Llama 3 8B Instruct. With a read token from huggingface.co/settings/tokens "
+                        + "whose account has access to meta-llama/Meta-Llama-3-8B-Instruct it comes from Meta; without that access "
+                        + "(or a token) from NousResearch's ungated copy of the same weights. "
+                        + "The token is saved where Hugging Face's own tools keep it, on this machine only."));
                 }
                 return rows;
             },
