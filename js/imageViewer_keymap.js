@@ -361,9 +361,23 @@ export function viewerKeybindings() {
         return CORE_CLAIMED.has(key);
     };
 
+    // ComfyUI takes one default per combo and raises an error toast for a second
+    // ("Keybinding on   already exists", Space: View3DMaximisePane and PlayPause).
+    // A combo shared by several actions is registered once, for the one without an
+    // `enabled` guard (the everywhere action) when there is one; the panel's own
+    // handler still picks between them (resolveViewerAction).
+    const owner = new Map();
+    for (const action of VIEWER_ACTIONS) {
+        if (!action.combo) continue;
+        const key = comboKey(action.combo);
+        const had = owner.get(key);
+        if (!had || (had.enabled && !action.enabled)) owner.set(key, action);
+    }
+
     const out = [];
     for (const action of VIEWER_ACTIONS) {
         if (!action.combo) continue;
+        if (owner.get(comboKey(action.combo)) !== action) continue;
         if (isTaken(comboKey(action.combo))) {
             console.info(
                 `[ImageViewer] ${comboLabel(action.combo)} is already bound in ComfyUI, so ` +
