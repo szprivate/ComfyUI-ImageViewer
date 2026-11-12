@@ -19,6 +19,7 @@ import * as Q from "./imageViewer_clipSeqData.js";
 // Registers the layers' blend with the scene model (evaluateIn).
 import "./imageViewer_animLayers.js";
 import { pref, PREF } from "./imageViewer_settings.js";
+import { viewerActionKeyLabel } from "./imageViewer_keymap.js";
 import { notice, openExportDialog, openFilePicker } from "./imageViewer_exportUI.js";
 
 // Maya's manipulator keys, which is what the hotkeys below bind to.
@@ -1161,6 +1162,10 @@ export const PrevizMixin = {
                 b.className = "previz-menu-item";
                 b.textContent = e.label;
                 if (e.title) b.title = e.title;
+                // Its key at the row's right: `cmd` names a keymap action (so a key the user
+                // rebound shows), `keys` is one written out (Shift+1, which goes by the key's place).
+                const keyLabel = e.keys || (e.cmd ? viewerActionKeyLabel(e.cmd) : "");
+                if (keyLabel && !Array.isArray(e.sub)) b.dataset.key = keyLabel;
                 if (!Array.isArray(e.sub)) {
                     b.addEventListener("mouseenter", () => {
                         for (const o of box.querySelectorAll(":scope > .previz-menu-subwrap.open")) o.classList.remove("open");
@@ -1251,11 +1256,11 @@ export const PrevizMixin = {
         const ids = this.previzSelectedIds();
         const frozen = this._previzFreezable(ids);
         return [
-            { label: "Centre Pivot", disabled: !ids.length, run: () => this.previzCentrePivot() },
-            { label: (this._previzPivotMode ? "\u2713 " : "") + "Move Pivot",
+            { label: "Centre Pivot", cmd: "PrevizCentrePivot", disabled: !ids.length, run: () => this.previzCentrePivot() },
+            { label: (this._previzPivotMode ? "\u2713 " : "") + "Move Pivot", cmd: "PivotMode",
               disabled: !ids.length && !this._previzPivotMode, run: () => this.previzTogglePivotMode() },
             "-",
-            { label: "Freeze Transformations", disabled: !frozen.ok.length,
+            { label: "Freeze Transformations", cmd: "PrevizFreeze", disabled: !frozen.ok.length,
               run: () => this.previzFreezeTransforms() },
         ];
     },
@@ -1387,14 +1392,14 @@ export const PrevizMixin = {
 
     _previzAddMenuEntries() {
         const entries = [
-            { label: "Model\u2026", run: () => this.previzAddFromBrowser() },
-            { label: "Camera", run: () => this.previzAddCamera() },
-            { label: "Image plane\u2026", run: () => this.previzAddImagePlane() },
-            { label: "Group", run: () => this.previzAddGroup() },
+            { label: "Model\u2026", cmd: "PrevizAddModel", run: () => this.previzAddFromBrowser() },
+            { label: "Camera", cmd: "PrevizAddCamera", run: () => this.previzAddCamera() },
+            { label: "Image plane\u2026", cmd: "PrevizAddImagePlane", run: () => this.previzAddImagePlane() },
+            { label: "Group", cmd: "PrevizAddGroup", run: () => this.previzAddGroup() },
             "-",
         ];
         for (const spec of S.PRIMITIVES) {
-            entries.push({ label: spec.label, run: () => this.previzAddPrimitive(spec.type) });
+            entries.push({ label: spec.label, cmd: `PrevizAdd${spec.label}`, run: () => this.previzAddPrimitive(spec.type) });
         }
         entries.push("-");
         // The world items as one submenu; opening and referencing scenes is File's.

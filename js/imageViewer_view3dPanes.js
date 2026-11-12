@@ -379,6 +379,8 @@ export const View3DPanesMixin = {
         const s = this._paneState();
         if (layout === "single") s.focus = s.active;
         s.layout = layout;
+        // Chosen by hand, a layout is not a maximised pane any more (togglePaneMaximised sets it again).
+        delete s.restore;
         // The active pane has to be one that is on screen.
         const slots = paneRects(layout, s.split, 100, 100, s.focus).map((p) => p.slot);
         if (!slots.includes(s.active)) {
@@ -416,9 +418,32 @@ export const View3DPanesMixin = {
             this.setPaneLayout(s.restore || "quad");
             return;
         }
-        s.restore = s.layout;
+        const was = s.layout;
         s.active = slot;
         this.setPaneLayout("single");
+        s.restore = was;
+    },
+
+    /**
+     * What Space over the stage would do: the slot of the pane under the mouse in a
+     * split layout, "restore" in a pane maximised from one, else null (Space plays).
+     */
+    paneSpaceTarget() {
+        const xy = this._paneHoverXY;
+        if (!xy || !this.stage || !this.stage.isConnected) return null;
+        const s = this._paneState();
+        if (s.layout === "single") return s.restore ? "restore" : null;
+        const slot = this._paneAt(xy[0], xy[1]);
+        return slot >= 0 ? slot : null;
+    },
+
+    /** Space over a pane: maximise it, or put the layout it came from back. */
+    paneSpaceToggle() {
+        const t = this.paneSpaceTarget();
+        if (t === null) return false;
+        if (t === "restore") this.togglePaneMaximised();
+        else this.togglePaneMaximised(t);
+        return true;
     },
 
     /** Build the panes' frames, labels and dividers for the layout. */
@@ -472,6 +497,9 @@ export const View3DPanesMixin = {
                 const slot = this._paneAt(e.clientX, e.clientY);
                 if (slot >= 0) this._paneActivate(slot);
             };
+            // Where the mouse is over the stage, for Space (paneSpaceTarget).
+            this.stage.addEventListener("pointermove", (e) => { this._paneHoverXY = [e.clientX, e.clientY]; }, true);
+            this.stage.addEventListener("pointerleave", () => { this._paneHoverXY = null; });
             this.stage.addEventListener("pointerdown", pick, true);
             this.stage.addEventListener("pointermove", pick, true);
             this.stage.addEventListener("wheel", pick, { capture: true, passive: true });

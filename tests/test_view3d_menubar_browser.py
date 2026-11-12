@@ -172,6 +172,86 @@ class MenuBarPaneTests(unittest.TestCase):
         self.assertEqual(single, "single")
         self.assertEqual(self.errors, [])
 
+    def _keys_of(self, pg, menu):
+        pg.evaluate(f"() => window.__panel.previzMenuBarOpen('{menu}')")
+        pg.wait_for_timeout(80)
+        out = pg.evaluate("""() => Object.fromEntries([...document.querySelectorAll('button.previz-menu-item'),
+            ...window.__panel.shadowRoot.querySelectorAll('button.previz-menu-item')]
+            .map((b) => [b.textContent.replace(/^\u2713 /, ''), b.dataset.key || '']))""")
+        pg.keyboard.press("Escape")
+        return out
+
+    def test_the_menus_show_their_keys(self):
+        pg = self._page()
+        try:
+            pg.evaluate("() => window.__panel.previzSelectAll()")
+            edit = self._keys_of(pg, "edit")
+            view = self._keys_of(pg, "view")
+            anim = self._keys_of(pg, "animate")
+            create = self._keys_of(pg, "create")
+            windows = self._keys_of(pg, "windows")
+            pg.evaluate("() => window.__panel._modelView().setPaneLayout('quad')")
+            quad = self._keys_of(pg, "view")
+            # Drawn at the row's right, out of its text.
+            pg.evaluate("() => window.__panel.previzMenuBarOpen('edit')")
+            after = pg.evaluate("""() => { const b = [...window.__panel.shadowRoot.querySelectorAll('button.previz-menu-item')]
+                .find((x) => x.textContent === 'Undo'); const cs = getComputedStyle(b, '::after');
+                return { content: cs.content, text: b.innerText }; }""")
+        finally:
+            pg.close()
+        self.assertEqual(edit["Undo"], "Ctrl+Z")
+        self.assertEqual(edit["Duplicate"], "Ctrl+D")
+        self.assertEqual(edit["Delete"], "Delete")
+        self.assertEqual(edit["Move"], "W")
+        self.assertEqual(edit["Move Pivot"], "Insert")
+        self.assertEqual(view["Frame selected"], "F")
+        self.assertEqual(view["Polygons"], "Shift+1")
+        self.assertEqual(view["Show all views"], "")      # a single view picked by hand: Space plays
+        self.assertEqual(quad["Maximise this view"], "Space over a view")
+        self.assertEqual(anim["Set key"], "S")
+        self.assertEqual(anim["Key translate"], "Shift+W")
+        self.assertIn("Camera", create)
+        self.assertIn("Outliner", windows)
+        self.assertEqual(after["content"], '"Ctrl+Z"')
+        self.assertEqual(after["text"], "Undo")
+        self.assertEqual(self.errors, [])
+
+    def test_space_over_a_view_maximises_it(self):
+        pg = self._page()
+        try:
+            pg.evaluate("() => window.__panel._modelView().setPaneLayout('quad')")
+            pg.wait_for_timeout(200)
+            boxes = pg.evaluate("() => [...window.__panel._modelView().root.querySelectorAll('.model-pane')].map((p) => { const r = p.getBoundingClientRect(); return [Number(p.dataset.slot), r.x, r.y, r.width, r.height]; })")
+            # The bottom right pane.
+            br = max(boxes, key=lambda b: (b[2], b[1]))
+            pg.mouse.move(br[1] + br[3] / 2, br[2] + br[4] / 2)
+            pg.mouse.move(br[1] + br[3] / 2 + 5, br[2] + br[4] / 2 + 5)
+            pg.wait_for_timeout(50)
+            pg.keyboard.press("Space")
+            pg.wait_for_timeout(150)
+            one = pg.evaluate("() => { const v = window.__panel._modelView(); const s = v._paneState(); return { layout: s.layout, kind: v.paneActiveKind(), playing: !!window.__panel.isPlaying }; }")
+            kind_br = pg.evaluate(f"() => window.__panel._modelView()._paneState().views[{br[0]}]")
+            pg.keyboard.press("Space")
+            pg.wait_for_timeout(150)
+            back = pg.evaluate("() => window.__panel._modelView()._paneState().layout")
+            # A single view chosen by hand: Space is Play / Pause again.
+            pg.evaluate("() => window.__panel._modelView().setPaneLayout('single')")
+            pg.mouse.move(800, 500)
+            pg.mouse.move(805, 505)
+            pg.keyboard.press("Space")
+            pg.wait_for_timeout(100)
+            plain = pg.evaluate("() => ({ layout: window.__panel._modelView()._paneState().layout, playing: !!window.__panel.isPlaying })")
+            pg.evaluate("() => window.__panel.isPlaying && window.__panel.stop()")
+        finally:
+            pg.close()
+        self.assertEqual(one["layout"], "single")
+        self.assertEqual(one["kind"], kind_br)
+        self.assertFalse(one["playing"])
+        self.assertEqual(back, "quad")
+        self.assertEqual(plain["layout"], "single")
+        self.assertTrue(plain["playing"])
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()
