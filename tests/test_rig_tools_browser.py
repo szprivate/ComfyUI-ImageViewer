@@ -801,6 +801,149 @@ class RigToolsBrowserTests(unittest.TestCase):
         self.assertGreater(film_hips[1][0] - film_hips[0][0], 0.05)   # the person moved across the picture
         self.assertEqual(self.errors, [])
 
+    def _ask(self, pg, aid, action, args=None):
+        """The agent's road: a request as rig_routes sends it; the page's answer to /rig/agent_done."""
+        pg.evaluate("async ([id, action, args]) => window.__panel.previzRigAgentRun({ id, action, args })", [aid, action, args or {}])
+        done = [b for k, b in self.requests if k == "agent_done" and b.get("id") == aid and b["state"] in ("done", "error")]
+        self.assertTrue(done, f"no answer to {aid}")
+        return done[-1]
+
+    def test_the_agent_makes_clips_and_renders_a_turntable_of_each(self):
+        """animate_scene's road: AI takes as clips, a clip placed, one turntable rig keyed per clip, a render per clip,
+        keys, layers, display layers, set-driven keys, IK/FK, USD and the scene in viewerState."""
+        pg = self.page()
+        frames, encodes, usd = [], [], []
+
+        def frame(route, request):
+            b = json.loads(request.post_data or "{}")
+            frames.append((b["name"], b["index"]))
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({"path": f"D:/out/previz/{b['name']}/{b['index']:04d}.png", "dir": f"D:/out/previz/{b['name']}"}))
+
+        def encode(route, request):
+            b = json.loads(request.post_data or "{}")
+            encodes.append(b)
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({"path": f"D:/out/previz/{b['name']}.mp4", "relative": f"previz/{b['name']}.mp4"}))
+
+        def usd_export(route, request):
+            b = json.loads(request.post_data or "{}")
+            usd.append(b)
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({"path": "D:/out/stages/shot_v001.usda", "relative": "stages/shot_v001.usda"}))
+        pg.route("**/imageviewer/previz_frame", frame)
+        pg.route("**/imageviewer/previz_encode", encode)
+        pg.route("**/imageviewer/usd_export", usd_export)
+        try:
+            pg.evaluate(OPEN, ["statue.glb", "Statue"])
+            pg.evaluate("async () => window.__panel.previzAutoRig(window.__hero, { seed: 7 })")
+            take = self._ask(pg, "m1", "motion", {"model": "Statue", "prompt": "A person walks forward.", "from": 0, "to": 23, "as_clip": True})
+            info = self._ask(pg, "s1", "scene_info")
+            src = info["result"]["scene"]["clips"]["sources"][0]["name"]
+            placed = self._ask(pg, "c1", "clip_place", {"source": src, "at": 30})
+            sped = self._ask(pg, "c2", "clip_set", {"clip": placed["result"]["clip"], "name": "Fast walk", "speed": 2})
+            listed = self._ask(pg, "c3", "clip_list")
+            tt = self._ask(pg, "t1", "turntable", {"clips": "all", "degrees": 360})
+            orbit = pg.evaluate("""() => { const P = window.__panel, view = P._modelView(), scene = P.previzScene();
+                const cam = scene.items.find((i) => i.kind === 'camera' && i.name === 'Turntable cam');
+                const e = view._entries.get(cam.id); const out = [];
+                for (const f of [0, 6, 12, 18, 30, 33, 36]) { view.applyFrame(f); e.root.updateMatrixWorld(true);
+                    const p = e.camera.getWorldPosition(new view.libs.THREE.Vector3());
+                    const d = new view.libs.THREE.Vector3(0, 0, -1).applyQuaternion(e.camera.getWorldQuaternion(new view.libs.THREE.Quaternion()));
+                    out.push([f, p.toArray(), d.toArray()]); }
+                view.applyFrame(0); return out; }""")
+            renders = []
+            for i, rg in enumerate(tt["result"]["ranges"]):
+                renders.append(self._ask(pg, f"r{i}", "render", {"clip": rg["clip"], "camera": "Turntable cam",
+                                                                  "name": f"turn_{i}", "add_node": False, "width": 64, "height": 36}))
+            blast = self._ask(pg, "pb", "playblast", {"from": 0, "to": 3, "camera": "Turntable cam", "hud": False, "scale": 25})
+            ik = pg.evaluate("() => window.__panel.previzScene().items.find((i) => i.kind === 'control' && i.control.type === 'ik').name")
+            fk = pg.evaluate("() => window.__panel.previzScene().items.find((i) => i.kind === 'control' && i.control.type === 'fk').name")
+            sw = self._ask(pg, "ik1", "ikfk_switch", {"control": ik, "to": "fk", "frame": 5})
+            key = self._ask(pg, "k1", "key_set", {"item": fk, "prop": "rotation", "keys": [{"frame": 2, "value": [10, 0, 0]}, {"frame": 8, "axis": "y", "value": 25}]})
+            keys = self._ask(pg, "k2", "key_list", {"item": fk, "frame": 8})
+            kdel = self._ask(pg, "k3", "key_delete", {"item": fk, "prop": "rotation", "frame": 2})
+            lay = self._ask(pg, "l1", "layer_add", {"name": "Fix", "mode": "additive"})
+            lset = self._ask(pg, "l2", "layer_set", {"layer": "Fix", "weight": 0.5, "mute": True})
+            dl = self._ask(pg, "d1", "display_layer_add", {"name": "set", "items": ["Statue"]})
+            dset = self._ask(pg, "d2", "display_layer_set", {"layer": "set", "visible": False, "mode": "template"})
+            attr = self._ask(pg, "x1", "attr_add", {"item": fk, "name": "fist", "min": 0, "max": 1})
+            sdk = self._ask(pg, "x2", "sdk_key", {"driver": {"item": fk, "prop": "attr:fist"}, "driver_value": 1,
+                                                  "driven": [{"item": ik, "prop": "position", "axis": "y", "value": 0.3}], "frame": 0})
+            cam = self._ask(pg, "cam", "add_camera", {"name": "Wide", "position": [4, 2, 4], "look_at": [0, 1, 0], "fov": 30, "active": False})
+            look = pg.evaluate("""() => { const P = window.__panel, view = P._modelView(), scene = P.previzScene();
+                const c = scene.items.find((i) => i.name === 'Wide'); const e = view._entries.get(c.id); view.applyFrame(0);
+                e.root.updateMatrixWorld(true);
+                return new view.libs.THREE.Vector3(0, 0, -1).applyQuaternion(e.camera.getWorldQuaternion(new view.libs.THREE.Quaternion())).toArray(); }""")
+            split = self._ask(pg, "c4", "clip_split", {"clip": "Fast walk", "at": 33})
+            bad = self._ask(pg, "e1", "clip_set", {"clip": "nobody"})
+            stage = self._ask(pg, "u1", "export_usd", {"name": "shot"})
+            state = pg.evaluate("() => window.__panel.agentViewerState().scene3d")
+            undo = pg.evaluate("() => window.__panel._undoState().past.map((s) => s.label).slice(-4)")
+        finally:
+            pg.close()
+        self.assertEqual(take["state"], "done", take)
+        self.assertEqual(take["result"]["clip"], "AI takes")
+        self.assertEqual(placed["state"], "done", placed)
+        self.assertEqual([placed["result"]["from"], placed["result"]["to"]], [30, 53])
+        self.assertEqual(sped["state"], "done", sped)
+        self.assertEqual([sped["result"]["from"], sped["result"]["to"], sped["result"]["speed"]], [30, 41, 2], "a speed keeps the source: half as long")
+        ranges = [[c["name"], c["from"], c["to"]] for c in listed["result"]["turntable_ranges"]]
+        self.assertEqual(ranges[1], ["Fast walk", 30, 41])
+        self.assertEqual(ranges[0][1:], [0, 23])
+        self.assertEqual(tt["state"], "done", tt)
+        self.assertEqual([[r["from"], r["to"]] for r in tt["result"]["ranges"]], [[0, 23], [30, 41]])
+        # The camera goes round the subject: the same distance from its centre, looking at it, a quarter turn every 6 frames.
+        c0 = tt["result"]["ranges"][0]["center"]
+        dist = tt["result"]["ranges"][0]["distance"]
+        for f, p, d in orbit[:4]:
+            flat = math.hypot(p[0] - c0[0], p[2] - c0[2])
+            self.assertAlmostEqual(flat, dist, delta=1e-3 * max(1, dist))
+            to = [c0[i] - p[i] for i in range(3)]
+            n = math.hypot(*to)
+            self.assertGreater(sum(d[i] * to[i] / n for i in range(3)), 0.999, f"frame {f} looks at the subject")
+        a0 = math.atan2(orbit[0][1][0] - c0[0], orbit[0][1][2] - c0[2])
+        a6 = math.atan2(orbit[1][1][0] - c0[0], orbit[1][1][2] - c0[2])
+        self.assertAlmostEqual(abs(math.degrees(a6 - a0)) % 360, 90, delta=0.5)
+        self.assertGreater(orbit[0][1][2], c0[2], "it starts in front of the character (+Z)")
+        # Each clip's render: its own frames, through the turntable camera.
+        for i, (r, (a, b)) in enumerate(zip(renders, [(0, 23), (30, 41)])):
+            self.assertEqual(r["state"], "done", r)
+            self.assertEqual(r["result"]["path"], f"D:/out/previz/turn_{i}.mp4")
+            self.assertEqual(sorted(x for n, x in frames if n == f"turn_{i}"), list(range(a, b + 1)))
+        self.assertEqual(blast["state"], "done", blast)
+        self.assertEqual(sorted(x for n, x in frames if n.endswith("_playblast")), [0, 1, 2, 3])
+        self.assertEqual(sw["state"], "done", sw)
+        self.assertEqual(sw["result"]["ikfk"], 0)
+        self.assertEqual(key["state"], "done", key)
+        self.assertEqual(key["result"]["keys"], 2)
+        rot = {k["frame"]: k["value"] for k in keys["result"]["tracks"]["rotation"]}
+        self.assertAlmostEqual(rot[8][1], 25, delta=1e-6)
+        self.assertEqual(kdel["result"]["frames_cleared"], 1)
+        self.assertEqual(lay["state"], "done", lay)
+        self.assertEqual(lset["state"], "done", lset)
+        self.assertEqual([lset["result"]["weight"], lset["result"]["mute"]], [0.5, True])
+        self.assertEqual(dl["result"]["members"], 1)
+        self.assertEqual([dset["result"]["visible"], dset["result"]["mode"]], [False, "template"])
+        self.assertEqual(attr["result"]["prop"], "attr:fist")
+        self.assertEqual(sdk["state"], "done", sdk)
+        self.assertEqual(sdk["result"]["keyed"], 1)
+        to = [-4, -1, -4]
+        n = math.hypot(*to)
+        self.assertGreater(sum(look[i] * to[i] / n for i in range(3)), 0.999, (look, "add_camera looks at its look_at"))
+        self.assertEqual(split["state"], "done", split)
+        self.assertEqual(bad["state"], "error")
+        self.assertIn("no clip named nobody", bad["error"])
+        self.assertEqual(stage["result"]["path"], "D:/out/stages/shot_v001.usda")
+        self.assertEqual(usd[0]["format"], "usda")
+        self.assertIn("Turntable cam", state["cameras"])
+        self.assertEqual(state["active_camera"], "Turntable cam")
+        self.assertTrue(any(c["name"] == "Fast walk" for c in state["clips"]), state)
+        self.assertEqual(state["anim_layers"][0]["name"], "Fix")
+        self.assertEqual(state["display_layers"][0]["visible"], False)
+        self.assertIn("split clip", undo, "each change is an undo step")
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,7 @@
 import { describeViewerState, annotationReport } from "./imageViewer_viewerState.js";
 import { frameKind } from "./imageViewer_historySelection.js";
 import * as D from "./imageViewer_editTimelineData.js";
+import { describeScene } from "./imageViewer_agentSceneData.js";
 
 const safe = (fn, fallback = null) => { try { return fn(); } catch (_) { return fallback; } };
 
@@ -196,6 +197,13 @@ export const AgentStateMixin = {
         });
     },
 
+    /** The previz scene beyond its characters: shot, cameras, clips, layers (what animate_scene works on). */
+    _agentScene3d() {
+        if (!this._modelMode || !this.isPrevizTab || !this.isPrevizTab()) return null;
+        const scene = this.previzScene && this.previzScene();
+        return scene ? describeScene(scene) : null;
+    },
+
     _agentAnnotCounts() {
         const items = safe(() => this._annotItems(false), null) || [];
         if (!items.length) return null;
@@ -247,6 +255,7 @@ export const AgentStateMixin = {
                       channel: this.channelView, exposure: this.exposure };
         snap.camera = safe(() => this._agentCamera(), null);
         snap.characters = safe(() => this._agentCharacters(), null);
+        snap.scene3d = safe(() => this._agentScene3d(), null);
         snap.annotations = this._agentAnnotCounts();
         return snap;
     },

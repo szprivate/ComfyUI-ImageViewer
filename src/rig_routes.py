@@ -480,7 +480,14 @@ AGENT_ACTIONS = ("rig", "remove_rig", "autorig", "motion", "inbetween", "clean_f
                  "restyle", "video_motion", "lipsync",
                  "layer_add", "layer_list", "constrain", "remove_constraint", "list_constraints", "bake_constraints",
                  "pose_list", "pose_save", "pose_apply", "pose_delete", "flip_pose", "add_motion",
-                 "pose", "pose_presets")
+                 "pose", "pose_presets",
+                 # The scene's own (js/imageViewer_previzAgentScene.js, SCENE_AGENT_ACTIONS): keep the two lists in step.
+                 "scene_info", "scene_set", "add_model", "add_camera", "set_camera", "turntable", "render", "playblast",
+                 "key_set", "key_delete", "key_list", "layer_set", "layer_remove", "layer_merge_down",
+                 "display_layer_add", "display_layer_set", "display_layer_list",
+                 "clip_list", "clip_from_keys", "clip_place", "clip_set", "clip_split", "clip_remove", "clip_match", "clip_bake",
+                 "clip_track_add", "clip_track_set",
+                 "ikfk_switch", "ikfk_match", "space_set", "attr_add", "sdk_key", "sdk_remove", "export_usd")
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
 PICTURE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 SOUND_EXTS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".opus"} | VIDEO_EXTS
