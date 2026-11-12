@@ -247,6 +247,33 @@ export const PrevizOutlinerMixin = {
         });
     },
 
+    /**
+     * A click on a row, as a file list takes it: plain selects that one,
+     * Ctrl toggles it, Shift selects every visible row from the last row
+     * clicked without Shift (the anchor) to this one, Ctrl+Shift adds that
+     * range to the selection. The clicked row becomes the primary.
+     */
+    _olClickSelect(id, e) {
+        const ctrl = e.ctrlKey || e.metaKey;
+        if (e.shiftKey && this._olAnchor && this._olAnchor !== id) {
+            const ids = this._olRangeIds(this._olAnchor, id);
+            if (ids) { this.previzSelectMany(ids, ctrl ? "add" : "replace", { primary: id }); return; }
+        }
+        this._olAnchor = id;
+        this.previzSelect(id, { add: ctrl || e.shiftKey });
+    },
+
+    /** The ids of the visible rows from `a` to `b`, in order on screen; null if either is not shown. */
+    _olRangeIds(a, b) {
+        const ui = this._previzUI;
+        const list = ui && ui.list;
+        if (!list) return null;
+        const ids = [...list.querySelectorAll(".ol-row[data-select-id]")].map((r) => r.dataset.selectId);
+        const i = ids.indexOf(a), j = ids.indexOf(b);
+        if (i < 0 || j < 0) return null;
+        return [...new Set(ids.slice(Math.min(i, j), Math.max(i, j) + 1))];
+    },
+
     /** Draw the tree into ui.list (from _previzRenderPanel). */
     _olDrawTree(ui, scene, doc) {
         const scroll = ui.list.scrollTop;
@@ -337,6 +364,7 @@ export const PrevizOutlinerMixin = {
             + (info && info.context ? " context" : "")
             + (item.visible === false ? " hidden-item" : "");
         row.dataset.itemId = item.id;
+        row.dataset.selectId = item.id;
         row.dataset.kind = outlinerKindOf(item);
         row.draggable = true;
         row.onclick = (e) => {
@@ -352,7 +380,7 @@ export const PrevizOutlinerMixin = {
                 this.previzBeginRename(item.id);
                 return;
             }
-            this.previzSelect(item.id, { add });
+            this._olClickSelect(item.id, e);
         };
         row.oncontextmenu = (e) => this._previzItemMenu(item.id, e);
 
@@ -510,6 +538,7 @@ export const PrevizOutlinerMixin = {
             kind.dataset.kind = "bones";
             if (!opts.joint) kind.append(outlinerIcon(doc, "bones"));
             row.append(this._olIndent(doc, d), this._olTwisty(doc, fold), kind, name);
+            if (opts.selectId) row.dataset.selectId = opts.selectId;
             row.onclick = onclick;
             list.append(row);
         };
@@ -526,9 +555,9 @@ export const PrevizOutlinerMixin = {
             const key = `${model.id}:bone:${b.name}`;
             const ctrl = fk.get(b.name);
             rowFor(b.name, depth + 1 + b.depth, ctrl ? `${b.name}: selects ${ctrl.name}` : b.name,
-                (e) => this.previzSelect(ctrl ? ctrl.id : model.id, { add: e.shiftKey || e.ctrlKey || e.metaKey }),
+                (e) => (ctrl ? this._olClickSelect(ctrl.id, e) : this.previzSelect(model.id, { add: e.ctrlKey || e.metaKey })),
                 b.hasKids && { open: b.open, toggle: () => (closed.has(key) ? closed.delete(key) : closed.add(key)) },
-                { joint: true, needle: searching ? needle : "", context: b.context, selected: !!ctrl && this.previzIsSelected(ctrl.id) });
+                { selectId: ctrl ? ctrl.id : "", joint: true, needle: searching ? needle : "", context: b.context, selected: !!ctrl && this.previzIsSelected(ctrl.id) });
         }
     },
 };

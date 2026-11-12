@@ -1118,6 +1118,15 @@ export const PrevizMixin = {
             this.previzMoveItems(this._previzDragIds(), null, null);
         };
 
+        // A right-click on the empty space: what puts something into the scene
+        // (Sebastian 2026-11-12) - the menu bar's Create menu and File > Import Model.
+        list.oncontextmenu = (e) => {
+            if (e.target.closest(".previz-item")) return;
+            e.preventDefault();
+            e.stopPropagation();
+            this._previzOpenMenu(this._previzOutlinerSpaceMenuEntries(), e.clientX, e.clientY);
+        };
+
         // The search field and the filter, above the tree (imageViewer_previzOutliner.js).
         const head = this._olBuildHead(doc);
         root.append(head.head, list);
@@ -1426,6 +1435,14 @@ export const PrevizMixin = {
         // The world items as one submenu; opening and referencing scenes is File's.
         entries.push({ label: "World", sub: this._previzWorldMenuEntries().map((e) => ({ ...e, label: e.label.replace(/^World: /, "") })) });
         return entries;
+    },
+
+    /** The Outliner's right-click on empty space: Create ▸ and Import Model…. */
+    _previzOutlinerSpaceMenuEntries() {
+        return [
+            { label: "Create", sub: this._previzAddMenuEntries() },
+            { label: "Import Model\u2026", cmd: "PrevizAddModel", run: () => this.previzImportModel() },
+        ];
     },
 
     /** ...and everything that takes something OUT of it. */
