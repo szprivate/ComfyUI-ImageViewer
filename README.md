@@ -1,25 +1,27 @@
 # ComfyUI Image Viewer
 
-A viewer panel for [ComfyUI](https://github.com/comfyanonymous/ComfyUI): look at what your workflow makes, compare it, cut it, paint on it and stage 3D shots, without leaving the graph.
+A panel for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) to look at what a workflow makes, compare it, cut it, paint on it, comp it and stage 3D shots, without leaving the graph.
 
-![The Viewer with the History beside it](docs/images/viewer.png)
+![The Viewer with the History beside it](docs/images/viewer.jpg)
 
-## Features
+## Spaces
 
-- **Viewer**: pictures, image sequences, videos and sounds. Zoom, full screen, exposure, single channels, OpenColorIO input colourspaces.
-- **Compare**: wipe two renders, or lay up to 16 side by side on a contact sheet. Videos play in step.
-- **History**: every render from every tab, kept in groups you can fold, rename and drag between.
-- **Editor**: cut films on a timeline (OpenTimelineIO), with sound, titles, effects and keyframes. Export the film, or hand it to DaVinci Resolve.
-- **Paint**: a picture in layers, with brushes, selections, masks, adjustment layers and text. Saves `.ora` and `.psd`.
-- **3D & Previz**: open GLB, FBX, OBJ, USD, Alembic and Gaussian splats, build and animate a shot, render it back into the workflow.
-- **Motion**: edit motion graphics scenes an agent wrote.
-- **Comp**: layer pictures, films and sequences in a node graph (Merge, Transform, Grade, Blur, keyed), in linear float. Renders PNG / EXR frames or a film into the History and onto the canvas; the graph can also sit in ComfyUI's bottom panel.
-- **Drawing tools**: roto mattes, SAM3 prompts and annotations, straight onto the picture.
-- **Panels**: a file browser, the selected node's Parameters, Agent code and Dataset, docked where you like. The viewer docks beside the canvas or opens in its own window.
-- **Dependencies**: what a file was made from and what was made from it, from the workflows saved with the files.
-- **agentY**: tags, approvals and AI edits when [agentY](https://github.com/szprivate/agentY) is running.
+| Space | For |
+|---|---|
+| [Viewer](docs/pages/viewer.md) | Pictures, sequences, videos and sounds: zoom, compare, contact sheets, exposure, OCIO, roto / SAM3 / annotation tools |
+| [Edit](docs/pages/edit.md) | Cutting films on an OpenTimelineIO timeline, with sound, titles and effects; export a film or to DaVinci Resolve |
+| [Paint](docs/pages/paint.md) | A picture in layers, with masks, adjustments and AI fills; saves `.ora` and `.psd` |
+| [3D](docs/pages/3d.md) | GLB, FBX, USD, Alembic and splats; previz shots, rigs and animation rendered back into the workflow |
+| [Motion](docs/pages/motion.md) | Motion graphics scenes an agent wrote |
+| [Comp](docs/pages/comp.md) | A node graph of pixel operations in linear float; renders frames or a film, exports to Nuke |
 
-How it all works: **[the docs](docs/index.md)**.
+## Panels
+
+[History](docs/pages/history.md) (every render, in groups), the [file browser](docs/pages/workspace.md#file-browser), [Parameters](docs/pages/workspace.md#parameters), [Agent code](docs/pages/agent-code.md) and [Dataset](docs/pages/dataset.md), docked where you like. The viewer docks beside the canvas or opens in its own window.
+
+Also: [Dependencies](docs/pages/dependencies.md) (what a file was made from) and [agentY](docs/pages/agentY.md) integration.
+
+**All the docs: [docs/index.md](docs/index.md).**
 
 ## Installation
 

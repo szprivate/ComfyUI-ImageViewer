@@ -1,8 +1,8 @@
 # History
 
-[Home](index.md)
+[Home](../index.md)
 
-<img src="images/history.png" alt="The History panel: two groups, Lookdev and Places" width="240" align="right">
+<img src="../images/history.png" alt="The History panel: two groups, Lookdev and Places" width="240" align="right">
 
 A panel (**ComfyUI ▸ History** in the lower bar). One History holds every render from every tab: 100 by default, up to 500 (the number at the foot of the panel). It survives a page reload. Clicking a thumbnail shows it in the tab it was made in.
 
@@ -30,6 +30,6 @@ The strip is sorted into groups, each with a heading. A group is the `group` of 
 
 - **Drag it onto the graph** for a loader node holding it (a selection gives one node each). Drop it onto a loader to swap its file.
 - **Drag it into a cut, a Paint canvas, a 3D scene** or the agentY chat.
-- **Right-click** a thumbnail for, in this order: Copy image path, Remove from history, Move to group; then (for a film) **Convert Footage** (LTX-2.5 passes: alpha matte, SDR to HDR, reframe, upscale), **Show dependencies** (see [Dependencies](dependencies.md)), **Load workflow** (the workflow it was made with, in a new canvas tab, as in the Dependencies tab), Edit in Motion / **Edit in Paint**; then, with agentY, **Tag as asset…**, the colour tags, and **agentY: approve** while a run waits at a review step (see [Working with agentY](agentY.md)).
+- **Right-click** for: copy path, remove, move to group, **Convert Footage** (a film: alpha matte, SDR to HDR, reframe, upscale), **Show dependencies** ([Dependencies](dependencies.md)), **Load workflow**, **Edit in Paint** / Motion, and with agentY the tags and approvals ([Working with agentY](agentY.md)).
 
 A thumbnail whose file is gone is dropped from the strip, after the server confirms it twice. The same render arriving twice is kept once.

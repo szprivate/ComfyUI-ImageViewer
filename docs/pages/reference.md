@@ -1,6 +1,6 @@
 # Reference
 
-[Home](index.md)
+[Home](../index.md)
 
 ## Folders
 

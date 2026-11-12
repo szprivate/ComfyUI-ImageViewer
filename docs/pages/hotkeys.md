@@ -1,6 +1,6 @@
 # Hotkeys
 
-[Home](index.md)
+[Home](../index.md)
 
 Keys work while the pointer is over the viewer, and not while you type in a field. <kbd>?</kbd> shows the keys bound right now, including the current space's.
 
@@ -28,9 +28,10 @@ Keys work while the pointer is over the viewer, and not while you type in a fiel
 
 Each space has keys of its own, active only on its tab:
 
-- [Editor](editor.md#cutting): <kbd>A</kbd> <kbd>T</kbd> <kbd>B</kbd> modes, <kbd>J</kbd> <kbd>K</kbd> <kbd>L</kbd>, <kbd>I</kbd> / <kbd>O</kbd>, <kbd>Ctrl</kbd>+<kbd>B</kbd>, <kbd>N</kbd> snapping…
+- [Editor](edit.md#cutting): <kbd>A</kbd> <kbd>T</kbd> <kbd>B</kbd> modes, <kbd>J</kbd> <kbd>K</kbd> <kbd>L</kbd>, <kbd>I</kbd> / <kbd>O</kbd>, <kbd>Ctrl</kbd>+<kbd>B</kbd>, <kbd>N</kbd> snapping…
 - [Paint](paint.md#tools): one letter per tool, <kbd>Ctrl</kbd>+<kbd>Z</kbd>, <kbd>Ctrl</kbd>+<kbd>T</kbd>…
 - [3D](3d.md#moving-around): <kbd>Q</kbd> <kbd>W</kbd> <kbd>E</kbd> <kbd>R</kbd>, <kbd>Alt</kbd>+drag, <kbd>Ctrl</kbd>+<kbd>Z</kbd>…
+- [Comp](comp.md#the-node-graph): <kbd>Tab</kbd> adds a node, <kbd>1</kbd> views, <kbd>D</kbd>, <kbd>A</kbd> / <kbd>Y</kbd> + drag…
 - [Dependencies](dependencies.md): <kbd>F</kbd> fits the graph
 
 So <kbd>R</kbd> is scale on a 3D tab and the red channel on a picture.

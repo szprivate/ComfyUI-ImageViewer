@@ -1,6 +1,6 @@
 # Motion
 
-[Home](index.md)
+[Home](../index.md)
 
 Motion edits motion graphics an agent wrote as a scene file (`*.mgscene.json`): text, shapes, pictures and videos with keyframes. What you see is what renders, because the preview and the render draw the same way.
 

@@ -1,6 +1,6 @@
 # Dataset
 
-[Home](index.md)
+[Home](../index.md)
 
 The Dataset panel reviews a LoRA training dataset an agent prepared, and then shows the training. It works on the files directly, so it needs no agentY to open.
 
