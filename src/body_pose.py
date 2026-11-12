@@ -16,6 +16,8 @@ pure: no ComfyUI, no torch.
 from __future__ import annotations
 
 import hashlib
+from fractions import Fraction
+import json
 import os
 import shutil
 
@@ -82,9 +84,54 @@ def people_of(mhr_pose_data, frame=0):
         box = box.tolist() if hasattr(box, "tolist") else box
         box = [float(v) for v in box[:4]] if box is not None and len(box) >= 4 else None
         size = (box[2] - box[0]) * (box[3] - box[1]) if box else 0.0
-        found.append({"landmarks": landmarks_of(kp), "box": box, "size": size})
+        kp2 = person.get("pred_keypoints_2d")
+        kp2 = kp2.tolist() if hasattr(kp2, "tolist") else kp2
+        if kp2 and isinstance(kp2[0], list) and kp2[0] and isinstance(kp2[0][0], list):
+            kp2 = kp2[0]
+        found.append({"landmarks": landmarks_of(kp), "box": box, "size": size,
+                      "kp2d": kp2 if kp2 is not None and len(kp2) >= 70 else None})
     found.sort(key=lambda p: -p["size"])
     return found
+
+
+def hand_over(mhr_pose_data):
+    """What ImageViewerBodyPose answers the page: the first frame's people (a picture) and, for a film,
+    every frame's person (:func:`track_of`)."""
+    data = mhr_pose_data or {}
+    size = data.get("image_size") or (0, 0)
+    people = [{k: v for k, v in p.items() if k != "kp2d"} for p in people_of(data, 0)]
+    out = {"people": people, "height": int(size[0]), "width": int(size[1])}
+    if len(data.get("frames") or []) > 1:
+        out["frames"] = track_of(data)
+    return out
+
+
+def _mp33(points, f=lambda p: p):
+    """MHR70 points -> MediaPipe's 33 order through ``f`` ([x, y, z, vis] each; a point MHR70 lacks is zeros)."""
+    out = []
+    for j in MP_FROM_MHR70:
+        out.append([0.0, 0.0, 0.0, 0.0] if j is None else f(points[j]))
+    return out
+
+
+def track_of(mhr_pose_data):
+    """Every frame of a film read by SAM 3D Body as the pose tracker's frames: [{world, image}] in order,
+    the biggest person of each frame; ``world`` as :func:`landmarks_of`, ``image`` the 2D keypoints as
+    shares of the picture (x right, y down), both None where nobody was found."""
+    data = mhr_pose_data or {}
+    h, w = (data.get("image_size") or (0, 0))[:2]
+    out = []
+    for fi in range(len(data.get("frames") or [])):
+        people = people_of(data, fi)
+        if not people:
+            out.append({"world": None, "image": None})
+            continue
+        img = None
+        kp2 = people[0].get("kp2d")
+        if kp2 is not None and w and h:
+            img = _mp33(kp2, lambda p: [round(float(p[0]) / w, 5), round(float(p[1]) / h, 5), 0.0, 1.0])
+        out.append({"world": people[0]["landmarks"], "image": img})
+    return out
 
 
 def find_model(names):
@@ -111,6 +158,133 @@ def graph(image_name, model_name, fov=0.0):
                          "fov": float(fov or 0.0), "batch_size": 8}},
         OUTPUT_NODE: {"class_type": "ImageViewerBodyPose", "inputs": {"mhr_pose_data": ["3", 0]}},
     }
+
+
+# A film is read in parts of at most PART_FRAMES frames, made at most FILM_SIDE pixels on its longer side:
+# GetVideoComponents holds a part's frames as one float tensor (~6 MB a frame at 960 x 540).
+PART_FRAMES = 240
+FILM_SIDE = 960
+MAX_FILM_FRAMES = 6000
+
+
+def video_graph(film_name, model_name, fov=0.0, smooth=1.0):
+    """The API prompt for one part of a film: LoadVideo -> GetVideoComponents -> SAM3DBody_Predict
+    (full frame, body only) -> SAM3DBody_Smooth (when ``smooth`` > 0) -> ImageViewerBodyPose."""
+    g = {
+        "1": {"class_type": "LoadVideo", "inputs": {"file": film_name}},
+        "5": {"class_type": "GetVideoComponents", "inputs": {"video": ["1", 0]}},
+        "2": {"class_type": "SAM3DBody_Loader", "inputs": {"model_file": model_name}},
+        "3": {"class_type": "SAM3DBody_Predict",
+              "inputs": {"sam3d_body_model": ["2", 0], "image": ["5", 0], "run_hand_refinement": False,
+                         "fov": float(fov or 0.0), "batch_size": 8}},
+        OUTPUT_NODE: {"class_type": "ImageViewerBodyPose", "inputs": {"mhr_pose_data": ["3", 0]}},
+    }
+    smooth = max(0.0, min(1.0, float(smooth or 0.0)))
+    if smooth > 0:
+        g["6"] = {"class_type": "SAM3DBody_Smooth",
+                  "inputs": {"mhr_pose_data": ["3", 0], "strength": smooth, "method": "savgol", "window": 7,
+                             "rotation_threshold_degrees": 30.0}}
+        g[OUTPUT_NODE]["inputs"]["mhr_pose_data"] = ["6", 0]
+    return g
+
+
+def film_parts(src, input_dir, start=0, end=-1, step=1, side=FILM_SIDE, part=PART_FRAMES):
+    """Cut the frames ``start..end`` (every ``step``-th) of the film *src* into short H.264 films in
+    ``input/rig_pose/film/`` for LoadVideo, at most *side* pixels on the longer side and *part* frames
+    each; made once per film and choice (a manifest beside them). Answers {fps, width, height, frames:
+    [film frame of each read frame], parts: [{name, first, count}]} (``first`` indexes ``frames``).
+    PyAV in this process: no program is started."""
+    import av
+    st = os.stat(src)
+    key = hashlib.sha1(f"{os.path.realpath(src)}|{st.st_mtime_ns}|{st.st_size}|{start}|{end}|{step}|{side}|{part}"
+                       .encode("utf-8")).hexdigest()[:12]
+    folder = os.path.join(input_dir, "rig_pose", "film")
+    manifest = os.path.join(folder, f"{key}.json")
+    if os.path.isfile(manifest):
+        try:
+            with open(manifest, encoding="utf-8") as fh:
+                got = json.load(fh)
+            if all(os.path.isfile(os.path.join(input_dir, p["name"])) for p in got["parts"]):
+                return got
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    os.makedirs(folder, exist_ok=True)
+    step = max(1, int(step))
+    start = max(0, int(start))
+    out = {"fps": 24.0, "width": 0, "height": 0, "frames": [], "parts": []}
+    writer = None
+
+    def close():
+        nonlocal writer
+        if writer is None:
+            return
+        oc, vs, tmp, dst = writer
+        for pkt in vs.encode():
+            oc.mux(pkt)
+        oc.close()
+        os.replace(tmp, dst)
+        writer = None
+
+    with av.open(src) as ic:
+        vin = next((s for s in ic.streams if s.type == "video"), None)
+        if vin is None:
+            raise ValueError("the film has no picture")
+        rate = vin.average_rate or vin.guessed_rate or 24
+        out["fps"] = float(rate)
+        i = -1
+        try:
+            for frame in ic.decode(vin):
+                i += 1
+                if 0 <= end < i:
+                    break
+                if i < start or (i - start) % step:
+                    continue
+                if not out["width"]:
+                    out["width"], out["height"] = frame.width, frame.height
+                    k = min(1.0, side / float(max(frame.width, frame.height)))
+                    tw, th = max(2, int(frame.width * k) // 2 * 2), max(2, int(frame.height * k) // 2 * 2)
+                if len(out["frames"]) >= MAX_FILM_FRAMES:
+                    raise ValueError(f"over {MAX_FILM_FRAMES} frames to read: pick a shorter stretch or read every 2nd frame")
+                if writer is None or (len(out["frames"]) - out["parts"][-1]["first"]) >= part:
+                    close()
+                    n = len(out["parts"])
+                    name = f"rig_pose/film/{key}_p{n:03d}.mp4"
+                    dst = os.path.join(input_dir, name)
+                    tmp = dst + ".partial.mp4"
+                    oc = av.open(tmp, "w")
+                    try:
+                        vs = oc.add_stream("libx264", rate=max(1, int(round(float(rate) / step))))
+                        vs.options = {"crf": "14", "preset": "veryfast"}
+                    except Exception:  # noqa: BLE001 - a PyAV without x264
+                        vs = oc.add_stream("mpeg4", rate=max(1, int(round(float(rate) / step))))
+                        vs.options = {"qscale": "2"}
+                    vs.width, vs.height, vs.pix_fmt = tw, th, "yuv420p"
+                    writer = (oc, vs, tmp, dst)
+                    out["parts"].append({"name": name, "first": len(out["frames"]), "count": 0})
+                oc, vs = writer[0], writer[1]
+                small = frame.reformat(width=tw, height=th, format="yuv420p")
+                small.pts = out["parts"][-1]["count"]
+                small.time_base = Fraction(1, max(1, int(round(float(rate) / step))))
+                for pkt in vs.encode(small):
+                    oc.mux(pkt)
+                out["frames"].append(i)
+                out["parts"][-1]["count"] += 1
+            close()
+        except BaseException:
+            if writer is not None:
+                try:
+                    writer[0].close()
+                    os.remove(writer[2])
+                except OSError:
+                    pass
+            raise
+    if not out["frames"]:
+        raise ValueError("no frames in that stretch of the film")
+    tmp = manifest + ".partial"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(out, fh)
+    os.replace(tmp, manifest)
+    return out
 
 
 def place_in_input(src, input_dir):
