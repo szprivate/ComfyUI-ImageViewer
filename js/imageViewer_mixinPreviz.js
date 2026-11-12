@@ -20,6 +20,7 @@ import * as Q from "./imageViewer_clipSeqData.js";
 import "./imageViewer_animLayers.js";
 import { pref, PREF } from "./imageViewer_settings.js";
 import { viewerActionKeyLabel } from "./imageViewer_keymap.js";
+import { PrevizOutlinerMixin } from "./imageViewer_previzOutliner.js";
 import { notice, openExportDialog, openFilePicker } from "./imageViewer_exportUI.js";
 
 // Maya's manipulator keys, which is what the hotkeys below bind to.
@@ -1106,13 +1107,16 @@ export const PrevizMixin = {
             this.previzMoveItems(this._previzDragIds(), null, null);
         };
 
-        root.append(list);
+        // The search field and the filter, above the tree (imageViewer_previzOutliner.js).
+        const head = this._olBuildHead(doc);
+        root.append(head.head, list);
         // The title bar the dock built is a sibling and stays; only previz's own
         // body is replaced.
         this._previzCloseAddMenu();
         host.querySelectorAll(":scope > .previz-body").forEach((n) => n.remove());
         host.appendChild(root);
-        this._previzUI = { root, list };
+        this._previzUI = { root, list, head: head.head, search: head.search, clear: head.clear, filter: head.filter };
+        if (this._olCloseFilterMenu) this._olCloseFilterMenu();
         return this._previzUI;
     },
 
@@ -1556,245 +1560,10 @@ export const PrevizMixin = {
 
         this._previzRefreshUndoButtons();
 
-        // Outliner: the tree, parents before their children.
-        ui.list.innerHTML = "";
-        const collapsed = this._previzCollapsed || (this._previzCollapsed = new Set());
-        const drawLevel = (parentId, depth) => {
-            for (const item of S.childrenOf(scene, parentId)) {
-                ui.list.append(this._previzOutlinerRow(item, depth, doc, scene));
-                if (!collapsed.has(item.id)) {
-                    if (item.kind === "model") this._previzSkeletonRows(item, depth + 1, doc, scene, ui.list);
-                    drawLevel(item.id, depth + 1);
-                }
-            }
-        };
-        drawLevel(null, 0);
-        if (!scene.items.length) {
-            ui.list.append(Object.assign(doc.createElement("div"), {
-                className: "previz-empty",
-                textContent: "Drop a model in, or use + Model.",
-            }));
-        }
-
+        // Outliner: the tree as the search and the filter have it (imageViewer_previzOutliner.js).
+        this._olDrawTree(ui, scene, doc);
     },
 
-
-    /**
-     * One row of the outliner.
-     *
-     * Dragging a row onto another makes it a child of that one; dropping it on
-     * the empty space below the tree puts it back at the top. That is the whole
-     * grouping interface — there is no "add to group" command, because the
-     * thing you want to say is where it goes.
-     */
-    _previzOutlinerRow(item, depth, doc, scene) {
-        const collapsed = this._previzCollapsed || (this._previzCollapsed = new Set());
-        const row = doc.createElement("div");
-        row.className = "previz-item"
-            + (this.previzIsSelected(item.id) ? " selected" : "")
-            + (item.id === this._previzSelection ? " primary" : "");
-        row.style.paddingLeft = `${4 + depth * 12}px`;
-        row.dataset.itemId = item.id;
-        row.draggable = true;
-        row.onclick = (e) => {
-            // A double-click is timed by hand: the first click re-renders the
-            // tree, so the second lands on a new row and the browser never
-            // sees the two as one dblclick.
-            const now = Date.now();
-            const last = this._previzLastClick;
-            this._previzLastClick = { id: item.id, t: now };
-            const add = e.shiftKey || e.ctrlKey || e.metaKey;
-            if (!add && last && last.id === item.id && now - last.t < 400) {
-                this._previzLastClick = null;
-                this.previzBeginRename(item.id);
-                return;
-            }
-            this.previzSelect(item.id, { add });
-        };
-        row.oncontextmenu = (e) => this._previzItemMenu(item.id, e);
-
-        const kids = S.childrenOf(scene, item.id);
-        const folds = kids.length || (item.kind === "model" && this._previzBonesOf(item.id).length);
-        const twisty = doc.createElement("span");
-        twisty.className = "previz-twisty" + (folds ? "" : " empty");
-        twisty.textContent = folds ? (collapsed.has(item.id) ? "\u25b8" : "\u25be") : "";
-        if (folds) {
-            twisty.title = collapsed.has(item.id) ? "Show what is inside" : "Fold this away";
-            twisty.onclick = (e) => {
-                e.stopPropagation();
-                if (collapsed.has(item.id)) collapsed.delete(item.id); else collapsed.add(item.id);
-                this._previzRenderPanel();
-            };
-        }
-
-        const eye = doc.createElement("button");
-        eye.className = "previz-eye" + (item.visible === false ? " off" : "");
-        eye.textContent = item.visible === false ? "\u25cc" : "\u25c9";
-        eye.title = item.kind === "group" ? "Show / hide the group and what is in it" : "Show / hide";
-        eye.onclick = (e) => {
-            e.stopPropagation();
-            item.visible = item.visible === false;
-            this.previzChanged();
-        };
-
-        const name = doc.createElement("span");
-        name.className = "previz-name";
-        const mark = item.kind === "camera" ? "\ud83c\udfa5"
-            : item.kind === "group" ? "\ud83d\udcc1"
-            : item.kind === "imageplane" ? "\ud83d\uddbc"
-            : item.kind === "control" ? "\u25ce"
-            : "\ud83e\uddca";
-        name.textContent = `${mark} ${item.name}`;
-        name.title = item.kind === "model" && item.src ? (item.src.path || item.src.filename || "") : item.name;
-        if (item.ref) {
-            const ref = L.referenceById(scene, item.ref.id);
-            name.classList.add("ref");
-            name.title = `${item.name}\nReferenced from ${ref ? ref.path : "a scene file"}`;
-        }
-
-        row.append(twisty, eye, name);
-        // Its display layer: a swatch, with T or R when the layer says template or reference.
-        const layer = L.layerOf(scene, item.id);
-        if (layer) {
-            const tag = doc.createElement("span");
-            tag.className = `previz-layer ${layer.mode}` + (layer.visible ? "" : " hidden");
-            tag.textContent = L.MODE_LABEL[layer.mode];
-            if (layer.color) tag.style.setProperty("--layer", layer.color);
-            tag.title = `On display layer ${layer.name}` + (layer.mode !== "normal" ? ` (${layer.mode})` : "")
-                + (layer.visible ? "" : ", hidden");
-            row.append(tag);
-        }
-        if (this._previzRenaming && this._previzRenaming.id === item.id) {
-            this._previzMountRename(row, name, item);
-        }
-        if (item.kind === "camera") {
-            const look = doc.createElement("button");
-            look.className = "previz-look" + (scene.activeCamera === item.id ? " active" : "");
-            look.textContent = "\u25a3";
-            look.title = scene.activeCamera === item.id ? "Back to the free view" : "Look through this camera";
-            look.onclick = (e) => { e.stopPropagation(); this.previzLookThrough(item.id); };
-            row.append(look);
-        }
-        const failed = this._model3d ? this._model3d.itemError(item.id) : "";
-        if (failed) {
-            const warn = doc.createElement("span");
-            warn.className = "previz-warn";
-            warn.textContent = "!";
-            warn.title = `This file could not be loaded:\n${failed}`;
-            row.append(warn);
-        }
-        if (S.allKeyframeFrames(item).length) {
-            const dot = doc.createElement("span");
-            dot.className = "previz-anim";
-            dot.textContent = "\u2022";
-            dot.title = `${S.allKeyframeFrames(item).length} keyframes`;
-            row.append(dot);
-        }
-
-        row.ondragstart = (e) => {
-            // Dragging one of a selection takes the selection along; any other
-            // row goes alone. Not selected here: that would redraw the tree
-            // and pull this row out from under the drag that just started.
-            this._previzDragItem = item.id;
-            row.classList.add("dragging");
-            try { e.dataTransfer.setData("text/plain", item.name); } catch (_) {}
-            if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-        };
-        row.ondragend = () => {
-            this._previzDragItem = null;
-            row.classList.remove("dragging");
-            this._previzClearDropMarks();
-        };
-        row.ondragover = (e) => {
-            if (!this._previzDragItem) return;
-            const drop = this._previzDropFor(row, item, e, scene);
-            if (!drop) return;
-            e.preventDefault();
-            if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-            this._previzClearDropMarks();
-            row.classList.add(`drop-${drop.zone}`);
-        };
-        row.ondragleave = () => row.classList.remove("drop-into", "drop-before", "drop-after");
-        row.ondrop = (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            const drop = this._previzDragItem ? this._previzDropFor(row, item, e, scene) : null;
-            this._previzClearDropMarks();
-            if (drop) this.previzMoveItems(this._previzDragIds(), drop.parent, drop.before);
-        };
-        return row;
-    },
-
-    /** A loaded model's bones as [{ name, parent }], parents first; [] without a skeleton. */
-    _previzBonesOf(modelId) {
-        const view = this._model3d;
-        const e = view && view._entries && view._entries.get(modelId);
-        if (!e || !e.bones || !e.bones.size) return [];
-        const names = e.boneOrder || [...e.bones.keys()];
-        return names.map((n) => {
-            const b = e.bones.get(n);
-            return { name: n, parent: b && b.parent && b.parent.isBone ? b.parent.name : null };
-        });
-    },
-
-    /**
-     * The skeleton under a model in the outliner: one "Skeleton" row (folded at
-     * first) and its bones as a tree. Bones are the file's, not scene items, so
-     * the rows only show them; a click selects the bone's FK control when the
-     * character is rigged, else the model.
-     */
-    _previzSkeletonRows(model, depth, doc, scene, list) {
-        const bones = this._previzBonesOf(model.id);
-        if (!bones.length) return;
-        const open = this._previzSkelOpen || (this._previzSkelOpen = new Set());
-        const fk = new Map();
-        for (const it of scene.items) {
-            if (it.kind === "control" && it.control && it.control.model === model.id && it.control.type === "fk") fk.set(it.control.bone, it);
-        }
-        // The Skeleton row starts folded (open set); bones start unfolded (closed set).
-        const closed = this._previzSkelClosed || (this._previzSkelClosed = new Set());
-        const rowFor = (label, d, title, onclick, fold) => {
-            const row = doc.createElement("div");
-            row.className = "previz-item previz-bone";
-            row.style.paddingLeft = `${4 + d * 12}px`;
-            const tw = doc.createElement("span");
-            tw.className = "previz-twisty" + (fold ? "" : " empty");
-            tw.textContent = fold ? (fold.isOpen ? "\u25be" : "\u25b8") : "";
-            if (fold) tw.onclick = (e) => { e.stopPropagation(); fold.toggle(); this._previzRenderPanel(); };
-            const name = doc.createElement("span");
-            name.className = "previz-name";
-            name.textContent = label;
-            name.title = title;
-            row.append(tw, name);
-            row.onclick = onclick;
-            list.append(row);
-        };
-        const skelKey = `${model.id}:skeleton`;
-        rowFor(`\ud83e\uddb4 Skeleton (${bones.length} bones)`, depth,
-            fk.size ? "The file's bones; click one to select its control." : "The file's bones. Rig → Add controls to animate them.",
-            () => this.previzSelect(model.id),
-            { isOpen: open.has(skelKey), toggle: () => (open.has(skelKey) ? open.delete(skelKey) : open.add(skelKey)) });
-        if (!open.has(skelKey)) return;
-        const kidsOf = new Map();
-        const known = new Set(bones.map((b) => b.name));
-        for (const b of bones) {
-            const p = b.parent && known.has(b.parent) ? b.parent : null;
-            if (!kidsOf.has(p)) kidsOf.set(p, []);
-            kidsOf.get(p).push(b.name);
-        }
-        const walk = (parent, d) => {
-            for (const n of kidsOf.get(parent) || []) {
-                const key = `${model.id}:bone:${n}`;
-                const ctrl = fk.get(n);
-                const hasKids = (kidsOf.get(n) || []).length > 0;
-                rowFor(`\u2022 ${n}`, d, ctrl ? `${n}: selects ${ctrl.name}` : n,
-                    (e) => this.previzSelect(ctrl ? ctrl.id : model.id, { add: e.shiftKey || e.ctrlKey || e.metaKey }),
-                    hasKids && { isOpen: !closed.has(key), toggle: () => (closed.has(key) ? closed.delete(key) : closed.add(key)) });
-                if (hasKids && !closed.has(key)) walk(n, d + 1);
-            }
-        };
-        walk(null, depth + 1);
-    },
 
     _previzClearDropMarks() {
         const ui = this._previzUI;
@@ -2235,3 +2004,6 @@ export const PrevizMixin = {
         win.setTimeout(() => view._setStatus(""), 6000);
     },
 };
+
+// The Outliner's tree, search and filter live in their own file.
+Object.assign(PrevizMixin, PrevizOutlinerMixin);
