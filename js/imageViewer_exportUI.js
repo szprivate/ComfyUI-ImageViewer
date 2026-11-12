@@ -247,7 +247,13 @@ export async function openExportDialog(host, spec) {
 
     syncCodec();
     syncWhere();
-    win.requestAnimationFrame(() => { name.focus(); name.select(); });
+    // The name takes the focus, unless a field of the dialog already has it
+    // (typed into in the frame before: that would move the typing elsewhere).
+    win.requestAnimationFrame(() => {
+        const active = box.getRootNode().activeElement;
+        if (active && active !== box && box.contains(active)) return;
+        name.focus(); name.select();
+    });
     return { close };
 }
 

@@ -441,8 +441,13 @@ export const PrevizRigMixin = {
         return n;
     },
 
-    /** The Rig menu, under the 3D panel's Rig button. */
-    _previzToggleRigMenu(anchor) {
+    /**
+     * The Rig menu (`which` "rig": building the character) or the Animation
+     * menu ("anim": moving it), under the 3D panel's two buttons. One list of
+     * entries is made, the extras splice theirs in, and RIG_MENUS sorts them
+     * into the two; null shows them all, as one menu.
+     */
+    _previzToggleRigMenu(anchor, which = null) {
         if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
         const scene = this.previzScene();
         // Nothing of a character selected: the scene's only character (or only rigged one) is meant.
@@ -496,6 +501,48 @@ export const PrevizRigMixin = {
             }
         }
         const a = anchor.getBoundingClientRect();
-        this._previzOpenMenu(entries, a.left, a.bottom + 2, anchor);
+        this._previzOpenMenu(which ? rigMenuOf(entries, which) : entries, a.left, a.bottom + 2, anchor);
     },
 };
+
+/**
+ * Which entry goes into which menu, group by group (a separator between
+ * groups), in the order shown. An entry no pattern names goes to the end of
+ * the Animation menu, so nothing new is lost.
+ */
+const RIG_MENUS = {
+    rig: [
+        [/^Add controls/, /^Add FK controls/, /^Auto-rig/, /^Set up auto-rig/, /^Remove rig/],
+        [/^Set Driven Key/, /^Add attribute/, /facial controls$/],
+    ],
+    anim: [
+        [/^Select all controls/, /^Key all controls/, /^Rest pose/, /^Pose…/, /^Mirror pose/, /^Flip pose/,
+         /^Copy pose/, /^Paste pose/, /^Pose library/],
+        [/^Switch limb/, /^Match (FK|IK) to/, /^Space…/],
+        [/^AI in-between/, /^Generate motion from text/, /^Restyle motion/, /^Motion from video/,
+         /^Lip sync/, /^Clean up feet/],
+        [/^Key all blendshapes/, /^Reset blendshapes/],
+        [/^Add motion from file/, /^Bake file's animation/, /^Export /],
+    ],
+};
+
+export function rigMenuOf(entries, which) {
+    const items = entries.filter((e) => e && e !== "-" && e.label);
+    const placed = new Set();
+    const groupsOf = (key) => RIG_MENUS[key].map((group) => {
+        const out = [];
+        for (const re of group) for (const e of items) if (!placed.has(e) && re.test(e.label)) { placed.add(e); out.push(e); }
+        return out;
+    });
+    const rig = groupsOf("rig");
+    const anim = groupsOf("anim");
+    const rest = items.filter((e) => !placed.has(e));
+    if (rest.length) anim.push(rest);
+    const out = [];
+    for (const g of which === "rig" ? rig : anim) {
+        if (!g.length) continue;
+        if (out.length) out.push("-");
+        out.push(...g);
+    }
+    return out;
+}

@@ -291,3 +291,15 @@ test("UniRig's skeleton of a T-posed character is read as a humanoid", () => {
                    "hand.L": 9, "upperArm.R": 26, "hand.R": 28, "upperLeg.L": 44, "foot.L": 46, "upperLeg.R": 48, "foot.R": 50 };
     for (const [role, n] of Object.entries(want)) assert.equal(m.roles[role], `bone_${n}`, role);
 });
+
+test("a limb's unused side: FK controls while on IK, IK and pole while on FK", () => {
+    const c = (id, control) => ({ id, kind: "control", control });
+    const controls = [
+        c("up", { type: "fk", bone: "UpLeg" }), c("lo", { type: "fk", bone: "Leg" }), c("ft", { type: "fk", bone: "Foot" }),
+        c("toe", { type: "fk", bone: "Toe" }),
+        c("ik", { type: "ik", chain: ["UpLeg", "Leg", "Foot"], pole: "pole" }), c("pole", { type: "pole", ik: "ik" }),
+    ];
+    assert.deepEqual([...R.idleControls(controls, () => 1)].sort(), ["ft", "lo", "up"]);
+    assert.deepEqual([...R.idleControls(controls, () => 0)].sort(), ["ik", "pole"]);
+    assert.deepEqual([...R.idleControls(controls, () => 0.5)], [], "blending: both sides in use");
+});

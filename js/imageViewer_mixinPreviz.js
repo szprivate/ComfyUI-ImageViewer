@@ -1109,10 +1109,14 @@ export const PrevizMixin = {
         this._setIcon(outBtn, "icon-save");
         outBtn.onclick = () => this._previzToggleExportMenu(outBtn);
         // Characters: controls, IK / FK, AI motion, FBX / USD / Alembic, motion from files (imageViewer_previzRig.js).
+        // Two menus over the same entries: Rig builds the character, Animation moves it.
         const rigBtn = el("button", "previz-btn previz-rig", "Rig");
-        rigBtn.title = "Rig a character: animation controls, IK / FK, AI in-betweens and text-to-motion, "
-                     + "FBX, USD and Alembic export, motion from FBX / USD / glTF files";
-        rigBtn.onclick = () => this._previzToggleRigMenu(rigBtn);
+        rigBtn.title = "Rig a character: animation controls, auto-rig, set-driven keys, attributes, facial controls";
+        rigBtn.onclick = () => this._previzToggleRigMenu(rigBtn, "rig");
+        const animBtn = el("button", "previz-btn previz-anim", "Animation");
+        animBtn.title = "Animate a character: poses, IK / FK, AI in-betweens, text-to-motion, motion from video, "
+                      + "lip sync, motion from FBX / USD / glTF files, FBX, USD and Alembic export";
+        animBtn.onclick = () => this._previzToggleRigMenu(animBtn, "anim");
         // Constraints: parent, point, orient, aim, scale (imageViewer_previzConstraints.js).
         const conBtn = el("button", "previz-btn previz-constrain", "Constrain");
         conBtn.title = "Constrain: select the target(s), then the item that should follow them, and pick parent, "
@@ -1149,7 +1153,7 @@ export const PrevizMixin = {
         const atlasBtn = el("button", "previz-btn previz-world previz-atlas-menu", "Atlas \u25BE");
         atlasBtn.title = "Atlas: new world, render this view, chisel, auto-orient, export a Gaussian splat";
         atlasBtn.onclick = () => this.previzAtlasMenu(atlasBtn);
-        actions.append(newBtn, addBtn, editBtn, outBtn, rigBtn, conBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn);
+        actions.append(newBtn, addBtn, editBtn, outBtn, rigBtn, animBtn, conBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn);
 
         const list = el("div", "previz-list");
         // The space below the tree is "no parent": dropping a row here lifts it
@@ -1174,7 +1178,7 @@ export const PrevizMixin = {
         this._previzCloseAddMenu();
         host.querySelectorAll(":scope > .previz-body").forEach((n) => n.remove());
         host.appendChild(root);
-        this._previzUI = { root, list, rigBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn };
+        this._previzUI = { root, list, rigBtn, animBtn, undoBtn, redoBtn, walkBtn, matchBtn, noteBtn, atlasBtn };
         return this._previzUI;
     },
 

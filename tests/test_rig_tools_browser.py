@@ -449,8 +449,15 @@ class RigToolsBrowserTests(unittest.TestCase):
         self.assertEqual(self.errors, [])
 
     def _menu(self, pg, label):
-        pg.locator("button.previz-rig").first.click()
-        pg.locator("button.previz-menu-item", has_text=label).first.click()
+        """Click an entry of the Rig menu or, when it is not there, of the Animation menu."""
+        for btn in ("button.previz-rig", "button.previz-anim"):
+            pg.locator(btn).first.click()
+            item = pg.locator("button.previz-menu-item", has_text=label)
+            if item.count():
+                item.first.click()
+                return
+            pg.evaluate("() => window.__panel._previzCloseAddMenu()")
+        raise AssertionError(f"no menu entry {label!r}")
 
     def _go(self, pg, title, fill=None):
         box = pg.locator(f'.rd-box[aria-label="{title}"]')

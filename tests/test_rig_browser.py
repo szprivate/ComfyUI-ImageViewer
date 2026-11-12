@@ -113,6 +113,90 @@ ROUNDTRIP = """async () => {
 }"""
 
 
+# An animated leg switched IK -> FK -> IK on keyed frames, the COG turned: nothing jumps, before or after.
+ANIMATED_SWITCH = """async () => {
+  const P = window.__panel;
+  const S = await import('/extensions/viewer/imageViewer_scene3d.js');
+  const scene = () => P.previzScene();
+  const d = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  const at = async (f) => { P.setFrame(f); await new Promise((r) => setTimeout(r, 30)); };
+  const bones = ['LeftFoot', 'LeftLeg', 'LeftHand', 'LeftForeArm'];
+  const snap = () => Object.fromEntries(bones.map((b) => [b, window.__boneAt(b)]));
+  const diff = (a, b) => Math.max(...bones.map((k) => d(a[k], b[k])));
+  const out = {};
+  // The character turned and the COG moved and turned: the switch must work in the rig's own space.
+  const cog = window.__ctrl('cog_ctrl');
+  P.previzSelect(cog.id);
+  P.previzSetChannel('rotation', 1, 35);
+  P.previzSetChannel('position', 1, -0.1);
+  // Animate the left leg's IK foot: keys at 0 and 20.
+  P._previzAutokey = true;
+  const foot = window.__ctrl('leg_L_ik');
+  await at(0); P.previzSelect(foot.id); P.previzSetChannel('position', 2, 0.1); S.setKeyframe && 0;
+  P.previzRigKeyAll(window.__hero);
+  await at(20); P.previzSelect(foot.id); P.previzSetChannel('position', 1, 0.35); P.previzSetChannel('position', 2, 0.3);
+  P.previzRigKeyAll(window.__hero);
+  // Switch to FK at 10.
+  await at(9); const b9 = snap();
+  await at(10); const b10 = snap();
+  P.previzRigSwitchIkFk(foot.id, 'fk');
+  await at(10); const a10 = snap();
+  await at(9); const a9 = snap();
+  out.toFK = { at10: diff(b10, a10), at9: diff(b9, a9), ikfk10: S.currentValue(scene(), foot, 'ikfk', 10), ikfk9: S.currentValue(scene(), foot, 'ikfk', 9) };
+  // Bend the FK knee at 15, then back to IK at 15.
+  await at(15);
+  const knee = window.__ctrl('mixamorigLeftLeg_fk'); const pre15 = snap(); out.ik15pre = S.currentValue(scene(), foot, 'ikfk', 15); out.ikTrack = JSON.stringify(S.track(foot,'ikfk')); out.kneeTrack = JSON.stringify(S.track(knee,'rotation'));
+  P.previzSelect(knee.id); P.previzSetChannel('rotation', 0, 100);
+  const c15 = snap(); out.kneeVal = S.currentValue(scene(), knee, 'rotation', 15);
+  P.previzRigSwitchIkFk(knee.id, 'ik');
+  await at(15); const d15 = snap();
+  await at(10); const a10b = snap();
+  out.sanity = { bend: diff(pre15, c15), move9to15: diff(a9, pre15) };
+  out.toIK = { at15: diff(c15, d15), at10kept: diff(a10, a10b), ikfk15: S.currentValue(scene(), foot, 'ikfk', 15) };
+  // The arm with its pole, not animated: FK -> IK -> FK.
+  P._previzAutokey = false;
+  await at(30);
+  const arm = window.__ctrl('arm_L_ik');
+  const sh = window.__ctrl('mixamorigLeftArm_fk'), el = window.__ctrl('mixamorigLeftForeArm_fk');
+  P.previzRigSwitchIkFk(arm.id, 'fk'); 
+  P.previzSelect(sh.id); P.previzSetChannel('rotation', 2, -50); P.previzSelect(el.id); P.previzSetChannel('rotation', 1, -60);
+  const e0 = snap();
+  P.previzRigSwitchIkFk(arm.id, 'ik'); await at(30); const e1 = snap();
+  P.previzRigSwitchIkFk(arm.id, 'fk'); await at(30); const e2 = snap();
+  out.arm = { pose: diff(e0, a10), toIK: diff(e0, e1), backFK: diff(e1, e2) };
+  // The menu label follows the blend.
+  P.previzSelect(arm.id);
+  return out;
+}"""
+
+# The view hides a limb's unused side; the Picker dims it and switches the limb.
+IDLE_AND_PICKER = """async () => {
+  const P = window.__panel;
+  P.setPanelDocked('picker', true);
+  P.setPanelMaximized ? 0 : 0;
+  P._pkRender(true);
+  const view = P._modelView();
+  const vis = (n) => view._entries.get(window.__ctrl(n).id).object.visible;
+  const tick = () => new Promise((r) => setTimeout(r, 120));
+  P.previzSelect(null); P.setFrame(0); await tick();
+  const r = {};
+  r.ik = { armIk: vis('arm_L_ik'), pole: vis('arm_L_pole'), fkArm: vis('mixamorigLeftArm_fk'), fkHand: vis('mixamorigLeftHand_fk'), finger: vis('mixamorigLeftHandMiddle1_fk') };
+  const pills = () => [...P.pickerPanel.querySelectorAll('.pk-ikfk')].map((b) => b.textContent);
+  r.pills = pills();
+  const pill = P.pickerPanel.querySelector(`.pk-ikfk[data-ik="${window.__ctrl('arm_L_ik').id}"]`);
+  const hand = window.__boneAt('LeftHand');
+  pill.click(); await tick(); P.setFrame(0); await tick();
+  r.afterClick = { pills: pills(), hand, hand2: window.__boneAt('LeftHand'), armIk: vis('arm_L_ik'), fkArm: vis('mixamorigLeftArm_fk'),
+     idleBtns: [...P.pickerPanel.querySelectorAll('.pk-btn.idle')].map((b) => b.title) };
+  // A hidden control selected (outliner) shows.
+  P.previzSelect(window.__ctrl('arm_L_ik').id); await tick();
+  r.selShows = vis('arm_L_ik');
+  P.previzSelect(null); await tick();
+  r.unselHides = vis('arm_L_ik');
+  return r;
+}"""
+
+
 def _free_port():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -202,6 +286,46 @@ class RigBrowserTests(unittest.TestCase):
         self.assertEqual(errors, [])
 
 
+    def test_animated_ik_fk_switch_and_the_unused_side(self):
+        pg = self.browser.new_page(viewport={"width": 1600, "height": 1000})
+        errors = []
+        pg.on("pageerror", lambda e: errors.append(str(e)))
+        try:
+            pg.goto(f"http://127.0.0.1:{self.port}/tabs.html")
+            pg.wait_for_function("() => window.__panel && window.__panel.container", timeout=20000)
+            pg.evaluate(OPEN, "hero.glb")
+            pg.evaluate(RIG)
+            pg.evaluate("() => {" + HELP + "}")
+            idle = pg.evaluate(IDLE_AND_PICKER)
+            sw = pg.evaluate(ANIMATED_SWITCH)
+        finally:
+            pg.close()
+        # Switching keeps every bone where it was, on the frame and on the frame before.
+        self.assertEqual(sw["toFK"]["ikfk10"], 0)
+        self.assertEqual(sw["toFK"]["ikfk9"], 1)
+        self.assertLess(sw["toFK"]["at10"], 0.002, sw)
+        self.assertLess(sw["toFK"]["at9"], 0.002, sw)
+        self.assertGreater(sw["sanity"]["bend"], 0.1, "the FK knee did bend the leg")
+        self.assertEqual(sw["toIK"]["ikfk15"], 1)
+        self.assertLess(sw["toIK"]["at15"], 0.002, sw)
+        self.assertLess(sw["toIK"]["at10kept"], 0.002, sw)
+        self.assertGreater(sw["arm"]["pose"], 0.1)
+        self.assertLess(sw["arm"]["toIK"], 0.002, sw)
+        self.assertLess(sw["arm"]["backFK"], 0.002, sw)
+        # On IK the arm's FK controls are hidden (fingers stay), on FK its IK control and pole.
+        self.assertEqual(idle["ik"], {"armIk": True, "pole": True, "fkArm": False, "fkHand": False, "finger": True})
+        self.assertEqual(idle["pills"], ["IK", "IK", "IK", "IK"])
+        after = idle["afterClick"]
+        self.assertEqual(after["pills"][0], "FK")
+        self.assertEqual(after["hand"], after["hand2"], "the Picker's switch does not move the hand")
+        self.assertFalse(after["armIk"])
+        self.assertTrue(after["fkArm"])
+        self.assertIn("arm_L_ik (arm.L)", after["idleBtns"])
+        self.assertIn("mixamorigRightArm_fk (upperArm.R)", after["idleBtns"])
+        self.assertTrue(idle["selShows"], "a selected control is shown even when its side is unused")
+        self.assertFalse(idle["unselHides"])
+        self.assertEqual(errors, [])
+
     def test_outliner_mirror_and_live_drag(self):
         pg = self.browser.new_page(viewport={"width": 1600, "height": 1000})
         errors = []
@@ -255,9 +379,14 @@ class RigBrowserTests(unittest.TestCase):
               return { before, during: window.__boneAt('LeftFoot'), attached: !!g.object };
             }""")
             pg.evaluate("() => { window.__panel._previzSelection = null; }")
-            pg.locator("button.previz-rig").first.click()
-            items = pg.locator("button.previz-menu-item")
-            menu = {items.nth(i).text_content(): "off" in (items.nth(i).get_attribute("class") or "") for i in range(items.count())}
+            menus = {}
+            for which in ("rig", "anim"):
+                pg.locator(f"button.previz-{which}").first.click()
+                items = pg.locator("button.previz-menu-item")
+                menus[which] = {items.nth(i).text_content(): "off" in (items.nth(i).get_attribute("class") or "")
+                                for i in range(items.count())}
+                pg.evaluate("() => window.__panel._previzCloseAddMenu()")
+            menu = {**menus["rig"], **menus["anim"]}
         finally:
             pg.close()
         self.assertTrue(any("Skeleton (%d bones)" % len(rig_fixture.BONES) in r for r in skel["folded"]), skel)
@@ -275,6 +404,15 @@ class RigBrowserTests(unittest.TestCase):
         self.assertIn("AI in-between…", menu, menu)
         self.assertFalse(menu["AI in-between…"])
         self.assertFalse(menu["Auto-rig…"])
+        # Two menus: Rig builds the character, Animation moves it.
+        self.assertIn("Auto-rig…", menus["rig"])
+        self.assertIn("Set Driven Key…", menus["rig"])
+        self.assertNotIn("AI in-between…", menus["rig"])
+        for label in ("AI in-between…", "Pose library…", "Motion from video…", "Lip sync from audio…",
+                      "Add motion from file…", "Export FBX…", "Match FK to IK"):
+            self.assertIn(label, menus["anim"])
+        self.assertTrue(any(k.startswith("Switch limb") for k in menus["anim"]), menus["anim"])
+        self.assertNotIn("Auto-rig…", menus["anim"])
         self.assertEqual(errors, [])
 
 if __name__ == "__main__":
