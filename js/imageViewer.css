@@ -1026,7 +1026,17 @@ textarea.param-input {
 .curves-graph-col { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 /* The graph takes whatever the panel has left: this is the one part worth
    making the panel taller for. */
-.curves-body .kf-graph { flex: 1 1 auto; height: auto; min-height: 90px; }
+.curves-body .kf-graph { flex: 1 1 auto; height: auto; min-height: 90px; overflow: hidden; }
+/* Zoomed or panned: the keys and curves outside the view are cut off. */
+.curves-body .kf-graph.panning { cursor: grabbing; }
+.curves-body .kf-graph.zooming { cursor: zoom-in; }
+/* Frame numbers along the bottom, values along the left. */
+.curves-tick { position: absolute; z-index: 1; pointer-events: none; font-size: 9px; color: #666;
+               line-height: 1; white-space: nowrap; }
+.curves-tick.frame { bottom: 1px; transform: translateX(-50%); }
+.curves-tick.value { left: 2px; transform: translateY(-50%); }
+/* A channel under an object's name sits further in than the name. */
+.curves-ch.nested { padding-left: 14px; }
 .curves-sub { color: #888; font-size: 11px; }
 .curves-sub .curves-action { margin-left: 8px; padding: 0 6px; font-size: 11px; color: #ccc;
     background: #222; border: 1px solid #444; border-radius: 3px; cursor: pointer; }
