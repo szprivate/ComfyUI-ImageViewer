@@ -2440,15 +2440,17 @@ audio.src-media { width: 90%; }
 }
 .model-mb-menus { display: flex; align-items: center; gap: 1px; min-width: 0; overflow: hidden; }
 .model-mb-btn {
-    height: 24px; padding: 0 9px; box-sizing: border-box; flex: none;
+    height: 24px; min-height: 0; padding: 0 9px; box-sizing: border-box; flex: none;
     background: transparent; color: #ccc; border: 1px solid transparent; border-radius: 3px;
     font-size: 12px; cursor: pointer; white-space: nowrap;
 }
 .model-mb-btn:hover, .model-mb-btn.open { background: #333; color: #fff; }
 .model-mb-btn.has-world { color: #f60; }
 .model-mb-right { position: relative; display: flex; align-items: center; gap: 4px; flex: none; }
+/* min-height: 0 - the stylesheet's `button, select` give every button 32 px, which would hang them
+   out of the 30 px bar and over the stage (the active pane's frame). */
 .model-mb-right select, .model-mb-right .model-btn {
-    height: 22px; padding: 0 7px; box-sizing: border-box;
+    height: 22px; min-height: 0; padding: 0 7px; box-sizing: border-box;
     background: #222; color: #ccc; border: 1px solid #444; border-radius: 3px; font-size: 12px; cursor: pointer;
 }
 .model-mb-right .model-icon-btn { min-width: 24px; padding: 0 4px; }

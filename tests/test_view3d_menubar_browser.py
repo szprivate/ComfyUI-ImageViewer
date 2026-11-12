@@ -99,6 +99,10 @@ class MenuBarPaneTests(unittest.TestCase):
         try:
             labels = pg.evaluate("() => [...window.__panel._modelView().root.querySelectorAll('.model-mb-menus > button')].map((b) => b.textContent)")
             right = pg.evaluate("() => window.__panel._modelView().root.querySelectorAll('.model-mb-right select, .model-mb-right button').length")
+            # Everything at the bar's right stays inside the bar (not over the stage and its pane frames).
+            inside = pg.evaluate("""() => { const r = window.__panel._modelView().root; const bar = r.querySelector('.model-menubar').getBoundingClientRect();
+                return [...r.querySelectorAll('.model-mb-right select, .model-mb-right button, .model-mb-menus button')]
+                  .every((b) => { const x = b.getBoundingClientRect(); return x.top >= bar.top && x.bottom <= bar.bottom; }); }""")
             tools = pg.evaluate("() => [...window.__panel._modelView().root.querySelectorAll('.model-toolcol [data-tool]')].map((b) => b.dataset.tool)")
             outliner_bar = pg.evaluate("() => !!window.__panel.previzPanel && !!window.__panel.previzPanel.querySelector('.previz-actions, .previz-bar')")
             # A real click opens File; moving onto Edit opens Edit in its place.
@@ -123,6 +127,7 @@ class MenuBarPaneTests(unittest.TestCase):
             pg.close()
         self.assertEqual(labels, ["File", "Edit", "Create", "Rig", "Animate", "Constrain", "World", "View", "Windows"])
         self.assertGreaterEqual(right, 3)
+        self.assertTrue(inside)
         self.assertEqual(tools[:4], ["select", "translate", "rotate", "scale"])
         self.assertFalse(outliner_bar)
         self.assertIn("Save scene…", file_items)
