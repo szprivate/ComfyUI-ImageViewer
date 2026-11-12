@@ -253,6 +253,63 @@ class AtlasCreateTests(unittest.TestCase):
         self.assertEqual(self.errors, [])
 
 
+    def test_the_echo_engine_takes_one_picture_and_sends_its_own_choices(self):
+        """SpAItial Echo, the second world generator: the same dialog, Engine: Echo."""
+        pg = self.page()
+        pg.evaluate(STUB)
+        pg.evaluate("""async () => {
+          const P = window.__panel;
+          const { app } = await import('/scripts/app.js');
+          app.graph.nodes = app.graph.nodes || []; app.graph.links = app.graph.links || {};
+          P.setViewerToggleState(true);
+          P.updateData({ unique_id: '51', tab_name: 'agentY', tabs: { tab: [
+            { path: 'D:/out/a.png', filename: 'a.png', type: 'output' },
+            { path: 'D:/out/b.png', filename: 'b.png', type: 'output' }] } }, null);
+          P.startHistorySelection('all', 0);
+          P.spaceOpen('3d');
+        }""")
+        root = "window.__panel.shadowRoot"
+        pg.evaluate(f"""() => {{ {root}.querySelector('.previz-btn.previz-atlas-menu').click();
+          [...{root}.querySelectorAll('.previz-menu .previz-menu-item')]
+            .find((b) => b.textContent.startsWith('New Echo world')).click(); }}""")
+        pg.wait_for_function(f"() => !!{root}.querySelector('.atlas-create.atlas-dlg .engine-echo')")
+        pg.keyboard.press("Escape")
+        # Two pictures in an Atlas dialog, then Engine: Echo - which takes one.
+        pg.evaluate(f"""() => {{ window.__panel.atlasCreateDialog({{ engine: 'atlas', images: [
+            {{ path: 'D:/out/a.png', name: 'a.png' }}, {{ path: 'D:/out/b.png', name: 'b.png' }}] }});
+          const sel = {root}.querySelector('.atlas-create .atlas-engine');
+          sel.value = 'echo'; sel.dispatchEvent(new Event('change')); }}""")
+        st = pg.evaluate(f"""() => {{
+          const d = {root}.querySelector('.atlas-create');
+          const shown = (s) => getComputedStyle(d.querySelector(s)).display !== 'none';
+          return {{ title: d.querySelector('.rd-title').textContent, engine: d.querySelector('.atlas-engine').value,
+                    chips: d.querySelectorAll('.atlas-pic').length, go: d.querySelector('.rd-go').disabled,
+                    warn: d.querySelector('.rd-hint').classList.contains('warn'),
+                    aspect: shown('.atlas-aspect'), model: shown('.echo-model'), mesh: shown('.echo-mesh') }};
+        }}""")
+        self.assertEqual(st, {"title": "New Echo world", "engine": "echo", "chips": 2, "go": True, "warn": True,
+                              "aspect": False, "model": True, "mesh": True}, "two pictures: Echo takes one")
+        pg.evaluate(f"() => {root}.querySelectorAll('.atlas-create .atlas-pic-x')[1].click()")
+        st = pg.evaluate(f"""() => {{ const d = {root}.querySelector('.atlas-create');
+          return {{ go: d.querySelector('.rd-go').disabled, promptOff: d.querySelector('.atlas-prompt').disabled,
+                    pano: d.querySelector('.echo-pano').disabled }}; }}""")
+        self.assertEqual(st, {"go": False, "promptOff": True, "pano": False})
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.screenshot(path=os.path.join(SHOTS, "new-echo-world.png"))
+        pg.evaluate(f"""() => {{ const d = {root}.querySelector('.atlas-create');
+          const set = (s, v) => {{ const n = d.querySelector(s); n.value = v; n.dispatchEvent(new Event('change')); }};
+          set('.echo-model', 'echo-hq'); set('.echo-pano', 'true'); set('.echo-mesh', 'mesh-simplified');
+          d.querySelector('.rd-go').click(); }}""")
+        pg.wait_for_function(f"() => !{root}.querySelector('.atlas-create')", timeout=15000)
+        post = next(c for c in pg.evaluate("() => window.__atlasCalls") if c[1])
+        self.assertEqual(post[1], {"engine": "echo", "name": "a", "prompt": "", "images": [{"path": "D:/out/a.png"}],
+                                   "model": "echo-hq", "is_pano": "true", "mesh": "mesh-simplified"})
+        # The engine is remembered: the next dialog opens on Echo.
+        pg.evaluate("() => window.__panel.atlasCreateDialog()")
+        self.assertEqual(pg.evaluate(f"() => {root}.querySelector('.atlas-create .atlas-engine').value"), "echo")
+        self.assertEqual(self.errors, [])
+
     def test_pictures_dropped_from_explorer_come_into_the_new_world_dialog(self):
         pg = self.page()
         pg.evaluate(STUB)
@@ -444,7 +501,8 @@ class AtlasCreateTests(unittest.TestCase):
             + (b.classList.contains('off') ? ' (off)' : '')); }}""")
         # The menu bar's World menu: walking and notes first, then the Atlas tools under their heading.
         labels = labels[labels.index("Atlas (off)") + 1:]
-        self.assertEqual(labels, ["New Atlas world\u2026", "Render view with Atlas\u2026", "Chisel this view\u2026",
+        self.assertEqual(labels, ["New Atlas world\u2026", "New Echo world\u2026", "Render view with Atlas\u2026",
+                                  "Chisel this view\u2026",
                                   "Auto-orient world", "\u2713 Show views", "Show as point cloud", "Camera from view",
                                   "Rebuild mesh", "Export Gaussian splat\u2026"])
         pg.keyboard.press("Escape")

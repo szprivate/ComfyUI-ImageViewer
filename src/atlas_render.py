@@ -217,6 +217,9 @@ CREATE_ROUTE = "atlas_create"
 ASPECTS = ("16:9", "9:16", "4:3", "3:4", "1:1")
 MAX_CREATE_IMAGES = 8
 MAX_PROMPT = 2000
+ENGINES = ("atlas", "echo")            # World Labs Atlas, or SpAItial Echo (the second world generator)
+ECHO_MODELS = ("echo-2", "echo-hq")
+ECHO_MESH = ("", "mesh", "mesh-simplified")
 
 
 def clean_create_request(data, images=None) -> dict:
@@ -230,12 +233,30 @@ def clean_create_request(data, images=None) -> dict:
         raise RelayError(f"at most {MAX_CREATE_IMAGES} pictures for one world", 400)
     if not imgs and not prompt:
         raise RelayError("describe the place, or add a picture of it", 400)
-    aspect = str(data.get("aspect_ratio") or "16:9")
-    if aspect not in ASPECTS:
-        raise RelayError("aspect_ratio is one of " + ", ".join(ASPECTS), 400)
     name = "".join(c if (c.isalnum() or c in "_- ") else "_" for c in str(data.get("name") or "")).strip()[:60]
     if not name:
         raise RelayError("give the world a name", 400)
+    engine = str(data.get("engine") or "atlas").lower()
+    if engine not in ENGINES:
+        raise RelayError("engine is atlas or echo", 400)
+    if engine == "echo":
+        if len(imgs) > 1:
+            raise RelayError("Echo makes a world from ONE picture (or a panorama, or words)", 400)
+        model = str(data.get("model") or "echo-2").lower()
+        if model not in ECHO_MODELS:
+            raise RelayError("model is " + " or ".join(ECHO_MODELS), 400)
+        pano = str(data.get("is_pano") or "auto").lower()
+        if pano not in ("auto", "true", "false"):
+            raise RelayError("is_pano is auto, true or false", 400)
+        mesh = str(data.get("mesh") or "").lower()
+        if mesh not in ECHO_MESH:
+            raise RelayError("mesh is none, mesh or mesh-simplified", 400)
+        return {"engine": "echo", "name": name, "prompt": "" if imgs else prompt, "image_paths": imgs,
+                "model": model, "is_pano": pano, "mesh": mesh,
+                "open_in_viewer": data.get("open_in_viewer", True) is not False}
+    aspect = str(data.get("aspect_ratio") or "16:9")
+    if aspect not in ASPECTS:
+        raise RelayError("aspect_ratio is one of " + ", ".join(ASPECTS), 400)
     try:
         detail = int(data.get("mesh_detail") or 4)
     except (TypeError, ValueError):

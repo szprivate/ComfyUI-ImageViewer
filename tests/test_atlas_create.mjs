@@ -57,6 +57,21 @@ test("the request names pictures by path or ComfyUI ref, never by URL", () => {
     assert.ok(A.isAtlasPicture({ filename: "x.webp" }) && !A.isAtlasPicture({ path: "x.mp4" }));
 });
 
+test("an Echo request: one picture or words, its own choices, no words beside a picture", () => {
+    const r = A.buildCreateRequest({ engine: "echo", prompt: "words", images: [{ path: "D:/a.png" }],
+                                     model: "echo-hq", pano: "true", mesh: "mesh", aspect: "9:16" });
+    assert.deepEqual(r, { engine: "echo", name: "words", prompt: "", images: [{ path: "D:/a.png" }],
+                          model: "echo-hq", is_pano: "true", mesh: "mesh" });
+    const t = A.buildCreateRequest({ engine: "echo", prompt: "a hall", model: "echo-9", pano: "x", mesh: "obj" });
+    assert.deepEqual([t.prompt, t.model, t.is_pano, t.mesh], ["a hall", "echo-2", "auto", ""]);
+    assert.ok(A.buildCreateRequest({ engine: "echo", images: [{ path: "a.png" }, { path: "b.png" }] }).error);
+    assert.equal(A.maxImagesFor("echo"), 1);
+    assert.equal(A.maxImagesFor("atlas"), A.CREATE_MAX_IMAGES);
+    assert.ok(!("engine" in A.buildCreateRequest({ prompt: "x" })), "an Atlas body is what it was");
+    assert.match(A.createProgress({ engine: "echo", elapsed: 3 }), /^Echo/);
+    assert.match(A.explainEchoError(Object.assign(new Error("402"), { kind: "balance" })), /SpAItial/);
+});
+
 // ── the dialog, against a fake DOM ──────────────────────────────────────────────────────────────────────
 class El {
     constructor(tag, doc) {
@@ -68,6 +83,7 @@ class El {
             add(c) { const s = this._s(); s.add(c); self.className = [...s].join(" "); },
             remove(c) { const s = this._s(); s.delete(c); self.className = [...s].join(" "); },
             contains(c) { return this._s().has(c); },
+            toggle(c, on) { if (on === undefined ? !this.contains(c) : on) this.add(c); else this.remove(c); },
         };
     }
     append(...kids) { for (const k of kids) { if (typeof k === "string") { this.textContent += k; continue; } k.parent = this; this.children.push(k); } }
