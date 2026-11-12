@@ -69,20 +69,54 @@ export function environmentSettings(item) {
     };
 }
 
-/** A light: a point light, and the fixture it hangs in (a glowing tube or panel). */
+/**
+ * A light. `type`:
+ *   point        a bulb shining every way (the World kit's Lamp hangs one in a fixture)
+ *   spot         a cone along the light's -Y (down until it is turned)
+ *   directional  parallel rays along -Y, a sun: where it stands does not matter, only where it points
+ *   area         a rectangle `width` x `height` shining from its underside (-Y); no shadows (three.js has none)
+ *   dome         sky light from above in `color`, from below in `ground`; position and turn ignored
+ * Intensities are three.js's physical units: candela for point and spot, lux
+ * for directional, nits for area; a dome is a plain multiplier.
+ */
+export const LIGHT_TYPES = ["point", "spot", "directional", "area", "dome"];
+export const LIGHT_LABELS = { point: "Point light", spot: "Spot light", directional: "Directional light",
+                              area: "Area light", dome: "Sky dome light" };
+/** Each type's own starting numbers; a light changed to another type takes that type's intensity. */
+export const LIGHT_DEFAULTS = {
+    point: { intensity: 100, distance: 0 },
+    spot: { intensity: 300, distance: 0 },
+    directional: { intensity: 3 },
+    area: { intensity: 15 },
+    dome: { intensity: 1 },
+};
+/** Which types cast shadows (three.js cannot shadow an area or a dome light). */
+export const SHADOW_TYPES = ["point", "spot", "directional"];
+
 export function lightSettings(item) {
     const l = (item && item.light) || {};
     const f = l.fixture || {};
+    const type = LIGHT_TYPES.includes(l.type) ? l.type : "point";
+    const def = LIGHT_DEFAULTS[type];
     const size = Array.isArray(f.size) && f.size.length === 3 ? f.size.map((v) => num(v, 0.1, 0, 100)) : [1.2, 0.14, 0.05];
     return {
-        type: "point",
+        type,
         color: col(l.color, "#fff6e8"),
-        intensity: num(l.intensity, 18, 0, 100000),
-        distance: num(l.distance, 14, 0, 100000),
+        intensity: num(l.intensity, type === "point" && l.type === undefined ? 18 : def.intensity, 0, 100000),
+        // Reach: 0 is no end (the light falls off by `decay` for ever).
+        distance: num(l.distance, type === "point" && l.type === undefined ? 14 : 0, 0, 100000),
         decay: num(l.decay, 2, 0, 4),
-        shadows: !!l.shadows,
-        fixture: { shape: ["tube", "panel", "none"].includes(f.shape) ? f.shape : "tube", size,
-                   emissive: num(f.emissive, 6, 0, 1000) },
+        angle: num(l.angle, 30, 1, 89),           // spot: the cone's half angle, degrees
+        penumbra: num(l.penumbra, 0.3, 0, 1),     // spot: how soft the cone's edge is
+        width: num(l.width, 2, 0.01, 10000),      // area
+        height: num(l.height, 2, 0.01, 10000),
+        ground: col(l.ground, "#5a4e42"),          // dome: the light from below
+        shadows: !!l.shadows && SHADOW_TYPES.includes(type),
+        softness: num(l.softness, 2, 0, 20),      // the shadow's blur, in shadow-map texels
+        // A fixture is the Lamp's: only a point light hangs in one; a new light has none.
+        fixture: { shape: type === "point" && ["tube", "panel", "none"].includes(f.shape) ? f.shape
+                       : type === "point" && l.type === undefined ? "tube" : "none",
+                   size, emissive: num(f.emissive, 6, 0, 1000) },
     };
 }
 
@@ -285,8 +319,20 @@ export function makeScatterItem(id, type = "tree", target = "terrain") {
     return Object.assign(base(id, "scatter", label), { scatter: s });
 }
 
-export function makeLightItem(id) {
-    return Object.assign(base(id, "light", "Lamp"), { position: [0, 3, 0], light: lightSettings({}) });
+/**
+ * The World kit's Lamp (`type` left out: a point light in a glowing tube), or
+ * one of the Create menu's lights by its type, with no fixture. A light that
+ * points (spot, directional, area) starts pointing down and a little forward.
+ */
+export function makeLightItem(id, type) {
+    if (!type) return Object.assign(base(id, "light", "Lamp"), { position: [0, 3, 0], light: lightSettings({}) });
+    const t = LIGHT_TYPES.includes(type) ? type : "point";
+    const item = Object.assign(base(id, "light", LIGHT_LABELS[t]), {
+        position: [0, 4, 0], light: lightSettings({ light: { type: t, color: "#ffffff" } }),
+    });
+    if (t === "spot" || t === "directional") { item.position = [3, 6, 4]; item.rotation = [35, 0, -25]; }
+    if (t === "area") item.position = [0, 3, 0];
+    return item;
 }
 
 export function makeDepthMeshItem(id, src, depth) {
@@ -318,12 +364,21 @@ export const WORLD_FIELDS = {
         { path: "render.bloom", label: "Bloom", type: "number", step: 0.05, min: 0, max: 5 },
         { path: "render.reflections", label: "Reflections", type: "select", options: ["capture", "off"] },
     ],
+    // `types`: the light types a row is for (lightFields picks them).
     light: [
+        { path: "light.type", label: "Type", type: "select", options: LIGHT_TYPES },
         { path: "light.color", label: "Colour", type: "color" },
-        { path: "light.intensity", label: "Intensity (cd)", type: "number", step: 1, min: 0 },
-        { path: "light.distance", label: "Reach", type: "number", step: 1, min: 0 },
-        { path: "light.shadows", label: "Shadows", type: "bool" },
-        { path: "light.fixture.emissive", label: "Glow", type: "number", step: 0.5, min: 0 },
+        { path: "light.intensity", label: "Intensity", type: "number", step: 0.5, min: 0 },
+        { path: "light.distance", label: "Reach (0 = no end)", type: "number", step: 1, min: 0, types: ["point", "spot"] },
+        { path: "light.decay", label: "Decay", type: "number", step: 0.5, min: 0, max: 4, types: ["point", "spot"] },
+        { path: "light.angle", label: "Cone angle", type: "number", step: 1, min: 1, max: 89, types: ["spot"] },
+        { path: "light.penumbra", label: "Cone softness", type: "number", step: 0.05, min: 0, max: 1, types: ["spot"] },
+        { path: "light.width", label: "Width", type: "number", step: 0.1, min: 0.01, types: ["area"] },
+        { path: "light.height", label: "Height", type: "number", step: 0.1, min: 0.01, types: ["area"] },
+        { path: "light.ground", label: "Ground colour", type: "color", types: ["dome"] },
+        { path: "light.shadows", label: "Shadows", type: "bool", types: SHADOW_TYPES },
+        { path: "light.softness", label: "Shadow softness", type: "number", step: 0.5, min: 0, max: 20, types: SHADOW_TYPES },
+        { path: "light.fixture.emissive", label: "Glow", type: "number", step: 0.5, min: 0, fixture: true },
     ],
     terrain: [
         { path: "terrain.height", label: "Height", type: "number", step: 1, min: 0 },
@@ -387,4 +442,23 @@ export function setPath(obj, path, value) {
     }
     cur[parts[parts.length - 1]] = value;
     return obj;
+}
+
+/** The channel box rows for one item: a light's are the ones for its type (and its fixture's glow when it hangs in one). */
+export function worldFields(item) {
+    const fields = (item && WORLD_FIELDS[item.kind]) || [];
+    if (!item || item.kind !== "light") return fields;
+    const l = lightSettings(item);
+    return fields.filter((f) => (!f.types || f.types.includes(l.type)) && (!f.fixture || l.fixture.shape !== "none"));
+}
+
+/** The scene's own lights on, off, or "auto" (on while the scene has no light and no environment). */
+export const DEFAULT_LIGHTS = ["auto", "on", "off"];
+
+/** Whether ComfyUI's studio lights should shine on this scene. */
+export function studioLightsOn(scene, hasEnvironment = false) {
+    const mode = scene && DEFAULT_LIGHTS.includes(scene.defaultLights) ? scene.defaultLights : "auto";
+    if (mode !== "auto") return mode === "on";
+    if (hasEnvironment) return false;
+    return !((scene && scene.items) || []).some((i) => i && i.kind === "light" && i.visible !== false);
 }

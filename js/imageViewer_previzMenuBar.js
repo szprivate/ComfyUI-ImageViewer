@@ -207,6 +207,9 @@ export const PrevizMenuBarMixin = {
             { label: tick(view.showGrid, "Grid"), cmd: "View3DGrid", run: () => view.setGrid(!view.showGrid) },
             { label: "Grid options…", title: "Size, spacing and major lines of the grid",
               disabled: !view.toggleGridMenu, run: () => view.toggleGridMenu(true) },
+            { label: "Default lights", title: "The studio lights a scene gets when it has none of its own", sub: [
+                ["auto", "Auto (off once the scene has a light)"], ["on", "Always on"], ["off", "Off"],
+            ].map(([v, l]) => ({ label: tick(this.previzDefaultLights() === v, l), run: () => this.previzSetDefaultLights(v) })) },
             { label: "Show", sub: [
                 { label: "All", run: () => view.setAllDisplayed(true) },
                 "-",

@@ -14,6 +14,7 @@ import { app } from "../../scripts/app.js";
 import * as S from "./imageViewer_scene3d.js";
 import * as L from "./imageViewer_sceneLayers.js";
 import { pruneConstraints } from "./imageViewer_constraintData.js";
+import { AIM_CHANNELS, AIM_PROPS, ROLL_PROP, aimOn } from "./imageViewer_cameraAim.js";
 import { bakedCopy } from "./imageViewer_constraints.js";
 import * as Q from "./imageViewer_clipSeqData.js";
 // Registers the layers' blend with the scene model (evaluateIn).
@@ -713,6 +714,12 @@ export const PrevizMixin = {
             }
             write(item, prop, value);
         }
+        // Navigating through a camera with a look-at target moves the target too.
+        if (Array.isArray(transform.aimTarget) && aimOn(item)) {
+            AIM_PROPS.forEach((p, i) => write(item, p, transform.aimTarget[i]));
+        }
+        // The Rotate tool on a look-at camera turns its roll.
+        if (Number.isFinite(transform.aimRoll) && aimOn(item)) write(item, ROLL_PROP, transform.aimRoll);
         // Mid-drag the scene only needs the numbers; the panel, the node widget
         // and the saved state catch up when the drag ends (onTransformEnd).
         if (live) this._previzRefreshFields();
@@ -744,7 +751,7 @@ export const PrevizMixin = {
         const frame = Math.round(this.currentFrame || 0);
         for (const item of items) {
             const props = prop ? [prop] : (item.kind === "camera"
-                ? ["position", "rotation", "fov"]
+                ? ["position", "rotation", "fov", ...(aimOn(item) ? AIM_CHANNELS : [])]
                 : item.kind === "control"
                     ? (item.control && item.control.type === "ik" ? ["position", "rotation", "ikfk"] : ["position", "rotation"])
                     : ["position", "rotation", "scale"]);
@@ -1414,6 +1421,8 @@ export const PrevizMixin = {
             entries.push({ label: spec.label, cmd: `PrevizAdd${spec.label}`, run: () => this.previzAddPrimitive(spec.type) });
         }
         entries.push("-");
+        // Lights (imageViewer_worldData.js LIGHT_TYPES): plain three.js lights, so a path tracer can read them too.
+        if (this._previzLightMenuEntries) entries.push({ label: "Light", sub: this._previzLightMenuEntries() });
         // The world items as one submenu; opening and referencing scenes is File's.
         entries.push({ label: "World", sub: this._previzWorldMenuEntries().map((e) => ({ ...e, label: e.label.replace(/^World: /, "") })) });
         return entries;

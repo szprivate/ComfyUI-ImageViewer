@@ -77,6 +77,7 @@ import { readRigFields } from "./imageViewer_rigData.js";
 import { readItemRef, readSceneLayers } from "./imageViewer_sceneLayers.js";
 import { pruneConstraints, readConstraints, readWeightStatic, writeWeightStatic } from "./imageViewer_constraintData.js";
 import { readDrivers } from "./imageViewer_rigDrivers.js";
+import { readAim, readAimStatic, writeAimStatic } from "./imageViewer_cameraAim.js";
 
 export const SCENE_VERSION = 1;
 export const DEFAULT_RESOLUTION = [1920, 1080];
@@ -194,6 +195,9 @@ export function addStaticWriter(fn) { if (!_staticWriters.includes(fn)) _staticW
 // A constraint's weights (imageViewer_constraintData.js) are the first extra channels.
 addStaticReader(readWeightStatic);
 addStaticWriter(writeWeightStatic);
+// A camera's look-at target, "aim:x" / "aim:y" / "aim:z" (imageViewer_cameraAim.js).
+addStaticReader(readAimStatic);
+addStaticWriter(writeAimStatic);
 function _extraStatic(item, prop) {
     for (const fn of _staticReaders) {
         const v = fn(item, prop);
@@ -1196,6 +1200,9 @@ export function parseScene(raw) {
             // The picture this camera's view has to match (a world's reference).
             const ref = referenceSettings(raw);
             if (ref) item.reference = ref;
+            // Its look-at target, off unless switched on (imageViewer_cameraAim.js).
+            const aim = readAim(raw.aim);
+            if (aim) item.aim = aim;
         } else if (offsetOf(raw)) {
             item.offset = offsetOf(raw);
         }
@@ -1333,6 +1340,8 @@ export function parseScene(raw) {
     if (data.walk && typeof data.walk === "object") scene.walk = walkSettings(data);
     const world = worldInfo(data);
     if (world) scene.world = world;
+    // The studio lights: left out = "auto" (imageViewer_worldData.js studioLightsOn).
+    if (data.defaultLights === "on" || data.defaultLights === "off") scene.defaultLights = data.defaultLights;
     // The clip sequencer's tracks and sources (imageViewer_clipSeqData.js tidies them).
     if (data.sequencer && typeof data.sequencer === "object") scene.sequencer = JSON.parse(JSON.stringify(data.sequencer));
     if (scene.activeCamera && !itemById(scene, scene.activeCamera)) scene.activeCamera = null;

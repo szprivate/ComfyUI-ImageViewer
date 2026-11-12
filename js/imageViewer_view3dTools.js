@@ -4,7 +4,7 @@
 //
 //   - the Display menu: switch whole kinds of things off and on in the view -
 //     polygons, curves (rig controls are curves), joints, cameras, image
-//     planes, splats, point clouds, the grid (Shift+1 .. Shift+8);
+//     planes, splats, point clouds, the grid (Shift+1 .. Shift+9);
 //   - joints drawn for every model that has bones (a line from each bone to
 //     its parent and a dot at each joint), hidden inside meshes unless X-ray;
 //   - the marquee: a left drag that starts on nothing (or on an object, with
@@ -30,6 +30,7 @@ export const DISPLAY_KINDS = [
     { key: "splats",      label: "Splats",       layer: 6, tip: "Gaussian splats" },
     { key: "points",      label: "Point Clouds", layer: 7 },
     { key: "grid",        label: "Grid",         layer: 0 },
+    { key: "lights",      label: "Lights",       layer: 8, tip: "The glyphs lights are seen and picked by (they still shine)" },
 ];
 
 const STORE = "imageviewer.viewer.display3d";
@@ -39,6 +40,7 @@ const JOINT_COLOR = 0x5aa0ff;
 export function displayKindOf(obj, item) {
     if (!obj) return "";
     if (obj.userData && obj.userData.imageViewerJoints) return "joints";
+    if (obj.userData && obj.userData.imageViewerLightGlyph) return "lights";
     if (obj.userData && (obj.userData.imageViewerSplat || obj.userData.imageViewerSplatBounds)) return "splats";
     if (obj.name === "splatbounds") return "splats";
     if (obj.name === "imageplane" || (item && item.kind === "imageplane" && obj.isMesh)) return "imageplanes";
@@ -145,6 +147,8 @@ export const View3DToolsMixin = {
                 entry.helper.userData.imageViewerCameraHelper = true;
                 entry.helper.traverse((o) => sort(o, item));
             }
+            // A camera's look-at target and its line go with the cameras.
+            if (entry.aimViz) entry.aimViz.traverse((o) => { if (o !== entry.aimViz) sort(o, item); });
         }
         this._jointsSync();
         if (cam && cam.layers) cam.layers.mask = this._rendering ? 0xffffffff : this._dispMask();
@@ -230,7 +234,7 @@ export const View3DToolsMixin = {
 
     _dispBuildButton(el) {
         const btn = el("button", "model-btn model-display-btn", "Display ▾");
-        btn.title = "Show / hide kinds of things in the view (Shift+1 .. Shift+8)";
+        btn.title = "Show / hide kinds of things in the view (Shift+1 .. Shift+9)";
         btn.onclick = (e) => { e.stopPropagation(); this.toggleDisplayMenu(); };
         return btn;
     },
@@ -366,6 +370,8 @@ export const View3DToolsMixin = {
     _mqDown(e) {
         if (e.button !== 0 || e.altKey || this._walk || this._placingNote) return false;
         if (this.gizmo && this.gizmo.object && this.gizmo.axis && this.gizmoMode !== "select") return false;
+        // A camera's look-at target has a gizmo of its own, in every tool (imageViewer_cameraAim3d.js).
+        if (this._aimGizmoHot && this._aimGizmoHot()) return false;
         if (this.gizmoMode !== "select" && this._pick(e)) return false;
         const rect = this.canvas.getBoundingClientRect();
         this._mq = { x: e.clientX, y: e.clientY, rect, id: e.pointerId, box: null,

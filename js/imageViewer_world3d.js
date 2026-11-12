@@ -14,7 +14,7 @@
 import { api } from "../../scripts/api.js";
 import {
     WORLD_KINDS, environmentSettings, terrainSettings, scatterSettings, depthMeshSettings,
-    referenceSettings, walkSettings, worldInfo, inClearArea, lightSettings,
+    referenceSettings, walkSettings, worldInfo, inClearArea, lightSettings, studioLightsOn,
 } from "./imageViewer_worldData.js";
 import { FLY_SPEED, flyDelta, flyWheel, flyStatus } from "./imageViewer_atlasRender.js";
 
@@ -44,6 +44,18 @@ function loadHdr() {
             .catch((e) => { _hdrPromise = null; throw e; });
     }
     return _hdrPromise;
+}
+
+// Area lights need three's LTC tables (RectAreaLightUniformsLib, 300 kB), fetched
+// the first time a scene has one; WebGLRenderer reads them from then on.
+let _rectAreaPromise = null;
+function loadRectArea() {
+    if (!_rectAreaPromise) {
+        _rectAreaPromise = import(api.apiURL("/imageviewer/lib/three/RectAreaLightUniformsLib.js"))
+            .then((m) => { m.RectAreaLightUniformsLib.init(); })
+            .catch((e) => { _rectAreaPromise = null; throw e; });
+    }
+    return _rectAreaPromise;
 }
 
 // What each scatter shape is made of, unless the scatter says otherwise.
@@ -178,7 +190,7 @@ export const WorldViewMixin = {
                 else if (item.kind === "terrain") await this._buildTerrain(entry, item);
                 else if (item.kind === "scatter") await this._buildScatter(entry, item);
                 else if (item.kind === "depthmesh") await this._buildDepthMesh(entry, item);
-                else if (item.kind === "light") this._buildLight(entry, item);
+                else if (item.kind === "light") await this._buildLight(entry, item);
                 entry.error = "";
             } catch (e) {
                 console.warn(`[ImageViewer] could not build ${item.name}`, e);
@@ -234,11 +246,11 @@ export const WorldViewMixin = {
             if (e.item.kind === "environment" && e.envApplied && e.item.visible !== false) env = true;
             if (e.item.kind === "terrain" && e.terrain) ground = true;
         }
-        for (const light of this.lights || []) light.visible = !env;
-        if (this.renderer) {
-            this.renderer.shadowMap.enabled = env;
-        }
+        // ComfyUI's studio rig lights a model nobody has lit; a scene with lights of its own
+        // (or an environment) is lit by those, unless View > Default lights says otherwise.
+        this._lightsFrame(env);
         if (this.grid) this.grid.visible = this.showGrid && !ground;
+        if (this._gridOriginSync) this._gridOriginSync();
         this._worldSyncRender();
     },
 
@@ -951,34 +963,220 @@ export const WorldViewMixin = {
 
     // ── Lights ───────────────────────────────────────────────────────────────
 
-    /** A point light and the fixture it hangs in, glowing in the light's colour. */
-    _buildLight(entry, item) {
+    /**
+     * A light (worldData's lightSettings): a plain three.js light - PointLight,
+     * SpotLight, DirectionalLight, RectAreaLight, HemisphereLight - so whatever
+     * else reads a three.js scene (a path tracer) reads these too. Built into
+     * the item's body: its position places it, its turn aims it (spot,
+     * directional and area shine along their -Y). Beside it a glyph to see and
+     * click it by (the Display menu's Lights, hidden in renders), and for the
+     * World kit's Lamp the fixture it hangs in.
+     */
+    async _buildLight(entry, item) {
         const { THREE } = this.libs;
         const l = lightSettings(item);
         const group = new THREE.Group();
         group.name = "light";
-        const light = new THREE.PointLight(new THREE.Color(l.color), l.intensity, l.distance, l.decay);
-        light.castShadow = l.shadows;
-        if (l.shadows) { light.shadow.mapSize.set(1024, 1024); light.shadow.bias = -0.002; }
-        group.add(light);
-        if (l.fixture.shape !== "none") {
+        const color = new THREE.Color(l.color);
+        let light = null;
+        const aimDown = (lt) => {
+            // The target hangs below the light in the item's own space, so turning the item aims it.
+            lt.target.position.set(0, -1, 0);
+            group.add(lt.target);
+        };
+        if (l.type === "spot") {
+            light = new THREE.SpotLight(color, l.intensity, l.distance, l.angle * DEG, l.penumbra, l.decay);
+            aimDown(light);
+        } else if (l.type === "directional") {
+            light = new THREE.DirectionalLight(color, l.intensity);
+            aimDown(light);
+        } else if (l.type === "area") {
+            await loadRectArea();
+            light = new THREE.RectAreaLight(color, l.intensity, l.width, l.height);
+            light.rotation.x = -Math.PI / 2;       // its -Z (where it shines) turned to -Y
+        } else if (l.type === "dome") {
+            // A sky light has no place: it is the scene's, straight up, whatever the item's turn.
+            light = new THREE.HemisphereLight(color, new THREE.Color(l.ground), l.intensity);
+            light.position.set(0, 1, 0);
+            light.userData.imageViewerItemId = item.id;
+            this.scene.add(light);
+            entry.worldExtras = [light];
+        } else {
+            light = new THREE.PointLight(color, l.intensity, l.distance, l.decay);
+        }
+        light.name = `light:${l.type}`;
+        light.userData.imageViewerLight = true;
+        if (l.shadows && light.shadow) {
+            light.castShadow = true;
+            light.shadow.mapSize.set(2048, 2048);
+            light.shadow.radius = l.softness;
+            light.shadow.bias = l.type === "point" ? -0.002 : -0.0005;
+            light.shadow.normalBias = 0.02;
+        }
+        if (l.type !== "dome") group.add(light);
+        if (l.type === "point" && l.fixture.shape !== "none") {
             const [len, wid, th] = l.fixture.size;
             const geo = l.fixture.shape === "panel"
                 ? new THREE.BoxGeometry(Math.max(len, 0.05), Math.max(th, 0.01), Math.max(len, 0.05))
                 : new THREE.BoxGeometry(Math.max(len, 0.05), Math.max(th, 0.01), Math.max(wid, 0.02));
-            const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: new THREE.Color(l.color),
+            const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: color,
                                                          emissiveIntensity: l.fixture.emissive, roughness: 0.4 });
             const fixture = new THREE.Mesh(geo, mat);
             fixture.position.y = Math.max(th, 0.01) / 2;
-            fixture.userData.imageViewerItemId = item.id;
+            // The bulb is inside it: a fixture that cast a shadow would put its own light out.
+            fixture.userData.imageViewerNoShadow = true;
             group.add(fixture);
             this._originals.set(fixture, mat);
+        } else {
+            group.add(this._lightGlyph(l));
         }
         group.traverse((c) => { c.userData.imageViewerItemId = item.id; });
         this._bodyOf(entry).add(group);
         entry.object = group;
+        entry.light = light;
         entry.stats = { format: "light" };
     },
+
+    /** Lines to see a light by, in Maya's way: a star, a cone, rays, a frame, a dome. */
+    _lightGlyph(l) {
+        const { THREE } = this.libs;
+        const pts = [];
+        const seg = (a, b) => pts.push(new THREE.Vector3(...a), new THREE.Vector3(...b));
+        const circle = (r, y, n = 24, axis = "y") => {
+            for (let i = 0; i < n; i++) {
+                const a0 = (i / n) * Math.PI * 2, a1 = ((i + 1) / n) * Math.PI * 2;
+                const p = (a) => axis === "y" ? [Math.cos(a) * r, y, Math.sin(a) * r]
+                    : axis === "x" ? [y, Math.cos(a) * r, Math.sin(a) * r] : [Math.cos(a) * r, Math.sin(a) * r, y];
+                seg(p(a0), p(a1));
+            }
+        };
+        const R = 0.25;
+        if (l.type === "spot") {
+            const len = 1, r = Math.tan(l.angle * DEG) * len;
+            circle(r, -len);
+            for (let i = 0; i < 4; i++) { const a = i * Math.PI / 2; seg([0, 0, 0], [Math.cos(a) * r, -len, Math.sin(a) * r]); }
+            circle(R * 0.4, 0, 12, "y");
+        } else if (l.type === "directional") {
+            for (const [x, z] of [[0, 0], [0.3, 0], [-0.3, 0], [0, 0.3], [0, -0.3]]) {
+                seg([x, 0, z], [x, -0.9, z]);
+                seg([x, -0.9, z], [x + 0.06, -0.75, z]); seg([x, -0.9, z], [x - 0.06, -0.75, z]);
+            }
+            circle(0.3, 0, 24, "y");
+        } else if (l.type === "area") {
+            const w = l.width / 2, h = l.height / 2;
+            seg([-w, 0, -h], [w, 0, -h]); seg([w, 0, -h], [w, 0, h]); seg([w, 0, h], [-w, 0, h]); seg([-w, 0, h], [-w, 0, -h]);
+            seg([-w, 0, -h], [w, 0, h]); seg([w, 0, -h], [-w, 0, h]);
+            seg([0, 0, 0], [0, -Math.max(0.5, Math.min(w, h)), 0]);
+        } else if (l.type === "dome") {
+            const r = 0.5;
+            circle(r, 0);
+            for (let k = 0; k < 4; k++) {
+                const az = k * Math.PI / 4;
+                for (let i = 0; i < 12; i++) {
+                    const e0 = (i / 12) * Math.PI, e1 = ((i + 1) / 12) * Math.PI;
+                    const p = (e) => [Math.cos(e) * r * Math.cos(az), Math.sin(e) * r, Math.cos(e) * r * Math.sin(az)];
+                    seg(p(e0), p(e1));
+                }
+            }
+        } else {
+            circle(R, 0, 24, "y"); circle(R, 0, 24, "x"); circle(R, 0, 24, "z");
+            for (const d of [[1, 0, 0], [0, 1, 0], [0, 0, 1], [-1, 0, 0], [0, -1, 0], [0, 0, -1]]) {
+                seg(d.map((v) => v * R * 1.3), d.map((v) => v * R * 2.2));
+            }
+        }
+        const geo = new THREE.BufferGeometry().setFromPoints(pts);
+        const glyph = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0xffd34d, toneMapped: false, fog: false }));
+        glyph.name = "lightglyph";
+        glyph.userData.imageViewerLightGlyph = true;
+        glyph.userData.imageViewerNoShadow = true;
+        return glyph;
+    },
+
+    /**
+     * The studio lights on or off, the shadow map, and the shadows: from
+     * _worldSyncStudio and before every viewport frame (a light hidden, shown
+     * or deleted changes them without a rebuild). `env`: whether an
+     * environment lights the world; measured when not given.
+     */
+    _lightsFrame(env) {
+        if (env === undefined) {
+            env = false;
+            for (const e of this._entries.values()) {
+                if (e.item.kind === "environment" && e.envApplied && e.item.visible !== false) { env = true; break; }
+            }
+        }
+        const studio = studioLightsOn(this.scene3d, env);
+        for (const light of this.lights || []) if (light.visible !== studio) light.visible = studio;
+        if (this.renderer && this.libs) {
+            const own = this._lightsShadowing();
+            const map = this.renderer.shadowMap;
+            if (map.enabled !== (env || own)) map.enabled = env || own;
+            // A light's shadow softness is PCF's radius, which the soft PCF map ignores.
+            const type = own ? this.libs.THREE.PCFShadowMap : this.libs.THREE.PCFSoftShadowMap;
+            if (map.type !== type) { map.type = type; map.needsUpdate = true; }
+        }
+        this._lightsSync();
+    },
+
+    /** Whether one of the scene's own lights casts a shadow (they need the shadow map on, and shadow-casting meshes). */
+    _lightsShadowing() {
+        for (const e of this._entries.values()) {
+            if (e.light && e.light.castShadow && e.root && e.root.visible !== false && e.item.visible !== false) return true;
+        }
+        return false;
+    },
+
+    /**
+     * Before a frame: while a light of the scene's casts shadows, every mesh
+     * casts and takes them (models and shapes come in without), and a
+     * directional light's shadow box is fitted round what is in the scene.
+     */
+    _lightsSync() {
+        if (!this.renderer || !this.libs) return;
+        const want = this._lightsShadowing();
+        if (!want && !this._lightsShadowOn) return;
+        this._lightsShadowOn = want;
+        for (const e of this._entries.values()) {
+            if (!e.root || WORLD_KINDS.includes(e.item.kind)) continue;
+            e.root.traverse((o) => {
+                if (!o.isMesh || o.userData.imageViewerNoShadow || o.name === "splatbounds") return;
+                if (o.castShadow !== want) o.castShadow = want;
+                if (o.receiveShadow !== want) o.receiveShadow = want;
+            });
+        }
+        if (!want) return;
+        const { THREE } = this.libs;
+        let box = null;
+        for (const e of this._entries.values()) {
+            if (!e.light || !e.light.isDirectionalLight || !e.light.castShadow) continue;
+            if (!box) {
+                box = new THREE.Box3();
+                for (const o of this._entries.values()) {
+                    if (o.root && !WORLD_KINDS.includes(o.item.kind) && o.item.kind !== "camera" && o.root.visible) box.expandByObject(o.root);
+                }
+                if (box.isEmpty()) box.set(new THREE.Vector3(-10, -1, -10), new THREE.Vector3(10, 5, 10));
+            }
+            const sphere = box.getBoundingSphere(new THREE.Sphere());
+            const lt = e.light, cam = lt.shadow.camera;
+            lt.updateMatrixWorld();
+            lt.target.updateMatrixWorld();
+            const pos = new THREE.Vector3().setFromMatrixPosition(lt.matrixWorld);
+            const toward = new THREE.Vector3().setFromMatrixPosition(lt.target.matrixWorld).sub(pos).normalize();
+            // The shadow box lies along the light's ray through its own position: it has to reach
+            // the scene's middle (`along` the ray, `aside` off it) and the scene's radius round that.
+            const offset = sphere.center.clone().sub(pos);
+            const along = offset.dot(toward);
+            const aside = offset.sub(toward.clone().multiplyScalar(along)).length();
+            const r = Math.max(1, sphere.radius * 1.1);
+            const half = r + aside;
+            const key = `${half.toFixed(2)},${along.toFixed(2)}`;
+            if (lt.userData.imageViewerShadowFit === key) continue;
+            lt.userData.imageViewerShadowFit = key;
+            cam.left = -half; cam.right = half; cam.top = half; cam.bottom = -half;
+            cam.near = Math.max(0.01, along - r * 2);
+            cam.far = Math.max(cam.near + 1, along + r * 2);
+            cam.updateProjectionMatrix();
+        }    },
 
     // ── Depth mesh ───────────────────────────────────────────────────────────
 
