@@ -29,6 +29,7 @@ import { Rig3DMixin } from "./imageViewer_rig3d.js";
 import { Rig3DExtrasMixin } from "./imageViewer_rig3dExtras.js";
 import { View3DToolsMixin } from "./imageViewer_view3dTools.js";
 import { View3DPanesMixin } from "./imageViewer_view3dPanes.js";
+import { View3DGridMixin } from "./imageViewer_view3dGrid.js";
 import { Atlas3DMixin } from "./imageViewer_atlas3d.js";
 import { displayStates, isPickable } from "./imageViewer_sceneLayers.js";
 import { constrainedLocals } from "./imageViewer_constraints.js";
@@ -193,9 +194,13 @@ export class Model3DView {
         }
         modeSel.onchange = () => this.setMaterialMode(modeSel.value);
 
-        const gridBtn = el("button", "model-btn", "Grid");
+        const gridBtn = el("button", "model-btn model-grid-btn", "Grid");
         gridBtn.title = "Show / hide the grid";
         gridBtn.onclick = () => this.setGrid(!this.showGrid);
+        // Its options (size, spacing, major lines) open from the caret beside it.
+        const gridMoreBtn = el("button", "model-btn model-grid-more", "▾");
+        gridMoreBtn.title = "Grid options: size, spacing, major lines";
+        gridMoreBtn.onclick = (e) => { e.stopPropagation(); this.toggleGridMenu(); };
 
         const displayBtn = this._dispBuildButton(el);
         // Houdini's viewport layouts, the two used most as buttons; the rest in View > Layout.
@@ -211,7 +216,7 @@ export class Model3DView {
             if (this.hooks.setIcon) this.hooks.setIcon(b, icon);
             layoutBtns[layout] = b;
         }
-        look.append(modeSel, gridBtn, displayBtn, layoutBtns.single, layoutBtns.quad);
+        look.append(modeSel, gridBtn, gridMoreBtn, displayBtn, layoutBtns.single, layoutBtns.quad);
 
         // The gizmo tools, beside the object they act on, with the same keys (Q / W / E / R / X).
         const toolBtns = {};
@@ -273,7 +278,7 @@ export class Model3DView {
         root.append(menubar, stage, tools, status);
         this.root = root;
         this.stage = stage;
-        this.ui = { menubar, menus, look, displayBtn, modeSel, gridBtn, layoutBtns, toolBtns, tools, spaceBtn, pivotBtn, walkBtn, status,
+        this.ui = { menubar, menus, look, displayBtn, modeSel, gridBtn, gridMoreBtn, layoutBtns, toolBtns, tools, spaceBtn, pivotBtn, walkBtn, status,
                     gate, shades, gateFrame, gateLabel };
         if (this.hooks.buildMenuBar) this.hooks.buildMenuBar(menus, this);
         this._paneBuild();
@@ -355,7 +360,8 @@ export class Model3DView {
         add(new THREE.DirectionalLight(0xffffff), 0.3, [10, 0, 0]);
         add(new THREE.DirectionalLight(0xffffff), 0.2, [0, -10, 0]);
 
-        this.grid = new THREE.GridHelper(20, 20);
+        // Size, spacing and major lines from the grid options (imageViewer_view3dGrid.js).
+        this.grid = this._gridMake(THREE);
         this.grid.visible = this.showGrid;
         scene.add(this.grid);
 
@@ -1058,8 +1064,10 @@ export class Model3DView {
 
         // ComfyUI's grid is a fixed 20 units. Scaled by powers of ten here, so a
         // model in millimetres or kilometres still sits on a readable grid.
+        // With "Scale with the model" off in the grid options it stays as set.
         const scale = Math.pow(10, Math.round(Math.log10(maxDim / 5)));
-        this.grid.scale.setScalar(Number.isFinite(scale) && scale > 0 ? scale : 1);
+        this._gridSetAutoScale(scale);
+        this._gridMenuSync();
 
         this._target = center.clone();
         if (this.controls) {
@@ -1089,6 +1097,7 @@ export class Model3DView {
         this.showGrid = !!on;
         if (this.grid) this.grid.visible = this.showGrid;
         this._syncToolbar();
+        this._gridMenuSync();
         this.requestRender();
     }
 
@@ -2620,4 +2629,5 @@ Object.assign(Model3DView.prototype, Rig3DMixin);
 Object.assign(Model3DView.prototype, Rig3DExtrasMixin);
 Object.assign(Model3DView.prototype, View3DToolsMixin);
 Object.assign(Model3DView.prototype, View3DPanesMixin);
+Object.assign(Model3DView.prototype, View3DGridMixin);
 Object.assign(Model3DView.prototype, Atlas3DMixin);

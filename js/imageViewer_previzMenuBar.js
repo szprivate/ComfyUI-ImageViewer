@@ -110,6 +110,9 @@ export const PrevizMenuBarMixin = {
             { label: "New scene", cmd: "PrevizNewScene", run: () => this.previzNewScene() },
             { label: "Open scene…", cmd: "PrevizLoadScene", run: () => this.previzLoadSceneFile() },
             { label: "Open USD / Alembic…", cmd: "PrevizImportUsd", run: () => this.previzImportUsd() },
+            { label: "Import Model…", cmd: "PrevizAddModel", title: "Add models to the scene from a file "
+                + "(glTF, FBX, OBJ, STL, PLY, USD, splats); the File Browser's selected models go in at once",
+              run: () => this.previzImportModel() },
             { label: "Reference scene…", title: "Bring a saved scene in under a namespace, linked: "
                 + "a newer version of the file is picked up here", run: () => this.previzReferenceDialog() },
             "-",
@@ -199,6 +202,8 @@ export const PrevizMenuBarMixin = {
             { label: "Shading", sub: MATERIAL_MODES.map(([v, l]) => ({
                 label: tick(view.materialMode === v, l), cmd: `View3D${v[0].toUpperCase()}${v.slice(1)}`, run: () => view.setMaterialMode(v) })) },
             { label: tick(view.showGrid, "Grid"), cmd: "View3DGrid", run: () => view.setGrid(!view.showGrid) },
+            { label: "Grid options…", title: "Size, spacing and major lines of the grid",
+              disabled: !view.toggleGridMenu, run: () => view.toggleGridMenu(true) },
             { label: "Show", sub: [
                 { label: "All", run: () => view.setAllDisplayed(true) },
                 "-",

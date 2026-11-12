@@ -23,6 +23,10 @@ import { viewerActionKeyLabel } from "./imageViewer_keymap.js";
 import { PrevizOutlinerMixin } from "./imageViewer_previzOutliner.js";
 import { notice, openExportDialog, openFilePicker } from "./imageViewer_exportUI.js";
 
+// What File > Import Model… offers: the model formats the 3D view reads (MODEL_FORMATS in imageViewer_model3d.js).
+const MODEL_IMPORT_EXTS = [".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply", ".usd", ".usda", ".usdc", ".usdz", ".abc",
+                           ".spz", ".splat", ".ksplat", ".sog"];
+
 // Maya's manipulator keys, which is what the hotkeys below bind to.
 export const PrevizMixin = {
 
@@ -1400,7 +1404,7 @@ export const PrevizMixin = {
 
     _previzAddMenuEntries() {
         const entries = [
-            { label: "Model\u2026", cmd: "PrevizAddModel", run: () => this.previzAddFromBrowser() },
+            // Models come in through File > Import Model… (Sebastian 2026-11-12).
             { label: "Camera", cmd: "PrevizAddCamera", run: () => this.previzAddCamera() },
             { label: "Image plane\u2026", cmd: "PrevizAddImagePlane", run: () => this.previzAddImagePlane() },
             { label: "Group", cmd: "PrevizAddGroup", run: () => this.previzAddGroup() },
@@ -1922,7 +1926,33 @@ export const PrevizMixin = {
         });
     },
 
-    /** + Model: take the file browser's selection, or open it to make one. */
+    /**
+     * File > Import Model…: the File Browser's selected models go in at once,
+     * else a file picker for one or more model files.
+     */
+    async previzImportModel() {
+        const picked = this._selectedBrowserFiles ? (this._selectedBrowserFiles() || []) : [];
+        const models = picked.filter((f) => f && f.kind === "model");
+        if (models.length) {
+            return this.previzAddModels(models.map((f) => ({ path: f.path, name: f.name, kind: "model" })));
+        }
+        await openFilePicker(this.container, {
+            id: "model",
+            title: "Import Model",
+            kind: "character",
+            exts: MODEL_IMPORT_EXTS,
+            multiple: true,
+            go: "Import",
+            note: "Adds the models to the scene in this tab. Ctrl or Shift + click picks several.",
+            onPick: async (files) => {
+                const n = await this.previzAddModels(files.map((f) => ({ path: f.path, name: f.name, kind: "model" })));
+                if (!n) return { ok: false, message: "None of these could be added to the scene." };
+                return { ok: true };
+            },
+        });
+        return 0;
+    },
+
     /**
      * An image plane from the picture in hand: the file browser's selection,
      * else the frame on screen in another tab.
@@ -2003,7 +2033,7 @@ export const PrevizMixin = {
         }
         if (this.setPanelDocked) this.setPanelDocked("browser", true);
         const view = this._modelView();
-        view._setStatus("Pick a model in the File Browser, then press + Model again — or drag it in here.");
+        view._setStatus("Pick a model in the File Browser, then choose Import Model… again — or drag it in here.");
         const win = this._viewerWindow();
         win.setTimeout(() => view._setStatus(""), 6000);
     },

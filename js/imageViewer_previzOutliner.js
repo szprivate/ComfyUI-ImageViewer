@@ -262,7 +262,7 @@ export const PrevizOutlinerMixin = {
         if (!rows.length) {
             const empty = doc.createElement("div");
             empty.className = "previz-empty";
-            if (!scene.items.length) empty.textContent = "Drop a model in, or use + Model.";
+            if (!scene.items.length) empty.textContent = "Drop a model in, or use File › Import Model…";
             else if (needle) empty.textContent = `Nothing is called “${this._olQuery.trim()}”.`;
             else empty.textContent = "The filter hides everything.";
             ui.list.append(empty);

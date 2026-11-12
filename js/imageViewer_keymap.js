@@ -196,8 +196,8 @@ const ACTION_DEFS = [
     // Putting things in, and taking the shot out.
     { key: "PrevizNewScene",  label: "Previz: New Scene",
       enabled: _previz, run: (p) => p.previzNewScene() },
-    { key: "PrevizAddModel",  label: "Previz: Add Model…",
-      enabled: _previz, run: (p) => p.previzAddFromBrowser() },
+    { key: "PrevizAddModel",  label: "Previz: Import Model…",
+      enabled: _previz, run: (p) => p.previzImportModel() },
     { key: "PrevizAddCamera", label: "Previz: Add Camera",
       enabled: _previz, run: (p) => p.previzAddCamera() },
     { key: "PrevizAddImagePlane", label: "Previz: Add Image Plane…",
