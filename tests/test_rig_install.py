@@ -59,6 +59,54 @@ class PickTests(unittest.TestCase):
             I.fetch = old
 
 
+
+class SkinTokensInstallTests(unittest.TestCase):
+    def test_wheels_for_torch_2_7_and_up_only(self):
+        page = PAGE.replace("cu124torch2.6", "cu124torch2.6")
+        recent = [w for w in I.flash_wheels(page, "win_amd64") if I.recent_torch(w)]
+        self.assertTrue(recent)
+        self.assertTrue(all(I._ver(w["torch"])[:2] >= (2, 7) for w in recent))
+        self.assertNotIn("2.6", [w["torch"] for w in recent])
+        # torch_scatter / torch_cluster do not matter for SkinTokens: only torch has to be there.
+        w = I.pick_flash(recent, "cp311", "cu128", "win_amd64", lambda *a: True, lambda *a: True)
+        self.assertEqual((w["torch"], w["cuda"]), ("2.9", "cu128"))
+
+    def test_requirements_without_the_demo_and_server(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "requirements.txt"), "w") as fh:
+                fh.write("transformers>=4.57.0\ngradio\nbpy>=4.2\nbottle\ntornado\nflash-attn\nopen3d\n")
+            self.assertEqual(I.skintokens_requirements(tmp), ["transformers>=4.57.0", "bpy>=4.2", "open3d"])
+
+    def test_a_full_run_installs_it_only_with_a_14_gb_gpu(self):
+        from unittest import mock
+        self.assertFalse(I.skintokens_in_full_run("cpu", "win")[0])
+        self.assertFalse(I.skintokens_in_full_run("cu128", "mac")[0])
+        with mock.patch.object(I, "gpu_memory_gb", lambda: 12.0):
+            ok, why = I.skintokens_in_full_run("cu126", "win")
+            self.assertFalse(ok)
+            self.assertIn("12 GB", why)
+        with mock.patch.object(I, "gpu_memory_gb", lambda: 23.99):
+            self.assertEqual(I.skintokens_in_full_run("cu128", "linux"), (True, ""))
+        with mock.patch.object(I, "gpu_memory_gb", lambda: None):
+            self.assertFalse(I.skintokens_in_full_run("cu128", "linux")[0])
+
+    def test_only_skintokens_writes_its_entry(self):
+        import json
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = os.path.join(tmp, "rig_tools.json")
+            with open(cfg, "w") as fh:
+                json.dump({"unirig": {"python": "u", "repo": "r"}}, fh)
+            with mock.patch.dict(os.environ, {"IMAGE_VIEWER_RIG_TOOLS": cfg}), \
+                 mock.patch.object(I, "install_skintokens", lambda *a: {"python": "s", "repo": "t"}), \
+                 mock.patch.object(sys, "argv", ["x", "--root", tmp, "--cuda", "cpu", "--only", "skintokens"]):
+                I.main()
+            with open(cfg) as fh:
+                self.assertEqual(json.load(fh), {"unirig": {"python": "u", "repo": "r"},
+                                                 "skintokens": {"python": "s", "repo": "t"}})
+
 if __name__ == "__main__":
     unittest.main()
 

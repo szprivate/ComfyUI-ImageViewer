@@ -223,6 +223,7 @@ class RigToolsBrowserTests(unittest.TestCase):
             ready = getattr(self, "installed", True)
             route.fulfill(status=200, content_type="application/json", body=json.dumps({
                 "unirig": {"ready": ready, "why": "" if ready else "UniRig is not set up"},
+                "skintokens": {"ready": ready and getattr(self, "skin_ready", False), "why": "SkinTokens is not set up"},
                 "kimodo": {"ready": ready, "why": "" if ready else "Kimodo is not set up", "model": "Kimodo-SOMA-RP-v1.2"},
                 "posetrack": {"ready": ready, "why": "" if ready else "Motion from video is not set up"},
                 "install": {"root": "D:/AI/rigtools", "hf_token": False, "running": None}}))
@@ -244,7 +245,7 @@ class RigToolsBrowserTests(unittest.TestCase):
                     state["result"] = fake_sitter() if str(src.get("path", "")).endswith(".png") else fake_track()
                 else:
                     state["result"] = {"path": "D:/out/characters/statue_rig.glb", "relative": "characters/statue_rig.glb",
-                                       "name": "statue_rig.glb"}
+                                       "name": "statue_rig.glb", "engine": body.get("engine") or "unirig"}
                 route.fulfill(status=200, content_type="application/json",
                               body=json.dumps({"job": kind, "state": "running", "log": []}))
             return handler
@@ -483,7 +484,7 @@ class RigToolsBrowserTests(unittest.TestCase):
             self.assertEqual(box.locator('input[type="password"]').count(), 1)
             box.locator('input[type="password"]').fill("hf_" + "b" * 30)
             box.locator("button.rd-go").click()
-            rig = pg.locator('.rd-box[aria-label="Auto-rig (UniRig)"]')
+            rig = pg.locator('.rd-box[aria-label="Auto-rig"]')
             rig.wait_for(state="visible", timeout=20000)
             gone = box.count()
         finally:
@@ -497,13 +498,63 @@ class RigToolsBrowserTests(unittest.TestCase):
         self.assertEqual(gone, 0)
         self.assertEqual(self.errors, [])
 
+    def test_auto_rig_offers_skintokens_and_keeping_the_skeleton(self):
+        """SkinTokens set up: the dialog offers it first; on a model with a skeleton it can keep it (skin weights
+        only), UniRig cannot; the engine chosen is remembered; one not set up opens the install for it."""
+        self.skin_ready = True
+        pg = self.page()
+        try:
+            pg.evaluate(OPEN, ["statue.glb", "Statue"])
+            pg.evaluate("() => { try { localStorage.removeItem('imageviewer.viewer.autorigEngine'); } catch (_) {} }")
+            self._menu(pg, "Auto-rig")
+            box = pg.locator('.rd-box[aria-label="Auto-rig"]')
+            box.wait_for(state="visible", timeout=10000)
+            first = box.locator("select.rig-engine").input_value()
+            no_keep = box.get_by_text("Keep its skeleton").count()       # the statue has no skeleton yet
+            box.locator("select.rig-engine").select_option("unirig")
+            box.locator("select.rig-engine").select_option("skintokens")
+            box.locator("button.rd-go").click()
+            box.wait_for(state="detached", timeout=30000)
+            pg.wait_for_function("() => window.__panel.previzScene().items.some((it) => it.kind === 'control')", timeout=30000)
+            remembered = pg.evaluate("() => localStorage.getItem('imageviewer.viewer.autorigEngine')")
+            # Rigged now: it has a skeleton, which SkinTokens can keep.
+            self._menu(pg, "Auto-rig")
+            box.wait_for(state="visible", timeout=10000)
+            keep = box.locator("label", has_text="Keep its skeleton")
+            shown_skin = keep.is_visible()
+            box.locator("select.rig-engine").select_option("unirig")
+            shown_unirig = keep.is_visible()
+            box.locator("select.rig-engine").select_option("skintokens")
+            keep.locator("input").check()
+            hint = box.locator(".rd-hint").first.inner_text()
+            box.locator("button.rd-go").click()
+            box.wait_for(state="detached", timeout=30000)
+            # The agent's road names the engine too.
+            pg.evaluate("""async () => window.__panel.previzRigAgentRun({ id: 'r1', action: 'autorig',
+                             args: { model: 'statue', engine: 'unirig', keep_skeleton: true } })""")
+        finally:
+            pg.close()
+            self.skin_ready = False
+        self.assertEqual(first, "skintokens")
+        self.assertEqual(no_keep, 0)
+        self.assertEqual(remembered, "skintokens")
+        self.assertTrue(shown_skin)
+        self.assertFalse(shown_unirig)
+        self.assertIn("stays", hint)
+        bodies = [b for k, b in self.requests if k == "autorig"]
+        self.assertEqual([(b["engine"], b["keep_skeleton"]) for b in bodies], [("skintokens", False), ("skintokens", True)])
+        done = [b for k, b in self.requests if k == "agent_done" and b.get("id") == "r1"][-1]
+        self.assertEqual(done["state"], "error")
+        self.assertIn("only SkinTokens", done["error"])
+        self.assertEqual(self.errors, [])
+
     def test_drive_everything_from_the_rig_menu(self):
         """The same road as the agent's, by hand: Rig menu, dialogs, their buttons."""
         pg = self.page()
         try:
             pg.evaluate(OPEN, ["statue.glb", "Statue"])
             self._menu(pg, "Auto-rig")
-            self._go(pg, "Auto-rig (UniRig)", {"input.rd-num": 9})
+            self._go(pg, "Auto-rig", {"input.rd-num": 9})
             pg.wait_for_function("() => window.__panel.previzScene().items.some((it) => it.kind === 'control')", timeout=30000)
             pg.evaluate("() => window.__panel.setFrame(0)")
             self._menu(pg, "Generate motion from text")

@@ -59,6 +59,122 @@ FAKE_UNIRIG = {
     """,
 }
 
+# A stand-in SkinTokens folder: the files the viewer looks for, and just enough of its src package for
+# scripts/rig/skintokens_run.py (which loads the checkpoint through torch.load, reads the mesh, predicts and
+# transfers); FAKE_SKIN_LOG gets a line per call, FAKE_RIGGED is what the transfer writes.
+FAKE_SKINTOKENS = {
+    "experiments/articulation_xl_quantization_256_token_4/grpo_1400.ckpt": "ckpt",
+    "experiments/skin_vae_2_10_32768/last.ckpt": "vae",
+    "models/Qwen3-0.6B/config.json": "{}",
+    "demo.py": "raise SystemExit('the viewer never runs the demo (it starts a server on every interface)')",
+    "src/__init__.py": "",
+    "src/_log.py": """
+        import json, os
+        def log(**kw):
+            with open(os.environ['FAKE_SKIN_LOG'], 'a') as fh:
+                fh.write(json.dumps(kw) + '\\n')
+    """,
+    "src/data/__init__.py": "",
+    "src/data/dataset.py": """
+        from src._log import log
+        class _Cfg:
+            def __init__(self, kw): self.kw = kw
+            def split_by_cls(self): return {'articulation': self}
+        class DatasetConfig:
+            @staticmethod
+            def parse(**kw):
+                log(step='dataset', loader=kw['datapath']['loader'], workers=kw['num_workers'],
+                    files=kw['datapath']['filepaths']['articulation'])
+                return _Cfg(kw)
+        class RigDatasetModule:
+            def __init__(self, **kw): self.cfg = kw['predict_dataset_config']['articulation']
+            def predict_dataloader(self):
+                import os
+                batch = {'vertices': 'v'}
+                if os.environ.get('FAKE_SKIN_HAS_SKELETON'):
+                    import torch
+                    batch['skeleton_tokens'] = torch.Tensor([[1, 2, 3]]); batch['skeleton_mask'] = torch.Tensor([[1, 1, 0]])
+                return {'articulation': [batch]}
+    """,
+    "src/data/transform.py": """
+        class Transform:
+            @staticmethod
+            def parse(**kw): return Transform()
+    """,
+    "src/data/vertex_group.py": "def voxel_skin(**kw): return 1",
+    "src/tokenizer/__init__.py": "",
+    "src/tokenizer/parse.py": "def get_tokenizer(**kw): return object()",
+    "src/model/__init__.py": "",
+    "src/model/tokenrig.py": """
+        import torch
+        from src._log import log
+        class _Asset:
+            joints = [[0, 0, 0]] * 22
+        class _Pred:
+            asset = _Asset()
+        class TokenRig:
+            tokenizer_config = {}
+            transform_config = {'predict_transform': {}}
+            @classmethod
+            def load_from_system_checkpoint(cls, checkpoint_path):
+                ck = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+                log(step='load', ckpt=checkpoint_path, weights_only=ck['weights_only'])
+                return cls()
+            def to(self, dev): log(step='device', device=dev); return self
+            def eval(self): return self
+            def _process_fn(self, b): return b
+            def predict_step(self, batch, skeleton_tokens=None, make_asset=False):
+                log(step='predict', keep=skeleton_tokens is not None, beams=batch['generate_kwargs']['num_beams'],
+                    has_tokens='skeleton_tokens' in batch)
+                return {'results': [_Pred()]}
+    """,
+    "src/rig_package/__init__.py": "",
+    "src/rig_package/parser/__init__.py": "",
+    "src/rig_package/parser/bpy.py": """
+        import os, shutil
+        from src._log import log
+        class BpyParser: pass
+        def transfer_rigging(source_asset, target_path, export_path, **kw):
+            log(step='transfer', target=os.path.basename(target_path), group=kw.get('group_per_vertex'))
+            shutil.copyfile(os.environ['FAKE_RIGGED'], export_path)
+    """,
+}
+
+# Just enough of torch and transformers for skintokens_run.py: a GPU of FAKE_VRAM_GB, a torch.load that says
+# whether it was asked for weights-only loading.
+FAKE_SKIN_TORCH = {
+    "torch/__init__.py": """
+        import contextlib, os
+        class Tensor(list):
+            def to(self, dev): return self
+            def __getitem__(self, i):
+                if isinstance(i, Tensor):           # a mask
+                    return Tensor([x for x, m in zip(self, i) if m])
+                v = list.__getitem__(self, i)
+                return Tensor(v) if isinstance(v, list) else v
+            def __eq__(self, o): return Tensor([x == o for x in self])
+            def cpu(self): return self
+            def numpy(self): return list(self)
+        class _Props: total_memory = float(os.environ.get('FAKE_VRAM_GB', '24')) * 2 ** 30
+        class cuda:
+            @staticmethod
+            def is_available(): return True
+            @staticmethod
+            def get_device_properties(i): return _Props()
+        class serialization:
+            @staticmethod
+            def add_safe_globals(x): pass
+        def load(f, map_location=None, weights_only=None, **kw): return {'weights_only': weights_only}
+        def manual_seed(s): pass
+        no_grad = contextlib.nullcontext
+    """,
+    "transformers/__init__.py": """
+        class AutoModelForCausalLM:
+            @staticmethod
+            def from_config(*a, **k): return None
+    """,
+}
+
 # Just enough of torch and kimodo for scripts/rig/kimodo_run.py to run its protocol.
 FAKE_KIMODO = {
     "torch/__init__.py": """
@@ -165,13 +281,19 @@ class RigRoutes(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.mkdtemp()
         cls.sent = []
-        cls.env = {k: os.environ.get(k) for k in ("IMAGE_VIEWER_RIG_TOOLS", "FAKE_RIGGED", "FAKE_KIMODO_LOG", "UNIRIG_DEVICE")}
+        cls.env = {k: os.environ.get(k) for k in ("IMAGE_VIEWER_RIG_TOOLS", "FAKE_RIGGED", "FAKE_KIMODO_LOG", "UNIRIG_DEVICE",
+                                                  "FAKE_SKIN_LOG")}
         cls.app, cls.dirs, cls.pkg = _load(cls.tmp, cls.sent)
         cls.routes = importlib.import_module(cls.pkg + ".rig_routes")
         cls.abc_io = importlib.import_module(cls.pkg + ".abc_io")
         unirig = os.path.join(cls.tmp, "UniRig")
         fake = os.path.join(cls.tmp, "fakemods")
         _tree(unirig, FAKE_UNIRIG)
+        skintokens = os.path.join(cls.tmp, "SkinTokens")
+        _tree(skintokens, FAKE_SKINTOKENS)
+        skintorch = os.path.join(cls.tmp, "skintorch")
+        _tree(skintorch, FAKE_SKIN_TORCH)
+        cls.skinlog = os.path.join(cls.tmp, "skintokens.log")
         _tree(fake, FAKE_KIMODO)
         posefake = os.path.join(cls.tmp, "posefake")
         _tree(posefake, FAKE_POSETRACK)
@@ -191,9 +313,11 @@ class RigRoutes(unittest.TestCase):
         cfg = os.path.join(cls.tmp, "rig_tools.json")
         with open(cfg, "w", encoding="utf-8") as fh:
             json.dump({"unirig": {"python": sys.executable, "repo": unirig},
+                       "skintokens": {"python": sys.executable, "repo": skintokens, "env": {"PYTHONPATH": skintorch}},
                        "kimodo": {"python": sys.executable, "env": {"PYTHONPATH": fake}, "text_encoder_device": "cpu"},
                        "posetrack": {"python": sys.executable, "env": {"PYTHONPATH": posefake}, "model": task}}, fh)
-        os.environ.update(IMAGE_VIEWER_RIG_TOOLS=cfg, FAKE_RIGGED=rigged, FAKE_KIMODO_LOG=cls.log, UNIRIG_DEVICE="cuda")
+        os.environ.update(IMAGE_VIEWER_RIG_TOOLS=cfg, FAKE_RIGGED=rigged, FAKE_KIMODO_LOG=cls.log, UNIRIG_DEVICE="cuda",
+                          FAKE_SKIN_LOG=cls.skinlog)
 
     @classmethod
     def tearDownClass(cls):
@@ -320,11 +444,16 @@ class RigRoutes(unittest.TestCase):
             return tools, r2.status, r3.status, r4.status
         tools, bad_mode, few, missing = self.run_c(go)
         self.assertTrue(tools["unirig"]["ready"], tools)
+        self.assertTrue(tools["skintokens"]["ready"], tools)
         self.assertTrue(tools["kimodo"]["ready"], tools)
         self.assertEqual(tools["kimodo"]["model"], "Kimodo-SOMA-RP-v1.2")
         self.assertEqual((bad_mode, few, missing), (400, 400, 404))
         missing_cfg = self.routes.tool_status({"unirig": {"python": "/no/python"}})
         self.assertFalse(missing_cfg["unirig"]["ready"])
+        self.assertFalse(missing_cfg["skintokens"]["ready"])
+        no_ckpt = self.routes.tool_status({"skintokens": {"python": sys.executable, "repo": self.tmp}})
+        self.assertFalse(no_ckpt["skintokens"]["ready"])
+        self.assertIn("checkpoint", no_ckpt["skintokens"]["why"])
         self.assertFalse(missing_cfg["kimodo"]["ready"])
 
     def test_agent_requests_go_to_the_page_and_back(self):
@@ -428,6 +557,64 @@ class RigRoutes(unittest.TestCase):
         log = " ".join(job["log"])
         for step in ("reading the mesh", "predicting the skeleton", "predicting the skin weights", "merging onto the model"):
             self.assertIn(step, log)
+
+    def skin_log(self):
+        with open(self.skinlog, encoding="utf-8") as fh:
+            return [json.loads(l) for l in fh if l.strip()]
+
+    def test_autorig_with_skintokens(self):
+        async def go(c, **extra):
+            body = {"src": {"filename": "statue.glb", "type": "input"}, "name": "statue", "seed": 3, **extra}
+            r = await c.post("/imageviewer/rig/autorig", json=body)
+            got = await r.json()
+            return (r.status, got) if r.status != 200 else (200, await self.wait(c, got))
+        if os.path.exists(self.skinlog):
+            os.remove(self.skinlog)
+        st, job = self.run_c(lambda c: go(c, engine="skintokens"))
+        self.assertEqual(job["state"], "done", job)
+        self.assertEqual(job["result"]["engine"], "skintokens")
+        self.assertIn("statue_rig", job["result"]["name"])
+        self.assertTrue(os.path.isfile(job["result"]["path"]))
+        log = " ".join(job["log"])
+        for step in ("SkinTokens on cuda", "reading the mesh", "predicting the skeleton and skin weights", "22 bones",
+                     "putting the rig onto the model"):
+            self.assertIn(step, log)
+        self.assertNotIn("warning", log)
+        calls = {c["step"]: c for c in self.skin_log()}
+        self.assertTrue(calls["load"]["weights_only"], calls)            # never torch.load(weights_only=False)
+        self.assertEqual(calls["dataset"]["loader"], "bpy")               # no bpy server, no network port
+        self.assertEqual(calls["dataset"]["workers"], 0)
+        self.assertTrue(calls["dataset"]["files"][0].endswith("model.glb"))
+        self.assertFalse(calls["predict"]["keep"])
+        self.assertFalse(calls["predict"]["has_tokens"])
+        self.assertEqual(calls["transfer"], {"step": "transfer", "target": "model.glb", "group": 4})
+
+        # Keep the model's skeleton: skin weights only. Only SkinTokens can, and only with a skeleton there.
+        os.remove(self.skinlog)
+        os.environ["FAKE_SKIN_HAS_SKELETON"] = "1"
+        try:
+            st, job = self.run_c(lambda c: go(c, engine="skintokens", keep_skeleton=True))
+        finally:
+            os.environ.pop("FAKE_SKIN_HAS_SKELETON", None)
+        self.assertEqual(job["state"], "done", job)
+        self.assertIn("keeping the model's skeleton", " ".join(job["log"]))
+        self.assertTrue({c["step"]: c for c in self.skin_log()}["predict"]["keep"])
+        st, job = self.run_c(lambda c: go(c, engine="skintokens", keep_skeleton=True))
+        self.assertEqual(job["state"], "error", job)
+        self.assertIn("no skeleton to keep", job["error"])
+        st, body = self.run_c(lambda c: go(c, engine="unirig", keep_skeleton=True))
+        self.assertEqual(st, 400, body)
+        st, body = self.run_c(lambda c: go(c, engine="blender"))
+        self.assertEqual(st, 400, body)
+
+        # A GPU with less than SkinTokens asks for: it still runs, and says so.
+        os.environ["FAKE_VRAM_GB"] = "8"
+        try:
+            st, job = self.run_c(lambda c: go(c, engine="skintokens"))
+        finally:
+            os.environ.pop("FAKE_VRAM_GB", None)
+        self.assertEqual(job["state"], "done", job)
+        self.assertIn("warning: this GPU has 8 GB", " ".join(job["log"]))
 
     def test_autorig_reads_alembic_and_says_why_it_failed(self):
         # An Alembic is handed to UniRig as an OBJ of its first frame.

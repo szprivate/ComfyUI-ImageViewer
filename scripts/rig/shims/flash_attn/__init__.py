@@ -1,8 +1,11 @@
-"""flash_attn stand-in: the two calls UniRig makes, on PyTorch's scaled_dot_product_attention."""
+"""flash_attn stand-in: the two calls UniRig makes and the one SkinTokens makes (flash_attn_func, in
+flash_attn_interface), on PyTorch's scaled_dot_product_attention."""
 import torch
 import torch.nn.functional as F
 
 __version__ = "0.0.0+viewer-shim"
+
+from .flash_attn_interface import flash_attn_func  # noqa: E402,F401
 
 
 def flash_attn_varlen_qkvpacked_func(qkv, cu_seqlens, max_seqlen, dropout_p=0.0, softmax_scale=None, causal=False, **_):
