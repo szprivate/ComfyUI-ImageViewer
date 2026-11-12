@@ -1417,6 +1417,18 @@ export const PrevizMixin = {
         }
         const view = this._modelView();
         const at = view && view.viewFocus && view.viewFocus();
+        // Sized to the scene: the grid's power of ten after Frame all (100 beside
+        // a character in centimetres), never below a unit - framing one small
+        // plane puts the grid at 0.1, and the next plane would shrink with it.
+        const size = Math.max(1, (view && Number(view._gridAutoScale)) || 1);
+        // Standing on the floor below where the view looks (the view's own
+        // height moves once the first plane is framed), beside the planes
+        // already there, not on top of them: the next free place along X, two
+        // plane heights apart.
+        const base = at ? [at[0], at[1], at[2]] : [0, 0, 0];
+        const taken = (x, y, z) => scene.items.some((i) => i.kind === "imageplane" && Array.isArray(i.position)
+            && Math.abs(i.position[0] - x) < size && Math.abs(i.position[1] - y) < size
+            && Math.abs(i.position[2] - z) < size);
         let k = 0;
         for (const it of planes) {
             const src = it.url && !it.path ? await this._previzSrcFor(it) : this._srcOfFrame(it);
@@ -1426,8 +1438,9 @@ export const PrevizMixin = {
             src.name = src.name || name;
             const item = S.makeImagePlaneItem(src, S.uniqueName(scene, this._basename(name)));
             // Facing the view where it looks; several side by side.
-            if (at) item.position = [at[0], item.position[1] + at[1], at[2]];
-            if (k) item.position = [item.position[0] + k * 2, item.position[1], item.position[2]];
+            while (taken(base[0] + k * 2 * size, 0.5 * size, base[2]) && k < 1000) k++;
+            item.position = [base[0] + k * 2 * size, 0.5 * size, base[2]];
+            item.scale = [size, size, size];
             k++;
             scene.items.push(item);
             last = item; added++;

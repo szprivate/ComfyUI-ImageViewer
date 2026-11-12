@@ -188,6 +188,27 @@ class DropHistoryInto3DTests(unittest.TestCase):
         self.assertEqual(paths, ["D:/out/chair.glb", "D:/out/world.spz"])
         self.assertEqual(undo, 0)
 
+    def test_drops_one_after_the_other_stand_side_by_side_and_take_the_scenes_size(self):
+        pg = self._page()
+        try:
+            pg.evaluate(DROP, [_item("D:/out/tall.png", "image")])
+            pg.wait_for_function("() => window.__panel.previzScene().items.length === 1", timeout=10000)
+            pg.evaluate(DROP, [_item("D:/out/tall.png", "image")])
+            pg.wait_for_function("() => window.__panel.previzScene().items.length === 2", timeout=10000)
+            first = pg.evaluate("() => window.__panel.previzScene().items.map((i) => i.position)")
+            # A scene in centimetres: Frame all has put the grid at 100.
+            pg.evaluate("() => { window.__panel.previzScene().items.length = 0; window.__panel._modelView()._gridAutoScale = 100; return true; }")
+            pg.evaluate(DROP, [_item("D:/out/tall.png", "image")])
+            pg.wait_for_function("() => window.__panel.previzScene().items.length === 1", timeout=10000)
+            big = pg.evaluate("() => { const i = window.__panel.previzScene().items[0]; return { s: i.scale, p: i.position }; }")
+        finally:
+            pg.close()
+        self.assertAlmostEqual(first[1][0] - first[0][0], 2.0, places=5)
+        self.assertAlmostEqual(first[1][1], first[0][1], places=5)
+        self.assertEqual(big["s"], [100, 100, 100])
+        self.assertAlmostEqual(first[0][1], 0.5, places=5)
+        self.assertAlmostEqual(big["p"][1], 50, places=3)
+
     def test_a_drop_on_the_viewer_tab_still_opens_it_there(self):
         pg = self._page(setup=False)
         try:
