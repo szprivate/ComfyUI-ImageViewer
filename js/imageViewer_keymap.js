@@ -240,6 +240,8 @@ const ACTION_DEFS = [
       enabled: _previz, run: (p) => p.previzSetMaterialMode("normal") },
     { key: "View3DWireframe", label: "3D View: Wireframe",
       enabled: _previz, run: (p) => p.previzSetMaterialMode("wireframe") },
+    { key: "View3DPathtraced", label: "3D View: Path Traced",
+      enabled: _previz, run: (p) => p.previzSetMaterialMode("pathtraced") },
     { key: "View3DCycleLook", label: "3D View: Cycle Material Mode",
       enabled: _previz, run: (p) => p.previzCycleMaterialMode() },
     { key: "View3DGrid",      label: "3D View: Show / Hide Grid",

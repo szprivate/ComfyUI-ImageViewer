@@ -2643,6 +2643,10 @@ audio.src-media { width: 90%; }
 .model-mb-right .model-grid-menu .model-btn.model-grid-reset { margin: 6px 10px 4px; height: 22px; }
 .model-mb-right .model-icon-btn svg { width: 14px; height: 14px; }
 .model-stage { position: absolute; top: 30px; left: 0; right: 0; bottom: 0; overflow: hidden; }
+/* Path traced shading: how far the picture has got (imageViewer_view3dPathTrace.js). */
+.model-pt-badge { position: absolute; left: 50px; top: 8px; z-index: 6; pointer-events: none;
+    padding: 2px 8px; border-radius: 4px; background: rgba(0, 0, 0, 0.55); color: #ddd;
+    font: 11px/16px sans-serif; white-space: nowrap; }
 .model-toolcol {
     position: absolute; top: 38px; left: 8px; z-index: 3;
     display: flex; flex-direction: column; gap: 3px; padding: 4px;

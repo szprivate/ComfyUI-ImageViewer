@@ -338,6 +338,9 @@ export const PrevizAgentSceneMixin = {
         if (Number(a.width) > 0 && Number(a.height) > 0) { st.width = Math.round(a.width); st.height = Math.round(a.height); st.useCameraRes = false; }
         for (const k of ["format", "shading", "background", "color", "quality", "codec"]) if (a[k]) st[k] = a[k];
         for (const k of ["scale", "aa", "fps"]) if (Number(a[k]) > 0) st[k] = Number(a[k]);
+        // The second renderer (imageViewer_view3dPathTrace.js): "raster" or "pathtraced".
+        if (a.renderer === "raster" || a.renderer === "pathtraced") st.renderer = a.renderer;
+        for (const k of ["samples", "bounces"]) if (Number(a[k]) > 0) st[k] = Math.round(Number(a[k]));
         if (a.add_node !== undefined) st.addNode = !!a.add_node;
         if (a.grid !== undefined) st.grid = !!a.grid;
         return this._asaRenderResult(await this.previzRender(st, { label: "Shot rendered" }));
