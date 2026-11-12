@@ -91,6 +91,11 @@ const ACTION_DEFS = [
       run: (p) => p.setFrame(p.getTimelineBounds().min) },
     { key: "LastFrame",    label: "Go To Last Frame",        combo: { key: "ArrowRight", ctrl: true },
       run: (p) => p.setFrame(p.getTimelineBounds().max) },
+    // Houdini's Space over a pane: that view fills the stage, Space again brings the layout back.
+    // Before Play / Pause, which keeps Space everywhere else (a combo's first enabled action wins).
+    { key: "View3DMaximisePane", label: "3D View: Maximise the View Under the Mouse / Show All Views", combo: { key: " " },
+      enabled: (p) => _previz(p) && !!(p._model3d && p._model3d.paneSpaceTarget && p._model3d.paneSpaceTarget() !== null),
+      run: (p, e) => { if (!(e && e.repeat)) p._model3d.paneSpaceToggle(); } },
     { key: "PlayPause",    label: "Play / Pause",            combo: { key: " " },
       run: (p) => { p.isPlaying ? p.stop() : p.play(); } },
 
@@ -440,6 +445,19 @@ export function resolveViewerAction(ev, panel) {
         if (!hit.action.enabled || (panel && hit.action.enabled(panel))) return hit.action;
     }
     return hits[0].action;
+}
+
+/**
+ * The key an action answers to now (the user's binding if there is one), as a
+ * menu shows it - "Ctrl+Z" - or "" for none. `key` is the action's short name
+ * ("PrevizUndo"), without the command prefix.
+ */
+export function viewerActionKeyLabel(key) {
+    const id = VIEWER_CMD_PREFIX + key;
+    for (const hits of effectiveMap().values()) {
+        for (const { action, combo } of hits) if (action.id === id) return comboLabel(combo);
+    }
+    return "";
 }
 
 /** Forget the cached merge — for tests, and whenever the settings are replaced. */

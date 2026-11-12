@@ -9,20 +9,22 @@
 // the same entry lists the old buttons used, so what is enabled is always
 // what is true now. Once one menu is open, moving onto another opens that one.
 import { rigMenuOf } from "./imageViewer_previzRig.js";
+import { viewerActionKeyLabel } from "./imageViewer_keymap.js";
 import { DISPLAY_KINDS } from "./imageViewer_view3dTools.js";
 import { MATERIAL_MODES } from "./imageViewer_model3d.js";
 import { PANE_VIEWS, PANE_LAYOUTS } from "./imageViewer_view3dPanes.js";
 
 // The panels of the 3D space, as the bar's 3D group lists them.
+// The third field is the keymap action that shows / hides it (bindable in Settings -> Keybinding).
 const WINDOWS = [
-    ["Outliner", "previz"],
-    ["Channel Box", "channels"],
-    ["Curve Editor", "curves"],
-    ["Dope Sheet", "dopeSheet"],
+    ["Outliner", "previz", "View3DPrevizPanel"],
+    ["Channel Box", "channels", "View3DChannelBox"],
+    ["Curve Editor", "curves", "View3DCurvesPanel"],
+    ["Dope Sheet", "dopeSheet", "View3DDopeSheet"],
     ["Anim Layers", "animLayers"],
     ["Layers", "layers3d"],
     ["Character Picker", "picker"],
-    ["Clip Sequencer", "clips"],
+    ["Clip Sequencer", "clips", "View3DClipsPanel"],
     ["Parameters", "params"],
     ["History", "history"],
 ];
@@ -33,7 +35,7 @@ const MENUS = [
     ["Edit", "previz-mb-edit", (p) => p._previzEditBarEntries()],
     ["Create", "previz-mb-create", (p) => p._previzAddMenuEntries()],
     ["Rig", "previz-rig", (p, a) => rigMenuOf(p._previzRigMenuEntries(a), "rig")],
-    ["Animate", "previz-anim", (p, a) => rigMenuOf(p._previzRigMenuEntries(a), "anim")],
+    ["Animate", "previz-anim", (p, a) => [...p._previzKeyMenuEntries(), "-", ...rigMenuOf(p._previzRigMenuEntries(a), "anim")]],
     ["Constrain", "previz-constrain", (p) => p._previzConstrainMenuEntries()],
     ["World", "previz-atlas-menu", (p) => p._previzWorldBarEntries()],
     ["View", "previz-mb-view", (p) => p._previzViewMenuEntries()],
@@ -105,18 +107,18 @@ export const PrevizMenuBarMixin = {
     _previzFileMenuEntries() {
         const exports = rigMenuOf(this._previzRigMenuEntries(null), "file");
         return [
-            { label: "New scene", run: () => this.previzNewScene() },
-            { label: "Open scene…", run: () => this.previzLoadSceneFile() },
-            { label: "Open USD / Alembic…", run: () => this.previzImportUsd() },
+            { label: "New scene", cmd: "PrevizNewScene", run: () => this.previzNewScene() },
+            { label: "Open scene…", cmd: "PrevizLoadScene", run: () => this.previzLoadSceneFile() },
+            { label: "Open USD / Alembic…", cmd: "PrevizImportUsd", run: () => this.previzImportUsd() },
             { label: "Reference scene…", title: "Bring a saved scene in under a namespace, linked: "
                 + "a newer version of the file is picked up here", run: () => this.previzReferenceDialog() },
             "-",
-            { label: "Save scene…", run: () => this.previzSaveSceneFile() },
-            { label: "Export USD…", run: () => this.previzExportUsd() },
+            { label: "Save scene…", cmd: "PrevizSaveScene", run: () => this.previzSaveSceneFile() },
+            { label: "Export USD…", cmd: "PrevizExportUsd", run: () => this.previzExportUsd() },
             ...(exports.length ? [{ label: "Export character", sub: exports }] : []),
             "-",
-            { label: "Render…", run: () => this.previzRenderDialog() },
-            { label: "Playblast…", disabled: !this.previzPlayblastDialog, run: () => this.previzPlayblastDialog() },
+            { label: "Render…", cmd: "PrevizRender", run: () => this.previzRenderDialog() },
+            { label: "Playblast…", cmd: "PrevizPlayblast", disabled: !this.previzPlayblastDialog, run: () => this.previzPlayblastDialog() },
         ];
     },
 
@@ -126,19 +128,43 @@ export const PrevizMenuBarMixin = {
         const none = !ids.length;
         const why = "Select something first.";
         return [
-            { label: "Undo", disabled: !this.previzCanUndo(), title: "Nothing to undo", run: () => this.previzUndo() },
-            { label: "Redo", disabled: !this.previzCanRedo(), title: "Nothing to redo", run: () => this.previzRedo() },
+            { label: "Undo", cmd: "PrevizUndo", disabled: !this.previzCanUndo(), title: "Nothing to undo", run: () => this.previzUndo() },
+            { label: "Redo", cmd: "PrevizRedo", disabled: !this.previzCanRedo(), title: "Nothing to redo", run: () => this.previzRedo() },
             "-",
-            { label: "Select all", run: () => this.previzSelectAll() },
-            { label: "Rename", disabled: none || many, title: none ? why : "One item at a time.",
+            { label: "Select all", cmd: "PrevizSelectAll", run: () => this.previzSelectAll() },
+            { label: "Rename", cmd: "PrevizRename", disabled: none || many, title: none ? why : "One item at a time.",
               run: () => this.previzBeginRename(ids[0]) },
-            { label: many ? `Duplicate ${ids.length} items` : "Duplicate", disabled: none, title: why,
+            { label: many ? `Duplicate ${ids.length} items` : "Duplicate", cmd: "PrevizDuplicate", disabled: none, title: why,
               run: () => this.previzDuplicate(ids) },
-            { label: many ? `Delete ${ids.length} items` : "Delete", disabled: none, title: why,
+            { label: many ? `Delete ${ids.length} items` : "Delete", cmd: "PrevizDelete", disabled: none, title: why,
               run: () => this.previzDelete(ids) },
-            { label: "Group", disabled: none, title: why, run: () => this.previzGroupSelection() },
+            { label: "Group", cmd: "PrevizGroup", disabled: none, title: why, run: () => this.previzGroupSelection() },
+            "-",
+            { label: "Tool", sub: [
+                ["select", "Select", "GizmoSelect"], ["translate", "Move", "GizmoMove"],
+                ["rotate", "Rotate", "GizmoRotate"], ["scale", "Scale", "GizmoScale"],
+            ].map(([mode, label, cmd]) => ({ label: tick(this._modelView().gizmoMode === mode, label), cmd,
+                                             run: () => this.previzSetGizmoMode(mode) })).concat(["-",
+                { label: tick(this._modelView().gizmoSpace === "local", "Local axes"), cmd: "GizmoSpace",
+                  run: () => this.previzToggleGizmoSpace() }]) },
             "-",
             ...this._previzEditMenuEntries(),
+        ];
+    },
+
+    /** Keying the selection, at the top of Animate: the keys Maya has for it. */
+    _previzKeyMenuEntries() {
+        const none = !this.previzSelectedIds().length;
+        const why = "Select something first.";
+        const key = (label, cmd, run) => ({ label, cmd, disabled: none, title: why, run });
+        return [
+            key("Set key", "PrevizKeyS", () => this.previzKeyAll()),
+            key("Key selected channels", "PrevizKeyChannels", () => this.previzKeySelectedChannels()),
+            key("Key translate", "PrevizKeyMove", () => this.previzKeyAll("position")),
+            key("Key rotate", "PrevizKeyRotate", () => this.previzKeyAll("rotation")),
+            key("Key scale", "PrevizKeyScale", () => this.previzKeyAll("scale")),
+            key("Delete key at playhead", "PrevizDeleteKey", () => this.previzDeleteKey()),
+            { label: tick(!!this._previzAutokey, "Autokey"), cmd: "PrevizAutokey", run: () => this.previzToggleAutokey() },
         ];
     },
 
@@ -146,13 +172,13 @@ export const PrevizMenuBarMixin = {
         const world = this.previzHasWorld && this.previzHasWorld();
         const walking = !!(this._model3d && this._model3d.walking);
         const out = [
-            { label: tick(walking, "Walk"), disabled: !(this.previzCanMove && this.previzCanMove()),
-              title: "Walk through the world (Shift+J): W A S D, mouse to look, Esc stops. Needs a world.",
+            { label: tick(walking, "Walk"), cmd: "WorldWalk", disabled: !(this.previzCanMove && this.previzCanMove()),
+              title: "Walk through the world: W A S D, mouse to look, Esc stops. Needs a world.",
               run: () => this.previzWalkToggle() },
             { label: "Match to reference", disabled: !world, title: world
                 ? "Set exposure, light, fog and glow from the world's reference picture" : "Needs a world.",
               run: () => this.previzMatchReference() },
-            { label: "Note…", disabled: !world, title: world ? "Pin a note to a spot (Shift+N)" : "Needs a world.",
+            { label: "Note…", cmd: "WorldNote", disabled: !world, title: world ? "Pin a note to a spot" : "Needs a world.",
               run: () => this.previzFeedbackPlace() },
         ];
         const atlas = this.previzAtlasMenuEntries ? this.previzAtlasMenuEntries() : [];
@@ -167,16 +193,16 @@ export const PrevizMenuBarMixin = {
         const pane = view._paneState ? view._paneState() : null;
         const kind = view.paneActiveKind ? view.paneActiveKind() : "persp";
         return [
-            { label: "Frame selected (F)", run: () => this.previzFKey ? this.previzFKey() : view.resetView() },
+            { label: "Frame selected", cmd: "FitView", run: () => this.previzFKey ? this.previzFKey() : view.resetView() },
             { label: "Frame all", run: () => view.resetView() },
             "-",
             { label: "Shading", sub: MATERIAL_MODES.map(([v, l]) => ({
-                label: tick(view.materialMode === v, l), run: () => view.setMaterialMode(v) })) },
-            { label: tick(view.showGrid, "Grid"), run: () => view.setGrid(!view.showGrid) },
+                label: tick(view.materialMode === v, l), cmd: `View3D${v[0].toUpperCase()}${v.slice(1)}`, run: () => view.setMaterialMode(v) })) },
+            { label: tick(view.showGrid, "Grid"), cmd: "View3DGrid", run: () => view.setGrid(!view.showGrid) },
             { label: "Show", sub: [
                 { label: "All", run: () => view.setAllDisplayed(true) },
                 "-",
-                ...DISPLAY_KINDS.map((k, i) => ({ label: tick(view.isDisplayed(k.key), `${k.label}   Shift+${i + 1}`),
+                ...DISPLAY_KINDS.map((k, i) => ({ label: tick(view.isDisplayed(k.key), k.label), keys: `Shift+${i + 1}`,
                                                   run: () => view.setDisplayed(k.key) })),
                 "-",
                 { label: tick(!!view._dispXray, "X-Ray Joints"), run: () => view.setJointXray(!view._dispXray) },
@@ -188,6 +214,9 @@ export const PrevizMenuBarMixin = {
                 { label: "This view", sub: PANE_VIEWS.map(([k, label]) => ({
                     label: tick(kind === k, label), run: () => view.setPaneView(pane.active, k) })) },
                 { label: pane.layout === "single" ? "Show all views" : "Maximise this view",
+                  // Space toggles a split layout and a pane maximised from one; a single view picked by hand plays.
+                  keys: (pane.layout !== "single" || pane.restore) && viewerActionKeyLabel("View3DMaximisePane")
+                      ? `${viewerActionKeyLabel("View3DMaximisePane")} over a view` : "",
                   run: () => view.togglePaneMaximised() },
             ] : []),
             { label: "Look through", sub: [
@@ -200,8 +229,8 @@ export const PrevizMenuBarMixin = {
     },
 
     _previzWindowsMenuEntries() {
-        return WINDOWS.map(([label, id]) => ({
-            label: tick(this.isPanelDocked && this.isPanelDocked(id), label),
+        return WINDOWS.map(([label, id, cmd]) => ({
+            label: tick(this.isPanelDocked && this.isPanelDocked(id), label), cmd,
             run: () => this.togglePanelDocked(id),
         }));
     },
