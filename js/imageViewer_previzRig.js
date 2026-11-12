@@ -468,12 +468,13 @@ export const PrevizRigMixin = {
         const sel = S.itemById(scene, this._previzSelection);
         const ik = sel && this._previzRigIkFor(sel.id);
         const entries = [
+            { label: "Install AI rigging / motion models…", run: () => this.previzRigInstallDialog && this.previzRigInstallDialog() },
+            "-",
             { label: model ? `Add controls to ${model.name}` : "Add controls", disabled: !bones,
               run: () => this.previzRigCharacter(modelId) },
             { label: "Add FK controls only", disabled: !bones, run: () => this.previzRigCharacter(modelId, { humanoid: false }) },
             { label: "Auto-rig…", disabled: !model,
               run: () => this.previzAutoRigDialog && this.previzAutoRigDialog(modelId) },
-            { label: "Set up auto-rig and AI motion…", run: () => this.previzRigInstallDialog && this.previzRigInstallDialog() },
             { label: "Remove rig", disabled: !rigged, run: () => this.previzRemoveRig(modelId) },
             "-",
             { label: "Select all controls", disabled: !rigged, run: () => this.previzRigSelectControls(modelId) },
