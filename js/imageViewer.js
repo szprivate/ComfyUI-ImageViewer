@@ -844,6 +844,9 @@ class ViewerPanel extends HTMLElement {
             this.previzPanel.parentNode.insertBefore(cb, this.previzPanel.nextSibling);
             this.channelsPanel = cb;
         }
+        // Not a dock panel any more: the Parameters panel shows it on a 3D tab (imageViewer_previzChannels.js
+        // _cbParamsBox moves it in). Until then it stays out of the rail's way.
+        if (this.channelsPanel) this.channelsPanel.classList.add('cb-params');
         // The 3D space's Layers panel and its Character Picker (imageViewer_previzLayers.js).
         for (const [id, prop, cls] of [['layers3d', 'layers3dPanel', 'layers3d-panel'],
                                        ['picker', 'pickerPanel', 'picker-panel']]) {

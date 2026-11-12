@@ -82,7 +82,6 @@ export const ModelMixin = {
         this._model3d.setPanelStates({
             previz: this.isPanelDocked("previz"),
             curves: this.isPanelDocked("curves"),
-            channels: this.isPanelDocked("channels"),
         });
     },
 
@@ -105,6 +104,8 @@ export const ModelMixin = {
             // Put away, and brought back on the way out only if it was open.
             this._rotoCurvesWereOpen = !!this.isPanelDocked?.("rotoCurves");
             this.rotoShowCurves?.(false);
+            // The Parameters panel shows the Channel Box here (imageViewer_previzChannels.js).
+            this._cbParams?.(true);
         }
         this._applyModelLook();
 
@@ -130,6 +131,8 @@ export const ModelMixin = {
         if (!this._modelMode) return;
         this._modelMode = false;
         this.viewport.classList.remove("model-mode");
+        // ...and ComfyUI's node parameters again.
+        this._cbParams?.(false);
         // ...and come back with the picture, for a tool that is still on.
         const tool = this._toolState && this._toolState.active;
         if (tool && tool !== "none") {

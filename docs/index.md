@@ -37,7 +37,7 @@ Panels sit beside the picture and can be docked, stacked as tabs and stored in l
 | [Agent code](agent-code.md) | Read the code an agent writes |
 | [Dataset](dataset.md) | Review a LoRA training dataset and watch the training |
 
-Each space brings its own panels too: the Editor's Edit, Inspector and Effects, Paint's Layers, Properties and History, Comp's Node Graph, Properties and Layers, the 3D Outliner, Channel Box and Curve Editor.
+Each space brings its own panels too: the Editor's Edit, Inspector and Effects, Paint's Layers, Properties and History, Comp's Node Graph, Properties and Layers, the 3D Outliner and Curve Editor (the 3D space's Channel Box is the Parameters panel).
 
 ## More
 
