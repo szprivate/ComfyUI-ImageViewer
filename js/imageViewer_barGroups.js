@@ -24,7 +24,7 @@
 import { api } from "../../scripts/api.js";
 import { recentDocs } from "./imageViewer_recentDocs.js";
 import { makeScene } from "./imageViewer_scene3d.js";
-import { spaceIconSvg } from "./imageViewer_spaceIcons.js";
+import { spaceIconSvg, spaceColor } from "./imageViewer_spaceIcons.js";
 
 // The spaces' own icons (imageViewer_spaceIcons.js): the same ones their tabs show.
 const ICONS = {
@@ -34,6 +34,8 @@ const ICONS = {
     paint: spaceIconSvg("paint"),
     timeline: spaceIconSvg("edit"),
 };
+// The space each icon stands for, for its accent colour (SPACE_COLORS).
+const ICON_SPACE = { box: "3d", motion: "motion", comp: "comp", paint: "paint", timeline: "edit" };
 // ComfyUI's own mark, as its frontend ships it (white on black, as it is drawn).
 const COMFY_LOGO = "/assets/images/comfy-logo-mono.svg";
 
@@ -184,6 +186,8 @@ export const BarGroupsMixin = {
                 b.append(logo);
             } else {
                 b.innerHTML = ICONS[group.icon];
+                const accent = spaceColor(ICON_SPACE[group.icon]);
+                if (accent) { b.dataset.space = ICON_SPACE[group.icon]; b.style.setProperty("--space-color", accent); }
             }
             b.addEventListener("click", () => this._barGroupMenu(group, b));
             bar.append(b);

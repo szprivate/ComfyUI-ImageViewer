@@ -16,7 +16,7 @@
 import { api } from "../../scripts/api.js";
 import { notice } from "./imageViewer_exportUI.js";
 import { setPref, PREF } from "./imageViewer_settings.js";
-import { spaceIconSvg, stripSpaceEmoji } from "./imageViewer_spaceIcons.js";
+import { spaceIconSvg, spaceColor, stripSpaceEmoji } from "./imageViewer_spaceIcons.js";
 import { HISTORY_KEY, snapshotTab, stampSnapshot, snapshotGroup, setSnapshotGroup, historyGroups,
          liveIndexOf, historySections, historyDisplayOrder, moveGroupInOrder, renameInOrder, foldIntoTab, groupFromLabel, snapshotNode } from "./imageViewer_historyData.js";
 
@@ -2001,6 +2001,8 @@ export const HistoryMixin = {
             text = stripSpaceEmoji(labelText);
             btn.title = text;
             btn.dataset.space = space;
+            const accent = spaceColor(space);
+            if (accent) btn.style.setProperty('--space-color', accent);
             const icon = document.createElement('span');
             icon.className = 'tab-icon';
             icon.innerHTML = spaceIconSvg(space, 14);
@@ -2011,15 +2013,8 @@ export const HistoryMixin = {
         span.className = 'tab-label';           // truncated with an ellipsis; the title has it whole
         span.textContent = text;
         btn.appendChild(span);
-
-        // User-assigned tab color (right-click → pick), applied via CSS custom
-        // properties so hover/active styling keeps working.
-        if (typeof this._applyTabColor === 'function') this._applyTabColor(btn, key);
-        btn.addEventListener('contextmenu', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            if (typeof this._openTabColorMenu === 'function') this._openTabColorMenu(key, e.clientX, e.clientY);
-        });
+        // No menu of its own on a right-click (the colour menu went: groups replaced it).
+        btn.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); });
 
         // Reordering is previewed live: the dragged tab itself moves through the
         // bar as the pointer passes each neighbour's middle, and the others

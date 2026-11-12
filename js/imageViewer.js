@@ -1588,11 +1588,6 @@ class ViewerPanel extends HTMLElement {
         }
         this.updateTabHighlights();
 
-        // Keep the "Send to Viewer" nodes tinted to match their tab color even
-        // after nodes are (re)added or state is restored on a fresh graph.
-        if (this.tabColors && typeof this._applyColorToTabNodes === 'function') {
-            Object.keys(this.tabColors).forEach(k => this._applyColorToTabNodes(k, this.tabColors[k]));
-        }
     }
 
     _resolveTabLabel(k, node) {

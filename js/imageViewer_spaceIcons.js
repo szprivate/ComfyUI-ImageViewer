@@ -25,6 +25,25 @@ export const SPACE_ICON_SHAPES = {
     "3d": RING + '<path d="m12 6.5 5 2.75v5.5L12 17.5l-5-2.75v-5.5Z"/><path d="M12 12v5.5"/><path d="m7 9.25 5 2.75 5-2.75"/>',
 };
 
+// Each space's accent: the colour its icon is drawn in, on its group in the
+// lower bar and on its tab, so a space is known by colour as well as by shape.
+// Only the accent - a button's ground stays the bar's. Mid tones, so they read
+// on the dark presets and on a light ComfyUI palette alike, and none is the
+// viewer's orange (the accent of "this one is up").
+export const SPACE_COLORS = {
+    viewer: "#5b9bf0",   // blue
+    edit: "#e0a53c",     // amber
+    paint: "#e06c8c",    // rose
+    motion: "#a487ea",   // violet
+    comp: "#3bb8a6",     // teal
+    "3d": "#79b84e",     // green
+};
+
+/** The accent colour of a space, or "" for a kind that has none. */
+export function spaceColor(kind) {
+    return SPACE_COLORS[kind] || "";
+}
+
 /** The icon of a space as SVG markup, or "" for a kind that has none. */
 export function spaceIconSvg(kind, size = 24) {
     const inner = SPACE_ICON_SHAPES[kind];
