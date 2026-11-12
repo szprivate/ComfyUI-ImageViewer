@@ -836,8 +836,14 @@ export const DockMixin = {
             bar = doc.createElement("div");
             bar.className = "panel-titlebar";
 
-            const grip = doc.createElement("span");
-            grip.className = "pt-grip";
+            // The switch (Blender's editor-type button): the panel is a container, and this
+            // changes what it holds, in place (dockSwitchPanel). Was a plain drag grip.
+            const grip = doc.createElement("button");
+            grip.className = "pt-switch";
+            grip.id = `${id}-switch-btn`;
+            grip.title = "Show another panel here";
+            grip.setAttribute("aria-haspopup", "menu");
+            this._dockSwitchIcon(grip);
             const name = doc.createElement("span");
             name.className = "pt-name";
             name.textContent = DOCK_PANELS[id].label;
@@ -861,7 +867,8 @@ export const DockMixin = {
             bar.append(grip, name, fold, max, hide);
             el.insertBefore(bar, el.firstChild);
 
-            for (const b of [fold, max]) b.addEventListener("pointerdown", (e) => e.stopPropagation());
+            for (const b of [fold, max, grip]) b.addEventListener("pointerdown", (e) => e.stopPropagation());
+            grip.addEventListener("click", (e) => { e.stopPropagation(); this._dockSwitchMenu(id, grip); });
             fold.addEventListener("click", (e) => { e.stopPropagation(); this.dockToggleCollapsed(id); });
             max.addEventListener("click", (e) => { e.stopPropagation(); this.dockToggleMaximized(id); });
             bar.addEventListener("dblclick", (e) => { if (!e.target.closest("button, select, input, a")) this.dockToggleCollapsed(id); });
@@ -872,6 +879,104 @@ export const DockMixin = {
             bar.addEventListener("pointerdown", (e) => this._onDockHeaderDown(id, bar, e));
         }
         return bar;
+    },
+
+    // ── Switching what a panel shows (the button left of its name) ──────────
+
+    _dockSwitchIcon(btn) {
+        const doc = btn.ownerDocument, NS = "http://www.w3.org/2000/svg";
+        const svg = (paths, cls) => {
+            const s = doc.createElementNS(NS, "svg");
+            s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("fill", "none"); s.setAttribute("stroke", "currentColor");
+            s.setAttribute("stroke-width", "2"); s.setAttribute("stroke-linecap", "round"); s.setAttribute("stroke-linejoin", "round");
+            if (cls) s.setAttribute("class", cls);
+            for (const [tag, at] of paths) {
+                const n = doc.createElementNS(NS, tag);
+                for (const [k, v] of Object.entries(at)) n.setAttribute(k, v);
+                s.append(n);
+            }
+            return s;
+        };
+        // Lucide's panels-top-left and chevron-down, as shapes (ISC licence).
+        btn.replaceChildren(
+            svg([["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2" }], ["path", { d: "M3 9h18" }], ["path", { d: "M9 21V9" }]]),
+            svg([["path", { d: "m6 9 6 6 6-6" }]], "pt-caret"));
+    },
+
+    /**
+     * The panels a place can switch to, by space: [{ title, items: [{ id, label }] }].
+     * The bar's groups say which panels belong to which space and when they can be up
+     * (BarGroupsMixin.panelSwitchGroups); without them, every panel there is.
+     */
+    _dockSwitchGroups() {
+        if (this.panelSwitchGroups) return this.panelSwitchGroups();
+        return [{ title: "Panels", items: Object.keys(DOCK_PANELS).filter((id) => this._dockPanelEl(id))
+            .map((id) => ({ id, label: DOCK_PANELS[id].label })) }];
+    },
+
+    _dockSwitchMenu(id, btn) {
+        if (this._previzAddMenu) { const was = this._dockSwitchOpen; this._previzCloseAddMenu(); if (was === id) return; }
+        const entries = [];
+        for (const g of this._dockSwitchGroups()) {
+            if (entries.length) entries.push("-");
+            entries.push({ head: g.title });
+            for (const it of g.items) {
+                const here = it.id === _dockId(id);
+                const elsewhere = !here && this.isPanelDocked(it.id);
+                entries.push({
+                    label: (here ? "\u2713  " : "     ") + it.label,
+                    title: here ? "Shown here" : elsewhere ? "Open in another place: the two swap places" : "Show it here instead",
+                    run: () => { if (!here) this.dockSwitchPanel(id, it.id); },
+                });
+            }
+        }
+        const r = btn.getBoundingClientRect();
+        const menu = this._previzOpenMenu && this._previzOpenMenu(entries, r.left, r.bottom + 3, btn);
+        if (!menu) return;
+        menu.classList.add("bar-menu", "pt-switch-menu");
+        this._dockSwitchOpen = id;
+        btn.classList.add("open");
+        // Lit while its menu is up; any way the menu goes puts it out.
+        const win = btn.ownerDocument.defaultView || window;
+        const off = () => { if (!menu.isConnected) { btn.classList.remove("open"); this._dockSwitchOpen = null; } else win.requestAnimationFrame(off); };
+        win.requestAnimationFrame(off);
+    },
+
+    /**
+     * Show `toId` in the place `fromId` has: the panels are containers, this changes what one holds.
+     * The two trade places - the one asked for comes up where the other was (its share of the rail,
+     * its tabs, folded or not), and the other goes where it was: hidden if it was hidden, else
+     * shown there, so a panel open elsewhere is never lost. One dockLayout change.
+     */
+    dockSwitchPanel(fromId, toId) {
+        fromId = _dockId(fromId); toId = _dockId(toId);
+        if (fromId === toId || !DOCK_PANELS[toId] || !this._dockPanelEl(toId)) return false;
+        const a = this._dockEntry(fromId), b = this._dockEntry(toId);
+        if (!a || !b) return false;
+        const PLACE = ["size", "tab", "behind", "collapsed", "hidden"];
+        const take = (e) => Object.fromEntries(PLACE.map((k) => [k, e[k]]));
+        const pa = take(a.entry), pb = take(b.entry);
+        const put = (e, p) => { for (const k of PLACE) { if (p[k] === undefined) delete e[k]; else e[k] = p[k]; } };
+        this.dockLayout[a.side].panels[a.index] = b.entry;
+        this.dockLayout[b.side].panels[b.index] = a.entry;
+        put(b.entry, pa); put(a.entry, pb);
+        b.entry.hidden = false;
+        if (this._dockMaxId === fromId) this._dockMaxId = toId;
+        else if (this._dockMaxId === toId) this._dockMaxId = fromId;
+        // A rail as narrow as the history strip would leave the newcomer unusable.
+        const spec = this.dockLayout[a.side], row = _isRow(a.side);
+        this._setRailSize(a.side, Math.max(row ? (spec.height || 0) : (spec.width || 0), DOCK_PANELS[toId][row ? "minH" : "minW"]));
+        // The Edit panels remember which of them are up for the next cut's tab.
+        if (this._editTlWant && this.isEditTab && this.isEditTab()) {
+            for (const [pid, on] of [[fromId, !pb.hidden], [toId, true]]) {
+                if (/^edit(Timeline|Inspector|Effects|Mixer)$/.test(pid)) this._editTlWant(pid, on);
+            }
+        }
+        this.applyDockLayout();
+        this.queuePersistViewerState && this.queuePersistViewerState();
+        if (this.barGroupsSync) this.barGroupsSync();
+        if (this.editTlRefresh && this.isEditTab && this.isEditTab()) this.editTlRefresh();
+        return true;
     },
 
     // ── Folding a panel, and one panel filling the viewer ───────────────────

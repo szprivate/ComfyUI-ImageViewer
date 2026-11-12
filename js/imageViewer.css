@@ -624,7 +624,15 @@ textarea.param-input {
 .dock-rail > .curves-panel,
 .dock-rail > .history-panel {
     width: auto; min-width: 0; flex-shrink: 1;
-    margin: 0; border-radius: 0;
+    margin: 0;
+}
+/* Every panel in a rail is a card of its own (Sebastian 2026-11-12: "slightly rounded outlines"):
+   a thin outline, rounded corners, its contents clipped to them, and a little room
+   around it, so the window's own background shows between the panels. */
+/* content-box: the rail's width is the panels' own, the room around them comes on top. */
+.dock-rail { padding: 3px; }
+.dock-rail > :not(.stack-splitter) {
+    border: 1px solid #333; border-radius: 7px; overflow: hidden; box-sizing: border-box;
 }
 .rail-splitter {
     display: none;                 /* shown alongside a rail that has panels */
@@ -636,7 +644,7 @@ textarea.param-input {
 .dock-rail.bottom {
     flex-direction: row;
     width: 100%; min-height: 0;
-    border-top: 1px solid #333;
+    border-top: 1px solid transparent;
 }
 .dock-rail.bottom > .params-panel,
 .dock-rail.bottom > .browser-panel,
@@ -646,14 +654,10 @@ textarea.param-input {
     height: auto; min-height: 0; flex-shrink: 1;
 }
 .stack-splitter {
-    flex: 0 0 6px;
-    cursor: row-resize; background: #111;
-    border-top: 1px solid #222; border-bottom: 1px solid #222;
+    flex: 0 0 5px;
+    cursor: row-resize; background: transparent; border-radius: 3px;
 }
-.stack-splitter.horizontal {
-    cursor: col-resize;
-    border: none; border-left: 1px solid #222; border-right: 1px solid #222;
-}
+.stack-splitter.horizontal { cursor: col-resize; }
 .rail-splitter:hover, .rail-splitter.dragging,
 .stack-splitter:hover, .stack-splitter.dragging { background: rgba(255,102,0,0.30); }
 
@@ -663,36 +667,48 @@ textarea.param-input {
 .panel-titlebar {
     flex: 0 0 auto;
     display: flex; align-items: center; gap: 4px;
-    height: 18px; padding: 0 4px; box-sizing: border-box;
+    height: 26px; padding: 0 5px 0 4px; box-sizing: border-box;
     background: #141414; border-bottom: 1px solid #262626;
-    font-size: 10px; color: #999;
+    font-size: 11px; color: #999;
     cursor: grab; user-select: none;
 }
 .panel-titlebar.dragging, .panel-titlebar:active { cursor: grabbing; }
 .panel-titlebar:hover { background: #191919; color: #ccc; }
-.pt-grip {
-    flex: 0 0 auto; width: 9px; height: 9px;
-    background-image: radial-gradient(currentColor 1px, transparent 1px);
-    background-size: 3px 3px; opacity: 0.5;
+/* The switch at the bar's left: which panel this place shows (_dockSwitchMenu).
+   The panel is a container; this changes what is in it. */
+.pt-switch {
+    flex: 0 0 auto; display: inline-flex; align-items: center; gap: 1px;
+    min-height: 0; height: 20px; padding: 0 3px 0 4px; margin: 0;
+    background: transparent; border: 1px solid transparent; border-radius: 5px;
+    color: #8a8a8a; cursor: pointer;
 }
-.pt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pt-switch > svg { width: 13px; height: 13px; }
+.pt-switch > svg.pt-caret { width: 9px; height: 9px; opacity: 0.7; }
+.pt-switch:hover, .pt-switch.open { color: #fff; background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.10); }
+.pt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; letter-spacing: 0.01em; }
 /* Panels that share a place: their names side by side in the bar, the one in
    front lit. */
-.pt-name.pt-tabs { display: flex; align-items: stretch; gap: 2px; height: 100%; }
-.pt-tab { flex: 0 1 auto; min-width: 0; min-height: 0; height: 100%; padding: 0 7px; border: none; border-radius: 3px 3px 0 0;
-          background: transparent; color: #888; font-size: 10px; line-height: 17px; cursor: pointer;
+.pt-name.pt-tabs { display: flex; align-items: center; gap: 2px; height: 100%; }
+.pt-tab { flex: 0 1 auto; min-width: 0; min-height: 0; height: 20px; padding: 0 8px; border: none; border-radius: 5px;
+          background: transparent; color: #888; font-size: 11px; line-height: 20px; cursor: pointer;
           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pt-tab:hover { color: #fff; background: #222; }
-.pt-tab.on { background: #262626; color: #eee; cursor: grab; box-shadow: inset 0 2px 0 #f60; }
+.pt-tab.on { background: #262626; color: #eee; cursor: grab; box-shadow: inset 0 -2px 0 #f60; }
 /* min-height, because the blanket `button` rule sets 32px and that beats height. */
 .pt-btn {
     flex: 0 0 auto; background: transparent; border: none; color: #888;
-    min-width: 14px; min-height: 14px; height: 14px; padding: 0;
-    cursor: pointer; font-size: 10px; line-height: 1; border-radius: 2px;
+    min-width: 20px; min-height: 0; height: 20px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer; font-size: 11px; line-height: 1; border-radius: 5px;
 }
 .pt-btn:hover { color: #fff; background: rgba(255,255,255,0.08); }
-.pt-btn > svg { width: 12px; height: 12px; }
+.pt-btn > svg { width: 13px; height: 13px; }
 .pt-close:hover { color: #fff; background: rgba(229,72,77,0.75); }
+/* A narrow panel (the History strip at its thumbnail width): the bar keeps the switch and the close
+   button, the name and the rest step aside in that order. */
+.panel-titlebar { container-type: inline-size; }
+@container (max-width: 130px) { .pt-max, .pt-switch > svg.pt-caret { display: none; } }
+@container (max-width: 100px) { .pt-fold, .pt-name { display: none; } .pt-close { margin-left: auto; } }
 .pt-btn:disabled { opacity: 0.35; cursor: default; }
 /* Folded: the title bar alone. Maximised: over the viewer, between its tab bar and its transport. */
 .dock-collapsed { min-height: 0 !important; min-width: 0 !important; }
@@ -1067,6 +1083,9 @@ textarea.param-input {
 }
 .previz-menu-item[data-key]:hover::after { color: #bbb; }
 .previz-menu-sep { height: 1px; margin: 3px 2px; background: #3a3a3a; }
+/* A heading inside a menu ({ head: "3D" }): names the rows under it, not pressable. */
+.previz-menu-head { padding: 5px 8px 2px; font-size: 9.5px; letter-spacing: 0.06em; text-transform: uppercase; color: #707070; user-select: none; }
+.previz-menu-sep + .previz-menu-head { padding-top: 3px; }
 .previz-btn, .previz-sel {
     background: #222; color: #ccc; border: 1px solid #444; border-radius: 3px;
     padding: 2px 6px; font-size: 11px; cursor: pointer;

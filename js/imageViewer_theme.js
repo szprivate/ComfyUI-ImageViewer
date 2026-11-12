@@ -56,7 +56,7 @@ export const THEME = [
     // ── The viewer around the Edit page ──
     { key: "window", name: "Window background", base: "1a1a1a", group: "chrome",
       tip: "Behind everything: what shows between and around the panels.",
-      rules: (c) => [[":host", `background: ${c}`], [".stack-splitter", `background: ${shade(c, -0.35)}`],
+      rules: (c) => [[":host", `background: ${c}`],
                      [".paint-root", `background: ${c}`], [".paint-view", `background: ${shade(c, -0.1)}`]] },
     { key: "panel", name: "Panel background", base: "0d0d0d", group: "chrome",
       tip: "Every dock panel: History, Parameters, files, the Edit panels (unless the timeline has its own below).",
@@ -97,7 +97,7 @@ export const THEME = [
       tip: "The tab that is up, the panel name in front, the outline of a button under the pointer.",
       rules: (c, v) => [[".tab.active", `color: ${c}; border-color: ${c}`],
                      ["button:hover, select:hover", `border-color: ${c}`],
-                     [".pt-tab.on", `box-shadow: inset 0 2px 0 ${c}`],
+                     [".pt-tab.on", `box-shadow: inset 0 -2px 0 ${c}`],
                      [".paint-btn:hover", `border-color: ${c}`], [".paint-btn.on", `border-color: ${c}`],
                      [".paint-optbar .paint-otool", `color: ${c}`], [".paint-status b", `color: ${c}`],
                      [".paint-sect h4", `color: ${c}`], [".paint-dlg h3", `color: ${c}`], [".paint-dlg", `border-color: ${c}`],

@@ -300,7 +300,7 @@ class ViewTabTests(unittest.TestCase):
         # Fold: the real button at the right of the title bar.
         pg.locator(sr + "#params-fold-btn").click()
         self.assertTrue(pg.evaluate("()=>__panel.isPanelCollapsed('params')"))
-        self.assertLess(box()[1], 24)
+        self.assertLess(box()[1], 34)        # the title bar (26 px since 2026-11-12) and the outline
         self.assertGreater(pg.evaluate("()=>__panel.browserPanel.getBoundingClientRect().height"), h0)   # the other takes the room
         self.assertTrue(pg.evaluate("()=>__panel.serializeDock().right.panels.find(p=>p.id==='params').collapsed"))
         # Kept through a layout round trip, and opened again by a double-click on the title.
