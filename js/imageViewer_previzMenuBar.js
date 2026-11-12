@@ -201,6 +201,9 @@ export const PrevizMenuBarMixin = {
             "-",
             { label: "Shading", sub: MATERIAL_MODES.map(([v, l]) => ({
                 label: tick(view.materialMode === v, l), cmd: `View3D${v[0].toUpperCase()}${v.slice(1)}`, run: () => view.setMaterialMode(v) })) },
+            { label: tick(!!(view.ptRasterWhileMoving && view.ptRasterWhileMoving()), "Path traced: raster while moving"),
+              title: "With Path traced shading: draw the view raster while an object moves or the shot plays, and trace again once it is still",
+              disabled: !view.ptRasterWhileMoving, run: () => view.ptSetRasterWhileMoving(!view.ptRasterWhileMoving()) },
             { label: tick(view.showGrid, "Grid"), cmd: "View3DGrid", run: () => view.setGrid(!view.showGrid) },
             { label: "Grid options…", title: "Size, spacing and major lines of the grid",
               disabled: !view.toggleGridMenu, run: () => view.toggleGridMenu(true) },

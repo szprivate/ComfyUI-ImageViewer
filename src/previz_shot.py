@@ -20,7 +20,8 @@ import uuid
 MAX_JOBS = 50
 MAX_ITEMS = 500
 RENDER_KEYS = ("camera", "start", "end", "fps", "width", "height", "useCameraRes", "scale", "format",
-               "quality", "shading", "background", "color", "aa", "grid", "helpers", "codec")
+               "quality", "shading", "background", "color", "aa", "grid", "helpers", "codec",
+               "renderer", "samples", "bounces")
 STATES = ("queued", "rendering", "done", "error")
 
 

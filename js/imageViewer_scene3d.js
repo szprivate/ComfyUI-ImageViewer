@@ -95,12 +95,16 @@ export function cameraResolution(item) {
 // camera being looked through, else the first one"; `end` null is the last
 // frame of the shot; `fps` null is the shot's own rate.
 export const RENDER_FORMATS = ["mp4", "mov", "webm", "png"];
+export const RENDERERS = ["raster", "pathtraced"];
 export const RENDER_DEFAULTS = {
     camera: null, useCameraRes: true, width: 1920, height: 1080, scale: 100,
     start: 0, end: null, fps: null,
     format: "mp4", quality: "high",
     shading: "original", background: "viewer", color: "#282828",
     aa: 2, grid: false, helpers: false, addNode: true,
+    // "raster" (the viewport's look) or "pathtraced" (imageViewer_view3dPathTrace.js),
+    // with the samples per frame and bounces a traced frame takes.
+    renderer: "raster", samples: 256, bounces: 6,
 };
 
 // The render dialog's starting point for a shot that has never been rendered,
@@ -139,6 +143,9 @@ export function renderSettings(scene) {
         grid: !!raw.grid,
         helpers: !!raw.helpers,
         addNode: raw.addNode !== false,
+        renderer: pick(raw.renderer, RENDERERS, d.renderer),
+        samples: int(raw.samples, 1, 16384, d.samples),
+        bounces: int(raw.bounces, 1, 32, d.bounces),
     };
 }
 

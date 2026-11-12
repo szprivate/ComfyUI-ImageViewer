@@ -13,6 +13,14 @@ Upstream: https://github.com/mrdoob/three.js, npm package `three@0.180.0`
 | `CopyShader.js`, `LuminosityHighPassShader.js`, `OutputShader.js` | `three@0.180.0/examples/jsm/shaders/` (the passes above need them) |
 | `RectAreaLightUniformsLib.js`, `RectAreaLightTexturesLib.js` | `three@0.180.0/examples/jsm/lights/` (3D space: area lights; loaded with the first one) |
 
+`three-gpu-pathtracer.module.js` is **three-gpu-pathtracer 0.0.24** (Garrett Johnson, MIT — see
+`LICENSE.pathtracer`), the 3D space's path traced renderer (`js/imageViewer_view3dPathTrace.js`); 0.0.24 is
+the last release that runs on three r180 (0.0.25 and up need r185 and move to WebGPU).
+`three-mesh-bvh.module.js` is **three-mesh-bvh 0.9.18** (MIT — see `LICENSE.bvh`), which it builds its BVH
+with. Both copied from `build/index.module.js`, imports rewritten (`'three'` → `'./three.module.js'`,
+`'three-mesh-bvh'` → `'./three-mesh-bvh.module.js'`, `'three/examples/jsm/postprocessing/Pass.js'` →
+`'./Pass.js'`), source-map line dropped.
+
 `spark.module.js` is **Spark 2.3.0** (`@sparkjsdev/spark`, World Labs, MIT — see
 `LICENSE.spark`), the Gaussian-splat renderer ComfyUI's own 3D viewer uses; it
 needs three ≥ r180. Its workers and WASM are inlined. Copied from `dist/`, with

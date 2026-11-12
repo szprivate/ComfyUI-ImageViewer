@@ -189,6 +189,13 @@ export const PrevizRenderMixin = {
         const bgWrap = el("span", "rd-inline");
         bgWrap.append(background, color);
         const aa = select([[1, "Off"], [2, "2× supersampling"], [4, "4× supersampling"]], st.aa);
+        // The second renderer: the scene's own materials and lights, path traced
+        // in this browser (imageViewer_view3dPathTrace.js).
+        const renderer = select([["raster", "Raster (as the viewport draws it)"], ["pathtraced", "Path traced"]], st.renderer);
+        const samples = number(st.samples, 1, 16384);
+        const bounces = number(st.bounces, 1, 32);
+        const ptWrap = el("span", "rd-inline");
+        ptWrap.append(el("span", "rd-sub", "Samples"), samples, el("span", "rd-sub", "Bounces"), bounces);
         const grid = check("Grid", st.grid);
         const helpers = check("Camera frustums & helpers", st.helpers);
         const includeWrap = el("span", "rd-inline");
@@ -208,6 +215,9 @@ export const PrevizRenderMixin = {
         foot.append(cancel, go);
 
         const fpsRow = row("Frame rate", fps, el("span", "rd-sub", "fps"));
+        const ptRow = row("", ptWrap);
+        const shadingRow = row("Shading", shading);
+        const aaRow = row("Anti-aliasing", aa);
         const useCamRow = row("Resolution", useCam.wrap);
         const qualityRow = row("", codecWrap, qualityWrap);
         box.append(
@@ -225,9 +235,11 @@ export const PrevizRenderMixin = {
             row("Range", rangeWrap),
             fpsRow,
             section("Look"),
-            row("Shading", shading),
+            row("Renderer", renderer),
+            ptRow,
+            shadingRow,
             row("Background", bgWrap),
-            row("Anti-aliasing", aa),
+            aaRow,
             row("Include", includeWrap),
             section("After"),
             row("", addNode.wrap),
@@ -249,6 +261,7 @@ export const PrevizRenderMixin = {
             shading: shading.value, background: background.value, color: color.value,
             aa: Number(aa.value) || 1, grid: grid.box.checked, helpers: helpers.box.checked,
             addNode: addNode.box.checked,
+            renderer: renderer.value, samples: Number(samples.value) || 256, bounces: Number(bounces.value) || 6,
         });
 
         // Everything that depends on something else, in one place.
@@ -265,6 +278,10 @@ export const PrevizRenderMixin = {
             }
             width.disabled = height.disabled = preset.disabled = fromCam;
             qualityRow.style.display = isVideo ? "" : "none";
+            // A traced frame has its own look and needs no supersampling (each sample is jittered).
+            const traced = s.renderer === "pathtraced";
+            ptRow.style.display = traced ? "" : "none";
+            shadingRow.style.display = aaRow.style.display = traced ? "none" : "";
             codecWrap.style.display = s.format === "mov" ? "" : "none";
             fpsRow.style.display = isVideo ? "" : "none";
             // A video has no alpha to put a transparent background in.
@@ -292,10 +309,11 @@ export const PrevizRenderMixin = {
                 + ` · ${FORMATS.find(([v]) => v === s.format)[1]}`
                 + (s.format === "mov" ? ` (${MOV_CODECS.find(([v]) => v === s.codec)[1]})` : "")
                 + (isVideo ? ` · ${secs.toFixed(secs < 10 ? 2 : 1)} s at ${s.fps} fps` : "")
-                + (s.aa > 1 ? ` · ${s.aa}× AA` : "");
+                + (s.renderer === "pathtraced" ? ` · path traced, ${s.samples} samples` : (s.aa > 1 ? ` · ${s.aa}× AA` : ""));
         };
         for (const n of [name, format, quality, codec, camera, width, height, scale, start, end, fps,
-                         shading, background, color, aa, useCam.box, grid.box, helpers.box, addNode.box]) {
+                         shading, background, color, aa, useCam.box, grid.box, helpers.box, addNode.box,
+                         renderer, samples, bounces]) {
             n.addEventListener("input", sync);
             n.addEventListener("change", sync);
         }
@@ -337,9 +355,12 @@ export const PrevizRenderMixin = {
             message.classList.remove("error");
             box.classList.add("rendering");
             const result = await this.previzRender(s, {
-                onProgress: (done, total) => {
-                    bar.style.width = `${Math.round(100 * done / Math.max(1, total))}%`;
-                    message.textContent = done < total ? `Frame ${done + 1} of ${total}…` : "Encoding…";
+                onProgress: (done, total, sample, samplesWanted) => {
+                    const part = sample && samplesWanted ? sample / samplesWanted : 0;
+                    bar.style.width = `${Math.round(100 * (done + part) / Math.max(1, total))}%`;
+                    message.textContent = done < total
+                        ? `Frame ${done + 1} of ${total}…` + (samplesWanted ? ` sample ${sample || 0} of ${samplesWanted}` : "")
+                        : "Encoding…";
                 },
             });
             box.classList.remove("rendering");
@@ -387,16 +408,24 @@ export const PrevizRenderMixin = {
         let done = 0, firstPath = null, framesDir = null, moviePath = null;
         const result = { ok: false, frames: 0, stopped: false, error: false, message: "" };
         try {
+            const traced = st.renderer === "pathtraced";
             if (!view.beginRender({
-                camera: cameraId, shading: st.shading,
+                camera: cameraId, shading: traced ? "original" : st.shading,
                 background: isVideo && st.background === "transparent" ? "viewer" : st.background,
-                color: st.color, grid: st.grid, helpers: st.helpers, aa: st.aa,
+                color: st.color, grid: st.grid, helpers: st.helpers, aa: traced ? 1 : st.aa,
             })) throw new Error("the 3D view is not ready");
             for (let f = start; f <= end; f++) {
                 if (this._previzRenderStop) { result.stopped = true; break; }
                 if (onProgress) onProgress(done, count);
-                const drawn = view.renderFrame(f, w, h);
-                if (!drawn) throw new Error("the renderer produced no image");
+                const drawn = traced
+                    ? await view.renderFramePathTraced(f, w, h, {
+                        samples: st.samples, bounces: st.bounces,
+                        shouldStop: () => this._previzRenderStop,
+                        onSample: (n, want) => { if (onProgress) onProgress(done, count, n, want); },
+                    })
+                    : view.renderFrame(f, w, h);
+                if (this._previzRenderStop && traced) { result.stopped = true; break; }
+                if (!drawn) throw new Error(traced ? "the path tracer produced no image" : "the renderer produced no image");
                 // A playblast writes its heads-up display over each frame (imageViewer_previzPlayblast.js).
                 const dataurl = frameFilter ? await frameFilter(drawn, f, { w, h, start, end, fps, cameraId }) : drawn;
                 const res = await fetch(api.apiURL("/imageviewer/previz_frame"), {

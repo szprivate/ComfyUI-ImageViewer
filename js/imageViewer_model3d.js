@@ -31,6 +31,7 @@ import { View3DToolsMixin } from "./imageViewer_view3dTools.js";
 import { View3DPanesMixin } from "./imageViewer_view3dPanes.js";
 import { View3DGridMixin } from "./imageViewer_view3dGrid.js";
 import { Atlas3DMixin } from "./imageViewer_atlas3d.js";
+import { View3DPathTraceMixin } from "./imageViewer_view3dPathTrace.js";
 import { CameraAim3DMixin } from "./imageViewer_cameraAim3d.js";
 import { displayStates, isPickable } from "./imageViewer_sceneLayers.js";
 import { constrainedLocals } from "./imageViewer_constraints.js";
@@ -111,6 +112,8 @@ const RES_PREFIX = "imageviewer-res/";
 
 export const MATERIAL_MODES = [
     ["original", "Original"], ["clay", "Clay"], ["normal", "Normal"], ["wireframe", "Wireframe"],
+    // The scene's own materials, traced (imageViewer_view3dPathTrace.js).
+    ["pathtraced", "Path traced"],
 ];
 
 function setting(id, fallback) {
@@ -723,6 +726,8 @@ export class Model3DView {
         }
         this._raf = 0;
         if (this._ro) { this._ro.disconnect(); this._ro = null; }
+        // The path tracer's buffers belong to this renderer's context.
+        this._ptDispose();
         // The gizmo listens on the canvas. Keeping it across a rebuild left its
         // handles bound to a canvas that no longer exists — they drew, and
         // dragging them did nothing. It is rebuilt by _syncSelection below.
@@ -846,12 +851,19 @@ export class Model3DView {
         if (this.controls && this.controls.enabled && !sceneCam && this.controls.update(dt)) again = true;
         // Wind and walking run the loop for as long as they last.
         if (this._worldTick(dt)) again = true;
+        this._ptSplit = false;
         // The studio lights, the shadow map and shadow casters follow the scene's own lights (imageViewer_world3d.js).
         if (this._lightsFrame) this._lightsFrame();
         if (!this._paneRenderAll()) {
             const cam = this.activeCameraObject();
             this._dispApply(cam);
-            this._worldRender(cam);
+            // Path traced shading draws the view itself, sample by sample; null = draw it raster.
+            const traced = this._ptViewportTick(cam);
+            if (traced === null) this._worldRender(cam);
+            else if (traced) again = true;
+        } else if (this.materialMode === "pathtraced") {
+            this._ptSplit = true;
+            this._ptBadge();
         }
         this._paneAxesDraw();
         if (again) this.requestRender();
@@ -1118,9 +1130,10 @@ export class Model3DView {
             if (mesh.name === "imageplane" || mesh.name === "splatbounds") continue;
             // A templated item keeps its wire, whatever the look of the rest.
             if (this._templated && this._templated.has(mesh)) continue;
-            mesh.material = this.materialMode === "original"
+            mesh.material = (this.materialMode === "original" || this.materialMode === "pathtraced")
                 ? original : this.materials[this.materialMode];
         }
+        if (this._ptModeChanged) this._ptModeChanged();
         this._syncToolbar();
         this.requestRender();
     }
@@ -2634,6 +2647,11 @@ export class Model3DView {
         return out;
     }
 
+    /** The vertical fov a scene camera renders its gate with, at the frame shown. */
+    _renderGateFov(item) {
+        return evaluateIn(this.scene3d, item, this.sceneFrame).fov || 35;
+    }
+
     /** Put the view back the way it was before beginRender. */
     endRender() {
         const r = this._rendering;
@@ -2648,6 +2666,8 @@ export class Model3DView {
         if (r.material !== this.materialMode) this.setMaterialMode(r.material);
         this.restoreSize();
         this.applyFrame(this.sceneFrame);
+        this._ptSig = null;
+        this._ptBadge();
     }
 
     /**
@@ -2713,4 +2733,5 @@ Object.assign(Model3DView.prototype, View3DToolsMixin);
 Object.assign(Model3DView.prototype, View3DPanesMixin);
 Object.assign(Model3DView.prototype, View3DGridMixin);
 Object.assign(Model3DView.prototype, Atlas3DMixin);
+Object.assign(Model3DView.prototype, View3DPathTraceMixin);
 Object.assign(Model3DView.prototype, CameraAim3DMixin);

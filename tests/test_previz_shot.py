@@ -30,6 +30,13 @@ class ShotTests(unittest.TestCase):
         job = ps.ShotBook().new_job({"scene": scene(), "render": {"camera": "cam", "evil": 1, "aa": 4}})
         self.assertEqual(job["render"], {"camera": "cam", "aa": 4, "format": "mp4"})
 
+    def test_a_path_traced_render_is_passed_on(self):
+        job = ps.ShotBook().new_job({"scene": scene(), "render": {
+            "camera": "cam", "renderer": "pathtraced", "samples": 512, "bounces": 8}})
+        self.assertEqual(job["render"]["renderer"], "pathtraced")
+        self.assertEqual(job["render"]["samples"], 512)
+        self.assertEqual(job["render"]["bounces"], 8)
+
     def test_bad_requests(self):
         b = ps.ShotBook()
         for data in (None, {}, {"scene": {"items": []}}, {"scene": {"items": [{"id": "a"}, {"id": "a"}]}},
