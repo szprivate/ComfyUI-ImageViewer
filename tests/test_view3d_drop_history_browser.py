@@ -206,8 +206,47 @@ class DropHistoryInto3DTests(unittest.TestCase):
         self.assertAlmostEqual(first[1][0] - first[0][0], 2.0, places=5)
         self.assertAlmostEqual(first[1][1], first[0][1], places=5)
         self.assertEqual(big["s"], [100, 100, 100])
-        self.assertAlmostEqual(first[0][1], 0.5, places=5)
-        self.assertAlmostEqual(big["p"][1], 50, places=3)
+        # At the world origin, standing on the grid: the pivot is its foot (scene3d groundOffset).
+        self.assertEqual(first[0], [0, 0, 0])
+        self.assertAlmostEqual(big["p"][1], 0, places=3)
+
+    def test_new_things_come_in_at_the_world_origin_standing_on_the_grid(self):
+        # Sebastian 2026-11-12: a plane came in a few units above the grid. New things landed at the
+        # orbit centre, which after Frame all on a model is the model's middle. Now: the origin.
+        pg = self._page()
+        try:
+            got = pg.evaluate("""async () => {
+              const P = window.__panel, view = P._modelView(), { THREE } = view.libs;
+              view.controls.target.set(2, 3, -1); view.controls.update();
+              const box = await P.previzAddPrimitive('box');
+              const flat = await P.previzAddPrimitive('plane');
+              const plane = P.previzAddImagePlane({ path: 'D:/out/tall.png', name: 'tall.png', external: true });
+              const plane2 = P.previzAddImagePlane({ path: 'D:/out/tall.png', name: 'tall.png', external: true });
+              const light = P.previzAddWorldItem('light', 'point');
+              await new Promise((r) => setTimeout(r, 1500));
+              const out = {};
+              for (const [k, it] of Object.entries({ box, flat, plane, plane2, light })) {
+                if (!it) continue;
+                const e = view._entries.get(it.id);
+                const b = e && new THREE.Box3().setFromObject(e.root);
+                const pivot = e && e.root.getWorldPosition(new THREE.Vector3()).toArray();
+                out[k] = { position: it.position, pivot, min: b && b.min.toArray(), max: b && b.max.toArray() };
+              }
+              return out;
+            }""")
+        finally:
+            pg.close()
+        for k in ("box", "flat", "plane"):
+            self.assertEqual(got[k]["position"], [0, 0, 0], k)
+            for a, b in zip(got[k]["pivot"], [0, 0, 0]):
+                self.assertAlmostEqual(a, b, places=4, msg=k)
+            self.assertAlmostEqual(got[k]["min"][1], 0, places=3, msg=k)   # on the grid, not under, not above
+        self.assertAlmostEqual(got["box"]["max"][1], 1, places=3)
+        self.assertAlmostEqual(got["plane"]["max"][1], 1, places=3)
+        self.assertEqual(got["plane2"]["position"], [2, 0, 0])            # beside the first, not inside it
+        if "light" in got:
+            self.assertEqual(got["light"]["position"][0], 0)
+            self.assertEqual(got["light"]["position"][2], 0)
 
     def test_a_drop_on_the_viewer_tab_still_opens_it_there(self):
         pg = self._page(setup=False)

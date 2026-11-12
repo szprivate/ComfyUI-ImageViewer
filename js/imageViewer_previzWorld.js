@@ -135,10 +135,10 @@ export const PrevizWorldMixin = {
         } else if (kind === "light") {
             // `type` here is the light's (Create > Light); the World kit's Lamp passes none.
             const lightType = LIGHT_TYPES.includes(type) ? type : null;
+            // At its own place over the world origin (makeLightItem: a lamp 3
+            // up, a point light 4 up, a spot over the front), not over the
+            // orbit centre, which after Frame all is a model's middle.
             item = makeLightItem(this._worldId(scene, "light"), lightType);
-            const view = this._modelView();
-            const at = view && view.viewFocus && view.viewFocus();
-            if (at) item.position = [at[0] + item.position[0], at[1] + item.position[1] - (lightType ? 1 : 0), at[2] + item.position[2]];
         } else if (kind === "depthmesh") {
             const pics = this._previzPictures();
             const depth = pics.find((p) => /depth|disp/i.test(p.name || "")) || pics[1];

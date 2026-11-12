@@ -36,7 +36,12 @@ SETUP = """async () => {
   app.graph.nodes = app.graph.nodes || []; app.graph.links = app.graph.links || {};
   P.setViewerToggleState(true);
   await P.spaceOpen('3d');
-  await P.previzAddPrimitive('box');
+  const box = await P.previzAddPrimitive('box');
+  // The box centred on its pivot, as boxes came in before they stood on the grid (scene3d
+  // groundOffset): the reach along +X below was measured with the gizmo at the view's centre.
+  delete box.offset; box.position = [0, 0.5, 0];
+  await P.previzChanged({ reload: true });
+  P._modelView().resetView();
   const v = P._modelView();
   v.setPaneLayout('single');
   v.setGizmoMode ? v.setGizmoMode('translate') : (v.gizmoMode = 'translate');

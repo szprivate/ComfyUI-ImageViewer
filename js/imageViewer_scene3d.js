@@ -333,15 +333,39 @@ export function makeModelItem(src, name) {
     };
 }
 
+/**
+ * NEW THINGS COME IN AT THE WORLD ORIGIN, standing on the grid, their pivot at
+ * the origin (Sebastian 2026-11-12: a plane came in a few units up, because new
+ * shapes and planes landed at the orbit centre, which is a model's middle
+ * after Frame all). A shape or picture whose geometry is centred - a box, a
+ * sphere, a card - is lifted onto the grid by its `offset` (the frozen
+ * transform under everything, see FROZEN TRANSFORMS above), so its translate
+ * reads 0 0 0, its pivot is the middle of its base, and scaling grows it up
+ * from the floor. The Channel Box does not call that offset "frozen".
+ */
+export const GROUND_LIFT = 0.5;
+
+export function groundOffset() {
+    return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, GROUND_LIFT, 0, 1];
+}
+
+/** Whether an item's offset is only the lift a new item came in with. */
+export function isGroundOffset(item) {
+    const m = offsetOf(item);
+    if (!m) return false;
+    const g = groundOffset();
+    return m.every((v, i) => Math.abs(v - g[i]) < 1e-9);
+}
+
 export function makePrimitiveItem(type, name) {
     const spec = PRIMITIVES.find((p) => p.type === type) || PRIMITIVES[0];
-    return {
+    const item = {
         id: newId("p"),
         kind: "primitive",
         name: name || spec.label,
         primitive: { type: spec.type },
         color: DEFAULT_COLOR,
-        position: [0, spec.type === "plane" ? 0 : 0.5, 0],   // sitting on the grid
+        position: [0, 0, 0],     // at the origin; a solid stands on the grid (groundOffset)
         rotation: [0, 0, 0],
         scale: spec.scale.slice(),
         pivot: [0, 0, 0],
@@ -349,6 +373,8 @@ export function makePrimitiveItem(type, name) {
         tracks: {},
         parent: null,
     };
+    if (spec.type !== "plane") item.offset = groundOffset();
+    return item;
 }
 
 /**
@@ -368,10 +394,14 @@ export function makeImagePlaneItem(src, name) {
         name: name || (src && (src.name || src.filename)) || "Image plane",
         src: src || null,
         plane: { opacity: 1, lit: false, doubleSided: true },
-        position: [0, 0.5, 0],
+        // Standing on the grid with its pivot at the middle of its lower edge,
+        // on the origin: turning it about Y spins it in place, scaling grows
+        // it up from the floor (groundOffset).
+        position: [0, 0, 0],
         rotation: [0, 0, 0],
         scale: [1, 1, 1],
         pivot: [0, 0, 0],
+        offset: groundOffset(),
         visible: true,
         tracks: {},
         parent: null,

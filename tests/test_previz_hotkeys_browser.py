@@ -42,7 +42,7 @@ SETUP = """async () => {
   P.setPanelDocked('channels', true);
   await P.spaceOpen('3d');
   await P.previzAddPrimitive('box');
-  const a = P.previzSelectedItem(); a.name = 'A'; a.position = [-3, 0.5, 0];
+  const a = P.previzSelectedItem(); a.name = 'A'; a.position = [-3, 0, 0];   // stands on the grid: its middle is 0.5 up
   await P.previzAddPrimitive('box');
   const b = P.previzSelectedItem(); b.name = 'B'; b.position = [3, 0.5, 0];
   P.previzAddGroup();
@@ -201,10 +201,10 @@ class PrevizHotkeysTests(unittest.TestCase):
                 return { one: JSON.parse(JSON.stringify(one)), two, back }; }""", self.ids)
         finally:
             pg.close()
-        self.assertEqual(st["one"]["a"], [[2.5, 0.5, 2.5], [1, 2.5, 1]])
+        self.assertEqual(st["one"]["a"], [[2.5, 0, 2.5], [1, 2.5, 1]])
         self.assertEqual(st["one"]["b"], [[2.5, 0.5, 2.5], [1, 2.5, 1]])
-        self.assertEqual(st["two"]["a"], [3.5, 0.5, 3.5], "a relative form works from each channel's own value")
-        self.assertEqual(st["back"], [2.5, 0.5, 2.5], "one undo step for the lot")
+        self.assertEqual(st["two"]["a"], [3.5, 0, 3.5], "a relative form works from each channel's own value")
+        self.assertEqual(st["back"], [2.5, 0, 2.5], "one undo step for the lot")
         self.assertEqual(self.errors, [])
 
     def test_display_menu_and_shift_digits_hide_kinds(self):

@@ -368,7 +368,7 @@ export const PrevizChannelsMixin = {
         if (this._cbWorldRows) this._cbWorldRows(ui, item, shape, doc);
         // Constraints on the item: their weights and settings (imageViewer_previzConstraints.js).
         if (this._cbConstraintRows) this._cbConstraintRows(ui, item, doc, numberRow);
-        if (item.kind !== "camera" && S.offsetOf(item)) {
+        if (item.kind !== "camera" && S.offsetOf(item) && !S.isGroundOffset(item)) {
             root.append(Object.assign(doc.createElement("div"), {
                 className: "cb-note", textContent: "Transformations frozen (Edit → Freeze).",
             }));

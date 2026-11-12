@@ -489,9 +489,10 @@ export const PrevizMixin = {
     },
 
     /**
-     * Add a blocking shape. It lands at the middle of the view rather than at
-     * the world origin, so it appears where you are looking instead of
-     * somewhere off screen.
+     * Add a blocking shape: at the world origin, standing on the grid, its
+     * pivot at the origin (scene3d's groundOffset). It used to land at the
+     * orbit centre, which after Frame all is a model's middle - so it came in
+     * floating above the grid.
      */
     async previzAddPrimitive(type) {
         const scene = this.previzScene();
@@ -500,9 +501,6 @@ export const PrevizMixin = {
         const wasEmpty = scene.items.length === 0;
         const item = S.makePrimitiveItem(type);
         item.name = S.uniqueName(scene, item.name);
-        const view = this._modelView();
-        const at = view.viewFocus && view.viewFocus();
-        if (at) item.position = [at[0], item.position[1] + at[1], at[2]];
         scene.items.push(item);
         this._previzSelection = item.id;
         await this.previzChanged({ reload: true });
@@ -1425,20 +1423,10 @@ export const PrevizMixin = {
             last = item; added++;
         }
         const view = this._modelView();
-        const at = view && view.viewFocus && view.viewFocus();
         // Sized to the scene: the grid's power of ten after Frame all (100 beside
         // a character in centimetres), never below a unit - framing one small
         // plane puts the grid at 0.1, and the next plane would shrink with it.
         const size = Math.max(1, (view && Number(view._gridAutoScale)) || 1);
-        // Standing on the floor below where the view looks (the view's own
-        // height moves once the first plane is framed), beside the planes
-        // already there, not on top of them: the next free place along X, two
-        // plane heights apart.
-        const base = at ? [at[0], at[1], at[2]] : [0, 0, 0];
-        const taken = (x, y, z) => scene.items.some((i) => i.kind === "imageplane" && Array.isArray(i.position)
-            && Math.abs(i.position[0] - x) < size && Math.abs(i.position[1] - y) < size
-            && Math.abs(i.position[2] - z) < size);
-        let k = 0;
         for (const it of planes) {
             const src = it.url && !it.path ? await this._previzSrcFor(it) : this._srcOfFrame(it);
             if (!src || (!src.path && !src.filename && !src.url)) continue;
@@ -1446,11 +1434,9 @@ export const PrevizMixin = {
             const name = it.filename || it.name || (it.path ? this._basename(it.path) : "") || "Image plane";
             src.name = src.name || name;
             const item = S.makeImagePlaneItem(src, S.uniqueName(scene, this._basename(name)));
-            // Facing the view where it looks; several side by side.
-            while (taken(base[0] + k * 2 * size, 0.5 * size, base[2]) && k < 1000) k++;
-            item.position = [base[0] + k * 2 * size, 0.5 * size, base[2]];
+            // At the origin standing on the grid, pivot at its foot; several side by side.
+            item.position = this._previzPlaneSpot(scene, size);
             item.scale = [size, size, size];
-            k++;
             scene.items.push(item);
             last = item; added++;
         }
@@ -1465,6 +1451,21 @@ export const PrevizMixin = {
                    `${left} item${left === 1 ? "" : "s"} left out: a scene takes models, splats, pictures and films.`);
         }
         return added;
+    },
+
+    /**
+     * Where the next image plane stands: the world origin, or - when a plane
+     * stands there already - the next free place along +X, two plane heights
+     * apart, on the grid (y 0: its pivot is its foot). Only top-level planes
+     * count; one parented to a camera is a backplate somewhere else.
+     */
+    _previzPlaneSpot(scene, size = 1) {
+        const taken = (x) => scene.items.some((i) => i.kind === "imageplane" && !i.parent
+            && Array.isArray(i.position) && Math.abs(i.position[0] - x) < size
+            && Math.abs(i.position[1]) < size && Math.abs(i.position[2]) < size);
+        let k = 0;
+        while (taken(k * 2 * size) && k < 1000) k++;
+        return [k * 2 * size, 0, 0];
     },
 
     /** Everything that puts something INTO the scene, under one button. */
@@ -2039,9 +2040,9 @@ export const PrevizMixin = {
      * An image plane from the picture in hand: the file browser's selection,
      * else the frame on screen in another tab.
      *
-     * It lands facing the view, a unit tall, at the point the view is looking
-     * at — the same place a new shape lands, so it is in front of you rather
-     * than at the origin behind the set.
+     * It lands a unit tall, standing on the grid at the world origin with its
+     * pivot at the middle of its lower edge (scene3d's groundOffset); several
+     * stand side by side along X (`_previzPlaneSpot`), as dropped ones do.
      */
     previzAddImagePlane(src = null) {
         const scene = this.previzScene();
@@ -2060,9 +2061,7 @@ export const PrevizMixin = {
         let last = null;
         for (const one of picked) {
             const item = S.makeImagePlaneItem(one, S.uniqueName(scene, one.name || "Image plane"));
-            const view = this._modelView();
-            const at = view && view.viewFocus && view.viewFocus();
-            if (at) item.position = [at[0], item.position[1] + at[1], at[2]];
+            item.position = this._previzPlaneSpot(scene, 1);
             scene.items.push(item);
             last = item;
         }
