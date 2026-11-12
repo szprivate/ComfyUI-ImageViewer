@@ -449,6 +449,13 @@ export const PrevizRigMixin = {
      */
     _previzToggleRigMenu(anchor, which = null) {
         if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
+        const entries = this._previzRigMenuEntries(anchor);
+        const a = anchor.getBoundingClientRect();
+        this._previzOpenMenu(which ? rigMenuOf(entries, which) : entries, a.left, a.bottom + 2, anchor);
+    },
+
+    /** Every Rig / Animation entry, enabled or not; `rigMenuOf` sorts them into menus. */
+    _previzRigMenuEntries(anchor = null) {
         const scene = this.previzScene();
         // Nothing of a character selected: the scene's only character (or only rigged one) is meant.
         const models = scene.items.filter((it) => it.kind === "model");
@@ -500,8 +507,7 @@ export const PrevizRigMixin = {
                     : /limb/.test(e.label) && rigged ? "Select an arm or leg control." : why;
             }
         }
-        const a = anchor.getBoundingClientRect();
-        this._previzOpenMenu(which ? rigMenuOf(entries, which) : entries, a.left, a.bottom + 2, anchor);
+        return entries;
     },
 };
 
@@ -522,8 +528,10 @@ const RIG_MENUS = {
         [/^AI in-between/, /^Generate motion from text/, /^Restyle motion/, /^Motion from video/,
          /^Lip sync/, /^Clean up feet/],
         [/^Key all blendshapes/, /^Reset blendshapes/],
-        [/^Add motion from file/, /^Bake file's animation/, /^Export /],
+        [/^Add motion from file/, /^Bake file's animation/],
     ],
+    // The character's FBX / USD / Alembic exports live in the menu bar's File menu.
+    file: [[/^Export /]],
 };
 
 export function rigMenuOf(entries, which) {
@@ -536,10 +544,11 @@ export function rigMenuOf(entries, which) {
     });
     const rig = groupsOf("rig");
     const anim = groupsOf("anim");
+    const file = groupsOf("file");
     const rest = items.filter((e) => !placed.has(e));
     if (rest.length) anim.push(rest);
     const out = [];
-    for (const g of which === "rig" ? rig : anim) {
+    for (const g of which === "rig" ? rig : which === "file" ? file : anim) {
         if (!g.length) continue;
         if (out.length) out.push("-");
         out.push(...g);

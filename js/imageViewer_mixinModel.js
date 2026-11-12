@@ -68,6 +68,9 @@ export const ModelMixin = {
                 canWalk: () => !!(this.previzCanMove && this.previzCanMove()),
                 onFeedbackRequest: (point, seen) => this._previzFeedbackSubmit(point, seen),
                 onPinClick: (pin) => this._previzPinClicked(pin),
+                // The menu bar over the canvas (imageViewer_previzMenuBar.js) and the panes' menus.
+                buildMenuBar: (host) => this.previzBuildMenuBar(host),
+                openMenu: (entries, x, y, anchor) => this._previzOpenMenu(entries, x, y, anchor),
             });
         }
         return this._model3d;

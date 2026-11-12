@@ -43,7 +43,7 @@ MENU_POINT = """async () => {
   P.previzSelect(a.id); P.previzSelect(b.id, { add: true });
   // Snap, not keep: the menu's Maintain offset switched off first.
   P.previzSetConstraintKeepOffset(false);
-  const btn = P.previzPanel.querySelector('.previz-constrain');
+  const btn = P.shadowRoot.querySelector('.model-menubar .previz-constrain');
   btn.click();
   const items = [...P.shadowRoot.querySelectorAll('.previz-menu-item')].map((x) => x.textContent);
   [...P.shadowRoot.querySelectorAll('.previz-menu-item')].find((x) => x.textContent === 'Point').click();

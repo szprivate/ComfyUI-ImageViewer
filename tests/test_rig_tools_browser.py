@@ -449,11 +449,14 @@ class RigToolsBrowserTests(unittest.TestCase):
         self.assertEqual(self.errors, [])
 
     def _menu(self, pg, label):
-        """Click an entry of the Rig menu or, when it is not there, of the Animation menu."""
-        for btn in ("button.previz-rig", "button.previz-anim"):
+        """Click an entry of the Rig menu, the Animation menu or File's Export character."""
+        for btn in ("button.previz-rig", "button.previz-anim", "button.previz-mb-file"):
             pg.locator(btn).first.click()
             item = pg.locator("button.previz-menu-item", has_text=label)
             if item.count():
+                sub = pg.locator("button.previz-menu-item.has-sub", has_text="Export character")
+                if btn.endswith("file") and sub.count():
+                    sub.first.click()
                 item.first.click()
                 return
             pg.evaluate("() => window.__panel._previzCloseAddMenu()")

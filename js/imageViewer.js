@@ -62,6 +62,7 @@ import { PrevizAtlasViewsMixin } from "./imageViewer_previzAtlasViews.js";
 import { PrevizUndoMixin } from "./imageViewer_previzUndo.js";
 import { PrevizRigMixin } from "./imageViewer_previzRig.js";
 import { PrevizConstraintsMixin } from "./imageViewer_previzConstraints.js";
+import { PrevizMenuBarMixin } from "./imageViewer_previzMenuBar.js";
 import { PrevizRigToolsMixin } from "./imageViewer_previzRigTools.js";
 import { PrevizRigAIMixin } from "./imageViewer_previzRigAI.js";
 import { PrevizRigPoseMixin } from "./imageViewer_previzRigPose.js";
@@ -1669,6 +1670,7 @@ Object.assign(
     PrevizUndoMixin,
     PrevizRigMixin,
     PrevizConstraintsMixin,
+    PrevizMenuBarMixin,
     PrevizRigToolsMixin,
     PrevizRigAIMixin,
     PrevizRigPoseMixin,

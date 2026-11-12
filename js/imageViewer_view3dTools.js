@@ -280,7 +280,7 @@ export const View3DToolsMixin = {
         xr.dataset.kind = "xray";
         menu._sync = () => rows.forEach((r) => r());
         menu._sync();
-        this.ui.look.parentNode.append(menu);
+        this.ui.look.append(menu);
         this._dispMenu = menu;
         this._dispMenuSync();
         const win = this.win;
@@ -328,6 +328,7 @@ export const View3DToolsMixin = {
             if (box.equals(before)) box.expandByPoint(entry.root.getWorldPosition(v));
         }
         if (box.isEmpty()) return false;
+        if (this._paneOrthoActive()) return this._paneFrameOrtho(box);
         const center = box.getCenter(new THREE.Vector3());
         const sphere = box.getBoundingSphere(new THREE.Sphere());
         const radius = Math.max(sphere.radius, 0.05);

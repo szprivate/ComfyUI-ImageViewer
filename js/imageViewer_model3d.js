@@ -28,6 +28,7 @@ import { WorldMatchMixin } from "./imageViewer_worldMatch.js";
 import { Rig3DMixin } from "./imageViewer_rig3d.js";
 import { Rig3DExtrasMixin } from "./imageViewer_rig3dExtras.js";
 import { View3DToolsMixin } from "./imageViewer_view3dTools.js";
+import { View3DPanesMixin } from "./imageViewer_view3dPanes.js";
 import { Atlas3DMixin } from "./imageViewer_atlas3d.js";
 import { displayStates, isPickable } from "./imageViewer_sceneLayers.js";
 import { constrainedLocals } from "./imageViewer_constraints.js";
@@ -106,7 +107,7 @@ export function modelFormatOf(frame) {
 // a real URL next to the model.
 const RES_PREFIX = "imageviewer-res/";
 
-const MATERIAL_MODES = [
+export const MATERIAL_MODES = [
     ["original", "Original"], ["clay", "Clay"], ["normal", "Normal"], ["wireframe", "Wireframe"],
 ];
 
@@ -171,13 +172,20 @@ export class Model3DView {
         const root = el("div", "model-view");
         root.id = "model-view";
 
-        // Two rows, at the top of the canvas beside the scene's own read-out:
-        // what the view looks like, then what the mouse does in it.
-        const bar = el("div", "model-toolbar");
-        const look = el("div", "model-toolbar-row");
-        const tools = el("div", "model-toolbar-row");
+        // A menu bar across the top (Maya's panel menus, Blender's header): the
+        // panel fills its menus in (hooks.buildMenuBar), the view keeps the
+        // shading, grid, display and layout controls at its right end. Below it
+        // the stage: the canvas, the gate and the panes of a multi-view
+        // (imageViewer_view3dPanes.js). The gizmo tools are a column at the
+        // stage's left edge, as Maya's and Blender's toolboxes are.
+        const menubar = el("div", "model-menubar");
+        const menus = el("div", "model-mb-menus");
+        const look = el("div", "model-mb-right");
+        menubar.append(menus, look);
+        const stage = el("div", "model-stage");
+        const tools = el("div", "model-toolcol");
         const modeSel = el("select", "model-mode");
-        modeSel.title = "Material";
+        modeSel.title = "Shading";
         for (const [value, label] of MATERIAL_MODES) {
             const o = el("option", "", label);
             o.value = value;
@@ -189,34 +197,23 @@ export class Model3DView {
         gridBtn.title = "Show / hide the grid";
         gridBtn.onclick = () => this.setGrid(!this.showGrid);
 
-        const resetBtn = el("button", "model-btn", "Reset view");
-        resetBtn.title = "Frame the model again (F)";
-        resetBtn.onclick = () => this.resetView();
-
-        // The two previz panels are toggled from here rather than from the
-        // playback bar: they describe this canvas, and there is nothing they
-        // can say about a picture.
-        const panelBtn = el("button", "model-btn model-panel-btn", "▣");
-        panelBtn.title = "Show / hide the Previz panel";
-        panelBtn.onclick = () => { if (this.hooks.onPanelToggle) this.hooks.onPanelToggle("previz"); };
-        if (this.hooks.setIcon) this.hooks.setIcon(panelBtn, "icon-previz");
-
-        const curvesBtn = el("button", "model-btn model-panel-btn", "∿");
-        curvesBtn.title = "Show / hide the Curve Editor";
-        curvesBtn.onclick = () => { if (this.hooks.onPanelToggle) this.hooks.onPanelToggle("curves"); };
-        if (this.hooks.setIcon) this.hooks.setIcon(curvesBtn, "icon-curves");
-
-        const channelsBtn = el("button", "model-btn model-panel-btn", "≡");
-        channelsBtn.title = "Show / hide the Channel Box";
-        channelsBtn.onclick = () => { if (this.hooks.onPanelToggle) this.hooks.onPanelToggle("channels"); };
-        if (this.hooks.setIcon) this.hooks.setIcon(channelsBtn, "icon-channelbox");
-
         const displayBtn = this._dispBuildButton(el);
-        look.append(modeSel, gridBtn, displayBtn, resetBtn, panelBtn, channelsBtn, curvesBtn);
+        // Houdini's viewport layouts, the two used most as buttons; the rest in View > Layout.
+        const layoutBtns = {};
+        for (const [layout, title, icon] of [
+            ["single", "One view: the pane the mouse was last over fills the stage", "icon-square"],
+            ["quad", "Four views: perspective, top, front and right - drag the dividers to size them", "icon-layout-grid"],
+        ]) {
+            const b = el("button", "model-btn model-icon-btn model-layout-btn", layout === "single" ? "1" : "4");
+            b.title = title;
+            b.dataset.layout = layout;
+            b.onclick = () => this.setPaneLayout(layout);
+            if (this.hooks.setIcon) this.hooks.setIcon(b, icon);
+            layoutBtns[layout] = b;
+        }
+        look.append(modeSel, gridBtn, displayBtn, layoutBtns.single, layoutBtns.quad);
 
-        // The gizmo tools. They used to sit in the previz panel, a rail away
-        // from the object they act on; here they are over the canvas, beside
-        // the view controls, and they follow the same keys (W / E / R / X).
+        // The gizmo tools, beside the object they act on, with the same keys (Q / W / E / R / X).
         const toolBtns = {};
         for (const [mode, label, key, icon] of [
             ["select", "Select", "Q", "icon-pointer"],
@@ -228,30 +225,34 @@ export class Model3DView {
             b.title = mode === "select"
                 ? "Select: click or drag a box, no gizmo (Q) - Shift toggles, Ctrl takes out, Ctrl+Shift adds"
                 : `${label} the selected item (${key})`;
+            b.dataset.tool = mode;
             b.onclick = () => this.setGizmoMode(mode);
             if (this.hooks.setIcon) this.hooks.setIcon(b, icon);
             toolBtns[mode] = b;
             tools.append(b);
         }
+        tools.append(el("div", "model-toolcol-sep"));
         const spaceBtn = el("button", "model-btn model-icon-btn", "World");
+        spaceBtn.dataset.tool = "space";
         spaceBtn.onclick = () => this.setGizmoSpace(this.gizmoSpace === "local" ? "world" : "local");
         tools.append(spaceBtn);
         // Move the pivot instead of the item (Maya's Insert): the gizmo then
         // drags the point the item turns about, and the item stays where it is.
         const pivotBtn = el("button", "model-btn model-icon-btn", "Pivot");
+        pivotBtn.dataset.tool = "pivot";
         pivotBtn.onclick = () => {
             if (this.hooks.onPivotMode) this.hooks.onPivotMode(); else this.setPivotMode(!this.pivotMode);
         };
         if (this.hooks.setIcon) this.hooks.setIcon(pivotBtn, "icon-axis3d");
         tools.append(pivotBtn);
-        // Walk (or fly) through the world, right beside the pivot. Shown only where the scene can be moved
+        // Walk (or fly) through the world. Shown only where the scene can be moved
         // through (hooks.canWalk); the same switch as Shift+J, so it lights up however walking was started.
         const walkBtn = el("button", "model-btn model-icon-btn", "Walk");
+        walkBtn.dataset.tool = "walk";
         walkBtn.onclick = () => { if (this.hooks.onWalkToggle) this.hooks.onWalkToggle(); else this.walkToggle(); };
         if (this.hooks.setIcon) this.hooks.setIcon(walkBtn, "icon-footprints");
         tools.append(walkBtn);
 
-        bar.append(look, tools);
         const status = el("div", "model-status");
 
         // The resolution gate: the picture the camera you are looking through
@@ -268,10 +269,14 @@ export class Model3DView {
         gateFrame.append(gateLabel);
         gate.append(gateFrame);
 
-        root.append(gate, bar, status);
+        stage.append(gate);
+        root.append(menubar, stage, tools, status);
         this.root = root;
-        this.ui = { look, displayBtn, modeSel, gridBtn, resetBtn, panelBtn, channelsBtn, curvesBtn, toolBtns, spaceBtn, pivotBtn, walkBtn, status,
+        this.stage = stage;
+        this.ui = { menubar, menus, look, displayBtn, modeSel, gridBtn, layoutBtns, toolBtns, tools, spaceBtn, pivotBtn, walkBtn, status,
                     gate, shades, gateFrame, gateLabel };
+        if (this.hooks.buildMenuBar) this.hooks.buildMenuBar(menus, this);
+        this._paneBuild();
         this._syncToolbar();
         this.host.appendChild(root);
     }
@@ -281,6 +286,9 @@ export class Model3DView {
         this.ui.modeSel.value = this.materialMode;
         this.ui.gridBtn.classList.toggle("active", this.showGrid);
         if (this._dispMenuSync) this._dispMenuSync();
+        if (this.ui.layoutBtns && this._panes) {
+            for (const [l, b] of Object.entries(this.ui.layoutBtns)) b.classList.toggle("active", l === this._panes.layout);
+        }
         for (const [mode, btn] of Object.entries(this.ui.toolBtns || {})) {
             btn.classList.toggle("active", mode === this.gizmoMode);
         }
@@ -313,10 +321,8 @@ export class Model3DView {
 
     /** Light the panel buttons from the dock, which is what actually knows. */
     setPanelStates(states) {
-        if (!this.ui) return;
-        this.ui.panelBtn.classList.toggle("active", !!(states && states.previz));
-        this.ui.curvesBtn.classList.toggle("active", !!(states && states.curves));
-        if (this.ui.channelsBtn) this.ui.channelsBtn.classList.toggle("active", !!(states && states.channels));
+        // The panel toggles are the menu bar's Windows menu now, which asks the dock when it opens.
+        this._panelStates = states || null;
     }
 
     _setStatus(text, isError = false) {
@@ -375,7 +381,8 @@ export class Model3DView {
         const { THREE, OrbitControls } = this.libs;
         const canvas = this.doc.createElement("canvas");
         canvas.className = "model-canvas";
-        this.root.insertBefore(canvas, this.root.firstChild);
+        this.stage.insertBefore(canvas, this.stage.firstChild);
+        this._paneHookCanvas(canvas);
 
         // alpha: a render can be asked for with a transparent background. The
         // clear colour is opaque otherwise, so the view looks the same.
@@ -414,7 +421,8 @@ export class Model3DView {
         // state — lands once the drag ends.
         const reportCamera = (live) => {
             const id = this.scene3d && this.scene3d.activeCamera;
-            if (!id || !this.hooks.onCameraMoved) return;
+            // A flat view's camera is its own, not the scene's.
+            if (!id || !this.hooks.onCameraMoved || this._paneOrthoActive()) return;
             const entry = this._entries.get(id);
             this.hooks.onCameraMoved(id, this.readTransform(this.activeCameraObject(),
                                                             entry && entry.item), live);
@@ -462,7 +470,8 @@ export class Model3DView {
         if (alt) {
             // Tumbling is done here rather than by the orbit controls, which
             // can only turn around the point they look at (see _tumbleStart).
-            this.controls.mouseButtons = { LEFT: null, MIDDLE: M.PAN, RIGHT: M.DOLLY };
+            // A flat view does not tumble: Alt+left pans it.
+            this.controls.mouseButtons = { LEFT: this._paneOrthoActive() ? M.PAN : null, MIDDLE: M.PAN, RIGHT: M.DOLLY };
             this.controls.enabled = true;
             return;
         }
@@ -489,7 +498,7 @@ export class Model3DView {
             e.preventDefault();
             return;
         }
-        if (e.altKey && e.button === 0) this._tumbleStart(e);
+        if (e.altKey && e.button === 0) { if (!this._paneOrthoActive()) this._tumbleStart(e); }
         else if (this.scene3d && this._mqDown(e) && this.gizmoMode === "select") {
             // The Select tool has no gizmo to hand the press to.
             e.stopImmediatePropagation();
@@ -651,7 +660,10 @@ export class Model3DView {
             // A camera has no geometry; its frustum lines are what you click.
             if (entry.helper && entry.helper.visible) roots.push(entry.helper);
         }
-        ray.params.Line.threshold = 0.05 * (this.activeCameraObject().position.length() || 1);
+        const pc = this.activeCameraObject();
+        ray.params.Line.threshold = pc.isOrthographicCamera
+            ? (pc.top - pc.bottom) / (pc.zoom || 1) * 0.01
+            : 0.05 * (pc.position.length() || 1);
         // What the Display menu hides cannot be clicked either.
         ray.layers.mask = this._dispMask();
         // A template or a reference layer's items are seen through: the click
@@ -722,8 +734,8 @@ export class Model3DView {
 
     _resize() {
         if (!this.renderer || !this.root) return;
-        const w = Math.max(1, this.root.clientWidth);
-        const h = Math.max(1, this.root.clientHeight);
+        const w = Math.max(1, this.stage.clientWidth);
+        const h = Math.max(1, this.stage.clientHeight);
         this.renderer.setSize(w, h, false);
         this._worldResize(w, h);
         this.camera.aspect = w / h;
@@ -734,6 +746,7 @@ export class Model3DView {
             if (entry.camera) this._applyLens(entry, evaluateIn(this.scene3d, entry.item, this.sceneFrame).fov);
         }
         this._syncGate();
+        this._panePlace();
         this.requestRender();
     }
 
@@ -764,8 +777,17 @@ export class Model3DView {
         if (this.gizmo) this.gizmo.camera = cam;
     }
 
-    /** The camera the viewport renders from: a scene camera, or the free one. */
+    /**
+     * The camera the mouse works through: the active pane's (a flat view's
+     * own, imageViewer_view3dPanes.js), else the perspective one.
+     */
     activeCameraObject() {
+        if (this.libs && this._paneOrthoActive && this._paneOrthoActive()) return this._paneOrtho(this.paneActiveKind()).cam;
+        return this._perspCameraObject();
+    }
+
+    /** The perspective view's camera: a scene camera looked through, or the free one. */
+    _perspCameraObject() {
         if (this._walk) return this.camera;
         const id = this.scene3d && this.scene3d.activeCamera;
         const entry = id ? this._entries.get(id) : null;
@@ -790,9 +812,12 @@ export class Model3DView {
         if (this.controls && this.controls.enabled && this.controls.update(dt)) again = true;
         // Wind and walking run the loop for as long as they last.
         if (this._worldTick(dt)) again = true;
-        const cam = this.activeCameraObject();
-        this._dispApply(cam);
-        this._worldRender(cam);
+        if (!this._paneRenderAll()) {
+            const cam = this.activeCameraObject();
+            this._dispApply(cam);
+            this._worldRender(cam);
+        }
+        this._paneAxesDraw();
         if (again) this.requestRender();
     }
 
@@ -1012,6 +1037,11 @@ export class Model3DView {
         const maxDim = Math.max(size.x, size.y, size.z) || 1;
         const distance = (Math.max(size.x, size.z) || maxDim) * 2;
 
+        // A flat view keeps its direction and only fits the box.
+        if (this._paneOrthoActive()) {
+            this._paneFrameOrtho(box);
+            return;
+        }
         const cam = this.activeCameraObject();
         cam.near = Math.min(0.01, maxDim / 1000);
         cam.far = Math.max(10000, maxDim * 100);
@@ -1601,8 +1631,8 @@ export class Model3DView {
     }
 
     _aspect() {
-        const w = this.root ? this.root.clientWidth : 1;
-        const h = this.root ? this.root.clientHeight : 1;
+        const w = this.stage ? this.stage.clientWidth : 1;
+        const h = this.stage ? this.stage.clientHeight : 1;
         return (w && h) ? w / h : 1;
     }
 
@@ -1733,8 +1763,8 @@ export class Model3DView {
      * the edges of the shot can be seen — Maya's overscan.
      */
     _gateRect(item) {
-        const w = Math.max(1, this.root ? this.root.clientWidth : 1);
-        const h = Math.max(1, this.root ? this.root.clientHeight : 1);
+        const w = Math.max(1, this.stage ? this.stage.clientWidth : 1);
+        const h = Math.max(1, this.stage ? this.stage.clientHeight : 1);
         const [rw, rh] = cameraResolution(item);
         const ar = rw / rh;
         const OVERSCAN = 1.15;
@@ -1778,7 +1808,8 @@ export class Model3DView {
         if (!ui || !ui.gate) return;
         const id = this.scene3d && this.scene3d.activeCamera;
         const entry = id && !this._walk ? this._entries.get(id) : null;
-        if (!entry || !entry.camera) {
+        // The gate is drawn over the whole stage: only with one perspective view on it.
+        if (!entry || !entry.camera || !this._panePlain()) {
             ui.gate.style.display = "none";
             this._syncReference(null, null);
             return;
@@ -2588,4 +2619,5 @@ Object.assign(Model3DView.prototype, WorldMatchMixin);
 Object.assign(Model3DView.prototype, Rig3DMixin);
 Object.assign(Model3DView.prototype, Rig3DExtrasMixin);
 Object.assign(Model3DView.prototype, View3DToolsMixin);
+Object.assign(Model3DView.prototype, View3DPanesMixin);
 Object.assign(Model3DView.prototype, Atlas3DMixin);
