@@ -28,9 +28,15 @@
 // object's shade of a colour is its own, so two objects' translate.x are told
 // apart at a glance.
 //
+// SELECTION
+// Click a key, Shift+click to add or take one away, Ctrl+click to take one
+// away, Ctrl+Shift+click to add (the 3D view's modifiers), or drag a box on the
+// empty graph. Dragging any selected key moves them all by the same frames and
+// value; Del removes them, Ctrl+A takes every key on screen, Esc lets go.
+//
 // TANGENTS
-// Click a key to select it and its handles appear; drag one to shape the
-// curve. Handles move together unless Alt breaks them, and double-clicking one
+// Every selected key shows its handles; drag one to shape the curve, and the
+// same handle of every other selected key turns by the same angle. Handles move together unless Alt breaks them, and double-clicking one
 // gives the key back to its ease (Smooth / Linear / Hold in the previz panel).
 // The numbers live on the key itself — see the tangent notes in
 // imageViewer_scene3d.js.
@@ -207,11 +213,16 @@ export const PrevizCurvesMixin = {
             onResized: () => this.previzRefreshCurves(),
             // A click on the graph itself, clear of any key, drops the
             // selection — and with it the handles.
-            onBlank: () => { this._previzCurveKey = null; this.previzRefreshCurves(); },
-            hint: "Drag a key sideways to retime it, up and down to change it; double-click removes it. " +
-                  "Click a key for its tangents — drag a handle to shape the curve, Alt to break it, " +
-                  "double-click it to hand the key back to its ease.",
+            // a drag there draws a box that selects the keys inside it.
+            onBlank: (e) => this._previzCurveBlankDown(e),
+            hint: "Click a key, Shift+click to add or take one away, Ctrl+click to take one away, or drag a box " +
+                  "on the empty graph. Drag a selected key to move them all - sideways retimes, up and down " +
+                  "changes the values (Shift holds one direction). Drag a handle to shape every selected " +
+                  "key's tangent, Alt to break it, double-click it for the ease again. Del removes the selected keys.",
         });
+        // Focusable, so Del / Ctrl+A / Esc reach previzCurveKeyDown.
+        ui.body.tabIndex = -1;
+        ui.body.addEventListener("mousedown", () => { try { ui.body.focus({ preventScroll: true }); } catch (_) {} }, true);
         this._previzCurveWrap = ui.wrap;
         this._previzCurveSvg = ui.svg;
         this._previzCurveUI = ui;
@@ -265,6 +276,9 @@ export const PrevizCurvesMixin = {
                 ], (v) => this.previzCurveRetime(v.from, v.to, v.newTo, v.ripple));
             });
         btn("Euler", EULER_TIP, () => this.previzEulerFilter());
+        btn("Tangents \u25be", "Give every selected key this tangent",
+            (b) => menuAt(b, [["smooth", "Smooth"], ["linear", "Linear"], ["hold", "Stepped"], ["flat", "Flat"]]
+                .map(([mode, name]) => ({ label: name, run: () => this.previzCurveSetTangents(mode) }))));
         ui.sub.parentNode.insertBefore(bar, ui.sub);
         ui.tools = bar;
     },
@@ -317,7 +331,7 @@ export const PrevizCurvesMixin = {
             const r = A.simplifyTrack(S.itemById(scene, id), prop, tolerance);
             before += r.before; after += r.after; if (r.skipped) skipped++;
         }
-        this._previzCurveKey = null;
+        this._previzCurveSetSel([]);
         this.previzChanged();
         notice("success", "Simplify", `${before} keys \u2192 ${after}` +
                (skipped ? ` (${skipped} stepped curve${skipped === 1 ? "" : "s"} left as they were)` : "") + ".");
@@ -343,7 +357,7 @@ export const PrevizCurvesMixin = {
         }
         this.previzSnapshot("retime keys");
         const n = A.retimeKeys(this.previzScene().items, tracks, Number(from), Number(to), Number(newTo), !!ripple);
-        this._previzCurveKey = null;
+        this._previzCurveSetSel([]);
         this.previzChanged();
         return n;
     },
@@ -537,27 +551,34 @@ export const PrevizCurvesMixin = {
         if (!wrap) return;
         wrap.querySelectorAll(".kf-dot, .kf-tan, .kf-tan-line").forEach((d) => d.remove());
         const doc = wrap.ownerDocument;
-        const sel = this._previzCurveKey;
+        const drawn = [];
 
         for (const ch of g.lines) {
             const item = ch.item;
             for (const k of S.track(item, ch.prop)) {
                 const v = S.componentOf(k.v, ch.axis);
                 const dot = doc.createElement("div");
-                const chosen = !!sel && sel.id === item.id && sel.prop === ch.prop && sel.f === k.f;
+                const me = { id: item.id, prop: ch.prop, axis: ch.axis, f: k.f };
+                const chosen = this._previzCurveIsSel(me);
+                if (chosen) drawn.push(me);
                 dot.className = "kf-dot" + (chosen ? " chosen" : "");
                 dot.style.left = g.X(k.f) + "%";
                 dot.style.top = g.Y(v) + "%";
                 dot.style.background = ch.color;
                 dot.title = `${ch.label} · frame ${k.f} = ${Math.round(v * 1000) / 1000}\n` +
-                            "drag sideways to retime, up/down to change · click for tangents · double-click to delete";
+                            "drag to move every selected key · Shift+click adds / takes away · " +
+                            "click for tangents · double-click to delete";
                 dot.onmousedown = (e) => this._previzCurveDotDown(e, item, ch, k.f, g);
                 dot.dataset.item = item.id;
+                dot.dataset.prop = ch.prop;
+                dot.dataset.axis = String(ch.axis);
+                dot.dataset.f = String(k.f);
                 dot.ondblclick = (e) => {
                     e.preventDefault(); e.stopPropagation();
                     this.previzSnapshot("delete key");
                     S.removeKeyframe(item, k.f, ch.prop);
-                    if (chosen) this._previzCurveKey = null;
+                    this._previzCurveSetSel(this._previzCurveSelList()
+                        .filter((s) => !(s.id === item.id && s.prop === ch.prop && s.f === k.f)));
                     this.previzChanged();
                 };
                 wrap.append(dot);
@@ -565,6 +586,189 @@ export const PrevizCurvesMixin = {
                 if (chosen) this._previzLayoutTangents(item, ch, k, g);
             }
         }
+        // What is selected but no longer on screen (another object picked, a
+        // channel hidden, a key deleted) is let go: a drag moves only what you see.
+        if (!this._previzCurveDragging) this._previzCurveSetSel(drawn, { keepPrimary: true });
+    },
+
+    // ── Selection ────────────────────────────────────────────────────────────
+    //
+    // A selected key is one DOT: an object, a property, an axis and a frame.
+    // Retiming moves the whole key (one key holds all three axes of a
+    // property); a value or a tangent changes only the axis that was picked.
+
+    _previzCurveSelList() {
+        return Array.isArray(this._previzCurveSel) ? this._previzCurveSel : [];
+    },
+
+    _previzCurveSelId(s) { return `${s.id}|${s.prop}|${s.axis}|${s.f}`; },
+
+    _previzCurveIsSel(s) {
+        const id = this._previzCurveSelId(s);
+        return this._previzCurveSelList().some((x) => this._previzCurveSelId(x) === id);
+    },
+
+    /** Replace the selection; the last one is the key the handles were asked for. */
+    _previzCurveSetSel(list, { keepPrimary = false } = {}) {
+        const seen = new Set(), out = [];
+        for (const s of list || []) {
+            const id = this._previzCurveSelId(s);
+            if (seen.has(id)) continue;
+            seen.add(id);
+            out.push({ id: s.id, prop: s.prop, axis: s.axis, f: s.f });
+        }
+        this._previzCurveSel = out;
+        const p = this._previzCurveKey;
+        if (keepPrimary && p && out.some((s) => this._previzCurveSelId(s) === this._previzCurveSelId(p))) return;
+        this._previzCurveKey = out.length ? out[out.length - 1] : null;
+    },
+
+    /** The 3D view's modifiers: plain replaces, Shift toggles, Ctrl removes, Ctrl+Shift adds. */
+    _previzCurveMode(e) {
+        const ctrl = e.ctrlKey || e.metaKey;
+        if (ctrl && e.shiftKey) return "add";
+        if (ctrl) return "remove";
+        if (e.shiftKey) return "toggle";
+        return "replace";
+    },
+
+    /** Put `hits` into the selection the way `mode` says. */
+    _previzCurveApplySel(hits, mode) {
+        const cur = this._previzCurveSelList();
+        const ids = new Set(hits.map((h) => this._previzCurveSelId(h)));
+        if (mode === "replace") return this._previzCurveSetSel(hits);
+        if (mode === "remove") return this._previzCurveSetSel(cur.filter((s) => !ids.has(this._previzCurveSelId(s))), { keepPrimary: true });
+        if (mode === "add") return this._previzCurveSetSel([...cur, ...hits]);
+        // toggle
+        const on = new Set(cur.map((s) => this._previzCurveSelId(s)));
+        const kept = cur.filter((s) => !ids.has(this._previzCurveSelId(s)));
+        const added = hits.filter((h) => !on.has(this._previzCurveSelId(h)));
+        return this._previzCurveSetSel([...kept, ...added], { keepPrimary: !added.length });
+    },
+
+    /** The keys of every dot on screen - Ctrl+A. */
+    previzCurveSelectAll() {
+        const wrap = this._previzCurveWrap;
+        if (!wrap) return 0;
+        const all = [...wrap.querySelectorAll(".kf-dot")].map((d) => this._previzCurveDotSel(d));
+        this._previzCurveSetSel(all);
+        this.previzRefreshCurves();
+        return all.length;
+    },
+
+    _previzCurveDotSel(d) {
+        return { id: d.dataset.item, prop: d.dataset.prop, axis: Number(d.dataset.axis), f: Number(d.dataset.f) };
+    },
+
+    /** The selected keys as the anim tools name them: one {id, prop, f} per key. */
+    _previzCurveSelKeys() {
+        const seen = new Set(), out = [];
+        for (const s of this._previzCurveSelList()) {
+            const k = `${s.id}|${s.prop}|${s.f}`;
+            if (seen.has(k)) continue;
+            seen.add(k);
+            out.push({ id: s.id, prop: s.prop, f: s.f });
+        }
+        return out;
+    },
+
+    /** Del: the selected keys go (the whole key: every axis of its property). One undo step. */
+    previzCurveDeleteSelected() {
+        const keys = this._previzCurveSelKeys();
+        if (!keys.length) return 0;
+        this.previzSnapshot("delete keys");
+        const n = A.deleteKeys(this.previzScene().items, keys);
+        this._previzCurveSetSel([]);
+        this.previzChanged();
+        return n;
+    },
+
+    /**
+     * Smooth / Linear / Stepped (the key's ease, its hand-set handles go) or
+     * Flat (a level handle on the selected axis) on every selected key.
+     */
+    previzCurveSetTangents(mode) {
+        const sel = this._previzCurveSelList();
+        if (!sel.length) { notice("info", "Tangents", "Select keys in the Curve Editor first."); return 0; }
+        const scene = this.previzScene();
+        this.previzSnapshot(`${mode} tangents`);
+        let n = 0;
+        if (mode === "flat") {
+            for (const s of sel) if (S.setTangent(S.itemById(scene, s.id), s.prop, s.f, s.axis, 0, { side: "out" })) n++;
+        } else {
+            n = A.setKeysEase(scene.items, this._previzCurveSelKeys(), mode);
+        }
+        this.previzChanged();
+        return n;
+    },
+
+    /** The Curve Editor's keys, while it has the focus. */
+    previzCurveKeyDown(e) {
+        const ui = this._previzCurveUI;
+        if (!ui || !ui.body.isConnected || !e.composedPath().includes(ui.body)) return false;
+        const k = e.key, mod = e.ctrlKey || e.metaKey;
+        let done = true;
+        if ((k === "Delete" || k === "Backspace") && this._previzCurveSelList().length) this.previzCurveDeleteSelected();
+        else if (mod && (k === "a" || k === "A")) this.previzCurveSelectAll();
+        else if (k === "Escape" && this._previzCurveSelList().length) { this._previzCurveSetSel([]); this.previzRefreshCurves(); }
+        else done = false;
+        if (done) { e.preventDefault(); e.stopImmediatePropagation(); }
+        return done;
+    },
+
+    /**
+     * A press on the graph away from any key: a click lets the selection go
+     * (with no modifier), a drag draws a box and selects the keys inside it.
+     */
+    _previzCurveBlankDown(e) {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        const wrap = this._previzCurveWrap;
+        if (!wrap) return;
+        const win = this._viewerWindow();
+        const doc = wrap.ownerDocument;
+        const mode = this._previzCurveMode(e);
+        const rect = wrap.getBoundingClientRect();
+        const x0 = e.clientX, y0 = e.clientY;
+        let box = null;
+        const span = (evt) => ({
+            l: Math.min(x0, evt.clientX), t: Math.min(y0, evt.clientY),
+            r: Math.max(x0, evt.clientX), b: Math.max(y0, evt.clientY),
+        });
+        const onMove = (evt) => {
+            if (!box && Math.hypot(evt.clientX - x0, evt.clientY - y0) < 3) return;
+            if (!box) {
+                box = doc.createElement("div");
+                box.className = "curves-marquee";
+                wrap.append(box);
+            }
+            const r = span(evt);
+            box.style.left = `${r.l - rect.left}px`;
+            box.style.top = `${r.t - rect.top}px`;
+            box.style.width = `${r.r - r.l}px`;
+            box.style.height = `${r.b - r.t}px`;
+        };
+        const onUp = (evt) => {
+            win.removeEventListener("mousemove", onMove);
+            win.removeEventListener("mouseup", onUp);
+            if (!box) {
+                if (mode === "replace") this._previzCurveSetSel([]);
+                this.previzRefreshCurves();
+                return;
+            }
+            box.remove();
+            const r = span(evt);
+            const hits = [];
+            for (const d of wrap.querySelectorAll(".kf-dot")) {
+                const b = d.getBoundingClientRect();
+                const cx = b.left + b.width / 2, cy = b.top + b.height / 2;
+                if (cx >= r.l && cx <= r.r && cy >= r.t && cy <= r.b) hits.push(this._previzCurveDotSel(d));
+            }
+            this._previzCurveApplySel(hits, mode);
+            this.previzRefreshCurves();
+        };
+        win.addEventListener("mousemove", onMove);
+        win.addEventListener("mouseup", onUp);
     },
 
     /** The two handles of the selected key, on this channel's curve. */
@@ -602,6 +806,8 @@ export const PrevizCurvesMixin = {
             h.ondblclick = (e) => {
                 e.preventDefault(); e.stopPropagation();
                 this.previzSnapshot("reset tangents");
+                const scene = this.previzScene();
+                for (const s of this._previzCurveSelKeys()) S.clearTangents(S.itemById(scene, s.id), s.prop, s.f);
                 S.clearTangents(item, ch.prop, key.f);
                 this.previzChanged();
             };
@@ -611,51 +817,113 @@ export const PrevizCurvesMixin = {
 
     // ── Dragging ─────────────────────────────────────────────────────────────
 
+    /**
+     * Press on a key: pick it the way the modifiers say, then drag every
+     * selected key by the same frames and the same value.
+     *
+     * Each move starts again from the tracks as they were at the press, so a
+     * drag that passes over other keys leaves them as they were. The graph's
+     * scale is the press's too - it would otherwise rescale under the pointer
+     * as the values move. Shift held while dragging keeps to the direction the
+     * drag started in (time or value).
+     */
     _previzCurveDotDown(e, item, ch, frame, geom) {
         if (e.button !== 0) return;
         e.preventDefault();
         e.stopPropagation();
-        // Clicking a key is also how you ask for its handles.
-        this._previzCurveKey = { id: item.id, prop: ch.prop, f: frame };
+        const me = { id: item.id, prop: ch.prop, axis: ch.axis, f: frame };
+        const mode = this._previzCurveMode(e);
+        const was = this._previzCurveIsSel(me);
+        if (mode === "remove" || (mode === "toggle" && was)) {
+            this._previzCurveApplySel([me], mode);
+            this.previzRefreshCurves();
+            return;
+        }
+        if (mode === "toggle" || mode === "add") this._previzCurveApplySel([me], "add");
+        else if (!was) this._previzCurveSetSel([me]);
+        this._previzCurveKey = me;          // the one whose handles were asked for
+        this.previzRefreshCurves();
+
+        const scene = this.previzScene();
+        const sel = this._previzCurveSelList().slice();
+        // Per track (object + property): its keys at the press, the frames that
+        // move and, per frame, the axes whose value moves.
+        const tracks = new Map();
+        for (const s of sel) {
+            const tk = `${s.id}|${s.prop}`;
+            let t = tracks.get(tk);
+            if (!t) {
+                const it = S.itemById(scene, s.id);
+                if (!it) continue;
+                t = { item: it, prop: s.prop, orig: JSON.parse(JSON.stringify(S.track(it, s.prop))), axes: new Map() };
+                tracks.set(tk, t);
+            }
+            if (!t.axes.has(s.f)) t.axes.set(s.f, new Set());
+            t.axes.get(s.f).add(s.axis);
+        }
+        let minF = Infinity, maxF = -Infinity;
+        for (const s of sel) { minF = Math.min(minF, s.f); maxF = Math.max(maxF, s.f); }
+
         const wrap = this._previzCurveWrap;
         const win = this._viewerWindow();
         const rect = wrap.getBoundingClientRect();
-        let current = frame;
-        let moved = false;
-        this.previzBeginDrag("move key");
+        const g = geom;
+        const perValue = (GRAPH.bottom - GRAPH.top) / 100 * rect.height / ((g.hi - g.lo) || 1);
+        const dfMin = Math.min(0, g.bounds.min - minF), dfMax = Math.max(0, g.bounds.max - maxF);
+        let moved = false, applied = 0, lock = null;
+        this._previzCurveDragging = true;
+        this.previzBeginDrag(sel.length > 1 ? "move keys" : "move key");
+
+        const build = (df, dv) => {
+            const out = [];
+            for (const t of tracks.values()) {
+                const still = new Set(t.orig.filter((k) => !t.axes.has(k.f)).map((k) => k.f));
+                const list = [];
+                for (const k of t.orig) {
+                    const nk = JSON.parse(JSON.stringify(k));
+                    const axes = t.axes.get(k.f);
+                    if (axes) {
+                        nk.f = k.f + df;
+                        if (still.has(nk.f)) return null;      // would land on a key that stays
+                        if (dv) {
+                            if (Array.isArray(nk.v)) for (const a of axes) nk.v[a] = Number(nk.v[a]) + dv;
+                            else nk.v = Number(nk.v) + dv;
+                        }
+                    }
+                    list.push(nk);
+                }
+                out.push([t, list]);
+            }
+            return out;
+        };
 
         const onMove = (evt) => {
+            const dx = evt.clientX - e.clientX, dy = evt.clientY - e.clientY;
+            if (!moved && Math.hypot(dx, dy) < 2) return;
             moved = true;
-            const g = this._previzCurveGeom(geom.lines);
-            const xPct = Math.max(0, Math.min(100, ((evt.clientX - rect.left) / rect.width) * 100));
-            const yPct = Math.max(0, Math.min(100, ((evt.clientY - rect.top) / rect.height) * 100));
-            const wantFrame = Math.max(g.bounds.min, Math.min(g.bounds.max, g.frameAt(xPct)));
-            const key = S.track(item, ch.prop).find((k) => k.f === current);
-            if (!key) return;
-
-            // Sideways: retime the key (every channel of this property moves with
-            // it — one key holds all three). Up/down: this channel only.
-            const value = evt.shiftKey ? undefined : g.valueAt(yPct);
-            let next = key.v;
-            if (value !== undefined) {
-                next = Array.isArray(key.v) ? key.v.slice() : value;
-                if (Array.isArray(next)) next[ch.axis] = value;
-            }
-
-            if (wantFrame !== current && !S.track(item, ch.prop).some((k) => k.f === wantFrame)) {
-                S.removeKeyframe(item, current, ch.prop);
-                S.setKeyframe(item, ch.prop, wantFrame, next, key.ease);
-                current = wantFrame;
-                this._previzCurveKey = { id: item.id, prop: ch.prop, f: current };
-            } else {
-                S.setKeyframe(item, ch.prop, current, next, key.ease);
-            }
+            if (evt.shiftKey) { if (!lock) lock = Math.abs(dx) >= Math.abs(dy) ? "time" : "value"; }
+            else lock = null;
+            let df = Math.round((dx / (rect.width || 1)) * g.span);
+            df = Math.max(dfMin, Math.min(dfMax, df));
+            let dv = -dy / (perValue || 1);
+            if (lock === "time") dv = 0;
+            if (lock === "value") df = 0;
+            let next = build(df, dv);
+            if (!next) { df = applied; next = build(df, dv); }   // keep the last frame that fitted
+            if (!next) return;
+            for (const [t, list] of next) S.setTrack(t.item, t.prop, list);
+            applied = df;
+            this._previzCurveSel = sel.map((s) => ({ ...s, f: s.f + df }));
+            this._previzCurveKey = { ...me, f: me.f + df };
             this.previzChanged({ persist: false, light: true });
         };
         const onUp = () => {
             win.removeEventListener("mousemove", onMove);
             win.removeEventListener("mouseup", onUp);
+            this._previzCurveDragging = false;
             this.previzEndDrag();
+            // A plain click on one of several selected keys picks that one alone.
+            if (!moved && mode === "replace" && was && sel.length > 1) this._previzCurveSetSel([me]);
             if (!moved) this.previzSnapshot("select key");   // keeps undo honest
             this.previzChanged();          // one save at the end of the drag
         };
@@ -670,6 +938,10 @@ export const PrevizCurvesMixin = {
      * key, IS the direction the curve leaves in. Dragging back past the key
      * would flip the handle to the other side, so the reach is clamped to stay
      * on its own side of the key.
+     *
+     * With several keys selected each of their handles on that side turns by
+     * the same angle on screen as the one dragged (every curve shares the
+     * graph's scale), so a row of keys keeps their differences.
      */
     _previzTangentDown(e, item, ch, key, side, geom) {
         if (e.button !== 0) return;
@@ -679,10 +951,26 @@ export const PrevizCurvesMixin = {
         const win = this._viewerWindow();
         const rect = wrap.getBoundingClientRect();
         const broken = e.altKey;
-        this.previzBeginDrag(broken ? "break tangent" : "shape tangent");
+        const g = geom;
+        // Screen pixels per value over pixels per frame: slope -> screen angle.
+        const k = ((GRAPH.bottom - GRAPH.top) / 100 * rect.height / ((g.hi - g.lo) || 1))
+                / ((rect.width || 1) / (g.span || 1));
+        const angle = (slope) => Math.atan(slope * k);
+        const scene = this.previzScene();
+        const me = { id: item.id, prop: ch.prop, axis: ch.axis, f: key.f };
+        const others = this._previzCurveSelList()
+            .filter((s) => this._previzCurveSelId(s) !== this._previzCurveSelId(me))
+            .map((s) => {
+                const it = S.itemById(scene, s.id);
+                return it ? { s, it, a0: angle(S.tangentAt(it, s.prop, s.f, s.axis, side)) } : null;
+            })
+            .filter(Boolean);
+        const a0 = angle(S.tangentAt(item, ch.prop, key.f, ch.axis, side));
+        const LIMIT = Math.PI / 2 - 0.01;
+        this._previzCurveDragging = true;
+        this.previzBeginDrag(broken ? "break tangent" : (others.length ? "shape tangents" : "shape tangent"));
 
         const onMove = (evt) => {
-            const g = this._previzCurveGeom(geom.lines);
             const xPct = Math.max(0, Math.min(100, ((evt.clientX - rect.left) / rect.width) * 100));
             const yPct = Math.max(0, Math.min(100, ((evt.clientY - rect.top) / rect.height) * 100));
             const dir = side === "in" ? -1 : 1;
@@ -690,12 +978,19 @@ export const PrevizCurvesMixin = {
             const minReach = Math.max(0.5, g.span * 0.01);
             const reach = dir * Math.max(minReach, dir * df);
             const dv = g.valueAt(yPct) - S.componentOf(key.v, ch.axis);
-            S.setTangent(item, ch.prop, key.f, ch.axis, dv / reach, { side, broken });
+            const slope = dv / reach;
+            S.setTangent(item, ch.prop, key.f, ch.axis, slope, { side, broken });
+            const turn = angle(slope) - a0;
+            for (const o of others) {
+                const a = Math.max(-LIMIT, Math.min(LIMIT, o.a0 + turn));
+                S.setTangent(o.it, o.s.prop, o.s.f, o.s.axis, Math.tan(a) / k, { side, broken });
+            }
             this.previzChanged({ persist: false, light: true });
         };
         const onUp = () => {
             win.removeEventListener("mousemove", onMove);
             win.removeEventListener("mouseup", onUp);
+            this._previzCurveDragging = false;
             this.previzEndDrag();
             this.previzChanged();
         };
