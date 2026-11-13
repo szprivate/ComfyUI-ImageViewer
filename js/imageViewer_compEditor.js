@@ -2628,7 +2628,7 @@ export function createCompEditor(host, opts = {}) {
         const list = got.workflows || [];
         if (!list.length) { pane.append(el(doc, "div", "mg-empty cp-warn", "This ComfyUI has none of the node packs this node's workflows need.")); return; }
         // The first one is the default: a node that never picked runs it (and keeps no `workflow`).
-        for (const w of list) wf.append(opt(w.id === got.choice ? "" : w.id, `${w.label}${w.api ? " · API" : ""}${w.missing && w.missing.length ? " · files missing" : ""}`));
+        for (const w of list) wf.append(opt(w.id === got.choice ? "" : w.id, `${w.label}${w.api ? " · API" : ""}${w.missing && w.missing.length ? " · downloads its model first" : ""}`));
         const cur = n.workflow && n.workflow !== got.choice && list.some((w) => w.id === n.workflow) ? n.workflow : "";
         wf.value = cur;
         wf.title = "The workflow (the model) this node runs";
@@ -3286,6 +3286,8 @@ export function createCompEditor(host, opts = {}) {
         rerender: () => queueRender(),
         /** An AI node's run has a result for frame f (a file relative to the comp): one undo step each. */
         aiResult(id, f, file) { return this.aiResults(id, { [String(f)]: file }); },
+        /** The workflows and model files on this machine changed (a download): ask again when Parameters is drawn. */
+        forgetAiModels() { if (st.aiModels) st.aiModels.clear(); refresh(["props"]); },
         /** A run's results ({frame: file relative to the comp}, a PNG sequence): ONE undo step for them all. */
         aiResults(id, frames, key0) {
             const flat = G.flatNode(st.comp, id), n = flat || node(id);

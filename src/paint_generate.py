@@ -83,6 +83,8 @@ LOADERS = {      # class -> (input, model folder) a missing file shows up in
     "UpscaleModelLoader": [("model_name", "upscale_models")],
     "ControlNetLoader": [("control_net_name", "controlnet")],
     "LoadDA3Model": [("model_name", "geometry_estimation")],
+    "LoadMoGeModel": [("model_name", "geometry_estimation")],
+    "ConditioningLoader": [("conditioning_name", "embeddings")],
 }
 IMAGE_LOADERS = ("LoadImage", "LoadImageOutput")
 MASK_LOADERS = ("LoadImageMask",)

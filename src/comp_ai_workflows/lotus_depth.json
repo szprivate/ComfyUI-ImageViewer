@@ -1,0 +1,150 @@
+{
+ "1": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "example.png",
+   "upload": "image"
+  },
+  "_meta": {
+   "title": "paint:image"
+  }
+ },
+ "10": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "lotus-depth-d-v1-1.safetensors",
+   "weight_dtype": "default"
+  }
+ },
+ "14": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "vae-ft-mse-840000-ema-pruned.safetensors"
+  }
+ },
+ "18": {
+  "class_type": "DisableNoise",
+  "inputs": {}
+ },
+ "68": {
+  "class_type": "LotusConditioning",
+  "inputs": {}
+ },
+ "19": {
+  "class_type": "BasicGuider",
+  "inputs": {
+   "model": [
+    "10",
+    0
+   ],
+   "conditioning": [
+    "68",
+    0
+   ]
+  }
+ },
+ "20": {
+  "class_type": "BasicScheduler",
+  "inputs": {
+   "model": [
+    "10",
+    0
+   ],
+   "scheduler": "normal",
+   "steps": 1,
+   "denoise": 1.0
+  }
+ },
+ "21": {
+  "class_type": "KSamplerSelect",
+  "inputs": {
+   "sampler_name": "euler"
+  }
+ },
+ "28": {
+  "class_type": "SetFirstSigma",
+  "inputs": {
+   "sigmas": [
+    "20",
+    0
+   ],
+   "sigma": 999.0000000000002
+  }
+ },
+ "23": {
+  "class_type": "VAEEncode",
+  "inputs": {
+   "pixels": [
+    "1",
+    0
+   ],
+   "vae": [
+    "14",
+    0
+   ]
+  }
+ },
+ "16": {
+  "class_type": "SamplerCustomAdvanced",
+  "inputs": {
+   "noise": [
+    "18",
+    0
+   ],
+   "guider": [
+    "19",
+    0
+   ],
+   "sampler": [
+    "21",
+    0
+   ],
+   "sigmas": [
+    "28",
+    0
+   ],
+   "latent_image": [
+    "23",
+    0
+   ]
+  }
+ },
+ "8": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "16",
+    0
+   ],
+   "vae": [
+    "14",
+    0
+   ]
+  }
+ },
+ "22": {
+  "class_type": "ImageInvert",
+  "inputs": {
+   "image": [
+    "8",
+    0
+   ]
+  }
+ },
+ "30": {
+  "class_type": "SaveImageAdvanced",
+  "inputs": {
+   "images": [
+    "22",
+    0
+   ],
+   "filename_prefix": "comp/ai/depth",
+   "format": "exr",
+   "format.bit_depth": "32-bit float",
+   "format.input_color_space": "linear"
+  },
+  "_meta": {
+   "title": "paint:output"
+  }
+ }
+}
