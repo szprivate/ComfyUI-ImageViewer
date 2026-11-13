@@ -160,7 +160,15 @@ const CSS = `
 .cp-pane{border:1px solid #ffffff14;border-radius:4px;margin:0 0 8px;background:#ffffff05}
 .cp-pane.first{border-color:#ffcf3a55}
 .cp-panehead{display:flex;align-items:center;gap:6px;padding:4px 6px;background:#ffffff0d;cursor:pointer;user-select:none;font-weight:600}
-.cp-panehead .cp-panename{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cp-panehead .cp-panename{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:none;border:1px solid transparent;border-radius:3px;color:inherit;font:inherit;padding:1px 4px;cursor:text}
+.cp-panehead .cp-panename::placeholder{color:inherit;opacity:1}
+.cp-panehead .cp-panename:hover{border-color:#ffffff33}
+.cp-panehead .cp-panename:focus{border-color:#ffffff66;background:#00000055;outline:none}
+.cp-panehead .cp-panename:focus::placeholder{opacity:.4}
+.cp-panehead .cp-panetile{flex:none;width:18px;height:14px;padding:0;border:1px solid #ffffff44;border-radius:3px;background:none;cursor:pointer}
+.cp-panehead .cp-panetile::-webkit-color-swatch-wrapper{padding:0}
+.cp-panehead .cp-panetile::-webkit-color-swatch{border:none;border-radius:2px}
+.cp-panehead .cp-panetile::-moz-color-swatch{border:none;border-radius:2px}
 .cp-panehead .cp-panetype{color:#9aa;font-weight:400;font-size:11px}
 .cp-panehead button{padding:0 6px;min-width:0}
 .cp-pane > .mg-prop,.cp-pane > .mg-empty,.cp-pane > div{margin-left:4px;margin-right:4px}
@@ -2437,11 +2445,22 @@ export function createCompEditor(host, opts = {}) {
         const folded = st.folded && st.folded.has(n.id);
         const head = el(doc, "div", "cp-panehead" + (folded ? " folded" : ""));
         const fold = el(doc, "span", "cp-panefold", folded ? "▸" : "▾");
-        head.append(fold, el(doc, "span", "cp-panename", `${n.name || n.id}`), el(doc, "span", "cp-panetype", t.label));
+        // The node's name and its colour in the graph are set here, in the header.
+        const name = el(doc, "input", "cp-panename"); name.type = "text"; name.value = n.name || ""; name.placeholder = n.id;
+        name.title = "The node's name: click to change it (empty: its id again)";
+        name.size = 1; name.spellcheck = false;
+        name.onchange = () => mutate(() => { if (name.value.trim()) n.name = name.value.trim(); else delete n.name; });
+        name.onkeydown = (e) => { if (e.key === "Enter") name.blur(); else if (e.key === "Escape") { name.value = n.name || ""; name.blur(); } e.stopPropagation(); };
+        const tile = el(doc, "input", "cp-panetile"); tile.type = "color"; tile.value = (n.tile || (n.type === "backdrop" ? BD_TILE : n.type === "sticky" ? NOTE_TILE : CAT_COLOR[t.cat] || "#808080")).slice(0, 7);
+        tile.title = "Its colour in the graph";
+        tile.onchange = () => mutate(() => { n.tile = tile.value; }, { structure: false });
+        head.append(fold, name, tile);
+        if (n.tile) { const r = btn("↺", "Its own colour again", () => mutate(() => { delete n.tile; }, { structure: false })); r.classList.add("cp-panetilereset"); head.append(r); }
+        head.append(el(doc, "span", "cp-panetype", t.label));
         const x = btn("×", "Close this panel (the node leaves the selection)", () => select(st.sel.filter((id) => id !== n.id)));
         head.append(x);
         head.onclick = (e) => {
-            if (e.target === x) return;
+            if (e.target.closest("button, input")) return;
             st.folded = st.folded || new Set();
             if (st.folded.has(n.id)) st.folded.delete(n.id); else st.folded.add(n.id);
             renderProps();
@@ -2499,15 +2518,6 @@ export function createCompEditor(host, opts = {}) {
         pane.append(row);
     }
     function paneBody(n, t, first) {
-        const name = el(doc, "input"); name.type = "text"; name.value = n.name || ""; name.placeholder = n.id;
-        name.onchange = () => mutate(() => { if (name.value.trim()) n.name = name.value.trim(); else delete n.name; });
-        pane.append(field("name", name));
-        const tile = el(doc, "input"); tile.type = "color"; tile.value = (n.tile || (n.type === "backdrop" ? BD_TILE : n.type === "sticky" ? NOTE_TILE : CAT_COLOR[t.cat] || "#808080")).slice(0, 7);
-        tile.title = "Its colour in the graph";
-        tile.onchange = () => mutate(() => { n.tile = tile.value; }, { structure: false });
-        const tileRow = field("colour", tile);
-        if (n.tile) tileRow.append(btn("↺", "Its own colour again", () => mutate(() => { delete n.tile; }, { structure: false })));
-        pane.append(tileRow);
         if (n.type === "sticky") {
             const ta = el(doc, "textarea"); ta.value = n.text || ""; ta.rows = 4; ta.style.width = "100%";
             ta.onchange = () => mutate(() => { n.text = ta.value; }, { structure: false });
