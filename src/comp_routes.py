@@ -29,6 +29,13 @@ and a render of its Output by the export rule.
                                                           the outputs moved beside the comp -> the node's results
     POST /imageviewer/comp_ai_place {job, image {filename, subfolder, type}}
                                                           the answer written beside the comp -> {file, frame, node}
+    POST /imageviewer/comp_ai_batch {path, comp, node, frames, workflow?, graph?, tune?, models?}
+                                                          a frame range as ONE prompt (comp_ai.prepare_batch):
+                                                          {run, graph, outputs {frame: node}, skipped}; 409 {missing}
+    POST /imageviewer/comp_ai_batch_place {run, images {frame: {filename, subfolder, type}}}
+                                                          the answers as a PNG sequence beside the comp -> {frames}
+    POST /imageviewer/comp_ai_models {action, workflow?, graph?}
+                                                          the model files a workflow's inputs can take
     GET  /imageviewer/comp_formats - the Send to Viewer node's formats and per-format options (file_writer)
     POST /imageviewer/comp_render {path, format, options? {bit_depth, compression, quality, compress_level, codec},
                                    first_number?, padding?, first?, last?, name?, context?, display?, view?, views?}
@@ -1086,7 +1093,8 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
                             ocio=comp_io.ocio_hook(path, path_access.is_allowed),
                             wid=body.get("workflow") or None, graph=body.get("graph"),
                             tune=body.get("tune") if isinstance(body.get("tune"), dict) else None,
-                            folder_paths=folder_paths, node_classes=node_classes())
+                            folder_paths=folder_paths, node_classes=node_classes(),
+                            models=body.get("models") if isinstance(body.get("models"), dict) else None)
         except G.Missing as e:
             return web.json_response({"error": str(e), "missing": e.missing}, status=409)
         except (comp_ai.AiError, G.GenerateError, ValueError, OSError) as e:
@@ -1121,6 +1129,36 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
             return err(path_access.refusal(res["path"]), 403)
         return web.json_response(res)
 
+    async def ai_batch(request):
+        from . import paint_generate as G
+        body = await body_of(request)
+        path = abspath(body.get("path"))
+        why = comp_path_ok(path)
+        if why:
+            return err(why, 403)
+        comp = body.get("comp")
+        if not isinstance(comp, dict):
+            return err("'comp' (the comp as it stands) is needed")
+        frames = body.get("frames")
+        if not isinstance(frames, list) or not all(isinstance(f, (int, float)) and not isinstance(f, bool) for f in frames):
+            return err("'frames' must be a list of frame numbers")
+        sources = comp_io.Sources(path, allow=path_access.may_serve, allow_lut=path_access.is_allowed)
+        try:
+            res = await off(comp_ai.prepare_batch, comp, path, str(body.get("node") or ""), frames,
+                            sources, folder_paths.get_input_directory(),
+                            ocio=comp_io.ocio_hook(path, path_access.is_allowed),
+                            wid=body.get("workflow") or None, graph=body.get("graph"),
+                            tune=body.get("tune") if isinstance(body.get("tune"), dict) else None,
+                            folder_paths=folder_paths, node_classes=node_classes(),
+                            models=body.get("models") if isinstance(body.get("models"), dict) else None)
+        except G.Missing as e:
+            return web.json_response({"error": str(e), "missing": e.missing}, status=409)
+        except (comp_ai.AiError, G.GenerateError, ValueError, OSError) as e:
+            return err(e)
+        finally:
+            sources.close()
+        return web.json_response(res)
+
     # ── VFX nodes (comp_vfx): LTX-2.5's Convert Footage workflows over the comp's range, the result beside it ──
 
     async def vfx_prepare(request):
@@ -1146,6 +1184,44 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         finally:
             sources.close()
         return web.json_response(res)
+
+    async def ai_batch_place(request):
+        body = await body_of(request)
+        run = str(body.get("run") or "")
+        images = body.get("images") if isinstance(body.get("images"), dict) else {}
+        try:
+            rec = comp_ai.batch_record(run)
+        except comp_ai.AiError as e:
+            return err(e)
+        target, _rel = comp_ai.sequence_name(rec["comp"], rec["node"], rec["kind"], run, 0)
+        if not path_access.is_allowed(target):
+            return err(path_access.refusal(target), 403)
+        found = {}
+        for f, img in images.items():
+            p = output_ref(img) if isinstance(img, dict) else None
+            if p and os.path.isfile(p) and path_access.may_serve(p):
+                try:
+                    found[int(f)] = p
+                except ValueError:
+                    continue
+        if not found:
+            return err("the workflow's pictures were not found", 404)
+        try:
+            res = await off(comp_ai.place_batch, run, found)
+        except (comp_ai.AiError, ValueError, OSError) as e:
+            return err(e)
+        res["missing"] = sorted(int(f) for f in images if str(f).lstrip("-").isdigit() and int(f) not in found)
+        return web.json_response(res)
+
+    async def ai_models(request):
+        from . import paint_generate as G
+        body = await body_of(request)
+        try:
+            res = await off(comp_ai.models_for, str(body.get("action") or ""), folder_paths,
+                            wid=body.get("workflow") or None, graph=body.get("graph"))
+        except (comp_ai.AiError, G.GenerateError, ValueError, OSError) as e:
+            return err(e)
+        return web.json_response(res, headers={"Cache-Control": "no-cache"})
 
     async def vfx_finish(request):
         from . import clip_vfx
@@ -1174,6 +1250,9 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         add("POST", f"{prefix}/comp_cdl", cdl)
         add("POST", f"{prefix}/comp_ai", ai_prepare)
         add("POST", f"{prefix}/comp_ai_place", ai_place)
+        add("POST", f"{prefix}/comp_ai_batch", ai_batch)
+        add("POST", f"{prefix}/comp_ai_batch_place", ai_batch_place)
+        add("POST", f"{prefix}/comp_ai_models", ai_models)
         add("POST", f"{prefix}/comp_vfx", vfx_prepare)
         add("POST", f"{prefix}/comp_vfx_finish", vfx_finish)
         add("GET", f"{prefix}/comp", get_comp)

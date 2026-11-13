@@ -595,6 +595,8 @@ export const CompPanelMixin = {
             cdlImport: (apply) => this._cpCdlImport(rec, apply),
             cdlExport: (n, values) => this._cpCdlExport(rec, n, values),
             aiRun: (id, frames) => this._cpAiRun(rec, id, frames),
+            aiStop: (id) => this._cpAiStop(id),
+            aiModels: (id) => this._cpAiModels(rec, id),
             vfxRun: (id) => this._cpVfxRun(rec, id),
             vfxStop: (id) => this._cpVfxStop(id),
         });
@@ -733,54 +735,182 @@ export const CompPanelMixin = {
         notice("error", "The CDL was not written", "There are 99 already.");
     },
 
-    // ── AI nodes: one frame through Paint's Generate workflows (comp_ai on the server) ──
+    // ── AI nodes: a frame range through Paint's Generate workflows as ONE ComfyUI job (comp_ai on the server) ──
 
-    /** Run an AI node on these frames, one after the other: each answer becomes its result (one undo step each). */
+    /** The Generate action an AI node asks for. */
+    _cpAiAction(n) {
+        const kind = n && C.EX.AI_KINDS[n.type];
+        if (!kind) return null;
+        return { matte: "background", depth: "edit", relight: "edit", upscale: "upscale" }[kind]
+            || ((n.prompt || "").trim() ? "fill" : "remove");
+    },
+
+    /** What an AI node can pick: Paint's workflows for its action, which one it uses, and that workflow's model
+     * inputs with the files ComfyUI's model folders hold ({workflows, choice, using, custom, inputs}). */
+    async _cpAiModels(rec, id) {
+        const ed = rec.editor, n = ed && ed.node(id);
+        const action = this._cpAiAction(n);
+        if (!action) return { workflows: [], inputs: [] };
+        const t = await this._paintWorkflows();
+        const a = t && t.actions && t.actions[action];
+        if (!a) throw new Error("this ComfyUI's viewer is older than the page");
+        const using = n.workflow && (a.workflows.some((w) => w.id === n.workflow) || (n.workflow === "custom" && a.custom)) ? n.workflow : a.choice;
+        const out = { workflows: a.workflows, choice: a.choice, using, custom: a.custom, inputs: [] };
+        if (using === "agent") return out;
+        const item = a.workflows.find((w) => w.id === using);
+        const graph = item ? await this._paintPrompt(item, () => {}) : null;
+        const r = await cpPost("/imageviewer/comp_ai_models", { action, workflow: using, graph });
+        out.inputs = r.inputs || [];
+        return out;
+    },
+
+    /** Stop an AI node's job: out of ComfyUI's queue, or interrupted if it runs. */
+    _cpAiStop(id) {
+        const run = this._cpAiRuns && this._cpAiRuns.get(id);
+        if (run) { run.stopped = true; if (run.stop) run.stop(); }
+    },
+
+    /**
+     * Run an AI node on these frames: ONE ComfyUI job for them all (or jobs of the node's `per_job` frames), the
+     * models loaded once; the answers come back as a PNG sequence beside the comp and become the node's results
+     * (one undo step a job).
+     */
     async _cpAiRun(rec, id, frames) {
         const ed = rec.editor;
         if (!ed) return;
         if (!rec.path) { notice("warn", "Save the comp first", "The results are kept beside it."); return; }
-        const busy = this._cpAiBusy || (this._cpAiBusy = new Set());
-        if (busy.has(id)) return;
+        const runs = this._cpAiRuns || (this._cpAiRuns = new Map());
+        if (runs.has(id)) return;
         const n0 = ed.node(id);
-        const kind = n0 && C.EX.AI_KINDS[n0.type];
-        if (!kind) return;
-        const action = { matte: "background", depth: "edit", relight: "edit", upscale: "upscale" }[kind]
-            || ((n0.prompt || "").trim() ? "fill" : "remove");
+        const action = this._cpAiAction(n0);
+        if (!action) return;
         const t = await this._paintWorkflows();
         const a = t && t.actions && t.actions[action];
         if (!a) { notice("error", "The workflows are not here", "This ComfyUI's viewer is older than the page."); return; }
-        if (a.choice === "agent") { notice("warn", "Pick a workflow", `${a.label} is set to agentY, which the Comp cannot ask: pick a workflow in Paint's Generate \u203a Workflows\u2026`); return; }
-        const item = a.workflows.find((w) => w.id === a.choice);
-        busy.add(id);
-        ed.setAiBusy([...busy]);
+        const wid = n0.workflow && (a.workflows.some((w) => w.id === n0.workflow) || (n0.workflow === "custom" && a.custom)) ? n0.workflow : a.choice;
+        if (wid === "agent") { notice("warn", "Pick a workflow", `${a.label} is set to agentY, which the Comp cannot ask: pick a workflow on the node, or in Paint's Generate \u203a Workflows\u2026`); return; }
+        const item = a.workflows.find((w) => w.id === wid);
         const label = `${n0.name || n0.id}`;
-        let done = 0, failed = null;
+        const all = [...new Set(frames)].sort((x, y) => x - y);
+        const per = Math.max(0, Math.round(n0.per_job || 0));
+        const chunks = [];
+        for (let i = 0; i < all.length; i += per || all.length) chunks.push(all.slice(i, i + (per || all.length)));
+        const run = { stopped: false, stop: null };
+        runs.set(id, run);
+        const busy = () => [...runs.keys(), ...(this._cpAiBusy || [])];
+        const shared = this._cpAiProgress || (this._cpAiProgress = {});
+        const tell = (text) => { shared[id] = text; if (rec.editor) ed.setAiBusy(busy(), Object.assign({}, shared)); };
+        tell(`0 / ${all.length}`);
+        let done = 0, failed = null, skipped = [];
         try {
             const graph = item ? await this._paintPrompt(item, () => {}) : null;
-            for (const f of frames) {
-                if (!rec.editor || !ed.node(id)) break;     // the tab closed, or the node deleted
-                const prep = await cpPost("/imageviewer/comp_ai", { path: rec.path, comp: ed.comp(), node: id, frame: f,
-                    workflow: a.choice, graph, tune: (item && item.tune && item.tune.length && this._paintTune(a.choice)) || null });
-                const pid = await this._paintQueue(prep.graphs[0]);
-                const img = await this._paintWait(pid, prep.output, {});
-                const placed = await cpPost("/imageviewer/comp_ai_place", { job: prep.job, image: img });
-                ed.aiResult(id, placed.frame, placed.file);
-                done++;
-                if (frames.length > 1) notice("info", `${label}: frame ${f} done (${done} of ${frames.length})`);
+            const tune = (item && item.tune && item.tune.length && this._paintTune(wid)) || null;
+            for (const part of chunks) {
+                if (run.stopped || !rec.editor || !ed.node(id)) break;     // stopped, the tab closed, or the node deleted
+                tell(`${done} / ${all.length} · preparing`);
+                const key = ed.aiKeyNow(id);
+                const prep = await cpPost("/imageviewer/comp_ai_batch", { path: rec.path, comp: ed.comp(), node: id, frames: part,
+                    workflow: wid, graph, tune });
+                skipped = skipped.concat(prep.skipped || []);
+                if (run.stopped) break;
+                const pid = await this._paintQueue(prep.graph);
+                const base = done;
+                const land = async (images) => {
+                    const placed = await cpPost("/imageviewer/comp_ai_batch_place", { run: prep.run, images });
+                    if (rec.editor && ed.node(id)) ed.aiResults(id, placed.frames, key);
+                    done += Object.keys(placed.frames).length;
+                    tell(`${done} / ${all.length}`);
+                };
+                let images;
+                try {
+                    images = await this._cpAiWaitAll(pid, prep.outputs, run, (k) => tell(`${base + k} / ${all.length}`));
+                } catch (e) {
+                    // Stopped or failed part way: the frames that came back are kept.
+                    if (e.images && Object.keys(e.images).length) { try { await land(e.images); } catch (_) { /* the error below says it */ } }
+                    throw e;
+                }
+                await land(images);
             }
         } catch (e) {
             failed = e;
             const miss = e.data && e.data.missing;
-            if (miss && miss.length) {
+            if (run.stopped) notice("info", `${label}: stopped`, done ? `${done} frame(s) came back before it stopped.` : "");
+            else if (miss && miss.length) {
                 const list = miss.map((m) => (m.kind === "model" ? `${m.what} (${m.folder})` : `node ${m.what}`)).join(", ");
-                notice("error", "The workflow needs what is not here", `${list} - fetch it from Paint's Generate, or pick another workflow there`);
+                notice("error", "The workflow needs what is not here", `${list} - pick another model on the node, fetch it from Paint's Generate, or pick another workflow`);
             } else notice("error", `${label} did not run`, String(e.message || e));
         } finally {
-            busy.delete(id);
-            if (rec.editor) ed.setAiBusy([...busy]);
+            runs.delete(id);
+            delete shared[id];
+            if (rec.editor) ed.setAiBusy(busy(), Object.assign({}, shared));
         }
-        if (!failed && done) notice("info", `${label}: ${done === 1 ? "the result is in" : `${done} frames are in`}`, "Save the comp to keep them.");
+        if (skipped.length) notice("warn", `${label}: ${skipped.length} frame(s) left out`, skipped.slice(0, 3).map((x) => `frame ${x.frame}: ${x.why}`).join("; "));
+        if (!failed && done) notice("info", `${label}: ${done === 1 ? "the result is in" : `${done} frames are in`} (${chunks.length === 1 ? "one job" : `${chunks.length} jobs`})`, "Save the comp to keep them.");
+    },
+
+    /**
+     * Wait for a batch prompt: every output node's first picture, {frame: {filename, subfolder, type}}. *outputs*
+     * is {frame: output node id}; *onFrame(k)* is told how many have come. Rejects on an error or a stop (what came
+     * before a stop is in the error's `images`).
+     */
+    _cpAiWaitAll(id, outputs, run, onFrame) {
+        return new Promise((resolve, reject) => {
+            const byNode = new Map(Object.entries(outputs).map(([f, nid]) => [String(nid), f]));
+            const got = {};
+            let over = false, running = false, timer = null;
+            const pick = (out) => {
+                const im = out && out.images && out.images[0];
+                return im && im.filename ? { filename: im.filename, subfolder: im.subfolder || "", type: im.type || "output" } : null;
+            };
+            const take = (node, out) => {
+                const f = byNode.get(String(node)), im = pick(out);
+                if (f === undefined || !im || got[f]) return;
+                got[f] = im;
+                try { onFrame(Object.keys(got).length); } catch (_) { /* only the bar */ }
+            };
+            const end = (fn, v) => {
+                if (over) return;
+                over = true;
+                clearInterval(timer);
+                for (const [k, f] of hooks) api.removeEventListener(k, f);
+                run.stop = null;
+                fn(v);
+            };
+            const fromHistory = async (final) => {
+                const asIs = () => { if (final && Object.keys(got).length) end(resolve, got); };
+                try {
+                    const res = await api.fetchApi(`/history/${encodeURIComponent(id)}`);
+                    if (!res.ok) { asIs(); return; }
+                    const h = (await res.json())[id];
+                    if (!h) { asIs(); return; }
+                    for (const [node, out] of Object.entries(h.outputs || {})) take(node, out);
+                    const st = h.status || {};
+                    if (st.status_str === "error") {
+                        const msg = (st.messages || []).find((m) => m[0] === "execution_error");
+                        end(reject, Object.assign(new Error(msg ? msg[1].exception_message : "the workflow failed"), { images: got }));
+                    } else if (st.completed || final) {
+                        if (Object.keys(got).length) end(resolve, got);
+                        else if (st.completed) end(reject, new Error("the workflow gave no pictures"));
+                    }
+                } catch (_) { asIs(); /* else asked again */ }
+            };
+            const hooks = [
+                ["executed", (e) => { const d = e.detail || {}; if (d.prompt_id === id) take(d.node, d.output); }],
+                ["execution_start", (e) => { const d = e.detail || {}; if (d.prompt_id === id) running = true; }],
+                ["execution_error", (e) => { const d = e.detail || {}; if (d.prompt_id === id) end(reject, Object.assign(new Error(d.exception_message || "the workflow failed"), { images: got })); }],
+                ["execution_interrupted", (e) => { const d = e.detail || {}; if (d.prompt_id === id) end(reject, Object.assign(new Error("stopped"), { images: got })); }],
+                ["execution_success", (e) => { const d = e.detail || {}; if (d.prompt_id === id) fromHistory(true); }],
+            ];
+            for (const [k, f] of hooks) api.addEventListener(k, f);
+            run.stop = async () => {
+                try { await api.fetchApi("/queue", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ delete: [id] }) }); } catch (_) { /* gone already */ }
+                if (running && !over) {
+                    try { await api.fetchApi("/interrupt", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt_id: id }) }); } catch (_) { /* nothing running */ }
+                }
+                end(reject, Object.assign(new Error("stopped"), { images: got }));
+            };
+            timer = setInterval(() => fromHistory(false), 5000);     // a message missed (the socket reconnected): ComfyUI's history knows
+        });
     },
 
     // ── VFX nodes: LTX-2.5's Convert Footage workflows over the comp's range (comp_vfx on the server) ──
@@ -803,7 +933,7 @@ export const CompPanelMixin = {
         const run = { stops: [], stopped: false };
         runs.set(id, run);
         busy.add(id);
-        ed.setAiBusy([...busy]);
+        ed.setAiBusy([...busy, ...((this._cpAiRuns && this._cpAiRuns.keys()) || [])], Object.assign({}, this._cpAiProgress || {}));
         const say = (t) => { if (rec.editor) ed.setVfxNote(id, t); };
         const key = ed.vfxKeyOf(id);
         try {
@@ -846,7 +976,7 @@ export const CompPanelMixin = {
         } finally {
             runs.delete(id);
             busy.delete(id);
-            if (rec.editor) ed.setAiBusy([...busy]);
+            if (rec.editor) ed.setAiBusy([...busy, ...((this._cpAiRuns && this._cpAiRuns.keys()) || [])], Object.assign({}, this._cpAiProgress || {}));
         }
     },
 

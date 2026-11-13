@@ -2576,19 +2576,87 @@ export function createCompEditor(host, opts = {}) {
         const key = aiKeyOf(n), here = C.EX.aiResultFrame(n, st.frame);
         const stale = made.filter((f) => (r.keys || {})[f] !== key);
         const line = el(doc, "div", "mg-empty cp-ai");
-        line.textContent = !made.length ? "Not run yet: it passes its input through. Run sends the picture coming in through a ComfyUI workflow (Paint's Generate choice)."
+        line.textContent = !made.length ? "Not run yet: it passes its input through. Run sends the picture coming in through a ComfyUI workflow; a frame range goes as one job and comes back as a PNG sequence."
             : `Results for ${made.length === 1 ? `frame ${made[0]}` : `${made.length} frames (${made[0]}–${made[made.length - 1]})`}; `
               + (here === st.frame ? "this frame has its own." : `this frame shows frame ${here}'s.`)
-              + (stale.length ? ` ${stale.length === made.length ? "All are" : `${stale.length} are`} out of date: what comes in, or the words, changed since.` : "");
+              + (stale.length ? ` ${stale.length === made.length ? "All are" : `${stale.length} are`} out of date: what comes in, the words or the model changed since.` : "");
         if (stale.length) line.classList.add("cp-warn");
         pane.append(line);
+        aiModelRows(n);
+        // Frames per job: 0 = the whole range in one job (the models load once); a number splits a long range.
+        const pj = el(doc, "input"); pj.type = "number"; pj.min = "0"; pj.step = "1"; pj.value = String(Math.max(0, Math.round(n.per_job || 0)));
+        pj.title = "0: every frame in one ComfyUI job. A number: jobs of that many frames (a long range, or little memory)";
+        pj.onchange = () => { const v = Math.max(0, Math.round(Number(pj.value) || 0)); mutate(() => { if (v) n.per_job = v; else delete n.per_job; }, { structure: false }); };
+        pj.addEventListener("keydown", (e) => e.stopPropagation());
+        pane.append(field("frames per job", pj));
         const row = el(doc, "div", "mg-prop cp-btnrow");
-        const busy = st.aiBusy && st.aiBusy.has(fid(n.id));
-        row.append(el(doc, "span", "mg-sw", ""), el(doc, "label", "", "run"),
-            btn(busy ? "Running…" : "This frame", "Run the workflow on the picture coming in at the playhead", () => { if (!busy && o.aiRun) o.aiRun(fid(n.id), [st.frame]); }),
-            btn("All frames", "Run it on every frame of the comp, one after the other", () => { if (!busy && o.aiRun) o.aiRun(fid(n.id), Array.from({ length: st.comp.format.frames }, (_, i) => i)); }),
-            btn("Forget", "Take the results off the node (the files stay)", () => { if (made.length) mutate(() => { delete n.results; }, { structure: false }); }));
+        const id = fid(n.id), busy = st.aiBusy && st.aiBusy.has(id), prog = st.aiProgress && st.aiProgress[id];
+        const all = () => Array.from({ length: st.comp.format.frames }, (_, i) => i);
+        row.append(el(doc, "span", "mg-sw", ""), el(doc, "label", "", "run"));
+        if (busy) {
+            row.append(el(doc, "span", "cp-ai-prog", prog ? `Running… ${prog}` : "Running…"),
+                btn("Stop", "Stop the job (out of the queue, or interrupted if it runs)", () => o.aiStop && o.aiStop(id)));
+        } else {
+            row.append(btn("This frame", "Run the workflow on the picture coming in at the playhead", () => o.aiRun && o.aiRun(id, [st.frame])),
+                btn("All frames", "Run it on every frame of the comp as one ComfyUI job: a PNG sequence comes back", () => o.aiRun && o.aiRun(id, all())));
+            if (stale.length && stale.length < made.length) row.append(btn("Out of date", "Run it again on the frames whose results are out of date", () => o.aiRun && o.aiRun(id, stale)));
+        }
+        row.append(btn("Forget", "Take the results off the node (the files stay)", () => { if (made.length) mutate(() => { delete n.results; }, { structure: false }); }));
         pane.append(row);
+    }
+    /** The node's workflow and model files: what Paint's table offers for its action, and the model folders' files
+     * each of that workflow's model inputs can take (asked once per workflow, through the panel). */
+    function aiModelRows(n) {
+        if (!o.aiModels) return;
+        const want = `${n.type}|${n.workflow || ""}|${n.type === "ai_inpaint" && (n.prompt || "").trim() ? "fill" : ""}`;
+        const cache = st.aiModels || (st.aiModels = new Map());
+        const got = cache.get(want);
+        if (!got) {
+            cache.set(want, { pending: true });
+            Promise.resolve(o.aiModels(fid(n.id))).then((v) => { cache.set(want, v || { error: "no answer" }); refresh(["props"]); },
+                (e) => { cache.set(want, { error: String((e && e.message) || e) }); refresh(["props"]); });
+        }
+        if (!got || got.pending) { pane.append(el(doc, "div", "mg-empty", "Looking up the workflows and models…")); return; }
+        if (got.error) {
+            const row = el(doc, "div", "mg-prop");
+            row.append(el(doc, "div", "mg-empty cp-warn", `Models not known: ${got.error}`), btn("Again", "Ask again", () => { cache.delete(want); refresh(["props"]); }));
+            pane.append(row);
+            return;
+        }
+        const wf = el(doc, "select", "mg-btn cp-ai-wf");
+        const def = (got.workflows || []).find((w) => w.id === got.choice);
+        const opt = (v, t) => { const x = el(doc, "option", "", t); x.value = v; return x; };
+        const defLabel = def ? def.label : got.choice === "custom" ? `My workflow${got.custom && got.custom.name ? `: ${got.custom.name}` : ""}`
+            : got.choice === "agent" ? "agentY: not for the Comp" : "";
+        wf.append(opt("", `Paint's choice${defLabel ? ` (${defLabel})` : ""}`));
+        for (const w of got.workflows || []) wf.append(opt(w.id, `${w.label}${w.api ? " · API" : ""}${w.missing && w.missing.length ? " · files missing" : ""}`));
+        if (got.custom) wf.append(opt("custom", `My workflow${got.custom.name ? ` (${got.custom.name})` : ""}`));
+        wf.value = n.workflow || "";
+        if (wf.value !== (n.workflow || "")) wf.value = "";
+        wf.title = "The workflow (the model) this node runs; Paint's choice follows Paint's Generate › Workflows";
+        wf.onchange = () => mutate(() => { if (wf.value) n.workflow = wf.value; else delete n.workflow; delete n.models; }, { structure: false });
+        pane.append(field("workflow", wf));
+        const ins = got.inputs || [];
+        if (!ins.length) {
+            if (got.using !== "agent") pane.append(el(doc, "div", "mg-empty", "This workflow has no model files to pick (an API model, or one the node pack chooses)."));
+            return;
+        }
+        for (const m of ins) {
+            const sel = el(doc, "select", "mg-btn cp-ai-model");
+            sel.dataset.key = m.key;
+            sel.append(opt("", `workflow's own (${m.value}${m.found ? "" : ", not here"})`));
+            for (const f of m.options || []) sel.append(opt(f, f));
+            const cur = (n.models || {})[m.key] || "";
+            sel.value = cur;
+            if (sel.value !== cur) { sel.append(opt(cur, `${cur} (not here)`)); sel.value = cur; }
+            sel.title = `${m.title}: a file of the ${m.folder} models`;
+            sel.onchange = () => mutate(() => {
+                const ms = n.models && typeof n.models === "object" ? n.models : (n.models = {});
+                if (sel.value) ms[m.key] = sel.value; else delete ms[m.key];
+                if (!Object.keys(ms).length) delete n.models;
+            }, { structure: false });
+            pane.append(field(`${m.title}`.slice(0, 28), sel));
+        }
     }
     /** A VFX node: what it shows, Render (the workflow over the comp's range, once), Stop, Forget. */
     function vfxKeyOfNode(n) {
@@ -3219,17 +3287,32 @@ export function createCompEditor(host, opts = {}) {
         },
         rerender: () => queueRender(),
         /** An AI node's run has a result for frame f (a file relative to the comp): one undo step each. */
-        aiResult(id, f, file) {
+        aiResult(id, f, file) { return this.aiResults(id, { [String(f)]: file }); },
+        /** A run's results ({frame: file relative to the comp}, a PNG sequence): ONE undo step for them all. */
+        aiResults(id, frames, key0) {
             const flat = G.flatNode(st.comp, id), n = flat || node(id);
-            if (!n) return false;
-            const fl = G.flattenComp(st.comp), key = C.aiKey(fl, C.nodeById(fl, id) || n);
+            if (!n || !frames || !Object.keys(frames).length) return false;
+            const fl = G.flattenComp(st.comp), key = key0 || C.aiKey(fl, C.nodeById(fl, id) || n);
             mutate(() => {
                 const r = n.results && typeof n.results === "object" ? n.results : (n.results = {});
-                (r.frames || (r.frames = {}))[String(f)] = file;
-                (r.keys || (r.keys = {}))[String(f)] = key;
+                for (const [f, file] of Object.entries(frames)) {
+                    (r.frames || (r.frames = {}))[String(f)] = file;
+                    (r.keys || (r.keys = {}))[String(f)] = key;
+                }
             }, { structure: false });
             return true;
         },
+        /** The key an AI node's results are made for now (taken when a run starts: what it was made from). */
+        aiKeyNow(id) {
+            const flat = G.flatNode(st.comp, id), n = flat || node(id);
+            if (!n) return null;
+            const fl = G.flattenComp(st.comp);
+            return C.aiKey(fl, C.nodeById(fl, id) || n);
+        },
+        /** Which AI nodes are running (Parameters says so), and how far ({id: "12 / 48"}). */
+        setAiBusy(ids, progress) { st.aiBusy = new Set(ids || []); st.aiProgress = progress || {}; refresh(["props"]); },
+        /** Forget the workflows and models asked for (Paint's table changed). */
+        aiModelsChanged() { if (st.aiModels) st.aiModels.clear(); refresh(["props"]); },
         /** A VFX node's render is in: its results (one undo step). */
         vfxResult(id, res) {
             const flat = G.flatNode(st.comp, id), n = flat || node(id);
@@ -3249,8 +3332,6 @@ export function createCompEditor(host, opts = {}) {
             if (text) m.set(id, text); else m.delete(id);
             refresh(["props"]);
         },
-        /** Which AI nodes are running (Parameters says so). */
-        setAiBusy(ids) { st.aiBusy = new Set(ids || []); refresh(["props"]); },
         frameAll,
         select: (ids) => select(ids),
         selection: () => st.sel.slice(),
