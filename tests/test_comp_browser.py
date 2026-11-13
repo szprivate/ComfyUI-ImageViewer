@@ -495,6 +495,32 @@ class CompBrowserTests(unittest.TestCase):
         self.assertNotIn(20, kept2, "frames made before the change are no longer counted")
         self.assertEqual(self.errors, [])
 
+    def test_while_a_value_moves_the_picture_is_smaller_and_then_its_own_size(self):
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        pg.evaluate(f"""() => {{ const e = {ED}; e.setFormat({{ width: 1280, height: 720 }}); e.setProxyBudget(0);
+            const c = e.comp(); c.nodes.push({{ id: 'Grade1', type: 'grade', x: 0, y: 60, inputs: ['Constant1', null], gain: 1 }});
+            c.nodes.find((n) => n.id === 'Output1').inputs = ['Grade1']; c.nodes.find((n) => n.id === 'Constant1').color = [0.2, 0.4, 0.6, 1]; e.refresh(); }}""")
+        pg.wait_for_timeout(600)
+        full = pg.evaluate(f"() => {ED}.lastRender()")
+        self.assertEqual(full["phases"]["proxy"], 1, full)
+        # values changed one after the other, as a drag does: drawn smaller, the same footage
+        seen = pg.evaluate(f"""async () => {{ const e = {ED}, out = [];
+            for (let k = 1; k <= 6; k++) {{ e.comp().nodes.find((n) => n.id === 'Grade1').gain = 1 + k * 0.1; e.refresh();
+                await new Promise((r) => setTimeout(r, 60)); out.push(e.lastRender()); }}
+            return out; }}""")
+        self.assertTrue(any(r["phases"]["proxy"] > 1 for r in seen), seen)
+        small = [r for r in seen if r["phases"]["proxy"] > 1][-1]
+        self.assertLess(small["width"], full["width"])
+        # once it stops, the picture at its own size, with the last value
+        pg.wait_for_timeout(700)
+        last = pg.evaluate(f"() => {ED}.lastRender()")
+        self.assertEqual((last["phases"]["proxy"], last["width"], last["height"]), (1, full["width"], full["height"]), last)
+        px = self.pixel(pg, 0.5, 0.5)
+        self.assertAlmostEqual(px[0], round(255 * ((0.2 * 1.6) ** (1 / 2.4) * 1.055 - 0.055)), delta=3)
+        self.assertEqual(self.errors, [])
+
     def test_the_gpu_preview_makes_the_cpus_numbers(self):
         pg = self.page()
         res = pg.evaluate("""async () => {

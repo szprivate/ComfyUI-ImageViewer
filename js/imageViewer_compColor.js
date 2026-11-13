@@ -101,6 +101,10 @@ export function colorCorrectImage(img, p) {
         return { X, kh, ks, kY: lumaOf(k[0], k[1], k[2]), ht: p[`${X}_hue_tol`], hsft: p[`${X}_hue_soft`], st: p[`${X}_sat_tol`], lt: p[`${X}_lum_tol`],
             soft: p[`${X}_soft`], turn: hueTurn(p[`${X}_hue`]), sat: p[`${X}_saturation`] / 100, bri: p[`${X}_brightness`] };
     });
+    // Worked once instead of per pixel where the ranges leave them alone (the same numbers either way): the
+    // hue turn when only the master turns, and powers of exactly 1.
+    const hueFixed = hue[1] === 0 && hue[2] === 0 && hue[3] === 0 ? hueTurn(hue[0] + 0) : null;
+    const conOne = con[0] === 1 && con[1] === 1 && con[2] === 1 && con[3] === 1;
     for (let i = 0; i < w * h * 4; i += 4) {
         const a = s[i + 3];
         if (a <= 0) { o[i] = s[i]; o[i + 1] = s[i + 1]; o[i + 2] = s[i + 2]; o[i + 3] = a; continue; }
@@ -109,7 +113,7 @@ export function colorCorrectImage(img, p) {
         const [ws, wm, wh] = rangeWeights(lumaOf(r, g, b), se, hs);
         // HSL
         const hu = hue[0] + (ws * hue[1] + wm * hue[2] + wh * hue[3]);
-        const [t0, t1, t2] = hueTurn(hu);
+        const [t0, t1, t2] = hueFixed || hueTurn(hu);
         let nr = t0 * r + t1 * g + t2 * b, ng = t2 * r + t0 * g + t1 * b, nb = t1 * r + t2 * g + t0 * b;
         r = nr; g = ng; b = nb;
         const sa = sat[0] * (ws * sat[1] + wm * sat[2] + wh * sat[3]);
@@ -118,9 +122,11 @@ export function colorCorrectImage(img, p) {
         const br = bri[0] + (ws * bri[1] + wm * bri[2] + wh * bri[3]);
         r = r + br; g = g + br; b = b + br;
         const ct = con[0] * (ws * con[1] + wm * con[2] + wh * con[3]);
+        if (conOne && ct === 1) { /* x^1: the number as it is */ } else {
         if (r > 0) r = cc * Math.pow(r / cc, ct);
         if (g > 0) g = cc * Math.pow(g / cc, ct);
         if (b > 0) b = cc * Math.pow(b / cc, ct);
+        }
         // hue offsets: master, midtones and highlights tint as a balance, shadows as a lift
         const c = [r, g, b];
         for (let k = 0; k < 3; k++) {
@@ -134,7 +140,7 @@ export function colorCorrectImage(img, p) {
             const ak = Ga[0] * (ws * Ga[1] + wm * Ga[2] + wh * Ga[3]);
             const pk = Pe[0] + (ws * Pe[1] + wm * Pe[2] + wh * Pe[3]);
             let x = c[k] * gk + pk;
-            if (x > 0) x = Math.pow(x, 1 / ak);
+            if (x > 0 && ak !== 1) x = Math.pow(x, 1 / ak);
             c[k] = x;
         }
         // secondaries

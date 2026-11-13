@@ -351,6 +351,14 @@ export function createCompEditor(host, opts = {}) {
         return { img: C.renderNode(st.comp, id, f, ctx), ctx, how: "cpu" };
     }
     let lastPics = null;
+    let lastPhases = null, drawCount = 0;
+    // While something changes quickly (a value dragged, the timeline scrubbed) a picture that costs more than
+    // PROXY_BUDGET_MS is made smaller - a half or a quarter of the preview's size each way, from the same
+    // footage - and the picture at its own size follows PROXY_SETTLE_MS after the last change. Only the picture
+    // while moving is smaller: what stays on screen is the ordinary preview.
+    const PROXY_AFTER_MS = 300, PROXY_SETTLE_MS = 320;
+    let PROXY_BUDGET_MS = 60;
+    let fullCost = 0, lastDrawEnd = -1e9, settleTimer = 0, lastProxy = 1;
     let renderGen = 0, renderQueued = false, lastMs = 0, lastScale = 1, lastShown = 0, drawnGen = 0, lastHow = "cpu";
     const SHOW_EVERY_MS = 120;
     const infos = new Map();
@@ -731,11 +739,12 @@ export function createCompEditor(host, opts = {}) {
         const gen = ++renderGen;
         const id = viewedId();
         const f = st.frame;
-        const scale = scaleNow();
+        const base = scaleNow();
         const pics = new Map();
+        const tAsk = performance.now();
         try {
             const bId0 = viewTools.bNeeded(id);
-            await loadNeeds(C.sourceNeeds(st.comp, id, f, eyeNow()).concat(bId0 ? C.sourceNeeds(st.comp, bId0, f, eyeNow()) : []), pics, scale);
+            await loadNeeds(C.sourceNeeds(st.comp, id, f, eyeNow()).concat(bId0 ? C.sourceNeeds(st.comp, bId0, f, eyeNow()) : []), pics, base);
             const ds = displaySpec();
             await needLuts(C.ocioNeeds(st.comp, f).map((x) => x.spec).concat(ds ? [ds] : []));
         } catch (_) { /* drawn without */ }
@@ -744,15 +753,30 @@ export function createCompEditor(host, opts = {}) {
         // anyway when nothing was drawn for a while, so a scrub shows frames as it goes instead of only at its end.
         if (gen < drawnGen || (gen !== renderGen && performance.now() - lastShown < SHOW_EVERY_MS)) return;
         lastShown = performance.now(); drawnGen = gen;
+        // Moving: the last picture was drawn a moment ago, and a picture at its own size costs too much.
+        const moving = lastShown - lastDrawEnd < PROXY_AFTER_MS && fullCost >= PROXY_BUDGET_MS;
+        const shrinkBy = !moving ? 1 : fullCost > 4 * PROXY_BUDGET_MS ? 4 : 2;
+        const scale = shrinkBy > 1 && Math.min(viewFmt().width, viewFmt().height) * base / shrinkBy >= 96 ? base / shrinkBy : base;
+        lastProxy = base / scale;
         lastPics = { pics, scale, frame: f };
         const t0 = performance.now();
+        const tLoad = t0 - tAsk;
         const roi = visibleRegion(scale);
         const { img, ctx: rctx, how } = picture(id, f, scale, pics, roi, false);
         lastRoi = img.roi || null;
         lastHow = how;
-        noteFrame(id, f, scale, rctx.keysUsed);
-        aheadSoon();
         lastMs = Math.round(performance.now() - t0);
+        if (scale === base) {
+            if (how !== "kept") fullCost = lastMs;
+            noteFrame(id, f, scale, rctx.keysUsed);
+            aheadSoon();
+            win().clearTimeout(settleTimer); settleTimer = 0;
+        } else {
+            // Smaller while moving: no rendering ahead now, and the picture at its own size once it stops.
+            aheadStop();
+            win().clearTimeout(settleTimer);
+            settleTimer = win().setTimeout(() => { settleTimer = 0; queueRender(); }, PROXY_SETTLE_MS);
+        }
         lastScale = scale;
         if (canvas.width !== img.w || canvas.height !== img.h) { canvas.width = img.w; canvas.height = img.h; }
         const ctx = canvas.getContext("2d");
@@ -771,6 +795,9 @@ export function createCompEditor(host, opts = {}) {
         const marked = viewTools.afterEncode(shownImg, data.data, scale);
         ctx.putImageData(data, 0, 0);
         layoutCanvas();
+        lastPhases = { load: Math.round(tLoad), render: lastMs, show: Math.round(performance.now() - t0) - lastMs, frame: f, how, proxy: lastProxy };
+        drawCount++;
+        lastDrawEnd = performance.now();
         const v = G.flatNode(st.comp, id), vf = viewFmt();
         const size = vf.width !== fmt().width || vf.height !== fmt().height ? ` · ${vf.width}×${vf.height}` : "";
         const lay = st.layer !== "rgba" ? (layers.includes(st.layer) ? ` · ${st.layer}` : ` · no ${st.layer} here: rgba`) : "";
@@ -780,7 +807,7 @@ export function createCompEditor(host, opts = {}) {
         const shown = ds ? (dl ? ` · ${ds.display} / ${ds.view}` : lutFail ? ` · OCIO display failed (${lutFail.why}): plain sRGB` : " · OCIO display loading…") : "";
         const cmp = imgB ? ` · ${viewTools.state.compare} with ${(node(bId) && (node(bId).name || bId)) || bId}` : "";
         const rng = viewTools.state.range ? ` · ${marked ? `${marked} px out of 0–1` : "nothing out of 0–1"}` : "";
-        info.textContent = `Viewing ${v ? v.name || v.id : "nothing"}${size}${cmp}${chan}${ev}${shown}${rng} · ${scale === 1 ? "full" : "1/" + Math.round(1 / scale)} · ${lastMs} ms${lastHow === "cpu" ? (gpuWhy && gpuWanted() ? ` · CPU (GPU off: ${gpuWhy})` : "") : ` · ${lastHow}`}`;
+        info.textContent = `Viewing ${v ? v.name || v.id : "nothing"}${size}${cmp}${chan}${ev}${shown}${rng} · ${scale === 1 ? "full" : "1/" + Math.round(1 / scale)}${lastProxy > 1 ? " while moving" : ""} · ${lastMs} ms${lastHow === "cpu" ? (gpuWhy && gpuWanted() ? ` · CPU (GPU off: ${gpuWhy})` : "") : ` · ${lastHow}`}`;
     }
     /** Frame f of node id is in the cache under the key renderNode used: remembered for the timeline's marks. */
     function noteFrame(id, f, scale, keysUsed) {
@@ -800,11 +827,23 @@ export function createCompEditor(host, opts = {}) {
     // ── rendering ahead: while nothing else happens, the next frames of the picture on screen are made and kept
     // (only the picture itself, so the cache holds frames rather than every node of a few), at most AHEAD and
     // at most half the cache; it stops at the first change, a newer draw or playback, and starts again later.
+    // It waits AHEAD_IDLE_MS after the last draw and stops at any press, key or wheel in the window: a frame
+    // made ahead holds the page while it is made, so it must not be in the way of the next thing done.
+    const AHEAD_IDLE_MS = 1000;
+    function aheadStop() { if (ahead) { win().clearTimeout(ahead.t); ahead.stop = true; ahead = null; } }
+    let aheadWin = null;
+    function aheadWatch() {
+        const w = win();
+        if (aheadWin === w) return;
+        aheadWin = w;
+        for (const t of ["pointerdown", "keydown", "wheel"]) w.addEventListener(t, () => aheadStop(), { capture: true, passive: true });
+    }
     function aheadSoon() {
-        if (ahead) { clearTimeout(ahead.t); ahead.stop = true; ahead = null; }
+        aheadStop();
         if (!st.comp || (o.playing && o.playing())) return;
+        aheadWatch();
         const job = { stop: false, gen: renderGen, t: 0 };
-        job.t = win().setTimeout(() => aheadRun(job), 400);
+        job.t = win().setTimeout(() => aheadRun(job), AHEAD_IDLE_MS);
         ahead = job;
     }
     async function aheadRun(job) {
@@ -3149,7 +3188,9 @@ export function createCompEditor(host, opts = {}) {
         },
         addNode: (type, extra) => { let n; mutate(() => { n = C.insertNode(gc(), type, primary() && primary().id, extra || {}); st.sel = [n.id]; }); return n; },
         undo, redo, save,
-        lastRender: () => ({ ms: lastMs, scale: lastScale, width: canvas.width, height: canvas.height }),
+        /** What a picture may cost before it is drawn smaller while moving (ms; tests set it low). */
+        setProxyBudget: (ms) => { PROXY_BUDGET_MS = Number(ms) || 0; },
+        lastRender: () => ({ ms: lastMs, scale: lastScale, width: canvas.width, height: canvas.height, phases: lastPhases, draws: drawCount }),
         canvas,
         dispose() { if (ro) ro.disconnect(); closeMenus(); infos.clear(); },
     };

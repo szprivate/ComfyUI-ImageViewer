@@ -798,7 +798,9 @@ export const CompPanelMixin = {
         if (!res.ok) return null;
         const w = Number(res.headers.get("X-Comp-W")), h = Number(res.headers.get("X-Comp-H"));
         let buf = await res.arrayBuffer();
-        if (res.headers.get("X-ImageViewer-Enc") === "gzip" || new Uint8Array(buf, 0, 2)[0] === 0x1f) {
+        // Packed only across machines ("none" on this one); a server that does not say always packed it.
+        const enc = res.headers.get("X-ImageViewer-Enc");
+        if (enc === "gzip" || (!enc && new Uint8Array(buf, 0, 2)[0] === 0x1f)) {
             buf = await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
         }
         const half = new Uint16Array(buf);
