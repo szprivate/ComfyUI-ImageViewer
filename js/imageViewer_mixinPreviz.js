@@ -24,6 +24,14 @@ import { viewerActionKeyLabel } from "./imageViewer_keymap.js";
 import { PrevizOutlinerMixin } from "./imageViewer_previzOutliner.js";
 import { notice, openExportDialog, openFilePicker } from "./imageViewer_exportUI.js";
 
+/** The scale that makes an FBX in `unitScaleFactor` cm units metres (1 when it already is, or says nothing). */
+export function fbxMetreScale(unitScaleFactor) {
+    const u = Number(unitScaleFactor);
+    if (!Number.isFinite(u) || u <= 0) return 1;
+    const k = u / 100;
+    return Math.abs(k - 1) < 1e-6 ? 1 : k;
+}
+
 // What File > Import Model… offers: the model formats the 3D view reads (MODEL_FORMATS in imageViewer_model3d.js).
 const MODEL_IMPORT_EXTS = [".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply", ".usd", ".usda", ".usdc", ".usdz", ".abc",
                            ".spz", ".splat", ".ksplat", ".sog"];
@@ -479,13 +487,44 @@ export const PrevizMixin = {
             item.name = S.uniqueName(scene, item.name);
             scene.items.push(item);
             this._previzSelection = item.id;
+            // An FBX says what its unit is: once it has loaded, one in centimetres is scaled to metres.
+            if (/\.fbx$/i.test(String(src.path || src.filename || src.url || src.name || ""))) {
+                (this._previzUnitPending || (this._previzUnitPending = new Map())).set(item.id, wasEmpty);
+            }
             added++;
         }
         if (!added) return 0;
         await this.previzChanged({ reload: true });
+        if (this._previzUnitPending) for (const id of [...this._previzUnitPending.keys()]) this.previzFbxUnitMaybe(id);
         // The first model in an empty scene is what the camera should frame.
         if (wasEmpty && this._model3d) this._model3d.resetView();
         return added;
+    },
+
+    /**
+     * A model just imported from an FBX in other units than the scene's metres (a Mixamo
+     * download, a Maya file: centimetres) gets the scale that makes it metres, once, when
+     * it has loaded: 1 cm units → scale 0.01. It is the item's own scale, so it shows in
+     * the Channel Box and can be set back. Models already in a scene are never changed.
+     */
+    previzFbxUnitMaybe(itemId) {
+        const pending = this._previzUnitPending;
+        if (!pending || !pending.has(itemId)) return;
+        const view = this._model3d;
+        const entry = view && view._entries && view._entries.get(itemId);
+        if (!entry || (!entry.object && !entry.error)) return;      // not loaded yet: onModelLoaded comes back
+        const wasEmpty = pending.get(itemId);
+        pending.delete(itemId);
+        const scene = this.previzScene();
+        const item = scene && S.itemById(scene, itemId);
+        const usf = Number(entry.unitScaleFactor);
+        const k = fbxMetreScale(usf);
+        if (!item || k === 1 || !(item.scale || []).every((v) => v === 1)) return;
+        item.scale = [k, k, k];
+        this.previzChanged({ reload: false });
+        if (wasEmpty && view.resetView) view.resetView();
+        notice("info", `${item.name} scaled to metres`,
+               `The file is in ${usf === 1 ? "centimetres" : `units of ${usf} cm`}: scale ${+k.toPrecision(6)} in the Channel Box makes it metres.`);
     },
 
     /**

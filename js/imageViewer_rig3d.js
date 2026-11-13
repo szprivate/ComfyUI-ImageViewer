@@ -151,6 +151,10 @@ export const Rig3DMixin = {
         const used = new Set();
         entry.object.traverse((o) => {
             if (!o.isBone) return;
+            // three.js's FBX reader gives a bone shared by two skinned meshes (a Mixamo character's
+            // body and joints) a copy of itself as its child, of the same name and at its place: the
+            // copy only follows its bone, so it is not a bone of the skeleton.
+            if (o.parent && o.parent.isBone && o.parent.name === o.name && !o.children.some((c) => c.isBone)) return;
             // Bone names are how controls find their bones, so they must be
             // unique; a file that repeats one gets the later ones numbered.
             let name = o.name || "bone";
