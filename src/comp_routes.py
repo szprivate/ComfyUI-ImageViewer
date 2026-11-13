@@ -23,6 +23,10 @@ and a render of its Output by the export rule.
     POST /imageviewer/comp_ai {path, comp, node, frame, workflow?, graph?, tune?}
                                                           an AI node's frame as Paint's Generate workflow (comp_ai):
                                                           {job, graphs, output, ...}; 409 {missing}
+    POST /imageviewer/comp_vfx {path, comp, node}         a VFX node's run (comp_vfx): clip_vfx's graphs for the page to
+                                                          queue, the input prerendered first unless it is off; 409 {missing}
+    POST /imageviewer/comp_vfx_finish {job, results: [{filename, subfolder, type}]}
+                                                          the outputs moved beside the comp -> the node's results
     POST /imageviewer/comp_ai_place {job, image {filename, subfolder, type}}
                                                           the answer written beside the comp -> {file, frame, node}
     GET  /imageviewer/comp_formats - the Send to Viewer node's formats and per-format options (file_writer)
@@ -69,6 +73,7 @@ import time
 import numpy as np
 
 from . import comp_ai
+from . import comp_vfx
 from . import comp_files
 from . import comp_io
 from . import comp_nuke
@@ -1116,6 +1121,48 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
             return err(path_access.refusal(res["path"]), 403)
         return web.json_response(res)
 
+    # ── VFX nodes (comp_vfx): LTX-2.5's Convert Footage workflows over the comp's range, the result beside it ──
+
+    async def vfx_prepare(request):
+        from . import clip_vfx
+        body = await body_of(request)
+        path = abspath(body.get("path"))
+        why = comp_path_ok(path)
+        if why:
+            return err(why, 403)
+        comp = body.get("comp")
+        if not isinstance(comp, dict):
+            return err("'comp' (the comp as it stands) is needed")
+        sources = comp_io.Sources(path, allow=path_access.may_serve, allow_lut=path_access.is_allowed)
+        try:
+            res = await off(comp_vfx.prepare, comp, path, str(body.get("node") or ""), sources,
+                            folder_paths.get_input_directory(), folder_paths.get_output_directory(),
+                            ocio=comp_io.ocio_hook(path, path_access.is_allowed), folder_paths=folder_paths,
+                            node_classes=node_classes(), may_use=path_access.may_serve)
+        except (comp_vfx.VfxNodeError, clip_vfx.VfxError) as e:
+            return web.json_response({"error": str(e), **e.extra}, status=e.status)
+        except (ValueError, OSError) as e:
+            return err(e)
+        finally:
+            sources.close()
+        return web.json_response(res)
+
+    async def vfx_finish(request):
+        from . import clip_vfx
+        body = await body_of(request)
+        refs = body.get("results")
+        if not isinstance(refs, list) or not refs:
+            return err("send the results")
+        paths = [output_ref(r) if isinstance(r, dict) else None for r in refs[:64]]
+        try:
+            res = await off(comp_vfx.finish, str(body.get("job") or ""), paths, folder_paths.get_output_directory(),
+                            may_use=path_access.may_serve)
+        except (comp_vfx.VfxNodeError, clip_vfx.VfxError) as e:
+            return web.json_response({"error": str(e), **e.extra}, status=e.status)
+        except (ValueError, OSError) as e:
+            return err(e)
+        return web.json_response(res)
+
     async def get_formats(request):
         return web.json_response(comp_io.formats(), headers={"Cache-Control": "no-cache"})
 
@@ -1127,6 +1174,8 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         add("POST", f"{prefix}/comp_cdl", cdl)
         add("POST", f"{prefix}/comp_ai", ai_prepare)
         add("POST", f"{prefix}/comp_ai_place", ai_place)
+        add("POST", f"{prefix}/comp_vfx", vfx_prepare)
+        add("POST", f"{prefix}/comp_vfx_finish", vfx_finish)
         add("GET", f"{prefix}/comp", get_comp)
         add("POST", f"{prefix}/comp", save_comp)
         add("POST", f"{prefix}/comp_new", new_comp)

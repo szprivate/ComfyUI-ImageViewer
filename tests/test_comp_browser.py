@@ -1732,6 +1732,56 @@ class CompBrowserTests(unittest.TestCase):
         self.assertEqual(pg.evaluate(f"() => {{ const c = {ED}.comp(); return c.nodes.find((n) => n.id === c.output).inputs; }}"), ["Read1"])
         self.assertEqual(self.errors, [])
 
+    def test_a_vfx_node_renders_once_through_its_workflow_and_reads_the_result_back(self):
+        """The History's Convert Footage workflows as Comp nodes: Render prerenders what comes in, queues the
+        workflow (ComfyUI stood in for here) and the film that comes back is the node's result."""
+        V = importlib.import_module(self.pkg + ".clip_vfx")
+        CV = importlib.import_module(self.pkg + ".comp_vfx")
+        io = importlib.import_module(self.pkg + ".comp_io")
+        fp = importlib.import_module(self.pkg + ".viewer_api").folder_paths
+        fp.get_full_path = lambda folder, name: f"/m/{folder}/{name}"
+        fp.get_filename_list = lambda folder: []
+        # What the workflow "made": a grey film, put where ComfyUI would.
+        grey = {"comp": 1, "format": {"width": 64, "height": 36, "fps": 24, "frames": 17},
+                "nodes": [{"id": "C", "type": "constant", "color": [0.5, 0.5, 0.5, 1], "inputs": []}], "output": "C"}
+        out_dir = os.path.join(self.dirs["output"], "ltx_vfx")
+        os.makedirs(out_dir, exist_ok=True)
+        CV.render_input(grey, "C", 17, io.Sources(None), os.path.join(out_dir, "made_00001.mp4"))
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        pg.evaluate("() => __panel.compSetFormat({ duration: 17 })")
+        nid = pg.evaluate(f"""() => {{ const e = {ED}; const c = e.comp(); const bg = c.nodes.find((n) => n.type === 'constant');
+            bg.color = [1, 0, 0, 1]; e.select([bg.id]); const v = e.addNode('vfx_alpha'); e.select([v.id]); e.save(); return v.id; }}""")
+        pane = f'.cp-pane[data-pane="{nid}"]'
+        self.assertIn("Not rendered yet", pg.locator(f"{pane} .cp-vfx").inner_text())
+        self.assertEqual(pg.locator(f"{pane} .mg-prop label", has_text="prerender").count(), 1)
+        pg.evaluate("""() => { window.__queued = [];
+            __panel._paintQueue = async (g) => { window.__queued.push(g); return 'p' + window.__queued.length; };
+            __panel._paintWait = async () => ({ filename: 'made_00001.mp4', subfolder: 'ltx_vfx', type: 'output' }); }""")
+        pg.locator(f"{pane} button", has_text="Render").first.click()
+        pg.wait_for_function(f"() => {{ const n = {ED}.comp().nodes.find((x) => x.id === '{nid}'); return n.results && n.results.file; }}", timeout=60000)
+        res = pg.evaluate(f"() => {ED}.comp().nodes.find((x) => x.id === '{nid}').results")
+        self.assertEqual((res["first"], res["last"], res["kind"]), (0, 16, "alpha"))
+        self.assertTrue(res["key"])
+        queued = pg.evaluate("() => window.__queued")
+        self.assertEqual(len(queued), 1)
+        self.assertTrue(any(v["class_type"] == "LoadVideo" and v["inputs"]["file"].startswith("clip_vfx/") for v in queued[0].values()))
+        pg.wait_for_timeout(1500)
+        self.assertIn("Rendered: frames 0", pg.locator(f"{pane} .cp-vfx").inner_text())
+        # The matte (grey 0.5 as sRGB, read as data) times the red that comes in: a darker red, not the plain one.
+        px = self.pixel(pg, 0.5, 0.5)
+        self.assertLess(px[0], 245, px)
+        self.assertGreater(px[0], 120, px)
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-vfx-node.png"))
+        # A change upstream makes it out of date.
+        pg.evaluate(f"() => {{ const e = {ED}; e.comp().nodes.find((n) => n.type === 'constant').color = [0, 1, 0, 1]; e.refresh(); e.select(['{nid}']); }}")
+        pg.wait_for_timeout(300)
+        self.assertIn("Out of date", pg.locator(f"{pane} .cp-vfx").inner_text())
+        self.assertEqual(self.errors, [])
+
     def test_the_comp_button_offers_new_and_open(self):
         pg = self.page()
         pg.evaluate("() => __panel.spaceOpen('comp')")
