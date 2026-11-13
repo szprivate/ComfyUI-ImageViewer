@@ -64,7 +64,7 @@ A layer's frames are the Merge's `in` and `out` in the file (`out` is the first 
 - **Tools**: a group's right-click menu (or its Parameters) has **Save as a tool…**. Tools are kept per user in `~/.comfyui_image_viewer/comp_tools/` (or the folder named by `IMAGE_VIEWER_COMP_TOOLS`) as `*.comp.json` files, so every comp on the machine can use them; they are listed under **Tools** in the <kbd>Tab</kbd> menu, where the × removes one.
 - **Backdrops** are coloured, labelled areas. Dragging the label moves the nodes on it; the corner resizes it. **Sticky notes** hold text (double-click to write). Neither takes part in the picture.
 - **Dots** bend a wire; they pass their input on.
-- **Colour…** in the right-click menu (or the colour row in Parameters) sets any node's colour in the graph.
+- A node's **name and colour** are in the header of its panel in Parameters: click the name to change it (empty gives its id back), click the swatch to pick its colour in the graph, ↺ to get its own colour back. **Colour…** in the right-click menu does the same.
 
 ## Expressions and links
 
