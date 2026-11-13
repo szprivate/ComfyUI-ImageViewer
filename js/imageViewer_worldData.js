@@ -11,6 +11,8 @@
 // azimuth of 0 is straight ahead (-Z), +90 to the right (+X); elevation is
 // degrees above the horizon.
 
+import { cleanPaint } from "./imageViewer_scatterPaint.js";
+
 export const WORLD_KINDS = ["environment", "terrain", "scatter", "depthmesh", "light"];
 export const SCATTER_TYPES = ["pine", "tree", "bush", "grass", "rock", "column", "lamp", "model"];
 export const TONE_CURVES = ["neutral", "aces", "agx", "linear"];
@@ -220,6 +222,9 @@ export function scatterSettings(item) {
         lift: num(s.lift, 0, -1000, 1000),
         emissive: num(s.emissive, 0, 0, 1000),
         roughness: s.roughness == null ? null : num(s.roughness, 0.85, 0.02, 1),
+        // Painted density over the terrain (imageViewer_scatterPaint.js), or
+        // null: grow anywhere the rules above allow.
+        paint: cleanPaint(s.paint),
     };
 }
 

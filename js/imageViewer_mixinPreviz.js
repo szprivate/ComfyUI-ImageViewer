@@ -224,6 +224,8 @@ export const PrevizMixin = {
             this.previzPersist();
             this.queuePersistViewerState();
         }
+        // The scatter brush follows an undo, another tab, a deleted scatter.
+        if (view.scatterPainting && view.scatterPainting() && this._previzScatterPaintCheck) this._previzScatterPaintCheck();
         return done;
     },
 

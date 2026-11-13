@@ -2647,6 +2647,25 @@ audio.src-media { width: 90%; }
 .model-pt-badge { position: absolute; left: 50px; top: 8px; z-index: 6; pointer-events: none;
     padding: 2px 8px; border-radius: 4px; background: rgba(0, 0, 0, 0.55); color: #ddd;
     font: 11px/16px sans-serif; white-space: nowrap; }
+/* The scatter brush's settings over the view (imageViewer_previzTerrain.js). */
+.model-view.scatter-painting .model-canvas { cursor: crosshair; }
+.model-view.scatter-painting.navigating .model-canvas { cursor: default; }
+.model-spaint-bar { position: absolute; left: 50%; top: 8px; transform: translateX(-50%); z-index: 7;
+    display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 4px;
+    background: rgba(0, 0, 0, 0.75); border: 1px solid #333; color: #ddd; font: 11px/16px sans-serif;
+    white-space: nowrap; }
+.model-spaint-bar .spb-title { color: #f60; font-weight: 600; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.model-spaint-bar .spb-mode { display: flex; }
+.model-spaint-bar .spb-btn { height: 22px; padding: 0 8px; background: #2a2a2a; color: #ccc;
+    border: 1px solid #444; border-radius: 3px; cursor: pointer; font: inherit; }
+.model-spaint-bar .spb-mode .spb-btn:first-child { border-radius: 3px 0 0 3px; }
+.model-spaint-bar .spb-mode .spb-btn:last-child { border-radius: 0 3px 3px 0; border-left: none; }
+.model-spaint-bar .spb-btn.on { background: #f60; border-color: #f60; color: #111; }
+.model-spaint-bar .spb-btn:hover:not(.on) { border-color: #777; }
+.model-spaint-bar .spb-field { display: flex; align-items: center; gap: 4px; color: #999; }
+.model-spaint-bar .spb-num { width: 52px; height: 20px; background: #1b1b1b; color: #6cf; border: 1px solid #444;
+    border-radius: 3px; font: inherit; padding: 0 4px; }
+.model-spaint-bar .spb-num:focus { outline: none; border-color: #f60; }
 .model-toolcol {
     position: absolute; top: 38px; left: 8px; z-index: 3;
     display: flex; flex-direction: column; gap: 3px; padding: 4px;
