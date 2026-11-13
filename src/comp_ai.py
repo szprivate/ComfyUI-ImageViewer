@@ -66,6 +66,7 @@ def prepare(comp, comp_path, node_id, frame, sources, input_dir, *, ocio=None, w
             folder_paths=None, node_classes=None):
     """The filled-in workflow for one frame of an AI node: paint_generate's answer plus ``kind``."""
     comp, _ = M.normalize(comp)
+    comp = M.G.flatten(comp)   # an AI node inside a group is named by its flat id, "<group>/<id>"
     n = next((x for x in comp["nodes"] if x["id"] == node_id), None)
     if n is None:
         raise AiError(f"no node {node_id!r} in the comp")

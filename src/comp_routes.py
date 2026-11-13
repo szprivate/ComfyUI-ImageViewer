@@ -48,6 +48,8 @@ and a render of its Output by the export rule.
     POST /imageviewer/comp_farm {path, writes?, ..., chunk, pool, group, priority, dry_run?}
                                                           the Writes as one Deadline job, relayed to agentY's
                                                           /agentY/comp_farm; dry_run answers the request + warnings
+    POST /imageviewer/comp_tools {op: list | get | save | delete, ...}
+                                                          the tool library (comp_tools.py)
 
 A Read's pixels go through the same reader as the render (``comp_io.Sources``), so the preview shows what the
 render will write - EXR and films included, which a browser cannot decode as floats. Everything that hands
@@ -476,6 +478,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
             comp, _ = M.normalize(raw)
         except (ValueError, OSError) as e:
             return err(e, 422)
+        comp = M.G.flatten(comp)   # a tracker inside a group is named by its flat id, "<group>/<id>"
         n = M.node_by_id(comp, str(body.get("node") or ""))
         if not n or n.get("type") not in ("tracker", "planartracker"):
             return err("no such Tracker or PlanarTracker in the comp", 422)
@@ -1114,3 +1117,6 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         add("POST", f"{prefix}/comp_localise", localise)
         add("POST", f"{prefix}/comp_farm", farm)
         add("POST", f"{prefix}/comp_export_nuke", export_nuke)
+    # The tool library: groups saved as tools, per OS user (comp_tools.py).
+    from . import comp_tools
+    comp_tools.register(add, web=web, path_access=path_access)

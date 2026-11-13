@@ -1402,6 +1402,90 @@ class CompBrowserTests(unittest.TestCase):
         self.assertGreater(l[0], 200, l); self.assertLess(r[0], 40, r)
         if SHOTS:
             pg.screenshot(path=os.path.join(SHOTS, "comp-3d-deep.png"))
+
+    def test_groups_backdrops_dots_expressions_and_the_tool_library(self):
+        """Ctrl+G groups the selection and the picture stays; a double-click goes inside, Ctrl+Backspace comes out; a
+        number worked out by an expression follows the frame; B puts a backdrop round the selection, which carries its
+        nodes; . makes a Dot; a group saved as a tool comes back from the Tab menu."""
+        tools = tempfile.mkdtemp()
+        os.environ["IMAGE_VIEWER_COMP_TOOLS"] = tools
+        self.addCleanup(os.environ.pop, "IMAGE_VIEWER_COMP_TOOLS", None)
+        pg = self.page()
+        self.new_comp(pg)
+        ED, g = self.ED, "__panel.compGraphPanel.querySelector('.cp-graph')"
+        pg.evaluate(f"() => {{ const e = {ED}; e.comp().nodes.find((n) => n.type === 'constant').color = [1, 0, 0, 1]; e.select(['Constant1']); e.addNode('grade'); e.refresh(); }}")
+        pg.wait_for_timeout(500)
+        before = self.pixel(pg, 0.5, 0.5)
+        key = lambda k: (pg.evaluate(f"() => {g}.focus()"), pg.keyboard.press(k))
+        # Group the Grade: the Output reads the group, the picture is the same.
+        pg.evaluate(f"() => {ED}.select(['Grade1'])")
+        key("Control+g")
+        st = pg.evaluate(f"() => {{ const c = {ED}.comp(); const grp = c.nodes.find((n) => n.type === 'group'); return {{ id: grp && grp.id, out: c.nodes.find((n) => n.id === c.output).inputs[0], inside: grp ? grp.nodes.map((n) => n.type).sort() : [] }}; }}")
+        self.assertEqual(st["out"], st["id"])
+        self.assertEqual(st["inside"], ["grade", "group_input", "group_output"])
+        pg.wait_for_timeout(400)
+        self.assertEqual(self.pixel(pg, 0.5, 0.5), before)
+        grp = st["id"]
+        # Inside it and out again.
+        pg.evaluate(f"() => {g}.querySelector('.cp-node[data-id=\"{grp}\"]').dispatchEvent(new MouseEvent('dblclick', {{ bubbles: true }}))")
+        inside = pg.evaluate(f"() => ({{ cls: {g}.classList.contains('in-group'), ids: Array.from({g}.querySelectorAll('.cp-node')).map((n) => n.dataset.id).sort(), crumbs: {g}.querySelector('.cp-crumbs').textContent }})")
+        self.assertTrue(inside["cls"])
+        self.assertEqual(inside["ids"], ["Grade1", "GroupOutput1", "Input1"])
+        self.assertIn("Comp", inside["crumbs"])
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.locator(".cp-graph").first.screenshot(path=os.path.join(SHOTS, "comp-inside-group.png"))
+        # The Grade inside: its gain worked out from the frame, typed into its expression line.
+        pg.evaluate(f"() => {ED}.select(['Grade1'])")
+        pg.wait_for_timeout(200)
+        pg.evaluate("() => __panel.compPropsPanel.querySelector('[data-expr=\"Grade1:gain\"]').click()")
+        inp = pg.locator('.cp-exprline input[data-fk="Grade1:gain:x0"]').first
+        inp.fill("frame >= 5 ? 0 : 1")
+        inp.press("Enter")
+        self.assertEqual(pg.evaluate(f"() => {ED}.comp().nodes.find((n) => n.type === 'group').nodes.find((n) => n.id === 'Grade1').expr"), {"gain": "frame >= 5 ? 0 : 1"})
+        pg.evaluate("() => __panel.setFrame(6)")
+        pg.wait_for_timeout(500)
+        self.assertLess(self.pixel(pg, 0.5, 0.5)[0], 20, "the gain is 0 from frame 5")
+        pg.evaluate("() => __panel.setFrame(1)")
+        pg.wait_for_timeout(500)
+        self.assertGreater(self.pixel(pg, 0.5, 0.5)[0], 200)
+        self.assertTrue(pg.evaluate(f"() => !!{g}.querySelector('.cp-node[data-id=Grade1] .cp-xbadge')"), "the node says it has one")
+        key("Control+Backspace")
+        self.assertFalse(pg.evaluate(f"() => {g}.classList.contains('in-group')"))
+        # A Dot and a backdrop round the Constant; the backdrop carries it.
+        pg.evaluate(f"() => {ED}.select(['Constant1'])")
+        key("b")
+        bd = pg.evaluate(f"() => {ED}.comp().nodes.find((n) => n.type === 'backdrop')")
+        self.assertTrue(bd)
+        key("f")   # the whole graph in view: the backdrop's label is above the Constant
+        pg.wait_for_timeout(100)
+        c0 = pg.evaluate(f"() => {{ const n = {ED}.comp().nodes.find((x) => x.id === 'Constant1'); return [n.x, n.y]; }}")
+        head = pg.evaluate(f"() => {{ const r = {g}.querySelector('.cp-bdhead').getBoundingClientRect(); return [r.left + 20, r.top + r.height / 2]; }}")
+        pg.mouse.move(*head); pg.mouse.down(); pg.mouse.move(head[0] + 60, head[1] + 30, steps=6); pg.mouse.up()
+        c1 = pg.evaluate(f"() => {{ const n = {ED}.comp().nodes.find((x) => x.id === 'Constant1'); return [n.x, n.y]; }}")
+        self.assertGreater(c1[0], c0[0] + 20)
+        pg.evaluate(f"() => {ED}.select(['Constant1'])")
+        key(".")
+        self.assertEqual(pg.evaluate(f"() => {ED}.comp().nodes.filter((n) => n.type === 'dot').map((n) => n.inputs)"), [["Constant1"]])
+        # The group saved as a tool, and put in again from the Tab menu.
+        pg.evaluate(f"() => {ED}.select(['{grp}'])")
+        pg.wait_for_timeout(200)
+        pg.evaluate("() => Array.from(__panel.compPropsPanel.querySelectorAll('button')).find((b) => b.textContent === 'Save as tool…').click()")
+        ask = pg.locator(".cp-ask input").first
+        ask.fill("Red off")
+        ask.press("Enter")
+        pg.wait_for_function("() => true")
+        pg.wait_for_timeout(500)
+        self.assertEqual(os.listdir(tools), ["red off.comp.json"])
+        key("Tab")
+        pg.wait_for_selector('.cp-tmrow[data-tool="Red off"]', timeout=5000)
+        pg.locator('.cp-tmrow[data-tool="Red off"]').first.click()
+        pg.wait_for_function(f"() => {ED}.comp().nodes.filter((n) => n.type === 'group').length === 2", timeout=5000)
+        if SHOTS:
+            pg.evaluate(f"() => {{ const e = {ED}; e.select([]); const n = e.addNode('sticky', {{ text: 'Grade off from frame 5' }}); e.comp().nodes.find((x) => x.id === 'Grade1' || x.type === 'group').tile = '#7d6fd1'; e.refresh(); }}")
+            key("f")
+            pg.wait_for_timeout(200)
+            pg.locator(".cp-graph").first.screenshot(path=os.path.join(SHOTS, "comp-graph-organised.png"))
         self.assertEqual(self.errors, [])
 
     def test_the_comp_button_offers_new_and_open(self):

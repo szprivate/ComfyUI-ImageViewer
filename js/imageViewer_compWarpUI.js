@@ -306,7 +306,7 @@ async function startTrack(E, n, body, apply) {
     E.begin();
     E.refresh(["props"]);
     try {
-        const got = await E.o.track(Object.assign({ node: n.id, comp: E.comp() }, body), (s) => {
+        const got = await E.o.track(Object.assign({ node: E.fid ? E.fid(n.id) : n.id, comp: E.root ? E.root() : E.comp() }, body), (s) => {
             run.done = s.done || 0; run.total = s.total || run.total;
             const m = E.node(n.id);
             if (m) { apply(m, s); E.live(); }

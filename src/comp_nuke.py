@@ -73,7 +73,8 @@ class _Anim:
 
     def animated(self, node, p):
         tr = node.get("tracks") if isinstance(node.get("tracks"), dict) else {}
-        return bool(isinstance(tr.get(p), list) and tr.get(p))
+        ex = node.get("expr") if isinstance(node.get("expr"), dict) else {}
+        return bool(isinstance(tr.get(p), list) and tr.get(p)) or bool(ex.get(p))   # an expression: a curve, frame by frame
 
     def series(self, node, p, fn=lambda v: v):
         return [fn(M.param_at(node, p, f)) for f in self.frames]
@@ -160,6 +161,7 @@ def build(comp, *, info_of=None, nk_path="", bake_dir="", bake=True, comp_path="
     ``info_of(node) -> (absolute path, source_info)`` says what a Read's file is (frames, kind); ``bake_dir`` is where
     baked nodes' frames will lie (``<bake_dir>/<name>/<name>.####.exr``)."""
     comp, _ = M.normalize(comp)
+    comp = M.G.flatten(comp)   # groups and Dots laid out flat, backdrops and notes left out
     fmt = comp["format"]
     W, H, F = int(fmt["width"]), int(fmt["height"]), int(fmt["frames"])
     A = _Anim(comp)
