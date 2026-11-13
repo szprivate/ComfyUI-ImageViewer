@@ -463,13 +463,12 @@ def extra_cases(sources):
     # AI nodes: their result is a picture beside the comp (here a source keyed by the node's result Read).
     res = lambda *fs: {"frames": {str(f): f"r_{f}.png" for f in fs}}
     ai = dict(sources)
-    ai.update({"ai_matte1#ai2": src(21), "ai_depth1#ai2": src(22), "ai_relight1#ai2": src(23), "ai_inpaint1#ai2": src(24),
+    ai.update({"ai_matte1#ai2": src(21), "ai_depth1#ai2": src(22), "ai_inpaint1#ai2": src(24),
                "ai_upscale1#ai2": src(25, 2 * W + 3, 2 * H - 1)})
     for kw in ({}, {"output": "matte"}, {"write": "ai.a"}):
         c.append(one(N("ai_matte", 1, ["Read1"], results=res(2, 7), **kw), ai, frame=4))
     c.append(one(N("ai_matte", 1, ["Read1"]), ai))   # not run: passes the input
     c.append(one(N("ai_depth", 1, ["Read1"], results=res(2), invert="on"), ai, frame=0))
-    c.append(one(N("ai_relight", 1, ["Read1"], results=res(2)), ai, frame=2))
     c.append(one(N("ai_inpaint", 1, ["Read1", "Read2"], results=res(2)), ai, frame=5))
     c.append(one(N("ai_upscale", 1, ["Read1"], results=res(2)), ai, frame=2))
     c.append(one(N("ai_upscale", 1, ["Read1"], factor="4"), ai))

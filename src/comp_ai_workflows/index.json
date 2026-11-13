@@ -1,0 +1,111 @@
+{
+ "_note": "The Comp's AI nodes' workflows, per node: a short list of what fits the node's task on a film's frames. An id is Paint's built-in of that id (src/paint_workflows) or one of the entries below (files in this folder). The first one this ComfyUI has is the node's default.",
+ "lists": {
+  "matte": {
+   "action": "background",
+   "workflows": [
+    "birefnet",
+    "rmbg_birefnet_matting",
+    "rmbg_birefnet_hr_matting",
+    "rmbg2",
+    "rmbg_ben2",
+    "rmbg_inspyrenet",
+    "rmbg_birefnet_general",
+    "rmbg_birefnet_portrait",
+    "bria_rmbg",
+    "recraft_rmbg"
+   ]
+  },
+  "depth": {
+   "action": "depth",
+   "workflows": [
+    "comp_da3_metric",
+    "comp_da3_mono"
+   ]
+  },
+  "inpaint": {
+   "action": [
+    "fill",
+    "remove"
+   ],
+   "workflows": [
+    "flux_fill",
+    "flux_fill_onereward_remove",
+    "gpt_image_2_inpaint",
+    "gpt_image_25_inpaint"
+   ]
+  },
+  "upscale": {
+   "action": "upscale",
+   "workflows": [
+    "upscale_model",
+    "seedvr2_7b",
+    "wavespeed_seedvr2",
+    "magnific_precise",
+    "recraft_crisp"
+   ]
+  }
+ },
+ "entries": [
+  {
+   "id": "comp_da3_metric",
+   "label": "Depth Anything 3 Metric (steady from frame to frame)",
+   "file": "da3_metric.json",
+   "api": false,
+   "format": "api",
+   "actions": [
+    "depth"
+   ],
+   "size": {
+    "mp": null,
+    "mult": 1,
+    "max": 8192
+   },
+   "from": "utility_depth_anything3_image_depth_estimation (ComfyUI's own nodes)",
+   "nodes": [
+    "DA3Inference",
+    "DA3Render",
+    "LoadDA3Model",
+    "LoadImage",
+    "SaveImageAdvanced"
+   ],
+   "models": [
+    {
+     "name": "depth_anything_3_metric_large.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Depth-Anything-3/resolve/main/geometry_estimation/depth_anything_3_metric_large.safetensors",
+     "directory": "geometry_estimation"
+    }
+   ]
+  },
+  {
+   "id": "comp_da3_mono",
+   "label": "Depth Anything 3 Mono (finest detail per frame)",
+   "file": "da3_mono.json",
+   "api": false,
+   "format": "api",
+   "actions": [
+    "depth"
+   ],
+   "size": {
+    "mp": null,
+    "mult": 1,
+    "max": 8192
+   },
+   "from": "utility_depth_anything3_image_depth_estimation (ComfyUI's own nodes)",
+   "nodes": [
+    "DA3Inference",
+    "DA3Render",
+    "LoadDA3Model",
+    "LoadImage",
+    "SaveImageAdvanced"
+   ],
+   "models": [
+    {
+     "name": "depth_anything_3_mono_large.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Depth-Anything-3/resolve/main/geometry_estimation/depth_anything_3_mono_large.safetensors",
+     "directory": "geometry_estimation"
+    }
+   ]
+  }
+ ]
+}

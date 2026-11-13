@@ -36,7 +36,7 @@ const vfxResults = { kind: "ai", def: null, help: "The film the workflow made (R
 const prerender = { kind: "enum", def: "on", choices: ["on", "off"],
     help: "on: what comes into the node is rendered to a film first and that goes through the workflow. off: the film of the Read coming in is used as it is (faster; only a Read of a film, with nothing between)" };
 
-export const AI_KINDS = { ai_matte: "matte", ai_depth: "depth", ai_relight: "relight", ai_inpaint: "inpaint", ai_upscale: "upscale" };
+export const AI_KINDS = { ai_matte: "matte", ai_depth: "depth", ai_inpaint: "inpaint", ai_upscale: "upscale" };
 /** The VFX nodes: the History's Convert Footage workflows (LTX-2.5, src/clip_vfx.py) on the comp, over its
  *  whole frame range at once (comp_vfx on the server). Their `results` is ONE film or EXR sequence:
  *  {file, offset, first, last, width, height, colorspace, key, prerender}; frames first..last show it, the
@@ -164,10 +164,6 @@ export const EXTRA_TYPES = {
     } },
     ai_depth: { label: "AI Depth", cat: "AI", inputs: ["src"], params: {
         invert: { kind: "enum", def: "off", choices: ["off", "on"], help: "off: near is white" },
-        results,
-    } },
-    ai_relight: { label: "AI Relight", cat: "AI", inputs: ["src"], params: {
-        prompt: { kind: "prompt", def: "soft warm light from the left, as late afternoon sun", help: "The light you want" },
         results,
     } },
     ai_inpaint: { label: "AI Inpaint", cat: "AI", inputs: ["src", "mask"], params: {

@@ -88,7 +88,7 @@ def _cdl_params():
     return out
 
 
-AI_KINDS = {"ai_matte": "matte", "ai_depth": "depth", "ai_relight": "relight", "ai_inpaint": "inpaint", "ai_upscale": "upscale"}
+AI_KINDS = {"ai_matte": "matte", "ai_depth": "depth", "ai_inpaint": "inpaint", "ai_upscale": "upscale"}
 _AI_DATA = {"matte", "depth"}
 # The VFX nodes (the page's VFX_KINDS): LTX-2.5's workflows over the whole range, one film as their result.
 VFX_KINDS = {"vfx_alpha": "alpha", "vfx_hdr": "hdr", "vfx_reframe": "reframe", "vfx_upscale": "upscale"}
@@ -99,7 +99,7 @@ EXTRA_LABELS = {"differencekeyer": "DifferenceKeyer", "despill": "Despill", "edg
                 "framehold": "FrameHold", "framerange": "FrameRange", "timeoffset": "TimeOffset", "appendclip": "AppendClip", "timeblur": "TimeBlur",
                 "cdl": "CDL", "lut": "LUT", "huecurves": "HueCurves", "clamp": "Clamp", "loglin": "Log2Lin",
                 "colormatch": "ColorMatch", "grain": "Grain", "denoise": "Denoise", "sharpen": "Sharpen", "median": "Median",
-                "edgedetect": "EdgeDetect", "edgeblur": "EdgeBlur", "ai_matte": "AI Matte", "ai_depth": "AI Depth", "ai_relight": "AI Relight",
+                "edgedetect": "EdgeDetect", "edgeblur": "EdgeBlur", "ai_matte": "AI Matte", "ai_depth": "AI Depth",
                 "ai_inpaint": "AI Inpaint", "ai_upscale": "AI Upscale",
                 "vfx_alpha": "VFX Alpha Matte", "vfx_hdr": "VFX SDR to HDR", "vfx_reframe": "VFX Reframe", "vfx_upscale": "VFX Upscale"}
 
@@ -156,8 +156,6 @@ EXTRA_TYPES = {
     "ai_matte": {"inputs": ["src"], "params": {"output": _n("enum", "premultiplied", choices=["premultiplied", "matte"]),
                                                "write": _WRITE, "results": _RESULTS}},
     "ai_depth": {"inputs": ["src"], "params": {"invert": _n("enum", "off", choices=_ONOFF), "results": _RESULTS}},
-    "ai_relight": {"inputs": ["src"], "params": {"prompt": _n("prompt", "soft warm light from the left, as late afternoon sun"),
-                                                 "results": _RESULTS}},
     "ai_inpaint": {"inputs": ["src", "mask"], "params": {"prompt": _n("prompt", ""), "results": _RESULTS}},
     "ai_upscale": {"inputs": ["src"], "params": {"factor": _n("enum", "2", choices=["2", "4"]), "results": _RESULTS}},
     "vfx_alpha": {"inputs": ["src"], "params": {"output": _n("enum", "premultiplied", choices=["premultiplied", "matte"]),
