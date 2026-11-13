@@ -53,6 +53,11 @@ GLOW_SOURCES = ["luminance", "max"]
 REFORMAT_TYPES = ["to format", "scale"]
 REFORMAT_RESIZE = ["none", "fit", "fill", "width", "height", "distort"]
 GHOST_SHAPES = ["disc", "polygon"]
+MISSING_FRAMES = ["black", "hold", "error"]
+WRITE_FORMATS = ["exr", "png", "tiff", "jpg", "mov", "mp4", "webm"]
+WRITE_CHANNELS = ["rgba", "rgb", "all"]
+WRITE_DEPTHS = ["half", "float", "8", "16"]
+EXR_COMPRESSIONS = ["zip", "zips", "none"]
 MATH_OPS = ["add", "multiply", "power", "invert", "clamp", "min", "max", "abs", "threshold", "set"]
 _CH = {"r": 0, "g": 1, "b": 2, "a": 3}
 
@@ -103,6 +108,7 @@ NODE_TYPES = {
         "offset": {"kind": "int", "def": 0},
         "colorspace": {"kind": "ocio_cs", "def": "auto", "choices": COLORSPACES},
         "fit": {"kind": "enum", "def": "fit", "choices": FITS},
+        "missing": {"kind": "enum", "def": "black", "choices": MISSING_FRAMES},
     }},
     "constant": {"inputs": [], "params": {
         "color": {"kind": "color", "def": [0, 0, 0, 1], "key": True},
@@ -313,6 +319,27 @@ NODE_TYPES = {
         "dirt_reach": {"kind": "num", "def": 0.3, "min": 0.01, "key": True},
         "seed": {"kind": "int", "def": 1},
         "write": {"kind": "target", "def": "rgba"},
+    }},
+    "write": {"inputs": ["src"], "params": {
+        "file": {"kind": "outfile", "def": ""},
+        "file_type": {"kind": "enum", "def": "exr", "choices": WRITE_FORMATS},
+        "channels": {"kind": "enum", "def": "rgba", "choices": WRITE_CHANNELS},
+        "depth": {"kind": "enum", "def": "half", "choices": WRITE_DEPTHS},
+        "compression": {"kind": "enum", "def": "zip", "choices": EXR_COMPRESSIONS},
+        "colorspace": {"kind": "ocio_cs", "def": ""},
+        "display": {"kind": "ocio_display", "def": ""},
+        "view": {"kind": "ocio_view", "def": ""},
+        "first": {"kind": "int", "def": None},
+        "last": {"kind": "int", "def": None},
+        "handles": {"kind": "int", "def": 0, "min": 0, "max": 1000},
+        "first_number": {"kind": "int", "def": 1001, "min": 0},
+        "padding": {"kind": "int", "def": 4, "min": 1, "max": 9},
+        "timecode": {"kind": "text", "def": ""},
+        "metadata": {"kind": "enum", "def": "on", "choices": ["on", "off"]},
+    }},
+    "metadata": {"inputs": ["src"], "params": {
+        "set": {"kind": "text", "def": ""},
+        "remove": {"kind": "text", "def": ""},
     }},
     "output": {"inputs": ["src"], "params": {}},
 }
@@ -1933,6 +1960,8 @@ def roto_write(m, src, sex, target, premult):
 
 
 WRITES = {t for t, d in NODE_TYPES.items() if "write" in d["params"]}
+# Nodes that hand their input on unchanged: what they do is outside the pixels (a file written, metadata).
+PASS_THROUGH = {"output", "write", "metadata"}
 _TWO_IN = {"merge", "copy", "channelmerge"}
 
 # Nodes with a mask input (the last) and a mix on top of what they do (the page's MASKABLE / maskMix).
@@ -2204,7 +2233,7 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             p = P(n, f, NODE_TYPES["depthblur"]["params"])
             p["size"] = p["size"] * scale
             return depth_blur_image(src, conform(run(ins[1], f, d1), src.shape[1], src.shape[0]), p)
-        if t == "output":
+        if t in PASS_THROUGH:
             return run(ins[0], f, d1)
         return blank(W, H)
     img = run(nid, frame, 0)

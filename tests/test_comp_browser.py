@@ -396,7 +396,10 @@ class CompBrowserTests(unittest.TestCase):
         # Save opens Paint's kind of menu.
         pg.evaluate("() => __panel.container.querySelector('.mg-bar .cp-save').click()")
         rows = pg.evaluate("() => [...__panel.container.querySelectorAll('.cp-pop > div')].map((d) => d.firstChild.textContent)")
-        self.assertEqual(rows, ["Save", "Save as…", "Render…", "Export to Nuke…", "Open…", "New comp"])
+        self.assertEqual(rows, ["Save", "Save as…", "Render…", "Render Write nodes…", "Send to the farm…", "Export to Nuke…",
+                                "Relink footage…", "Localise footage…", "Open…", "New comp"])
+        off = pg.evaluate("() => [...__panel.container.querySelectorAll('.cp-pop > div.off')].map((d) => d.firstChild.textContent)")
+        self.assertEqual(off, ["Render Write nodes…", "Send to the farm…"])   # no Write node yet
         # Open: the file picker for comps; New: a new comp tab.
         pg.evaluate("() => { window.__picked = 0; __panel.compPickFile = () => { window.__picked++; }; }")
         pg.evaluate("() => __panel.container.querySelector('.cp-pop').remove()")
@@ -703,6 +706,36 @@ class CompBrowserTests(unittest.TestCase):
         bake = os.path.splitext(nk[0])[0] + "_bake"
         baked = [f for r, _, fs in os.walk(bake) for f in fs if f.endswith(".exr")]
         self.assertEqual(len(baked), 2)
+        self.assertEqual(self.errors, [])
+
+    def test_write_nodes_render_their_own_files_and_the_farm_request_is_checked(self):
+        """A Write node after the Constant: Render Write nodes… plans its files, renders a multi-layer EXR sequence
+        with handles, and lands it in the History; Send to the farm… shows the Deadline frames before anything goes."""
+        pg = self.page()
+        self.new_comp(pg)
+        pg.evaluate("() => __panel.compSetFormat({ duration: 3 })")
+        out = os.path.join(self.dirs["output"], "writes_test")
+        pg.evaluate(f"""(dir) => {{ const e = {self.ED}; const c = e.comp(); const k = c.nodes.find((n) => n.type === 'constant');
+            const w = e.addNode('write'); w.inputs = [k.id]; w.name = 'main'; w.file = dir + '/main.####.exr'; w.channels = 'all';
+            w.first = 0; w.last = 1; w.handles = 1; e.refresh(); }}""", out)
+        pg.evaluate("() => { window.__landed = []; __panel.exportLanded = async (p) => { window.__landed.push(p); }; }")
+        pg.locator(".mg-bar .cp-save").click()
+        pg.locator(".cp-pop > div", has_text="Render Write nodes…").click()
+        pg.wait_for_selector(".cp-dlg.cp-writes")
+        pg.wait_for_function("() => /main: 4 files/.test(__panel.container.querySelector('.cp-writes .cp-plan').textContent)", timeout=10000)
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-writes-dialog.png"))
+        pg.locator(".cp-writes button", has_text="Render").last.click()
+        pg.wait_for_function("() => !__panel.container.querySelector('.cp-writes')", timeout=60000)
+        self.assertEqual(sorted(os.listdir(out)), ["main.1000.exr", "main.1001.exr", "main.1002.exr", "main.1003.exr"])   # frames -1..2
+        self.assertEqual(len(pg.evaluate("() => window.__landed")), 1)
+        pg.locator(".mg-bar .cp-save").click()
+        pg.locator(".cp-pop > div", has_text="Send to the farm…").click()
+        pg.wait_for_selector(".cp-dlg.cp-farm")
+        pg.wait_for_function("() => /Deadline frames 0-3 \\(comp frame \\+ 1\\)/.test(__panel.container.querySelector('.cp-farm').textContent)",
+                             timeout=10000)
+        pg.locator(".cp-farm button", has_text="Cancel").click()
         self.assertEqual(self.errors, [])
 
     def test_render_dialog_offers_the_send_nodes_formats_and_options(self):
