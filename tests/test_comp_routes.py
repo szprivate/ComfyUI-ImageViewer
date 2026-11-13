@@ -167,7 +167,10 @@ class CompRoutes(unittest.TestCase):
             self.assertEqual(r.status, 200)
             w, h = int(r.headers["X-Comp-W"]), int(r.headers["X-Comp-H"])
             self.assertEqual((w, h, r.headers["X-Comp-OW"], r.headers["X-Comp-OH"]), (30, 20, "60", "40"))
-            px = np.frombuffer(gzip.decompress(await r.read()), "<f2").reshape(h, w, 4).astype(np.float32)
+            body = await r.read()
+            # packed across machines only: the test client is this machine
+            self.assertEqual(r.headers["X-ImageViewer-Enc"], "none")
+            px = np.frombuffer(body, "<f2").reshape(h, w, 4).astype(np.float32)
             self.assertAlmostEqual(float(px[5, 5, 0]), 1.0, places=2)    # red, premultiplied
             self.assertAlmostEqual(float(px[5, 25, 3]), 0.0, places=3)   # the transparent half
         self.run_c(go)

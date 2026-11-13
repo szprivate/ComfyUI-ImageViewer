@@ -953,8 +953,15 @@ def from_float(rgb, alpha=None, linear=True):
     rgb = np.asarray(rgb, np.float32)
     if not linear:
         rgb = srgb_to_linear(np.clip(rgb, 0, None)).astype(np.float32)
-    a = np.ones(rgb.shape[:2], np.float32) if alpha is None else np.asarray(alpha, np.float32)
-    return np.concatenate([rgb * a[..., None], a[..., None]], axis=2).astype(np.float32)
+    out = np.empty(rgb.shape[:2] + (4,), np.float32)
+    if alpha is None:
+        out[..., :3] = rgb
+        out[..., 3] = 1.0
+    else:
+        a = np.asarray(alpha, np.float32)
+        np.multiply(rgb, a[..., None], out=out[..., :3])
+        out[..., 3] = a
+    return out
 
 
 def to_straight(img, srgb=True):

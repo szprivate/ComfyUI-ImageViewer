@@ -247,14 +247,15 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
 
     def pixels(comp_path, node, frame, most):
         src = readers.get(comp_path or None)
-        with pixel_lock:
-            path, info = src.info(node)
-            if info.get("kind") == "refused":
-                return 403, path_access.serve_refusal(path)
-            try:
-                img = src(node, frame)
-            except comp_io.MissingFrame as e:
-                return 404, str(e)
+        # No lock round the read: the page asks for every Read of a frame at once, and they are read side by
+        # side (a film keeps a lock of its own; the caches are plain dicts).
+        path, info = src.info(node)
+        if info.get("kind") == "refused":
+            return 403, path_access.serve_refusal(path)
+        try:
+            img = src(node, frame)
+        except comp_io.MissingFrame as e:
+            return 404, str(e)
         if img is None:
             return 404, f"{os.path.basename(path) or 'the Read'} has no picture at frame {frame}"
         oh, ow = img.shape[:2]
@@ -274,10 +275,12 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         if status != 200:
             return err(got, status)
         img, ow, oh = got
-        data = await off(lambda: gzip.compress(comp_io.as_f16(img), 1))
+        # Packed for the wire only when it goes over one: on this machine gzip costs more time than it saves.
+        local = (request.remote or "") in ("127.0.0.1", "::1", "localhost")
+        data = await off(lambda: comp_io.as_f16(img) if local else gzip.compress(comp_io.as_f16(img), 1))
         return web.Response(body=data, content_type="application/octet-stream", headers={
             "X-Comp-W": str(img.shape[1]), "X-Comp-H": str(img.shape[0]), "X-Comp-OW": str(ow), "X-Comp-OH": str(oh),
-            "X-ImageViewer-Enc": "gzip", "Cache-Control": "no-cache",
+            "X-ImageViewer-Enc": "none" if local else "gzip", "Cache-Control": "no-cache",
             "Access-Control-Expose-Headers": "X-Comp-W, X-Comp-H, X-Comp-OW, X-Comp-OH, X-ImageViewer-Enc"})
 
     # ── rendering ────────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@
 // source spread by scatter, rays from the aperture's blades, reflections between lens elements along the
 // axis through the frame's centre, dust on the front glass), not from any program's flare.
 
-import { blank, blurImage } from "./imageViewer_compOps.js";
+import { blank, blurImage, scanBox, withBox } from "./imageViewer_compOps.js";
 
 const LUM = [0.2126, 0.7152, 0.0722];
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -37,6 +37,9 @@ export function glowImage(img, p) {
         const k = p.softness > 0 ? clamp01((L - p.threshold) / p.softness) : L > p.threshold ? 1 : 0;
         q[i] = s[i] * k * tint[0]; q[i + 1] = s[i + 1] * k * tint[1]; q[i + 2] = s[i + 2] * k * tint[2];
     }
+    // Usually only a little of the picture is bright enough: its box is all the blurs go through (the same
+    // numbers - outside it everything is 0 either way).
+    withBox(hi, scanBox(hi));
     const steps = Math.max(1, Math.round(p.steps));
     const acc = new Float64Array(N * 4);
     let size = p.size;

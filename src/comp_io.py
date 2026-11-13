@@ -14,6 +14,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 
 import numpy as np
 
@@ -225,6 +226,80 @@ def _still_size(path):
     return None
 
 
+def _read_u8(path):
+    """A picture stored in 8 bits as uint8 RGBA [H, W, 4] (alpha 255 where it has none), or None for any other
+    kind (float, 16 bit, odd channel counts): those go through ``_read_float``."""
+    try:
+        import OpenImageIO as oiio
+    except ImportError:
+        oiio = None
+    if oiio is not None:
+        inp = oiio.ImageInput.open(path)
+        if not inp:
+            return None
+        try:
+            spec = inp.spec()
+            if spec.format != oiio.UINT8 or spec.nchannels not in (3, 4) or spec.alpha_channel not in (-1, 3):
+                return None
+        finally:
+            inp.close()
+        buf = oiio.ImageBuf(path)
+        if buf.has_error:
+            return None
+        arr = np.asarray(buf.get_pixels(oiio.UINT8), dtype=np.uint8)
+        if arr.ndim != 3 or arr.shape[2] not in (3, 4):
+            return None
+        if arr.shape[2] == 3:
+            out = np.empty(arr.shape[:2] + (4,), np.uint8)
+            out[..., :3] = arr
+            out[..., 3] = 255
+            return out
+        return np.ascontiguousarray(arr)
+    from PIL import Image
+    with Image.open(path) as im:
+        if im.mode not in ("RGB", "RGBA", "P", "L", "LA"):
+            return None
+        has_alpha = "A" in im.getbands() or (im.mode == "P" and "transparency" in im.info)
+        if im.mode in ("L", "LA"):
+            return None     # grey: the float path repeats the one channel
+        return np.asarray(im.convert("RGBA")) if has_alpha else _rgb_to_rgba(np.asarray(im.convert("RGB")))
+
+
+def _rgb_to_rgba(arr):
+    out = np.empty(arr.shape[:2] + (4,), np.uint8)
+    out[..., :3] = arr
+    out[..., 3] = 255
+    return out
+
+
+_LUT8 = {}
+
+
+def _lut8(linear):
+    """The 256 numbers an 8-bit value becomes: what ``_read_float`` + ``from_float`` make of it, worked once
+    per value instead of once per pixel (k / 255 in float32, then sRGB decoded in float64, as float32)."""
+    if linear not in _LUT8:
+        v = np.arange(256).astype(np.float32) / 255.0
+        _LUT8[linear] = v if linear else M.srgb_to_linear(np.clip(v, 0, None)).astype(np.float32)
+    return _LUT8[linear]
+
+
+def from_u8(u8, linear=False, has_alpha=True):
+    """uint8 straight RGBA -> a picture, the numbers ``from_float(_read_float(...))`` gives for the same file."""
+    lut = _lut8(linear)
+    out = np.empty(u8.shape[:2] + (4,), np.float32)
+    if has_alpha:
+        a = u8[..., 3].astype(np.float32) / 255.0
+        for k in range(3):
+            np.multiply(lut[u8[..., k]], a, out=out[..., k])
+        out[..., 3] = a
+    else:
+        for k in range(3):
+            out[..., k] = lut[u8[..., k]]
+        out[..., 3] = 1.0
+    return out
+
+
 def _read_float(path):
     """(rgb [H, W, 3], alpha [H, W] or None) of a picture, floats as stored (8 bit / 255)."""
     alpha_index = -1
@@ -255,7 +330,12 @@ def _read_float(path):
 
 
 class _Video:
-    """Frames of one film, read forwards; a step back opens it again."""
+    """Frames of one film. Read forwards; a step back, or a jump far ahead, seeks to the keyframe before the
+    frame (a film whose frame rate is constant: the frame is known by its time) instead of decoding from the
+    start again. The last few frames are kept, and one film is read by one thread at a time."""
+
+    KEEP = 12
+    JUMP = 48
 
     def __init__(self, path):
         import av
@@ -263,27 +343,77 @@ class _Video:
         self.c = None
         self.i = -1
         self.last = None
+        self.lock = threading.Lock()
+        self.kept = {}
 
-    def frame(self, n):
-        if self.c is None or n < self.i:
-            if self.c is not None:
-                self.c.close()
-            self.c = self.av.open(self.path)
-            self.it = self.c.decode(video=0)
-            self.i = -1
-            self.last = None
-        while self.i < n:
-            try:
-                self.last = next(self.it).to_ndarray(format="rgba")
-                self.i += 1
-            except StopIteration:
-                break
-        return self.last
-
-    def close(self):
+    def _open(self):
         if self.c is not None:
             self.c.close()
-            self.c = None
+        self.c = self.av.open(self.path)
+        self.it = self.c.decode(video=0)
+        self.i = -1
+        self.last = None
+
+    def _index(self, fr, st):
+        """The frame number of a decoded frame from its time, or None when the film does not say."""
+        if fr.pts is None or not self.cfr:
+            return None
+        t = (fr.pts - (st.start_time or 0)) * st.time_base
+        return int(round(float(t * self.rate)))
+
+    def _seek(self, n):
+        """To just before frame n by the keyframe before it; False when the film cannot be sought that way."""
+        st = self.c.streams.video[0]
+        if not self.cfr or not st.time_base:
+            return False
+        target = int((st.start_time or 0) + n / self.rate / st.time_base)
+        try:
+            self.c.seek(max(0, target), stream=st, backward=True, any_frame=False)
+        except Exception:  # noqa: BLE001 - a film that will not seek: read it from the start
+            return False
+        self.it = self.c.decode(video=0)
+        try:
+            fr = next(self.it)
+        except StopIteration:
+            return False
+        k = self._index(fr, st)
+        if k is None or k > n:
+            return False          # landed past it, or cannot tell: from the start instead
+        self.i, self.last = k, fr.to_ndarray(format="rgba")
+        return True
+
+    def frame(self, n):
+        with self.lock:
+            hit = self.kept.get(n)
+            if hit is not None:
+                return hit
+            if self.c is None:
+                self._open()
+                st = self.c.streams.video[0]
+                rate = st.average_rate or st.guessed_rate
+                self.rate = rate
+                self.cfr = bool(rate) and (st.guessed_rate is None or st.average_rate is None or st.guessed_rate == st.average_rate)
+            if n < self.i or n > self.i + self.JUMP:
+                if not (n > 0 and self._seek(n)):
+                    self._open()
+            while self.i < n:
+                try:
+                    self.last = next(self.it).to_ndarray(format="rgba")
+                    self.i += 1
+                except StopIteration:
+                    break
+            if self.last is not None and self.i == n:
+                self.kept[n] = self.last
+                while len(self.kept) > self.KEEP:
+                    self.kept.pop(next(iter(self.kept)))
+            return self.last
+
+    def close(self):
+        with self.lock:
+            if self.c is not None:
+                self.c.close()
+                self.c = None
+            self.kept.clear()
 
 
 class Sources:
@@ -402,12 +532,18 @@ class Sources:
             return self.stills[key]
         if not os.path.isfile(file):
             return None
+        linear = cs == "linear" or (cs == "auto" and os.path.splitext(file)[1].lower() in LINEAR_EXTS)
+        u8 = None if ocs else _read_u8(file)
+        if u8 is not None:
+            img = from_u8(u8, linear=linear)
+            if kind == "still":
+                self.stills[key] = img
+            return img
         rgb, alpha = _read_float(file)
         if ocs:
             from . import comp_ocio
             img = M.from_float(comp_ocio.from_space(rgb, cs), alpha, linear=True)
         else:
-            linear = cs == "linear" or (cs == "auto" and os.path.splitext(file)[1].lower() in LINEAR_EXTS)
             img = M.from_float(rgb, alpha, linear=linear)
         if kind == "still":
             self.stills[key] = img
@@ -550,7 +686,13 @@ def shrink(img, k):
     h, w = img.shape[0] // k * k, img.shape[1] // k * k
     if not h or not w:
         return img
-    return img[:h, :w].reshape(h // k, k, w // k, k, 4).mean(axis=(1, 3), dtype=np.float32)
+    a = img[:h, :w]
+    out = np.zeros((h // k, w // k, img.shape[2]), np.float32)
+    for dy in range(k):
+        for dx in range(k):
+            out += a[dy::k, dx::k]
+    out *= np.float32(1.0 / (k * k))
+    return out
 
 
 def as_f16(img) -> bytes:

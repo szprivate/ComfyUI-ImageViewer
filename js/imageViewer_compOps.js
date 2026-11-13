@@ -49,27 +49,53 @@ export function boxesForGauss(sigma, n = 3) {
     return Array.from({ length: n }, (_, i) => (i < m ? wl : wu));
 }
 
-/** Mean over 2r+1 along one axis, the edge value repeated (paint_math._box_axis), in place on a Float64Array. */
+/**
+ * Mean over 2r+1 along one axis, the edge value repeated (paint_math._box_axis), in place on a Float64Array.
+ * Every line and channel is summed in the same order as the numpy twin (r+1 copies of the first value, the
+ * line, r copies of the last; a running sum; out = (S[i+2r+1] - S[i]) / (2r+1)), so the numbers are exactly
+ * those of the plain loop. Only the order the lines are worked in differs: the four channels side by side
+ * across a row, and down the picture a block of columns at a time (rows read whole, not a pixel a row apart).
+ */
 export function boxAxis(a, w, h, r, horizontal) {
     if (r <= 0) return;
-    const n = horizontal ? w : h, lines = horizontal ? h : w;
-    const stride = horizontal ? 4 : w * 4, lineStep = horizontal ? w * 4 : 4;
-    const acc = new Float64Array(n + 2 * r + 2);
     const div = 2 * r + 1;
-    for (let line = 0; line < lines; line++) {
-        const base = line * lineStep;
-        for (let ch = 0; ch < 4; ch++) {
-            // padded: r+1 copies of the first, the line, r copies of the last; cumulative sums
-            let sum = 0;
-            acc[0] = 0;
-            const P = n + 2 * r + 1;
-            for (let k = 0; k < P; k++) {
-                let idx = k - (r + 1);
-                if (idx < 0) idx = 0; else if (idx >= n) idx = n - 1;
-                sum += a[base + idx * stride + ch];
-                acc[k + 1] = sum;
+    if (horizontal) {
+        const P = w + 2 * r + 1, acc = new Float64Array((P + 1) * 4), end = (w - 1) * 4;
+        for (let y = 0; y < h; y++) {
+            const base = y * w * 4;
+            let s0 = 0, s1 = 0, s2 = 0, s3 = 0, j = 4;
+            const f0 = a[base], f1 = a[base + 1], f2 = a[base + 2], f3 = a[base + 3];
+            for (let k = 0; k <= r; k++, j += 4) { s0 += f0; s1 += f1; s2 += f2; s3 += f3; acc[j] = s0; acc[j + 1] = s1; acc[j + 2] = s2; acc[j + 3] = s3; }
+            for (let q = base, qe = base + w * 4; q < qe; q += 4, j += 4) {
+                s0 += a[q]; s1 += a[q + 1]; s2 += a[q + 2]; s3 += a[q + 3];
+                acc[j] = s0; acc[j + 1] = s1; acc[j + 2] = s2; acc[j + 3] = s3;
             }
-            for (let i = 0; i < n; i++) a[base + i * stride + ch] = (acc[i + 2 * r + 2] - acc[i + 1]) / div;
+            const l0 = a[base + end], l1 = a[base + end + 1], l2 = a[base + end + 2], l3 = a[base + end + 3];
+            for (let k = 0; k < r; k++, j += 4) { s0 += l0; s1 += l1; s2 += l2; s3 += l3; acc[j] = s0; acc[j + 1] = s1; acc[j + 2] = s2; acc[j + 3] = s3; }
+            const reach = (2 * r + 1) * 4;
+            for (let i = 0, q = base, lo = 4; i < w; i++, q += 4, lo += 4) {
+                const hi = lo + reach;
+                a[q] = (acc[hi] - acc[lo]) / div; a[q + 1] = (acc[hi + 1] - acc[lo + 1]) / div;
+                a[q + 2] = (acc[hi + 2] - acc[lo + 2]) / div; a[q + 3] = (acc[hi + 3] - acc[lo + 3]) / div;
+            }
+        }
+        return;
+    }
+    const row = w * 4, P = h + 2 * r + 1, L = Math.min(row, 256);
+    const acc = new Float64Array((P + 1) * L), sum = new Float64Array(L);
+    for (let c0 = 0; c0 < row; c0 += L) {
+        const n = Math.min(L, row - c0);
+        sum.fill(0);
+        for (let k = 0; k < P; k++) {
+            let y = k - (r + 1);
+            if (y < 0) y = 0; else if (y >= h) y = h - 1;
+            const from = y * row + c0, to = (k + 1) * L;
+            for (let l = 0; l < n; l++) { const v = sum[l] + a[from + l]; sum[l] = v; acc[to + l] = v; }
+        }
+        const reach = (2 * r + 1) * L;
+        for (let i = 0; i < h; i++) {
+            const to = i * row + c0, lo = (i + 1) * L, hi = lo + reach;
+            for (let l = 0; l < n; l++) a[to + l] = (acc[hi + l] - acc[lo + l]) / div;
         }
     }
 }
@@ -96,13 +122,13 @@ export function blurImage(img, size) {
             return withBox({ w: img.w, h: img.h, data: out }, sub);
         }
     }
-    const a = Float64Array.from(img.data);
+    const a = new Float64Array(img.data);
     for (const s of boxes) {
         const r = (s - 1) >> 1;
         boxAxis(a, img.w, img.h, r, true);
         boxAxis(a, img.w, img.h, r, false);
     }
-    return { w: img.w, h: img.h, data: Float32Array.from(a) };
+    return { w: img.w, h: img.h, data: new Float32Array(a) };
 }
 
 
