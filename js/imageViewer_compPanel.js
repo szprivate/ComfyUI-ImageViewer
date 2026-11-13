@@ -735,31 +735,36 @@ export const CompPanelMixin = {
         notice("error", "The CDL was not written", "There are 99 already.");
     },
 
-    // ── AI nodes: a frame range through Paint's Generate workflows as ONE ComfyUI job (comp_ai on the server) ──
+    // ── AI nodes: a frame range through the node's workflow as ONE ComfyUI job (comp_ai on the server) ──
 
-    /** The Generate action an AI node asks for. */
-    _cpAiAction(n) {
+    /** An AI node's own short list of workflows (the server's comp_ai_workflows/index.json): {kind, action,
+     * workflows, choice (the default)}, asked once per node kind and action. */
+    async _cpAiList(n) {
         const kind = n && C.EX.AI_KINDS[n.type];
         if (!kind) return null;
-        return { matte: "background", depth: "edit", relight: "edit", upscale: "upscale" }[kind]
-            || ((n.prompt || "").trim() ? "fill" : "remove");
+        const prompt = kind === "inpaint" ? (n.prompt || "") : "";
+        const key = `${kind}|${kind === "inpaint" && prompt.trim() ? "fill" : ""}`;
+        const kept = this._cpAiLists || (this._cpAiLists = new Map());
+        if (!kept.has(key)) {
+            const ask = cpPost("/imageviewer/comp_ai_workflows", { kind, prompt });
+            kept.set(key, ask);
+            ask.catch(() => kept.delete(key));
+        }
+        return kept.get(key);
     },
 
-    /** What an AI node can pick: Paint's workflows for its action, which one it uses, and that workflow's model
-     * inputs with the files ComfyUI's model folders hold ({workflows, choice, using, custom, inputs}). */
+    /** What an AI node can pick: its workflows, which one it uses, and that workflow's model inputs with the files
+     * ComfyUI's model folders hold ({workflows, choice, using, inputs}). */
     async _cpAiModels(rec, id) {
         const ed = rec.editor, n = ed && ed.node(id);
-        const action = this._cpAiAction(n);
-        if (!action) return { workflows: [], inputs: [] };
-        const t = await this._paintWorkflows();
-        const a = t && t.actions && t.actions[action];
-        if (!a) throw new Error("this ComfyUI's viewer is older than the page");
-        const using = n.workflow && (a.workflows.some((w) => w.id === n.workflow) || (n.workflow === "custom" && a.custom)) ? n.workflow : a.choice;
-        const out = { workflows: a.workflows, choice: a.choice, using, custom: a.custom, inputs: [] };
-        if (using === "agent") return out;
+        const a = await this._cpAiList(n);
+        if (!a) return { workflows: [], inputs: [] };
+        const using = n.workflow && a.workflows.some((w) => w.id === n.workflow) ? n.workflow : a.choice;
+        const out = { workflows: a.workflows, choice: a.choice, using, inputs: [] };
+        if (!using) return out;
         const item = a.workflows.find((w) => w.id === using);
         const graph = item ? await this._paintPrompt(item, () => {}) : null;
-        const r = await cpPost("/imageviewer/comp_ai_models", { action, workflow: using, graph });
+        const r = await cpPost("/imageviewer/comp_ai_models", { kind: a.kind, prompt: n.prompt || "", workflow: using, graph });
         out.inputs = r.inputs || [];
         return out;
     },
@@ -782,13 +787,11 @@ export const CompPanelMixin = {
         const runs = this._cpAiRuns || (this._cpAiRuns = new Map());
         if (runs.has(id)) return;
         const n0 = ed.node(id);
-        const action = this._cpAiAction(n0);
-        if (!action) return;
-        const t = await this._paintWorkflows();
-        const a = t && t.actions && t.actions[action];
-        if (!a) { notice("error", "The workflows are not here", "This ComfyUI's viewer is older than the page."); return; }
-        const wid = n0.workflow && (a.workflows.some((w) => w.id === n0.workflow) || (n0.workflow === "custom" && a.custom)) ? n0.workflow : a.choice;
-        if (wid === "agent") { notice("warn", "Pick a workflow", `${a.label} is set to agentY, which the Comp cannot ask: pick a workflow on the node, or in Paint's Generate \u203a Workflows\u2026`); return; }
+        let a;
+        try { a = await this._cpAiList(n0); } catch (e) { notice("error", "The workflows are not here", String(e.message || e)); return; }
+        if (!a) return;
+        const wid = n0.workflow && a.workflows.some((w) => w.id === n0.workflow) ? n0.workflow : a.choice;
+        if (!wid) { notice("warn", "No workflow for this node here", "This ComfyUI has none of the node packs its workflows need."); return; }
         const item = a.workflows.find((w) => w.id === wid);
         const label = `${n0.name || n0.id}`;
         const all = [...new Set(frames)].sort((x, y) => x - y);
@@ -837,7 +840,8 @@ export const CompPanelMixin = {
             if (run.stopped) notice("info", `${label}: stopped`, done ? `${done} frame(s) came back before it stopped.` : "");
             else if (miss && miss.length) {
                 const list = miss.map((m) => (m.kind === "model" ? `${m.what} (${m.folder})` : `node ${m.what}`)).join(", ");
-                notice("error", "The workflow needs what is not here", `${list} - pick another model on the node, fetch it from Paint's Generate, or pick another workflow`);
+                const urls = miss.filter((m) => m.url).map((m) => m.url);
+                notice("error", "The workflow needs what is not here", `${list} - pick another model or workflow on the node${urls.length ? `, or put the file into that ComfyUI model folder: ${urls.join(" ")}` : ""}`);
             } else notice("error", `${label} did not run`, String(e.message || e));
         } finally {
             runs.delete(id);

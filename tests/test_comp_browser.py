@@ -7,6 +7,7 @@ and on the ComfyUI canvas; leaving the tab gives the viewport back.
 """
 import asyncio
 import importlib
+import json
 import os
 import shutil
 import socket
@@ -1811,13 +1812,26 @@ class CompBrowserTests(unittest.TestCase):
                 if hasattr(fp, k):
                     delattr(fp, k)
         self.addCleanup(undo)
-        G.set_custom("background", {
+        graph = {
             "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "base.safetensors"}},
             "2": {"class_type": "LoadImage", "_meta": {"title": "paint:image"}, "inputs": {"image": "x.png"}},
             "3": {"class_type": "SomeMatte", "inputs": {"image": ["2", 0], "model": ["1", 0], "seed": 5}},
             "4": {"class_type": "SaveImage", "_meta": {"title": "paint:output"}, "inputs": {"images": ["3", 0], "filename_prefix": "x"}},
-        }, "test matte")
-        G.set_choice("background", "custom")
+        }
+        # The Comp's own table for this test: the matte node lists two workflows, the first its default.
+        table = os.path.join(self.tmp, "comp_flows")
+        os.makedirs(table, exist_ok=True)
+        entries = []
+        for wid, label in (("t_matte", "Test matte"), ("t_matte2", "Second matte")):
+            with open(os.path.join(table, wid + ".json"), "w", encoding="utf-8") as fh:
+                json.dump(graph, fh)
+            entries.append({"id": wid, "label": label, "file": wid + ".json", "format": "api", "actions": ["background"],
+                            "size": {"mp": None, "mult": 8, "max": 2048}, "nodes": []})
+        with open(os.path.join(table, "index.json"), "w", encoding="utf-8") as fh:
+            json.dump({"lists": {"matte": {"action": "background", "workflows": ["t_matte", "t_matte2"]}}, "entries": entries}, fh)
+        old_dir = G.COMP_DIR
+        G.COMP_DIR = table
+        self.addCleanup(setattr, G, "COMP_DIR", old_dir)
         pg = self.page()
         pg.evaluate("""() => { const f = window.__fetchApi;
             window.__fetchApi = (p, o) => (p.startsWith('/imageviewer/paint/') ? fetch(p, o) : f(p, o)); }""")
@@ -1828,8 +1842,12 @@ class CompBrowserTests(unittest.TestCase):
         pg.evaluate(f"() => {self.ED}.save()")
         pg.evaluate("""() => { window.__queued = []; __api.queuePrompt = async (n, p) => { window.__queued.push(p.output);
             return { prompt_id: 'P' + window.__queued.length }; }; }""")
-        # The pickers: Paint's choice plus the workflows, and the loader's files from the model folder.
+        # The pickers: the node's own short list (its default first, no Paint choice), and the loader's files.
         pg.wait_for_function("() => __panel.shadowRoot.querySelector('.cp-ai-model')", timeout=10000)
+        wf = pg.evaluate("() => Array.from(__panel.shadowRoot.querySelector('.cp-ai-wf').options).map((o) => [o.value, o.textContent])")
+        self.assertEqual([v for v, _t in wf], ["", "t_matte2"])
+        self.assertIn("Test matte", wf[0][1])
+        self.assertFalse(any("Paint" in t for _v, t in wf), wf)
         opts = pg.evaluate("() => Array.from(__panel.shadowRoot.querySelector('.cp-ai-model').options).map((o) => o.value)")
         self.assertEqual(opts, ["", "base.safetensors", "sub/other.safetensors"])
         self.assertTrue(pg.evaluate("() => !!__panel.shadowRoot.querySelector('.cp-ai-wf')"))

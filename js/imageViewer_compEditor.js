@@ -2604,7 +2604,7 @@ export function createCompEditor(host, opts = {}) {
         row.append(btn("Forget", "Take the results off the node (the files stay)", () => { if (made.length) mutate(() => { delete n.results; }, { structure: false }); }));
         pane.append(row);
     }
-    /** The node's workflow and model files: what Paint's table offers for its action, and the model folders' files
+    /** The node's workflow and model files: the node's own short list of workflows, and the model folders' files
      * each of that workflow's model inputs can take (asked once per workflow, through the panel). */
     function aiModelRows(n) {
         if (!o.aiModels) return;
@@ -2624,21 +2624,19 @@ export function createCompEditor(host, opts = {}) {
             return;
         }
         const wf = el(doc, "select", "mg-btn cp-ai-wf");
-        const def = (got.workflows || []).find((w) => w.id === got.choice);
         const opt = (v, t) => { const x = el(doc, "option", "", t); x.value = v; return x; };
-        const defLabel = def ? def.label : got.choice === "custom" ? `My workflow${got.custom && got.custom.name ? `: ${got.custom.name}` : ""}`
-            : got.choice === "agent" ? "agentY: not for the Comp" : "";
-        wf.append(opt("", `Paint's choice${defLabel ? ` (${defLabel})` : ""}`));
-        for (const w of got.workflows || []) wf.append(opt(w.id, `${w.label}${w.api ? " · API" : ""}${w.missing && w.missing.length ? " · files missing" : ""}`));
-        if (got.custom) wf.append(opt("custom", `My workflow${got.custom.name ? ` (${got.custom.name})` : ""}`));
-        wf.value = n.workflow || "";
-        if (wf.value !== (n.workflow || "")) wf.value = "";
-        wf.title = "The workflow (the model) this node runs; Paint's choice follows Paint's Generate › Workflows";
+        const list = got.workflows || [];
+        if (!list.length) { pane.append(el(doc, "div", "mg-empty cp-warn", "This ComfyUI has none of the node packs this node's workflows need.")); return; }
+        // The first one is the default: a node that never picked runs it (and keeps no `workflow`).
+        for (const w of list) wf.append(opt(w.id === got.choice ? "" : w.id, `${w.label}${w.api ? " · API" : ""}${w.missing && w.missing.length ? " · files missing" : ""}`));
+        const cur = n.workflow && n.workflow !== got.choice && list.some((w) => w.id === n.workflow) ? n.workflow : "";
+        wf.value = cur;
+        wf.title = "The workflow (the model) this node runs";
         wf.onchange = () => mutate(() => { if (wf.value) n.workflow = wf.value; else delete n.workflow; delete n.models; }, { structure: false });
         pane.append(field("workflow", wf));
         const ins = got.inputs || [];
         if (!ins.length) {
-            if (got.using !== "agent") pane.append(el(doc, "div", "mg-empty", "This workflow has no model files to pick (an API model, or one the node pack chooses)."));
+            pane.append(el(doc, "div", "mg-empty", "This workflow has no model files to pick (an API model, or one the node pack chooses)."));
             return;
         }
         for (const m of ins) {
@@ -3311,7 +3309,7 @@ export function createCompEditor(host, opts = {}) {
         },
         /** Which AI nodes are running (Parameters says so), and how far ({id: "12 / 48"}). */
         setAiBusy(ids, progress) { st.aiBusy = new Set(ids || []); st.aiProgress = progress || {}; refresh(["props"]); },
-        /** Forget the workflows and models asked for (Paint's table changed). */
+        /** Forget the workflows and models asked for (the tables changed). */
         aiModelsChanged() { if (st.aiModels) st.aiModels.clear(); refresh(["props"]); },
         /** A VFX node's render is in: its results (one undo step). */
         vfxResult(id, res) {

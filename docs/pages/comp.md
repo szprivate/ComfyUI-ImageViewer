@@ -96,7 +96,7 @@ The **⇢** row links the number to another node's with a scale and an offset (i
 | 3D | Camera, Card, Geometry (cube, sphere, cylinder), Scene, Project, PointCloud, Render |
 | Deep | DeepRead, DeepFromImage, DeepMerge, DeepHoldout, DeepCrop, DeepFlatten |
 | Views | OneView, JoinViews, Anaglyph, SideBySide |
-| AI | AI Matte, AI Depth, AI Relight, AI Inpaint, AI Upscale |
+| AI | AI Matte, AI Depth, AI Inpaint, AI Upscale |
 | VFX | VFX Alpha Matte, VFX SDR to HDR, VFX Reframe, VFX Upscale |
 | Graph | Group, Input, GroupOutput, Dot, Backdrop, StickyNote |
 
@@ -122,11 +122,18 @@ A few notes on the newer nodes:
 
 ### AI nodes
 
-AI nodes send the image coming into them through a ComfyUI workflow and keep the answer. They use the same workflows as Paint's Generate (Matte uses background removal, Depth and Relight an image edit with words, Inpaint fill or remove inside the alpha of its mask input, Upscale the upscalers). By default a node runs the workflow picked there for its action.
+AI nodes send the image coming into them through a ComfyUI workflow and keep the answer. Each node has its own short list of workflows, picked because they do that node's job and behave the same on every frame, so they suit footage as well as stills:
+
+- **AI Matte**: background removal (BiRefNet, RMBG, BEN2, InSPyReNet and two API removers). Its answer becomes the alpha.
+- **AI Depth**: Depth Anything 3 on ComfyUI's own nodes. *Metric* gives depth in the same scale from frame to frame, *Mono* the finest detail per frame. The model writes raw depth as float EXR, and the whole job is mapped through one range (the 1st to the 99th percentile of every frame), so the grey of a depth stays the same across the frames. The result is a 16-bit PNG, near is white.
+- **AI Inpaint**: fills inside the alpha of its mask input. With a prompt it lists the fill models, without one the removal models.
+- **AI Upscale**: upscalers that keep the picture rather than invent detail (an upscale model, SeedVR2, two API upscalers).
+
+The first workflow of a list that this ComfyUI can run is the default. Workflows whose node packs are not installed are left out; "files missing" means the model files are not downloaded yet.
 
 Each node can pick its own:
 
-- **workflow**: Paint's choice, or any workflow Paint lists for that action (local models and API models; "files missing" means the model files are not installed yet). Changing it clears the node's model picks.
+- **workflow**: one from its list. Changing it clears the node's model picks.
 - **model files**: one row per model input of that workflow (diffusion model, checkpoint, text encoder, VAE, LoRA, upscale model, and loaders of node packs whose file sits in a ComfyUI model folder). Each row lists the files in that model folder; "workflow's own" keeps the file the workflow names. Only files ComfyUI lists can be picked.
 
 A changed workflow or model marks the node's results as out of date.

@@ -1,14 +1,21 @@
-"""Comp's AI nodes (matte, depth, relight, inpaint, upscale): one frame through a ComfyUI workflow.
+"""Comp's AI nodes (matte, depth, inpaint, upscale): frames through a ComfyUI workflow.
 
-The workflows are Paint's Generate ones (``paint_generate``: the built-ins, the user's choice per action, the
-same slots and model checks). ``prepare`` renders what goes into the node at that frame (``comp_model``, full
-size), hands it to ``paint_generate.prepare`` as the picture to work on - an inpaint's mask input as the
-selection - and keeps what it needs to lay the answer back. The page queues the graphs; ``place`` writes the
-answer beside the comp, ``<comp stem>_ai/<node>/<node>_<kind>.<frame>_<run>.png``, and names it relative to the comp,
-so the node's ``results`` move with the comp's folder.
+Each node has a short list of workflows of its own (``comp_ai_workflows/index.json``): the ones that suit its
+task on a film's frames, some of them Paint's Generate built-ins (the background removers, the masked fills, the
+upscalers that keep to the picture) and some the Comp's alone (depth: Depth Anything 3 through ComfyUI's own
+nodes). The first one this ComfyUI has is the node's default; ``workflow`` on the node picks another. They are run
+through ``paint_generate`` (the same slots, model checks and model picks).
 
-What each node asks for: matte = Paint's background removal (its matte), depth and relight = an image edit with
-words, inpaint = fill (with words) or remove (without), upscale = the upscalers.
+``prepare`` renders what goes into the node at a frame (``comp_model``, full size), hands it to
+``paint_generate.prepare`` as the picture to work on - an inpaint's mask input as the selection - and keeps what it
+needs to lay the answer back. The page queues the graphs; ``place`` writes the answer beside the comp,
+``<comp stem>_ai/<node>/<node>_<kind>.<frame>_<run>.png``, and names it relative to the comp, so the node's
+``results`` move with the comp's folder.
+
+What each node asks for: matte = background removal (its matte), depth = a depth map (near white), inpaint =
+fill (with words) or remove (without), upscale = the upscalers. A depth workflow answers the model's own depth as
+a float EXR; the frames of one job are brought to 0..1 together (``depth_maps``: near = 1, the 1st and 99th
+percentile of all of them), so the map does not pump from frame to frame, and written as 16-bit PNGs.
 
 A frame range is ONE ComfyUI job (``prepare_batch``): every frame's input is rendered and filled into the workflow
 as for one frame, then the per-frame graphs are laid into one prompt (``merge_graphs``) in which every node that is
@@ -17,9 +24,8 @@ queue holds one entry. Each frame keeps its own output node; ``place_batch`` wri
 ``<comp stem>_ai/<node>/<run>/<node>_<kind>.####.png``, which the node reads back frame by frame (``results``).
 All frames of a run share one seed (less flicker between frames).
 
-A node may name its own workflow (``workflow``: an id of Paint's table for its action, else Paint's choice) and
-its own model files (``models``: {"<workflow node>.<input>": file}, checked against ComfyUI's model folders by
-``paint_generate.apply_models``); ``models_for`` lists what can be picked.
+A node may name its own model files (``models``: {"<workflow node>.<input>": file}, checked against ComfyUI's model
+folders by ``paint_generate.apply_models``); ``models_for`` lists what can be picked.
 """
 from __future__ import annotations
 
@@ -37,10 +43,8 @@ from . import comp_model as M
 from . import paint_generate as G
 from . import paint_io as P
 
-AI_KINDS = {"ai_matte": "matte", "ai_depth": "depth", "ai_relight": "relight", "ai_inpaint": "inpaint", "ai_upscale": "upscale"}
-DEPTH_PROMPT = ("Turn this picture into a depth map: greyscale, near things white, far things black, smooth "
-                "shading without texture or detail, exactly the same framing.")
-RELIGHT_PROMPT = "Relight this picture: {prompt}. Keep everything else exactly as it is: the subjects, the objects, the framing."
+AI_KINDS = {"ai_matte": "matte", "ai_depth": "depth", "ai_inpaint": "inpaint", "ai_upscale": "upscale"}
+DEPTH_LOW, DEPTH_HIGH = 1.0, 99.0     # percentiles of a job's depth that become far (0) and near (1)
 MAX_JOBS = 8
 MAX_BATCH_FRAMES = 1000
 MAX_BATCH_BYTES = 64 * 1024 * 1024
@@ -59,16 +63,53 @@ def action_of(kind, prompt):
     if kind == "matte":
         return "background", ""
     if kind == "depth":
-        return "edit", DEPTH_PROMPT
-    if kind == "relight":
-        if not words:
-            raise AiError("say how the light should be")
-        return "edit", RELIGHT_PROMPT.format(prompt=words.rstrip("."))
+        return "depth", ""
     if kind == "inpaint":
         return ("fill", words) if words else ("remove", "")
     if kind == "upscale":
         return "upscale", ""
     raise AiError(f"not an AI node: {kind!r}")
+
+
+def _list_of(kind):
+    lists = G.comp_table().get("lists") or {}
+    got = lists.get(kind)
+    if not got:
+        raise AiError(f"not an AI node: {kind!r}")
+    return got
+
+
+def workflows_for(kind, prompt="", folder_paths=None, node_classes=None):
+    """The workflows an AI node of *kind* can run: {kind, action, workflows [items as Paint lists them], choice (the
+    default: the first one this ComfyUI has)}. An inpaint lists what serves its action now (fill with words,
+    remove without)."""
+    action, _w = action_of(kind, prompt)
+    ids = _list_of(kind).get("workflows") or []
+    if folder_paths is not None and not isinstance(folder_paths, G._Remembered):
+        folder_paths = G._Remembered(folder_paths)
+    items = []
+    for wid in ids:
+        e, _g = G._builtin(wid)
+        if not e or action not in e.get("actions") or not G.installed(e, node_classes):
+            continue
+        items.append(G._entry_item(e, folder_paths, node_classes))
+    return {"kind": kind, "action": action, "workflows": items, "choice": items[0]["id"] if items else None}
+
+
+def pick_workflow(kind, prompt, wanted, node_classes=None):
+    """The workflow a node runs: *wanted* when its list has it for the action, else the list's default."""
+    action, _w = action_of(kind, prompt)
+    ids = _list_of(kind).get("workflows") or []
+    usable = []
+    for wid in ids:
+        e, _g = G._builtin(wid)
+        if e and action in e.get("actions") and G.installed(e, node_classes):
+            usable.append(wid)
+    if wanted and wanted in usable:
+        return wanted
+    if not usable:
+        raise AiError("this ComfyUI has none of the workflows for this node (its node packs are not installed)")
+    return usable[0]
 
 
 def to_8bit(img):
@@ -112,6 +153,7 @@ def _frame_input(comp, kind, ins, f, sources, ocio):
 def _generate(kind, n, pic, sel, input_dir, *, wid, graph, tune, models, folder_paths, node_classes):
     w, h = pic.shape[1], pic.shape[0]
     action, words = action_of(kind, n.get("prompt"))
+    wid = pick_workflow(kind, n.get("prompt"), wid, node_classes)
     k = max(1, int(float(n.get("factor") or 2))) if kind == "upscale" else 2
     s = SimpleNamespace(doc=SimpleNamespace(w=w, h=h, selection=sel))
     res = G.prepare(s, None, action, input_dir, wid=wid, prompt=words, k=k, folder_paths=folder_paths,
@@ -222,7 +264,7 @@ def prepare_batch(comp, comp_path, node_id, frames, sources, input_dir, *, ocio=
     if folder_paths is not None:
         folder_paths = G._Remembered(folder_paths)     # every frame asks about the same model files
     picks = _node_models(n, models)
-    wid = wid or n.get("workflow") or None
+    wid = pick_workflow(kind, n.get("prompt") or "", wid or n.get("workflow") or None, node_classes)
     run = secrets.token_hex(6)
     plates = os.path.join(input_dir, "paint", f"compai_{run}")
     seed = secrets.randbelow(G.SEED_MAX + 1)
@@ -266,12 +308,16 @@ def prepare_batch(comp, comp_path, node_id, frames, sources, input_dir, *, ocio=
             _BATCHES.pop(next(iter(_BATCHES)))
     return {"run": run, "graph": merged, "outputs": {str(f): o for f, o in zip(done, out_ids)}, "frames": done,
             "skipped": skipped, "kind": kind, "action": action, "nodes": len(merged), "per_frame": len(graphs[0]),
-            "seed": seed}
+            "seed": seed, "workflow": wid}
 
 
-def models_for(action, folder_paths, *, wid=None, graph=None):
-    """What can be picked for a workflow of *action* (``wid``, else Paint's choice): {workflow, inputs}."""
-    if action not in G.ACTIONS:
+def models_for(action, folder_paths, *, wid=None, graph=None, kind=None, prompt="", node_classes=None):
+    """What can be picked for a workflow: {workflow, inputs}. With *kind* (an AI node's) the workflow is *wid* when
+    the node's list has it, else the list's default; with only *action* (an older page) Paint's for it."""
+    if kind:
+        action, _w = action_of(kind, prompt)
+        wid = pick_workflow(kind, prompt, wid, node_classes)
+    elif action not in G.ACTIONS:
         raise AiError(f"unknown action {action!r}")
     wid = wid or G.choices()[action]
     if wid == G.AGENT:
@@ -291,14 +337,68 @@ def result_name(comp_path, node_id, kind, frame, run=""):
     return os.path.join(os.path.dirname(os.path.abspath(comp_path)), *rel.split("/")), rel
 
 
+def read_depth(path):
+    """A depth workflow's answer as float32 [H, W], larger = farther: a float EXR as the model wrote it (read with
+    PyAV, which ComfyUI itself writes them with), or a picture taken as a depth map already (near white)."""
+    if str(path).lower().endswith(".exr"):
+        import av
+        with open(path, "rb") as fh:
+            data = fh.read()
+        frames = av.CodecContext.create("exr", "r").decode(av.Packet(data))
+        if not frames:
+            raise AiError(f"{os.path.basename(path)} could not be read")
+        f = frames[0]
+        fmt = f.format.name
+        a = f.to_ndarray(format="grayf32le" if fmt.startswith("gray") else "gbrpf32le").astype(np.float32)
+        if a.ndim == 3:
+            a = a[..., :3].mean(axis=2)
+        return np.nan_to_num(a, nan=0.0, posinf=0.0, neginf=0.0)
+    px = P.image_pixels(path)[..., :3].astype(np.float32)
+    return 1.0 - (px[..., 0] * 0.299 + px[..., 1] * 0.587 + px[..., 2] * 0.114) / 255.0
+
+
+def _fit_float(a, w, h):
+    """A float map scaled to cover w x h and cut to it from the middle (as ``G._cover`` does a picture)."""
+    ph, pw = a.shape[:2]
+    if (pw, ph) == (w, h):
+        return a
+    from PIL import Image
+    k = max(w / pw, h / ph)
+    sw, sh = max(w, int(np.ceil(pw * k))), max(h, int(np.ceil(ph * k)))
+    big = np.asarray(Image.fromarray(np.ascontiguousarray(a, dtype=np.float32)).resize((sw, sh), Image.BILINEAR))
+    x0, y0 = (sw - w) // 2, (sh - h) // 2
+    return big[y0:y0 + h, x0:x0 + w].copy()
+
+
+def depth_maps(depths):
+    """Depths of one job (float [H, W] each, larger = farther) as 16-bit depth maps, near = white: all of them
+    through ONE range, the 1st to the 99th percentile of every frame's values, so the map stays put from frame
+    to frame. Values that are not finite or not above 0 (no depth: the sky of some models) count as far."""
+    samples = []
+    for d in depths:
+        v = d[np.isfinite(d)]
+        v = v[v > 0] if (v > 0).any() else v
+        if v.size > 200000:
+            v = v[:: int(np.ceil(v.size / 200000))]
+        samples.append(v)
+    allv = np.concatenate(samples) if samples else np.zeros(1, np.float32)
+    if not allv.size:
+        allv = np.zeros(1, np.float32)
+    lo, hi = np.percentile(allv, [DEPTH_LOW, DEPTH_HIGH])
+    rng = max(float(hi - lo), 1e-6)
+    out = []
+    for d in depths:
+        dd = np.where(np.isfinite(d) & (d > 0) if (d > 0).any() else np.isfinite(d), d, hi)
+        near = 1.0 - np.clip((dd - lo) / rng, 0.0, 1.0)
+        out.append(np.clip(near * 65535.0 + 0.5, 0, 65535).astype(np.uint16))
+    return out
+
+
 def _answer(rec, px, plate=None):
     """The workflow's picture as the node's result for one frame (uint8)."""
     w, h, kind = rec["w"], rec["h"], rec["kind"]
     if kind == "matte":
         return G.matte_of(G._cover(px, w, h))
-    if kind == "depth":
-        rgb = G._cover(px, w, h)[..., :3].astype(np.float32)
-        return np.clip(rgb[..., 0] * 0.299 + rgb[..., 1] * 0.587 + rgb[..., 2] * 0.114 + 0.5, 0, 255).astype(np.uint8)
     if kind == "upscale":
         return np.ascontiguousarray(G._cover(px, w * rec["k"], h * rec["k"]))
     if kind == "inpaint":
@@ -312,11 +412,19 @@ def _answer(rec, px, plate=None):
     return out
 
 
+def _png16(px):
+    import io
+    from PIL import Image
+    b = io.BytesIO()
+    Image.fromarray(np.ascontiguousarray(px)).save(b, format="PNG", compress_level=4)   # uint16 grey: "I;16"
+    return b.getvalue()
+
+
 def _write(path, px):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = f"{path}.part-{secrets.token_hex(4)}"
     with open(tmp, "wb") as fh:
-        fh.write(P.png_bytes(px))
+        fh.write(_png16(px) if px.dtype == np.uint16 else P.png_bytes(px))
     os.replace(tmp, path)
 
 
@@ -326,7 +434,10 @@ def place(job, result_path):
         rec = _JOBS.get(job)
     if not rec:
         raise AiError("that run is no longer known (the server restarted?) - run it again")
-    out = _answer(rec, P.image_pixels(result_path))
+    if rec["kind"] == "depth":
+        out = depth_maps([_fit_float(read_depth(result_path), rec["w"], rec["h"])])[0]
+    else:
+        out = _answer(rec, P.image_pixels(result_path))
     path, rel = result_name(rec["comp"], rec["node"], rec["kind"], rec["frame"], job[:6])
     _write(path, out)
     return {"file": rel, "path": path, "frame": rec["frame"], "node": rec["node"], "kind": rec["kind"]}
@@ -354,13 +465,19 @@ def place_batch(run, results):
     comp: {frames {frame: file relative to the comp}, paths {frame: absolute}, node, kind, folder}."""
     rec = batch_record(run)
     frames, paths = {}, {}
-    for f, src in sorted(((int(a), b) for a, b in results.items()), key=lambda x: x[0]):
-        per = rec["frames"].get(f)
-        if not per:
-            continue
-        one = dict(per, kind=rec["kind"])
-        plate = P.image_pixels(per["plate"]) if per.get("plate") else None
-        out = _answer(one, P.image_pixels(src), plate)
+    todo = [(f, src, rec["frames"].get(f)) for f, src in sorted(((int(a), b) for a, b in results.items()), key=lambda x: x[0])]
+    todo = [x for x in todo if x[2]]
+    if rec["kind"] == "depth":
+        outs = depth_maps([_fit_float(read_depth(src), per["w"], per["h"]) for _f, src, per in todo])
+    else:
+        outs = None
+    for i, (f, src, per) in enumerate(todo):
+        if outs is not None:
+            out = outs[i]
+        else:
+            one = dict(per, kind=rec["kind"])
+            plate = P.image_pixels(per["plate"]) if per.get("plate") else None
+            out = _answer(one, P.image_pixels(src), plate)
         path, rel = sequence_name(rec["comp"], rec["node"], rec["kind"], run, f)
         _write(path, out)
         frames[str(f)], paths[str(f)] = rel, path
