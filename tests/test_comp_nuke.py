@@ -136,13 +136,32 @@ class NukeScript(unittest.TestCase):
         self.assertEqual(sorted(b["id"] for b in plan["bake"]), ["Blur1", "Blur2"])
         self.assertIn("Blur3", plan["native"])
 
+    def test_a_group_is_written_flat_and_an_expression_as_a_curve(self):
+        c = comp([{"id": "C", "type": "constant", "inputs": []},
+                  {"id": "D", "type": "dot", "inputs": ["C"]},
+                  {"id": "G1", "type": "group", "inputs": ["D"], "nodes": [
+                      {"id": "Input1", "type": "group_input", "index": 0, "inputs": []},
+                      {"id": "Blur1", "type": "blur", "inputs": ["Input1"], "size": 1, "expr": {"size": "frame * 2"}},
+                      {"id": "GroupOutput1", "type": "group_output", "inputs": ["Blur1"]}]},
+                  {"id": "Note", "type": "sticky", "text": "hello", "inputs": []},
+                  {"id": "Output1", "type": "output", "inputs": ["G1"]}])
+        text, plan = N.build(c)
+        self.assertEqual(plan["native"], ["C", "G1/Blur1", "Output1"])
+        blur = [k for cls, k, _ in blocks(text) if cls == "Blur"][0]
+        self.assertEqual(blur["name"], "G1_Blur1")             # a Nuke name holds no "/"
+        self.assertEqual(blur["size"], "{{curve x0 0 2 4}}")   # the expression's values, frame by frame
+        write = [p for cls, k, p in blocks(text) if cls == "Write"][0]
+        self.assertEqual(write[-1], "$N_G1_Blur1")             # through the Dot and the group's ports
+
     def test_no_comp_node_type_breaks_the_writer(self):
         nodes = [{"id": f"N{i}", "type": t, "inputs": []} for i, t in enumerate(N.M.NODE_TYPES) if t != "output"]
         nodes.append({"id": "Output1", "type": "output", "inputs": [nodes[0]["id"]]})
         text, plan = N.build(comp(nodes))
         lines = text.splitlines()
         self.assertEqual(sum(ln.endswith(" {") for ln in lines), sum(ln == "}" for ln in lines))
-        self.assertEqual(len(plan["native"]) + len(plan["bake"]) + len(plan["placeholder"]) + len(plan["skipped"]), len(nodes))
+        # Dots, groups, their ports, backdrops and notes are laid out flat first: they write no node of their own.
+        graph_only = {"dot", "group", "group_input", "group_output", "backdrop", "sticky"}
+        self.assertEqual(len(plan["native"]) + len(plan["bake"]) + len(plan["placeholder"]) + len(plan["skipped"]), len([n for n in nodes if n["type"] not in graph_only]))
         self.assertTrue(text.startswith("#! nuke -nx"))
 
     @unittest.skipIf(OpenEXR is None, "needs the OpenEXR module to read the file back")

@@ -565,6 +565,7 @@ export const CompPanelMixin = {
             playing: () => !!this.isPlaying,
             onCache: () => { if (this.activeTab === key && this.queueCacheMarks) this.queueCacheMarks(); },
             ocioInfo: () => this._cpOcioInfo(),
+            tools: (op, extra) => this._cpTools(op, extra),
             ocioLut: (spec) => this._cpOcioLut(spec, rec),
             onDisplay: (v) => { try { localStorage.setItem("imageviewer.comp.display", v || ""); } catch (_) { /* not kept */ } },
             setChannel: (c) => this.setChannelView(VIEW_CHANNEL[c] || "all"),
@@ -633,6 +634,16 @@ export const CompPanelMixin = {
     },
 
     /** The server's OCIO config (colourspaces, displays, views, the working space), asked once. */
+    /** The tool library (src/comp_tools.py): op list | get | save | delete. */
+    async _cpTools(op, extra = {}) {
+        const res = await api.fetchApi("/imageviewer/comp_tools", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(Object.assign({ op }, extra)),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        return data;
+    },
     _cpOcioInfo() {
         const st = this._cpState();
         if (!st.ocio) {

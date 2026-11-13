@@ -88,6 +88,30 @@ except ImportError:   # loaded on its own (the tests): the file beside this one
     _X = _ilu.module_from_spec(_spec)
     _spec.loader.exec_module(_X)
 
+
+def _sibling(name):
+    """A module beside this one, also when this file is loaded on its own (the tests load it by its path)."""
+    import importlib
+    if __package__:
+        try:
+            return importlib.import_module(f"{__package__}.{name}")
+        except ImportError:
+            pass
+    import importlib.util
+    import os
+    import sys
+    key = f"_comp_{name}"
+    if key not in sys.modules:
+        spec = importlib.util.spec_from_file_location(key, os.path.join(os.path.dirname(os.path.abspath(__file__)), f"{name}.py"))
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[key] = mod
+        spec.loader.exec_module(mod)
+    return sys.modules[key]
+
+
+G = _sibling("comp_graph")
+E = _sibling("comp_expr")
+
 COMP_VERSION = 1
 SUFFIX = ".comp.json"
 MERGE_OPS = ["over", "under", "plus", "minus", "multiply", "screen", "max", "min", "difference",
@@ -511,6 +535,13 @@ NODE_TYPES = {
         "reference": {"kind": "int", "def": 0},
     }},
     "output": {"inputs": ["src"], "params": {}},
+    # The graph's own (comp_graph.py): no pixels of their own. A group's ports are its Input nodes.
+    "dot": {"inputs": ["src"], "params": {}},
+    "group": {"inputs": [], "params": {}},
+    "group_input": {"inputs": [], "params": {}},
+    "group_output": {"inputs": ["src"], "params": {}},
+    "backdrop": {"inputs": [], "params": {}},
+    "sticky": {"inputs": [], "params": {}},
 }
 NODE_TYPES.update(_X.EXTRA_TYPES)
 
@@ -554,40 +585,7 @@ def normalize(raw):
                        "fps": f.get("fps") if _is_num(f.get("fps")) and f.get("fps") > 0 else 24,
                        "frames": _int(f.get("frames"), 48, 1, 100000)},
             "nodes": [], "output": raw.get("output") if isinstance(raw.get("output"), str) else None}
-    seen = set()
-    for n in raw.get("nodes") if isinstance(raw.get("nodes"), list) else []:
-        if not isinstance(n, dict) or n.get("type") not in NODE_TYPES:
-            errors.append("a node of unknown type was left out")
-            continue
-        if not isinstance(n.get("id"), str) or not n["id"] or n["id"] in seen:
-            errors.append(f"a {n.get('type')} node without its own id was left out")
-            continue
-        seen.add(n["id"])
-        node = copy.deepcopy(n)
-        ins = n.get("inputs") if isinstance(n.get("inputs"), list) else []
-        node["inputs"] = [ins[i] if i < len(ins) and isinstance(ins[i], str) else None
-                          for i in range(len(NODE_TYPES[n["type"]]["inputs"]))]
-        # A layer's length: whole frames, out after in (a Merge's only).
-        for k in ("in", "out"):
-            if node["type"] != "merge" or not _is_num(node.get(k)):
-                node.pop(k, None)
-            else:
-                node[k] = int(round(node[k]))
-        if "in" in node and "out" in node and node["out"] <= node["in"]:
-            errors.append(f"{node['id']}: its out was not after its in and was taken off")
-            node.pop("out")
-        comp["nodes"].append(node)
-    for n in comp["nodes"]:
-        n["inputs"] = [i if i in seen and i != n["id"] else None for i in n["inputs"]]
-    for n in comp["nodes"]:
-        for i, src in enumerate(list(n["inputs"])):
-            if not src:
-                continue
-            n["inputs"][i] = None
-            if _reaches(comp, src, n["id"]):
-                errors.append(f"{n['id']}: an input that made a loop was taken off")
-            else:
-                n["inputs"][i] = src
+    comp["nodes"] = _normalize_level(raw.get("nodes"), errors, "", 0)
     out = node_by_id(comp, comp["output"]) if comp["output"] else None
     if not out or out.get("type") != "output":
         first = next((n for n in comp["nodes"] if n["type"] == "output"), None)
@@ -596,6 +594,69 @@ def normalize(raw):
     if views:
         comp["format"]["views"] = views
     return comp, errors
+
+
+_MAX_GROUP_DEPTH = 16
+
+
+def inputs_of(n):
+    """A node's ports' names: its type's, or a group's Input nodes'."""
+    if not n:
+        return []
+    if n.get("type") == "group":
+        return [x.get("name") or x.get("id") for x in G.group_inputs(n)]
+    return NODE_TYPES.get(n.get("type"), {"inputs": []})["inputs"]
+
+
+def _normalize_level(raw, errors, where, depth):
+    """One graph's nodes (the comp's or a group's): known types, ids of their own, inputs that exist, no loops."""
+    seen, nodes = set(), []
+    for n in raw if isinstance(raw, list) else []:
+        if not isinstance(n, dict) or n.get("type") not in NODE_TYPES:
+            errors.append(f"{where}a node of unknown type was left out")
+            continue
+        if not isinstance(n.get("id"), str) or not n["id"] or n["id"] in seen:
+            errors.append(f"{where}a {n.get('type')} node without its own id was left out")
+            continue
+        if n["type"] == "group" and depth >= _MAX_GROUP_DEPTH:
+            errors.append(f"{where}{n['id']}: groups go {_MAX_GROUP_DEPTH} deep at most")
+            continue
+        seen.add(n["id"])
+        node = copy.deepcopy({k: v for k, v in n.items() if k != "__scope"})
+        if n["type"] == "group":
+            node["nodes"] = _normalize_level(n.get("nodes"), errors, f"{where}{n['id']}/", depth + 1)
+            for k, x in enumerate(G.group_inputs(node)):
+                x["index"] = k
+        else:
+            node.pop("nodes", None)
+        ins = n.get("inputs") if isinstance(n.get("inputs"), list) else []
+        node["inputs"] = [ins[i] if i < len(ins) and isinstance(ins[i], str) else None for i in range(len(inputs_of(node)))]
+        if "expr" in node and not isinstance(node["expr"], dict):
+            del node["expr"]
+        # A layer's length: whole frames, out after in (a Merge's only).
+        for k in ("in", "out"):
+            if node["type"] != "merge" or not _is_num(node.get(k)):
+                node.pop(k, None)
+            else:
+                node[k] = int(round(node[k]))
+        if "in" in node and "out" in node and node["out"] <= node["in"]:
+            errors.append(f"{where}{node['id']}: its out was not after its in and was taken off")
+            node.pop("out")
+        nodes.append(node)
+    level = {"nodes": nodes}
+    for n in nodes:
+        n["inputs"] = [i if i in seen and i != n["id"] and node_by_id(level, i)["type"] not in G.GRAPH_ONLY else None
+                       for i in n["inputs"]]
+    for n in nodes:
+        for i, src in enumerate(list(n["inputs"])):
+            if not src:
+                continue
+            n["inputs"][i] = None
+            if _reaches(level, src, n["id"]):
+                errors.append(f"{where}{n['id']}: an input that made a loop was taken off")
+            else:
+                n["inputs"][i] = src
+    return nodes
 
 
 # ── views (stereo, multi-view): the page's cleanViews / viewFile / viewNode / eyeOffset ─────────────────────
@@ -773,7 +834,7 @@ def merge_live(n, f):
     return True
 
 
-def param_at(node, p, frame):
+def param_at(node, p, frame, scope=None):
     d = NODE_TYPES.get(node.get("type"), {}).get("params", {}).get(p)
     own = node[p] if p in node else (d["def"] if d else None)
     if not d or not d.get("key"):
@@ -781,12 +842,82 @@ def param_at(node, p, frame):
     tracks = node.get("tracks") if isinstance(node.get("tracks"), dict) else {}
     keys = tracks.get(p) if isinstance(tracks.get(p), list) else []
     v = value_at(keys, own, frame)
+    ex = (node.get("expr") or {}).get(p) if isinstance(node.get("expr"), dict) else None
+    sc = scope or node.get("__scope")
+    if ex and sc is not None:
+        v = _with_expr(node, p, d, v, frame, sc)
     if d["kind"] == "num" and _is_num(v):
         if "min" in d and v < d["min"]:
             v = d["min"]
         if "max" in d and v > d["max"]:
             v = d["max"]
     return v
+
+
+# ── expressions (comp_expr.py; the page's withExpr) ─────────────────────────
+
+_EXPR_BUSY = []
+
+
+def exprable(t, p):
+    """Can ``p`` of a node of type ``t`` take an expression (a keyable number, vector or colour)?"""
+    d = NODE_TYPES.get(t, {}).get("params", {}).get(p)
+    return bool(d and d.get("key") and d["kind"] in ("num", "int", "vec2", "color"))
+
+
+def _with_expr(node, p, d, v, frame, sc):
+    if len(_EXPR_BUSY) > 32 or any(b[0] is node and b[1] == p for b in _EXPR_BUSY):
+        return v
+    ex = node["expr"][p]
+    f = sc.format or {}
+    fps = f.get("fps") or 24
+
+    def vars_(value):
+        return {"frame": frame, "time": frame / fps, "fps": fps, "width": f.get("width"), "height": f.get("height"), "value": value}
+
+    def ref(k):
+        def get(nid, param, comp):
+            m = sc.find(nid)
+            if not m or param not in NODE_TYPES.get(m.get("type"), {}).get("params", {}):
+                return float("nan")
+            r = param_at(m, param, frame)
+            if isinstance(r, (list, tuple)):
+                i = comp if comp is not None else (k if k is not None else 0)
+                return r[i] if i < len(r) and _is_num(r[i]) else float("nan")
+            return r if _is_num(r) else float("nan")
+        return get
+    _EXPR_BUSY.append((node, p))
+    try:
+        if isinstance(v, (list, tuple)):
+            if not isinstance(ex, list):
+                return v
+            out = list(v)
+            for k in range(len(out)):
+                if k >= len(ex) or not isinstance(ex[k], str) or not ex[k].strip() or not _is_num(out[k]):
+                    continue
+                r = E.eval_expr(ex[k], vars_(out[k]), ref(k))
+                if math.isfinite(r):
+                    out[k] = r
+            return out
+        if not isinstance(ex, str) or not ex.strip() or not _is_num(v):
+            return v
+        r = E.eval_expr(ex, vars_(v), ref(None))
+        if not math.isfinite(r):
+            return v
+        return float(math.floor(r + 0.5)) if d["kind"] == "int" else r
+    finally:
+        _EXPR_BUSY.pop()
+
+
+def expr_refs_of(node):
+    out = []
+    for ex in ((node or {}).get("expr") or {}).values():
+        for s in ex if isinstance(ex, list) else [ex]:
+            if isinstance(s, str):
+                for r in E.expr_refs(s):
+                    if r not in out:
+                        out.append(r)
+    return out
 
 
 # ── pixels ───────────────────────────────────────────────────────────────────
@@ -966,6 +1097,9 @@ _PLAIN_SIZE = (GEO3D | DEEP) - {"project3d"}
 
 def format_at(comp, nid, depth=0):
     """The size of the picture node ``nid`` makes, in pixels of the comp (the page's ``formatAt``)."""
+    if not depth:
+        comp = G.flatten(comp)
+        nid = G.resolve(comp, nid)
     F = {"width": comp["format"]["width"], "height": comp["format"]["height"]}
     n = node_by_id(comp, nid) if nid and depth < 256 else None
     if not n or n.get("type") not in NODE_TYPES:
@@ -2254,7 +2388,9 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
     """The picture node ``nid`` makes at ``frame``; ``source(node, frame)`` gives a Read's pixels (a picture at
     their own size) or None, ``deep_source(node, frame)`` a DeepRead's deep picture (comp_deep) or None. The page's
     ``renderNode``: nodes that look at other times render their input at those frames; ``view`` is the view made
-    (None: the comp's first, if it has views)."""
+    (None: the comp's first, if it has views). Groups, Dots, backdrops and notes: the flat comp (comp_graph.py)."""
+    comp = G.flatten(comp)
+    nid = G.resolve(comp, nid)
     fmt = comp["format"]
     W = max(1, int(math.floor(fmt["width"] * scale + 0.5)))
     H = max(1, int(math.floor(fmt["height"] * scale + 0.5)))
@@ -2746,6 +2882,8 @@ class _Api:
 
 def sources_of(comp, nid):
     """The Reads node ``nid`` depends on."""
+    comp = G.flatten(comp)
+    nid = G.resolve(comp, nid)
     out, seen = [], set()
 
     def walk(i):

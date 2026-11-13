@@ -385,6 +385,7 @@ def new_node_cases(sources):
     c.extend(box_cases(sources))
     c.extend(warp_cases(sources))
     c.extend(extra_cases(sources))
+    c.extend(graph_cases(sources))
     return c
 
 
@@ -553,6 +554,37 @@ def scene_cases(sources):
                              N("scene3d", 1, ["card3d1", "geo3d1", None, None]), cam(1, translate=[0, 0, 1.8]),
                              N("render3d", 1, ["scene3d1", "camera3d1", None]), N("deepread", 1, [], file="a.exr"),
                              N("deepmerge", 1, ["render3d1", "deepread1", None, None]), out("deepmerge1")]), "deep": {"deepread1": deep_a}}, sources))
+    return c
+
+
+def graph_cases(sources):
+    """Graph organisation: Dots, groups (nested, disabled, with two inputs), backdrops and notes laid out flat, and
+    expressions - the frame, maths, other nodes' numbers in the same graph and in the graphs around it, links."""
+    N, c = node, []
+    gin = lambda i, idx=0: {"id": f"Input{i}", "type": "group_input", "index": idx, "inputs": []}
+    gout = lambda src_id: {"id": "GroupOutput1", "type": "group_output", "inputs": [src_id]}
+    notes = [{"id": "Backdrop1", "type": "backdrop", "x": -40, "y": -40, "w": 400, "h": 300, "inputs": []},
+             {"id": "StickyNote1", "type": "sticky", "text": "a note", "inputs": []}]
+    c.append(({"comp": comp([read(1), read(2), N("dot", 1, ["Read1"]), N("dot", 2, ["dot1"]), merge(1, "dot2", "Read2"), *notes, out("Merge1")])}, sources))
+    inner = {"id": "G2", "type": "group", "inputs": ["blur1"], "nodes": [
+        gin(1), N("transform", 1, ["Input1"], translate=[0, 0], rotate=0,
+                  expr={"translate": ["Grade1.gain * 3 - 1", "sin(frame) * 2"], "rotate": "frame * 5 + random(3) * 10"}),
+        gout("transform1")]}
+    outer = {"id": "G1", "type": "group", "inputs": ["Read1", "Read2"], "nodes": [
+        gin(1, 0), gin(2, 1), N("blur", 1, ["Input1"], size=1, expr={"size": "clamp(frame / 2, 0, 3) + (frame % 3 == 1 ? 0.5 : 0)"}),
+        inner, merge(1, "G2", "Input2", mix=0.5, expr={"mix": "smoothstep(0, 8, frame) * 0.5 + noise(frame * 0.3) * 0.1"}),
+        {"id": "Dot1", "type": "dot", "inputs": ["Merge1"]}, gout("Dot1")]}
+    grade = N("grade", 1, ["G1"], gain=1, expr={"gain": "pow(1.2, 2) - floor(2.7) / 4 + round(0.5) * 0.1"})
+    grade["id"] = "Grade1"
+    for f in (0, 4):
+        c.append(({"comp": comp([read(1), read(2), outer, grade, out("Grade1")]), "frame": f}, sources))
+    off = dict(outer, disable=True)
+    c.append(({"comp": comp([read(1), read(2), off, out("G1")])}, sources))
+    # Links (what the Parameters panel writes), vectors by component and a colour from another node.
+    c.append(({"comp": comp([N("constant", 1, [], color=[0.2, 0.4, 0.6, 1]),
+                             N("constant", 2, [], color=[0, 0, 0, 1], expr={"color": ["constant1.color.b * 0.5 + 0.1", "constant1.color", None, "mod(7, 4) / 3"]}),
+                             N("transform", 1, ["constant2"], expr={"translate": ["'constant1'.color.g * 10 + 2", "max(1, 2, 3) - atan2(1, 1)"], "scale": ["1 + 0.1 * (frame > 2)", None]}),
+                             out("transform1")]), "frame": 3}, {}))
     return c
 
 

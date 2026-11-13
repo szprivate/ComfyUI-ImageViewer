@@ -292,6 +292,9 @@ def parse_removes(text):
 def metadata_at(comp, nid, frame, sources=None, depth=0):
     """The metadata of node ``nid``'s picture at ``frame``: the Read at the top of its B pipe (input 0) gives its
     file's, every Metadata node on the way down sets / removes keys. A time node changes the frame asked for."""
+    if not depth:
+        comp = M.G.flatten(comp)
+        nid = M.G.resolve(comp, nid)
     n = M.node_by_id(comp, nid)
     if not n or depth > 256:
         return {}
@@ -400,6 +403,7 @@ def plan(comp, comp_path, ids=None, first=None, last=None, handles=None):
     switched-off ones left out) -> ``{id, name, pattern, type, film, frames, numbers: {frame: file number}}``."""
     want = None if ids in (None, "all") else set(ids)
     out = []
+    comp = M.G.flatten(comp)   # a Write inside a group is named by its flat id, "<group>/<id>"
     for n in write_nodes(comp):
         if n.get("disable") or (want is not None and n["id"] not in want):
             continue
@@ -505,6 +509,7 @@ def render(comp, comp_path, plans, sources=None, *, progress=None, cancelled=Non
     ``progress(done, total)``; ``cancelled()`` -> True stops it (InterruptedError). Returns
     ``[{id, name, files, film, frames}]`` (what was written)."""
     comp, _ = M.normalize(comp)
+    comp = M.G.flatten(comp)
     hook = comp_io.ocio_hook() if ocio is None else ocio
     fps = comp["format"]["fps"]
     frames = sorted({f for p in plans for f in p["frames"]})

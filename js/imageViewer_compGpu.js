@@ -217,6 +217,7 @@ export function createCompGpu(doc = document) {
 
     /** Whether the GPU can do node `id`'s picture: rgba only, and at least one shader node in it. */
     function canRender(comp, id) {
+        comp = C.G.flattenComp(comp); id = C.G.resolveId(comp, id);
         let shaders = 0, ok = true;
         const seen = new Set();
         const walk = (nid) => {
@@ -237,6 +238,7 @@ export function createCompGpu(doc = document) {
      * with `roi` the region worked. Null when the GPU cannot (the caller renders on the CPU).
      */
     function render(comp, id, frame, ctx, roi = null) {
+        comp = C.G.flattenComp(comp); id = C.G.resolveId(comp, id);
         if (!canRender(comp, id)) return null;
         const scale = ctx.scale || 1;
         const W = Math.max(1, Math.round(comp.format.width * scale)), H = Math.max(1, Math.round(comp.format.height * scale));

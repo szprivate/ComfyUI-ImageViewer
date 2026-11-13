@@ -28,6 +28,9 @@ The graph flows from top to bottom: inputs on the top edge of a node, the output
 | Disable / delete / frame all | <kbd>D</kbd> / <kbd>Del</kbd> / <kbd>F</kbd> |
 | Grid / snap | <kbd>G</kbd> / <kbd>S</kbd> |
 | Add footage | Drop History thumbnails or file browser rows on the graph |
+| Group the selection / take a group apart | <kbd>Ctrl</kbd>+<kbd>G</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> |
+| Go into a group / back up | Double-click it or <kbd>Ctrl</kbd>+<kbd>Enter</kbd> / <kbd>Ctrl</kbd>+<kbd>Backspace</kbd> or the path at the top |
+| Backdrop round the selection / Dot | <kbd>B</kbd> / <kbd>.</kbd> |
 
 The selected nodes' parameters appear in the **Parameters** panel, one section per node, and their handles are drawn over the picture (transform jack, crop box, flare position). **Layers** and the **Curve Editor** sit behind the graph as tabs. The graph can also be shown in ComfyUI's bottom panel (**Comp** tab).
 
@@ -49,6 +52,27 @@ The same graph as a stack of layers on a timeline: each Merge on the main pipe i
 
 A layer's frames are the Merge's `in` and `out` in the file (`out` is the first frame without the layer); the script export turns them into an expression on the Merge's disable.
 
+## Keeping a graph tidy
+
+- **Groups** hold a graph of their own. Inside, each **Input** node is one of the group's inputs (in their order) and the **GroupOutput** is what it passes on. A disabled group passes its first input. Node names inside a group are its own; another group may use the same ones.
+- **Tools**: a group's right-click menu (or its Parameters) has **Save as a tool…**. Tools are kept per user in `~/.comfyui_image_viewer/comp_tools/` (or the folder named by `IMAGE_VIEWER_COMP_TOOLS`) as `*.comp.json` files, so every comp on the machine can use them; they are listed under **Tools** in the <kbd>Tab</kbd> menu, where the × removes one.
+- **Backdrops** are coloured, labelled areas. Dragging the label moves the nodes on it; the corner resizes it. **Sticky notes** hold text (double-click to write). Neither takes part in the picture.
+- **Dots** bend a wire; they pass their input on.
+- **Colour…** in the right-click menu (or the colour row in Parameters) sets any node's colour in the graph.
+
+## Expressions and links
+
+Any keyable number, position or colour can be worked out instead of set: click **=** at the end of its row in Parameters. A position or colour has a line per component; an empty line leaves that component alone. A node with expressions shows **=** in the graph, and a dotted line comes from each node it reads.
+
+| | |
+|---|---|
+| Names | `frame`, `time` (seconds), `fps`, `width`, `height`, `value` (the number without the expression), `pi`, `e` |
+| Operators | `+ - * / % ^`, `== != < <= > >=`, `&& \|\| !`, `a ? b : c` |
+| Functions | `sin cos tan asin acos atan atan2 sqrt abs exp log log10 pow floor ceil round fract sign min max clamp lerp mix smoothstep step mod degrees radians if random noise` |
+| Other nodes | `Blur1.size`, `Transform1.translate.x`, `Grade1.color.r`; `'Odd name'.mix` for an id with spaces. A node is looked up in the same graph first, then in the graphs around it. |
+
+The **⇢** row links the number to another node's with a scale and an offset (it writes `Node.param * scale + offset`). **Bake to keys** turns the expression into a key on every frame; **Take off** removes it. Expressions are a small calculator: they cannot run code, read files or reach anything outside the comp. The script export writes an expression's values as keys.
+
 ## Nodes
 
 | Category | Nodes |
@@ -67,6 +91,7 @@ A layer's frames are the Merge's `in` and `out` in the file (`out` is the first 
 | Deep | DeepRead, DeepFromImage, DeepMerge, DeepHoldout, DeepCrop, DeepFlatten |
 | Views | OneView, JoinViews, Anaglyph, SideBySide |
 | AI | AI Matte, AI Depth, AI Relight, AI Inpaint, AI Upscale |
+| Graph | Group, Input, GroupOutput, Dot, Backdrop, StickyNote |
 
 Most colour, filter, keying and channel nodes have a **mask** input (the last one) and a **mix**. Mix 0 passes the input through unchanged; with a mask connected, the node acts only where the chosen mask channel (alpha by default, or any extra channel such as `mask.a`) is above 0, and **invert mask** flips that. The mask's channel and invert rows appear once something is plugged into the mask input. A mask of another size is aligned at the bottom-left corner, like any other image.
 

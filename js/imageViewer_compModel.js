@@ -36,8 +36,10 @@ import * as DP from "./imageViewer_compDeep.js";
 import * as PT from "./imageViewer_compPaint.js";
 import * as WP from "./imageViewer_compWarp.js";
 import * as EX from "./imageViewer_compExtra.js";
+import * as E from "./imageViewer_compExpr.js";
+import * as G from "./imageViewer_compGraph.js";
 import { blank, blurImage, boxesForGauss } from "./imageViewer_compOps.js";
-export { blank, blurImage, boxesForGauss };
+export { blank, blurImage, boxesForGauss, E, G };
 
 export const COMP_VERSION = 1;
 export const COMP_SUFFIX = ".comp.json";
@@ -418,6 +420,13 @@ export const NODE_TYPES = {
         reference: { kind: "int", def: 0, help: "The frame where the picture stays as it is" },
     } },
     output: { label: "Output", cat: "Other", inputs: ["src"], params: {} },
+    // The graph's own (imageViewer_compGraph.js): no pixels of their own. A group's ports are its Input nodes.
+    dot: { label: "Dot", cat: "Graph", inputs: ["src"], params: {} },
+    group: { label: "Group", cat: "Graph", inputs: [], params: {} },
+    group_input: { label: "Input", cat: "Graph", inputs: [], params: {} },
+    group_output: { label: "GroupOutput", cat: "Graph", inputs: ["src"], params: {} },
+    backdrop: { label: "Backdrop", cat: "Graph", inputs: [], params: {} },
+    sticky: { label: "StickyNote", cat: "Graph", inputs: [], params: {} },
 };
 /**
  * Nodes that take a MASK and a mix on top of what they do: the last input is "mask", and the result is
@@ -443,7 +452,8 @@ export const TYPE_ORDER = ["read", "constant", "roto", "paint", "merge", "copy",
     "motionblur", "depthblur", "defocus", "lensflare", "shuffle", "addchannels", "removechannels", "channelmerge", "channelmath", "premult", "unpremult", "retime", "vectors", "metadata", "write",
     "camera3d", "card3d", "geo3d", "project3d", "scene3d", "pointcloud", "render3d",
     "deepread", "deepfromimage", "deepmerge", "deepholdout", "deepcrop", "deepflatten",
-    "oneview", "joinviews", "anaglyph", "sidebyside", "output"];
+    "oneview", "joinviews", "anaglyph", "sidebyside", "output",
+    "dot", "group", "group_input", "group_output", "backdrop", "sticky"];
 /** Nodes that hand their input on unchanged: what they do is outside the pixels (a file written, metadata). */
 export const PASS_THROUGH = new Set(["output", "write", "metadata"]);
 // The finishing nodes (keying, time, colour, filters, AI) are in imageViewer_compExtra.js.
@@ -516,31 +526,7 @@ export function normalizeComp(raw) {
         nodes: [],
         output: typeof raw.output === "string" ? raw.output : null,
     };
-    const seen = new Set();
-    for (const n of Array.isArray(raw.nodes) ? raw.nodes : []) {
-        if (!isObj(n) || !NODE_TYPES[n.type]) { errors.push(`a node of unknown type ${isObj(n) ? n.type : n} was left out`); continue; }
-        if (typeof n.id !== "string" || !n.id || seen.has(n.id)) { errors.push(`a ${n.type} node without its own id was left out`); continue; }
-        seen.add(n.id);
-        const t = NODE_TYPES[n.type];
-        const node = clone(n);
-        node.x = isNum(n.x) ? n.x : 0; node.y = isNum(n.y) ? n.y : 0;
-        const ins = Array.isArray(n.inputs) ? n.inputs : [];
-        node.inputs = t.inputs.map((_, i) => (typeof ins[i] === "string" ? ins[i] : null));
-        if (node.tracks && !isObj(node.tracks)) delete node.tracks;
-        // A layer's length: whole frames, out after in (a Merge's only).
-        for (const k of ["in", "out"]) { if (node.type !== "merge" || !isNum(node[k])) delete node[k]; else node[k] = Math.round(node[k]); }
-        if (isNum(node.in) && isNum(node.out) && node.out <= node.in) { errors.push(`${node.id}: its out was not after its in and was taken off`); delete node.out; }
-        comp.nodes.push(node);
-    }
-    for (const n of comp.nodes) n.inputs = n.inputs.map((id) => (id && seen.has(id) && id !== n.id ? id : null));
-    // Cycles are not a picture: the input that closes one goes.
-    for (const n of comp.nodes) n.inputs = n.inputs.map((id, i) => {
-        if (!id) return null;
-        n.inputs[i] = null;
-        const bad = reaches(comp, id, n.id);
-        if (bad) errors.push(`${n.id}: an input that made a loop was taken off`);
-        return bad ? null : id;
-    });
+    comp.nodes = normalizeLevel(raw.nodes, errors, "", 0);
     if (!comp.output || !nodeById(comp, comp.output) || nodeById(comp, comp.output).type !== "output") {
         const o = comp.nodes.find((n) => n.type === "output");
         comp.output = o ? o.id : null;
@@ -593,11 +579,55 @@ export function eyeOffset(comp, view, interaxial) {
 export const firstView = (comp) => viewsOf(comp)[0] || null;
 
 /** The comp's Write nodes, in graph order. */
-export function writeNodes(comp) { return (comp && comp.nodes || []).filter((n) => n.type === "write"); }
+export function writeNodes(comp) { return (comp && G.flattenComp(comp).nodes || []).filter((n) => n.type === "write"); }
 
 /** The Reads a comp names (for relinking and localising): [{id, name, file, local}]. */
 export function readNodes(comp) {
     return (comp && comp.nodes || []).filter((n) => n.type === "read" && n.file).map((n) => ({ id: n.id, name: n.name || n.id, file: n.file, local: n.local || "" }));
+}
+
+/** One graph's nodes (the comp's, or a group's), checked: known types, ids of their own, inputs that exist, no loops. */
+const MAX_GROUP_DEPTH = 16;
+function normalizeLevel(raw, errors, where, depth) {
+    const seen = new Set(), nodes = [];
+    for (const n of Array.isArray(raw) ? raw : []) {
+        if (!isObj(n) || !NODE_TYPES[n.type]) { errors.push(`${where}a node of unknown type ${isObj(n) ? n.type : n} was left out`); continue; }
+        if (typeof n.id !== "string" || !n.id || seen.has(n.id)) { errors.push(`${where}a ${n.type} node without its own id was left out`); continue; }
+        if (n.type === "group" && depth >= MAX_GROUP_DEPTH) { errors.push(`${where}${n.id}: groups go ${MAX_GROUP_DEPTH} deep at most`); continue; }
+        seen.add(n.id);
+        const node = clone(n);
+        node.x = isNum(n.x) ? n.x : 0; node.y = isNum(n.y) ? n.y : 0;
+        if (n.type === "group") {
+            node.nodes = normalizeLevel(n.nodes, errors, `${where}${n.id}/`, depth + 1);
+            G.groupInputs(node).forEach((x, k) => { x.index = k; });
+        } else delete node.nodes;
+        const ins = Array.isArray(n.inputs) ? n.inputs : [];
+        node.inputs = inputsOf(node).map((_, i) => (typeof ins[i] === "string" ? ins[i] : null));
+        if (node.tracks && !isObj(node.tracks)) delete node.tracks;
+        if (node.expr !== undefined && !isObj(node.expr)) delete node.expr;
+        // A layer's length: whole frames, out after in (a Merge's only).
+        for (const k of ["in", "out"]) { if (node.type !== "merge" || !isNum(node[k])) delete node[k]; else node[k] = Math.round(node[k]); }
+        if (isNum(node.in) && isNum(node.out) && node.out <= node.in) { errors.push(`${where}${node.id}: its out was not after its in and was taken off`); delete node.out; }
+        nodes.push(node);
+    }
+    const level = { nodes };
+    for (const n of nodes) n.inputs = n.inputs.map((id) => (id && seen.has(id) && id !== n.id && !G.GRAPH_ONLY.has(nodeById(level, id).type) ? id : null));
+    // Cycles are not a picture: the input that closes one goes.
+    for (const n of nodes) n.inputs = n.inputs.map((id, i) => {
+        if (!id) return null;
+        n.inputs[i] = null;
+        const bad = reaches(level, id, n.id);
+        if (bad) errors.push(`${where}${n.id}: an input that made a loop was taken off`);
+        return bad ? null : id;
+    });
+    return nodes;
+}
+
+/** A node's ports' names: its type's, or a group's Input nodes'. */
+export function inputsOf(n) {
+    if (!n) return [];
+    if (n.type === "group") return G.groupInputs(n).map((x) => x.name || x.id);
+    return (NODE_TYPES[n.type] || { inputs: [] }).inputs;
 }
 
 export function nodeById(comp, id) { return (comp && comp.nodes || []).find((n) => n.id === id) || null; }
@@ -616,7 +646,13 @@ export function makeNode(comp, type, extra = {}) {
     const node = { id: uniqueId(comp, t.label), type, x: 0, y: 0, inputs: t.inputs.map(() => null) };
     for (const [p, d] of Object.entries(t.params)) if (d.def !== null) node[p] = clone(d.def);
     Object.assign(node, clone(extra));
-    node.inputs = t.inputs.map((_, i) => (extra.inputs && extra.inputs[i]) || null);
+    // A new group holds an Input wired to its Output: it passes its picture until something goes between them.
+    if (type === "group" && !Array.isArray(node.nodes)) node.nodes = [
+        { id: "Input1", type: "group_input", index: 0, x: 0, y: 0, inputs: [] },
+        { id: "GroupOutput1", type: "group_output", x: 0, y: 150, inputs: ["Input1"] }];
+    if (type === "backdrop") { node.w = node.w || 360; node.h = node.h || 240; }
+    if (type === "sticky") { node.w = node.w || 180; node.h = node.h || 90; if (node.text === undefined) node.text = ""; }
+    node.inputs = inputsOf(node).map((_, i) => (extra.inputs && extra.inputs[i]) || null);
     return node;
 }
 
@@ -660,8 +696,21 @@ export function connect(comp, dstId, port, srcId) {
 export function disconnect(comp, dstId, port) { return connect(comp, dstId, port, null); }
 
 // ── wires: where they run, and a node dropped on one ───────────────────────
+/** A Dot's size in the graph (a small round elbow for wires). */
+export const DOT = 12;
+/** How big a node is drawn in the graph: [w, h]. */
+export function nodeSize(n) {
+    if (!n) return [NODE_W, NODE_H];
+    if (n.type === "dot") return [DOT, DOT];
+    if (G.GRAPH_ONLY.has(n.type)) return [isNum(n.w) ? n.w : n.type === "sticky" ? 180 : 360, isNum(n.h) ? n.h : n.type === "sticky" ? 90 : 240];
+    return [NODE_W, NODE_H];
+}
+/** Where a node's output sits (the bottom middle). */
+export function outXY(n) { const [w, h] = nodeSize(n); return [n.x + w / 2, n.y + h]; }
+/** Where input ``i`` of a node sits (along its top edge). */
+export function inXY(n, i) { return n.type === "dot" ? [n.x + DOT / 2, n.y] : [n.x + portX(n, i), n.y]; }
 /** Where input ``port`` of a node sits along its top edge (graph units from its left). */
-export function portX(n, i) { return ((i + 1) / ((NODE_TYPES[n.type] || { inputs: [0] }).inputs.length + 1)) * NODE_W; }
+export function portX(n, i) { return ((i + 1) / (Math.max(1, inputsOf(n).length) + 1)) * NODE_W; }
 /** A wire's curve (the editor draws the same): from the bottom middle of the source to the input on top of the other. */
 export function wireCurve(x1, y1, x2, y2) {
     const dy = Math.max(30, Math.abs(y2 - y1) / 2);
@@ -672,7 +721,7 @@ export function wires(comp) {
     const out = [];
     for (const n of comp.nodes) n.inputs.forEach((src, port) => {
         const s = src && nodeById(comp, src);
-        if (s) out.push({ src, dst: n.id, port, curve: wireCurve(s.x + NODE_W / 2, s.y + NODE_H, n.x + portX(n, port), n.y) });
+        if (s) out.push({ src, dst: n.id, port, curve: wireCurve(...outXY(s), ...inXY(n, port)) });
     });
     return out;
 }
@@ -695,7 +744,7 @@ export function wireDistance(curve, x, y) {
 /** Can node ``id`` go into a wire as Nuke lets one: it has an input, its first is free and nothing reads it yet. */
 export function canSplice(comp, id) {
     const n = nodeById(comp, id);
-    return !!(n && n.type !== "output" && n.inputs.length && !n.inputs[0] && !consumers(comp, id).length);
+    return !!(n && n.type !== "output" && n.type !== "group_output" && n.inputs.length && !n.inputs[0] && !consumers(comp, id).length);
 }
 /** The wire a node dropped at (x, y) - its middle - goes into: the nearest within ``reach``, none of its own. */
 export function wireUnder(comp, id, x, y, reach) {
@@ -798,6 +847,146 @@ export function insertNode(comp, type, afterId, extra = {}) {
     return node;
 }
 
+// ── groups, tools, backdrops (the graph's own; see imageViewer_compGraph.js) ─────
+const baseOf = (id) => String(id).replace(/\d+$/, "") || "Node";
+function freshId(have, base) { let k = 1; while (have.has(`${base}${k}`)) k++; const id = `${base}${k}`; have.add(id); return id; }
+
+/**
+ * The nodes ``ids`` of a graph (`level`: the comp, or compGraph.levelView of a group) put into one Group node, in
+ * place. What came into them from outside becomes the group's inputs (an Input node each, in the order of the
+ * sources from left to right); the node read from outside (the most read, else the lowest one nothing inside
+ * reads) feeds its Output, and what read it reads the group. Returns {group, lost} - lost: wires from outside to
+ * another node inside, which a group with one output cannot keep - or null.
+ */
+export function groupNodes(level, ids, { name } = {}) {
+    const inside = new Set(ids.filter((id) => { const n = nodeById(level, id); return n && n.type !== "output"; }));
+    if (!inside.size) return null;
+    const ns = level.nodes.filter((n) => inside.has(n.id));
+    const pics = ns.filter((n) => !G.GRAPH_ONLY.has(n.type));
+    const srcs = [];
+    for (const n of pics) for (const s of n.inputs) if (s && !inside.has(s) && !srcs.includes(s)) srcs.push(s);
+    srcs.sort((a, b) => (nodeById(level, a).x - nodeById(level, b).x) || (nodeById(level, a).y - nodeById(level, b).y));
+    const outs = [];
+    for (const n of pics) for (const { node: c, port } of consumers(level, n.id)) if (!inside.has(c.id)) outs.push({ c, port, from: n.id });
+    let from = null;
+    if (outs.length) {
+        const count = new Map();
+        for (const x of outs) count.set(x.from, (count.get(x.from) || 0) + 1);
+        from = [...count].sort((a, b) => (b[1] - a[1]) || (nodeById(level, b[0]).y - nodeById(level, a[0]).y))[0][0];
+    } else {
+        const sinks = pics.filter((n) => !pics.some((m) => m.inputs.includes(n.id)));
+        const pool = sinks.length ? sinks : pics;
+        from = pool.length ? pool.reduce((a, b) => (b.y > a.y ? b : a)).id : null;
+    }
+    const xs = ns.map((n) => n.x), ys = ns.map((n) => n.y);
+    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    const have = new Set(ns.map((n) => n.id));
+    const inputs = srcs.map((s, k) => {
+        const sn = nodeById(level, s);
+        return { id: freshId(have, "Input"), type: "group_input", index: k, name: sn.name || sn.id, x: Math.round(Math.min(Math.max(sn.x, x0), x1)), y: Math.round(y0 - 90), inputs: [] };
+    });
+    const inId = new Map(srcs.map((s, k) => [s, inputs[k].id]));
+    for (const n of pics) n.inputs = n.inputs.map((s) => (s && !inside.has(s) ? inId.get(s) : s));
+    const fromNode = from && nodeById(level, from);
+    const out = { id: freshId(have, "GroupOutput"), type: "group_output", x: Math.round(fromNode ? fromNode.x : x0), y: Math.round(y1 + 90), inputs: [from] };
+    const group = makeNode(level, "group", { x: Math.round((x0 + x1) / 2), y: Math.round((y0 + y1) / 2), nodes: [] });
+    if (name) group.name = name;
+    group.nodes = [...inputs, ...ns, out];
+    group.inputs = srcs.slice();
+    let lost = 0;
+    for (const x of outs) { if (x.from === from) x.c.inputs[x.port] = group.id; else { x.c.inputs[x.port] = null; lost++; } }
+    const at = level.nodes.findIndex((n) => inside.has(n.id));
+    const rest = level.nodes.filter((n) => !inside.has(n.id));
+    rest.splice(Math.max(0, Math.min(at, rest.length)), 0, group);
+    level.nodes = rest;
+    return { group, lost };
+}
+
+/**
+ * A Group node of a graph taken apart, in place: its nodes come out (ids changed only where the graph already
+ * has them), wired to what came into the group, and what read the group reads what fed its Output. Returns the
+ * ids of the nodes that came out, or null.
+ */
+export function ungroup(level, id) {
+    const g = nodeById(level, id);
+    if (!g || g.type !== "group") return null;
+    const ins = G.groupInputs(g), out = G.groupOutput(g);
+    const portSrc = new Map(ins.map((x, k) => [x.id, g.inputs[k] || null]));
+    const moved = (g.nodes || []).filter((n) => n.type !== "group_input" && n.type !== "group_output");
+    const have = new Set(level.nodes.filter((n) => n !== g).map((n) => n.id));
+    const ren = new Map();
+    for (const n of moved) ren.set(n.id, have.has(n.id) ? freshId(have, baseOf(n.id)) : (have.add(n.id), n.id));
+    const mapIn = (s) => (!s ? null : portSrc.has(s) ? portSrc.get(s) : ren.has(s) ? ren.get(s) : null);
+    const xs = moved.map((n) => n.x), ys = moved.map((n) => n.y);
+    const dx = moved.length ? g.x - (Math.min(...xs) + Math.max(...xs)) / 2 : 0, dy = moved.length ? g.y - (Math.min(...ys) + Math.max(...ys)) / 2 : 0;
+    for (const n of moved) {
+        n.inputs = n.inputs.map(mapIn);
+        n.x = Math.round(n.x + dx); n.y = Math.round(n.y + dy);
+        if (n.expr) for (const [from, to] of ren) if (from !== to) n.expr = renameInExpr(n.expr, from, to);
+        n.id = ren.get(n.id);
+    }
+    const passes = out ? mapIn(out.inputs[0]) : null;
+    for (const { node: c, port } of consumers(level, id)) c.inputs[port] = passes && !reaches(level, passes, c.id) ? passes : null;
+    const at = level.nodes.indexOf(g);
+    const rest = level.nodes.filter((n) => n !== g);
+    rest.splice(at, 0, ...moved);
+    level.nodes = rest;
+    return moved.map((n) => n.id);
+}
+const renameInExpr = (expr, from, to) => {
+    const one = (s) => (typeof s === "string" ? E.renameRef(s, from, to) : s);
+    const out = {};
+    for (const [p, v] of Object.entries(expr)) out[p] = Array.isArray(v) ? v.map(one) : one(v);
+    return out;
+};
+
+/** A Group as a tool for the tool library: a comp file (`*.comp.json`) holding the group alone, unwired. */
+export function toolFragment(group, format, name) {
+    const g = clone(group);
+    g.inputs = g.inputs.map(() => null);
+    g.x = 0; g.y = 0;
+    if (name) g.name = name;
+    return { comp: COMP_VERSION, format: clone(format), nodes: [g], output: null, tool: { name: name || g.name || g.id } };
+}
+
+/** A tool (toolFragment's file) put into a graph at (x, y): a new Group node, unwired. Returns it, or null. */
+export function insertTool(level, raw, at = null) {
+    const { comp: frag } = normalizeComp(Object.assign({}, raw, { comp: COMP_VERSION }));
+    const src = frag.nodes.find((n) => n.type === "group");
+    if (!src) return null;
+    const name = (raw && raw.tool && raw.tool.name) || src.name || "Tool";
+    const base = String(name).replace(/[^A-Za-z0-9_]/g, "") || "Group";
+    const g = Object.assign(clone(src), { id: uniqueId(level, /\d$/.test(base) ? base + "_" : base), name });
+    g.inputs = g.inputs.map(() => null);
+    const p = at || freeSpot(level);
+    g.x = Math.round(p.x); g.y = Math.round(p.y);
+    addNode(level, g);
+    return g;
+}
+
+/** The nodes a backdrop holds: those whose middle lies inside it (backdrops and notes too). */
+export function backdropHolds(level, id) {
+    const b = nodeById(level, id);
+    if (!b) return [];
+    const [bw, bh] = nodeSize(b);
+    return level.nodes.filter((n) => {
+        if (n === b) return false;
+        const [w, h] = nodeSize(n);
+        const cx = n.x + w / 2, cy = n.y + h / 2;
+        return cx > b.x && cx < b.x + bw && cy > b.y && cy < b.y + bh && !(n.type === "backdrop" && w * h >= bw * bh);
+    }).map((n) => n.id);
+}
+
+/** A backdrop round the nodes ``ids`` (with a margin and room for its label on top), not yet in the graph. */
+export function backdropAround(level, ids, extra = {}) {
+    const ns = ids.map((id) => nodeById(level, id)).filter(Boolean);
+    if (!ns.length) return makeNode(level, "backdrop", Object.assign(freeSpot(level), extra));
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const n of ns) { const [w, h] = nodeSize(n); x0 = Math.min(x0, n.x); y0 = Math.min(y0, n.y); x1 = Math.max(x1, n.x + w); y1 = Math.max(y1, n.y + h); }
+    const m = 30;
+    return makeNode(level, "backdrop", Object.assign({ x: Math.round(x0 - m), y: Math.round(y0 - m - 30), w: Math.round(x1 - x0 + 2 * m), h: Math.round(y1 - y0 + 2 * m + 30) }, extra));
+}
+
 /** Where a node with nothing to hang under goes: right of everything, level with the topmost. */
 export function freeSpot(comp) {
     if (!comp.nodes.length) return { x: 0, y: 0 };
@@ -822,11 +1011,13 @@ function shiftBelow(comp, node, aboveId) {
 // ── keys and values ──────────────────────────────────────────────────────────
 
 /** A param's value at `frame`: its keys (Motion's interpolation), else its value, else the type's default. */
-export function paramAt(node, p, frame) {
+export function paramAt(node, p, frame, scope) {
     const d = NODE_TYPES[node.type] && NODE_TYPES[node.type].params[p];
     const own = node[p] !== undefined ? node[p] : d ? d.def : undefined;
     if (!d || !d.key) return clone(own);
-    const v = valueAt({ tracks: node.tracks, [p]: own }, p, frame);
+    let v = valueAt({ tracks: node.tracks, [p]: own }, p, frame);
+    const ex = node.expr && node.expr[p];
+    if (ex) { const sc = scope || node.__scope; if (sc) v = withExpr(node, p, d, v, frame, sc); }
     if (d.kind === "num" && isNum(v)) {
         let x = v;
         if (d.min !== undefined && x < d.min) x = d.min;
@@ -834,6 +1025,54 @@ export function paramAt(node, p, frame) {
         return x;
     }
     return v;
+}
+
+// ── expressions ──────────────────────────────────────────────────────────────
+// `expr: { param: "text" }` on a node (a vector or a colour: a list, one text or null per component) says how a
+// keyable number is worked out from `value` (its own keys or number), the frame and other nodes' numbers
+// (imageViewer_compExpr.js). Where it makes no number the value stays. Its twin is comp_model.param_at.
+const exprBusy = [];
+/** Can `p` of a node of this type take an expression? (keyable numbers, vectors and colours) */
+export function exprable(type, p) {
+    const d = NODE_TYPES[type] && NODE_TYPES[type].params[p];
+    return !!(d && d.key && (d.kind === "num" || d.kind === "int" || d.kind === "vec2" || d.kind === "color"));
+}
+function withExpr(node, p, d, v, frame, sc) {
+    if (exprBusy.length > 32 || exprBusy.some((b) => b[0] === node && b[1] === p)) return v;   // a loop of links
+    const ex = node.expr[p];
+    const f = sc.format || {}, fps = f.fps || 24;
+    const vars = (value) => ({ frame, time: frame / fps, fps, width: f.width, height: f.height, value });
+    const ref = (k) => (id, param, comp) => {
+        const m = G.scopeNode(sc, id);
+        if (!m || !NODE_TYPES[m.type] || !NODE_TYPES[m.type].params[param]) return NaN;
+        const r = paramAt(m, param, frame);
+        if (Array.isArray(r)) { const i = comp ?? k ?? 0; return i < r.length && isNum(r[i]) ? r[i] : NaN; }
+        return isNum(r) ? r : NaN;
+    };
+    exprBusy.push([node, p]);
+    try {
+        if (Array.isArray(v)) {
+            if (!Array.isArray(ex)) return v;
+            const out = v.slice();
+            for (let k = 0; k < out.length; k++) {
+                if (typeof ex[k] !== "string" || !ex[k].trim() || !isNum(out[k])) continue;
+                const r = E.evalExpr(ex[k], { vars: vars(out[k]), ref: ref(k) });
+                if (Number.isFinite(r)) out[k] = r;
+            }
+            return out;
+        }
+        if (typeof ex !== "string" || !ex.trim() || !isNum(v)) return v;
+        const r = E.evalExpr(ex, { vars: vars(v), ref: ref(null) });
+        return Number.isFinite(r) ? (d.kind === "int" ? Math.floor(r + 0.5) : r) : v;
+    } finally { exprBusy.pop(); }
+}
+/** The node ids a node's expressions read. */
+export function exprRefsOf(node) {
+    const out = [];
+    for (const ex of Object.values((node && node.expr) || {})) for (const s of Array.isArray(ex) ? ex : [ex]) {
+        if (typeof s === "string") for (const r of E.exprRefs(s)) if (!out.includes(r)) out.push(r);
+    }
+    return out;
 }
 
 /** Every key frame of a node, sorted. */
@@ -1173,6 +1412,7 @@ export const GEO3D = new Set(["camera3d", "card3d", "geo3d", "project3d", "scene
 export const DEEP = new Set(["deepread", "deepfromimage", "deepmerge", "deepholdout", "deepcrop", "deepflatten", "render3d"]);
 const PLAIN_SIZE = new Set([...GEO3D, ...DEEP].filter((t) => t !== "project3d"));
 export function formatAt(comp, id, depth = 0) {
+    if (!depth) { comp = G.flattenComp(comp); id = G.resolveId(comp, id); }
     const F = { width: comp.format.width, height: comp.format.height };
     const n = id && depth < 256 && nodeById(comp, id);
     if (!n || !NODE_TYPES[n.type]) return F;
@@ -1307,6 +1547,8 @@ export function upstreamKey(comp, id) {
         const { x, y, name, ...rest } = n;
         parts.push(JSON.stringify(rest));
         for (const s of n.inputs) walk(s);
+        // What its expressions read is part of what it is.
+        for (const r of exprRefsOf(n)) { const m = n.__scope && G.scopeNode(n.__scope, r); if (m) walk(m.id); }
     };
     walk(id);
     return parts.join("|");
@@ -1323,6 +1565,7 @@ export function upstreamKey(comp, id) {
  */
 /** The OCIO transforms a comp's nodes ask for at frame f: [{spec, key}] (the page fetches their LUTs). */
 export function ocioNeeds(comp, frame) {
+    comp = G.flattenComp(comp);
     const out = new Map();
     for (const n of comp.nodes || []) {
         for (const spec of EX.extraLuts(n)) out.set(OC.ocioKey(spec), spec);
@@ -1360,6 +1603,7 @@ const TWO_IN = new Set(["merge", "copy", "channelmerge"]);
  * the order a render makes them - what the channel menus offer.
  */
 export function channelsAt(comp, id, depth = 0) {
+    if (!depth) { comp = G.flattenComp(comp); id = G.resolveId(comp, id); }
     const n = id && nodeById(comp, id);
     if (!n || depth > 256) return [];
     const ins = (i) => channelsAt(comp, n.inputs[i], depth + 1);
@@ -1423,6 +1667,7 @@ export function hashString(str, seed = 0) {
  * from its inputs' hashes so a graph is hashed once per render (`memo`: id -> hash).
  */
 export function upstreamHash(comp, id, memo = new Map(), depth = 0) {
+    if (!depth) { comp = G.flattenComp(comp); id = G.resolveId(comp, id); }
     if (!id) return "-";
     if (memo.has(id)) return memo.get(id);
     const n = nodeById(comp, id);
@@ -1432,7 +1677,9 @@ export function upstreamHash(comp, id, memo = new Map(), depth = 0) {
     // A Paint node's strokes can follow a Transform that is not upstream of it: its settings count too.
     const links = n.type === "paint" && Array.isArray(n.strokes) ? [...new Set(n.strokes.map((s) => s && s.link).filter((l) => typeof l === "string"))] : [];
     const h = hashString(JSON.stringify(rest) + "|" + n.inputs.map((s) => upstreamHash(comp, s, memo, depth + 1)).join(",")
-        + (links.length ? "|" + links.map((l) => upstreamHash(comp, l, memo, depth + 1)).join(",") : ""));
+        + (links.length ? "|" + links.map((l) => upstreamHash(comp, l, memo, depth + 1)).join(",") : "")
+        // What its expressions read is part of what it is.
+        + (n.expr ? "|" + exprRefsOf(n).map((r) => { const m = n.__scope && G.scopeNode(n.__scope, r); return m ? upstreamHash(comp, m.id, memo, depth + 1) : "?"; }).join(",") : ""));
     memo.set(id, h);
     return h;
 }
@@ -1486,6 +1733,8 @@ export function resultKey(comp, id, frame, ctx) {
 }
 
 export function renderNode(comp, id, frame, ctx) {
+    // Groups, Dots, backdrops and notes: the flat comp (imageViewer_compGraph.js); a group or a Dot shows what it passes on.
+    comp = G.flattenComp(comp); id = G.resolveId(comp, id);
     const scale = ctx.scale || 1;
     const view = ctx.view ? ctx.view : firstView(comp);
     const dmemo = ctx.dmemo || (ctx.dmemo = new Map());   // the deep pictures beside the deep nodes' flattened ones
@@ -2049,6 +2298,7 @@ export function sourcesOf(comp, id) {
 
 /** Every Read and comp frame `id` reads to be drawn at `frame`: [{node, frame}], each once. */
 export function sourceNeeds(comp, id, frame, view = null) {
+    comp = G.flattenComp(comp); id = G.resolveId(comp, id);
     const out = [], seen = new Set();
     const vs = viewsOf(comp);
     const walk = (nid, f, depth, v) => {
