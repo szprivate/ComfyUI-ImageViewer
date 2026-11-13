@@ -19,6 +19,9 @@
 //   save(path, comp)           -> Promise
 //   newComp(), open(), saveAs(comp)   the bar's file buttons (as Paint's: New, Open, Save with its menu)
 //   render(path)               -> Promise<{message}>
+//   renderWrites(ids)          the Write nodes rendered (ids, or null for all): the panel's dialog
+//   metadata(nodeId, frame)    -> Promise<{key: value}>: what a node's picture carries (the Read's header, Metadata nodes)
+//   relink(), localise(), farm()   the Save menu's pipeline dialogs (the panel's)
 //   notify(text, severity)
 import * as C from "./imageViewer_compModel.js";
 import * as O from "./imageViewer_compOps.js";
@@ -39,6 +42,10 @@ const CSS = `
 .cp-root *{box-sizing:border-box}
 .cp-stage{flex:1;position:relative;overflow:hidden;cursor:default}
 .cp-canvas{position:absolute;left:0;top:0;transform-origin:0 0;image-rendering:auto;box-shadow:0 0 0 1px #444}
+.cp-meta{max-height:220px;overflow:auto;margin:0 6px 6px;font-size:11px}
+.cp-meta-row{display:flex;gap:8px;padding:1px 0;border-bottom:1px solid #ffffff10}
+.cp-meta-k{flex:0 0 45%;color:#9a9aa2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cp-meta-v{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;user-select:text}
 .cp-info{position:absolute;left:8px;bottom:6px;opacity:.7;pointer-events:none;white-space:nowrap}
 .cp-graph,.cp-layers{position:absolute;inset:0;background:#202024;color:#d8d8dc;font:12px/1.35 system-ui,Segoe UI,sans-serif;outline:none;overflow:hidden;user-select:none}
 .cp-graph *,.cp-layers *{box-sizing:border-box}
@@ -528,7 +535,10 @@ export function createCompEditor(host, opts = {}) {
     }
     function fileItems() {
         return [["Save", save, !!st.path, "Ctrl+S"], ["Save as…", saveAs, !!o.saveAs, "Ctrl+Shift+S"], null,
-            ["Render…", doRender, !!o.render], ["Export to Nuke…", doNuke, !!o.exportNuke], null,
+            ["Render…", doRender, !!o.render], ["Render Write nodes…", () => doWrites(null), !!o.renderWrites && C.writeNodes(st.comp).length > 0],
+            ["Send to the farm…", () => doPipe("farm"), !!o.farm && C.writeNodes(st.comp).length > 0],
+            ["Export to Nuke…", doNuke, !!o.exportNuke], null,
+            ["Relink footage…", () => doPipe("relink"), !!o.relink], ["Localise footage…", () => doPipe("localise"), !!o.localise], null,
             ["Open…", () => o.open && o.open(), !!o.open, "Ctrl+O"], ["New comp", () => o.newComp && o.newComp(), !!o.newComp]];
     }
     async function saveAs() { if (st.comp && o.saveAs) await o.saveAs(st.comp); }
@@ -542,6 +552,19 @@ export function createCompEditor(host, opts = {}) {
         if (st.dirty || !o.render) return;
         try { const r = await o.render(st.path); if (r && r.message) toast(r.message, "info"); }
         catch (e) { toast("Render failed: " + (e.message || e), "error"); }
+    }
+
+    async function doWrites(ids) {
+        if (st.dirty) await save();
+        if (st.dirty || !o.renderWrites) return;
+        try { await o.renderWrites(ids); }
+        catch (e) { toast("Render failed: " + (e.message || e), "error"); }
+    }
+    async function doPipe(what) {
+        if (!o[what]) return;
+        if (what === "farm" && st.dirty) { await save(); if (st.dirty) return; }
+        try { await o[what](); }
+        catch (e) { toast(String(e.message || e), "error"); }
     }
 
     async function doNuke() {
@@ -1625,6 +1648,11 @@ export function createCompEditor(host, opts = {}) {
             i.title = `${d.help || ""}${have.length ? `\nComing in: ${have.join(", ")}` : "\nNothing but r g b a comes in"}`;
             i.onchange = () => write(i.value.trim());
             row.append(i);
+        } else if (d.kind === "outfile" || d.kind === "text") {
+            const i = el(doc, "input"); i.type = "text"; i.value = mixed ? "" : (cur || ""); i.spellcheck = false;
+            i.placeholder = mixed ? "— (differs)" : d.kind === "outfile" ? "empty: beside the comp, or shot.####.exr" : (p === "timecode" ? "HH:MM:SS:FF" : "");
+            i.onchange = () => write(i.value.trim());
+            row.append(i);
         } else if (d.kind === "file") {
             const i = el(doc, "input"); i.type = "text"; i.value = mixed ? "" : (cur || ""); i.placeholder = mixed ? "— (differs)" : "a picture, a film, or shot.####.exr";
             i.onchange = () => write(i.value.trim());
@@ -1856,8 +1884,31 @@ export function createCompEditor(host, opts = {}) {
             pane.append(line);
             if (o.sourceInfo) o.sourceInfo(n).then((inf) => {
                 line.textContent = !inf || inf.kind === "missing" ? "No such file (yet)." : inf.kind === "refused" ? "Not in the folders the viewer may read."
-                    : inf.kind === "still" ? "A still picture." : `${inf.kind === "video" ? "A film" : "A sequence"}: frames ${inf.first}–${inf.last}${inf.fps ? ` at ${r3(inf.fps)} fps` : ""}.`;
+                    : inf.kind === "still" ? "A still picture." : `${inf.kind === "video" ? "A film" : inf.kind === "comp" ? "A comp (its Output, rendered)" : "A sequence"}: frames ${inf.first}–${inf.last}${inf.fps ? ` at ${r3(inf.fps)} fps` : ""}.`
+                    + (inf.gaps ? ` ${inf.gaps} frame${inf.gaps > 1 ? "s" : ""} missing in it.` : "")
+                    + (inf.timecode ? ` Timecode ${inf.timecode}.` : "") + (n.local ? " Reads its local copy." : "");
             }).catch(() => { line.textContent = ""; });
+        }
+        if (n.type === "write") {
+            const f0 = Number.isFinite(n.first) ? n.first : 0, f1 = Number.isFinite(n.last) ? n.last : fmt().frames - 1, h = n.handles || 0;
+            const base = Number.isFinite(n.first_number) ? n.first_number : 1001;
+            pane.append(el(doc, "div", "mg-empty", `Writes comp frames ${f0 - h}–${f1 + h} as files ${base + f0 - h}–${base + f1 + h}`
+                + `${h ? ` (${h} handle${h > 1 ? "s" : ""} each side)` : ""}. Render Write nodes… (the Save menu) writes them all.`));
+            if (o.renderWrites) pane.append(field("", btn("Render this Write…", "Render only this Write node", () => doWrites([n.id]))));
+        }
+        if (o.metadata && (n.type === "read" || n.type === "write" || n.type === "metadata")) {
+            const box = el(doc, "div", "cp-meta");
+            const show = btn("Show metadata", "What this node's picture carries at the playhead: the footage's header, and what Metadata nodes set", async () => {
+                show.disabled = true;
+                try {
+                    const md = await o.metadata(n.id, st.frame);
+                    const keys = Object.keys(md || {}).sort();
+                    box.replaceChildren(...(keys.length ? keys.map((k) => { const r = el(doc, "div", "cp-meta-row"); r.append(el(doc, "span", "cp-meta-k", k), el(doc, "span", "cp-meta-v", String(Array.isArray(md[k]) ? md[k].join(", ") : md[k]))); return r; })
+                        : [el(doc, "div", "mg-empty", "No metadata.")]));
+                } catch (e) { box.replaceChildren(el(doc, "div", "mg-empty", "Not read: " + (e.message || e))); }
+                show.disabled = false;
+            });
+            pane.append(field("metadata", show), box);
         }
         if (n.type === "output") pane.append(el(doc, "div", "mg-empty", "What the comp renders: Render… writes it by the export rule, into the History and onto the ComfyUI canvas."));
         const keys = C.nodeKeyFrames(n);
@@ -2326,6 +2377,16 @@ export function createCompEditor(host, opts = {}) {
         select: (ids) => select(ids),
         selected: () => primary(),
         view: (id) => setView(id),
+        /** Several nodes' fields changed as ONE undo step: {id: {field: value | undefined}} (undefined deletes it). */
+        setNodes(patches) {
+            mutate(() => {
+                for (const [id, patch] of Object.entries(patches || {})) {
+                    const n = node(id);
+                    if (!n) continue;
+                    for (const [k, v] of Object.entries(patch)) { if (v === undefined || v === null) delete n[k]; else n[k] = v; }
+                }
+            });
+        },
         addNode: (type, extra) => { let n; mutate(() => { n = C.insertNode(st.comp, type, primary() && primary().id, extra || {}); st.sel = [n.id]; }); return n; },
         undo, redo, save,
         lastRender: () => ({ ms: lastMs, scale: lastScale, width: canvas.width, height: canvas.height }),

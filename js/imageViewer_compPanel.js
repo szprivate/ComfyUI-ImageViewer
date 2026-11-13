@@ -81,6 +81,8 @@ export const CompPanelMixin = {
             return false;
         }
         this._cpShowDoc(data.path, data.comp);
+        const rec = st.tabs[COMP_PREFIX + data.path];
+        if (data.autosave && rec && this._cpOfferRecovery && !(rec.editor && rec.editor.isDirty())) this._cpOfferRecovery(rec, data.autosave);
         return true;
     },
 
@@ -88,6 +90,7 @@ export const CompPanelMixin = {
         const st = this._cpState();
         const key = COMP_PREFIX + path;
         addRecentDoc("comp", path);
+        if (this._cpAutosaveWatch) this._cpAutosaveWatch();
         let rec = st.tabs[key];
         if (this.allTabs[key] && rec) {
             if (rec.editor && rec.editor.isDirty()) notice("info", "The comp is open with changes", "Save or close its tab to read the file again.");
@@ -564,6 +567,11 @@ export const CompPanelMixin = {
             saveAs: (c) => this.compSaveAs(rec, c),
             render: () => this.compRenderDialog(rec),
             exportNuke: () => this.compNukeDialog(rec),
+            renderWrites: (ids) => this.compWritesDialog(rec, ids),
+            metadata: (id, f) => this._cpMetadata(rec, id, f),
+            relink: () => this.compRelinkDialog(rec),
+            localise: () => this.compLocaliseDialog(rec),
+            farm: () => this.compFarmDialog(rec),
             track: (body, progress, cancelled) => this.compTrack(rec, body, progress, cancelled),
             notify: (m, sev) => notice(sev || "info", m),
         });
@@ -597,9 +605,9 @@ export const CompPanelMixin = {
 
     async _cpSourceInfo(rec, node) {
         const st = this._cpState();
-        const key = `${rec.path}|${node.file}`;
+        const key = `${rec.path}|${node.file}|${node.local || ""}`;
         if (st.infos.has(key)) return st.infos.get(key);
-        const q = new URLSearchParams({ file: node.file || "", comp: rec.path });
+        const q = new URLSearchParams({ file: node.file || "", comp: rec.path, local: node.local || "" });
         const p = api.fetchApi(`/imageviewer/comp_source?${q}`).then((r) => r.json()).catch(() => ({ kind: "missing" }));
         st.infos.set(key, p);
         const info = await p;
@@ -638,15 +646,15 @@ export const CompPanelMixin = {
         if (!node.file) return null;
         const st = this._cpState();
         const info = await this._cpSourceInfo(rec, node);
-        if (!info || !["still", "sequence", "video"].includes(info.kind)) return null;
+        if (!info || !["still", "sequence", "video", "comp"].includes(info.kind)) return null;
         const fmt = how.format || { width: 1920, height: 1080 };
         const most = Math.min(4096, Math.max(64, Math.ceil(Math.max(fmt.width, fmt.height) * (how.scale || 1) * 1.5)));
         const f = info.kind === "still" ? 0 : frame;
-        const key = [rec.path, node.file, node.colorspace || "auto", node.offset || 0, f, most].join("|");
+        const key = [rec.path, node.file, node.local || "", node.colorspace || "auto", node.offset || 0, node.missing || "black", f, most].join("|");
         const hit = st.cache.get(key);
         if (hit) { st.cache.delete(key); st.cache.set(key, hit); return hit; }
         const q = new URLSearchParams({ file: node.file, comp: rec.path, frame: String(frame), offset: String(node.offset || 0),
-            cs: node.colorspace || "auto", max: String(most) });
+            cs: node.colorspace || "auto", max: String(most), missing: node.missing || "black", local: node.local || "" });
         const res = await api.fetchApi(`/imageviewer/comp_pixels?${q}`);
         if (!res.ok) return null;
         const w = Number(res.headers.get("X-Comp-W")), h = Number(res.headers.get("X-Comp-H"));
@@ -671,8 +679,8 @@ export const CompPanelMixin = {
 
     _cpPickFootage(cb) {
         openFilePicker(this.container, {
-            id: "comp-footage", title: "Footage for the comp", kind: "image", exts: MEDIA_EXTS, go: "Use",
-            note: "A picture, a film, or one frame of a numbered sequence (the whole sequence is used).",
+            id: "comp-footage", title: "Footage for the comp", kind: "image", exts: [...MEDIA_EXTS, ".json"], go: "Use",
+            note: "A picture, a film, or one frame of a numbered sequence (the whole sequence is used); another *.comp.json is read as a precomp.",
             onPick: async ([file]) => {
                 if (!file) return { ok: false, message: "Pick a file." };
                 cb(asSequencePattern(file.path, SEQ_FRAME.test(file.name)));

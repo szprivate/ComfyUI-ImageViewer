@@ -10,7 +10,8 @@ A node-based compositor for stills, films and image sequences. It works in linea
 
 - **Open Comp…** or **New comp** in the lower bar's Comp menu. With a shot context on the canvas, a new comp is created in that shot's `comps` folder.
 - Double-click a `*.comp.json` in the file browser.
-- The bar above the picture has New, Open and Save; Save's menu holds Save as…, Render… and the script export.
+- The bar above the picture has New, Open and Save; Save's menu holds Save as…, the renders, the farm, the script export, and Relink / Localise footage.
+- Unsaved changes are kept aside every 30 seconds. If the viewer closes before you save (a crash, a closed tab), opening the comp again offers them back.
 
 ## The node graph
 
@@ -52,7 +53,7 @@ A layer's frames are the Merge's `in` and `out` in the file (`out` is the first 
 
 | Category | Nodes |
 |---|---|
-| Input / output | Read, Constant, Roto (drawn with the viewer's Roto tool), Paint, Output |
+| Input / output | Read, Constant, Roto (drawn with the viewer's Roto tool), Paint, Write, Metadata, Output |
 | Merging | Merge (over, plus, multiply, screen, in, out, atop, mask, stencil …), Copy, ChannelMerge, ChannelMath |
 | Geometry | Transform, Reformat, Crop |
 | Warping | CornerPin, STMap, VectorWarp, GridWarp, LensDistortion |
@@ -64,6 +65,14 @@ A layer's frames are the Merge's `in` and `out` in the file (`out` is the first 
 | Channels | Shuffle, AddChannels, Remove |
 
 Most colour, filter, keying and channel nodes have a **mask** input (the last one) and a **mix**. Mix 0 passes the input through unchanged; with a mask connected, the node acts only where the chosen mask channel (alpha by default, or any extra channel such as `mask.a`) is above 0, and **invert mask** flips that. The mask's channel and invert rows appear once something is plugged into the mask input. A mask of another size is aligned at the bottom-left corner, like any other image.
+
+## Footage
+
+- A Read takes stills, films, image sequences (`shot.####.exr`, `shot.%04d.exr`) and other comps (`*.comp.json`): a comp read this way is rendered as it stands, so a precomp updates whenever it is saved.
+- A sequence with holes in it is fine. The Read's **Missing frames** setting picks what a hole shows: black, the nearest frame before it, or an error that stops the render.
+- **Show metadata** on a Read, Write or Metadata node lists what the image carries at the current frame: the file's own header (EXR attributes, film tags), timecode, and anything set further up. A **Metadata** node sets keys (`key = value`, `[frame]` is the frame number) or removes them (`exr/*` patterns work).
+- **Relink footage…** looks for missing files by name under a folder you pick (a sequence by its name around the frame number) and points the Reads at them, as one undo step.
+- **Localise footage…** copies the footage of the Reads into a local cache and uses the copies from then on; the Read keeps its original path, and a copy is refreshed when the original changes.
 
 Each image keeps its own resolution; images of different sizes are aligned at the bottom-left corner. Extra channels (`depth.z`, `mask.a` …) travel down the graph with the image.
 
@@ -117,6 +126,16 @@ The working space is the scene-linear role of the OCIO config. The display menu 
 ## Output
 
 - **Render…**: every still format of the Send To Image Viewer node (PNG, EXR, TIFF …) or an MP4 / MOV / WebM film, rendered at full resolution on the server. The result is versioned, added to the History and placed on the canvas as a loader node.
+- **Write nodes** write files from anywhere in the graph, each with its own path, format and frame range. A path may hold `####` (the frame number at the node's padding), `{comp}`, `{name}` and `{version}`; a relative path lies beside the comp, and an empty one gives `<comp>_<name>/<name>.####.exr` there. EXR is written as half or full float with ZIP, ZIPS or no compression; **Channels: all** puts every extra channel into the same file as its own layer. Handles add frames on each side of the range, and the file numbers follow the comp frames (comp frame 0 is the first number, 1001 by default). Timecode and the image's metadata go into the EXR header. **Render Write nodes…** renders the ticked ones in one pass.
+- **Send to the farm…** sends the Write nodes to the render farm (Deadline) through agentY, as one job split into chunks of frames; the dialog warns about any comp, footage or output path that only this machine can see.
 - **Script export** (Save menu): writes an `.nk` script. Nodes with a direct equivalent are translated; the rest are rendered to EXR sequences next to the script and read back in.
+
+## Scripting
+
+Comps can be built and rendered without the viewer:
+
+- `python scripts/comp_render.py shot.comp.json` renders every Write node; `--writes`, `--first`, `--last`, `--handles`, `--frames 1001-1010 --frame-offset 1001` (one farm chunk) and `--output out/shot.####.exr` (the Output node) narrow it, and `--list` prints what would be written. Use ComfyUI's Python; nothing of ComfyUI itself is loaded.
+- `src/comp_api.py` is the Python API behind it: `Comp.open` / `Comp.new`, `add`, `connect`, `set`, `key`, `remove`, `apply(ops)` (a list of edits, all or nothing), `save`, `render`, `render_output`.
+- agentY has the same edits as tools (create, read, edit, render, send to the farm); an open comp tab takes the agent's changes in at once.
 
 All nodes are written from published formulas and observed behaviour; no third-party code or assets are used.

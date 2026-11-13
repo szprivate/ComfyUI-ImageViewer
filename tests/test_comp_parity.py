@@ -426,6 +426,15 @@ class CompParity(unittest.TestCase):
                     self.assertEqual(j["choices"], pd["choices"], f"{t}.{p}")
         self.assertEqual(sorted(self.js["table"]), sorted(M.NODE_TYPES))
 
+    def test_the_python_api_names_nodes_as_the_page_does(self):
+        import types
+        pkg = types.ModuleType("_cpar")
+        pkg.__path__ = [os.path.join(ROOT, "src")]
+        sys.modules.setdefault("_cpar", pkg)
+        import importlib
+        A = importlib.import_module("_cpar.comp_api")
+        self.assertEqual({t: d["label"] for t, d in self.js["table"].items()}, A.LABELS)
+
     def test_every_case_renders_the_same(self):
         for i, (spec_, sources) in enumerate(self.cases):
             with self.subTest(i=i, nodes=[n["type"] + ":" + str(n.get("operation", "")) for n in spec_["comp"]["nodes"]]):
