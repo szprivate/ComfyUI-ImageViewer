@@ -52,7 +52,7 @@ A layer's frames are the Merge's `in` and `out` in the file (`out` is the first 
 
 | Category | Nodes |
 |---|---|
-| Input / output | Read, Constant, Roto (drawn with the viewer's Roto tool), Output |
+| Input / output | Read, Constant, Roto (drawn with the viewer's Roto tool), Paint, Output |
 | Merging | Merge (over, plus, multiply, screen, in, out, atop, mask, stencil …), Copy, ChannelMerge, ChannelMath |
 | Geometry | Transform, Reformat, Crop |
 | Colour | Grade, ColorCorrect (per-range HSL / RGB, hue wheels, two secondaries), OCIOColorSpace, OCIODisplay |
@@ -68,6 +68,34 @@ Each image keeps its own resolution; images of different sizes are aligned at th
 ## Working speed
 
 Every node's result is kept in memory while you work (up to about 640 MB). Changing a node remakes only what lies downstream of it, and a frame you have already seen comes back at once. Each image also knows the box its visible pixels lie in, so a small element, roto shape or blurred patch over a large plate is only worked out inside that box (about eight times faster for a small blurred element over a 1080p plate). When nothing else is happening, the next frames of the picture on screen are rendered ahead. Frames that are ready are marked on the timeline, so playback over them runs at speed. The proxy menu in the bar sets the working resolution; the render is always full size.
+
+## Paint
+
+The Paint node lays strokes on the picture that comes into it. Select it and its section in **Parameters** holds the tools, the brush and the list of strokes; drag on the picture to paint.
+
+| Tool | What a stroke does |
+|---|---|
+| Brush | Paints a colour |
+| Clone | Copies the picture from another place: <kbd>Alt</kbd>+click sets where from, the offset is kept for the next strokes. *From frame* copies from another frame (-1: the one before) |
+| Reveal | Paints the node's second input (**reveal**) through, with the same offset and frame settings |
+| Eraser | Removes colour and alpha |
+| Select | Click a stroke to edit it; <kbd>Del</kbd> deletes it |
+
+Each stroke has its own size, hardness, opacity and spacing, and lives on **all frames**, **this frame**, **from here on**, **up to here** or a range of frames. A stroke can **follow** a Transform node: it moves with that node's animation, counted from the frame it was painted on. <kbd>[</kbd> and <kbd>]</kbd> change the brush size. Strokes are stored in the comp and rendered on the server like every other node.
+
+## Viewer tools
+
+The **Viewer** menu in the bar holds the tools for looking at the picture. None of them changes the comp or the render.
+
+| Tool | Use |
+|---|---|
+| Compare | Select a node and press <kbd>2</kbd> to make it **B** (tagged in the graph). The picture shows A (the viewed node) against B as a **wipe** (drag the handle; <kbd>Shift</kbd>+drag turns the line, double-click centres it), their **difference** or a 50 % **mix**. <kbd>W</kbd> on the picture turns the wipe on and off |
+| Pixel sampler | <kbd>I</kbd>. Shows the values under the pointer in the working space (premultiplied and straight) and as displayed; <kbd>Shift</kbd>+drag a box for its mean, minimum and maximum |
+| Scopes | Histogram, waveform (click it to switch between luma and RGB) and vectorscope, read from the picture as displayed |
+| Out-of-range colours | Stripes over values above 1 (red) and below 0 (blue), yellow for an alpha outside 0–1; the info line counts the pixels |
+| Guides | The format's box (anything outside it is overscan), action safe (93 %) and title safe (90 %), and the centre |
+
+The sampler and the scopes read the preview at its proxy size.
 
 ## Colour
 

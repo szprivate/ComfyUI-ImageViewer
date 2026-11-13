@@ -17,6 +17,15 @@ import re
 
 import numpy as np
 
+try:
+    from . import comp_paint as PT
+except ImportError:   # loaded on its own (the tests): the twin beside it
+    import importlib.util as _ilu
+    import os as _os
+    _spec = _ilu.spec_from_file_location("comp_paint", _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "comp_paint.py"))
+    PT = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(PT)
+
 COMP_VERSION = 1
 SUFFIX = ".comp.json"
 MERGE_OPS = ["over", "under", "plus", "minus", "multiply", "screen", "max", "min", "difference",
@@ -232,6 +241,9 @@ NODE_TYPES = {
         "roto": {"kind": "roto", "def": None},
         "write": {"kind": "target", "def": "rgba"},
         "premult": {"kind": "enum", "def": "on", "choices": ["on", "off"]},
+    }},
+    "paint": {"inputs": ["src", "reveal"], "params": {
+        "strokes": {"kind": "strokes", "def": []},
     }},
     "vectors": {"inputs": ["src"], "params": {
         "smoothness": {"kind": "num", "def": 0.04, "min": 0.001, "max": 1},
@@ -631,6 +643,18 @@ def transform_matrix(node, frame, fmt, scale=1.0):
     c = param_at(node, "center", frame) or [fmt["width"] / 2, fmt["height"] / 2]
     cx, cy = c[0] * scale, c[1] * scale
     return _mul(_t(t[0] * scale + cx, t[1] * scale + cy), _mul(_r(r), _mul(_s(sc[0], sc[1]), _mul(_k(k[0], k[1]), _t(-cx, -cy)))))
+
+
+def link_matrix(comp, s, f):
+    """A Paint stroke's link at frame f (the page's ``linkMatrix``): the linked Transform's matrix at f taken back
+    through its matrix at the stroke's frame, in full-size pixels; None without one."""
+    if not s or not s.get("link"):
+        return None
+    n = node_by_id(comp, s["link"])
+    if not n or n.get("disable") or n.get("type") != "transform":
+        return None
+    F = format_at(comp, (n.get("inputs") or [None])[0])
+    return _mul(transform_matrix(n, f, F, 1), _inv(transform_matrix(n, s["f"], F, 1)))
 
 
 def reformat_size(node, frame, in_fmt):
@@ -2140,6 +2164,29 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             if src is not None:
                 m = conform(m, src.shape[1], src.shape[0])
             return roto_write(m, src, ex_of(ins[0], f), n.get("write") or "rgba", n.get("premult") != "off")
+        if t == "paint":
+            src = run(ins[0], f, d1) if ins[0] else blank(W, H)
+            strokes = PT.live_strokes(n.get("strokes"), f)
+            if not strokes:
+                return src
+            shifted = {}
+
+            def moved(img, s):
+                ox, oy = -s["offset"][0] * scale, -s["offset"][1] * scale
+                return resample(img, _t(ox, oy), img.shape[1], img.shape[0]) if (ox or oy) else img
+
+            def source_of(s, now):
+                if s["tool"] == "reveal" and not (len(ins) > 1 and ins[1]):
+                    return None
+                if s["tool"] == "clone" and not s["dt"]:
+                    return moved(now, s)
+                key = (s["tool"], s["dt"], s["offset"][0], s["offset"][1])
+                if key not in shifted:
+                    pic = conform(run(ins[1], f + s["dt"], d1), src.shape[1], src.shape[0]) if s["tool"] == "reveal" \
+                        else run(ins[0], f + s["dt"], d1)
+                    shifted[key] = moved(pic, s)
+                return shifted[key]
+            return PT.paint_image(src, strokes, scale, source_of, lambda s: link_matrix(comp, s, f))
         if t == "vectors":
             return vectors_of(ins[0], f, d1, n)
         if t == "motionblur":
