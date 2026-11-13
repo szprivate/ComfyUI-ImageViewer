@@ -13,6 +13,7 @@ import * as S from "./imageViewer_scene3d.js";
 import * as R from "./imageViewer_rigData.js";
 import * as M from "./imageViewer_rigMotion.js";
 import { notice, openExportDialog } from "./imageViewer_exportUI.js";
+import { showInstallLog } from "./imageViewer_installLog.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -229,6 +230,7 @@ export const PrevizRigToolsMixin = {
                     if (!res.ok) return { ok: false, message: job.error || `HTTP ${res.status}` };
                 }
                 progress(0.02, 1, "Starting…");
+                showInstallLog(job.job, { host: this.container });   // the live log of pip / git / the downloads
                 const out = await this._previzRigInstallWait(job, progress);
                 if (out.state !== "done") return { ok: false, message: out.state === "cancelled" ? "Cancelled." : (out.error || out.state) };
                 const now = await this._previzRigTools();

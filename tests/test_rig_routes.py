@@ -515,13 +515,18 @@ class RigRoutes(unittest.TestCase):
             done = await self.wait(c, job)
             t1 = await (await c.get("/imageviewer/rig/tools")).json()
             # A cancel stops the installer and what it started.
+            ilog = await (await c.get(f"/imageviewer/install_log?id={job['job']}")).json()
+            tail = await (await c.get(f"/imageviewer/install_log?id={job['job']}&since=3")).json()
+            # The log window's Stop stops the installer as the dialog's does.
             sj = await (await c.post("/imageviewer/rig/install", json={"root": slow})).json()
             await asyncio.sleep(0.5)
-            await c.post("/imageviewer/rig/job", json={"job": sj["job"], "cancel": True})
+            await c.post("/imageviewer/install_log", json={"id": sj["job"], "cancel": True})
             stopped = await self.wait(c, sj)
-            return t0, bad.status, job, again, done, t1, stopped
+            slog = await (await c.get(f"/imageviewer/install_log?id={sj['job']}")).json()
+            listing = await (await c.get("/imageviewer/install_log")).json()
+            return t0, bad.status, job, again, done, t1, stopped, (ilog, tail, slog, listing)
         try:
-            t0, bad, job, again, done, t1, stopped = self.run_c(go)
+            t0, bad, job, again, done, t1, stopped, (ilog, tail, slog, listing) = self.run_c(go)
         finally:
             self.routes.INSTALLER = old[0]
             for k, v in (("HF_TOKEN_PATH", old[1]), ("HF_TOKEN", old[2])):
@@ -543,6 +548,20 @@ class RigRoutes(unittest.TestCase):
             self.assertEqual(json.load(fh), ["--root", root, "--only", "kimodo"])
         self.assertTrue(t1["install"]["hf_token"])
         self.assertEqual(stopped["state"], "cancelled", stopped)
+        # Every line the installer printed is in the install log the page's window follows.
+        self.assertEqual(done["log_id"], job["job"])
+        self.assertEqual(ilog["state"], "done")
+        self.assertTrue(ilog["lines"][0].startswith("$ "))          # the command itself first
+        self.assertIn("$ step 6", ilog["lines"])
+        self.assertIn("== written", ilog["lines"])
+        self.assertEqual(ilog["lines"][-1], "-- done --")
+        self.assertEqual(tail["lines"], ilog["lines"][3:])
+        self.assertEqual(ilog["next"], len(ilog["lines"]))
+        self.assertTrue(ilog["log_file"].endswith(".log"))
+        self.assertNotIn("hf_", json.dumps(ilog))
+        self.assertEqual(slog["state"], "cancelled", slog)
+        self.assertIn("-- stop asked for --", slog["lines"])
+        self.assertIn(job["job"], [l["id"] for l in listing["logs"]])
 
     def test_autorig_runs_unirig_steps(self):
         async def go(c):

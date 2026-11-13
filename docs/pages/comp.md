@@ -135,7 +135,7 @@ AI nodes send the image coming into them through a ComfyUI workflow and keep the
 - **AI Inpaint**: fills inside the alpha of its mask input. With a prompt it lists the fill models, without one the removal models.
 - **AI Upscale**: upscalers that keep the picture rather than invent detail (an upscale model, SeedVR2, two API upscalers).
 
-The first workflow of a list that this ComfyUI can run is the default. Workflows whose nodes this ComfyUI does not have are left out. "Downloads its model first" means the model files are not on this machine yet: Run then lists the files, their sizes and the model folders they go into, and asks before it fetches anything. The files come from Hugging Face, the download shows on the node's progress line, and Stop ends it. Say "Not now" and nothing is fetched or run.
+The first workflow of a list that this ComfyUI can run is the default. Workflows whose nodes this ComfyUI does not have are left out. "Downloads its model first" means the model files are not on this machine yet: Run then lists the files, their sizes and the model folders they go into, and asks before it fetches anything. The files come from Hugging Face, the download shows on the node's progress line and in the [install log](reference.md#install-log), and Stop ends it. Say "Not now" and nothing is fetched or run.
 
 Each node can pick its own:
 

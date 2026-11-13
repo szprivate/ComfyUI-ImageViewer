@@ -3657,6 +3657,12 @@ try:
                                      resolve=lambda p: _resolve_raw_path(str(p))[0] if p else None)
         except Exception as e:  # noqa: BLE001 - the rest of the viewer works without it
             print(f"[ImageViewer] Clip VFX routes not registered: {e}")
+        # The install log: what every install and model download prints, for the page's log window (install_log.py).
+        try:
+            from . import install_log
+            install_log.register(_safe_add, web=web, path_access=path_access)
+        except Exception as e:  # noqa: BLE001 - the rest of the viewer works without it
+            print(f"[ImageViewer] Install log routes not registered: {e}")
         # Characters: FBX / Alembic export, UniRig auto-rigging, Kimodo motion (rig_routes.py; rig_export).
         try:
             from . import rig_routes

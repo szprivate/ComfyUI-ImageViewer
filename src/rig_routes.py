@@ -72,6 +72,7 @@ import urllib.parse
 from struct import error as struct_error
 
 from . import body_pose
+from . import install_log
 from . import rig_export
 from . import rig_import
 
@@ -310,6 +311,7 @@ class _Job:
         self.share = None
         self.log_path = None
         self._fh = None
+        self.ilog = None          # install_log.Log the page's log window follows (installs)
 
     def open_log(self):
         """Everything the job prints also goes to a file (the page only sees the last lines):
@@ -344,6 +346,8 @@ class _Job:
                 self._fh.flush()
             except OSError:
                 pass
+        if self.ilog:
+            self.ilog.say(line)
         if line:
             self.log.append(line)
             del self.log[:-LOG_LINES]
@@ -355,6 +359,8 @@ class _Job:
             out["share"] = round(self.share, 3)
         if self.log_path:
             out["log_file"] = self.log_path
+        if self.ilog:
+            out["log_id"] = self.ilog.id
         if self.result is not None:
             out["result"] = self.result
         if self.error:
@@ -547,8 +553,13 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
                     job.error += f" (full log: {job.log_path})"
             finally:
                 job.close_log()
+                if job.ilog:
+                    job.ilog.say("-- done --" if job.state == "done" else f"-- {job.state}: {job.error or ''} --")
+                    job.ilog.finish(job.state, job.error)
         if kind_logs(job.kind):
             job.open_log()
+            if job.ilog:
+                job.ilog.log_file = job.log_path
         threading.Thread(target=run, daemon=True, name=f"rig-{job.kind}").start()
 
     # ── export ───────────────────────────────────────────────────────────────
@@ -680,6 +691,13 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
             cmd += ["--only", only]
         steps = INSTALL_STEPS[only] if only else sum(v for k, v in INSTALL_STEPS.items() if k != "kimodo-text")
         job = new_job("install")
+
+        def stop():
+            job.cancelled = True
+            _kill_tree(job.proc)
+
+        job.ilog = install_log.new("Installing " + (only or "the rig tools") + " into " + root, "install", stop=stop, log_id=job.id)
+        job.ilog.say("$ " + " ".join(cmd))
 
         def work():
             env = dict(os.environ, PYTHONUNBUFFERED="1")

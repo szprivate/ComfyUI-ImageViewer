@@ -24,6 +24,7 @@ import { queueWithAuth } from "./imageViewer_comfyAuth.js";
 import { maskBBox, composite } from "./imageViewer_paintData.js";
 import { app } from "../../scripts/app.js";
 import * as WC from "./imageViewer_paintCanvas.js";
+import { showInstallLog } from "./imageViewer_installLog.js";
 
 export const PAINT_PREFIX = "paint:";
 /** The dock panels of a Paint tab, and the editor part each one holds. */
@@ -953,6 +954,7 @@ export const PaintPanelMixin = {
             `${item.label} needs model files that are not on this machine:\n${list}\nTogether ${mb(plan.total)}, from Hugging Face.${more}`);
         if (!yes) return false;
         const { job } = await postJson("/imageviewer/paint/download", { workflow: item.id });
+        showInstallLog(job, { host: this.container });
         let st;
         let cancelled = false;
         say({ text: "Downloading the models", share: 0, stop: async () => {

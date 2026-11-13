@@ -29,6 +29,14 @@ Both are read on every request, so no restart is needed.
 
 What a Send node shows is written to ComfyUI's temp folder as `ImageViewer_*` files. Each node keeps its newest renders within the two limits above and deletes older ones. The trash button in the lower bar deletes them all and clears the History.
 
+## Install log
+
+Anything the viewer installs or downloads opens the install log, a small window that shows the output as it happens: the rig tools' installer (pip, git and the model downloads it runs), the model files Paint and Comp AI nodes fetch, and SAM 3D Body's weights. One window serves all of them. It follows the newest line until you scroll up, can copy the log or the log file's path, and its Stop button ends the install. Closing the window leaves the install running; **Rig ▸ Install log…** brings it back, with a list of the earlier ones since ComfyUI started.
+
+A model a node pack downloads by itself on its first run is not in it: that shows in ComfyUI's console.
+
+For scripts: `GET /imageviewer/install_log` lists the logs, `GET /imageviewer/install_log?id=<job>&since=<n>` returns the lines from `n` on, and `POST /imageviewer/install_log {"id", "cancel": true}` stops one. The id is the job id the install or download route answered.
+
 ## Python packages
 
 `requirements.txt` installs Pillow, numpy, usd-core and trimesh. Optional:

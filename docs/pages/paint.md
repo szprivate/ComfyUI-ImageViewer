@@ -58,7 +58,7 @@ The Generate panel and menu send the selection (plus some surrounding context) t
 | Select objects | SAM 3.1, by text or inside the selection box |
 | Upscale | Upscale models, SeedVR2, Magnific, Crystal, Recraft, Topaz |
 
-Only workflows whose nodes are installed are offered. Missing model files are listed with size and target folder and only downloaded (from Hugging Face) after you confirm. **Generate ▸ Workflows…**, or Settings ▸ ComfyUI Image Viewer ▸ Paint, selects the workflow per action and accepts your own API-format workflow.
+Only workflows whose nodes are installed are offered. Missing model files are listed with size and target folder and only downloaded (from Hugging Face) after you confirm; the [install log](reference.md#install-log) shows the download as it runs. **Generate ▸ Workflows…**, or Settings ▸ ComfyUI Image Viewer ▸ Paint, selects the workflow per action and accepts your own API-format workflow.
 
 ## Saving
 
