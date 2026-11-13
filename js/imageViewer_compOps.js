@@ -50,7 +50,7 @@ export function boxesForGauss(sigma, n = 3) {
 }
 
 /** Mean over 2r+1 along one axis, the edge value repeated (paint_math._box_axis), in place on a Float64Array. */
-function boxAxis(a, w, h, r, horizontal) {
+export function boxAxis(a, w, h, r, horizontal) {
     if (r <= 0) return;
     const n = horizontal ? w : h, lines = horizontal ? h : w;
     const stride = horizontal ? 4 : w * 4, lineStep = horizontal ? w * 4 : 4;
