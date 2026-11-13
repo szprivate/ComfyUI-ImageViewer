@@ -36,6 +36,7 @@ LABELS = {"read": "Read", "constant": "Constant", "roto": "Roto", "paint": "Pain
           "removechannels": "Remove", "channelmerge": "ChannelMerge", "channelmath": "ChannelMath", "premult": "Premult",
           "unpremult": "Unpremult", "retime": "Retime", "vectors": "Vectors", "metadata": "Metadata", "write": "Write",
           "output": "Output"}
+LABELS.update(M._X.EXTRA_LABELS)   # the rest of the node set (comp_extra)
 EASES = ["smooth", "linear", "hold", "easeIn", "easeOut", "easeInOut", "backOut", "expoOut"]
 NODE_GAP = 60
 

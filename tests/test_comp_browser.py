@@ -325,7 +325,7 @@ class CompBrowserTests(unittest.TestCase):
         self.assertIn("Frame all (F)", menu.evaluate("(m) => m.textContent"))
         pg.keyboard.type("key")
         types = menu.evaluate("(m) => [...m.querySelectorAll('.cp-tmrow')].map((d) => d.dataset.type)")
-        self.assertEqual(set(types), {"keyer", "lumakeyer", "chromakeyer"}, types)
+        self.assertEqual(set(types), {"keyer", "lumakeyer", "chromakeyer", "differencekeyer", "despill", "edgeextend", "lightwrap", "coreedge"}, types)
         pg.keyboard.press("ArrowDown")
         pg.keyboard.press("Enter")
         self.assertTrue(pg.evaluate(f"() => {self.ED}.comp().nodes.some((n) => n.type === '{types[1]}')"))

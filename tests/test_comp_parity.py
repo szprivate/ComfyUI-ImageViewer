@@ -383,6 +383,96 @@ def new_node_cases(sources):
     c.extend(mask_cases(sources))
     c.extend(box_cases(sources))
     c.extend(warp_cases(sources))
+    c.extend(extra_cases(sources))
+    return c
+
+
+def extra_cases(sources):
+    """The finishing nodes (src/comp_extra.py, js/imageViewer_compExtra.js): keying, time, colour, filters, AI."""
+    c = []
+    N = node
+    one = lambda n, srcs=sources, **kw: ({"comp": comp([read(1), read(2), n, out(n["id"])], **kw.pop("cw", {})), **kw}, srcs)
+    for kw in ({}, {"threshold": 0.1, "softness": 0, "invert": "on"}, {"output": "matte", "softness": 0.3}):
+        c.append(one(N("differencekeyer", 1, ["Read1", "Read2"], **kw)))
+    c.append(one(N("differencekeyer", 1, ["Read1", "Read2"], write="k.a")))
+    green = src(11)
+    green[..., 1] = np.maximum(green[..., 1], 180)
+    for kw in ({}, {"screen": "blue", "limit": "average", "amount": 0.6, "replace": "grey"},
+               {"replace": "colour", "replace_color": [0.9, 0.4, 0.2, 1]}, {"output": "spill"}):
+        c.append(one(N("despill", 1, ["Read1"], **kw), {"Read1": green, "Read2": sources["Read2"]}))
+    for kw in ({}, {"size": 3, "threshold": 0.5, "output": "extended"}):
+        c.append(one(N("edgeextend", 1, ["Read1"], **kw)))
+    c.append(one(N("edgeextend", 1, ["Read1"], size=8), scale=0.5, cw={"w": 40, "h": 24}))
+    for kw in ({}, {"width": 4, "diffuse": 6, "intensity": 2, "threshold": 0.3}, {"output": "wrap only"}):
+        c.append(one(N("lightwrap", 1, ["Read1", "Read2"], **kw)))
+    for kw in ({}, {"output": "core", "size": 2.5}, {"output": "outside", "softness": 0}, {"write": "m.a"}):
+        c.append(one(N("coreedge", 1, ["Read1"], **kw)))
+    frames = moving(5, range(0, 9))
+    big = {"w": 40, "h": 32}
+    for kw in ({"frame": 2}, {"frame": 1, "every": 3}):
+        c.append(one(N("framehold", 1, ["Read1"], **kw), frames, frame=6, cw=big))
+    for f, kw in ((1, {"first": 3, "last": 5}), (7, {"first": 3, "last": 5}), (7, {"first": 3, "last": 5, "outside": "black"})):
+        c.append(one(N("framerange", 1, ["Read1"], **kw), frames, frame=f, cw=big))
+    c.append(one(N("timeoffset", 1, ["Read1"], offset=-2), frames, frame=4, cw=big))
+    for f in (1, 3, 4, 6):
+        c.append(({"comp": comp([read(1), N("timeoffset", 1, ["Read1"], offset=3), N("appendclip", 1, ["Read1", "timeoffset1"], a_first=1, a_last=4, b_first=0, dissolve=2),
+                                 out("appendclip1")], **big), "frame": f}, frames))
+    for kw in ({}, {"shutter": 1.5, "samples": 4, "offset": "start"}, {"shutter": 2, "samples": 3, "offset": "end"}):
+        c.append(one(N("timeblur", 1, ["Read1"], **kw), frames, frame=4, cw=big))
+    c.append(one(N("retime", 1, ["Read1"], speed=0.5, blend="vectors"), frames, frame=5, cw=big))
+    c.append(one(N("retime", 1, ["Read1"], speed=0.25, start=1, blend="vectors"), frames, frame=4, cw=big, scale=0.5))
+    for kw in ({"slope_r": 1.2, "slope_g": 0.9, "offset_b": 0.02, "power_r": 1.3, "power_g": 0.8, "saturation": 0.7},
+               {"slope_r": 1.2, "offset_g": -0.03, "power_b": 1.6, "saturation": 1.4, "direction": "inverse"}):
+        c.append(one(N("cdl", 1, ["Read1"], **kw)))
+    for kw in ({}, {"unpremult": "off"}):
+        cs, srcs = one(N("lut", 1, ["Read1"], file="look.cube", **kw))
+        c.append((dict(cs, ocio=OCIO_LUTS), srcs))
+    for kw in ({"sat_red": 1.6, "hue_green": 30, "lum_blue": 0.7, "sat_cyan": 0.2},
+               {"hue_red": -40, "hue_yellow": 25, "lum_magenta": 1.4, "sat_blue": 1.8}):
+        c.append(one(N("huecurves", 1, ["Read1"], **kw)))
+    for kw in ({}, {"minimum": 0.2, "maximum": 0.6, "channels": "rgba"}, {"min_on": "off", "maximum": 0.3, "channels": "g"}):
+        c.append(one(N("clamp", 1, ["Read1"], **kw)))
+    opaque = {"Read1": src(9, alpha=False), "Read2": sources["Read2"]}
+    for curve in ("cineon", "logc3", "slog3", "acescct"):
+        for op in ("log to lin", "lin to log"):
+            c.append(one(N("loglin", 1, ["Read1"], curve=curve, operation=op), opaque))   # straight values in 0..1, as log footage is
+    for kw in ({}, {"amount": 0.5}):
+        c.append(one(N("colormatch", 1, ["Read1", "Read2"], **kw)))
+    for kw in ({}, {"size": 0, "saturation": 1, "response": 0, "seed": 7}, {"size": 2.5, "animated": "off", "amount": 0.1}):
+        c.append(one(N("grain", 1, ["Read1", None], **kw), frame=3))
+    c.append(one(N("grain", 1, ["Read1", "Read2"], amount=0.8)))
+    c.append(one(N("grain", 1, ["Read1", None], size=3), scale=0.5, frame=2, cw={"w": 40, "h": 24}))
+    for kw in ({}, {"radius": 1, "strength": 0.2, "mix": 0.6}):
+        c.append(one(N("denoise", 1, ["Read1"], **kw)))
+    c.append(one(N("denoise", 1, ["Read1"], radius=4), scale=0.5, cw={"w": 40, "h": 24}))
+    for kw in ({}, {"amount": 1.5, "size": 4}):
+        c.append(one(N("sharpen", 1, ["Read1"], **kw)))
+    for kw in ({}, {"radius": 2, "channels": "rgb"}, {"radius": 4}):
+        c.append(one(N("median", 1, ["Read1"], **kw)))
+    for kw in ({}, {"size": 0, "gain": 2, "source": "rgb"}):
+        c.append(one(N("edgedetect", 1, ["Read1"], **kw)))
+    for kw in ({}, {"size": 6, "width": 2, "amount": 0.7}):
+        c.append(one(N("edgeblur", 1, ["Read1"], **kw)))
+    # Through a mask (the last input) and a mix, as the other per-pixel nodes.
+    c.append(one(N("cdl", 1, ["Read1", "Read2"], slope_r=1.5, saturation=0.4, mix=0.7)))
+    c.append(one(N("grain", 1, ["Read1", None, "Read2"], amount=0.4, mask_invert="on"), frame=2))
+    c.append(one(N("denoise", 1, ["Read1", "Read2"], mix=0.5, mask_channel="r")))
+    c.append(one(N("differencekeyer", 1, ["Read1", "Read2", "Read2"], mix=0.6)))
+    # AI nodes: their result is a picture beside the comp (here a source keyed by the node's result Read).
+    res = lambda *fs: {"frames": {str(f): f"r_{f}.png" for f in fs}}
+    ai = dict(sources)
+    ai.update({"ai_matte1#ai2": src(21), "ai_depth1#ai2": src(22), "ai_relight1#ai2": src(23), "ai_inpaint1#ai2": src(24),
+               "ai_upscale1#ai2": src(25, 2 * W + 3, 2 * H - 1)})
+    for kw in ({}, {"output": "matte"}, {"write": "ai.a"}):
+        c.append(one(N("ai_matte", 1, ["Read1"], results=res(2, 7), **kw), ai, frame=4))
+    c.append(one(N("ai_matte", 1, ["Read1"]), ai))   # not run: passes the input
+    c.append(one(N("ai_depth", 1, ["Read1"], results=res(2), invert="on"), ai, frame=0))
+    c.append(one(N("ai_relight", 1, ["Read1"], results=res(2)), ai, frame=2))
+    c.append(one(N("ai_inpaint", 1, ["Read1", "Read2"], results=res(2)), ai, frame=5))
+    c.append(one(N("ai_upscale", 1, ["Read1"], results=res(2)), ai, frame=2))
+    c.append(one(N("ai_upscale", 1, ["Read1"], factor="4"), ai))
+    c.append(({"comp": comp([read(1), N("ai_upscale", 1, ["Read1"], results=res(2)), N("blur", 1, ["ai_upscale1"], size=2), out("blur1")]),
+               "frame": 2, "scale": 0.5}, ai))
     return c
 
 
