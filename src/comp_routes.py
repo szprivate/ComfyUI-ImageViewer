@@ -30,6 +30,7 @@ starts a process: films are read and written by PyAV in this process.
 from __future__ import annotations
 
 import gzip
+import math
 import os
 import re
 import secrets
@@ -40,6 +41,7 @@ import numpy as np
 
 from . import comp_io
 from . import comp_nuke
+from . import comp_track
 from . import comp_model as M
 
 MAX_JOBS = 8
@@ -345,6 +347,110 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
         threading.Thread(target=run_job, args=(job, comp, path, spec), daemon=True, name=f"comp-render-{jid}").start()
         return web.json_response({"job": jid, "total": job["total"]})
 
+    # ── tracking ─────────────────────────────────────────────────────────────
+
+    def run_track(job, comp, comp_path, spec):
+        sources = comp_io.Sources(comp_path, allow=path_access.may_serve)
+        hook = comp_io.ocio_hook()
+        src_id = spec["input"]
+
+        def get(f):
+            return M.render_node(comp, src_id, f, sources, 1.0, ocio=hook)
+
+        def progress(i, got):
+            job["done"] = i + 1
+            job["keys" if spec["kind"] == "points" else "plane"] = got
+        try:
+            if spec["kind"] == "points":
+                got = comp_track.track_points(get, spec["frames"], spec["points"], cancel=lambda: job.get("cancel"), progress=progress)
+                job["keys"] = got
+            else:
+                got = comp_track.track_plane(get, spec["frames"], spec["quad"], cancel=lambda: job.get("cancel"), progress=progress)
+                job["plane"] = got
+            job.update(state="stopped" if job.get("cancel") else "done", result={"frames": job["done"], "notes": sources.notes})
+        except Exception as e:  # noqa: BLE001 - said to the page
+            job.update(state="error", error=str(e))
+        finally:
+            sources.close()
+            job["ended"] = time.time()
+
+    def _num_pair(v, lo=None):
+        if not isinstance(v, (list, tuple)) or len(v) < 2:
+            return None
+        try:
+            a, b = float(v[0]), float(v[1])
+        except (TypeError, ValueError):
+            return None
+        if not (math.isfinite(a) and math.isfinite(b)):
+            return None
+        if lo is not None:
+            a, b = max(lo, min(1000, a)), max(lo, min(1000, b))
+        return [a, b]
+
+    async def track(request):
+        """POST {path, comp?, node, from, to, points: [{id, x, y, pattern, search}] | quad: [[x, y] x 4]} starts a
+        job; GET ?job= says how far it got with the keys so far; POST {job, cancel} stops it."""
+        if request.method == "GET":
+            job = jobs.get(request.query.get("job") or "")
+            if not job:
+                return err("no such track", 404)
+            return web.json_response({k: job.get(k) for k in ("state", "done", "total", "keys", "plane", "result", "error")})
+        body = await body_of(request)
+        if body.get("job"):
+            job = jobs.get(str(body["job"]))
+            if not job:
+                return err("no such track", 404)
+            if body.get("cancel"):
+                job["cancel"] = True
+            return web.json_response({"ok": True})
+        path = abspath(body.get("path"))
+        why = comp_path_ok(path)
+        if why:
+            return err(why, 403 if M.is_comp_path(path) else 400)
+        try:
+            raw = body["comp"] if isinstance(body.get("comp"), dict) else await off(comp_io.read, path)
+            comp, _ = M.normalize(raw)
+        except (ValueError, OSError) as e:
+            return err(e, 422)
+        n = M.node_by_id(comp, str(body.get("node") or ""))
+        if not n or n.get("type") not in ("tracker", "planartracker"):
+            return err("no such Tracker or PlanarTracker in the comp", 422)
+        src_id = (n.get("inputs") or [None])[0]
+        if not src_id:
+            return err("the tracker has nothing coming in to track", 422)
+        last = comp["format"]["frames"] - 1
+        try:
+            f0 = max(0, min(last, int(body.get("from", 0))))
+            f1 = max(0, min(last, int(body.get("to", last))))
+        except (TypeError, ValueError):
+            return err("from and to are frame numbers")
+        step = 1 if f1 >= f0 else -1
+        spec = {"input": src_id, "frames": list(range(f0, f1 + step, step))}
+        if n["type"] == "tracker":
+            pts = []
+            for p in body.get("points") or []:
+                if not isinstance(p, dict):
+                    continue
+                at = _num_pair([p.get("x"), p.get("y")])
+                if not at:
+                    continue
+                pts.append({"id": str(p.get("id") or len(pts))[:64], "x": at[0], "y": at[1],
+                            "pattern": _num_pair(p.get("pattern"), 5) or [21, 21], "search": _num_pair(p.get("search"), 7) or [61, 61]})
+            if not pts:
+                return err("no points to track (place one on the picture first)")
+            spec.update(kind="points", points=pts[:64])
+        else:
+            quad = [_num_pair(q) for q in (body.get("quad") or [])][:4]
+            if len(quad) != 4 or not all(quad):
+                return err("the surface needs its four corners")
+            spec.update(kind="plane", quad=quad)
+        for k in [k for k, j in jobs.items() if j.get("ended")][: max(0, len(jobs) - MAX_JOBS + 1)]:
+            jobs.pop(k, None)
+        jid = secrets.token_hex(8)
+        job = jobs[jid] = {"state": "running", "done": 0, "total": len(spec["frames"])}
+        threading.Thread(target=run_track, args=(job, comp, path, spec), daemon=True, name=f"comp-track-{jid}").start()
+        return web.json_response({"job": jid, "total": job["total"]})
+
     # ── Export to Nuke ───────────────────────────────────────────────────────
 
     def run_nuke(job, comp, comp_path, spec):
@@ -466,5 +572,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
         add("GET", f"{prefix}/comp_pixels", get_pixels)
         add("GET", f"{prefix}/comp_render", render)
         add("POST", f"{prefix}/comp_render", render)
+        add("GET", f"{prefix}/comp_track", track)
+        add("POST", f"{prefix}/comp_track", track)
         add("GET", f"{prefix}/comp_export_nuke", export_nuke)
         add("POST", f"{prefix}/comp_export_nuke", export_nuke)
