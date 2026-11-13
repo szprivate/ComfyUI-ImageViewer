@@ -2,7 +2,7 @@
 
 [Home](../index.md)
 
-Keys work while the pointer is over the viewer, and not while you type in a field. <kbd>?</kbd> shows the keys bound right now, including the current space's.
+Hotkeys are active while the pointer is over the viewer and no text field has focus. <kbd>?</kbd> lists the current bindings, including those of the active space.
 
 ## Viewer
 
@@ -26,21 +26,21 @@ Keys work while the pointer is over the viewer, and not while you type in a fiel
 
 ## In the spaces
 
-Each space has keys of its own, active only on its tab:
+Each space has its own keys, active only on its tabs:
 
-- [Editor](edit.md#cutting): <kbd>A</kbd> <kbd>T</kbd> <kbd>B</kbd> modes, <kbd>J</kbd> <kbd>K</kbd> <kbd>L</kbd>, <kbd>I</kbd> / <kbd>O</kbd>, <kbd>Ctrl</kbd>+<kbd>B</kbd>, <kbd>N</kbd> snapping…
+- [Edit](edit.md#editing): <kbd>A</kbd> <kbd>T</kbd> <kbd>B</kbd> modes, <kbd>J</kbd> <kbd>K</kbd> <kbd>L</kbd>, <kbd>I</kbd> / <kbd>O</kbd>, <kbd>Ctrl</kbd>+<kbd>B</kbd>, <kbd>N</kbd> snapping…
 - [Paint](paint.md#tools): one letter per tool, <kbd>Ctrl</kbd>+<kbd>Z</kbd>, <kbd>Ctrl</kbd>+<kbd>T</kbd>…
-- [3D](3d.md#moving-around): <kbd>Q</kbd> <kbd>W</kbd> <kbd>E</kbd> <kbd>R</kbd>, <kbd>Alt</kbd>+drag, <kbd>Ctrl</kbd>+<kbd>Z</kbd>…
+- [3D](3d.md#navigation): <kbd>Q</kbd> <kbd>W</kbd> <kbd>E</kbd> <kbd>R</kbd>, <kbd>Alt</kbd>+drag, <kbd>Ctrl</kbd>+<kbd>Z</kbd>…
 - [Comp](comp.md#the-node-graph): <kbd>Tab</kbd> adds a node, <kbd>1</kbd> views, <kbd>D</kbd>, <kbd>A</kbd> / <kbd>Y</kbd> + drag…
 - [Dependencies](dependencies.md): <kbd>F</kbd> fits the graph
 
-So <kbd>R</kbd> is scale on a 3D tab and the red channel on a picture.
+A key can therefore mean different things per space: <kbd>R</kbd> is scale on a 3D tab and the red channel in the Viewer.
 
-## Changing them
+## Rebinding
 
-Every action is a ComfyUI command:
+Every action is registered as a ComfyUI command:
 
-1. **Settings ▸ Keybinding**, search for `Image Viewer`.
-2. Double-click a row and press the new combo.
+1. Open **Settings ▸ Keybinding** and search for `Image Viewer`.
+2. Double-click a row and press the new combination.
 
-A combo you set yourself works anywhere in ComfyUI while the viewer is open. If another extension already owns a default key, the row shows no key but the key still works over the viewer; the browser console lists those keys at start.
+Custom bindings work anywhere in ComfyUI while the viewer is open. If another extension already owns a default key, the row shows no binding, but the key still works while the pointer is over the viewer; the browser console lists these keys on startup.

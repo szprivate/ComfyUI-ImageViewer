@@ -2,65 +2,65 @@
 
 [Home](../index.md)
 
-Cuts films on a timeline, as an NLE does. A cut is an OpenTimelineIO file (`.otio`) and plays in its own tab before anything is rendered.
+A multi-track editor. A cut is an OpenTimelineIO file (`.otio`) and plays in its own tab straight from the source media; nothing has to be rendered first.
 
-![A cut: the Source viewer and the timeline viewer above, the Edit timeline below](../images/edit.jpg)
+![A cut with the Source viewer on the left, the timeline viewer on the right and the Edit timeline below](../images/edit.jpg)
 
 ## Opening a cut
 
 - **Open Edit…** in the lower bar's Timeline menu.
-- **Open cut…** (<kbd>Ctrl</kbd>+<kbd>O</kbd> on the timeline, or the folder button on its bar), or double-click a `.otio` in the file browser.
-- A film with a `.otio` beside it lights the timeline button in the transport.
+- **Open cut…** (<kbd>Ctrl</kbd>+<kbd>O</kbd> with the timeline focused, or the folder button on the Edit bar), or double-click a `.otio` in the file browser.
+- If a film has a `.otio` of the same name next to it, the timeline button in the transport lights up and opens that cut.
 
-The space's panels show only on a cut's tab: **Edit** (the timeline), **Inspector** (the selection's numbers), **Effects** (transitions, titles, colours, sound effects) and **Mixer**.
+The Edit, Inspector, Effects and Mixer panels are only shown while a cut's tab is active.
 
 ## Tracks
 
-| Track | Holds |
+| Track | Content |
 |---|---|
-| V1 | The cut: shots one after another, with dissolves and gaps |
-| V2 and up | Clips placed at a time, over what is under them. Titles go here |
+| V1 | The main sequence: shots back to back, with dissolves and gaps |
+| V2 and up | Clips placed at a time. A clip covers picture and sound of everything below it. Titles live here |
 | A1 | The music bed |
-| Sound tracks | Sound clips placed at a time |
+| Sound tracks | Audio clips placed at a time |
 
-Each header has a switch, solo, lock and the Auto Track Selector. Shift + wheel makes tracks taller or lower.
+Each track header has enable, solo, lock and the auto track selector. Shift + mouse wheel changes track height.
 
 ## Adding clips
 
 - Drag History thumbnails, file browser rows, desktop files or canvas nodes onto the timeline.
-- **Add ▸ Files…** / **Selected canvas nodes** inserts at the playhead.
-- Drop above the top track or below the bottom one for a new track.
+- **Add ▸ Files…** and **Add ▸ Selected canvas nodes** perform an insert edit at the playhead.
+- Dropping above the top track or below the bottom track creates a new track.
 
-## Cutting
+## Editing
 
-| Mode | Key | An edge… | The body… |
+| Mode | Key | Clip edge | Clip body |
 |---|---|---|---|
-| Selection | <kbd>A</kbd> | trims, leaving a gap | moves the clip over what is there |
-| Trim | <kbd>T</kbd> | ripples | slips (upper half), slides (lower half) |
-| Blade | <kbd>B</kbd> | | cuts where you click |
-| Dynamic trim | <kbd>W</kbd> | <kbd>J</kbd> / <kbd>L</kbd> move the selected edit as if playing | |
+| Selection | <kbd>A</kbd> | Trim without ripple (leaves a gap) | Overwrite move |
+| Trim | <kbd>T</kbd> | Ripple trim | Upper half slip, lower half slide |
+| Blade | <kbd>B</kbd> | – | Split at the click |
+| Dynamic trim | <kbd>W</kbd> | <kbd>J</kbd> / <kbd>L</kbd> move the selected edit point at playback speed | – |
 
-The middle of a cut rolls it. <kbd>,</kbd> / <kbd>.</kbd> nudge a frame. <kbd>N</kbd> turns snapping on and off. In Trim mode the two frames beside the cut are shown over the picture.
+The centre of an edit point rolls it. <kbd>,</kbd> / <kbd>.</kbd> nudge by one frame, <kbd>N</kbd> toggles snapping. In Trim mode the outgoing and incoming frames are shown side by side.
 
-| To | Do |
+| Action | Key |
 |---|---|
-| Cut at the playhead | <kbd>Ctrl</kbd>+<kbd>B</kbd> |
-| Delete with a gap / closing it | <kbd>Del</kbd> / <kbd>Shift</kbd>+<kbd>Del</kbd> (with an in and out and nothing selected: lift / extract the range) |
-| Switch a clip off | <kbd>D</kbd> |
-| Set in / out | <kbd>I</kbd> / <kbd>O</kbd>, <kbd>X</kbd> around a clip |
+| Split at the playhead | <kbd>Ctrl</kbd>+<kbd>B</kbd> |
+| Lift / ripple delete | <kbd>Del</kbd> / <kbd>Shift</kbd>+<kbd>Del</kbd>; with in/out set and nothing selected, lift or extract the range |
+| Disable clip | <kbd>D</kbd> |
+| Mark in / out | <kbd>I</kbd> / <kbd>O</kbd>; <kbd>X</kbd> marks the clip |
 | Retime / loop | <kbd>Alt</kbd>+drag an edge / <kbd>Ctrl</kbd>+drag the out edge |
-| Match frame / back | <kbd>F</kbd> / <kbd>Shift</kbd>+<kbd>F</kbd> |
-| Marker | <kbd>M</kbd> (on a marker: name, colour, notes) |
-| Swap with the neighbour | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>,</kbd> / <kbd>.</kbd> |
+| Match frame / reverse match frame | <kbd>F</kbd> / <kbd>Shift</kbd>+<kbd>F</kbd> |
+| Marker | <kbd>M</kbd>; on an existing marker it opens name, colour and notes |
+| Swap with neighbour | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>,</kbd> / <kbd>.</kbd> |
 | Select forward | <kbd>Y</kbd> (<kbd>Alt</kbd>: all tracks) |
-| Paste a clip's look | <kbd>Ctrl</kbd>+<kbd>C</kbd>, then <kbd>Alt</kbd>+<kbd>V</kbd> |
+| Copy / paste attributes | <kbd>Ctrl</kbd>+<kbd>C</kbd>, <kbd>Alt</kbd>+<kbd>V</kbd> |
 | Undo / redo | <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> |
 
-A clip's right-click menu also has freeze frame, reverse, compound clip, unlink / link sound, colours and takes. Press <kbd>?</kbd> on a cut's tab for every key.
+The clip context menu adds freeze frame, reverse, compound clips, link / unlink audio, clip colour and takes. <kbd>?</kbd> on a cut's tab lists every key.
 
 ## Source viewer and three-point editing
 
-One monitor display, single or dual (the toggle at the top right of the right-hand viewer; <kbd>Q</kbd> swaps a single one). Click a History thumbnail, or drop a clip on the Source viewer, to load it. Mark its in and out, then:
+The monitor area runs single or dual; the toggle sits at the top right of the right-hand viewer, and <kbd>Q</kbd> switches a single viewer between source and timeline. Click a History thumbnail or drop a clip on the Source viewer to load it, set in and out, then:
 
 | Edit | Key |
 |---|---|
@@ -70,29 +70,29 @@ One monitor display, single or dual (the toggle at the top right of the right-ha
 | Place on top | <kbd>F12</kbd> |
 | Ripple overwrite / fit to fill / append | <kbd>Shift</kbd>+<kbd>F10</kbd> / <kbd>F11</kbd> / <kbd>F12</kbd> |
 
-The patch boxes at the left of the track headers say which tracks the source goes to.
+The patch buttons at the left of the track headers set the destination tracks.
 
-## Look, titles, transitions
+## Picture, titles, transitions
 
-- **Inspector**: zoom, position, rotation, crop, opacity, volume and speed. The ◇ keys a row at the playhead; with several clips selected a change goes to all.
-- **Titles** (Effects): drop one on a video track and type in the Inspector's Title tab.
-- **Transitions** (Effects): cross dissolve, dip to black / white, wipe. Drop one on a cut.
+- **Inspector**: zoom, position, rotation, crop, opacity, volume and speed. The ◇ keys a parameter at the playhead. With several clips selected, a change applies to all of them.
+- **Titles** (Effects panel): drop one on a video track and edit it in the Inspector's Title tab.
+- **Transitions** (Effects panel): cross dissolve, dip to black / white, wipe. Drop one on an edit point.
 
-## Sound
+## Audio
 
-- The speaker on the bar mutes the cut (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd>); <kbd>Shift</kbd>+<kbd>M</kbd> scrubs sound.
-- A sound clip's volume line: drag it, <kbd>Alt</kbd>+click adds a point. The corner squares are fades. <kbd>Shift</kbd>+<kbd>T</kbd> crossfades at a cut.
-- Sound effects (EQ, compressor, reverb …) from Effects onto a clip or a track header.
-- **Mixer**: a strip per track and the master, with meter, fader, pan, mute and solo.
+- The speaker button on the bar mutes the cut (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd>); <kbd>Shift</kbd>+<kbd>M</kbd> toggles audio scrubbing.
+- Each audio clip has a volume line (<kbd>Alt</kbd>+click adds a point) and fade handles in its top corners. <kbd>Shift</kbd>+<kbd>T</kbd> adds a crossfade at an edit point.
+- Audio effects (EQ, compressor, limiter, reverb, delay, gain, pan) go on a clip or a whole track from the Effects panel.
+- **Mixer**: one strip per track plus master, with meter, fader, pan, mute and solo.
 
 ## Saving and exporting
 
-| | |
+| Command | Result |
 |---|---|
-| Save cut (<kbd>Ctrl</kbd>+<kbd>S</kbd>) / Save cut as… | Writes the `.otio`; the bar says where |
-| Export film… | Renders picture and sound as the next version, never over the film the cut came from |
-| Export to Resolve… | A folder with the media, FCPXML, EDL and OTIO for DaVinci Resolve |
+| Save cut (<kbd>Ctrl</kbd>+<kbd>S</kbd>) / Save cut as… | Writes the `.otio`; the bar shows the full path |
+| Export film… | Renders picture and sound to the next version; the film the cut belongs to is never overwritten |
+| FCPXML / EDL export (Save menu) | A folder with copies of the media, an FCPXML 1.9, a CMX3600 EDL and an OTIO |
 
 ## With agentY
 
-**Auto edit…** (the wand menu) cuts on the beat, to a rhythm or to each shot's best part; **Detect cuts** finds cuts inside a film; **Ask agentY…** and a clip's **Recreate with changes…** hand the cut to the agent, whose new versions come back as takes.
+**Auto edit…** (wand menu) cuts to the beat, to an even rhythm or to each shot's best part, and **Detect cuts** finds hard cuts and dissolves inside a film. **Ask agentY…** and a clip's **Recreate with changes…** send the saved cut to the agent; new versions come back as takes on the clip.
