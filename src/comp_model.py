@@ -1893,6 +1893,45 @@ def roto_write(m, src, sex, target, premult):
 WRITES = {t for t, d in NODE_TYPES.items() if "write" in d["params"]}
 _TWO_IN = {"merge", "copy", "channelmerge"}
 
+# Nodes with a mask input (the last) and a mix on top of what they do (the page's MASKABLE / maskMix).
+MASKABLE = ["grade", "colorcorrect", "ocio_colorspace", "ocio_display", "glow", "lensflare", "blur",
+            "shuffle", "copy", "erode", "laplacian", "channelmerge", "channelmath", "premult", "unpremult", "lumakeyer",
+            "chromakeyer", "keyer", "motionblur", "depthblur", "defocus"]
+OWN_MIX = {t for t in MASKABLE if "mix" in NODE_TYPES[t]["params"]}
+for _mt in MASKABLE:
+    _md = NODE_TYPES[_mt]
+    _md["inputs"] = list(_md["inputs"]) + ["mask"]
+    if "mix" not in _md["params"]:
+        _md["params"]["mix"] = {"kind": "num", "def": 1, "min": 0, "max": 1, "key": True}
+    _md["params"]["mask_channel"] = {"kind": "chan", "def": "a"}
+    _md["params"]["mask_invert"] = {"kind": "enum", "def": "off", "choices": ["off", "on"]}
+MASKABLE = set(MASKABLE)
+
+
+def mask_index(t):
+    return len(NODE_TYPES[t]["inputs"]) - 1 if t in MASKABLE else -1
+
+
+def mask_mix(src, sex, img, ex, m, mix, invert):
+    """src + (img - src) x mix x m for the picture and every extra channel (the page's ``maskMix``)."""
+    h, w = img.shape[:2]
+    if m is None:
+        t = np.full((h, w), float(mix), np.float64)
+    else:
+        mm = m.astype(np.float64)
+        t = mix * ((1 - mm) if invert else mm)
+    S = src.astype(np.float64)
+    out = (S + (img.astype(np.float64) - S) * t[..., None]).astype(np.float32)
+    oex = {}
+    names = list(dict.fromkeys(list((sex or {}).keys()) + list((ex or {}).keys())))
+    for k in names:
+        a = (sex or {}).get(k)
+        b = (ex or {}).get(k)
+        a = a.astype(np.float64) if a is not None else np.zeros((h, w), np.float64)
+        b = b.astype(np.float64) if b is not None else np.zeros((h, w), np.float64)
+        oex[k] = (a + (b - a) * t).astype(np.float32)
+    return out, oex
+
 
 def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, channels=False):
     """The picture node ``nid`` makes at ``frame``; ``source(node, frame)`` gives a Read's pixels (a picture at
@@ -1927,9 +1966,30 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
                 i0 = (n.get("inputs") or [None])[0]
                 base = run(i0, f, depth + 1) if i0 else blank(W, H)
                 img, ex = write_target(base, ex_of(i0, f), conform(img, base.shape[1], base.shape[0]), w)
+        if n and not n.get("disable") and n.get("type") in MASKABLE:
+            img, ex = mask_stage(n, f, depth, img, ex)
         memo[(i, f)] = img
         memo[("x", i, f)] = ex
         return img
+
+    def mask_stage(n, f, depth, img, ex):
+        mix = 1 if n["type"] in OWN_MIX else param_at(n, "mix", f)
+        ins = n.get("inputs") or []
+        k = mask_index(n["type"])
+        mi = ins[k] if len(ins) > k else None
+        if not mi and mix == 1:
+            return img, ex
+        h, w = img.shape[:2]
+        i0 = ins[0] if ins else None
+        s0 = run(i0, f, depth + 1) if i0 else blank(w, h)
+        src = conform(s0, w, h)
+        sex = _conform_extras(ex_of(i0, f), w, h) if i0 else {}
+        m = None
+        if mi:
+            mp = run(mi, f, depth + 1)
+            plane = channel_of(mp, ex_of(mi, f), n.get("mask_channel") or "a")
+            m = conform(plane, w, h) if plane is not None else np.zeros((h, w), np.float32)
+        return mask_mix(src, sex, img, ex, m, mix, (n.get("mask_invert") or "off") == "on")
 
     def spatial(i0, f, d1, fn):
         src = run(i0, f, d1)

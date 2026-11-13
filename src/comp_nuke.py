@@ -132,6 +132,13 @@ def _bakeable(n):
     t = n.get("type")
     if t not in NATIVE:
         return f"{t}: no stock Nuke node does the same"
+    if t in M.MASKABLE:
+        ins = n.get("inputs") or []
+        k = M.mask_index(t)
+        if len(ins) > k and ins[k]:
+            return f"{t}: its mask is not written into the Nuke script (the node is baked)"
+        if t not in M.OWN_MIX and ((n.get("tracks") or {}).get("mix") or (n.get("mix") is not None and n.get("mix") != 1)):
+            return f"{t}: its mix is not written into the Nuke script (the node is baked)"
     if t == "shuffle" and ((n.get("out") or "rgba") != "rgba" or any((n.get(k) or k) not in _SHUF for k in "rgba")):
         return "shuffle: extra channels are not written into the Nuke script (its rgba is baked)"
     if t == "constant" and (n.get("write") or "rgba") != "rgba":

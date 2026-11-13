@@ -35,17 +35,17 @@ test("connect refuses a loop; delete reconnects through the first input", () => 
     const r = C.addNode(c, read(c, "a.png"));
     const g = C.insertNode(c, "grade", r.id);
     const b = C.insertNode(c, "blur", g.id);
-    assert.deepEqual(b.inputs, [g.id]);
+    assert.deepEqual(b.inputs, [g.id, null], "src, then the mask");
     assert.equal(C.connect(c, r.id === "Read1" ? g.id : g.id, 0, b.id), false, "blur -> grade would loop");
     C.removeNodes(c, [g.id]);
-    assert.deepEqual(C.nodeById(c, b.id).inputs, [r.id]);
+    assert.deepEqual(C.nodeById(c, b.id).inputs, [r.id, null]);
 });
 
 test("insertNode after a node takes over what read it", () => {
     const c = C.newComp();
     const g = C.insertNode(c, "grade", "Constant1");
     assert.deepEqual(C.nodeById(c, "Output1").inputs, [g.id]);
-    assert.deepEqual(g.inputs, ["Constant1"]);
+    assert.deepEqual(g.inputs, ["Constant1", null]);
     assert.ok(C.nodeById(c, "Output1").y > g.y, "the Output moved down to make room");
 });
 
@@ -543,4 +543,18 @@ test("channel rules: names, lists, a write into one channel or a layer, the Roto
     [img, ex] = CH.rotoWrite(Float64Array.from([0.5]), 1, 1, src, {}, "mask.a", false);
     assert.deepEqual(Array.from(img.data).map((v) => +v.toFixed(3)), [0.8, 0.6, 0.4, 1]);
     assert.equal(ex["mask.a"][0], 0.5);
+});
+
+test("a MASKABLE node has a mask input last, a mix, and the mask holds it back", () => {
+    assert.deepEqual(C.NODE_TYPES.blur.inputs, ["src", "mask"]);
+    assert.equal(C.maskIndex("blur"), 1);
+    assert.equal(C.maskIndex("merge"), -1, "Merge has its own mask");
+    assert.ok(C.NODE_TYPES.blur.params.mix && C.NODE_TYPES.blur.params.mask_channel);
+    const src = { w: 2, h: 1, data: Float32Array.from([1, 1, 1, 1, 0, 0, 0, 0]) };
+    const img = { w: 2, h: 1, data: Float32Array.from([0, 0, 0, 1, 1, 1, 1, 1]) };
+    const [o, ex] = C.maskMix(src, { "z.a": Float32Array.from([0, 0]) }, img, {}, Float32Array.from([0.5, 1]), 0.5, false);
+    assert.deepEqual(Array.from(o.data), [0.75, 0.75, 0.75, 1, 0.5, 0.5, 0.5, 0.5]);
+    assert.deepEqual(Array.from(ex["z.a"]), [0, 0]);
+    const [oi] = C.maskMix(src, {}, img, {}, Float32Array.from([1, 0]), 1, true);
+    assert.deepEqual(Array.from(oi.data), [1, 1, 1, 1, 1, 1, 1, 1]);
 });
