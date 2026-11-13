@@ -79,6 +79,7 @@ export const ModelMixin = {
                 onTerrainEdit: (id, patch) => this.previzTerrainEditWrite(id, patch),
                 onTerrainBrushEnd: (id) => this._previzTerrainBarDrop(id),
                 onTerrainBrush: (b) => this._previzTerrainBarSync(b),
+                onTerrainErode: (s) => this._previzErodeSync(s),
                 // The menu bar over the canvas (imageViewer_previzMenuBar.js) and the panes' menus.
                 buildMenuBar: (host) => this.previzBuildMenuBar(host),
                 openMenu: (entries, x, y, anchor) => this._previzOpenMenu(entries, x, y, anchor),

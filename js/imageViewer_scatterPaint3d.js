@@ -49,6 +49,7 @@ export const ScatterPaint3DMixin = {
      */
     scatterPaintBegin(id) {
         if (this._tb && this.terrainBrushEnd) this.terrainBrushEnd();
+        if (this._te && this.terrainErodeEnd) this.terrainErodeEnd(false);
         this.scatterPaintEnd();
         const entry = this._entries.get(id);
         if (!entry || !entry.item || entry.item.kind !== "scatter") return "Select a scatter to paint.";
