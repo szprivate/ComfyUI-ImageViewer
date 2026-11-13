@@ -32,8 +32,18 @@ const cdlParams = () => {
     return out;
 };
 const results = { kind: "ai", def: null, help: "What the workflow made, per frame (Run fills it)" };
+const vfxResults = { kind: "ai", def: null, help: "The film the workflow made (Render fills it)" };
+const prerender = { kind: "enum", def: "on", choices: ["on", "off"],
+    help: "on: what comes into the node is rendered to a film first and that goes through the workflow. off: the film of the Read coming in is used as it is (faster; only a Read of a film, with nothing between)" };
 
 export const AI_KINDS = { ai_matte: "matte", ai_depth: "depth", ai_relight: "relight", ai_inpaint: "inpaint", ai_upscale: "upscale" };
+/** The VFX nodes: the History's Convert Footage workflows (LTX-2.5, src/clip_vfx.py) on the comp, over its
+ *  whole frame range at once (comp_vfx on the server). Their `results` is ONE film or EXR sequence:
+ *  {file, offset, first, last, width, height, colorspace, key, prerender}; frames first..last show it, the
+ *  others pass the input. */
+export const VFX_KINDS = { vfx_alpha: "alpha", vfx_hdr: "hdr", vfx_reframe: "reframe", vfx_upscale: "upscale" };
+/** The ones whose picture takes the result's size (the others keep the size that comes in). */
+const VFX_SIZED = new Set(["reframe", "upscale"]);
 /** The data pictures (read as numbers, not as sRGB colour). */
 const AI_DATA = new Set(["matte", "depth"]);
 
@@ -168,6 +178,24 @@ export const EXTRA_TYPES = {
         factor: { kind: "enum", def: "2", choices: ["2", "4"], help: "The picture this many times larger" },
         results,
     } },
+    // ── VFX, LTX-2.5 workflows over the whole range ──
+    vfx_alpha: { label: "VFX Alpha Matte", cat: "VFX", inputs: ["src"], params: {
+        output: { kind: "enum", def: "premultiplied", choices: ["premultiplied", "matte"], help: "matte: the matte as grey" },
+        prerender, results: vfxResults,
+    } },
+    vfx_hdr: { label: "VFX SDR to HDR", cat: "VFX", inputs: ["src"], params: { prerender, results: vfxResults } },
+    vfx_reframe: { label: "VFX Reframe", cat: "VFX", inputs: ["src"], params: {
+        width: { kind: "int", def: 1920, min: 256, max: 1920, help: "The new frame's width (snapped to 64)" },
+        height: { kind: "int", def: 1088, min: 256, max: 1920, help: "The new frame's height (snapped to 64)" },
+        prompt: { kind: "prompt", def: "", help: "Optional: what the new parts of the frame show" },
+        prerender, results: vfxResults,
+    } },
+    vfx_upscale: { label: "VFX Upscale", cat: "VFX", inputs: ["src"], params: {
+        mode: { kind: "enum", def: "refine", choices: ["refine", "restore"], help: "refine: stays close to the clip; restore: for damaged or archival footage" },
+        size: { kind: "enum", def: "FullHD", choices: ["FullHD", "4K"], help: "4K needs more memory" },
+        prompt: { kind: "prompt", def: "", help: "Optional: what the clip shows" },
+        prerender, results: vfxResults,
+    } },
 };
 export const EXTRA_ORDER = Object.keys(EXTRA_TYPES);
 /** Effects with one picture going through them (the Layers view reads them as a layer's effects). */
@@ -197,6 +225,27 @@ export function aiRead(n, f) {
     if (rf === null) return null;
     return { id: `${n.id}#ai${rf}`, type: "read", file: n.results.frames[String(rf)], colorspace: AI_DATA.has(AI_KINDS[n.type]) ? "linear" : "srgb",
         fit: "stretch", offset: 0, inputs: [] };
+}
+/** The comp frames a VFX node's result covers ([first, last]), or null before it ran. */
+export function vfxSpan(n) {
+    const r = n && n.results;
+    if (!r || !r.file || !Number.isFinite(Number(r.first)) || !Number.isFinite(Number(r.last))) return null;
+    return [Number(r.first), Number(r.last)];
+}
+/** The Read standing for a VFX node's result at f (its film or sequence through the footage reader), or null. */
+export function vfxRead(n, f) {
+    const sp = vfxSpan(n);
+    if (!sp || f < sp[0] || f > sp[1]) return null;
+    const r = n.results;
+    return { id: `${n.id}#vfx`, type: "read", file: r.file, colorspace: r.colorspace || (VFX_KINDS[n.type] === "alpha" ? "linear" : "auto"),
+        fit: "stretch", offset: Number(r.offset) || 0, inputs: [] };
+}
+/** The size a VFX node's picture has: the result's for reframe / upscale once run, else null (= what comes in). */
+export function vfxSize(n) {
+    const r = n && !n.disable && n.results;
+    if (!r || !r.file || !VFX_SIZED.has(VFX_KINDS[n.type])) return null;
+    const w = Math.round(Number(r.width)), h = Math.round(Number(r.height));
+    return w > 0 && h > 0 ? { width: w, height: h } : null;
 }
 /** The factor an AI Upscale makes its picture larger by. */
 export function upscaleFactor(n) { return Math.max(1, Number(n && n.factor) || 2); }
@@ -289,8 +338,34 @@ export function extraMake(n, f, api) {
     case "median": return F.medianImage(src(), p, scale);
     case "edgedetect": return F.edgeDetectImage(src(), p, scale);
     case "edgeblur": return F.edgeBlurImage(src(), p, scale);
-    default: return aiMake(n, f, p, api);
+    default: return VFX_KINDS[n.type] ? vfxMake(n, f, p, api) : aiMake(n, f, p, api);
     }
+}
+
+/** A VFX node: its result over the frames it covers, at the result's size (reframe / upscale) or the size that
+ *  comes in; outside them (or before it ran) the input, laid into that size. */
+function vfxMake(n, f, p, api) {
+    const kind = VFX_KINDS[n.type], ins = n.inputs || [];
+    const s = ins[0] ? api.run(ins[0], f) : (() => { const [w, h] = api.size(n, 0); return api.blank(w, h); })();
+    const sz = vfxSize(n);
+    const w = sz ? Math.max(1, Math.round(sz.width * api.scale)) : s.w, h = sz ? Math.max(1, Math.round(sz.height * api.scale)) : s.h;
+    const rd = vfxRead(n, f), got = rd && api.source ? api.source(rd, f) : null;
+    if (!got) return w === s.w && h === s.h ? s : api.resample(s, api.fitMatrix(s.w, s.h, w, h, "stretch"), w, h);
+    const r = api.resample(got, api.fitMatrix(got.w, got.h, w, h, "stretch"), w, h);
+    if (kind === "reframe" || kind === "upscale") return r;
+    const S = (w === s.w && h === s.h ? s : api.resample(s, api.fitMatrix(s.w, s.h, w, h, "stretch"), w, h)).data;
+    const out = api.blank(w, h), o = out.data, R = r.data;
+    for (let i = 0; i < w * h * 4; i += 4) {
+        if (kind === "alpha") {
+            const m = 0.2126 * R[i] + 0.7152 * R[i + 1] + 0.0722 * R[i + 2];
+            if (p.output === "matte") { o[i] = m; o[i + 1] = m; o[i + 2] = m; o[i + 3] = 1; }
+            else { o[i] = S[i] * m; o[i + 1] = S[i + 1] * m; o[i + 2] = S[i + 2] * m; o[i + 3] = S[i + 3] * m; }
+        } else {        // hdr: the new picture under the alpha that came in
+            const a = S[i + 3];
+            for (let c = 0; c < 4; c++) o[i + c] = R[i + c] * a;
+        }
+    }
+    return out;
 }
 
 /** An AI node: its result laid over the size that comes in (an upscale: that x its factor), else its input. */

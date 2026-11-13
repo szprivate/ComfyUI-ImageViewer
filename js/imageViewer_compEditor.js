@@ -220,7 +220,7 @@ input.cp-newch{flex:1;min-width:0}
 `;
 const CAT_COLOR = { Image: "#9aa6b8", Merge: "#6f9fe0", Transform: "#b39ddb", Color: "#86c98a", Filter: "#e0a060", Other: "#c8c8c8",
     Channel: "#9b8a6a", Time: "#d98fb0", Keyer: "#5fc4b8", Draw: "#d6c86a",
-    "3D": "#7fb3d5", Deep: "#8c7fd5", Views: "#d5a07f" };
+    "3D": "#7fb3d5", Deep: "#8c7fd5", Views: "#d5a07f", VFX: "#e07fa8" };
 const KIND_ICON = { layer: "▣", background: "▤", group: "⧉" };
 
 const el = (doc, tag, cls, text) => {
@@ -2590,6 +2590,34 @@ export function createCompEditor(host, opts = {}) {
             btn("Forget", "Take the results off the node (the files stay)", () => { if (made.length) mutate(() => { delete n.results; }, { structure: false }); }));
         pane.append(row);
     }
+    /** A VFX node: what it shows, Render (the workflow over the comp's range, once), Stop, Forget. */
+    function vfxKeyOfNode(n) {
+        const fl = G.flattenComp(st.comp), f = C.nodeById(fl, fid(n.id)) || C.nodeById(fl, n.id);
+        return C.vfxKey(fl, f || n);
+    }
+    function vfxSection(n) {
+        const r = n.results && n.results.file ? n.results : null;
+        const busy = st.aiBusy && st.aiBusy.has(fid(n.id));
+        const note = (st.vfxNotes && st.vfxNotes.get(fid(n.id))) || "";
+        const line = el(doc, "div", "mg-empty cp-ai cp-vfx");
+        const pre = n.prerender === "off" ? "the Read's film as it is" : "what comes in, prerendered to a film first";
+        if (!r) line.textContent = `Not rendered yet: it passes its input through. Render runs the LTX-2.5 workflow once over the comp's frames (on ${pre}) and keeps the result beside the comp; the node then reads that back. Slow: minutes, on the GPU.`;
+        else {
+            const stale = r.key && r.key !== vfxKeyOfNode(n);
+            line.textContent = `Rendered: frames ${r.first}–${r.last} read ${String(r.file).split("/").pop()}`
+                + (r.width ? ` (${r.width} x ${r.height})` : "") + "; outside them the input passes."
+                + (stale ? " Out of date: what comes in, or the settings, changed since. Render again to update it." : "");
+            if (stale) line.classList.add("cp-warn");
+        }
+        pane.append(line);
+        if (note) pane.append(el(doc, "div", "mg-empty cp-vfx-note", note));
+        const row = el(doc, "div", "mg-prop cp-btnrow");
+        row.append(el(doc, "span", "mg-sw", ""), el(doc, "label", "", "render"),
+            btn(busy ? "Rendering…" : (r ? "Render again" : "Render"), "Run the workflow over the comp's frames and keep the result beside the comp", () => { if (!busy && o.vfxRun) o.vfxRun(fid(n.id)); }),
+            btn("Stop", "Stop the run (what ComfyUI has queued for it is cancelled)", () => { if (busy && o.vfxStop) o.vfxStop(fid(n.id)); }),
+            btn("Forget", "Take the result off the node (the files stay)", () => { if (r) mutate(() => { delete n.results; }, { structure: false }); }));
+        pane.append(row);
+    }
     function paneBody(n, t, first) {
         if (n.type === "sticky") {
             const ta = el(doc, "textarea"); ta.value = n.text || ""; ta.rows = 4; ta.style.width = "100%";
@@ -2638,6 +2666,7 @@ export function createCompEditor(host, opts = {}) {
         if (WUI.draws(n.type)) WUI.section(wctx(), n);
         if (n.type === "cdl") cdlSection(n, t.params);
         if (C.EX.AI_KINDS[n.type]) aiSection(n);
+        if (C.EX.VFX_KINDS[n.type]) vfxSection(n);
         if (n.type === "camera3d" && o.importCamera) {
             const row = el(doc, "div", "mg-prop cp-camimport");
             row.append(el(doc, "span", "mg-sw", ""), el(doc, "label", "", "import"));
@@ -3200,6 +3229,25 @@ export function createCompEditor(host, opts = {}) {
                 (r.keys || (r.keys = {}))[String(f)] = key;
             }, { structure: false });
             return true;
+        },
+        /** A VFX node's render is in: its results (one undo step). */
+        vfxResult(id, res) {
+            const flat = G.flatNode(st.comp, id), n = flat || node(id);
+            if (!n) return false;
+            const keep = ["file", "offset", "first", "last", "width", "height", "colorspace", "frames", "kind", "prerender", "key"];
+            mutate(() => { n.results = Object.fromEntries(keep.filter((k) => res[k] !== undefined).map((k) => [k, res[k]])); }, { structure: false });
+            return true;
+        },
+        /** The key a VFX node's result would be made for now. */
+        vfxKeyOf(id) {
+            const fl = G.flattenComp(st.comp), n = C.nodeById(fl, id) || node(id);
+            return n ? C.vfxKey(fl, n) : "";
+        },
+        /** How far a VFX node's run is (a line in Parameters; "" clears it). */
+        setVfxNote(id, text) {
+            const m = st.vfxNotes || (st.vfxNotes = new Map());
+            if (text) m.set(id, text); else m.delete(id);
+            refresh(["props"]);
         },
         /** Which AI nodes are running (Parameters says so). */
         setAiBusy(ids) { st.aiBusy = new Set(ids || []); refresh(["props"]); },
