@@ -6,6 +6,7 @@ and on the ComfyUI canvas; leaving the tab gives the viewport back.
     python -m unittest tests.test_comp_browser     (Playwright and aiohttp; skipped without)
 """
 import asyncio
+import importlib
 import os
 import shutil
 import socket
@@ -1486,6 +1487,155 @@ class CompBrowserTests(unittest.TestCase):
             key("f")
             pg.wait_for_timeout(200)
             pg.locator(".cp-graph").first.screenshot(path=os.path.join(SHOTS, "comp-graph-organised.png"))
+        self.assertEqual(self.errors, [])
+
+    def test_nodes_are_duplicated_copied_and_pasted_and_alt_dragged(self):
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        pg.evaluate("() => __panel.setPanelDocked('compGraph', true)")
+        pg.evaluate(f"""() => {{ const e = {ED}; e.select([]); const c = e.comp();
+            e.addNode('blur', {{ x: 400, y: 60 }}); e.select([]); e.addNode('grade', {{ x: 400, y: 140 }});
+            const by = (id) => c.nodes.find((n) => n.id === id);
+            by('Blur1').inputs = ['Constant1']; by('Grade1').inputs = ['Blur1']; e.select(['Blur1', 'Grade1']); e.refresh(); }}""")
+        pg.wait_for_timeout(200)
+        graph = pg.evaluate_handle("() => __panel.compGraphPanel.querySelector('.cp-graph')")
+        nodes = lambda: pg.evaluate(f"() => {ED}.comp().nodes.map((n) => [n.id, n.inputs, n.x, n.y])")   # noqa: E731
+        by = lambda i: next(n for n in nodes() if n[0] == i)   # noqa: E731
+        mid = lambda i: graph.evaluate("(g, id) => { const r = g.querySelector(`.cp-node[data-id=${id}]`).getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }", i)   # noqa: E731
+        graph.evaluate("(g) => g.focus()")
+        # Ctrl+D: copies beside the originals, wired among themselves, selected; one undo step.
+        pg.keyboard.press("Control+d")
+        self.assertEqual(by("Grade2")[1], ["Blur2"])
+        self.assertEqual(by("Blur2")[1], [None])
+        self.assertEqual(by("Grade1")[1], ["Blur1"])
+        self.assertEqual(sorted(pg.evaluate(f"() => {ED}.selection()")), ["Blur2", "Grade2"])
+        pg.evaluate(f"() => {ED}.undo()")
+        self.assertEqual(len(nodes()), 4)
+        # Ctrl+C, then Ctrl+V under the pointer; Ctrl+Shift+V keeps the wire from outside.
+        pg.evaluate(f"() => {ED}.select(['Blur1'])")
+        graph.evaluate("(g) => g.focus()")
+        pg.keyboard.press("Control+c")
+        box = graph.bounding_box()
+        spot = [box["x"] + box["width"] * 0.75, box["y"] + box["height"] * 0.7]
+        pg.mouse.move(*spot)
+        pg.keyboard.press("Control+v")
+        self.assertEqual(by("Blur2")[1], [None])
+        m = mid("Blur2")
+        self.assertLess(abs(m[0] - spot[0]) + abs(m[1] - spot[1]), 30, "pasted under the pointer")
+        pg.keyboard.press("Control+Shift+V")
+        self.assertEqual(by("Blur3")[1], ["Constant1"])
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-copy-paste.png"))
+        # Alt + drag: a copy is dragged away, the original stays where it was.
+        before = by("Grade1")
+        a = mid("Grade1")
+        pg.keyboard.down("Alt")
+        pg.mouse.move(*a); pg.mouse.down()
+        pg.mouse.move(a[0] + 160, a[1] + 40, steps=6)
+        pg.mouse.up()
+        pg.keyboard.up("Alt")
+        self.assertEqual(by("Grade1"), before)
+        g2 = by("Grade2")
+        self.assertEqual(g2[1], [None])
+        self.assertGreater(g2[2], before[2] + 80)
+        self.assertEqual(pg.evaluate(f"() => {ED}.selection()"), ["Grade2"])
+        pg.evaluate(f"() => {ED}.undo()")
+        self.assertFalse(any(n[0] == "Grade2" for n in nodes()))
+        # Alt + drag on the empty graph still pans.
+        self.assertEqual(self.errors, [])
+
+    def test_a_read_comes_in_without_a_dialog_and_open_asks_the_system(self):
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        pg.evaluate("() => __panel.setPanelDocked('compGraph', true)")
+        pg.evaluate(f"() => {{ const e = {ED}; e.select([]); e.addNodeAt('read'); }}")
+        pg.wait_for_timeout(200)
+        self.assertEqual(pg.evaluate(f"() => {ED}.comp().nodes.filter((n) => n.type === 'read').map((n) => n.file)"), [""])
+        self.assertEqual(pg.evaluate("() => __panel.shadowRoot.querySelectorAll('.file-picker, .fp-shade, .export-shade').length"), 0)
+        # Open: the server shows the system's dialog (stubbed here) and the Read takes the file it names.
+        nd = importlib.import_module(self.pkg + ".native_dialog")
+        asked = []
+        real = nd.pick_file
+        nd.pick_file = lambda start="", title="", filters=(): (asked.append((start, title)), self.png)[1]
+        self.addCleanup(lambda: setattr(nd, "pick_file", real))
+        pg.evaluate("() => __panel.compPropsPanel.querySelector('.cp-open').click()")
+        pg.wait_for_function(f"() => {ED}.comp().nodes.some((n) => n.type === 'read' && n.file)", timeout=5000)
+        f = pg.evaluate(f"() => {ED}.comp().nodes.find((n) => n.type === 'read').file")
+        self.assertEqual(os.path.normcase(os.path.abspath(f)), os.path.normcase(os.path.abspath(self.png)))
+        self.assertEqual(len(asked), 1)
+        # Cancelled: nothing changes. No dialog to be had (501): the viewer's own file browser opens.
+        nd.pick_file = lambda *a, **k: ""
+        pg.evaluate("() => __panel.compPropsPanel.querySelector('.cp-open').click()")
+        pg.wait_for_timeout(300)
+        self.assertEqual(pg.evaluate(f"() => {ED}.comp().nodes.find((n) => n.type === 'read').file"), f)
+
+        def none(*a, **k):
+            raise nd.Unavailable("no desktop")
+        nd.pick_file = none
+        before = pg.evaluate("() => __panel.shadowRoot.querySelectorAll('*').length")
+        pg.evaluate("() => __panel.compPropsPanel.querySelector('.cp-open').click()")
+        pg.wait_for_function("(n) => __panel.shadowRoot.querySelectorAll('*').length > n + 5", arg=before, timeout=5000)
+        self.assertEqual(self.errors, [])
+
+    def test_the_layers_show_a_read_before_it_is_wired_and_the_bottom_layers_footage(self):
+        pg = self.page()
+        path = self.new_comp(pg)
+        ED = self.ED
+        comp = {"comp": 1, "format": {"width": 64, "height": 36, "fps": 24, "frames": 40}, "output": "Output1", "nodes": [
+            {"id": "Read1", "type": "read", "file": self.png, "inputs": [], "x": 0, "y": 0},
+            {"id": "Grade1", "type": "grade", "inputs": ["Read1"], "x": 0, "y": 70},
+            {"id": "Output1", "type": "output", "inputs": [None], "x": 0, "y": 200}]}
+        pg.evaluate(f"([c, p]) => {ED}.load(c, p)", [comp, path])
+        pg.evaluate("() => __panel.setPanelDocked('compLayers', true)")
+        pg.wait_for_timeout(250)
+        P = "__panel.compLayersPanel"
+        rows = lambda: pg.evaluate(f"() => [...{P}.querySelectorAll('.cp-lrow')].map((r) => [r.querySelector('.cp-lname').textContent, r.classList.contains('cp-lloose')])")   # noqa: E731
+        self.assertEqual(rows(), [["plate.png", False]], "the Read is a layer although nothing reaches the Output")
+        self.assertEqual(pg.evaluate(f"() => {P}.querySelectorAll('.cp-note.cp-loose').length"), 1)
+        pg.evaluate(f"() => {P}.querySelector('.cp-note.cp-loose button').click()")
+        self.assertEqual(pg.evaluate(f"() => {{ const c = {ED}.comp(); return c.nodes.find((n) => n.id === c.output).inputs; }}"), ["Grade1"])
+        self.assertEqual(pg.evaluate(f"() => {P}.querySelectorAll('.cp-note.cp-loose').length"), 0)
+        self.assertEqual(rows(), [["plate.png", False]], "the bottom layer is named after its footage")
+        # A second Read dropped onto the graph is listed as not in the picture yet; "+ layer" puts it on top.
+        pg.evaluate("() => __panel.setPanelDocked('compGraph', true)")
+        pg.wait_for_timeout(200)
+        pg.evaluate("""() => { const g = __panel.compGraphPanel.querySelector('.cp-graph'), r = g.getBoundingClientRect();
+            const dt = new DataTransfer();
+            dt.setData('application/x-imageviewer-history', JSON.stringify({ items: [{ path: null, filename: 'plate.png', subfolder: '', type: 'output', kind: 'image' }] }));
+            g.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true, composed: true,
+                clientX: r.left + r.width * 0.8, clientY: r.top + r.height / 2 })); }""")
+        pg.wait_for_function(f"() => {ED}.comp().nodes.filter((n) => n.type === 'read').length === 2", timeout=5000)
+        pg.evaluate("() => __panel.setPanelDocked('compLayers', true)")
+        pg.wait_for_timeout(200)
+        self.assertEqual(rows(), [["plate.png", False], ["plate.png", True]])
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-layers-loose-read.png"))
+        pg.evaluate(f"() => {P}.querySelector('.cp-lloose button').click()")
+        self.assertEqual(rows(), [["plate.png", False], ["plate.png", False]])
+        ins = pg.evaluate(f"() => {{ const c = {ED}.comp(); const m = c.nodes.find((n) => n.type === 'merge'); return m.inputs.slice(0, 2); }}")
+        self.assertEqual(ins, ["Grade1", "Read2"])
+        self.assertEqual(self.errors, [])
+
+    def test_the_first_footage_dropped_into_an_empty_graph_is_wired_into_the_output(self):
+        pg = self.page()
+        path = self.new_comp(pg)
+        ED = self.ED
+        comp = {"comp": 1, "format": {"width": 64, "height": 36, "fps": 24, "frames": 4}, "output": "Output1",
+                "nodes": [{"id": "Output1", "type": "output", "inputs": [None], "x": 0, "y": 200}]}
+        pg.evaluate(f"([c, p]) => {ED}.load(c, p)", [comp, path])
+        pg.evaluate("() => __panel.setPanelDocked('compGraph', true)")
+        pg.wait_for_timeout(200)
+        pg.evaluate("""() => { const g = __panel.compGraphPanel.querySelector('.cp-graph'), r = g.getBoundingClientRect();
+            const dt = new DataTransfer();
+            dt.setData('application/x-imageviewer-history', JSON.stringify({ items: [{ path: null, filename: 'plate.png', subfolder: '', type: 'output', kind: 'image' }] }));
+            g.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true, composed: true,
+                clientX: r.left + r.width / 2, clientY: r.top + r.height / 3 })); }""")
+        pg.wait_for_function(f"() => {ED}.comp().nodes.some((n) => n.type === 'read')", timeout=5000)
+        self.assertEqual(pg.evaluate(f"() => {{ const c = {ED}.comp(); return c.nodes.find((n) => n.id === c.output).inputs; }}"), ["Read1"])
         self.assertEqual(self.errors, [])
 
     def test_the_comp_button_offers_new_and_open(self):

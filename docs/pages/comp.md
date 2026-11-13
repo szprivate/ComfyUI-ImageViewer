@@ -27,16 +27,22 @@ The graph flows from top to bottom: inputs on the top edge of a node, the output
 | View a node | <kbd>1</kbd>, or the eye on its right edge |
 | Disable / delete / frame all | <kbd>D</kbd> / <kbd>Del</kbd> / <kbd>F</kbd> |
 | Grid / snap | <kbd>G</kbd> / <kbd>S</kbd> |
-| Add footage | Drop History thumbnails or file browser rows on the graph |
+| Duplicate the selection | <kbd>Ctrl</kbd>+<kbd>D</kbd>, or hold <kbd>Alt</kbd> and drag a node away |
+| Copy / cut / paste | <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>X</kbd> / <kbd>Ctrl</kbd>+<kbd>V</kbd> (lands under the pointer); <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> also keeps the inputs from nodes that were not copied |
+| Add footage | Drop History thumbnails, file browser rows or files from the desktop on the graph: a Read each |
 | Group the selection / take a group apart | <kbd>Ctrl</kbd>+<kbd>G</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> |
 | Go into a group / back up | Double-click it or <kbd>Ctrl</kbd>+<kbd>Enter</kbd> / <kbd>Ctrl</kbd>+<kbd>Backspace</kbd> or the path at the top |
 | Backdrop round the selection / Dot | <kbd>B</kbd> / <kbd>.</kbd> |
+
+Copies keep the connections and expression links among themselves; groups and backdrops (with what lies on them) are copied whole, an Output never. What was copied can be pasted into another comp or into a group.
 
 The selected nodes' parameters appear in the **Parameters** panel, one section per node, and their handles are drawn over the picture (transform jack, crop box, flare position). **Layers** and the **Curve Editor** sit behind the graph as tabs. The graph can also be shown in ComfyUI's bottom panel (**Comp** tab).
 
 ## Layers
 
 The same graph as a stack of layers on a timeline: each Merge on the main pipe is a layer, its A input the layer's picture. A layer row has the visibility switch, the merge operation and the opacity on the left, and on the right a bar from the layer's first to its last frame. Outside its bar the Merge passes its B input unchanged. A Read's footage is drawn as a dashed band behind the bar.
+
+A Read that is in the graph but not part of the picture yet is listed below the layers; **+ layer** puts it on top. While nothing is wired into the Output, the panel shows the layers that lead to the node you are viewing (or the largest unconnected tree), and **Wire into the Output** connects it.
 
 | Action | Input |
 |---|---|
@@ -98,6 +104,7 @@ Most colour, filter, keying and channel nodes have a **mask** input (the last on
 ## Footage
 
 - A Read takes stills, films, image sequences (`shot.####.exr`, `shot.%04d.exr`) and other comps (`*.comp.json`): a comp read this way is rendered as it stands, so a precomp updates whenever it is saved.
+- A new Read starts empty. **Open** beside its File parameter brings up the system's file dialog when the browser runs on the ComfyUI machine; from another machine it opens the viewer's file browser, which is also what **…** does. Picking one frame of a sequence takes the whole sequence. Files dropped from the desktop are copied into ComfyUI's input folder first.
 - A sequence with holes in it is fine. The Read's **Missing frames** setting picks what a hole shows: black, the nearest frame before it, or an error that stops the render.
 - **Show metadata** on a Read, Write or Metadata node lists what the image carries at the current frame: the file's own header (EXR attributes, film tags), timecode, and anything set further up. A **Metadata** node sets keys (`key = value`, `[frame]` is the frame number) or removes them (`exr/*` patterns work).
 - **Relink footage…** looks for missing files by name under a folder you pick (a sequence by its name around the frame number) and points the Reads at them, as one undo step.

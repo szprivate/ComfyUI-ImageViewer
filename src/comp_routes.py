@@ -709,6 +709,39 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
 
     # ── relinking and localising footage ─────────────────────────────────────
 
+    async def open_dialog(request):
+        """POST {start?} -> {path, name, allowed} | {cancelled: true}: the operating system's Open File dialog,
+        shown ON THE COMFYUI MACHINE, for a Read's file. Only for the page on that machine itself (loopback or
+        the machine's own address, ComfyUI's own Origin, JSON): anyone else gets 403 and the page uses the
+        viewer's own file browser. No program is started (native_dialog.py). 501: no dialog can be shown here.
+        The path is only named; reading it is still path_access's decision (`allowed`)."""
+        ok, why = path_access.same_origin(request)
+        if ok and not path_access._is_local(request):
+            ok, why = False, "The Open dialog comes up on the ComfyUI machine, so only a page on that machine may ask for it."
+        if not ok:
+            return err(why, 403)
+        from . import native_dialog
+        body = await body_of(request)
+        start = abspath(body.get("start")) if body.get("start") else ""
+        if start and not os.path.isdir(start):
+            start = os.path.dirname(start)
+        if start and not path_access.is_allowed(start):
+            start = ""
+        exts = sorted(path_access.MEDIA_EXTS)
+        filters = [("Footage", ";".join("*" + e for e in exts) + ";*.comp.json"), ("All files", "*.*")]
+        try:
+            path = await off(native_dialog.pick_file, start, "Open footage", filters)
+        except native_dialog.Busy as e:
+            return err(e, 409)
+        except native_dialog.Unavailable as e:
+            return err(e, 501)
+        except Exception as e:      # ctypes / tk trouble: the page falls back to its own browser
+            return err(e, 501)
+        if not path:
+            return web.json_response({"cancelled": True})
+        path = os.path.abspath(path)
+        return web.json_response({"path": path, "name": os.path.basename(path), "allowed": bool(path_access.is_allowed(path))})
+
     async def relink(request):
         """POST {path, comp?, folder?} -> {missing: [{id, name, file}], found: {id: new file}}: the Reads whose
         footage is not there, and (with a folder) where files of their names are under it. Nothing is changed:
@@ -1113,6 +1146,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         add("POST", f"{prefix}/comp_ops", ops)
         add("GET", f"{prefix}/comp_summary", summary)
         add("POST", f"{prefix}/comp_relink", relink)
+        add("POST", f"{prefix}/comp_open_dialog", open_dialog)
         add("GET", f"{prefix}/comp_localise", localise)
         add("POST", f"{prefix}/comp_localise", localise)
         add("POST", f"{prefix}/comp_farm", farm)
