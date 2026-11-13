@@ -17,6 +17,8 @@ import {
     referenceSettings, walkSettings, worldInfo, inClearArea, lightSettings, studioLightsOn,
 } from "./imageViewer_worldData.js";
 import { FLY_SPEED, flyDelta, flyWheel, flyStatus } from "./imageViewer_atlasRender.js";
+import { decodePaint, paintAt, paintedSpots } from "./imageViewer_scatterPaint.js";
+import { decodeSculpt, decodeLayerPaint, layerAt, mixLayers } from "./imageViewer_terrainSculpt.js";
 
 // Bloom and tone mapping come from three's post-processing addons, loaded the
 // first time a world asks for bloom (vendor/three, like the rest of three).
@@ -551,6 +553,14 @@ export const WorldViewMixin = {
             heights.set(fbm(n, t.seed, t.roughness));
         }
 
+        // The sculpt brushes' heights, in metres, on top (onto this grid if the segments changed).
+        const base = heights.slice();
+        let sculpt = null;
+        if (t.sculpt && t.height > 0) {
+            sculpt = decodeSculpt(t.sculpt, n);
+            for (let i = 0; i < heights.length; i++) heights[i] += sculpt.cells[i] / t.height;
+        }
+
         const geom = new THREE.PlaneGeometry(t.size[0], t.size[1], seg, seg).rotateX(-Math.PI / 2);
         const pos = geom.attributes.position;
         for (let i = 0; i < pos.count; i++) pos.setY(i, heights[i] * t.height);
@@ -576,6 +586,16 @@ export const WorldViewMixin = {
                 w = [Math.max(0, 1 - rock - cliff - flatPeak), rock, cliff, flatPeak];
             }
             weights.set(w, i * 4);
+        }
+        // The layer brush's paint over what the rules (or the splat picture) say.
+        const ruleWeights = weights.slice();
+        if (t.layerPaint) {
+            const lp = decodeLayerPaint(t.layerPaint), p4 = [0, 0, 0, 0], r4 = [0, 0, 0, 0], o4 = [0, 0, 0, 0];
+            for (let i = 0; i < pos.count; i++) {
+                layerAt(lp, (i % n) / seg, Math.floor(i / n) / seg, p4);
+                for (let k = 0; k < 4; k++) r4[k] = ruleWeights[i * 4 + k];
+                weights.set(mixLayers(r4, p4, o4), i * 4);
+            }
         }
         geom.setAttribute("aSplat", new THREE.BufferAttribute(weights, 4));
 
@@ -668,7 +688,8 @@ export const WorldViewMixin = {
         this._bodyOf(entry).add(mesh);
         entry.object = mesh;
         this._originals.set(mesh, material);
-        entry.terrain = { heights, seg, size: t.size, height: t.height, weights, normals: nrm.array, mesh, uniforms };
+        entry.terrain = { heights, seg, size: t.size, height: t.height, weights, normals: nrm.array, mesh, uniforms,
+                          base, ruleWeights, geom };
         entry.stats = { meshes: 1, vertices: pos.count, triangles: seg * seg * 2 };
     },
 
@@ -877,9 +898,24 @@ export const WorldViewMixin = {
             // rather than leaving one half of the room bare.
             spots.sort((a, b) => Math.hypot(a[0] - 0.5, a[1] - 0.5) - Math.hypot(b[0] - 0.5, b[1] - 0.5));
         }
-        const maxTries = s.grid ? spots.length : s.count * 8;
+        // A painted scatter (imageViewer_scatterPaint.js): `count` spots over the whole
+        // terrain, each kept as thickly as the paint there says, and each with its own
+        // random numbers, so a stroke here leaves what grows over there alone.
+        const painted = s.paint ? decodePaint(s.paint) : null;
+        let picks = null;
+        if (painted && s.grid) {
+            picks = spots.map((spot) => ({ u: spot[0], v: spot[1], keep: r(), r: [r(), r(), r(), r(), r(), r()] }))
+                .filter((spot) => spot.keep < paintAt(painted, spot.u, spot.v));
+        } else if (painted) {
+            picks = paintedSpots(painted, s.count, r);
+        }
+        let draws = null;
+        const rr = () => (draws && draws.length ? draws.shift() : r());
+        const maxTries = picks ? picks.length : (s.grid ? spots.length : s.count * 8);
         for (let tries = 0; matrices.length < s.count && tries < maxTries; tries++) {
-            const [u, v] = s.grid ? spots[tries] : [r() * 0.98 + 0.01, r() * 0.98 + 0.01];
+            let u, v;
+            if (picks) { ({ u, v } = picks[tries]); draws = picks[tries].r.slice(); }
+            else [u, v] = s.grid ? spots[tries] : [r() * 0.98 + 0.01, r() * 0.98 + 0.01];
             if (u < 0.005 || u > 0.995 || v < 0.005 || v > 0.995) continue;
             const gx = Math.round(u * T.seg), gy = Math.round(v * T.seg), vi = gy * n + gx;
             const ny = T.normals[vi * 3 + 1];
@@ -887,7 +923,7 @@ export const WorldViewMixin = {
             if (slope > s.maxSlope) continue;
             if (s.layer >= 0) {
                 const w = T.weights, sum = w[vi * 4] + w[vi * 4 + 1] + w[vi * 4 + 2] + w[vi * 4 + 3] || 1;
-                if (r() > w[vi * 4 + s.layer] / sum) continue;
+                if (rr() > w[vi * 4 + s.layer] / sum) continue;
             }
             p.set((u - 0.5) * T.size[0], 0, (v - 0.5) * T.size[1]);
             // Height by the same bilinear read the walk uses, so nothing floats.
@@ -897,13 +933,13 @@ export const WorldViewMixin = {
                  + (H[(y0 + 1) * n + x0] * (1 - tx) + H[(y0 + 1) * n + x0 + 1] * tx) * ty) * T.height - 0.05 + s.lift;
             world.copy(p).applyMatrix4(tbody.matrixWorld);
             if (inClearArea(s.clear, world.x, world.z)) continue;
-            const size = s.scale[0] + (s.scale[1] - s.scale[0]) * r();
+            const size = s.scale[0] + (s.scale[1] - s.scale[0]) * rr();
             const tilt = s.source.type === "rock" ? 0.4 : (s.source.type === "grass" ? 0.15
                        : (s.source.type === "column" || s.source.type === "lamp" ? 0 : 0.05));
             // Lamps hang in rows, all one way; everything else turns at random.
-            e.set((r() - 0.5) * tilt, s.source.type === "lamp" ? 0 : r() * Math.PI * 2, (r() - 0.5) * tilt);
+            e.set((rr() - 0.5) * tilt, s.source.type === "lamp" ? 0 : rr() * Math.PI * 2, (rr() - 0.5) * tilt);
             q.setFromEuler(e);
-            const vary = s.source.type === "column" ? 1 : 0.85 + r() * 0.3;
+            const vary = s.source.type === "column" ? 1 : 0.85 + rr() * 0.3;
             sc.set(size, size * vary * s.aspect, size);
             m.compose(p, q, sc).premultiply(toScatter);
             matrices.push(m.clone());
@@ -956,7 +992,10 @@ export const WorldViewMixin = {
         this._bodyOf(entry).add(group);
         entry.object = group;
         entry.stats = { meshes: parts.length, instances: matrices.length };
-        if (matrices.length < s.count) {
+        if (painted) {
+            entry.note = `Painted: ${matrices.length} placed. Count is how many would grow where the paint is full, `
+                + "over the whole terrain; paint thicker or raise Count for more.";
+        } else if (matrices.length < s.count) {
             entry.note = `${matrices.length} of ${s.count} placed — the rest had no ground that fits (layer, slope, clearings)`;
         }
     },

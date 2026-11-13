@@ -21,9 +21,6 @@ import {
 // step 5, turns a degree a pixel).
 const WORLD_DRAG_SHARE = 0.2;
 
-const SCATTER_LABELS = { pine: "Pines", tree: "Trees", bush: "Bushes", grass: "Grass", rock: "Rocks",
-                         column: "Columns", lamp: "Lamps", model: "Model…" };
-
 export const PrevizWorldMixin = {
 
     /** Whether this tab's scene is (or has) a world. */
@@ -54,19 +51,17 @@ export const PrevizWorldMixin = {
         return this.previzHasWorld(key) || !!(this.previzAtlasItem && this.previzAtlasItem(key)) || this.previzHasSplat(key);
     },
 
-    /** The Add menu's World section. */
+    /**
+     * Create > World. Terrain and its scatters are the bar's own Terrain menu
+     * (imageViewer_previzTerrain.js); the World kit's Lamp is gone from here, a
+     * light is Create > Light (Sebastian 2026-11-13). Scenes holding a Lamp keep it.
+     */
     _previzWorldMenuEntries() {
-        const entries = [
+        return [
             { label: "World: Environment (sky, sun, fog)", run: () => this.previzAddWorldItem("environment") },
-            { label: "World: Terrain", run: () => this.previzAddWorldItem("terrain") },
+            { label: "World: Depth mesh… (picture + depth map)", run: () => this.previzAddWorldItem("depthmesh") },
+            { label: "World: Reference on camera…", run: () => this.previzSetCameraReference() },
         ];
-        for (const type of SCATTER_TYPES) {
-            entries.push({ label: `World: Scatter ${SCATTER_LABELS[type]}`, run: () => this.previzAddWorldItem("scatter", type) });
-        }
-        entries.push({ label: "World: Lamp", run: () => this.previzAddWorldItem("light") });
-        entries.push({ label: "World: Depth mesh… (picture + depth map)", run: () => this.previzAddWorldItem("depthmesh") });
-        entries.push({ label: "World: Reference on camera…", run: () => this.previzSetCameraReference() });
-        return entries;
     },
 
     /** Create > Light: one row per light type. */
@@ -122,7 +117,12 @@ export const PrevizWorldMixin = {
         } else if (kind === "terrain") {
             item = makeTerrainItem(this._worldId(scene, "terrain"));
         } else if (kind === "scatter") {
-            const terrain = scene.items.find((i) => i.kind === "terrain");
+            // On the selected terrain (or the selected scatter's), else the scene's first.
+            const sel = S.itemById(scene, this._previzSelection);
+            const selGround = sel && (sel.kind === "terrain" ? sel
+                : sel.kind === "scatter" ? S.itemById(scene, sel.scatter && sel.scatter.target) : null);
+            const terrain = selGround && selGround.kind === "terrain" ? selGround
+                : scene.items.find((i) => i.kind === "terrain");
             if (!terrain) { this._worldStatus("Add a terrain first — a scatter grows on one."); return null; }
             item = makeScatterItem(this._worldId(scene, `scatter_${type}`), type, terrain.id);
             if (type === "model") {
@@ -130,7 +130,7 @@ export const PrevizWorldMixin = {
                     .filter((f) => f && f.kind === "model");
                 if (!picked.length) {
                     if (this.setPanelDocked) this.setPanelDocked("browser", true);
-                    this._worldStatus("Pick a model in the File Browser, then choose Scatter Model… again.");
+                    this._worldStatus("Pick a model in the File Browser, then choose Terrain > Scattering > Model… again.");
                     return null;
                 }
                 item.scatter.source.src = { path: picked[0].path, name: picked[0].name, external: true };
