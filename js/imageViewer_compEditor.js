@@ -267,6 +267,7 @@ export function createCompEditor(host, opts = {}) {
         layerSel: null, draw: null, pick: null, ocio: null, display: "",
         grid: loadGrid(),
         held: null,                 // "a" (lay out) / "y" (cut wires) while that key is held over the graph
+        heldCode: "",               // the physical key it went down on (e.code), matched at the keyup
         batch: new Map(), batchN: 0, // when each selected node joined the selection (one box = one batch)
         eye: null,                  // the view the picture is made in (a comp with views)
         lt: { zoom: 1, open: new Set() }, // the Layers timeline: its zoom, the layers unfolded (by Merge id, or "bg")
@@ -1856,7 +1857,7 @@ export function createCompEditor(host, opts = {}) {
         else if (ctrl && e.shiftKey && k.toLowerCase() === "s") saveAs();
         else if (ctrl && k.toLowerCase() === "s") save();
         else if (ctrl && k.toLowerCase() === "o" && o.open) o.open();
-        else if (!ctrl && !e.altKey && (k.toLowerCase() === "a" || k.toLowerCase() === "y") && part === graph) st.held = k.toLowerCase();
+        else if (!ctrl && !e.altKey && (k.toLowerCase() === "a" || k.toLowerCase() === "y") && part === graph) hold(k.toLowerCase(), e.code);
         else if (ctrl && !e.altKey && k.toLowerCase() === "d" && part === graph) duplicateSel();
         else if (ctrl && !e.altKey && !e.shiftKey && k.toLowerCase() === "c" && part === graph) copySel();
         else if (ctrl && !e.altKey && !e.shiftKey && k.toLowerCase() === "x" && part === graph) cutSel();
@@ -1884,10 +1885,43 @@ export function createCompEditor(host, opts = {}) {
         return used;
     }
     for (const part of [graph, layers, props, root]) part.addEventListener("keydown", keyDown);
-    // The gesture keys are let go: a keyup anywhere (a held key's up comes where the focus is), or the window's blur.
-    const letGo = (e) => { if (!e || !e.key || ["a", "y"].includes(e.key.toLowerCase())) st.held = null; };
+    // A and Y are momentary: on while the key is down, off at its keyup. The keyup is listened for on the WINDOW the
+    // graph is in now (popped out it is another one), in the capture phase, so it is seen wherever the focus went
+    // meanwhile and before anything else can stop it. The key is matched by its letter AND by the physical key it
+    // went down on (`code`: a QWERTZ keyboard's Y is KeyZ), so a Shift or a layout switch while held cannot strand
+    // it. Losing the window (Alt+Tab, a dialog) or the page being hidden lets go too: no keyup comes then.
+    let heldWin = null;
+    function letGo(e) {
+        if (!st.held) return unhook();
+        if (e && e.type === "keyup") {
+            const key = (e.key || "").toLowerCase();
+            if (key !== st.held && !(st.heldCode && e.code === st.heldCode)) return;
+        }
+        st.held = null; st.heldCode = "";
+        unhook();
+    }
+    const onHidden = () => { const d = heldWin && heldWin.document; if (d && d.visibilityState === "hidden") letGo(); };
+    function unhook() {
+        if (!heldWin) return;
+        heldWin.removeEventListener("keyup", letGo, true);
+        heldWin.removeEventListener("blur", letGo);
+        heldWin.document.removeEventListener("visibilitychange", onHidden);
+        heldWin = null;
+    }
+    function hold(key, code) {
+        st.held = key; st.heldCode = code || "";
+        const w = win();
+        if (heldWin === w) return;
+        unhook();
+        heldWin = w;
+        w.addEventListener("keyup", letGo, true);
+        w.addEventListener("blur", letGo);
+        w.document.addEventListener("visibilitychange", onHidden);
+    }
+    // The root's own keyup as well: it comes first when the focus is in it (and a window listener is a step behind
+    // when the graph has just been moved into another window).
     root.addEventListener("keyup", letGo, true);
-    graph.addEventListener("blur", () => { if (!graph.onpointermove) st.held = null; });
+    graph.addEventListener("blur", () => { if (!graph.onpointermove) letGo(); });
 
     // ── drops: History thumbnails / file-browser rows become Reads ───────────
     const DROP = "application/x-imageviewer-history";
@@ -3151,6 +3185,6 @@ export function createCompEditor(host, opts = {}) {
         undo, redo, save,
         lastRender: () => ({ ms: lastMs, scale: lastScale, width: canvas.width, height: canvas.height }),
         canvas,
-        dispose() { if (ro) ro.disconnect(); closeMenus(); infos.clear(); },
+        dispose() { if (ro) ro.disconnect(); closeMenus(); infos.clear(); letGo(); },
     };
 }

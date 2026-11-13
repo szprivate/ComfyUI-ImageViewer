@@ -790,6 +790,51 @@ class CompBrowserTests(unittest.TestCase):
         self.assertIsNone(pg.evaluate(f"() => {ED}.node('{a}').inputs[0]"))
         self.assertEqual(self.errors, [])
 
+    def test_a_and_y_are_on_only_while_held(self):
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        g = pg.locator(".cp-graph").first
+        g.click(position={"x": 5, "y": 5})
+        held = lambda: pg.evaluate(f"() => {ED}.state.held")
+        pg.keyboard.down("a")
+        self.assertEqual(held(), "a")
+        pg.keyboard.up("a")
+        self.assertIsNone(held(), "off at the keyup")
+        # The focus left the comp while the key was down: its keyup still lets go.
+        pg.keyboard.down("y")
+        self.assertEqual(held(), "y")
+        pg.evaluate("() => { const b = document.createElement('button'); b.id = 'elsewhere'; document.body.append(b); b.focus(); }")
+        pg.keyboard.up("y")
+        self.assertIsNone(held(), "keyup outside the comp")
+        # Leaving the window (no keyup ever comes) lets go.
+        g.click(position={"x": 5, "y": 5})
+        pg.keyboard.down("a")
+        pg.evaluate("() => window.dispatchEvent(new Event('blur'))")
+        self.assertIsNone(held(), "window blur")
+        pg.keyboard.up("a")
+        # A keyup someone else stops in the capture phase of the document still reaches the window's listener.
+        g.click(position={"x": 5, "y": 5})
+        pg.evaluate("() => document.addEventListener('keyup', window.__stopUp = (e) => e.stopPropagation(), true)")
+        pg.keyboard.down("y")
+        pg.keyboard.up("y")
+        pg.evaluate("() => document.removeEventListener('keyup', window.__stopUp, true)")
+        self.assertIsNone(held(), "keyup stopped below the window")
+        # Matched by the physical key too: a layout switch while held gives another letter at the keyup.
+        g.click(position={"x": 5, "y": 5})
+        pg.keyboard.down("y")
+        pg.evaluate("() => window.dispatchEvent(new KeyboardEvent('keyup', { key: 'z', code: 'KeyY' }))")
+        self.assertIsNone(held(), "same code, other letter")
+        pg.keyboard.up("y")
+        # Another key's keyup leaves it on.
+        g.click(position={"x": 5, "y": 5})
+        pg.keyboard.down("a")
+        pg.keyboard.press("Shift")
+        self.assertEqual(held(), "a")
+        pg.keyboard.up("a")
+        self.assertIsNone(held())
+        self.assertEqual(self.errors, [])
+
     def test_export_to_nuke_from_the_bar(self):
         pg = self.page()
         self.new_comp(pg)
