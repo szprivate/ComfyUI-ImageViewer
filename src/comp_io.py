@@ -300,6 +300,7 @@ class Sources:
         self.infos = {}
         self.videos = {}
         self.stills = {}
+        self.deeps = {}
         self.numbers = {}
         self.precomps = {}
         self.stack = tuple(_stack) + ((os.path.abspath(comp_path),) if comp_path else ())
@@ -412,6 +413,29 @@ class Sources:
             self.stills[key] = img
         return img
 
+    def deep(self, node, frame):
+        """A DeepRead's deep picture at comp frame ``frame`` (comp_deep's form, the file's own size) or None."""
+        path, info = self.info(node)
+        kind = info.get("kind")
+        if kind not in ("still", "sequence"):
+            return None
+        n = M.source_frame(node, info, frame)
+        file = frame_path(path, n) if kind == "sequence" else path
+        if file in self.deeps:
+            return self.deeps[file]
+        if not os.path.isfile(file):
+            return None
+        from . import comp_deep
+        try:
+            d = comp_deep.read_deep(file)
+        except (ValueError, OSError, RuntimeError) as e:
+            self.notes.append(f"{os.path.basename(file)}: {e}")
+            d = None
+        if len(self.deeps) > 8:
+            self.deeps.pop(next(iter(self.deeps)))
+        self.deeps[file] = d
+        return d
+
     def close(self):
         for v in self.videos.values():
             v.close()
@@ -466,19 +490,54 @@ def display_encoder(display=None, view=None):
     return lambda rgb: comp_ocio.apply_rgb(rgb, spec)
 
 
-def render_frames(comp, frames=None, sources=None, scale=1.0):
-    """Yield ``(frame, picture)`` for the comp's Output at each frame (all of them by default)."""
+def render_frames(comp, frames=None, sources=None, scale=1.0, view=None, close=True):
+    """Yield ``(frame, picture)`` for the comp's Output at each frame (all of them by default), in ``view``
+    (None: the comp's first, if it has views)."""
     comp, _ = M.normalize(comp)
     if not comp["output"]:
         raise ValueError("the comp has no Output node")
     frames = list(range(comp["format"]["frames"])) if frames is None else list(frames)
     hook = ocio_hook(getattr(sources, "comp_path", None), getattr(sources, "allow_lut", None))
+    deep = getattr(sources, "deep", None)
     try:
         for f in frames:
-            yield f, M.render_node(comp, comp["output"], f, sources, scale, ocio=hook)
+            yield f, M.render_node(comp, comp["output"], f, sources, scale, ocio=hook, view=view, deep_source=deep)
     finally:
-        if sources is not None:
+        if sources is not None and close:
             sources.close()
+
+
+# ── cameras from files ───────────────────────────────────────────────────────
+
+CAMERA_EXTS = (".chan",)
+
+
+def parse_camera_text(text, limit=100000):
+    """A camera text file: one line a frame, ``frame tx ty tz rx ry rz [vertical fov]`` (degrees; # comments).
+    ``[{"f", "t": [x, y, z], "r": [x, y, z], "vfov"?}]`` sorted by frame; ValueError when no line reads."""
+    out = []
+    for line in str(text).splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.replace(",", " ").split()
+        if len(parts) < 7:
+            continue
+        try:
+            nums = [float(x) for x in parts[:8]]
+        except ValueError:
+            continue
+        if not all(np.isfinite(nums)):
+            continue
+        k = {"f": int(round(nums[0])), "t": nums[1:4], "r": nums[4:7]}
+        if len(nums) > 7 and 0 < nums[7] < 180:
+            k["vfov"] = nums[7]
+        out.append(k)
+        if len(out) >= limit:
+            break
+    if not out:
+        raise ValueError("no camera lines (frame tx ty tz rx ry rz [vertical fov]) in the file")
+    return sorted(out, key=lambda k: k["f"])
 
 
 # ── a source for the page's preview ──────────────────────────────────────────

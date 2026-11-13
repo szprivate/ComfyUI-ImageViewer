@@ -17,6 +17,28 @@ import re
 
 import numpy as np
 
+
+def _sibling(name):
+    """A module beside this one, whether this one was imported as part of the package or loaded from its file."""
+    try:
+        import importlib
+        return importlib.import_module(f"{__package__}.{name}") if __package__ else importlib.import_module(name)
+    except ImportError:
+        import importlib.util
+        import os
+        import sys
+        key = f"_comp_sibling_{name}"
+        if key in sys.modules:
+            return sys.modules[key]
+        spec = importlib.util.spec_from_file_location(key, os.path.join(os.path.dirname(os.path.abspath(__file__)), f"{name}.py"))
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[key] = mod
+        spec.loader.exec_module(mod)
+        return mod
+
+
+G3 = _sibling("comp_3d")
+DP = _sibling("comp_deep")
 try:
     from . import comp_paint as PT
 except ImportError:   # loaded on its own (the tests): the twin beside it
@@ -92,6 +114,8 @@ CM_OPS = ["union", "plus", "minus", "from", "multiply", "divide", "in", "out", "
 GLOW_SOURCES = ["luminance", "max"]
 REFORMAT_TYPES = ["to format", "scale"]
 REFORMAT_RESIZE = ["none", "fit", "fill", "width", "height", "distort"]
+VIEW_ANAGLYPH = ["colour", "grey"]
+VIEW_LAYOUTS = ["side by side", "over under"]
 GHOST_SHAPES = ["disc", "polygon"]
 MISSING_FRAMES = ["black", "hold", "error"]
 WRITE_FORMATS = ["exr", "png", "tiff", "jpg", "mov", "mp4", "webm"]
@@ -360,6 +384,71 @@ NODE_TYPES = {
         "seed": {"kind": "int", "def": 1},
         "write": {"kind": "target", "def": "rgba"},
     }},
+    "camera3d": {"inputs": [], "params": {
+        "translate": {"kind": "vec3", "def": [0, 0, 2], "key": True},
+        "rotate": {"kind": "vec3", "def": [0, 0, 0], "key": True},
+        "focal": {"kind": "num", "def": 35, "min": 1, "max": 2000, "key": True},
+        "haperture": {"kind": "num", "def": 36, "min": 0.1, "max": 200, "key": True},
+        "near": {"kind": "num", "def": 0.01, "min": 0.0001},
+        "far": {"kind": "num", "def": 100000, "min": 0.001},
+        "interaxial": {"kind": "num", "def": 0.065, "min": 0, "key": True},
+        "convergence": {"kind": "num", "def": 3, "min": 0.001, "key": True},
+    }},
+    "card3d": {"inputs": ["img"], "params": {
+        "translate": {"kind": "vec3", "def": [0, 0, 0], "key": True},
+        "rotate": {"kind": "vec3", "def": [0, 0, 0], "key": True},
+        "scale": {"kind": "vec3", "def": [1, 1, 1], "key": True},
+        "uniform": {"kind": "num", "def": 1, "min": 0, "key": True},
+    }},
+    "geo3d": {"inputs": ["img"], "params": {
+        "shape": {"kind": "enum", "def": "cube", "choices": G3.SHAPES},
+        "divisions": {"kind": "int", "def": 24, "min": 3, "max": 128},
+        "translate": {"kind": "vec3", "def": [0, 0, 0], "key": True},
+        "rotate": {"kind": "vec3", "def": [0, 0, 0], "key": True},
+        "scale": {"kind": "vec3", "def": [1, 1, 1], "key": True},
+        "uniform": {"kind": "num", "def": 1, "min": 0, "key": True},
+    }},
+    "project3d": {"inputs": ["img", "camera"], "params": {
+        "faces": {"kind": "enum", "def": "both", "choices": G3.PROJECT_FACES},
+    }},
+    "scene3d": {"inputs": ["1", "2", "3", "4"], "params": {}},
+    "pointcloud": {"inputs": ["img", "camera"], "params": {
+        "channel": {"kind": "chan", "def": "depth.z"},
+        "mode": {"kind": "enum", "def": "distance", "choices": G3.DEPTH_MODES},
+        "multiply": {"kind": "num", "def": 1, "min": 0, "key": True},
+        "step": {"kind": "int", "def": 2, "min": 1, "max": 64},
+        "size": {"kind": "num", "def": 2, "min": 0.1, "max": 64, "key": True},
+    }},
+    "render3d": {"inputs": ["scene", "camera", "bg"], "params": {
+        "samples": {"kind": "int", "def": 2, "min": 1, "max": 4},
+        "depth": {"kind": "enum", "def": "depth.z", "choices": G3.DEPTH_OUT},
+    }},
+    "deepread": {"inputs": [], "params": {
+        "file": {"kind": "file", "def": ""},
+        "offset": {"kind": "int", "def": 0},
+    }},
+    "deepfromimage": {"inputs": ["img"], "params": {
+        "channel": {"kind": "chan", "def": "depth.z"},
+        "z": {"kind": "num", "def": 1, "min": 0, "key": True},
+    }},
+    "deepmerge": {"inputs": ["1", "2", "3", "4"], "params": {}},
+    "deepholdout": {"inputs": ["src", "holdout"], "params": {}},
+    "deepcrop": {"inputs": ["deep"], "params": {
+        "znear": {"kind": "num", "def": 0, "min": 0, "key": True},
+        "zfar": {"kind": "num", "def": 0, "min": 0, "key": True},
+        "outside": {"kind": "enum", "def": "off", "choices": ["off", "on"]},
+    }},
+    "deepflatten": {"inputs": ["deep"], "params": {}},
+    "oneview": {"inputs": ["src"], "params": {
+        "view": {"kind": "view", "def": ""},
+    }},
+    "joinviews": {"inputs": ["v1", "v2", "v3", "v4"], "params": {}},
+    "anaglyph": {"inputs": ["src"], "params": {
+        "mode": {"kind": "enum", "def": "colour", "choices": VIEW_ANAGLYPH},
+    }},
+    "sidebyside": {"inputs": ["src"], "params": {
+        "layout": {"kind": "enum", "def": "side by side", "choices": VIEW_LAYOUTS},
+    }},
     "write": {"inputs": ["src"], "params": {
         "file": {"kind": "outfile", "def": ""},
         "file_type": {"kind": "enum", "def": "exr", "choices": WRITE_FORMATS},
@@ -503,7 +592,69 @@ def normalize(raw):
     if not out or out.get("type") != "output":
         first = next((n for n in comp["nodes"] if n["type"] == "output"), None)
         comp["output"] = first["id"] if first else None
+    views = clean_views(f.get("views"))
+    if views:
+        comp["format"]["views"] = views
     return comp, errors
+
+
+# ── views (stereo, multi-view): the page's cleanViews / viewFile / viewNode / eyeOffset ─────────────────────
+
+_VIEW_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,31}$")
+
+
+def clean_views(v):
+    if not isinstance(v, list):
+        return []
+    out = []
+    for x in v:
+        if isinstance(x, str) and _VIEW_NAME.match(x) and x not in out and len(out) < 16:
+            out.append(x)
+    return out if len(out) >= 2 else []
+
+
+def views_of(comp):
+    v = (comp or {}).get("format", {}).get("views")
+    return v if isinstance(v, list) else []
+
+
+def first_view(comp):
+    v = views_of(comp)
+    return v[0] if v else None
+
+
+def view_file(file, view):
+    if not isinstance(file, str) or not view:
+        return file
+    return file.replace("%V", view).replace("%v", view[0])
+
+
+def view_node(n, view):
+    """A node as it is in ``view``: its ``split`` settings over it and a Read's %V named (the node itself otherwise)."""
+    if not n or not view:
+        return n
+    sp = n.get("split", {}).get(view) if isinstance(n.get("split"), dict) else None
+    sp = sp if isinstance(sp, dict) else None
+    f = n.get("file")
+    file = view_file(f, view) if isinstance(f, str) and re.search(r"%[Vv]", f) else None
+    if not sp and file is None:
+        return n
+    out = dict(n)
+    for k, v in (sp or {}).items():
+        if k not in ("id", "type", "inputs"):
+            out[k] = v
+    if file is not None:
+        out["file"] = file
+        out["__view"] = view
+    return out
+
+
+def eye_offset(comp, view, interaxial):
+    vs = views_of(comp)
+    i = vs.index(view) if view in vs else -1
+    if len(vs) < 2 or i < 0:
+        return 0
+    return (i - (len(vs) - 1) / 2) * interaxial
 
 
 def _reaches(comp, start, target):
@@ -808,6 +959,11 @@ def reformat_layout(node, frame, in_fmt, scale=1.0):
     return m, max(1, _round_js(bw * scale)), max(1, _round_js(bh * scale))
 
 
+GEO3D = {"camera3d", "card3d", "geo3d", "project3d", "scene3d", "pointcloud"}
+DEEP = {"deepread", "deepfromimage", "deepmerge", "deepholdout", "deepcrop", "deepflatten", "render3d"}
+_PLAIN_SIZE = (GEO3D | DEEP) - {"project3d"}
+
+
 def format_at(comp, nid, depth=0):
     """The size of the picture node ``nid`` makes, in pixels of the comp (the page's ``formatAt``)."""
     F = {"width": comp["format"]["width"], "height": comp["format"]["height"]}
@@ -818,13 +974,16 @@ def format_at(comp, nid, depth=0):
 
     def up():
         return format_at(comp, ins[0], depth + 1) if NODE_TYPES[n["type"]]["inputs"] and ins and ins[0] else F
+    if not n.get("disable") and n["type"] == "sidebyside":
+        u = up()
+        return {"width": u["width"], "height": u["height"] * 2} if n.get("layout") == "over under" else {"width": u["width"] * 2, "height": u["height"]}
     if not n.get("disable") and n["type"] == "stmap" and len(ins) > 1 and ins[1]:
         return format_at(comp, ins[1], depth + 1)
     if not n.get("disable") and n["type"] == "ai_upscale":
         u, k = up(), _X.upscale_factor(n)
         return {"width": max(1, int(math.floor(u["width"] * k + 0.5))), "height": max(1, int(math.floor(u["height"] * k + 0.5)))}
     if n.get("disable") or n["type"] != "reformat":
-        return F if n["type"] in ("read", "constant") else up()
+        return F if n["type"] in ("read", "constant") or n["type"] in _PLAIN_SIZE else up()
     w, h = reformat_size(n, 0, up())
     return {"width": w, "height": h}
 
@@ -2090,14 +2249,17 @@ def mask_mix(src, sex, img, ex, m, mix, invert):
     return out, oex
 
 
-def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, channels=False):
+def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, channels=False, view=None,
+                deep_source=None):
     """The picture node ``nid`` makes at ``frame``; ``source(node, frame)`` gives a Read's pixels (a picture at
-    their own size) or None. The page's ``renderNode``: nodes that look at other times render their input
-    at those frames."""
+    their own size) or None, ``deep_source(node, frame)`` a DeepRead's deep picture (comp_deep) or None. The page's
+    ``renderNode``: nodes that look at other times render their input at those frames; ``view`` is the view made
+    (None: the comp's first, if it has views)."""
     fmt = comp["format"]
     W = max(1, int(math.floor(fmt["width"] * scale + 0.5)))
     H = max(1, int(math.floor(fmt["height"] * scale + 0.5)))
     memo = {} if memo is None else memo
+    view = view or first_view(comp)
 
     def ex_of(i, f):
         return memo.get(("x", i, f)) or {} if i else {}
@@ -2107,7 +2269,7 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             return blank(W, H)
         if (i, f) in memo:
             return memo[(i, f)]
-        n = node_by_id(comp, i)
+        n = view_node(node_by_id(comp, i), view)
         img = make(n, f, depth + 1)
         if isinstance(img, tuple):
             img, ex = img
@@ -2163,6 +2325,104 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
     def in_fmt(n, k=0):
         ins = n.get("inputs") or []
         return format_at(comp, ins[k] if len(ins) > k else None)
+
+    # ── views ──
+    def in_view(i, f, v):
+        if (v or None) == (view or None):
+            return run(i, f, 0), ex_of(i, f)
+        vm = memo.setdefault(("views",), {})
+        sub = vm.setdefault(v, {})
+        return render_node(comp, i, f, source, scale, sub, ocio, True, v, deep_source)
+
+    def views2():
+        vs = views_of(comp)
+        return (vs[0], vs[1]) if vs else (None, None)
+
+    # ── 3D ──
+    def P3(n, f):
+        return {k: param_at(n, k, f) for k in NODE_TYPES[n["type"]]["params"]}
+
+    def cam_node(cid):
+        c = view_node(node_by_id(comp, cid), view) if cid else None
+        return c if c and not c.get("disable") and c.get("type") == "camera3d" else None
+
+    def camera_of(cid, f, w, h, stereo):
+        c = cam_node(cid)
+        p = P3(c, f) if c else {k: copy.deepcopy(d["def"]) for k, d in NODE_TYPES["camera3d"]["params"].items()}
+        return G3.camera_at(p, eye_offset(comp, view, p["interaxial"]) if stereo else 0, w, h)
+
+    def placed(n, f):
+        p = P3(n, f)
+        u = p["uniform"]
+        return G3.trs(p["translate"], p["rotate"], [p["scale"][0] * u, p["scale"][1] * u, p["scale"][2] * u])
+
+    def scene_of(i, f, depth):
+        n = view_node(node_by_id(comp, i), view) if i and depth < 256 else None
+        if not n or n.get("disable"):
+            return []
+        t = n["type"]
+        ins = n.get("inputs") or []
+        if t == "scene3d":
+            return [o for s_ in ins for o in scene_of(s_, f, depth + 1)]
+        if t in ("card3d", "geo3d"):
+            if t == "card3d":
+                F = in_fmt(n)
+                mesh = G3.card_mesh(F["height"] / F["width"])
+            else:
+                mesh = G3.shape_mesh(param_at(n, "shape", f), param_at(n, "divisions", f))
+            ob = dict(G3.place_mesh(mesh, placed(n, f)), kind="mesh", tex=None, proj=None, faces="both")
+            src = view_node(node_by_id(comp, ins[0]), view) if ins and ins[0] else None
+            if src and not src.get("disable") and src.get("type") == "project3d":
+                si = src.get("inputs") or [None, None]
+                img = run(si[0], f, depth + 1)
+                ob["proj"] = {"img": img, "cam": camera_of(si[1], f, img.shape[1], img.shape[0], False)}
+                ob["faces"] = param_at(src, "faces", f)
+            elif ins and ins[0]:
+                ob["tex"] = run(ins[0], f, depth + 1)
+            return [ob]
+        if t == "pointcloud":
+            if not ins[0]:
+                return []
+            img = run(ins[0], f, depth + 1)
+            dch = channel_of(img, ex_of(ins[0], f), param_at(n, "channel", f) or "depth.z")
+            pos, col = G3.points_from_depth(img, dch, camera_of(ins[1], f, img.shape[1], img.shape[0], False),
+                                            param_at(n, "mode", f), param_at(n, "multiply", f),
+                                            max(1, _round_js(param_at(n, "step", f) * scale)))
+            return [{"kind": "points", "pos": pos.reshape(-1), "col": col.reshape(-1), "size": param_at(n, "size", f) * scale}]
+        return []
+
+    def render3d(n, f, d1):
+        ins = n["inputs"]
+        img, dep, deep = G3.render_scene(scene_of(ins[0], f, d1), camera_of(ins[1], f, W, H, True), W, H, param_at(n, "samples", f))
+        memo[("d", n["id"], f)] = deep
+        ex = {}
+        if ins[2]:
+            raw = run(ins[2], f, d1)
+            img = merge_images(conform(raw, W, H), img, None, "over", 1)
+            ex = dict(_conform_extras(ex_of(ins[2], f), W, H))
+        if (n.get("depth") or "depth.z") != "none":
+            ex["depth.z"] = dep
+        return img, ex
+
+    # ── deep ──
+    def deep_of(i, f, d1):
+        n = view_node(node_by_id(comp, i), view) if i else None
+        if not n:
+            return DP.empty(W, H)
+        if n.get("disable") and n["type"] in DEEP:
+            ins = n.get("inputs") or []
+            return deep_of(ins[0], f, d1 + 1) if ins and ins[0] else DP.empty(W, H)
+        img = run(i, f, d1)
+        own = memo.get(("d", i, f)) if not n.get("disable") and n["type"] in DEEP and n["type"] != "deepflatten" else None
+        if own is not None:
+            return own
+        c = conform(img, W, H)
+        return DP.deep_from_image(c, channel_of(img, ex_of(i, f), "depth.z") if c is img else None, 1)
+
+    def deep_out(n, f, d):
+        memo[("d", n["id"], f)] = d
+        img, dep = DP.deep_flatten(d)
+        return img, {"depth.z": dep}
 
     def make(n, f, d1):
         if not n:
@@ -2320,6 +2580,53 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             p = P(n, f, NODE_TYPES["depthblur"]["params"])
             p["size"] = p["size"] * scale
             return depth_blur_image(src, conform(run(ins[1], f, d1), src.shape[1], src.shape[0]), p)
+        if t in ("camera3d", "card3d", "geo3d", "scene3d", "pointcloud"):
+            if t == "camera3d":
+                return blank(W, H), {}
+            cam = next((c for c in comp["nodes"] if c["type"] == "camera3d" and not c.get("disable")), None)
+            img, _, _ = G3.render_scene(scene_of(n["id"], f, d1), camera_of(cam["id"] if cam else None, f, W, H, True), W, H, 1)
+            return img, {}
+        if t == "project3d":
+            return run(ins[0], f, d1), ex_of(ins[0], f)
+        if t == "render3d":
+            return render3d(n, f, d1)
+        if t == "deepread":
+            src = deep_source(n, f) if deep_source else None
+            return deep_out(n, f, DP.deep_place(src, fmt["width"], fmt["height"], scale) if src is not None else DP.empty(W, H))
+        if t == "deepfromimage":
+            if ins[0]:
+                raw = run(ins[0], f, d1)
+                img = conform(raw, W, H)
+                dch = channel_of(raw, ex_of(ins[0], f), param_at(n, "channel", f) or "depth.z") if img is raw else None
+            else:
+                img, dch = blank(W, H), None
+            return deep_out(n, f, DP.deep_from_image(img, dch, param_at(n, "z", f)))
+        if t == "deepmerge":
+            got = [s_ for s_ in ins if s_]
+            return deep_out(n, f, DP.deep_merge([deep_of(s_, f, d1) for s_ in got]) if got else DP.empty(W, H))
+        if t == "deepholdout":
+            src = deep_of(ins[0], f, d1)
+            return deep_out(n, f, DP.deep_holdout(src, deep_of(ins[1], f, d1)) if ins[1] else src)
+        if t == "deepcrop":
+            return deep_out(n, f, DP.deep_crop(deep_of(ins[0], f, d1), param_at(n, "znear", f), param_at(n, "zfar", f), n.get("outside") == "on"))
+        if t == "deepflatten":
+            img, dep = DP.deep_flatten(deep_of(ins[0], f, d1))
+            return img, {"depth.z": dep}
+        if t == "oneview":
+            v = param_at(n, "view", f) or first_view(comp)
+            return in_view(ins[0], f, v) if v in views_of(comp) else (run(ins[0], f, d1), ex_of(ins[0], f))
+        if t == "joinviews":
+            vs = views_of(comp)
+            k = max(0, vs.index(view) if view in vs else -1)
+            s0 = ins[min(k, 3)] or ins[0]
+            return run(s0, f, d1), ex_of(s0, f)
+        if t in ("anaglyph", "sidebyside"):
+            vl, vr = views2()
+            L = in_view(ins[0], f, vl)[0]
+            R = conform(in_view(ins[0], f, vr)[0], L.shape[1], L.shape[0])
+            if t == "anaglyph":
+                return anaglyph_image(L, R, n.get("mode") or "colour"), {}
+            return side_by_side(L, R, n.get("layout") == "over under"), {}
         if t == "cornerpin":
             frm, to = WP.pin_corners(lambda p: param_at(n, p, f), in_fmt(n))
             inv = WP.homography(frm, to) if n.get("invert") == "on" else WP.homography(to, frm)
@@ -2385,6 +2692,21 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
     return (img, ex_of(nid, frame)) if channels else img
 
 
+def anaglyph_image(L, R, mode):
+    a, b = L.astype(np.float64), R.astype(np.float64)
+    out = np.empty_like(a)
+    if mode == "grey":
+        yl = 0.2126 * a[..., 0] + 0.7152 * a[..., 1] + 0.0722 * a[..., 2]
+        yr = 0.2126 * b[..., 0] + 0.7152 * b[..., 1] + 0.0722 * b[..., 2]
+        out[..., 0], out[..., 1], out[..., 2] = yl, yr, yr
+    else:
+        out[..., 0], out[..., 1], out[..., 2] = a[..., 0], b[..., 1], b[..., 2]
+    out[..., 3] = np.maximum(a[..., 3], b[..., 3])
+    return out.astype(np.float32)
+
+
+def side_by_side(L, R, over):
+    return np.concatenate([L, R], axis=0 if over else 1).astype(np.float32)
 def grid_points(n, f, fmt):
     """The page's ``gridPoints``: the source grid and the destination as far as ``distortion`` takes it."""
     cols = max(2, min(16, int(math.floor((n.get("cols") or 5) + 0.5))))

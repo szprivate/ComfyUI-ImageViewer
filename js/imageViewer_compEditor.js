@@ -24,6 +24,7 @@
 //   relink(), localise(), farm()   the Save menu's pipeline dialogs (the panel's)
 //   notify(text, severity)
 import * as C from "./imageViewer_compModel.js";
+import * as CI from "./imageViewer_compCamImport.js";
 import * as O from "./imageViewer_compOps.js";
 import * as CK from "./imageViewer_compColor.js";
 import * as Mo from "./imageViewer_mgModel.js";
@@ -87,6 +88,7 @@ const CSS = `
 .cp-dlg-shade{position:absolute;inset:0;z-index:50;background:#0008;display:flex;align-items:center;justify-content:center}
 .cp-dlg{background:#26262c;border:1px solid #44444c;border-radius:4px;padding:12px 14px;min-width:380px;max-width:92%;box-shadow:0 8px 28px #000a;color:#d8d8dc;font:12px/1.35 system-ui,Segoe UI,sans-serif}
 .cp-dlg h3{margin:0 0 10px;font-size:13px}
+.mg-prop input.cp-vec3{width:52px;min-width:0}
 .cp-dlg .cp-field{display:flex;align-items:center;gap:6px;margin:6px 0}
 .cp-dlg .cp-field label{width:56px;color:#9a9aa2}
 .cp-dlg input{flex:1;background:#141418;border:1px solid #44444c;color:#fff;font:inherit;padding:3px 5px}
@@ -169,7 +171,8 @@ input.cp-newch{flex:1;min-width:0}
 .cp-ccluma{width:100%;height:70px;background:rgba(0,0,0,.25);border-radius:3px}
 `;
 const CAT_COLOR = { Image: "#9aa6b8", Merge: "#6f9fe0", Transform: "#b39ddb", Color: "#86c98a", Filter: "#e0a060", Other: "#c8c8c8",
-    Channel: "#9b8a6a", Time: "#d98fb0", Keyer: "#5fc4b8", Draw: "#d6c86a" };
+    Channel: "#9b8a6a", Time: "#d98fb0", Keyer: "#5fc4b8", Draw: "#d6c86a",
+    "3D": "#7fb3d5", Deep: "#8c7fd5", Views: "#d5a07f" };
 const KIND_ICON = { layer: "▣", background: "▤", group: "⧉" };
 
 const el = (doc, tag, cls, text) => {
@@ -217,6 +220,7 @@ export function createCompEditor(host, opts = {}) {
         grid: loadGrid(),
         held: null,                 // "a" (lay out) / "y" (cut wires) while that key is held over the graph
         batch: new Map(), batchN: 0, // when each selected node joined the selection (one box = one batch)
+        eye: null,                  // the view the picture is made in (a comp with views)
         lt: { zoom: 1, open: new Set() }, // the Layers timeline: its zoom, the layers unfolded (by Merge id, or "bg")
         lkeys: [],                  // the keys picked in the Layers timeline: [{id, prop, f}]
     };
@@ -278,11 +282,12 @@ export function createCompEditor(host, opts = {}) {
      * `aheadOnly`: keep only this picture (rendering ahead).
      */
     function picture(id, f, scale, pics, roi, aheadOnly) {
-        const ctx = { scale, source: (n, nf) => pics.get(`${n.id}@${nf}`) || null, cache: heavy, matte, ocio: lutOf,
+        const ctx = { ...sourcesCtx(pics), scale, cache: heavy, matte, ocio: lutOf,
             cacheBytes: CACHE_BYTES, keysUsed: new Map(), ...(aheadOnly ? { cacheIds: new Set([id]) } : { cacheAll: true }) };
         const key = C.resultKey(st.comp, id, f, ctx);
         if (heavy.has(key)) { const kept = heavy.get(key); heavy.delete(key); heavy.set(key, kept); const im = kept.img; im.ch = kept.ex; ctx.keysUsed.set(`${id}@${f}`, key); return { img: im, ctx, how: "kept" }; }
-        const g = gpuNow();
+        // The GPU does not make views (a view's own settings, its Reads): a comp with views is drawn on the CPU.
+        const g = C.viewsOf(st.comp).length ? null : gpuNow();
         if (g) {
             try {
                 const im = g.render(st.comp, id, f, ctx, roi);
@@ -395,6 +400,31 @@ export function createCompEditor(host, opts = {}) {
         toast: (m, sev) => toast(m, sev), pop: (a, items) => popMenu(a, items), barAnchor: () => vtBtn,
     });
     const node = (id) => C.nodeById(st.comp, id);
+    // ── views: a node's settings split off for one view ──
+    // A split ({view: {its params, tracks}}) is a whole copy of the node's settings; while the picture is made in
+    // that view the Parameters rows read and write it (its node's id, type and inputs hidden on it, unsaved).
+    const splitIds = new Map();
+    const tnode = (id) => splitIds.get(id) || node(id);
+    function splitTarget(n) {
+        const v = eyeNow(), sp = v && n && n.split && n.split[v];
+        if (!sp || typeof sp !== "object") return null;
+        for (const k of ["id", "type", "inputs"]) Object.defineProperty(sp, k, { value: n[k], enumerable: false, configurable: true, writable: true });
+        return sp;
+    }
+    function splitOff(n) {
+        const v = eyeNow();
+        if (!v) return;
+        mutate(() => {
+            const own = {};
+            for (const p of Object.keys(C.NODE_TYPES[n.type].params)) if (n[p] !== undefined) own[p] = JSON.parse(JSON.stringify(n[p]));
+            if (n.tracks) own.tracks = JSON.parse(JSON.stringify(n.tracks));
+            n.split = Object.assign({}, n.split || {}, { [v]: own });
+        });
+    }
+    function unsplit(n) {
+        const v = eyeNow();
+        mutate(() => { if (n.split) { delete n.split[v]; if (!Object.keys(n.split).length) delete n.split; } });
+    }
     const primary = () => (st.sel.length ? node(st.sel[st.sel.length - 1]) : null);
     const keyHost = () => ({ comp: { width: fmt().width, height: fmt().height } });
     /** The nodes a Parameters change reaches: every selected node of the shown node's type, the shown one first
@@ -427,7 +457,7 @@ export function createCompEditor(host, opts = {}) {
     function liveRestore() {
         for (const [k, b] of liveBak) {
             const [id, p] = k.split("\0");
-            const t = node(id);
+            const t = tnode(id);
             if (!t) continue;
             if (b.v === undefined) delete t[p]; else t[p] = b.v;
             if (b.had) { t.tracks = t.tracks || {}; t.tracks[p] = b.tr; } else if (t.tracks) delete t.tracks[p];
@@ -518,6 +548,25 @@ export function createCompEditor(host, opts = {}) {
             b.addEventListener("click", (e) => { e.stopPropagation(); fn(b); });
             return b;
         };
+        // Views: the view the picture is made in, and the comp's views set or taken off.
+        const eyes = el(doc, "select", "mg-btn cp-views");
+        const vs = C.viewsOf(st.comp);
+        if (vs.length) for (const v of vs) eyes.append(new Option(`View: ${v}`, v));
+        else eyes.append(new Option("Views: none", ""));
+        eyes.append(new Option(vs.length ? "No views (take them off)" : "Stereo: left, right", "\u0001"));
+        if (vs.length) eyes.append(new Option("Views…", "\u0002"));
+        eyes.value = vs.length ? eyeNow() : "";
+        eyes.title = vs.length ? "The view the picture is made in (the render makes every view)" : "A comp without views; Stereo makes it a left / right pair";
+        eyes.onchange = () => {
+            if (eyes.value === "\u0001") { mutate(() => { if (vs.length) delete st.comp.format.views; else st.comp.format.views = C.STEREO_VIEWS.slice(); }); st.eye = null; }
+            else if (eyes.value === "\u0002") {
+                const got = win().prompt("The comp's views, in order (the first is the left eye of a pair):", vs.join(" "));
+                const nv = C.cleanViews(String(got || "").split(/[\s,]+/));
+                if (got !== null && nv.length) mutate(() => { st.comp.format.views = nv; });
+                else if (got !== null) toast("Two or more names: letters, digits, _ and -", "warn");
+                renderBar();
+            } else { st.eye = eyes.value; queueRender(); renderProps(); }
+        };
         const vtOn = viewTools.summary();
         vtBtn = btn("Viewer ▾", "The viewer's tools: compare with a second node (A / B wipe, difference), the pixel sampler, scopes, out-of-range colours, guides"
             + (vtOn.length ? ` - on: ${vtOn.join(", ")}` : ""), () => popMenu(vtBtn, viewTools.menuItems()), "cp-vtools" + (vtOn.length ? " on" : ""));
@@ -529,7 +578,7 @@ export function createCompEditor(host, opts = {}) {
             t,
             el(doc, "span", "mg-sep"),
             btn("↶", "Undo (Ctrl+Z)", undo), btn("↷", "Redo (Ctrl+Shift+Z)", redo),
-            el(doc, "span", "mg-sep"), proxy, gpuBtn, ...(disp ? [disp] : []), layerSel, ...[o.barControl && o.barControl()].filter(Boolean),
+            el(doc, "span", "mg-sep"), proxy, gpuBtn, ...(disp ? [disp] : []), layerSel, eyes, ...[o.barControl && o.barControl()].filter(Boolean),
             vtBtn,
             btn("Fit", "Fit the picture (F on the picture)", () => { st.zoom.fit = true; layoutCanvas(); }),
             el(doc, "span", "mg-info", `${fmt().width}×${fmt().height} · ${fmt().fps} fps · ${fmt().frames} f`));
@@ -598,6 +647,16 @@ export function createCompEditor(host, opts = {}) {
         const g = moveGen;
         win().requestAnimationFrame(() => { if (g !== moveGen) return; renderQueued = false; draw(); });
     }
+    /** The view the picture is made in (a comp with views; null without). */
+    const eyeNow = () => { const vs = C.viewsOf(st.comp); return vs.includes(st.eye) ? st.eye : vs[0] || null; };
+    /** renderNode's sources from the pixels loaded for a draw (Reads per view, DeepReads' deep pictures). */
+    const sourcesCtx = (pics) => ({ view: eyeNow(), source: (n, nf) => pics.get(C.srcKey(n, nf)) || null,
+        deepSource: (n, nf) => pics.get("deep:" + C.srcKey(n, nf)) || null });
+    /** The pixels `needs` names (C.sourceNeeds) into `pics`: Reads by srcKey, DeepReads' deep pictures by "deep:" + it. */
+    const loadNeeds = (needs, pics, scale) => Promise.all(needs.map(async ({ node: n, frame: nf, deep }) => {
+        const load = deep ? o.loadDeep : o.loadSource;
+        pics.set((deep ? "deep:" : "") + C.srcKey(n, nf), load ? await load(n, nf, { scale, format: fmt() }).catch(() => null) : null);
+    }));
     async function draw() {
         if (!st.comp) return;
         const gen = ++renderGen;
@@ -607,11 +666,7 @@ export function createCompEditor(host, opts = {}) {
         const pics = new Map();
         try {
             const bId0 = viewTools.bNeeded(id);
-            const needs = C.sourceNeeds(st.comp, id, f).concat(bId0 ? C.sourceNeeds(st.comp, bId0, f) : []);
-            await Promise.all(needs.map(async ({ node: n, frame: nf }) => {
-                const p = o.loadSource ? await o.loadSource(n, nf, { scale, format: fmt() }).catch(() => null) : null;
-                pics.set(`${n.id}@${nf}`, p);
-            }));
+            await loadNeeds(C.sourceNeeds(st.comp, id, f, eyeNow()).concat(bId0 ? C.sourceNeeds(st.comp, bId0, f, eyeNow()) : []), pics, scale);
             const ds = displaySpec();
             await needLuts(C.ocioNeeds(st.comp, f).map((x) => x.spec).concat(ds ? [ds] : []));
         } catch (_) { /* drawn without */ }
@@ -640,7 +695,7 @@ export function createCompEditor(host, opts = {}) {
         const layerOf = (p) => (layers.includes(st.layer) && C.CH.layersOf(Object.keys(p.ch || {})).includes(st.layer) ? C.CH.layerPicture(p, p.ch, st.layer) : p);
         // Compared with B (the viewer tools): B drawn with the same sources, then laid beside / over / against A.
         const bId = viewTools.bNeeded(id);
-        const imgB = bId ? C.renderNode(st.comp, bId, f, { scale, source: (n, nf) => pics.get(`${n.id}@${nf}`) || null, cache: heavy, matte, ocio: lutOf, cacheAll: true, cacheBytes: CACHE_BYTES }) : null;
+        const imgB = bId ? C.renderNode(st.comp, bId, f, { ...sourcesCtx(pics), scale, cache: heavy, matte, ocio: lutOf, cacheAll: true, cacheBytes: CACHE_BYTES }) : null;
         const shownImg = viewTools.compose(layerOf(img), imgB ? layerOf(imgB) : null);
         C.viewEncode(shownImg, data.data, { gain: Math.pow(2, st.ev), channel: st.channel,
             color: dl ? (r, g, b) => C.OC.lutColor(dl, r, g, b) : null });
@@ -694,9 +749,7 @@ export function createCompEditor(host, opts = {}) {
             if (cachedFrames().has(f)) continue;
             const pics = new Map();
             try {
-                await Promise.all(C.sourceNeeds(st.comp, id, f).map(async ({ node: nn, frame: nf }) => {
-                    pics.set(`${nn.id}@${nf}`, o.loadSource ? await o.loadSource(nn, nf, { scale, format: fmt() }).catch(() => null) : null);
-                }));
+                await loadNeeds(C.sourceNeeds(st.comp, id, f, eyeNow()), pics, scale);
             } catch (_) { /* made without */ }
             if (job.stop || job.gen !== renderGen || !st.comp) return;
             const { ctx: actx } = picture(id, f, scale, pics, null, true);
@@ -941,8 +994,8 @@ export function createCompEditor(host, opts = {}) {
         // The colour that goes INTO the node (what a keyer sees), else what is on screen.
         const srcId = n.inputs && n.inputs[0] ? n.inputs[0] : viewedId();
         const { pics, scale, frame } = lastPics;
-        const img = C.renderNode(st.comp, srcId, frame, { scale, source: (s, nf) => pics.get(`${s.id}@${nf}`) || null, cache: heavy, matte,
-            ocio: lutOf, cacheAll: true, cacheBytes: CACHE_BYTES });
+        const img = C.renderNode(st.comp, srcId, frame, Object.assign(sourcesCtx(pics), { scale, cache: heavy, matte,
+            ocio: lutOf, cacheAll: true, cacheBytes: CACHE_BYTES }));
         const dy = downBy(C.formatAt(st.comp, srcId));   // the picture clicked on and the one read may differ in size
         const x = Math.max(0, Math.min(img.w - 1, Math.floor(xy[0] * scale))), y = Math.max(0, Math.min(img.h - 1, Math.floor((xy[1] - dy) * scale)));
         const i = (y * img.w + x) * 4, a = img.data[i + 3];
@@ -1524,7 +1577,7 @@ export function createCompEditor(host, opts = {}) {
             if (e.button !== 0) return;
             e.preventDefault();
             const step = d.kind === "int" ? 0.25 : (d.step || 0.01);
-            const n0 = node(id);
+            const n0 = tnode(id);
             const starts = targetsOf(n0).map((t) => [t.id, Number(C.paramAt(t, p, st.frame)) || 0]);
             let last = e.clientX, acc = 0, pushed = false;
             lab.setPointerCapture(e.pointerId);
@@ -1539,7 +1592,7 @@ export function createCompEditor(host, opts = {}) {
                     if (d.min !== undefined) v = Math.max(d.min, v);
                     if (d.max !== undefined) v = Math.min(d.max, v);
                     v = d.kind === "int" ? Math.round(v) : Math.round(v * 1e4) / 1e4;
-                    const t = node(tid);
+                    const t = tnode(tid);
                     if (!t) continue;
                     if (d.key) Mo.setProp(keyHost(), t, p, v, st.frame); else t[p] = v;
                     if (tid === id && !inp.classList.contains("cp-mixed")) inp.value = r3(v);
@@ -1599,6 +1652,29 @@ export function createCompEditor(host, opts = {}) {
                 if (axisMixed(a)) { i.value = ""; i.placeholder = "—"; i.classList.add("cp-mixed"); }
                 row.append(i);
             }
+        } else if (d.kind === "vec3") {
+            const base = cur || d.def || [0, 0, 0];
+            const axisMixed = (a) => tg.some((t) => { const tv = C.paramAt(t, p, st.frame); return (tv ? tv[a] : null) !== (cur ? cur[a] : null); });
+            for (let a = 0; a < 3; a++) {
+                const i = withFk(numInput(cur ? cur[a] : null, d.step || 0.01, (v) => {
+                    if (v === null) return;
+                    mutate(() => writeAll(n, p, d, (old) => { const nv = (old || base).slice(); nv[a] = v; return nv; }), { structure: false });
+                }, { onLive: (v) => liveWrite(n, p, d, (old) => { const nv = (old || base).slice(); nv[a] = v; return nv; }) }), { title: "xyz"[a], fk: `${n.id}:${p}:${a}` });
+                if (axisMixed(a)) { i.value = ""; i.placeholder = "—"; i.classList.add("cp-mixed"); }
+                i.classList.add("cp-vec3");
+                row.append(i);
+            }
+        } else if (d.kind === "view") {
+            const sel = el(doc, "select");
+            const vs = C.viewsOf(st.comp);
+            sel.append(new Option(`(the first${vs.length ? ": " + vs[0] : ""})`, ""));
+            for (const v of vs) sel.append(new Option(v, v));
+            const value = String(cur ?? "");
+            if (value && !vs.includes(value)) sel.append(new Option(`${value} (not a view of this comp)`, value));
+            sel.value = value;
+            if (!vs.length) sel.title = "The comp has no views: set them in the bar's view menu";
+            sel.onchange = () => write(sel.value);
+            row.append(sel);
         } else if (d.kind === "color") {
             const c = cur || [0, 0, 0, 1];
             const pick = el(doc, "input"); pick.type = "color"; pick.value = toHex(c);
@@ -1866,6 +1942,8 @@ export function createCompEditor(host, opts = {}) {
         pane = box;
         try { paneBody(n, t, first); } finally { pane = null; }
     }
+    // Nodes whose settings are drawn by a tool of their own: no per-view settings for them.
+    const NO_SPLIT = new Set(["roto", "output", "paint", "tracker", "planartracker", "gridwarp"]);
     /** A CDL node's file buttons: read a .cc / .cdl / .ccc into it, write it as one. */
     function cdlSection(n, params) {
         const row = el(doc, "div", "mg-prop cp-btnrow");
@@ -1915,26 +1993,51 @@ export function createCompEditor(host, opts = {}) {
             pane.append(field("disable", dis));
         }
         const ps = Object.entries(t.params);
+        // In a comp with views: this view's own settings, if split off (rows then read and write those).
+        const vs = C.viewsOf(st.comp), eye = eyeNow();
+        const sp = vs.length && ps.length && !NO_SPLIT.has(n.type) ? splitTarget(n) : null;
+        if (sp) splitIds.set(n.id, sp); else splitIds.delete(n.id);
+        if (vs.length && ps.length && !NO_SPLIT.has(n.type)) {
+            const row = el(doc, "div", "mg-prop cp-split" + (sp ? " on" : ""));
+            row.append(el(doc, "span", "mg-sw", ""), el(doc, "label", "", "view"));
+            row.append(el(doc, "span", "cp-splitnote", sp ? `own settings in ${eye}` : `the same in every view`));
+            row.append(sp ? btn("Join", `Take ${eye}'s own settings away: every view the same again`, () => unsplit(n))
+                : btn("Split", `Give ${eye} settings of its own (a copy of these, changed only in ${eye})`, () => splitOff(n)));
+            pane.append(row);
+        }
+        const pn = sp || n;
         // The mask's channel and invert only matter with something in the mask input.
         const mi = C.maskIndex(n.type), masked = mi >= 0 && !!n.inputs[mi];
         const maskRow = (p) => p === "mask_channel" || p === "mask_invert";
         if (n.type === "colorcorrect") {
-            ccSection(n, t.params);
-            if (masked) for (const [p, d] of ps) if (maskRow(p)) pane.append(paramRow(n, p, d));
-        } else for (const [p, d] of ps) if (d.kind !== "roto" && d.kind !== "ai" && d.kind !== "strokes" && !WUI.OWN_KINDS.has(d.kind) && (masked || !maskRow(p))) pane.append(paramRow(n, p, d));
+            ccSection(pn, t.params);
+            if (masked) for (const [p, d] of ps) if (maskRow(p)) pane.append(paramRow(pn, p, d));
+        } else for (const [p, d] of ps) if (d.kind !== "roto" && d.kind !== "ai" && d.kind !== "strokes" && !WUI.OWN_KINDS.has(d.kind) && (masked || !maskRow(p))) pane.append(paramRow(pn, p, d));
         if (n.type === "paint") paintTool.section(n, pane, first);
         if (WUI.draws(n.type)) WUI.section(wctx(), n);
         if (n.type === "cdl") cdlSection(n, t.params);
         if (C.EX.AI_KINDS[n.type]) aiSection(n);
+        if (n.type === "camera3d" && o.importCamera) {
+            const row = el(doc, "div", "mg-prop cp-camimport");
+            row.append(el(doc, "span", "mg-sw", ""), el(doc, "label", "", "import"));
+            const take = (kind) => o.importCamera(kind, pn).then((got) => {
+                if (!got || !got.tracks) return;
+                mutate(() => CI.applyCameraKeys(pn, got.tracks), { structure: false });
+                toast(`Camera keys from ${got.from || "the file"}: ${got.frames} frames`, "success");
+            }).catch((e) => toast("No camera taken: " + (e.message || e), "warn"));
+            row.append(btn("3D shot…", "Keys from a camera of a shot open in a 3D tab: where it stands, its turn and its lens, frame by frame", () => take("scene")),
+                btn("File…", "Keys from a camera text file (.chan): frame, translate x y z, rotate x y z, vertical field of view", () => take("file")));
+            pane.append(row);
+        }
         if (n.type === "roto") {
             if (first) rotoSection(n);
             else pane.append(el(doc, "div", "mg-empty", "The shapes are drawn in the panel on top: click this node in the graph to bring it there."));
         }
         if (first && n.type !== "roto" && o.roto && o.roto.unmount) o.roto.unmount();
-        if (n.type === "read") {
+        if (n.type === "read" || n.type === "deepread") {
             const line = el(doc, "div", "mg-empty", "…");
             pane.append(line);
-            if (o.sourceInfo) o.sourceInfo(n).then((inf) => {
+            if (o.sourceInfo) o.sourceInfo(C.viewNode(n, eyeNow())).then((inf) => {
                 line.textContent = !inf || inf.kind === "missing" ? "No such file (yet)." : inf.kind === "refused" ? "Not in the folders the viewer may read."
                     : inf.kind === "still" ? "A still picture." : `${inf.kind === "video" ? "A film" : inf.kind === "comp" ? "A comp (its Output, rendered)" : "A sequence"}: frames ${inf.first}–${inf.last}${inf.fps ? ` at ${r3(inf.fps)} fps` : ""}.`
                     + (inf.gaps ? ` ${inf.gaps} frame${inf.gaps > 1 ? "s" : ""} missing in it.` : "")

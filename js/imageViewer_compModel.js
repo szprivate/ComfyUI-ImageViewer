@@ -31,6 +31,8 @@ import * as K from "./imageViewer_compMatte.js";
 import * as OC from "./imageViewer_compOcio.js";
 import * as LT from "./imageViewer_compLight.js";
 import * as CH from "./imageViewer_compChannels.js";
+import * as G3 from "./imageViewer_comp3d.js";
+import * as DP from "./imageViewer_compDeep.js";
 import * as PT from "./imageViewer_compPaint.js";
 import * as WP from "./imageViewer_compWarp.js";
 import * as EX from "./imageViewer_compExtra.js";
@@ -55,6 +57,8 @@ export const WRITE_CHANNELS = ["rgba", "rgb", "all"];
 export const WRITE_DEPTHS = ["half", "float", "8", "16"];
 export const EXR_COMPRESSIONS = ["zip", "zips", "none"];
 export const REFORMAT_RESIZE = ["none", "fit", "fill", "width", "height", "distort"];
+export const VIEW_ANAGLYPH = ["colour", "grey"];
+export const VIEW_LAYOUTS = ["side by side", "over under"];
 export const NODE_TYPES = {
     read: { label: "Read", cat: "Image", inputs: [], params: {
         file: { kind: "file", def: "" },
@@ -277,6 +281,74 @@ export const NODE_TYPES = {
         threshold: { kind: "num", def: 1, min: 0, key: true, step: 0.05, help: "Brighter than this is a highlight" },
         bloom: { kind: "num", def: 0, min: 0, key: true, step: 0.1, help: "How much brighter the highlights' bokeh gets" },
     } },
+    // ── 3D (imageViewer_comp3d.js): geometry and cameras are not pictures; Render 3D makes one ──
+    camera3d: { label: "Camera", cat: "3D", inputs: [], params: {
+        translate: { kind: "vec3", def: [0, 0, 2], key: true, step: 0.01, help: "Where it stands, in scene units (y up)" },
+        rotate: { kind: "vec3", def: [0, 0, 0], key: true, step: 0.5, help: "Its turn in degrees about x, then y, then z; it looks down its own -z" },
+        focal: { kind: "num", def: 35, min: 1, max: 2000, key: true, step: 0.5, help: "Focal length, mm" },
+        haperture: { kind: "num", def: 36, min: 0.1, max: 200, key: true, step: 0.1, label: "film back", help: "The film back's width, mm (36: full frame); the height follows from the picture's shape" },
+        near: { kind: "num", def: 0.01, min: 0.0001, step: 0.01, help: "Nothing nearer than this is drawn" },
+        far: { kind: "num", def: 100000, min: 0.001, step: 1, help: "Nothing further than this is drawn" },
+        interaxial: { kind: "num", def: 0.065, min: 0, key: true, step: 0.005, help: "Stereo (a comp with views): the distance between the eyes, in scene units" },
+        convergence: { kind: "num", def: 3, min: 0.001, key: true, step: 0.05, help: "Stereo: the distance at which the eyes' pictures meet (an off-axis pair)" },
+    } },
+    card3d: { label: "Card", cat: "3D", inputs: ["img"], params: {
+        translate: { kind: "vec3", def: [0, 0, 0], key: true, step: 0.01 },
+        rotate: { kind: "vec3", def: [0, 0, 0], key: true, step: 0.5, help: "Degrees about x, then y, then z" },
+        scale: { kind: "vec3", def: [1, 1, 1], key: true, step: 0.01 },
+        uniform: { kind: "num", def: 1, min: 0, key: true, step: 0.01, help: "The card is one unit wide times this; its height follows the picture's shape" },
+    } },
+    geo3d: { label: "Shape", cat: "3D", inputs: ["img"], params: {
+        shape: { kind: "enum", def: "cube", choices: G3.SHAPES, help: "One unit across; the picture wraps it (no picture: white)" },
+        divisions: { kind: "int", def: 24, min: 3, max: 128, help: "Segments around a sphere or a cylinder" },
+        translate: { kind: "vec3", def: [0, 0, 0], key: true, step: 0.01 },
+        rotate: { kind: "vec3", def: [0, 0, 0], key: true, step: 0.5, help: "Degrees about x, then y, then z" },
+        scale: { kind: "vec3", def: [1, 1, 1], key: true, step: 0.01 },
+        uniform: { kind: "num", def: 1, min: 0, key: true, step: 0.01 },
+    } },
+    project3d: { label: "Project", cat: "3D", inputs: ["img", "camera"], params: {
+        faces: { kind: "enum", def: "both", choices: G3.PROJECT_FACES, help: "front: only surfaces facing the projecting camera take the picture" },
+    } },
+    scene3d: { label: "Scene", cat: "3D", inputs: ["1", "2", "3", "4"], params: {} },
+    pointcloud: { label: "PointCloud", cat: "3D", inputs: ["img", "camera"], params: {
+        channel: { kind: "chan", def: "depth.z", help: "Where the picture holds its depth" },
+        mode: { kind: "enum", def: "distance", choices: G3.DEPTH_MODES, help: "distance: the depth is the distance along the camera's view; inverse: it is 1 / distance" },
+        multiply: { kind: "num", def: 1, min: 0, key: true, step: 0.01, help: "The depth times this (inverse: this over the depth)" },
+        step: { kind: "int", def: 2, min: 1, max: 64, help: "A point every this many pixels" },
+        size: { kind: "num", def: 2, min: 0.1, max: 64, key: true, step: 0.1, help: "A point's width when rendered, in pixels" },
+    } },
+    render3d: { label: "Render3D", cat: "3D", inputs: ["scene", "camera", "bg"], params: {
+        samples: { kind: "int", def: 2, min: 1, max: 4, help: "Samples a pixel each way (antialiasing): 2 is 4 a pixel" },
+        depth: { kind: "enum", def: "depth.z", choices: G3.DEPTH_OUT, help: "depth.z: the distance to the nearest surface goes into the depth.z channel (0: nothing)" },
+    } },
+    // ── deep (imageViewer_compDeep.js): any number of samples a pixel; viewed, a deep node shows itself flattened ──
+    deepread: { label: "DeepRead", cat: "Deep", inputs: [], params: {
+        file: { kind: "file", def: "" },
+        offset: { kind: "int", def: 0, help: "Frames to slide the footage by" },
+    } },
+    deepfromimage: { label: "DeepFromImage", cat: "Deep", inputs: ["img"], params: {
+        channel: { kind: "chan", def: "depth.z", help: "Each pixel's depth (where it is 0 or missing: z)" },
+        z: { kind: "num", def: 1, min: 0, key: true, step: 0.01, help: "The depth of pixels without one" },
+    } },
+    deepmerge: { label: "DeepMerge", cat: "Deep", inputs: ["1", "2", "3", "4"], params: {} },
+    deepholdout: { label: "DeepHoldout", cat: "Deep", inputs: ["src", "holdout"], params: {} },
+    deepcrop: { label: "DeepCrop", cat: "Deep", inputs: ["deep"], params: {
+        znear: { kind: "num", def: 0, min: 0, key: true, step: 0.01, help: "Samples nearer than this go" },
+        zfar: { kind: "num", def: 0, min: 0, key: true, step: 0.01, help: "Samples further than this go (0: no far limit)" },
+        outside: { kind: "enum", def: "off", choices: ["off", "on"], help: "on: keep what is outside the range instead" },
+    } },
+    deepflatten: { label: "DeepFlatten", cat: "Deep", inputs: ["deep"], params: {} },
+    // ── views (stereo and more): the comp's format.views; Reads with %V in their name read one file per view ──
+    oneview: { label: "OneView", cat: "Views", inputs: ["src"], params: {
+        view: { kind: "view", def: "", help: "The view everything above is made in (empty: the comp's first)" },
+    } },
+    joinviews: { label: "JoinViews", cat: "Views", inputs: ["v1", "v2", "v3", "v4"], params: {} },
+    anaglyph: { label: "Anaglyph", cat: "Views", inputs: ["src"], params: {
+        mode: { kind: "enum", def: "colour", choices: VIEW_ANAGLYPH, help: "Red from the first view, green and blue from the second; grey: each eye as grey first" },
+    } },
+    sidebyside: { label: "SideBySide", cat: "Views", inputs: ["src"], params: {
+        layout: { kind: "enum", def: "side by side", choices: VIEW_LAYOUTS, help: "The first two views next to each other (left first) or above each other (left on top)" },
+    } },
     write: { label: "Write", cat: "Other", inputs: ["src"], params: {
         file: { kind: "outfile", def: "", help: "Where it writes: shot.####.exr (one # per digit), or a film. Relative: beside the comp. Empty: <comp>_<name>/<name>.####.<type> beside the comp" },
         file_type: { kind: "enum", def: "exr", choices: WRITE_FORMATS, label: "type", help: "The file type (a path's own ending wins)" },
@@ -368,7 +440,10 @@ function maskable(t) {
 /** The index of a MASKABLE node's mask input (-1 for the rest). */
 export function maskIndex(type) { return MASKABLE.has(type) ? NODE_TYPES[type].inputs.length - 1 : -1; }
 export const TYPE_ORDER = ["read", "constant", "roto", "paint", "merge", "copy", "transform", "reformat", "crop", "cornerpin", "tracker", "planartracker", "stmap", "vectorwarp", "lensdistortion", "gridwarp", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "keyer", "lumakeyer", "chromakeyer", "blur", "glow", "erode", "laplacian",
-    "motionblur", "depthblur", "defocus", "lensflare", "shuffle", "addchannels", "removechannels", "channelmerge", "channelmath", "premult", "unpremult", "retime", "vectors", "metadata", "write", "output"];
+    "motionblur", "depthblur", "defocus", "lensflare", "shuffle", "addchannels", "removechannels", "channelmerge", "channelmath", "premult", "unpremult", "retime", "vectors", "metadata", "write",
+    "camera3d", "card3d", "geo3d", "project3d", "scene3d", "pointcloud", "render3d",
+    "deepread", "deepfromimage", "deepmerge", "deepholdout", "deepcrop", "deepflatten",
+    "oneview", "joinviews", "anaglyph", "sidebyside", "output"];
 /** Nodes that hand their input on unchanged: what they do is outside the pixels (a file written, metadata). */
 export const PASS_THROUGH = new Set(["output", "write", "metadata"]);
 // The finishing nodes (keying, time, colour, filters, AI) are in imageViewer_compExtra.js.
@@ -470,8 +545,52 @@ export function normalizeComp(raw) {
         const o = comp.nodes.find((n) => n.type === "output");
         comp.output = o ? o.id : null;
     }
+    const views = cleanViews(f.views);
+    if (views.length) comp.format.views = views;
     return { comp, errors };
 }
+
+// ── views (stereo, multi-view) ───────────────────────────────────────────────
+// A comp with format.views (two or more names, the first is "left" of a stereo pair) is made once per view.
+// A Read whose file names %V (the view) or %v (its first letter) reads one file per view; a node's `split`
+// ({view: {param: value, tracks?}}) gives it other settings in that view; a Camera's eyes move apart by its
+// interaxial. renderNode's ctx.view is the view made (null: the comp has none, or the first).
+export const VIEW_NAME = /^[A-Za-z][A-Za-z0-9_-]{0,31}$/;
+export const STEREO_VIEWS = ["left", "right"];
+/** Two or more distinct view names, or [] (a comp without views). */
+export function cleanViews(v) {
+    if (!Array.isArray(v)) return [];
+    const out = [];
+    for (const x of v) if (typeof x === "string" && VIEW_NAME.test(x) && !out.includes(x) && out.length < 16) out.push(x);
+    return out.length >= 2 ? out : [];
+}
+export const viewsOf = (comp) => (comp && comp.format && Array.isArray(comp.format.views) ? comp.format.views : []);
+/** A file name in a view: %V is the view's name, %v its first letter. */
+export function viewFile(file, view) {
+    if (typeof file !== "string" || !view) return file;
+    return file.replace(/%V/g, view).replace(/%v/g, view[0]);
+}
+/** A node as it is in `view`: its split settings over it and a Read's %V named. The node itself when nothing differs. */
+export function viewNode(n, view) {
+    if (!n || !view) return n;
+    const sp = isObj(n.split) && isObj(n.split[view]) ? n.split[view] : null;
+    const file = typeof n.file === "string" && /%[Vv]/.test(n.file) ? viewFile(n.file, view) : null;
+    if (!sp && file === null) return n;
+    const out = Object.assign({}, n);
+    if (sp) for (const [k, v] of Object.entries(sp)) if (k !== "id" && k !== "type" && k !== "inputs") out[k] = v;
+    if (file !== null) { out.file = file; out.__view = view; }
+    return out;
+}
+/** The key a page keeps a Read's pixels under (a per-view Read's per view). */
+export const srcKey = (n, f) => `${n.id}@${f}${n.__view ? "#" + n.__view : ""}`;
+/** How far a camera's eye moves along its x in `view`: the views spread evenly about the middle, interaxial apart. */
+export function eyeOffset(comp, view, interaxial) {
+    const vs = viewsOf(comp), i = view ? vs.indexOf(view) : -1;
+    if (vs.length < 2 || i < 0) return 0;
+    return (i - (vs.length - 1) / 2) * interaxial;
+}
+/** The view made when none is asked for: the comp's first, or null. */
+export const firstView = (comp) => viewsOf(comp)[0] || null;
 
 /** The comp's Write nodes, in graph order. */
 export function writeNodes(comp) { return (comp && comp.nodes || []).filter((n) => n.type === "write"); }
@@ -1049,14 +1168,19 @@ export function reformatLayout(node, frame, inFmt, scale = 1) {
  * Reformat sets it, a node with no input is the comp's format, every other node keeps what comes in (a Merge:
  * B's). Pictures of other sizes are laid at the bottom left of the one they meet (``conform``).
  */
+/** Nodes whose picture is the comp's size whatever comes in (3D and deep). */
+export const GEO3D = new Set(["camera3d", "card3d", "geo3d", "project3d", "scene3d", "pointcloud"]);
+export const DEEP = new Set(["deepread", "deepfromimage", "deepmerge", "deepholdout", "deepcrop", "deepflatten", "render3d"]);
+const PLAIN_SIZE = new Set([...GEO3D, ...DEEP].filter((t) => t !== "project3d"));
 export function formatAt(comp, id, depth = 0) {
     const F = { width: comp.format.width, height: comp.format.height };
     const n = id && depth < 256 && nodeById(comp, id);
     if (!n || !NODE_TYPES[n.type]) return F;
     const up = () => (NODE_TYPES[n.type].inputs.length && n.inputs[0] ? formatAt(comp, n.inputs[0], depth + 1) : F);
+    if (!n.disable && n.type === "sidebyside") { const u = up(); return n.layout === "over under" ? { width: u.width, height: u.height * 2 } : { width: u.width * 2, height: u.height }; }
     if (!n.disable && n.type === "stmap" && n.inputs[1]) return formatAt(comp, n.inputs[1], depth + 1);
     if (!n.disable && n.type === "ai_upscale") { const u = up(), k = EX.upscaleFactor(n); return { width: Math.max(1, Math.round(u.width * k)), height: Math.max(1, Math.round(u.height * k)) }; }
-    if (n.disable || n.type !== "reformat") return n.type === "read" || n.type === "constant" ? F : up();
+    if (n.disable || n.type !== "reformat") return n.type === "read" || n.type === "constant" || PLAIN_SIZE.has(n.type) ? F : up();
     const [w, h] = reformatSize(n, 0, up());
     return { width: w, height: h };
 }
@@ -1241,6 +1365,9 @@ export function channelsAt(comp, id, depth = 0) {
     const ins = (i) => channelsAt(comp, n.inputs[i], depth + 1);
     const t = NODE_TYPES[n.type] || { inputs: [] };
     if (n.disable) return t.inputs.length ? ins(0) : [];
+    if ((GEO3D.has(n.type) && n.type !== "project3d") || n.type === "anaglyph" || n.type === "sidebyside") return [];
+    if (DEEP.has(n.type) && n.type !== "render3d") return ["depth.z"];
+    if (n.type === "render3d") { const b = ins(2); return (n.depth || "depth.z") === "none" || b.includes("depth.z") ? b : [...b, "depth.z"]; }
     let have = t.inputs.length ? ins(0) : [];
     if (TWO_IN.has(n.type)) for (const c of ins(1)) if (!have.includes(c)) have = [...have, c];
     if (n.type === "addchannels") {
@@ -1348,23 +1475,27 @@ export function cacheKeep(cache, key, value, maxBytes, maxCount) {
     }
 }
 
-const sourceSigOf = (comp, nid, f, ctx) => sourceNeeds(comp, nid, f).map(({ node: s, frame: sf }) => `${s.id}:${sf}:${tokenOf(ctx.source ? ctx.source(s, sf) : null)}`).join(",");
+const sourceSigOf = (comp, nid, f, ctx, view) => sourceNeeds(comp, nid, f, view).map(({ node: s, frame: sf, deep }) =>
+    `${srcKey(s, sf)}:${tokenOf(deep ? (ctx.deepSource ? ctx.deepSource(s, sf) : null) : ctx.source ? ctx.source(s, sf) : null)}`).join(",");
 const lutSigOf = (comp, frame, ctx) => ocioNeeds(comp, frame).map((x) => x.key + (ctx.ocio && ctx.ocio(x.spec) ? "+" : "-")).join(",");
 /** The key renderNode keeps node `id`'s result at `frame` under in `ctx.cache` (another renderer - the GPU - keeps
  *  its pictures under the same key, so the two share one cache). */
 export function resultKey(comp, id, frame, ctx) {
-    return `${frame}@${ctx.scale || 1}@${upstreamHash(comp, id)}@${sourceSigOf(comp, id, frame, ctx)}@${lutSigOf(comp, frame, ctx)}`;
+    const view = ctx.view || firstView(comp);
+    return `${frame}@${ctx.scale || 1}@${view || ""}@${upstreamHash(comp, id)}@${sourceSigOf(comp, id, frame, ctx, view)}@${lutSigOf(comp, frame, ctx)}`;
 }
 
 export function renderNode(comp, id, frame, ctx) {
     const scale = ctx.scale || 1;
+    const view = ctx.view ? ctx.view : firstView(comp);
+    const dmemo = ctx.dmemo || (ctx.dmemo = new Map());   // the deep pictures beside the deep nodes' flattened ones
     const W = Math.max(1, Math.round(comp.format.width * scale)), H = Math.max(1, Math.round(comp.format.height * scale));
     const memo = ctx.memo || (ctx.memo = new Map());
     const xmemo = ctx.xmemo || (ctx.xmemo = new Map());   // the extra channels beside each picture
     const keys = new Map(), hashes = new Map();
     // What a cached result also depends on beside the settings: which pixels its Reads were handed (none yet,
     // or which decoded frame) and which OCIO transforms had arrived.
-    const sourceSig = (nid, f) => sourceSigOf(comp, nid, f, ctx);
+    const sourceSig = (nid, f) => sourceSigOf(comp, nid, f, ctx, view);
     let lut = null;
     const lutSig = () => lut ?? (lut = lutSigOf(comp, frame, ctx));
     // A node's result with its own extra channels (otherwise its first input's are taken, moved for SPATIAL ones).
@@ -1374,11 +1505,11 @@ export function renderNode(comp, id, frame, ctx) {
         if (!nid || depth > 256) return blank(W, H);
         const mk = `${nid}@${f}`;
         if (memo.has(mk)) return memo.get(mk);
-        const n = nodeById(comp, nid);
+        const n = viewNode(nodeById(comp, nid), view);
         let ck = null;
         if (n && !n.disable && ctx.cache && (ctx.cacheIds ? ctx.cacheIds.has(nid) : ctx.cacheAll ? true : HEAVY.has(n.type))) {
             if (!keys.has(nid)) keys.set(nid, upstreamHash(comp, nid, hashes));
-            ck = `${f}@${scale}@${keys.get(nid)}@${sourceSig(nid, f)}@${lutSig()}`;
+            ck = `${f}@${scale}@${view || ""}@${keys.get(nid)}@${sourceSig(nid, f)}@${lutSig()}`;
             if (ctx.keysUsed) ctx.keysUsed.set(mk, ck);
             if (ctx.cache.has(ck)) {
                 const kept = ctx.cache.get(ck);
@@ -1435,6 +1566,85 @@ export function renderNode(comp, id, frame, ctx) {
         detail: paramAt(n, "detail", f) }, scale);
     // The size that comes into input k of node n, in pixels of the comp.
     const inFmt = (n, k = 0) => formatAt(comp, n.inputs[k]);
+    // ── views: what a node makes in another view (a renderNode of its own, its memo kept per view) ──
+    const inView = (nid, f, v) => {
+        if ((v || null) === (view || null)) return X(run(nid, f, 0), exOf(nid, f));
+        const vm = ctx.vmemo || (ctx.vmemo = new Map());
+        if (!vm.has(v)) vm.set(v, {});
+        const own = vm.get(v);
+        const sub = Object.assign({}, ctx, { memo: own.memo || new Map(), xmemo: own.xmemo || new Map(), dmemo: own.dmemo || new Map(), view: v, vmemo: vm });
+        const r = renderNode(comp, nid, f, sub);
+        Object.assign(vm.get(v), { memo: sub.memo, xmemo: sub.xmemo, dmemo: sub.dmemo });
+        return X({ w: r.w, h: r.h, data: r.data }, r.ch || {});
+    };
+    const views2 = () => { const vs = viewsOf(comp); return vs.length ? [vs[0], vs[1]] : [null, null]; };
+    // ── 3D ──
+    const P3 = (n, f) => { const p = {}; for (const k of Object.keys(NODE_TYPES[n.type].params)) p[k] = paramAt(n, k, f); return p; };
+    const camNode = (cid) => { const c = cid && viewNode(nodeById(comp, cid), view); return c && !c.disable && c.type === "camera3d" ? c : null; };
+    // A camera taking a w x h picture; `stereo`: its eye in this view.
+    const cameraOf = (cid, f, w, h, stereo) => {
+        const c = camNode(cid), p = c ? P3(c, f) : Object.fromEntries(Object.entries(NODE_TYPES.camera3d.params).map(([k, d]) => [k, clone(d.def)]));
+        return G3.cameraAt(p, stereo ? eyeOffset(comp, view, p.interaxial) : 0, w, h);
+    };
+    const placed = (n, f) => { const p = P3(n, f), u = p.uniform; return G3.trs(p.translate, p.rotate, [p.scale[0] * u, p.scale[1] * u, p.scale[2] * u]); };
+    // The scene node `nid` makes: [objects] in world space (see comp3d's renderScene).
+    const sceneOf = (nid, f, depth) => {
+        const n = nid && depth < 256 ? viewNode(nodeById(comp, nid), view) : null;
+        if (!n || n.disable) return [];
+        if (n.type === "scene3d") return [].concat(...n.inputs.map((s) => sceneOf(s, f, depth + 1)));
+        if (n.type === "card3d" || n.type === "geo3d") {
+            const mesh = n.type === "card3d"
+                ? G3.cardMesh((() => { const F = inFmt(n); return F.height / F.width; })())
+                : G3.shapeMesh(paramAt(n, "shape", f), paramAt(n, "divisions", f));
+            const ob = Object.assign({ kind: "mesh", tex: null, proj: null, faces: "both" }, G3.placeMesh(mesh, placed(n, f)));
+            const src = n.inputs[0] && viewNode(nodeById(comp, n.inputs[0]), view);
+            if (src && !src.disable && src.type === "project3d") {
+                const img = run(src.inputs[0], f, depth + 1);
+                ob.proj = { img, cam: cameraOf(src.inputs[1], f, img.w, img.h, false) };
+                ob.faces = paramAt(src, "faces", f);
+            } else if (n.inputs[0]) ob.tex = run(n.inputs[0], f, depth + 1);
+            return [ob];
+        }
+        if (n.type === "pointcloud") {
+            const img = n.inputs[0] ? run(n.inputs[0], f, depth + 1) : null;
+            if (!img) return [];
+            const ch = paramAt(n, "channel", f) || "depth.z";
+            const dch = CH.channelOf(img, exOf(n.inputs[0], f), ch);
+            const pts = G3.pointsFromDepth(img, dch, cameraOf(n.inputs[1], f, img.w, img.h, false), paramAt(n, "mode", f),
+                paramAt(n, "multiply", f), Math.max(1, Math.round(paramAt(n, "step", f) * scale)));
+            return [{ kind: "points", pos: pts.pos, col: pts.col, size: paramAt(n, "size", f) * scale }];
+        }
+        return [];
+    };
+    const render3d = (n, f, d1) => {
+        const r = G3.renderScene(sceneOf(n.inputs[0], f, d1), cameraOf(n.inputs[1], f, W, H, true), W, H, paramAt(n, "samples", f));
+        dmemo.set(`${n.id}@${f}`, r.deep);
+        let img = r.img, ex = {};
+        if (n.inputs[2]) {
+            const raw = run(n.inputs[2], f, d1);
+            img = mergeImages(conform(raw, W, H), img, null, "over", 1);
+            ex = Object.assign({}, conformExtras(exOf(n.inputs[2], f), raw.w, raw.h, W, H));
+        }
+        if ((n.depth || "depth.z") !== "none") ex["depth.z"] = r.depth;
+        return X(img, ex);
+    };
+    // ── deep ──
+    // The deep picture of node `nid`: a deep node's own, a picture's one sample a pixel (DeepFromImage's defaults).
+    const deepOf = (nid, f, d1) => {
+        const n = nid && viewNode(nodeById(comp, nid), view);
+        if (!n) return DP.emptyDeep(W, H);
+        if (n.disable && DEEP.has(n.type)) return n.inputs.length && n.inputs[0] ? deepOf(n.inputs[0], f, d1 + 1) : DP.emptyDeep(W, H);
+        const img = run(nid, f, d1);
+        const own = !n.disable && DEEP.has(n.type) && n.type !== "deepflatten" ? dmemo.get(`${nid}@${f}`) : null;
+        if (own) return own;
+        const c = conform(img, W, H);
+        return DP.deepFromImage(c, c === img ? CH.channelOf(img, exOf(nid, f), "depth.z") : null, 1);
+    };
+    const deepOut = (n, f, d) => {
+        dmemo.set(`${n.id}@${f}`, d);
+        const fl = DP.deepFlatten(d);
+        return X(fl.img, { "depth.z": fl.depth });
+    };
     const make = (n, f, depth) => {
         const d1 = depth + 1;
         if (!n) return blank(W, H);
@@ -1613,6 +1823,48 @@ export function renderNode(comp, id, frame, ctx) {
             p.size *= scale;
             return O.depthBlurImage(src, conform(run(n.inputs[1], f, d1), src.w, src.h), p);
         }
+        case "camera3d": case "card3d": case "geo3d": case "scene3d": case "pointcloud": {
+            // Geometry on its own: seen through the comp's first Camera, as Render3D would draw it.
+            if (n.type === "camera3d") return X(blank(W, H), {});
+            const cam = comp.nodes.find((c) => c.type === "camera3d" && !c.disable);
+            const r = G3.renderScene(sceneOf(n.id, f, d1), cameraOf(cam ? cam.id : null, f, W, H, true), W, H, 1);
+            return X(r.img, {});
+        }
+        case "project3d": return X(run(n.inputs[0], f, d1), exOf(n.inputs[0], f));
+        case "render3d": return render3d(n, f, d1);
+        case "deepread": {
+            const src = ctx.deepSource ? ctx.deepSource(n, f) : null;
+            return deepOut(n, f, src ? DP.deepPlace(src, comp.format.width, comp.format.height, scale) : DP.emptyDeep(W, H));
+        }
+        case "deepfromimage": {
+            const img = n.inputs[0] ? conform(run(n.inputs[0], f, d1), W, H) : blank(W, H);
+            const same = n.inputs[0] && run(n.inputs[0], f, d1) === img;
+            return deepOut(n, f, DP.deepFromImage(img, same ? CH.channelOf(img, exOf(n.inputs[0], f), paramAt(n, "channel", f) || "depth.z") : null, paramAt(n, "z", f)));
+        }
+        case "deepmerge": {
+            const ins = n.inputs.filter(Boolean);
+            return deepOut(n, f, ins.length ? DP.deepMerge(ins.map((s) => deepOf(s, f, d1))) : DP.emptyDeep(W, H));
+        }
+        case "deepholdout": {
+            const src = deepOf(n.inputs[0], f, d1);
+            return deepOut(n, f, n.inputs[1] ? DP.deepHoldout(src, deepOf(n.inputs[1], f, d1)) : src);
+        }
+        case "deepcrop": return deepOut(n, f, DP.deepCrop(deepOf(n.inputs[0], f, d1), paramAt(n, "znear", f), paramAt(n, "zfar", f), n.outside === "on"));
+        case "deepflatten": { const fl = DP.deepFlatten(deepOf(n.inputs[0], f, d1)); return X(fl.img, { "depth.z": fl.depth }); }
+        case "oneview": {
+            const v = paramAt(n, "view", f) || firstView(comp);
+            return viewsOf(comp).includes(v) ? inView(n.inputs[0], f, v) : X(run(n.inputs[0], f, d1), exOf(n.inputs[0], f));
+        }
+        case "joinviews": {
+            const i = Math.max(0, viewsOf(comp).indexOf(view));
+            const s0 = n.inputs[Math.min(i, 3)] || n.inputs[0];
+            return X(run(s0, f, d1), exOf(s0, f));
+        }
+        case "anaglyph": case "sidebyside": {
+            const [vl, vr] = views2();
+            const L = inView(n.inputs[0], f, vl).img, R = conform(inView(n.inputs[0], f, vr).img, L.w, L.h);
+            return X(n.type === "anaglyph" ? anaglyphImage(L, R, n.mode || "colour") : sideBySide(L, R, n.layout === "over under"), {});
+        }
         case "cornerpin": {
             const { from, to } = WP.pinCorners((p) => paramAt(n, p, f), inFmt(n));
             const inv = n.invert === "on" ? WP.homography(from, to) : WP.homography(to, from);
@@ -1675,6 +1927,28 @@ export function renderNode(comp, id, frame, ctx) {
     };
     const img = run(id, frame, 0);
     return { w: img.w, h: img.h, data: img.data, ch: exOf(id, frame) };
+}
+
+/** Red from the left eye, green and blue from the right ("grey": each eye's luminance); alpha the larger. */
+export function anaglyphImage(L, R, mode) {
+    const out = blank(L.w, L.h), o = out.data, a = L.data, b = R.data;
+    for (let i = 0; i < L.w * L.h * 4; i += 4) {
+        if (mode === "grey") {
+            const yl = 0.2126 * a[i] + 0.7152 * a[i + 1] + 0.0722 * a[i + 2], yr = 0.2126 * b[i] + 0.7152 * b[i + 1] + 0.0722 * b[i + 2];
+            o[i] = yl; o[i + 1] = yr; o[i + 2] = yr;
+        } else { o[i] = a[i]; o[i + 1] = b[i + 1]; o[i + 2] = b[i + 2]; }
+        o[i + 3] = Math.max(a[i + 3], b[i + 3]);
+    }
+    return out;
+}
+/** Two pictures of one size next to each other (left first) or above each other (left on top). */
+export function sideBySide(L, R, over) {
+    const w = L.w, h = L.h, out = blank(over ? w : w * 2, over ? h * 2 : h);
+    for (let y = 0; y < h; y++) {
+        out.data.set(L.data.subarray(y * w * 4, (y + 1) * w * 4), over ? y * w * 4 : y * w * 8);
+        out.data.set(R.data.subarray(y * w * 4, (y + 1) * w * 4), over ? (y + h) * w * 4 : y * w * 8 + w * 4);
+    }
+    return out;
 }
 
 /** A GridWarp's two point lists at frame f (flat [x, y, ...], pixels of its input): the source grid, and the
@@ -1774,40 +2048,45 @@ export function sourcesOf(comp, id) {
 }
 
 /** Every Read and comp frame `id` reads to be drawn at `frame`: [{node, frame}], each once. */
-export function sourceNeeds(comp, id, frame) {
+export function sourceNeeds(comp, id, frame, view = null) {
     const out = [], seen = new Set();
-    const walk = (nid, f, depth) => {
-        const key = `${nid}@${f}`;
+    const vs = viewsOf(comp);
+    const walk = (nid, f, depth, v) => {
+        const key = `${nid}@${f}#${v || ""}`;
         if (!nid || depth > 256 || seen.has(key)) return;
         seen.add(key);
-        const n = nodeById(comp, nid);
+        const n = viewNode(nodeById(comp, nid), v);
         if (!n) return;
-        if (n.disable) { if (n.inputs.length) walk(n.inputs[0], f, depth + 1); return; }
-        if (n.type === "read") { out.push({ node: n, frame: f }); return; }
-        if (EX.AI_KINDS[n.type]) { const rd = EX.aiRead(n, f); if (rd) out.push({ node: rd, frame: f }); }
+        if (n.disable) { if (n.inputs.length) walk(n.inputs[0], f, depth + 1, v); return; }
+        if (n.type === "read") { out.push({ node: n, frame: f, view: v }); return; }
+        if (n.type === "deepread") { out.push({ node: n, frame: f, view: v, deep: true }); return; }
+        if (n.type === "oneview") { const w = paramAt(n, "view", f) || vs[0] || null; walk(n.inputs[0], f, depth + 1, vs.includes(w) ? w : v); return; }
+        if (n.type === "anaglyph" || n.type === "sidebyside") { for (const w of vs.length ? vs.slice(0, 2) : [v]) walk(n.inputs[0], f, depth + 1, w); return; }
+        if (n.type === "joinviews") { const i = Math.max(0, vs.indexOf(v)); walk(n.inputs[Math.min(i, 3)] || n.inputs[0], f, depth + 1, v); return; }
+        if (EX.AI_KINDS[n.type]) { const rd = EX.aiRead(n, f); if (rd) out.push({ node: rd, frame: f, view: v }); }
         const xr = EX.extraReads(n, f);
-        if (xr) { for (const [k, g] of xr) walk(n.inputs[k], g, depth + 1); return; }
+        if (xr) { for (const [k, g] of xr) walk(n.inputs[k], g, depth + 1, v); return; }
         if (n.type === "retime") {
             const t = retimeFrame(n, f);
-            if (n.blend !== "mix" && n.blend !== "vectors") walk(n.inputs[0], Math.floor(t + 0.5), depth + 1);
-            else { const f0 = Math.floor(t); walk(n.inputs[0], f0, depth + 1); if (t - f0 >= 1e-9) walk(n.inputs[0], f0 + 1, depth + 1); }
+            if (n.blend !== "mix" && n.blend !== "vectors") walk(n.inputs[0], Math.floor(t + 0.5), depth + 1, v);
+            else { const f0 = Math.floor(t); walk(n.inputs[0], f0, depth + 1, v); if (t - f0 >= 1e-9) walk(n.inputs[0], f0 + 1, depth + 1, v); }
             return;
         }
         if (n.type === "vectors" || (n.type === "motionblur" && !n.inputs[1])) {
-            for (const g of [f - 1, f, f + 1]) walk(n.inputs[0], g, depth + 1);
+            for (const g of [f - 1, f, f + 1]) walk(n.inputs[0], g, depth + 1, v);
             if (n.type === "vectors") return;
         }
-        if (n.type === "depthblur" && !n.inputs[1]) { walk(n.inputs[0], f, depth + 1); return; }
+        if (n.type === "depthblur" && !n.inputs[1]) { walk(n.inputs[0], f, depth + 1, v); return; }
         if (n.type === "paint") {
             const fr = PT.paintFrames(n.strokes, f);
-            for (const g of fr.clone) walk(n.inputs[0], g, depth + 1);
-            if (n.inputs[1]) for (const g of fr.reveal) walk(n.inputs[1], g, depth + 1);
-            walk(n.inputs[0], f, depth + 1);
+            for (const g of fr.clone) walk(n.inputs[0], g, depth + 1, v);
+            if (n.inputs[1]) for (const g of fr.reveal) walk(n.inputs[1], g, depth + 1, v);
+            walk(n.inputs[0], f, depth + 1, v);
             return;
         }
-        for (const s of n.inputs) walk(s, f, depth + 1);
+        for (const s of n.inputs) walk(s, f, depth + 1, v);
     };
-    walk(id, frame, 0);
+    walk(id, frame, 0, view || vs[0] || null);
     return out;
 }
 
