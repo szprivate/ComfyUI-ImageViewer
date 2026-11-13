@@ -1421,7 +1421,8 @@ export function createCompEditor(host, opts = {}) {
             row.append(channelSelect(n, p, d, String(cur ?? d.def), write));
         } else if (d.kind === "chanlist") {
             const i = el(doc, "input"); i.type = "text"; i.value = cur ?? d.def ?? ""; i.placeholder = "mask.a, depth.z";
-            const have = C.channelsAt(st.comp, n.inputs[0]);
+            const fromIdx = d.from === "mask" ? C.maskIndex(n.type) : 0;
+        const have = C.channelsAt(st.comp, n.inputs[fromIdx]);
             i.title = `${d.help || ""}${have.length ? `\nComing in: ${have.join(", ")}` : "\nNothing but r g b a comes in"}`;
             i.onchange = () => write(i.value.trim());
             row.append(i);
@@ -1455,9 +1456,11 @@ export function createCompEditor(host, opts = {}) {
         if (d.kind === "chan") {
             for (const c of C.CH.RGBA) add(c);
             if (have.length) { const g = group("extra"); for (const c of have) add(c, c, g); }
-            const g = group("constant");
-            add("0", "0 (black)", g); add("1", "1 (white)", g);
-            if (n.type === "shuffle") add("-", "- (not written)", g);
+            if (d.from !== "mask") {
+                const g = group("constant");
+                add("0", "0 (black)", g); add("1", "1 (white)", g);
+                if (n.type === "shuffle") add("-", "- (not written)", g);
+            }
         } else {
             add("rgba", "rgba (the whole picture)");
             const layers = C.CH.layersOf(have);
@@ -1634,8 +1637,13 @@ export function createCompEditor(host, opts = {}) {
             pane.append(field("disable", dis));
         }
         const ps = Object.entries(t.params);
-        if (n.type === "colorcorrect") ccSection(n, t.params);
-        else for (const [p, d] of ps) if (d.kind !== "roto") pane.append(paramRow(n, p, d));
+        // The mask's channel and invert only matter with something in the mask input.
+        const mi = C.maskIndex(n.type), masked = mi >= 0 && !!n.inputs[mi];
+        const maskRow = (p) => p === "mask_channel" || p === "mask_invert";
+        if (n.type === "colorcorrect") {
+            ccSection(n, t.params);
+            if (masked) for (const [p, d] of ps) if (maskRow(p)) pane.append(paramRow(n, p, d));
+        } else for (const [p, d] of ps) if (d.kind !== "roto" && (masked || !maskRow(p))) pane.append(paramRow(n, p, d));
         if (n.type === "roto") {
             if (first) rotoSection(n);
             else pane.append(el(doc, "div", "mg-empty", "The shapes are drawn in the panel on top: click this node in the graph to bring it there."));

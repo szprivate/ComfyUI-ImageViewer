@@ -267,6 +267,25 @@ export const NODE_TYPES = {
     } },
     output: { label: "Output", cat: "Other", inputs: ["src"], params: {} },
 };
+/**
+ * Nodes that take a MASK and a mix on top of what they do: the last input is "mask", and the result is
+ * in + (result - in) x mix x the mask's channel (`maskMix`). Nodes that change the size, the time or only
+ * make a picture are left out; a node with a mix of its own keeps it (the mask then multiplies that).
+ */
+export const MASKABLE = new Set(["grade", "colorcorrect", "ocio_colorspace", "ocio_display", "glow", "lensflare", "blur",
+    "shuffle", "copy", "erode", "laplacian", "channelmerge", "channelmath", "premult", "unpremult", "lumakeyer", "chromakeyer",
+    "keyer", "motionblur", "depthblur", "defocus"]);
+/** MASKABLE nodes whose own arithmetic already takes `mix` (the mask stage then does not apply it twice). */
+export const OWN_MIX = new Set([...MASKABLE].filter((t) => NODE_TYPES[t].params.mix));
+for (const t of MASKABLE) {
+    const d = NODE_TYPES[t];
+    d.inputs = [...d.inputs, "mask"];
+    if (!d.params.mix) d.params.mix = { kind: "num", def: 1, min: 0, max: 1, step: 0.01, key: true, help: "How much of the result: 0 is what comes in" };
+    d.params.mask_channel = { kind: "chan", def: "a", from: "mask", label: "mask channel", help: "The mask input's channel that says where the node acts" };
+    d.params.mask_invert = { kind: "enum", def: "off", choices: ["off", "on"], label: "invert mask" };
+}
+/** The index of a MASKABLE node's mask input (-1 for the rest). */
+export function maskIndex(type) { return MASKABLE.has(type) ? NODE_TYPES[type].inputs.length - 1 : -1; }
 export const TYPE_ORDER = ["read", "constant", "roto", "merge", "copy", "transform", "reformat", "crop", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "keyer", "lumakeyer", "chromakeyer", "blur", "glow", "erode", "laplacian",
     "motionblur", "depthblur", "defocus", "lensflare", "shuffle", "addchannels", "removechannels", "channelmerge", "channelmath", "premult", "unpremult", "retime", "vectors", "output"];
 /** Nodes whose result is kept between renders (keyed by their whole upstream): they take long. */
@@ -1029,6 +1048,25 @@ export function channelsAt(comp, id, depth = 0) {
     return have;
 }
 
+/**
+ * The mask stage: `src` (what came in) + (`img` - src) x mix x m, per pixel, for the picture and every extra
+ * channel of either (a channel one side lacks counts as 0). `m` is one plane (null: no mask), `invert` 1 - m.
+ * Float64 between steps, as the numpy twin's `mask_mix`.
+ */
+export function maskMix(src, sex, img, ex, m, mix, invert) {
+    const w = img.w, h = img.h, N = w * h, out = blank(w, h), o = out.data, S = src.data, R = img.data;
+    const t = new Float64Array(N);
+    for (let p = 0; p < N; p++) t[p] = m ? mix * (invert ? 1 - m[p] : m[p]) : mix;
+    for (let p = 0, i = 0; p < N; p++, i += 4) for (let k = 0; k < 4; k++) o[i + k] = S[i + k] + (R[i + k] - S[i + k]) * t[p];
+    const oex = {};
+    for (const name of new Set([...Object.keys(sex || {}), ...Object.keys(ex || {})])) {
+        const a = (sex || {})[name], b = (ex || {})[name], c = new Float32Array(N);
+        for (let p = 0; p < N; p++) { const av = a ? a[p] : 0, bv = b ? b[p] : 0; c[p] = av + (bv - av) * t[p]; }
+        oex[name] = c;
+    }
+    return [out, oex];
+}
+
 export function renderNode(comp, id, frame, ctx) {
     const scale = ctx.scale || 1;
     const W = Math.max(1, Math.round(comp.format.width * scale)), H = Math.max(1, Math.round(comp.format.height * scale));
@@ -1067,6 +1105,7 @@ export function renderNode(comp, id, frame, ctx) {
                 [img, ex] = CH.writeTarget(base, exOf(n.inputs[0], f), conform(img, base.w, base.h), w);
             }
         }
+        if (n && !n.disable && MASKABLE.has(n.type)) [img, ex] = maskStage(n, f, depth, img, ex);
         memo.set(mk, img);
         xmemo.set(mk, ex);
         if (ck) {
@@ -1074,6 +1113,22 @@ export function renderNode(comp, id, frame, ctx) {
             while (ctx.cache.size > (ctx.cacheMax || 24)) ctx.cache.delete(ctx.cache.keys().next().value);
         }
         return img;
+    };
+    // A MASKABLE node's result held back by its mix and its mask's channel (where it is 0 the input shows).
+    const maskStage = (n, f, depth, img, ex) => {
+        const mix = OWN_MIX.has(n.type) ? 1 : paramAt(n, "mix", f);
+        const mi = n.inputs[maskIndex(n.type)];
+        if (!mi && mix === 1) return [img, ex];
+        const i0 = n.inputs[0];
+        const s0 = i0 ? run(i0, f, depth + 1) : blank(img.w, img.h);
+        const src = conform(s0, img.w, img.h), sex = i0 ? conformExtras(exOf(i0, f), s0.w, s0.h, img.w, img.h) : {};
+        let m = null;
+        if (mi) {
+            const mp = run(mi, f, depth + 1);
+            const plane = CH.channelOf(mp, exOf(mi, f), n.mask_channel || "a");
+            m = plane ? conformPlane(plane, mp.w, mp.h, img.w, img.h) : new Float32Array(img.w * img.h);
+        }
+        return maskMix(src, sex, img, ex, m, mix, (n.mask_invert || "off") === "on");
     };
     // A SPATIAL node: its picture and every extra channel through the same operation.
     const spatial = (srcId, f, d1, fn) => { const src = run(srcId, f, d1); return X(fn(src), CH.mapExtras(exOf(srcId, f), src.w, src.h, fn)); };
