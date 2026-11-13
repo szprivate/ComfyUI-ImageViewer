@@ -11,6 +11,7 @@ import { HistoryMixin, HISTORY_LIMIT_DEFAULT, HISTORY_LIMIT_OLD_DEFAULT, HISTORY
 import { mergeTabHistories, snapshotTab, isMediaTabKey, isFeedTabKey, foldIntoTab, groupFromLabel, packSnapshot, unpackSnapshot } from "./imageViewer_historyData.js";
 import { PrevizWorldMixin } from "./imageViewer_previzWorld.js";
 import { PrevizTerrainMixin } from "./imageViewer_previzTerrain.js";
+import { PrevizTerrainErodeMixin } from "./imageViewer_previzTerrainErode.js";
 import { PlaybackMixin } from "./imageViewer_mixinPlayback.js";
 import { ParamsMixin }   from "./imageViewer_mixinParams.js";
 import { UIMixin }       from "./imageViewer_mixinUI.js";
@@ -1718,6 +1719,7 @@ Object.assign(
     FrameMasksMixin,
     PrevizWorldMixin,
     PrevizTerrainMixin,
+    PrevizTerrainErodeMixin,
     PrefsMixin,
 );
 

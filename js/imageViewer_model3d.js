@@ -36,6 +36,7 @@ import { CameraAim3DMixin } from "./imageViewer_cameraAim3d.js";
 import { View3DVideoPlaneMixin, isVideoSrc } from "./imageViewer_view3dVideoPlane.js";
 import { ScatterPaint3DMixin } from "./imageViewer_scatterPaint3d.js";
 import { TerrainBrush3DMixin } from "./imageViewer_terrainBrush3d.js";
+import { TerrainErode3DMixin } from "./imageViewer_terrainErode3d.js";
 import { displayStates, isPickable } from "./imageViewer_sceneLayers.js";
 import { constrainedLocals } from "./imageViewer_constraints.js";
 
@@ -734,6 +735,8 @@ export class Model3DView {
         // So is the scatter brush.
         if (this._sp) this.scatterPaintEnd();
         if (this._tb) this.terrainBrushEnd();
+        // An erosion's render targets belong to this renderer.
+        if (this._te) this.terrainErodeEnd(false);
         if (this._raf && this._rafWin) {
             try { this._rafWin.cancelAnimationFrame(this._raf); } catch (e) {}
         }
@@ -2768,3 +2771,4 @@ Object.assign(Model3DView.prototype, CameraAim3DMixin);
 Object.assign(Model3DView.prototype, View3DVideoPlaneMixin);
 Object.assign(Model3DView.prototype, ScatterPaint3DMixin);
 Object.assign(Model3DView.prototype, TerrainBrush3DMixin);
+Object.assign(Model3DView.prototype, TerrainErode3DMixin);

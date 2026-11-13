@@ -145,7 +145,7 @@ class TerrainTests(unittest.TestCase):
         finally:
             pg.close()
         self.assertEqual([t.strip() for t in terrain_items],
-                         ["New terrain", "Sculpt", "Paint layer", "Clear sculpting", "Clear layer paint", "Scattering"])
+                         ["New terrain", "Sculpt", "Paint layer", "Erode…", "Clear sculpting", "Clear layer paint", "Scattering"])
         scatter_before = scatter_before[scatter_before.index("Pines"):]
         self.assertEqual(scatter_before[:8], ["Pines", "Trees", "Bushes", "Grass", "Rocks", "Columns", "Lamps", "Model…"])
         self.assertIn("Paint scatter", scatter_before)
@@ -319,6 +319,86 @@ class TerrainTests(unittest.TestCase):
         self.assertTrue(still_on)
         self.assertTrue(stopped)
         self.assertAlmostEqual(cleared["mid"], before["mid"], places=3)
+        self.assertEqual(self.errors, [])
+
+    def test_erosion_runs_live_and_applies_as_sculpt(self):
+        pg = self._page()
+        try:
+            P = "window.__panel"
+            pg.evaluate(f"() => {P}.previzAddWorldItem('terrain')")
+            self._built(pg)
+            pg.evaluate(f"() => {P}.previzAddWorldItem('scatter', 'grass')")
+            self._built(pg)
+            pg.evaluate(f"""() => {{ const v = {P}._modelView(); v.camera.position.set(110, 90, 110);
+                v.controls.target.set(0, 0, 0); v.controls.update(); v.requestRender(); }}""")
+            H = f"""() => {{ const v = {P}._modelView(); const t = {P}.previzScene().items.find((i) => i.kind === 'terrain');
+                const T = v._entries.get(t.id).terrain; return Array.from(T.heights, (h) => h * T.height); }}"""
+            before = pg.evaluate(H)
+            if SHOTS:
+                os.makedirs(SHOTS, exist_ok=True)
+                pg.wait_for_timeout(300)
+                pg.screenshot(path=os.path.join(SHOTS, "erode-before.png"))
+            entry = pg.evaluate(f"() => {P}._previzTerrainMenuEntries().find((e) => e.label === 'Erode…').disabled")
+            pg.evaluate(f"() => {P}._previzTerrainMenuEntries().find((e) => e.label === 'Erode…').run()")
+            box = pg.locator(".model-erode-box")
+            box.locator("input[data-key=iterations]").fill("400")
+            box.locator("input[data-key=iterations]").press("Enter")
+            box.locator("select[data-scatter]").select_option("wetness")
+            box.locator(".meb-run").click()
+            pg.wait_for_function(f"() => {{ const s = {P}._modelView().terrainErodeState(); return s && s.done >= 400 && !s.running; }}",
+                                 timeout=60000)
+            state = pg.evaluate(f"() => {P}._modelView().terrainErodeState()")
+            text = box.locator(".meb-text").text_content()
+            eroded = pg.evaluate(H)
+            if SHOTS:
+                pg.wait_for_timeout(300)
+                pg.screenshot(path=os.path.join(SHOTS, "erode-running.png"))
+            # Reset puts the terrain back and keeps the box.
+            box.locator(".meb-reset").click()
+            reset = pg.evaluate(H)
+            box.locator(".meb-run").click()
+            pg.wait_for_function(f"() => {{ const s = {P}._modelView().terrainErodeState(); return s && s.done >= 400; }}", timeout=60000)
+            again = pg.evaluate(H)
+            box.locator(".meb-ok").click()
+            self._built(pg)
+            applied = pg.evaluate(H)
+            scene = pg.evaluate(f"""() => {{ const s = {P}.previzScene(); const t = s.items.find((i) => i.kind === 'terrain');
+                const sc = s.items.find((i) => i.kind === 'scatter');
+                return {{ sculpt: !!t.terrain.sculpt, layers: !!t.terrain.layerPaint, paint: !!(sc.scatter && sc.scatter.paint),
+                         box: !!{P}._modelView().stage.querySelector('.model-erode-box'),
+                         eroding: {P}._modelView().terrainEroding() }}; }}""")
+            if SHOTS:
+                pg.wait_for_timeout(400)
+                pg.screenshot(path=os.path.join(SHOTS, "erode-applied.png"))
+            labels = pg.evaluate(f"() => {P}._undoState().past.map((s) => s.label)")
+            pg.evaluate(f"() => {P}.previzUndo()")
+            self._built(pg)
+            undone = pg.evaluate(H)
+            # Without the GPU it runs on the CPU, and Cancel puts the terrain back.
+            pg.evaluate(f"() => {{ {P}._modelView()._teCpuOnly = true; {P}.previzTerrainErodeOpen(); }}")
+            pg.evaluate(f"() => {P}.previzTerrainErodeSet({{ iterations: 3 }})")
+            pg.evaluate(f"() => {P}.previzTerrainErodeRun(true)")
+            pg.wait_for_function(f"() => {{ const s = {P}._modelView().terrainErodeState(); return s && s.done >= 3; }}", timeout=30000)
+            cpu = pg.evaluate(f"() => {P}._modelView().terrainErodeState().gpu")
+            pg.evaluate(f"() => {P}.previzTerrainErodeCancel()")
+            cancelled = pg.evaluate(H)
+            closed = pg.evaluate(f"() => !{P}._modelView().stage.querySelector('.model-erode-box')")
+        finally:
+            pg.close()
+        diff = lambda a, b: max(abs(x - y) for x, y in zip(a, b))
+        self.assertFalse(entry)
+        self.assertTrue(state["gpu"], "the GPU erodes where WebGL2 has float targets")
+        self.assertIn("400 / 400", text)
+        self.assertGreater(diff(eroded, before), 0.5)
+        self.assertLess(diff(reset, before), 1e-4)
+        self.assertLess(diff(again, eroded), 1e-3)
+        self.assertLess(diff(applied, eroded), 0.02)
+        self.assertEqual(scene, {"sculpt": True, "layers": True, "paint": True, "box": False, "eroding": False})
+        self.assertEqual(labels[-1], "erode Terrain")
+        self.assertLess(diff(undone, before), 1e-4)
+        self.assertFalse(cpu)
+        self.assertLess(diff(cancelled, before), 1e-4)
+        self.assertTrue(closed)
         self.assertEqual(self.errors, [])
 
 

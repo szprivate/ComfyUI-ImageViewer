@@ -43,6 +43,7 @@ export const TerrainBrush3DMixin = {
     /** Start the terrain brushes on terrain `id`. Answers an error text, or "". */
     terrainBrushBegin(id, patch = null) {
         if (this._sp && this.scatterPaintEnd) this.scatterPaintEnd();
+        if (this._te && this.terrainErodeEnd) this.terrainErodeEnd(false);
         this.terrainBrushEnd();
         const entry = this._entries.get(id);
         if (!entry || !entry.item || entry.item.kind !== "terrain") return "Select a terrain to edit.";

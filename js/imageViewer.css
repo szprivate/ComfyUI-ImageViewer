@@ -2735,3 +2735,26 @@ audio.src-media { width: 90%; }
 .frame-mask-input.bad { border-color: #c44; }
 .frame-mask-slider { flex: 1 1 auto; min-width: 0; accent-color: #f60; }
 .frame-mask-value { width: 34px; text-align: right; color: #aaa; font-size: 11px; }
+/* Terrain > Erode… (imageViewer_previzTerrainErode.js). */
+.model-erode-box { position: absolute; right: 8px; top: 40px; z-index: 7; width: 250px;
+    display: flex; flex-direction: column; gap: 8px; padding: 8px; border-radius: 4px;
+    background: rgba(0, 0, 0, 0.8); border: 1px solid #333; color: #ddd; font: 11px/16px sans-serif; }
+.model-erode-box .meb-title { color: #f60; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-erode-box .meb-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: center; }
+.model-erode-box .meb-label { color: #999; }
+.model-erode-box .meb-in { height: 20px; min-width: 0; background: #1b1b1b; color: #6cf; border: 1px solid #444;
+    border-radius: 3px; font: inherit; padding: 0 4px; box-sizing: border-box; }
+.model-erode-box .meb-in:focus { outline: none; border-color: #f60; }
+.model-erode-box .meb-apply { display: flex; flex-direction: column; gap: 4px; border-top: 1px solid #333; padding-top: 6px; }
+.model-erode-box .meb-check { display: flex; gap: 6px; align-items: center; color: #bbb; }
+.model-erode-box .meb-follow { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; align-items: center; color: #999; }
+.model-erode-box .meb-follow span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-erode-box .meb-bar { height: 4px; background: #2a2a2a; border-radius: 2px; overflow: hidden; }
+.model-erode-box .meb-fill { height: 100%; width: 0; background: #f60; }
+.model-erode-box .meb-text { color: #999; margin-top: 3px; }
+.model-erode-box .meb-btns { display: flex; gap: 4px; }
+.model-erode-box .spb-btn { flex: 1; height: 22px; padding: 0 6px; background: #2a2a2a; color: #ccc;
+    border: 1px solid #444; border-radius: 3px; cursor: pointer; font: inherit; }
+.model-erode-box .spb-btn.on { background: #f60; border-color: #f60; color: #111; }
+.model-erode-box .spb-btn:hover:not(.on):not(:disabled) { border-color: #777; }
+.model-erode-box .spb-btn:disabled { opacity: 0.45; cursor: default; }

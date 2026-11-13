@@ -51,6 +51,8 @@ export const PrevizTerrainMixin = {
                 disabled: !ground, title: why || TOOL_TIPS.layer,
                 run: () => this.previzTerrainBrushStart("layer", i) })), disabled: !ground, title: why },
             ...(on ? [{ label: "Stop editing terrain", title: "Esc", run: () => this.previzTerrainBrushStop() }] : []),
+            { label: "Erode…", disabled: !ground, title: why || "Rain and sliding wear the ground into valleys, live; Apply keeps it",
+              run: () => this.previzTerrainErodeOpen() },
             { label: "Clear sculpting", disabled: !(t && t.sculpt), title: why || "Back to the generated heights",
               run: () => this.previzTerrainClear("sculpt") },
             { label: "Clear layer paint", disabled: !(t && t.layerPaint), title: why || "Back to the slope and height rules",
