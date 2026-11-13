@@ -427,6 +427,21 @@ class EditResolveToolsBrowserTests(Base):
 
     # ── still frame ──
 
+    def test_selecting_a_clip_leaves_the_playhead_where_it_is(self):
+        # V1: a 0-96, c 96-168, b 168-264. A click on a clip's body selects it and moves no playhead,
+        # in the Selection mode and in the Trim mode.
+        pg = self.page()
+        self.fit(pg)
+        mid = """(i) => { const b = [...__panel._editTlUi.rows.querySelectorAll('.edit-track[data-track="V1"] .edit-shot')][i];
+            const r = b.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }"""
+        for mode in ("select", "trim"):
+            pg.evaluate("(m) => { __panel.editTlMode(m); __panel._editTlSel = null; __panel._editTlEditSel = null;"
+                        " __panel.setFrame(30); __panel.editTlRefresh(); }", mode)
+            x, y = pg.evaluate(mid, 2)
+            pg.mouse.click(x, y)
+            self.assertEqual(pg.evaluate("() => [__panel._editTlSel && __panel._editTlSel.i, __panel.currentFrame]"), [2, 30], mode)
+        pg.evaluate("() => __panel.editTlMode('select')")
+
     def test_a_still_frame_of_the_playhead_goes_to_the_history_and_with_shift_into_the_cut(self):
         # V1: a 0-96 (a film, in 0), c 96-168 (a still), b 168-264 (in 1).
         pg = self.page()
