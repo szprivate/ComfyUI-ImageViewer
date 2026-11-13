@@ -679,3 +679,28 @@ test("a MASKABLE node has a mask input last, a mix, and the mask holds it back",
     const [oi] = C.maskMix(src, {}, img, {}, Float32Array.from([1, 0]), 1, true);
     assert.deepEqual(Array.from(oi.data), [1, 1, 1, 1, 1, 1, 1, 1]);
 });
+
+test("bounding boxes: a small thing carries its box through transform, blur and merge, and the numbers stay", () => {
+    const comp = C.newComp({ width: 40, height: 30 });
+    const r = C.addNode(comp, read(comp, "a.png"));
+    const t = C.addNode(comp, C.makeNode(comp, "transform", { inputs: [r.id], translate: [5, 3] }));
+    const b = C.addNode(comp, C.makeNode(comp, "blur", { inputs: [t.id], size: 3 }));
+    const bg = C.addNode(comp, C.makeNode(comp, "constant", { color: [0.2, 0.3, 0.4, 1] }));
+    const m = C.addNode(comp, C.makeNode(comp, "merge", { inputs: [bg.id, b.id] }));
+    const pic = { w: 40, h: 30, data: new Float32Array(40 * 30 * 4) };
+    for (let y = 10; y < 14; y++) for (let x = 12; x < 16; x++) for (let k = 0; k < 4; k++) pic.data[(y * 40 + x) * 4 + k] = 0.5;
+    const memo = new Map();
+    const ctx = { scale: 1, source: () => pic, memo };
+    const out = C.renderNode(comp, m.id, 0, ctx);
+    const read0 = memo.get(`${r.id}@0`), blur0 = memo.get(`${b.id}@0`);
+    assert.deepEqual(read0.bb, [12, 10, 16, 14]);
+    assert.ok(blur0.bb && blur0.bb[0] > 0 && blur0.bb[2] < 40, `the blur's box: ${blur0.bb}`);
+    // The same comp without boxes (the full arithmetic) gives the same picture.
+    const full = { ...pic, data: pic.data };
+    const ctx2 = { scale: 1, source: () => full, memo: new Map() };
+    const strip = (img) => { delete img.bb; return img; };
+    const plain = C.renderNode(comp, m.id, 0, { ...ctx2, source: () => strip({ w: 40, h: 30, data: pic.data }) });
+    let d = 0;
+    for (let i = 0; i < out.data.length; i++) d = Math.max(d, Math.abs(out.data[i] - plain.data[i]));
+    assert.ok(d < 1e-6, `same numbers: ${d}`);
+});

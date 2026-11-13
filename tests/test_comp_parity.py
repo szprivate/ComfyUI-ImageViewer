@@ -96,6 +96,28 @@ def mask_cases(sources):
     return c
 
 
+def box_cases(sources):
+    """Small things over a plate: the preview works only inside their boxes (bounding boxes); the numbers must
+    not change. A sparse picture, a crop moved and blurred, a merge mask, a roto-free mask stage, a reformat."""
+    c = []
+    N = node
+    sparse = np.zeros((H, W, 4), np.uint8)
+    sparse[5:9, 7:12] = src(9, 5, 4)
+    sp = dict(sources, Read3=sparse)
+    c.append(({"comp": comp([read(1), read(2), N("crop", 1, ["Read1"], topleft=[4, 3], bottomright=[10, 8]),
+                             N("transform", 1, ["crop1"], translate=[6.5, 4.25], rotate=20, scale=[0.8, 1.3]),
+                             N("blur", 1, ["transform1"], size=4), merge(1, "Read2", "blur1"), out("Merge1")])}, sources))
+    c.append(({"comp": comp([read(2), read(3), N("blur", 1, ["Read3"], size=7),
+                             merge(1, "Read2", "blur1", operation="screen"), out("Merge1")])}, sp))
+    c.append(({"comp": comp([read(2), read(3), N("grade", 1, ["Read3", None], gain=2),
+                             N("transform", 1, ["grade1"], translate=[-9, 2]), merge(1, "Read2", "transform1", "Read1", mix=0.6),
+                             out("Merge1")])}, dict(sp, Read1=src(1))))
+    c.append(({"comp": comp([read(3), N("blur", 1, ["Read3"], size=30), out("blur1")])}, sp))
+    c.append(({"comp": comp([read(2), read(3), N("reformat", 1, ["Read3"], width=14, height=10, resize="none"),
+                             merge(1, "Read2", "reformat1", operation="plus"), N("blur", 2, ["Merge1", "Read3"], size=2), out("blur2")])}, sp))
+    return c
+
+
 def cases():
     s1, s2, s3 = src(1), src(2), src(3, 11, 7)
     sources = {"Read1": s1, "Read2": s2}
@@ -284,6 +306,7 @@ def new_node_cases(sources):
         c.append(one(node("channelmath", 1, ["Read1"], operation=op, value=0.4, channels="rgba" if op == "clamp" else "rgb", mix=0.8)))
     c.extend(channel_cases(sources))
     c.extend(mask_cases(sources))
+    c.extend(box_cases(sources))
     return c
 
 
