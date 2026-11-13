@@ -9,7 +9,7 @@ const [, , inPath, outPath] = process.argv;
 const cases = JSON.parse(readFileSync(inPath, "utf8"));
 const out = { pictures: [], table: {} };
 for (const [type, t] of Object.entries(C.NODE_TYPES)) {
-    out.table[type] = { inputs: t.inputs, params: Object.fromEntries(Object.entries(t.params).map(([p, d]) =>
+    out.table[type] = { label: t.label, inputs: t.inputs, params: Object.fromEntries(Object.entries(t.params).map(([p, d]) =>
         [p, { kind: d.kind, def: d.def, key: !!d.key, min: d.min ?? null, max: d.max ?? null, choices: d.choices ?? null }])) };
 }
 for (const c of cases) {

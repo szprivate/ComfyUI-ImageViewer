@@ -50,6 +50,11 @@ export const COLORSPACES = ["auto", "srgb", "linear"];
  * A param: kind num | int | vec2 | color (linear RGBA) | enum | file | text; `key` = it can be animated.
  */
 export const REFORMAT_TYPES = ["to format", "scale"];
+export const MISSING_FRAMES = ["black", "hold", "error"];
+export const WRITE_FORMATS = ["exr", "png", "tiff", "jpg", "mov", "mp4", "webm"];
+export const WRITE_CHANNELS = ["rgba", "rgb", "all"];
+export const WRITE_DEPTHS = ["half", "float", "8", "16"];
+export const EXR_COMPRESSIONS = ["zip", "zips", "none"];
 export const REFORMAT_RESIZE = ["none", "fit", "fill", "width", "height", "distort"];
 export const VIEW_ANAGLYPH = ["colour", "grey"];
 export const VIEW_LAYOUTS = ["side by side", "over under"];
@@ -59,6 +64,7 @@ export const NODE_TYPES = {
         offset: { kind: "int", def: 0, help: "Frames to slide the footage by: +10 starts it 10 frames later" },
         colorspace: { kind: "ocio_cs", def: "auto", choices: COLORSPACES, help: "What the file holds. auto: EXR / HDR are linear, the rest sRGB; or any colourspace of the OCIO config, converted to the working space" },
         fit: { kind: "enum", def: "fit", choices: FITS, help: "How a picture of another size is laid into the comp" },
+        missing: { kind: "enum", def: "black", choices: MISSING_FRAMES, help: "A frame of a sequence that is not on disk: black, the nearest frame there is (hold), or the render stops (error)" },
     } },
     constant: { label: "Constant", cat: "Image", inputs: [], params: {
         color: { kind: "color", def: [0, 0, 0, 1], key: true },
@@ -342,6 +348,27 @@ export const NODE_TYPES = {
     sidebyside: { label: "SideBySide", cat: "Views", inputs: ["src"], params: {
         layout: { kind: "enum", def: "side by side", choices: VIEW_LAYOUTS, help: "The first two views next to each other (left first) or above each other (left on top)" },
     } },
+    write: { label: "Write", cat: "Other", inputs: ["src"], params: {
+        file: { kind: "outfile", def: "", help: "Where it writes: shot.####.exr (one # per digit), or a film. Relative: beside the comp. Empty: <comp>_<name>/<name>.####.<type> beside the comp" },
+        file_type: { kind: "enum", def: "exr", choices: WRITE_FORMATS, label: "type", help: "The file type (a path's own ending wins)" },
+        channels: { kind: "enum", def: "rgba", choices: WRITE_CHANNELS, help: "all: every extra channel too, as layers of one multi-layer EXR" },
+        depth: { kind: "enum", def: "half", choices: WRITE_DEPTHS, help: "EXR: half or float; PNG / TIFF: 8 or 16 bits (TIFF float: 32 float)" },
+        compression: { kind: "enum", def: "zip", choices: EXR_COMPRESSIONS, help: "EXR compression (lossless)" },
+        colorspace: { kind: "ocio_cs", def: "", help: "A float file (EXR) is written in this colourspace; empty: the working space" },
+        display: { kind: "ocio_display", def: "", help: "PNG / TIFF / JPEG / films: encoded for this display; empty: plain sRGB" },
+        view: { kind: "ocio_view", def: "" },
+        first: { kind: "int", def: null, help: "The first comp frame it writes; empty: 0" },
+        last: { kind: "int", def: null, help: "The last comp frame it writes; empty: the comp's last" },
+        handles: { kind: "int", def: 0, min: 0, max: 1000, help: "Extra frames written before the first and after the last" },
+        first_number: { kind: "int", def: 1001, min: 0, label: "frame 0 is", help: "The file number of comp frame 0 (a handle before it gets a lower number)" },
+        padding: { kind: "int", def: 4, min: 1, max: 9, help: "Digits of the frame number when the path has no #" },
+        timecode: { kind: "text", def: "", help: "Timecode of comp frame 0, HH:MM:SS:FF; empty: the footage's own, else none" },
+        metadata: { kind: "enum", def: "on", choices: ["on", "off"], help: "Write the metadata that arrives (and the comp's own) into EXR headers" },
+    } },
+    metadata: { label: "Metadata", cat: "Other", inputs: ["src"], params: {
+        set: { kind: "text", def: "", help: "key = value; key2 = value - set or replaced on the way down" },
+        remove: { kind: "text", def: "", help: "Keys taken off (comma separated; * at the end matches a start: exr/*)" },
+    } },
     cornerpin: { label: "CornerPin", cat: "Transform", inputs: ["src"], params: {
         to1: { kind: "vec2", def: null, key: true, step: 1, help: "Where the bottom left corner goes, pixels of the picture that comes in (empty: where it is)" },
         to2: { kind: "vec2", def: null, key: true, step: 1, help: "Where the bottom right corner goes" },
@@ -411,10 +438,12 @@ for (const t of MASKABLE) {
 /** The index of a MASKABLE node's mask input (-1 for the rest). */
 export function maskIndex(type) { return MASKABLE.has(type) ? NODE_TYPES[type].inputs.length - 1 : -1; }
 export const TYPE_ORDER = ["read", "constant", "roto", "paint", "merge", "copy", "transform", "reformat", "crop", "cornerpin", "tracker", "planartracker", "stmap", "vectorwarp", "lensdistortion", "gridwarp", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "keyer", "lumakeyer", "chromakeyer", "blur", "glow", "erode", "laplacian",
-    "motionblur", "depthblur", "defocus", "lensflare", "shuffle", "addchannels", "removechannels", "channelmerge", "channelmath", "premult", "unpremult", "retime", "vectors",
+    "motionblur", "depthblur", "defocus", "lensflare", "shuffle", "addchannels", "removechannels", "channelmerge", "channelmath", "premult", "unpremult", "retime", "vectors", "metadata", "write",
     "camera3d", "card3d", "geo3d", "project3d", "scene3d", "pointcloud", "render3d",
     "deepread", "deepfromimage", "deepmerge", "deepholdout", "deepcrop", "deepflatten",
     "oneview", "joinviews", "anaglyph", "sidebyside", "output"];
+/** Nodes that hand their input on unchanged: what they do is outside the pixels (a file written, metadata). */
+export const PASS_THROUGH = new Set(["output", "write", "metadata"]);
 /** Nodes whose result is kept between renders (keyed by their whole upstream): they take long. */
 export const HEAVY = new Set(["vectors", "motionblur", "depthblur", "defocus"]);
 export const NODE_W = 120;
@@ -556,6 +585,14 @@ export function eyeOffset(comp, view, interaxial) {
 }
 /** The view made when none is asked for: the comp's first, or null. */
 export const firstView = (comp) => viewsOf(comp)[0] || null;
+
+/** The comp's Write nodes, in graph order. */
+export function writeNodes(comp) { return (comp && comp.nodes || []).filter((n) => n.type === "write"); }
+
+/** The Reads a comp names (for relinking and localising): [{id, name, file, local}]. */
+export function readNodes(comp) {
+    return (comp && comp.nodes || []).filter((n) => n.type === "read" && n.file).map((n) => ({ id: n.id, name: n.name || n.id, file: n.file, local: n.local || "" }));
+}
 
 export function nodeById(comp, id) { return (comp && comp.nodes || []).find((n) => n.id === id) || null; }
 
@@ -1853,7 +1890,7 @@ export function renderNode(comp, id, frame, ctx) {
             const m = mat.mul(mat.s(scale, scale), mat.mul(m0, mat.s(1 / scale, 1 / scale)));
             return spatial(n.inputs[0], f, d1, (p) => resample(p, m, p.w, p.h));
         }
-        case "output": return run(n.inputs[0], f, d1);
+        case "output": case "write": case "metadata": return run(n.inputs[0], f, d1);
         default: return blank(W, H);
         }
     };
