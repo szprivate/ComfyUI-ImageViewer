@@ -1688,6 +1688,9 @@ textarea.param-input {
    exactly on the picture's rectangle, the words drawn in the frame there
    (paintTitle), with the font the render draws with. */
 .edit-title-layer { position: absolute; pointer-events: none; transform-origin: center; }
+/* The timeline's frame under the Edit tab's pictures (_editPlayFrameBg): black where a picture of another shape leaves room. */
+.edit-frame-bg { position: absolute; pointer-events: none; transform-origin: center; z-index: 0; }
+.edit-frame-bg > div { position: absolute; background: #000; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1); }
 
 /* Inspector and Effects (imageViewer_editPanels.js). The Inspector wears what
    the viewer's other panels wear: their ground (the panel's own), the header
@@ -2032,6 +2035,11 @@ textarea.param-input {
                  pointer-events: none; z-index: 3; display: none; }
 .edit-ruler .edit-range { background: rgba(255,216,77,.16); border-left: none; border-right: none; pointer-events: none; }
 .insp-select { box-sizing: border-box; background: #111; color: #00e5ff; border: 1px solid #333; border-radius: 2px; font-size: 11px; padding: 1px 2px; }
+/* Timeline settings (the Inspector with nothing selected): size, its presets, the rate's own number. */
+.insp-num.insp-size { width: 58px; }
+.insp-size-preset { width: 26px; }
+.insp-num.insp-rate-num { width: 64px; margin-left: 4px; }
+.insp-fit { max-width: 100%; }
 
 /* Contact Sheet of 3+ history items (imageViewer_contactGrid.js): every item in
    its own letterboxed cell; the two-layer compare stack steps aside. */

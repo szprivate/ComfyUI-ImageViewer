@@ -523,9 +523,10 @@ export const EditSourceMixin = {
         const still = STILL.test(file), sound = SOUND.test(file);
         let dur = still ? Infinity : 0;
         const tab = this.activeTab;
-        if (!still && this._editTlProbe) {
+        if (this._editTlProbe) {
+            // A still is asked about too: its size can be the timeline's (adoptSettings at the edit).
             const info = (await this._editTlProbe([file]))[file];
-            if (info && info.duration > 0) dur = info.duration;
+            if (!still && info && info.duration > 0) dur = info.duration;
         }
         // The user left the cut's tab while its length was asked for (a History
         // double-click goes to the snapshot's tab): kept, shown with the next cut.
@@ -893,6 +894,9 @@ export const EditSourceMixin = {
             tp = b > a ? { in: a, length: b - a, at: tl.in } : { error: "mark the source's range first" };
         }
         if (tp.error) { this._editTlSay(tp.error); return false; }
+        // The first picture into a timeline with none takes its size and frame rate (unless set by hand).
+        const adopted = s.sound ? { cut, took: "" } : D.adoptSettings(cut, this._editTlInfo && this._editTlInfo.get(s.file));
+        cut = adopted.cut;
         let track = this._editSrcDest(cut, s.sound);
         if (s.sound && !track) {
             cut = D.addTrack(cut, "audio");
@@ -910,7 +914,8 @@ export const EditSourceMixin = {
         if (span && kind !== "replace" && this._editTlSeek) this._editTlSeek(span.end);
         this.editTlRefresh();
         const label = (SOURCE_BUTTONS.find((b) => b[0] === kind) || [kind, kind])[1];
-        this._editTlSay(`${label}: ${s.name}, ${Math.round(tp.length * fps)} frames on ${res.sel && res.sel.track ? res.sel.track : "V1"}`);
+        this._editTlSay(`${label}: ${s.name}, ${Math.round(tp.length * (cut.fps || fps))} frames on ${res.sel && res.sel.track ? res.sel.track : "V1"}`
+                        + (adopted.took ? ` \u00b7 timeline set to ${adopted.took}` : ""));
         return true;
     },
 
