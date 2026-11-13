@@ -183,22 +183,79 @@ export const EditPlayMixin = {
             // Keyframes: the clip's look at this moment of its own time (clipFx(clip, u)).
             const fx = clip ? D.clipFx(live && live.clip === clip ? { fx: live.fx } : clip, this._editPlayU(el)) : null;
             let transform = base, clipPath = "";
-            if (fx) {
-                const w = el.videoWidth || el.naturalWidth, h = el.videoHeight || el.naturalHeight;
-                const W = el.clientWidth, H = el.clientHeight;
-                if (w && h && W && H) {
-                    // Where the picture lies in its layer: fitted, in the middle.
-                    const s = Math.min(W / w, H / h);
-                    const place = D.fxPlace(fx, { x: (W - w * s) / 2, y: (H - h * s) / 2, w: w * s, h: h * s });
-                    transform = (base + " " + place.transform).trim();
-                    clipPath = place.clip;
-                }
+            const w = el.videoWidth || el.naturalWidth, h = el.videoHeight || el.naturalHeight;
+            const W = el.clientWidth, H = el.clientHeight;
+            if (clip && w && h && W && H) {
+                // Where the picture lies in its layer: in the timeline's frame (fitted into the layer),
+                // brought into it by its Scaling (D.layerPlace) - the layer's own picture scaled to that box.
+                const g = this._editPlayPlace(clip, w, h, W, H);
+                const place = D.fxPlace(fx || D.NEUTRAL_FX, g.box, g.frame);
+                const scaled = Math.abs(g.sx - 1) > 1e-4 || Math.abs(g.sy - 1) > 1e-4;
+                const r = (v) => Math.round(v * 100000) / 100000;
+                transform = (base + " " + place.transform + (scaled ? ` scale(${r(g.sx)}, ${r(g.sy)})` : "")).trim();
+                // The clip-path is in the layer's own space, before that scale: its corners taken back through it.
+                clipPath = !place.poly.length ? place.clip
+                    : D.polyClip(place.poly.map(([X, Y]) => [W / 2 + (X - W / 2) / g.sx, H / 2 + (Y - H / 2) / g.sy]));
             }
             if (el.style.transform !== transform) el.style.transform = transform;
             if (el.style.clipPath !== clipPath) el.style.clipPath = clipPath;
         }
         if (this._ep && this._ep.at) this._editPlayMix(this._ep.at);
+        this._editPlayFrameBg();
         this._editPlayTitles();
+    },
+
+    /**
+     * The timeline's frame size (its settings, D.cutSettings), else the first
+     * picture's own as the render takes it (timeline_render._size): { w, h }, or
+     * null while nothing says.
+     */
+    editFrameSize() {
+        const cut = this._editTlTab ? this._editTlCut : null;
+        if (!cut) return null;
+        const s = D.cutSettings(cut);
+        if (s.width && s.height) return { w: s.width, h: s.height };
+        const flat = this._editFlat ? this._editFlat(cut) : cut;
+        const first = (flat.clips || []).find((c) => c.file)
+            || (flat.tracks || []).filter((k) => k.kind !== "audio").flatMap((k) => k.clips || []).find((c) => c.file && !c.title);
+        const info = first && this._editTlInfo && this._editTlInfo.get(first.file);
+        return info && info.width > 0 && info.height > 0 ? { w: info.width, h: info.height } : null;
+    },
+
+    /** Where `clip`'s picture (w x h) lies in a layer of W x H: D.layerPlace with the timeline's frame and the clip's Scaling. */
+    _editPlayPlace(clip, w, h, W, H) {
+        const size = this.editFrameSize();
+        return D.layerPlace(w, h, W, H, size ? size.w : 0, size ? size.h : 0, D.clipFit(this._editTlCut, clip));
+    },
+
+    // The timeline's frame, black, under the pictures: a picture of another
+    // shape than the frame has black beside it, as the render has. A box the
+    // layer's size, taking the viewer's zoom and pan, with the frame drawn in it.
+    _editPlayFrameBg() {
+        const main = this._videoMode ? this.videoBase : this.imgBase;
+        const size = this._editPlayOn ? this.editFrameSize() : null;
+        const host = main && main.parentNode;
+        let bg = this._epFrameBg;
+        if (!size || !host) { if (bg) bg.style.display = "none"; return; }
+        const doc = host.ownerDocument;
+        if (!bg || bg.ownerDocument !== doc) {
+            if (bg && bg.parentNode) bg.parentNode.removeChild(bg);
+            bg = this._epFrameBg = doc.createElement("div");
+            bg.className = "edit-frame-bg";
+            bg.appendChild(doc.createElement("div"));
+        }
+        if (bg.parentNode !== host) host.insertBefore(bg, host.firstChild);
+        let W = main.clientWidth, H = main.clientHeight, at = [main.offsetLeft, main.offsetTop];
+        if (!W || !H || main.style.display === "none") { W = host.clientWidth; H = host.clientHeight; at = [0, 0]; }
+        const s = Math.min(W / size.w, H / size.h);
+        const st = bg.style;
+        st.display = "block";
+        st.left = at[0] + "px"; st.top = at[1] + "px"; st.width = W + "px"; st.height = H + "px";
+        st.transform = this._epViewerT || "";
+        const f = bg.firstChild.style;
+        f.left = (W - size.w * s) / 2 + "px"; f.top = (H - size.h * s) / 2 + "px";
+        f.width = size.w * s + "px"; f.height = size.h * s + "px";
+        bg.dataset.size = size.w + "x" + size.h;
     },
 
     /** A clip's opacity as it is drawn at clip time `u` (1 for a clip as it comes), a live Inspector drag included. */
@@ -294,6 +351,7 @@ export const EditPlayMixin = {
         this._editFxLive = null;
         if (this._epImgB) { this._epImgB.style.display = "none"; this._epImgB.removeAttribute("src"); }
         for (const el of this._epTitleEls || []) { el.style.display = "none"; el._sig = ""; }
+        if (this._epFrameBg) this._epFrameBg.style.display = "none";
         this._editTitleLive = null;
         this._ep = null;
         this._epCutShown = null;
@@ -316,11 +374,14 @@ export const EditPlayMixin = {
         if (!this._editPlayOn || this._editTlTab !== this.activeTab) return;
         if (this._epCutShown === this._editTlCut) return;
         this._epCutShown = this._editTlCut;
+        // The frame rate is the cut's (its settings may have changed it).
+        if (Math.abs((this.fps || 0) - this.editPlayFps()) > 1e-6) this._setFpsUi(this.editPlayFps());
         const bounds = this.applyTimelineBounds();
         const playing = this.isPlaying;
         this.editPlaySetFrame(Math.max(bounds.min, Math.min(this.currentFrame || 0, bounds.max)));
         const cut = this._editPlayCut();
         if (playing && !(cut && cut.clips.length)) this.stop();
+        this._editPlayMirror();                 // its frame size or a clip's Scaling may have changed
     },
 
     // ── a frame ──────────────────────────────────────────────────────────────
@@ -657,7 +718,8 @@ export const EditPlayMixin = {
         if (items.length && main && main.parentNode) {
             if (!fontsKnown()) fontList().then(() => { for (const el of pool) el._sig = ""; this._editPlayTitles(); });
             // The frame: the picture's own size, else the last one seen (titles over black), else 1920 x 1080.
-            let size = this._displayedMediaSize && this._displayedMediaSize();
+            // (The timeline's frame when it has a size - editFrameSize - as the render draws them.)
+            let size = this.editFrameSize() || (this._displayedMediaSize && this._displayedMediaSize());
             if (size && size.w > 0 && size.h > 0) this._epFrameSize = size; else size = this._epFrameSize || { w: 1920, h: 1080 };
             const host = main.parentNode;
             const doc = host.ownerDocument;

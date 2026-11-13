@@ -128,7 +128,7 @@ def flatten(doc):
               and str(t.get("OTIO_SCHEMA") or "").startswith("Track")]
     video = [t for t in tracks if str(t.get("kind") or "Video").lower() == "video"]
     audio = [t for t in tracks if str(t.get("kind") or "").lower() == "audio"]
-    out = {"name": str(doc.get("name") or ""), "fps": _rate(doc), "duration": 0.0,
+    out = {"name": str(doc.get("name") or ""), "fps": cut_rate(doc), "duration": 0.0,
            "video": [], "audio": [], "transitions": [], "texts": [],
            "video_tracks": len(video), "audio_tracks": len(audio)}
     if video:
@@ -224,6 +224,63 @@ FX = {"zx": (1.0, 0.01, 20.0), "zy": (1.0, 0.01, 20.0), "x": (0.0, -5.0, 5.0), "
       "op": (1.0, 0.0, 1.0)}
 FX_FLAGS = ("fh", "fv", "toff", "coff", "ooff")
 
+# How a picture of another size than the timeline's is brought into its frame
+# (imageViewer_editTimelineData.js FIT_MODES, timeline_render.fit - kept in step):
+# "fit" whole and centred, black beside it; "fill" covering the frame, cut off
+# where it is larger; "stretch" to the frame's size, not kept in shape; "none" at
+# its own pixels, centred. The timeline has one (``metadata.imageviewer.fit``),
+# a clip may have its own (``fx["fit"]``).
+FIT_MODES = ("fit", "fill", "stretch", "none")
+MAX_FRAME_SIDE = 16384
+MAX_FPS = 240.0
+
+
+def clean_settings(given):
+    """The timeline's settings held to what they may be: ``{"fps", "width",
+    "height", "fit", "set_by"}`` with only what was given and sound kept.
+    ``width`` / ``height`` 0 is "not set" (the render takes the first shot's);
+    ``set_by`` "hand" says they were chosen in the panel (the first clip dropped
+    into an empty timeline then leaves them)."""
+    out = {}
+    if not isinstance(given, dict):
+        return out
+    try:
+        fps = float(given.get("fps") or 0)
+    except (TypeError, ValueError):
+        fps = 0.0
+    if 0 < fps <= MAX_FPS:
+        out["fps"] = round(fps, 4)
+    try:
+        w, h = int(given.get("width") or 0), int(given.get("height") or 0)
+    except (TypeError, ValueError):
+        w = h = 0
+    if 0 < w <= MAX_FRAME_SIDE and 0 < h <= MAX_FRAME_SIDE:
+        out["width"], out["height"] = w, h
+    if given.get("fit") in FIT_MODES:
+        out["fit"] = given["fit"]
+    if given.get("set_by") == "hand":
+        out["set_by"] = "hand"
+    return out
+
+
+def cut_settings(doc):
+    """The timeline settings a cut's file holds: ours (``metadata.imageviewer``),
+    the size else from agentY's note; the frame rate else the first one found."""
+    mine = clean_settings(_imageviewer(doc))
+    if "width" not in mine:
+        size = clean_settings({"width": _note(doc).get("width"), "height": _note(doc).get("height")})
+        mine.update(size)
+    if "fps" not in mine:
+        rate = _rate(doc)
+        if rate > 0:
+            mine["fps"] = round(rate, 4)
+    return mine
+
+
+def cut_rate(doc):
+    """The cut's frame rate: the one set in the panel, else the first in the file (0: none)."""
+    return float(cut_settings(doc).get("fps") or 0.0) if isinstance(doc, dict) else 0.0
+
 
 def clean_fx(given):
     """*given* held to what an effect may be, with only what differs from neutral
@@ -244,6 +301,8 @@ def clean_fx(given):
     for key in FX_FLAGS:
         if given.get(key):
             out[key] = True
+    if given.get("fit") in FIT_MODES:
+        out["fit"] = given["fit"]
     keys = clean_keys(given.get("keys"))
     if keys:
         out["keys"] = keys
@@ -1109,8 +1168,12 @@ def editable(doc):
         raise ValueError("not an OpenTimelineIO timeline")
     meta = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
     stamp = meta.get("imageviewer") if isinstance(meta.get("imageviewer"), dict) else {}
-    out = {"name": str(doc.get("name") or ""), "fps": _rate(doc) or 24.0, "clips": [], "texts": [],
+    out = {"name": str(doc.get("name") or ""), "fps": cut_rate(doc) or 24.0, "clips": [], "texts": [],
            "sound": [], "edited": str(stamp.get("edited") or "")}
+    # The timeline's settings: its picture's size (0: not set) and how other sizes are brought into it.
+    settings = cut_settings(doc)
+    out.update(width=settings.get("width", 0), height=settings.get("height", 0), fit=settings.get("fit", "fit"),
+               setBy=settings.get("set_by", ""))
     video = _track_of(doc, "video")
     pending = None                      # the dissolve waiting for the clip after it
     gap = 0.0                           # the empty time (OTIO Gaps) waiting for the clip after it
@@ -1459,7 +1522,10 @@ def rebuild(doc, edit, stamp="", may_use=None):
     if video is None:
         raise ValueError("the timeline has no video track")
     hint = ((video.get("metadata") or {}).get("imageviewer") or {}) if isinstance(video.get("metadata"), dict) else {}
-    rate = _rate(doc) or float(hint.get("fps") or 24.0)
+    # The timeline's settings: the edit's when it states them (an older page does not), else the file's.
+    settings = clean_settings(edit.get("settings")) if isinstance(edit.get("settings"), dict) else None
+    kept_settings = settings if settings is not None else clean_settings(_imageviewer(doc))
+    rate = float(kept_settings.get("fps") or 0) or cut_rate(doc) or float(hint.get("fps") or 24.0)
     source = list((_track_of(doc, "video") or {}).get("children") or [])
     clips = edit.get("clips")
     if not isinstance(clips, list) or not clips:
@@ -1634,6 +1700,8 @@ def rebuild(doc, edit, stamp="", may_use=None):
             compounds_of((_imageviewer(doc) or {}))
         if kept:
             meta["imageviewer"]["compounds"] = kept
+        meta["imageviewer"].update(kept_settings)
+        meta["imageviewer"]["fps"] = round(rate, 4)
     return new
 
 

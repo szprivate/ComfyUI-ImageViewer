@@ -72,6 +72,106 @@ export function textLook(t) {
 export const FX = { zx: [1, 0.01, 20], zy: [1, 0.01, 20], x: [0, -5, 5], y: [0, -5, 5], rot: [0, -3600, 3600],
                     ax: [0, -5, 5], ay: [0, -5, 5], cl: [0, 0, 1], cr: [0, 0, 1], ct: [0, 0, 1], cb: [0, 0, 1], op: [1, 0, 1] };
 export const FX_FLAGS = ["fh", "fv", "toff", "coff", "ooff"];
+
+// ── the timeline's settings ──────────────────────────────────────────────────
+//
+// A cut has a picture size and a frame rate (`cut.width` / `cut.height`, 0 = not
+// set: the first shot's own size, as the render takes it; `cut.fps`) and a way
+// to bring a picture of another size into that frame (`cut.fit`, FIT_MODES). A
+// clip may have its own (`fx.fit`, the Inspector's Scaling). A clip at another
+// frame rate plays at its own speed: each frame of the film shows the source
+// frame on screen at that moment (the render's rule, timeline_render.clip_frames).
+// The first picture dropped into a timeline with no picture on it gives it its
+// size and rate (adoptSettings), unless they were set by hand (`setBy: "hand"`).
+// In the file: metadata.imageviewer.{fps, width, height, fit, set_by}
+// (timeline_io.clean_settings, kept in step).
+export const FIT_MODES = ["fit", "fill", "stretch", "none"];
+export const FIT_LABELS = { fit: "Fit (whole, black beside it)", fill: "Fill (crop to the frame)", stretch: "Stretch to the frame", none: "None (own pixels)" };
+export const FRAME_RATES = [23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60];
+export const FRAME_SIZES = [[1280, 720], [1920, 1080], [2048, 1080], [2560, 1440], [3840, 2160], [4096, 2160], [1080, 1920], [1080, 1350], [1080, 1080]];
+const MAX_SIDE = 16384, MAX_FPS = 240;
+
+/** The timeline's settings, every part present: { fps, width, height, fit, setBy } (width / height 0: not set). */
+export function cutSettings(cut) {
+    const fps = Number(cut && cut.fps);
+    const w = Math.round(Number(cut && cut.width)), h = Math.round(Number(cut && cut.height));
+    const sized = w > 0 && h > 0 && w <= MAX_SIDE && h <= MAX_SIDE;
+    return { fps: fps > 0 && fps <= MAX_FPS ? fps : 24, width: sized ? w : 0, height: sized ? h : 0,
+             fit: FIT_MODES.includes(cut && cut.fit) ? cut.fit : "fit", setBy: cut && cut.setBy === "hand" ? "hand" : "" };
+}
+
+/** How `clip`'s picture is brought into the frame: its own Scaling, else the timeline's. */
+export function clipFit(cut, clip) {
+    const own = clip && clip.fx && clip.fx.fit;
+    return FIT_MODES.includes(own) ? own : cutSettings(cut).fit;
+}
+
+/**
+ * The size a `w x h` picture is drawn at inside a `W x H` frame by `mode`
+ * (timeline_render.fit): { w, h }, centred. "fit" whole, "fill" covering the
+ * frame, "stretch" the frame's size, "none" its own pixels (frame pixels).
+ */
+export function fitBox(w, h, W, H, mode = "fit") {
+    if (!(w > 0 && h > 0) || mode === "stretch") return { w: W, h: H };
+    if (mode === "none") return { w, h };
+    const s = mode === "fill" ? Math.max(W / w, H / h) : Math.min(W / w, H / h);
+    return { w: w * s, h: h * s };
+}
+
+/**
+ * The cut with new settings (`patch`: any of fps, width, height, fit); `hand`:
+ * chosen in the panel, so a first clip leaves them. Clips stay where they are in
+ * seconds; the frame grid is the new rate's.
+ */
+export function setCutSettings(cut, patch, hand = true) {
+    const next = { ...cut };
+    const p = patch || {};
+    if (Number(p.fps) > 0 && Number(p.fps) <= MAX_FPS) next.fps = Math.round(Number(p.fps) * 10000) / 10000;
+    if (p.width !== undefined || p.height !== undefined) {
+        const w = Math.round(Number(p.width)), h = Math.round(Number(p.height));
+        if (w > 0 && h > 0 && w <= MAX_SIDE && h <= MAX_SIDE) { next.width = w; next.height = h; }
+        else if (!w && !h) { next.width = 0; next.height = 0; }
+    }
+    if (FIT_MODES.includes(p.fit)) next.fit = p.fit;
+    if (hand) next.setBy = "hand";
+    return next;
+}
+
+/** Has the cut no picture on it (no shot on V1, no film or picture on a video track - titles do not count)? */
+export function pictureless(cut) {
+    if (((cut && cut.clips) || []).length) return false;
+    return !((cut && cut.tracks) || []).some((k) => k.kind !== "audio" && (k.clips || []).some((c) => c.file && !c.title));
+}
+
+/**
+ * The first picture into an empty timeline gives it its settings: `info` is
+ * what the server read of the file (timeline_probe: width, height, fps, still).
+ * A picture has no rate: only its size is taken. Unchanged (the same object)
+ * when the cut has a picture already, its settings were set by hand, or `info`
+ * says nothing. -> { cut, took: "1920x1080 · 25 fps" | "" }.
+ */
+export function adoptSettings(cut, info) {
+    if (!cut || !info || !pictureless(cut) || cut.setBy === "hand") return { cut, took: "" };
+    const patch = {};
+    if (info.width > 0 && info.height > 0) { patch.width = info.width; patch.height = info.height; }
+    if (!info.still && info.fps > 0) patch.fps = info.fps;
+    if (!Object.keys(patch).length) return { cut, took: "" };
+    const next = setCutSettings(cut, patch, false);
+    const s = cutSettings(next);
+    const said = [s.width ? `${s.width}x${s.height}` : "", patch.fps ? `${rateLabel(s.fps)} fps` : ""].filter(Boolean).join(" \u00b7 ");
+    return { cut: next, took: said };
+}
+
+/** A frame rate as it is written: 25, 23.976, 29.97. */
+export function rateLabel(fps) {
+    return String(Math.round(Number(fps) * 1000) / 1000);
+}
+
+/** What the file keeps of the settings (timeline_io.clean_settings): always stated, so a change reaches it. */
+export function settingsToSave(cut) {
+    const s = cutSettings(cut);
+    return { fps: s.fps, width: s.width, height: s.height, fit: s.fit, set_by: s.setBy };
+}
 export const FX_SECTIONS = { transform: ["zx", "zy", "x", "y", "rot", "ax", "ay", "fh", "fv"], crop: ["cl", "cr", "ct", "cb"], composite: ["op"] };
 const FX_OFF = { transform: "toff", crop: "coff", composite: "ooff" };
 
@@ -86,6 +186,7 @@ export function cleanFx(given) {
         if (held !== neutral) out[key] = held;
     }
     for (const key of FX_FLAGS) if (given[key]) out[key] = true;
+    if (FIT_MODES.includes(given.fit)) out.fit = given.fit;
     const keys = cleanKeys(given.keys);
     if (Object.keys(keys).length) out.keys = keys;
     return out;
@@ -201,38 +302,53 @@ export function clipFx(clip, u = 0) {
     return plain ? null : fx;
 }
 
+/** An effect that changes nothing (fxPlace for a clip drawn as it comes). */
+export const NEUTRAL_FX = Object.freeze({ ...Object.fromEntries(Object.entries(FX).map(([k, [n]]) => [k, n])), fh: false, fv: false });
+
 /**
- * How a layer draws a clip with effect `fx` (clipFx): the CSS transform to put
- * AFTER the viewer's own, and the clip-path that keeps the picture inside the
- * frame and inside its crop. `box` is where the untransformed picture lies in
- * the layer, in the layer's own pixels: { x, y, w, h }; the layer turns about
- * its middle, which is the picture's. The same arithmetic as the render's
- * (timeline_render.lay): cropped, scaled and turned about the anchor point, moved.
+ * How a layer draws a clip with effect `fx` (clipFx; NEUTRAL_FX for none): the
+ * CSS transform to put AFTER the viewer's own, and the clip-path that keeps the
+ * picture inside the frame and inside its crop (`poly`: its corners, [] for
+ * none). `box` is where the untransformed picture lies in the layer, in the
+ * layer's own pixels: { x, y, w, h }; `frame` where the timeline's frame lies
+ * (the box itself without one - a picture that is the frame). Both have the
+ * same middle, about which the layer turns. The same arithmetic as the
+ * render's (timeline_render.lay): the picture cut to the frame and its crop
+ * (a crop is of the picture, a position or an anchor of the frame), then
+ * scaled and turned about the anchor point, moved, and what lands outside the
+ * frame not drawn.
  */
-export function fxPlace(fx, box) {
+export function fxPlace(fx, box, frame = box) {
     const sx = fx.zx * (fx.fh ? -1 : 1), sy = fx.zy * (fx.fv ? -1 : 1);
-    const px = fx.x * box.w, py = -fx.y * box.h, ax = fx.ax * box.w, ay = -fx.ay * box.h;
+    const px = fx.x * frame.w, py = -fx.y * frame.h, ax = fx.ax * frame.w, ay = -fx.ay * frame.h;
     const r = (v) => Math.round(v * 1000) / 1000;
     const moved = sx !== 1 || sy !== 1 || fx.rot % 360 !== 0 || px !== 0 || py !== 0;
     const transform = moved
         ? `translate(${r(px + ax)}px, ${r(py + ay)}px) rotate(${r(fx.rot)}deg) scale(${r(sx)}, ${r(sy)}) translate(${r(-ax)}px, ${r(-ay)}px)`
         : "";
     const cropped = fx.cl > 0 || fx.cr > 0 || fx.ct > 0 || fx.cb > 0;
-    if (!moved && !cropped) return { transform, clip: "", opacity: fx.op };
+    const E = 1e-6;
+    const over = box.x < frame.x - E || box.y < frame.y - E || box.x + box.w > frame.x + frame.w + E || box.y + box.h > frame.y + frame.h + E;
+    if (!moved && !cropped && !over) return { transform, clip: "", poly: [], opacity: fx.op };
     // The frame, seen from the picture's own space: its corners taken back
-    // through the transform. What is drawn is the part of that inside the crop.
-    const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
+    // through the transform. What is drawn is the part of that inside the crop
+    // and inside the frame (a picture larger than it was cut off there first).
+    const cx = frame.x + frame.w / 2, cy = frame.y + frame.h / 2;
     const cos = Math.cos(fx.rot * Math.PI / 180), sin = Math.sin(fx.rot * Math.PI / 180);
     const back = ([X, Y]) => {
         const dx = X - cx - px - ax, dy = Y - cy - py - ay;
         return [cx + ax + (cos * dx + sin * dy) / sx, cy + ay + (-sin * dx + cos * dy) / sy];
     };
-    let poly = [[box.x, box.y], [box.x + box.w, box.y], [box.x + box.w, box.y + box.h], [box.x, box.y + box.h]].map(back);
+    const f = frame;
+    let poly = [[f.x, f.y], [f.x + f.w, f.y], [f.x + f.w, f.y + f.h], [f.x, f.y + f.h]].map(moved ? back : (q) => q);
+    const lo = (a, b) => Math.max(a, b), hi = (a, b) => Math.min(a, b);
+    const left = lo(box.x + fx.cl * box.w, f.x), right = hi(box.x + box.w - fx.cr * box.w, f.x + f.w);
+    const top = lo(box.y + fx.ct * box.h, f.y), bottom = hi(box.y + box.h - fx.cb * box.h, f.y + f.h);
     const sides = [
-        [(q) => q[0] >= box.x + fx.cl * box.w, 0, box.x + fx.cl * box.w],
-        [(q) => q[0] <= box.x + box.w - fx.cr * box.w, 0, box.x + box.w - fx.cr * box.w],
-        [(q) => q[1] >= box.y + fx.ct * box.h, 1, box.y + fx.ct * box.h],
-        [(q) => q[1] <= box.y + box.h - fx.cb * box.h, 1, box.y + box.h - fx.cb * box.h],
+        [(q) => q[0] >= left, 0, left],
+        [(q) => q[0] <= right, 0, right],
+        [(q) => q[1] >= top, 1, top],
+        [(q) => q[1] <= bottom, 1, bottom],
     ];
     for (const [inside, axis, at] of sides) {          // one side of the crop at a time (Sutherland-Hodgman)
         const next = [];
@@ -241,15 +357,42 @@ export function fxPlace(fx, box) {
             const ia = inside(a), ib = inside(b);
             if (ia) next.push(a);
             if (ia !== ib) {
-                const f = (at - a[axis]) / (b[axis] - a[axis]);
-                next.push([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]);
+                const t = (at - a[axis]) / (b[axis] - a[axis]);
+                next.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
             }
         }
         poly = next;
         if (!poly.length) break;
     }
-    const clip = poly.length ? "polygon(" + poly.map(([X, Y]) => `${r(X)}px ${r(Y)}px`).join(", ") + ")" : "polygon(0px 0px, 0px 0px, 0px 0px)";
-    return { transform, clip, opacity: fx.op };
+    const clip = polyClip(poly);
+    return { transform, clip, poly, opacity: fx.op };
+}
+
+/** A clip-path of the corners `poly` (layer pixels): nothing drawn for none. */
+export function polyClip(poly) {
+    const r = (v) => Math.round(v * 1000) / 1000;
+    return poly.length ? "polygon(" + poly.map(([X, Y]) => `${r(X)}px ${r(Y)}px`).join(", ") + ")" : "polygon(0px 0px, 0px 0px, 0px 0px)";
+}
+
+/**
+ * Where a picture of `w x h` (its own pixels) is drawn in a layer of `W x H`
+ * that shows it whole and centred (object-fit: contain), with the timeline's
+ * frame `fw x fh` fitted into the layer the same way and the picture brought
+ * into that frame by `mode` (fitBox). -> { frame, box, sx, sy }: the frame's and
+ * the picture's boxes in the layer, and the scale that takes the layer's own
+ * picture to `box` (about the layer's middle). Without a frame size the frame
+ * is the picture (a cut with no size yet).
+ */
+export function layerPlace(w, h, W, H, fw, fh, mode = "fit") {
+    if (!(fw > 0 && fh > 0)) { fw = w; fh = h; mode = "fit"; }
+    const sF = Math.min(W / fw, H / fh);
+    const F = { w: fw * sF, h: fh * sF };
+    const frame = { x: (W - F.w) / 2, y: (H - F.h) / 2, w: F.w, h: F.h };
+    const p = fitBox(w, h, fw, fh, mode);
+    const P = { w: p.w * sF, h: p.h * sF };
+    const box = { x: (W - P.w) / 2, y: (H - P.h) / 2, w: P.w, h: P.h };
+    const s0 = Math.min(W / w, H / h);
+    return { frame, box, sx: P.w / (w * s0), sy: P.h / (h * s0) };
 }
 
 export const MIN_CLIP = 0.1;
@@ -996,6 +1139,7 @@ export function sameCut(a, b) {
         afx: JSON.stringify(cleanAfx(cut && cut.afx && cut.afx.A1)),
         master: JSON.stringify(cleanAfx(cut && cut.afx && cut.afx.master)),
         markers: JSON.stringify(cleanMarkers(cut && cut.markers)),
+        settings: JSON.stringify(settingsToSave(cut || {})),
     });
     return key(a) === key(b);
 }
@@ -1047,6 +1191,7 @@ export function toSave(cut) {
         auto: Object.fromEntries(["V1", "A1", "T"].map((id) => [id, !(cut.auto && cut.auto[id] === false)])),
         afx: { A1: cleanAfx(cut.afx && cut.afx.A1), master: cleanAfx(cut.afx && cut.afx.master) },
         markers: cleanMarkers(cut.markers),
+        settings: settingsToSave(cut),
     };
 }
 
