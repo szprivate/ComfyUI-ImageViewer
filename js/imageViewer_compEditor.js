@@ -2565,6 +2565,63 @@ export function createCompEditor(host, opts = {}) {
             btn("Export…", "Write this node's numbers (at the playhead) as a .cc, .cdl or .ccc", () => o.cdlExport && o.cdlExport(n, values())));
         pane.append(row);
     }
+    /** Grain, Degrain, Regrain: the grain profile (measured by Analyse at full size on the server), its curves. */
+    function grainSection(n) {
+        const GR = C.EX.GR, pr = GR.isProfile(n.profile) ? n.profile : null, id = fid(n.id);
+        const line = el(doc, "div", "mg-empty cp-grain");
+        const what = n.type === "regrain" ? "the plate less the degrained plate" : n.type === "grain" ? (n.inputs[1] ? "the plate" : "what comes in") : "what comes in";
+        if (!pr) {
+            line.textContent = n.type === "grain"
+                ? "No profile: the grain is made from the numbers above. Analyse measures a plate's grain (wire it into 'plate'): its strength per brightness and channel, its size and colour - then the numbers above step aside and amount 1 is as measured."
+                : `No profile: the grain is measured on every frame as it is drawn, at the preview's size. Analyse measures ${what} at full size on a few frames and keeps it on the node (steadier, and right at full size).`;
+        } else {
+            const q = GR.profileAt(pr, 1), mid = Math.floor(pr.bins / 2);
+            const sd = (c) => (q.total[c][mid] * 1000).toFixed(1);
+            line.textContent = `Profile from ${what}, ${pr.frames || 1} frame(s)${pr.width ? ` at ${pr.width} x ${pr.height}` : ""}: grain at mid brightness r ${sd(0)} g ${sd(1)} b ${sd(2)} (thousandths), `
+                + `finest band ${Math.round(100 * q.bands[0][1][mid] / Math.max(1e-12, q.total[1][mid]))} % of it, channels alike ${Math.round(100 * (pr.corr[0][1] + pr.corr[1][2] + pr.corr[0][2]) / 3)} %.`;
+        }
+        pane.append(line);
+        if (pr) {
+            // Strength against brightness, per channel (the measured bins' centres).
+            const cv = el(doc, "canvas", "cp-grain-curve"), W = 240, H = 64;
+            cv.width = W; cv.height = H;
+            cv.style.cssText = "display:block;width:240px;height:64px;margin:2px 0 6px 8px;background:#18181b;border-radius:3px";
+            cv.title = "The grain's strength (up) against brightness (across), red, green and blue";
+            const g = cv.getContext && cv.getContext("2d");
+            if (g) {
+                const q = GR.profileAt(pr, 1);
+                let top = 0;
+                for (const row of q.total) for (const v of row) top = Math.max(top, v);
+                top = top > 0 ? top * 1.15 : 1;
+                ["#e5484d", "#46a758", "#3e63dd"].forEach((col, c) => {
+                    g.strokeStyle = col; g.lineWidth = 1.5; g.beginPath();
+                    q.total[c].forEach((v, k) => { const x = 6 + (W - 12) * (k + 0.5) / pr.bins, y = H - 4 - (H - 8) * v / top; if (k) g.lineTo(x, y); else g.moveTo(x, y); });
+                    g.stroke();
+                });
+            }
+            pane.append(cv);
+        }
+        const row = el(doc, "div", "mg-prop cp-btnrow");
+        row.append(el(doc, "span", "mg-sw", ""), el(doc, "label", "", "profile"));
+        const busy = st.grainBusy && st.grainBusy.has(id);
+        const spread = () => {
+            const F = st.comp.format.frames, k = Math.min(5, F);
+            return Array.from({ length: k }, (_, i) => (k === 1 ? 0 : Math.round(i * (F - 1) / (k - 1))));
+        };
+        const go = (frames) => {
+            if (!o.grainAnalyse || busy) return;
+            (st.grainBusy || (st.grainBusy = new Set())).add(id);
+            refresh(["props"]);
+            Promise.resolve(o.grainAnalyse(id, frames)).finally(() => { st.grainBusy.delete(id); refresh(["props"]); });
+        };
+        if (busy) row.append(el(doc, "span", "cp-ai-prog", "Measuring…"));
+        else {
+            row.append(btn("Analyse", "Measure the grain on this frame, at full size", () => go([st.frame])),
+                btn("5 frames", "Measure it on five frames spread over the comp (steadier)", () => go(spread())));
+            if (pr) row.append(btn("Forget", "Take the profile off the node", () => mutate(() => { delete n.profile; }, { structure: false })));
+        }
+        pane.append(row);
+    }
     /** An AI node: what it shows, and Run (this frame, every frame), Forget. */
     // An AI node's key is worked out on the flat comp (its inputs may be inside a group).
     function aiKeyOf(n) {
@@ -2729,10 +2786,11 @@ export function createCompEditor(host, opts = {}) {
         if (n.type === "colorcorrect") {
             ccSection(pn, t.params);
             if (masked) for (const [p, d] of ps) if (maskRow(p)) pane.append(paramRow(pn, p, d));
-        } else for (const [p, d] of ps) if (d.kind !== "roto" && d.kind !== "ai" && d.kind !== "strokes" && !WUI.OWN_KINDS.has(d.kind) && (masked || !maskRow(p))) pane.append(paramRow(pn, p, d));
+        } else for (const [p, d] of ps) if (d.kind !== "roto" && d.kind !== "ai" && d.kind !== "grainprofile" && d.kind !== "strokes" && !WUI.OWN_KINDS.has(d.kind) && (masked || !maskRow(p))) pane.append(paramRow(pn, p, d));
         if (n.type === "paint") paintTool.section(n, pane, first);
         if (WUI.draws(n.type)) WUI.section(wctx(), n);
         if (n.type === "cdl") cdlSection(n, t.params);
+        if (n.type === "grain" || n.type === "degrain" || n.type === "regrain") grainSection(n);
         if (C.EX.AI_KINDS[n.type]) aiSection(n);
         if (C.EX.VFX_KINDS[n.type]) vfxSection(n);
         if (n.type === "camera3d" && o.importCamera) {
@@ -3299,6 +3357,18 @@ export function createCompEditor(host, opts = {}) {
                     (r.frames || (r.frames = {}))[String(f)] = file;
                     (r.keys || (r.keys = {}))[String(f)] = key;
                 }
+            }, { structure: false });
+            return true;
+        },
+        /** A grain profile measured for node `id` (Analyse): kept on it, one undo step. A Grain node getting its
+         *  first profile goes to amount 1 (with a profile, amount is a share of the measured grain), unless keyed. */
+        grainProfile(id, prof) {
+            const flat = G.flatNode(st.comp, id), n = flat || node(id);
+            if (!n || !C.EX.GR.isProfile(prof)) return false;
+            mutate(() => {
+                const first = !C.EX.GR.isProfile(n.profile);
+                n.profile = prof;
+                if (n.type === "grain" && first && !(n.tracks && n.tracks.amount)) n.amount = 1;
             }, { structure: false });
             return true;
         },

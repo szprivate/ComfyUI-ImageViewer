@@ -98,14 +98,20 @@ _VFX_SIZED = {"reframe", "upscale"}
 EXTRA_LABELS = {"differencekeyer": "DifferenceKeyer", "despill": "Despill", "edgeextend": "EdgeExtend", "lightwrap": "LightWrap", "coreedge": "CoreEdge",
                 "framehold": "FrameHold", "framerange": "FrameRange", "timeoffset": "TimeOffset", "appendclip": "AppendClip", "timeblur": "TimeBlur",
                 "cdl": "CDL", "lut": "LUT", "huecurves": "HueCurves", "clamp": "Clamp", "loglin": "Log2Lin",
-                "colormatch": "ColorMatch", "grain": "Grain", "denoise": "Denoise", "sharpen": "Sharpen", "median": "Median",
+                "colormatch": "ColorMatch", "grain": "Grain", "degrain": "Degrain", "regrain": "Regrain", "denoise": "Denoise", "sharpen": "Sharpen", "median": "Median",
                 "edgedetect": "EdgeDetect", "edgeblur": "EdgeBlur", "ai_matte": "AI Matte", "ai_depth": "AI Depth", "ai_relight": "AI Relight",
                 "ai_inpaint": "AI Inpaint", "ai_upscale": "AI Upscale",
                 "vfx_alpha": "VFX Alpha Matte", "vfx_hdr": "VFX SDR to HDR", "vfx_reframe": "VFX Reframe", "vfx_upscale": "VFX Upscale"}
 
 # The per-pixel ones that take a mask input (the last) and a mix (the page's EXTRA_MASKABLE).
 EXTRA_MASKABLE = ["differencekeyer", "despill", "edgeextend", "lightwrap", "coreedge", "cdl", "lut", "huecurves", "clamp",
-                  "loglin", "colormatch", "grain", "denoise", "sharpen", "median", "edgedetect", "edgeblur"]
+                  "loglin", "colormatch", "grain", "degrain", "denoise", "sharpen", "median", "edgedetect", "edgeblur"]
+# Slow ones, kept between renders (the page's EXTRA_HEAVY).
+EXTRA_HEAVY = ["denoise", "median", "timeblur", "degrain", "regrain"]
+_PROFILE = _n("grainprofile", None)
+DEGRAIN_OUTPUTS = ["degrained", "removed"]
+REGRAIN_FILLS = ["scatter", "synth", "plate"]
+REGRAIN_OUTPUTS = ["result", "grain", "new areas", "difference"]
 EXTRA_TYPES = {
     "differencekeyer": {"inputs": ["src", "clean"], "params": {
         "threshold": _n("num", 0.05, True, 0), "softness": _n("num", 0.1, True, 0),
@@ -143,7 +149,18 @@ EXTRA_TYPES = {
     "colormatch": {"inputs": ["src", "reference"], "params": {"amount": _n("num", 1, True, 0, 1)}},
     "grain": {"inputs": ["src", "plate"], "params": {
         "amount": _n("num", 0.04, True, 0), "size": _n("num", 1, True, 0, 20), "saturation": _n("num", 0.3, True, 0, 1),
-        "response": _n("num", 0.5, True, 0, 1), "seed": _n("int", 0), "animated": _n("enum", "on", choices=GRAIN_ANIM)}},
+        "response": _n("num", 0.5, True, 0, 1), "seed": _n("int", 0), "animated": _n("enum", "on", choices=GRAIN_ANIM),
+        "profile": _PROFILE}},
+    "degrain": {"inputs": ["src"], "params": {
+        "temporal": _n("int", 1, False, 0, 3), "motion": _n("num", 4, False, 0.5, 20), "strength": _n("num", 1.5, True, 0, 10),
+        "fine": _n("num", 1, True, 0, 1), "medium": _n("num", 1, True, 0, 1), "coarse": _n("num", 0.5, True, 0, 1),
+        "output": _n("enum", "degrained", choices=DEGRAIN_OUTPUTS), "profile": _PROFILE}},
+    "regrain": {"inputs": ["comp", "plate", "degrained", "new"], "params": {
+        "amount": _n("num", 1, True, 0), "fill": _n("enum", "scatter", choices=REGRAIN_FILLS),
+        "detect": _n("enum", "on", choices=["on", "off"]), "threshold": _n("num", 0.02, True, 0),
+        "softness": _n("num", 0.02, True, 0), "cell": _n("num", 48, False, 4, 512), "seed": _n("int", 0),
+        "animated": _n("enum", "on", choices=GRAIN_ANIM), "output": _n("enum", "result", choices=REGRAIN_OUTPUTS),
+        "profile": _PROFILE}},
     "denoise": {"inputs": ["src"], "params": {"radius": _n("num", 3, False, 0, 30), "strength": _n("num", 0.05, True, 0, 1),
                                               "mix": _n("num", 1, True, 0, 1)}},
     "sharpen": {"inputs": ["src"], "params": {"amount": _n("num", 0.5, True, 0), "size": _n("num", 2, True, 0, 50)}},
@@ -899,7 +916,19 @@ def make(n, f, api):
         return color_match_image(s, api.run(ins[1], f) if ins[1] else None, p)
     if t == "grain":
         s = src()
+        if is_profile(n.get("profile")):
+            return profile_grain_image(s, n, p, f, scale)
         return grain_image(s, p, f, scale, api.run(ins[1], f) if ins[1] else None)
+    if t == "degrain":
+        fs = degrain_frames(n, f)
+        at = fs.index(f)
+        s = api.run(ins[0], f)
+        h0, w0 = s.shape[:2]
+        pics = [s if g == f else M.conform(api.run(ins[0], g), w0, h0) for g in fs]
+        return degrain_image(pics, at, n, p, scale)
+    if t == "regrain":
+        s = src()
+        return regrain_image(s, other(1, s), other(2, s), other(3, s), n, p, f, scale)
     if t == "denoise":
         return denoise_image(src(), p, scale)
     if t == "sharpen":
@@ -913,3 +942,505 @@ def make(n, f, api):
     if t in VFX_KINDS:
         return _vfx_make(n, f, p, api)
     return _ai_make(n, f, p, api)
+
+
+# ── grain as a measured thing (the page's imageViewer_compGrain.js) ──────────
+# Clean room: the a-trous B3-spline wavelet (Starck and Murtagh), soft thresholding (Donoho), the median
+# absolute deviation, Tukey's biweight and Cholesky, from their published descriptions.
+
+GRAIN_LEVELS = 4
+GRAIN_BINS = 8
+_MIN_COUNT = 8
+_SAMPLES = 65536
+_MIN_SHARE = 0.005
+_EDGE = 4
+
+
+def atrous_smooth(a, j):
+    """One a-trous smoothing at level j: [1 4 6 4 1] / 16 with holes of 2^j, across then down, edges held."""
+    h, w = a.shape
+    s = 1 << j
+    xs = np.arange(w)
+    x0, x1 = np.maximum(xs - 2 * s, 0), np.maximum(xs - s, 0)
+    x3, x4 = np.minimum(xs + s, w - 1), np.minimum(xs + 2 * s, w - 1)
+    t = (a[:, x0] + 4 * a[:, x1] + 6 * a + 4 * a[:, x3] + a[:, x4]) / 16
+    ys = np.arange(h)
+    y0, y1 = np.maximum(ys - 2 * s, 0), np.maximum(ys - s, 0)
+    y3, y4 = np.minimum(ys + s, h - 1), np.minimum(ys + 2 * s, h - 1)
+    return (t[y0] + 4 * t[y1] + 6 * t + 4 * t[y3] + t[y4]) / 16
+
+
+def atrous(a, levels):
+    d = []
+    c = a
+    for j in range(levels):
+        n = atrous_smooth(c, j)
+        d.append(c - n)
+        c = n
+    return d, c
+
+
+_KR = 128
+_KERNELS = []
+
+
+def _atrous_kernels():
+    if _KERNELS:
+        return _KERNELS
+    c = [0.0] * (2 * _KR + 1)
+    c[_KR] = 1.0
+    ks = [c]
+    for k in range(GRAIN_LEVELS):
+        s = 1 << k
+        n = [0.0] * (2 * _KR + 1)
+        taps = ((-2 * s, 1), (-s, 4), (0, 6), (s, 4), (2 * s, 1))
+        for i in range(len(c)):
+            if not c[i]:
+                continue
+            for o, wt in taps:
+                q = i + o
+                if 0 <= q < len(n):
+                    n[q] += c[i] * wt / 16
+        c = n
+        ks.append(c)
+    _KERNELS.extend(ks)
+    return _KERNELS
+
+
+def _dot(a, b):
+    v = 0.0
+    for i in range(len(a)):
+        v += a[i] * b[i]
+    return v
+
+
+def white_band_cov(j, k):
+    K = _atrous_kernels()
+    x, y, z, t = _dot(K[j], K[k]), _dot(K[j], K[k + 1]), _dot(K[j + 1], K[k]), _dot(K[j + 1], K[k + 1])
+    return x * x - y * y - z * z + t * t
+
+
+def white_band_spread(j):
+    return math.sqrt(white_band_cov(j, j))
+
+
+def rgb_planes(img):
+    s = _f64(img)
+    return [s[..., 0], s[..., 1], s[..., 2]]
+
+
+def guide_luma(planes):
+    L = LUM[0] * planes[0] + LUM[1] * planes[1] + LUM[2] * planes[2]
+    return atrous_smooth(atrous_smooth(L, 0), 1)
+
+
+def _median(v):
+    v = np.sort(np.asarray(v, np.float64))
+    n = v.size
+    if not n:
+        return 0.0
+    return float(v[(n - 1) // 2]) if n % 2 else float((v[n // 2 - 1] + v[n // 2]) / 2)
+
+
+def _sample_index(w, h, levels):
+    step = max(1, int(math.floor(math.sqrt((w * h) / _SAMPLES))))
+    m = max(1, min(w // 4, h // 4, 1 << levels))
+    ys = np.arange(m, h - m, step)
+    xs = np.arange(m, w - m, step)
+    return (ys[:, None] * w + xs[None, :]).reshape(-1)
+
+
+def _flat_samples(idx, guide):
+    if not idx.size:
+        return idx
+    h, w = guide.shape
+    g = guide.reshape(-1)
+    gm = np.abs(g[idx + 1] - g[idx - 1]) + np.abs(g[idx + w] - g[idx - w])
+    lim = _EDGE * _median(gm)
+    out = idx[gm <= lim]
+    return out if out.size >= idx.size / 4 else idx
+
+
+def _fill_bins(row, whole):
+    out = list(row)
+    for k in range(len(out)):
+        if out[k] is not None:
+            continue
+        best = None
+        r = 1
+        while r < len(row) and best is None:
+            if k - r >= 0 and row[k - r] is not None:
+                best = row[k - r]
+            elif k + r < len(row) and row[k + r] is not None:
+                best = row[k + r]
+            r += 1
+        out[k] = whole if best is None else best
+    return out
+
+
+def analyse_grain(noise, guide, scale=1.0, rng=None):
+    """The page's analyseGrain: noise = three planes, guide = the brightness plane (h x w)."""
+    levels, NB = GRAIN_LEVELS, GRAIN_BINS
+    h, w = guide.shape
+    idx = _flat_samples(_sample_index(w, h, levels), guide)
+    gflat = guide.reshape(-1)
+    if rng:
+        lo, hi = float(rng[0]), float(rng[1])
+    else:
+        g = np.sort(gflat[idx])
+        n = g.size
+        lo = float(g[int(math.floor(0.01 * (n - 1)))]) if n else 0.0
+        hi = float(g[int(math.floor(0.99 * (n - 1)))]) if n else 1.0
+    if not (hi - lo > 1e-6):
+        hi = lo + 1e-6
+    b = np.floor((gflat[idx] - lo) / (hi - lo) * NB)
+    b = np.clip(b, 0, NB - 1).astype(np.int64)
+    sigma = [[None] * 3 for _ in range(levels)]
+    bands0 = []
+    for c in range(3):
+        d, _ = atrous(noise[c], levels)
+        bands0.append(d[0].reshape(-1))
+        for j in range(levels):
+            v = np.abs(d[j].reshape(-1)[idx])
+            least = max(_MIN_COUNT, int(math.ceil(_MIN_SHARE * idx.size)))
+            row = []
+            for k in range(NB):
+                g = v[b == k]
+                row.append(1.4826 * _median(g) if g.size >= least else None)
+            sigma[j][c] = _fill_bins(row, 1.4826 * _median(v))
+    S = [[0.0] * 3 for _ in range(3)]
+    sb = [x[idx] for x in bands0]
+    # Summed pixel by pixel in the page's order (a then b inside each pixel), so the rounding is the same.
+    for a in range(3):
+        for bb in range(3):
+            S[a][bb] = float(_seq_sum(sb[a] * sb[bb]))
+    corr = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    for a in range(3):
+        for bb in range(3):
+            if a == bb:
+                continue
+            q = math.sqrt(S[a][a] * S[bb][bb])
+            corr[a][bb] = max(-1.0, min(1.0, S[a][bb] / q)) if q > 0 else 0.0
+    return {"v": 1, "scale": scale, "levels": levels, "bins": NB, "lo": lo, "hi": hi, "sigma": sigma, "corr": corr}
+
+
+def _seq_sum(v):
+    """A sum taken one after the other, as the page adds (numpy's own sum pairs them)."""
+    return float(np.cumsum(v)[-1]) if v.size else 0.0
+
+
+def is_profile(p):
+    try:
+        return bool(p and p.get("v") == 1 and isinstance(p.get("sigma"), list) and p["sigma"]
+                    and isinstance(p.get("corr"), list) and math.isfinite(float(p["lo"])) and math.isfinite(float(p["hi"])))
+    except (TypeError, ValueError, AttributeError):
+        return False
+
+
+def merge_profiles(lst):
+    ps = [p for p in lst if is_profile(p)]
+    if not ps:
+        return None
+    import copy
+    p0 = ps[0]
+    out = copy.deepcopy(p0)
+    for j in range(len(p0["sigma"])):
+        for c in range(3):
+            for k in range(p0["bins"]):
+                out["sigma"][j][c][k] = _median([p["sigma"][j][c][k] for p in ps])
+    for a in range(3):
+        for b in range(3):
+            s = 0.0
+            for p in ps:
+                s += p["corr"][a][b]
+            out["corr"][a][b] = s / len(ps)
+    out["frames"] = len(ps)
+    return out
+
+
+def profile_at(p, scale):
+    shift = int(math.floor(math.log2(float(p["scale"]) / scale) + 0.5))
+    L = len(p["sigma"])
+    levels = max(1, L - max(0, shift))
+    bands = []
+    for j in range(levels):
+        m = min(L - 1, max(0, j + shift))
+        bands.append([list(map(float, row)) for row in p["sigma"][m]])
+    bins = int(p["bins"])
+    rho = [[white_band_cov(j, k) / (white_band_spread(j) * white_band_spread(k)) for k in range(levels)] for j in range(levels)]
+    total = []
+    for c in range(3):
+        row = []
+        for b in range(bins):
+            v = 0.0
+            for j in range(levels):
+                for k in range(levels):
+                    v += rho[j][k] * bands[j][c][b] * bands[k][c][b]
+            row.append(math.sqrt(max(0.0, v)))
+        total.append(row)
+    return {"levels": levels, "bands": bands, "total": total, "lo": float(p["lo"]), "hi": float(p["hi"]), "bins": bins,
+            "corr": [list(map(float, r)) for r in p["corr"]]}
+
+
+def bin_places(guide, q):
+    NB = q["bins"]
+    u = (guide - q["lo"]) / (q["hi"] - q["lo"]) * NB - 0.5
+    u = np.clip(u, 0, NB - 1)
+    k = np.floor(u)
+    k = np.minimum(k, max(0, NB - 2))
+    t = u - k if NB > 1 else np.zeros_like(u)
+    return k.astype(np.int64), t
+
+
+def _lookup(row, pl):
+    k, t = pl
+    r = np.asarray(row, np.float64)
+    if r.size > 1:
+        return r[k] * (1 - t) + r[k + 1] * t
+    return np.full(k.shape, r[0])
+
+
+def cholesky3(m):
+    L = [[0.0] * 3 for _ in range(3)]
+    for i in range(3):
+        for j in range(i + 1):
+            s = m[i][j]
+            for k in range(j):
+                s -= L[i][k] * L[j][k]
+            L[i][j] = math.sqrt(max(s, 1e-6)) if i == j else s / L[j][j]
+    return L
+
+
+def synth_field(q, w, h, frame, seed):
+    ys, xs = np.mgrid[0:h, 0:w]
+    k = 3.4641016151377544
+    a = (hash01(xs, ys, 0, frame, seed) - 0.5) * k
+    b = (hash01(xs, ys, 1, frame, seed) - 0.5) * k
+    c = (hash01(xs, ys, 2, frame, seed) - 0.5) * k
+    Lc = cholesky3(q["corr"])
+    X = [Lc[0][0] * a, Lc[1][0] * a + Lc[1][1] * b, Lc[2][0] * a + Lc[2][1] * b + Lc[2][2] * c]
+    out = []
+    for ch in range(3):
+        share = []
+        for j in range(q["levels"]):
+            s = 0.0
+            for kk in range(q["bins"]):
+                s += q["bands"][j][ch][kk] / q["total"][ch][kk] if q["total"][ch][kk] > 0 else 0
+            share.append(s / q["bins"])
+        g0 = [share[j] / white_band_spread(j) for j in range(q["levels"])]
+        vr = 0.0
+        for j in range(q["levels"]):
+            for kk in range(q["levels"]):
+                vr += g0[j] * g0[kk] * white_band_cov(j, kk)
+        sd = math.sqrt(vr) if vr > 0 else 1.0
+        d, _ = atrous(X[ch], q["levels"])
+        o = np.zeros((h, w))
+        for j in range(q["levels"]):
+            o = o + (g0[j] / sd) * d[j]
+        out.append(o)
+    return out
+
+
+def _profile_for(n, noise, guide, scale):
+    p = n.get("profile") if n else None
+    return profile_at(p if is_profile(p) else analyse_grain(noise, guide, scale), scale)
+
+
+def profile_grain_image(img, n, p, frame, scale):
+    h, w = img.shape[:2]
+    q = profile_at(n["profile"], scale)
+    fr = 0 if p["animated"] == "off" else _round(frame)
+    seed = _round(p.get("seed") or 0)
+    F = synth_field(q, w, h, fr, seed)
+    s = _f64(img)
+    pl = bin_places(guide_luma(rgb_planes(img)), q)
+    out = s.copy()
+    a = s[..., 3]
+    for c in range(3):
+        out[..., c] = s[..., c] + p["amount"] * a * F[c] * _lookup(q["total"][c], pl)
+    return out.astype(np.float32)
+
+
+def _box3(a):
+    h, w = a.shape
+    xs = np.arange(w)
+    t = (a[:, np.maximum(xs - 1, 0)] + a + a[:, np.minimum(xs + 1, w - 1)]) / 3
+    ys = np.arange(h)
+    return (t[np.maximum(ys - 1, 0)] + t + t[np.minimum(ys + 1, h - 1)]) / 3
+
+
+def degrain_frames(n, f):
+    R = max(0, min(3, _round(n.get("temporal") if n.get("temporal") is not None else 1)))
+    return list(range(f - R, f + R + 1))
+
+
+def degrain_image(pics, at, n, p, scale):
+    S = pics[at]
+    s = _f64(S)
+    planes = rgb_planes(S)
+    guide = guide_luma(planes)
+    q = _profile_for(n, planes, guide, scale)
+    pl = bin_places(guide, q)
+    lum_tot = [(q["total"][0][k] + q["total"][1][k] + q["total"][2][k]) / 3 for k in range(q["bins"])]
+    T, rho = planes, None
+    if len(pics) > 1:
+        acc = [x.copy() for x in planes]
+        W = np.ones(guide.shape)
+        W2 = np.ones(guide.shape)
+        mot = max(1e-6, p["motion"])
+        sg = _lookup(lum_tot, pl)
+        for k in range(len(pics)):
+            if k == at:
+                continue
+            Q = rgb_planes(pics[k])
+            D = (np.abs(Q[0] - planes[0]) + np.abs(Q[1] - planes[1]) + np.abs(Q[2] - planes[2])) / 3
+            Db = _box3(D)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                u = np.where(sg > 0, Db / (mot * sg), 2.0)
+            wt = np.where(u < 1, (1 - u * u) * (1 - u * u), 0.0)
+            for c in range(3):
+                acc[c] = acc[c] + wt * Q[c]
+            W = W + wt
+            W2 = W2 + wt * wt
+        T = [a / W for a in acc]
+        rho = np.sqrt(W2) / W
+    amt = [p["fine"], p["medium"], p["coarse"]]
+    k0 = max(0.0, p["strength"])
+    res = []
+    for c in range(3):
+        d, rest = atrous(T[c], q["levels"])
+        o = rest.copy()
+        for j in range(q["levels"]):
+            a = amt[min(j, 2)]
+            v = d[j]
+            if not a:
+                o = o + v
+                continue
+            thr = k0 * _lookup(q["bands"][j][c], pl) * (rho if rho is not None else 1)
+            m = np.abs(v) - thr
+            soft = np.where(m > 0, np.where(v < 0, -m, m), 0.0)
+            o = o + (v + a * (soft - v))
+        res.append(o)
+    out = np.empty_like(s)
+    out[..., 3] = s[..., 3]
+    for c in range(3):
+        out[..., c] = s[..., c] - res[c] if p["output"] == "removed" else res[c]
+    return out.astype(np.float32)
+
+
+def _scatter_field(G, w, h, cs, frame, seed):
+    ys, xs = np.mgrid[0:h, 0:w]
+    cx, cy = np.floor(xs / cs).astype(np.int64), np.floor(ys / cs).astype(np.int64)
+    best = np.full((h, w), np.inf)
+    bx, by = np.zeros((h, w), np.int64), np.zeros((h, w), np.int64)
+    for db in (-1, 0, 1):
+        for da in (-1, 0, 1):
+            a, b = cx + da, cy + db
+            px = (a + hash01(a, b, 10, frame, seed)) * cs
+            py = (b + hash01(a, b, 11, frame, seed)) * cs
+            dd = (px - xs) * (px - xs) + (py - ys) * (py - ys)
+            nb = dd < best
+            best = np.where(nb, dd, best)
+            bx = np.where(nb, a, bx)
+            by = np.where(nb, b, by)
+    G, ok = G
+    jy = jx = None
+    done = np.zeros((h, w), bool)
+    for t in range(4):
+        ox = np.floor(hash01(bx, by, 12 + 2 * t, frame, seed) * w).astype(np.int64)
+        oy = np.floor(hash01(bx, by, 13 + 2 * t, frame, seed) * h).astype(np.int64)
+        ty, tx = (ys + oy) % h, (xs + ox) % w
+        if jy is None:
+            jy, jx = ty, tx
+        else:
+            jy, jx = np.where(done, jy, ty), np.where(done, jx, tx)
+        done = done | ok[jy, jx]
+    return [g[jy, jx] for g in G]
+
+
+def _scatter_source(Nrm, guide):
+    h, w = guide.shape
+    xs, ys = np.arange(w), np.arange(h)
+    l, r = np.maximum(xs - 1, 0), np.minimum(xs + 1, w - 1)
+    u, d = np.maximum(ys - 1, 0), np.minimum(ys + 1, h - 1)
+    gm = np.abs(guide[:, r] - guide[:, l]) + np.abs(guide[d] - guide[u])
+    idx = _sample_index(w, h, GRAIN_LEVELS)
+    lim = 2 * _EDGE * _median(gm.reshape(-1)[idx])
+    return [np.clip(x, -4, 4) for x in Nrm], gm <= lim
+
+
+def regrain_image(comp, plate, degr, new_mask, n, p, frame, scale):
+    h, w = comp.shape[:2]
+    fr = 0 if p["animated"] == "off" else _round(frame)
+    seed = _round(p.get("seed") or 0)
+    s = _f64(comp)
+    Cg = guide_luma(rgb_planes(comp))
+    have = plate is not None and degr is not None
+    G = Dg = None
+    if have:
+        P, D = rgb_planes(plate), rgb_planes(degr)
+        G = [P[c] - D[c] for c in range(3)]
+        Dg = guide_luma(D)
+        q = _profile_for(n, G, Dg, scale)
+    elif is_profile(n.get("profile")):
+        q = profile_at(n["profile"], scale)
+    else:
+        return comp
+    plC = bin_places(Cg, q)
+    if not have:
+        m = np.ones((h, w))
+    else:
+        m = np.zeros((h, w))
+        if new_mask is not None:
+            m = _clip01(_f64(new_mask)[..., 3])
+        if p["detect"] == "on":
+            d = np.abs(Cg - Dg)
+            thr, soft = p["threshold"], p["softness"]
+            v = _clip01((d - thr) / soft) if soft > 0 else np.where(d > thr, 1.0, 0.0)
+            m = np.where(v > m, v, m)
+    Nrm = None
+    if have:
+        plD = bin_places(Dg, q)
+        Nrm = []
+        for c in range(3):
+            sg = _lookup(q["total"][c], plD)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                Nrm.append(np.where(sg > 1e-9, G[c] / sg, 0.0))
+    F = None
+    if not have or p["fill"] == "synth":
+        F = synth_field(q, w, h, fr, seed)
+    elif p["fill"] == "scatter":
+        F = _scatter_field(_scatter_source(Nrm, Dg), w, h, max(4.0, p["cell"] * scale), fr, seed)
+    mm = m if F is not None else np.zeros((h, w))
+    out = np.empty_like(s)
+    a = s[..., 3]
+    mode = p["output"]
+    for c in range(3):
+        u = (Nrm[c] * (1 - mm) if Nrm is not None else 0) + (F[c] * mm if F is not None else 0)
+        g = p["amount"] * u * _lookup(q["total"][c], plC)
+        r = s[..., c] + a * g
+        if mode == "grain":
+            out[..., c] = g
+        elif mode == "new areas":
+            out[..., c] = m
+        elif mode == "difference":
+            out[..., c] = r - _f64(plate)[..., c] if have else g
+        else:
+            out[..., c] = r
+    out[..., 3] = a if mode == "result" else 1.0
+    return out.astype(np.float32)
+
+
+def analyse_inputs(node_type, pics):
+    """The noise and guide Analyse measures for a node from its inputs' pictures: (noise planes, guide) or None."""
+    a = pics[0] if pics else None
+    b = pics[1] if len(pics) > 1 else None
+    if node_type == "regrain":
+        if a is None or b is None:
+            return None
+        P, D = rgb_planes(a), rgb_planes(b)
+        return [P[c] - D[c] for c in range(3)], guide_luma(D)
+    if a is None:
+        return None
+    P = rgb_planes(a)
+    return P, guide_luma(P)

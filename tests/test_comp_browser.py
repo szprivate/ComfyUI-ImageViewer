@@ -1782,6 +1782,39 @@ class CompBrowserTests(unittest.TestCase):
         self.assertIn("Out of date", pg.locator(f"{pane} .cp-vfx").inner_text())
         self.assertEqual(self.errors, [])
 
+    def test_degrain_analyses_its_grain_on_the_server_and_shows_the_profile(self):
+        pg = self.page()
+        self.new_comp(pg)
+        pg.evaluate(f"""() => {{ const e = {self.ED}; e.select(['Constant1']);
+            e.addNode('grain', {{ amount: 0.06, size: 0, saturation: 0.5 }}); e.addNode('degrain', {{}}); }}""")
+        pg.wait_for_timeout(800)
+        P = "__panel.compPropsPanel"
+        did = pg.evaluate(f"() => {{ const e = {self.ED}, n = e.comp().nodes.find((x) => x.type === 'degrain'); e.select([n.id]); return n.id; }}")
+        pg.wait_for_timeout(300)
+        text = pg.evaluate(f"() => ({P}.querySelector('.cp-grain') || {{}}).textContent || ''")
+        self.assertIn("No profile", text)
+        labels = pg.evaluate(f"() => Array.from({P}.querySelectorAll('.mg-prop label')).map((l) => l.textContent)")
+        for want in ("temporal", "strength", "fine", "medium", "coarse"):
+            self.assertIn(want, labels)
+        pg.evaluate(f"() => Array.from({P}.querySelectorAll('.cp-btnrow button')).find((b) => b.textContent === 'Analyse').click()")
+        pg.wait_for_function(f"() => {{ const n = {self.ED}.comp().nodes.find((x) => x.id === '{did}'); return n && n.profile; }}", timeout=20000)
+        prof = pg.evaluate(f"() => {self.ED}.comp().nodes.find((x) => x.id === '{did}').profile")
+        self.assertEqual((prof["v"], prof["bins"], len(prof["sigma"])), (1, 8, 4))
+        self.assertGreater(prof["sigma"][0][1][4], 0.005)     # the Grain's noise was measured at full size
+        pg.wait_for_function(f"() => !!{P}.querySelector('.cp-grain-curve')", timeout=5000)
+        self.assertIn("Profile from", pg.evaluate(f"() => {P}.querySelector('.cp-grain').textContent"))
+        # The Grain node takes a profile too, and with it amount 1 is as measured.
+        gid = pg.evaluate(f"() => {{ const e = {self.ED}, n = e.comp().nodes.find((x) => x.type === 'grain'); e.select([n.id]); return n.id; }}")
+        pg.wait_for_timeout(300)
+        pg.evaluate(f"() => Array.from({P}.querySelectorAll('.cp-btnrow button')).find((b) => b.textContent === 'Analyse').click()")
+        pg.wait_for_function(f"() => {{ const n = {self.ED}.comp().nodes.find((x) => x.id === '{gid}'); return n && n.profile; }}", timeout=20000)
+        self.assertEqual(pg.evaluate(f"() => {self.ED}.comp().nodes.find((x) => x.id === '{gid}').amount"), 1)
+        pg.evaluate(f"() => {self.ED}.select(['{did}'])")
+        pg.wait_for_timeout(600)
+        if SHOTS:
+            pg.screenshot(path=os.path.join(SHOTS, "comp-degrain-profile.png"))
+        self.assertEqual(self.errors, [])
+
     def test_the_comp_button_offers_new_and_open(self):
         pg = self.page()
         pg.evaluate("() => __panel.spaceOpen('comp')")
