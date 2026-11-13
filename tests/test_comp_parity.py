@@ -152,6 +152,46 @@ def paint_cases(sources):
     return c
 
 
+def warp_cases(sources):
+    """CornerPin, STMap, VectorWarp, LensDistortion, GridWarp, and the trackers' stabilise / match-move."""
+    c = []
+    N = node
+    pin = {"to1": [2, 15], "to2": [26, 16.5], "to3": [24, 1], "to4": [4.5, 3]}
+    c.append(({"comp": comp([read(1), N("cornerpin", 1, ["Read1"], **pin), out("cornerpin1")])}, sources))
+    c.append(({"comp": comp([read(1), N("cornerpin", 1, ["Read1"], invert="on", from1=[1, 16], from3=[27, 0.5], **pin), out("cornerpin1")])}, sources))
+    c.append(({"comp": comp([read(1), N("addchannels", 1, ["Read1"], channels="m.a", value=0.5),
+                             N("cornerpin", 1, ["addchannels1"], **pin), N("shuffle", 1, ["cornerpin1"], g="m.a"), out("shuffle1")]), "scale": 0.5}, sources))
+    # an ST map from a lens undistort, used on the plate: the same picture as the undistort itself
+    lens = {"k1": -0.12, "k2": 0.03, "zoom": 1.05}
+    c.append(({"comp": comp([read(1), N("lensdistortion", 1, ["Read1"], **lens), out("lensdistortion1")])}, sources))
+    c.append(({"comp": comp([read(1), N("lensdistortion", 1, ["Read1"], mode="redistort", center=[12, 9], **lens), out("lensdistortion1")])}, sources))
+    c.append(({"comp": comp([read(1), N("lensdistortion", 1, ["Read1"], output="stmap", **lens), out("lensdistortion1")])}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("lensdistortion", 1, ["Read2"], output="stmap", k1=0.2),
+                             N("stmap", 1, ["Read1", "lensdistortion1"]), out("stmap1")])}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("reformat", 1, ["Read2"], width=13, height=21, resize="distort"),
+                             N("stmap", 1, ["Read1", "reformat1"], u="b", v="r"), out("stmap1")]), "scale": 0.5}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("vectorwarp", 1, ["Read1", "Read2"], amount=3.5), out("vectorwarp1")])}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("vectorwarp", 1, ["Read1", "Read2"], u="b", v="a", amount=-2), out("vectorwarp1")]), "scale": 0.5}, sources))
+    moved = moving(5, [1, 2, 3])
+    c.append(({"comp": comp([read(1), N("vectors", 1, ["Read1"], iterations=8, levels=2),
+                             N("vectorwarp", 1, ["Read1", "vectors1"]), out("vectorwarp1")], w=40, h=32), "frame": 2}, moved))
+    dst = [v + d for v, d in zip([0, 0, 14.5, 0, 29, 0, 0, 8.5, 14.5, 8.5, 29, 8.5, 0, 17, 14.5, 17, 29, 17],
+                                [0, 0, 1, 0, 0, 0, 0, 0, 3, -2, 0, 0, 0, 0, -1, 0, 0, 0])]
+    c.append(({"comp": comp([read(1), N("gridwarp", 1, ["Read1"], cols=3, rows=3, dst_points=dst), out("gridwarp1")])}, sources))
+    c.append(({"comp": comp([read(1), N("gridwarp", 1, ["Read1"], cols=3, rows=3, dst_points=dst, distortion=0.4), out("gridwarp1")]), "scale": 0.5}, sources))
+    pts = {"points": [{"id": "p1", "keys": [[0, 5, 5, 1], [4, 8, 6, 1]]}, {"id": "p2", "keys": [[0, 20, 6, 1], [4, 22, 9, 1]]},
+                      {"id": "p3", "keys": [[0, 21, 14, 1], [4, 20, 15.5, 1]]}, {"id": "p4", "keys": [[0, 6, 13, 1], [4, 7, 12, 1]]}]}
+    for motion in ("translate", "rotate", "scale", "perspective"):
+        for how in ("stabilise", "match-move"):
+            c.append(({"comp": comp([read(1), N("tracker", 1, ["Read1"], points=pts, motion=motion, transform=how), out("tracker1")]), "frame": 3}, sources))
+    c.append(({"comp": comp([read(1), N("tracker", 1, ["Read1"], points=pts, motion="scale", transform="match-move", reference=4),
+                             out("tracker1")]), "frame": 1, "scale": 0.5}, sources))
+    plane = {"keys": [[0, 2, 15, 26, 16, 25, 2, 3, 1], [6, 3, 14, 24, 16, 26, 1, 4, 3]]}
+    for how in ("stabilise", "match-move"):
+        c.append(({"comp": comp([read(1), N("planartracker", 1, ["Read1"], plane=plane, transform=how), out("planartracker1")]), "frame": 2}, sources))
+    return c
+
+
 def cases():
     s1, s2, s3 = src(1), src(2), src(3, 11, 7)
     sources = {"Read1": s1, "Read2": s2}
@@ -342,6 +382,7 @@ def new_node_cases(sources):
     c.extend(channel_cases(sources))
     c.extend(mask_cases(sources))
     c.extend(box_cases(sources))
+    c.extend(warp_cases(sources))
     return c
 
 

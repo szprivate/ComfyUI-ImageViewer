@@ -494,6 +494,92 @@ class CompBrowserTests(unittest.TestCase):
         self.assertNotIn(20, kept2, "frames made before the change are no longer counted")
         self.assertEqual(self.errors, [])
 
+    def test_the_gpu_preview_makes_the_cpus_numbers(self):
+        pg = self.page()
+        res = pg.evaluate("""async () => {
+            const C = await import('/extensions/viewer/imageViewer_compModel.js');
+            const G = await import('/extensions/viewer/imageViewer_compGpu.js');
+            const gpu = G.createCompGpu(document);
+            if (!gpu) return { none: true };
+            let seed = 7;
+            const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+            const pic = (w, h, sparse) => { const d = new Float32Array(w * h * 4);
+                for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { if (sparse && (x < 20 || x > 40 || y < 10 || y > 30)) continue;
+                    const a = rnd(), i = (y * w + x) * 4; d[i] = rnd() * a; d[i + 1] = rnd() * a; d[i + 2] = rnd() * a * 1.5; d[i + 3] = a; }
+                return { w, h, data: d }; };
+            const W = 97, H = 61, P1 = pic(W, H, false), P2 = pic(W, H, true);
+            const N = (id, type, inputs, kw = {}) => ({ id, type, inputs, x: 0, y: 0, ...kw });
+            const mk = (nodes, out) => C.normalizeComp({ comp: 1, format: { width: W, height: H, fps: 24, frames: 10 }, nodes, output: out }).comp;
+            const R = [N('R1', 'read', [], { file: 'a.png' }), N('R2', 'read', [], { file: 'b.png' })];
+            const cases = [
+                mk([...R, N('G', 'grade', ['R1', null], { gain: 1.7, gamma: 0.8, saturation: 1.3, lift: 0.05 }), N('O', 'output', ['G'])], 'O'),
+                mk([...R, N('T', 'transform', ['R2'], { translate: [7.5, -3.25], rotate: 17, scale: [1.2, 0.85] }), N('M', 'merge', ['R1', 'T', null]), N('O', 'output', ['M'])], 'O'),
+                mk([...R, N('B', 'blur', ['R2', null], { size: 9 }), N('M', 'merge', ['R1', 'B', 'R1'], { operation: 'screen', mix: 0.7 }), N('O', 'output', ['M'])], 'O'),
+                mk([...R, N('C', 'crop', ['R1'], { topleft: [10, 8], bottomright: [70, 50], softness: 3 }), N('F', 'reformat', ['C'], { width: 60, height: 40, resize: 'fill' }),
+                    N('M', 'merge', ['R2', 'F', null], { operation: 'difference' }), N('O', 'output', ['M'])], 'O'),
+                mk([...R, N('U', 'unpremult', ['R1', null]), N('G', 'grade', ['U', 'R2'], { gain: 2, mask_invert: 'on' }), N('P', 'premult', ['G', null], { mix: 0.5 }),
+                    N('B', 'blur', ['P', 'R2'], { size: 4, mask_channel: 'r' }), N('O', 'output', ['B'])], 'O'),
+                mk([...R, N('K', 'constant', [], { color: [0.2, 0.5, 0.9, 0.6] }), N('L', 'lumakeyer', ['R1', null]), N('M', 'merge', ['K', 'L', null]), N('O', 'output', ['M'])], 'O'),
+            ];
+            const out = [];
+            for (const comp of cases) {
+                const src = (n) => (n.id === 'R1' ? P1 : P2);
+                const cpu = C.renderNode(comp, comp.output, 0, { scale: 1, source: src });
+                const g = gpu.render(comp, comp.output, 0, { scale: 1, source: src });
+                if (!g) { out.push({ skipped: true }); continue; }
+                let d = 0;
+                for (let i = 0; i < cpu.data.length; i++) d = Math.max(d, Math.abs(cpu.data[i] - g.data[i]));
+                out.push({ d, w: g.w, h: g.h, cw: cpu.w, ch: cpu.h });
+            }
+            // A region: only its pixels are worked, and they are right.
+            const comp = cases[2];
+            const src = (n) => (n.id === 'R1' ? P1 : P2);
+            const cpu = C.renderNode(comp, comp.output, 0, { scale: 1, source: src });
+            const g = gpu.render(comp, comp.output, 0, { scale: 1, source: src }, [30, 20, 60, 40]);
+            let d = 0, outside = 0;
+            for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) for (let k = 0; k < 4; k++) {
+                const i = (y * W + x) * 4 + k;
+                if (x >= 30 && x < 60 && y >= 20 && y < 40) d = Math.max(d, Math.abs(cpu.data[i] - g.data[i])); else if (g.data[i]) outside++;
+            }
+            return { out, roi: { d, outside, box: g.roi } };
+        }""")
+        if res.get("none"):
+            self.skipTest("no WebGL2 with float targets here")
+        for i, r in enumerate(res["out"]):
+            if r.get("skipped"):
+                continue
+            self.assertEqual((r["w"], r["h"]), (r["cw"], r["ch"]), f"case {i}")
+            self.assertLess(r["d"], 1e-4, f"case {i}: {r}")
+        self.assertLess(res["roi"]["d"], 1e-4, res["roi"])
+        self.assertEqual(res["roi"]["outside"], 0, "nothing worked outside the region")
+        self.assertEqual(self.errors, [])
+
+    def test_the_editor_draws_on_the_gpu_and_only_the_part_on_screen_when_zoomed_in(self):
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        pg.evaluate(f"""() => {{ const e = {ED}; const c = e.comp();
+            c.nodes.push({{ id: 'Grade1', type: 'grade', x: 0, y: 60, inputs: ['Constant1', null], gain: 2 }});
+            c.nodes.find((n) => n.id === 'Output1').inputs = ['Grade1'];
+            c.nodes.find((n) => n.id === 'Constant1').color = [0.25, 0.5, 0.75, 1]; e.refresh(); }}""")
+        pg.wait_for_timeout(400)
+        info = pg.evaluate(f"() => {ED}.renderInfo()")
+        if info["gpuOff"]:
+            self.skipTest("GPU off here: " + info["gpuOff"])
+        self.assertIn(info["how"], ("gpu", "kept"), info)
+        px = self.pixel(pg, 0.5, 0.5)
+        pg.evaluate(f"() => {ED}.setGpu(false)")
+        pg.wait_for_timeout(400)
+        self.assertEqual(pg.evaluate(f"() => {ED}.renderInfo().how"), "kept", "the CPU finds the GPU's picture in the shared cache")
+        self.assertEqual(self.pixel(pg, 0.5, 0.5), px)
+        pg.evaluate(f"() => {{ {ED}.setGpu(true); const z = {ED}.state.zoom; z.fit = false; z.s = 6; z.x = -1500; z.y = -900; {ED}.relayout && {ED}.relayout(); }}")
+        pg.evaluate(f"() => {{ const c = {ED}.comp(); c.nodes.find((n) => n.id === 'Grade1').gain = 3; {ED}.refresh(); }}")
+        pg.wait_for_timeout(500)
+        info = pg.evaluate(f"() => {ED}.renderInfo()")
+        self.assertEqual(info["how"], "gpu, region", info)
+        self.assertTrue(info["region"], info)
+        self.assertEqual(self.errors, [])
+
     def test_a_node_dropped_on_a_wire_goes_into_the_flow(self):
         pg = self.page()
         self.new_comp(pg)
@@ -1003,6 +1089,92 @@ class CompBrowserTests(unittest.TestCase):
         if SHOTS:
             pg.wait_for_timeout(400)
             pg.screenshot(path=os.path.join(SHOTS, "comp-handles.png"))
+        self.assertEqual(self.errors, [])
+
+    def test_tracker_corner_pin_lens_and_grid_warp_on_the_picture(self):
+        from PIL import Image
+        ys, xs = np.mgrid[0:80, 0:120].astype(np.float64)
+        rng = np.random.default_rng(3)
+        g = np.zeros_like(xs)
+        for a, b, c in (rng.random((40, 3)) - [0.5, 0.5, 0]) * [1.2, 1.2, 6]:
+            g += np.sin(xs * a + ys * b + c)
+        u8 = np.clip(128 + g * 18, 0, 255).astype(np.uint8)
+        Image.fromarray(np.dstack([u8, u8, u8, np.full_like(u8, 255)]), "RGBA").save(os.path.join(self.dirs["output"], "trk_tex.png"))
+        path = os.path.join(self.dirs["output"], "trk.comp.json")
+        comp = {"comp": 1, "format": {"width": 120, "height": 80, "fps": 24, "frames": 5}, "output": "Output1",
+                "nodes": [{"id": "Read1", "type": "read", "file": "trk_tex.png", "inputs": [], "x": 0, "y": 0},
+                          {"id": "Transform1", "type": "transform", "inputs": ["Read1"], "x": 0, "y": 60,
+                           "tracks": {"translate": [{"f": 0, "v": [0, 0], "ease": "linear"}, {"f": 4, "v": [6, -3]}]}},
+                          {"id": "Tracker1", "type": "tracker", "inputs": ["Transform1"], "x": 0, "y": 120},
+                          {"id": "Output1", "type": "output", "inputs": ["Tracker1"], "x": 0, "y": 180}]}
+        pg = self.page()
+        ok = pg.evaluate("""async ([path, comp]) => { const r = await fetch('/imageviewer/comp', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path, comp }) }); if (!r.ok) return false; return !!(await __panel.compOpenFile(path)); }""", [path, comp])
+        self.assertTrue(ok)
+        ED = self.ED
+        pg.wait_for_function(f"() => {{ const e = {ED}; return e && e.comp() && e.comp().nodes.length === 4; }}", timeout=10000)
+        pg.evaluate(f"() => {{ {ED}.select(['Tracker1']); {ED}.setFrame(0); }}")
+        pg.wait_for_timeout(300)
+        # + Point, then a click on the picture puts a point there.
+        pg.locator(".cp-pane button", has_text="+ Point").click()
+        b = pg.evaluate(f"() => {ED}.canvasBox()")
+        sb = pg.evaluate(f"() => {{ const r = {ED}.stage.getBoundingClientRect(); return [r.x, r.y]; }}")
+        k = b["w"] / b["cw"]
+        pg.mouse.click(sb[0] + b["x"] + 60 * k, sb[1] + b["y"] + 40 * k)
+        pts = pg.evaluate(f"() => {ED}.comp().nodes.find((n) => n.id === 'Tracker1').points.points")
+        self.assertEqual(len(pts), 1)
+        self.assertAlmostEqual(pts[0]["keys"][0][1], 60, delta=1.5)
+        self.assertAlmostEqual(pts[0]["keys"][0][2], 40, delta=1.5)
+        # Track to the end through the server; the keys come in, one undo step.
+        pg.locator(".cp-pane button", has_text="▶▶").click()
+        pg.wait_for_function(f"() => {{ const n = {ED}.comp().nodes.find((n) => n.id === 'Tracker1'); return n.points.points[0].keys.length === 5 && !{ED}.state.trkRun; }}", timeout=20000)
+        keys = pg.evaluate(f"() => {ED}.comp().nodes.find((n) => n.id === 'Tracker1').points.points[0].keys")
+        x0, y0 = keys[0][1], keys[0][2]
+        self.assertAlmostEqual(keys[4][1] - x0, 6, delta=0.4)
+        self.assertAlmostEqual(keys[4][2] - y0, -3, delta=0.4)
+        # Make: Stabilise is a Transform beside the tracker.
+        pg.locator(".cp-pane button", has_text="Stabilise").click()
+        made = pg.evaluate(f"() => {ED}.comp().nodes.filter((n) => n.type === 'transform').length")
+        self.assertEqual(made, 2)
+        # A CornerPin: its corner squares drag.
+        pg.evaluate(f"() => {{ {ED}.select(['Read1']); {ED}.addNode('cornerpin'); }}")
+        pg.wait_for_timeout(300)
+        h = pg.locator(".cp-over rect.cp-wpin[data-param=to3]")
+        self.assertEqual(h.count(), 1)
+        hb = h.bounding_box()
+        z = pg.evaluate(f"() => {ED}.state.zoom.s")
+        cx, cy = hb["x"] + hb["width"] / 2, hb["y"] + hb["height"] / 2
+        pg.mouse.move(cx, cy); pg.mouse.down(); pg.mouse.move(cx - 20, cy + 10, steps=4); pg.mouse.up()
+        to3 = pg.evaluate(f"() => {{ const n = {ED}.comp().nodes.find((n) => n.type === 'cornerpin'); return n.to3; }}")
+        self.assertIsNotNone(to3)
+        self.assertAlmostEqual(to3[0], 120 - 20 / z, delta=1.5)
+        self.assertAlmostEqual(to3[1], 0 + 10 / z, delta=1.5)
+        # A GridWarp: a destination point drags.
+        pg.evaluate(f"() => {{ {ED}.select(['Read1']); {ED}.addNode('gridwarp'); }}")
+        pg.wait_for_timeout(300)
+        self.assertEqual(pg.locator(".cp-over circle.cp-wpt").count(), 25)
+        hb = pg.locator(".cp-over circle.cp-wpt").nth(12).bounding_box()
+        cx, cy = hb["x"] + hb["width"] / 2, hb["y"] + hb["height"] / 2
+        pg.mouse.move(cx, cy); pg.mouse.down(); pg.mouse.move(cx + 15, cy, steps=4); pg.mouse.up()
+        moved = pg.evaluate(f"""() => {{ const n = {ED}.comp().nodes.find((n) => n.type === 'gridwarp');
+            const d = n.dst_points || (n.tracks && n.tracks.dst_points && n.tracks.dst_points[0].v); return d ? d.points || d : null; }}""")
+        self.assertIsNotNone(moved, "the drag wrote the destination points")
+        # LensDistortion: Draw lines, two clicks and a double-click make a line; Solve says what it found.
+        pg.evaluate(f"() => {{ {ED}.select(['Read1']); {ED}.addNode('lensdistortion'); }}")
+        pg.wait_for_timeout(300)
+        pg.locator(".cp-pane button", has_text="Draw lines").click()
+        b = pg.evaluate(f"() => {ED}.canvasBox()")
+        k = b["w"] / b["cw"]
+        for i, (px, py) in enumerate([(10, 20), (60, 14), (110, 20)]):
+            if i == 2:
+                pg.mouse.dblclick(sb[0] + b["x"] + px * k, sb[1] + b["y"] + py * k)
+            else:
+                pg.mouse.click(sb[0] + b["x"] + px * k, sb[1] + b["y"] + py * k)
+        lines = pg.evaluate(f"() => {ED}.comp().nodes.find((n) => n.type === 'lensdistortion').lines")
+        self.assertTrue(lines and len(lines) == 1 and len(lines[0]) >= 3, lines)
+        if SHOTS:
+            pg.wait_for_timeout(400)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-lens-lines.png"))
         self.assertEqual(self.errors, [])
 
     def test_a_reformat_makes_the_picture_its_new_size_and_the_jack_after_it_sits_in_its_middle(self):

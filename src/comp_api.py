@@ -28,7 +28,8 @@ from . import comp_model as M
 from . import comp_write as CW
 
 LABELS = {"read": "Read", "constant": "Constant", "roto": "Roto", "paint": "Paint", "merge": "Merge", "copy": "Copy", "transform": "Transform",
-          "reformat": "Reformat", "crop": "Crop", "grade": "Grade", "colorcorrect": "ColorCorrect", "ocio_colorspace": "OCIOColorSpace",
+          "reformat": "Reformat", "crop": "Crop", "cornerpin": "CornerPin", "stmap": "STMap", "vectorwarp": "VectorWarp",
+          "lensdistortion": "LensDistortion", "gridwarp": "GridWarp", "tracker": "Tracker", "planartracker": "PlanarTracker", "grade": "Grade", "colorcorrect": "ColorCorrect", "ocio_colorspace": "OCIOColorSpace",
           "ocio_display": "OCIODisplay", "keyer": "Keyer", "lumakeyer": "LumaKeyer", "chromakeyer": "ChromaKeyer", "blur": "Blur",
           "glow": "Glow", "erode": "Erode/Dilate", "laplacian": "Laplacian", "motionblur": "MotionBlur", "depthblur": "DepthBlur",
           "defocus": "Defocus", "lensflare": "LensFlare", "shuffle": "Shuffle", "addchannels": "AddChannels",

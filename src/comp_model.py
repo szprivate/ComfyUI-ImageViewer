@@ -26,6 +26,36 @@ except ImportError:   # loaded on its own (the tests): the twin beside it
     PT = _ilu.module_from_spec(_spec)
     _spec.loader.exec_module(PT)
 
+
+def _load_sibling(name):
+    """A module beside this one: imported relatively in the package, by its path when this file is loaded alone."""
+    try:
+        import importlib
+        return importlib.import_module(f"{__package__}.{name}") if __package__ else None
+    except ImportError:
+        return None
+
+
+def _warp_module():
+    mod = _load_sibling("comp_warp")
+    if mod is not None:
+        return mod
+    import importlib.util
+    import os
+    import sys
+    mod = sys.modules.get("comp_warp")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location("comp_warp", os.path.join(os.path.dirname(os.path.abspath(__file__)), "comp_warp.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        sys.modules["comp_warp"] = mod
+    return mod
+
+
+WP = _warp_module()
+LENS_MODES, LENS_OUTPUTS = WP.LENS_MODES, WP.LENS_OUTPUTS
+TRACK_MOTIONS, TRACK_TRANSFORMS = WP.TRACK_MOTIONS, WP.TRACK_TRANSFORMS
+
 COMP_VERSION = 1
 SUFFIX = ".comp.json"
 MERGE_OPS = ["over", "under", "plus", "minus", "multiply", "screen", "max", "min", "difference",
@@ -340,6 +370,46 @@ NODE_TYPES = {
     "metadata": {"inputs": ["src"], "params": {
         "set": {"kind": "text", "def": ""},
         "remove": {"kind": "text", "def": ""},
+    }},
+    "cornerpin": {"inputs": ["src"], "params": dict(
+        {f"to{k}": {"kind": "vec2", "def": None, "key": True} for k in range(1, 5)},
+        **{f"from{k}": {"kind": "vec2", "def": None, "key": True} for k in range(1, 5)},
+        invert={"kind": "enum", "def": "off", "choices": ["off", "on"]})},
+    "stmap": {"inputs": ["src", "stmap"], "params": {
+        "u": {"kind": "chan", "def": "r"},
+        "v": {"kind": "chan", "def": "g"},
+    }},
+    "vectorwarp": {"inputs": ["src", "vectors"], "params": {
+        "u": {"kind": "chan", "def": "r"},
+        "v": {"kind": "chan", "def": "g"},
+        "amount": {"kind": "num", "def": 1, "key": True},
+    }},
+    "lensdistortion": {"inputs": ["src"], "params": {
+        "mode": {"kind": "enum", "def": "undistort", "choices": LENS_MODES},
+        "k1": {"kind": "num", "def": 0, "key": True},
+        "k2": {"kind": "num", "def": 0, "key": True},
+        "center": {"kind": "vec2", "def": None, "key": True},
+        "zoom": {"kind": "num", "def": 1, "min": 0.1, "max": 10, "key": True},
+        "output": {"kind": "enum", "def": "image", "choices": LENS_OUTPUTS},
+        "lines": {"kind": "lines", "def": None},
+    }},
+    "gridwarp": {"inputs": ["src"], "params": {
+        "cols": {"kind": "int", "def": 5, "min": 2, "max": 16},
+        "rows": {"kind": "int", "def": 5, "min": 2, "max": 16},
+        "src_points": {"kind": "points", "def": None},
+        "dst_points": {"kind": "points", "def": None, "key": True},
+        "distortion": {"kind": "num", "def": 1, "min": 0, "max": 1, "key": True},
+    }},
+    "tracker": {"inputs": ["src"], "params": {
+        "points": {"kind": "trackpoints", "def": None},
+        "motion": {"kind": "enum", "def": "translate", "choices": TRACK_MOTIONS},
+        "transform": {"kind": "enum", "def": "none", "choices": TRACK_TRANSFORMS},
+        "reference": {"kind": "int", "def": 0},
+    }},
+    "planartracker": {"inputs": ["src"], "params": {
+        "plane": {"kind": "plane", "def": None},
+        "transform": {"kind": "enum", "def": "none", "choices": TRACK_TRANSFORMS},
+        "reference": {"kind": "int", "def": 0},
     }},
     "output": {"inputs": ["src"], "params": {}},
 }
@@ -737,6 +807,8 @@ def format_at(comp, nid, depth=0):
 
     def up():
         return format_at(comp, ins[0], depth + 1) if NODE_TYPES[n["type"]]["inputs"] and ins and ins[0] else F
+    if not n.get("disable") and n["type"] == "stmap" and len(ins) > 1 and ins[1]:
+        return format_at(comp, ins[1], depth + 1)
     if n.get("disable") or n["type"] != "reformat":
         return F if n["type"] in ("read", "constant") else up()
     w, h = reformat_size(n, 0, up())
@@ -2233,11 +2305,94 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             p = P(n, f, NODE_TYPES["depthblur"]["params"])
             p["size"] = p["size"] * scale
             return depth_blur_image(src, conform(run(ins[1], f, d1), src.shape[1], src.shape[0]), p)
+        if t == "cornerpin":
+            frm, to = WP.pin_corners(lambda p: param_at(n, p, f), in_fmt(n))
+            inv = WP.homography(frm, to) if n.get("invert") == "on" else WP.homography(to, frm)
+            return spatial(ins[0], f, d1, lambda p: WP.homography_image(p, inv, scale))
+        if t in ("stmap", "vectorwarp"):
+            src = run(ins[0], f, d1)
+            i1 = ins[1] if len(ins) > 1 else None
+            if not i1:
+                return src, ex_of(ins[0], f)
+            sh_, sw_ = src.shape[:2]
+            Mi = run(i1, f, d1)
+            if t == "stmap":
+                mex = ex_of(i1, f)
+                mh, mw = Mi.shape[:2]
+            else:
+                mex = _conform_extras(ex_of(i1, f), sw_, sh_)
+                Mi = conform(Mi, sw_, sh_)
+                mh, mw = sh_, sw_
+            us = channel_of(Mi, mex, n.get("u") or "r")
+            vs = channel_of(Mi, mex, n.get("v") or "g")
+            us = np.zeros((mh, mw), np.float32) if us is None else us
+            vs = np.zeros((mh, mw), np.float32) if vs is None else vs
+            if t == "stmap":
+                U, V = WP.st_map(us, vs, sw_, sh_)
+            else:
+                U, V = WP.vector_map(us, vs, mw, mh, param_at(n, "amount", f), scale)
+            return spatial(ins[0], f, d1, lambda p: WP.sample_map(p, U, V, mw, mh))
+        if t == "lensdistortion":
+            src = run(ins[0], f, d1)
+            sh_, sw_ = src.shape[:2]
+            p = {"mode": n.get("mode") or "undistort", "k1": param_at(n, "k1", f), "k2": param_at(n, "k2", f),
+                 "center": param_at(n, "center", f), "zoom": param_at(n, "zoom", f)}
+            U, V = WP.lens_map(sw_, sh_, p, scale)
+            if n.get("output") == "stmap":
+                return WP.map_as_st(U, V, sw_, sh_, sw_, sh_), {}
+            return spatial(ins[0], f, d1, lambda q: WP.sample_map(q, U, V, sw_, sh_))
+        if t == "gridwarp":
+            src = run(ins[0], f, d1)
+            sh_, sw_ = src.shape[:2]
+            sp, dp = grid_points(n, f, in_fmt(n))
+            U, V = WP.grid_map(sp, dp, sw_, sh_, scale)
+            return spatial(ins[0], f, d1, lambda q: WP.sample_map(q, U, V, sw_, sh_))
+        if t in ("tracker", "planartracker"):
+            how = n.get("transform") or "none"
+            mo = None if how == "none" else track_motion(n, f)
+            if not mo:
+                return run(ins[0], f, d1), ex_of(ins[0], f)
+            if mo["kind"] == "perspective":
+                inv = WP.homography(mo["Q"], mo["P"]) if how == "match-move" else WP.homography(mo["P"], mo["Q"])
+                return spatial(ins[0], f, d1, lambda p: WP.homography_image(p, inv, scale))
+            m0 = mo["m"] if how == "match-move" else WP.invert_affine(mo["m"])
+            m = _mul(_s(scale, scale), _mul(m0, _s(1 / scale, 1 / scale)))
+            return spatial(ins[0], f, d1, lambda p: resample(p, m, p.shape[1], p.shape[0]))
         if t in PASS_THROUGH:
             return run(ins[0], f, d1)
         return blank(W, H)
     img = run(nid, frame, 0)
     return (img, ex_of(nid, frame)) if channels else img
+
+
+def grid_points(n, f, fmt):
+    """The page's ``gridPoints``: the source grid and the destination as far as ``distortion`` takes it."""
+    cols = max(2, min(16, int(math.floor((n.get("cols") or 5) + 0.5))))
+    rows = max(2, min(16, int(math.floor((n.get("rows") or 5) + 0.5))))
+    ln = 2 * cols * rows
+
+    def ok(a):
+        return isinstance(a, list) and len(a) == ln and all(_is_num(v) for v in a)
+    sp = n["src_points"] if ok(n.get("src_points")) else WP.lattice(cols, rows, fmt["width"], fmt["height"])
+    raw = param_at(n, "dst_points", f)
+    dr = raw if ok(raw) else sp
+    k = param_at(n, "distortion", f)
+    return sp, [v + (dr[i] - v) * k for i, v in enumerate(sp)]
+
+
+def track_motion(n, f):
+    """The page's ``trackMotion``: the motion from the reference frame to ``f``, or None."""
+    ref = int(math.floor((n.get("reference") or 0) + 0.5))
+    if n.get("type") == "planartracker":
+        keys = (n.get("plane") or {}).get("keys") if isinstance(n.get("plane"), dict) else None
+        if not WP.track_has(keys, ref) or not WP.track_has(keys, f):
+            return None
+        return {"kind": "perspective", "P": WP.quad_at(keys, ref), "Q": WP.quad_at(keys, f)}
+    P, Q = WP.track_pairs(n.get("points"), ref, f)
+    mo = WP.solve_motion(P, Q, n.get("motion") or "translate")
+    if mo and mo["kind"] == "perspective":
+        mo["P"], mo["Q"] = P[:4], Q[:4]
+    return mo
 
 
 def sources_of(comp, nid):

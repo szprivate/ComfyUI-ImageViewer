@@ -32,6 +32,7 @@ import * as OC from "./imageViewer_compOcio.js";
 import * as LT from "./imageViewer_compLight.js";
 import * as CH from "./imageViewer_compChannels.js";
 import * as PT from "./imageViewer_compPaint.js";
+import * as WP from "./imageViewer_compWarp.js";
 import { blank, blurImage, boxesForGauss } from "./imageViewer_compOps.js";
 export { blank, blurImage, boxesForGauss };
 
@@ -296,6 +297,53 @@ export const NODE_TYPES = {
         set: { kind: "text", def: "", help: "key = value; key2 = value - set or replaced on the way down" },
         remove: { kind: "text", def: "", help: "Keys taken off (comma separated; * at the end matches a start: exr/*)" },
     } },
+    cornerpin: { label: "CornerPin", cat: "Transform", inputs: ["src"], params: {
+        to1: { kind: "vec2", def: null, key: true, step: 1, help: "Where the bottom left corner goes, pixels of the picture that comes in (empty: where it is)" },
+        to2: { kind: "vec2", def: null, key: true, step: 1, help: "Where the bottom right corner goes" },
+        to3: { kind: "vec2", def: null, key: true, step: 1, help: "Where the top right corner goes" },
+        to4: { kind: "vec2", def: null, key: true, step: 1, help: "Where the top left corner goes" },
+        from1: { kind: "vec2", def: null, key: true, step: 1, help: "The four points that are pinned (empty: the picture's corners): bottom left" },
+        from2: { kind: "vec2", def: null, key: true, step: 1, help: "bottom right" },
+        from3: { kind: "vec2", def: null, key: true, step: 1, help: "top right" },
+        from4: { kind: "vec2", def: null, key: true, step: 1, help: "top left" },
+        invert: { kind: "enum", def: "off", choices: ["off", "on"], help: "on: the other way, the 'to' points back onto the 'from' ones (to flatten a surface)" },
+    } },
+    stmap: { label: "STMap", cat: "Transform", inputs: ["src", "stmap"], params: {
+        u: { kind: "chan", def: "r", help: "The map's channel that says where across to read (0 left, 1 right)" },
+        v: { kind: "chan", def: "g", help: "The map's channel that says where up to read (0 bottom, 1 top)" },
+    } },
+    vectorwarp: { label: "VectorWarp", cat: "Transform", inputs: ["src", "vectors"], params: {
+        u: { kind: "chan", def: "r", help: "The channel with the motion across, pixels of the comp (Vectors: r forward, b backward)" },
+        v: { kind: "chan", def: "g", help: "The channel with the motion down (Vectors: g forward, a backward)" },
+        amount: { kind: "num", def: 1, key: true, step: 0.05, help: "Each pixel is read this many vectors away: 1 pulls the next frame's picture to this one, -1 the other way" },
+    } },
+    lensdistortion: { label: "LensDistortion", cat: "Transform", inputs: ["src"], params: {
+        mode: { kind: "enum", def: "undistort", choices: WP.LENS_MODES, help: "undistort: straighten the plate; redistort: bend a straight picture back into the plate's lens" },
+        k1: { kind: "num", def: 0, key: true, step: 0.001, help: "Barrel below 0, pincushion above, at the corners (the radius is a share of half the diagonal)" },
+        k2: { kind: "num", def: 0, key: true, step: 0.001, help: "The same, growing faster towards the corners" },
+        center: { kind: "vec2", def: null, key: true, step: 1, help: "The lens's centre (empty: the middle of the picture)" },
+        zoom: { kind: "num", def: 1, min: 0.1, max: 10, key: true, step: 0.01, help: "Scales the result about the centre: above 1 hides the edges the warp pulls in" },
+        output: { kind: "enum", def: "image", choices: WP.LENS_OUTPUTS, help: "stmap: the warp itself as an ST map (u, v), for writing out and using in an STMap" },
+        lines: { kind: "lines", def: null, help: "Lines along things that are straight, drawn on the plate: Solve finds k1 and k2 from them" },
+    } },
+    gridwarp: { label: "GridWarp", cat: "Transform", inputs: ["src"], params: {
+        cols: { kind: "int", def: 5, min: 2, max: 16, help: "Points across" },
+        rows: { kind: "int", def: 5, min: 2, max: 16, help: "Points down" },
+        src_points: { kind: "points", def: null, help: "The source grid (empty: even over the picture); Shift + drag a point on the picture" },
+        dst_points: { kind: "points", def: null, key: true, help: "Where each point of the grid goes; drag them on the picture" },
+        distortion: { kind: "num", def: 1, min: 0, max: 1, key: true, step: 0.01, help: "0: as it is, 1: the full warp (keyed: a warp over time, half of a morph)" },
+    } },
+    tracker: { label: "Tracker", cat: "Transform", inputs: ["src"], params: {
+        points: { kind: "trackpoints", def: null, help: "The tracked points: placed and tracked on the picture" },
+        motion: { kind: "enum", def: "translate", choices: WP.TRACK_MOTIONS, help: "What the points solve for: a move; with two or more a turn and a scale too; with four a perspective (corner pin)" },
+        transform: { kind: "enum", def: "none", choices: WP.TRACK_TRANSFORMS, help: "What this node does to its picture: nothing (it only tracks), hold it still, or move it as the points move" },
+        reference: { kind: "int", def: 0, help: "The frame where the picture stays as it is" },
+    } },
+    planartracker: { label: "PlanarTracker", cat: "Transform", inputs: ["src"], params: {
+        plane: { kind: "plane", def: null, help: "The surface tracked: four corners placed on the picture, then tracked" },
+        transform: { kind: "enum", def: "none", choices: WP.TRACK_TRANSFORMS, help: "What this node does to its picture: nothing, flatten the surface's motion away, or move the picture with it" },
+        reference: { kind: "int", def: 0, help: "The frame where the picture stays as it is" },
+    } },
     output: { label: "Output", cat: "Other", inputs: ["src"], params: {} },
 };
 /**
@@ -317,7 +365,7 @@ for (const t of MASKABLE) {
 }
 /** The index of a MASKABLE node's mask input (-1 for the rest). */
 export function maskIndex(type) { return MASKABLE.has(type) ? NODE_TYPES[type].inputs.length - 1 : -1; }
-export const TYPE_ORDER = ["read", "constant", "roto", "paint", "merge", "copy", "transform", "reformat", "crop", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "keyer", "lumakeyer", "chromakeyer", "blur", "glow", "erode", "laplacian",
+export const TYPE_ORDER = ["read", "constant", "roto", "paint", "merge", "copy", "transform", "reformat", "crop", "cornerpin", "tracker", "planartracker", "stmap", "vectorwarp", "lensdistortion", "gridwarp", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "keyer", "lumakeyer", "chromakeyer", "blur", "glow", "erode", "laplacian",
     "motionblur", "depthblur", "defocus", "lensflare", "shuffle", "addchannels", "removechannels", "channelmerge", "channelmath", "premult", "unpremult", "retime", "vectors", "metadata", "write", "output"];
 /** Nodes that hand their input on unchanged: what they do is outside the pixels (a file written, metadata). */
 export const PASS_THROUGH = new Set(["output", "write", "metadata"]);
@@ -672,7 +720,7 @@ export function nodeKeyFrames(node) {
 
 // ── the stack the Layers panel shows ─────────────────────────────────────────
 
-const CHAIN = new Set(["transform", "paint", "reformat", "glow", "lensflare", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "lumakeyer", "chromakeyer", "erode", "laplacian", "channelmerge", "channelmath", "blur", "crop", "shuffle", "addchannels", "removechannels", "premult", "unpremult", "retime", "keyer", "vectors",
+const CHAIN = new Set(["transform", "paint", "reformat", "cornerpin", "tracker", "planartracker", "stmap", "vectorwarp", "lensdistortion", "gridwarp", "glow", "lensflare", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "lumakeyer", "chromakeyer", "erode", "laplacian", "channelmerge", "channelmath", "blur", "crop", "shuffle", "addchannels", "removechannels", "premult", "unpremult", "retime", "keyer", "vectors",
     "motionblur", "depthblur", "defocus", "copy"]);
 
 /**
@@ -1000,6 +1048,7 @@ export function formatAt(comp, id, depth = 0) {
     const n = id && depth < 256 && nodeById(comp, id);
     if (!n || !NODE_TYPES[n.type]) return F;
     const up = () => (NODE_TYPES[n.type].inputs.length && n.inputs[0] ? formatAt(comp, n.inputs[0], depth + 1) : F);
+    if (!n.disable && n.type === "stmap" && n.inputs[1]) return formatAt(comp, n.inputs[1], depth + 1);
     if (n.disable || n.type !== "reformat") return n.type === "read" || n.type === "constant" ? F : up();
     const [w, h] = reformatSize(n, 0, up());
     return { width: w, height: h };
@@ -1153,7 +1202,7 @@ export function ocioNeeds(comp, frame) {
     }
     return [...out].map(([key, spec]) => ({ key, spec }));
 }
-export { OC, CH, PT };
+export { OC, CH, PT, O };
 
 /** Nodes that make something and so have a "write" (the channel or layer it goes into). */
 export const WRITES = new Set(Object.keys(NODE_TYPES).filter((t) => NODE_TYPES[t].params.write));
@@ -1278,6 +1327,14 @@ export function cacheKeep(cache, key, value, maxBytes, maxCount) {
     }
 }
 
+const sourceSigOf = (comp, nid, f, ctx) => sourceNeeds(comp, nid, f).map(({ node: s, frame: sf }) => `${s.id}:${sf}:${tokenOf(ctx.source ? ctx.source(s, sf) : null)}`).join(",");
+const lutSigOf = (comp, frame, ctx) => ocioNeeds(comp, frame).map((x) => x.key + (ctx.ocio && ctx.ocio(x.spec) ? "+" : "-")).join(",");
+/** The key renderNode keeps node `id`'s result at `frame` under in `ctx.cache` (another renderer - the GPU - keeps
+ *  its pictures under the same key, so the two share one cache). */
+export function resultKey(comp, id, frame, ctx) {
+    return `${frame}@${ctx.scale || 1}@${upstreamHash(comp, id)}@${sourceSigOf(comp, id, frame, ctx)}@${lutSigOf(comp, frame, ctx)}`;
+}
+
 export function renderNode(comp, id, frame, ctx) {
     const scale = ctx.scale || 1;
     const W = Math.max(1, Math.round(comp.format.width * scale)), H = Math.max(1, Math.round(comp.format.height * scale));
@@ -1286,9 +1343,9 @@ export function renderNode(comp, id, frame, ctx) {
     const keys = new Map(), hashes = new Map();
     // What a cached result also depends on beside the settings: which pixels its Reads were handed (none yet,
     // or which decoded frame) and which OCIO transforms had arrived.
-    const sourceSig = (nid, f) => sourceNeeds(comp, nid, f).map(({ node: s, frame: sf }) => `${s.id}:${sf}:${tokenOf(ctx.source ? ctx.source(s, sf) : null)}`).join(",");
+    const sourceSig = (nid, f) => sourceSigOf(comp, nid, f, ctx);
     let lut = null;
-    const lutSig = () => lut ?? (lut = ocioNeeds(comp, frame).map((x) => x.key + (ctx.ocio && ctx.ocio(x.spec) ? "+" : "-")).join(","));
+    const lutSig = () => lut ?? (lut = lutSigOf(comp, frame, ctx));
     // A node's result with its own extra channels (otherwise its first input's are taken, moved for SPATIAL ones).
     const X = (img, ex) => ({ __x: true, img, ex });
     const exOf = (nid, f) => (nid && xmemo.get(`${nid}@${f}`)) || {};
@@ -1534,12 +1591,140 @@ export function renderNode(comp, id, frame, ctx) {
             p.size *= scale;
             return O.depthBlurImage(src, conform(run(n.inputs[1], f, d1), src.w, src.h), p);
         }
+        case "cornerpin": {
+            const { from, to } = WP.pinCorners((p) => paramAt(n, p, f), inFmt(n));
+            const inv = n.invert === "on" ? WP.homography(from, to) : WP.homography(to, from);
+            return spatial(n.inputs[0], f, d1, (p) => WP.homographyImage(p, inv, scale));
+        }
+        case "stmap": {
+            const src = run(n.inputs[0], f, d1);
+            if (!n.inputs[1]) return X(src, exOf(n.inputs[0], f));
+            const M = run(n.inputs[1], f, d1), mex = exOf(n.inputs[1], f);
+            const us = CH.channelOf(M, mex, n.u || "r") || new Float32Array(M.w * M.h), vs = CH.channelOf(M, mex, n.v || "g") || new Float32Array(M.w * M.h);
+            const [U, V] = WP.stMap(us, vs, M.w, M.h, src.w, src.h);
+            return spatial(n.inputs[0], f, d1, (p) => WP.sampleMap(p, U, V, M.w, M.h));
+        }
+        case "vectorwarp": {
+            const src = run(n.inputs[0], f, d1);
+            if (!n.inputs[1]) return X(src, exOf(n.inputs[0], f));
+            const Vi = run(n.inputs[1], f, d1), vex = conformExtras(exOf(n.inputs[1], f), Vi.w, Vi.h, src.w, src.h), Vc = conform(Vi, src.w, src.h);
+            const us = CH.channelOf(Vc, vex, n.u || "r") || new Float32Array(src.w * src.h), vs = CH.channelOf(Vc, vex, n.v || "g") || new Float32Array(src.w * src.h);
+            const [U, V] = WP.vectorMap(us, vs, src.w, src.h, paramAt(n, "amount", f), scale);
+            return spatial(n.inputs[0], f, d1, (p) => WP.sampleMap(p, U, V, src.w, src.h));
+        }
+        case "lensdistortion": {
+            const src = run(n.inputs[0], f, d1);
+            const p = { mode: n.mode || "undistort", k1: paramAt(n, "k1", f), k2: paramAt(n, "k2", f), center: paramAt(n, "center", f), zoom: paramAt(n, "zoom", f) };
+            const [U, V] = WP.lensMap(src.w, src.h, p, scale);
+            if (n.output === "stmap") return X(WP.mapAsSt(U, V, src.w, src.h, src.w, src.h), {});
+            return spatial(n.inputs[0], f, d1, (q) => WP.sampleMap(q, U, V, src.w, src.h));
+        }
+        case "gridwarp": {
+            const src = run(n.inputs[0], f, d1);
+            const [sp, dp] = gridPoints(n, f, inFmt(n));
+            const [U, V] = WP.gridMap(sp, dp, src.w, src.h, scale);
+            return spatial(n.inputs[0], f, d1, (q) => WP.sampleMap(q, U, V, src.w, src.h));
+        }
+        case "tracker": case "planartracker": {
+            const how = n.transform || "none";
+            const mo = how === "none" ? null : trackMotion(n, f);
+            if (!mo) return X(run(n.inputs[0], f, d1), exOf(n.inputs[0], f));
+            if (mo.kind === "perspective") {
+                // Match-move: each output pixel reads where it was at the reference; stabilise: where it is now.
+                const inv = how === "match-move" ? WP.homography(mo.Q, mo.P) : WP.homography(mo.P, mo.Q);
+                return spatial(n.inputs[0], f, d1, (p) => WP.homographyImage(p, inv, scale));
+            }
+            const m0 = how === "match-move" ? mo.m : WP.invertAffine(mo.m);
+            const m = mat.mul(mat.s(scale, scale), mat.mul(m0, mat.s(1 / scale, 1 / scale)));
+            return spatial(n.inputs[0], f, d1, (p) => resample(p, m, p.w, p.h));
+        }
         case "output": case "write": case "metadata": return run(n.inputs[0], f, d1);
         default: return blank(W, H);
         }
     };
     const img = run(id, frame, 0);
     return { w: img.w, h: img.h, data: img.data, ch: exOf(id, frame) };
+}
+
+/** A GridWarp's two point lists at frame f (flat [x, y, ...], pixels of its input): the source grid, and the
+ *  destination as far as ``distortion`` takes it. A list of the wrong length counts as not there (the even grid). */
+export function gridPoints(n, f, fmt) {
+    const cols = Math.max(2, Math.min(16, Math.round(n.cols || 5))), rows = Math.max(2, Math.min(16, Math.round(n.rows || 5)));
+    const len = 2 * cols * rows, ok = (a) => Array.isArray(a) && a.length === len && a.every(isNum);
+    const sp = ok(n.src_points) ? n.src_points : WP.lattice(cols, rows, fmt.width, fmt.height);
+    const raw = paramAt(n, "dst_points", f), dr = ok(raw) ? raw : sp;
+    const k = paramAt(n, "distortion", f);
+    return [sp, sp.map((v, i) => v + (dr[i] - v) * k)];
+}
+
+/** A Tracker's or PlanarTracker's motion from its reference frame to frame f: solveMotion's answer, with the point
+ *  sets (P at the reference, Q now) for a perspective; null when the points do not reach both frames. */
+export function trackMotion(n, f) {
+    const ref = Math.round(n.reference || 0);
+    if (n.type === "planartracker") {
+        const keys = n.plane && n.plane.keys;
+        if (!WP.trackHas(keys, ref) || !WP.trackHas(keys, f)) return null;
+        const P = WP.quadAt(keys, ref), Q = WP.quadAt(keys, f);
+        return { kind: "perspective", P, Q };
+    }
+    const { P, Q } = WP.trackPairs(n.points, ref, f);
+    const mo = WP.solveMotion(P, Q, n.motion || "translate");
+    if (mo && mo.kind === "perspective") { mo.P = P.slice(0, 4); mo.Q = Q.slice(0, 4); }
+    return mo;
+}
+export { WP };
+
+export const TRACK_BAKES = ["stabilise", "match-move", "corner pin"];
+/** The frames a Tracker's or PlanarTracker's motion is known at: every frame of the comp it reaches from its reference. */
+export function trackFrames(comp, n) {
+    const out = [];
+    for (let f = 0; f < comp.format.frames; f++) if (trackMotion(n, f)) out.push(f);
+    return out;
+}
+/**
+ * A Tracker's / PlanarTracker's motion as a new keyed node (not wired: it is put beside the tracker, for the
+ * picture it should move): "stabilise" / "match-move" a Transform (a key a frame: translate, rotate, scale and,
+ * for stabilise, its centre), or a CornerPin for a perspective / a surface (its from corners the reference's, its
+ * to corners keyed; stabilise = invert on). "corner pin" is a match-move CornerPin from the first four points, or
+ * the surface. Returns the node added, or null when there is nothing to bake.
+ */
+export function bakeTrack(comp, trackerId, how) {
+    const n = nodeById(comp, trackerId);
+    if (!n || (n.type !== "tracker" && n.type !== "planartracker")) return null;
+    const pin = how === "corner pin" || n.type === "planartracker" || n.motion === "perspective";
+    const probe = pin && n.type === "tracker" ? Object.assign({}, n, { motion: "perspective" }) : n;
+    const frames = trackFrames(comp, probe);
+    if (!frames.length) return null;
+    const key = (f, v) => ({ f, v, ease: "linear" });
+    const r4 = (v) => Math.round(v * 1e4) / 1e4;
+    const at = { x: n.x + NODE_W + 30, y: n.y, name: undefined };
+    const label = n.name || n.id;
+    let node;
+    if (pin) {
+        const first = trackMotion(probe, frames[0]);
+        if (!first || first.kind !== "perspective") return null;
+        node = makeNode(comp, "cornerpin", Object.assign(at, { name: `${label} ${how === "stabilise" ? "stabilise" : "pin"}`,
+            invert: how === "stabilise" ? "on" : "off" }));
+        first.P.forEach((p, k) => { node[`from${k + 1}`] = p.map(r4); });
+        node.tracks = {};
+        for (let k = 0; k < 4; k++) node.tracks[`to${k + 1}`] = frames.map((f) => key(f, trackMotion(probe, f).Q[k].map(r4)));
+    } else {
+        node = makeNode(comp, "transform", Object.assign(at, { name: `${label} ${how}` }));
+        const t = [], r = [], sc = [], c = [];
+        for (const f of frames) {
+            const mo = trackMotion(n, f);
+            if (how === "match-move") { t.push(key(f, [r4(mo.cQ[0] - mo.cP[0]), r4(mo.cQ[1] - mo.cP[1])])); r.push(key(f, r4(mo.angle))); sc.push(key(f, [r4(mo.s), r4(mo.s)])); }
+            else { t.push(key(f, [r4(mo.cP[0] - mo.cQ[0]), r4(mo.cP[1] - mo.cQ[1])])); r.push(key(f, r4(-mo.angle))); sc.push(key(f, [r4(1 / mo.s), r4(1 / mo.s)])); c.push(key(f, mo.cQ.map(r4))); }
+        }
+        const mo0 = trackMotion(n, frames[0]);
+        node.tracks = { translate: t };
+        if (n.motion === "rotate" || n.motion === "scale") node.tracks.rotate = r;
+        if (n.motion === "scale") node.tracks.scale = sc;
+        if (how === "match-move") node.center = mo0.cP.map(r4); else node.tracks.center = c;
+    }
+    if (!node.name) delete node.name;
+    addNode(comp, node);
+    return node;
 }
 
 /** a x (1 - t) + b x t. */
