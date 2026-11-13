@@ -96,7 +96,8 @@ const DOCK_PANELS = {
     // is up by default, under the picture where a graph has width; Layers is the same graph as a stack, off at first.
     // A comp node's settings show in the Parameters panel (compPanel's _cpParams), not in a panel of their own.
     compGraph: { prop: "compGraphPanel", label: "Node Graph", minW: 320, minH: 160, defaultRail: "bottom", size: 2 },
-    compLayers: { prop: "compLayersPanel", label: "Layers", minW: 220, minH: 140, defaultRail: "right", size: 1 },
+    // Layers is a timeline (bars and keys over time), so it lives under the picture, a tab beside the Node graph.
+    compLayers: { prop: "compLayersPanel", label: "Layers", minW: 320, minH: 120, defaultRail: "bottom", size: 1, tabWith: "compGraph" },
     // The Curve Editor: the selected comp nodes' keys (imageViewer_compCurves.js), off at first, under the picture.
     compCurves: { prop: "compCurvesPanel", label: "Curve Editor", minW: 320, minH: 140, defaultRail: "bottom", size: 1, tabWith: "compGraph" },
     // Paint (imageViewer_paintPanel.js / imageViewer_paintEditor.js): a picture is a TAB (the editor covers the main
@@ -209,7 +210,6 @@ export const DockMixin = {
                                            { id: "rotoCurves", size: 1, hidden: true },
                                            { id: "paramCurves", size: 1, hidden: true },
                                            { id: "motionProps", size: 2, hidden: true },
-                                           { id: "compLayers", size: 1, hidden: true },
                                            { id: "paintLayers", size: 2, hidden: true },
                                            { id: "paintProps", size: 2, hidden: true, tab: "paint", behind: false },
                                            { id: "paintTool", size: 2, hidden: true, tab: "paint", behind: true },
@@ -223,6 +223,7 @@ export const DockMixin = {
                                             { id: "clips", size: 1, hidden: true, tab: "tcurves", behind: true },
                                             { id: "motionTimeline", size: 1, hidden: true },
                                             { id: "compGraph", size: 1, hidden: true, tab: "comp", behind: false },
+                                            { id: "compLayers", size: 1, hidden: true, tab: "comp", behind: true },
                                             { id: "compCurves", size: 1, hidden: true, tab: "comp", behind: true }] },
         };
     },
@@ -436,6 +437,13 @@ export const DockMixin = {
                 this._dockMixerHome();
             }
         } catch (_) { /* no storage: it stays where the layout has it */ }
+        // Once, too: the Comp's Layers became a timeline and moved from the right rail to a tab beside the Node graph.
+        try {
+            if (!window.localStorage.getItem("imageviewer.viewer.compLayersBottom")) {
+                window.localStorage.setItem("imageviewer.viewer.compLayersBottom", "1");
+                this._dockCompLayersHome();
+            }
+        } catch (_) { /* no storage: it stays where the layout has it */ }
         // A panel the saved layout never mentioned (a viewer upgraded mid-flight)
         // goes back to where it shipped, put away rather than sprung on the user.
         for (const [id, spec] of Object.entries(DOCK_PANELS)) {
@@ -473,6 +481,23 @@ export const DockMixin = {
         const tl = list.findIndex((p) => p.id === "editTimeline");
         entry.size = tl >= 0 ? Math.max(0.2, (list[tl].size || 1) * 0.4) : DOCK_PANELS.editMixer.size;
         list.splice(tl >= 0 ? tl + 1 : list.length, 0, entry);
+    },
+
+    // The Comp's Layers into the strip under the picture, a tab behind the Node graph.
+    _dockCompLayersHome() {
+        let entry = null;
+        for (const side of ["left", "right"]) {
+            const list = this.dockLayout[side].panels;
+            const i = list.findIndex((p) => p.id === "compLayers");
+            if (i >= 0) [entry] = list.splice(i, 1);
+        }
+        if (!entry) return;
+        const list = this.dockLayout.bottom.panels;
+        const g = list.findIndex((p) => p.id === "compGraph");
+        if (g < 0) { delete entry.tab; entry.behind = false; list.push(entry); return; }
+        if (!list[g].tab) { list[g].tab = "comp"; list[g].behind = false; }
+        Object.assign(entry, { tab: list[g].tab, behind: true, size: list[g].size || 1 });
+        list.splice(g + 1, 0, entry);
     },
 
     // ── Queries ──────────────────────────────────────────────────────────────

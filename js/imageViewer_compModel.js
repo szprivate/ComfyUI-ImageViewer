@@ -365,6 +365,9 @@ export function normalizeComp(raw) {
         const ins = Array.isArray(n.inputs) ? n.inputs : [];
         node.inputs = t.inputs.map((_, i) => (typeof ins[i] === "string" ? ins[i] : null));
         if (node.tracks && !isObj(node.tracks)) delete node.tracks;
+        // A layer's length: whole frames, out after in (a Merge's only).
+        for (const k of ["in", "out"]) { if (node.type !== "merge" || !isNum(node[k])) delete node[k]; else node[k] = Math.round(node[k]); }
+        if (isNum(node.in) && isNum(node.out) && node.out <= node.in) { errors.push(`${node.id}: its out was not after its in and was taken off`); delete node.out; }
         comp.nodes.push(node);
     }
     for (const n of comp.nodes) n.inputs = n.inputs.map((id) => (id && seen.has(id) && id !== n.id ? id : null));
@@ -687,7 +690,7 @@ export function moveLayer(comp, i, d) {
     const a = L[i], b = L[i + d];
     if (!a || !b || !a.merge || !b.merge) return false;
     const ma = nodeById(comp, a.merge), mb = nodeById(comp, b.merge);
-    for (const k of ["operation", "mix", "disable", "name", "tracks"]) { const t = ma[k]; ma[k] = mb[k]; mb[k] = t; if (ma[k] === undefined) delete ma[k]; if (mb[k] === undefined) delete mb[k]; }
+    for (const k of ["operation", "mix", "disable", "name", "tracks", "in", "out"]) { const t = ma[k]; ma[k] = mb[k]; mb[k] = t; if (ma[k] === undefined) delete ma[k]; if (mb[k] === undefined) delete mb[k]; }
     const tA = ma.inputs[1]; ma.inputs[1] = mb.inputs[1]; mb.inputs[1] = tA;
     const tM = ma.inputs[2]; ma.inputs[2] = mb.inputs[2]; mb.inputs[2] = tM;
     // The branches keep their place on screen beside their Merge.
@@ -732,6 +735,65 @@ export function removeLayer(comp, i) {
     if (!L || !L.merge) return false;
     const ids = [L.merge, ...branchIds(comp, nodeById(comp, L.merge).inputs[1])];
     removeNodes(comp, ids);
+    return true;
+}
+
+// ── a layer's length (its Merge's in / out) ──────────────────────────────────
+
+/** Is a Merge's A laid over at comp frame `f`? Its `in` is the first frame it is, `out` the first it is no
+ *  longer (Motion's layer rule); either left out = from the start / to the end. Outside, the Merge passes B. */
+export function mergeLive(n, f) {
+    if (isNum(n.in) && f < n.in) return false;
+    if (isNum(n.out) && f >= n.out) return false;
+    return true;
+}
+
+/** A layer's length as frames [in, out), the comp's whole length filling what is not set. */
+export function layerRange(comp, mergeId) {
+    const n = nodeById(comp, mergeId), F = comp.format.frames;
+    return { in: n && isNum(n.in) ? n.in : 0, out: n && isNum(n.out) ? n.out : F };
+}
+
+/** Set a layer's in / out (whole frames, at least one frame long). The comp's own ends are written as nothing. */
+export function setLayerRange(comp, mergeId, a, b) {
+    const n = nodeById(comp, mergeId);
+    if (!n || n.type !== "merge") return false;
+    a = Math.round(a); b = Math.round(b);
+    if (b <= a) b = a + 1;
+    if (a === 0) delete n.in; else n.in = a;
+    if (b === comp.format.frames) delete n.out; else n.out = b;
+    return true;
+}
+
+/** The nodes that make a layer: its Merge and its A branch (the chain up to the source). */
+export function layerNodes(comp, L) {
+    return [L.merge, ...(L.chain || [])].filter((id, i, a) => id && a.indexOf(id) === i && nodeById(comp, id));
+}
+
+/** Every key of a layer's nodes: [{id, prop, f}]. */
+export function layerKeys(comp, L) {
+    const out = [];
+    for (const id of layerNodes(comp, L)) {
+        const n = nodeById(comp, id);
+        for (const [prop, list] of Object.entries(n.tracks || {})) for (const k of list || []) out.push({ id, prop, f: k.f });
+    }
+    return out;
+}
+
+/**
+ * Slide a layer in time by `df` frames, as a layer bar is dragged: its in and out, a Read's footage (offset) and
+ * every key of its nodes move together, so the layer looks the same, later or earlier.
+ */
+export function slideLayer(comp, L, df) {
+    df = Math.round(df);
+    if (!df || !L || !L.merge) return false;
+    const r = layerRange(comp, L.merge);
+    setLayerRange(comp, L.merge, r.in + df, r.out + df);
+    for (const id of layerNodes(comp, L)) {
+        const n = nodeById(comp, id);
+        if (n.type === "read") { const o = (n.offset || 0) + df; if (o) n.offset = o; else delete n.offset; }
+        for (const list of Object.values(n.tracks || {})) for (const k of list || []) k.f += df;
+    }
     return true;
 }
 
@@ -1232,6 +1294,7 @@ export function renderNode(comp, id, frame, ctx) {
             return img;
         }
         case "merge": {
+            if (!mergeLive(n, f)) return run(n.inputs[0], f, d1);
             const B = run(n.inputs[0], f, d1), A = conform(run(n.inputs[1], f, d1), B.w, B.h);
             const M = n.inputs[2] ? conform(run(n.inputs[2], f, d1), B.w, B.h) : null;
             return mergeImages(B, A, M, n.operation || "over", paramAt(n, "mix", f));

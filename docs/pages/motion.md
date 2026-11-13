@@ -13,7 +13,7 @@ Edits motion graphics scenes (`*.mgscene.json`) written by an agent: text, shape
 ## Editing
 
 - **Preview**: drag the handles to move, scale and rotate a layer or to move its anchor point.
-- **Timeline** panel: the layer list on the left (select, visibility, lock, rename by double-click, drag to reorder; **+** adds text, rectangle, ellipse or group) and the keyframes per row (click, drag, copy, paste, delete).
+- **Timeline** panel: the layer list on the left (select, visibility, lock, rename by double-click, drag to reorder; **+** adds text, rectangle, ellipse or group) and the keyframes per row (click, <kbd>Shift</kbd> toggles, <kbd>Ctrl</kbd> removes, <kbd>Ctrl</kbd>+<kbd>Shift</kbd> adds; drag, copy, paste, delete). Each layer's bar runs from its first to its last frame: drag an end to trim it, <kbd>Alt</kbd>+drag the middle to slide the layer with its keys.
 - **Properties** panel: the selected layer's values at the playhead. Changing an animated value sets a key; the stopwatch toggles animation. The curve below shapes the selected key's easing.
 - The viewer transport plays the scene; the fps field and the last frame number set the scene's frame rate and length.
 

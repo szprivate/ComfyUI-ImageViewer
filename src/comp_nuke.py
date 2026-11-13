@@ -282,6 +282,14 @@ def _native(n, t, ins, pos, label, write, out, A, W, H, F, y_, note, info_of, nk
         b, a = src(0), src(1)
         m = src(2)
         note("Merge: screen, difference, min and max work on alpha as on colour in the comp; Nuke's Merge2 may treat alpha its own way for some of them")
+        # A layer's length: the Merge is off before its in and from its out on (comp frames are Nuke's here).
+        live = []
+        if M._is_num(n.get("in")):
+            live.append(f"frame<{int(n['in'])}")
+        if M._is_num(n.get("out")):
+            live.append(f"frame>={int(n['out'])}")
+        if live and not dis:
+            dis = [("disable", '{{"' + " || ".join(live) + '"}}')]
         knobs = [("inputs", "2+1" if m else "2"), ("operation", n.get("operation") or "over"),
                  ("mix", A.knob(n, "mix"))] + dis
         return out.add("Merge2", label, knobs, [b, a] + ([m] if m else []), pos)

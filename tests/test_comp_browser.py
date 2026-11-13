@@ -195,6 +195,70 @@ class CompBrowserTests(unittest.TestCase):
         self.assertEqual(st, {"graph": False, "mode": False})
         self.assertEqual(self.errors, [])
 
+    def test_layers_have_a_length_and_keys_on_a_timeline(self):
+        pg = self.page()
+        path = self.new_comp(pg)
+        comp = {"comp": 1, "format": {"width": 64, "height": 36, "fps": 24, "frames": 40}, "output": "Output1", "nodes": [
+            {"id": "BG", "type": "constant", "color": [0, 0, 1, 1], "inputs": [], "x": 0, "y": 0},
+            {"id": "Solid", "type": "constant", "color": [1, 0, 0, 1], "inputs": [], "x": 200, "y": 0},
+            {"id": "T", "type": "transform", "inputs": ["Solid"], "x": 200, "y": 60,
+             "tracks": {"rotate": [{"f": 4, "v": 0}, {"f": 12, "v": 90}], "translate": [{"f": 12, "v": [0, 0]}]}},
+            {"id": "Merge1", "type": "merge", "inputs": ["BG", "T", None], "x": 0, "y": 120, "in": 5, "out": 20},
+            {"id": "Output1", "type": "output", "inputs": ["Merge1"], "x": 0, "y": 200}]}
+        pg.evaluate(f"([c, p]) => {self.ED}.load(c, p)", [comp, path])
+        pg.evaluate("() => __panel.setPanelDocked('compLayers', true)")
+        pg.wait_for_timeout(250)
+        P = "__panel.compLayersPanel"
+        self.assertEqual(pg.evaluate(f"() => {P}.querySelectorAll('.cp-lrow').length"), 2)
+        bar = pg.locator(".cp-layers .kl-bar").first
+        b0 = bar.bounding_box()
+        k = b0["width"] / 15                                  # frames 5..19: 15 frames
+        # the picture follows the length: frame 2 is the background alone, frame 8 the solid over it
+        pg.evaluate("() => __panel.setFrame(2)"); pg.wait_for_timeout(300)
+        self.assertGreater(self.pixel(pg, 0.5, 0.5)[2], 200)
+        pg.evaluate("() => __panel.setFrame(8)"); pg.wait_for_timeout(300)
+        self.assertGreater(self.pixel(pg, 0.5, 0.5)[0], 200)
+        # slide the bar by 6 frames: in / out and every key of the layer move
+        cx, cy = b0["x"] + 2.5 * k, b0["y"] + b0["height"] / 2      # frame 7.5: no key there
+        pg.mouse.move(cx, cy); pg.mouse.down(); pg.mouse.move(cx + 3 * k, cy); pg.mouse.move(cx + 6 * k, cy, steps=4); pg.mouse.up()
+        got = pg.evaluate(f"""() => {{ const c = {self.ED}.comp(); const m = c.nodes.find((n) => n.id === 'Merge1'), t = c.nodes.find((n) => n.id === 'T');
+            return [m.in, m.out, t.tracks.rotate.map((k) => k.f), t.tracks.translate.map((k) => k.f)]; }}""")
+        self.assertEqual(got, [11, 26, [10, 18], [18]])
+        # one undo step for the drag
+        pg.evaluate(f"() => {self.ED}.undo()")
+        self.assertEqual(pg.evaluate(f"() => {self.ED}.comp().nodes.find((n) => n.id === 'Merge1').in"), 5)
+        # trim the out end by -5 frames
+        b0 = bar.bounding_box()
+        ex, ey = b0["x"] + b0["width"] - 2, b0["y"] + b0["height"] / 2
+        pg.mouse.move(ex, ey); pg.mouse.down(); pg.mouse.move(ex - 5 * k, ey, steps=4); pg.mouse.up()
+        self.assertEqual(pg.evaluate(f"() => {{ const m = {self.ED}.comp().nodes.find((n) => n.id === 'Merge1'); return [m.in, m.out]; }}"), [5, 15])
+        # unfold the layer: a row per animated param; drag the rotate key at 12 to 16
+        pg.locator(".cp-layers .cp-lrow .cp-ltw").first.click()
+        pg.wait_for_timeout(100)
+        self.assertEqual(pg.evaluate(f"() => {P}.querySelectorAll('.cp-lsub').length"), 2)
+        dias = pg.locator(".cp-layers .cp-lsub .kl-dia")
+        self.assertEqual(dias.count(), 3)
+        d = [dias.nth(i) for i in range(3) if pg.evaluate("(e) => e._keys[0].prop + ':' + e._keys[0].f", dias.nth(i).element_handle()) == "rotate:12"][0]
+        db = d.bounding_box()
+        dx, dy = db["x"] + db["width"] / 2, db["y"] + db["height"] / 2
+        pg.mouse.move(dx, dy); pg.mouse.down(); pg.mouse.move(dx + 2 * k, dy); pg.mouse.move(dx + 4 * k, dy, steps=3); pg.mouse.up()
+        self.assertEqual(pg.evaluate(f"() => {self.ED}.comp().nodes.find((n) => n.id === 'T').tracks.rotate.map((k) => k.f)"), [4, 16])
+        # a box over both sub rows around frame 4..16 picks three keys; Del takes them away (rotate keeps its value)
+        r0 = pg.locator(".cp-layers .cp-lsub .cp-ltrack").first.bounding_box()
+        r1 = pg.locator(".cp-layers .cp-lsub .cp-ltrack").nth(1).bounding_box()
+        x4 = r0["x"] + 3 * k
+        pg.mouse.move(x4, r0["y"] + 2); pg.mouse.down(); pg.mouse.move(x4 + 8 * k, r1["y"] + r1["height"] - 2, steps=5)
+        pg.mouse.move(r0["x"] + 17 * k, r1["y"] + r1["height"] - 2, steps=3); pg.mouse.up()
+        self.assertEqual(pg.evaluate(f"() => {self.ED}.state.lkeys.length"), 3)
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.locator(".cp-layers").screenshot(path=os.path.join(SHOTS, "comp-layer-timeline.png"))
+        pg.keyboard.press("Delete")
+        t = pg.evaluate(f"() => {self.ED}.comp().nodes.find((n) => n.id === 'T')")
+        self.assertNotIn("tracks", t)
+        self.assertEqual(t["rotate"], 90)
+        self.assertEqual(self.errors, [])
+
     def test_popped_out_the_picture_is_drawn(self):
         """The viewer in its own window, the main window behind it (its frames stop): the picture still draws there,
         for a comp opened before the pop-out and for one opened after it."""
