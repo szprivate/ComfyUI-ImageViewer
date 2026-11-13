@@ -491,6 +491,92 @@ class CompBrowserTests(unittest.TestCase):
         self.assertNotIn(20, kept2, "frames made before the change are no longer counted")
         self.assertEqual(self.errors, [])
 
+    def test_the_gpu_preview_makes_the_cpus_numbers(self):
+        pg = self.page()
+        res = pg.evaluate("""async () => {
+            const C = await import('/extensions/viewer/imageViewer_compModel.js');
+            const G = await import('/extensions/viewer/imageViewer_compGpu.js');
+            const gpu = G.createCompGpu(document);
+            if (!gpu) return { none: true };
+            let seed = 7;
+            const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+            const pic = (w, h, sparse) => { const d = new Float32Array(w * h * 4);
+                for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { if (sparse && (x < 20 || x > 40 || y < 10 || y > 30)) continue;
+                    const a = rnd(), i = (y * w + x) * 4; d[i] = rnd() * a; d[i + 1] = rnd() * a; d[i + 2] = rnd() * a * 1.5; d[i + 3] = a; }
+                return { w, h, data: d }; };
+            const W = 97, H = 61, P1 = pic(W, H, false), P2 = pic(W, H, true);
+            const N = (id, type, inputs, kw = {}) => ({ id, type, inputs, x: 0, y: 0, ...kw });
+            const mk = (nodes, out) => C.normalizeComp({ comp: 1, format: { width: W, height: H, fps: 24, frames: 10 }, nodes, output: out }).comp;
+            const R = [N('R1', 'read', [], { file: 'a.png' }), N('R2', 'read', [], { file: 'b.png' })];
+            const cases = [
+                mk([...R, N('G', 'grade', ['R1', null], { gain: 1.7, gamma: 0.8, saturation: 1.3, lift: 0.05 }), N('O', 'output', ['G'])], 'O'),
+                mk([...R, N('T', 'transform', ['R2'], { translate: [7.5, -3.25], rotate: 17, scale: [1.2, 0.85] }), N('M', 'merge', ['R1', 'T', null]), N('O', 'output', ['M'])], 'O'),
+                mk([...R, N('B', 'blur', ['R2', null], { size: 9 }), N('M', 'merge', ['R1', 'B', 'R1'], { operation: 'screen', mix: 0.7 }), N('O', 'output', ['M'])], 'O'),
+                mk([...R, N('C', 'crop', ['R1'], { topleft: [10, 8], bottomright: [70, 50], softness: 3 }), N('F', 'reformat', ['C'], { width: 60, height: 40, resize: 'fill' }),
+                    N('M', 'merge', ['R2', 'F', null], { operation: 'difference' }), N('O', 'output', ['M'])], 'O'),
+                mk([...R, N('U', 'unpremult', ['R1', null]), N('G', 'grade', ['U', 'R2'], { gain: 2, mask_invert: 'on' }), N('P', 'premult', ['G', null], { mix: 0.5 }),
+                    N('B', 'blur', ['P', 'R2'], { size: 4, mask_channel: 'r' }), N('O', 'output', ['B'])], 'O'),
+                mk([...R, N('K', 'constant', [], { color: [0.2, 0.5, 0.9, 0.6] }), N('L', 'lumakeyer', ['R1', null]), N('M', 'merge', ['K', 'L', null]), N('O', 'output', ['M'])], 'O'),
+            ];
+            const out = [];
+            for (const comp of cases) {
+                const src = (n) => (n.id === 'R1' ? P1 : P2);
+                const cpu = C.renderNode(comp, comp.output, 0, { scale: 1, source: src });
+                const g = gpu.render(comp, comp.output, 0, { scale: 1, source: src });
+                if (!g) { out.push({ skipped: true }); continue; }
+                let d = 0;
+                for (let i = 0; i < cpu.data.length; i++) d = Math.max(d, Math.abs(cpu.data[i] - g.data[i]));
+                out.push({ d, w: g.w, h: g.h, cw: cpu.w, ch: cpu.h });
+            }
+            // A region: only its pixels are worked, and they are right.
+            const comp = cases[2];
+            const src = (n) => (n.id === 'R1' ? P1 : P2);
+            const cpu = C.renderNode(comp, comp.output, 0, { scale: 1, source: src });
+            const g = gpu.render(comp, comp.output, 0, { scale: 1, source: src }, [30, 20, 60, 40]);
+            let d = 0, outside = 0;
+            for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) for (let k = 0; k < 4; k++) {
+                const i = (y * W + x) * 4 + k;
+                if (x >= 30 && x < 60 && y >= 20 && y < 40) d = Math.max(d, Math.abs(cpu.data[i] - g.data[i])); else if (g.data[i]) outside++;
+            }
+            return { out, roi: { d, outside, box: g.roi } };
+        }""")
+        if res.get("none"):
+            self.skipTest("no WebGL2 with float targets here")
+        for i, r in enumerate(res["out"]):
+            if r.get("skipped"):
+                continue
+            self.assertEqual((r["w"], r["h"]), (r["cw"], r["ch"]), f"case {i}")
+            self.assertLess(r["d"], 1e-4, f"case {i}: {r}")
+        self.assertLess(res["roi"]["d"], 1e-4, res["roi"])
+        self.assertEqual(res["roi"]["outside"], 0, "nothing worked outside the region")
+        self.assertEqual(self.errors, [])
+
+    def test_the_editor_draws_on_the_gpu_and_only_the_part_on_screen_when_zoomed_in(self):
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        pg.evaluate(f"""() => {{ const e = {ED}; const c = e.comp();
+            c.nodes.push({{ id: 'Grade1', type: 'grade', x: 0, y: 60, inputs: ['Constant1', null], gain: 2 }});
+            c.nodes.find((n) => n.id === 'Output1').inputs = ['Grade1'];
+            c.nodes.find((n) => n.id === 'Constant1').color = [0.25, 0.5, 0.75, 1]; e.refresh(); }}""")
+        pg.wait_for_timeout(400)
+        info = pg.evaluate(f"() => {ED}.renderInfo()")
+        if info["gpuOff"]:
+            self.skipTest("GPU off here: " + info["gpuOff"])
+        self.assertIn(info["how"], ("gpu", "kept"), info)
+        px = self.pixel(pg, 0.5, 0.5)
+        pg.evaluate(f"() => {ED}.setGpu(false)")
+        pg.wait_for_timeout(400)
+        self.assertEqual(pg.evaluate(f"() => {ED}.renderInfo().how"), "kept", "the CPU finds the GPU's picture in the shared cache")
+        self.assertEqual(self.pixel(pg, 0.5, 0.5), px)
+        pg.evaluate(f"() => {{ {ED}.setGpu(true); const z = {ED}.state.zoom; z.fit = false; z.s = 6; z.x = -1500; z.y = -900; {ED}.relayout && {ED}.relayout(); }}")
+        pg.evaluate(f"() => {{ const c = {ED}.comp(); c.nodes.find((n) => n.id === 'Grade1').gain = 3; {ED}.refresh(); }}")
+        pg.wait_for_timeout(500)
+        info = pg.evaluate(f"() => {ED}.renderInfo()")
+        self.assertEqual(info["how"], "gpu, region", info)
+        self.assertTrue(info["region"], info)
+        self.assertEqual(self.errors, [])
+
     def test_a_node_dropped_on_a_wire_goes_into_the_flow(self):
         pg = self.page()
         self.new_comp(pg)
