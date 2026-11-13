@@ -1629,6 +1629,59 @@ export function trackMotion(n, f) {
 }
 export { WP };
 
+export const TRACK_BAKES = ["stabilise", "match-move", "corner pin"];
+/** The frames a Tracker's or PlanarTracker's motion is known at: every frame of the comp it reaches from its reference. */
+export function trackFrames(comp, n) {
+    const out = [];
+    for (let f = 0; f < comp.format.frames; f++) if (trackMotion(n, f)) out.push(f);
+    return out;
+}
+/**
+ * A Tracker's / PlanarTracker's motion as a new keyed node (not wired: it is put beside the tracker, for the
+ * picture it should move): "stabilise" / "match-move" a Transform (a key a frame: translate, rotate, scale and,
+ * for stabilise, its centre), or a CornerPin for a perspective / a surface (its from corners the reference's, its
+ * to corners keyed; stabilise = invert on). "corner pin" is a match-move CornerPin from the first four points, or
+ * the surface. Returns the node added, or null when there is nothing to bake.
+ */
+export function bakeTrack(comp, trackerId, how) {
+    const n = nodeById(comp, trackerId);
+    if (!n || (n.type !== "tracker" && n.type !== "planartracker")) return null;
+    const pin = how === "corner pin" || n.type === "planartracker" || n.motion === "perspective";
+    const probe = pin && n.type === "tracker" ? Object.assign({}, n, { motion: "perspective" }) : n;
+    const frames = trackFrames(comp, probe);
+    if (!frames.length) return null;
+    const key = (f, v) => ({ f, v, ease: "linear" });
+    const r4 = (v) => Math.round(v * 1e4) / 1e4;
+    const at = { x: n.x + NODE_W + 30, y: n.y, name: undefined };
+    const label = n.name || n.id;
+    let node;
+    if (pin) {
+        const first = trackMotion(probe, frames[0]);
+        if (!first || first.kind !== "perspective") return null;
+        node = makeNode(comp, "cornerpin", Object.assign(at, { name: `${label} ${how === "stabilise" ? "stabilise" : "pin"}`,
+            invert: how === "stabilise" ? "on" : "off" }));
+        first.P.forEach((p, k) => { node[`from${k + 1}`] = p.map(r4); });
+        node.tracks = {};
+        for (let k = 0; k < 4; k++) node.tracks[`to${k + 1}`] = frames.map((f) => key(f, trackMotion(probe, f).Q[k].map(r4)));
+    } else {
+        node = makeNode(comp, "transform", Object.assign(at, { name: `${label} ${how}` }));
+        const t = [], r = [], sc = [], c = [];
+        for (const f of frames) {
+            const mo = trackMotion(n, f);
+            if (how === "match-move") { t.push(key(f, [r4(mo.cQ[0] - mo.cP[0]), r4(mo.cQ[1] - mo.cP[1])])); r.push(key(f, r4(mo.angle))); sc.push(key(f, [r4(mo.s), r4(mo.s)])); }
+            else { t.push(key(f, [r4(mo.cP[0] - mo.cQ[0]), r4(mo.cP[1] - mo.cQ[1])])); r.push(key(f, r4(-mo.angle))); sc.push(key(f, [r4(1 / mo.s), r4(1 / mo.s)])); c.push(key(f, mo.cQ.map(r4))); }
+        }
+        const mo0 = trackMotion(n, frames[0]);
+        node.tracks = { translate: t };
+        if (n.motion === "rotate" || n.motion === "scale") node.tracks.rotate = r;
+        if (n.motion === "scale") node.tracks.scale = sc;
+        if (how === "match-move") node.center = mo0.cP.map(r4); else node.tracks.center = c;
+    }
+    if (!node.name) delete node.name;
+    addNode(comp, node);
+    return node;
+}
+
 /** a x (1 - t) + b x t. */
 export function mixImages(a, b, t) {
     const out = blank(a.w, a.h), o = out.data, x = a.data, y = b.data;
