@@ -97,6 +97,7 @@ The **⇢** row links the number to another node's with a scale and an offset (i
 | Deep | DeepRead, DeepFromImage, DeepMerge, DeepHoldout, DeepCrop, DeepFlatten |
 | Views | OneView, JoinViews, Anaglyph, SideBySide |
 | AI | AI Matte, AI Depth, AI Relight, AI Inpaint, AI Upscale |
+| VFX | VFX Alpha Matte, VFX SDR to HDR, VFX Reframe, VFX Upscale |
 | Graph | Group, Input, GroupOutput, Dot, Backdrop, StickyNote |
 
 Most colour, filter, keying and channel nodes have a **mask** input (the last one) and a **mix**. Mix 0 passes the input through unchanged; with a mask connected, the node acts only where the chosen mask channel (alpha by default, or any extra channel such as `mask.a`) is above 0, and **invert mask** flips that. The mask's channel and invert rows appear once something is plugged into the mask input. A mask of another size is aligned at the bottom-left corner, like any other image.
@@ -133,6 +134,17 @@ A changed workflow or model marks the node's results as out of date.
 Nothing runs by itself. In the node's Parameters section, **This frame** runs it on the frame at the playhead and **All frames** on every frame of the comp; **Out of date** reruns only the frames whose results are stale. A frame range is queued as **one ComfyUI job**: every frame's input is rendered and written out, and one prompt holds each frame's part of the workflow while the parts that are the same for all frames (model loaders, text encoders) appear once, so the models load once. All frames of a run share one seed. While it runs, Parameters shows how many frames are done and a **Stop** button (frames that already came back are kept). The answers are saved next to the comp as a PNG sequence, `<comp>_ai/<node>/<run>/<node>_<kind>.####.png`, and stored in the node, so they travel with the comp (one undo step per job).
 
 **frames per job** (0 = the whole range in one job) splits a long range into several jobs. ComfyUI keeps every frame's intermediate images in memory until a job ends, so a long range at a large size may need it. For Inpaint, a frame whose mask is empty is left out and named in a notice. A frame without its own result shows the nearest earlier one; before the first run the node passes its input through. When the input or the prompt changes afterwards, Parameters marks the results as out of date; they stay until they are run again. **Forget** removes them from the node and leaves the files.
+
+### VFX nodes
+
+The VFX nodes are the History's **Convert Footage** passes as nodes: **VFX Alpha Matte** (a matte of the main subject; output premultiplied or the matte as grey), **VFX SDR to HDR** (the scene-linear ACEScg EXR frames), **VFX Reframe** (outpaints into a new frame size, snapped to 64) and **VFX Upscale** (refine or restore, FullHD or 4K). They run the same LTX-2.5 workflows, which work on a whole clip at once and take minutes on the GPU, so a VFX node is never worked out live: it is rendered once and then read back like footage.
+
+**Render** in the node's Parameters section runs it over the comp's frames. The workflows take 8n + 1 frames, so a few frames at the end can be left out; the alpha matte runs in parts of at most 121 frames, joined afterwards. The result lands next to the comp in `<comp>_vfx/<node>/` (a film, or for HDR the EXR sequence) and is stored in the node. Over the frames it covers the node shows the result; outside them, and before it has been rendered, it passes its input through. Reframe and Upscale take the size of their result. Stop cancels a run, Forget takes the result off the node and leaves the files. When the input or a setting changes afterwards, Parameters marks the result as out of date until it is rendered again.
+
+**Prerender** decides what goes into the workflow:
+
+- **on** (default): what comes into the node, everything in the comp up to there, is rendered to a film first, and that film goes through the workflow.
+- **off**: the film of the Read coming in is used as it is. This is quicker and uses the plate's own pixels, but the input must be a Read of a film with nothing but Dots in between. The result follows the Read's offset.
 
 ## Working speed
 

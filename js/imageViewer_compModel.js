@@ -1514,6 +1514,7 @@ export function formatAt(comp, id, depth = 0) {
     const up = () => (NODE_TYPES[n.type].inputs.length && n.inputs[0] ? formatAt(comp, n.inputs[0], depth + 1) : F);
     if (!n.disable && n.type === "sidebyside") { const u = up(); return n.layout === "over under" ? { width: u.width, height: u.height * 2 } : { width: u.width * 2, height: u.height }; }
     if (!n.disable && n.type === "stmap" && n.inputs[1]) return formatAt(comp, n.inputs[1], depth + 1);
+    if (EX.VFX_KINDS[n.type]) { const z = EX.vfxSize(n); if (z) return z; }
     if (!n.disable && n.type === "ai_upscale") { const u = up(), k = EX.upscaleFactor(n); return { width: Math.max(1, Math.round(u.width * k)), height: Math.max(1, Math.round(u.height * k)) }; }
     if (n.disable || n.type !== "reformat") return n.type === "read" || n.type === "constant" || PLAIN_SIZE.has(n.type) ? F : up();
     const [w, h] = reformatSize(n, 0, up());
@@ -1685,6 +1686,16 @@ export function aiKey(comp, n) {
     // The workflow and models a node picked count too (a node without them keeps the key it had).
     if (n.workflow || models) parts.push(n.workflow || "", models);
     const text = parts.join("\u0001");
+    let h = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+    return h.toString(36);
+}
+
+/** A VFX node's key: what comes in and the settings its workflow ran with (a result of another key is out of date). */
+export function vfxKey(comp, n) {
+    const ins = n.inputs || [];
+    const text = [ins[0] ? upstreamKey(comp, ins[0]) : "", n.type, n.prompt || "", n.width || "", n.height || "", n.mode || "", n.size || "",
+        n.prerender || "on"].join("\u0001");
     let h = 0x811c9dc5;
     for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
     return h.toString(36);
@@ -2414,6 +2425,7 @@ export function sourceNeeds(comp, id, frame, view = null) {
         if (n.type === "anaglyph" || n.type === "sidebyside") { for (const w of vs.length ? vs.slice(0, 2) : [v]) walk(n.inputs[0], f, depth + 1, w); return; }
         if (n.type === "joinviews") { const i = Math.max(0, vs.indexOf(v)); walk(n.inputs[Math.min(i, 3)] || n.inputs[0], f, depth + 1, v); return; }
         if (EX.AI_KINDS[n.type]) { const rd = EX.aiRead(n, f); if (rd) out.push({ node: rd, frame: f, view: v }); }
+        if (EX.VFX_KINDS[n.type] && !n.disable) { const rd = EX.vfxRead(n, f); if (rd) out.push({ node: rd, frame: f, view: v }); }
         const xr = EX.extraReads(n, f);
         if (xr) { for (const [k, g] of xr) walk(n.inputs[k], g, depth + 1, v); return; }
         if (n.type === "retime") {

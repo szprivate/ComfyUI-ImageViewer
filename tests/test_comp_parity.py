@@ -475,6 +475,20 @@ def extra_cases(sources):
     c.append(one(N("ai_upscale", 1, ["Read1"], factor="4"), ai))
     c.append(({"comp": comp([read(1), N("ai_upscale", 1, ["Read1"], results=res(2)), N("blur", 1, ["ai_upscale1"], size=2), out("blur1")]),
                "frame": 2, "scale": 0.5}, ai))
+    # VFX nodes: one film over frames first..last (here a source keyed by "<node>#vfx@<frame>"), the input outside.
+    vres = lambda **kw: dict({"file": "n_vfx/x.mp4", "offset": 0, "first": 2, "last": 6}, **kw)
+    vx = dict(sources)
+    vx.update({"vfx_alpha1#vfx@4": src(31), "vfx_hdr1#vfx@4": src(32), "vfx_reframe1#vfx@4": src(33, 40, 22),
+               "vfx_upscale1#vfx@4": src(34, 2 * W, 2 * H), "vfx_upscale1#vfx@1": src(34, 2 * W, 2 * H)})
+    for kw in ({}, {"output": "matte"}):
+        c.append(one(N("vfx_alpha", 1, ["Read1"], results=vres(), **kw), vx, frame=4))
+    c.append(one(N("vfx_alpha", 1, ["Read1"]), vx, frame=4))                 # not rendered: passes the input
+    c.append(one(N("vfx_hdr", 1, ["Read1"], results=vres()), vx, frame=4))
+    c.append(one(N("vfx_reframe", 1, ["Read1"], results=vres(width=40, height=22)), vx, frame=4))
+    c.append(one(N("vfx_reframe", 1, ["Read1"], results=vres(width=40, height=22)), vx, frame=8))   # outside: the input, laid into the new size
+    c.append(one(N("vfx_upscale", 1, ["Read1"], results=vres(width=2 * W, height=2 * H)), vx, frame=1))
+    c.append(({"comp": comp([read(1), N("vfx_upscale", 1, ["Read1"], results=vres(width=2 * W, height=2 * H)), N("blur", 1, ["vfx_upscale1"], size=2), out("blur1")]),
+               "frame": 4, "scale": 0.5}, vx))
     return c
 
 

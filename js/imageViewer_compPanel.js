@@ -597,6 +597,8 @@ export const CompPanelMixin = {
             aiRun: (id, frames) => this._cpAiRun(rec, id, frames),
             aiStop: (id) => this._cpAiStop(id),
             aiModels: (id) => this._cpAiModels(rec, id),
+            vfxRun: (id) => this._cpVfxRun(rec, id),
+            vfxStop: (id) => this._cpVfxStop(id),
         });
         try { const v = localStorage.getItem("imageviewer.comp.display"); if (v) rec.editor.setDisplay(v); } catch (_) { /* none kept */ }
         this.compViewSync();
@@ -795,7 +797,7 @@ export const CompPanelMixin = {
         for (let i = 0; i < all.length; i += per || all.length) chunks.push(all.slice(i, i + (per || all.length)));
         const run = { stopped: false, stop: null };
         runs.set(id, run);
-        const busy = () => [...runs.keys()];
+        const busy = () => [...runs.keys(), ...(this._cpAiBusy || [])];
         const shared = this._cpAiProgress || (this._cpAiProgress = {});
         const tell = (text) => { shared[id] = text; if (rec.editor) ed.setAiBusy(busy(), Object.assign({}, shared)); };
         tell(`0 / ${all.length}`);
@@ -909,6 +911,80 @@ export const CompPanelMixin = {
             };
             timer = setInterval(() => fromHistory(false), 5000);     // a message missed (the socket reconnected): ComfyUI's history knows
         });
+    },
+
+    // ── VFX nodes: LTX-2.5's Convert Footage workflows over the comp's range (comp_vfx on the server) ──
+
+    /**
+     * Render a VFX node: the server prerenders what comes in (or takes the Read's film), the page queues the
+     * workflow's graphs as the History's dialog does, and the result - one film or EXR sequence beside the comp -
+     * becomes the node's `results` (one undo step). Parameters shows how far it is; Stop ends it.
+     */
+    async _cpVfxRun(rec, id) {
+        const ed = rec.editor;
+        if (!ed) return;
+        if (!rec.path) { notice("warn", "Save the comp first", "The result is kept beside it."); return; }
+        const busy = this._cpAiBusy || (this._cpAiBusy = new Set());
+        if (busy.has(id)) return;
+        const n0 = ed.node(id);
+        if (!n0 || !C.EX.VFX_KINDS[n0.type]) return;
+        const label = `${n0.name || n0.id}`;
+        const runs = this._cpVfxRuns || (this._cpVfxRuns = new Map());
+        const run = { stops: [], stopped: false };
+        runs.set(id, run);
+        busy.add(id);
+        ed.setAiBusy([...busy, ...((this._cpAiRuns && this._cpAiRuns.keys()) || [])], Object.assign({}, this._cpAiProgress || {}));
+        const say = (t) => { if (rec.editor) ed.setVfxNote(id, t); };
+        const key = ed.vfxKeyOf(id);
+        try {
+            say(n0.prerender === "off" ? "Getting the film ready…" : "Prerendering what comes in…");
+            const prep = await cpPost("/imageviewer/comp_vfx", { path: rec.path, comp: ed.comp(), node: id });
+            if (run.stopped) throw new Error("Stopped");
+            const n = prep.graphs.length;
+            const outs = [], waits = [];
+            const show = (k, what) => say(`${prep.label}${n > 1 ? ` (part ${k + 1} of ${n})` : ""}: ${what}`
+                + (prep.note ? ` - ${prep.note}` : ""));
+            for (let k = 0; k < n; k++) {
+                const g = prep.graphs[k];
+                const pid = await this._paintQueue(g);
+                const p = this._paintWait(pid, prep.output, {
+                    start: () => show(k, "running"),
+                    node: (nid) => show(k, (g[nid] && ((g[nid]._meta && g[nid]._meta.title) || g[nid].class_type)) || "running"),
+                    progress: (v, m, nid) => show(k, `${(g[nid] && ((g[nid]._meta && g[nid]._meta.title) || g[nid].class_type)) || "running"}${m ? ` ${Math.round((v / m) * 100)}%` : ""}`),
+                    stop: (fn) => run.stops.push(fn),
+                });
+                p.catch(() => {});       // awaited below, in order
+                waits.push(p);
+            }
+            show(0, "waiting in ComfyUI's queue");
+            for (const p of waits) outs.push(await p);
+            if (run.stopped) throw new Error("Stopped");
+            say("Bringing the result in…");
+            const res = await cpPost("/imageviewer/comp_vfx_finish", { job: prep.job, results: outs });
+            if (rec.editor && ed.node(id)) ed.vfxResult(id, { ...res, key });
+            say("");
+            notice("info", `${label}: the result is in`, `Frames ${res.first}-${res.last}. Save the comp to keep it.`);
+        } catch (e) {
+            for (const fn of run.stops) { try { fn(); } catch (_) { /* gone */ } }
+            const miss = e.data && e.data.missing;
+            if (run.stopped || String(e.message) === "Stopped") say("Stopped.");
+            else if (miss && miss.length) {
+                const list = miss.map((m) => (m.kind === "model" ? `${m.what} (models/${m.folder})` : `node ${m.what}`)).join(", ");
+                say(`Not here: ${list}`);
+                notice("error", "The workflow needs what is not here", list);
+            } else { say(String(e.message || e)); notice("error", `${label} did not render`, String(e.message || e)); }
+        } finally {
+            runs.delete(id);
+            busy.delete(id);
+            if (rec.editor) ed.setAiBusy([...busy, ...((this._cpAiRuns && this._cpAiRuns.keys()) || [])], Object.assign({}, this._cpAiProgress || {}));
+        }
+    },
+
+    _cpVfxStop(id) {
+        const run = this._cpVfxRuns && this._cpVfxRuns.get(id);
+        if (!run) return;
+        run.stopped = true;
+        for (const fn of run.stops) { try { fn(); } catch (_) { /* gone */ } }
     },
 
     async _cpLoadSource(rec, node, frame, how = {}) {

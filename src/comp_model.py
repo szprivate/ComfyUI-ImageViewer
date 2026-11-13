@@ -1120,6 +1120,10 @@ def format_at(comp, nid, depth=0):
         return {"width": u["width"], "height": u["height"] * 2} if n.get("layout") == "over under" else {"width": u["width"] * 2, "height": u["height"]}
     if not n.get("disable") and n["type"] == "stmap" and len(ins) > 1 and ins[1]:
         return format_at(comp, ins[1], depth + 1)
+    if n["type"] in _X.VFX_KINDS:
+        z = _X.vfx_size(n)
+        if z:
+            return z
     if not n.get("disable") and n["type"] == "ai_upscale":
         u, k = up(), _X.upscale_factor(n)
         return {"width": max(1, int(math.floor(u["width"] * k + 0.5))), "height": max(1, int(math.floor(u["height"] * k + 0.5)))}

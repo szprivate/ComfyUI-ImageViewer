@@ -60,6 +60,7 @@ def _n(kind, d, key=False, mn=None, mx=None, choices=None):
 
 _WRITE = _n("target", "rgba")
 _RESULTS = _n("ai", None)
+_PRERENDER = _n("enum", "on", choices=["on", "off"])
 _ONOFF = ["off", "on"]
 
 
@@ -89,6 +90,9 @@ def _cdl_params():
 
 AI_KINDS = {"ai_matte": "matte", "ai_depth": "depth", "ai_relight": "relight", "ai_inpaint": "inpaint", "ai_upscale": "upscale"}
 _AI_DATA = {"matte", "depth"}
+# The VFX nodes (the page's VFX_KINDS): LTX-2.5's workflows over the whole range, one film as their result.
+VFX_KINDS = {"vfx_alpha": "alpha", "vfx_hdr": "hdr", "vfx_reframe": "reframe", "vfx_upscale": "upscale"}
+_VFX_SIZED = {"reframe", "upscale"}
 
 # The names the page shows (and the Python API uses) for these nodes.
 EXTRA_LABELS = {"differencekeyer": "DifferenceKeyer", "despill": "Despill", "edgeextend": "EdgeExtend", "lightwrap": "LightWrap", "coreedge": "CoreEdge",
@@ -96,7 +100,8 @@ EXTRA_LABELS = {"differencekeyer": "DifferenceKeyer", "despill": "Despill", "edg
                 "cdl": "CDL", "lut": "LUT", "huecurves": "HueCurves", "clamp": "Clamp", "loglin": "Log2Lin",
                 "colormatch": "ColorMatch", "grain": "Grain", "denoise": "Denoise", "sharpen": "Sharpen", "median": "Median",
                 "edgedetect": "EdgeDetect", "edgeblur": "EdgeBlur", "ai_matte": "AI Matte", "ai_depth": "AI Depth", "ai_relight": "AI Relight",
-                "ai_inpaint": "AI Inpaint", "ai_upscale": "AI Upscale"}
+                "ai_inpaint": "AI Inpaint", "ai_upscale": "AI Upscale",
+                "vfx_alpha": "VFX Alpha Matte", "vfx_hdr": "VFX SDR to HDR", "vfx_reframe": "VFX Reframe", "vfx_upscale": "VFX Upscale"}
 
 # The per-pixel ones that take a mask input (the last) and a mix (the page's EXTRA_MASKABLE).
 EXTRA_MASKABLE = ["differencekeyer", "despill", "edgeextend", "lightwrap", "coreedge", "cdl", "lut", "huecurves", "clamp",
@@ -155,6 +160,14 @@ EXTRA_TYPES = {
                                                  "results": _RESULTS}},
     "ai_inpaint": {"inputs": ["src", "mask"], "params": {"prompt": _n("prompt", ""), "results": _RESULTS}},
     "ai_upscale": {"inputs": ["src"], "params": {"factor": _n("enum", "2", choices=["2", "4"]), "results": _RESULTS}},
+    "vfx_alpha": {"inputs": ["src"], "params": {"output": _n("enum", "premultiplied", choices=["premultiplied", "matte"]),
+                                                "prerender": _PRERENDER, "results": _RESULTS}},
+    "vfx_hdr": {"inputs": ["src"], "params": {"prerender": _PRERENDER, "results": _RESULTS}},
+    "vfx_reframe": {"inputs": ["src"], "params": {"width": _n("int", 1920, mn=256, mx=1920), "height": _n("int", 1088, mn=256, mx=1920),
+                                                  "prompt": _n("prompt", ""), "prerender": _PRERENDER, "results": _RESULTS}},
+    "vfx_upscale": {"inputs": ["src"], "params": {"mode": _n("enum", "refine", choices=["refine", "restore"]),
+                                                  "size": _n("enum", "FullHD", choices=["FullHD", "4K"]),
+                                                  "prompt": _n("prompt", ""), "prerender": _PRERENDER, "results": _RESULTS}},
 }
 EXTRA_ORDER = list(EXTRA_TYPES)
 
@@ -704,6 +717,70 @@ def ai_read(n, f):
             "colorspace": "linear" if AI_KINDS[n["type"]] in _AI_DATA else "srgb", "fit": "stretch", "offset": 0, "inputs": []}
 
 
+def vfx_span(n):
+    """The comp frames a VFX node's result covers, (first, last), or None before it ran."""
+    r = n.get("results") if isinstance(n.get("results"), dict) else None
+    if not r or not r.get("file"):
+        return None
+    try:
+        return int(r["first"]), int(r["last"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def vfx_read(n, f):
+    sp = vfx_span(n)
+    if not sp or f < sp[0] or f > sp[1]:
+        return None
+    r = n["results"]
+    return {"id": f"{n['id']}#vfx", "type": "read", "file": r["file"],
+            "colorspace": r.get("colorspace") or ("linear" if VFX_KINDS[n["type"]] == "alpha" else "auto"),
+            "fit": "stretch", "offset": int(r.get("offset") or 0), "inputs": []}
+
+
+def vfx_size(n):
+    """The result's size for reframe / upscale once run ({width, height}), else None (the size that comes in)."""
+    r = n.get("results") if isinstance(n.get("results"), dict) and not n.get("disable") else None
+    if not r or not r.get("file") or VFX_KINDS.get(n["type"]) not in _VFX_SIZED:
+        return None
+    try:
+        w, h = _round(float(r.get("width"))), _round(float(r.get("height")))
+    except (TypeError, ValueError):
+        return None
+    return {"width": w, "height": h} if w > 0 and h > 0 else None
+
+
+def _vfx_make(n, f, p, api):
+    kind = VFX_KINDS[n["type"]]
+    ins = n.get("inputs") or []
+    if ins and ins[0]:
+        s = api.run(ins[0], f)
+    else:
+        w0, h0 = api.size(n, 0)
+        s = M.blank(w0, h0)
+    h0, w0 = s.shape[:2]
+    sz = vfx_size(n)
+    w, h = (max(1, _round(sz["width"] * api.scale)), max(1, _round(sz["height"] * api.scale))) if sz else (w0, h0)
+
+    def fit(img):
+        hh, ww = img.shape[:2]
+        return img if (ww, hh) == (w, h) else M.resample(img, M.fit_matrix(ww, hh, w, h, "stretch"), w, h)
+    rd = vfx_read(n, f)
+    got = api.source(rd, f) if rd and api.source else None
+    if got is None:
+        return fit(s)
+    R = fit(got)
+    if kind in ("reframe", "upscale"):
+        return R
+    R, S = _f64(R), _f64(fit(s))
+    if kind == "alpha":
+        m = 0.2126 * R[..., 0] + 0.7152 * R[..., 1] + 0.0722 * R[..., 2]
+        if p.get("output") == "matte":
+            return _matte(m)
+        return (S * m[..., None]).astype(np.float32)
+    return (R * S[..., 3:4]).astype(np.float32)
+
+
 def upscale_factor(n):
     try:
         return max(1.0, float(n.get("factor") or 2))
@@ -833,4 +910,6 @@ def make(n, f, api):
         return edge_detect_image(src(), p, scale)
     if t == "edgeblur":
         return edge_blur_image(src(), p, scale)
+    if t in VFX_KINDS:
+        return _vfx_make(n, f, p, api)
     return _ai_make(n, f, p, api)
