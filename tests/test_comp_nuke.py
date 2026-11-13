@@ -122,7 +122,7 @@ class NukeScript(unittest.TestCase):
         text, plan = N.build(comp(nodes))
         lines = text.splitlines()
         self.assertEqual(sum(ln.endswith(" {") for ln in lines), sum(ln == "}" for ln in lines))
-        self.assertEqual(len(plan["native"]) + len(plan["bake"]) + len(plan["placeholder"]), len(nodes))
+        self.assertEqual(len(plan["native"]) + len(plan["bake"]) + len(plan["placeholder"]) + len(plan["skipped"]), len(nodes))
         self.assertTrue(text.startswith("#! nuke -nx"))
 
     @unittest.skipIf(OpenEXR is None, "needs the OpenEXR module to read the file back")

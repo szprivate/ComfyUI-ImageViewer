@@ -42,8 +42,35 @@ The selected nodes' parameters appear in the **Parameters** panel, one section p
 | Filter and light | Blur, MotionBlur, DepthBlur, Defocus, Glow, LensFlare, Laplacian |
 | Time | Retime, Vectors (optical flow) |
 | Channels | Shuffle, AddChannels, Remove |
+| 3D | Camera, Card, Geometry (cube, sphere, cylinder), Scene, Project, PointCloud, Render |
+| Deep | DeepRead, DeepFromImage, DeepMerge, DeepHoldout, DeepCrop, DeepFlatten |
+| Views | OneView, JoinViews, Anaglyph, SideBySide |
 
 Each image keeps its own resolution; images of different sizes are aligned at the bottom-left corner. Extra channels (`depth.z`, `mask.a` …) travel down the graph with the image.
+
+## 3D
+
+A small scene renderer inside the comp: Y up, the camera looking down -Z, rotations in degrees applied X, then Y, then Z.
+
+- **Card** puts an image on a plane (its height follows the image's aspect); **Geometry** wraps an image, or plain white, round a cube, sphere or cylinder. Both have translate, rotate, scale and a uniform scale.
+- **Project** paints an image onto whatever it is attached to, from a Camera; *front* keeps it off faces turned away from that camera.
+- **PointCloud** turns an image and its depth channel (`depth.z` by default, read as distance or 1 / distance) into points seen from a Camera.
+- **Scene** gathers up to four of these; **Render** draws a Scene (or one piece) through a Camera over an optional background, with 1 to 4 samples per pixel each way. It writes `depth.z` too. Fed into a Deep node, it gives one sample per object per pixel.
+- **Camera** has a focal length and a film back, near and far planes, and an interaxial and convergence for stereo. Its **import** row takes keys from a camera of a shot open in a 3D tab (place, turn and lens, one key a frame) or from a camera text file: `.chan`, one line a frame with `frame tx ty tz rx ry rz` and optionally the vertical field of view.
+
+## Deep
+
+A deep image holds any number of samples per pixel, each a premultiplied colour at a depth. **DeepRead** reads the first deep part of an OpenEXR file (R G B A Z ZBack; a missing A counts as 1). **DeepFromImage** makes one sample per pixel from a flat image and its depth channel, or at a set depth. **DeepMerge** combines up to four, **DeepHoldout** dims one by what another has in front of it, **DeepCrop** keeps the samples between two depths (or outside them), and **DeepFlatten**, or any flat node after a deep one, lays them front to back. A sample's back depth is kept but not used to split it.
+
+## Views
+
+The view menu in the bar turns a comp into a stereo pair (left, right) or any list of views; the picture shows the view picked there. Then:
+
+- `%V` in a Read's file name stands for the view's name and `%v` for its first letter, so one Read reads a file per view.
+- **Split** in a node's parameters gives it different settings in the view on show; **Join** takes them away.
+- A Camera's eyes sit interaxial apart, with zero parallax at the convergence distance.
+- **OneView** picks a view, **JoinViews** takes a different input per view, **Anaglyph** and **SideBySide** show two views in one image.
+- **Render…** writes every view, each as its own versioned output named `<name>_<view>`.
 
 ## Colour
 
@@ -52,6 +79,6 @@ The working space is the scene-linear role of the OCIO config. The display menu 
 ## Output
 
 - **Render…**: every still format of the Send To Image Viewer node (PNG, EXR, TIFF …) or an MP4 / MOV / WebM film, rendered at full resolution on the server. The result is versioned, added to the History and placed on the canvas as a loader node.
-- **Script export** (Save menu): writes an `.nk` script. Nodes with a direct equivalent are translated; the rest are rendered to EXR sequences next to the script and read back in.
+- **Script export** (Save menu): writes an `.nk` script. Nodes with a direct equivalent are translated; the rest are rendered to EXR sequences next to the script and read back in. Cameras, 3D pieces and deep nodes only appear as part of the image rendered from them.
 
 All nodes are written from published formulas and observed behaviour; no third-party code or assets are used.

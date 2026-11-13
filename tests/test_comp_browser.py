@@ -1050,6 +1050,65 @@ class CompBrowserTests(unittest.TestCase):
         self.assertTrue(pg.evaluate("() => !!__panel.compGraphPanel.querySelector('.comp-slot .cp-graph')"))
         self.assertEqual(self.errors, [])
 
+    def test_3d_nodes_views_a_camera_from_a_3d_shot_and_a_deep_file(self):
+        pg = self.page()
+        path = self.new_comp(pg)
+        ED = self.ED
+        # A deep file beside the comp: one red sample in the left half, at depth 2.
+        from importlib import import_module
+        D = import_module(self.pkg + ".comp_deep")
+        W, H = 320, 180
+        n = np.zeros(W * H, np.uint32)
+        n.reshape(H, W)[:, :160] = 1
+        s = np.tile(np.array([[1, 0, 0, 1, 2, 2]], np.float32), (int(n.sum()), 1))
+        deep = os.path.join(self.dirs["output"], "deep_plate.exr")
+        D.write_deep(deep, {"w": W, "h": H, "n": n, "s": s})
+        nodes = [
+            {"id": "Constant1", "type": "constant", "inputs": [], "color": [0, 1, 0, 1], "x": 0, "y": 0},
+            {"id": "card3d1", "type": "card3d", "inputs": ["Constant1"], "x": 0, "y": 60},
+            {"id": "camera3d1", "type": "camera3d", "inputs": [], "translate": [0, 0, 2], "interaxial": 0.6, "convergence": 100, "x": 120, "y": 60},
+            {"id": "render3d1", "type": "render3d", "inputs": ["card3d1", "camera3d1", None], "x": 0, "y": 120},
+            {"id": "deepread1", "type": "deepread", "inputs": [], "file": deep, "x": 240, "y": 0},
+            {"id": "deepflatten1", "type": "deepflatten", "inputs": ["deepread1"], "x": 240, "y": 60},
+            {"id": "Output1", "type": "output", "inputs": ["render3d1"], "x": 0, "y": 180}]
+        pg.evaluate(f"""([nodes, path]) => {ED}.load({{ comp: 1, format: {{ width: 320, height: 180, fps: 24, frames: 3 }}, nodes, output: 'Output1' }}, path)""",
+                    [nodes, path])
+        pg.wait_for_timeout(800)
+        mid, corner = self.pixel(pg, 0.5, 0.5), self.pixel(pg, 0.03, 0.05)
+        self.assertGreater(mid[1], 200); self.assertLess(mid[0], 40)
+        self.assertLess(corner[1], 40)
+        # Stereo from the bar's view menu: the right eye sees the card further left than the left eye does.
+        pg.locator(".cp-views").select_option("\u0001")
+        self.assertEqual(pg.evaluate(f"() => {ED}.comp().format.views"), ["left", "right"])
+        edge = lambda: self.pixel(pg, 0.5 + (35 / 18) * 0.25 * 0.5 * 0.92, 0.5)[1]
+        pg.locator(".cp-views").select_option("left")
+        pg.wait_for_timeout(600)
+        left = edge()
+        pg.locator(".cp-views").select_option("right")
+        pg.wait_for_timeout(600)
+        right = edge()
+        self.assertGreater(left, 200, (left, right)); self.assertLess(right, 60, (left, right))
+        # A camera of a shot open in a 3D tab: its keys go onto the Camera node.
+        pg.evaluate("""() => { __panel._scenes = __panel._scenes || {};
+            __panel._scenes['previz:t'] = { name: 'shot', items: [{ id: 'c1', kind: 'camera', name: 'Cam', position: [1, 2, 3], rotation: [0, 0, 0], scale: [1, 1, 1], fov: 30,
+                tracks: { position: [{ f: 0, v: [1, 2, 3] }, { f: 2, v: [1, 2, 5] }] } }] }; }""")
+        pg.evaluate(f"() => {ED}.select(['camera3d1'])")
+        pg.wait_for_timeout(300)
+        pg.locator(".cp-pane.first .cp-camimport button", has_text="3D shot").click()
+        pg.wait_for_function(f"() => {{ const n = {ED}.node('camera3d1'); return n.tracks && n.tracks.translate; }}", timeout=5000)
+        cam = pg.evaluate(f"() => {ED}.node('camera3d1')")
+        self.assertEqual([round(v, 6) for v in cam["translate"]], [1, 2, 3])
+        self.assertEqual(len(cam["tracks"]["translate"]), 3)
+        self.assertIn("focal", cam["tracks"])
+        # The deep file, flattened, through the comp_deep route.
+        pg.evaluate(f"() => {ED}.view('deepflatten1')")
+        pg.wait_for_timeout(1000)
+        l, r = self.pixel(pg, 0.25, 0.5), self.pixel(pg, 0.75, 0.5)
+        self.assertGreater(l[0], 200, l); self.assertLess(r[0], 40, r)
+        if SHOTS:
+            pg.screenshot(path=os.path.join(SHOTS, "comp-3d-deep.png"))
+        self.assertEqual(self.errors, [])
+
     def test_the_comp_button_offers_new_and_open(self):
         pg = self.page()
         pg.evaluate("() => __panel.spaceOpen('comp')")

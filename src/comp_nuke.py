@@ -142,6 +142,10 @@ def _bakeable(n):
     return None
 
 
+NOT_PICTURES = {"camera3d", "card3d", "geo3d", "scene3d", "project3d", "pointcloud",
+                "deepread", "deepfromimage", "deepmerge", "deepholdout", "deepcrop"}
+
+
 def build(comp, *, info_of=None, nk_path="", bake_dir="", bake=True):
     """``(text, plan)``: the script, and ``{bake: [{id, name, dir, pattern}], notes: [...], native: [...]}``.
 
@@ -152,7 +156,7 @@ def build(comp, *, info_of=None, nk_path="", bake_dir="", bake=True):
     W, H, F = int(fmt["width"]), int(fmt["height"]), int(fmt["frames"])
     A = _Anim(comp)
     out = _Out()
-    plan = {"bake": [], "notes": [], "native": [], "placeholder": []}
+    plan = {"bake": [], "notes": [], "native": [], "placeholder": [], "skipped": []}
     head = {}            # comp node id -> the Nuke node that is its picture
     reach = _reachable(comp)
     notes = set()
@@ -205,7 +209,12 @@ def build(comp, *, info_of=None, nk_path="", bake_dir="", bake=True):
         return head[nid]
 
     for n in comp["nodes"]:
+        # A camera, a piece of 3D or a deep picture is not a picture of its own: it is written (baked as the
+        # picture the comp makes of it) only when a node in the script reads it, not for the nodes that use it.
+        if n["type"] in NOT_PICTURES and n["id"] != comp.get("output"):
+            continue
         write(n["id"])
+    plan["skipped"] = [n["id"] for n in comp["nodes"] if n["id"] not in head]
 
     lines = ["#! nuke -nx", f"version {NUKE_VERSION}", "Root {", " inputs 0",
              f" name {_str(nk_path.replace(os.sep, '/')) if nk_path else 'comp.nk'}",

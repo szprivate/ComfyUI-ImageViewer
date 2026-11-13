@@ -19,6 +19,8 @@ import { createCompEditor } from "./imageViewer_compEditor.js";
 import { canvasContext, notice, openExportDialog, openFilePicker } from "./imageViewer_exportUI.js";
 import { addRecentDoc } from "./imageViewer_recentDocs.js";
 import { COMP_SUFFIX, addLayer, isCompPath, makeNode, sourceName } from "./imageViewer_compModel.js";
+import { decodeDeep } from "./imageViewer_compDeep.js";
+import { cameraKeys, sceneCameraSamples, sceneCameras } from "./imageViewer_compCamImport.js";
 
 export const COMP_PREFIX = "comp:";
 /** The dock panels of a comp tab, and the editor part each one holds. */
@@ -546,6 +548,8 @@ export const CompPanelMixin = {
             rotoMatte: (roto, f, cw, ch, W, H, doc) => this._cpRotoMatte(roto, f, cw, ch, W, H, doc),
             onView: () => { if (this._cpRoto && this._cpRoto.rec === rec) this.updateToolOverlay(); },
             loadSource: (node, frame, how) => this._cpLoadSource(rec, node, frame, how),
+            loadDeep: (node, frame) => this._cpLoadDeep(rec, node, frame),
+            importCamera: (kind, node) => this._cpImportCamera(rec, kind, node),
             ocioInfo: () => this._cpOcioInfo(),
             ocioLut: (spec) => this._cpOcioLut(spec),
             onDisplay: (v) => { try { localStorage.setItem("imageviewer.comp.display", v || ""); } catch (_) { /* not kept */ } },
@@ -664,6 +668,105 @@ export const CompPanelMixin = {
             st.cacheBytes -= v.data.byteLength;
         }
         return pic;
+    },
+
+    /** A DeepRead's deep picture at a comp frame (GET comp_deep: counts, then six floats a sample), cached with the pixels. */
+    async _cpLoadDeep(rec, node, frame) {
+        if (!node.file) return null;
+        const st = this._cpState();
+        const info = await this._cpSourceInfo(rec, node);
+        if (!info || !["still", "sequence"].includes(info.kind)) return null;
+        const f = info.kind === "still" ? 0 : frame;
+        const key = ["deep", rec.path, node.file, node.offset || 0, f].join("|");
+        const hit = st.cache.get(key);
+        if (hit) { st.cache.delete(key); st.cache.set(key, hit); return hit.deep; }
+        const q = new URLSearchParams({ file: node.file, comp: rec.path, frame: String(frame), offset: String(node.offset || 0) });
+        const res = await api.fetchApi(`/imageviewer/comp_deep?${q}`);
+        if (!res.ok) return null;
+        const w = Number(res.headers.get("X-Comp-W")), h = Number(res.headers.get("X-Comp-H"));
+        let buf = await res.arrayBuffer();
+        if (res.headers.get("X-ImageViewer-Enc") === "gzip" || new Uint8Array(buf, 0, 2)[0] === 0x1f) {
+            buf = await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+        }
+        const deep = decodeDeep(buf, w, h);
+        const bytes = deep.n.byteLength + deep.s.byteLength;
+        st.cache.set(key, { deep, data: { byteLength: bytes } });
+        st.cacheBytes += bytes;
+        while (st.cacheBytes > CACHE_BYTES && st.cache.size > 1) {
+            const [k, v] = st.cache.entries().next().value;
+            st.cache.delete(k);
+            st.cacheBytes -= v.data.byteLength;
+        }
+        return deep;
+    },
+
+    /**
+     * A Camera node's keys from somewhere else: "scene" = a camera of a shot open in a 3D tab (its frames from the
+     * shot's first, one key a frame over the comp's length), "file" = a camera text file (.chan) picked.
+     * -> {tracks, from, frames} for the editor to put on the node.
+     */
+    async _cpImportCamera(rec, kind, node) {
+        const comp = rec.editor && rec.editor.comp();
+        const fmt = (comp && comp.format) || { width: 1920, height: 1080, frames: 1 };
+        const hap = Number(node.haperture) || 36;
+        if (kind === "scene") {
+            const found = [];
+            for (const key of Object.keys((this._scenes) || {})) {
+                const scene = this.previzScene ? this.previzScene(key) : null;
+                if (!scene) continue;
+                const label = (this.tabLabels && this.tabLabels[key]) || scene.name || key;
+                for (const c of sceneCameras(scene)) found.push({ scene, cam: c, label: `${label} \u203a ${c.name}` });
+            }
+            if (!found.length) throw new Error("no 3D tab with a camera is open");
+            const pick = found.length === 1 ? found[0] : await this._cpChoose(rec, "Camera from a 3D shot", found.map((x) => x.label)).then((i) => (i == null ? null : found[i]));
+            if (!pick) return null;
+            const first = Math.round((pick.scene.render && pick.scene.render.start) || 0);
+            const samples = sceneCameraSamples(pick.scene, pick.cam.id, first, first + Math.max(1, fmt.frames || 1) - 1);
+            if (pick.cam.aimed) notice("warn", "An aimed camera", "Its look-at target is not read: the keys are of its own turn.");
+            return { tracks: cameraKeys(samples, hap, fmt.width, fmt.height), from: pick.label, frames: samples.length };
+        }
+        const file = await new Promise((done) => openFilePicker(this.container, {
+            id: "comp-camera", title: "Camera file", kind: "comp", exts: [".chan"], go: "Use",
+            note: "One line a frame: frame, translate x y z, rotate x y z (degrees), and the vertical field of view if known.",
+            onPick: async ([f]) => { done(f || null); return { ok: !!f, message: f ? "" : "Pick a file." }; },
+        }));
+        if (!file) return null;
+        const q = new URLSearchParams({ file: file.path, comp: rec.path || "" });
+        const res = await api.fetchApi(`/imageviewer/comp_camera?${q}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        const keys = data.keys || [];
+        const f0 = keys.length ? keys[0].f : 0;
+        const samples = keys.map((k) => ({ ...k, f: k.f - f0 }));
+        return { tracks: cameraKeys(samples, hap, fmt.width, fmt.height), from: baseOf(file.path), frames: samples.length };
+    },
+
+    /** One of several things, in a small dialog over the comp: the index picked, or null. */
+    _cpChoose(rec, title, labels) {
+        const doc = rec.el.ownerDocument;
+        const el = (tag, cls, text) => { const e = doc.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+        return new Promise((done) => {
+            const shade = el("div", "cp-dlg-shade");
+            const box = el("div", "cp-dlg cp-choose");
+            box.append(el("h3", "", title));
+            const sel = el("select", "cp-choose-sel");
+            labels.forEach((l, i) => { const o = el("option", "", l); o.value = String(i); sel.append(o); });
+            const r = el("div", "cp-field"); r.append(sel); box.append(r);
+            const go = el("div", "cp-go");
+            const cancel = el("button", "mg-btn", "Cancel");
+            const ok = el("button", "mg-btn on", "Use");
+            go.append(cancel, ok); box.append(go); shade.append(box);
+            const end = (v) => { shade.remove(); done(v); };
+            cancel.addEventListener("click", () => end(null));
+            ok.addEventListener("click", () => end(Number(sel.value)));
+            box.addEventListener("keydown", (e) => {
+                e.stopPropagation();
+                if (e.key === "Escape") { e.preventDefault(); end(null); } else if (e.key === "Enter") { e.preventDefault(); end(Number(sel.value)); }
+            });
+            shade.addEventListener("pointerdown", (e) => { e.stopPropagation(); if (e.target === shade) end(null); });
+            rec.el.append(shade);
+            setTimeout(() => sel.focus(), 0);
+        });
     },
 
     _cpPickFootage(cb) {
@@ -1022,14 +1125,17 @@ export const CompPanelMixin = {
     /** A finished render: said with its path, put in the History, and (unless asked not to) on the canvas. */
     async compLand(result, { canvas = true } = {}) {
         if (!result) return;
-        notice("success", "Comp rendered", "output/" + (result.relative || baseOf(result.path)));
+        notice("success", "Comp rendered", (result.views && result.views.length > 1 ? `${result.views.length} views, ` : "") + "output/" + (result.relative || baseOf(result.path)));
         if (result.notes && result.notes.length) notice("warn", "Some footage was not there", result.notes.slice(0, 3).join("; "));
-        const landed = result.kind === "video" ? [result.path] : (result.paths || [result.path]);
-        if (this.exportLanded) this.exportLanded(landed);
-        if (canvas && this.previzNodeForRender) {
-            await this.previzNodeForRender(result.kind === "video"
-                ? { kind: "video", path: result.path }
-                : { kind: "image", isSequence: !!result.isSequence, seqDir: result.seqDir, path: result.path });
+        // A comp with views rendered one output a view; each lands.
+        for (const r of (result.views && result.views.length ? result.views : [result])) {
+            const landed = r.kind === "video" ? [r.path] : (r.paths || [r.path]);
+            if (this.exportLanded) this.exportLanded(landed);
+            if (canvas && this.previzNodeForRender) {
+                await this.previzNodeForRender(r.kind === "video"
+                    ? { kind: "video", path: r.path }
+                    : { kind: "image", isSequence: !!r.isSequence, seqDir: r.seqDir, path: r.path });
+            }
         }
     },
 };
