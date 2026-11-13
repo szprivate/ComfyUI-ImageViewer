@@ -9,14 +9,19 @@ and a render of its Output by the export rule.
     GET  /imageviewer/comp_pixels?file=&comp=&frame=&offset=&cs=&max=
                                                           one frame of a Read: float16 premultiplied linear
                                                           RGBA, gzip; X-Comp-W / -H (sent) and -OW / -OH (the file's)
+    GET  /imageviewer/comp_deep?file=&comp=&frame=&offset=
+                                                          one frame of a DeepRead: counts (uint32) then samples (float32 x 6),
+                                                          gzip; X-Comp-W / -H, X-Deep-Samples (comp_deep.encode)
+    GET  /imageviewer/comp_camera?file=&comp=            a camera text file (.chan) read: {path, keys: [{f, t, r, vfov?}]}
     GET  /imageviewer/comp_ocio                          the OCIO config: {available, working, colorspaces, displays}
     GET  /imageviewer/comp_lut?src=&dst= | ?src=&display=&view=
                                                           a transform baked for the preview: float32 LUT, gzip;
                                                           X-Lut-Size, X-Lut-Shaper (comp_ocio.bake)
     GET  /imageviewer/comp_formats - the Send to Viewer node's formats and per-format options (file_writer)
     POST /imageviewer/comp_render {path, format, options? {bit_depth, compression, quality, compress_level, codec},
-                                   first_number?, padding?, first?, last?, name?, context?, display?, view?}
-                                                          -> {job}; GET ?job= -> its state; POST {job, cancel}
+                                   first_number?, padding?, first?, last?, name?, context?, display?, view?, views?}
+                                                          -> {job}; GET ?job= -> its state; POST {job, cancel}.
+                                                          A comp with views: one output per view, <name>_<view>
     POST /imageviewer/comp_export_nuke {path, name?, context?, bake?}
                                                           -> {job}: a .nk by the export rule (kind "comp"), the nodes
                                                           Nuke has none for baked to EXR beside it (comp_nuke);
@@ -44,6 +49,7 @@ from . import comp_model as M
 
 MAX_JOBS = 8
 PIXEL_MAX = 4096
+DEEP_MAX = 24_000_000   # samples the preview takes from one deep frame (about 576 MB as floats)
 
 
 class _Readers:
@@ -237,16 +243,14 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
 
     # ── rendering ────────────────────────────────────────────────────────────
 
-    def run_job(job, comp, comp_path, spec):
-        sources = comp_io.Sources(comp_path, allow=path_access.may_serve)
+    def run_view(job, comp, sources, spec, name, view):
+        """One view of a render (the comp's only one when it has none): its result."""
         fmt, f0, f1 = spec["format"], spec["first"], spec["last"]
         out_dir = folder_paths.get_output_directory()
-        name = spec["name"]
         writer = None
         try:
             enc = comp_io.display_encoder(spec.get("display"), spec.get("view"))
             frames = range(f0, f1 + 1)
-            job["total"] = len(frames)
             if fmt in comp_io.VIDEO_FORMATS:
                 how = export_rules.video_settings(fmt, spec.get("codec"), comp_io.film_quality(spec.get("quality")))
                 t = export_rules.target("comp", name, fmt, out_dir, spec.get("context"))
@@ -263,7 +267,9 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
                 hashes = "#" * pad
                 result = {"kind": "image", "isSequence": True, "seqDir": seq["folder"], "version": seq["version"],
                           "relative": seq["relative"].replace(".####.", f".{hashes}."), "firstNumber": start}
-            for f, img in comp_io.render_frames(comp, frames, sources):
+            if view:
+                result["view"] = view
+            for f, img in comp_io.render_frames(comp, frames, sources, view=view, close=False):
                 if job.get("cancel"):
                     raise InterruptedError
                 if writer is not None:
@@ -280,14 +286,29 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
             if writer is not None:
                 writer.close(True)
                 writer = None
-            job.update(state="done", result=dict(result, frames=job["done"], notes=sources.notes))
+            result["frames"] = f1 - f0 + 1
+            return result
+        finally:
+            if writer is not None:
+                writer.close(False)
+
+    def run_job(job, comp, comp_path, spec):
+        sources = comp_io.Sources(comp_path, allow=path_access.may_serve)
+        try:
+            views = spec.get("views") or [None]
+            results = []
+            for v in views:
+                # Each view its own output by the export rule: <name>_<view>.
+                results.append(run_view(job, comp, sources, spec, f"{spec['name']}_{v}" if v else spec["name"], v))
+            result = dict(results[0], frames=job["done"], notes=sources.notes)
+            if views != [None]:
+                result["views"] = results
+            job.update(state="done", result=result)
         except InterruptedError:
             job.update(state="stopped")
         except Exception as e:  # noqa: BLE001 - said to the page
             job.update(state="error", error=str(e))
         finally:
-            if writer is not None:
-                writer.close(False)
             sources.close()
             job["ended"] = time.time()
 
@@ -338,10 +359,16 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
                 "quality": options.get("quality", body.get("quality")),
                 "name": export_rules.slug(body.get("name") or base, "comp"), "context": body.get("context"),
                 "display": str(body.get("display") or ""), "view": str(body.get("view") or "")}
+        # A comp with views renders every one of them (or the ones asked for), one output each.
+        have = M.views_of(comp)
+        asked = body.get("views")
+        spec["views"] = [v for v in (asked if isinstance(asked, list) else have) if v in have] if have else []
+        if have and not spec["views"]:
+            return err(f"the comp's views are {', '.join(have)}")
         for k in [k for k, j in jobs.items() if j.get("ended")][: max(0, len(jobs) - MAX_JOBS + 1)]:
             jobs.pop(k, None)
         jid = secrets.token_hex(8)
-        job = jobs[jid] = {"state": "running", "done": 0, "total": f1 - f0 + 1}
+        job = jobs[jid] = {"state": "running", "done": 0, "total": (f1 - f0 + 1) * max(1, len(spec["views"]))}
         threading.Thread(target=run_job, args=(job, comp, path, spec), daemon=True, name=f"comp-render-{jid}").start()
         return web.json_response({"job": jid, "total": job["total"]})
 
@@ -451,6 +478,61 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
             "X-Lut-Size": str(size), "X-Lut-Shaper": shaper, "X-ImageViewer-Enc": "gzip", "Cache-Control": "max-age=60",
             "Access-Control-Expose-Headers": "X-Lut-Size, X-Lut-Shaper, X-ImageViewer-Enc"})
 
+    # ── deep files and camera files ──────────────────────────────────────────
+
+    def deep_pixels(comp_path, node, frame):
+        src = readers.get(comp_path or None)
+        with pixel_lock:
+            path, info = src.info(node)
+            if info.get("kind") == "refused":
+                return 403, path_access.serve_refusal(path)
+            d = src.deep(node, frame)
+        if d is None:
+            return 404, f"{os.path.basename(path) or 'the DeepRead'} has no deep picture at frame {frame}"
+        if len(d["s"]) > DEEP_MAX:
+            return 413, f"{len(d['s'])} deep samples: more than the preview takes ({DEEP_MAX})"
+        return 200, d
+
+    async def get_deep(request):
+        q = request.query
+        comp_path = abspath(q.get("comp"))
+        try:
+            frame = int(q.get("frame") or 0)
+        except ValueError:
+            return err("frame is a number")
+        status, got = await off(deep_pixels, comp_path, read_node(q), frame)
+        if status != 200:
+            return err(got, status)
+        from . import comp_deep
+        data = await off(lambda: gzip.compress(comp_deep.encode(got), 1))
+        return web.Response(body=data, content_type="application/octet-stream", headers={
+            "X-Comp-W": str(got["w"]), "X-Comp-H": str(got["h"]), "X-Deep-Samples": str(len(got["s"])),
+            "X-ImageViewer-Enc": "gzip", "Cache-Control": "no-cache",
+            "Access-Control-Expose-Headers": "X-Comp-W, X-Comp-H, X-Deep-Samples, X-ImageViewer-Enc"})
+
+    def camera_file(path):
+        if not path or not path.lower().endswith(comp_io.CAMERA_EXTS):
+            return 400, f"a camera file is a {' / '.join(comp_io.CAMERA_EXTS)}"
+        if not path_access.is_allowed(path):
+            return 403, "not in the folders the viewer may read"
+        if not os.path.isfile(path):
+            return 404, "no such file"
+        if os.path.getsize(path) > comp_io.MAX_BYTES:
+            return 413, "too big for a camera file"
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            try:
+                return 200, comp_io.parse_camera_text(fh.read())
+            except ValueError as e:
+                return 422, str(e)
+
+    async def get_camera(request):
+        comp_path = abspath(request.query.get("comp"))
+        path = comp_io.resolve_file(request.query.get("file"), comp_path)
+        status, got = await off(camera_file, path)
+        if status != 200:
+            return err(got, status)
+        return web.json_response({"path": path, "keys": got}, headers={"Cache-Control": "no-cache"})
+
     async def get_formats(request):
         return web.json_response(comp_io.formats(), headers={"Cache-Control": "no-cache"})
 
@@ -464,6 +546,8 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
         add("POST", f"{prefix}/comp_save_as", save_as)
         add("GET", f"{prefix}/comp_source", get_source)
         add("GET", f"{prefix}/comp_pixels", get_pixels)
+        add("GET", f"{prefix}/comp_deep", get_deep)
+        add("GET", f"{prefix}/comp_camera", get_camera)
         add("GET", f"{prefix}/comp_render", render)
         add("POST", f"{prefix}/comp_render", render)
         add("GET", f"{prefix}/comp_export_nuke", export_nuke)

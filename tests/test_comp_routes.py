@@ -365,5 +365,84 @@ class CompRoutes(unittest.TestCase):
                 self.assertEqual((v.codec_context.width, v.codec_context.height), (30, 22))
         self.run_c(go)
 
+    def test_a_deep_exr_is_read_for_the_preview_and_the_render(self):
+        """A deep file written by comp_deep: GET comp_deep hands its samples to the page, sorted front first; a
+        DeepRead -> DeepHoldout -> render flattens it as the page does."""
+        D = importlib.import_module(self.pkg + ".comp_deep")
+        from PIL import Image
+        w, h = 6, 4
+        n = np.array([2, 1, 0, 3] * 6, np.uint32)
+        s = np.zeros((int(n.sum()), 6), np.float32)
+        s[:, 0] = 0.5
+        s[:, 3] = 0.5
+        s[:, 4] = np.arange(len(s), 0, -1) % 5 + 1     # not in depth order: the reader sorts
+        s[:, 5] = s[:, 4]
+        path = os.path.join(self.dirs["output"], "deep.exr")
+        D.write_deep(path, {"w": w, "h": h, "n": n, "s": s})
+
+        async def go(c):
+            r = await c.get("/imageviewer/comp_deep", params={"file": path, "frame": "0"})
+            self.assertEqual(r.status, 200)
+            self.assertEqual((r.headers["X-Comp-W"], r.headers["X-Comp-H"], r.headers["X-Deep-Samples"]), ("6", "4", str(len(s))))
+            raw = gzip.decompress(await r.read())
+            counts = np.frombuffer(raw[: w * h * 4], "<u4")
+            samples = np.frombuffer(raw[w * h * 4:], "<f4").reshape(-1, 6)
+            self.assertEqual(counts.tolist(), n.tolist())
+            self.assertTrue(samples[0, 4] <= samples[1, 4])
+            r = await c.get("/imageviewer/comp_deep", params={"file": os.path.join(self.outside, "x.exr")})
+            self.assertEqual(r.status, 403)
+            comp = {"comp": 1, "format": {"width": 6, "height": 4, "fps": 24, "frames": 1}, "output": "Output1",
+                    "nodes": [{"id": "DeepRead1", "type": "deepread", "file": "deep.exr", "inputs": []},
+                              {"id": "DeepFlatten1", "type": "deepflatten", "inputs": ["DeepRead1"]},
+                              {"id": "Output1", "type": "output", "inputs": ["DeepFlatten1"]}]}
+            cp = os.path.join(self.dirs["output"], "deep.comp.json")
+            await self.j(c, "/imageviewer/comp", {"path": cp, "comp": comp})
+            st = await self.render(c, cp, format="png", first=0, last=0)
+            self.assertEqual(st["state"], "done", st)
+            px = np.asarray(Image.open(st["result"]["path"]).convert("RGBA"))
+            self.assertEqual(px[0, 0, 3], 191)     # two samples of alpha 0.5: 0.75
+            self.assertEqual(px[0, 2, 3], 0)       # none
+        self.run_c(go)
+
+    def test_a_camera_file_is_read_as_keys(self):
+        cam = os.path.join(self.dirs["output"], "shot.chan")
+        with open(cam, "w") as fh:
+            fh.write("# frame tx ty tz rx ry rz vfov\n2 0 1 5 0 10 0 40\n1 0 1 6 0 0 0 40\nnot a line\n")
+
+        async def go(c):
+            r = await c.get("/imageviewer/comp_camera", params={"file": cam})
+            self.assertEqual(r.status, 200, await r.text())
+            keys = (await r.json())["keys"]
+            self.assertEqual([k["f"] for k in keys], [1, 2])
+            self.assertEqual(keys[1]["r"], [0, 10, 0])
+            self.assertEqual(keys[0]["vfov"], 40)
+            r = await c.get("/imageviewer/comp_camera", params={"file": self.png})
+            self.assertEqual(r.status, 400)
+        self.run_c(go)
+
+    def test_a_comp_with_views_renders_one_output_per_view(self):
+        from PIL import Image
+        for name, col in (("eye_left.png", (255, 0, 0)), ("eye_right.png", (0, 255, 0))):
+            Image.new("RGBA", (12, 8), col + (255,)).save(os.path.join(self.dirs["output"], name))
+
+        async def go(c):
+            comp = {"comp": 1, "format": {"width": 12, "height": 8, "fps": 24, "frames": 1, "views": ["left", "right"]},
+                    "output": "Output1",
+                    "nodes": [{"id": "Read1", "type": "read", "file": "eye_%V.png", "inputs": []},
+                              {"id": "Output1", "type": "output", "inputs": ["Read1"]}]}
+            cp = os.path.join(self.dirs["output"], "stereo.comp.json")
+            await self.j(c, "/imageviewer/comp", {"path": cp, "comp": comp})
+            st = await self.render(c, cp, format="png", first=0, last=0)
+            self.assertEqual(st["state"], "done", st)
+            got = {v["view"]: v["path"] for v in st["result"]["views"]}
+            self.assertEqual(sorted(got), ["left", "right"])
+            self.assertIn("stereo_left", os.path.basename(got["left"]))
+            self.assertEqual(tuple(np.asarray(Image.open(got["left"]).convert("RGB"))[2, 2]), (255, 0, 0))
+            self.assertEqual(tuple(np.asarray(Image.open(got["right"]).convert("RGB"))[2, 2]), (0, 255, 0))
+            one = await self.render(c, cp, format="png", first=0, last=0, views=["right"])
+            self.assertEqual([v["view"] for v in one["result"]["views"]], ["right"])
+        self.run_c(go)
+
+
 if __name__ == "__main__":
     unittest.main()
