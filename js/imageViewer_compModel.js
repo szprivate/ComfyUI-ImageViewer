@@ -864,11 +864,24 @@ export const mat = {
 /** `src` drawn through `m` (source pixels -> output pixels) into a w x h picture, bilinear, transparent outside. */
 export function resample(src, m, w, h) {
     const out = blank(w, h), o = out.data, s = src.data, sw = src.w, sh = src.h;
-    if (m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1 && m[4] === 0 && m[5] === 0 && sw === w && sh === h) { o.set(s); return out; }
+    if (m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1 && m[4] === 0 && m[5] === 0 && sw === w && sh === h) { o.set(s); return src.bb ? O.withBox(out, src.bb) : out; }
     const iv = mat.inv(m);
-    for (let y = 0; y < h; y++) {
+    // With a box: only the output pixels its corners land in (a pixel more all round, for the bilinear reach).
+    let X0 = 0, Y0 = 0, X1 = w, Y1 = h;
+    if (src.bb) {
+        const [bx0, by0, bx1, by1] = src.bb;
+        if (O.boxEmpty(src.bb)) return O.withBox(out, [0, 0, 0, 0]);
+        let lx = Infinity, ly = Infinity, hx = -Infinity, hy = -Infinity;
+        for (const [cx, cy] of [[bx0 - 1, by0 - 1], [bx1 + 1, by0 - 1], [bx0 - 1, by1 + 1], [bx1 + 1, by1 + 1]]) {
+            const X = m[0] * cx + m[2] * cy + m[4], Y = m[1] * cx + m[3] * cy + m[5];
+            lx = Math.min(lx, X); hx = Math.max(hx, X); ly = Math.min(ly, Y); hy = Math.max(hy, Y);
+        }
+        [X0, Y0, X1, Y1] = O.boxClip([Math.floor(lx) - 1, Math.floor(ly) - 1, Math.ceil(hx) + 1, Math.ceil(hy) + 1], w, h);
+        O.withBox(out, [X0, Y0, X1, Y1]);
+    }
+    for (let y = Y0; y < Y1; y++) {
         const py = y + 0.5;
-        for (let x = 0; x < w; x++) {
+        for (let x = X0; x < X1; x++) {
             const px = x + 0.5;
             const u = iv[0] * px + iv[2] * py + iv[4] - 0.5;
             const v = iv[1] * px + iv[3] * py + iv[5] - 0.5;
@@ -960,7 +973,8 @@ export function conform(img, w, h) {
         const s = (y - dy) * img.w * 4;
         out.data.set(img.data.subarray(s, s + cw * 4), y * w * 4);
     }
-    return out;
+    const b = O.boxOf(img);
+    return O.withBox(out, O.boxClip([b[0], b[1] + dy, b[2], b[3] + dy], w, h));
 }
 /** One channel of w0 x h0 numbers laid into w x h the same way. */
 export function conformPlane(a, w0, h0, w, h) {
@@ -1022,9 +1036,21 @@ const OPS = {
     stencil: (A, B, a) => B * (1 - a),
 };
 
+/** Operations that give B where A is 0 (so only A's box needs working out). */
+const B_WHERE_NO_A = new Set(["over", "under", "plus", "screen", "atop"]);
 export function mergeImages(Bimg, Aimg, Mimg, op, mix) {
     const w = Bimg.w, h = Bimg.h, out = blank(w, h), o = out.data, B = Bimg.data, A = Aimg.data, M = Mimg ? Mimg.data : null;
     const f = OPS[op] || OPS.over;
+    if (Aimg.bb && B_WHERE_NO_A.has(OPS[op] ? op : "over") && !O.boxWhole(Aimg.bb, w, h)) {
+        o.set(B);
+        const [x0, y0, x1, y1] = O.boxClip(Aimg.bb, w, h);
+        for (let y = y0; y < y1; y++) for (let x = x0, i = (y * w + x0) * 4; x < x1; x++, i += 4) {
+            const a = A[i + 3], b = B[i + 3];
+            const t = M ? mix * M[i + 3] : mix;
+            for (let k = 0; k < 4; k++) { const r = f(A[i + k], B[i + k], a, b); o[i + k] = B[i + k] + (r - B[i + k]) * t; }
+        }
+        return Bimg.bb ? O.withBox(out, O.boxUnion(Bimg.bb, Aimg.bb)) : out;
+    }
     for (let i = 0; i < w * h * 4; i += 4) {
         const a = A[i + 3], b = B[i + 3];
         const t = M ? mix * M[i + 3] : mix;
@@ -1267,7 +1293,8 @@ export function renderNode(comp, id, frame, ctx) {
             const plane = CH.channelOf(mp, exOf(mi, f), n.mask_channel || "a");
             m = plane ? conformPlane(plane, mp.w, mp.h, img.w, img.h) : new Float32Array(img.w * img.h);
         }
-        return maskMix(src, sex, img, ex, m, mix, (n.mask_invert || "off") === "on");
+        const [mo, mex] = maskMix(src, sex, img, ex, m, mix, (n.mask_invert || "off") === "on");
+        return [src.bb && img.bb ? O.withBox(mo, O.boxUnion(src.bb, img.bb)) : mo, mex];
     };
     // A SPATIAL node: its picture and every extra channel through the same operation.
     const spatial = (srcId, f, d1, fn) => { const src = run(srcId, f, d1); return X(fn(src), CH.mapExtras(exOf(srcId, f), src.w, src.h, fn)); };
@@ -1285,7 +1312,9 @@ export function renderNode(comp, id, frame, ctx) {
             const src = ctx.source ? ctx.source(n, f) : null;
             // A source may come shrunk (the page's proxy): `ow` x `oh` is the file's own size then.
             const k = src ? scale * (src.ow ? src.ow / src.w : 1) : 1;
-            return src ? resample(src, fitMatrix(src.w, src.h, W, H, n.fit || "fit", k), W, H) : blank(W, H);
+            if (!src) return O.withBox(blank(W, H), [0, 0, 0, 0]);
+            const img = resample(src, fitMatrix(src.w, src.h, W, H, n.fit || "fit", k), W, H);
+            return O.withBox(img, O.scanBox(img));
         }
         case "constant": {
             const c = paramAt(n, "color", f) || [0, 0, 0, 1];
@@ -1303,7 +1332,8 @@ export function renderNode(comp, id, frame, ctx) {
         case "grade": {
             const p = {};
             for (const k of Object.keys(NODE_TYPES.grade.params)) p[k] = paramAt(n, k, f);
-            return gradeImage(run(n.inputs[0], f, d1), p);
+            const g0 = run(n.inputs[0], f, d1);
+            return g0.bb ? O.withBox(gradeImage(g0, p), g0.bb) : gradeImage(g0, p);
         }
         case "lumakeyer": case "chromakeyer": case "erode": case "laplacian": case "channelmath": {
             const p = {};
@@ -1355,7 +1385,12 @@ export function renderNode(comp, id, frame, ctx) {
             const tl = paramAt(n, "topleft", f) || [0, 0];
             const F = inFmt(n), br = paramAt(n, "bottomright", f) || [F.width, F.height];
             const soft = paramAt(n, "softness", f) * scale;
-            return spatial(n.inputs[0], f, d1, (p) => O.cropImage(p, tl[0] * scale, tl[1] * scale, br[0] * scale, br[1] * scale, soft));
+            return spatial(n.inputs[0], f, d1, (p) => {
+                const c = O.cropImage(p, tl[0] * scale, tl[1] * scale, br[0] * scale, br[1] * scale, soft);
+                const L = tl[0] * scale, T = tl[1] * scale, R = br[0] * scale, B = br[1] * scale, pb = O.boxOf(p);
+                const cb = O.boxClip([Math.floor(L) - 1, Math.floor(T) - 1, Math.ceil(R) + 1, Math.ceil(B) + 1], p.w, p.h);
+                return O.withBox(c, O.boxClip([Math.max(cb[0], pb[0]), Math.max(cb[1], pb[1]), Math.min(cb[2], pb[2]), Math.min(cb[3], pb[3])], p.w, p.h));
+            });
         }
         case "shuffle": {
             const src = run(n.inputs[0], f, d1);
@@ -1400,7 +1435,7 @@ export function renderNode(comp, id, frame, ctx) {
             const src = n.inputs[0] ? run(n.inputs[0], f, d1) : null, w = src ? src.w : W, h = src ? src.h : H;
             if (w !== W || h !== H) matte = conformPlane(matte, W, H, w, h);
             const [img, ex] = CH.rotoWrite(matte, w, h, src, exOf(n.inputs[0], f), n.write || "rgba", n.premult !== "off");
-            return X(img, ex);
+            return X(O.withBox(img, O.scanBox(img)), ex);
         }
         case "vectors": return vectorsOf(n.inputs[0], f, d1, n);
         case "motionblur": {

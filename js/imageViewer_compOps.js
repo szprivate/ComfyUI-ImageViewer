@@ -10,6 +10,34 @@
 
 export function blank(w, h) { return { w, h, data: new Float32Array(w * h * 4) }; }
 
+// ── bounding boxes ───────────────────────────────────────────────────────────
+// A picture may carry `bb` = [x0, y0, x1, y1] (pixels, x1 / y1 past the end): every channel is exactly 0
+// outside it. It is only a promise that lets an operation skip the empty part (Merge, Transform, Blur go
+// through less); a picture without one counts as full. The numpy render has no boxes: the numbers are the same.
+
+/** The box of the non-zero pixels of `img` (any of r g b a), [0, 0, 0, 0] when empty. */
+export function scanBox(img) {
+    const { w, h, data: d } = img;
+    let x0 = w, y0 = h, x1 = 0, y1 = 0;
+    for (let y = 0; y < h; y++) {
+        let row = y * w * 4, lo = -1, hi = -1;
+        for (let x = 0; x < w; x++, row += 4) if (d[row] || d[row + 1] || d[row + 2] || d[row + 3]) { if (lo < 0) lo = x; hi = x; }
+        if (lo < 0) continue;
+        if (lo < x0) x0 = lo; if (hi + 1 > x1) x1 = hi + 1;
+        if (y < y0) y0 = y; y1 = y + 1;
+    }
+    return x1 > x0 ? [x0, y0, x1, y1] : [0, 0, 0, 0];
+}
+/** The box of `img`: its own, else the whole picture. */
+export function boxOf(img) { return img.bb || [0, 0, img.w, img.h]; }
+export const boxEmpty = (b) => b[2] <= b[0] || b[3] <= b[1];
+export const boxUnion = (a, b) => (boxEmpty(a) ? b : boxEmpty(b) ? a : [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])]);
+export const boxClip = (b, w, h) => { const c = [Math.max(0, b[0]), Math.max(0, b[1]), Math.min(w, b[2]), Math.min(h, b[3])]; return boxEmpty(c) ? [0, 0, 0, 0] : c; };
+export const boxGrow = (b, r, w, h) => (boxEmpty(b) ? b : boxClip([b[0] - r, b[1] - r, b[2] + r, b[3] + r], w, h));
+export const boxWhole = (b, w, h) => b[0] <= 0 && b[1] <= 0 && b[2] >= w && b[3] >= h;
+/** `img` with `bb` set (dropped when it is the whole picture). */
+export function withBox(img, bb) { if (bb && !boxWhole(bb, img.w, img.h)) img.bb = bb; return img; }
+
 export function boxesForGauss(sigma, n = 3) {
     if (sigma <= 0) return new Array(n).fill(1);
     const wIdeal = Math.sqrt((12 * sigma * sigma) / n + 1);
@@ -49,8 +77,27 @@ function boxAxis(a, w, h, r, horizontal) {
 export function blurImage(img, size) {
     const sigma = Math.max(0, size) / 2;
     if (sigma <= 0) return img;
+    const boxes = boxesForGauss(sigma);
+    if (img.bb) {
+        // Only the box grown by how far the three passes reach (and a pixel): outside it everything stays 0,
+        // and inside, the edge of the piece is 0 as the picture's own pixels there are.
+        const reach = boxes.reduce((t, s) => t + ((s - 1) >> 1), 0) + 1;
+        const sub = boxGrow(img.bb, reach, img.w, img.h);
+        if (boxEmpty(sub)) return withBox({ w: img.w, h: img.h, data: new Float32Array(img.w * img.h * 4) }, [0, 0, 0, 0]);
+        if (!boxWhole(sub, img.w, img.h)) {
+            const sw = sub[2] - sub[0], sh = sub[3] - sub[1], a = new Float64Array(sw * sh * 4);
+            for (let y = 0; y < sh; y++) {
+                const from = ((sub[1] + y) * img.w + sub[0]) * 4;
+                for (let k = 0; k < sw * 4; k++) a[y * sw * 4 + k] = img.data[from + k];
+            }
+            for (const s of boxes) { const r = (s - 1) >> 1; boxAxis(a, sw, sh, r, true); boxAxis(a, sw, sh, r, false); }
+            const out = new Float32Array(img.w * img.h * 4);
+            for (let y = 0; y < sh; y++) out.set(a.subarray(y * sw * 4, (y + 1) * sw * 4), ((sub[1] + y) * img.w + sub[0]) * 4);
+            return withBox({ w: img.w, h: img.h, data: out }, sub);
+        }
+    }
     const a = Float64Array.from(img.data);
-    for (const s of boxesForGauss(sigma)) {
+    for (const s of boxes) {
         const r = (s - 1) >> 1;
         boxAxis(a, img.w, img.h, r, true);
         boxAxis(a, img.w, img.h, r, false);
