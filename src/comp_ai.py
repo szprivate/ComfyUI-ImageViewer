@@ -176,11 +176,15 @@ def prepare(comp, comp_path, node_id, frame, sources, input_dir, *, ocio=None, w
     f = int(frame)
     pic, sel = _frame_input(comp, kind, ins, f, sources, ocio)
     h, w = pic.shape[:2]
-    res, action, k = _generate(kind, n, pic, sel, input_dir, wid=wid or n.get("workflow") or None, graph=graph,
+    wid = wid or n.get("workflow") or None
+    if kind == "depth":
+        wid = pick_workflow(kind, "", wid, node_classes)
+    res, action, k = _generate(kind, n, pic, sel, input_dir, wid=wid, graph=graph,
                                tune=tune, models=_node_models(n, models), folder_paths=folder_paths,
                                node_classes=node_classes)
     rec = {"comp": os.path.abspath(comp_path), "node": node_id, "frame": f, "kind": kind, "w": w, "h": h, "k": k,
-           "box": res["box"], "pic": pic if kind == "inpaint" else None, "at": time.time()}
+           "box": res["box"], "pic": pic if kind == "inpaint" else None, "at": time.time(),
+           "near": kind == "depth" and near_white(wid)}
     with _LOCK:
         _JOBS[res["job"]] = rec
         while len(_JOBS) > MAX_JOBS:
@@ -301,7 +305,7 @@ def prepare_batch(comp, comp_path, node_id, frames, sources, input_dir, *, ocio=
     if len(json.dumps(merged)) > MAX_BATCH_BYTES:
         raise AiError("the job is too large: set frames per job lower")
     rec = {"comp": os.path.abspath(comp_path), "node": node_id, "kind": kind, "frames": per, "at": time.time(),
-           "outputs": dict(zip(out_ids, done))}
+           "outputs": dict(zip(out_ids, done)), "near": near_white(wid)}
     with _LOCK:
         _BATCHES[run] = rec
         while len(_BATCHES) > MAX_JOBS:
@@ -337,24 +341,34 @@ def result_name(comp_path, node_id, kind, frame, run=""):
     return os.path.join(os.path.dirname(os.path.abspath(comp_path)), *rel.split("/")), rel
 
 
-def read_depth(path):
+def near_white(wid):
+    """Whether workflow *wid* answers a map that is near = white already (``"depth": "near_white"``: MoGe, Lotus,
+    Marigold - ComfyUI's node scales each frame on its own) rather than the model's distance."""
+    e, _g = G._builtin(wid) if wid else (None, None)
+    return bool(e) and e.get("depth") == "near_white"
+
+
+def read_depth(path, near=False):
     """A depth workflow's answer as float32 [H, W], larger = farther: a float EXR as the model wrote it (read with
-    PyAV, which ComfyUI itself writes them with), or a picture taken as a depth map already (near white)."""
-    if str(path).lower().endswith(".exr"):
-        import av
-        with open(path, "rb") as fh:
-            data = fh.read()
-        frames = av.CodecContext.create("exr", "r").decode(av.Packet(data))
-        if not frames:
-            raise AiError(f"{os.path.basename(path)} could not be read")
-        f = frames[0]
-        fmt = f.format.name
-        a = f.to_ndarray(format="grayf32le" if fmt.startswith("gray") else "gbrpf32le").astype(np.float32)
-        if a.ndim == 3:
-            a = a[..., :3].mean(axis=2)
-        return np.nan_to_num(a, nan=0.0, posinf=0.0, neginf=0.0)
-    px = P.image_pixels(path)[..., :3].astype(np.float32)
-    return 1.0 - (px[..., 0] * 0.299 + px[..., 1] * 0.587 + px[..., 2] * 0.114) / 255.0
+    PyAV, which ComfyUI itself writes them with), or a picture taken as a depth map already (near white). With
+    *near* (or for a picture) the values are near = 1 and become 2 - v: 1 (nearest) .. 2, every one above 0, so
+    that none is taken for "no depth"."""
+    if not str(path).lower().endswith(".exr"):
+        px = P.image_pixels(path)[..., :3].astype(np.float32)
+        return 2.0 - (px[..., 0] * 0.299 + px[..., 1] * 0.587 + px[..., 2] * 0.114) / 255.0
+    import av
+    with open(path, "rb") as fh:
+        data = fh.read()
+    frames = av.CodecContext.create("exr", "r").decode(av.Packet(data))
+    if not frames:
+        raise AiError(f"{os.path.basename(path)} could not be read")
+    f = frames[0]
+    fmt = f.format.name
+    a = f.to_ndarray(format="grayf32le" if fmt.startswith("gray") else "gbrpf32le").astype(np.float32)
+    if a.ndim == 3:
+        a = a[..., :3].mean(axis=2)
+    a = np.nan_to_num(a, nan=0.0, posinf=0.0, neginf=0.0)
+    return (2.0 - np.clip(a, 0.0, 1.0)).astype(np.float32) if near else a
 
 
 def _fit_float(a, w, h):
@@ -435,7 +449,7 @@ def place(job, result_path):
     if not rec:
         raise AiError("that run is no longer known (the server restarted?) - run it again")
     if rec["kind"] == "depth":
-        out = depth_maps([_fit_float(read_depth(result_path), rec["w"], rec["h"])])[0]
+        out = depth_maps([_fit_float(read_depth(result_path, rec.get("near")), rec["w"], rec["h"])])[0]
     else:
         out = _answer(rec, P.image_pixels(result_path))
     path, rel = result_name(rec["comp"], rec["node"], rec["kind"], rec["frame"], job[:6])
@@ -468,7 +482,7 @@ def place_batch(run, results):
     todo = [(f, src, rec["frames"].get(f)) for f, src in sorted(((int(a), b) for a, b in results.items()), key=lambda x: x[0])]
     todo = [x for x in todo if x[2]]
     if rec["kind"] == "depth":
-        outs = depth_maps([_fit_float(read_depth(src), per["w"], per["h"]) for _f, src, per in todo])
+        outs = depth_maps([_fit_float(read_depth(src, rec.get("near")), per["w"], per["h"]) for _f, src, per in todo])
     else:
         outs = None
     for i, (f, src, per) in enumerate(todo):

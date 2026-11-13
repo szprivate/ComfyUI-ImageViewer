@@ -1,0 +1,72 @@
+{
+ "1": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "example.png",
+   "upload": "image"
+  },
+  "_meta": {
+   "title": "paint:image"
+  }
+ },
+ "2": {
+  "class_type": "LoadMoGeModel",
+  "inputs": {
+   "model_name": "moge_2_vitl_normal_fp16.safetensors"
+  },
+  "_meta": {
+   "title": "Load MoGe"
+  }
+ },
+ "3": {
+  "class_type": "MoGeInference",
+  "inputs": {
+   "moge_model": [
+    "2",
+    0
+   ],
+   "image": [
+    "1",
+    0
+   ],
+   "resolution_level": 9,
+   "fov_x_degrees": 0.0,
+   "batch_size": 4,
+   "force_projection": true,
+   "apply_mask": true,
+   "refine_steps": 3
+  },
+  "_meta": {
+   "title": "Run MoGe"
+  }
+ },
+ "4": {
+  "class_type": "MoGeRender",
+  "inputs": {
+   "moge_geometry": [
+    "3",
+    0
+   ],
+   "output": "depth"
+  },
+  "_meta": {
+   "title": "Render MoGe Geometry"
+  }
+ },
+ "5": {
+  "class_type": "SaveImageAdvanced",
+  "inputs": {
+   "images": [
+    "4",
+    0
+   ],
+   "filename_prefix": "comp/ai/depth",
+   "format": "exr",
+   "format.bit_depth": "32-bit float",
+   "format.input_color_space": "linear"
+  },
+  "_meta": {
+   "title": "paint:output"
+  }
+ }
+}

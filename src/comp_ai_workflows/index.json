@@ -1,5 +1,5 @@
 {
- "_note": "The Comp's AI nodes' workflows, per node: a short list of what fits the node's task on a film's frames. An id is Paint's built-in of that id (src/paint_workflows) or one of the entries below (files in this folder). The first one this ComfyUI has is the node's default.",
+ "_note": "The Comp's AI nodes' workflows, per node: a short list of what fits the node's task on a film's frames. An id is Paint's built-in of that id (src/paint_workflows) or one of the entries below (files in this folder). The first one this ComfyUI has is the node's default. A depth entry answers its model's distance as a float EXR, or with \"depth\": \"near_white\" a map that is already near = white (scaled per frame by ComfyUI's node).",
  "lists": {
   "matte": {
    "action": "background",
@@ -20,7 +20,14 @@
    "action": "depth",
    "workflows": [
     "comp_da3_metric",
-    "comp_da3_mono"
+    "comp_da3_mono",
+    "comp_da3_base",
+    "comp_da3_small",
+    "comp_moge3_vitl",
+    "comp_moge3_vitg",
+    "comp_moge2_vitl",
+    "comp_lotus_depth",
+    "comp_marigold_v2_depth"
    ]
   },
   "inpaint": {
@@ -106,6 +113,260 @@
      "directory": "geometry_estimation"
     }
    ]
+  },
+  {
+   "id": "comp_da3_base",
+   "label": "Depth Anything 3 Base (lighter, 0.5 GB)",
+   "file": "da3_base.json",
+   "api": false,
+   "format": "api",
+   "actions": [
+    "depth"
+   ],
+   "size": {
+    "mp": null,
+    "mult": 1,
+    "max": 8192
+   },
+   "from": "utility_depth_anything3_image_depth_estimation (ComfyUI's own nodes)",
+   "nodes": [
+    "DA3Inference",
+    "DA3Render",
+    "LoadDA3Model",
+    "LoadImage",
+    "SaveImageAdvanced"
+   ],
+   "models": [
+    {
+     "name": "depth_anything_3_base.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Depth-Anything-3/resolve/main/geometry_estimation/depth_anything_3_base.safetensors",
+     "directory": "geometry_estimation"
+    }
+   ]
+  },
+  {
+   "id": "comp_da3_small",
+   "label": "Depth Anything 3 Small (fastest, 0.1 GB)",
+   "file": "da3_small.json",
+   "api": false,
+   "format": "api",
+   "actions": [
+    "depth"
+   ],
+   "size": {
+    "mp": null,
+    "mult": 1,
+    "max": 8192
+   },
+   "from": "utility_depth_anything3_image_depth_estimation (ComfyUI's own nodes)",
+   "nodes": [
+    "DA3Inference",
+    "DA3Render",
+    "LoadDA3Model",
+    "LoadImage",
+    "SaveImageAdvanced"
+   ],
+   "models": [
+    {
+     "name": "depth_anything_3_small.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Depth-Anything-3/resolve/main/geometry_estimation/depth_anything_3_small.safetensors",
+     "directory": "geometry_estimation"
+    }
+   ]
+  },
+  {
+   "id": "comp_moge3_vitl",
+   "label": "MoGe 3 Large (sharp edges, scaled per frame)",
+   "file": "moge3_vitl.json",
+   "api": false,
+   "format": "api",
+   "actions": [
+    "depth"
+   ],
+   "size": {
+    "mp": null,
+    "mult": 1,
+    "max": 8192
+   },
+   "from": "utility_moge3_geometry_estimation (ComfyUI's own nodes)",
+   "nodes": [
+    "LoadImage",
+    "LoadMoGeModel",
+    "MoGeInference",
+    "MoGeRender",
+    "SaveImageAdvanced"
+   ],
+   "models": [
+    {
+     "name": "moge_3_vitl_fp16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MoGe/resolve/main/geometry_estimation/moge_3_vitl_fp16.safetensors",
+     "directory": "geometry_estimation"
+    }
+   ],
+   "depth": "near_white"
+  },
+  {
+   "id": "comp_moge3_vitg",
+   "label": "MoGe 3 Giant (most detail, 2.5 GB, scaled per frame)",
+   "file": "moge3_vitg.json",
+   "api": false,
+   "format": "api",
+   "actions": [
+    "depth"
+   ],
+   "size": {
+    "mp": null,
+    "mult": 1,
+    "max": 8192
+   },
+   "from": "utility_moge3_geometry_estimation (ComfyUI's own nodes)",
+   "nodes": [
+    "LoadImage",
+    "LoadMoGeModel",
+    "MoGeInference",
+    "MoGeRender",
+    "SaveImageAdvanced"
+   ],
+   "models": [
+    {
+     "name": "moge_3_vitg_fp16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MoGe/resolve/main/geometry_estimation/moge_3_vitg_fp16.safetensors",
+     "directory": "geometry_estimation"
+    }
+   ],
+   "depth": "near_white"
+  },
+  {
+   "id": "comp_moge2_vitl",
+   "label": "MoGe 2 Large (scaled per frame)",
+   "file": "moge2_vitl.json",
+   "api": false,
+   "format": "api",
+   "actions": [
+    "depth"
+   ],
+   "size": {
+    "mp": null,
+    "mult": 1,
+    "max": 8192
+   },
+   "from": "utility_moge_depth_estimation (ComfyUI's own nodes)",
+   "nodes": [
+    "LoadImage",
+    "LoadMoGeModel",
+    "MoGeInference",
+    "MoGeRender",
+    "SaveImageAdvanced"
+   ],
+   "models": [
+    {
+     "name": "moge_2_vitl_normal_fp16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MoGe/resolve/main/geometry_estimation/moge_2_vitl_normal_fp16.safetensors",
+     "directory": "geometry_estimation"
+    }
+   ],
+   "depth": "near_white"
+  },
+  {
+   "id": "comp_lotus_depth",
+   "label": "Lotus Depth (diffusion, scaled per frame)",
+   "file": "lotus_depth.json",
+   "api": false,
+   "format": "api",
+   "actions": [
+    "depth"
+   ],
+   "size": {
+    "mp": 0.6,
+    "mult": 64,
+    "max": 2048
+   },
+   "from": "image_lotus_depth_v1_1 (ComfyUI's own nodes)",
+   "nodes": [
+    "BasicGuider",
+    "BasicScheduler",
+    "DisableNoise",
+    "ImageInvert",
+    "KSamplerSelect",
+    "LoadImage",
+    "LotusConditioning",
+    "SamplerCustomAdvanced",
+    "SaveImageAdvanced",
+    "SetFirstSigma",
+    "UNETLoader",
+    "VAEDecode",
+    "VAEEncode",
+    "VAELoader"
+   ],
+   "models": [
+    {
+     "name": "lotus-depth-d-v1-1.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/lotus/resolve/main/lotus-depth-d-v1-1.safetensors",
+     "directory": "diffusion_models"
+    },
+    {
+     "name": "vae-ft-mse-840000-ema-pruned.safetensors",
+     "url": "https://huggingface.co/stabilityai/sd-vae-ft-mse-original/resolve/main/vae-ft-mse-840000-ema-pruned.safetensors",
+     "directory": "vae"
+    }
+   ],
+   "depth": "near_white"
+  },
+  {
+   "id": "comp_marigold_v2_depth",
+   "label": "Marigold V2 (finest detail, slow, 22 GB, scaled per frame)",
+   "file": "marigold_v2_depth.json",
+   "api": false,
+   "format": "api",
+   "actions": [
+    "depth"
+   ],
+   "size": {
+    "mp": 1.0,
+    "mult": 16,
+    "max": 2048
+   },
+   "from": "image_marigold_v2_depth_estimation (ComfyUI's own nodes)",
+   "nodes": [
+    "BasicGuider",
+    "ConditioningLoader",
+    "DisableNoise",
+    "KSamplerSelect",
+    "LoadImage",
+    "LoraLoaderModelOnly",
+    "ManualSigmas",
+    "MarigoldV2PostProcess",
+    "ModelSamplingAuraFlow",
+    "SamplerCustomAdvanced",
+    "SaveImageAdvanced",
+    "UNETLoader",
+    "VAEDecode",
+    "VAEEncode",
+    "VAELoader"
+   ],
+   "models": [
+    {
+     "name": "qwen_image_edit_2509_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/marigold-v2-0/resolve/main/diffusion_models/qwen_image_edit_2509_int8_convrot.safetensors",
+     "directory": "diffusion_models"
+    },
+    {
+     "name": "marigold_v2_depth_log_stage2.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/marigold-v2-0/resolve/main/loras/marigold_v2_depth_log_stage2.safetensors",
+     "directory": "loras"
+    },
+    {
+     "name": "marigold_v2_depth_conditioning.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/marigold-v2-0/resolve/main/embeddings/marigold_v2_depth_conditioning.safetensors",
+     "directory": "embeddings"
+    },
+    {
+     "name": "marigold_v2_depth_log_stage2_vae.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/marigold-v2-0/resolve/main/vae/marigold_v2_depth_log_stage2_vae.safetensors",
+     "directory": "vae"
+    }
+   ],
+   "depth": "near_white"
   }
  ]
 }

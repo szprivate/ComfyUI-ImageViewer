@@ -125,11 +125,17 @@ A few notes on the newer nodes:
 AI nodes send the image coming into them through a ComfyUI workflow and keep the answer. Each node has its own short list of workflows, picked because they do that node's job and behave the same on every frame, so they suit footage as well as stills:
 
 - **AI Matte**: background removal (BiRefNet, RMBG, BEN2, InSPyReNet and two API removers). Its answer becomes the alpha.
-- **AI Depth**: Depth Anything 3 on ComfyUI's own nodes. *Metric* gives depth in the same scale from frame to frame, *Mono* the finest detail per frame. The model writes raw depth as float EXR, and the whole job is mapped through one range (the 1st to the 99th percentile of every frame), so the grey of a depth stays the same across the frames. The result is a 16-bit PNG, near is white.
+- **AI Depth**: the depth models ComfyUI runs with its own nodes, no node pack needed:
+  - *Depth Anything 3* Metric, Mono, Base and Small. Metric gives depth in the same scale from frame to frame, Mono the finest detail per frame, Base and Small are lighter and faster. These write raw depth as float EXR, and the whole job is mapped through one range (the 1st to the 99th percentile of every frame), so a depth keeps its grey across the frames.
+  - *MoGe 3* Large and Giant, *MoGe 2* Large: sharp edges and fine structure.
+  - *Lotus Depth*: a one-step diffusion model.
+  - *Marigold V2*: the most detail, but slow and a 22 GB download.
+
+  MoGe, Lotus and Marigold hand back a map that ComfyUI's node has already scaled to each frame, so on footage the grey of a depth can shift from frame to frame. Use Depth Anything 3 Metric when it has to hold still. The result is a 16-bit PNG, near is white.
 - **AI Inpaint**: fills inside the alpha of its mask input. With a prompt it lists the fill models, without one the removal models.
 - **AI Upscale**: upscalers that keep the picture rather than invent detail (an upscale model, SeedVR2, two API upscalers).
 
-The first workflow of a list that this ComfyUI can run is the default. Workflows whose node packs are not installed are left out; "files missing" means the model files are not downloaded yet.
+The first workflow of a list that this ComfyUI can run is the default. Workflows whose nodes this ComfyUI does not have are left out. "Downloads its model first" means the model files are not on this machine yet: Run then lists the files, their sizes and the model folders they go into, and asks before it fetches anything. The files come from Hugging Face, the download shows on the node's progress line, and Stop ends it. Say "Not now" and nothing is fetched or run.
 
 Each node can pick its own:
 

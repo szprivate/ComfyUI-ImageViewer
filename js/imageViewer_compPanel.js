@@ -769,6 +769,77 @@ export const CompPanelMixin = {
         return out;
     },
 
+    /** A yes / no question in a small dialog over the comp: true for *okText*. */
+    _cpConfirm(rec, title, text, okText) {
+        const doc = rec.el.ownerDocument;
+        const el = (tag, cls, t) => { const e = doc.createElement(tag); if (cls) e.className = cls; if (t != null) e.textContent = t; return e; };
+        return new Promise((done) => {
+            const shade = el("div", "cp-dlg-shade");
+            const box = el("div", "cp-dlg cp-confirm");
+            box.append(el("h3", "", title));
+            const note = el("div", "cp-note", text);
+            note.style.whiteSpace = "pre-line";
+            box.append(note);
+            const go = el("div", "cp-go");
+            const cancel = el("button", "mg-btn", "Not now");
+            const ok = el("button", "mg-btn on cp-confirm-ok", okText);
+            go.append(cancel, ok); box.append(go); shade.append(box);
+            const end = (v) => { shade.remove(); done(v); };
+            cancel.addEventListener("click", () => end(false));
+            ok.addEventListener("click", () => end(true));
+            box.tabIndex = -1;
+            box.addEventListener("keydown", (e) => {
+                e.stopPropagation();
+                if (e.key === "Escape") { e.preventDefault(); end(false); } else if (e.key === "Enter") { e.preventDefault(); end(true); }
+            });
+            shade.addEventListener("pointerdown", (e) => { e.stopPropagation(); if (e.target === shade) end(false); });
+            rec.el.append(shade);
+            setTimeout(() => ok.focus(), 0);
+        });
+    },
+
+    /**
+     * Whether the model files an AI node's workflow needs are here, fetching them when the user says so (Paint's
+     * routes: /paint/models for the plan and sizes, /paint/download for the files, from Hugging Face into
+     * ComfyUI's model folders). Asked first, with each file, its size and where it goes; the download shows on
+     * the node's busy line and Stop stops it. False when the user says not now or stops it.
+     */
+    async _cpModelsReady(rec, item, tell, run) {
+        const gone = (item && item.missing || []).filter((m) => m.kind !== "node");
+        if (!gone.length) return true;
+        tell("looking up the model files");
+        const plan = await cpPost("/imageviewer/paint/models", { workflow: item.id });
+        const files = (plan.files || []).filter((f) => f.url);
+        if (!files.length) return true;                 // nothing offered: the run says what is missing
+        const mb = (n) => (n ? (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(n / 1e6))} MB`) : "size not known");
+        const list = files.map((f) => `• ${f.name} (${mb(f.size)}) into models/${f.folder}`).join("\n");
+        const more = plan.unknown && plan.unknown.length ? `\nNot offered for download (put them there yourself): ${plan.unknown.join(", ")}` : "";
+        const yes = await this._cpConfirm(rec, "Download the models?",
+            `${item.label} needs model files that are not on this machine:\n${list}\nTogether ${mb(plan.total)}, from Hugging Face.${more}`, "Download");
+        if (!yes) return false;
+        const { job } = await cpPost("/imageviewer/paint/download", { workflow: item.id });
+        run.stop = () => { cpPost("/imageviewer/paint/download", { job, cancel: true }).catch(() => {}); };
+        let st;
+        try {
+            for (;;) {
+                await new Promise((r) => setTimeout(r, 1000));
+                st = await cpPost("/imageviewer/paint/download", { job });
+                const total = st.files.reduce((t, f) => t + (f.size || 0), 0);
+                const done = st.files.reduce((t, f) => t + (f.done || 0), 0);
+                const now = st.files.find((f) => f.state === "fetching");
+                tell(`downloading ${now ? now.name : "the models"} · ${mb(done)} of ${mb(total)}`);
+                if (st.state !== "running") break;
+            }
+        } finally { run.stop = null; }
+        if (st.state === "done") {
+            if (this._cpAiLists) this._cpAiLists.clear();
+            if (rec.editor && rec.editor.forgetAiModels) rec.editor.forgetAiModels();
+            return true;
+        }
+        if (st.state === "stopped" || run.stopped) return false;
+        throw new Error("the download did not work: " + (st.error || st.state));
+    },
+
     /** Stop an AI node's job: out of ComfyUI's queue, or interrupted if it runs. */
     _cpAiStop(id) {
         const run = this._cpAiRuns && this._cpAiRuns.get(id);
@@ -806,6 +877,10 @@ export const CompPanelMixin = {
         tell(`0 / ${all.length}`);
         let done = 0, failed = null, skipped = [];
         try {
+            if (item && !(await this._cpModelsReady(rec, item, (t) => tell(t), run))) {
+                notice("info", `${label}: not run`, "The model files it needs are not on this machine.");
+                return;
+            }
             const graph = item ? await this._paintPrompt(item, () => {}) : null;
             const tune = (item && item.tune && item.tune.length && this._paintTune(wid)) || null;
             for (const part of chunks) {
