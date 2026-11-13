@@ -1,27 +1,27 @@
 # ComfyUI Image Viewer
 
-A panel for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) to look at what a workflow makes, compare it, cut it, paint on it, comp it and stage 3D shots, without leaving the graph.
+A viewer panel for [ComfyUI](https://github.com/comfyanonymous/ComfyUI). It displays what a workflow produces and adds the tools to work with the results in place: comparison, an OTIO timeline, a layer-based paint editor, a node compositor and a 3D previz scene.
 
-![The Viewer with the History beside it](docs/images/viewer.jpg)
+![The Viewer with the History panel and the file browser](docs/images/viewer.jpg)
 
 ## Spaces
 
-| Space | For |
+| Space | Used for |
 |---|---|
-| [Viewer](docs/pages/viewer.md) | Pictures, sequences, videos and sounds: zoom, compare, contact sheets, exposure, OCIO, roto / SAM3 / annotation tools |
-| [Edit](docs/pages/edit.md) | Cutting films on an OpenTimelineIO timeline, with sound, titles and effects; export a film or to DaVinci Resolve |
-| [Paint](docs/pages/paint.md) | A picture in layers, with masks, adjustments and AI fills; saves `.ora` and `.psd` |
-| [3D](docs/pages/3d.md) | GLB, FBX, USD, Alembic and splats; previz shots, rigs and animation rendered back into the workflow |
-| [Motion](docs/pages/motion.md) | Motion graphics scenes an agent wrote |
-| [Comp](docs/pages/comp.md) | A node graph of pixel operations in linear float; renders frames or a film, exports to Nuke |
+| [Viewer](docs/pages/viewer.md) | Stills, sequences, video and audio: zoom, wipe and contact-sheet compare, exposure, OCIO input, roto / SAM3 / annotation |
+| [Edit](docs/pages/edit.md) | Multi-track editing on OpenTimelineIO with sound, titles and effects; film export and FCPXML / EDL interchange |
+| [Paint](docs/pages/paint.md) | Layered image editing with masks, adjustment layers and generative fills; reads and writes `.ora` and `.psd` |
+| [3D](docs/pages/3d.md) | GLB, FBX, USD, Alembic and Gaussian splats; previz shots, rigs and animation rendered back into the workflow |
+| [Motion](docs/pages/motion.md) | Motion graphics scenes written by an agent |
+| [Comp](docs/pages/comp.md) | Node-based compositing in linear float; renders stills, sequences or films |
 
 ## Panels
 
-[History](docs/pages/history.md) (every render, in groups), the [file browser](docs/pages/workspace.md#file-browser), [Parameters](docs/pages/workspace.md#parameters), [Agent code](docs/pages/agent-code.md) and [Dataset](docs/pages/dataset.md), docked where you like. The viewer docks beside the canvas or opens in its own window.
+[History](docs/pages/history.md) (every render, in groups), [file browser](docs/pages/workspace.md#file-browser), [Parameters](docs/pages/workspace.md#parameters), [Agent code](docs/pages/agent-code.md) and [Dataset](docs/pages/dataset.md) dock to any rail. The viewer itself floats over the canvas, docks next to it or runs in its own browser window.
 
-Also: [Dependencies](docs/pages/dependencies.md) (what a file was made from) and [agentY](docs/pages/agentY.md) integration.
+Also: [Dependencies](docs/pages/dependencies.md) (file provenance graph) and the [agentY](docs/pages/agentY.md) integration.
 
-**All the docs: [docs/index.md](docs/index.md).**
+**Full documentation: [docs/index.md](docs/index.md).**
 
 ## Installation
 
@@ -38,13 +38,13 @@ git clone https://github.com/szprivate/ComfyUI-ImageViewer.git
 pip install -r ComfyUI-ImageViewer/requirements.txt
 ```
 
-Restart ComfyUI. Use ComfyUI's own Python for the `pip install`.
+Restart ComfyUI. Run `pip` with ComfyUI's own Python environment.
 
-Saving videos and previz renders needs `imageio-ffmpeg` (VideoHelperSuite installs it, or `pip install imageio-ffmpeg`).
+Writing videos and previz renders requires `imageio-ffmpeg` (installed by VideoHelperSuite, or `pip install imageio-ffmpeg`).
 
 ### First steps
 
-Click **Image Viewer** in ComfyUI's top bar, wire a **Send To Image Viewer** node into your workflow and run it. Hover the panel and press <kbd>?</kbd> for the keys.
+Click **Image Viewer** in ComfyUI's top bar, add a **Send To Image Viewer** node to your workflow and queue it. Hover the panel and press <kbd>?</kbd> to list the hotkeys.
 
 ## Trademarks and independence
 

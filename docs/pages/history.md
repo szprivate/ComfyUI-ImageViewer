@@ -2,34 +2,35 @@
 
 [Home](../index.md)
 
-<img src="../images/history.png" alt="The History panel: two groups, Lookdev and Places" width="240" align="right">
+<img src="../images/history.png" alt="The History panel with three groups" width="220" align="right">
 
-A panel (**ComfyUI ▸ History** in the lower bar). One History holds every render from every tab: 100 by default, up to 500 (the number at the foot of the panel). It survives a page reload. Clicking a thumbnail shows it in the tab it was made in.
+The History panel (**ComfyUI ▸ History** in the lower bar) collects every render from every tab: 100 items by default, up to 500 (set at the bottom of the panel). It is kept across page reloads. Clicking a thumbnail shows it in the tab it was created in.
 
 ## Groups
 
-The strip is sorted into groups, each with a heading. A group is the `group` of the Send node that made it (or the stage agentY saved it from). The group used last comes first, newest first inside.
+Thumbnails are sorted into groups. The group comes from the `group` input of the Send node that produced the render, or from the agentY stage that saved it. The most recently used group is on top; inside a group the newest item comes first.
 
-| To | Do |
+| Action | Input |
 |---|---|
-| Fold a group | Click its heading |
-| Move thumbnails to a group | Drag them onto its heading, or right-click ▸ **Move to group** |
-| Rename a group | The ✎ on its heading, or right-click it. A name that exists merges the two |
+| Collapse a group | Click its heading |
+| Reorder groups | Drag a heading up or down |
+| Move thumbnails to a group | Drag them onto the heading, or right-click ▸ **Move to group** |
+| Rename a group | ✎ on the heading, or right-click it; an existing name merges both groups |
 
-## Moving through it
+## Navigation
 
-| To | Do |
+| Action | Input |
 |---|---|
 | Newer / older | <kbd>↑</kbd> / <kbd>↓</kbd> |
-| Select several | <kbd>Ctrl</kbd>+click, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+click for a range |
-| Compare | <kbd>Shift</kbd>+click two, or select several and press <kbd>C</kbd>. See [Comparing](viewer.md#comparing) |
-| Remove | <kbd>Shift</kbd>+<kbd>Delete</kbd>, or right-click ▸ **Remove**. The file on disk stays |
-| Clear everything | The trash button in the lower bar |
+| Multi-select | <kbd>Ctrl</kbd>+click, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+click for a range |
+| Compare | <kbd>Shift</kbd>+click two items, or select several and press <kbd>C</kbd> ([Comparing](viewer.md#comparing)) |
+| Remove from History | <kbd>Shift</kbd>+<kbd>Delete</kbd> or right-click ▸ **Remove**; the file on disk is kept |
+| Clear | Trash button in the lower bar |
 
-## What a thumbnail can do
+## Thumbnail actions
 
-- **Drag it onto the graph** for a loader node holding it (a selection gives one node each). Drop it onto a loader to swap its file.
-- **Drag it into a cut, a Paint canvas, a 3D scene** or the agentY chat.
-- **Right-click** for: copy path, remove, move to group, **Convert Footage** (a film: alpha matte, SDR to HDR, reframe, upscale), **Show dependencies** ([Dependencies](dependencies.md)), **Load workflow**, **Edit in Paint** / Motion, and with agentY the tags and approvals ([Working with agentY](agentY.md)).
+- **Drag onto the canvas** to create a loader node (one per selected item), or onto an existing loader to replace its file.
+- **Drag into a cut, a Paint canvas, a 3D scene** or the agentY chat.
+- **Right-click**: copy path, remove, move to group, **Convert Footage** for films (alpha matte, SDR to HDR, reframe, upscale), **Show dependencies** ([Dependencies](dependencies.md)), **Load workflow**, **Edit in Paint** / **Edit in Motion**, and with agentY the tags and approvals ([Working with agentY](agentY.md)).
 
-A thumbnail whose file is gone is dropped from the strip, after the server confirms it twice. The same render arriving twice is kept once.
+Items whose file has been deleted are removed once the server has confirmed it twice. Duplicate renders are kept once.

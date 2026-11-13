@@ -2,56 +2,56 @@
 
 [Home](../index.md)
 
-Layers pictures, films and image sequences in a node graph, as Nuke does, in linear float with keys over time. A comp is a file (`*.comp.json`); its nodes never go onto ComfyUI's canvas.
+A node-based compositor for stills, films and image sequences. It works in linear, premultiplied float, and every parameter can be keyed. A comp is a file (`*.comp.json`); its nodes are independent of the ComfyUI graph.
 
-![A comp: the picture with its handles, the node's Parameters, the Node Graph below](../images/comp.jpg)
+![A comp with a lens flare node selected, its parameters on the right and the node graph below](../images/comp.jpg)
 
 ## Opening
 
-- **Open Comp…** / **New comp** in the lower bar's Comp menu. A new comp goes into the shot's `comps` folder when the canvas names a shot.
+- **Open Comp…** or **New comp** in the lower bar's Comp menu. With a shot context on the canvas, a new comp is created in that shot's `comps` folder.
 - Double-click a `*.comp.json` in the file browser.
-- The picture's bar has New, Open and Save (its menu: Save as…, Render…, Export to Nuke…).
+- The bar above the picture has New, Open and Save; Save's menu holds Save as…, Render… and the script export.
 
 ## The node graph
 
-Runs top to bottom: inputs on a node's top edge, its output at the bottom.
+The graph flows from top to bottom: inputs on the top edge of a node, the output at the bottom.
 
-| To | Do |
+| Action | Input |
 |---|---|
-| Add a node | <kbd>Tab</kbd>, **Add**, or right-click; type to find it |
+| Add a node | <kbd>Tab</kbd>, **Add** or right-click, then type to search |
 | Connect / disconnect | Drag from an output to an input / drag an input away |
-| Put a node into a wire | Drop it on the wire |
-| Cut wires | Hold <kbd>Y</kbd> and drag across them |
-| Lay nodes out in a row or column | Hold <kbd>A</kbd> and drag |
+| Insert into a connection | Drop a free node onto the wire |
+| Cut connections | Hold <kbd>Y</kbd> and drag across wires |
+| Arrange in a row or column | Hold <kbd>A</kbd> and drag |
 | View a node | <kbd>1</kbd>, or the eye on its right edge |
-| Switch off / delete / frame all | <kbd>D</kbd> / <kbd>Del</kbd> / <kbd>F</kbd> |
-| Grid and snap | <kbd>G</kbd> / <kbd>S</kbd> |
-| Read footage | Drop History thumbnails or file browser rows on the graph |
+| Disable / delete / frame all | <kbd>D</kbd> / <kbd>Del</kbd> / <kbd>F</kbd> |
+| Grid / snap | <kbd>G</kbd> / <kbd>S</kbd> |
+| Add footage | Drop History thumbnails or file browser rows on the graph |
 
-The selected nodes' settings are in the **Parameters** panel, one panel per node. Their handles are on the picture (a Transform's jack, a Crop's box, a flare's light). The **Curve Editor** is a tab behind the graph; **Layers** shows the graph as a stack. The graph can also sit in ComfyUI's bottom panel (its **Comp** tab).
+The selected nodes' parameters appear in the **Parameters** panel, one section per node, and their handles are drawn over the picture (transform jack, crop box, flare position). The **Curve Editor** sits behind the graph as a tab; **Layers** shows the same graph as a layer stack. The graph can also be shown in ComfyUI's bottom panel (**Comp** tab).
 
 ## Nodes
 
-| Kind | Nodes |
+| Category | Nodes |
 |---|---|
-| In and out | Read, Constant, Roto (drawn with the viewer's Roto tool), Output |
-| Layering | Merge (Nuke's operations), Copy, ChannelMerge, ChannelMath |
-| Shape | Transform, Reformat, Crop |
-| Colour | Grade, ColorCorrect (Color Finesse-style: ranges, wheels, secondaries), OCIOColorSpace, OCIODisplay |
+| Input / output | Read, Constant, Roto (drawn with the viewer's Roto tool), Output |
+| Merging | Merge (over, plus, multiply, screen, in, out, atop, mask, stencil …), Copy, ChannelMerge, ChannelMath |
+| Geometry | Transform, Reformat, Crop |
+| Colour | Grade, ColorCorrect (per-range HSL / RGB, hue wheels, two secondaries), OCIOColorSpace, OCIODisplay |
 | Keying | Keyer, LumaKeyer, ChromaKeyer, Erode/Dilate, Premult, Unpremult |
-| Blur and light | Blur, MotionBlur, DepthBlur, Defocus, Glow, LensFlare, Laplacian |
+| Filter and light | Blur, MotionBlur, DepthBlur, Defocus, Glow, LensFlare, Laplacian |
 | Time | Retime, Vectors (optical flow) |
 | Channels | Shuffle, AddChannels, Remove |
 
-Every picture has its own size; pictures of other sizes meet at the bottom left. Extra channels (`depth.z`, `mask.a`) flow down the graph with the picture.
+Each image keeps its own resolution; images of different sizes are aligned at the bottom-left corner. Extra channels (`depth.z`, `mask.a` …) travel down the graph with the image.
 
 ## Colour
 
-The working space is the OCIO config's scene-linear space. The bar's display menu shows the picture through a display and view; the viewer's exposure and channel controls sit in the bar and change only what is shown.
+The working space is the scene-linear role of the OCIO config. The display menu in the bar views the image through any display / view of the config; the viewer's exposure and channel controls also sit in the bar and only affect the display.
 
-## Rendering and Nuke
+## Output
 
-- **Render…**: every still format of the Send To Image Viewer node (PNG, EXR, TIFF …) or an MP4 / MOV / WebM film, at full size on the server. The result is versioned, joins the History and lands on the canvas as a loader node.
-- **Export to Nuke…**: a `.nk` script; nodes Nuke has become that node, the rest are baked to EXR sequences beside it.
+- **Render…**: every still format of the Send To Image Viewer node (PNG, EXR, TIFF …) or an MP4 / MOV / WebM film, rendered at full resolution on the server. The result is versioned, added to the History and placed on the canvas as a loader node.
+- **Script export** (Save menu): writes an `.nk` script. Nodes with a direct equivalent are translated; the rest are rendered to EXR sequences next to the script and read back in.
 
-Every node is written from published maths and how compositing tools behave; no code or assets come from other programs.
+All nodes are written from published formulas and observed behaviour; no third-party code or assets are used.
