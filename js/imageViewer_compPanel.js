@@ -18,6 +18,7 @@ import { api } from "../../scripts/api.js";
 import { createCompEditor } from "./imageViewer_compEditor.js";
 import { canvasContext, notice, openExportDialog, openFilePicker } from "./imageViewer_exportUI.js";
 import { addRecentDoc } from "./imageViewer_recentDocs.js";
+import * as C from "./imageViewer_compModel.js";
 import { COMP_SUFFIX, addLayer, isCompPath, makeNode, sourceName } from "./imageViewer_compModel.js";
 import { decodeDeep } from "./imageViewer_compDeep.js";
 import { cameraKeys, sceneCameraSamples, sceneCameras } from "./imageViewer_compCamImport.js";
@@ -28,6 +29,14 @@ export const COMP_PANELS = { compGraph: "graph", compLayers: "layers", compCurve
 /** Which of them are up the first time (the node editor is the default way in). */
 const FIRST_UP = { compGraph: true, compLayers: false, compCurves: false };
 
+const LUT_EXTS = [".cube", ".3dl", ".spi3d", ".spi1d", ".csp", ".clf", ".ctf", ".cdl", ".cc", ".lut"];
+const CDL_EXTS = [".cc", ".cdl", ".ccc"];
+async function cpPost(route, body) {
+    const res = await api.fetchApi(route, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { const e = new Error(data.error || `HTTP ${res.status}`); e.status = res.status; e.data = data; throw e; }
+    return data;
+}
 const baseOf = (p) => String(p || "").split(/[\\/]/).pop();
 const nameOf = (p) => baseOf(p).replace(/\.comp\.json$/i, "");
 const MEDIA_EXTS = [".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".exr", ".hdr", ".bmp",
@@ -556,7 +565,7 @@ export const CompPanelMixin = {
             playing: () => !!this.isPlaying,
             onCache: () => { if (this.activeTab === key && this.queueCacheMarks) this.queueCacheMarks(); },
             ocioInfo: () => this._cpOcioInfo(),
-            ocioLut: (spec) => this._cpOcioLut(spec),
+            ocioLut: (spec) => this._cpOcioLut(spec, rec),
             onDisplay: (v) => { try { localStorage.setItem("imageviewer.comp.display", v || ""); } catch (_) { /* not kept */ } },
             setChannel: (c) => this.setChannelView(VIEW_CHANNEL[c] || "all"),
             exposureHeld: () => !!this.isExposureModifierActive,
@@ -578,6 +587,10 @@ export const CompPanelMixin = {
             farm: () => this.compFarmDialog(rec),
             track: (body, progress, cancelled) => this.compTrack(rec, body, progress, cancelled),
             notify: (m, sev) => notice(sev || "info", m),
+            pickLut: (cb) => this._cpPickLut(rec, cb),
+            cdlImport: (apply) => this._cpCdlImport(rec, apply),
+            cdlExport: (n, values) => this._cpCdlExport(rec, n, values),
+            aiRun: (id, frames) => this._cpAiRun(rec, id, frames),
         });
         try { const v = localStorage.getItem("imageviewer.comp.display"); if (v) rec.editor.setDisplay(v); } catch (_) { /* none kept */ }
         this.compViewSync();
@@ -630,9 +643,12 @@ export const CompPanelMixin = {
     },
 
     /** An OCIO transform baked for the preview: {size, shaper, data} (a 3D LUT behind a shaper, or a matrix), or null. */
-    async _cpOcioLut(spec) {
+    async _cpOcioLut(spec, rec) {
         const q = new URLSearchParams({ src: spec.src || "" });
-        if (spec.display) { q.set("display", spec.display); q.set("view", spec.view || "*"); } else q.set("dst", spec.dst || "");
+        if (spec.file) {   // a LUT node's file (beside the comp when relative)
+            q.set("file", spec.file);
+            if (rec && rec.path) q.set("comp", rec.path);
+        } else if (spec.display) { q.set("display", spec.display); q.set("view", spec.view || "*"); } else q.set("dst", spec.dst || "");
         const res = await api.fetchApi(`/imageviewer/comp_lut?${q}`);
         if (!res.ok) {
             let why = `HTTP ${res.status}`;
@@ -644,6 +660,111 @@ export const CompPanelMixin = {
             buf = await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
         }
         return { size: Number(res.headers.get("X-Lut-Size")) || 0, shaper: res.headers.get("X-Lut-Shaper") || "lin:0:1", data: new Float32Array(buf) };
+    },
+
+    // ── colour files: LUTs and CDLs (comp_files on the server) ───────────────
+
+    /** A file of the comp's folder named relative to it when it lies there or below, else its whole path. */
+    _cpRelative(rec, path) {
+        const dir = String(rec.path || "").replace(/[\\/][^\\/]*$/, "");
+        const norm = (x) => x.replace(/\\/g, "/");
+        const d = norm(dir) + "/", f = norm(path);
+        return dir && f.toLowerCase().startsWith(d.toLowerCase()) ? f.slice(d.length) : path;
+    },
+    _cpPickLut(rec, cb) {
+        openFilePicker(this.container, {
+            id: "comp-lut", title: "A LUT file", exts: LUT_EXTS, go: "Use",
+            note: "A .cube is read as it is; the other formats need OpenColorIO on the server.",
+            onPick: async ([file]) => {
+                if (!file) return { ok: false, message: "Pick a file." };
+                cb(this._cpRelative(rec, file.path));
+                return { ok: true };
+            },
+        });
+    },
+    _cpCdlImport(rec, apply) {
+        openFilePicker(this.container, {
+            id: "comp-cdl", title: "A colour decision (.cc, .cdl, .ccc)", exts: CDL_EXTS, go: "Read",
+            note: "The first correction in the file is read: slope, offset, power and saturation.",
+            onPick: async ([file]) => {
+                if (!file) return { ok: false, message: "Pick a file." };
+                const q = new URLSearchParams({ file: file.path, comp: rec.path || "" });
+                const res = await api.fetchApi(`/imageviewer/comp_cdl?${q}`);
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) return { ok: false, message: data.error || `HTTP ${res.status}` };
+                apply(data);
+                notice("info", `Read ${baseOf(file.path)}${data.id ? ` (${data.id})` : ""}`);
+                return { ok: true };
+            },
+        });
+    },
+    /** Write a CDL node's numbers beside the comp as <comp>_<node>.cc (the next free name; never over a file). */
+    async _cpCdlExport(rec, n, values) {
+        if (!rec.path) { notice("warn", "Save the comp first", "The .cc is written beside it."); return; }
+        const stem = `${nameOf(rec.path)}_${String(n.name || n.id).replace(/[^\w.-]+/g, "_")}`;
+        for (let i = 1; i < 100; i++) {
+            const file = `${stem}${i > 1 ? `_${i}` : ""}.cc`;
+            try {
+                const out = await cpPost("/imageviewer/comp_cdl", { comp: rec.path, file, values, id: n.name || n.id });
+                notice("info", "CDL written", out.path);
+                return;
+            } catch (e) {
+                if (e.status === 409) continue;
+                notice("error", "The CDL was not written", String(e.message || e));
+                return;
+            }
+        }
+        notice("error", "The CDL was not written", "There are 99 already.");
+    },
+
+    // ── AI nodes: one frame through Paint's Generate workflows (comp_ai on the server) ──
+
+    /** Run an AI node on these frames, one after the other: each answer becomes its result (one undo step each). */
+    async _cpAiRun(rec, id, frames) {
+        const ed = rec.editor;
+        if (!ed) return;
+        if (!rec.path) { notice("warn", "Save the comp first", "The results are kept beside it."); return; }
+        const busy = this._cpAiBusy || (this._cpAiBusy = new Set());
+        if (busy.has(id)) return;
+        const n0 = ed.node(id);
+        const kind = n0 && C.EX.AI_KINDS[n0.type];
+        if (!kind) return;
+        const action = { matte: "background", depth: "edit", relight: "edit", upscale: "upscale" }[kind]
+            || ((n0.prompt || "").trim() ? "fill" : "remove");
+        const t = await this._paintWorkflows();
+        const a = t && t.actions && t.actions[action];
+        if (!a) { notice("error", "The workflows are not here", "This ComfyUI's viewer is older than the page."); return; }
+        if (a.choice === "agent") { notice("warn", "Pick a workflow", `${a.label} is set to agentY, which the Comp cannot ask: pick a workflow in Paint's Generate \u203a Workflows\u2026`); return; }
+        const item = a.workflows.find((w) => w.id === a.choice);
+        busy.add(id);
+        ed.setAiBusy([...busy]);
+        const label = `${n0.name || n0.id}`;
+        let done = 0, failed = null;
+        try {
+            const graph = item ? await this._paintPrompt(item, () => {}) : null;
+            for (const f of frames) {
+                if (!rec.editor || !ed.node(id)) break;     // the tab closed, or the node deleted
+                const prep = await cpPost("/imageviewer/comp_ai", { path: rec.path, comp: ed.comp(), node: id, frame: f,
+                    workflow: a.choice, graph, tune: (item && item.tune && item.tune.length && this._paintTune(a.choice)) || null });
+                const pid = await this._paintQueue(prep.graphs[0]);
+                const img = await this._paintWait(pid, prep.output, {});
+                const placed = await cpPost("/imageviewer/comp_ai_place", { job: prep.job, image: img });
+                ed.aiResult(id, placed.frame, placed.file);
+                done++;
+                if (frames.length > 1) notice("info", `${label}: frame ${f} done (${done} of ${frames.length})`);
+            }
+        } catch (e) {
+            failed = e;
+            const miss = e.data && e.data.missing;
+            if (miss && miss.length) {
+                const list = miss.map((m) => (m.kind === "model" ? `${m.what} (${m.folder})` : `node ${m.what}`)).join(", ");
+                notice("error", "The workflow needs what is not here", `${list} - fetch it from Paint's Generate, or pick another workflow there`);
+            } else notice("error", `${label} did not run`, String(e.message || e));
+        } finally {
+            busy.delete(id);
+            if (rec.editor) ed.setAiBusy([...busy]);
+        }
+        if (!failed && done) notice("info", `${label}: ${done === 1 ? "the result is in" : `${done} frames are in`}`, "Save the comp to keep them.");
     },
 
     async _cpLoadSource(rec, node, frame, how = {}) {

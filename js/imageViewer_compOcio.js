@@ -57,4 +57,4 @@ export function ocioSpec(type, p) {
     if (type === "ocio_display") return { src: p.in_space || "", display: p.display || "*", view: p.view || "*" };
     return { src: p.in_space || "", dst: p.out_space || "" };
 }
-export const ocioKey = (spec) => JSON.stringify([spec.src || "", spec.dst || "", spec.display || "", spec.view || ""]);
+export const ocioKey = (spec) => JSON.stringify([spec.src || "", spec.dst || "", spec.display || "", spec.view || ""].concat(spec.file ? [spec.file] : []));

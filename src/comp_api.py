@@ -40,6 +40,7 @@ LABELS = {"read": "Read", "constant": "Constant", "roto": "Roto", "paint": "Pain
           "deepmerge": "DeepMerge", "deepholdout": "DeepHoldout", "deepcrop": "DeepCrop", "deepflatten": "DeepFlatten",
           "oneview": "OneView", "joinviews": "JoinViews", "anaglyph": "Anaglyph", "sidebyside": "SideBySide",
           "output": "Output"}
+LABELS.update(M._X.EXTRA_LABELS)   # the rest of the node set (comp_extra)
 EASES = ["smooth", "linear", "hold", "easeIn", "easeOut", "easeInOut", "backOut", "expoOut"]
 NODE_GAP = 60
 

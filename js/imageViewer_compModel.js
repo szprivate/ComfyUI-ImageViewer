@@ -35,6 +35,7 @@ import * as G3 from "./imageViewer_comp3d.js";
 import * as DP from "./imageViewer_compDeep.js";
 import * as PT from "./imageViewer_compPaint.js";
 import * as WP from "./imageViewer_compWarp.js";
+import * as EX from "./imageViewer_compExtra.js";
 import { blank, blurImage, boxesForGauss } from "./imageViewer_compOps.js";
 export { blank, blurImage, boxesForGauss };
 
@@ -209,7 +210,7 @@ export const NODE_TYPES = {
         speed: { kind: "num", def: 1, step: 0.05, help: "2 plays twice as fast, 0.5 half as fast, -1 backwards" },
         start: { kind: "int", def: 0, help: "The frame that stays where it is" },
         offset: { kind: "num", def: 0, step: 1, help: "Frames to add to the input's frame" },
-        blend: { kind: "enum", def: "nearest", choices: ["nearest", "mix"], help: "Between frames: the nearest, or the two mixed" },
+        blend: { kind: "enum", def: "nearest", choices: ["nearest", "mix", "vectors"], help: "Between frames: the nearest, the two mixed, or made from their motion (vectors)" },
     } },
     lumakeyer: { label: "LumaKeyer", cat: "Keyer", inputs: ["src"], params: {
         source: { kind: "enum", def: "luminance", choices: K.LUMA_SOURCES, help: "What brightness is measured on" },
@@ -428,7 +429,8 @@ export const MASKABLE = new Set(["grade", "colorcorrect", "ocio_colorspace", "oc
     "keyer", "motionblur", "depthblur", "defocus"]);
 /** MASKABLE nodes whose own arithmetic already takes `mix` (the mask stage then does not apply it twice). */
 export const OWN_MIX = new Set([...MASKABLE].filter((t) => NODE_TYPES[t].params.mix));
-for (const t of MASKABLE) {
+for (const t of MASKABLE) maskable(t);
+function maskable(t) {
     const d = NODE_TYPES[t];
     d.inputs = [...d.inputs, "mask"];
     if (!d.params.mix) d.params.mix = { kind: "num", def: 1, min: 0, max: 1, step: 0.01, key: true, help: "How much of the result: 0 is what comes in" };
@@ -444,8 +446,12 @@ export const TYPE_ORDER = ["read", "constant", "roto", "paint", "merge", "copy",
     "oneview", "joinviews", "anaglyph", "sidebyside", "output"];
 /** Nodes that hand their input on unchanged: what they do is outside the pixels (a file written, metadata). */
 export const PASS_THROUGH = new Set(["output", "write", "metadata"]);
+// The finishing nodes (keying, time, colour, filters, AI) are in imageViewer_compExtra.js.
+Object.assign(NODE_TYPES, EX.EXTRA_TYPES);
+for (const t of EX.EXTRA_MASKABLE) { MASKABLE.add(t); if (NODE_TYPES[t].params.mix) OWN_MIX.add(t); maskable(t); }
+TYPE_ORDER.splice(TYPE_ORDER.indexOf("metadata"), 0, ...EX.EXTRA_ORDER);
 /** Nodes whose result is kept between renders (keyed by their whole upstream): they take long. */
-export const HEAVY = new Set(["vectors", "motionblur", "depthblur", "defocus"]);
+export const HEAVY = new Set(["vectors", "motionblur", "depthblur", "defocus", ...EX.EXTRA_HEAVY]);
 export const NODE_W = 120;
 export const NODE_H = 30;
 
@@ -840,7 +846,7 @@ export function nodeKeyFrames(node) {
 // ── the stack the Layers panel shows ─────────────────────────────────────────
 
 const CHAIN = new Set(["transform", "paint", "reformat", "cornerpin", "tracker", "planartracker", "stmap", "vectorwarp", "lensdistortion", "gridwarp", "glow", "lensflare", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "lumakeyer", "chromakeyer", "erode", "laplacian", "channelmerge", "channelmath", "blur", "crop", "shuffle", "addchannels", "removechannels", "premult", "unpremult", "retime", "keyer", "vectors",
-    "motionblur", "depthblur", "defocus", "copy"]);
+    "motionblur", "depthblur", "defocus", "copy", ...EX.EXTRA_CHAIN]);
 
 /**
  * The comp as layers, top first: [{ kind: "layer" | "background" | "group", merge?, chain: [ids top-down],
@@ -1173,6 +1179,7 @@ export function formatAt(comp, id, depth = 0) {
     const up = () => (NODE_TYPES[n.type].inputs.length && n.inputs[0] ? formatAt(comp, n.inputs[0], depth + 1) : F);
     if (!n.disable && n.type === "sidebyside") { const u = up(); return n.layout === "over under" ? { width: u.width, height: u.height * 2 } : { width: u.width * 2, height: u.height }; }
     if (!n.disable && n.type === "stmap" && n.inputs[1]) return formatAt(comp, n.inputs[1], depth + 1);
+    if (!n.disable && n.type === "ai_upscale") { const u = up(), k = EX.upscaleFactor(n); return { width: Math.max(1, Math.round(u.width * k)), height: Math.max(1, Math.round(u.height * k)) }; }
     if (n.disable || n.type !== "reformat") return n.type === "read" || n.type === "constant" || PLAIN_SIZE.has(n.type) ? F : up();
     const [w, h] = reformatSize(n, 0, up());
     return { width: w, height: h };
@@ -1318,6 +1325,7 @@ export function upstreamKey(comp, id) {
 export function ocioNeeds(comp, frame) {
     const out = new Map();
     for (const n of comp.nodes || []) {
+        for (const spec of EX.extraLuts(n)) out.set(OC.ocioKey(spec), spec);
         if (n.disable || (n.type !== "ocio_colorspace" && n.type !== "ocio_display")) continue;
         const p = {};
         for (const k of Object.keys(NODE_TYPES[n.type].params)) p[k] = paramAt(n, k, frame);
@@ -1326,7 +1334,20 @@ export function ocioNeeds(comp, frame) {
     }
     return [...out].map(([key, spec]) => ({ key, spec }));
 }
-export { OC, CH, PT, O };
+/**
+ * What an AI node's result was made from, as a short hash: what comes into it (and its mask) and the words /
+ * factor it asks with. A result whose key is not the node's key now is out of date (said in Parameters; it is
+ * still shown until it is run again).
+ */
+export function aiKey(comp, n) {
+    const ins = n.inputs || [];
+    const text = [ins[0] ? upstreamKey(comp, ins[0]) : "", ins[1] ? upstreamKey(comp, ins[1]) : "", n.type, n.prompt || "", n.factor || ""].join("\u0001");
+    let h = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+    return h.toString(36);
+}
+
+export { OC, CH, PT, O, EX };
 
 /** Nodes that make something and so have a "write" (the channel or layer it goes into). */
 export const WRITES = new Set(Object.keys(NODE_TYPES).filter((t) => NODE_TYPES[t].params.write));
@@ -1738,11 +1759,12 @@ export function renderNode(comp, id, frame, ctx) {
         case "retime": {
             const t = retimeFrame(n, f), s0 = n.inputs[0];
             const at = (g) => X(run(s0, g, d1), exOf(s0, g));
-            if (n.blend !== "mix") return at(Math.floor(t + 0.5));
+            if (n.blend !== "mix" && n.blend !== "vectors") return at(Math.floor(t + 0.5));
             const f0 = Math.floor(t), fr = t - f0;
             if (fr < 1e-9) return at(f0);
             const a = run(s0, f0, d1), b = run(s0, f0 + 1, d1);
-            return X(mixImages(a, b, fr), CH.mixExtras(exOf(s0, f0), exOf(s0, f0 + 1), fr, a.w * a.h));
+            const pic = n.blend === "vectors" ? EX.F.vectorBlend(a, conform(b, a.w, a.h), fr) : mixImages(a, b, fr);
+            return X(pic, CH.mixExtras(exOf(s0, f0), exOf(s0, f0 + 1), fr, a.w * a.h));
         }
         case "keyer": {
             const p = {};
@@ -1891,7 +1913,16 @@ export function renderNode(comp, id, frame, ctx) {
             return spatial(n.inputs[0], f, d1, (p) => resample(p, m, p.w, p.h));
         }
         case "output": case "write": case "metadata": return run(n.inputs[0], f, d1);
-        default: return blank(W, H);
+        default: {
+            const r = EX.extraMake(n, f, {
+                run: (sid, g) => run(sid, g, d1), X, exOf, scale, W, H, blank, resample, fitMatrix, conform, mixImages,
+                P: (nn, g) => { const p = {}; for (const k of Object.keys(NODE_TYPES[nn.type].params)) p[k] = paramAt(nn, k, g); return p; },
+                size: (nn, k) => { const F = inFmt(nn, k); return [Math.max(1, Math.round(F.width * scale)), Math.max(1, Math.round(F.height * scale))]; },
+                source: ctx.source, ocio: ctx.ocio,
+                ocioImage: (img, lut, unp) => OC.ocioImage(img, (r, g, b) => OC.lutColor(lut, r, g, b), unp),
+            });
+            return r === undefined ? blank(W, H) : r;
+        }
         }
     };
     const img = run(id, frame, 0);
@@ -2032,9 +2063,12 @@ export function sourceNeeds(comp, id, frame, view = null) {
         if (n.type === "oneview") { const w = paramAt(n, "view", f) || vs[0] || null; walk(n.inputs[0], f, depth + 1, vs.includes(w) ? w : v); return; }
         if (n.type === "anaglyph" || n.type === "sidebyside") { for (const w of vs.length ? vs.slice(0, 2) : [v]) walk(n.inputs[0], f, depth + 1, w); return; }
         if (n.type === "joinviews") { const i = Math.max(0, vs.indexOf(v)); walk(n.inputs[Math.min(i, 3)] || n.inputs[0], f, depth + 1, v); return; }
+        if (EX.AI_KINDS[n.type]) { const rd = EX.aiRead(n, f); if (rd) out.push({ node: rd, frame: f, view: v }); }
+        const xr = EX.extraReads(n, f);
+        if (xr) { for (const [k, g] of xr) walk(n.inputs[k], g, depth + 1, v); return; }
         if (n.type === "retime") {
             const t = retimeFrame(n, f);
-            if (n.blend !== "mix") walk(n.inputs[0], Math.floor(t + 0.5), depth + 1, v);
+            if (n.blend !== "mix" && n.blend !== "vectors") walk(n.inputs[0], Math.floor(t + 0.5), depth + 1, v);
             else { const f0 = Math.floor(t); walk(n.inputs[0], f0, depth + 1, v); if (t - f0 >= 1e-9) walk(n.inputs[0], f0 + 1, depth + 1, v); }
             return;
         }

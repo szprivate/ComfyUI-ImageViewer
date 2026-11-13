@@ -159,6 +159,7 @@ const CSS = `
 .cp-panehead button{padding:0 6px;min-width:0}
 .cp-pane > .mg-prop,.cp-pane > .mg-empty,.cp-pane > div{margin-left:4px;margin-right:4px}
 input.cp-newch{flex:1;min-width:0}
+.mg-prop textarea.cp-text{flex:1;min-width:0;resize:vertical;font:inherit;background:#1b1b1b;color:inherit;border:1px solid #3a3a3a;border-radius:3px;padding:3px 5px}.mg-empty.cp-warn{color:#e0a64a;opacity:.9}.cp-pane > .mg-empty.cp-ai{padding:6px 4px}.mg-prop.cp-btnrow{flex-wrap:wrap;gap:4px}
 .mg-prop input.cp-mixed::placeholder{color:#c9a24a;opacity:1}.mg-prop.cp-mixedrow label{color:#c9a24a}.cp-multi{color:#9aa}
 .cp-stage.drawing,.cp-stage.picking{cursor:crosshair}
 .cp-cctabs,.cp-ccrange{display:flex;flex-wrap:wrap;gap:3px;margin:6px 0 4px}
@@ -1724,6 +1725,16 @@ export function createCompEditor(host, opts = {}) {
             i.title = `${d.help || ""}${have.length ? `\nComing in: ${have.join(", ")}` : "\nNothing but r g b a comes in"}`;
             i.onchange = () => write(i.value.trim());
             row.append(i);
+        } else if (d.kind === "prompt") {
+            const i = el(doc, "textarea", "cp-text"); i.rows = 2; i.value = mixed ? "" : (cur || ""); i.placeholder = mixed ? "— (differs)" : (d.help || "");
+            i.onchange = () => write(i.value.trim());
+            i.addEventListener("keydown", (e) => e.stopPropagation());
+            row.append(i);
+        } else if (d.kind === "lutfile") {
+            const i = el(doc, "input"); i.type = "text"; i.value = mixed ? "" : (cur || ""); i.placeholder = mixed ? "— (differs)" : "a .cube, .3dl, .spi3d, .csp, .clf ...";
+            i.onchange = () => write(i.value.trim());
+            const b = btn("…", "Choose a LUT file", () => o.pickLut && o.pickLut((path) => write(path)));
+            row.append(i, b);
         } else if (d.kind === "outfile" || d.kind === "text") {
             const i = el(doc, "input"); i.type = "text"; i.value = mixed ? "" : (cur || ""); i.spellcheck = false;
             i.placeholder = mixed ? "— (differs)" : d.kind === "outfile" ? "empty: beside the comp, or shot.####.exr" : (p === "timecode" ? "HH:MM:SS:FF" : "");
@@ -1933,6 +1944,45 @@ export function createCompEditor(host, opts = {}) {
     }
     // Nodes whose settings are drawn by a tool of their own: no per-view settings for them.
     const NO_SPLIT = new Set(["roto", "output", "paint", "tracker", "planartracker", "gridwarp"]);
+    /** A CDL node's file buttons: read a .cc / .cdl / .ccc into it, write it as one. */
+    function cdlSection(n, params) {
+        const row = el(doc, "div", "mg-prop cp-btnrow");
+        row.append(el(doc, "span", "mg-sw", ""), el(doc, "label", "", "file"));
+        const apply = (v) => mutate(() => {
+            const set = (p, x) => { if (Number.isFinite(Number(x))) writeAll(n, p, params[p], () => Number(x)); };
+            ["r", "g", "b"].forEach((c, k) => { set("slope_" + c, v.slope[k]); set("offset_" + c, v.offset[k]); set("power_" + c, v.power[k]); });
+            set("saturation", v.saturation);
+            if (v.id && !n.name) n.name = String(v.id).slice(0, 60);
+        }, { structure: false });
+        const values = () => {
+            const at = (p) => C.paramAt(n, p, st.frame) ?? params[p].def;
+            return { slope: ["r", "g", "b"].map((c) => at("slope_" + c)), offset: ["r", "g", "b"].map((c) => at("offset_" + c)),
+                power: ["r", "g", "b"].map((c) => at("power_" + c)), saturation: at("saturation") };
+        };
+        row.append(btn("Import…", "Read a .cc, .cdl or .ccc into this node (at the playhead when it is animated)", () => o.cdlImport && o.cdlImport(apply)),
+            btn("Export…", "Write this node's numbers (at the playhead) as a .cc, .cdl or .ccc", () => o.cdlExport && o.cdlExport(n, values())));
+        pane.append(row);
+    }
+    /** An AI node: what it shows, and Run (this frame, every frame), Forget. */
+    function aiSection(n) {
+        const r = n.results || {}, fr = r.frames || {}, made = Object.keys(fr).filter((k) => fr[k]).map(Number).sort((a, b) => a - b);
+        const key = C.aiKey(st.comp, n), here = C.EX.aiResultFrame(n, st.frame);
+        const stale = made.filter((f) => (r.keys || {})[f] !== key);
+        const line = el(doc, "div", "mg-empty cp-ai");
+        line.textContent = !made.length ? "Not run yet: it passes its input through. Run sends the picture coming in through a ComfyUI workflow (Paint's Generate choice)."
+            : `Results for ${made.length === 1 ? `frame ${made[0]}` : `${made.length} frames (${made[0]}–${made[made.length - 1]})`}; `
+              + (here === st.frame ? "this frame has its own." : `this frame shows frame ${here}'s.`)
+              + (stale.length ? ` ${stale.length === made.length ? "All are" : `${stale.length} are`} out of date: what comes in, or the words, changed since.` : "");
+        if (stale.length) line.classList.add("cp-warn");
+        pane.append(line);
+        const row = el(doc, "div", "mg-prop cp-btnrow");
+        const busy = st.aiBusy && st.aiBusy.has(n.id);
+        row.append(el(doc, "span", "mg-sw", ""), el(doc, "label", "", "run"),
+            btn(busy ? "Running…" : "This frame", "Run the workflow on the picture coming in at the playhead", () => { if (!busy && o.aiRun) o.aiRun(n.id, [st.frame]); }),
+            btn("All frames", "Run it on every frame of the comp, one after the other", () => { if (!busy && o.aiRun) o.aiRun(n.id, Array.from({ length: st.comp.format.frames }, (_, i) => i)); }),
+            btn("Forget", "Take the results off the node (the files stay)", () => { if (made.length) mutate(() => { delete n.results; }, { structure: false }); }));
+        pane.append(row);
+    }
     function paneBody(n, t, first) {
         const name = el(doc, "input"); name.type = "text"; name.value = n.name || ""; name.placeholder = n.id;
         name.onchange = () => mutate(() => { if (name.value.trim()) n.name = name.value.trim(); else delete n.name; });
@@ -1962,9 +2012,11 @@ export function createCompEditor(host, opts = {}) {
         if (n.type === "colorcorrect") {
             ccSection(pn, t.params);
             if (masked) for (const [p, d] of ps) if (maskRow(p)) pane.append(paramRow(pn, p, d));
-        } else for (const [p, d] of ps) if (d.kind !== "roto" && d.kind !== "strokes" && !WUI.OWN_KINDS.has(d.kind) && (masked || !maskRow(p))) pane.append(paramRow(pn, p, d));
+        } else for (const [p, d] of ps) if (d.kind !== "roto" && d.kind !== "ai" && d.kind !== "strokes" && !WUI.OWN_KINDS.has(d.kind) && (masked || !maskRow(p))) pane.append(paramRow(pn, p, d));
         if (n.type === "paint") paintTool.section(n, pane, first);
         if (WUI.draws(n.type)) WUI.section(wctx(), n);
+        if (n.type === "cdl") cdlSection(n, t.params);
+        if (C.EX.AI_KINDS[n.type]) aiSection(n);
         if (n.type === "camera3d" && o.importCamera) {
             const row = el(doc, "div", "mg-prop cp-camimport");
             row.append(el(doc, "span", "mg-sw", ""), el(doc, "label", "", "import"));
@@ -2476,6 +2528,20 @@ export function createCompEditor(host, opts = {}) {
             return keyDown(e, part);
         },
         rerender: () => queueRender(),
+        /** An AI node's run has a result for frame f (a file relative to the comp): one undo step each. */
+        aiResult(id, f, file) {
+            const n = node(id);
+            if (!n) return false;
+            const key = C.aiKey(st.comp, n);
+            mutate(() => {
+                const r = n.results && typeof n.results === "object" ? n.results : (n.results = {});
+                (r.frames || (r.frames = {}))[String(f)] = file;
+                (r.keys || (r.keys = {}))[String(f)] = key;
+            }, { structure: false });
+            return true;
+        },
+        /** Which AI nodes are running (Parameters says so). */
+        setAiBusy(ids) { st.aiBusy = new Set(ids || []); refresh(["props"]); },
         frameAll,
         select: (ids) => select(ids),
         selected: () => primary(),

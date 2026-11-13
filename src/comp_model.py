@@ -78,6 +78,16 @@ WP = _warp_module()
 LENS_MODES, LENS_OUTPUTS = WP.LENS_MODES, WP.LENS_OUTPUTS
 TRACK_MOTIONS, TRACK_TRANSFORMS = WP.TRACK_MOTIONS, WP.TRACK_TRANSFORMS
 
+
+try:   # the finishing nodes (keying, time, colour, filters, AI): comp_extra.py, bound to this module below
+    from . import comp_extra as _X
+except ImportError:   # loaded on its own (the tests): the file beside this one
+    import importlib.util as _ilu
+    import os as _os
+    _spec = _ilu.spec_from_file_location("comp_extra", _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "comp_extra.py"))
+    _X = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_X)
+
 COMP_VERSION = 1
 SUFFIX = ".comp.json"
 MERGE_OPS = ["over", "under", "plus", "minus", "multiply", "screen", "max", "min", "difference",
@@ -287,7 +297,7 @@ NODE_TYPES = {
         "speed": {"kind": "num", "def": 1},
         "start": {"kind": "int", "def": 0},
         "offset": {"kind": "num", "def": 0},
-        "blend": {"kind": "enum", "def": "nearest", "choices": ["nearest", "mix"]},
+        "blend": {"kind": "enum", "def": "nearest", "choices": ["nearest", "mix", "vectors"]},
     }},
     "keyer": {"inputs": ["src"], "params": {
         "mode": {"kind": "enum", "def": "chroma", "choices": KEYER_MODES},
@@ -502,6 +512,7 @@ NODE_TYPES = {
     }},
     "output": {"inputs": ["src"], "params": {}},
 }
+NODE_TYPES.update(_X.EXTRA_TYPES)
 
 
 def _is_num(v):
@@ -968,6 +979,9 @@ def format_at(comp, nid, depth=0):
         return {"width": u["width"], "height": u["height"] * 2} if n.get("layout") == "over under" else {"width": u["width"] * 2, "height": u["height"]}
     if not n.get("disable") and n["type"] == "stmap" and len(ins) > 1 and ins[1]:
         return format_at(comp, ins[1], depth + 1)
+    if not n.get("disable") and n["type"] == "ai_upscale":
+        u, k = up(), _X.upscale_factor(n)
+        return {"width": max(1, int(math.floor(u["width"] * k + 0.5))), "height": max(1, int(math.floor(u["height"] * k + 0.5)))}
     if n.get("disable") or n["type"] != "reformat":
         return F if n["type"] in ("read", "constant") or n["type"] in _PLAIN_SIZE else up()
     w, h = reformat_size(n, 0, up())
@@ -2198,7 +2212,7 @@ _TWO_IN = {"merge", "copy", "channelmerge"}
 # Nodes with a mask input (the last) and a mix on top of what they do (the page's MASKABLE / maskMix).
 MASKABLE = ["grade", "colorcorrect", "ocio_colorspace", "ocio_display", "glow", "lensflare", "blur",
             "shuffle", "copy", "erode", "laplacian", "channelmerge", "channelmath", "premult", "unpremult", "lumakeyer",
-            "chromakeyer", "keyer", "motionblur", "depthblur", "defocus"]
+            "chromakeyer", "keyer", "motionblur", "depthblur", "defocus"] + list(_X.EXTRA_MASKABLE)
 OWN_MIX = {t for t in MASKABLE if "mix" in NODE_TYPES[t]["params"]}
 for _mt in MASKABLE:
     _md = NODE_TYPES[_mt]
@@ -2509,14 +2523,15 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
 
             def at(g):
                 return run(s0, g, d1), ex_of(s0, g)
-            if n.get("blend") != "mix":
+            if n.get("blend") not in ("mix", "vectors"):
                 return at(int(math.floor(tf + 0.5)))
             f0 = int(math.floor(tf))
             fr = tf - f0
             if fr < 1e-9:
                 return at(f0)
             a, b = run(s0, f0, d1), run(s0, f0 + 1, d1)
-            return mix_images(a, b, fr), mix_extras(ex_of(s0, f0), ex_of(s0, f0 + 1), fr, a.shape[:2])
+            pic = _X.vector_blend(a, conform(b, a.shape[1], a.shape[0]), fr) if n.get("blend") == "vectors" else mix_images(a, b, fr)
+            return pic, mix_extras(ex_of(s0, f0), ex_of(s0, f0 + 1), fr, a.shape[:2])
         if t == "keyer":
             return key_image(run(ins[0], f, d1), P(n, f, NODE_TYPES["keyer"]["params"]))
         if t == "roto":
@@ -2667,7 +2682,12 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             return spatial(ins[0], f, d1, lambda p: resample(p, m, p.shape[1], p.shape[0]))
         if t in PASS_THROUGH:
             return run(ins[0], f, d1)
-        return blank(W, H)
+        api = _Api(run=lambda i, g: run(i, g, d1), ex_of=ex_of, scale=scale, source=source, ocio=ocio,
+                   P=lambda nn, g: P(nn, g, NODE_TYPES[nn["type"]]["params"]),
+                   size=lambda nn, k: (lambda F: (max(1, int(math.floor(F["width"] * scale + 0.5))),
+                                                  max(1, int(math.floor(F["height"] * scale + 0.5)))))(in_fmt(nn, k)))
+        r = _X.make(n, f, api)
+        return blank(W, H) if r is None else r
     img = run(nid, frame, 0)
     return (img, ex_of(nid, frame)) if channels else img
 
@@ -2717,6 +2737,13 @@ def track_motion(n, f):
     return mo
 
 
+class _Api:
+    """What comp_extra.make is handed: run, P, ex_of, scale, size, source, ocio."""
+
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
 def sources_of(comp, nid):
     """The Reads node ``nid`` depends on."""
     out, seen = [], set()
@@ -2745,3 +2772,6 @@ def source_frame(node, info, f):
     last = info.get("last") if _is_num(info.get("last")) else first
     n = first + f - int(node.get("offset") or 0)
     return max(first, min(last, n))
+
+
+_X.bind(__import__("types").SimpleNamespace(**globals()))   # this module's helpers (it may not be in sys.modules)

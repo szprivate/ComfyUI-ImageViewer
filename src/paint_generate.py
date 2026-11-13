@@ -549,8 +549,11 @@ def _refs_set(graph, ref, name, value):
 
 
 def prepare(s, token, action, input_dir, *, wid=None, prompt="", variations=1, k=2, folder_paths=None,
-            node_classes=None, graph=None, tune=None, box=None):
+            node_classes=None, graph=None, tune=None, box=None, picture=None):
     """The workflow for one Generate, filled in: {job, graphs, output, label, box, api, filled}.
+
+    *picture*: the uint8 (H, W, 4) to work on in place of the document's composite (Comp's AI nodes hand in
+    their input's picture, with ``s.doc`` only its size and selection).
 
     *graph*: the prompt ComfyUI's page made of a canvas-format built-in; *tune*: the dialog's settings
     ({node ref: {input: value}}); *box*: for Select objects, whether the selection's box goes in."""
@@ -576,7 +579,7 @@ def prepare(s, token, action, input_dir, *, wid=None, prompt="", variations=1, k
             raise GenerateError("say what to select, or select around it and take the selection's box")
     (bx, by, bw, bh), sb = crop_box(doc, action)
     tw, th = _work_size(bw, bh, entry.get("size") or {})
-    pic = P.composite(doc)[by:by + bh, bx:bx + bw].copy()
+    pic = (P.composite(doc) if picture is None else picture)[by:by + bh, bx:bx + bw].copy()
     sel = doc.selection[by:by + bh, bx:bx + bw] if (sb and action in MASKED + ("edit",)) else None
     if (tw, th) != (bw, bh):
         pic = O._resize(pic, tw, th)
