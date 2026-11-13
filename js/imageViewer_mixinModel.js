@@ -65,7 +65,10 @@ export const ModelMixin = {
                     .find((f) => this._frameIsModel(f)) || null,
                 onClipFrames: (id, frames) => this.previzFitClipLength(frames),
                 // An Atlas world just loaded: set it upright when it has new cameras (imageViewer_previzAtlasOrient.js).
-                onModelLoaded: (id) => { if (this.previzAtlasMaybeOrient) this.previzAtlasMaybeOrient(id); },
+                onModelLoaded: (id) => {
+                    if (this.previzAtlasMaybeOrient) this.previzAtlasMaybeOrient(id);
+                    if (this.previzFbxUnitMaybe) this.previzFbxUnitMaybe(id);
+                },
                 // Worlds (imageViewer_previzWorld.js).
                 onWalkChange: (on) => this._onWalkChange(on),
                 onWalkToggle: () => this.previzWalkToggle(),

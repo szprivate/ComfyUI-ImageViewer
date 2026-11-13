@@ -74,6 +74,35 @@ function loadSpark() {
 }
 
 export const SPLAT_FORMATS = ["spz", "splat", "ksplat", "sog"];
+/**
+ * An FBX file's GlobalSettings UnitScaleFactor (centimetres per unit: 1 for a file in
+ * centimetres, 100 in metres), read from the bytes - binary or ASCII - or null.
+ */
+export function fbxUnitScaleFactor(buffer) {
+    const bytes = new Uint8Array(buffer);
+    const head = new TextDecoder("latin1").decode(bytes.subarray(0, 21));
+    if (head.startsWith("Kaydara FBX Binary")) {
+        // The property's name as a binary string record: 'S', its length (15), the name.
+        const key = [0x53, 15, 0, 0, 0, ...Array.from("UnitScaleFactor", (c) => c.charCodeAt(0))];
+        outer: for (let i = 0; i + key.length < bytes.length; i++) {
+            for (let j = 0; j < key.length; j++) if (bytes[i + j] !== key[j]) continue outer;
+            // Then 'S' "double", 'S' "Number", 'S' "", and the value as 'D' + float64.
+            let k = i + key.length;
+            for (let n = 0; n < 3 && k < bytes.length; n++) {
+                if (bytes[k] !== 0x53) return null;
+                k += 5 + new DataView(bytes.buffer, bytes.byteOffset + k + 1, 4).getUint32(0, true);
+            }
+            if (bytes[k] === 0x44 && k + 9 <= bytes.length) return new DataView(bytes.buffer, bytes.byteOffset + k + 1, 8).getFloat64(0, true);
+            if (bytes[k] === 0x46 && k + 5 <= bytes.length) return new DataView(bytes.buffer, bytes.byteOffset + k + 1, 4).getFloat32(0, true);
+            return null;
+        }
+        return null;
+    }
+    const text = new TextDecoder("utf-8").decode(bytes.subarray(0, Math.min(bytes.length, 1 << 20)));
+    const m = text.match(/"UnitScaleFactor"\s*,\s*"[^"]*"\s*,\s*"[^"]*"\s*,\s*"[^"]*"\s*,\s*([-+0-9.eE]+)/);
+    return m ? Number(m[1]) : null;
+}
+
 export const MODEL_FORMATS = ["glb", "gltf", "fbx", "obj", "stl", "ply",
                                "usd", "usda", "usdc", "usdz", "abc", ...SPLAT_FORMATS];
 const _MODEL_RE = /\.(glb|gltf|fbx|obj|stl|ply|usda|usdc|usdz|usd|abc|spz|splat|ksplat|sog)$/i;
@@ -954,7 +983,10 @@ export class Model3DView {
         if (format === "fbx") {
             const fbx = new FBXLoader(manager).parse(buffer, RES_PREFIX);
             fbx.traverse((c) => { if (c.isSkinnedMesh) c.frustumCulled = false; });
-            return { object: fbx, animations: fbx.animations || [] };
+            // Its unit (centimetres = 1, metres = 100): three.js keeps it only when the file's top is not one group.
+            const usf = fbxUnitScaleFactor(buffer);
+            return { object: fbx, animations: fbx.animations || [],
+                     unitScaleFactor: usf != null ? usf : (fbx.userData && fbx.userData.unitScaleFactor) };
         }
         if (format === "stl") {
             const geom = new STLLoader(manager).parse(buffer);
@@ -1610,6 +1642,7 @@ export class Model3DView {
             if (!this._entries.has(item.id) || entry.loadSeq !== seq) { this._disposeObject(loaded.object); return entry; }
             this._bodyOf(entry).add(loaded.object);
             entry.object = loaded.object;
+            entry.unitScaleFactor = loaded.unitScaleFactor != null ? Number(loaded.unitScaleFactor) : null;
             entry.stats = this._statsOf(loaded.object, format);
             // Its bones as the file has them: the rest pose a rig is built on.
             this._rigCapture(entry);

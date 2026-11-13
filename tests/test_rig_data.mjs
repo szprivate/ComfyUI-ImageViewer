@@ -303,3 +303,22 @@ test("a limb's unused side: FK controls while on IK, IK and pole while on FK", (
     assert.deepEqual([...R.idleControls(controls, () => 0)].sort(), ["ik", "pole"]);
     assert.deepEqual([...R.idleControls(controls, () => 0.5)], [], "blending: both sides in use");
 });
+
+test("a skeleton that repeats bone names (FBX copies of shared bones) is read, not walked forever", () => {
+    // Each bone has a copy of itself as a child, of the same name, as three.js's FBX reader makes them.
+    const base = [["Hips", null, [0, 1, 0]], ["Spine", "Hips", [0, 1.1, 0]], ["Spine1", "Spine", [0, 1.25, 0]], ["Spine2", "Spine1", [0, 1.4, 0]],
+                  ["Neck", "Spine2", [0, 1.55, 0]], ["Head", "Neck", [0, 1.65, 0]],
+                  ["LeftShoulder", "Spine2", [0.05, 1.5, 0]], ["LeftArm", "LeftShoulder", [0.15, 1.5, 0]], ["LeftForeArm", "LeftArm", [0.45, 1.5, 0]], ["LeftHand", "LeftForeArm", [0.7, 1.5, 0]],
+                  ["RightShoulder", "Spine2", [-0.05, 1.5, 0]], ["RightArm", "RightShoulder", [-0.15, 1.5, 0]], ["RightForeArm", "RightArm", [-0.45, 1.5, 0]], ["RightHand", "RightForeArm", [-0.7, 1.5, 0]],
+                  ["LeftUpLeg", "Hips", [0.1, 0.95, 0]], ["LeftLeg", "LeftUpLeg", [0.1, 0.5, 0]], ["LeftFoot", "LeftLeg", [0.1, 0.08, 0]], ["LeftToeBase", "LeftFoot", [0.1, 0, 0.12]],
+                  ["RightUpLeg", "Hips", [-0.1, 0.95, 0]], ["RightLeg", "RightUpLeg", [-0.1, 0.5, 0]], ["RightFoot", "RightLeg", [-0.1, 0.08, 0]], ["RightToeBase", "RightFoot", [-0.1, 0, 0.12]]];
+    const bones = [];
+    for (const [n, p, head] of base) {
+        bones.push({ name: "mixamorig" + n, parent: p && "mixamorig" + p, head });
+        bones.push({ name: "mixamorig" + n, parent: "mixamorig" + n, head });
+    }
+    const m = R.matchHumanoid(bones);
+    assert.equal(m.humanoid, true, `missing ${m.missing}`);
+    assert.equal(m.roles.hips, "mixamorigHips");
+    assert.equal(m.roles["hand.L"] || m.roles["lowerArm.L"] ? true : false, true);
+});

@@ -137,6 +137,29 @@ test("unmatched bones follow their parents at rest", () => {
     near(mat4.mul(mat4.invert(hand), prop).slice(12, 15), [0.1, 0, 0], 1e-9);
 });
 
+test("a T-pose file onto an A-pose character: the rests are lined up first", () => {
+    // The same skeleton with the arm hanging 45° down (an A-pose), the hand along it.
+    const c = Math.SQRT1_2 * 0.5;
+    const aPose = REST.map((b) => {
+        if (b.name.endsWith("LeftHand")) return { ...b, world: mat4.compose([0.2 + c, 1.4 - c, 0], [0, 0, 0, 1], [1, 1, 1]) };
+        return b;
+    });
+    const match = L.matchBones(REST.map((b) => b.name), aPose.map((b) => b.name));
+    const angle = (pose) => { const h = pose.get("mixamorig:LeftHand").slice(12, 15), a = pose.get("mixamorig:LeftArm").slice(12, 15);
+                              return Math.atan2(h[1] - a[1], h[0] - a[0]); };
+    const [rest, swung] = L.retarget({ bones: REST, frames: animate(REST, [0, 10]) }, { bones: aPose }, match);
+    near(angle(rest.pose), 0, 1e-9, "the file's T-pose is a T-pose on the character");
+    near(angle(swung.pose), -1.0, 1e-9, "and the swing is the file's");
+    // The hand (no child of its own) turns with its arm: it lies along it as it did.
+    const relHand = (pose) => mat4.decompose(mat4.mul(mat4.invert(pose.get("mixamorig:LeftArm")), pose.get("mixamorig:LeftHand"))).q;
+    near(relHand(swung.pose), relHand(rest.pose), 1e-9, "hand along the arm");
+    // Off: the old behaviour, the character's own rest kept as the file's.
+    const [old] = L.retarget({ bones: REST, frames: animate(REST, [0]) }, { bones: aPose }, match, { alignRest: false });
+    near(angle(old.pose), -Math.PI / 4, 1e-9, "unaligned, it stays in its A-pose");
+    assert.equal(L.restAlignment({ bones: REST }, { bones: REST }, L.matchBones(REST.map((b) => b.name), REST.map((b) => b.name))).size, 0,
+                 "the same skeleton needs no turn");
+});
+
 test("the fingerprint notices a changed motion, not float noise", () => {
     const frames = animate(REST, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]).map((fr) => ({ f: fr.f, pose: fr.worlds }));
     const fp = L.fingerprint(frames, { bones: 3, frames: 4 });
