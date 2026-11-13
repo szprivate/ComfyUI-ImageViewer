@@ -258,6 +258,86 @@ def new_node_cases(sources):
     for op in ("add", "multiply", "power", "invert", "clamp", "min", "max", "abs", "threshold", "set"):
         c.append(one(node("channelmath", 1, ["Read1"], operation=op, value=0.4, channels="rgba" if op == "clamp" else "rgb", mix=0.8)))
     c.extend(channel_cases(sources))
+    c.extend(scene_cases(sources))
+    return c
+
+
+def synthetic_deep(seed, w, h, most=3):
+    """A deep picture with 0..most samples a pixel, in no particular depth order (as a file may hold them)."""
+    rng = np.random.default_rng(seed)
+    counts = rng.integers(0, most + 1, w * h)
+    tot = int(counts.sum())
+    s = np.zeros((tot, 6), np.float32)
+    a = rng.random(tot).astype(np.float32) * 0.9
+    s[:, :3] = rng.random((tot, 3)).astype(np.float32) * a[:, None]
+    s[:, 3] = a
+    s[:, 4] = rng.random(tot).astype(np.float32) * 4 + 0.5
+    s[:, 5] = s[:, 4]
+    return M.DP.sort_samples({"w": w, "h": h, "n": counts.astype(np.uint32), "s": s})
+
+
+def scene_cases(sources):
+    """3D (cards, shapes, projection, point clouds, near clipping), deep, and views."""
+    N = node
+    c = []
+    cam = lambda i, **kw: N("camera3d", i, [], **kw)
+    r3 = lambda i, sc, cm, bg=None, **kw: N("render3d", i, [sc, cm, bg], **kw)
+    c.append(({"comp": comp([read(1), N("card3d", 1, ["Read1"], rotate=[10, 25, 3], translate=[0.05, -0.03, 0]),
+                             cam(1, translate=[0.1, 0.05, 1.6], rotate=[-2, 3, 1]), r3(1, "card3d1", "camera3d1"), out("render3d1")])}, sources))
+    c.append(({"comp": comp([read(2), N("geo3d", 1, [None], shape="sphere", divisions=13, translate=[0.31, 0.07, -0.42], uniform=0.71),
+                             N("geo3d", 2, [None], shape="cube", rotate=[33, 41, 7], translate=[-0.37, -0.11, 0.13], scale=[0.61, 0.43, 0.52]),
+                             N("geo3d", 3, ["Read2"], shape="cylinder", divisions=9, rotate=[71, 12, 5], translate=[0.03, 0.29, -0.2], uniform=0.4),
+                             N("scene3d", 1, ["geo3d1", "geo3d2", "geo3d3", None]), cam(1, translate=[0.13, 0.21, 2.7], rotate=[-4.3, 2.9, 1.7], focal=41),
+                             r3(1, "scene3d1", "camera3d1", "Read2", samples=1), out("render3d1")])}, sources))
+    c.append(({"comp": comp([read(1), cam(1, translate=[0.02, 0.01, 2.1], rotate=[1.3, -2.1, 0.4]),
+                             N("project3d", 1, ["Read1", "camera3d1"], faces="front"),
+                             N("card3d", 1, ["project3d1"], rotate=[7, -31, 2], translate=[0.0, 0.03, -0.3], uniform=1.3),
+                             N("geo3d", 1, ["project3d1"], shape="cylinder", divisions=11, rotate=[3, 17, 2], translate=[0.21, -0.1, 0.25], uniform=0.45),
+                             N("scene3d", 1, ["card3d1", "geo3d1", None, None]), cam(2, translate=[0.47, 0.12, 1.9], rotate=[-3.1, 13.7, 0.8]),
+                             r3(1, "scene3d1", "camera3d2", samples=3), out("render3d1")])}, sources))
+    c.append(({"comp": comp([read(1), N("lumakeyer", 1, ["Read1"], write="depth.z", low=0.1), cam(1, translate=[0, 0, 1.5]),
+                             N("pointcloud", 1, ["lumakeyer1", "camera3d1"], step=1, multiply=1.7, size=1.6),
+                             cam(2, translate=[0.31, 0.2, 1.4], rotate=[-6.1, 9.3, 0.7]), r3(1, "pointcloud1", "camera3d2"), out("render3d1")])}, sources))
+    c.append(({"comp": comp([read(1), N("lumakeyer", 1, ["Read1"], write="depth.z", low=0.1), cam(1, translate=[0, 0, 1.5]),
+                             N("pointcloud", 1, ["lumakeyer1", "camera3d1"], step=3, mode="inverse", multiply=0.9, size=2.3),
+                             cam(2, translate=[0.11, -0.2, 1.1], rotate=[3.1, -7.3, 0.2]), r3(1, "pointcloud1", "camera3d2", samples=2), out("render3d1")])}, sources))
+    c.append(({"comp": comp([read(1), N("card3d", 1, ["Read1"], rotate=[0, 81.3, 0], uniform=3.1),
+                             cam(1, translate=[0.13, 0.02, 0.37], rotate=[0.7, 1.1, 0], near=0.05), r3(1, "card3d1", "camera3d1"), out("render3d1")])}, sources))
+    c.append(({"comp": comp([read(1), N("card3d", 1, ["Read1"], rotate=[5, 12, 0]), cam(1, translate=[0.1, 0, 1.9]), out("card3d1")])}, sources))
+    c.append(({"comp": comp([read(1), N("card3d", 1, ["Read1"], rotate=[5, 12, 0]), cam(1, translate=[0.1, 0.03, 1.7], rotate=[1.1, 2.3, 0.3]),
+                             r3(1, "card3d1", "camera3d1"), out("render3d1")], w=40, h=32), "scale": 0.5}, sources))
+    # views
+    vc = lambda nodes, **kw: dict(comp(nodes, **kw), format=dict(comp(nodes, **kw)["format"], views=["left", "right"]))
+    stereo = [read(1), N("card3d", 1, ["Read1"], rotate=[3, 17, 1]), N("geo3d", 1, [None], shape="cube", uniform=0.3, translate=[0.2, 0.1, 0.4], rotate=[20, 30, 0]),
+              N("scene3d", 1, ["card3d1", "geo3d1", None, None]),
+              cam(1, translate=[0.03, 0.02, 1.8], interaxial=0.21, convergence=1.4), r3(1, "scene3d1", "camera3d1")]
+    c.append(({"comp": vc(stereo + [N("anaglyph", 1, ["render3d1"]), out("anaglyph1")])}, sources))
+    c.append(({"comp": vc(stereo + [N("anaglyph", 1, ["render3d1"], mode="grey"), out("anaglyph1")])}, sources))
+    c.append(({"comp": vc(stereo + [N("sidebyside", 1, ["render3d1"]), out("sidebyside1")])}, sources))
+    c.append(({"comp": vc(stereo + [N("sidebyside", 1, ["render3d1"], layout="over under"), out("sidebyside1")])}, sources))
+    c.append(({"comp": vc(stereo + [out("render3d1")]), "view": "right"}, sources))
+    c.append(({"comp": vc(stereo + [N("oneview", 1, ["render3d1"], view="right"), out("oneview1")])}, sources))
+    per_view = {"Read1@0#left": src(11), "Read1@0#right": src(12), "Read2": src(2)}
+    c.append(({"comp": vc([read(1, file="plate_%V.png"), read(2), N("joinviews", 1, ["Read1", "Read2", None, None]),
+                           dict(N("grade", 1, ["joinviews1"]), split={"right": {"gain": 2.5}}), N("sidebyside", 1, ["grade1"]), out("sidebyside1")])}, per_view))
+    c.append(({"comp": vc([read(1, file="plate_%v.png"), N("anaglyph", 1, ["Read1"]), out("anaglyph1")])},
+              {"Read1@0#left": src(13), "Read1@0#right": src(14)}))
+    # deep
+    deep_a = synthetic_deep(21, 20, 10)
+    c.append(({"comp": comp([N("deepread", 1, [], file="a.exr"), out("deepread1")]), "deep": {"deepread1": deep_a}}, {}))
+    c.append(({"comp": comp([N("deepread", 1, [], file="a.exr"), N("deepcrop", 1, ["deepread1"], znear=1.2, zfar=3.1), out("deepcrop1")]), "deep": {"deepread1": deep_a}}, {}))
+    c.append(({"comp": comp([N("deepread", 1, [], file="a.exr"), N("deepcrop", 1, ["deepread1"], znear=1.2, outside="on"), out("deepcrop1")]), "deep": {"deepread1": deep_a}}, {}))
+    c.append(({"comp": comp([N("deepread", 1, [], file="a.exr"), out("deepread1")], w=40, h=30), "scale": 0.5, "deep": {"deepread1": synthetic_deep(22, 33, 25)}}, {}))
+    c.append(({"comp": comp([read(1), read(2), N("addchannels", 1, ["Read1"], channels="depth.z", value=1.5),
+                             N("deepfromimage", 1, ["addchannels1"]), N("deepfromimage", 2, ["Read2"], z=1.1),
+                             N("deepread", 1, [], file="a.exr"), N("deepmerge", 1, ["deepfromimage1", "deepfromimage2", "deepread1", None]),
+                             N("deepflatten", 1, ["deepmerge1"]), out("deepflatten1")]), "deep": {"deepread1": deep_a}}, sources))
+    c.append(({"comp": comp([read(1), N("deepread", 1, [], file="a.exr"), N("deepfromimage", 1, ["Read1"], z=2.2),
+                             N("deepholdout", 1, ["deepread1", "deepfromimage1"]), out("deepholdout1")]), "deep": {"deepread1": deep_a}}, sources))
+    c.append(({"comp": comp([read(1), N("card3d", 1, ["Read1"], rotate=[5, 20, 0]), N("geo3d", 1, [None], shape="sphere", divisions=10, uniform=0.5, translate=[0.1, 0, -0.3]),
+                             N("scene3d", 1, ["card3d1", "geo3d1", None, None]), cam(1, translate=[0, 0, 1.8]),
+                             N("render3d", 1, ["scene3d1", "camera3d1", None]), N("deepread", 1, [], file="a.exr"),
+                             N("deepmerge", 1, ["render3d1", "deepread1", None, None]), out("deepmerge1")]), "deep": {"deepread1": deep_a}}, sources))
     return c
 
 
@@ -271,6 +351,8 @@ class CompParity(unittest.TestCase):
         payload = []
         for spec_, sources in cls.cases:
             payload.append({"comp": spec_["comp"], "frame": spec_.get("frame", 0), "scale": spec_.get("scale", 1), "ocio": spec_.get("ocio"),
+                            "view": spec_.get("view"),
+                            "deep": {k: {"w": d["w"], "h": d["h"], "n": d["n"].tolist(), "s": d["s"].reshape(-1).tolist()} for k, d in (spec_.get("deep") or {}).items()},
                             "sources": {k: {"w": int(v.shape[1]), "h": int(v.shape[0]), "u8": v.reshape(-1).tolist(),
                                             "linear": next((n.get("colorspace") == "linear" for n in spec_["comp"]["nodes"] if n["id"] == k.split("@")[0]), False)}
                                         for k, v in sources.items()}})
@@ -309,9 +391,11 @@ class CompParity(unittest.TestCase):
                 for k, v in sources.items():
                     node = M.node_by_id(c, k.split("@")[0])
                     pics[k] = M.decode8(v, linear=(node or {}).get("colorspace") == "linear")
+                deeps = spec_.get("deep") or {}
                 img, ex = M.render_node(c, c["output"], spec_.get("frame", 0),
-                                        lambda n, f: pics.get(f"{n['id']}@{f}", pics.get(n["id"])), spec_.get("scale", 1),
-                                        ocio=ocio_hook(spec_["ocio"]) if spec_.get("ocio") else None, channels=True)
+                                        lambda n, f: pics.get(f"{n['id']}@{f}#{n.get('__view')}", pics.get(f"{n['id']}@{f}", pics.get(n["id"]))), spec_.get("scale", 1),
+                                        ocio=ocio_hook(spec_["ocio"]) if spec_.get("ocio") else None, channels=True,
+                                        view=spec_.get("view"), deep_source=lambda n, f: deeps.get(n["id"]))
                 js = self.js["pictures"][i]
                 self.assertEqual((js["w"], js["h"]), (img.shape[1], img.shape[0]))
                 ref = np.asarray(js["data"], np.float32).reshape(img.shape)
@@ -319,7 +403,12 @@ class CompParity(unittest.TestCase):
                 self.assertLess(diff, 2e-5, f"case {i}: max difference {diff}")
                 self.assertEqual(list(js["ch"]), list(ex), f"case {i}: the extra channels")
                 for k, v in ex.items():
-                    d = float(np.max(np.abs(np.asarray(js["ch"][k], np.float32).reshape(v.shape) - v))) if v.size else 0.0
+                    # relative to the channel's size: a depth of 160 differs by float32's last places
+                    d = float(np.max(np.abs(np.asarray(js["ch"][k], np.float32).reshape(v.shape) - v) / np.maximum(1, np.abs(v)))) if v.size else 0.0
+                    if os.environ.get("COMP_PARITY_DEBUG") and d >= 2e-5:
+                        a = np.asarray(js["ch"][k], np.float32).reshape(v.shape)
+                        yx = np.unravel_index(np.argmax(np.abs(a - v)), v.shape)
+                        print(i, k, yx, a[yx], v[yx])
                     self.assertLess(d, 2e-5, f"case {i}: channel {k} differs by {d}")
 
 
