@@ -1673,13 +1673,18 @@ export function ocioNeeds(comp, frame) {
     return [...out].map(([key, spec]) => ({ key, spec }));
 }
 /**
- * What an AI node's result was made from, as a short hash: what comes into it (and its mask) and the words /
- * factor it asks with. A result whose key is not the node's key now is out of date (said in Parameters; it is
+ * What an AI node's result was made from, as a short hash: what comes into it (and its mask), the words /
+ * factor it asks with, and the workflow / model files it picked.
+ * A result whose key is not the node's key now is out of date (said in Parameters; it is
  * still shown until it is run again).
  */
 export function aiKey(comp, n) {
     const ins = n.inputs || [];
-    const text = [ins[0] ? upstreamKey(comp, ins[0]) : "", ins[1] ? upstreamKey(comp, ins[1]) : "", n.type, n.prompt || "", n.factor || ""].join("\u0001");
+    const models = n.models && typeof n.models === "object" ? Object.keys(n.models).sort().map((k) => `${k}=${n.models[k]}`).join(",") : "";
+    const parts = [ins[0] ? upstreamKey(comp, ins[0]) : "", ins[1] ? upstreamKey(comp, ins[1]) : "", n.type, n.prompt || "", n.factor || ""];
+    // The workflow and models a node picked count too (a node without them keeps the key it had).
+    if (n.workflow || models) parts.push(n.workflow || "", models);
+    const text = parts.join("\u0001");
     let h = 0x811c9dc5;
     for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
     return h.toString(36);

@@ -121,9 +121,18 @@ A few notes on the newer nodes:
 
 ### AI nodes
 
-AI nodes send the image coming into them through a ComfyUI workflow and keep the answer. They use the same workflows as Paint's Generate, so the workflow picked there for background removal, image edit, fill / remove or upscale is the one that runs (Matte uses background removal, Depth and Relight an image edit with words, Inpaint fill or remove inside the alpha of its mask input, Upscale the upscalers).
+AI nodes send the image coming into them through a ComfyUI workflow and keep the answer. They use the same workflows as Paint's Generate (Matte uses background removal, Depth and Relight an image edit with words, Inpaint fill or remove inside the alpha of its mask input, Upscale the upscalers). By default a node runs the workflow picked there for its action.
 
-Nothing runs by itself. In the node's Parameters section, **This frame** runs it on the frame at the playhead and **All frames** on every frame, one after the other. Each answer is saved next to the comp as `<comp>_ai/<node>/<node>_<kind>.<frame>_<run>.png` and stored in the node, so it travels with the comp (one undo step per frame). A frame without its own result shows the nearest earlier one; before the first run the node passes its input through. When the input or the prompt changes afterwards, Parameters marks the results as out of date; they stay until they are run again. **Forget** removes them from the node and leaves the files.
+Each node can pick its own:
+
+- **workflow**: Paint's choice, or any workflow Paint lists for that action (local models and API models; "files missing" means the model files are not installed yet). Changing it clears the node's model picks.
+- **model files**: one row per model input of that workflow (diffusion model, checkpoint, text encoder, VAE, LoRA, upscale model, and loaders of node packs whose file sits in a ComfyUI model folder). Each row lists the files in that model folder; "workflow's own" keeps the file the workflow names. Only files ComfyUI lists can be picked.
+
+A changed workflow or model marks the node's results as out of date.
+
+Nothing runs by itself. In the node's Parameters section, **This frame** runs it on the frame at the playhead and **All frames** on every frame of the comp; **Out of date** reruns only the frames whose results are stale. A frame range is queued as **one ComfyUI job**: every frame's input is rendered and written out, and one prompt holds each frame's part of the workflow while the parts that are the same for all frames (model loaders, text encoders) appear once, so the models load once. All frames of a run share one seed. While it runs, Parameters shows how many frames are done and a **Stop** button (frames that already came back are kept). The answers are saved next to the comp as a PNG sequence, `<comp>_ai/<node>/<run>/<node>_<kind>.####.png`, and stored in the node, so they travel with the comp (one undo step per job).
+
+**frames per job** (0 = the whole range in one job) splits a long range into several jobs. ComfyUI keeps every frame's intermediate images in memory until a job ends, so a long range at a large size may need it. For Inpaint, a frame whose mask is empty is left out and named in a notice. A frame without its own result shows the nearest earlier one; before the first run the node passes its input through. When the input or the prompt changes afterwards, Parameters marks the results as out of date; they stay until they are run again. **Forget** removes them from the node and leaves the files.
 
 ## Working speed
 

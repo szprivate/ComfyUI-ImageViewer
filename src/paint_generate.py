@@ -351,6 +351,94 @@ def resolve_models(graph, folder_paths):
     return gone
 
 
+MODEL_EXTS = (".safetensors", ".sft", ".ckpt", ".pt", ".pth", ".bin", ".gguf", ".onnx")
+NOT_MODEL_FOLDERS = ("custom_nodes", "configs", "input", "output", "temp")
+MAX_OPTIONS = 2000
+
+
+def _folder_names(folder_paths):
+    """The model folders ComfyUI knows (its own and the ones node packs add)."""
+    names = getattr(folder_paths, "folder_names_and_paths", None)
+    if isinstance(names, dict):
+        return [n for n in names if n not in NOT_MODEL_FOLDERS]
+    return sorted({f for v in LOADERS.values() for _i, f in v})
+
+
+def _listed(folder_paths, folder):
+    got = []
+    for f in FOLDER_ALIASES.get(folder, (folder,)):
+        try:
+            got += [str(x) for x in folder_paths.get_filename_list(f) or []]
+        except Exception:  # noqa: BLE001 - an unknown folder name
+            pass
+    return sorted(set(got), key=str.lower)
+
+
+def _folder_of(folder_paths, name):
+    """The model folder that lists *name* (or a file of that name in a subfolder); None when none does."""
+    want = _base(name)
+    for f in _folder_names(folder_paths):
+        if any(_base(x) == want for x in _listed(folder_paths, f)):
+            return f
+    return None
+
+
+def model_inputs(graph, folder_paths):
+    """Every input of *graph* that names a model file, with what else could go there:
+    [{key "<node>.<input>", node, input, title, folder, value, options}]. The known loaders by their folder
+    (``LOADERS``); any other input whose value is a model file by the folder that lists it (a node pack's own
+    loader). Without ComfyUI (the tests: no folder_paths) the options are only the value."""
+    out = []
+    if folder_paths is not None and not isinstance(folder_paths, _Remembered):
+        folder_paths = _Remembered(folder_paths)
+    ids = sorted(graph, key=lambda k: (0, int(k)) if str(k).isdigit() else (1, str(k)))
+    for k in ids:
+        v = graph[k]
+        known = dict(LOADERS.get(v.get("class_type"), []))
+        for name, val in (v.get("inputs") or {}).items():
+            if not isinstance(val, str) or not val.strip():
+                continue
+            folder = known.get(name)
+            if folder is None:
+                if not val.lower().endswith(MODEL_EXTS) or folder_paths is None:
+                    continue
+                folder = _folder_of(folder_paths, val)
+                if not folder:
+                    continue
+            opts = _listed(folder_paths, folder) if folder_paths is not None else []
+            have = locate(folder_paths, folder, val) if folder_paths is not None else val
+            value = have or val
+            if value not in opts:
+                opts = [value] + opts
+            out.append({"key": f"{k}.{name}", "node": str(k), "input": name, "folder": folder,
+                        "title": str(((v.get("_meta") or {}).get("title")) or v.get("class_type") or k),
+                        "value": value, "found": bool(have), "options": opts[:MAX_OPTIONS]})
+    return out
+
+
+def apply_models(graph, models, folder_paths):
+    """The user's model picks onto *graph* (in place): {"<node>.<input>": file}. Each must be an input that
+    names a model and a file its folder lists; anything else is refused (nothing outside the model folders)."""
+    if not models:
+        return []
+    if not isinstance(models, dict):
+        raise GenerateError("the models must be {node.input: file}")
+    have = {m["key"]: m for m in model_inputs(graph, folder_paths)}
+    done = []
+    for key, name in models.items():
+        if name in (None, ""):
+            continue
+        m = have.get(str(key))
+        if not m:
+            continue                  # the workflow changed under the pick: its own model stays
+        name = str(name)
+        if folder_paths is not None and name not in m["options"]:
+            raise GenerateError(f"{name} is not in the {m['folder']} models")
+        graph[m["node"]]["inputs"][m["input"]] = name
+        done.append(m["key"])
+    return done
+
+
 def missing(graph, folder_paths=None, node_classes=None):
     """What the workflow needs that this ComfyUI does not have: [{what, kind, folder?}]. Model names are
     looked for in subfolders too, and the graph is pointed at what was found."""
@@ -399,6 +487,7 @@ class _Remembered:
     def __init__(self, fp):
         self._fp, self._full, self._lists = fp, {}, {}
         self.models_dir = getattr(fp, "models_dir", None)
+        self.folder_names_and_paths = getattr(fp, "folder_names_and_paths", None)
 
     def get_full_path(self, folder, name):
         k = (folder, name)
@@ -549,17 +638,19 @@ def _refs_set(graph, ref, name, value):
 
 
 def prepare(s, token, action, input_dir, *, wid=None, prompt="", variations=1, k=2, folder_paths=None,
-            node_classes=None, graph=None, tune=None, box=None, picture=None):
+            node_classes=None, graph=None, tune=None, box=None, picture=None, models=None):
     """The workflow for one Generate, filled in: {job, graphs, output, label, box, api, filled}.
 
     *picture*: the uint8 (H, W, 4) to work on in place of the document's composite (Comp's AI nodes hand in
     their input's picture, with ``s.doc`` only its size and selection).
 
     *graph*: the prompt ComfyUI's page made of a canvas-format built-in; *tune*: the dialog's settings
-    ({node ref: {input: value}}); *box*: for Select objects, whether the selection's box goes in."""
+    ({node ref: {input: value}}); *box*: for Select objects, whether the selection's box goes in; *models*: the
+    model files picked in place of the workflow's own ({"<node>.<input>": file}, :func:`apply_models`)."""
     if action not in ACTIONS:
         raise GenerateError(f"unknown action {action!r}")
     entry, graph = resolve_workflow(action, wid, graph)
+    apply_models(graph, models, folder_paths)
     gone = missing(graph, folder_paths, node_classes)
     if gone:
         urls = {m["name"]: m for m in entry.get("models") or []}

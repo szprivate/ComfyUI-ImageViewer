@@ -1743,6 +1743,96 @@ class CompBrowserTests(unittest.TestCase):
         self.assertNotIn("comp:", pg.evaluate("() => __panel.tabOrder"))
         self.assertEqual(self.errors, [])
 
+    def test_an_ai_node_runs_a_frame_range_as_one_job_and_picks_its_model(self):
+        """All frames as ONE queued prompt (the loader once, an output per frame), the answers back as a PNG
+        sequence on the node in one undo step; the node's workflow and model pickers; Stop."""
+        flows = os.path.join(self.tmp, "flows_ai")
+        os.environ["IMAGE_VIEWER_PAINT_WORKFLOWS"] = flows
+        self.addCleanup(os.environ.pop, "IMAGE_VIEWER_PAINT_WORKFLOWS", None)
+        G = importlib.import_module(self.pkg + ".paint_generate")
+        fp = sys.modules[self.pkg + ".viewer_api"].folder_paths
+        lists = {"checkpoints": ["base.safetensors", "sub/other.safetensors"]}
+        fp.folder_names_and_paths = {k: ([], set()) for k in lists}
+        fp.get_filename_list = lambda f: list(lists.get(f, []))
+        fp.get_full_path = lambda f, n: (n if n in lists.get(f, []) else None)
+
+        def undo():
+            for k in ("folder_names_and_paths", "get_filename_list", "get_full_path"):
+                if hasattr(fp, k):
+                    delattr(fp, k)
+        self.addCleanup(undo)
+        G.set_custom("background", {
+            "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "base.safetensors"}},
+            "2": {"class_type": "LoadImage", "_meta": {"title": "paint:image"}, "inputs": {"image": "x.png"}},
+            "3": {"class_type": "SomeMatte", "inputs": {"image": ["2", 0], "model": ["1", 0], "seed": 5}},
+            "4": {"class_type": "SaveImage", "_meta": {"title": "paint:output"}, "inputs": {"images": ["3", 0], "filename_prefix": "x"}},
+        }, "test matte")
+        G.set_choice("background", "custom")
+        pg = self.page()
+        pg.evaluate("""() => { const f = window.__fetchApi;
+            window.__fetchApi = (p, o) => (p.startsWith('/imageviewer/paint/') ? fetch(p, o) : f(p, o)); }""")
+        path = self.new_comp(pg)
+        ai = pg.evaluate(f"""(file) => {{ const e = {self.ED}; const c = e.comp(); const out = c.nodes.find((n) => n.type === 'output');
+            const r = e.addNode('read', {{ file }}); const a = e.addNode('ai_matte'); a.inputs = [r.id]; out.inputs = [a.id];
+            e.refresh(); e.select([a.id]); return a.id; }}""", self.png)
+        pg.evaluate(f"() => {self.ED}.save()")
+        pg.evaluate("""() => { window.__queued = []; __api.queuePrompt = async (n, p) => { window.__queued.push(p.output);
+            return { prompt_id: 'P' + window.__queued.length }; }; }""")
+        # The pickers: Paint's choice plus the workflows, and the loader's files from the model folder.
+        pg.wait_for_function("() => __panel.shadowRoot.querySelector('.cp-ai-model')", timeout=10000)
+        opts = pg.evaluate("() => Array.from(__panel.shadowRoot.querySelector('.cp-ai-model').options).map((o) => o.value)")
+        self.assertEqual(opts, ["", "base.safetensors", "sub/other.safetensors"])
+        self.assertTrue(pg.evaluate("() => !!__panel.shadowRoot.querySelector('.cp-ai-wf')"))
+        pg.evaluate("""() => { const s = __panel.shadowRoot.querySelector('.cp-ai-model'); s.value = 'sub/other.safetensors';
+            s.dispatchEvent(new Event('change')); }""")
+        self.assertEqual(pg.evaluate(f"(id) => {self.ED}.node(id).models", ai), {"1.ckpt_name": "sub/other.safetensors"})
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.wait_for_timeout(300)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-ai-node-models.png"))
+        # All frames: one prompt.
+        pg.evaluate(f"(id) => {{ window.__run = __panel._cpAiRun(__panel._cpActive(), id, [0, 1, 2, 3]); }}", ai)
+        pg.wait_for_function("() => window.__queued.length === 1", timeout=20000)
+        g = pg.evaluate("() => window.__queued[0]")
+        kinds = [v["class_type"] for v in g.values()]
+        self.assertEqual(kinds.count("CheckpointLoaderSimple"), 1)
+        self.assertEqual(kinds.count("SaveImage"), 4)
+        self.assertEqual(next(v for v in g.values() if v["class_type"] == "CheckpointLoaderSimple")["inputs"]["ckpt_name"],
+                         "sub/other.safetensors")
+        self.assertIn("Running", pg.evaluate("() => __panel.shadowRoot.querySelector('.cp-ai-prog').textContent"))
+        from PIL import Image
+        os.makedirs(os.path.join(self.dirs["output"], "gen"), exist_ok=True)
+        outs = {}
+        for k, v in g.items():
+            if v["class_type"] == "SaveImage":
+                f = int(v["inputs"]["filename_prefix"].rsplit(".", 1)[1])
+                a = np.zeros((90, 160, 3), np.uint8)
+                a[:, : 20 * (f + 1)] = 255
+                Image.fromarray(a, "RGB").save(os.path.join(self.dirs["output"], "gen", f"m{f}.png"))
+                outs[k] = f"m{f}.png"
+        pg.evaluate("""(outs) => { for (const [node, name] of Object.entries(outs))
+                __api.dispatch('executed', { prompt_id: 'P1', node, output: { images: [{ filename: name, subfolder: 'gen', type: 'output' }] } });
+            __api.dispatch('execution_success', { prompt_id: 'P1' }); }""", outs)
+        pg.evaluate("() => window.__run")
+        res = pg.evaluate(f"(id) => {self.ED}.node(id).results", ai)
+        self.assertEqual(sorted(res["frames"]), ["0", "1", "2", "3"])
+        files = [os.path.join(os.path.dirname(path), *rel.split("/")) for rel in res["frames"].values()]
+        self.assertTrue(all(os.path.isfile(f) for f in files))
+        self.assertEqual(len({os.path.dirname(f) for f in files}), 1)          # one folder: a sequence
+        self.assertTrue(res["frames"]["2"].endswith("_matte.0002.png"), res["frames"])
+        # One undo step for the whole run.
+        pg.evaluate(f"() => {self.ED}.undo()")
+        self.assertIsNone(pg.evaluate(f"(id) => {self.ED}.node(id).results || null", ai))
+        pg.evaluate(f"() => {self.ED}.redo()")
+        # Stop: out of the queue, nothing placed, the node free again.
+        pg.evaluate(f"(id) => {{ window.__run = __panel._cpAiRun(__panel._cpActive(), id, [0, 1]); }}", ai)
+        pg.wait_for_function("() => window.__queued.length === 2", timeout=20000)
+        pg.evaluate(f"(id) => __panel._cpAiStop(id)", ai)
+        pg.evaluate("() => window.__run")
+        self.assertFalse(pg.evaluate("() => __panel._cpAiRuns.size"))
+        self.assertTrue(pg.evaluate("() => !!__panel.shadowRoot.querySelector('.cp-btnrow')"))
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

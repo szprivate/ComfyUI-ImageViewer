@@ -189,6 +189,143 @@ class CompFiles(unittest.TestCase):
         with self.assertRaises(self.AI.AiError):
             self.AI.action_of("relight", "")
 
+    # ── a frame range as one job; picking the models ──
+
+    MODELS = {"checkpoints": ["base.safetensors", "sub/other.safetensors"], "upscale_models": ["x2.pth", "x4.pth"]}
+
+    def _fake_models(self):
+        """The routes' folder_paths with a few model files listed (taken off again by the test's cleanup)."""
+        fp = sys.modules[self.pkg + ".viewer_api"].folder_paths
+        lists = self.MODELS
+        fp.folder_names_and_paths = {k: ([], set()) for k in lists}
+        fp.get_filename_list = lambda f: list(lists.get(f, []))
+        fp.get_full_path = lambda f, n: (n if n in lists.get(f, []) else None)
+
+        def undo():
+            for k in ("folder_names_and_paths", "get_filename_list", "get_full_path"):
+                if hasattr(fp, k):
+                    delattr(fp, k)
+        self.addCleanup(undo)
+        return fp
+
+    LOADER_FLOW = {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "base.safetensors"}},
+        "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "x", "clip": ["1", 1]}},
+        "3": {"class_type": "LoadImage", "_meta": {"title": "paint:image"}, "inputs": {"image": "x.png"}},
+        "4": {"class_type": "VAEEncode", "inputs": {"pixels": ["3", 0], "vae": ["1", 2]}},
+        "5": {"class_type": "KSampler", "inputs": {"model": ["1", 0], "positive": ["2", 0], "negative": ["2", 0],
+                                                   "latent_image": ["4", 0], "seed": 1, "steps": 4}},
+        "6": {"class_type": "VAEDecode", "inputs": {"samples": ["5", 0], "vae": ["1", 2]}},
+        "7": {"class_type": "SaveImage", "_meta": {"title": "paint:output"}, "inputs": {"images": ["6", 0], "filename_prefix": "x"}},
+    }
+
+    def test_merged_graphs_share_what_is_the_same_and_keep_an_output_per_frame(self):
+        import copy
+        gs = []
+        for i in range(3):
+            g = copy.deepcopy(self.LOADER_FLOW)
+            g["3"]["inputs"]["image"] = f"f{i}.png"
+            gs.append(g)
+        merged, outs = self.AI.merge_graphs(gs, ["7", "7", "7"])
+        kinds = [v["class_type"] for v in merged.values()]
+        self.assertEqual(kinds.count("CheckpointLoaderSimple"), 1)
+        self.assertEqual(kinds.count("CLIPTextEncode"), 1)
+        self.assertEqual(kinds.count("LoadImage"), 3)
+        self.assertEqual(kinds.count("KSampler"), 3)
+        self.assertEqual(kinds.count("SaveImage"), 3)
+        self.assertEqual(len(set(outs)), 3)
+        for o in outs:      # each output reads its own frame's chain
+            dec = merged[merged[o]["inputs"]["images"][0]]
+            self.assertEqual(dec["class_type"], "VAEDecode")
+        loads = {merged[k]["inputs"]["image"] for k in merged if merged[k]["class_type"] == "LoadImage"}
+        self.assertEqual(loads, {"f0.png", "f1.png", "f2.png"})
+
+    def test_a_frame_range_is_one_job_and_comes_back_as_a_png_sequence(self):
+        self._fake_models()
+        self.G.set_custom("background", self.LOADER_FLOW, "test matte with a model")
+        self.G.set_choice("background", "custom")
+        comp_path = os.path.join(self.dirs["output"], "seq.comp.json")
+        comp = {"comp": 1, "format": {"width": 60, "height": 40, "fps": 24, "frames": 6}, "output": "Output1",
+                "nodes": [{"id": "Read1", "type": "read", "file": "plate.png", "inputs": []},
+                          {"id": "AI1", "type": "ai_matte", "inputs": ["Read1"], "models": {"1.ckpt_name": "sub/other.safetensors"}},
+                          {"id": "Output1", "type": "output", "inputs": ["AI1"]}]}
+        from PIL import Image
+
+        async def go(c):
+            r = await c.post("/imageviewer/comp_ai_batch", json={"path": comp_path, "comp": comp, "node": "AI1", "frames": [1, 2, 3, 4]})
+            prep = await r.json()
+            self.assertEqual(r.status, 200, prep)
+            g = prep["graph"]
+            kinds = [v["class_type"] for v in g.values()]
+            self.assertEqual(kinds.count("CheckpointLoaderSimple"), 1)    # the model loads once
+            self.assertEqual(kinds.count("SaveImage"), 4)
+            loader = next(v for v in g.values() if v["class_type"] == "CheckpointLoaderSimple")
+            self.assertEqual(loader["inputs"]["ckpt_name"], "sub/other.safetensors")   # the node's own pick
+            seeds = {v["inputs"]["seed"] for v in g.values() if v["class_type"] == "KSampler"}
+            self.assertEqual(len(seeds), 1)                                # one seed for the run
+            self.assertEqual(sorted(prep["outputs"]), ["1", "2", "3", "4"])
+            prefixes = sorted(g[o]["inputs"]["filename_prefix"] for o in prep["outputs"].values())
+            self.assertTrue(prefixes[0].endswith("AI1.0001"), prefixes)
+            # The answers: a matte per frame, wider white each frame.
+            os.makedirs(os.path.join(self.dirs["output"], "gen"), exist_ok=True)
+            images = {}
+            for f in prep["frames"]:
+                ans = np.zeros((40, 60, 3), np.uint8)
+                ans[:, : 10 * f] = 255
+                Image.fromarray(ans, "RGB").save(os.path.join(self.dirs["output"], "gen", f"b{f}.png"))
+                images[str(f)] = {"filename": f"b{f}.png", "subfolder": "gen", "type": "output"}
+            images["5"] = {"filename": "../../../x.png", "type": "output"}
+            r = await c.post("/imageviewer/comp_ai_batch_place", json={"run": prep["run"], "images": images})
+            placed = await r.json()
+            self.assertEqual(r.status, 200, placed)
+            self.assertEqual(sorted(placed["frames"]), ["1", "2", "3", "4"])
+            self.assertEqual(placed["missing"], [5])
+            self.assertEqual(placed["frames"]["3"], f"seq_ai/AI1/{prep['run']}/AI1_matte.0003.png")
+            for rel in placed["frames"].values():
+                self.assertTrue(os.path.isfile(os.path.join(self.dirs["output"], *rel.split("/"))))
+            r = await c.post("/imageviewer/comp_ai_batch_place", json={"run": "nope", "images": images})
+            self.assertEqual(r.status, 400)
+            # A file outside the model folders is refused.
+            bad = dict(comp, nodes=[comp["nodes"][0], dict(comp["nodes"][1], models={"1.ckpt_name": "../evil.safetensors"}), comp["nodes"][2]])
+            r = await c.post("/imageviewer/comp_ai_batch", json={"path": comp_path, "comp": bad, "node": "AI1", "frames": [1]})
+            self.assertEqual(r.status, 400)
+            return placed
+        placed = self.run_c(go)
+        comp["nodes"][1]["results"] = {"frames": placed["frames"], "keys": {}}
+        io = importlib.import_module(self.pkg + ".comp_io")
+        src = io.Sources(comp_path)
+        try:
+            one = self.M.render_node(comp, "Output1", 1, src, 1.0)
+            four = self.M.render_node(comp, "Output1", 4, src, 1.0)
+        finally:
+            src.close()
+        self.assertGreater(float(one[20, 5, 3]), 0.99)     # frame 1: white to x = 10
+        self.assertLess(float(one[20, 20, 3]), 0.01)
+        self.assertGreater(float(four[20, 35, 3]), 0.99)   # frame 4: white to x = 40
+
+    def test_the_models_a_workflow_can_take_are_listed_from_the_model_folders(self):
+        fp = self._fake_models()
+        got = self.G.model_inputs(self.LOADER_FLOW, fp)
+        self.assertEqual([m["key"] for m in got], ["1.ckpt_name"])
+        self.assertEqual(got[0]["folder"], "checkpoints")
+        self.assertEqual(got[0]["options"], ["base.safetensors", "sub/other.safetensors"])
+        # A node pack's own loader: found by the folder that lists its file.
+        g = {"1": {"class_type": "SomePackUpscaler", "inputs": {"model": "x2.pth", "tile": 512}}}
+        got = self.G.model_inputs(g, fp)
+        self.assertEqual([(m["key"], m["folder"]) for m in got], [("1.model", "upscale_models")])
+        self.G.apply_models(g, {"1.model": "x4.pth"}, fp)
+        self.assertEqual(g["1"]["inputs"]["model"], "x4.pth")
+        with self.assertRaises(self.G.GenerateError):
+            self.G.apply_models(g, {"1.model": "C:/elsewhere/x8.pth"}, fp)
+
+        async def go(c):
+            self.G.set_custom("upscale", self.LOADER_FLOW, "with a model")
+            r = await c.post("/imageviewer/comp_ai_models", json={"action": "upscale", "workflow": "custom"})
+            res = await r.json()
+            self.assertEqual(r.status, 200, res)
+            self.assertEqual(res["inputs"][0]["options"], ["base.safetensors", "sub/other.safetensors"])
+        self.run_c(go)
+
 
 if __name__ == "__main__":
     unittest.main()
