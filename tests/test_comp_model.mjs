@@ -35,17 +35,17 @@ test("connect refuses a loop; delete reconnects through the first input", () => 
     const r = C.addNode(c, read(c, "a.png"));
     const g = C.insertNode(c, "grade", r.id);
     const b = C.insertNode(c, "blur", g.id);
-    assert.deepEqual(b.inputs, [g.id]);
+    assert.deepEqual(b.inputs, [g.id, null], "src, then the mask");
     assert.equal(C.connect(c, r.id === "Read1" ? g.id : g.id, 0, b.id), false, "blur -> grade would loop");
     C.removeNodes(c, [g.id]);
-    assert.deepEqual(C.nodeById(c, b.id).inputs, [r.id]);
+    assert.deepEqual(C.nodeById(c, b.id).inputs, [r.id, null]);
 });
 
 test("insertNode after a node takes over what read it", () => {
     const c = C.newComp();
     const g = C.insertNode(c, "grade", "Constant1");
     assert.deepEqual(C.nodeById(c, "Output1").inputs, [g.id]);
-    assert.deepEqual(g.inputs, ["Constant1"]);
+    assert.deepEqual(g.inputs, ["Constant1", null]);
     assert.ok(C.nodeById(c, "Output1").y > g.y, "the Output moved down to make room");
 });
 
@@ -189,16 +189,43 @@ test("a heavy node's result is kept between renders and taken again while nothin
     const d = C.addNode(comp, C.makeNode(comp, "depthblur", { inputs: [r.id, r.id] }));
     const g = C.addNode(comp, C.makeNode(comp, "grade", { inputs: [d.id] }));
     const cache = new Map();
-    let calls = 0;
-    const source = () => { calls++; return pattern(16, 16, 0, 0, 0); };
+    const pic = pattern(16, 16, 0, 0, 0);
+    const source = () => pic;
     C.renderNode(comp, g.id, 0, { scale: 1, source, cache });
-    const after = calls;
+    const kept = [...cache.values()][0];
+    assert.equal(cache.size, 1, "only the heavy node is kept by default");
     g.gain = 2;
     C.renderNode(comp, g.id, 0, { scale: 1, source, cache });
-    assert.equal(calls, after, "the depth blur came from the cache");
+    assert.equal(cache.size, 1, "the depth blur came from the cache");
+    assert.equal([...cache.values()][0], kept);
     d.focus = 0.1;
     C.renderNode(comp, g.id, 0, { scale: 1, source, cache });
-    assert.ok(calls > after, "its own setting changed: made again");
+    assert.equal(cache.size, 2, "its own setting changed: made again");
+    C.renderNode(comp, g.id, 0, { scale: 1, source: () => pattern(16, 16, 0, 0, 0), cache });
+    assert.equal(cache.size, 3, "other pixels from the Read: made again");
+});
+
+test("with cacheAll every node is kept, within a byte budget, and the keys used are told", () => {
+    const comp = C.newComp({ width: 16, height: 16 });
+    const r = C.addNode(comp, read(comp, "a.png"));
+    const g = C.addNode(comp, C.makeNode(comp, "grade", { inputs: [r.id] }));
+    const b = C.addNode(comp, C.makeNode(comp, "blur", { inputs: [g.id], size: 2 }));
+    const pic = pattern(16, 16, 0, 0, 0), cache = new Map(), keysUsed = new Map();
+    const one = C.renderNode(comp, b.id, 0, { scale: 1, source: () => pic, cache, cacheAll: true, keysUsed });
+    assert.equal(cache.size, 3, "read, grade, blur");
+    assert.ok(keysUsed.get(`${b.id}@0`));
+    b.size = 3;
+    let made = 0;
+    const two = C.renderNode(comp, b.id, 0, { scale: 1, source: () => { made++; return pic; }, cache, cacheAll: true });
+    assert.notEqual(one, two);
+    assert.equal(cache.size, 4, "only the blur made again");
+    const small = new Map();
+    for (let f = 0; f < 6; f++) C.renderNode(comp, b.id, f, { scale: 1, source: () => pic, cache: small, cacheAll: true, cacheBytes: 16 * 16 * 16 * 4 });
+    assert.ok(small.__bytes <= 16 * 16 * 16 * 4 && small.size === 4, "the oldest go first");
+    const only = new Map();
+    C.renderNode(comp, b.id, 0, { scale: 1, source: () => pic, cache: only, cacheIds: new Set([b.id]) });
+    assert.deepEqual([...only.keys()].length, 1);
+    assert.notEqual(C.upstreamHash(comp, b.id), C.upstreamHash(comp, g.id));
 });
 
 test("the keyer takes the screen out and keeps the rest; despill takes green out of an edge", () => {
@@ -543,4 +570,137 @@ test("channel rules: names, lists, a write into one channel or a layer, the Roto
     [img, ex] = CH.rotoWrite(Float64Array.from([0.5]), 1, 1, src, {}, "mask.a", false);
     assert.deepEqual(Array.from(img.data).map((v) => +v.toFixed(3)), [0.8, 0.6, 0.4, 1]);
     assert.equal(ex["mask.a"][0], 0.5);
+});
+
+// ── a layer's length and its keys on the Layers timeline ─────────────────────
+import * as KL from "../js/imageViewer_keyLanes.js";
+
+function twoLayerComp() {
+    const c = C.newComp();
+    c.format.frames = 40;
+    const { merge, source } = C.addLayer(c, C.makeNode(c, "read", { file: "a.mov" }));
+    const t = C.insertNode(c, "transform", source.id, {});
+    t.tracks = { rotate: [{ f: 4, v: 0 }, { f: 12, v: 90 }] };
+    merge.tracks = { mix: [{ f: 8, v: 1 }] };
+    return { c, merge, source, t };
+}
+
+test("a Merge passes B outside its in / out; set, slide and normalise keep whole frames", () => {
+    const { c, merge, source, t } = twoLayerComp();
+    assert.equal(C.mergeLive(merge, 0), true);
+    C.setLayerRange(c, merge.id, 5, 20);
+    assert.deepEqual([merge.in, merge.out], [5, 20]);
+    assert.deepEqual([C.mergeLive(merge, 4), C.mergeLive(merge, 5), C.mergeLive(merge, 19), C.mergeLive(merge, 20)], [false, true, true, false]);
+    C.setLayerRange(c, merge.id, 0, 40);   // the comp's own ends are written as nothing
+    assert.equal("in" in merge, false); assert.equal("out" in merge, false);
+    C.setLayerRange(c, merge.id, 5, 20);
+    const L = C.layerStack(c)[0];
+    assert.equal(C.layerKeys(c, L).length, 3);
+    C.slideLayer(c, L, 10);
+    assert.deepEqual([merge.in, merge.out, source.offset], [15, 30, 10]);
+    assert.deepEqual(t.tracks.rotate.map((k) => k.f), [14, 22]);
+    assert.deepEqual(merge.tracks.mix.map((k) => k.f), [18]);
+    C.slideLayer(c, L, -10);
+    assert.equal("offset" in source, false);
+    const raw = JSON.parse(JSON.stringify(c));
+    raw.nodes.find((n) => n.id === merge.id).in = 7.4;
+    raw.nodes.find((n) => n.id === merge.id).out = 3;
+    raw.nodes.find((n) => n.id === source.id).in = 3;   // only a Merge has one
+    const { comp: n2, errors } = C.normalizeComp(raw);
+    const m2 = n2.nodes.find((n) => n.id === merge.id);
+    assert.deepEqual([m2.in, m2.out], [7, undefined]);
+    assert.equal("in" in n2.nodes.find((n) => n.id === source.id), false);
+    assert.equal(errors.length, 1);
+});
+
+test("a layer's length goes with it when layers swap places", () => {
+    const c = C.newComp();
+    const a = C.addLayer(c, C.makeNode(c, "constant", { name: "A" }));
+    const b = C.addLayer(c, C.makeNode(c, "constant", { name: "B" }));
+    C.setLayerRange(c, b.merge.id, 3, 9);
+    assert.equal(C.layerStack(c)[0].source, b.source.id);
+    C.moveLayer(c, 0, 1);
+    const L = C.layerStack(c);
+    assert.equal(L[1].source, b.source.id);
+    assert.deepEqual(C.layerRange(c, L[1].merge), { in: 3, out: 9 });
+    assert.deepEqual(C.layerRange(c, L[0].merge), { in: 0, out: c.format.frames });
+    void a;
+});
+
+test("a Merge out of its range renders as its B", () => {
+    const c = C.newComp();
+    c.format.width = 4; c.format.height = 2;
+    c.nodes[0].color = [0, 0, 1, 1];
+    const { merge } = C.addLayer(c, C.makeNode(c, "constant", { color: [1, 0, 0, 1] }));
+    C.setLayerRange(c, merge.id, 2, 4);
+    const px = (f) => Array.from(C.renderNode(c, c.output, f, {}).data.slice(0, 4)).map((v) => Math.round(v * 100) / 100);
+    assert.deepEqual(px(1), [0, 0, 1, 1]);
+    assert.deepEqual(px(2), [1, 0, 0, 1]);
+    assert.deepEqual(px(4), [0, 0, 1, 1]);
+});
+
+test("the timeline's shared arithmetic: bar edits, picking with modifiers, moving keys of several nodes", () => {
+    assert.deepEqual(KL.barEdit({ in: 5, out: 20 }, "move", 3), { in: 8, out: 23 });
+    assert.deepEqual(KL.barEdit({ in: 5, out: 20 }, "in", 30), { in: 19, out: 20 });
+    assert.deepEqual(KL.barEdit({ in: 5, out: 20 }, "out", 30, { hi: 24 }), { in: 5, out: 24 });
+    assert.deepEqual(KL.barEdit({ in: 5, out: 20 }, "in", -9, { lo: 0 }), { in: 0, out: 20 });
+    assert.deepEqual([KL.barPart(2, 100), KL.barPart(50, 100), KL.barPart(98, 100), KL.barPart(3, 8)], ["in", "move", "out", "in"]);
+    assert.equal(KL.pickMode({ shiftKey: true }), "toggle");
+    assert.equal(KL.pickMode({ ctrlKey: true, shiftKey: true }), "add");
+    const a = { id: "n1", prop: "rotate", f: 4 }, b = { id: "n2", prop: "mix", f: 4 };
+    let sel = KL.pickKeys([], [a], "replace");
+    sel = KL.pickKeys(sel, [b], "toggle");
+    assert.equal(sel.length, 2);
+    assert.equal(KL.allPicked(sel, [a, b]), true);
+    sel = KL.pickKeys(sel, [a, b], "toggle");   // a diamond whose keys are all picked lets them go
+    assert.equal(sel.length, 0);
+    sel = KL.pickKeys([a, b], [a], "remove");
+    assert.deepEqual(sel, [b]);
+    const { c, merge, t } = twoLayerComp();
+    const moved = Mo.moveKeysMany((id) => C.nodeById(c, id), [{ id: t.id, prop: "rotate", f: 12 }, { id: merge.id, prop: "mix", f: 8 }], 5);
+    assert.deepEqual(moved.map((k) => [k.id, k.f]), [[t.id, 17], [merge.id, 13]]);
+    assert.deepEqual(t.tracks.rotate.map((k) => k.f), [4, 17]);
+    // the last key of a param taken away: the param keeps that value, no longer animated
+    Mo.removeKeysMany((id) => C.nodeById(c, id), [{ id: merge.id, prop: "mix", f: 13 }]);
+    assert.equal(merge.tracks, undefined);
+    assert.equal(merge.mix, 1);
+});
+
+test("a MASKABLE node has a mask input last, a mix, and the mask holds it back", () => {
+    assert.deepEqual(C.NODE_TYPES.blur.inputs, ["src", "mask"]);
+    assert.equal(C.maskIndex("blur"), 1);
+    assert.equal(C.maskIndex("merge"), -1, "Merge has its own mask");
+    assert.ok(C.NODE_TYPES.blur.params.mix && C.NODE_TYPES.blur.params.mask_channel);
+    const src = { w: 2, h: 1, data: Float32Array.from([1, 1, 1, 1, 0, 0, 0, 0]) };
+    const img = { w: 2, h: 1, data: Float32Array.from([0, 0, 0, 1, 1, 1, 1, 1]) };
+    const [o, ex] = C.maskMix(src, { "z.a": Float32Array.from([0, 0]) }, img, {}, Float32Array.from([0.5, 1]), 0.5, false);
+    assert.deepEqual(Array.from(o.data), [0.75, 0.75, 0.75, 1, 0.5, 0.5, 0.5, 0.5]);
+    assert.deepEqual(Array.from(ex["z.a"]), [0, 0]);
+    const [oi] = C.maskMix(src, {}, img, {}, Float32Array.from([1, 0]), 1, true);
+    assert.deepEqual(Array.from(oi.data), [1, 1, 1, 1, 1, 1, 1, 1]);
+});
+
+test("bounding boxes: a small thing carries its box through transform, blur and merge, and the numbers stay", () => {
+    const comp = C.newComp({ width: 40, height: 30 });
+    const r = C.addNode(comp, read(comp, "a.png"));
+    const t = C.addNode(comp, C.makeNode(comp, "transform", { inputs: [r.id], translate: [5, 3] }));
+    const b = C.addNode(comp, C.makeNode(comp, "blur", { inputs: [t.id], size: 3 }));
+    const bg = C.addNode(comp, C.makeNode(comp, "constant", { color: [0.2, 0.3, 0.4, 1] }));
+    const m = C.addNode(comp, C.makeNode(comp, "merge", { inputs: [bg.id, b.id] }));
+    const pic = { w: 40, h: 30, data: new Float32Array(40 * 30 * 4) };
+    for (let y = 10; y < 14; y++) for (let x = 12; x < 16; x++) for (let k = 0; k < 4; k++) pic.data[(y * 40 + x) * 4 + k] = 0.5;
+    const memo = new Map();
+    const ctx = { scale: 1, source: () => pic, memo };
+    const out = C.renderNode(comp, m.id, 0, ctx);
+    const read0 = memo.get(`${r.id}@0`), blur0 = memo.get(`${b.id}@0`);
+    assert.deepEqual(read0.bb, [12, 10, 16, 14]);
+    assert.ok(blur0.bb && blur0.bb[0] > 0 && blur0.bb[2] < 40, `the blur's box: ${blur0.bb}`);
+    // The same comp without boxes (the full arithmetic) gives the same picture.
+    const full = { ...pic, data: pic.data };
+    const ctx2 = { scale: 1, source: () => full, memo: new Map() };
+    const strip = (img) => { delete img.bb; return img; };
+    const plain = C.renderNode(comp, m.id, 0, { ...ctx2, source: () => strip({ w: 40, h: 30, data: pic.data }) });
+    let d = 0;
+    for (let i = 0; i < out.data.length; i++) d = Math.max(d, Math.abs(out.data[i] - plain.data[i]));
+    assert.ok(d < 1e-6, `same numbers: ${d}`);
 });

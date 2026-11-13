@@ -331,6 +331,67 @@ class CompRoutes(unittest.TestCase):
             self.assertEqual(st, 403)
         self.run_c(go)
 
+    def test_track_points_and_a_surface_through_a_moving_picture(self):
+        from PIL import Image
+        ys, xs = np.mgrid[0:80, 0:120].astype(np.float64)
+        rng = np.random.default_rng(3)
+        g = np.zeros_like(xs)
+        for a, b, c in (rng.random((40, 3)) - [0.5, 0.5, 0]) * [1.2, 1.2, 6]:
+            g += np.sin(xs * a + ys * b + c)
+        u8 = np.clip(128 + g * 18, 0, 255).astype(np.uint8)
+        Image.fromarray(np.dstack([u8, u8, u8, np.full_like(u8, 255)]), "RGBA").save(os.path.join(self.dirs["output"], "tex.png"))
+        comp = {"comp": 1, "format": {"width": 120, "height": 80, "fps": 24, "frames": 5}, "output": "Output1",
+                "nodes": [{"id": "Read1", "type": "read", "file": "tex.png", "inputs": []},
+                          {"id": "Transform1", "type": "transform", "inputs": ["Read1"],
+                           "tracks": {"translate": [{"f": 0, "v": [0, 0], "ease": "linear"}, {"f": 4, "v": [6, -3]}]}},
+                          {"id": "Tracker1", "type": "tracker", "inputs": ["Transform1"]},
+                          {"id": "PlanarTracker1", "type": "planartracker", "inputs": ["Transform1"]},
+                          {"id": "Output1", "type": "output", "inputs": ["Tracker1"]}]}
+
+        async def wait(c, jid):
+            for _ in range(200):
+                r = await c.get("/imageviewer/comp_track", params={"job": jid})
+                s = await r.json()
+                if s["state"] != "running":
+                    return s
+                await asyncio.sleep(0.05)
+            self.fail("the track did not end")
+
+        async def go(c):
+            path = os.path.join(self.dirs["output"], "track.comp.json")
+            st, _ = await self.j(c, "/imageviewer/comp", {"path": path, "comp": comp})
+            self.assertEqual(st, 200)
+            st, d = await self.j(c, "/imageviewer/comp_track", {"path": path, "node": "Tracker1", "from": 0, "to": 4,
+                                                                "points": [{"id": "p1", "x": 60, "y": 40, "pattern": [15, 15], "search": [41, 41]}]})
+            self.assertEqual(st, 200, d)
+            s = await wait(c, d["job"])
+            self.assertEqual(s["state"], "done", s)
+            keys = s["keys"]["p1"]
+            self.assertEqual([k[0] for k in keys], [0, 1, 2, 3, 4])
+            for f, x, y, score in keys:
+                self.assertAlmostEqual(x, 60 + 1.5 * f, delta=0.15)
+                self.assertAlmostEqual(y, 40 - 0.75 * f, delta=0.15)
+            # backwards from the last frame, with the comp sent along (not saved)
+            st, d = await self.j(c, "/imageviewer/comp_track", {"path": path, "comp": comp, "node": "Tracker1", "from": 4, "to": 1,
+                                                                "points": [{"id": "p1", "x": 66, "y": 37}]})
+            s = await wait(c, d["job"])
+            self.assertEqual([k[0] for k in s["keys"]["p1"]], [4, 3, 2, 1])
+            quad = [[35, 60], [85, 60], [85, 20], [35, 20]]
+            st, d = await self.j(c, "/imageviewer/comp_track", {"path": path, "node": "PlanarTracker1", "from": 0, "to": 4, "quad": quad})
+            self.assertEqual(st, 200, d)
+            s = await wait(c, d["job"])
+            self.assertEqual(s["state"], "done", s)
+            last = s["plane"][-1]
+            self.assertEqual(last[0], 4)
+            for k in range(4):
+                self.assertAlmostEqual(last[1 + 2 * k], quad[k][0] + 6, delta=0.3)
+                self.assertAlmostEqual(last[2 + 2 * k], quad[k][1] - 3, delta=0.3)
+            st, d = await self.j(c, "/imageviewer/comp_track", {"path": path, "node": "Output1", "points": [{"x": 1, "y": 1}]})
+            self.assertEqual(st, 422)
+            st, d = await self.j(c, "/imageviewer/comp_track", {"path": path, "node": "Tracker1", "points": []})
+            self.assertEqual(st, 400)
+        self.run_c(go)
+
     @unittest.skipIf(av is None, "needs PyAV")
     def test_render_a_film(self):
         async def go(c):

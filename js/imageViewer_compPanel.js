@@ -550,6 +550,8 @@ export const CompPanelMixin = {
             loadSource: (node, frame, how) => this._cpLoadSource(rec, node, frame, how),
             loadDeep: (node, frame) => this._cpLoadDeep(rec, node, frame),
             importCamera: (kind, node) => this._cpImportCamera(rec, kind, node),
+            playing: () => !!this.isPlaying,
+            onCache: () => { if (this.activeTab === key && this.queueCacheMarks) this.queueCacheMarks(); },
             ocioInfo: () => this._cpOcioInfo(),
             ocioLut: (spec) => this._cpOcioLut(spec),
             onDisplay: (v) => { try { localStorage.setItem("imageviewer.comp.display", v || ""); } catch (_) { /* not kept */ } },
@@ -566,6 +568,7 @@ export const CompPanelMixin = {
             saveAs: (c) => this.compSaveAs(rec, c),
             render: () => this.compRenderDialog(rec),
             exportNuke: () => this.compNukeDialog(rec),
+            track: (body, progress, cancelled) => this.compTrack(rec, body, progress, cancelled),
             notify: (m, sev) => notice(sev || "info", m),
         });
         try { const v = localStorage.getItem("imageviewer.comp.display"); if (v) rec.editor.setDisplay(v); } catch (_) { /* none kept */ }
@@ -1102,6 +1105,31 @@ export const CompPanelMixin = {
             if (progress) progress(s.done || 0, s.total || 1);
             if (s.state === "done") return { ok: true, result: s.result };
             if (s.state !== "running") return { ok: false, error: true, message: s.error || "The export stopped." };
+        }
+    },
+
+    /**
+     * Track a Tracker's points / a PlanarTracker's surface on the server (/imageviewer/comp_track) over the full-size
+     * pictures of its input. ``body`` = {node, from, to, points | quad, comp} (the comp as it is now, saved or not);
+     * ``progress(state)`` hears every poll with the keys so far; ``cancelled()`` true stops it. -> the last state.
+     */
+    async compTrack(rec, body, progress, cancelled) {
+        const res = await api.fetchApi("/imageviewer/comp_track", {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({ path: rec.path }, body)),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) return { ok: false, message: data.error || `HTTP ${res.status}` };
+        let asked = false;
+        for (;;) {
+            await new Promise((r) => setTimeout(r, 250));
+            if (!asked && cancelled && cancelled()) {
+                asked = true;
+                await api.fetchApi("/imageviewer/comp_track", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ job: data.job, cancel: true }) }).catch(() => {});
+            }
+            const r = await api.fetchApi(`/imageviewer/comp_track?job=${encodeURIComponent(data.job)}`);
+            const s = await r.json().catch(() => ({}));
+            if (progress) progress(s);
+            if (s.state !== "running") return Object.assign({ ok: s.state !== "error", message: s.error }, s);
         }
     },
 

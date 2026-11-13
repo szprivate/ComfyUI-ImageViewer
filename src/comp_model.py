@@ -39,6 +39,44 @@ def _sibling(name):
 
 G3 = _sibling("comp_3d")
 DP = _sibling("comp_deep")
+try:
+    from . import comp_paint as PT
+except ImportError:   # loaded on its own (the tests): the twin beside it
+    import importlib.util as _ilu
+    import os as _os
+    _spec = _ilu.spec_from_file_location("comp_paint", _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "comp_paint.py"))
+    PT = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(PT)
+
+
+def _load_sibling(name):
+    """A module beside this one: imported relatively in the package, by its path when this file is loaded alone."""
+    try:
+        import importlib
+        return importlib.import_module(f"{__package__}.{name}") if __package__ else None
+    except ImportError:
+        return None
+
+
+def _warp_module():
+    mod = _load_sibling("comp_warp")
+    if mod is not None:
+        return mod
+    import importlib.util
+    import os
+    import sys
+    mod = sys.modules.get("comp_warp")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location("comp_warp", os.path.join(os.path.dirname(os.path.abspath(__file__)), "comp_warp.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        sys.modules["comp_warp"] = mod
+    return mod
+
+
+WP = _warp_module()
+LENS_MODES, LENS_OUTPUTS = WP.LENS_MODES, WP.LENS_OUTPUTS
+TRACK_MOTIONS, TRACK_TRANSFORMS = WP.TRACK_MOTIONS, WP.TRACK_TRANSFORMS
 
 COMP_VERSION = 1
 SUFFIX = ".comp.json"
@@ -258,6 +296,9 @@ NODE_TYPES = {
         "write": {"kind": "target", "def": "rgba"},
         "premult": {"kind": "enum", "def": "on", "choices": ["on", "off"]},
     }},
+    "paint": {"inputs": ["src", "reveal"], "params": {
+        "strokes": {"kind": "strokes", "def": []},
+    }},
     "vectors": {"inputs": ["src"], "params": {
         "smoothness": {"kind": "num", "def": 0.04, "min": 0.001, "max": 1},
         "iterations": {"kind": "int", "def": 30, "min": 1, "max": 200},
@@ -392,6 +433,46 @@ NODE_TYPES = {
     "sidebyside": {"inputs": ["src"], "params": {
         "layout": {"kind": "enum", "def": "side by side", "choices": VIEW_LAYOUTS},
     }},
+    "cornerpin": {"inputs": ["src"], "params": dict(
+        {f"to{k}": {"kind": "vec2", "def": None, "key": True} for k in range(1, 5)},
+        **{f"from{k}": {"kind": "vec2", "def": None, "key": True} for k in range(1, 5)},
+        invert={"kind": "enum", "def": "off", "choices": ["off", "on"]})},
+    "stmap": {"inputs": ["src", "stmap"], "params": {
+        "u": {"kind": "chan", "def": "r"},
+        "v": {"kind": "chan", "def": "g"},
+    }},
+    "vectorwarp": {"inputs": ["src", "vectors"], "params": {
+        "u": {"kind": "chan", "def": "r"},
+        "v": {"kind": "chan", "def": "g"},
+        "amount": {"kind": "num", "def": 1, "key": True},
+    }},
+    "lensdistortion": {"inputs": ["src"], "params": {
+        "mode": {"kind": "enum", "def": "undistort", "choices": LENS_MODES},
+        "k1": {"kind": "num", "def": 0, "key": True},
+        "k2": {"kind": "num", "def": 0, "key": True},
+        "center": {"kind": "vec2", "def": None, "key": True},
+        "zoom": {"kind": "num", "def": 1, "min": 0.1, "max": 10, "key": True},
+        "output": {"kind": "enum", "def": "image", "choices": LENS_OUTPUTS},
+        "lines": {"kind": "lines", "def": None},
+    }},
+    "gridwarp": {"inputs": ["src"], "params": {
+        "cols": {"kind": "int", "def": 5, "min": 2, "max": 16},
+        "rows": {"kind": "int", "def": 5, "min": 2, "max": 16},
+        "src_points": {"kind": "points", "def": None},
+        "dst_points": {"kind": "points", "def": None, "key": True},
+        "distortion": {"kind": "num", "def": 1, "min": 0, "max": 1, "key": True},
+    }},
+    "tracker": {"inputs": ["src"], "params": {
+        "points": {"kind": "trackpoints", "def": None},
+        "motion": {"kind": "enum", "def": "translate", "choices": TRACK_MOTIONS},
+        "transform": {"kind": "enum", "def": "none", "choices": TRACK_TRANSFORMS},
+        "reference": {"kind": "int", "def": 0},
+    }},
+    "planartracker": {"inputs": ["src"], "params": {
+        "plane": {"kind": "plane", "def": None},
+        "transform": {"kind": "enum", "def": "none", "choices": TRACK_TRANSFORMS},
+        "reference": {"kind": "int", "def": 0},
+    }},
     "output": {"inputs": ["src"], "params": {}},
 }
 
@@ -448,6 +529,15 @@ def normalize(raw):
         ins = n.get("inputs") if isinstance(n.get("inputs"), list) else []
         node["inputs"] = [ins[i] if i < len(ins) and isinstance(ins[i], str) else None
                           for i in range(len(NODE_TYPES[n["type"]]["inputs"]))]
+        # A layer's length: whole frames, out after in (a Merge's only).
+        for k in ("in", "out"):
+            if node["type"] != "merge" or not _is_num(node.get(k)):
+                node.pop(k, None)
+            else:
+                node[k] = int(round(node[k]))
+        if "in" in node and "out" in node and node["out"] <= node["in"]:
+            errors.append(f"{node['id']}: its out was not after its in and was taken off")
+            node.pop("out")
         comp["nodes"].append(node)
     for n in comp["nodes"]:
         n["inputs"] = [i if i in seen and i != n["id"] else None for i in n["inputs"]]
@@ -636,6 +726,15 @@ def value_at(keys, own, frame):
     return _interpolate(keys[i], keys[i + 1], frame)
 
 
+def merge_live(n, f):
+    """Is a Merge's A laid over at frame ``f``: ``in`` is its first frame, ``out`` the first it is no longer."""
+    if _is_num(n.get("in")) and f < n["in"]:
+        return False
+    if _is_num(n.get("out")) and f >= n["out"]:
+        return False
+    return True
+
+
 def param_at(node, p, frame):
     d = NODE_TYPES.get(node.get("type"), {}).get("params", {}).get(p)
     own = node[p] if p in node else (d["def"] if d else None)
@@ -767,6 +866,18 @@ def transform_matrix(node, frame, fmt, scale=1.0):
     return _mul(_t(t[0] * scale + cx, t[1] * scale + cy), _mul(_r(r), _mul(_s(sc[0], sc[1]), _mul(_k(k[0], k[1]), _t(-cx, -cy)))))
 
 
+def link_matrix(comp, s, f):
+    """A Paint stroke's link at frame f (the page's ``linkMatrix``): the linked Transform's matrix at f taken back
+    through its matrix at the stroke's frame, in full-size pixels; None without one."""
+    if not s or not s.get("link"):
+        return None
+    n = node_by_id(comp, s["link"])
+    if not n or n.get("disable") or n.get("type") != "transform":
+        return None
+    F = format_at(comp, (n.get("inputs") or [None])[0])
+    return _mul(transform_matrix(n, f, F, 1), _inv(transform_matrix(n, s["f"], F, 1)))
+
+
 def reformat_size(node, frame, in_fmt):
     """The size a Reformat makes, in pixels of the comp, from the size that comes in (the page's ``reformatSize``)."""
     if (param_at(node, "mode", frame) or "to format") == "scale":
@@ -828,6 +939,8 @@ def format_at(comp, nid, depth=0):
     if not n.get("disable") and n["type"] == "sidebyside":
         u = up()
         return {"width": u["width"], "height": u["height"] * 2} if n.get("layout") == "over under" else {"width": u["width"] * 2, "height": u["height"]}
+    if not n.get("disable") and n["type"] == "stmap" and len(ins) > 1 and ins[1]:
+        return format_at(comp, ins[1], depth + 1)
     if n.get("disable") or n["type"] != "reformat":
         return F if n["type"] in ("read", "constant") or n["type"] in _PLAIN_SIZE else up()
     w, h = reformat_size(n, 0, up())
@@ -2053,6 +2166,45 @@ def roto_write(m, src, sex, target, premult):
 WRITES = {t for t, d in NODE_TYPES.items() if "write" in d["params"]}
 _TWO_IN = {"merge", "copy", "channelmerge"}
 
+# Nodes with a mask input (the last) and a mix on top of what they do (the page's MASKABLE / maskMix).
+MASKABLE = ["grade", "colorcorrect", "ocio_colorspace", "ocio_display", "glow", "lensflare", "blur",
+            "shuffle", "copy", "erode", "laplacian", "channelmerge", "channelmath", "premult", "unpremult", "lumakeyer",
+            "chromakeyer", "keyer", "motionblur", "depthblur", "defocus"]
+OWN_MIX = {t for t in MASKABLE if "mix" in NODE_TYPES[t]["params"]}
+for _mt in MASKABLE:
+    _md = NODE_TYPES[_mt]
+    _md["inputs"] = list(_md["inputs"]) + ["mask"]
+    if "mix" not in _md["params"]:
+        _md["params"]["mix"] = {"kind": "num", "def": 1, "min": 0, "max": 1, "key": True}
+    _md["params"]["mask_channel"] = {"kind": "chan", "def": "a"}
+    _md["params"]["mask_invert"] = {"kind": "enum", "def": "off", "choices": ["off", "on"]}
+MASKABLE = set(MASKABLE)
+
+
+def mask_index(t):
+    return len(NODE_TYPES[t]["inputs"]) - 1 if t in MASKABLE else -1
+
+
+def mask_mix(src, sex, img, ex, m, mix, invert):
+    """src + (img - src) x mix x m for the picture and every extra channel (the page's ``maskMix``)."""
+    h, w = img.shape[:2]
+    if m is None:
+        t = np.full((h, w), float(mix), np.float64)
+    else:
+        mm = m.astype(np.float64)
+        t = mix * ((1 - mm) if invert else mm)
+    S = src.astype(np.float64)
+    out = (S + (img.astype(np.float64) - S) * t[..., None]).astype(np.float32)
+    oex = {}
+    names = list(dict.fromkeys(list((sex or {}).keys()) + list((ex or {}).keys())))
+    for k in names:
+        a = (sex or {}).get(k)
+        b = (ex or {}).get(k)
+        a = a.astype(np.float64) if a is not None else np.zeros((h, w), np.float64)
+        b = b.astype(np.float64) if b is not None else np.zeros((h, w), np.float64)
+        oex[k] = (a + (b - a) * t).astype(np.float32)
+    return out, oex
+
 
 def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, channels=False, view=None,
                 deep_source=None):
@@ -2090,9 +2242,30 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
                 i0 = (n.get("inputs") or [None])[0]
                 base = run(i0, f, depth + 1) if i0 else blank(W, H)
                 img, ex = write_target(base, ex_of(i0, f), conform(img, base.shape[1], base.shape[0]), w)
+        if n and not n.get("disable") and n.get("type") in MASKABLE:
+            img, ex = mask_stage(n, f, depth, img, ex)
         memo[(i, f)] = img
         memo[("x", i, f)] = ex
         return img
+
+    def mask_stage(n, f, depth, img, ex):
+        mix = 1 if n["type"] in OWN_MIX else param_at(n, "mix", f)
+        ins = n.get("inputs") or []
+        k = mask_index(n["type"])
+        mi = ins[k] if len(ins) > k else None
+        if not mi and mix == 1:
+            return img, ex
+        h, w = img.shape[:2]
+        i0 = ins[0] if ins else None
+        s0 = run(i0, f, depth + 1) if i0 else blank(w, h)
+        src = conform(s0, w, h)
+        sex = _conform_extras(ex_of(i0, f), w, h) if i0 else {}
+        m = None
+        if mi:
+            mp = run(mi, f, depth + 1)
+            plane = channel_of(mp, ex_of(mi, f), n.get("mask_channel") or "a")
+            m = conform(plane, w, h) if plane is not None else np.zeros((h, w), np.float32)
+        return mask_mix(src, sex, img, ex, m, mix, (n.get("mask_invert") or "off") == "on")
 
     def spatial(i0, f, d1, fn):
         src = run(i0, f, d1)
@@ -2225,6 +2398,8 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             img[...] = np.array([c[0] * c[3], c[1] * c[3], c[2] * c[3], c[3]], np.float32)
             return img
         if t == "merge":
+            if not merge_live(n, f):
+                return run(ins[0], f, d1)
             Bi = run(ins[0], f, d1)
             Ai = conform(run(ins[1], f, d1), Bi.shape[1], Bi.shape[0])
             Mi = conform(run(ins[2], f, d1), Bi.shape[1], Bi.shape[0]) if ins[2] else None
@@ -2321,6 +2496,29 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             if src is not None:
                 m = conform(m, src.shape[1], src.shape[0])
             return roto_write(m, src, ex_of(ins[0], f), n.get("write") or "rgba", n.get("premult") != "off")
+        if t == "paint":
+            src = run(ins[0], f, d1) if ins[0] else blank(W, H)
+            strokes = PT.live_strokes(n.get("strokes"), f)
+            if not strokes:
+                return src
+            shifted = {}
+
+            def moved(img, s):
+                ox, oy = -s["offset"][0] * scale, -s["offset"][1] * scale
+                return resample(img, _t(ox, oy), img.shape[1], img.shape[0]) if (ox or oy) else img
+
+            def source_of(s, now):
+                if s["tool"] == "reveal" and not (len(ins) > 1 and ins[1]):
+                    return None
+                if s["tool"] == "clone" and not s["dt"]:
+                    return moved(now, s)
+                key = (s["tool"], s["dt"], s["offset"][0], s["offset"][1])
+                if key not in shifted:
+                    pic = conform(run(ins[1], f + s["dt"], d1), src.shape[1], src.shape[0]) if s["tool"] == "reveal" \
+                        else run(ins[0], f + s["dt"], d1)
+                    shifted[key] = moved(pic, s)
+                return shifted[key]
+            return PT.paint_image(src, strokes, scale, source_of, lambda s: link_matrix(comp, s, f))
         if t == "vectors":
             return vectors_of(ins[0], f, d1, n)
         if t == "motionblur":
@@ -2385,6 +2583,59 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             if t == "anaglyph":
                 return anaglyph_image(L, R, n.get("mode") or "colour"), {}
             return side_by_side(L, R, n.get("layout") == "over under"), {}
+        if t == "cornerpin":
+            frm, to = WP.pin_corners(lambda p: param_at(n, p, f), in_fmt(n))
+            inv = WP.homography(frm, to) if n.get("invert") == "on" else WP.homography(to, frm)
+            return spatial(ins[0], f, d1, lambda p: WP.homography_image(p, inv, scale))
+        if t in ("stmap", "vectorwarp"):
+            src = run(ins[0], f, d1)
+            i1 = ins[1] if len(ins) > 1 else None
+            if not i1:
+                return src, ex_of(ins[0], f)
+            sh_, sw_ = src.shape[:2]
+            Mi = run(i1, f, d1)
+            if t == "stmap":
+                mex = ex_of(i1, f)
+                mh, mw = Mi.shape[:2]
+            else:
+                mex = _conform_extras(ex_of(i1, f), sw_, sh_)
+                Mi = conform(Mi, sw_, sh_)
+                mh, mw = sh_, sw_
+            us = channel_of(Mi, mex, n.get("u") or "r")
+            vs = channel_of(Mi, mex, n.get("v") or "g")
+            us = np.zeros((mh, mw), np.float32) if us is None else us
+            vs = np.zeros((mh, mw), np.float32) if vs is None else vs
+            if t == "stmap":
+                U, V = WP.st_map(us, vs, sw_, sh_)
+            else:
+                U, V = WP.vector_map(us, vs, mw, mh, param_at(n, "amount", f), scale)
+            return spatial(ins[0], f, d1, lambda p: WP.sample_map(p, U, V, mw, mh))
+        if t == "lensdistortion":
+            src = run(ins[0], f, d1)
+            sh_, sw_ = src.shape[:2]
+            p = {"mode": n.get("mode") or "undistort", "k1": param_at(n, "k1", f), "k2": param_at(n, "k2", f),
+                 "center": param_at(n, "center", f), "zoom": param_at(n, "zoom", f)}
+            U, V = WP.lens_map(sw_, sh_, p, scale)
+            if n.get("output") == "stmap":
+                return WP.map_as_st(U, V, sw_, sh_, sw_, sh_), {}
+            return spatial(ins[0], f, d1, lambda q: WP.sample_map(q, U, V, sw_, sh_))
+        if t == "gridwarp":
+            src = run(ins[0], f, d1)
+            sh_, sw_ = src.shape[:2]
+            sp, dp = grid_points(n, f, in_fmt(n))
+            U, V = WP.grid_map(sp, dp, sw_, sh_, scale)
+            return spatial(ins[0], f, d1, lambda q: WP.sample_map(q, U, V, sw_, sh_))
+        if t in ("tracker", "planartracker"):
+            how = n.get("transform") or "none"
+            mo = None if how == "none" else track_motion(n, f)
+            if not mo:
+                return run(ins[0], f, d1), ex_of(ins[0], f)
+            if mo["kind"] == "perspective":
+                inv = WP.homography(mo["Q"], mo["P"]) if how == "match-move" else WP.homography(mo["P"], mo["Q"])
+                return spatial(ins[0], f, d1, lambda p: WP.homography_image(p, inv, scale))
+            m0 = mo["m"] if how == "match-move" else WP.invert_affine(mo["m"])
+            m = _mul(_s(scale, scale), _mul(m0, _s(1 / scale, 1 / scale)))
+            return spatial(ins[0], f, d1, lambda p: resample(p, m, p.shape[1], p.shape[0]))
         if t == "output":
             return run(ins[0], f, d1)
         return blank(W, H)
@@ -2407,6 +2658,34 @@ def anaglyph_image(L, R, mode):
 
 def side_by_side(L, R, over):
     return np.concatenate([L, R], axis=0 if over else 1).astype(np.float32)
+def grid_points(n, f, fmt):
+    """The page's ``gridPoints``: the source grid and the destination as far as ``distortion`` takes it."""
+    cols = max(2, min(16, int(math.floor((n.get("cols") or 5) + 0.5))))
+    rows = max(2, min(16, int(math.floor((n.get("rows") or 5) + 0.5))))
+    ln = 2 * cols * rows
+
+    def ok(a):
+        return isinstance(a, list) and len(a) == ln and all(_is_num(v) for v in a)
+    sp = n["src_points"] if ok(n.get("src_points")) else WP.lattice(cols, rows, fmt["width"], fmt["height"])
+    raw = param_at(n, "dst_points", f)
+    dr = raw if ok(raw) else sp
+    k = param_at(n, "distortion", f)
+    return sp, [v + (dr[i] - v) * k for i, v in enumerate(sp)]
+
+
+def track_motion(n, f):
+    """The page's ``trackMotion``: the motion from the reference frame to ``f``, or None."""
+    ref = int(math.floor((n.get("reference") or 0) + 0.5))
+    if n.get("type") == "planartracker":
+        keys = (n.get("plane") or {}).get("keys") if isinstance(n.get("plane"), dict) else None
+        if not WP.track_has(keys, ref) or not WP.track_has(keys, f):
+            return None
+        return {"kind": "perspective", "P": WP.quad_at(keys, ref), "Q": WP.quad_at(keys, f)}
+    P, Q = WP.track_pairs(n.get("points"), ref, f)
+    mo = WP.solve_motion(P, Q, n.get("motion") or "translate")
+    if mo and mo["kind"] == "perspective":
+        mo["P"], mo["Q"] = P[:4], Q[:4]
+    return mo
 
 
 def sources_of(comp, nid):

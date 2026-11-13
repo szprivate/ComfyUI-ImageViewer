@@ -33,6 +33,8 @@ import * as LT from "./imageViewer_compLight.js";
 import * as CH from "./imageViewer_compChannels.js";
 import * as G3 from "./imageViewer_comp3d.js";
 import * as DP from "./imageViewer_compDeep.js";
+import * as PT from "./imageViewer_compPaint.js";
+import * as WP from "./imageViewer_compWarp.js";
 import { blank, blurImage, boxesForGauss } from "./imageViewer_compOps.js";
 export { blank, blurImage, boxesForGauss };
 
@@ -239,6 +241,9 @@ export const NODE_TYPES = {
         write: { kind: "target", def: "rgba", label: "channel", help: "What it writes into: rgba (its whole picture, as before), one channel, or a layer (its r g b a); the rest of what comes in passes" },
         premult: { kind: "enum", def: "on", choices: ["on", "off"], help: "on: what comes in is multiplied by the matte (cut out); off: it stays as it is, the matte only written" },
     } },
+    paint: { label: "Paint", cat: "Draw", inputs: ["src", "reveal"], params: {
+        strokes: { kind: "strokes", def: [], help: "The strokes: painted on the picture while this node is in the Parameters panel" },
+    } },
     vectors: { label: "Vectors", cat: "Time", inputs: ["src"], params: {
         smoothness: { kind: "num", def: 0.04, min: 0.001, max: 1, step: 0.005, help: "Higher: smoother, less detailed motion" },
         iterations: { kind: "int", def: 30, min: 1, max: 200, help: "More: slower, more exact" },
@@ -337,9 +342,75 @@ export const NODE_TYPES = {
     sidebyside: { label: "SideBySide", cat: "Views", inputs: ["src"], params: {
         layout: { kind: "enum", def: "side by side", choices: VIEW_LAYOUTS, help: "The first two views next to each other (left first) or above each other (left on top)" },
     } },
+    cornerpin: { label: "CornerPin", cat: "Transform", inputs: ["src"], params: {
+        to1: { kind: "vec2", def: null, key: true, step: 1, help: "Where the bottom left corner goes, pixels of the picture that comes in (empty: where it is)" },
+        to2: { kind: "vec2", def: null, key: true, step: 1, help: "Where the bottom right corner goes" },
+        to3: { kind: "vec2", def: null, key: true, step: 1, help: "Where the top right corner goes" },
+        to4: { kind: "vec2", def: null, key: true, step: 1, help: "Where the top left corner goes" },
+        from1: { kind: "vec2", def: null, key: true, step: 1, help: "The four points that are pinned (empty: the picture's corners): bottom left" },
+        from2: { kind: "vec2", def: null, key: true, step: 1, help: "bottom right" },
+        from3: { kind: "vec2", def: null, key: true, step: 1, help: "top right" },
+        from4: { kind: "vec2", def: null, key: true, step: 1, help: "top left" },
+        invert: { kind: "enum", def: "off", choices: ["off", "on"], help: "on: the other way, the 'to' points back onto the 'from' ones (to flatten a surface)" },
+    } },
+    stmap: { label: "STMap", cat: "Transform", inputs: ["src", "stmap"], params: {
+        u: { kind: "chan", def: "r", help: "The map's channel that says where across to read (0 left, 1 right)" },
+        v: { kind: "chan", def: "g", help: "The map's channel that says where up to read (0 bottom, 1 top)" },
+    } },
+    vectorwarp: { label: "VectorWarp", cat: "Transform", inputs: ["src", "vectors"], params: {
+        u: { kind: "chan", def: "r", help: "The channel with the motion across, pixels of the comp (Vectors: r forward, b backward)" },
+        v: { kind: "chan", def: "g", help: "The channel with the motion down (Vectors: g forward, a backward)" },
+        amount: { kind: "num", def: 1, key: true, step: 0.05, help: "Each pixel is read this many vectors away: 1 pulls the next frame's picture to this one, -1 the other way" },
+    } },
+    lensdistortion: { label: "LensDistortion", cat: "Transform", inputs: ["src"], params: {
+        mode: { kind: "enum", def: "undistort", choices: WP.LENS_MODES, help: "undistort: straighten the plate; redistort: bend a straight picture back into the plate's lens" },
+        k1: { kind: "num", def: 0, key: true, step: 0.001, help: "Barrel below 0, pincushion above, at the corners (the radius is a share of half the diagonal)" },
+        k2: { kind: "num", def: 0, key: true, step: 0.001, help: "The same, growing faster towards the corners" },
+        center: { kind: "vec2", def: null, key: true, step: 1, help: "The lens's centre (empty: the middle of the picture)" },
+        zoom: { kind: "num", def: 1, min: 0.1, max: 10, key: true, step: 0.01, help: "Scales the result about the centre: above 1 hides the edges the warp pulls in" },
+        output: { kind: "enum", def: "image", choices: WP.LENS_OUTPUTS, help: "stmap: the warp itself as an ST map (u, v), for writing out and using in an STMap" },
+        lines: { kind: "lines", def: null, help: "Lines along things that are straight, drawn on the plate: Solve finds k1 and k2 from them" },
+    } },
+    gridwarp: { label: "GridWarp", cat: "Transform", inputs: ["src"], params: {
+        cols: { kind: "int", def: 5, min: 2, max: 16, help: "Points across" },
+        rows: { kind: "int", def: 5, min: 2, max: 16, help: "Points down" },
+        src_points: { kind: "points", def: null, help: "The source grid (empty: even over the picture); Shift + drag a point on the picture" },
+        dst_points: { kind: "points", def: null, key: true, help: "Where each point of the grid goes; drag them on the picture" },
+        distortion: { kind: "num", def: 1, min: 0, max: 1, key: true, step: 0.01, help: "0: as it is, 1: the full warp (keyed: a warp over time, half of a morph)" },
+    } },
+    tracker: { label: "Tracker", cat: "Transform", inputs: ["src"], params: {
+        points: { kind: "trackpoints", def: null, help: "The tracked points: placed and tracked on the picture" },
+        motion: { kind: "enum", def: "translate", choices: WP.TRACK_MOTIONS, help: "What the points solve for: a move; with two or more a turn and a scale too; with four a perspective (corner pin)" },
+        transform: { kind: "enum", def: "none", choices: WP.TRACK_TRANSFORMS, help: "What this node does to its picture: nothing (it only tracks), hold it still, or move it as the points move" },
+        reference: { kind: "int", def: 0, help: "The frame where the picture stays as it is" },
+    } },
+    planartracker: { label: "PlanarTracker", cat: "Transform", inputs: ["src"], params: {
+        plane: { kind: "plane", def: null, help: "The surface tracked: four corners placed on the picture, then tracked" },
+        transform: { kind: "enum", def: "none", choices: WP.TRACK_TRANSFORMS, help: "What this node does to its picture: nothing, flatten the surface's motion away, or move the picture with it" },
+        reference: { kind: "int", def: 0, help: "The frame where the picture stays as it is" },
+    } },
     output: { label: "Output", cat: "Other", inputs: ["src"], params: {} },
 };
-export const TYPE_ORDER = ["read", "constant", "roto", "merge", "copy", "transform", "reformat", "crop", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "keyer", "lumakeyer", "chromakeyer", "blur", "glow", "erode", "laplacian",
+/**
+ * Nodes that take a MASK and a mix on top of what they do: the last input is "mask", and the result is
+ * in + (result - in) x mix x the mask's channel (`maskMix`). Nodes that change the size, the time or only
+ * make a picture are left out; a node with a mix of its own keeps it (the mask then multiplies that).
+ */
+export const MASKABLE = new Set(["grade", "colorcorrect", "ocio_colorspace", "ocio_display", "glow", "lensflare", "blur",
+    "shuffle", "copy", "erode", "laplacian", "channelmerge", "channelmath", "premult", "unpremult", "lumakeyer", "chromakeyer",
+    "keyer", "motionblur", "depthblur", "defocus"]);
+/** MASKABLE nodes whose own arithmetic already takes `mix` (the mask stage then does not apply it twice). */
+export const OWN_MIX = new Set([...MASKABLE].filter((t) => NODE_TYPES[t].params.mix));
+for (const t of MASKABLE) {
+    const d = NODE_TYPES[t];
+    d.inputs = [...d.inputs, "mask"];
+    if (!d.params.mix) d.params.mix = { kind: "num", def: 1, min: 0, max: 1, step: 0.01, key: true, help: "How much of the result: 0 is what comes in" };
+    d.params.mask_channel = { kind: "chan", def: "a", from: "mask", label: "mask channel", help: "The mask input's channel that says where the node acts" };
+    d.params.mask_invert = { kind: "enum", def: "off", choices: ["off", "on"], label: "invert mask" };
+}
+/** The index of a MASKABLE node's mask input (-1 for the rest). */
+export function maskIndex(type) { return MASKABLE.has(type) ? NODE_TYPES[type].inputs.length - 1 : -1; }
+export const TYPE_ORDER = ["read", "constant", "roto", "paint", "merge", "copy", "transform", "reformat", "crop", "cornerpin", "tracker", "planartracker", "stmap", "vectorwarp", "lensdistortion", "gridwarp", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "keyer", "lumakeyer", "chromakeyer", "blur", "glow", "erode", "laplacian",
     "motionblur", "depthblur", "defocus", "lensflare", "shuffle", "addchannels", "removechannels", "channelmerge", "channelmath", "premult", "unpremult", "retime", "vectors",
     "camera3d", "card3d", "geo3d", "project3d", "scene3d", "pointcloud", "render3d",
     "deepread", "deepfromimage", "deepmerge", "deepholdout", "deepcrop", "deepflatten",
@@ -421,6 +492,9 @@ export function normalizeComp(raw) {
         const ins = Array.isArray(n.inputs) ? n.inputs : [];
         node.inputs = t.inputs.map((_, i) => (typeof ins[i] === "string" ? ins[i] : null));
         if (node.tracks && !isObj(node.tracks)) delete node.tracks;
+        // A layer's length: whole frames, out after in (a Merge's only).
+        for (const k of ["in", "out"]) { if (node.type !== "merge" || !isNum(node[k])) delete node[k]; else node[k] = Math.round(node[k]); }
+        if (isNum(node.in) && isNum(node.out) && node.out <= node.in) { errors.push(`${node.id}: its out was not after its in and was taken off`); delete node.out; }
         comp.nodes.push(node);
     }
     for (const n of comp.nodes) n.inputs = n.inputs.map((id) => (id && seen.has(id) && id !== n.id ? id : null));
@@ -728,7 +802,7 @@ export function nodeKeyFrames(node) {
 
 // ── the stack the Layers panel shows ─────────────────────────────────────────
 
-const CHAIN = new Set(["transform", "reformat", "glow", "lensflare", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "lumakeyer", "chromakeyer", "erode", "laplacian", "channelmerge", "channelmath", "blur", "crop", "shuffle", "addchannels", "removechannels", "premult", "unpremult", "retime", "keyer", "vectors",
+const CHAIN = new Set(["transform", "paint", "reformat", "cornerpin", "tracker", "planartracker", "stmap", "vectorwarp", "lensdistortion", "gridwarp", "glow", "lensflare", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "lumakeyer", "chromakeyer", "erode", "laplacian", "channelmerge", "channelmath", "blur", "crop", "shuffle", "addchannels", "removechannels", "premult", "unpremult", "retime", "keyer", "vectors",
     "motionblur", "depthblur", "defocus", "copy"]);
 
 /**
@@ -787,7 +861,7 @@ export function moveLayer(comp, i, d) {
     const a = L[i], b = L[i + d];
     if (!a || !b || !a.merge || !b.merge) return false;
     const ma = nodeById(comp, a.merge), mb = nodeById(comp, b.merge);
-    for (const k of ["operation", "mix", "disable", "name", "tracks"]) { const t = ma[k]; ma[k] = mb[k]; mb[k] = t; if (ma[k] === undefined) delete ma[k]; if (mb[k] === undefined) delete mb[k]; }
+    for (const k of ["operation", "mix", "disable", "name", "tracks", "in", "out"]) { const t = ma[k]; ma[k] = mb[k]; mb[k] = t; if (ma[k] === undefined) delete ma[k]; if (mb[k] === undefined) delete mb[k]; }
     const tA = ma.inputs[1]; ma.inputs[1] = mb.inputs[1]; mb.inputs[1] = tA;
     const tM = ma.inputs[2]; ma.inputs[2] = mb.inputs[2]; mb.inputs[2] = tM;
     // The branches keep their place on screen beside their Merge.
@@ -832,6 +906,65 @@ export function removeLayer(comp, i) {
     if (!L || !L.merge) return false;
     const ids = [L.merge, ...branchIds(comp, nodeById(comp, L.merge).inputs[1])];
     removeNodes(comp, ids);
+    return true;
+}
+
+// ── a layer's length (its Merge's in / out) ──────────────────────────────────
+
+/** Is a Merge's A laid over at comp frame `f`? Its `in` is the first frame it is, `out` the first it is no
+ *  longer (Motion's layer rule); either left out = from the start / to the end. Outside, the Merge passes B. */
+export function mergeLive(n, f) {
+    if (isNum(n.in) && f < n.in) return false;
+    if (isNum(n.out) && f >= n.out) return false;
+    return true;
+}
+
+/** A layer's length as frames [in, out), the comp's whole length filling what is not set. */
+export function layerRange(comp, mergeId) {
+    const n = nodeById(comp, mergeId), F = comp.format.frames;
+    return { in: n && isNum(n.in) ? n.in : 0, out: n && isNum(n.out) ? n.out : F };
+}
+
+/** Set a layer's in / out (whole frames, at least one frame long). The comp's own ends are written as nothing. */
+export function setLayerRange(comp, mergeId, a, b) {
+    const n = nodeById(comp, mergeId);
+    if (!n || n.type !== "merge") return false;
+    a = Math.round(a); b = Math.round(b);
+    if (b <= a) b = a + 1;
+    if (a === 0) delete n.in; else n.in = a;
+    if (b === comp.format.frames) delete n.out; else n.out = b;
+    return true;
+}
+
+/** The nodes that make a layer: its Merge and its A branch (the chain up to the source). */
+export function layerNodes(comp, L) {
+    return [L.merge, ...(L.chain || [])].filter((id, i, a) => id && a.indexOf(id) === i && nodeById(comp, id));
+}
+
+/** Every key of a layer's nodes: [{id, prop, f}]. */
+export function layerKeys(comp, L) {
+    const out = [];
+    for (const id of layerNodes(comp, L)) {
+        const n = nodeById(comp, id);
+        for (const [prop, list] of Object.entries(n.tracks || {})) for (const k of list || []) out.push({ id, prop, f: k.f });
+    }
+    return out;
+}
+
+/**
+ * Slide a layer in time by `df` frames, as a layer bar is dragged: its in and out, a Read's footage (offset) and
+ * every key of its nodes move together, so the layer looks the same, later or earlier.
+ */
+export function slideLayer(comp, L, df) {
+    df = Math.round(df);
+    if (!df || !L || !L.merge) return false;
+    const r = layerRange(comp, L.merge);
+    setLayerRange(comp, L.merge, r.in + df, r.out + df);
+    for (const id of layerNodes(comp, L)) {
+        const n = nodeById(comp, id);
+        if (n.type === "read") { const o = (n.offset || 0) + df; if (o) n.offset = o; else delete n.offset; }
+        for (const list of Object.values(n.tracks || {})) for (const k of list || []) k.f += df;
+    }
     return true;
 }
 
@@ -902,11 +1035,24 @@ export const mat = {
 /** `src` drawn through `m` (source pixels -> output pixels) into a w x h picture, bilinear, transparent outside. */
 export function resample(src, m, w, h) {
     const out = blank(w, h), o = out.data, s = src.data, sw = src.w, sh = src.h;
-    if (m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1 && m[4] === 0 && m[5] === 0 && sw === w && sh === h) { o.set(s); return out; }
+    if (m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1 && m[4] === 0 && m[5] === 0 && sw === w && sh === h) { o.set(s); return src.bb ? O.withBox(out, src.bb) : out; }
     const iv = mat.inv(m);
-    for (let y = 0; y < h; y++) {
+    // With a box: only the output pixels its corners land in (a pixel more all round, for the bilinear reach).
+    let X0 = 0, Y0 = 0, X1 = w, Y1 = h;
+    if (src.bb) {
+        const [bx0, by0, bx1, by1] = src.bb;
+        if (O.boxEmpty(src.bb)) return O.withBox(out, [0, 0, 0, 0]);
+        let lx = Infinity, ly = Infinity, hx = -Infinity, hy = -Infinity;
+        for (const [cx, cy] of [[bx0 - 1, by0 - 1], [bx1 + 1, by0 - 1], [bx0 - 1, by1 + 1], [bx1 + 1, by1 + 1]]) {
+            const X = m[0] * cx + m[2] * cy + m[4], Y = m[1] * cx + m[3] * cy + m[5];
+            lx = Math.min(lx, X); hx = Math.max(hx, X); ly = Math.min(ly, Y); hy = Math.max(hy, Y);
+        }
+        [X0, Y0, X1, Y1] = O.boxClip([Math.floor(lx) - 1, Math.floor(ly) - 1, Math.ceil(hx) + 1, Math.ceil(hy) + 1], w, h);
+        O.withBox(out, [X0, Y0, X1, Y1]);
+    }
+    for (let y = Y0; y < Y1; y++) {
         const py = y + 0.5;
-        for (let x = 0; x < w; x++) {
+        for (let x = X0; x < X1; x++) {
             const px = x + 0.5;
             const u = iv[0] * px + iv[2] * py + iv[4] - 0.5;
             const v = iv[1] * px + iv[3] * py + iv[5] - 0.5;
@@ -989,6 +1135,7 @@ export function formatAt(comp, id, depth = 0) {
     if (!n || !NODE_TYPES[n.type]) return F;
     const up = () => (NODE_TYPES[n.type].inputs.length && n.inputs[0] ? formatAt(comp, n.inputs[0], depth + 1) : F);
     if (!n.disable && n.type === "sidebyside") { const u = up(); return n.layout === "over under" ? { width: u.width, height: u.height * 2 } : { width: u.width * 2, height: u.height }; }
+    if (!n.disable && n.type === "stmap" && n.inputs[1]) return formatAt(comp, n.inputs[1], depth + 1);
     if (n.disable || n.type !== "reformat") return n.type === "read" || n.type === "constant" || PLAIN_SIZE.has(n.type) ? F : up();
     const [w, h] = reformatSize(n, 0, up());
     return { width: w, height: h };
@@ -1003,7 +1150,8 @@ export function conform(img, w, h) {
         const s = (y - dy) * img.w * 4;
         out.data.set(img.data.subarray(s, s + cw * 4), y * w * 4);
     }
-    return out;
+    const b = O.boxOf(img);
+    return O.withBox(out, O.boxClip([b[0], b[1] + dy, b[2], b[3] + dy], w, h));
 }
 /** One channel of w0 x h0 numbers laid into w x h the same way. */
 export function conformPlane(a, w0, h0, w, h) {
@@ -1028,6 +1176,16 @@ export function transformMatrix(node, frame, format, scale = 1) {
     const c = paramAt(node, "center", frame) || [format.width / 2, format.height / 2];
     const cx = c[0] * scale, cy = c[1] * scale;
     return mat.mul(mat.t(t[0] * scale + cx, t[1] * scale + cy), mat.mul(mat.r(r), mat.mul(mat.s(sc[0], sc[1]), mat.mul(mat.k(k[0], k[1]), mat.t(-cx, -cy)))));
+}
+
+/** A Paint stroke's link at frame f: the matrix (full-size pixels) its points move by - the linked node's matrix at
+ *  f taken back through its matrix at the stroke's frame - or null (no link, or not a node that moves pictures). */
+export function linkMatrix(comp, s, f) {
+    if (!s || !s.link) return null;
+    const n = nodeById(comp, s.link);
+    if (!n || n.disable || n.type !== "transform") return null;
+    const F = formatAt(comp, n.inputs[0]);
+    return mat.mul(transformMatrix(n, f, F, 1), mat.inv(transformMatrix(n, s.f, F, 1)));
 }
 
 export function gradeImage(img, p) {
@@ -1065,9 +1223,21 @@ const OPS = {
     stencil: (A, B, a) => B * (1 - a),
 };
 
+/** Operations that give B where A is 0 (so only A's box needs working out). */
+const B_WHERE_NO_A = new Set(["over", "under", "plus", "screen", "atop"]);
 export function mergeImages(Bimg, Aimg, Mimg, op, mix) {
     const w = Bimg.w, h = Bimg.h, out = blank(w, h), o = out.data, B = Bimg.data, A = Aimg.data, M = Mimg ? Mimg.data : null;
     const f = OPS[op] || OPS.over;
+    if (Aimg.bb && B_WHERE_NO_A.has(OPS[op] ? op : "over") && !O.boxWhole(Aimg.bb, w, h)) {
+        o.set(B);
+        const [x0, y0, x1, y1] = O.boxClip(Aimg.bb, w, h);
+        for (let y = y0; y < y1; y++) for (let x = x0, i = (y * w + x0) * 4; x < x1; x++, i += 4) {
+            const a = A[i + 3], b = B[i + 3];
+            const t = M ? mix * M[i + 3] : mix;
+            for (let k = 0; k < 4; k++) { const r = f(A[i + k], B[i + k], a, b); o[i + k] = B[i + k] + (r - B[i + k]) * t; }
+        }
+        return Bimg.bb ? O.withBox(out, O.boxUnion(Bimg.bb, Aimg.bb)) : out;
+    }
     for (let i = 0; i < w * h * 4; i += 4) {
         const a = A[i + 3], b = B[i + 3];
         const t = M ? mix * M[i + 3] : mix;
@@ -1100,7 +1270,10 @@ export function upstreamKey(comp, id) {
 
 /**
  * The picture `id` makes at `frame`. ctx: { scale, source(node, frame) -> picture | null (a Read's pixels at
- * their own size, linear premultiplied), cache?: Map (kept between calls for the HEAVY nodes) }. Nodes that
+ * their own size, linear premultiplied), cache?: Map (results kept between calls: the HEAVY nodes', every
+ * node's with `cacheAll`, only `cacheIds`' when given; within `cacheBytes` or `cacheMax` entries; keyed by
+ * frame, scale, `upstreamHash`, the sources handed over and the LUTs there; `keysUsed`: a Map that gets
+ * each cached node's key, `${id}@${frame}` -> key) }. Nodes that
  * look at other times (Retime, Vectors, MotionBlur without vectors) render their input at those frames.
  * Returns a picture of its own size (formatAt) x scale.
  */
@@ -1116,7 +1289,7 @@ export function ocioNeeds(comp, frame) {
     }
     return [...out].map(([key, spec]) => ({ key, spec }));
 }
-export { OC, CH };
+export { OC, CH, PT, O };
 
 /** Nodes that make something and so have a "write" (the channel or layer it goes into). */
 export const WRITES = new Set(Object.keys(NODE_TYPES).filter((t) => NODE_TYPES[t].params.write));
@@ -1156,6 +1329,104 @@ export function channelsAt(comp, id, depth = 0) {
     return have;
 }
 
+/**
+ * The mask stage: `src` (what came in) + (`img` - src) x mix x m, per pixel, for the picture and every extra
+ * channel of either (a channel one side lacks counts as 0). `m` is one plane (null: no mask), `invert` 1 - m.
+ * Float64 between steps, as the numpy twin's `mask_mix`.
+ */
+export function maskMix(src, sex, img, ex, m, mix, invert) {
+    const w = img.w, h = img.h, N = w * h, out = blank(w, h), o = out.data, S = src.data, R = img.data;
+    const t = new Float64Array(N);
+    for (let p = 0; p < N; p++) t[p] = m ? mix * (invert ? 1 - m[p] : m[p]) : mix;
+    for (let p = 0, i = 0; p < N; p++, i += 4) for (let k = 0; k < 4; k++) o[i + k] = S[i + k] + (R[i + k] - S[i + k]) * t[p];
+    const oex = {};
+    for (const name of new Set([...Object.keys(sex || {}), ...Object.keys(ex || {})])) {
+        const a = (sex || {})[name], b = (ex || {})[name], c = new Float32Array(N);
+        for (let p = 0; p < N; p++) { const av = a ? a[p] : 0, bv = b ? b[p] : 0; c[p] = av + (bv - av) * t[p]; }
+        oex[name] = c;
+    }
+    return [out, oex];
+}
+
+/** cyrb53: a 53-bit hash of a string, as a base-36 string. */
+export function hashString(str, seed = 0) {
+    let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
+    for (let i = 0; i < str.length; i++) {
+        const ch = str.charCodeAt(i);
+        h1 = Math.imul(h1 ^ ch, 2654435761);
+        h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+/**
+ * A hash of node `id`'s settings and everything upstream of it (what `upstreamKey` spells out), built
+ * from its inputs' hashes so a graph is hashed once per render (`memo`: id -> hash).
+ */
+export function upstreamHash(comp, id, memo = new Map(), depth = 0) {
+    if (!id) return "-";
+    if (memo.has(id)) return memo.get(id);
+    const n = nodeById(comp, id);
+    if (!n || depth > 256) return "?";
+    memo.set(id, "~");   // a loop (refused by connect) hashes as itself
+    const { x, y, name, ...rest } = n;
+    // A Paint node's strokes can follow a Transform that is not upstream of it: its settings count too.
+    const links = n.type === "paint" && Array.isArray(n.strokes) ? [...new Set(n.strokes.map((s) => s && s.link).filter((l) => typeof l === "string"))] : [];
+    const h = hashString(JSON.stringify(rest) + "|" + n.inputs.map((s) => upstreamHash(comp, s, memo, depth + 1)).join(",")
+        + (links.length ? "|" + links.map((l) => upstreamHash(comp, l, memo, depth + 1)).join(",") : ""));
+    memo.set(id, h);
+    return h;
+}
+// A token per object handed to renderNode (a decoded source frame): the same object, the same token.
+const tokens = new WeakMap();
+let tokenNext = 1;
+function tokenOf(o) {
+    if (!o || typeof o !== "object") return "0";
+    let t = tokens.get(o);
+    if (!t) { t = tokenNext++; tokens.set(o, t); }
+    return t;
+}
+/** The bytes a kept result holds (its picture and its extra channels). */
+export function resultBytes(r) {
+    let b = r.img && r.img.data ? r.img.data.byteLength : 0;
+    for (const v of Object.values(r.ex || {})) b += v.byteLength || 0;
+    return b;
+}
+/**
+ * Keep `value` in `cache` (a Map in use order, oldest first) under `key`: within `maxBytes` when given (the
+ * oldest go first, the newest always stays), else within `maxCount` entries (24).
+ */
+export function cacheKeep(cache, key, value, maxBytes, maxCount) {
+    if (cache.has(key)) { cache.__bytes = (cache.__bytes || 0) - (cache.get(key).__b || 0); cache.delete(key); }
+    value.__b = resultBytes(value);
+    cache.set(key, value);
+    cache.__bytes = (cache.__bytes || 0) + value.__b;
+    if (maxBytes) {
+        while (cache.__bytes > maxBytes && cache.size > 1) {
+            const [k, v] = cache.entries().next().value;
+            cache.delete(k);
+            cache.__bytes -= v.__b || 0;
+        }
+    } else {
+        while (cache.size > (maxCount || 24)) {
+            const [k, v] = cache.entries().next().value;
+            cache.delete(k);
+            cache.__bytes -= v.__b || 0;
+        }
+    }
+}
+
+const sourceSigOf = (comp, nid, f, ctx, view) => sourceNeeds(comp, nid, f, view).map(({ node: s, frame: sf, deep }) =>
+    `${srcKey(s, sf)}:${tokenOf(deep ? (ctx.deepSource ? ctx.deepSource(s, sf) : null) : ctx.source ? ctx.source(s, sf) : null)}`).join(",");
+const lutSigOf = (comp, frame, ctx) => ocioNeeds(comp, frame).map((x) => x.key + (ctx.ocio && ctx.ocio(x.spec) ? "+" : "-")).join(",");
+/** The key renderNode keeps node `id`'s result at `frame` under in `ctx.cache` (another renderer - the GPU - keeps
+ *  its pictures under the same key, so the two share one cache). */
+export function resultKey(comp, id, frame, ctx) {
+    const view = ctx.view || firstView(comp);
+    return `${frame}@${ctx.scale || 1}@${view || ""}@${upstreamHash(comp, id)}@${sourceSigOf(comp, id, frame, ctx, view)}@${lutSigOf(comp, frame, ctx)}`;
+}
+
 export function renderNode(comp, id, frame, ctx) {
     const scale = ctx.scale || 1;
     const view = ctx.view ? ctx.view : firstView(comp);
@@ -1163,7 +1434,12 @@ export function renderNode(comp, id, frame, ctx) {
     const W = Math.max(1, Math.round(comp.format.width * scale)), H = Math.max(1, Math.round(comp.format.height * scale));
     const memo = ctx.memo || (ctx.memo = new Map());
     const xmemo = ctx.xmemo || (ctx.xmemo = new Map());   // the extra channels beside each picture
-    const keys = new Map();
+    const keys = new Map(), hashes = new Map();
+    // What a cached result also depends on beside the settings: which pixels its Reads were handed (none yet,
+    // or which decoded frame) and which OCIO transforms had arrived.
+    const sourceSig = (nid, f) => sourceSigOf(comp, nid, f, ctx, view);
+    let lut = null;
+    const lutSig = () => lut ?? (lut = lutSigOf(comp, frame, ctx));
     // A node's result with its own extra channels (otherwise its first input's are taken, moved for SPATIAL ones).
     const X = (img, ex) => ({ __x: true, img, ex });
     const exOf = (nid, f) => (nid && xmemo.get(`${nid}@${f}`)) || {};
@@ -1173,10 +1449,16 @@ export function renderNode(comp, id, frame, ctx) {
         if (memo.has(mk)) return memo.get(mk);
         const n = viewNode(nodeById(comp, nid), view);
         let ck = null;
-        if (n && !n.disable && HEAVY.has(n.type) && ctx.cache) {
-            if (!keys.has(nid)) keys.set(nid, upstreamKey(comp, nid));
-            ck = `${f}@${scale}@${view || ""}@${keys.get(nid)}`;
-            if (ctx.cache.has(ck)) { const kept = ctx.cache.get(ck); memo.set(mk, kept.img); xmemo.set(mk, kept.ex); return kept.img; }
+        if (n && !n.disable && ctx.cache && (ctx.cacheIds ? ctx.cacheIds.has(nid) : ctx.cacheAll ? true : HEAVY.has(n.type))) {
+            if (!keys.has(nid)) keys.set(nid, upstreamHash(comp, nid, hashes));
+            ck = `${f}@${scale}@${view || ""}@${keys.get(nid)}@${sourceSig(nid, f)}@${lutSig()}`;
+            if (ctx.keysUsed) ctx.keysUsed.set(mk, ck);
+            if (ctx.cache.has(ck)) {
+                const kept = ctx.cache.get(ck);
+                ctx.cache.delete(ck); ctx.cache.set(ck, kept);   // most recently used last
+                memo.set(mk, kept.img); xmemo.set(mk, kept.ex);
+                return kept.img;
+            }
         }
         let img = make(n, f, depth), ex;
         if (img && img.__x) { ex = img.ex; img = img.img; }
@@ -1196,13 +1478,28 @@ export function renderNode(comp, id, frame, ctx) {
                 [img, ex] = CH.writeTarget(base, exOf(n.inputs[0], f), conform(img, base.w, base.h), w);
             }
         }
+        if (n && !n.disable && MASKABLE.has(n.type)) [img, ex] = maskStage(n, f, depth, img, ex);
         memo.set(mk, img);
         xmemo.set(mk, ex);
-        if (ck) {
-            ctx.cache.set(ck, { img, ex });
-            while (ctx.cache.size > (ctx.cacheMax || 24)) ctx.cache.delete(ctx.cache.keys().next().value);
-        }
+        if (ck) cacheKeep(ctx.cache, ck, { img, ex }, ctx.cacheBytes, ctx.cacheMax);
         return img;
+    };
+    // A MASKABLE node's result held back by its mix and its mask's channel (where it is 0 the input shows).
+    const maskStage = (n, f, depth, img, ex) => {
+        const mix = OWN_MIX.has(n.type) ? 1 : paramAt(n, "mix", f);
+        const mi = n.inputs[maskIndex(n.type)];
+        if (!mi && mix === 1) return [img, ex];
+        const i0 = n.inputs[0];
+        const s0 = i0 ? run(i0, f, depth + 1) : blank(img.w, img.h);
+        const src = conform(s0, img.w, img.h), sex = i0 ? conformExtras(exOf(i0, f), s0.w, s0.h, img.w, img.h) : {};
+        let m = null;
+        if (mi) {
+            const mp = run(mi, f, depth + 1);
+            const plane = CH.channelOf(mp, exOf(mi, f), n.mask_channel || "a");
+            m = plane ? conformPlane(plane, mp.w, mp.h, img.w, img.h) : new Float32Array(img.w * img.h);
+        }
+        const [mo, mex] = maskMix(src, sex, img, ex, m, mix, (n.mask_invert || "off") === "on");
+        return [src.bb && img.bb ? O.withBox(mo, O.boxUnion(src.bb, img.bb)) : mo, mex];
     };
     // A SPATIAL node: its picture and every extra channel through the same operation.
     const spatial = (srcId, f, d1, fn) => { const src = run(srcId, f, d1); return X(fn(src), CH.mapExtras(exOf(srcId, f), src.w, src.h, fn)); };
@@ -1299,7 +1596,9 @@ export function renderNode(comp, id, frame, ctx) {
             const src = ctx.source ? ctx.source(n, f) : null;
             // A source may come shrunk (the page's proxy): `ow` x `oh` is the file's own size then.
             const k = src ? scale * (src.ow ? src.ow / src.w : 1) : 1;
-            return src ? resample(src, fitMatrix(src.w, src.h, W, H, n.fit || "fit", k), W, H) : blank(W, H);
+            if (!src) return O.withBox(blank(W, H), [0, 0, 0, 0]);
+            const img = resample(src, fitMatrix(src.w, src.h, W, H, n.fit || "fit", k), W, H);
+            return O.withBox(img, O.scanBox(img));
         }
         case "constant": {
             const c = paramAt(n, "color", f) || [0, 0, 0, 1];
@@ -1308,6 +1607,7 @@ export function renderNode(comp, id, frame, ctx) {
             return img;
         }
         case "merge": {
+            if (!mergeLive(n, f)) return run(n.inputs[0], f, d1);
             const B = run(n.inputs[0], f, d1), A = conform(run(n.inputs[1], f, d1), B.w, B.h);
             const M = n.inputs[2] ? conform(run(n.inputs[2], f, d1), B.w, B.h) : null;
             return mergeImages(B, A, M, n.operation || "over", paramAt(n, "mix", f));
@@ -1316,7 +1616,8 @@ export function renderNode(comp, id, frame, ctx) {
         case "grade": {
             const p = {};
             for (const k of Object.keys(NODE_TYPES.grade.params)) p[k] = paramAt(n, k, f);
-            return gradeImage(run(n.inputs[0], f, d1), p);
+            const g0 = run(n.inputs[0], f, d1);
+            return g0.bb ? O.withBox(gradeImage(g0, p), g0.bb) : gradeImage(g0, p);
         }
         case "lumakeyer": case "chromakeyer": case "erode": case "laplacian": case "channelmath": {
             const p = {};
@@ -1368,7 +1669,12 @@ export function renderNode(comp, id, frame, ctx) {
             const tl = paramAt(n, "topleft", f) || [0, 0];
             const F = inFmt(n), br = paramAt(n, "bottomright", f) || [F.width, F.height];
             const soft = paramAt(n, "softness", f) * scale;
-            return spatial(n.inputs[0], f, d1, (p) => O.cropImage(p, tl[0] * scale, tl[1] * scale, br[0] * scale, br[1] * scale, soft));
+            return spatial(n.inputs[0], f, d1, (p) => {
+                const c = O.cropImage(p, tl[0] * scale, tl[1] * scale, br[0] * scale, br[1] * scale, soft);
+                const L = tl[0] * scale, T = tl[1] * scale, R = br[0] * scale, B = br[1] * scale, pb = O.boxOf(p);
+                const cb = O.boxClip([Math.floor(L) - 1, Math.floor(T) - 1, Math.ceil(R) + 1, Math.ceil(B) + 1], p.w, p.h);
+                return O.withBox(c, O.boxClip([Math.max(cb[0], pb[0]), Math.max(cb[1], pb[1]), Math.min(cb[2], pb[2]), Math.min(cb[3], pb[3])], p.w, p.h));
+            });
         }
         case "shuffle": {
             const src = run(n.inputs[0], f, d1);
@@ -1413,7 +1719,30 @@ export function renderNode(comp, id, frame, ctx) {
             const src = n.inputs[0] ? run(n.inputs[0], f, d1) : null, w = src ? src.w : W, h = src ? src.h : H;
             if (w !== W || h !== H) matte = conformPlane(matte, W, H, w, h);
             const [img, ex] = CH.rotoWrite(matte, w, h, src, exOf(n.inputs[0], f), n.write || "rgba", n.premult !== "off");
-            return X(img, ex);
+            return X(O.withBox(img, O.scanBox(img)), ex);
+        }
+        case "paint": {
+            // Strokes on the picture that comes in (the comp's size without one); clone / reveal read pictures moved by
+            // their offset, at other frames for a dt. Pictures of another size meet at the bottom left.
+            const src = n.inputs[0] ? run(n.inputs[0], f, d1) : blank(W, H);
+            const strokes = PT.liveStrokes(n.strokes, f);
+            if (!strokes.length) return src;
+            const shifted = new Map();
+            const moved = (img, s) => {
+                const ox = -s.offset[0] * scale, oy = -s.offset[1] * scale;
+                return ox || oy ? resample(img, mat.t(ox, oy), img.w, img.h) : img;
+            };
+            const sourceOf = (s, now) => {
+                if (s.tool === "reveal" && !n.inputs[1]) return null;
+                if (s.tool === "clone" && !s.dt) return moved(now, s);
+                const key = `${s.tool}@${s.dt}@${s.offset[0]},${s.offset[1]}`;
+                if (!shifted.has(key)) {
+                    const pic = s.tool === "reveal" ? conform(run(n.inputs[1], f + s.dt, d1), src.w, src.h) : run(n.inputs[0], f + s.dt, d1);
+                    shifted.set(key, moved(pic, s));
+                }
+                return shifted.get(key);
+            };
+            return PT.paintImage(src, strokes, scale, sourceOf, (s) => linkMatrix(comp, s, f));
         }
         case "vectors": return vectorsOf(n.inputs[0], f, d1, n);
         case "motionblur": {
@@ -1477,6 +1806,53 @@ export function renderNode(comp, id, frame, ctx) {
             const L = inView(n.inputs[0], f, vl).img, R = conform(inView(n.inputs[0], f, vr).img, L.w, L.h);
             return X(n.type === "anaglyph" ? anaglyphImage(L, R, n.mode || "colour") : sideBySide(L, R, n.layout === "over under"), {});
         }
+        case "cornerpin": {
+            const { from, to } = WP.pinCorners((p) => paramAt(n, p, f), inFmt(n));
+            const inv = n.invert === "on" ? WP.homography(from, to) : WP.homography(to, from);
+            return spatial(n.inputs[0], f, d1, (p) => WP.homographyImage(p, inv, scale));
+        }
+        case "stmap": {
+            const src = run(n.inputs[0], f, d1);
+            if (!n.inputs[1]) return X(src, exOf(n.inputs[0], f));
+            const M = run(n.inputs[1], f, d1), mex = exOf(n.inputs[1], f);
+            const us = CH.channelOf(M, mex, n.u || "r") || new Float32Array(M.w * M.h), vs = CH.channelOf(M, mex, n.v || "g") || new Float32Array(M.w * M.h);
+            const [U, V] = WP.stMap(us, vs, M.w, M.h, src.w, src.h);
+            return spatial(n.inputs[0], f, d1, (p) => WP.sampleMap(p, U, V, M.w, M.h));
+        }
+        case "vectorwarp": {
+            const src = run(n.inputs[0], f, d1);
+            if (!n.inputs[1]) return X(src, exOf(n.inputs[0], f));
+            const Vi = run(n.inputs[1], f, d1), vex = conformExtras(exOf(n.inputs[1], f), Vi.w, Vi.h, src.w, src.h), Vc = conform(Vi, src.w, src.h);
+            const us = CH.channelOf(Vc, vex, n.u || "r") || new Float32Array(src.w * src.h), vs = CH.channelOf(Vc, vex, n.v || "g") || new Float32Array(src.w * src.h);
+            const [U, V] = WP.vectorMap(us, vs, src.w, src.h, paramAt(n, "amount", f), scale);
+            return spatial(n.inputs[0], f, d1, (p) => WP.sampleMap(p, U, V, src.w, src.h));
+        }
+        case "lensdistortion": {
+            const src = run(n.inputs[0], f, d1);
+            const p = { mode: n.mode || "undistort", k1: paramAt(n, "k1", f), k2: paramAt(n, "k2", f), center: paramAt(n, "center", f), zoom: paramAt(n, "zoom", f) };
+            const [U, V] = WP.lensMap(src.w, src.h, p, scale);
+            if (n.output === "stmap") return X(WP.mapAsSt(U, V, src.w, src.h, src.w, src.h), {});
+            return spatial(n.inputs[0], f, d1, (q) => WP.sampleMap(q, U, V, src.w, src.h));
+        }
+        case "gridwarp": {
+            const src = run(n.inputs[0], f, d1);
+            const [sp, dp] = gridPoints(n, f, inFmt(n));
+            const [U, V] = WP.gridMap(sp, dp, src.w, src.h, scale);
+            return spatial(n.inputs[0], f, d1, (q) => WP.sampleMap(q, U, V, src.w, src.h));
+        }
+        case "tracker": case "planartracker": {
+            const how = n.transform || "none";
+            const mo = how === "none" ? null : trackMotion(n, f);
+            if (!mo) return X(run(n.inputs[0], f, d1), exOf(n.inputs[0], f));
+            if (mo.kind === "perspective") {
+                // Match-move: each output pixel reads where it was at the reference; stabilise: where it is now.
+                const inv = how === "match-move" ? WP.homography(mo.Q, mo.P) : WP.homography(mo.P, mo.Q);
+                return spatial(n.inputs[0], f, d1, (p) => WP.homographyImage(p, inv, scale));
+            }
+            const m0 = how === "match-move" ? mo.m : WP.invertAffine(mo.m);
+            const m = mat.mul(mat.s(scale, scale), mat.mul(m0, mat.s(1 / scale, 1 / scale)));
+            return spatial(n.inputs[0], f, d1, (p) => resample(p, m, p.w, p.h));
+        }
         case "output": return run(n.inputs[0], f, d1);
         default: return blank(W, H);
         }
@@ -1505,6 +1881,87 @@ export function sideBySide(L, R, over) {
         out.data.set(R.data.subarray(y * w * 4, (y + 1) * w * 4), over ? (y + h) * w * 4 : y * w * 8 + w * 4);
     }
     return out;
+}
+
+/** A GridWarp's two point lists at frame f (flat [x, y, ...], pixels of its input): the source grid, and the
+ *  destination as far as ``distortion`` takes it. A list of the wrong length counts as not there (the even grid). */
+export function gridPoints(n, f, fmt) {
+    const cols = Math.max(2, Math.min(16, Math.round(n.cols || 5))), rows = Math.max(2, Math.min(16, Math.round(n.rows || 5)));
+    const len = 2 * cols * rows, ok = (a) => Array.isArray(a) && a.length === len && a.every(isNum);
+    const sp = ok(n.src_points) ? n.src_points : WP.lattice(cols, rows, fmt.width, fmt.height);
+    const raw = paramAt(n, "dst_points", f), dr = ok(raw) ? raw : sp;
+    const k = paramAt(n, "distortion", f);
+    return [sp, sp.map((v, i) => v + (dr[i] - v) * k)];
+}
+
+/** A Tracker's or PlanarTracker's motion from its reference frame to frame f: solveMotion's answer, with the point
+ *  sets (P at the reference, Q now) for a perspective; null when the points do not reach both frames. */
+export function trackMotion(n, f) {
+    const ref = Math.round(n.reference || 0);
+    if (n.type === "planartracker") {
+        const keys = n.plane && n.plane.keys;
+        if (!WP.trackHas(keys, ref) || !WP.trackHas(keys, f)) return null;
+        const P = WP.quadAt(keys, ref), Q = WP.quadAt(keys, f);
+        return { kind: "perspective", P, Q };
+    }
+    const { P, Q } = WP.trackPairs(n.points, ref, f);
+    const mo = WP.solveMotion(P, Q, n.motion || "translate");
+    if (mo && mo.kind === "perspective") { mo.P = P.slice(0, 4); mo.Q = Q.slice(0, 4); }
+    return mo;
+}
+export { WP };
+
+export const TRACK_BAKES = ["stabilise", "match-move", "corner pin"];
+/** The frames a Tracker's or PlanarTracker's motion is known at: every frame of the comp it reaches from its reference. */
+export function trackFrames(comp, n) {
+    const out = [];
+    for (let f = 0; f < comp.format.frames; f++) if (trackMotion(n, f)) out.push(f);
+    return out;
+}
+/**
+ * A Tracker's / PlanarTracker's motion as a new keyed node (not wired: it is put beside the tracker, for the
+ * picture it should move): "stabilise" / "match-move" a Transform (a key a frame: translate, rotate, scale and,
+ * for stabilise, its centre), or a CornerPin for a perspective / a surface (its from corners the reference's, its
+ * to corners keyed; stabilise = invert on). "corner pin" is a match-move CornerPin from the first four points, or
+ * the surface. Returns the node added, or null when there is nothing to bake.
+ */
+export function bakeTrack(comp, trackerId, how) {
+    const n = nodeById(comp, trackerId);
+    if (!n || (n.type !== "tracker" && n.type !== "planartracker")) return null;
+    const pin = how === "corner pin" || n.type === "planartracker" || n.motion === "perspective";
+    const probe = pin && n.type === "tracker" ? Object.assign({}, n, { motion: "perspective" }) : n;
+    const frames = trackFrames(comp, probe);
+    if (!frames.length) return null;
+    const key = (f, v) => ({ f, v, ease: "linear" });
+    const r4 = (v) => Math.round(v * 1e4) / 1e4;
+    const at = { x: n.x + NODE_W + 30, y: n.y, name: undefined };
+    const label = n.name || n.id;
+    let node;
+    if (pin) {
+        const first = trackMotion(probe, frames[0]);
+        if (!first || first.kind !== "perspective") return null;
+        node = makeNode(comp, "cornerpin", Object.assign(at, { name: `${label} ${how === "stabilise" ? "stabilise" : "pin"}`,
+            invert: how === "stabilise" ? "on" : "off" }));
+        first.P.forEach((p, k) => { node[`from${k + 1}`] = p.map(r4); });
+        node.tracks = {};
+        for (let k = 0; k < 4; k++) node.tracks[`to${k + 1}`] = frames.map((f) => key(f, trackMotion(probe, f).Q[k].map(r4)));
+    } else {
+        node = makeNode(comp, "transform", Object.assign(at, { name: `${label} ${how}` }));
+        const t = [], r = [], sc = [], c = [];
+        for (const f of frames) {
+            const mo = trackMotion(n, f);
+            if (how === "match-move") { t.push(key(f, [r4(mo.cQ[0] - mo.cP[0]), r4(mo.cQ[1] - mo.cP[1])])); r.push(key(f, r4(mo.angle))); sc.push(key(f, [r4(mo.s), r4(mo.s)])); }
+            else { t.push(key(f, [r4(mo.cP[0] - mo.cQ[0]), r4(mo.cP[1] - mo.cQ[1])])); r.push(key(f, r4(-mo.angle))); sc.push(key(f, [r4(1 / mo.s), r4(1 / mo.s)])); c.push(key(f, mo.cQ.map(r4))); }
+        }
+        const mo0 = trackMotion(n, frames[0]);
+        node.tracks = { translate: t };
+        if (n.motion === "rotate" || n.motion === "scale") node.tracks.rotate = r;
+        if (n.motion === "scale") node.tracks.scale = sc;
+        if (how === "match-move") node.center = mo0.cP.map(r4); else node.tracks.center = c;
+    }
+    if (!node.name) delete node.name;
+    addNode(comp, node);
+    return node;
 }
 
 /** a x (1 - t) + b x t. */
@@ -1549,6 +2006,13 @@ export function sourceNeeds(comp, id, frame, view = null) {
             if (n.type === "vectors") return;
         }
         if (n.type === "depthblur" && !n.inputs[1]) { walk(n.inputs[0], f, depth + 1, v); return; }
+        if (n.type === "paint") {
+            const fr = PT.paintFrames(n.strokes, f);
+            for (const g of fr.clone) walk(n.inputs[0], g, depth + 1, v);
+            if (n.inputs[1]) for (const g of fr.reveal) walk(n.inputs[1], g, depth + 1, v);
+            walk(n.inputs[0], f, depth + 1, v);
+            return;
+        }
         for (const s of n.inputs) walk(s, f, depth + 1, v);
     };
     walk(id, frame, 0, view || vs[0] || null);

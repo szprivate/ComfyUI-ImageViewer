@@ -29,6 +29,11 @@ import { MG_CSS } from "./imageViewer_mgEditor.js";
 import { paintIcon } from "./imageViewer_paintIcons.js";
 import { createCompCurves } from "./imageViewer_compCurves.js";
 import * as J from "./imageViewer_compJack.js";
+import { createCompGpu } from "./imageViewer_compGpu.js";
+import * as KL from "./imageViewer_keyLanes.js";
+import { createPaintTool, PAINT_TOOL_CSS } from "./imageViewer_compPaintTool.js";
+import { createViewTools, VIEW_TOOLS_CSS } from "./imageViewer_compViewTools.js";
+import * as WUI from "./imageViewer_compWarpUI.js";
 
 const CSS = `
 .cp-root{display:flex;flex-direction:column;position:absolute;inset:0;background:#0f0f12;color:#d8d8dc;font:12px/1.35 system-ui,Segoe UI,sans-serif;outline:none}
@@ -91,15 +96,30 @@ const CSS = `
 .cp-tmsub{color:#8a8a92;font-size:10px}
 .cp-tmhead{padding:5px 6px 1px;color:#8a8a92;font-size:10px;text-transform:uppercase;letter-spacing:.04em;cursor:default}
 .cp-tmnone{padding:4px 8px;color:#8a8a92;cursor:default}
-.cp-lbar{display:flex;gap:4px;align-items:center;padding:4px 6px;border-bottom:1px solid #2c2c32;flex-wrap:wrap}
-.cp-lrows{position:absolute;top:31px;left:0;right:0;bottom:0;overflow:auto}
-.cp-lrow{display:flex;align-items:center;gap:6px;height:26px;padding:0 6px;border-bottom:1px solid #2a2a30;cursor:pointer}
-.cp-lrow.sel{background:#2b2218}.cp-lrow:hover:not(.sel){background:#25252b}
+.cp-lbar{display:flex;gap:4px;align-items:center;padding:4px 6px;border-bottom:1px solid #2c2c32;flex-wrap:nowrap;overflow:hidden;height:31px}
+.cp-lbar .cp-lzoom{margin-left:auto;display:flex;gap:2px;align-items:center;opacity:.85}
+.cp-lrows{position:absolute;top:31px;left:0;right:0;bottom:0;overflow:auto;outline:none}
+.cp-lt-in{position:relative;min-height:100%}
+.cp-lrow,.cp-lsub,.cp-lruler{display:flex;height:26px;border-bottom:1px solid #2a2a30}
+.cp-lsub{height:22px;border-bottom-color:#26262b}
+.cp-lruler{position:sticky;top:0;z-index:5;height:22px;background:#26262c}
+.cp-ltl{position:sticky;left:0;z-index:3;flex:none;display:flex;align-items:center;gap:6px;padding:0 6px;background:#202024;border-right:1px solid #2c2c32;overflow:hidden;white-space:nowrap;cursor:pointer}
+.cp-lruler .cp-ltl{background:#26262c;cursor:default;color:#8a8a92;font-size:10px}
+.cp-lsub .cp-ltl{padding-left:34px;color:#b0b0b8;font-size:11px;cursor:default}
+.cp-lrow.sel .cp-ltl{background:#2b2218}.cp-lrow:hover:not(.sel) .cp-ltl{background:#25252b}
+.cp-ltrack{position:relative;flex:none}
+.cp-lruler .cp-ltrack{cursor:ew-resize;overflow:hidden}
+.cp-ltick{position:absolute;top:0;bottom:0;border-left:1px solid #3a3a42;font-size:9px;padding:2px 0 0 2px;color:#8a8a92;pointer-events:none}
+.cp-lend{position:absolute;top:0;bottom:0;border-left:1px dashed #5a5a62;pointer-events:none}
+.cp-lt-ph{position:absolute;top:0;bottom:0;width:0;border-left:1px solid #ff6a1a;z-index:2;pointer-events:none}
+.cp-lt-grip{position:absolute;top:0;width:0;height:0;margin-left:-6px;border:6px solid transparent;border-top:9px solid #ff6a1a;pointer-events:none}
+.cp-ltw{width:12px;flex:none;text-align:center;opacity:.7;font-size:10px;cursor:pointer}
 .cp-lrow .cp-lname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cp-lrow.off .cp-lname{opacity:.4;text-decoration:line-through}
 .cp-lrow select,.cp-lrow input{background:#141418;border:1px solid #34343c;color:#e6e6ea;border-radius:2px;font:inherit;padding:0 2px;height:20px}
 .cp-lrow input{width:52px}
-.cp-lrow .cp-lkind{font-size:10px;opacity:.55;width:62px;flex:none}
+.cp-lrow .cp-lkind{font-size:11px;opacity:.6;width:14px;flex:none;text-align:center}
+.cp-lbg{position:absolute;top:6px;bottom:6px;border-radius:3px;background:#2e2e36;border:1px solid #3c3c46;box-sizing:border-box;pointer-events:none}
 .cp-swatch{width:14px;height:14px;border-radius:2px;flex:none;border:1px solid #0008}
 .cp-note{opacity:.6;padding:6px 2px}
 .cp-over{position:absolute;left:0;top:0;transform-origin:0 0;overflow:visible;pointer-events:none}
@@ -173,7 +193,7 @@ function keepGrid(g) { try { localStorage.setItem(GRID_KEY, JSON.stringify(g)); 
 
 export function installCompStyles(rootNode) {
     const doc = rootNode.ownerDocument || rootNode;
-    for (const [attr, text] of [["data-mg", MG_CSS], ["data-comp", CSS]]) {
+    for (const [attr, text] of [["data-mg", MG_CSS], ["data-comp", CSS + PAINT_TOOL_CSS + VIEW_TOOLS_CSS + WUI.CSS], ["data-kl", KL.KL_CSS]]) {
         if (!rootNode.querySelector || !rootNode.querySelector(`style[${attr}]`)) {
             const style = el(doc, "style"); style.setAttribute(attr, "1"); style.textContent = text;
             (rootNode.head || rootNode).appendChild(style);
@@ -193,6 +213,8 @@ export function createCompEditor(host, opts = {}) {
         held: null,                 // "a" (lay out) / "y" (cut wires) while that key is held over the graph
         batch: new Map(), batchN: 0, // when each selected node joined the selection (one box = one batch)
         eye: null,                  // the view the picture is made in (a comp with views)
+        lt: { zoom: 1, open: new Set() }, // the Layers timeline: its zoom, the layers unfolded (by Merge id, or "bg")
+        lkeys: [],                  // the keys picked in the Layers timeline: [{id, prop, f}]
     };
     // OCIO transforms baked for the preview, by ocioKey: {lut, at, why} once answered, the promise while asked.
     // Every draw waits for the SAME request (a second draw during a slow first bake once found nothing, drew
@@ -220,9 +242,57 @@ export function createCompEditor(host, opts = {}) {
         }));
     }
     if (o.ocioInfo) o.ocioInfo().then((info) => { st.ocio = info; if (st.comp) { renderBar(); renderProps(); } }).catch(() => {});
-    const heavy = new Map();   // HEAVY nodes' results, kept between renders (renderNode's ctx.cache)
+    // Every node's results, kept between renders within CACHE_BYTES (renderNode's ctx.cache, cacheAll): a change
+    // makes again only what is downstream of it, and a frame seen before (or rendered ahead) comes back at once.
+    const heavy = new Map();
+    const CACHE_BYTES = 640 * 1024 * 1024;
+    // The frames of the picture on screen whose result is kept: f -> {key, hash, id, scale} (cachedFrames()).
+    const frameKeys = new Map();
+    let ahead = null;           // the frames being rendered ahead while nothing else happens
+    const AHEAD = 48;
+    // The GPU preview (imageViewer_compGpu.js): on by default where WebGL2 with float targets is there (localStorage
+    // imageviewer.comp.gpu "off" turns it off); a failure turns it off for the session and says so in the info line.
+    let gpu = null, gpuTried = false, gpuWhy = "", lastRoi = null;
+    const gpuWanted = () => { try { return localStorage.getItem("imageviewer.comp.gpu") !== "off"; } catch (_) { return true; } };
+    function gpuNow() {
+        if (!gpuWanted() || gpuWhy) return null;
+        if (!gpuTried) { gpuTried = true; try { gpu = createCompGpu(doc); if (!gpu) gpuWhy = "no WebGL2 float targets"; } catch (e) { gpuWhy = String((e && e.message) || e); } }
+        return gpu;
+    }
+    /** The part of the picture on screen (pixels of the picture at `scale`), or null when most of it shows. */
+    function visibleRegion(scale) {
+        if (st.zoom.fit) return null;
+        const vf = viewFmt(), Wd = stage.clientWidth || 1, Hd = stage.clientHeight || 1;
+        const x0 = Math.max(0, -st.zoom.x / st.zoom.s), y0 = Math.max(0, -st.zoom.y / st.zoom.s);
+        const x1 = Math.min(vf.width, (Wd - st.zoom.x) / st.zoom.s), y1 = Math.min(vf.height, (Hd - st.zoom.y) / st.zoom.s);
+        if (x1 <= x0 || y1 <= y0) return [0, 0, 0, 0];
+        if ((x1 - x0) * (y1 - y0) > 0.7 * vf.width * vf.height) return null;
+        return [Math.floor(x0 * scale) - 2, Math.floor(y0 * scale) - 2, Math.ceil(x1 * scale) + 2, Math.ceil(y1 * scale) + 2];
+    }
+    /**
+     * Node id's picture at f: from the cache, else the GPU (a region only when `roi`: not kept then), else renderNode.
+     * `aheadOnly`: keep only this picture (rendering ahead).
+     */
+    function picture(id, f, scale, pics, roi, aheadOnly) {
+        const ctx = { ...sourcesCtx(pics), scale, cache: heavy, matte, ocio: lutOf,
+            cacheBytes: CACHE_BYTES, keysUsed: new Map(), ...(aheadOnly ? { cacheIds: new Set([id]) } : { cacheAll: true }) };
+        const key = C.resultKey(st.comp, id, f, ctx);
+        if (heavy.has(key)) { const kept = heavy.get(key); heavy.delete(key); heavy.set(key, kept); const im = kept.img; im.ch = kept.ex; ctx.keysUsed.set(`${id}@${f}`, key); return { img: im, ctx, how: "kept" }; }
+        // The GPU does not make views (a view's own settings, its Reads): a comp with views is drawn on the CPU.
+        const g = C.viewsOf(st.comp).length ? null : gpuNow();
+        if (g) {
+            try {
+                const im = g.render(st.comp, id, f, ctx, roi);
+                if (im) {
+                    if (!im.roi) { C.cacheKeep(heavy, key, { img: im, ex: {} }, CACHE_BYTES); ctx.keysUsed.set(`${id}@${f}`, key); }
+                    return { img: im, ctx, how: im.roi ? "gpu, region" : "gpu" };
+                }
+            } catch (e) { gpuWhy = String((e && e.message) || e); gpu = null; }
+        }
+        return { img: C.renderNode(st.comp, id, f, ctx), ctx, how: "cpu" };
+    }
     let lastPics = null;
-    let renderGen = 0, renderQueued = false, lastMs = 0, lastScale = 1, lastShown = 0, drawnGen = 0;
+    let renderGen = 0, renderQueued = false, lastMs = 0, lastScale = 1, lastShown = 0, drawnGen = 0, lastHow = "cpu";
     const SHOW_EVERY_MS = 120;
     const infos = new Map();
 
@@ -272,6 +342,9 @@ export function createCompEditor(host, opts = {}) {
     graph.append(gbar);
     const props = el(doc, "div", "mg-side mg-part"); props.tabIndex = 0;
     const layers = el(doc, "div", "cp-layers"); layers.tabIndex = 0;
+    // The Layers panel is a timeline: a bar of actions over a scroller that is never replaced (drags hold its pointer).
+    const lbarEl = el(doc, "div", "cp-lbar"), lscroll = el(doc, "div", "cp-lrows");
+    layers.append(lbarEl, lscroll);
     const curvesEl = el(doc, "div", "cp-curves-part");
     const parts = { graph, props, layers, curves: curvesEl };
     // The Curve Editor: the selected nodes' keys (imageViewer_compCurves.js); every change one undo step here.
@@ -296,6 +369,28 @@ export function createCompEditor(host, opts = {}) {
     const toast = (m, sev) => { try { o.notify(m, sev); } catch (_) { /* no toasts */ } };
     const comp = () => st.comp;
     const fmt = () => st.comp.format;
+    // The Paint node's tool (imageViewer_compPaintTool.js): strokes on the picture while a Paint node is on top.
+    const paintTool = createPaintTool({
+        doc, el, svgEl, stage, btn, toHex, fromHex,
+        numInput: (v, step, fn, d) => numInput(v, step, fn, d),
+        primary: () => primary(), node: (id) => node(id), comp: () => st.comp, frame: () => st.frame,
+        compXY: (e) => compXY(e), inFmt: (n) => inFmt(n), downBy: (f) => downBy(f), zoom: () => st.zoom.s || 1, layer: () => layer,
+        push: () => { if (liveBak.size) liveRestore(); st.hist.push(st.comp); },
+        live: () => { st.dirty = true; queueRender(); renderOverlay(); },
+        changed: () => { st.dirty = true; refresh(["bar", "props", "stage", "graph"]); },
+        overlay: () => renderOverlay(), props: () => renderProps(), redraw: () => { renderOverlay(); renderProps(); },
+        toast: (m, sev) => toast(m, sev),
+    });
+    // The viewer tools (imageViewer_compViewTools.js): A / B compare, the sampler, scopes, out-of-range, guides.
+    let vtBtn = null;
+    const viewTools = createViewTools({
+        doc, el, svgEl, stage,
+        rerender: () => queueRender(), overlay: () => renderOverlay(), graph: () => renderGraph(), bar: () => renderBar(),
+        node: (id) => node(id), nodes: () => st.comp.nodes, viewed: () => viewedId(),
+        label: (id) => { const n = node(id); return n ? n.name || n.id : String(id); },
+        viewFmt: () => viewFmt(), fmt: () => fmt(), zoom: () => st.zoom.s || 1, compXY: (e) => compXY(e),
+        toast: (m, sev) => toast(m, sev), pop: (a, items) => popMenu(a, items), barAnchor: () => vtBtn,
+    });
     const node = (id) => C.nodeById(st.comp, id);
     // ── views: a node's settings split off for one view ──
     // A split ({view: {its params, tracks}}) is a whole copy of the node's settings; while the picture is made in
@@ -420,6 +515,11 @@ export function createCompEditor(host, opts = {}) {
         proxy.value = st.proxy;
         proxy.title = "The picture's resolution while you work (the render is always full size)";
         proxy.onchange = () => { st.proxy = proxy.value; queueRender(); };
+        const gpuBtn = btn("GPU", "Work the picture on the graphics card (the render is always made on the server)", () => {
+            const on = !gpuWanted();
+            try { localStorage.setItem("imageviewer.comp.gpu", on ? "on" : "off"); } catch (_) { /* not kept */ }
+            gpuWhy = ""; gpuTried = false; gpuBtn.classList.toggle("on", on); queueRender();
+        }, gpuWanted() ? "on cp-gpu" : "cp-gpu");
         let disp = null;
         if (st.ocio && st.ocio.available && st.ocio.displays.length) {
             disp = el(doc, "select", "mg-btn cp-display");
@@ -459,6 +559,9 @@ export function createCompEditor(host, opts = {}) {
                 renderBar();
             } else { st.eye = eyes.value; queueRender(); renderProps(); }
         };
+        const vtOn = viewTools.summary();
+        vtBtn = btn("Viewer ▾", "The viewer's tools: compare with a second node (A / B wipe, difference), the pixel sampler, scopes, out-of-range colours, guides"
+            + (vtOn.length ? ` - on: ${vtOn.join(", ")}` : ""), () => popMenu(vtBtn, viewTools.menuItems()), "cp-vtools" + (vtOn.length ? " on" : ""));
         bar.append(
             ib("newDoc", "New comp…", () => o.newComp && o.newComp(), "cp-new"),
             ib("open", "Open… (Ctrl+O) a comp", () => o.open && o.open(), "cp-open"),
@@ -467,7 +570,8 @@ export function createCompEditor(host, opts = {}) {
             t,
             el(doc, "span", "mg-sep"),
             btn("↶", "Undo (Ctrl+Z)", undo), btn("↷", "Redo (Ctrl+Shift+Z)", redo),
-            el(doc, "span", "mg-sep"), proxy, ...(disp ? [disp] : []), layerSel, eyes, ...[o.barControl && o.barControl()].filter(Boolean),
+            el(doc, "span", "mg-sep"), proxy, gpuBtn, ...(disp ? [disp] : []), layerSel, eyes, ...[o.barControl && o.barControl()].filter(Boolean),
+            vtBtn,
             btn("Fit", "Fit the picture (F on the picture)", () => { st.zoom.fit = true; layoutCanvas(); }),
             el(doc, "span", "mg-info", `${fmt().width}×${fmt().height} · ${fmt().fps} fps · ${fmt().frames} f`));
     }
@@ -524,6 +628,11 @@ export function createCompEditor(host, opts = {}) {
     /** renderNode's sources from the pixels loaded for a draw (Reads per view, DeepReads' deep pictures). */
     const sourcesCtx = (pics) => ({ view: eyeNow(), source: (n, nf) => pics.get(C.srcKey(n, nf)) || null,
         deepSource: (n, nf) => pics.get("deep:" + C.srcKey(n, nf)) || null });
+    /** The pixels `needs` names (C.sourceNeeds) into `pics`: Reads by srcKey, DeepReads' deep pictures by "deep:" + it. */
+    const loadNeeds = (needs, pics, scale) => Promise.all(needs.map(async ({ node: n, frame: nf, deep }) => {
+        const load = deep ? o.loadDeep : o.loadSource;
+        pics.set((deep ? "deep:" : "") + C.srcKey(n, nf), load ? await load(n, nf, { scale, format: fmt() }).catch(() => null) : null);
+    }));
     async function draw() {
         if (!st.comp) return;
         const gen = ++renderGen;
@@ -532,12 +641,8 @@ export function createCompEditor(host, opts = {}) {
         const scale = scaleNow();
         const pics = new Map();
         try {
-            const needs = C.sourceNeeds(st.comp, id, f, eyeNow());
-            await Promise.all(needs.map(async ({ node: n, frame: nf, deep }) => {
-                const load = deep ? o.loadDeep : o.loadSource;
-                const p = load ? await load(n, nf, { scale, format: fmt() }).catch(() => null) : null;
-                pics.set((deep ? "deep:" : "") + C.srcKey(n, nf), p);
-            }));
+            const bId0 = viewTools.bNeeded(id);
+            await loadNeeds(C.sourceNeeds(st.comp, id, f, eyeNow()).concat(bId0 ? C.sourceNeeds(st.comp, bId0, f, eyeNow()) : []), pics, scale);
             const ds = displaySpec();
             await needLuts(C.ocioNeeds(st.comp, f).map((x) => x.spec).concat(ds ? [ds] : []));
         } catch (_) { /* drawn without */ }
@@ -548,7 +653,12 @@ export function createCompEditor(host, opts = {}) {
         lastShown = performance.now(); drawnGen = gen;
         lastPics = { pics, scale, frame: f };
         const t0 = performance.now();
-        const img = C.renderNode(st.comp, id, f, Object.assign(sourcesCtx(pics), { scale, cache: heavy, matte, ocio: lutOf }));
+        const roi = visibleRegion(scale);
+        const { img, ctx: rctx, how } = picture(id, f, scale, pics, roi, false);
+        lastRoi = img.roi || null;
+        lastHow = how;
+        noteFrame(id, f, scale, rctx.keysUsed);
+        aheadSoon();
         lastMs = Math.round(performance.now() - t0);
         lastScale = scale;
         if (canvas.width !== img.w || canvas.height !== img.h) { canvas.width = img.w; canvas.height = img.h; }
@@ -558,9 +668,14 @@ export function createCompEditor(host, opts = {}) {
         // Exposure and the channel are the viewer's, not the comp's: the render never sees them.
         const layers = C.CH.layersOf(Object.keys(img.ch || {}));
         fillLayers(layers);
-        const shownImg = layers.includes(st.layer) ? C.CH.layerPicture(img, img.ch, st.layer) : img;
+        const layerOf = (p) => (layers.includes(st.layer) && C.CH.layersOf(Object.keys(p.ch || {})).includes(st.layer) ? C.CH.layerPicture(p, p.ch, st.layer) : p);
+        // Compared with B (the viewer tools): B drawn with the same sources, then laid beside / over / against A.
+        const bId = viewTools.bNeeded(id);
+        const imgB = bId ? C.renderNode(st.comp, bId, f, { ...sourcesCtx(pics), scale, cache: heavy, matte, ocio: lutOf, cacheAll: true, cacheBytes: CACHE_BYTES }) : null;
+        const shownImg = viewTools.compose(layerOf(img), imgB ? layerOf(imgB) : null);
         C.viewEncode(shownImg, data.data, { gain: Math.pow(2, st.ev), channel: st.channel,
             color: dl ? (r, g, b) => C.OC.lutColor(dl, r, g, b) : null });
+        const marked = viewTools.afterEncode(shownImg, data.data, scale);
         ctx.putImageData(data, 0, 0);
         layoutCanvas();
         const v = node(id), vf = viewFmt();
@@ -570,7 +685,57 @@ export function createCompEditor(host, opts = {}) {
         const ev = st.ev && st.channel !== "a" ? ` · ${st.ev > 0 ? "+" : ""}${st.ev.toFixed(1)} EV` : "";
         const lutFail = ds && !dl && luts.get(C.OC.ocioKey(ds));
         const shown = ds ? (dl ? ` · ${ds.display} / ${ds.view}` : lutFail ? ` · OCIO display failed (${lutFail.why}): plain sRGB` : " · OCIO display loading…") : "";
-        info.textContent = `Viewing ${v ? v.name || v.id : "nothing"}${size}${chan}${ev}${shown} · ${scale === 1 ? "full" : "1/" + Math.round(1 / scale)} · ${lastMs} ms`;
+        const cmp = imgB ? ` · ${viewTools.state.compare} with ${(node(bId) && (node(bId).name || bId)) || bId}` : "";
+        const rng = viewTools.state.range ? ` · ${marked ? `${marked} px out of 0–1` : "nothing out of 0–1"}` : "";
+        info.textContent = `Viewing ${v ? v.name || v.id : "nothing"}${size}${cmp}${chan}${ev}${shown}${rng} · ${scale === 1 ? "full" : "1/" + Math.round(1 / scale)} · ${lastMs} ms${lastHow === "cpu" ? (gpuWhy && gpuWanted() ? ` · CPU (GPU off: ${gpuWhy})` : "") : ` · ${lastHow}`}`;
+    }
+    /** Frame f of node id is in the cache under the key renderNode used: remembered for the timeline's marks. */
+    function noteFrame(id, f, scale, keysUsed) {
+        const key = keysUsed.get(`${id}@${f}`);
+        if (!key) return;
+        frameKeys.set(f, { key, id, scale, hash: C.upstreamHash(st.comp, id) });
+        if (o.onCache) o.onCache();
+    }
+    /** The frames of the picture on screen as it is now set up that are kept and come back without work. */
+    function cachedFrames() {
+        const out = new Set();
+        if (!st.comp) return out;
+        const id = viewedId(), scale = scaleNow(), hash = C.upstreamHash(st.comp, id);
+        for (const [f, e] of frameKeys) if (e.id === id && e.scale === scale && e.hash === hash && heavy.has(e.key)) out.add(f);
+        return out;
+    }
+    // ── rendering ahead: while nothing else happens, the next frames of the picture on screen are made and kept
+    // (only the picture itself, so the cache holds frames rather than every node of a few), at most AHEAD and
+    // at most half the cache; it stops at the first change, a newer draw or playback, and starts again later.
+    function aheadSoon() {
+        if (ahead) { clearTimeout(ahead.t); ahead.stop = true; ahead = null; }
+        if (!st.comp || (o.playing && o.playing())) return;
+        const job = { stop: false, gen: renderGen, t: 0 };
+        job.t = win().setTimeout(() => aheadRun(job), 400);
+        ahead = job;
+    }
+    async function aheadRun(job) {
+        const id = viewedId(), scale = scaleNow(), F = st.comp.format.frames, start = st.frame;
+        const fb = Math.max(1, Math.round(viewFmt().width * scale) * Math.round(viewFmt().height * scale) * 16);
+        const n = Math.min(AHEAD, F - 1, Math.floor(CACHE_BYTES / 2 / fb));
+        let made = 0;
+        for (let k = 1; k <= n; k++) {
+            if (job.stop || job.gen !== renderGen || !st.comp || (o.playing && o.playing())) return;
+            const f = (start + k) % F;
+            if (cachedFrames().has(f)) continue;
+            const pics = new Map();
+            try {
+                await loadNeeds(C.sourceNeeds(st.comp, id, f, eyeNow()), pics, scale);
+            } catch (_) { /* made without */ }
+            if (job.stop || job.gen !== renderGen || !st.comp) return;
+            const { ctx: actx } = picture(id, f, scale, pics, null, true);
+            noteFrame(id, f, scale, actx.keysUsed);
+            made++;
+            // A breath between frames, so the page stays live.
+            await new Promise((r) => win().setTimeout(r, 0));
+        }
+        if (job === ahead) ahead = null;
+        return made;
     }
     function layoutCanvas() {
         if (!st.comp) return;
@@ -585,6 +750,11 @@ export function createCompEditor(host, opts = {}) {
         canvas.style.transform = `translate(${st.zoom.x}px, ${st.zoom.y}px) scale(${st.zoom.s})`;
         over.setAttribute("width", cw); over.setAttribute("height", ch);
         over.style.transform = canvas.style.transform;
+        // A picture worked only over the part on screen: panned or zoomed past it, it is made again.
+        if (lastRoi) {
+            const want = visibleRegion(lastScale);
+            if (!want || want[0] < lastRoi[0] || want[1] < lastRoi[1] || want[2] > lastRoi[2] || want[3] > lastRoi[3]) queueRender();
+        }
         if (o.onView) o.onView();
     }
     stage.addEventListener("wheel", (e) => {
@@ -607,6 +777,8 @@ export function createCompEditor(host, opts = {}) {
             return;
         }
         if (e.button === 0 && st.pick) { e.preventDefault(); pickAt(compXY(e)); return; }
+        if (e.button === 0 && viewTools.down(e, compXY(e))) return;
+        if (e.button === 0 && !st.toolOn && paintTool.down(e)) return;
         // Otherwise the left or the middle button pans the picture - the left one not while the Roto tool owns it.
         if (e.button !== 0 && e.button !== 1) return;
         if (e.button === 0 && st.toolOn) return;
@@ -615,6 +787,8 @@ export function createCompEditor(host, opts = {}) {
         stage.onpointermove = (ev) => { st.zoom.fit = false; st.zoom.x = ox + ev.clientX - sx; st.zoom.y = oy + ev.clientY - sy; layoutCanvas(); };
         stage.onpointerup = () => { stage.onpointermove = null; };
     });
+    stage.addEventListener("pointermove", (e) => { if (!stage.onpointermove && st.comp) { paintTool.move(e); viewTools.move(compXY(e)); } });
+    stage.addEventListener("pointerleave", () => { paintTool.leave(); viewTools.leave(); });
     stage.addEventListener("dblclick", () => { if (st.toolOn) return; st.zoom.fit = true; layoutCanvas(); });
 
     // ── on the picture: Roto shapes and the colour picker ────────────────────
@@ -642,6 +816,8 @@ export function createCompEditor(host, opts = {}) {
     function renderOverlay() {
         over.replaceChildren();
         stage.classList.toggle("picking", !!st.pick);
+        stage.classList.toggle("painting", paintTool.active());
+        if (st.comp) viewTools.overlay(over);
         drawHandles();
         if (o.onView) o.onView();
     }
@@ -661,7 +837,9 @@ export function createCompEditor(host, opts = {}) {
         layer = svgEl(doc, "g", { transform: `translate(0 ${st.hoff})` });
         over.append(layer);
         if (n.type === "transform") { drawJack(n); return; }
+        if (WUI.draws(n.type)) { WUI.drawHandles(wctx(), n); return; }
         if (n.type === "crop") { drawCropBox(n); return; }
+        if (n.type === "paint") { paintTool.overlay(layer); return; }
         const hs = handlesOf(n);
         if (!hs.length) return;
         const z = st.zoom.s || 1;
@@ -739,6 +917,20 @@ export function createCompEditor(host, opts = {}) {
         for (const [name, x, y] of [["tl", x0, y0], ["tr", x1, y0], ["bl", x0, y1], ["br", x1, y1]])
             part(svgEl(doc, "rect", { class: "cp-jsq", x: x - h, y: y - h, width: 2 * h, height: 2 * h }), name, "Drag: this corner");
     }
+    /** What imageViewer_compWarpUI.js works with: the editor's helpers and state, for the node on show. */
+    function wctx() {
+        return {
+            doc, st, o, stage, layer, pane, z: st.zoom.s || 1, frame: st.frame,
+            el: (tag, cls, text) => el(doc, tag, cls, text), svg: (tag, attrs) => svgEl(doc, tag, attrs), tip: tipped, btn, toast,
+            node, comp: () => st.comp, inFmt, mutate, renderOverlay,
+            refresh: (which) => refresh(which),
+            xy: (e) => { const p = compXY(e); return [p[0], p[1] - (st.hoff || 0)]; },
+            set: (n, p, v) => { const d = C.NODE_TYPES[n.type].params[p]; if (d && d.key) Mo.setProp(keyHost(), n, p, v, st.frame); else n[p] = v; },
+            begin: () => { if (liveBak.size) liveRestore(); st.hist.push(st.comp); },
+            live: () => { renderOverlay(); queueRender(); },
+            end: () => { st.dirty = true; refresh(["bar", "props", "stage", "graph", "curves"]); },
+        };
+    }
     /** A handle dragged: compute(xy0, xy, ev) gives the values; at the playhead (a key there when animated); one undo step. */
     function dragPatch(e, id, compute) {
         if (e.button !== 0 || st.pick) return;
@@ -778,7 +970,8 @@ export function createCompEditor(host, opts = {}) {
         // The colour that goes INTO the node (what a keyer sees), else what is on screen.
         const srcId = n.inputs && n.inputs[0] ? n.inputs[0] : viewedId();
         const { pics, scale, frame } = lastPics;
-        const img = C.renderNode(st.comp, srcId, frame, Object.assign(sourcesCtx(pics), { scale, cache: heavy, matte }));
+        const img = C.renderNode(st.comp, srcId, frame, Object.assign(sourcesCtx(pics), { scale, cache: heavy, matte,
+            ocio: lutOf, cacheAll: true, cacheBytes: CACHE_BYTES }));
         const dy = downBy(C.formatAt(st.comp, srcId));   // the picture clicked on and the one read may differ in size
         const x = Math.max(0, Math.min(img.w - 1, Math.floor(xy[0] * scale))), y = Math.max(0, Math.min(img.h - 1, Math.floor((xy[1] - dy) * scale)));
         const i = (y * img.w + x) * 4, a = img.data[i + 3];
@@ -874,6 +1067,7 @@ export function createCompEditor(host, opts = {}) {
                 : "Show this node in the picture (1)";
             box.append(eye);
             if (isViewed) box.append(el(doc, "span", "cp-vtag", n.id === st.comp.output ? "OUTPUT" : "VIEWER"));
+            if (n.id === viewTools.b()) { const bt = el(doc, "span", "cp-btag", "B"); bt.title = "Compared with the picture on show (the Viewer menu; 2 on a selected node)"; box.append(bt); }
             world.append(box);
             n.inputs.forEach((src, i) => {
                 const s = src && node(src);
@@ -1268,6 +1462,10 @@ export function createCompEditor(host, opts = {}) {
         const k = e.key, ctrl = e.ctrlKey || e.metaKey;
         let used = true;
         if (st.pick && k === "Escape") { st.pick = null; renderOverlay(); renderProps(); }
+        else if (k === "Escape" && WUI.escape(wctx())) { /* stopped placing a point / drawing lines */ }
+        else if (!ctrl && (part === root || part === props) && paintTool.key(e)) { /* the Paint tool's */ }
+        else if (part === root && viewTools.key(e)) { /* the viewer tools' */ }
+        else if (k === "2" && primary()) viewTools.setB(primary().id);
         else if (ctrl && k.toLowerCase() === "z") { if (e.shiftKey) redo(); else undo(); }
         else if (ctrl && k.toLowerCase() === "y") redo();
         else if (ctrl && e.shiftKey && k.toLowerCase() === "s") saveAs();
@@ -1277,6 +1475,7 @@ export function createCompEditor(host, opts = {}) {
         else if (!ctrl && k.toLowerCase() === "g" && part === graph) setGrid({ show: !st.grid.show });
         else if (!ctrl && k.toLowerCase() === "s" && part === graph) setGrid({ snap: !st.grid.snap });
         else if (k === "Tab" && part === graph) tabMenu();
+        else if (part === layers && ltKey(e)) { /* the Layers timeline's own keys */ }
         else if ((k === "Delete" || k === "Backspace") && part !== root) removeSel();
         else if (k.toLowerCase() === "d" && !ctrl && part === graph) toggleDisable();
         else if (k === "1" && primary()) setView(primary().id);
@@ -1497,7 +1696,8 @@ export function createCompEditor(host, opts = {}) {
             row.append(channelSelect(n, p, d, String(cur ?? d.def), write));
         } else if (d.kind === "chanlist") {
             const i = el(doc, "input"); i.type = "text"; i.value = cur ?? d.def ?? ""; i.placeholder = "mask.a, depth.z";
-            const have = C.channelsAt(st.comp, n.inputs[0]);
+            const fromIdx = d.from === "mask" ? C.maskIndex(n.type) : 0;
+        const have = C.channelsAt(st.comp, n.inputs[fromIdx]);
             i.title = `${d.help || ""}${have.length ? `\nComing in: ${have.join(", ")}` : "\nNothing but r g b a comes in"}`;
             i.onchange = () => write(i.value.trim());
             row.append(i);
@@ -1524,16 +1724,19 @@ export function createCompEditor(host, opts = {}) {
      * "target": where a node writes - rgba, one channel, a layer, or a new one typed in; "layer": a layer only.
      */
     function channelSelect(n, p, d, value, write) {
-        const have = C.channelsAt(st.comp, n.inputs[0]);
+        // A map's channels are the map's (STMap, VectorWarp: input 1), everyone else's what comes in.
+        const have = C.channelsAt(st.comp, n.type === "stmap" || n.type === "vectorwarp" ? n.inputs[1] : n.inputs[0]);
         const s = el(doc, "select");
         const add = (v, label, parent = s) => parent.append(new Option(label || v, v));
         const group = (label) => { const g = doc.createElement("optgroup"); g.label = label; s.append(g); return g; };
         if (d.kind === "chan") {
             for (const c of C.CH.RGBA) add(c);
             if (have.length) { const g = group("extra"); for (const c of have) add(c, c, g); }
-            const g = group("constant");
-            add("0", "0 (black)", g); add("1", "1 (white)", g);
-            if (n.type === "shuffle") add("-", "- (not written)", g);
+            if (d.from !== "mask") {
+                const g = group("constant");
+                add("0", "0 (black)", g); add("1", "1 (white)", g);
+                if (n.type === "shuffle") add("-", "- (not written)", g);
+            }
         } else {
             add("rgba", "rgba (the whole picture)");
             const layers = C.CH.layersOf(have);
@@ -1700,6 +1903,8 @@ export function createCompEditor(host, opts = {}) {
         pane = box;
         try { paneBody(n, t, first); } finally { pane = null; }
     }
+    // Nodes whose settings are drawn by a tool of their own: no per-view settings for them.
+    const NO_SPLIT = new Set(["roto", "output", "paint", "tracker", "planartracker", "gridwarp"]);
     function paneBody(n, t, first) {
         const name = el(doc, "input"); name.type = "text"; name.value = n.name || ""; name.placeholder = n.id;
         name.onchange = () => mutate(() => { if (name.value.trim()) n.name = name.value.trim(); else delete n.name; });
@@ -1712,9 +1917,9 @@ export function createCompEditor(host, opts = {}) {
         const ps = Object.entries(t.params);
         // In a comp with views: this view's own settings, if split off (rows then read and write those).
         const vs = C.viewsOf(st.comp), eye = eyeNow();
-        const sp = vs.length && ps.length && n.type !== "roto" && n.type !== "output" ? splitTarget(n) : null;
+        const sp = vs.length && ps.length && !NO_SPLIT.has(n.type) ? splitTarget(n) : null;
         if (sp) splitIds.set(n.id, sp); else splitIds.delete(n.id);
-        if (vs.length && ps.length && n.type !== "roto" && n.type !== "output") {
+        if (vs.length && ps.length && !NO_SPLIT.has(n.type)) {
             const row = el(doc, "div", "mg-prop cp-split" + (sp ? " on" : ""));
             row.append(el(doc, "span", "mg-sw", ""), el(doc, "label", "", "view"));
             row.append(el(doc, "span", "cp-splitnote", sp ? `own settings in ${eye}` : `the same in every view`));
@@ -1723,8 +1928,15 @@ export function createCompEditor(host, opts = {}) {
             pane.append(row);
         }
         const pn = sp || n;
-        if (n.type === "colorcorrect") ccSection(pn, t.params);
-        else for (const [p, d] of ps) if (d.kind !== "roto") pane.append(paramRow(pn, p, d));
+        // The mask's channel and invert only matter with something in the mask input.
+        const mi = C.maskIndex(n.type), masked = mi >= 0 && !!n.inputs[mi];
+        const maskRow = (p) => p === "mask_channel" || p === "mask_invert";
+        if (n.type === "colorcorrect") {
+            ccSection(pn, t.params);
+            if (masked) for (const [p, d] of ps) if (maskRow(p)) pane.append(paramRow(pn, p, d));
+        } else for (const [p, d] of ps) if (d.kind !== "roto" && d.kind !== "strokes" && !WUI.OWN_KINDS.has(d.kind) && (masked || !maskRow(p))) pane.append(paramRow(pn, p, d));
+        if (n.type === "paint") paintTool.section(n, pane, first);
+        if (WUI.draws(n.type)) WUI.section(wctx(), n);
         if (n.type === "camera3d" && o.importCamera) {
             const row = el(doc, "div", "mg-prop cp-camimport");
             row.append(el(doc, "span", "mg-sw", ""), el(doc, "label", "", "import"));
@@ -1761,32 +1973,112 @@ export function createCompEditor(host, opts = {}) {
         }
     }
 
-    // ── layers (the same graph, After Effects' way) ──────────────────────────
+    // ── layers (the same graph as a stack, on a timeline) ────────────────────
+    // A row per layer: its switches and Merge on the left, on the right its bar - from its in to its out, the
+    // Merge's `in` / `out` - over the footage a Read has, and its keys. A layer unfolds into a row per animated
+    // param of its nodes (the Merge and its A branch), each key a diamond. Bars: drag the middle to slide the
+    // layer (its keys and footage along), an end to trim it. Diamonds: click / Shift / Ctrl as the 3D view,
+    // a box on empty lanes, drag to move, Del, `,` / `.`, right-click for the ease. The keys move through
+    // Motion's moveKeys (mgModel.moveKeysMany), the bar's arithmetic is keyLanes'.
+    const LT_LABEL = 320;
+    const ltK = () => {
+        const avail = Math.max(160, (lscroll.clientWidth || 600) - LT_LABEL - 24);
+        return (avail / Math.max(1, fmt().frames)) * st.lt.zoom;
+    };
+    const ltFrameAt = (ev) => {
+        const r = lscroll.getBoundingClientRect();
+        return (ev.clientX - r.left - lscroll.clientLeft + lscroll.scrollLeft - LT_LABEL) / ltK();
+    };
+    let ltPh = null, ltDragging = false, ltMenuEl = null;
+    const footInfo = new Map();   // a Read's file -> what it is ({kind, first, last}), asked once
+    function footOf(n) {
+        if (!n || n.type !== "read" || !n.file || !o.sourceInfo) return null;
+        if (!footInfo.has(n.file)) {
+            footInfo.set(n.file, null);
+            o.sourceInfo(n).then((inf) => { footInfo.set(n.file, inf || null); if (inf && inf.kind !== "still") renderLayers(); }).catch(() => {});
+        }
+        const inf = footInfo.get(n.file);
+        if (!inf || (inf.kind !== "video" && inf.kind !== "sequence")) return null;
+        const a = n.offset || 0;
+        return { in: a, out: a + Math.max(1, (inf.last ?? 0) - (inf.first ?? 0) + 1) };
+    }
+    function ltPlayhead() {
+        if (!ltPh || !st.comp) return;
+        const x = st.frame * ltK();
+        ltPh.style.left = LT_LABEL + x + "px";
+        if (ltPh._grip) ltPh._grip.style.left = x + "px";
+        if (ltPh._label) ltPh._label.textContent = "frame " + st.frame;
+    }
+    /** The params of a node with keys, in its table's order. */
+    const animated = (n) => Object.keys(n.tracks || {}).filter((p) => (n.tracks[p] || []).length)
+        .sort((a, b) => Object.keys(C.NODE_TYPES[n.type].params).indexOf(a) - Object.keys(C.NODE_TYPES[n.type].params).indexOf(b));
+    const keyOf = (s) => { const n = node(s.id); return n && (n.tracks?.[s.prop] || []).find((k) => k.f === s.f); };
+    function ltCloseMenu() { if (ltMenuEl) { ltMenuEl.remove(); ltMenuEl = null; } }
+
     function renderLayers() {
-        layers.replaceChildren();
-        const lbar = el(doc, "div", "cp-lbar");
+        if (!st.comp || ltDragging) return;
+        ltCloseMenu();
         const L = C.layerStack(st.comp);
         const selIdx = L.findIndex((l) => l.merge && (st.sel.includes(l.merge) || l.chain.some((id) => st.sel.includes(id))));
-        lbar.append(
+        const ex = (st.lt.zoom).toFixed(st.lt.zoom < 10 ? 1 : 0);
+        lbarEl.replaceChildren(
             btn("+ Footage…", "A new layer on top: a picture, a film or a sequence", () => o.pickFile && o.pickFile((path) => mutate(() => { st.sel = [C.addLayer(st.comp, C.makeNode(st.comp, "read", { file: path })).source.id]; }))),
             btn("+ Solid", "A new layer on top: a colour", () => mutate(() => { st.sel = [C.addLayer(st.comp, C.makeNode(st.comp, "constant", { color: [1, 1, 1, 1], name: "Solid" })).source.id]; })),
             btn("▲", "Move the selected layer up", () => { if (selIdx > 0) mutate(() => C.moveLayer(st.comp, selIdx, -1)); }),
             btn("▼", "Move the selected layer down", () => { if (selIdx >= 0) mutate(() => C.moveLayer(st.comp, selIdx, 1)); }),
             btn("🗑", "Delete the selected layer", () => { if (selIdx >= 0) mutate(() => { C.removeLayer(st.comp, selIdx); st.sel = []; }); }));
-        layers.append(lbar);
-        const rows = el(doc, "div", "cp-lrows");
-        if (!L.length) rows.append(el(doc, "div", "cp-note", "Nothing reaches the Output yet. Add footage, or wire a node into the Output in the Node graph."));
+        const zoom = el(doc, "span", "cp-lzoom");
+        zoom.append(btn("−", "Zoom out (Ctrl + wheel)", () => ltZoom(st.lt.zoom / 1.5)), el(doc, "span", "cp-lzx", `${ex}×`),
+            btn("+", "Zoom in (Ctrl + wheel)", () => ltZoom(st.lt.zoom * 1.5)), btn("Fit", "The whole comp in the panel", () => ltZoom(1)));
+        lbarEl.append(zoom);
+
+        const keepL = lscroll.scrollLeft, keepT = lscroll.scrollTop;
+        const k = ltK(), F = fmt().frames, W = F * k + 14;
+        const inner = el(doc, "div", "cp-lt-in");
+        inner.style.width = LT_LABEL + W + "px";
+        const row = (cls) => {
+            const r = el(doc, "div", cls), lab = el(doc, "div", "cp-ltl"), tr = el(doc, "div", "cp-ltrack");
+            lab.style.width = LT_LABEL + "px"; tr.style.width = W + "px";
+            r.append(lab, tr); inner.append(r);
+            return { r, lab, tr };
+        };
+        const at = (f) => f * k + "px";
+        // the ruler: frames, the comp's end, the playhead's grip; press or drag in it to move time
+        const ru = row("cp-lruler");
+        ru.lab.textContent = "frame " + st.frame;
+        const rulerLab = ru.lab;
+        ru.tr.dataset.lt = "ruler";
+        for (let f = 0, step = KL.rulerStep(k); f <= F; f += step) { const t = el(doc, "div", "cp-ltick", String(f)); t.style.left = at(f); ru.tr.append(t); }
+        const dia = (track, f, keys, agg) => {
+            const one = keys.length === 1 ? keyOf(keys[0]) : null;
+            const ease = one ? one.ease : null;
+            const d = el(doc, "div", "kl-dia" + (agg ? " agg" : "") + (KL.allPicked(st.lkeys, keys) ? " sel" : "") + (ease === "linear" ? " lin" : ease === "hold" ? " hold" : ""));
+            d.style.left = at(f);
+            d._keys = keys;
+            d.title = agg ? `frame ${f}: ${keys.length} key(s)` : `${keys[0].prop} @ ${f}${one ? ` · ${ease || "smooth"}` : ""}`;
+            track.append(d);
+            return d;
+        };
+        if (!L.length) inner.append(el(doc, "div", "cp-note", "Nothing reaches the Output yet. Add footage, or wire a node into the Output in the Node graph."));
         L.forEach((l, i) => {
             const m = l.merge ? node(l.merge) : null;
             const src = l.source ? node(l.source) : null;
-            const row = el(doc, "div", "cp-lrow" + (i === selIdx || (!m && l.chain.some((id) => st.sel.includes(id))) ? " sel" : "") + (m && m.disable ? " off" : ""));
+            const openKey = l.merge || "bg";
+            const keys = C.layerKeys(st.comp, l);
+            const isSel = i === selIdx || (!m && l.chain.some((id) => st.sel.includes(id)));
+            const r = row("cp-lrow" + (isSel ? " sel" : "") + (m && m.disable ? " off" : ""));
+            r.r.dataset.layer = openKey;
+            const tw = el(doc, "span", "cp-ltw", keys.length ? (st.lt.open.has(openKey) ? "▾" : "▸") : "");
+            tw.title = keys.length ? "Show / hide the layer's animated params" : "";
+            tw.onclick = (e) => { e.stopPropagation(); if (!keys.length) return; if (st.lt.open.has(openKey)) st.lt.open.delete(openKey); else st.lt.open.add(openKey); renderLayers(); };
             const eye = el(doc, "span", "mg-ic" + (m && m.disable ? "" : " on"), "👁");
             eye.title = m ? "Show / hide the layer (its Merge's disable)" : "The background is always there";
             eye.onclick = (e) => { e.stopPropagation(); if (m) mutate(() => { if (m.disable) delete m.disable; else m.disable = true; }); };
             const sw = el(doc, "span", "cp-swatch");
             sw.style.background = src ? CAT_COLOR[C.NODE_TYPES[src.type].cat] : "#666";
-            row.append(eye, sw, el(doc, "span", "cp-lkind", `${KIND_ICON[l.kind]} ${l.kind}`), el(doc, "span", "cp-lname", l.name));
-            if (l.chain.length > 1) row.lastChild.title = l.chain.map((id) => node(id).name || id).join(" ← ");
+            const kind = el(doc, "span", "cp-lkind", KIND_ICON[l.kind]); kind.title = l.kind;
+            r.lab.append(tw, eye, sw, kind, el(doc, "span", "cp-lname", l.name));
+            if (l.chain.length > 1) r.lab.lastChild.title = l.chain.map((id) => node(id).name || id).join(" ← ");
             if (m) {
                 const op = el(doc, "select");
                 for (const x of C.MERGE_OPS) op.append(new Option(x, x));
@@ -1797,12 +2089,247 @@ export function createCompEditor(host, opts = {}) {
                 mix.title = "Opacity (the Merge's mix)";
                 mix.onclick = (e) => e.stopPropagation();
                 mix.onchange = () => { const v = parseFloat(mix.value); if (Number.isFinite(v)) mutate(() => Mo.setProp(keyHost(), m, "mix", Math.max(0, Math.min(1, v)), st.frame), { structure: false }); };
-                row.append(op, mix);
+                r.lab.append(op, mix);
             }
-            row.onclick = () => select(l.source ? [l.source] : l.chain.slice(0, 1));
-            rows.append(row);
+            r.lab.onclick = () => select(l.source ? [l.source] : l.chain.slice(0, 1));
+            // the lane: the footage there is, the bar, the keys
+            r.tr.dataset.lt = "lane";
+            const foot = footOf(src);
+            if (foot) { const fb = el(doc, "div", "kl-foot"); fb.style.left = at(foot.in); fb.style.width = (foot.out - foot.in) * k + "px"; fb.title = "The footage"; r.tr.append(fb); }
+            if (m) {
+                const rg = C.layerRange(st.comp, l.merge);
+                const b = el(doc, "div", "kl-bar" + (isSel ? " sel" : "") + (m.disable ? " off" : ""));
+                b.style.left = at(rg.in); b.style.width = Math.max(3, (rg.out - rg.in) * k) + "px";
+                b.title = `${l.name}: frames ${rg.in}–${rg.out - 1} · drag to slide, an end to trim; [ and ] trim to the playhead`;
+                b._layer = l;
+                r.tr.append(b);
+            } else {
+                const bg = el(doc, "div", "cp-lbg"); bg.style.left = "0px"; bg.style.width = F * k + "px"; r.tr.append(bg);
+            }
+            const byF = new Map();
+            for (const kk of keys) { if (!byF.has(kk.f)) byF.set(kk.f, []); byF.get(kk.f).push(kk); }
+            for (const [f, ks] of byF) dia(r.tr, f, ks, true);
+            if (!st.lt.open.has(openKey)) return;
+            for (const id of C.layerNodes(st.comp, l)) {
+                const n = node(id);
+                for (const p of animated(n)) {
+                    const sr = row("cp-lsub");
+                    sr.lab.textContent = `${n.name || n.id} · ${p}`;
+                    sr.lab.title = `${C.NODE_TYPES[n.type].label} ${n.name || n.id}: ${p}`;
+                    sr.tr.dataset.lt = "lane";
+                    for (const kk of n.tracks[p]) dia(sr.tr, kk.f, [{ id, prop: p, f: kk.f }], false);
+                }
+            }
         });
-        layers.append(rows);
+        // the comp's end down every lane
+        const end = el(doc, "div", "cp-lend"); end.style.left = LT_LABEL + F * k + "px"; inner.append(end);
+        ltPh = el(doc, "div", "cp-lt-ph"); inner.append(ltPh);
+        ltPh._grip = el(doc, "div", "cp-lt-grip"); ru.tr.append(ltPh._grip); ltPh._label = rulerLab;
+        lscroll.replaceChildren(inner);
+        ltPlayhead();
+        lscroll.scrollLeft = keepL; lscroll.scrollTop = keepT;
+    }
+
+    function ltZoom(z, aboutX = null) {
+        const before = ltK();
+        const x = aboutX ?? lscroll.clientWidth / 2;
+        const f = (x - LT_LABEL + lscroll.scrollLeft) / before;
+        st.lt.zoom = Math.max(1, Math.min(64, z));
+        renderLayers();
+        lscroll.scrollLeft = Math.max(0, f * ltK() + LT_LABEL - x);
+    }
+    lscroll.addEventListener("wheel", (e) => {
+        if (!e.ctrlKey && !e.metaKey) return;
+        e.preventDefault();
+        const r = lscroll.getBoundingClientRect();
+        ltZoom(st.lt.zoom * (e.deltaY < 0 ? 1.25 : 1 / 1.25), e.clientX - r.left);
+    }, { passive: false });
+
+    /** A drag held by the scroller (never replaced): `move(ev)` on every move, `up(ev, moved)` at the end. */
+    function ltHold(e, move, up) {
+        const id = e.pointerId;
+        try { lscroll.setPointerCapture(id); } catch (_) { /* gone already */ }
+        let moved = false;
+        const x0 = e.clientX, y0 = e.clientY;
+        const onMove = (ev) => {
+            if (ev.pointerId !== id) return;
+            if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 3) return;
+            moved = true;
+            move(ev);
+        };
+        const onUp = (ev) => {
+            if (ev.pointerId !== id) return;
+            for (const [t, f] of [["pointermove", onMove], ["pointerup", onUp], ["pointercancel", onUp]]) lscroll.removeEventListener(t, f);
+            try { lscroll.releasePointerCapture(id); } catch (_) { /* released */ }
+            up(ev, moved);
+        };
+        lscroll.addEventListener("pointermove", onMove);
+        lscroll.addEventListener("pointerup", onUp);
+        lscroll.addEventListener("pointercancel", onUp);
+    }
+    /** An edit that follows the pointer: rebuilt from the comp at the press each move, one undo step. */
+    function ltLive() {
+        const base = JSON.stringify(st.comp);
+        let pushed = false;
+        return {
+            apply(fn) {
+                if (!pushed) { st.hist.push(st.comp); pushed = true; }
+                st.comp = JSON.parse(base);
+                fn();
+                st.dirty = true;
+                ltDragging = false; renderLayers(); ltDragging = true;
+                queueRender(); renderOverlay();
+            },
+            get pushed() { return pushed; },
+        };
+    }
+    function ltEnd(pushed) {
+        ltDragging = false;
+        if (pushed) { refresh(); if (o.onComp) o.onComp(); } else renderLayers();
+    }
+
+    lscroll.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0 || !st.comp) return;
+        const t = e.target;
+        if (ltMenuEl && e.composedPath().includes(ltMenuEl)) return;
+        ltCloseMenu();
+        if (t.closest(".cp-ltl")) return;                  // the label's own clicks
+        const d = t.closest(".kl-dia"), b = t.closest(".kl-bar"), lane = t.closest(".cp-ltrack");
+        if (!lane) return;
+        e.preventDefault();
+        layers.focus({ preventScroll: true });
+        const k = ltK();
+        if (d) {
+            // a diamond: pick (a plain press on a picked one keeps the selection, to drag it), then drag in time
+            const mode = KL.pickMode(e);
+            if (!(mode === "replace" && KL.allPicked(st.lkeys, d._keys))) st.lkeys = KL.pickKeys(st.lkeys, d._keys, mode);
+            const f0 = Math.round(parseFloat(d.style.left) / k);
+            renderLayers();
+            const sel0 = st.lkeys.map((x) => ({ ...x }));
+            const live = ltLive();
+            let last = 0;
+            ltDragging = true;
+            ltHold(e, (ev) => {
+                const df = Math.round((ev.clientX - e.clientX) / k);
+                if (df === last) return;
+                last = df;
+                live.apply(() => { st.lkeys = Mo.moveKeysMany((id) => node(id), sel0, df); });
+            }, (ev, moved) => {
+                if (!moved && mode === "replace") setFrame(f0);
+                ltEnd(live.pushed);
+            });
+            return;
+        }
+        if (b) {
+            // a layer bar: select the layer, then slide it or trim an end
+            const l = b._layer;
+            const r = b.getBoundingClientRect();
+            const part = KL.barPart(e.clientX - r.left, r.width);
+            const r0 = C.layerRange(st.comp, l.merge), F = fmt().frames;
+            const want = l.source ? [l.source] : l.chain.slice(0, 1);
+            if (want.length && !(st.sel.length === 1 && st.sel[0] === want[0])) select(want);
+            const live = ltLive();
+            let last = 0;
+            ltDragging = true;
+            const snapPx = 6;
+            ltHold(e, (ev) => {
+                let df = Math.round((ev.clientX - e.clientX) / k);
+                // an end (or the start of a slide) lands on the playhead within a few pixels
+                const edge = part === "out" ? r0.out : r0.in;
+                if (!ev.shiftKey && Math.abs((edge + df - st.frame) * k) < snapPx) df = st.frame - edge;
+                if (df === last) return;
+                last = df;
+                live.apply(() => {
+                    if (part === "move") C.slideLayer(st.comp, l, df);
+                    else { const nr = KL.barEdit(r0, part, df, { lo: Math.min(0, r0.in), hi: Math.max(F, r0.out) }); C.setLayerRange(st.comp, l.merge, nr.in, nr.out); }
+                });
+            }, () => ltEnd(live.pushed));
+            return;
+        }
+        if (lane.dataset.lt === "ruler") {
+            // time: press or drag along the ruler
+            ltDragging = true;
+            setFrame(ltFrameAt(e));
+            ltHold(e, (ev) => setFrame(ltFrameAt(ev)), () => { ltDragging = false; renderLayers(); });
+            return;
+        }
+        // empty lane: a box picks the diamonds it touches; a click without a move puts time there
+        const mode = KL.pickMode(e);
+        const before = st.lkeys.slice();
+        const inner = lscroll.firstChild;
+        const ir = () => inner.getBoundingClientRect();
+        const box = el(doc, "div", "kl-box");
+        const x0 = e.clientX, y0 = e.clientY;
+        ltDragging = true;
+        ltHold(e, (ev) => {
+            if (!box.isConnected) inner.append(box);
+            const R = ir();
+            box.style.left = Math.min(x0, ev.clientX) - R.left + "px"; box.style.top = Math.min(y0, ev.clientY) - R.top + "px";
+            box.style.width = Math.abs(ev.clientX - x0) + "px"; box.style.height = Math.abs(ev.clientY - y0) + "px";
+            const hit = { left: Math.min(x0, ev.clientX), right: Math.max(x0, ev.clientX), top: Math.min(y0, ev.clientY), bottom: Math.max(y0, ev.clientY) };
+            const keys = [];
+            for (const dd of inner.querySelectorAll(".kl-dia")) {
+                const on = KL.boxesMeet(hit, dd.getBoundingClientRect());
+                if (on) keys.push(...dd._keys);
+            }
+            st.lkeys = mode === "replace" ? KL.pickKeys([], keys, "replace") : KL.pickKeys(before, keys, mode === "toggle" ? "add" : mode);
+            for (const dd of inner.querySelectorAll(".kl-dia")) dd.classList.toggle("sel", KL.allPicked(st.lkeys, dd._keys));
+        }, (ev, moved) => {
+            box.remove();
+            ltDragging = false;
+            if (!moved) { if (mode === "replace") st.lkeys = []; setFrame(ltFrameAt(ev)); }
+            renderLayers();
+        });
+    });
+    lscroll.addEventListener("contextmenu", (e) => {
+        const d = e.target.closest && e.target.closest(".kl-dia");
+        if (!d) return;
+        e.preventDefault(); e.stopPropagation();
+        if (!KL.allPicked(st.lkeys, d._keys)) { st.lkeys = KL.pickKeys(st.lkeys, d._keys, "replace"); renderLayers(); }
+        ltCloseMenu();
+        const m = el(doc, "div", "mg-ctx cp-pop");
+        const item = (label, fn) => { const it = el(doc, "div", "", label); it.onclick = (ev) => { ev.stopPropagation(); ltCloseMenu(); fn(); }; m.append(it); };
+        for (const [ease, label] of [["smooth", "Smooth"], ["linear", "Linear"], ["hold", "Hold (stepped)"]]) {
+            item(label, () => mutate(() => { for (const s of st.lkeys) { const n = node(s.id); if (n) Mo.setEase(n, s.prop, s.f, ease); } }, { structure: false }));
+        }
+        m.append(el(doc, "hr"));
+        item("Delete keys", () => ltDeleteKeys());
+        for (const t of ["pointerdown", "mousedown", "click", "dblclick"]) m.addEventListener(t, (ev) => ev.stopPropagation());
+        const r = layers.getBoundingClientRect();
+        m.style.left = e.clientX - r.left + "px"; m.style.top = e.clientY - r.top + "px";
+        layers.append(m);
+        ltMenuEl = m;
+    });
+    function ltDeleteKeys() {
+        if (!st.lkeys.length) return;
+        mutate(() => { Mo.removeKeysMany((id) => node(id), st.lkeys); st.lkeys = []; });
+        if (o.onComp) o.onComp();
+    }
+    /** The timeline's keys, while the Layers panel has the focus. True when the key was its. */
+    function ltKey(e) {
+        const k = e.key, ctrl = e.ctrlKey || e.metaKey;
+        const L = C.layerStack(st.comp);
+        const cur = L.find((l) => l.merge && (st.sel.includes(l.merge) || l.chain.some((id) => st.sel.includes(id))));
+        if ((k === "Delete" || k === "Backspace") && st.lkeys.length) { ltDeleteKeys(); return true; }
+        if ((k === "," || k === ".") && st.lkeys.length && !ctrl) {
+            const df = (k === "," ? -1 : 1) * (e.shiftKey ? 10 : 1);
+            mutate(() => { st.lkeys = Mo.moveKeysMany((id) => node(id), st.lkeys, df); }, { structure: false });
+            renderLayers();
+            return true;
+        }
+        if (ctrl && k.toLowerCase() === "a") { st.lkeys = L.flatMap((l) => C.layerKeys(st.comp, l)); renderLayers(); return true; }
+        if (k === "Escape" && st.lkeys.length) { st.lkeys = []; renderLayers(); return true; }
+        if ((k === "[" || k === "]") && cur) {
+            // trim to the playhead: the in onto it, or the out just after it (the playhead's frame the last).
+            // By the key's character, so a layout that types [ with AltGr works too.
+            const r = C.layerRange(st.comp, cur.merge);
+            mutate(() => {
+                if (k === "[") C.setLayerRange(st.comp, cur.merge, Math.min(st.frame, r.out - 1), r.out);
+                else C.setLayerRange(st.comp, cur.merge, r.in, Math.max(st.frame + 1, r.in + 1));
+            });
+            return true;
+        }
+        return false;
     }
 
     // ── time ─────────────────────────────────────────────────────────────────
@@ -1811,8 +2338,9 @@ export function createCompEditor(host, opts = {}) {
         if (!fromHost && o.onFrame) o.onFrame(st.frame);
         queueRender();
         renderOverlay();
-        if (primary() && (Object.keys(primary().tracks || {}).length || primary().type === "roto")) renderProps();
+        if (primary() && (Object.keys(primary().tracks || {}).length || primary().type === "roto" || primary().type === "paint")) renderProps();
         if (curvesEl.isConnected && st.sel.length) curves().draw();
+        ltPlayhead();
     }
 
     // Made in the window the editor is in, and made again when it moves (an observer of another window's
@@ -1821,8 +2349,13 @@ export function createCompEditor(host, opts = {}) {
     function observe() {
         if (ro) ro.disconnect();
         const RO = win().ResizeObserver || (typeof ResizeObserver !== "undefined" ? ResizeObserver : null);
-        ro = RO ? new RO(() => { layoutCanvas(); if (!st.graph.fitted) renderGraph(); }) : null;
-        if (ro) { ro.observe(stage); ro.observe(graph); }
+        let ltW = 0;
+        ro = RO ? new RO(() => {
+            layoutCanvas(); if (!st.graph.fitted) renderGraph();
+            // the Layers timeline is laid out to its width: again when that changes (it was hidden at first)
+            if (st.comp && lscroll.clientWidth && lscroll.clientWidth !== ltW && !ltDragging) { ltW = lscroll.clientWidth; renderLayers(); }
+        }) : null;
+        if (ro) { ro.observe(stage); ro.observe(graph); ro.observe(lscroll); }
     }
     observe();
     /** The editor's elements moved into another window (the viewer popped out or back in). */
@@ -1837,6 +2370,16 @@ export function createCompEditor(host, opts = {}) {
     return {
         parts,
         state: st,
+        /** The frames of the picture on screen kept in the cache (the timeline's marks). */
+        cachedFrames,
+        /** How the last picture was made: "cpu", "gpu", "gpu, region" or "kept"; and why the GPU is off, if it is. */
+        renderInfo: () => ({ how: lastHow, gpuOff: gpuWhy, region: lastRoi }),
+        /** Switch the GPU preview on / off (kept in localStorage). */
+        setGpu: (on) => { try { localStorage.setItem("imageviewer.comp.gpu", on ? "on" : "off"); } catch (_) { /* not kept */ } gpuWhy = ""; gpuTried = false; queueRender(); },
+        /** Forget every kept result (a source changed on disk). */
+        clearCache: () => { heavy.clear(); heavy.__bytes = 0; frameKeys.clear(); if (o.onCache) o.onCache(); },
+        /** Render ahead now (the tests; normally after a pause). Resolves with the frames made. */
+        renderAhead: () => { if (ahead) { clearTimeout(ahead.t); ahead.stop = true; } const job = { stop: false, gen: renderGen, t: 0 }; ahead = job; return aheadRun(job); },
         setDisplay: (v) => { st.display = v || ""; renderBar(); queueRender(); },
         /** How the picture is looked at: {ev, channel} (either may be left out). */
         stage,
@@ -1849,7 +2392,8 @@ export function createCompEditor(host, opts = {}) {
         load(raw, path) {
             const { comp: c, errors } = C.normalizeComp(raw);
             st.comp = c; st.path = path || ""; st.dirty = false; st.hist = new Mo.History(); st.sel = []; st.view = null;
-            st.pick = null; heavy.clear(); lastPics = null;
+            st.pick = null; heavy.clear(); heavy.__bytes = 0; frameKeys.clear(); lastPics = null;
+            if (o.onCache) o.onCache();
             st.zoom.fit = true; st.graph.fitted = false;
             refresh();
             return { ok: !errors.length, errors };

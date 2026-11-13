@@ -65,6 +65,15 @@ class NukeScript(unittest.TestCase):
         self.assertIn('format "100 50 0 0 100 50 1 comp_100x50"', text)
         self.assertIn("last_frame 2", text)
 
+    def test_a_layers_length_is_the_merges_disable_expression(self):
+        c = comp([{"id": "BG", "type": "constant", "inputs": []},
+                  {"id": "FG", "type": "constant", "inputs": []},
+                  {"id": "Merge1", "type": "merge", "inputs": ["BG", "FG", None], "in": 1, "out": 2},
+                  {"id": "Output1", "type": "output", "inputs": ["Merge1"]}])
+        text, _ = N.build(c)
+        m = {k["name"]: k for _, k, _p in blocks(text)}["Merge1"]
+        self.assertEqual(m["disable"], '{{"frame<1 || frame>=2"}}')
+
     def test_a_transform_is_turned_over_to_y_up(self):
         c = comp([{"id": "C", "type": "constant", "inputs": []},
                   {"id": "T", "type": "transform", "inputs": ["C"], "translate": [10, 5], "rotate": 30, "center": [20, 10]},
@@ -115,6 +124,17 @@ class NukeScript(unittest.TestCase):
         self.assertEqual(plan2["bake"], [])
         self.assertIn("Glow1", plan2["placeholder"])
         self.assertIn("Baked", N.readme(plan, "a.nk"))
+
+    def test_a_masked_node_or_a_mix_is_baked(self):
+        c = comp([{"id": "C", "type": "constant", "inputs": []},
+                  {"id": "M", "type": "constant", "inputs": []},
+                  {"id": "Blur1", "type": "blur", "inputs": ["C", "M"], "size": 2},
+                  {"id": "Blur2", "type": "blur", "inputs": ["Blur1", None], "size": 2, "mix": 0.5},
+                  {"id": "Blur3", "type": "blur", "inputs": ["Blur2", None], "size": 2},
+                  {"id": "Output1", "type": "output", "inputs": ["Blur3"]}])
+        _, plan = N.build(c, bake_dir="/b")
+        self.assertEqual(sorted(b["id"] for b in plan["bake"]), ["Blur1", "Blur2"])
+        self.assertIn("Blur3", plan["native"])
 
     def test_no_comp_node_type_breaks_the_writer(self):
         nodes = [{"id": f"N{i}", "type": t, "inputs": []} for i, t in enumerate(N.M.NODE_TYPES) if t != "output"]

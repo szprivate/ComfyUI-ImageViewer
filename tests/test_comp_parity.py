@@ -74,6 +74,124 @@ def channel_cases(sources):
     return c
 
 
+def mask_cases(sources):
+    """Every MASKABLE node's mask input and mix: a channel of the mask picture, inverted, an extra channel,
+    a smaller mask (laid bottom left), a keyed mix."""
+    c = []
+    N = node
+    c.append(({"comp": comp([read(1), read(2), N("grade", 1, ["Read1", "Read2"], gain=2.5, mix=0.7), out("grade1")])}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("blur", 1, ["Read1", "Read2"], size=3, mask_channel="g", mask_invert="on"),
+                             out("blur1")])}, sources))
+    c.append(({"comp": comp([read(1), N("blur", 1, ["Read1", None], size=2, mix=0.35), out("blur1")])}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("lumakeyer", 1, ["Read2"], write="m.a"),
+                             N("glow", 1, ["Read1", "lumakeyer1"], mask_channel="m.a", mix=0.8), out("glow1")])}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("reformat", 1, ["Read2"], width=12, height=9, resize="none"),
+                             N("erode", 1, ["Read1", "reformat1"], size=1.5), out("erode1")])}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("addchannels", 1, ["Read1"], channels="z.a", value=0.5),
+                             N("shuffle", 1, ["addchannels1", "Read2"], r="b", b="r", mask_channel="r"), out("shuffle1")])}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("copy", 1, ["Read1", "Read2", "Read2"], mask_channel="b"), out("copy1")])}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("colorcorrect", 1, ["Read1", "Read2"], master_saturation=150, mix=0.6), out("colorcorrect1")])}, sources))
+    c.append(({"comp": comp([read(1), N("unpremult", 1, ["Read1", None], mix=0.5,
+                             tracks={"mix": [{"f": 0, "v": 0}, {"f": 9, "v": 1}]}), out("unpremult1")]), "frame": 4}, sources))
+    return c
+
+
+def box_cases(sources):
+    """Small things over a plate: the preview works only inside their boxes (bounding boxes); the numbers must
+    not change. A sparse picture, a crop moved and blurred, a merge mask, a roto-free mask stage, a reformat."""
+    c = []
+    N = node
+    sparse = np.zeros((H, W, 4), np.uint8)
+    sparse[5:9, 7:12] = src(9, 5, 4)
+    sp = dict(sources, Read3=sparse)
+    c.append(({"comp": comp([read(1), read(2), N("crop", 1, ["Read1"], topleft=[4, 3], bottomright=[10, 8]),
+                             N("transform", 1, ["crop1"], translate=[6.5, 4.25], rotate=20, scale=[0.8, 1.3]),
+                             N("blur", 1, ["transform1"], size=4), merge(1, "Read2", "blur1"), out("Merge1")])}, sources))
+    c.append(({"comp": comp([read(2), read(3), N("blur", 1, ["Read3"], size=7),
+                             merge(1, "Read2", "blur1", operation="screen"), out("Merge1")])}, sp))
+    c.append(({"comp": comp([read(2), read(3), N("grade", 1, ["Read3", None], gain=2),
+                             N("transform", 1, ["grade1"], translate=[-9, 2]), merge(1, "Read2", "transform1", "Read1", mix=0.6),
+                             out("Merge1")])}, dict(sp, Read1=src(1))))
+    c.append(({"comp": comp([read(3), N("blur", 1, ["Read3"], size=30), out("blur1")])}, sp))
+    c.append(({"comp": comp([read(2), read(3), N("reformat", 1, ["Read3"], width=14, height=10, resize="none"),
+                             merge(1, "Read2", "reformat1", operation="plus"), N("blur", 2, ["Merge1", "Read3"], size=2), out("blur2")])}, sp))
+    return c
+
+
+def paint_cases(sources):
+    """The Paint node: colour, erase, clone (from the picture before it and from another frame), reveal, frame ranges,
+    a stroke following a Transform, at a proxy scale and over a picture of another size."""
+    N = node
+    c = []
+    line = [[2, 3], [9.5, 6.25], [20, 4], [26, 14]]
+    strokes = [
+        {"tool": "color", "pts": line, "size": 5, "hard": 0.4, "opacity": 0.8, "color": [1.2, 0.3, 0.1, 0.7]},
+        {"tool": "erase", "pts": [[14, 9], [18, 12]], "size": 6.5, "hard": 0, "opacity": 0.6},
+        {"tool": "clone", "pts": [[4, 12], [12, 13]], "size": 4, "hard": 0.8, "offset": [6.5, -3.25]},
+        {"tool": "reveal", "pts": [[20, 2], [21, 15]], "size": 7, "hard": 0.5, "spacing": 0.3, "offset": [-2, 1]},
+        {"tool": "color", "pts": [[8, 8]], "size": 9, "life": "single", "f": 0, "color": [0, 1, 0, 1]},
+        {"tool": "color", "pts": [[3, 14]], "size": 9, "life": "single", "f": 4, "color": [0, 0, 1, 1]},
+        {"tool": "color", "pts": [[24, 3]], "size": 5, "life": "from", "f": 1},
+        {"tool": "color", "pts": [[24, 9]], "size": 5, "life": "range", "f": 3, "f1": 1},
+        {"tool": "color", "pts": [[1, 1], [28, 16]], "size": 3, "off": True},
+    ]
+    for scale in (1, 0.5):
+        c.append(({"comp": comp([read(1), read(2), N("paint", 1, ["Read1", "Read2"], strokes=strokes), out("paint1")]), "scale": scale}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("paint", 1, ["Read1", "Read2"], strokes=strokes), out("paint1")]), "frame": 2}, sources))
+    c.append(({"comp": comp([N("paint", 1, [None, None], strokes=strokes[:2]), out("paint1")])}, {}))
+    moved = moving(5, [1, 2, 3])
+    c.append(({"comp": comp([read(1), N("paint", 1, ["Read1", None], strokes=[
+        {"tool": "clone", "pts": [[6, 6], [30, 20]], "size": 8, "dt": -1, "offset": [2, 2]},
+        {"tool": "reveal", "pts": [[6, 20], [30, 6]], "size": 8}]), out("paint1")], w=40, h=32), "frame": 2}, moved))
+    tr = N("transform", 1, ["Read1"], tracks={"translate": [{"f": 0, "v": [0, 0]}, {"f": 4, "v": [8, -4]}]})
+    c.append(({"comp": comp([read(1), tr, N("paint", 1, ["transform1", None], strokes=[
+        {"tool": "color", "pts": [[5, 10], [12, 9]], "size": 4, "link": "transform1", "f": 1}]), out("paint1")]), "frame": 3}, sources))
+    small = {"Read1": src(3, 11, 7), "Read2": sources["Read2"]}
+    c.append(({"comp": comp([read(1, fit="none"), N("reformat", 1, ["Read1"], width=11, height=7), read(2),
+                             N("paint", 1, ["reformat1", "Read2"], strokes=strokes[:4]), out("paint1")])}, small))
+    return c
+
+
+def warp_cases(sources):
+    """CornerPin, STMap, VectorWarp, LensDistortion, GridWarp, and the trackers' stabilise / match-move."""
+    c = []
+    N = node
+    pin = {"to1": [2, 15], "to2": [26, 16.5], "to3": [24, 1], "to4": [4.5, 3]}
+    c.append(({"comp": comp([read(1), N("cornerpin", 1, ["Read1"], **pin), out("cornerpin1")])}, sources))
+    c.append(({"comp": comp([read(1), N("cornerpin", 1, ["Read1"], invert="on", from1=[1, 16], from3=[27, 0.5], **pin), out("cornerpin1")])}, sources))
+    c.append(({"comp": comp([read(1), N("addchannels", 1, ["Read1"], channels="m.a", value=0.5),
+                             N("cornerpin", 1, ["addchannels1"], **pin), N("shuffle", 1, ["cornerpin1"], g="m.a"), out("shuffle1")]), "scale": 0.5}, sources))
+    # an ST map from a lens undistort, used on the plate: the same picture as the undistort itself
+    lens = {"k1": -0.12, "k2": 0.03, "zoom": 1.05}
+    c.append(({"comp": comp([read(1), N("lensdistortion", 1, ["Read1"], **lens), out("lensdistortion1")])}, sources))
+    c.append(({"comp": comp([read(1), N("lensdistortion", 1, ["Read1"], mode="redistort", center=[12, 9], **lens), out("lensdistortion1")])}, sources))
+    c.append(({"comp": comp([read(1), N("lensdistortion", 1, ["Read1"], output="stmap", **lens), out("lensdistortion1")])}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("lensdistortion", 1, ["Read2"], output="stmap", k1=0.2),
+                             N("stmap", 1, ["Read1", "lensdistortion1"]), out("stmap1")])}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("reformat", 1, ["Read2"], width=13, height=21, resize="distort"),
+                             N("stmap", 1, ["Read1", "reformat1"], u="b", v="r"), out("stmap1")]), "scale": 0.5}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("vectorwarp", 1, ["Read1", "Read2"], amount=3.5), out("vectorwarp1")])}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("vectorwarp", 1, ["Read1", "Read2"], u="b", v="a", amount=-2), out("vectorwarp1")]), "scale": 0.5}, sources))
+    moved = moving(5, [1, 2, 3])
+    c.append(({"comp": comp([read(1), N("vectors", 1, ["Read1"], iterations=8, levels=2),
+                             N("vectorwarp", 1, ["Read1", "vectors1"]), out("vectorwarp1")], w=40, h=32), "frame": 2}, moved))
+    dst = [v + d for v, d in zip([0, 0, 14.5, 0, 29, 0, 0, 8.5, 14.5, 8.5, 29, 8.5, 0, 17, 14.5, 17, 29, 17],
+                                [0, 0, 1, 0, 0, 0, 0, 0, 3, -2, 0, 0, 0, 0, -1, 0, 0, 0])]
+    c.append(({"comp": comp([read(1), N("gridwarp", 1, ["Read1"], cols=3, rows=3, dst_points=dst), out("gridwarp1")])}, sources))
+    c.append(({"comp": comp([read(1), N("gridwarp", 1, ["Read1"], cols=3, rows=3, dst_points=dst, distortion=0.4), out("gridwarp1")]), "scale": 0.5}, sources))
+    pts = {"points": [{"id": "p1", "keys": [[0, 5, 5, 1], [4, 8, 6, 1]]}, {"id": "p2", "keys": [[0, 20, 6, 1], [4, 22, 9, 1]]},
+                      {"id": "p3", "keys": [[0, 21, 14, 1], [4, 20, 15.5, 1]]}, {"id": "p4", "keys": [[0, 6, 13, 1], [4, 7, 12, 1]]}]}
+    for motion in ("translate", "rotate", "scale", "perspective"):
+        for how in ("stabilise", "match-move"):
+            c.append(({"comp": comp([read(1), N("tracker", 1, ["Read1"], points=pts, motion=motion, transform=how), out("tracker1")]), "frame": 3}, sources))
+    c.append(({"comp": comp([read(1), N("tracker", 1, ["Read1"], points=pts, motion="scale", transform="match-move", reference=4),
+                             out("tracker1")]), "frame": 1, "scale": 0.5}, sources))
+    plane = {"keys": [[0, 2, 15, 26, 16, 25, 2, 3, 1], [6, 3, 14, 24, 16, 26, 1, 4, 3]]}
+    for how in ("stabilise", "match-move"):
+        c.append(({"comp": comp([read(1), N("planartracker", 1, ["Read1"], plane=plane, transform=how), out("planartracker1")]), "frame": 2}, sources))
+    return c
+
+
 def cases():
     s1, s2, s3 = src(1), src(2), src(3, 11, 7)
     sources = {"Read1": s1, "Read2": s2}
@@ -101,12 +219,16 @@ def cases():
                         "rotate": [{"f": 2, "v": 0, "ease": ease, "to": 3}, {"f": 9, "v": 30}]}}
         c.append(({"comp": comp([read(1), t, out("Transform1")]), "frame": 5}, sources))
     c.append(({"comp": comp([read(1), read(2), merge(1, "Read1", "Read2", disable=True), out("Merge1")])}, sources))
+    # a layer's length: the Merge passes B before its in and from its out on
+    for fr in (1, 3, 6):
+        c.append(({"comp": comp([read(1), read(2), merge(1, "Read1", "Read2", **{"in": 2, "out": 6}), out("Merge1")]), "frame": fr}, sources))
     c.append(({"comp": comp([read(1), {"id": "Blur1", "type": "blur", "inputs": ["Read1"], "size": 6}, out("Blur1")]), "scale": 0.5}, sources))
     for fit in ("none", "fit"):   # at a proxy scale "none" keeps the picture's size in the comp
         c.append(({"comp": comp([read(3, fit=fit), out("Read3")], w=40, h=24), "scale": 0.5}, {"Read3": s3}))
     straight = {"Read1": src(9, alpha=False)}
     c.append(({"comp": comp([read(1, colorspace="linear"), out("Read1")])}, straight))
     c.extend(new_node_cases(sources))
+    c.extend(paint_cases(sources))
     return c
 
 
@@ -259,6 +381,9 @@ def new_node_cases(sources):
         c.append(one(node("channelmath", 1, ["Read1"], operation=op, value=0.4, channels="rgba" if op == "clamp" else "rgb", mix=0.8)))
     c.extend(channel_cases(sources))
     c.extend(scene_cases(sources))
+    c.extend(mask_cases(sources))
+    c.extend(box_cases(sources))
+    c.extend(warp_cases(sources))
     return c
 
 
