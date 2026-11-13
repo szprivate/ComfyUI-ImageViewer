@@ -65,6 +65,15 @@ class NukeScript(unittest.TestCase):
         self.assertIn('format "100 50 0 0 100 50 1 comp_100x50"', text)
         self.assertIn("last_frame 2", text)
 
+    def test_a_layers_length_is_the_merges_disable_expression(self):
+        c = comp([{"id": "BG", "type": "constant", "inputs": []},
+                  {"id": "FG", "type": "constant", "inputs": []},
+                  {"id": "Merge1", "type": "merge", "inputs": ["BG", "FG", None], "in": 1, "out": 2},
+                  {"id": "Output1", "type": "output", "inputs": ["Merge1"]}])
+        text, _ = N.build(c)
+        m = {k["name"]: k for _, k, _p in blocks(text)}["Merge1"]
+        self.assertEqual(m["disable"], '{{"frame<1 || frame>=2"}}')
+
     def test_a_transform_is_turned_over_to_y_up(self):
         c = comp([{"id": "C", "type": "constant", "inputs": []},
                   {"id": "T", "type": "transform", "inputs": ["C"], "translate": [10, 5], "rotate": 30, "center": [20, 10]},

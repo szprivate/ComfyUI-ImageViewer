@@ -392,6 +392,33 @@ class BrowserTests(unittest.TestCase):
         self.assertTrue(self.ed(pg, "e.isDirty()"))
         self.assertEqual(self.errors, [])
 
+    def test_a_layer_bar_trims_at_its_ends_and_slides_with_alt(self):
+        pg = self.motion_page()
+        dur = self.ed(pg, "e.comp().duration")
+        x0, y, k = self.frame_x(pg, 0)
+        bar = pg.locator("#motionTimeline-panel .mg-layer-row .mg-bar-range").first
+        lid = pg.evaluate("(b)=>b.closest('.mg-layer-row').dataset.layer", bar.element_handle())
+        b = bar.bounding_box()
+        # the out end: 10 frames shorter
+        ex, ey = b["x"] + b["width"] - 1, b["y"] + b["height"] / 2
+        pg.mouse.move(ex, ey); pg.mouse.down(); pg.mouse.move(ex - 5 * k, ey); pg.mouse.move(ex - 10 * k, ey); pg.mouse.up()
+        lay = lambda: self.ed(pg, f"(({{l}})=>({{in:l.in??0,out:l.out??e.comp().duration,keys:Object.values(l.tracks||{{}}).flat().map(k=>k.f)}}))({{l:e.getScene().layers.find(l=>l.id==='{lid}')}})")
+        self.assertEqual(lay()["out"], dur - 10)
+        keys0 = lay()["keys"]
+        # Alt + the middle: the layer and its keys 4 frames later
+        b = bar.bounding_box()
+        mx, my = b["x"] + b["width"] / 2, b["y"] + b["height"] / 2
+        pg.keyboard.down("Alt")
+        pg.mouse.move(mx, my); pg.mouse.down(); pg.mouse.move(mx + 2 * k, my); pg.mouse.move(mx + 4 * k, my); pg.mouse.up()
+        pg.keyboard.up("Alt")
+        got = lay()
+        self.assertEqual((got["in"], got["out"]), (4, dur - 6))
+        self.assertEqual(got["keys"], [f + 4 for f in keys0])
+        # one undo step each
+        self.ed(pg, "e.undo()")
+        self.assertEqual(lay()["in"], 0)
+        self.assertEqual(self.errors, [])
+
     def test_the_viewers_bar_is_the_motion_transport(self):
         pg = self.motion_page()
         c = self.ed(pg, "e.comp()")

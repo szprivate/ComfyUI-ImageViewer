@@ -27,6 +27,7 @@
 // Edits are the pure functions of imageViewer_mgModel.js, with a snapshot History for undo.
 import * as S from "./imageViewer_mgScene.js";
 import * as Mo from "./imageViewer_mgModel.js";
+import * as KL from "./imageViewer_keyLanes.js";
 
 const NS = "http://www.w3.org/2000/svg";
 const LABEL_W = 176;
@@ -78,7 +79,8 @@ export const MG_CSS = `
 .mg-ttrack{position:relative;flex:none;border-bottom:1px solid #202026}
 .mg-ruler .mg-ttrack{background:#202026;cursor:ew-resize;overflow:hidden}
 .mg-tick{position:absolute;top:0;bottom:0;border-left:1px solid #34343c;font-size:9px;padding-left:2px;opacity:.7;pointer-events:none}
-.mg-bar-range{position:absolute;top:6px;height:10px;background:#3a4a66;border-radius:2px;opacity:.7}
+.mg-bar-range{position:absolute;top:6px;height:10px;background:#3a4a66;border-radius:2px;opacity:.7;box-sizing:border-box;border-left:2px solid #9fb6e0;border-right:2px solid #9fb6e0}
+.mg-bar-range:hover{opacity:1}
 .mg-dia{position:absolute;top:5px;width:11px;height:11px;margin-left:-5px;background:${AMBER};transform:rotate(45deg) scale(.78);border:1px solid #402a00;cursor:pointer}
 .mg-dia.agg{background:#b98a4a;pointer-events:none}.mg-dia.sel{background:#fff;border-color:#ff6a1a}
 .mg-playhead{position:absolute;top:0;bottom:0;width:0;border-left:1px solid #ff3b3b;z-index:2;pointer-events:none}
@@ -967,6 +969,14 @@ export function createMgEditor(host, opts = {}) {
             scrubOnTrack(r.track, l.id);
             const a = l.in ?? 0, b = l.out ?? dur();
             const range = el(doc, "div", "mg-bar-range"); range.style.left = a * k + "px"; range.style.width = Math.max(2, (b - a) * k) + "px";
+            range.title = `frames ${a}–${b - 1}: drag an end to trim, Alt + drag to slide the layer with its keys`;
+            // The ends trim, Alt + drag slides (keyLanes' arithmetic, as the Comp's Layers); a plain press in the
+            // middle stays the track's scrub.
+            range.onpointermove = (e) => {
+                const r = range.getBoundingClientRect(), part = KL.barPart(e.clientX - r.left, r.width);
+                range.style.cursor = part !== "move" ? "ew-resize" : e.altKey ? "grab" : "";
+            };
+            range.onpointerdown = (e) => barDown(e, l, range, k);
             r.track.append(range);
             const frames = new Set();
             for (const t of Object.values(l.tracks || {})) for (const kk of t) frames.add(kk.f);
@@ -990,11 +1000,49 @@ export function createMgEditor(host, opts = {}) {
         tl.append(inner);
         tl.scrollLeft = keepL; tl.scrollTop = keepT;
     }
+    /** A layer's bar pressed: an end trims it, Alt + the middle slides it (with its keys). One undo step. */
+    function barDown(e, l, range, k) {
+        if (e.button !== 0) return;
+        const r = range.getBoundingClientRect(), part = KL.barPart(e.clientX - r.left, r.width);
+        if (part === "move" && !e.altKey) return;          // the track's scrub
+        e.stopPropagation(); e.preventDefault();
+        if (l.id !== st.sel) select(l.id);
+        const orig = JSON.stringify(l), x0 = e.clientX;
+        const r0 = { in: Number.isFinite(l.in) ? l.in : 0, out: Number.isFinite(l.out) ? l.out : dur() };
+        let pushed = false, last = 0;
+        const target = tl;
+        try { target.setPointerCapture(e.pointerId); } catch (_) { /* pointer already gone */ }
+        const onMove = (ev) => {
+            if (ev.pointerId !== e.pointerId) return;
+            const df = Math.round((ev.clientX - x0) / k);
+            if (df === last) return;
+            last = df;
+            if (!pushed) { st.hist.push(st.scene); pushed = true; }
+            const ly = Mo.layerOf(st.scene, l.id), base = JSON.parse(orig);
+            for (const key of ["in", "out", "tracks"]) { if (base[key] === undefined) delete ly[key]; else ly[key] = base[key]; }
+            if (part === "move") Mo.slideLayer(st.scene, ly, df);
+            else { const nr = KL.barEdit(r0, part, df, { lo: Math.min(0, r0.in), hi: Math.max(dur(), r0.out) }); Mo.setLayerRange(st.scene, ly, nr.in, nr.out); }
+            st.dirty = true;
+            refresh(["bar", "stage", "timeline", "gizmo"]);
+        };
+        const onUp = (ev) => {
+            if (ev.pointerId !== e.pointerId) return;
+            target.removeEventListener("pointermove", onMove);
+            target.removeEventListener("pointerup", onUp);
+            target.removeEventListener("pointercancel", onUp);
+            try { target.releasePointerCapture(e.pointerId); } catch (_) { /* already released */ }
+            if (pushed) refresh();
+        };
+        target.addEventListener("pointermove", onMove);
+        target.addEventListener("pointerup", onUp);
+        target.addEventListener("pointercancel", onUp);
+    }
     function keyDown(e, l, prop, f, k) {
         e.stopPropagation(); e.preventDefault();
-        const idx = st.keys.findIndex((s) => s.id === l.id && s.prop === prop && s.f === f);
-        if (e.shiftKey) { if (idx >= 0) st.keys.splice(idx, 1); else st.keys.push({ id: l.id, prop, f }); }
-        else if (idx < 0) st.keys = [{ id: l.id, prop, f }];
+        // Shift toggles, Ctrl takes away, Ctrl+Shift adds (the 3D view's and the Comp's Layers' modifiers);
+        // a plain press on a picked key keeps the selection, to drag it.
+        const me = [{ id: l.id, prop, f }], mode = KL.pickMode(e);
+        if (!(mode === "replace" && KL.allPicked(st.keys, me))) st.keys = KL.pickKeys(st.keys, me, mode);
         const orig = JSON.stringify(st.scene.layers);
         const x0 = e.clientX; let moved = false;
         const sel0 = st.keys.map((s) => ({ ...s }));
@@ -1009,12 +1057,7 @@ export function createMgEditor(host, opts = {}) {
             if (!moved) { moved = true; st.hist.push(st.scene); }
             const base = JSON.parse(orig);
             st.scene.layers.forEach((ly, i) => { ly.tracks = base[i].tracks; if (!base[i].tracks) delete ly.tracks; });
-            const next = [];
-            for (const id of new Set(sel0.map((s) => s.id))) {
-                const ly = Mo.layerOf(st.scene, id);
-                next.push(...Mo.moveKeys(ly, sel0.filter((s) => s.id === id), df).map((s) => ({ id, ...s })));
-            }
-            st.keys = next; st.dirty = true;
+            st.keys = Mo.moveKeysMany((id) => Mo.layerOf(st.scene, id), sel0, df); st.dirty = true;
             refresh(["bar", "stage", "timeline", "gizmo"]);
         };
         const onUp = (ev) => {
@@ -1059,7 +1102,7 @@ export function createMgEditor(host, opts = {}) {
         else if (e.key === "End") { e.preventDefault(); e.stopPropagation(); T ? T.last() : setFrame(dur() - 1); }
         else if (e.key === "Delete" || e.key === "Backspace") {
             e.preventDefault(); e.stopPropagation();
-            if (st.keys.length) mutate(() => { for (const k of st.keys) { const l = Mo.layerOf(st.scene, k.id); if (l) Mo.removeKey(l, k.prop, k.f); } st.keys = []; });
+            if (st.keys.length) mutate(() => { Mo.removeKeysMany((id) => Mo.layerOf(st.scene, id), st.keys); st.keys = []; });
             else delSel();
         }
     };

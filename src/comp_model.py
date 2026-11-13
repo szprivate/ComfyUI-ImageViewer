@@ -358,6 +358,15 @@ def normalize(raw):
         ins = n.get("inputs") if isinstance(n.get("inputs"), list) else []
         node["inputs"] = [ins[i] if i < len(ins) and isinstance(ins[i], str) else None
                           for i in range(len(NODE_TYPES[n["type"]]["inputs"]))]
+        # A layer's length: whole frames, out after in (a Merge's only).
+        for k in ("in", "out"):
+            if node["type"] != "merge" or not _is_num(node.get(k)):
+                node.pop(k, None)
+            else:
+                node[k] = int(round(node[k]))
+        if "in" in node and "out" in node and node["out"] <= node["in"]:
+            errors.append(f"{node['id']}: its out was not after its in and was taken off")
+            node.pop("out")
         comp["nodes"].append(node)
     for n in comp["nodes"]:
         n["inputs"] = [i if i in seen and i != n["id"] else None for i in n["inputs"]]
@@ -482,6 +491,15 @@ def value_at(keys, own, frame):
     while i < len(keys) - 1 and keys[i + 1]["f"] <= frame:
         i += 1
     return _interpolate(keys[i], keys[i + 1], frame)
+
+
+def merge_live(n, f):
+    """Is a Merge's A laid over at frame ``f``: ``in`` is its first frame, ``out`` the first it is no longer."""
+    if _is_num(n.get("in")) and f < n["in"]:
+        return False
+    if _is_num(n.get("out")) and f >= n["out"]:
+        return False
+    return True
 
 
 def param_at(node, p, frame):
@@ -1964,6 +1982,8 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             img[...] = np.array([c[0] * c[3], c[1] * c[3], c[2] * c[3], c[3]], np.float32)
             return img
         if t == "merge":
+            if not merge_live(n, f):
+                return run(ins[0], f, d1)
             Bi = run(ins[0], f, d1)
             Ai = conform(run(ins[1], f, d1), Bi.shape[1], Bi.shape[0])
             Mi = conform(run(ins[2], f, d1), Bi.shape[1], Bi.shape[0]) if ins[2] else None

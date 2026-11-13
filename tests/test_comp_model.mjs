@@ -544,3 +544,97 @@ test("channel rules: names, lists, a write into one channel or a layer, the Roto
     assert.deepEqual(Array.from(img.data).map((v) => +v.toFixed(3)), [0.8, 0.6, 0.4, 1]);
     assert.equal(ex["mask.a"][0], 0.5);
 });
+
+// ── a layer's length and its keys on the Layers timeline ─────────────────────
+import * as KL from "../js/imageViewer_keyLanes.js";
+
+function twoLayerComp() {
+    const c = C.newComp();
+    c.format.frames = 40;
+    const { merge, source } = C.addLayer(c, C.makeNode(c, "read", { file: "a.mov" }));
+    const t = C.insertNode(c, "transform", source.id, {});
+    t.tracks = { rotate: [{ f: 4, v: 0 }, { f: 12, v: 90 }] };
+    merge.tracks = { mix: [{ f: 8, v: 1 }] };
+    return { c, merge, source, t };
+}
+
+test("a Merge passes B outside its in / out; set, slide and normalise keep whole frames", () => {
+    const { c, merge, source, t } = twoLayerComp();
+    assert.equal(C.mergeLive(merge, 0), true);
+    C.setLayerRange(c, merge.id, 5, 20);
+    assert.deepEqual([merge.in, merge.out], [5, 20]);
+    assert.deepEqual([C.mergeLive(merge, 4), C.mergeLive(merge, 5), C.mergeLive(merge, 19), C.mergeLive(merge, 20)], [false, true, true, false]);
+    C.setLayerRange(c, merge.id, 0, 40);   // the comp's own ends are written as nothing
+    assert.equal("in" in merge, false); assert.equal("out" in merge, false);
+    C.setLayerRange(c, merge.id, 5, 20);
+    const L = C.layerStack(c)[0];
+    assert.equal(C.layerKeys(c, L).length, 3);
+    C.slideLayer(c, L, 10);
+    assert.deepEqual([merge.in, merge.out, source.offset], [15, 30, 10]);
+    assert.deepEqual(t.tracks.rotate.map((k) => k.f), [14, 22]);
+    assert.deepEqual(merge.tracks.mix.map((k) => k.f), [18]);
+    C.slideLayer(c, L, -10);
+    assert.equal("offset" in source, false);
+    const raw = JSON.parse(JSON.stringify(c));
+    raw.nodes.find((n) => n.id === merge.id).in = 7.4;
+    raw.nodes.find((n) => n.id === merge.id).out = 3;
+    raw.nodes.find((n) => n.id === source.id).in = 3;   // only a Merge has one
+    const { comp: n2, errors } = C.normalizeComp(raw);
+    const m2 = n2.nodes.find((n) => n.id === merge.id);
+    assert.deepEqual([m2.in, m2.out], [7, undefined]);
+    assert.equal("in" in n2.nodes.find((n) => n.id === source.id), false);
+    assert.equal(errors.length, 1);
+});
+
+test("a layer's length goes with it when layers swap places", () => {
+    const c = C.newComp();
+    const a = C.addLayer(c, C.makeNode(c, "constant", { name: "A" }));
+    const b = C.addLayer(c, C.makeNode(c, "constant", { name: "B" }));
+    C.setLayerRange(c, b.merge.id, 3, 9);
+    assert.equal(C.layerStack(c)[0].source, b.source.id);
+    C.moveLayer(c, 0, 1);
+    const L = C.layerStack(c);
+    assert.equal(L[1].source, b.source.id);
+    assert.deepEqual(C.layerRange(c, L[1].merge), { in: 3, out: 9 });
+    assert.deepEqual(C.layerRange(c, L[0].merge), { in: 0, out: c.format.frames });
+    void a;
+});
+
+test("a Merge out of its range renders as its B", () => {
+    const c = C.newComp();
+    c.format.width = 4; c.format.height = 2;
+    c.nodes[0].color = [0, 0, 1, 1];
+    const { merge } = C.addLayer(c, C.makeNode(c, "constant", { color: [1, 0, 0, 1] }));
+    C.setLayerRange(c, merge.id, 2, 4);
+    const px = (f) => Array.from(C.renderNode(c, c.output, f, {}).data.slice(0, 4)).map((v) => Math.round(v * 100) / 100);
+    assert.deepEqual(px(1), [0, 0, 1, 1]);
+    assert.deepEqual(px(2), [1, 0, 0, 1]);
+    assert.deepEqual(px(4), [0, 0, 1, 1]);
+});
+
+test("the timeline's shared arithmetic: bar edits, picking with modifiers, moving keys of several nodes", () => {
+    assert.deepEqual(KL.barEdit({ in: 5, out: 20 }, "move", 3), { in: 8, out: 23 });
+    assert.deepEqual(KL.barEdit({ in: 5, out: 20 }, "in", 30), { in: 19, out: 20 });
+    assert.deepEqual(KL.barEdit({ in: 5, out: 20 }, "out", 30, { hi: 24 }), { in: 5, out: 24 });
+    assert.deepEqual(KL.barEdit({ in: 5, out: 20 }, "in", -9, { lo: 0 }), { in: 0, out: 20 });
+    assert.deepEqual([KL.barPart(2, 100), KL.barPart(50, 100), KL.barPart(98, 100), KL.barPart(3, 8)], ["in", "move", "out", "in"]);
+    assert.equal(KL.pickMode({ shiftKey: true }), "toggle");
+    assert.equal(KL.pickMode({ ctrlKey: true, shiftKey: true }), "add");
+    const a = { id: "n1", prop: "rotate", f: 4 }, b = { id: "n2", prop: "mix", f: 4 };
+    let sel = KL.pickKeys([], [a], "replace");
+    sel = KL.pickKeys(sel, [b], "toggle");
+    assert.equal(sel.length, 2);
+    assert.equal(KL.allPicked(sel, [a, b]), true);
+    sel = KL.pickKeys(sel, [a, b], "toggle");   // a diamond whose keys are all picked lets them go
+    assert.equal(sel.length, 0);
+    sel = KL.pickKeys([a, b], [a], "remove");
+    assert.deepEqual(sel, [b]);
+    const { c, merge, t } = twoLayerComp();
+    const moved = Mo.moveKeysMany((id) => C.nodeById(c, id), [{ id: t.id, prop: "rotate", f: 12 }, { id: merge.id, prop: "mix", f: 8 }], 5);
+    assert.deepEqual(moved.map((k) => [k.id, k.f]), [[t.id, 17], [merge.id, 13]]);
+    assert.deepEqual(t.tracks.rotate.map((k) => k.f), [4, 17]);
+    // the last key of a param taken away: the param keeps that value, no longer animated
+    Mo.removeKeysMany((id) => C.nodeById(c, id), [{ id: merge.id, prop: "mix", f: 13 }]);
+    assert.equal(merge.tracks, undefined);
+    assert.equal(merge.mix, 1);
+});

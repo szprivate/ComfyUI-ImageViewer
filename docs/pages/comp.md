@@ -28,7 +28,25 @@ The graph flows from top to bottom: inputs on the top edge of a node, the output
 | Grid / snap | <kbd>G</kbd> / <kbd>S</kbd> |
 | Add footage | Drop History thumbnails or file browser rows on the graph |
 
-The selected nodes' parameters appear in the **Parameters** panel, one section per node, and their handles are drawn over the picture (transform jack, crop box, flare position). The **Curve Editor** sits behind the graph as a tab; **Layers** shows the same graph as a layer stack. The graph can also be shown in ComfyUI's bottom panel (**Comp** tab).
+The selected nodes' parameters appear in the **Parameters** panel, one section per node, and their handles are drawn over the picture (transform jack, crop box, flare position). **Layers** and the **Curve Editor** sit behind the graph as tabs. The graph can also be shown in ComfyUI's bottom panel (**Comp** tab).
+
+## Layers
+
+The same graph as a stack of layers on a timeline: each Merge on the main pipe is a layer, its A input the layer's picture. A layer row has the visibility switch, the merge operation and the opacity on the left, and on the right a bar from the layer's first to its last frame. Outside its bar the Merge passes its B input unchanged. A Read's footage is drawn as a dashed band behind the bar.
+
+| Action | Input |
+|---|---|
+| Slide a layer (footage and keys move with it) | Drag the middle of its bar |
+| Trim the start / end | Drag an end of the bar (snaps to the playhead, <kbd>Shift</kbd> to place freely) |
+| Trim the start / end to the playhead | <kbd>[</kbd> / <kbd>]</kbd> |
+| Show the animated parameters | The arrow left of the layer: one row per keyed parameter of the Merge and its A branch |
+| Select keys | Click; <kbd>Shift</kbd> toggles, <kbd>Ctrl</kbd> removes, <kbd>Ctrl</kbd>+<kbd>Shift</kbd> adds; drag a box on empty lanes; <kbd>Ctrl</kbd>+<kbd>A</kbd> |
+| Move keys | Drag them, or <kbd>,</kbd> / <kbd>.</kbd> (<kbd>Shift</kbd>: 10 frames) |
+| Delete keys / interpolation | <kbd>Del</kbd> / right-click a key |
+| Move time | Click or drag in the ruler, or click an empty lane |
+| Zoom | <kbd>Ctrl</kbd>+wheel, or − / + / Fit in the bar |
+
+A layer's frames are the Merge's `in` and `out` in the file (`out` is the first frame without the layer); the script export turns them into an expression on the Merge's disable.
 
 ## Nodes
 

@@ -178,6 +178,33 @@ export function moveKeys(layer, sel, df) {
     return out;
 }
 
+/**
+ * Move keys of several holders at once (layers, or a comp's nodes): `sel` = [{id, prop, f}], `holderOf(id)` the
+ * thing with the tracks. Returns the moved selection, still named by id. (Motion's timeline and the Comp's Layers.)
+ */
+export function moveKeysMany(holderOf, sel, df) {
+    const out = [];
+    for (const id of new Set(sel.map((s) => s.id))) {
+        const h = holderOf(id);
+        if (!h) continue;
+        out.push(...moveKeys(h, sel.filter((s) => s.id === id), df).map((s) => ({ id, ...s })));
+    }
+    return out;
+}
+
+/** Take the keys `sel` = [{id, prop, f}] away from their holders. A property whose last key goes keeps that
+ *  key's value (it stops being animated where it stood, as the stopwatch does). */
+export function removeKeysMany(holderOf, sel) {
+    for (const s of sel) {
+        const h = holderOf(s.id);
+        if (!h) continue;
+        const list = track(h, s.prop);
+        if (list.length === 1 && list[0].f === s.f) h[s.prop] = clone(list[0].v);
+        removeKey(h, s.prop, s.f);
+        if (h.tracks && !Object.keys(h.tracks).length) delete h.tracks;
+    }
+}
+
 export function setEase(layer, prop, frame, ease) {
     const k = keyAt(layer, prop, frame);
     if (!k) return;
@@ -236,6 +263,23 @@ export function pasteKeys(layer, clip, frame) {
 /** The animated props of a layer (those with tracks), in the order they are listed. */
 export function animatedProps(layer) {
     return Object.keys(PROPS).filter((p) => isAnimated(layer, p));
+}
+
+/** A layer's in / out (whole frames, at least one long); the composition's own ends are written as nothing. */
+export function setLayerRange(scene, layer, a, b) {
+    a = Math.round(a); b = Math.round(b);
+    if (b <= a) b = a + 1;
+    if (a === 0) delete layer.in; else layer.in = a;
+    if (b === scene.comp.duration) delete layer.out; else layer.out = b;
+}
+
+/** Slide a layer in time by `df` frames: its in, its out and every key of it move together. */
+export function slideLayer(scene, layer, df) {
+    df = Math.round(df);
+    if (!df) return;
+    const a = Number.isFinite(layer.in) ? layer.in : 0, b = Number.isFinite(layer.out) ? layer.out : scene.comp.duration;
+    setLayerRange(scene, layer, a + df, b + df);
+    for (const list of Object.values(layer.tracks || {})) for (const k of list || []) k.f += df;
 }
 
 export function setDuration(scene, frames) {

@@ -101,6 +101,9 @@ def cases():
                         "rotate": [{"f": 2, "v": 0, "ease": ease, "to": 3}, {"f": 9, "v": 30}]}}
         c.append(({"comp": comp([read(1), t, out("Transform1")]), "frame": 5}, sources))
     c.append(({"comp": comp([read(1), read(2), merge(1, "Read1", "Read2", disable=True), out("Merge1")])}, sources))
+    # a layer's length: the Merge passes B before its in and from its out on
+    for fr in (1, 3, 6):
+        c.append(({"comp": comp([read(1), read(2), merge(1, "Read1", "Read2", **{"in": 2, "out": 6}), out("Merge1")]), "frame": fr}, sources))
     c.append(({"comp": comp([read(1), {"id": "Blur1", "type": "blur", "inputs": ["Read1"], "size": 6}, out("Blur1")]), "scale": 0.5}, sources))
     for fit in ("none", "fit"):   # at a proxy scale "none" keeps the picture's size in the comp
         c.append(({"comp": comp([read(3, fit=fit), out("Read3")], w=40, h=24), "scale": 0.5}, {"Read3": s3}))
