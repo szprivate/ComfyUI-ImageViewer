@@ -118,6 +118,40 @@ def box_cases(sources):
     return c
 
 
+def paint_cases(sources):
+    """The Paint node: colour, erase, clone (from the picture before it and from another frame), reveal, frame ranges,
+    a stroke following a Transform, at a proxy scale and over a picture of another size."""
+    N = node
+    c = []
+    line = [[2, 3], [9.5, 6.25], [20, 4], [26, 14]]
+    strokes = [
+        {"tool": "color", "pts": line, "size": 5, "hard": 0.4, "opacity": 0.8, "color": [1.2, 0.3, 0.1, 0.7]},
+        {"tool": "erase", "pts": [[14, 9], [18, 12]], "size": 6.5, "hard": 0, "opacity": 0.6},
+        {"tool": "clone", "pts": [[4, 12], [12, 13]], "size": 4, "hard": 0.8, "offset": [6.5, -3.25]},
+        {"tool": "reveal", "pts": [[20, 2], [21, 15]], "size": 7, "hard": 0.5, "spacing": 0.3, "offset": [-2, 1]},
+        {"tool": "color", "pts": [[8, 8]], "size": 9, "life": "single", "f": 0, "color": [0, 1, 0, 1]},
+        {"tool": "color", "pts": [[3, 14]], "size": 9, "life": "single", "f": 4, "color": [0, 0, 1, 1]},
+        {"tool": "color", "pts": [[24, 3]], "size": 5, "life": "from", "f": 1},
+        {"tool": "color", "pts": [[24, 9]], "size": 5, "life": "range", "f": 3, "f1": 1},
+        {"tool": "color", "pts": [[1, 1], [28, 16]], "size": 3, "off": True},
+    ]
+    for scale in (1, 0.5):
+        c.append(({"comp": comp([read(1), read(2), N("paint", 1, ["Read1", "Read2"], strokes=strokes), out("paint1")]), "scale": scale}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("paint", 1, ["Read1", "Read2"], strokes=strokes), out("paint1")]), "frame": 2}, sources))
+    c.append(({"comp": comp([N("paint", 1, [None, None], strokes=strokes[:2]), out("paint1")])}, {}))
+    moved = moving(5, [1, 2, 3])
+    c.append(({"comp": comp([read(1), N("paint", 1, ["Read1", None], strokes=[
+        {"tool": "clone", "pts": [[6, 6], [30, 20]], "size": 8, "dt": -1, "offset": [2, 2]},
+        {"tool": "reveal", "pts": [[6, 20], [30, 6]], "size": 8}]), out("paint1")], w=40, h=32), "frame": 2}, moved))
+    tr = N("transform", 1, ["Read1"], tracks={"translate": [{"f": 0, "v": [0, 0]}, {"f": 4, "v": [8, -4]}]})
+    c.append(({"comp": comp([read(1), tr, N("paint", 1, ["transform1", None], strokes=[
+        {"tool": "color", "pts": [[5, 10], [12, 9]], "size": 4, "link": "transform1", "f": 1}]), out("paint1")]), "frame": 3}, sources))
+    small = {"Read1": src(3, 11, 7), "Read2": sources["Read2"]}
+    c.append(({"comp": comp([read(1, fit="none"), N("reformat", 1, ["Read1"], width=11, height=7), read(2),
+                             N("paint", 1, ["reformat1", "Read2"], strokes=strokes[:4]), out("paint1")])}, small))
+    return c
+
+
 def cases():
     s1, s2, s3 = src(1), src(2), src(3, 11, 7)
     sources = {"Read1": s1, "Read2": s2}
@@ -154,6 +188,7 @@ def cases():
     straight = {"Read1": src(9, alpha=False)}
     c.append(({"comp": comp([read(1, colorspace="linear"), out("Read1")])}, straight))
     c.extend(new_node_cases(sources))
+    c.extend(paint_cases(sources))
     return c
 
 

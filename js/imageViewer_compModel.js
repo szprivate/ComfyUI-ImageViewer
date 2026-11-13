@@ -31,6 +31,7 @@ import * as K from "./imageViewer_compMatte.js";
 import * as OC from "./imageViewer_compOcio.js";
 import * as LT from "./imageViewer_compLight.js";
 import * as CH from "./imageViewer_compChannels.js";
+import * as PT from "./imageViewer_compPaint.js";
 import { blank, blurImage, boxesForGauss } from "./imageViewer_compOps.js";
 export { blank, blurImage, boxesForGauss };
 
@@ -235,6 +236,9 @@ export const NODE_TYPES = {
         write: { kind: "target", def: "rgba", label: "channel", help: "What it writes into: rgba (its whole picture, as before), one channel, or a layer (its r g b a); the rest of what comes in passes" },
         premult: { kind: "enum", def: "on", choices: ["on", "off"], help: "on: what comes in is multiplied by the matte (cut out); off: it stays as it is, the matte only written" },
     } },
+    paint: { label: "Paint", cat: "Draw", inputs: ["src", "reveal"], params: {
+        strokes: { kind: "strokes", def: [], help: "The strokes: painted on the picture while this node is in the Parameters panel" },
+    } },
     vectors: { label: "Vectors", cat: "Time", inputs: ["src"], params: {
         smoothness: { kind: "num", def: 0.04, min: 0.001, max: 1, step: 0.005, help: "Higher: smoother, less detailed motion" },
         iterations: { kind: "int", def: 30, min: 1, max: 200, help: "More: slower, more exact" },
@@ -286,7 +290,7 @@ for (const t of MASKABLE) {
 }
 /** The index of a MASKABLE node's mask input (-1 for the rest). */
 export function maskIndex(type) { return MASKABLE.has(type) ? NODE_TYPES[type].inputs.length - 1 : -1; }
-export const TYPE_ORDER = ["read", "constant", "roto", "merge", "copy", "transform", "reformat", "crop", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "keyer", "lumakeyer", "chromakeyer", "blur", "glow", "erode", "laplacian",
+export const TYPE_ORDER = ["read", "constant", "roto", "paint", "merge", "copy", "transform", "reformat", "crop", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "keyer", "lumakeyer", "chromakeyer", "blur", "glow", "erode", "laplacian",
     "motionblur", "depthblur", "defocus", "lensflare", "shuffle", "addchannels", "removechannels", "channelmerge", "channelmath", "premult", "unpremult", "retime", "vectors", "output"];
 /** Nodes whose result is kept between renders (keyed by their whole upstream): they take long. */
 export const HEAVY = new Set(["vectors", "motionblur", "depthblur", "defocus"]);
@@ -631,7 +635,7 @@ export function nodeKeyFrames(node) {
 
 // ── the stack the Layers panel shows ─────────────────────────────────────────
 
-const CHAIN = new Set(["transform", "reformat", "glow", "lensflare", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "lumakeyer", "chromakeyer", "erode", "laplacian", "channelmerge", "channelmath", "blur", "crop", "shuffle", "addchannels", "removechannels", "premult", "unpremult", "retime", "keyer", "vectors",
+const CHAIN = new Set(["transform", "paint", "reformat", "glow", "lensflare", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "lumakeyer", "chromakeyer", "erode", "laplacian", "channelmerge", "channelmath", "blur", "crop", "shuffle", "addchannels", "removechannels", "premult", "unpremult", "retime", "keyer", "vectors",
     "motionblur", "depthblur", "defocus", "copy"]);
 
 /**
@@ -1001,6 +1005,16 @@ export function transformMatrix(node, frame, format, scale = 1) {
     return mat.mul(mat.t(t[0] * scale + cx, t[1] * scale + cy), mat.mul(mat.r(r), mat.mul(mat.s(sc[0], sc[1]), mat.mul(mat.k(k[0], k[1]), mat.t(-cx, -cy)))));
 }
 
+/** A Paint stroke's link at frame f: the matrix (full-size pixels) its points move by - the linked node's matrix at
+ *  f taken back through its matrix at the stroke's frame - or null (no link, or not a node that moves pictures). */
+export function linkMatrix(comp, s, f) {
+    if (!s || !s.link) return null;
+    const n = nodeById(comp, s.link);
+    if (!n || n.disable || n.type !== "transform") return null;
+    const F = formatAt(comp, n.inputs[0]);
+    return mat.mul(transformMatrix(n, f, F, 1), mat.inv(transformMatrix(n, s.f, F, 1)));
+}
+
 export function gradeImage(img, p) {
     const out = blank(img.w, img.h), s = img.data, o = out.data;
     const A = (p.multiply * (p.gain - p.lift)) / ((p.whitepoint - p.blackpoint) || 1e-6);
@@ -1102,7 +1116,7 @@ export function ocioNeeds(comp, frame) {
     }
     return [...out].map(([key, spec]) => ({ key, spec }));
 }
-export { OC, CH };
+export { OC, CH, PT };
 
 /** Nodes that make something and so have a "write" (the channel or layer it goes into). */
 export const WRITES = new Set(Object.keys(NODE_TYPES).filter((t) => NODE_TYPES[t].params.write));
@@ -1181,7 +1195,10 @@ export function upstreamHash(comp, id, memo = new Map(), depth = 0) {
     if (!n || depth > 256) return "?";
     memo.set(id, "~");   // a loop (refused by connect) hashes as itself
     const { x, y, name, ...rest } = n;
-    const h = hashString(JSON.stringify(rest) + "|" + n.inputs.map((s) => upstreamHash(comp, s, memo, depth + 1)).join(","));
+    // A Paint node's strokes can follow a Transform that is not upstream of it: its settings count too.
+    const links = n.type === "paint" && Array.isArray(n.strokes) ? [...new Set(n.strokes.map((s) => s && s.link).filter((l) => typeof l === "string"))] : [];
+    const h = hashString(JSON.stringify(rest) + "|" + n.inputs.map((s) => upstreamHash(comp, s, memo, depth + 1)).join(",")
+        + (links.length ? "|" + links.map((l) => upstreamHash(comp, l, memo, depth + 1)).join(",") : ""));
     memo.set(id, h);
     return h;
 }
@@ -1437,6 +1454,29 @@ export function renderNode(comp, id, frame, ctx) {
             const [img, ex] = CH.rotoWrite(matte, w, h, src, exOf(n.inputs[0], f), n.write || "rgba", n.premult !== "off");
             return X(O.withBox(img, O.scanBox(img)), ex);
         }
+        case "paint": {
+            // Strokes on the picture that comes in (the comp's size without one); clone / reveal read pictures moved by
+            // their offset, at other frames for a dt. Pictures of another size meet at the bottom left.
+            const src = n.inputs[0] ? run(n.inputs[0], f, d1) : blank(W, H);
+            const strokes = PT.liveStrokes(n.strokes, f);
+            if (!strokes.length) return src;
+            const shifted = new Map();
+            const moved = (img, s) => {
+                const ox = -s.offset[0] * scale, oy = -s.offset[1] * scale;
+                return ox || oy ? resample(img, mat.t(ox, oy), img.w, img.h) : img;
+            };
+            const sourceOf = (s, now) => {
+                if (s.tool === "reveal" && !n.inputs[1]) return null;
+                if (s.tool === "clone" && !s.dt) return moved(now, s);
+                const key = `${s.tool}@${s.dt}@${s.offset[0]},${s.offset[1]}`;
+                if (!shifted.has(key)) {
+                    const pic = s.tool === "reveal" ? conform(run(n.inputs[1], f + s.dt, d1), src.w, src.h) : run(n.inputs[0], f + s.dt, d1);
+                    shifted.set(key, moved(pic, s));
+                }
+                return shifted.get(key);
+            };
+            return PT.paintImage(src, strokes, scale, sourceOf, (s) => linkMatrix(comp, s, f));
+        }
         case "vectors": return vectorsOf(n.inputs[0], f, d1, n);
         case "motionblur": {
             const src = run(n.inputs[0], f, d1);
@@ -1502,6 +1542,13 @@ export function sourceNeeds(comp, id, frame) {
             if (n.type === "vectors") return;
         }
         if (n.type === "depthblur" && !n.inputs[1]) { walk(n.inputs[0], f, depth + 1); return; }
+        if (n.type === "paint") {
+            const fr = PT.paintFrames(n.strokes, f);
+            for (const g of fr.clone) walk(n.inputs[0], g, depth + 1);
+            if (n.inputs[1]) for (const g of fr.reveal) walk(n.inputs[1], g, depth + 1);
+            walk(n.inputs[0], f, depth + 1);
+            return;
+        }
         for (const s of n.inputs) walk(s, f, depth + 1);
     };
     walk(id, frame, 0);

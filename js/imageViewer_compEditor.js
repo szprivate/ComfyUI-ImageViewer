@@ -29,6 +29,8 @@ import { paintIcon } from "./imageViewer_paintIcons.js";
 import { createCompCurves } from "./imageViewer_compCurves.js";
 import * as J from "./imageViewer_compJack.js";
 import * as KL from "./imageViewer_keyLanes.js";
+import { createPaintTool, PAINT_TOOL_CSS } from "./imageViewer_compPaintTool.js";
+import { createViewTools, VIEW_TOOLS_CSS } from "./imageViewer_compViewTools.js";
 
 const CSS = `
 .cp-root{display:flex;flex-direction:column;position:absolute;inset:0;background:#0f0f12;color:#d8d8dc;font:12px/1.35 system-ui,Segoe UI,sans-serif;outline:none}
@@ -186,7 +188,7 @@ function keepGrid(g) { try { localStorage.setItem(GRID_KEY, JSON.stringify(g)); 
 
 export function installCompStyles(rootNode) {
     const doc = rootNode.ownerDocument || rootNode;
-    for (const [attr, text] of [["data-mg", MG_CSS], ["data-comp", CSS], ["data-kl", KL.KL_CSS]]) {
+    for (const [attr, text] of [["data-mg", MG_CSS], ["data-comp", CSS + PAINT_TOOL_CSS + VIEW_TOOLS_CSS], ["data-kl", KL.KL_CSS]]) {
         if (!rootNode.querySelector || !rootNode.querySelector(`style[${attr}]`)) {
             const style = el(doc, "style"); style.setAttribute(attr, "1"); style.textContent = text;
             (rootNode.head || rootNode).appendChild(style);
@@ -320,6 +322,28 @@ export function createCompEditor(host, opts = {}) {
     const toast = (m, sev) => { try { o.notify(m, sev); } catch (_) { /* no toasts */ } };
     const comp = () => st.comp;
     const fmt = () => st.comp.format;
+    // The Paint node's tool (imageViewer_compPaintTool.js): strokes on the picture while a Paint node is on top.
+    const paintTool = createPaintTool({
+        doc, el, svgEl, stage, btn, toHex, fromHex,
+        numInput: (v, step, fn, d) => numInput(v, step, fn, d),
+        primary: () => primary(), node: (id) => node(id), comp: () => st.comp, frame: () => st.frame,
+        compXY: (e) => compXY(e), inFmt: (n) => inFmt(n), downBy: (f) => downBy(f), zoom: () => st.zoom.s || 1, layer: () => layer,
+        push: () => { if (liveBak.size) liveRestore(); st.hist.push(st.comp); },
+        live: () => { st.dirty = true; queueRender(); renderOverlay(); },
+        changed: () => { st.dirty = true; refresh(["bar", "props", "stage", "graph"]); },
+        overlay: () => renderOverlay(), props: () => renderProps(), redraw: () => { renderOverlay(); renderProps(); },
+        toast: (m, sev) => toast(m, sev),
+    });
+    // The viewer tools (imageViewer_compViewTools.js): A / B compare, the sampler, scopes, out-of-range, guides.
+    let vtBtn = null;
+    const viewTools = createViewTools({
+        doc, el, svgEl, stage,
+        rerender: () => queueRender(), overlay: () => renderOverlay(), graph: () => renderGraph(), bar: () => renderBar(),
+        node: (id) => node(id), nodes: () => st.comp.nodes, viewed: () => viewedId(),
+        label: (id) => { const n = node(id); return n ? n.name || n.id : String(id); },
+        viewFmt: () => viewFmt(), fmt: () => fmt(), zoom: () => st.zoom.s || 1, compXY: (e) => compXY(e),
+        toast: (m, sev) => toast(m, sev), pop: (a, items) => popMenu(a, items), barAnchor: () => vtBtn,
+    });
     const node = (id) => C.nodeById(st.comp, id);
     const primary = () => (st.sel.length ? node(st.sel[st.sel.length - 1]) : null);
     const keyHost = () => ({ comp: { width: fmt().width, height: fmt().height } });
@@ -439,6 +463,9 @@ export function createCompEditor(host, opts = {}) {
             b.addEventListener("click", (e) => { e.stopPropagation(); fn(b); });
             return b;
         };
+        const vtOn = viewTools.summary();
+        vtBtn = btn("Viewer ▾", "The viewer's tools: compare with a second node (A / B wipe, difference), the pixel sampler, scopes, out-of-range colours, guides"
+            + (vtOn.length ? ` - on: ${vtOn.join(", ")}` : ""), () => popMenu(vtBtn, viewTools.menuItems()), "cp-vtools" + (vtOn.length ? " on" : ""));
         bar.append(
             ib("newDoc", "New comp…", () => o.newComp && o.newComp(), "cp-new"),
             ib("open", "Open… (Ctrl+O) a comp", () => o.open && o.open(), "cp-open"),
@@ -448,6 +475,7 @@ export function createCompEditor(host, opts = {}) {
             el(doc, "span", "mg-sep"),
             btn("↶", "Undo (Ctrl+Z)", undo), btn("↷", "Redo (Ctrl+Shift+Z)", redo),
             el(doc, "span", "mg-sep"), proxy, ...(disp ? [disp] : []), layerSel, ...[o.barControl && o.barControl()].filter(Boolean),
+            vtBtn,
             btn("Fit", "Fit the picture (F on the picture)", () => { st.zoom.fit = true; layoutCanvas(); }),
             el(doc, "span", "mg-info", `${fmt().width}×${fmt().height} · ${fmt().fps} fps · ${fmt().frames} f`));
     }
@@ -507,7 +535,8 @@ export function createCompEditor(host, opts = {}) {
         const scale = scaleNow();
         const pics = new Map();
         try {
-            const needs = C.sourceNeeds(st.comp, id, f);
+            const bId0 = viewTools.bNeeded(id);
+            const needs = C.sourceNeeds(st.comp, id, f).concat(bId0 ? C.sourceNeeds(st.comp, bId0, f) : []);
             await Promise.all(needs.map(async ({ node: n, frame: nf }) => {
                 const p = o.loadSource ? await o.loadSource(n, nf, { scale, format: fmt() }).catch(() => null) : null;
                 pics.set(`${n.id}@${nf}`, p);
@@ -536,9 +565,14 @@ export function createCompEditor(host, opts = {}) {
         // Exposure and the channel are the viewer's, not the comp's: the render never sees them.
         const layers = C.CH.layersOf(Object.keys(img.ch || {}));
         fillLayers(layers);
-        const shownImg = layers.includes(st.layer) ? C.CH.layerPicture(img, img.ch, st.layer) : img;
+        const layerOf = (p) => (layers.includes(st.layer) && C.CH.layersOf(Object.keys(p.ch || {})).includes(st.layer) ? C.CH.layerPicture(p, p.ch, st.layer) : p);
+        // Compared with B (the viewer tools): B drawn with the same sources, then laid beside / over / against A.
+        const bId = viewTools.bNeeded(id);
+        const imgB = bId ? C.renderNode(st.comp, bId, f, { scale, source: (n, nf) => pics.get(`${n.id}@${nf}`) || null, cache: heavy, matte, ocio: lutOf, cacheAll: true, cacheBytes: CACHE_BYTES }) : null;
+        const shownImg = viewTools.compose(layerOf(img), imgB ? layerOf(imgB) : null);
         C.viewEncode(shownImg, data.data, { gain: Math.pow(2, st.ev), channel: st.channel,
             color: dl ? (r, g, b) => C.OC.lutColor(dl, r, g, b) : null });
+        const marked = viewTools.afterEncode(shownImg, data.data, scale);
         ctx.putImageData(data, 0, 0);
         layoutCanvas();
         const v = node(id), vf = viewFmt();
@@ -548,7 +582,9 @@ export function createCompEditor(host, opts = {}) {
         const ev = st.ev && st.channel !== "a" ? ` · ${st.ev > 0 ? "+" : ""}${st.ev.toFixed(1)} EV` : "";
         const lutFail = ds && !dl && luts.get(C.OC.ocioKey(ds));
         const shown = ds ? (dl ? ` · ${ds.display} / ${ds.view}` : lutFail ? ` · OCIO display failed (${lutFail.why}): plain sRGB` : " · OCIO display loading…") : "";
-        info.textContent = `Viewing ${v ? v.name || v.id : "nothing"}${size}${chan}${ev}${shown} · ${scale === 1 ? "full" : "1/" + Math.round(1 / scale)} · ${lastMs} ms`;
+        const cmp = imgB ? ` · ${viewTools.state.compare} with ${(node(bId) && (node(bId).name || bId)) || bId}` : "";
+        const rng = viewTools.state.range ? ` · ${marked ? `${marked} px out of 0–1` : "nothing out of 0–1"}` : "";
+        info.textContent = `Viewing ${v ? v.name || v.id : "nothing"}${size}${cmp}${chan}${ev}${shown}${rng} · ${scale === 1 ? "full" : "1/" + Math.round(1 / scale)} · ${lastMs} ms`;
     }
     /** Frame f of node id is in the cache under the key renderNode used: remembered for the timeline's marks. */
     function noteFrame(id, f, scale, keysUsed) {
@@ -637,6 +673,8 @@ export function createCompEditor(host, opts = {}) {
             return;
         }
         if (e.button === 0 && st.pick) { e.preventDefault(); pickAt(compXY(e)); return; }
+        if (e.button === 0 && viewTools.down(e, compXY(e))) return;
+        if (e.button === 0 && !st.toolOn && paintTool.down(e)) return;
         // Otherwise the left or the middle button pans the picture - the left one not while the Roto tool owns it.
         if (e.button !== 0 && e.button !== 1) return;
         if (e.button === 0 && st.toolOn) return;
@@ -645,6 +683,8 @@ export function createCompEditor(host, opts = {}) {
         stage.onpointermove = (ev) => { st.zoom.fit = false; st.zoom.x = ox + ev.clientX - sx; st.zoom.y = oy + ev.clientY - sy; layoutCanvas(); };
         stage.onpointerup = () => { stage.onpointermove = null; };
     });
+    stage.addEventListener("pointermove", (e) => { if (!stage.onpointermove && st.comp) { paintTool.move(e); viewTools.move(compXY(e)); } });
+    stage.addEventListener("pointerleave", () => { paintTool.leave(); viewTools.leave(); });
     stage.addEventListener("dblclick", () => { if (st.toolOn) return; st.zoom.fit = true; layoutCanvas(); });
 
     // ── on the picture: Roto shapes and the colour picker ────────────────────
@@ -672,6 +712,8 @@ export function createCompEditor(host, opts = {}) {
     function renderOverlay() {
         over.replaceChildren();
         stage.classList.toggle("picking", !!st.pick);
+        stage.classList.toggle("painting", paintTool.active());
+        if (st.comp) viewTools.overlay(over);
         drawHandles();
         if (o.onView) o.onView();
     }
@@ -692,6 +734,7 @@ export function createCompEditor(host, opts = {}) {
         over.append(layer);
         if (n.type === "transform") { drawJack(n); return; }
         if (n.type === "crop") { drawCropBox(n); return; }
+        if (n.type === "paint") { paintTool.overlay(layer); return; }
         const hs = handlesOf(n);
         if (!hs.length) return;
         const z = st.zoom.s || 1;
@@ -905,6 +948,7 @@ export function createCompEditor(host, opts = {}) {
                 : "Show this node in the picture (1)";
             box.append(eye);
             if (isViewed) box.append(el(doc, "span", "cp-vtag", n.id === st.comp.output ? "OUTPUT" : "VIEWER"));
+            if (n.id === viewTools.b()) { const bt = el(doc, "span", "cp-btag", "B"); bt.title = "Compared with the picture on show (the Viewer menu; 2 on a selected node)"; box.append(bt); }
             world.append(box);
             n.inputs.forEach((src, i) => {
                 const s = src && node(src);
@@ -1299,6 +1343,9 @@ export function createCompEditor(host, opts = {}) {
         const k = e.key, ctrl = e.ctrlKey || e.metaKey;
         let used = true;
         if (st.pick && k === "Escape") { st.pick = null; renderOverlay(); renderProps(); }
+        else if (!ctrl && (part === root || part === props) && paintTool.key(e)) { /* the Paint tool's */ }
+        else if (part === root && viewTools.key(e)) { /* the viewer tools' */ }
+        else if (k === "2" && primary()) viewTools.setB(primary().id);
         else if (ctrl && k.toLowerCase() === "z") { if (e.shiftKey) redo(); else undo(); }
         else if (ctrl && k.toLowerCase() === "y") redo();
         else if (ctrl && e.shiftKey && k.toLowerCase() === "s") saveAs();
@@ -1728,7 +1775,8 @@ export function createCompEditor(host, opts = {}) {
         if (n.type === "colorcorrect") {
             ccSection(n, t.params);
             if (masked) for (const [p, d] of ps) if (maskRow(p)) pane.append(paramRow(n, p, d));
-        } else for (const [p, d] of ps) if (d.kind !== "roto" && (masked || !maskRow(p))) pane.append(paramRow(n, p, d));
+        } else for (const [p, d] of ps) if (d.kind !== "roto" && d.kind !== "strokes" && (masked || !maskRow(p))) pane.append(paramRow(n, p, d));
+        if (n.type === "paint") paintTool.section(n, pane, first);
         if (n.type === "roto") {
             if (first) rotoSection(n);
             else pane.append(el(doc, "div", "mg-empty", "The shapes are drawn in the panel on top: click this node in the graph to bring it there."));
@@ -2118,7 +2166,7 @@ export function createCompEditor(host, opts = {}) {
         if (!fromHost && o.onFrame) o.onFrame(st.frame);
         queueRender();
         renderOverlay();
-        if (primary() && (Object.keys(primary().tracks || {}).length || primary().type === "roto")) renderProps();
+        if (primary() && (Object.keys(primary().tracks || {}).length || primary().type === "roto" || primary().type === "paint")) renderProps();
         if (curvesEl.isConnected && st.sel.length) curves().draw();
         ltPlayhead();
     }
