@@ -34,6 +34,8 @@ and a render of its Output by the export rule.
                                                           {run, graph, outputs {frame: node}, skipped}; 409 {missing}
     POST /imageviewer/comp_ai_batch_place {run, images {frame: {filename, subfolder, type}}}
                                                           the answers as a PNG sequence beside the comp -> {frames}
+    POST /imageviewer/comp_grain {path, comp, node, frames}  a Grain / Degrain / Regrain node's grain measured at
+                                                          full size (comp_grain.analyse) -> {profile, frames, width, height}
     POST /imageviewer/comp_ai_models {action, workflow?, graph?}
                                                           the model files a workflow's inputs can take
     GET  /imageviewer/comp_formats - the Send to Viewer node's formats and per-format options (file_writer)
@@ -1239,6 +1241,29 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
             return err(e)
         return web.json_response(res)
 
+    async def grain(request):
+        from . import comp_grain
+        body = await body_of(request)
+        path = abspath(body.get("path"))
+        why = comp_path_ok(path)
+        if why:
+            return err(why, 403)
+        comp = body.get("comp")
+        if not isinstance(comp, dict):
+            return err("'comp' (the comp as it stands) is needed")
+        frames = body.get("frames")
+        if not isinstance(frames, list) or not all(isinstance(f, (int, float)) and not isinstance(f, bool) for f in frames):
+            return err("'frames' must be a list of frame numbers")
+        sources = comp_io.Sources(path, allow=path_access.may_serve, allow_lut=path_access.is_allowed)
+        try:
+            res = await off(comp_grain.analyse, comp, str(body.get("node") or ""), frames, sources,
+                            ocio=comp_io.ocio_hook(path, path_access.is_allowed))
+        except (comp_grain.GrainError, ValueError, OSError) as e:
+            return err(e)
+        finally:
+            sources.close()
+        return web.json_response(res)
+
     async def get_formats(request):
         return web.json_response(comp_io.formats(), headers={"Cache-Control": "no-cache"})
 
@@ -1253,6 +1278,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         add("POST", f"{prefix}/comp_ai_batch", ai_batch)
         add("POST", f"{prefix}/comp_ai_batch_place", ai_batch_place)
         add("POST", f"{prefix}/comp_ai_models", ai_models)
+        add("POST", f"{prefix}/comp_grain", grain)
         add("POST", f"{prefix}/comp_vfx", vfx_prepare)
         add("POST", f"{prefix}/comp_vfx_finish", vfx_finish)
         add("GET", f"{prefix}/comp", get_comp)

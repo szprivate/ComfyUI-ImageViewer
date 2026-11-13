@@ -595,6 +595,7 @@ export const CompPanelMixin = {
             cdlImport: (apply) => this._cpCdlImport(rec, apply),
             cdlExport: (n, values) => this._cpCdlExport(rec, n, values),
             aiRun: (id, frames) => this._cpAiRun(rec, id, frames),
+            grainAnalyse: (id, frames) => this._cpGrainAnalyse(rec, id, frames),
             aiStop: (id) => this._cpAiStop(id),
             aiModels: (id) => this._cpAiModels(rec, id),
             vfxRun: (id) => this._cpVfxRun(rec, id),
@@ -775,6 +776,20 @@ export const CompPanelMixin = {
      * models loaded once; the answers come back as a PNG sequence beside the comp and become the node's results
      * (one undo step a job).
      */
+    /** Measure a Grain / Degrain / Regrain node's grain on the server at full size and keep it on the node. */
+    async _cpGrainAnalyse(rec, id, frames) {
+        const ed = rec.editor;
+        if (!ed) return;
+        if (!rec.path) { notice("warn", "Save the comp first", "The footage is found from where the comp is."); return; }
+        try {
+            const res = await cpPost("/imageviewer/comp_grain", { path: rec.path, comp: ed.comp(), node: id, frames });
+            if (rec.editor && ed.grainProfile(id, res.profile))
+                notice("info", "Grain measured", `${res.frames.length === 1 ? `Frame ${res.frames[0]}` : `${res.frames.length} frames`} at ${res.width} x ${res.height}.`);
+        } catch (e) {
+            notice("error", "The grain was not measured", String(e.message || e));
+        }
+    },
+
     async _cpAiRun(rec, id, frames) {
         const ed = rec.editor;
         if (!ed) return;

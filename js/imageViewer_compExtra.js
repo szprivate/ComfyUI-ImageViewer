@@ -11,7 +11,8 @@
 // runs it passes its input through. Nothing runs by itself: the Run buttons in Parameters run it.
 import * as F from "./imageViewer_compFilters.js";
 import { mixExtras } from "./imageViewer_compChannels.js";
-export { F };
+import * as GR from "./imageViewer_compGrain.js";
+export { F, GR };
 
 const write = { kind: "target", def: "rgba", label: "channel", help: "What it writes into: rgba (its whole picture), one channel, or a layer (its r g b a); the rest of what comes in passes" };
 const onOff = (def = "off") => ({ kind: "enum", def, choices: ["off", "on"] });
@@ -32,6 +33,8 @@ const cdlParams = () => {
     return out;
 };
 const results = { kind: "ai", def: null, help: "What the workflow made, per frame (Run fills it)" };
+/** A grain profile (imageViewer_compGrain.js analyseGrain), filled by the node's Analyse; null: measured each frame. */
+const profile = { kind: "grainprofile", def: null, help: "The grain measured by Analyse; none: measured on every frame as it is drawn" };
 const vfxResults = { kind: "ai", def: null, help: "The film the workflow made (Render fills it)" };
 const prerender = { kind: "enum", def: "on", choices: ["on", "off"],
     help: "on: what comes into the node is rendered to a film first and that goes through the workflow. off: the film of the Read coming in is used as it is (faster; only a Read of a film, with nothing between)" };
@@ -133,6 +136,29 @@ export const EXTRA_TYPES = {
         response: { kind: "num", def: 0.5, min: 0, max: 1, key: true, step: 0.05, help: "1: grain grows with brightness; 0: even" },
         seed: { kind: "int", def: 0 },
         animated: { kind: "enum", def: "on", choices: F.GRAIN_ANIM, help: "on: new grain every frame" },
+        profile,
+    } },
+    degrain: { label: "Degrain", cat: "Filter", inputs: ["src"], params: {
+        temporal: { kind: "int", def: 1, min: 0, max: 3, help: "Frames each side averaged in where nothing moves (0: this frame only)" },
+        motion: { kind: "num", def: 4, min: 0.5, max: 20, step: 0.25, help: "A neighbouring frame counts as moved where it differs by more than this many times the grain" },
+        strength: { kind: "num", def: 1.5, min: 0, max: 10, key: true, step: 0.05, help: "Detail below this many times the grain's spread is taken as grain" },
+        fine: { kind: "num", def: 1, min: 0, max: 1, key: true, step: 0.05, help: "How much of the finest grain (1 pixel) goes" },
+        medium: { kind: "num", def: 1, min: 0, max: 1, key: true, step: 0.05, help: "How much of the 2 pixel grain goes" },
+        coarse: { kind: "num", def: 0.5, min: 0, max: 1, key: true, step: 0.05, help: "How much of the coarser grain (4 pixels and up) goes" },
+        output: { kind: "enum", def: "degrained", choices: GR.DEGRAIN_OUTPUTS, help: "removed: what was taken out" },
+        profile,
+    } },
+    regrain: { label: "Regrain", cat: "Filter", inputs: ["comp", "plate", "degrained", "new"], params: {
+        amount: { kind: "num", def: 1, min: 0, key: true, step: 0.05, help: "1: as strong as the plate's grain at each brightness" },
+        fill: { kind: "enum", def: "scatter", choices: GR.REGRAIN_FILLS, help: "Where the comp is new: the plate's grain scattered from elsewhere, grain made from the profile, or the plate's own left in place" },
+        detect: { kind: "enum", def: "on", choices: ["on", "off"], help: "on: where the comp differs from the degrained plate counts as new (besides the 'new' input)" },
+        threshold: { kind: "num", def: 0.02, min: 0, key: true, step: 0.005, help: "A brightness difference above this is new" },
+        softness: { kind: "num", def: 0.02, min: 0, key: true, step: 0.005 },
+        cell: { kind: "num", def: 48, min: 4, max: 512, step: 4, help: "Scatter: the size of the pieces the grain is taken in, pixels of the comp" },
+        seed: { kind: "int", def: 0 },
+        animated: { kind: "enum", def: "on", choices: F.GRAIN_ANIM, help: "on: new scatter / synthesis every frame" },
+        output: { kind: "enum", def: "result", choices: GR.REGRAIN_OUTPUTS, help: "grain: the grain alone; new areas: where it was made again; difference: the result less the plate" },
+        profile,
     } },
     denoise: { label: "Denoise", cat: "Filter", inputs: ["src"], params: {
         radius: { kind: "num", def: 3, min: 0, max: 30, step: 0.5, help: "Pixels of the comp: the area it averages over" },
@@ -202,9 +228,9 @@ export const EXTRA_ORDER = Object.keys(EXTRA_TYPES);
 export const EXTRA_CHAIN = EXTRA_ORDER.filter((t) => !["appendclip"].includes(t));
 /** The per-pixel ones that take a mask input (the last) and a mix, as the other colour / filter / keyer nodes do. */
 export const EXTRA_MASKABLE = ["differencekeyer", "despill", "edgeextend", "lightwrap", "coreedge", "cdl", "lut", "huecurves", "clamp",
-    "loglin", "colormatch", "grain", "denoise", "sharpen", "median", "edgedetect", "edgeblur"];
+    "loglin", "colormatch", "grain", "degrain", "denoise", "sharpen", "median", "edgedetect", "edgeblur"];
 /** Slow ones: kept between renders. */
-export const EXTRA_HEAVY = ["denoise", "median", "timeblur"];
+export const EXTRA_HEAVY = ["denoise", "median", "timeblur", "degrain", "regrain"];
 
 // ── AI results ───────────────────────────────────────────────────────────────
 
@@ -277,6 +303,8 @@ export function extraReads(n, f) {
     case "timeoffset": return [[0, f - (n.offset || 0)]];
     case "appendclip": return appendParts(n, f).map(([i, g]) => [i, g]);
     case "timeblur": return F.timeBlurFrames({ shutter: n.shutter ?? 0.5, samples: n.samples ?? 5, offset: n.offset }, f).map(([g]) => [0, g]);
+    // Its own frames, and the mask (its last input) at f.
+    case "degrain": return [...GR.degrainFrames(n, f).map((g) => [0, g]), [1, f]];
     default: return null;
     }
 }
@@ -332,7 +360,16 @@ export function extraMake(n, f, api) {
     case "clamp": return F.clampImage(src(), p);
     case "loglin": return F.logLinImage(src(), p);
     case "colormatch": { const s = src(); return F.colorMatchImage(s, ins[1] ? run(ins[1], f) : null, p); }
-    case "grain": { const s = src(); return F.grainImage(s, p, f, scale, ins[1] ? run(ins[1], f) : null); }
+    case "grain": {
+        const s = src();
+        return GR.isProfile(n.profile) ? GR.profileGrainImage(s, n, p, f, scale) : F.grainImage(s, p, f, scale, ins[1] ? run(ins[1], f) : null);
+    }
+    case "degrain": {
+        const fs = GR.degrainFrames(n, f), at = fs.indexOf(f), s = run(ins[0], f);
+        const pics = fs.map((g) => (g === f ? s : api.conform(run(ins[0], g), s.w, s.h)));
+        return GR.degrainImage(pics, at, n, p, scale);
+    }
+    case "regrain": { const s = src(); return GR.regrainImage(s, other(1, s), other(2, s), other(3, s), n, p, f, scale); }
     case "denoise": return F.denoiseImage(src(), p, scale);
     case "sharpen": return F.sharpenImage(src(), p, scale);
     case "median": return F.medianImage(src(), p, scale);
