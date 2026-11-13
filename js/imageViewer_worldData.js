@@ -12,6 +12,7 @@
 // degrees above the horizon.
 
 import { cleanPaint } from "./imageViewer_scatterPaint.js";
+import { cleanSculpt, cleanLayerPaint } from "./imageViewer_terrainSculpt.js";
 
 export const WORLD_KINDS = ["environment", "terrain", "scatter", "depthmesh", "light"];
 export const SCATTER_TYPES = ["pine", "tree", "bush", "grass", "rock", "column", "lamp", "model"];
@@ -155,6 +156,9 @@ export function terrainSettings(item) {
         segments: Math.round(num(t.segments, 256, 8, 512)),
         // A ceiling is a terrain turned over; you don't stand on it.
         walkable: t.walkable !== false,
+        // Hand edits from the terrain brushes (imageViewer_terrainSculpt.js), or null.
+        sculpt: cleanSculpt(t.sculpt),
+        layerPaint: cleanLayerPaint(t.layerPaint),
         layers,
         rules: {
             rockSlope: pair(r.rockSlope, [24, 38], 0, 90),

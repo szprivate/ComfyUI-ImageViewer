@@ -76,6 +76,9 @@ export const ModelMixin = {
                 onScatterPaint: (id, paint, live, first) => this.previzScatterPaintWrite(id, paint, live, first),
                 onScatterPaintEnd: (id) => this._previzScatterBarDrop(id),
                 onScatterBrush: (b) => this._previzScatterBarSync(b),
+                onTerrainEdit: (id, patch) => this.previzTerrainEditWrite(id, patch),
+                onTerrainBrushEnd: (id) => this._previzTerrainBarDrop(id),
+                onTerrainBrush: (b) => this._previzTerrainBarSync(b),
                 // The menu bar over the canvas (imageViewer_previzMenuBar.js) and the panes' menus.
                 buildMenuBar: (host) => this.previzBuildMenuBar(host),
                 openMenu: (entries, x, y, anchor) => this._previzOpenMenu(entries, x, y, anchor),
@@ -139,6 +142,7 @@ export const ModelMixin = {
         if (!this._modelMode) return;
         this._modelMode = false;
         if (this._model3d && this._model3d.scatterPaintEnd) this._model3d.scatterPaintEnd();
+        if (this._model3d && this._model3d.terrainBrushEnd) this._model3d.terrainBrushEnd();
         this.viewport.classList.remove("model-mode");
         // ...and ComfyUI's node parameters again.
         this._cbParams?.(false);

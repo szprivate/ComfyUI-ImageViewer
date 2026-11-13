@@ -138,13 +138,15 @@ class TerrainTests(unittest.TestCase):
             pg.evaluate("() => window.__panel._previzTerrainMenuEntries()[0].run()")
             self._built(pg)
             _, scatter_after = self._menu(pg, "terrain", "Scattering")
-            pg.evaluate("""() => window.__panel._previzTerrainMenuEntries()[1].sub
+            pg.evaluate("""() => window.__panel._previzTerrainMenuEntries().find((e) => e.label === 'Scattering').sub
                 .find((e) => e.label === 'Grass').run()""")
             self._built(pg)
             kinds = pg.evaluate("() => window.__panel.previzScene().items.map((i) => i.kind)")
         finally:
             pg.close()
-        self.assertEqual([t.strip() for t in terrain_items], ["New terrain", "Scattering"])
+        self.assertEqual([t.strip() for t in terrain_items],
+                         ["New terrain", "Sculpt", "Paint layer", "Clear sculpting", "Clear layer paint", "Scattering"])
+        scatter_before = scatter_before[scatter_before.index("Pines"):]
         self.assertEqual(scatter_before[:8], ["Pines", "Trees", "Bushes", "Grass", "Rocks", "Columns", "Lamps", "Model…"])
         self.assertIn("Paint scatter", scatter_before)
         self.assertIn("Clear scatter paint", scatter_before)
@@ -229,6 +231,94 @@ class TerrainTests(unittest.TestCase):
         self.assertTrue(redone)
         self.assertEqual(cleared, unpainted)
         self.assertEqual(leftovers, 0)
+        self.assertEqual(self.errors, [])
+
+    def _stroke(self, pg, dx=-150, steps=20, step=15, ctrl=False):
+        box = pg.evaluate("() => { const r = window.__panel._modelView().canvas.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }")
+        cx, cy = box[0] + box[2] / 2, box[1] + box[3] / 2
+        pg.mouse.move(cx + dx, cy)
+        if ctrl:
+            pg.keyboard.down("Control")
+        pg.mouse.down()
+        for i in range(1, steps + 1):
+            pg.mouse.move(cx + dx + i * step, cy)
+            pg.wait_for_timeout(15)
+        pg.mouse.up()
+        if ctrl:
+            pg.keyboard.up("Control")
+        pg.wait_for_timeout(300)
+
+    def test_the_terrain_brushes_sculpt_and_paint_layers(self):
+        pg = self._page()
+        try:
+            P = "window.__panel"
+            pg.evaluate(f"() => {P}.previzAddWorldItem('terrain')")
+            self._built(pg)
+            pg.evaluate(f"() => {P}.previzAddWorldItem('scatter', 'rock')")
+            self._built(pg)
+            pg.evaluate(f"""() => {{ const v = {P}._modelView(); v.camera.position.set(0, 160, 0.01);
+                v.controls.target.set(0, 0, 0); v.controls.update(); v.requestRender(); }}""")
+            pg.wait_for_timeout(200)
+            H = f"""() => {{ const v = {P}._modelView(); const t = {P}.previzScene().items.find((i) => i.kind === 'terrain');
+                const T = v._entries.get(t.id).terrain; const n = T.seg + 1, m = Math.floor(n / 2);
+                return {{ mid: T.heights[m * n + m] * T.height, edge: T.heights[m * n + 5] * T.height,
+                          splat: Array.from(T.mesh.geometry.attributes.aSplat.array.slice((m * n + m) * 4, (m * n + m) * 4 + 4)) }}; }}"""
+            before = pg.evaluate(H)
+            # Terrain > Sculpt > Raise from the menu.
+            pg.evaluate(f"""() => {P}._previzTerrainMenuEntries().find((e) => e.label === 'Sculpt').sub
+                .find((e) => /Raise/.test(e.label)).run()""")
+            bar = pg.evaluate(f"() => !!{P}._modelView().stage.querySelector('.model-terrain-bar')")
+            pg.evaluate(f"() => {P}._modelView().terrainBrushSet({{ radius: 15, strength: 1, hardness: 0.6 }})")
+            self._stroke(pg)
+            self._stroke(pg)
+            self._built(pg)
+            raised = pg.evaluate(H)
+            sculpt = pg.evaluate(f"() => !!{P}.previzScene().items.find((i) => i.kind === 'terrain').terrain.sculpt")
+            # The rocks stand on the new ground: every instance within a metre of the terrain under it.
+            floating = pg.evaluate(f"""() => {{ const v = {P}._modelView(); const s = {P}.previzScene();
+                const it = s.items.find((i) => i.kind === 'scatter'), t = s.items.find((i) => i.kind === 'terrain');
+                const e = v._entries.get(it.id), te = v._entries.get(t.id);
+                const mesh = e.object.children.find((c) => c.isInstancedMesh);
+                const THREE = v.libs.THREE, m = new THREE.Matrix4(), p = new THREE.Vector3();
+                let bad = 0;
+                for (let i = 0; i < mesh.count; i++) {{ mesh.getMatrixAt(i, m); p.setFromMatrixPosition(m);
+                    const y = v._terrainHeightAt(te, p.x, p.z); if (y != null && Math.abs(p.y - y) > 1) bad++; }}
+                return bad; }}""")
+            # Paint the rock layer, then Ctrl+drag lowers with the Raise tool.
+            pg.evaluate(f"() => {P}._modelView().terrainBrushSet({{ tool: 'layer', layer: 2 }})")
+            self._stroke(pg)
+            self._built(pg)
+            painted = pg.evaluate(H)
+            if SHOTS:
+                os.makedirs(SHOTS, exist_ok=True)
+                pg.evaluate(f"""() => {{ const v = {P}._modelView(); v.camera.position.set(90, 70, 90);
+                    v.controls.target.set(0, 0, 0); v.controls.update(); v.requestRender(); }}""")
+                pg.wait_for_timeout(400)
+                pg.screenshot(path=os.path.join(SHOTS, "terrain-brushes.png"))
+            undo_labels = pg.evaluate(f"() => {P}._undoState().past.map((s) => s.label)")
+            pg.evaluate(f"() => {P}.previzUndo()")
+            self._built(pg)
+            undone = pg.evaluate(f"() => {P}.previzScene().items.find((i) => i.kind === 'terrain').terrain.layerPaint")
+            still_on = pg.evaluate(f"() => {P}._modelView().terrainBrushing()")
+            pg.keyboard.press("Escape")
+            pg.wait_for_timeout(100)
+            stopped = pg.evaluate(f"() => !{P}._modelView().terrainBrushing() && !{P}._modelView().stage.querySelector('.model-terrain-bar')")
+            pg.evaluate(f"() => {P}.previzTerrainClear('sculpt')")
+            self._built(pg)
+            cleared = pg.evaluate(H)
+        finally:
+            pg.close()
+        self.assertTrue(bar)
+        self.assertGreater(raised["mid"] - before["mid"], 1)
+        self.assertAlmostEqual(raised["edge"], before["edge"], places=3)
+        self.assertTrue(sculpt)
+        self.assertEqual(floating, 0)
+        self.assertGreater(painted["splat"][2], 0.9)
+        self.assertEqual(undo_labels[-3:], ["sculpt Terrain", "sculpt Terrain", "paint Terrain layers"])
+        self.assertIsNone(undone)
+        self.assertTrue(still_on)
+        self.assertTrue(stopped)
+        self.assertAlmostEqual(cleared["mid"], before["mid"], places=3)
         self.assertEqual(self.errors, [])
 
 

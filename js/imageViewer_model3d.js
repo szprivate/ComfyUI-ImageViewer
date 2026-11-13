@@ -35,6 +35,7 @@ import { View3DPathTraceMixin } from "./imageViewer_view3dPathTrace.js";
 import { CameraAim3DMixin } from "./imageViewer_cameraAim3d.js";
 import { View3DVideoPlaneMixin, isVideoSrc } from "./imageViewer_view3dVideoPlane.js";
 import { ScatterPaint3DMixin } from "./imageViewer_scatterPaint3d.js";
+import { TerrainBrush3DMixin } from "./imageViewer_terrainBrush3d.js";
 import { displayStates, isPickable } from "./imageViewer_sceneLayers.js";
 import { constrainedLocals } from "./imageViewer_constraints.js";
 
@@ -510,7 +511,7 @@ export class Model3DView {
     _onPointerDown(e) {
         this._applyNavButtons(e.altKey);
         // The scatter brush has the left button while it is on (Alt still navigates).
-        if (this._sp && this._spDown(e)) {
+        if ((this._sp && this._spDown(e)) || (this._tb && this._tbDown(e))) {
             this._downAt = null;
             e.stopImmediatePropagation();
             e.preventDefault();
@@ -732,6 +733,7 @@ export class Model3DView {
         if (this._walk) this.walkExit();
         // So is the scatter brush.
         if (this._sp) this.scatterPaintEnd();
+        if (this._tb) this.terrainBrushEnd();
         if (this._raf && this._rafWin) {
             try { this._rafWin.cancelAnimationFrame(this._raf); } catch (e) {}
         }
@@ -2532,6 +2534,7 @@ export class Model3DView {
         hide(this._pinGroup);           // feedback pins are notes, not part of the shot
         hide(this._spGroup);            // the scatter brush's wash and ring are for painting
         hide(this._spRing);
+        hide(this._tbRing);
         for (const box of (this._alsoBoxes || new Map()).values()) hide(box);
         for (const j of (this._joints || new Map()).values()) hide(j.group);
         // An Atlas world's views are there to see where its pictures were taken, never in a picture.
@@ -2764,3 +2767,4 @@ Object.assign(Model3DView.prototype, View3DPathTraceMixin);
 Object.assign(Model3DView.prototype, CameraAim3DMixin);
 Object.assign(Model3DView.prototype, View3DVideoPlaneMixin);
 Object.assign(Model3DView.prototype, ScatterPaint3DMixin);
+Object.assign(Model3DView.prototype, TerrainBrush3DMixin);

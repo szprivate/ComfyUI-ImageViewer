@@ -18,6 +18,7 @@ import {
 } from "./imageViewer_worldData.js";
 import { FLY_SPEED, flyDelta, flyWheel, flyStatus } from "./imageViewer_atlasRender.js";
 import { decodePaint, paintAt, paintedSpots } from "./imageViewer_scatterPaint.js";
+import { decodeSculpt, decodeLayerPaint, layerAt, mixLayers } from "./imageViewer_terrainSculpt.js";
 
 // Bloom and tone mapping come from three's post-processing addons, loaded the
 // first time a world asks for bloom (vendor/three, like the rest of three).
@@ -552,6 +553,14 @@ export const WorldViewMixin = {
             heights.set(fbm(n, t.seed, t.roughness));
         }
 
+        // The sculpt brushes' heights, in metres, on top (onto this grid if the segments changed).
+        const base = heights.slice();
+        let sculpt = null;
+        if (t.sculpt && t.height > 0) {
+            sculpt = decodeSculpt(t.sculpt, n);
+            for (let i = 0; i < heights.length; i++) heights[i] += sculpt.cells[i] / t.height;
+        }
+
         const geom = new THREE.PlaneGeometry(t.size[0], t.size[1], seg, seg).rotateX(-Math.PI / 2);
         const pos = geom.attributes.position;
         for (let i = 0; i < pos.count; i++) pos.setY(i, heights[i] * t.height);
@@ -577,6 +586,16 @@ export const WorldViewMixin = {
                 w = [Math.max(0, 1 - rock - cliff - flatPeak), rock, cliff, flatPeak];
             }
             weights.set(w, i * 4);
+        }
+        // The layer brush's paint over what the rules (or the splat picture) say.
+        const ruleWeights = weights.slice();
+        if (t.layerPaint) {
+            const lp = decodeLayerPaint(t.layerPaint), p4 = [0, 0, 0, 0], r4 = [0, 0, 0, 0], o4 = [0, 0, 0, 0];
+            for (let i = 0; i < pos.count; i++) {
+                layerAt(lp, (i % n) / seg, Math.floor(i / n) / seg, p4);
+                for (let k = 0; k < 4; k++) r4[k] = ruleWeights[i * 4 + k];
+                weights.set(mixLayers(r4, p4, o4), i * 4);
+            }
         }
         geom.setAttribute("aSplat", new THREE.BufferAttribute(weights, 4));
 
@@ -669,7 +688,8 @@ export const WorldViewMixin = {
         this._bodyOf(entry).add(mesh);
         entry.object = mesh;
         this._originals.set(mesh, material);
-        entry.terrain = { heights, seg, size: t.size, height: t.height, weights, normals: nrm.array, mesh, uniforms };
+        entry.terrain = { heights, seg, size: t.size, height: t.height, weights, normals: nrm.array, mesh, uniforms,
+                          base, ruleWeights, geom };
         entry.stats = { meshes: 1, vertices: pos.count, triangles: seg * seg * 2 };
     },
 

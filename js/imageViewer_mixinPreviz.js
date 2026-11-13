@@ -226,6 +226,7 @@ export const PrevizMixin = {
         }
         // The scatter brush follows an undo, another tab, a deleted scatter.
         if (view.scatterPainting && view.scatterPainting() && this._previzScatterPaintCheck) this._previzScatterPaintCheck();
+        if (view.terrainBrushing && view.terrainBrushing() && this._previzTerrainBrushCheck) this._previzTerrainBrushCheck();
         return done;
     },
 
